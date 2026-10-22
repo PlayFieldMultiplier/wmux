@@ -43,7 +43,7 @@ function rig() {
   const svc = new ApprovalService({
     file: path.join(dir, 'factory', 'approvals.json'),
     bots: () => ({ listEnabled: () => [profile], get: (id) => (id === A ? profile : null) }),
-    runningWake: () => ({ wakeId: 'w-1', attempt: 1, threadId: null, tainted: false, guest: false, ownerWords: true }),
+    runningWake: () => ({ wakeId: 'w-1', attempt: 1, threadId: null, tainted: false, guest: false, signedIn: false, ownerWords: true }),
     readPr: async () => { throw new Error('no PR'); },
     ghLogin: async () => null,
     rooms: () => writer,
@@ -58,7 +58,7 @@ function rig() {
     guestWake: () => false,
     tainted: () => false,
     wakeReason: () => ({ kind: 'human', text: 'call me Kim', source: 'desktop' }),
-    conversation: () => ({ tainted: false }),
+    conversation: () => ({ tainted: false, signedIn: false }),
     propose: (bot, change) => svc.proposeOwnerProfile(bot, change),
   };
   const propose = (params: Record<string, unknown>) => handleMemoryUpdate({ target: 'user', ...params }, asBot, deps);

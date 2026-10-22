@@ -25,7 +25,7 @@ import { getBotSkillStore, type BotSkillStore } from './botSkills';
 import { getSecretStore, type DeletedKey, type SecretStore } from './secretStore';
 import type { SkillIndexEntry } from '../../shared/botSkill';
 import type { BotProfile } from '../../shared/bot';
-import type { RoomCard, ThreadId } from '../../shared/room';
+import { inAnotherBotsDm, type RoomCard, type ThreadId } from '../../shared/room';
 import type { WakeItem } from '../../shared/wake';
 import type { BotGroup } from '../../shared/botGroup';
 import type { WakeApprovalSummary, WakeClock, WakeConnectorSummary, WakeGroup, WakeLanguage, WakePromptInput, WakeRunReply } from './wakePrompt';
@@ -150,7 +150,8 @@ export function wakeLanguage(ports: WakeContextPorts, profile: BotProfile, item:
       const to = [c.refs?.botId, ...(c.refs?.botIds ?? [])];
       return to.includes(profile.id) || to.every((x) => x === undefined);
     };
-    const pick = (cards: readonly RoomCard[], match: (c: RoomCard) => boolean): RoomCard | undefined => [...cards].reverse().find((c) => isOwnerCard(c) && match(c));
+    // The owner's words in another bot's 1:1 are that bot's alone.
+    const pick = (cards: readonly RoomCard[], match: (c: RoomCard) => boolean): RoomCard | undefined => [...cards].reverse().find((c) => isOwnerCard(c) && !inAnotherBotsDm(c.threadId, profile.id) && match(c));
     try {
       const threadCards = item.threadId ? ports.cards(item.workspaceId, item.threadId, WAKE_CONTEXT_LIMITS.SCAN) : [];
       const inThread = pick(threadCards, addressed) ?? pick(threadCards, () => true);

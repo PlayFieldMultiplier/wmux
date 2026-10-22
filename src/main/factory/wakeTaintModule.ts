@@ -46,7 +46,7 @@ registerFactoryRpcModule('wakeTaint', (_router, deps) => {
       setWakeTaint(taint, runningWake, wakeItemById);
       // The runtime marks a bot's conversation by the wakes run in it
       // (conversationMarks.ts).
-      setBotRuntimePorts({ wakeTainted: (item) => taint.wakeTainted(item) });
+      setBotRuntimePorts({ wakeTainted: (item) => taint.wakeTainted(item), wakeSignedIn: (item) => taint.wakeSignedIn(item) });
       // A bot's card written in its running wake is stamped (RoomCard.origin)
       // unless that wake is known clean; a write outside a wake passes its
       // origin itself.

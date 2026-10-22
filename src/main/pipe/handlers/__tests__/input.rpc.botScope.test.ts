@@ -25,27 +25,42 @@ const PANE_OWNERS: Record<string, string> = {
   'pty-stranger': 'ws-stranger',
   'pty-reclaimed': 'ws-task-reopened',
   'pty-reclaimed-other': 'ws-task-other-reopened',
+  'pty-signed': 'ws-task-signed',
+  'pty-reclaimed-signed': 'ws-task-signed-reopened',
 };
 
-interface Entry { ownerWorkspaceId: string; taskWorkspaceId: string; status: string; dispatch?: LedgerDispatch }
+interface Entry { id: string; ownerWorkspaceId: string; taskWorkspaceId: string; status: string; dispatch?: LedgerDispatch }
 
 const ENTRIES: Entry[] = [
-  { ownerWorkspaceId: 'ws-bot', taskWorkspaceId: 'ws-task-mine', status: 'working', dispatch: { origin: { kind: 'bot', botId: BOT.botId } } },
-  { ownerWorkspaceId: 'ws-bot', taskWorkspaceId: 'ws-task-other', status: 'working', dispatch: { origin: { kind: 'bot', botId: 'bot-ffffffff' } } },
-  { ownerWorkspaceId: 'ws-bot', taskWorkspaceId: 'ws-task-pane', status: 'working', dispatch: { origin: { kind: 'pane' } } },
+  { id: 't-mine', ownerWorkspaceId: 'ws-bot', taskWorkspaceId: 'ws-task-mine', status: 'working', dispatch: { origin: { kind: 'bot', botId: BOT.botId } } },
+  { id: 't-other', ownerWorkspaceId: 'ws-bot', taskWorkspaceId: 'ws-task-other', status: 'working', dispatch: { origin: { kind: 'bot', botId: 'bot-ffffffff' } } },
+  { id: 't-pane', ownerWorkspaceId: 'ws-bot', taskWorkspaceId: 'ws-task-pane', status: 'working', dispatch: { origin: { kind: 'pane' } } },
+  // A task whose worker used the owner's sign-in (main's gateway).
+  { id: 't-signed', ownerWorkspaceId: 'ws-bot', taskWorkspaceId: 'ws-task-signed', status: 'working', dispatch: { origin: { kind: 'bot', botId: BOT.botId }, gatewayConnectors: ['gmail'] } },
+  // Ended tasks whose workers main reclaimed and a resume reopened elsewhere.
+  { id: 't-reopened', ownerWorkspaceId: 'ws-bot', taskWorkspaceId: 'ws-task-reopened-was', status: 'completed', dispatch: { origin: { kind: 'bot', botId: BOT.botId } } },
+  { id: 't-signed-reopened', ownerWorkspaceId: 'ws-bot', taskWorkspaceId: 'ws-task-signed-was', status: 'completed', dispatch: { origin: { kind: 'bot', botId: BOT.botId }, gatewayConnectors: ['gmail'] } },
 ];
+
+const RECLAIMED: Record<string, { taskId: string; botId: string }> = {
+  'pty-reclaimed': { taskId: 't-reopened', botId: BOT.botId },
+  'pty-reclaimed-signed': { taskId: 't-signed-reopened', botId: BOT.botId },
+};
 
 function wire(): RpcRouter {
   const ledger = {
     list: (f: { ownerWorkspaceId?: string; openOnly?: boolean } = {}) =>
-      ENTRIES.filter((e) => f.ownerWorkspaceId === undefined || e.ownerWorkspaceId === f.ownerWorkspaceId),
+      ENTRIES.filter((e) => (f.ownerWorkspaceId === undefined || e.ownerWorkspaceId === f.ownerWorkspaceId) && (!f.openOnly || e.status === 'working')),
+    findByTaskWorkspace: (ws: string) => ENTRIES.find((e) => e.taskWorkspaceId === ws) ?? null,
+    get: (id: string) => ENTRIES.find((e) => e.id === id) ?? null,
   } as unknown as TaskLedger;
   const router = new RpcRouter();
   registerInputRpc(router, { get: () => undefined } as unknown as PTYManager, () => ({}) as BrowserWindow, undefined, undefined, undefined, {
     getLedger: () => ledger,
     // main's reclaim records: this bot's ended task reopened in a new
     // workspace, and another bot's.
-    reclaimedWorkerWorkspaces: (botId, owner) => (owner !== 'ws-bot' ? [] : botId === BOT.botId ? ['ws-task-reopened'] : ['ws-task-other-reopened']),
+    reclaimedWorkerWorkspaces: (botId, owner) => (owner !== 'ws-bot' ? [] : botId === BOT.botId ? ['ws-task-reopened', 'ws-task-signed-reopened'] : ['ws-task-other-reopened']),
+    reclaimedTaskOfPane: (ws, ptyId) => (PANE_OWNERS[ptyId] === ws ? RECLAIMED[ptyId] ?? null : null),
   });
   return router;
 }
@@ -90,6 +105,18 @@ describe('input.readScreen — bot scope', () => {
     for (const ptyId of ['pty-other-bot', 'pty-pane-task', 'pty-stranger', 'pty-reclaimed-other']) {
       const res = await asBot(router, { ptyId });
       expect(res.ok, ptyId).toBe(false);
+    }
+  });
+
+  it('the pane of a task that used a signed-in connection is not read by a bot, open or reopened; a plain task\'s pane is', async () => {
+    const router = wire();
+    for (const ptyId of ['pty-own', 'pty-mine', 'pty-reclaimed']) {
+      expect(await asBot(router, { ptyId }), ptyId).toMatchObject({ ok: true, result: { text: 'SCREEN' } });
+    }
+    for (const ptyId of ['pty-signed', 'pty-reclaimed-signed']) {
+      sendToRendererMock.mockClear();
+      expect(await asBot(router, { ptyId }), ptyId).toMatchObject({ ok: false, error: expect.stringContaining('signed-in connection is not read by a bot') });
+      expect(sendToRendererMock.mock.calls.some((c) => c[1] === 'input.readScreen'), ptyId).toBe(false);
     }
   });
 

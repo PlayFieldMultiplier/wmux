@@ -2350,7 +2350,7 @@ export class FanOutService {
     }
     // A task with connections counts as started from outside text.
     // A resume is refused for a guest-sourced wake (workerResume.rpc.ts).
-    const origin: FanoutOrigin = { kind: 'bot', botId: input.botId, tainted: input.tainted || connectors.length > 0, guest: false };
+    const origin: FanoutOrigin = { kind: 'bot', botId: input.botId, tainted: input.tainted || connectors.length > 0, guest: false, ...(gatewayConnectors.length > 0 ? { gatewayConnectors: [...gatewayConnectors] } : {}) };
     const keys = [...new Set(connectors.flatMap((c) => c.secrets.map((s) => s.secret)))];
     const secretGrant = keys.length > 0
       ? mintSecretGrant({ botId: input.botId, taskId: input.taskId, ownerWorkspaceId: input.ownerWorkspaceId, cwd: input.cwd, names: [], connectionNames: keys })

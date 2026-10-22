@@ -45,7 +45,7 @@ afterEach(() => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-const CLEAN: ConversationMarks = { tainted: false };
+const CLEAN: ConversationMarks = { tainted: false, signedIn: false };
 
 function rig(wake: { guest?: boolean | 'unknown'; tainted?: boolean; reason?: WakeReason | null; answers?: Record<string, boolean>; conversation?: ConversationMarks | null } = {}) {
   return {
@@ -127,7 +127,7 @@ describe('memory.update', () => {
   });
 
   it('a conversation that ran a tainted or guest wake saves nothing, even in a clean wake; none at all is refused too', () => {
-    for (const conversation of [{ tainted: true }, null]) {
+    for (const conversation of [{ tainted: true, signedIn: false }, null]) {
       for (const target of ['memory', 'user']) {
         expect(update({ target, action: 'add', text: 'x' }, rig({ reason: HUMAN, conversation }))).toEqual({ ok: false, code: 'not_authorized', message: MEMORY_CONVERSATION_REFUSAL });
       }

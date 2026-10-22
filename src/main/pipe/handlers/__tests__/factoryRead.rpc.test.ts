@@ -86,6 +86,7 @@ function deps(over: Partial<FactoryReadDeps> = {}): FactoryReadDeps & { roomsDir
     rooms: () => writer,
     postKey: () => 'wake:w-1:1',
     guestWake: () => false,
+    conversationTainted: () => false,
     now: () => 1_000_000,
     ...over,
   };
@@ -316,6 +317,12 @@ describe('plan.propose', () => {
       expect(await handlePlanPropose({ title: 'Plan', items: [ITEM] }, ctxOf(MOA), d)).toMatchObject({ ok: false, code: 'not_authorized', message: expect.stringContaining('external guest') });
       expect((d.rooms() as RoomWriter).read('ws-hq', { guests: true }).cards).toHaveLength(0);
     }
+  });
+
+  it('a conversation that took in outside text proposes no plan, even when its wake is the owner\'s', async () => {
+    const d = deps({ conversationTainted: () => true });
+    expect(await handlePlanPropose({ title: 'Plan', items: [ITEM] }, ctxOf(MOA), d)).toMatchObject({ ok: false, code: 'not_authorized', message: expect.stringContaining('saves nothing that runs later') });
+    expect((d.rooms() as RoomWriter).read('ws-hq', { guests: true }).cards).toHaveLength(0);
   });
 
   it('a newer plan supersedes the bot\'s older plan still open; another bot\'s stays open', async () => {

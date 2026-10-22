@@ -43,13 +43,25 @@ export type WakeReason =
    *  carried outside text. `handoffId`: the handoff that wake delivered, so
    *  the tasks still answer it. `fingerprint`: of the arguments (a retry
    *  that started them retires this wake too). `guest`: the asking wake's
-   *  guest provenance (wakeTaint.ts); absent reads as unknown unless clean. */
-  | { kind: 'held_fanout'; heldId: string; heldAt: number; titles: string[]; args?: HeldFanoutArgs; fingerprint?: string; tainted: boolean; guest?: boolean; handoffId?: string }
+   *  guest provenance (wakeTaint.ts); absent reads as unknown unless clean.
+   *  `wakeKind`: a signed-in request's (fanout.rpc.ts), the reason kind of
+   *  the wake that asked for it. */
+  | { kind: 'held_fanout'; heldId: string; heldAt: number; titles: string[]; args?: HeldFanoutArgs; fingerprint?: string; tainted: boolean; guest?: boolean; handoffId?: string; wakeKind?: HeldWakeKind }
   /** An outside agent's message named this bot (shared/guestBots.ts):
    *  `cardId` is its `guest` card, `text` what it said (redacted). Always
    *  tainted (wakeTaint.ts): nothing this wake starts merges without the
    *  owner. */
   | { kind: 'guest'; guestId: string; guestName: string; cardId: string; text: string };
+
+/** The reason kind of the wake a held fan-out was asked in. */
+export type HeldWakeKind = Exclude<WakeReason['kind'], 'held_fanout'>;
+
+const HELD_WAKE_KINDS: Record<HeldWakeKind, true> = { facts: true, human: true, handoff: true, manual: true, schedule: true, routine: true, mention: true, intro: true, guest: true };
+
+/** Whether a stored value is a held fan-out's asking wake kind. Pure. */
+export function isHeldWakeKind(v: unknown): v is HeldWakeKind {
+  return typeof v === 'string' && Object.prototype.hasOwnProperty.call(HELD_WAKE_KINDS, v);
+}
 
 /** A held fan-out's fanout_start arguments, as the bot's tool takes them. */
 export interface HeldFanoutArgs {

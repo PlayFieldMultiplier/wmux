@@ -19,6 +19,7 @@ import {
   probeBotExecSupport,
 } from '../botExecSandbox';
 import { WakeTaint, runningWakeAttended, setWakeTaint } from '../wakeTaint';
+import { __resetConversationMarksForTesting, holdSignedInForWake, markConversation, releaseWakeHold, startConversation } from '../conversationMarks';
 import type { WakeItem, WakeReason } from '../../../shared/wake';
 import { ALL_RPC_METHODS } from '../../../shared/rpc';
 
@@ -366,10 +367,12 @@ describe('the attended rule and the decision on each tool', () => {
   beforeEach(() => {
     const runningWake = () => (running ? { item: running, startedAt: 1 } : null);
     setWakeTaint(new WakeTaint({ facts: () => [], handoff: () => null, taskRow: () => null, runningWake }), runningWake);
+    startConversation('bot-1', { tainted: false, signedIn: false });
   });
   afterEach(() => {
     setWakeTaint(null);
     running = null;
+    __resetConversationMarksForTesting();
   });
 
   it('only the owner\'s message or run button is attended', () => {
@@ -397,6 +400,25 @@ describe('the attended rule and the decision on each tool', () => {
   });
 
   const ctx = (): BotExecContext => ({ botId: 'bot-1', botDir, attended: () => runningWakeAttended('bot-1'), rules: () => [] });
+
+  it('the owner\'s own message is not attended in a conversation that took in outside text or a signed-in task\'s data, nor in none', () => {
+    running = wake({ kind: 'human', text: 'save the notes', source: 'desktop' });
+    expect(evaluateBotExecTool('Write', { file_path: 'a.md', content: 'x' }, ctx())).toMatchObject({ ok: true });
+    markConversation('bot-1', 'signedIn');
+    expect(runningWakeAttended('bot-1')).toBe(false);
+    for (const [tool, input] of [['Write', { file_path: 'a.md', content: 'x' }], ['Edit', { file_path: 'notes.md', old_string: 'a', new_string: 'b' }], ['Bash', { command: 'ls' }]] as const) {
+      expect(evaluateBotExecTool(tool, input, ctx())).toMatchObject({ ok: false, layer: 'attended', reason: expect.stringContaining('holds data from a signed-in task') });
+    }
+    startConversation('bot-1', { tainted: true, signedIn: false });
+    expect(evaluateBotExecTool('Write', { file_path: 'a.md', content: 'x' }, ctx())).toMatchObject({ ok: false, layer: 'attended', reason: expect.stringContaining('outside text') });
+    // A wake that cannot be told clean holds the signed-in mark: the refusal says so.
+    startConversation('bot-1', { tainted: false, signedIn: false });
+    holdSignedInForWake('bot-1');
+    expect(evaluateBotExecTool('Bash', { command: 'ls' }, ctx())).toMatchObject({ ok: false, layer: 'attended', reason: expect.stringContaining('holds data from a signed-in task') });
+    releaseWakeHold('bot-1');
+    __resetConversationMarksForTesting();
+    expect(runningWakeAttended('bot-1')).toBe(false);
+  });
 
   it('Bash, Write and Edit are refused unattended; Read of the folder is not', () => {
     running = wake({ kind: 'routine', routineId: 'r', dueAt: 1 });

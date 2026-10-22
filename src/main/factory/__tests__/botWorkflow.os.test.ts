@@ -24,13 +24,15 @@ import type { FactoryRouter } from '../factoryHost';
 vi.mock('electron', () => ({ app: { getPath: () => '/tmp', isPackaged: false, on: vi.fn() }, ipcMain: { handle: vi.fn(), on: vi.fn() } }));
 let dir: string;
 let guestSourced: boolean | 'unknown' = false;
+let conversationTainted = false;
+let conversationSignedIn = false;
 const owner = { botId: 'bot-a', workspaceId: 'ws-owner', repoKey: 'github.com/acme/repo', threadId: 'general' as const, tainted: true };
 const input = { clientWorkflowId: 'plan-a', title: 'Two steps', steps: [{ title: 'first', prompt: 'make first change' }, { title: 'second', prompt: 'build on first' }] };
 const brain = { kind: 'brain' as const, workspaceId: owner.workspaceId };
 const worker = { kind: 'worker' as const, workspaceId: 'ws-worker' };
 const sha = 'a'.repeat(40);
 const context: RpcContext = { origin: 'local', commanderWorkspace: owner.workspaceId, bot: { botId: owner.botId, workspaceId: owner.workspaceId, role: 'maintainer' } };
-beforeEach(() => { guestSourced = false; __resetFactoryStopForTesting(); dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-workflow-')); });
+beforeEach(() => { guestSourced = false; conversationTainted = false; conversationSignedIn = false; __resetFactoryStopForTesting(); dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-workflow-')); });
 afterEach(() => { __resetRedactedSecretsForTesting(); fs.rmSync(dir, { recursive: true, force: true }); });
 const file = () => path.join(dir, 'workflows.json');
 const open = () => { const store = new BotWorkflowStore(file()); store.load(); return store; };
@@ -54,7 +56,7 @@ function harness(store: BotWorkflowStore, ledger = new TaskLedger({ dir })) {
   const fanout = vi.fn(async (_params: Record<string, unknown>, _ctx: RpcContext, _binding: import('../workflowFanout').WorkflowDispatchBinding): Promise<unknown> => ({ ok: true, status: 'accepted' }));
   const queue = new WakeQueue(path.join(dir, 'wake-queue.json'));
   const ports: WorkflowPorts = { store, profile: () => ({ id: owner.botId, workspaceId: owner.workspaceId, enabled: true, repo: { repoKey: owner.repoKey } } as BotProfile),
-    turn: () => ({ wakeId: 'one', threadId: 'general' }), tainted: () => true, guestSourced: () => guestSourced, rows: () => ledger.list(), fanout: () => fanout, queue: () => queue, active: () => true };
+    turn: () => ({ wakeId: 'one', threadId: 'general' }), tainted: () => true, guestSourced: () => guestSourced, conversationTainted: () => conversationTainted, conversationSignedIn: () => conversationSignedIn, rows: () => ledger.list(), fanout: () => fanout, queue: () => queue, active: () => true };
   const handlers = new Map<string, Parameters<FactoryRouter['register']>[1]>();
   registerWorkflowRpc({ register: (name, fn) => { handlers.set(name, fn); }, onBotRefused: () => () => undefined }, ports);
   const call = (name: string, params: Record<string, unknown>, ctx = context) => handlers.get(name)!(params, ctx);
@@ -482,6 +484,20 @@ describe('durable sequential workflows', () => {
     expect(await h.call(WORKFLOW_RPC.create, input)).toMatchObject({ ok: true });
   });
 
+  it('a conversation that took in outside text saves no workflow, also when it turns so while the write is queued', async () => {
+    const store = open(); const h = harness(store);
+    conversationTainted = true;
+    const r = await h.call(WORKFLOW_RPC.create, input) as { ok: boolean; message?: string };
+    expect(r).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION' });
+    expect(r.message).toContain('saves nothing that runs later');
+    expect(store.list(owner.botId, owner.workspaceId)).toHaveLength(0);
+    conversationTainted = false;
+    const late = h.call(WORKFLOW_RPC.create, input);
+    conversationTainted = true;
+    expect(await late).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION', message: expect.stringContaining('saves nothing that runs later') });
+    expect(store.list(owner.botId, owner.workspaceId)).toHaveLength(0);
+  });
+
   it('a wake not known clean advances no workflow', async () => {
     const store = open(); const h = harness(store);
     const created = await h.call(WORKFLOW_RPC.create, input) as { ok: true; workflow: { id: string } };
@@ -490,6 +506,19 @@ describe('durable sequential workflows', () => {
       expect(await h.call(WORKFLOW_RPC.advance, { workflowId: created.workflow.id, idempotencyKey: 'wake:one:1' })).toMatchObject({ ok: false, code: 'FAILED_PRECONDITION', message: expect.stringContaining('external guest') });
     }
     expect(h.fanout).not.toHaveBeenCalled();
+  });
+
+  it('a conversation that holds data from a signed-in task advances no workflow, and leaves its step as it was', async () => {
+    const store = open(); const h = harness(store);
+    const created = await h.call(WORKFLOW_RPC.create, input) as { ok: true; workflow: { id: string } };
+    conversationSignedIn = true;
+    expect(await h.call(WORKFLOW_RPC.advance, { workflowId: created.workflow.id, idempotencyKey: 'wake:one:1' }))
+      .toMatchObject({ ok: false, code: 'FAILED_PRECONDITION', message: expect.stringContaining('holds data from a signed-in task') });
+    expect(h.fanout).not.toHaveBeenCalled();
+    expect(store.get(created.workflow.id, owner.botId, owner.workspaceId)?.steps.map((step) => step.state)).toEqual(['pending', 'pending']);
+    conversationSignedIn = false;
+    expect(await h.call(WORKFLOW_RPC.advance, { workflowId: created.workflow.id, idempotencyKey: 'wake:one:1' })).toMatchObject({ ok: true });
+    expect(h.fanout).toHaveBeenCalledTimes(1);
   });
 
   it('a workflow is judged again inside its write: one whose wake turned unknown, or ended, while queued is not saved', async () => {

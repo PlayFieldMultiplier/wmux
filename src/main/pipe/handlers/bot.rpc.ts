@@ -52,6 +52,7 @@ import type { WakeTaskSummary } from '../../factory/wakePrompt';
 import { botRepoFromFolder, greetNewBot } from '../../factory/botCreate';
 import { DISMISSED_ANSWER, getHandoffRouter } from '../../factory/handoffRouter';
 import { getWakeTaint, guestGateProvenance, type GuestProvenance, type WakeTaint } from '../../factory/wakeTaint';
+import { TAINTED_CONVERSATION_SAVES_NOTHING, conversationTainted } from '../../factory/conversationMarks';
 import { conversationBotIds } from '../../factory/guestMessage';
 import type { Handoff } from '../../../shared/handoff';
 import type { WakeItem } from '../../../shared/wake';
@@ -132,6 +133,9 @@ export interface SetJobPorts {
   ownerAnswer?: (botId: string, wake: Pick<WakeItem, 'reason'>) => boolean;
   /** That wake's guest provenance (wakeTaint.ts wakeGuest). Missing: clean. */
   wakeGuest?: (wake: Pick<WakeItem, 'reason' | 'botId' | 'workspaceId'>) => GuestProvenance;
+  /** Whether the bot's live conversation took in outside text (none: yes).
+   *  Missing: conversationMarks.ts. */
+  conversationTainted?: (botId: string) => boolean;
 }
 
 /** The wake carries the owner's own answer to the bot's question: an
@@ -285,6 +289,9 @@ export function registerBotRpcHandlers(
       if (!ownerWords) {
         return refuse('not_owner_words', 'a bot sets its job only while it answers the owner\'s own message, or their answer to its question');
       }
+      // Nor from a conversation that took in outside text: the owner's words
+      // in it do not make what it read clean.
+      if ((setJobPorts.conversationTainted ?? conversationTainted)(botId) !== false) return refuse('not_authorized', TAINTED_CONVERSATION_SAVES_NOTHING);
     }
     const r = l.store.setJob(botId, job);
     if (!r.ok) return refuse(r.code, r.code === 'invalid_argument' ? `job must be 1-${BOT_JOB_MAX} characters, no control characters but newlines` : r.message);

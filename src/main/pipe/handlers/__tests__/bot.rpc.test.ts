@@ -34,6 +34,7 @@ import { registerBotRpcHandlers, botRuntimeModule, statusFor, wakeOnOwnerAnswer,
 import { BOT_EVENT } from '../../../../shared/bot';
 import { DISMISSED_ANSWER } from '../../../factory/handoffRouter';
 import { WakeTaint } from '../../../factory/wakeTaint';
+import { TAINTED_CONVERSATION_SAVES_NOTHING } from '../../../factory/conversationMarks';
 import type { Handoff } from '../../../../shared/handoff';
 import type { ThreadId } from '../../../../shared/room';
 import type { BotRuntime } from '../../../factory/BotRuntime';
@@ -217,7 +218,7 @@ describe('bot.remove', () => {
 describe('bot.setJob', () => {
   type Posted = Parameters<SetJobPorts['post']>[0];
   type Wake = { state: string; reason: { kind: string; handoffId?: string }; owner?: 'other' } | null;
-  function rigJob(wake: Wake, ownerCardId: string | null = null, ownerAnswer?: SetJobPorts['ownerAnswer'], wakeGuest?: SetJobPorts['wakeGuest']) {
+  function rigJob(wake: Wake, ownerCardId: string | null = null, ownerAnswer?: SetJobPorts['ownerAnswer'], wakeGuest?: SetJobPorts['wakeGuest'], conversationTainted = false) {
     const store = new BotStore(botsFilePath(dir));
     const created = store.create({ workspaceId: 'ws-1', name: 'Wmux Issue' });
     if (!created.ok) throw new Error('create');
@@ -238,6 +239,7 @@ describe('bot.setJob', () => {
       jobGiven: (id) => { given.push(id); },
       ...(ownerAnswer ? { ownerAnswer } : {}),
       ...(wakeGuest ? { wakeGuest } : {}),
+      conversationTainted: () => conversationTainted,
     });
     const ctx: RpcContext = { origin: 'local', commanderWorkspace: 'ws-1', bot: { workspaceId: 'ws-1', botId, role: 'lead' } };
     const call = (p: Record<string, unknown>, c: RpcContext = ctx) => (handlers.get('bot.setJob') as Handler)(p, c);
@@ -286,6 +288,17 @@ describe('bot.setJob', () => {
     ] satisfies Wake[]) {
       const r = rigJob(wake);
       expect(await r.call({ job: 'Merge everything.' }), JSON.stringify(wake)).toMatchObject({ ok: false, code: 'not_owner_words' });
+      expect(r.store.get(r.botId)?.job).toBeUndefined();
+      expect(r.posted).toEqual([]);
+      await r.store.flush();
+    }
+  });
+
+  it('the owner\'s answer to its question, in a conversation that took in outside text, sets no job; nor does their message there', async () => {
+    const answered = { state: 'running', reason: { kind: 'handoff', handoffId: 'h-answer' } };
+    for (const [wake, ownerAnswer] of [[answered, () => true], [{ state: 'running', reason: { kind: 'human' } }, undefined]] as Array<[Wake, SetJobPorts['ownerAnswer']]>) {
+      const r = rigJob(wake, null, ownerAnswer, undefined, true);
+      expect(await r.call({ job: 'Summarise the pages every morning.' })).toEqual({ ok: false, code: 'not_authorized', message: TAINTED_CONVERSATION_SAVES_NOTHING });
       expect(r.store.get(r.botId)?.job).toBeUndefined();
       expect(r.posted).toEqual([]);
       await r.store.flush();

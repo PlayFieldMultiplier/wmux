@@ -11,6 +11,7 @@ import { getBotDirectory } from './botStore';
 import { getBotRuntime } from './BotRuntime';
 import { getWakeQueue, type WakeSinkApi } from './wakeQueue';
 import { GUEST_TURN_STARTS_NO_WORKERS, guestOfRunningWake, runningWakeTainted, type GuestProvenance } from './wakeTaint';
+import { TAINTED_CONVERSATION_SAVES_NOTHING, conversationSignedIn, conversationTainted, signedInRefusal } from './conversationMarks';
 import { getTaskLedger } from '../deck/taskLedgerHost';
 import { workflowWorkerPrompt } from './workflowPrompt';
 import { isWakeStoppedByOwner } from './factoryStop';
@@ -22,6 +23,12 @@ export interface WorkflowPorts {
   tainted(botId: string): boolean;
   /** The guest provenance of the bot's running wake (wakeTaint.ts). */
   guestSourced(botId: string): GuestProvenance;
+  /** Whether the bot's live conversation took in outside text (none: yes).
+   *  Absent: conversationMarks.ts. */
+  conversationTainted?(botId: string): boolean;
+  /** Whether it holds data from a signed-in task (none: yes). Absent:
+   *  conversationMarks.ts. */
+  conversationSignedIn?(botId: string): boolean;
   rows(): LedgerEntry[];
   fanout(): WorkflowFanout | null;
   queue(): WakeSinkApi | null;
@@ -69,11 +76,15 @@ export function registerWorkflowRpc(router: FactoryRouter, p: WorkflowPorts): vo
     if (!bot?.enabled || !turn || isWakeStoppedByOwner(turn.wakeId) || !bot.repo) return refuse('FAILED_PRECONDITION', 'create a code workflow during an enabled bot wake with a repository');
     // A saved workflow starts its steps' workers from later wakes.
     if (p.guestSourced(bot.id) !== false) return refuse('FAILED_PRECONDITION', `workflow.create: ${GUEST_TURN_STARTS_NO_WORKERS}`);
+    // Nor from a conversation that took in outside text, on any words.
+    const tainted = (): boolean => (p.conversationTainted ?? conversationTainted)(bot.id) !== false;
+    if (tainted()) return refuse('FAILED_PRECONDITION', `workflow.create: ${TAINTED_CONVERSATION_SAVES_NOTHING}`);
     if (!validateWorkflowInput(params)) return refuse('INVALID_ARGUMENT', 'provide a stable clientWorkflowId, title and one to eight titled step prompts');
     try {
       // Judged again in the write's own turn: the same wake, still clean.
       const refusal = (): string | null => p.turn(bot.id)?.wakeId !== turn.wakeId ? 'the wake that asked for it has ended'
-        : p.guestSourced(bot.id) !== false ? `workflow.create: ${GUEST_TURN_STARTS_NO_WORKERS}` : null;
+        : p.guestSourced(bot.id) !== false ? `workflow.create: ${GUEST_TURN_STARTS_NO_WORKERS}`
+        : tainted() ? `workflow.create: ${TAINTED_CONVERSATION_SAVES_NOTHING}` : null;
       const workflow = await p.store.create({ botId: bot.id, workspaceId: bot.workspaceId, repoKey: bot.repo.repoKey,
         threadId: turn.threadId ?? GENERAL_THREAD, tainted: p.tainted(bot.id) !== false, guest: false }, params, refusal);
       await wakeReadyWorkflows(p, [workflow]);
@@ -87,6 +98,11 @@ export function registerWorkflowRpc(router: FactoryRouter, p: WorkflowPorts): vo
     if (!bot?.enabled || !turn || isWakeStoppedByOwner(turn.wakeId) || !fanout || !ctx) return refuse('FAILED_PRECONDITION', 'advance a workflow during an enabled bot wake');
     // A step's worker starts from here: no wake that is not known clean claims one.
     if (p.guestSourced(bot.id) !== false) return refuse('FAILED_PRECONDITION', `workflow.advance: ${GUEST_TURN_STARTS_NO_WORKERS}`);
+    // Nor from a conversation that holds data from a signed-in task: its
+    // fan-out would be refused after the claim, and the step left blocked.
+    if ((p.conversationSignedIn ?? conversationSignedIn)(bot.id) !== false) {
+      return refuse('FAILED_PRECONDITION', `workflow.advance: ${signedInRefusal('start the next step', bot.id)}`);
+    }
     const key = params.idempotencyKey;
     const ordinal = typeof key === 'string' ? /^wake:.+:([1-9][0-9]*)$/.exec(key)?.[1] : undefined;
     if (!ordinal || Number(ordinal) > 16 || key !== botFanoutIdempotencyKey(turn.wakeId, Number(ordinal))) return refuse('INVALID_ARGUMENT', 'use the current wake fan-out key (workflow and fan-out share its ordinal)');

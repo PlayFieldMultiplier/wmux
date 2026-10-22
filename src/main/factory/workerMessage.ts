@@ -15,9 +15,11 @@
 //     types there and gives up after its deadline (`held`: nothing typed);
 //   - the rate: one message in flight per task, at least MIN_GAP_MS apart,
 //     at most PER_HOUR in a rolling hour (attempts count, delivered or not);
-//   - the origin: a message from a wake that carried outside text
-//     (wakeTaint.ts) goes only to a task recorded as started from outside
-//     text, so a task recorded clean only ever took clean instructions.
+//   - the origin: a message from a wake, or a conversation, that carried
+//     outside text (wakeTaint.ts, conversationMarks.ts) goes only to a task
+//     recorded as started from outside text, so a task recorded clean only
+//     ever took clean instructions; a conversation that holds data from a
+//     signed-in task writes to no other task.
 // The text goes in after one fixed line naming the bot and the task, so the
 // worker can tell it from the owner's typing.
 
@@ -25,7 +27,7 @@ import { BOT_WORKER_MESSAGE_LIMITS, type BotWorkerMessageResult } from '../../sh
 import type { LedgerEntry } from '../../shared/ledger';
 import { GUEST_TURN_STARTS_NO_WORKERS, guestOfWake, runningWakeTainted, type GuestProvenance } from './wakeTaint';
 import { currentWakeId } from './wakeQueue';
-import { conversationMarks } from './conversationMarks';
+import { conversationMarks, conversationSignedIn, signedInRefusal } from './conversationMarks';
 
 export const WORKER_MESSAGE_TASK_RE = /^wtask-[A-Za-z0-9_-]{1,80}$/;
 
@@ -48,6 +50,9 @@ export interface WorkerMessagePorts {
   /** Whether the bot's live conversation has taken in outside text (none:
    *  true). Default: conversationMarks.ts. */
   senderConversationTainted?: (botId: string) => boolean;
+  /** Whether the bot's live conversation holds data from a signed-in task
+   *  (none: true). Default: conversationMarks.ts. */
+  senderSignedIn?: (botId: string) => boolean;
   /** The id of the wake the bot is running now. Default: wakeQueue.ts. */
   senderWakeId?: (botId: string) => string | null;
   /** A wake's guest provenance by id. Default: wakeTaint.ts guestOfWake. */
@@ -140,16 +145,27 @@ export async function deliverWorkerMessage(
       clean = false;
     }
     if (!clean) return refuse('not_now', 'a task with a signed-in connection takes messages only from a wake and conversation that took in no outside text');
+  } else {
+    // What a signed-in task read stays in this conversation: no other
+    // worker is told it.
+    let signedIn = true;
+    try {
+      signedIn = (ports.senderSignedIn ?? conversationSignedIn)(botId) !== false;
+    } catch {
+      signedIn = true;
+    }
+    if (signedIn) return refuse('not_now', signedInRefusal('write to a worker of another task', botId));
   }
   if (origin.tainted === false) {
     let tainted = true;
     try {
-      tainted = (ports.senderTainted ?? runningWakeTainted)(botId) !== false;
+      tainted = (ports.senderTainted ?? runningWakeTainted)(botId) !== false
+        || (ports.senderConversationTainted ?? ((id: string) => conversationMarks(id)?.tainted !== false))(botId) !== false;
     } catch {
       tainted = true;
     }
     if (tainted) {
-      return refuse('not_now', 'this task was started from clean input, and this wake carried outside text: it takes messages only from a clean wake');
+      return refuse('not_now', 'this task was started from clean input, and this wake or its conversation carried outside text: it takes messages only from a clean wake and conversation');
     }
   }
   const now = (ports.now ?? Date.now)();

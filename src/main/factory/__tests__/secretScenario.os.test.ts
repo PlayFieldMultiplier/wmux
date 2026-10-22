@@ -120,7 +120,7 @@ describe('bot secret scenario', () => {
     setSecretGrantSource(getSecretStore);
     const wakes: WakeEnqueueInput[] = [];
     const ports = { wakes: { enqueue: (w: WakeEnqueueInput) => { wakes.push(w); return null; } }, factLog: facts };
-    const deps = { store: getSecretStore, writer: () => writer, ports: () => ports, guestWake: () => false as const };
+    const deps = { store: getSecretStore, writer: () => writer, ports: () => ports, guestWake: () => false as const, signedIn: () => false };
     const botCtx = { origin: 'local', bot: BOT } as unknown as RpcContext;
 
     // ── 1. the bot asks (a non-credential name is refused first) ──

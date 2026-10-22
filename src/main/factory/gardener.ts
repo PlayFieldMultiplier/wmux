@@ -29,7 +29,7 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { isCoordinatorBot, type BotProfile } from '../../shared/bot';
 import type { Fact } from '../../shared/facts';
-import type { ThreadId } from '../../shared/room';
+import { inAnotherBotsDm, type ThreadId } from '../../shared/room';
 import type { WakeReason } from '../../shared/wake';
 import type { FactLogApi } from './factLog';
 import type { BotDirectoryApi } from './botStore';
@@ -48,6 +48,9 @@ const GROUP_FACT_IDS_MAX = 20;
 export interface CorrectionGroup {
   /** The pattern: `<role>:<category>` (or `<role>:<cardKind>`). */
   key: string;
+  /** How many corrections the pattern holds (in the window). */
+  count: number;
+  /** The facts the reading bot may see: none from another bot's 1:1. */
   factIds: string[];
   /** The workspaces of the corrected bots, most frequent first. */
   workspaceIds: string[];
@@ -76,8 +79,10 @@ export function correctionKey(f: Fact, bots: BotDirectoryApi | null): string | n
   return `${role}:${what}`;
 }
 
-/** The corrections grouped by pattern; only groups of at least `threshold`. Pure. */
-export function correctionGroups(facts: readonly Fact[], bots: BotDirectoryApi | null, threshold = GARDENER_THRESHOLD): CorrectionGroup[] {
+/** The corrections grouped by pattern; only groups of at least `threshold`.
+ *  Every correction counts; the ids and notes are only those `reader` may
+ *  see (none from another bot's 1:1 with the owner). Pure. */
+export function correctionGroups(facts: readonly Fact[], bots: BotDirectoryApi | null, threshold = GARDENER_THRESHOLD, reader?: string): CorrectionGroup[] {
   const groups = new Map<string, { facts: Fact[]; ws: Map<string, number> }>();
   for (const f of facts) {
     const key = correctionKey(f, bots);
@@ -99,13 +104,17 @@ export function correctionGroups(facts: readonly Fact[], bots: BotDirectoryApi |
   }
   return [...groups]
     .filter(([, g]) => g.facts.length >= threshold)
-    .map(([key, g]) => ({
-      key,
-      factIds: g.facts.map((f) => f.id).slice(-GROUP_FACT_IDS_MAX),
-      workspaceIds: [...g.ws].sort((a, b) => b[1] - a[1]).map(([w]) => w),
-      notes: g.facts.map((f) => (typeof f.payload.note === 'string' ? f.payload.note.slice(0, 160) : '')).filter(Boolean).slice(-3),
-    }))
-    .sort((a, b) => b.factIds.length - a.factIds.length);
+    .map(([key, g]) => {
+      const shown = reader === undefined ? g.facts : g.facts.filter((f) => !inAnotherBotsDm(f.payload.threadId, reader));
+      return {
+        key,
+        count: g.facts.length,
+        factIds: shown.map((f) => f.id).slice(-GROUP_FACT_IDS_MAX),
+        workspaceIds: [...g.ws].sort((a, b) => b[1] - a[1]).map(([w]) => w),
+        notes: shown.map((f) => (typeof f.payload.note === 'string' ? f.payload.note.slice(0, 160) : '')).filter(Boolean).slice(-3),
+      };
+    })
+    .sort((a, b) => b.count - a.count);
 }
 
 /** The stable id of a proposal for a pattern (its thread suffix). */
@@ -179,7 +188,8 @@ export class Gardener {
     const log = this.ports.factLog();
     if (!log) return [];
     const since = this.now() - GARDENER_WINDOW_MS;
-    return correctionGroups(factsSince(log, since).filter((f) => f.kind === 'human.correction'), this.ports.bots());
+    const bots = this.ports.bots();
+    return correctionGroups(factsSince(log, since).filter((f) => f.kind === 'human.correction'), bots, GARDENER_THRESHOLD, hqBot(bots)?.id);
   }
 
   private recentlyProposed(key: string): boolean {
@@ -212,6 +222,13 @@ export class Gardener {
       // Only a wake that was queued counts as proposed: a dropped one is
       // tried again on the next correction.
       if (!queued) continue;
+      // The pattern rides in its thread: corrections made in another bot's
+      // 1:1 count, but their words stay out of the wake.
+      try {
+        this.ports.note?.(hq.workspaceId, `${GARDENER_THREAD_PREFIX}${id}` as ThreadId, `Correction pattern ${g.key}`, `${g.count} corrections of this pattern in the last 7 days; ${g.factIds.length} of them are listed in this wake.`);
+      } catch {
+        /* best effort */
+      }
       this.proposals.set(id, { key: g.key, at, factIds: g.factIds, workspaceIds: g.workspaceIds });
       woke.push(id);
     }

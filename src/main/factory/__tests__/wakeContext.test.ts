@@ -41,6 +41,18 @@ describe('wakeContext', () => {
     expect(wakeGroup(ports(fresh), me, wake({ kind: 'human', text: 'x', source: 'desktop' }, G))).toBeNull();
   });
 
+  it('the owner\'s words in another bot\'s 1:1 never reach this bot\'s wake: no sample, no language from them', () => {
+    const elsewhere = [owner('Q3 revenue is 4.2M, keep it quiet', { threadId: 'dm:bot-0000000b' as ThreadId })];
+    for (const r of [{ kind: 'routine', routineId: 'r-1', dueAt: 1 }, { kind: 'facts', factIds: [], trigger: { kind: 'pr.opened' } }] as WakeItem['reason'][]) {
+      const lang = wakeLanguage(ports(elsewhere, { uiLocale: () => 'en' }), me, wake(r));
+      expect(JSON.stringify(lang)).not.toContain('Q3');
+      expect(lang).toEqual({ name: 'English', source: 'ui' });
+    }
+    // This bot's own 1:1 still sets it.
+    const mine = [owner('Q3 notes for you', { threadId: `dm:${me.id}` as ThreadId })];
+    expect(wakeLanguage(ports(mine, { uiLocale: () => 'en' }), me, wake({ kind: 'intro' }))?.sample).toBe('Q3 notes for you');
+  });
+
   it('reads a language from the script; a UI locale as its English name', () => {
     expect(scriptLanguage('머지할거 머지해')).toBe('Korean');
     expect(scriptLanguage('マージして')).toBe('Japanese');

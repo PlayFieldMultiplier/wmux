@@ -90,7 +90,7 @@ import type { Fact, FactDraft } from '../../shared/facts';
 import type { MergeEffect } from '../../shared/moaDecision';
 import type { PrLaneFacts } from '../../shared/prReview';
 import type { RpcContext } from '../../shared/rpc';
-import { GENERAL_THREAD, ROOM_LIMITS, dmThreadBot, issueThreadId, parseThreadId, prThreadId, type RoomCard, type ThreadId } from '../../shared/room';
+import { GENERAL_THREAD, ROOM_LIMITS, dmThreadBot, dmThreadId, issueThreadId, parseThreadId, prThreadId, type RoomCard, type ThreadId } from '../../shared/room';
 import type { FactoryRouter } from './factoryHost';
 import { factFromMergeEffect } from './factIngest';
 import { fenceFor } from '../../shared/markdownFence';
@@ -198,6 +198,17 @@ export interface ApprovalWake {
   /** The owner card that started the wake (RunningWake.ownerCardId): the
    *  request's card answers it when it lands in that card's thread. */
   ownerCardId?: string;
+  /** The bot's conversation holds data from a signed-in task
+   *  (conversationMarks.ts): the request's card, which carries the bot's
+   *  reason, goes to the bot's own 1:1. Absent: not known otherwise, so
+   *  yes. */
+  signedIn?: boolean;
+}
+
+/** Whether a wake's conversation is not known to hold no signed-in task's
+ *  data. */
+function signedInWake(wake: Pick<ApprovalWake, 'signedIn'>): boolean {
+  return wake.signedIn !== false;
 }
 
 /** Whether a wake is not known to be clean of a guest's words. */
@@ -680,7 +691,9 @@ export class ApprovalService {
       workspaceId: bot.workspaceId,
       // Where the bot talks with the owner, so the owner's "merge it" there
       // approves it; the card links the PR's (or issue's) own thread.
-      threadId: this.conversationThread(bot.botId, wake),
+      // The conversation's mark as it reads now, after the waits, and never
+      // cleaner than when it asked.
+      threadId: this.conversationThread(bot.botId, wake, signedInWake(wake) || signedInWake(still)),
       reason,
       // As the wake reads now, after the waits, and never cleaner than when
       // it asked.
@@ -869,10 +882,13 @@ export class ApprovalService {
   }
 
   /** The thread a request's card goes to: the bot's 1:1 when its turn runs
-   *  there, else the thread of the owner's latest words to the bot (its
-   *  latest owner-message wake), else the running wake's when that is the
-   *  owner's, else `general`. */
-  private conversationThread(botId: string, wake: ApprovalWake): ThreadId {
+   *  there or its conversation holds data from a signed-in task (the card
+   *  carries the bot's reason, and no other bot reads that 1:1), else the
+   *  thread of the owner's latest words to the bot (its latest
+   *  owner-message wake), else the running wake's when that is the owner's,
+   *  else `general`. */
+  private conversationThread(botId: string, wake: ApprovalWake, signedIn = signedInWake(wake)): ThreadId {
+    if (signedIn) return dmThreadId(botId);
     // A turn in the bot's 1:1 (its task's facts wake there too) asks there:
     // the 1:1 is where that work was asked for.
     if (dmThreadBot(wake.threadId) === botId) return wake.threadId as ThreadId;

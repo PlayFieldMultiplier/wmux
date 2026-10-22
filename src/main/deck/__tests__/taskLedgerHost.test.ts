@@ -13,6 +13,8 @@ import {
   setTaskLedgerForTests,
 } from '../taskLedgerHost';
 import { raiseDecision, composeDecisionContext, DECISION_LEDGER_PREFIX_MAX_CHARS, DECISION_LIMITS } from '../deckDecisionStore';
+import { sanitizeFanoutOrigin } from '../../../shared/fanoutOrigin';
+import { taskSignedIn } from '../../../shared/ledger';
 
 let dir: string;
 let ledger: TaskLedger;
@@ -133,6 +135,21 @@ describe('createWorkTaskReconciler', () => {
       { verifiedWorkspaceId: 'ws-other' },
     ]);
     expect(ledger.get('wtask-old')?.status).toBe('working');
+  });
+
+  it('a mirrored row of a signed-in task keeps its gateway connections, so it still reads as signed-in', async () => {
+    const tasks = [
+      { id: 'wtask-gw', title: 'recovered', status: 'open', owner: { verifiedWorkspaceId: 'ws-parent' }, paneGroupId: 'ws-gw' },
+    ];
+    const reconcile = createWorkTaskReconciler({
+      candidateOwners: () => ['ws-parent'],
+      missionList: async () => ({ ok: true, results: [{ verifiedWorkspaceId: 'ws-parent', ok: true, tasks }] }),
+      originOf: () => sanitizeFanoutOrigin({ kind: 'bot', botId: 'bot-0000aaaa', tainted: true, gatewayConnectors: ['gmail'] }) ?? null,
+    });
+    await reconcile();
+    const row = ledger.get('wtask-gw');
+    expect(row?.dispatch).toMatchObject({ origin: { kind: 'bot', botId: 'bot-0000aaaa', tainted: true }, connectors: ['gmail'], gatewayConnectors: ['gmail'], reconciled: true });
+    expect(row && taskSignedIn(row)).toBe(true);
   });
 
   it('a mirrored row carries the lineage stamp\'s origin, and the fan-out\'s own register replaces it (#2393)', async () => {

@@ -38,6 +38,11 @@ export interface FanoutOrigin {
   tainted?: boolean;
   /** kind 'bot': the starting wake's guest provenance (wakeTaint.ts). */
   guest?: boolean;
+  /** kind 'bot': the connections the task's worker reached through main's
+   *  signed-in gateway (set by main at dispatch). A row the WorkTask
+   *  reconciler mirrors from this stamp keeps them, so the task still reads
+   *  as signed-in (shared/ledger.ts taskSignedIn). */
+  gatewayConnectors?: string[];
 }
 
 /** One task workspace's durable stamp as FANOUT_LINEAGE answers it. `botId`
@@ -51,6 +56,7 @@ export interface FanoutLineageEntry {
 }
 
 const ID_MAX = 128;
+const CONNECTOR_NAME_RE = /^[a-z][a-z0-9-]{0,30}[a-z0-9]$/;
 const LABEL_MAX = 200;
 
 function boundedString(raw: unknown, max: number): string | undefined {
@@ -75,7 +81,15 @@ export function sanitizeFanoutOrigin(raw: unknown): FanoutOrigin | undefined {
   if (kind === 'bot') {
     const botId = r['botId'];
     if (typeof botId !== 'string' || !BOT_ID_RE.test(botId)) return undefined;
-    return { kind, botId, ...(typeof r['tainted'] === 'boolean' ? { tainted: r['tainted'] } : {}), ...(typeof r['guest'] === 'boolean' ? { guest: r['guest'] } : {}) };
+    const gw = r['gatewayConnectors'];
+    const gatewayConnectors = Array.isArray(gw) && gw.length > 0 && gw.length <= 8 && gw.every((n) => typeof n === 'string' && CONNECTOR_NAME_RE.test(n)) ? [...gw as string[]] : undefined;
+    return {
+      kind,
+      botId,
+      ...(typeof r['tainted'] === 'boolean' ? { tainted: r['tainted'] } : {}),
+      ...(typeof r['guest'] === 'boolean' ? { guest: r['guest'] } : {}),
+      ...(gatewayConnectors ? { gatewayConnectors } : {}),
+    };
   }
   if (kind !== 'pane') return { kind };
   const paneId = boundedString(r['paneId'], ID_MAX);
