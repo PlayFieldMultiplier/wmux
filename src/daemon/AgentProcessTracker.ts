@@ -473,6 +473,73 @@ export async function readExecutableImage(pid: number): Promise<string | undefin
   }
 }
 
+/** npm packages a runtime-hosted agent ships in: each registry row's
+ *  `process.packages`, plus the packages of agents whose rows name none. */
+const EXTRA_AGENT_PACKAGES: Partial<Record<AgentSlug, readonly string[]>> = {
+  codex: ['@openai/codex'],
+  opencode: ['opencode-ai'],
+  copilot: ['@github/copilot'],
+};
+const AGENT_PACKAGES: ReadonlyMap<AgentSlug, ReadonlySet<string>> = new Map(
+  AGENT_ROWS.map((row) => [row.slug, new Set([...(row.process?.packages ?? []), ...(EXTRA_AGENT_PACKAGES[row.slug] ?? [])])] as const),
+);
+
+/** Native agents whose installer names each binary by its version, under the
+ *  user's home (`~/.local/share/claude/versions/2.1.307`). */
+const NATIVE_VERSION_DIRS: ReadonlyMap<AgentSlug, string> = new Map([['claude', '.local/share/claude/versions']]);
+
+/** A release binary named for its target (`codex-aarch64-apple-darwin`). */
+const NATIVE_TARGET_SUFFIX = /-(?:aarch64|x86_64)-(?:apple-darwin|unknown-linux-(?:gnu|musl))$/;
+
+/**
+ * Whether the executable the kernel reports for `entry` (`image`, from
+ * readExecutableImage) really is the `slug` agent the process's own argv
+ * claims (darwin, linux). argv is self-reported (`exec -a claude sleep`), so:
+ *   - a native agent's image must itself be that agent: its file name is the
+ *     agent's executable (`claude`, `kiro-cli`, `codex-aarch64-apple-darwin`),
+ *     or it is a version binary in that agent's install directory;
+ *   - a runtime-hosted agent's image must be a runtime (`node`, `python3.12`),
+ *     and the real path of its absolute script argument must lie inside one
+ *     of that agent's npm packages (`…/node_modules/@anthropic-ai/claude-code/cli.js`).
+ * Anything else, or an unreadable image, is not that agent. A copied binary or
+ * package still passes. Pure apart from `realpath` — exported for tests.
+ */
+export function isAgentImage(
+  entry: ProcessTreeEntry,
+  slug: AgentSlug,
+  image: string | undefined,
+  userHome = os.homedir(),
+  realpath: (file: string) => string = fs.realpathSync,
+): boolean {
+  if (!image || !path.posix.isAbsolute(image)) return false;
+  if (!RUNTIME_STEMS.has(imageStem(entry.name))) {
+    const stem = imageStem(image).replace(NATIVE_TARGET_SUFFIX, '');
+    if ((AGENT_SLUG_SET.has(stem) ? stem : NATIVE_STEM_TO_SLUG.get(stem)) === slug) return true;
+    const versions = NATIVE_VERSION_DIRS.get(slug);
+    return !!versions && path.posix.dirname(image) === path.posix.join(userHome, versions) &&
+      /^\d+\.\d+\.\d+/.test(path.posix.basename(image));
+  }
+  const runtime = imageStem(image).replace(/^nodejs$/, 'node').replace(/^(python3)\.\d+$/, '$1');
+  if (!RUNTIME_STEMS.has(runtime)) return false;
+  const argv = tokenizeCmdline(entry.cmdline ?? '');
+  const script = argv[1]?.startsWith('-') ? argv.slice(2).find((t) => !t.startsWith('-')) : argv[1];
+  if (!script || !path.posix.isAbsolute(script)) return false;
+  let real: string;
+  try {
+    real = realpath(script);
+  } catch {
+    return false;
+  }
+  // The innermost package owns the file.
+  const segs = real.split('/');
+  const at = segs.lastIndexOf('node_modules');
+  if (at === -1) return false;
+  const scoped = segs[at + 1]?.startsWith('@') === true;
+  if (at + (scoped ? 3 : 2) >= segs.length) return false;
+  const pkg = scoped ? `${segs[at + 1]}/${segs[at + 2]}` : segs[at + 1];
+  return AGENT_PACKAGES.get(slug)?.has(pkg) === true;
+}
+
 /** One full process-table snapshot (pid/ppid/name[/cmdline]). Windows has no
  *  PPID in tasklist, so this shells out to Windows PowerShell 5.1 (always
  *  present, absolute System32 path — no PATH trust) for a single CIM
@@ -512,6 +579,9 @@ interface TrackedAgent {
   /** #1727 — set for an agent inside a WSL pane: `pid` is a LINUX pid, and
    *  this says where it lives and how to tell it from a reused one. */
   wsl?: WslWatchedAgent;
+  /** The last executable check of `pid` (isAgentImage), keyed by the slug and
+   *  argv it was made for: one image read per launch, not per delivery. */
+  image?: { key: string; ok: boolean };
 }
 
 /** #1727 — what the tracker needs to follow agents inside WSL panes. All
@@ -582,7 +652,21 @@ export class AgentProcessTracker {
     private readonly readImage: (pid: number) => Promise<string | undefined> = readExecutableImage,
     private readonly userHome: string = os.homedir(),
     private readonly wsl: WslTrackingOptions = {},
+    private readonly platform: NodeJS.Platform = process.platform,
   ) {}
+
+  /** Whether `entry`'s real executable is the `slug` agent (isAgentImage).
+   *  Only darwin and linux can read it; Windows keeps the image-name check.
+   *  `state`, when it tracks this pid, caches the verdict for this argv. */
+  private async imageMatches(entry: ProcessTreeEntry, slug: AgentSlug, state?: TrackedAgent): Promise<boolean> {
+    if (this.platform !== 'darwin' && this.platform !== 'linux') return true;
+    const key = `${slug}\0${entry.name}\0${entry.cmdline ?? ''}`;
+    const cache = state?.pid === entry.pid ? state : undefined;
+    if (cache?.image?.key === key) return cache.image.ok;
+    const ok = isAgentImage(entry, slug, await this.readImage(entry.pid).catch(() => undefined), this.userHome);
+    if (cache) cache.image = { key, ok };
+    return ok;
+  }
 
   private isWsl(sessionId: string): boolean {
     return this.wsl.isWslSession?.(sessionId) === true;
@@ -901,7 +985,9 @@ export class AgentProcessTracker {
 
   /** #1307 — re-picks from a fresh process table: true only while the
    *  tracked pid is still the pane shell's agent descendant with the
-   *  expected slug, so a reused pid fails. Enumerates, unlike identityFor. */
+   *  expected slug, so a reused pid fails. On macOS and Linux its real
+   *  executable must also be that agent (isAgentImage), so a renamed process
+   *  fails. Enumerates, unlike identityFor. */
   async verifyLive(sessionId: string, expectedSlug: AgentSlug): Promise<boolean> {
     const s = this.states.get(sessionId);
     if (s?.wsl) {
@@ -912,11 +998,14 @@ export class AgentProcessTracker {
     const shellPid = this.shellPids.get(sessionId);
     if (!s?.alive || shellPid === undefined) return false;
     try {
-      const pick = selectAgentProcess(await this.snapshot(), shellPid);
+      const table = await this.snapshot();
+      const pick = selectAgentProcess(table, shellPid);
       // The death edge, disarm or a re-arm can land while the table is read.
-      return this.states.get(sessionId) === s && s.alive &&
-        this.shellPids.get(sessionId) === shellPid &&
-        pick?.pid === s.pid && pick.slug === expectedSlug;
+      const current = () => this.states.get(sessionId) === s && s.alive && this.shellPids.get(sessionId) === shellPid;
+      const picked = table.find((e) => e.pid === s.pid);
+      if (!current() || !picked || pick?.pid !== s.pid || pick.slug !== expectedSlug) return false;
+      // argv names the agent; the kernel's executable must back it.
+      return await this.imageMatches(picked, expectedSlug, s) && current();
     } catch {
       return false;
     }
@@ -948,7 +1037,9 @@ export class AgentProcessTracker {
     try {
       const root = (await this.snapshot()).find(entry => entry.pid === pid);
       return this.shellPids.get(sessionId) === pid && !!root &&
-        selectAgentProcess([{ ...root, ppid: -1 }], -1)?.slug === expectedSlug;
+        selectAgentProcess([{ ...root, ppid: -1 }], -1)?.slug === expectedSlug &&
+        await this.imageMatches(root, expectedSlug, this.states.get(sessionId)) &&
+        this.shellPids.get(sessionId) === pid;
     } catch { return false; }
   }
 

@@ -1,7 +1,11 @@
-import { describe, it, expect, vi } from 'vitest';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import { afterAll, describe, it, expect, vi } from 'vitest';
 import {
   AGENT_MISS_BACKOFF_MS,
   AgentProcessTracker,
+  isAgentImage,
   parsePipeDelimited,
   parsePsOutput,
   resolveAgentSlug,
@@ -645,7 +649,7 @@ describe('AgentProcessTracker', () => {
   it('verifyLive passes only while a fresh table still picks the tracked pid and slug', async () => {
     const watcher = makeWatcher();
     let table = [entry(200, SHELL, 'claude.exe')];
-    const tracker = new AgentProcessTracker(watcher, async () => table);
+    const tracker = new AgentProcessTracker(watcher, async () => table, undefined, undefined, undefined, 'win32');
 
     expect(await tracker.verifyLive('s1', 'claude')).toBe(false); // never armed
     tracker.arm('s1', SHELL);
@@ -664,7 +668,7 @@ describe('AgentProcessTracker', () => {
   it('verifyLive fails when the tracked pid now runs a different program — the #1307 regression guard', async () => {
     const watcher = makeWatcher();
     let table = [entry(200, SHELL, 'claude.exe')];
-    const tracker = new AgentProcessTracker(watcher, async () => table);
+    const tracker = new AgentProcessTracker(watcher, async () => table, undefined, undefined, undefined, 'win32');
     tracker.arm('s1', SHELL);
     await flush();
 
@@ -679,7 +683,7 @@ describe('AgentProcessTracker', () => {
     let gated = false;
     const tracker = new AgentProcessTracker(watcher, () => (gated
       ? new Promise<ProcessTreeEntry[]>((resolve) => { release = resolve; })
-      : Promise.resolve(TABLE)));
+      : Promise.resolve(TABLE)), undefined, undefined, undefined, 'win32');
     tracker.arm('s1', SHELL);
     await flush();
 
@@ -696,7 +700,7 @@ describe('AgentProcessTracker', () => {
     const tracker = new AgentProcessTracker(watcher, async () => {
       if (fail) throw new Error('ps timed out');
       return TABLE;
-    });
+    }, undefined, undefined, undefined, 'win32');
     tracker.arm('s1', SHELL);
     await flush();
 
@@ -709,7 +713,7 @@ describe('owned native agent root', () => {
   it('accepts only the armed PTY root with freshly matching executable metadata', async () => {
     let entries = [entry(100, 1, 'opencode')];
     const watcher = { watch: vi.fn(), unwatch: vi.fn() };
-    const tracker = new AgentProcessTracker(watcher, async () => entries);
+    const tracker = new AgentProcessTracker(watcher, async () => entries, undefined, undefined, undefined, 'win32');
     expect(await tracker.verifyOwnedRoot('pane', 100, 'opencode')).toBe(false);
     tracker.arm('pane', 100);
     expect(await tracker.verifyOwnedRoot('pane', 100, 'opencode')).toBe(true);
@@ -718,6 +722,106 @@ describe('owned native agent root', () => {
     expect(await tracker.verifyOwnedRoot('pane', 100, 'opencode')).toBe(false);
     tracker.disarm('pane');
     expect(await tracker.verifyOwnedRoot('pane', 100, 'opencode')).toBe(false);
+  });
+});
+
+// argv is self-reported, so on macOS and Linux an agent is verified by the
+// executable the kernel reports for it.
+describe('the real executable backs the agent', () => {
+  const HOME = '/Users/dev';
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-agent-image-'));
+  afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
+  // An npm global install: bin/<name> links into the package.
+  const install = (pkg: string, file: string, bin: string): string => {
+    const target = path.join(root, 'lib', 'node_modules', pkg, file);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, '');
+    fs.mkdirSync(path.join(root, 'bin'), { recursive: true });
+    fs.symlinkSync(target, path.join(root, 'bin', bin));
+    return path.join(root, 'bin', bin);
+  };
+  const claudeBin = install('@anthropic-ai/claude-code', 'cli.js', 'claude');
+  const codexBin = install('@openai/codex', 'bin/codex.js', 'codex');
+  const lookalike = path.join(root, 'claude.js');
+  fs.writeFileSync(lookalike, '');
+  const NODE = '/opt/homebrew/Cellar/node/24.1.0/bin/node';
+
+  it('a native agent is its own binary, never another program renamed by exec -a', () => {
+    const claude = entry(200, 100, 'claude', 'claude --model opus');
+    expect(isAgentImage(claude, 'claude', `${HOME}/.local/share/claude/versions/2.1.307`, HOME)).toBe(true);
+    expect(isAgentImage(claude, 'claude', '/opt/homebrew/Caskroom/claude-code/2.1.307/claude', HOME)).toBe(true);
+    expect(isAgentImage(claude, 'claude', '/bin/sleep', HOME)).toBe(false);
+    expect(isAgentImage(claude, 'claude', '/tmp/x/2.1.307', HOME)).toBe(false);
+    expect(isAgentImage(claude, 'claude', undefined, HOME)).toBe(false);
+    expect(isAgentImage(entry(200, 100, 'codex'), 'codex', '/opt/homebrew/Caskroom/codex/0.50.0/codex-aarch64-apple-darwin', HOME)).toBe(true);
+    expect(isAgentImage(entry(200, 100, 'kiro-cli'), 'kiro', '/usr/local/bin/kiro-cli', HOME)).toBe(true);
+    expect(isAgentImage(entry(200, 100, 'codex'), 'claude', '/usr/local/bin/codex', HOME)).toBe(false);
+  });
+
+  it('a runtime-hosted agent runs a script inside that agent\'s installed package', () => {
+    expect(isAgentImage(entry(200, 100, 'node', `node ${claudeBin}`), 'claude', NODE, HOME)).toBe(true);
+    expect(isAgentImage(entry(200, 100, 'node', `node --max-old-space-size=4096 ${claudeBin} -c`), 'claude', NODE, HOME)).toBe(true);
+    expect(isAgentImage(entry(200, 100, 'node', `node ${codexBin}`), 'codex', '/usr/bin/nodejs', HOME)).toBe(true);
+    expect(isAgentImage(entry(200, 100, 'node', `node ${codexBin}`), 'claude', NODE, HOME)).toBe(false);
+    // A script that only looks like the agent, a missing one, a relative one.
+    expect(isAgentImage(entry(200, 100, 'node', `node ${lookalike}`), 'claude', NODE, HOME)).toBe(false);
+    expect(isAgentImage(entry(200, 100, 'node', 'node /tmp/claude.js'), 'claude', NODE, HOME)).toBe(false);
+    expect(isAgentImage(entry(200, 100, 'node', 'node ./cli.js'), 'claude', NODE, HOME)).toBe(false);
+    // `exec -a node sleep …`: the image is no runtime.
+    expect(isAgentImage(entry(200, 100, 'node', `node ${claudeBin}`), 'claude', '/bin/sleep', HOME)).toBe(false);
+  });
+
+  const tracker = (table: ProcessTreeEntry[], readImage: (pid: number) => Promise<string | undefined>, platform: NodeJS.Platform) =>
+    new AgentProcessTracker(makeWatcher(), async () => table, readImage, HOME, {}, platform);
+
+  it('verifyLive refuses a renamed process and reads the image once per launch', async () => {
+    const table = [entry(100, 1, 'zsh'), entry(200, 100, 'claude', 'claude 100')];
+    const sleep = vi.fn(async () => '/bin/sleep');
+    const renamed = tracker(table, sleep, 'darwin');
+    renamed.arm('s1', 100);
+    await flush();
+    expect(await renamed.verifyLive('s1', 'claude')).toBe(false);
+
+    const real = vi.fn(async () => `${HOME}/.local/share/claude/versions/2.1.307`);
+    const live = tracker(table, real, 'linux');
+    live.arm('s1', 100);
+    await flush();
+    expect(await live.verifyLive('s1', 'claude')).toBe(true);
+    expect(await live.isAgentRunning('s1', 'claude', async () => true)).toBe(true);
+    expect(real).toHaveBeenCalledTimes(1);
+  });
+
+  it('verifyLive refuses node running a look-alike script, and accepts the installed agent', async () => {
+    const read = async () => NODE;
+    const fake = tracker([entry(100, 1, 'zsh'), entry(200, 100, 'node', 'node /tmp/claude.js')], read, 'darwin');
+    fake.arm('s1', 100);
+    await flush();
+    expect(fake.identityFor('s1')).toEqual({ slug: 'claude', alive: true });
+    expect(await fake.verifyLive('s1', 'claude')).toBe(false);
+
+    const installed = tracker([entry(100, 1, 'zsh'), entry(200, 100, 'node', `node ${claudeBin}`)], read, 'darwin');
+    installed.arm('s1', 100);
+    await flush();
+    expect(await installed.verifyLive('s1', 'claude')).toBe(true);
+  });
+
+  it('an exec pane\'s own root is checked the same way', async () => {
+    const table = [entry(100, 1, 'opencode', 'opencode')];
+    const renamed = tracker(table, async () => '/bin/sleep', 'darwin');
+    renamed.arm('pane', 100);
+    expect(await renamed.verifyOwnedRoot('pane', 100, 'opencode')).toBe(false);
+    const real = tracker(table, async () => `${HOME}/.opencode/bin/opencode`, 'darwin');
+    real.arm('pane', 100);
+    expect(await real.verifyOwnedRoot('pane', 100, 'opencode')).toBe(true);
+  });
+
+  it('Windows keeps the image-name check and never reads an image', async () => {
+    const read = vi.fn(async () => undefined);
+    const win = tracker([entry(100, 1, 'pwsh.exe'), entry(200, 100, 'claude.exe')], read, 'win32');
+    win.arm('s1', 100);
+    await flush();
+    expect(await win.verifyLive('s1', 'claude')).toBe(true);
+    expect(read).not.toHaveBeenCalled();
   });
 });
 

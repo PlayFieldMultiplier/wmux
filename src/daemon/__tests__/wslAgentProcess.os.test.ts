@@ -333,7 +333,7 @@ describe('AgentProcessTracker in a WSL pane', () => {
     const windowsCheck = vi.fn(async () => true);
     const tracker = new AgentProcessTracker({ watch: () => undefined, unwatch: () => undefined },
       async () => [{ pid: 50, ppid: 1, name: 'bash', cmdline: 'bash' }, { pid: 51, ppid: 50, name: 'claude', cmdline: 'claude' }],
-      async () => undefined, '/home/dev', { isWslSession: () => false });
+      async () => undefined, '/home/dev', { isWslSession: () => false }, 'win32');
     tracker.arm('win-1', 50);
     await new Promise((r) => setTimeout(r, 0));
     expect(await tracker.isAgentRunning('win-1', 'claude', windowsCheck)).toBe(true);
