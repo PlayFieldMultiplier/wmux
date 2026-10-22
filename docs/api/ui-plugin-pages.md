@@ -112,7 +112,11 @@ and Discover views. The curated UI catalog installs the original Agent status
 example from the application bundle; it does not download arbitrary URLs or
 accept public submissions. Installation keeps permissions unapproved until the
 owner reviews the existing permission prompt. The bundled example carries its
-MIT license and publisher metadata.
+MIT license and publisher metadata. At startup, a catalog-installed copy whose
+manifest version is older than the one the application ships is replaced by the
+shipped bundle; if the new version declares more permissions than were
+approved, the plugin asks for approval again. Manually installed bundles are
+never replaced.
 
 Disabling a UI plugin stops new bridge requests, file serving and mounted pages
 without restarting. Re-enabling preserves its reviewed permissions. Uninstall

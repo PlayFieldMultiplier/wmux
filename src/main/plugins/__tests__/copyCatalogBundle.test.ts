@@ -19,10 +19,13 @@ it('keeps every shipped catalog inventory aligned with its complete source bundl
     expect(forge).toContain(`'./examples/plugins/${entry.id}'`);
   }
 });
-it('keeps each catalog entry\'s capabilities and README link aligned with its shipped bundle', () => {
+it('keeps each catalog entry\'s capabilities, version and README link aligned with its shipped bundle', () => {
   for (const entry of UI_PLUGIN_CATALOG) {
-    const manifest = JSON.parse(fs.readFileSync(path.resolve('examples/plugins', entry.id, 'manifest.json'), 'utf8')) as { capabilities: string[] };
+    const manifest = JSON.parse(fs.readFileSync(path.resolve('examples/plugins', entry.id, 'manifest.json'), 'utf8')) as { capabilities: string[]; version: string };
     expect([...entry.capabilities]).toEqual(manifest.capabilities);
+    // The Plugins page shows this version before installation; installed
+    // copies are refreshed when the shipped manifest's version is newer.
+    expect(entry.version).toBe(manifest.version);
     expect(entry.readme).toBe(`https://github.com/openwong2kim/wmux/blob/main/examples/plugins/${entry.id}/README.md`);
   }
 });
