@@ -6,7 +6,7 @@ Run `wmux codex` in a PowerShell terminal pane to start a conversation bound to
 that pane, or `wmux codex resume` to use Codex's resume picker. Other TUI options
 are forwarded to the account's installed managed Codex binary. This path requires
 Codex with `app-server proxy`, `--remote` and `--remote-auth-token-env` (verified
-with 0.162.1), and a matching wmux app/daemon/CLI build.
+with 0.162.1 and 0.163.0), and a matching wmux app/daemon/CLI build.
 
 The launcher obtains a pane claim from main's process-tree walk. The daemon
 reserves that pane's existing relay, exposes an authenticated loopback WebSocket,
