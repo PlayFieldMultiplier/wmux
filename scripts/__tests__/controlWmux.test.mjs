@@ -13,7 +13,9 @@ import {
   electronUserDataDir,
   envHasSuffix,
   findClaimedPort,
+  launchAppArgs,
   launchEnv,
+  launchUserDataDirArg,
   packagedCliBundle,
   parseCdpLog,
   parseConsoleLine,
@@ -289,5 +291,25 @@ describe('stop --purge (purgeSuffixedData)', () => {
     const r = purgeSuffixedData({ suffix, paths: [kept, other], preExisting: [kept], userData: null });
     expect(r.removed).toEqual([]);
     expect(fs.existsSync(kept) && fs.existsSync(other)).toBe(true);
+  });
+});
+
+describe('launch app arguments', () => {
+  it('macOS always gets the mock keychain; a --user-data-dir is passed through as one argument', () => {
+    expect(launchAppArgs({ platform: 'darwin' })).toEqual(['--use-mock-keychain']);
+    expect(launchAppArgs({ platform: 'darwin', userDataDirArg: '/tmp/s/electron-user-data' }))
+      .toEqual(['--use-mock-keychain', '--user-data-dir=/tmp/s/electron-user-data']);
+    expect(launchAppArgs({ platform: 'win32' })).toEqual([]);
+    expect(launchAppArgs({ platform: 'win32', userDataDirArg: 'C:/s/u' })).toEqual(['--user-data-dir=C:/s/u']);
+  });
+
+  it('picks the caller’s dir, else the first launch’s, else on macOS one inside ~/.wmux<suffix>', () => {
+    const base = { home: '/Users/u', suffix: '-verify-a' };
+    expect(launchUserDataDirArg({ ...base, explicit: '/tmp/s/ud', platform: 'darwin' })).toBe('/tmp/s/ud');
+    expect(launchUserDataDirArg({ ...base, previous: '/tmp/first', platform: 'darwin' })).toBe('/tmp/first');
+    expect(launchUserDataDirArg({ ...base, previous: null, platform: 'darwin' })).toBeNull();
+    expect(launchUserDataDirArg({ ...base, platform: 'darwin' })).toBe('/Users/u/.wmux-verify-a/electron-user-data');
+    expect(launchUserDataDirArg({ ...base, platform: 'linux' })).toBeNull();
+    expect(launchUserDataDirArg({ ...base, platform: 'win32' })).toBeNull();
   });
 });

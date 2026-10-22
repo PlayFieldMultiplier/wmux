@@ -191,6 +191,33 @@ export function electronUserDataDir({ suffix, env = {}, home, platform = process
   return p.join(envValue(env, 'XDG_CONFIG_HOME') || p.join(posixHome, '.config'), `wmux${suffix}`);
 }
 
+/**
+ * The `--user-data-dir` a launch gives the app: the caller's own (`launch
+ * --user-data-dir`, which a harness points into its sandbox), else what the
+ * first launch used (`restart`), else, on macOS, a dir inside the run's
+ * ~/.wmux<suffix>, which the purge snapshot already covers. Elsewhere none:
+ * userData stays where the wmux CLI looks for it (role.ts, doctor.ts), and
+ * `stop --purge` removes it from there.
+ */
+export function launchUserDataDirArg({ explicit = null, previous, home, suffix, platform = process.platform }) {
+  if (explicit) return explicit;
+  if (previous !== undefined) return previous;
+  if (platform !== 'darwin') return null;
+  return path.posix.join(home, `.wmux${suffix}`, 'electron-user-data');
+}
+
+/**
+ * The app's arguments. macOS: `--use-mock-keychain`, so the first safeStorage
+ * call cannot open a login-keychain dialog on the owner's desktop (and block
+ * the main thread on a locked screen); e2e/lib.mjs passes the same.
+ */
+export function launchAppArgs({ userDataDirArg = null, platform = process.platform }) {
+  const args = [];
+  if (platform === 'darwin') args.push('--use-mock-keychain');
+  if (userDataDirArg) args.push(`--user-data-dir=${userDataDirArg}`);
+  return args;
+}
+
 /** The userData path the app itself logged at boot (src/main/index.ts appInit), or null. */
 export function parseUserDataLog(text) {
   const m = /\[Main\] WMUX_DATA_SUFFIX="([^"]*)" .{1,8}? userData="([^"]+)"/.exec(String(text ?? ''));
@@ -276,6 +303,8 @@ export function purgeSuffixedData({ suffix, paths, preExisting = [], userData, l
     else skipped.push({ path: userData.path, reason: 'userData: pre-launch state unknown (the app logged another path than predicted); left in place' });
   }
   for (const p of candidates) {
+    // userData inside an already removed ~/.wmux<suffix> is gone with it.
+    if (!pathPresent(p)) continue;
     if (!path.basename(p).includes(suffix)) {
       skipped.push({ path: p, reason: `name does not carry the suffix ${suffix}` });
       continue;

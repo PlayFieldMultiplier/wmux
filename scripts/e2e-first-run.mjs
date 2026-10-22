@@ -97,6 +97,9 @@ const sandbox = fs.mkdtempSync(path.join(sandboxBase(), SANDBOX_PREFIX));
 const fakeBin = path.join(sandbox, 'fake-bin');
 const fakeAgentLog = path.join(runDir, 'fake-agents.jsonl');
 const envFile = path.join(runDir, 'app-env.json');
+// Electron's userData goes into the sandbox (wmux appends the suffix to it),
+// never to %APPDATA% or ~/Library/Application Support.
+const userDataDirArg = path.join(sandbox, 'electron-user-data');
 const realHome = os.homedir();
 const realAppData = process.env.APPDATA;
 const realLocalAppData = process.env.LOCALAPPDATA;
@@ -453,7 +456,7 @@ async function scenario() {
   });
 
   await step('launch', async () => {
-    const r = await must(['launch', '--app', app, '--suffix', suffix, '--env-file', envFile, '--timeout', '120000'], { timeoutMs: 150_000 });
+    const r = await must(['launch', '--app', app, '--suffix', suffix, '--env-file', envFile, '--user-data-dir', userDataDirArg, '--timeout', '120000'], { timeoutMs: 150_000 });
     result.observed.cdpPort = r.cdpPort;
     result.evidenceDir = r.evidenceDir;
     await recordTree();
@@ -522,7 +525,7 @@ async function scenario() {
   await step('wizard finishes', async () => {
     const r = await cw(['wait-settle', '--testid', 'first-run-wizard', '--state', 'hidden', '--quiet', '0', '--timeout', '20000'], { timeoutMs: 45_000 });
     if (!r.ok) throw new StepError('the wizard stayed open after the sample task succeeded');
-    const marker = path.join(driverEnv.APPDATA || path.join(sandbox, '.config'), `wmux${suffix}`, '.first-run');
+    const marker = path.join(`${userDataDirArg}${suffix}`, '.first-run');
     return { completionMarker: fs.existsSync(marker) ? marker : 'not found where expected (informational)' };
   });
 

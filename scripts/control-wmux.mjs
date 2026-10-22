@@ -9,7 +9,7 @@
 // command except `launch` refuses to run without it, so the driver can only
 // ever touch the instance it launched itself — never the owner's real wmux.
 //
-//   node scripts/control-wmux.mjs launch [--app <executable>] [--suffix -verify-x] [--timeout ms] [--env-file vars.json]
+//   node scripts/control-wmux.mjs launch [--app <executable>] [--suffix -verify-x] [--timeout ms] [--env-file vars.json] [--user-data-dir dir]
 //   node scripts/control-wmux.mjs doctor
 //   node scripts/control-wmux.mjs snapshot [--testid ID | --selector CSS | --role R --name N] [--as label]
 //   node scripts/control-wmux.mjs screenshot [--as label]
@@ -34,7 +34,9 @@ import {
   electronUserDataDir,
   envHasSuffix,
   findClaimedPort,
+  launchAppArgs,
   launchEnv,
+  launchUserDataDirArg,
   packagedCliBundle,
   parseCdpLog,
   parseConsoleLine,
@@ -329,19 +331,25 @@ async function cmdLaunch(opts, reconnectState = null) {
   // Electron's userData, snapshotted like the paths above so `stop --purge`
   // removes it only if this run created it. A relaunch keeps the first
   // launch's record; a relaunch of a state without one stays unknown.
-  const userDataPath = electronUserDataDir({ suffix, env, home });
+  const userDataDirArg = launchUserDataDirArg({
+    explicit: opts['user-data-dir'] ? path.resolve(String(opts['user-data-dir'])) : null,
+    previous: reconnectState ? reconnectState.userDataDirArg ?? null : undefined,
+    home,
+    suffix,
+  });
+  const userDataPath = electronUserDataDir({ suffix, env, home, userDataDirArg });
   const userData = reconnectState
     ? reconnectState.userData ?? null
     : { path: userDataPath, existedBeforeLaunch: pathPresent(userDataPath) };
 
   const runId = `${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}${suffix}`;
-  const state = { runId, suffix, app, pid: null, cdpPort: null, startedAt: new Date().toISOString(), preExisting, userData };
+  const state = { runId, suffix, app, pid: null, cdpPort: null, startedAt: new Date().toISOString(), preExisting, userData, userDataDirArg };
   const dir = evidenceDir(state);
   const logPath = path.join(dir, 'app.log');
   const logFd = fs.openSync(logPath, 'a');
   // Renderer console -> stderr -> app.log, so `console` can read history.
   env.ELECTRON_ENABLE_LOGGING = '1';
-  const child = spawn(app, [], { env, detached: true, stdio: ['ignore', logFd, logFd] });
+  const child = spawn(app, launchAppArgs({ userDataDirArg }), { env, detached: true, stdio: ['ignore', logFd, logFd] });
   fs.closeSync(logFd);
   state.pid = child.pid;
   // The app's identity is its pid AND its creation time, read while we still

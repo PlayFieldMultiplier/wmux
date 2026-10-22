@@ -35,7 +35,9 @@ because it drives an already packaged app.
 - **Isolated**: a unique `WMUX_DATA_SUFFIX` and a sandbox home under the temp
   dir (`/tmp` on macOS, where the per-user temp dir is too long for the
   daemon's Unix sockets) (`HOME` and `CODEX_HOME`; on Windows also `USERPROFILE`, `APPDATA`,
-  `LOCALAPPDATA`), so the hooks install lands in the sandbox.
+  `LOCALAPPDATA`), so the hooks install lands in the sandbox. Electron's
+  userData goes into the sandbox too (`--user-data-dir`, through
+  `control-wmux launch`).
   `WMUX_NO_PATH_REFRESH=1` keeps the Windows registry PATH from putting real
   agents ahead of the fakes. Preflight refuses a `--suffix` that already has
   data or a named pipe, and an `--app` under the installed wmux
