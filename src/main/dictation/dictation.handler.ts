@@ -55,10 +55,10 @@ export function registerDictationHandlers(getWindow: () => BrowserWindow | null)
     if (fromMain(e)) store.cancel();
   });
   ipcMain.removeHandler(IPC.DICTATION_ASSETS);
-  ipcMain.handle(IPC.DICTATION_ASSETS, (e): DictationAssetsResult => {
+  ipcMain.handle(IPC.DICTATION_ASSETS, async (e): Promise<DictationAssetsResult> => {
     if (!fromMain(e)) return { ok: false, state: notAllowed };
     try {
-      const assets = store.loadAssets();
+      const assets = await store.loadAssets();
       return assets ? { ok: true, assets } : { ok: false, state: store.status() };
     } catch (err) {
       return { ok: false, state: { state: 'failed', message: err instanceof Error ? err.message : String(err) } };

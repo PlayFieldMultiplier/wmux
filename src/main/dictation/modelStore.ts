@@ -13,6 +13,7 @@ import {
   DICTATION_MODEL,
   DICTATION_MODEL_BYTES,
   dictationModelUrl,
+  isDictationModelHost,
   type DictationAssets,
   type DictationModelState,
 } from '../../shared/dictation';
@@ -132,6 +133,8 @@ export class DictationModelStore {
     signal.throwIfAborted();
     const res = await this.opts.fetch(dictationModelUrl(file), { signal });
     if (!res.ok || !res.body) throw new Error(`${file.path}: HTTP ${res.status}`);
+    // The consent names Hugging Face and its CDN; a redirect anywhere else is refused.
+    if (res.url && !isDictationModelHost(new URL(res.url).hostname)) throw new Error(`${file.path}: redirected to ${new URL(res.url).hostname}`);
     const hash = createHash('sha256');
     const out = fs.openSync(part, 'w');
     let bytes = 0;
@@ -167,27 +170,32 @@ export class DictationModelStore {
     this.verified.add(file.path);
   }
 
-  /** The engine's inputs, each model file checked against its hash first.
+  /** The engine's inputs, each model file checked against its hash the
+   *  first time this process reads it (streamed, so main keeps answering).
    *  A file that changed on disk is deleted and the model reads absent. */
-  loadAssets(): DictationAssets | null {
+  async loadAssets(): Promise<DictationAssets | null> {
     if (!this.complete()) return null;
-    const read = (file: ModelFile): Buffer | null => {
+    const read = async (file: ModelFile): Promise<Buffer | null> => {
       const full = path.join(this.dir(), file.path);
-      const data = fs.readFileSync(full);
-      if (!this.verified.has(file.path)) {
-        if (createHash('sha256').update(data).digest('hex') !== file.sha256) {
-          fs.rmSync(full, { force: true });
-          return null;
-        }
-        this.verified.add(file.path);
+      if (this.verified.has(file.path)) return fs.promises.readFile(full);
+      const hash = createHash('sha256');
+      const chunks: Buffer[] = [];
+      for await (const chunk of fs.createReadStream(full)) {
+        hash.update(chunk as Buffer);
+        chunks.push(chunk as Buffer);
       }
-      return data;
+      if (hash.digest('hex') !== file.sha256) {
+        fs.rmSync(full, { force: true });
+        return null;
+      }
+      this.verified.add(file.path);
+      return Buffer.concat(chunks);
     };
     const byPath = (p: string) => this.files.find((f) => f.path === p) as ModelFile;
-    const encoder = read(byPath('onnx/encoder_model_quantized.onnx'));
-    const decoder = read(byPath('onnx/decoder_model_merged_quantized.onnx'));
-    const tokenizer = read(byPath('tokenizer.json'));
-    const generation = read(byPath('generation_config.json'));
+    const encoder = await read(byPath('onnx/encoder_model_quantized.onnx'));
+    const decoder = await read(byPath('onnx/decoder_model_merged_quantized.onnx'));
+    const tokenizer = await read(byPath('tokenizer.json'));
+    const generation = await read(byPath('generation_config.json'));
     if (!encoder || !decoder || !tokenizer || !generation) {
       this.set({ state: 'absent' });
       return null;
@@ -200,7 +208,7 @@ export class DictationModelStore {
       tokenizer: tokenizer.toString('utf8'),
       suppress: ints(gen.suppress_tokens),
       beginSuppress: ints(gen.begin_suppress_tokens),
-      wasm: fs.readFileSync(this.opts.wasmPath()),
+      wasm: await fs.promises.readFile(this.opts.wasmPath()),
     };
   }
 }

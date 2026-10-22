@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DICTATION_MODEL, DICTATION_MODEL_BYTES, dictationModelUrl, type DictationModelState } from '../../../shared/dictation';
+import { DICTATION_MODEL, DICTATION_MODEL_BYTES, dictationModelUrl, isDictationModelHost, type DictationModelState } from '../../../shared/dictation';
 import { DictationModelStore } from '../modelStore';
 
 const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex');
@@ -26,7 +26,7 @@ beforeEach(() => {
 afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
 
 /** A server that answers each file's URL with `body(path)` in two chunks. */
-function server(body: (p: string) => Buffer | null = (p) => CONTENT[p] ?? null) {
+function server(body: (p: string) => Buffer | null = (p) => CONTENT[p] ?? null, finalUrl?: string) {
   const urls: string[] = [];
   const fetch = vi.fn(async (url: string, init: { signal: AbortSignal }) => {
     urls.push(url);
@@ -42,7 +42,9 @@ function server(body: (p: string) => Buffer | null = (p) => CONTENT[p] ?? null) 
         c.close();
       },
     });
-    return new Response(stream, { status: 200 });
+    const res = new Response(stream, { status: 200 });
+    Object.defineProperty(res, 'url', { value: finalUrl ?? 'https://us.aws.cdn.hf.co/xet-bridge-us/abc' });
+    return res;
   });
   return { fetch, urls };
 }
@@ -54,8 +56,10 @@ describe('DictationModelStore', () => {
   it('pins the real model: one revision, its files from huggingface.co, about 80 MB', () => {
     expect(DICTATION_MODEL.revision).toMatch(/^[0-9a-f]{40}$/);
     expect(DICTATION_MODEL.files.every((f) => /^[0-9a-f]{64}$/.test(f.sha256))).toBe(true);
-    expect(dictationModelUrl(DICTATION_MODEL.files[0])).toBe(`https://huggingface.co/onnx-community/whisper-base/resolve/${DICTATION_MODEL.revision}/config.json`);
-    expect(Math.round(DICTATION_MODEL_BYTES / 1e6)).toBe(80);
+    expect(dictationModelUrl(DICTATION_MODEL.files[0])).toBe(`https://huggingface.co/onnx-community/whisper-base/resolve/${DICTATION_MODEL.revision}/generation_config.json`);
+    expect(Math.round(DICTATION_MODEL_BYTES / 1e6)).toBe(79);
+    // Only what the engine reads.
+    expect(DICTATION_MODEL.files.map((f) => f.path).sort()).toEqual(['generation_config.json', 'onnx/decoder_model_merged_quantized.onnx', 'onnx/encoder_model_quantized.onnx', 'tokenizer.json']);
   });
 
   it('fetches nothing until asked, then keeps every verified file and reads ready', async () => {
@@ -85,7 +89,7 @@ describe('DictationModelStore', () => {
     const encoder = path.join(m.dir(), 'onnx/encoder_model_quantized.onnx');
     expect(fs.existsSync(encoder)).toBe(false);
     expect(fs.existsSync(`${encoder}.part`)).toBe(false);
-    expect(m.loadAssets()).toBeNull();
+    expect(await m.loadAssets()).toBeNull();
   });
 
   it('a file larger than pinned is cut off, and an HTTP error fails the download', async () => {
@@ -93,6 +97,15 @@ describe('DictationModelStore', () => {
     expect(await big.download()).toMatchObject({ state: 'failed', message: expect.stringContaining('larger than') });
     const missing = store(server(() => null).fetch);
     expect(await missing.download()).toMatchObject({ state: 'failed', message: expect.stringContaining('HTTP 404') });
+  });
+
+  it('a file redirected anywhere but Hugging Face or its CDN is refused', async () => {
+    expect(isDictationModelHost('huggingface.co')).toBe(true);
+    expect(isDictationModelHost('us.aws.cdn.hf.co')).toBe(true);
+    expect(isDictationModelHost('cdn.hf.co.evil.example')).toBe(false);
+    expect(isDictationModelHost('evilhf.co')).toBe(false);
+    const m = store(server(undefined, 'https://mirror.example.com/x').fetch);
+    expect(await m.download()).toMatchObject({ state: 'failed', message: expect.stringContaining('redirected to mirror.example.com') });
   });
 
   it('a cancelled download leaves the model absent', async () => {
@@ -106,7 +119,7 @@ describe('DictationModelStore', () => {
   it('loads the engine\'s assets once verified, and refuses a file changed on disk since', async () => {
     const m = store(server().fetch);
     await m.download();
-    const assets = m.loadAssets();
+    const assets = await m.loadAssets();
     expect(assets?.suppress).toEqual([1, 2]);
     expect(assets?.beginSuppress).toEqual([220, 50257]);
     expect(assets?.encoder.length).toBe(3000);
@@ -116,7 +129,7 @@ describe('DictationModelStore', () => {
     fs.writeFileSync(decoder, Buffer.alloc(5000, 7));
     const later = store(server().fetch);
     expect(later.status()).toEqual({ state: 'ready' });
-    expect(later.loadAssets()).toBeNull();
+    expect(await later.loadAssets()).toBeNull();
     expect(later.status()).toEqual({ state: 'absent' });
     expect(fs.existsSync(decoder)).toBe(false);
   });

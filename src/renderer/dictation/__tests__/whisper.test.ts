@@ -4,8 +4,8 @@
 // into fixtures/whisper-reference.json; no Whisper code is copied here.
 import fs from 'node:fs';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
-import { DECODE_LIMITS, PREFERRED_LANGUAGE_MIN_SHARE, SAMPLE_RATE, WHISPER_TOKENS, WhisperTokenizer, chooseLanguage, dictationLanguageFor, endsInLoop, logMelSpectrogram, noSpeechProbability } from '../whisper';
+import { describe, expect, it, vi } from 'vitest';
+import { DECODE_LIMITS, PREFERRED_LANGUAGE_MIN_SHARE, SAMPLE_RATE, WHISPER_TOKENS, WhisperTokenizer, chooseLanguage, dictationLanguageFor, endsInLoop, logMelSpectrogram, noSpeechProbability, transcribe, type WhisperOrt, type WhisperSessions } from '../whisper';
 
 const reference = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'whisper-reference.json'), 'utf8')) as {
   frames: number;
@@ -104,5 +104,44 @@ describe('chooseLanguage', () => {
     expect(dictationLanguageFor('ko')).toBe('ko');
     expect(dictationLanguageFor('zh-TW')).toBe('zh-TW');
     expect(dictationLanguageFor('xx')).toBe('auto');
+  });
+});
+
+describe('transcribe', () => {
+  // Stand-ins for onnxruntime: the decoder answers each step with logits
+  // from `steps`, one array per call.
+  class FakeTensor {
+    constructor(readonly type: string, readonly data: unknown, readonly dims: readonly number[] = []) {}
+  }
+  const ort = { Tensor: FakeTensor } as unknown as WhisperOrt;
+  function sessions(steps: Array<Record<number, number>>) {
+    let call = 0;
+    const decoder = {
+      inputNames: ['input_ids', 'encoder_hidden_states', 'past_key_values.0.decoder.key', 'past_key_values.0.decoder.value', 'past_key_values.0.encoder.key', 'past_key_values.0.encoder.value', 'use_cache_branch'],
+      run: vi.fn(async () => {
+        const logits = new Float32Array(51865).fill(-30);
+        for (const [id, v] of Object.entries(steps[Math.min(call, steps.length - 1)])) logits[Number(id)] = v;
+        call += 1;
+        const kv = new FakeTensor('float32', new Float32Array(0), [1, 8, 0, 64]);
+        return { logits: new FakeTensor('float32', logits, [1, 1, 51865]), 'present.0.decoder.key': kv, 'present.0.decoder.value': kv, 'present.0.encoder.key': kv, 'present.0.encoder.value': kv };
+      }),
+    };
+    const encoder = { run: vi.fn(async () => ({ last_hidden_state: new FakeTensor('float32', new Float32Array(0)) })) };
+    return { encoder, decoder } as unknown as WhisperSessions & { decoder: { run: ReturnType<typeof vi.fn> } };
+  }
+  const tokenizer = new WhisperTokenizer(JSON.stringify({ model: { vocab: reference.bpe.vocab } }));
+  const korean = reference.bpe.cases[0];
+  const loud = () => Float32Array.from({ length: SAMPLE_RATE }, (_, i) => 0.2 * Math.sin(i / 5));
+  const opts = { language: 'auto' as const, suppress: [], beginSuppress: [] };
+
+  it('a window the model hears as no speech types nothing', async () => {
+    const s = sessions([{ [WHISPER_TOKENS.NO_SPEECH]: 10, [WHISPER_TOKENS.LANG.en]: 2 }]);
+    expect(await transcribe(ort, s, tokenizer, loud(), opts)).toBe('');
+    expect(s.decoder.run).toHaveBeenCalledTimes(1);
+  });
+
+  it('speech is decoded token by token to the end of text', async () => {
+    const steps = [{ [WHISPER_TOKENS.LANG.ko]: 10 }, ...korean.ids.map((id) => ({ [id]: 10 })), { [WHISPER_TOKENS.EOT]: 10 }];
+    expect(await transcribe(ort, sessions(steps), tokenizer, loud(), opts)).toBe(korean.text.trim());
   });
 });

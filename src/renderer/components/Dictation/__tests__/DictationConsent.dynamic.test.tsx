@@ -49,7 +49,8 @@ describe('dictation consent', () => {
     act(() => setDictation({ phase: 'consent', target: 'chat:p', startedAt: null }));
     const dialog = q('[data-testid="dictation-consent"]')!;
     const text = dialog.textContent ?? '';
-    expect(text).toContain('About 80 MB');
+    expect(text).toContain('About 79 MB');
+    expect(text).toContain("Hugging Face's CDN (cdn.hf.co)");
     expect(text).toContain('huggingface.co · onnx-community/whisper-base');
     expect(text).toContain('Revision 1846881b6b3a');
     expect(text).toContain('MIT');

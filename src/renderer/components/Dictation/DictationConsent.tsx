@@ -60,6 +60,8 @@ export function DictationConsent() {
               <span title={DICTATION_MODEL.revision}>
                 {t('dictation.consent.revision', { revision: DICTATION_MODEL.revision.slice(0, 12) })}
               </span>
+              {' '}
+              {t('dictation.consent.cdn', { cdn: DICTATION_MODEL.cdn })}
             </Fact>
             <Fact title={t('dictation.consent.licence')}>{DICTATION_MODEL.licence}</Fact>
             <Fact title={t('dictation.consent.storage')}>{t('dictation.consent.storageValue')}</Fact>

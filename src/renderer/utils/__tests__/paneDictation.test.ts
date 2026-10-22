@@ -12,8 +12,15 @@ const mocks = vi.hoisted(() => ({
   toggleDictation: vi.fn(),
   stopDictation: vi.fn(),
   state: { phase: 'idle', target: null as string | null },
+  noteInput: vi.fn(),
 }));
+
+/** A terminal whose screen shows `lines`. */
+function screen(lines: string[], modes = { bracketedPasteMode: true }) {
+  return { modes, rows: lines.length, buffer: { active: { viewportY: 0, getLine: (y: number) => ({ translateToString: () => lines[y] ?? '' }) } } };
+}
 vi.mock('../../hooks/useTerminal', () => ({ terminalRegistry: mocks.terminals }));
+vi.mock('../../daemon/daemonLinkNotice', () => ({ notePaneUserInput: mocks.noteInput }));
 vi.mock('../../dictation/dictation', () => ({
   toggleDictation: mocks.toggleDictation,
   stopDictation: mocks.stopDictation,
@@ -72,13 +79,24 @@ describe('writeDictationToPty', () => {
 describe('dictateIntoActivePane', () => {
   it('dictates into the focused pane and pastes the text there', async () => {
     seedPane();
-    mocks.terminals.set('pty-1', { modes: { bracketedPasteMode: true } });
+    mocks.terminals.set('pty-1', screen(['~ % ']));
     dictateIntoActivePane();
     expect(mocks.toggleDictation).toHaveBeenCalledWith('pane:pty-1', expect.any(Function));
     const deliver = mocks.toggleDictation.mock.calls[0][1] as (text: string) => void;
     deliver('hello world\n');
     await Promise.resolve();
     expect(write).toHaveBeenCalledWith('pty-1', '\x1b[200~hello world\x1b[201~');
+    expect(mocks.noteInput).toHaveBeenCalledWith('pty-1');
+  });
+
+  it('types nothing into a dialog that took the pane while the owner spoke', async () => {
+    seedPane();
+    mocks.terminals.set('pty-1', screen(['Do you trust the files in this folder?', '', '❯ 1. Yes, proceed', '  2. No, exit', '', 'Enter to confirm · Esc to cancel']));
+    dictateIntoActivePane();
+    (mocks.toggleDictation.mock.calls[0][1] as (text: string) => void)('yes');
+    await Promise.resolve();
+    expect(write).not.toHaveBeenCalled();
+    expect(useStore.getState().toasts.at(-1)?.message).toBe('The pane is showing a dialog, so the dictated text was not typed.');
   });
 
   it('stops a pane dictation that is recording, wherever focus went', () => {

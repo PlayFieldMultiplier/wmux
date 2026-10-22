@@ -11,13 +11,14 @@ export const DICTATION_MODEL = {
   repo: 'onnx-community/whisper-base',
   revision: '1846881b6b3a3024392c1eea3ad983695bc23925',
   host: 'huggingface.co',
+  /** Where huggingface.co redirects the large files (regional hosts under
+   *  it, e.g. us.aws.cdn.hf.co). */
+  cdn: 'cdn.hf.co',
   licence: 'MIT',
+  /** What the engine reads; nothing else of the repository is fetched. */
   files: [
-    { path: 'config.json', size: 2243, sha256: 'f4d0608f7d918166da7edb3e188de5ef1bfe70d9802e785d271fd88111e9cf4b' },
     { path: 'generation_config.json', size: 3832, sha256: '61070cf8de25b1e9256e8e102ded49d8d24a8369ed36ef84fdf21549e68125a0' },
-    { path: 'preprocessor_config.json', size: 339, sha256: 'a6a76d28c93edb273669eb9e0b0636a2bddbb1272c3261e47b7ca6dfdbac1b8d' },
     { path: 'tokenizer.json', size: 2480466, sha256: '27fc476bfe7f17299480be2273fc0608e4d5a99aba2ab5dec5374b4482d1a566' },
-    { path: 'tokenizer_config.json', size: 282682, sha256: '2e036e4dbacfdeb7242c7d4ec4149f4a16e86026048f94d1637e3a8ee9c6a573' },
     { path: 'onnx/encoder_model_quantized.onnx', size: 23201314, sha256: '5862993336bf33acd23736071aae2b32261d3b1b2f37780194460d4ef974dd46' },
     { path: 'onnx/decoder_model_merged_quantized.onnx', size: 53693315, sha256: 'fa3ef9902734ce5ae6f9ef2bdb2ba9a6c4b5785b09f4f420ce036573dc9d090b' },
   ],
@@ -31,6 +32,13 @@ export const DICTATION_MODEL_BYTES = DICTATION_MODEL.files.reduce((sum, f) => su
 /** Where a model file is downloaded from. */
 export function dictationModelUrl(file: { path: string }): string {
   return `https://${DICTATION_MODEL.host}/${DICTATION_MODEL.repo}/resolve/${DICTATION_MODEL.revision}/${file.path}`;
+}
+
+/** Whether a download may come from `hostname`: Hugging Face itself or its
+ *  CDN. Pure. */
+export function isDictationModelHost(hostname: string): boolean {
+  const h = hostname.toLowerCase();
+  return h === DICTATION_MODEL.host || h === DICTATION_MODEL.cdn || h.endsWith(`.${DICTATION_MODEL.cdn}`);
 }
 
 export type DictationModelState =

@@ -5,6 +5,8 @@ import { terminalRegistry } from '../hooks/useTerminal';
 import { getDictationState, stopDictation, toggleDictation } from '../dictation/dictation';
 import { deliverChatInsert } from '../components/Chat/chatAttachments';
 import { pastePtyChunked, type TerminalModesLike } from './clipboardChunk';
+import { notePaneUserInput } from '../daemon/daemonLinkNotice';
+import { classifyLaunchScreen } from '../../shared/agentFirstRun';
 
 /**
  * "Dictate into this pane" (shortcut and palette): the focused terminal pane
@@ -35,6 +37,16 @@ export function writeDictationToPty(ptyId: string, text: string, modes: Terminal
   return pastePtyChunked((d) => window.electronAPI.pty.write(ptyId, d), body, modes);
 }
 
+/** The pane's visible rows as text. */
+export function visibleScreen(term: unknown): string {
+  const t = term as { rows?: number; buffer?: { active?: { viewportY: number; getLine: (y: number) => { translateToString: (trim?: boolean) => string } | undefined } } };
+  const buf = t.buffer?.active;
+  if (!buf || !t.rows) return '';
+  const lines: string[] = [];
+  for (let y = buf.viewportY; y < buf.viewportY + t.rows; y += 1) lines.push(buf.getLine(y)?.translateToString(true) ?? '');
+  return lines.join('\n');
+}
+
 function deliverToPane(ptyId: string, chat: boolean, text: string): void {
   const { pushToast } = useStore.getState();
   if (chat) {
@@ -46,7 +58,14 @@ function deliverToPane(ptyId: string, chat: boolean, text: string): void {
     pushToast({ level: 'warn', message: t('dictation.paneGone') });
     return;
   }
+  // A dialog took the screen while the owner spoke (a permission prompt, a
+  // trust or first-run menu): a paste there would answer it.
+  if (classifyLaunchScreen(visibleScreen(term))) {
+    pushToast({ level: 'warn', message: t('dictation.paneDialog') });
+    return;
+  }
   const modes = (term as unknown as { modes?: TerminalModesLike }).modes;
+  notePaneUserInput(ptyId);
   void writeDictationToPty(ptyId, text, modes ?? null).catch((err) => {
     console.error('[wmux:dictation] paste failed:', err);
     useStore.getState().pushToast({ level: 'warn', message: t('dictation.paneGone') });
