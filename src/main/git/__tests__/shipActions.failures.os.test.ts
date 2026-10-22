@@ -12,7 +12,8 @@ import path from 'node:path';
 vi.mock('electron', () => ({ ipcMain: { handle: vi.fn(), removeHandler: vi.fn() } }));
 
 import { ipcMain } from 'electron';
-import { ShipActions, classifyShipFailure, shipActions, spawnRun } from '../shipActions';
+import { ShipActions, classifyShipFailure, shipActions, signerAskEnv, spawnRun } from '../shipActions';
+import { setSecretGuardEnabled } from '../secretGuardSetting';
 import { registerGitShipHandlers } from '../../ipc/handlers/gitShip.handler';
 import { IPC } from '../../../shared/constants';
 
@@ -206,6 +207,35 @@ describe('commit once without signing', () => {
       expect(env.LC_MESSAGES).toBe('C');
     }
   });
+
+  it('the commit runs its signer with askpass forced, so a passphrase cannot be asked on a hidden console', async () => {
+    const calls: Array<{ args: string[]; env: NodeJS.ProcessEnv }> = [];
+    const run = vi.fn(async (_cmd: string, args: string[], opts: { env: NodeJS.ProcessEnv }) => {
+      calls.push({ args, env: opts.env });
+      if (args[0] === 'rev-parse' && args[1] === 'HEAD') return { stdout: `${HEAD}\n` };
+      if (args[0] === 'symbolic-ref') return { stdout: 'feat/x\n' };
+      return { stdout: '' };
+    });
+    const svc = new ShipActions(run as never, async () => null, () => undefined, () => 1, () => true, () => async () => true);
+    // Both commit paths: through the secret guard's index copy, and without it.
+    for (const guard of [true, false]) {
+      setSecretGuardEnabled(guard);
+      calls.length = 0;
+      try {
+        await svc.commit('/repo', 'msg', EXPECT);
+      } finally {
+        setSecretGuardEnabled(true);
+      }
+      const commit = calls.find((c) => c.args.includes('commit'));
+      expect(commit?.env.SSH_ASKPASS_REQUIRE).toBe('force');
+      expect(commit?.env.SSH_ASKPASS).toBeTruthy();
+      // Only the commit can run a signer; nothing else is changed.
+      for (const c of calls.filter((x) => !x.args.includes('commit'))) expect(c.env.SSH_ASKPASS_REQUIRE).toBeUndefined();
+    }
+    // No askpass of the user's: one that always fails. A user's own (a GUI one) is kept, and now always used.
+    expect(signerAskEnv({})).toEqual({ SSH_ASKPASS_REQUIRE: 'force', SSH_ASKPASS: 'false' });
+    expect(signerAskEnv({ SSH_ASKPASS: '/opt/bin/ssh-askpass-gui' })).toEqual({ SSH_ASKPASS_REQUIRE: 'force', SSH_ASKPASS: '/opt/bin/ssh-askpass-gui' });
+  });
 });
 
 describe('auth failures name the forge from the remote', () => {
@@ -237,6 +267,35 @@ describe('spawnRun: no terminal to wait on', () => {
     const pid = Number(String(err.stdout).trim());
     expect(pid).toBeGreaterThan(0);
     await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow(), { timeout: 5_000 });
+  }, 15_000);
+
+  // Every platform: a signer started by git (a grandchild) that would read a
+  // console nobody sees asks the forced askpass instead, which gives it no
+  // passphrase, so it fails at once with words the commit names as signing.
+  // The fake keeps OpenSSH's rule: SSH_ASKPASS_REQUIRE=force runs SSH_ASKPASS,
+  // and an askpass that fails or cannot start means no passphrase.
+  it('a signer that wants a passphrase fails at once under the commit\'s env, never waits out the timeout', async () => {
+    const signer = [
+      "const { spawnSync } = require('child_process');",
+      "if (process.env.SSH_ASKPASS_REQUIRE === 'force' && process.env.SSH_ASKPASS) {",
+      "  const r = spawnSync(process.env.SSH_ASKPASS, ['Enter passphrase for \"/k\":'], { stdio: ['ignore', 'pipe', 'ignore'] });",
+      '  if (r.status === 0 && String(r.stdout).trim()) process.exit(0);',
+      "  process.stderr.write('Load key \"/k\": incorrect passphrase supplied to decrypt private key\\n');",
+      '  process.exit(255);',
+      '}',
+      'setTimeout(() => {}, 30000);',
+    ].join('\n');
+    const git = `const c = require('child_process').spawn(process.execPath, ['-e', ${JSON.stringify(signer)}], { stdio: 'inherit' }); c.on('exit', (code) => process.exit(code ?? 1));`;
+    const env = { ...process.env, ...signerAskEnv({}) };
+    const t0 = Date.now();
+    const err = await spawnRun(process.execPath, ['-e', git], { cwd: os.tmpdir(), env, timeout: 10_000 }).catch((e) => e);
+    expect(Date.now() - t0).toBeLessThan(5_000);
+    expect(err).toMatchObject({ killed: false, code: 255 });
+    expect(err.timedOut).toBeUndefined();
+    expect(classifyShipFailure('commit', String(err.stderr))).toBe('signing');
+    // Without it, the same signer waits on the console until the timeout.
+    const waited = await spawnRun(process.execPath, ['-e', git], { cwd: os.tmpdir(), env: process.env, timeout: 500 }).catch((e) => e);
+    expect(waited).toMatchObject({ timedOut: true });
   }, 15_000);
 
   it.skipIf(!posix)('stdin is empty, the child leads its own group, GPG_TTY is dropped', async () => {
