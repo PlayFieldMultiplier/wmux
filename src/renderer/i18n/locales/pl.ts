@@ -3410,6 +3410,8 @@ export const pl = {
   'settings.sc.newTerminalInPane': 'Nowy terminal w tym panelu',
   'settings.sc.closeSurface': 'Zamknij aktywną kartę',
   'surface.closeConfirm': 'Zamknąć tę kartę? Wszystko, co w niej działa, zostanie zatrzymane.',
+  'surface.closeConfirmShell': 'Zamknąć tę kartę? To zakończy jej powłokę i działające w niej programy. Programy uruchomione niezależnie od terminala — aplikacje otwarte przez open lub start, sesje tmux, usługi w tle — mogą działać dalej.',
+  'surface.closeConfirmRemoteView': 'Zamknąć tę kartę? Zamknie to tylko Twój widok; sesja nadal działa na drugim komputerze.',
   'settings.sc.closePane': 'Zamknij podzielony panel',
   'settings.sc.searchTerminal': 'Szukaj w terminalu',
   'settings.sc.commandPalette': 'Paleta poleceń',

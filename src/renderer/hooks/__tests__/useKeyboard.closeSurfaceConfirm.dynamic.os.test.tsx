@@ -10,7 +10,7 @@ import { useKeyboard } from '../useKeyboard';
 import CloseTabConfirm from '../../components/Pane/CloseTabConfirm';
 import { terminalRegistry } from '../useTerminal';
 import { useStore } from '../../stores';
-import type { Workspace } from '../../../shared/types';
+import type { Surface, Workspace } from '../../../shared/types';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -141,6 +141,43 @@ describe('close-tab shortcut confirmation', () => {
     const text = dialog()?.textContent ?? '';
     expect(text).toContain('Close two');
     expect(document.querySelector('[data-close-tab-confirm]')?.textContent).toBe('Close tab');
+  });
+
+  it('says a shell tab ends its shell and that programs started apart may keep running (#2555)', () => {
+    pressCloseTab();
+    const text = dialog()?.textContent ?? '';
+    expect(text).toContain('This ends its shell and the programs running in it.');
+    expect(text).toContain('may keep running');
+    expect(text).not.toContain('Anything running in it will be stopped.');
+  });
+
+  function addSurface(surface: Surface): void {
+    act(() => useStore.setState((st) => {
+      const pane = st.workspaces[0].rootPane;
+      if (pane.type === 'leaf') pane.surfaces.push(surface);
+    }));
+    act(() => useStore.getState().requestCloseTab({ workspaceId: 'ws-c', paneId: 'p-c', surfaceId: surface.id }));
+  }
+
+  it('keeps the general wording for a tab with no shell', () => {
+    addSurface({ id: 's-3', ptyId: '', title: 'page', shell: '', cwd: '/tmp', surfaceType: 'browser' });
+    const text = dialog()?.textContent ?? '';
+    expect(text).toContain('Anything running in it will be stopped.');
+    expect(text).not.toContain('This ends its shell');
+  });
+
+  it('treats a remote terminal this desktop minted as a shell it ends', () => {
+    addSurface({ id: 's-4', ptyId: '', title: 'remote', shell: '', cwd: '', surfaceType: 'remote-terminal', remoteHostId: 'h-1', remoteSessionId: 'r-1', remoteOwned: true });
+    const text = dialog()?.textContent ?? '';
+    expect(text).toContain('This ends its shell and the programs running in it.');
+  });
+
+  it('says closing a view of someone else\'s remote session leaves it running', () => {
+    addSurface({ id: 's-5', ptyId: '', title: 'remote', shell: '', cwd: '', surfaceType: 'remote-terminal', remoteHostId: 'h-1', remoteSessionId: 'r-2' });
+    const text = dialog()?.textContent ?? '';
+    expect(text).toContain('the session keeps running on the other PC');
+    expect(text).not.toContain('will be stopped');
+    expect(text).not.toContain('This ends its shell');
   });
 
   it('starts on Cancel and lets the keyboard reach Close', () => {
