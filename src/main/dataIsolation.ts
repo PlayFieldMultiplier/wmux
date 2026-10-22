@@ -45,6 +45,19 @@ export function checkUserDataIsolation(
 export const PORTABLE_DATA_SUFFIX = '-portable';
 
 /**
+ * darwin: may this boot install or repair the CLI shim (`/usr/local/bin/wmux`,
+ * fallback `~/.local/bin/wmux`)? Never from an isolated instance, i.e. any
+ * non-empty WMUX_DATA_SUFFIX (a portable copy, a test or verification run):
+ * the shim path is suffix-blind, so the instance would repoint the owner's
+ * installed CLI at itself, and its "already attempted" marker lives in the
+ * suffixed data dir, where it does not stop the next isolated run. The same
+ * rule #2104 applied to the statusline and hook bridge refresh.
+ */
+export function mayInstallDarwinCliShim(env: NodeJS.ProcessEnv): boolean {
+  return !env.WMUX_DATA_SUFFIX;
+}
+
+/**
  * darwin: should a PACKAGED app use isolated data because it is not installed?
  * A copy run from a DMG mount, AppTranslocation, an electron-forge `out/` dir,
  * or ~/Downloads would otherwise share production data, sockets, token and the
