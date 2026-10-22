@@ -4,7 +4,7 @@
 // real output, produced with real git (local bare remotes, a pre-receive hook,
 // a passphrase-protected ssh signing key) or copied as the hosts word them.
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -12,11 +12,37 @@ import path from 'node:path';
 vi.mock('electron', () => ({ ipcMain: { handle: vi.fn(), removeHandler: vi.fn() } }));
 
 import { ipcMain } from 'electron';
-import { ShipActions, classifyShipFailure, shipActions, spawnRun } from '../shipActions';
+import { ShipActions, classifyShipFailure, shipActions, signerAskEnv, spawnRun } from '../shipActions';
+import { setSecretGuardEnabled } from '../secretGuardSetting';
 import { registerGitShipHandlers } from '../../ipc/handlers/gitShip.handler';
 import { IPC } from '../../../shared/constants';
 
 const posix = process.platform !== 'win32';
+
+/** The OpenSSH version a command prints (`ssh -V` writes it to stderr), or null when it cannot run. */
+function opensshVersion(cmd: string, args: string[]): [number, number] | null {
+  const r = spawnSync(cmd, args, { encoding: 'utf8', windowsHide: true, timeout: 15_000, env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1' } });
+  const m = /OpenSSH_(?:for_Windows_)?(\d+)\.(\d+)/.exec(`${r.stdout ?? ''}${r.stderr ?? ''}`);
+  return m ? [Number(m[1]), Number(m[2])] : null;
+}
+/** SSH_ASKPASS_REQUIRE is OpenSSH 8.4+. */
+const forcesAskpass = (v: [number, number] | null) => v !== null && (v[0] > 8 || (v[0] === 8 && v[1] >= 4));
+const keygenOnPath = spawnSync('ssh-keygen', ['-?'], { windowsHide: true, timeout: 15_000 }).error === undefined;
+/** The ssh on PATH, and the one git itself finds (on Windows, Git for Windows' own). */
+const pathSsh = opensshVersion('ssh', ['-V']);
+const gitSsh = opensshVersion('git', ['-c', 'alias.wmuxsshv=!ssh -V', 'wmuxsshv']);
+/** `gpg.format=ssh` is git 2.34+. */
+const gitSignsWithSsh = (() => {
+  const m = /git version (\d+)\.(\d+)/.exec(spawnSync('git', ['--version'], { encoding: 'utf8', windowsHide: true }).stdout ?? '');
+  return m !== null && (Number(m[1]) > 2 || (Number(m[1]) === 2 && Number(m[2]) >= 34));
+})();
+
+/** A passphrase-protected ed25519 key in `dir`, in no agent. */
+function passphraseKey(dir: string): string {
+  const key = path.join(dir, 'signing-key');
+  execFileSync('ssh-keygen', ['-q', '-t', 'ed25519', '-N', 'wmux-test-passphrase', '-C', 'wmux-test', '-f', key], { stdio: 'ignore', windowsHide: true });
+  return key;
+}
 
 /** git's own output, as real git prints it (paths shortened). */
 const SAMPLES = {
@@ -206,6 +232,48 @@ describe('commit once without signing', () => {
       expect(env.LC_MESSAGES).toBe('C');
     }
   });
+
+  it('the commit runs its signer with askpass forced, so a passphrase cannot be asked on a hidden console', async () => {
+    const calls: Array<{ args: string[]; env: NodeJS.ProcessEnv }> = [];
+    const run = vi.fn(async (_cmd: string, args: string[], opts: { env: NodeJS.ProcessEnv }) => {
+      calls.push({ args, env: opts.env });
+      if (args[0] === 'rev-parse' && args[1] === 'HEAD') return { stdout: `${HEAD}\n` };
+      if (args[0] === 'symbolic-ref') return { stdout: 'feat/x\n' };
+      return { stdout: '' };
+    });
+    const svc = new ShipActions(run as never, async () => null, () => undefined, () => 1, () => true, () => async () => true);
+    // Both commit paths: through the secret guard's index copy, and without it.
+    for (const guard of [true, false]) {
+      setSecretGuardEnabled(guard);
+      calls.length = 0;
+      try {
+        await svc.commit('/repo', 'msg', EXPECT);
+      } finally {
+        setSecretGuardEnabled(true);
+      }
+      const commit = calls.find((c) => c.args.includes('commit'));
+      expect(commit?.env.SSH_ASKPASS_REQUIRE).toBe('force');
+      expect(commit?.env.SSH_ASKPASS).toBeTruthy();
+      // Only a call that can run a signer gets it; nothing else is changed.
+      for (const c of calls.filter((x) => !x.args.includes('commit'))) expect(c.env.SSH_ASKPASS_REQUIRE).toBeUndefined();
+    }
+    // A push signs too (push.gpgSign), and ssh's own questions on it fail at once as well.
+    const pushCalls: Array<{ args: string[]; env: NodeJS.ProcessEnv }> = [];
+    const pushRun = vi.fn(async (_cmd: string, args: string[], opts: { env: NodeJS.ProcessEnv }) => {
+      pushCalls.push({ args, env: opts.env });
+      if (args[0] === 'config') return { stdout: args[2].endsWith('.remote') ? 'origin\n' : 'refs/heads/feat/x\n' };
+      if (args[0] === 'rev-parse' && args[1] === 'HEAD') return { stdout: `${HEAD}\n` };
+      if (args[0] === 'symbolic-ref') return { stdout: 'feat/x\n' };
+      return { stdout: '' };
+    });
+    await new ShipActions(pushRun as never, async () => null, () => undefined, () => 1, () => true, () => async () => true).push('/repo', EXPECT);
+    const push = pushCalls.find((c) => c.args[0] === 'push');
+    expect(push?.env).toMatchObject({ SSH_ASKPASS_REQUIRE: 'force', GIT_TERMINAL_PROMPT: '0' });
+    for (const c of pushCalls.filter((x) => x.args[0] !== 'push')) expect(c.env.SSH_ASKPASS_REQUIRE).toBeUndefined();
+    // No askpass of the user's: one that always fails. A user's own (a GUI one) is kept, and now always used.
+    expect(signerAskEnv({})).toEqual({ SSH_ASKPASS_REQUIRE: 'force', SSH_ASKPASS: 'false' });
+    expect(signerAskEnv({ SSH_ASKPASS: '/opt/bin/ssh-askpass-gui' })).toEqual({ SSH_ASKPASS_REQUIRE: 'force', SSH_ASKPASS: '/opt/bin/ssh-askpass-gui' });
+  });
 });
 
 describe('auth failures name the forge from the remote', () => {
@@ -238,6 +306,65 @@ describe('spawnRun: no terminal to wait on', () => {
     expect(pid).toBeGreaterThan(0);
     await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow(), { timeout: 5_000 });
   }, 15_000);
+
+  // Every platform: a signer started by git (a grandchild) that would read a
+  // console nobody sees asks the forced askpass instead, which gives it no
+  // passphrase, so it fails at once with words the commit names as signing.
+  // The fake keeps OpenSSH's rule: SSH_ASKPASS_REQUIRE=force runs SSH_ASKPASS,
+  // and an askpass that fails or cannot start means no passphrase.
+  it('a signer that wants a passphrase fails at once under the commit\'s env, never waits out the timeout', async () => {
+    const signer = [
+      "const { spawnSync } = require('child_process');",
+      "if (process.env.SSH_ASKPASS_REQUIRE === 'force' && process.env.SSH_ASKPASS) {",
+      "  const r = spawnSync(process.env.SSH_ASKPASS, ['Enter passphrase for \"/k\":'], { stdio: ['ignore', 'pipe', 'ignore'] });",
+      '  if (r.status === 0 && String(r.stdout).trim()) process.exit(0);',
+      "  process.stderr.write('Load key \"/k\": incorrect passphrase supplied to decrypt private key\\n');",
+      '  process.exit(255);',
+      '}',
+      'setTimeout(() => {}, 30000);',
+    ].join('\n');
+    const git = `const c = require('child_process').spawn(process.execPath, ['-e', ${JSON.stringify(signer)}], { stdio: 'inherit' }); c.on('exit', (code) => process.exit(code ?? 1));`;
+    const env = { ...process.env, ...signerAskEnv({}) };
+    const t0 = Date.now();
+    const err = await spawnRun(process.execPath, ['-e', git], { cwd: os.tmpdir(), env, timeout: 10_000 }).catch((e) => e);
+    expect(Date.now() - t0).toBeLessThan(5_000);
+    expect(err).toMatchObject({ killed: false, code: 255 });
+    expect(err.timedOut).toBeUndefined();
+    expect(classifyShipFailure('commit', String(err.stderr))).toBe('signing');
+    // Without it, the same signer waits on the console until the timeout
+    // (whatever askpass the shell that runs the tests exports).
+    const plain = { ...process.env };
+    delete plain.SSH_ASKPASS;
+    delete plain.SSH_ASKPASS_REQUIRE;
+    delete plain.DISPLAY;
+    const waited = await spawnRun(process.execPath, ['-e', git], { cwd: os.tmpdir(), env: plain, timeout: 500 }).catch((e) => e);
+    expect(waited).toMatchObject({ timedOut: true });
+  }, 15_000);
+
+  // The real thing on every OS whose ssh-keygen honours the force (8.4+): a
+  // passphrase key in no agent, signed under the commit's env, gets no
+  // passphrase from the `false` askpass (or from one that cannot start) and
+  // fails at once with the words the commit names as signing.
+  it.skipIf(!keygenOnPath || !forcesAskpass(pathSsh))('real ssh-keygen -Y sign with a passphrase key fails at once under the commit\'s env', async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'wmux-realsign-'));
+    try {
+      const key = passphraseKey(dir);
+      const file = path.join(dir, 'payload');
+      writeFileSync(file, 'payload');
+      const env = { ...process.env, ...signerAskEnv({}) };
+      delete env.SSH_AUTH_SOCK;
+      const t0 = Date.now();
+      const err = await spawnRun('ssh-keygen', ['-Y', 'sign', '-n', 'git', '-f', key, file], { cwd: dir, env, timeout: 30_000 }).catch((e) => e);
+      const stderr = String(err?.stderr ?? '');
+      expect(Date.now() - t0, stderr).toBeLessThan(5_000);
+      expect(err, 'ssh-keygen signed without a passphrase').toBeInstanceOf(Error);
+      expect(err.timedOut).toBeUndefined();
+      expect(err.code).not.toBe(0);
+      expect(classifyShipFailure('commit', stderr), stderr).toBe('signing');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 40_000);
 
   it.skipIf(!posix)('stdin is empty, the child leads its own group, GPG_TTY is dropped', async () => {
     const script = 'read x; echo "read=$?"; echo "pgid=$(ps -o pgid= -p $$ | tr -d " ")"; echo "pid=$$"; echo "tty=${GPG_TTY:-none}"';
@@ -368,6 +495,26 @@ describe('against real git', () => {
     const left = execFileSync('ps', ['-axo', 'command'], { encoding: 'utf8' }).split('\n').filter((l) => l.includes(key));
     expect(left).toEqual([]);
   }, 30_000);
+
+  // Every OS whose git-found OpenSSH honours the force. On Windows this is
+  // the hidden-console case: PATH git is Git for Windows' cmd\git.exe
+  // launcher and the signer is its bundled ssh-keygen, which used to wait
+  // out the 60 s timeout for a passphrase.
+  it.skipIf(!keygenOnPath || !gitSignsWithSsh || !forcesAskpass(gitSsh))('a commit signed by the ssh-keygen git finds, with a passphrase key, fails at once as signing', async () => {
+    const root = tmp();
+    const { work } = repo(root);
+    const key = passphraseKey(root);
+    g(work, 'config', 'commit.gpgsign', 'true');
+    g(work, 'config', 'gpg.format', 'ssh');
+    g(work, 'config', 'gpg.ssh.program', 'ssh-keygen');
+    g(work, 'config', 'user.signingkey', key);
+    writeFileSync(path.join(work, 'w.txt'), 'w');
+    const pin = { branch: 'main', head: g(work, 'rev-parse', 'HEAD') };
+    const t0 = Date.now();
+    const res = await new ShipActions().commit(work, 'msg', pin);
+    expect(Date.now() - t0, JSON.stringify(res)).toBeLessThan(15_000);
+    expect(res).toMatchObject({ ok: false, reason: 'signing' });
+  }, 90_000);
 
   it('a folder moved away → missing-folder, for the status and for a commit', async () => {
     const root = tmp();
