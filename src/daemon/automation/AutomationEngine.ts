@@ -628,7 +628,7 @@ export class AutomationEngine {
       ok: true,
       run: clone(run),
       ...(blocker && finished && {
-        lingeringSession: { runId: finished.id, ptyId: blocker.ptyId, startedAt: finished.startedAt ?? finished.scheduledFor },
+        lingeringSession: { runId: finished.id, ptyId: blocker.ptyId, endedAt: finished.endedAt ?? finished.startedAt ?? finished.scheduledFor },
       }),
     };
   }

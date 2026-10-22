@@ -4,6 +4,7 @@ import { useStore } from '../../stores';
 import { useT } from '../../hooks/useT';
 import { AUTOMATION_DEFAULTS, type Automation, type AutomationLingeringSession, type AutomationRun } from '../../../shared/automation';
 import { isLiveRun, isPermissionReset, sortRunsNewestFirst } from '../../stores/selectors/schedules';
+import { surfacePtyIds } from '../../stores/selectors/sidebarSeen';
 import Button from '../ui/Button';
 import Badge from '../ui/Badge';
 import Switch from '../ui/Switch';
@@ -60,6 +61,14 @@ export default function ScheduleDetail({ automation: a, accounts, onEdit, onDisc
   // #2065: Run now refused only by a finished run's still-open session.
   const [endOffer, setEndOffer] = useState<AutomationLingeringSession | null>(null);
   const [busy, setBusy] = useState(false);
+  // The offer goes once its session is no longer in the way: it ended (the
+  // run's record dropped that ptyId) or a pane now shows it (handed over).
+  const offerRun = endOffer ? allRuns.find((r) => r.id === endOffer.runId) : undefined;
+  const offerShown = useStore((s) => (endOffer ? surfacePtyIds(s).has(endOffer.ptyId) : false));
+  const offerStale = !!endOffer && ((offerRun !== undefined && offerRun.ptyId !== endOffer.ptyId) || offerShown);
+  useEffect(() => {
+    if (offerStale) setEndOffer(null);
+  }, [offerStale]);
   const api = window.electronAPI?.automation;
 
   type Api = NonNullable<typeof api>;
@@ -142,15 +151,15 @@ export default function ScheduleDetail({ automation: a, accounts, onEdit, onDisc
       </header>
 
       {/* Ends only that one session, then starts; Cancel is focused (the Plugins page's Uninstall confirm). */}
-      {endOffer && (
-        <div className="flex flex-wrap items-center gap-2" data-schedule-end-session={endOffer.runId}>
+      {endOffer && !offerStale && (
+        <div key={endOffer.runId} className="flex flex-wrap items-center gap-2" data-schedule-end-session={endOffer.runId}>
           <span className="text-[12px] text-[var(--text-sub)]">
             {renderSentence(t('schedules.endSessionHint'), {
-              when: formatWhen(endOffer.startedAt),
+              when: formatWhen(endOffer.endedAt),
               session: <code className="ui-code">{endOffer.ptyId}</code>,
             })}
           </span>
-          <Button size="sm" autoFocus onClick={() => setEndOffer(null)} data-schedule-end-session-cancel>
+          <Button size="sm" autoFocus disabled={busy} onClick={() => setEndOffer(null)} data-schedule-end-session-cancel>
             {t('schedules.cancel')}
           </Button>
           <Button size="sm" variant="danger" disabled={busy || !api} onClick={() => runNow(endOffer.runId)} data-schedule-end-session-confirm>

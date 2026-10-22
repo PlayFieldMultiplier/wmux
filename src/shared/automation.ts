@@ -363,7 +363,7 @@ export interface AutomationProposeParams { draft: AutomationDraft }
 export interface AutomationAckAttentionParams { ids: string[] }
 
 /** A finished run whose session is still open and alone kept a Run now from starting (#2065). */
-export interface AutomationLingeringSession { runId: string; ptyId: string; startedAt: number }
+export interface AutomationLingeringSession { runId: string; ptyId: string; endedAt: number }
 
 export type AutomationRunNowResult =
   | { ok: true; run: AutomationRun; lingeringSession?: AutomationLingeringSession }

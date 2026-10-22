@@ -793,7 +793,7 @@ describe('AutomationEngine — ending a lingering session from Run now (#2065)',
     await finish(h, run.id);
     const lingering = await h.engine.runNow(run.automationId, 'manual');
     expect(lingering.ok && lingering.run).toMatchObject({ state: 'skipped', detail: 'previous_session_open' });
-    expect(lingering.ok && lingering.lingeringSession).toEqual({ runId: run.id, ptyId: `auto-${run.id}`, startedAt: run.startedAt });
+    expect(lingering.ok && lingering.lingeringSession).toEqual({ runId: run.id, ptyId: `auto-${run.id}`, endedAt: h.engine.listRuns().find((r) => r.id === run.id)?.endedAt });
     expect(h.destroyed).toEqual([]);
 
     // Ambiguous (agent gone, PTY up): not on the linger timer, no offer.

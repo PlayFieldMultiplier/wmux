@@ -102,8 +102,8 @@ export class AutomationClient {
       })) as { ok?: unknown; run?: unknown; lingeringSession?: unknown; error?: unknown } | null;
       if (r?.ok === true && r.run && typeof r.run === 'object') {
         const s = r.lingeringSession as Partial<AutomationLingeringSession> | undefined;
-        const lingering = s && typeof s.runId === 'string' && typeof s.ptyId === 'string' && typeof s.startedAt === 'number'
-          ? { runId: s.runId, ptyId: s.ptyId, startedAt: s.startedAt }
+        const lingering = s && typeof s.runId === 'string' && typeof s.ptyId === 'string' && typeof s.endedAt === 'number'
+          ? { runId: s.runId, ptyId: s.ptyId, endedAt: s.endedAt }
           : undefined;
         return { ok: true, run: r.run as AutomationRun, ...(lingering && { lingeringSession: lingering }) };
       }
