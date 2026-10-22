@@ -33,7 +33,8 @@ import {
   WORKTASK_CLOSED_GC_MS,
   WORKTASK_IDEMPOTENCY_CAP,
   WORKTASK_MAX_OPEN_PER_WORKSPACE,
-  WORKTASK_PR_URL_RE,
+  WORKTASK_PR_URL_MAX,
+  isWorktaskPrUrl,
   missionTopicFor,
   normalizeWorktreePath,
   taskIdFromMissionTopic,
@@ -581,12 +582,14 @@ export class WorkTaskService {
         };
       }
 
-      // prUrl 형식 게이트(J3 §2 — 리뷰 G5): GitHub PR URL 정합만. 비단조라
-      // write-once 방어가 없으므로 형식이 유일한 wire 방어선이다.
-      if (input.prUrl !== undefined && !WORKTASK_PR_URL_RE.test(input.prUrl)) {
+      // prUrl format gate (J3 §2, review G5): a GitHub PR URL or a GitLab merge
+      // request page only, length-capped (isWorktaskPrUrl). prUrl is
+      // non-monotonic, with no write-once guard, so its format is the only
+      // wire defence.
+      if (input.prUrl !== undefined && !isWorktaskPrUrl(input.prUrl)) {
         return {
           ok: false,
-          error: `task.mission.update: prUrl must match https://github.com/{owner}/{repo}/pull/{n}`,
+          error: `task.mission.update: prUrl must match https://github.com/{owner}/{repo}/pull/{n} or https://{host}/{project}/-/merge_requests/{n} (at most ${WORKTASK_PR_URL_MAX} characters)`,
         };
       }
 

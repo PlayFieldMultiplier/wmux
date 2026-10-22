@@ -29,6 +29,7 @@ import {
 } from './PrProvider';
 import { mergeBlock, type MergeBlock, type PrCheck, type PrCheckBucket, type PrLaneFacts, type PrMergeRequest, type PrReviewHead, type PrReviewRead, type PrWriteResult } from '../../shared/prReview';
 import type { CiRollup } from '../pipe/handlers/factoryRead.rpc';
+import { WORKTASK_MR_URL_RE } from '../../shared/workTask';
 
 const execFileAsync = promisify(execFile);
 
@@ -491,11 +492,27 @@ export function glabMergeAnswer(stdout: string, url: string): PrWriteResult {
 
 /** A failed `glab api` call glab answered as a sign-out. Only its own stderr
  *  counts (the error message holds the command line, project path
- *  included): a 401, or "Unauthenticated." as glab prints for a host it
- *  holds no token for. A 403 is no sign-out. */
+ *  included), and only glab's status words: `401 Unauthorized`, `HTTP 401`,
+ *  or "Unauthenticated." as glab prints for a host it holds no token for. A
+ *  bare 401 (a URL's `team-401%2F`) is not one, and a 403 is no sign-out. */
 export function glabApiSignedOut(err: unknown): boolean {
   const stderr = (err as { stderr?: unknown })?.stderr;
-  return typeof stderr === 'string' && (/\b401\b/.test(stderr) || stderr.includes('Unauthenticated.'));
+  return typeof stderr === 'string' && /\b401 Unauthorized\b|\bHTTP 401\b|Unauthenticated\./.test(stderr);
+}
+
+/** A merge request's iid and web URL from its REST answer, or null. The URL
+ *  is GitLab's own `web_url` when it reads as this iid's merge request page
+ *  (WORKTASK_MR_URL_RE, the shape the task's prUrl takes),
+ *  else the one built from the host and project. */
+export function glabMrRef(raw: unknown, project: { host: string; path: string }): { iid: number; url: string } | null {
+  const o = rec(raw);
+  const iid = o?.iid;
+  if (typeof iid !== 'number' || !Number.isInteger(iid) || iid <= 0) return null;
+  const web = text(o?.web_url);
+  const url = WORKTASK_MR_URL_RE.test(web) && web.endsWith(`/-/merge_requests/${iid}`)
+    ? web
+    : `https://${project.host}/${project.path}/-/merge_requests/${iid}`;
+  return { iid, url };
 }
 
 /** `glab auth status`'s outcome for one host. */
@@ -859,6 +876,54 @@ export class GlabPrService implements PrProvider {
       };
     } catch (err) {
       return { ok: false, code: 'error', message: glabErrorText(err) };
+    }
+  }
+
+  /** Open a merge request from `source` into `target` inside the key's
+   *  project (task_pr; no fork, no draft). `signedOut` marks a failure glab
+   *  answered as a sign-out (glabApiSignedOut); any other failure is not one. */
+  async createMergeRequest(
+    cwd: string,
+    key: string,
+    req: { source: string; target: string; title: string; description: string },
+  ): Promise<{ ok: true; iid: number; url: string } | { ok: false; signedOut: boolean; message: string }> {
+    try {
+      const project = GlabPrService.project(key);
+      for (const ref of [req.source, req.target]) if (!ref || ref.startsWith('-')) throw new Error(`not a branch name: ${ref}`);
+      const { stdout } = await this.api(project.host, [
+        '-X', 'POST', `projects/${encodeURIComponent(project.path)}/merge_requests`,
+        // `=` forms: a title or description starting with "-" stays a value.
+        '-f', `source_branch=${req.source}`, '-f', `target_branch=${req.target}`,
+        '-f', `title=${req.title}`, '-f', `description=${req.description}`,
+      ], cwd);
+      const mr = glabMrRef(JSON.parse(stdout), project);
+      if (!mr) throw new Error('GitLab answered without a merge request');
+      return { ok: true, ...mr };
+    } catch (err) {
+      return { ok: false, signedOut: glabApiSignedOut(err), message: glabErrorText(err) };
+    }
+  }
+
+  /** The open merge request from `source` into `target` within the key's
+   *  project (task_pr's re-entry), or null when there is none or it cannot
+   *  be read. One from a fork with the same branch name is not it. */
+  async openMergeRequestOf(cwd: string, key: string, source: string, target: string): Promise<{ iid: number; url: string } | null> {
+    try {
+      const project = GlabPrService.project(key);
+      for (const ref of [source, target]) if (!ref || ref.startsWith('-')) return null;
+      const q = new URLSearchParams({ state: 'opened', source_branch: source, target_branch: target, per_page: '20' });
+      const { stdout } = await this.api(project.host, [`projects/${encodeURIComponent(project.path)}/merge_requests?${q.toString()}`], cwd);
+      const raw = JSON.parse(stdout) as unknown;
+      if (!Array.isArray(raw)) return null;
+      for (const r of raw) {
+        const o = rec(r);
+        if (!o || typeof o.source_project_id !== 'number' || o.source_project_id !== o.target_project_id) continue;
+        const mr = glabMrRef(o, project);
+        if (mr) return mr;
+      }
+      return null;
+    } catch {
+      return null;
     }
   }
 

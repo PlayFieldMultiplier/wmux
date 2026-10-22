@@ -2,6 +2,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { TaskPrService, type PrExec, type CreatePrInput } from '../TaskPrService';
+import { GlabPrService } from '../../github/GlabPrService';
 
 const VALID_PR = 'https://github.com/acme/widget/pull/42';
 
@@ -22,7 +23,9 @@ function makeExec(
     calls.push({ cmd, args });
     const r = behavior(cmd, args);
     if ('throw' in r) {
-      const err = new Error(r.throw) as Error & { stderr?: string };
+      // As execFile rejects: the message holds the command line, stderr is
+      // the tool's own output (the sign-out rule reads stderr only).
+      const err = new Error(`Command failed: ${cmd} ${args.join(' ')}`) as Error & { stderr?: string };
       err.stderr = r.throw;
       throw err;
     }
@@ -49,8 +52,10 @@ function happyBehavior(cmd: string, args: string[]): { stdout: string } | { thro
     if (a.startsWith('pr list')) return { stdout: VALID_PR };
   }
   if (cmd === 'git') {
-    if (a.startsWith('status')) return { stdout: '' }; // clean
-    if (a.startsWith('remote')) return { stdout: 'origin' };
+    if (args[0] === 'check-ref-format') return { stdout: `${args[2]}\n` };
+    if (a === 'status --porcelain') return { stdout: '' }; // clean
+    if (a === 'remote get-url --push origin') return { stdout: 'https://github.com/acme/widget.git\n' };
+    if (a === 'remote') return { stdout: 'origin' };
     if (a.startsWith('push')) return { stdout: '' };
   }
   return { stdout: '' };
@@ -111,9 +116,12 @@ describe('J3 §2 dirty 차단(CX7)', () => {
 
 describe('J3 §2 no-origin(fork·다중 remote 자동 추측 금지 §7·CL9)', () => {
   it('origin remote 부재는 명시 에러', async () => {
-    const { exec } = makeExec((cmd, args) =>
-      cmd === 'git' && argStr(args).startsWith('remote') ? { stdout: 'upstream\nfork' } : happyBehavior(cmd, args),
-    );
+    const { exec } = makeExec((cmd, args) => {
+      const a = argStr(args);
+      if (cmd === 'git' && a === 'remote get-url --push origin') return { throw: "error: No such remote 'origin'" };
+      if (cmd === 'git' && a === 'remote') return { stdout: 'upstream\nfork' };
+      return happyBehavior(cmd, args);
+    });
     const { svc } = makeService(exec);
     const res = await svc.createPr(INPUT);
     expect(res.ok).toBe(false);
@@ -142,6 +150,8 @@ describe('J3 §2 정상 1클릭 PR', () => {
     expect(create!.args[baseIdx + 1]).toBe('main');
     // --head도 브랜치로 명시.
     expect(create!.args).toContain('--head');
+    // A github.com origin's gh calls are not pinned (unchanged).
+    expect(calls.some((c) => isGh(c.cmd) && c.args.includes('-R'))).toBe(false);
 
     // prUrl 데몬 커밋 + PrStatusCache invalidate.
     const upd = daemonCalls.find((c) => c.method === 'task.mission.update');
@@ -246,5 +256,320 @@ describe('J3 §2 prUrl 커밋 실패(비치명)', () => {
     if (!res.ok) throw new Error('unreachable');
     expect(res.commitPending).toBe(true);
     expect(res.prUrl).toBe(VALID_PR);
+  });
+});
+
+// ── GitLab: origin on a non-GitHub host opens a merge request with glab ──
+
+const GL_ORIGIN = 'git@gitlab.example.com:group/sub/proj.git';
+const GL_PROJECT = 'projects/group%2Fsub%2Fproj';
+const GL_MR = 'https://gitlab.example.com/group/sub/proj/-/merge_requests/7';
+
+function isGlab(cmd: string): boolean {
+  return cmd === 'glab' || cmd === 'glab.exe';
+}
+
+/** glab api args after `api --hostname <host>`. */
+function apiArgs(args: string[]): string[] {
+  return args[0] === 'api' && args[1] === '--hostname' ? args.slice(3) : [];
+}
+
+function glHappy(cmd: string, args: string[]): { stdout: string } | { throw: string } {
+  const a = argStr(args);
+  if (cmd === 'git' && a === 'remote get-url --push origin') return { stdout: `${GL_ORIGIN}\n` };
+  if (isGlab(cmd)) {
+    if (a === '--version') return { stdout: 'glab 1.50.0' };
+    const api = apiArgs(args);
+    if (api[0] === 'user') return { stdout: JSON.stringify({ username: 'alice' }) };
+    if (api[0] === 'graphql') return { stdout: JSON.stringify({ data: { project: { repository: { rootRef: 'main' } } } }) };
+    if (api[0] === '-X' && api[1] === 'POST') return { stdout: JSON.stringify({ iid: 7, web_url: GL_MR, source_project_id: 10, target_project_id: 10 }) };
+    if (api[0]?.startsWith(`${GL_PROJECT}/merge_requests?`)) return { stdout: '[]' };
+  }
+  // gh (signed in to github.com) cannot read a GitLab repository.
+  if (isGh(cmd) && args[0] === 'repo') return { throw: 'none of the git remotes configured for this repository point to a known GitHub host' };
+  return happyBehavior(cmd, args);
+}
+
+function makeGlService(behavior: (cmd: string, args: string[]) => { stdout: string } | { throw: string }) {
+  const { exec, calls } = makeExec(behavior);
+  const daemonCalls: Array<{ method: string; params: Record<string, unknown> }> = [];
+  const daemon = {
+    rpc: vi.fn(async (method: string, params: Record<string, unknown>) => {
+      daemonCalls.push({ method, params });
+      return { ok: true };
+    }),
+  };
+  const glab = new GlabPrService(Date.now, exec);
+  const svc = new TaskPrService({ daemon, cache: { invalidate: vi.fn() }, exec, glab });
+  const posts = () => calls.filter((c) => isGlab(c.cmd) && apiArgs(c.args)[0] === '-X');
+  return { svc, calls, daemonCalls, posts };
+}
+
+describe('task_pr on GitLab (glab)', () => {
+  it('routes a GitLab origin to glab: pushes to origin, POSTs the MR, never runs gh', async () => {
+    const { svc, calls, daemonCalls, posts } = makeGlService(glHappy);
+    const res = await svc.createPr({ ...INPUT, body: '-starts with a dash' });
+    expect(res).toEqual({ ok: true, prUrl: GL_MR, mrIid: 7 });
+    expect(calls.some((c) => isGh(c.cmd))).toBe(false);
+    expect(calls.find((c) => c.cmd === 'git' && c.args[0] === 'push')?.args).toEqual(['push', '-u', 'origin', '--', INPUT.branch]);
+    const post = posts();
+    expect(post).toHaveLength(1);
+    expect(post[0].args.slice(0, 3)).toEqual(['api', '--hostname', 'gitlab.example.com']);
+    expect(apiArgs(post[0].args)).toEqual([
+      '-X', 'POST', `${GL_PROJECT}/merge_requests`,
+      '-f', `source_branch=${INPUT.branch}`, '-f', 'target_branch=main',
+      '-f', `title=${INPUT.title}`, '-f', 'description=-starts with a dash',
+    ]);
+    expect(daemonCalls.find((c) => c.method === 'task.mission.update')?.params.prUrl).toBe(GL_MR);
+  });
+
+  it('keeps a GitHub origin on the gh path (no glab call)', async () => {
+    const { svc, calls } = makeGlService((cmd, args) =>
+      cmd === 'git' && argStr(args) === 'remote get-url --push origin' ? { stdout: 'https://github.com/acme/widget.git\n' } : happyBehavior(cmd, args),
+    );
+    const res = await svc.createPr(INPUT);
+    expect(res).toEqual({ ok: true, prUrl: VALID_PR });
+    expect(calls.some((c) => isGlab(c.cmd))).toBe(false);
+  });
+
+  it('returns the open MR for the branch instead of opening a second one', async () => {
+    const { svc, posts } = makeGlService((cmd, args) => {
+      const api = apiArgs(args);
+      if (isGlab(cmd) && api[0] === '-X') return { throw: 'glab: Another open merge request already exists for this source branch: !7 (HTTP 409)' };
+      if (isGlab(cmd) && api[0]?.startsWith(`${GL_PROJECT}/merge_requests?`)) {
+        expect(api[0]).toContain('state=opened');
+        expect(api[0]).toContain(`source_branch=${encodeURIComponent(INPUT.branch)}`);
+        expect(api[0]).toContain('target_branch=main');
+        return {
+          stdout: JSON.stringify([
+            { iid: 3, web_url: 'https://gitlab.example.com/fork/proj/-/merge_requests/3', source_project_id: 99, target_project_id: 10 },
+            { iid: 7, web_url: GL_MR, source_project_id: 10, target_project_id: 10 },
+          ]),
+        };
+      }
+      return glHappy(cmd, args);
+    });
+    const res = await svc.createPr(INPUT);
+    expect(res).toEqual({ ok: true, prUrl: GL_MR, recovered: true, mrIid: 7 });
+    expect(posts()).toHaveLength(1);
+  });
+
+  it('a signed-out glab is gh-unauth, before anything is pushed', async () => {
+    const { svc, calls } = makeGlService((cmd, args) =>
+      isGlab(cmd) && apiArgs(args)[0] === 'user' ? { throw: 'glab: 401 Unauthorized' } : glHappy(cmd, args),
+    );
+    const res = await svc.createPr(INPUT);
+    expect(res.ok).toBe(false);
+    if (res.ok) throw new Error('unreachable');
+    expect(res.reason).toBe('gh-unauth');
+    expect(res.error).toContain('glab auth login --hostname gitlab.example.com');
+    expect(calls.find((c) => c.cmd === 'git' && c.args[0] === 'push')).toBeUndefined();
+  });
+
+  it('a network blip is a transient error, not a sign-out', async () => {
+    const { svc, calls } = makeGlService((cmd, args) =>
+      isGlab(cmd) && apiArgs(args)[0] === 'user'
+        ? { throw: 'dial tcp: lookup gitlab.example.com: no such host' }
+        : glHappy(cmd, args),
+    );
+    const res = await svc.createPr(INPUT);
+    expect(res.ok).toBe(false);
+    if (res.ok) throw new Error('unreachable');
+    expect(res.reason).toBe('error');
+    expect(calls.find((c) => c.cmd === 'git' && c.args[0] === 'push')).toBeUndefined();
+  });
+
+  it('a missing glab is gh-missing (gh signed in elsewhere cannot read this repo)', async () => {
+    const { svc, calls } = makeGlService((cmd, args) => {
+      if (isGlab(cmd) && args[0] === '--version') return { throw: 'spawn glab ENOENT' };
+      if (isGh(cmd) && args[0] === 'repo') return { throw: 'none of the git remotes configured for this repository point to a known GitHub host' };
+      return glHappy(cmd, args);
+    });
+    const res = await svc.createPr(INPUT);
+    expect(calls.find((c) => c.cmd === 'git' && c.args[0] === 'push')).toBeUndefined();
+    expect(res.ok).toBe(false);
+    if (res.ok) throw new Error('unreachable');
+    expect(res.reason).toBe('gh-missing');
+    expect(res.error).toContain('glab');
+  });
+
+  it('a failed create with no open MR is pr-failed; one glab answered 401 is gh-unauth', async () => {
+    const failing = (stderr: string) => makeGlService((cmd, args) =>
+      isGlab(cmd) && apiArgs(args)[0] === '-X' ? { throw: stderr } : glHappy(cmd, args),
+    );
+    const blip = await failing('Post "https://gitlab.example.com/api/v4/projects/group%2Fsub%2Fproj/merge_requests": EOF').svc.createPr(INPUT);
+    expect(blip.ok === false && blip.reason).toBe('pr-failed');
+    const out = await failing('glab: 401 Unauthorized').svc.createPr(INPUT);
+    expect(out.ok === false && out.reason).toBe('gh-unauth');
+  });
+});
+
+describe('task_pr: a host glab refuses goes on to gh', () => {
+  const glabMissing = (origin: string, gh: (cmd: string, args: string[]) => { stdout: string } | { throw: string } | null) =>
+    makeGlService((cmd, args) => {
+      if (cmd === 'git' && argStr(args) === 'remote get-url --push origin') return { stdout: `${origin}\n` };
+      if (isGlab(cmd) && args[0] === '--version') return { throw: 'spawn glab ENOENT' };
+      // The ssh config maps the alias `work` to github.com.
+      if (cmd === 'ssh' && argStr(args) === '-G work') return { stdout: 'user git\nhostname github.com\nport 22\n' };
+      if (isGh(cmd)) return gh(cmd, args) ?? happyBehavior(cmd, args);
+      return glHappy(cmd, args);
+    });
+
+  it('an ssh alias for GitHub (glab missing) opens its PR with gh', async () => {
+    const { svc, calls } = glabMissing('git@work:acme/widget.git', () => null);
+    expect(await svc.createPr(INPUT)).toEqual({ ok: true, prUrl: VALID_PR });
+    // Every gh call names origin's repository, the alias resolved.
+    expect(calls.find((c) => isGh(c.cmd) && c.args[0] === 'repo')?.args.slice(0, 3)).toEqual(['repo', 'view', 'github.com/acme/widget']);
+    const create = calls.find((c) => isGh(c.cmd) && c.args[0] === 'pr' && c.args[1] === 'create');
+    expect(create?.args.slice(0, 4)).toEqual(['pr', 'create', '-R', 'github.com/acme/widget']);
+    expect(create?.args).toContain('main');
+  });
+
+  it('an alias ssh does not resolve to a real host answers the glab refusal', async () => {
+    const { svc, calls } = glabMissing('git@nowhere:acme/widget.git', () => null);
+    const res = await svc.createPr(INPUT);
+    expect(res.ok === false && res.reason).toBe('gh-missing');
+    expect(calls.some((c) => isGh(c.cmd))).toBe(false);
+  });
+
+  it('a GitLab origin with a GitHub mirror remote (glab missing) never reaches the mirror', async () => {
+    const { svc, calls } = glabMissing(GL_ORIGIN, (_cmd, args) => {
+      if (args[0] !== 'repo') return null;
+      // Unpinned, gh would pick the github.com mirror; pinned to origin it cannot read it.
+      return args[2] === 'gitlab.example.com/group/sub/proj' ? { throw: 'HTTP 404: Not Found' } : { stdout: 'main' };
+    });
+    const res = await svc.createPr(INPUT);
+    expect(res.ok === false && res.reason).toBe('gh-missing');
+    expect(res.ok === false && res.error).toContain('glab');
+    expect(calls.filter((c) => c.cmd === 'git' && c.args[0] === 'push')).toHaveLength(0);
+    expect(calls.find((c) => isGh(c.cmd) && c.args[0] === 'pr')).toBeUndefined();
+  });
+
+  it('GitHub Enterprise on its own domain (glab missing) reaches gh: the push and the PR create run', async () => {
+    const { svc, calls } = glabMissing('git@code.acme.example:acme/widget.git', () => null);
+    const res = await svc.createPr(INPUT);
+    expect(calls.filter((c) => c.cmd === 'git' && c.args[0] === 'push')).toHaveLength(1);
+    expect(calls.find((c) => isGh(c.cmd) && c.args[0] === 'pr' && c.args[1] === 'create')?.args.slice(2, 4)).toEqual(['-R', 'code.acme.example/acme/widget']);
+    expect(res.ok).toBe(true);
+  });
+
+  it('a GitLab host with glab and gh both missing answers the glab refusal', async () => {
+    const { svc, calls } = glabMissing(GL_ORIGIN, () => ({ throw: 'spawn gh ENOENT' }));
+    const res = await svc.createPr(INPUT);
+    expect(res.ok).toBe(false);
+    if (res.ok) throw new Error('unreachable');
+    expect(res.reason).toBe('gh-missing');
+    expect(res.error).toContain('glab');
+    expect(calls.find((c) => c.cmd === 'git' && c.args[0] === 'push')).toBeUndefined();
+  });
+
+  it('a glab sign-out with gh signed out too answers the glab sign-out', async () => {
+    const { svc } = makeGlService((cmd, args) => {
+      if (isGlab(cmd) && apiArgs(args)[0] === 'user') return { throw: 'glab: 401 Unauthorized (HTTP 401)' };
+      if (isGh(cmd) && args[0] === 'auth') return { throw: 'You are not logged into any GitHub hosts' };
+      return glHappy(cmd, args);
+    });
+    const res = await svc.createPr(INPUT);
+    expect(res.ok === false && res.error).toContain('glab auth login --hostname gitlab.example.com');
+  });
+
+  it('gh that got past the gate answers its own failure', async () => {
+    const { svc } = glabMissing('git@work:acme/widget.git', (cmd, args) =>
+      args[0] === 'pr' ? { throw: 'GraphQL: something went wrong' } : null,
+    );
+    const res = await svc.createPr(INPUT);
+    expect(res.ok === false && res.reason).toBe('pr-failed');
+    expect(res.ok === false && res.error).toContain('gh pr create failed');
+  });
+});
+
+describe('task_pr: the branch is a plain name before anything is pushed', () => {
+  for (const branch of ['+wtask/x', '-wtask', 'a:b', 'x^', 'x~1', '@{-1}', 'refs/heads/main', 'refs/tags/v1']) {
+    it(`refuses ${JSON.stringify(branch)} on both paths`, async () => {
+      for (const make of [() => makeGlService(glHappy), () => makeGlService(happyBehavior)]) {
+        const { svc, calls } = make();
+        const res = await svc.createPr({ ...INPUT, branch });
+        expect(res.ok === false && res.reason).toBe('error');
+        expect(calls.find((c) => c.cmd === 'git' && c.args[0] === 'push')).toBeUndefined();
+      }
+    });
+  }
+
+  it('refuses a name git does not hand back unchanged', async () => {
+    const { svc, calls } = makeGlService((cmd, args) =>
+      cmd === 'git' && args[0] === 'check-ref-format' ? { throw: 'fatal: not a valid branch name' } : glHappy(cmd, args),
+    );
+    const res = await svc.createPr({ ...INPUT, branch: 'wtask/x.lock' });
+    expect(res.ok === false && res.reason).toBe('error');
+    expect(calls.find((c) => c.cmd === 'git' && c.args[0] === 'push')).toBeUndefined();
+  });
+});
+
+describe('task_pr on GitLab: the rest of the contract', () => {
+  it('an unreadable default branch is pr-failed, and no MR is opened', async () => {
+    const { svc, posts } = makeGlService((cmd, args) =>
+      isGlab(cmd) && apiArgs(args)[0] === 'graphql' ? { stdout: JSON.stringify({ data: { project: null }, errors: [{ message: 'not found' }] }) } : glHappy(cmd, args),
+    );
+    const res = await svc.createPr(INPUT);
+    expect(res.ok === false && res.reason).toBe('pr-failed');
+    expect(res.ok === false && res.error).toContain('base branch');
+    expect(posts()).toHaveLength(0);
+  });
+
+  it('builds the MR URL when web_url is missing or is not that MR\'s page', async () => {
+    for (const web_url of [undefined, 'https://gitlab.example.com/group/sub/proj/-/merge_requests/8', 'javascript:alert(1)']) {
+      const { svc } = makeGlService((cmd, args) =>
+        isGlab(cmd) && apiArgs(args)[0] === '-X' ? { stdout: JSON.stringify({ iid: 7, web_url }) } : glHappy(cmd, args),
+      );
+      expect(await svc.createPr(INPUT)).toEqual({ ok: true, prUrl: GL_MR, mrIid: 7 });
+    }
+  });
+
+  it('reads only glab\'s stderr for a sign-out: a 401 in the command line is not one', async () => {
+    const { svc } = makeGlService((cmd, args) => {
+      if (cmd === 'git' && argStr(args) === 'remote get-url --push origin') return { stdout: 'git@gitlab.example.com:team-401/proj.git\n' };
+      if (isGlab(cmd) && apiArgs(args)[0] === '-X') return { throw: 'Post "https://gitlab.example.com/api/v4/projects/team-401%2Fproj/merge_requests": EOF' };
+      return glHappy(cmd, args);
+    });
+    // The title puts "401 Unauthorized" in the command line, so in err.message.
+    const res = await svc.createPr({ ...INPUT, title: '401 Unauthorized page' });
+    expect(res.ok === false && res.reason).toBe('pr-failed');
+  });
+});
+
+describe('task_pr: the push goes where it was approved to', () => {
+  const OTHER = 'git@gitlab.example.com:other/proj.git';
+  /** origin's push URL reads `first` for `n` reads, then `later`. */
+  const shifting = (base: (cmd: string, args: string[]) => { stdout: string } | { throw: string }, first: string, later: string, n: number) => {
+    let reads = 0;
+    return (cmd: string, args: string[]) => {
+      if (cmd === 'git' && argStr(args) === 'remote get-url --push origin') {
+        reads += 1;
+        return { stdout: `${reads <= n ? first : later}\n` };
+      }
+      return base(cmd, args);
+    };
+  };
+
+  it('refuses when origin\'s push URL changed right before the push, on both paths', async () => {
+    for (const [base, first] of [[glHappy, GL_ORIGIN], [happyBehavior, 'https://github.com/acme/widget.git']] as const) {
+      const { svc, calls } = makeGlService(shifting(base, first, OTHER, 1));
+      const res = await svc.createPr(INPUT);
+      expect(res.ok === false && res.error).toContain("origin's push URL changed");
+      expect(calls.filter((c) => c.cmd === 'git' && c.args[0] === 'push')).toHaveLength(0);
+    }
+  });
+
+  it('refuses when origin is not the push target the human approved', async () => {
+    const { svc, calls } = makeGlService(glHappy);
+    const res = await svc.createPr({ ...INPUT, pushTarget: 'gitlab.example.com/other/proj' });
+    expect(res.ok === false && res.error).toContain('gitlab.example.com/other/proj → gitlab.example.com/group/sub/proj');
+    expect(calls.filter((c) => c.cmd === 'git' && c.args[0] === 'push')).toHaveLength(0);
+  });
+
+  it('pushes when it still is the approved target', async () => {
+    const { svc, calls } = makeGlService(glHappy);
+    expect(await svc.createPr({ ...INPUT, pushTarget: 'gitlab.example.com/group/sub/proj' })).toEqual({ ok: true, prUrl: GL_MR, mrIid: 7 });
+    expect(calls.filter((c) => c.cmd === 'git' && c.args[0] === 'push')).toHaveLength(1);
   });
 });
