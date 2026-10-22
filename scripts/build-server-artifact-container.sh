@@ -41,7 +41,6 @@ docker run --rm --platform "$PLATFORM" \
   --user "$(id -u):$(id -g)" \
   -v "$PWD":/src -w /src \
   -e HOME=/tmp/home \
-  -e ELECTRON_SKIP_BINARY_DOWNLOAD=1 \
   -e ARCH="$ARCH" -e OUT="$OUT" -e CACHE="$CACHE" -e NODE_TARBALL="$NODE_TARBALL" -e MAX_GLIBC="$MAX_GLIBC" \
   "$IMAGE" bash -euo pipefail -c '
     mkdir -p /tmp/node "$HOME"

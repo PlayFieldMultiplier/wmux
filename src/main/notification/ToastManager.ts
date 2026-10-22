@@ -2,6 +2,7 @@ import { Notification, BrowserWindow, app } from 'electron';
 import { isWindows, isMac } from '../../shared/platform';
 import { IPC } from '../../shared/constants';
 import { focusedPrimaryWindow, primaryWindow } from '../window/auxiliaryWindows';
+import { logNotificationFailure } from './notificationFailure';
 
 /**
  * Originating context for a toast. When present, clicking the toast not only
@@ -85,6 +86,7 @@ export class ToastManager {
       body,
       silent: false,
     });
+    logNotificationFailure(notification, 'ToastManager');
 
     notification.on('click', () => {
       // Bring app to front when toast is clicked. Windows Action Center

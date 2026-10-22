@@ -33,6 +33,10 @@ const osInclude = include.map((glob) => glob.replace('*.test.', '*.os.test.'));
 export default defineConfig({
   test: {
     setupFiles: ['./src/test-utils/isolateDataDir.ts', './src/test-utils/jsdomEnv.ts'],
+    // Installs the Electron binary once before any worker starts, so no test
+    // that imports `electron` downloads it mid-run. Root-only in vitest 5 (not
+    // inherited by the projects), so it runs once per run.
+    globalSetup: ['./scripts/vitest-electron-binary.mjs'],
     environment: 'node',
     // Two lanes (scripts/lib/test-lanes.mjs has the rule; a file's name,
     // `.os.test` or not, has its lane): `integration` holds the files that

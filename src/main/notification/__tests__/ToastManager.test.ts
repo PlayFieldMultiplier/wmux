@@ -124,6 +124,25 @@ describe('ToastManager (OS-aware notifications)', () => {
     expect(electronMocks.dockBounce).not.toHaveBeenCalled();
   });
 
+  // Electron 42: an unsigned macOS build reports every toast as `failed`
+  // instead of showing it. The toast must leave a log line, not vanish.
+  it('logs a toast the OS reports as failed, without throwing', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const { ToastManager } = await import('../ToastManager');
+      expect(new ToastManager().showDirect('t', 'b')).toBe(true);
+
+      const onCalls = electronMocks.notificationInstances[0].on.mock.calls;
+      const failedCall = onCalls.find((c: unknown[]) => c[0] === 'failed');
+      expect(failedCall).toBeDefined();
+      if (!failedCall) throw new Error('no failed handler registered');
+      expect(() => (failedCall[1] as (e: unknown, error: string) => void)({}, 'not allowed')).not.toThrow();
+      expect(warn).toHaveBeenCalledWith('[ToastManager] OS notification failed to show:', 'not allowed');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   describe('click → pane jump (X2)', () => {
     // Pull the 'click' handler the SUT registered on the Notification mock
     // and invoke it, simulating the user clicking the OS toast.
