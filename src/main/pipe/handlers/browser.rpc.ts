@@ -2,6 +2,7 @@ import type { BrowserWindow, WebContents } from 'electron';
 import { Notification, nativeImage, shell, webContents } from 'electron';
 import type { RpcRouter } from '../RpcRouter';
 import { sendToRenderer } from './_bridge';
+import { logNotificationFailure } from '../../notification/notificationFailure';
 import { IPC } from '../../../shared/constants';
 import { HelpRequests } from '../../browser-session/HelpRequests';
 import {
@@ -1967,11 +1968,13 @@ export function registerBrowserRpc(
     }
     try {
       if (!Notification.isSupported()) return;
-      new Notification({
+      const notification = new Notification({
         title: 'wmux — the browser needs you',
         body: prompt,
         silent: false,
-      }).show();
+      });
+      logNotificationFailure(notification, 'browser.help.request');
+      notification.show();
     } catch {
       /* notifications are unavailable on some Linux desktops */
     }
