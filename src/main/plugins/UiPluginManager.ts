@@ -107,10 +107,24 @@ export class UiPluginManager {
     for (const name of fs.readdirSync(root)) {
       if (!LEFTOVER_PREFIXES.some((prefix) => name.startsWith(prefix))) continue;
       try {
+        // A parked bundle is a leftover only once its plugin's folder is back.
+        // While it is missing (the restore above failed), the parked copy may
+        // be the only one: keep it for the next start.
+        if (name.startsWith(RETIRED_PREFIX) && !this.hasBundleFolder(root, name.split('@')[1])) continue;
         if (isDirectory(name)) fs.rmSync(path.join(root, name), { recursive: true, force: true });
       } catch (error) {
         console.warn(`[UiPluginManager] could not remove ${name}:`, error);
       }
+    }
+  }
+
+  private hasBundleFolder(root: string, id: string | undefined): boolean {
+    if (!id || !PLUGIN_NAME_REGEX.test(id)) return false;
+    try {
+      const stat = fs.lstatSync(path.join(root, id));
+      return stat.isDirectory() && !stat.isSymbolicLink();
+    } catch {
+      return false;
     }
   }
 

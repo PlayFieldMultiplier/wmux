@@ -259,17 +259,40 @@ describe('a refresh that is interrupted', () => {
     expect(fs.readdirSync(test.options.pluginsDir)).toEqual(['office']);
   });
 
+  it('keeps a parked bundle it could not restore, and restores it at the next start', async () => {
+    const test = setup();
+    const parkedName = '.retired@office@0b5e4c1a-0000-4000-8000-000000000001';
+    oldOffice(test, parkedName);
+    // The first rename of this start is the restore; make it fail.
+    renames.calls = 0;
+    renames.fail = (call) => call === 1;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await test.manager.initialize();
+    } finally {
+      renames.fail = null;
+      warn.mockRestore();
+    }
+    expect(fs.readFileSync(path.join(test.options.pluginsDir, parkedName, 'office.js'), 'utf8')).toBe('/* the 1.0.0 page */');
+
+    await new UiPluginManager(test.options).initialize();
+    expect(installedVersion(test)).toBe(shippedVersion());
+    expect(fs.readdirSync(test.options.pluginsDir)).toEqual(['office']);
+  });
+
   it('removes what interrupted installs, removals and refreshes left, and nothing else', async () => {
     const test = setup();
     const dir = test.options.pluginsDir;
-    for (const name of ['.install-abc', '.removed-1234', '.retired@office@5678', '.retired@agent-state-page@9']) {
+    // foo's folder is there, so its parked copy is a leftover; office's is not, so its parked copy is kept.
+    fs.mkdirSync(path.join(dir, 'foo'), { recursive: true });
+    for (const name of ['.install-abc', '.removed-1234', '.retired@office@5678', '.retired@foo@9']) {
       fs.mkdirSync(path.join(dir, name), { recursive: true });
       fs.writeFileSync(path.join(dir, name, 'manifest.json'), '{}');
     }
     fs.mkdirSync(path.join(dir, '.keep-me'));
     fs.writeFileSync(path.join(dir, '.install-note'), 'a file, not a leftover folder');
     await test.manager.initialize();
-    expect(fs.readdirSync(dir).sort()).toEqual(['.install-note', '.keep-me']);
+    expect(fs.readdirSync(dir).sort()).toEqual(['.install-note', '.keep-me', '.retired@office@5678', 'foo']);
   });
 
   it('never follows a link named like a leftover', async () => {
