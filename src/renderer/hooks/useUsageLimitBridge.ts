@@ -12,9 +12,11 @@ import { nextUsageLimitWaitingChange } from '../stores/slices/usageLimitSlice';
 // It also applies the global "continue after a usage limit resets" setting:
 // a limit whose `autoResume` is still undefined (nobody decided for that pane)
 // is armed once while the setting is on. It runs on both inputs — the limits
-// map AND the setting — because at boot `list()` can resolve before the saved
-// session restores the setting. Each ptyId+detectedAt is applied at most once,
-// so a pane the user later disarms is never re-armed for the same limit.
+// map AND the setting — and not before the saved session's settings land
+// (`sessionSettingsLoaded`), because at boot `list()` can resolve first and
+// the default would arm panes against a saved "off". Each ptyId+detectedAt is
+// applied at most once, so a pane the user later disarms is never re-armed
+// for the same limit.
 
 /** Dedup key of one limit occurrence. */
 export function usageLimitApplyKey(limit: Pick<PaneUsageLimit, 'ptyId' | 'detectedAt'>): string {
@@ -87,6 +89,7 @@ export function useUsageLimitBridge(): void {
 
     const applied = new Set<string>();
     const apply = (state: ReturnType<typeof useStore.getState>) => {
+      if (!state.sessionSettingsLoaded) return;
       for (const ptyId of planUsageLimitAutoResume(state.usageLimits, state.usageLimitAutoResume, applied)) {
         const limit = state.usageLimits[ptyId];
         // Claimed up front so an overlapping pass does not send twice; a send
@@ -98,7 +101,8 @@ export function useUsageLimitBridge(): void {
     };
     apply(useStore.getState());
     const offStore = useStore.subscribe((state, prev) => {
-      if (state.usageLimits !== prev.usageLimits || state.usageLimitAutoResume !== prev.usageLimitAutoResume) {
+      if (state.usageLimits !== prev.usageLimits || state.usageLimitAutoResume !== prev.usageLimitAutoResume
+        || state.sessionSettingsLoaded !== prev.sessionSettingsLoaded) {
         apply(state);
       }
       if (state.usageLimits !== prev.usageLimits) scheduleWaiting(state.usageLimits);

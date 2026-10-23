@@ -22,6 +22,7 @@ export type FleetTriageReason =
 
 const REASON_BY_DETAIL_KEY: Record<FleetDetailKey, FleetTriageReason> = {
   'fleet.needsYourInput': 'input',
+  'fleet.detail.shellSecret': 'input',
   'fleet.detail.error': 'error',
   'fleet.detail.unconfirmed': 'unconfirmed',
   'fleet.detail.supervisionStopped': 'supervisionStopped',

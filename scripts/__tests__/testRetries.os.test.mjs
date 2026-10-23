@@ -46,7 +46,7 @@ function fakeModule(relativeModuleId, tests, project = 'unit', { duration = 0, s
           fullName: t.name,
           location: t.line ? { line: t.line, column: 1 } : undefined,
           diagnostic: () => (t.pending ? undefined : { retryCount: t.retryCount ?? 0 }),
-          result: () => ({ state: t.state }),
+          result: () => ({ state: t.state, ...(t.errors ? { errors: t.errors } : {}) }),
         })),
     },
   };
@@ -76,6 +76,19 @@ describe('collectRetriedTests', () => {
       { file: 'src/a/__tests__/a.test.ts', name: 'a > broken', line: null, state: 'failed', retryCount: 1 },
       { file: 'src/a/__tests__/a.test.ts', name: 'a > flaky', line: 7, state: 'passed', retryCount: 1 },
     ]);
+  });
+
+  it('keeps the first line of a failed attempt\'s error, so a flake says why', () => {
+    const byProject = collectRetriedTests([
+      fakeModule('src/a.test.ts', [{
+        name: 'a > flaky', state: 'passed', retryCount: 1,
+        errors: [{ message: 'expected 3 to be 4 // Object.is equality\n- Expected\n+ Received' }, { message: 'expected 3 to be 4 // Object.is equality' }],
+      }]),
+    ]);
+    expect(byProject.get('unit')[0].errors).toEqual(['expected 3 to be 4 // Object.is equality']);
+    const { flaky } = mergeReports([report(byProject.get('unit'))]);
+    expect(flaky[0].errors).toEqual(['expected 3 to be 4 // Object.is equality']);
+    expect(renderAnnotations(flaky)[0]).toMatch(/passed on retry: expected 3 to be 4/);
   });
 
   it('groups by project, a project with no retry included', () => {

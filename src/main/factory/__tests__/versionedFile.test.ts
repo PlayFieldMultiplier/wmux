@@ -5,7 +5,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createFilePersister, readVersionedFile } from '../versionedFile';
+import { createFilePersister, persisterWritesSettled, readVersionedFile } from '../versionedFile';
 import { BotFanoutReceipts, RECEIPT_RETAIN_MS } from '../botFanoutReceipts';
 
 let dir = '';
@@ -48,6 +48,30 @@ describe('createFilePersister.settled', () => {
     const bad = createFilePersister(path.join(f, 'under-a-file.json'), () => ({ version: 1 }));
     void bad.schedule().catch(() => undefined);
     await expect(bad.settled()).resolves.toBeUndefined();
+  });
+});
+
+describe('persisterWritesSettled', () => {
+  it('waits for every persister\'s fire-and-forget write, and one scheduled while it waits', async () => {
+    const a = createFilePersister(path.join(dir, 'a.json'), () => ({ version: 1, n: 1 }));
+    let second: ReturnType<typeof createFilePersister> | null = null;
+    void a.schedule().then(() => {
+      second = createFilePersister(path.join(dir, 'b.json'), () => ({ version: 1, n: 2 }));
+      void second.schedule();
+    });
+    await persisterWritesSettled();
+    expect(readVersionedFile(path.join(dir, 'a.json'), 1)).toMatchObject({ n: 1 });
+    expect(second).not.toBeNull();
+    expect(readVersionedFile(path.join(dir, 'b.json'), 1)).toMatchObject({ n: 2 });
+  });
+
+  it('a failed write settles too', async () => {
+    // A folder that is a file: the write's mkdir fails.
+    fs.writeFileSync(path.join(dir, 'a-file'), '');
+    const p = createFilePersister(path.join(dir, 'a-file', 'x.json'), () => ({ version: 1 }));
+    const write = p.schedule();
+    await expect(persisterWritesSettled()).resolves.toBeUndefined();
+    await expect(write).rejects.toThrow();
   });
 });
 

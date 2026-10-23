@@ -370,7 +370,7 @@ const AGENT_PATTERNS: AgentPattern[] = [
     // lastAgent of a Claude pane and silenced every Claude pattern for the
     // rest of the session. The PermissionRequest hook (#1107) is Codex's
     // primary approval signal anyway.
-    gate: /OpenAI\s*Codex|Do you trust the contents of this directory/,
+    gate: /OpenAI\s*Codex|Do you trust the contents of this directory|Trust\s*this\s*folder\?/,
     patterns: [
       { regex: /^codex>\s*$/,                    status: 'waiting',   message: 'Waiting for input' },
       // Approval prompts — clean-room transcribed from a live Codex CLI
@@ -397,6 +397,9 @@ const AGENT_PATTERNS: AgentPattern[] = [
       // the question mark ("Working with untrusted contents comes with
       // higher risk..."), so only the start is anchored.
       { regex: /^\s*Do you trust the contents of this directory\?/,     status: 'awaiting_input', message: 'Directory trust prompt' },
+      // codex-cli 0.157's wording ("Folder access" / "Trust this folder?" /
+      // "› 1. Trust and continue"): the question has its own row.
+      { regex: /^\s*Trust\s*this\s*folder\?\s*$/,                      status: 'awaiting_input', message: 'Directory trust prompt' },
     ],
   },
 
@@ -770,8 +773,8 @@ function isClaudePromptChrome(line: string): boolean {
 
 /**
  * The Codex TUI's own chrome: the banner row (`│ >_ OpenAI Codex (v0.149.1) │`,
- * measured on 0.149.1) or the first-boot trust prompt, which Codex draws
- * before the banner. Both must START the row's visible text, so a shell
+ * measured on 0.149.1) or the first-boot trust prompt (either wording), which
+ * Codex draws before the banner. Both must START the row's visible text, so a shell
  * command, a log line or prose that quotes either phrase does not count.
  */
 function isCodexChrome(line: string): boolean {
@@ -779,7 +782,8 @@ function isCodexChrome(line: string): boolean {
   if (SOURCE_LINE_RE.test(stripped)) return false;
   const v = visibleChrome(stripped);
   return /^>_\s*OpenAI\s*Codex\b/.test(v)
-    || /^Do\s*you\s*trust\s*the\s*contents\s*of\s*this\s*directory\?/.test(v);
+    || /^Do\s*you\s*trust\s*the\s*contents\s*of\s*this\s*directory\?/.test(v)
+    || /^Trust\s*this\s*folder\?$/.test(v);
 }
 
 /**

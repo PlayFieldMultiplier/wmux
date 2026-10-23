@@ -16,7 +16,9 @@
 // on your screen" sits in warning red.
 
 import { type RiskClassCopy } from '../../../main/mcp/methodCapabilityMap';
-import type { BrowserActionPromptInfo } from '../../../main/mcp/ApprovalQueue';
+import type { BrowserActionPromptInfo, RemoteSpawnPromptInfo } from '../../../main/mcp/ApprovalQueue';
+import { agentLauncherStem, agentRow } from '../../../shared/agentIdentity';
+import { applyWorkerPermissionFlags, isFanoutWorkerPermissionMode } from '../../../shared/workerLaunch';
 import { groupCapabilities } from './capabilityGrouping';
 import { useT } from '../../hooks/useT';
 import Dialog, { DialogBody, DialogFooter, DialogHeader } from '../ui/Dialog';
@@ -50,14 +52,19 @@ export interface PermissionApprovalDialogProps {
    */
   title?: string;
   /** What is being asked. Absent (and 'plugin') keeps the plugin layout. */
-  kind?: 'plugin' | 'browser-borrow' | 'computer-app' | 'browser-action';
+  kind?: 'plugin' | 'browser-borrow' | 'computer-app' | 'browser-action' | 'remote-spawn';
   /** kind 'browser-action': the action, the site and the pane it is for. */
   browserAction?: BrowserActionPromptInfo;
   /** kind 'browser-action': the pane's display name (resolved by the container). */
   paneName?: string;
+  /** kind 'remote-spawn': who asks, for what, where, and the full prompt. */
+  remoteSpawn?: RemoteSpawnPromptInfo;
   /** Called when the user clicks Approve. */
   onApprove: () => void;
-  /** kind 'browser-action': "Always on this pane". Absent hides the button. */
+  /**
+   * kind 'browser-action': "Always on this pane"; kind 'remote-spawn': "Always
+   * allow this PC, folder and agent". Absent hides the button.
+   */
   onApproveAlways?: () => void;
   /** Called when the user clicks Deny. */
   onDeny: () => void;
@@ -90,9 +97,12 @@ export function PermissionApprovalDialogView(
   const t = useT();
   const groups = groupCapabilities(props.declaredCapabilities);
   const action = props.kind === 'browser-action' ? props.browserAction : undefined;
+  const spawn = props.kind === 'remote-spawn' ? props.remoteSpawn : undefined;
   // A dangerous action on a protected pane is critical by kind: it declares no
-  // capabilities, so the grouping alone would read it as benign.
-  const hasCritical = !!action || groups.some((g) => g.copy.severity === 'critical');
+  // capabilities, so the grouping alone would read it as benign. So is another
+  // PC running an agent as the user here.
+  const hasCritical = !!action || !!spawn || groups.some((g) => g.copy.severity === 'critical');
+  const spawnAgent = spawn ? agentRow(spawn.agent)?.display ?? spawn.agent : '';
   // The container keys this view by prompt id, so each prompt gets its own
   // guard window and no focus carried over from the one before.
   const guard = useActivationGuard(props.clientName + '\u0000' + props.declaredCapabilities.join(','));
@@ -118,14 +128,18 @@ export function PermissionApprovalDialogView(
             </span>
             {action
               ? t(`permission.browserAction.${action.action}`, { host: action.host })
-              : props.title ?? t('permission.pluginTitle')}
+              : spawn
+                ? spawn.followUp
+                  ? t('remoteSpawn.card.followUpTitle', { hostName: spawn.hostName })
+                  : t('remoteSpawn.card.title', { hostName: spawn.hostName, agent: spawnAgent })
+                : props.title ?? t('permission.pluginTitle')}
           </span>
         }
         description={
           // The label names WHAT is asking. A borrow prompt is a workspace's
           // agent, not a plugin, and calling it one would misattribute the
           // request; a computer-use prompt names the agent itself.
-          action ? (
+          spawn ? undefined : action ? (
             <>
               {t('permission.paneLabel')}{' '}
               <span className="font-mono text-[12px] text-[var(--text-main)]">
@@ -169,6 +183,7 @@ export function PermissionApprovalDialogView(
             ) : null}
           </div>
         ) : null}
+        {spawn ? <RemoteSpawnDetails spawn={spawn} agent={spawnAgent} /> : null}
         {props.rationale ? (
           <div className="ui-group px-3.5 py-3 text-[13px] text-[var(--text-sub)]">
             "{props.rationale}"
@@ -216,9 +231,9 @@ export function PermissionApprovalDialogView(
         <Button size="md" variant="secondary" onClick={guard(props.onDeny)}>
           {t('approval.deny')}
         </Button>
-        {action && props.onApproveAlways ? (
+        {(action || spawn) && props.onApproveAlways ? (
           <Button size="md" variant="secondary" onClick={guard(props.onApproveAlways)}>
-            {t('permission.browserAction.always')}
+            {t(spawn ? 'remoteSpawn.card.always' : 'permission.browserAction.always')}
           </Button>
         ) : null}
         {/* Solid red only when the grant reaches the screen or the keyboard —
@@ -232,9 +247,82 @@ export function PermissionApprovalDialogView(
           {/* Severity is not colour alone: in themes whose accent is red, the
               danger and primary fills look alike. */}
           {hasCritical && <IconWarning size={12} />}
-          {action ? t('permission.browserAction.allowOnce') : t('approval.approve')}
+          {action
+            ? t('permission.browserAction.allowOnce')
+            : spawn
+              ? t('remoteSpawn.card.allowOnce')
+              : t('approval.approve')}
         </Button>
       </DialogFooter>
     </Dialog>
   );
+}
+
+/** How tall the prompt box grows before it scrolls. */
+const SPAWN_PROMPT_MAX_HEIGHT = 240;
+
+/**
+ * The body of a 'remote-spawn' card: where and how the agent would run, the
+ * whole prompt, and one plain sentence on what allowing means. The prompt came
+ * from another PC: it is shown in full, as text, never cut and never markup.
+ */
+function RemoteSpawnDetails({ spawn, agent }: { spawn: RemoteSpawnPromptInfo; agent: string }) {
+  const t = useT();
+  const mode = isFanoutWorkerPermissionMode(spawn.permissionMode)
+    ? t(`settings.fanoutWorkerMode.${spawn.permissionMode}`)
+    : spawn.permissionMode;
+  const rows: { key: string; label: string; value: string; mono?: boolean; note?: string }[] = [
+    { key: 'pc', label: t('remoteSpawn.card.pc'), value: spawn.hostName },
+    { key: 'agent', label: t('remoteSpawn.card.agent'), value: agent },
+    { key: 'folder', label: t('remoteSpawn.card.folder'), value: spawn.folder, mono: true },
+    {
+      key: 'mode',
+      label: t('remoteSpawn.card.mode'),
+      value: mode,
+      // The mode is a launch flag only some agents take; one that takes none runs without it.
+      ...(!takesPermissionMode(spawn.agent) && { note: t('remoteSpawn.card.modeClaudeOnly') }),
+    },
+  ];
+  const meaning = spawn.followUp
+    ? t('remoteSpawn.card.meaningFollowUp', { hostName: spawn.hostName })
+    : t(spawn.followUps === 'direct' ? 'remoteSpawn.card.meaningDirect' : 'remoteSpawn.card.meaningAsk', {
+        hostName: spawn.hostName,
+      });
+  return (
+    <>
+      <div className="ui-group" data-remote-spawn-rows>
+        {rows.map((row) => (
+          <div key={row.key} className="ui-row !items-start" data-remote-spawn-row={row.key}>
+            <div className="ui-row-text">
+              <p className="ui-row-detail">{row.label}</p>
+              <p className={`ui-row-title break-all${row.mono ? ' ui-code' : ''}`}>{row.value}</p>
+              {row.note ? <p className="ui-row-detail" data-remote-spawn-mode-note>{row.note}</p> : null}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="ui-group px-3.5 py-3 text-[13px] text-[var(--text-sub)]">
+        <p className="m-0 mb-2">{t('remoteSpawn.card.prompt')}</p>
+        <pre
+          data-remote-spawn-prompt
+          className="m-0 whitespace-pre-wrap break-words overflow-auto text-[13px] text-[var(--text-main)]"
+          style={{ maxHeight: SPAWN_PROMPT_MAX_HEIGHT, fontFamily: 'inherit' }}
+        >
+          {spawn.text}
+        </pre>
+      </div>
+      <p className="m-0 text-[13px] text-[var(--text-sub)]" data-remote-spawn-meaning>{meaning}</p>
+      {spawn.followUp ? null : (
+        <p className="m-0 text-[13px] text-[var(--text-sub)]" data-remote-spawn-own-hooks>{t('remoteSpawn.card.ownHooks')}</p>
+      )}
+    </>
+  );
+}
+
+/** Whether the worker permission flags change this agent's launch line (the same check the spawn applies). */
+function takesPermissionMode(agent: string): boolean {
+  const row = agentRow(agent);
+  if (!row) return false;
+  const launcher = agentLauncherStem(row);
+  return applyWorkerPermissionFlags(launcher, 'auto') !== launcher;
 }

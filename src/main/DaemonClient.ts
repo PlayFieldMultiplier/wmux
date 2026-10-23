@@ -1,5 +1,6 @@
 import net from 'node:net';
 import type { PaneUsageLimit, PaneUsageLimitPatch } from '../shared/usageLimit';
+import { parseShellPromptChange, parseShellPromptList, type ShellPromptList } from '../shared/shellPrompt';
 import { EventEmitter } from 'node:events';
 import crypto from 'node:crypto';
 import type { RpcResponse, DaemonEvent } from '../shared/rpc';
@@ -37,9 +38,12 @@ import type {
   A2aRemoteStatus,
 } from '../shared/rpc';
 import { stripReplayQuerySequences } from '../shared/replayQuerySanitizer';
+import { A2A_SPAWN_RPC, type A2aSpawnAskInput, type A2aSpawnAskResult, type A2aSpawnOutgoingList, type A2aSpawnPolicySetResult, type A2aSpawnPolicyV1, type A2aSpawnRequestSummary } from '../shared/a2aSpawn';
 import { createSessionPipeMarkers } from '../daemon/sessionPipeMarkers';
 import { SessionPipeStreamScanner } from './daemon/sessionPipeStreamScanner';
 import { DAEMON_RPC_TIMEOUT_MS } from '../shared/timeouts';
+import { AGENT_STATE_BATCH_MAX } from '../shared/agentStateBatch';
+import { VIEWER_VISIBILITY_BATCH_MAX } from '../shared/viewerVisibilityBatch';
 import { DAEMON_CONTROL_LINE_MAX_CHARS } from '../shared/daemonControlLine';
 import { sanitizeTitle } from './pty/titleDetect';
 import {
@@ -57,6 +61,18 @@ import type { SessionPromptScheduleResult } from '../shared/sessionPromptSchedul
 // RCA A2 — single source of truth in shared/timeouts.ts so the renderer's
 // RECONCILE_TIMEOUT_MS can be derived from (and stay greater than) this value.
 const RPC_TIMEOUT_MS = DAEMON_RPC_TIMEOUT_MS;
+/**
+ * #2372 — how long a session-list read waits for others to share its call. A
+ * reloaded window's panes ask over tens of milliseconds, not in one turn.
+ */
+const LIST_SESSIONS_COALESCE_MS = 20;
+/** #2372 — likewise for viewer-visibility reports, which nobody awaits. */
+const VIEWER_VISIBILITY_COALESCE_MS = 50;
+
+/** Params made only of primitives, so their JSON is a faithful key. */
+function flatParams(params: Record<string, unknown>): boolean {
+  return Object.values(params).every((v) => v === null || ['string', 'number', 'boolean', 'undefined'].includes(typeof v));
+}
 const MAX_LINE_BUFFER = DAEMON_CONTROL_LINE_MAX_CHARS; // 1 MB
 
 interface PendingRequest {
@@ -134,6 +150,13 @@ export class DaemonClient extends EventEmitter {
         clearTimeout(timeout);
         this.controlPipe = socket;
         this.connected = true;
+        // #2372 — a new connection may be a new daemon, and a list read left
+        // in flight on the old socket must not hold up the ones queued behind it.
+        this.connectionEpoch += 1;
+        this.viewerVisibilityBatchRefused = false;
+        for (const key of this.listSessionsQueue.keys()) {
+          if (!this.listSessionsBusy(key)) setImmediate(() => this.flushListSessions(key));
+        }
         this.setupControlPipe(socket);
         // Pushed events are first-party-only and opt-in. Start the event
         // handshake before connect() resolves so no caller RPC can overtake it
@@ -175,6 +198,22 @@ export class DaemonClient extends EventEmitter {
   // cannot resurrect itself and subscribe on behalf of a connection that is
   // already gone.
   private eventHandshakeGeneration = 0;
+  /** #2372 — default-timeout agent reads asked for in this turn, by pane id. */
+  private agentStateQueue: Map<string, Array<{ resolve: (v: unknown) => void; reject: (e: unknown) => void }>> | null = null;
+  /**
+   * #2372 — `daemon.listSessions` reads waiting for their call, by params.
+   * A key with a call in flight is in `listSessionsInFlight`; reads asked for
+   * meanwhile wait here for the next one.
+   */
+  private listSessionsQueue = new Map<string, { params: Record<string, unknown>; waiters: Array<{ resolve: (v: unknown) => void; reject: (e: unknown) => void }> }>();
+  /** The connection each key's in-flight call went out on (see listSessionsBusy). */
+  private listSessionsInFlight = new Map<string, number>();
+  /** Bumped on every successful connect. */
+  private connectionEpoch = 0;
+  /** The connected daemon refused a batched visibility call (older than #2372). */
+  private viewerVisibilityBatchRefused = false;
+  /** #2372 — viewer-visibility reports waiting for their call, last one per pane. */
+  private viewerVisibilityQueue: Map<string, boolean> | null = null;
 
   /**
    * Subscribe to pushed events again on the live connection. The daemon drops
@@ -365,7 +404,88 @@ export class DaemonClient extends EventEmitter {
     if (!this.controlPipe || !this.connected) {
       throw new Error('DaemonClient not connected');
     }
+    if (method === 'daemon.listSessions' && opts.timeoutMs === undefined && flatParams(params)) {
+      return this.listSessionsCoalesced(params);
+    }
+    // #2372 — a detach resets the daemon's viewer visibility to its default,
+    // so a report for that pane still waiting in the queue must reach the
+    // daemon first, or it would land after the reset.
+    if (method === 'daemon.detachSession' && typeof params['id'] === 'string' && this.viewerVisibilityQueue?.has(params['id'])) {
+      void this.flushViewerVisibility();
+    }
+    return this.send(method, params, opts);
+  }
 
+  /**
+   * #2372 — every pane of a reloaded window asks main for the session list
+   * (its reconnect, and `pty:list`), and each read is the whole list: 60
+   * panes cost about 130 calls in one second, past the daemon's 200/s budget
+   * with the panes' resizes, so some of those resizes and lists were refused.
+   * Reads with the same params asked within LIST_SESSIONS_COALESCE_MS share
+   * one call. A read never takes an answer
+   * from a call sent before it was asked: one asked while a call is in
+   * flight waits for the next, which goes out when that one returns. Each
+   * waiter after the first gets its own copy, so one caller changing its
+   * array cannot change another's. A read with its own timeout, or with
+   * nested params, is not shared.
+   *
+   * Every read keeps the deadline it would have had alone (RPC_TIMEOUT_MS
+   * from when it was asked), so waiting behind a slow call never stretches
+   * it: callers such as the renderer's reconcile watchdog rely on that bound.
+   */
+  private listSessionsCoalesced(params: Record<string, unknown>): Promise<unknown> {
+    const key = JSON.stringify(Object.entries(params).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+    return new Promise((resolve, reject) => {
+      let entry = this.listSessionsQueue.get(key);
+      if (!entry) {
+        entry = { params, waiters: [] };
+        this.listSessionsQueue.set(key, entry);
+        if (!this.listSessionsBusy(key)) setTimeout(() => this.flushListSessions(key), LIST_SESSIONS_COALESCE_MS).unref?.();
+      }
+      let done = false;
+      const timer = setTimeout(() => {
+        if (done) return;
+        done = true;
+        reject(new Error(`RPC timeout: daemon.listSessions (${RPC_TIMEOUT_MS}ms)`));
+      }, RPC_TIMEOUT_MS);
+      entry.waiters.push({
+        resolve: (v) => { if (done) return; done = true; clearTimeout(timer); resolve(v); },
+        reject: (e) => { if (done) return; done = true; clearTimeout(timer); reject(e); },
+      });
+    });
+  }
+
+  /** A call for `key` is out on THIS connection. One left on a dropped socket does not hold the key. */
+  private listSessionsBusy(key: string): boolean {
+    return this.listSessionsInFlight.get(key) === this.connectionEpoch;
+  }
+
+  private flushListSessions(key: string): void {
+    const entry = this.listSessionsQueue.get(key);
+    if (!entry) return;
+    this.listSessionsQueue.delete(key);
+    const epoch = this.connectionEpoch;
+    this.listSessionsInFlight.set(key, epoch);
+    let call: Promise<unknown>;
+    try {
+      call = this.controlPipe && this.connected ? this.send('daemon.listSessions', entry.params) : Promise.reject(new Error('DaemonClient not connected'));
+    } catch (err) {
+      call = Promise.reject(err);
+    }
+    void call.then(
+      (rows) => entry.waiters.forEach((w, i) => w.resolve(i === 0 ? rows : structuredClone(rows))),
+      (err: unknown) => entry.waiters.forEach((w) => w.reject(err)),
+    ).finally(() => {
+      if (this.listSessionsInFlight.get(key) === epoch) this.listSessionsInFlight.delete(key);
+      if (this.listSessionsQueue.has(key) && !this.listSessionsBusy(key)) this.flushListSessions(key);
+    });
+  }
+
+  private send(
+    method: string,
+    params: Record<string, unknown>,
+    opts: { timeoutMs?: number } = {},
+  ): Promise<unknown> {
     const id = `req-${++this.requestId}`;
     const timeoutMs = opts.timeoutMs ?? RPC_TIMEOUT_MS;
 
@@ -680,6 +800,28 @@ export class DaemonClient extends EventEmitter {
     })) as A2aRemoteExposureSetResult;
   }
 
+  async a2aSpawnPolicyGet(): Promise<{ policy: A2aSpawnPolicyV1 }> {
+    return (await this.rpc(A2A_SPAWN_RPC.policyGet, {})) as { policy: A2aSpawnPolicyV1 };
+  }
+
+  /** The daemon checks and realpaths each root and bumps `version`. */
+  async a2aSpawnPolicySet(policy: A2aSpawnPolicyV1): Promise<A2aSpawnPolicySetResult> {
+    return (await this.rpc(A2A_SPAWN_RPC.policySet, { policy })) as A2aSpawnPolicySetResult;
+  }
+
+  async a2aSpawnRequestsList(): Promise<{ requests: A2aSpawnRequestSummary[] }> {
+    return (await this.rpc(A2A_SPAWN_RPC.requestsList, {})) as { requests: A2aSpawnRequestSummary[] };
+  }
+
+  /** As the asking PC: store a request and queue it for the other PC (no network wait). */
+  async a2aSpawnAsk(input: A2aSpawnAskInput): Promise<A2aSpawnAskResult> {
+    return (await this.rpc(A2A_SPAWN_RPC.ask, { ...input })) as A2aSpawnAskResult;
+  }
+
+  async a2aSpawnOutgoing(spawnId?: string): Promise<A2aSpawnOutgoingList> {
+    return (await this.rpc(A2A_SPAWN_RPC.outgoing, spawnId ? { spawnId } : {})) as A2aSpawnOutgoingList;
+  }
+
   /** Reaches the other PC over the pinned connection, hence 30s. */
   async a2aRemoteHostsExposed(hostId: string): Promise<A2aRemoteHostsExposedResult> {
     return (await this.rpc('a2a.remote.hosts.exposed', { hostId }, { timeoutMs: 30_000 })) as A2aRemoteHostsExposedResult;
@@ -724,12 +866,110 @@ export class DaemonClient extends EventEmitter {
   }
 
   /**
+   * #2372 — one pane's raw `daemon.getAgentState` reply. Reads asked for in
+   * the same turn go to the daemon as one call with `ids`, so a burst of
+   * per-pane reads (the resync after a resubscribe, the renderer's name reads
+   * at startup) costs one RPC instead of one per pane. A lone read stays a
+   * single-id call. A daemon that answers a batch without `states` (older
+   * than #2372) is read one pane at a time.
+   */
+  private readAgentStateRaw(sessionId: string): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      if (!this.agentStateQueue) {
+        this.agentStateQueue = new Map();
+        setImmediate(() => void this.flushAgentStateQueue());
+      }
+      const waiters = this.agentStateQueue.get(sessionId) ?? [];
+      waiters.push({ resolve, reject });
+      this.agentStateQueue.set(sessionId, waiters);
+    });
+  }
+
+  /**
+   * #2372 — tell the daemon whether a desk renderer can see `sessionId`.
+   * Fire-and-forget, as the renderer's report is. Reports made within
+   * VIEWER_VISIBILITY_COALESCE_MS go as one call with `updates`, the last
+   * report per pane winning (a
+   * reloaded window reports every pane on mount and again after its
+   * reattach). A lone report stays a single call. A daemon older than #2372
+   * refuses `updates`; each pane is then sent one at a time, and so is every
+   * later report on that connection.
+   */
+  setViewerVisibility(sessionId: string, visible: boolean): void {
+    if (!this.viewerVisibilityQueue) {
+      this.viewerVisibilityQueue = new Map();
+      setTimeout(() => void this.flushViewerVisibility(), VIEWER_VISIBILITY_COALESCE_MS).unref?.();
+    }
+    // Re-inserted, so the order sent is the order of each pane's last report.
+    this.viewerVisibilityQueue.delete(sessionId);
+    this.viewerVisibilityQueue.set(sessionId, visible);
+  }
+
+  private async flushViewerVisibility(): Promise<void> {
+    const queue = this.viewerVisibilityQueue;
+    this.viewerVisibilityQueue = null;
+    if (!queue || !this.connected) return;
+    const single = (id: string, visible: boolean) =>
+      this.send('daemon.setSessionViewerVisibility', { id, visible }).catch(() => undefined);
+    const updates = [...queue].map(([id, visible]) => ({ id, visible }));
+    if (updates.length === 1 || this.viewerVisibilityBatchRefused) {
+      await Promise.all(updates.map((u) => single(u.id, u.visible)));
+      return;
+    }
+    const chunks: Array<typeof updates> = [];
+    for (let i = 0; i < updates.length; i += VIEWER_VISIBILITY_BATCH_MAX) chunks.push(updates.slice(i, i + VIEWER_VISIBILITY_BATCH_MAX));
+    // Every chunk is written now, in order, before any later call.
+    await Promise.all(chunks.map(async (chunk) => {
+      let older = false;
+      try {
+        const res = (await this.send('daemon.setSessionViewerVisibility', { updates: chunk })) as { batched?: unknown } | null;
+        older = res?.batched !== true;
+      } catch (err) {
+        // An older daemon requires `id` and refuses the batch. Any other
+        // failure (a refused call) is dropped like a lost single report.
+        older = /id \(string\) and visible \(boolean\) are required/.test(err instanceof Error ? err.message : String(err));
+      }
+      if (!older) return;
+      this.viewerVisibilityBatchRefused = true;
+      await Promise.all(chunk.map((u) => single(u.id, u.visible)));
+    }));
+  }
+
+  private async flushAgentStateQueue(): Promise<void> {
+    const queue = this.agentStateQueue;
+    this.agentStateQueue = null;
+    if (!queue) return;
+    const settle = (id: string, read: Promise<unknown>) => read.then(
+      (v) => { for (const w of queue.get(id) ?? []) w.resolve(v); },
+      (err) => { for (const w of queue.get(id) ?? []) w.reject(err); },
+    );
+    const single = (id: string) => settle(id, this.rpc('daemon.getAgentState', { id }));
+    const ids = [...queue.keys()];
+    if (ids.length === 1) return single(ids[0]);
+    const chunks: string[][] = [];
+    for (let i = 0; i < ids.length; i += AGENT_STATE_BATCH_MAX) chunks.push(ids.slice(i, i + AGENT_STATE_BATCH_MAX));
+    await Promise.all(chunks.map(async (chunk) => {
+      let states: Record<string, unknown> | undefined;
+      try {
+        const res = (await this.rpc('daemon.getAgentState', { ids: chunk })) as { states?: unknown } | null;
+        if (res && typeof res.states === 'object' && res.states !== null) states = res.states as Record<string, unknown>;
+      } catch (err) {
+        for (const id of chunk) void settle(id, Promise.reject(err));
+        return;
+      }
+      await Promise.all(chunk.map((id) => (states && id in states ? settle(id, Promise.resolve(states[id])) : single(id))));
+    }));
+  }
+
+  /**
    * daemon AgentDetector가 gate로 확정한 에이전트 표시명을 조회한다(없으면 null).
    * renderer detection pull의 권위 소스 — session:agent emit 전파 race를 우회한다.
    */
   async getAgentName(sessionId: string): Promise<string | null> {
     try {
-      const result = await this.rpc('daemon.getAgentName', { id: sessionId });
+      // Its agentName is the same daemon read (readDaemonAgentState) that
+      // daemon.getAgentName answers, so a burst of name reads batches too.
+      const result = await this.readAgentStateRaw(sessionId);
       const name = (result as { agentName?: unknown })?.agentName;
       return typeof name === 'string' && name ? name : null;
     } catch {
@@ -772,7 +1012,7 @@ export class DaemonClient extends EventEmitter {
     try {
       const result = await (opts.timeoutMs !== undefined
         ? this.rpc('daemon.getAgentState', { id: sessionId }, { timeoutMs: opts.timeoutMs })
-        : this.rpc('daemon.getAgentState', { id: sessionId })) as {
+        : this.readAgentStateRaw(sessionId)) as {
         agentName?: unknown;
         agentVerified?: unknown;
         agentStatus?: unknown;
@@ -869,6 +1109,20 @@ export class DaemonClient extends EventEmitter {
       return Array.isArray(response.limits) ? response.limits as PaneUsageLimit[] : [];
     } catch {
       return [];
+    }
+  }
+
+  /**
+   * The shell prompts the daemon shows now (daemon/shellPrompt), each checked
+   * like an event. Null when it is unreachable or predates them: the caller
+   * then keeps what it has instead of clearing it.
+   */
+  async listShellPrompts(): Promise<ShellPromptList | null> {
+    if (!this.isConnected) return null;
+    try {
+      return parseShellPromptList(await this.rpc('daemon.shellPrompt.list', {}));
+    } catch {
+      return null;
     }
   }
 
@@ -1153,6 +1407,14 @@ export class DaemonClient extends EventEmitter {
           if (typeof data?.count === 'number' && Number.isFinite(data.count) && data.count >= 0) {
             this.emit('session:subagents', { sessionId: event.sessionId, count: Math.floor(data.count) });
           }
+          break;
+        }
+        case 'shell.prompt': {
+          // A pane with no agent waits on stdin (daemon/shellPrompt); null clears.
+          // Checked here: a `secret` keeps no question whatever was sent, and a
+          // change without a version is dropped (it cannot be ordered against the list).
+          const change = parseShellPromptChange(event.data);
+          if (change) this.emit('session:shellPrompt', { sessionId: event.sessionId, ...change });
           break;
         }
         case 'prompt.event':

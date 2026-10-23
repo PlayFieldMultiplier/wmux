@@ -7,6 +7,7 @@ import {
   type AutomationRunNowResult,
   type AutomationCreateParams,
   type AutomationGrantParams,
+  type AutomationLingeringSession,
   type AutomationMutationResult,
   type AutomationProposeParams,
   type AutomationRemoveParams,
@@ -96,9 +97,16 @@ export class AutomationClient {
 
   async runNow(params: AutomationRunNowParams): Promise<AutomationRunNowResult> {
     try {
-      const r = (await this.transport.rpc(AUTOMATION_RPC.runNow, { id: params.id, kind: params.kind })) as
-        { ok?: unknown; run?: unknown; error?: unknown } | null;
-      if (r?.ok === true && r.run && typeof r.run === 'object') return { ok: true, run: r.run as AutomationRun };
+      const r = (await this.transport.rpc(AUTOMATION_RPC.runNow, {
+        id: params.id, kind: params.kind, ...(params.endSessionOf !== undefined && { endSessionOf: params.endSessionOf }),
+      })) as { ok?: unknown; run?: unknown; lingeringSession?: unknown; error?: unknown } | null;
+      if (r?.ok === true && r.run && typeof r.run === 'object') {
+        const s = r.lingeringSession as Partial<AutomationLingeringSession> | undefined;
+        const lingering = s && typeof s.runId === 'string' && typeof s.ptyId === 'string' && typeof s.endedAt === 'number'
+          ? { runId: s.runId, ptyId: s.ptyId, endedAt: s.endedAt }
+          : undefined;
+        return { ok: true, run: r.run as AutomationRun, ...(lingering && { lingeringSession: lingering }) };
+      }
       return { ok: false, error: typeof r?.error === 'string' ? r.error : 'invalid daemon reply' };
     } catch (err) {
       return { ok: false, error: errorText(err) };

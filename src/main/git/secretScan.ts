@@ -12,7 +12,7 @@
 // caller refuses the action.
 import { spawn } from 'node:child_process';
 import { getExecEnv } from '../../shared/execEnv';
-import { PatchScanner, parseNameStatusZ, type SecretFinding } from '../../shared/secretGuard';
+import { PatchScanner, describeScanFailure, describeSecretFindings, parseNameStatusZ, type SecretFinding } from '../../shared/secretGuard';
 
 /** Runs git with these args, handing each stdout line (split on \n only) to
  *  onLine; true when git exited 0. */
@@ -24,8 +24,17 @@ const SCAN_TIMEOUT_MS = 5 * 60_000;
 
 /** A GitLines that spawns git in `cwd` and streams its output (no size cap). */
 export function spawnGitLines(cwd: string, env: NodeJS.ProcessEnv = {}): GitLines {
-  return (args, onLine) => new Promise((resolve) => {
-    const child = spawn('git', args, { cwd, env: { ...getExecEnv(), ...env }, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+  return (args, onLine) => spawnLines('git', args, { cwd, env: { ...getExecEnv(), ...env } }, onLine);
+}
+
+/**
+ * Runs `file` with `args` and exactly `env`, handing each stdout line to
+ * onLine as spawnGitLines does (no size cap, killed after SCAN_TIMEOUT_MS);
+ * true when it exited 0.
+ */
+export function spawnLines(file: string, args: string[], opts: { cwd: string; env: NodeJS.ProcessEnv }, onLine: (line: string) => void): Promise<boolean> {
+  return new Promise((resolve) => {
+    const child = spawn(file, args, { cwd: opts.cwd, env: opts.env, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
     const timer = setTimeout(() => child.kill(), SCAN_TIMEOUT_MS);
     let pending: string[] = [];
     child.stdout.setEncoding('utf8');
@@ -80,6 +89,16 @@ export async function scanCommits(run: GitLines, revs: string[]): Promise<Secret
     if (await run(log(merges, NAMES), (l) => names.push(l))) return scan(run, names, log(merges, PATCH));
   }
   return { ok: false };
+}
+
+/** Why a scan stops the action, as the Git page words it; null to go ahead.
+ *  `action` completes "so it was not …" ('pushed', 'sent in a pull request'). */
+export type SecretRefusal = { error: string; secrets: SecretFinding[] } | { error: string; secretScanFailed: true };
+
+export function secretRefusal(scan: SecretScanResult, action: string): SecretRefusal | null {
+  if (!scan.ok) return { error: describeScanFailure(action), secretScanFailed: true };
+  if (scan.findings.length) return { error: describeSecretFindings(scan.findings, action), secrets: scan.findings };
+  return null;
 }
 
 /** rev-list arguments for the commits a PR from `head` shows against `base`

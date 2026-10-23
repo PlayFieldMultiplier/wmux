@@ -25,6 +25,7 @@ import A2aLinkDialog from '../Remote/A2aLinkDialog';
 import A2aShareDialog from '../Remote/A2aShareDialog';
 import { displayPath } from '../../utils/displayPath';
 import { workspaceColorHex } from '../../../shared/workspaceColors';
+import { readRemoteSpawnedBy } from '../../utils/remoteSpawnedBy';
 import PaneActionsMenu, { PANE_ACTIONS_MENU_WIDTH, type PaneActionItem } from './PaneActionsMenu';
 import { PANE_BROWSER_PROFILE_KEY, usePaneChromeProfileMenu } from './usePaneChromeProfileMenu';
 import { usePaneBrowserPolicyMenu } from './usePaneBrowserPolicyMenu';
@@ -178,6 +179,10 @@ export const CHAT_TOGGLE_WIDTH = 84;
  *  end of a 248px header before this was counted. */
 export const ENFORCED_MODEL_BADGE_MIN_WIDTH = 12;
 
+/** The "Started remotely by" chip's floor, for the same reason: it shrinks
+ *  like the model badge, with the same padding and border. */
+export const REMOTE_SPAWN_CHIP_MIN_WIDTH = 12;
+
 /**
  * How much shrink-0 chrome the header carries BESIDES the action cluster.
  *
@@ -196,10 +201,13 @@ export function paneHeaderExtraChromeWidth(opts: {
   enforcedModelBadge: boolean;
   /** The active pane is held at a usage limit (UsageLimitChip is drawn). */
   usageLimitChip?: boolean;
+  /** The workspace was started by another PC (its chip is drawn). */
+  remoteSpawnChip?: boolean;
 }): number {
   return (opts.chatToggle ? CHAT_TOGGLE_WIDTH : 0)
     + (opts.enforcedModelBadge ? ENFORCED_MODEL_BADGE_MIN_WIDTH : 0)
-    + (opts.usageLimitChip ? USAGE_LIMIT_CHIP_COMPACT_WIDTH : 0);
+    + (opts.usageLimitChip ? USAGE_LIMIT_CHIP_COMPACT_WIDTH : 0)
+    + (opts.remoteSpawnChip ? REMOTE_SPAWN_CHIP_MIN_WIDTH : 0);
 }
 
 /** The usage-limit chip in its compact form: clock glyph + countdown. */
@@ -470,6 +478,8 @@ export default function SurfaceTabs({
         ].filter(Boolean).join(' · '),
       })
     : '';
+  const remoteSpawnedBy = readRemoteSpawnedBy(workspace);
+  const remoteSpawnLabel = remoteSpawnedBy ? t('remoteSpawn.chip', { name: remoteSpawnedBy.name }) : '';
   const supervisionLabel = !supervision
     ? ''
     : supervision.status === 'stopped'
@@ -1243,6 +1253,8 @@ export default function SurfaceTabs({
         compact={usageLimitCompact}
         readOnly={readOnly}
         workspaceId={workspace.id}
+        paneId={paneId}
+        cwd={surfaces.find((sf) => sf.id === activeSurfaceId)?.cwd}
       />
       {supervision && (
         <span
@@ -1286,6 +1298,19 @@ export default function SurfaceTabs({
           )}
           {enforcedLaunch.skipFlag && enforcedLaunch.model ? ' · ' : ''}
           {enforcedLaunch.model}
+        </span>
+      )}
+      {/* Provenance, not state: another PC started this workspace. Neutral
+          like the model badge beside it, and shrinkable for the same reason. */}
+      {remoteSpawnLabel && (
+        <span
+          data-pane-remote-spawn
+          className="shrink min-w-0 max-w-[160px] truncate px-[5px] rounded-[3px] text-[10px] leading-4 text-[var(--text-muted)] bg-[var(--bg-surface)] border border-[var(--border-soft)] select-none"
+          title={remoteSpawnLabel}
+          {...tokenAttrs('textMuted', 'text')}
+          {...tokenAttrs('bgSurface', 'bg')}
+        >
+          {remoteSpawnLabel}
         </span>
       )}
 

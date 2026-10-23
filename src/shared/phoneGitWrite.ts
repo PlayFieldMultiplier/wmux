@@ -59,7 +59,11 @@ export type GitWriteError =
   /** This daemon does not serve the action yet (its `/api/config` key is absent). */
   | 'not-implemented'
   /** Receipt only: the push did not reach the remote. */
-  | 'push-not-landed';
+  | 'push-not-landed'
+  /** The commits carry a password or key file or value (the Git page's push check; + `secretPath` …). */
+  | 'secrets-found'
+  /** That check could not read the commits, so nothing was pushed. */
+  | 'secret-scan-failed';
 
 /** HTTP status for each tag when it is the response itself (not inside a receipt). */
 export const GIT_WRITE_ERROR_STATUS: Readonly<Record<GitWriteError, number>> = {
@@ -80,6 +84,8 @@ export const GIT_WRITE_ERROR_STATUS: Readonly<Record<GitWriteError, number>> = {
   'git-operation-failed': 500,
   'not-implemented': 501,
   'push-not-landed': 409,
+  'secrets-found': 409,
+  'secret-scan-failed': 500,
 };
 
 /** `{error, …}`: the tag plus the extras its row in the contract names. */
@@ -100,6 +106,12 @@ export interface GitWriteErrorBody {
   login?: string;
   /** `rate-limited`, epoch ms. */
   retryAt?: number;
+  /** `secrets-found`: the first finding (`SecretFinding`, never the value) and how many there are. */
+  secretPath?: string;
+  secretWhat?: 'file' | 'value';
+  secretKind?: string;
+  secretLine?: number;
+  secretCount?: number;
 }
 
 /** The account every push and merge goes out as (`gitWriteLogin`). */

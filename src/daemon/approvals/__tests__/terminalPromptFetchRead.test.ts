@@ -238,7 +238,9 @@ describe('Fetch and Read records', () => {
   it('a call the box does not spell stays informational', async () => {
     const h = makeRegistry(FETCH, { ...FETCH_CALL, input: { url: 'https://example.org', prompt: 'What is the page title?' } });
     const record = await create(h);
-    expect(record).toMatchObject({ toolName: 'WebFetch', summary: 'https://example.org' });
+    // Unbound: the card shows the URL the screen shows, which typed keys
+    // would answer, not the one the call names.
+    expect(record).toMatchObject({ toolName: 'WebFetch', summary: 'url: https://example.com/ · prompt: What is the page title?' });
     expect(record).not.toHaveProperty('choices');
     expect(record).not.toHaveProperty('promptFingerprint');
   });

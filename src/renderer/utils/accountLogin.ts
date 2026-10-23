@@ -96,8 +96,9 @@ async function openLoginTab(req: AccountLoginRequest): Promise<LoginTab | null> 
 }
 
 /** Open a terminal tab running `initialCommand` in the active workspace's
- *  active pane, focus it and close Settings. Also used by agy sign-in, which
- *  has no login subcommand: the user signs in from agy's own start screen. */
+ *  active pane (or the pane `target` names), focus it and close Settings.
+ *  Also used by agy sign-in, which has no login subcommand: the user signs in
+ *  from agy's own start screen. */
 export async function openTerminalTab(req: {
   env?: Record<string, string>;
   wslAccountLoginEnvKey?: ReturnType<typeof loginEnvKey>;
@@ -112,13 +113,16 @@ export async function openTerminalTab(req: {
    * bound-account env (agent setup, which must match what detection reads).
    */
   plainEnv?: boolean;
+  /** This pane of this workspace instead of the active one. */
+  target?: { workspaceId: string; paneId: string };
 }): Promise<LoginTab | null> {
   const state = useStore.getState();
   if (state.paneGate !== 'ready') return null;
-  const ws = state.workspaces.find((w) => w.id === state.activeWorkspaceId);
+  const ws = state.workspaces.find((w) => w.id === (req.target?.workspaceId ?? state.activeWorkspaceId));
   // Another computer's (shadow) workspace never gets a local shell.
   if (!ws || isShadowWorkspaceId(ws.id)) return null;
-  const paneId = ws.activePaneId;
+  const paneId = req.target?.paneId ?? ws.activePaneId;
+  if (!getWorkspaceLeafPanes(ws).some((p) => p.id === paneId)) return null;
   const cwd = req.cwd !== undefined
     ? (req.cwd ?? undefined)
     : resolveStartupCwd({

@@ -60,4 +60,18 @@ describe('boundSessionLives', () => {
       fs.rmSync(other, { recursive: true, force: true });
     }
   });
+
+  it('accepts a Qwen conversation only under the projects of the Qwen account the launch uses', async () => {
+    const qwen = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-qwen-home-'));
+    try {
+      const dir = path.join(qwen, 'projects', name(cwd), 'chats');
+      transcript(dir, id, '{"type":"user"}\n');
+      const binding = { agent: 'qwen', sessionId: id, cwd, transcriptPath: path.join(dir, `${id}.jsonl`) };
+      expect(await boundSessionLives(binding, { QWEN_HOME: qwen }, { now: 0 })).toBe(true);
+      // Another account is another answer, also inside the cache window.
+      expect(await boundSessionLives(binding, { QWEN_HOME: config }, { now: 1 })).toBe(false);
+    } finally {
+      fs.rmSync(qwen, { recursive: true, force: true });
+    }
+  });
 });

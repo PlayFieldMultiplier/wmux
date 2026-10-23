@@ -83,21 +83,25 @@ export interface AgentMcpTargetSpec {
 }
 
 /** Session resume grammar as data. `{id}` in `exact` stands for the session id. */
-export interface AgentResumeSpec {
+export type AgentResumeSpec = AgentResumeSpecBase & (
+  | { readonly idFormat: 'uuid'; readonly exact: string }
+  /** wmux binds no id for this agent (it names its own sessions, with no
+   *  launch flag to set one): there is no exact form, so a stored id is never
+   *  offered or typed, and only the picker is. */
+  | { readonly idFormat: 'picker-only'; readonly exact?: never; readonly pin?: never }
+);
+
+interface AgentResumeSpecBase {
   /** Inserted after the launcher to open the agent's own session picker, which
    *  lists the folder's conversations and lets the user choose. Typed by the
    *  resume pill, chip and Deck when no exact session is bound. There is no
    *  "latest in this folder" form: several panes can share a folder, and a
    *  guess would reopen the same conversation in each (#1946). */
   readonly picker: string;
-  /** Inserted after the launcher to resume one exact session. */
-  readonly exact: string;
   /** The launch flag that names a NEW session's id up front (Claude
    *  `--session-id <id>`), when the agent has one. wmux pins fresh launches
    *  with it, and drops it from a relaunch: the id may already be in use. */
   readonly pin?: string;
-  /** The shape a stored session id must have before it is offered. */
-  readonly idFormat: 'uuid';
 }
 
 /** What the file-transcript chat route (nativeChatBridge) can do for an agent. */
@@ -108,6 +112,15 @@ export interface AgentTerminalChatSpec {
   /** The agent's own composer queues a prompt typed mid-turn, so a queued
    *  phone message can also be steered into the running turn. */
   readonly queue?: true;
+}
+
+/** Another documented install line for one platform ({@link AgentSetupSpec}). */
+export interface AgentInstallAlternative {
+  readonly platform: 'posix' | 'win32';
+  readonly via: 'winget';
+  readonly command: string;
+  readonly requires: readonly string[];
+  readonly source: string;
 }
 
 /**
@@ -125,8 +138,9 @@ export interface AgentSetupSpec {
     readonly win32: { readonly root: 'home' | 'LOCALAPPDATA'; readonly path: readonly string[] };
   };
   /** The npm package (scope and name segments) and, on Windows, its
-   *  spawnable entrypoints (the `.cmd` shim npm puts on PATH is not). */
-  readonly npm: {
+   *  spawnable entrypoints (the `.cmd` shim npm puts on PATH is not). Absent
+   *  for an agent whose vendor documents no npm install. */
+  readonly npm?: {
     readonly package: readonly string[];
     readonly winEntries: readonly (readonly string[])[];
     /** Also look for the package next to a `<binary>.cmd` shim in any PATH
@@ -137,11 +151,14 @@ export interface AgentSetupSpec {
    * The documented status subcommand that says whether the agent is signed in.
    * `json-logged-in`: JSON with a `loggedIn` boolean that agrees with the exit
    * code (0 / 1). `exit-code`: 0 is signed in, 1 with `signedOutText` in the
-   * output is signed out.
+   * output is signed out. `none`: the vendor documents no such subcommand
+   * (the agent signs in on its own first run and keeps the result in its own
+   * store), so wmux does not check it; the card says so.
    */
   readonly loginStatus:
     | { readonly args: readonly string[]; readonly read: 'json-logged-in' }
-    | { readonly args: readonly string[]; readonly read: 'exit-code'; readonly signedOutText: string };
+    | { readonly args: readonly string[]; readonly read: 'exit-code'; readonly signedOutText: string }
+    | { readonly read: 'none' };
   /** Below this version the card says "update recommended" (never forced). */
   readonly updateFloor: string;
   /**
@@ -156,6 +173,10 @@ export interface AgentSetupSpec {
     readonly source: string;
     /** Opened when an install fails or cannot run here. */
     readonly officialPage: string;
+    /** The vendor's other documented ways on one platform, each verbatim with
+     *  its own source, offered after the line above. `winget` runs in
+     *  PowerShell. `requires` as above. */
+    readonly more?: readonly AgentInstallAlternative[];
   };
   /** The agent's own first-run screens have a guide card
    *  (src/shared/claudeFirstRun.ts `claudeSetupScreen`). */
@@ -380,6 +401,39 @@ export const AGENT_IDENTITIES = [
     roleBinding: false,
     modelFlag: '--model',
     detect: 'screen',
+    setup: {
+      binary: 'grok',
+      // Both installers put it in ~/.grok/bin (install.sh BIN_DIR; the
+      // getting-started guide: "The PowerShell installer automatically adds
+      // `%USERPROFILE%\.grok\bin` to your User PATH").
+      native: { posix: ['.grok', 'bin', 'grok'], win32: { root: 'home', path: ['.grok', 'bin', 'grok.exe'] } },
+      // Grok signs in on its first run (browser OAuth, or XAI_API_KEY) and
+      // documents `grok login` / `grok logout`, but no status subcommand.
+      loginStatus: { read: 'none' },
+      // `--model` (modelFlag above) verified on 1.0.x.
+      updateFloor: '1.0.0',
+      // https://docs.x.ai/build/overview, "Install"; the same two lines in
+      // https://github.com/xai-org/grok-build README, "Installing the released
+      // binary". Checked 2026-10-23.
+      install: {
+        posix: { command: 'curl -fsSL https://x.ai/cli/install.sh | bash', requires: ['curl', 'bash'] },
+        win32: { command: 'irm https://x.ai/cli/install.ps1 | iex' },
+        source: 'https://docs.x.ai/build/overview',
+        officialPage: 'https://docs.x.ai/build/overview',
+        more: [{
+          // The package id from the vendor's own WinGet note ("winget upgrade
+          // --id xAI.GrokBuild -e"); the manifest's publisher is xAI Corp.
+          platform: 'win32',
+          via: 'winget',
+          command: 'winget install --id xAI.GrokBuild -e',
+          // winget.exe is an app execution alias (a reparse point a file check
+          // cannot read), so it is not checked: a missing winget fails the line,
+          // and the card then opens the official page.
+          requires: [],
+          source: 'https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/01-getting-started.md',
+        }],
+      },
+    },
   },
   {
     slug: 'agy',
@@ -407,6 +461,49 @@ export const AGENT_IDENTITIES = [
     accounts: 'agy-service',
     tokenUsage: true,
     modelCatalog: true,
+    setup: {
+      binary: 'agy',
+      // "Default install paths": ~/.local/bin/agy, and
+      // C:\Users\<username>\AppData\Local\agy\bin (agy.exe).
+      native: { posix: ['.local', 'bin', 'agy'], win32: { root: 'LOCALAPPDATA', path: ['agy', 'bin', 'agy.exe'] } },
+      // agy signs in from its own first run (Google sign-in, kept in the OS
+      // keyring; `/logout` inside the session) and documents no status
+      // subcommand.
+      loginStatus: { read: 'none' },
+      // `-i` and `--model` (promptFlag, modelFlag above) verified on 1.2.13.
+      updateFloor: '1.2.13',
+      // https://antigravity.google/docs/getting-started (CLI tab), also on
+      // https://antigravity.google/download. Checked 2026-10-23.
+      install: {
+        posix: { command: 'curl -fsSL https://antigravity.google/cli/install.sh | bash', requires: ['curl', 'bash'] },
+        win32: { command: 'irm https://antigravity.google/cli/install.ps1 | iex' },
+        source: 'https://antigravity.google/docs/getting-started',
+        officialPage: 'https://antigravity.google/docs/getting-started',
+      },
+    },
+  },
+  {
+    // Qwen Code. Options from the official CLI (QwenLM/qwen-code
+    // packages/cli/src/config/top-level-options.ts, checked 2026-10-23):
+    // `--resume` "Use without an ID to show session picker", `--resume <id>`
+    // resumes that session, `--session-id` "Specify a session ID for this run"
+    // (a UUID). The conversation is `<projects>/<cwd>/chats/<id>.jsonl`
+    // (src/daemon/transcript/qwenTranscript.ts).
+    slug: 'qwen',
+    display: 'Qwen Code',
+    resume: { picker: '--resume', exact: '--resume {id}', pin: '--session-id', idFormat: 'uuid' },
+    process: { packages: ['@qwen-code/qwen-code'] },
+  },
+  {
+    // Kimi Code CLI. https://www.kimi.com/code/docs/en/kimi-code-cli/reference/kimi-command
+    // (checked 2026-10-23): `--session` with no id opens a selector, `--session
+    // <id>` opens that session. Its ids are its own (not UUIDs) and no launch
+    // flag sets one, so wmux offers the picker only. npm package from
+    // https://www.kimi.com/code/docs/en/kimi-code-cli/guides/getting-started.html.
+    slug: 'kimi',
+    display: 'Kimi Code CLI',
+    resume: { picker: '--session', idFormat: 'picker-only' },
+    process: { packages: ['@moonshot-ai/kimi-code'] },
   },
 ] as const satisfies readonly AgentIdentityRow[];
 

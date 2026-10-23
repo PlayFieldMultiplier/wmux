@@ -33,6 +33,7 @@ import SurfaceTabs, {
   type PaneActionsMode,
 } from './SurfaceTabs';
 import { PANE_CORNER_GUTTER, paneHeaderTailGap } from './paneChrome';
+import { readRemoteSpawnedBy } from '../../utils/remoteSpawnedBy';
 import { isTerminalKindSurfaceType, isTerminalSurfaceType, isWorkSurfaceType, pickSplitShownSurfaces } from './surfaceKinds';
 import { AUTO_RESUME_AGENTS } from '../../stores/selectors/surfaceShown';
 import WorkTabs from './WorkTabs';
@@ -811,6 +812,7 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
       surfaceType: activeSurfaceType,
     }),
     usageLimitChip: hasUsageLimit,
+    remoteSpawnChip: !!readRemoteSpawnedBy(workspace),
   });
   // While the work area is expanded the terminal strip sizes to its content,
   // so its width cannot judge the cluster; it keeps the ⋮ form instead.

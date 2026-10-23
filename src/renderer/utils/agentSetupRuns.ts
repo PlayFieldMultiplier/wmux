@@ -246,7 +246,8 @@ async function openRun(
   const tab = await openTerminalTab({
     initialCommand: command,
     title,
-    cwd: runCwd(),
+    // An install runs from the home folder; a sign-in where the user works.
+    cwd: kind === 'install' ? null : runCwd(),
     plainEnv: true,
     ...(shell ? { shell } : {}),
   });

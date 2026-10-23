@@ -25,9 +25,11 @@ import type { WorkspaceColorId } from './workspaceColors';
 import type { AgentSlug } from './events';
 import type { OrchestratorRoleBindings } from './orchestratorRole';
 import type { PcRailPersisted } from './pcRail';
+import type { SleepPreventionMode } from './sleepPrevention';
 import type { StarPromptState } from './starPrompt';
 import type { AgentSignalKind } from './hooks/signal-types';
 import type { DeadPaneRecovery } from './ptyRecovery';
+import type { ShellPromptSignal } from './shellPrompt';
 
 // Re-export for backward compatibility
 /** BYOB M0 — which runtime serves as a workspace's orchestrator brain.
@@ -560,6 +562,12 @@ export interface MetadataUpdatePayload {
    * payload to workspace metadata. 0 clears.
    */
   subagents?: number;
+  /**
+   * A pane with no agent whose command waits on stdin (daemon/shellPrompt):
+   * the prompt, or null to clear. Per-ptyId only, like `subagents`. A `secret`
+   * carries no question.
+   */
+  shellPrompt?: ShellPromptSignal | null;
   // P2 — pane label relay. MetadataStore's `pane.metadata.changed` is teed to
   // the renderer as a paneId-only update (no ptyId/workspaceId);
   // useNotificationListener routes on `paneId` and writes ONLY the per-pane
@@ -1072,6 +1080,8 @@ export interface SessionData {
   autoUpdateEnabled?: boolean;
   /** Settings › General: refuse commits, pushes and PRs that carry passwords or keys. Absent = on. */
   secretGuardEnabled?: boolean;
+  /** Settings › General: when wmux keeps the computer awake. Absent = 'working'. */
+  sleepPreventionMode?: SleepPreventionMode;
   customThemeColors?: CustomThemeColors;
   /** PC rail: the selected computer, the last workspace per computer, muted hosts. Never a shadow id. */
   pcRail?: PcRailPersisted;

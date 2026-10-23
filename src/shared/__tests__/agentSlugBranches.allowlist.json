@@ -1,6 +1,7 @@
 {
   "comment": "Per-file count of agent slug branches allowed under src/. See agentSlugBranches.guard.test.ts.",
   "files": {
+    "src/cli/commands/codex.ts": 1,
     "src/cli/commands/role.ts": 2,
     "src/cli/commands/setupStatusline.ts": 1,
     "src/cli/index.ts": 1,
@@ -42,6 +43,7 @@
     "src/main/agents/ModelCatalog.ts": 1,
     "src/main/agents/codexWorkerGuard.ts": 1,
     "src/main/agents/toolSurfaceLaunch.ts": 4,
+    "src/main/cliShim.ts": 1,
     "src/main/factory/workerReclaim.ts": 1,
     "src/main/firstRun/FirstRunOrchestrator.ts": 1,
     "src/main/index.ts": 1,

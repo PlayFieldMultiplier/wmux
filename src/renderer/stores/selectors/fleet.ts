@@ -1,8 +1,9 @@
 import type { AgentStatus, Task, PaneLeaf, Surface } from '../../../shared/types';
-import { getLeafPanes, getWorkspaceLeafPanes } from '../../../shared/paneUtils';
+import { getLeafPanes, getWorkspaceLeafPanes, getWorkspacePtyIds } from '../../../shared/paneUtils';
 import { stashedPaneLiveness } from '../../../shared/paneStash';
 import { isBrainPtyId } from '../../../shared/constants';
 import { remoteAgentKey } from '../../../shared/remoteHosts';
+import { isShadowWorkspaceId } from '../../../shared/pcRail';
 import type { AttachedRemoteWorkspace } from '../slices/remoteWorkspacesSlice';
 import type { StoreState } from '../index';
 import { flattenAgentText } from '../../../shared/assistantPreview';
@@ -137,6 +138,9 @@ export type FleetSelectorState = Pick<StoreState, 'workspaces' | 'surfaceAgentSt
    *  needs input"); this pass has to read the same signal or the dot above the
    *  roster contradicts it. Optional so existing fixtures stay terse. */
   surfacePendingQuestion?: StoreState['surfacePendingQuestion'];
+  /** A pane with no agent whose command waits on stdin (daemon/shellPrompt):
+   *  Needs you, like a pending question. Optional so existing fixtures stay terse. */
+  surfaceShellPrompt?: StoreState['surfaceShellPrompt'];
   /** Liveness inputs for the `unverifiable` display state — the same two maps
    *  `isPaneAgentBusy` ranks above the heuristic. A pane whose shell is back at
    *  a prompt or whose agent process is gone is IDLE, not unverifiable, so a
@@ -421,13 +425,15 @@ const STATUS_RANK: Record<AgentStatus, number> = {
  * complete / waiting / error stays cleared.
  */
 export function surfaceAttentionStatus(
-  state: Pick<FleetSelectorState, 'surfaceAgentStatus' | 'surfaceAgent' | 'surfacePendingQuestion' | 'usageLimitWaiting'>,
+  state: Pick<FleetSelectorState, 'surfaceAgentStatus' | 'surfaceAgent' | 'surfacePendingQuestion' | 'surfaceShellPrompt' | 'usageLimitWaiting'>,
   ptyId: string,
 ): AgentStatus | undefined {
   // #1168 — a transcript-derived pending question outranks whatever the stop
   // payload settled this surface to, exactly as it does in
   // workspaceAgentRoster.
   if (state.surfacePendingQuestion?.[ptyId]?.trim()) return 'awaiting_input';
+  // A command in a pane with no agent waits on stdin: a person has to answer it.
+  if (state.surfaceShellPrompt?.[ptyId]) return 'awaiting_input';
   if (state.surfaceAgent?.[ptyId]?.status === 'awaiting_input') return 'awaiting_input';
   const status = state.surfaceAgentStatus[ptyId];
   return isQuietUsageLimitError(state.usageLimitWaiting, ptyId, status) ? undefined : status;
@@ -995,6 +1001,7 @@ export type FleetSection = 'needsYou' | 'finished' | 'running' | 'idle';
 /** Fallback detail keys — the renderer translates them. */
 export type FleetDetailKey =
   | 'fleet.needsYourInput'
+  | 'fleet.detail.shellSecret'
   | 'fleet.detail.error'
   | 'fleet.detail.unconfirmed'
   | 'fleet.detail.supervisionStopped'
@@ -1026,7 +1033,7 @@ export interface FleetGroups {
 
 export type FleetGroupContext = Pick<
   FleetSelectorState,
-  'surfacePendingQuestion' | 'surfaceLastMessage' | 'surfaceActivityAt' | 'surfaceTurnOpenAt'
+  'surfacePendingQuestion' | 'surfaceShellPrompt' | 'surfaceLastMessage' | 'surfaceActivityAt' | 'surfaceTurnOpenAt'
 > & {
   /** Read-time clock for elapsed time. Absent → no elapsed time on any row. */
   now?: number;
@@ -1232,10 +1239,17 @@ export function fleetRow(pane: FleetPane, ctx: FleetGroupContext = {}): FleetRow
     return { ...base, section, detailKey: 'fleet.detail.unconfirmed' };
   }
   switch (pane.agentStatus) {
-    case 'awaiting_input':
-      return question
-        ? { ...base, section, detail: question, detailSource: 'question', detailKey: 'fleet.needsYourInput' }
+    case 'awaiting_input': {
+      if (question) return { ...base, section, detail: question, detailSource: 'question', detailKey: 'fleet.needsYourInput' };
+      // A shell's stdin prompt: its row, or for a password only that it needs
+      // someone at the computer (the row itself never reaches the renderer).
+      const shell = target ? ctx.surfaceShellPrompt?.[target] : undefined;
+      if (shell?.shape === 'secret') return { ...base, section, detailKey: 'fleet.detail.shellSecret' };
+      const shellQuestion = shell ? flattenAgentText(shell.question ?? '') || undefined : undefined;
+      return shellQuestion
+        ? { ...base, section, detail: shellQuestion, detailSource: 'question', detailKey: 'fleet.needsYourInput' }
         : { ...base, section, detailKey: 'fleet.needsYourInput' };
+    }
     case 'waiting':
       return question
         ? { ...base, section, detail: question, detailSource: 'question', detailKey: 'fleet.needsYourInput' }
@@ -1357,6 +1371,7 @@ export function selectFleetBoard(
     surfaceOutputAt: state.surfaceOutputAt,
     surfaceTurnOpenAt: state.surfaceTurnOpenAt,
     surfacePendingQuestion: state.surfacePendingQuestion,
+    surfaceShellPrompt: state.surfaceShellPrompt,
     surfaceLastMessage: state.surfaceLastMessage,
     sortMode: opts.sortMode,
   });
@@ -1382,6 +1397,7 @@ function fleetBoardPanes(
     usageLimitWaiting: state.usageLimitWaiting,
     surfaceAgent: state.surfaceAgent,
     surfacePendingQuestion: state.surfacePendingQuestion,
+    surfaceShellPrompt: state.surfaceShellPrompt,
     surfaceActivityAt: state.surfaceActivityAt,
     surfaceTurnOpenAt: state.surfaceTurnOpenAt,
     commandRunningByPtyId: state.commandRunningByPtyId,
@@ -1428,13 +1444,27 @@ export function selectFleetSectionCounts(state: FleetBoardState): FleetSectionCo
     state.workspaces, state.surfaceAgentStatus, state.surfaceActivity, state.paneLabel,
     state.supervisionByPtyId, state.surfaceAgent, state.surfacePendingQuestion, state.surfaceActivityAt,
     state.surfaceTurnOpenAt, state.commandRunningByPtyId, state.agentAliveByPtyId, state.remoteWorkspaces,
-    state.usageLimitWaiting,
+    state.usageLimitWaiting, state.surfaceShellPrompt,
   ];
   const memo = sectionCountsMemo;
   if (memo && inputs.every((value, i) => Object.is(value, memo.inputs[i]))
       && sameKeys(hook, memo.hook) && sameKeys(unverifiable, memo.unverifiable)) {
     return memo.out;
   }
+  const out = countFleetSections(state, hook, unverifiable);
+  // Keep the previous object when nothing changed, so a shallow subscriber
+  // never re-renders on an equal count.
+  const kept = memo && memo.out.needsYou === out.needsYou && memo.out.running === out.running ? memo.out : out;
+  sectionCountsMemo = { inputs, hook, unverifiable, out: kept };
+  return kept;
+}
+
+/** The per-row section rule of `fleetRow`, counted only. */
+function countFleetSections(
+  state: FleetBoardState,
+  hook: Record<string, boolean>,
+  unverifiable: Record<string, number>,
+): FleetSectionCounts {
   const out: FleetSectionCounts = { needsYou: 0, running: 0 };
   for (const pane of fleetBoardPanes(state, hook, unverifiable)) {
     const target = fleetTargetPtyId(pane);
@@ -1443,11 +1473,62 @@ export function selectFleetSectionCounts(state: FleetBoardState): FleetSectionCo
     if (section === 'needsYou') out.needsYou++;
     else if (section === 'running') out.running++;
   }
-  // Keep the previous object when nothing changed, so a shallow subscriber
-  // never re-renders on an equal count.
-  const kept = memo && memo.out.needsYou === out.needsYou && memo.out.running === out.running ? memo.out : out;
-  sectionCountsMemo = { inputs, hook, unverifiable, out: kept };
-  return kept;
+  return out;
+}
+
+// Its own slot: sharing selectFleetSectionCounts' would make the sidebar and
+// this app-level subscriber evict each other on every store change.
+let localWorkingMemo: {
+  inputs: unknown[]; hook: Record<string, boolean>; unverifiable: Record<string, number>;
+  running: boolean; quietPtyIds: string[];
+} | undefined;
+
+/** How recent a quiet turn's terminal output must be to keep it working.
+ *  useTerminal stamps surfaceOutputAt at most every 30 s. */
+export const QUIET_TURN_OUTPUT_MS = 120_000;
+
+/**
+ * Whether any agent on THIS computer is working: a row in Fleet's Running
+ * section. Keeps the computer awake (main/power/sleepPrevention.ts). Same rows
+ * and section rule as the board, with three differences that follow from the
+ * question: another computer's agents do not count (shadow workspaces and
+ * attached remote hosts are left out), bot workers do (Fleet's counts leave
+ * them to their bot, but they are work this computer is doing), and so does
+ * an agent that is alive and whose terminal still prints: a long quiet tool
+ * call keeps repainting its spinner after its hooks went silent (main settles
+ * that turn to idle at 30 min, and Fleet marks it unconfirmed until then),
+ * while a wedged or idle agent prints nothing. The same covers a working tab
+ * behind another tab of its pane that needs you, which Fleet ranks first.
+ */
+export function selectLocalAgentsWorking(state: FleetBoardState): boolean {
+  // From `state`, not a local copy: the roll-up is cached on the state object.
+  // Shadow and remote keys never match a local row, so they are harmless here.
+  const hook = state.hookRunningByPtyId ?? selectHookRunningByPtyId(state);
+  const unverifiable = state.unverifiablePaneMinutes ?? selectUnverifiablePaneMinutes(state);
+  const inputs = [
+    state.workspaces, state.surfaceAgentStatus, state.surfaceActivity, state.paneLabel,
+    state.supervisionByPtyId, state.surfaceAgent, state.surfacePendingQuestion, state.surfaceActivityAt,
+    state.surfaceTurnOpenAt, state.commandRunningByPtyId, state.agentAliveByPtyId, state.usageLimitWaiting,
+  ];
+  const last = localWorkingMemo;
+  let memo = last && inputs.every((value, i) => Object.is(value, last.inputs[i]))
+    && sameKeys(hook, last.hook) && sameKeys(unverifiable, last.unverifiable) ? last : undefined;
+  if (!memo) {
+    const workspaces = state.workspaces.some((w) => isShadowWorkspaceId(w.id))
+      ? state.workspaces.filter((w) => !isShadowWorkspaceId(w.id))
+      : state.workspaces;
+    const local: FleetBoardState = { ...state, workspaces, remoteWorkspaces: undefined };
+    const alive = state.agentAliveByPtyId ?? {};
+    const quietPtyIds = [...new Set([
+      ...fleetBoardPanes(local, hook, unverifiable).filter((pane) => pane.unverifiable && pane.ptyId).map((pane) => pane.ptyId),
+      ...workspaces.flatMap(getWorkspacePtyIds).filter((ptyId) => alive[ptyId] === true),
+    ])];
+    memo = { inputs, hook, unverifiable, running: countFleetSections(local, hook, unverifiable).running > 0, quietPtyIds };
+    localWorkingMemo = memo;
+  }
+  if (memo.running) return true;
+  const clock = state.agentClockMs ?? Date.now();
+  return memo.quietPtyIds.some((ptyId) => clock - (state.surfaceOutputAt?.[ptyId] ?? -Infinity) <= QUIET_TURN_OUTPUT_MS);
 }
 
 /**

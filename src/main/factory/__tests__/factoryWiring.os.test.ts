@@ -8,6 +8,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { persisterWritesSettled } from '../versionedFile';
 import type { BotProfile, BotRole } from '../../../shared/bot';
 import type { Fact } from '../../../shared/facts';
 import type { LedgerEntry, LedgerStatus } from '../../../shared/ledger';
@@ -73,6 +74,9 @@ afterEach(async () => {
   await Promise.all(queues.splice(0).map((q) => q.flush().catch(() => undefined)));
   log.dispose();
   setWakeQueue(null);
+  // A store's fire-and-forget save can still be on its way: let it land
+  // before its folder goes, or the removal races it.
+  await persisterWritesSettled();
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

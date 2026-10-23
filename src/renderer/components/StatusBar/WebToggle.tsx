@@ -30,6 +30,7 @@ import PhoneConnectWizard, { type WizardSession } from './PhoneConnectWizard';
 import OtherComputersSection from './OtherComputersSection';
 import AttachRemoteModal from '../Sidebar/AttachRemoteModal';
 import PairingScope from '../PcRail/PairingScope';
+import { TailscaleProblemFix } from '../Remote/TailscaleChecklist';
 import { useStore } from '../../stores';
 import {
   buildDesktopPairLink,
@@ -329,7 +330,7 @@ export interface WebPopoverBodyProps {
 export type TailscaleCheck =
   | { state: 'checking' }
   | { state: 'ok' }
-  | { state: 'problem'; lines: string[] };
+  | { state: 'problem'; lines: string[]; problem?: string };
 
 /**
  * Whether the stopped body's one-click actions would start a server with an
@@ -631,8 +632,10 @@ export function WebPopoverBody({
       />
     </>
   );
-  // Quoted tool output (tailscale's own lines), with its one URL clickable.
-  const problemNotice = (lines: string[]) => (
+  // Quoted tool output (tailscale's own lines), with its one URL clickable,
+  // and the one button that fixes it when there is one (open Tailscale, or
+  // its download page) — never a command run on the person's behalf.
+  const problemNotice = (lines: string[], problem?: string) => (
     <div className="ui-notice flex gap-2 px-3 py-2.5">
       <span className="mt-0.5 shrink-0 text-[var(--accent-yellow)]" aria-hidden="true">
         <IconWarning size={12} />
@@ -652,6 +655,7 @@ export function WebPopoverBody({
             </span>
           );
         })}
+        <TailscaleProblemFix problem={problem} testId="web" />
       </div>
     </div>
   );
@@ -693,7 +697,7 @@ export function WebPopoverBody({
                 {t('web.wizardChecking')}
               </p>
             ) : tailscaleCheck?.state === 'problem' ? (
-              problemNotice(tailscaleCheck.lines.length > 0 ? tailscaleCheck.lines : [t('web.wizardCheckFailed')])
+              problemNotice(tailscaleCheck.lines.length > 0 ? tailscaleCheck.lines : [t('web.wizardCheckFailed')], tailscaleCheck.problem)
             ) : (
               <>
                 <p className="ui-note">{t('web.connectPhoneNeedsTailscale')}</p>
@@ -713,7 +717,7 @@ export function WebPopoverBody({
               </>
             )
           ) : null}
-          {info.transportError ? problemNotice(info.transportError.lines) : null}
+          {info.transportError ? problemNotice(info.transportError.lines, info.transportError.reason) : null}
         </PopoverSection>
         <PopoverSection title={t('web.shareThisComputer')}>
           {wizardLink}
@@ -1209,7 +1213,7 @@ export default function WebToggle({ variant = 'icon', compact = false, onOpenCha
       .diagnose()
       .then(
         (d): TailscaleCheck =>
-          d.tailscale.ok ? { state: 'ok' } : { state: 'problem', lines: d.tailscale.lines },
+          d.tailscale.ok ? { state: 'ok' } : { state: 'problem', lines: d.tailscale.lines, problem: d.tailscale.problem },
         (): TailscaleCheck => ({ state: 'problem', lines: [] }),
       )
       .then((check) => {

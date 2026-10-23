@@ -118,6 +118,25 @@ esac`);
     },
   );
 
+  it.skipIf(process.platform === 'win32')(
+    'an agent with no documented sign-in check is only asked its version, and reads as installed',
+    async () => {
+      const calls = flag('grok-calls');
+      writeScript('grok', `echo "$*" >> "${calls}"
+case "$1" in
+  --version) echo "grok 0.9.0" ;;
+esac`);
+      const d = detector();
+      expect(await d.detect('grok')).toMatchObject({
+        agent: 'grok', readiness: 'installed', loginKnown: false, executable: path.join(bin, 'grok'),
+        version: '0.9.0', updateRecommended: true, candidates: [],
+      });
+      // Nothing but --version ran: no sign-in command, no credential read.
+      expect(fs.readFileSync(calls, 'utf8').trim().split('\n')).toEqual(['--version']);
+      expect(await d.detect('agy')).toMatchObject({ agent: 'agy', readiness: 'not-installed' });
+    },
+  );
+
   it.skipIf(process.platform === 'win32')('a status probe that hangs is "could not tell", not signed out', async () => {
     // Like an npm launcher: the probed process starts a child and waits on it.
     // The timeout must take the child down too, not only the launcher.

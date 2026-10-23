@@ -14,6 +14,7 @@ import {
   hasOutstandingRunningClaim,
 } from '../metadata.handler';
 import { readSourceText } from '../../../../test-utils/sourceText';
+import { noteShellPrompt, resetShellPromptMirrorForTests } from '../../../shellPrompt/shellPromptMirror';
 
 vi.mock('electron', () => ({
   ipcMain: { removeHandler: vi.fn(), handle: vi.fn() },
@@ -66,6 +67,24 @@ describe('runMetadataPollTick payload diff', () => {
     expect(sent).toHaveLength(1);
 
     removeCwd('pty-diff-1');
+  });
+
+  it('carries a waiting shell prompt, so a renderer that reloaded gets it back', async () => {
+    const live = new Set(['pty-diff-sp']);
+    const mgr = fakePtyManager(live);
+    const { win, sent } = fakeWindow();
+    updateCwd('pty-diff-sp', 'C:/repo-sp');
+    noteShellPrompt('pty-diff-sp', { epoch: 'e', seq: 1, prompt: { shape: 'secret' } });
+
+    await runMetadataPollTick(mgr, win, true);
+    expect(sent[0][1]).toMatchObject({ ptyId: 'pty-diff-sp', shellPrompt: { shape: 'secret' } });
+    noteShellPrompt('pty-diff-sp', { epoch: 'e', seq: 2, prompt: null });
+    await runMetadataPollTick(mgr, win, true);
+    expect(sent).toHaveLength(2);
+    expect(sent[1][1]).toMatchObject({ ptyId: 'pty-diff-sp', shellPrompt: null });
+
+    removeCwd('pty-diff-sp');
+    resetShellPromptMirrorForTests();
   });
 
   it('sends again when a field changes, and on revert to a prior value', async () => {

@@ -54,6 +54,7 @@ import { registerUtilityTools } from './playwright/tools/utility';
 import { registerExtractionTools } from './playwright/tools/extraction';
 import { registerChannelTools } from './channels';
 import { registerFanOutTools } from './fanout';
+import { registerRemoteSpawnTools } from './remoteSpawn';
 import { registerLedgerUpdateTool, registerLedgerListTool, registerLedgerBrainUpdateTool } from './ledger';
 import { registerTaskFetchTool, registerTaskPushTool } from './taskPush';
 import { registerWorktaskTools } from './worktask';
@@ -2442,6 +2443,14 @@ registerChannelTools(
 // fresh server. The resolved id is used only to warm the walk — the handler
 // derives the owning workspace from the ptyId and rejects a stated one.
 registerFanOutTools(server, {
+  getSenderPtyId: () => verifiedPtyId(),
+  resolveWorkspaceId: requireWorkspaceId,
+});
+
+// === Remote spawn (full + core) — ask a paired PC to start an agent ===
+// Same walk-hit-only provenance as fan-out: the handler resolves the caller's
+// pane from the ptyId and refuses a caller started for someone (depth 1).
+registerRemoteSpawnTools(server, {
   getSenderPtyId: () => verifiedPtyId(),
   resolveWorkspaceId: requireWorkspaceId,
 });

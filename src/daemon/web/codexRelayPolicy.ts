@@ -83,7 +83,8 @@ export const CLIENT_REQUEST_CLASSES: Readonly<Record<string, MethodClass>> = {
     'threadSection/create', 'threadSection/delete', 'threadSection/list', 'threadSection/update',
     'turn/interrupt', 'windowsSandbox/readiness', 'windowsSandbox/setupStart',
     // Experimental
-    'account/bedrock/discover', 'account/bedrock/setup', 'collaborationMode/list', 'environment/info',
+    // checkGovCloudRequirements only reads the account's provider config (no thread, no process).
+    'account/bedrock/checkGovCloudRequirements', 'account/bedrock/discover', 'account/bedrock/setup', 'collaborationMode/list', 'environment/info',
     'environment/status', 'fuzzyFileSearch/sessionStart', 'fuzzyFileSearch/sessionStop',
     'fuzzyFileSearch/sessionUpdate', 'mcpServer/event/stream/start', 'mcpServer/event/stream/stop', 'memory/reset',
     'memory/status', 'plugin/search', 'process/kill', 'process/resizePty', 'process/writeStdin', 'project/create',

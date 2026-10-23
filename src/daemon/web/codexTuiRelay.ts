@@ -82,6 +82,9 @@ const RECONNECT_BASE_MS = 250;
 const RECONNECT_MAX_MS = 4000;
 /** Bound on the runtime check that runs before the first re-dial after a loss. */
 const ENSURE_UPSTREAM_MS = 30_000;
+/** How long a token-bound endpoint waits for its TUI's first connection, and
+ * for its next one after the TUI closed a connection itself. */
+const UNCLAIMED_MS = 30_000;
 const bounded = (work:Promise<void>, ms:number):Promise<void> => new Promise<void>(resolve=>{
   const timer = setTimeout(resolve,ms);
   timer.unref?.();
@@ -94,7 +97,7 @@ const bounded = (work:Promise<void>, ms:number):Promise<void> => new Promise<voi
  * is ended and the endpoint stays for a bounded time, so the TUI's own
  * reconnect lands on a fresh, re-checked server link. */
 export async function createCodexTuiRelay(options:{codeHome?:string; onRequestMethod?:(method:string)=>void; onStateChange?:()=>void; policy?:CodexRelayPolicy; answerConfirmMs?:number;
-  /** The TUI's server link was lost: nothing pinned to that connection (request ids, phone decisions) may match a later one. */
+  /** The TUI's connection ended without the relay closing (its server link was lost, or the TUI closed it to open another): nothing pinned to that connection (request ids, phone decisions) may match a later one. */
   onLinkLost?:()=>void;
   /** The server behind a lost link is gone (another server answered on the account socket, or none came back in time): a turn it was running is over. */
   onServerLost?:()=>void;
@@ -122,7 +125,6 @@ export async function createCodexTuiRelay(options:{codeHome?:string; onRequestMe
   const wss = new WebSocketServer({noServer:true,maxPayload:MAX_FRAME,perMessageDeflate:false});
   const sockets = new Set<WebSocket>();
   let claimed = false;
-  let everClaimed = false;
   // A TUI's server link opened at least once. Until then nothing here reports
   // on the pane: the TUI it was made for may never come (it exited first).
   let everLinked = false;
@@ -136,13 +138,25 @@ export async function createCodexTuiRelay(options:{codeHome?:string; onRequestMe
   /**
    * The TUI's server link was lost and no new one has opened. One per loss,
    * shared by every reconnect attempt the TUI makes: one backoff, one runtime
-   * check, one deadline. Only while it lasts may the endpoint be claimed again.
+   * check, one deadline.
    */
   let loss:{on:string; delay:number; ensured?:Promise<void>; deadline:NodeJS.Timeout} | undefined;
+  /**
+   * The TUI closed its connection itself, and no new one has linked yet. A
+   * Codex TUI opens more than one app-server connection over its life: its
+   * startup resume picker uses one and the session opens the next. The
+   * endpoint stays for the same TUI's next connection, bounded like its first.
+   */
+  let left = false;
   // Ends the current connection, answering what it never sent upstream.
   let endCurrent:(()=>void) | undefined;
   let closing:Promise<void> | undefined;
   let unclaimedTimer:ReturnType<typeof setTimeout> | undefined;
+  const armUnclaimed = () => {
+    if (unclaimedTimer) clearTimeout(unclaimedTimer);
+    unclaimedTimer = setTimeout(()=>{void close().catch(()=> { /* noop */ });},UNCLAIMED_MS);
+    unclaimedTimer.unref?.();
+  };
   // The live connection's phone-answer path; none before a TUI connects.
   let answerOnConnection:((threadId:string,requestId:string,decision:CodexDecisionAnswer)=>Promise<CodexAnswerOutcome>) | undefined;
   // Turn identity as the pane's own stream reports it (`turn/started`,
@@ -211,8 +225,9 @@ export async function createCodexTuiRelay(options:{codeHome?:string; onRequestMe
     const supplied = Buffer.from(request.headers.authorization ?? '');
     const expected = Buffer.from(`Bearer ${authToken}`);
     const authenticated = !authToken || supplied.length === expected.length && timingSafeEqual(supplied,expected);
-    // One TUI: the first claim, and again only while a lost link waits for it.
-    if (!authenticated || retired || claimed || everClaimed && !loss || request.headers.origin || !['/','/rpc'].includes(request.url ?? '')) {
+    // One connection at a time: the first claim, and the next one only once
+    // the previous connection has ended (a lost link, or the TUI closed it).
+    if (!authenticated || retired || claimed || request.headers.origin || !['/','/rpc'].includes(request.url ?? '')) {
       // Close the socket once the refusal is flushed: an upgraded socket is
       // half-open after end() until the peer closes its side, and it still
       // counts toward maxConnections and holds server.close().
@@ -220,14 +235,23 @@ export async function createCodexTuiRelay(options:{codeHome?:string; onRequestMe
       return;
     }
     claimed = true;
-    everClaimed = true;
     if (unclaimedTimer) clearTimeout(unclaimedTimer);
-    wss.handleUpgrade(request,socket,head,client=>wss.emit('connection',client));
+    // An upgrade the WebSocket layer aborts (a malformed handshake) never
+    // becomes a connection: give the claim back, and the wait it cleared.
+    let upgraded = false;
+    socket.once('close',()=>{
+      if (upgraded || retired) return;
+      claimed = false;
+      if (!loss && (authToken || left)) armUnclaimed();
+    });
+    wss.handleUpgrade(request,socket,head,client=>{upgraded = true;wss.emit('connection',client);});
   });
   wss.on('connection',client=>{
     sockets.add(client);
     // The TUI coming back after its server link was lost, rather than its first connection.
     const rejoining = !!loss;
+    // The TUI's next connection after it closed one itself.
+    const returning = left;
     // False once this connection ended (`drop`) while the relay lives on:
     // nothing of it may act on the relay any more.
     let alive = true;
@@ -573,10 +597,19 @@ export async function createCodexTuiRelay(options:{codeHome?:string; onRequestMe
     endCurrent = endHere;
     const clientGone = () => {
       if (!alive) return;
+      // The relay closed first (its owner, or a refusal): nothing waits for a
+      // next connection, and a frame held for the server link is released.
+      // drop() does nothing on a retired relay, so this goes before it.
+      if (retired) { endConnection();alive = false;linkSettled();return; }
       // A TUI that gave up on a reconnect attempt before the server came back
       // leaves the endpoint for its next attempt.
       if (rejoining && !linked) { drop(false);return; }
-      endConnection();retire();
+      // The relay stays for the TUI's next connection; the lease or the pane closes it.
+      drop(false);
+      left = true;
+      try {options.onLinkLost?.();} catch {/* A notice cannot keep the old connection. */}
+      try {options.onStateChange?.();} catch {/* Nothing is live until the next connection links. */}
+      armUnclaimed();
     };
     client.on('error',clientGone);
     client.on('close',clientGone);
@@ -609,6 +642,11 @@ export async function createCodexTuiRelay(options:{codeHome?:string; onRequestMe
           await probeUpstream();
         } catch {retryLater();return;}
         if (!alive || retired) return;
+      } else if (returning) {
+        // The account socket may have changed since the last connection.
+        try {on = await verifyUpstreamSocket(upstreamPath);}
+        catch {endConnection();retire();return;}
+        if (!alive || retired) return;
       }
       let attempt:WebSocket;
       try {attempt = openCodexAccountSocket(upstreamPath,{handshakeTimeout:5000,maxPayload:MAX_FRAME,perMessageDeflate:false,followRedirects:false});}
@@ -629,6 +667,10 @@ export async function createCodexTuiRelay(options:{codeHome?:string; onRequestMe
         linked = true;
         const first = !everLinked;
         everLinked = true;
+        // A TUI's next connection on another account socket: another server,
+        // and the old one's turns are over.
+        if (returning && on !== linkedOn) serverGone();
+        left = false;
         endLoss(on);
         linkSettled();
         // The relay just became live: its owner re-reads it (an empty selection
@@ -658,16 +700,13 @@ export async function createCodexTuiRelay(options:{codeHome?:string; onRequestMe
     if (!authToken) await chmod(socketPath,0o600);
     const address = server.address();
     const url = authToken && address && typeof address !== 'string' ? `ws://127.0.0.1:${address.port}` : `unix://${socketPath}`;
-    if (authToken && !everClaimed) {
-      unclaimedTimer = setTimeout(()=>{void close().catch(()=> { /* noop */ });},30_000);
-      unclaimedTimer.unref?.();
-    }
+    if (authToken && !claimed) armUnclaimed();
     // `retired` lets the owner tell "this relay is live and nothing is selected"
     // from "this relay is gone" — after close() the tracker reports no selection
     // either way, and only the former may erase a durable recovery hint.
     return {url,...(authToken ? {authToken} : {}),current:()=>tracker.current(),retired:()=>retired,close,
-      /** The TUI's server link was lost and no new one has opened yet: nothing here is live. */
-      disconnected:()=>!retired && !!loss,
+      /** The TUI's connection ended (its server link was lost, or it closed it) and no new one has linked yet: nothing here is live. */
+      disconnected:()=>!retired && (!!loss || left),
       /** A TUI linked to the server through this relay at least once. */
       linked:()=>everLinked,
       /** A phone's answer to a request reported by `decisionPending`. */

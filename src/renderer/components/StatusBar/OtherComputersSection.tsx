@@ -7,8 +7,11 @@ import { PopoverSection } from '../ui/Popover';
 import Button from '../ui/Button';
 import Input from '../ui/Input';
 import { pairReasonMessage } from '../Sidebar/AttachRemoteModal';
+import { TailscaleFixButton } from '../Remote/TailscaleChecklist';
+import { hostOfUrl, tailnetPrecheck, withTailnetNote, type TailnetNotice } from '../Remote/tailnetCheck';
+import type { TailscaleFix } from '../../../shared/web';
 import { maskPairInput, parseRemotePairInput, type RemotePairInputError } from '../../../shared/remotePairInput';
-import type { RemoteHostPublic, RemoteHostStatus } from '../../../shared/remoteHosts';
+import { HOST_UNREACHABLE_ERROR, type RemoteHostPublic, type RemoteHostStatus } from '../../../shared/remoteHosts';
 
 /**
  * The Remote hub's "Other computers": this machine → the hosts it has paired
@@ -82,6 +85,7 @@ const OtherComputersSection = forwardRef<HTMLDivElement, OtherComputersSectionPr
   const [pairedWith, setPairedWith] = useState<string | null>(null);
   const [pairing, setPairing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [tailscaleFix, setTailscaleFix] = useState<TailscaleFix | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const mounted = useRef(true);
   useEffect(() => () => { mounted.current = false; }, []);
@@ -160,6 +164,7 @@ const OtherComputersSection = forwardRef<HTMLDivElement, OtherComputersSectionPr
   const handleSubmit = useCallback(async () => {
     const remote = window.electronAPI?.remote;
     if (!remote || pairing) return;
+    setTailscaleFix(null);
     const parsed = parseRemotePairInput(input);
     if (parsed.kind === 'error') {
       setError(t(INPUT_ERROR[parsed.reason]));
@@ -181,6 +186,17 @@ const OtherComputersSection = forwardRef<HTMLDivElement, OtherComputersSectionPr
     setError(null);
     const replacing = repairTarget;
     try {
+      // An address surely on the tailnet with Tailscale not carrying it: say
+      // so now. One Tailscale may not own: say it only if the PC is not reached.
+      const tailnet = await tailnetPrecheck(hostOfUrl(parsed.origin));
+      if (tailnet.held) {
+        if (mounted.current) { setError(tailnet.held.text); setTailscaleFix(tailnet.held.fix ?? null); }
+        return;
+      }
+      const unreachable = (line: string, note: TailnetNotice | null = tailnet.ifUnreachable): void => {
+        setError(withTailnetNote(line, note));
+        setTailscaleFix(note?.fix ?? null);
+      };
       if (parsed.kind === 'pair') {
         const res = await remote.hostsPair(
           parsed.origin,
@@ -190,7 +206,7 @@ const OtherComputersSection = forwardRef<HTMLDivElement, OtherComputersSectionPr
         );
         if (!mounted.current) return;
         if (!res.ok) {
-          setError(pairReasonMessage(t, res.reason, res.attemptsLeft));
+          unreachable(pairReasonMessage(t, res.reason, res.attemptsLeft), res.reason === 'unreachable' ? tailnet.ifUnreachable : null);
           return;
         }
         if (replacing) setRemoteHostAuthRejected(res.host.id, false);
@@ -198,7 +214,7 @@ const OtherComputersSection = forwardRef<HTMLDivElement, OtherComputersSectionPr
         const res = await remote.hostsAdd(parsed.url);
         if (!mounted.current) return;
         if (!res.ok) {
-          setError(res.error);
+          unreachable(res.error, res.error === HOST_UNREACHABLE_ERROR ? tailnet.ifUnreachable : null);
           return;
         }
       }
@@ -355,6 +371,11 @@ const OtherComputersSection = forwardRef<HTMLDivElement, OtherComputersSectionPr
               <p className="ui-row-error" role="alert">
                 {error}
               </p>
+            ) : null}
+            {error && tailscaleFix ? (
+              <div className="flex flex-wrap items-center gap-2" data-remote-hub-tailscale-fix>
+                <TailscaleFixButton fix={tailscaleFix} />
+              </div>
             ) : null}
           </div>
         ) : null}

@@ -394,3 +394,76 @@ describe('one invite for A2A and the workspaces', () => {
     expect(q('remote-connect-message')?.getAttribute('role')).toBe('status');
   });
 });
+
+describe('a connection over the tailnet fails fast', () => {
+  const checklist = (reason: 'not-running' | 'unreadable' | 'not-installed') => ({
+    items: reason === 'not-installed'
+      ? [
+        { id: 'installed', state: 'fail', reason, fix: 'download' },
+        { id: 'signed-in', state: 'unchecked' },
+        { id: 'self', state: 'unchecked' },
+        { id: 'peer', state: 'unchecked' },
+      ]
+      : [
+        { id: 'installed', state: 'pass' },
+        { id: 'signed-in', state: 'fail', reason, fix: 'open-app' },
+        { id: 'self', state: 'unchecked' },
+        { id: 'peer', state: 'unchecked' },
+      ],
+    ok: false,
+  });
+  async function connectWith(reason: 'not-running' | 'unreadable' | 'not-installed', link = LINK, pair?: unknown) {
+    stub(link, false);
+    if (pair) remote.hostsPair.mockResolvedValue(pair);
+    const web = {
+      tailscaleCheck: vi.fn(async () => checklist(reason)),
+      tailscaleOpen: vi.fn(async () => ({ ok: true, opened: 'app' })),
+    };
+    vi.stubGlobal('electronAPI', { a2aRemote: a2a, remote, web });
+    await render();
+    await act(async () => { q<HTMLButtonElement>('remote-connect-paste-button')!.click(); });
+    await act(async () => { q<HTMLButtonElement>('remote-connect-submit')!.click(); });
+    for (let i = 0; i < 6; i++) await act(async () => { await Promise.resolve(); });
+    return web;
+  }
+
+  it('Tailscale off: says so at once, tries nothing, and opens Tailscale only from its button', async () => {
+    const web = await connectWith('not-running');
+    expect(web.tailscaleCheck).toHaveBeenCalledWith('office.ts.net');
+    expect(remote.hostsPair).not.toHaveBeenCalled();
+    expect(q('remote-connect-message')?.textContent).toMatch(/Tailscale is off/);
+    expect(web.tailscaleOpen).not.toHaveBeenCalled();
+    const fix = document.querySelector<HTMLButtonElement>('[data-testid="remote-connect-tailscale-fix"] [data-tailscale-fix="open-app"]')!;
+    await act(async () => { fix.click(); });
+    expect(web.tailscaleOpen).toHaveBeenCalledWith('app');
+  });
+
+  it('a status that could not be read holds nothing back: the connection tries as before', async () => {
+    const web = await connectWith('unreadable');
+    expect(web.tailscaleCheck).toHaveBeenCalled();
+    expect(remote.hostsPair).toHaveBeenCalledWith('https://office.ts.net', 'ABCD2345');
+    expect(q('remote-connect-tailscale-fix')).toBeNull();
+  });
+
+  it('a 100.64/10 address Tailscale may not own (another overlay) is still tried; with no Tailscale here it is never blamed', async () => {
+    const link = 'https://100.92.4.7:7681/pair#wmux-desktop-code=ABCD2345';
+    const web = await connectWith('not-installed', link, { ok: false, reason: 'unreachable' });
+    expect(web.tailscaleCheck).toHaveBeenCalledWith('100.92.4.7');
+    expect(remote.hostsPair).toHaveBeenCalledWith('https://100.92.4.7:7681', 'ABCD2345');
+    expect(q('remote-connect-message')?.textContent).not.toMatch(/Tailscale/);
+    expect(q('remote-connect-tailscale-fix')).toBeNull();
+  });
+
+  it('the same address with Tailscale installed but off: tried, and the reason is added only when it is not reached', async () => {
+    const link = 'https://100.92.4.7:7681/pair#wmux-desktop-code=ABCD2345';
+    let web = await connectWith('not-running', link);
+    expect(remote.hostsPair).toHaveBeenCalledWith('https://100.92.4.7:7681', 'ABCD2345');
+    expect(q('remote-connect-message')?.textContent).not.toMatch(/Tailscale/);
+
+    act(() => root.unmount());
+    root = createRoot(container);
+    web = await connectWith('not-running', link, { ok: false, reason: 'unreachable' });
+    expect(web.tailscaleCheck).toHaveBeenCalledWith('100.92.4.7');
+    expect(q('remote-connect-message')?.textContent).toMatch(/Tailscale is off/);
+  });
+});

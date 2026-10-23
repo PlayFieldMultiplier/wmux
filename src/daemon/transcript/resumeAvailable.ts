@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { checkNativeTranscriptPath, codexSessionRoot } from './providers';
+import { qwenProjectsRoot } from './qwenTranscript';
 import type { ResumeBinding } from '../../shared/agentResume';
 
 /** A liveness check reads the account's files: reuse its answer briefly. */
@@ -12,6 +13,13 @@ export function clearResumeCache(): void {
 }
 
 const boundCache = new Map<string, { until: number; result: Promise<boolean> }>();
+
+/** Each resumable agent's account root, part of the cache key: another account is another answer. */
+const ACCOUNT_ROOT: Readonly<Record<string, (env: Record<string, string>) => string>> = {
+  claude: (env) => env.CLAUDE_CONFIG_DIR ?? '',
+  codex: (env) => codexSessionRoot(env),
+  qwen: (env) => qwenProjectsRoot(env),
+};
 
 /** Whether `file` resolves inside `root` (both through their real paths). */
 async function realInside(file: string, root: string): Promise<boolean> {
@@ -34,7 +42,7 @@ export function boundSessionLives(
   const now = opts.now ?? Date.now();
   const defined: Record<string, string> = {};
   for (const [key, value] of Object.entries(env)) if (typeof value === 'string') defined[key] = value;
-  const account = binding.agent === 'claude' ? defined.CLAUDE_CONFIG_DIR ?? '' : codexSessionRoot(defined);
+  const account = Object.hasOwn(ACCOUNT_ROOT, binding.agent) ? ACCOUNT_ROOT[binding.agent](defined) : '';
   const key = JSON.stringify([binding.agent, binding.sessionId, binding.transcriptPath ?? '', binding.cwd, account]);
   for (const [k, entry] of boundCache) if (entry.until <= now) boundCache.delete(k);
   const hit = opts.fresh ? undefined : boundCache.get(key);

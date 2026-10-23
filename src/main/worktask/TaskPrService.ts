@@ -47,6 +47,9 @@ import { getExecEnv } from '../../shared/execEnv';
 import { parseRemoteKey } from '../github/PrProvider';
 import { isGitlabRepoKey } from '../github/hostLane';
 import { GLAB_ENV, glabLoginHint, glabPrService, type GlabPrService } from '../github/GlabPrService';
+import { scanCommits, secretRefusal, spawnGitLines, type GitLines } from '../git/secretScan';
+import { secretGuardEnabled } from '../git/secretGuardSetting';
+import type { SecretFinding } from '../../shared/secretGuard';
 
 const execFileAsync = promisify(execFile);
 
@@ -81,6 +84,10 @@ export interface TaskPrServiceOptions {
   cache?: PrCachePort;
   exec?: PrExec;
   glab?: PrGlabPort;
+  /** git for the pre-push secret check, in `cwd` (default: spawned, streamed). */
+  scanGit?: (cwd: string) => GitLines;
+  /** Settings › General's password and key check (default: its live value). */
+  secretGuard?: () => boolean;
 }
 
 export interface CreatePrInput {
@@ -111,8 +118,11 @@ export type CreatePrResult =
     }
   | {
       ok: false;
-      reason: 'gh-missing' | 'gh-unauth' | 'dirty' | 'no-origin' | 'push-failed' | 'pr-failed' | 'error';
+      reason: 'gh-missing' | 'gh-unauth' | 'dirty' | 'no-origin' | 'push-failed' | 'pr-failed' | 'secrets' | 'error';
       error: string;
+      /** `secrets`: the Git page's push check refused (secretRefusal). */
+      secrets?: SecretFinding[];
+      secretScanFailed?: true;
       /** 브라우저 폴백 안내(gh 부재·미인증 시). */
       browseFallback?: string;
     };
@@ -122,12 +132,56 @@ export class TaskPrService {
   private readonly cache: PrCachePort | undefined;
   private readonly exec: PrExec;
   private readonly glab: PrGlabPort;
+  private readonly scanGit: (cwd: string) => GitLines;
+  private readonly secretGuard: () => boolean;
 
   constructor(opts: TaskPrServiceOptions) {
     this.daemon = opts.daemon;
     this.cache = opts.cache;
     this.exec = opts.exec ?? (execFileAsync as unknown as PrExec);
     this.glab = opts.glab ?? glabPrService;
+    this.scanGit = opts.scanGit ?? ((cwd) => spawnGitLines(cwd));
+    this.secretGuard = opts.secretGuard ?? secretGuardEnabled;
+  }
+
+  /** The Git page's push check on the branch's commits origin lacks; null to go ahead. */
+  private async secretsRefusal(worktreePath: string, sha: string): Promise<CreatePrResult | null> {
+    if (!this.secretGuard()) return null;
+    const refused = secretRefusal(await scanCommits(this.scanGit(worktreePath), [sha, '--not', '--remotes=origin']), 'pushed');
+    return refused ? { ok: false, reason: 'secrets', ...refused } : null;
+  }
+
+  /**
+   * `push -u origin <branch>`, pinned to one commit: the branch is read once,
+   * that commit is checked and that commit is pushed. An agent still at work
+   * in the worktree can commit while the check runs; its new commit is not
+   * pushed unchecked. Null when pushed.
+   */
+  private async pushChecked(worktreePath: string, branch: string): Promise<CreatePrResult | null> {
+    let sha = '';
+    try {
+      const { stdout } = await this.git(['rev-parse', '--verify', '-q', '--end-of-options', `refs/heads/${branch}^{commit}`], worktreePath);
+      sha = stdout.trim();
+    } catch (err) {
+      return { ok: false, reason: 'error', error: `git rev-parse failed: ${errMsg(err)}` };
+    }
+    if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(sha)) return { ok: false, reason: 'error', error: `Could not read the commit ${branch} names.` };
+    const secrets = await this.secretsRefusal(worktreePath, sha);
+    if (secrets) return secrets;
+    try {
+      await this.git(['push', 'origin', '--', `${sha}:refs/heads/${branch}`], worktreePath);
+    } catch (err) {
+      return { ok: false, reason: 'push-failed', error: `git push failed: ${errMsg(err)}` };
+    }
+    // The upstream `-u` set: git sets none for a push that names a commit.
+    // The PR does not need it, so a failure here does not fail the PR.
+    try {
+      await this.git(['config', `branch.${branch}.remote`, 'origin'], worktreePath);
+      await this.git(['config', `branch.${branch}.merge`, `refs/heads/${branch}`], worktreePath);
+    } catch {
+      // As a `push -u` whose upstream could not be written.
+    }
+    return null;
   }
 
   private gh(args: string[], cwd: string): Promise<{ stdout: string; stderr: string }> {
@@ -285,15 +339,13 @@ export class TaskPrService {
       return { ok: false, reason: 'error', error: `git remote failed: ${errMsg(err)}` };
     }
 
-    // ── ③ push -u origin -- {branch}(execFile argv + `--` 세퍼레이터 — F6: 브랜치명이
-    // 옵션으로 오인되는 표면 차단). 이미 존재(fast-forward)면 무해 통과.
+    // ── ③ push: the branch's checked commit to origin (pushChecked; execFile
+    // argv with the `--` separator, so a branch name is never read as an
+    // option). A branch already there (fast-forward) passes harmlessly.
     const movedBeforePush = await this.pushTargetMoved(worktreePath, target);
     if (movedBeforePush) return movedBeforePush;
-    try {
-      await this.git(['push', '-u', 'origin', '--', branch], worktreePath);
-    } catch (err) {
-      return { ok: false, reason: 'push-failed', error: `git push failed: ${errMsg(err)}` };
-    }
+    const pushRefused = await this.pushChecked(worktreePath, branch);
+    if (pushRefused) return pushRefused;
 
     // base = repo default(CL4·[J2대조]4 — fan-out 원본 브랜치 미기록이라 default 조회).
     // F6: 조회 실패·빈 값이면 'main' 추측 대신 명시 에러(엉뚱한 base로 PR 여는 것 방지).
@@ -441,11 +493,8 @@ export class TaskPrService {
     // ── ③ push — the gh path's push (origin was read above).
     const movedBeforePush = await this.pushTargetMoved(worktreePath, target);
     if (movedBeforePush) return movedBeforePush;
-    try {
-      await this.git(['push', '-u', 'origin', '--', branch], worktreePath);
-    } catch (err) {
-      return { ok: false, reason: 'push-failed', error: `git push failed: ${errMsg(err)}` };
-    }
+    const pushRefused = await this.pushChecked(worktreePath, branch);
+    if (pushRefused) return pushRefused;
 
     // base = the project's default branch; unreadable is an error, never a guess.
     const base = await this.glab.defaultBranch(worktreePath, key);

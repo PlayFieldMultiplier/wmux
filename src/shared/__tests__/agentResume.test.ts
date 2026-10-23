@@ -697,3 +697,16 @@ describe('withLaunchSessionId (A1)', () => {
     expect(toResumeCommand(line, { agent: 'claude', sessionId: U, cwd: '/r', ts: 1 }, '/r')).toBe(`claude --resume ${U} --model opus`);
   });
 });
+
+describe('qwen and kimi grammar', () => {
+  it('qwen resumes an exact UUID or opens its picker; kimi only ever opens its picker', () => {
+    expect(resumeGrammarFor('qwen')).toMatchObject({ picker: '--resume', pin: '--session-id' });
+    expect(resumeGrammarFor('qwen')?.withId('0f1e2d3c-4b5a-4987-8a6b-5c4d3e2f1a0b')).toBe('--resume 0f1e2d3c-4b5a-4987-8a6b-5c4d3e2f1a0b');
+    expect(isPlausibleResumeSessionId('qwen', '0f1e2d3c-4b5a-4987-8a6b-5c4d3e2f1a0b')).toBe(true);
+    expect(resumeGrammarFor('kimi')).toMatchObject({ picker: '--session' });
+    expect(isPlausibleResumeSessionId('kimi', '01HZX3K8Q2VJ7N5R9T4W6Y0ABC')).toBe(false);
+    expect(isPlausibleResumeSessionId('kimi', '0f1e2d3c-4b5a-4987-8a6b-5c4d3e2f1a0b')).toBe(false);
+    // No exact form: whatever reaches it, only the picker is typed.
+    expect(resumeGrammarFor('kimi')?.withId('01HZX3K8Q2VJ7N5R9T4W6Y0ABC; echo hi')).toBe('--session');
+  });
+});

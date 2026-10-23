@@ -73,6 +73,7 @@ export const CORE_TOOL_SURFACE: readonly string[] = [
   'channel_mission_close',
   'channel_mission_list',
   'fanout_start',
+  'remote_spawn',
   'ledger_update',
   'task_push',
   'task_fetch',

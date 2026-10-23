@@ -58,6 +58,7 @@ import { useNotificationListener } from '../../hooks/useNotificationListener';
 import { useRpcBridge } from '../../hooks/useRpcBridge';
 import { useA2aLinkRequestToast, useA2aRemoteSnapshot } from '../../hooks/useA2aRemoteSnapshot';
 import { useA2aRemoteBridge } from '../../hooks/useA2aRemoteBridge';
+import { useConnectionDropNotice } from '../../hooks/useConnectionDropNotice';
 import { useCloseTabOnShellExit } from '../../hooks/useCloseTabOnShellExit';
 import AgentMentionPicker from '../Palette/AgentMentionPicker';
 import HandoffPopover from '../Git/HandoffPopover';
@@ -89,6 +90,7 @@ import { FIRST_RUN_REOPEN_EVENT } from '../../../shared/firstRun';
 import { isFileDrag } from '../../../shared/dragDrop';
 import { terminalRegistry, watchColdFramePersistence } from '../../hooks/useTerminal';
 import { clearPersistedColdFrames, restoreColdFrames } from '../../terminal/coldFrame';
+import { installSleepPreventionBridge } from '../../utils/sleepPreventionBridge';
 import { heldSuspendedIds, holdsSuspendedSession, resolvePtyIdsToClear } from '../../hooks/reconcileWithReQuery';
 import { isSurfaceShown } from '../../stores/selectors/surfaceShown';
 import { runWithProgressTimeout } from '../../hooks/reconcileProgressTimeout';
@@ -509,6 +511,7 @@ function buildSessionData(dumped: Map<string, boolean>): SessionData {
     shortcutOverrides: state.shortcutOverrides,
     autoUpdateEnabled: state.autoUpdateEnabled,
     secretGuardEnabled: state.secretGuardEnabled,
+    sleepPreventionMode: state.sleepPreventionMode,
     customThemeColors: state.customThemeColors ?? undefined,
     pcRail: selectPcRailPersisted(state),
     onboardingCompleted: state.onboardingCompleted,
@@ -929,6 +932,8 @@ export default function AppLayout() {
   // The other PCs' links, connections and held work: the one subscription
   // behind the Remote page and its rail badge.
   useA2aRemoteBridge();
+  // A PC connection in use that really dropped (not a blip) gets one toast.
+  useConnectionDropNotice();
   // `exit` in a shell closes its tab (clean exit only).
   useCloseTabOnShellExit();
   // Keep the main-process WorkspaceMirror warm: push the workspace tree +
@@ -2146,6 +2151,15 @@ export default function AppLayout() {
   // beforeunload (an installer update, a crash). Only while "Restore on
   // launch" is on; turning it off clears the stored frames.
   useEffect(() => watchColdFramePersistence(), []);
+
+  // Keep the computer awake while agents work: the mode and the working
+  // verdict to main, main's sleep window back (utils/sleepPreventionBridge.ts).
+  // The browser build (the only one exposing `hostPlatform`) has no main and
+  // must not keep the host awake.
+  useEffect(() => {
+    const browserBuild = typeof (window.electronAPI as { hostPlatform?: unknown }).hostPlatform === 'function';
+    return installSleepPreventionBridge(useStore, browserBuild ? undefined : window.electronAPI.power);
+  }, []);
 
   // Periodic session save — protects against crashes.
   // Awaits scrollback dump completion before saving session.json to guarantee

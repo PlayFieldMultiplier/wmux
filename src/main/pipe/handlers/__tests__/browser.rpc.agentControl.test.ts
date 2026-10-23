@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserWindow } from 'electron';
 import { RpcRouter } from '../../RpcRouter';
-import { registerBrowserRpc } from '../browser.rpc';
+import { registerBrowserRpc, untilAborted } from '../browser.rpc';
 import { dispatchAsClaimedCaller } from './claimedCaller';
 import { BrowserAgentControl } from '../../../browser-session/BrowserAgentControl';
 
@@ -18,7 +18,10 @@ vi.mock('electron', () => ({
 vi.mock('../../../security/navigationPolicy', () => ({
   validateResolvedNavigationUrl: vi.fn(async () => ({ valid: true })),
 }));
-const { sendToRendererMock } = vi.hoisted(() => ({ sendToRendererMock: vi.fn(async () => ({ ok: true })) }));
+const { sendToRendererMock } = vi.hoisted(() => ({
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- each case stubs its own argument shape
+  sendToRendererMock: vi.fn(async (..._args: any[]): Promise<unknown> => ({ ok: true })),
+}));
 vi.mock('../_bridge', () => ({
   sendToRenderer: sendToRendererMock,
 }));
@@ -241,4 +244,36 @@ describe('browser RPC — the user paused or took over the tab', () => {
     await vi.advanceTimersByTimeAsync(30_000);
     expect(control.get(SURFACE.surfaceId).mode).toBe('agent');
   });
+
+  it('an unnamed close refuses a held tab that is discarded (no live target), found through the renderer', async () => {
+    const { router, control, cdp } = setup();
+    cdp.listTargets.mockReturnValue([]); // the held tab sleeps: no CDP target
+    control.apply('sleeping-tab', 'takeOver');
+    sendToRendererMock.mockImplementation(async (_w: unknown, method: string) =>
+      method === 'surface.list' ? [{ id: 'sleeping-tab', paneId: 'p1', surfaceType: 'browser' }] : { ok: true });
+
+    const res = await router.dispatch({ id: 'c', method: 'browser.close', params: { workspaceId: 'ws-a' } });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain('browser.close: BROWSER_USER_IN_CONTROL');
+    expect(sendToRendererMock).toHaveBeenCalledWith(expect.anything(), 'surface.list', { workspaceId: 'ws-a', includeStashed: true });
+    expect(sendToRendererMock).not.toHaveBeenCalledWith(expect.anything(), 'browser.close', expect.anything());
+  });
 });
+
+describe('untilAborted', () => {
+  it('removes its abort listener whichever side wins', async () => {
+    const controller = new AbortController();
+    const add = vi.spyOn(controller.signal, 'addEventListener');
+    const remove = vi.spyOn(controller.signal, 'removeEventListener');
+    await untilAborted(Promise.resolve(), controller.signal);
+    expect(add).toHaveBeenCalledTimes(1);
+    expect(remove).toHaveBeenCalledWith('abort', add.mock.calls[0][1]);
+
+    const parked = untilAborted(new Promise(() => undefined), controller.signal);
+    controller.abort();
+    await parked;
+    expect(remove).toHaveBeenCalledTimes(2);
+    expect(remove.mock.calls[1][1]).toBe(add.mock.calls[1][1]);
+  });
+});
+

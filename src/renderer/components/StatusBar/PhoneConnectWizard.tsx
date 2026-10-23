@@ -8,6 +8,7 @@ import Checkbox from '../ui/Checkbox';
 import Field from '../ui/Field';
 import Input from '../ui/Input';
 import SegmentedControl from '../ui/SegmentedControl';
+import { TailscaleProblemFix } from '../Remote/TailscaleChecklist';
 import {
   DEVICE_NAME_MAX,
   PhonePairCode,
@@ -270,10 +271,14 @@ export function PhoneWizardView(p: PhoneWizardViewProps) {
               {t('web.wizardNeedsRestart')}
             </p>
           ) : p.diagnosis && !p.diagnosis.tailscale.ok ? (
-            <Lines
-              lines={p.diagnosis.tailscale.lines.length > 0 ? p.diagnosis.tailscale.lines : [t('web.wizardCheckFailed')]}
-              onOpenLink={p.onOpenLink}
-            />
+            <>
+              <Lines
+                lines={p.diagnosis.tailscale.lines.length > 0 ? p.diagnosis.tailscale.lines : [t('web.wizardCheckFailed')]}
+                onOpenLink={p.onOpenLink}
+              />
+              {/* The one fix, a click away: open Tailscale or its download page. */}
+              <TailscaleProblemFix problem={p.diagnosis.tailscale.problem} testId="wizard" />
+            </>
           ) : null}
           {/* Running behind a tailnet front while tailscale itself reports a
               problem: the address may reach nothing, so say it, don't bury it. */}
@@ -284,6 +289,7 @@ export function PhoneWizardView(p: PhoneWizardViewProps) {
             <>
               <p className="ui-note">{t('web.wizardTailscaleWarn')}</p>
               <Lines lines={p.diagnosis.tailscale.lines} onOpenLink={p.onOpenLink} />
+              <TailscaleProblemFix problem={p.diagnosis.tailscale.problem} testId="wizard-shared" />
             </>
           ) : null}
           {p.errorLines.length > 0 ? <Lines lines={p.errorLines} onOpenLink={p.onOpenLink} /> : null}

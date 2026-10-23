@@ -37,6 +37,7 @@ import {
 } from '../../shared/workerLaunch';
 import { handleCompanyRpc } from '../../company/renderer/rpcHandlers';
 import { t } from '../i18n';
+import { parseRemoteSpawnedBy, remoteSpawnToastMessage } from '../utils/remoteSpawnedBy';
 import { formatA2aMessage, formatA2aBroadcast, sanitizeA2aName, type A2aFormatOptions } from '../utils/a2aFormat';
 import type { A2aPriority } from '../utils/a2aFormat';
 import { findPendingExecuteRequest, requestExecuteApproval, requestFanOutApproval, requestTaskApproval } from '../utils/executeApprovalGate';
@@ -1639,6 +1640,9 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
     // Never re-resolved against today's layout — the requesting pane may have
     // closed since, and its ptyId may belong to another pane by now.
     const fanoutOrigin = sanitizeFanoutOrigin(params.fanoutOrigin);
+    // Another PC asked for this workspace (remote spawn). Strictly checked; a
+    // value that is not exactly one is ignored rather than failing the spawn.
+    const remoteSpawnedBy = parseRemoteSpawnedBy(params.remoteSpawnedBy);
 
     store.addWorkspace(name);
     const afterAdd = useStore.getState();
@@ -1648,6 +1652,7 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
     }
     const newWsId = newWs.id;
     const paneId = newWs.activePaneId;
+    if (remoteSpawnedBy) afterAdd.setWorkspaceRemoteSpawnedBy(newWsId, remoteSpawnedBy);
 
     // Depth-1 lineage: main stamps this workspace as a task of its owner
     // INSIDE pty.create, before the PTY (and the agent) exists; a failed stamp
@@ -1721,12 +1726,16 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
       // again with nobody noticing, so name the reason it came off.
       console.warn('[wmux:worker-launch] model-env marker dropped', { role, reason: remarked.dropped });
     }
-    const createOptions = withWorkspaceProfile(
-      remarked.command === bound.initialCommand ? bound : { ...bound, initialCommand: remarked.command },
-      // profile.startupCwd = worktreePath 힌트(§1 — 초기 편의). split 상속에
-      // 밀리는 tolerant 힌트라 방어가 아니라 편의로만 계상한다.
-      { ...newWs.profile, startupCwd: cwd || newWs.profile?.startupCwd },
-    );
+    const createOptions = {
+      ...withWorkspaceProfile(
+        remarked.command === bound.initialCommand ? bound : { ...bound, initialCommand: remarked.command },
+        // profile.startupCwd = worktreePath 힌트(§1 — 초기 편의). split 상속에
+        // 밀리는 tolerant 힌트라 방어가 아니라 편의로만 계상한다.
+        { ...newWs.profile, startupCwd: cwd || newWs.profile?.startupCwd },
+      ),
+      // A pane another PC asked for: main stamps it (depth 1) inside the create, before the agent starts.
+      ...(remoteSpawnedBy ? { remoteSpawnOf: remoteSpawnedBy.hostId } : {}),
+    };
     // The line that will really be typed into the pane — after the role rewrite,
     // after the marker decision, and after the profile has had its say.
     const launchCommand = createOptions.initialCommand ?? '';
@@ -1760,6 +1769,7 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
     }
     afterPty.addSurface(paneId, ptyId, '', cwd, newWsId);
     releaseLeaf();
+    if (remoteSpawnedBy) useStore.getState().pushToast({ level: 'info', message: remoteSpawnToastMessage(remoteSpawnedBy) });
 
     // 포커스 복원 — fan-out 스폰이 사람 화면을 훔치지 않는다. 아래 role 스탬프
     // 앞에 둔다: setRole은 IPC 왕복이고, 그 사이 사용자 화면이 새 워크스페이스에
@@ -1785,7 +1795,8 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
     // task would come back on the default (expensive) one with nothing said.
     // It carries the model-env marker exactly as launched, so main can tell
     // whether the neutralisation survived when it reports a stuck worker.
-    return { workspaceId: newWsId, ptyId, initialCommand: launchCommand, ...(fanoutOrigin ? { fanoutOrigin } : {}) };
+    // `paneId`: the new pane, for a remote spawn's link endpoint.
+    return { workspaceId: newWsId, ptyId, paneId, initialCommand: launchCommand, ...(fanoutOrigin ? { fanoutOrigin } : {}) };
   }
 
   // -------------------------------------------------------------------------

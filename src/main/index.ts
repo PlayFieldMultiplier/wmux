@@ -55,10 +55,12 @@ import { app, BrowserWindow, dialog, ipcMain, powerMonitor } from 'electron';
 import { checkUserDataIsolation, claimPortableDataNotice, mayInstallDarwinCliShim, PORTABLE_DATA_SUFFIX, shouldUsePortableData } from './dataIsolation';
 import { createWindow, loadMainRenderer } from './window/createWindow';
 import { attachDesktopPresenceReporter, reportDesktopPresence } from './window/desktopPresence';
+import { installSleepPrevention } from './power/installSleepPrevention';
 import { PTYManager } from './pty/PTYManager';
 import { PTYBridge } from './pty/PTYBridge';
 import { createLocalApprovalScreenReader } from './pty/localApprovalScreen';
 import { pruneDaemonPidMapAtConnect } from './pty/pidMap';
+import { resyncShellPromptsAtConnect } from './shellPrompt/shellPromptMirror';
 import { registerAllHandlers } from './ipc/registerHandlers';
 import { registerConnectorTerminalHandlers } from './ipc/handlers/connectorTerminal.handler';
 import { registerConnectorOAuthHandlers } from './ipc/handlers/connectorOAuth.handler';
@@ -127,6 +129,7 @@ import { focusedPrimaryWindow } from './window/auxiliaryWindows';
 import { createFanOutService } from './worktask/createFanOutService';
 import { getWorkerTempDirSweeper, liveTempDirsFromSessions } from './worktask/fanoutTempDir';
 import { registerFanOutRpc } from './pipe/handlers/fanout.rpc';
+import { registerRemoteSpawnRpc } from './pipe/handlers/remoteSpawn.rpc';
 import { registerLedgerRpc } from './pipe/handlers/ledger.rpc';
 import { registerTaskPushRpc } from './pipe/handlers/taskPush.rpc';
 import { registerVerifyRpc } from './pipe/handlers/verify.rpc';
@@ -203,6 +206,7 @@ import { resyncAfterResubscribe, serialResync, type DaemonSessionRow } from './n
 import { markRendererNotificationListenerNotReady } from './notification/rendererNotificationReadiness';
 import { RemoteInboxBridge } from './lanlink/RemoteInboxBridge';
 import { RemoteA2aBridge } from './a2a/RemoteA2aBridge';
+import { RemoteSpawnCoordinator } from './a2aRemote/remoteSpawnCoordinator';
 import { daemonRemoteA2aRpcDeps } from './a2a/remoteA2aRpcDeps';
 import { setA2aRemoteBridge } from './ipc/handlers/a2aRemote.handler';
 import { sendToRenderer } from './pipe/handlers/_bridge';
@@ -601,6 +605,7 @@ terminalCoreSelection();
 markBoot('construction-start');
 const ptyManager = new PTYManager();
 let mainWindow: BrowserWindow | null = null;
+let sleepPrevention: ReturnType<typeof installSleepPrevention> | null = null;
 // Forward-declared: PTYBridge captures this binding by reference and reads it
 // at runtime (after the actual HookSignalRouter is constructed further down
 // in this file). Lets the detector tee call `recordDetector` on emit without
@@ -804,6 +809,7 @@ let daemonNotificationRouter: DaemonNotificationRouter | null = null;
 let remoteInboxBridge: RemoteInboxBridge | null = null;
 // Cross-host A2A: hands remote tasks/replies the daemon holds to the renderer.
 let remoteA2aBridge: RemoteA2aBridge | null = null;
+let remoteSpawnCoordinator: RemoteSpawnCoordinator | null = null;
 // Scheduled runs: daemon automation events → renderer + OS toasts.
 const automationBridge = new AutomationBridge(
   () => mainWindow,
@@ -974,6 +980,8 @@ let crashCount = 0;
 function attachWindowRecovery(win: BrowserWindow): void {
   win.webContents.on('render-process-gone', (_event, details) => {
     console.error('[Main] Renderer crashed:', details.reason, details.exitCode);
+    // Its last "agents working" verdict has nobody left to withdraw it.
+    sleepPrevention?.controller.rendererGone();
     if (details.reason === 'clean-exit') return;
     const now = Date.now();
     if (now - lastCrashTime < 5000) {
@@ -1052,9 +1060,9 @@ localCompletionAlarm = new CompletionAlarm({
   onConfirmed: (_pane, _slug, _cls, resume) => resume(),
 });
 
-registerWorkspaceRpc(rpcRouter, () => mainWindow);
-registerSurfaceRpc(rpcRouter, () => mainWindow);
-registerPaneRpc(rpcRouter, () => mainWindow, {}, () => daemonClient);
+registerWorkspaceRpc(rpcRouter, () => mainWindow, { agentControl: browserAgentControl });
+registerSurfaceRpc(rpcRouter, () => mainWindow, browserAgentControl);
+registerPaneRpc(rpcRouter, () => mainWindow, { agentControl: browserAgentControl }, () => daemonClient);
 const inputRpc = registerInputRpc(
   rpcRouter,
   ptyManager,
@@ -1319,6 +1327,7 @@ registerGitHandoffHandlers({
   startFanOut: (req) => startGuiFanOut(fanOutService, req),
 });
 registerFanOutRpc(rpcRouter, fanOutService, () => mainWindow, { getDaemonClient: () => daemonClient });
+registerRemoteSpawnRpc(rpcRouter, () => mainWindow, { getDaemonClient: () => daemonClient });
 registerLedgerRpc(rpcRouter, () => mainWindow, {
   // A completion on a no-changes skip asks the no-changes check again.
   noChangesCheck: liveNoChangesCheck({
@@ -1929,6 +1938,10 @@ app.on('ready', async () => {
   logLine('info', 'main', 'app.on(ready) fired');
   console.log('[Main] App ready, creating window...');
 
+  // Keep the computer awake (Settings › General). Before any window exists, so
+  // the renderer's first mode and working-verdict sends have a listener.
+  sleepPrevention = installSleepPrevention(() => mainWindow);
+
   // #818: own the accelerator table before any window can exist. Skipping this
   // left Electron's default menu in charge, and on macOS its NSMenu key
   // equivalents fire before the renderer — Cmd+Shift+R force-reloaded (wiping
@@ -2411,6 +2424,12 @@ app.on('ready', async () => {
         onClaudeTurnEnd,
       );
       daemonNotificationRouter.start();
+      void resyncShellPromptsAtConnect(
+        () => client.listShellPrompts(),
+        (ptyId, shellPrompt) => broadcastMetadataUpdate(mainWindow, { ptyId, shellPrompt }),
+      ).catch((err: unknown) => {
+        logLine('warn', 'main', `shell prompt resync failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
       // LanLink PR-2 — mount the remote-inbox cursor-pull bridge. On every
       // (re)connect it pulls the daemon's durable inbox from its retained cursor
       // and materializes read-only remote items to the renderer over a dedicated
@@ -2434,6 +2453,21 @@ app.on('ready', async () => {
       });
       remoteA2aBridge.start();
       setA2aRemoteBridge(remoteA2aBridge);
+      // Remote spawn (this PC starts an agent another PC asked for): cards and starts.
+      remoteSpawnCoordinator?.stop();
+      const spawnBridge = remoteA2aBridge;
+      remoteSpawnCoordinator = new RemoteSpawnCoordinator({
+        daemonRpc: (method, params) => client.rpc(method, params),
+        sendToRenderer: (method, params, opts) => sendToRenderer(() => mainWindow, method, params, opts),
+        onDaemonEvent: (listener) => {
+          client.on('event', listener);
+          return () => { client.off('event', listener); };
+        },
+        consent: approvalQueue,
+        retryHeld: (taskId) => spawnBridge.retryHeld(taskId),
+        log: (level, msg) => logLine(level, 'a2a-remote', msg),
+      });
+      remoteSpawnCoordinator.start();
       automationBridge.start(client);
       // X1 — context fold (git branch / worktree / ports / PR badge).
       workspaceContextRouter?.stop();
@@ -2472,6 +2506,8 @@ app.on('ready', async () => {
       remoteInboxBridge = null;
       remoteA2aBridge?.stop();
       remoteA2aBridge = null;
+      remoteSpawnCoordinator?.stop();
+      remoteSpawnCoordinator = null;
       setA2aRemoteBridge(null);
       automationBridge.stop();
       workspaceContextRouter?.stop();
@@ -3145,6 +3181,9 @@ app.on('before-quit', async (e) => {
   // Broker dies with the app: shims exit and hosts mark the server down,
   // same visible behavior as the old per-agent child dying with wmux.
   mcpBrokerSupervisor.stop();
+
+  // Let the computer sleep again once wmux is gone.
+  sleepPrevention?.dispose();
 
   // Quick launch: give the global chord back and drop the composer window.
   try {

@@ -928,6 +928,20 @@ details[open] > .wmux-chatv2-tool-line .wmux-chatv2-chevron { transform: rotate(
 .wmux-remote-machine-detail { display: grid; grid-template-columns: 120px minmax(0, 1fr) auto; align-items: center; gap: 2px 12px; margin: 0; padding: 4px 12px 10px; border-top: 1px solid var(--stroke); font-size: 13px; }
 .wmux-remote-machine-detail dt { font-size: 12px; color: var(--text-muted); }
 .wmux-remote-machine-detail dd { display: flex; align-items: center; min-width: 0; min-height: 28px; margin: 0; color: var(--text-main); }
+/* Tailscale checklist inside the This computer band: one line of four ticks
+   while all pass, a row per check otherwise. Marks carry the state (green
+   done, yellow caution); rows themselves stay neutral. */
+.wmux-remote-ts { padding: 2px 6px 8px 12px; border-top: 1px solid var(--stroke); font-size: 13px; }
+.wmux-remote-ts-head { display: flex; align-items: center; gap: 8px; min-height: 32px; }
+.wmux-remote-ts-sum { min-width: 0; color: var(--text-sub); font-size: 12px; }
+.wmux-remote-ts-list { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.wmux-remote-ts[data-ok] .wmux-remote-ts-list { flex-direction: row; flex-wrap: wrap; gap: 2px 16px; }
+.wmux-remote-ts-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-height: 28px; color: var(--text-sub); }
+.wmux-remote-ts-row[data-state="fail"] { color: var(--text-main); }
+.wmux-remote-ts-row[data-state="unchecked"] { color: var(--text-muted); }
+.wmux-remote-ts-mark { display: inline-flex; justify-content: center; width: 14px; }
+.wmux-remote-ts-why { min-width: 0; color: var(--text-sub); font-size: 12px; }
+.wmux-remote-ts-help { flex-basis: 100%; margin: 0 0 4px 22px; color: var(--text-sub); font-size: 12px; }
 
 /* Needs you: one bordered block, a hairline over the subtle fill (no wash). */
 .wmux-remote-needs { display: flex; flex-direction: column; gap: 4px; padding: 8px 8px 8px 12px; border: 1px solid var(--attention-hairline); border-radius: 10px; background: var(--selection-subtle); }
@@ -1010,6 +1024,10 @@ details[open] > .wmux-chatv2-tool-line .wmux-chatv2-chevron { transform: rotate(
 .wmux-schedules-row[data-off="true"] { color: var(--text-muted); }
 .wmux-schedules-row-static:hover { background: transparent; }
 .wmux-schedules-new { flex-direction: row; align-items: center; gap: 8px; font-size: 13px; color: var(--text-sub); }
+/* Runs missed while asleep: one notice under the header on the subtle fill,
+ * its actions on their own row (the column is too narrow for a side action). */
+.wmux-schedules-missed { display: flex; flex-direction: column; gap: 2px; margin: 0 4px 6px; padding: 10px 12px; border-radius: 10px; background: var(--selection-subtle); }
+.wmux-schedules-missed-actions { display: flex; gap: 6px; margin-top: 6px; }
 .wmux-schedules-row-name { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 13px; font-weight: 500; }
 .wmux-schedules-row-meta { font-size: 11px; color: var(--text-muted); }
 .wmux-schedules-main { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; }

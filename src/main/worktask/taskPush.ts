@@ -69,6 +69,9 @@ import {
 } from '../../shared/taskGitRelay';
 import { readWorkerFile } from '../../shared/readWorkerFile';
 import { originUrlRepoKey, urlNamedRemoteRefusal, workerGitEnv, workerGitPreflight, workerGitSafeArgs, workerOriginRefusal, type GitConfigEntry } from './workerGit';
+import { scanCommits, secretRefusal, spawnLines, type GitLines } from '../git/secretScan';
+import { secretGuardEnabled } from '../git/secretGuardSetting';
+import type { SecretFinding } from '../../shared/secretGuard';
 
 const execFileP = promisify(execFile);
 
@@ -144,10 +147,17 @@ export interface TaskPushInput extends TaskGitRepoInput, TaskOriginPinInput {
 
 export type TaskPushResult =
   | { ok: true; branch: string; remote: 'origin'; head: string; output: string }
-  | { ok: false; reason: 'branch-refused' | 'no-origin' | 'remote-refused' | 'config-refused' | 'rejected' | 'git-failed'; error: string };
+  | { ok: false; reason: 'branch-refused' | 'no-origin' | 'remote-refused' | 'config-refused' | 'rejected' | 'git-failed'; error: string }
+  /** The same check, and the same words, as the Git page's push (`secretRefusal`). */
+  | { ok: false; reason: 'secrets'; error: string; secrets?: SecretFinding[]; secretScanFailed?: true };
+
+/** The env of main's own git on a task: `extra` over the worker git env. */
+function hostGitEnv(extra?: Record<string, string>): NodeJS.ProcessEnv {
+  return { ...workerGitEnv(getExecEnv()), GIT_TERMINAL_PROMPT: '0', ...extra };
+}
 
 export async function defaultGit(args: string[], cwd: string, extra?: Record<string, string>, opts?: { timeoutMs?: number }): Promise<GitOut> {
-  const env = { ...workerGitEnv(getExecEnv()), GIT_TERMINAL_PROMPT: '0', ...extra };
+  const env = hostGitEnv(extra);
   try {
     const timeout = Math.max(1, Math.min(opts?.timeoutMs ?? TASK_PUSH_TIMEOUT_MS, TASK_PUSH_TIMEOUT_MS));
     const { stdout, stderr } = await execFileP('git', args, { cwd, env, timeout, windowsHide: true, maxBuffer: 1024 * 1024 });
@@ -269,6 +279,11 @@ export interface TaskPushDeps {
   /** A Windows path as the task's WSL distro sees it (default: ask the distro
    *  with `wslpath`). */
   toWslPath?: (windowsPath: string) => string | Promise<string | null> | null;
+  /** Settings › General's password and key check (default: its live value). */
+  secretGuard?: () => boolean;
+  /** Runs git (or wsl.exe) for the secret check, its stdout streamed line
+   *  by line; default: spawnLines. */
+  lines?: typeof spawnLines;
 }
 
 /** `ls-remote --symref` output → the remote HEAD's branch, or null. Pure. */
@@ -283,6 +298,9 @@ export interface TaskGitRepo {
   entries: GitConfigEntry[];
   /** A read on the recorded repository (`--git-dir`, no object or ref write). */
   local: (args: string[]) => Promise<GitOut>;
+  /** `local` for the secret scan, its output streamed: a patch of any size is
+   *  read whole, within the Git page's time limit. */
+  scanLines: GitLines;
   /** The commit the worktree's HEAD names: its HEAD file in the recorded
    *  worktree git dir, read strictly (parseTaskHead), a branch resolved in
    *  the recorded repository's refs. No object is read. Fails when main
@@ -502,6 +520,7 @@ export async function openTaskGitRepo(input: TaskGitRepoInput, git: TaskPushGit 
   const target = taskGitDirTarget(input.gitCommonDir, platform);
   if (target.kind === 'refused') return fail(target.error);
   const wslExec = deps.wslExec ?? defaultWslExec;
+  const lines = deps.lines ?? spawnLines;
   const safe = workerGitSafeArgs(target.kind === 'wsl' ? '/dev/null' : path.resolve(input.noHooksDir));
   // The stable cwd for host git: never discovered from, always overridden by
   // --git-dir or GIT_DIR.
@@ -510,12 +529,15 @@ export async function openTaskGitRepo(input: TaskGitRepoInput, git: TaskPushGit 
   // run(args, env): git on the right target, env added. Called only through
   // exec below, so every call runs with taskGitEnv.
   let run: (args: string[], env: Record<string, string>) => Promise<GitOut>;
+  // The same git and env as `run`, its stdout streamed (the secret scan).
+  let stream: (args: string[], env: Record<string, string>, onLine: (line: string) => void) => Promise<boolean>;
   let common: string; // the recorded common git dir, in the serving git's spelling
   let toLinux: ((winPath: string) => Promise<string | null>) | null = null;
   if (target.kind === 'wsl') {
     common = target.gitDir;
     const wslExe = wslExePath(process.env.SystemRoot);
     run = (args, env) => wslExec(wslExe, ['-d', target.distro, '--cd', '/', '--exec', 'git', ...args], wslEnv(env));
+    stream = (args, env, onLine) => lines(wslExe, ['-d', target.distro, '--cd', '/', '--exec', 'git', ...args], { cwd: os.homedir(), env: wslEnv(env) }, onLine);
     toLinux = deps.toWslPath
       ? async (p) => deps.toWslPath!(p)
       : async (p) => {
@@ -530,6 +552,7 @@ export async function openTaskGitRepo(input: TaskGitRepoInput, git: TaskPushGit 
     if (!same) return fail(`the task's repository ${input.gitCommonDir} no longer resolves to itself`);
     common = input.gitCommonDir;
     run = (args, env) => git(args, hostCwd, env);
+    stream = (args, env, onLine) => lines('git', args, { cwd: hostCwd, env: hostGitEnv(env) }, onLine);
   }
   const exec = (args: string[], env: Record<string, string>) => run(args, taskGitEnv(env));
 
@@ -591,6 +614,7 @@ export async function openTaskGitRepo(input: TaskGitRepoInput, git: TaskPushGit 
   }
 
   const local = (args: string[]) => exec([`--git-dir=${common}`, ...safe, ...args], { GIT_COMMON_DIR: common });
+  const scanLines: GitLines = (args, onLine) => stream([`--git-dir=${common}`, ...safe, ...args], taskGitEnv({ GIT_COMMON_DIR: common }), onLine);
   const pre = await workerGitPreflight(local);
   if (!pre.ok) return { ok: false, reason: 'config-refused', error: pre.error };
   const own = (key: string) => pre.entries.find((e) => (e.scope === 'local' || e.scope === 'worktree') && e.key === key)?.value;
@@ -702,7 +726,7 @@ export async function openTaskGitRepo(input: TaskGitRepoInput, git: TaskPushGit 
   });
 
   const workerShellPlatform: NodeJS.Platform = target.kind === 'wsl' ? 'linux' : platform;
-  return { ok: true, repo: { entries: pre.entries, local, headOid, inRelay, relayShellPath, workerShellPlatform, inWslDistro: target.kind === 'wsl' } };
+  return { ok: true, repo: { entries: pre.entries, local, scanLines, headOid, inRelay, relayShellPath, workerShellPlatform, inWslDistro: target.kind === 'wsl' } };
 }
 
 /** Removes the relay of a task that has closed, after any call on it ends. */
@@ -786,6 +810,12 @@ export async function pushTaskBranch(input: TaskPushInput, git: TaskPushGit = de
   const sha = commit.stdout.trim();
   if (commit.code !== 0 || sha !== head.oid) {
     return { ok: false, reason: 'git-failed', error: `the worktree's HEAD ${head.oid} is not a commit in the task's repository` };
+  }
+  if ((deps.secretGuard ?? secretGuardEnabled)()) {
+    // Every commit origin's tracking refs lack, each commit's own change: the
+    // Git page's push check.
+    const refused = secretRefusal(await scanCommits(repo.scanLines, [sha, '--not', '--remotes=origin']), 'pushed');
+    if (refused) return { ok: false, reason: 'secrets', ...refused };
   }
   const pushed = await repo.inRelay(url, (run) => run(taskPushArgs(input.branch, url, sha)));
   if (!pushed.ok) return { ok: false, reason: 'git-failed', error: pushed.error };

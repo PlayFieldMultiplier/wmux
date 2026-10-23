@@ -34,6 +34,7 @@ import { atomicWriteJSONSync } from '../../daemon/util/atomicWrite';
 import { getTaskLedger } from '../deck/taskLedgerHost';
 import { getWorkspaceMirror } from '../workspace/WorkspaceMirror';
 import { sanitizeFanoutOrigin, type FanoutLineageEntry, type FanoutOrigin } from '../../shared/fanoutOrigin';
+import { REMOTE_SPAWN_LINEAGE_PREFIX } from '../../shared/a2aSpawn';
 import { BOT_ID_RE } from '../../shared/bot';
 import { getWorkerSlots, parseLaunchToken, type WorkerSlots } from '../factory/workerSlots';
 import { holderCounts, liveHolders, type LiveHolders, type ReservedTask } from '../factory/workerHolders';
@@ -861,6 +862,24 @@ export function stampFanoutTaskPane(
   if (task) guards.markTask(ws, owner, origin ?? undefined, task);
   else if (origin) guards.markTask(ws, owner, origin);
   else guards.markTask(ws, owner);
+}
+
+/**
+ * A pane another PC started here (remote spawn): its workspace is stamped as
+ * a task of `remote-spawn:<hostId>` inside pty.create, before the PTY (and
+ * the agent) exists, so the agent cannot fan out again (depth 1). Throws
+ * (failing the create) when the stamp cannot be written.
+ */
+export function stampRemoteSpawnPane(
+  options: { remoteSpawnOf?: unknown; workspaceId?: unknown } | undefined,
+  guards: Pick<FanOutGuards, 'markTask'> = getFanOutGuards(),
+): void {
+  const hostId = typeof options?.remoteSpawnOf === 'string' ? options.remoteSpawnOf : '';
+  if (!hostId) return;
+  if (!/^[0-9a-f-]{36}$/.test(hostId)) throw new Error('PTY_CREATE: a remote-started pane names its PC by id');
+  const ws = typeof options?.workspaceId === 'string' ? options.workspaceId : '';
+  if (!ws) throw new Error('PTY_CREATE: a remote-started pane needs its workspaceId for the lineage stamp');
+  guards.markTask(ws, `${REMOTE_SPAWN_LINEAGE_PREFIX}${hostId}`);
 }
 
 /** A task pane's create, once its session id is known and before the

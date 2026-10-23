@@ -17,6 +17,8 @@ import { CHATV2_IPC, type ChatV2BridgeApi, type ChatV2EventsPush, type ChatV2Res
 import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron';
 import { START_POLARITY_STORAGE_KEY, resolveStartPolarity, startPaintCss } from '../shared/windowStartPaint';
 import { IPC } from '../shared/constants';
+import type { A2aSpawnAskResult, A2aSpawnOutgoingList, A2aSpawnPolicySetResult, A2aSpawnPolicyV1, A2aSpawnRequestSummary, A2aSpawnUiAsk } from '../shared/a2aSpawn';
+import type { SleepPreventionMode, SleepWindow } from '../shared/sleepPrevention';
 import { ROOM_EVENT } from '../shared/room';
 import { BOT_EVENT } from '../shared/bot';
 import { BOT_APPROVAL_IPC } from '../shared/botApproval';
@@ -140,6 +142,9 @@ import type {
   WebGrantArgs,
   WebTerminalInfo,
   WebDiagnosis,
+  WebTailscaleChecklist,
+  WebTailscaleOpenResult,
+  WebTailscaleOpenTarget,
 } from '../shared/web';
 import { PC_RAIL_IPC } from '../shared/pcRail';
 import type {
@@ -308,7 +313,7 @@ const electronAPI = {
     // wmux.json leaf — `exec` runs the command as the pane's ROOT process and
     // `supervision` arms the daemon's PaneSupervisor (daemon mode only; the
     // local branch ignores them with a one-time warning toast).
-    create: (options?: { shell?: string; cwd?: string; recoveryCwds?: Pick<DeadPaneRecovery, 'spawnCwd' | 'cwd' | 'sourceSessionId'>; cols?: number; rows?: number; workspaceId?: string; surfaceId?: string; env?: Record<string, string>; wslAccountLoginEnvKey?: 'CLAUDE_CONFIG_DIR' | 'CODEX_HOME'; ignoreAccountBinding?: boolean; initialCommand?: string; exec?: string; supervision?: { restart: 'on-failure' | 'always'; limit?: { burst?: number; healthyUptimeSec?: number }; restorePermissionMode?: boolean }; fanoutTaskOf?: string; fanoutOrigin?: import('../shared/fanoutOrigin').FanoutOrigin; secretGrant?: string; fanoutLaunch?: { taskId: string; gen: number } }) =>
+    create: (options?: { shell?: string; cwd?: string; recoveryCwds?: Pick<DeadPaneRecovery, 'spawnCwd' | 'cwd' | 'sourceSessionId'>; cols?: number; rows?: number; workspaceId?: string; surfaceId?: string; env?: Record<string, string>; wslAccountLoginEnvKey?: 'CLAUDE_CONFIG_DIR' | 'CODEX_HOME'; ignoreAccountBinding?: boolean; initialCommand?: string; exec?: string; supervision?: { restart: 'on-failure' | 'always'; limit?: { burst?: number; healthyUptimeSec?: number }; restorePermissionMode?: boolean }; fanoutTaskOf?: string; fanoutOrigin?: import('../shared/fanoutOrigin').FanoutOrigin; secretGrant?: string; fanoutLaunch?: { taskId: string; gen: number }; remoteSpawnOf?: string }) =>
       ipcRenderer.invoke(IPC.PTY_CREATE, options),
     write: (id: string, data: string) => {
       ipcRenderer.send(IPC.PTY_WRITE, id, data);
@@ -555,6 +560,17 @@ const electronAPI = {
      *  False elsewhere, where the media query already says it. */
     getReducedMotion: () => ipcRenderer.invoke(IPC.SYSTEM_REDUCED_MOTION) as Promise<boolean>,
   },
+  // Keep the computer awake (main/power/sleepPrevention.ts).
+  power: {
+    setSleepMode: (mode: SleepPreventionMode) => ipcRenderer.send(IPC.POWER_SLEEP_MODE, mode),
+    setAgentsWorking: (working: boolean) => ipcRenderer.send(IPC.POWER_AGENTS_WORKING, working),
+    /** The system slept and woke: the stretch it slept through. Returns the unsubscribe. */
+    onSlept: (callback: (window: SleepWindow) => void) => {
+      const listener = (_event: unknown, window: SleepWindow) => callback(window);
+      ipcRenderer.on(IPC.POWER_SLEPT, listener);
+      return () => { ipcRenderer.removeListener(IPC.POWER_SLEPT, listener); };
+    },
+  },
   settings: {
     getTerminalCore: () => ipcRenderer.invoke(IPC.TERMINAL_CORE_SETTINGS_GET) as Promise<TerminalCoreSettings>,
     setTerminalCore: (engine: TerminalEngine) => ipcRenderer.invoke(IPC.TERMINAL_CORE_SETTINGS_SET, engine) as Promise<TerminalCoreSettings>,
@@ -655,8 +671,8 @@ const electronAPI = {
     // progress) flow through this one shape. Renderer routes by ptyId
     // (preferred) or workspaceId (for surface-less updates like
     // meta.setStatus on the active workspace).
-    onUpdate: (callback: (payload: { ptyId?: string; workspaceId?: string; gitBranch?: string; cwd?: string; listeningPorts?: number[]; agentStatus?: string; agentName?: string; status?: string; progress?: number; gitIsWorktree?: boolean; pr?: { number: number; state: 'open' | 'draft' | 'merged' | 'closed'; checks: 'pending' | 'passing' | 'failing' | null; url: string } | null; gitSync?: { dirty: number; ahead: number; behind: number; hasUpstream: boolean } | null; lastNotificationText?: { ts: number; title: string | null; body: string; source: 'osc9' | 'osc777' | 'osc99' }; activity?: string; teammatesWorking?: true; subagents?: number; pendingQuestion?: string; lastMessage?: string; lastActivity?: ''; paneId?: string; paneLabel?: string; paneRole?: string; agentSlug?: string | null; hookKind?: string; settled?: boolean }) => void) => {
-      const listener = (_event: Electron.IpcRendererEvent, payload: { ptyId?: string; workspaceId?: string; gitBranch?: string; cwd?: string; listeningPorts?: number[]; agentStatus?: string; agentName?: string; status?: string; progress?: number; gitIsWorktree?: boolean; pr?: { number: number; state: 'open' | 'draft' | 'merged' | 'closed'; checks: 'pending' | 'passing' | 'failing' | null; url: string } | null; gitSync?: { dirty: number; ahead: number; behind: number; hasUpstream: boolean } | null; lastNotificationText?: { ts: number; title: string | null; body: string; source: 'osc9' | 'osc777' | 'osc99' }; activity?: string; teammatesWorking?: true; subagents?: number; pendingQuestion?: string; lastMessage?: string; lastActivity?: ''; paneId?: string; paneLabel?: string; paneRole?: string; agentSlug?: string | null; hookKind?: string; settled?: boolean }) =>
+    onUpdate: (callback: (payload: { ptyId?: string; workspaceId?: string; gitBranch?: string; cwd?: string; listeningPorts?: number[]; agentStatus?: string; agentName?: string; status?: string; progress?: number; gitIsWorktree?: boolean; pr?: { number: number; state: 'open' | 'draft' | 'merged' | 'closed'; checks: 'pending' | 'passing' | 'failing' | null; url: string } | null; gitSync?: { dirty: number; ahead: number; behind: number; hasUpstream: boolean } | null; lastNotificationText?: { ts: number; title: string | null; body: string; source: 'osc9' | 'osc777' | 'osc99' }; activity?: string; teammatesWorking?: true; subagents?: number; shellPrompt?: { shape: 'yes-no' | 'enter' | 'secret'; question?: string } | null; pendingQuestion?: string; lastMessage?: string; lastActivity?: ''; paneId?: string; paneLabel?: string; paneRole?: string; agentSlug?: string | null; hookKind?: string; settled?: boolean }) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: { ptyId?: string; workspaceId?: string; gitBranch?: string; cwd?: string; listeningPorts?: number[]; agentStatus?: string; agentName?: string; status?: string; progress?: number; gitIsWorktree?: boolean; pr?: { number: number; state: 'open' | 'draft' | 'merged' | 'closed'; checks: 'pending' | 'passing' | 'failing' | null; url: string } | null; gitSync?: { dirty: number; ahead: number; behind: number; hasUpstream: boolean } | null; lastNotificationText?: { ts: number; title: string | null; body: string; source: 'osc9' | 'osc777' | 'osc99' }; activity?: string; teammatesWorking?: true; subagents?: number; shellPrompt?: { shape: 'yes-no' | 'enter' | 'secret'; question?: string } | null; pendingQuestion?: string; lastMessage?: string; lastActivity?: ''; paneId?: string; paneLabel?: string; paneRole?: string; agentSlug?: string | null; hookKind?: string; settled?: boolean }) =>
         callback(payload);
       ipcRenderer.on(IPC.METADATA_UPDATE, listener);
       return () => { ipcRenderer.removeListener(IPC.METADATA_UPDATE, listener); };
@@ -920,8 +936,8 @@ const electronAPI = {
       ipcRenderer.invoke(IPC.AUTOMATION_GRANT, id, mode, allowedTools, ...(browserIdentity === undefined ? [] : [browserIdentity])) as Promise<
         import('../shared/automation').AutomationMutationResult
       >,
-    runNow: (id: string, kind: 'manual' | 'test') =>
-      ipcRenderer.invoke(IPC.AUTOMATION_RUN_NOW, id, kind) as Promise<import('../shared/automation').AutomationRunNowResult>,
+    runNow: (id: string, kind: 'manual' | 'test', endSessionOf?: string) =>
+      ipcRenderer.invoke(IPC.AUTOMATION_RUN_NOW, id, kind, ...(endSessionOf === undefined ? [] : [endSessionOf])) as Promise<import('../shared/automation').AutomationRunNowResult>,
     cancelRun: (runId: string) =>
       ipcRenderer.invoke(IPC.AUTOMATION_CANCEL_RUN, runId) as Promise<import('../shared/automation').AutomationOkResult>,
     // The UI locale id only; main owns the toast words.
@@ -1265,8 +1281,8 @@ const electronAPI = {
     secretHookSet: (on: boolean) =>
       ipcRenderer.invoke(IPC.GIT_SECRET_HOOK_SET, on) as Promise<{ autoInstall: boolean; failed: string[] }>,
     // Each write names the branch + HEAD it was asked for; main refuses if either moved.
-    shipCommit: (repoPath: string, message: string, expect: import('../main/git/shipActions').ShipExpect) =>
-      ipcRenderer.invoke(IPC.GIT_SHIP_COMMIT, repoPath, message, expect) as Promise<import('../main/git/shipActions').ShipActionResult>,
+    shipCommit: (repoPath: string, message: string, expect: import('../main/git/shipActions').ShipExpect, opts?: import('../main/git/shipActions').ShipCommitOptions) =>
+      ipcRenderer.invoke(IPC.GIT_SHIP_COMMIT, repoPath, message, expect, opts) as Promise<import('../main/git/shipActions').ShipActionResult>,
     shipPush: (repoPath: string, expect: import('../main/git/shipActions').ShipExpect) =>
       ipcRenderer.invoke(IPC.GIT_SHIP_PUSH, repoPath, expect) as Promise<import('../main/git/shipActions').ShipActionResult>,
     shipCreatePr: (repoPath: string, title: string, expect: import('../main/git/shipActions').ShipExpect) =>
@@ -2324,6 +2340,13 @@ document.addEventListener('DOMContentLoaded', () => {
     ipcRenderer.invoke(IPC.A2A_REMOTE_EXPOSURE_GET, hostId) as Promise<A2aRemoteExposureGetResult>,
   exposureSet: (hostId: string, workspaceIds: string[], paneIds: Record<string, string[]>, brain: boolean, expected?: A2aRemoteExposureGetResult['exposure']) =>
     ipcRenderer.invoke(IPC.A2A_REMOTE_EXPOSURE_SET, hostId, workspaceIds, paneIds, brain, expected) as Promise<A2aRemoteExposureSetResult>,
+  spawnPolicyGet: () => ipcRenderer.invoke(IPC.A2A_REMOTE_SPAWN_POLICY_GET) as Promise<{ policy: A2aSpawnPolicyV1 }>,
+  spawnPolicySet: (policy: A2aSpawnPolicyV1) =>
+    ipcRenderer.invoke(IPC.A2A_REMOTE_SPAWN_POLICY_SET, policy) as Promise<A2aSpawnPolicySetResult>,
+  spawnRequestsList: () =>
+    ipcRenderer.invoke(IPC.A2A_REMOTE_SPAWN_REQUESTS_LIST) as Promise<{ requests: A2aSpawnRequestSummary[] }>,
+  spawnAsk: (ask: A2aSpawnUiAsk) => ipcRenderer.invoke(IPC.A2A_REMOTE_SPAWN_ASK, ask) as Promise<A2aSpawnAskResult>,
+  spawnOutgoing: () => ipcRenderer.invoke(IPC.A2A_REMOTE_SPAWN_OUTGOING) as Promise<A2aSpawnOutgoingList>,
   hostsExposed: (hostId: string) =>
     ipcRenderer.invoke(IPC.A2A_REMOTE_HOSTS_EXPOSED, hostId) as Promise<A2aRemoteHostsExposedResult>,
   linksList: () => ipcRenderer.invoke(IPC.A2A_REMOTE_LINKS_LIST) as Promise<A2aRemoteLinksListResult>,
@@ -2375,6 +2398,10 @@ document.addEventListener('DOMContentLoaded', () => {
     ipcRenderer.invoke(IPC.WEB_SET_GRANTS, args) as Promise<WebTerminalInfo>,
   stop: () => ipcRenderer.invoke(IPC.WEB_STOP) as Promise<WebTerminalInfo>,
   diagnose: () => ipcRenderer.invoke(IPC.WEB_DIAGNOSE) as Promise<WebDiagnosis>,
+  tailscaleCheck: (peer?: string) =>
+    ipcRenderer.invoke(IPC.WEB_TAILSCALE_CHECK, peer ? { peer } : {}) as Promise<WebTailscaleChecklist>,
+  tailscaleOpen: (target: WebTailscaleOpenTarget) =>
+    ipcRenderer.invoke(IPC.WEB_TAILSCALE_OPEN, target) as Promise<WebTailscaleOpenResult>,
   // Roster surface. Unlike the calls above these do NOT resolve a
   // WebTerminalInfo: the device roster is owned by the store, not by a running
   // server, so it answers even while the server is stopped.

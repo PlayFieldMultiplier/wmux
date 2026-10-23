@@ -43,7 +43,7 @@ import {
   type AutomationRunReason,
   type AutomationRunState,
 } from '../../shared/automation';
-import { nextOccurrenceAfter, planDue } from '../../shared/automationSchedule';
+import { AUTOMATION_TICK_MS, nextOccurrenceAfter, planDue } from '../../shared/automationSchedule';
 import { classifyLaunchScreen, FIRST_RUN_DISMISS_KEY, FIRST_RUN_MAX_ANSWERS } from '../../shared/agentFirstRun';
 import type { SessionPromptScheduleResult } from '../../shared/sessionPromptSchedule';
 import type { AgentStatus } from '../../shared/types';
@@ -71,7 +71,7 @@ import {
   writeSnapshot,
 } from './store';
 
-export const AUTOMATION_TICK_MS = 30_000;
+export { AUTOMATION_TICK_MS };
 export const AUTOMATION_MONITOR_MS = 5_000;
 /** A tick later than this after the previous one means sleep or a clock jump. */
 export const AUTOMATION_TICK_GAP_MS = 2 * 60_000;
@@ -603,14 +603,34 @@ export class AutomationEngine {
     return { ok: true };
   }
 
-  async runNow(id: unknown, kind: unknown): Promise<AutomationRunNowResult> {
+  async runNow(id: unknown, kind: unknown, endSessionOf?: unknown): Promise<AutomationRunNowResult> {
     const automation = this.find(id);
     if (!automation) return { ok: false, error: 'Not found' };
     if (kind !== 'manual' && kind !== 'test') return { ok: false, error: 'Invalid run kind' };
+    if (endSessionOf !== undefined && typeof endSessionOf !== 'string') return { ok: false, error: 'Invalid run id' };
     // The same rule as the schedule: a stale grant never runs, not even by hand.
     if (needsRegrant(automation)) return { ok: false, error: 'Grant the permission again before running' };
+    // #2065: the person confirmed ending a finished run's lingering session.
+    // Only that session, and only while it is still the one thing in the way;
+    // anything else is left to the overlap rule below.
+    if (endSessionOf !== undefined) {
+      const blocker = this.soleLingeringBlocker(automation.id);
+      const finished = blocker?.runId === endSessionOf ? this.runs.find((r) => r.id === endSessionOf) : undefined;
+      if (finished) await this.terminate(finished);
+    }
     const run = await this.startRun(automation, this.now(), kind);
-    return { ok: true, run: clone(run) };
+    // Skipped only for a finished run's lingering session: name it, so the
+    // person can end it and start.
+    const blocker = run.state === 'skipped' && run.detail === 'previous_session_open'
+      ? this.soleLingeringBlocker(automation.id) : undefined;
+    const finished = blocker && this.runs.find((r) => r.id === blocker.runId);
+    return {
+      ok: true,
+      run: clone(run),
+      ...(blocker && finished && {
+        lingeringSession: { runId: finished.id, ptyId: blocker.ptyId, endedAt: finished.endedAt ?? finished.startedAt ?? finished.scheduledFor },
+      }),
+    };
   }
 
   async cancelRun(runId: unknown): Promise<AutomationOkResult> {
@@ -716,6 +736,30 @@ export class AutomationEngine {
     return run;
   }
 
+  /**
+   * Overlap: an open run, or any run of this schedule whose session is still
+   * live (lingering after completion, or ambiguous). A completed/failed run
+   * whose session a human has opened does not count: that session is theirs
+   * now, and the next occurrence gets its own PTY.
+   */
+  private overlapBlockers(automationId: string): { running: boolean; openSessions: LiveRun[] } {
+    const running = this.runs.some((r) => r.automationId === automationId && !isFinalRunState(r.state));
+    const openSessions = running ? [] : [...this.live.values()].filter((l) => {
+      const r = this.runs.find((x) => x.id === l.runId);
+      if (r?.automationId !== automationId) return false;
+      const handedOver = (r.state === 'completed' || r.state === 'failed') && this.ports.isAttached(l.ptyId);
+      return !handedOver;
+    });
+    return { running, openSessions };
+  }
+
+  /** The one finished run's lingering session that alone blocks a new run (#2065). */
+  private soleLingeringBlocker(automationId: string): LiveRun | undefined {
+    const { running, openSessions } = this.overlapBlockers(automationId);
+    if (running || openSessions.length !== 1 || openSessions[0].phase !== 'lingering') return undefined;
+    return openSessions[0];
+  }
+
   // ── Launch ────────────────────────────────────────────────────────────────
 
   /** Claim and launch one run. Returns the run record (possibly skipped/failed). */
@@ -737,17 +781,7 @@ export class AutomationEngine {
       return skipped;
     }
     const mode = effectiveMode(snapshot);
-    // Overlap: an open run, or any run of this schedule whose session is still
-    // live (lingering after completion, or ambiguous). A completed/failed run
-    // whose session a human has opened does not count: that session is theirs
-    // now, and the next occurrence gets its own PTY.
-    const running = this.runs.some((r) => r.automationId === automation.id && !isFinalRunState(r.state));
-    const openSessions = running ? [] : [...this.live.values()].filter((l) => {
-      const r = this.runs.find((x) => x.id === l.runId);
-      if (r?.automationId !== automation.id) return false;
-      const handedOver = (r.state === 'completed' || r.state === 'failed') && this.ports.isAttached(l.ptyId);
-      return !handedOver;
-    });
+    const { running, openSessions } = this.overlapBlockers(automation.id);
     if (running || openSessions.length > 0) {
       // #2065: a run that only waits on a finished run's lingering session
       // says so, rather than reading as "previous run still going". An

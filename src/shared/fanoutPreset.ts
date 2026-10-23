@@ -120,6 +120,24 @@ export const FANOUT_AGENTS: readonly FanoutAgentSpec[] = [
     modelFlag: true,
     unattendedFlags: '--dangerously-skip-permissions',
   },
+  {
+    stem: 'qwen',
+    label: 'Qwen Code',
+    selectable: false,
+    disabledReason: 'not verified end to end yet (first prompt, unattended flag, trust screen)',
+    disabledCode: 'unverified',
+    modelFlag: false,
+    unattendedFlags: '',
+  },
+  {
+    stem: 'kimi',
+    label: 'Kimi Code CLI',
+    selectable: false,
+    disabledReason: 'not verified end to end yet (first prompt, unattended flag, trust screen)',
+    disabledCode: 'unverified',
+    modelFlag: false,
+    unattendedFlags: '',
+  },
 ] satisfies readonly (FanoutAgentSpec & { stem: AgentSlug })[];
 
 /** Stems fan-out may launch that the generic role-binding rewrite does not know

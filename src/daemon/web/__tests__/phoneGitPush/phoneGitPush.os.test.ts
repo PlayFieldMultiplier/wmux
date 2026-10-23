@@ -131,6 +131,22 @@ describe('phone git push', { timeout: 60_000 }, () => {
     try { return git(bare, 'rev-parse', '--verify', '-q', ref); } catch { return null; }
   };
 
+  it('runs the Git page\'s push check: a commit carrying a key is refused at preview with the first finding, and nothing is pushed', async () => {
+    git(work, 'checkout', '-q', '-b', 'feat');
+    git(work, ...toBare(['push', '-q', '-u', 'origin', 'feat']));
+    fs.writeFileSync(path.join(work, 'deploy.pem'), '-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA\n-----END RSA PRIVATE KEY-----\n');
+    git(work, 'add', 'deploy.pem');
+    git(work, 'commit', '-q', '-m', 'key');
+    const r = await preview();
+    expect(r).toMatchObject({ ok: false, body: { error: 'secrets-found', secretPath: 'deploy.pem', secretWhat: 'value', secretCount: 1 } });
+    expect(JSON.stringify(r)).not.toContain('MIIEpAIBAAKCAQEA');
+    expect(calls.push).toHaveLength(0);
+    // A clean commit on top of origin's tip goes through the same check.
+    git(work, 'reset', '-q', '--hard', 'HEAD~1');
+    commit(work, 'clean');
+    expect((await preview()).ok).toBe(true);
+  });
+
   it('pushes to the upstream ref when its name differs from the local branch, and pushes exactly expectedHead', async () => {
     const base = git(work, 'rev-parse', 'HEAD');
     git(work, ...toBare(['push', '-q', 'origin', 'main:refs/heads/remote-y']));

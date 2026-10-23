@@ -83,11 +83,11 @@ import { scheduleTokenFileReHarden } from '../shared/security';
 import { applyTaskQueryView } from '../shared/a2aTaskQueryView';
 import { normalizeLivePaneIds } from '../shared/a2aOrphanedTask';
 import type { WebTlsConfig } from '../shared/web';
-import { generateSnapshotUnqueued, enqueueSnapshotJob, generateTextSnapshot, capTextRowsToFrameBudget, MAX_SCROLLBACK } from './HeadlessSnapshot';
+import { generateSnapshotUnqueued, enqueueSnapshotJob, generateTextSnapshot, generateTextSnapshotUnqueued, runSmallSnapshotJob, capTextRowsToFrameBudget, MAX_SCROLLBACK } from './HeadlessSnapshot';
 import { queuedScreenText, queuedTextSnapshot } from './queuedSessionText';
 import type { TerminalPty } from '../shared/terminalPty';
 import { serializeSession } from './sessionSerialize';
-import { AwaitingScreenVerifier, AWAITING_NARROW_DIALOG_COLS, questionInFlight, renderPaneScreen } from './AwaitingScreenVerifier';
+import { AwaitingScreenVerifier, AWAITING_NARROW_DIALOG_COLS, questionInFlight, renderPaneScreen, renderPaneTail } from './AwaitingScreenVerifier';
 import { screenShowsAgentDialog, screenShowsActiveDialog, screenShowsPermissionDialog } from './transcript/chatScreenGate';
 import { ApprovalPushRouter } from './push/approvalPushRouter';
 import { readPendingToolUse } from './transcript/pendingToolUse';
@@ -112,7 +112,16 @@ import { registerA2aLinkRpc } from './a2aRemote/linkRpc';
 import { A2aOffers } from './a2aRemote/offers';
 import { OfferStore } from './a2aRemote/offerStore';
 import { A2aRemoteDelivery, shareOfferFeatures } from './a2aRemote/delivery';
-import { A2A_FEATURE_IMAGES, A2A_FEATURE_LINK_OFFER, isRemoteTaskId } from '../shared/a2aRemote';
+import { A2aSpawnReceiver, registerSpawnRpc } from './a2aRemote/spawnReceiver';
+import { SpawnPolicyStore } from './a2aRemote/spawnPolicyStore';
+import { SpawnRequestStore } from './a2aRemote/spawnRequestStore';
+import { SpawnLinkStore } from './a2aRemote/spawnLinkStore';
+import { A2aSpawnStarter, registerSpawnStartRpc } from './a2aRemote/spawnStarter';
+import { A2aSpawnRequester, registerSpawnAskRpc } from './a2aRemote/spawnRequester';
+import { SpawnOutgoingStore } from './a2aRemote/spawnOutgoingStore';
+import { linkAlias } from './a2aRemote/outbound';
+import { A2A_SPAWN_EVENT, type A2aSpawnEvent } from '../shared/a2aSpawn';
+import { A2A_FEATURE_IMAGES, A2A_FEATURE_LINK_OFFER, A2A_FEATURE_SPAWN, A2A_FEATURE_STREAM_PING, isRemoteTaskId } from '../shared/a2aRemote';
 import type { A2aRemoteLinkEvent } from '../shared/rpc';
 import { ChannelService, ChannelStateWriter, ChannelWakeWorker, wakeAgentSlug, wrapChannelMessageEnvelope, wrapChannelCatalogEnvelope, stampChannelCaller, type CallerFieldSpec, type ChannelServiceEventLog } from './channels';
 import { AppendOnlyLog } from './eventlog/AppendOnlyLog';
@@ -128,6 +137,7 @@ import { A2aTaskService, statusMessageFromWire } from './a2a/A2aTaskService';
 import { parsePublicCreateTask } from './a2a/publicCreateParams';
 import { WorkTaskService } from './worktask/WorkTaskService';
 import { listMissionsBatch } from './worktask/missionListBatch';
+import { viewerVisibilityUpdates } from '../shared/viewerVisibilityBatch';
 import { isTaskState, type AgentStatus, type Message, type Task } from '../shared/types';
 import { ProcessMonitor } from './ProcessMonitor';
 import { AgentProcessTracker } from './AgentProcessTracker';
@@ -192,6 +202,9 @@ import { agentSlugToDisplay, isAgentSignal, type AgentSignal } from '../shared/h
 import { checkNativeTranscriptPath } from './transcript/providers';
 import { TranscriptProjector } from './transcript/TranscriptProjector';
 import { TranscriptActivityWatcher } from './transcript/TranscriptActivityWatcher';
+import { ShellPromptWatcher } from './shellPrompt/ShellPromptWatcher';
+import { foregroundTtyWait } from './shellPrompt/foregroundTtyWait';
+import { lastLineOfOutput } from './shellPrompt/shellPromptShape';
 import { ApiErrorTurnEnds, stopFailureSignal } from './transcript/apiErrorTurnEnd';
 import { TeammateWakes, turnEndAt } from './transcript/teammateWake';
 import { TranscriptDiscovery, DISCOVERABLE_AGENT } from './transcript/TranscriptDiscovery';
@@ -247,6 +260,7 @@ import { chatAgentStatus, confirmedStopAt, transcriptTurnEnd } from './transcrip
 import { DaemonPTYBridge } from './DaemonPTYBridge';
 import { createCodexSharedRuntime, runCodexDaemon } from './transcript/codexSharedRuntime';
 import { validChatAttachments } from '../shared/transcript/chatAttachments';
+import { agentStatesFor } from '../shared/agentStateBatch';
 import { ChatSessionService } from './chat/ChatSessionService';
 import { createChatV2Host } from './chat/v2/host';
 import { registerChatV2Rpc } from './chat/v2/rpc';
@@ -358,6 +372,7 @@ let transcriptProjector: TranscriptProjector | null = null;
 // Fleet's now-doing line for panes with no per-tool hook (setup-hooks installs,
 // Codex): tails the agent's own transcript. Guarded like the projector.
 let transcriptActivity: TranscriptActivityWatcher | null = null;
+let shellPrompts: ShellPromptWatcher | null = null;
 let apiErrorTurnEnds: ApiErrorTurnEnds | null = null;
 let teammateWakes: TeammateWakes | null = null;
 // Phone native chat bridge (contract v0.3.1). Built in registerRpcHandlers next
@@ -749,6 +764,7 @@ function createApprovalRegistry(sessionManager: DaemonSessionManager): ApprovalR
         rows: frame.rows,
         mark: { bytes: frame.mark, keyInputRevision, incarnation },
         ...(typeof cols === 'number' ? { cols } : {}),
+        ...(frame.unknown ? { unknown: frame.unknown } : {}),
       };
     },
     // The pane's own Claude transcript (the projector's containment-checked
@@ -3086,6 +3102,12 @@ function registerRpcHandlers(
   // phone resize route. Unknown ids are a no-op (the report can race a
   // dispose), matching the fire-and-forget relay in pty.handler.
   pipeServer.onRpc('daemon.setSessionViewerVisibility', async (params) => {
+    // #2372 — `updates` sets several panes in one call, in order.
+    if (params['updates'] !== undefined) {
+      const updates = viewerVisibilityUpdates(params['updates']);
+      for (const u of updates) sessionManager.setSessionViewerVisibility(u.id, u.visible);
+      return { ok: true, batched: true };
+    }
     const p = params as unknown as { id: string; visible: boolean };
     if (typeof p.id !== 'string' || typeof p.visible !== 'boolean') {
       throw new Error('setSessionViewerVisibility: id (string) and visible (boolean) are required');
@@ -5395,8 +5417,11 @@ function registerRpcHandlers(
       ? agentProcessTracker.idleShellState(original.meta.pid, original.meta.env, true, { fresh: true })
       : 'error');
   });
-  pipeServer.onRpc('daemon.getAgentState', async (params) => {
-    const id = typeof params['id'] === 'string' ? params['id'] : '';
+  // #2372 — `ids` reads several panes in one call (see agentStateBatch.ts).
+  pipeServer.onRpc('daemon.getAgentState', async (params) => (params['ids'] !== undefined
+    ? agentStatesFor(params['ids'], agentStateFor)
+    : agentStateFor(typeof params['id'] === 'string' ? params['id'] : '')));
+  function agentStateFor(id: string) {
     const state = readDaemonAgentState(id);
     const bridge = sessionManager.getSession(id)?.bridge;
     if (!bridge) return state;
@@ -5424,7 +5449,7 @@ function registerRpcHandlers(
       // since its agent started), so its idle window runs from that end.
       settledAgoMs: bridge.settledAgoMs(),
     };
-  });
+  }
   // #1594 — what main's terminal_send needs to paste into a session: the agent
   // and DECSET 2004 from the live output stream. A hidden pane's renderer xterm
   // may not have seen the bytes that set or cleared the mode; this stream has.
@@ -5622,6 +5647,56 @@ function registerRpcHandlers(
     (error)=>log('warn','[codex] pane ownership cleanup failed:',error));
   sessionManager.on('session:died', (payload: { id: string }) => usageLimits?.drop(payload.id));
   sessionManager.on('session:destroyed', (payload: { id: string }) => usageLimits?.drop(payload.id));
+
+  // A pane with no agent whose command waits on stdin (y/N, Enter, a
+  // password): reported to main as the pane's Needs you. Informational only.
+  if (!shellPrompts) {
+    shellPrompts = new ShellPromptWatcher({
+      listSessionIds: () => sessionManager.listLiveSessions().map((s) => s.id),
+      probe: (id) => {
+        const managed = sessionManager.getSession(id);
+        if (!managed) return null;
+        const commandRunning = managed.promptLog.commandRunningIfKnown() === true;
+        return {
+          // Only asked while a command runs: the canonical agent reader is not free.
+          agentPresent: commandRunning && readDaemonAgentState(id).agentName !== null,
+          commandRunning,
+          altScreen: managed.bridge.outputModes?.altScreen === true,
+          bytes: managed.ringBuffer.totalBytesWritten,
+          keyRevision: managed.bridge.getKeyInputRevision(),
+          ...(typeof managed.meta.pid === 'number' ? { pid: managed.meta.pid } : {}),
+        };
+      },
+      // The last 4 KiB of raw output: a copy, no parse.
+      tailLine: (id) => {
+        const data = sessionManager.getSession(id)?.ringBuffer.readAll();
+        return data ? lastLineOfOutput(data.subarray(Math.max(0, data.length - 4096)).toString('utf8')) : null;
+      },
+      // Only the ring's tail, and under the small-snapshot gate: never a whole
+      // replay, never queued ahead of an attach or a reveal.
+      readRows: (id) => renderPaneTail(
+        () => sessionManager.getSession(id),
+        (req) => runSmallSnapshotJob(() => generateTextSnapshotUnqueued(req)),
+      ),
+      ttyWait: (pid) => (typeof pid === 'number' ? foregroundTtyWait(pid) : 'unknown'),
+      emit: (sessionId, change) => {
+        const event: DaemonEvent = { type: 'shell.prompt', sessionId, data: change };
+        pipeServer.broadcast(event);
+      },
+      log: (level, message) => log(level, message),
+    });
+    shellPrompts.start();
+  }
+  const watchedPrompts = shellPrompts;
+  // Main asks on every (re)connect: events are sent on change only, so a GUI
+  // that connects while a prompt waits, or missed a clear, starts from this.
+  pipeServer.onRpc('daemon.shellPrompt.list', async () => watchedPrompts.list());
+  sessionManager.on('session:prompt', (payload: { sessionId: string; event?: { type?: string } }) => {
+    if (payload.event?.type === 'command_end') watchedPrompts.noteCommandEnd(payload.sessionId);
+  });
+  sessionManager.on('session:fenceInput', (payload: { sessionId: string }) => watchedPrompts.noteKey(payload.sessionId));
+  sessionManager.on('session:died', (payload: { id: string }) => watchedPrompts.dropSession(payload.id));
+  sessionManager.on('session:destroyed', (payload: { id: string }) => watchedPrompts.dropSession(payload.id));
 
   // Scheduled runs. Every effect goes through the same session RPCs and
   // readers a GUI pane uses; the engine owns only its store and run state.
@@ -7702,7 +7777,11 @@ function wireContextWatchers(
   sessionManager: DaemonSessionManager,
   pipeServer: DaemonPipeServer,
 ): () => void {
-  const gitWatcher = new GitContextWatcher();
+  // offLoop: a pane's cwd is read and watched only after a reader process
+  // opened it. On macOS the daemon is its own responsible process for the
+  // privacy check, and an open() under ~/Desktop it has no grant for blocked
+  // this loop until main force-respawned the daemon (health pings failing).
+  const gitWatcher = new GitContextWatcher(undefined, { offLoop: true });
   const portWatcher = new PortWatcher(() =>
     sessionManager.listLiveSessions().map((s) => ({ sessionId: s.id, pid: s.pid })),
   );
@@ -9260,12 +9339,15 @@ async function main(): Promise<void> {
     let a2aDelivery: A2aRemoteDelivery | null = null;
     // Share offers settle with the links they make (built below, once the stores exist).
     let a2aOffers: A2aOffers | null = null;
+    // A link a remote start made puts back the pane it showed when it ends (built below).
+    let a2aSpawnStarter: A2aSpawnStarter | null = null;
     const a2aLinks = new LinkStore({
       dir: a2aDir,
       log: a2aLog,
       onTransition: (l) => {
         a2aDelivery?.onLinkTransition(l);
         a2aOffers?.onLinkTransition(l);
+        a2aSpawnStarter?.onLinkTransition(l);
       },
     });
     const a2aExposures = new ExposureStore({ dir: a2aDir, log: a2aLog });
@@ -9289,9 +9371,105 @@ async function main(): Promise<void> {
       log: a2aLog,
     });
     a2aOffers = a2aOffersRef;
+    // Remote spawn (receiver side): off until this PC's human opts a PC in.
+    const a2aSpawnPolicy = new SpawnPolicyStore({ dir: a2aDir, log: a2aLog });
+    const a2aSpawnRequests = new SpawnRequestStore({ dir: a2aDir, log: a2aLog });
+    // A PC removed while a write failed is dropped again on start; only when
+    // both pairing files read, so an unreadable one never clears the opt-ins.
+    if (a2aPeers.usable && a2aRemoteHosts.usable) {
+      const a2aPaired = (hostId: string): boolean =>
+        a2aPeers.list().some((p) => p.hostId === hostId && !p.revokedAt) || a2aRemoteHosts.get(hostId) !== undefined;
+      a2aSpawnPolicy.retainHosts(a2aPaired);
+      a2aSpawnRequests.retainHosts(a2aPaired);
+    }
+    const a2aHostName = (hostId: string): string | undefined =>
+      a2aRemoteHosts.get(hostId)?.name ?? a2aPeers.list().find((p) => p.hostId === hostId && !p.revokedAt)?.name;
+    // Starting needs the task ledger (the prompt is the link's first task).
+    if (a2aTaskService) {
+      a2aSpawnStarter = new A2aSpawnStarter({
+        links: a2aLinks,
+        spawnLinks: new SpawnLinkStore({ dir: a2aDir, log: a2aLog }),
+        exposures: a2aExposures,
+        taskService: a2aTaskService,
+        policy: a2aSpawnPolicy,
+        hostName: a2aHostName,
+        aliasFor: (l) => linkAlias(l, a2aHostName(l.remote.hostId)),
+        broadcast: (event) => pipeServer.broadcast({ type: event.type, sessionId: '', data: event }),
+        log: a2aLog,
+      });
+    }
+    const a2aStarter = a2aSpawnStarter;
+    // Remote spawn (asking side): this PC's requests to other PCs, and their answers.
+    const a2aAsks = a2aTaskService
+      ? new A2aSpawnRequester({
+        store: new SpawnOutgoingStore({ dir: a2aDir, log: a2aLog }),
+        links: a2aLinks,
+        taskService: a2aTaskService,
+        enqueue: (hostId, envelope) => {
+          if (!a2aDelivery) throw new Error('messages between PCs are not carried this run');
+          a2aDelivery.outbox.enqueue(hostId, envelope);
+        },
+        hosts: () => (a2aDelivery?.status() ?? []).map((h) => ({ hostId: h.hostId, name: h.name, online: h.state === 'connected' })),
+        features: (hostId) => a2aDelivery?.peerFeatures(hostId),
+        aliasFor: (l) => linkAlias(l, a2aHostName(l.remote.hostId)),
+        broadcast: (event) => pipeServer.broadcast({ type: event.type, sessionId: '', data: event }),
+        log: a2aLog,
+      })
+      : null;
+    const a2aSpawn = new A2aSpawnReceiver({
+      policy: a2aSpawnPolicy,
+      requests: a2aSpawnRequests,
+      enqueue: (hostId, envelope) => {
+        if (!a2aDelivery) throw new Error('messages between PCs are not carried this run');
+        a2aDelivery.outbox.enqueue(hostId, envelope);
+      },
+      // Nothing is shown or started before the app has caught up with its panes.
+      appReady: () => a2aExposedPanes.isReconciled(),
+      liveSpawns: (hostId) => a2aStarter?.liveCount(hostId) ?? 0,
+      onChange: (hostId, spawnId, state) => {
+        const event: A2aSpawnEvent = { type: A2A_SPAWN_EVENT, hostId, spawnId, state };
+        pipeServer.broadcast({ type: event.type, sessionId: '', data: event });
+      },
+      hostName: a2aHostName,
+      ...(a2aStarter
+        ? { start: a2aStarter, abandon: (hostId, spawnId) => a2aStarter.abandon(hostId, spawnId) }
+        : {}),
+      ...(a2aAsks
+        ? {
+          isOutstanding: (hostId, spawnId) => a2aAsks.isOutstanding(hostId, spawnId),
+          onResult: (hostId, result) => a2aAsks.onResult(hostId, result),
+          onTargets: (hostId, targets) => a2aAsks.onTargets(hostId, targets),
+        }
+        : {}),
+      targetsQueued: (hostId) =>
+        a2aDelivery?.outbox.pending(hostId).some((r) => r.envelope.kind === 'link' && r.envelope.link?.state === 'spawn-targets') === true,
+      log: a2aLog,
+    });
     const a2aForgetHost = forgetHostCascade({ links: a2aLinks, exposures: a2aExposures, offers: a2aOffersRef }, a2aLog);
     const a2aCascade = (hostId: string): void => {
       a2aForgetHost(hostId);
+      // A re-paired PC starts from nothing: no opt-in, no rules, no requests.
+      // Each store on its own, so one failing does not keep the other.
+      try {
+        a2aSpawnPolicy.forgetHost(hostId);
+      } catch (err) {
+        a2aLog('error', `[a2a-remote] revoke cascade: spawn policy for ${hostId}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      try {
+        a2aSpawnRequests.forgetHost(hostId);
+      } catch (err) {
+        a2aLog('error', `[a2a-remote] revoke cascade: spawn requests for ${hostId}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      try {
+        a2aSpawn.forgetHost(hostId);
+      } catch (err) {
+        a2aLog('error', `[a2a-remote] revoke cascade: spawn receiver for ${hostId}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      try {
+        a2aAsks?.forgetHost(hostId);
+      } catch (err) {
+        a2aLog('error', `[a2a-remote] revoke cascade: spawn requests sent to ${hostId}: ${err instanceof Error ? err.message : String(err)}`);
+      }
       a2aDelivery?.onPeerRevoked(hostId);
     };
     // Link nudges for the app (a proposal to accept, a state change to show).
@@ -9328,6 +9506,7 @@ async function main(): Promise<void> {
       cascade: a2aCascade,
       log: a2aLog,
     });
+    registerSpawnRpc(onA2aRpc, { policy: a2aSpawnPolicy, requests: a2aSpawnRequests, onSaved: (previous) => a2aSpawn.sendTargets(previous) });
     // Link control RPCs. Their handlers are also kept here: the delivery
     // layer's link reconcile reuses `a2a.remote.links.refresh` as is.
     const a2aLinkHandlers = new Map<string, (params: Record<string, unknown>) => Promise<unknown>>();
@@ -9361,9 +9540,13 @@ async function main(): Promise<void> {
         broadcast: (event) => pipeServer.broadcast(event),
         refreshLink: (linkId) => (refresh ? refresh({ linkId }) : Promise.resolve(null)),
         offers: a2aOffersRef,
-        // This build shows and accepts share offers, and takes images on
-        // messages: tell the servers it joins, and the joiners in its hello.
-        features: [A2A_FEATURE_LINK_OFFER, A2A_FEATURE_IMAGES],
+        spawn: a2aSpawn,
+        ...(a2aStarter ? { spawnLinks: a2aStarter } : {}),
+        ...(a2aAsks ? { spawnAsks: a2aAsks } : {}),
+        // This build shows and accepts share offers, takes images on
+        // messages and pings its streams: tell the servers it joins, and the
+        // joiners in its hello.
+        features: [A2A_FEATURE_LINK_OFFER, A2A_FEATURE_IMAGES, A2A_FEATURE_STREAM_PING, A2A_FEATURE_SPAWN],
         uploadsRoot: path.join(wmuxDir, 'uploads'),
         // A live terminal of the sender's workspace (stamped at spawn by main), else none.
         spawnCwdOf: (ptyId, workspaceId) => {
@@ -9378,6 +9561,21 @@ async function main(): Promise<void> {
       a2aDeliveryRef = a2aDelivery;
       // A share that was mid-accept when the daemon stopped is settled by links.json.
       a2aOffersRef.recover();
+      // A spawn request still pending from before a restart is decided now.
+      a2aStarter?.reconcile();
+      a2aSpawn.recover();
+      // Each PC allowed to ask learns what it may ask for (unless that is still queued for it).
+      a2aSpawn.sendTargets();
+      // Cards and approved starts past their expiry end `expired` even with nobody looking.
+      // Put-backs of ended spawn links that could not be done yet are retried here too.
+      const spawnSweep = setInterval(() => {
+        a2aSpawn.sweep();
+        a2aStarter?.reconcile();
+        a2aAsks?.expire();
+      }, 60_000);
+      spawnSweep.unref?.();
+      if (a2aStarter) registerSpawnStartRpc(onA2aRpc, { receiver: a2aSpawn, starter: a2aStarter });
+      if (a2aAsks) registerSpawnAskRpc(onA2aRpc, a2aAsks);
     } else {
       log('warn', '[a2a-remote] task ledger unavailable: messages between PCs are not carried this run');
     }

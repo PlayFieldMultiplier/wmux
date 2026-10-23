@@ -21,6 +21,9 @@ const DAY_MS = 24 * 60 * MINUTE_MS;
 /** How far back a missed-occurrence scan looks at most. */
 const MAX_SCAN_DAYS = 400;
 
+/** How often the daemon's scheduler ticks (AutomationEngine). */
+export const AUTOMATION_TICK_MS = 30_000;
+
 export const SCHEDULE_TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
 export function parseScheduleTime(time: string): { hour: number; minute: number } | null {
