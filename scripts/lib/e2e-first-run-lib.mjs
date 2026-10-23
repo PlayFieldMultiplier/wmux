@@ -435,3 +435,75 @@ export function agentRanInPane(logText, agent = 'claude') {
   }
   return { started, prompted };
 }
+
+/** The first task's folder: a git repository with a GitHub-shaped origin
+ *  (what firstRun:check-folder accepts), one commit, nothing to fetch. */
+export const FIRST_TASK_REPO_ORIGIN = 'https://github.com/example/first-run-e2e.git';
+
+/**
+ * The first task's repository, as `{ files, git }`: the files to write, then
+ * the git argument lists to run in it, in order. The identity and signing
+ * settings ride on the commit itself, so no git config of the sandbox (or
+ * the owner) is read or written.
+ */
+export function firstTaskRepoFixture() {
+  return {
+    files: [{ name: 'README.md', content: '# first-run-e2e\n\nA fixture repository for the wmux first-run e2e. The first-run bot reads it.\n' }],
+    git: [
+      ['-c', 'init.defaultBranch=main', 'init', '-q'],
+      ['remote', 'add', 'origin', FIRST_TASK_REPO_ORIGIN],
+      ['add', 'README.md'],
+      ['-c', 'user.name=wmux e2e', '-c', 'user.email=e2e@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'Initial commit'],
+    ],
+  };
+}
+
+/**
+ * The line typed into a pane to move it into `dir` and write the folder it
+ * landed in to `file` (the folder row's default is the active pane's cwd).
+ */
+export function paneCdCommand(dir, file, platform = process.platform) {
+  for (const v of [dir, file]) {
+    if (String(v).includes("'")) throw new Error(`path must not contain a quote: ${v}`);
+  }
+  if (platform === 'win32') {
+    return `Set-Location -LiteralPath '${dir}'; (Get-Location).Path | Set-Content -Encoding UTF8 -LiteralPath '${file}'`;
+  }
+  return `cd '${dir}' && pwd -P > '${file}'`;
+}
+
+/**
+ * `<wmux dir>/factory/bots.json` (botStore.ts, version 1) holding exactly one
+ * bot profile: `{ ok: true, bot: { id, name, repoPath } }`, or why not.
+ */
+export function oneBotProfile(text) {
+  let raw;
+  try {
+    raw = JSON.parse(String(text ?? ''));
+  } catch {
+    return { ok: false, reason: 'bots.json is not JSON' };
+  }
+  if (!raw || raw.version !== 1 || !Array.isArray(raw.bots)) return { ok: false, reason: 'bots.json has no version 1 bot list' };
+  if (raw.bots.length !== 1) return { ok: false, reason: `bots.json holds ${raw.bots.length} bot profiles, not 1` };
+  const b = raw.bots[0] ?? {};
+  return { ok: true, bot: { id: b.id ?? null, name: b.name ?? null, repoPath: b.repo?.repoPath ?? null } };
+}
+
+/**
+ * The fake Claude's Agent SDK prompts in a FAKE_AGENT_LOG
+ * (fakeAgentSdk.mjs `sdk-prompt`), and the first one holding `text`
+ * (whitespace runs compared as one space), or null.
+ */
+export function sdkPromptWith(logText, text, agent = 'claude') {
+  const squash = (s) => String(s).replace(/\s+/g, ' ').trim();
+  const want = squash(text);
+  const prompts = [];
+  for (const line of String(logText ?? '').split('\n')) {
+    if (!line.trim()) continue;
+    let e;
+    try { e = JSON.parse(line); } catch { continue; }
+    if (e.agent === agent && e.event === 'sdk-prompt' && typeof e.prompt === 'string') prompts.push(e.prompt);
+  }
+  const match = want ? prompts.find((p) => squash(p).includes(want)) ?? null : null;
+  return { prompts, match };
+}

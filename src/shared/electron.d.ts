@@ -80,7 +80,10 @@ import type {
 import type { BrowserHelpOutcome, BrowserHelpRequestInfo } from './browserHelp';
 import type { PairFailureReason, RemoteAttachmentDescriptor, RemoteErrorReason, RemoteHostPublic, RemoteHostStatus, RemoteWorkspaceSummary, SshAddProgress, SshAddResult, SshConfirmResult, SshServiceResult, SshTunnelState } from './remoteHosts';
 import type {
+  FirstBotRequest,
+  FirstBotResult,
   FirstRunCheckResult,
+  FirstRunFolderCheck,
   RegisterMcpResult,
   SampleTaskStartPayload,
 } from './firstRun';
@@ -134,6 +137,8 @@ declare global {
         agentPlan: (agent: AgentId, paneShell?: string) => Promise<AgentSetupPlan>;
         setAgentPath: (agent: AgentId, input: string | null) => Promise<SetAgentPathResult>;
         startSampleTask: (payload: SampleTaskStartPayload) => Promise<void>;
+        checkFolder: (folder: string) => Promise<FirstRunFolderCheck>;
+        firstBot: (req: FirstBotRequest) => Promise<FirstBotResult>;
         onSampleTaskReady: (callback: () => void) => () => void;
         onSampleTaskTimeout: (callback: () => void) => () => void;
       };

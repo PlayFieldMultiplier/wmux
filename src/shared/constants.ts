@@ -830,6 +830,10 @@ export const IPC = {
   FIRST_RUN_AGENT_PLAN: 'first-run:agent-plan',
   /** Agent-ready step: remember (or forget) a typed path for an agent wmux did not find. */
   FIRST_RUN_AGENT_SET_PATH: 'first-run:agent-set-path',
+  /** First task step: whether a folder can be a bot's repository (git, hosted origin). */
+  FIRST_RUN_CHECK_FOLDER: 'first-run:check-folder',
+  /** First task step: the first-run bot, made once for the picked folder. */
+  FIRST_RUN_FIRST_BOT: 'first-run:first-bot',
   // First-run wizard event channels (renderer-side `on()` listeners)
   FIRST_RUN_SAMPLE_TASK_READY: 'first-run:sample-task-ready',
   FIRST_RUN_SAMPLE_TASK_TIMEOUT: 'first-run:sample-task-timeout',

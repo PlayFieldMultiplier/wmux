@@ -114,6 +114,9 @@ export const PHONE_ROOM_NOTICE_CODES: Readonly<Record<string, PhoneNoticeCode>> 
     titles: ['room.notice.workers.full.bot', 'room.notice.workers.full.factory', 'room.notice.workers.full.wmux'],
     more: ['room.notice.workers.full.body', 'room.notice.workers.full.held'],
   },
+  // A fan-out of a bot with no worker slots at all (the first run's): nothing
+  // started and nothing waits (roomWriter.ts).
+  'workers.off': bodied('workers.off', { bot: 'string' }),
   'budget.held': titled('budget.held', { bot: 'string', until: 'number' }, ['room.notice.budget.held.at', 'room.notice.budget.held.manual']),
   'bot.usageLimit': titled('bot.usageLimit', { bot: 'string', until: 'number' }),
   'bot.error': titled('bot.error', { bot: 'string' }),

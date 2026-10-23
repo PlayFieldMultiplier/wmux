@@ -108,3 +108,49 @@ export const OSC133_PROMPT_READY_PATTERNS: readonly RegExp[] = [
   // eslint-disable-next-line no-control-regex
   /\x1b\]133;[AB]\x1b\\/,
 ];
+
+// === The bot's first task (handoff #3) ===
+// The last first-run step: a folder, a bot made once for it, and its first
+// task. The consent is the Bots plan consent (factory settings planConsent),
+// asked on the wizard's own screen before anything is created or sent. The
+// task is posted with the room's own post (rooms.post) under
+// FIRST_TASK_CLIENT_POST_ID, and its answer is the bot's first card after it
+// in the bot's 1:1 thread (rooms.read).
+
+/** Renderer → main: is this folder one a bot can read (firstRun:check-folder). */
+export type FirstRunFolderCheck =
+  | { ok: true; root: string; displayRoot: string; repoKey: string }
+  | { ok: false; code: 'not_a_repo' | 'no_remote' | 'invalid_argument'; message: string };
+
+/** Renderer → main payload for firstRun:first-bot. */
+export interface FirstBotRequest {
+  workspaceId: string;
+  folder: string;
+}
+
+/**
+ * firstRun:first-bot's answer. The first-run bot is made once: a later call,
+ * a re-run first run or a call after a quit returns the same bot
+ * (`created: false`). It is made without its greeting turn, with no worker
+ * slots (FIRST_RUN_BOT_WORKERS), and with a read-only job.
+ */
+export type FirstBotResult =
+  | { ok: true; created: boolean; bot: { id: string; name: string; workspaceId: string; repoPath: string }; threadId: string }
+  | {
+      ok: false;
+      code: 'consent_required' | 'not_started' | 'not_a_repo' | 'no_remote' | 'repo_mismatch' | 'invalid_argument' | 'too_many_bots';
+      message: string;
+    };
+
+/** The first task's clientPostId: a repeat post returns the first card. */
+export const FIRST_TASK_CLIENT_POST_ID = 'first-run-first-task';
+
+/** The first-run bot's worker slots: none, so a fan-out it asks for waits
+ *  for the owner to raise them, and nothing is pushed or opened as a PR
+ *  until they do. */
+export const FIRST_RUN_BOT_WORKERS = 0;
+
+/** The example first tasks, in the card's order; the first is the default.
+ *  Both only read: the README one proposes the text in the chat. */
+export const FIRST_TASK_EXAMPLES = ['explain', 'readme'] as const;
+export type FirstTaskExample = (typeof FIRST_TASK_EXAMPLES)[number];
