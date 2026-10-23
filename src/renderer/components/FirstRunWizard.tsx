@@ -39,6 +39,14 @@ import { AgentReadyGroup, AgentSetupCorner, cornerRun, decideAgentPrimary } from
 import { refreshAgentStatus, useAgentSetup } from '../utils/agentSetupRuns';
 import { anyAgentSetUp, type AgentId } from '../../shared/agentSetup';
 import { FIRST_RUN_REOPEN_EVENT } from '../../shared/firstRun';
+import {
+  FirstTaskBlock,
+  FirstTaskFooterAction,
+  firstTaskPrimary,
+  openFirstTaskConversation,
+  useFirstTask,
+  type FirstTaskPrimary,
+} from './FirstRunFirstTask';
 
 // ─── Local type narrowing for electronAPI.firstRun ────────────────────────────
 //
@@ -363,6 +371,15 @@ export default function FirstRunWizard({ mode, onClose }: FirstRunWizardProps) {
   const agentPrimary = decideAgentPrimary(statuses, runs);
   const noAgentReady = statuses !== null && !anyAgentSetUp(statuses);
 
+  // ─── The bot's first task (first run only, once an agent is ready) ─────────
+  const activeWorkspaceId = useStore((s) => s.activeWorkspaceId);
+  const showFirstTask = mode === 'firstRun' && statuses !== null && anyAgentReady(statuses);
+  const firstTask = useFirstTask({ enabled: showFirstTask, workspaceId: activeWorkspaceId });
+  const openConversation = useCallback(() => {
+    openFirstTaskConversation();
+    onCloseRef.current();
+  }, []);
+
   // ─── Statusline offer (opt-in; never auto-installs — owner decision 2026-07-17) ──
   // Fetched once on mount; the block renders only when Claude is detected AND
   // there is at least one installable settings target.
@@ -613,7 +630,9 @@ export default function FirstRunWizard({ mode, onClose }: FirstRunWizardProps) {
     hooksState: result?.status.claudeFound ? hooksState : 'unknown',
     sampleState,
     agentAction: agentPrimary !== null,
+    firstTask: showFirstTask ? firstTaskPrimary(firstTask.phase, firstTask.canSend) : 'none',
   });
+  const firstTaskDone = showFirstTask && (firstTask.phase === 'answered' || firstTask.phase === 'late');
 
   if (aside && asideRun) {
     return <AgentSetupCorner agent={asideRun.agent} onExpand={() => setAside(null)} />;
@@ -732,6 +751,8 @@ export default function FirstRunWizard({ mode, onClose }: FirstRunWizardProps) {
               onFallbackContinue={handleFallbackContinue}
               primary={primary === 'try' || primary === 'fallback'}
             />
+
+            {showFirstTask && <FirstTaskBlock task={firstTask} />}
           </>
         )}
       </DialogBody>
@@ -744,8 +765,17 @@ export default function FirstRunWizard({ mode, onClose }: FirstRunWizardProps) {
             onClick={() => void dismiss()}
             data-testid="first-run-wizard-skip"
           >
-            {noAgentReady ? t('firstRunWizard.agent.later') : t('firstRunWizard.skipButton')}
+            {noAgentReady
+              ? t('firstRunWizard.agent.later')
+              : firstTaskDone ? t('firstRunWizard.closeButton') : t('firstRunWizard.skipButton')}
           </Button>
+          {showFirstTask && (
+            <FirstTaskFooterAction
+              task={firstTask}
+              primary={primary === 'send' || primary === 'open'}
+              onOpen={openConversation}
+            />
+          )}
         </DialogFooter>
       )}
     </Dialog>
@@ -757,11 +787,12 @@ export default function FirstRunWizard({ mode, onClose }: FirstRunWizardProps) {
  * at most one filled warm action per surface, and never one that is disabled
  * or already running. Order follows what unblocks the operator first: the
  * timeout fallback's Continue, then MCP registration, then the required hook
- * install, then the sample task. While any of those is in flight, nothing is
- * primary — the emphasis does not jump to the next step mid-install. The
- * optional statusline offer is never primary.
+ * install, then the bot's first task, then the sample task. While any of
+ * those is in flight, nothing is primary — the emphasis does not jump to the
+ * next step mid-install. The optional statusline offer is never primary.
+ * Once the first task is answered, opening its conversation is.
  */
-export type WizardPrimaryAction = 'fallback' | 'agent' | 'register' | 'hooks' | 'try' | null;
+export type WizardPrimaryAction = 'fallback' | 'agent' | 'register' | 'hooks' | 'send' | 'open' | 'try' | null;
 
 export function decidePrimaryAction({
   uiState,
@@ -771,6 +802,7 @@ export function decidePrimaryAction({
   hooksState,
   sampleState,
   agentAction = false,
+  firstTask = 'none',
 }: {
   uiState: WizardUiState | null;
   claudeFound: boolean;
@@ -780,15 +812,21 @@ export function decidePrimaryAction({
   sampleState: SampleSubState;
   /** No agent is ready yet and an agent card has an action (install / sign in). */
   agentAction?: boolean;
+  /** The first-task step: Send ready, the task on its way (consent screen
+   *  included), Open the conversation, or nothing to offer. */
+  firstTask?: FirstTaskPrimary;
 }): WizardPrimaryAction {
   if (sampleState === 'timeout-fallback') return 'fallback';
   if (sampleState === 'splitting' || sampleState === 'awaiting-prompt') return null;
+  if (firstTask === 'busy') return null;
+  if (firstTask === 'open') return 'open';
   // Nothing below works without an agent: getting one ready comes first.
   if (agentAction) return 'agent';
   // Read from the check result, not uiState: reopen mode still offers Register.
   if (claudeFound && !mcpRegistered) return registering ? null : 'register';
   if (hooksState === 'installing') return null;
   if (hooksState === 'offer' || hooksState === 'error') return 'hooks';
+  if (firstTask === 'send') return 'send';
   if (uiState === 'ready' && sampleState === 'idle') return 'try';
   return null;
 }
