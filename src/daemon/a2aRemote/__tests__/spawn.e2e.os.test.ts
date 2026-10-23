@@ -27,6 +27,9 @@ import { A2aServer } from '../server';
 import { A2aSpawnReceiver } from '../spawnReceiver';
 import { SpawnPolicyStore } from '../spawnPolicyStore';
 import { SpawnRequestStore } from '../spawnRequestStore';
+import { SpawnLinkStore } from '../spawnLinkStore';
+import { A2aSpawnStarter } from '../spawnStarter';
+import { linkAlias } from '../outbound';
 import { freePort } from './a2aServerRig';
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 90_000 });
@@ -43,6 +46,7 @@ interface Pc {
   server: A2aServer;
   policy: SpawnPolicyStore;
   spawn: A2aSpawnReceiver;
+  links: LinkStore;
   results: Array<{ from: string; result: A2aSpawnResultV1 }>;
   targets: Array<{ from: string; targets: A2aSpawnTargetsV1 }>;
   /** Release the agent check (it waits until then). */
@@ -59,7 +63,7 @@ afterEach(async () => {
   for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
 });
 
-async function makePc(name: string, opts: { holdAgentCheck?: boolean } = {}): Promise<Pc> {
+async function makePc(name: string, opts: { holdAgentCheck?: boolean; startable?: boolean } = {}): Promise<Pc> {
   const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-spawn-e2e-')));
   dirs.push(dir);
   const a2aDir = path.join(dir, 'a2a');
@@ -71,7 +75,8 @@ async function makePc(name: string, opts: { holdAgentCheck?: boolean } = {}): Pr
   const tasks = new A2aTaskService({ log, origin: { machineId: name, daemonEpoch: 1 } });
   tasks.restoreFromLog();
   let delivery: A2aRemoteDelivery | null = null;
-  const links = new LinkStore({ ...store, onTransition: (l) => delivery?.onLinkTransition(l) });
+  let starter: A2aSpawnStarter | null = null;
+  const links = new LinkStore({ ...store, onTransition: (l) => { delivery?.onLinkTransition(l); starter?.onLinkTransition(l); } });
   const exposures = new ExposureStore(store);
   const panes = new ExposedPaneCache();
   const peers = new PeerStore(store);
@@ -82,6 +87,13 @@ async function makePc(name: string, opts: { holdAgentCheck?: boolean } = {}): Pr
   const held = new Promise<boolean>((resolve) => { release = () => resolve(true); });
   const results: Pc['results'] = [];
   const targets: Pc['targets'] = [];
+  if (opts.startable) {
+    starter = new A2aSpawnStarter({
+      links, spawnLinks: new SpawnLinkStore(store), exposures, taskService: tasks, policy,
+      hostName: () => 'PC-A', aliasFor: (l) => linkAlias(l, 'PC-A'), broadcast: quiet, log: quiet,
+    });
+  }
+  const started = starter;
   const spawn = new A2aSpawnReceiver({
     policy,
     requests,
@@ -91,6 +103,7 @@ async function makePc(name: string, opts: { holdAgentCheck?: boolean } = {}): Pr
     isOutstanding: () => true,
     onResult: (from, result) => results.push({ from, result }),
     onTargets: (from, t) => targets.push({ from, targets: t }),
+    ...(started ? { start: started, abandon: (h, id) => started.abandon(h, id), liveSpawns: (h) => started.liveCount(h) } : {}),
     log: quiet,
   });
   const routes = createA2aRoutes({ exposures, panes, links, broadcast: quiet, log: quiet });
@@ -122,6 +135,7 @@ async function makePc(name: string, opts: { holdAgentCheck?: boolean } = {}): Pr
     broadcast: quiet,
     refreshLink: (linkId) => handlers.get('a2a.remote.links.refresh')!({ linkId }),
     spawn,
+    ...(started ? { spawnLinks: started } : {}),
     log: quiet,
     timing: TIMING,
     heartbeatMs: 200,
@@ -139,6 +153,7 @@ async function makePc(name: string, opts: { holdAgentCheck?: boolean } = {}): Pr
     server,
     policy,
     spawn,
+    links,
     results,
     targets,
     release: () => release(),
@@ -236,6 +251,30 @@ describe('remote spawn requests, end to end', () => {
     await until(() => a.results.length > 0);
     expect(a.results[0].result).toMatchObject({ spawnId: env.linkId, code: 'not-supported' });
   });
+
+  for (const aJoins of [true, false]) {
+    it(`a card answered on B starts the agent, and A learns B's pane, when A is the ${aJoins ? 'joiner' : 'server'}`, async () => {
+      const a = await makePc('PC-A');
+      const b = await makePc('PC-B', { startable: true });
+      if (aJoins) await pair(a, b);
+      else await pair(b, a);
+      await allow(b, a.hostId);
+      const env = spawnEnvelope();
+      a.delivery.outbox.enqueue(b.hostId, env);
+      await until(() => a.results.length > 0);
+      expect(a.results[0].result).toEqual({ v: 1, spawnId: env.linkId, code: 'waiting-for-approval' });
+      expect(await b.spawn.decideCard(a.hostId, env.linkId, 'once')).toEqual({ ok: true });
+      expect(await b.spawn.claim(a.hostId, env.linkId)).toMatchObject({ ok: true });
+      expect(await b.spawn.started(a.hostId, env.linkId, { workspaceId: 'ws-b', paneId: 'pane-b' })).toEqual({ ok: true });
+      await until(() => a.results.length > 1);
+      expect(a.results[1].result).toEqual({
+        v: 1, spawnId: env.linkId, code: 'started', endpoint: { kind: 'pane', workspaceId: 'ws-b', paneId: 'pane-b' }, linkVersion: 1,
+        linkId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+      });
+      const linkId = a.results[1].result.linkId!;
+      expect(b.links.get(linkId)).toMatchObject({ state: 'active', spawned: true, remote: { hostId: a.hostId, workspaceId: 'ws-a', paneId: 'pane-a' } });
+    });
+  }
 
   it('a PC that is not allowed is told so, and nothing is kept for it', async () => {
     const a = await makePc('PC-A');

@@ -204,6 +204,7 @@ import { resyncAfterResubscribe, serialResync, type DaemonSessionRow } from './n
 import { markRendererNotificationListenerNotReady } from './notification/rendererNotificationReadiness';
 import { RemoteInboxBridge } from './lanlink/RemoteInboxBridge';
 import { RemoteA2aBridge } from './a2a/RemoteA2aBridge';
+import { RemoteSpawnCoordinator } from './a2aRemote/remoteSpawnCoordinator';
 import { daemonRemoteA2aRpcDeps } from './a2a/remoteA2aRpcDeps';
 import { setA2aRemoteBridge } from './ipc/handlers/a2aRemote.handler';
 import { sendToRenderer } from './pipe/handlers/_bridge';
@@ -806,6 +807,7 @@ let daemonNotificationRouter: DaemonNotificationRouter | null = null;
 let remoteInboxBridge: RemoteInboxBridge | null = null;
 // Cross-host A2A: hands remote tasks/replies the daemon holds to the renderer.
 let remoteA2aBridge: RemoteA2aBridge | null = null;
+let remoteSpawnCoordinator: RemoteSpawnCoordinator | null = null;
 // Scheduled runs: daemon automation events → renderer + OS toasts.
 const automationBridge = new AutomationBridge(
   () => mainWindow,
@@ -2447,6 +2449,21 @@ app.on('ready', async () => {
       });
       remoteA2aBridge.start();
       setA2aRemoteBridge(remoteA2aBridge);
+      // Remote spawn (this PC starts an agent another PC asked for): cards and starts.
+      remoteSpawnCoordinator?.stop();
+      const spawnBridge = remoteA2aBridge;
+      remoteSpawnCoordinator = new RemoteSpawnCoordinator({
+        daemonRpc: (method, params) => client.rpc(method, params),
+        sendToRenderer: (method, params, opts) => sendToRenderer(() => mainWindow, method, params, opts),
+        onDaemonEvent: (listener) => {
+          client.on('event', listener);
+          return () => { client.off('event', listener); };
+        },
+        consent: approvalQueue,
+        retryHeld: (taskId) => spawnBridge.retryHeld(taskId),
+        log: (level, msg) => logLine(level, 'a2a-remote', msg),
+      });
+      remoteSpawnCoordinator.start();
       automationBridge.start(client);
       // X1 — context fold (git branch / worktree / ports / PR badge).
       workspaceContextRouter?.stop();
@@ -2485,6 +2502,8 @@ app.on('ready', async () => {
       remoteInboxBridge = null;
       remoteA2aBridge?.stop();
       remoteA2aBridge = null;
+      remoteSpawnCoordinator?.stop();
+      remoteSpawnCoordinator = null;
       setA2aRemoteBridge(null);
       automationBridge.stop();
       workspaceContextRouter?.stop();

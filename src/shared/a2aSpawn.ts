@@ -120,6 +120,32 @@ export interface A2aSpawnResultV1 {
   endpoint?: { kind: 'pane'; workspaceId: string; paneId: string };
   /** `started` only: the link's version on B. */
   linkVersion?: number;
+  /** `started` only: the link's id (a uuid B minted when it started the agent). */
+  linkId?: string;
+}
+
+/**
+ * The message id of a started spawn's first task (the prompt), on both PCs:
+ * with the link id from the `started` answer it gives the same task id on
+ * each (`remoteTaskId`), so the replies of the started agent land on the
+ * asker's copy. The link id is a fresh uuid minted by B (`links.json` takes
+ * uuids only, and nothing the asker sent predicts it).
+ */
+export function spawnFirstMessageId(linkId: SpawnLinkId): string {
+  return `first_${linkId}`;
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * The id of a link a remote start made: a uuid the starting PC minted.
+ * Branded, so a spawnId (or any other string) cannot be passed where one is
+ * meant; `asSpawnLinkId` is the only way to get one.
+ */
+export type SpawnLinkId = string & { readonly __spawnLinkId: true };
+
+export function asSpawnLinkId(v: unknown): SpawnLinkId | null {
+  return typeof v === 'string' && UUID_RE.test(v) ? (v as SpawnLinkId) : null;
 }
 
 /** B -> A: what A may ask for. Ids and labels only, never a path. */
@@ -149,6 +175,16 @@ export interface A2aSpawnRuleV1 {
   hostId: HostId;
   rootId: string;
   agent: AgentSlug;
+  /**
+   * The folder below the root it was granted for (normalized; '' = the root).
+   * Absent on a rule saved before it was recorded: it then covers the root only.
+   */
+  sub?: string;
+}
+
+/** A rule allows exactly the folder it was granted for. */
+export function spawnRuleMatches(rule: A2aSpawnRuleV1, hostId: HostId, rootId: string, agent: AgentSlug, sub: string): boolean {
+  return rule.hostId === hostId && rule.rootId === rootId && rule.agent === agent && (rule.sub ?? '') === sub;
 }
 
 export interface A2aSpawnPolicyV1 {
@@ -192,7 +228,122 @@ export const A2A_SPAWN_RPC = Object.freeze({
   policySet: 'a2a.remote.spawnPolicy.set',
   /** → `{ requests: A2aSpawnRequestSummary[] }` (newest first, no prompt text). */
   requestsList: 'a2a.remote.spawnRequests.list',
+  /** → `A2aSpawnWork`: what main has to show or start (on connect and on each event). */
+  work: 'a2a.remote.spawn.work',
+  /** `{ hostId, spawnId, verdict: A2aSpawnVerdict }` → `A2aSpawnStepResult`; only for a request awaiting its card. */
+  decide: 'a2a.remote.spawn.decide',
+  /**
+   * `{ hostId, spawnId }` → `A2aSpawnClaimResult`. Takes an approved request
+   * for starting, after checking everything again right now (policy, caps,
+   * folder). A refusal is settled and answered by the daemon itself.
+   */
+  claim: 'a2a.remote.spawn.claim',
+  /** `{ hostId, spawnId, workspaceId, paneId }` → `A2aSpawnStepResult`: the pane runs; mint the link, answer `started`, queue the prompt. */
+  started: 'a2a.remote.spawn.started',
+  /** `{ hostId, spawnId, code: 'folder-not-allowed' | 'failed' }` → `A2aSpawnStepResult`: starting a claimed request failed. */
+  failed: 'a2a.remote.spawn.failed',
 } as const);
+
+/** Daemon broadcast: a received request changed state (main shows its card, or starts it). */
+export const A2A_SPAWN_EVENT = 'a2a.remote.spawn.changed';
+export interface A2aSpawnEvent {
+  type: typeof A2A_SPAWN_EVENT;
+  hostId: HostId;
+  spawnId: string;
+  state: A2aSpawnRequestState;
+}
+
+/**
+ * A received request, on B:
+ *   pending  — checks running (or waiting for the app)
+ *   awaiting — its card is shown
+ *   approved — allowed (by its card, or a rule); main starts it
+ *   starting — main claimed it and is creating the worktree and pane
+ *   decided  — final; `code` says how
+ */
+export type A2aSpawnRequestState = 'pending' | 'awaiting' | 'approved' | 'starting' | 'decided';
+
+/** The card's three answers. `always` also adds the (PC, folder, agent) rule. */
+export type A2aSpawnVerdict = 'once' | 'always' | 'deny';
+
+/** What B's approval card shows. Machine-local only: it carries the prompt. */
+export interface A2aSpawnCardV1 {
+  hostId: HostId;
+  /** B's name for that PC. */
+  hostName: string;
+  spawnId: string;
+  agent: AgentSlug;
+  rootId: string;
+  rootLabel: string;
+  /** The folder as resolved on B (root realpath + sub), for display. */
+  folder: string;
+  permissionMode: A2aSpawnPermissionMode;
+  followUps: A2aSpawnFollowUps;
+  /** The full prompt (already sanitized on arrival). */
+  text: string;
+  expiresAt: string;
+}
+
+/**
+ * The workspace a remote spawn started, as the renderer keeps it for the
+ * workspace's whole life (`fanout.spawnWorkspace` param `remoteSpawnedBy`):
+ * its header chip and the start toast read it. Never the prompt.
+ */
+export interface A2aRemoteSpawnedBy {
+  hostId: HostId;
+  /** This PC's name for the asking PC. */
+  name: string;
+  spawnId: string;
+  agent: AgentSlug;
+}
+
+/** An approved request main has to start. */
+export interface A2aSpawnWorkItem {
+  hostId: HostId;
+  spawnId: string;
+}
+
+/**
+ * A later instruction on a link a remote spawn made, held for its card
+ * (`followUps: 'ask'`). Allowed: main retries the hold (it is delivered like
+ * any held task); denied: main rejects the hold.
+ */
+export interface A2aSpawnFollowUpCardV1 {
+  taskId: string;
+  hostId: HostId;
+  hostName: string;
+  agent: AgentSlug;
+  folder: string;
+  permissionMode: A2aSpawnPermissionMode;
+  text: string;
+}
+
+/** `a2a.remote.spawn.work`'s answer. */
+export interface A2aSpawnWork {
+  awaiting: A2aSpawnCardV1[];
+  approved: A2aSpawnWorkItem[];
+  followUps: A2aSpawnFollowUpCardV1[];
+}
+
+/** What main needs to start a claimed request. No prompt: it goes as the link's first task. */
+export interface A2aSpawnClaimV1 {
+  hostId: HostId;
+  hostName: string;
+  spawnId: string;
+  agent: AgentSlug;
+  /** The root's realpath: a git repository's top level. */
+  repoPath: string;
+  /** Normalized relative POSIX path below it ('' = the root). */
+  sub: string;
+  permissionMode: A2aSpawnPermissionMode;
+}
+
+export type A2aSpawnClaimResult =
+  | { ok: true; claim: A2aSpawnClaimV1 }
+  /** Not startable now; `code` is what the asker was told, when it was settled here. */
+  | { ok: false; error: string; code?: A2aSpawnCode };
+
+export type A2aSpawnStepResult = { ok: true } | { ok: false; error: string };
 
 /** `a2a.remote.spawnPolicy.set`'s answer: the saved policy, or why it was refused. */
 export type A2aSpawnPolicySetResult =
@@ -206,7 +357,7 @@ export interface A2aSpawnRequestSummary {
   spawnId: string;
   agent: AgentSlug;
   rootId: string;
-  state: 'pending' | 'decided';
+  state: A2aSpawnRequestState;
   code?: A2aSpawnCode;
   receivedAt: string;
   expiresAt: string;
@@ -297,24 +448,27 @@ export function spawnClockOk(sentAt: string, expiresAt: string, now: number): bo
 }
 
 export function parseSpawnResult(raw: unknown): A2aSpawnResultV1 | null {
-  if (!isPlain(raw) || !onlyKeys(raw, ['v', 'spawnId', 'code', 'endpoint', 'linkVersion'])) return null;
+  if (!isPlain(raw) || !onlyKeys(raw, ['v', 'spawnId', 'code', 'endpoint', 'linkVersion', 'linkId'])) return null;
   if (raw['v'] !== 1 || !isSpawnId(raw['spawnId']) || !isSpawnCode(raw['code'])) return null;
   const code = raw['code'];
   const endpoint = raw['endpoint'];
   const linkVersion = raw['linkVersion'];
+  const linkId = raw['linkId'];
   if (code !== 'started') {
-    if (endpoint !== undefined || linkVersion !== undefined) return null;
+    if (endpoint !== undefined || linkVersion !== undefined || linkId !== undefined) return null;
     return { v: 1, spawnId: raw['spawnId'] as string, code };
   }
   if (!isPlain(endpoint) || !onlyKeys(endpoint, ['kind', 'workspaceId', 'paneId']) || endpoint['kind'] !== 'pane') return null;
   if (!safeId(endpoint['workspaceId']) || !safeId(endpoint['paneId'])) return null;
   if (typeof linkVersion !== 'number' || !Number.isInteger(linkVersion) || linkVersion < 1) return null;
+  if (typeof linkId !== 'string' || !UUID_RE.test(linkId)) return null;
   return {
     v: 1,
     spawnId: raw['spawnId'] as string,
     code,
     endpoint: { kind: 'pane', workspaceId: endpoint['workspaceId'] as string, paneId: endpoint['paneId'] as string },
     linkVersion,
+    linkId,
   };
 }
 
@@ -370,10 +524,12 @@ export function coerceSpawnPolicy(raw: unknown): A2aSpawnPolicyV1 | null {
   const cleanRules: A2aSpawnRuleV1[] = [];
   for (const r of rules) {
     if (!isPlain(r) || !isHostId(r['hostId']) || !isSpawnRootId(r['rootId']) || !isAgentSlug(r['agent'])) return null;
+    const sub = r['sub'] === undefined ? '' : normalizeSpawnSub(r['sub']);
+    if (sub === null || (r['sub'] !== undefined && sub !== r['sub'])) return null;
     // A rule for a folder no longer listed goes with it: a folder added later
     // under the same id must not inherit it.
     if (!cleanRoots.some((root) => root.id === r['rootId'])) continue;
-    cleanRules.push({ hostId: r['hostId'], rootId: r['rootId'] as string, agent: r['agent'] });
+    cleanRules.push({ hostId: r['hostId'], rootId: r['rootId'] as string, agent: r['agent'], ...(sub ? { sub } : {}) });
   }
   return {
     v: 1,

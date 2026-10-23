@@ -78,7 +78,7 @@ import { agentDisplayToSlug } from '../../../shared/agentIdentity';
 import { wslDistroArgs, isWslDistroSpawnArgs } from '../../../shared/wslDistro';
 import { getDefaultWslDistro } from '../../pty/defaultWslDistro';
 import { SessionPromptScheduler } from '../../pty/SessionPromptScheduler';
-import { recordFanoutTaskPane, stampFanoutTaskPane } from '../../worktask/fanoutGuards';
+import { recordFanoutTaskPane, stampFanoutTaskPane, stampRemoteSpawnPane } from '../../worktask/fanoutGuards';
 import type { FanoutOrigin } from '../../../shared/fanoutOrigin';
 import {
   removeSessionPromptSchedulesForPty,
@@ -166,6 +166,8 @@ type PtyCreateOptions = {
   secretGrant?: string;
   /** Fan-out task pane: the task launch it is for (main/factory/workerSlots). */
   fanoutLaunch?: unknown;
+  /** A pane another PC started (remote spawn): that PC's id, stamped as its lineage before the PTY exists. */
+  remoteSpawnOf?: string;
 };
 
 
@@ -571,6 +573,8 @@ export function registerPTYHandlers(
       // create and before the PTY (and the agent) exists. A failed stamp fails
       // the create; the renderer rolls the workspace back.
       stampFanoutTaskPane(options);
+      // A pane another PC started: the same stamp, under that PC (depth 1).
+      stampRemoteSpawnPane(options);
       // A bot's fan-out worker launches with the merge-lane guard or not at
       // all (botWorkerMergeGuard.ts); a throw fails the create.
       const botWorker = botWorkerForCreate(options);
@@ -933,6 +937,8 @@ export function registerPTYHandlers(
       // create and before the PTY (and the agent) exists. A failed stamp fails
       // the create; the renderer rolls the workspace back.
       stampFanoutTaskPane(options);
+      // A pane another PC started: the same stamp, under that PC (depth 1).
+      stampRemoteSpawnPane(options);
       // A bot's fan-out worker launches with the merge-lane guard or not at
       // all (botWorkerMergeGuard.ts); a throw fails the create.
       const botWorker = botWorkerForCreate(options);

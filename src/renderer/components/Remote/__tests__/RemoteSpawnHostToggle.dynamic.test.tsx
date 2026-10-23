@@ -34,7 +34,7 @@ const policy = (): A2aSpawnPolicyV1 => ({ ...defaultSpawnPolicy(), enabled: true
 describe('RemoteSpawnHostToggle', () => {
   it('renders nothing while the flag is off, or before the policy is read', async () => {
     const onSave = vi.fn();
-    await act(async () => root.render(<RemoteSpawnHostToggle hostId={HOST} name="DESK" policy={policy()} onSave={onSave} onError={vi.fn()} />));
+    await act(async () => root.render(<RemoteSpawnHostToggle enabled={false} hostId={HOST} name="DESK" policy={policy()} onSave={onSave} onError={vi.fn()} />));
     expect(container.innerHTML).toBe('');
     await act(async () => root.render(<RemoteSpawnHostToggle enabled hostId={HOST} name="DESK" policy={null} onSave={onSave} onError={vi.fn()} />));
     expect(container.innerHTML).toBe('');

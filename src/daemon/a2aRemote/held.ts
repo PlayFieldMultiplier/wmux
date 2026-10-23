@@ -25,6 +25,8 @@ export interface HeldDeps {
   linkStore: Pick<LinkStore, 'get' | 'list' | 'checkMessage'>;
   outbox: Pick<OutboxStore, 'enqueue' | 'pending' | 'refuse'>;
   now?: () => number;
+  /** A link a remote start made (outbound.ts redacts what goes out on it). */
+  spawnLink?: (linkId: string) => boolean;
 }
 
 export type RejectHeldResult =

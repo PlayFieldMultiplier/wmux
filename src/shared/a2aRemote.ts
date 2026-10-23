@@ -475,6 +475,12 @@ export interface A2aLinkRecordV1 {
    * 'local' means this host is the joiner. Exposure applies to 'remote' links.
    */
   proposer: 'local' | 'remote';
+  /**
+   * The link a remote spawn made on THIS PC (it started the agent): what goes
+   * out on it is redacted, no images go either way, and later tasks may wait
+   * for a card. Local bookkeeping, never sent; an older build drops it.
+   */
+  spawned?: true;
 }
 
 // ─── Layer 2/3 wire ─────────────────────────────────────────────────────────
@@ -918,7 +924,9 @@ export interface A2aRemoteTaskMarkerV1 {
     /** A paste was attempted but never confirmed (main restarted mid-delivery): a person decides. */
     | 'delivery-unconfirmed'
     /** The pane kept having no agent to deliver to. */
-    | 'no-agent';
+    | 'no-agent'
+    /** A follow-up on a link a remote spawn made, waiting for its approval card (`followUps: 'ask'`). */
+    | 'awaiting-approval';
   /**
    * This side's link endpoint kind when the task was stored. `brain` = the
    * task is this PC's Moa's, delivered as a wake, never to a pane. Absent on a

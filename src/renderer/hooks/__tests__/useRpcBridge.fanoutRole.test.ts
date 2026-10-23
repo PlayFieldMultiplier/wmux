@@ -66,7 +66,7 @@ describe('useRpcBridge — fan-out task roles', () => {
 
   it('returns the launched command so a re-fire replays the bound one', () => {
     const block = fanoutSpawnBlock();
-    expect(block).toMatch(/return \{ workspaceId: newWsId, ptyId, initialCommand: launchCommand, \.\.\.\(fanoutOrigin \? \{ fanoutOrigin \} : \{\}\) \}/);
+    expect(block).toMatch(/return \{ workspaceId: newWsId, ptyId, paneId, initialCommand: launchCommand, \.\.\.\(fanoutOrigin \? \{ fanoutOrigin \} : \{\}\) \}/);
     // …and that variable is read off the options the PTY was actually created
     // with, so the role rewrite, the marker decision and the workspace profile
     // are all already in it.

@@ -16,6 +16,7 @@ import {
   type A2aRemoteEnvelope,
   type A2aRemoteTaskMarkerV1,
 } from '../../shared/a2aRemote';
+import { redactSecrets } from '../../shared/redactSecrets';
 import {
   isRemoteWorkspaceId,
   remoteAlias,
@@ -27,7 +28,7 @@ import {
   type A2aRemoteTarget,
   type A2aRemoteTaskState,
 } from '../../shared/a2aRemoteDelivery';
-import type { CompletionEvidence, Message, Part, Task } from '../../shared/types';
+import type { CompletionEvidence, EvidenceItem, Message, Part, Task } from '../../shared/types';
 import type { A2aTaskService } from '../a2a/A2aTaskService';
 import type { LinkStore } from './linkStore';
 import type { OutboxStore } from './outboxStore';
@@ -84,6 +85,12 @@ export interface OutboundDeps {
   now?: () => number;
   /** Test seam for envelope messageIds (defaults to a random UUID). */
   mintId?: () => string;
+  /**
+   * A link a remote start made on this PC: what goes out on it is redacted
+   * (`redactSecrets`) and carries no images. A backstop, not a boundary: it
+   * matches known key shapes and misses encoded ones.
+   */
+  spawnLink?: (linkId: string) => boolean;
   log?: (level: 'info' | 'warn' | 'error', msg: string) => void;
 }
 
@@ -220,7 +227,7 @@ export async function sendRemoteReply(deps: OutboundDeps, input: A2aRemoteReplyI
 }
 
 /** What the outbound sync needs: the ledger (read + bookkeeping), the link gate and the outbox. */
-export type StateDeps = Pick<OutboundDeps, 'linkStore' | 'outbox' | 'now' | 'mintId' | 'images'> & {
+export type StateDeps = Pick<OutboundDeps, 'linkStore' | 'outbox' | 'now' | 'mintId' | 'images' | 'spawnLink'> & {
   taskService: Pick<A2aTaskService, 'getTask' | 'markRemote'>;
   log?: (level: 'info' | 'warn' | 'error', msg: string) => void;
 };
@@ -403,7 +410,7 @@ function remoteTaskAndLink(
 }
 
 function envelope(
-  deps: Pick<OutboundDeps, 'now'>,
+  deps: Pick<OutboundDeps, 'now' | 'spawnLink'>,
   link: A2aLinkRecordV1,
   messageId: string,
   body: Pick<A2aRemoteEnvelope, 'kind' | 'taskId' | 'text' | 'state' | 'message' | 'evidence' | 'receipt' | 'images'>,
@@ -413,8 +420,44 @@ function envelope(
     linkId: link.linkId,
     linkVersion: link.version,
     messageId,
-    ...body,
+    // Marked on the link itself, so no path that sends on it can skip this.
+    ...(link.spawned === true || deps.spawnLink?.(link.linkId) ? spawnLinkBody(body) : body),
     sentAt: new Date((deps.now ?? Date.now)()).toISOString(),
+  };
+}
+
+/**
+ * What may leave on a link a remote start made: every string redacted, no
+ * images, and only the fields this build knows (rebuilt, not copied, so a
+ * field added later cannot pass unredacted).
+ */
+function spawnLinkBody(
+  body: Pick<A2aRemoteEnvelope, 'kind' | 'taskId' | 'text' | 'state' | 'message' | 'evidence' | 'receipt' | 'images'>,
+): typeof body {
+  const r = (v: string): string => redactSecrets(v);
+  const evidence: CompletionEvidence | undefined = body.evidence
+    ? {
+      summary: r(body.evidence.summary),
+      items: body.evidence.items.map((item): EvidenceItem =>
+        item.kind === 'command'
+          ? { kind: 'command', status: item.status, summary: r(item.summary), command: r(item.command), ...(item.output !== undefined ? { output: r(item.output) } : {}) }
+          : {
+            kind: item.kind, status: item.status, summary: r(item.summary),
+            ...(item.location !== undefined ? { location: r(item.location) } : {}),
+            ...(item.output !== undefined ? { output: r(item.output) } : {}),
+          }),
+      ...(body.evidence.files ? { files: body.evidence.files.map(r) } : {}),
+    }
+    : undefined;
+  return {
+    kind: body.kind,
+    ...(body.taskId !== undefined ? { taskId: body.taskId } : {}),
+    ...(body.text !== undefined ? { text: r(body.text) } : {}),
+    ...(body.state !== undefined ? { state: body.state } : {}),
+    ...(body.message !== undefined ? { message: r(body.message) } : {}),
+    ...(evidence ? { evidence } : {}),
+    // A receipt is one of two words; anything else is not sent.
+    ...(body.receipt === 'delivered' || body.receipt === 'read' ? { receipt: body.receipt } : {}),
   };
 }
 
