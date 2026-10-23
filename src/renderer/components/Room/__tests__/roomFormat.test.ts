@@ -129,6 +129,15 @@ describe('factory system cards in the reader\'s language (RoomCard.notice)', () 
     }
   });
 
+  it('a bot with no worker slots says nothing started and how to allow workers, never that it waits', () => {
+    for (const locale of ['en', 'ko', 'pl', 'zh'] as const) {
+      setLocale(locale);
+      const off = noticeText(card({ notice: { code: 'workers.off', args: { bot: 'B' } } }), i18nT);
+      expect(off).toEqual({ title: i18nT('room.notice.workers.off', { bot: 'B' }), body: i18nT('room.notice.workers.off.body') });
+      expect(off?.title).toContain('B');
+    }
+  });
+
   it('words a known code in Korean, its values worded too; evidence bodies stay as written', () => {
     setLocale('ko');
     expect(noticeText(card({ notice: { code: 'worker.pausedResumable' } }), i18nT)?.title).toBe('워커 일시 중지됨 (이어서 가능)');

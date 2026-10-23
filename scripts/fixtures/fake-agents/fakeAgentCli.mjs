@@ -1,8 +1,9 @@
 // Non-interactive side of the fake agent CLIs (claude.mjs, codex.mjs): the
 // `--version` and sign-in status probes the first-run "Agent ready" cards run
 // (src/main/firstRun/AgentSetupDetector.ts and the `setup.loginStatus` rows in
-// src/shared/agentIdentity.ts), and the prompt a launch line such as
-// `claude "<prompt>"` hands the interactive TUI.
+// src/shared/agentIdentity.ts), the prompt a launch line such as
+// `claude "<prompt>"` hands the interactive TUI, and the flags of a Claude
+// Agent SDK spawn (fakeAgentSdk.mjs runs that session).
 //
 // Pure (argv and env in, an answer out) so scripts/__tests__/fakeAgentCli.test.mjs
 // can pin it without spawning anything.
@@ -38,6 +39,9 @@ const VALUE_FLAGS = new Set([
  * What one invocation asks for:
  *   { kind: 'version' }                  `--version` / `-v` / `-V`
  *   { kind: 'login-status' }             claude `auth status`, codex `login status`
+ *   { kind: 'sdk', … }                   claude `--output-format stream-json`:
+ *                                        a Claude Agent SDK session on stdio
+ *                                        (sdkArgs, fakeAgentSdk.mjs)
  *   { kind: 'tui', prompt?: string }     anything else: the interactive TUI,
  *                                        with the first positional argument as
  *                                        its first prompt (as both CLIs do)
@@ -48,6 +52,7 @@ export function parseFakeAgentArgs(agent, argv) {
   if (first === '--version' || first === '-v' || first === '-V') return { kind: 'version' };
   if (agent === 'claude' && first === 'auth' && args[1] === 'status') return { kind: 'login-status' };
   if (agent === 'codex' && first === 'login' && args[1] === 'status') return { kind: 'login-status' };
+  if (agent === 'claude' && args.some((a, i) => a === '--output-format' && args[i + 1] === 'stream-json')) return sdkArgs(args);
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (VALUE_FLAGS.has(a)) {
@@ -58,6 +63,41 @@ export function parseFakeAgentArgs(agent, argv) {
     if (a.trim()) return { kind: 'tui', prompt: a };
   }
   return { kind: 'tui' };
+}
+
+/**
+ * What an SDK spawn asks for, from the flags the Claude Agent SDK passes
+ * (its ProcessTransport): the `--mcp-config` server names (JSON only, as the
+ * SDK hands them over), the `--allowedTools` list, the model and permission
+ * mode, and the session to resume or name.
+ */
+function sdkArgs(args) {
+  const out = { kind: 'sdk', mcpServers: [], tools: [], model: null, permissionMode: null, sessionId: null, resume: null };
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    const v = args[i + 1];
+    if (a === '--mcp-config' && v !== undefined) {
+      i++;
+      try {
+        const servers = JSON.parse(v)?.mcpServers;
+        if (servers && typeof servers === 'object') out.mcpServers.push(...Object.keys(servers));
+      } catch { /* a config file path: no servers the fake can name */ }
+    } else if ((a === '--allowedTools' || a === '--allowed-tools') && v !== undefined) {
+      i++;
+      out.tools.push(...v.split(',').map((t) => t.trim()).filter(Boolean));
+    } else if (a === '--model' && v !== undefined) {
+      i++;
+      out.model = v;
+    } else if (a === '--permission-mode' && v !== undefined) {
+      i++;
+      out.permissionMode = v;
+    } else if ((a === '--session-id' || a === '--resume') && v !== undefined) {
+      i++;
+      out.sessionId = v;
+      if (a === '--resume') out.resume = v;
+    }
+  }
+  return out;
 }
 
 /**
@@ -90,7 +130,7 @@ export function probeAnswer(agent, kind, env = {}) {
  * piped stdout is flushed first.
  */
 export function answerProbe(agent, parsed, log) {
-  if (parsed.kind === 'tui') return false;
+  if (parsed.kind === 'tui' || parsed.kind === 'sdk') return false;
   const answer = probeAnswer(agent, parsed.kind, process.env);
   log('probe', { kind: parsed.kind, code: answer.code });
   process.stdout.write(answer.stdout);

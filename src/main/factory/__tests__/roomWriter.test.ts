@@ -480,6 +480,11 @@ describe('facts → system cards', () => {
     const [unheld] = writeFactCards(w, fact('bot.workers_full', { id: 'f-s5', workspaceId: 'ws1', ref: { botId: 'bot-00000001' }, payload: { scope: 'wmux', running: 8, limit: 8, held: false } }), bots);
     expect(`${unheld.title} ${unheld.body}`).not.toMatch(/automatically/);
     expect(unheld.notice).toEqual({ code: 'workers.full', args: { bot: expect.any(String), scope: 'wmux', inUse: 8, cap: 8 } });
+    // No worker slots at all (the first run's bot): nothing waits or starts by itself.
+    const [off] = writeFactCards(w, fact('bot.workers_full', { id: 'f-s6', workspaceId: 'ws1', ref: { botId: 'bot-00000001' }, payload: { scope: 'bot', running: 0, limit: 0, held: false } }), bots);
+    expect(off.title).toMatch(/ started no workers: its worker limit is 0$/);
+    expect(off.body).toBe('Nothing was started, pushed or opened as a pull request. Allow workers in its settings, then ask it again.');
+    expect(off.notice).toEqual({ code: 'workers.off', args: { bot: expect.any(String) } });
     expect(writeFactCards(w, fact('bot.workers_full', { id: 'f-s3', workspaceId: 'ws1', ref: { botId: 'bot-00000001' }, payload: { scope: 'elsewhere', running: 1, limit: 1 } }), bots)).toEqual([]);
   });
 

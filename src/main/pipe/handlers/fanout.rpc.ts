@@ -834,6 +834,10 @@ export function workersFullText(full: WorkerSlotsFull, held: boolean, heldNote =
     : 'start it again once one of the running workers ends'}.`;
 }
 
+/** What a fan-out of a bot with no worker slots is told. */
+export const WORKERS_OFF_TEXT =
+  'this bot may not start workers: its worker limit is 0, so nothing was started, pushed or opened as a pull request. Tell the owner the work needs workers: they can allow them in your settings and then ask you again.';
+
 /** What an accepted bot fan-out answers: the workers are not up yet. */
 export const BOT_FANOUT_STARTING_NOTE =
   'Accepted: the workers are starting, not started. Say they are starting, not that they started: a worker that could not start wakes you, and one that started reports through its task.';
@@ -1675,6 +1679,13 @@ export function registerFanOutRpc(
       const wmux = open.live !== undefined ? { live: open.live, limit: FANOUT_LIVE_TASK_CAP } : undefined;
       const full = workerSlotsFull(botProfile.budget, open.bot, open.factory, n, WAKE_LIMITS.GLOBAL_CONCURRENT_WORKERS, wmux);
       const most = Math.min(botProfile.budget.maxConcurrentWorkers, WAKE_LIMITS.GLOBAL_CONCURRENT_WORKERS);
+      if (botProfile.budget.maxConcurrentWorkers === 0) {
+        // No worker slots at all (the first run's bot starts with none): not
+        // held, since nothing should start by itself once the owner allows
+        // workers. The card tells the owner why nothing started.
+        botPort.workersFull(bot, { scope: 'bot', running: open.bot, limit: 0 });
+        return deny('RESOURCE_EXHAUSTED', WORKERS_OFF_TEXT);
+      }
       if (n > most) {
         // More tasks than the slots could ever hold: reported only when the
         // slots are all in use too (the card would say so).

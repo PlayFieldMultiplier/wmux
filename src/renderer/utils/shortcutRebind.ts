@@ -5,12 +5,14 @@ import {
   builtinOwning,
   customKeybindingsOn,
   displayCombo,
+  isPluginPageShortcut,
   rebindProblem,
   shortcutDescription,
   type CustomKeyLike,
   type ShortcutActionId,
 } from '../../shared/keymap';
 import { currentShortcutBindings, shortcutPlatform } from './shortcutBindings';
+import { cachedRailPageTitle } from '../plugins/usePlugins';
 
 /**
  * Rebinding a built-in from anywhere — Settings → Shortcuts and the command
@@ -20,6 +22,10 @@ import { currentShortcutBindings, shortcutPlatform } from './shortcutBindings';
 
 /** The user-facing name of `action` (its Settings → Shortcuts label). */
 export function describeShortcut(action: ShortcutActionId): string {
+  if (isPluginPageShortcut(action)) {
+    const name = action.slice('plugin:'.length);
+    return t('settings.sc.togglePluginPage', { name: cachedRailPageTitle(name) ?? name });
+  }
   const { key, vars } = shortcutDescription(action);
   return t(key as Parameters<typeof t>[0], vars);
 }
@@ -103,7 +109,7 @@ export function builtinKeyConflict(key: string): KeyConflict | null {
 
 /** True for actions that ship with no key (see UNBOUND_SHORTCUTS). */
 export function isUnboundByDefault(action: ShortcutActionId): boolean {
-  return UNBOUND_SHORTCUTS.some((e) => e.action === action);
+  return isPluginPageShortcut(action) || UNBOUND_SHORTCUTS.some((e) => e.action === action);
 }
 
 /**

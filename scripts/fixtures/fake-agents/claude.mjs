@@ -23,7 +23,10 @@
 //     does;
 //   - `--version` and `auth status --json` answer without the TUI, so the
 //     first-run "Agent ready" card reads it as installed and signed in
-//     (fakeAgentCli.mjs; FAKE_CLAUDE_SIGNED_OUT=1 reports signed out).
+//     (fakeAgentCli.mjs; FAKE_CLAUDE_SIGNED_OUT=1 reports signed out);
+//   - `--output-format stream-json` (a Claude Agent SDK spawn, such as a
+//     bot's turn) answers each prompt with `Fake answer: …` over the SDK's
+//     stdio protocol, with no TUI and no hooks (fakeAgentSdk.mjs).
 //
 // Hooks run ONLY when pointed at explicitly — never from the home directory or
 // CLAUDE_CONFIG_DIR (wmux sets that for account panes, which would make it the
@@ -44,6 +47,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { envFlag, makeLogger, runFakeTui } from './fakeAgentTui.mjs';
 import { answerProbe, parseFakeAgentArgs } from './fakeAgentCli.mjs';
+import { runFakeSdk } from './fakeAgentSdk.mjs';
 
 const log = makeLogger('claude');
 const cli = parseFakeAgentArgs('claude', process.argv.slice(2));
@@ -113,7 +117,8 @@ function fireHook(event, conversation, extra = {}) {
   }
 }
 
-if (!answerProbe('claude', cli, log)) runFakeTui({
+if (cli.kind === 'sdk') runFakeSdk(cli, log);
+else if (!answerProbe('claude', cli, log)) runFakeTui({
   agent: 'claude',
   initialPrompt: cli.prompt,
   title: '✳ Claude Code',

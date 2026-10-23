@@ -1,7 +1,9 @@
 import { useStore } from '../stores';
+import { listedRailPageNames } from '../plugins/usePlugins';
 import {
   defaultBindings,
   effectiveBindings,
+  isPluginPageShortcut,
   ShortcutPressGuard,
   type ShortcutBinding,
   type ShortcutOverrides,
@@ -37,6 +39,27 @@ export function currentShortcutBindings(): readonly ShortcutBinding[] {
     cache = { platform, overrides, bindings: effectiveBindings(platform, overrides) };
   }
   return cache.bindings;
+}
+
+let activeCache: { all: readonly ShortcutBinding[]; pages: ReadonlySet<string>; bindings: ShortcutBinding[] } | null = null;
+
+/**
+ * What a key press can run: currentShortcutBindings without the key of a
+ * plugin page the rail does not list (removed or denied). Its override stays
+ * stored, so Settings can still take it off, but the key reaches the
+ * terminal instead of opening a page that is not there.
+ */
+export function activeShortcutBindings(): readonly ShortcutBinding[] {
+  const all = currentShortcutBindings();
+  const pages = listedRailPageNames();
+  if (!activeCache || activeCache.all !== all || activeCache.pages !== pages) {
+    activeCache = {
+      all,
+      pages,
+      bindings: all.filter((b) => !isPluginPageShortcut(b.action) || pages.has(b.action.slice('plugin:'.length))),
+    };
+  }
+  return activeCache.bindings;
 }
 
 let defaultsCache: { platform: NodeJS.Platform; bindings: ShortcutBinding[] } | null = null;

@@ -69,13 +69,10 @@ import { botsStopPort, stopAllSummary, toastStoppedWork, type BotsStopPort } fro
 import { InlineConfirm } from './InlineConfirm';
 import GuestBotsDialog, { type GuestConversationOption } from './GuestBotsDialog';
 import { getGuestBotPort, type GuestBotPort } from './guestBots';
+import { lastBotsConversation, rememberBotsConversation } from './botsSelection';
 import './bots.css';
 
 type T = ReturnType<typeof useT>;
-
-/** The conversation shown last, kept while the app runs (leaving the page
- *  and coming back opens it again). */
-let lastSelected: string | null = null;
 
 /** A conversation's name: the bot's own, or the group's (a group made from
  *  a workspace's room: the workspace's). */
@@ -623,7 +620,7 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop, eng
   const [query, setQuery] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(() => lastSelected);
+  const [selectedId, setSelectedId] = useState<string | null>(() => lastBotsConversation());
   // Narrow sheets show one column: the list, or the chat with a back button.
   const [view, setView] = useState<'list' | 'chat'>('list');
 
@@ -728,7 +725,7 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop, eng
 
   const selectedKey = starting ? pendingId : selected?.c.id ?? null;
   useEffect(() => {
-    if (selectedKey) lastSelected = selectedKey;
+    if (selectedKey) rememberBotsConversation(selectedKey);
   }, [selectedKey]);
 
   // "+": the Settings add form in a dialog here (a build without the create

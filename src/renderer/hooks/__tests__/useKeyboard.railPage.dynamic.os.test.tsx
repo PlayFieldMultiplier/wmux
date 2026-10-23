@@ -8,6 +8,13 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import React from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+// The plugins whose rail page the rail lists (the plugin list is not read here).
+const railPages = vi.hoisted(() => ({ names: new Set(['office']) as ReadonlySet<string> }));
+vi.mock('../../plugins/usePlugins', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../plugins/usePlugins')>()),
+  listedRailPageNames: () => railPages.names,
+}));
+
 import { useKeyboard, WORKSPACES_ONLY_ACTIONS } from '../useKeyboard';
 import { useStore } from '../../stores';
 
@@ -50,6 +57,43 @@ afterEach(() => {
 });
 
 describe('shortcuts on a rail page', () => {
+  it('a key given to a plugin rail page opens it from any page and toggles it back', () => {
+    act(() => useStore.getState().setShortcutOverride('plugin:office', 'Ctrl+Alt+P'));
+    const key = { ctrlKey: true, altKey: true, key: 'p', code: 'KeyP' };
+    press(key);
+    expect(useStore.getState().appRoute).toBe('plugin:office');
+    press(key);
+    expect(useStore.getState().appRoute).toBe('workspaces');
+    act(() => useStore.getState().setAppRoute('fleet'));
+    press(key);
+    expect(useStore.getState().appRoute).toBe('plugin:office');
+    act(() => useStore.getState().resetShortcut('plugin:office'));
+  });
+
+  it('a held plugin page key opens the page once and does not flip it back', () => {
+    act(() => useStore.getState().setShortcutOverride('plugin:office', 'Ctrl+Alt+P'));
+    const key = { ctrlKey: true, altKey: true, key: 'p', code: 'KeyP' };
+    press(key);
+    press({ ...key, repeat: true });
+    expect(useStore.getState().appRoute).toBe('plugin:office');
+    press({ ...key, repeat: true });
+    expect(useStore.getState().appRoute).toBe('plugin:office');
+    act(() => useStore.getState().resetShortcut('plugin:office'));
+  });
+
+  it('the key of a plugin the rail no longer lists opens nothing', () => {
+    railPages.names = new Set();
+    try {
+      act(() => useStore.getState().setShortcutOverride('plugin:office', 'Ctrl+Alt+P'));
+      act(() => useStore.getState().setAppRoute('fleet'));
+      press({ ctrlKey: true, altKey: true, key: 'p', code: 'KeyP' });
+      expect(useStore.getState().appRoute).toBe('fleet');
+    } finally {
+      act(() => useStore.getState().resetShortcut('plugin:office'));
+      railPages.names = new Set(['office']);
+    }
+  });
+
   it('pane and PTY shortcuts do nothing while Fleet covers the panes', () => {
     expect(WORKSPACES_ONLY_ACTIONS.has('closeSurface')).toBe(true);
     expect(WORKSPACES_ONLY_ACTIONS.has('splitHorizontal')).toBe(true);

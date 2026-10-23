@@ -6,7 +6,7 @@ import {
   getLastBroadcastAgentStatus,
   hasOutstandingRunningClaim,
 } from '../ipc/handlers/metadata.handler';
-import { markSettled } from './idleSuppression';
+import { isByteIdle, markSettled } from './idleSuppression';
 
 /**
  * The statuses a settle edge must never overwrite (the F5 rule, shared by the
@@ -91,6 +91,36 @@ export function settleHookTurnToIdle(
     markSettled(ptyId, now);
     return true;
   }
+  broadcastSettledIdle(ptyId, win, now);
+  return true;
+}
+
+/**
+ * The one way main says `running` for an agent turn the daemon reports (its
+ * `agent.turn` edge, a mid-turn idle edge, a resubscribe's snapshot): never
+ * over a pane waiting on a human, which shows `awaiting_input` (an approval,
+ * or a question with its `pendingQuestion`). The daemon withholds those too;
+ * this guards what main is showing. False when withheld.
+ */
+export function broadcastTurnRunning(
+  ptyId: string,
+  win: BrowserWindow | null,
+  extra: { daemonTurnOpen?: true; agentName?: string } = {},
+): boolean {
+  if (!ptyId || getLastBroadcastAgentStatus(ptyId) === 'awaiting_input') return false;
+  broadcastMetadataUpdate(win, { ptyId, agentStatus: 'running', ...extra });
+  return true;
+}
+
+/**
+ * The daemon's agent turn ended. A pane still printing gets its own idle edge
+ * later; a byte-idle one gets none (that edge was spent while the turn ran, or
+ * the turn never printed), so it is settled here. Only a pane still showing
+ * this turn's `running`: a result, a waiting prompt or a dialog stands. True
+ * when settled.
+ */
+export function settleEndedDaemonTurn(ptyId: string, win: BrowserWindow | null, now: number = Date.now()): boolean {
+  if (!ptyId || !isByteIdle(ptyId) || getLastBroadcastAgentStatus(ptyId) !== 'running') return false;
   broadcastSettledIdle(ptyId, win, now);
   return true;
 }

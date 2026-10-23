@@ -36,6 +36,7 @@
  */
 
 import { PC_RAIL_SHORTCUTS } from './pcRail/shortcuts';
+import { PLUGIN_NAME_REGEX } from './pluginHost';
 
 /**
  * Every action a built-in shortcut can run. `prefix` is the tmux-style prefix
@@ -68,7 +69,24 @@ export const SHORTCUT_ACTION_IDS = [
   'renameTab', 'togglePluginsView',
 ] as const;
 
-export type ShortcutActionId = typeof SHORTCUT_ACTION_IDS[number];
+/**
+ * A plugin's rail page, `plugin:<name>` (the same string as its AppRoute).
+ * Plugins come and go, so these are not in the table above: like the
+ * UNBOUND_SHORTCUTS they ship with no key, and an override binds one.
+ */
+export type PluginPageShortcutId = `plugin:${string}`;
+
+export type ShortcutActionId = typeof SHORTCUT_ACTION_IDS[number] | PluginPageShortcutId;
+
+/** The shortcut action that opens plugin `name`'s rail page. */
+export function pluginPageShortcut(name: string): PluginPageShortcutId {
+  return `plugin:${name}`;
+}
+
+/** True for a plugin rail page action with a well-formed plugin name. */
+export function isPluginPageShortcut(value: unknown): value is PluginPageShortcutId {
+  return typeof value === 'string' && value.startsWith('plugin:') && PLUGIN_NAME_REGEX.test(value.slice('plugin:'.length));
+}
 
 export interface KeymapEntry {
   /** What the combo does. Several rows can share an action (aliases). */
@@ -306,7 +324,8 @@ export function concreteCombo(
 }
 
 export function isShortcutActionId(value: unknown): value is ShortcutActionId {
-  return typeof value === 'string' && (SHORTCUT_ACTION_IDS as readonly string[]).includes(value);
+  return (typeof value === 'string' && (SHORTCUT_ACTION_IDS as readonly string[]).includes(value))
+    || isPluginPageShortcut(value);
 }
 
 /** The default bindings on `platform` (the prefix row excluded). */
@@ -608,6 +627,11 @@ export function sanitizeShortcutOverrides(raw: unknown): ShortcutOverrides {
     ...UNBOUND_SHORTCUTS.map((e) => e.action),
   ]);
   for (const [action, combo] of Object.entries(raw as Record<string, unknown>)) {
+    // A plugin page has no default to switch off, so only a key is kept.
+    if (isPluginPageShortcut(action)) {
+      if (typeof combo === 'string' && invalidShortcutCombo(combo) === null) out[action] = combo;
+      continue;
+    }
     if (!isShortcutActionId(action) || !configurable.has(action)) continue;
     if (combo === null) out[action] = null;
     else if (typeof combo === 'string' && invalidShortcutCombo(combo) === null) out[action] = combo;

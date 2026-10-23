@@ -515,6 +515,18 @@ describe('decidePrimaryAction', () => {
     expect(decidePrimaryAction({ ...base, uiState: 'reopen' })).toBeNull();
   });
 
+  it('the first task: Send after setup and before the sample task, nothing while it runs, then Open', () => {
+    expect(decidePrimaryAction({ ...base, firstTask: 'send' })).toBe('send');
+    // Setup that unblocks first keeps the emphasis.
+    expect(decidePrimaryAction({ ...base, hooksState: 'offer', firstTask: 'send' })).toBe('hooks');
+    expect(decidePrimaryAction({ ...base, mcpRegistered: false, firstTask: 'send' })).toBe('register');
+    expect(decidePrimaryAction({ ...base, agentAction: true, firstTask: 'send' })).toBe('agent');
+    // The consent screen and the wait are in flight: Try does not take over.
+    expect(decidePrimaryAction({ ...base, firstTask: 'busy' })).toBeNull();
+    expect(decidePrimaryAction({ ...base, firstTask: 'open' })).toBe('open');
+    expect(decidePrimaryAction({ ...base, firstTask: 'none' })).toBe('try');
+  });
+
   it('has no primary when Claude is missing', () => {
     expect(decidePrimaryAction({ ...base, uiState: 'claude-missing', claudeFound: false, mcpRegistered: false, hooksState: 'unknown' })).toBeNull();
   });

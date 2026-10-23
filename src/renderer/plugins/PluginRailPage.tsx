@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { usePlugins, refreshPlugins } from './usePlugins';
+import { railPagePlugins } from './railPagePlugins';
 import PluginFrame from './PluginFrame';
 import { useStore } from '../stores';
 import { useT } from '../hooks/useT';
@@ -9,7 +10,7 @@ import { FOCUS_RING } from '../components/focusRing';
 export function PluginRailNavigation({ compact }: { compact: boolean }) {
   const { plugins } = usePlugins();
   const route = useStore((s) => s.appRoute);
-  const pages = plugins.filter((p) => p.contributes.railPage && p.trustStatus !== 'denied');
+  const pages = railPagePlugins(plugins);
   if (pages.length === 0) return null;
   // Under the built-in pages, set apart by one short hairline; each carries
   // its catalog glyph (a package for a bundle the catalog did not install).

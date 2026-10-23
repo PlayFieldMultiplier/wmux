@@ -1389,7 +1389,25 @@ export class DaemonPTYBridge extends EventEmitter {
     if (this.lastEscAt === this.titleEdgeEscAt) return;
     if (this.agentDetector?.getLastAgent() !== 'Claude Code') return;
     this.titleEdgeEscAt = this.lastEscAt;
+    this.closeInterruptedTurn();
     this.emit('turnInterrupted', { sessionId, agent: 'Claude Code' });
+  }
+
+  /**
+   * The agent reported its turn interrupted (its own row, or Claude Code's
+   * idle title right after a lone Esc). No Stop hook follows an interrupt, so
+   * the episode ends here: otherwise it stays open, and the pane keeps reading
+   * as mid-turn (`agent.turn`) until the next prompt. Also behind a dialog:
+   * the interrupt ended the turn the dialog belonged to, and the dialog's own
+   * state (awaitingHuman) still drives the display until it is gone. Only on
+   * this turn's own interrupt: a lone Esc (or the agent's own interrupt,
+   * noteInterrupt) since the episode opened and within the confirm window. A
+   * redraw can reprint an older turn's row, which says nothing of this one.
+   */
+  private closeInterruptedTurn(): void {
+    if (!this.turnOpen && !this.turnSoftClosed) return;
+    if (Date.now() - this.lastEscAt >= ESC_INTERRUPT_CONFIRM_MS || this.lastEscAt < this.turnOpenedAt) return;
+    this.closeTurn();
   }
 
   /**
@@ -1819,6 +1837,7 @@ export class DaemonPTYBridge extends EventEmitter {
     // recovery replay prints it again for a turn that is long over.
     this.interruptedUnsubscribe = agentDetector.onInterrupted(({ agent }) => {
       if (this.muted || Date.now() - this.lastResizeAtMs < RESIZE_REDRAW_GUARD_MS) return;
+      this.closeInterruptedTurn();
       this.emit('turnInterrupted', { sessionId, agent });
     });
 

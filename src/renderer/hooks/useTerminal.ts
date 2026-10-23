@@ -9,7 +9,7 @@ import { applyUnicodeWidthModel } from '../../shared/terminalUnicode';
 import { isSafeGeometry } from '../../shared/terminalGeometry';
 import { isPrefixTrigger, resolveShortcut } from '../../shared/keymap';
 import { mentionKeyClaim } from '../utils/agentMention';
-import { currentShortcutBindings, defaultShortcutBindings, shortcutPressGuard } from '../utils/shortcutBindings';
+import { activeShortcutBindings, defaultShortcutBindings, shortcutPressGuard } from '../utils/shortcutBindings';
 import { isPcRailAction, pcRailClaimsKey } from '../components/PcRail/pcRailModel';
 import { xtermWindowsBuildNumber } from '../../shared/conptyWindows';
 import { WebLinksAddon } from '@xterm/addon-web-links';
@@ -2283,7 +2283,7 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
           event: e,
           by: pass ? 'none' : describeDeclinedKey(e, {
             isPressDuplicate: (ev) => shortcutPressGuard.isDuplicate(ev),
-            bindings: currentShortcutBindings(),
+            bindings: activeShortcutBindings(),
             prefixKeyCode: useStore.getState().prefixConfig.key,
           }),
         };
@@ -2388,7 +2388,7 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
       // rules to honour a disabled built-in (#1152). On macOS the ⌘ family is
       // simply not Ctrl, so Ctrl+D (EOF), Ctrl+K (kill-line) and friends reach
       // readline there (owner-reported 2026-07-19).
-      const bindings = currentShortcutBindings();
+      const bindings = activeShortcutBindings();
       const shortcut = resolveShortcut(e, bindings);
       // A built-in the user switched off or moved away (Settings → Shortcuts)
       // is the pane's again: xterm PROCESSES it — Ctrl+T reaches Codex's

@@ -177,7 +177,7 @@ const NOTICE_CODES: ReadonlyMap<string, boolean> = new Map([
   ['gate.skipped', false], ['gate.busy', true], ['gate.noBase', true], ['gate.refused', false],
   ['gate.notRunNoBot', true], ['gate.notRunNoWorktree', true], ['gate.notRunNoBaseRef', true],
   ['research.completed', true], ['research.unverified', true], ['research.notCompleted', false], ['task.merged', true],
-  ['budget.exhausted', true], ['budget.held', true], ['bot.usageLimit', false], ['workers.full', true],
+  ['budget.exhausted', true], ['budget.held', true], ['bot.usageLimit', false], ['workers.full', true], ['workers.off', true],
   ['task.done', false], ['task.reported', false], ['task.failed', false], ['task.cancelled', false],
   ['task.stoppedByOwner', false], ['task.inputRequired', false], ['task.keptFolderCleaned', true],
   ['verify.passed', false], ['verify.killed', false], ['verify.failed', false], ['verify.skipped', false],

@@ -749,7 +749,7 @@ export function useNotificationListener() {
       // workspace metadata — pull it OUT here, alongside ptyId, so it can never
       // flow into `...rest` and get written into updateWorkspaceMetadata by
       // applyToWorkspace's spread.
-      const { ptyId, workspaceId: payloadWsId, activity, teammatesWorking, subagents, shellPrompt, pendingQuestion, lastMessage, lastActivity, paneId, paneLabel, paneRole, agentSlug, hookKind, settled, ...rest } = payload;
+      const { ptyId, workspaceId: payloadWsId, activity, teammatesWorking, subagents, shellPrompt, pendingQuestion, lastMessage, lastActivity, paneId, paneLabel, paneRole, agentSlug, hookKind, settled, daemonTurnOpen, ...rest } = payload;
 
       // The orchestrator's own brain pty (the `claude-pty` vendor's embedded
       // Claude Code TUI) is not a fleet agent. The daemon has no idea it is
@@ -820,7 +820,8 @@ export function useNotificationListener() {
           // replaced the per-tool-call PostToolUse hook as the running source.
           if (rest.agentStatus === 'running') {
             state.markSurfaceRunning(ptyId);
-            // The TURN LATCH. Only a hook-reported turn start opens it — a
+            // The TURN LATCH. A daemon-owned agent turn or hook turn start
+            // opens it — a
             // `UserPromptSubmit`, or main's reopen on the first tool of a turn
             // that had none (`agent.tool_started`), or a lead turn a
             // teammate's message woke (`agent.teammate_wake`, #2494) —
@@ -832,6 +833,8 @@ export function useNotificationListener() {
             // the turn.
             if (hookKind === 'agent.user_prompt_submit' || hookKind === 'agent.tool_started' || hookKind === 'agent.teammate_wake') {
               state.markSurfaceTurnOpen(ptyId);
+            } else if (daemonTurnOpen === true) {
+              state.openDaemonTurn(ptyId);
             }
           }
           // A SETTLE (main's interrupt / back-at-prompt / process-exit / latch
@@ -844,6 +847,10 @@ export function useNotificationListener() {
           if (rest.agentStatus === 'idle' && settled === true) {
             state.settleSurfaceTurn(ptyId);
           }
+        }
+        // The daemon's "no turn": withdraws only a latch the daemon opened.
+        if (daemonTurnOpen === false) {
+          state.closeDaemonTurn(ptyId);
         }
         // The surface's own branch (Moa's view pointer): the workspace record
         // above only follows the active pane, and only at the time it arrives.

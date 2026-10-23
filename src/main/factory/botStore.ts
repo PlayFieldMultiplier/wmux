@@ -332,6 +332,7 @@ export function parseBotProfile(raw: unknown): BotProfile | null {
     ...(avatar ? { avatar } : {}),
     ...(isIdentitySlot(r.hue) ? { hue: r.hue } : {}),
     enabled: r.enabled,
+    ...(r.firstRun === true ? { firstRun: true as const } : {}),
     ...(parked ? { parked } : {}),
     createdAt: r.createdAt as number,
     updatedAt: r.updatedAt as number,
@@ -411,6 +412,8 @@ export interface BotCreateInput {
   avatar?: unknown;
   /** Add bot's recipe (shared/botRecipes.ts), display only; Add bot only. */
   recipe?: unknown;
+  /** The first run's bot (BotProfile.firstRun); the first run only. */
+  firstRun?: unknown;
 }
 
 /** The fields `update` may change (identity — id, workspace, role — never).
@@ -688,6 +691,7 @@ export class BotStore implements BotDirectoryApi {
       ...(avatar ? { avatar } : {}),
       ...(hue !== undefined ? { hue } : {}),
       enabled: input.enabled ?? true,
+      ...(input.firstRun === true ? { firstRun: true as const } : {}),
       createdAt: now,
       updatedAt: now,
     };

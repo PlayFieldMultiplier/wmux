@@ -5,10 +5,12 @@ import {
   A2A_REMOTE_RPC,
   deliveredImagesOf,
   localSideOf,
+  missKindOf,
   type A2aRemoteDeliveryResult,
   type A2aRemoteHeldReason,
   type A2aRemoteInboxItem,
   type A2aRemoteTaskState,
+  type A2aRemoteWaitingCause,
 } from '../../shared/a2aRemoteDelivery';
 import { GATED_DELIVERY_DEADLINE_MARGIN_MS, GATED_NEW_TASK_SEND_MAIN_TIMEOUT_MS } from '../../shared/freshContext';
 import { TERMINAL_STATES, type Task } from '../../shared/types';
@@ -67,7 +69,7 @@ export interface RemoteA2aBridgeDeps {
 type Mark =
   | { delivered: true; ptyId?: string; note?: 'pasted-not-submitted' }
   | { held: A2aRemoteHeldReason }
-  | { attempted: false };
+  | { attempted: false; waiting?: A2aRemoteWaitingCause };
 
 /** One unit of work: the task itself, or one inbox item of it. */
 interface Work {
@@ -90,8 +92,12 @@ export class RemoteA2aBridge {
   /** A mark the daemon did not take yet: retried before anything else, never re-delivered. */
   private readonly pendingMarks = new Map<string, { taskId: string; messageId?: string; mark: Mark }>();
   private readonly retry = new Map<string, { at: number; delayMs: number }>();
-  /** Consecutive "written nowhere" answers per unit (no agent in the pane). */
-  private readonly misses = new Map<string, { count: number; since: number }>();
+  /**
+   * "Written nowhere" answers per unit since its first one; only a delivery
+   * (or the unit leaving the list) starts them again. `waiting` says whether
+   * the last one was an agent behind a prompt or a person typing.
+   */
+  private readonly misses = new Map<string, { count: number; since: number; waiting: boolean }>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private unsubscribe: (() => void) | null = null;
   private running: Promise<void> | null = null;
@@ -292,18 +298,36 @@ export class RemoteA2aBridge {
     if (isRecord(result) && 'error' in result && typeof result.error === 'string') {
       this.deps.log?.('warn', `[a2a-remote] renderer refused ${unit.key}: ${result.error}`);
     }
-    // Written nowhere (no agent in the pane, a person typing): the attempt is
-    // cleared so a later try may write. A pane that keeps having no agent is
-    // held for a person instead of being retried forever.
-    const miss = this.misses.get(unit.key) ?? { count: 0, since: this.now() };
+    // Written nowhere: the attempt is cleared so a later try may write. The
+    // misses count from the first one, whatever their kinds; the current one
+    // picks what happens once they have gone on too long. A pane with no agent
+    // is held for a person instead of being retried forever. One whose agent
+    // is there but behind a prompt, or a person typing, is not held: it
+    // retries at the base delay and goes in soon after that clears, and from
+    // then on every miss tells the daemon why (it tells the sender once; a
+    // reply it could not send goes with the next). Anything else just retries.
+    const kind = isRecord(result) && 'reason' in result ? missKindOf(result.reason) : 'retry';
+    const waiting: A2aRemoteWaitingCause | undefined = kind === 'agent-prompt' || kind === 'user-typing' ? kind : undefined;
+    const miss = this.misses.get(unit.key) ?? { count: 0, since: this.now(), waiting: false };
+    if (waiting) {
+      this.retry.set(unit.key, { at: this.now() + REMOTE_BRIDGE_RETRY_MIN_MS, delayMs: REMOTE_BRIDGE_RETRY_MIN_MS });
+    } else if (miss.waiting && kind === 'no-agent') {
+      // From waiting to no agent: the backoff starts again.
+      this.retry.delete(unit.key);
+      this.backoff(unit.key);
+    }
     miss.count += 1;
+    miss.waiting = waiting !== undefined;
     this.misses.set(unit.key, miss);
-    if (miss.count >= REMOTE_BRIDGE_NO_AGENT_TRIES || this.now() - miss.since >= REMOTE_BRIDGE_NO_AGENT_MS) {
+    const long = miss.count >= REMOTE_BRIDGE_NO_AGENT_TRIES || this.now() - miss.since >= REMOTE_BRIDGE_NO_AGENT_MS;
+    if (long && kind === 'no-agent') {
       this.misses.delete(unit.key);
       await this.mark(unit.key, { ...ref, mark: { held: 'no-agent' } });
       return 'no-agent';
     }
-    await this.mark(unit.key, { ...ref, mark: { attempted: false } });
+    // The daemon tells the sender of a task only, never on a reply's item.
+    const tell = long && waiting !== undefined && !item;
+    await this.mark(unit.key, { ...ref, mark: { attempted: false, ...(tell ? { waiting } : {}) } });
     return 'not-delivered';
   }
 

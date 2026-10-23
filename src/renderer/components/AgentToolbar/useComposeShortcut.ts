@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { useStore } from '../../stores';
 import { focusedTerminalPtyId } from '../../utils/focusedSurface';
-import { currentShortcutBindings, shortcutPressGuard } from '../../utils/shortcutBindings';
+import { activeShortcutBindings, shortcutPressGuard } from '../../utils/shortcutBindings';
 import { isComposeChord, composeOwnerHost } from '../../terminal/composeChord';
 
 /**
@@ -39,7 +39,7 @@ export function useComposeShortcut(): void {
       // bindings — nothing at all when the user switched it off in Settings →
       // Shortcuts, and the key then belongs to the pane (useTerminal's
       // released-shortcut branch writes the byte).
-      if (!isComposeChord(e, currentShortcutBindings())) return;
+      if (!isComposeChord(e, activeShortcutBindings())) return;
       // Key repeat must not flap the popover open and shut. The pane gate
       // swallows repeats too (the chord predicate accepts them), so this is a
       // deliberate NON-REPEATING chord, not a gate disagreement: a held Ctrl+G
