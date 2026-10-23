@@ -39,7 +39,8 @@ export function registerDictationHandlers(getWindow: () => BrowserWindow | null)
   };
   const store = new DictationModelStore({
     dataDir: getWmuxDir(),
-    fetch: (url, init) => net.fetch(url, { signal: init.signal }),
+    // no-store: the model is kept in the data folder, so the HTTP cache would hold a second copy.
+    fetch: (url, init) => net.fetch(url, { signal: init.signal, cache: 'no-store' }),
     wasmPath,
     onState: push,
   });

@@ -169,6 +169,8 @@ export async function stopDictation(): Promise<void> {
   set({ phase: 'transcribing', startedAt: null });
   try {
     const audio = await rec.stop();
+    // A cancel while the recording was still being decoded: start no worker for it.
+    if (gen !== generation) return;
     const seconds = audio.length / SAMPLE_RATE;
     const t0 = performance.now();
     const text = await transcribeInWorker(audio);

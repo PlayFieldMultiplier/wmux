@@ -151,6 +151,20 @@ describe('the engine', () => {
     expect(d.getDictationState()).toMatchObject({ phase: 'idle', error: 'the speech engine took too long' });
   });
 
+  it('Esc while the recording is still being decoded asks no engine to transcribe it', async () => {
+    const audio = deferred<Float32Array>();
+    h.startRecording.mockResolvedValue({ stop: vi.fn(() => audio.promise), cancel: vi.fn() });
+    const onText = vi.fn();
+    await d.toggleDictation('chat:a', onText);
+    const stopped = d.stopDictation();
+    d.cancelDictation();
+    audio.resolve(new Float32Array(16_000));
+    await stopped;
+    expect(h.workers.flatMap((w) => w.posted.map((m) => m.type))).not.toContain('transcribe');
+    expect(onText).not.toHaveBeenCalled();
+    expect(d.getDictationState()).toMatchObject({ phase: 'idle', error: null });
+  });
+
   it('Esc while transcribing stops the engine, writes nothing and reports nothing', async () => {
     const { stopped, onText, worker } = await recordThenStop();
     d.cancelDictation();
