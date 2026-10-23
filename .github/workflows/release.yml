@@ -214,6 +214,11 @@ jobs:
           WMUX_PACKAGE_TERMINAL_CORE: '1'
         run: npm run make
 
+      # The e2e fake agents (scripts/fixtures/fake-agents) answer as Claude Code
+      # and Codex; a package carrying one, under any name, is never released.
+      - name: Release bundle has no fake agent
+        run: node scripts/check-release-bundle.mjs out
+
       # The packaged helper must be byte-identical to the one the main bundle
       # pins, and the pin must be in the bundle: otherwise this build ships a
       # wmux whose computer use can never start.
@@ -624,6 +629,11 @@ jobs:
         env:
           WMUX_PACKAGE_TERMINAL_CORE: '1'
         run: npm run make
+
+      # The e2e fake agents (scripts/fixtures/fake-agents) answer as Claude Code
+      # and Codex; a package carrying one, under any name, is never released.
+      - name: Release bundle has no fake agent
+        run: node scripts/check-release-bundle.mjs out
         timeout-minutes: 60
 
       # The packaged app must carry the manifest written above, byte for byte:
@@ -846,6 +856,11 @@ jobs:
         env:
           WMUX_PACKAGE_TERMINAL_CORE: '1'
         run: npm run make
+
+      # The e2e fake agents (scripts/fixtures/fake-agents) answer as Claude Code
+      # and Codex; a package carrying one, under any name, is never released.
+      - name: Release bundle has no fake agent
+        run: node scripts/check-release-bundle.mjs out
         timeout-minutes: 30
 
       # The packaged app must carry the manifest written above, byte for byte:
