@@ -3214,6 +3214,7 @@ export const ko = {
   'firstRunWizard.alreadyCompleted': '{date}에 완료되었습니다',
   'firstRunWizard.fallbackPressEnter': '계속하려면 Enter를 누르세요',
   'firstRunWizard.fallbackButton': '계속',
+  'firstRunWizard.sampleTaskFailed': '터미널에서 샘플 작업을 시작하지 못했어요.',
   'firstRunWizard.statuslineHeading': 'Claude Code 상태줄 (권장)',
   'firstRunWizard.statuslineDescription':
     'Claude Code 입력창 아래에 모델·컨텍스트 사용량·사용 한도를 표시합니다. 직접 설정한 상태줄이 있으면 절대 덮어쓰지 않습니다.',

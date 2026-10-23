@@ -3807,6 +3807,7 @@ export const en = {
   'firstRunWizard.alreadyCompleted': 'Already completed on {date}',
   'firstRunWizard.fallbackPressEnter': 'Press Enter to continue',
   'firstRunWizard.fallbackButton': 'Continue',
+  'firstRunWizard.sampleTaskFailed': 'The sample task could not start in the terminal.',
   'firstRunWizard.statuslineHeading': 'Claude Code statusline (recommended)',
   'firstRunWizard.statuslineDescription':
     'Show model, context usage, and rate limits under Claude Code\'s input box. Your own statusline, if any, is never overwritten.',

@@ -4,6 +4,10 @@
 //
 //   npm run e2e:first-run -- --app <packaged wmux executable> [--keep] [--artifacts <dir>]
 //
+// Package from a checkout whose path has no dot-directory in it (not one under
+// `.claude/`, say): asar's unpack glob does not match dot paths, so such a build
+// ships no app.asar.unpacked and its local terminals cannot start.
+//
 // What it proves, driven through the real UI over CDP (data-testid handles
 // only, through scripts/control-wmux.mjs):
 //   1. the "Welcome to wmux" wizard opens on a fresh profile;

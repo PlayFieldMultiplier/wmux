@@ -3781,6 +3781,7 @@ export const pl = {
   'firstRunWizard.alreadyCompleted': 'Ukończono już {date}',
   'firstRunWizard.fallbackPressEnter': 'Naciśnij Enter, aby kontynuować',
   'firstRunWizard.fallbackButton': 'Kontynuuj',
+  'firstRunWizard.sampleTaskFailed': 'Nie udało się uruchomić przykładowego zadania w terminalu.',
   'firstRunWizard.statuslineHeading': 'Pasek stanu Claude Code (zalecane)',
   'firstRunWizard.statuslineDescription':
     'Pokaż model, zużycie kontekstu i limity zapytań pod polem wejścia Claude Code. Twój własny pasek stanu, jeśli istnieje, nigdy nie jest nadpisywany.',

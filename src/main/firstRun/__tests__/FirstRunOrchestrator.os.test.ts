@@ -84,7 +84,13 @@ vi.mock('../SampleTaskRunner', () => ({
   },
 }));
 
-import { FirstRunOrchestrator } from '../FirstRunOrchestrator';
+import {
+  FirstRunOrchestrator,
+  SAMPLE_PROMPT_END_GRACE_MS,
+  SAMPLE_WRITE_RETRY_MS,
+  SAMPLE_WRITE_WINDOW_MS,
+  samplePromptVerdict,
+} from '../FirstRunOrchestrator';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -463,11 +469,16 @@ describe('FirstRunOrchestrator', () => {
     dc.emit('session:data', { sessionId: 'session-A', data: Buffer.from('hello', 'utf8') });
     expect(received).toEqual(['hello']);
 
-    // Write goes through writeToSession with sanitized text.
-    source.write('cmd\r');
-    expect(dc.writeToSession).toHaveBeenCalledTimes(1);
-    expect(dc.writeToSession.mock.calls[0][0]).toBe('session-A');
-    expect(typeof dc.writeToSession.mock.calls[0][1]).toBe('string');
+    // The write goes through the daemon's conditional write, never the pipe.
+    dc.rpc.mockResolvedValueOnce({ events: [{ type: 'prompt_end', byteOffset: 9 }], eventCount: 2, totalBytesWritten: 9, keyInputRevision: 0, incarnationId: 'inc-1', emptyShellPrompt: true, sessionFound: true });
+    dc.rpc.mockResolvedValueOnce({ written: true });
+    await expect(source.write('cmd\r')).resolves.toBe(true);
+    expect(dc.writeToSession).not.toHaveBeenCalled();
+    expect(dc.rpc.mock.calls[1]).toEqual(['daemon.writeIfUnchanged', {
+      sessionId: 'session-A',
+      data: 'cmd\r',
+      expect: { keyInputRevision: 0, incarnationId: 'inc-1', requireEmptyShellPrompt: true, outputBytes: 9, markerCount: 2, lastPromptMarker: { type: 'prompt_end', byteOffset: 9 } },
+    }]);
 
     unsubscribe();
     expect(dc.listenerCount('session:data')).toBe(0);
@@ -507,6 +518,217 @@ describe('FirstRunOrchestrator', () => {
     await expect(answer('command_end')).resolves.toBe(false);
     await expect(answer(null)).resolves.toBe(false);
     await expect(answer('prompt_end', true, false)).resolves.toBe(false);
+  });
+
+  // ── 9c. the sample command's delivery is checked, not assumed ──────────────
+  it('a daemon write the pane refuses is read and tried again; one that never lands is undelivered, and nothing is written over a used prompt', async () => {
+    try {
+      const dc = new MockDaemonClient();
+      const orch = new FirstRunOrchestrator(
+        makePtyManager() as never,
+        makePtyBridge() as never,
+        () => dc as never,
+        makeMcpRegistrar() as never,
+        () => 'token',
+        () => makeWindow() as never,
+      );
+      await orch.startSampleTask('session-A');
+      vi.useFakeTimers();
+      const source = capturedRuns[0].source as unknown as { write: (d: string) => Promise<boolean> };
+      const atPrompt = (bytes: number) => ({ events: [{ type: 'prompt_end', byteOffset: bytes }], eventCount: 1, totalBytesWritten: bytes, keyInputRevision: 0, emptyShellPrompt: true, sessionFound: true });
+      // The grid's resize redrew the prompt between the read and the write:
+      // refused, read again, written.
+      dc.rpc
+        .mockResolvedValueOnce(atPrompt(10)).mockResolvedValueOnce({ written: false })
+        .mockResolvedValueOnce(atPrompt(40)).mockResolvedValueOnce({ written: true });
+      const delivered = source.write('cmd\r');
+      await vi.advanceTimersByTimeAsync(1000);
+      await expect(delivered).resolves.toBe(true);
+      expect(dc.rpc.mock.calls.filter((c) => c[0] === 'daemon.writeIfUnchanged').map((c) => (c[1] as { expect: { outputBytes: number } }).expect.outputBytes)).toEqual([10, 40]);
+      // Refused every time: undelivered once the window has passed.
+      dc.rpc.mockReset();
+      dc.rpc.mockImplementation(async (method: string) => (method === 'daemon.readPromptEvents' ? atPrompt(10) : { written: false }));
+      let settled = false;
+      const never = source.write('cmd\r').finally(() => { settled = true; });
+      await vi.advanceTimersByTimeAsync(SAMPLE_WRITE_WINDOW_MS - 200);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(400);
+      await expect(never).resolves.toBe(false);
+      const tries = dc.rpc.mock.calls.filter((c) => c[0] === 'daemon.writeIfUnchanged').length;
+      expect(tries).toBeGreaterThan(5);
+      expect(tries).toBeLessThanOrEqual(Math.ceil(SAMPLE_WRITE_WINDOW_MS / SAMPLE_WRITE_RETRY_MS) + 1);
+      // A prompt someone typed into: nothing is written.
+      dc.rpc.mockReset();
+      dc.rpc.mockResolvedValueOnce({ ...atPrompt(10), emptyShellPrompt: false });
+      await expect(source.write('cmd\r')).resolves.toBe(false);
+      expect(dc.rpc.mock.calls.map((c) => c[0])).toEqual(['daemon.readPromptEvents']);
+      expect(dc.writeToSession).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // ── 9d. the write waits for a prompt still being drawn, and stops on Skip ──
+  describe('the sample write on a prompt still being drawn', () => {
+    type Source = { write: (d: string, signal?: AbortSignal) => Promise<boolean | 'unknown'> };
+    const read = (type: string, over: Record<string, unknown> = {}) => ({
+      events: [{ type, byteOffset: 10 }], eventCount: 1, totalBytesWritten: 10,
+      keyInputRevision: 0, incarnationId: 'inc-1', emptyShellPrompt: type === 'prompt_end', sessionFound: true, ...over,
+    });
+    const writes = (dc: MockDaemonClient) => dc.rpc.mock.calls.filter((c) => c[0] === 'daemon.writeIfUnchanged')
+      .map((c) => (c[1] as { expect: Record<string, unknown> }).expect);
+    async function daemonSource(): Promise<{ dc: MockDaemonClient; source: Source }> {
+      const dc = new MockDaemonClient();
+      const orch = new FirstRunOrchestrator(
+        makePtyManager() as never,
+        makePtyBridge() as never,
+        () => dc as never,
+        makeMcpRegistrar() as never,
+        () => 'token',
+        () => makeWindow() as never,
+      );
+      await orch.startSampleTask('session-A');
+      vi.useFakeTimers();
+      return { dc, source: capturedRuns[0].source as unknown as Source };
+    }
+
+    it('a prompt end that comes late is waited for, then the empty prompt is written to', async () => {
+      const { dc, source } = await daemonSource();
+      // bash: 133;A, then the user's PROMPT_COMMAND, then PS1 draws 133;B.
+      dc.rpc
+        .mockResolvedValueOnce(read('prompt_start'))
+        .mockResolvedValueOnce(read('prompt_start'))
+        .mockResolvedValueOnce(read('prompt_end', { eventCount: 2, totalBytesWritten: 30, events: [{ type: 'prompt_end', byteOffset: 30 }] }))
+        .mockResolvedValueOnce({ written: true });
+      const delivered = source.write('cmd\r');
+      await vi.advanceTimersByTimeAsync(1000);
+      await expect(delivered).resolves.toBe(true);
+      expect(writes(dc)).toEqual([{ keyInputRevision: 0, incarnationId: 'inc-1', requireEmptyShellPrompt: true, outputBytes: 30, markerCount: 2, lastPromptMarker: { type: 'prompt_end', byteOffset: 30 } }]);
+    });
+
+    it('a prompt that never draws its end is written to after the grace, only while no key has reached the pane', async () => {
+      const { dc, source } = await daemonSource();
+      dc.rpc.mockImplementation(async (method: string) => (method === 'daemon.readPromptEvents' ? read('prompt_start') : { written: true }));
+      let settled = false;
+      const delivered = source.write('cmd\r').finally(() => { settled = true; });
+      await vi.advanceTimersByTimeAsync(SAMPLE_PROMPT_END_GRACE_MS - 200);
+      expect(settled).toBe(false);
+      expect(writes(dc)).toEqual([]);
+      await vi.advanceTimersByTimeAsync(400);
+      await expect(delivered).resolves.toBe(true);
+      // No empty-prompt verdict exists without 133;B: the key revision, 0, stands in.
+      expect(writes(dc)).toEqual([{ keyInputRevision: 0, incarnationId: 'inc-1', outputBytes: 10, markerCount: 1, lastPromptMarker: { type: 'prompt_start', byteOffset: 10 } }]);
+
+      // A pane a key has reached gets nothing without the prompt's end.
+      dc.rpc.mockReset();
+      dc.rpc.mockImplementation(async (method: string) => (method === 'daemon.readPromptEvents' ? read('prompt_start', { keyInputRevision: 2 }) : { written: true }));
+      const refused = source.write('cmd\r');
+      await vi.advanceTimersByTimeAsync(SAMPLE_WRITE_WINDOW_MS + 500);
+      await expect(refused).resolves.toBe(false);
+      expect(writes(dc)).toEqual([]);
+    });
+
+    it.each([
+      ['a key', read('prompt_start', { keyInputRevision: 1 })],
+      ['a new shell', read('prompt_start', { incarnationId: 'inc-2' })],
+      ['a command started', read('command_start')],
+    ])('stops waiting at once on hard evidence: %s', async (_name, second) => {
+      const { dc, source } = await daemonSource();
+      dc.rpc.mockResolvedValueOnce(read('prompt_start')).mockResolvedValueOnce(second);
+      const delivered = source.write('cmd\r');
+      await vi.advanceTimersByTimeAsync(SAMPLE_WRITE_RETRY_MS + 50);
+      await expect(delivered).resolves.toBe(false);
+      expect(dc.rpc).toHaveBeenCalledTimes(2);
+      expect(writes(dc)).toEqual([]);
+    });
+
+    it('Skip or dismiss stops the loop: nothing is written once the run aborted', async () => {
+      const { dc, source } = await daemonSource();
+      const ctrl = new AbortController();
+      // The grid's resize redraws keep refusing the write while the user presses Skip.
+      dc.rpc.mockImplementation(async (method: string) => (method === 'daemon.readPromptEvents' ? read('prompt_end') : { written: false }));
+      const delivered = source.write('cmd\r', ctrl.signal);
+      await vi.advanceTimersByTimeAsync(SAMPLE_WRITE_RETRY_MS * 2 + 50);
+      const before = writes(dc).length;
+      expect(before).toBeGreaterThan(0);
+      const calls = dc.rpc.mock.calls.length;
+      ctrl.abort();
+      dc.rpc.mockImplementation(async (method: string) => (method === 'daemon.readPromptEvents' ? read('prompt_end') : { written: true }));
+      await vi.advanceTimersByTimeAsync(SAMPLE_WRITE_WINDOW_MS);
+      await expect(delivered).resolves.toBe(false);
+      expect(writes(dc)).toHaveLength(before);
+      // Not even read again.
+      expect(dc.rpc.mock.calls.length).toBe(calls);
+
+      // Aborted between the read and the write: the read's answer is not acted on.
+      dc.rpc.mockReset();
+      const late = new AbortController();
+      dc.rpc.mockImplementation(async (method: string) => {
+        if (method === 'daemon.readPromptEvents') { late.abort(); return read('prompt_end'); }
+        return { written: true };
+      });
+      await expect(source.write('cmd\r', late.signal)).resolves.toBe(false);
+      expect(writes(dc)).toEqual([]);
+    });
+
+    it('a write whose answer was lost is judged by the key revision, and unknown only when the pane cannot be read', async () => {
+      const { dc, source } = await daemonSource();
+      const lost = (after: unknown) => {
+        dc.rpc.mockReset();
+        dc.rpc
+          .mockResolvedValueOnce(read('prompt_end'))
+          .mockRejectedValueOnce(new Error('rpc timeout'));
+        if (after instanceof Error) dc.rpc.mockRejectedValueOnce(after);
+        else dc.rpc.mockResolvedValueOnce(after);
+      };
+      // The daemon typed the line (its key revision moved): delivered.
+      lost(read('command_start', { keyInputRevision: 1 }));
+      await expect(source.write('cmd\r')).resolves.toBe(true);
+      // The pane cannot be read again: unknown, never a failure.
+      lost(new Error('daemon gone'));
+      await expect(source.write('cmd\r')).resolves.toBe('unknown');
+      // Unchanged: it was not written, so it is tried again.
+      lost(read('prompt_end'));
+      dc.rpc.mockResolvedValueOnce(read('prompt_end')).mockResolvedValueOnce({ written: true });
+      const retried = source.write('cmd\r');
+      await vi.advanceTimersByTimeAsync(SAMPLE_WRITE_RETRY_MS + 50);
+      await expect(retried).resolves.toBe(true);
+      expect(writes(dc)).toHaveLength(2);
+    });
+  });
+
+  it('samplePromptVerdict waits for a prompt being drawn and refuses only on hard evidence', () => {
+    const base = { keyInputRevision: 0, incarnationId: 'inc-1' };
+    const r = (type: string | null, over: Record<string, unknown> = {}) => ({
+      events: type ? [{ type }] : [], keyInputRevision: 0, incarnationId: 'inc-1', emptyShellPrompt: type === 'prompt_end', sessionFound: true, ...over,
+    });
+    expect(samplePromptVerdict(r('prompt_end'), base, false)).toBe('write');
+    expect(samplePromptVerdict(r('prompt_end', { emptyShellPrompt: false }), base, false)).toBe('refuse');
+    expect(samplePromptVerdict(r('prompt_start'), base, false)).toBe('wait');
+    expect(samplePromptVerdict(r('prompt_start'), base, true)).toBe('write-unended');
+    expect(samplePromptVerdict(r('prompt_start', { keyInputRevision: 3 }), { ...base, keyInputRevision: 3 }, true)).toBe('wait');
+    expect(samplePromptVerdict(r('command_end'), base, true)).toBe('wait');
+    expect(samplePromptVerdict(r(null), base, true)).toBe('wait');
+    expect(samplePromptVerdict(r('command_start'), base, false)).toBe('refuse');
+    expect(samplePromptVerdict(r('prompt_start', { keyInputRevision: 1 }), base, false)).toBe('refuse');
+    expect(samplePromptVerdict(r('prompt_end', { incarnationId: 'inc-2' }), base, false)).toBe('refuse');
+    expect(samplePromptVerdict(r('prompt_end', { sessionFound: false }), base, false)).toBe('refuse');
+  });
+
+  it('an undelivered sample task sends neither READY nor TIMEOUT, and says so to its caller', async () => {
+    runnerOutcomes.push('undelivered');
+    const win = makeWindow();
+    const orch = new FirstRunOrchestrator(
+      makePtyManager() as never,
+      makePtyBridge() as never,
+      () => new MockDaemonClient() as never,
+      makeMcpRegistrar() as never,
+      () => 'token',
+      () => win as never,
+    );
+    await expect(orch.startSampleTask('session-A')).resolves.toBe('undelivered');
+    expect(win.webContents.send).not.toHaveBeenCalledWith(IPC.FIRST_RUN_SAMPLE_TASK_READY);
+    expect(win.webContents.send).not.toHaveBeenCalledWith(IPC.FIRST_RUN_SAMPLE_TASK_TIMEOUT);
   });
 
   // ── 10. startSampleTask — non-daemon mode + TIMEOUT event ───────────────────
