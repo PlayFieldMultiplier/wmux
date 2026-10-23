@@ -33,8 +33,6 @@
 // Cloning the 1.7KB built-in prompt would freeze it at install time and drift
 // as Kiro updates its own.
 
-import path from 'node:path';
-
 /** Marks the file as wmux-owned, so an installer never clobbers a user's. */
 export const KIRO_AGENT_MANAGED_MARKER = 'wmux-managed: kiro-lifecycle-agent';
 
@@ -53,13 +51,14 @@ const WINDOWS_BARE_PATH = /^[\p{L}\p{M}\p{N}_.\-~+:/\\]+$/u;
 
 /**
  * A Windows path that can stand bare in a hook line and names one file
- * wherever the hook runs: only WINDOWS_BARE_PATH's characters, and absolute
- * (`C:/…`, `C:\…`, or rooted `/…`). A relative path, a drive-relative one
- * (`C:b.mjs`), `~/…` or `-r/…` would resolve against the hook's own working
- * directory, or read as an option.
+ * wherever the hook runs: only WINDOWS_BARE_PATH's characters, and fully
+ * qualified (`C:/…`, `C:\…`, or a UNC `//server/share/…`). A relative path,
+ * a drive-relative one (`C:b.mjs`), a rooted one (`/b.mjs`, on whatever drive
+ * the hook starts on), `~/…` or `-r/…` would resolve against the hook's own
+ * working directory, or read as an option.
  */
 export function isWindowsBarePath(p) {
-  return WINDOWS_BARE_PATH.test(p) && path.win32.isAbsolute(p) && !/^[A-Za-z]:(?![\\/])/.test(p);
+  return WINDOWS_BARE_PATH.test(p) && /^(?:[A-Za-z]:[\\/]|[\\/]{2})/.test(p);
 }
 
 /**
@@ -82,7 +81,7 @@ export function kiroHookCommand(bridgeScript, platform = process.platform) {
   if (platform !== 'win32') return `node "${bridgeScript}"`;
   if (!isWindowsBarePath(bridgeScript)) {
     throw new Error(
-      `wmux Kiro hook: the bridge path ${JSON.stringify(bridgeScript)} is not absolute, or has a space or a shell character. `
+      `wmux Kiro hook: the bridge path ${JSON.stringify(bridgeScript)} does not start with a drive (C:/) or a UNC share, or has a space or a shell character. `
       + 'On Windows, Kiro runs hook commands through cmd /C in a way that cannot pass a quoted path, '
       + 'so the path is written unquoted and must have no spaces. '
       + 'Put the hook files in a folder such as C:/wmux-hooks/.',

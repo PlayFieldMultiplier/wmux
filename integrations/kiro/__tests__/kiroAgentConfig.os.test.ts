@@ -27,13 +27,13 @@ describe('buildKiroAgentConfig', () => {
   // cost penalty. A future "let's copy the real prompt for quality" change
   // should have to argue with this test.
   it('ships no prompt of its own', () => {
-    expect(buildKiroAgentConfig('/b', HOME).prompt).toBe('');
+    expect(buildKiroAgentConfig('C:/b', HOME).prompt).toBe('');
   });
 
   // Why approval behaviour cannot change: the built-in pre-approves nothing
   // either, so anything we omit is not more restrictive than the default.
   it('matches the built-in on every field it sets', () => {
-    const config = buildKiroAgentConfig('/b', HOME) as Record<string, unknown>;
+    const config = buildKiroAgentConfig('C:/b', HOME) as Record<string, unknown>;
     for (const [key, builtIn] of Object.entries(BUILT_IN_DEFAULTS)) {
       if (config[key] === undefined) continue; // omitted → Kiro's own default
       expect(config[key], `${key} diverges from kiro_default`).toEqual(builtIn);
@@ -45,11 +45,11 @@ describe('buildKiroAgentConfig', () => {
   // seeing the project's docs. The measurement that cleared the empty prompt
   // ran in a temp directory, where neither could have shown up.
   it('keeps the MCP servers the built-in loads', () => {
-    expect(buildKiroAgentConfig('/b', HOME).includeMcpJson).toBe(true);
+    expect(buildKiroAgentConfig('C:/b', HOME).includeMcpJson).toBe(true);
   });
 
   it('keeps the project context resources the built-in loads', () => {
-    const resources = buildKiroAgentConfig('/b', HOME).resources as string[];
+    const resources = buildKiroAgentConfig('C:/b', HOME).resources as string[];
     expect(resources).toContain('file://AGENTS.md');
     expect(resources).toContain('file://README.md');
     expect(resources).toContain('skill://.kiro/skills/*/SKILL.md');
@@ -62,7 +62,7 @@ describe('buildKiroAgentConfig', () => {
   it('registers only the triggers wmux can act on', () => {
     // userPromptSubmit exists in Kiro and is deliberately absent: no
     // approval-specific event means no honest awaiting_input (#898).
-    expect(Object.keys(buildKiroAgentConfig('/b', HOME).hooks as object).sort())
+    expect(Object.keys(buildKiroAgentConfig('C:/b', HOME).hooks as object).sort())
       .toEqual(['agentSpawn', 'stop']);
   });
 
@@ -70,7 +70,7 @@ describe('buildKiroAgentConfig', () => {
   // configured value has to sit between them so our cap fires first and Kiro's
   // is a real backstop rather than a ten-second stall.
   it('gives Kiro a backstop just above the bridge cap', () => {
-    const hooks = buildKiroAgentConfig('/b', HOME).hooks as Record<string, Array<{ timeout_ms: number }>>;
+    const hooks = buildKiroAgentConfig('C:/b', HOME).hooks as Record<string, Array<{ timeout_ms: number }>>;
     for (const trigger of ['stop', 'agentSpawn']) {
       expect(hooks[trigger][0].timeout_ms).toBeGreaterThan(2000);
       expect(hooks[trigger][0].timeout_ms).toBeLessThan(10_000);
@@ -97,8 +97,7 @@ describe('buildKiroAgentConfig', () => {
     expect(commandFor('C:\\Users\\someone\\.wmux\\hooks\\b.mjs', 'win32')).toBe('node C:/Users/someone/.wmux/hooks/b.mjs');
     expect(commandFor('C:/wmux-hooks/b.mjs', 'win32')).toBe('node C:/wmux-hooks/b.mjs');
     expect(commandFor('C:\\Users\\RUNNER~1\\x_y.z+1\\b.mjs', 'win32')).toBe('node C:/Users/RUNNER~1/x_y.z+1/b.mjs');
-    // Rooted on the current drive: absolute enough to name one file.
-    expect(commandFor('/bridge.mjs', 'win32')).toBe('node /bridge.mjs');
+    expect(commandFor('\\\\server\\share\\b.mjs', 'win32')).toBe('node //server/share/b.mjs');
   });
 
   it('accepts letters in any script on Windows', () => {
@@ -127,6 +126,9 @@ describe('buildKiroAgentConfig', () => {
       'C:b.mjs',
       '~/b.mjs',
       '-r/b.mjs',
+      // Rooted: on whatever drive the hook starts on.
+      '/bridge.mjs',
+      '\\bridge.mjs',
     ]) {
       expect(() => buildKiroAgentConfig(bad, HOME, { platform: 'win32' }), JSON.stringify(bad))
         .toThrow(/no spaces[\s\S]*C:\/wmux-hooks\//);
@@ -143,7 +145,7 @@ describe('buildKiroAgentConfig', () => {
 describe('isWmuxOwnedKiroAgent', () => {
   // An installer must never replace a file it cannot prove it wrote.
   it('recognises our own config', () => {
-    expect(isWmuxOwnedKiroAgent(buildKiroAgentConfig('/b', HOME))).toBe(true);
+    expect(isWmuxOwnedKiroAgent(buildKiroAgentConfig('C:/b', HOME))).toBe(true);
   });
 
   it('refuses anything else, including a same-named user agent', () => {

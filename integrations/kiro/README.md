@@ -95,11 +95,13 @@ Replace the placeholders, using forward slashes so the JSON needs no escaping:
   | macOS, Linux | `node \"<path>/wmux-kiro-bridge.mjs\"` (quoted inside the JSON string) |
   | Windows | `node <path>/wmux-kiro-bridge.mjs` (no quotes), e.g. `node C:/wmux-hooks/wmux-kiro-bridge.mjs` |
 
-  **Windows: the directory path must be absolute and have no spaces.**
+  **Windows: the directory path must start with a drive letter (`C:/…`) or
+  a UNC share (`//server/share/…`), and have no spaces.**
   Kiro's open-source predecessor (Amazon Q Developer CLI) runs a hook command
   on Windows through `cmd /C` in a way that delivers any quote in it to `node`
   literally, so the path cannot be quoted and a space would split it. The
-  generator refuses such a path, a relative one, or one with a shell character
+  generator refuses such a path, a relative or rooted one (`/…` is on
+  whatever drive the hook starts on), or one with a shell character
   such as `& ( ) ' %`, rather than write a hook that never runs. Letters in any
   script are fine. A Windows `wmux.json` written with the earlier quoted form
   never ran its hooks: replace both `command` values with the form above.
