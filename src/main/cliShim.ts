@@ -110,10 +110,15 @@ export function buildShimCmd(): string {
     'if not defined CODEX_HOME if defined USERPROFILE set "CODEX_HOME=%USERPROFILE%\\.codex"',
     'if defined CODEX_HOME for %%h in ("%CODEX_HOME%") do set "CODEX_HOME=%%~fh"',
     'set WMUX_CODEX_ARGS=%*',
-    'for %%v in (WMUX_CODEX_EXE WMUX_CODEX_LAUNCH WMUX_CODEX_CD WMUX_CODEX_LEASE codex) do set "%%v="',
+    'for %%v in (WMUX_CODEX_EXE WMUX_CODEX_LAUNCH WMUX_CODEX_CD WMUX_CODEX_LEASE WMUX_CODEX_ERROR codex) do set "%%v="',
     'for /f "delims=" %%l in (\'^""%WMUX_APP%\\wmux.exe" "%WMUX_APP%\\resources\\cli-bundle\\index.js" codex --wmux-handoff^"\') do set "%%l"',
     'set "WMUX_CODEX_ARGS="',
-    // The handoff printed its own error and holds no lease.
+    // A failed handoff holds no lease. Its stderr reaches no console while its
+    // stdout is this pipe (see reportHandoffError): it left its error in a
+    // UTF-16 file, which `type` shows intact in any code page.
+    'if not defined WMUX_CODEX_LEASE if defined WMUX_CODEX_ERROR type "%TEMP%\\wmux-codex-%WMUX_CODEX_ERROR%.txt" 1>&2',
+    'if not defined WMUX_CODEX_LEASE if defined WMUX_CODEX_ERROR del "%TEMP%\\wmux-codex-%WMUX_CODEX_ERROR%.txt" 2>nul',
+    'if not defined WMUX_CODEX_LEASE if not defined WMUX_CODEX_ERROR echo wmux: wmux codex stopped before it could say why. 1>&2',
     'if not defined WMUX_CODEX_LEASE exit /b 1',
     // Codex, and every process it starts, gets the bearer and nothing else of
     // the launch: a nested setlocal holds the rest back, and its endlocal

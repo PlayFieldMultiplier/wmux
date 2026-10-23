@@ -1,5 +1,6 @@
 import {spawn} from 'node:child_process';
-import {randomBytes} from 'node:crypto';
+import {randomBytes,randomUUID} from 'node:crypto';
+import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -110,6 +111,36 @@ export async function codexHandoff(raw:string|undefined, output:NodeJS.WriteStre
   } catch (error) {
     await releaseLease(launch.leaseId);
     throw error;
+  }
+}
+
+/**
+ * Report a failed `codex --wmux-handoff` to wmux.cmd's console. Returns false
+ * when the caller should print the message as usual instead.
+ *
+ * The handoff's stderr reaches no console: wmux.exe is a GUI-subsystem
+ * program, and with its stdout on the script's `for /f` pipe Electron does not
+ * attach to the console, so the console handle it inherited as stderr writes
+ * nowhere. The message goes to a file in %TEMP%, and only the file's ASCII
+ * token crosses the pipe, as WMUX_CODEX_ERROR; the script `type`s the file.
+ * UTF-16 with a BOM: `type` writes that to the console intact in any code page,
+ * where UTF-8 bytes would be read in the console's (949 mangles a Korean path).
+ */
+export async function reportHandoffError(message:string, output:NodeJS.WriteStream = process.stdout, env:NodeJS.ProcessEnv = process.env):Promise<boolean> {
+  if (output.isTTY || !(output instanceof net.Socket) || !env.TEMP) return false;
+  const token = randomUUID();
+  const file = path.win32.join(env.TEMP,`wmux-codex-${token}.txt`);
+  try {
+    fs.writeFileSync(file,Buffer.concat([Buffer.from([0xff,0xfe]),Buffer.from(`${message}\r\n`,'utf16le')]),{flag:'wx'});
+  } catch {
+    return false;
+  }
+  try {
+    await new Promise<void>((resolve,reject)=>output.write(`WMUX_CODEX_ERROR=${token}\n`,error=>error ? reject(error) : resolve()));
+    return true;
+  } catch {
+    fs.rmSync(file,{force:true});
+    return false;
   }
 }
 

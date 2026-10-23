@@ -26,7 +26,7 @@ import { handleChannel } from './commands/channel';
 import { handleRemote } from './commands/remote';
 import { handleWeb } from './commands/web';
 import { handleDaemon } from './commands/daemon';
-import { handleCodex } from './commands/codex';
+import { CODEX_HANDOFF_FLAG, handleCodex, reportHandoffError } from './commands/codex';
 
 const HELP_TEXT = `
 wmux CLI
@@ -288,7 +288,12 @@ async function main(): Promise<void> {
     // finally closes the pane's relay lease.
     if (process.platform === 'win32') process.on('SIGBREAK', () => { /* the foreground TUI handles Ctrl+Break */ });
     try { await handleCodex(argv.slice(1)); }
-    catch (error) { console.error(error instanceof Error ? error.message : String(error)); process.exitCode = 1; }
+    catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const handoff = argv.length === 2 && argv[1] === CODEX_HANDOFF_FLAG;
+      if (!(handoff && await reportHandoffError(message))) console.error(message);
+      process.exitCode = 1;
+    }
     return;
   }
 

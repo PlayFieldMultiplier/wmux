@@ -11,6 +11,8 @@ import {
   PATH_EDIT_EXIT,
   shimIsCurrent,
 } from '../cliShim';
+import { buildSync } from 'esbuild';
+import * as pty from 'node-pty';
 import { codexHandoffLines } from '../../cli/commands/codex';
 
 describe('buildShimCmd', () => {
@@ -53,6 +55,7 @@ describe('buildShimCmd', () => {
     // No launch without a lease; Codex never sees ELECTRON_RUN_AS_NODE, and
     // nothing after Codex sees the bearer.
     expect(at('if not defined WMUX_CODEX_LEASE exit /b 1')).toBeGreaterThan(handoff);
+    expect(at('if not defined WMUX_CODEX_LEASE exit /b 1')).toBeLessThan(launch);
     // CODEX_HOME is settled before the handoff reads it, and no path comes back through its pipe.
     expect(at('if defined CODEX_HOME for %%h in ("%CODEX_HOME%") do set "CODEX_HOME=%%~fh"')).toBeLessThan(handoff);
     expect(at('set "CODEX_HOME=%WMUX_CODEX_HOME%"')).toBe(-1);
@@ -207,6 +210,83 @@ describe.skipIf(process.platform !== 'win32')('wmux.cmd codex launch (live cmd.e
     nodeFs.writeFileSync(nodePath.join(bin, 'wmux.cmd'), buildShimCmd());
     expect(shimIsCurrent(bin)).toBe(true);
   });
+});
+
+// A failed handoff's message on a real console (a ConPTY, as in a wmux pane).
+// wmux.exe is a GUI-subsystem program, and with its stdout on the `for /f`
+// pipe its stderr reaches no console. The Node stand-in above is a console
+// program, which shows its stderr anyway, so here wmux.exe is a copy of Node
+// with its PE subsystem set to GUI, what Electron's is.
+describe.skipIf(process.platform !== 'win32')('wmux.cmd codex handoff errors (live console)', () => {
+  let root = '';
+  let temp = '';
+  let isolated: Record<string, string> = {};
+  /** `wmux <tail>` in a console of its own: what reached the screen, and the exit code. */
+  const run = (tail: string, opts: { chcp?: number; env?: Record<string, string> } = {}) =>
+    new Promise<{ exitCode: number; screen: string }>((resolve) => {
+      const env: Record<string, string> = {};
+      for (const [key, value] of Object.entries(process.env)) {
+        if (value !== undefined && !/^(wmux_|codex_home$|electron_run_as_node$)/i.test(key)) env[key] = value;
+      }
+      const chcp = opts.chcp === undefined ? '' : `chcp ${opts.chcp} >nul & `;
+      const term = pty.spawn(process.env.ComSpec || 'cmd.exe', `/d /s /c "${chcp}"${nodePath.join(root, 'bin', 'wmux.cmd')}" ${tail}"`, {
+        cols: 400, rows: 30, cwd: root, env: { ...env, ...isolated, ...opts.env }, useConpty: true,
+      });
+      let out = '';
+      term.onData((data) => { out += data; });
+      // node-pty emits exit once the output pipe has closed: every byte is in.
+      // eslint-disable-next-line no-control-regex -- stripping the console's escape sequences is the point
+      term.onExit(({ exitCode }) => resolve({ exitCode, screen: out.replace(/\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07/g, '') }));
+    });
+
+  beforeAll(() => {
+    root = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'wmux shim gui (a&b) '));
+    // %TEMP% holds the error file; a Korean user name puts Korean in it.
+    temp = nodePath.join(root, '홍길동', 'Temp');
+    nodeFs.mkdirSync(temp, { recursive: true });
+    // No daemon to reach: another data suffix, and a profile with no token or port file.
+    isolated = {
+      WMUX_DATA_SUFFIX: `-shim-test-${process.pid}`, USERPROFILE: root, HOME: root,
+      CODEX_HOME: nodePath.join(root, '.codex'), TEMP: temp, TMP: temp,
+    };
+    const app = nodePath.join(root, 'app-1.0.0');
+    const bundle = nodePath.join(app, 'resources', 'cli-bundle');
+    nodeFs.mkdirSync(bundle, { recursive: true });
+    nodeFs.mkdirSync(nodePath.join(root, 'bin'));
+    nodeFs.writeFileSync(nodePath.join(root, 'bin', 'wmux.cmd'), buildShimCmd());
+    const exe = nodeFs.readFileSync(process.execPath);
+    // IMAGE_NT_HEADERS: 'PE\0\0', the 20-byte file header, then Subsystem 68 bytes into the optional header.
+    const subsystem = exe.readUInt32LE(0x3c) + 24 + 68;
+    expect(exe.readUInt16LE(subsystem)).toBe(3);
+    exe.writeUInt16LE(2, subsystem);
+    nodeFs.writeFileSync(nodePath.join(app, 'wmux.exe'), exe);
+    for (const [entry, out] of [['../../cli/index.ts', 'cli.cjs'], ['../../cli/commands/codex.ts', 'codex.cjs']]) {
+      buildSync({ entryPoints: [nodePath.join(__dirname, entry)], bundle: true, platform: 'node', format: 'cjs', outfile: nodePath.join(bundle, out), logLevel: 'silent' });
+    }
+    // The real CLI, or the real report of a message the test picks.
+    nodeFs.writeFileSync(nodePath.join(bundle, 'index.js'), [
+      'if (process.env.WMUX_TEST_MESSAGE) require("./codex.cjs").reportHandoffError(process.env.WMUX_TEST_MESSAGE)',
+      '  .then((shown) => { if (!shown) process.stderr.write("not reported"); process.exitCode = 1; });',
+      'else require("./cli.cjs");',
+    ].join('\n'));
+  }, 60_000);
+
+  afterAll(() => { if (root) nodeFs.rmSync(root, { recursive: true, force: true }); });
+
+  it('shows the real handoff\'s error and exits 1, leaving no file behind', async () => {
+    const r = await run('codex resume');
+    expect(r.exitCode).toBe(1);
+    expect(r.screen).toContain('Run wmux codex directly in a wmux terminal pane.');
+    expect(nodeFs.readdirSync(temp)).toEqual([]);
+  }, 60_000);
+
+  it('shows a non-ASCII message intact under code page 949', async () => {
+    const message = 'This terminal\'s Codex account is C:\\Users\\홍길동\\.codex & 50% "q" ^x !y!';
+    const r = await run('codex', { chcp: 949, env: { WMUX_TEST_MESSAGE: message } });
+    expect(r.exitCode).toBe(1);
+    expect(r.screen).toContain(message);
+    expect(nodeFs.readdirSync(temp)).toEqual([]);
+  }, 60_000);
 });
 
 describe('buildPathEditScript', () => {
