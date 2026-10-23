@@ -950,6 +950,7 @@ export const pl = {
   'fleet.detail.complete': 'Tura zakończona. Otwórz terminal, aby zobaczyć wynik.',
   'fleet.detail.running': 'Tura w toku.',
   'fleet.detail.idle': 'Brak ostatnio zgłoszonej aktywności',
+  'fleet.detail.shellSecret': 'Wymaga Ciebie przy komputerze: prosi o hasło',
   'fleet.action.respond': 'Odpowiedz',
   'fleet.action.result': 'Zobacz wynik',
   'fleet.action.inspect': 'Sprawdź',

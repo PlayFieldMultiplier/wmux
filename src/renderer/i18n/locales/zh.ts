@@ -1461,6 +1461,7 @@ export const zh = {
   'fleet.detail.complete': '回合已结束。打开终端查看结果。',
   'fleet.detail.running': '回合进行中。',
   'fleet.detail.idle': '最近没有报告活动',
+  'fleet.detail.shellSecret': '需要你在电脑前操作：它在要求输入密码',
   'fleet.action.respond': '回复',
   'fleet.action.result': '查看结果',
   'fleet.action.inspect': '检查',

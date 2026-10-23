@@ -1,5 +1,6 @@
 import net from 'node:net';
 import type { PaneUsageLimit, PaneUsageLimitPatch } from '../shared/usageLimit';
+import { parseShellPromptSignal } from '../shared/shellPrompt';
 import { EventEmitter } from 'node:events';
 import crypto from 'node:crypto';
 import type { RpcResponse, DaemonEvent } from '../shared/rpc';
@@ -1206,6 +1207,11 @@ export class DaemonClient extends EventEmitter {
           }
           break;
         }
+        case 'shell.prompt':
+          // A pane with no agent waits on stdin (daemon/shellPrompt); null clears.
+          // Checked here: a `secret` keeps no question whatever was sent.
+          this.emit('session:shellPrompt', { sessionId: event.sessionId, prompt: parseShellPromptSignal(event.data) });
+          break;
         case 'prompt.event':
           // OSC 133 shell-integration marker (A/B/C/D) parsed in the daemon.
           // DaemonNotificationRouter consumes this to tee the D variant onto

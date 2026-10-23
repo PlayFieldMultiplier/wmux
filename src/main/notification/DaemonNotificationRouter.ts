@@ -40,6 +40,7 @@ import { getWorkspaceMirror, type WorkspaceMirror } from '../workspace/Workspace
 import { sendToRenderer } from '../pipe/handlers/_bridge';
 import { agentDisplayToSlug } from '../pty/AgentDetector';
 import type { ChannelMessage } from '../../shared/channels';
+import type { ShellPromptSignal } from '../../shared/shellPrompt';
 
 // Mirrors PTYBridge.AGENT_EVENT_SUPPRESSION_MS — same dedup semantics across
 // daemon and local modes.
@@ -1416,6 +1417,15 @@ export class DaemonNotificationRouter {
       }
     };
 
+    // A pane with no agent waiting on stdin: per-ptyId, like `subagents`. Null clears.
+    const onShellPrompt = (payload: { sessionId: string; prompt: ShellPromptSignal | null }) => {
+      try {
+        broadcastMetadataUpdate(this.getWindow(), { ptyId: payload.sessionId, shellPrompt: payload.prompt });
+      } catch (err) {
+        console.warn('[DaemonNotificationRouter] shell prompt error:', err);
+      }
+    };
+
     const onAgentProcessExit = (payload: { sessionId: string; slug?: string | null }) => {
       // The agent whose hooks owned the line is gone; the next one (a hookless
       // Codex in the same pane) may report from its transcript.
@@ -1558,6 +1568,7 @@ export class DaemonNotificationRouter {
     this.daemonClient.on('session:teammates', onTeammates);
     this.daemonClient.on('session:teammateWake', onTeammateWake);
     this.daemonClient.on('session:subagents', onSubagents);
+    this.daemonClient.on('session:shellPrompt', onShellPrompt);
     this.daemonClient.on('session:restarted', onRestarted);
     this.daemonClient.on('supervision:changed', onSupervisionChanged);
     // A2A channels (a2a-channels U4) — project daemon-broadcast channel
@@ -1596,6 +1607,7 @@ export class DaemonNotificationRouter {
       () => this.daemonClient.off('session:teammates', onTeammates),
       () => this.daemonClient.off('session:teammateWake', onTeammateWake),
       () => this.daemonClient.off('session:subagents', onSubagents),
+      () => this.daemonClient.off('session:shellPrompt', onShellPrompt),
       () => this.daemonClient.off('session:restarted', onRestarted),
       () => this.daemonClient.off('supervision:changed', onSupervisionChanged),
       () => this.daemonClient.off('channel:message', onChannelMessage),

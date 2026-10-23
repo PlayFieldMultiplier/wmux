@@ -101,6 +101,7 @@ export default function FleetView() {
   // non-agent active pane never borrows the real agent's name/status.
   const surfaceAgent = useStore((s) => s.surfaceAgent);
   const surfacePendingQuestion = useStore((s) => s.surfacePendingQuestion);
+  const surfaceShellPrompt = useStore((s) => s.surfaceShellPrompt);
   const surfaceActivityAt = useStore((s) => s.surfaceActivityAt);
   const surfaceTurnOpenAt = useStore((s) => s.surfaceTurnOpenAt);
   const commandRunningByPtyId = useStore((s) => s.commandRunningByPtyId);
@@ -181,12 +182,12 @@ export default function FleetView() {
   // (`now`) rather than subscribed; elapsed time is minute-granular anyway.
   const { panes, groups } = useMemo(() => selectFleetBoard({
       workspaces, surfaceAgentStatus, surfaceActivity, paneLabel, supervisionByPtyId,
-      surfaceAgent, surfacePendingQuestion, surfaceActivityAt, surfaceTurnOpenAt,
+      surfaceAgent, surfacePendingQuestion, surfaceShellPrompt, surfaceActivityAt, surfaceTurnOpenAt,
       commandRunningByPtyId, agentAliveByPtyId, hookRunningByPtyId, remoteWorkspaces,
       surfaceLastMessage, surfaceOutputAt: useStore.getState().surfaceOutputAt,
       unverifiablePaneMinutes: unverifiableMinutes, usageLimitWaiting,
     }, { now, sortMode: fleetSortMode }), [usageLimitWaiting, workspaces, surfaceAgentStatus, surfaceActivity, paneLabel, supervisionByPtyId,
-    surfaceAgent, surfacePendingQuestion, surfaceActivityAt, surfaceTurnOpenAt,
+    surfaceAgent, surfacePendingQuestion, surfaceShellPrompt, surfaceActivityAt, surfaceTurnOpenAt,
     commandRunningByPtyId, agentAliveByPtyId, hookRunningByPtyId, remoteWorkspaces, unverifiableMinutes,
     surfaceLastMessage, now, fleetSortMode]);
   // On close (unmount), remember what each pane's status was, so the next open

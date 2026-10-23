@@ -1166,6 +1166,11 @@ export interface DaemonEvent {
     // ends, so a stale count never sticks.
     //   agent.subagents → { count: number }
     | 'agent.subagents'
+    // A pane with no agent whose command waits on stdin (daemon/shellPrompt):
+    // the prompt when it appears or changes, null when it clears. A `secret`
+    // carries no question.
+    //   shell.prompt → ShellPromptSignal | null
+    | 'shell.prompt'
     | 'prompt.event'
     | 'notification.event'
     | 'cwd.changed'

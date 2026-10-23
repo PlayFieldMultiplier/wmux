@@ -961,6 +961,7 @@ export const en = {
   'fleet.detail.complete': 'Turn finished. Open the terminal to see the result.',
   'fleet.detail.running': 'Turn in progress.',
   'fleet.detail.idle': 'No recent activity reported',
+  'fleet.detail.shellSecret': 'Needs you at the computer: it is asking for a password',
   'fleet.action.respond': 'Respond',
   'fleet.action.result': 'See result',
   'fleet.action.inspect': 'Check',

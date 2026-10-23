@@ -693,6 +693,7 @@ export const ko = {
   'fleet.detail.complete': '턴이 끝났습니다. 터미널에서 결과를 확인하세요.',
   'fleet.detail.running': '응답 진행 중',
   'fleet.detail.idle': '최근 활동 정보 없음',
+  'fleet.detail.shellSecret': '컴퓨터 앞에서 입력해야 해요: 비밀번호를 묻고 있어요',
   'fleet.action.respond': '응답하기',
   'fleet.action.result': '결과 보기',
   'fleet.action.inspect': '확인하기',
