@@ -108,11 +108,12 @@ export const PHONE_ROOM_NOTICE_CODES: Readonly<Record<string, PhoneNoticeCode>> 
   },
   // A fan-out waiting for a worker slot, the bot's own, the factory's or
   // wmux's live fan-out cap (roomWriter.ts); `held`: 1 when the request is
-  // held and starts by itself.
+  // held and starts by itself. A bot with no slots at all (`scope` bot,
+  // `cap` 0: the first run's bot) has its own title and body.
   'workers.full': {
     args: { bot: 'string', scope: 'string', inUse: 'number', cap: 'number', held: 'number' },
-    titles: ['room.notice.workers.full.bot', 'room.notice.workers.full.factory', 'room.notice.workers.full.wmux'],
-    more: ['room.notice.workers.full.body', 'room.notice.workers.full.held'],
+    titles: ['room.notice.workers.full.bot', 'room.notice.workers.full.factory', 'room.notice.workers.full.wmux', 'room.notice.workers.off'],
+    more: ['room.notice.workers.full.body', 'room.notice.workers.full.held', 'room.notice.workers.off.body'],
   },
   'budget.held': titled('budget.held', { bot: 'string', until: 'number' }, ['room.notice.budget.held.at', 'room.notice.budget.held.manual']),
   'bot.usageLimit': titled('bot.usageLimit', { bot: 'string', until: 'number' }),
