@@ -3097,7 +3097,7 @@ function registerRpcHandlers(
     if (params['updates'] !== undefined) {
       const updates = viewerVisibilityUpdates(params['updates']);
       for (const u of updates) sessionManager.setSessionViewerVisibility(u.id, u.visible);
-      return { ok: true, applied: updates.length };
+      return { ok: true, batched: true };
     }
     const p = params as unknown as { id: string; visible: boolean };
     if (typeof p.id !== 'string' || typeof p.visible !== 'boolean') {

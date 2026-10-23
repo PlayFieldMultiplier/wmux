@@ -99,5 +99,11 @@ describe('DaemonClient session-list reads in a burst (#2372)', () => {
       client.rpc('daemon.listSessions', {}, { timeoutMs: 1_000 }),
     ]);
     expect(handled).toHaveLength(4);
+    // Nested params are not a faithful key: never shared.
+    await Promise.all([
+      client.rpc('daemon.listSessions', { filter: { workspaceId: 'a' } }),
+      client.rpc('daemon.listSessions', { filter: { workspaceId: 'b' } }),
+    ]);
+    expect(handled.slice(4)).toEqual([{ filter: { workspaceId: 'a' } }, { filter: { workspaceId: 'b' } }]);
   });
 });

@@ -47,12 +47,16 @@ describe('DaemonClient viewer-visibility reports in a burst (#2372)', () => {
     visible = new Map();
     older = false;
     server.onRpc('daemon.client.identify', async () => ({ ok: true }));
+    server.onRpc('daemon.detachSession', async (params) => {
+      calls.push({ detach: params['id'] });
+      return { ok: true };
+    });
     server.onRpc('daemon.setSessionViewerVisibility', async (params) => {
       calls.push(params);
       if (params['updates'] !== undefined && !older) {
         const updates = viewerVisibilityUpdates(params['updates']);
         for (const u of updates) visible.set(u.id, u.visible);
-        return { ok: true, applied: updates.length };
+        return { ok: true, batched: true };
       }
       if (typeof params['id'] !== 'string' || typeof params['visible'] !== 'boolean') {
         throw new Error('setSessionViewerVisibility: id (string) and visible (boolean) are required');
@@ -96,6 +100,20 @@ describe('DaemonClient viewer-visibility reports in a burst (#2372)', () => {
     expect(visible.get('daemon-a')).toBe(false);
     expect(visible.get('daemon-b')).toBe(true);
     expect(calls).toHaveLength(3); // the refused batch, then one per pane
+
+    // Remembered for the connection: the next burst goes straight to singles.
+    client.setViewerVisibility('daemon-c', true);
+    client.setViewerVisibility('daemon-d', true);
+    await vi.waitFor(() => expect(visible.size).toBe(4), { timeout: 5_000 });
+    expect(calls).toHaveLength(5);
+  });
+
+  it('a detach sends the pane\'s queued report first, so the daemon\'s reset lands after it', async () => {
+    client.setViewerVisibility('daemon-a', false);
+    client.setViewerVisibility('daemon-b', false);
+    await client.rpc('daemon.detachSession', { id: 'daemon-a' });
+    expect(calls[0]).toEqual({ updates: [{ id: 'daemon-a', visible: false }, { id: 'daemon-b', visible: false }] });
+    expect(calls[1]).toEqual({ detach: 'daemon-a' });
   });
 });
 

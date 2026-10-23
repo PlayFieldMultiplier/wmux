@@ -67,6 +67,11 @@ const RPC_TIMEOUT_MS = DAEMON_RPC_TIMEOUT_MS;
 const LIST_SESSIONS_COALESCE_MS = 20;
 /** #2372 — likewise for viewer-visibility reports, which nobody awaits. */
 const VIEWER_VISIBILITY_COALESCE_MS = 50;
+
+/** Params made only of primitives, so their JSON is a faithful key. */
+function flatParams(params: Record<string, unknown>): boolean {
+  return Object.values(params).every((v) => v === null || ['string', 'number', 'boolean', 'undefined'].includes(typeof v));
+}
 const MAX_LINE_BUFFER = DAEMON_CONTROL_LINE_MAX_CHARS; // 1 MB
 
 interface PendingRequest {
@@ -144,6 +149,13 @@ export class DaemonClient extends EventEmitter {
         clearTimeout(timeout);
         this.controlPipe = socket;
         this.connected = true;
+        // #2372 — a new connection may be a new daemon, and a list read left
+        // in flight on the old socket must not hold up the ones queued behind it.
+        this.connectionEpoch += 1;
+        this.viewerVisibilityBatchRefused = false;
+        for (const key of this.listSessionsQueue.keys()) {
+          if (!this.listSessionsBusy(key)) setImmediate(() => this.flushListSessions(key));
+        }
         this.setupControlPipe(socket);
         // Pushed events are first-party-only and opt-in. Start the event
         // handshake before connect() resolves so no caller RPC can overtake it
@@ -193,7 +205,12 @@ export class DaemonClient extends EventEmitter {
    * meanwhile wait here for the next one.
    */
   private listSessionsQueue = new Map<string, { params: Record<string, unknown>; waiters: Array<{ resolve: (v: unknown) => void; reject: (e: unknown) => void }> }>();
-  private listSessionsInFlight = new Set<string>();
+  /** The connection each key's in-flight call went out on (see listSessionsBusy). */
+  private listSessionsInFlight = new Map<string, number>();
+  /** Bumped on every successful connect. */
+  private connectionEpoch = 0;
+  /** The connected daemon refused a batched visibility call (older than #2372). */
+  private viewerVisibilityBatchRefused = false;
   /** #2372 — viewer-visibility reports waiting for their call, last one per pane. */
   private viewerVisibilityQueue: Map<string, boolean> | null = null;
 
@@ -386,7 +403,15 @@ export class DaemonClient extends EventEmitter {
     if (!this.controlPipe || !this.connected) {
       throw new Error('DaemonClient not connected');
     }
-    if (method === 'daemon.listSessions' && opts.timeoutMs === undefined) return this.listSessionsCoalesced(params);
+    if (method === 'daemon.listSessions' && opts.timeoutMs === undefined && flatParams(params)) {
+      return this.listSessionsCoalesced(params);
+    }
+    // #2372 — a detach resets the daemon's viewer visibility to its default,
+    // so a report for that pane still waiting in the queue must reach the
+    // daemon first, or it would land after the reset.
+    if (method === 'daemon.detachSession' && typeof params['id'] === 'string' && this.viewerVisibilityQueue?.has(params['id'])) {
+      void this.flushViewerVisibility();
+    }
     return this.send(method, params, opts);
   }
 
@@ -400,26 +425,46 @@ export class DaemonClient extends EventEmitter {
    * from a call sent before it was asked: one asked while a call is in
    * flight waits for the next, which goes out when that one returns. Each
    * waiter after the first gets its own copy, so one caller changing its
-   * array cannot change another's. A read with its own timeout is not shared.
+   * array cannot change another's. A read with its own timeout, or with
+   * nested params, is not shared.
+   *
+   * Every read keeps the deadline it would have had alone (RPC_TIMEOUT_MS
+   * from when it was asked), so waiting behind a slow call never stretches
+   * it: callers such as the renderer's reconcile watchdog rely on that bound.
    */
   private listSessionsCoalesced(params: Record<string, unknown>): Promise<unknown> {
-    const key = JSON.stringify(params, Object.keys(params).sort());
+    const key = JSON.stringify(Object.entries(params).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
     return new Promise((resolve, reject) => {
       let entry = this.listSessionsQueue.get(key);
       if (!entry) {
         entry = { params, waiters: [] };
         this.listSessionsQueue.set(key, entry);
-        if (!this.listSessionsInFlight.has(key)) setTimeout(() => this.flushListSessions(key), LIST_SESSIONS_COALESCE_MS).unref?.();
+        if (!this.listSessionsBusy(key)) setTimeout(() => this.flushListSessions(key), LIST_SESSIONS_COALESCE_MS).unref?.();
       }
-      entry.waiters.push({ resolve, reject });
+      let done = false;
+      const timer = setTimeout(() => {
+        if (done) return;
+        done = true;
+        reject(new Error(`RPC timeout: daemon.listSessions (${RPC_TIMEOUT_MS}ms)`));
+      }, RPC_TIMEOUT_MS);
+      entry.waiters.push({
+        resolve: (v) => { if (done) return; done = true; clearTimeout(timer); resolve(v); },
+        reject: (e) => { if (done) return; done = true; clearTimeout(timer); reject(e); },
+      });
     });
+  }
+
+  /** A call for `key` is out on THIS connection. One left on a dropped socket does not hold the key. */
+  private listSessionsBusy(key: string): boolean {
+    return this.listSessionsInFlight.get(key) === this.connectionEpoch;
   }
 
   private flushListSessions(key: string): void {
     const entry = this.listSessionsQueue.get(key);
     if (!entry) return;
     this.listSessionsQueue.delete(key);
-    this.listSessionsInFlight.add(key);
+    const epoch = this.connectionEpoch;
+    this.listSessionsInFlight.set(key, epoch);
     let call: Promise<unknown>;
     try {
       call = this.controlPipe && this.connected ? this.send('daemon.listSessions', entry.params) : Promise.reject(new Error('DaemonClient not connected'));
@@ -430,8 +475,8 @@ export class DaemonClient extends EventEmitter {
       (rows) => entry.waiters.forEach((w, i) => w.resolve(i === 0 ? rows : structuredClone(rows))),
       (err: unknown) => entry.waiters.forEach((w) => w.reject(err)),
     ).finally(() => {
-      this.listSessionsInFlight.delete(key);
-      if (this.listSessionsQueue.has(key)) this.flushListSessions(key);
+      if (this.listSessionsInFlight.get(key) === epoch) this.listSessionsInFlight.delete(key);
+      if (this.listSessionsQueue.has(key) && !this.listSessionsBusy(key)) this.flushListSessions(key);
     });
   }
 
@@ -824,7 +869,8 @@ export class DaemonClient extends EventEmitter {
    * report per pane winning (a
    * reloaded window reports every pane on mount and again after its
    * reattach). A lone report stays a single call. A daemon older than #2372
-   * refuses `updates`; each pane is then sent one at a time.
+   * refuses `updates`; each pane is then sent one at a time, and so is every
+   * later report on that connection.
    */
   setViewerVisibility(sessionId: string, visible: boolean): void {
     if (!this.viewerVisibilityQueue) {
@@ -841,22 +887,29 @@ export class DaemonClient extends EventEmitter {
     this.viewerVisibilityQueue = null;
     if (!queue || !this.connected) return;
     const single = (id: string, visible: boolean) =>
-      this.rpc('daemon.setSessionViewerVisibility', { id, visible }).catch(() => undefined);
+      this.send('daemon.setSessionViewerVisibility', { id, visible }).catch(() => undefined);
     const updates = [...queue].map(([id, visible]) => ({ id, visible }));
-    if (updates.length === 1) { await single(updates[0].id, updates[0].visible); return; }
-    for (let i = 0; i < updates.length; i += VIEWER_VISIBILITY_BATCH_MAX) {
-      const chunk = updates.slice(i, i + VIEWER_VISIBILITY_BATCH_MAX);
+    if (updates.length === 1 || this.viewerVisibilityBatchRefused) {
+      await Promise.all(updates.map((u) => single(u.id, u.visible)));
+      return;
+    }
+    const chunks: Array<typeof updates> = [];
+    for (let i = 0; i < updates.length; i += VIEWER_VISIBILITY_BATCH_MAX) chunks.push(updates.slice(i, i + VIEWER_VISIBILITY_BATCH_MAX));
+    // Every chunk is written now, in order, before any later call.
+    await Promise.all(chunks.map(async (chunk) => {
       let older = false;
       try {
-        const res = (await this.rpc('daemon.setSessionViewerVisibility', { updates: chunk })) as { applied?: unknown } | null;
-        older = typeof res?.applied !== 'number';
+        const res = (await this.send('daemon.setSessionViewerVisibility', { updates: chunk })) as { batched?: unknown } | null;
+        older = res?.batched !== true;
       } catch (err) {
         // An older daemon requires `id` and refuses the batch. Any other
         // failure (a refused call) is dropped like a lost single report.
         older = /id \(string\) and visible \(boolean\) are required/.test(err instanceof Error ? err.message : String(err));
       }
-      if (older) await Promise.all(chunk.map((u) => single(u.id, u.visible)));
-    }
+      if (!older) return;
+      this.viewerVisibilityBatchRefused = true;
+      await Promise.all(chunk.map((u) => single(u.id, u.visible)));
+    }));
   }
 
   private async flushAgentStateQueue(): Promise<void> {
