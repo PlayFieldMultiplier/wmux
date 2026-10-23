@@ -6,7 +6,8 @@
 // that already holds the task is waited on; the answer is the bot's own card
 // after the task; Skip never makes a bot; a folder that is not a repository
 // keeps Send disabled; the suggestion is asked again until it checks ok;
-// Open selects the first-run bot's 1:1.
+// Open selects the first-run bot's 1:1; the sample task's end does not end
+// the first run while this step is shown.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createElement, act } from 'react';
@@ -289,6 +290,66 @@ describe('FirstRunWizard first task', () => {
     expect(status?.textContent).toBe('Bots read a git repository with a GitHub remote. Pick one, or skip.');
     expect(byId('first-run-first-task-send')?.disabled).toBe(true);
     expect(primaries()).not.toContain('first-run-first-task-send');
+  });
+
+  describe('the sample task while the step is shown', () => {
+    let onReady: () => void;
+    let onTimeout: () => void;
+    function sampleReady() {
+      firstRun.onSampleTaskReady.mockImplementation((cb: () => void) => { onReady = cb; return () => undefined; });
+      firstRun.onSampleTaskTimeout.mockImplementation((cb: () => void) => { onTimeout = cb; return () => undefined; });
+      firstRun.startSampleTask.mockResolvedValue(undefined);
+      // A workspace whose top-left pane already has a pty, so the task starts at once.
+      act(() => {
+        useStore.setState({
+          activeWorkspaceId: 'w1',
+          workspaces: [{ id: 'w1', rootPane: { id: 'l1', type: 'leaf', surfaces: [{ id: 's1', ptyId: 'p1' }], activeSurfaceId: 's1' } }],
+          applyLayoutTemplate: () => undefined,
+        } as never);
+      });
+    }
+    afterEach(() => { vi.useRealTimers(); });
+
+    it('a sample success leaves the dialog open on the first task and completes nothing', async () => {
+      install();
+      sampleReady();
+      const onClose = await mount();
+      vi.useFakeTimers({ toFake: ['setTimeout'] });
+      await click('first-run-wizard-try');
+      await act(async () => onReady());
+      await act(async () => { vi.advanceTimersByTime(5_000); });
+      expect(byId('first-run-wizard-sample-success')).not.toBeNull();
+      expect(firstRun.complete).not.toHaveBeenCalled();
+      expect(onClose).not.toHaveBeenCalled();
+      expect(byId('first-run-first-task-send')?.disabled).toBe(false);
+      expect(primaries()).toEqual(['first-run-first-task-send']);
+    });
+
+    it("the fallback's Continue completes nothing while the step is shown", async () => {
+      install();
+      sampleReady();
+      const onClose = await mount();
+      await click('first-run-wizard-try');
+      await act(async () => onTimeout());
+      await click('first-run-wizard-fallback-continue');
+      expect(firstRun.complete).not.toHaveBeenCalled();
+      expect(onClose).not.toHaveBeenCalled();
+      expect(byId('first-run-wizard-sample-success')).not.toBeNull();
+    });
+
+    it('with no agent ready (no step), a sample success still completes and closes', async () => {
+      install();
+      firstRun.agentStatus.mockResolvedValue([{ ...ready, readiness: 'not-installed', executable: null, version: null }]);
+      sampleReady();
+      const onClose = await mount();
+      expect(byId('first-run-first-task')).toBeNull();
+      vi.useFakeTimers({ toFake: ['setTimeout'] });
+      await click('first-run-wizard-try');
+      await act(async () => onReady());
+      await act(async () => { vi.advanceTimersByTime(2_000); });
+      expect(firstRun.complete).toHaveBeenCalledTimes(1);
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('is not offered when the wizard is reopened', async () => {

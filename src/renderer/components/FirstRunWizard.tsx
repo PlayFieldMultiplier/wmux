@@ -375,6 +375,11 @@ export default function FirstRunWizard({ mode, onClose }: FirstRunWizardProps) {
   const activeWorkspaceId = useStore((s) => s.activeWorkspaceId);
   const showFirstTask = mode === 'firstRun' && statuses !== null && anyAgentReady(statuses);
   const firstTask = useFirstTask({ enabled: showFirstTask, workspaceId: activeWorkspaceId });
+  // The first run ends with the bot's first task: while that step is shown,
+  // the sample task's end leaves the dialog open on it. Read by the sample
+  // task's callbacks, which outlive the render that started them.
+  const firstTaskShownRef = useRef(showFirstTask);
+  firstTaskShownRef.current = showFirstTask;
   const openConversation = useCallback(() => {
     openFirstTaskConversation(firstTask.botId);
     onCloseRef.current();
@@ -589,6 +594,7 @@ export default function FirstRunWizard({ mode, onClose }: FirstRunWizardProps) {
       cleanup();
       if (!isMountedRef.current) return;
       setSampleState('success');
+      if (firstTaskShownRef.current) return;
       // Auto-complete + close after a brief moment so the user can read the success copy.
       setTimeout(() => {
         void firstRunBridge().complete().catch(() => undefined);
@@ -613,6 +619,10 @@ export default function FirstRunWizard({ mode, onClose }: FirstRunWizardProps) {
   }, [sampleState]);
 
   const handleFallbackContinue = useCallback(async () => {
+    if (firstTaskShownRef.current) {
+      setSampleState('success');
+      return;
+    }
     try {
       await firstRunBridge().complete();
     } catch {
