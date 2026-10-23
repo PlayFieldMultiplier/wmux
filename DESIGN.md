@@ -179,8 +179,8 @@ reads as a second, differently tinted panel.
   `--text-sub` keep 4.5:1 and `--text-subtle` and `--text-muted` 3:1 against
   both the frame and the sidebar. The
   range stops at 90% (`GLASS_MAX_COVERAGE`), above which the glass no longer
-  reads as glass: a theme that needs more, or whose muted text misses 3:1
-  even opaque, is opaque on Windows as if glass were Off (material none, a
+  reads as glass: a theme where any of the five tiers still misses its floor
+  at 90% is opaque on Windows as if glass were Off (material none, a
   solid caption strip), while the setting keeps the user's level. Glass
   draws a theme's own text tiers and row fills on both platforms, exactly as
   macOS does: no platform rule restates a text colour, and Windows has no
