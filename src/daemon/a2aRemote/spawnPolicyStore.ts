@@ -25,6 +25,12 @@ import { loadStore, storeUnavailable, type StoreLog } from './storeFile';
  */
 
 export const SPAWN_POLICY_FILE = 'spawn-policy.json';
+/**
+ * How long one save may take, from the call: queued behind another save and
+ * checking every folder. Under the app's 30 s RPC timeout, so a save the app
+ * gave up on has saved nothing.
+ */
+export const SPAWN_POLICY_SET_BUDGET_MS = 25_000;
 
 /** The repository top level of `dir` (realpath), or null when it is not inside one. */
 export type RepoToplevel = (dir: string) => Promise<string | null>;
@@ -39,6 +45,7 @@ export interface SpawnPolicyStoreOptions {
   repoToplevel?: RepoToplevel;
   realpath?: (p: string) => Promise<string>;
   checks?: SpawnChecks;
+  setBudgetMs?: number;
 }
 
 export class SpawnPolicyStore {
@@ -49,6 +56,8 @@ export class SpawnPolicyStore {
   private readonly repoToplevel: RepoToplevel;
   private readonly realpath: (p: string) => Promise<string>;
   private readonly checks: SpawnChecks;
+  private readonly now: () => number;
+  private readonly setBudgetMs: number;
   private policy: A2aSpawnPolicyV1;
   private writable: boolean;
 
@@ -60,6 +69,8 @@ export class SpawnPolicyStore {
     this.repoToplevel = opts.repoToplevel ?? gitToplevel;
     this.realpath = opts.realpath ?? ((p) => fs.promises.realpath(p));
     this.checks = opts.checks ?? spawnChecks;
+    this.now = opts.now ?? Date.now;
+    this.setBudgetMs = opts.setBudgetMs ?? SPAWN_POLICY_SET_BUDGET_MS;
     const loaded = loadStore({
       filePath: this.filePath,
       fileName: SPAWN_POLICY_FILE,
@@ -87,7 +98,8 @@ export class SpawnPolicyStore {
    * The version check and the write happen together, after every wait.
    */
   set(raw: unknown): Promise<A2aSpawnPolicySetResult> {
-    const run = this.queue.then(() => this.setNow(raw));
+    const deadline = this.now() + this.setBudgetMs;
+    const run = this.queue.then(() => this.setNow(raw, deadline));
     this.queue = run.then(() => undefined, () => undefined);
     return run;
   }
@@ -122,13 +134,30 @@ export class SpawnPolicyStore {
 
   private queue: Promise<void> = Promise.resolve();
 
-  private async setNow(raw: unknown): Promise<A2aSpawnPolicySetResult> {
+  private async setNow(raw: unknown, deadline: number): Promise<A2aSpawnPolicySetResult> {
     if (!this.writable) return { ok: false, error: storeUnavailable(SPAWN_POLICY_FILE).message };
     const next = coerceSpawnPolicy(raw);
     if (!next) return { ok: false, error: 'the policy is not valid' };
     if (next.version !== this.policy.version) return CONFLICT;
+    // Past the budget nothing is written: the caller has stopped waiting.
+    const checked = await withinBudget(this.checkRoots(next.roots, deadline), deadline - this.now());
+    if (checked === OVER_BUDGET) return { ok: false, error: 'the folders did not answer in time; nothing was saved' };
+    if (!Array.isArray(checked)) return checked;
+    // Something else changed the policy while the folders were checked.
+    if (next.version !== this.policy.version) return CONFLICT;
+    const saved: A2aSpawnPolicyV1 = { ...next, roots: checked, version: this.policy.version + 1 };
+    this.write(this.filePath, saved);
+    this.scheduleHarden(this.filePath);
+    this.policy = saved;
+    return { ok: true, policy: structuredClone(saved) };
+  }
+
+  /** Each root resolved and checked, in order; the first refusal otherwise. */
+  private async checkRoots(input: A2aSpawnPolicyV1['roots'], deadline: number): Promise<A2aSpawnPolicyV1['roots'] | { ok: false; error: string }> {
     const roots: A2aSpawnPolicyV1['roots'] = [];
-    for (const root of next.roots) {
+    for (const root of input) {
+      // A save already given up on checks no further folders.
+      if (this.now() > deadline) return { ok: false, error: 'the folders did not answer in time; nothing was saved' };
       if (!path.isAbsolute(root.path)) return { ok: false, error: `${root.label}: the folder must be an absolute path` };
       // Bounded like a request's checks: a folder on a mount that does not
       // answer fails this save instead of holding up every later one.
@@ -145,13 +174,7 @@ export class SpawnPolicyStore {
       if (top === null || !samePath(top, real)) return { ok: false, error: `${root.label}: the folder must be the top level of a git repository` };
       roots.push({ ...root, path: real });
     }
-    // Something else changed the policy while the folders were checked.
-    if (next.version !== this.policy.version) return CONFLICT;
-    const saved: A2aSpawnPolicyV1 = { ...next, roots, version: this.policy.version + 1 };
-    this.write(this.filePath, saved);
-    this.scheduleHarden(this.filePath);
-    this.policy = saved;
-    return { ok: true, policy: structuredClone(saved) };
+    return roots;
   }
 
   private persist(why: string): void {
@@ -166,6 +189,22 @@ export class SpawnPolicyStore {
       this.log('error', `[a2a-remote] ${SPAWN_POLICY_FILE}: not saved after ${why}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
+}
+
+const OVER_BUDGET = Symbol('over budget');
+
+/** `p`, or `OVER_BUDGET` once `ms` have passed (at once when `ms` is not positive). */
+function withinBudget<T>(p: Promise<T>, ms: number): Promise<T | typeof OVER_BUDGET> {
+  if (ms <= 0) {
+    p.catch(() => undefined);
+    return Promise.resolve(OVER_BUDGET);
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const over = new Promise<typeof OVER_BUDGET>((resolve) => {
+    timer = setTimeout(() => resolve(OVER_BUDGET), ms);
+    timer.unref?.();
+  });
+  return Promise.race([p, over]).finally(() => clearTimeout(timer));
 }
 
 const CONFLICT: A2aSpawnPolicySetResult = { ok: false, conflict: true, error: 'the settings changed in the meantime' };

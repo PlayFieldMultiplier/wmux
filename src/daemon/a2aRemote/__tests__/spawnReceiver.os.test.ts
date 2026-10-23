@@ -587,6 +587,22 @@ describe('SpawnPolicyStore', () => {
     expect(await slow.set(base)).toMatchObject({ ok: true });
   });
 
+  it('a save has one time budget from the call, so one the app gave up on has saved nothing', async () => {
+    const slowRoot = (): Promise<string> => new Promise((r) => setTimeout(() => r(repo), 40));
+    const slow = new SpawnPolicyStore({ dir: a2aDir, scheduleHarden: quiet, checks: new SpawnChecks(8, 5_000), setBudgetMs: 100, realpath: slowRoot });
+    // Each folder answers within its own timeout, but together they take longer than the save may.
+    const roots = ['a', 'b', 'c', 'd'].map((id) => ({ id, label: id.toUpperCase(), path: repo }));
+    expect(await slow.set({ ...slow.get(), roots })).toEqual({ ok: false, error: 'the folders did not answer in time; nothing was saved' });
+    expect(slow.get().version).toBe(0);
+    expect(fs.existsSync(slow.filePath)).toBe(false);
+    // A save queued behind a slow one counts its wait too.
+    const first = slow.set({ ...slow.get(), roots });
+    const second = slow.set({ ...slow.get(), followUps: 'direct' });
+    await first;
+    expect(await second).toMatchObject({ ok: false });
+    expect(slow.get().version).toBe(0);
+  });
+
   it('on start, PCs no longer paired are dropped from the policy and the requests', async () => {
     await allowHost();
     requests.receive(HOST, { ...envelope().spawn! });
