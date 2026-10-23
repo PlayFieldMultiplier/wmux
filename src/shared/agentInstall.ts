@@ -94,18 +94,14 @@ export function agentExecutableNames(agent: AgentId): string[] {
  * first-run flow, which asks the user how to sign in; wmux picks nothing.
  * `claude auth login` is deliberately not used: it signs in with the
  * subscription method unless told otherwise, which would choose for the user.
- * Quoted for the pane's shell, so spaces and non-ASCII folders are safe. A
- * script entry runs with `node`, or on Windows with the Node.js its installer
- * bundles (`node`, from the detector) when there is one.
+ * Quoted for the pane's shell, so spaces and non-ASCII folders are safe.
  */
-export function agentLoginCommand(executable: string, shell: AgentCommandShell, node?: string | null): string {
+export function agentLoginCommand(executable: string, shell: AgentCommandShell): string {
   const isScript = /\.(c|m)?js$/i.test(executable);
   if (shell === 'powershell') {
     // PowerShell also ends a single-quoted string at the typographic single
     // quotes, so those are doubled too (same rule as chat/v2/handoff pwshQuote).
-    const quote = (s: string): string => `'${s.replace(/['\u2018\u2019\u201a\u201b]/g, (c) => c + c)}'`;
-    const q = quote(executable);
-    if (isScript && node) return `& ${quote(node)} ${q}`;
+    const q = `'${executable.replace(/['\u2018\u2019\u201a\u201b]/g, (c) => c + c)}'`;
     return isScript ? `node ${q}` : `& ${q}`;
   }
   const q = `'${executable.replace(/'/g, `'\\''`)}'`;

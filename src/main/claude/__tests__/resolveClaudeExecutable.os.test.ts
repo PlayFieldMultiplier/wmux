@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { agentCandidates, bundledNodeFor, claudeCandidates, programOnPath, resolveAgentExecutableWith, resolveClaudeExecutableWith, type ResolveClaudeEnv } from '../resolveClaudeExecutable';
+import { agentCandidates, claudeCandidates, programOnPath, resolveAgentExecutableWith, resolveClaudeExecutableWith, type ResolveClaudeEnv } from '../resolveClaudeExecutable';
 
 function posix(files: string[], env: Record<string, string> = {}, platform: NodeJS.Platform = 'linux'): ResolveClaudeEnv {
   const set = new Set(files);
@@ -264,8 +264,7 @@ describe('Grok and Antigravity candidates', () => {
 
 describe('Qwen Code and Kimi Code CLI candidates', () => {
   const LOCAL = 'C:\\Users\\u\\AppData\\Local';
-  const ENTRY = `${LOCAL}\\qwen-code\\qwen-code\\lib\\cli-entry.js`;
-  const NODE = `${LOCAL}\\qwen-code\\qwen-code\\node\\node.exe`;
+  const SHIM = `${LOCAL}\\qwen-code\\qwen-code\\bin\\qwen.cmd`;
   const win = (files: string[]): ResolveClaudeEnv => {
     const set = new Set(files.map((f) => f.toLowerCase()));
     return {
@@ -276,10 +275,10 @@ describe('Qwen Code and Kimi Code CLI candidates', () => {
     };
   };
 
-  it('Windows: the standalone archive\'s script entry (not its qwen.cmd), kimi.exe, and the npm entrypoints', () => {
+  it('Windows: the standalone archive\'s own qwen.cmd, kimi.exe, and the npm entrypoints', () => {
     expect(agentCandidates(win([]), 'qwen')).toEqual([
       'C:\\tools\\qwen.exe',
-      ENTRY,
+      SHIM,
       'C:\\Users\\u\\AppData\\Roaming\\npm\\node_modules\\@qwen-code\\qwen-code\\cli-entry.js',
     ]);
     expect(agentCandidates(win([]), 'kimi')).toEqual([
@@ -289,12 +288,9 @@ describe('Qwen Code and Kimi Code CLI candidates', () => {
     ]);
   });
 
-  it('the bundled node.exe runs that entry, only when it is there and only for that entry', () => {
-    expect(bundledNodeFor(win([ENTRY, NODE]), ENTRY)).toBe(NODE);
-    expect(bundledNodeFor(win([ENTRY, NODE]), ENTRY.toUpperCase())).toBe(NODE);
-    expect(bundledNodeFor(win([ENTRY]), ENTRY)).toBeNull();
-    expect(bundledNodeFor(win([ENTRY, NODE]), 'C:\\Users\\u\\AppData\\Roaming\\npm\\node_modules\\@qwen-code\\qwen-code\\cli-entry.js')).toBeNull();
-    expect(bundledNodeFor({ ...win([ENTRY, NODE]), platform: 'linux' }, ENTRY)).toBeNull();
+  it('Windows: picks the archive\'s qwen.cmd (which runs its bundled node.exe), not the PATH shim that calls it', () => {
+    const r = win([SHIM, `${LOCAL}\\qwen-code\\bin\\qwen.cmd`]);
+    expect(resolveAgentExecutableWith({ ...r, env: { ...r.env, PATH: `${LOCAL}\\qwen-code\\bin` } }, 'qwen')).toBe(SHIM);
   });
 
   it('macOS and Linux: ~/.local/bin/qwen and ~/.kimi-code/bin/kimi when PATH misses them', () => {

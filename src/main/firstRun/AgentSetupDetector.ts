@@ -16,7 +16,6 @@ import { withFreshWindowsPath } from '../../shared/windowsPathEnv';
 import { killProcessTree } from '../../daemon/automation/treeKill';
 import {
   agentCandidates,
-  bundledNodeFor,
   isExecutableFile,
   liveResolveEnv,
   resolveAgentExecutableWith,
@@ -66,9 +65,6 @@ export interface AgentSetupDetectorDeps {
   /** Candidate list shown when nothing was found. */
   candidates?: (agent: AgentId, env: NodeJS.ProcessEnv) => string[];
   run?: ProbeRunner;
-  /** The Node.js an agent's installer bundles for `executable`, or null
-   *  (a script entry then runs with the `node` on PATH). */
-  bundledNode?: (executable: string, env: NodeJS.ProcessEnv) => string | null;
   /** The environment probes start from (scrubbed before use). */
   env?: () => NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
@@ -197,7 +193,6 @@ export class AgentSetupDetector {
   private readonly isFile: (p: string) => boolean;
   private readonly candidates: (agent: AgentId, env: NodeJS.ProcessEnv) => string[];
   private readonly run: ProbeRunner;
-  private readonly bundledNode: (executable: string, env: NodeJS.ProcessEnv) => string | null;
   private readonly env: () => NodeJS.ProcessEnv;
   private readonly platform: NodeJS.Platform;
   private readonly homedir: () => string;
@@ -214,7 +209,6 @@ export class AgentSetupDetector {
     this.isFile = deps.isFile ?? isExecutableFile;
     this.candidates = deps.candidates ?? ((agent, env) => agentCandidates(liveResolveEnv(env), agent));
     this.run = deps.run ?? execProbe;
-    this.bundledNode = deps.bundledNode ?? ((executable, env) => bundledNodeFor(liveResolveEnv(env), executable));
     this.platform = deps.platform ?? process.platform;
     this.homedir = deps.homedir ?? os.homedir;
     this.timeoutMs = deps.timeoutMs ?? PROBE_TIMEOUT_MS;
@@ -255,18 +249,8 @@ export class AgentSetupDetector {
     return result.code === 0 ? parseAgentVersion(result.stdout) : null;
   }
 
-  /** The Node.js `executable` runs with when its installer bundles one. */
-  nodeFor(executable: string): string | null {
-    try {
-      return this.bundledNode(executable, this.env());
-    } catch {
-      return null;
-    }
-  }
-
   private probe(executable: string, probeEnv: NodeJS.ProcessEnv, args: readonly string[]): Promise<ProbeResult> {
-    const node = this.nodeFor(executable);
-    const launch = resolveClaudeLaunch(executable, { args, platform: this.platform, ...(node ? { nodeExecutable: node } : {}) });
+    const launch = resolveClaudeLaunch(executable, { args, platform: this.platform });
     return this.run(launch.command, launch.args, {
       env: launch.env ? { ...probeEnv, ...launch.env } : probeEnv,
       // Never an opened repo: a project folder's config must not change the answer.

@@ -119,13 +119,9 @@ describe('Qwen Code and Kimi Code CLI install lines', () => {
     ]);
   });
 
-  it('signs in to a script entry with the Node.js its installer bundles, else the node on PATH', () => {
-    const entry = 'C:\\Users\\u\\AppData\\Local\\qwen-code\\qwen-code\\lib\\cli-entry.js';
-    const node = 'C:\\Users\\u\\AppData\\Local\\qwen-code\\qwen-code\\node\\node.exe';
-    expect(agentLoginCommand(entry, 'powershell', node)).toBe(`& '${node}' '${entry}'`);
-    expect(agentLoginCommand(entry, 'powershell')).toBe(`node '${entry}'`);
-    // A native executable ignores it.
-    expect(agentLoginCommand('C:\\k\\kimi.exe', 'powershell', node)).toBe("& 'C:\\k\\kimi.exe'");
+  it('signs in to Qwen on Windows through its own qwen.cmd, never as a bare script', () => {
+    const shim = 'C:\\Users\\u\\AppData\\Local\\qwen-code\\qwen-code\\bin\\qwen.cmd';
+    expect(agentLoginCommand(shim, 'powershell')).toBe(`& '${shim}'`);
   });
 });
 

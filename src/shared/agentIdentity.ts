@@ -135,13 +135,7 @@ export interface AgentSetupSpec {
    *  folder; otherwise the environment variable naming the base folder. */
   readonly native: {
     readonly posix: readonly string[];
-    readonly win32: {
-      readonly root: 'home' | 'LOCALAPPDATA';
-      readonly path: readonly string[];
-      /** The Node.js the installer bundles, under the same root, when `path`
-       *  is a script the vendor's own `.cmd` shim runs with it. */
-      readonly node?: readonly string[];
-    };
+    readonly win32: { readonly root: 'home' | 'LOCALAPPDATA'; readonly path: readonly string[] };
   };
   /** The npm package (scope and name segments) and, on Windows, its
    *  spawnable entrypoints (the `.cmd` shim npm puts on PATH is not). Absent
@@ -502,17 +496,14 @@ export const AGENT_IDENTITIES = [
     setup: {
       binary: 'qwen',
       // The standalone installers (install-qwen-standalone.sh: ~/.local/bin;
-      // the Windows .bat: %LOCALAPPDATA%\qwen-code). On Windows the command is
-      // a `qwen.cmd` shim, which cannot be spawned, so the card runs what it
-      // runs: the archive's lib\cli-entry.js with its own node\node.exe
-      // (QwenLM/qwen-code scripts/create-standalone-package.js `writeShims`).
+      // the Windows .bat: %LOCALAPPDATA%\qwen-code). On Windows that is the
+      // archive's own `bin\qwen.cmd`, which runs its bundled node.exe and sets
+      // the launcher path Qwen reads to call itself again (QwenLM/qwen-code
+      // scripts/create-standalone-package.js `writeShims`), so the card runs
+      // the shim rather than its script (resolveClaudeLaunch wraps a .cmd).
       native: {
         posix: ['.local', 'bin', 'qwen'],
-        win32: {
-          root: 'LOCALAPPDATA',
-          path: ['qwen-code', 'qwen-code', 'lib', 'cli-entry.js'],
-          node: ['qwen-code', 'qwen-code', 'node', 'node.exe'],
-        },
+        win32: { root: 'LOCALAPPDATA', path: ['qwen-code', 'qwen-code', 'bin', 'qwen.cmd'] },
       },
       // package.json `bin`: { "qwen": "cli-entry.js" }.
       npm: { package: ['@qwen-code', 'qwen-code'], winEntries: [['cli-entry.js']], besideShim: true },

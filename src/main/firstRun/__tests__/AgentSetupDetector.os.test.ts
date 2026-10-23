@@ -156,36 +156,24 @@ esac`);
   });
 });
 
-describe('a script entry its installer bundles a Node.js for (Qwen Code on Windows)', () => {
-  const entry = 'C:\\Users\\u\\AppData\\Local\\qwen-code\\qwen-code\\lib\\cli-entry.js';
-  const node = 'C:\\Users\\u\\AppData\\Local\\qwen-code\\qwen-code\\node\\node.exe';
-
-  function probeWith(bundled: string | null) {
-    const calls: { command: string; args: string[]; cwd: string }[] = [];
+describe('Qwen Code on Windows', () => {
+  it('asks its version through the vendor qwen.cmd (cmd.exe, verbatim), from the home folder', async () => {
+    const shim = 'C:\\Users\\u\\AppData\\Local\\qwen-code\\qwen-code\\bin\\qwen.cmd';
+    const calls: { command: string; args: string[]; cwd: string; verbatim?: boolean }[] = [];
     const d = new AgentSetupDetector({
       env: () => ({ Path: 'C:\\Windows' }),
       platform: 'win32',
       homedir: () => 'C:\\Users\\u',
-      resolve: (agent) => (agent === 'qwen' ? entry : null),
-      bundledNode: (exe) => (exe === entry ? bundled : null),
+      resolve: (agent) => (agent === 'qwen' ? shim : null),
       run: async (command, args, opts) => {
-        calls.push({ command, args, cwd: opts.cwd });
+        calls.push({ command, args, cwd: opts.cwd, verbatim: opts.windowsVerbatimArguments });
         return { code: 0, stdout: '0.26.0\n', stderr: '', timedOut: false };
       },
     });
-    return { d, calls };
-  }
-
-  it('asks its version through that node.exe, from the home folder', async () => {
-    const { d, calls } = probeWith(node);
-    expect(await d.detect('qwen')).toMatchObject({ readiness: 'installed', executable: entry, version: '0.26.0' });
-    expect(calls).toEqual([{ command: node, args: [entry, '--version'], cwd: 'C:\\Users\\u' }]);
-  });
-
-  it('without one, the entry runs with the node on PATH', async () => {
-    const { d, calls } = probeWith(null);
-    await d.detect('qwen');
-    expect(calls.map((c) => c.command)).toEqual(['node']);
+    expect(await d.detect('qwen')).toMatchObject({ readiness: 'installed', executable: shim, version: '0.26.0' });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ args: ['/d', '/s', '/c', `""${shim}" "--version""`], cwd: 'C:\\Users\\u', verbatim: true });
+    expect(calls[0].command.toLowerCase()).toMatch(/cmd\.exe$/);
   });
 });
 

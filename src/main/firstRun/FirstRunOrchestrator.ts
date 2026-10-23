@@ -165,7 +165,7 @@ export class FirstRunOrchestrator {
       // (the renderer's explicit choice, else $SHELL, as pty creation does),
       // which may be pwsh too.
       login: executable
-        ? { command: agentLoginCommand(executable, method.shell === 'powershell' ? 'powershell' : shellSyntax(paneShell || process.env.SHELL), this.agentDetector.nodeFor(executable)), shell: method.shell }
+        ? { command: agentLoginCommand(executable, method.shell === 'powershell' ? 'powershell' : shellSyntax(paneShell || process.env.SHELL)), shell: method.shell }
         : null,
     };
   }

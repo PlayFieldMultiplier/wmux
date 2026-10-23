@@ -2,7 +2,7 @@ import { execFile } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { agentRow, agentSlugsWith, type AgentSlugWith } from '../../shared/agentIdentity';
+import { agentRow, type AgentSlugWith } from '../../shared/agentIdentity';
 
 // One answer to "where is the user's claude?", shared by Moa (the deck
 // adapters) and the first-run wizard's "Claude Code detected" row so the two
@@ -181,25 +181,6 @@ export function programOnPath(r: ResolveClaudeEnv, name: string): boolean {
   const login = r.loginShellPath?.() ?? null;
   const dirs = [...pathDirs(r), '/usr/bin', '/bin', ...(login ? pathDirs(r, login) : [])];
   return dirs.some((d) => isFileSafe(r, path.posix.join(d, name)));
-}
-
-/**
- * The Node.js an agent's own Windows installer bundles, when `executable` is
- * that installer's script entry (`setup.native.win32.node`). Never the `node`
- * on PATH: such an install exists for machines without one.
- */
-export function bundledNodeFor(r: ResolveClaudeEnv, executable: string): string | null {
-  if (r.platform !== 'win32') return null;
-  const p = path.win32;
-  for (const agent of agentSlugsWith('setup')) {
-    const win = agentRow(agent)?.setup?.native.win32;
-    if (!win?.node) continue;
-    const base = win.root === 'home' ? r.homedir : r.env[win.root];
-    if (!base || p.join(base, ...win.path).toLowerCase() !== p.normalize(executable).toLowerCase()) continue;
-    const node = p.join(base, ...win.node);
-    return isFileSafe(r, node) ? node : null;
-  }
-  return null;
 }
 
 function firstHit(r: ResolveClaudeEnv, candidates: string[]): string | null {
