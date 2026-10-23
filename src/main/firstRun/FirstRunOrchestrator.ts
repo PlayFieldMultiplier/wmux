@@ -37,7 +37,7 @@ import {
   type AgentSetupPlan,
   type SetAgentPathResult,
 } from '../../shared/agentInstall';
-import { isExecutableFile } from '../claude/resolveClaudeExecutable';
+import { isExecutableFile, liveResolveEnv, programOnPath } from '../claude/resolveClaudeExecutable';
 import { atomicWriteJSON } from '../../daemon/util/atomicWrite';
 
 const MARKER_FILENAME = '.first-run';
@@ -165,7 +165,7 @@ export class FirstRunOrchestrator {
       // (the renderer's explicit choice, else $SHELL, as pty creation does),
       // which may be pwsh too.
       login: executable
-        ? { command: agentLoginCommand(executable, method.shell === 'powershell' ? 'powershell' : shellSyntax(paneShell || process.env.SHELL)), shell: method.shell }
+        ? { command: agentLoginCommand(executable, method.shell === 'powershell' ? 'powershell' : shellSyntax(paneShell || process.env.SHELL), this.agentDetector.nodeFor(executable)), shell: method.shell }
         : null,
     };
   }
@@ -205,9 +205,7 @@ export class FirstRunOrchestrator {
   }
 
   private onPath(name: string, env: NodeJS.ProcessEnv): boolean {
-    const raw = env.PATH ?? env.Path ?? '';
-    const dirs = [...raw.split(path.delimiter), '/usr/bin', '/bin'].filter((d) => path.isAbsolute(d));
-    return dirs.some((d) => isExecutableFile(path.join(d, name)));
+    return programOnPath(liveResolveEnv(env), name);
   }
 
   private agentPathsPath(): string {

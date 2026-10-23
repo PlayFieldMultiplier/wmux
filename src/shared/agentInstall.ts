@@ -7,11 +7,12 @@
 // line typed into the visible pane. Each line is the vendor's own documented
 // installer, copied verbatim (no flag added or removed) from the source URL
 // next to it; the one WinGet line is `winget install` with the package id the
-// vendor documents. They install into the user's own folder and need no
-// administrator rights and no Node.js. When an install fails, the card opens
-// `officialPage` instead of trying anything else.
+// vendor documents. The main lines install into the user's own folder and need
+// no administrator rights and no Node.js; an npm, pnpm or Homebrew line is
+// offered only after it, and only where the vendor documents it. When an
+// install fails, the card opens `officialPage` instead of trying anything else.
 
-import { agentRow } from './agentIdentity';
+import { agentRow, type AgentInstallAlternative } from './agentIdentity';
 import type { AgentId } from './agentSetup';
 
 /** Which shell the pane runs the line in. */
@@ -27,7 +28,7 @@ export type AgentCommandShell =
 
 /** Which of an agent's documented lines: its main installer script, or one of
  *  the row's `install.more`. */
-export type AgentInstallVia = 'script' | 'winget';
+export type AgentInstallVia = 'script' | AgentInstallAlternative['via'];
 
 export interface AgentInstallMethod {
   via: AgentInstallVia;
@@ -93,14 +94,18 @@ export function agentExecutableNames(agent: AgentId): string[] {
  * first-run flow, which asks the user how to sign in; wmux picks nothing.
  * `claude auth login` is deliberately not used: it signs in with the
  * subscription method unless told otherwise, which would choose for the user.
- * Quoted for the pane's shell, so spaces and non-ASCII folders are safe.
+ * Quoted for the pane's shell, so spaces and non-ASCII folders are safe. A
+ * script entry runs with `node`, or on Windows with the Node.js its installer
+ * bundles (`node`, from the detector) when there is one.
  */
-export function agentLoginCommand(executable: string, shell: AgentCommandShell): string {
+export function agentLoginCommand(executable: string, shell: AgentCommandShell, node?: string | null): string {
   const isScript = /\.(c|m)?js$/i.test(executable);
   if (shell === 'powershell') {
     // PowerShell also ends a single-quoted string at the typographic single
     // quotes, so those are doubled too (same rule as chat/v2/handoff pwshQuote).
-    const q = `'${executable.replace(/['\u2018\u2019\u201a\u201b]/g, (c) => c + c)}'`;
+    const quote = (s: string): string => `'${s.replace(/['\u2018\u2019\u201a\u201b]/g, (c) => c + c)}'`;
+    const q = quote(executable);
+    if (isScript && node) return `& ${quote(node)} ${q}`;
     return isScript ? `node ${q}` : `& ${q}`;
   }
   const q = `'${executable.replace(/'/g, `'\\''`)}'`;

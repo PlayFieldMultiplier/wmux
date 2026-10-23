@@ -117,7 +117,7 @@ export interface AgentTerminalChatSpec {
 /** Another documented install line for one platform ({@link AgentSetupSpec}). */
 export interface AgentInstallAlternative {
   readonly platform: 'posix' | 'win32';
-  readonly via: 'winget';
+  readonly via: 'winget' | 'npm' | 'pnpm' | 'brew';
   readonly command: string;
   readonly requires: readonly string[];
   readonly source: string;
@@ -135,7 +135,13 @@ export interface AgentSetupSpec {
    *  folder; otherwise the environment variable naming the base folder. */
   readonly native: {
     readonly posix: readonly string[];
-    readonly win32: { readonly root: 'home' | 'LOCALAPPDATA'; readonly path: readonly string[] };
+    readonly win32: {
+      readonly root: 'home' | 'LOCALAPPDATA';
+      readonly path: readonly string[];
+      /** The Node.js the installer bundles, under the same root, when `path`
+       *  is a script the vendor's own `.cmd` shim runs with it. */
+      readonly node?: readonly string[];
+    };
   };
   /** The npm package (scope and name segments) and, on Windows, its
    *  spawnable entrypoints (the `.cmd` shim npm puts on PATH is not). Absent
@@ -174,7 +180,7 @@ export interface AgentSetupSpec {
     /** Opened when an install fails or cannot run here. */
     readonly officialPage: string;
     /** The vendor's other documented ways on one platform, each verbatim with
-     *  its own source, offered after the line above. `winget` runs in
+     *  its own source, offered after the line above. On Windows each runs in
      *  PowerShell. `requires` as above. */
     readonly more?: readonly AgentInstallAlternative[];
   };
@@ -493,6 +499,63 @@ export const AGENT_IDENTITIES = [
     display: 'Qwen Code',
     resume: { picker: '--resume', exact: '--resume {id}', pin: '--session-id', idFormat: 'uuid' },
     process: { packages: ['@qwen-code/qwen-code'] },
+    setup: {
+      binary: 'qwen',
+      // The standalone installers (install-qwen-standalone.sh: ~/.local/bin;
+      // the Windows .bat: %LOCALAPPDATA%\qwen-code). On Windows the command is
+      // a `qwen.cmd` shim, which cannot be spawned, so the card runs what it
+      // runs: the archive's lib\cli-entry.js with its own node\node.exe
+      // (QwenLM/qwen-code scripts/create-standalone-package.js `writeShims`).
+      native: {
+        posix: ['.local', 'bin', 'qwen'],
+        win32: {
+          root: 'LOCALAPPDATA',
+          path: ['qwen-code', 'qwen-code', 'lib', 'cli-entry.js'],
+          node: ['qwen-code', 'qwen-code', 'node', 'node.exe'],
+        },
+      },
+      // package.json `bin`: { "qwen": "cli-entry.js" }.
+      npm: { package: ['@qwen-code', 'qwen-code'], winEntries: [['cli-entry.js']], besideShim: true },
+      // Qwen signs in inside a session (`/auth`); the standalone `qwen auth`
+      // command was removed, so there is no status subcommand to read.
+      loginStatus: { read: 'none' },
+      // The version whose `--resume` / `--session-id` were checked (above).
+      updateFloor: '0.26.0',
+      // https://github.com/QwenLM/qwen-code README, "Installation" (the
+      // standalone script first, then "NPM / Homebrew"). Checked 2026-10-23.
+      install: {
+        posix: {
+          command: 'curl -fsSL https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen-standalone.sh | bash',
+          requires: ['curl', 'bash'],
+        },
+        win32: { command: 'irm https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen-standalone.ps1 | iex' },
+        source: 'https://github.com/QwenLM/qwen-code#installation',
+        officialPage: 'https://github.com/QwenLM/qwen-code#installation',
+        more: [
+          {
+            platform: 'posix',
+            via: 'npm',
+            command: 'npm install -g @qwen-code/qwen-code@latest',
+            requires: ['npm'],
+            source: 'https://github.com/QwenLM/qwen-code#installation',
+          },
+          {
+            platform: 'win32',
+            via: 'npm',
+            command: 'npm install -g @qwen-code/qwen-code@latest',
+            requires: ['npm'],
+            source: 'https://github.com/QwenLM/qwen-code#installation',
+          },
+          {
+            platform: 'posix',
+            via: 'brew',
+            command: 'brew install qwen-code',
+            requires: ['brew'],
+            source: 'https://github.com/QwenLM/qwen-code#installation',
+          },
+        ],
+      },
+    },
   },
   {
     // Kimi Code CLI. https://www.kimi.com/code/docs/en/kimi-code-cli/reference/kimi-command
@@ -504,6 +567,54 @@ export const AGENT_IDENTITIES = [
     display: 'Kimi Code CLI',
     resume: { picker: '--session', idFormat: 'picker-only' },
     process: { packages: ['@moonshot-ai/kimi-code'] },
+    setup: {
+      binary: 'kimi',
+      // install.sh / install.ps1: KIMI_INSTALL_DIR defaults to ~/.kimi-code
+      // (%USERPROFILE%\.kimi-code), the binary in its bin folder.
+      native: { posix: ['.kimi-code', 'bin', 'kimi'], win32: { root: 'home', path: ['.kimi-code', 'bin', 'kimi.exe'] } },
+      // package.json `bin`: { "kimi": "dist/main.mjs" }.
+      npm: { package: ['@moonshot-ai', 'kimi-code'], winEntries: [['dist', 'main.mjs']], besideShim: true },
+      // Kimi signs in inside a session (`/login`) and documents no status
+      // subcommand.
+      loginStatus: { read: 'none' },
+      // The 2.x CLI whose `--session` was checked (above); a 1.x `kimi` is the
+      // older Python agent.
+      updateFloor: '2.3.0',
+      // https://www.kimi.com/code/docs/en/kimi-code-cli/guides/getting-started.html,
+      // "Installation" (the install script first, then npm and pnpm). Checked
+      // 2026-10-23.
+      install: {
+        posix: { command: 'curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash', requires: ['curl', 'bash'] },
+        win32: { command: 'irm https://code.kimi.com/kimi-code/install.ps1 | iex' },
+        source: 'https://www.kimi.com/code/docs/en/kimi-code-cli/guides/getting-started.html',
+        officialPage: 'https://www.kimi.com/code/docs/en/kimi-code-cli/guides/getting-started.html',
+        more: [
+          {
+            platform: 'posix',
+            via: 'npm',
+            command: 'npm install -g @moonshot-ai/kimi-code',
+            requires: ['npm'],
+            source: 'https://www.kimi.com/code/docs/en/kimi-code-cli/guides/getting-started.html',
+          },
+          {
+            platform: 'win32',
+            via: 'npm',
+            command: 'npm install -g @moonshot-ai/kimi-code',
+            requires: ['npm'],
+            source: 'https://www.kimi.com/code/docs/en/kimi-code-cli/guides/getting-started.html',
+          },
+          // macOS / Linux only: pnpm's Windows global folder is not one the
+          // card can find the package in afterwards.
+          {
+            platform: 'posix',
+            via: 'pnpm',
+            command: 'pnpm add -g @moonshot-ai/kimi-code',
+            requires: ['pnpm'],
+            source: 'https://www.kimi.com/code/docs/en/kimi-code-cli/guides/getting-started.html',
+          },
+        ],
+      },
+    },
   },
 ] as const satisfies readonly AgentIdentityRow[];
 
