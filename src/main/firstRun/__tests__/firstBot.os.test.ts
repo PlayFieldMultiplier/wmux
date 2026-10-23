@@ -87,7 +87,8 @@ describe('the first run\'s bot', () => {
     expect(bot?.job).toMatch(/Do not change files, start workers, push, or open a pull request/);
     expect(bot?.template).toBe('custom');
     expect(bot?.firstRun).toBe(true);
-    expect(bot?.repo).toMatchObject({ repoKey: 'github.com/example/app', repoPath: '/src/app' });
+    // The stored path is the platform's own form (`\\src\\app` on Windows).
+    expect(bot?.repo).toMatchObject({ repoKey: 'github.com/example/app', repoPath: path.normalize('/src/app') });
   });
 
   it('refuses a folder that is not a git checkout with a hosted origin, making nothing', async () => {
@@ -108,13 +109,16 @@ describe('the first run\'s bot', () => {
 
 describe('checkFirstRunFolder', () => {
   it('answers the git root, shortened under home, and its repository', async () => {
+    // Native paths, so the home prefix matches on Windows too.
+    const home = path.resolve('/home/me');
+    const root = path.join(home, 'app');
     const git = vi.fn(async (args: string[]) => {
-      if (args[0] === 'rev-parse') return ok('/home/me/app\n');
+      if (args[0] === 'rev-parse') return ok(`${root}\n`);
       if (args.includes('config')) return ok('local\0remote.origin.url\nhttps://github.com/example/app.git\0');
       return ok('https://github.com/example/app.git\n');
     });
-    expect(await checkFirstRunFolder('/home/me/app/src', { git, realpath: (p) => p, homeDir: '/home/me' }))
-      .toEqual({ ok: true, root: '/home/me/app', displayRoot: '~/app', repoKey: 'github.com/example/app' });
+    expect(await checkFirstRunFolder(path.join(root, 'src'), { git, realpath: (p) => p, homeDir: home }))
+      .toEqual({ ok: true, root, displayRoot: `~${path.sep}app`, repoKey: 'github.com/example/app' });
     expect(await checkFirstRunFolder('/tmp/plain', { git: vi.fn(async () => fail) })).toMatchObject({ ok: false, code: 'not_a_repo' });
   });
 });
