@@ -260,6 +260,13 @@ export const A2A_SPAWN_PIPE_RPC = Object.freeze({
   status: 'a2a.remote.spawnStatus',
 } as const);
 
+/**
+ * The fan-out lineage owner main stamps on a workspace another PC started
+ * (`remote-spawn:<hostId>`): depth 1 for its agent. Not a workspace id, so
+ * the sidebar does not nest it under (or orphan it from) an owner.
+ */
+export const REMOTE_SPAWN_LINEAGE_PREFIX = 'remote-spawn:';
+
 /** Daemon broadcast: a received request changed state (main shows its card, or starts it). */
 export const A2A_SPAWN_EVENT = 'a2a.remote.spawn.changed';
 export interface A2aSpawnEvent {

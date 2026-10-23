@@ -34,6 +34,7 @@ import { atomicWriteJSONSync } from '../../daemon/util/atomicWrite';
 import { getTaskLedger } from '../deck/taskLedgerHost';
 import { getWorkspaceMirror } from '../workspace/WorkspaceMirror';
 import { sanitizeFanoutOrigin, type FanoutLineageEntry, type FanoutOrigin } from '../../shared/fanoutOrigin';
+import { REMOTE_SPAWN_LINEAGE_PREFIX } from '../../shared/a2aSpawn';
 import { BOT_ID_RE } from '../../shared/bot';
 import { getWorkerSlots, parseLaunchToken, type WorkerSlots } from '../factory/workerSlots';
 import { holderCounts, liveHolders, type LiveHolders, type ReservedTask } from '../factory/workerHolders';
@@ -878,7 +879,7 @@ export function stampRemoteSpawnPane(
   if (!/^[0-9a-f-]{36}$/.test(hostId)) throw new Error('PTY_CREATE: a remote-started pane names its PC by id');
   const ws = typeof options?.workspaceId === 'string' ? options.workspaceId : '';
   if (!ws) throw new Error('PTY_CREATE: a remote-started pane needs its workspaceId for the lineage stamp');
-  guards.markTask(ws, `remote-spawn:${hostId}`);
+  guards.markTask(ws, `${REMOTE_SPAWN_LINEAGE_PREFIX}${hostId}`);
 }
 
 /** A task pane's create, once its session id is known and before the

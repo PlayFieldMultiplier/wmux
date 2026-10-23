@@ -14,7 +14,7 @@
 import type { BrowserWindow } from 'electron';
 import type { RpcRouter } from '../RpcRouter';
 import type { RpcContext } from '../../../shared/rpc';
-import { A2A_SPAWN_PIPE_RPC } from '../../../shared/a2aSpawn';
+import { A2A_SPAWN_PIPE_RPC, REMOTE_SPAWN_LINEAGE_PREFIX } from '../../../shared/a2aSpawn';
 import { isAgentSlug } from '../../../shared/agentIdentity';
 import { HUMAN_WORKSPACE_ID } from '../../../shared/channels';
 import type { DaemonClient } from '../../DaemonClient';
@@ -69,7 +69,7 @@ export function registerRemoteSpawnRpc(router: RpcRouter, getWindow: GetWindow, 
       return deny('FAILED_PRECONDITION', `the fan-out lineage store could not be read, so it cannot rule out that the caller was itself started for someone (${(err as Error).message})`);
     }
     if (owner !== null) {
-      const by = owner.startsWith('remote-spawn:') ? 'another PC' : owner;
+      const by = owner.startsWith(REMOTE_SPAWN_LINEAGE_PREFIX) ? 'another PC' : owner;
       return deny('NOT_AUTHORIZED', `workspace ${caller.workspaceId} was started by ${by}, and an agent started for someone does not ask another PC to start one`);
     }
     const agent = str(params['agent']);

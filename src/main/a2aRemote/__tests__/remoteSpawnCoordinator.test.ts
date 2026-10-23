@@ -183,6 +183,8 @@ describe('starting an approved request', () => {
       name: 'From HOME-A',
       cwd: '/wt/remote-x/apps',
       initialCommand: 'claude',
+      // A worktree nobody opened here: no folder-trust prompt for the agent.
+      env: { CLAUDE_CODE_SANDBOXED: '1' },
       workerPermissionMode: 'acceptEdits',
       remoteSpawnedBy: { hostId: HOST, name: 'HOME-A', spawnId: SPAWN, agent: 'claude' },
     });
