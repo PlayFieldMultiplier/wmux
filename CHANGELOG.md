@@ -62,12 +62,6 @@
   palette list every page a plugin adds to the rail; give one a key and it
   opens that page from anywhere, and closes it again. (#2646)
 
-- **Groundwork for starting agents from another PC.** wmux can now receive
-  and answer a request from a paired PC to start a new agent here, with a
-  per-PC setting that is off by default and a list of allowed folders and
-  agents. Nothing is started yet and the settings are not shown; both come
-  in a later release.
-
 - **A terminal waiting for an answer shows as Needs you in Fleet.** When a command in a plain shell stops to ask something (`git push`'s `(y/N)`, "Press Enter to continue", ssh asking whether to trust a new host, a password), Fleet moves the pane to Needs you and shows the question. A password prompt shows only that it needs you at the computer; its text is never passed on. Before, such a pane looked like an idle shell. (#2649)
 
 - **Let a paired PC start an agent on this one.** Settings › LAN has a new
@@ -78,7 +72,7 @@
   allow this PC, folder and agent, or Deny. An allowed agent starts in a new
   "From <PC>" workspace, on a fresh worktree of that repository, and its
   header says who started it. By default every later instruction from that
-  PC asks again. Asking from the other PC comes in a later release.
+  PC asks again.
 
 - **Ask a paired PC to start an agent.** On the Remote page, a PC's menu has
   **Start an agent…**: pick an agent and a folder that PC allows, write the
