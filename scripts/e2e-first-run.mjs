@@ -687,24 +687,20 @@ async function firstTask() {
   await step('first task sent', async () => {
     const shown = await cw(['wait-settle', '--testid', 'first-run-first-task', '--quiet', '0', '--timeout', '20000'], { timeoutMs: 45_000 });
     if (!shown.ok) throw new StepError('no first-task card (first-run-first-task) after the folder row read ok');
-    // The task as the card holds it: an editable field, else the chosen
-    // example (the first, "explain", is the default).
+    // The task as Send will post it (its data-task-text: the chosen
+    // example's, "explain" by default).
     const card = await read(`(() => {
-      const card = document.querySelector('[data-testid="first-run-first-task"]');
-      const field = card.querySelector('textarea, input[type="text"], input:not([type])');
-      const examples = [...card.querySelectorAll('[data-testid^="first-run-first-task-example-"]')];
-      const chosen = examples.find((el) => ['aria-pressed', 'aria-checked', 'aria-selected', 'data-selected'].some((a) => el.getAttribute(a) === 'true')) ?? card.querySelector('[data-testid="first-run-first-task-example-explain"]');
       const send = document.querySelector('[data-testid="first-run-first-task-send"]');
-      return { field: field ? field.value : null, example: chosen ? chosen.textContent : null, exampleId: chosen ? chosen.dataset.testid : null, send: send ? !send.disabled : null };
+      return { task: send ? send.dataset.taskText ?? null : null, send: send ? !send.disabled : null };
     })()`);
     result.observed.firstTaskCard = card;
-    taskText = (card?.field || card?.example || '').trim() || null;
+    taskText = (card?.task || '').trim() || null;
     if (card?.send !== true) throw new StepError(card?.send === false ? 'Send (first-run-first-task-send) is disabled' : 'no Send button (first-run-first-task-send) on the first-task card');
     await must(['click', '--testid', 'first-run-first-task-send']);
     const consent = await cw(['wait-settle', '--testid', 'first-run-first-task-consent', '--quiet', '0', '--timeout', '20000'], { timeoutMs: 45_000 });
     if (!consent.ok) throw new StepError('no usage consent screen (first-run-first-task-consent) after Send');
     await must(['click', '--testid', 'first-run-first-task-consent-confirm']);
-    return { task: taskText, from: card?.field ? 'field' : card?.exampleId };
+    return { task: taskText };
   });
 
   await step('first answer', async () => {
@@ -805,8 +801,12 @@ async function sampleTask({ wizardCloses }) {
 
   if (wizardCloses) {
     await step('wizard finishes', async () => {
+      // After the bot's first answer the wizard stays on it, with "Open the
+      // conversation"; that (or Close) ends it. Before this step, nothing.
+      const open = await read(`(() => { const b = document.querySelector('[data-testid="first-run-first-task-open"]'); return b ? !b.disabled : null; })()`);
+      if (open === true) await must(['click', '--testid', 'first-run-first-task-open']);
       const r = await cw(['wait-settle', '--testid', 'first-run-wizard', '--state', 'hidden', '--quiet', '0', '--timeout', '20000'], { timeoutMs: 45_000 });
-      if (!r.ok) throw new StepError('the wizard stayed open after the sample task succeeded');
+      if (!r.ok) throw new StepError(open === true ? 'the wizard stayed open after "Open the conversation"' : 'the wizard stayed open after the sample task succeeded');
       const marker = result.observed.userData?.path ? path.join(result.observed.userData.path, '.first-run') : null;
       return { completionMarker: marker && fs.existsSync(marker) ? marker : 'not found where expected (informational)' };
     });
