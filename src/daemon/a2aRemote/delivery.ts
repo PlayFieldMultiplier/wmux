@@ -72,6 +72,8 @@ export interface A2aRemoteDeliveryDeps {
   offers?: A2aOffers;
   /** Remote spawn requests, results and targets (link envelopes; see `spawnReceiver.ts`). */
   spawn?: InboundDeps['spawn'];
+  /** Links a remote start made here (spawnStarter.ts): redacted, no images, follow-ups held for their card. */
+  spawnLinks?: NonNullable<InboundDeps['spawnLinks']>;
   /** Optional features this PC advertises: on its streams to the servers it joined, and in its own streams' `hello`. */
   features?: readonly string[];
   /**
@@ -661,6 +663,7 @@ export class A2aRemoteDelivery {
       ...(this.deps.localWorkspaceName ? { localWorkspaceName: this.deps.localWorkspaceName } : {}),
       ...(this.deps.offers ? { offers: this.deps.offers } : {}),
       ...(this.deps.spawn ? { spawn: this.deps.spawn } : {}),
+      ...(this.deps.spawnLinks ? { spawnLinks: this.deps.spawnLinks } : {}),
       ...(this.images ? { images: { store: this.images, pullAttempts: this.pullAttempts } } : {}),
       log: this.deps.log,
     };
@@ -674,6 +677,7 @@ export class A2aRemoteDelivery {
       outbox: this.outbox,
       aliasFor: (l) => this.aliasFor(l),
       peerFeatures: (hostId) => this.peerFeatures(hostId),
+      ...(this.deps.spawnLinks ? { spawnLink: (id: string) => this.deps.spawnLinks!.isSpawnLink(id) } : {}),
       ...(store
         ? {
           images: {
@@ -745,7 +749,12 @@ export class A2aRemoteDelivery {
   }
 
   private heldDeps(): HeldDeps {
-    return { taskService: this.deps.taskService, linkStore: this.deps.links, outbox: this.outbox };
+    return {
+      taskService: this.deps.taskService,
+      linkStore: this.deps.links,
+      outbox: this.outbox,
+      ...(this.deps.spawnLinks ? { spawnLink: (id: string) => this.deps.spawnLinks!.isSpawnLink(id) } : {}),
+    };
   }
 }
 

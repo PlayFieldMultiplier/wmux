@@ -30,6 +30,8 @@ export interface SpawnLinkRecordV1 {
   paneId: string;
   agent: AgentSlug;
   rootId: string;
+  /** The folder the agent was started for, as resolved here (display, on this PC only). */
+  folder: string;
   /** The start showed this pane to that PC (it was not shown already): put it back when the link ends. */
   addedExposure: boolean;
   /** …and with it the pane's workspace. */
@@ -118,9 +120,10 @@ export class SpawnLinkStore {
 
 function coerceRecord(raw: unknown): SpawnLinkRecordV1 | null {
   if (!isPlainObject(raw) || raw['v'] !== 1) return null;
-  const { linkId, hostId, spawnId, workspaceId, paneId, agent, rootId, addedExposure, addedWorkspace, startedAt } = raw;
+  const { linkId, hostId, spawnId, workspaceId, paneId, agent, rootId, folder, addedExposure, addedWorkspace, startedAt } = raw;
   if (!isSpawnId(spawnId) || linkId !== spawnLinkId(spawnId) || !isHostId(hostId)) return null;
   if (!isSafeId(workspaceId) || !isSafeId(paneId) || !isAgentSlug(agent) || !isSpawnRootId(rootId)) return null;
+  if (typeof folder !== 'string' || folder.length > 4096) return null;
   if (typeof addedExposure !== 'boolean' || typeof addedWorkspace !== 'boolean' || !isIsoString(startedAt)) return null;
-  return { v: 1, linkId, hostId, spawnId, workspaceId, paneId, agent, rootId, addedExposure, addedWorkspace, startedAt };
+  return { v: 1, linkId, hostId, spawnId, workspaceId, paneId, agent, rootId, folder, addedExposure, addedWorkspace, startedAt };
 }

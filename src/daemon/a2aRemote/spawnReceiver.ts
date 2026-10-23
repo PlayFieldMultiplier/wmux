@@ -123,7 +123,7 @@ export interface SpawnReceiverDeps {
    * shown to that PC, the prompt as the link's first task. Throws when it
    * could not, leaving nothing behind. Absent: this build starts nothing.
    */
-  mint?: (rec: SpawnRequestRecordV1, request: A2aSpawnRequestV1, end: { workspaceId: string; paneId: string }) => { linkVersion: number };
+  mint?: (rec: SpawnRequestRecordV1, request: A2aSpawnRequestV1, end: { workspaceId: string; paneId: string }) => Promise<{ linkVersion: number }>;
   onTargets?: (hostId: HostId, targets: A2aSpawnTargetsV1) => void;
   now?: () => number;
   /** Test seams. */
@@ -163,6 +163,8 @@ export class A2aSpawnReceiver {
   private stopped = false;
   /** Decisions in flight, by host:spawnId, so one is never decided twice at once. */
   private readonly deciding = new Map<string, Promise<void>>();
+  /** Starts being linked (`started`), by host:spawnId. */
+  private readonly minting = new Set<string>();
   /** Decisions waiting to try again, by host:spawnId. */
   private readonly retries = new Map<string, ReturnType<typeof setTimeout>>();
   /** When each answer (host:spawnId:code) was last sent. */
@@ -377,17 +379,23 @@ export class A2aSpawnReceiver {
   }
 
   /** Main started the agent in this pane: make it reachable and answer `started`. */
-  started(hostId: HostId, spawnId: string, end: { workspaceId: string; paneId: string }): A2aSpawnStepResult {
+  async started(hostId: HostId, spawnId: string, end: { workspaceId: string; paneId: string }): Promise<A2aSpawnStepResult> {
     const rec = this.deps.requests.get(hostId, spawnId);
     if (!rec || rec.state !== 'starting' || !rec.request) return { ok: false, error: 'this request is not starting' };
     if (!this.deps.mint) return { ok: false, error: 'this build cannot start remote agents' };
+    // One report per start: a second while the first is still linking is refused.
+    const k = `${hostId}:${spawnId}`;
+    if (this.minting.has(k)) return { ok: false, error: 'this request is already being linked' };
+    this.minting.add(k);
     let linkVersion: number;
     try {
-      ({ linkVersion } = this.deps.mint(rec, rec.request, end));
+      ({ linkVersion } = await this.deps.mint(rec, rec.request, end));
     } catch (err) {
       this.deps.log('error', `[a2a-remote] spawn request ${spawnId} from ${hostId}: started, but not linked: ${errMsg(err)}`);
       this.finish(hostId, spawnId, 'failed');
       return { ok: false, error: `not linked: ${errMsg(err)}` };
+    } finally {
+      this.minting.delete(k);
     }
     const endpoint = { kind: 'pane' as const, workspaceId: end.workspaceId, paneId: end.paneId };
     if (!this.finish(hostId, spawnId, 'started', { endpoint, linkVersion })) return { ok: false, error: 'the answer could not be stored' };

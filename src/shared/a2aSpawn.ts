@@ -131,6 +131,15 @@ export function spawnLinkId(spawnId: string): string {
   return spawnId.slice('sp-'.length);
 }
 
+/**
+ * The message id of a started spawn's first task (the prompt), on both PCs:
+ * with `spawnLinkId` it gives the same task id on each (`remoteTaskId`), so
+ * the replies of the started agent land on the asker's copy.
+ */
+export function spawnFirstMessageId(spawnId: string): string {
+  return `first_${spawnLinkId(spawnId)}`;
+}
+
 /** B -> A: what A may ask for. Ids and labels only, never a path. */
 export interface A2aSpawnTargetsV1 {
   v: 1;

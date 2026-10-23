@@ -115,7 +115,11 @@ import { A2aRemoteDelivery, shareOfferFeatures } from './a2aRemote/delivery';
 import { A2aSpawnReceiver, registerSpawnRpc } from './a2aRemote/spawnReceiver';
 import { SpawnPolicyStore } from './a2aRemote/spawnPolicyStore';
 import { SpawnRequestStore } from './a2aRemote/spawnRequestStore';
-import { A2A_FEATURE_IMAGES, A2A_FEATURE_LINK_OFFER, A2A_FEATURE_STREAM_PING, isRemoteTaskId } from '../shared/a2aRemote';
+import { SpawnLinkStore } from './a2aRemote/spawnLinkStore';
+import { A2aSpawnStarter, registerSpawnStartRpc } from './a2aRemote/spawnStarter';
+import { linkAlias } from './a2aRemote/outbound';
+import { A2A_SPAWN_EVENT, type A2aSpawnEvent } from '../shared/a2aSpawn';
+import { A2A_FEATURE_IMAGES, A2A_FEATURE_LINK_OFFER, A2A_FEATURE_SPAWN, A2A_FEATURE_STREAM_PING, isRemoteTaskId } from '../shared/a2aRemote';
 import type { A2aRemoteLinkEvent } from '../shared/rpc';
 import { ChannelService, ChannelStateWriter, ChannelWakeWorker, wakeAgentSlug, wrapChannelMessageEnvelope, wrapChannelCatalogEnvelope, stampChannelCaller, type CallerFieldSpec, type ChannelServiceEventLog } from './channels';
 import { AppendOnlyLog } from './eventlog/AppendOnlyLog';
@@ -9326,12 +9330,15 @@ async function main(): Promise<void> {
     let a2aDelivery: A2aRemoteDelivery | null = null;
     // Share offers settle with the links they make (built below, once the stores exist).
     let a2aOffers: A2aOffers | null = null;
+    // A link a remote start made puts back the pane it showed when it ends (built below).
+    let a2aSpawnStarter: A2aSpawnStarter | null = null;
     const a2aLinks = new LinkStore({
       dir: a2aDir,
       log: a2aLog,
       onTransition: (l) => {
         a2aDelivery?.onLinkTransition(l);
         a2aOffers?.onLinkTransition(l);
+        a2aSpawnStarter?.onLinkTransition(l);
       },
     });
     const a2aExposures = new ExposureStore({ dir: a2aDir, log: a2aLog });
@@ -9366,6 +9373,23 @@ async function main(): Promise<void> {
       a2aSpawnPolicy.retainHosts(a2aPaired);
       a2aSpawnRequests.retainHosts(a2aPaired);
     }
+    const a2aHostName = (hostId: string): string | undefined =>
+      a2aRemoteHosts.get(hostId)?.name ?? a2aPeers.list().find((p) => p.hostId === hostId && !p.revokedAt)?.name;
+    // Starting needs the task ledger (the prompt is the link's first task).
+    if (a2aTaskService) {
+      a2aSpawnStarter = new A2aSpawnStarter({
+        links: a2aLinks,
+        spawnLinks: new SpawnLinkStore({ dir: a2aDir, log: a2aLog }),
+        exposures: a2aExposures,
+        taskService: a2aTaskService,
+        policy: a2aSpawnPolicy,
+        hostName: a2aHostName,
+        aliasFor: (l) => linkAlias(l, a2aHostName(l.remote.hostId)),
+        broadcast: (event) => pipeServer.broadcast({ type: event.type, sessionId: '', data: event }),
+        log: a2aLog,
+      });
+    }
+    const a2aStarter = a2aSpawnStarter;
     const a2aSpawn = new A2aSpawnReceiver({
       policy: a2aSpawnPolicy,
       requests: a2aSpawnRequests,
@@ -9373,6 +9397,15 @@ async function main(): Promise<void> {
         if (!a2aDelivery) throw new Error('messages between PCs are not carried this run');
         a2aDelivery.outbox.enqueue(hostId, envelope);
       },
+      // Nothing is shown or started before the app has caught up with its panes.
+      appReady: () => a2aExposedPanes.isReconciled(),
+      liveSpawns: (hostId) => a2aStarter?.liveCount(hostId) ?? 0,
+      onChange: (hostId, spawnId, state) => {
+        const event: A2aSpawnEvent = { type: A2A_SPAWN_EVENT, hostId, spawnId, state };
+        pipeServer.broadcast({ type: event.type, sessionId: '', data: event });
+      },
+      hostName: a2aHostName,
+      ...(a2aStarter ? { mint: (rec, request, end) => a2aStarter.mint(rec, request, end) } : {}),
       log: a2aLog,
     });
     const a2aForgetHost = forgetHostCascade({ links: a2aLinks, exposures: a2aExposures, offers: a2aOffersRef }, a2aLog);
@@ -9466,10 +9499,11 @@ async function main(): Promise<void> {
         refreshLink: (linkId) => (refresh ? refresh({ linkId }) : Promise.resolve(null)),
         offers: a2aOffersRef,
         spawn: a2aSpawn,
+        ...(a2aStarter ? { spawnLinks: a2aStarter } : {}),
         // This build shows and accepts share offers, takes images on
         // messages and pings its streams: tell the servers it joins, and the
         // joiners in its hello.
-        features: [A2A_FEATURE_LINK_OFFER, A2A_FEATURE_IMAGES, A2A_FEATURE_STREAM_PING],
+        features: [A2A_FEATURE_LINK_OFFER, A2A_FEATURE_IMAGES, A2A_FEATURE_STREAM_PING, A2A_FEATURE_SPAWN],
         uploadsRoot: path.join(wmuxDir, 'uploads'),
         // A live terminal of the sender's workspace (stamped at spawn by main), else none.
         spawnCwdOf: (ptyId, workspaceId) => {
@@ -9485,7 +9519,12 @@ async function main(): Promise<void> {
       // A share that was mid-accept when the daemon stopped is settled by links.json.
       a2aOffersRef.recover();
       // A spawn request still pending from before a restart is decided now.
+      a2aStarter?.reconcile();
       a2aSpawn.recover();
+      // Cards and approved starts past their expiry end `expired` even with nobody looking.
+      const spawnSweep = setInterval(() => a2aSpawn.sweep(), 60_000);
+      spawnSweep.unref?.();
+      if (a2aStarter) registerSpawnStartRpc(onA2aRpc, { receiver: a2aSpawn, starter: a2aStarter });
     } else {
       log('warn', '[a2a-remote] task ledger unavailable: messages between PCs are not carried this run');
     }

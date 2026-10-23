@@ -16,6 +16,7 @@ import {
   type A2aRemoteEnvelope,
   type A2aRemoteTaskMarkerV1,
 } from '../../shared/a2aRemote';
+import { redactSecrets } from '../../shared/redactSecrets';
 import {
   isRemoteWorkspaceId,
   remoteAlias,
@@ -84,6 +85,12 @@ export interface OutboundDeps {
   now?: () => number;
   /** Test seam for envelope messageIds (defaults to a random UUID). */
   mintId?: () => string;
+  /**
+   * A link a remote start made on this PC: what goes out on it is redacted
+   * (`redactSecrets`) and carries no images. A backstop, not a boundary: it
+   * matches known key shapes and misses encoded ones.
+   */
+  spawnLink?: (linkId: string) => boolean;
   log?: (level: 'info' | 'warn' | 'error', msg: string) => void;
 }
 
@@ -220,7 +227,7 @@ export async function sendRemoteReply(deps: OutboundDeps, input: A2aRemoteReplyI
 }
 
 /** What the outbound sync needs: the ledger (read + bookkeeping), the link gate and the outbox. */
-export type StateDeps = Pick<OutboundDeps, 'linkStore' | 'outbox' | 'now' | 'mintId' | 'images'> & {
+export type StateDeps = Pick<OutboundDeps, 'linkStore' | 'outbox' | 'now' | 'mintId' | 'images' | 'spawnLink'> & {
   taskService: Pick<A2aTaskService, 'getTask' | 'markRemote'>;
   log?: (level: 'info' | 'warn' | 'error', msg: string) => void;
 };
@@ -403,7 +410,7 @@ function remoteTaskAndLink(
 }
 
 function envelope(
-  deps: Pick<OutboundDeps, 'now'>,
+  deps: Pick<OutboundDeps, 'now' | 'spawnLink'>,
   link: A2aLinkRecordV1,
   messageId: string,
   body: Pick<A2aRemoteEnvelope, 'kind' | 'taskId' | 'text' | 'state' | 'message' | 'evidence' | 'receipt' | 'images'>,
@@ -413,8 +420,34 @@ function envelope(
     linkId: link.linkId,
     linkVersion: link.version,
     messageId,
-    ...body,
+    ...(deps.spawnLink?.(link.linkId) ? spawnLinkBody(body) : body),
     sentAt: new Date((deps.now ?? Date.now)()).toISOString(),
+  };
+}
+
+/** What may leave on a link a remote start made: every text redacted, no images. */
+function spawnLinkBody(
+  body: Pick<A2aRemoteEnvelope, 'kind' | 'taskId' | 'text' | 'state' | 'message' | 'evidence' | 'receipt' | 'images'>,
+): typeof body {
+  const { images: _dropped, ...rest } = body;
+  const evidence = rest.evidence
+    ? {
+      ...rest.evidence,
+      summary: redactSecrets(rest.evidence.summary),
+      items: rest.evidence.items.map((item) => ({
+        ...item,
+        summary: redactSecrets(item.summary),
+        ...('command' in item ? { command: redactSecrets(item.command) } : {}),
+        ...(item.output !== undefined ? { output: redactSecrets(item.output) } : {}),
+        ...('location' in item && item.location !== undefined ? { location: redactSecrets(item.location) } : {}),
+      })) as typeof rest.evidence.items,
+    }
+    : undefined;
+  return {
+    ...rest,
+    ...(rest.text !== undefined ? { text: redactSecrets(rest.text) } : {}),
+    ...(rest.message !== undefined ? { message: redactSecrets(rest.message) } : {}),
+    ...(evidence ? { evidence } : {}),
   };
 }
 

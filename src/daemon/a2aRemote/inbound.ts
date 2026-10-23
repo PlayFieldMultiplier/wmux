@@ -55,6 +55,8 @@ export interface InboundDeps {
   offers?: { applyInbound(env: A2aRemoteEnvelope, peer: { hostId: HostId }): A2aRemoteDeliverResponse | Promise<A2aRemoteDeliverResponse> };
   /** Images on task / reply envelopes (`images.1`); absent, refs are ignored and only the text is taken. */
   images?: InboundImages;
+  /** Links a remote start made here: no images on them, and (followUps 'ask') new tasks held for their card. */
+  spawnLinks?: { isSpawnLink(linkId: string): boolean; holdsFollowUps(linkId: string): boolean };
   /** Remote spawn (`link` states `spawn`, `spawn-result`, `spawn-targets`); absent, they are an unknown link. */
   spawn?: { applyInbound(env: A2aRemoteEnvelope, peer: { hostId: HostId }): A2aRemoteDeliverResponse };
   /** Where a refusal's detail goes: this PC's log. The peer gets the code alone. */
@@ -135,6 +137,10 @@ async function applyInbound(
   if (!check.ok) return fail(check.error);
   const link = check.link;
   const remoteWs = remoteWorkspaceId(link.linkId);
+  // A link a remote start made carries no images either way.
+  if (deps.spawnLinks?.isSpawnLink(link.linkId) && env.images && env.images.length > 0) {
+    return fail('bad-request', 'a link a remote start made carries no images');
+  }
 
   if (env.kind === 'task') {
     const taskId = remoteTaskId(link.linkId, env.messageId);
@@ -156,7 +162,11 @@ async function applyInbound(
             paneId: link.local.paneId,
           },
         history: [{ kind: 'message', messageId: env.messageId, role: 'user', parts: parts.parts }],
-        remote: { v: 1, linkId: link.linkId, hostId: peer.hostId, messageId: env.messageId, direction: 'inbound', delivered: false, kind: link.local.kind },
+        remote: {
+          v: 1, linkId: link.linkId, hostId: peer.hostId, messageId: env.messageId, direction: 'inbound', delivered: false, kind: link.local.kind,
+          // A later instruction to an agent a remote start made waits for its card here (followUps 'ask').
+          ...(deps.spawnLinks?.holdsFollowUps(link.linkId) ? { held: 'awaiting-approval' as const, heldAt: new Date().toISOString() } : {}),
+        } as A2aRemoteTaskMarkerV1,
       },
       { conflictOnBodyMismatch: true },
     );
