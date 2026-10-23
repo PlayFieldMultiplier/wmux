@@ -37,9 +37,16 @@ afterEach(() => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-/** Let the gate's ledger writes (file appends) and wakes land. */
+/**
+ * Let the gate's ledger writes (file appends) and wakes land. Each round waits
+ * for the writes queued so far to finish, then one turn of the loop for what
+ * they resume; a fixed sleep raced the appends on a slow disk (#2434).
+ */
 const flush = async (): Promise<void> => {
-  for (let i = 0; i < 15; i++) await new Promise((r) => setTimeout(r, 5));
+  for (let i = 0; i < 15; i++) {
+    await ledger.flush();
+    await new Promise((r) => setImmediate(r));
+  }
 };
 
 async function register(id = 'task-1', preset = 'default', origin: { kind: string; botId?: string } = { kind: 'bot', botId: BOT }): Promise<void> {
