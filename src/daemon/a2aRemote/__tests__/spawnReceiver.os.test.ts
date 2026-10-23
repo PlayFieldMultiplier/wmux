@@ -590,14 +590,19 @@ describe('SpawnPolicyStore', () => {
 
   it('a folder that does not answer fails its save in time, and the next save still runs', async () => {
     let hang = true;
+    // Every check here times out at 30 ms, so the git call is a seam: a real
+    // one takes longer than that to start on a loaded Windows runner.
     const slow = new SpawnPolicyStore({
       dir: a2aDir, scheduleHarden: quiet, checks: new SpawnChecks(8, 30),
       realpath: (p) => (hang ? new Promise(() => undefined) : realpathNative(p)),
+      repoToplevel: async (d) => d,
     });
     const base = { ...slow.get(), roots: [{ id: 'web', label: 'Web', path: repo }] };
-    expect(await slow.set(base)).toMatchObject({ ok: false, error: 'Web: the folder did not answer in time' });
+    expect(await slow.set(base)).toEqual({ ok: false, error: 'Web: the folder did not answer in time' });
     hang = false;
-    expect(await slow.set(base)).toMatchObject({ ok: true });
+    // The hung check still holds its slot; the next save has room and goes through.
+    const next = await slow.set(base);
+    expect(next.ok ? 'saved' : next.error).toBe('saved');
   });
 
   it('a save has one time budget from the call, so one the app gave up on has saved nothing', async () => {
