@@ -1024,6 +1024,10 @@ details[open] > .wmux-chatv2-tool-line .wmux-chatv2-chevron { transform: rotate(
 .wmux-schedules-row[data-off="true"] { color: var(--text-muted); }
 .wmux-schedules-row-static:hover { background: transparent; }
 .wmux-schedules-new { flex-direction: row; align-items: center; gap: 8px; font-size: 13px; color: var(--text-sub); }
+/* Runs missed while asleep: one notice under the header on the subtle fill,
+ * its actions on their own row (the column is too narrow for a side action). */
+.wmux-schedules-missed { display: flex; flex-direction: column; gap: 2px; margin: 0 4px 6px; padding: 10px 12px; border-radius: 10px; background: var(--selection-subtle); }
+.wmux-schedules-missed-actions { display: flex; gap: 6px; margin-top: 6px; }
 .wmux-schedules-row-name { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 13px; font-weight: 500; }
 .wmux-schedules-row-meta { font-size: 11px; color: var(--text-muted); }
 .wmux-schedules-main { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; }
