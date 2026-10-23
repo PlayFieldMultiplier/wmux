@@ -38,6 +38,7 @@ import { FOCUS_RING } from './focusRing';
 import { AgentReadyGroup, AgentSetupCorner, cornerRun, decideAgentPrimary } from './FirstRunAgentCards';
 import { refreshAgentStatus, useAgentSetup } from '../utils/agentSetupRuns';
 import { anyAgentSetUp, type AgentId } from '../../shared/agentSetup';
+import { DEFAULT_BOT_ENGINE_AGENT } from '../../shared/bot';
 import { FIRST_RUN_REOPEN_EVENT } from '../../shared/firstRun';
 import {
   FirstTaskBlock,
@@ -373,9 +374,9 @@ export default function FirstRunWizard({ mode, onClose }: FirstRunWizardProps) {
 
   // ─── The bot's first task (first run only, once an agent is ready) ─────────
   const activeWorkspaceId = useStore((s) => s.activeWorkspaceId);
-  // The bot runs on Claude Code (the Agent SDK): another agent being ready
-  // does not let its first task run.
-  const showFirstTask = mode === 'firstRun' && statuses !== null && statuses.some((s) => s.agent === 'claude' && s.readiness === 'ready');
+  // The bot runs on its engine's agent (Claude Code): another agent being
+  // ready does not let its first task run.
+  const showFirstTask = mode === 'firstRun' && statuses !== null && statuses.some((s) => s.agent === DEFAULT_BOT_ENGINE_AGENT && s.readiness === 'ready');
   const firstTask = useFirstTask({ enabled: showFirstTask, workspaceId: activeWorkspaceId });
   // The first run ends with the bot's first task: while that step is shown,
   // the sample task's end leaves the dialog open on it. Read by the sample

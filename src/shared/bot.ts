@@ -17,6 +17,7 @@
 // for that one spawn, not in the environment — see
 // main/factory/botTokenHandoff.ts and src/mcp/botTokenHandoff.ts).
 
+import type { AgentId } from './agentSetup';
 import type { FactFilter, FactKind } from './facts';
 
 /** The legacy role tag. Kept in bots.json v1, on the token binding and on
@@ -117,6 +118,10 @@ export type BotEngine =
   | { kind: 'acp'; command: string; args: string[] };
 
 export const DEFAULT_BOT_ENGINE: BotEngine = { kind: 'claude-sdk' };
+
+/** The agent CLI the default engine runs (claude-sdk spawns Claude Code): a
+ *  new bot's turns need this agent ready. */
+export const DEFAULT_BOT_ENGINE_AGENT: AgentId = 'claude';
 
 /** Whether a bot's engine refuses its built-in tools per call in a wake not
  *  known clean of a guest's words (ClaudeSdkAdapter's guest gate). A bot on
