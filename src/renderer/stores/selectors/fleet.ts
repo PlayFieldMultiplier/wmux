@@ -1,5 +1,5 @@
 import type { AgentStatus, Task, PaneLeaf, Surface } from '../../../shared/types';
-import { getLeafPanes, getWorkspaceLeafPanes } from '../../../shared/paneUtils';
+import { getLeafPanes, getWorkspaceLeafPanes, getWorkspacePtyIds } from '../../../shared/paneUtils';
 import { stashedPaneLiveness } from '../../../shared/paneStash';
 import { isBrainPtyId } from '../../../shared/constants';
 import { remoteAgentKey } from '../../../shared/remoteHosts';
@@ -1479,9 +1479,11 @@ export const QUIET_TURN_OUTPUT_MS = 120_000;
  * question: another computer's agents do not count (shadow workspaces and
  * attached remote hosts are left out), bot workers do (Fleet's counts leave
  * them to their bot, but they are work this computer is doing), and so does
- * a turn Fleet marks unconfirmed (no hook for 30 min, agent not known dead)
- * while its terminal still prints: a long quiet tool call keeps repainting
- * its spinner, a wedged agent does not.
+ * an agent that is alive and whose terminal still prints: a long quiet tool
+ * call keeps repainting its spinner after its hooks went silent (main settles
+ * that turn to idle at 30 min, and Fleet marks it unconfirmed until then),
+ * while a wedged or idle agent prints nothing. The same covers a working tab
+ * behind another tab of its pane that needs you, which Fleet ranks first.
  */
 export function selectLocalAgentsWorking(state: FleetBoardState): boolean {
   // From `state`, not a local copy: the roll-up is cached on the state object.
@@ -1501,9 +1503,11 @@ export function selectLocalAgentsWorking(state: FleetBoardState): boolean {
       ? state.workspaces.filter((w) => !isShadowWorkspaceId(w.id))
       : state.workspaces;
     const local: FleetBoardState = { ...state, workspaces, remoteWorkspaces: undefined };
-    const quietPtyIds = fleetBoardPanes(local, hook, unverifiable)
-      .filter((pane) => pane.unverifiable && pane.ptyId)
-      .map((pane) => pane.ptyId);
+    const alive = state.agentAliveByPtyId ?? {};
+    const quietPtyIds = [...new Set([
+      ...fleetBoardPanes(local, hook, unverifiable).filter((pane) => pane.unverifiable && pane.ptyId).map((pane) => pane.ptyId),
+      ...workspaces.flatMap(getWorkspacePtyIds).filter((ptyId) => alive[ptyId] === true),
+    ])];
     memo = { inputs, hook, unverifiable, running: countFleetSections(local, hook, unverifiable).running > 0, quietPtyIds };
     localWorkingMemo = memo;
   }

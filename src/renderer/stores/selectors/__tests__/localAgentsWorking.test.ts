@@ -96,4 +96,19 @@ describe('selectLocalAgentsWorking (keeps the computer awake)', () => {
     useStore.setState({ agentClockMs: clock - 30_000 + QUIET_TURN_OUTPUT_MS + 1 });
     expect(selectLocalAgentsWorking(useStore.getState())).toBe(false);
   });
+
+  it('keeps a live agent working while it prints, after its quiet turn was settled to idle', () => {
+    const now = Date.now();
+    // Main settles a turn whose hooks were silent for 30 min: no latch, no running status.
+    seedNothingRunning(now, { agentAliveByPtyId: { 'pty-3': true }, surfaceOutputAt: { 'pty-3': now - 30_000 } });
+    expect(selectFleetSectionCounts(useStore.getState()).running).toBe(0);
+    expect(selectLocalAgentsWorking(useStore.getState())).toBe(true);
+
+    useStore.setState({ agentClockMs: now + QUIET_TURN_OUTPUT_MS });
+    expect(selectLocalAgentsWorking(useStore.getState())).toBe(false);
+
+    // Only a live agent counts: a plain shell printing does not.
+    useStore.setState({ agentClockMs: now, agentAliveByPtyId: {} });
+    expect(selectLocalAgentsWorking(useStore.getState())).toBe(false);
+  });
 });
