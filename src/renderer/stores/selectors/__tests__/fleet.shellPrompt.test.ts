@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { groupFleetPanes, selectFleetPanes, surfaceAttentionStatus } from '../fleet';
+import { groupFleetPanes, selectFleetBoard, selectFleetPanes, selectFleetSectionCounts, surfaceAttentionStatus } from '../fleet';
+import { useStore } from '../../index';
+import { buildFleetTriage } from '../../../utils/fleetTriage';
+import { seedFleetTriageStore } from '../../../utils/__tests__/fleetTriageFixture';
 import type { FleetSelectorState } from '../fleet';
 import type { PaneLeaf, Surface, Workspace } from '../../../../shared/types';
 
@@ -54,5 +57,40 @@ describe('Fleet: a shell waiting on stdin', () => {
   it('cleared, the pane is Idle again', () => {
     const { groups } = rowOf(state({}));
     expect(groups.needsYou).toHaveLength(0);
+  });
+});
+
+// The paths the app actually reads: the board the Fleet overlay renders, the
+// section counts the sidebar and status bar show, and the fleet.triage RPC.
+describe('Fleet: a shell waiting on stdin, through the board, the counts and fleet.triage', () => {
+  const NOW = 1_800_000_000_000;
+  const ask = { 'pty-5': { shape: 'yes-no' as const, question: 'Push anyway? [y/N]' } };
+
+  it('the board puts it in Needs you with the prompt row', () => {
+    seedFleetTriageStore(NOW);
+    const before = selectFleetBoard(useStore.getState(), { now: NOW, sortMode: 'attention' });
+    expect(before.groups.needsYou.some((r) => r.pane.ptyId === 'pty-5')).toBe(false);
+    seedFleetTriageStore(NOW, { surfaceShellPrompt: ask });
+    const { groups } = selectFleetBoard(useStore.getState(), { now: NOW, sortMode: 'attention' });
+    const row = groups.needsYou.find((r) => r.pane.ptyId === 'pty-5');
+    expect(row).toMatchObject({ detail: 'Push anyway? [y/N]', detailSource: 'question' });
+    expect(groups.idle.some((r) => r.pane.ptyId === 'pty-5')).toBe(false);
+  });
+
+  it('the section counts count it', () => {
+    seedFleetTriageStore(NOW);
+    const before = selectFleetSectionCounts(useStore.getState()).needsYou;
+    seedFleetTriageStore(NOW, { surfaceShellPrompt: ask });
+    expect(selectFleetSectionCounts(useStore.getState()).needsYou).toBe(before + 1);
+  });
+
+  it('fleet.triage reports it as input; a password as input with no row of text', () => {
+    seedFleetTriageStore(NOW, { surfaceShellPrompt: ask });
+    expect(buildFleetTriage(useStore.getState(), {}, NOW).needsYou.find((r) => r.ptyId === 'pty-5'))
+      .toMatchObject({ reason: 'input', detail: 'Push anyway? [y/N]' });
+    seedFleetTriageStore(NOW, { surfaceShellPrompt: { 'pty-5': { shape: 'secret' } } });
+    const secret = buildFleetTriage(useStore.getState(), {}, NOW).needsYou.find((r) => r.ptyId === 'pty-5');
+    expect(secret?.reason).toBe('input');
+    expect(secret?.detail).not.toContain('assword:');
   });
 });

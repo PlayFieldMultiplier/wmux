@@ -20,9 +20,11 @@ const ENTER: readonly RegExp[] = [
 // Checked first: a secret row is never offered as anything else.
 const SECRET: readonly RegExp[] = [
   /pass(?:word|phrase)\b[^\n]*:\s*$/i,
-  /\bpin\b[^\n]*:\s*$/i,
-  /\b(?:verification|one[- ]time|2fa|mfa|otp|authentication)\s+code\b[^\n]*:\s*$/i,
-  /\botp\b[^\n]*:\s*$/i,
+  // A PIN or code only as a whole prompt ("Enter PIN:", "PIN for token:",
+  // "OTP code:"), not any row that mentions one and happens to end in ':'.
+  /^\s*(?:enter\s+(?:your\s+)?)?pin(?:\s+(?:for|of)\s+[^:]{1,80})?\s*:\s*$/i,
+  /\b(?:verification|one[- ]time|2fa|mfa|otp|authentication)\s+code(?:\s+(?:for|from)\s+[^:]{1,80})?\s*:\s*$/i,
+  /^\s*(?:enter\s+(?:your\s+)?)?otp\s*:\s*$/i,
 ];
 
 /** The bottom-most row with any content, without its trailing blanks; null when the screen is blank. */
@@ -30,6 +32,30 @@ export function lastNonBlankRow(rows: readonly string[]): string | null {
   for (let i = rows.length - 1; i >= 0; i--) {
     const row = rows[i].replace(/\s+$/, '');
     if (row.length > 0) return row;
+  }
+  return null;
+}
+
+// eslint-disable-next-line no-control-regex -- terminal escapes are the point
+const ESCAPES = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]|\x1b[PX^_][^\x1b]*\x1b\\|\x1b[@-Z\\-_]|\x1b./g;
+
+/**
+ * The last line a stretch of raw output leaves showing, escapes stripped: the
+ * cheap look that decides whether the screen is worth reading at all. A
+ * carriage return overwrites from the line's start, a backspace takes the
+ * character before it. Null when nothing is left.
+ */
+export function lastLineOfOutput(raw: string): string | null {
+  const text = raw.replace(ESCAPES, '');
+  const lines = text.split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const segments = lines[i].split('\r').filter((s) => s.length > 0);
+    let line = segments[segments.length - 1] ?? '';
+    // eslint-disable-next-line no-control-regex -- a backspace takes the character before it
+    while (line.includes('\x08')) line = line.replace(/[^\x08]?\x08/, '');
+    // eslint-disable-next-line no-control-regex -- what is left of the controls
+    line = line.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '').replace(/\s+$/, '');
+    if (line.length > 0) return line;
   }
   return null;
 }

@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { SHELL_PROMPT_QUIET_MS, ShellPromptWatcher } from '../ShellPromptWatcher';
+import { lastNonBlankRow } from '../shellPromptShape';
 import type { TtyWait } from '../foregroundTtyWait';
 import type { ShellPromptSignal } from '../../../shared/shellPrompt';
 
 /** One pane whose every signal the test sets, and a clock the test moves. */
-function rig(over: Partial<{ agentPresent: boolean; commandRunning: boolean; altScreen: boolean; rows: string[]; ttyWait: TtyWait }> = {}) {
+function rig(over: Partial<{ agentPresent: boolean; commandRunning: boolean; altScreen: boolean; rows: string[]; tail: string | null; ttyWait: TtyWait }> = {}) {
   let now = 0;
   const pane = {
     agentPresent: false,
@@ -16,6 +17,8 @@ function rig(over: Partial<{ agentPresent: boolean; commandRunning: boolean; alt
     rows: ['$ git push origin feat/x', 'Push anyway? [y/N] '],
     ttyWait: 'unknown' as TtyWait,
     gone: false,
+    /** The raw output's last line; undefined reads it off the rows. */
+    tail: undefined as string | null | undefined,
     ...over,
   };
   const emits: Array<ShellPromptSignal | null> = [];
@@ -26,6 +29,7 @@ function rig(over: Partial<{ agentPresent: boolean; commandRunning: boolean; alt
       agentPresent: pane.agentPresent, commandRunning: pane.commandRunning, altScreen: pane.altScreen,
       bytes: pane.bytes, keyRevision: pane.keyRevision, pid: pane.pid,
     }),
+    tailLine: () => (pane.tail !== undefined ? pane.tail : lastNonBlankRow(pane.rows)),
     readRows: async () => { reads += 1; return pane.rows; },
     ttyWait: () => pane.ttyWait,
     emit: (_id, prompt) => emits.push(prompt),
@@ -60,6 +64,27 @@ describe('ShellPromptWatcher: one signal alone makes no record', () => {
   it('a quiet build: a command running quietly, its last row no prompt', async () => {
     const r = rig({ rows: ['$ cargo build', '   Compiling serde v1.0.210'] });
     await r.settle();
+    expect(r.emits).toEqual([]);
+  });
+
+  it('a settle whose raw last line is no prompt renders nothing', async () => {
+    // A dev server or `tail -f` that pauses again and again: the screen is never rebuilt.
+    const r = rig({ tail: 'GET /api/health 200 3ms' });
+    await r.settle();
+    for (let i = 0; i < 5; i++) {
+      r.pane.bytes += 40;
+      await r.after(0);
+      await r.after(SHELL_PROMPT_QUIET_MS + 100);
+    }
+    expect(r.emits).toEqual([]);
+    expect(r.reads()).toBe(0);
+  });
+
+  it('a raw last line that looks like a prompt is still judged on the rendered screen', async () => {
+    // The raw tail can lie (a redraw moved the cursor up); the rendered rows decide.
+    const r = rig({ tail: 'Continue? [y/N]', rows: ['$ make', 'done'] });
+    await r.settle();
+    expect(r.reads()).toBe(1);
     expect(r.emits).toEqual([]);
   });
 
@@ -170,6 +195,15 @@ describe('ShellPromptWatcher: the record clears', () => {
       null,
       { shape: 'yes-no', question: 'Really force-push? (yes/no)' },
     ]);
+  });
+
+  it('list() holds what is shown, for a client that connects later', async () => {
+    const r = rig();
+    expect(r.watcher.list()).toEqual([]);
+    await r.settle();
+    expect(r.watcher.list()).toEqual([{ sessionId: 'p1', prompt: { shape: 'yes-no', question: 'Push anyway? [y/N]' } }]);
+    r.watcher.noteCommandEnd('p1');
+    expect(r.watcher.list()).toEqual([]);
   });
 
   it('when the pane goes away', async () => {

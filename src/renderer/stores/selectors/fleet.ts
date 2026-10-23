@@ -1396,6 +1396,7 @@ function fleetBoardPanes(
     usageLimitWaiting: state.usageLimitWaiting,
     surfaceAgent: state.surfaceAgent,
     surfacePendingQuestion: state.surfacePendingQuestion,
+    surfaceShellPrompt: state.surfaceShellPrompt,
     surfaceActivityAt: state.surfaceActivityAt,
     surfaceTurnOpenAt: state.surfaceTurnOpenAt,
     commandRunningByPtyId: state.commandRunningByPtyId,
@@ -1442,7 +1443,7 @@ export function selectFleetSectionCounts(state: FleetBoardState): FleetSectionCo
     state.workspaces, state.surfaceAgentStatus, state.surfaceActivity, state.paneLabel,
     state.supervisionByPtyId, state.surfaceAgent, state.surfacePendingQuestion, state.surfaceActivityAt,
     state.surfaceTurnOpenAt, state.commandRunningByPtyId, state.agentAliveByPtyId, state.remoteWorkspaces,
-    state.usageLimitWaiting,
+    state.usageLimitWaiting, state.surfaceShellPrompt,
   ];
   const memo = sectionCountsMemo;
   if (memo && inputs.every((value, i) => Object.is(value, memo.inputs[i]))

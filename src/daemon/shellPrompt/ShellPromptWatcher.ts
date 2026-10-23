@@ -11,7 +11,9 @@
 //      (shellPromptShape.ts);
 //   e. Linux: the foreground process is not blocked on something other than
 //      input (foregroundTtyWait.ts). Unknown elsewhere, so it never vetoes there.
-// The screen is read only once output has settled, once per settled screen.
+// The screen is read only once output has settled, once per settled screen,
+// and only when the raw output's last line already looks like a prompt: the
+// render (the ring's tail, off the attach and reveal queue) is the rare case.
 // A shown prompt clears on any new output, a key, the command's end, or the
 // pane going away.
 
@@ -61,7 +63,14 @@ export interface ShellPromptWatcherDeps {
   listSessionIds(): string[];
   /** Null when the pane is gone. */
   probe(sessionId: string): ShellPromptProbe | null;
-  /** The visible rows, or null when they cannot be read. */
+  /**
+   * The last line the newest raw output leaves showing, escapes stripped, or
+   * null. Synchronous and cheap: the screen is rendered only when this line
+   * could be a prompt, so a dev server or `tail -f` that pauses again and
+   * again costs no render.
+   */
+  tailLine(sessionId: string): string | null;
+  /** The visible rows (rebuilt from the ring's tail), or null when they cannot be read. */
   readRows(sessionId: string): Promise<readonly string[] | null>;
   ttyWait(pid: number | undefined): TtyWait;
   /** A prompt appeared or changed (a signal), or cleared (null). Sent on change only. */
@@ -120,6 +129,13 @@ export class ShellPromptWatcher {
     this.show(sessionId, null);
   }
 
+  /** Every prompt shown now: what a client that connects later starts from. */
+  list(): Array<{ sessionId: string; prompt: ShellPromptSignal }> {
+    const out: Array<{ sessionId: string; prompt: ShellPromptSignal }> = [];
+    for (const [sessionId, watch] of this.panes) if (watch.shown) out.push({ sessionId, prompt: watch.shown });
+    return out;
+  }
+
   dropSession(sessionId: string): void {
     this.show(sessionId, null);
     this.panes.delete(sessionId);
@@ -165,6 +181,12 @@ export class ShellPromptWatcher {
     }
     if (watch.judgedBytes === probe.bytes) return;
     watch.judgedBytes = probe.bytes;
+    // The cheap look first: no render unless the raw last line could be a prompt.
+    const line = this.deps.tailLine(sessionId);
+    if (!line || !classifyPromptRow(line)) {
+      this.show(sessionId, null);
+      return;
+    }
     watch.reading = true;
     let rows: readonly string[] | null = null;
     try {

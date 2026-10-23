@@ -1,6 +1,6 @@
 import net from 'node:net';
 import type { PaneUsageLimit, PaneUsageLimitPatch } from '../shared/usageLimit';
-import { parseShellPromptSignal } from '../shared/shellPrompt';
+import { parseShellPromptSignal, type ShellPromptSignal } from '../shared/shellPrompt';
 import { EventEmitter } from 'node:events';
 import crypto from 'node:crypto';
 import type { RpcResponse, DaemonEvent } from '../shared/rpc';
@@ -921,6 +921,27 @@ export class DaemonClient extends EventEmitter {
       return Array.isArray(response.limits) ? response.limits as PaneUsageLimit[] : [];
     } catch {
       return [];
+    }
+  }
+
+  /**
+   * The shell prompts the daemon shows now (daemon/shellPrompt), each checked
+   * like an event. Null when it is unreachable or predates them: the caller
+   * then keeps what it has instead of clearing it.
+   */
+  async listShellPrompts(): Promise<Array<{ sessionId: string; prompt: ShellPromptSignal }> | null> {
+    if (!this.isConnected) return null;
+    try {
+      const response = await this.rpc('daemon.shellPrompt.list', {}) as { prompts?: unknown };
+      if (!Array.isArray(response?.prompts)) return null;
+      const out: Array<{ sessionId: string; prompt: ShellPromptSignal }> = [];
+      for (const item of response.prompts as Array<{ sessionId?: unknown; prompt?: unknown }>) {
+        const prompt = parseShellPromptSignal(item?.prompt);
+        if (typeof item?.sessionId === 'string' && item.sessionId && prompt) out.push({ sessionId: item.sessionId, prompt });
+      }
+      return out;
+    } catch {
+      return null;
     }
   }
 

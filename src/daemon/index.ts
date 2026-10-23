@@ -83,11 +83,11 @@ import { scheduleTokenFileReHarden } from '../shared/security';
 import { applyTaskQueryView } from '../shared/a2aTaskQueryView';
 import { normalizeLivePaneIds } from '../shared/a2aOrphanedTask';
 import type { WebTlsConfig } from '../shared/web';
-import { generateSnapshotUnqueued, enqueueSnapshotJob, generateTextSnapshot, capTextRowsToFrameBudget, MAX_SCROLLBACK } from './HeadlessSnapshot';
+import { generateSnapshotUnqueued, enqueueSnapshotJob, generateTextSnapshot, generateTextSnapshotUnqueued, runSmallSnapshotJob, capTextRowsToFrameBudget, MAX_SCROLLBACK } from './HeadlessSnapshot';
 import { queuedScreenText, queuedTextSnapshot } from './queuedSessionText';
 import type { TerminalPty } from '../shared/terminalPty';
 import { serializeSession } from './sessionSerialize';
-import { AwaitingScreenVerifier, AWAITING_NARROW_DIALOG_COLS, questionInFlight, renderPaneScreen } from './AwaitingScreenVerifier';
+import { AwaitingScreenVerifier, AWAITING_NARROW_DIALOG_COLS, questionInFlight, renderPaneScreen, renderPaneTail } from './AwaitingScreenVerifier';
 import { screenShowsAgentDialog, screenShowsActiveDialog, screenShowsPermissionDialog } from './transcript/chatScreenGate';
 import { ApprovalPushRouter } from './push/approvalPushRouter';
 import { readPendingToolUse } from './transcript/pendingToolUse';
@@ -194,6 +194,7 @@ import { TranscriptProjector } from './transcript/TranscriptProjector';
 import { TranscriptActivityWatcher } from './transcript/TranscriptActivityWatcher';
 import { ShellPromptWatcher } from './shellPrompt/ShellPromptWatcher';
 import { foregroundTtyWait } from './shellPrompt/foregroundTtyWait';
+import { lastLineOfOutput } from './shellPrompt/shellPromptShape';
 import { ApiErrorTurnEnds, stopFailureSignal } from './transcript/apiErrorTurnEnd';
 import { TeammateWakes, turnEndAt } from './transcript/teammateWake';
 import { TranscriptDiscovery, DISCOVERABLE_AGENT } from './transcript/TranscriptDiscovery';
@@ -5650,7 +5651,17 @@ function registerRpcHandlers(
           ...(typeof managed.meta.pid === 'number' ? { pid: managed.meta.pid } : {}),
         };
       },
-      readRows: async (id) => (await renderPaneScreen(() => sessionManager.getSession(id), generateTextSnapshot))?.rows ?? null,
+      // The last 4 KiB of raw output: a copy, no parse.
+      tailLine: (id) => {
+        const data = sessionManager.getSession(id)?.ringBuffer.readAll();
+        return data ? lastLineOfOutput(data.subarray(Math.max(0, data.length - 4096)).toString('utf8')) : null;
+      },
+      // Only the ring's tail, and under the small-snapshot gate: never a whole
+      // replay, never queued ahead of an attach or a reveal.
+      readRows: (id) => renderPaneTail(
+        () => sessionManager.getSession(id),
+        (req) => runSmallSnapshotJob(() => generateTextSnapshotUnqueued(req)),
+      ),
       ttyWait: (pid) => (typeof pid === 'number' ? foregroundTtyWait(pid) : 'unknown'),
       emit: (sessionId, prompt) => {
         const event: DaemonEvent = { type: 'shell.prompt', sessionId, data: prompt };
@@ -5661,6 +5672,9 @@ function registerRpcHandlers(
     shellPrompts.start();
   }
   const watchedPrompts = shellPrompts;
+  // Main asks on every (re)connect: events are sent on change only, so a GUI
+  // that connects while a prompt waits, or missed a clear, starts from this.
+  pipeServer.onRpc('daemon.shellPrompt.list', async () => ({ prompts: watchedPrompts.list() }));
   sessionManager.on('session:prompt', (payload: { sessionId: string; event?: { type?: string } }) => {
     if (payload.event?.type === 'command_end') watchedPrompts.noteCommandEnd(payload.sessionId);
   });
