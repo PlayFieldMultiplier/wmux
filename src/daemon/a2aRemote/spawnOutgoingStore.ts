@@ -135,9 +135,10 @@ export class SpawnOutgoingStore {
   }
 
   /**
-   * Written before the envelope is queued. Past the bound, final records go
-   * first, oldest first, and an expired one only when no other final record
-   * is left: it still takes a late `started`. Open ones never go.
+   * Written before the envelope is queued. Past the bound, the oldest final
+   * record that takes no answer goes. Open and expired ones never go (an
+   * expired one still takes a late `started`): with only those left, the new
+   * request is refused until expired ones are pruned.
    */
   add(rec: SpawnOutgoingRecordV1): void {
     if (!this.writable) throw storeUnavailable(SPAWN_OUTGOING_FILE);
@@ -147,9 +148,8 @@ export class SpawnOutgoingStore {
     if (this.records.has(k)) throw new Error(`spawn request ${clean.spawnId}: already recorded`);
     const next = this.pruned();
     if (next.size >= SPAWN_REQUESTS_MAX) {
-      const finals = [...next.values()].filter((r) => !OPEN.has(r.state)).sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
-      const oldestFinal = finals.find((r) => !TAKES_ANSWER.has(r.state)) ?? finals[0];
-      if (!oldestFinal) throw new Error(`spawn requests: ${SPAWN_REQUESTS_MAX} are waiting already`);
+      const oldestFinal = [...next.values()].filter((r) => !TAKES_ANSWER.has(r.state)).sort((a, b) => a.updatedAt.localeCompare(b.updatedAt))[0];
+      if (!oldestFinal) throw new Error(`spawn requests: ${SPAWN_REQUESTS_MAX} are waiting or may still be answered`);
       next.delete(key(oldestFinal.hostId, oldestFinal.spawnId));
     }
     next.set(k, clean);
