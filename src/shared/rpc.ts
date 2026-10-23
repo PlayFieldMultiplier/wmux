@@ -1168,8 +1168,8 @@ export interface DaemonEvent {
     | 'agent.subagents'
     // A pane with no agent whose command waits on stdin (daemon/shellPrompt):
     // the prompt when it appears or changes, null when it clears. A `secret`
-    // carries no question.
-    //   shell.prompt → ShellPromptSignal | null
+    // carries no question. `seq` orders it against daemon.shellPrompt.list.
+    //   shell.prompt → ShellPromptChange ({ epoch, seq, prompt: ShellPromptSignal | null })
     | 'shell.prompt'
     | 'prompt.event'
     | 'notification.event'

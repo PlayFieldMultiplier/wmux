@@ -40,3 +40,56 @@ export function parseShellPromptSignal(raw: unknown): ShellPromptSignal | null {
   const question = typeof r.question === 'string' ? r.question.replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, SHELL_PROMPT_QUESTION_MAX) : '';
   return question ? { shape, question } : { shape };
 }
+
+/**
+ * Where one change sits in the daemon's order. `seq` grows on every set and
+ * clear of any pane; `epoch` names the daemon process, so a restarted daemon,
+ * whose `seq` starts again, still reads as newer.
+ */
+export interface ShellPromptVersion {
+  epoch: string;
+  seq: number;
+}
+
+/** One pane's prompt changing: the `shell.prompt` event's data. */
+export interface ShellPromptChange extends ShellPromptVersion {
+  /** Null clears. */
+  prompt: ShellPromptSignal | null;
+}
+
+/** Every prompt shown, as of `seq`: the `daemon.shellPrompt.list` answer. */
+export interface ShellPromptList extends ShellPromptVersion {
+  prompts: Array<{ sessionId: string; prompt: ShellPromptSignal; seq: number }>;
+}
+
+function parseVersion(r: Record<string, unknown>): ShellPromptVersion | null {
+  if (typeof r.epoch !== 'string' || !r.epoch) return null;
+  if (typeof r.seq !== 'number' || !Number.isSafeInteger(r.seq) || r.seq < 0) return null;
+  return { epoch: r.epoch, seq: r.seq };
+}
+
+/** A received change, checked: null when its version is malformed (an unordered change cannot be placed). */
+export function parseShellPromptChange(raw: unknown): ShellPromptChange | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const version = parseVersion(r);
+  return version ? { ...version, prompt: parseShellPromptSignal(r.prompt) } : null;
+}
+
+/** A received list, checked: null when malformed; an entry that is malformed is dropped. */
+export function parseShellPromptList(raw: unknown): ShellPromptList | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const version = parseVersion(r);
+  if (!version || !Array.isArray(r.prompts)) return null;
+  const prompts: ShellPromptList['prompts'] = [];
+  for (const item of r.prompts as unknown[]) {
+    if (!item || typeof item !== 'object') continue;
+    const i = item as Record<string, unknown>;
+    const prompt = parseShellPromptSignal(i.prompt);
+    if (typeof i.sessionId !== 'string' || !i.sessionId || !prompt) continue;
+    if (typeof i.seq !== 'number' || !Number.isSafeInteger(i.seq) || i.seq < 0 || i.seq > version.seq) continue;
+    prompts.push({ sessionId: i.sessionId, prompt, seq: i.seq });
+  }
+  return { ...version, prompts };
+}

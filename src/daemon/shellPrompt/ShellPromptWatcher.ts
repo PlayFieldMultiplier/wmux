@@ -16,8 +16,13 @@
 // render (the ring's tail, off the attach and reveal queue) is the rare case.
 // A shown prompt clears on any new output, a key, the command's end, or the
 // pane going away.
+//
+// Every set and clear takes the next `seq`, and the list carries the `seq` it
+// was taken at: main can then tell a change that arrives after the list but
+// happened before it (and drop it) from one that happened after (and keep it).
 
-import type { ShellPromptSignal } from '../../shared/shellPrompt';
+import { randomUUID } from 'node:crypto';
+import type { ShellPromptChange, ShellPromptList, ShellPromptSignal } from '../../shared/shellPrompt';
 import { classifyPromptRow, lastNonBlankRow } from './shellPromptShape';
 import type { TtyWait } from './foregroundTtyWait';
 
@@ -74,7 +79,9 @@ export interface ShellPromptWatcherDeps {
   readRows(sessionId: string): Promise<readonly string[] | null>;
   ttyWait(pid: number | undefined): TtyWait;
   /** A prompt appeared or changed (a signal), or cleared (null). Sent on change only. */
-  emit(sessionId: string, prompt: ShellPromptSignal | null): void;
+  emit(sessionId: string, change: ShellPromptChange): void;
+  /** Names this daemon process in every version. Defaults to a random id. */
+  epoch?: string;
   now?: () => number;
   tickMs?: number;
   log?: (level: 'warn', message: string) => void;
@@ -88,6 +95,8 @@ interface PaneWatch {
   judgedBytes?: number;
   reading: boolean;
   shown: ShellPromptSignal | null;
+  /** The `seq` that set `shown`. */
+  shownSeq: number;
 }
 
 const same = (a: ShellPromptSignal | null, b: ShellPromptSignal | null): boolean =>
@@ -97,9 +106,12 @@ export class ShellPromptWatcher {
   private readonly panes = new Map<string, PaneWatch>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private readonly now: () => number;
+  private readonly epoch: string;
+  private seq = 0;
 
   constructor(private readonly deps: ShellPromptWatcherDeps) {
     this.now = deps.now ?? Date.now;
+    this.epoch = deps.epoch ?? randomUUID();
   }
 
   start(): void {
@@ -129,11 +141,11 @@ export class ShellPromptWatcher {
     this.show(sessionId, null);
   }
 
-  /** Every prompt shown now: what a client that connects later starts from. */
-  list(): Array<{ sessionId: string; prompt: ShellPromptSignal }> {
-    const out: Array<{ sessionId: string; prompt: ShellPromptSignal }> = [];
-    for (const [sessionId, watch] of this.panes) if (watch.shown) out.push({ sessionId, prompt: watch.shown });
-    return out;
+  /** Every prompt shown now, as of the latest `seq`: what a client that connects later starts from. */
+  list(): ShellPromptList {
+    const prompts: ShellPromptList['prompts'] = [];
+    for (const [sessionId, watch] of this.panes) if (watch.shown) prompts.push({ sessionId, prompt: watch.shown, seq: watch.shownSeq });
+    return { epoch: this.epoch, seq: this.seq, prompts };
   }
 
   dropSession(sessionId: string): void {
@@ -157,7 +169,7 @@ export class ShellPromptWatcher {
     const at = this.now();
     let watch = this.panes.get(sessionId);
     if (!watch) {
-      watch = { bytes: probe.bytes, keyRevision: probe.keyRevision, changedAt: at, reading: false, shown: null };
+      watch = { bytes: probe.bytes, keyRevision: probe.keyRevision, changedAt: at, reading: false, shown: null, shownSeq: 0 };
       this.panes.set(sessionId, watch);
     }
     if (watch.reading) return;
@@ -214,8 +226,12 @@ export class ShellPromptWatcher {
     const watch = this.panes.get(sessionId);
     const before = watch?.shown ?? null;
     if (same(before, prompt)) return;
-    if (watch) watch.shown = prompt;
-    else if (prompt) return;
-    this.deps.emit(sessionId, prompt);
+    if (!watch && prompt) return;
+    this.seq += 1;
+    if (watch) {
+      watch.shown = prompt;
+      watch.shownSeq = this.seq;
+    }
+    this.deps.emit(sessionId, { epoch: this.epoch, seq: this.seq, prompt });
   }
 }

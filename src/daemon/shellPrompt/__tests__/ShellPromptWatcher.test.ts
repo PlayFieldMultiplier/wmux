@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { SHELL_PROMPT_QUIET_MS, ShellPromptWatcher } from '../ShellPromptWatcher';
 import { lastNonBlankRow } from '../shellPromptShape';
 import type { TtyWait } from '../foregroundTtyWait';
-import type { ShellPromptSignal } from '../../../shared/shellPrompt';
+import type { ShellPromptChange, ShellPromptSignal } from '../../../shared/shellPrompt';
 
 /** One pane whose every signal the test sets, and a clock the test moves. */
 function rig(over: Partial<{ agentPresent: boolean; commandRunning: boolean; altScreen: boolean; rows: string[]; tail: string | null; ttyWait: TtyWait }> = {}) {
@@ -22,6 +22,7 @@ function rig(over: Partial<{ agentPresent: boolean; commandRunning: boolean; alt
     ...over,
   };
   const emits: Array<ShellPromptSignal | null> = [];
+  const changes: ShellPromptChange[] = [];
   let reads = 0;
   const watcher = new ShellPromptWatcher({
     listSessionIds: () => (pane.gone ? [] : ['p1']),
@@ -32,14 +33,15 @@ function rig(over: Partial<{ agentPresent: boolean; commandRunning: boolean; alt
     tailLine: () => (pane.tail !== undefined ? pane.tail : lastNonBlankRow(pane.rows)),
     readRows: async () => { reads += 1; return pane.rows; },
     ttyWait: () => pane.ttyWait,
-    emit: (_id, prompt) => emits.push(prompt),
+    emit: (_id, change) => { changes.push(change); emits.push(change.prompt); },
+    epoch: 'epoch-test',
     now: () => now,
   });
   /** Moves the clock and runs one pass. */
   const after = async (ms: number) => { now += ms; await watcher.tick(); };
   /** First sight of the pane, then past the quiet window. */
   const settle = async () => { await after(0); await after(SHELL_PROMPT_QUIET_MS + 100); };
-  return { pane, emits, watcher, after, settle, reads: () => reads };
+  return { pane, emits, changes, watcher, after, settle, reads: () => reads };
 }
 
 describe('ShellPromptWatcher: all five signals make one record', () => {
@@ -199,11 +201,27 @@ describe('ShellPromptWatcher: the record clears', () => {
 
   it('list() holds what is shown, for a client that connects later', async () => {
     const r = rig();
-    expect(r.watcher.list()).toEqual([]);
+    expect(r.watcher.list()).toEqual({ epoch: 'epoch-test', seq: 0, prompts: [] });
     await r.settle();
-    expect(r.watcher.list()).toEqual([{ sessionId: 'p1', prompt: { shape: 'yes-no', question: 'Push anyway? [y/N]' } }]);
+    expect(r.watcher.list()).toEqual({
+      epoch: 'epoch-test',
+      seq: 1,
+      prompts: [{ sessionId: 'p1', prompt: { shape: 'yes-no', question: 'Push anyway? [y/N]' }, seq: 1 }],
+    });
     r.watcher.noteCommandEnd('p1');
-    expect(r.watcher.list()).toEqual([]);
+    expect(r.watcher.list()).toEqual({ epoch: 'epoch-test', seq: 2, prompts: [] });
+  });
+
+  it('every set and clear takes the next seq, so main can order them against the list', async () => {
+    const r = rig();
+    await r.settle();
+    r.pane.bytes += 30;
+    r.pane.rows = ['Really force-push? (yes/no)'];
+    await r.after(500);
+    await r.after(SHELL_PROMPT_QUIET_MS + 100);
+    r.watcher.dropSession('p1');
+    expect(r.changes.map((c) => [c.seq, c.prompt?.shape ?? null])).toEqual([[1, 'yes-no'], [2, null], [3, 'yes-no'], [4, null]]);
+    expect(new Set(r.changes.map((c) => c.epoch))).toEqual(new Set(['epoch-test']));
   });
 
   it('when the pane goes away', async () => {

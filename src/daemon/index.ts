@@ -5663,8 +5663,8 @@ function registerRpcHandlers(
         (req) => runSmallSnapshotJob(() => generateTextSnapshotUnqueued(req)),
       ),
       ttyWait: (pid) => (typeof pid === 'number' ? foregroundTtyWait(pid) : 'unknown'),
-      emit: (sessionId, prompt) => {
-        const event: DaemonEvent = { type: 'shell.prompt', sessionId, data: prompt };
+      emit: (sessionId, change) => {
+        const event: DaemonEvent = { type: 'shell.prompt', sessionId, data: change };
         pipeServer.broadcast(event);
       },
       log: (level, message) => log(level, message),
@@ -5674,7 +5674,7 @@ function registerRpcHandlers(
   const watchedPrompts = shellPrompts;
   // Main asks on every (re)connect: events are sent on change only, so a GUI
   // that connects while a prompt waits, or missed a clear, starts from this.
-  pipeServer.onRpc('daemon.shellPrompt.list', async () => ({ prompts: watchedPrompts.list() }));
+  pipeServer.onRpc('daemon.shellPrompt.list', async () => watchedPrompts.list());
   sessionManager.on('session:prompt', (payload: { sessionId: string; event?: { type?: string } }) => {
     if (payload.event?.type === 'command_end') watchedPrompts.noteCommandEnd(payload.sessionId);
   });
