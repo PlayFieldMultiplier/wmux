@@ -17,7 +17,7 @@ import { linkAlias } from '../outbound';
 import { A2aSpawnReceiver, registerSpawnRpc, type SpawnReceiverDeps } from '../spawnReceiver';
 import { SpawnPolicyStore, samePath } from '../spawnPolicyStore';
 import { SpawnRequestStore } from '../spawnRequestStore';
-import { CheckBusy, CheckTimeout, SpawnChecks } from '../spawnChecks';
+import { CheckBusy, CheckTimeout, SpawnChecks, realpathNative } from '../spawnChecks';
 import { deliberateSleep } from '../../../test-utils/waitFor';
 import { shortPathOf } from '../../../test-utils/shortPath';
 
@@ -198,7 +198,10 @@ describe('the decision', () => {
     expect(await decide(envelope())).toBe('folder-not-allowed');
   });
 
-  it('containment compares realpaths as they are: a sibling differing only by case is outside', async () => {
+  // Windows paths compare without case (path.win32.relative and samePath fold
+  // it), as its volumes are case-insensitive: there `Repo` and `repo` are the
+  // same folder, and that is right. The exact compare holds everywhere else.
+  it.skipIf(process.platform === 'win32')('containment compares realpaths as they are: a sibling differing only by case is outside', async () => {
     await allowHost();
     // A filesystem that resolves `Repo` to a different folder than `repo` (a case-sensitive volume).
     const sibling = repo.replace(/repo$/, 'Repo');
@@ -589,7 +592,7 @@ describe('SpawnPolicyStore', () => {
     let hang = true;
     const slow = new SpawnPolicyStore({
       dir: a2aDir, scheduleHarden: quiet, checks: new SpawnChecks(8, 30),
-      realpath: (p) => (hang ? new Promise(() => undefined) : fs.promises.realpath(p)),
+      realpath: (p) => (hang ? new Promise(() => undefined) : realpathNative(p)),
     });
     const base = { ...slow.get(), roots: [{ id: 'web', label: 'Web', path: repo }] };
     expect(await slow.set(base)).toMatchObject({ ok: false, error: 'Web: the folder did not answer in time' });

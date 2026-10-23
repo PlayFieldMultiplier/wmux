@@ -167,7 +167,9 @@ export class SpawnPolicyStore {
         top = await this.checks.run(() => this.repoToplevel(real));
       } catch (err) {
         if (err instanceof CheckTimeout) return { ok: false, error: `${root.label}: the folder did not answer in time` };
-        if (err instanceof CheckBusy) return { ok: false, error: 'other folder checks are still running; try again shortly' };
+        // Slots are held by checks that have not returned; a drive that never
+        // answers keeps them until wmux restarts.
+        if (err instanceof CheckBusy) return { ok: false, error: 'earlier folder checks have not finished; if this keeps happening, a drive is not answering: restart wmux' };
         return { ok: false, error: `${root.label}: the folder does not exist` };
       }
       if (top === null || !samePath(top, real)) return { ok: false, error: `${root.label}: the folder must be the top level of a git repository` };
