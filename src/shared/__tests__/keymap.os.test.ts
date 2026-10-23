@@ -14,7 +14,9 @@ import {
   displayCombo,
   effectiveBindings,
   invalidShortcutCombo,
+  isPluginPageShortcut,
   isPrefixTrigger,
+  pluginPageShortcut,
   overridesFromDisabledCombos,
   rebindProblem,
   resolveShortcut,
@@ -541,6 +543,39 @@ describe('UNBOUND_SHORTCUTS', () => {
     expect(rebindProblem('movePaneRight', 'Ctrl+D', bindings, 'win32', 'KeyB'))
       .toEqual({ kind: 'taken', by: 'splitHorizontal' });
     expect(rebindProblem('movePaneRight', 'Ctrl+Alt+P', bindings, 'win32', 'KeyB')).toBeNull();
+  });
+});
+
+// ─── Plugin rail pages ───────────────────────────────────────────────────────
+
+describe('plugin rail page shortcuts', () => {
+  it('are named by the plugin and bind nothing by default', () => {
+    expect(pluginPageShortcut('office')).toBe('plugin:office');
+    expect(isPluginPageShortcut('plugin:office')).toBe(true);
+    expect(isPluginPageShortcut('plugin:')).toBe(false);
+    expect(isPluginPageShortcut('plugin:Bad Name')).toBe(false);
+    expect(isPluginPageShortcut('office')).toBe(false);
+    expect(defaultBindings('win32').some((b) => b.action.startsWith('plugin:'))).toBe(false);
+  });
+
+  it('keep a key through the session loader, but not a switch-off or a bad name', () => {
+    const overrides = sanitizeShortcutOverrides({
+      'plugin:office': 'Ctrl+Alt+P',
+      'plugin:pulse': null,
+      'plugin:Bad Name': 'Ctrl+Alt+Q',
+      'plugin:other': 'P',
+    });
+    expect(overrides).toEqual({ 'plugin:office': 'Ctrl+Alt+P' });
+    const bindings = effectiveBindings('win32', overrides);
+    expect(resolveShortcut(ev({ key: 'p', code: 'KeyP', ctrlKey: true, altKey: true }), bindings)).toBe('plugin:office');
+  });
+
+  it('are checked for conflicts both ways', () => {
+    const bindings = effectiveBindings('win32', { 'plugin:office': 'Ctrl+Alt+P' });
+    expect(rebindProblem('plugin:office', 'Ctrl+D', bindings, 'win32', 'KeyB'))
+      .toEqual({ kind: 'taken', by: 'splitHorizontal' });
+    expect(rebindProblem('movePaneRight', 'Ctrl+Alt+P', bindings, 'win32', 'KeyB'))
+      .toEqual({ kind: 'taken', by: 'plugin:office' });
   });
 });
 

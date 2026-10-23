@@ -55,7 +55,7 @@ describe('the pane gate and the popover gate share one chord predicate (#1280)',
     // the chord. Anything more specific is the predicates' own tests' job.
     // #1455: over the same effective bindings every other gate reads.
     expect(HANDLER).toMatch(/composeOwnerHost\(e\.target\)\.owns && isComposeChord\(e, bindings\)/);
-    expect(HANDLER).toContain('const bindings = currentShortcutBindings();');
+    expect(HANDLER).toContain('const bindings = activeShortcutBindings();');
     expect(HANDLER).toMatch(/return false; \/\/ let DOM bubble to useComposeShortcut/);
   });
 

@@ -13,13 +13,14 @@ import { isShadowWorkspaceId } from '../../../shared/pcRail';
 import { hasAdoptableTaskDiff, openTaskDiff } from '../../utils/openTaskDiff';
 import { tokenAttrs } from '../../themes';
 import { usePlugins } from '../../plugins/usePlugins';
+import { railPagePlugins } from '../../plugins/railPagePlugins';
 import { postPluginCommand } from '../../plugins/pluginFrameRegistry';
 import { runProjectCommand } from '../../utils/projectCommands';
 import { applyProjectLayoutFresh } from '../../utils/projectConfigProbe';
 import { COMPANY_MODE_ENABLED } from '../../../shared/featureFlags';
 import { isChatV2Covering } from '../ChatV2/coverage';
 import { showWorkspaces } from '../../utils/showWorkspaces';
-import { comboFromEvent, displayCombo, effectiveBindings, type ShortcutActionId } from '../../../shared/keymap';
+import { comboFromEvent, displayCombo, effectiveBindings, pluginPageShortcut, type ShortcutActionId } from '../../../shared/keymap';
 import { shortcutPlatform, shortcutPressGuard } from '../../utils/shortcutBindings';
 import {
   clearShortcut,
@@ -695,6 +696,20 @@ export default function CommandPalette() {
         setVisible(false);
       },
     });
+
+    // Each plugin rail page the rail lists, so its page can be opened and
+    // given a key from here like the built-in pages.
+    for (const plugin of railPagePlugins(plugins)) {
+      const route = pluginPageShortcut(plugin.name);
+      items.push({
+        id: `plugin-page-${plugin.name}`,
+        label: t('palette.cmd.openPluginPage', { name: plugin.contributes.railPage?.title ?? plugin.name }),
+        category: 'command' as PaletteCategory,
+        icon: <IconCommand />,
+        shortcut: route,
+        action: () => { useStore.getState().setAppRoute(route); setVisible(false); },
+      });
+    }
 
     // Plugin-contributed commands (B-1 ui.commands). Trusted plugins only —
     // the same mount gate the panel hosts apply. Execution posts a

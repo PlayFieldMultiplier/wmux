@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { PluginHostPluginSummary } from '../../shared/pluginHost';
+import { railPagePlugins } from './railPagePlugins';
 
 /** A loaded bundle; `managed` when the catalog installed it (main's install ledger). */
 export type ListedPlugin = PluginHostPluginSummary & { managed?: boolean };
@@ -50,6 +51,23 @@ export async function refreshPlugins(changedName?: string): Promise<void> {
   if (changedName && previous) publish({ ...previous, plugins: previous.plugins.filter((plugin) => plugin.name !== changedName) });
   const state = await fetchPlugins();
   if (epoch === generation) publish(state);
+}
+
+let railNamesFor: PluginListState | null | undefined;
+let railNames: ReadonlySet<string> = new Set();
+
+/** The plugins whose rail page the rail lists now (none until the list is read). */
+export function listedRailPageNames(): ReadonlySet<string> {
+  if (railNamesFor !== cache) {
+    railNamesFor = cache;
+    railNames = new Set(railPagePlugins(cache?.plugins ?? []).map((p) => p.name));
+  }
+  return railNames;
+}
+
+/** Plugin `name`'s rail page title from the last list read, or null. */
+export function cachedRailPageTitle(name: string): string | null {
+  return cache?.plugins.find((p) => p.name === name)?.contributes.railPage?.title ?? null;
 }
 
 export function usePlugins(): PluginListState {

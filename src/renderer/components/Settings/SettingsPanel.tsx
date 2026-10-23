@@ -50,8 +50,12 @@ import {
   concreteCombo,
   defaultRowsFor,
   displayCombo,
+  isPluginPageShortcut,
+  pluginPageShortcut,
   type ShortcutActionId,
 } from '../../../shared/keymap';
+import { usePlugins } from '../../plugins/usePlugins';
+import { railPagePlugins } from '../../plugins/railPagePlugins';
 import { shortcutPressGuard } from '../../utils/shortcutBindings';
 import {
   builtinKeyConflict,
@@ -4385,6 +4389,7 @@ export function TabShortcuts() {
   const setShortcutOverride = useStore((s) => s.setShortcutOverride);
   const resetShortcut = useStore((s) => s.resetShortcut);
   const prefixConfig = useStore((s) => s.prefixConfig);
+  const { plugins } = usePlugins();
   const setPrefixKey = useStore((s) => s.setPrefixKey);
   const setPrefixBinding = useStore((s) => s.setPrefixBinding);
   const removePrefixBinding = useStore((s) => s.removePrefixBinding);
@@ -4468,9 +4473,14 @@ export function TabShortcuts() {
   // Palette commands that ship with no key: listed so a key given to one (here
   // or from the palette) can be seen, changed and taken off again.
   const unsetLabel = t('settings.sc.unset');
-  const visibleUnbound = UNBOUND_SHORTCUTS.filter((entry) => {
-    const override = shortcutOverrides[entry.action];
-    return matchesShortcut(describe(entry.action), typeof override === 'string' ? displayCombo(override, platform) : '');
+  // Each plugin rail page is one too, plus any page that still holds a key
+  // after its plugin went away, so that key can be taken off.
+  const pluginPages = railPagePlugins(plugins).map((p) => pluginPageShortcut(p.name));
+  const orphanedPages = (Object.keys(shortcutOverrides) as ShortcutActionId[])
+    .filter((action) => isPluginPageShortcut(action) && !pluginPages.includes(action));
+  const visibleUnbound = [...UNBOUND_SHORTCUTS.map((e) => e.action), ...pluginPages, ...orphanedPages].filter((action) => {
+    const override = shortcutOverrides[action];
+    return matchesShortcut(describe(action), typeof override === 'string' ? displayCombo(override, platform) : '');
   });
 
   return (
@@ -4536,20 +4546,20 @@ export function TabShortcuts() {
             />
           );
         })}
-        {visibleUnbound.map((entry) => {
-          const override = shortcutOverrides[entry.action];
+        {visibleUnbound.map((action) => {
+          const override = shortcutOverrides[action];
           const bound = typeof override === 'string';
           return (
             <KbdRow
-              key={entry.action}
+              key={action}
               keys={bound ? displayCombo(override, platform) : unsetLabel}
-              description={describe(entry.action)}
+              description={describe(action)}
               unset={!bound}
-              onChangeKey={() => setRebinding(entry.action)}
+              onChangeKey={() => setRebinding(action)}
               changeKeyTitle={t('settings.sc.changeKey')}
-              onReset={bound ? () => restoreShortcut(entry.action) : undefined}
+              onReset={bound ? () => restoreShortcut(action) : undefined}
               resetLabel={t('settings.sc.reset')}
-              note={shortcutNote?.action === entry.action ? shortcutNote.text : undefined}
+              note={shortcutNote?.action === action ? shortcutNote.text : undefined}
             />
           );
         })}
