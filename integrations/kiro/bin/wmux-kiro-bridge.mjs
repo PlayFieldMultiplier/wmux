@@ -9,7 +9,8 @@
 //
 // Registered inside a wmux-owned Kiro agent config (`~/.kiro/agents/wmux.json`):
 //   "hooks": { "stop": [{ "command": "node \"<abs path to this file>\"" }] }
-// so the command Kiro runs is unchanged by the move.
+// on POSIX, and `node C:/abs/path/to/this/file.mjs`, unquoted, on Windows
+// (#1917; see kiroHookCommand in ../agent/wmuxAgent.mjs).
 //
 // Two layouts, one file:
 //   * installed: copied next to wmux-hooks-bridge.mjs (both in one directory);
@@ -17,7 +18,7 @@
 // The import below tries them in that order. A copy taken from an older wmux
 // (before this move) is self-contained and keeps working as it was.
 //
-// NO SHEBANG, deliberately: Kiro invokes this as `node "<path>"`, and Vitest
+// NO SHEBANG, deliberately: Kiro invokes this through `node`, and Vitest
 // cannot parse a `.mjs` that starts with one.
 
 import { fileURLToPath } from 'node:url';
