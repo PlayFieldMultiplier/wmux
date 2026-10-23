@@ -175,8 +175,9 @@ reads as a second, differently tinted panel.
   blurs and tints, so this is a conservative bound, not a measurement. The
   frame coverage rises in 1% steps from the level's floor (dark 30% Soft /
   12% Clear, light 55% / 35%; the sheet stays at 6% / 5% dark, 10% / 8%
-  light) to the smallest value where `--text-main` and `--text-sub` keep
-  4.5:1 and `--text-muted` 3:1 against both the frame and the sidebar. The
+  light) to the smallest value where `--text-main`, `--text-sub2` and
+  `--text-sub` keep 4.5:1 and `--text-subtle` and `--text-muted` 3:1 against
+  both the frame and the sidebar. The
   range stops at 90% (`GLASS_MAX_COVERAGE`), above which the glass no longer
   reads as glass: a theme that needs more, or whose muted text misses 3:1
   even opaque, is opaque on Windows as if glass were Off (material none, a
