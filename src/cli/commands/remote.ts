@@ -100,7 +100,7 @@ export async function handleRemote(sub: string | undefined, args: string[], json
     const name = result.spawn.hostName ?? result.spawn.hostId;
     console.log(result.online
       ? `Sent to ${name} (${result.spawn.spawnId}). It answers once it decides.`
-      : `${name} is off. It starts when ${name} is on (until ${new Date(result.spawn.expiresAt).toLocaleString()}). (${result.spawn.spawnId})`);
+      : `${name} is off. wmux will try to deliver the request before ${new Date(result.spawn.expiresAt).toLocaleString()}; ${name} decides whether the agent starts. (${result.spawn.spawnId})`);
     return;
   }
   if (sub === 'spawn-status') {

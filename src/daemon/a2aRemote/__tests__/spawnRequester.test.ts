@@ -267,6 +267,15 @@ describe('expiry, refusals, restarts', () => {
     expect(tasks.getTask(remoteTaskId(linkId, spawnFirstMessageId(linkId)))?.history[0].parts).toEqual([{ kind: 'text', text: 'fix the build' }]);
   });
 
+  it('an expired request stays expired on a late waiting-for-approval answer', async () => {
+    const id = askOk({ expiresInHours: 1 });
+    clock += 3600_000 + SPAWN_ASK_GRACE_MS + 1;
+    asks.expire();
+    expect(await asks.onResult(B, { v: 1, spawnId: id, code: 'waiting-for-approval' })).toBe(true);
+    // Read the record itself: list() expires again and would hide a move back to waiting.
+    expect(store.get(B, id)?.state).toBe('expired');
+  });
+
   it('a request the other PC refused for good is not supported there', () => {
     const id = askOk();
     asks.onRefused(B, sent[0].env, 'bad-request');

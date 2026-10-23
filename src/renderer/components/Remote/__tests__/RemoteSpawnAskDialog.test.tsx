@@ -88,7 +88,7 @@ describe('RemoteSpawnAskDialog', () => {
 
   it('notes an offline PC and still lets the request go', () => {
     render({ online: false });
-    expect(q('remote-spawn-ask-offline')?.textContent).toMatch(/^DESK is off\. It starts when DESK is on \(until .+\)\.$/);
+    expect(q('remote-spawn-ask-offline')?.textContent).toMatch(/^DESK is off\. wmux will try to deliver the request before .+; DESK decides whether the agent starts\.$/);
     type('remote-spawn-ask-text', 'Fix the login test');
     expect(send()?.disabled).toBe(false);
   });

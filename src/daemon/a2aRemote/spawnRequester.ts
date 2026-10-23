@@ -161,7 +161,8 @@ export class A2aSpawnRequester {
     if (!rec || !this.deps.store.takesAnswer(hostId, result.spawnId)) return true;
     try {
       if (result.code === 'waiting-for-approval') {
-        if (rec.state !== 'waiting') this.settle(rec, { state: 'waiting' });
+        // Only a sent request moves to waiting: an expired one is revived only by `started`.
+        if (rec.state === 'sent') this.settle(rec, { state: 'waiting' });
         return true;
       }
       if (result.code !== 'started') {
