@@ -4,6 +4,7 @@ import { atomicWriteJSONSync } from '../util/atomicWrite';
 import { scheduleTokenFileReHarden } from '../../shared/security';
 import { isHostId, type HostId } from '../../shared/a2aRemote';
 import {
+  SPAWN_DECIDED_PER_HOST_MAX,
   SPAWN_REQUEST_KEEP_MS,
   SPAWN_REQUESTS_MAX,
   isSpawnCode,
@@ -24,7 +25,12 @@ import { isIsoString, isPlainObject, loadStore, storeUnavailable, type StoreLog 
  * The prompt is kept only while a request is pending (its card and its first
  * task need it after a restart); a decided record keeps the fingerprint and
  * the outcome, never the text. A decided record goes `SPAWN_REQUEST_KEEP_MS`
- * after its expiry; at most `SPAWN_REQUESTS_MAX` records are kept.
+ * after it was decided (not after the expiry the asker chose); one PC may
+ * hold at most `SPAWN_DECIDED_PER_HOST_MAX` decided records, and past that
+ * its new requests wait. Each write lands before memory changes, so a
+ * failed write leaves nothing behind. The decision's answer is marked `sent`
+ * once it is queued, so one that never left is sent again on recovery.
+ * At most `SPAWN_REQUESTS_MAX` records are kept in all.
  *
  * Load: a record this build cannot read is skipped, never the whole file.
  */
@@ -43,6 +49,10 @@ export interface SpawnRequestRecordV1 {
   code?: A2aSpawnCode;
   receivedAt: string;
   expiresAt: string;
+  /** Decided only. */
+  decidedAt?: string;
+  /** Decided only: its spawn-result is in the outbox. */
+  sent?: true;
   /** Pending only. */
   request?: A2aSpawnRequestV1;
 }
@@ -51,6 +61,7 @@ export type SpawnReceive =
   | { kind: 'new'; rec: SpawnRequestRecordV1 }
   | { kind: 'duplicate'; rec: SpawnRequestRecordV1 }
   | { kind: 'conflict' }
+  /** No room: this PC's decided records, or all records, are at their cap. */
   | { kind: 'full' };
 
 export interface SpawnRequestStoreOptions {
@@ -127,6 +138,11 @@ export class SpawnRequestStore {
       }));
   }
 
+  /** Decided records whose answer never reached the outbox. */
+  unsent(): SpawnRequestRecordV1[] {
+    return [...this.records.values()].filter((r) => r.state === 'decided' && !r.sent).map((r) => structuredClone(r));
+  }
+
   /** Record a request that passed the cheap checks, pending its decision. */
   receive(hostId: HostId, req: A2aSpawnRequestV1): SpawnReceive {
     this.assertWritable();
@@ -134,7 +150,8 @@ export class SpawnRequestStore {
     const known = this.records.get(key(hostId, req.spawnId));
     if (known) return known.fingerprint === fingerprint ? { kind: 'duplicate', rec: structuredClone(known) } : { kind: 'conflict' };
     this.prune();
-    if (this.records.size >= SPAWN_REQUESTS_MAX) return { kind: 'full' };
+    const decidedHere = [...this.records.values()].filter((r) => r.hostId === hostId && r.state === 'decided').length;
+    if (this.records.size >= SPAWN_REQUESTS_MAX || decidedHere >= SPAWN_DECIDED_PER_HOST_MAX) return { kind: 'full' };
     const rec: SpawnRequestRecordV1 = {
       v: 1,
       hostId,
@@ -147,8 +164,7 @@ export class SpawnRequestStore {
       receivedAt: new Date(this.now()).toISOString(),
       expiresAt: req.expiresAt,
     };
-    this.records.set(key(hostId, req.spawnId), rec);
-    this.persist();
+    this.commit((m) => m.set(key(hostId, req.spawnId), rec));
     return { kind: 'new', rec: structuredClone(rec) };
   }
 
@@ -158,35 +174,55 @@ export class SpawnRequestStore {
     if (!rec || rec.state !== 'pending') return undefined;
     this.assertWritable();
     const { request: _dropped, ...rest } = rec;
-    const next: SpawnRequestRecordV1 = { ...rest, state: 'decided', code };
-    this.records.set(key(hostId, spawnId), next);
-    this.persist();
+    const next: SpawnRequestRecordV1 = { ...rest, state: 'decided', code, decidedAt: new Date(this.now()).toISOString() };
+    this.commit((m) => m.set(key(hostId, spawnId), next));
     return structuredClone(next);
   }
 
-  /** A paired PC was removed: its requests go. Returns the pending ones dropped. */
+  /** The decision's answer is in the outbox. */
+  markSent(hostId: HostId, spawnId: string): void {
+    const rec = this.records.get(key(hostId, spawnId));
+    if (!rec || rec.state !== 'decided' || rec.sent) return;
+    this.assertWritable();
+    this.commit((m) => m.set(key(hostId, spawnId), { ...rec, sent: true }));
+  }
+
+  /**
+   * A paired PC was removed: its requests go, from memory at once (nothing
+   * of that PC is decided or answered after this) and then from the file;
+   * a write that fails is logged. Returns the pending ones dropped.
+   */
   forgetHost(hostId: HostId): number {
     const gone = [...this.records.values()].filter((r) => r.hostId === hostId);
     if (gone.length === 0) return 0;
-    this.assertWritable();
     for (const r of gone) this.records.delete(key(r.hostId, r.spawnId));
-    this.persist();
+    try {
+      this.assertWritable();
+      this.write(this.filePath, { v: 1, records: [...this.records.values()] });
+      this.scheduleHarden(this.filePath);
+    } catch (err) {
+      this.log('error', `[a2a-remote] ${SPAWN_REQUESTS_FILE}: not saved after forgetting ${hostId}: ${err instanceof Error ? err.message : String(err)}`);
+    }
     return gone.filter((r) => r.state === 'pending').length;
   }
 
-  /** Drop decided records past their keep time. */
+  /** Drop decided records kept past `SPAWN_REQUEST_KEEP_MS` since their decision. */
   prune(): number {
     const cutoff = this.now() - SPAWN_REQUEST_KEEP_MS;
-    const stale = [...this.records.values()].filter((r) => r.state === 'decided' && Date.parse(r.expiresAt) < cutoff);
+    const stale = [...this.records.values()].filter((r) => r.state === 'decided' && Date.parse(r.decidedAt ?? r.receivedAt) < cutoff);
     if (stale.length === 0 || !this.writable) return 0;
-    for (const r of stale) this.records.delete(key(r.hostId, r.spawnId));
-    this.persist();
+    this.commit((m) => { for (const r of stale) m.delete(key(r.hostId, r.spawnId)); });
     return stale.length;
   }
 
-  private persist(): void {
-    this.write(this.filePath, { v: 1, records: [...this.records.values()] });
+  /** Write the changed records, then make them the live ones: a failed write changes nothing. */
+  private commit(change: (m: Map<string, SpawnRequestRecordV1>) => void): void {
+    const next = new Map(this.records);
+    change(next);
+    this.write(this.filePath, { v: 1, records: [...next.values()] });
     this.scheduleHarden(this.filePath);
+    this.records.clear();
+    for (const [k, v] of next) this.records.set(k, v);
   }
 
   private assertWritable(): void {
@@ -205,5 +241,9 @@ function coerceRecord(raw: unknown): SpawnRequestRecordV1 | null {
     return { v: 1, hostId, spawnId, fingerprint, agent: request.agent, rootId: request.folder.root, state, receivedAt, expiresAt, request };
   }
   if (state !== 'decided' || !isSpawnCode(code)) return null;
-  return { v: 1, hostId, spawnId, fingerprint, agent: agent as A2aSpawnRequestV1['agent'], rootId, state, code, receivedAt, expiresAt };
+  const decidedAt = isIsoString(raw['decidedAt']) ? raw['decidedAt'] : receivedAt;
+  return {
+    v: 1, hostId, spawnId, fingerprint, agent: agent as A2aSpawnRequestV1['agent'], rootId, state, code, receivedAt, expiresAt, decidedAt,
+    ...(raw['sent'] === true ? { sent: true as const } : {}),
+  };
 }

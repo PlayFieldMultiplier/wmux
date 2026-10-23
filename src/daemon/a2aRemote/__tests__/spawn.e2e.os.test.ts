@@ -87,6 +87,8 @@ async function makePc(name: string, opts: { holdAgentCheck?: boolean } = {}): Pr
     requests,
     enqueue: (h, env) => void delivery!.outbox.enqueue(h, env),
     agentInstalled: () => (opts.holdAgentCheck ? held : Promise.resolve(true)),
+    // Every spawn result in these tests answers a request this test made.
+    isOutstanding: () => true,
     onResult: (from, result) => results.push({ from, result }),
     onTargets: (from, t) => targets.push({ from, targets: t }),
     log: quiet,

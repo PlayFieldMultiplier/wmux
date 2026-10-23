@@ -88,7 +88,7 @@ describe('RemoteSpawnSection', () => {
     expect(spawnPolicySet.mock.calls[0][0]).toEqual({
       ...defaultSpawnPolicy(),
       enabled: true,
-      roots: [{ id: 'my-api', label: 'My API', path: '/Users/me/code/My API' }],
+      roots: [{ id: expect.stringMatching(/^my-api-[a-z0-9]{6}$/), label: 'My API', path: '/Users/me/code/My API' }],
       agents: ['claude'],
     });
     expect(container.textContent).toContain('Saved');
@@ -104,6 +104,20 @@ describe('RemoteSpawnSection', () => {
     expect($('[data-testid="remote-spawn-error"]')!.textContent).toBe('/tmp/x is not the top folder of a git repository');
     // Still a draft: Save stays available.
     expect($<HTMLButtonElement>('[data-testid="remote-spawn-save"]')!.disabled).toBe(false);
+  });
+
+  it('reloads the saved policy and says so when it changed elsewhere meanwhile', async () => {
+    stub(() => ({ ok: false, conflict: true, error: 'the settings changed in the meantime' }));
+    const elsewhere = { ...defaultSpawnPolicy(), enabled: true, version: 4 };
+    const get = (window as unknown as { electronAPI: { a2aRemote: { spawnPolicyGet: ReturnType<typeof vi.fn> } } }).electronAPI.a2aRemote.spawnPolicyGet;
+    await render(<RemoteSpawnSection enabled />);
+    await click($('[data-testid="remote-spawn-enabled"]'));
+    get.mockResolvedValue({ policy: elsewhere });
+    await click($('[data-testid="remote-spawn-save"]'));
+    expect($('[data-testid="remote-spawn-error"]')!.textContent).toBe('These settings changed in the meantime. They were reloaded; make your change again.');
+    // The reloaded policy is the new baseline: nothing left to save.
+    expect($('[data-testid="remote-spawn-enabled"]')!.getAttribute('aria-checked')).toBe('true');
+    expect($<HTMLButtonElement>('[data-testid="remote-spawn-save"]')!.disabled).toBe(true);
   });
 
   it('takes bypass permissions only after the confirm', async () => {

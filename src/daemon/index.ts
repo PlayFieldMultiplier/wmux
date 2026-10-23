@@ -9317,11 +9317,16 @@ async function main(): Promise<void> {
     const a2aCascade = (hostId: string): void => {
       a2aForgetHost(hostId);
       // A re-paired PC starts from nothing: no opt-in, no rules, no requests.
+      // Each store on its own, so one failing does not keep the other.
       try {
         a2aSpawnPolicy.forgetHost(hostId);
-        a2aSpawnRequests.forgetHost(hostId);
       } catch (err) {
         a2aLog('error', `[a2a-remote] revoke cascade: spawn policy for ${hostId}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      try {
+        a2aSpawnRequests.forgetHost(hostId);
+      } catch (err) {
+        a2aLog('error', `[a2a-remote] revoke cascade: spawn requests for ${hostId}: ${err instanceof Error ? err.message : String(err)}`);
       }
       a2aDelivery?.onPeerRevoked(hostId);
     };

@@ -5668,6 +5668,7 @@ export const pl = {
   'remoteSpawn.save': "Zapisz",
   'remoteSpawn.saved': "Zapisano",
   'remoteSpawn.saveFailed': "Nie udało się zapisać. Spróbuj ponownie, gdy wmux się połączy.",
+  'remoteSpawn.conflict': "Te ustawienia zmieniły się w międzyczasie. Wczytano je ponownie; wprowadź zmianę jeszcze raz.",
   'remoteSpawn.loading': "Odczytywanie tego ustawienia…",
   'remoteSpawn.unavailable': "To ustawienie wymaga demona wmux. Pojawi się, gdy demon się połączy.",
   'remoteSpawn.hostToggle': "Może tu uruchamiać agentów",

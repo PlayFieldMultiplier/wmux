@@ -100,6 +100,14 @@ function SpawnPolicyEditor({ pickFolder }: { pickFolder: () => Promise<string | 
     try {
       const r = await saveSpawnPolicy(draft, t('remoteSpawn.saveFailed'));
       if (!mounted.current) return;
+      if (!r.ok && r.conflict) {
+        // Changed elsewhere meanwhile: show what is saved now, and say so.
+        const fresh = await readSpawnPolicy();
+        if (!mounted.current) return;
+        if (fresh) { setSaved(fresh); setDraft(fresh); }
+        setError(t('remoteSpawn.conflict'));
+        return;
+      }
       if (!r.ok) { setError(r.error); return; }
       setSaved(r.policy);
       setDraft(r.policy);

@@ -35,7 +35,7 @@ import RemoteRowMenu, { type RemoteRowMenuItem } from './RemoteRowMenu';
 import TailscaleChecklist from './TailscaleChecklist';
 import RemoteSpawnHostToggle from './RemoteSpawnHostToggle';
 import { REMOTE_SPAWN_UI_ENABLED } from './remoteSpawnFlag';
-import { readSpawnPolicy, saveSpawnPolicy } from './remoteSpawnPolicy';
+import { readSpawnPolicy, saveSpawnPolicy, type SpawnPolicySaveResult } from './remoteSpawnPolicy';
 import type { A2aSpawnPolicyV1 } from '../../../shared/a2aSpawn';
 
 /** How often the page re-reads the roster, the hosts and the server state. */
@@ -364,10 +364,16 @@ export default function RemotePage() {
     return r.ok ? null : t('a2aDelivery.failed');
   });
   // A PC's opt-in for starting new agents saves the whole policy at once.
-  const saveSpawn = useCallback(async (next: A2aSpawnPolicyV1) => {
+  const saveSpawn = useCallback(async (next: A2aSpawnPolicyV1): Promise<SpawnPolicySaveResult> => {
     setError(null);
     const r = await saveSpawnPolicy(next, t('remoteSpawn.saveFailed'));
     if (r.ok && mounted.current) setSpawnPolicy(r.policy);
+    if (!r.ok && r.conflict) {
+      // Changed elsewhere meanwhile: show what is saved now.
+      const fresh = await readSpawnPolicy();
+      if (fresh && mounted.current) setSpawnPolicy(fresh);
+      return { ok: false, error: t('remoteSpawn.conflict'), conflict: true };
+    }
     return r;
   }, [t]);
 

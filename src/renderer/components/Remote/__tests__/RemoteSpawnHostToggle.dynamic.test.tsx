@@ -63,15 +63,18 @@ describe('RemoteSpawnHostToggle', () => {
 });
 
 describe('makeRootId', () => {
-  it('slugs a folder name and keeps ids unique within 32 characters', () => {
-    expect(makeRootId('My API', [])).toBe('my-api');
-    expect(makeRootId('프로젝트', [])).toBe('folder');
-    expect(makeRootId('api', ['api', 'api-2'])).toBe('api-3');
-    const long = 'a'.repeat(40);
-    const first = makeRootId(long, []);
-    const second = makeRootId(long, [first]);
-    expect(first).toHaveLength(32);
-    expect(second).not.toBe(first);
-    for (const id of [first, second, makeRootId('-x-', [])]) expect(isSpawnRootId(id)).toBe(true);
+  it('slugs a folder name with a random suffix: a later folder never reuses an earlier id', () => {
+    expect(makeRootId('My API', [], () => 'abc123')).toBe('my-api-abc123');
+    // Two CJK names no longer share one id (an allow rule cannot carry over).
+    const a = makeRootId('프로젝트', []);
+    const b = makeRootId('作业', [a]);
+    expect(a).toMatch(/^folder-[a-z0-9]{6}$/);
+    expect(b).not.toBe(a);
+    // A taken id is drawn again.
+    const draws = ['abc123', 'abc123', 'zzz999'];
+    expect(makeRootId('api', ['api-abc123'], () => draws.shift()!)).toBe('api-zzz999');
+    const long = makeRootId('a'.repeat(40), []);
+    expect(long.length).toBeLessThanOrEqual(32);
+    for (const id of [a, b, long, makeRootId('-x-', [])]) expect(isSpawnRootId(id)).toBe(true);
   });
 });

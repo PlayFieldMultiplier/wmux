@@ -36,6 +36,8 @@ export const SPAWN_TEXT_MAX = A2A_REMOTE_BODY_MAX;
 export const SPAWN_SUB_MAX = 512;
 /** Roots and agents one policy may list. */
 export const SPAWN_ROOTS_MAX = 32;
+/** Decided requests kept per PC; past it, that PC's new requests wait (`rate-limited`). */
+export const SPAWN_DECIDED_PER_HOST_MAX = 100;
 /** "Always allow" rules one policy may hold. */
 export const SPAWN_RULES_MAX = 256;
 /** A root's display label (characters). */
@@ -193,7 +195,10 @@ export const A2A_SPAWN_RPC = Object.freeze({
 } as const);
 
 /** `a2a.remote.spawnPolicy.set`'s answer: the saved policy, or why it was refused. */
-export type A2aSpawnPolicySetResult = { ok: true; policy: A2aSpawnPolicyV1 } | { ok: false; error: string };
+export type A2aSpawnPolicySetResult =
+  | { ok: true; policy: A2aSpawnPolicyV1 }
+  /** `conflict`: the policy changed since the caller read it (`version`); read it again. */
+  | { ok: false; error: string; conflict?: true };
 
 /** What the UI may list about a received request: never the prompt. */
 export interface A2aSpawnRequestSummary {
@@ -365,6 +370,9 @@ export function coerceSpawnPolicy(raw: unknown): A2aSpawnPolicyV1 | null {
   const cleanRules: A2aSpawnRuleV1[] = [];
   for (const r of rules) {
     if (!isPlain(r) || !isHostId(r['hostId']) || !isSpawnRootId(r['rootId']) || !isAgentSlug(r['agent'])) return null;
+    // A rule for a folder no longer listed goes with it: a folder added later
+    // under the same id must not inherit it.
+    if (!cleanRoots.some((root) => root.id === r['rootId'])) continue;
     cleanRules.push({ hostId: r['hostId'], rootId: r['rootId'] as string, agent: r['agent'] });
   }
   return {

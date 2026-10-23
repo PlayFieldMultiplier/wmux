@@ -4746,6 +4746,7 @@ export const zh = {
   'remoteSpawn.save': "保存",
   'remoteSpawn.saved': "已保存",
   'remoteSpawn.saveFailed': "无法保存。请在 wmux 连接后重试。",
+  'remoteSpawn.conflict': "这些设置在此期间已更改，已重新载入。请再做一次修改。",
   'remoteSpawn.loading': "正在读取此设置…",
   'remoteSpawn.unavailable': "此设置需要 wmux 守护进程。守护进程连接后会显示。",
   'remoteSpawn.hostToggle': "可以在这里启动代理",

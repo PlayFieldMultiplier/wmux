@@ -41,7 +41,9 @@ export async function saveSpawnPolicy(policy: A2aSpawnPolicyV1, fallback: string
       const saved = coerceSpawnPolicy(r.policy);
       return saved ? { ok: true, policy: saved } : { ok: false, error: fallback };
     }
-    return { ok: false, error: typeof r?.error === 'string' && r.error ? r.error : fallback };
+    const error = typeof r?.error === 'string' && r.error ? r.error : fallback;
+    // Changed elsewhere since it was read (another window, a removed PC): the caller reads it again.
+    return r && 'conflict' in r && r.conflict === true ? { ok: false, error, conflict: true } : { ok: false, error };
   } catch {
     return { ok: false, error: fallback };
   }
@@ -64,22 +66,29 @@ export function folderName(path: string): string {
 }
 
 /**
- * A root id (`[a-z0-9][a-z0-9-]{0,31}`) from a folder's name, unique among
- * `taken`. A name with no usable letters (CJK, symbols) becomes `folder`.
+ * A root id (`[a-z0-9][a-z0-9-]{0,31}`) from a folder's name, with a random
+ * suffix so that a folder added later never reuses the id of one removed
+ * (or of another with no usable letters, such as a CJK name: `folder-…`).
  */
-export function makeRootId(name: string, taken: readonly string[]): string {
+export function makeRootId(name: string, taken: readonly string[], random: () => string = randomSuffix): string {
   const base = name
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
-    .slice(0, ROOT_ID_MAX)
+    .slice(0, ROOT_ID_MAX - SUFFIX_LEN - 1)
     .replace(/-+$/, '') || 'folder';
-  if (!taken.includes(base)) return base;
-  for (let n = 2; ; n++) {
-    const suffix = `-${n}`;
-    const id = `${base.slice(0, ROOT_ID_MAX - suffix.length).replace(/-+$/, '')}${suffix}`;
+  for (;;) {
+    const id = `${base}-${random()}`;
     if (!taken.includes(id)) return id;
   }
+}
+
+const SUFFIX_LEN = 6;
+
+function randomSuffix(): string {
+  const bytes = new Uint8Array(SUFFIX_LEN);
+  crypto.getRandomValues(bytes);
+  return [...bytes].map((b) => 'abcdefghijklmnopqrstuvwxyz0123456789'[b % 36]).join('');
 }
 
 /** A new allowed folder for `path`, labelled by its name. */

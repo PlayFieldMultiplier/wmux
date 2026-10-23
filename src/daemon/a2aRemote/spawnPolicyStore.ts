@@ -76,12 +76,43 @@ export class SpawnPolicyStore {
   /**
    * Replace the policy with `raw`, after checking it whole: each root must
    * resolve to a git repository's top level, and is stored as that realpath.
-   * `version` is this store's, never the caller's.
+   *
+   * `raw.version` is the version the caller read. Saves run one at a time,
+   * and one whose version is no longer current (another save, or a removed
+   * PC, landed meanwhile) is refused as a `conflict` and changes nothing.
+   * The version check and the write happen together, after every wait.
    */
-  async set(raw: unknown): Promise<A2aSpawnPolicySetResult> {
+  set(raw: unknown): Promise<A2aSpawnPolicySetResult> {
+    const run = this.queue.then(() => this.setNow(raw));
+    this.queue = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  /** A paired PC was removed: it is no longer allowed and its rules go (a re-pair starts from nothing). */
+  forgetHost(hostId: HostId): boolean {
+    const had = hostId in this.policy.hosts || this.policy.rules.some((r) => r.hostId === hostId);
+    if (!had) return false;
+    const hosts = { ...this.policy.hosts };
+    delete hosts[hostId];
+    // Memory first: the live policy stops allowing that PC even when the
+    // file cannot be written (it is then logged, and the next save retries).
+    this.policy = {
+      ...this.policy,
+      hosts,
+      rules: this.policy.rules.filter((r) => r.hostId !== hostId),
+      version: this.policy.version + 1,
+    };
+    this.persist(`forgetting ${hostId}`);
+    return true;
+  }
+
+  private queue: Promise<void> = Promise.resolve();
+
+  private async setNow(raw: unknown): Promise<A2aSpawnPolicySetResult> {
     if (!this.writable) return { ok: false, error: storeUnavailable(SPAWN_POLICY_FILE).message };
     const next = coerceSpawnPolicy(raw);
     if (!next) return { ok: false, error: 'the policy is not valid' };
+    if (next.version !== this.policy.version) return CONFLICT;
     const roots: A2aSpawnPolicyV1['roots'] = [];
     for (const root of next.roots) {
       if (!path.isAbsolute(root.path)) return { ok: false, error: `${root.label}: the folder must be an absolute path` };
@@ -95,6 +126,8 @@ export class SpawnPolicyStore {
       if (top === null || !samePath(top, real)) return { ok: false, error: `${root.label}: the folder must be the top level of a git repository` };
       roots.push({ ...root, path: real });
     }
+    // Something else changed the policy while the folders were checked.
+    if (next.version !== this.policy.version) return CONFLICT;
     const saved: A2aSpawnPolicyV1 = { ...next, roots, version: this.policy.version + 1 };
     this.write(this.filePath, saved);
     this.scheduleHarden(this.filePath);
@@ -102,30 +135,31 @@ export class SpawnPolicyStore {
     return { ok: true, policy: structuredClone(saved) };
   }
 
-  /** A paired PC was removed: it is no longer allowed and its rules go (a re-pair starts from nothing). */
-  forgetHost(hostId: HostId): boolean {
-    const had = hostId in this.policy.hosts || this.policy.rules.some((r) => r.hostId === hostId);
-    if (!had) return false;
-    if (!this.writable) throw storeUnavailable(SPAWN_POLICY_FILE);
-    const hosts = { ...this.policy.hosts };
-    delete hosts[hostId];
-    const saved: A2aSpawnPolicyV1 = {
-      ...this.policy,
-      hosts,
-      rules: this.policy.rules.filter((r) => r.hostId !== hostId),
-      version: this.policy.version + 1,
-    };
-    this.write(this.filePath, saved);
-    this.scheduleHarden(this.filePath);
-    this.policy = saved;
-    return true;
+  private persist(why: string): void {
+    if (!this.writable) {
+      this.log('error', `[a2a-remote] ${SPAWN_POLICY_FILE}: not saved after ${why}: ${storeUnavailable(SPAWN_POLICY_FILE).message}`);
+      return;
+    }
+    try {
+      this.write(this.filePath, this.policy);
+      this.scheduleHarden(this.filePath);
+    } catch (err) {
+      this.log('error', `[a2a-remote] ${SPAWN_POLICY_FILE}: not saved after ${why}: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 }
 
-/** Case-insensitive on the platforms whose default file systems are. */
+const CONFLICT: A2aSpawnPolicySetResult = { ok: false, conflict: true, error: 'the settings changed in the meantime' };
+
+/**
+ * Two realpaths name the same folder. Exact on every platform but Windows,
+ * whose file systems are case-insensitive: realpath already returns the
+ * on-disk spelling, and a case-sensitive volume (Linux, a case-sensitive
+ * APFS) must not let a sibling that differs only by case pass as the same.
+ */
 export function samePath(a: string, b: string, platform: NodeJS.Platform = process.platform): boolean {
   const norm = (p: string): string => path.resolve(p);
-  return platform === 'win32' || platform === 'darwin' ? norm(a).toLowerCase() === norm(b).toLowerCase() : norm(a) === norm(b);
+  return platform === 'win32' ? norm(a).toLowerCase() === norm(b).toLowerCase() : norm(a) === norm(b);
 }
 
 /**

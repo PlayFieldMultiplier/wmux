@@ -5222,6 +5222,7 @@ export const ko = {
   'remoteSpawn.save': "저장",
   'remoteSpawn.saved': "저장됨",
   'remoteSpawn.saveFailed': "저장하지 못했습니다. wmux가 연결되면 다시 시도하세요.",
+  'remoteSpawn.conflict': "그사이 설정이 바뀌어 다시 불러왔습니다. 변경을 다시 해 주세요.",
   'remoteSpawn.loading': "설정을 읽는 중…",
   'remoteSpawn.unavailable': "이 설정에는 wmux 데몬이 필요합니다. 데몬이 연결되면 나타납니다.",
   'remoteSpawn.hostToggle': "여기서 에이전트 시작 가능",

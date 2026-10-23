@@ -5708,6 +5708,7 @@ export const en = {
   'remoteSpawn.save': "Save",
   'remoteSpawn.saved': "Saved",
   'remoteSpawn.saveFailed': "Could not save. Try again once wmux is connected.",
+  'remoteSpawn.conflict': "These settings changed in the meantime. They were reloaded; make your change again.",
   'remoteSpawn.loading': "Reading this setting…",
   'remoteSpawn.unavailable': "This needs the wmux daemon. It will appear once the daemon connects.",
   'remoteSpawn.hostToggle': "Can start agents here",
