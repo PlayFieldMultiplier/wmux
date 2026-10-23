@@ -3284,6 +3284,7 @@ export const ko = {
   'firstRunWizard.firstTask.folderNone': "아직 고른 폴더가 없습니다.",
   'firstRunWizard.firstTask.folderChecking': "폴더 확인 중…",
   'firstRunWizard.firstTask.folderNotRepo': "봇은 GitHub 원격 저장소가 있는 git 저장소를 읽습니다. 하나를 고르거나 건너뛰세요.",
+  'firstRunWizard.firstTask.existingBot': "첫 봇은 이미 이 저장소를 읽고 있습니다. 이 봇에게 작업을 보내거나 건너뛰세요.",
   'firstRunWizard.firstTask.choose': "선택…",
   'firstRunWizard.firstTask.example.explain.title': "이 폴더 설명하기",
   'firstRunWizard.firstTask.example.explain.detail': "어떤 프로젝트인지, 어떻게 구성되어 있는지, 어디부터 읽으면 되는지.",

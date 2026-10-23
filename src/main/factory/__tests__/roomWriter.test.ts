@@ -484,7 +484,7 @@ describe('facts → system cards', () => {
     const [off] = writeFactCards(w, fact('bot.workers_full', { id: 'f-s6', workspaceId: 'ws1', ref: { botId: 'bot-00000001' }, payload: { scope: 'bot', running: 0, limit: 0, held: false } }), bots);
     expect(off.title).toMatch(/ started no workers: its worker limit is 0$/);
     expect(off.body).toBe('Nothing was started, pushed or opened as a pull request. Allow workers in its settings, then ask it again.');
-    expect(off.notice).toEqual({ code: 'workers.full', args: { bot: expect.any(String), scope: 'bot', inUse: 0, cap: 0 } });
+    expect(off.notice).toEqual({ code: 'workers.off', args: { bot: expect.any(String) } });
     expect(writeFactCards(w, fact('bot.workers_full', { id: 'f-s3', workspaceId: 'ws1', ref: { botId: 'bot-00000001' }, payload: { scope: 'elsewhere', running: 1, limit: 1 } }), bots)).toEqual([]);
   });
 

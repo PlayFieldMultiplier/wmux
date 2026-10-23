@@ -12,7 +12,7 @@ import type { BrowserWindow, IpcMainInvokeEvent } from 'electron';
 import { IPC } from '../../shared/constants';
 import { wrapHandler } from '../ipc/wrapHandler';
 import type { FirstRunOrchestrator } from './FirstRunOrchestrator';
-import type { FirstBotResult, SampleTaskStartPayload } from '../../shared/firstRun';
+import type { FirstBotResult, FirstRunFolderCheck, SampleTaskStartPayload } from '../../shared/firstRun';
 import { AGENT_IDS, type AgentId } from '../../shared/agentSetup';
 import type { FactorySettings } from '../../shared/factorySettings';
 import { isMainWindowSender } from '../ipc/mainWindowSender';
@@ -36,6 +36,16 @@ export function firstBotHandler(
     if (!isMainWindowSender(e, getWindow())) return { ok: false, code: 'invalid_argument', message: 'only the main window may make the first bot' };
     const settings = deps.settings ? deps.settings() : getFactorySettingsStore()?.get() ?? null;
     return firstRunBot((deps.store ?? getBotStore)(), settings, req);
+  };
+}
+
+/** firstRun:check-folder's body: the sender check, then the folder check. */
+export function checkFolderHandler(
+  getWindow: () => BrowserWindow | null,
+): (e: { sender?: unknown; senderFrame?: unknown }, folder: unknown) => Promise<FirstRunFolderCheck> {
+  return async (e, folder) => {
+    if (!isMainWindowSender(e, getWindow())) return { ok: false, code: 'invalid_argument', message: 'only the main window may check the first run\'s folder' };
+    return checkFirstRunFolder(folder);
   };
 }
 
@@ -138,7 +148,7 @@ export function registerFirstRunHandlers(orchestrator: FirstRunOrchestrator, get
   ipcMain.removeHandler(IPC.FIRST_RUN_CHECK_FOLDER);
   ipcMain.handle(
     IPC.FIRST_RUN_CHECK_FOLDER,
-    wrapHandler(IPC.FIRST_RUN_CHECK_FOLDER, async (_event: IpcMainInvokeEvent, folder: unknown) => checkFirstRunFolder(folder)),
+    wrapHandler(IPC.FIRST_RUN_CHECK_FOLDER, checkFolderHandler(getWindow)),
   );
 
   ipcMain.removeHandler(IPC.FIRST_RUN_FIRST_BOT);

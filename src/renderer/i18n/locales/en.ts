@@ -3894,6 +3894,7 @@ export const en = {
   'firstRunWizard.firstTask.folderNone': "No folder chosen yet.",
   'firstRunWizard.firstTask.folderChecking': "Checking the folder…",
   'firstRunWizard.firstTask.folderNotRepo': "Bots read a git repository with a GitHub remote. Pick one, or skip.",
+  'firstRunWizard.firstTask.existingBot': "Your first bot already reads this repository. Send it the task, or skip.",
   'firstRunWizard.firstTask.choose': "Choose…",
   'firstRunWizard.firstTask.example.explain.title': "Explain this folder",
   'firstRunWizard.firstTask.example.explain.detail': "What the project is, how it is laid out, and where to start reading.",

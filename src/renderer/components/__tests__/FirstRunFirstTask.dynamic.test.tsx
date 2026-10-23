@@ -69,9 +69,10 @@ function install({ folder = { ok: true, root: '/r', displayRoot: '~/r', repoKey:
   };
   rooms = {
     status: vi.fn().mockResolvedValue({ running: true, enabled: true, hqWorkspaceId: null }),
-    read: vi.fn(async ({ sinceSeq = 0 }: { sinceSeq?: number }) => {
-      const cards = thread.filter((c) => c.seq > sinceSeq);
-      return { ok: true, workspaceId: 'w1', threadId: 'dm:b1', cards, nextSinceSeq: cards.at(-1)?.seq ?? sinceSeq, hasMore: false };
+    // `thread` holds the room's cards, General's too; seq is the room's.
+    read: vi.fn(async ({ sinceSeq = 0, threadId = 'dm:b1' }: { sinceSeq?: number; threadId?: string }) => {
+      const cards = thread.filter((c) => c.seq > sinceSeq && c.threadId === threadId);
+      return { ok: true, workspaceId: 'w1', threadId, cards, nextSinceSeq: cards.at(-1)?.seq ?? sinceSeq, hasMore: false };
     }),
     post: vi.fn(async (p: { title: string; body?: string }) => {
       const posted = card((thread.at(-1)?.seq ?? 0) + 1, { kind: 'human' }, { title: p.title });
@@ -270,6 +271,52 @@ describe('FirstRunWizard first task', () => {
     expect(byId('first-run-first-task-error')?.textContent).toContain('Mochi was refused read');
     expect(byId('first-run-first-task-answer')).toBeNull();
     expect(firstRun.complete).not.toHaveBeenCalled();
+  });
+
+  it("a turn that did not run is said in General: the wizard shows it and completes nothing", async () => {
+    install();
+    await mount();
+    await click('first-run-first-task-send');
+    await click('first-run-first-task-consent-confirm');
+    // Another bot's error, and one from before the task, are not this task's.
+    thread.push(card(0, { kind: 'system' }, { threadId: 'general', kind: 'fact', title: 'old', refs: { botId: 'b1' }, notice: { code: 'bot.error', args: { bot: 'Mochi' } } }));
+    thread.push(card(2, { kind: 'system' }, { threadId: 'general', kind: 'fact', title: 'Other hit an error', refs: { botId: 'b2' }, notice: { code: 'bot.error', args: { bot: 'Other' } } }));
+    await tick();
+    expect(byId('first-run-first-task-error')).toBeNull();
+    thread.push(card(3, { kind: 'system' }, { threadId: 'general', kind: 'fact', title: 'Mochi hit an error', refs: { botId: 'b1' }, notice: { code: 'bot.error', args: { bot: 'Mochi' } } }));
+    await tick();
+    expect(byId('first-run-first-task-error')?.textContent).toContain('Mochi hit an error');
+    expect(byId('first-run-first-task-waiting')).toBeNull();
+    expect(firstRun.complete).not.toHaveBeenCalled();
+  });
+
+  it('is offered only when Claude Code is ready: Codex alone does not run the bot', async () => {
+    install();
+    firstRun.agentStatus.mockResolvedValue([{ ...ready, readiness: 'not-installed' }, { ...ready, agent: 'codex' }]);
+    await mount();
+    expect(byId('first-run-first-task')).toBeNull();
+    expect(firstRun.firstBot).not.toHaveBeenCalled();
+  });
+
+  it('a first-run bot made earlier for another folder is shown and nothing is sent until Send again', async () => {
+    install();
+    firstRun.firstBot.mockResolvedValue({ ok: true, created: false, bot: { id: 'b1', name: 'Mochi', workspaceId: 'w1', repoPath: '/a' }, threadId: 'dm:b1' });
+    firstRun.checkFolder.mockImplementation(async (f: string) => (f === '/a' ? { ok: true, root: '/a', displayRoot: '~/a', repoKey: 'o/a' } : { ok: true, root: '/r', displayRoot: '~/r', repoKey: 'o/r' }));
+    await mount();
+    await click('first-run-first-task-send');
+    await click('first-run-first-task-consent-confirm');
+    expect(rooms.post).not.toHaveBeenCalled();
+    expect(byId('first-run-folder-status')?.textContent).toBe('~/a');
+    expect(byId('first-run-folder-existing-bot')).not.toBeNull();
+    expect(byId('first-run-folder-choose')?.disabled).toBe(true);
+    // The suggestion (~/r) no longer replaces the bot's folder.
+    await tick();
+    expect(byId('first-run-folder-status')?.textContent).toBe('~/a');
+    // Sent again, the task goes to that bot, about its folder.
+    await click('first-run-first-task-send');
+    await click('first-run-first-task-consent-confirm');
+    expect(firstRun.firstBot).toHaveBeenLastCalledWith({ workspaceId: 'w1', folder: '/a' });
+    expect(rooms.post).toHaveBeenCalledTimes(1);
   });
 
   it('Skip from the card dismisses and never makes the bot or posts', async () => {

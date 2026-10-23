@@ -3443,6 +3443,7 @@ export const zh = {
   'firstRunWizard.firstTask.folderNone': "尚未选择文件夹。",
   'firstRunWizard.firstTask.folderChecking': "正在检查文件夹…",
   'firstRunWizard.firstTask.folderNotRepo': "机器人读取带有 GitHub 远程仓库的 git 仓库。请选择一个，或跳过。",
+  'firstRunWizard.firstTask.existingBot': "你的第一个机器人已经在读取这个仓库。把任务发给它，或者跳过。",
   'firstRunWizard.firstTask.choose': "选择…",
   'firstRunWizard.firstTask.example.explain.title': "解释这个文件夹",
   'firstRunWizard.firstTask.example.explain.detail': "这是什么项目、结构如何、从哪里开始读。",

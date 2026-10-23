@@ -3868,6 +3868,7 @@ export const pl = {
   'firstRunWizard.firstTask.folderNone': "Nie wybrano jeszcze folderu.",
   'firstRunWizard.firstTask.folderChecking': "Sprawdzanie folderu…",
   'firstRunWizard.firstTask.folderNotRepo': "Boty czytają repozytorium git ze zdalnym repozytorium na GitHubie. Wybierz takie albo pomiń.",
+  'firstRunWizard.firstTask.existingBot': "Twój pierwszy bot czyta już to repozytorium. Wyślij mu zadanie albo pomiń.",
   'firstRunWizard.firstTask.choose': "Wybierz…",
   'firstRunWizard.firstTask.example.explain.title': "Wyjaśnij ten folder",
   'firstRunWizard.firstTask.example.explain.detail': "Czym jest projekt, jak jest zorganizowany i od czego zacząć czytanie.",

@@ -15,7 +15,7 @@ import { DEFAULT_FACTORY_SETTINGS, type FactorySettings } from '../../factory/fa
 import { BOTS_PLAN_CONSENT_VERSION } from '../../../shared/factorySettings';
 import { FIRST_RUN_BOT_WORKERS } from '../../../shared/firstRun';
 import { FIRST_RUN_BOT_JOB, checkFirstRunFolder, firstRunBot } from '../firstBot';
-import { firstBotHandler } from '../index';
+import { checkFolderHandler, firstBotHandler } from '../index';
 import type { GitResult } from '../../git/git';
 
 let dir = '';
@@ -98,10 +98,11 @@ describe('the first run\'s bot', () => {
     expect(store.list()).toHaveLength(0);
   });
 
-  it('only the main window may ask for it', async () => {
+  it('only the main window may ask for it, or check its folder', async () => {
     const r = await firstBotHandler(() => null, { store: () => store, settings: () => consented() })({ sender: {} }, req);
     expect(r).toMatchObject({ ok: false });
     expect(store.list()).toHaveLength(0);
+    expect(await checkFolderHandler(() => null)({ sender: {} }, '/src/app')).toMatchObject({ ok: false, code: 'invalid_argument' });
   });
 });
 

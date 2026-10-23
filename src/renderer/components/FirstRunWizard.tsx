@@ -373,7 +373,9 @@ export default function FirstRunWizard({ mode, onClose }: FirstRunWizardProps) {
 
   // ─── The bot's first task (first run only, once an agent is ready) ─────────
   const activeWorkspaceId = useStore((s) => s.activeWorkspaceId);
-  const showFirstTask = mode === 'firstRun' && statuses !== null && anyAgentReady(statuses);
+  // The bot runs on Claude Code (the Agent SDK): another agent being ready
+  // does not let its first task run.
+  const showFirstTask = mode === 'firstRun' && statuses !== null && statuses.some((s) => s.agent === 'claude' && s.readiness === 'ready');
   const firstTask = useFirstTask({ enabled: showFirstTask, workspaceId: activeWorkspaceId });
   // The first run ends with the bot's first task: while that step is shown,
   // the sample task's end leaves the dialog open on it. Read by the sample

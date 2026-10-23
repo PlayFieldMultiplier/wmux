@@ -1487,7 +1487,7 @@ export function systemCardForFact(fact: Fact, bots?: BotDirectoryApi): SystemCar
           title: `${name} started no workers: its worker limit is 0`,
           body: 'Nothing was started, pushed or opened as a pull request. Allow workers in its settings, then ask it again.',
           refs: baseRefs,
-          notice: { code: 'workers.full', args: { bot: name, scope, inUse: running, cap: 0 } },
+          notice: { code: 'workers.off', args: { bot: name } },
         };
       }
       return {

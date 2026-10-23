@@ -12,7 +12,7 @@ import {
   type FirstRunFolderCheck,
   type FirstTaskExample,
 } from '../../shared/firstRun';
-import { dmThreadId, parseThreadId, type RoomCard, type ThreadId } from '../../shared/room';
+import { GENERAL_THREAD, dmThreadId, parseThreadId, type RoomCard, type ThreadId } from '../../shared/room';
 import type { FactoryBotRepoSuggestion } from '../../shared/botCreate';
 import { useStore } from '../stores';
 import { useT } from '../hooks/useT';
@@ -111,6 +111,21 @@ export function suggestionStatusOf(code: Extract<FactoryBotRepoSuggestion, { ok:
 
 export type FirstTaskOutcome = { kind: 'answer' | 'error'; card: RoomCard };
 
+/** The notice codes of a General card that say a bot's turn did not run. */
+const TURN_FAILED_NOTICES: ReadonlySet<string> = new Set(['bot.error', 'bot.usageLimit', 'budget.exhausted', 'budget.held']);
+
+/**
+ * A card wmux wrote in General about this bot after the task card
+ * (`taskSeq`; seq is the room's, so it orders across threads) that says its
+ * turn did not run: an error, the usage limit, a budget stop, a refusal.
+ */
+export function firstTaskFailure(generalCards: readonly RoomCard[], botId: string, taskSeq: number): RoomCard | null {
+  return generalCards
+    .filter((c) => c.seq > taskSeq && c.actor.kind === 'system' && c.refs?.botId === botId)
+    .sort((a, b) => a.seq - b.seq)
+    .find((c) => c.kind === 'refusal' || c.kind === 'budget' || (c.notice !== undefined && TURN_FAILED_NOTICES.has(c.notice.code))) ?? null;
+}
+
 /**
  * The bot's first card after the task card (`taskSeq`): its answer, or an
  * error when it is a refusal or a budget stop (the bot's own, or the one
@@ -179,6 +194,8 @@ export interface FirstTaskState {
   taskText: string;
   /** The first-run bot, once made. */
   botId: string | null;
+  /** The first-run bot was made earlier for the folder now shown. */
+  existingBot: boolean;
   choose: () => void;
   selectExample: (example: FirstTaskExample) => void;
   send: () => void;
@@ -198,6 +215,8 @@ export function useFirstTask({ enabled, workspaceId }: { enabled: boolean; works
   const [still, setStill] = useState(false);
   const [outcome, setOutcome] = useState<FirstTaskState['outcome']>(null);
   const [botId, setBotId] = useState<string | null>(null);
+  // The first-run bot made earlier reads another folder than the row showed.
+  const [existingBot, setExistingBot] = useState(false);
 
   const live = useRef(true);
   useEffect(() => {
@@ -299,6 +318,21 @@ export function useFirstTask({ enabled, workspaceId }: { enabled: boolean; works
       if (!api) return fail();
       const botId = made.bot.id;
       setBotId(botId);
+      // A bot made earlier (a first run left before its task) reads its own
+      // folder: show that one and send nothing, so the task never names a
+      // folder the bot does not read.
+      if (!made.created && made.bot.repoPath && made.bot.repoPath !== folder.path) {
+        if (!live.current) return;
+        const shown = await bridge.checkFolder?.(made.bot.repoPath).catch(() => null);
+        if (!live.current) return;
+        pickedRef.current = true;
+        setPicked(true);
+        setFolder({ path: made.bot.repoPath, status: 'ok', displayRoot: shown?.ok ? shown.displayRoot : made.bot.repoPath });
+        setExistingBot(true);
+        running.current = false;
+        setPhase('idle');
+        return;
+      }
       const roomId = made.bot.workspaceId;
       const threadId = parseThreadId(made.threadId) ?? dmThreadId(botId);
 
@@ -321,9 +355,15 @@ export function useFirstTask({ enabled, workspaceId }: { enabled: boolean; works
 
       const started = timing.now();
       let since = taskSeq;
+      let sinceGeneral = taskSeq;
       for (;;) {
         const page = await readThread(api, roomId, threadId, since).catch(() => null);
+        // A turn that did not run is said in General, not in the 1:1.
+        const general = await readThread(api, roomId, GENERAL_THREAD, sinceGeneral).catch(() => null);
         if (!live.current) return;
+        const failed = general ? firstTaskFailure(general.cards, botId, taskSeq) : null;
+        if (failed) return fail(failed.title, failed);
+        if (general) sinceGeneral = Math.max(sinceGeneral, general.next);
         const found = page ? firstTaskOutcome(page.cards, botId, taskSeq) : null;
         if (found?.kind === 'error') return fail(found.card.title, found.card);
         if (found) {
@@ -357,6 +397,7 @@ export function useFirstTask({ enabled, workspaceId }: { enabled: boolean; works
     canSend,
     taskText: firstTaskText(example, t),
     botId,
+    existingBot,
     choose,
     selectExample,
     send,
@@ -402,9 +443,10 @@ export function FirstTaskBlock({ task }: { task: FirstTaskState }) {
               {folderStatus === 'none' && t('firstRunWizard.firstTask.folderNone')}
               {(folderStatus === 'not_a_repo' || folderStatus === 'no_remote') && t('firstRunWizard.firstTask.folderNotRepo')}
             </p>
+            {task.existingBot && <p className="ui-row-detail" data-testid="first-run-folder-existing-bot">{t('firstRunWizard.firstTask.existingBot')}</p>}
           </div>
           <div className="ui-row-action">
-            <Button size="sm" variant="ghost" onClick={task.choose} disabled={locked} data-testid="first-run-folder-choose">
+            <Button size="sm" variant="ghost" onClick={task.choose} disabled={locked || task.existingBot} data-testid="first-run-folder-choose">
               {t('firstRunWizard.firstTask.choose')}
             </Button>
           </div>
