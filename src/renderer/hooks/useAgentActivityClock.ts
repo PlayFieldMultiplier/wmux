@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { useStore } from '../stores';
-import { HOOK_RUNNING_TTL_MS } from '../stores/selectors/fleet';
+import { HOOK_RUNNING_TTL_MS, QUIET_TURN_OUTPUT_MS } from '../stores/selectors/fleet';
 import { SUBAGENT_COUNT_STALE_MS } from '../../shared/subagentCount';
 
 /** Bump cadence — matches the competitor's 2 s status tick. */
@@ -40,7 +40,7 @@ export function useAgentActivityClock(): void {
   useEffect(() => {
     let lastSlowBumpAt = 0;
     const id = setInterval(() => {
-      const { surfaceActivityAt, surfaceTurnOpenAt, surfaceTeammatesAt, surfaceSubagentsAt, agentClockMs } = useStore.getState();
+      const { surfaceActivityAt, surfaceTurnOpenAt, surfaceTeammatesAt, surfaceSubagentsAt, surfaceOutputAt, agentAliveByPtyId, agentClockMs } = useStore.getState();
       const now = Date.now();
       let anyFresh = false;
       // An Agent Teams teammate's stamp decays on the same window.
@@ -68,6 +68,14 @@ export function useAgentActivityClock(): void {
       let anyLatch = false;
       for (const ptyId in surfaceTurnOpenAt) {
         if (surfaceTurnOpenAt[ptyId] > 0) { anyLatch = true; break; }
+      }
+      // A live agent that printed lately counts as working for the sleep
+      // blocker (selectLocalAgentsWorking) until its output is
+      // QUIET_TURN_OUTPUT_MS old: the clock has to pass that mark.
+      for (const ptyId in agentAliveByPtyId ?? {}) {
+        if (anyLatch) break;
+        const outputAt = surfaceOutputAt[ptyId];
+        if (agentAliveByPtyId[ptyId] === true && outputAt !== undefined && now - outputAt <= QUIET_TURN_OUTPUT_MS + SLOW_TICK_MS) anyLatch = true;
       }
       if (anyLatch && now - lastSlowBumpAt >= SLOW_TICK_MS) {
         lastSlowBumpAt = now;

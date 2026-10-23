@@ -918,6 +918,11 @@ tests, changelog draft, issue triage) that open the composer filled in.
   limit sit behind More options at their defaults. One primary action
   (Create, Save or Turn on) and Cancel; a problem shows under the part it is
   about.
+- **Missed while asleep:** after the computer slept through scheduled runs,
+  one notice under the list header on the `--selection-subtle` fill: "N runs
+  missed while asleep", a muted line that Run now starts each schedule once,
+  then Run now (secondary) and Skip (ghost) on their own row. Either answers
+  it; until then the sidebar's Schedules row counts it once as needs you.
 - **Detail:** the name, the on/off switch, the next run, Run now and Edit,
   then the run history (status dot, start, duration, result, Open for a live
   run). Dividers are `--stroke` hairlines.

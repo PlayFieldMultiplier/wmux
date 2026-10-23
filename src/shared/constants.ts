@@ -302,6 +302,12 @@ export const IPC = {
   // state that sleep may have invalidated (shared glyph atlas — see
   // terminal/atlasWakeRecovery.ts).
   SYSTEM_RESUMED: 'system:resumed',
+  // Keep the computer awake (main/power/sleepPrevention.ts). Renderer → main:
+  // the saved mode, and whether any local agent is working. Main → renderer:
+  // the window the system slept through, for the missed-runs notice.
+  POWER_SLEEP_MODE: 'power:sleep-mode',
+  POWER_AGENTS_WORKING: 'power:agents-working',
+  POWER_SLEPT: 'power:slept',
   /** Windows' "Animation effects" off, which Chromium's
    *  prefers-reduced-motion misses there (main/reducedMotion.ts). */
   SYSTEM_REDUCED_MOTION: 'system:reduced-motion',

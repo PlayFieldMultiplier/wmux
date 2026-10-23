@@ -33,6 +33,7 @@ import {
   shadowsToEvict,
 } from '../shadowWorkspace';
 import { clampFileTreeWidth } from '../../utils/fileTreeLayout';
+import { isSleepPreventionMode } from '../../../shared/sleepPrevention';
 import { clampSidebarWidth, dropOwnerFoldKeys, movePinned, pinnedFirst, pruneTaskGroupExpanded, resolveSidebarSortMode, sortModeMigratedToAttention, unpinNestedTasks } from '../../utils/sidebarLayout';
 import {
   collectLeafIds,
@@ -1069,6 +1070,12 @@ export const createWorkspaceSlice: StateCreator<StoreState, [['zustand/immer', n
       if (typeof data.secretGuardEnabled === 'boolean') {
         state.secretGuardEnabled = data.secretGuardEnabled;
         window.electronAPI.settings.setSecretGuardEnabled?.(data.secretGuardEnabled);
+      }
+
+      // Keep the computer awake: an unknown value keeps the default. Main
+      // hears of it from utils/sleepPreventionBridge.ts.
+      if (isSleepPreventionMode(data.sleepPreventionMode)) {
+        state.sleepPreventionMode = data.sleepPreventionMode;
       }
 
       // Window glass, ahead of the empty-workspace return below. On Windows

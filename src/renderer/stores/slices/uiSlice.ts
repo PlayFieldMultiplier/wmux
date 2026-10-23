@@ -143,6 +143,7 @@ import {
   type TokenRole,
 } from '../../themes';
 import { sanitizeFontFamily } from '../../utils/terminalFont';
+import { DEFAULT_SLEEP_PREVENTION_MODE, type SleepPreventionMode } from '../../../shared/sleepPrevention';
 import {
   DEFAULT_TERMINAL_CURSOR_STYLE,
   sanitizeTerminalCursorStyle,
@@ -985,6 +986,11 @@ export interface UISlice {
   /** On by default; main holds the live value (main/git/secretGuardSetting.ts). */
   secretGuardEnabled: boolean;
   setSecretGuardEnabled: (enabled: boolean) => void;
+
+  // ─── Keep the computer awake ─────────────────────────────────────────
+  /** Main holds the blocker (main/power/sleepPrevention.ts); this is the choice. */
+  sleepPreventionMode: SleepPreventionMode;
+  setSleepPreventionMode: (mode: SleepPreventionMode) => void;
 
   // ─── Onboarding ─────────────────────────────────────────────────────
   onboardingActive: boolean;
@@ -2339,6 +2345,13 @@ export const createUISlice: StateCreator<StoreState, [['zustand/immer', never]],
 
   setSecretGuardEnabled: (enabled) => set((state) => {
     state.secretGuardEnabled = enabled;
+  }),
+
+  // ─── Keep the computer awake ─────────────────────────────────────────
+  sleepPreventionMode: DEFAULT_SLEEP_PREVENTION_MODE,
+
+  setSleepPreventionMode: (mode) => set((state) => {
+    state.sleepPreventionMode = mode;
   }),
 
   // ─── Onboarding ─────────────────────────────────────────────────────

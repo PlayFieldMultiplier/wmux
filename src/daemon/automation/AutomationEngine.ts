@@ -43,7 +43,7 @@ import {
   type AutomationRunReason,
   type AutomationRunState,
 } from '../../shared/automation';
-import { nextOccurrenceAfter, planDue } from '../../shared/automationSchedule';
+import { AUTOMATION_TICK_MS, nextOccurrenceAfter, planDue } from '../../shared/automationSchedule';
 import { classifyLaunchScreen, FIRST_RUN_DISMISS_KEY, FIRST_RUN_MAX_ANSWERS } from '../../shared/agentFirstRun';
 import type { SessionPromptScheduleResult } from '../../shared/sessionPromptSchedule';
 import type { AgentStatus } from '../../shared/types';
@@ -71,7 +71,7 @@ import {
   writeSnapshot,
 } from './store';
 
-export const AUTOMATION_TICK_MS = 30_000;
+export { AUTOMATION_TICK_MS };
 export const AUTOMATION_MONITOR_MS = 5_000;
 /** A tick later than this after the previous one means sleep or a clock jump. */
 export const AUTOMATION_TICK_GAP_MS = 2 * 60_000;
