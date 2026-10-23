@@ -5249,6 +5249,7 @@ export const ko = {
   'remoteSpawn.card.prompt': "지시",
   'remoteSpawn.card.meaningDirect': "허용하면 {hostName}이(가) 이 폴더에서 내 권한으로 이 에이전트를 실행합니다. 이후 지시는 다시 묻지 않고 전달됩니다.",
   'remoteSpawn.card.meaningAsk': "허용하면 {hostName}이(가) 이 폴더에서 내 권한으로 이 에이전트를 실행합니다. 이후 지시는 매번 다시 묻습니다.",
+  'remoteSpawn.card.ownHooks': "에이전트는 이 저장소의 훅과 git 설정을 그대로 쓰며 작업합니다. 여기서 직접 실행한 에이전트와 같습니다.",
   'remoteSpawn.card.meaningFollowUp': "허용하면 {hostName}이(가) 여기서 시작한 에이전트에게 이 지시를 보냅니다.",
   'remoteSpawn.card.allowOnce': "한 번 허용",
   'remoteSpawn.card.always': "이 PC·폴더·에이전트는 항상 허용",

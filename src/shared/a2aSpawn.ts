@@ -131,11 +131,22 @@ export interface A2aSpawnResultV1 {
  * asker's copy. The link id is a fresh uuid minted by B (`links.json` takes
  * uuids only, and nothing the asker sent predicts it).
  */
-export function spawnFirstMessageId(linkId: string): string {
+export function spawnFirstMessageId(linkId: SpawnLinkId): string {
   return `first_${linkId}`;
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * The id of a link a remote start made: a uuid the starting PC minted.
+ * Branded, so a spawnId (or any other string) cannot be passed where one is
+ * meant; `asSpawnLinkId` is the only way to get one.
+ */
+export type SpawnLinkId = string & { readonly __spawnLinkId: true };
+
+export function asSpawnLinkId(v: unknown): SpawnLinkId | null {
+  return typeof v === 'string' && UUID_RE.test(v) ? (v as SpawnLinkId) : null;
+}
 
 /** B -> A: what A may ask for. Ids and labels only, never a path. */
 export interface A2aSpawnTargetsV1 {

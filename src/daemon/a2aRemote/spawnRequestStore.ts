@@ -65,6 +65,8 @@ export interface SpawnRequestRecordV1 {
   linkId?: string;
   /** Starting only: when main claimed it (a start that never reports back is ended after a while). */
   claimedAt?: string;
+  /** Starting only: the root's path the claim checked; the start must still match it. */
+  claimedRoot?: string;
 }
 
 /** What a `started` decision keeps. */
@@ -184,7 +186,7 @@ export class SpawnRequestStore {
     if (!rec || !from.includes(rec.state)) return undefined;
     this.assertWritable();
     const at = new Date(this.now()).toISOString();
-    const { claimedAt: _claimed, ...rest } = rec;
+    const { claimedAt: _claimed, claimedRoot: _root, ...rest } = rec;
     const next: SpawnRequestRecordV1 = {
       ...rest,
       state: to,
@@ -235,6 +237,14 @@ export class SpawnRequestStore {
     return { kind: 'new', rec: structuredClone(rec) };
   }
 
+  /** A starting request's claim passed its checks against this root path. */
+  noteClaimedRoot(hostId: HostId, spawnId: string, rootPath: string): void {
+    const rec = this.records.get(key(hostId, spawnId));
+    if (!rec || rec.state !== 'starting') return;
+    this.assertWritable();
+    this.commit((m) => m.set(key(hostId, spawnId), { ...rec, claimedRoot: rootPath }));
+  }
+
   /** An open request was decided: keep the outcome, drop the text. `started` names the new pane. */
   decide(
     hostId: HostId,
@@ -245,7 +255,7 @@ export class SpawnRequestStore {
     const rec = this.records.get(key(hostId, spawnId));
     if (!rec || !OPEN.has(rec.state)) return undefined;
     this.assertWritable();
-    const { request: _dropped, claimedAt: _claimed, ...rest } = rec;
+    const { request: _dropped, claimedAt: _claimed, claimedRoot: _root, ...rest } = rec;
     const next: SpawnRequestRecordV1 = {
       ...rest,
       state: 'decided',
@@ -330,6 +340,7 @@ function coerceRecord(raw: unknown): SpawnRequestRecordV1 | null {
       v: 1, hostId, spawnId, fingerprint, agent: request.agent, rootId: request.folder.root,
       state: state as A2aSpawnRequestState, receivedAt, expiresAt, ...approvedAt,
       ...(state === 'starting' && isIsoString(raw['claimedAt']) ? { claimedAt: raw['claimedAt'] } : {}),
+      ...(state === 'starting' && typeof raw['claimedRoot'] === 'string' ? { claimedRoot: raw['claimedRoot'] } : {}),
       request,
     };
   }

@@ -87,7 +87,10 @@ export async function createSpawnWorktree(input: SpawnWorktreeInput, opts: Spawn
   const noFilters = drivers.flatMap((n) => ['smudge=', 'clean=', 'process=', 'required=false'].flatMap((v) => ['-c', `filter.${n}.${v}`]));
   // Nor does the checkout descend into submodules (their own config is not checked here).
   const noSubmodules = ['-c', 'submodule.recurse=false'];
-  const ownBefore = ownConfig(conf.stdout);
+  // The new branch tracks nothing, so the add writes no branch.<name>.* keys
+  // into the repository's config (a global autoSetupMerge would).
+  const noTracking = ['-c', 'branch.autoSetupMerge=false'];
+  const ownBefore = ownConfig(conf.stdout, branchFor(input.spawnId));
 
   // 4. The worktree.
   let root: string;
@@ -101,7 +104,7 @@ export async function createSpawnWorktree(input: SpawnWorktreeInput, opts: Spawn
     return failed(`the worktrees folder is not usable: ${(err as Error).message}`);
   }
   const worktreePath = path.join(root, `remote-${input.spawnId}`);
-  const branch = `wmux/remote/${input.spawnId}`;
+  const branch = branchFor(input.spawnId);
   if (worktreePath.length > MAX_WORKTREE_PATH_LEN) return failed(`worktree path exceeds ${MAX_WORKTREE_PATH_LEN} characters: ${worktreePath}`);
   // Never clean up what this call did not make.
   if (fs.existsSync(worktreePath)) return failed(`${worktreePath} already exists`);
@@ -110,7 +113,7 @@ export async function createSpawnWorktree(input: SpawnWorktreeInput, opts: Spawn
   const undo = (): Promise<void> => removeWorktree(git, root, worktreePath, branch);
 
   // No files yet: the config is read again first, as the new worktree sees it.
-  const add = await git(['worktree', 'add', '--no-checkout', '-b', branch, worktreePath, 'HEAD'], [...noSubmodules, ...noFilters]);
+  const add = await git(['worktree', 'add', '--no-checkout', '--no-track', '-b', branch, worktreePath, 'HEAD'], [...noSubmodules, ...noTracking, ...noFilters]);
   if (add.code !== 0) {
     await undo();
     return failed(`git worktree add failed: ${add.stderr.trim()}`);
@@ -126,7 +129,7 @@ export async function createSpawnWorktree(input: SpawnWorktreeInput, opts: Spawn
     return failed(`git config --list failed in the new worktree: ${confAfter.stderr.trim()}`);
   }
   const refusedAfter = parseGitConfigList(confAfter.stdout).find((e) => (e.scope === 'local' || e.scope === 'worktree') && REFUSED_OWN_KEYS.test(e.key));
-  if (ownConfig(confAfter.stdout) !== ownBefore || refusedAfter) {
+  if (ownConfig(confAfter.stdout, branch) !== ownBefore || refusedAfter) {
     await undo();
     return notAllowed(refusedAfter ? `the new worktree's git config sets ${refusedAfter.key}` : 'the repository\'s git config changed while the worktree was made');
   }
@@ -167,7 +170,12 @@ export async function removeSpawnWorktree(input: { repoPath: string; spawnId: st
   if (!isSpawnId(input.spawnId)) return;
   const root = await realpathOrNull(opts.worktreesRoot ?? path.join(getWmuxHomeDir(), 'worktrees'));
   if (root === null) return;
-  await removeWorktree(gitRunner(input.repoPath, opts), root, path.join(root, `remote-${input.spawnId}`), `wmux/remote/${input.spawnId}`);
+  await removeWorktree(gitRunner(input.repoPath, opts), root, path.join(root, `remote-${input.spawnId}`), branchFor(input.spawnId));
+}
+
+/** The branch a spawn's worktree is on. */
+function branchFor(spawnId: string): string {
+  return `wmux/remote/${spawnId}`;
 }
 
 type Git = (args: string[], pre?: string[], at?: string) => Promise<GitOut>;
@@ -205,10 +213,15 @@ async function removeWorktree(git: Git, root: string, worktreePath: string, bran
   }
 }
 
-/** The repository's own config (local scope, shared by its worktrees), as one comparable string. */
-function ownConfig(stdout: string): string {
+/**
+ * The repository's own config (local scope, shared by its worktrees), as one
+ * comparable string. Keys of `except` (the new branch's own `branch.<name>.*`,
+ * which git may write for it) are left out.
+ */
+function ownConfig(stdout: string, except?: string): string {
+  const own = except ? `branch.${except.toLowerCase()}.` : undefined;
   return parseGitConfigList(stdout)
-    .filter((e) => e.scope === 'local')
+    .filter((e) => e.scope === 'local' && !(own && e.key.startsWith(own)))
     .map((e) => `${e.scope}\0${e.key}\0${e.value}`)
     .join('\n');
 }

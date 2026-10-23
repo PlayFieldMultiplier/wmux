@@ -10,7 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { A2A_REMOTE_PROTOCOL, type A2aRemoteEnvelope } from '../../../shared/a2aRemote';
-import { spawnFirstMessageId, type A2aSpawnRequestState } from '../../../shared/a2aSpawn';
+import { asSpawnLinkId, spawnFirstMessageId, type A2aSpawnRequestState, type SpawnLinkId } from '../../../shared/a2aSpawn';
 import { A2aTaskService } from '../../a2a/A2aTaskService';
 import { AppendOnlyLog } from '../../eventlog/AppendOnlyLog';
 import { ExposureStore } from '../exposureStore';
@@ -57,7 +57,7 @@ function makeReceiver(over: Partial<SpawnReceiverDeps> = {}): A2aSpawnReceiver {
     liveSpawns: (h) => starter.liveCount(h),
     onChange: (_h, spawnId, state) => void changes.push({ spawnId, state }),
     hostName: () => 'HOME-A',
-    mint: (rec, req, end) => starter.mint(rec, req, end),
+    start: starter,
     abandon: (h, spawnId) => starter.abandon(h, spawnId),
     now: () => clock ?? Date.now(),
     log: quiet,
@@ -123,7 +123,7 @@ const codes = (env: A2aRemoteEnvelope): Array<string | undefined> =>
   sent.filter((s) => s.env.linkId === env.linkId).map((s) => s.env.spawnResult?.code);
 const stateOf = (env: A2aRemoteEnvelope): string | undefined => requests.get(HOST, env.linkId)?.state;
 /** The link a started request made (its id comes with the `started` answer). */
-const linkOf = (env: A2aRemoteEnvelope): string => requests.get(HOST, env.linkId)!.linkId!;
+const linkOf = (env: A2aRemoteEnvelope): SpawnLinkId => asSpawnLinkId(requests.get(HOST, env.linkId)!.linkId)!;
 
 async function arrive(env: A2aRemoteEnvelope, r = receiver): Promise<void> {
   expect(r.applyInbound(env, { hostId: HOST })).toEqual({ ok: true, duplicate: false });
@@ -358,43 +358,118 @@ describe('the link a start made', () => {
   });
 });
 
-describe('a start that does not finish leaves no link', () => {
-  it('the started answer not stored: the link and its exposure go again', async () => {
+describe('the start handshake: reserved, stored, then made reachable', () => {
+  async function claimed(): Promise<A2aRemoteEnvelope> {
     await allow();
     const env = request();
     await arrive(env);
     await receiver.decideCard(HOST, env.linkId, 'once');
-    await receiver.claim(HOST, env.linkId);
-    // The first write after linking (the `started` answer) fails once.
+    expect(await receiver.claim(HOST, env.linkId)).toMatchObject({ ok: true });
+    return env;
+  }
+  const nothingMade = (pane: string): void => {
+    expect(links.list()).toEqual([]);
+    expect(exposures.isPaneExposed(HOST, `ws-${pane}`, pane)).toBe(false);
+    expect(tasks.listRemotePending()).toEqual([]);
+    expect(starter.liveCount()).toBe(0);
+  };
+
+  it('the started answer not stored: nothing was made reachable, and nothing is left', async () => {
+    const env = await claimed();
     vi.spyOn(requests, 'decide').mockImplementationOnce(() => { throw new Error('disk full'); });
-    expect(await receiver.started(HOST, env.linkId, { workspaceId: 'ws-x', paneId: 'pane-x' })).toMatchObject({ ok: false });
-    expect(links.list().filter((l) => l.state === 'active')).toEqual([]);
-    expect(exposures.isPaneExposed(HOST, 'ws-x', 'pane-x')).toBe(false);
+    expect(await receiver.started(HOST, env.linkId, { workspaceId: 'ws-x', paneId: 'x' })).toMatchObject({ ok: false });
+    nothingMade('x');
     expect(codes(env).at(-1)).toBe('failed');
   });
 
-  it('a daemon that stopped after linking and before storing the answer ends the link on recovery', async () => {
+  it('main gave up while the start was being linked: it refuses itself before storing anything', async () => {
+    const env = await claimed();
+    const giveUp = makeReceiver({
+      start: {
+        ...starter,
+        prepare: (rec, req, end) => {
+          const id = starter.prepare(rec, req, end);
+          // main's failed() arrives while this start is in flight
+          expect(giveUp.failed(HOST, env.linkId, 'failed')).toEqual({ ok: true });
+          return id;
+        },
+        commit: (id) => starter.commit(id),
+        discard: (id) => starter.discard(id),
+        activate: (id) => starter.activate(id),
+        isActive: (id) => starter.isActive(id),
+      },
+    });
+    expect(await giveUp.started(HOST, env.linkId, { workspaceId: 'ws-z', paneId: 'z' })).toEqual({ ok: false, error: 'the start was abandoned' });
+    nothingMade('z');
+    expect(codes(env).at(-1)).toBe('failed');
+  });
+
+  it('stored, but making it reachable failed: no answer yet; the sweep finishes it, then answers', async () => {
+    const env = await claimed();
+    vi.spyOn(tasks, 'createTask').mockResolvedValueOnce({ ok: false, error: 'ledger busy' } as never);
+    expect(await receiver.started(HOST, env.linkId, { workspaceId: 'ws-w', paneId: 'w' })).toEqual({ ok: true });
+    expect(stateOf(env)).toBe('decided');
+    expect(codes(env)).not.toContain('started');
+    // A resend meanwhile is not told `started` before the agent is reachable.
+    expect(receiver.applyInbound(env, { hostId: HOST })).toEqual({ ok: false, error: 'unavailable' });
+    receiver.sweep();
+    await vi.waitFor(() => expect(codes(env).at(-1)).toBe('started'), { timeout: 5_000 });
+    const linkId = linkOf(env);
+    expect(links.get(linkId)?.state).toBe('active');
+    expect(tasks.getTask(remoteTaskId(linkId, spawnFirstMessageId(linkId)))).toBeDefined();
+  });
+
+  it('a daemon that stopped after storing the start, before making it reachable, finishes it on recovery', async () => {
+    const env = await claimed();
+    const rec = requests.get(HOST, env.linkId)!;
+    const linkId = starter.prepare(rec, rec.request!, { workspaceId: 'ws-v', paneId: 'v' });
+    requests.decide(HOST, env.linkId, 'started', { endpoint: { kind: 'pane', workspaceId: 'ws-v', paneId: 'v' }, linkVersion: 1, linkId });
+    starter.commit(linkId);
+    expect(links.get(linkId)).toBeUndefined();
+    const after = makeReceiver();
+    after.recover();
+    await vi.waitFor(() => expect(codes(env).at(-1)).toBe('started'), { timeout: 5_000 });
+    expect(links.get(linkId)?.state).toBe('active');
+    expect(exposures.isPaneExposed(HOST, 'ws-v', 'v')).toBe(true);
+    after.stop();
+  });
+
+  it('a daemon that stopped after reserving, before storing, ends the start failed and drops the reservation', async () => {
+    const env = await claimed();
+    const rec = requests.get(HOST, env.linkId)!;
+    starter.prepare(rec, rec.request!, { workspaceId: 'ws-u', paneId: 'u' });
+    makeReceiver().recover();
+    expect(codes(env).at(-1)).toBe('failed');
+    nothingMade('u');
+    expect(new SpawnLinkStore({ dir: a2aDir, scheduleHarden: quiet }).list()).toEqual([]);
+  });
+
+  it('a link that will not end is kept as ending and retried until it does', async () => {
     await allow();
     const env = request();
-    await arrive(env);
-    await receiver.decideCard(HOST, env.linkId, 'once');
-    await receiver.claim(HOST, env.linkId);
-    // Linked, never answered: the request is still starting.
-    const rec = requests.get(HOST, env.linkId)!;
-    const { linkId } = await starter.mint(rec, rec.request!, { workspaceId: 'ws-y', paneId: 'pane-y' });
+    await startOne(env, 'e');
+    const linkId = linkOf(env);
+    vi.spyOn(links, 'revoke').mockImplementationOnce(() => { throw new Error('links.json not writable'); });
+    starter.abandon(HOST, env.linkId);
     expect(links.get(linkId)?.state).toBe('active');
-    makeReceiver().recover();
+    expect(new SpawnLinkStore({ dir: a2aDir, scheduleHarden: quiet }).get(linkId)).toMatchObject({ ending: true });
+    starter.reconcile();
     expect(links.get(linkId)?.state).toBe('revoked');
-    expect(exposures.isPaneExposed(HOST, 'ws-y', 'pane-y')).toBe(false);
-    expect(codes(env).at(-1)).toBe('failed');
+    expect(exposures.isPaneExposed(HOST, 'ws-e', 'e')).toBe(false);
+  });
+
+  it('the root must still be the folder the claim checked', async () => {
+    const env = await claimed();
+    const other = path.join(dir, 'other');
+    fs.mkdirSync(path.join(other, 'apps'), { recursive: true });
+    execFileSync('git', ['init', '-q', other]);
+    await allow({ roots: [{ id: 'web', label: 'Web', path: other }] });
+    expect(await receiver.started(HOST, env.linkId, { workspaceId: 'ws-t', paneId: 't' })).toEqual({ ok: false, error: 'folder-not-allowed' });
+    nothingMade('t');
   });
 
   it('a start main never reports back on ends failed after its deadline, freeing its slot', async () => {
-    await allow();
-    const env = request({ expiresIn: 72 * 3600_000 - 60_000 });
-    await arrive(env);
-    await receiver.decideCard(HOST, env.linkId, 'once');
-    await receiver.claim(HOST, env.linkId);
+    const env = await claimed();
     clock = Date.now() + 9 * 60_000;
     receiver.sweep();
     expect(stateOf(env)).toBe('starting');
@@ -402,6 +477,28 @@ describe('a start that does not finish leaves no link', () => {
     receiver.sweep();
     expect(codes(env).at(-1)).toBe('failed');
     expect(requests.startingCount(HOST)).toBe(0);
+  });
+
+  it('a claim whose checks could not run now goes back to approved, and the next one starts it', async () => {
+    await allow();
+    let calls = 0;
+    const r = makeReceiver({ agentInstalled: async () => { calls += 1; if (calls === 2) throw new Error('PATH probe crashed'); return true; } });
+    const env = request();
+    await arrive(env, r);
+    await r.decideCard(HOST, env.linkId, 'once');
+    expect(await r.claim(HOST, env.linkId)).toMatchObject({ ok: false });
+    expect(stateOf(env)).toBe('approved');
+    expect(await r.claim(HOST, env.linkId)).toMatchObject({ ok: true });
+  });
+
+  it('a start counts once: while reserved it is starting, once stored it is running', async () => {
+    const env = await claimed();
+    const rec = requests.get(HOST, env.linkId)!;
+    const linkId = starter.prepare(rec, rec.request!, { workspaceId: 'ws-s', paneId: 's' });
+    expect([starter.liveCount(HOST), requests.startingCount(HOST)]).toEqual([0, 1]);
+    requests.decide(HOST, env.linkId, 'started', { endpoint: { kind: 'pane', workspaceId: 'ws-s', paneId: 's' }, linkVersion: 1, linkId });
+    starter.commit(linkId);
+    expect([starter.liveCount(HOST), requests.startingCount(HOST)]).toEqual([1, 0]);
   });
 });
 
@@ -486,7 +583,8 @@ describe('the spawn-links record', () => {
     const store = new SpawnLinkStore({ dir: a2aDir, scheduleHarden: quiet, write: () => undefined });
     const row = (i: number) => ({
       v: 1 as const, linkId: crypto.randomUUID(), hostId: HOST, spawnId: `sp-${crypto.randomUUID()}`, workspaceId: `ws-${i}`, paneId: `p-${i}`,
-      agent: 'claude' as const, rootId: 'web', folder: repo, addedExposure: false, addedWorkspace: false, startedAt: new Date().toISOString(),
+      agent: 'claude' as const, rootId: 'web', folder: repo, remote: { workspaceId: 'ws-a', paneId: 'pane-a' },
+      addedExposure: false, addedWorkspace: false, startedAt: new Date().toISOString(), phase: 'active' as const,
     });
     const firstRow = row(0);
     store.add(firstRow);

@@ -100,8 +100,11 @@ describe('remote-spawn card', () => {
     expect(container.querySelector('[data-remote-spawn-mode-note]')?.textContent).toBe('The mode applies to Claude only.');
   });
 
-  it('the sentence follows the follow-up setting', () => {
+  it('the sentence follows the follow-up setting, and says the agent works with the repository\'s own hooks', () => {
     expect(meaning()).toBe('Allowing this lets DESK run this agent as you in this folder. Each later instruction asks again.');
+    expect(container.querySelector('[data-remote-spawn-own-hooks]')?.textContent).toBe(
+      'The agent works in your repository with its own hooks and git settings, like any agent you start there.',
+    );
     show(prompt({ followUps: 'direct' }));
     expect(meaning()).toBe(
       'Allowing this lets DESK run this agent as you in this folder. Its later instructions arrive without asking again.',
@@ -125,6 +128,7 @@ describe('remote-spawn card', () => {
     expect(container.querySelector('[data-remote-spawn-prompt]')?.textContent).toBe('Now run the e2e suite');
     expect(button('Always allow')).toBeUndefined();
     expect(button('Allow once')).toBeTruthy();
+    expect(container.querySelector('[data-remote-spawn-own-hooks]')).toBeNull();
   });
 
   it('Deny resolves false', () => {

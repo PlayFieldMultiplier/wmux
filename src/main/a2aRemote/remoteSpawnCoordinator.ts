@@ -7,6 +7,7 @@ import {
   type A2aSpawnCardV1,
   type A2aSpawnClaimResult,
   type A2aSpawnFollowUpCardV1,
+  type A2aSpawnRequestSummary,
   type A2aSpawnWork,
 } from '../../shared/a2aSpawn';
 import type { ApprovalHandle, RemoteSpawnPromptInfo } from '../mcp/ApprovalQueue';
@@ -251,7 +252,7 @@ export class RemoteSpawnCoordinator {
     // What this start made so far, taken back if it does not finish.
     let tree: { repoPath: string; spawnId: string } | null = null;
     let workspaceId: string | null = null;
-    const undo = async (code: 'folder-not-allowed' | 'failed', why: string): Promise<void> => {
+    const undo = async (code: 'folder-not-allowed' | 'failed', why: string, refused = false): Promise<void> => {
       this.deps.log('warn', `[remote-spawn] ${spawnId} from ${hostId}: not started (${code}): ${why}`);
       if (workspaceId) {
         // Closing the workspace ends its pane and the agent in it.
@@ -262,7 +263,7 @@ export class RemoteSpawnCoordinator {
         await (this.deps.removeWorktree ?? removeSpawnWorktree)(tree).catch((err: unknown) =>
           this.deps.log('warn', `[remote-spawn] ${spawnId}: worktree not removed: ${errText(err)}`));
       }
-      await this.deps.daemonRpc(A2A_SPAWN_RPC.failed, { hostId, spawnId, code }).catch(() => undefined);
+      if (!refused) await this.deps.daemonRpc(A2A_SPAWN_RPC.failed, { hostId, spawnId, code }).catch(() => undefined);
     };
     try {
       const row = agentRow(claim.agent);
@@ -295,7 +296,18 @@ export class RemoteSpawnCoordinator {
       try {
         res = await this.deps.daemonRpc(A2A_SPAWN_RPC.started, { hostId, spawnId, ...ws });
       } catch (err) {
-        return await undo('failed', `not linked: ${errText(err)}`);
+        // No answer: the daemon may have stored the start anyway. Ask before
+        // taking anything down; a start it stored stands (it finishes linking
+        // on its own), and one it cannot tell about is left for the person.
+        const stored = await this.startStored(hostId, spawnId);
+        if (stored === false) {
+          // Refused before anything is taken down: a start still being linked
+          // gives itself up, and one stored meanwhile refuses this and stands.
+          const refused = await this.deps.daemonRpc(A2A_SPAWN_RPC.failed, { hostId, spawnId, code: 'failed' }).then(isOk, () => false);
+          if (refused) return await undo('failed', `not linked: ${errText(err)}`, true);
+        }
+        this.deps.log('warn', `[remote-spawn] ${spawnId} from ${hostId}: started, ${stored ? 'stored by the daemon' : 'not confirmed'}; kept: ${errText(err)}`);
+        return;
       }
       if (!isOk(res)) return await undo('failed', `not linked: ${errorOf(res)}`);
       this.deps.log('info', `[remote-spawn] ${spawnId} from ${hostId}: started ${claim.agent} in workspace ${ws.workspaceId}`);
@@ -303,6 +315,18 @@ export class RemoteSpawnCoordinator {
       await undo('failed', `start failed: ${errText(err)}`);
     } finally {
       this.starting.delete(key);
+    }
+  }
+
+  /** Whether the daemon stored this request as started; undefined when it cannot be asked. */
+  private async startStored(hostId: string, spawnId: string): Promise<boolean | undefined> {
+    try {
+      const res = (await this.deps.daemonRpc(A2A_SPAWN_RPC.requestsList, {})) as { requests?: A2aSpawnRequestSummary[] };
+      if (!Array.isArray(res?.requests)) return undefined;
+      const rec = res.requests.find((r) => r.hostId === hostId && r.spawnId === spawnId);
+      return rec?.state === 'decided' && rec.code === 'started';
+    } catch {
+      return undefined;
     }
   }
 

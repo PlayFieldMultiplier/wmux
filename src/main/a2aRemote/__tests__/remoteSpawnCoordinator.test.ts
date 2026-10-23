@@ -45,6 +45,8 @@ function rig(work: () => A2aSpawnWork, over: {
   render?: () => unknown;
   worktree?: () => unknown;
   started?: () => unknown;
+  requests?: () => unknown;
+  failed?: () => unknown;
   retryMs?: number;
 } = {}): Rig {
   let listener: ((e: { type?: unknown }) => void) | undefined;
@@ -56,6 +58,8 @@ function rig(work: () => A2aSpawnWork, over: {
     if (method === A2A_SPAWN_RPC.work) return work();
     if (method === A2A_SPAWN_RPC.claim) return over.claim ? over.claim() : { ok: true, claim };
     if (method === A2A_SPAWN_RPC.started && over.started) return over.started();
+    if (method === A2A_SPAWN_RPC.requestsList && over.requests) return over.requests();
+    if (method === A2A_SPAWN_RPC.failed && over.failed) return over.failed();
     return { ok: true };
   });
   const render = vi.fn(async (method: string) => {
@@ -195,7 +199,8 @@ describe('starting an approved request', () => {
       [{ render: () => { throw new Error('RPC timeout'); } }, 'failed', { closed: false, removed: true }],
       // The daemon refused to link it (the PC was turned off meanwhile).
       [{ started: () => ({ ok: false, error: 'not-allowed' }) }, 'failed', { closed: true, removed: true }],
-      [{ started: () => { throw new Error('daemon gone'); } }, 'failed', { closed: true, removed: true }],
+      // No answer, and the daemon has it as still starting.
+      [{ started: () => { throw new Error('daemon gone'); }, requests: () => ({ requests: [{ hostId: HOST, spawnId: SPAWN, state: 'starting' }] }) }, 'failed', { closed: true, removed: true }],
     ];
     for (const [over, code, left] of cases) {
       const r = rig(() => ({ ...empty(), approved: [{ hostId: HOST, spawnId: SPAWN }] }), over);
@@ -206,6 +211,41 @@ describe('starting an approved request', () => {
       expect(r.removed).toEqual(left.removed ? [{ repoPath: '/repo', spawnId: SPAWN }] : []);
       r.coord.stop();
     }
+  });
+
+  it('a start with no answer is asked about before anything is taken down', async () => {
+    const lost = { started: () => { throw new Error('RPC timeout'); } };
+    const settle = async (over: Parameters<typeof rig>[1]): Promise<Rig> => {
+      const r = rig(() => ({ ...empty(), approved: [{ hostId: HOST, spawnId: SPAWN }] }), { ...lost, ...over });
+      r.coord.start();
+      await vi.waitFor(() => expect(calls(r, A2A_SPAWN_RPC.requestsList)).toHaveLength(1), { timeout: 5_000 });
+      await r.coord.whenIdle();
+      return r;
+    };
+    const kept = (r: Rig): void => {
+      expect(r.render.mock.calls.filter((c) => c[0] === 'workspace.close')).toEqual([]);
+      expect(r.removed).toEqual([]);
+    };
+    // Stored as started: it stands, and nothing is refused.
+    const stored = await settle({ requests: () => ({ requests: [{ hostId: HOST, spawnId: SPAWN, state: 'decided', code: 'started' }] }) });
+    kept(stored);
+    expect(calls(stored, A2A_SPAWN_RPC.failed)).toEqual([]);
+    // The daemon cannot be asked: left for the person, not taken down.
+    const unknown = await settle({ requests: () => { throw new Error('daemon gone'); } });
+    kept(unknown);
+    expect(calls(unknown, A2A_SPAWN_RPC.failed)).toEqual([]);
+    // Not stored, but it was stored by the time the refusal arrived: the refusal is turned down, and it stands.
+    const late = await settle({
+      requests: () => ({ requests: [{ hostId: HOST, spawnId: SPAWN, state: 'starting' }] }),
+      failed: () => ({ ok: false, error: 'this request is not starting' }),
+    });
+    kept(late);
+    expect(calls(late, A2A_SPAWN_RPC.failed)).toHaveLength(1);
+    // Not stored, and the refusal taken: taken down, refused once.
+    const gone = await settle({ requests: () => ({ requests: [{ hostId: HOST, spawnId: SPAWN, state: 'starting' }] }) });
+    expect(gone.render.mock.calls.filter((c) => c[0] === 'workspace.close').map((c) => c[1])).toEqual([{ id: 'ws-new' }]);
+    expect(gone.removed).toEqual([{ repoPath: '/repo', spawnId: SPAWN }]);
+    expect(calls(gone, A2A_SPAWN_RPC.failed)).toEqual([{ hostId: HOST, spawnId: SPAWN, code: 'failed' }]);
   });
 
   it('a claim refused with a code is left alone; one that could not be checked now is tried again', async () => {

@@ -312,6 +312,9 @@ function RemoteSpawnDetails({ spawn, agent }: { spawn: RemoteSpawnPromptInfo; ag
         </pre>
       </div>
       <p className="m-0 text-[13px] text-[var(--text-sub)]" data-remote-spawn-meaning>{meaning}</p>
+      {spawn.followUp ? null : (
+        <p className="m-0 text-[13px] text-[var(--text-sub)]" data-remote-spawn-own-hooks>{t('remoteSpawn.card.ownHooks')}</p>
+      )}
     </>
   );
 }

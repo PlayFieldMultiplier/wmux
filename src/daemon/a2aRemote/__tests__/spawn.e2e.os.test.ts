@@ -103,7 +103,7 @@ async function makePc(name: string, opts: { holdAgentCheck?: boolean; startable?
     isOutstanding: () => true,
     onResult: (from, result) => results.push({ from, result }),
     onTargets: (from, t) => targets.push({ from, targets: t }),
-    ...(started ? { mint: (rec, req, end) => started.mint(rec, req, end), liveSpawns: (h) => started.liveCount(h) } : {}),
+    ...(started ? { start: started, abandon: (h, id) => started.abandon(h, id), liveSpawns: (h) => started.liveCount(h) } : {}),
     log: quiet,
   });
   const routes = createA2aRoutes({ exposures, panes, links, broadcast: quiet, log: quiet });

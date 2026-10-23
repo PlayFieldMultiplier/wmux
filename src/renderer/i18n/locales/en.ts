@@ -5735,6 +5735,7 @@ export const en = {
   'remoteSpawn.card.prompt': "Instruction",
   'remoteSpawn.card.meaningDirect': "Allowing this lets {hostName} run this agent as you in this folder. Its later instructions arrive without asking again.",
   'remoteSpawn.card.meaningAsk': "Allowing this lets {hostName} run this agent as you in this folder. Each later instruction asks again.",
+  'remoteSpawn.card.ownHooks': "The agent works in your repository with its own hooks and git settings, like any agent you start there.",
   'remoteSpawn.card.meaningFollowUp': "Allowing this sends this instruction to the agent {hostName} started here.",
   'remoteSpawn.card.allowOnce': "Allow once",
   'remoteSpawn.card.always': "Always allow this PC, folder and agent",

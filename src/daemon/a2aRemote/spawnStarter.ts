@@ -3,7 +3,9 @@ import path from 'node:path';
 import {
   A2A_SPAWN_RPC,
   normalizeSpawnSub,
+  asSpawnLinkId,
   spawnFirstMessageId,
+  type SpawnLinkId,
   type A2aSpawnFollowUpCardV1,
   type A2aSpawnRequestV1,
   type A2aSpawnVerdict,
@@ -54,8 +56,8 @@ import { errMsg, isSafeId } from './storeFile';
 
 export interface SpawnStarterDeps {
   links: Pick<LinkStore, 'get' | 'list' | 'createSpawned' | 'revoke'>;
-  spawnLinks: Pick<SpawnLinkStore, 'get' | 'has' | 'list' | 'add' | 'remove'>;
-  exposures: Pick<ExposureStore, 'addPane' | 'removePane' | 'isPaneExposed'>;
+  spawnLinks: Pick<SpawnLinkStore, 'get' | 'has' | 'list' | 'add' | 'update' | 'remove'>;
+  exposures: Pick<ExposureStore, 'addPane' | 'removePane' | 'isPaneExposed' | 'get'>;
   taskService: Pick<A2aTaskService, 'createTask' | 'listRemoteHeld'>;
   policy: Pick<SpawnPolicyStore, 'get'>;
   hostName: (hostId: HostId) => string | undefined;
@@ -91,86 +93,127 @@ export class A2aSpawnStarter {
     return this.isSpawnLink(linkId) && this.deps.policy.get().followUps === 'ask';
   }
 
-  /** Live links remote starts made here: of `hostId`, or of every PC. */
+  /**
+   * Agents remote starts made here that run, or are about to: of `hostId`,
+   * or of every PC. A start still only prepared is counted by the request
+   * (it is starting there), not here, so nothing counts twice.
+   */
   liveCount(hostId?: HostId): number {
     return this.deps.spawnLinks.list().filter((r) => {
       if (hostId !== undefined && r.hostId !== hostId) return false;
+      if (r.ending || r.phase === 'prepared') return false;
+      if (r.phase === 'committed') return true;
       const link = this.deps.links.get(r.linkId);
       return link !== undefined && !TERMINAL_LINK.has(link.state);
     }).length;
   }
 
-  async mint(rec: SpawnRequestRecordV1, request: A2aSpawnRequestV1, end: { workspaceId: string; paneId: string }): Promise<{ linkId: string; linkVersion: number }> {
+  /** Activated: the link, the exposure and the first task exist (the `started` answer may go). */
+  isActive(linkId: string): boolean {
+    return this.deps.spawnLinks.get(linkId)?.phase === 'active';
+  }
+
+  /**
+   * Phase 1 of a start: reserve a fresh link id (nothing the asker sent
+   * predicts it) and record what activation will need. Nothing exists yet
+   * that the asker could reach: no link, no exposure, no task. Throws when
+   * it cannot be recorded.
+   */
+  prepare(rec: SpawnRequestRecordV1, request: A2aSpawnRequestV1, end: { workspaceId: string; paneId: string }): SpawnLinkId {
     if (!isSafeId(end.workspaceId) || !isSafeId(end.paneId)) throw new Error('the started pane is not named');
-    const { hostId, spawnId } = rec;
-    // A fresh id nothing the asker sent predicts, free in both stores before anything is written.
-    let linkId = crypto.randomUUID();
-    while (this.deps.links.get(linkId) || this.deps.spawnLinks.has(linkId)) linkId = crypto.randomUUID();
+    let linkId = asSpawnLinkId(crypto.randomUUID());
+    while (!linkId || this.deps.links.get(linkId) || this.deps.spawnLinks.has(linkId)) linkId = asSpawnLinkId(crypto.randomUUID());
     const policy = this.deps.policy.get();
     const root = policy.roots.find((r) => r.id === request.folder.root);
     const sub = normalizeSpawnSub(request.folder.sub) ?? '';
-    const folder = root ? (sub ? path.join(root.path, ...sub.split('/')) : root.path) : '';
+    this.deps.spawnLinks.add({
+      v: 1, linkId, hostId: rec.hostId, spawnId: rec.spawnId, workspaceId: end.workspaceId, paneId: end.paneId, agent: request.agent,
+      rootId: request.folder.root, folder: root ? (sub ? path.join(root.path, ...sub.split('/')) : root.path) : '',
+      remote: { workspaceId: request.from.workspaceId, paneId: request.from.paneId }, text: request.text,
+      addedExposure: false, addedWorkspace: false, startedAt: new Date(this.now()).toISOString(), phase: 'prepared',
+    });
+    return linkId;
+  }
 
-    const shown = this.deps.exposures.isPaneExposed(hostId, end.workspaceId, end.paneId);
-    const added = shown ? { added: false, addedWorkspace: false } : this.deps.exposures.addPane(hostId, end.workspaceId, end.paneId);
-    let recorded = false;
-    let link: A2aLinkRecordV1;
-    try {
-      this.deps.spawnLinks.add({
-        v: 1, linkId, hostId, spawnId, workspaceId: end.workspaceId, paneId: end.paneId, agent: request.agent,
-        rootId: request.folder.root, folder, addedExposure: added.added, addedWorkspace: added.addedWorkspace,
-        startedAt: new Date(this.now()).toISOString(),
-      });
-      recorded = true;
-      link = this.deps.links.createSpawned({
-        linkId,
-        local: { kind: 'pane', workspaceId: end.workspaceId, paneId: end.paneId },
-        remote: { hostId, kind: 'pane', workspaceId: request.from.workspaceId, paneId: request.from.paneId },
-        allow: { inbound: true, outbound: false },
-        proposer: 'remote',
-      });
-    } catch (err) {
-      // Only what this call made goes again.
-      if (recorded) this.forget(linkId);
-      if (added.added) this.unexpose(hostId, end, added.addedWorkspace);
-      throw err;
-    }
+  /** Phase 2 done (the request is stored `started`): activation may run, and is owed from now on. */
+  commit(linkId: SpawnLinkId): void {
+    this.deps.spawnLinks.update(linkId, { phase: 'committed' });
+  }
 
-    const messageId = spawnFirstMessageId(linkId);
-    const taskId = remoteTaskId(linkId, messageId);
-    let created: Awaited<ReturnType<SpawnStarterDeps['taskService']['createTask']>>;
-    try {
-      created = await this.deps.taskService.createTask(
+  /** A prepared start that will not be committed: its reservation goes (nothing else was made). */
+  discard(linkId: SpawnLinkId): void {
+    if (this.deps.spawnLinks.get(linkId)?.phase === 'prepared') this.forget(linkId);
+  }
+
+  /**
+   * Phase 3, once the start is committed: show the pane to that PC, create
+   * the link active, queue the prompt as its first task (typed into the pane
+   * once its agent is ready, never on a command line). Each step is done
+   * only if missing, so a retry (after a failure or a restart) finishes it.
+   * The exposure is recorded before it is added, so it is always put back.
+   */
+  async activate(linkId: SpawnLinkId): Promise<void> {
+    let rec = this.deps.spawnLinks.get(linkId);
+    if (!rec || rec.ending || rec.phase === 'prepared') throw new Error(`spawn link ${linkId}: not committed`);
+    const { hostId } = rec;
+    const end = { workspaceId: rec.workspaceId, paneId: rec.paneId };
+    if (rec.phase === 'committed') {
+      if (!this.deps.exposures.isPaneExposed(hostId, end.workspaceId, end.paneId)) {
+        if (!rec.addedExposure) {
+          const addedWorkspace = !(this.deps.exposures.get(hostId)?.workspaceIds.includes(end.workspaceId) ?? false);
+          rec = this.deps.spawnLinks.update(linkId, { addedExposure: true, addedWorkspace });
+        }
+        this.deps.exposures.addPane(hostId, end.workspaceId, end.paneId);
+      }
+      let link = this.deps.links.get(linkId);
+      if (!link) {
+        link = this.deps.links.createSpawned({
+          linkId,
+          local: { kind: 'pane', ...end },
+          remote: { hostId, kind: 'pane', ...rec.remote },
+          allow: { inbound: true, outbound: false },
+          proposer: 'remote',
+        });
+      }
+      if (TERMINAL_LINK.has(link.state)) throw new Error(`spawn link ${linkId}: ended before it was activated`);
+      const messageId = spawnFirstMessageId(linkId);
+      const text = rec.text ?? '';
+      const created = await this.deps.taskService.createTask(
         {
-          id: taskId,
-          title: request.text.split('\n', 1)[0].slice(0, 100),
+          id: remoteTaskId(linkId, messageId),
+          title: text.split('\n', 1)[0].slice(0, 100),
           from: { workspaceId: remoteWorkspaceId(linkId), name: this.deps.aliasFor(link) },
           to: { workspaceId: end.workspaceId, name: this.deps.localWorkspaceName?.(end.workspaceId) ?? end.workspaceId, paneId: end.paneId },
-          history: [{ kind: 'message', messageId, role: 'user', parts: [{ kind: 'text', text: request.text }] }],
+          history: [{ kind: 'message', messageId, role: 'user', parts: [{ kind: 'text', text }] }],
           remote: { v: 1, linkId, hostId, messageId, direction: 'inbound', delivered: false, kind: 'pane' },
         },
         { conflictOnBodyMismatch: true },
       );
-    } catch (err) {
-      created = { ok: false, error: errMsg(err) } as typeof created;
+      if (!created.ok) throw new Error(`the prompt was not queued: ${created.error}`);
+      this.deps.spawnLinks.update(linkId, { phase: 'active', dropText: true });
     }
-    if (!created.ok) {
-      // The agent runs but would never get its prompt: end the link (its
-      // transition puts the exposure back) rather than leave it half made.
-      this.endLink(linkId, spawnId);
-      throw new Error(`the prompt was not queued: ${created.error}`);
-    }
-    this.deps.broadcast({ type: A2A_REMOTE_INBOUND_EVENT, taskId });
-    return { linkId, linkVersion: link.version };
+    this.deps.broadcast({ type: A2A_REMOTE_INBOUND_EVENT, taskId: remoteTaskId(linkId, spawnFirstMessageId(linkId)) });
   }
 
   /**
-   * A start that did not finish: end the link it made, if any (its
-   * transition puts the exposure back and drops the record).
+   * A start that did not finish: a prepared one is only dropped; one that
+   * got further is marked `ending` (durably) and its link ended, retried by
+   * `reconcile` until it is.
    */
   abandon(hostId: HostId, spawnId: string): void {
     for (const rec of this.deps.spawnLinks.list()) {
-      if (rec.hostId === hostId && rec.spawnId === spawnId) this.endLink(rec.linkId, spawnId);
+      if (rec.hostId !== hostId || rec.spawnId !== spawnId) continue;
+      const linkId = rec.linkId as SpawnLinkId;
+      if (rec.phase === 'prepared') {
+        this.discard(linkId);
+        continue;
+      }
+      try {
+        this.deps.spawnLinks.update(linkId, { ending: true });
+      } catch (err) {
+        this.deps.log('error', `[a2a-remote] spawn ${spawnId}: link ${linkId} not marked ending: ${errMsg(err)}`);
+      }
+      this.endLink(linkId);
     }
   }
 
@@ -184,24 +227,32 @@ export class A2aSpawnStarter {
   }
 
   /**
-   * Spawn links that ended (or vanished): put back their exposure and drop
-   * them. On start, on every link ending, and periodically, so a put-back
-   * that could not be done or written is retried.
+   * Spawn links that ended, vanished, or are being ended: end the link if it
+   * still lives, put back the exposure, drop the record. On start, on every
+   * link ending, and periodically, so whatever could not be done or written
+   * is retried. A committed start whose activation is still owed is left to
+   * the receiver.
    */
   reconcile(): void {
     for (const rec of this.deps.spawnLinks.list()) {
       const link = this.deps.links.get(rec.linkId);
-      if (!link || TERMINAL_LINK.has(link.state)) this.end(rec.linkId);
+      if (rec.ending && link && !TERMINAL_LINK.has(link.state)) {
+        this.endLink(rec.linkId as SpawnLinkId);
+        continue;
+      }
+      const gone = link ? TERMINAL_LINK.has(link.state) : rec.phase === 'active' || rec.ending === true;
+      if (gone) this.end(rec.linkId);
     }
   }
 
-  private endLink(linkId: string, spawnId: string): void {
+  private endLink(linkId: SpawnLinkId): void {
     const link = this.deps.links.get(linkId);
     try {
       if (link && !TERMINAL_LINK.has(link.state)) this.deps.links.revoke(linkId, 'local');
       else this.reconcile();
     } catch (err) {
-      this.deps.log('error', `[a2a-remote] spawn ${spawnId}: link ${linkId} not ended: ${errMsg(err)}`);
+      // Kept `ending`: reconcile tries again.
+      this.deps.log('error', `[a2a-remote] spawn link ${linkId} not ended yet: ${errMsg(err)}`);
     }
   }
 

@@ -162,6 +162,13 @@ describe('createSpawnWorktree', () => {
     expect(fs.readFileSync(path.join(spawnDir(), 'README.md'), 'utf8')).toBe('r\n');
   });
 
+  it('works with a global branch.autoSetupMerge, which would otherwise write tracking keys for the new branch', async () => {
+    fs.writeFileSync(globalConfig, '[branch]\n\tautoSetupMerge = always\n');
+    const r = await create();
+    expect(r.ok).toBe(true);
+    expect(g(repo, 'config', '--local', '--list').split('\n').filter((l) => l.startsWith('branch.wmux/'))).toEqual([]);
+  });
+
   it('runs no filter a global includeIf.onbranch defines for the new branch only', async () => {
     // Applies once wmux/remote/<id> exists: after the config was first read.
     fs.writeFileSync(path.join(repo, '.gitattributes'), '* filter=late\n');

@@ -5695,6 +5695,7 @@ export const pl = {
   'remoteSpawn.card.prompt': "Polecenie",
   'remoteSpawn.card.meaningDirect': "Zezwolenie pozwoli {hostName} uruchamiać tego agenta jako Ty w tym folderze. Kolejne polecenia dotrą bez ponownego pytania.",
   'remoteSpawn.card.meaningAsk': "Zezwolenie pozwoli {hostName} uruchamiać tego agenta jako Ty w tym folderze. Każde kolejne polecenie zapyta ponownie.",
+  'remoteSpawn.card.ownHooks': "Agent pracuje w Twoim repozytorium z jego własnymi hookami i ustawieniami git, jak każdy agent uruchomiony tutaj.",
   'remoteSpawn.card.meaningFollowUp': "Zezwolenie wyśle to polecenie do agenta, którego {hostName} uruchomił tutaj.",
   'remoteSpawn.card.allowOnce': "Zezwól raz",
   'remoteSpawn.card.always': "Zawsze zezwalaj temu komputerowi, folderowi i agentowi",

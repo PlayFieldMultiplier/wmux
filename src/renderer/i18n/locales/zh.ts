@@ -4773,6 +4773,7 @@ export const zh = {
   'remoteSpawn.card.prompt': "指令",
   'remoteSpawn.card.meaningDirect': "允许后，{hostName} 可以在此文件夹中以你的身份运行这个代理。之后的指令将直接送达，不再询问。",
   'remoteSpawn.card.meaningAsk': "允许后，{hostName} 可以在此文件夹中以你的身份运行这个代理。之后的每条指令都会再次询问。",
+  'remoteSpawn.card.ownHooks': "代理会在你的仓库中使用该仓库自己的钩子和 git 设置工作，与你在此启动的任何代理相同。",
   'remoteSpawn.card.meaningFollowUp': "允许后，这条指令会发送给 {hostName} 在这里启动的代理。",
   'remoteSpawn.card.allowOnce': "允许一次",
   'remoteSpawn.card.always': "始终允许此电脑、文件夹和代理",

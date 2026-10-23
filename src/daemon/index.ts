@@ -9406,7 +9406,7 @@ async function main(): Promise<void> {
       },
       hostName: a2aHostName,
       ...(a2aStarter
-        ? { mint: (rec, request, end) => a2aStarter.mint(rec, request, end), abandon: (hostId, spawnId) => a2aStarter.abandon(hostId, spawnId) }
+        ? { start: a2aStarter, abandon: (hostId, spawnId) => a2aStarter.abandon(hostId, spawnId) }
         : {}),
       log: a2aLog,
     });

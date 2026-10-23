@@ -37,12 +37,29 @@ export interface SpawnLinkRecordV1 {
   rootId: string;
   /** The folder the agent was started for, as resolved here (display, on this PC only). */
   folder: string;
+  /** The asker's pane (the link's remote end). */
+  remote: { workspaceId: string; paneId: string };
+  /** The prompt, kept only until the link is active (it becomes the link's first task). */
+  text?: string;
   /** The start showed this pane to that PC (it was not shown already): put it back when the link ends. */
   addedExposure: boolean;
   /** …and with it the pane's workspace. */
   addedWorkspace: boolean;
   startedAt: string;
+  /**
+   * Where the start is:
+   *   prepared  — the id is reserved; nothing exists yet (no link, no
+   *               exposure, no task), and the request is not decided
+   *   committed — the request is decided `started`; activation pending
+   *   active    — link, exposure and first task exist; the answer may go
+   */
+  phase: SpawnLinkPhase;
+  /** The link is being ended (a start that did not finish): retried until it is. */
+  ending?: true;
 }
+
+export type SpawnLinkPhase = 'prepared' | 'committed' | 'active';
+const PHASES: ReadonlySet<string> = new Set<SpawnLinkPhase>(['prepared', 'committed', 'active']);
 
 export interface SpawnLinkStoreOptions {
   dir: string;
@@ -107,6 +124,23 @@ export class SpawnLinkStore {
     this.save(next);
   }
 
+  /** Change one record (its phase, its exposure bookkeeping, `ending`); written before memory changes. */
+  update(
+    linkId: string,
+    patch: Partial<Pick<SpawnLinkRecordV1, 'phase' | 'addedExposure' | 'addedWorkspace' | 'ending'>> & { dropText?: true },
+  ): SpawnLinkRecordV1 {
+    const rec = this.records.get(linkId);
+    if (!rec) throw new Error(`spawn link ${linkId}: not recorded`);
+    if (!this.writable) throw storeUnavailable(SPAWN_LINKS_FILE);
+    const next = new Map(this.records);
+    const { dropText, ...fields } = patch;
+    const { text: _text, ...kept } = rec;
+    const updated: SpawnLinkRecordV1 = { ...(dropText ? kept : rec), ...fields };
+    next.set(linkId, updated);
+    this.save(next);
+    return structuredClone(updated);
+  }
+
   remove(linkId: string): void {
     if (!this.records.has(linkId)) return;
     if (!this.writable) throw storeUnavailable(SPAWN_LINKS_FILE);
@@ -126,10 +160,18 @@ export class SpawnLinkStore {
 
 function coerceRecord(raw: unknown): SpawnLinkRecordV1 | null {
   if (!isPlainObject(raw) || raw['v'] !== 1) return null;
-  const { linkId, hostId, spawnId, workspaceId, paneId, agent, rootId, folder, addedExposure, addedWorkspace, startedAt } = raw;
+  const { linkId, hostId, spawnId, workspaceId, paneId, agent, rootId, folder, addedExposure, addedWorkspace, startedAt, phase, ending, remote, text } = raw;
+  if (!isPlainObject(remote) || !isSafeId(remote['workspaceId']) || !isSafeId(remote['paneId'])) return null;
+  if (text !== undefined && typeof text !== 'string') return null;
   if (!isSpawnId(spawnId) || typeof linkId !== 'string' || !UUID_RE.test(linkId) || !isHostId(hostId)) return null;
   if (!isSafeId(workspaceId) || !isSafeId(paneId) || !isAgentSlug(agent) || !isSpawnRootId(rootId)) return null;
   if (typeof folder !== 'string' || folder.length > 4096) return null;
   if (typeof addedExposure !== 'boolean' || typeof addedWorkspace !== 'boolean' || !isIsoString(startedAt)) return null;
-  return { v: 1, linkId, hostId, spawnId, workspaceId, paneId, agent, rootId, folder, addedExposure, addedWorkspace, startedAt };
+  if (typeof phase !== 'string' || !PHASES.has(phase)) return null;
+  return {
+    v: 1, linkId, hostId, spawnId, workspaceId, paneId, agent, rootId, folder, addedExposure, addedWorkspace, startedAt,
+    remote: { workspaceId: remote['workspaceId'] as string, paneId: remote['paneId'] as string },
+    ...(typeof text === 'string' ? { text } : {}),
+    phase: phase as SpawnLinkPhase, ...(ending === true ? { ending: true as const } : {}),
+  };
 }
