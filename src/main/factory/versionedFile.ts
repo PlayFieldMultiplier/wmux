@@ -37,6 +37,19 @@ export interface FilePersister {
   settled(): Promise<void>;
 }
 
+/** Every persister's writes still running, settled (never rejecting). */
+const running = new Set<Promise<void>>();
+
+/**
+ * Resolves once no persister has a write running, including writes scheduled
+ * while waiting. A test awaits it before removing the folder its stores write
+ * to: a fire-and-forget save that is still on its way would otherwise land in
+ * (or fail on) a folder being deleted.
+ */
+export async function persisterWritesSettled(): Promise<void> {
+  while (running.size > 0) await Promise.all([...running]);
+}
+
 export function createFilePersister(file: string, snapshot: () => unknown): FilePersister {
   assertNotLiveWmuxPath(file);
   const chain = createSerialChain();
@@ -47,10 +60,14 @@ export function createFilePersister(file: string, snapshot: () => unknown): File
   return {
     schedule() {
       // One queued write is enough: it reads the snapshot when it runs.
-      pending ??= chain(async () => {
-        pending = null;
-        await atomicWriteJSON(file, snapshot());
-      });
+      if (!pending) {
+        pending = chain(async () => {
+          pending = null;
+          await atomicWriteJSON(file, snapshot());
+        });
+        const done: Promise<void> = pending.then(() => undefined, () => undefined).finally(() => running.delete(done));
+        running.add(done);
+      }
       last = pending;
       return pending;
     },

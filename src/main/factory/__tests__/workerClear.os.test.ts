@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { persisterWritesSettled } from '../versionedFile';
 import type { LedgerEntry } from '../../../shared/ledger';
 import {
   ReclaimedWorkers,
@@ -39,8 +40,11 @@ beforeEach(() => {
   wt = path.join(dir, 'wt');
   fs.mkdirSync(wt);
 });
-afterEach(() => {
+afterEach(async () => {
   setFanOutGuardsForTests(null);
+  // A store's fire-and-forget save can still be on its way: let it land
+  // before its folder goes, or the removal races it.
+  await persisterWritesSettled();
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
