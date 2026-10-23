@@ -510,6 +510,10 @@ export const METHOD_CAPABILITY: Record<RpcMethod, RequiredCapability> = {
   'a2a.remote.offers.withdraw': { capability: 'wmux.internal' },
   'a2a.remote.offers.accept': { capability: 'wmux.internal' },
   'a2a.remote.offers.decline': { capability: 'wmux.internal' },
+  // Remote spawn: only the app's own human sets who may start agents here.
+  'a2a.remote.spawnPolicy.get': { capability: 'wmux.internal' },
+  'a2a.remote.spawnPolicy.set': { capability: 'wmux.internal' },
+  'a2a.remote.spawnRequests.list': { capability: 'wmux.internal' },
 
   // --- A2A (agent-to-agent) ---
   'a2a.resolve.identity': { capability: 'a2a.read',    riskClass: 'a2a' },
