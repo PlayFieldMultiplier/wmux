@@ -970,7 +970,7 @@ const firstRunOrchestrator = new FirstRunOrchestrator(
   },
   () => mainWindow,
 );
-const disposeFirstRunHandlers = registerFirstRunHandlers(firstRunOrchestrator);
+const disposeFirstRunHandlers = registerFirstRunHandlers(firstRunOrchestrator, () => mainWindow);
 
 // Module-scope crash tracking so activate-created windows share the same counters
 let lastCrashTime = 0;

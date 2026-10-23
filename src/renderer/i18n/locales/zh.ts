@@ -2317,6 +2317,8 @@ export const zh = {
   'room.notice.workers.full.wmux': "{bot} 正在等待：可同时运行的 {cap} 个任务已全部占用（包括你的）",
   'room.notice.workers.full.body': "这不是预算限制：有正在运行的工作者结束后就会空出名额。",
   'room.notice.workers.full.held': "有一个结束后会自动开始。这不是预算限制。",
+  'room.notice.workers.off': "{bot} 没有启动任何 worker：它的 worker 上限为 0",
+  'room.notice.workers.off.body': "没有启动、推送任何内容，也没有打开拉取请求。请在它的设置中允许 worker，然后再次请求。",
   'room.notice.bot.usageLimit': "{bot} 已达使用限额；将于 {time} 继续",
   'room.notice.budget.held': "已排队：{bot} 的回合已用完",
   'room.notice.budget.held.at': "你的消息将于 {time} 处理；在 {bot} 的资料中恢复即可立即处理。",

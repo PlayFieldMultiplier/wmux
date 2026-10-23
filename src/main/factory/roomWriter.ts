@@ -1480,6 +1480,16 @@ export function systemCardForFact(fact: Fact, bots?: BotDirectoryApi): SystemCar
       // Only a held request starts by itself: a batch larger than the
       // bot's slots is refused unheld, and the bot is told to split it.
       const held = p.held === true;
+      // No worker slots at all (the first run's bot): nothing waits.
+      if (scope === 'bot' && limit === 0) {
+        return {
+          workspaces: factRooms(fact, bots), threadId: GENERAL_THREAD, kind: 'fact',
+          title: `${name} started no workers: its worker limit is 0`,
+          body: 'Nothing was started, pushed or opened as a pull request. Allow workers in its settings, then ask it again.',
+          refs: baseRefs,
+          notice: { code: 'workers.full', args: { bot: name, scope, inUse: running, cap: 0 } },
+        };
+      }
       return {
         workspaces: factRooms(fact, bots), threadId: GENERAL_THREAD, kind: 'fact',
         title: scope === 'bot'

@@ -226,6 +226,10 @@ export interface BotProfile {
    *  before slots were stored (the store fills it on load). */
   hue?: number;
   enabled: boolean;
+  /** Made by the first run (main/firstRun/firstBot.ts). At most one live bot
+   *  carries it: a later first run finds this one instead of making another.
+   *  Written once, at create. */
+  firstRun?: true;
   /** `until`: an error park at the provider's usage limit, lifted by
    *  itself then (an older build reads it as a plain error park). */
   parked?: { reason: 'budget' | 'error' | 'human'; at: number; until?: number };

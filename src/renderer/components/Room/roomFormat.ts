@@ -333,6 +333,8 @@ export function noticeText(card: Pick<RoomCard, 'actor' | 'body' | 'notice'>, t:
   // One title per whose slots are full.
   if (notice.code === 'workers.full') {
     if (args.scope === undefined) return null;
+    // A bot with no worker slots (the first run's bot): nothing waits.
+    if (args.scope === 'bot' && args.cap === 0) return { title: t('room.notice.workers.off', vars), body: t('room.notice.workers.off.body', vars) };
     // Only a held request starts by itself (`held`: 1).
     return { title: t(`room.notice.workers.full.${args.scope}`, vars), body: t(args.held === 1 ? 'room.notice.workers.full.held' : 'room.notice.workers.full.body', vars) };
   }

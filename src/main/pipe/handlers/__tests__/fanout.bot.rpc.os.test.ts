@@ -22,7 +22,7 @@ vi.mock('../../../deck/deckDecisionStore', async (actual) => ({
 
 import { sendToRenderer } from '../_bridge';
 import { git } from '../../../git/git';
-import { BOT_FANOUT_STARTING_NOTE, botLaunchRefusal, countOpenBotWorkers, parseCheckout, registerFanOutRpc, verdictedTaskIds, workersHeldNote, type FanOutBotPort, type HeldFanoutRequest } from '../fanout.rpc';
+import { BOT_FANOUT_STARTING_NOTE, botLaunchRefusal, countOpenBotWorkers, parseCheckout, registerFanOutRpc, verdictedTaskIds, workersHeldNote, WORKERS_OFF_TEXT, type FanOutBotPort, type HeldFanoutRequest } from '../fanout.rpc';
 import type { FanOutRequest, FanOutResult, FanOutService, FanOutStatus } from '../../../worktask/FanOutService';
 import type { RpcRouter } from '../../RpcRouter';
 import { FANOUT_LIVE_TASK_CAP, FanOutGuards } from '../../../worktask/fanoutGuards';
@@ -881,6 +881,16 @@ describe('task.fanout.start — bot origin', () => {
     expect(errorOf(await r.call({ idempotencyKey: 'wake:w-1:2', ...two }, botCtx('lead'))).message).toMatch(/start at most 1 task per fan-out/);
     expect(r.port.full).toEqual([{ scope: 'bot', running: 1, limit: 1 }]);
     expect(r.port.exhausted).toEqual([]);
+  });
+
+  it('a bot with no worker slots (the first run\'s) starts nothing, holds nothing, and its card says why', async () => {
+    const r = rig('lead', { budget: { ...DEFAULT_BOT_BUDGETS.lead, maxConcurrentWorkers: 0 } }, { builtinPresets: true });
+    const res = await r.call({ idempotencyKey: 'wake:w-1:1', titles: ['x'], prompt: 'write the README', preset: 'default' }, botCtx('lead'));
+    expect(errorOf(res)).toMatchObject({ code: 'RESOURCE_EXHAUSTED', message: WORKERS_OFF_TEXT });
+    await r.flush();
+    expect(r.start).not.toHaveBeenCalled();
+    expect(r.port.full).toEqual([{ scope: 'bot', running: 0, limit: 0, request: undefined }]);
+    expect(r.port.seen.size).toBe(0);
   });
 
   it('worker hours used up stay a budget refusal, and nothing is held', async () => {

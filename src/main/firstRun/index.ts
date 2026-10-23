@@ -7,13 +7,18 @@
  */
 
 import { ipcMain } from 'electron';
-import type { IpcMainInvokeEvent } from 'electron';
+import type { BrowserWindow, IpcMainInvokeEvent } from 'electron';
 
 import { IPC } from '../../shared/constants';
 import { wrapHandler } from '../ipc/wrapHandler';
 import type { FirstRunOrchestrator } from './FirstRunOrchestrator';
-import type { SampleTaskStartPayload } from '../../shared/firstRun';
+import type { FirstBotResult, SampleTaskStartPayload } from '../../shared/firstRun';
 import { AGENT_IDS, type AgentId } from '../../shared/agentSetup';
+import type { FactorySettings } from '../../shared/factorySettings';
+import { isMainWindowSender } from '../ipc/mainWindowSender';
+import { getBotStore } from '../factory/botStore';
+import { getFactorySettingsStore } from '../factory/factorySettings';
+import { checkFirstRunFolder, firstRunBot } from './firstBot';
 
 function requireAgentId(value: unknown): AgentId {
   if (typeof value !== 'string' || !(AGENT_IDS as readonly string[]).includes(value)) {
@@ -22,7 +27,19 @@ function requireAgentId(value: unknown): AgentId {
   return value as AgentId;
 }
 
-export function registerFirstRunHandlers(orchestrator: FirstRunOrchestrator): () => void {
+/** firstRun:first-bot's body: the sender check, then the first-run bot. */
+export function firstBotHandler(
+  getWindow: () => BrowserWindow | null,
+  deps: { store?: typeof getBotStore; settings?: () => FactorySettings | null } = {},
+): (e: { sender?: unknown; senderFrame?: unknown }, req: unknown) => Promise<FirstBotResult> {
+  return async (e, req) => {
+    if (!isMainWindowSender(e, getWindow())) return { ok: false, code: 'invalid_argument', message: 'only the main window may make the first bot' };
+    const settings = deps.settings ? deps.settings() : getFactorySettingsStore()?.get() ?? null;
+    return firstRunBot((deps.store ?? getBotStore)(), settings, req);
+  };
+}
+
+export function registerFirstRunHandlers(orchestrator: FirstRunOrchestrator, getWindow: () => BrowserWindow | null): () => void {
   ipcMain.removeHandler(IPC.FIRST_RUN_CHECK);
   ipcMain.handle(
     IPC.FIRST_RUN_CHECK,
@@ -118,8 +135,19 @@ export function registerFirstRunHandlers(orchestrator: FirstRunOrchestrator): ()
     ),
   );
 
+  ipcMain.removeHandler(IPC.FIRST_RUN_CHECK_FOLDER);
+  ipcMain.handle(
+    IPC.FIRST_RUN_CHECK_FOLDER,
+    wrapHandler(IPC.FIRST_RUN_CHECK_FOLDER, async (_event: IpcMainInvokeEvent, folder: unknown) => checkFirstRunFolder(folder)),
+  );
+
+  ipcMain.removeHandler(IPC.FIRST_RUN_FIRST_BOT);
+  ipcMain.handle(IPC.FIRST_RUN_FIRST_BOT, wrapHandler(IPC.FIRST_RUN_FIRST_BOT, firstBotHandler(getWindow)));
+
   return () => {
     ipcMain.removeHandler(IPC.FIRST_RUN_CHECK);
+    ipcMain.removeHandler(IPC.FIRST_RUN_CHECK_FOLDER);
+    ipcMain.removeHandler(IPC.FIRST_RUN_FIRST_BOT);
     ipcMain.removeHandler(IPC.FIRST_RUN_COMPLETE);
     ipcMain.removeHandler(IPC.FIRST_RUN_DISMISS);
     ipcMain.removeHandler(IPC.FIRST_RUN_REOPEN);

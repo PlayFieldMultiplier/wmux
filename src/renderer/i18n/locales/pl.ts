@@ -2225,6 +2225,8 @@ export const pl = {
   'room.notice.workers.full.wmux': "{bot} czeka: wszystkie {cap} zadań, które mogą działać jednocześnie, są zajęte (także Twoje)",
   'room.notice.workers.full.body': "To nie jest limit budżetu: miejsce zwolni się, gdy jeden z działających workerów się zakończy.",
   'room.notice.workers.full.held': "Zacznie się automatycznie, gdy jedno się zakończy. To nie jest limit budżetu.",
+  'room.notice.workers.off': "{bot} nie uruchomił żadnych workerów: jego limit workerów wynosi 0",
+  'room.notice.workers.off.body': "Nic nie zostało uruchomione, wypchnięte ani otwarte jako pull request. Zezwól na workery w jego ustawieniach, a potem poproś ponownie.",
   'room.notice.bot.usageLimit': "{bot} osiągnął limit użycia; wznowi pracę o {time}",
   'room.notice.budget.held': "W kolejce: {bot} nie ma już tur",
   'room.notice.budget.held.at': "Twoja wiadomość zostanie obsłużona o {time} albo od razu, jeśli wznowisz bota {bot} w jego profilu.",

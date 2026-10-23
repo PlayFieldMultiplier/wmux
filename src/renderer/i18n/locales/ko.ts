@@ -1760,6 +1760,8 @@ export const ko = {
   'room.notice.workers.full.wmux': "{bot} 대기 중: 동시에 실행할 수 있는 작업 {cap}개가 모두 사용 중입니다(내 작업 포함)",
   'room.notice.workers.full.body': "예산 한도가 아닙니다. 실행 중인 워커가 끝나면 자리가 납니다.",
   'room.notice.workers.full.held': "하나가 끝나면 자동으로 시작합니다. 예산 한도가 아닙니다.",
+  'room.notice.workers.off': "{bot}은(는) worker를 시작하지 않았습니다: worker 한도가 0입니다",
+  'room.notice.workers.off.body': "아무것도 시작하거나 푸시하거나 PR로 열지 않았습니다. 설정에서 worker를 허용한 뒤 다시 요청하세요.",
   'room.notice.bot.usageLimit': "{bot}: 사용량 한도에 도달해 {time}에 다시 시작합니다",
   'room.notice.budget.held': "대기 중: {bot}의 턴이 소진됐습니다",
   'room.notice.budget.held.at': "메시지는 {time}에 실행됩니다. {bot} 프로필에서 재개하면 바로 실행됩니다.",

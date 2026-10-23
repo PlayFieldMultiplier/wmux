@@ -2248,6 +2248,8 @@ export const en = {
   'room.notice.workers.full.wmux': "{bot} is waiting: all {cap} tasks that can run at once are in use (including yours)",
   'room.notice.workers.full.body': "This is not a budget limit: a slot frees when a running worker ends.",
   'room.notice.workers.full.held': "It will start automatically when one finishes. This is not a budget limit.",
+  'room.notice.workers.off': "{bot} started no workers: its worker limit is 0",
+  'room.notice.workers.off.body': "Nothing was started, pushed or opened as a pull request. Allow workers in its settings, then ask it again.",
   'room.notice.bot.usageLimit': "{bot} hit its usage limit; it picks up again at {time}",
   'room.notice.budget.held': "Queued: {bot} is out of turns",
   'room.notice.budget.held.at': "Your message runs at {time}, or now if you resume {bot} in its profile.",
