@@ -20,6 +20,7 @@ import { agentRow } from '../../shared/agentIdentity';
 import fs from 'node:fs';
 import { checkNativeTranscriptPath } from './providers';
 import { findCodexTranscriptCandidates, scanForTranscript, type ScanReport } from './TranscriptDiscovery';
+import { findQwenTranscriptCandidates } from './qwenTranscript';
 
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 
@@ -118,6 +119,20 @@ const OPTIONS: Readonly<Record<string, OptionTable>> = {
       ...['-i', '--image'].map((o) => [o, 'many' as Arity] as const),
     ]),
   },
+  // Qwen Code's value options (packages/cli/src/config/top-level-options.ts).
+  qwen: {
+    options: new Map<string, Arity>([
+      ...['-m', '--model', '--advisor', '-p', '--prompt', '-i', '--prompt-interactive', '--system-prompt', '--append-system-prompt',
+        '--output-style', '-s', '--sandbox', '--sandbox-image', '--approval-mode', '--channel', '--mcp-config', '--openai-logging-dir',
+        '--openai-api-key', '--openai-base-url', '--input-format', '-o', '--output-format', '--json-fd', '--json-file', '--json-schema',
+        '--input-file', '--session-id', '--worktree', '--max-session-turns', '--max-wall-time', '--max-tool-calls', '--max-subagent-depth',
+        '--auth-type', '--telemetry-target', '--telemetry-otlp-endpoint', '--telemetry-otlp-protocol', '--telemetry-outfile', '--proxy',
+      ].map((o) => [o, 1 as Arity] as const),
+      ...['--fallback-model', '--allowed-mcp-server-names', '--disable-mcp-server', '--allowed-tools', '-e', '--extensions',
+        '--include-directories', '--add-dir', '--core-tools', '--exclude-tools', '--disabled-slash-commands',
+      ].map((o) => [o, 'many' as Arity] as const),
+    ]),
+  },
 };
 
 /** The index just past option `argv[i]` and its values. */
@@ -208,7 +223,8 @@ function subcommandFormSession(argv: readonly Word[], from: number, subcommand: 
  */
 export function sessionFromCommandLine(agent: string, cmdline: string | undefined): CommandLineSession | undefined {
   const grammar = resumeGrammarFor(agent);
-  if (!grammar || !cmdline) return undefined;
+  // A picker-only agent's ids are never bound (agentIdentity.ts `idFormat`).
+  if (!grammar || !cmdline || agentRow(agent)?.resume?.idFormat === 'picker-only') return undefined;
   const argv = words(cmdline);
   const launcher = launcherIndex(argv, agent);
   if (launcher < 0) return undefined;
@@ -223,6 +239,7 @@ export function sessionFromCommandLine(agent: string, cmdline: string | undefine
 const CANDIDATES: Readonly<Record<string, (id: string, env: Record<string, string> | undefined, report: ScanReport) => string[]>> = {
   claude: (id, env, report) => scanForTranscript(id, env, report),
   codex: (id, env, report) => findCodexTranscriptCandidates(id, env, report),
+  qwen: (id, env, report) => findQwenTranscriptCandidates(id, env, report),
 };
 
 /** A transcript that holds a conversation: a non-empty file. An empty one is
@@ -232,14 +249,16 @@ function holdsConversation(file: string): boolean {
 }
 
 /**
- * The transcript `id` names for `agent`: `file` when a contained, non-empty one
- * exists; otherwise `certain` says whether the lookup proves there is none (a
- * scan cut short by its bounds, an unreadable folder or duplicate copies prove
- * nothing).
+ * The transcript `id` names for `agent`: `file` when exactly one contained,
+ * non-empty one exists; otherwise `certain` says whether the lookup proves
+ * there is none (a scan cut short by its bounds, an unreadable folder or
+ * duplicate copies prove nothing, so more than one contained copy binds none).
  */
 function findTranscript(agent: string, id: string, env?: Record<string, string>): { file?: string; certain: boolean } {
   const report: ScanReport = { complete: true };
-  const file = CANDIDATES[agent](id, env, report).find((f) => checkNativeTranscriptPath(agent, f, id, env).ok);
+  const contained = CANDIDATES[agent](id, env, report).filter((f) => checkNativeTranscriptPath(agent, f, id, env).ok);
+  if (contained.length > 1) return { certain: false };
+  const file = contained[0];
   if (file && holdsConversation(file)) return { file, certain: true };
   // A contained file that is empty, or one outside the account, is not a conversation either.
   return { certain: report.complete || file !== undefined };

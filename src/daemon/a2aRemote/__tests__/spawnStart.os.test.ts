@@ -236,6 +236,20 @@ describe('right before the start', () => {
     expect(codes(env)).toEqual(['waiting-for-approval', 'folder-not-allowed']);
   });
 
+  it('an approved request for an agent another PC may not start (kept from an older build) is refused at the claim', async () => {
+    await allow();
+    const env = request();
+    await arrive(env);
+    await receiver.decideCard(HOST, env.linkId, 'once');
+    receiver.stop();
+    const file = requests.filePath;
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(/"agent":\s*"claude"/g, '"agent": "gemini"'));
+    requests = new SpawnRequestStore({ dir: a2aDir, scheduleHarden: quiet });
+    expect(requests.get(HOST, env.linkId)?.request?.agent).toBe('gemini');
+    receiver = makeReceiver({ policy: { get: () => ({ ...policy.get(), agents: ['claude', 'gemini'] }) } });
+    expect(await receiver.claim(HOST, env.linkId)).toMatchObject({ ok: false, code: 'agent-not-allowed' });
+  });
+
   it('a PC turned off after its card was answered is not started', async () => {
     await allow();
     const env = request();

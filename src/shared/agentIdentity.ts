@@ -83,21 +83,25 @@ export interface AgentMcpTargetSpec {
 }
 
 /** Session resume grammar as data. `{id}` in `exact` stands for the session id. */
-export interface AgentResumeSpec {
+export type AgentResumeSpec = AgentResumeSpecBase & (
+  | { readonly idFormat: 'uuid'; readonly exact: string }
+  /** wmux binds no id for this agent (it names its own sessions, with no
+   *  launch flag to set one): there is no exact form, so a stored id is never
+   *  offered or typed, and only the picker is. */
+  | { readonly idFormat: 'picker-only'; readonly exact?: never; readonly pin?: never }
+);
+
+interface AgentResumeSpecBase {
   /** Inserted after the launcher to open the agent's own session picker, which
    *  lists the folder's conversations and lets the user choose. Typed by the
    *  resume pill, chip and Deck when no exact session is bound. There is no
    *  "latest in this folder" form: several panes can share a folder, and a
    *  guess would reopen the same conversation in each (#1946). */
   readonly picker: string;
-  /** Inserted after the launcher to resume one exact session. */
-  readonly exact: string;
   /** The launch flag that names a NEW session's id up front (Claude
    *  `--session-id <id>`), when the agent has one. wmux pins fresh launches
    *  with it, and drops it from a relaunch: the id may already be in use. */
   readonly pin?: string;
-  /** The shape a stored session id must have before it is offered. */
-  readonly idFormat: 'uuid';
 }
 
 /** What the file-transcript chat route (nativeChatBridge) can do for an agent. */
@@ -477,6 +481,29 @@ export const AGENT_IDENTITIES = [
         officialPage: 'https://antigravity.google/docs/getting-started',
       },
     },
+  },
+  {
+    // Qwen Code. Options from the official CLI (QwenLM/qwen-code
+    // packages/cli/src/config/top-level-options.ts, checked 2026-10-23):
+    // `--resume` "Use without an ID to show session picker", `--resume <id>`
+    // resumes that session, `--session-id` "Specify a session ID for this run"
+    // (a UUID). The conversation is `<projects>/<cwd>/chats/<id>.jsonl`
+    // (src/daemon/transcript/qwenTranscript.ts).
+    slug: 'qwen',
+    display: 'Qwen Code',
+    resume: { picker: '--resume', exact: '--resume {id}', pin: '--session-id', idFormat: 'uuid' },
+    process: { packages: ['@qwen-code/qwen-code'] },
+  },
+  {
+    // Kimi Code CLI. https://www.kimi.com/code/docs/en/kimi-code-cli/reference/kimi-command
+    // (checked 2026-10-23): `--session` with no id opens a selector, `--session
+    // <id>` opens that session. Its ids are its own (not UUIDs) and no launch
+    // flag sets one, so wmux offers the picker only. npm package from
+    // https://www.kimi.com/code/docs/en/kimi-code-cli/guides/getting-started.html.
+    slug: 'kimi',
+    display: 'Kimi Code CLI',
+    resume: { picker: '--session', idFormat: 'picker-only' },
+    process: { packages: ['@moonshot-ai/kimi-code'] },
   },
 ] as const satisfies readonly AgentIdentityRow[];
 

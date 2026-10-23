@@ -21,6 +21,7 @@
 // Pure module: no node:* imports (the renderer imports these types).
 
 import { isAgentSlug, type AgentSlug } from './agentIdentity';
+import { FANOUT_AGENTS } from './fanoutPreset';
 import { A2A_REMOTE_BODY_MAX, A2A_REMOTE_RECORD_V, isConsistentEndpoint, isHostId, type HostId } from './a2aRemote';
 import { DEFAULT_FANOUT_WORKER_PERMISSION_MODE, isFanoutWorkerPermissionMode, type FanoutWorkerPermissionMode } from './workerLaunch';
 
@@ -378,6 +379,18 @@ function safeId(v: unknown): v is string {
   return typeof v === 'string' && v.length > 0 && v.length <= SAFE_ID_MAX && !/[\u0000-\u001f\u007f]/.test(v);
 }
 
+/**
+ * Agents another PC may start here: the fan-out agents verified end to end
+ * (FANOUT_AGENTS `selectable`), which start unattended past their first-run
+ * screens. Any other agent would stop on its own trust or onboarding prompt
+ * with nobody there. A policy drops one when it is read, and a request for
+ * one is refused `agent-not-allowed`.
+ */
+const SPAWNABLE_AGENTS: ReadonlySet<string> = new Set(FANOUT_AGENTS.filter((a) => a.selectable).map((a) => a.stem));
+export function isSpawnableAgent(v: unknown): v is AgentSlug {
+  return isAgentSlug(v) && SPAWNABLE_AGENTS.has(v);
+}
+
 export function isSpawnId(v: unknown): v is string {
   return typeof v === 'string' && SPAWN_ID_RE.test(v);
 }
@@ -496,7 +509,10 @@ function isLabel(v: unknown): v is string {
 /**
  * A policy from disk or from the UI, every field checked; null when it is not
  * one. Unknown agents, hosts, rules and malformed roots make the whole policy
- * invalid rather than being dropped, so a save never silently narrows.
+ * invalid rather than being dropped, so a save never silently narrows. A known
+ * agent another PC may not start (`isSpawnableAgent`) is dropped instead, with
+ * its rules: a policy saved when it was offered keeps every other host, root
+ * and agent.
  */
 export function coerceSpawnPolicy(raw: unknown): A2aSpawnPolicyV1 | null {
   if (!isPlain(raw) || raw['v'] !== A2A_REMOTE_RECORD_V) return null;
@@ -528,7 +544,7 @@ export function coerceSpawnPolicy(raw: unknown): A2aSpawnPolicyV1 | null {
     if (sub === null || (r['sub'] !== undefined && sub !== r['sub'])) return null;
     // A rule for a folder no longer listed goes with it: a folder added later
     // under the same id must not inherit it.
-    if (!cleanRoots.some((root) => root.id === r['rootId'])) continue;
+    if (!cleanRoots.some((root) => root.id === r['rootId']) || !isSpawnableAgent(r['agent'])) continue;
     cleanRules.push({ hostId: r['hostId'], rootId: r['rootId'] as string, agent: r['agent'], ...(sub ? { sub } : {}) });
   }
   return {
@@ -539,7 +555,7 @@ export function coerceSpawnPolicy(raw: unknown): A2aSpawnPolicyV1 | null {
     permissionMode,
     hosts: cleanHosts,
     roots: cleanRoots,
-    agents: [...new Set(agents as AgentSlug[])],
+    agents: [...new Set((agents as AgentSlug[]).filter(isSpawnableAgent))],
     rules: cleanRules,
     version,
   };

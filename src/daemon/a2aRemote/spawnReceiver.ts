@@ -8,6 +8,7 @@ import {
   SPAWN_TARGETS_LINK_ID,
   asSpawnLinkId,
   isFinalSpawnCode,
+  isSpawnableAgent,
   normalizeSpawnSub,
   spawnRuleMatches,
   parseSpawnRequest,
@@ -423,7 +424,7 @@ export class A2aSpawnReceiver {
     const policy = this.deps.policy.get();
     if (!spawnHostAllowed(policy, hostId)) return refuse('not-allowed');
     if (this.now() > Date.parse(req.expiresAt)) return refuse('expired');
-    if (!policy.agents.includes(req.agent)) return refuse('agent-not-allowed');
+    if (!policy.agents.includes(req.agent) || !isSpawnableAgent(req.agent)) return refuse('agent-not-allowed');
     const sub = normalizeSpawnSub(req.folder.sub);
     const root = policy.roots.find((r) => r.id === req.folder.root);
     if (sub === null || !root) return refuse('folder-not-allowed');
@@ -764,7 +765,7 @@ export class A2aSpawnReceiver {
     // The policy may have changed since the request arrived.
     if (!spawnHostAllowed(policy, hostId)) return 'not-allowed';
     if (this.now() > Date.parse(req.expiresAt)) return 'expired';
-    if (!policy.agents.includes(req.agent)) return 'agent-not-allowed';
+    if (!policy.agents.includes(req.agent) || !isSpawnableAgent(req.agent)) return 'agent-not-allowed';
     // Nothing that could leave the root reaches the disk (parsed so already; checked again here).
     const sub = normalizeSpawnSub(req.folder.sub);
     const root = policy.roots.find((r) => r.id === req.folder.root);
