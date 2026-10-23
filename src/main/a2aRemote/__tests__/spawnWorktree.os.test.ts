@@ -71,6 +71,15 @@ describe('createSpawnWorktree', () => {
     expect(fs.readFileSync(path.join(spawnDir(), 'apps', 'site', 'index.txt'), 'utf8')).toBe('site\n');
   });
 
+  it('takes a folder whose name starts with two dots as inside the worktree', async () => {
+    fs.mkdirSync(path.join(repo, '..cfg'));
+    fs.writeFileSync(path.join(repo, '..cfg', 'a.txt'), 'a\n');
+    g(repo, 'add', '.');
+    g(repo, 'commit', '-qm', 'dots');
+    const r = await create({ sub: '..cfg' });
+    expect(r).toMatchObject({ ok: true, cwd: realpath(path.join(spawnDir(), '..cfg')) });
+  });
+
   it('runs no hook from .git/hooks', async () => {
     const hook = path.join(repo, '.git', 'hooks', 'post-checkout');
     fs.writeFileSync(hook, hookScript(), { mode: 0o755 });

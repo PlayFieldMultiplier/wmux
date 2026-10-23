@@ -126,7 +126,7 @@ export async function createSpawnWorktree(input: SpawnWorktreeInput, opts: Spawn
     await git(['branch', '-D', branch]);
     // A folder git no longer knows: removed only as a plain child of the root.
     const rel = path.relative(root, worktreePath);
-    if (rel && !rel.startsWith('..') && !path.isAbsolute(rel) && !rel.includes(path.sep)) {
+    if (rel && isBelow(rel) && !rel.includes(path.sep)) {
       try { fs.rmSync(worktreePath, { recursive: true, force: true }); } catch { /* reported by the caller's detail */ }
     }
   };
@@ -143,7 +143,7 @@ export async function createSpawnWorktree(input: SpawnWorktreeInput, opts: Spawn
   let inside = false;
   if (wtReal !== null && cwdReal !== null) {
     const rel = path.relative(wtReal, cwdReal);
-    inside = !rel.startsWith('..') && !path.isAbsolute(rel) && isDirectory(cwdReal);
+    inside = isBelow(rel) && isDirectory(cwdReal);
   }
   if (!inside || wtReal === null || cwdReal === null) {
     await undo();
@@ -164,6 +164,12 @@ function filterDriverNames(stdout: string): string[] {
     if (/^filter\./i.test(key) && last > 'filter.'.length) names.add(key.slice('filter.'.length, last));
   }
   return [...names];
+}
+
+/** A `path.relative` result that stays at or below its base (a name like
+ *  `..foo` is below it). */
+function isBelow(rel: string): boolean {
+  return rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
 }
 
 async function realpathOrNull(p: string): Promise<string | null> {
