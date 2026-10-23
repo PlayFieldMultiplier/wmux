@@ -37,7 +37,7 @@ import type {
   A2aRemoteStatus,
 } from '../shared/rpc';
 import { stripReplayQuerySequences } from '../shared/replayQuerySanitizer';
-import { A2A_SPAWN_RPC, type A2aSpawnPolicyV1, type A2aSpawnRequestSummary } from '../shared/a2aSpawn';
+import { A2A_SPAWN_RPC, type A2aSpawnPolicySetResult, type A2aSpawnPolicyV1, type A2aSpawnRequestSummary } from '../shared/a2aSpawn';
 import { createSessionPipeMarkers } from '../daemon/sessionPipeMarkers';
 import { SessionPipeStreamScanner } from './daemon/sessionPipeStreamScanner';
 import { DAEMON_RPC_TIMEOUT_MS } from '../shared/timeouts';
@@ -689,8 +689,8 @@ export class DaemonClient extends EventEmitter {
   }
 
   /** The daemon checks and realpaths each root and bumps `version`. */
-  async a2aSpawnPolicySet(policy: A2aSpawnPolicyV1): Promise<{ ok: true; policy: A2aSpawnPolicyV1 } | { ok: false; error: string }> {
-    return (await this.rpc(A2A_SPAWN_RPC.policySet, { policy })) as { ok: true; policy: A2aSpawnPolicyV1 } | { ok: false; error: string };
+  async a2aSpawnPolicySet(policy: A2aSpawnPolicyV1): Promise<A2aSpawnPolicySetResult> {
+    return (await this.rpc(A2A_SPAWN_RPC.policySet, { policy })) as A2aSpawnPolicySetResult;
   }
 
   async a2aSpawnRequestsList(): Promise<{ requests: A2aSpawnRequestSummary[] }> {

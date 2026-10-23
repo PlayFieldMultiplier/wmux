@@ -8,11 +8,12 @@
 import {
   coerceSpawnPolicy,
   SPAWN_LABEL_MAX,
+  type A2aSpawnPolicySetResult,
   type A2aSpawnPolicyV1,
   type A2aSpawnRootV1,
 } from '../../../shared/a2aSpawn';
 
-export type SpawnPolicySaveResult = { ok: true; policy: A2aSpawnPolicyV1 } | { ok: false; error: string };
+export type SpawnPolicySaveResult = A2aSpawnPolicySetResult;
 
 const ROOT_ID_MAX = 32;
 

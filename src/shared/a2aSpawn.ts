@@ -192,6 +192,9 @@ export const A2A_SPAWN_RPC = Object.freeze({
   requestsList: 'a2a.remote.spawnRequests.list',
 } as const);
 
+/** `a2a.remote.spawnPolicy.set`'s answer: the saved policy, or why it was refused. */
+export type A2aSpawnPolicySetResult = { ok: true; policy: A2aSpawnPolicyV1 } | { ok: false; error: string };
+
 /** What the UI may list about a received request: never the prompt. */
 export interface A2aSpawnRequestSummary {
   hostId: HostId;

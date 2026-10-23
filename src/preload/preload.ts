@@ -17,7 +17,7 @@ import { CHATV2_IPC, type ChatV2BridgeApi, type ChatV2EventsPush, type ChatV2Res
 import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron';
 import { START_POLARITY_STORAGE_KEY, resolveStartPolarity, startPaintCss } from '../shared/windowStartPaint';
 import { IPC } from '../shared/constants';
-import type { A2aSpawnPolicyV1, A2aSpawnRequestSummary } from '../shared/a2aSpawn';
+import type { A2aSpawnPolicySetResult, A2aSpawnPolicyV1, A2aSpawnRequestSummary } from '../shared/a2aSpawn';
 import { ROOM_EVENT } from '../shared/room';
 import { BOT_EVENT } from '../shared/bot';
 import { BOT_APPROVAL_IPC } from '../shared/botApproval';
@@ -2314,7 +2314,7 @@ document.addEventListener('DOMContentLoaded', () => {
     ipcRenderer.invoke(IPC.A2A_REMOTE_EXPOSURE_SET, hostId, workspaceIds, paneIds, brain, expected) as Promise<A2aRemoteExposureSetResult>,
   spawnPolicyGet: () => ipcRenderer.invoke(IPC.A2A_REMOTE_SPAWN_POLICY_GET) as Promise<{ policy: A2aSpawnPolicyV1 }>,
   spawnPolicySet: (policy: A2aSpawnPolicyV1) =>
-    ipcRenderer.invoke(IPC.A2A_REMOTE_SPAWN_POLICY_SET, policy) as Promise<{ ok: true; policy: A2aSpawnPolicyV1 } | { ok: false; error: string }>,
+    ipcRenderer.invoke(IPC.A2A_REMOTE_SPAWN_POLICY_SET, policy) as Promise<A2aSpawnPolicySetResult>,
   spawnRequestsList: () =>
     ipcRenderer.invoke(IPC.A2A_REMOTE_SPAWN_REQUESTS_LIST) as Promise<{ requests: A2aSpawnRequestSummary[] }>,
   hostsExposed: (hostId: string) =>

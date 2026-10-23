@@ -4,7 +4,7 @@ import path from 'node:path';
 import { atomicWriteJSONSync } from '../util/atomicWrite';
 import { scheduleTokenFileReHarden } from '../../shared/security';
 import { getExecEnv } from '../../shared/execEnv';
-import { coerceSpawnPolicy, defaultSpawnPolicy, type A2aSpawnPolicyV1 } from '../../shared/a2aSpawn';
+import { coerceSpawnPolicy, defaultSpawnPolicy, type A2aSpawnPolicySetResult, type A2aSpawnPolicyV1 } from '../../shared/a2aSpawn';
 import type { HostId } from '../../shared/a2aRemote';
 import { loadStore, storeUnavailable, type StoreLog } from './storeFile';
 
@@ -38,8 +38,6 @@ export interface SpawnPolicyStoreOptions {
   repoToplevel?: RepoToplevel;
   realpath?: (p: string) => Promise<string>;
 }
-
-export type SpawnPolicySetResult = { ok: true; policy: A2aSpawnPolicyV1 } | { ok: false; error: string };
 
 export class SpawnPolicyStore {
   readonly filePath: string;
@@ -80,7 +78,7 @@ export class SpawnPolicyStore {
    * resolve to a git repository's top level, and is stored as that realpath.
    * `version` is this store's, never the caller's.
    */
-  async set(raw: unknown): Promise<SpawnPolicySetResult> {
+  async set(raw: unknown): Promise<A2aSpawnPolicySetResult> {
     if (!this.writable) return { ok: false, error: storeUnavailable(SPAWN_POLICY_FILE).message };
     const next = coerceSpawnPolicy(raw);
     if (!next) return { ok: false, error: 'the policy is not valid' };
