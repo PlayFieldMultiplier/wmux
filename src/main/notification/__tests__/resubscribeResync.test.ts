@@ -21,6 +21,7 @@ vi.mock('../../ipc/handlers/metadata.handler', () => ({
 
 import { resyncAfterResubscribe, serialResync, type DaemonPaneState, type DaemonSessionRow } from '../resubscribeResync';
 import { HookSignalRouter } from '../../hooks/HookSignalRouter';
+import { isByteIdle, noteByteActivity } from '../idleSuppression';
 import { SignalLatencyMeter } from '../../../shared/hooks/SignalLatencyMeter';
 
 function run(
@@ -89,6 +90,54 @@ describe('resyncAfterResubscribe (#2263)', () => {
     await result;
     expect(statuses()).toEqual([{ ptyId: 'd1', agentStatus: 'running', agentName: 'Claude Code' }]);
     expect(router.governsRunningState('d1')).toBe(true);
+  });
+
+  it('restores the renderer latch for an ongoing Codex even when main already shows running', async () => {
+    mocks.last.set('d1', 'running');
+    const { result } = run({ d1: { agentStatus: 'running', agentName: 'Codex', turnOpen: true, agentMidTurn: true } }, router);
+    await result;
+    expect(statuses()).toContainEqual({ ptyId: 'd1', agentStatus: 'running', daemonTurnOpen: true });
+  });
+
+  it('keeps an approval authoritative when restoring a daemon turn snapshot', async () => {
+    mocks.last.set('d1', 'awaiting_input');
+    const { result } = run({ d1: { agentStatus: 'awaiting_input', agentName: 'Codex', turnOpen: true, agentMidTurn: true } }, router);
+    await result;
+    expect(statuses().some((s) => s.agentStatus === 'running')).toBe(false);
+  });
+
+  it('sends the daemon latch only with a running status, and a pane with no daemon turn only closes it', async () => {
+    mocks.last.set('d1', 'complete');
+    mocks.last.set('d2', 'idle');
+    const { result } = run({
+      d1: { agentStatus: 'complete', agentName: 'Codex', turnOpen: true, agentMidTurn: true },
+      d2: { agentStatus: 'idle', agentName: 'Codex', turnOpen: false, agentMidTurn: false },
+    }, router);
+    await result;
+    expect(statuses().some((s) => s.ptyId === 'd1' && 'daemonTurnOpen' in s)).toBe(false);
+    expect(statuses()).toContainEqual({ ptyId: 'd2', daemonTurnOpen: false });
+    expect(statuses().some((s) => s.ptyId === 'd2' && 'agentStatus' in s)).toBe(false);
+  });
+
+  it('never pushes running over a pane showing a dialog, even when the daemon reads running', async () => {
+    mocks.last.set('d1', 'awaiting_input');
+    const { result } = run({ d1: { agentStatus: 'running', agentName: 'Codex', turnOpen: true, agentMidTurn: true } }, router);
+    await result;
+    expect(statuses().some((s) => s.agentStatus === 'running')).toBe(false);
+  });
+
+  it('rebuilds the byte state a daemon turn\'s end settles by from the snapshot', async () => {
+    noteByteActivity('d1', false);
+    noteByteActivity('d2', true);
+    mocks.last.set('d1', 'running');
+    mocks.last.set('d2', 'running');
+    const { result } = run({
+      d1: { agentStatus: 'idle', agentName: 'Codex', turnOpen: true, agentMidTurn: true },
+      d2: { agentStatus: 'running', agentName: 'Codex', turnOpen: true, agentMidTurn: true },
+    }, router);
+    await result;
+    expect(isByteIdle('d1')).toBe(true);
+    expect(isByteIdle('d2')).toBe(false);
   });
 
   it('takes no latch for a turn open without hooks', async () => {

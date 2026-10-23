@@ -126,6 +126,16 @@ describe('DaemonPTYBridge — agentTurn edges', () => {
     expect(bridge.isAgentMidTurn()).toBe(false);
   });
 
+  it('an agent killed mid-turn ends its turn on the process-death edge', () => {
+    bridge.noteInput('codex\r');
+    bridge.noteAgentProcess({ slug: 'codex', alive: true });
+    bridge.noteInput('refactor the parser\r');
+    expect(bridge.isAgentMidTurn()).toBe(true);
+    bridge.noteAgentProcess({ slug: 'codex', alive: false });
+    expect(edges).toEqual([edges[0], null]);
+    expect(bridge.isAgentMidTurn()).toBe(false);
+  });
+
   it('an open turn becomes an agent turn when the agent process is attributed', () => {
     bridge.noteInput('claude\r');
     bridge.noteInput('do it\r');
@@ -188,7 +198,7 @@ describe('turnRunningSince wiring', () => {
     const src = read('index.ts');
     const at = src.indexOf("sessionManager.on('session:agentTurn'");
     expect(at).toBeGreaterThan(-1);
-    const body = src.slice(at, at + 400);
+    const body = src.slice(at, src.indexOf('\n  });', at));
     expect(body).toMatch(/stateWriter\.saveAsap\(buildState\(sessionManager\)\)/);
     expect(body).not.toMatch(/saveDebounced/);
     expect(src).toMatch(/const AGENT_TURN_SAVE_DELAY_MS = 1_000;/);

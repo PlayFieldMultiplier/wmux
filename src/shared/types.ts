@@ -607,6 +607,8 @@ export interface MetadataUpdatePayload {
    * both; a plain idle still only ends the latch.
    */
   settled?: boolean;
+  /** Daemon-owned agent turn; excludes boot paints and bare shell submissions. */
+  daemonTurnOpen?: boolean;
 }
 
 // === Status indicator colors ===

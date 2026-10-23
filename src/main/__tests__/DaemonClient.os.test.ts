@@ -321,7 +321,7 @@ describe('DaemonClient', () => {
 
     it('passes the title and open-turn fields through, sanitized, and omits malformed ones (#2263)', async () => {
       const pipeName = testPipeName('agent-state-title');
-      let extra: Record<string, unknown> = { title: '✳ build\x07 fix', turnOpen: true, settledAgoMs: 1500 };
+      let extra: Record<string, unknown> = { title: '✳ build\x07 fix', turnOpen: true, agentMidTurn: true, settledAgoMs: 1500 };
       mockServer = createMockDaemonServer(pipeName, AUTH_TOKEN, {
         'daemon.getAgentState': () => ({
           agentName: 'Claude Code',
@@ -337,12 +337,13 @@ describe('DaemonClient', () => {
 
       client = new DaemonClient(pipeName, AUTH_TOKEN);
       await client.connect();
-      await expect(client.getAgentState('sess-1')).resolves.toMatchObject({ title: '✳ build fix', turnOpen: true, settledAgoMs: 1500 });
-      extra = { title: 7, turnOpen: 'yes', settledAgoMs: -1 };
+      await expect(client.getAgentState('sess-1')).resolves.toMatchObject({ title: '✳ build fix', turnOpen: true, agentMidTurn: true, settledAgoMs: 1500 });
+      extra = { title: 7, turnOpen: 'yes', agentMidTurn: 'yes', settledAgoMs: -1 };
       const malformed = await client.getAgentState('sess-1');
       expect(malformed).not.toBeNull();
       expect(malformed).not.toHaveProperty('title');
       expect(malformed).not.toHaveProperty('turnOpen');
+      expect(malformed).not.toHaveProperty('agentMidTurn');
       expect(malformed).not.toHaveProperty('settledAgoMs');
       // No result settled since the agent started: the daemon sends null.
       extra = { settledAgoMs: null };
@@ -899,6 +900,43 @@ describe('DaemonClient', () => {
       await client.disconnect();
       sockets.forEach(s => s.destroy());
       await new Promise<void>(resolve => server.close(() => resolve()));
+    });
+
+    it('relays daemon turn boundaries and distinguishes silence inside a running turn', async () => {
+      const pipeName = testPipeName('agent-turn-event');
+      const sockets = new Set<net.Socket>();
+      const server = net.createServer((socket) => {
+        sockets.add(socket);
+        socket.setEncoding('utf8');
+        socket.on('data', () => { /* Accept RPC traffic; this server only tests events. */ });
+      });
+      await new Promise<void>((resolve, reject) => { server.on('error', reject); server.listen(pipeName, resolve); });
+      client = new DaemonClient(pipeName, AUTH_TOKEN);
+      try {
+        await client.connect();
+        const turns: unknown[] = [];
+        const idle: unknown[] = [];
+        client.on('session:agentTurn', (p) => turns.push(p));
+        client.on('session:idle', (p) => idle.push(p));
+        await vi.waitFor(() => expect(sockets.size).toBeGreaterThan(0), { timeout: 10_000 });
+        for (const socket of sockets) {
+          for (const [type, data] of [
+            ['agent.turn', { running: true }],
+            ['activity.idle', { agentMidTurn: true }],
+            ['agent.turn', { running: 'invalid' }],
+            ['agent.turn', { running: false }],
+          ]) socket.write(JSON.stringify({ type, sessionId: 'sess-codex', data }) + '\n');
+        }
+        await vi.waitFor(() => expect(turns).toEqual([
+          { sessionId: 'sess-codex', running: true },
+          { sessionId: 'sess-codex', running: false },
+        ]), { timeout: 10_000 });
+        expect(idle).toEqual([{ sessionId: 'sess-codex', agentMidTurn: true }]);
+      } finally {
+        await client.disconnect();
+        sockets.forEach((s) => s.destroy());
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
     });
 
     it('should emit disconnected when daemon goes away', async () => {

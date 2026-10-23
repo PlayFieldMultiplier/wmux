@@ -137,7 +137,27 @@ export function lastUserInputAt(ptyId: string): number | undefined {
   return lastInputAt.get(ptyId);
 }
 
+/**
+ * Panes whose last byte-activity edge from the daemon was idle
+ * (`activity.idle`, with no `activity.active` since). A daemon agent turn that
+ * ends on such a pane gets no idle edge of its own, so its end settles the
+ * pane (DaemonNotificationRouter `onAgentTurn`). Rebuilt from the daemon's
+ * status after a resubscribe, since the gap may have dropped edges.
+ */
+const byteIdle = new Set<string>();
+
+/** `true` idle, `false` active, `undefined` unknown (read as not idle). */
+export function noteByteActivity(ptyId: string, idle: boolean | undefined): void {
+  if (idle === true) byteIdle.add(ptyId);
+  else byteIdle.delete(ptyId);
+}
+
+export function isByteIdle(ptyId: string): boolean {
+  return byteIdle.has(ptyId);
+}
+
 export function clearPty(ptyId: string): void {
+  byteIdle.delete(ptyId);
   lastResizeAt.delete(ptyId);
   resizeRevisions.delete(ptyId);
   lastSettleAt.delete(ptyId);

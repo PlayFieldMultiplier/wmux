@@ -250,7 +250,10 @@ export const createResumeSlice: StateCreator<
     // machine whose shell emits no markers. `surfaceActivityAt` is untouched:
     // it is evidence about when the pane was last heard from, not the claim.
     for (const ptyId of Object.keys(draft.surfaceTurnOpenAt)) {
-      if (snapshot[ptyId] === false) delete draft.surfaceTurnOpenAt[ptyId];
+      if (snapshot[ptyId] === false) {
+        delete draft.surfaceTurnOpenAt[ptyId];
+        if (draft.surfaceTurnOpenByDaemon) delete draft.surfaceTurnOpenByDaemon[ptyId];
+      }
     }
     draft.commandRunningByPtyId = { ...snapshot };
   }),

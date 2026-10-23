@@ -1005,6 +1005,7 @@ export class DaemonClient extends EventEmitter {
     title?: string;
     /** #2263 — a turn is open (a quiet one reads `idle` in agentStatus). Absent on an older daemon. */
     turnOpen?: boolean;
+    agentMidTurn?: boolean;
     /** Milliseconds since the pane's last settled result. Absent on an older
      *  daemon and when none settled since its agent started. */
     settledAgoMs?: number;
@@ -1026,6 +1027,7 @@ export class DaemonClient extends EventEmitter {
         keyInputIdleMs?: unknown;
         title?: unknown;
         turnOpen?: unknown;
+        agentMidTurn?: unknown;
         settledAgoMs?: unknown;
       };
       const validStatuses: AgentStatus[] = [
@@ -1068,6 +1070,7 @@ export class DaemonClient extends EventEmitter {
           : {}),
         ...(typeof result.title === 'string' ? { title: sanitizeTitle(result.title) } : {}),
         ...(typeof result.turnOpen === 'boolean' ? { turnOpen: result.turnOpen } : {}),
+        ...(typeof result.agentMidTurn === 'boolean' ? { agentMidTurn: result.agentMidTurn } : {}),
         ...(typeof result.settledAgoMs === 'number' && Number.isFinite(result.settledAgoMs) && result.settledAgoMs >= 0
           ? { settledAgoMs: result.settledAgoMs }
           : {}),
@@ -1355,8 +1358,12 @@ export class DaemonClient extends EventEmitter {
           break;
         case 'activity.idle': {
           // #1463 — a daemon that knows the silence came before any turn says so.
-          const preTurn = (event.data as { preTurn?: unknown } | null)?.preTurn === true;
-          this.emit('session:idle', { sessionId: event.sessionId, ...(preTurn ? { preTurn } : {}) });
+          const data = event.data as { preTurn?: unknown; agentMidTurn?: unknown } | null;
+          const preTurn = data?.preTurn === true;
+          this.emit('session:idle', {
+            sessionId: event.sessionId, ...(preTurn ? { preTurn } : {}),
+            ...(typeof data?.agentMidTurn === 'boolean' ? { agentMidTurn: data.agentMidTurn } : {}),
+          });
           break;
         }
         case 'activity.active':
@@ -1366,6 +1373,16 @@ export class DaemonClient extends EventEmitter {
             agentName: typeof event.data === 'string' ? event.data : undefined,
           });
           break;
+        case 'agent.turn': {
+          const data = event.data as { running?: unknown; afterAnswer?: unknown } | null;
+          if (typeof data?.running === 'boolean') {
+            this.emit('session:agentTurn', {
+              sessionId: event.sessionId, running: data.running,
+              ...(data.afterAnswer === true ? { afterAnswer: true } : {}),
+            });
+          }
+          break;
+        }
         case 'agent.event':
           this.emit('session:agent', { sessionId: event.sessionId, event: event.data });
           break;

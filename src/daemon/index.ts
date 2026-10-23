@@ -3070,6 +3070,14 @@ function registerRpcHandlers(
     // so a client re-attaching (the renderer reconnect path) left no daemon-side
     // trace to correlate with renderer ptyId-clear / session-replacement.
     log('info', `[lifecycle] attachSession id=${p.id} pipe=${managed ? 'started' : 'no-managed-session'} total=${sessionManager.listSessions().length}`);
+    // A surviving agent turn may predate this renderer/main connection.
+    // Replay its current state after attach, even if it produces no new bytes.
+    if (managed) {
+      pipeServer.broadcast({
+        type: 'agent.turn', sessionId: p.id,
+        data: { running: managed.bridge.isAgentMidTurn() && managed.bridge.getAgentStatus() !== 'awaiting_input' },
+      });
+    }
 
     return { ok: true };
   });
@@ -5444,6 +5452,7 @@ function registerRpcHandlers(
       // and whether a turn is open (a quiet turn reads `idle` above).
       title: bridge.getTitle().title,
       turnOpen: bridge.isTurnOpen(),
+      agentMidTurn: bridge.isAgentMidTurn() && bridge.getAgentStatus() !== 'awaiting_input',
       // Additive, for main's idle stop of a reported bot worker after an app
       // restart: how long ago the pane's last result settled (null: none
       // since its agent started), so its idle window runs from that end.
@@ -7363,11 +7372,15 @@ function wireEvents(
   // to clients (main process). These are emitted by DaemonSessionManager
   // which re-emits bridge events.
   sessionManager.on('session:idle', (payload: { sessionId: string; preTurn?: boolean }) => {
+    const bridge = sessionManager.getSession(payload.sessionId)?.bridge;
     const event: DaemonEvent = {
       type: 'activity.idle',
       sessionId: payload.sessionId,
       // #1463 — silence before any turn (a TUI boot): main settles it.
-      data: payload.preTurn ? { preTurn: true } : null,
+      data: {
+        ...(payload.preTurn ? { preTurn: true } : {}),
+        agentMidTurn: bridge?.isAgentMidTurn() === true && bridge.getAgentStatus() !== 'awaiting_input',
+      },
     };
     pipeServer.broadcast(event);
     // #1621 — an OpenCode turn with no lifecycle `agent.stop` ends here, on
@@ -7636,6 +7649,12 @@ function wireEvents(
     };
     pipeServer.broadcast({ type: 'agent.event', sessionId: payload.sessionId, data });
     webTerminalServer?.emitAgentLiveness(deriveAgentLiveness(payload.sessionId, data, Date.now()));
+    // The turn the dialog paused goes on: its open turn was withheld while the
+    // pane waited on a human (`session:agentTurn`), and nothing else restores it.
+    // `afterAnswer`: main applies it even while it still shows the dialog.
+    if (managed?.bridge.isAgentMidTurn()) {
+      pipeServer.broadcast({ type: 'agent.turn', sessionId: payload.sessionId, data: { running: true, afterAnswer: true } });
+    }
   });
 
   // OSC 133 prompt/command markers — broadcast to main so
@@ -7700,7 +7719,15 @@ function wireEvents(
   // writes must stay async and few).
   const AGENT_TURN_SAVE_DELAY_MS = 1_000;
   let agentTurnSaveTimer: NodeJS.Timeout | null = null;
-  sessionManager.on('session:agentTurn', () => {
+  sessionManager.on('session:agentTurn', (payload: { sessionId: string; runningSince: number | null }) => {
+    // A pane blocked on a human is not running, whatever its episode says (the
+    // same guard attach, the status RPC and `activity.idle` apply): a start
+    // edge is left out then, never sent as an end, and the dialog's answer
+    // restores it (`session:answered`).
+    const turnBridge = sessionManager.getSession(payload.sessionId)?.bridge;
+    if (payload.runningSince === null || turnBridge?.getAgentStatus() !== 'awaiting_input') {
+      pipeServer.broadcast({ type: 'agent.turn', sessionId: payload.sessionId, data: { running: payload.runningSince !== null } });
+    }
     if (agentTurnSaveTimer || shuttingDown) return;
     agentTurnSaveTimer = setTimeout(() => {
       agentTurnSaveTimer = null;

@@ -50,6 +50,42 @@ describe('DaemonPTYBridge — interrupted-turn row', () => {
     expect(interrupted).toEqual([{ sessionId: 'sess-1', agent: 'Claude Code' }]);
   });
 
+  describe('the turn it ends', () => {
+    let edges: Array<number | null>;
+    beforeEach(() => {
+      edges = [];
+      bridge.on('agentTurn', (p: { runningSince: number | null }) => edges.push(p.runningSince));
+      vi.advanceTimersByTime(RESIZE_REDRAW_GUARD_MS);
+      bridge.noteInput('fix the build\r');
+      bridge.noteAgentStatus('running', true); // UserPromptSubmit
+      vi.advanceTimersByTime(10);
+      expect(bridge.isAgentMidTurn()).toBe(true);
+    });
+
+    it('this turn\'s Esc and its row end the open agent turn: no Stop hook follows an interrupt', () => {
+      bridge.noteInput('\x1b');
+      feed(ROW);
+      expect(bridge.isAgentMidTurn()).toBe(false);
+      expect(edges).toEqual([edges[0], null]);
+    });
+
+    it('a row reprinted with no Esc of this turn leaves the turn open', () => {
+      feed(ROW);
+      expect(bridge.isAgentMidTurn()).toBe(true);
+      expect(edges).toHaveLength(1);
+    });
+
+    it('an interrupt behind a dialog still ends the turn the dialog belonged to', () => {
+      bridge.noteAgentStatus('awaiting_input', true); // a permission prompt
+      expect(bridge.isAgentMidTurn()).toBe(true);
+      // The agent's own interrupt (no key, so the dialog is not answered first).
+      bridge.noteInterrupt();
+      feed(ROW);
+      expect(bridge.isAgentMidTurn()).toBe(false);
+      expect(edges).toEqual([edges[0], null]);
+    });
+  });
+
   it('ignores the row inside a resize redraw', () => {
     bridge.noteResize();
     feed(ROW);
