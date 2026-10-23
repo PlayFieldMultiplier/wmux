@@ -20,6 +20,7 @@ import { agentRow } from '../../shared/agentIdentity';
 import fs from 'node:fs';
 import { checkNativeTranscriptPath } from './providers';
 import { findCodexTranscriptCandidates, scanForTranscript, type ScanReport } from './TranscriptDiscovery';
+import { findQwenTranscriptCandidates } from './qwenTranscript';
 
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 
@@ -116,6 +117,20 @@ const OPTIONS: Readonly<Record<string, OptionTable>> = {
       ...['-c', '--config', '-m', '--model', '-p', '--profile', '-C', '--cd', '-s', '--sandbox', '-a', '--ask-for-approval',
         '--enable', '--disable', '--remote', '--remote-auth-token-env', '--local-provider', '--add-dir'].map((o) => [o, 1 as Arity] as const),
       ...['-i', '--image'].map((o) => [o, 'many' as Arity] as const),
+    ]),
+  },
+  // Qwen Code's value options (packages/cli/src/config/top-level-options.ts).
+  qwen: {
+    options: new Map<string, Arity>([
+      ...['-m', '--model', '--advisor', '-p', '--prompt', '-i', '--prompt-interactive', '--system-prompt', '--append-system-prompt',
+        '--output-style', '-s', '--sandbox', '--sandbox-image', '--approval-mode', '--channel', '--mcp-config', '--openai-logging-dir',
+        '--openai-api-key', '--openai-base-url', '--input-format', '-o', '--output-format', '--json-fd', '--json-file', '--json-schema',
+        '--input-file', '--session-id', '--worktree', '--max-session-turns', '--max-wall-time', '--max-tool-calls', '--max-subagent-depth',
+        '--auth-type', '--telemetry-target', '--telemetry-otlp-endpoint', '--telemetry-otlp-protocol', '--telemetry-outfile', '--proxy',
+      ].map((o) => [o, 1 as Arity] as const),
+      ...['--fallback-model', '--allowed-mcp-server-names', '--disable-mcp-server', '--allowed-tools', '-e', '--extensions',
+        '--include-directories', '--add-dir', '--core-tools', '--exclude-tools', '--disabled-slash-commands',
+      ].map((o) => [o, 'many' as Arity] as const),
     ]),
   },
 };
@@ -223,6 +238,7 @@ export function sessionFromCommandLine(agent: string, cmdline: string | undefine
 const CANDIDATES: Readonly<Record<string, (id: string, env: Record<string, string> | undefined, report: ScanReport) => string[]>> = {
   claude: (id, env, report) => scanForTranscript(id, env, report),
   codex: (id, env, report) => findCodexTranscriptCandidates(id, env, report),
+  qwen: (id, env, report) => findQwenTranscriptCandidates(id, env, report),
 };
 
 /** A transcript that holds a conversation: a non-empty file. An empty one is

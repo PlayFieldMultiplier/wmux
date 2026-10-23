@@ -5,6 +5,7 @@ import type { AgentSlug } from '../../shared/agentIdentity';
 import { checkTranscriptPath, type TranscriptPathCheck } from '../hooks/transcriptPathGuard';
 import { parseTranscriptLineDetailed, type ParsedTranscriptLine } from './parseEntry';
 import { parseCodexLineDetailed } from './parseCodexEntry';
+import { checkQwenTranscriptPath } from './qwenTranscript';
 
 /** Each native transcript adapter supplies BOTH decoding and account/identity
  * containment. Unknown agents cannot inherit another agent's parser or guard.
@@ -23,8 +24,14 @@ const providers: Readonly<Record<string, FileTranscriptProvider>> = {
 export function fileTranscriptProvider(agent: string): FileTranscriptProvider | undefined {
   return Object.hasOwn(providers, agent) ? providers[agent] : undefined;
 }
+/** Agents whose conversation file wmux only locates (exact resume), never reads:
+ *  no parser, so no file-transcript feature treats them as supported. */
+const checkOnly: Readonly<Record<string, FileTranscriptProvider['check']>> = {
+  qwen: checkQwenTranscriptPath,
+} satisfies Partial<Record<AgentSlug, FileTranscriptProvider['check']>>;
 export function checkNativeTranscriptPath(agent: string, file: string, nativeSessionId: string, env?: Record<string, string>): TranscriptPathCheck {
-  return fileTranscriptProvider(agent)?.check(file, nativeSessionId, env) ?? { ok: false, reason: 'unsupported-agent' };
+  const check = fileTranscriptProvider(agent)?.check ?? (Object.hasOwn(checkOnly, agent) ? checkOnly[agent] : undefined);
+  return check?.(file, nativeSessionId, env) ?? { ok: false, reason: 'unsupported-agent' };
 }
 export function codexSessionRoot(env?: Record<string, string>): string {
   return path.join(env?.CODEX_HOME || process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'sessions');

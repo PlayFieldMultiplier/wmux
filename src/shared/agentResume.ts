@@ -238,7 +238,9 @@ const UUID_RE = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
  * Other agents keep their own id formats, so only these two are checked.
  */
 export function isPlausibleResumeSessionId(agent: string, sessionId: string): boolean {
-  if (agentRow(agent)?.resume?.idFormat === 'uuid') return UUID_RE.test(sessionId);
+  const format = agentRow(agent)?.resume?.idFormat;
+  if (format === 'picker-only') return false;
+  if (format === 'uuid') return UUID_RE.test(sessionId);
   return sessionId.length > 0;
 }
 
@@ -260,6 +262,8 @@ const SKIP_TOKENS: ReadonlySet<string> = new Set([
   '--continue',
   '--resume',
   '--print',
+  // Qwen Code's one-shot form (`-p` is its short alias).
+  '--prompt',
   '-c',
   '-r',
   '-p',

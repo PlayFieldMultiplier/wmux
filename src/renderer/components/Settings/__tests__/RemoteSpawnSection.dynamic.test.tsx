@@ -93,6 +93,16 @@ describe('RemoteSpawnSection', () => {
     expect($<HTMLButtonElement>('[data-testid="remote-spawn-save"]')!.disabled).toBe(true);
   });
 
+  it('offers only the agents another PC may start', async () => {
+    stub();
+    await render(<RemoteSpawnSection enabled />);
+    await click($('[data-testid="remote-spawn-enabled"]'));
+    const offered = [...container.querySelectorAll('[data-remote-spawn-agent]')].map((el) => el.getAttribute('data-remote-spawn-agent'));
+    expect(offered).toContain('claude');
+    expect(offered).toContain('codex');
+    for (const agent of ['gemini', 'qwen', 'kimi']) expect(offered).not.toContain(agent);
+  });
+
   it('shows the daemon’s reason when it refuses the save', async () => {
     stub(() => ({ ok: false, error: '/tmp/x is not the top folder of a git repository' }));
     await render(<RemoteSpawnSection enabled pickFolder={async () => '/tmp/x'} />);

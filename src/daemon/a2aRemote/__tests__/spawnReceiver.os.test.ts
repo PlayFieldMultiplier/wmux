@@ -160,6 +160,24 @@ describe('the decision', () => {
     expect(requests.summaries()[0]).toMatchObject({ hostId: HOST, state: 'decided', code: 'not-supported', rootId: 'web' });
   });
 
+  it('a policy file naming an agent another PC may not start loads as off, and a listing of one is still refused', async () => {
+    await allowHost();
+    const file = path.join(a2aDir, 'spawn-policy.json');
+    const raw = fs.readFileSync(file, 'utf8');
+    expect(raw).toContain('"codex"');
+    fs.writeFileSync(file, raw.replace('"codex"', '"gemini"'));
+    // A file written by a build that offered gemini: not a policy now, so nothing starts.
+    policy = new SpawnPolicyStore({ dir: a2aDir, scheduleHarden: quiet });
+    expect(policy.get()).toMatchObject({ enabled: false, agents: [] });
+    expect(await decide(envelope({ spawn: { agent: 'gemini' } }), HOST, makeReceiver())).toBe('not-allowed');
+    // A policy that lists one anyway (from anywhere) is refused on the agent.
+    await allowHost();
+    installed.add('gemini');
+    const listed = makeReceiver({ policy: { get: () => ({ ...policy.get(), agents: ['claude', 'gemini'] }) } });
+    expect(await decide(envelope({ spawn: { agent: 'gemini' } }), HOST, listed)).toBe('agent-not-allowed');
+    listed.stop();
+  });
+
   it('an agent B did not list, and one that is not installed', async () => {
     await allowHost({ agents: ['codex'] });
     expect(await decide(envelope())).toBe('agent-not-allowed');

@@ -21,6 +21,7 @@
 // Pure module: no node:* imports (the renderer imports these types).
 
 import { isAgentSlug, type AgentSlug } from './agentIdentity';
+import { FANOUT_AGENTS } from './fanoutPreset';
 import { A2A_REMOTE_BODY_MAX, A2A_REMOTE_RECORD_V, isConsistentEndpoint, isHostId, type HostId } from './a2aRemote';
 import { DEFAULT_FANOUT_WORKER_PERMISSION_MODE, isFanoutWorkerPermissionMode, type FanoutWorkerPermissionMode } from './workerLaunch';
 
@@ -378,6 +379,18 @@ function safeId(v: unknown): v is string {
   return typeof v === 'string' && v.length > 0 && v.length <= SAFE_ID_MAX && !/[\u0000-\u001f\u007f]/.test(v);
 }
 
+/**
+ * Agents another PC may start here: the fan-out agents verified end to end
+ * (FANOUT_AGENTS `selectable`), which start unattended past their first-run
+ * screens. Any other agent would stop on its own trust or onboarding prompt
+ * with nobody there. A policy naming one is not valid, and a request for one
+ * is refused `agent-not-allowed`.
+ */
+const SPAWNABLE_AGENTS: ReadonlySet<string> = new Set(FANOUT_AGENTS.filter((a) => a.selectable).map((a) => a.stem));
+export function isSpawnableAgent(v: unknown): v is AgentSlug {
+  return isAgentSlug(v) && SPAWNABLE_AGENTS.has(v);
+}
+
 export function isSpawnId(v: unknown): v is string {
   return typeof v === 'string' && SPAWN_ID_RE.test(v);
 }
@@ -519,11 +532,11 @@ export function coerceSpawnPolicy(raw: unknown): A2aSpawnPolicyV1 | null {
     if (cleanRoots.some((c) => c.id === r['id'])) return null;
     cleanRoots.push({ id: r['id'] as string, label: r['label'] as string, path: r['path'] as string });
   }
-  if (!Array.isArray(agents) || agents.length > SPAWN_ROOTS_MAX || !agents.every(isAgentSlug)) return null;
+  if (!Array.isArray(agents) || agents.length > SPAWN_ROOTS_MAX || !agents.every(isSpawnableAgent)) return null;
   if (!Array.isArray(rules) || rules.length > SPAWN_RULES_MAX) return null;
   const cleanRules: A2aSpawnRuleV1[] = [];
   for (const r of rules) {
-    if (!isPlain(r) || !isHostId(r['hostId']) || !isSpawnRootId(r['rootId']) || !isAgentSlug(r['agent'])) return null;
+    if (!isPlain(r) || !isHostId(r['hostId']) || !isSpawnRootId(r['rootId']) || !isSpawnableAgent(r['agent'])) return null;
     const sub = r['sub'] === undefined ? '' : normalizeSpawnSub(r['sub']);
     if (sub === null || (r['sub'] !== undefined && sub !== r['sub'])) return null;
     // A rule for a folder no longer listed goes with it: a folder added later

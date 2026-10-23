@@ -96,8 +96,11 @@ export interface AgentResumeSpec {
    *  `--session-id <id>`), when the agent has one. wmux pins fresh launches
    *  with it, and drops it from a relaunch: the id may already be in use. */
   readonly pin?: string;
-  /** The shape a stored session id must have before it is offered. */
-  readonly idFormat: 'uuid';
+  /** The shape a stored session id must have before it is offered.
+   *  `'picker-only'`: wmux binds no id for this agent (it names its own
+   *  sessions, with no launch flag to set one), so a stored id is never
+   *  offered and only the picker is. */
+  readonly idFormat: 'uuid' | 'picker-only';
 }
 
 /** What the file-transcript chat route (nativeChatBridge) can do for an agent. */
@@ -407,6 +410,29 @@ export const AGENT_IDENTITIES = [
     accounts: 'agy-service',
     tokenUsage: true,
     modelCatalog: true,
+  },
+  {
+    // Qwen Code. Options from the official CLI (QwenLM/qwen-code
+    // packages/cli/src/config/top-level-options.ts, checked 2026-10-23):
+    // `--resume` "Use without an ID to show session picker", `--resume <id>`
+    // resumes that session, `--session-id` "Specify a session ID for this run"
+    // (a UUID). The conversation is `<projects>/<cwd>/chats/<id>.jsonl`
+    // (src/daemon/transcript/qwenTranscript.ts).
+    slug: 'qwen',
+    display: 'Qwen Code',
+    resume: { picker: '--resume', exact: '--resume {id}', pin: '--session-id', idFormat: 'uuid' },
+    process: { packages: ['@qwen-code/qwen-code'] },
+  },
+  {
+    // Kimi Code CLI. https://www.kimi.com/code/docs/en/kimi-code-cli/reference/kimi-command
+    // (checked 2026-10-23): `--session` with no id opens a selector, `--session
+    // <id>` opens that session. Its ids are its own (not UUIDs) and no launch
+    // flag sets one, so wmux offers the picker only. npm package from
+    // https://www.kimi.com/code/docs/en/kimi-code-cli/guides/getting-started.html.
+    slug: 'kimi',
+    display: 'Kimi Code CLI',
+    resume: { picker: '--session', exact: '--session {id}', idFormat: 'picker-only' },
+    process: { packages: ['@moonshot-ai/kimi-code'] },
   },
 ] as const satisfies readonly AgentIdentityRow[];
 

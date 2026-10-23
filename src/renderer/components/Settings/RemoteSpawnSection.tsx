@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   defaultSpawnPolicy,
+  isSpawnableAgent,
   SPAWN_ROOTS_MAX,
   type A2aSpawnApproval,
   type A2aSpawnFollowUps,
@@ -224,7 +225,7 @@ function SpawnPolicyEditor({ pickFolder }: { pickFolder: () => Promise<string | 
             ))}
           <SettingRow label={t('remoteSpawn.agents')} description={t('remoteSpawn.agentsDesc')} layout="stacked">
             <div className="flex flex-wrap gap-x-4 gap-y-2 pt-1" role="group" aria-label={t('remoteSpawn.agents')}>
-              {AGENT_ROWS.map((a) => (
+              {AGENT_ROWS.filter((a) => isSpawnableAgent(a.slug)).map((a) => (
                 <label key={a.slug} className="inline-flex items-center gap-1.5 text-[13px]">
                   <Checkbox
                     checked={draft.agents.includes(a.slug)}
