@@ -74,11 +74,11 @@ describe('runMetadataPollTick payload diff', () => {
     const mgr = fakePtyManager(live);
     const { win, sent } = fakeWindow();
     updateCwd('pty-diff-sp', 'C:/repo-sp');
-    noteShellPrompt('pty-diff-sp', { shape: 'secret' });
+    noteShellPrompt('pty-diff-sp', { epoch: 'e', seq: 1, prompt: { shape: 'secret' } });
 
     await runMetadataPollTick(mgr, win, true);
     expect(sent[0][1]).toMatchObject({ ptyId: 'pty-diff-sp', shellPrompt: { shape: 'secret' } });
-    noteShellPrompt('pty-diff-sp', null);
+    noteShellPrompt('pty-diff-sp', { epoch: 'e', seq: 2, prompt: null });
     await runMetadataPollTick(mgr, win, true);
     expect(sent).toHaveLength(2);
     expect(sent[1][1]).toMatchObject({ ptyId: 'pty-diff-sp', shellPrompt: null });

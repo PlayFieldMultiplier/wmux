@@ -1,6 +1,6 @@
 import net from 'node:net';
 import type { PaneUsageLimit, PaneUsageLimitPatch } from '../shared/usageLimit';
-import { parseShellPromptSignal, type ShellPromptSignal } from '../shared/shellPrompt';
+import { parseShellPromptChange, parseShellPromptList, type ShellPromptList } from '../shared/shellPrompt';
 import { EventEmitter } from 'node:events';
 import crypto from 'node:crypto';
 import type { RpcResponse, DaemonEvent } from '../shared/rpc';
@@ -943,17 +943,10 @@ export class DaemonClient extends EventEmitter {
    * like an event. Null when it is unreachable or predates them: the caller
    * then keeps what it has instead of clearing it.
    */
-  async listShellPrompts(): Promise<Array<{ sessionId: string; prompt: ShellPromptSignal }> | null> {
+  async listShellPrompts(): Promise<ShellPromptList | null> {
     if (!this.isConnected) return null;
     try {
-      const response = await this.rpc('daemon.shellPrompt.list', {}) as { prompts?: unknown };
-      if (!Array.isArray(response?.prompts)) return null;
-      const out: Array<{ sessionId: string; prompt: ShellPromptSignal }> = [];
-      for (const item of response.prompts as Array<{ sessionId?: unknown; prompt?: unknown }>) {
-        const prompt = parseShellPromptSignal(item?.prompt);
-        if (typeof item?.sessionId === 'string' && item.sessionId && prompt) out.push({ sessionId: item.sessionId, prompt });
-      }
-      return out;
+      return parseShellPromptList(await this.rpc('daemon.shellPrompt.list', {}));
     } catch {
       return null;
     }
@@ -1242,11 +1235,14 @@ export class DaemonClient extends EventEmitter {
           }
           break;
         }
-        case 'shell.prompt':
+        case 'shell.prompt': {
           // A pane with no agent waits on stdin (daemon/shellPrompt); null clears.
-          // Checked here: a `secret` keeps no question whatever was sent.
-          this.emit('session:shellPrompt', { sessionId: event.sessionId, prompt: parseShellPromptSignal(event.data) });
+          // Checked here: a `secret` keeps no question whatever was sent, and a
+          // change without a version is dropped (it cannot be ordered against the list).
+          const change = parseShellPromptChange(event.data);
+          if (change) this.emit('session:shellPrompt', { sessionId: event.sessionId, ...change });
           break;
+        }
         case 'prompt.event':
           // OSC 133 shell-integration marker (A/B/C/D) parsed in the daemon.
           // DaemonNotificationRouter consumes this to tee the D variant onto

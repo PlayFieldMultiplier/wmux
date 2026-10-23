@@ -40,7 +40,7 @@ import { getWorkspaceMirror, type WorkspaceMirror } from '../workspace/Workspace
 import { sendToRenderer } from '../pipe/handlers/_bridge';
 import { agentDisplayToSlug } from '../pty/AgentDetector';
 import type { ChannelMessage } from '../../shared/channels';
-import type { ShellPromptSignal } from '../../shared/shellPrompt';
+import type { ShellPromptChange } from '../../shared/shellPrompt';
 import { noteShellPrompt } from '../shellPrompt/shellPromptMirror';
 
 // Mirrors PTYBridge.AGENT_EVENT_SUPPRESSION_MS — same dedup semantics across
@@ -1419,9 +1419,10 @@ export class DaemonNotificationRouter {
     };
 
     // A pane with no agent waiting on stdin: per-ptyId, like `subagents`. Null clears.
-    const onShellPrompt = (payload: { sessionId: string; prompt: ShellPromptSignal | null }) => {
+    const onShellPrompt = (payload: { sessionId: string } & ShellPromptChange) => {
       try {
-        noteShellPrompt(payload.sessionId, payload.prompt);
+        // An event older than what main has (the list overtook it) changes nothing.
+        if (!noteShellPrompt(payload.sessionId, payload)) return;
         broadcastMetadataUpdate(this.getWindow(), { ptyId: payload.sessionId, shellPrompt: payload.prompt });
       } catch (err) {
         console.warn('[DaemonNotificationRouter] shell prompt error:', err);
