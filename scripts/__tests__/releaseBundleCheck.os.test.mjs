@@ -62,10 +62,27 @@ describe.skipIf(process.platform === 'win32')('check-release-bundle.mjs', () => 
     fs.mkdirSync(path.join(out, 'vendor'));
     await asar.createPackage(inner, path.join(out, 'vendor', 'tools.asar'));
     fs.symlinkSync(path.join('..', 'vendor', 'tools.asar'), path.join(out, 'resources', 'tools.asar'));
-    fs.unlinkSync(path.join(out, 'resources', 'app.asar'));
     const run = check(out);
     expect(run.status).toBe(1);
     expect(run.stderr).toContain('tools.asar!/tool.js');
+  });
+
+  it('fails on a fake-agents link even when its target was walked already', async () => {
+    // It points at the output dir itself, which the walk visits first, so the
+    // target is always seen before the link, whatever the directory order.
+    const out = await packaged({ 'index.js': 'app' });
+    fs.symlinkSync('..', path.join(out, 'resources', 'fake-agents'));
+    const run = check(out);
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain(path.join('resources', 'fake-agents'));
+  });
+
+  it('refuses a directory with no app.asar, even when another archive is there', async () => {
+    const out = await packaged({ 'index.js': 'app' });
+    fs.renameSync(path.join(out, 'resources', 'app.asar'), path.join(out, 'resources', 'tools.asar'));
+    const run = check(out);
+    expect(run.status).toBe(2);
+    expect(run.stderr).toContain('no app.asar');
   });
 
   it('fails on a symlink whose target cannot be read', async () => {

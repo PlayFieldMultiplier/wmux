@@ -20,6 +20,12 @@ export function indexFixtures(fixtures) {
   return index;
 }
 
+/** Whether a path alone marks a fake agent's place: a `fake-agents` segment, or a fixture's name (any case). */
+export function pathNamesFakeAgent(p, index) {
+  const parts = segments(p);
+  return parts.some((s) => s.toLowerCase() === 'fake-agents') || index.names.has((parts[parts.length - 1] ?? '').toLowerCase());
+}
+
 /**
  * The shipped entries that are a fake agent, and the ones that could be but
  * cannot be read. `entries` are `{ path, size?, read }`: `read` gives the
