@@ -706,5 +706,7 @@ describe('qwen and kimi grammar', () => {
     expect(resumeGrammarFor('kimi')).toMatchObject({ picker: '--session' });
     expect(isPlausibleResumeSessionId('kimi', '01HZX3K8Q2VJ7N5R9T4W6Y0ABC')).toBe(false);
     expect(isPlausibleResumeSessionId('kimi', '0f1e2d3c-4b5a-4987-8a6b-5c4d3e2f1a0b')).toBe(false);
+    // No exact form: whatever reaches it, only the picker is typed.
+    expect(resumeGrammarFor('kimi')?.withId('01HZX3K8Q2VJ7N5R9T4W6Y0ABC; echo hi')).toBe('--session');
   });
 });

@@ -160,19 +160,21 @@ describe('the decision', () => {
     expect(requests.summaries()[0]).toMatchObject({ hostId: HOST, state: 'decided', code: 'not-supported', rootId: 'web' });
   });
 
-  it('a policy file naming an agent another PC may not start loads as off, and a listing of one is still refused', async () => {
+  it('a policy file naming an agent another PC may not start loads without it, and a listing of one is still refused', async () => {
     await allowHost();
     const file = path.join(a2aDir, 'spawn-policy.json');
     const raw = fs.readFileSync(file, 'utf8');
     expect(raw).toContain('"codex"');
     fs.writeFileSync(file, raw.replace('"codex"', '"gemini"'));
-    // A file written by a build that offered gemini: not a policy now, so nothing starts.
+    // A file written by a build that offered gemini: gemini is dropped, the rest stands.
     policy = new SpawnPolicyStore({ dir: a2aDir, scheduleHarden: quiet });
-    expect(policy.get()).toMatchObject({ enabled: false, agents: [] });
-    expect(await decide(envelope({ spawn: { agent: 'gemini' } }), HOST, makeReceiver())).toBe('not-allowed');
+    expect(policy.get()).toMatchObject({ enabled: true, agents: ['claude'] });
+    installed.add('gemini');
+    expect(await decide(envelope({ spawn: { agent: 'gemini' } }), HOST, makeReceiver())).toBe('agent-not-allowed');
+    // claude passes every check (this receiver has no starter, so it ends not-supported).
+    expect(await decide(envelope(), HOST, makeReceiver())).toBe('not-supported');
     // A policy that lists one anyway (from anywhere) is refused on the agent.
     await allowHost();
-    installed.add('gemini');
     const listed = makeReceiver({ policy: { get: () => ({ ...policy.get(), agents: ['claude', 'gemini'] }) } });
     expect(await decide(envelope({ spawn: { agent: 'gemini' } }), HOST, listed)).toBe('agent-not-allowed');
     listed.stop();

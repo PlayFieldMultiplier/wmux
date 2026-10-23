@@ -16,11 +16,11 @@ let container: HTMLDivElement;
 let root: Root;
 let spawnPolicySet: ReturnType<typeof vi.fn>;
 
-function stub(set: (p: A2aSpawnPolicyV1) => unknown = (p) => ({ ok: true, policy: { ...p, version: p.version + 1 } })) {
+function stub(set: (p: A2aSpawnPolicyV1) => unknown = (p) => ({ ok: true, policy: { ...p, version: p.version + 1 } }), stored: unknown = defaultSpawnPolicy()) {
   spawnPolicySet = vi.fn(async (p: A2aSpawnPolicyV1) => set(p));
   vi.stubGlobal('electronAPI', {
     a2aRemote: {
-      spawnPolicyGet: vi.fn(async () => ({ policy: defaultSpawnPolicy() })),
+      spawnPolicyGet: vi.fn(async () => ({ policy: stored })),
       spawnPolicySet,
     },
   });
@@ -101,6 +101,20 @@ describe('RemoteSpawnSection', () => {
     expect(offered).toContain('claude');
     expect(offered).toContain('codex');
     for (const agent of ['gemini', 'qwen', 'kimi']) expect(offered).not.toContain(agent);
+  });
+
+  it('a saved policy naming one of the others loses it, and the next save sends the rest', async () => {
+    const hostId = '11111111-1111-4111-8111-111111111111';
+    const claude = { hostId, rootId: 'web', agent: 'claude' };
+    stub(undefined, {
+      ...defaultSpawnPolicy(), enabled: true, roots: [{ id: 'web', label: 'Web', path: '/r' }],
+      agents: ['claude', 'gemini'], rules: [{ hostId, rootId: 'web', agent: 'gemini' }, claude],
+    });
+    await render(<RemoteSpawnSection enabled />);
+    await click($('[data-remote-spawn-agent="codex"]'));
+    await click($('[data-testid="remote-spawn-save"]'));
+    expect(spawnPolicySet).toHaveBeenCalledTimes(1);
+    expect(spawnPolicySet.mock.calls[0][0]).toMatchObject({ agents: ['claude', 'codex'], rules: [claude] });
   });
 
   it('shows the daemon’s reason when it refuses the save', async () => {

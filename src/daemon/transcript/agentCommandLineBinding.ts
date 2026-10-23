@@ -223,7 +223,8 @@ function subcommandFormSession(argv: readonly Word[], from: number, subcommand: 
  */
 export function sessionFromCommandLine(agent: string, cmdline: string | undefined): CommandLineSession | undefined {
   const grammar = resumeGrammarFor(agent);
-  if (!grammar || !cmdline) return undefined;
+  // A picker-only agent's ids are never bound (agentIdentity.ts `idFormat`).
+  if (!grammar || !cmdline || agentRow(agent)?.resume?.idFormat === 'picker-only') return undefined;
   const argv = words(cmdline);
   const launcher = launcherIndex(argv, agent);
   if (launcher < 0) return undefined;
@@ -248,14 +249,16 @@ function holdsConversation(file: string): boolean {
 }
 
 /**
- * The transcript `id` names for `agent`: `file` when a contained, non-empty one
- * exists; otherwise `certain` says whether the lookup proves there is none (a
- * scan cut short by its bounds, an unreadable folder or duplicate copies prove
- * nothing).
+ * The transcript `id` names for `agent`: `file` when exactly one contained,
+ * non-empty one exists; otherwise `certain` says whether the lookup proves
+ * there is none (a scan cut short by its bounds, an unreadable folder or
+ * duplicate copies prove nothing, so more than one contained copy binds none).
  */
 function findTranscript(agent: string, id: string, env?: Record<string, string>): { file?: string; certain: boolean } {
   const report: ScanReport = { complete: true };
-  const file = CANDIDATES[agent](id, env, report).find((f) => checkNativeTranscriptPath(agent, f, id, env).ok);
+  const contained = CANDIDATES[agent](id, env, report).filter((f) => checkNativeTranscriptPath(agent, f, id, env).ok);
+  if (contained.length > 1) return { certain: false };
+  const file = contained[0];
   if (file && holdsConversation(file)) return { file, certain: true };
   // A contained file that is empty, or one outside the account, is not a conversation either.
   return { certain: report.complete || file !== undefined };

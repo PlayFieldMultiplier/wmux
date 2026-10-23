@@ -88,14 +88,17 @@ describe('the policy', () => {
     expect(coerceSpawnPolicy(defaultSpawnPolicy())).toEqual(defaultSpawnPolicy());
   });
 
+  it('drops an agent another PC may not start, and its rules, keeping the rest', () => {
+    const hostId = '11111111-1111-4111-8111-111111111111';
+    const base = { ...defaultSpawnPolicy(), enabled: true, hosts: { [hostId]: { allowed: true } }, roots: [{ id: 'web', label: 'Web', path: '/r' }] };
+    const claude = { hostId, rootId: 'web', agent: 'claude' };
+    const policy = coerceSpawnPolicy({ ...base, agents: ['gemini', 'claude', 'qwen'], rules: [{ hostId, rootId: 'web', agent: 'gemini' }, claude] });
+    expect(policy).toMatchObject({ enabled: true, hosts: { [hostId]: { allowed: true } }, roots: [{ id: 'web' }], agents: ['claude'], rules: [claude] });
+  });
+
   it('refuses a policy with anything unknown rather than dropping it', () => {
     const base = { ...defaultSpawnPolicy(), enabled: true };
     expect(coerceSpawnPolicy({ ...base, agents: ['claude', 'rm'] })).toBeNull();
-    // An agent another PC may not start (not verified unattended) is refused the same way.
-    for (const agent of ['gemini', 'qwen', 'kimi']) {
-      expect(coerceSpawnPolicy({ ...base, agents: ['claude', agent] })).toBeNull();
-      expect(coerceSpawnPolicy({ ...base, roots: [{ id: 'web', label: 'Web', path: '/r' }], rules: [{ hostId: '11111111-1111-4111-8111-111111111111', rootId: 'web', agent }] })).toBeNull();
-    }
     expect(coerceSpawnPolicy({ ...base, permissionMode: 'yolo' })).toBeNull();
     expect(coerceSpawnPolicy({ ...base, hosts: { 'not-a-host': { allowed: true } } })).toBeNull();
     expect(coerceSpawnPolicy({ ...base, roots: [{ id: 'a', label: 'A', path: '/x' }, { id: 'a', label: 'B', path: '/y' }] })).toBeNull();

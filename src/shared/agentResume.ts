@@ -70,9 +70,12 @@ interface ResumeGrammar {
 const RESUME_BY_LAUNCHER: ReadonlyMap<string, ResumeGrammar> = new Map(
   AGENT_ROWS.flatMap((row): [string, ResumeGrammar][] => {
     const spec = row.resume;
-    return spec
-      ? [[row.slug, { picker: spec.picker, withId: (id) => spec.exact.split('{id}').join(id), ...(spec.pin ? { pin: spec.pin } : {}) }]]
-      : [];
+    if (!spec) return [];
+    // A picker-only agent has no exact form: any resume of it opens the picker,
+    // and no id is ever written into its line.
+    const exact = spec.exact;
+    const withId = exact === undefined ? (): string => spec.picker : (id: string): string => exact.split('{id}').join(id);
+    return [[row.slug, { picker: spec.picker, withId, ...(spec.pin ? { pin: spec.pin } : {}) }]];
   }),
 );
 

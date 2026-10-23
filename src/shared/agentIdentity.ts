@@ -83,24 +83,25 @@ export interface AgentMcpTargetSpec {
 }
 
 /** Session resume grammar as data. `{id}` in `exact` stands for the session id. */
-export interface AgentResumeSpec {
+export type AgentResumeSpec = AgentResumeSpecBase & (
+  | { readonly idFormat: 'uuid'; readonly exact: string }
+  /** wmux binds no id for this agent (it names its own sessions, with no
+   *  launch flag to set one): there is no exact form, so a stored id is never
+   *  offered or typed, and only the picker is. */
+  | { readonly idFormat: 'picker-only'; readonly exact?: never; readonly pin?: never }
+);
+
+interface AgentResumeSpecBase {
   /** Inserted after the launcher to open the agent's own session picker, which
    *  lists the folder's conversations and lets the user choose. Typed by the
    *  resume pill, chip and Deck when no exact session is bound. There is no
    *  "latest in this folder" form: several panes can share a folder, and a
    *  guess would reopen the same conversation in each (#1946). */
   readonly picker: string;
-  /** Inserted after the launcher to resume one exact session. */
-  readonly exact: string;
   /** The launch flag that names a NEW session's id up front (Claude
    *  `--session-id <id>`), when the agent has one. wmux pins fresh launches
    *  with it, and drops it from a relaunch: the id may already be in use. */
   readonly pin?: string;
-  /** The shape a stored session id must have before it is offered.
-   *  `'picker-only'`: wmux binds no id for this agent (it names its own
-   *  sessions, with no launch flag to set one), so a stored id is never
-   *  offered and only the picker is. */
-  readonly idFormat: 'uuid' | 'picker-only';
 }
 
 /** What the file-transcript chat route (nativeChatBridge) can do for an agent. */
@@ -431,7 +432,7 @@ export const AGENT_IDENTITIES = [
     // https://www.kimi.com/code/docs/en/kimi-code-cli/guides/getting-started.html.
     slug: 'kimi',
     display: 'Kimi Code CLI',
-    resume: { picker: '--session', exact: '--session {id}', idFormat: 'picker-only' },
+    resume: { picker: '--session', idFormat: 'picker-only' },
     process: { packages: ['@moonshot-ai/kimi-code'] },
   },
 ] as const satisfies readonly AgentIdentityRow[];

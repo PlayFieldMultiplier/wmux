@@ -271,6 +271,7 @@ describe('qwen and kimi', () => {
     expect(sessionFromCommandLine('qwen', `qwen -m qwen3-coder -p "go" --resume ${ID}`)).toEqual({ sessionId: ID, kind: 'resume' });
     expect(sessionFromCommandLine('qwen', 'qwen --resume')).toBeUndefined();
     expect(sessionFromCommandLine('kimi', 'kimi --session 01HZX3K8Q2VJ7N5R9T4W6Y0ABC')).toBeUndefined();
+    expect(sessionFromCommandLine('kimi', `kimi --session ${ID}`)).toBeUndefined();
   });
 
   it('binds a pinned qwen launch, and a resume only when its conversation is in this account', () => {
@@ -280,6 +281,15 @@ describe('qwen and kimi', () => {
     expect(commandLineBinding('qwen', `qwen --resume ${ID}`, '/work', env)).toBeUndefined();
     const file = chat('-work');
     expect(commandLineBinding('qwen', `qwen --resume ${ID}`, '/work', env, { now: 7 })?.transcriptPath).toBe(file);
+  });
+
+  it('binds none of several copies of one conversation, and keeps a stopped pin while they are there', () => {
+    chat('-work');
+    chat('-work-copy');
+    const env = { QWEN_HOME: home };
+    expect(commandLineBinding('qwen', `qwen --resume ${ID}`, '/work', env)).toBeUndefined();
+    const pinned = { agent: 'qwen', sessionId: ID, cwd: '/work', ts: 7 };
+    expect(settleStoppedBinding(pinned, env)).toBe(pinned);
   });
 
   it('settles a stopped qwen pin: dropped while unwritten, adopted once written', () => {

@@ -19,11 +19,14 @@ const UUID_RE = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const MAX_PROJECT_DIRS = 512;
 const MAX_CANDIDATES = 8;
 
-/** `<base>/projects` for the account a launch with `env` uses. */
-export function qwenProjectsRoot(env?: Record<string, string>): string {
-  const base = env?.QWEN_RUNTIME_DIR || process.env.QWEN_RUNTIME_DIR
-    || env?.QWEN_HOME || process.env.QWEN_HOME
-    || path.join(os.homedir(), '.qwen');
+/**
+ * `<base>/projects` for the account a launch with `env` uses: read from that
+ * one env (the daemon's own when none is given), never mixed with the other,
+ * so a pane's QWEN_HOME is not overridden by the daemon's runtime dir.
+ */
+export function qwenProjectsRoot(env?: Record<string, string | undefined>): string {
+  const from = env ?? process.env;
+  const base = from.QWEN_RUNTIME_DIR || from.QWEN_HOME || path.join(from.HOME || os.homedir(), '.qwen');
   return path.join(path.resolve(base), 'projects');
 }
 
@@ -59,7 +62,7 @@ export function findQwenTranscriptCandidates(id: string, env?: Record<string, st
       continue;
     }
     found.push(candidate);
-    if (found.length >= MAX_CANDIDATES) return found;
+    if (found.length >= MAX_CANDIDATES) { incomplete(); return found; }
   }
   return found;
 }
