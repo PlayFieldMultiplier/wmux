@@ -415,6 +415,54 @@ export function envHasSuffix(envText, suffix) {
 }
 
 /**
+ * The answering daemon's pid from `wmux daemon status --json` stdout, or null.
+ * Decided on the JSON, not the exit code: a daemon that does not answer also
+ * prints JSON (`{ ok: false, running: false, error }`) and exits 1.
+ */
+export function parseDaemonStatusPid(stdout) {
+  let out;
+  try {
+    out = JSON.parse(String(stdout ?? '').trim());
+  } catch {
+    return null;
+  }
+  if (out?.ok !== true || out.running !== true) return null;
+  return Number.isInteger(out.pid) && out.pid > 0 ? out.pid : null;
+}
+
+/**
+ * Does live `pid`, read from this run's suffixed daemon.pid, belong to the
+ * recorded isolated instance? A stale pid file can name a reused pid, so the
+ * pid alone proves nothing. Returns { ok, how, reason }.
+ *   - 'pipe': the daemon on this suffix's own control pipe (its name and auth
+ *     token both live under ~/.wmux<suffix>) answers `daemon.ping` with this
+ *     very pid. Every platform; the only proof on Windows, where another
+ *     process's environment is not readable.
+ *   - 'env' (not Windows): the process's own environment sets
+ *     WMUX_DATA_SUFFIX to exactly `suffix` (envHasSuffix).
+ * probes: pidAlive(pid), pingPid() -> number|null, envText(pid) -> string.
+ */
+export function daemonIdentityHolds({ pid, suffix }, probes, platform = process.platform) {
+  if (!Number.isInteger(pid) || pid <= 0 || !suffix) return { ok: false, how: null, reason: 'no daemon pid or suffix' };
+  if (!probes.pidAlive(pid)) return { ok: false, how: null, reason: `daemon pid ${pid} is not running` };
+  let answered = null;
+  try { answered = probes.pingPid(); } catch { answered = null; }
+  if (answered === pid) return { ok: true, how: 'pipe', reason: null };
+  if (platform !== 'win32') {
+    let envText = '';
+    try { envText = probes.envText(pid); } catch { envText = ''; }
+    if (envHasSuffix(envText, suffix)) return { ok: true, how: 'env', reason: null };
+  }
+  return {
+    ok: false,
+    how: null,
+    reason: answered == null
+      ? `no daemon answered on the ${suffix} pipe, and daemon pid ${pid} is not otherwise proven ours`
+      : `the daemon on the ${suffix} pipe is pid ${answered}, not daemon.pid's ${pid}`,
+  };
+}
+
+/**
  * macOS: the environment part of `ps -E -ww -o command=`, which prints the
  * command line and then the environment. `argsOnly` is the same process's
  * `ps -ww -o command=`; stripping it keeps a `WMUX_DATA_SUFFIX=...` that only

@@ -11,6 +11,7 @@ import path from 'node:path';
 import {
   appIdentityHolds,
   claimOwnedBy,
+  daemonIdentityHolds,
   darwinEnvPart,
   electronUserDataDir,
   envHasSuffix,
@@ -23,6 +24,7 @@ import {
   packagedCliBundle,
   parseCdpLog,
   parseConsoleLine,
+  parseDaemonStatusPid,
   parseKillResults,
   parseLstart,
   parseProcessStart,
@@ -164,6 +166,72 @@ describe('envHasSuffix', () => {
     expect(envHasSuffix('HOME=/x\0WMUX_DATA_SUFFIX=-verify-a\0', '-verify-a')).toBe(true);
     expect(envHasSuffix('WMUX_DATA_SUFFIX=-verify-ab PATH=/bin', '-verify-a')).toBe(false);
     expect(envHasSuffix('PATH=/bin', '-verify-a')).toBe(false);
+  });
+});
+
+describe('parseDaemonStatusPid (daemon status --json)', () => {
+  it('takes the pid only from a running answer', () => {
+    expect(parseDaemonStatusPid('{"ok":true,"running":true,"status":"ok","pid":4242,"uptime":3}\n')).toBe(4242);
+    expect(parseDaemonStatusPid('{"ok":false,"running":false,"error":"wmux is not running"}')).toBeNull();
+    expect(parseDaemonStatusPid('{"ok":true,"running":true}')).toBeNull();
+    expect(parseDaemonStatusPid('{"ok":true,"running":true,"pid":"4242"}')).toBeNull();
+    expect(parseDaemonStatusPid('wmux daemon is running.')).toBeNull();
+    expect(parseDaemonStatusPid('')).toBeNull();
+  });
+});
+
+describe('daemonIdentityHolds: is daemon.pid this instance\'s daemon?', () => {
+  const PID = 4242;
+  const SUFFIX = '-verify-a';
+  const probes = (over = {}) => ({
+    pidAlive: () => true,
+    pingPid: vi.fn(() => PID),
+    envText: vi.fn(() => ''),
+    ...over,
+  });
+
+  it('win32: accepts the pid the daemon on the suffixed pipe reports', () => {
+    expect(daemonIdentityHolds({ pid: PID, suffix: SUFFIX }, probes(), 'win32')).toMatchObject({ ok: true, how: 'pipe' });
+  });
+
+  it('win32: refuses a reused pid (the suffixed pipe answers with another pid)', () => {
+    const v = daemonIdentityHolds({ pid: PID, suffix: SUFFIX }, probes({ pingPid: () => 999 }), 'win32');
+    expect(v).toMatchObject({ ok: false, how: null });
+    expect(v.reason).toMatch(/pid 999, not daemon\.pid's 4242/);
+  });
+
+  it('win32: refuses when nothing answers on the suffixed pipe, and never trusts env text there', () => {
+    const p = probes({ pingPid: () => null, envText: vi.fn(() => `WMUX_DATA_SUFFIX=${SUFFIX}`) });
+    const v = daemonIdentityHolds({ pid: PID, suffix: SUFFIX }, p, 'win32');
+    expect(v).toMatchObject({ ok: false, how: null });
+    expect(v.reason).toMatch(/no daemon answered/);
+    expect(p.envText).not.toHaveBeenCalled();
+  });
+
+  it('refuses when the ping probe throws', () => {
+    const p = probes({ pingPid: () => { throw new Error('ETIMEDOUT'); } });
+    expect(daemonIdentityHolds({ pid: PID, suffix: SUFFIX }, p, 'win32').ok).toBe(false);
+  });
+
+  it('refuses a dead pid without asking anything', () => {
+    const p = probes({ pidAlive: () => false });
+    expect(daemonIdentityHolds({ pid: PID, suffix: SUFFIX }, p, 'win32').ok).toBe(false);
+    expect(p.pingPid).not.toHaveBeenCalled();
+  });
+
+  it('refuses a missing pid or suffix', () => {
+    expect(daemonIdentityHolds({ pid: null, suffix: SUFFIX }, probes(), 'win32').ok).toBe(false);
+    expect(daemonIdentityHolds({ pid: PID, suffix: '' }, probes(), 'win32').ok).toBe(false);
+  });
+
+  it('posix: the process environment still proves it when the pipe does not answer', () => {
+    const p = probes({ pingPid: () => null, envText: () => `HOME=/x\0WMUX_DATA_SUFFIX=${SUFFIX}\0` });
+    expect(daemonIdentityHolds({ pid: PID, suffix: SUFFIX }, p, 'darwin')).toMatchObject({ ok: true, how: 'env' });
+  });
+
+  it('posix: refuses a reused pid whose environment lacks the suffix', () => {
+    const p = probes({ pingPid: () => 999, envText: () => 'HOME=/x\0WMUX_DATA_SUFFIX=\0' });
+    expect(daemonIdentityHolds({ pid: PID, suffix: SUFFIX }, p, 'linux').ok).toBe(false);
   });
 });
 

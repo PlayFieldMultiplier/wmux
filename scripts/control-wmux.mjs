@@ -32,9 +32,9 @@ import { fileURLToPath } from 'node:url';
 import {
   appIdentityHolds,
   claimOwnedBy,
+  daemonIdentityHolds,
   darwinEnvPart,
   electronUserDataDir,
-  envHasSuffix,
   launchAppArgs,
   launchdJobsFor,
   launchEnv,
@@ -43,6 +43,7 @@ import {
   packagedCliBundle,
   parseCdpLog,
   parseConsoleLine,
+  parseDaemonStatusPid,
   parseKillResults,
   parseProcessStart,
   parseUserDataLog,
@@ -355,7 +356,7 @@ async function cmdLaunch(opts, reconnectState = null) {
   const sock = path.join(home, `.wmux${suffix}.sock`);
   const daemonPid = readPidFile(path.join(home, `.wmux${suffix}`, 'daemon.pid'));
   const ownedReconnect = reconnectState && reconnectState.suffix === suffix && reconnectState.app === app
-    && daemonPid && pidAlive(daemonPid) && envHasSuffix(processEnvText(daemonPid), suffix);
+    && daemonPid && daemonOwned(daemonPid, app, suffix).ok;
   if ((fs.existsSync(sock) || pidAlive(daemonPid)) && !ownedReconnect) {
     fail(`suffix ${suffix} already has a live socket or daemon (${sock}); pick another --suffix — refusing to share someone else's instance`);
   }
@@ -720,6 +721,36 @@ function processEnvText(pid) {
   return '';
 }
 
+/**
+ * The pid of the daemon answering `daemon status` on this suffix's own pipe,
+ * or null (no CLI bundle, or nothing answered). Same CLI and env as the
+ * `daemon stop` in cmdStop, so both talk to the same pipe.
+ */
+function daemonPingPid(app, suffix) {
+  const cli = daemonCli(app);
+  if (!cli) return null;
+  const r = spawnSync(process.execPath, [cli, 'daemon', 'status', '--json'], {
+    env: scrubEnv(process.env, suffix),
+    encoding: 'utf8',
+    windowsHide: true,
+    timeout: 15_000,
+  });
+  return parseDaemonStatusPid(r.stdout);
+}
+
+/** daemonIdentityHolds with the real probes: { ok, how, reason }. */
+function daemonOwned(pid, app, suffix) {
+  const verdict = daemonIdentityHolds({ pid, suffix }, {
+    pidAlive,
+    pingPid: () => daemonPingPid(app, suffix),
+    envText: processEnvText,
+  });
+  if (!verdict.ok && !daemonCli(app)) {
+    return { ...verdict, reason: `${verdict.reason}; no wmux CLI bundle found to ask the daemon (looked next to ${app} and in dist/cli-bundle)` };
+  }
+  return verdict;
+}
+
 async function waitDead(pid, ms) {
   const end = Date.now() + ms;
   while (pidAlive(pid) && Date.now() < end) await sleep(200);
@@ -729,9 +760,9 @@ async function waitDead(pid, ms) {
 async function cmdRestart(opts) {
   const state = requireState();
   const daemonPid = readPidFile(path.join(os.homedir(), `.wmux${state.suffix}`, 'daemon.pid'));
-  if (!daemonPid || !pidAlive(daemonPid) || !envHasSuffix(processEnvText(daemonPid), state.suffix)) {
-    fail('restart needs a live daemon owned by the recorded isolated instance');
-  }
+  if (!daemonPid) fail('restart needs a live daemon owned by the recorded isolated instance (no daemon.pid)');
+  const daemon = daemonOwned(daemonPid, state.app, state.suffix);
+  if (!daemon.ok) fail(`restart needs a live daemon owned by the recorded isolated instance (${daemon.reason})`);
   if (!recordedAppAlive(state)) fail(`the recorded app (pid ${state.pid}) is gone or its pid now belongs to another process; run stop then launch`);
   // Use the same detach as stop, but deliberately retain the daemon. Windows:
   // through a handle pinned to the recorded creation time, never a bare pid.
@@ -740,7 +771,7 @@ async function cmdRestart(opts) {
     if (result !== 'killed') fail(`app pid ${state.pid} not terminated (${result || 'no result'})`);
   } else if (signal(state.pid, 'SIGTERM') === 'denied') fail(`not permitted to signal pid ${state.pid}`);
   if (!(await waitDead(state.pid, 10_000))) fail('app did not exit; run doctor then stop');
-  timeline(state, { cmd: 'restart', previousPid: state.pid, retainedDaemonPid: daemonPid });
+  timeline(state, { cmd: 'restart', previousPid: state.pid, retainedDaemonPid: daemonPid, daemonIdentity: daemon.how });
   const result = await cmdLaunch({ app: state.app, suffix: state.suffix, timeout: opts.timeout }, state);
   return { ...result, previousPid: state.pid, retainedDaemonPid: daemonPid };
 }
@@ -770,20 +801,37 @@ async function cmdStop(opts) {
   const daemonPid = readPidFile(daemonPidFile);
   if (pidAlive(daemonPid)) {
     const cli = daemonCli(state.app);
+    // Windows: prove the daemon is ours while it still answers, pinned to its
+    // creation time read BEFORE the question: a pid reused before the answer
+    // fails the answer, one reused after it fails the pinned kill below.
+    const pinnedAt = process.platform === 'win32' ? processStartedAt(daemonPid) : null;
+    const winProof = process.platform === 'win32' ? daemonOwned(daemonPid, state.app, state.suffix) : null;
     if (cli) {
       const r = spawnSync(process.execPath, [cli, 'daemon', 'stop', '--json'], { env, encoding: 'utf8', timeout: 15_000 });
       steps.push(`daemon stop via ${path.relative(REPO_ROOT, cli).startsWith('..') ? cli : path.relative(REPO_ROOT, cli)}: exit ${r.status}`);
     }
     if (!(await waitDead(daemonPid, 8000))) {
-      // A stale pid file can name a reused pid: only signal a process whose own
-      // environment carries this run's suffix.
-      if (envHasSuffix(processEnvText(daemonPid), state.suffix)) {
-        if (signal(daemonPid, 'SIGTERM') === 'denied') steps.push(`daemon pid ${daemonPid}: not permitted to signal, skipped`);
+      // A stale pid file can name a reused pid: only end a process proven to
+      // be this run's daemon (daemonIdentityHolds).
+      if (process.platform === 'win32') {
+        if (!winProof.ok || pinnedAt == null) {
+          steps.push(`daemon pid ${daemonPid}: still running, identity not verified (${winProof.ok ? 'creation time unreadable' : winProof.reason}), not signalled`);
+        } else {
+          const result = killByIdentity([{ pid: daemonPid, createdAt: pinnedAt }])[daemonPid];
+          steps.push(result === 'killed'
+            ? `daemon pid ${daemonPid}: terminated through a handle pinned to its creation time (identity verified by daemon.ping over the ${state.suffix} pipe)`
+            : `daemon pid ${daemonPid}: not terminated (${result || 'no result'})`);
+          if (result === 'killed') await waitDead(daemonPid, 5000);
+        }
+      } else {
+        const proof = daemonOwned(daemonPid, state.app, state.suffix);
+        if (!proof.ok) steps.push(`daemon pid ${daemonPid}: still running, identity not verified (${proof.reason}), not signalled`);
+        else if (signal(daemonPid, 'SIGTERM') === 'denied') steps.push(`daemon pid ${daemonPid}: not permitted to signal, skipped`);
         else {
-          steps.push(`daemon pid ${daemonPid}: SIGTERM (identity verified by WMUX_DATA_SUFFIX)`);
+          steps.push(`daemon pid ${daemonPid}: SIGTERM (identity verified by ${proof.how === 'pipe' ? `daemon.ping over the ${state.suffix} pipe` : 'WMUX_DATA_SUFFIX'})`);
           await waitDead(daemonPid, 5000);
         }
-      } else steps.push(`daemon pid ${daemonPid}: still running, identity not verified, not signalled`);
+      }
     } else steps.push(`daemon pid ${daemonPid}: stopped`);
   } else steps.push('daemon: not running');
 
