@@ -13,6 +13,7 @@ import {
   type FirstTaskExample,
 } from '../../shared/firstRun';
 import { dmThreadId, parseThreadId, type RoomCard, type ThreadId } from '../../shared/room';
+import type { FactoryBotRepoSuggestion } from '../../shared/botCreate';
 import { useStore } from '../stores';
 import { useT } from '../hooks/useT';
 import { CATCH_UP_MAX_PAGES, roomsApi, type RoomsApi } from '../hooks/useRoomSync';
@@ -20,6 +21,7 @@ import { getFactoryBotPort, getFactorySettingsPort } from './Room/factoryPorts';
 import { roomPostParams } from './Room/RoomComposer';
 import { turnBotsOn } from './Bots/botsAddBot';
 import { pickFolderDialog } from './Settings/FactoryTab';
+import { selectBotConversationOnOpen } from './Bots/botsSelection';
 import Dialog, { DialogBody, DialogFooter, DialogHeader } from './ui/Dialog';
 import Button from './ui/Button';
 import { IconCheck, IconWarning } from './icons';
@@ -65,6 +67,10 @@ const NOT_STARTED_WAIT_MS = 400;
 export const ANSWER_POLL_MS = 1_000;
 export const STILL_WAITING_MS = 45_000;
 export const GIVE_UP_MS = 10 * 60_000;
+/** Until the owner picks a folder or the suggested one checks ok, the
+ *  suggestion is asked again this often: the workspace's folder may change
+ *  under the open wizard (a `cd` in its pane). */
+export const SUGGEST_POLL_MS = 1_500;
 /** The answer's body is shown up to this many characters. */
 const ANSWER_EXCERPT_MAX = 600;
 
@@ -94,6 +100,13 @@ export function firstTaskText(example: FirstTaskExample, t: T): string {
 export function folderStatusOf(check: FirstRunFolderCheck): FolderStatus {
   if (check.ok) return 'ok';
   return check.code === 'no_remote' ? 'no_remote' : 'not_a_repo';
+}
+
+/** A refused suggestion as the row's status: a folder that is no repository
+ *  a bot can read says so; no folder at all is `none`. */
+export function suggestionStatusOf(code: Extract<FactoryBotRepoSuggestion, { ok: false }>['code']): FolderStatus {
+  if (code === 'no_remote') return 'no_remote';
+  return code === 'not_a_repo' || code === 'repo_untrusted' ? 'not_a_repo' : 'none';
 }
 
 export type FirstTaskOutcome = { kind: 'answer' | 'error'; card: RoomCard };
@@ -162,6 +175,10 @@ export interface FirstTaskState {
   /** The answer, the error card, or the refusal's message. */
   outcome: { card?: RoomCard; message?: string } | null;
   canSend: boolean;
+  /** The text Send will post: the selected example's, in the owner's language. */
+  taskText: string;
+  /** The first-run bot, once made. */
+  botId: string | null;
   choose: () => void;
   selectExample: (example: FirstTaskExample) => void;
   send: () => void;
@@ -174,10 +191,13 @@ export function useFirstTask({ enabled, workspaceId }: { enabled: boolean; works
   const [folder, setFolder] = useState<FirstTaskFolder | null>(null);
   // A folder the owner picked is theirs: the suggestion no longer replaces it.
   const [picked, setPicked] = useState(false);
+  // The same, read by a suggestion already on its way when the pick lands.
+  const pickedRef = useRef(false);
   const [example, setExample] = useState<FirstTaskExample>(FIRST_TASK_EXAMPLES[0]);
   const [phase, setPhase] = useState<FirstTaskPhase>('idle');
   const [still, setStill] = useState(false);
   const [outcome, setOutcome] = useState<FirstTaskState['outcome']>(null);
+  const [botId, setBotId] = useState<string | null>(null);
 
   const live = useRef(true);
   useEffect(() => {
@@ -188,11 +208,13 @@ export function useFirstTask({ enabled, workspaceId }: { enabled: boolean; works
   // Only the newest check lands: a pick made while the suggestion was being
   // checked wins.
   const checkSeq = useRef(0);
-  const check = useCallback(async (path: string) => {
+  // `quiet`: the suggestion's re-check of the folder already shown keeps its
+  // status until the answer, instead of flashing "Checking…" every poll.
+  const check = useCallback(async (path: string, quiet = false) => {
     const bridge = firstTaskBridge();
     if (!bridge.checkFolder) return;
     const seq = ++checkSeq.current;
-    setFolder({ path, status: 'checking' });
+    if (!quiet) setFolder({ path, status: 'checking' });
     let r: FirstRunFolderCheck;
     try {
       r = await bridge.checkFolder(path);
@@ -203,21 +225,38 @@ export function useFirstTask({ enabled, workspaceId }: { enabled: boolean; works
     setFolder(r.ok ? { path: r.root, status: 'ok', displayRoot: r.displayRoot } : { path, status: folderStatusOf(r) });
   }, []);
 
-  // The default: the folder "Add bot" would suggest for the active workspace.
+  // The default: the folder "Add bot" would suggest for the active
+  // workspace, asked when the step appears and again every SUGGEST_POLL_MS
+  // until the owner picks a folder or the suggested one checks ok.
+  const settled = folder?.status === 'ok';
+  const shown = useRef<string | null>(null);
+  shown.current = folder?.path ?? null;
   useEffect(() => {
-    if (!enabled || !workspaceId || picked) return;
-    const port = getFactoryBotPort();
-    if (!port.suggestRepo) return;
+    if (!enabled || !workspaceId || picked || settled) return;
+    const suggest = getFactoryBotPort().suggestRepo;
+    if (!suggest) return;
     let on = true;
-    port.suggestRepo(workspaceId).then((s) => {
-      if (on && s.ok) void check(s.root);
-    }, () => undefined);
+    void (async () => {
+      while (on) {
+        const s = await suggest(workspaceId).catch(() => null);
+        if (!on || pickedRef.current) return;
+        if (s?.ok) {
+          await check(s.root, s.root === shown.current);
+        } else if (s) {
+          ++checkSeq.current;
+          setFolder({ path: '', status: suggestionStatusOf(s.code) });
+        }
+        if (!on) return;
+        await timing.wait(SUGGEST_POLL_MS);
+      }
+    })();
     return () => { on = false; };
-  }, [enabled, workspaceId, picked, check]);
+  }, [enabled, workspaceId, picked, settled, check]);
 
   const choose = useCallback(() => {
     void pickFolderDialog().then((path) => {
       if (!path || !live.current) return;
+      pickedRef.current = true;
       setPicked(true);
       void check(path);
     }, () => undefined);
@@ -259,6 +298,7 @@ export function useFirstTask({ enabled, workspaceId }: { enabled: boolean; works
       const api = roomsApi();
       if (!api) return fail();
       const botId = made.bot.id;
+      setBotId(botId);
       const roomId = made.bot.workspaceId;
       const threadId = parseThreadId(made.threadId) ?? dmThreadId(botId);
 
@@ -315,6 +355,8 @@ export function useFirstTask({ enabled, workspaceId }: { enabled: boolean; works
     still,
     outcome,
     canSend,
+    taskText: firstTaskText(example, t),
+    botId,
     choose,
     selectExample,
     send,
@@ -323,9 +365,9 @@ export function useFirstTask({ enabled, workspaceId }: { enabled: boolean; works
   };
 }
 
-/** Opens the Bots page, where the first-run bot's 1:1 is the conversation
- *  shown (the only bot on a first run). */
-export function openFirstTaskConversation(): void {
+/** Opens the Bots page on the first-run bot's 1:1. */
+export function openFirstTaskConversation(botId: string | null): void {
+  if (botId) selectBotConversationOnOpen(botId);
   useStore.getState().openBotsPage();
 }
 
@@ -506,6 +548,7 @@ export function FirstTaskFooterAction({ task, primary, onOpen }: { task: FirstTa
       variant={primary && task.canSend ? 'primary' : 'secondary'}
       onClick={task.send}
       disabled={!task.canSend}
+      data-task-text={task.taskText}
       data-testid="first-run-first-task-send"
     >
       {t('firstRunWizard.firstTask.send')}

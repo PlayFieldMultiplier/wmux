@@ -5,13 +5,16 @@
 // read-only "explain" one, posted once under FIRST_TASK_CLIENT_POST_ID; a 1:1
 // that already holds the task is waited on; the answer is the bot's own card
 // after the task; Skip never makes a bot; a folder that is not a repository
-// keeps Send disabled.
+// keeps Send disabled; the suggestion is asked again until it checks ok;
+// Open selects the first-run bot's 1:1.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createElement, act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+
 import FirstRunWizard from '../FirstRunWizard';
 import { setFirstTaskTimingForTests } from '../FirstRunFirstTask';
+import { lastBotsConversation, rememberBotsConversation } from '../Bots/botsSelection';
 import { setFactoryBotPort, setFactorySettingsPort, type FactoryBotPort, type FactorySettingsPort } from '../Room/factoryPorts';
 import { useStore } from '../../stores';
 import { resetAgentSetupForTests } from '../../utils/agentSetupRuns';
@@ -22,12 +25,14 @@ import type { AgentSetupStatus } from '../../../shared/agentSetup';
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const EXPLAIN_TASK = "Explain what this folder contains: what the project is, how it is laid out, and where to start reading. Don't change any files.";
+const README_TASK = "Draft a README for this repository and show it to me in the chat; don't write files.";
 
 let container: HTMLDivElement;
 let root: Root;
 let firstRun: Record<string, ReturnType<typeof vi.fn>>;
 let rooms: Record<string, ReturnType<typeof vi.fn>>;
 let settingsSet: ReturnType<typeof vi.fn>;
+let suggestRepo: ReturnType<typeof vi.fn>;
 /** The bot's 1:1 as main holds it. */
 let thread: RoomCard[];
 /** Pending poll waits: `tick()` lets them go. */
@@ -80,12 +85,13 @@ function install({ folder = { ok: true, root: '/r', displayRoot: '~/r', repoKey:
     dialog: { pickFolder: vi.fn().mockResolvedValue(['/elsewhere']) },
     pty: { onData: vi.fn(() => () => undefined), onExit: vi.fn(() => () => undefined) },
   };
+  suggestRepo = vi.fn().mockResolvedValue({ ok: true, repoKey: 'o/r', root: '/r', displayRoot: '~/r', inherited: false });
   setFactoryBotPort({
     available: true,
     list: async () => [],
     subscribe: () => () => undefined,
     act: async () => ({ ok: true }),
-    suggestRepo: vi.fn().mockResolvedValue({ ok: true, repoKey: 'o/r', root: '/r', displayRoot: '~/r', inherited: false }),
+    suggestRepo,
   } as FactoryBotPort);
   settingsSet = vi.fn().mockResolvedValue({ enabled: true });
   setFactorySettingsPort({ available: true, get: vi.fn().mockResolvedValue({ enabled: false }), set: settingsSet } as unknown as FactorySettingsPort);
@@ -208,6 +214,49 @@ describe('FirstRunWizard first task', () => {
     expect(answer?.textContent).toContain('Start in src/main.ts.');
     expect(firstRun.complete).toHaveBeenCalledTimes(1);
     expect(primaries()).toEqual(['first-run-first-task-open']);
+  });
+
+  it("Open the conversation selects the first-run bot's 1:1, then opens the Bots page", async () => {
+    install();
+    rememberBotsConversation('bot:another');
+    // The page reads the selection as it opens.
+    const openBotsPage = vi.fn(() => lastBotsConversation());
+    act(() => { useStore.setState({ openBotsPage } as never); });
+    const onClose = await mount();
+    await click('first-run-first-task-send');
+    await click('first-run-first-task-consent-confirm');
+    thread.push(card(2, BOT, { title: 'An answer' }));
+    await tick();
+    await click('first-run-first-task-open');
+    expect(openBotsPage).toHaveBeenCalledTimes(1);
+    expect(openBotsPage.mock.results[0].value).toBe('bot:b1');
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('Send carries the exact text it will post, for the selected example', async () => {
+    install();
+    await mount();
+    expect(byId('first-run-first-task-send')?.dataset.taskText).toBe(EXPLAIN_TASK);
+    await click('first-run-first-task-example-readme');
+    expect(byId('first-run-first-task-send')?.dataset.taskText).toBe(README_TASK);
+  });
+
+  it('asks for the suggestion again until it checks ok, without a click', async () => {
+    install();
+    suggestRepo.mockResolvedValue({ ok: false, code: 'not_a_repo' });
+    await mount();
+    expect(byId('first-run-folder-status')?.dataset.status).toBe('not_a_repo');
+    expect(byId('first-run-first-task-send')?.disabled).toBe(true);
+
+    // The pane moved into the repository.
+    suggestRepo.mockResolvedValue({ ok: true, repoKey: 'o/r', root: '/r', displayRoot: '~/r', inherited: false });
+    await tick();
+    expect(byId('first-run-folder-status')?.dataset.status).toBe('ok');
+    expect(byId('first-run-first-task-send')?.disabled).toBe(false);
+    // Settled: no further ask.
+    const asked = suggestRepo.mock.calls.length;
+    await tick();
+    expect(suggestRepo.mock.calls.length).toBe(asked);
   });
 
   it("an error card from the bot shows as an error and does not complete the first run", async () => {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { firstTaskOutcome, firstTaskPrimary, firstTaskText, folderStatusOf } from '../FirstRunFirstTask';
+import { firstTaskOutcome, firstTaskPrimary, firstTaskText, folderStatusOf, suggestionStatusOf } from '../FirstRunFirstTask';
 import { t } from '../../i18n';
 import type { RoomCard } from '../../../shared/room';
 
@@ -34,6 +34,9 @@ describe('first task helpers', () => {
     expect(folderStatusOf({ ok: false, code: 'no_remote', message: '' })).toBe('no_remote');
     expect(folderStatusOf({ ok: false, code: 'not_a_repo', message: '' })).toBe('not_a_repo');
     expect(folderStatusOf({ ok: false, code: 'invalid_argument', message: '' })).toBe('not_a_repo');
+    expect(suggestionStatusOf('not_a_repo')).toBe('not_a_repo');
+    expect(suggestionStatusOf('no_remote')).toBe('no_remote');
+    expect(suggestionStatusOf('no_folder')).toBe('none');
   });
 
   it('offers Send only when idle and sendable; in flight is busy; answered offers Open', () => {

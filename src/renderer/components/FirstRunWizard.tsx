@@ -376,9 +376,9 @@ export default function FirstRunWizard({ mode, onClose }: FirstRunWizardProps) {
   const showFirstTask = mode === 'firstRun' && statuses !== null && anyAgentReady(statuses);
   const firstTask = useFirstTask({ enabled: showFirstTask, workspaceId: activeWorkspaceId });
   const openConversation = useCallback(() => {
-    openFirstTaskConversation();
+    openFirstTaskConversation(firstTask.botId);
     onCloseRef.current();
-  }, []);
+  }, [firstTask.botId]);
 
   // ─── Statusline offer (opt-in; never auto-installs — owner decision 2026-07-17) ──
   // Fetched once on mount; the block renders only when Claude is detected AND
