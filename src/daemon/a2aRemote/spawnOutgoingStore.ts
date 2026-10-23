@@ -40,7 +40,7 @@ export interface SpawnOutgoingRecordV1 {
   sub?: string;
   /** The pane here that gets the replies. */
   from: { workspaceId: string; paneId: string };
-  /** Who asked, for the per-pane hourly limit (a pty id, or `ui`). */
+  /** Who asked, for the per-pane hourly limit: the pane that gets the replies. */
   callerKey: string;
   /** The prompt, until the request is final. */
   text?: string;

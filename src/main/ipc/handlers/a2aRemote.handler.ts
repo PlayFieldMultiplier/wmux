@@ -186,7 +186,8 @@ export function registerA2aRemoteHandlers(daemonClient: DaemonClient | null, opt
           text: p.text,
           ...(typeof p.expiresInHours === 'number' ? { expiresInHours: p.expiresInHours } : {}),
           from: { kind: 'pane', workspaceId, paneId },
-          callerKey: 'ui',
+          // Per pane, as for an agent: the pane that gets the replies.
+          callerKey: paneId,
         });
       },
     ],

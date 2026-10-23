@@ -424,7 +424,7 @@ export interface A2aSpawnAskInput {
   /** 1–72; default 24. */
   expiresInHours?: number;
   from: A2aSpawnFromV1;
-  /** Counts toward the per-pane hourly limit (the pty, or `ui` for the Remote page). */
+  /** Counts toward the per-pane hourly limit: the pane that gets the replies. */
   callerKey: string;
 }
 
