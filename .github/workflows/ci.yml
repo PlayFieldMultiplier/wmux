@@ -393,10 +393,12 @@ jobs:
       - name: Use npm 11
         run: npm install -g npm@11
 
-      # See the checks job for the key.
+      # See the checks job for the key. Restore only: `npm run package` rebuilds
+      # the native modules for Electron, and a save from here would hand that
+      # node_modules to the jobs that run them under Node.
       - name: Restore node_modules
         id: node-modules
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules
           key: node-modules-${{ runner.os }}-${{ runner.arch }}-node${{ steps.node.outputs.node-version }}-${{ hashFiles('package-lock.json', 'patches/**', 'scripts/fix-node-pty.js', 'scripts/apply-patches.mjs') }}

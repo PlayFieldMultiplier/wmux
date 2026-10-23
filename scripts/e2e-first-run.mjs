@@ -646,8 +646,6 @@ async function scenario() {
     throw new StepError(`the Claude Code row never reached a status at rest (seen: ${seen.join(' -> ') || 'none'})`);
   });
 
-  // The first bot task (plan item 3) goes on from here: its steps follow this
-  // point, before 'evidence', so ci.yml's first-run e2e job covers it as well.
   await step('evidence', async () => {
     const snap = await cw(['snapshot', '--as', 'final'], { timeoutMs: 30_000 });
     const shot = await cw(['screenshot', '--as', 'final'], { timeoutMs: 30_000 });
