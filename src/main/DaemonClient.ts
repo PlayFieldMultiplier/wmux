@@ -38,7 +38,7 @@ import type {
   A2aRemoteStatus,
 } from '../shared/rpc';
 import { stripReplayQuerySequences } from '../shared/replayQuerySanitizer';
-import { A2A_SPAWN_RPC, type A2aSpawnPolicySetResult, type A2aSpawnPolicyV1, type A2aSpawnRequestSummary } from '../shared/a2aSpawn';
+import { A2A_SPAWN_RPC, type A2aSpawnAskInput, type A2aSpawnAskResult, type A2aSpawnOutgoingList, type A2aSpawnPolicySetResult, type A2aSpawnPolicyV1, type A2aSpawnRequestSummary } from '../shared/a2aSpawn';
 import { createSessionPipeMarkers } from '../daemon/sessionPipeMarkers';
 import { SessionPipeStreamScanner } from './daemon/sessionPipeStreamScanner';
 import { DAEMON_RPC_TIMEOUT_MS } from '../shared/timeouts';
@@ -811,6 +811,15 @@ export class DaemonClient extends EventEmitter {
 
   async a2aSpawnRequestsList(): Promise<{ requests: A2aSpawnRequestSummary[] }> {
     return (await this.rpc(A2A_SPAWN_RPC.requestsList, {})) as { requests: A2aSpawnRequestSummary[] };
+  }
+
+  /** As the asking PC: store a request and queue it for the other PC (no network wait). */
+  async a2aSpawnAsk(input: A2aSpawnAskInput): Promise<A2aSpawnAskResult> {
+    return (await this.rpc(A2A_SPAWN_RPC.ask, { ...input })) as A2aSpawnAskResult;
+  }
+
+  async a2aSpawnOutgoing(spawnId?: string): Promise<A2aSpawnOutgoingList> {
+    return (await this.rpc(A2A_SPAWN_RPC.outgoing, spawnId ? { spawnId } : {})) as A2aSpawnOutgoingList;
   }
 
   /** Reaches the other PC over the pinned connection, hence 30s. */
