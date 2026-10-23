@@ -28,7 +28,24 @@ function propertyName(node: ts.PropertyName): string | undefined {
   return undefined;
 }
 
+/**
+ * Whether the source could spell `marker` as a key. Escapes count: a `\u` or
+ * `\x` can spell any letter, a backslash before another character stands for
+ * that character, and a backslash before a line break drops both.
+ */
+function maySpell(text: string, marker: string): boolean {
+  if (/\\[ux]/.test(text)) return true;
+  return text.replace(/\\(?:\r\n|[\n\r\u2028\u2029])?/g, '').includes(marker);
+}
+
 describe('RPC dispatch provenance source invariant', () => {
+  it('a file that spells the marker only through escapes is still read', () => {
+    expect(maySpell("{ 'operat\\or': true }", 'operator')).toBe(true);
+    expect(maySpell("{ 'oper\\\nator': true }", 'operator')).toBe(true);
+    expect(maySpell('{ extern\\u0061lWire: true }', 'externalWire')).toBe(true);
+    expect(maySpell("{ 'operand': true }", 'operator')).toBe(false);
+  });
+
   function markerWriters(marker: string): string[] {
     const writers: string[] = [];
 
@@ -36,9 +53,8 @@ describe('RPC dispatch provenance source invariant', () => {
       const text = fs.readFileSync(file, 'utf8');
       // A file that never spells the marker cannot write it: only the few
       // that do are parsed. Parsing every file of main for each marker ran
-      // past the test timeout on a loaded Windows runner (#2434). A file
-      // with an escape is parsed too: `extern\u0061lWire` spells it.
-      if (!text.includes(marker) && !/\\[ux]/.test(text)) continue;
+      // past the test timeout on a loaded Windows runner (#2434).
+      if (!maySpell(text, marker)) continue;
       const source = ts.createSourceFile(
         file,
         text,

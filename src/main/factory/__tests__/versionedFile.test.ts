@@ -66,9 +66,12 @@ describe('persisterWritesSettled', () => {
   });
 
   it('a failed write settles too', async () => {
-    const p = createFilePersister(path.join(dir, 'missing', 'deeper', 'x.json'), () => ({ version: 1 }));
-    void p.schedule().catch(() => undefined);
+    // A folder that is a file: the write's mkdir fails.
+    fs.writeFileSync(path.join(dir, 'a-file'), '');
+    const p = createFilePersister(path.join(dir, 'a-file', 'x.json'), () => ({ version: 1 }));
+    const write = p.schedule();
     await expect(persisterWritesSettled()).resolves.toBeUndefined();
+    await expect(write).rejects.toThrow();
   });
 });
 
