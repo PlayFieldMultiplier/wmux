@@ -58,9 +58,45 @@ export interface InboundDeps {
   /** Links a remote start made here: no images on them, and (followUps 'ask') new tasks held for their card. */
   spawnLinks?: { isSpawnLink(linkId: string): boolean; holdsFollowUps(linkId: string): boolean };
   /** Remote spawn (`link` states `spawn`, `spawn-result`, `spawn-targets`); absent, they are an unknown link. */
-  spawn?: { applyInbound(env: A2aRemoteEnvelope, peer: { hostId: HostId }): A2aRemoteDeliverResponse };
+  spawn?: { applyInbound(env: A2aRemoteEnvelope, peer: { hostId: HostId }): A2aRemoteDeliverResponse | Promise<A2aRemoteDeliverResponse> };
+  /** New tasks each PC may send this one (`PeerTaskBudget`); absent, no limit. */
+  taskBudget?: PeerTaskBudget;
   /** Where a refusal's detail goes: this PC's log. The peer gets the code alone. */
   log?: (level: 'info' | 'warn' | 'error', msg: string) => void;
+}
+
+/**
+ * New tasks one PC may send this PC per hour, on any link; resends are not
+ * counted. Past it a task is answered `unavailable`: nothing is lost, the
+ * sender holds it (and what follows it to this PC) and sends it again later.
+ * It counts every link, not only spawn links: each link is one a person
+ * accepted, but a peer that floods one should slow down, not cost this PC
+ * unbounded work; the limit is far above a person's or an agent's pace.
+ */
+export const INBOUND_TASKS_PER_HOST_PER_HOUR = 120;
+const HOUR_MS = 60 * 60 * 1000;
+
+/** Arrivals of new tasks per PC over the last hour (in memory). */
+export class PeerTaskBudget {
+  private readonly arrivals = new Map<HostId, number[]>();
+  constructor(
+    private readonly max = INBOUND_TASKS_PER_HOST_PER_HOUR,
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  admit(hostId: HostId): boolean {
+    const now = this.now();
+    const recent = (this.arrivals.get(hostId) ?? []).filter((t) => now - t < HOUR_MS);
+    const ok = recent.length < this.max;
+    if (ok) recent.push(now);
+    this.arrivals.set(hostId, recent);
+    return ok;
+  }
+
+  /** Take back the arrival `admit` just counted (the task was not stored). */
+  unadmit(hostId: HostId): void {
+    this.arrivals.get(hostId)?.pop();
+  }
 }
 
 export interface InboundImages {
@@ -146,8 +182,15 @@ async function applyInbound(
     const taskId = remoteTaskId(link.linkId, env.messageId);
     const text = env.text ?? '';
     // A task already here is answered from the ledger: its images were taken then.
-    const parts = await messageParts(env, peer, deps, deps.taskService.getTask(taskId) !== undefined);
-    if ('error' in parts) return fail(parts.error);
+    const known = deps.taskService.getTask(taskId) !== undefined;
+    // Counted before its images are fetched and stored; a resend of a task already here is not a new one.
+    const budget = known ? undefined : deps.taskBudget;
+    if (budget && !budget.admit(peer.hostId)) return fail('unavailable', 'too many new tasks from that PC in the last hour; it sends this one again later');
+    const parts = await messageParts(env, peer, deps, known);
+    if ('error' in parts) {
+      budget?.unadmit(peer.hostId);
+      return fail(parts.error);
+    }
     const created = await deps.taskService.createTask(
       {
         id: taskId,
@@ -170,8 +213,11 @@ async function applyInbound(
       },
       { conflictOnBodyMismatch: true },
     );
-    if (!created.ok) return fail('conflict' in created ? 'conflict' : 'unavailable', created.error);
-    if (created.existed) return { ok: true, taskId, duplicate: true };
+    if (!created.ok || created.existed) {
+      budget?.unadmit(peer.hostId);
+      if (!created.ok) return fail('conflict' in created ? 'conflict' : 'unavailable', created.error);
+      return { ok: true, taskId, duplicate: true };
+    }
     deps.broadcast({ type: A2A_REMOTE_INBOUND_EVENT, taskId });
     return { ok: true, taskId, duplicate: false };
   }

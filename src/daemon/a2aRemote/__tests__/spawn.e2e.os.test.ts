@@ -8,8 +8,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { A2A_REMOTE_PROTOCOL, type A2aRemoteEnvelope } from '../../../shared/a2aRemote';
-import { SPAWN_TARGETS_LINK_ID, type A2aSpawnResultV1, type A2aSpawnTargetsV1 } from '../../../shared/a2aSpawn';
+import { A2A_FEATURE_SPAWN, A2A_REMOTE_PROTOCOL, type A2aRemoteEnvelope } from '../../../shared/a2aRemote';
+import { A2A_REMOTE_RPC } from '../../../shared/a2aRemoteDelivery';
+import { SPAWN_TARGETS_LINK_ID, asSpawnLinkId, spawnFirstMessageId, type A2aSpawnResultV1, type A2aSpawnTargetsV1 } from '../../../shared/a2aSpawn';
 import type { DaemonConfig } from '../../types';
 import { A2aTaskService } from '../../a2a/A2aTaskService';
 import { AppendOnlyLog } from '../../eventlog/AppendOnlyLog';
@@ -29,6 +30,9 @@ import { SpawnPolicyStore } from '../spawnPolicyStore';
 import { SpawnRequestStore } from '../spawnRequestStore';
 import { SpawnLinkStore } from '../spawnLinkStore';
 import { A2aSpawnStarter } from '../spawnStarter';
+import { A2aSpawnRequester } from '../spawnRequester';
+import { SpawnOutgoingStore } from '../spawnOutgoingStore';
+import { remoteTaskId } from '../ids';
 import { linkAlias } from '../outbound';
 import { freePort } from './a2aServerRig';
 
@@ -47,6 +51,10 @@ interface Pc {
   policy: SpawnPolicyStore;
   spawn: A2aSpawnReceiver;
   links: LinkStore;
+  tasks: A2aTaskService;
+  /** As the asking PC (`asking`): the real requester. */
+  asks: A2aSpawnRequester | null;
+  rpc: (method: string, params: Record<string, unknown>) => Promise<unknown>;
   results: Array<{ from: string; result: A2aSpawnResultV1 }>;
   targets: Array<{ from: string; targets: A2aSpawnTargetsV1 }>;
   /** Release the agent check (it waits until then). */
@@ -63,7 +71,7 @@ afterEach(async () => {
   for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
 });
 
-async function makePc(name: string, opts: { holdAgentCheck?: boolean; startable?: boolean } = {}): Promise<Pc> {
+async function makePc(name: string, opts: { holdAgentCheck?: boolean; startable?: boolean; asking?: boolean } = {}): Promise<Pc> {
   const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-spawn-e2e-')));
   dirs.push(dir);
   const a2aDir = path.join(dir, 'a2a');
@@ -94,15 +102,34 @@ async function makePc(name: string, opts: { holdAgentCheck?: boolean; startable?
     });
   }
   const started = starter;
+  const asks = opts.asking
+    ? new A2aSpawnRequester({
+      store: new SpawnOutgoingStore(store),
+      links,
+      taskService: tasks,
+      enqueue: (h, env) => void delivery!.outbox.enqueue(h, env),
+      hosts: () => delivery!.status().map((h) => ({ hostId: h.hostId, name: h.name, online: h.state === 'connected' })),
+      features: (h) => delivery!.peerFeatures(h),
+      aliasFor: (l) => linkAlias(l, 'PC'),
+      broadcast: quiet,
+      log: quiet,
+    })
+    : null;
   const spawn = new A2aSpawnReceiver({
     policy,
     requests,
     enqueue: (h, env) => void delivery!.outbox.enqueue(h, env),
     agentInstalled: () => (opts.holdAgentCheck ? held : Promise.resolve(true)),
-    // Every spawn result in these tests answers a request this test made.
-    isOutstanding: () => true,
-    onResult: (from, result) => results.push({ from, result }),
-    onTargets: (from, t) => targets.push({ from, targets: t }),
+    // Without the real asking side, every spawn result answers a request this test made.
+    isOutstanding: (h, id) => (asks ? asks.isOutstanding(h, id) : true),
+    onResult: async (from, result) => {
+      results.push({ from, result });
+      return asks ? asks.onResult(from, result) : true;
+    },
+    onTargets: (from, t) => {
+      targets.push({ from, targets: t });
+      asks?.onTargets(from, t);
+    },
     ...(started ? { start: started, abandon: (h, id) => started.abandon(h, id), liveSpawns: (h) => started.liveCount(h) } : {}),
     log: quiet,
   });
@@ -136,6 +163,8 @@ async function makePc(name: string, opts: { holdAgentCheck?: boolean; startable?
     refreshLink: (linkId) => handlers.get('a2a.remote.links.refresh')!({ linkId }),
     spawn,
     ...(started ? { spawnLinks: started } : {}),
+    ...(asks ? { spawnAsks: asks } : {}),
+    features: [A2A_FEATURE_SPAWN],
     log: quiet,
     timing: TIMING,
     heartbeatMs: 200,
@@ -154,6 +183,9 @@ async function makePc(name: string, opts: { holdAgentCheck?: boolean; startable?
     policy,
     spawn,
     links,
+    tasks,
+    asks,
+    rpc: (method, params) => handlers.get(method)!(params),
     results,
     targets,
     release: () => release(),
@@ -285,5 +317,66 @@ describe('remote spawn requests, end to end', () => {
     await until(() => a.results.length > 0);
     expect(a.results[0].result).toEqual({ v: 1, spawnId: env.linkId, code: 'not-allowed' });
     expect(fs.existsSync(path.join(b.dir, 'a2a', 'spawn-requests.json'))).toBe(false);
+  });
+});
+
+describe('asking another PC, end to end', () => {
+  for (const aJoins of [true, false]) {
+    it(`A asks, B allows it, A gets the link and the first task, and B's agent's reply lands on A's copy, when A is the ${aJoins ? 'joiner' : 'server'}`, async () => {
+      const a = await makePc('PC-A', { asking: true });
+      const b = await makePc('PC-B', { startable: true });
+      if (aJoins) await pair(a, b);
+      else await pair(b, a);
+      await allow(b, a.hostId);
+      // B tells A what it may ask for; A asks only once it knows B takes requests.
+      b.spawn.sendTargets({ ...b.policy.get(), hosts: {} });
+      await until(() => a.asks!.list().places.some((p) => p.hostId === b.hostId && p.supported && p.targets !== undefined));
+      expect(a.asks!.list().places.find((p) => p.hostId === b.hostId)?.targets).toMatchObject({ roots: [{ id: 'web', label: 'Web' }], agents: ['claude'] });
+
+      const asked = a.asks!.ask({
+        pc: b.hostId, agent: 'claude', folder: { root: 'web' }, text: 'fix the build',
+        from: { kind: 'pane', workspaceId: 'ws-a', paneId: 'pane-a' }, callerKey: 'pane-a',
+      });
+      expect(asked).toMatchObject({ ok: true, online: true, spawn: { state: 'sent' } });
+      const spawnId = asked.ok ? asked.spawn.spawnId : '';
+      await until(() => a.asks!.list(spawnId).requests[0]?.state === 'waiting');
+      expect(await b.spawn.decideCard(a.hostId, spawnId, 'once')).toEqual({ ok: true });
+      expect(await b.spawn.claim(a.hostId, spawnId)).toMatchObject({ ok: true });
+      expect(await b.spawn.started(a.hostId, spawnId, { workspaceId: 'ws-b', paneId: 'pane-b' })).toEqual({ ok: true });
+      await until(() => a.asks!.list(spawnId).requests[0]?.state === 'started');
+
+      const linkId = asSpawnLinkId(a.asks!.list(spawnId).requests[0].linkId)!;
+      expect(a.links.get(linkId)).toMatchObject({
+        state: 'active', version: 1, proposer: 'local',
+        local: { kind: 'pane', workspaceId: 'ws-a', paneId: 'pane-a' },
+        remote: { hostId: b.hostId, kind: 'pane', workspaceId: 'ws-b', paneId: 'pane-b' },
+        allow: { outbound: true, inbound: false },
+      });
+      const taskId = remoteTaskId(linkId, spawnFirstMessageId(linkId));
+      expect(a.tasks.getTask(taskId)?.history[0].parts).toEqual([{ kind: 'text', text: 'fix the build' }]);
+      expect(b.tasks.getTask(taskId)?.metadata.remote).toMatchObject({ direction: 'inbound' });
+
+      // B's agent answers on its task; the reply reaches A's copy of it.
+      expect(await b.rpc(A2A_REMOTE_RPC.reply, { taskId, workspaceId: 'ws-b', text: 'build fixed' })).toMatchObject({ ok: true });
+      await until(() => (a.tasks.getTask(taskId)?.history.length ?? 0) > 1);
+      expect(a.tasks.getTask(taskId)?.history[1]).toMatchObject({ role: 'agent', parts: [{ kind: 'text', text: 'build fixed' }] });
+    });
+  }
+
+  it('a refusal from B ends the request on A with its code, and nothing is linked', async () => {
+    const a = await makePc('PC-A', { asking: true });
+    const b = await makePc('PC-B', { startable: true });
+    await pair(a, b);
+    await allow(b, a.hostId);
+    b.spawn.sendTargets({ ...b.policy.get(), hosts: {} });
+    await until(() => a.asks!.list().places.some((p) => p.hostId === b.hostId && p.supported));
+    const asked = a.asks!.ask({
+      pc: b.hostId, agent: 'claude', folder: { root: 'elsewhere' }, text: 'fix the build',
+      from: { kind: 'pane', workspaceId: 'ws-a', paneId: 'pane-a' }, callerKey: 'pane-a',
+    });
+    const spawnId = asked.ok ? asked.spawn.spawnId : '';
+    await until(() => a.asks!.list(spawnId).requests[0]?.state === 'refused');
+    expect(a.asks!.list(spawnId).requests[0]).toMatchObject({ code: 'folder-not-allowed' });
+    expect(a.links.list()).toEqual([]);
   });
 });

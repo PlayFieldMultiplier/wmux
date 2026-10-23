@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { agentExecEnv } from '../../shared/execEnv';
 import { agentLauncherStem, agentRow, type AgentSlug } from '../../shared/agentIdentity';
-import { A2A_REMOTE_PROTOCOL, type A2aRemoteDeliverResponse, type A2aRemoteEnvelope, type HostId } from '../../shared/a2aRemote';
+import { A2A_REMOTE_PROTOCOL, isHostId, type A2aRemoteDeliverResponse, type A2aRemoteEnvelope, type HostId } from '../../shared/a2aRemote';
 import {
   A2A_SPAWN_RPC,
   SPAWN_TARGETS_LINK_ID,
@@ -20,6 +20,7 @@ import {
   type A2aSpawnCardV1,
   type A2aSpawnClaimResult,
   type A2aSpawnCode,
+  type A2aSpawnPolicyV1,
   type A2aSpawnRequestState,
   type A2aSpawnRequestV1,
   type A2aSpawnResultV1,
@@ -112,10 +113,10 @@ export interface SpawnReceiverDeps {
   realpath?: (p: string) => Promise<string>;
   /** Whether `p` is a folder; rejects with the stat error when it cannot tell. */
   isDirectory?: (p: string) => Promise<boolean>;
-  /** As A: a request this PC sent to `hostId` that is still waiting for an answer. None yet in this build. */
+  /** As A: a request this PC sent to `hostId` that is still waiting for an answer. */
   isOutstanding?: (hostId: HostId, spawnId: string) => boolean;
-  /** As A: an answer to one of this PC's requests, or newer targets. */
-  onResult?: (hostId: HostId, result: A2aSpawnResultV1) => void;
+  /** As A: an answer to one of this PC's requests; false when it could not be taken yet (the other PC sends it again). */
+  onResult?: (hostId: HostId, result: A2aSpawnResultV1) => Promise<boolean>;
   /** The app has caught up with this daemon (it knows which panes exist). Until then a request waits. Default: ready. */
   appReady?: () => boolean;
   /** Live links remote starts made here: of `hostId`, or of every PC. Default: none. */
@@ -141,6 +142,8 @@ export interface SpawnReceiverDeps {
   /** End the link (and its exposure) a start of `spawnId` made, if any: the start did not finish. */
   abandon?: (hostId: HostId, spawnId: string) => void;
   onTargets?: (hostId: HostId, targets: A2aSpawnTargetsV1) => void;
+  /** Targets for `hostId` are still in the outbox (so a start does not queue them again). */
+  targetsQueued?: (hostId: HostId) => boolean;
   now?: () => number;
   /** Test seams. */
   checks?: SpawnChecks;
@@ -207,14 +210,13 @@ export class A2aSpawnReceiver {
   }
 
   /** One spawn envelope from an authenticated peer. Never waits on a decision. */
-  applyInbound(env: A2aRemoteEnvelope, peer: { hostId: HostId }): A2aRemoteDeliverResponse {
+  applyInbound(env: A2aRemoteEnvelope, peer: { hostId: HostId }): A2aRemoteDeliverResponse | Promise<A2aRemoteDeliverResponse> {
     const state = env.link?.state;
     if (env.linkVersion !== 0) return { ok: false, error: 'bad-request' };
     if (state === 'spawn-result') {
       const result = parseSpawnResult(env.spawnResult);
       if (!result || result.spawnId !== env.linkId) return { ok: false, error: 'bad-request' };
-      this.takeResult(peer.hostId, result);
-      return OK;
+      return this.takeResult(peer.hostId, result);
     }
     if (state === 'spawn-targets') {
       const targets = parseSpawnTargets(env.spawnTargets);
@@ -234,9 +236,35 @@ export class A2aSpawnReceiver {
     return this.receive(peer.hostId, req, env.sentAt);
   }
 
-  /** What `hostId` may ask for, as an envelope; null when it may not ask. Not sent until spawning ships. */
-  targetsEnvelope(hostId: HostId): A2aRemoteEnvelope | null {
-    const targets = spawnTargetsFor(this.deps.policy.get(), hostId);
+  /**
+   * Tell PCs what they may ask for. With `previous` (a save): every PC allowed
+   * now gets its targets, and one allowed before but not now gets empty lists
+   * (it learns no more than a `not-allowed` answer would tell it). Without (a
+   * start): every allowed PC, unless targets for it are still queued.
+   */
+  sendTargets(previous?: A2aSpawnPolicyV1): void {
+    const policy = this.deps.policy.get();
+    const hosts = new Set([...Object.keys(policy.hosts), ...Object.keys(previous?.hosts ?? {})]);
+    for (const hostId of hosts) {
+      if (!isHostId(hostId)) continue;
+      const allowed = spawnTargetsFor(policy, hostId) !== null;
+      if (previous) {
+        if (!allowed && spawnTargetsFor(previous, hostId) === null) continue;
+      } else if (!allowed || this.deps.targetsQueued?.(hostId)) {
+        continue;
+      }
+      const env = this.targetsEnvelope(hostId) ?? this.targetsEnvelope(hostId, { v: 1, version: policy.version, roots: [], agents: [] });
+      try {
+        if (env) this.deps.enqueue(hostId, env);
+      } catch (err) {
+        this.deps.log('warn', `[a2a-remote] spawn targets for ${hostId} not queued: ${errMsg(err)}`);
+      }
+    }
+  }
+
+  /** What `hostId` may ask for (or `targets`), as an envelope; null when it may not ask. */
+  targetsEnvelope(hostId: HostId, empty?: A2aSpawnTargetsV1): A2aRemoteEnvelope | null {
+    const targets = empty ?? spawnTargetsFor(this.deps.policy.get(), hostId);
     if (!targets) return null;
     return {
       protocol: A2A_REMOTE_PROTOCOL,
@@ -897,18 +925,23 @@ export class A2aSpawnReceiver {
 
   // --- A: answers ---------------------------------------------------------------
 
-  /** An answer is handed on only for a request this PC sent and that has no final answer yet. */
-  private takeResult(hostId: HostId, result: A2aSpawnResultV1): void {
+  /**
+   * An answer is handed on only for a request this PC sent and that has no
+   * final answer yet. One the asking side could not take (its link or first
+   * task not written) is refused `unavailable`, so the other PC sends it again.
+   */
+  private async takeResult(hostId: HostId, result: A2aSpawnResultV1): Promise<A2aRemoteDeliverResponse> {
     const k = `${hostId}:${result.spawnId}`;
     if (this.answered.has(k) || this.deps.isOutstanding?.(hostId, result.spawnId) !== true) {
       this.deps.log('info', `[a2a-remote] spawn result ${result.spawnId} from ${hostId} ignored: no request of this PC waits for it`);
-      return;
+      return OK;
     }
+    if (this.deps.onResult && !(await this.deps.onResult(hostId, result))) return UNAVAILABLE;
     if (isFinalSpawnCode(result.code)) {
       this.answered.add(k);
       if (this.answered.size > ANSWERED_MAX) this.answered.delete(this.answered.values().next().value as string);
     }
-    this.deps.onResult?.(hostId, result);
+    return OK;
   }
 }
 
@@ -939,9 +972,19 @@ type RpcHandler = (params: Record<string, unknown>) => Promise<unknown>;
 /** The machine-local policy RPCs (`wmux.internal`). */
 export function registerSpawnRpc(
   onRpc: (method: string, handler: RpcHandler) => void,
-  deps: { policy: Pick<SpawnPolicyStore, 'get' | 'set'>; requests: Pick<SpawnRequestStore, 'summaries'> },
+  deps: {
+    policy: Pick<SpawnPolicyStore, 'get' | 'set'>;
+    requests: Pick<SpawnRequestStore, 'summaries'>;
+    /** A saved policy: tell the PCs it concerns what they may ask for now. */
+    onSaved?: (previous: A2aSpawnPolicyV1) => void;
+  },
 ): void {
   onRpc(A2A_SPAWN_RPC.policyGet, async () => ({ policy: deps.policy.get() }));
-  onRpc(A2A_SPAWN_RPC.policySet, async (params) => deps.policy.set(params['policy']));
+  onRpc(A2A_SPAWN_RPC.policySet, async (params) => {
+    const previous = deps.policy.get();
+    const res = await deps.policy.set(params['policy']);
+    if (res.ok) deps.onSaved?.(previous);
+    return res;
+  });
   onRpc(A2A_SPAWN_RPC.requestsList, async () => ({ requests: deps.requests.summaries() }));
 }

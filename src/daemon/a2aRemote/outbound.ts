@@ -421,7 +421,7 @@ function envelope(
     linkVersion: link.version,
     messageId,
     // Marked on the link itself, so no path that sends on it can skip this.
-    ...(link.spawned === true || deps.spawnLink?.(link.linkId) ? spawnLinkBody(body) : body),
+    ...((link.spawned === true && link.proposer === 'remote') || deps.spawnLink?.(link.linkId) ? spawnLinkBody(body) : body),
     sentAt: new Date((deps.now ?? Date.now)()).toISOString(),
   };
 }
@@ -523,6 +523,8 @@ async function attachImages(
   text: string,
 ): Promise<Attached> {
   if (!paths || paths.length === 0) return { ok: true, text, images: [] };
+  // A spawn's link carries no images either way (the other PC refuses them).
+  if (link.spawned === true) return { ok: false, error: 'bad-request: a link a remote start made carries no images' };
   if (paths.length > A2A_REMOTE_IMAGE_LIMITS.PER_MESSAGE) {
     return { ok: false, error: `bad-request: at most ${A2A_REMOTE_IMAGE_LIMITS.PER_MESSAGE} images on one message` };
   }

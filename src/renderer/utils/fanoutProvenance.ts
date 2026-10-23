@@ -19,6 +19,7 @@ import type { TranslationKey } from '../i18n/locales/en';
 import { getWorkspaceLeafPanes } from '../../shared/paneUtils';
 import { computePaneAutoName, paneDisplayName } from './paneNaming';
 import type { FanoutOrigin } from '../../shared/fanoutOrigin';
+import { REMOTE_SPAWN_LINEAGE_PREFIX } from '../../shared/a2aSpawn';
 
 /** The subset of a main-side FanOutAuditRecord this module reads. */
 export interface FanoutAuditLike {
@@ -115,6 +116,8 @@ export function resolveTaskLink(
   if (mission) {
     return { ownerId: mission.owner?.verifiedWorkspaceId ?? '', detached: mission.detachedAt !== undefined };
   }
+  // A workspace another PC started carries a lineage stamp for depth 1 only: no owner here.
+  if (lineageOwner?.startsWith(REMOTE_SPAWN_LINEAGE_PREFIX)) return null;
   if (lineageOwner) return { ownerId: lineageOwner, detached: false };
   if (spawnOwner) return { ownerId: spawnOwner, detached: false };
   return null;

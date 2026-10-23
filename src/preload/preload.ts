@@ -17,7 +17,7 @@ import { CHATV2_IPC, type ChatV2BridgeApi, type ChatV2EventsPush, type ChatV2Res
 import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron';
 import { START_POLARITY_STORAGE_KEY, resolveStartPolarity, startPaintCss } from '../shared/windowStartPaint';
 import { IPC } from '../shared/constants';
-import type { A2aSpawnPolicySetResult, A2aSpawnPolicyV1, A2aSpawnRequestSummary } from '../shared/a2aSpawn';
+import type { A2aSpawnAskResult, A2aSpawnOutgoingList, A2aSpawnPolicySetResult, A2aSpawnPolicyV1, A2aSpawnRequestSummary, A2aSpawnUiAsk } from '../shared/a2aSpawn';
 import type { SleepPreventionMode, SleepWindow } from '../shared/sleepPrevention';
 import { ROOM_EVENT } from '../shared/room';
 import { BOT_EVENT } from '../shared/bot';
@@ -2329,6 +2329,8 @@ document.addEventListener('DOMContentLoaded', () => {
     ipcRenderer.invoke(IPC.A2A_REMOTE_SPAWN_POLICY_SET, policy) as Promise<A2aSpawnPolicySetResult>,
   spawnRequestsList: () =>
     ipcRenderer.invoke(IPC.A2A_REMOTE_SPAWN_REQUESTS_LIST) as Promise<{ requests: A2aSpawnRequestSummary[] }>,
+  spawnAsk: (ask: A2aSpawnUiAsk) => ipcRenderer.invoke(IPC.A2A_REMOTE_SPAWN_ASK, ask) as Promise<A2aSpawnAskResult>,
+  spawnOutgoing: () => ipcRenderer.invoke(IPC.A2A_REMOTE_SPAWN_OUTGOING) as Promise<A2aSpawnOutgoingList>,
   hostsExposed: (hostId: string) =>
     ipcRenderer.invoke(IPC.A2A_REMOTE_HOSTS_EXPOSED, hostId) as Promise<A2aRemoteHostsExposedResult>,
   linksList: () => ipcRenderer.invoke(IPC.A2A_REMOTE_LINKS_LIST) as Promise<A2aRemoteLinksListResult>,

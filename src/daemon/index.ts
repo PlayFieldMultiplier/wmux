@@ -117,6 +117,8 @@ import { SpawnPolicyStore } from './a2aRemote/spawnPolicyStore';
 import { SpawnRequestStore } from './a2aRemote/spawnRequestStore';
 import { SpawnLinkStore } from './a2aRemote/spawnLinkStore';
 import { A2aSpawnStarter, registerSpawnStartRpc } from './a2aRemote/spawnStarter';
+import { A2aSpawnRequester, registerSpawnAskRpc } from './a2aRemote/spawnRequester';
+import { SpawnOutgoingStore } from './a2aRemote/spawnOutgoingStore';
 import { linkAlias } from './a2aRemote/outbound';
 import { A2A_SPAWN_EVENT, type A2aSpawnEvent } from '../shared/a2aSpawn';
 import { A2A_FEATURE_IMAGES, A2A_FEATURE_LINK_OFFER, A2A_FEATURE_SPAWN, A2A_FEATURE_STREAM_PING, isRemoteTaskId } from '../shared/a2aRemote';
@@ -9397,6 +9399,23 @@ async function main(): Promise<void> {
       });
     }
     const a2aStarter = a2aSpawnStarter;
+    // Remote spawn (asking side): this PC's requests to other PCs, and their answers.
+    const a2aAsks = a2aTaskService
+      ? new A2aSpawnRequester({
+        store: new SpawnOutgoingStore({ dir: a2aDir, log: a2aLog }),
+        links: a2aLinks,
+        taskService: a2aTaskService,
+        enqueue: (hostId, envelope) => {
+          if (!a2aDelivery) throw new Error('messages between PCs are not carried this run');
+          a2aDelivery.outbox.enqueue(hostId, envelope);
+        },
+        hosts: () => (a2aDelivery?.status() ?? []).map((h) => ({ hostId: h.hostId, name: h.name, online: h.state === 'connected' })),
+        features: (hostId) => a2aDelivery?.peerFeatures(hostId),
+        aliasFor: (l) => linkAlias(l, a2aHostName(l.remote.hostId)),
+        broadcast: (event) => pipeServer.broadcast({ type: event.type, sessionId: '', data: event }),
+        log: a2aLog,
+      })
+      : null;
     const a2aSpawn = new A2aSpawnReceiver({
       policy: a2aSpawnPolicy,
       requests: a2aSpawnRequests,
@@ -9415,6 +9434,15 @@ async function main(): Promise<void> {
       ...(a2aStarter
         ? { start: a2aStarter, abandon: (hostId, spawnId) => a2aStarter.abandon(hostId, spawnId) }
         : {}),
+      ...(a2aAsks
+        ? {
+          isOutstanding: (hostId, spawnId) => a2aAsks.isOutstanding(hostId, spawnId),
+          onResult: (hostId, result) => a2aAsks.onResult(hostId, result),
+          onTargets: (hostId, targets) => a2aAsks.onTargets(hostId, targets),
+        }
+        : {}),
+      targetsQueued: (hostId) =>
+        a2aDelivery?.outbox.pending(hostId).some((r) => r.envelope.kind === 'link' && r.envelope.link?.state === 'spawn-targets') === true,
       log: a2aLog,
     });
     const a2aForgetHost = forgetHostCascade({ links: a2aLinks, exposures: a2aExposures, offers: a2aOffersRef }, a2aLog);
@@ -9436,6 +9464,11 @@ async function main(): Promise<void> {
         a2aSpawn.forgetHost(hostId);
       } catch (err) {
         a2aLog('error', `[a2a-remote] revoke cascade: spawn receiver for ${hostId}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      try {
+        a2aAsks?.forgetHost(hostId);
+      } catch (err) {
+        a2aLog('error', `[a2a-remote] revoke cascade: spawn requests sent to ${hostId}: ${err instanceof Error ? err.message : String(err)}`);
       }
       a2aDelivery?.onPeerRevoked(hostId);
     };
@@ -9473,7 +9506,7 @@ async function main(): Promise<void> {
       cascade: a2aCascade,
       log: a2aLog,
     });
-    registerSpawnRpc(onA2aRpc, { policy: a2aSpawnPolicy, requests: a2aSpawnRequests });
+    registerSpawnRpc(onA2aRpc, { policy: a2aSpawnPolicy, requests: a2aSpawnRequests, onSaved: (previous) => a2aSpawn.sendTargets(previous) });
     // Link control RPCs. Their handlers are also kept here: the delivery
     // layer's link reconcile reuses `a2a.remote.links.refresh` as is.
     const a2aLinkHandlers = new Map<string, (params: Record<string, unknown>) => Promise<unknown>>();
@@ -9509,6 +9542,7 @@ async function main(): Promise<void> {
         offers: a2aOffersRef,
         spawn: a2aSpawn,
         ...(a2aStarter ? { spawnLinks: a2aStarter } : {}),
+        ...(a2aAsks ? { spawnAsks: a2aAsks } : {}),
         // This build shows and accepts share offers, takes images on
         // messages and pings its streams: tell the servers it joins, and the
         // joiners in its hello.
@@ -9530,14 +9564,18 @@ async function main(): Promise<void> {
       // A spawn request still pending from before a restart is decided now.
       a2aStarter?.reconcile();
       a2aSpawn.recover();
+      // Each PC allowed to ask learns what it may ask for (unless that is still queued for it).
+      a2aSpawn.sendTargets();
       // Cards and approved starts past their expiry end `expired` even with nobody looking.
       // Put-backs of ended spawn links that could not be done yet are retried here too.
       const spawnSweep = setInterval(() => {
         a2aSpawn.sweep();
         a2aStarter?.reconcile();
+        a2aAsks?.expire();
       }, 60_000);
       spawnSweep.unref?.();
       if (a2aStarter) registerSpawnStartRpc(onA2aRpc, { receiver: a2aSpawn, starter: a2aStarter });
+      if (a2aAsks) registerSpawnAskRpc(onA2aRpc, a2aAsks);
     } else {
       log('warn', '[a2a-remote] task ledger unavailable: messages between PCs are not carried this run');
     }

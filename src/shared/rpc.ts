@@ -624,6 +624,10 @@ export type RpcMethod =
   | 'a2a.remote.spawn.claim'
   | 'a2a.remote.spawn.started'
   | 'a2a.remote.spawn.failed'
+  | 'a2a.remote.spawn.ask'
+  | 'a2a.remote.spawn.outgoing'
+  | 'a2a.remote.spawn'
+  | 'a2a.remote.spawnStatus'
   | 'a2a.resolve.identity'
   | 'a2a.whoami'
   | 'a2a.discover'
@@ -974,6 +978,10 @@ export const ALL_RPC_METHODS = [
   'a2a.remote.spawn.claim',
   'a2a.remote.spawn.started',
   'a2a.remote.spawn.failed',
+  'a2a.remote.spawn.ask',
+  'a2a.remote.spawn.outgoing',
+  'a2a.remote.spawn',
+  'a2a.remote.spawnStatus',
   'a2a.resolve.identity',
   'a2a.whoami',
   'a2a.discover',

@@ -1,4 +1,5 @@
 import { agentLauncherStem, agentRow } from '../../shared/agentIdentity';
+import { firstRunEnvForAgent } from '../../shared/agentFirstRun';
 import { A2A_REMOTE_INBOUND_EVENT, A2A_REMOTE_RPC } from '../../shared/a2aRemoteDelivery';
 import {
   A2A_SPAWN_EVENT,
@@ -274,12 +275,16 @@ export class RemoteSpawnCoordinator {
       // The renderer takes a name of at most 64 characters (it drops the marker otherwise).
       const spawnedBy: A2aRemoteSpawnedBy = { hostId, name: claim.hostName.slice(0, 64), spawnId, agent: claim.agent };
       let opened: unknown;
+      // The worktree is a folder nobody opened here: without the first-run env
+      // Claude Code stops on its folder-trust prompt, as a fan-out worker would.
+      const paneEnv = firstRunEnvForAgent(agentLauncherStem(row));
       try {
         opened = await this.deps.sendToRenderer('fanout.spawnWorkspace', {
           name: `From ${claim.hostName}`,
           cwd: made.cwd,
           // The launcher alone: the prompt arrives as the link's first task, typed in once the agent is ready.
           initialCommand: agentLauncherStem(row),
+          ...(Object.keys(paneEnv).length > 0 ? { env: paneEnv } : {}),
           workerPermissionMode: claim.permissionMode,
           // Also stamps the workspace depth 1 inside pty.create, before the agent starts.
           remoteSpawnedBy: spawnedBy,

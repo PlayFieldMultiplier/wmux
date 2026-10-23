@@ -333,6 +333,10 @@ export const FIRST_PARTY_METHODS: ReadonlySet<RpcMethod> = new Set<RpcMethod>([
   // server-derived in the handler and the spawn is approval-gated, so the grant
   // is to ATTEMPT the call; an unverifiable caller still fails closed.
   'task.fanout.start',
+  // remote_spawn: ask a paired PC to start an agent. The caller's pane is
+  // server-resolved and depth-1 checked in the handler; the other PC decides.
+  'a2a.remote.spawn',
+  'a2a.remote.spawnStatus',
   // Task ledger — ledger_update (every profile, worker-scoped by the ledger's
   // authz) and ledger_list (commander-only tool, also in the commander lane).
   'ledger.list',

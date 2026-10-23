@@ -243,7 +243,30 @@ export const A2A_SPAWN_RPC = Object.freeze({
   started: 'a2a.remote.spawn.started',
   /** `{ hostId, spawnId, code: 'folder-not-allowed' | 'failed' }` → `A2aSpawnStepResult`: starting a claimed request failed. */
   failed: 'a2a.remote.spawn.failed',
+  /**
+   * As A: `A2aSpawnAskInput` → `A2aSpawnAskResult`. Main calls it after
+   * checking the caller (local origin, its own pane, depth 1); the daemon
+   * stores the request and queues it for the other PC.
+   */
+  ask: 'a2a.remote.spawn.ask',
+  /** As A: `{ spawnId? }` → `A2aSpawnOutgoingList`: this PC's requests (no prompt text) and what each PC lets it ask for. */
+  outgoing: 'a2a.remote.spawn.outgoing',
 } as const);
+
+/** Main-pipe methods (local origin only): an agent, the CLI or the Remote page asks another PC to start an agent. */
+export const A2A_SPAWN_PIPE_RPC = Object.freeze({
+  /** `{ pc, agent, root, sub?, prompt, expiresInHours?, senderPtyId }` → `A2aSpawnAskResult`. */
+  spawn: 'a2a.remote.spawn',
+  /** `{ spawnId? }` → `A2aSpawnOutgoingList`. */
+  status: 'a2a.remote.spawnStatus',
+} as const);
+
+/**
+ * The fan-out lineage owner main stamps on a workspace another PC started
+ * (`remote-spawn:<hostId>`): depth 1 for its agent. Not a workspace id, so
+ * the sidebar does not nest it under (or orphan it from) an owner.
+ */
+export const REMOTE_SPAWN_LINEAGE_PREFIX = 'remote-spawn:';
 
 /** Daemon broadcast: a received request changed state (main shows its card, or starts it). */
 export const A2A_SPAWN_EVENT = 'a2a.remote.spawn.changed';
@@ -351,6 +374,111 @@ export type A2aSpawnPolicySetResult =
   | { ok: true; policy: A2aSpawnPolicyV1 }
   /** `conflict`: the policy changed since the caller read it (`version`); read it again. */
   | { ok: false; error: string; conflict?: true };
+
+// ─── Asking (A's side) ──────────────────────────────────────────────────────
+
+/** Requests one pane may send per hour, to any PC. */
+export const SPAWN_ASKS_PER_PANE_PER_HOUR = 3;
+/** Requests to one PC that may wait for their answer at once. */
+export const SPAWN_ASKS_OPEN_PER_HOST_MAX = 3;
+/** How long a request waits for the other PC when the caller names no time. */
+export const SPAWN_ASK_TTL_DEFAULT_MS = 24 * 60 * 60 * 1000;
+/** A request with no answer this long after its expiry is ended `expired` here. */
+export const SPAWN_ASK_GRACE_MS = 10 * 60 * 1000;
+
+/**
+ * A request this PC sent:
+ *   sent     — queued, or delivered and not answered yet
+ *   waiting  — the other PC shows its card
+ *   started  — the agent runs there; `linkId` is the link to it
+ *   refused  — `code` says why
+ *   expired  — no answer in time
+ */
+export type A2aSpawnOutgoingState = 'sent' | 'waiting' | 'started' | 'refused' | 'expired';
+
+/** What a caller may see about a request this PC sent: never the prompt. */
+export interface A2aSpawnOutgoingSummary {
+  hostId: HostId;
+  /** This PC's name for the other PC, when it has one. */
+  hostName?: string;
+  spawnId: string;
+  agent: AgentSlug;
+  rootId: string;
+  sub?: string;
+  /** The pane here that gets the replies. */
+  from: A2aSpawnFromV1;
+  state: A2aSpawnOutgoingState;
+  code?: A2aSpawnCode;
+  linkId?: string;
+  createdAt: string;
+  updatedAt: string;
+  expiresAt: string;
+}
+
+/** What main hands the daemon; `from` is the caller's own pane, found by main. */
+export interface A2aSpawnAskInput {
+  /** The other PC: its host id, or this PC's name for it. */
+  pc: string;
+  agent: AgentSlug;
+  folder: { root: string; sub?: string };
+  text: string;
+  /** 1–72; default 24. */
+  expiresInHours?: number;
+  from: A2aSpawnFromV1;
+  /** Counts toward the per-pane hourly limit: the pane that gets the replies. */
+  callerKey: string;
+}
+
+/**
+ * The Remote page's ask (renderer → main). `end` is the pane that gets the
+ * replies; main checks it against its own pane tree before using it.
+ */
+export interface A2aSpawnUiAsk {
+  hostId: HostId;
+  agent: AgentSlug;
+  folder: { root: string; sub?: string };
+  text: string;
+  expiresInHours?: number;
+  end: { workspaceId: string; paneId: string };
+}
+
+/**
+ * Why a request was not sent. `not-supported`: that PC's wmux cannot take
+ * one (it never said `spawn.1`); `unknown-pc` / `ambiguous-pc`: no paired PC,
+ * or more than one, goes by that name.
+ */
+export type A2aSpawnAskError = 'unknown-pc' | 'ambiguous-pc' | 'not-supported' | 'rate-limited' | 'bad-request' | 'unavailable';
+
+export type A2aSpawnAskResult =
+  /** `online`: the other PC's link is up now; when false the request waits for it until `expiresAt`. */
+  | { ok: true; spawn: A2aSpawnOutgoingSummary; online: boolean }
+  | { ok: false; error: A2aSpawnAskError; message?: string };
+
+/** One paired PC as a place to ask. */
+export interface A2aSpawnPlace {
+  hostId: HostId;
+  name?: string;
+  online: boolean;
+  /** It said `spawn.1`. */
+  supported: boolean;
+  /** What it last said this PC may ask for; absent until it says. Empty lists: nothing (any more). */
+  targets?: A2aSpawnTargetsV1;
+}
+
+export interface A2aSpawnOutgoingList {
+  /** Newest first. */
+  requests: A2aSpawnOutgoingSummary[];
+  places: A2aSpawnPlace[];
+}
+
+/** Daemon broadcast: a request this PC sent, or what a PC lets it ask for, changed. */
+export const A2A_SPAWN_OUTGOING_EVENT = 'a2a.remote.spawn.outgoing.changed';
+export interface A2aSpawnOutgoingEvent {
+  type: typeof A2A_SPAWN_OUTGOING_EVENT;
+  hostId: HostId;
+  spawnId?: string;
+  state?: A2aSpawnOutgoingState;
+}
 
 /** What the UI may list about a received request: never the prompt. */
 export interface A2aSpawnRequestSummary {

@@ -128,6 +128,7 @@ import { focusedPrimaryWindow } from './window/auxiliaryWindows';
 import { createFanOutService } from './worktask/createFanOutService';
 import { getWorkerTempDirSweeper, liveTempDirsFromSessions } from './worktask/fanoutTempDir';
 import { registerFanOutRpc } from './pipe/handlers/fanout.rpc';
+import { registerRemoteSpawnRpc } from './pipe/handlers/remoteSpawn.rpc';
 import { registerLedgerRpc } from './pipe/handlers/ledger.rpc';
 import { registerTaskPushRpc } from './pipe/handlers/taskPush.rpc';
 import { registerVerifyRpc } from './pipe/handlers/verify.rpc';
@@ -1325,6 +1326,7 @@ registerGitHandoffHandlers({
   startFanOut: (req) => startGuiFanOut(fanOutService, req),
 });
 registerFanOutRpc(rpcRouter, fanOutService, () => mainWindow, { getDaemonClient: () => daemonClient });
+registerRemoteSpawnRpc(rpcRouter, () => mainWindow, { getDaemonClient: () => daemonClient });
 registerLedgerRpc(rpcRouter, () => mainWindow, {
   // A completion on a no-changes skip asks the no-changes check again.
   noChangesCheck: liveNoChangesCheck({
