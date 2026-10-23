@@ -685,6 +685,21 @@ describe('cross-host delivery, end to end', () => {
     expect(texts()).toEqual(['run the migration', WAITING_SUMMARY['agent-prompt'], NO_AGENT_SUMMARY]);
   });
 
+  it('a no-agent hold whose reply to the sender never went is told by maintenance, once', async () => {
+    const b = await makePc('PC-B', { render: async () => ({ ok: true, delivered: false, reason: 'no_target_pty' }) });
+    const a = await makePc('PC-A');
+    const linkId = await linked(a, b);
+    const taskId = await sendTask(a, linkId, 'rebuild the index');
+    await until(() => b.tasks.getTask(taskId) !== undefined);
+    // Held with no reply sent (as when the send failed at the time).
+    expect((await b.tasks.markRemote({ taskId, held: 'no-agent' })).ok).toBe(true);
+    await b.delivery.maintain();
+    await b.delivery.maintain();
+    const texts = (): string[] => a.tasks.getTask(taskId)!.history.map((m) => (m.parts[0] as { text: string }).text);
+    await until(() => texts().length === 2);
+    expect(texts()).toEqual(['rebuild the index', NO_AGENT_SUMMARY]);
+  });
+
   it('main restarting mid-paste: the task is not pasted again and shows as delivery-unconfirmed', async () => {
     // B's renderer takes the paste and never answers (main dies right there).
     const b = await makePc('PC-B', { render: () => new Promise(() => undefined) });

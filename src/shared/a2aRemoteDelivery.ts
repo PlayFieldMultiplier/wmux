@@ -9,6 +9,7 @@
 // Pure module: no node:* imports (the renderer imports it).
 
 import { A2A_BRAIN_ALIAS, isRemoteTaskId, type A2aEndpointKind, type A2aRemoteReceipt, type A2aRemoteTaskMarkerV1, type HostId } from './a2aRemote';
+import type { GatedSubmitRefusal } from './ptyMessageDelivery';
 import { isTaskState, type Part, type Task, type TaskState } from './types';
 
 /**
@@ -235,11 +236,34 @@ export function readHeldReason(held: string): A2aRemoteHeldReason {
  */
 export type A2aRemoteWaitingCause = 'agent-prompt' | 'user-typing';
 
-/** The waiting cause a renderer refusal reason stands for (ptyMessageDelivery's `GatedSubmitRefusal`), if any. */
-export function waitingCauseOf(reason: unknown): A2aRemoteWaitingCause | undefined {
-  if (reason === 'approval_pending') return 'agent-prompt';
-  if (reason === 'user_typing') return 'user-typing';
-  return undefined;
+/**
+ * What one "written nowhere" answer from the renderer says about the pane:
+ * no agent there (`no_agent_pane`, the only answer that may end in a hold),
+ * an agent there that is waiting (a cause), or nothing either way (`retry`:
+ * the delivery stays on the retry path).
+ */
+export type A2aRemoteMissKind = 'no-agent' | A2aRemoteWaitingCause | 'retry';
+
+/** Every gated refusal, decided here: a new one fails the type check until it is. */
+const GATED_MISS: Readonly<Record<GatedSubmitRefusal['reason'], A2aRemoteWaitingCause | 'retry'>> = {
+  approval_pending: 'agent-prompt',
+  user_typing: 'user-typing',
+  // The agent may well be there; none of these says it is gone.
+  gate_unavailable: 'retry',
+  write_failed: 'retry',
+  fresh_context_timeout: 'retry',
+  fresh_context_busy: 'retry',
+  usage_limited: 'retry',
+  agent_changed: 'retry',
+  agent_unverified: 'retry',
+  deadline: 'retry',
+  guard_refused: 'retry',
+};
+
+/** The miss kind of a renderer `reason` (anything unknown is `retry`). */
+export function missKindOf(reason: unknown): A2aRemoteMissKind {
+  if (reason === 'no_agent_pane') return 'no-agent';
+  return typeof reason === 'string' && Object.hasOwn(GATED_MISS, reason) ? GATED_MISS[reason as GatedSubmitRefusal['reason']] : 'retry';
 }
 
 export function isWaitingCause(v: unknown): v is A2aRemoteWaitingCause {
@@ -319,7 +343,7 @@ export function localSideOf(task: Pick<Task, 'metadata'>): 'from' | 'to' {
  *     pane is gone, or another occupant holds it now. Never re-routed.
  *   - neither: not written this time (approval prompt, person typing, no
  *     agent in the pane); the bridge may try again later. `reason` says
- *     which: `waitingCauseOf` reads the ones where an agent is there.
+ *     which (`missKindOf`).
  */
 export type A2aRemoteDeliveryResult =
   | { ok: true; delivered: true; duplicate?: boolean; ptyId?: string; note?: 'pasted-not-submitted' }

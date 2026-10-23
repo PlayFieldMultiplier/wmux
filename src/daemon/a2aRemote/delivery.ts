@@ -342,6 +342,12 @@ export class A2aRemoteDelivery {
   /** Periodic upkeep: drop old acked records, reject holds past their TTL, re-queue what is owed. */
   async maintain(): Promise<void> {
     await this.syncAll().catch((err: unknown) => this.deps.log('warn', `[a2a-remote] outbound sync failed: ${errMsg(err)}`));
+    // A no-agent hold whose reply to the sender could not go when it was held
+    // (main marks it once): told here, once it can be.
+    for (const task of this.deps.taskService.listRemoteHeld()) {
+      const marker = task.metadata.remote as { direction?: string; held?: string } | undefined;
+      if (marker?.direction === 'inbound' && marker.held === 'no-agent') await this.tellSender(task.id, NO_AGENT_SUMMARY);
+    }
     // Before the prune: an ack whose mark never landed (crash, failed append) is
     // recovered while its record is still here. This runs at start and every
     // minute, so every acked record is seen at least once before it is pruned.
@@ -433,8 +439,10 @@ export class A2aRemoteDelivery {
         ...(p['note'] === 'pasted-not-submitted' ? { note: 'pasted-not-submitted' as const } : {}),
         ...(typeof p['ptyId'] === 'string' && isSafeId(p['ptyId']) ? { ptyId: p['ptyId'] } : {}),
       });
+      // A reply that could not go now is tried again by `maintain`.
       if (res.ok && held === 'no-agent' && messageId === undefined) await this.tellSender(taskId, NO_AGENT_SUMMARY);
-      // Not a hold: main keeps delivering. A cause this build does not know is ignored.
+      // Not a hold: main keeps delivering and says `waiting` on every later miss,
+      // so a reply that could not go is tried again then. A cause this build does not know is ignored.
       const waiting = p['waiting'];
       if (res.ok && held === undefined && isWaitingCause(waiting) && messageId === undefined) await this.tellSender(taskId, WAITING_SUMMARY[waiting]);
       // Handed over: the sender gets a `delivered` receipt.
@@ -545,15 +553,18 @@ export class A2aRemoteDelivery {
    * Our pane could not take the peer's task (no agent, or an agent behind a
    * prompt or a person typing): the sender hears why, once per summary, as a
    * reply from this side (its task stays open; `submitted` has no edge to
-   * `input-required`, and nothing here has started the work).
+   * `input-required`, and nothing here has started the work). Once means the
+   * reply is in the task's history: a send that failed stored nothing, so the
+   * next call tries again. False only when the reply could not be sent.
    */
-  private async tellSender(taskId: string, summary: string): Promise<void> {
+  private async tellSender(taskId: string, summary: string): Promise<boolean> {
     const task = this.deps.taskService.getTask(taskId);
-    if (!task || task.status.state !== 'submitted') return;
+    if (!task || task.status.state !== 'submitted') return true;
     const said = task.history.some((m) => m.parts.some((p) => p.kind === 'text' && p.text === summary));
-    if (said) return;
+    if (said) return true;
     const res = await sendRemoteReply(this.outboundDeps(), { taskId, workspaceId: task.metadata.to.workspaceId, text: summary });
     if (!res.ok) this.deps.log('warn', `[a2a-remote] ${taskId}: could not tell the sender why its task waits: ${res.error}`);
+    return res.ok;
   }
 
   private newSession(hostId: HostId): JoinerSession {
