@@ -1,12 +1,11 @@
 import { execFile } from 'node:child_process';
-import fs from 'node:fs';
 import path from 'node:path';
 import { atomicWriteJSONSync } from '../util/atomicWrite';
 import { scheduleTokenFileReHarden } from '../../shared/security';
 import { getExecEnv } from '../../shared/execEnv';
 import { coerceSpawnPolicy, defaultSpawnPolicy, type A2aSpawnPolicySetResult, type A2aSpawnPolicyV1 } from '../../shared/a2aSpawn';
 import type { HostId } from '../../shared/a2aRemote';
-import { CheckBusy, CheckTimeout, spawnChecks, type SpawnChecks } from './spawnChecks';
+import { CheckBusy, CheckTimeout, realpathNative, spawnChecks, type SpawnChecks } from './spawnChecks';
 import { loadStore, storeUnavailable, type StoreLog } from './storeFile';
 
 /**
@@ -67,7 +66,7 @@ export class SpawnPolicyStore {
     this.write = opts.write ?? ((p, d): void => atomicWriteJSONSync(p, d));
     this.scheduleHarden = opts.scheduleHarden ?? scheduleTokenFileReHarden;
     this.repoToplevel = opts.repoToplevel ?? gitToplevel;
-    this.realpath = opts.realpath ?? ((p) => fs.promises.realpath(p));
+    this.realpath = opts.realpath ?? realpathNative;
     this.checks = opts.checks ?? spawnChecks;
     this.now = opts.now ?? Date.now;
     this.setBudgetMs = opts.setBudgetMs ?? SPAWN_POLICY_SET_BUDGET_MS;
@@ -231,6 +230,6 @@ const gitToplevel: RepoToplevel = (dir) => new Promise((resolve) => {
     if (err) return resolve(null);
     const top = String(stdout).trim();
     if (!top) return resolve(null);
-    fs.promises.realpath(top).then(resolve, () => resolve(null));
+    realpathNative(top).then(resolve, () => resolve(null));
   });
 });

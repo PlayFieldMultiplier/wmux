@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+
 /**
  * Disk and PATH checks for remote spawn (the policy's folders, a request's
  * folder and agent), bounded in time and in number.
@@ -60,6 +62,19 @@ export class SpawnChecks {
 
 /** The one gate every spawn check of this process goes through. */
 export const spawnChecks = new SpawnChecks();
+
+/**
+ * The OS realpath (`fs.realpath.native`). Every spawn path that is compared
+ * goes through this one: on Windows it expands 8.3 short names
+ * (`C:\Users\RUNNER~1`) and returns the on-disk case, which the JS realpath
+ * does not, so a root saved under one spelling still matches a folder
+ * resolved under another (#984).
+ */
+export function realpathNative(p: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    fs.realpath.native(p, (err, resolved) => (err ? reject(err) : resolve(resolved)));
+  });
+}
 
 /** The errors that mean "no such folder here" (anything else may pass on a retry). */
 export function notThere(err: unknown): boolean {

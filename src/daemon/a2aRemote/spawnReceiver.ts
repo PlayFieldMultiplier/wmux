@@ -23,7 +23,7 @@ import { sanitizeRemoteMessage } from '../../shared/a2aRemoteDelivery';
 import { whichOnPath } from '../web/agentLaunch';
 import type { SpawnPolicyStore } from './spawnPolicyStore';
 import { samePath } from './spawnPolicyStore';
-import { CheckTimeout, notThere, spawnChecks, type SpawnChecks } from './spawnChecks';
+import { CheckTimeout, notThere, realpathNative, spawnChecks, type SpawnChecks } from './spawnChecks';
 import { spawnFingerprint, type SpawnRequestRecordV1, type SpawnRequestStore } from './spawnRequestStore';
 import { errMsg, isPlainObject } from './storeFile';
 
@@ -133,7 +133,7 @@ export class A2aSpawnReceiver {
     this.deps = deps;
     this.now = deps.now ?? Date.now;
     this.agentInstalled = deps.agentInstalled ?? agentOnPath;
-    this.realpath = deps.realpath ?? ((p) => fs.promises.realpath(p));
+    this.realpath = deps.realpath ?? realpathNative;
     this.isDirectory = deps.isDirectory ?? ((p) => fs.promises.stat(p).then((s) => s.isDirectory()));
     this.checks = deps.checks ?? spawnChecks;
     this.retryMinMs = deps.retryMinMs ?? RETRY_MIN_MS;
@@ -382,7 +382,7 @@ export class A2aSpawnReceiver {
       const real = await this.checks.run(() => this.realpath(target(rootReal)));
       if (!samePath(rootReal, rootPath) || !inside(rootReal, real)) return false;
       if (!(await this.checks.run(() => this.isDirectory(real)))) return false;
-      return (await this.checks.run(() => this.realpath(target(rootReal)))) === real;
+      return samePath(await this.checks.run(() => this.realpath(target(rootReal))), real);
     } catch (err) {
       if (notThere(err)) return false;
       throw err;

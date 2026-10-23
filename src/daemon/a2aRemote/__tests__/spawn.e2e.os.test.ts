@@ -60,7 +60,7 @@ afterEach(async () => {
 });
 
 async function makePc(name: string, opts: { holdAgentCheck?: boolean } = {}): Promise<Pc> {
-  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-spawn-e2e-')));
+  const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-spawn-e2e-')));
   dirs.push(dir);
   const a2aDir = path.join(dir, 'a2a');
   const port = await freePort();

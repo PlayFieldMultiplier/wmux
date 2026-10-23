@@ -19,6 +19,7 @@ import { SpawnPolicyStore, samePath } from '../spawnPolicyStore';
 import { SpawnRequestStore } from '../spawnRequestStore';
 import { CheckBusy, CheckTimeout, SpawnChecks } from '../spawnChecks';
 import { deliberateSleep } from '../../../test-utils/waitFor';
+import { shortPathOf } from '../../../test-utils/shortPath';
 
 const HOST = '11111111-1111-4111-8111-111111111111';
 const OTHER = '22222222-2222-4222-8222-222222222222';
@@ -48,7 +49,7 @@ function makeReceiver(over: Partial<SpawnReceiverDeps> = {}): A2aSpawnReceiver {
 }
 
 beforeEach(() => {
-  dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-spawn-')));
+  dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'a2a-spawn-')));
   a2aDir = path.join(dir, 'a2a');
   repo = path.join(dir, 'repo');
   fs.mkdirSync(path.join(repo, 'apps', 'site'), { recursive: true });
@@ -177,6 +178,15 @@ describe('the decision', () => {
     expect(await decide(envelope({ spawn: { folder: { root: 'web', sub: 'escape' } } }))).toBe('folder-not-allowed');
     fs.writeFileSync(path.join(repo, 'file.txt'), 'x');
     expect(await decide(envelope({ spawn: { folder: { root: 'web', sub: 'file.txt' } } }))).toBe('folder-not-allowed');
+  });
+
+  it('a root saved under its 8.3 short name is stored long and still matches a request (Windows)', async () => {
+    const short = shortPathOf(repo);
+    // Not Windows, or this volume makes no short names: nothing to spell differently.
+    if (!short) return;
+    await allowHost({ roots: [{ id: 'web', label: 'Web', path: short }] });
+    expect(policy.get().roots[0].path).toBe(repo);
+    expect(await decide(envelope({ spawn: { folder: { root: 'web', sub: 'apps' } } }))).toBe('not-supported');
   });
 
   it('a root replaced by a link elsewhere after it was allowed is refused', async () => {
