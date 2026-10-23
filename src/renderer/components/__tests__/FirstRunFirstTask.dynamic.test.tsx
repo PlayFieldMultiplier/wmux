@@ -298,9 +298,10 @@ describe('FirstRunWizard first task', () => {
     expect(firstRun.firstBot).not.toHaveBeenCalled();
   });
 
-  it('a first-run bot made earlier for another folder is shown and nothing is sent until Send again', async () => {
+  // made earlier (created false), or made now on a clone the workspace's bot already reads (created true)
+  it.each([false, true])('a first-run bot that reads another folder is shown and nothing is sent until Send again (created %s)', async (created) => {
     install();
-    firstRun.firstBot.mockResolvedValue({ ok: true, created: false, bot: { id: 'b1', name: 'Mochi', workspaceId: 'w1', repoPath: '/a' }, threadId: 'dm:b1' });
+    firstRun.firstBot.mockResolvedValue({ ok: true, created, bot: { id: 'b1', name: 'Mochi', workspaceId: 'w1', repoPath: '/a' }, threadId: 'dm:b1' });
     firstRun.checkFolder.mockImplementation(async (f: string) => (f === '/a' ? { ok: true, root: '/a', displayRoot: '~/a', repoKey: 'o/a' } : { ok: true, root: '/r', displayRoot: '~/r', repoKey: 'o/r' }));
     await mount();
     await click('first-run-first-task-send');

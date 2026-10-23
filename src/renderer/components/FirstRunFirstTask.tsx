@@ -318,10 +318,11 @@ export function useFirstTask({ enabled, workspaceId }: { enabled: boolean; works
       if (!api) return fail();
       const botId = made.bot.id;
       setBotId(botId);
-      // A bot made earlier (a first run left before its task) reads its own
-      // folder: show that one and send nothing, so the task never names a
-      // folder the bot does not read.
-      if (!made.created && made.bot.repoPath && made.bot.repoPath !== folder.path) {
+      // A bot that reads another folder (one made earlier, when a first run
+      // was left before its task, or one made now on a clone of the same
+      // repository the workspace's bot already reads): show that folder and
+      // send nothing, so the task never names a folder the bot does not read.
+      if (made.bot.repoPath && made.bot.repoPath !== folder.path) {
         if (!live.current) return;
         const shown = await bridge.checkFolder?.(made.bot.repoPath).catch(() => null);
         if (!live.current) return;
