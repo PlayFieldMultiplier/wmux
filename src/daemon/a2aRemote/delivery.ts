@@ -662,6 +662,7 @@ export class A2aRemoteDelivery {
       ...(this.deps.offers ? { offers: this.deps.offers } : {}),
       ...(this.deps.spawn ? { spawn: this.deps.spawn } : {}),
       ...(this.images ? { images: { store: this.images, pullAttempts: this.pullAttempts } } : {}),
+      log: this.deps.log,
     };
   }
 

@@ -53,13 +53,14 @@ that happens to carry content fails it too.
 Claude-compatible hook bridge (`integrations/shared/bin/wmux-hooks-bridge.mjs`,
 flavour `kiro`; see `integrations/shared/README.md`). The mapping, the
 privacy rule, the pane rule and the log file (`~/.wmux/kiro-bridge.log`) are
-the same as before the move. The command in the agent config does not change.
+the same as before the move.
 
 ## Manual setup
 
 1. Put **both** `wmux-kiro-bridge.mjs` and `wmux-hooks-bridge.mjs` in the same
    stable directory, e.g. `~/.wmux/hooks/`. The Kiro entry point loads the
-   shared bridge from beside itself.
+   shared bridge from beside itself. On Windows that directory's path must
+   have no spaces (see below); `C:/wmux-hooks/` works for any user name.
 2. Write `~/.kiro/agents/wmux.json` with the config
    `agent/wmuxAgent.mjs` builds, pointing `command` at that path:
 
@@ -75,18 +76,36 @@ the same as before the move. The command in the agent config does not change.
                    "skill://<home>/.kiro/skills/*/SKILL.md",
                    "file://<home>/.kiro/steering/**/*.md"],
      "hooks": {
-       "stop":       [{ "command": "node \"<path>/wmux-kiro-bridge.mjs\"", "timeout_ms": 2500 }],
-       "agentSpawn": [{ "command": "node \"<path>/wmux-kiro-bridge.mjs\"", "timeout_ms": 2500 }]
+       "stop":       [{ "command": "<hook command>", "timeout_ms": 2500 }],
+       "agentSpawn": [{ "command": "<hook command>", "timeout_ms": 2500 }]
      }
    }
    ```
 
 3. Launch Kiro panes with `kiro-cli chat --agent wmux`.
 
-Replace **both** placeholders with absolute paths, and use forward slashes so
-the JSON needs no escaping:
+Replace the placeholders, using forward slashes so the JSON needs no escaping:
 
-- `<path>` — the directory holding `wmux-kiro-bridge.mjs`.
+- `<hook command>` — the hook line exactly as `agent/wmuxAgent.mjs` generates
+  it (`kiroHookCommand`), with `<path>` the absolute path of the directory
+  holding `wmux-kiro-bridge.mjs`. Its form depends on the platform:
+
+  | Platform | Hook command |
+  |---|---|
+  | macOS, Linux | `node \"<path>/wmux-kiro-bridge.mjs\"` (quoted inside the JSON string) |
+  | Windows | `node <path>/wmux-kiro-bridge.mjs` (no quotes), e.g. `node C:/wmux-hooks/wmux-kiro-bridge.mjs` |
+
+  **Windows: the directory path must start with a drive letter (`C:/…`) or
+  a UNC share (`//server/share/…`), and have no spaces.**
+  Kiro's open-source predecessor (Amazon Q Developer CLI) runs a hook command
+  on Windows through `cmd /C` in a way that delivers any quote in it to `node`
+  literally, so the path cannot be quoted and a space would split it. The
+  generator refuses such a path, a relative or rooted one (`/…` is on
+  whatever drive the hook starts on), or one with a shell character
+  such as `& ( ) ' %`, rather than write a hook that never runs. Letters in any
+  script are fine. A Windows `wmux.json` written with the earlier quoted form
+  never ran its hooks: replace both `command` values with the form above.
+
 - `<home>` — your home directory (`C:/Users/you`, `/Users/you`, `/home/you`).
   Kiro does not expand `~` or `<home>` here: a literal one resolves to nothing
   and the skills and steering entries are dropped **without an error**, which

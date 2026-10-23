@@ -428,3 +428,39 @@ describe('acceptInbound — share offers ride a link envelope', () => {
     expect(await acceptInbound(offerEnv('offer-withdrawn'), peer, deps)).toEqual({ ok: false, error: 'unknown-link' });
   });
 });
+
+describe('acceptInbound — refusals carry a code only', () => {
+  const SECRET_DETAIL = 'EACCES: permission denied, open /home/someone/.wmux/a2a/ledger';
+
+  it('a store failure answers its code, and the detail goes to this PC\'s log only', async () => {
+    const lines: string[] = [];
+    const linkId = activeLink();
+    const failing: InboundDeps = {
+      ...deps,
+      taskService: { ...tasks, getTask: (id: string) => tasks.getTask(id), createTask: async () => ({ ok: false, error: SECRET_DETAIL }) } as unknown as InboundDeps['taskService'],
+      log: (_level, msg) => { lines.push(msg); },
+    };
+    const res = await acceptInbound(env(linkId, {}), peer, failing);
+    expect(res).toEqual({ ok: false, error: 'unavailable' });
+    expect(JSON.stringify(res)).not.toContain('EACCES');
+    expect(lines.join('\n')).toContain(SECRET_DETAIL);
+  });
+
+  it('a thrown error answers unavailable with no text', async () => {
+    const linkId = activeLink();
+    const throwing: InboundDeps = {
+      ...deps,
+      linkStore: { ...links, get: (id: string) => links.get(id), checkMessage: () => { throw new Error(SECRET_DETAIL); } } as unknown as InboundDeps['linkStore'],
+      log: () => undefined,
+    };
+    const res = await acceptInbound(env(linkId, {}), peer, throwing);
+    expect(res).toEqual({ ok: false, error: 'unavailable' });
+  });
+
+  it('a check\'s own words stay here too: a receipt for a task this PC never sent', async () => {
+    const linkId = activeLink();
+    const res = await acceptInbound(env(linkId, { kind: 'receipt', taskId: 'rt-nope', receipt: 'delivered', text: undefined }), peer, deps);
+    expect(res.ok).toBe(false);
+    expect(res).not.toHaveProperty('message');
+  });
+});
