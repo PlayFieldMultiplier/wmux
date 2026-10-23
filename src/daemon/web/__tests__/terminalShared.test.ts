@@ -82,8 +82,15 @@ function guardHelpersSource(): string {
   return appJs.slice(start, close + 4);
 }
 
-/** Resolves once everything queued so far has been parsed. */
-const flush = (t: Terminal) => new Promise<void>((resolve) => t.write('', resolve));
+const parsed = (t: Terminal) => new Promise<void>((resolve) => t.write('', resolve));
+/**
+ * Resolves once everything queued so far has been parsed, including a write a
+ * parser handler queued while parsing it (the guard's reset marker). That write
+ * lands behind this flush's own empty one, and xterm yields between writes once
+ * a parse runs past its time slice (a loaded machine), so a second empty write
+ * is what waits for it.
+ */
+const flush = async (t: Terminal) => { await parsed(t); await parsed(t); };
 
 // What a claude that exited without cleaning up leaves at the end of the ring.
 const LEAKED_TUI_MODES = '$ \x1b[?1003h\x1b[?1006h\x1b[?1004h\x1b[?2004h';
