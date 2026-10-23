@@ -85,6 +85,7 @@ import type { ComputerUseSettingsPayload } from '../shared/computer/config';
 import type { QuickLaunchSettingsPayload } from '../shared/quickLaunch';
 import type { ResumeBinding } from '../shared/agentResume';
 import type { PaneUsageLimit, PaneUsageLimitPatch } from '../shared/usageLimit';
+import type { DictationAssetsResult, DictationMicAccess, DictationModelState } from '../shared/dictation';
 import type { PreviewChangedEvent, PreviewLinkEvent, PreviewOpenResult } from '../shared/filePreview';
 import type {
   WorkspaceSettleChangedPayload,
@@ -1995,6 +1996,21 @@ const electronAPI = {
     },
     update: (ptyId: string, patch: PaneUsageLimitPatch) =>
       ipcRenderer.invoke(IPC.USAGE_LIMIT_UPDATE, { ptyId, patch }) as Promise<{ ok: boolean }>,
+  },
+  // Voice dictation (shared/dictation): the model's state and its one-time
+  // download (called only from the owner's consent), the engine's assets,
+  // and the microphone's OS access.
+  dictation: {
+    status: () => ipcRenderer.invoke(IPC.DICTATION_STATUS) as Promise<DictationModelState>,
+    download: () => ipcRenderer.invoke(IPC.DICTATION_DOWNLOAD) as Promise<DictationModelState>,
+    cancel: () => ipcRenderer.invoke(IPC.DICTATION_CANCEL) as Promise<void>,
+    assets: () => ipcRenderer.invoke(IPC.DICTATION_ASSETS) as Promise<DictationAssetsResult>,
+    micAccess: () => ipcRenderer.invoke(IPC.DICTATION_MIC_ACCESS) as Promise<DictationMicAccess>,
+    onState: (callback: (state: DictationModelState) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, state: DictationModelState) => callback(state);
+      ipcRenderer.on(IPC.DICTATION_STATE, listener);
+      return () => { ipcRenderer.removeListener(IPC.DICTATION_STATE, listener); };
+    },
   },
   // Workspace settle / snooze (shared/workspaceSettle). Main owns the state;
   // `get` hydrates on boot, `onChanged` streams the snapshot and the changes

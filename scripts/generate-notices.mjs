@@ -333,6 +333,20 @@ for (const f of BUNDLED_FONTS) {
 // comment.
 const BORROWED_SOURCES = [
   {
+    name: 'OpenAI Whisper',
+    license: 'MIT License',
+    repo: 'https://github.com/openai/whisper',
+    copyright: 'Copyright (c) 2022 OpenAI',
+    what:
+      'Voice dictation runs the Whisper base model (its weights are MIT, in\n' +
+      'onnx-community/whisper-base\'s ONNX conversion), which the owner downloads\n' +
+      'on first use; no weights ship with wmux. Whisper\'s log-mel features and\n' +
+      'greedy decoding were reimplemented in TypeScript in\n' +
+      'src/renderer/dictation/whisper.ts; no code was copied. The tests\'\n' +
+      'reference values were generated with openai-whisper\n' +
+      '(scripts/dictation/gen-whisper-reference.py).',
+  },
+  {
     name: 'browser-use',
     license: 'MIT License',
     repo: 'https://github.com/browser-use/browser-use',

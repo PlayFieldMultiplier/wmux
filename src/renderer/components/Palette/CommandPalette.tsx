@@ -39,6 +39,7 @@ import {
   toggleAgentToolbarPin,
   toggleActiveWorkspaceBookmark,
 } from '../../utils/commandActions';
+import { dictateIntoActivePane } from '../../utils/paneDictation';
 
 // ---------------------------------------------------------------------------
 // SVG Icons (inline, no external dependency)
@@ -417,6 +418,13 @@ export default function CommandPalette() {
         label: t('palette.cmd.showGitDiff'),
         shortcut: 'showGitDiff',
         action: () => { showGitDiff(); setVisible(false); },
+      },
+      {
+        // Close first: the pane keeps the keyboard, so Esc cancels and the
+        // shortcut stops it without the palette in the way.
+        label: t('palette.cmd.dictatePane'),
+        shortcut: 'dictatePane',
+        action: () => { setVisible(false); dictateIntoActivePane(); },
       },
       {
         // Close first: the rename field takes the keyboard, and the palette

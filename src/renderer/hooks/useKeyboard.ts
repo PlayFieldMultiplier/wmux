@@ -33,6 +33,7 @@ import {
   stashActivePane,
   toggleAgentToolbarPin,
 } from '../utils/commandActions';
+import { dictateIntoActivePane } from '../utils/paneDictation';
 
 // Lightweight bookmark toast — reuses the same DOM element pattern as showCopyToast
 let bookmarkToastTimer: ReturnType<typeof setTimeout> | null = null;
@@ -93,7 +94,7 @@ export const WORKSPACES_ONLY_ACTIONS: ReadonlySet<ShortcutActionId> = new Set<Sh
   'focusUpAlt', 'focusDownAlt', 'focusLeftAlt', 'focusRightAlt',
   'clearMultiview', 'openBrowser', 'openPrivateBrowser', 'addBookmark', 'zoomIn', 'zoomOut', 'zoomReset',
   'stashPane', 'movePaneLeft', 'movePaneRight', 'movePaneUp', 'movePaneDown',
-  'multiTask', 'showGitDiff', 'renameTab',
+  'multiTask', 'showGitDiff', 'renameTab', 'dictatePane',
 ]);
 
 const STOP_PROPAGATION_ACTIONS: ReadonlySet<ShortcutActionId> = new Set<ShortcutActionId>([
@@ -594,6 +595,9 @@ export function useKeyboard() {
         }
       },
       mentionAgent: () => { document.dispatchEvent(new CustomEvent(OPEN_MENTION_PICKER_EVENT)); },
+      // Toggle: one press starts dictating into the focused pane, the next
+      // stops and pastes the text (no Enter).
+      dictatePane: dictateIntoActivePane,
       // No default key (UNBOUND_SHORTCUTS) — these run only once the user
       // binds one, from the command palette or Settings → Shortcuts. Each
       // runs exactly what its palette row runs.
@@ -850,8 +854,9 @@ export function useKeyboard() {
         if (mentionClaim === 'noSource') {
           // Once per press: a held chord auto-repeats, and one toast is enough.
           if (!e.repeat) store.getState().pushToast({ message: t('mention.noSource'), level: 'info' });
-        } else if (!(action === 'closeSurface' && e.repeat)) {
+        } else if (!((action === 'closeSurface' || action === 'dictatePane') && e.repeat)) {
           // A held close-tab chord auto-repeats; only the first press asks.
+          // A held dictation chord would start and stop on every repeat.
           run();
         }
         return;

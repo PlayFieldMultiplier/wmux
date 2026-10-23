@@ -7,11 +7,12 @@
 // line typed into the visible pane. Each line is the vendor's own documented
 // installer, copied verbatim (no flag added or removed) from the source URL
 // next to it; the one WinGet line is `winget install` with the package id the
-// vendor documents. They install into the user's own folder and need no
-// administrator rights and no Node.js. When an install fails, the card opens
-// `officialPage` instead of trying anything else.
+// vendor documents. The main lines install into the user's own folder and need
+// no administrator rights and no Node.js; an npm, pnpm or Homebrew line is
+// offered only after it, and only where the vendor documents it. When an
+// install fails, the card opens `officialPage` instead of trying anything else.
 
-import { agentRow } from './agentIdentity';
+import { agentRow, type AgentInstallAlternative } from './agentIdentity';
 import type { AgentId } from './agentSetup';
 
 /** Which shell the pane runs the line in. */
@@ -27,7 +28,7 @@ export type AgentCommandShell =
 
 /** Which of an agent's documented lines: its main installer script, or one of
  *  the row's `install.more`. */
-export type AgentInstallVia = 'script' | 'winget';
+export type AgentInstallVia = 'script' | AgentInstallAlternative['via'];
 
 export interface AgentInstallMethod {
   via: AgentInstallVia;

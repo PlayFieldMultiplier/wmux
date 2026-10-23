@@ -28,9 +28,12 @@ node scripts/control-wmux.mjs launch --app <path/to/wmux>  # any other packaged 
 node scripts/control-wmux.mjs launch --suffix -verify-mytest --timeout 90000
 node scripts/control-wmux.mjs launch --app <exe> --env-file vars.json   # extra env, applied after the scrub below
 node scripts/control-wmux.mjs launch --app <exe> --user-data-dir <dir>  # Electron userData at <dir><suffix>
+node scripts/control-wmux.mjs launch --app <exe> --fake-audio clip.wav  # a WAV plays once as the microphone
 ```
 
 `--env-file` takes a JSON object of string values, set on the app after the scrub (so a `WMUX_*` knob such as `WMUX_NO_PATH_REFRESH` survives it); it may not set `WMUX_DATA_SUFFIX` or `WMUX_MCP_REGISTER_EXTERNAL` (MCP registration writes the real agent configs). `restart` reuses it. `CONTROL_WMUX_DIR=<dir>` moves the run state and evidence from this skill's folder to `<dir>/.run` and `<dir>/evidence`, so a harness such as `scripts/e2e-first-run.mjs` keeps its own record. On macOS the app always gets `--use-mock-keychain` (no login-keychain dialog on the owner's desktop) and, unless `--user-data-dir` says otherwise, `--user-data-dir=~/.wmux<suffix>/electron-user-data`; wmux appends the suffix to whatever userData it was given. Elsewhere userData stays at its default (`%APPDATA%\wmux<suffix>`, `$XDG_CONFIG_HOME` or `~/.config/wmux<suffix>`), where the wmux CLI looks for it. `restart` reuses the first launch's choice.
+
+`--fake-audio` proves voice dictation without a microphone. Chromium's fake capture device plays the 16-bit PCM WAV once, from when a recording opens it, and the real microphone is never touched. The audio service's sandbox would refuse to read the file, so only that sandbox is off for the instance. `restart` reuses the clip. Make a clip with `say -o x.aiff "…"` then `afconvert -f WAVE -d LEI16@16000 -c 1 x.aiff x.wav`.
 
 Where userData actually is: `launch` and `doctor` print a `userData` field, the path the app logs at boot (`[Main] WMUX_DATA_SUFFIX="<suffix>" → userData="<path>"`), and `userDataSource`: `logged`, or `predicted` when the app never logged that line (then `doctor` lists it under `problems`). It is kept in `state.json`. Every recipe that reads a profile file (`session.json`, `.first-run`) takes the path from that field, never from a hard-coded `~/Library/Application Support/…` or `%APPDATA%\…`: a guessed path can hold a stale file from an earlier run.
 

@@ -38,7 +38,7 @@ import {
   type AgentSetupPlan,
   type SetAgentPathResult,
 } from '../../shared/agentInstall';
-import { isExecutableFile } from '../claude/resolveClaudeExecutable';
+import { isExecutableFile, liveResolveEnv, programOnPath } from '../claude/resolveClaudeExecutable';
 import { atomicWriteJSON } from '../../daemon/util/atomicWrite';
 
 const MARKER_FILENAME = '.first-run';
@@ -330,9 +330,7 @@ export class FirstRunOrchestrator {
   }
 
   private onPath(name: string, env: NodeJS.ProcessEnv): boolean {
-    const raw = env.PATH ?? env.Path ?? '';
-    const dirs = [...raw.split(path.delimiter), '/usr/bin', '/bin'].filter((d) => path.isAbsolute(d));
-    return dirs.some((d) => isExecutableFile(path.join(d, name)));
+    return programOnPath(liveResolveEnv(env), name);
   }
 
   private agentPathsPath(): string {

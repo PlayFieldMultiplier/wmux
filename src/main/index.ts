@@ -112,6 +112,7 @@ import { registerEventsRpc } from './pipe/handlers/events.rpc';
 import { PluginHostLoader } from './plugins/PluginHostLoader';
 import { registerPluginProtocolHandler } from './plugins/pluginProtocol';
 import { registerPrivilegedSchemes } from './privilegedSchemes';
+import { denyMediaOutsideMainWindow } from './browser-session/mediaPermission';
 import { registerPreviewProtocol } from './preview/previewProtocol';
 import { isHtmlPreviewContents, registerHtmlPreview } from './preview/previewHtml';
 import { pageZoomKey, stepPageZoom } from '../shared/browserZoom';
@@ -1783,6 +1784,7 @@ registerElementShotHandler(() => mainWindow);
 // Private browser tabs: the renderer asks once the last one has closed. The
 // clear waits for the closed tabs' guests to be destroyed (tracked here).
 trackPrivateBrowserContents();
+denyMediaOutsideMainWindow();
 ipcMain.handle('browser:clear-private-session', async () => {
   await clearPrivateBrowserSession();
   return { ok: true };
