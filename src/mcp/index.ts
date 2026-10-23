@@ -34,7 +34,7 @@ import { resolveTerminalRoute, resolveCommanderRoute, type PidMapLookup } from '
 import { classifyWorkspaceListResult, type WorkspaceLiveness } from './workspaceIdentity';
 import { PlaywrightEngine } from './playwright/PlaywrightEngine';
 import { getOpenerKey, noteOpenedSurface } from './playwright/surfaceRouting';
-import { registerNavigationTools } from './playwright/tools/navigation';
+import { describeGuardedLoad, openWithDownloadGuard, registerNavigationTools } from './playwright/tools/navigation';
 import { paneProfileRefusal } from './playwright/paneProfileRefusal';
 import { assertCodeToolAllowed } from './playwright/automationLease';
 import { registerInteractionTools } from './playwright/tools/interaction';
@@ -54,6 +54,7 @@ import { registerUtilityTools } from './playwright/tools/utility';
 import { registerExtractionTools } from './playwright/tools/extraction';
 import { registerChannelTools } from './channels';
 import { registerFanOutTools } from './fanout';
+import { registerRemoteSpawnTools } from './remoteSpawn';
 import { registerLedgerUpdateTool, registerLedgerListTool, registerLedgerBrainUpdateTool } from './ledger';
 import { registerTaskFetchTool, registerTaskPushTool } from './taskPush';
 import { registerWorktaskTools } from './worktask';
@@ -1605,17 +1606,33 @@ server.tool(
     // when this connection opened it or nobody claims it, and records the
     // opener on what comes back, so the surface this tool reports is one the
     // caller may keep driving without naming it again.
-    return callRpc(
-      'browser.open',
-      { ...(url && { url }), ...(isPrivate === true && { private: true }), workspaceId, openerKey: getOpenerKey() },
-      undefined,
-      (result) => {
-        const surfaceId = (result as { surfaceId?: unknown } | null | undefined)?.surfaceId;
-        if (typeof surfaceId === 'string' && surfaceId) {
-          noteOpenedSurface(workspaceId, surfaceId);
-        }
-      },
+    let openedSurfaceId: string | undefined;
+    // On an unprotected Chrome pane the tab opens on about:blank and the URL
+    // loads once the download guard is armed (openWithDownloadGuard).
+    const { result, load } = await openWithDownloadGuard(
+      browserToolDeps,
+      'browser_open',
+      workspaceId,
+      url,
+      (withUrl) => callRpc(
+        'browser.open',
+        { ...(withUrl && { url: withUrl }), ...(isPrivate === true && { private: true }), workspaceId, openerKey: getOpenerKey() },
+        undefined,
+        (reply) => {
+          const surfaceId = (reply as { surfaceId?: unknown } | null | undefined)?.surfaceId;
+          if (typeof surfaceId === 'string' && surfaceId) {
+            openedSurfaceId = surfaceId;
+            noteOpenedSurface(workspaceId, surfaceId);
+          }
+        },
+      ),
+      () => openedSurfaceId,
     );
+    if (!load) return result;
+    return {
+      content: [...result.content, { type: 'text' as const, text: describeGuardedLoad(load) }],
+      ...((result.isError || !load.ok) && { isError: true as const }),
+    };
   },
 );
 
@@ -2426,6 +2443,14 @@ registerChannelTools(
 // fresh server. The resolved id is used only to warm the walk — the handler
 // derives the owning workspace from the ptyId and rejects a stated one.
 registerFanOutTools(server, {
+  getSenderPtyId: () => verifiedPtyId(),
+  resolveWorkspaceId: requireWorkspaceId,
+});
+
+// === Remote spawn (full + core) — ask a paired PC to start an agent ===
+// Same walk-hit-only provenance as fan-out: the handler resolves the caller's
+// pane from the ptyId and refuses a caller started for someone (depth 1).
+registerRemoteSpawnTools(server, {
   getSenderPtyId: () => verifiedPtyId(),
   resolveWorkspaceId: requireWorkspaceId,
 });

@@ -118,6 +118,25 @@ esac`);
     },
   );
 
+  it.skipIf(process.platform === 'win32')(
+    'an agent with no documented sign-in check is only asked its version, and reads as installed',
+    async () => {
+      const calls = flag('grok-calls');
+      writeScript('grok', `echo "$*" >> "${calls}"
+case "$1" in
+  --version) echo "grok 0.9.0" ;;
+esac`);
+      const d = detector();
+      expect(await d.detect('grok')).toMatchObject({
+        agent: 'grok', readiness: 'installed', loginKnown: false, executable: path.join(bin, 'grok'),
+        version: '0.9.0', updateRecommended: true, candidates: [],
+      });
+      // Nothing but --version ran: no sign-in command, no credential read.
+      expect(fs.readFileSync(calls, 'utf8').trim().split('\n')).toEqual(['--version']);
+      expect(await d.detect('agy')).toMatchObject({ agent: 'agy', readiness: 'not-installed' });
+    },
+  );
+
   it.skipIf(process.platform === 'win32')('a status probe that hangs is "could not tell", not signed out', async () => {
     // Like an npm launcher: the probed process starts a child and waits on it.
     // The timeout must take the child down too, not only the launcher.
@@ -134,6 +153,27 @@ esac`);
     const alive = (): boolean => { try { process.kill(childPid, 0); return true; } catch { return false; } };
     for (let i = 0; i < 40 && alive(); i++) await new Promise((r) => setTimeout(r, 50));
     expect(alive()).toBe(false);
+  });
+});
+
+describe('Qwen Code on Windows', () => {
+  it('asks its version through the vendor qwen.cmd (cmd.exe, verbatim), from the home folder', async () => {
+    const shim = 'C:\\Users\\u\\AppData\\Local\\qwen-code\\qwen-code\\bin\\qwen.cmd';
+    const calls: { command: string; args: string[]; cwd: string; verbatim?: boolean }[] = [];
+    const d = new AgentSetupDetector({
+      env: () => ({ Path: 'C:\\Windows' }),
+      platform: 'win32',
+      homedir: () => 'C:\\Users\\u',
+      resolve: (agent) => (agent === 'qwen' ? shim : null),
+      run: async (command, args, opts) => {
+        calls.push({ command, args, cwd: opts.cwd, verbatim: opts.windowsVerbatimArguments });
+        return { code: 0, stdout: '0.26.0\n', stderr: '', timedOut: false };
+      },
+    });
+    expect(await d.detect('qwen')).toMatchObject({ readiness: 'installed', executable: shim, version: '0.26.0' });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ args: ['/d', '/s', '/c', `""${shim}" "--version""`], cwd: 'C:\\Users\\u', verbatim: true });
+    expect(calls[0].command.toLowerCase()).toMatch(/cmd\.exe$/);
   });
 });
 

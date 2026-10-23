@@ -9,7 +9,7 @@
 // command except `launch` refuses to run without it, so the driver can only
 // ever touch the instance it launched itself — never the owner's real wmux.
 //
-//   node scripts/control-wmux.mjs launch [--app <executable>] [--suffix -verify-x] [--timeout ms] [--env-file vars.json] [--user-data-dir dir]
+//   node scripts/control-wmux.mjs launch [--app <executable>] [--suffix -verify-x] [--timeout ms] [--env-file vars.json] [--user-data-dir dir] [--fake-audio clip.wav]
 //   node scripts/control-wmux.mjs doctor
 //   node scripts/control-wmux.mjs snapshot [--testid ID | --selector CSS | --role R --name N] [--as label]
 //   node scripts/control-wmux.mjs screenshot [--as label]
@@ -396,7 +396,10 @@ async function cmdLaunch(opts, reconnectState = null) {
   const logFd = fs.openSync(logPath, 'a');
   // Renderer console -> stderr -> app.log, so `console` can read history.
   env.ELECTRON_ENABLE_LOGGING = '1';
-  const child = spawn(app, launchAppArgs({ userDataDirArg }), { env, detached: true, stdio: ['ignore', logFd, logFd] });
+  const fakeAudio = opts['fake-audio'] ? path.resolve(String(opts['fake-audio'])) : reconnectState?.fakeAudio ?? null;
+  if (fakeAudio && !fs.existsSync(fakeAudio)) fail(`--fake-audio ${fakeAudio} does not exist`);
+  const child = spawn(app, launchAppArgs({ userDataDirArg, fakeAudio }), { env, detached: true, stdio: ['ignore', logFd, logFd] });
+  if (fakeAudio) state.fakeAudio = fakeAudio;
   fs.closeSync(logFd);
   state.pid = child.pid;
   // The app's identity is its pid AND its creation time, read while we still

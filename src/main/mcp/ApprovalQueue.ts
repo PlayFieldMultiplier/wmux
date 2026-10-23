@@ -36,12 +36,36 @@ import type { PluginTrustStore } from './PluginTrustStore';
  * 'computer-app' asks whether one agent may see and drive one desktop app for
  * this run (src/main/computer/computerConsent.ts); not persisted either.
  * 'browser-action' asks whether an agent may run one dangerous action (page
- * script, download, sensitive-site cookies) on a protected browser pane
+ * script, download, sensitive-site cookies) on a protected browser pane, or
+ * skip a safety check (or download) on an unprotected one
  * (src/main/browser-session/dangerousActionConsent.ts). The queue persists
  * nothing for it; its answer may carry `remember`, which the consent service
  * turns into the pane's standing grant after re-validating it.
  */
-export type ApprovalPromptKind = 'plugin' | 'browser-borrow' | 'computer-app' | 'browser-action';
+export type ApprovalPromptKind = 'plugin' | 'browser-borrow' | 'computer-app' | 'browser-action' | 'remote-spawn';
+
+/**
+ * What a 'remote-spawn' prompt is about: another PC asks this one to start an
+ * agent (or, `followUp`, sends a later instruction on the link such a start
+ * made). Shown in full: the prompt is never cut, and the dialog says plainly
+ * what allowing means. The answer may carry `remember` ("Always allow this PC,
+ * folder and agent"), which only the first card offers.
+ */
+export interface RemoteSpawnPromptInfo {
+  hostId: string;
+  /** This PC's name for the asking PC. */
+  hostName: string;
+  agent: string;
+  /** The folder as resolved here. */
+  folder: string;
+  permissionMode: string;
+  /** Whether later instructions on this link ask again. */
+  followUps: 'ask' | 'direct';
+  /** The full prompt (or the follow-up's text). */
+  text: string;
+  /** A later instruction on a running remote-started agent, not a new start. */
+  followUp?: true;
+}
 
 /** What a 'browser-action' prompt is about, for the dialog and the inbox row. */
 export interface BrowserActionPromptInfo {
@@ -54,6 +78,12 @@ export interface BrowserActionPromptInfo {
   host: string;
   /** A short, already-sanitized description of the operation. */
   detail?: string;
+  /**
+   * The pane is not protected: the agent asked to skip a safety check (or to
+   * download). There is no standing grant to remember, so the dialog offers
+   * no "Always on this pane".
+   */
+  unprotected?: true;
 }
 
 /**
@@ -81,6 +111,8 @@ export interface ApprovalPromptInfo {
   deadlineAt?: number;
   /** Set only for kind 'browser-action'. */
   browserAction?: BrowserActionPromptInfo;
+  /** Set only for kind 'remote-spawn'. */
+  remoteSpawn?: RemoteSpawnPromptInfo;
 }
 
 /** Callback the queue invokes when a fresh prompt should appear on screen. */
@@ -97,7 +129,9 @@ export interface ApprovalResult {
   identity: PluginIdentityRecord | undefined;
   /**
    * 'browser-action' only, and only when the operator approved with "Always on
-   * this pane". Absent on every other kind, so their results read as before.
+   * this pane"; 'remote-spawn' only, with "Always allow this PC, folder and
+   * agent" on a first card. Absent on every other kind, so their results read
+   * as before.
    */
   remember?: true;
 }
@@ -267,6 +301,8 @@ export class ApprovalQueue {
     deadlineAt?: number;
     /** kind 'browser-action' only: what the dialog shows. */
     browserAction?: BrowserActionPromptInfo;
+    /** kind 'remote-spawn' only: what the dialog shows. */
+    remoteSpawn?: RemoteSpawnPromptInfo;
   }): ApprovalHandle {
     const key = `${input.kind}::${input.dedupeKey}`;
     const existing = this.inflight.get(key);
@@ -305,6 +341,7 @@ export class ApprovalQueue {
         title: input.title,
         ...(input.deadlineAt !== undefined && { deadlineAt: input.deadlineAt }),
         ...(input.kind === 'browser-action' && input.browserAction && { browserAction: { ...input.browserAction } }),
+        ...(input.kind === 'remote-spawn' && input.remoteSpawn && { remoteSpawn: { ...input.remoteSpawn } }),
       });
     } catch {
       /* swallow — best-effort renderer notification, same as requestApproval */
@@ -319,7 +356,7 @@ export class ApprovalQueue {
    * re-sends) is a no-op.
    *
    * Only boolean `true` approves. `opts.remember` is honoured for kind
-   * 'browser-action' alone, and only on an approval; the queue itself writes
+   * 'browser-action' and 'remote-spawn' alone, and only on an approval; the queue itself writes
    * nothing for it.
    */
   async resolvePrompt(promptId: string, approved: boolean, opts?: { remember?: boolean }): Promise<void> {
@@ -330,7 +367,7 @@ export class ApprovalQueue {
     this.byPromptId.delete(promptId);
     this.inflight.delete(key);
     approved = approved === true;
-    const remember = approved && pending.kind === 'browser-action' && opts?.remember === true;
+    const remember = approved && (pending.kind === 'browser-action' || pending.kind === 'remote-spawn') && opts?.remember === true;
     // Fire the removal-push BEFORE the trust-store await so the renderer
     // inbox row is removed even if the persistence write below fails.
     try { this.closePrompt?.(promptId); } catch { /* best-effort renderer notification */ }

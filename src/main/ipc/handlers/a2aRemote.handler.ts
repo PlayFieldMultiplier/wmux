@@ -1,6 +1,9 @@
 import { BrowserWindow, ipcMain } from 'electron';
 import { IPC } from '../../../shared/constants';
 import { A2A_REMOTE_RPC } from '../../../shared/a2aRemoteDelivery';
+import { A2A_SPAWN_OUTGOING_EVENT, coerceSpawnPolicy, type A2aSpawnUiAsk } from '../../../shared/a2aSpawn';
+import { isAgentSlug } from '../../../shared/agentIdentity';
+import { getFanOutGuards } from '../../worktask/fanoutGuards';
 import type {
   A2aRemoteExposureGetResult,
   A2aRemoteHostStatus,
@@ -26,7 +29,7 @@ const publisher = new A2aExposurePublisher({
 });
 
 // Share offer nudges ride the link channel: the renderer re-reads both lists.
-const LINK_EVENTS: ReadonlySet<string> = new Set(['a2a.remote.link.proposed', 'a2a.remote.link.changed', 'a2a.remote.offer.changed']);
+const LINK_EVENTS: ReadonlySet<string> = new Set(['a2a.remote.link.proposed', 'a2a.remote.link.changed', 'a2a.remote.offer.changed', A2A_SPAWN_OUTGOING_EVENT]);
 
 /** How long a call made before the daemon connected waits for it (the
  *  renderer reads the Remote feed at start, racing the boot connect). */
@@ -155,6 +158,49 @@ export function registerA2aRemoteHandlers(daemonClient: DaemonClient | null, opt
     ],
     // A person's reject from the held list.
     [IPC.A2A_REMOTE_HELD_REJECT, async (taskId) => (await clientNow()).rpc(A2A_REMOTE_RPC.rejectHeld, { taskId: str(taskId), reason: 'rejected-by-person' })],
+    // Starting new agents from another PC. A policy that is not exactly one
+    // is refused here, before it reaches the daemon (which checks it again).
+    [IPC.A2A_REMOTE_SPAWN_POLICY_GET, async () => (await client()).a2aSpawnPolicyGet()],
+    [
+      IPC.A2A_REMOTE_SPAWN_POLICY_SET,
+      async (raw) => {
+        const policy = coerceSpawnPolicy(raw);
+        if (!policy) return { ok: false, error: 'bad-request' };
+        return (await clientNow()).a2aSpawnPolicySet(policy);
+      },
+    ],
+    [IPC.A2A_REMOTE_SPAWN_REQUESTS_LIST, async () => (await client()).a2aSpawnRequestsList()],
+    [
+      IPC.A2A_REMOTE_SPAWN_ASK,
+      async (params) => {
+        const p = (params ?? {}) as Partial<A2aSpawnUiAsk>;
+        const c = await clientNow();
+        // The reply pane comes from this PC's own tree, never from the renderer's words.
+        const workspaceId = str(p.end?.workspaceId);
+        const paneId = str(p.end?.paneId);
+        if (!publisher.hasPane(workspaceId, paneId)) return { ok: false, error: 'bad-request', message: 'that pane is not open on this PC' };
+        // Depth 1, as for an agent's ask: replies do not go to a fan-out task or an agent another PC started.
+        let owner: string | null;
+        try {
+          owner = getFanOutGuards().fanoutOwnerOf(workspaceId);
+        } catch {
+          return { ok: false, error: 'unavailable', message: 'could not tell whether that pane was itself started for someone' };
+        }
+        if (owner !== null) return { ok: false, error: 'bad-request', message: 'replies cannot go to a pane that was itself started for someone' };
+        if (!isAgentSlug(p.agent) || typeof p.text !== 'string' || typeof p.folder?.root !== 'string') return { ok: false, error: 'bad-request' };
+        return c.a2aSpawnAsk({
+          pc: str(p.hostId),
+          agent: p.agent,
+          folder: { root: p.folder.root, ...(typeof p.folder.sub === 'string' && p.folder.sub ? { sub: p.folder.sub } : {}) },
+          text: p.text,
+          ...(typeof p.expiresInHours === 'number' ? { expiresInHours: p.expiresInHours } : {}),
+          from: { kind: 'pane', workspaceId, paneId },
+          // Per pane, as for an agent: the pane that gets the replies.
+          callerKey: paneId,
+        });
+      },
+    ],
+    [IPC.A2A_REMOTE_SPAWN_OUTGOING, async () => (await client()).a2aSpawnOutgoing()],
   ];
   for (const [channel, fn] of handlers) {
     ipcMain.removeHandler(channel);

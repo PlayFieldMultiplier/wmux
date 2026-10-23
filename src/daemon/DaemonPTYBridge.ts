@@ -467,9 +467,12 @@ export class DaemonPTYBridge extends EventEmitter {
         // a key or click has overtaken is refreshed off this.
         if (this.sessionId) this.emit('fenceInput', { sessionId: this.sessionId });
         this.noteTyped(active);
+        // Only a key can put text on the prompt line. A terminal's replies
+        // (ConPTY's startup queries) and focus reports cannot, and a focus
+        // change (Alt-Tab) used to leave an untouched prompt reading as used.
+        this.emptyShellPrompt = false;
+        this.completedShellCommand = false;
       }
-      this.emptyShellPrompt = false;
-      this.completedShellCommand = false;
     }
 
     // A pane blocked on a human is answered by a lone option digit or a lone
@@ -1775,7 +1778,9 @@ export class DaemonPTYBridge extends EventEmitter {
           if (parsed.type === 'command_start' || parsed.type === 'command_end') this.noteAgentEnded();
           this.codexBootWindow = parsed.type === 'command_start' || (parsed.type !== 'command_end' && this.codexBootWindow);
           if (parsed.type === 'prompt_end') {
-            this.emptyShellPrompt = this.inputRevision === 0 || this.completedShellCommand;
+            // The first prompt is empty when no key has reached the pane;
+            // passive input (counted by inputRevision) does not type.
+            this.emptyShellPrompt = this.keyInputRevision === 0 || this.completedShellCommand;
             this.completedShellCommand = false;
           }
           promptLog.append(parsed);

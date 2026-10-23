@@ -307,6 +307,11 @@ export interface BotRuntimePorts {
    *  wrote a card there since `since` (room.rpc.ts postTurnText). Called
    *  while the wake still runs. */
   postTurnText?: (profile: BotProfile, item: WakeItem, text: string, since: number) => Promise<unknown> | void;
+  /** A turn on a group chat's card (an owner message or a mention there)
+   *  finished: its reaction or acknowledgement on that card, and its words
+   *  as postTurnText posts them (room.rpc.ts endGroupTurn). False: not a
+   *  group chat's card. Called while the wake still runs. */
+  endGroupTurn?: (profile: BotProfile, item: WakeItem, text: string, since: number) => Promise<boolean>;
   /** The photos of the owner message a `human` wake answers (its card in
    *  the room's store, roomAttachments.ts): base64 JPEG, and how many are
    *  gone. Null or absent: none. */
@@ -1264,7 +1269,17 @@ export class BotRuntime {
         // has no coordinator) is not addressed to this bot: its closing text
         // was a note to itself ("nothing to add"), so only a room_post
         // speaks. Any other wake stays silent without a room_post.
-        if (item.reason.kind === 'human' && item.reason.roomWide !== true && result.text.trim() && ports.postTurnText) {
+        // In a group chat the turn also ends as a reaction, or as an
+        // acknowledgement when the bot said nothing there.
+        let groupTurn = false;
+        if ((item.reason.kind === 'human' || item.reason.kind === 'mention') && ports.endGroupTurn) {
+          try {
+            groupTurn = await ports.endGroupTurn(profile, item, result.text, turnStartedAt);
+          } catch (err) {
+            console.warn(`[factory] the group turn of ${item.id} did not end cleanly: ${String(err)}`);
+          }
+        }
+        if (!groupTurn && item.reason.kind === 'human' && item.reason.roomWide !== true && result.text.trim() && ports.postTurnText) {
           try {
             await ports.postTurnText(profile, item, result.text, turnStartedAt);
           } catch (err) {

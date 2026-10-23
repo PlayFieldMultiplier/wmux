@@ -34,7 +34,8 @@ import {
   needsConsentMessage,
   staleRunIdentity,
 } from './browser.rpc';
-import { browserPolicyRefusalCode, policyDeniedMessage } from '../../../shared/browserPolicy';
+import { browserPolicyRefusalCode, bypassDeniedMessage, policyDeniedMessage } from '../../../shared/browserPolicy';
+import type { HostPolicy } from '../../../shared/browserHostPolicy';
 
 // ---------------------------------------------------------------------------
 // browser.consent.* — the MCP lane asks main before a dangerous action on a
@@ -47,6 +48,12 @@ import { browserPolicyRefusalCode, policyDeniedMessage } from '../../../shared/b
 // exclusive profile → the policy decision. Nothing the caller names
 // (workspace, pane, profile) is believed; a caller that is not a confirmed
 // protected pane is refused.
+//
+// An unprotected pane's agent asks too (`unprotected: true`) before it skips
+// a safety check or keeps a download. Main still decides from the pane's own
+// policy: the flag is honoured only for a pane that resolves as unprotected,
+// and a protected pane is never asked about on those terms. No download pass
+// is opened for it — that pane's browser does not deny downloads.
 // ---------------------------------------------------------------------------
 
 type GetWindow = () => BrowserWindow | null;
@@ -76,6 +83,18 @@ function refuse(why: string): ConsentRefusal {
   return new ConsentRefusal('policy_denied', policyDeniedMessage(CONSENT_METHOD, why));
 }
 
+function refuseBypass(why: string): ConsentRefusal {
+  return new ConsentRefusal('policy_denied', bypassDeniedMessage(CONSENT_METHOD, why));
+}
+
+/** The refusal wording a request asked in (protected unless it says not). */
+function refusalFor(params: Record<string, unknown>): (why: string) => ConsentRefusal {
+  return params['unprotected'] === true ? refuseBypass : refuse;
+}
+
+/** An unprotected pane has no site list; this stands in for one in its caller. */
+const NO_SITE_LIST: HostPolicy = { mode: 'off', allow: [], block: [] };
+
 /** The canonical host of an http(s) URL, or null. */
 export function canonicalUrlHost(url: string): string | null {
   let parsed: URL;
@@ -99,12 +118,14 @@ async function resolveCaller(
   params: Record<string, unknown>,
   ctx: RpcContext | undefined,
 ): Promise<ConsentCaller> {
+  const unprotected = params['unprotected'] === true;
+  const fail = refusalFor(params);
   const decision = callerScope(ctx, params);
-  if (decision.kind === 'rejected') throw refuse('the caller could not be identified');
+  if (decision.kind === 'rejected') throw fail('the caller could not be identified');
   const ptyId = callerPaneOf(ctx);
   const workspaceId = decision.workspaceId;
   // Consent is a pane's question: no attested pane, nothing to ask about.
-  if (!ptyId || !workspaceId) throw refuse('the calling pane could not be identified');
+  if (!ptyId || !workspaceId) throw fail('the calling pane could not be identified');
   let paneId: string | null = null;
   let run: LiveRunIdentity | null = null;
   if (isRunCaller(ctx)) {
@@ -123,7 +144,7 @@ async function resolveCaller(
       paneId = null;
     }
   }
-  if (!paneId) throw refuse('the calling pane could not be identified');
+  if (!paneId) throw fail('the calling pane could not be identified');
   const currentProfile = deps.chrome.profileFor(workspaceId, paneId);
   const binding = deps.paneBindings()[paneId];
   const ownsProfile =
@@ -140,11 +161,26 @@ async function resolveCaller(
       throw new ConsentRefusal('needs_consent', needsConsentMessage(CONSENT_METHOD, `${why}; grant the schedule again in wmux`));
     }
   }
-  if (pd.kind === 'legacy') throw refuse('this pane is not protected, so there is nothing to consent to');
-  if (pd.kind === 'denied') throw refuse(pd.why);
-  if (deps.backend() !== 'chrome') throw refuse('a protected pane runs only on the Chrome browser backend');
-  if (!ownsProfile) throw refuse('a protected pane needs a Chrome profile bound to that pane alone');
-  if (!pd.confirmed) throw refuse("this pane's site list must be confirmed again by the user");
+  if (pd.kind === 'legacy') {
+    if (!unprotected) throw fail('this pane is not protected, so there is nothing to consent to');
+    return {
+      workspaceId,
+      paneId,
+      profileId: currentProfile ?? '',
+      epoch: 0,
+      hosts: NO_SITE_LIST,
+      ptyId,
+      ...(run && { runId: run.runId }),
+      unprotected: true,
+    };
+  }
+  if (pd.kind === 'denied') throw fail(pd.why);
+  // Asked on an unprotected pane's terms, but the pane is protected now: its
+  // own checks apply, and the call must be made again under them.
+  if (unprotected) throw fail('this pane is protected now; try the call again without skipping its checks');
+  if (deps.backend() !== 'chrome') throw fail('a protected pane runs only on the Chrome browser backend');
+  if (!ownsProfile) throw fail('a protected pane needs a Chrome profile bound to that pane alone');
+  if (!pd.confirmed) throw fail("this pane's site list must be confirmed again by the user");
   return {
     workspaceId,
     paneId,
@@ -157,6 +193,7 @@ async function resolveCaller(
 }
 
 function parseOperation(params: Record<string, unknown>): { action: BrowserConsentAction; hosts: string[]; detail?: string } {
+  const refuse = refusalFor(params);
   const action = params['action'];
   if (typeof action !== 'string' || !ACTIONS.has(action)) throw refuse('unknown action');
   const detail = typeof params['detail'] === 'string' ? params['detail'].slice(0, MAX_DETAIL_INPUT) : undefined;
@@ -268,7 +305,7 @@ export function registerBrowserConsentRpc(router: Pick<RpcRouter, 'register'>, d
       const caller = await resolveCaller(deps, params, ctx);
       runId = caller.runId;
       let targetId = '';
-      if (op.action === 'download') {
+      if (op.action === 'download' && !caller.unprotected) {
         targetId = typeof params['targetId'] === 'string' ? params['targetId'] : '';
         if (!targetId || targetId.length > 128) throw refuse('a download needs the tab it starts in');
       }
@@ -276,7 +313,10 @@ export function registerBrowserConsentRpc(router: Pick<RpcRouter, 'register'>, d
         revalidate: () => resolveCaller(deps, params, ctx),
         ...(ctx?.signal && { signal: ctx.signal }),
       });
-      if (op.action !== 'download') return { ok: true, operationId: decision.operationId, epoch: decision.epoch, via: decision.via };
+      // An unprotected pane's download is the tool's own to take once allowed.
+      if (op.action !== 'download' || caller.unprotected) {
+        return { ok: true, operationId: decision.operationId, epoch: decision.epoch, via: decision.via };
+      }
 
       // Right before dispatch: the terms once more, then lift the deny for
       // this one download only.

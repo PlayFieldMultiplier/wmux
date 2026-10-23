@@ -161,6 +161,11 @@ export class RemoteHostStore {
     this.load();
   }
 
+  /** False when the file could not be read or written: the list may be missing hosts. */
+  get usable(): boolean {
+    return this.writable;
+  }
+
   get(hostId: HostId): A2aRemoteHostRecordV1 | undefined {
     const rec = this.hosts.get(hostId);
     return rec ? structuredClone(rec) : undefined;

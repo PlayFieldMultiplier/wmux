@@ -5,12 +5,14 @@
 // change only with an app release. wmux never fetches a command (or a list of
 // commands) at runtime; the line the user is shown and confirms is exactly the
 // line typed into the visible pane. Each line is the vendor's own documented
-// native installer, copied verbatim (no flag added or removed) from the source
-// URL next to it. Both install into the user's own folder and need no
-// administrator rights and no Node.js. When an install fails, the card opens
-// `officialPage` instead of trying anything else.
+// installer, copied verbatim (no flag added or removed) from the source URL
+// next to it; the one WinGet line is `winget install` with the package id the
+// vendor documents. The main lines install into the user's own folder and need
+// no administrator rights and no Node.js; an npm, pnpm or Homebrew line is
+// offered only after it, and only where the vendor documents it. When an
+// install fails, the card opens `officialPage` instead of trying anything else.
 
-import { agentRow } from './agentIdentity';
+import { agentRow, type AgentInstallAlternative } from './agentIdentity';
 import type { AgentId } from './agentSetup';
 
 /** Which shell the pane runs the line in. */
@@ -18,13 +20,18 @@ export type AgentCommandShell =
   /** The user's own default shell (macOS / Linux). */
   | 'user'
   /**
-   * Windows PowerShell. Both Windows lines are PowerShell syntax, and a WSL or
-   * cmd default shell would run a different (or no) install than the Windows
-   * one wmux detects.
+   * Windows PowerShell. The vendors' main Windows lines are PowerShell syntax,
+   * and a WSL or cmd default shell would run a different (or no) install than
+   * the Windows one wmux detects.
    */
   | 'powershell';
 
+/** Which of an agent's documented lines: its main installer script, or one of
+ *  the row's `install.more`. */
+export type AgentInstallVia = 'script' | AgentInstallAlternative['via'];
+
 export interface AgentInstallMethod {
+  via: AgentInstallVia;
   command: string;
   shell: AgentCommandShell;
   /** Where the command was copied from. */
@@ -35,18 +42,36 @@ export interface AgentInstallMethod {
   requires: readonly string[];
 }
 
-/** The bundled install line for an agent on this platform (from its row). */
-export function agentInstallMethod(agent: AgentId, platform: NodeJS.Platform): AgentInstallMethod | null {
+/** Every bundled install line for an agent on this platform, the row's main
+ *  one first, then its other documented ways there (`install.more`). */
+export function agentInstallMethods(agent: AgentId, platform: NodeJS.Platform): AgentInstallMethod[] {
   const install = agentRow(agent)?.setup?.install;
-  if (!install) return null;
+  if (!install) return [];
   const win = platform === 'win32';
-  return {
+  const main: AgentInstallMethod = {
+    via: 'script',
     command: win ? install.win32.command : install.posix.command,
     shell: win ? 'powershell' : 'user',
     source: install.source,
     officialPage: install.officialPage,
     requires: win ? [] : install.posix.requires,
   };
+  const more = (install.more ?? [])
+    .filter((m) => m.platform === (win ? 'win32' : 'posix'))
+    .map((m): AgentInstallMethod => ({
+      via: m.via,
+      command: m.command,
+      shell: win ? 'powershell' : 'user',
+      source: m.source,
+      officialPage: install.officialPage,
+      requires: m.requires,
+    }));
+  return [main, ...more];
+}
+
+/** The bundled install line for an agent on this platform (from its row). */
+export function agentInstallMethod(agent: AgentId, platform: NodeJS.Platform): AgentInstallMethod | null {
+  return agentInstallMethods(agent, platform)[0] ?? null;
 }
 
 /** Official install page for an agent (the fallback whenever a command fails). */
@@ -58,7 +83,7 @@ export function agentOfficialPage(agent: AgentId): string | null {
 export function agentExecutableNames(agent: AgentId): string[] {
   const spec = agentRow(agent)?.setup;
   if (!spec) return [];
-  const entries = spec.npm.winEntries.map((e) => e[e.length - 1] ?? '').filter(Boolean);
+  const entries = (spec.npm?.winEntries ?? []).map((e) => e[e.length - 1] ?? '').filter(Boolean);
   return [...new Set([spec.binary, `${spec.binary}.exe`, ...entries].map((n) => n.toLowerCase()))];
 }
 
@@ -122,16 +147,23 @@ export function classifyInstallFailure(paneText: string): InstallFailureKind {
   return 'unknown';
 }
 
+/** One install line the card can offer. */
+export interface AgentSetupPlanInstall {
+  via: AgentInstallVia;
+  command: string;
+  shell: AgentCommandShell;
+  officialPage: string;
+  /** Programs `command` needs that were not found; non-empty = cannot run here. */
+  missing: string[];
+}
+
 /** What the card needs to offer an install or a sign-in. */
 export interface AgentSetupPlan {
   agent: AgentId;
-  install: {
-    command: string;
-    shell: AgentCommandShell;
-    officialPage: string;
-    /** Programs `command` needs that were not found; non-empty = cannot run here. */
-    missing: string[];
-  };
+  /** The main line (`installs[0]`). */
+  install: AgentSetupPlanInstall;
+  /** Every documented line on this platform, the main one first. */
+  installs: AgentSetupPlanInstall[];
   /** Null when the agent is not installed. */
   login: { command: string; shell: AgentCommandShell } | null;
 }

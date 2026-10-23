@@ -26,6 +26,7 @@ import { findWorkspaceSurfaceById } from '../../utils/paneTraversal';
 import { FOCUS_RING } from '../focusRing';
 import { IconX } from '../icons';
 import { HunkGutter, HunkLines } from './HunkLines';
+import { secretRefusalText } from '../Git/secretRefusal';
 
 // gpui button recipes (theme-safe color-mix on tokens; primary/danger keep the
 // rgba sheen the DESIGN spec calls for). Reused across this panel's header.
@@ -1063,6 +1064,9 @@ export default function DiffPanel({ source, isActive, focused = isActive, surfac
         pushToast({ level: 'warn', message: `${res.error}${res.browseFallback ? ` — ${res.browseFallback}` : ''}` });
       } else if (res.reason === 'dirty') {
         pushToast({ level: 'warn', message: res.error });
+      } else if (res.reason === 'secrets') {
+        // The Git page's words for the same refusal.
+        pushToast({ level: 'warn', message: res.secretScanFailed ? t('git.secret.scanFailed') : secretRefusalText(res.secrets ?? [], t) });
       } else {
         pushToast({ level: 'error', message: t('diff.prFailed', { error: res.error ?? '' }) });
       }

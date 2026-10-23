@@ -226,6 +226,8 @@ describe('PhoneWizardView', () => {
     expect(html).toContain('web.wizardAlreadySharing');
     expect(html).toContain('web.wizardTailscaleWarn');
     expect(html).toContain('needs the Tailscale CLI');
+    // The same one-click fix as the not-yet-sharing step.
+    expect(html).toContain('data-tailscale-problem-fix="wizard-shared"');
   });
 
   it('step 4: the named device and the roster, with Done as primary', () => {

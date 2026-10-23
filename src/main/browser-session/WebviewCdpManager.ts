@@ -123,6 +123,14 @@ export class WebviewCdpManager {
   // RPC-held leases (token → expiry timer + surfaceId), for automation that
   // drives the guest outside main (Playwright in the MCP process).
   private rpcLeases = new Map<string, { surfaceId: string; gen: number; timer: NodeJS.Timeout }>();
+  // RPC leases the user ended from the browser pane (Stop / Take over), kept
+  // for one TTL so the holder's next renew learns why instead of "unknown".
+  private revokedRpcLeases = new Map<string, { error: Error; timer: NodeJS.Timeout }>();
+  // Renew calls parked until their lease is revoked or released (watchRpcLease).
+  private rpcLeaseWatchers = new Map<string, Set<() => void>>();
+  // Told the surface's lease count whenever it changes: the "agent is driving"
+  // marker is driven from it (BrowserAgentControl).
+  private leaseObserver?: (surfaceId: string, leases: number) => void;
   // Optional hook so a CDP event-capture layer (BrowserCaptureManager, #106) can
   // tear down its debugger listeners when a surface is unregistered — manual
   // wc.debugger.detach() does not remove EventEmitter listeners, and may not
@@ -135,6 +143,19 @@ export class WebviewCdpManager {
 
   constructor(cdpPort = 18800) {
     this.cdpPort = cdpPort;
+  }
+
+  /** Register the callback told every change of a surface's lease count. */
+  setLeaseObserver(fn: (surfaceId: string, leases: number) => void): void {
+    this.leaseObserver = fn;
+  }
+
+  private notifyLeases(surfaceId: string, leases: number): void {
+    try {
+      this.leaseObserver?.(surfaceId, leases);
+    } catch {
+      // the marker is best-effort; lease bookkeeping must not depend on it
+    }
   }
 
   /** Register a callback invoked with the webContentsId on every unregister. */
@@ -330,16 +351,19 @@ export class WebviewCdpManager {
       // gs.discarded is deliberately NOT cleared here: a discard-driven
       // unmount arrives as webview 'destroyed' → unregister, and the flag is
       // what lets ensureAwake() know the surface can be woken.
+      const hadLeases = gs.leases > 0;
       gs.leases = 0;
       gs.inGrace = false;
       // Invalidate outstanding lease handles: an op that acquired before this
       // unregister must not decrement a replacement guest's fresh lease count.
       gs.gen += 1;
+      if (hadLeases) this.notifyLeases(surfaceId, 0);
     }
     for (const [token, lease] of this.rpcLeases) {
       if (lease.surfaceId === surfaceId) {
         clearTimeout(lease.timer);
         this.rpcLeases.delete(token);
+        this.wakeRpcLeaseWatchers(token);
       }
     }
     console.log(`[WebviewCdpManager] Unregistered surface=${surfaceId}`);
@@ -501,6 +525,7 @@ export class WebviewCdpManager {
     }
     gs.inGrace = false;
     this.recomputeThrottle(surfaceId);
+    this.notifyLeases(surfaceId, gs.leases);
     return gs.gen;
   }
 
@@ -510,6 +535,7 @@ export class WebviewCdpManager {
     // Stale handle from before an unregister — the count was already zeroed.
     if (gen !== undefined && gen !== gs.gen) return;
     gs.leases -= 1;
+    this.notifyLeases(surfaceId, gs.leases);
     if (gs.leases > 0) return;
     // Idle grace: stay unthrottled briefly so back-to-back ops don't flap.
     gs.inGrace = true;
@@ -574,12 +600,92 @@ export class WebviewCdpManager {
   }
 
   releaseRpcLease(token: string): boolean {
+    const revoked = this.revokedRpcLeases.get(token);
+    if (revoked) {
+      clearTimeout(revoked.timer);
+      this.revokedRpcLeases.delete(token);
+    }
     const lease = this.rpcLeases.get(token);
     if (!lease) return false;
     clearTimeout(lease.timer);
     this.rpcLeases.delete(token);
     this.releaseAutomationLease(lease.surfaceId, lease.gen);
+    this.wakeRpcLeaseWatchers(token);
     return true;
+  }
+
+  /**
+   * End every RPC lease held on a surface because the user stopped or took over
+   * the agent there. The holder learns `error` from its next renew (or from a
+   * renew already parked in watchRpcLease, at once).
+   */
+  revokeRpcLeases(surfaceId: string, error: Error): number {
+    let revoked = 0;
+    for (const [token, lease] of [...this.rpcLeases]) {
+      if (lease.surfaceId !== surfaceId) continue;
+      clearTimeout(lease.timer);
+      this.rpcLeases.delete(token);
+      this.releaseAutomationLease(lease.surfaceId, lease.gen);
+      const timer = setTimeout(() => this.revokedRpcLeases.delete(token), RPC_LEASE_TTL_MS);
+      timer.unref?.();
+      this.revokedRpcLeases.set(token, { error, timer });
+      this.wakeRpcLeaseWatchers(token);
+      revoked += 1;
+    }
+    return revoked;
+  }
+
+  /** Why the user ended this lease, when they did. */
+  rpcLeaseRevocation(token: string): Error | undefined {
+    return this.revokedRpcLeases.get(token)?.error;
+  }
+
+  /**
+   * Resolve when the lease is revoked or released, or after `waitMs` —
+   * whichever comes first; at once when the token is not a live lease. Lets the
+   * holder park one renew call instead of polling, and learn of a Stop at once.
+   */
+  watchRpcLease(token: string, waitMs: number): Promise<void> {
+    if (!this.rpcLeases.has(token)) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      let set = this.rpcLeaseWatchers.get(token);
+      if (!set) {
+        set = new Set();
+        this.rpcLeaseWatchers.set(token, set);
+      }
+      const watchers = set;
+      const done = () => {
+        clearTimeout(timer);
+        watchers.delete(done);
+        if (watchers.size === 0 && this.rpcLeaseWatchers.get(token) === watchers) {
+          this.rpcLeaseWatchers.delete(token);
+        }
+        resolve();
+      };
+      const timer = setTimeout(done, waitMs);
+      timer.unref?.();
+      watchers.add(done);
+    });
+  }
+
+  private wakeRpcLeaseWatchers(token: string): void {
+    const set = this.rpcLeaseWatchers.get(token);
+    if (!set) return;
+    for (const done of [...set]) done();
+  }
+
+  /** Stop the guest's in-flight navigation or load (the user pressed Stop). */
+  stopLoading(surfaceId: string): boolean {
+    const session = this.sessions.get(surfaceId);
+    if (!session) return false;
+    const wc = webContents.fromId(session.webContentsId);
+    if (!wc || wc.isDestroyed()) return false;
+    try {
+      wc.stop();
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private ensureGuestState(surfaceId: string): GuestState {

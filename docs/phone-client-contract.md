@@ -494,8 +494,10 @@ Check `/api/config` and hide the keyboard rather than letting a user type into a
 mistake the browser client made and shipped.
 
 It is **409 `{"error":"terminal-prompt-active","effect":"none"}`** while the pane
-shows the agent's own permission dialog (a pending `terminal_prompt` record),
-except for a lone Esc or a lone Ctrl-C — see
+shows the agent's own permission dialog as an answerable pending
+`terminal_prompt` record (one that carries a `promptFingerprint`, or any
+ExitPlanMode record), except for a
+lone Esc or a lone Ctrl-C — see
 [`terminal_prompt`](#terminal_prompt--the-agents-own-permission-dialog).
 
 Phone scrolling has two ownership modes. A terminal's normal buffer is local
@@ -1428,12 +1430,20 @@ Every refusal writes nothing and carries `effect: "none"`:
 | 404 | `{error:"not-found"}` | Unknown id, or (device) the brain's pane |
 | 501 | `{error:"answer-in-terminal"}` | No `terminal-prompt-decline` in `X-Wmux-Client-Caps` |
 
-**Typing cannot answer it.** While the pane has a pending `terminal_prompt`
-record (answerable or not, answered-and-waiting included), `POST /api/input` to
-that pane is refused with 409 `{"error":"terminal-prompt-active","effect":"none"}`
-and nothing is written — a digit, Enter, a paste, a notification "Reply", any
-key sequence. The dialog is answered only through `POST /api/approvals/<id>`
-above, or at the computer. The one exception is the cancel direction: a body
+**Typing cannot answer it.** While the pane has a pending answerable
+`terminal_prompt` record (it carries a `promptFingerprint`; answered-and-waiting
+included), `POST /api/input` to that pane is refused with 409
+`{"error":"terminal-prompt-active","effect":"none"}` and nothing is written — a
+digit, Enter, a paste, a notification "Reply", any key sequence. That dialog is
+answered only through `POST /api/approvals/<id>` above, or at the computer. An
+informational record (no `promptFingerprint`: the dialog could not be bound to
+its tool call) does not refuse input: no route can answer it, so typed keys are
+the only way to answer it away from the computer. It still raises the pane's
+attention and its card, and when the dialog names its tool its `summary` is
+the command the screen shows, not the one the hook named.
+An ExitPlanMode record (`toolName: "ExitPlanMode"`) refuses input with or
+without a `promptFingerprint`: its first row, under the cursor, switches the
+session's permission mode. The one exception is the cancel direction: a body
 that is exactly one Esc (`\x1b`) or exactly one Ctrl-C (`\x03`) is written as
 usual. Esc followed by anything else (an arrow key, Enter) is refused. The check
 runs when the request body completes, immediately before the write, so a dialog
@@ -4234,8 +4244,9 @@ arrival order (`seq`, increasing; never sort by `at`).
   earlier card, and a workspace whose room the owner had written in reads
   on as a group chat in `general`. Additive: no field, route or answer
   changed; a client that draws threads generically shows it like any other.
-- `sinceSeq` — cards with a larger `seq`. Omitted: the newest page. Read
-  forward from `0` for the whole history.
+- `sinceSeq` — cards with a larger `seq`, and cards changed since (see
+  **Changed cards** below). Omitted: the newest page. Read forward from `0`
+  for the whole history.
 - `limit` — 1–100, default 50.
 
 ```json
@@ -4325,6 +4336,26 @@ arrival order (`seq`, increasing; never sort by `at`).
   stale, so read the thread again after a resume.
 - `state` — `open` or `resolved` on `question`, `proposal` and `plan` cards.
   `closes: true` — the card records the end of its thread's subject.
+- `reactions` — in a group chat only: `[{botId, emoji, ack?: true}]`, at most
+  one per bot and 16 in all. `emoji` is one of ❤️ 👍 👎 😂 ‼️ ❓ 👀 ✅ 🙌.
+  - Without `ack`: a bot woken for this card reacted instead of replying.
+  - With `ack: true`: the bot stayed silent, and wmux left the reaction to
+    show that it saw the card.
+  - Name the bot from `GET /api/bots`.
+  - A reaction is display only, with nothing to answer.
+  - A bot's later reaction replaces its earlier one on the same card.
+  - Additive (2026-10-23): no route, answer or `protocolVersion` changed.
+- **Changed cards.** When a bot reacts to a card, the card keeps its `id` and
+  `seq`, and the change takes the next room seq.
+  - A forward read (`sinceSeq`) after that change brings the card back with
+    its new `reactions`, even when its `seq` is older than `sinceSeq`.
+  - Replace the card you hold by `id`, and keep it in its place by `seq`.
+    Never add a second row for an `id` you already show.
+  - A forward page still lists its cards in increasing `seq`. It can hold an
+    older card among new ones, and `nextSinceSeq` can be larger than the last
+    card's `seq`: pass it back as it is.
+  - Only reactions move a card this way. A question's `state` change shows
+    only on a newest-page read, as before.
 - `replyTo` — the id of a card of the same thread this one answers. A card a
   bot writes while it handles an owner message (its turn started from a
   `human` card) carries that `human` card's id, unless the bot named another
@@ -6985,6 +7016,8 @@ sheet. No stored token for that login → 424 `gh-auth-missing`;
 | 409 | `not-a-git-repo` | the session is not in a repository |
 | 500 | `git-operation-failed` | git could not answer; retry later |
 | 501 | `not-implemented` | this daemon does not serve the action yet (its key is absent) |
+| 409 | `secrets-found` (+ the first finding: `secretPath`, `secretWhat` (`file` \| `value`), `secretKind`, `secretLine?`; and `secretCount`; never the value) | the commits carry a password or key; take it out on the desktop and push again |
+| 500 | `secret-scan-failed` | the password and key check could not read the commits, so nothing was pushed; retry, or push from the desktop |
 | 409 | `squash-disabled`, `protected-target`, `remote-branch-exists`, `remote-unsupported`, `not-pushed`, `pr-exists` (+ `number`), `no-commits-ahead`, `detached-head`, `git-operation-in-progress`, `merge-in-flight`, `identity-changed`, `request-id-reused` | show; usually re-preview |
 | 424 | `gh-auth-missing`, `remote-forbidden` (+ `login`) | fix on the desktop |
 | 428 | `confirm-required` | new preview |

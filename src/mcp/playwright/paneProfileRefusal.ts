@@ -2,6 +2,7 @@
 // scope funnel and the engine can all recognize the refusal without a cycle.
 import { PANE_PROFILE_UNRESOLVED_CODE } from '../../shared/chromePaneBinding';
 import { browserPolicyRefusal } from '../../shared/browserPolicy';
+import { agentControlRefusal } from '../../shared/browserAgentControl';
 
 const EXPLANATION =
   'the browser profile for this pane could not be resolved. This workspace binds browser profiles per pane, ' +
@@ -45,11 +46,12 @@ export function paneProfileRefusal(error: unknown): PaneProfileUnresolvedError |
 }
 
 /**
- * Either refusal main answers a browser call with when the caller's pane may
- * not act — the pane-profile refusal above, or a protected pane's
- * policy_denied / needs_consent (src/shared/browserPolicy.ts). Both are final
+ * Any refusal main answers a browser call with when the caller's pane may
+ * not act — the pane-profile refusal above, a protected pane's
+ * policy_denied / needs_consent (src/shared/browserPolicy.ts), or the user's
+ * Stop / Take over on the tab (src/shared/browserAgentControl.ts). All are final
  * answers: every retry, fallback or "unknown → carry on" path must rethrow it.
  */
 export function browserCallRefusal(error: unknown): Error | null {
-  return paneProfileRefusal(error) ?? browserPolicyRefusal(error);
+  return paneProfileRefusal(error) ?? browserPolicyRefusal(error) ?? agentControlRefusal(error);
 }

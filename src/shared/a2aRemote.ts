@@ -28,13 +28,15 @@
 //     server derives it from its own link record for the authenticated peer.
 //   - Remote-origin work is message-only (no worker spawn) and a remote task
 //     whose target pane changed occupant is HELD, never re-routed to a sibling
-//     pane (a sibling may not be exposed).
+//     pane (a sibling may not be exposed). Starting a new agent is a separate,
+//     owner-gated request (`shared/a2aSpawn.ts`), never a task.
 //   - Every persisted record carries `v` so a downgrade or a future colleague
 //     tier can tell formats apart.
 //
 // Pure module: no node:* imports (the renderer imports these types).
 
-import type { TaskState } from './types';
+import type { CompletionEvidence, TaskState } from './types';
+import type { A2aSpawnRequestV1, A2aSpawnResultV1, A2aSpawnTargetsV1 } from './a2aSpawn';
 
 // ─── Versions ───────────────────────────────────────────────────────────────
 
@@ -105,6 +107,25 @@ export const A2A_FEATURE_LINK_OFFER = 'link-offer.1';
  * an omitted-images note instead: an older receiver would drop the refs unseen.
  */
 export const A2A_FEATURE_IMAGES = 'images.1';
+/**
+ * The PC takes remote spawn requests (`shared/a2aSpawn.ts`). A requester sends
+ * one only to a PC that advertises it.
+ */
+export const A2A_FEATURE_SPAWN = 'spawn.1';
+/**
+ * Stream liveness both ways. A joiner with it acks its stream cursor every
+ * `A2A_STREAM_PING_MS` while the stream is up (to a server whose hello lists
+ * it); a server whose joiner advertised it ends that stream after
+ * `A2A_STREAM_SILENCE_MS` with no request from the joiner. Without it a joiner
+ * that vanished without closing its socket (sleep, Wi-Fi off) stayed
+ * "connected" on the server until TCP gave up, which takes minutes.
+ */
+export const A2A_FEATURE_STREAM_PING = 'stream-ping.1';
+export const A2A_STREAM_PING_MS = 15_000;
+/** No sign of the other end for this long ends a stream, on either side. */
+export const A2A_STREAM_SILENCE_MS = 40_000;
+/** The joiner's first stream redial waits this long; each next one doubles it. */
+export const A2A_REDIAL_BACKOFF_MIN_MS = 1_000;
 const FEATURE_RE = /^[a-z0-9][a-z0-9.-]{0,31}$/;
 const FEATURES_MAX = 16;
 
@@ -454,6 +475,13 @@ export interface A2aLinkRecordV1 {
    * 'local' means this host is the joiner. Exposure applies to 'remote' links.
    */
   proposer: 'local' | 'remote';
+  /**
+   * A link a remote spawn made. No images go on it either way. With
+   * `proposer: 'remote'` this PC started the agent: what goes out on it is
+   * redacted and later tasks may wait for a card. With `proposer: 'local'`
+   * this PC asked for it. Local bookkeeping, never sent; an older build drops it.
+   */
+  spawned?: true;
 }
 
 // ─── Layer 2/3 wire ─────────────────────────────────────────────────────────
@@ -577,6 +605,22 @@ export function isA2aRemoteMessageKind(v: unknown): v is A2aRemoteMessageKind {
 export const A2A_REMOTE_BODY_MAX = 32 * 1024;
 
 /**
+ * Caps a 'state' envelope's `message` and `evidence` are sent within (bytes,
+ * UTF-8), so the envelope, with its summary `text`, stays under the request
+ * body limit. A larger message is cut; evidence items that do not fit are
+ * left off from the end.
+ */
+export const A2A_REMOTE_STATE_MESSAGE_MAX = 16 * 1024;
+export const A2A_REMOTE_STATE_EVIDENCE_MAX = 32 * 1024;
+/**
+ * The whole 'state' envelope as JSON (bytes, UTF-8), escapes included: a
+ * margin under the receiver's request body limit (2 × A2A_REMOTE_BODY_MAX +
+ * 4 KiB). An envelope over it sheds its message, then evidence items, and
+ * at worst goes as the plain state with its summary.
+ */
+export const A2A_REMOTE_STATE_ENVELOPE_MAX = 2 * A2A_REMOTE_BODY_MAX;
+
+/**
  * One message in either direction. The idempotency key is (linkId, messageId):
  * the same key with a byte-identical payload is a duplicate (answered as one);
  * the same key with a different payload is REFUSED (`conflict`).
@@ -598,13 +642,32 @@ export interface A2aRemoteEnvelope {
   /** For 'state'. */
   state?: TaskState;
   /**
+   * For 'state': the receiver's status message and completion evidence. Both
+   * are optional and additive: an older peer ignores them and keeps `text` as
+   * the evidence summary. The receiver re-checks them like local evidence.
+   */
+  message?: string;
+  evidence?: CompletionEvidence;
+  /**
    * For 'link'. `offer` / `offer-withdrawn` carry a share offer instead of a
    * link notice: `linkId` is then the offerId, both versions are 0, and the
    * payload is in `offer`. An older receiver refuses them as an unknown link.
    */
-  link?: { state: 'active' | 'revoked' | 'broken' | 'offer' | 'offer-withdrawn'; version: number; reason?: A2aLinkRecordV1['endedReason'] };
+  link?: {
+    state: 'active' | 'revoked' | 'broken' | 'offer' | 'offer-withdrawn' | 'spawn' | 'spawn-result' | 'spawn-targets';
+    version: number;
+    reason?: A2aLinkRecordV1['endedReason'];
+  };
   /** For a 'link' envelope whose state is `offer` / `offer-withdrawn`. */
   offer?: A2aOfferPayload;
+  /**
+   * Remote spawn (`shared/a2aSpawn.ts`), each on a 'link' envelope of the same
+   * state name. `linkId` is the spawnId (or `SPAWN_TARGETS_LINK_ID`); these
+   * never touch a link record. An older receiver refuses them as an unknown link.
+   */
+  spawn?: A2aSpawnRequestV1;
+  spawnResult?: A2aSpawnResultV1;
+  spawnTargets?: A2aSpawnTargetsV1;
   /** For 'receipt' (with `taskId`). */
   receipt?: A2aRemoteReceipt;
   /**
@@ -862,7 +925,9 @@ export interface A2aRemoteTaskMarkerV1 {
     /** A paste was attempted but never confirmed (main restarted mid-delivery): a person decides. */
     | 'delivery-unconfirmed'
     /** The pane kept having no agent to deliver to. */
-    | 'no-agent';
+    | 'no-agent'
+    /** A follow-up on a link a remote spawn made, waiting for its approval card (`followUps: 'ask'`). */
+    | 'awaiting-approval';
   /**
    * This side's link endpoint kind when the task was stored. `brain` = the
    * task is this PC's Moa's, delivered as a wake, never to a pane. Absent on a

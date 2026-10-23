@@ -95,12 +95,13 @@ describe('browser tool workspace scope', () => {
           // and the release of a lease an older main granted anyway.
           "sendRpc('browser.lease.acquire",
           "sendRpc('browser.lease.release",
+          // watchLease: the one renew, by token, for both lease paths (it also
+          // carries the user's Stop / Take over back to the op).
+          "sendRpc('browser.lease.renew",
           // An older main's unnamed lease, released unheld.
           "sendRpc('browser.lease.release",
           "sendRpc('browser.lease.release",
-          "sendRpc('browser.lease.renew",
           "sendRpc('browser.lease.release",
-          "sendRpc('browser.lease.renew",
           "sendRpc('browser.lease.release",
         ]);
       } else {

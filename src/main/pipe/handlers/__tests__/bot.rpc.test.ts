@@ -35,6 +35,7 @@ import { BOT_EVENT } from '../../../../shared/bot';
 import { DISMISSED_ANSWER } from '../../../factory/handoffRouter';
 import { WakeTaint } from '../../../factory/wakeTaint';
 import { TAINTED_CONVERSATION_SAVES_NOTHING } from '../../../factory/conversationMarks';
+import { persisterWritesSettled } from '../../../factory/versionedFile';
 import type { Handoff } from '../../../../shared/handoff';
 import type { ThreadId } from '../../../../shared/room';
 import type { BotRuntime } from '../../../factory/BotRuntime';
@@ -73,7 +74,10 @@ beforeEach(() => {
   ledgerMock.listeners.clear();
   ledgerMock.rows.clear();
 });
-afterEach(() => {
+afterEach(async () => {
+  // A store's fire-and-forget save can still be on its way: let it land
+  // before its folder goes, or the removal races it (ENOTEMPTY).
+  await persisterWritesSettled();
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

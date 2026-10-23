@@ -34,7 +34,7 @@ try {
     process.exit(2);
   }
 
-  const ours = buildKiroAgentConfig('/bridge.mjs', homedir());
+  const ours = buildKiroAgentConfig('C:/bridge.mjs', homedir());
 
   // Fields we deliberately differ on. Everything else must either match or be
   // absent-with-the-same-effect. The list comes from the module under test, so

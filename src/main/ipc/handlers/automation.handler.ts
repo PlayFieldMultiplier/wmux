@@ -417,11 +417,12 @@ export function registerAutomationHandlers(
     },
   ));
 
-  handle(IPC.AUTOMATION_RUN_NOW, async (id: unknown, kind: unknown): Promise<AutomationRunNowResult> => {
+  handle(IPC.AUTOMATION_RUN_NOW, async (id: unknown, kind: unknown, endSessionOf?: unknown): Promise<AutomationRunNowResult> => {
     const a = api();
     if (!a) return refuse();
     if (!isId(id) || (kind !== 'manual' && kind !== 'test')) return refuse('invalid request');
-    return a.runNow({ id, kind });
+    if (endSessionOf !== undefined && !isId(endSessionOf)) return refuse('invalid request');
+    return a.runNow({ id, kind, ...(endSessionOf !== undefined && { endSessionOf }) });
   });
 
   handle(IPC.AUTOMATION_CANCEL_RUN, async (runId: unknown): Promise<AutomationOkResult> => {

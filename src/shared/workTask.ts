@@ -18,6 +18,8 @@
  * 해석·projection 적용은 WorkTaskService(daemon)의 몫이다.
  */
 
+import type { SecretFinding } from './secretGuard';
+
 /**
  * 데몬 스탬프 신원 참조(§2 — §6.L authContext와 동형). authz 앵커는
  * verifiedWorkspaceId다(principalId는 display/routing/감사 전용).
@@ -306,9 +308,12 @@ export type CreatePrResultWire =
   | { ok: true; prUrl: string; recovered?: boolean; commitPending?: boolean; mrIid?: number }
   | {
       ok: false;
-      reason: 'gh-missing' | 'gh-unauth' | 'dirty' | 'no-origin' | 'push-failed' | 'pr-failed' | 'error';
+      reason: 'gh-missing' | 'gh-unauth' | 'dirty' | 'no-origin' | 'push-failed' | 'pr-failed' | 'secrets' | 'error';
       error: string;
       browseFallback?: string;
+      /** `secrets`: the Git page's push check refused; the UI words it from these. */
+      secrets?: SecretFinding[];
+      secretScanFailed?: true;
     };
 
 /** 정리 스캔 항목 4종(WorktaskScanService.WorktaskScanEntry 미러). */

@@ -7,14 +7,16 @@ import Dialog, { DialogBody, DialogFooter, DialogHeader } from '../ui/Dialog';
 import WebToggle, { webPairUrl } from '../StatusBar/WebToggle';
 import { revokeFailureMessage } from '../StatusBar/PairedDevicesModal';
 import { A2aExposureChecklist } from '../Settings/A2aExposureChecklist';
-import { IconChevron, IconComputer, IconCopy, IconMessage, IconPhone, IconServer } from '../icons';
+import { IconChevron, IconComputer, IconCopy, IconElbow, IconMessage, IconPhone, IconServer } from '../icons';
 import { FOCUS_RING } from '../focusRing';
 import { timeAgo } from '../../utils/timeAgo';
 import type { WebDeviceSummary, WebTerminalInfo } from '../../../shared/web';
 import type { RemoteHostPublic, RemoteHostStatus, RemoteWorkspaceSummary } from '../../../shared/remoteHosts';
 import { remoteAttachmentKey } from '../../../shared/remoteHosts';
 import type { LanLinkPeerSummary } from '../../../shared/lanlink';
-import type { A2aLinkOfferRecordV1, A2aLinkRecordV1 } from '../../../shared/a2aRemote';
+import type { A2aExposureV1, A2aLinkOfferRecordV1, A2aLinkRecordV1 } from '../../../shared/a2aRemote';
+import type { Workspace } from '../../../shared/types';
+import { getWorkspaceLeafPanes } from '../../../shared/paneUtils';
 import type { A2aRemoteHostStatus, A2aRemoteStatus } from '../../../shared/rpc';
 import { buildRemoteEntries, paneNamesByPty, serverReach, type RemoteEntry, type ServerReach } from './remoteEntries';
 import { selectRemoteInbox } from '../../stores/selectors/remoteInbox';
@@ -30,6 +32,13 @@ import SshHostCheckDialog from './SshHostCheckDialog';
 import { sshNeedsIdentityCheck, sshNeedsPerson, type SshTunnelState } from '../../../shared/remoteHosts';
 import { pcRailHostState } from '../../../shared/pcRail';
 import RemoteRowMenu, { type RemoteRowMenuItem } from './RemoteRowMenu';
+import TailscaleChecklist from './TailscaleChecklist';
+import RemoteSpawnHostToggle from './RemoteSpawnHostToggle';
+import { REMOTE_SPAWN_UI_ENABLED } from './remoteSpawnFlag';
+import { readSpawnPolicy, saveSpawnPolicy, type SpawnPolicySaveResult } from './remoteSpawnPolicy';
+import type { A2aSpawnOutgoingList, A2aSpawnOutgoingSummary, A2aSpawnPlace, A2aSpawnPolicyV1 } from '../../../shared/a2aSpawn';
+import { agentRow } from '../../../shared/agentIdentity';
+import RemoteSpawnAskDialog from './RemoteSpawnAskDialog';
 
 /** How often the page re-reads the roster, the hosts and the server state. */
 export const REMOTE_PAGE_POLL_MS = 10_000;
@@ -87,6 +96,24 @@ interface PcRow {
 type Confirm = { kind: 'entry' | 'pc' | 'link'; id: string } | null;
 
 /**
+ * How many of this PC's panes an exposure lets that PC see now: a listed pane
+ * that has since closed does not count, and a workspace listed without a pane
+ * list shows every pane it has.
+ */
+export function exposedPaneCount(exposure: A2aExposureV1 | null, workspaces: readonly Workspace[]): number {
+  if (!exposure) return 0;
+  let n = 0;
+  for (const wsId of exposure.workspaceIds) {
+    const ws = workspaces.find((w) => w.id === wsId);
+    if (!ws) continue;
+    const live = getWorkspaceLeafPanes(ws).map((p) => p.id);
+    const listed = exposure.paneIds?.[wsId];
+    n += listed ? listed.filter((id) => live.includes(id)).length : live.length;
+  }
+  return n;
+}
+
+/**
  * The Remote rail page: this PC's state on one line, what needs a person
  * (link requests, held work, a PC whose certificate changed), then one list
  * of every other PC with its links, the phones and what each is viewing, and
@@ -113,6 +140,17 @@ export default function RemotePage() {
   const [devicesError, setDevicesError] = useState(false);
   const [hosts, setHosts] = useState<RemoteHostPublic[] | null>(null);
   const [peers, setPeers] = useState<LanLinkPeerSummary[] | null>(null);
+  /**
+   * What this PC lets each PC that joined it see, by hostId: the last good
+   * read (null: nothing listed). A PC never read yet has no key, and its row
+   * claims nothing rather than "nothing".
+   */
+  const [exposures, setExposures] = useState<Record<string, A2aExposureV1 | null>>({});
+  /** Who may start new agents here (null: not read, or the feature is hidden). */
+  const [spawnPolicy, setSpawnPolicy] = useState<A2aSpawnPolicyV1 | null>(null);
+  /** What this PC asked other PCs to start, and what each lets it ask for (null: not read). */
+  const [outgoing, setOutgoing] = useState<A2aSpawnOutgoingList | null>(null);
+  const [spawnAsk, setSpawnAsk] = useState<{ place: A2aSpawnPlace; name: string } | null>(null);
   const [connect, setConnect] = useState<{ tab?: ConnectTab } | null>(null);
   const [addSsh, setAddSsh] = useState(false);
   const [checkSsh, setCheckSsh] = useState<{ id: string; label: string } | null>(null);
@@ -139,6 +177,20 @@ export default function RemotePage() {
   const mounted = useRef(true);
   useEffect(() => () => { mounted.current = false; }, []);
 
+  // A failed read keeps the last list.
+  const readOutgoing = useCallback(async () => {
+    const read = window.electronAPI?.a2aRemote?.spawnOutgoing;
+    if (!read) return;
+    const v = await read().catch(() => null);
+    if (mounted.current && v && Array.isArray(v.requests) && Array.isArray(v.places)) setOutgoing(v);
+  }, []);
+  // A request this PC sent changed, or what a PC lets it ask for: that nudge
+  // rides the link-event channel, so any nudge there re-reads the list.
+  useEffect(() => {
+    if (!REMOTE_SPAWN_UI_ENABLED) return;
+    return window.electronAPI?.a2aRemote?.onLinkEvent?.(() => void readOutgoing());
+  }, [readOutgoing]);
+
   // Each source is read on its own so one slow or missing bridge never
   // blanks the others.
   const refresh = useCallback(async () => {
@@ -156,9 +208,29 @@ export default function RemotePage() {
     if (api?.remote?.hostsList) reads.push(api.remote.hostsList().then((v) => { if (mounted.current) setHosts(v); }, () => undefined));
     if (api?.remote?.sshStates) reads.push(api.remote.sshStates().then((v) => { if (mounted.current) setSshStates(v); }, () => undefined));
     if (api?.lanlink?.peersList) reads.push(api.lanlink.peersList().then((v) => { if (mounted.current) setPeers(v.peers); }, () => undefined));
+    // A failed read keeps the last policy.
+    if (REMOTE_SPAWN_UI_ENABLED) reads.push(readSpawnPolicy().then((p) => { if (mounted.current && p) setSpawnPolicy(p); }));
+    if (REMOTE_SPAWN_UI_ENABLED) reads.push(readOutgoing());
     await Promise.all(reads);
+    // A PC that joined this one sees only what this PC lists for it.
+    const exposureGet = api?.a2aRemote?.exposureGet;
+    if (exposureGet) {
+      const hostIds = [...new Set(useStore.getState().a2aRemote.peers.map((x) => x.hostId))];
+      const got = await Promise.all(hostIds.map(async (id) => [id, await exposureGet(id).then((r) => r?.exposure ?? null, () => undefined)] as const));
+      if (mounted.current) {
+        setExposures((prev) => {
+          const next: Record<string, A2aExposureV1 | null> = {};
+          // A failed read keeps the last value (or none); a PC no longer paired drops out.
+          for (const [id, e] of got) {
+            if (e !== undefined) next[id] = e;
+            else if (id in prev) next[id] = prev[id];
+          }
+          return next;
+        });
+      }
+    }
     if (mounted.current) setNow(Date.now());
-  }, []);
+  }, [readOutgoing]);
   useEffect(() => {
     void refresh();
     const timer = window.setInterval(() => { void refresh(); }, REMOTE_PAGE_POLL_MS);
@@ -210,7 +282,9 @@ export default function RemotePage() {
       return {
         hostId,
         name: st?.name || joined?.name || peer?.name || hostId.slice(0, 6),
-        word: st ? A2A_STATUS[st.state] : 'waiting',
+        // No stream status (a PC that joined this one and has not connected
+        // since wmux started): offline, with when it was last seen.
+        word: st ? A2A_STATUS[st.state] : 'disconnected',
         pending: st?.pending ?? 0,
         lastSeenAt: Number.isFinite(seenAt) ? seenAt : null,
         address: joined?.addresses[0] ?? null,
@@ -309,6 +383,19 @@ export default function RemotePage() {
     const r = await call();
     return r.ok ? null : t('a2aDelivery.failed');
   });
+  // A PC's opt-in for starting new agents saves the whole policy at once.
+  const saveSpawn = useCallback(async (next: A2aSpawnPolicyV1): Promise<SpawnPolicySaveResult> => {
+    setError(null);
+    const r = await saveSpawnPolicy(next, t('remoteSpawn.saveFailed'));
+    if (r.ok && mounted.current) setSpawnPolicy(r.policy);
+    if (!r.ok && r.conflict) {
+      // Changed elsewhere meanwhile: show what is saved now.
+      const fresh = await readSpawnPolicy();
+      if (fresh && mounted.current) setSpawnPolicy(fresh);
+      return { ok: false, error: t('remoteSpawn.conflict'), conflict: true };
+    }
+    return r;
+  }, [t]);
 
   const removeEntry = (entry: RemoteEntry) => run(entry.key, async () => {
     const api = window.electronAPI;
@@ -407,7 +494,7 @@ export default function RemotePage() {
     : !a2aStatus.enabled ? t('remotePage.a2aOff')
       : a2aStatus.listening ? t('remotePage.a2aListening', { port: a2aStatus.port })
         : t('remotePage.a2aError', { error: a2aStatus.lastError ?? t('remotePage.unknown') });
-  const dialogOpen = !!(connect || linkDialog || exposure || offerDialog);
+  const dialogOpen = !!(connect || linkDialog || exposure || offerDialog || spawnAsk);
   const isConfirming = (kind: NonNullable<Confirm>['kind'], id: string) => confirming?.kind === kind && confirming.id === id;
   const rowError = (key: string) => (error?.key === key ? <p className="wmux-remote-row-error" role="alert">{error.message}</p> : null);
   const statusCell = (word: StatusWord, live: boolean, since: number | null) => (
@@ -429,6 +516,18 @@ export default function RemotePage() {
     )
   );
 
+  // A request this PC sent, in plain words: the agent, the folder, its state.
+  const spawnLine = (r: A2aSpawnOutgoingSummary, place: A2aSpawnPlace | undefined, pc: string) => {
+    const root = place?.targets?.roots.find((x) => x.id === r.rootId)?.label ?? r.rootId;
+    const what = t('remoteSpawn.out.what', { agent: agentRow(r.agent)?.display ?? r.agent, folder: r.sub ? `${root}/${r.sub}` : root });
+    const state = r.state === 'refused'
+      ? t('remoteSpawn.out.refused', { pc, reason: t(`remoteSpawn.code.${r.code ?? 'failed'}`, { pc }) })
+      : t(`remoteSpawn.out.${r.state}`, { pc });
+    return `${what} · ${state}`;
+  };
+
+  const seeLabel = (count: number) => (count === 0 ? t('remotePage.perm.seesNone') : count === 1 ? t('remotePage.perm.seesOne') : t('remotePage.perm.sees', { count }));
+
   // Rows of the one list, by group.
   const pcRows: ReactNode[] = pcs.flatMap((pc) => {
     const key = `pc:${pc.hostId}`;
@@ -439,9 +538,18 @@ export default function RemotePage() {
       moaLink ? t('remotePage.moaLink') : '',
       pc.pending > 0 ? t('remotePage.toSend', { count: pc.pending }) : '',
     ].filter(Boolean).join(' · ');
+    // Starting an agent there: what is open, and the newest answer when it was a refusal.
+    const spawnPlace = outgoing?.places.find((p) => p.hostId === pc.hostId);
+    const asked = (outgoing?.requests ?? []).filter((r) => r.hostId === pc.hostId);
+    const lastFinal = asked.find((r) => r.state !== 'sent' && r.state !== 'waiting');
+    const spawnShown = [
+      ...asked.filter((r) => r.state === 'sent' || r.state === 'waiting'),
+      ...(lastFinal?.state === 'refused' ? [lastFinal] : []),
+    ];
     const menu: RemoteRowMenuItem[] = [
       ...(pc.joined ? [{ id: 'link', label: t('remotePage.menu.linkPanes'), onSelect: () => setLinkDialog({ hostId: pc.hostId }) }] : []),
       ...(pc.peerId ? [{ id: 'exposure', label: t('remotePage.menu.exposure'), onSelect: () => setExposure({ hostId: pc.hostId, name: pc.name }) }] : []),
+      ...(spawnPlace ? [{ id: 'spawn', label: t('remoteSpawn.ask.menu'), onSelect: () => setSpawnAsk({ place: spawnPlace, name: pc.name }) }] : []),
       { id: 'remove', label: t('remotePage.remove'), danger: true, onSelect: () => setConfirming({ kind: 'pc', id: pc.hostId }) },
     ];
     return [
@@ -452,6 +560,21 @@ export default function RemotePage() {
           {pc.address && <span className="ui-code">{pc.address}</span>}
           {pc.address && meta ? ' · ' : ''}
           {meta}
+        </span>
+        {/* What this PC allows that PC. One slot per permission; the empty
+            one is kept for starting new agents, so adding it later does not
+            reshape the row. */}
+        <span className="wmux-remote-perm" data-remote-perm>
+          <span className="wmux-remote-perm-slot" data-perm-slot="see">{pc.peerId && pc.hostId in exposures ? seeLabel(exposedPaneCount(exposures[pc.hostId], workspaces)) : ''}</span>
+          <span className="wmux-remote-perm-slot" data-perm-slot="agents">
+            <RemoteSpawnHostToggle
+              hostId={pc.hostId}
+              name={pc.name}
+              policy={spawnPolicy}
+              onSave={saveSpawn}
+              onError={(message) => setError({ key, message })}
+            />
+          </span>
         </span>
         {statusCell(pc.word, pc.word === 'connected', pc.lastSeenAt)}
         <span className="wmux-remote-acts">
@@ -490,6 +613,12 @@ export default function RemotePage() {
             t={t}
           />
         )),
+      ...spawnShown.map((r) => (
+        <li key={r.spawnId} className="wmux-remote-link" data-spawn-out={r.spawnId} data-spawn-state={r.state}>
+          <span className="wmux-remote-link-ln" aria-hidden="true"><IconElbow size={16} /></span>
+          <span className="wmux-remote-link-what">{spawnLine(r, spawnPlace, pc.name)}</span>
+        </li>
+      )),
     ];
   });
   const hostRows: ReactNode[] = hostEntries.flatMap((h) => {
@@ -581,7 +710,11 @@ export default function RemotePage() {
       <span className="wmux-remote-ic" aria-hidden="true"><IconMessage size={16} /></span>
       <span className="wmux-remote-nm"><span className="truncate">{p.name}</span></span>
       <span className="wmux-remote-meta">
-        {[t('remotePage.messagesOnly'), p.lastSeenAt !== null ? t('remotePage.lastSeenAgo', { time: timeAgo(p.lastSeenAt, now) }) : ''].filter(Boolean).join(' · ')}
+        {[
+          t('remotePage.messagesOnly'),
+          p.status === 'blocked' ? t('remotePage.peerRevoked') : '',
+          p.lastSeenAt !== null ? t('remotePage.lastSeenAgo', { time: timeAgo(p.lastSeenAt, now) }) : '',
+        ].filter(Boolean).join(' · ')}
       </span>
       {statusCell(p.status === 'blocked' ? 'disconnected' : 'waiting', false, null)}
       <span className="wmux-remote-acts">
@@ -672,6 +805,7 @@ export default function RemotePage() {
             <span className={`wmux-remote-chev${details ? ' is-open' : ''}`} aria-hidden="true"><IconChevron size={12} /></span>
           </button>
         </div>
+        <TailscaleChecklist />
         {details && (
           <dl className="wmux-remote-machine-detail" id="remote-machine-detail">
             {serverOn && address && (
@@ -825,6 +959,7 @@ export default function RemotePage() {
           onClose={() => { setConnect(null); void refresh(); }}
           onLinkPane={(hostId) => { setConnect(null); setLinkDialog({ hostId }); }}
           onAddOverSsh={() => { setConnect(null); setAddSsh(true); }}
+          onLanPaired={() => { void refresh(); }}
         />
       )}
       {addSsh && <AddSshPcDialog onClose={() => { setAddSsh(false); void refresh(); }} />}
@@ -838,14 +973,22 @@ export default function RemotePage() {
       {offerDialog && (
         <A2aLinkDialog offer={offerDialog} onClose={() => { setOfferDialog(null); void refresh(); }} />
       )}
+      {spawnAsk && (
+        <RemoteSpawnAskDialog
+          // The newest word from that PC, so a change while the dialog is open shows.
+          place={outgoing?.places.find((x) => x.hostId === spawnAsk.place.hostId) ?? spawnAsk.place}
+          pcName={spawnAsk.name}
+          onClose={() => { setSpawnAsk(null); void refresh(); }}
+        />
+      )}
       {exposure && (
-        <Dialog onClose={() => setExposure(null)} width={520} data-testid="remote-exposure">
+        <Dialog onClose={() => { setExposure(null); void refresh(); }} width={520} data-testid="remote-exposure">
           <DialogHeader title={t('remotePage.exposureTitle', { name: exposure.name })} closeLabel={t('remotePage.connect.close')} />
           <DialogBody>
             <A2aExposureChecklist hostId={exposure.hostId} pcName={exposure.name} t={t} />
           </DialogBody>
           <DialogFooter>
-            <Button variant="secondary" size="md" onClick={() => setExposure(null)}>{t('remotePage.connect.done')}</Button>
+            <Button variant="secondary" size="md" onClick={() => { setExposure(null); void refresh(); }}>{t('remotePage.connect.done')}</Button>
           </DialogFooter>
         </Dialog>
       )}

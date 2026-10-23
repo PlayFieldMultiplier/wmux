@@ -1,4 +1,6 @@
-import { ipcMain } from 'electron';
+import { ipcMain, shell } from 'electron';
+import { execFile, spawn } from 'node:child_process';
+import { access } from 'node:fs/promises';
 import { IPC } from '../../../shared/constants';
 import { wrapHandler } from '../wrapHandler';
 import type { DaemonClient } from '../../DaemonClient';
@@ -13,16 +15,23 @@ import {
   type WebGrantArgs,
   type WebStartArgs,
   type WebTerminalInfo,
+  type WebTailscaleOpenResult,
+  type WebTailscaleOpenTarget,
 } from '../../../shared/web';
+import { getExecEnv } from '../../../shared/execEnv';
 // The tailscale sequence is shared with `wmux web --tailscale` rather than
 // reimplemented here: the steps a second copy drops are the rollbacks, and
 // those only run on failure paths nobody exercises by hand.
 import {
+  TAILSCALE_DOWNLOAD_URL,
+  checkTailscale,
   checkWebFront,
   describeTailscaleProblem,
   diagnoseTailscale,
   startWebTransport,
   stopWebTransport,
+  tailscaleAppLaunch,
+  type TailscaleChecklist,
   type TailscaleExec,
 } from '../../../cli/tailscale';
 
@@ -32,6 +41,45 @@ import {
  * wizard should sit on "Checking…".
  */
 export const WEB_DIAGNOSE_TIMEOUT_MS = 10_000;
+
+/**
+ * Ceiling on the Remote page's Tailscale checklist. It is also what a
+ * connection over the tailnet waits before it starts, so it is short: a
+ * status read that takes longer is reported as unreadable, which never blocks
+ * the connection.
+ */
+export const TAILSCALE_CHECK_TIMEOUT_MS = 5_000;
+
+/** How the open action reaches the OS (a test seam; production uses Electron and child_process). */
+export interface TailscaleOpener {
+  openExternal: (url: string) => Promise<void>;
+  /** Resolves true when the command started (and, for `open -a`, found the app). */
+  launch: (cmd: string, args: string[]) => Promise<boolean>;
+  exists: (file: string) => Promise<boolean>;
+}
+
+const defaultOpener: TailscaleOpener = {
+  openExternal: (url) => shell.openExternal(url),
+  launch: (cmd, args) =>
+    new Promise<boolean>((resolve) => {
+      if (cmd === 'open') {
+        // `open -a` exits non-zero when no such app is installed.
+        execFile(cmd, args, { env: getExecEnv(), timeout: 10_000 }, (err) => resolve(!err));
+        return;
+      }
+      try {
+        const child = spawn(cmd, args, { detached: true, stdio: 'ignore', env: getExecEnv() });
+        child.once('error', () => resolve(false));
+        child.once('spawn', () => {
+          child.unref();
+          resolve(true);
+        });
+      } catch {
+        resolve(false);
+      }
+    }),
+  exists: (file) => access(file).then(() => true, () => false),
+};
 
 /**
  * wmux web — titlebar toggle ↔ daemon control-plane IPC. Forwards the renderer's
@@ -80,6 +128,7 @@ export function registerWebHandlers(
    * tailnet until someone runs a tailscale command by hand.
    */
   exec?: TailscaleExec,
+  opener: TailscaleOpener = defaultOpener,
 ): () => void {
   const call = async (
     method: string,
@@ -244,6 +293,70 @@ export function registerWebHandlers(
         diagnoseInFlight = null;
       });
       return diagnoseInFlight;
+    }),
+  );
+
+  /**
+   * The Remote page's checklist (and the pre-connect check of a tailnet
+   * address). READ-ONLY: one `tailscale status --json`. Concurrent asks for
+   * the same peer share one read.
+   */
+  const checksInFlight = new Map<string, Promise<TailscaleChecklist>>();
+  const runCheck = async (peer: string): Promise<TailscaleChecklist> => {
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), TAILSCALE_CHECK_TIMEOUT_MS);
+    try {
+      return await checkTailscale({
+        ...(peer ? { peer } : {}),
+        signal: abort.signal,
+        ...(exec ? { exec } : {}),
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  ipcMain.removeHandler(IPC.WEB_TAILSCALE_CHECK);
+  ipcMain.handle(
+    IPC.WEB_TAILSCALE_CHECK,
+    wrapHandler(IPC.WEB_TAILSCALE_CHECK, async (_event, input: unknown): Promise<TailscaleChecklist> => {
+      const raw = input && typeof input === 'object' ? (input as { peer?: unknown }).peer : undefined;
+      // A host name or an address, nothing longer: it is only compared, never run.
+      const peer = typeof raw === 'string' && raw.length <= 253 ? raw.trim() : '';
+      let pending = checksInFlight.get(peer);
+      if (!pending) {
+        pending = runCheck(peer).finally(() => checksInFlight.delete(peer));
+        checksInFlight.set(peer, pending);
+      }
+      return pending;
+    }),
+  );
+
+  /**
+   * The checklist's buttons. Takes a target name, never a path or a URL from
+   * the renderer: `download` opens Tailscale's download page, `app` brings the
+   * installed Tailscale app forward. Neither signs in, connects or installs
+   * anything — that stays the person's own act inside Tailscale.
+   */
+  ipcMain.removeHandler(IPC.WEB_TAILSCALE_OPEN);
+  ipcMain.handle(
+    IPC.WEB_TAILSCALE_OPEN,
+    wrapHandler(IPC.WEB_TAILSCALE_OPEN, async (_event, input: unknown): Promise<WebTailscaleOpenResult> => {
+      const target: WebTailscaleOpenTarget | null = input === 'download' || input === 'app' ? input : null;
+      if (target === null) return { ok: false, opened: null };
+      if (target === 'download') {
+        await opener.openExternal(TAILSCALE_DOWNLOAD_URL);
+        return { ok: true, opened: 'download' };
+      }
+      const launches = tailscaleAppLaunch();
+      if (launches === null) return { ok: false, opened: null };
+      for (const { cmd, args } of launches) {
+        // Absolute candidates (Windows) must exist; `open -a` finds the app itself.
+        if (cmd !== 'open' && !(await opener.exists(cmd))) continue;
+        if (await opener.launch(cmd, args)) return { ok: true, opened: 'app' };
+      }
+      // No app to open: the download page is where it comes from.
+      await opener.openExternal(TAILSCALE_DOWNLOAD_URL);
+      return { ok: true, opened: 'download' };
     }),
   );
 
@@ -625,6 +738,8 @@ export function registerWebHandlers(
   return () => {
     ipcMain.removeHandler(IPC.WEB_STATUS);
     ipcMain.removeHandler(IPC.WEB_DIAGNOSE);
+    ipcMain.removeHandler(IPC.WEB_TAILSCALE_CHECK);
+    ipcMain.removeHandler(IPC.WEB_TAILSCALE_OPEN);
     ipcMain.removeHandler(IPC.WEB_START);
     ipcMain.removeHandler(IPC.WEB_SET_GRANTS);
     ipcMain.removeHandler(IPC.WEB_STOP);

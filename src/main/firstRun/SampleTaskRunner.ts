@@ -39,8 +39,14 @@ import {
 export interface PtyDataSource {
   /** Subscribe to incoming PTY data. Returns an unsubscribe function. */
   onData(handler: (chunk: string) => void): () => void;
-  /** Write data into the PTY. */
-  write(data: string): void;
+  /**
+   * Write data into the PTY. A promise answers whether the bytes reached the
+   * shell (a daemon session's conditional write); `false` is never reported
+   * as a sample task that ran, and `'unknown'` (the write's answer was lost
+   * and the pane could not be read again) never as a failure. `signal` is
+   * the run's: once it aborts, nothing more is written.
+   */
+  write(data: string, signal?: AbortSignal): void | Promise<boolean | 'unknown'>;
   /**
    * Whether the shell is already at an empty prompt it drew before we listened.
    * Read after `onData` subscribed, so a prompt is either in this answer or
@@ -104,18 +110,37 @@ export class SampleTaskRunner {
         return;
       }
 
+      // Set once the command is being written: no second write, and the
+      // handshake timer no longer applies (the write answers for itself).
+      let injecting = false;
       const inject = (): void => {
-        try {
-          source.write(SAMPLE_TASK_COMMAND + '\r');
-        } catch {
-          /* best-effort: write failures still report 'ok' to caller —
-           * the renderer-side fallback handles "Press Enter" UX */
+        if (injecting) return;
+        injecting = true;
+        if (timer !== null) {
+          clearTimeout(timer);
+          timer = null;
         }
-        finish('ok');
+        let delivery: void | Promise<boolean | 'unknown'>;
+        try {
+          delivery = source.write(SAMPLE_TASK_COMMAND + '\r', signal);
+        } catch {
+          finish('undelivered');
+          return;
+        }
+        if (!delivery) {
+          finish('ok');
+          return;
+        }
+        // 'unknown' takes the handshake timeout's path: the wizard offers
+        // "Press Enter to continue", neither success nor an error.
+        delivery.then(
+          (written) => finish(written === 'unknown' ? 'timeout' : written ? 'ok' : 'undelivered'),
+          () => finish('undelivered'),
+        );
       };
 
       const onChunk = (chunk: string): void => {
-        if (disposed) return;
+        if (disposed || injecting) return;
         buffer += chunk;
         // Cap the buffer length, retaining a small overlap so a sequence
         // straddling the slice boundary still matches on the next chunk.

@@ -9,6 +9,8 @@ export default defineConfig({
     ],
     environment: 'node',
     fileParallelism: false,
+    // Same Electron binary install as vitest.config.ts: once, before any file.
+    globalSetup: ['./scripts/vitest-electron-binary.mjs'],
     // Same temp HOME + data suffix as the parallel lane: runtime tests spawn real
     // sessions whose shell integration writes under the wmux data dir.
     setupFiles: ['./src/test-utils/isolateDataDir.ts'],

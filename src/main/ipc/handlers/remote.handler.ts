@@ -40,7 +40,7 @@ import type { RemoteAttentionNotification } from '../../remote/remoteAttention';
 import { isCategoryMuted } from '../../notification/mutedCategories';
 import { toastManager } from '../../notification/ToastManager';
 import { isPcRailHostMuted } from './pcRail.handler';
-import { parseRemoteAttachmentKey, parseWebUrl, remoteAttachmentKey, REMOTE_POLL_INTERVAL_MS, REMOTE_SSH_IPC } from '../../../shared/remoteHosts';
+import { HOST_UNREACHABLE_ERROR, parseRemoteAttachmentKey, parseWebUrl, remoteAttachmentKey, REMOTE_POLL_INTERVAL_MS, REMOTE_SSH_IPC } from '../../../shared/remoteHosts';
 import { normalizeWorkspaceColor } from '../../../shared/workspaceColors';
 import { DEVICE_KIND_HEADER } from '../../../shared/web';
 import { HostStatusProber, combineHostStatus } from '../../remote/hostStatus';
@@ -191,7 +191,7 @@ function probeFailureMessage(probe: Exclude<ProbeResult, { kind: 'ok' }>): strin
     case 'unauthorized':
       return 'token rejected — re-run wmux web on the remote and paste the new URL';
     case 'unreachable':
-      return 'could not reach that host';
+      return HOST_UNREACHABLE_ERROR;
     case 'needs-https':
       return NEEDS_HTTPS_MESSAGE;
     case 'incompatible':

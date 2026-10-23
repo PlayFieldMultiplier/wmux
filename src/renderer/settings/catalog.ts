@@ -104,6 +104,7 @@ export const SETTINGS_CATALOG: SettingsCatalogEntry[] = [
   { id: 'checkupdate', tab: 'general', labelKey: 'settings.checkUpdate', synonyms: 'update now latest release' },
   { id: 'secretguard', tab: 'general', labelKey: 'settings.secretGuard', descKey: 'settings.secretGuardDesc', synonyms: 'git secret password key token env commit push pr 비밀번호 키' },
   { id: 'startup', tab: 'general', labelKey: 'settings.startup', synonyms: 'autostart boot login launch 시작' },
+  { id: 'sleepprevention', tab: 'general', labelKey: 'settings.sleepPrevention', descKey: 'settings.sleepPreventionDesc', synonyms: 'sleep awake suspend standby power caffeine 절전 잠자기 대기 uśpienie czuwanie 睡眠 休眠' },
   { id: 'tutorial', tab: 'general', labelKey: 'settings.restartTutorial', descKey: 'settings.restartTutorialDesc', synonyms: 'onboarding tour help 튜토리얼' },
   { id: 'firstrun', tab: 'general', labelKey: 'settings.firstRunSetup', descKey: 'settings.firstRunSetupDesc', synonyms: 'first run setup doctor diagnose' },
   { id: 'reset', tab: 'general', labelKey: 'settings.reset', synonyms: 'factory default wipe 초기화' },
@@ -206,7 +207,7 @@ export const SETTINGS_CATALOG: SettingsCatalogEntry[] = [
 
   { id: 'lanenable', tab: 'lanlink', labelKey: 'settings.lanlinkEnable', descKey: 'settings.lanlinkEnableDesc', synonyms: 'lan link network peer remote pair' },
   { id: 'lannic', tab: 'lanlink', labelKey: 'settings.lanlinkNic', descKey: 'settings.lanlinkNicDesc', synonyms: 'nic interface ethernet wifi mac' },
-  { id: 'lanpair', tab: 'lanlink', labelKey: 'settings.lanlinkPair', synonyms: 'pin pair join revoke peer' },
+  { id: 'lanpair', tab: 'lanlink', labelKey: 'settings.lanlinkConnections', descKey: 'settings.lanlinkConnectionsDesc', synonyms: 'pin pair join revoke peer connections remote invite 연결 페어링' },
 
   { id: 'version', tab: 'about', labelKey: 'settings.aboutTagline', synonyms: 'version about changelog release 버전' },
   { id: 'stargithub', tab: 'about', labelKey: 'starPrompt.settingsLabel', descKey: 'starPrompt.settingsDescription', synonyms: 'star github support repository 스타 깃허브' },

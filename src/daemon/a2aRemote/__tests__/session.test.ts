@@ -1,7 +1,7 @@
 // JoinerSession pump, with a fake pinned client: what happens when this side
 // cannot record the outcome of a send.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { A2A_REMOTE_PROTOCOL, A2A_ROUTES, type A2aOutboxRecordV1 } from '../../../shared/a2aRemote';
+import { A2A_FEATURE_STREAM_PING, A2A_REMOTE_PROTOCOL, A2A_ROUTES, type A2aOutboxRecordV1 } from '../../../shared/a2aRemote';
 import { JoinerSession, type SessionClient } from '../session';
 import { deliberateSleep } from '../../../test-utils/waitFor';
 
@@ -163,5 +163,47 @@ describe('JoinerSession server features', () => {
     session.start();
     await vi.waitFor(() => expect(seen).toHaveLength(1), { timeout: 5_000 });
     expect(session.features()).toEqual([]);
+  });
+});
+
+describe('JoinerSession stream ping', () => {
+  function pinging(features: string[]): { acks: () => unknown[] } {
+    const acks: unknown[] = [];
+    const client: SessionClient = {
+      requestJson: async (_m, p, body) => {
+        if (p === A2A_ROUTES.ack) acks.push(body);
+        return { status: 200, json: { ok: true, acked: 0 } };
+      },
+      openStream: async function* (_p, { signal }) {
+        yield { event: 'hello', data: { epoch: 'e7', features } };
+        await new Promise<void>((r) => signal.addEventListener('abort', () => r(), { once: true }));
+      },
+    };
+    const session = new JoinerSession({
+      hostId: HOST,
+      host: () => ({ v: 1, hostId: HOST, name: 'B', addresses: ['127.0.0.1'], port: 1, fingerprint256: 'AB', peerId: 'p', createdAt: 'x' }),
+      credential: () => ({ peerId: '22222222-2222-4222-8222-222222222222', secret: 'a'.repeat(43) }),
+      outbox: { epoch: 'e', head: () => undefined, openCount: () => 0, markSent: () => record(), markOutcomeUnknown: () => record(), ack: () => 0, refuse: () => record() },
+      accept: async () => ({ ok: true, duplicate: false }),
+      onRefused: () => undefined,
+      reconcileLinks: async () => undefined,
+      onStatus: () => undefined,
+      timing: { livenessMs: 60_000, pingMs: 50 },
+      client: () => client,
+      log: () => undefined,
+    });
+    sessions.push(session);
+    session.start();
+    return { acks: () => acks };
+  }
+
+  it('acks the stream cursor on a timer to a server that takes stream-ping.1, and never to one that does not', async () => {
+    const yes = pinging([A2A_FEATURE_STREAM_PING]);
+    const no = pinging([]);
+    await deliberateSleep(300, 'real timer: several ping intervals');
+    expect(yes.acks().length).toBeGreaterThanOrEqual(3);
+    // Nothing applied yet on this stream: seq 0 of its epoch, which acks nothing.
+    expect(yes.acks()[0]).toEqual({ cursor: { epoch: 'e7', seq: 0 } });
+    expect(no.acks()).toHaveLength(0);
   });
 });

@@ -1,7 +1,9 @@
 import type http from 'node:http';
 import {
+  A2A_FEATURE_STREAM_PING,
   A2A_FEATURES_HEADER,
   A2A_ROUTES,
+  A2A_STREAM_SILENCE_MS,
   parseA2aFeatures,
   type A2aRemoteDeliverResponse,
   type A2aRemoteErrorCode,
@@ -35,9 +37,16 @@ import { errMsg, isPlainObject } from './storeFile';
  * an `A2aStreamEvent` with `id: <epoch>:<seq>`. The heartbeat is an EVENT, not
  * an SSE comment: the joiner's parser drops comments, so a comment could not
  * tell it the stream is still alive.
+ *
+ * The other way round: a joiner that advertised `stream-ping.1` acks its
+ * cursor on a timer, and its stream ends after `silenceMs` with no request
+ * from it. Writing heartbeats cannot tell a vanished joiner (sleep, Wi-Fi
+ * off, no FIN) from a live one: the kernel buffers the bytes and only gives
+ * up after minutes of retransmits.
  */
 
 export const STREAM_HEARTBEAT_MS = 15_000;
+const ACK_WARN_EVERY_MS = 60_000;
 
 export interface A2aStreamHubDeps {
   outbox: Pick<OutboxStore, 'epoch' | 'pending' | 'ack'>;
@@ -56,6 +65,8 @@ export interface A2aStreamHubDeps {
   /** What THIS PC takes, told to every joiner in the stream's `hello` (`A2aStreamHello.features`). */
   features?: readonly string[];
   heartbeatMs?: number;
+  /** A `stream-ping.1` joiner silent this long loses its stream (default `A2A_STREAM_SILENCE_MS`). */
+  silenceMs?: number;
   log: (level: 'info' | 'warn' | 'error', msg: string) => void;
 }
 
@@ -65,6 +76,8 @@ interface Stream {
   lastSent: number;
   timer: ReturnType<typeof setInterval>;
   since: number;
+  /** Armed only for a joiner that pings: ends the stream when it fires. */
+  silence: ReturnType<typeof setTimeout> | null;
 }
 
 const STATUS_OF: Record<A2aRemoteErrorCode, number> = {
@@ -109,6 +122,8 @@ export class A2aStreamHub {
    * replaces it (a peer that went back to an older build advertises less).
    */
   private readonly features = new Map<HostId, ReadonlySet<string>>();
+  /** When each peer's failed ack was last logged. */
+  private readonly ackWarnAt = new Map<HostId, number>();
 
   constructor(deps: A2aStreamHubDeps) {
     this.deps = deps;
@@ -117,6 +132,7 @@ export class A2aStreamHub {
   /** Add the three delivery routes to the authenticated route table. */
   register(table: A2aRouteTable): void {
     table.add('POST', A2A_ROUTES.messages, async ({ req, res, peer }) => {
+      this.heard(peer.hostId);
       const body = await readJsonBody(req, A2A_REQUEST_BODY_MAX);
       if (body === 'too-large') return tooLarge(req, res);
       let answer: A2aRemoteDeliverResponse;
@@ -130,6 +146,7 @@ export class A2aStreamHub {
     });
 
     table.add('POST', A2A_ROUTES.ack, async ({ req, res, peer }) => {
+      this.heard(peer.hostId);
       const body = await readJsonBody(req, A2A_REQUEST_BODY_MAX);
       if (body === 'too-large') return tooLarge(req, res);
       const cursor = isPlainObject(body) && isPlainObject(body['cursor']) ? body['cursor'] : null;
@@ -140,7 +157,12 @@ export class A2aStreamHub {
       try {
         acked = this.deps.outbox.ack(peer.hostId, { epoch: cursor['epoch'], seq: cursor['seq'] });
       } catch (err) {
-        this.deps.log('warn', `[a2a-remote] ack from ${peer.hostId} not stored: ${errMsg(err)}`);
+        // A pinging joiner acks every 15 s: one line a minute is enough.
+        const now = Date.now();
+        if (now - (this.ackWarnAt.get(peer.hostId) ?? 0) >= ACK_WARN_EVERY_MS) {
+          this.ackWarnAt.set(peer.hostId, now);
+          this.deps.log('warn', `[a2a-remote] ack from ${peer.hostId} not stored: ${errMsg(err)}`);
+        }
         return sendJson(res, 503, { ok: false, error: 'unavailable' });
       }
       sendJson(res, 200, { ok: true, acked });
@@ -180,12 +202,31 @@ export class A2aStreamHub {
 
   // --- internals --------------------------------------------------------------
 
+  /** `hostId`'s joiner made a request: its stream's silence deadline starts over. */
+  private heard(hostId: HostId): void {
+    const stream = this.streams.get(hostId);
+    if (stream?.silence) this.armSilence(hostId, stream);
+  }
+
+  private armSilence(hostId: HostId, stream: Stream): void {
+    if (stream.silence) clearTimeout(stream.silence);
+    const silenceMs = this.deps.silenceMs ?? A2A_STREAM_SILENCE_MS;
+    stream.silence = setTimeout(() => {
+      if (this.streams.get(hostId) !== stream) return;
+      this.deps.log('info', `[a2a-remote] ${hostId}: nothing heard for ${Math.round(silenceMs / 1000)}s, ending its stream`);
+      // destroy, not end: a vanished peer never acknowledges a graceful close.
+      stream.res.destroy();
+    }, silenceMs);
+    stream.silence.unref?.();
+  }
+
   private open(req: http.IncomingMessage, res: http.ServerResponse, hostId: HostId): void {
     const prev = this.streams.get(hostId);
     if (prev) {
       // One stream per peer: the newest connection wins.
       this.streams.delete(hostId);
       clearInterval(prev.timer);
+      if (prev.silence) clearTimeout(prev.silence);
       prev.res.end();
     }
     const advertised = parseA2aFeatures(req.headers[A2A_FEATURES_HEADER]);
@@ -212,12 +253,14 @@ export class A2aStreamHub {
       if (!res.writableEnded) res.write('event: heartbeat\ndata: {}\n\n');
     }, heartbeatMs);
     timer.unref?.();
-    const stream: Stream = { res, lastSent: 0, timer, since: Date.now() };
+    const stream: Stream = { res, lastSent: 0, timer, since: Date.now(), silence: null };
     this.streams.set(hostId, stream);
+    if (advertised.includes(A2A_FEATURE_STREAM_PING)) this.armSilence(hostId, stream);
     // The request socket must not time out while the stream is idle between heartbeats.
     req.socket.setTimeout(0);
     res.on('close', () => {
       clearInterval(timer);
+      if (stream.silence) clearTimeout(stream.silence);
       if (this.streams.get(hostId) === stream) {
         this.streams.delete(hostId);
         this.deps.onStatus?.(hostId, false);

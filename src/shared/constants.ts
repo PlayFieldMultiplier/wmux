@@ -302,6 +302,12 @@ export const IPC = {
   // state that sleep may have invalidated (shared glyph atlas — see
   // terminal/atlasWakeRecovery.ts).
   SYSTEM_RESUMED: 'system:resumed',
+  // Keep the computer awake (main/power/sleepPrevention.ts). Renderer → main:
+  // the saved mode, and whether any local agent is working. Main → renderer:
+  // the window the system slept through, for the missed-runs notice.
+  POWER_SLEEP_MODE: 'power:sleep-mode',
+  POWER_AGENTS_WORKING: 'power:agents-working',
+  POWER_SLEPT: 'power:slept',
   /** Windows' "Animation effects" off, which Chromium's
    *  prefers-reduced-motion misses there (main/reducedMotion.ts). */
   SYSTEM_REDUCED_MOTION: 'system:reduced-motion',
@@ -592,6 +598,17 @@ export const IPC = {
   USAGE_LIMIT_CHANGED: 'usageLimit:changed',
   USAGE_LIMIT_LIST: 'usageLimit:list',
   USAGE_LIMIT_UPDATE: 'usageLimit:update',
+  // Voice dictation (shared/dictation). Renderer → main: the model's state,
+  // its one-time download (only from the owner's consent) and cancel, the
+  // engine's assets once the model checks out, and the microphone's OS
+  // access (macOS asks on first use). Main → renderer: the model's state as
+  // it changes (download progress).
+  DICTATION_STATUS: 'dictation:status',
+  DICTATION_DOWNLOAD: 'dictation:download',
+  DICTATION_CANCEL: 'dictation:cancel',
+  DICTATION_ASSETS: 'dictation:assets',
+  DICTATION_MIC_ACCESS: 'dictation:micAccess',
+  DICTATION_STATE: 'dictation:state',
   // Workspace settle / snooze (shared/workspaceSettle). Main owns and decides
   // the state; renderer → main snapshot read on boot and the user's verbs,
   // main → renderer push of the snapshot plus the changes behind it (toasts).
@@ -748,6 +765,13 @@ export const IPC = {
   A2A_REMOTE_HELD_LIST: 'a2aRemote:held:list',
   A2A_REMOTE_HELD_RETRY: 'a2aRemote:held:retry',
   A2A_REMOTE_HELD_REJECT: 'a2aRemote:held:reject',
+  // Starting new agents from another PC: this PC's policy, and what it received.
+  A2A_REMOTE_SPAWN_POLICY_GET: 'a2aRemote:spawnPolicy:get',
+  A2A_REMOTE_SPAWN_POLICY_SET: 'a2aRemote:spawnPolicy:set',
+  A2A_REMOTE_SPAWN_REQUESTS_LIST: 'a2aRemote:spawnRequests:list',
+  // Asking another PC to start an agent: the ask, and what this PC sent.
+  A2A_REMOTE_SPAWN_ASK: 'a2aRemote:spawn:ask',
+  A2A_REMOTE_SPAWN_OUTGOING: 'a2aRemote:spawn:outgoing',
   // Scheduled runs (renderer → main → daemon `automation.*`). Invoke channels
   // resolve even with no daemon (empty lists / `{ ok:false }`). AUTOMATION_PUSH
   // carries daemon events and connect-time snapshots main → renderer;
@@ -789,6 +813,10 @@ export const IPC = {
   WEB_SET_GRANTS: 'web:setGrants',
   /** Read-only readiness check for the phone wizard: tailscale + server status, changes nothing. */
   WEB_DIAGNOSE: 'web:diagnose',
+  /** The Remote page's Tailscale checklist: one read-only `tailscale status --json`. */
+  WEB_TAILSCALE_CHECK: 'web:tailscaleCheck',
+  /** Open Tailscale's download page or bring the Tailscale app forward; nothing more. */
+  WEB_TAILSCALE_OPEN: 'web:tailscaleOpen',
   // First-run wizard (Plan 1.15) — magical-moment onboarding flow
   FIRST_RUN_CHECK: 'first-run:check',
   FIRST_RUN_COMPLETE: 'first-run:complete',

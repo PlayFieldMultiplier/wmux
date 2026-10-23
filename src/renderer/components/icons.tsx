@@ -581,3 +581,14 @@ export function IconImage({ size = 14 }: { size?: number }) {
     </Icon>
   );
 }
+
+/** A microphone — voice dictation. */
+export function IconMic({ size = 14 }: { size?: number }) {
+  return (
+    <Icon size={size}>
+      <rect x="5" y="1.6" width="4" height="6.8" rx="2" />
+      <path d="M2.8 6.6 a4.2 4.2 0 0 0 8.4 0" />
+      <line x1="7" y1="10.8" x2="7" y2="12.4" />
+    </Icon>
+  );
+}

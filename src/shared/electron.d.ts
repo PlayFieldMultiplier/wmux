@@ -34,6 +34,7 @@ import type {
   LanLinkSendArgs,
   LanLinkPeersListResult,
 } from './lanlink';
+import type { A2aSpawnAskResult, A2aSpawnOutgoingList, A2aSpawnPolicySetResult, A2aSpawnPolicyV1, A2aSpawnRequestSummary, A2aSpawnUiAsk } from './a2aSpawn';
 import type {
   A2aRemoteExposureGetResult,
   A2aRemoteExposureSetResult,
@@ -72,6 +73,9 @@ import type {
   WebGrantArgs,
   WebTerminalInfo,
   WebDiagnosis,
+  WebTailscaleChecklist,
+  WebTailscaleOpenResult,
+  WebTailscaleOpenTarget,
 } from './web';
 import type { BrowserHelpOutcome, BrowserHelpRequestInfo } from './browserHelp';
 import type { PairFailureReason, RemoteAttachmentDescriptor, RemoteErrorReason, RemoteHostPublic, RemoteHostStatus, RemoteWorkspaceSummary, SshAddProgress, SshAddResult, SshConfirmResult, SshServiceResult, SshTunnelState } from './remoteHosts';
@@ -247,6 +251,16 @@ declare global {
          */
         /** `expected`: the list this save was computed from; a different saved list answers `conflict`. */
         exposureSet: (hostId: string, workspaceIds: string[], paneIds: Record<string, string[]>, brain: boolean, expected?: A2aRemoteExposureGetResult['exposure']) => Promise<A2aRemoteExposureSetResult>;
+        /** This PC's policy for other PCs starting new agents here. */
+        spawnPolicyGet: () => Promise<{ policy: A2aSpawnPolicyV1 }>;
+        /** Saves the whole policy; the daemon checks each folder and bumps `version`. A refusal carries the reason. */
+        spawnPolicySet: (policy: A2aSpawnPolicyV1) => Promise<A2aSpawnPolicySetResult>;
+        /** Requests other PCs sent, newest first, without their prompt. */
+        spawnRequestsList: () => Promise<{ requests: A2aSpawnRequestSummary[] }>;
+        /** Ask another PC to start an agent; replies go to `end`, a pane here. Never rejects for a refusal. */
+        spawnAsk: (ask: A2aSpawnUiAsk) => Promise<A2aSpawnAskResult>;
+        /** The requests this PC sent (no prompt text) and what each PC lets it ask for. */
+        spawnOutgoing: () => Promise<A2aSpawnOutgoingList>;
         /** The panes a PC this PC joined shows to it. */
         hostsExposed: (hostId: string) => Promise<A2aRemoteHostsExposedResult>;
         linksList: () => Promise<A2aRemoteLinksListResult>;
@@ -312,6 +326,15 @@ declare global {
          * older preload without it keeps the popover on the plain hub.
          */
         diagnose?: () => Promise<WebDiagnosis>;
+        /**
+         * The Remote page's Tailscale checklist: one read-only
+         * `tailscale status --json`, capped at a few seconds. `peer` (a
+         * MagicDNS name, host name or tailnet address) is the device the last
+         * check looks for; without it any other online device passes.
+         */
+        tailscaleCheck?: (peer?: string) => Promise<WebTailscaleChecklist>;
+        /** Open Tailscale's download page, or bring the Tailscale app forward. Only ever from a click. */
+        tailscaleOpen?: (target: WebTailscaleOpenTarget) => Promise<WebTailscaleOpenResult>;
         /**
          * Mint a fresh pairing code. Needed because a code is single-use and
          * expires, which would otherwise leave no way to pair another device

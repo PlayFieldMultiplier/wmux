@@ -100,6 +100,15 @@ describe('UISlice — pane zoom', () => {
 // SessionData. Test the setters in isolation here; the load-back path is
 // exercised via workspaceSlice.loadSession (covered separately when that
 // path gets test coverage — see T5 report).
+describe('UISlice — usage-limit auto-resume', () => {
+  it('is on by default (owner decision 2026-10-22), and the setter turns it off', () => {
+    const store = createTestStore();
+    expect(store.getState().usageLimitAutoResume).toBe(true);
+    store.getState().setUsageLimitAutoResume(false);
+    expect(store.getState().usageLimitAutoResume).toBe(false);
+  });
+});
+
 describe('UISlice — first-run + cheat sheet flags', () => {
   let store: ReturnType<typeof createTestStore>;
 

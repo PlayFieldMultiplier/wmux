@@ -1,0 +1,823 @@
+{
+ "pass": {
+  "schemaVersion": 1,
+  "scenario": "group-chat-reactions-and-caps",
+  "run": 1,
+  "workspaceId": "ws-1cfb0d19-b583-4847-a273-a3337478b695",
+  "botKeys": {
+   "alpha": "bot-b6cad04d",
+   "beta": "bot-bbc95a0f"
+  },
+  "injected": [
+   {
+    "label": "greeting",
+    "kind": "card",
+    "id": "c-mvjoe7ojb2803edd18",
+    "threadId": "group:grp-c0745cea",
+    "at": 1792681693794
+   },
+   {
+    "label": "plan",
+    "kind": "card",
+    "id": "c-mvjoefu88fd7997c40",
+    "threadId": "group:grp-c0745cea",
+    "at": 1792681704364
+   }
+  ],
+  "harnessErrors": [],
+  "wakes": [
+   {
+    "id": "w-mvjoe7ok-e5e0337d",
+    "botId": "bot-b6cad04d",
+    "workspaceId": "ws-1cfb0d19-b583-4847-a273-a3337478b695",
+    "reason": {
+     "kind": "human",
+     "text": "Nothing to do yet.",
+     "source": "desktop",
+     "clientMessageId": "c-mvjoe7ojb2803edd18",
+     "runId": "run-c-mvjoe7ojb2803edd18",
+     "room": true,
+     "roomWide": true,
+     "roomAnswerer": "bot-b6cad04d"
+    },
+    "threadId": "group:grp-c0745cea",
+    "priority": 0,
+    "enqueuedAt": 1792681693796,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mvjoe7ok-356190cc",
+    "botId": "bot-bbc95a0f",
+    "workspaceId": "ws-1cfb0d19-b583-4847-a273-a3337478b695",
+    "reason": {
+     "kind": "human",
+     "text": "Nothing to do yet.",
+     "source": "desktop",
+     "clientMessageId": "c-mvjoe7ojb2803edd18",
+     "runId": "run-c-mvjoe7ojb2803edd18",
+     "room": true,
+     "roomWide": true,
+     "roomAnswerer": "bot-b6cad04d"
+    },
+    "threadId": "group:grp-c0745cea",
+    "priority": 0,
+    "enqueuedAt": 1792681693796,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mvjoefu9-69c0aa4e",
+    "botId": "bot-b6cad04d",
+    "workspaceId": "ws-1cfb0d19-b583-4847-a273-a3337478b695",
+    "reason": {
+     "kind": "human",
+     "text": "Alpha, work it out with beta.",
+     "source": "desktop",
+     "clientMessageId": "c-mvjoefu88fd7997c40",
+     "runId": "run-c-mvjoefu88fd7997c40"
+    },
+    "threadId": "group:grp-c0745cea",
+    "priority": 0,
+    "enqueuedAt": 1792681704369,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mvjoefym-e75c8c93",
+    "botId": "bot-bbc95a0f",
+    "workspaceId": "ws-1cfb0d19-b583-4847-a273-a3337478b695",
+    "reason": {
+     "kind": "mention",
+     "cardId": "c-mvjoefylfab11c5e83",
+     "handoffId": "h-mvjoefymba584212b909",
+     "fromBotId": "bot-b6cad04d"
+    },
+    "threadId": "group:grp-c0745cea",
+    "priority": 1,
+    "enqueuedAt": 1792681704526,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mvjoeg28-3f806222",
+    "botId": "bot-b6cad04d",
+    "workspaceId": "ws-1cfb0d19-b583-4847-a273-a3337478b695",
+    "reason": {
+     "kind": "mention",
+     "cardId": "c-mvjoeg28aa9f8b7af2",
+     "handoffId": "h-mvjoeg28f8dfd4461be4",
+     "fromBotId": "bot-bbc95a0f"
+    },
+    "threadId": "group:grp-c0745cea",
+    "priority": 1,
+    "enqueuedAt": 1792681704656,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mvjoeg2a-48c63585",
+    "botId": "bot-bbc95a0f",
+    "workspaceId": "ws-1cfb0d19-b583-4847-a273-a3337478b695",
+    "reason": {
+     "kind": "mention",
+     "cardId": "c-mvjoeg2a9867a3401d",
+     "handoffId": "h-mvjoeg2ab34a10c7c5d4",
+     "fromBotId": "bot-b6cad04d"
+    },
+    "threadId": "group:grp-c0745cea",
+    "priority": 1,
+    "enqueuedAt": 1792681704658,
+    "attempts": 1,
+    "state": "done"
+   },
+   {
+    "id": "w-mvjoeg2c-a0750021",
+    "botId": "bot-b6cad04d",
+    "workspaceId": "ws-1cfb0d19-b583-4847-a273-a3337478b695",
+    "reason": {
+     "kind": "mention",
+     "cardId": "c-mvjoeg2c2ab36cad53",
+     "handoffId": "h-mvjoeg2c8bb34220ed4b",
+     "fromBotId": "bot-bbc95a0f"
+    },
+    "threadId": "group:grp-c0745cea",
+    "priority": 1,
+    "enqueuedAt": 1792681704660,
+    "attempts": 1,
+    "state": "done"
+   }
+  ],
+  "handoffs": [
+   {
+    "version": 1,
+    "id": "h-mvjoefymba584212b909",
+    "runId": "run-c-mvjoefu88fd7997c40",
+    "threadId": "group:grp-c0745cea",
+    "depth": 1,
+    "hopsInRun": 1,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-1cfb0d19-b583-4847-a273-a3337478b695",
+     "botId": "bot-b6cad04d"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-1cfb0d19-b583-4847-a273-a3337478b695",
+     "botId": "bot-bbc95a0f"
+    },
+    "kind": "message",
+    "attribution": {
+     "originator": {
+      "kind": "human"
+     },
+     "chain": []
+    },
+    "landing": "wake",
+    "payload": {
+     "title": "Alpha to beta",
+     "body": "Alpha to beta.",
+     "refs": {
+      "messageId": "c-mvjoefylfab11c5e83"
+     }
+    },
+    "status": "delivered",
+    "clientHandoffId": "mention:c-mvjoefylfab11c5e83:bot-bbc95a0f",
+    "guestSourced": false,
+    "createdAt": 1792681704526,
+    "updatedAt": 1792681704529
+   },
+   {
+    "version": 1,
+    "id": "h-mvjoeg28f8dfd4461be4",
+    "runId": "run-c-mvjoefu88fd7997c40",
+    "threadId": "group:grp-c0745cea",
+    "depth": 2,
+    "hopsInRun": 2,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-1cfb0d19-b583-4847-a273-a3337478b695",
+     "botId": "bot-bbc95a0f"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-1cfb0d19-b583-4847-a273-a3337478b695",
+     "botId": "bot-b6cad04d"
+    },
+    "kind": "message",
+    "attribution": {
+     "originator": {
+      "kind": "human"
+     },
+     "chain": [
+      "h-mvjoefymba584212b909"
+     ]
+    },
+    "landing": "wake",
+    "payload": {
+     "title": "Beta to alpha",
+     "body": "Beta to alpha.",
+     "refs": {
+      "messageId": "c-mvjoeg28aa9f8b7af2"
+     }
+    },
+    "status": "delivered",
+    "clientHandoffId": "mention:c-mvjoeg28aa9f8b7af2:bot-b6cad04d",
+    "guestSourced": false,
+    "createdAt": 1792681704656,
+    "updatedAt": 1792681704659
+   },
+   {
+    "version": 1,
+    "id": "h-mvjoeg2ab34a10c7c5d4",
+    "runId": "run-c-mvjoefu88fd7997c40",
+    "threadId": "group:grp-c0745cea",
+    "depth": 3,
+    "hopsInRun": 3,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-1cfb0d19-b583-4847-a273-a3337478b695",
+     "botId": "bot-b6cad04d"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-1cfb0d19-b583-4847-a273-a3337478b695",
+     "botId": "bot-bbc95a0f"
+    },
+    "kind": "message",
+    "attribution": {
+     "originator": {
+      "kind": "human"
+     },
+     "chain": [
+      "h-mvjoefymba584212b909",
+      "h-mvjoeg28f8dfd4461be4"
+     ]
+    },
+    "landing": "wake",
+    "payload": {
+     "title": "Alpha again",
+     "body": "Alpha again.",
+     "refs": {
+      "messageId": "c-mvjoeg2a9867a3401d"
+     }
+    },
+    "status": "delivered",
+    "clientHandoffId": "mention:c-mvjoeg2a9867a3401d:bot-bbc95a0f",
+    "guestSourced": false,
+    "createdAt": 1792681704658,
+    "updatedAt": 1792681704662
+   },
+   {
+    "version": 1,
+    "id": "h-mvjoeg2c8bb34220ed4b",
+    "runId": "run-c-mvjoefu88fd7997c40",
+    "threadId": "group:grp-c0745cea",
+    "depth": 4,
+    "hopsInRun": 4,
+    "from": {
+     "kind": "bot",
+     "workspaceId": "ws-1cfb0d19-b583-4847-a273-a3337478b695",
+     "botId": "bot-bbc95a0f"
+    },
+    "to": {
+     "kind": "bot",
+     "workspaceId": "ws-1cfb0d19-b583-4847-a273-a3337478b695",
+     "botId": "bot-b6cad04d"
+    },
+    "kind": "message",
+    "attribution": {
+     "originator": {
+      "kind": "human"
+     },
+     "chain": [
+      "h-mvjoefymba584212b909",
+      "h-mvjoeg28f8dfd4461be4",
+      "h-mvjoeg2ab34a10c7c5d4"
+     ]
+    },
+    "landing": "wake",
+    "payload": {
+     "title": "Beta to alpha",
+     "body": "Beta to alpha.",
+     "refs": {
+      "messageId": "c-mvjoeg2c2ab36cad53"
+     }
+    },
+    "status": "delivered",
+    "clientHandoffId": "mention:c-mvjoeg2c2ab36cad53:bot-b6cad04d",
+    "guestSourced": false,
+    "createdAt": 1792681704660,
+    "updatedAt": 1792681704663
+   }
+  ],
+  "cards": [
+   {
+    "version": 1,
+    "id": "c-mvjoe7ojb2803edd18",
+    "seq": 1,
+    "workspaceId": "ws-1cfb0d19-b583-4847-a273-a3337478b695",
+    "threadId": "group:grp-c0745cea",
+    "kind": "human",
+    "at": 1792681693795,
+    "actor": {
+     "kind": "human"
+    },
+    "title": "Morning, both",
+    "body": "Nothing to do yet.",
+    "refs": {
+     "botIds": [
+      "bot-b6cad04d",
+      "bot-bbc95a0f"
+     ]
+    },
+    "routed": {
+     "answerer": "bot-b6cad04d"
+    },
+    "reactions": [
+     {
+      "botId": "bot-b6cad04d",
+      "emoji": "❤️"
+     },
+     {
+      "botId": "bot-bbc95a0f",
+      "emoji": "✅",
+      "ack": true
+     }
+    ]
+   },
+   {
+    "version": 1,
+    "id": "c-mvjoefu88fd7997c40",
+    "seq": 2,
+    "workspaceId": "ws-1cfb0d19-b583-4847-a273-a3337478b695",
+    "threadId": "group:grp-c0745cea",
+    "kind": "human",
+    "at": 1792681704368,
+    "actor": {
+     "kind": "human"
+    },
+    "title": "Plan the release",
+    "body": "Alpha, work it out with beta.",
+    "refs": {
+     "botId": "bot-b6cad04d",
+     "botIds": [
+      "bot-b6cad04d"
+     ]
+    }
+   },
+   {
+    "version": 1,
+    "id": "c-mvjoefylfab11c5e83",
+    "seq": 3,
+    "workspaceId": "ws-1cfb0d19-b583-4847-a273-a3337478b695",
+    "threadId": "group:grp-c0745cea",
+    "kind": "opinion",
+    "at": 1792681704525,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-1cfb0d19-b583-4847-a273-a3337478b695",
+     "botId": "bot-b6cad04d"
+    },
+    "title": "Alpha to beta",
+    "body": "Alpha to beta.",
+    "refs": {
+     "botIds": [
+      "bot-bbc95a0f"
+     ]
+    },
+    "replyTo": "c-mvjoefu88fd7997c40",
+    "clientPostId": "wake:w-mvjoefu9-69c0aa4e:1"
+   },
+   {
+    "version": 1,
+    "id": "c-mvjoeg28aa9f8b7af2",
+    "seq": 4,
+    "workspaceId": "ws-1cfb0d19-b583-4847-a273-a3337478b695",
+    "threadId": "group:grp-c0745cea",
+    "kind": "opinion",
+    "at": 1792681704656,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-1cfb0d19-b583-4847-a273-a3337478b695",
+     "botId": "bot-bbc95a0f"
+    },
+    "title": "Beta to alpha",
+    "body": "Beta to alpha.",
+    "refs": {
+     "botIds": [
+      "bot-b6cad04d"
+     ]
+    },
+    "clientPostId": "wake:w-mvjoefym-e75c8c93:1"
+   },
+   {
+    "version": 1,
+    "id": "c-mvjoeg2a9867a3401d",
+    "seq": 5,
+    "workspaceId": "ws-1cfb0d19-b583-4847-a273-a3337478b695",
+    "threadId": "group:grp-c0745cea",
+    "kind": "opinion",
+    "at": 1792681704658,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-1cfb0d19-b583-4847-a273-a3337478b695",
+     "botId": "bot-b6cad04d"
+    },
+    "title": "Alpha again",
+    "body": "Alpha again.",
+    "refs": {
+     "botIds": [
+      "bot-bbc95a0f"
+     ]
+    },
+    "clientPostId": "wake:w-mvjoeg28-3f806222:1"
+   },
+   {
+    "version": 1,
+    "id": "c-mvjoeg2c2ab36cad53",
+    "seq": 6,
+    "workspaceId": "ws-1cfb0d19-b583-4847-a273-a3337478b695",
+    "threadId": "group:grp-c0745cea",
+    "kind": "opinion",
+    "at": 1792681704660,
+    "actor": {
+     "kind": "bot",
+     "workspaceId": "ws-1cfb0d19-b583-4847-a273-a3337478b695",
+     "botId": "bot-bbc95a0f"
+    },
+    "title": "Beta to alpha",
+    "body": "Beta to alpha.",
+    "refs": {
+     "botIds": [
+      "bot-b6cad04d"
+     ]
+    },
+    "clientPostId": "wake:w-mvjoeg2a-48c63585:1",
+    "reactions": [
+     {
+      "botId": "bot-b6cad04d",
+      "emoji": "🙌",
+      "ack": true
+     }
+    ]
+   }
+  ],
+  "records": [
+   {
+    "label": "make the group",
+    "result": {
+     "ok": true,
+     "group": {
+      "id": "grp-c0745cea",
+      "workspaceId": "ws-1cfb0d19-b583-4847-a273-a3337478b695",
+      "name": "Pair",
+      "memberIds": [
+       "bot-b6cad04d",
+       "bot-bbc95a0f"
+      ],
+      "threadId": "group:grp-c0745cea",
+      "createdAt": 1792681693792,
+      "updatedAt": 1792681693792
+     }
+    }
+   }
+  ],
+  "sources": {
+   "facts": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "wakes": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "handoffs": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "bots": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "settings": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "repoWatch": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "ledger": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "verdicts": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "effects": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "approvals": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "approvalRules": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "decisions": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "routines": {
+    "present": false,
+    "ok": false,
+    "errors": 0
+   },
+   "cards": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "workers": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   },
+   "ghCalls": {
+    "present": true,
+    "ok": true,
+    "errors": 0
+   }
+  },
+  "bots": [
+   {
+    "id": "bot-b6cad04d",
+    "workspaceId": "ws-1cfb0d19-b583-4847-a273-a3337478b695",
+    "role": "lead",
+    "name": "Developer"
+   },
+   {
+    "id": "bot-bbc95a0f",
+    "workspaceId": "ws-1cfb0d19-b583-4847-a273-a3337478b695",
+    "role": "triage",
+    "name": "Issue"
+   }
+  ],
+  "facts": [
+   {
+    "kind": "human.message",
+    "ref": {
+     "botId": "bot-b6cad04d",
+     "messageId": "c-mvjoe7ojb2803edd18:bot-b6cad04d"
+    },
+    "payload": {
+     "text": "Nothing to do yet.",
+     "cardId": "c-mvjoe7ojb2803edd18",
+     "threadId": "group:grp-c0745cea",
+     "source": "desktop"
+    }
+   },
+   {
+    "kind": "human.message",
+    "ref": {
+     "botId": "bot-bbc95a0f",
+     "messageId": "c-mvjoe7ojb2803edd18:bot-bbc95a0f"
+    },
+    "payload": {
+     "text": "Nothing to do yet.",
+     "cardId": "c-mvjoe7ojb2803edd18",
+     "threadId": "group:grp-c0745cea",
+     "source": "desktop"
+    }
+   },
+   {
+    "kind": "human.message",
+    "ref": {
+     "botId": "bot-b6cad04d",
+     "messageId": "c-mvjoefu88fd7997c40:bot-b6cad04d"
+    },
+    "payload": {
+     "text": "Alpha, work it out with beta.",
+     "cardId": "c-mvjoefu88fd7997c40",
+     "threadId": "group:grp-c0745cea",
+     "source": "desktop"
+    }
+   },
+   {
+    "kind": "handoff.received",
+    "ref": {
+     "handoffId": "h-mvjoefymba584212b909",
+     "botId": "bot-bbc95a0f"
+    },
+    "payload": {
+     "handoffKind": "message",
+     "title": "Alpha to beta",
+     "threadId": "group:grp-c0745cea",
+     "runId": "run-c-mvjoefu88fd7997c40",
+     "depth": 1,
+     "hopsInRun": 1,
+     "fromLabel": "Developer",
+     "toLabel": "Issue",
+     "fromWorkspaceId": "ws-1cfb0d19-b583-4847-a273-a3337478b695",
+     "toWorkspaceId": "ws-1cfb0d19-b583-4847-a273-a3337478b695",
+     "mention": true
+    }
+   },
+   {
+    "kind": "handoff.received",
+    "ref": {
+     "handoffId": "h-mvjoeg28f8dfd4461be4",
+     "botId": "bot-b6cad04d"
+    },
+    "payload": {
+     "handoffKind": "message",
+     "title": "Beta to alpha",
+     "threadId": "group:grp-c0745cea",
+     "runId": "run-c-mvjoefu88fd7997c40",
+     "depth": 2,
+     "hopsInRun": 2,
+     "fromLabel": "Issue",
+     "toLabel": "Developer",
+     "fromWorkspaceId": "ws-1cfb0d19-b583-4847-a273-a3337478b695",
+     "toWorkspaceId": "ws-1cfb0d19-b583-4847-a273-a3337478b695",
+     "mention": true
+    }
+   },
+   {
+    "kind": "handoff.received",
+    "ref": {
+     "handoffId": "h-mvjoeg2ab34a10c7c5d4",
+     "botId": "bot-bbc95a0f"
+    },
+    "payload": {
+     "handoffKind": "message",
+     "title": "Alpha again",
+     "threadId": "group:grp-c0745cea",
+     "runId": "run-c-mvjoefu88fd7997c40",
+     "depth": 3,
+     "hopsInRun": 3,
+     "fromLabel": "Developer",
+     "toLabel": "Issue",
+     "fromWorkspaceId": "ws-1cfb0d19-b583-4847-a273-a3337478b695",
+     "toWorkspaceId": "ws-1cfb0d19-b583-4847-a273-a3337478b695",
+     "mention": true
+    }
+   },
+   {
+    "kind": "handoff.received",
+    "ref": {
+     "handoffId": "h-mvjoeg2c8bb34220ed4b",
+     "botId": "bot-b6cad04d"
+    },
+    "payload": {
+     "handoffKind": "message",
+     "title": "Beta to alpha",
+     "threadId": "group:grp-c0745cea",
+     "runId": "run-c-mvjoefu88fd7997c40",
+     "depth": 4,
+     "hopsInRun": 4,
+     "fromLabel": "Issue",
+     "toLabel": "Developer",
+     "fromWorkspaceId": "ws-1cfb0d19-b583-4847-a273-a3337478b695",
+     "toWorkspaceId": "ws-1cfb0d19-b583-4847-a273-a3337478b695",
+     "mention": true
+    }
+   }
+  ],
+  "stub": {
+   "alpha": [
+    {
+     "at": 1792681704527,
+     "event": "tool",
+     "sessionId": "stub-a3ceb497a34b",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mvjoefylfab11c5e83\",\n    \"seq\": 3,\n    \"workspaceId\": \"ws-1cfb0d19-b583-4847-a273-a3337478b695\",\n    \"threadId\": \"group:grp-c0745cea\",\n    \"kind\": \"opinion\",\n    \"at\": 1792681704525,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-1cfb0d19-b583-4847-a273-a3337478b695\",\n      \"botId\": \"bot-b6cad04d\"\n    },\n    \"title\": \"Alpha to beta\",\n    \"body\": \"Alpha to beta.\",\n    \"refs\": {\n      \"botIds\": [\n        \"bot-bbc95a0f\"\n      ]\n    },\n    \"replyTo\": \"c-mvjoefu88fd7997c40\",\n    \"clientPostId\": \"wake:w-mvjoefu9-69c0aa4e:1\"\n  },\n  \"mentions\": [\n    {\n      \"botId\": \"bot-bbc95a0f\",\n      \"ok\": true,\n      \"handoffId\": \"h-mvjoefymba584212b909\"\n    }\n  ]\n}"
+    },
+    {
+     "at": 1792681704659,
+     "event": "tool",
+     "sessionId": "stub-a3ceb497a34b",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mvjoeg2a9867a3401d\",\n    \"seq\": 5,\n    \"workspaceId\": \"ws-1cfb0d19-b583-4847-a273-a3337478b695\",\n    \"threadId\": \"group:grp-c0745cea\",\n    \"kind\": \"opinion\",\n    \"at\": 1792681704658,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-1cfb0d19-b583-4847-a273-a3337478b695\",\n      \"botId\": \"bot-b6cad04d\"\n    },\n    \"title\": \"Alpha again\",\n    \"body\": \"Alpha again.\",\n    \"refs\": {\n      \"botIds\": [\n        \"bot-bbc95a0f\"\n      ]\n    },\n    \"clientPostId\": \"wake:w-mvjoeg28-3f806222:1\"\n  },\n  \"mentions\": [\n    {\n      \"botId\": \"bot-bbc95a0f\",\n      \"ok\": true,\n      \"handoffId\": \"h-mvjoeg2ab34a10c7c5d4\"\n    }\n  ]\n}"
+    },
+    {
+     "at": 1792681704663,
+     "event": "tool",
+     "sessionId": "stub-a3ceb497a34b",
+     "name": "room_post",
+     "ok": false,
+     "text": "{\n  \"ok\": false,\n  \"code\": \"not_now\",\n  \"message\": \"you have posted 2 cards in this group chat since the owner's last message here. End the turn and leave the rest to the others.\"\n}"
+    }
+   ],
+   "beta": [
+    {
+     "at": 1792681704657,
+     "event": "tool",
+     "sessionId": "stub-e8f0c1f0d9ac",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mvjoeg28aa9f8b7af2\",\n    \"seq\": 4,\n    \"workspaceId\": \"ws-1cfb0d19-b583-4847-a273-a3337478b695\",\n    \"threadId\": \"group:grp-c0745cea\",\n    \"kind\": \"opinion\",\n    \"at\": 1792681704656,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-1cfb0d19-b583-4847-a273-a3337478b695\",\n      \"botId\": \"bot-bbc95a0f\"\n    },\n    \"title\": \"Beta to alpha\",\n    \"body\": \"Beta to alpha.\",\n    \"refs\": {\n      \"botIds\": [\n        \"bot-b6cad04d\"\n      ]\n    },\n    \"clientPostId\": \"wake:w-mvjoefym-e75c8c93:1\"\n  },\n  \"mentions\": [\n    {\n      \"botId\": \"bot-b6cad04d\",\n      \"ok\": true,\n      \"handoffId\": \"h-mvjoeg28f8dfd4461be4\"\n    }\n  ]\n}"
+    },
+    {
+     "at": 1792681704661,
+     "event": "tool",
+     "sessionId": "stub-e8f0c1f0d9ac",
+     "name": "room_post",
+     "ok": true,
+     "text": "{\n  \"ok\": true,\n  \"card\": {\n    \"version\": 1,\n    \"id\": \"c-mvjoeg2c2ab36cad53\",\n    \"seq\": 6,\n    \"workspaceId\": \"ws-1cfb0d19-b583-4847-a273-a3337478b695\",\n    \"threadId\": \"group:grp-c0745cea\",\n    \"kind\": \"opinion\",\n    \"at\": 1792681704660,\n    \"actor\": {\n      \"kind\": \"bot\",\n      \"workspaceId\": \"ws-1cfb0d19-b583-4847-a273-a3337478b695\",\n      \"botId\": \"bot-bbc95a0f\"\n    },\n    \"title\": \"Beta to alpha\",\n    \"body\": \"Beta to alpha.\",\n    \"refs\": {\n      \"botIds\": [\n        \"bot-b6cad04d\"\n      ]\n    },\n    \"clientPostId\": \"wake:w-mvjoeg2a-48c63585:1\"\n  },\n  \"mentions\": [\n    {\n      \"botId\": \"bot-b6cad04d\",\n      \"ok\": true,\n      \"handoffId\": \"h-mvjoeg2c8bb34220ed4b\"\n    }\n  ]\n}"
+    }
+   ]
+  }
+ },
+ "fail": [
+  {
+   "why": "the reaction-only turn left no reaction",
+   "failing": [
+    "reaction_on_greeting"
+   ],
+   "mutate": [
+    {
+     "op": "remove",
+     "path": "cards.0.reactions.0"
+    }
+   ]
+  },
+  {
+   "why": "the silent bot left no acknowledgement",
+   "failing": [
+    "silence_acknowledged"
+   ],
+   "mutate": [
+    {
+     "op": "remove",
+     "path": "cards.0.reactions.1"
+    }
+   ]
+  },
+  {
+   "why": "a third post went through",
+   "failing": [
+    "two_posts_each"
+   ],
+   "mutate": [
+    {
+     "op": "push",
+     "path": "cards",
+     "value": {
+      "version": 1,
+      "id": "c-extra",
+      "seq": 7,
+      "workspaceId": "ws-1cfb0d19-b583-4847-a273-a3337478b695",
+      "threadId": "group:grp-c0745cea",
+      "kind": "opinion",
+      "at": 1792681704525,
+      "actor": {
+       "kind": "bot",
+       "workspaceId": "ws-1cfb0d19-b583-4847-a273-a3337478b695",
+       "botId": "bot-b6cad04d"
+      },
+      "title": "Alpha a third time",
+      "body": "Alpha to beta.",
+      "refs": {
+       "botIds": [
+        "bot-bbc95a0f"
+       ]
+      },
+      "replyTo": "c-mvjoefu88fd7997c40",
+      "clientPostId": "wake:w-mvjoefu9-69c0aa4e:1"
+     }
+    }
+   ]
+  },
+  {
+   "why": "the refused turn left no acknowledgement",
+   "failing": [
+    "refused_turn_acknowledges"
+   ],
+   "mutate": [
+    {
+     "op": "remove",
+     "path": "cards.5.reactions"
+    }
+   ]
+  }
+ ]
+}

@@ -44,7 +44,7 @@ import { quitAndStopSessions, type QuitAndStopCallbacks } from '../quit/quitAndS
  * `appMenu.template.os.test.ts` fails when package.json's major drifts from this.
  * Re-probe with `npx electron scripts/probe-menu-role-accelerators.js`.
  */
-export const PROBED_ELECTRON_MAJOR = 41;
+export const PROBED_ELECTRON_MAJOR = 42;
 
 /**
  * Accelerators Electron attaches to a role when the template does not spell one
@@ -56,9 +56,13 @@ export const PROBED_ELECTRON_MAJOR = 41;
  * `all` is the platform-agnostic string Electron itself reports (it hands back
  * `CommandOrControl+W`, not a resolved `Cmd+W`); per-platform keys are only for
  * the roles that genuinely differ. Not hand-copied from Electron's source —
- * read out of the running Electron 41 build by the probe script above, which is
- * how `quit` was caught: it has NO accelerator on Windows (Alt+F4 is the OS
- * gesture), only on Linux.
+ * read out of a running Electron build by the probe script above, which is how
+ * `quit` was caught: it has NO accelerator on Windows (Alt+F4 is the OS
+ * gesture), only on Linux. The probe reports the platform it runs on, so each
+ * column is only as fresh as its last probe: win32 was re-probed on Electron
+ * 42.11.3; darwin and linux were last probed on Electron 41. darwin's
+ * `pasteAndMatchStyle` was corrected from Electron 42.11.3's own role table
+ * (`Cmd+Option+Shift+V` on macOS), which no darwin probe had caught.
  */
 type RoleAccelerator = { all?: string; darwin?: string; win32?: string; linux?: string };
 
@@ -79,7 +83,7 @@ export const ROLE_DEFAULT_ACCELERATORS: Readonly<Record<string, RoleAccelerator>
   cut: { all: 'CommandOrControl+X' },
   copy: { all: 'CommandOrControl+C' },
   paste: { all: 'CommandOrControl+V' },
-  pasteAndMatchStyle: { all: 'Shift+CommandOrControl+V' },
+  pasteAndMatchStyle: { darwin: 'Cmd+Option+Shift+V', win32: 'Shift+CommandOrControl+V', linux: 'Shift+CommandOrControl+V' },
   selectAll: { all: 'CommandOrControl+A' },
   reload: { all: 'CmdOrCtrl+R' },
   forceReload: { all: 'Shift+CmdOrCtrl+R' },

@@ -1,5 +1,8 @@
 // ─── The Mochi crew: the bots' characters ────────────────────────────────────
 //
+// Copyright (c) 2026 openwong2kim. All rights reserved. NOT under the MIT
+// License: see ASSETS-LICENSE.md.
+//
 // GENERATED from the owner-approved "Mochi Orb Crew v2" design (2026-10-16,
 // drawn by Grok). One character per bot identity colour: MOCHI_CHARACTERS[i]
 // wears BOT_IDENTITY_HUES[i] (BotAvatar.tsx) as its body colour. Each art

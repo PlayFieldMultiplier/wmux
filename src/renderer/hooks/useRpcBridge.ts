@@ -37,6 +37,7 @@ import {
 } from '../../shared/workerLaunch';
 import { handleCompanyRpc } from '../../company/renderer/rpcHandlers';
 import { t } from '../i18n';
+import { parseRemoteSpawnedBy, remoteSpawnToastMessage } from '../utils/remoteSpawnedBy';
 import { formatA2aMessage, formatA2aBroadcast, sanitizeA2aName, type A2aFormatOptions } from '../utils/a2aFormat';
 import type { A2aPriority } from '../utils/a2aFormat';
 import { findPendingExecuteRequest, requestExecuteApproval, requestFanOutApproval, requestTaskApproval } from '../utils/executeApprovalGate';
@@ -899,9 +900,9 @@ function bodyWithImages(text: string, images: readonly A2aDeliveredImage[]): (pt
   return (ptyId) => withImageFooter(body, images, panePathFor(ptyId));
 }
 
-export function buildA2aNudge(taskId: string, senderName: string, kind: 'new' | 'reply', title?: string): string {
+export function buildA2aNudge(taskId: string, senderName: string, kind: 'new' | 'reply' | 'completed' | 'failed', title?: string): string {
   const id8 = taskId.replace(/^task[-_]?/, '').slice(0, 8);
-  const what = kind === 'new' ? 'new A2A task' : 'reply on A2A task';
+  const what = kind === 'new' ? 'new A2A task' : kind === 'reply' ? 'reply on A2A task' : `A2A task ${kind}:`;
   const preview = kind === 'new' && title ? nudgeTitlePreview(title) : '';
   const about = preview ? ` — title: "${preview}"` : '';
   const safeId = taskId.replace(/[^A-Za-z0-9_-]/g, '');
@@ -1103,8 +1104,15 @@ async function handleRemoteTaskSend(params: RpcParams): Promise<A2aRemoteDeliver
  * RemoteA2aBridge only. A reply is written to our local pane the way a local
  * reply is (a one-line pointer to a live agent, the body otherwise), held under
  * the same pane rules as a new remote task. A state change follows the local
- * convention for status updates: no pane write, the event-bus pointer only.
+ * convention for status updates (the event-bus pointer), except that a task we
+ * sent which the peer completed or failed also leaves a one-line pointer in our
+ * pane: a sender on another PC has no other sign of it, and the ended task is
+ * collected 30 minutes later.
  */
+/** Remote state items this renderer already teed to the event bus (task id, item id). */
+const announcedRemoteStates = new Set<string>();
+const ANNOUNCED_REMOTE_STATES_MAX = 1000;
+
 async function handleRemoteNotify(params: RpcParams): Promise<A2aRemoteDeliveryResult> {
   const task = params.task as Task | undefined;
   const messageId = typeof params.messageId === 'string' ? params.messageId : '';
@@ -1115,15 +1123,39 @@ async function handleRemoteNotify(params: RpcParams): Promise<A2aRemoteDeliveryR
   const item = marker?.inbox?.find((i) => i.messageId === messageId);
   if (!marker || marker.v !== 1 || !item) return { error: `${A2A_REMOTE_NOTIFY_METHOD}: no such item` };
 
+  const side = localSideOf(task);
   if (item.kind === 'state') {
-    useStore.getState().applyDaemonTaskUpdate(task);
-    const cached = useStore.getState().getTask(task.id) ?? task;
-    const state = task.status.state;
-    emitA2aTaskEvent(cached, state === 'canceled' ? 'cancelled' : 'updated', state);
-    return { ok: true, delivered: true };
+    // Announced once per item: a handover main retries (a thrown or timed-out
+    // call) must not tee the same state to the event bus again.
+    const itemKey = `${task.id}\0${messageId}`;
+    if (!announcedRemoteStates.has(itemKey)) {
+      announcedRemoteStates.add(itemKey);
+      if (announcedRemoteStates.size > ANNOUNCED_REMOTE_STATES_MAX) {
+        announcedRemoteStates.delete(announcedRemoteStates.values().next().value as string);
+      }
+      useStore.getState().applyDaemonTaskUpdate(task);
+      const cached = useStore.getState().getTask(task.id) ?? task;
+      const state = task.status.state;
+      emitA2aTaskEvent(cached, state === 'canceled' ? 'cancelled' : 'updated', state);
+    }
+    // The item's own state, not the task's: an earlier `working` item handed
+    // over late must not announce the end.
+    const ended = item.state === 'completed' || item.state === 'failed' ? item.state : undefined;
+    if (!ended || side !== 'from') return { ok: true, delivered: true };
+    // The pointer is one best-effort try. The event above already announced
+    // the end and the task stays queryable, so a pane that is gone, holds
+    // another program or runs no agent gets no pointer, and nothing is held
+    // or retried for it.
+    const target = remoteAnchorTarget(task.metadata.from, params.resnapshot === true);
+    if ('held' in target) return { ok: true, delivered: true };
+    const pointer = buildA2aNudge(task.id, sanitizeRemoteText(task.metadata.to.name), ended);
+    const liveMeta = deliveryLiveMeta(useStore.getState().surfaceAgent, target.pty, target.ws.metadata);
+    const written = await writeRemoteDelivery({ ...task.metadata.from, ptyId: target.pty }, target, () => (isLiveTuiAgent(liveMeta)
+      ? deliverPtyNudge(target.ws, pointer, target.pty, false)
+      : deliverPtyNotification(target.ws, sanitizeRemoteText(task.metadata.to.name), pointer, target.pty, false)));
+    return 'delivered' in written && written.delivered ? written : { ok: true, delivered: true };
   }
 
-  const side = localSideOf(task);
   const anchor = task.metadata[side];
   const target = remoteAnchorTarget(anchor, params.resnapshot === true);
   if ('held' in target) return { ok: true, delivered: false, held: target.held };
@@ -1608,6 +1640,9 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
     // Never re-resolved against today's layout — the requesting pane may have
     // closed since, and its ptyId may belong to another pane by now.
     const fanoutOrigin = sanitizeFanoutOrigin(params.fanoutOrigin);
+    // Another PC asked for this workspace (remote spawn). Strictly checked; a
+    // value that is not exactly one is ignored rather than failing the spawn.
+    const remoteSpawnedBy = parseRemoteSpawnedBy(params.remoteSpawnedBy);
 
     store.addWorkspace(name);
     const afterAdd = useStore.getState();
@@ -1617,6 +1652,7 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
     }
     const newWsId = newWs.id;
     const paneId = newWs.activePaneId;
+    if (remoteSpawnedBy) afterAdd.setWorkspaceRemoteSpawnedBy(newWsId, remoteSpawnedBy);
 
     // Depth-1 lineage: main stamps this workspace as a task of its owner
     // INSIDE pty.create, before the PTY (and the agent) exists; a failed stamp
@@ -1690,12 +1726,16 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
       // again with nobody noticing, so name the reason it came off.
       console.warn('[wmux:worker-launch] model-env marker dropped', { role, reason: remarked.dropped });
     }
-    const createOptions = withWorkspaceProfile(
-      remarked.command === bound.initialCommand ? bound : { ...bound, initialCommand: remarked.command },
-      // profile.startupCwd = worktreePath 힌트(§1 — 초기 편의). split 상속에
-      // 밀리는 tolerant 힌트라 방어가 아니라 편의로만 계상한다.
-      { ...newWs.profile, startupCwd: cwd || newWs.profile?.startupCwd },
-    );
+    const createOptions = {
+      ...withWorkspaceProfile(
+        remarked.command === bound.initialCommand ? bound : { ...bound, initialCommand: remarked.command },
+        // profile.startupCwd = worktreePath 힌트(§1 — 초기 편의). split 상속에
+        // 밀리는 tolerant 힌트라 방어가 아니라 편의로만 계상한다.
+        { ...newWs.profile, startupCwd: cwd || newWs.profile?.startupCwd },
+      ),
+      // A pane another PC asked for: main stamps it (depth 1) inside the create, before the agent starts.
+      ...(remoteSpawnedBy ? { remoteSpawnOf: remoteSpawnedBy.hostId } : {}),
+    };
     // The line that will really be typed into the pane — after the role rewrite,
     // after the marker decision, and after the profile has had its say.
     const launchCommand = createOptions.initialCommand ?? '';
@@ -1729,6 +1769,7 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
     }
     afterPty.addSurface(paneId, ptyId, '', cwd, newWsId);
     releaseLeaf();
+    if (remoteSpawnedBy) useStore.getState().pushToast({ level: 'info', message: remoteSpawnToastMessage(remoteSpawnedBy) });
 
     // 포커스 복원 — fan-out 스폰이 사람 화면을 훔치지 않는다. 아래 role 스탬프
     // 앞에 둔다: setRole은 IPC 왕복이고, 그 사이 사용자 화면이 새 워크스페이스에
@@ -1754,7 +1795,8 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
     // task would come back on the default (expensive) one with nothing said.
     // It carries the model-env marker exactly as launched, so main can tell
     // whether the neutralisation survived when it reports a stuck worker.
-    return { workspaceId: newWsId, ptyId, initialCommand: launchCommand, ...(fanoutOrigin ? { fanoutOrigin } : {}) };
+    // `paneId`: the new pane, for a remote spawn's link endpoint.
+    return { workspaceId: newWsId, ptyId, paneId, initialCommand: launchCommand, ...(fanoutOrigin ? { fanoutOrigin } : {}) };
   }
 
   // -------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import mutableFs from 'node:fs';
-import { readThreadOwner, resolveThreadOwner, attributeThread, notifierOrigin } from '../bin/wmux-codex-thread.mjs';
+import { readThreadOwner, resolveThreadOwner, attributeThread, notifierOrigin, notifierOriginLookup } from '../bin/wmux-codex-thread.mjs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as net from 'node:net';
@@ -269,5 +269,89 @@ describe('thread ownership across a shared app-server', { timeout: 20_000 }, () 
     fs.rmSync(path.join(home, '.wmux-owner-auth-token'));
     await run(true, CHILD, {}, 'Stop');
     expect(fs.existsSync(path.join(home, '.wmux-owner', 'resume-spool'))).toBe(false);
+  });
+
+  // #2376: an origin lookup that runs out of time is not a verdict.
+  it('names a lookup that ran out of time before any ancestor decided', () => {
+    const lookup = (chain: string[][], stop: string) => () => ({ chain, stop, elapsedMs: 901, budgetMs: 900 });
+    expect(notifierOriginLookup(env, lookup([], 'timeout')).origin).toBe('timeout');
+    // What was read before the deadline still decides.
+    expect(notifierOriginLookup(env, lookup([['codex', 'app-server', '--managed-daemon']], 'timeout')).origin).toBe('shared-server');
+    expect(notifierOriginLookup(env, lookup([], 'unreadable')).origin).toBe('unknown');
+    expect(notifierOriginLookup({}, lookup([], 'timeout'))).toEqual({ origin: 'unclaimed' });
+  });
+  it('routes a timed-out turn to its recorded owner, else to the environment\'s pane', async () => {
+    persistCodexThreadOwner({ id: 'relay-pane', env: env as Record<string, string> },
+      { live: true, selection: { threadId: ROOT, cwd: home, generation: 1 } }, env.CODEX_HOME!, env);
+    const owned = { ...env };
+    expect(await attributeThread('timeout', { rootId: ROOT }, owned)).toBe(true);
+    expect(owned.WMUX_PTY_ID).toBe('relay-pane');
+    const noWait = async () => { /* no retry wait */ };
+    const unowned = { ...env };
+    expect(await attributeThread('timeout', { rootId: OTHER }, unowned,
+      (id: string, target: NodeJS.ProcessEnv) => resolveThreadOwner(id, target, { delay: noWait }))).toBe(true);
+    expect(unowned.WMUX_PTY_ID).toBe('pane-a');
+    expect(await attributeThread('timeout', { rootId: OTHER }, { ...env, WMUX_PTY_ID: '' },
+      (id: string, target: NodeJS.ProcessEnv) => resolveThreadOwner(id, target, { delay: noWait }))).toBe(false);
+  });
+});
+
+// The real walk, forced past a 1 ms budget. Linux reads /proc with no spawn,
+// which a 1 ms budget does not reliably outrun; elsewhere the walk spawns
+// PowerShell (Windows) or `ps` (macOS).
+describe.skipIf(process.platform === 'linux')('an origin lookup that runs out of time (#2376)', { timeout: 30_000 }, () => {
+  let home: string;
+  let pipe: string;
+  let server: net.Server;
+  let received: any[];
+  let env: NodeJS.ProcessEnv;
+  beforeEach(async () => {
+    home = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-origin-timeout-'));
+    pipe = process.platform === 'win32' ? `\\\\.\\pipe\\wmux-origin-timeout-${randomUUID()}`
+      : path.join(os.tmpdir(), `wot-${randomUUID()}.sock`);
+    received = [];
+    env = { ...process.env };
+    for (const key of Object.keys(env)) if (key.startsWith('WMUX_')) delete env[key];
+    // The pane that happened to start a shared server, and no handed argv: the bridge walks its ancestors.
+    Object.assign(env, { HOME: home, USERPROFILE: home, CODEX_HOME: path.join(home, '.codex'), WMUX_DATA_SUFFIX: '-owner',
+      WMUX_PIPE_NAME: pipe, WMUX_PTY_ID: 'pane-starter', WMUX_WORKSPACE_ID: 'workspace-a', WMUX_CODEX_ORIGIN_LOOKUP_BUDGET_MS: '1' });
+    fs.writeFileSync(path.join(home, '.wmux-owner-auth-token'), 'owner-token');
+    server = net.createServer(socket => {
+      let data = '';
+      socket.on('data', chunk => {
+        data += chunk;
+        const nl = data.indexOf('\n');
+        if (nl < 0) return;
+        const request = JSON.parse(data.slice(0, nl));
+        received.push(request);
+        socket.end(JSON.stringify({ id: request.id, ok: true, result: { ok: true } }) + '\n');
+      });
+      socket.on('error', () => { /* the bridge closes first */ });
+    });
+    await new Promise<void>(resolve => server.listen(pipe, resolve));
+  });
+  afterEach(async () => {
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  async function notify(id: string) {
+    const payload = JSON.stringify({ type: 'agent-turn-complete', 'thread-id': id, cwd: home });
+    const child = spawn(process.execPath, [path.join(bin, 'wmux-codex-notify.mjs'), payload], { env, stdio: 'ignore' });
+    expect(await new Promise(resolve => child.on('exit', resolve))).toBe(0);
+  }
+  const outcomes = () => fs.readFileSync(path.join(home, '.wmux-owner', 'codex-notify.log'), 'utf8')
+    .trim().split('\n').map(line => JSON.parse(line) as { outcome: string; elapsedMs?: number; budgetMs?: number });
+
+  it('logs the timeout and delivers to the thread\'s recorded owner', async () => {
+    persistCodexThreadOwner({ id: 'relay-pane', env: { ...env, WMUX_PTY_ID: 'relay-pane' } as Record<string, string> },
+      { live: true, selection: { threadId: ROOT, cwd: home, generation: 1 } }, env.CODEX_HOME!, env);
+    await notify(ROOT);
+    expect(received.map(r => r.params.ptyId)).toEqual(['relay-pane']);
+    expect(outcomes()[0]).toMatchObject({ outcome: 'origin-lookup-timeout', budgetMs: 1 });
+  });
+  it('logs the timeout and keeps pane delivery for a thread with no recorded owner', async () => {
+    await notify(OTHER);
+    expect(received.map(r => r.params.ptyId)).toEqual(['pane-starter']);
+    expect(outcomes()[0]).toMatchObject({ outcome: 'origin-lookup-timeout', budgetMs: 1 });
   });
 });

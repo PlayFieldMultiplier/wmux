@@ -616,6 +616,18 @@ export type RpcMethod =
   | 'a2a.remote.offers.withdraw'
   | 'a2a.remote.offers.accept'
   | 'a2a.remote.offers.decline'
+  | 'a2a.remote.spawnPolicy.get'
+  | 'a2a.remote.spawnPolicy.set'
+  | 'a2a.remote.spawnRequests.list'
+  | 'a2a.remote.spawn.work'
+  | 'a2a.remote.spawn.decide'
+  | 'a2a.remote.spawn.claim'
+  | 'a2a.remote.spawn.started'
+  | 'a2a.remote.spawn.failed'
+  | 'a2a.remote.spawn.ask'
+  | 'a2a.remote.spawn.outgoing'
+  | 'a2a.remote.spawn'
+  | 'a2a.remote.spawnStatus'
   | 'a2a.resolve.identity'
   | 'a2a.whoami'
   | 'a2a.discover'
@@ -958,6 +970,18 @@ export const ALL_RPC_METHODS = [
   'a2a.remote.offers.withdraw',
   'a2a.remote.offers.accept',
   'a2a.remote.offers.decline',
+  'a2a.remote.spawnPolicy.get',
+  'a2a.remote.spawnPolicy.set',
+  'a2a.remote.spawnRequests.list',
+  'a2a.remote.spawn.work',
+  'a2a.remote.spawn.decide',
+  'a2a.remote.spawn.claim',
+  'a2a.remote.spawn.started',
+  'a2a.remote.spawn.failed',
+  'a2a.remote.spawn.ask',
+  'a2a.remote.spawn.outgoing',
+  'a2a.remote.spawn',
+  'a2a.remote.spawnStatus',
   'a2a.resolve.identity',
   'a2a.whoami',
   'a2a.discover',
@@ -1166,6 +1190,11 @@ export interface DaemonEvent {
     // ends, so a stale count never sticks.
     //   agent.subagents → { count: number }
     | 'agent.subagents'
+    // A pane with no agent whose command waits on stdin (daemon/shellPrompt):
+    // the prompt when it appears or changes, null when it clears. A `secret`
+    // carries no question. `seq` orders it against daemon.shellPrompt.list.
+    //   shell.prompt → ShellPromptChange ({ epoch, seq, prompt: ShellPromptSignal | null })
+    | 'shell.prompt'
     | 'prompt.event'
     | 'notification.event'
     | 'cwd.changed'

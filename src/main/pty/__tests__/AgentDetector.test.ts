@@ -412,6 +412,21 @@ describe('AgentDetector', () => {
       expect(ev).toMatchObject({ agent: 'Codex CLI', message: 'Directory trust prompt' });
     });
 
+    it('codex-cli 0.157 "Trust this folder?" screen before the banner reads as awaiting_input, not idle', () => {
+      const det = new AgentDetector();
+      const cb = vi.fn();
+      det.onEvent(cb);
+      det.feed('  Folder access\n\n  Trust this folder?\n  /work/repo\n\n› 1. Trust and continue\n  2. Quit\n\n  Press enter to continue\n');
+      const ev = cb.mock.calls.find((c) => c[0].status === 'awaiting_input')?.[0];
+      expect(ev).toMatchObject({ agent: 'Codex CLI', message: 'Directory trust prompt' });
+      // Prose naming the question is not the dialog.
+      const prose = new AgentDetector();
+      const proseCb = vi.fn();
+      prose.onEvent(proseCb);
+      prose.feed('  When Codex asks "Trust this folder?" pick Trust and continue.\n');
+      expect(proseCb).not.toHaveBeenCalled();
+    });
+
     it('does NOT match conversational mentions (end-anchored whole line)', () => {
       const { det, cb } = gated();
       det.feed('  If Codex prints "Would you like to run the following command?" then pick no.\n');

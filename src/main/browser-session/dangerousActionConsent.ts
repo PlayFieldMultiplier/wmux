@@ -5,6 +5,7 @@ import type { BrowserPolicyStore } from './BrowserPolicyStore';
 import {
   BROWSER_CONSENT_DEADLINE_MS,
   NEEDS_CONSENT_CODE,
+  bypassDeniedMessage,
   policyDeniedMessage,
   type BrowserConsentAction,
   type PaneConsentGrants,
@@ -34,6 +35,12 @@ import { cookieDomainAllowed, type HostPolicy } from '../../shared/browserHostPo
 // "Always on this pane" (remember) is honoured only after the same checks, is
 // written with the epoch the caller was resolved under, and the operation then
 // runs under the epoch that write returned — a stale answer grants nothing.
+//
+// An unprotected pane (caller.unprotected) asks the same question, through
+// the same prompt and with the same deadline, when its agent asks to skip a
+// safety check (allowDangerous, allowSensitiveDomains) or to keep a download.
+// It has no site list and no standing grants, so every such operation is
+// asked about and "remember" counts as once.
 // ---------------------------------------------------------------------------
 
 /** The method name refusals are attributed to (the MCP lane maps the prefix). */
@@ -79,6 +86,8 @@ export interface ConsentCaller {
   ptyId: string | undefined;
   /** Set when the caller is a scheduled run acting as this pane's browser. */
   runId?: string;
+  /** The pane is not protected: its agent asked to skip a safety check. */
+  unprotected?: true;
 }
 
 /** One operation's terms. Hosts are canonical (see browserConsent.rpc.ts). */
@@ -101,6 +110,12 @@ export interface DangerousActionConsentDeps {
   store: Pick<BrowserPolicyStore, 'grantsFor' | 'setGrants'>;
   /** The approval queue; null until main has built it (fail closed). */
   queue: () => Pick<ApprovalQueue, 'requestConsent' | 'cancelPrompt'> | null;
+  /**
+   * Whether a prompt can be shown now (main has a window). Read for an
+   * unprotected pane only, which is refused at once rather than left waiting
+   * out the deadline on a question nobody can see.
+   */
+  canAsk?: () => boolean;
   /** Whether a PTY is a daemon-owned scheduled run (AutomationBridge). */
   runOwnership: (ptyId: string | undefined) => AutomationRunOwnership;
   /** Display name of a workspace, for the prompt. */
@@ -124,11 +139,17 @@ function denied(why: string): ConsentRefusal {
   return new ConsentRefusal('policy_denied', policyDeniedMessage(CONSENT_METHOD, why));
 }
 
-function needsConsent(action: BrowserConsentAction, host: string, why: string): ConsentRefusal {
+function bypassDenied(why: string): ConsentRefusal {
+  return new ConsentRefusal('policy_denied', bypassDeniedMessage(CONSENT_METHOD, why));
+}
+
+function needsConsent(action: BrowserConsentAction, host: string, why: string, unprotected: boolean): ConsentRefusal {
   return new ConsentRefusal(
     'needs_consent',
     `${CONSENT_METHOD}: ${NEEDS_CONSENT_CODE}: ${action} on ${host}. ${why} ` +
-      "The operator can allow it on this pane (Always on this pane) the next time it is asked while they are present; do not retry unchanged.",
+      (unprotected
+        ? 'Skipping this safety check needs the operator to allow it while they are present; do not retry unchanged.'
+        : "The operator can allow it on this pane (Always on this pane) the next time it is asked while they are present; do not retry unchanged."),
   );
 }
 
@@ -160,6 +181,7 @@ export function sameTerms(a: ConsentCaller, b: ConsentCaller): boolean {
     && a.paneId === b.paneId
     && a.profileId === b.profileId
     && JSON.stringify(a.hosts) === JSON.stringify(b.hosts)
+    && (a.unprotected === true) === (b.unprotected === true)
   );
 }
 
@@ -198,21 +220,27 @@ export class DangerousActionConsent {
     opts: { revalidate: () => Promise<ConsentCaller>; signal?: AbortSignal },
   ): Promise<ConsentDecision> {
     const hostLabel = op.hosts.join(', ');
-    if (op.hosts.length === 0) throw denied('the action names no site');
-    // Never wider than the pane's own site policy: consent is asked only for
-    // what the policy already lets this pane reach.
-    if (!op.hosts.every((h) => cookieDomainAllowed(caller.hosts, h))) {
-      throw denied("that host is not on this pane's allowed list");
-    }
+    const unprotected = caller.unprotected === true;
+    const refuse = unprotected ? bypassDenied : denied;
+    if (op.hosts.length === 0) throw refuse('the action names no site');
+    // An unprotected pane has no site list and no standing grants: it is
+    // always asked.
+    if (!unprotected) {
+      // Never wider than the pane's own site policy: consent is asked only for
+      // what the policy already lets this pane reach.
+      if (!op.hosts.every((h) => cookieDomainAllowed(caller.hosts, h))) {
+        throw denied("that host is not on this pane's allowed list");
+      }
 
-    // Per pane, not per file: another pane's edit (its own "Always", say)
-    // moves the file's epoch and must not void this pane's answer.
-    const standing = this.deps.store.grantsFor(caller.paneId, caller.workspaceId, caller.profileId);
-    if (!standing) {
-      throw denied("the pane's browser policy changed while the call was being checked; try again");
-    }
-    if (grantCovers(standing.grants, op)) {
-      return { operationId: this.mint(), epoch: caller.epoch, via: 'grant' };
+      // Per pane, not per file: another pane's edit (its own "Always", say)
+      // moves the file's epoch and must not void this pane's answer.
+      const standing = this.deps.store.grantsFor(caller.paneId, caller.workspaceId, caller.profileId);
+      if (!standing) {
+        throw denied("the pane's browser policy changed while the call was being checked; try again");
+      }
+      if (grantCovers(standing.grants, op)) {
+        return { operationId: this.mint(), epoch: caller.epoch, via: 'grant' };
+      }
     }
 
     // Unattended: answer now, before anything is queued. Unknown is refused the
@@ -226,12 +254,12 @@ export class DangerousActionConsent {
       this.deps.log?.(
         `[browser-consent] needs_consent ${op.action} on ${hostLabel} (pane ${caller.paneId}, pty ${caller.ptyId ?? '-'}, ${ownership})`,
       );
-      throw needsConsent(op.action, hostLabel, why);
+      throw needsConsent(op.action, hostLabel, why, unprotected);
     }
 
     const queue = this.deps.queue();
-    if (!queue) throw denied('nobody can be asked right now');
-    if (opts.signal?.aborted) throw denied('the call was cancelled');
+    if (!queue || (unprotected && this.deps.canAsk?.() === false)) throw refuse('nobody can be asked right now');
+    if (opts.signal?.aborted) throw refuse('the call was cancelled');
 
     const operationId = this.mint();
     const deadlineAt = this.now() + this.deadlineMs;
@@ -252,10 +280,11 @@ export class DangerousActionConsent {
           action: op.action,
           host: hostLabel,
           ...(detail && { detail }),
+          ...(unprotected && { unprotected: true as const }),
         },
       });
     } catch {
-      throw denied('the question could not be put to the operator');
+      throw refuse('the question could not be put to the operator');
     }
 
     let result: ApprovalResult | 'expired' | 'aborted';
@@ -285,13 +314,13 @@ export class DangerousActionConsent {
       // Take the row off screen: an answer that can no longer be used must not
       // sit there inviting a click.
       queue.cancelPrompt(handle.promptId, result === 'expired' ? 'consent expired' : 'caller went away');
-      throw denied(result === 'expired' ? 'the operator did not answer in time' : 'the call was cancelled');
+      throw refuse(result === 'expired' ? 'the operator did not answer in time' : 'the call was cancelled');
     }
-    if (result.approved !== true) throw denied('the operator denied it');
+    if (result.approved !== true) throw refuse('the operator denied it');
     // Checked again at answer time: a click that lands after the deadline (the
     // timer may not have fired yet under load) is not an answer.
-    if (this.now() > deadlineAt) throw denied('the operator answered after the deadline');
-    if (opts.signal?.aborted) throw denied('the call was cancelled');
+    if (this.now() > deadlineAt) throw refuse('the operator answered after the deadline');
+    if (opts.signal?.aborted) throw refuse('the call was cancelled');
 
     // Re-resolve who is asking. Anything that moved under the prompt — a
     // rebind, a policy edit, a move, the pane going away — voids the answer.
@@ -299,21 +328,22 @@ export class DangerousActionConsent {
     try {
       again = await opts.revalidate();
     } catch {
-      throw denied('the pane changed while the operator was being asked');
+      throw refuse('the pane changed while the operator was being asked');
     }
     if (!sameTerms(caller, again) || again.ptyId !== caller.ptyId) {
-      throw denied('the pane changed while the operator was being asked');
+      throw refuse('the pane changed while the operator was being asked');
     }
     // The re-resolution awaited: the deadline and the caller once more.
-    if (this.now() > deadlineAt) throw denied('the operator answered after the deadline');
-    if (opts.signal?.aborted) throw denied('the call was cancelled');
+    if (this.now() > deadlineAt) throw refuse('the operator answered after the deadline');
+    if (opts.signal?.aborted) throw refuse('the call was cancelled');
 
-    if (result.remember !== true) return { operationId, epoch: again.epoch, via: 'once' };
+    // Nothing to remember on an unprotected pane: an "always" there is a once.
+    if (result.remember !== true || unprotected) return { operationId, epoch: again.epoch, via: 'once' };
 
     // Remember: same checks once more, then a write that names the epoch just
     // re-read and the pane's terms; the store refuses it if either moved. Only
     // the epoch that write returns is used.
-    if (this.now() > deadlineAt || opts.signal?.aborted) throw denied('the operator answered after the deadline');
+    if (this.now() > deadlineAt || opts.signal?.aborted) throw refuse('the operator answered after the deadline');
     let epoch: number;
     try {
       epoch = await this.deps.store.setGrants(
@@ -323,7 +353,7 @@ export class DangerousActionConsent {
         again.epoch,
       );
     } catch {
-      throw denied("the pane's browser policy changed before the grant could be saved");
+      throw refuse("the pane's browser policy changed before the grant could be saved");
     }
     return { operationId, epoch, via: 'remembered' };
   }

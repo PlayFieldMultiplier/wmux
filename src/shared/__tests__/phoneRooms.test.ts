@@ -37,6 +37,17 @@ describe('phone room cards', () => {
     expect(phoneRoomCard(card(8, { attachments: [photo] }), () => null)).not.toHaveProperty('attachments');
   });
 
+  it("carries a group card's reactions, palette only and one per bot; a card without any has none", () => {
+    const out = phoneRoomCard(card(10, {
+      kind: 'human', actor: { kind: 'human' },
+      reactions: [{ botId: 'bot-1111bbbb', emoji: '❤️' }, { botId: 'bot-2222cccc', emoji: '👀', ack: true }],
+    }), () => null);
+    expect(out?.reactions).toEqual([{ botId: 'bot-1111bbbb', emoji: '❤️' }, { botId: 'bot-2222cccc', emoji: '👀', ack: true }]);
+    expect(parsePhoneRoomCard(out)).toEqual(out);
+    expect(parsePhoneRoomCard({ ...out, reactions: [{ botId: 'bot-1111bbbb', emoji: '🦄' }] })).not.toHaveProperty('reactions');
+    expect(phoneRoomCard(card(11), () => null)).not.toHaveProperty('reactions');
+  });
+
   it("leaves a bot card's files off the phone wire for now", () => {
     const files = [{ id: 'b'.repeat(32), name: 'report.md', mediaType: 'text/markdown', bytes: 12 }];
     const out = phoneRoomCard(card(9, { files }), () => ({ role: 'lead', name: 'Lead' }));
@@ -189,6 +200,20 @@ describe('fitPhoneRoomPage', () => {
     expect(size(out)).toBeLessThanOrEqual(PHONE_ROOM_LIMITS.replyBytes);
     expect(out.cards[out.cards.length - 1].seq).toBe(40);
     expect(out.nextSinceSeq).toBe(40);
+  });
+
+  it('a forward page of changed cards keeps the earliest changes, in seq order, and says hasMore at the last kept change', () => {
+    // Card 1 changed last (mark 100); the others are new cards.
+    const marks = (c: { seq: number }) => (c.seq === 1 ? 100 : c.seq);
+    const out = fitPhoneRoomPage(page(40), true, PHONE_ROOM_LIMITS.replyBytes, marks);
+    expect(out.cards.map((c) => c.seq)).not.toContain(1);
+    expect(out.cards[0].seq).toBe(2);
+    expect(out.nextSinceSeq).toBe(out.cards[out.cards.length - 1].seq);
+    const changedFirst = (c: { seq: number }) => (c.seq === 40 ? 0.5 : c.seq);
+    const out2 = fitPhoneRoomPage(page(40), true, PHONE_ROOM_LIMITS.replyBytes, changedFirst);
+    expect(out2.cards.at(-1)?.seq).toBe(40);
+    expect(out2.cards.map((c) => c.seq)).toEqual([...out2.cards.map((c) => c.seq)].sort((a, b) => a - b));
+    expect(out2.nextSinceSeq).toBe(out2.cards.at(-2)?.seq);
   });
 
   it('a page that fits is unchanged', () => {

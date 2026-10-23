@@ -5,6 +5,7 @@ import { AGENT_IDS } from '../agentSetup';
 import {
   agentExecutableNames,
   agentInstallMethod,
+  agentInstallMethods,
   agentLoginCommand,
   classifyInstallFailure,
   shellSyntax,
@@ -51,10 +52,88 @@ describe('classifyInstallFailure', () => {
   });
 });
 
+describe('Grok and Antigravity install lines', () => {
+  it('macOS and Linux: the vendor install script, in the user\'s shell', () => {
+    for (const platform of ['darwin', 'linux'] as const) {
+      expect(agentInstallMethods('grok', platform)).toEqual([{
+        via: 'script', command: 'curl -fsSL https://x.ai/cli/install.sh | bash', shell: 'user',
+        source: 'https://docs.x.ai/build/overview', officialPage: 'https://docs.x.ai/build/overview', requires: ['curl', 'bash'],
+      }]);
+      expect(agentInstallMethods('agy', platform)).toEqual([{
+        via: 'script', command: 'curl -fsSL https://antigravity.google/cli/install.sh | bash', shell: 'user',
+        source: 'https://antigravity.google/docs/getting-started', officialPage: 'https://antigravity.google/docs/getting-started', requires: ['curl', 'bash'],
+      }]);
+    }
+  });
+
+  it('Windows: PowerShell first, then WinGet for Grok, both in PowerShell; Antigravity has the one PowerShell line', () => {
+    expect(agentInstallMethods('grok', 'win32').map((m) => [m.via, m.shell, m.command, m.requires])).toEqual([
+      ['script', 'powershell', 'irm https://x.ai/cli/install.ps1 | iex', []],
+      ['winget', 'powershell', 'winget install --id xAI.GrokBuild -e', []],
+    ]);
+    expect(agentInstallMethods('agy', 'win32').map((m) => [m.via, m.shell, m.command, m.requires])).toEqual([
+      ['script', 'powershell', 'irm https://antigravity.google/cli/install.ps1 | iex', []],
+    ]);
+    // The first line stays the one agentInstallMethod gives.
+    expect(agentInstallMethod('grok', 'win32')?.via).toBe('script');
+    // Claude and Codex keep their one line per platform.
+    expect(agentInstallMethods('claude', 'win32')).toHaveLength(1);
+    expect(agentInstallMethods('codex', 'darwin')).toHaveLength(1);
+  });
+
+  it('signs in at the detected Windows path, quoted for PowerShell', () => {
+    expect(agentLoginCommand('C:\\Users\\Kim O\'Neil\\.grok\\bin\\grok.exe', 'powershell'))
+      .toBe("& 'C:\\Users\\Kim O''Neil\\.grok\\bin\\grok.exe'");
+    expect(agentLoginCommand('C:\\Users\\u\\AppData\\Local\\agy\\bin\\agy.exe', 'powershell'))
+      .toBe("& 'C:\\Users\\u\\AppData\\Local\\agy\\bin\\agy.exe'");
+  });
+});
+
+describe('Qwen Code and Kimi Code CLI install lines', () => {
+  const lines = (agent: 'qwen' | 'kimi', platform: NodeJS.Platform) =>
+    agentInstallMethods(agent, platform).map((m) => [m.via, m.shell, m.command, m.requires]);
+
+  it('macOS and Linux: the vendor script first, then npm, then Homebrew (Qwen) or pnpm (Kimi), as their docs list them', () => {
+    for (const platform of ['darwin', 'linux'] as const) {
+      expect(lines('qwen', platform)).toEqual([
+        ['script', 'user', 'curl -fsSL https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen-standalone.sh | bash', ['curl', 'bash']],
+        ['npm', 'user', 'npm install -g @qwen-code/qwen-code@latest', ['npm']],
+        ['brew', 'user', 'brew install qwen-code', ['brew']],
+      ]);
+      expect(lines('kimi', platform)).toEqual([
+        ['script', 'user', 'curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash', ['curl', 'bash']],
+        ['npm', 'user', 'npm install -g @moonshot-ai/kimi-code', ['npm']],
+        ['pnpm', 'user', 'pnpm add -g @moonshot-ai/kimi-code', ['pnpm']],
+      ]);
+    }
+  });
+
+  it('Windows: the PowerShell script first, then npm, both in PowerShell', () => {
+    expect(lines('qwen', 'win32')).toEqual([
+      ['script', 'powershell', 'irm https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen-standalone.ps1 | iex', []],
+      ['npm', 'powershell', 'npm install -g @qwen-code/qwen-code@latest', ['npm']],
+    ]);
+    expect(lines('kimi', 'win32')).toEqual([
+      ['script', 'powershell', 'irm https://code.kimi.com/kimi-code/install.ps1 | iex', []],
+      ['npm', 'powershell', 'npm install -g @moonshot-ai/kimi-code', ['npm']],
+    ]);
+  });
+
+  it('signs in to Qwen on Windows through its own qwen.cmd, never as a bare script', () => {
+    const shim = 'C:\\Users\\u\\AppData\\Local\\qwen-code\\qwen-code\\bin\\qwen.cmd';
+    expect(agentLoginCommand(shim, 'powershell')).toBe(`& '${shim}'`);
+  });
+});
+
 describe('agentExecutableNames', () => {
   it('accepts the binary, its .exe and the npm entrypoints', () => {
     expect(agentExecutableNames('claude')).toEqual(['claude', 'claude.exe', 'cli.js']);
     expect(agentExecutableNames('codex')).toEqual(['codex', 'codex.exe', 'codex.js']);
+    // No npm entrypoints for an agent whose vendor documents no npm install.
+    expect(agentExecutableNames('grok')).toEqual(['grok', 'grok.exe']);
+    expect(agentExecutableNames('agy')).toEqual(['agy', 'agy.exe']);
+    expect(agentExecutableNames('qwen')).toEqual(['qwen', 'qwen.exe', 'cli-entry.js']);
+    expect(agentExecutableNames('kimi')).toEqual(['kimi', 'kimi.exe', 'main.mjs']);
   });
 });
 

@@ -6,7 +6,10 @@
  * avatars (`data-avatar-small`, 24px and under) only blink, so stacks and
  * pills stay still; offscreen ones (`data-avatar-offscreen`) are paused; and
  * reduced motion or a hidden window stops everything. Rule order matters: idle, working, small,
- * then reduced motion. Art and classes: mochiCharacters.tsx. */
+ * then reduced motion. Art and classes: mochiCharacters.tsx.
+ *
+ * Copyright (c) 2026 openwong2kim. All rights reserved. The Mochi motion is
+ * NOT under the MIT License: see ASSETS-LICENSE.md. */
 
 @keyframes wmux-mo1-bob{0%,100%{transform:translateY(0) scale(1,1)}50%{transform:translateY(.3px) scale(1.03,.97)}}
 @keyframes wmux-mo1-work{0%,100%{transform:translateY(0) scale(1,1)}30%{transform:translateY(-1.35px) scale(.98,1.05)}58%{transform:translateY(.18px) scale(1.04,.96)}}

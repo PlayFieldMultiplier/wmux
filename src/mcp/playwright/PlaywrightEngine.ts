@@ -13,6 +13,7 @@ import {
   WorkspaceScopeUnresolvedError,
   WORKSPACE_SCOPE_UNRESOLVED_CODE,
   browserCallRefusal,
+  isProtectedScope,
   lastKnownProtection,
   rememberProtection,
   type BrowserTargetScope,
@@ -20,6 +21,7 @@ import {
 import { BrowserPolicyError, POLICY_DENIED_CODE } from '../../shared/browserPolicy';
 import { attachPageCapture } from './pageCapture';
 import { trackRequestBaseline } from './actionSettle';
+import { guardUnclaimedDownloads, isDownloadGuardArmed } from './downloadGuard';
 import {
   attachModalTracking,
   modalScopeKey,
@@ -31,6 +33,8 @@ import {
   openSurfaceForConnection,
   resolveDefaultSurface,
 } from './surfaceRouting';
+// Cycle-safe: automationLease reaches this module only inside function bodies.
+import { currentBrowserOpSignal } from './automationLease';
 
 export { WORKSPACE_SCOPE_UNRESOLVED_CODE } from './browserScope';
 
@@ -441,7 +445,16 @@ export class PlaywrightEngine {
     await this.disconnect();
     // B0: first real use — initialize playwright-core's module graph now.
     const { chromium } = loadPlaywright();
-    this.browser = await this.connectOverCdp(chromium, endpoint, isPort ? cdpPortOrWsEndpoint : null);
+    const browser = await this.connectOverCdp(chromium, endpoint, isPort ? cdpPortOrWsEndpoint : null);
+    // The user may have stopped this op while the attach was in flight; the
+    // Stop's disconnect ran before there was a browser to drop. Do not keep
+    // a connection the stopped op would go on to drive.
+    const opSignal = currentBrowserOpSignal();
+    if (opSignal?.aborted) {
+      await browser.close().catch(() => { /* already gone */ });
+      opSignal.throwIfAborted();
+    }
+    this.browser = browser;
     // cdpPort stays null on ws connections: findViaJsonEndpoint (HTTP /json)
     // has no surface to talk to there and is gated on this.cdpPort.
     this.cdpPort = isPort ? cdpPortOrWsEndpoint : null;
@@ -572,6 +585,10 @@ export class PlaywrightEngine {
   }
 
   async ensureConnected(workspaceId?: string): Promise<void> {
+    // The user stopped this op's tab (automationLease): no connection is made
+    // or reused for it, so a body that outlived its refusal cannot act again.
+    const opSignal = currentBrowserOpSignal();
+    opSignal?.throwIfAborted();
     const reusable =
       this.browser?.isConnected() === true &&
       (workspaceId === undefined || this.connectedWorkspaceId === undefined || this.connectedWorkspaceId === workspaceId);
@@ -648,6 +665,7 @@ export class PlaywrightEngine {
         return;
       } catch (err) {
         if (err instanceof CdpAttachInfoUnavailableError) throw err;
+        opSignal?.throwIfAborted();
         // A refusal, like the one above: retrying cannot change main's answer.
         const refusal = browserCallRefusal(err);
         if (refusal) throw refusal;
@@ -662,6 +680,7 @@ export class PlaywrightEngine {
         );
         if (attempt < MAX_CONNECT_RETRIES) {
           await sleep(RETRY_DELAY_MS);
+          opSignal?.throwIfAborted();
         }
       }
     }
@@ -717,6 +736,8 @@ export class PlaywrightEngine {
     workspaceId?: string,
     knownNoSurface?: boolean,
   ): Promise<Page | null> {
+    // A stopped op resolves no page at all (see ensureConnected).
+    currentBrowserOpSignal()?.throwIfAborted();
     // Resolve the selection context (which workspace/surface this call targets)
     // BEFORE consulting any shared state, so the lock, fast-fail latch, and
     // auto-open latch are all scoped to THIS caller's workspace and can never
@@ -745,12 +766,21 @@ export class PlaywrightEngine {
 
     // Serialize concurrent calls for the SAME context (prevents duplicate
     // auto-open); a different context gets its own promise, never this one's.
+    // Either way the page comes back after an await, during which the user
+    // may have stopped this op: a stopped op gets the refusal, not the page —
+    // also when it joined another call's discovery.
     const inflight = this.getPageLocks.get(ctx.key);
-    if (inflight) return inflight;
+    if (inflight) {
+      const joined = await inflight;
+      currentBrowserOpSignal()?.throwIfAborted();
+      return joined;
+    }
     const p = this._getPageImpl(ctx);
     this.getPageLocks.set(ctx.key, p);
     try {
-      return await p;
+      const page = await p;
+      currentBrowserOpSignal()?.throwIfAborted();
+      return page;
     } finally {
       this.getPageLocks.delete(ctx.key);
     }
@@ -789,6 +819,19 @@ export class PlaywrightEngine {
     // #1063 inline events went silent under 'chrome').
     if (page && this.workspaceBackend === 'chrome') {
       this.attachLifecycleMirror(page, scope.workspaceId, scope.surfaceId);
+    }
+    // Unprotected pane: a tab the agent drives (a write) and holds — opened
+    // for this workspace or lent by the user — gets the download guard: a
+    // download no download tool claimed is cancelled and deleted. Never a tab
+    // the agent only read, and never a user's own tab, whose downloads are the
+    // user's. A protected pane is never armed: its browser denies downloads,
+    // and main lets the approved one through. Asked once per page.
+    if (
+      page && this.workspaceBackend === 'chrome' && opts.intent === 'write'
+      && !isProtectedScope(scope) && !isDownloadGuardArmed(page)
+      && (await this.agentHoldsTab(page, scope.workspaceId))
+    ) {
+      guardUnclaimedDownloads(page);
     }
     // Console/network capture starts HERE — the first time a page is resolved
     // (open / navigate / attach) — not on the first browser_console call
@@ -862,6 +905,24 @@ export class PlaywrightEngine {
     throw new AgentWindowScopeError(label, targetId);
   }
 
+  /**
+   * Whether main lists this tab as one the workspace holds: wmux opened it
+   * for the workspace, or the user lent it (live rows carry owner 'agent' /
+   * 'borrowed'; a dedicated Chrome lists only the tabs wmux opened). A user's
+   * own tab is absent or 'user'. False when it cannot be told.
+   */
+  private async agentHoldsTab(page: Page, workspaceId: string): Promise<boolean> {
+    const targetId = await this.targetIdOf(page);
+    if (!targetId) return false;
+    try {
+      const info = (await sendRpc('browser.cdp.info', { workspaceId })) as CdpInfoResponse;
+      const row = info.targets?.find((t) => t.targetId === targetId || t.surfaceId === targetId);
+      return !!row && row.owner !== 'user';
+    } catch {
+      return false;
+    }
+  }
+
   /** A Page's CDP target id, over a throwaway session (client-side Pages expose
    *  none). null when the page is gone or will not answer. */
   private async targetIdOf(page: Page): Promise<string | null> {
@@ -894,6 +955,29 @@ export class PlaywrightEngine {
       /* older main / cdp disabled — caller treats as builtin */
     }
     return this.workspaceBackend;
+  }
+
+  /**
+   * Whether `workspaceId`'s browser is an unprotected pane on the Chrome
+   * backend, asked of main afresh (one cdp.info, which also starts that
+   * Chrome). Such a pane opens a tab on about:blank and loads the URL through
+   * a handed-out Page, so the download guard is armed before the first
+   * navigation. Throws when it cannot be told, so the caller refuses rather
+   * than opening the URL unguarded — except main's "CDP remote debugging is
+   * unavailable", which only its non-Chrome branch answers (Chrome is checked
+   * first), so it is a confirmed non-Chrome pane.
+   */
+  async isUnprotectedChrome(workspaceId: string): Promise<boolean> {
+    let info: CdpInfoResponse;
+    try {
+      info = (await sendRpc('browser.cdp.info', { workspaceId })) as CdpInfoResponse;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (/CDP remote debugging is unavailable/.test(message)) return false;
+      throw new Error(`wmux could not tell whether this pane's browser is protected (${message})`);
+    }
+    this.cacheShellUrl(info);
+    return info.workspaceBackend === 'chrome' && info.protected !== true;
   }
 
   getWorkspaceBackend(): BrowserBackend | undefined {
@@ -1113,7 +1197,9 @@ export class PlaywrightEngine {
     // proven even when a legacy main cannot tag its subsequent cdp.info entry.
     let surfaceProvenByAutoOpen = false;
 
+    const opSignal = currentBrowserOpSignal();
     for (let attempt = 1; attempt <= PAGE_FIND_RETRIES; attempt++) {
+      opSignal?.throwIfAborted();
       try {
         // Strategies 1-3 locate an EXISTING page. When the caller's workspace
         // is known to own no surface (#554), every one of them can only return
@@ -1237,12 +1323,16 @@ export class PlaywrightEngine {
         if (attempt < PAGE_FIND_RETRIES) {
           console.error(`[PlaywrightEngine] No page found, reconnecting... (${attempt}/${PAGE_FIND_RETRIES})`);
           await sleep(PAGE_FIND_DELAY_MS);
+          opSignal?.throwIfAborted();
           await this.disconnect();
           await this.ensureConnected(ctx.workspaceId);
         }
       } catch (err) {
         if (isWorkspaceScopeUnresolvedError(err)) throw err;
         if (err instanceof CdpAttachInfoUnavailableError) throw err;
+        // Stopped by the user: the failure in hand is the dropped connection,
+        // and the retry below would reconnect to the tab they stopped.
+        opSignal?.throwIfAborted();
         if (browserCallRefusal(err)) throw browserCallRefusal(err);
         console.error(
           `[PlaywrightEngine] getPage attempt ${attempt} failed:`,
@@ -1250,6 +1340,7 @@ export class PlaywrightEngine {
         );
         if (attempt < PAGE_FIND_RETRIES) {
           await sleep(PAGE_FIND_DELAY_MS);
+          opSignal?.throwIfAborted();
           await this.disconnect();
           await this.ensureConnected(ctx.workspaceId);
         }

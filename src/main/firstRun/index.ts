@@ -93,20 +93,27 @@ export function registerFirstRunHandlers(orchestrator: FirstRunOrchestrator): ()
         if (!payload || typeof payload.ptyId !== 'string' || payload.ptyId.length === 0) {
           throw new Error('FIRST_RUN_START_SAMPLE_TASK: missing or invalid ptyId');
         }
-        // Fire-and-forget — the runner outcome is reported via the
-        // FIRST_RUN_SAMPLE_TASK_READY / TIMEOUT event channels rather than
-        // the invoke return value, so the renderer can keep the wizard
-        // responsive while the 5s OSC133 handshake plays out.
+        // The invoke awaits the runner, but success and the fallback are
+        // reported on the FIRST_RUN_SAMPLE_TASK_READY / TIMEOUT event
+        // channels, which the wizard subscribed to before it called this.
         //
         // I6 fix: if startSampleTask itself throws (e.g. PTYBridge gone,
         // daemon disconnect mid-flight), the wizard would otherwise hang in
         // 'awaiting-prompt' forever because it relies on the READY/TIMEOUT
         // event channels for resolution. Surface failures as a TIMEOUT
         // event so the wizard's fallback "Press Enter" UI engages.
-        orchestrator.startSampleTask(payload.ptyId).catch((err: unknown) => {
+        //
+        // A command that never reached the pane is the one outcome the invoke
+        // answers itself: it rejects, so the wizard shows an error instead of
+        // success or "press Enter" over an empty prompt.
+        const outcome = await orchestrator.startSampleTask(payload.ptyId).catch((err: unknown) => {
           console.error('[firstRun] startSampleTask failed:', err);
           orchestrator.emitSampleTaskTimeout();
+          return 'timeout' as const;
         });
+        if (outcome === 'undelivered') {
+          throw new Error('FIRST_RUN_START_SAMPLE_TASK: the sample command did not reach the pane');
+        }
       },
     ),
   );

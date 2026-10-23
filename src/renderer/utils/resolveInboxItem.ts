@@ -25,12 +25,13 @@ import { resolveExecuteApproval } from './executeApproval';
 //     Done and its negation to Cancel, so one keyboard model (Enter / Backspace)
 //     covers all three sources without any arm learning about another's.
 //
-// `opts.remember` ("Always on this pane") rides only for a 'browser-action'
-// approval; every other resolve is sent exactly as before.
+// `opts.remember` ("Always on this pane", "Always allow this PC, folder and
+// agent") rides only for a 'browser-action' or 'remote-spawn' approval; every
+// other resolve is sent exactly as before.
 export function resolveInboxItem(item: InboxItem, approved: boolean, opts?: { remember?: boolean }): void {
   switch (item.source) {
     case 'mcp': {
-      if (approved && opts?.remember === true && item.kind === 'browser-action') {
+      if (approved && opts?.remember === true && (item.kind === 'browser-action' || item.kind === 'remote-spawn')) {
         void window.electronAPI.permissionPrompt?.resolve(item.promptId, approved, { remember: true });
       } else {
         void window.electronAPI.permissionPrompt?.resolve(item.promptId, approved);

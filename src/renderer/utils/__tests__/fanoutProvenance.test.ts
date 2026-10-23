@@ -66,6 +66,10 @@ describe('resolveTaskLink', () => {
     expect(resolveTaskLink(mission({ detachedAt: 5 }), 'other', 'other')).toEqual({ ownerId: 'owner', detached: true });
   });
 
+  it('a workspace another PC started has no owner here: an ordinary row, not a closed workspace\'s task', () => {
+    expect(resolveTaskLink(undefined, 'remote-spawn:22222222-2222-4222-8222-222222222222')).toBeNull();
+  });
+
   // #1481 review B6 — durable lineage, not the audit window, links an old task.
   it('falls back to the durable lineage stamp, then the spawn stamp', () => {
     expect(resolveTaskLink(undefined, 'o')).toEqual({ ownerId: 'o', detached: false });

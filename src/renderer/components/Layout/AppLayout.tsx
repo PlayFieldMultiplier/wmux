@@ -58,6 +58,7 @@ import { useNotificationListener } from '../../hooks/useNotificationListener';
 import { useRpcBridge } from '../../hooks/useRpcBridge';
 import { useA2aLinkRequestToast, useA2aRemoteSnapshot } from '../../hooks/useA2aRemoteSnapshot';
 import { useA2aRemoteBridge } from '../../hooks/useA2aRemoteBridge';
+import { useConnectionDropNotice } from '../../hooks/useConnectionDropNotice';
 import { useCloseTabOnShellExit } from '../../hooks/useCloseTabOnShellExit';
 import AgentMentionPicker from '../Palette/AgentMentionPicker';
 import HandoffPopover from '../Git/HandoffPopover';
@@ -89,15 +90,19 @@ import { FIRST_RUN_REOPEN_EVENT } from '../../../shared/firstRun';
 import { isFileDrag } from '../../../shared/dragDrop';
 import { terminalRegistry, watchColdFramePersistence } from '../../hooks/useTerminal';
 import { clearPersistedColdFrames, restoreColdFrames } from '../../terminal/coldFrame';
+import { installSleepPreventionBridge } from '../../utils/sleepPreventionBridge';
 import { heldSuspendedIds, holdsSuspendedSession, resolvePtyIdsToClear } from '../../hooks/reconcileWithReQuery';
 import { isSurfaceShown } from '../../stores/selectors/surfaceShown';
 import { runWithProgressTimeout } from '../../hooks/reconcileProgressTimeout';
+import { loadSessionThenDaemonDecision } from '../../hooks/startupDaemonDecision';
 import { createLateReconcileOnConnect } from '../../hooks/lateReconcileOnConnect';
 import { applyStartupReconcileFallback } from '../../hooks/startupReconcileFallback';
 import { RECONCILE_REQUEST_COALESCE_MS, setReconcileRequester } from '../../hooks/reconcileRequest';
 import { ptyLifecycle } from '../../hooks/ptyLifecycle';
 import ProjectConfigDialog from '../Project/ProjectConfigDialog';
 import WorkspacePrepDialog from '../Project/WorkspacePrepDialog';
+import { DictationHost } from '../Dictation/DictationHost';
+import { dictationAvailable } from '../Dictation/DictationButton';
 import AttachRemoteModal from '../Sidebar/AttachRemoteModal';
 import { probeProjectConfig, maybeAutoApplyProjectLayout, workspaceProbeCwd } from '../../utils/projectConfigProbe';
 import { serializeTerminalBuffer } from '../../utils/scrollbackDump';
@@ -507,6 +512,7 @@ function buildSessionData(dumped: Map<string, boolean>): SessionData {
     shortcutOverrides: state.shortcutOverrides,
     autoUpdateEnabled: state.autoUpdateEnabled,
     secretGuardEnabled: state.secretGuardEnabled,
+    sleepPreventionMode: state.sleepPreventionMode,
     customThemeColors: state.customThemeColors ?? undefined,
     pcRail: selectPcRailPersisted(state),
     onboardingCompleted: state.onboardingCompleted,
@@ -927,6 +933,8 @@ export default function AppLayout() {
   // The other PCs' links, connections and held work: the one subscription
   // behind the Remote page and its rail badge.
   useA2aRemoteBridge();
+  // A PC connection in use that really dropped (not a blip) gets one toast.
+  useConnectionDropNotice();
   // `exit` in a shell closes its tab (clean exit only).
   useCloseTabOnShellExit();
   // Keep the main-process WorkspaceMirror warm: push the workspace tree +
@@ -1540,69 +1548,73 @@ export default function AppLayout() {
     // .then(), which left paneGate='pending' forever on .then-never-fires paths.
     void (async () => {
       try {
-        const saved = await window.electronAPI.session.load();
-        if (!saved) {
-          // Nothing to restore; let the boot site-guides auto-enable proceed.
-          useStore.getState().markSessionSettingsLoaded();
-          sessionLoadedRef.current = true;
-          setSessionLoaded(true);
-          // First ever launch: the welcome dialog's auto-update row asks.
-          return;
-        }
+        // v2.8.1 hotfix (Bug 3): reconciliation waits until main has settled
+        // the daemon-vs-local decision. Without it, the reconcile fires while
+        // IPC handlers are mid-swap and pty.list can hit a "no handler
+        // registered" rejection — the renderer surfaces that as a generic
+        // "알 수 없는 오류" toast spam. A first launch, with nothing to
+        // reconcile, waits too: the gate this opens is what keeps its first
+        // pane from being a local PTY (startupDaemonDecision.ts).
+        //
+        // Codex P1 — daemonMode is set inside the helper, BEFORE paneGate
+        // flips ready. The separate daemonMode useEffect also calls
+        // setDaemonModeActive from its own .then, but that runs on its own
+        // React schedule. If paneGate flips first, Terminals mount with
+        // daemonModeAtMount=false and never call pty.reconnect — reproducing
+        // blank-terminal exactly as if reconcile never happened.
+        const { saved, daemonConnected } = await loadSessionThenDaemonDecision({
+          load: () => window.electronAPI.session.load(),
+          nothingSaved: () => {
+            // Nothing to restore; let the boot site-guides auto-enable proceed.
+            useStore.getState().markSessionSettingsLoaded();
+            sessionLoadedRef.current = true;
+            setSessionLoaded(true);
+          },
+          restore: (saved) => {
+            // If autoUpdateEnabled was never set (upgrade from older version), prompt
+            const isFirstAutoUpdateChoice = saved.autoUpdateEnabled == null;
 
-        // If autoUpdateEnabled was never set (upgrade from older version), prompt
-        const isFirstAutoUpdateChoice = saved.autoUpdateEnabled == null;
+            useStore.getState().loadSession(saved);
 
-        useStore.getState().loadSession(saved);
+            // Sanitize stale per-workspace agent state. agentStatus/agentName
+            // describe a live PTY's current state; carrying them across an app
+            // restart is always wrong — the workspaces just rehydrated, no agent
+            // has emitted anything yet in this session. Without this reset the
+            // sidebar dot would lie about agents that died last time the user
+            // closed wmux (Codex 1st review #4: lifecycle reset).
+            const postLoadState = useStore.getState();
+            for (const ws of postLoadState.workspaces) {
+              // Only update workspaces whose persisted state actually carries a
+              // live status. Plain truthiness on agentStatus is true for 'idle'
+              // too, so the previous guard re-broadcast a no-op metadata update
+              // for every workspace that had ever held agent state.
+              const status = ws.metadata?.agentStatus;
+              const hasLive = (status && status !== 'idle') || (ws.metadata?.agentName && ws.metadata.agentName.length > 0);
+              if (hasLive) {
+                postLoadState.updateWorkspaceMetadata(ws.id, { agentStatus: 'idle', agentName: '' });
+              }
+            }
 
-        // Sanitize stale per-workspace agent state. agentStatus/agentName
-        // describe a live PTY's current state; carrying them across an app
-        // restart is always wrong — the workspaces just rehydrated, no agent
-        // has emitted anything yet in this session. Without this reset the
-        // sidebar dot would lie about agents that died last time the user
-        // closed wmux (Codex 1st review #4: lifecycle reset).
-        const postLoadState = useStore.getState();
-        for (const ws of postLoadState.workspaces) {
-          // Only update workspaces whose persisted state actually carries a
-          // live status. Plain truthiness on agentStatus is true for 'idle'
-          // too, so the previous guard re-broadcast a no-op metadata update
-          // for every workspace that had ever held agent state.
-          const status = ws.metadata?.agentStatus;
-          const hasLive = (status && status !== 'idle') || (ws.metadata?.agentName && ws.metadata.agentName.length > 0);
-          if (hasLive) {
-            postLoadState.updateWorkspaceMetadata(ws.id, { agentStatus: 'idle', agentName: '' });
-          }
-        }
+            sessionLoadedRef.current = true;
+            setSessionLoaded(true);
+            // Only a saved session that brought workspaces back counts as
+            // restored: an empty one leaves the fresh default workspace in place,
+            // whose id matches nothing on disk (main's startup Deck reconcile).
+            if (Array.isArray(saved.workspaces) && saved.workspaces.length > 0) {
+              useStore.getState().markSessionRestored();
+            }
 
-        sessionLoadedRef.current = true;
-        setSessionLoaded(true);
-        // Only a saved session that brought workspaces back counts as
-        // restored: an empty one leaves the fresh default workspace in place,
-        // whose id matches nothing on disk (main's startup Deck reconcile).
-        if (Array.isArray(saved.workspaces) && saved.workspaces.length > 0) {
-          useStore.getState().markSessionRestored();
-        }
-
-        if (isFirstAutoUpdateChoice) {
-          setShowAutoUpdatePrompt(true);
-        }
-
-        // v2.8.1 hotfix (Bug 3): defer reconciliation until main has
-        // settled the daemon-vs-local decision. Without this gate, the
-        // reconcile fires while IPC handlers are mid-swap and pty.list
-        // can hit a "no handler registered" rejection — the renderer
-        // surfaces that as a generic "알 수 없는 오류" toast spam.
-        const daemonReady = await window.electronAPI.daemon.whenReady();
-
-        // Codex P1 — set daemonMode flag here, BEFORE paneGate flips ready.
-        // The separate daemonMode useEffect also calls setDaemonModeActive
-        // from its own .then, but that runs on its own React schedule. If
-        // paneGate flips first, Terminals mount with daemonModeAtMount=false
-        // and never call pty.reconnect — reproducing blank-terminal exactly
-        // as if reconcile never happened. Setting it inside this serialized
-        // startup path guarantees daemonMode is correct before Terminal mount.
-        setDaemonModeActive(daemonReady.connected);
-        daemonModeAtStartup = daemonReady.connected;
+            if (isFirstAutoUpdateChoice) {
+              setShowAutoUpdatePrompt(true);
+            }
+          },
+          whenReady: () => window.electronAPI.daemon.whenReady(),
+          setDaemonModeActive,
+        });
+        daemonModeAtStartup = daemonConnected;
+        // First ever launch: nothing to reconcile, and the welcome dialog's
+        // auto-update row asks.
+        if (!saved) return;
 
         // User-facing scrollback restore toggle. OFF: skip reconcile entirely
         // and clear every pty-keyed surface field so each Terminal mounts
@@ -2145,6 +2157,15 @@ export default function AppLayout() {
   // launch" is on; turning it off clears the stored frames.
   useEffect(() => watchColdFramePersistence(), []);
 
+  // Keep the computer awake while agents work: the mode and the working
+  // verdict to main, main's sleep window back (utils/sleepPreventionBridge.ts).
+  // The browser build (the only one exposing `hostPlatform`) has no main and
+  // must not keep the host awake.
+  useEffect(() => {
+    const browserBuild = typeof (window.electronAPI as { hostPlatform?: unknown }).hostPlatform === 'function';
+    return installSleepPreventionBridge(useStore, browserBuild ? undefined : window.electronAPI.power);
+  }, []);
+
   // Periodic session save — protects against crashes.
   // Awaits scrollback dump completion before saving session.json to guarantee
   // files referenced in session data actually exist on disk.
@@ -2366,6 +2387,8 @@ export default function AppLayout() {
       <CloseTabConfirm />
       <ProjectConfigDialog />
       <WorkspacePrepDialog />
+      {/* Voice dictation: the model consent, Esc to cancel, failure toasts. */}
+      {dictationAvailable() && <ErrorBoundary name="DictationHost"><DictationHost /></ErrorBoundary>}
       {/* "Pair again" from a remote workspace whose host rejected us. Lives
           here because re-pairing removes that host's views. */}
       {remoteRepairHostId && (

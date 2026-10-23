@@ -143,7 +143,8 @@ describe('relay git: inside WSL', () => {
       const r = await pushTaskBranch(
         { worktreePath: 'C:\\Users\\me\\.wmux\\worktrees\\h\\t', branch: 'wtask/one', defaultBranches: [], noHooksDir: 'C:\\Users\\me\\.wmux\\factory\\no-hooks', gitCommonDir: '\\\\wsl.localhost\\Ubuntu\\home\\me\\repo\\.git', gitWorktreeDir: '\\\\wsl.localhost\\Ubuntu\\home\\me\\repo\\.git\\worktrees\\t', relayRoot, taskId: 'wtask-1' },
         async () => ({ code: 1, stdout: '', stderr: 'host git' }),
-        { platform: 'win32', wslExec: exec },
+        // The secret check streams wsl.exe's output: no commits to read.
+        { platform: 'win32', wslExec: exec, lines: async () => true },
       );
       expect(r).toMatchObject({ ok: true, head: sha });
       const push = calls.find((c) => c.args.includes('push'));

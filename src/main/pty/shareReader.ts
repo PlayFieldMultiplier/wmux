@@ -111,11 +111,13 @@ abstract class QueuedProbeReader implements ProbeReader {
   protected abstract abandon(): void;
   /** Stops for good: the reader was closed. */
   protected abstract stop(): void;
+  /** Nothing is queued or being read. */
+  protected idle(): void { /* nothing to let go by default */ }
 
   private next(): void {
     if (this.busy || this.closed) return;
     const entry = this.queue.shift();
-    if (!entry) return;
+    if (!entry) { this.idle(); return; }
     this.busy = true;
     this.reading = entry;
     let over = false;
@@ -166,6 +168,7 @@ async function answer(op, p) {
   try {
     if (op === 'read') return await fs.promises.readFile(p, 'utf8');
     if (op === 'realpath') return await fs.promises.realpath(p);
+    if (op === 'open') { await (await fs.promises.opendir(p)).close(); return 'opened'; }
     return kind(await fs.promises.stat(p));
   } catch (err) {
     if (op !== 'stat') return null;
@@ -213,9 +216,16 @@ export class ChildProbeReader extends QueuedProbeReader {
   /** Processes killed for a missed deadline — observability/testing only. */
   kills = 0;
 
+  private idleTimer: NodeJS.Timeout | null = null;
+
+  /**
+   * @param idleMs Lets the process go after this long with nothing to read
+   *   (the next read starts a new one). Omitted, it lives until closed or killed.
+   */
   constructor(
     deadlineMs = SHARE_READ_DEADLINE_MS,
     private readonly source = SHARE_READER_SOURCE,
+    private readonly idleMs?: number,
   ) {
     super(deadlineMs);
   }
@@ -226,6 +236,7 @@ export class ChildProbeReader extends QueuedProbeReader {
   }
 
   protected ask(probe: Probe): Promise<ProbeAnswer> {
+    this.clearIdle();
     const child = this.child ?? this.start();
     const id = ++this.nextId;
     return new Promise<ProbeAnswer>((resolve, reject) => {
@@ -246,7 +257,23 @@ export class ChildProbeReader extends QueuedProbeReader {
   }
 
   protected stop(): void {
+    this.clearIdle();
     this.retire(new Error('reader closed'));
+  }
+
+  protected idle(): void {
+    if (this.idleMs === undefined || !this.child) return;
+    this.clearIdle();
+    this.idleTimer = setTimeout(() => {
+      this.idleTimer = null;
+      if (this.outstanding === 0) this.retire(new Error('reader idle'));
+    }, this.idleMs);
+    this.idleTimer.unref?.();
+  }
+
+  private clearIdle(): void {
+    if (this.idleTimer) clearTimeout(this.idleTimer);
+    this.idleTimer = null;
   }
 
   private start(): ChildProcess {

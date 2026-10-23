@@ -61,7 +61,8 @@ import Select from '../ui/Select';
 import Popover from '../ui/Popover';
 import { IconFanOut, IconImage, IconPlus } from '../icons';
 import { ChatAttachmentChips } from '../Chat/ChatAttachmentViews';
-import type { ChatAttachment } from '../Chat/chatAttachments';
+import { spliceAtCaret, type ChatAttachment } from '../Chat/chatAttachments';
+import { DictationButton, dictationAvailable } from '../Dictation/DictationButton';
 import { CardPhotos, ROOM_PHOTO_LIMIT, isRoomPhotoPath, photoOnlyCard, registerBotsDropTarget } from './BotsPhotos';
 import BotsFilePanel, { CardFiles, type OpenRoomFile } from './BotsFiles';
 import { renderBrainMarkdown, type MarkdownOptions } from '../shared/BrainMarkdown';
@@ -510,6 +511,7 @@ function MessageRow({ item, ctx, group }: { item: Extract<TimelineItem, { kind: 
               {renderBrainMarkdown((card.body?.trim() ? card.body : card.title).trim(), ctx.markdown)}
             </div>
           )}
+          <CardReactions card={card} ctx={ctx} end />
           {chips}
           {thread && thread.replies > 0 && <ThreadSummaryLine thread={thread} ctx={ctx} />}
         </div>
@@ -546,9 +548,47 @@ function MessageRow({ item, ctx, group }: { item: Extract<TimelineItem, { kind: 
         {/* Its files sit under the bubble, outside it (a chip's fill never
             sits on the bubble's). */}
         {ctx.onOpenFile && <CardFiles card={card} t={t} shownId={ctx.shownFileId} onOpen={ctx.onOpenFile} />}
+        <CardReactions card={card} ctx={ctx} />
         {chips}
         {thread && thread.replies > 0 && <ThreadSummaryLine thread={thread} ctx={ctx} />}
       </div>
+    </div>
+  );
+}
+
+/** The bots' reactions on a card in a group chat, one chip per emoji
+ *  with its count; the chip names who reacted, and says "saw this" for
+ *  the acknowledgements wmux left for bots that stayed silent. */
+function CardReactions({ card, ctx, end }: { card: RoomCardData; ctx: RowCtx; end?: boolean }) {
+  const { t } = ctx;
+  if (!card.reactions?.length) return null;
+  // An acknowledgement and a picked reaction of the same emoji are two
+  // chips: an acknowledging bot only saw the card.
+  const byEmoji = new Map<string, { emoji: string; names: string[]; picked: boolean }>();
+  for (const r of card.reactions) {
+    const key = `${r.emoji}:${r.ack ? 'ack' : 'pick'}`;
+    const entry = byEmoji.get(key) ?? { emoji: r.emoji, names: [], picked: !r.ack };
+    entry.names.push(botFace(r.botId, ctx)?.name || r.botId);
+    byEmoji.set(key, entry);
+  }
+  return (
+    <div data-bots-reactions className={`mt-0.5 flex flex-wrap items-center gap-1 ${end ? 'justify-end' : ''}`}>
+      {[...byEmoji].map(([key, { emoji, names, picked }]) => {
+        const label = t(picked ? 'botsPage.chat.reacted' : 'botsPage.chat.sawThis', { names: names.join(', '), emoji });
+        return (
+          <span
+            key={key}
+            data-bots-reaction={emoji}
+            role="img"
+            aria-label={label}
+            title={label}
+            className="inline-flex h-[20px] items-center gap-1 px-1.5 rounded-[var(--chip-radius)] bg-[var(--selection)] text-[11px] tabular-nums text-[var(--text-sub)]"
+          >
+            <span aria-hidden>{emoji}</span>
+            {names.length > 1 && <span aria-hidden>{names.length}</span>}
+          </span>
+        );
+      })}
     </div>
   );
 }
@@ -1504,6 +1544,21 @@ function BotsComposer({ conversation, threadId, workspaceId: workspaceOverride, 
     inputRef.current?.focus();
   };
   const listId = `bots-mention-list-${workspaceId}-${threadId}`;
+  // Dictated text goes in at the caret (over a selection), for the owner to
+  // edit; it is never sent by itself.
+  const insertDictation = (value: string) => {
+    const el = inputRef.current;
+    const current = textNow.current;
+    const start = el?.selectionStart ?? current.length;
+    const end = el?.selectionEnd ?? start;
+    const next = spliceAtCaret(current.slice(0, start) + current.slice(end), start, value);
+    pendingCaret.current = next.caret;
+    textNow.current = next.text;
+    setText(next.text);
+    setCaret(next.caret);
+    if (conversation.kind === 'room') picks.onText(next.text);
+    el?.focus();
+  };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     // Never while the IME composes (a Korean syllable is still being built).
@@ -1701,6 +1756,9 @@ function BotsComposer({ conversation, threadId, workspaceId: workspaceOverride, 
           onPaste={(e) => void pastePhoto(e)}
           className="wmux-bots-composer-input text-[14px]"
         />
+        {dictationAvailable() && (
+          <DictationButton target={`bots:${workspaceId}:${threadId}`} onText={insertDictation} disabled={!!refusal} className="wmux-bots-composer-plus" />
+        )}
         <button
           type="submit"
           data-testid="bots-composer-send"

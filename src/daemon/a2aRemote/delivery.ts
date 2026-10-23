@@ -8,6 +8,7 @@ import {
   type A2aLinkRecordV1,
   type A2aOutboxRecordV1,
   type A2aRemoteDeliverResponse,
+  type A2aRemoteEnvelope,
   type A2aRemoteErrorCode,
   type A2aRemoteHostRecordV1,
   type HostId,
@@ -23,7 +24,7 @@ import { remoteTaskId } from './ids';
 import { A2aImageStore, sha256 } from './imageStore';
 import { registerImageRoutes } from './imageRoutes';
 import { imageRoots, imageSourceMessage, readImageSource } from './imageSource';
-import { acceptInbound, type ImagePull, type InboundDeps } from './inbound';
+import { PeerTaskBudget, acceptInbound, type ImagePull, type InboundDeps } from './inbound';
 import type { NotifyLinkChange } from './linkRpc';
 import type { LinkStore } from './linkStore';
 import type { A2aOffers } from './offers';
@@ -70,6 +71,12 @@ export interface A2aRemoteDeliveryDeps {
   localWorkspaceName?: (workspaceId: string) => string | undefined;
   /** Share offers: received as link envelopes, refused by older builds, ended when a peer stops supporting them. */
   offers?: A2aOffers;
+  /** Remote spawn requests, results and targets (link envelopes; see `spawnReceiver.ts`). */
+  spawn?: InboundDeps['spawn'];
+  /** Links a remote start made here (spawnStarter.ts): redacted, no images, follow-ups held for their card. */
+  spawnLinks?: NonNullable<InboundDeps['spawnLinks']>;
+  /** This PC's requests to start agents on other PCs (spawnRequester.ts): told when the other PC refuses one for good. */
+  spawnAsks?: { onRefused(hostId: HostId, envelope: A2aRemoteEnvelope, code: A2aRemoteErrorCode): void };
   /** Optional features this PC advertises: on its streams to the servers it joined, and in its own streams' `hello`. */
   features?: readonly string[];
   /**
@@ -96,7 +103,7 @@ export interface A2aRemoteDeliveryDeps {
 const SYNC_MS = 5_000;
 const MAINTENANCE_MS = 60_000;
 const HELD_REASONS: ReadonlySet<string> = new Set<A2aRemoteHeldReason>([
-  'occupant-changed', 'pane-missing', 'link-not-active', 'delivery-unconfirmed', 'no-agent',
+  'occupant-changed', 'pane-missing', 'link-not-active', 'delivery-unconfirmed', 'no-agent', 'awaiting-approval',
 ]);
 /** What the sender's ledger shows while our pane has no agent to take its task. */
 export const NO_AGENT_SUMMARY = 'The linked pane on the receiving PC has no agent running; the task is held until someone there acts.';
@@ -130,6 +137,8 @@ export class A2aRemoteDelivery {
   private readonly features: readonly string[] | undefined;
   /** Failed image fetches from the servers this PC joined (`InboundImages.pullAttempts`). */
   private readonly pullAttempts = new Map<string, number>();
+  /** New tasks each PC sent this one in the last hour (the inbound limit). */
+  private readonly taskBudget = new PeerTaskBudget();
   private readonly deps: A2aRemoteDeliveryDeps;
   private readonly sessions = new Map<HostId, { session: JoinerSession; fingerprint: string; port: number }>();
   /** Server-side status, last announced. */
@@ -571,6 +580,7 @@ export class A2aRemoteDelivery {
   private async onRefused(rec: A2aOutboxRecordV1, code: A2aRemoteErrorCode, detail?: string): Promise<void> {
     this.deps.log('warn', `[a2a-remote] ${rec.hostId} refused ${rec.envelope.kind} on link ${rec.envelope.linkId}: ${code}`);
     this.deps.offers?.onRefused(rec.hostId, rec.envelope, code);
+    this.deps.spawnAsks?.onRefused(rec.hostId, rec.envelope, code);
     const taskId = taskOfEnvelope(rec.envelope, remoteTaskId);
     if (!taskId || !this.deps.taskService.getTask(taskId)) return;
     const reason = code === 'attachment-failed' ? `not sent to the other PC: ${detail ?? 'its images could not be uploaded'}` : `refused by the other PC: ${code}`;
@@ -658,7 +668,11 @@ export class A2aRemoteDelivery {
       aliasFor: (l) => this.aliasFor(l),
       ...(this.deps.localWorkspaceName ? { localWorkspaceName: this.deps.localWorkspaceName } : {}),
       ...(this.deps.offers ? { offers: this.deps.offers } : {}),
+      ...(this.deps.spawn ? { spawn: this.deps.spawn } : {}),
+      ...(this.deps.spawnLinks ? { spawnLinks: this.deps.spawnLinks } : {}),
       ...(this.images ? { images: { store: this.images, pullAttempts: this.pullAttempts } } : {}),
+      taskBudget: this.taskBudget,
+      log: this.deps.log,
     };
   }
 
@@ -670,6 +684,7 @@ export class A2aRemoteDelivery {
       outbox: this.outbox,
       aliasFor: (l) => this.aliasFor(l),
       peerFeatures: (hostId) => this.peerFeatures(hostId),
+      ...(this.deps.spawnLinks ? { spawnLink: (id: string) => this.deps.spawnLinks!.isSpawnLink(id) } : {}),
       ...(store
         ? {
           images: {
@@ -741,7 +756,12 @@ export class A2aRemoteDelivery {
   }
 
   private heldDeps(): HeldDeps {
-    return { taskService: this.deps.taskService, linkStore: this.deps.links, outbox: this.outbox };
+    return {
+      taskService: this.deps.taskService,
+      linkStore: this.deps.links,
+      outbox: this.outbox,
+      ...(this.deps.spawnLinks ? { spawnLink: (id: string) => this.deps.spawnLinks!.isSpawnLink(id) } : {}),
+    };
   }
 }
 

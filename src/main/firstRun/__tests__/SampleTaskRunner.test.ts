@@ -290,6 +290,78 @@ describe('SampleTaskRunner', () => {
   });
 });
 
+describe('SampleTaskRunner — a write that answers whether it was delivered', () => {
+  it('a command that never reached the shell is undelivered, never ok', async () => {
+    const writes: string[] = [];
+    let handler: ((chunk: string) => void) | null = null;
+    const source: PtyDataSource = {
+      onData(h) { handler = h; return () => { handler = null; }; },
+      write(data) { writes.push(data); return Promise.resolve(false); },
+    };
+    const run = new SampleTaskRunner().run(source, new AbortController().signal);
+    handler!('\x1b]133;A\x07');
+    expect(await run).toEqual({ outcome: 'undelivered' });
+    expect(writes).toEqual([SAMPLE_TASK_COMMAND + '\r']);
+    const throwing: PtyDataSource = {
+      onData(h) { handler = h; return () => { handler = null; }; },
+      write() { return Promise.reject(new Error('gone')); },
+    };
+    const run2 = new SampleTaskRunner().run(throwing, new AbortController().signal);
+    handler!('\x1b]133;A\x07');
+    expect(await run2).toEqual({ outcome: 'undelivered' });
+  });
+
+  it('a delivered command is ok; a prompt seen again while it is being written writes nothing more, and the handshake timer no longer applies', async () => {
+    vi.useFakeTimers();
+    try {
+      const writes: string[] = [];
+      let handler: ((chunk: string) => void) | null = null;
+      let deliver: (v: boolean) => void = () => undefined;
+      const source: PtyDataSource = {
+        onData(h) { handler = h; return () => { handler = null; }; },
+        write(data) { writes.push(data); return new Promise<boolean>((r) => { deliver = r; }); },
+      };
+      const run = new SampleTaskRunner().run(source, new AbortController().signal);
+      const emit = handler as unknown as (chunk: string) => void;
+      emit('\x1b]133;A\x07');
+      emit('\x1b]133;B\x07');
+      await vi.advanceTimersByTimeAsync(OSC133_TIMEOUT_MS + 1000);
+      deliver(true);
+      expect(await run).toEqual({ outcome: 'ok' });
+      expect(writes).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('the write gets the run\'s signal: Skip during the write is aborted, and the signal tells the write to stop', async () => {
+    let handler: ((chunk: string) => void) | null = null;
+    let seen: AbortSignal | undefined;
+    const source: PtyDataSource = {
+      onData(h) { handler = h; return () => { handler = null; }; },
+      write(_data, signal) { seen = signal; return new Promise<boolean>(() => { /* still trying */ }); },
+    };
+    const ctrl = new AbortController();
+    const run = new SampleTaskRunner().run(source, ctrl.signal);
+    handler!('\x1b]133;A\x07');
+    expect(seen).toBe(ctrl.signal);
+    ctrl.abort();
+    expect(await run).toEqual({ outcome: 'aborted' });
+    expect(seen?.aborted).toBe(true);
+  });
+
+  it('a write whose answer is unknown takes the timeout\'s path, neither ok nor undelivered', async () => {
+    let handler: ((chunk: string) => void) | null = null;
+    const source: PtyDataSource = {
+      onData(h) { handler = h; return () => { handler = null; }; },
+      write() { return Promise.resolve('unknown' as const); },
+    };
+    const run = new SampleTaskRunner().run(source, new AbortController().signal);
+    handler!('\x1b]133;B\x07');
+    expect(await run).toEqual({ outcome: 'timeout' });
+  });
+});
+
 describe('SAMPLE_TASK_COMMAND (#452)', () => {
   it('launches claude with the sample prompt instead of pasting a bare prompt', () => {
     // The OSC133 prompt-ready we scan for is emitted by the *shell* (e.g. pwsh

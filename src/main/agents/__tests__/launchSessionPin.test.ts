@@ -23,6 +23,11 @@ describe('withLaunchSessionPin (A1)', () => {
     const options = { exec: 'claude', initialCommand: undefined };
     expect(withLaunchSessionPin(options, mint)).toBe(options);
   });
+  it('pins a typed fresh qwen launch the same way, and never a kimi one (no pin flag)', () => {
+    expect(withLaunchSessionPin({ initialCommand: 'qwen' }, mint)?.initialCommand).toBe(`qwen --session-id ${U}`);
+    const kimi = { initialCommand: 'kimi' };
+    expect(withLaunchSessionPin(kimi, mint)).toBe(kimi);
+  });
   it('mints a real UUID by default', () => {
     expect(withLaunchSessionPin({ initialCommand: 'claude' })?.initialCommand).toMatch(/^claude --session-id [0-9a-f-]{36}$/);
   });

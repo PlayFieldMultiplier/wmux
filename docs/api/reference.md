@@ -26,7 +26,7 @@ returns `EPERM`. Wire framing: newline-delimited JSON, one object per line.
 
 ## RPC methods
 
-Total: **289** methods (`ALL_RPC_METHODS` in
+Total: **301** methods (`ALL_RPC_METHODS` in
 `src/shared/rpc.ts`). Capability and risk class are read from
 `src/main/mcp/methodCapabilityMap.ts`:
 
@@ -226,6 +226,18 @@ Total: **289** methods (`ALL_RPC_METHODS` in
 | `a2a.remote.offers.withdraw` | `wmux.internal` |  |
 | `a2a.remote.offers.accept` | `wmux.internal` |  |
 | `a2a.remote.offers.decline` | `wmux.internal` |  |
+| `a2a.remote.spawnPolicy.get` | `wmux.internal` |  |
+| `a2a.remote.spawnPolicy.set` | `wmux.internal` |  |
+| `a2a.remote.spawnRequests.list` | `wmux.internal` |  |
+| `a2a.remote.spawn.work` | `wmux.internal` |  |
+| `a2a.remote.spawn.decide` | `wmux.internal` |  |
+| `a2a.remote.spawn.claim` | `wmux.internal` |  |
+| `a2a.remote.spawn.started` | `wmux.internal` |  |
+| `a2a.remote.spawn.failed` | `wmux.internal` |  |
+| `a2a.remote.spawn.ask` | `wmux.internal` |  |
+| `a2a.remote.spawn.outgoing` | `wmux.internal` |  |
+| `a2a.remote.spawn` | `a2a.execute` | `a2a` |
+| `a2a.remote.spawnStatus` | `a2a.read` | `a2a` |
 | `a2a.resolve.identity` | `a2a.read` | `a2a` |
 | `a2a.whoami` | `a2a.read` | `a2a` |
 | `a2a.discover` | `a2a.read` | `a2a` |

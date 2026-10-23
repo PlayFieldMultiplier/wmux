@@ -45,7 +45,7 @@
 //     exiting) re-runs the verification without waiting for new output.
 
 import type { RingBuffer, ReplayGeometry } from './RingBuffer';
-import { readRingTailWithModesAndGeometry, readRingWithModesAndGeometry } from './sessionTextReplay';
+import { UNKNOWN_CELL, readRingTailWithModesAndGeometry, readRingWithModesAndGeometry, withUnknownCells } from './sessionTextReplay';
 import { screenShowsActiveDialog, screenShowsPermissionDialog } from './transcript/chatScreenGate';
 import { isNativeDecision, type ApprovalRequest } from './approvals/types';
 
@@ -71,6 +71,12 @@ export interface AwaitingFrame {
   mark: number;
   /** The grid's width. Absent: not known, treated as wide. */
   cols?: number;
+  /**
+   * The same rows with UNKNOWN_CELL for each cell the read could not see (the
+   * ring dropped the bytes that last wrote it), where `rows` has a blank.
+   * Present only when there is one.
+   */
+  unknown?: readonly string[];
 }
 
 export interface AwaitingScreenVerifierDeps {
@@ -338,6 +344,29 @@ function liveGeometry(pane: RenderablePane): { cols: number; rows: number } | nu
 }
 
 /**
+ * The visible grid rebuilt from only the newest `maxBytes` of the ring, for a
+ * caller that reads plain shell output (the shell-prompt watcher): no whole-ring
+ * replay. Null when the pane is gone or muted, its geometry is unknown, the
+ * parse failed, or the pane was resized meanwhile.
+ */
+export async function renderPaneTail(
+  getPane: () => RenderablePane | undefined,
+  snapshot: TextSnapshot,
+  maxBytes: number = AWAITING_RENDER_WINDOW_BYTES,
+): Promise<string[] | null> {
+  const pane = getPane();
+  if (!pane || pane.bridge.isMuted) return null;
+  const geometry = liveGeometry(pane);
+  if (!geometry) return null;
+  const tail = readRingTailWithModesAndGeometry(pane.ringBuffer, pane.bridge.outputModes ?? null, maxBytes);
+  const outcome = await snapshot({ ...geometry, scrollback: 0, initial: tail.replay, geometry: tail.geometry });
+  if (!outcome.ok || getPane() !== pane) return null;
+  const after = liveGeometry(pane);
+  if (!after || after.cols !== geometry.cols || after.rows !== geometry.rows) return null;
+  return outcome.rows.map((r) => r.text);
+}
+
+/**
  * Read a pane's visible grid for the verifier. Null — "unreadable", which keeps
  * the pane awaiting — when the pane is gone or muted, its geometry is unknown,
  * the parse failed, or the pane was resized while the render waited in the
@@ -359,17 +388,25 @@ export async function renderPaneScreen(
   // was up was refused as gone). Only when the whole ring does not parse in
   // time is the newest stretch read instead.
   const outputModes = pane.bridge.outputModes ?? null;
+  // A ring that dropped its oldest bytes cannot show a cell they last wrote:
+  // such a cell reads as unknown (withUnknownCells), not as a blank.
   const whole = readRingWithModesAndGeometry(pane.ringBuffer, outputModes);
   const mark = whole.writtenAt;
-  let outcome = await snapshot({ ...geometry, scrollback: 0, initial: whole.replay, geometry: whole.geometry });
+  let read = withUnknownCells(whole, geometry);
+  let outcome = await snapshot({ ...geometry, scrollback: 0, initial: read.replay, geometry: read.geometry });
   if (!outcome.ok && outcome.reason === 'budget') {
     const tail = readRingTailWithModesAndGeometry(pane.ringBuffer, outputModes, AWAITING_RENDER_WINDOW_BYTES);
     if (tail.writtenAt !== mark) return null;
-    outcome = await snapshot({ ...geometry, scrollback: 0, initial: tail.replay, geometry: tail.geometry });
+    read = withUnknownCells(tail, geometry);
+    outcome = await snapshot({ ...geometry, scrollback: 0, initial: read.replay, geometry: read.geometry });
   }
   if (!outcome.ok) return null;
   if (getPane() !== pane) return null;
   const after = liveGeometry(pane);
   if (!after || after.cols !== geometry.cols || after.rows !== geometry.rows) return null;
-  return { rows: outcome.rows.map((r) => r.text), mark, cols: geometry.cols };
+  const texts = outcome.rows.map((r) => r.text);
+  if (!read.marked || !texts.some((t) => t.includes(UNKNOWN_CELL))) return { rows: texts, mark, cols: geometry.cols };
+  // Every other reader sees what it saw before: an unknown cell as a blank.
+  const rows = texts.map((t) => t.split(UNKNOWN_CELL).join(' ').replace(/ +$/, ''));
+  return { rows, mark, cols: geometry.cols, unknown: texts };
 }

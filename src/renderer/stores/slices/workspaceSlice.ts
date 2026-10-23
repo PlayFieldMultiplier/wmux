@@ -7,6 +7,8 @@ import { normalizeStarPromptState } from '../../../shared/starPrompt';
 import { normalizeWorkspaceProfile } from '../../../shared/workspaceProfile';
 import { overridesFromDisabledCombos, sanitizeShortcutOverrides } from '../../../shared/keymap';
 import { normalizeWorkspaceColor, type WorkspaceColorId } from '../../../shared/workspaceColors';
+import type { A2aRemoteSpawnedBy } from '../../../shared/a2aSpawn';
+import { parseRemoteSpawnedBy, type RemoteSpawnedWorkspace } from '../../utils/remoteSpawnedBy';
 import { normalizeRoleBindings } from '../../../shared/orchestratorRole';
 import { getPresetById } from '../../../shared/layoutPresets';
 import { setLocale as i18nSetLocale, t as i18nT, detectSupportedLocale, type Locale } from '../../i18n';
@@ -33,6 +35,7 @@ import {
   shadowsToEvict,
 } from '../shadowWorkspace';
 import { clampFileTreeWidth } from '../../utils/fileTreeLayout';
+import { isSleepPreventionMode } from '../../../shared/sleepPrevention';
 import { clampSidebarWidth, dropOwnerFoldKeys, movePinned, pinnedFirst, pruneTaskGroupExpanded, resolveSidebarSortMode, sortModeMigratedToAttention, unpinNestedTasks } from '../../utils/sidebarLayout';
 import {
   collectLeafIds,
@@ -301,6 +304,8 @@ export interface WorkspaceSlice {
    * normalizeWorkspaceColor rather than stored.
    */
   setWorkspaceColor: (id: string, color: WorkspaceColorId | undefined) => void;
+  /** Mark a workspace as started by another PC (remote spawn); kept for its life. */
+  setWorkspaceRemoteSpawnedBy: (id: string, by: A2aRemoteSpawnedBy) => void;
   /** `pin` is the drop target's pin state; omitted keeps the row's own. */
   reorderWorkspace: (fromIndex: number, toIndex: number, pin?: boolean) => void;
   loadSession: (data: SessionData) => void;
@@ -1017,6 +1022,11 @@ export const createWorkspaceSlice: StateCreator<StoreState, [['zustand/immer', n
       }
     }),
 
+    setWorkspaceRemoteSpawnedBy: (id, by) => set((state: StoreState) => {
+      const ws = state.workspaces.find((w: Workspace) => w.id === id) as RemoteSpawnedWorkspace | undefined;
+      if (ws) ws.remoteSpawnedBy = { ...by };
+    }),
+
     reorderWorkspace: (fromIndex, toIndex, pin) => set((state: StoreState) => {
       // The pinned group stays a prefix of the stored order; a drop beside a
       // pinned row pins, beside an unpinned one unpins (sidebarLayout.movePinned).
@@ -1069,6 +1079,12 @@ export const createWorkspaceSlice: StateCreator<StoreState, [['zustand/immer', n
       if (typeof data.secretGuardEnabled === 'boolean') {
         state.secretGuardEnabled = data.secretGuardEnabled;
         window.electronAPI.settings.setSecretGuardEnabled?.(data.secretGuardEnabled);
+      }
+
+      // Keep the computer awake: an unknown value keeps the default. Main
+      // hears of it from utils/sleepPreventionBridge.ts.
+      if (isSleepPreventionMode(data.sleepPreventionMode)) {
+        state.sleepPreventionMode = data.sleepPreventionMode;
       }
 
       // Window glass, ahead of the empty-workspace return below. On Windows
@@ -1368,6 +1384,14 @@ export const createWorkspaceSlice: StateCreator<StoreState, [['zustand/immer', n
         const color = normalizeWorkspaceColor(ws.color);
         if (color) ws.color = color;
         else delete ws.color;
+      }
+      // Remote-spawn provenance: same hand-editable file, same rule. A value
+      // that is not exactly one is dropped so the header chip never shows it.
+      for (const ws of state.workspaces as RemoteSpawnedWorkspace[]) {
+        if (ws.remoteSpawnedBy === undefined) continue;
+        const by = parseRemoteSpawnedBy(ws.remoteSpawnedBy);
+        if (by) ws.remoteSpawnedBy = by;
+        else delete ws.remoteSpawnedBy;
       }
 
       // Restore user preferences. Migrate legacy 37-field customThemeColors

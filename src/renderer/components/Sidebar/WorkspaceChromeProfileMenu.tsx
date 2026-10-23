@@ -3,6 +3,8 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { IconChevron } from '../icons';
 import { useT } from '../../hooks/useT';
 import { useStore } from '../../stores';
+import Button from '../ui/Button';
+import type { LentLiveTab } from '../../../shared/browserAgentControl';
 
 /**
  * Workspace right-click → Chrome profile submenu (Phase 2.5, BIND ONLY).
@@ -66,6 +68,27 @@ export default function WorkspaceChromeProfileMenu({
   }, [workspaceId, isChromeBackend]);
 
   useEffect(() => { reload(); }, [reload]);
+
+  // Live Chrome: the user's own tabs this workspace's agents were lent, each
+  // with Return to me. Read when the submenu opens; main owns the grants.
+  const [lentTabs, setLentTabs] = useState<LentLiveTab[]>([]);
+  const isLive = bound === 'live';
+  const reloadLent = useCallback(() => {
+    const api = window.electronAPI?.browser?.agentControl;
+    if (!api || !isLive) {
+      setLentTabs([]);
+      return;
+    }
+    void api.lentTabs(workspaceId).then((res) => {
+      setLentTabs(res.ok && res.tabs ? res.tabs : []);
+    }).catch(() => { /* the section stays as it was */ });
+  }, [workspaceId, isLive]);
+  useEffect(() => { if (open) reloadLent(); }, [open, reloadLent]);
+  const returnTab = useCallback((surfaceId: string) => {
+    const api = window.electronAPI?.browser?.agentControl;
+    if (!api) return;
+    void api.returnTab(workspaceId, surfaceId).then(reloadLent).catch(() => { /* best-effort */ });
+  }, [workspaceId, reloadLent]);
 
   const bind = useCallback((profileName: string | null) => {
     const api = window.electronAPI?.browser?.chromeProfiles;
@@ -230,6 +253,30 @@ export default function WorkspaceChromeProfileMenu({
               </button>
             );
           })}
+          {isLive && lentTabs.length > 0 && (
+            <div className="border-t border-[var(--bg-overlay)] mt-1 pt-1" data-testid="chrome-lent-tabs">
+              <div className="px-3 py-1 text-[11px] text-[var(--text-sub)]">{t('chromeProfiles.lentTabs')}</div>
+              {lentTabs.map((tab) => (
+                <div key={tab.surfaceId} className="flex items-center gap-2 px-3 py-1 text-xs" style={{ color: 'var(--text-main)' }}>
+                  <span className="truncate flex-1 min-w-0" title={tab.url}>
+                    {tab.title || tab.url || t('chromeProfiles.untitledTab')}
+                  </span>
+                  <Button
+                    size="sm"
+                    className="shrink-0"
+                    data-testid="chrome-lent-return"
+                    title={t('chromeProfiles.returnTabHint')}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      returnTab(tab.surfaceId);
+                    }}
+                  >
+                    {t('chromeProfiles.returnTab')}
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
           <div className="border-t border-[var(--bg-overlay)] mt-1 pt-1">
             {confirmLiveOpen ? (
               <div

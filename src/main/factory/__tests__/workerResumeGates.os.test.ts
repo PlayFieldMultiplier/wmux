@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { persisterWritesSettled } from '../versionedFile';
 
 vi.mock('electron', () => ({ ipcMain: { handle: vi.fn(), removeHandler: vi.fn() }, dialog: {}, nativeImage: {} }));
 
@@ -43,7 +44,12 @@ beforeEach(async () => {
     ended: 'completed', state: 'stopped', at: 1, sessions: [{ sessionId: 'daemon-1', cwd: dir, resumeSessionId: UUID }],
   });
 });
-afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+afterEach(async () => {
+  // A store's fire-and-forget save can still be on its way: let it land
+  // before its folder goes, or the removal races it.
+  await persisterWritesSettled();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
 
 function ports(): WorkerResumePorts & { typeLine: ReturnType<typeof vi.fn> } {
   const typeLine = vi.fn(() => true);

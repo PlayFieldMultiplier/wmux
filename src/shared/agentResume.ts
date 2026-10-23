@@ -70,9 +70,12 @@ interface ResumeGrammar {
 const RESUME_BY_LAUNCHER: ReadonlyMap<string, ResumeGrammar> = new Map(
   AGENT_ROWS.flatMap((row): [string, ResumeGrammar][] => {
     const spec = row.resume;
-    return spec
-      ? [[row.slug, { picker: spec.picker, withId: (id) => spec.exact.split('{id}').join(id), ...(spec.pin ? { pin: spec.pin } : {}) }]]
-      : [];
+    if (!spec) return [];
+    // A picker-only agent has no exact form: any resume of it opens the picker,
+    // and no id is ever written into its line.
+    const exact = spec.exact;
+    const withId = exact === undefined ? (): string => spec.picker : (id: string): string => exact.split('{id}').join(id);
+    return [[row.slug, { picker: spec.picker, withId, ...(spec.pin ? { pin: spec.pin } : {}) }]];
   }),
 );
 
@@ -238,7 +241,9 @@ const UUID_RE = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
  * Other agents keep their own id formats, so only these two are checked.
  */
 export function isPlausibleResumeSessionId(agent: string, sessionId: string): boolean {
-  if (agentRow(agent)?.resume?.idFormat === 'uuid') return UUID_RE.test(sessionId);
+  const format = agentRow(agent)?.resume?.idFormat;
+  if (format === 'picker-only') return false;
+  if (format === 'uuid') return UUID_RE.test(sessionId);
   return sessionId.length > 0;
 }
 
@@ -260,6 +265,8 @@ const SKIP_TOKENS: ReadonlySet<string> = new Set([
   '--continue',
   '--resume',
   '--print',
+  // Qwen Code's one-shot form (`-p` is its short alias).
+  '--prompt',
   '-c',
   '-r',
   '-p',

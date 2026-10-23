@@ -97,6 +97,7 @@ import {
   type Party,
 } from '../../shared/handoff';
 import { GENERAL_THREAD, ROOM_LIMITS, dmThreadBot, groupThreadGroup, parseThreadId, type RoomCard, type ThreadId } from '../../shared/room';
+import { GROUP_ROUND_LIMITS } from '../../shared/botGroupProtocol';
 import { humanCardIdOfRun } from './humanMessage';
 import { untrackedGuest, type GuestProvenance, type TaintMark } from './wakeTaint';
 import { crossesGuestBoundary } from './guestWorkspaces';
@@ -129,6 +130,16 @@ import {
   type FactoryRoomPorts,
   type RoomWriter,
 } from './roomWriter';
+
+/** Whether a bot talks in a live group chat's thread (its own, or General
+ *  for a group made from the room) as one of the group's bots. */
+function inGroupChat(ports: Partial<FactoryRoomPorts>, workspaceId: string, threadId: ThreadId, botId: string): boolean {
+  try {
+    return ports.groups?.byThread(workspaceId, threadId)?.memberIds.includes(botId) === true;
+  } catch {
+    return false;
+  }
+}
 
 export const HANDOFFS_FILENAME = 'handoffs.jsonl';
 export const LEGACY_MOA_HANDOFFS_FILENAME = 'moa-handoffs.json';
@@ -935,6 +946,11 @@ export class HandoffRouter {
       const refused = this.refuse(draft, 'max_depth', `chain depth ${depth} is over ${HANDOFF_LIMITS.MAX_DEPTH}`);
       if (inRelay) this.stopRelay(draft.id, target.bot, `the chain reached its depth limit (${HANDOFF_LIMITS.MAX_DEPTH})`);
       return refused;
+    }
+    // A group chat's bots mentioning each other go MENTION_WAVES deep
+    // (shared/botGroupProtocol.ts): an A↔B loop ends there.
+    if (depth > GROUP_ROUND_LIMITS.MENTION_WAVES && spec.clientHandoffId?.startsWith('mention:') === true && inGroupChat(ports, sender.workspaceId, draft.threadId, sender.botId)) {
+      return this.refuse(draft, 'max_depth', `bots in a group chat mention each other at most ${GROUP_ROUND_LIMITS.MENTION_WAVES} deep; this mention is ${depth} deep`);
     }
     // The first hops of an owner's run (the bots it woke answering each
     // other) are never refused here; they count for the hops after them.

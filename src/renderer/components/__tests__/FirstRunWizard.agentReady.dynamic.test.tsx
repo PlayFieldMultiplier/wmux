@@ -158,6 +158,64 @@ describe('FirstRunWizard agent ready step', () => {
     expect(primaries().map((b) => b.dataset.testid)).toEqual(['first-run-agent-claude-run']);
   });
 
+  it('an agent whose sign-in wmux cannot check shows installed, says so, and offers Sign in as a secondary', async () => {
+    installBridge([notInstalled('claude'), notInstalled('codex'), {
+      agent: 'grok', readiness: 'installed', executable: '/home/u/.grok/bin/grok', version: '1.0.67', updateRecommended: false, loginKnown: false, candidates: [],
+    }]);
+    await act(async () => { root.render(createElement(FirstRunWizard, { mode: 'firstRun', onClose: vi.fn() })); });
+    await settle();
+    const card = byId('first-run-agent-grok');
+    expect(card?.dataset.status).toBe('ok');
+    expect(card?.textContent).toContain('Installed · 1.0.67');
+    expect(byId('first-run-agent-grok-sign-in-note')?.textContent).toContain("wmux can't check it");
+    expect(byId('first-run-agent-grok-login')?.className).not.toContain('ui-btn-primary');
+    // Claude's Install is still the one primary.
+    expect(primaries().map((b) => b.dataset.testid)).toEqual(['first-run-agent-claude-install']);
+  });
+
+  it('an agent with several documented install lines lets the user pick one, and runs exactly that one from the home folder', async () => {
+    const PS = 'irm https://x.ai/cli/install.ps1 | iex';
+    const WINGET = 'winget install --id xAI.GrokBuild -e';
+    const firstRun = installBridge([ready('claude'), notInstalled('codex'), {
+      agent: 'grok', readiness: 'not-installed', executable: null, version: null, updateRecommended: false, loginKnown: true, candidates: [],
+    }]);
+    const ps = { via: 'script', command: PS, shell: 'powershell', officialPage: 'https://docs.x.ai/build/overview', missing: [] };
+    const winget = { via: 'winget', command: WINGET, shell: 'powershell', officialPage: 'https://docs.x.ai/build/overview', missing: [] };
+    firstRun.agentPlan.mockResolvedValue({ agent: 'grok', install: ps, installs: [ps, winget], login: null });
+    tab.open.mockResolvedValue({ workspaceId: 'ws-1', ptyId: 'pty-1' });
+    // A workspace with its own startup folder: the install still runs from home.
+    act(() => {
+      useStore.setState((st) => ({ workspaces: st.workspaces.map((w, i) => (i === 0 ? { ...w, profile: { ...w.profile, startupCwd: '/work/project' } } : w)) }) as never);
+    });
+    await act(async () => { root.render(createElement(FirstRunWizard, { mode: 'firstRun', onClose: vi.fn() })); });
+    await settle();
+
+    await act(async () => { byId('first-run-agent-grok-install')?.click(); });
+    await settle();
+    const via = byId('first-run-agent-grok-via');
+    expect([...(via?.querySelectorAll('[role="radio"]') ?? [])].map((b) => b.textContent)).toEqual(['PowerShell', 'WinGet']);
+    expect(byId('first-run-agent-grok-command')?.textContent).toBe(PS);
+
+    const wingetOption = [...(via?.querySelectorAll('[role="radio"]') ?? [])].find((b) => b.textContent === 'WinGet') as HTMLButtonElement;
+    await act(async () => { wingetOption.click(); });
+    expect(byId('first-run-agent-grok-command')?.textContent).toBe(WINGET);
+    expect(tab.open).not.toHaveBeenCalled();
+
+    await act(async () => { byId('first-run-agent-grok-run')?.click(); });
+    await settle();
+    // From the home folder (null), never a workspace's startup folder.
+    expect(tab.open).toHaveBeenCalledWith(expect.objectContaining({ initialCommand: WINGET, shell: 'powershell.exe', cwd: null }));
+  });
+
+  it('an installed agent whose sign-in wmux cannot check counts as set up: the footer is no longer Later', async () => {
+    installBridge([notInstalled('claude'), notInstalled('codex'), {
+      agent: 'agy', readiness: 'installed', executable: '/home/u/.local/bin/agy', version: '1.4.5', updateRecommended: false, loginKnown: false, candidates: [],
+    }]);
+    await act(async () => { root.render(createElement(FirstRunWizard, { mode: 'firstRun', onClose: vi.fn() })); });
+    await settle();
+    expect(byId('first-run-wizard-skip')?.textContent).not.toBe('Later');
+  });
+
   it('Run on a card that is not the primary stays secondary', async () => {
     const fr = installBridge([notInstalled('claude'), notInstalled('codex')]);
     fr.agentPlan.mockResolvedValue({

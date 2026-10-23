@@ -24,6 +24,7 @@ import { displayWorkspaceName, fleetRequesterText } from '../../utils/fanoutProv
 import { useShallow } from 'zustand/react/shallow';
 import { formatIdle, IDLE_SHOW_AFTER_MS } from '../../utils/idleTime';
 import { refuseWorkspaceClose } from '../Moa/moaHqGuard';
+import { secretRefusalText } from '../Git/secretRefusal';
 
 export type ReviewEditorKind = 'close' | 'pr';
 type Translate = ReturnType<typeof useT>;
@@ -195,6 +196,9 @@ export async function createReviewTaskPr(entry: ReviewQueueEntry, t: Translate):
       push({ level: 'warn', message: `${res.error}${res.browseFallback ? ` — ${res.browseFallback}` : ''}` });
     } else if (res.reason === 'dirty') {
       push({ level: 'warn', message: res.error });
+    } else if (res.reason === 'secrets') {
+      // The Git page's words for the same refusal.
+      push({ level: 'warn', message: res.secretScanFailed ? t('git.secret.scanFailed') : secretRefusalText(res.secrets ?? [], t) });
     } else {
       push({ level: 'error', message: t('diff.prFailed', { error: res.error ?? '' }) });
     }

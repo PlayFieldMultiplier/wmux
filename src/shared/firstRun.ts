@@ -45,7 +45,9 @@ export type RegisterMcpResult =
 
 // === Sample task ===
 // Outcome reported by SampleTaskRunner (T3) via firstRun:sample-task-ready or :timeout events.
-export type SampleTaskOutcome = 'ok' | 'timeout' | 'aborted';
+// 'undelivered': the shell was at its prompt but the command never reached
+// it; the start invoke rejects, so the wizard shows an error, never success.
+export type SampleTaskOutcome = 'ok' | 'timeout' | 'aborted' | 'undelivered';
 
 // Renderer → main payload for firstRun:start-sample-task.
 // `ptyId` is the upper-left pane's shell — the sample task launches `claude`

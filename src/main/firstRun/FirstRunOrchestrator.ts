@@ -27,17 +27,18 @@ import { externalRegistrationSkipReason } from '../../shared/mcpTargets';
 import type {
   FirstRunCheckResult,
   RegisterMcpResult,
+  SampleTaskOutcome,
 } from '../../shared/firstRun';
 import { AGENT_IDS, type AgentId, type AgentSetupStatus } from '../../shared/agentSetup';
 import {
   agentExecutableNames,
-  agentInstallMethod,
+  agentInstallMethods,
   agentLoginCommand,
   shellSyntax,
   type AgentSetupPlan,
   type SetAgentPathResult,
 } from '../../shared/agentInstall';
-import { isExecutableFile } from '../claude/resolveClaudeExecutable';
+import { isExecutableFile, liveResolveEnv, programOnPath } from '../claude/resolveClaudeExecutable';
 import { atomicWriteJSON } from '../../daemon/util/atomicWrite';
 
 const MARKER_FILENAME = '.first-run';
@@ -62,7 +63,70 @@ function buildDaemonSource(dc: DaemonClient, ptyId: string): PtyDataSource {
       dc.on('session:data', listener);
       return () => { dc.removeListener('session:data', listener); handlerRef = NOOP; };
     },
-    write(data) { dc.writeToSession(ptyId, sanitizePtyText(data)); },
+    // Through the daemon's control channel, not the pane's session pipe: the
+    // pane's own attach replaces that pipe (pty:reconnect, forceFresh) just
+    // after the pane is created, and a write in between was dropped while
+    // the wizard reported success. daemon.writeIfUnchanged compares the pane
+    // with a fresh read and writes in one step, and answers whether it wrote.
+    // Second layer, bounded by SAMPLE_WRITE_WINDOW_MS: output that lands
+    // between the read and the write (the grid's resize redraws the prompt)
+    // refuses it, and a prompt still being drawn is waited for
+    // (samplePromptVerdict), so the pane is read and tried again. The compare
+    // makes a retry safe: a line already typed has moved the pane, so it is
+    // never typed twice. Skip or dismiss (the signal) stops the loop.
+    async write(data, signal) {
+      const line = sanitizePtyText(data);
+      const startedAt = Date.now();
+      let baseline: PromptBaseline | null = null;
+      for (let attempt = 0; ; attempt++) {
+        if (attempt > 0) {
+          if (Date.now() - startedAt >= SAMPLE_WRITE_WINDOW_MS) return false;
+          await new Promise((r) => setTimeout(r, SAMPLE_WRITE_RETRY_MS));
+        }
+        if (signal?.aborted) return false;
+        let read: PromptRead | null;
+        try {
+          read = await dc.rpc('daemon.readPromptEvents', { sessionId: ptyId, limit: 1 }) as PromptRead | null;
+        } catch {
+          return false; // nothing was written since the last answer
+        }
+        if (!read) return false;
+        baseline ??= { keyInputRevision: read.keyInputRevision, incarnationId: read.incarnationId };
+        const verdict = samplePromptVerdict(read, baseline, Date.now() - startedAt >= SAMPLE_PROMPT_END_GRACE_MS);
+        if (verdict === 'refuse') return false;
+        if (verdict === 'wait') continue;
+        if (signal?.aborted) return false;
+        const last = read.events?.at(-1);
+        let res: { written?: boolean } | null;
+        try {
+          res = await dc.rpc('daemon.writeIfUnchanged', {
+            sessionId: ptyId,
+            data: line,
+            expect: {
+              ...(typeof read.keyInputRevision === 'number' ? { keyInputRevision: read.keyInputRevision } : {}),
+              ...(typeof read.incarnationId === 'string' && read.incarnationId ? { incarnationId: read.incarnationId } : {}),
+              // A prompt that never drew its end has no empty-prompt verdict:
+              // its key revision, still 0, stands in for it.
+              ...(verdict === 'write' ? { requireEmptyShellPrompt: true as const } : {}),
+              outputBytes: read.totalBytesWritten ?? 0,
+              markerCount: read.eventCount ?? read.events?.length ?? 0,
+              lastPromptMarker: last && typeof last.byteOffset === 'number' ? { type: last.type, byteOffset: last.byteOffset } : null,
+            },
+          }) as { written?: boolean } | null;
+        } catch {
+          // The reply was lost; the write may still have happened. The
+          // daemon moves the key revision when it types the line, so one
+          // read tells: moved means written, unchanged means not (try again).
+          const after = await (dc.rpc('daemon.readPromptEvents', { sessionId: ptyId, limit: 1 }) as Promise<PromptRead | null>)
+            .catch(() => null);
+          const wrote = writeLanded(read, after);
+          if (wrote === null) return 'unknown';
+          if (wrote) return true;
+          continue;
+        }
+        if (res?.written === true) return true;
+      }
+    },
     // The daemon logs each OSC 133 marker before it forwards the bytes, so
     // its prompt log holds every prompt this listener could have missed.
     async atPrompt() {
@@ -72,8 +136,68 @@ function buildDaemonSource(dc: DaemonClient, ptyId: string): PtyDataSource {
   };
 }
 
-interface PromptRead {
-  events?: Array<{ type: string }>;
+/**
+ * How long the sample command's conditional write keeps trying (see
+ * buildDaemonSource): the runner's own handshake bound, OSC133_TIMEOUT_MS.
+ */
+export const SAMPLE_WRITE_WINDOW_MS = 5000;
+export const SAMPLE_WRITE_RETRY_MS = 150;
+/**
+ * How long a prompt's start (133;A) may stand without its end (133;B) before
+ * the write goes ahead without it. bash runs the user's PROMPT_COMMAND
+ * between the two, often 50-500 ms; a prompt framework that rebuilds PS1 on
+ * every prompt drops the B append and never draws it.
+ */
+export const SAMPLE_PROMPT_END_GRACE_MS = 1500;
+
+interface PromptBaseline {
+  keyInputRevision?: number;
+  incarnationId?: string;
+}
+
+/**
+ * What the sample command's write does with one read of the pane:
+ * - `refuse` on hard evidence that the prompt is not a fresh, empty one: a key
+ *   since the first read, another shell incarnation, a command started, or a
+ *   drawn prompt the daemon does not vouch for as empty;
+ * - `write` at a drawn prompt (133;B) the daemon vouches for as empty;
+ * - `write-unended` at a prompt start (133;A) whose end did not come within
+ *   the grace, on a pane no key has ever reached (key revision 0);
+ * - `wait` otherwise: the prompt is still being drawn, or there is none yet.
+ */
+export function samplePromptVerdict(
+  read: PromptRead,
+  baseline: PromptBaseline,
+  graceOver: boolean,
+): 'refuse' | 'write' | 'write-unended' | 'wait' {
+  if (read.sessionFound !== true) return 'refuse';
+  if (baseline.incarnationId !== undefined && read.incarnationId !== baseline.incarnationId) return 'refuse';
+  if (baseline.keyInputRevision !== undefined && read.keyInputRevision !== baseline.keyInputRevision) return 'refuse';
+  const last = read.events?.at(-1)?.type;
+  if (last === 'command_start') return 'refuse';
+  if (last === 'prompt_end') return shellAtEmptyPrompt(read) ? 'write' : 'refuse';
+  if (last === 'prompt_start' && graceOver && read.keyInputRevision === 0) return 'write-unended';
+  return 'wait';
+}
+
+/**
+ * Whether a conditional write whose reply was lost had typed the line:
+ * the daemon moves the key revision when it does. Null when the pane cannot
+ * be read again, or the reads cannot tell.
+ */
+function writeLanded(before: PromptRead, after: PromptRead | null): boolean | null {
+  if (!after || after.sessionFound !== true) return null;
+  if (typeof before.keyInputRevision !== 'number' || typeof after.keyInputRevision !== 'number') return null;
+  if (after.incarnationId !== before.incarnationId) return null;
+  return after.keyInputRevision > before.keyInputRevision;
+}
+
+export interface PromptRead {
+  events?: Array<{ type: string; byteOffset?: number }>;
+  eventCount?: number;
+  totalBytesWritten?: number;
+  keyInputRevision?: number;
+  incarnationId?: string;
   emptyShellPrompt?: boolean;
   sessionFound?: boolean;
 }
@@ -82,8 +206,9 @@ interface PromptRead {
  * The newest OSC 133 marker ends a prompt (B) and the daemon vouches that the
  * prompt is empty. A marker alone cannot tell a fresh prompt from a stale one
  * under a shell that never reports command-start (bash 3.2, pwsh without
- * PSReadLine); emptyShellPrompt is cleared by any input, so it also keeps the
- * command off a line the user has begun typing (as terminalSession.ts reads it).
+ * PSReadLine); emptyShellPrompt is cleared by any key (not by a terminal's
+ * replies or focus reports), so it also keeps the command off a line the user
+ * has begun typing (as terminalSession.ts reads it).
  */
 export function shellAtEmptyPrompt(res: PromptRead | null): boolean {
   return res?.sessionFound === true
@@ -144,14 +269,22 @@ export class FirstRunOrchestrator {
    * line for the exact executable the card shows.
    */
   async agentPlan(agent: AgentId, paneShell?: string): Promise<AgentSetupPlan> {
-    const method = agentInstallMethod(agent, process.platform);
+    const methods = agentInstallMethods(agent, process.platform);
+    const method = methods[0];
     if (!method) throw new Error(`first-run: no install line for ${agent}`);
     const env = this.agentDetector.probeEnvFor(process.execPath);
-    const missing = method.requires.filter((name) => !this.onPath(name, env));
+    const installs = methods.map((m) => ({
+      via: m.via,
+      command: m.command,
+      shell: m.shell,
+      officialPage: m.officialPage,
+      missing: m.requires.filter((name) => !this.onPath(name, env)),
+    }));
     const executable = this.agentDetector.resolveExecutable(agent);
     return {
       agent,
-      install: { command: method.command, shell: method.shell, officialPage: method.officialPage, missing },
+      install: installs[0],
+      installs,
       // The sign-in line is typed into the pane's shell, so it is quoted for that
       // shell: PowerShell on Windows; on macOS/Linux the shell the pane spawns
       // (the renderer's explicit choice, else $SHELL, as pty creation does),
@@ -197,9 +330,7 @@ export class FirstRunOrchestrator {
   }
 
   private onPath(name: string, env: NodeJS.ProcessEnv): boolean {
-    const raw = env.PATH ?? env.Path ?? '';
-    const dirs = [...raw.split(path.delimiter), '/usr/bin', '/bin'].filter((d) => path.isAbsolute(d));
-    return dirs.some((d) => isExecutableFile(path.join(d, name)));
+    return programOnPath(liveResolveEnv(env), name);
   }
 
   private agentPathsPath(): string {
@@ -352,7 +483,7 @@ export class FirstRunOrchestrator {
     win.webContents.send(IPC.FIRST_RUN_SAMPLE_TASK_TIMEOUT);
   }
 
-  async startSampleTask(ptyId: string): Promise<void> {
+  async startSampleTask(ptyId: string): Promise<SampleTaskOutcome> {
     // Single-flight: cancel any prior runner before starting a new one.
     this.activeAbort?.abort();
     const ctrl = new AbortController();
@@ -369,10 +500,12 @@ export class FirstRunOrchestrator {
     if (this.activeAbort === ctrl) this.activeAbort = null;
 
     const win = this.getWindow();
-    if (!win || win.isDestroyed()) return;
+    if (!win || win.isDestroyed()) return outcome;
     if (outcome === 'ok') win.webContents.send(IPC.FIRST_RUN_SAMPLE_TASK_READY);
     else if (outcome === 'timeout') win.webContents.send(IPC.FIRST_RUN_SAMPLE_TASK_TIMEOUT);
     // 'aborted' → no event; dismiss/restart already handled the UX.
+    // 'undelivered' → no event; the start invoke rejects (firstRun/index.ts).
+    return outcome;
   }
 
   // ── private ────────────────────────────────────────────────────────────────

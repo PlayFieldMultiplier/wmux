@@ -2,6 +2,7 @@ import type { BrowserWindow } from 'electron';
 import type { RpcRouter } from '../RpcRouter';
 import type { RpcContext } from '../../../shared/rpc';
 import { sendToRenderer } from './_bridge';
+import { heldBrowserSurfaceRefusal, type AgentControlHolds } from './surface.rpc';
 import {
   mintWorkspaceClaimToken,
   revokeWorkspaceClaimTokensFor,
@@ -20,6 +21,8 @@ export interface WorkspaceRpcDeps {
   guards?: Pick<FanOutGuards, 'fanoutOwnerOf' | 'markTask'>;
   /** Injected in tests; defaults to the mirror/renderer resolution. */
   resolveCallerWorkspace?: (senderPtyId: string) => Promise<string | null>;
+  /** Stop / Take over on browser tabs: a workspace holding a held tab is not closed. */
+  agentControl?: AgentControlHolds;
 }
 
 export function registerWorkspaceRpc(router: RpcRouter, getWindow: GetWindow, deps: WorkspaceRpcDeps = {}): void {
@@ -155,6 +158,11 @@ export function registerWorkspaceRpc(router: RpcRouter, getWindow: GetWindow, de
         );
       }
     }
+    // Closing the workspace closes its browser tabs, so a tab the user paused or
+    // took over refuses it. `force` does not lift this: only the user's own
+    // Resume or Hand back does.
+    const userHold = await heldBrowserSurfaceRefusal(getWindow, deps.agentControl, 'workspace.close', [id], () => true);
+    if (userHold) throw userHold;
     const result = await sendToRenderer(getWindow, 'workspace.close', { id, ...(force ? { force: true } : {}) });
     // #922 PR-A — retire any claim bound to this workspace, but ONLY once the
     // close actually happened.

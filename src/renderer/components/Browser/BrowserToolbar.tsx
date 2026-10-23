@@ -4,6 +4,7 @@ import { isSafeBrowserUrl } from '../../utils/browserPane';
 import Badge from '../ui/Badge';
 import { IconLock as IconPrivate } from '../icons';
 import { useElementWidth } from '../../hooks/useElementWidth';
+import { BrowserAgentStatus } from './BrowserAgentControls';
 
 /** Below this toolbar width the "Private" badge folds to its padlock, so the
  *  address field keeps room for the URL. */
@@ -95,6 +96,10 @@ interface BrowserToolbarProps {
   /** Private tab: a neutral "Private" badge sits beside the URL bar. */
   isPrivate?: boolean;
   inspecting: boolean;
+  /** The tab's surface: its agent marker and Stop / Take over sit in this row. */
+  surfaceId?: string;
+  /** An open help request speaks for the tab; the agent marker steps aside. */
+  agentStatusHidden?: boolean;
   onNavigate: (url: string) => void;
   onBack: () => void;
   onForward: () => void;
@@ -116,6 +121,8 @@ export default function BrowserToolbar({
   isActive,
   isPrivate = false,
   inspecting,
+  surfaceId,
+  agentStatusHidden,
   onNavigate,
   onBack,
   onForward,
@@ -278,6 +285,10 @@ export default function BrowserToolbar({
           />
         </div>
       </form>
+
+      {surfaceId && (
+        <BrowserAgentStatus surfaceId={surfaceId} compact={compactPrivate} hidden={agentStatusHidden} />
+      )}
 
       {isPrivate && (compactPrivate ? (
         <span

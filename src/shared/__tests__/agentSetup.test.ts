@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isOlderVersion, parseAgentVersion } from '../agentSetup';
+import { anyAgentReady, anyAgentSetUp, isOlderVersion, parseAgentVersion, type AgentSetupStatus } from '../agentSetup';
 
 describe('agent version helpers', () => {
   it('reads the version from each agent\'s --version line', () => {
@@ -13,5 +13,18 @@ describe('agent version helpers', () => {
     expect(isOlderVersion('2.1.236', '2.1.236')).toBe(false);
     expect(isOlderVersion('0.163.0', '0.157.0')).toBe(false);
     expect(isOlderVersion('0.9.0', '0.157.0')).toBe(true);
+  });
+});
+
+describe('anyAgentSetUp', () => {
+  const st = (agent: AgentSetupStatus['agent'], readiness: AgentSetupStatus['readiness']): AgentSetupStatus => ({
+    agent, readiness, executable: null, version: null, updateRecommended: false, loginKnown: readiness !== 'installed', candidates: [],
+  });
+  it('counts a signed-in agent or one installed with an uncheckable sign-in; anyAgentReady still counts only signed in', () => {
+    const installedOnly = [st('claude', 'not-installed'), st('codex', 'login-needed'), st('grok', 'installed')];
+    expect(anyAgentSetUp(installedOnly)).toBe(true);
+    expect(anyAgentReady(installedOnly)).toBe(false);
+    expect(anyAgentSetUp([st('claude', 'login-needed'), st('agy', 'not-installed')])).toBe(false);
+    expect(anyAgentSetUp([st('codex', 'ready')])).toBe(true);
   });
 });
