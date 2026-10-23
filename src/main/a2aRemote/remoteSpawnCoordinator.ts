@@ -244,7 +244,8 @@ export class RemoteSpawnCoordinator {
       if (!row) return failed('failed', `unknown agent ${claim.agent}`);
       const tree = await (this.deps.createWorktree ?? createSpawnWorktree)({ repoPath: claim.repoPath, sub: claim.sub, spawnId });
       if (!tree.ok) return failed(tree.code, tree.detail);
-      const spawnedBy: A2aRemoteSpawnedBy = { hostId, name: claim.hostName, spawnId, agent: claim.agent };
+      // The renderer takes a name of at most 64 characters (it drops the marker otherwise).
+      const spawnedBy: A2aRemoteSpawnedBy = { hostId, name: claim.hostName.slice(0, 64), spawnId, agent: claim.agent };
       let ws: SpawnedWorkspace | null;
       try {
         ws = spawnedWorkspace(await this.deps.sendToRenderer('fanout.spawnWorkspace', {

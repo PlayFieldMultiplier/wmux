@@ -17,8 +17,8 @@
 
 import { type RiskClassCopy } from '../../../main/mcp/methodCapabilityMap';
 import type { BrowserActionPromptInfo, RemoteSpawnPromptInfo } from '../../../main/mcp/ApprovalQueue';
-import { agentRow } from '../../../shared/agentIdentity';
-import { isFanoutWorkerPermissionMode } from '../../../shared/workerLaunch';
+import { agentLauncherStem, agentRow } from '../../../shared/agentIdentity';
+import { applyWorkerPermissionFlags, isFanoutWorkerPermissionMode } from '../../../shared/workerLaunch';
 import { groupCapabilities } from './capabilityGrouping';
 import { useT } from '../../hooks/useT';
 import Dialog, { DialogBody, DialogFooter, DialogHeader } from '../ui/Dialog';
@@ -279,8 +279,8 @@ function RemoteSpawnDetails({ spawn, agent }: { spawn: RemoteSpawnPromptInfo; ag
       key: 'mode',
       label: t('remoteSpawn.card.mode'),
       value: mode,
-      // The mode is a Claude flag; another agent runs without it.
-      ...(spawn.agent !== 'claude' && { note: t('remoteSpawn.card.modeClaudeOnly') }),
+      // The mode is a launch flag only some agents take; one that takes none runs without it.
+      ...(!takesPermissionMode(spawn.agent) && { note: t('remoteSpawn.card.modeClaudeOnly') }),
     },
   ];
   const meaning = spawn.followUp
@@ -314,4 +314,12 @@ function RemoteSpawnDetails({ spawn, agent }: { spawn: RemoteSpawnPromptInfo; ag
       <p className="m-0 text-[13px] text-[var(--text-sub)]" data-remote-spawn-meaning>{meaning}</p>
     </>
   );
+}
+
+/** Whether the worker permission flags change this agent's launch line (the same check the spawn applies). */
+function takesPermissionMode(agent: string): boolean {
+  const row = agentRow(agent);
+  if (!row) return false;
+  const launcher = agentLauncherStem(row);
+  return applyWorkerPermissionFlags(launcher, 'auto') !== launcher;
 }
