@@ -335,6 +335,89 @@ describe('RemoteA2aBridge', () => {
     expect(daemon.attempts.filter((a) => a.attempted === false)).toHaveLength(4);
   });
 
+  it('an agent behind a prompt is not held: retried at the base delay, the daemon told on every miss past the bound, in soon after it clears', async () => {
+    daemon.tasks.set(id(24), remoteTask(24));
+    answer = () => ({ ok: true, delivered: false, reason: 'approval_pending' });
+    bridge.start();
+    await settle();
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    // Never held, and never backed off past the base delay.
+    expect(daemon.marks).toEqual([]);
+    expect(renderer.mock.calls.length).toBeGreaterThan(300);
+    const told = daemon.attempts.filter((a) => a.waiting !== undefined);
+    expect(told.length).toBe(renderer.mock.calls.length - 4);
+    expect(new Set(told.map((a) => a.waiting))).toEqual(new Set(['agent-prompt']));
+    // The prompt is answered: the next try, within the base delay, goes in.
+    answer = () => ({ ok: true, delivered: true, ptyId: 'pty-b' });
+    await vi.advanceTimersByTimeAsync(REMOTE_BRIDGE_RETRY_MIN_MS);
+    expect(daemon.marks).toEqual([{ taskId: id(24), delivered: true, ptyId: 'pty-b' }]);
+  });
+
+  it('a sender reply the daemon could not send the first time goes with the next miss, and once overall', async () => {
+    daemon.tasks.set(id(26), remoteTask(26));
+    // The daemon's side: a reply goes once (it is then in the task's history); the first send fails.
+    let failNext = 1;
+    let sent = 0;
+    const real = daemon.rpc.bind(daemon);
+    daemon.rpc = async (m, p) => {
+      if (m === 'a2a.remote.mark' && p.waiting !== undefined) {
+        if (failNext > 0) failNext -= 1;
+        else if (sent === 0) sent += 1;
+      }
+      return real(m, p);
+    };
+    answer = () => ({ ok: true, delivered: false, reason: 'user_typing' });
+    bridge.start();
+    await settle();
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(failNext).toBe(0);
+    expect(sent).toBe(1);
+    expect(daemon.attempts.filter((a) => a.waiting === 'user-typing').length).toBeGreaterThan(1);
+  });
+
+  it('a pane flapping between no agent and a prompt still ends in one outcome: held as no-agent once', async () => {
+    daemon.tasks.set(id(25), remoteTask(25));
+    let n = 0;
+    answer = () => ({ ok: true, delivered: false, reason: n++ % 2 === 0 ? 'no_agent_pane' : 'approval_pending' });
+    bridge.start();
+    await settle();
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(daemon.marks).toEqual([{ taskId: id(25), held: 'no-agent' }]);
+    const calls = renderer.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(renderer.mock.calls.length).toBe(calls);
+  });
+
+  it('a refusal that says nothing about the agent, or one this build does not know, stays on the retry path', async () => {
+    daemon.tasks.set(id(27), remoteTask(27));
+    daemon.tasks.set(id(28), remoteTask(28));
+    answer = (p) => ({ ok: true, delivered: false, reason: p.presetTaskId === id(27) ? 'gate_unavailable' : 'some_new_reason' });
+    bridge.start();
+    await settle();
+    await vi.advanceTimersByTimeAsync(2 * 60 * 60_000);
+    expect(daemon.marks).toEqual([]);
+    expect(daemon.attempts.filter((a) => a.waiting !== undefined)).toEqual([]);
+    const tries = (n: number) => renderer.mock.calls.filter(([, p]) => p.presetTaskId === id(n)).length;
+    expect(tries(27)).toBeGreaterThan(5);
+    expect(tries(28)).toBeGreaterThan(5);
+  });
+
+  it('a reply waiting behind a prompt is retried but tells nothing: the daemon tells a sender of a task only', async () => {
+    const t = remoteTask(29);
+    const marker = t.metadata.remote as A2aRemoteTaskState;
+    marker.delivered = true;
+    marker.inbox = [{ messageId: 'r1', kind: 'reply' }];
+    t.history.push({ kind: 'message', messageId: 'r1', role: 'agent', parts: [{ kind: 'text', text: 'reply' }] });
+    daemon.tasks.set(id(29), t);
+    answer = () => ({ ok: true, delivered: false, reason: 'approval_pending' });
+    bridge.start();
+    await settle();
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+    expect(renderer.mock.calls.length).toBeGreaterThan(5);
+    expect(daemon.attempts.filter((a) => a.waiting !== undefined)).toEqual([]);
+    expect(daemon.marks).toEqual([]);
+  });
+
   it('a renderer timeout leaves the attempt standing: held as unconfirmed, not pasted again', async () => {
     daemon.tasks.set(id(23), remoteTask(23));
     answer = () => Promise.reject(new Error('RPC timeout: a2a.task.send (130000ms)'));
