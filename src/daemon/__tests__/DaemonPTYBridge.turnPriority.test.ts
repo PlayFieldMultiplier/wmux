@@ -83,6 +83,39 @@ describe('DaemonPTYBridge turn priority', () => {
     expect(bridge.isEmptyShellPrompt()).toBe(false);
   });
 
+  it('a terminal\'s replies and focus reports never make an untouched prompt read as used', () => {
+    // ConPTY's startup queries answered (cursor position, device attributes)
+    // and a focus change, all before the first prompt is drawn.
+    bridge.noteInput('\x1b[24;80R');
+    bridge.noteInput('\x1b[?1;2c');
+    bridge.noteInput('\x1b[I\x1b[O');
+    expect(bridge.getInputRevision()).toBe(3);
+    expect(bridge.getKeyInputRevision()).toBe(0);
+    feed('\x1b]133;A\x07PS C:\\> \x1b]133;B\x07');
+    expect(bridge.isEmptyShellPrompt()).toBe(true);
+    // Alt-Tab away and back at the drawn prompt.
+    bridge.noteInput('\x1b[O');
+    bridge.noteInput('\x1b[I');
+    expect(bridge.isEmptyShellPrompt()).toBe(true);
+    // Between a command's end and the next prompt, too.
+    bridge.noteInput('ls\r');
+    feed('\x1b]133;C\x07');
+    feed('\x1b]133;D;0\x07');
+    bridge.noteInput('\x1b[I');
+    feed('\x1b]133;A\x07$ \x1b]133;B\x07');
+    expect(bridge.isEmptyShellPrompt()).toBe(true);
+    // A key still makes it used.
+    bridge.noteInput('x');
+    expect(bridge.isEmptyShellPrompt()).toBe(false);
+  });
+
+  it('the first prompt after a key reached the pane is not vouched for as empty', () => {
+    bridge.noteInput('\x1b[I');
+    bridge.noteInput('e');
+    feed('\x1b]133;A\x07$ \x1b]133;B\x07');
+    expect(bridge.isEmptyShellPrompt()).toBe(false);
+  });
+
   describe('baseline (unsettled pane)', () => {
     it.each(['\x1b[A', 'queued-draft'])('does not certify input queued after Enter in the same chunk: %s', (queued) => {
       feed('\x1b]133;B\x07'); bridge.noteInput(`sleep 3\r${queued}`);
