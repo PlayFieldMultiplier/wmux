@@ -14,7 +14,7 @@ import {
   type HostId,
   type PeerCredential,
 } from '../../shared/a2aRemote';
-import { A2A_REMOTE_RPC, isLegacyHeldReason, readHeldReason, type A2aRemoteHeldReason } from '../../shared/a2aRemoteDelivery';
+import { A2A_REMOTE_RPC, isLegacyHeldReason, isWaitingCause, readHeldReason, type A2aRemoteHeldReason, type A2aRemoteWaitingCause } from '../../shared/a2aRemoteDelivery';
 import type { A2aRemoteHostStatus, A2aRemoteHostsStatusResult } from '../../shared/rpc';
 import { prepareA2aImage, type A2aImageInfo, type A2aImageRefusal } from '../../shared/a2aImages';
 import { TERMINAL_STATES } from '../../shared/types';
@@ -107,6 +107,11 @@ const HELD_REASONS: ReadonlySet<string> = new Set<A2aRemoteHeldReason>([
 ]);
 /** What the sender's ledger shows while our pane has no agent to take its task. */
 export const NO_AGENT_SUMMARY = 'The linked pane on the receiving PC has no agent running; the task is held until someone there acts.';
+/** What the sender's ledger shows while our pane's agent is there but cannot take its task yet (not a hold). */
+export const WAITING_SUMMARY: Readonly<Record<A2aRemoteWaitingCause, string>> = {
+  'agent-prompt': 'The agent on the receiving PC is waiting on a prompt there; the task is delivered once the prompt is answered.',
+  'user-typing': 'Someone is typing in the linked pane on the receiving PC; the task is delivered once they stop.',
+};
 const STATES: ReadonlySet<string> = new Set(['working', 'input-required', 'completed', 'failed', 'canceled']);
 const TERMINAL_LINK: ReadonlySet<string> = new Set(['revoked', 'broken']);
 
@@ -428,7 +433,10 @@ export class A2aRemoteDelivery {
         ...(p['note'] === 'pasted-not-submitted' ? { note: 'pasted-not-submitted' as const } : {}),
         ...(typeof p['ptyId'] === 'string' && isSafeId(p['ptyId']) ? { ptyId: p['ptyId'] } : {}),
       });
-      if (res.ok && held === 'no-agent' && messageId === undefined) await this.noAgent(taskId);
+      if (res.ok && held === 'no-agent' && messageId === undefined) await this.tellSender(taskId, NO_AGENT_SUMMARY);
+      // Not a hold: main keeps delivering. A cause this build does not know is ignored.
+      const waiting = p['waiting'];
+      if (res.ok && held === undefined && isWaitingCause(waiting) && messageId === undefined) await this.tellSender(taskId, WAITING_SUMMARY[waiting]);
       // Handed over: the sender gets a `delivered` receipt.
       if (res.ok && p['delivered'] === true && messageId === undefined) await this.syncTask(taskId);
       return res.ok ? { ok: true } : res;
@@ -534,17 +542,18 @@ export class A2aRemoteDelivery {
   // --- internals ------------------------------------------------------------
 
   /**
-   * Our pane kept having no agent for the peer's task: the sender hears why,
-   * once, as a reply from this side (its task stays open; `submitted` has no
-   * edge to `input-required`, and nothing here has started the work).
+   * Our pane could not take the peer's task (no agent, or an agent behind a
+   * prompt or a person typing): the sender hears why, once per summary, as a
+   * reply from this side (its task stays open; `submitted` has no edge to
+   * `input-required`, and nothing here has started the work).
    */
-  private async noAgent(taskId: string): Promise<void> {
+  private async tellSender(taskId: string, summary: string): Promise<void> {
     const task = this.deps.taskService.getTask(taskId);
     if (!task || task.status.state !== 'submitted') return;
-    const said = task.history.some((m) => m.parts.some((p) => p.kind === 'text' && p.text === NO_AGENT_SUMMARY));
+    const said = task.history.some((m) => m.parts.some((p) => p.kind === 'text' && p.text === summary));
     if (said) return;
-    const res = await sendRemoteReply(this.outboundDeps(), { taskId, workspaceId: task.metadata.to.workspaceId, text: NO_AGENT_SUMMARY });
-    if (!res.ok) this.deps.log('warn', `[a2a-remote] ${taskId}: could not tell the sender its pane has no agent: ${res.error}`);
+    const res = await sendRemoteReply(this.outboundDeps(), { taskId, workspaceId: task.metadata.to.workspaceId, text: summary });
+    if (!res.ok) this.deps.log('warn', `[a2a-remote] ${taskId}: could not tell the sender why its task waits: ${res.error}`);
   }
 
   private newSession(hostId: HostId): JoinerSession {

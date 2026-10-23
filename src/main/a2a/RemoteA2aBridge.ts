@@ -5,10 +5,12 @@ import {
   A2A_REMOTE_RPC,
   deliveredImagesOf,
   localSideOf,
+  waitingCauseOf,
   type A2aRemoteDeliveryResult,
   type A2aRemoteHeldReason,
   type A2aRemoteInboxItem,
   type A2aRemoteTaskState,
+  type A2aRemoteWaitingCause,
 } from '../../shared/a2aRemoteDelivery';
 import { GATED_DELIVERY_DEADLINE_MARGIN_MS, GATED_NEW_TASK_SEND_MAIN_TIMEOUT_MS } from '../../shared/freshContext';
 import { TERMINAL_STATES, type Task } from '../../shared/types';
@@ -67,7 +69,7 @@ export interface RemoteA2aBridgeDeps {
 type Mark =
   | { delivered: true; ptyId?: string; note?: 'pasted-not-submitted' }
   | { held: A2aRemoteHeldReason }
-  | { attempted: false };
+  | { attempted: false; waiting?: A2aRemoteWaitingCause };
 
 /** One unit of work: the task itself, or one inbox item of it. */
 interface Work {
@@ -90,8 +92,12 @@ export class RemoteA2aBridge {
   /** A mark the daemon did not take yet: retried before anything else, never re-delivered. */
   private readonly pendingMarks = new Map<string, { taskId: string; messageId?: string; mark: Mark }>();
   private readonly retry = new Map<string, { at: number; delayMs: number }>();
-  /** Consecutive "written nowhere" answers per unit (no agent in the pane). */
-  private readonly misses = new Map<string, { count: number; since: number }>();
+  /**
+   * Consecutive "written nowhere" answers per unit, of one kind: no agent in
+   * the pane, or an agent there behind a prompt or a person typing
+   * (`waiting`). A change of kind starts the count again.
+   */
+  private readonly misses = new Map<string, { count: number; since: number; waiting?: A2aRemoteWaitingCause; told?: boolean }>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private unsubscribe: (() => void) | null = null;
   private running: Promise<void> | null = null;
@@ -292,18 +298,25 @@ export class RemoteA2aBridge {
     if (isRecord(result) && 'error' in result && typeof result.error === 'string') {
       this.deps.log?.('warn', `[a2a-remote] renderer refused ${unit.key}: ${result.error}`);
     }
-    // Written nowhere (no agent in the pane, a person typing): the attempt is
-    // cleared so a later try may write. A pane that keeps having no agent is
-    // held for a person instead of being retried forever.
-    const miss = this.misses.get(unit.key) ?? { count: 0, since: this.now() };
+    // Written nowhere: the attempt is cleared so a later try may write. A pane
+    // that keeps having no agent is held for a person instead of being retried
+    // forever. One whose agent is there but behind a prompt, or a person
+    // typing, is not held: it keeps retrying on the backoff and goes in once
+    // that clears, and the sender is told why once.
+    const waiting = isRecord(result) && 'reason' in result ? waitingCauseOf(result.reason) : undefined;
+    const prev = this.misses.get(unit.key);
+    const miss = prev && prev.waiting === waiting ? prev : { count: 0, since: this.now(), ...(waiting ? { waiting } : {}) };
     miss.count += 1;
     this.misses.set(unit.key, miss);
-    if (miss.count >= REMOTE_BRIDGE_NO_AGENT_TRIES || this.now() - miss.since >= REMOTE_BRIDGE_NO_AGENT_MS) {
+    const long = miss.count >= REMOTE_BRIDGE_NO_AGENT_TRIES || this.now() - miss.since >= REMOTE_BRIDGE_NO_AGENT_MS;
+    if (long && !waiting) {
       this.misses.delete(unit.key);
       await this.mark(unit.key, { ...ref, mark: { held: 'no-agent' } });
       return 'no-agent';
     }
-    await this.mark(unit.key, { ...ref, mark: { attempted: false } });
+    const tell = long && !miss.told && waiting !== undefined;
+    if (tell) miss.told = true;
+    await this.mark(unit.key, { ...ref, mark: { attempted: false, ...(tell ? { waiting } : {}) } });
     return 'not-delivered';
   }
 

@@ -335,6 +335,39 @@ describe('RemoteA2aBridge', () => {
     expect(daemon.attempts.filter((a) => a.attempted === false)).toHaveLength(4);
   });
 
+  it('an agent behind a prompt is not held: the sender is told once, and the task goes in once the prompt is answered', async () => {
+    daemon.tasks.set(id(24), remoteTask(24));
+    answer = () => ({ ok: true, delivered: false, reason: 'approval_pending' });
+    bridge.start();
+    await settle();
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    // Past the no-agent bound and still retried on the backoff, never held.
+    expect(renderer.mock.calls.length).toBeGreaterThan(5);
+    expect(daemon.marks).toEqual([]);
+    expect(daemon.attempts.filter((a) => a.waiting !== undefined)).toEqual([{ taskId: id(24), attempted: false, waiting: 'agent-prompt' }]);
+    // The prompt is answered: the next try goes in.
+    answer = () => ({ ok: true, delivered: true, ptyId: 'pty-b' });
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(daemon.marks).toEqual([{ taskId: id(24), delivered: true, ptyId: 'pty-b' }]);
+  });
+
+  it('a person typing is told as such; a pane whose agent then leaves counts its no-agent misses afresh', async () => {
+    daemon.tasks.set(id(25), remoteTask(25));
+    answer = () => ({ ok: true, delivered: false, reason: 'user_typing' });
+    bridge.start();
+    await settle();
+    await vi.advanceTimersByTimeAsync(20 * 60_000);
+    expect(daemon.attempts.filter((a) => a.waiting !== undefined)).toEqual([{ taskId: id(25), attempted: false, waiting: 'user-typing' }]);
+    const before = renderer.mock.calls.length;
+    answer = () => ({ ok: true, delivered: false, reason: 'no_agent_pane' });
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    // One no-agent miss is not yet a hold.
+    expect(renderer.mock.calls.length).toBe(before + 1);
+    expect(daemon.marks).toEqual([]);
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(daemon.marks).toEqual([{ taskId: id(25), held: 'no-agent' }]);
+  });
+
   it('a renderer timeout leaves the attempt standing: held as unconfirmed, not pasted again', async () => {
     daemon.tasks.set(id(23), remoteTask(23));
     answer = () => Promise.reject(new Error('RPC timeout: a2a.task.send (130000ms)'));

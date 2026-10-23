@@ -226,6 +226,26 @@ export function readHeldReason(held: string): A2aRemoteHeldReason {
   return LEGACY_MOA_HELD_REASONS.has(held) ? 'link-not-active' : (held as A2aRemoteHeldReason);
 }
 
+/**
+ * Why a pane whose agent IS there could not take a delivery just now: its
+ * agent is showing a prompt or dialog (an Enter would answer it), or a person
+ * is typing in it. Not a hold: the delivery keeps retrying and goes in once
+ * that clears. Main tells the daemon (`waiting` on the mark RPC), which tells
+ * the sender once. An older daemon ignores the field.
+ */
+export type A2aRemoteWaitingCause = 'agent-prompt' | 'user-typing';
+
+/** The waiting cause a renderer refusal reason stands for (ptyMessageDelivery's `GatedSubmitRefusal`), if any. */
+export function waitingCauseOf(reason: unknown): A2aRemoteWaitingCause | undefined {
+  if (reason === 'approval_pending') return 'agent-prompt';
+  if (reason === 'user_typing') return 'user-typing';
+  return undefined;
+}
+
+export function isWaitingCause(v: unknown): v is A2aRemoteWaitingCause {
+  return v === 'agent-prompt' || v === 'user-typing';
+}
+
 /** True for a hold reason only earlier versions wrote (a Moa hold). */
 export function isLegacyHeldReason(held: string): boolean {
   return LEGACY_MOA_HELD_REASONS.has(held);
@@ -298,7 +318,8 @@ export function localSideOf(task: Pick<Task, 'metadata'>): 'from' | 'to' {
  *   - `held`: refused for a reason that must not be retried blindly — the
  *     pane is gone, or another occupant holds it now. Never re-routed.
  *   - neither: not written this time (approval prompt, person typing, no
- *     agent in the pane); the bridge may try again later.
+ *     agent in the pane); the bridge may try again later. `reason` says
+ *     which: `waitingCauseOf` reads the ones where an agent is there.
  */
 export type A2aRemoteDeliveryResult =
   | { ok: true; delivered: true; duplicate?: boolean; ptyId?: string; note?: 'pasted-not-submitted' }

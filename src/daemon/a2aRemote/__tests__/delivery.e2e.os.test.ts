@@ -16,7 +16,7 @@ import { RemoteA2aBridge } from '../../../main/a2a/RemoteA2aBridge';
 import { A2aTaskService } from '../../a2a/A2aTaskService';
 import { AppendOnlyLog } from '../../eventlog/AppendOnlyLog';
 import { A2aRemoteController } from '../controller';
-import { A2aRemoteDelivery } from '../delivery';
+import { A2aRemoteDelivery, NO_AGENT_SUMMARY, WAITING_SUMMARY } from '../delivery';
 import { ExposedPaneCache } from '../exposedPanes';
 import { ExposureStore } from '../exposureStore';
 import { joinRemoteHost } from '../joiner';
@@ -659,6 +659,30 @@ describe('cross-host delivery, end to end', () => {
     second.abort();
     first.abort();
     await Promise.all([firstRun, secondRun]);
+  });
+
+  it('B\'s pane waiting on a prompt tells A so once, not "no agent"; a cause B does not know tells nothing', async () => {
+    // B's renderer never takes it, for a reason that is no waiting cause: main keeps trying.
+    const b = await makePc('PC-B', { render: async () => ({ ok: true, delivered: false, reason: 'no_target_pty' }) });
+    const a = await makePc('PC-A');
+    const linkId = await linked(a, b);
+    const taskId = await sendTask(a, linkId, 'run the migration');
+    await until(() => b.tasks.getTask(taskId) !== undefined);
+    const texts = (): string[] => a.tasks.getTask(taskId)!.history.map((m) => (m.parts[0] as { text: string }).text);
+    // What a main of this version sends once the prompt outlasted the no-agent bound.
+    expect(await b.rpc(A2A_REMOTE_RPC.mark, { taskId, attempted: false, waiting: 'agent-prompt' })).toEqual({ ok: true });
+    expect(await b.rpc(A2A_REMOTE_RPC.mark, { taskId, attempted: false, waiting: 'agent-prompt' })).toEqual({ ok: true });
+    await until(() => texts().length === 2);
+    expect(texts()[1]).toBe(WAITING_SUMMARY['agent-prompt']);
+    expect(texts()[1]).not.toBe(NO_AGENT_SUMMARY);
+    // Not a hold: the task is still B's to deliver.
+    expect((b.tasks.getTask(taskId)!.metadata.remote as { held?: string }).held).toBeUndefined();
+    // A newer main's cause this daemon does not know: accepted, nothing said.
+    expect(await b.rpc(A2A_REMOTE_RPC.mark, { taskId, attempted: false, waiting: 'agent-asleep' })).toEqual({ ok: true });
+    // The no-agent hold still says no agent.
+    expect(await b.rpc(A2A_REMOTE_RPC.mark, { taskId, held: 'no-agent' })).toEqual({ ok: true });
+    await until(() => texts().length === 3);
+    expect(texts()).toEqual(['run the migration', WAITING_SUMMARY['agent-prompt'], NO_AGENT_SUMMARY]);
   });
 
   it('main restarting mid-paste: the task is not pasted again and shows as delivery-unconfirmed', async () => {
