@@ -12,7 +12,10 @@ import SegmentedControl from '../ui/SegmentedControl';
 import { FOCUS_RING } from '../focusRing';
 import { IconCheck, IconPlus, IconX } from '../icons';
 import RemoteRepairNotice from '../Remote/RemoteRepairNotice';
-import { remoteAttachmentKey } from '../../../shared/remoteHosts';
+import { TailscaleFixButton } from '../Remote/TailscaleChecklist';
+import { hostOfUrl, tailnetPrecheck, withTailnetNote } from '../Remote/tailnetCheck';
+import type { TailscaleFix } from '../../../shared/web';
+import { HOST_UNREACHABLE_ERROR, remoteAttachmentKey } from '../../../shared/remoteHosts';
 import type { PairFailureReason, RemoteHostPublic, RemoteWorkspaceSummary } from '../../../shared/remoteHosts';
 
 type AddHostMode = 'pair' | 'url';
@@ -98,6 +101,8 @@ export default function AttachRemoteModal({ onClose, repairHostId, initialHostId
   const [pairLabel, setPairLabel] = useState('');
   const [pairing, setPairing] = useState(false);
   const [pairError, setPairError] = useState<string | null>(null);
+  /** The one Tailscale button, while the error shown is a failed Tailscale check. */
+  const [tailscaleFix, setTailscaleFix] = useState<TailscaleFix | null>(null);
 
   const [creatingWorkspace, setCreatingWorkspace] = useState(false);
   const [createWorkspaceError, setCreateWorkspaceError] = useState<string | null>(null);
@@ -191,7 +196,16 @@ export default function AttachRemoteModal({ onClose, repairHostId, initialHostId
     if (!remote || !addUrl.trim()) return;
     setAdding(true);
     setAddError(null);
+    setTailscaleFix(null);
     try {
+      // An address surely on the tailnet with Tailscale not carrying it: say
+      // so now. One Tailscale may not own: say it only if the PC is not reached.
+      const tailnet = await tailnetPrecheck(hostOfUrl(addUrl.trim()));
+      if (tailnet.held) {
+        setAddError(tailnet.held.text);
+        setTailscaleFix(tailnet.held.fix ?? null);
+        return;
+      }
       const res = await remote.hostsAdd(addUrl.trim(), addLabel.trim() || undefined);
       if (res.ok) {
         setAddUrl('');
@@ -199,7 +213,9 @@ export default function AttachRemoteModal({ onClose, repairHostId, initialHostId
         await refreshHosts();
         autoSelect(res.host.id);
       } else {
-        setAddError(res.error);
+        const note = res.error === HOST_UNREACHABLE_ERROR ? tailnet.ifUnreachable : null;
+        setAddError(withTailnetNote(res.error, note));
+        setTailscaleFix(note?.fix ?? null);
       }
     } catch {
       // An IPC rejection (not the {ok:false} error-result path) must still
@@ -220,7 +236,14 @@ export default function AttachRemoteModal({ onClose, repairHostId, initialHostId
     // and every attachment keyed by it — survives. Nothing was removed before
     // this point: closing the dialog or a wrong code leaves the host as it was.
     const replacing = repairTarget;
+    setTailscaleFix(null);
     try {
+      const tailnet = await tailnetPrecheck(hostOfUrl(pairOrigin.trim()));
+      if (tailnet.held) {
+        setPairError(tailnet.held.text);
+        setTailscaleFix(tailnet.held.fix ?? null);
+        return;
+      }
       const res = await remote.hostsPair(
         pairOrigin.trim(), pairCode.trim(), pairLabel.trim() || undefined,
         ...(replacing ? [replacing.id] : []),
@@ -240,7 +263,9 @@ export default function AttachRemoteModal({ onClose, repairHostId, initialHostId
           autoSelect(res.host.id);
         }
       } else {
-        setPairError(pairReasonMessage(t, res.reason, res.attemptsLeft));
+        const note = res.reason === 'unreachable' ? tailnet.ifUnreachable : null;
+        setPairError(withTailnetNote(pairReasonMessage(t, res.reason, res.attemptsLeft), note));
+        setTailscaleFix(note?.fix ?? null);
       }
     } catch {
       // An IPC rejection (not the {ok:false} error-result path) must still
@@ -443,7 +468,13 @@ export default function AttachRemoteModal({ onClose, repairHostId, initialHostId
           <div className="flex flex-col gap-2">
             <SegmentedControl<AddHostMode>
               value={addMode}
-              onValueChange={setAddMode}
+              onValueChange={(mode) => {
+                // Each form's error (and its Tailscale button) belongs to that form alone.
+                setAddMode(mode);
+                setAddError(null);
+                setPairError(null);
+                setTailscaleFix(null);
+              }}
               ariaLabel={t('remote.addHost')}
               className="w-full [&>button]:flex-1 [&>button]:px-2 [&>button]:whitespace-nowrap [&>button]:text-[12px]"
               options={[
@@ -499,6 +530,7 @@ export default function AttachRemoteModal({ onClose, repairHostId, initialHostId
                   {t('remote.pair')}
                 </Button>
                 {pairError && <p className={errorLine}>{pairError}</p>}
+                {pairError && tailscaleFix && <TailscaleFixButton fix={tailscaleFix} />}
               </>
             ) : (
               <>
@@ -530,6 +562,7 @@ export default function AttachRemoteModal({ onClose, repairHostId, initialHostId
                   {t('remote.addHost')}
                 </Button>
                 {addError && <p className={errorLine}>{addError}</p>}
+                {addError && tailscaleFix && <TailscaleFixButton fix={tailscaleFix} />}
               </>
             )}
           </div>

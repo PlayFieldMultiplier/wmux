@@ -207,7 +207,7 @@ export const SETTINGS_CATALOG: SettingsCatalogEntry[] = [
 
   { id: 'lanenable', tab: 'lanlink', labelKey: 'settings.lanlinkEnable', descKey: 'settings.lanlinkEnableDesc', synonyms: 'lan link network peer remote pair' },
   { id: 'lannic', tab: 'lanlink', labelKey: 'settings.lanlinkNic', descKey: 'settings.lanlinkNicDesc', synonyms: 'nic interface ethernet wifi mac' },
-  { id: 'lanpair', tab: 'lanlink', labelKey: 'settings.lanlinkPair', synonyms: 'pin pair join revoke peer' },
+  { id: 'lanpair', tab: 'lanlink', labelKey: 'settings.lanlinkConnections', descKey: 'settings.lanlinkConnectionsDesc', synonyms: 'pin pair join revoke peer connections remote invite 연결 페어링' },
 
   { id: 'version', tab: 'about', labelKey: 'settings.aboutTagline', synonyms: 'version about changelog release 버전' },
   { id: 'stargithub', tab: 'about', labelKey: 'starPrompt.settingsLabel', descKey: 'starPrompt.settingsDescription', synonyms: 'star github support repository 스타 깃허브' },

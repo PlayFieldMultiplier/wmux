@@ -304,8 +304,8 @@ function decodeTurnCursor(
  *                              allowed) or JSON backlog (Bearer only)
  *   POST /api/input?session=   free-form bytes — 403 unless `--allow-input`;
  *                              409 `terminal-prompt-active` while the pane
- *                              shows a `terminal_prompt` dialog (lone Esc /
- *                              Ctrl-C excepted)
+ *                              shows an answerable `terminal_prompt` dialog
+ *                              (lone Esc / Ctrl-C excepted)
  *   POST /api/upload           raw JPEG/PNG bytes → a path on disk — 403
  *                              unless `--allow-upload` (its own grant)
  *   GET  /api/approvals        pending + recently resolved approval requests
@@ -7554,7 +7554,8 @@ export class WebTerminalServer {
 
   /**
    * Whether raw input must be refused because the pane shows the agent's own
-   * permission dialog (a pending `terminal_prompt` record, answered or not).
+   * permission dialog (a pending `terminal_prompt` record the approvals route
+   * can answer, answered or not).
    *
    * A digit and Enter typed here would answer that dialog while skipping every
    * fence `POST /api/approvals/:id` applies (capability, fingerprint, the
@@ -7577,8 +7578,17 @@ export class WebTerminalServer {
     if (!approvals) return false;
     // A native decision is not a dialog typed keys can answer behind the
     // fences: the agent's server judges its own input, as it does today.
+    // Only a record the fences can answer (bound: it carries a
+    // `promptFingerprint`, also while a pressed answer is waiting) takes the
+    // keys away. An informational record cannot be answered from any phone,
+    // so refusing keys there left the dialog answerable at the computer only.
+    // An ExitPlanMode dialog always does: its first row, where the cursor
+    // starts, switches the session's permission mode (auto mode, bypass), and
+    // a plan record is left unanswerable on purpose (a bypass row, stepwise
+    // off), so a lone Enter must not answer it either.
     return approvals.list().pending.some(
-      (r) => r.kind === 'terminal_prompt' && r.sessionId === sessionId && !isNativeDecision(r),
+      (r) => r.kind === 'terminal_prompt' && r.sessionId === sessionId && !isNativeDecision(r)
+        && (!!r.promptFingerprint || r.toolName === 'ExitPlanMode'),
     );
   }
 

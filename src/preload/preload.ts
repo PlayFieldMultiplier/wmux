@@ -140,6 +140,9 @@ import type {
   WebGrantArgs,
   WebTerminalInfo,
   WebDiagnosis,
+  WebTailscaleChecklist,
+  WebTailscaleOpenResult,
+  WebTailscaleOpenTarget,
 } from '../shared/web';
 import { PC_RAIL_IPC } from '../shared/pcRail';
 import type {
@@ -931,8 +934,8 @@ const electronAPI = {
       ipcRenderer.invoke(IPC.AUTOMATION_GRANT, id, mode, allowedTools, ...(browserIdentity === undefined ? [] : [browserIdentity])) as Promise<
         import('../shared/automation').AutomationMutationResult
       >,
-    runNow: (id: string, kind: 'manual' | 'test') =>
-      ipcRenderer.invoke(IPC.AUTOMATION_RUN_NOW, id, kind) as Promise<import('../shared/automation').AutomationRunNowResult>,
+    runNow: (id: string, kind: 'manual' | 'test', endSessionOf?: string) =>
+      ipcRenderer.invoke(IPC.AUTOMATION_RUN_NOW, id, kind, ...(endSessionOf === undefined ? [] : [endSessionOf])) as Promise<import('../shared/automation').AutomationRunNowResult>,
     cancelRun: (runId: string) =>
       ipcRenderer.invoke(IPC.AUTOMATION_CANCEL_RUN, runId) as Promise<import('../shared/automation').AutomationOkResult>,
     // The UI locale id only; main owns the toast words.
@@ -1276,8 +1279,8 @@ const electronAPI = {
     secretHookSet: (on: boolean) =>
       ipcRenderer.invoke(IPC.GIT_SECRET_HOOK_SET, on) as Promise<{ autoInstall: boolean; failed: string[] }>,
     // Each write names the branch + HEAD it was asked for; main refuses if either moved.
-    shipCommit: (repoPath: string, message: string, expect: import('../main/git/shipActions').ShipExpect) =>
-      ipcRenderer.invoke(IPC.GIT_SHIP_COMMIT, repoPath, message, expect) as Promise<import('../main/git/shipActions').ShipActionResult>,
+    shipCommit: (repoPath: string, message: string, expect: import('../main/git/shipActions').ShipExpect, opts?: import('../main/git/shipActions').ShipCommitOptions) =>
+      ipcRenderer.invoke(IPC.GIT_SHIP_COMMIT, repoPath, message, expect, opts) as Promise<import('../main/git/shipActions').ShipActionResult>,
     shipPush: (repoPath: string, expect: import('../main/git/shipActions').ShipExpect) =>
       ipcRenderer.invoke(IPC.GIT_SHIP_PUSH, repoPath, expect) as Promise<import('../main/git/shipActions').ShipActionResult>,
     shipCreatePr: (repoPath: string, title: string, expect: import('../main/git/shipActions').ShipExpect) =>
@@ -2371,6 +2374,10 @@ document.addEventListener('DOMContentLoaded', () => {
     ipcRenderer.invoke(IPC.WEB_SET_GRANTS, args) as Promise<WebTerminalInfo>,
   stop: () => ipcRenderer.invoke(IPC.WEB_STOP) as Promise<WebTerminalInfo>,
   diagnose: () => ipcRenderer.invoke(IPC.WEB_DIAGNOSE) as Promise<WebDiagnosis>,
+  tailscaleCheck: (peer?: string) =>
+    ipcRenderer.invoke(IPC.WEB_TAILSCALE_CHECK, peer ? { peer } : {}) as Promise<WebTailscaleChecklist>,
+  tailscaleOpen: (target: WebTailscaleOpenTarget) =>
+    ipcRenderer.invoke(IPC.WEB_TAILSCALE_OPEN, target) as Promise<WebTailscaleOpenResult>,
   // Roster surface. Unlike the calls above these do NOT resolve a
   // WebTerminalInfo: the device roster is owned by the store, not by a running
   // server, so it answers even while the server is stopped.

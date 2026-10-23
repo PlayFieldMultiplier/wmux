@@ -20,7 +20,7 @@ import type { BotTaskView } from '../../shared/botTask';
 import { taskPrUrls, type WorkOwner } from '../../shared/botsWork';
 import type { BotGroup } from '../../shared/botGroup';
 import type { Handoff } from '../../shared/handoff';
-import { dmThreadBot, dmThreadId, groupThreadGroup, parseThreadId, ROOM_LIMITS, type RoomCard, type ThreadId, type ThreadSummary } from '../../shared/room';
+import { dmThreadBot, dmThreadId, groupThreadGroup, parseThreadId, ROOM_LIMITS, roomCardMark, type RoomCard, type ThreadId, type ThreadSummary } from '../../shared/room';
 import {
   PHONE_BOTS_COMMAND,
   PHONE_BOTS_LIMITS,
@@ -75,7 +75,7 @@ import { getWorkspaceMirror } from '../workspace/WorkspaceMirror';
 
 /** The room reads this file needs (RoomWriter). */
 export interface PhoneRoomReader {
-  read(workspaceId: string, opts: { threadId?: ThreadId; sinceSeq?: number; limit?: number; guests?: boolean }): { cards: RoomCard[]; nextSinceSeq: number; hasMore: boolean };
+  read(workspaceId: string, opts: { threadId?: ThreadId; sinceSeq?: number; limit?: number; guests?: boolean; changes?: boolean }): { cards: RoomCard[]; nextSinceSeq: number; hasMore: boolean };
   summary(workspaceId: string, threadId: ThreadId): ThreadSummary;
   threads(workspaceId: string): ThreadSummary[];
   /** The newest card of a room that matches (RoomWriter.find). */
@@ -292,6 +292,8 @@ export function handlePhoneRoomCommand(command: string, payload: Record<string, 
     // The owner's phone (and a guest's own read, projected by the daemon)
     // shows external guests' cards; bots never read through here.
     guests: true,
+    // A card a bot reacted to since comes back (phone-client-contract.md).
+    changes: true,
   });
   const info = botInfo(bots);
   const action = (approvalId: string): string | null => {
@@ -313,7 +315,8 @@ export function handlePhoneRoomCommand(command: string, payload: Record<string, 
     const projected = phoneRoomCard(card, info, action, resumable);
     if (projected) cards.push(projected);
   }
-  return fitPhoneRoomPage({ workspaceId, threadId, cards, nextSinceSeq: page.nextSinceSeq, hasMore: page.hasMore }, sinceSeq !== undefined);
+  const marks = new Map(page.cards.map((card) => [card.id, roomCardMark(card)]));
+  return fitPhoneRoomPage({ workspaceId, threadId, cards, nextSinceSeq: page.nextSinceSeq, hasMore: page.hasMore }, sinceSeq !== undefined, undefined, (card) => marks.get(card.id) ?? card.seq);
 }
 
 /** `workspaces.guestCards`: a guest bot's read of its conversation (the

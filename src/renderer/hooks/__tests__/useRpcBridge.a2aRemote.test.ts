@@ -306,6 +306,46 @@ describe('remote reply and state delivery', () => {
     expect(useStore.getState().getTask(RT)!.status.state).toBe('completed');
   });
 
+  it('a peer completing or failing our task leaves a one-line pointer in the sending pane', async () => {
+    const done = outboundTask({ state: 'completed', inbox: [{ messageId: 's2', kind: 'state', state: 'completed', delivered: false }] });
+    expect(await notify(done, 's2')).toEqual({ ok: true, delivered: true, ptyId: PINNED_PTY });
+    expect(gate).toHaveBeenCalledTimes(1);
+    expect(gate.mock.calls[0][0]).toBe(PINNED_PTY);
+    expect(gate.mock.calls[0][1]).toMatch(/A2A task completed: .* from pc-b\/ws-b\/codex — a2a_task_query task_id:rt-/);
+    expect(gate.mock.calls[0][1]).not.toMatch(/\n/);
+    gate.mockClear();
+    const failed = outboundTask({ state: 'failed', inbox: [{ messageId: 's3', kind: 'state', state: 'failed', delivered: false }] });
+    expect(await notify(failed, 's3')).toMatchObject({ ok: true, delivered: true });
+    expect(gate.mock.calls[0][1]).toMatch(/A2A task failed:/);
+  });
+
+  it('only the ending item announces it: an earlier working item handed over late writes nothing', async () => {
+    const task = outboundTask({ state: 'completed', inbox: [{ messageId: 's1', kind: 'state', state: 'working', delivered: false }] });
+    expect(await notify(task, 's1')).toEqual({ ok: true, delivered: true });
+    expect(gate).not.toHaveBeenCalled();
+  });
+
+  it('the end pointer is one best-effort try: a pane that is gone or holds another pty gets none, and nothing is held', async () => {
+    useStore.setState({ workspaces: [target(PINNED_PTY, false)] });
+    const done = outboundTask({ state: 'completed', inbox: [{ messageId: 's2', kind: 'state', state: 'completed', delivered: false }] });
+    expect(await notify(done, 's2')).toEqual({ ok: true, delivered: true });
+    useStore.setState({ workspaces: [target('pty-new')] });
+    const failed = outboundTask({ state: 'failed', inbox: [{ messageId: 's3', kind: 'state', state: 'failed', delivered: false }] });
+    expect(await notify(failed, 's3')).toEqual({ ok: true, delivered: true });
+    expect(gate).not.toHaveBeenCalled();
+  });
+
+  it('a state item handed over again announces it on the event bus once', async () => {
+    const publish = vi.fn();
+    (window as unknown as { electronAPI: { events?: unknown } }).electronAPI.events = { publish };
+    const done = outboundTask({ state: 'completed', inbox: [{ messageId: 's4', kind: 'state', state: 'completed', delivered: false }] });
+    await notify(done, 's4');
+    await notify(done, 's4');
+    await notify(done, 's4');
+    const a2aEvents = publish.mock.calls.filter(([e]) => (e as { type?: string }).type === 'a2a.task');
+    expect(a2aEvents).toHaveLength(1);
+  });
+
   it('refuses an item the task does not owe', async () => {
     expect((await notify(outboundTask(), 'nope')).error).toBeDefined();
     expect((await notify({ ...outboundTask(), id: 'task-1' }, 'r1')).error).toBeDefined();

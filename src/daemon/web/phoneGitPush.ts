@@ -12,6 +12,7 @@ import { buildGitEnv, gitArgv, type GitRunResult } from './sessionDiff';
 import { canonicalPath, pathKey } from './phoneGitRead';
 import { GitWriteReceipts, type GhTokenResult } from './phoneGitWriteGate';
 import { registerPhoneGitWriteAction, type GitWriteExecuteContext, type GitWritePreviewResult, type GitWriteSessionContext } from './phoneGitWriteRegistry';
+import { scanCommits, spawnGitLines, type GitLines } from '../../main/git/secretScan';
 import {
   GIT_WRITE_OID, GIT_WRITE_PUSH_MAX_COMMITS, GIT_WRITE_RECEIPT_TTL_MS,
   type GitWriteErrorBody, type PushCommit, type PushExecuteBody, type PushPreviewFacts,
@@ -98,6 +99,11 @@ export interface PhoneGitPushDeps {
   push: PushSpawner;
   /** The environment git and gh are found in (PATH, HOME). */
   baseEnv: () => NodeJS.ProcessEnv;
+  /** Local git streamed line by line, for the password and key check (no size cap). */
+  gitLines: (env: NodeJS.ProcessEnv) => GitLines;
+  /** Whether that check runs. The desktop's Settings toggle lives in the app,
+   *  not here, so the daemon always checks. */
+  secretGuard?: () => boolean;
   /** Where the in-flight intents and the relays are written. */
   stateDir: () => string;
   now: () => number;
@@ -219,6 +225,7 @@ export const defaultPushDeps: PhoneGitPushDeps = {
   gh: (args, env) => ghRun(args, undefined, env),
   push: spawnGroup,
   baseEnv: getExecEnv,
+  gitLines: (env) => spawnGitLines(os.homedir(), env),
   stateDir: getWmuxDir,
   now: Date.now,
   // eslint-disable-next-line no-console
@@ -722,6 +729,24 @@ async function gather(ctx: GitWriteSessionContext, deps: PhoneGitPushDeps, pin?:
   if (!hasUpstream && remoteTip !== null && !fastForward) return failed({ error: 'remote-branch-exists' });
   const tracking = await run('rev-parse', '--verify', '-q', '--end-of-options', `refs/remotes/origin/${targetRef.slice('refs/heads/'.length)}^{commit}`);
   const trackingOid = tracking.ok ? tracking.stdout.trim() : null;
+
+  // The Git page's push check, on the same commits, at preview and again at
+  // execute: each commit's own change, read with this repository's dirs.
+  if (deps.secretGuard?.() !== false) {
+    const pinned = { ...env, GIT_COMMON_DIR: dirs.commonDir };
+    const lines: GitLines = (args, onLine) => deps.gitLines(pinned)(local(`--git-dir=${dirs.gitDir}`, ...args), onLine);
+    const scan = await scanCommits(lines, range);
+    if (!scan.ok) return failed({ error: 'secret-scan-failed' });
+    if (scan.findings.length > 0) {
+      const [first] = scan.findings;
+      return failed({
+        error: 'secrets-found',
+        secretPath: first.path, secretWhat: first.what, secretKind: first.kind,
+        ...(first.line !== undefined ? { secretLine: first.line } : {}),
+        secretCount: scan.findings.length,
+      });
+    }
+  }
 
   let commits: PushCommit[] = [];
   let commitsTruncated = false;

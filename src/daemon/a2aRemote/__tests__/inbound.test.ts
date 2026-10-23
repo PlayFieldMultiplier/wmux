@@ -199,6 +199,57 @@ describe('acceptInbound — reply and state', () => {
       .toMatchObject({ ok: true });
     expect(tasks.getTask(id)!.status).toMatchObject({ state: 'completed', evidence: { summary: 'shipped', items: [] } });
   });
+
+  async function outboundTask(linkId: string): Promise<string> {
+    const id = remoteTaskId(linkId, 'orig');
+    await tasks.createTask({
+      id,
+      title: 't',
+      from: { workspaceId: 'ws-b', name: 'Backend', paneId: 'pane-b' },
+      to: { workspaceId: `remote:${linkId}`, name: 'pc-a/ws-a/claude' },
+      remote: { v: 1, linkId, hostId: HOST, messageId: 'orig', direction: 'outbound' },
+    });
+    await acceptInbound(env(linkId, { kind: 'state', taskId: id, state: 'working', text: undefined }), peer, deps);
+    return id;
+  }
+
+  it('completes an outbound task with the peer\'s message and evidence, sanitized; unknown fields are ignored', async () => {
+    const linkId = activeLink();
+    const id = await outboundTask(linkId);
+    const raw = {
+      ...env(linkId, { kind: 'state', taskId: id, state: 'completed', text: 'shipped' }),
+      message: 'Report\u001b[2J body',
+      evidence: {
+        summary: 'shipped',
+        items: [{ kind: 'command', status: 'passed', command: 'npm test\u001b]0;x\u0007', summary: 'tests pass' }],
+        files: ['src/a.ts', 'src/\u202eb.ts', 'src/\u009bc.ts', 'src/d\u200b.ts'],
+      },
+      someFutureField: { any: 'thing' },
+    };
+    expect(await acceptInbound(raw as unknown as A2aRemoteEnvelope, peer, deps)).toMatchObject({ ok: true });
+    const status = tasks.getTask(id)!.status;
+    expect(status.state).toBe('completed');
+    const text = status.message?.parts[0];
+    expect((text?.kind === 'text' ? text.text : '').includes('\u001b')).toBe(false);
+    expect(status.evidence?.items).toHaveLength(1);
+    // A path with a C1, bidi or zero-width character is left off, not rewritten.
+    expect(status.evidence?.files).toEqual(['src/a.ts']);
+    expect(JSON.stringify(status.evidence)).not.toMatch(/\\u001b|\\u0007/);
+  });
+
+  it('a malformed or oversized message or evidence is left off; the state still applies', async () => {
+    const linkId = activeLink();
+    const id = await outboundTask(linkId);
+    const raw = {
+      ...env(linkId, { kind: 'state', taskId: id, state: 'completed', text: 'shipped' }),
+      message: 'x'.repeat(40 * 1024),
+      evidence: { summary: 42, items: 'nope' },
+    };
+    expect(await acceptInbound(raw as unknown as A2aRemoteEnvelope, peer, deps)).toMatchObject({ ok: true });
+    const status = tasks.getTask(id)!.status;
+    expect(status).toMatchObject({ state: 'completed', evidence: { summary: 'shipped', items: [] } });
+    expect(status.message).toBeUndefined();
+  });
 });
 
 describe('acceptInbound — link notices', () => {
@@ -375,5 +426,41 @@ describe('acceptInbound — share offers ride a link envelope', () => {
   it('without an offer handler (an older build) it is an unknown link, refused without throwing', async () => {
     expect(await acceptInbound(offerEnv('offer'), peer, deps)).toEqual({ ok: false, error: 'unknown-link' });
     expect(await acceptInbound(offerEnv('offer-withdrawn'), peer, deps)).toEqual({ ok: false, error: 'unknown-link' });
+  });
+});
+
+describe('acceptInbound — refusals carry a code only', () => {
+  const SECRET_DETAIL = 'EACCES: permission denied, open /home/someone/.wmux/a2a/ledger';
+
+  it('a store failure answers its code, and the detail goes to this PC\'s log only', async () => {
+    const lines: string[] = [];
+    const linkId = activeLink();
+    const failing: InboundDeps = {
+      ...deps,
+      taskService: { ...tasks, getTask: (id: string) => tasks.getTask(id), createTask: async () => ({ ok: false, error: SECRET_DETAIL }) } as unknown as InboundDeps['taskService'],
+      log: (_level, msg) => { lines.push(msg); },
+    };
+    const res = await acceptInbound(env(linkId, {}), peer, failing);
+    expect(res).toEqual({ ok: false, error: 'unavailable' });
+    expect(JSON.stringify(res)).not.toContain('EACCES');
+    expect(lines.join('\n')).toContain(SECRET_DETAIL);
+  });
+
+  it('a thrown error answers unavailable with no text', async () => {
+    const linkId = activeLink();
+    const throwing: InboundDeps = {
+      ...deps,
+      linkStore: { ...links, get: (id: string) => links.get(id), checkMessage: () => { throw new Error(SECRET_DETAIL); } } as unknown as InboundDeps['linkStore'],
+      log: () => undefined,
+    };
+    const res = await acceptInbound(env(linkId, {}), peer, throwing);
+    expect(res).toEqual({ ok: false, error: 'unavailable' });
+  });
+
+  it('a check\'s own words stay here too: a receipt for a task this PC never sent', async () => {
+    const linkId = activeLink();
+    const res = await acceptInbound(env(linkId, { kind: 'receipt', taskId: 'rt-nope', receipt: 'delivered', text: undefined }), peer, deps);
+    expect(res.ok).toBe(false);
+    expect(res).not.toHaveProperty('message');
   });
 });

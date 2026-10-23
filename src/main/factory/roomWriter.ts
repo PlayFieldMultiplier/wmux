@@ -43,6 +43,7 @@ import {
   issueThreadId,
   isGuestSourcedCard,
   prThreadId,
+  roomCardMark,
   taskOriginThread,
   type CardKind,
   type CardNotice,
@@ -60,6 +61,7 @@ import type { BotGroup } from '../../shared/botGroup';
 import { parseRoomAttachments } from '../../shared/roomAttachments';
 import { parseRoomFiles } from './roomFiles';
 import { guestSide } from './guestWorkspaces';
+import { REACTIONS_PER_CARD_MAX, isReactionEmoji, sanitizeReactions, type CardReaction } from '../../shared/botGroupProtocol';
 
 export const ROOMS_DIRNAME = 'rooms';
 
@@ -543,6 +545,7 @@ export function parseCardLine(raw: unknown, workspaceId: string): RoomCard | nul
   const guest = c.kind === 'guest' && actor.kind === 'system' ? sanitizeGuestRef(c.guest) : undefined;
   // A guest card that does not say whose it is is not a card of this room.
   if (c.kind === 'guest' && !guest) return null;
+  const reactions = sanitizeReactions(c.reactions, (id) => BOT_ID_RE.test(id));
   return {
     version: 1,
     id: c.id,
@@ -567,6 +570,9 @@ export function parseCardLine(raw: unknown, workspaceId: string): RoomCard | nul
     ...(files ? { files } : {}),
     ...(guest ? { guest } : {}),
     ...(c.origin === 'guest' ? { origin: 'guest' as const } : {}),
+    ...(reactions ? { reactions } : {}),
+    ...(typeof c.changedSeq === 'number' && Number.isSafeInteger(c.changedSeq) && c.changedSeq > c.seq ? { changedSeq: c.changedSeq } : {}),
+    ...(c.groupTurn === true && actor.kind === 'bot' ? { groupTurn: true as const } : {}),
   };
 }
 
@@ -628,6 +634,8 @@ export interface RoomCardInput {
    *  unless the caller says `'clean'`: it decided the card is clean at its
    *  call's start (never stored). */
   origin?: 'guest' | 'clean';
+  /** Bot cards only (RoomCard.groupTurn). */
+  groupTurn?: true;
 }
 
 /** A post from a bot or the owner: idempotent by clientPostId, and a replyTo
@@ -783,7 +791,7 @@ export class RoomWriter {
     const state: RoomState = {
       cards,
       byId: new Map(cards.map((c) => [c.id, c])),
-      nextSeq: Math.max(highWater, ...[...byId.values()].map((c) => c.seq)) + 1,
+      nextSeq: Math.max(highWater, ...[...byId.values()].map(roomCardMark)) + 1,
       lines,
       seenFacts: new Set(cards.filter((c) => c.refs?.factId).map(factCardKey).slice(-ROOM_STORE_LIMITS.SEEN_FACTS)),
       byClientId: new Map(cards.filter((c) => c.clientPostId).map((c) => [c.clientPostId as string, c.id])),
@@ -887,6 +895,7 @@ export class RoomWriter {
       ...(files ? { files } : {}),
       ...(guest ? { guest } : {}),
       ...(fromGuestTurn ? { origin: 'guest' as const } : {}),
+      ...(input.groupTurn === true && actor.kind === 'bot' ? { groupTurn: true as const } : {}),
       ...(extra?.replyTo ? { replyTo: extra.replyTo } : {}),
       ...(extra?.clientPostId ? { clientPostId: extra.clientPostId } : {}),
     };
@@ -972,6 +981,30 @@ export class RoomWriter {
     return card;
   }
 
+  /** A bot's reaction on a card (same id and seq), replacing its earlier
+   *  one there. The change takes the next seq as the card's changedSeq, so
+   *  a reader polling by sinceSeq sees it. Null when there is no such card, the reaction is not a
+   *  palette emoji, the card already has it, or the card holds
+   *  REACTIONS_PER_CARD_MAX other bots' reactions. */
+  react(workspaceId: string, id: string, reaction: CardReaction): RoomCard | null {
+    const state = this.room(workspaceId);
+    const cur = state?.byId.get(id);
+    if (!state || !cur || !BOT_ID_RE.test(reaction.botId) || !isReactionEmoji(reaction.emoji)) return null;
+    const others = (cur.reactions ?? []).filter((r) => r.botId !== reaction.botId);
+    const mine = cur.reactions?.find((r) => r.botId === reaction.botId);
+    if (mine && mine.emoji === reaction.emoji && mine.ack === reaction.ack) return null;
+    if (others.length >= REACTIONS_PER_CARD_MAX) return null;
+    const card: RoomCard = { ...cur, reactions: [...others, { botId: reaction.botId, emoji: reaction.emoji, ...(reaction.ack ? { ack: true as const } : {}) }], changedSeq: state.nextSeq };
+    if (!this.writeLine(workspaceId, state, card)) return null;
+    state.nextSeq += 1;
+    state.byId.set(id, card);
+    const idx = state.cards.findIndex((c) => c.id === id);
+    if (idx >= 0) state.cards[idx] = card;
+    this.afterWrite(workspaceId, state);
+    this.push(workspaceId, card);
+    return card;
+  }
+
   /** One card as readers see it: a stored bot secret is redacted even in a
    *  card written before that value was stored (secretRedaction.ts). */
   get(workspaceId: string, id: string): RoomCard | null {
@@ -1004,14 +1037,16 @@ export class RoomWriter {
   /** Cards in arrival (seq) order, at most `limit` (≤ PAGE). threadId
    *  omitted: every card; `general`: the general thread only. With sinceSeq:
    *  the cards after it, `hasMore` when the page stopped short; without: the
-   *  newest page. Pass `nextSinceSeq` back to continue.
+   *  newest page. Pass `nextSinceSeq` back to continue. `changes`: a
+   *  forward read also brings back a card changed since (a reaction), by
+   *  roomCardMark; the page holds the earliest changes, in seq order.
    *
    *  An external guest's cards (kind `guest`, outside text) are left out
    *  unless `guests` is set: only the owner's views, the guest's own read and
    *  the guest's own (tainted) wake ask for them, so a bot never reads a
    *  guest's words by accident in a turn whose work may merge. */
   /** `dmReader`: a bot reading; another bot's 1:1 cards are left out. */
-  read(workspaceId: string, opts: { threadId?: ThreadId; sinceSeq?: number; limit?: number; guests?: boolean; dmReader?: string } = {}): { cards: RoomCard[]; nextSinceSeq: number; hasMore: boolean } {
+  read(workspaceId: string, opts: { threadId?: ThreadId; sinceSeq?: number; limit?: number; guests?: boolean; dmReader?: string; changes?: boolean } = {}): { cards: RoomCard[]; nextSinceSeq: number; hasMore: boolean } {
     const state = this.room(workspaceId);
     if (!state) return { cards: [], nextSinceSeq: 0, hasMore: false };
     const limit = Math.max(1, Math.min(ROOM_LIMITS.PAGE, Math.floor(opts.limit ?? ROOM_LIMITS.PAGE)));
@@ -1023,6 +1058,13 @@ export class RoomWriter {
     if (since === null) {
       const cards = scoped.slice(-limit);
       return { cards: redactStoredSecretsDeep(cards), nextSinceSeq: cards[cards.length - 1]?.seq ?? 0, hasMore: false };
+    }
+    if (opts.changes === true) {
+      const changed = scoped.filter((c) => roomCardMark(c) > since).sort((a, b) => roomCardMark(a) - roomCardMark(b));
+      const taken = changed.slice(0, limit);
+      const cards = [...taken].sort((a, b) => a.seq - b.seq);
+      const last = taken[taken.length - 1];
+      return { cards: redactStoredSecretsDeep(cards), nextSinceSeq: last ? roomCardMark(last) : since, hasMore: changed.length > limit };
     }
     const after = scoped.filter((c) => c.seq > since);
     const cards = after.slice(0, limit);

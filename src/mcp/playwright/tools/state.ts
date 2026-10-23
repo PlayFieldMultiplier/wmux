@@ -11,7 +11,7 @@ import {
   protectedUrlAllowed,
 } from '../protectedPane';
 import { matchSensitiveCookieDomain, matchSensitiveDomain } from '../security';
-import { consentHostOf, requestBrowserConsent } from '../consent';
+import { bypassRefusal, consentHostOf, requestBrowserConsent } from '../consent';
 import { evalFunctionOrRpc } from '../page-eval';
 import { evaluateIsolated } from '../isolated-eval';
 import { isChromiumUserAgent } from '../../../shared/uaMetadata';
@@ -109,7 +109,7 @@ const BROWSER_COOKIES_SHAPE = {
   allowSensitiveDomains: z
     .boolean()
     .optional()
-    .describe('Allow sensitive-domain reads. Default false.'),
+    .describe('Ask the user to allow sensitive-domain reads. Default false.'),
   surfaceId: optionalSurfaceId,
 };
 
@@ -127,7 +127,7 @@ const BROWSER_STORAGE_SHAPE = {
   allowSensitiveDomains: z
     .boolean()
     .optional()
-    .describe('Allow sensitive-domain reads. Default false.'),
+    .describe('Ask the user to allow sensitive-domain reads. Default false.'),
   surfaceId: optionalSurfaceId,
 };
 
@@ -241,6 +241,28 @@ async function consentToSensitive(scope: BrowserTargetScope, tool: string, hosts
   });
 }
 
+/** The most sites one question can name (main refuses more). */
+const MAX_CONSENT_HOSTS = 20;
+
+/**
+ * On an unprotected pane allowSensitiveDomains only asks: one question names
+ * every sensitive site the call would reveal, and nothing is revealed without
+ * the operator's yes. A call that touches no sensitive site asks nobody.
+ */
+async function consentToSensitiveBypass(scope: BrowserTargetScope, tool: string, hosts: Iterable<string>): Promise<void> {
+  const unique = [...new Set(hosts)];
+  if (unique.length === 0) return;
+  if (unique.length > MAX_CONSENT_HOSTS) {
+    throw bypassRefusal(tool, `the call would reveal data of ${unique.length} sensitive sites, more than one question can name; pass url to name one site`);
+  }
+  await requestBrowserConsent(scope, tool, {
+    action: 'sensitive',
+    hosts: unique,
+    detail: `${tool} get`,
+    unprotected: true,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
@@ -277,7 +299,7 @@ export function registerStateTools(server: McpServer, deps: BrowserToolDeps): vo
   // -----------------------------------------------------------------------
   server.tool(
     'browser_cookies',
-    'Get, set, or clear cookies. Sensitive domains (email, banking, auth) are blocked on read and redacted unless allowSensitiveDomains:true.',
+    'Get, set, or clear cookies. Sensitive domains (email, banking, auth) are blocked on read and redacted unless allowSensitiveDomains:true and the user allows it.',
     BROWSER_COOKIES_SHAPE,
     async ({ action, url, cookies, allowSensitiveDomains, surfaceId }) => withAutomationLease(deps, surfaceId, async (scope) => {
       try {
@@ -320,7 +342,7 @@ export function registerStateTools(server: McpServer, deps: BrowserToolDeps): vo
               if (sensitive && !allowSensitiveDomains) {
                 throw new Error(
                   `browser_cookies get blocked: "${sensitive}" is on the sensitive-domain blocklist (email / banking / auth). ` +
-                  `Pass allowSensitiveDomains:true if the caller has user consent.`,
+                  `Pass allowSensitiveDomains:true to ask the user to allow it.`,
                 );
               }
             }
@@ -354,6 +376,14 @@ export function registerStateTools(server: McpServer, deps: BrowserToolDeps): vo
               return {
                 content: [{ type: 'text' as const, text: JSON.stringify(shown, null, 2) }],
               };
+            }
+            if (allowSensitiveDomains) {
+              const revealed = visible.flatMap((c) => {
+                const hit = matchSensitiveDomain(c.domain ?? '');
+                return hit ? [hit] : [];
+              });
+              const urlHit = url ? matchSensitiveDomain(url) : null;
+              await consentToSensitiveBypass(scope, 'browser_cookies', urlHit ? [urlHit, ...revealed] : revealed);
             }
             const safe = visible.map((c) => {
               const hit = matchSensitiveDomain(c.domain ?? '');
@@ -476,7 +506,7 @@ export function registerStateTools(server: McpServer, deps: BrowserToolDeps): vo
   // -----------------------------------------------------------------------
   server.tool(
     'browser_storage',
-    'Get, set, or clear local or session storage. Reads on sensitive pages (email, banking, auth) are blocked unless allowSensitiveDomains:true.',
+    'Get, set, or clear local or session storage. Reads on sensitive pages (email, banking, auth) are blocked unless allowSensitiveDomains:true and the user allows it.',
     BROWSER_STORAGE_SHAPE,
     async ({ type, action, key, value, allowSensitiveDomains, surfaceId }) => withAutomationLease(deps, surfaceId, async (scope) => {
       try {
@@ -501,7 +531,7 @@ export function registerStateTools(server: McpServer, deps: BrowserToolDeps): vo
             if (action === 'get' && !allowSensitiveDomains) {
               throw new Error(
                 `browser_storage get blocked: current page "${sensitive}" is on the sensitive-domain blocklist (email / banking / auth). ` +
-                `Pass allowSensitiveDomains:true if the caller has user consent.`,
+                `Pass allowSensitiveDomains:true to ask the user to allow it.`,
               );
             }
             await consentToSensitive(scope, 'browser_storage', [sensitive], action);
@@ -519,30 +549,60 @@ export function registerStateTools(server: McpServer, deps: BrowserToolDeps): vo
               if (sensitive) {
                 throw new Error(
                   `browser_storage get blocked: current page "${sensitive}" is on the sensitive-domain blocklist (email / banking / auth). ` +
-                  `Pass allowSensitiveDomains:true if the caller has user consent.`,
+                  `Pass allowSensitiveDomains:true to ask the user to allow it.`,
                 );
               }
             }
-            const result = await evalFunctionOrRpc(
+            // Set when the operator was asked: the host they approved, which
+            // the read itself must still be on.
+            let approvedHost: string | null | undefined;
+            if (allowSensitiveDomains && !isProtectedScope(scope)) {
+              const pageUrl = await currentUrl(page, scope);
+              // An address that cannot be read cannot be checked: refused,
+              // never read as "not sensitive".
+              if (!pageUrl) {
+                throw bypassRefusal('browser_storage', 'the page address could not be read to check it against the sensitive-domain list');
+              }
+              const sensitive = matchSensitiveDomain(pageUrl);
+              if (sensitive) {
+                await consentToSensitiveBypass(scope, 'browser_storage', [sensitive]);
+                approvedHost = consentHostOf(pageUrl);
+              }
+            }
+            const read = await evalFunctionOrRpc(
               page,
-              ([sName, sKey]: [string, string | undefined]) => {
+              ([sName, sKey, withHref]: [string, string | undefined, boolean]) => {
                 const storage = (window as any)[sName] as Storage;
+                let value: string | null | Record<string, string>;
                 if (sKey) {
-                  return storage.getItem(sKey);
-                }
-                // Return all entries
-                const entries: Record<string, string> = {};
-                for (let i = 0; i < storage.length; i++) {
-                  const k = storage.key(i);
-                  if (k !== null) {
-                    entries[k] = storage.getItem(k) ?? '';
+                  value = storage.getItem(sKey);
+                } else {
+                  // Return all entries
+                  const entries: Record<string, string> = {};
+                  for (let i = 0; i < storage.length; i++) {
+                    const k = storage.key(i);
+                    if (k !== null) {
+                      entries[k] = storage.getItem(k) ?? '';
+                    }
                   }
+                  value = entries;
                 }
-                return entries;
+                // The page's address, read in the same evaluation as the
+                // storage, when the operator's approval names a site.
+                return withHref ? { href: location.href, value } : value;
               },
-              [storageName, key] as [string, string | undefined],
+              [storageName, key, approvedHost !== undefined] as [string, string | undefined, boolean],
               scope,
             );
+            let result = read;
+            if (approvedHost !== undefined) {
+              const r = read as { href?: unknown; value?: unknown } | null;
+              const href = r && typeof r.href === 'string' ? r.href : '';
+              if (consentHostOf(href) !== approvedHost) {
+                throw bypassRefusal('browser_storage', 'the page moved to another site while the operator was being asked');
+              }
+              result = r?.value as typeof read;
+            }
 
             const text =
               typeof result === 'string' ? result : JSON.stringify(result, null, 2);

@@ -10,13 +10,11 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import {
   LanLinkView,
-  LanLinkPairingView,
   nicOptions,
   LANLINK_NIC_NONE,
   type LanLinkViewProps,
-  type LanLinkPairingViewProps,
 } from '../SettingsPanel';
-import type { NicInfo, LanLinkNic, LanLinkPeerSummary } from '../../../../shared/lanlink';
+import type { NicInfo, LanLinkNic } from '../../../../shared/lanlink';
 
 /** Identity translator — returns the key so tests don't depend on en.ts copy. */
 const tStub = (key: string): string => key;
@@ -107,106 +105,5 @@ describe('LanLinkView — onChange wiring', () => {
     const ethOption = props.options.find((o) => o.nic?.name === 'Ethernet')!;
     props.onChangeNic(ethOption.value);
     expect(onChangeNic).toHaveBeenCalledWith(ethOption.value);
-  });
-});
-
-// ─── LanLink pairing (PR-5) — pure view ───────────────────────────────────────
-
-function makePairProps(overrides: Partial<LanLinkPairingViewProps> = {}): LanLinkPairingViewProps {
-  return {
-    enabled: true,
-    selfAddress: null,
-    pin: null,
-    countdownSec: null,
-    failCount: 0,
-    pairBusy: false,
-    onBeginPair: () => undefined,
-    onCancelPair: () => undefined,
-    joinHost: '',
-    joinPort: 0,
-    joinPin: '',
-    onJoinHost: () => undefined,
-    onJoinPort: () => undefined,
-    onJoinPin: () => undefined,
-    onJoin: () => undefined,
-    joinBusy: false,
-    peers: [],
-    confirmingRevoke: null,
-    onAskRevoke: () => undefined,
-    onConfirmRevoke: () => undefined,
-    onCancelRevoke: () => undefined,
-    error: null,
-    t: tStub,
-    ...overrides,
-  };
-}
-
-describe('LanLinkPairingView — markup', () => {
-  it('shows only the disabled hint when LanLink is off (no actionable form)', () => {
-    const html = renderToStaticMarkup(createElement(LanLinkPairingView, makePairProps({ enabled: false })));
-    expect(html).toContain('settings.lanlinkPairDisabled');
-    expect(html).not.toContain('settings.lanlinkPairStartButton');
-  });
-
-  it('shows the Generate PIN button + empty peers when enabled with no PIN', () => {
-    const html = renderToStaticMarkup(createElement(LanLinkPairingView, makePairProps()));
-    expect(html).toContain('settings.lanlinkPairStartButton');
-    expect(html).toContain('settings.lanlinkPeersEmpty');
-  });
-
-  it('renders the PIN + countdown when a pairing window is open', () => {
-    const html = renderToStaticMarkup(
-      createElement(LanLinkPairingView, makePairProps({ pin: '123456', countdownSec: 90 })),
-    );
-    expect(html).toContain('lanlink-pair-pin');
-    expect(html).toContain('123456');
-    expect(html).toContain('settings.lanlinkPairCountdown');
-  });
-
-  it('shows this machine host:port next to the PIN when available (codex#5)', () => {
-    // tStub returns the key (no {address} interpolation), so assert the self line
-    // renders; the actual host:port value is exercised by the CDP dogfood.
-    const withAddr = renderToStaticMarkup(
-      createElement(LanLinkPairingView, makePairProps({ pin: '123456', selfAddress: '192.168.1.5:45651' })),
-    );
-    expect(withAddr).toContain('lanlink-pair-self');
-    expect(withAddr).toContain('settings.lanlinkPairSelfAddress');
-    // No self line before a PIN is minted (nothing to share yet).
-    const noPin = renderToStaticMarkup(
-      createElement(LanLinkPairingView, makePairProps({ pin: null, selfAddress: '192.168.1.5:45651' })),
-    );
-    expect(noPin).not.toContain('lanlink-pair-self');
-  });
-
-  it('renders a peer row with the "remote peer" badge and a revoke control', () => {
-    const peers: LanLinkPeerSummary[] = [
-      { peerUuid: 'u1', peerName: 'Workstation', pairedAt: 1, lastSeenAt: 2, burned: false },
-    ];
-    const html = renderToStaticMarkup(createElement(LanLinkPairingView, makePairProps({ peers })));
-    expect(html).toContain('lanlink-peers');
-    expect(html).toContain('settings.lanlinkPeerBadge');
-    expect(html).toContain('Workstation');
-    expect(html).toContain('settings.lanlinkPeerRevoke');
-  });
-
-  it('surfaces an error message when present', () => {
-    const html = renderToStaticMarkup(createElement(LanLinkPairingView, makePairProps({ error: 'boom' })));
-    expect(html).toContain('lanlink-pair-error');
-    expect(html).toContain('boom');
-  });
-});
-
-describe('LanLinkPairingView — onChange wiring', () => {
-  it('fires onBeginPair / onJoin / onConfirmRevoke directly', () => {
-    const onBeginPair = vi.fn();
-    const onJoin = vi.fn();
-    const onConfirmRevoke = vi.fn();
-    const props = makePairProps({ onBeginPair, onJoin, onConfirmRevoke });
-    props.onBeginPair();
-    props.onJoin();
-    props.onConfirmRevoke('u1');
-    expect(onBeginPair).toHaveBeenCalled();
-    expect(onJoin).toHaveBeenCalled();
-    expect(onConfirmRevoke).toHaveBeenCalledWith('u1');
   });
 });

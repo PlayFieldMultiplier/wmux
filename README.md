@@ -201,7 +201,7 @@ Community shout-outs to [@snowyukitty](https://github.com/snowyukitty), [@matdac
 
 ## License
 
-[MIT](LICENSE)
+The source code is [MIT](LICENSE). The Mochi crew bot characters are not: they are all rights reserved, see [ASSETS-LICENSE.md](ASSETS-LICENSE.md).
 
 <sub>**Keywords:** ADE · agent development environment · AI agent automation · workspace multiplexer · AI coding agent workspace · agent fleet · multi-agent terminal · git worktree fan-out · Claude Code · Codex CLI · Gemini CLI · iOS approval app · MCP server · Chrome DevTools Protocol · browser automation · split terminal · Windows terminal multiplexer · macOS terminal multiplexer · ConPTY · xterm.js · Electron terminal · tmux for Windows</sub>
 

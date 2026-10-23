@@ -1,7 +1,12 @@
 // ─── TaskPrService — J3 §2 gh 4중 게이트 1클릭 PR ────────────────────────────
 
 import { afterEach, describe, it, expect, vi } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { TaskPrService, type PrExec, type CreatePrInput } from '../TaskPrService';
+import { spawnGitLines, type GitLines } from '../../git/secretScan';
 import { GlabPrService } from '../../github/GlabPrService';
 import type { ForgeHosts } from '../../../shared/forgeHosts';
 
@@ -46,6 +51,11 @@ function makeExec(
   return { exec, calls };
 }
 
+/** The commit the task branch names (the fake git's rev-parse). */
+const BRANCH_SHA = 'c0ffee'.padEnd(40, '0');
+/** The push of that commit to the task branch. */
+const PINNED_PUSH = ['push', 'origin', '--', `${BRANCH_SHA}:refs/heads/${INPUT.branch}`];
+
 function isGh(cmd: string): boolean {
   return cmd === 'gh' || cmd === 'gh.exe';
 }
@@ -65,6 +75,7 @@ function happyBehavior(cmd: string, args: string[]): { stdout: string } | { thro
   }
   if (cmd === 'git') {
     if (args[0] === 'check-ref-format') return { stdout: `${args[2]}\n` };
+    if (args[0] === 'rev-parse') return { stdout: `${BRANCH_SHA}\n` };
     if (a === 'status --porcelain') return { stdout: '' }; // clean
     if (a === 'remote get-url --push origin') return { stdout: 'https://github.com/acme/widget.git\n' };
     if (a === 'remote') return { stdout: 'origin' };
@@ -73,7 +84,10 @@ function happyBehavior(cmd: string, args: string[]): { stdout: string } | { thro
   return { stdout: '' };
 }
 
-function makeService(exec: PrExec, opts?: { daemonOk?: boolean }) {
+/** The pre-push secret check's git: no commits to read (a clean change). */
+const cleanScan = (): GitLines => async () => true;
+
+function makeService(exec: PrExec, opts?: { daemonOk?: boolean; scanGit?: (cwd: string) => GitLines }) {
   const daemonCalls: Array<{ method: string; params: Record<string, unknown> }> = [];
   const daemon = {
     rpc: vi.fn(async (method: string, params: Record<string, unknown>) => {
@@ -82,7 +96,7 @@ function makeService(exec: PrExec, opts?: { daemonOk?: boolean }) {
     }),
   };
   const invalidate = vi.fn();
-  const svc = new TaskPrService({ daemon, cache: { invalidate }, exec });
+  const svc = new TaskPrService({ daemon, cache: { invalidate }, exec, scanGit: opts?.scanGit ?? cleanScan });
   return { svc, daemon, daemonCalls, invalidate };
 }
 
@@ -151,9 +165,14 @@ describe('J3 §2 정상 1클릭 PR', () => {
     if (!res.ok) throw new Error('unreachable');
     expect(res.prUrl).toBe(VALID_PR);
 
-    // push -u origin -- {branch}(F6 세퍼레이터).
+    // The branch's commit, pushed after the `--` separator (F6), and the
+    // upstream `push -u` would have set.
     const push = calls.find((c) => c.cmd === 'git' && c.args[0] === 'push');
-    expect(push?.args).toEqual(['push', '-u', 'origin', '--', INPUT.branch]);
+    expect(push?.args).toEqual(PINNED_PUSH);
+    expect(calls.filter((c) => c.cmd === 'git' && c.args[0] === 'config').map((c) => c.args)).toEqual([
+      ['config', `branch.${INPUT.branch}.remote`, 'origin'],
+      ['config', `branch.${INPUT.branch}.merge`, `refs/heads/${INPUT.branch}`],
+    ]);
 
     // pr create에 --base가 실 값(main)으로 실렸는지.
     const create = calls.find((c) => isGh(c.cmd) && c.args[0] === 'pr' && c.args[1] === 'create');
@@ -317,7 +336,7 @@ function makeGlService(behavior: (cmd: string, args: string[]) => { stdout: stri
     }),
   };
   const glab = new GlabPrService(Date.now, exec);
-  const svc = new TaskPrService({ daemon, cache: { invalidate: vi.fn() }, exec, glab });
+  const svc = new TaskPrService({ daemon, cache: { invalidate: vi.fn() }, exec, glab, scanGit: cleanScan });
   const posts = () => calls.filter((c) => isGlab(c.cmd) && apiArgs(c.args)[0] === '-X');
   return { svc, calls, daemonCalls, posts };
 }
@@ -328,7 +347,7 @@ describe('task_pr on GitLab (glab)', () => {
     const res = await svc.createPr({ ...INPUT, body: '-starts with a dash' });
     expect(res).toEqual({ ok: true, prUrl: GL_MR, mrIid: 7 });
     expect(calls.some((c) => isGh(c.cmd))).toBe(false);
-    expect(calls.find((c) => c.cmd === 'git' && c.args[0] === 'push')?.args).toEqual(['push', '-u', 'origin', '--', INPUT.branch]);
+    expect(calls.find((c) => c.cmd === 'git' && c.args[0] === 'push')?.args).toEqual(PINNED_PUSH);
     const post = posts();
     expect(post).toHaveLength(1);
     expect(post[0].args.slice(0, 3)).toEqual(['api', '--hostname', 'gitlab.example.com']);
@@ -653,5 +672,76 @@ describe('task_pr: the push goes where it was approved to', () => {
     const { svc, calls } = makeGlService(glHappy);
     expect(await svc.createPr({ ...INPUT, pushTarget: 'gitlab.example.com/group/sub/proj' })).toEqual({ ok: true, prUrl: GL_MR, mrIid: 7 });
     expect(calls.filter((c) => c.cmd === 'git' && c.args[0] === 'push')).toHaveLength(1);
+  });
+});
+
+describe('the Git page\'s push check runs before the task PR push', () => {
+  const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', ...args], { cwd, encoding: 'utf8' }).trim();
+  let root: string;
+  afterEach(() => { if (root) fs.rmSync(root, { recursive: true, force: true }); });
+
+  /** A real worktree whose task branch adds `file` on top of what origin has. */
+  function repoWith(file: string, text: string): string {
+    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-taskpr-secrets-')));
+    const origin = path.join(root, 'origin.git');
+    const repo = path.join(root, 'repo');
+    execFileSync('git', ['init', '-q', '--bare', origin]);
+    execFileSync('git', ['init', '-q', '-b', 'main', repo]);
+    fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n');
+    git(repo, 'add', '.');
+    git(repo, 'commit', '-qm', 'init');
+    git(repo, 'remote', 'add', 'origin', origin);
+    git(repo, 'push', '-q', 'origin', 'main');
+    git(repo, 'checkout', '-q', '-b', INPUT.branch);
+    fs.writeFileSync(path.join(repo, file), text);
+    git(repo, 'add', '.');
+    git(repo, 'commit', '-qm', 'work');
+    return repo;
+  }
+
+  /** The fake git, except that rev-parse reads the real repository the check scans. */
+  const realRevParse = (run: ReturnType<typeof makeExec>): PrExec => async (cmd, args, opts) =>
+    (cmd === 'git' && args[0] === 'rev-parse'
+      ? { stdout: execFileSync('git', args, { cwd: opts.cwd, encoding: 'utf8' }), stderr: '' }
+      : run.exec(cmd, args, opts));
+  const KEY = '-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA\n-----END RSA PRIVATE KEY-----\n';
+
+  it('a branch carrying a key is refused with the Git page\'s words and never pushed; a clean one is pushed', async () => {
+    const keyed = repoWith('deploy.pem', KEY);
+    let run = makeExec(happyBehavior);
+    let res = await makeService(realRevParse(run), { scanGit: (cwd) => spawnGitLines(cwd) }).svc.createPr({ ...INPUT, worktreePath: keyed });
+    expect(res).toMatchObject({ ok: false, reason: 'secrets', error: expect.stringContaining('deploy.pem'), secrets: [expect.objectContaining({ path: 'deploy.pem' })] });
+    expect(run.calls.some((c) => c.cmd === 'git' && c.args[0] === 'push')).toBe(false);
+
+    fs.rmSync(root, { recursive: true, force: true });
+    const clean = repoWith('b.txt', 'b\n');
+    run = makeExec(happyBehavior);
+    res = await makeService(realRevParse(run), { scanGit: (cwd) => spawnGitLines(cwd) }).svc.createPr({ ...INPUT, worktreePath: clean });
+    expect(res.ok).toBe(true);
+    expect(run.calls.some((c) => c.cmd === 'git' && c.args[0] === 'push')).toBe(true);
+  });
+
+  it('a commit made while the check runs is not pushed: the push names the commit that was checked', async () => {
+    const repo = repoWith('b.txt', 'b\n');
+    const checked = git(repo, 'rev-parse', 'HEAD');
+    // The agent commits a key while the check reads the branch.
+    let committed = false;
+    const scanGit = (cwd: string): GitLines => {
+      const real = spawnGitLines(cwd);
+      return async (args, onLine) => {
+        if (!committed) {
+          committed = true;
+          fs.writeFileSync(path.join(repo, 'deploy.pem'), KEY);
+          git(repo, 'add', '.');
+          git(repo, 'commit', '-qm', 'late');
+        }
+        return real(args, onLine);
+      };
+    };
+    const run = makeExec(happyBehavior);
+    const res = await makeService(realRevParse(run), { scanGit }).svc.createPr({ ...INPUT, worktreePath: repo });
+    expect(res.ok).toBe(true);
+    expect(git(repo, 'rev-parse', 'HEAD')).not.toBe(checked);
+    expect(run.calls.find((c) => c.cmd === 'git' && c.args[0] === 'push')?.args).toEqual(['push', 'origin', '--', `${checked}:refs/heads/${INPUT.branch}`]);
   });
 });

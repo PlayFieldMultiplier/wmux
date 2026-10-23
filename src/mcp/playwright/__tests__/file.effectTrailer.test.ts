@@ -10,7 +10,10 @@ vi.mock('../../wmux-client', () => ({
   sendRpc: (method: string, ...args: unknown[]) =>
     method.startsWith('browser.lease.') || method === 'browser.lifecycle.get'
       ? Promise.resolve({ token: null })
-      : mockSendRpc(method, ...args),
+      // The operator allows the download (consent.unprotected.test.ts covers no).
+      : method === 'browser.consent.request'
+        ? Promise.resolve({ ok: true, operationId: 'op', epoch: 0, via: 'once' })
+        : mockSendRpc(method, ...args),
 }));
 
 vi.mock('../PlaywrightEngine', () => ({

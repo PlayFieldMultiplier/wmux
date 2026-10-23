@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { A2A_REMOTE_STATE_ENVELOPE_MAX, A2A_REMOTE_STATE_EVIDENCE_MAX } from '../../../shared/a2aRemote';
 import { A2aTaskService } from '../../a2a/A2aTaskService';
 import { AppendOnlyLog } from '../../eventlog/AppendOnlyLog';
 import { remoteTaskId } from '../ids';
@@ -221,6 +222,59 @@ describe('sendRemoteReply / sendRemoteState', () => {
     await tasks.cancelTask({ taskId: id, callerWorkspaceId: 'ws-a' });
     await syncRemoteTask(deps, id);
     expect(outbox.pending(HOST).at(-1)!.envelope.messageId).toBe(stateMessageId(tasks.getTask(id)!));
+  });
+
+  // We are the receiver of a task the peer sent: our completion goes back with its report.
+  async function completedInbound(evidence: Parameters<A2aTaskService['transition']>[0]['evidence'], text = 'The full report.'): Promise<string> {
+    const linkId = activeLink();
+    const id = remoteTaskId(linkId, 'peer-msg');
+    await tasks.createTask({
+      id,
+      title: 't',
+      from: { workspaceId: `remote:${linkId}`, name: 'pc-b/ws/pane' },
+      to: { workspaceId: 'ws-a', name: 'Frontend', paneId: 'pane-a' },
+      history: [{ kind: 'message', messageId: 'peer-msg', role: 'user', parts: [{ kind: 'text', text: 'review it' }] }],
+      remote: { v: 1, linkId, hostId: HOST, messageId: 'peer-msg', direction: 'inbound', delivered: true },
+    });
+    expect((await tasks.transition({ taskId: id, to: 'working', callerWorkspaceId: 'ws-a' })).ok).toBe(true);
+    const done = await tasks.transition({
+      taskId: id, to: 'completed', callerWorkspaceId: 'ws-a', evidence,
+      message: { kind: 'message', messageId: 'status-1', role: 'agent', parts: [{ kind: 'text', text }] },
+    });
+    expect(done.ok).toBe(true);
+    await syncRemoteTask(deps, id);
+    return id;
+  }
+
+  it('a completion carries its status message and evidence; `text` stays the summary for an older peer', async () => {
+    const evidence = { summary: 'reviewed', items: [{ kind: 'inspection' as const, status: 'verified' as const, summary: 'no P1' }] };
+    const id = await completedInbound(evidence);
+    const state = outbox.pending(HOST).filter((r) => r.envelope.kind === 'state' && r.envelope.taskId === id).at(-1)!;
+    expect(state.envelope).toMatchObject({ state: 'completed', text: 'reviewed', message: 'The full report.', evidence });
+  });
+
+  it('evidence too large for one envelope is sent with the items that fit', async () => {
+    const item = (n: number) => ({ kind: 'inspection' as const, status: 'verified' as const, summary: `${n} ${'x'.repeat(3000)}` });
+    const evidence = { summary: 'big', items: Array.from({ length: 16 }, (_, n) => item(n)) };
+    const id = await completedInbound(evidence);
+    const sent = outbox.pending(HOST).filter((r) => r.envelope.kind === 'state' && r.envelope.taskId === id).at(-1)!.envelope.evidence!;
+    expect(Buffer.byteLength(JSON.stringify(sent), 'utf8')).toBeLessThanOrEqual(A2A_REMOTE_STATE_EVIDENCE_MAX);
+    expect(sent.items.length).toBeGreaterThan(0);
+    expect(sent.items.length).toBeLessThan(16);
+    expect(sent.items).toEqual(evidence.items.slice(0, sent.items.length));
+  });
+
+  it('control characters, which JSON escapes to six bytes each, cannot push the envelope past the body limit', async () => {
+    // Within the local cap (64 KiB of JSON), but about 60 KiB once escaped as \\u00XX.
+    const item = (n: number) => ({ kind: 'inspection' as const, status: 'verified' as const, summary: `${n} ${'\u0001'.repeat(1000)}` });
+    const evidence = { summary: 'big', items: Array.from({ length: 10 }, (_, n) => item(n)) };
+    const id = await completedInbound(evidence, `start ${'\u001b'.repeat(10_000)} end`);
+    const sent = outbox.pending(HOST).filter((r) => r.envelope.kind === 'state' && r.envelope.taskId === id).at(-1)!.envelope;
+    expect(Buffer.byteLength(JSON.stringify(sent), 'utf8')).toBeLessThanOrEqual(A2A_REMOTE_STATE_ENVELOPE_MAX);
+    expect(sent).toMatchObject({ state: 'completed', text: 'big' });
+    // The outgoing message is peer text already: no escape sequences.
+    expect(sent.message?.includes('\u001b')).toBe(false);
+    expect(sent.evidence!.items.length).toBeLessThan(10);
   });
 
   it('nothing is queued on a revoked link', async () => {

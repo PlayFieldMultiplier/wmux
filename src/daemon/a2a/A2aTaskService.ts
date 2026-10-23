@@ -39,7 +39,7 @@ import type {
   TaskState,
   WmuxTaskMetadata,
 } from '../../shared/types';
-import { validateTransition, VALID_TRANSITIONS, TERMINAL_STATES } from '../../shared/types';
+import { validateMessage, validateTransition, VALID_TRANSITIONS, TERMINAL_STATES } from '../../shared/types';
 import {
   isVerifiedItem,
   normalizeCompletionEvidenceWire,
@@ -90,6 +90,17 @@ function evidenceGateHint(code: string): string {
     default:
       return 'attach valid completion evidence and retry';
   }
+}
+
+/**
+ * The status message an `a2a.task.update` caller sent (a string on the wire),
+ * as the transition stores it; undefined when none was sent. Throws on an
+ * empty or over-long message, the same check main runs before it forwards one.
+ */
+export function statusMessageFromWire(raw: unknown, mintId: () => string): Message | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== 'string') throw new Error('message must be a string');
+  return { kind: 'message', messageId: mintId(), role: 'agent', parts: [{ kind: 'text', text: validateMessage(raw) }] };
 }
 
 /** append + readAllRecords만 요구하는 최소 로그 인터페이스(AppendOnlyLog 만족). */
@@ -304,7 +315,7 @@ export class A2aTaskService {
       };
       task.metadata.updatedAt = t.timestamp;
       if (t.remoteMessageId) {
-        addInboxItem(task, t.remoteMessageId, 'state');
+        addInboxItem(task, t.remoteMessageId, 'state', t.to);
         // The peer told us this state: nothing to tell it back.
         const m = remoteMarkerOf(task);
         if (m) m.stateSync = t.to;
@@ -318,7 +329,7 @@ export class A2aTaskService {
       task.status = { state: 'canceled', timestamp: c.timestamp };
       task.metadata.updatedAt = c.timestamp;
       if (c.remoteMessageId) {
-        addInboxItem(task, c.remoteMessageId, 'state');
+        addInboxItem(task, c.remoteMessageId, 'state', 'canceled');
         const m = remoteMarkerOf(task);
         if (m) m.stateSync = 'canceled';
       }
@@ -948,6 +959,10 @@ export class A2aTaskService {
     messageId: string;
     to: TaskState;
     summary?: string;
+    /** The peer's status message (sanitized peer text). */
+    message?: string;
+    /** The peer's completion evidence (wire-normalized, sanitized), re-checked here like local evidence. */
+    evidence?: CompletionEvidence;
   }): Promise<RemoteOpOk | ConflictErr | OpErr> {
     return this.withTaskLock(input.taskId, async () => {
       const task = this.tasks.get(input.taskId);
@@ -995,12 +1010,24 @@ export class A2aTaskService {
       }
       const terminal = input.to === 'completed' || input.to === 'failed';
       const summary = input.summary?.trim() || `${input.to} on the remote host (evidence stays there)`;
+      // The peer's evidence counts only when it passes the same gate a local
+      // completion does; otherwise the summary alone stands, as from an older peer.
+      const ended = input.to === 'completed' || input.to === 'failed' ? input.to : undefined;
+      const verdict = ended && input.evidence ? validateCompletionEvidence(ended, input.evidence) : undefined;
+      const evidence: CompletionEvidence | undefined = terminal
+        ? (verdict?.ok ? input.evidence : { summary, items: [] })
+        : undefined;
+      const message: Message | undefined = input.message
+        ? { kind: 'message', messageId: input.messageId, role: 'agent', parts: [{ kind: 'text', text: input.message }] }
+        : undefined;
       const payload: A2aTaskTransitionPayload = {
         kind: 'task.transition',
         taskId: input.taskId,
         to: input.to,
         timestamp,
-        ...(terminal ? { forced: 'remote_state' as const, evidence: { summary, items: [] } } : {}),
+        ...(message ? { message } : {}),
+        ...(evidence ? { forced: 'remote_state' as const, evidence } : {}),
+        ...(verdict?.ok ? { verifiedItemCount: verdict.verifiedItemCount } : {}),
         remoteMessageId: input.messageId,
       };
       const committed = await this.log.append(this.envelope(payload, remoteWs, this.derivePrincipalId(task, 'to', remoteWs)));
@@ -1216,11 +1243,11 @@ function remoteMarkerOf(task: Task | undefined): A2aRemoteTaskState | undefined 
 }
 
 /** Owe the local pane one delivery for a reply/state the peer sent (idempotent). */
-function addInboxItem(task: Task, messageId: string, kind: A2aRemoteInboxItem['kind']): void {
+function addInboxItem(task: Task, messageId: string, kind: A2aRemoteInboxItem['kind'], state?: TaskState): void {
   const marker = remoteMarkerOf(task);
   if (!marker) return;
   const inbox = marker.inbox ?? (marker.inbox = []);
-  if (!inbox.some((i) => i.messageId === messageId)) inbox.push({ messageId, kind, delivered: false });
+  if (!inbox.some((i) => i.messageId === messageId)) inbox.push({ messageId, kind, ...(state ? { state } : {}), delivered: false });
 }
 
 /** The text parts of a history's first message, joined — the "body" a remote id dedupes on. */

@@ -41,6 +41,11 @@ describe('method table', () => {
       expect(CLIENT_REQUEST_CLASSES[m]).toBe('ownThread');
     }
   });
+
+  it('passes the account read every Codex 0.163 TUI sends at startup', () => {
+    // Refused, it raised a "Codex request not sent" notice on every launch.
+    expect(classify({ id: 1, method: 'account/bedrock/checkGovCloudRequirements', params: {} })).toBe('pass');
+  });
 });
 
 describe('threadIdentityEnv', () => {

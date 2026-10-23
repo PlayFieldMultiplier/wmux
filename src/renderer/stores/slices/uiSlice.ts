@@ -819,8 +819,9 @@ export interface UISlice {
   setAnthropicUsageEnabled: (enabled: boolean) => void;
   // Usage-limit pause: when on, a pane that hits its provider's usage limit
   // with no per-pane decision yet is armed to receive a short continue
-  // message once the limit resets (useUsageLimitBridge applies it). Off by
-  // default; each pane can override it from its limit chip.
+  // message once the limit resets (useUsageLimitBridge applies it). On by
+  // default (owner decision 2026-10-22); a saved choice is kept, and each
+  // pane can override it from its limit card.
   usageLimitAutoResume: boolean;
   setUsageLimitAutoResume: (enabled: boolean) => void;
   // #1826: when on, a pane recovered at app start that was running Claude Code
@@ -2039,7 +2040,7 @@ export const createUISlice: StateCreator<StoreState, [['zustand/immer', never]],
   }),
 
   // ─── Phase 2 — Anthropic usage meter ────────────────────────────────────
-  usageLimitAutoResume: false,
+  usageLimitAutoResume: true,
   setUsageLimitAutoResume: (enabled) => set((state) => {
     state.usageLimitAutoResume = enabled;
   }),

@@ -21,6 +21,14 @@ export interface OnboardingStep {
    *  the step (it starts on Fleet, where the Workspaces page sits covered and
    *  inert underneath). */
   page?: AppRoute;
+  /** Choices shown under the description, each a short name and what it is
+   *  for. */
+  items?: Array<{ termKey: string; textKey: string }>;
+  /** A last line of copy under the items. */
+  noteKey?: string;
+  /** A link to the Settings tab where the step's choice is made. Following it
+   *  ends the tour, which would otherwise cover Settings. */
+  settingsLink?: { labelKey: string; tab: string };
 }
 
 /** On screen: not inside a covered (inert) or hidden part of the app. */
@@ -71,12 +79,23 @@ export const ONBOARDING_STEPS: OnboardingStep[] = [
     // No clip: the recording showed a sidebar layout that has since changed.
   },
   {
+    // What each browser backend (shared/browserBackend.ts) is for. The pane's
+    // own browser button is the control; the status bar stands in when the
+    // pane chrome is compact.
     id: 'open-browser',
     titleKey: 'onboarding.step3.title',
     descriptionKey: 'onboarding.step3.description',
-    targetSelector: '[data-onboarding-target="status-bar"]',
+    targetSelector: '[data-pane-action="new-browser"]',
+    fallbackSelector: '[data-onboarding-target="status-bar"]',
     page: 'workspaces',
-    placement: 'top',
+    placement: 'bottom',
+    items: [
+      { termKey: 'onboarding.step3.builtin', textKey: 'onboarding.step3.builtinUse' },
+      { termKey: 'onboarding.step3.chrome', textKey: 'onboarding.step3.chromeUse' },
+      { termKey: 'onboarding.step3.external', textKey: 'onboarding.step3.externalUse' },
+    ],
+    noteKey: 'onboarding.step3.statusBar',
+    settingsLink: { labelKey: 'onboarding.step3.settingsLink', tab: 'browser' },
   },
   {
     id: 'command-palette',

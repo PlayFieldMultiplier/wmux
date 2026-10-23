@@ -795,6 +795,10 @@ export const IPC = {
   WEB_SET_GRANTS: 'web:setGrants',
   /** Read-only readiness check for the phone wizard: tailscale + server status, changes nothing. */
   WEB_DIAGNOSE: 'web:diagnose',
+  /** The Remote page's Tailscale checklist: one read-only `tailscale status --json`. */
+  WEB_TAILSCALE_CHECK: 'web:tailscaleCheck',
+  /** Open Tailscale's download page or bring the Tailscale app forward; nothing more. */
+  WEB_TAILSCALE_OPEN: 'web:tailscaleOpen',
   // First-run wizard (Plan 1.15) — magical-moment onboarding flow
   FIRST_RUN_CHECK: 'first-run:check',
   FIRST_RUN_COMPLETE: 'first-run:complete',

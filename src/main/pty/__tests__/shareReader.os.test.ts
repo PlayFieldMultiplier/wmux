@@ -78,6 +78,27 @@ describe('ChildProbeReader', () => {
     expect(r.outstanding).toBe(0);
   }, 20_000);
 
+  it('answers open for a directory it can open, null otherwise', async () => {
+    const dir = tmp();
+    const r = reader();
+    expect(await r.read({ op: 'open', path: dir })).toBe('opened');
+    expect(await r.read({ op: 'open', path: path.join(dir, 'nope') })).toBeNull();
+  }, 20_000);
+
+  it('with idleMs, lets its process go when idle and starts a new one on the next read', async () => {
+    const dir = tmp();
+    const r = new ChildProbeReader(10_000, SHARE_READER_SOURCE, 200);
+    readers.push(r);
+    expect(await r.read({ op: 'stat', path: dir })).toBe('dir');
+    const first = r.pid as number;
+    expect(first).toBeTypeOf('number');
+    expect(await gone(first)).toBe(true);
+    expect(r.pid).toBeUndefined();
+    expect(r.kills).toBe(0); // let go, not killed for a missed deadline
+    expect(await r.read({ op: 'stat', path: dir })).toBe('dir');
+    expect(r.starts).toBe(2);
+  }, 20_000);
+
   it('kills a reader whose read misses the deadline and starts a new one on the next read', async () => {
     const r = reader(500, HANGING_SOURCE);
     const dir = tmp();
@@ -168,9 +189,15 @@ describe('ChildProbeReader', () => {
   }, 20_000);
 
   it('the reader script runs under Electron\'s node too (the daemon\'s and main\'s runtime)', async () => {
+    // Since Electron 42, `require('electron')` downloads a missing binary.
+    // Look up the installed one without that side effect and skip when there
+    // is none (CI installs it with `npx install-electron`).
     let electron: string;
-    try { electron = createRequire(__filename)('electron') as unknown as string; } catch { return; }
-    if (typeof electron !== 'string' || !fs.existsSync(electron)) return;
+    try {
+      const dir = path.dirname(createRequire(__filename).resolve('electron/package.json'));
+      electron = path.join(dir, 'dist', fs.readFileSync(path.join(dir, 'path.txt'), 'utf8').trim());
+    } catch { return; }
+    if (!fs.existsSync(electron)) return;
     const dir = tmp();
     const child = spawn(electron, ['-e', SHARE_READER_SOURCE], {
       env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true,

@@ -193,6 +193,10 @@ describe('effectiveAccelerators', () => {
     // OS gesture) but does on Linux.
     expect(effectiveAccelerators([{ role: 'quit' }], 'win32')).toEqual([]);
     expect(acceleratorsMatch(one([{ role: 'quit' }], 'linux'), 'Control+Q', 'linux')).toBe(true);
+    // macOS adds Option: Electron's role table has `Cmd+Option+Shift+V` there,
+    // `Shift+CommandOrControl+V` elsewhere.
+    expect(acceleratorsMatch(one([{ role: 'pasteAndMatchStyle' }], 'darwin'), 'Command+Alt+Shift+V', 'darwin')).toBe(true);
+    expect(acceleratorsMatch(one([{ role: 'pasteAndMatchStyle' }], 'win32'), 'Control+Shift+V', 'win32')).toBe(true);
   });
 
   it('expands the editMenu composite to its members', () => {

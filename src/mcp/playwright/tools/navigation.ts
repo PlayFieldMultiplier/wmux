@@ -15,7 +15,8 @@ import {
 import { domainFromUrl } from '../../../shared/browserMemory/siteMemory';
 import { normalizeUrlKey } from '../../../shared/browserReplay/actionTrace';
 import { withAutomationLease } from '../automationLease';
-import { assertProtectedNavigation } from '../protectedPane';
+import { assertProtectedNavigation, isProtectedScope } from '../protectedPane';
+import { guardUnclaimedDownloads } from '../downloadGuard';
 import { describeToolError } from '../toolError';
 import {
   EFFECT_TRAILER_NOTE,
@@ -264,6 +265,78 @@ function tabsToolSuccess(result: BrowserTabsSuccessResult) {
  *  - browser_navigate_back — go back in history
  *  - browser_tabs          — list / new / select / close tabs
  */
+/** How a URL opened through {@link openWithDownloadGuard} loaded. */
+export type GuardedLoad = { ok: true; url: string } | { ok: false; error: string };
+
+/**
+ * Open a tab for `url` (browser_open, browser_tabs new).
+ *
+ * Main opens a tab by loading its URL straight away, before this lane holds
+ * a Page for it, so on an unprotected pane a URL that downloads would be
+ * saved before the download guard could be armed. On an unprotected Chrome
+ * pane the tab is therefore opened on about:blank, handed out through the
+ * engine (which arms the guard, armed again here explicitly), and only then
+ * sent to `url`. Main never sees that URL, so its policy is applied here
+ * first, as browser_navigate applies it. Everywhere else — a protected pane,
+ * another backend, or no URL — main opens it as before.
+ *
+ * `open` performs the RPC (with the URL, or without it on the guarded path)
+ * and `surfaceOf` names the surface it produced.
+ */
+export async function openWithDownloadGuard<R>(
+  deps: BrowserToolDeps,
+  tool: string,
+  workspaceId: string,
+  url: string | undefined,
+  open: (url: string | undefined) => Promise<R>,
+  surfaceOf: (result: R) => string | undefined,
+): Promise<{ result: R; load?: GuardedLoad }> {
+  const engine = PlaywrightEngine.getInstance();
+  if (!url) return { result: await open(url) };
+  let guarded: boolean;
+  try {
+    guarded = await engine.isUnprotectedChrome(workspaceId);
+  } catch (err) {
+    // Unknown is not "not Chrome": refused rather than opened unguarded.
+    throw taggedFailure(
+      'unknown_error',
+      `${tool}: the URL was not opened: ${describeToolError(err)}. Retry, or open without a url.`,
+    );
+  }
+  if (!guarded) return { result: await open(url) };
+  const policy = await readNavigationPolicy();
+  const check = validateNavigationUrl(url, policy);
+  if (!check.valid) throw taggedFailure('invalid_params', `URL blocked: ${check.reason}`);
+  const resolvedCheck = await validateResolvedNavigationUrl(url, policy);
+  if (!resolvedCheck.valid && !resolvedCheck.unresolved) {
+    throw taggedFailure('invalid_params', `URL blocked: ${resolvedCheck.reason}`);
+  }
+  const result = await open(undefined);
+  const surfaceId = surfaceOf(result);
+  if (!surfaceId) return { result };
+  try {
+    const finalUrl = await withAutomationLease(deps, surfaceId, async (scope) => {
+      // The pane may have become protected since it was asked: its own rule.
+      assertProtectedNavigation(scope, tool, url);
+      const page = await engine.getPageForScope(scope, { intent: 'write' });
+      if (!page) throw new Error(`${tool}: no page resolved for the opened tab`);
+      if (!isProtectedScope(scope)) guardUnclaimedDownloads(page);
+      await page.goto(url, { waitUntil: 'domcontentloaded' });
+      return page.url();
+    });
+    return { result, load: { ok: true, url: finalUrl } };
+  } catch (err) {
+    return { result, load: { ok: false, error: describeToolError(err) } };
+  }
+}
+
+/** The line a guarded load adds to a tool's answer. */
+export function describeGuardedLoad(load: GuardedLoad): string {
+  return load.ok
+    ? `Loaded ${redactPasswordParams(load.url)}`
+    : `The tab opened, but loading the URL failed: ${load.error}`;
+}
+
 export function registerNavigationTools(server: McpServer, deps: BrowserToolDeps): void {
   // -----------------------------------------------------------------------
   // browser_navigate
@@ -638,17 +711,17 @@ export function registerNavigationTools(server: McpServer, deps: BrowserToolDeps
           );
         }
 
-        const tabsParams = {
+        const tabsParams = (withUrl: string | undefined) => ({
           action: resolvedAction,
           workspaceId,
           ...(surfaceId && { surfaceId }),
-          ...(url !== undefined && { url }),
+          ...(withUrl !== undefined && { url: withUrl }),
           ...(scope !== undefined && { scope }),
           // Only `new` opens something, but the key rides along on every action
           // so main can answer "is this one mine?" per row on `list` — as a
           // verdict; the key itself never comes back.
           openerKey: getOpenerKey(),
-        };
+        });
         // `borrow` blocks on a human, so it cannot share the 10 s default: that
         // capped the user's 60 s answer window at ten seconds and reported a
         // prompt still on screen as "temporarily unavailable". Every other action
@@ -656,19 +729,42 @@ export function registerNavigationTools(server: McpServer, deps: BrowserToolDeps
         // Spread rather than a ternary over two calls: only borrow carries a
         // timeout argument at all, and every other action reaches sendRpc with
         // exactly the arguments it had before.
-        const tabsArgs: [typeof tabsParams, number?] =
-          resolvedAction === 'borrow' ? [tabsParams, BORROW_RPC_TIMEOUT_MS] : [tabsParams];
-        const result = await sendRpc('browser.tabs', ...tabsArgs);
-        if (!isBrowserTabsResult(result)) {
-          throw new Error('Invalid browser.tabs response from wmux main.');
-        }
-        // A tab this call created becomes this connection's default target,
-        // the same promise browser_open makes. Only creation moves it: select
-        // is UI focus, and close leaves the pin to be re-resolved.
-        if (result.ok && result.action === 'new' && 'tab' in result) {
-          noteOpenedSurface(workspaceId, result.tab.surfaceId);
-        }
-        return result.ok ? tabsToolSuccess(result) : tabsToolError(result);
+        const call = async (withUrl: string | undefined) => {
+          const params = tabsParams(withUrl);
+          const tabsArgs: [typeof params, number?] =
+            resolvedAction === 'borrow' ? [params, BORROW_RPC_TIMEOUT_MS] : [params];
+          const result = await sendRpc('browser.tabs', ...tabsArgs);
+          if (!isBrowserTabsResult(result)) {
+            throw new Error('Invalid browser.tabs response from wmux main.');
+          }
+          // A tab this call created becomes this connection's default target,
+          // the same promise browser_open makes. Only creation moves it: select
+          // is UI focus, and close leaves the pin to be re-resolved.
+          if (result.ok && result.action === 'new' && 'tab' in result) {
+            noteOpenedSurface(workspaceId, result.tab.surfaceId);
+          }
+          return result;
+        };
+        // `new` with a URL: on an unprotected Chrome pane the tab opens on
+        // about:blank and the URL loads once the download guard is armed.
+        const { result, load } = resolvedAction === 'new' && url !== undefined
+          ? await openWithDownloadGuard(
+            deps,
+            'browser_tabs',
+            workspaceId,
+            url,
+            call,
+            (r) => (r.ok && r.action === 'new' && 'tab' in r ? r.tab.surfaceId : undefined),
+          )
+          : { result: await call(url), load: undefined };
+        if (!result.ok) return tabsToolError(result);
+        const out = tabsToolSuccess(result);
+        if (!load) return out;
+        return {
+          ...out,
+          content: [...out.content, { type: 'text' as const, text: describeGuardedLoad(load) }],
+          ...(!load.ok && { isError: true }),
+        };
       } catch (error) {
         const message = describeToolError(error);
         if (/Unknown method:\s*browser\.tabs/i.test(message)) {
@@ -693,10 +789,13 @@ export function registerNavigationTools(server: McpServer, deps: BrowserToolDeps
             browserTabsError('BROWSER_TABS_SCOPE_REFUSED', message),
           );
         }
+        // openWithDownloadGuard's refusal says why the URL was not opened.
         return tabsToolError(
           browserTabsError(
             'BROWSER_TABS_UNAVAILABLE',
-            'Workspace-scoped browser tabs are temporarily unavailable.',
+            message.includes('the URL was not opened')
+              ? message
+              : 'Workspace-scoped browser tabs are temporarily unavailable.',
           ),
         );
       }

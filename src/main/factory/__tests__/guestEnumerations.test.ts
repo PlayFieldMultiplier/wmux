@@ -140,6 +140,8 @@ const ROOM_READ_CALLERS: Record<string, Why> = {
   'src/main/pipe/handlers/room.rpc.ts#handleRoomResolve': { kind: 'owner', why: 'the operator\'s resolve' },
   'src/main/pipe/handlers/room.rpc.ts#handleRoomThreads': { kind: 'owner', why: 'operator only' },
   'src/main/pipe/handlers/room.rpc.ts#postTurnText': { kind: 'one-workspace', why: 'the bot\'s own room' },
+  'src/main/pipe/handlers/room.rpc.ts#groupRoundRefusal': { kind: 'one-workspace', why: 'the poster\'s own room: its group chat\'s thread' },
+  'src/main/pipe/handlers/room.rpc.ts#endGroupTurn': { kind: 'one-workspace', why: 'the bot\'s own room: the card its wake is about' },
 };
 
 // ── The scan ───────────────────────────────────────────────────────────────

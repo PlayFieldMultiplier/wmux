@@ -58,6 +58,7 @@ import { useNotificationListener } from '../../hooks/useNotificationListener';
 import { useRpcBridge } from '../../hooks/useRpcBridge';
 import { useA2aLinkRequestToast, useA2aRemoteSnapshot } from '../../hooks/useA2aRemoteSnapshot';
 import { useA2aRemoteBridge } from '../../hooks/useA2aRemoteBridge';
+import { useConnectionDropNotice } from '../../hooks/useConnectionDropNotice';
 import { useCloseTabOnShellExit } from '../../hooks/useCloseTabOnShellExit';
 import AgentMentionPicker from '../Palette/AgentMentionPicker';
 import HandoffPopover from '../Git/HandoffPopover';
@@ -929,6 +930,8 @@ export default function AppLayout() {
   // The other PCs' links, connections and held work: the one subscription
   // behind the Remote page and its rail badge.
   useA2aRemoteBridge();
+  // A PC connection in use that really dropped (not a blip) gets one toast.
+  useConnectionDropNotice();
   // `exit` in a shell closes its tab (clean exit only).
   useCloseTabOnShellExit();
   // Keep the main-process WorkspaceMirror warm: push the workspace tree +

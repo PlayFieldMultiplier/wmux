@@ -54,6 +54,7 @@
 // drawn is a mismatch, and the driver stops rather than guess.
 
 import type { DecisionForm } from './types';
+import { UNKNOWN_CELL } from '../sessionTextReplay';
 
 export type AskFormQuestion = NonNullable<DecisionForm['questions']>[number];
 
@@ -206,6 +207,16 @@ export function sameQuestionText(screen: string, form: string): boolean {
   return text.length > 0 && text === compact(form);
 }
 
+/**
+ * Where a question view was read on the grid, for a read with unknown cells
+ * (see drawnMatches): the label's row and column of each option and the rows
+ * of its `more`, the question's rows, the tab bar's row. Kept beside the
+ * views, not in them.
+ */
+const optionAt = new WeakMap<AskPickerRow, { row: number; col: number; more: number[] }>();
+const questionAt = new WeakMap<AskPickerQuestionView, { rows: number[]; gutter: boolean }>();
+const barAt = new WeakMap<AskPickerQuestionView, number>();
+
 function parseTabBar(row: string): AskPickerTabs | null {
   let text = row.trim();
   if (text.startsWith('←')) text = text.slice(1).trim();
@@ -237,18 +248,21 @@ function parseQuestionView(
   seen: { hint?: string } = {},
 ): AskPickerQuestionView | null {
   const text: string[] = [];
+  const textAt: number[] = [];
   let i = start;
   for (; i < rows.length && !OPTION_ROW.test(rows[i]!); i++) {
     if (RULE.test(rows[i]!.trim())) return null;
-    if (rows[i]!.trim()) text.push(rows[i]!.trim());
+    if (rows[i]!.trim()) {
+      text.push(rows[i]!.trim());
+      textAt.push(i);
+    }
   }
   if (text.length === 0) return null;
   // A question that wraps draws a `│ ` gutter on every one of its rows (2.1.292);
   // a one-row question draws none. Stripped only from several rows that all
   // carry it: on one row a `│` is the question's own text.
-  const question = text.length > 1 && text.every((row) => QUESTION_GUTTER.test(row))
-    ? text.map((row) => row.replace(QUESTION_GUTTER, '')).filter((row) => row.trim())
-    : text;
+  const gutter = text.length > 1 && text.every((row) => QUESTION_GUTTER.test(row));
+  const question = gutter ? text.map((row) => row.replace(QUESTION_GUTTER, '')).filter((row) => row.trim()) : text;
   if (question.length === 0) return null;
   const options: AskPickerRow[] = [];
   let multiSelect: boolean | undefined;
@@ -269,6 +283,7 @@ function parseQuestionView(
         cursor: m[1] === '❯ ',
         ...(box ? { checked: box[1] === '✔' } : {}),
       });
+      optionAt.set(options[options.length - 1]!, { row: i, col: row.length - (box ? box[2]! : m[3]!).length, more: [] });
       lastOption = i;
       continue;
     }
@@ -283,7 +298,9 @@ function parseQuestionView(
     // its description.
     if (row.trim()) {
       if (submitRow || options.length === 0) return null;
-      (options[options.length - 1]!.more ??= []).push(row.trim());
+      const option = options[options.length - 1]!;
+      (option.more ??= []).push(row.trim());
+      optionAt.get(option)!.more.push(i);
     }
   }
   // No bottom rule: not a whole picker.
@@ -292,7 +309,7 @@ function parseQuestionView(
   if (hint === null) return null;
   seen.hint = hint;
   if (options.filter((o) => o.cursor).length + (submitRow?.cursor ? 1 : 0) > 1) return null;
-  return {
+  const view: AskPickerQuestionView = {
     view: 'question',
     ...bar,
     question: normalize(question.join(' ')),
@@ -300,6 +317,8 @@ function parseQuestionView(
     multiSelect: multiSelect === true,
     ...(submitRow ? { submitRow } : {}),
   };
+  questionAt.set(view, { rows: textAt, gutter });
+  return view;
 }
 
 /**
@@ -419,9 +438,10 @@ export function parseAskPicker(rawRows: readonly string[]): AskPickerScreen | nu
     let i = bar + 1;
     while (i < rows.length && !rows[i]!.trim()) i++;
     if (i >= rows.length) return null;
-    return rows[i]!.trim() === 'Review your answers'
-      ? parseReviewView(rows, i + 1, tabs)
-      : parseQuestionView(rows, i, tabs);
+    if (rows[i]!.trim() === 'Review your answers') return parseReviewView(rows, i + 1, tabs);
+    const view = parseQuestionView(rows, i, tabs);
+    if (view) barAt.set(view, bar);
+    return view;
   }
   const first = rows.findIndex((row) => row.trim().length > 0);
   if (first < 0 || REVIEW_ROWS.has(rows[first]!.trim())) return null;
@@ -592,6 +612,63 @@ function sameOption(row: AskPickerRow, option: AskFormQuestion['options'][number
   return false;
 }
 
+/** Columns a character takes: 2 for a wide one. Errs wide, as ApprovalRegistry's textWidth does. */
+const cellsOf = (ch: string): number => ((ch.codePointAt(0) ?? 0) >= 0x1100 ? 2 : 1);
+
+/**
+ * `drawn`, a read's text with UNKNOWN_CELL for each cell the read could not
+ * see, is `form`, whitespace aside: every known character equal and in order,
+ * and each run of unknown cells standing for form characters no wider than the
+ * run (an unknown blank stands for nothing). Only an unknown cell is a
+ * wildcard, and a known character is never skipped.
+ */
+function drawnMatches(drawn: string, form: string): boolean {
+  const tokens: Array<string | number> = [];
+  for (const ch of compact(drawn)) {
+    const last = tokens[tokens.length - 1];
+    if (ch !== UNKNOWN_CELL) tokens.push(ch);
+    else if (typeof last === 'number') tokens[tokens.length - 1] = last + 1;
+    else tokens.push(1);
+  }
+  const want = [...compact(form)];
+  const memo = new Map<number, boolean>();
+  const from = (t: number, f: number): boolean => {
+    if (t === tokens.length) return f === want.length;
+    const key = t * (want.length + 1) + f;
+    const known = memo.get(key);
+    if (known !== undefined) return known;
+    const token = tokens[t]!;
+    let ok = false;
+    if (typeof token === 'string') {
+      ok = want[f] === token && from(t + 1, f + 1);
+    } else {
+      for (let g = f, width = 0; !ok; g++) {
+        ok = from(t + 1, g);
+        if (g >= want.length) break;
+        width += cellsOf(want[g]!);
+        if (width > token) break;
+      }
+    }
+    memo.set(key, ok);
+    return ok;
+  };
+  return from(0, 0);
+}
+
+/** An option's rows as `unknown` draws them (its label from its column, then `more`), or null. */
+function drawnOptionRows(row: AskPickerRow, unknown: readonly string[]): string[] | null {
+  const at = optionAt.get(row);
+  return at ? [(unknown[at.row] ?? '').slice(at.col), ...at.more.map((r) => unknown[r] ?? '')] : null;
+}
+
+/** How many of `rows` are the option's label when they read as `option`; 0 when they do not. */
+function drawnOptionLabelRows(rows: readonly string[], option: AskFormQuestion['options'][number]): number {
+  for (let k = 1; k <= rows.length; k++) {
+    if (drawnMatches(rows.slice(0, k).join(''), option.label) && drawnMatches(rows.slice(k).join(''), option.description ?? '')) return k;
+  }
+  return 0;
+}
+
 /** The labels an answer shows as: the chosen options' labels, then the free text. */
 export function answerLabels(question: AskFormQuestion, answer: AskAnswer): string[] {
   return [
@@ -610,10 +687,15 @@ export function answerLabels(question: AskFormQuestion, answer: AskAnswer): stri
  * (which tab is current, which are answered) or a multi-select (its Submit
  * tab and review) still need the bar.
  */
-function tabsMatch(screen: AskPickerTabs, questions: readonly AskFormQuestion[]): boolean {
+function tabsMatch(screen: AskPickerScreen, questions: readonly AskFormQuestion[], unknown?: readonly string[]): boolean {
   if (screen.topCut) return questions.length === 1 && questions[0]!.multiSelect !== true;
+  // A read with unknown cells: the bar's labels as drawn, split at its marks.
+  const bar = unknown && screen.view === 'question' ? barAt.get(screen) : undefined;
+  const drawn = bar === undefined ? null : (unknown![bar] ?? '').split(/([☐☒✔])/);
+  const drawnTab = (j: number): string => (drawn?.[2 * j + 2] ?? '').replace(/→\s*$/, '');
   return screen.tabs.length === questions.length
-    && screen.tabs.every((tab, j) => tab.label === normalize(questions[j]!.header ?? ''))
+    && screen.tabs.every((tab, j) => tab.label === normalize(questions[j]!.header ?? '')
+      || (drawn !== null && drawnMatches(drawnTab(j), questions[j]!.header ?? '')))
     && (questions.length > 1
       ? screen.submitTab
       // One question: a multi-select draws the Submit tab (measured on 2.1.288);
@@ -632,53 +714,100 @@ function tabsMatch(screen: AskPickerTabs, questions: readonly AskFormQuestion[])
  * the expected boxes ticked, and the free-text row showing its placeholder or
  * exactly the typed text. A review view must list every question with the
  * answer given, and offer `1. Submit answers` / `2. Cancel`.
+ *
+ * `unknown` (a read's rows with UNKNOWN_CELL for each cell it could not see):
+ * a question view's texts (its header, question, options and free-text row)
+ * may hold unknown cells, matched by drawnMatches. Its marks, digits and cursor
+ * are read as drawn.
  */
 export function askScreenMeets(
   screen: AskPickerScreen | null,
   expect: AskExpectation,
   questions: readonly AskFormQuestion[],
   answers: readonly AskAnswer[],
+  unknown?: readonly string[],
 ): boolean {
-  if (!screen || !tabsMatch(screen, questions)) return false;
+  return askScreenRead(screen, expect, questions, answers, unknown) === 'meets';
+}
+
+/**
+ * askScreenMeets, and `unknown` when the screen meets `expect` only with an
+ * unknown cell in the label of an option the answer chooses on this question,
+ * or with a question that, read through its unknown cells, is another
+ * question of the form too: a key is never sent for a choice, or on a
+ * question, the read could not see whole.
+ */
+function askScreenRead(
+  screen: AskPickerScreen | null,
+  expect: AskExpectation,
+  questions: readonly AskFormQuestion[],
+  answers: readonly AskAnswer[],
+  unknown?: readonly string[],
+): 'meets' | 'differs' | 'unknown' {
+  const no = 'differs';
+  if (!screen || !tabsMatch(screen, questions, unknown)) return no;
   if (expect.view === 'review') {
-    if (screen.view !== 'review' || screen.entries.length !== questions.length) return false;
-    if (!screen.tabs.every((tab) => tab.answered)) return false;
+    if (screen.view !== 'review' || screen.entries.length !== questions.length) return no;
+    if (!screen.tabs.every((tab) => tab.answered)) return no;
     const [submit, cancel] = screen.rows;
     if (screen.rows.length !== 2 || submit?.key !== ASK_KEY_REVIEW_SUBMIT || submit.label !== 'Submit answers'
       || cancel?.key !== '2' || cancel.label !== 'Cancel') {
-      return false;
+      return no;
     }
     return questions.every((q, j) => sameQuestionText(screen.entries[j]!.question, q.text)
-      && answerListMatches(screen.entries[j]!.answer, answerLabels(q, answers[j]!)));
+      && answerListMatches(screen.entries[j]!.answer, answerLabels(q, answers[j]!))) ? 'meets' : no;
   }
-  if (expect.view !== 'question' || screen.view !== 'question') return false;
+  if (expect.view !== 'question' || screen.view !== 'question') return no;
   const question = questions[expect.q];
-  if (!question || !sameQuestionText(screen.question, question.text)) return false;
-  if (!screen.tabs.every((tab, j) => j === expect.q || tab.answered === j < expect.q)) return false;
-  if (screen.multiSelect !== question.multiSelect) return false;
-  if (question.multiSelect ? !screen.submitRow : !!screen.submitRow) return false;
+  if (!question) return no;
+  const at = unknown ? questionAt.get(screen) : undefined;
+  const drawnQuestion = at && at.rows.map((r) => (at.gutter ? (unknown![r] ?? '').replace(/^(\s*)│ ?/, '$1') : unknown![r] ?? '')).join('');
+  const shows = (text: string) => sameQuestionText(screen.question, text) || (!!drawnQuestion && drawnMatches(drawnQuestion, text));
+  if (!shows(question.text)) return no;
+  // Read through unknown cells, the question must read as no other question
+  // of the form: `Approve` and two unseen cells is `Approve?` and `Approved?`.
+  if (!sameQuestionText(screen.question, question.text) && questions.some((q, j) => j !== expect.q && shows(q.text))) return 'unknown';
+  if (!screen.tabs.every((tab, j) => j === expect.q || tab.answered === j < expect.q)) return no;
+  if (screen.multiSelect !== question.multiSelect) return no;
+  if (question.multiSelect ? !screen.submitRow : !!screen.submitRow) return no;
   // The row reads `Next` where another question follows and `Submit` on the
   // last one (measured on 2.1.288).
-  if (screen.submitRow && screen.submitRow.next !== expect.q < questions.length - 1) return false;
+  if (screen.submitRow && screen.submitRow.next !== expect.q < questions.length - 1) return no;
   const otherKey = String(question.options.length + 1);
-  if (screen.options.length !== question.options.length + 1) return false;
+  if (screen.options.length !== question.options.length + 1) return no;
+  // With unknown cells, the rows of each option's label as drawn.
+  const labelRows = new Map<string, string[]>();
   const rowsMatch = question.options.every((o, j) => {
     const row = screen.options[j]!;
-    return row.key === o.key && sameOption(row, o);
+    if (row.key !== o.key) return false;
+    const drawn = unknown ? drawnOptionRows(row, unknown) : null;
+    if (!drawn) return sameOption(row, o);
+    const k = drawnOptionLabelRows(drawn, o);
+    labelRows.set(o.key, drawn.slice(0, k));
+    return k > 0;
   });
-  if (!rowsMatch) return false;
+  if (!rowsMatch) return no;
   const free = screen.options[screen.options.length - 1]!;
-  if (free.key !== otherKey || (free.more ?? []).length > 0) return false;
-  if (expect.other === null ? !FREE_TEXT_PLACEHOLDER.test(free.label) : compact(free.label) !== compact(expect.other)) return false;
+  if (free.key !== otherKey || (free.more ?? []).length > 0) return no;
+  const drawnFree = unknown ? drawnOptionRows(free, unknown)?.[0] : undefined;
+  const freeShows = (text: string) => compact(free.label) === compact(text) || (drawnFree !== undefined && drawnMatches(drawnFree, text));
+  if (expect.other === null
+    ? !FREE_TEXT_PLACEHOLDER.test(free.label) && !freeShows('Type something.') && !freeShows('Type something')
+    : !freeShows(expect.other)) {
+    return no;
+  }
   if (question.multiSelect) {
     const ticked = screen.options.filter((o) => o.checked).map((o) => o.key).sort();
-    if (ticked.join(',') !== [...expect.checked].sort().join(',')) return false;
+    if (ticked.join(',') !== [...expect.checked].sort().join(',')) return no;
   } else if (expect.checked.length > 0) {
-    return false;
+    return no;
   }
-  return expect.cursor === 'submit'
+  const cursorOk = expect.cursor === 'submit'
     ? screen.submitRow?.cursor === true
     : screen.options.find((o) => o.cursor)?.key === expect.cursor;
+  if (!cursorOk) return no;
+  const chosen = answers[expect.q]?.keys ?? [];
+  return chosen.some((key) => labelRows.get(key)?.some((row) => row.includes(UNKNOWN_CELL))) ? 'unknown' : 'meets';
 }
 
 /** The screen is this prompt's review (its tabs, every one answered), whatever answers it lists. */
@@ -691,10 +820,23 @@ export function askReviewOf(screen: AskPickerScreen | null, questions: readonly 
  * no tab answered, the cursor on its first option, nothing ticked, the
  * free-text row empty.
  */
-export function askPickerUntouched(screen: AskPickerScreen | null, questions: readonly AskFormQuestion[]): boolean {
-  return !!screen
-    && screen.tabs.every((tab) => !tab.answered)
-    && askScreenMeets(screen, { view: 'question', q: 0, cursor: '1', checked: [], other: null }, questions, []);
+export function askPickerUntouched(screen: AskPickerScreen | null, questions: readonly AskFormQuestion[], unknown?: readonly string[]): boolean {
+  return askPickerUntouchedRead(screen, questions, unknown, []) === 'meets';
+}
+
+/**
+ * askPickerUntouched, read for an answer about to be sent: `unknown` when the
+ * picker is untouched only with an unknown cell in the label of an option
+ * `answers` chooses on the first question (see askScreenRead).
+ */
+export function askPickerUntouchedRead(
+  screen: AskPickerScreen | null,
+  questions: readonly AskFormQuestion[],
+  unknown: readonly string[] | undefined,
+  answers: readonly AskAnswer[],
+): 'meets' | 'differs' | 'unknown' {
+  if (!screen || !screen.tabs.every((tab) => !tab.answered)) return 'differs';
+  return askScreenRead(screen, { view: 'question', q: 0, cursor: '1', checked: [], other: null }, questions, answers, unknown);
 }
 
 /**

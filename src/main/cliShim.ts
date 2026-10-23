@@ -60,6 +60,21 @@ import { execFile, execFileSync } from 'child_process';
  *
  * `dir /b /ad /o-d` lists directories matching `app-*` sorted newest-first
  * (by modification time). The first match is the current version.
+ *
+ * `wmux codex` is started by this script, not by the CLI (#2612). wmux.exe is a
+ * GUI-subsystem program: run as Node it holds this console's handles but is
+ * not attached to the console, so a console program it spawns gets a console
+ * of its own and the inherited handles are not a terminal there ("stdin is not
+ * a terminal"). The CLI's `codex --wmux-handoff` reserves the pane's relay
+ * lease and prints how to launch Codex into this script's `for /f` pipe; the
+ * script starts Codex itself, then releases the lease.
+ *
+ * Argument fidelity is today's: the user's arguments reach Codex only as `%*`
+ * on the launch line, where the leading `codex` is the value of
+ * `--remote-auth-token-env`, so the relay bearer travels in a variable named
+ * `codex`, set only inside this script's `setlocal`. The CLI reads
+ * `WMUX_CODEX_ARGS` (also `%*`) only to check the options and to know whether
+ * the user chose a directory.
  */
 export function buildShimCmd(): string {
   return [
@@ -68,6 +83,7 @@ export function buildShimCmd(): string {
     // otherwise be inherited and eat literal `!` in forwarded arguments.
     'setlocal DisableDelayedExpansion',
     'set "ELECTRON_RUN_AS_NODE=1"',
+    'if /i "%~1"=="codex" goto :wmux_codex',
     'for /f "delims=" %%i in (\'dir /b /ad /o-d "%~dp0..\\app-*" 2^>nul\') do (',
     // No `call` — it is only needed for batch files and would re-expand
     // %-sequences and carets in the forwarded arguments.
@@ -78,6 +94,43 @@ export function buildShimCmd(): string {
     'exit /b 1',
     ':wmux_done',
     'endlocal & exit /b %ERRORLEVEL%',
+    ':wmux_codex',
+    'for /f "delims=" %%i in (\'dir /b /ad /o-d "%~dp0..\\app-*" 2^>nul\') do (',
+    '  set "WMUX_APP=%~dp0..\\%%i"',
+    '  goto :wmux_codex_app',
+    ')',
+    'echo wmux: no app directory found in "%~dp0.." >&2',
+    'exit /b 1',
+    ':wmux_codex_app',
+    // Paths never come back through the handoff's `for /f`: cmd decodes that
+    // pipe in the console's code page, which mangles a non-ASCII path (a
+    // Korean user name under code page 949). The script settles CODEX_HOME
+    // here, the handoff and Codex both inherit it, and Codex's --cd is this
+    // script's own directory.
+    'if not defined CODEX_HOME if defined USERPROFILE set "CODEX_HOME=%USERPROFILE%\\.codex"',
+    'if defined CODEX_HOME for %%h in ("%CODEX_HOME%") do set "CODEX_HOME=%%~fh"',
+    'set WMUX_CODEX_ARGS=%*',
+    'for %%v in (WMUX_CODEX_EXE WMUX_CODEX_LAUNCH WMUX_CODEX_CD WMUX_CODEX_LEASE codex) do set "%%v="',
+    'for /f "delims=" %%l in (\'^""%WMUX_APP%\\wmux.exe" "%WMUX_APP%\\resources\\cli-bundle\\index.js" codex --wmux-handoff^"\') do set "%%l"',
+    'set "WMUX_CODEX_ARGS="',
+    // The handoff printed its own error and holds no lease.
+    'if not defined WMUX_CODEX_LEASE exit /b 1',
+    // Codex, and every process it starts, gets the bearer and nothing else of
+    // the launch: a nested setlocal holds the rest back, and its endlocal
+    // brings the lease back for the release.
+    'setlocal',
+    'set "ELECTRON_RUN_AS_NODE="',
+    // The C runtime reads `\"` as a quote: a directory ending in `\` (a drive root) doubles it.
+    'set "WMUX_CODEX_CDARG="',
+    'if defined WMUX_CODEX_CD set WMUX_CODEX_CDARG=--cd "%CD%"',
+    'if defined WMUX_CODEX_CD if "%CD:~-1%"=="\\" set WMUX_CODEX_CDARG=--cd "%CD%\\"',
+    // cmd expands the whole line before any of its `set`s runs.
+    'set "WMUX_CODEX_EXE=" & set "WMUX_CODEX_LAUNCH=" & set "WMUX_CODEX_CD=" & set "WMUX_CODEX_CDARG=" & set "WMUX_CODEX_LEASE=" & set "WMUX_APP=" & "%CODEX_HOME%\\%WMUX_CODEX_EXE%" %WMUX_CODEX_LAUNCH% %WMUX_CODEX_CDARG% --remote-auth-token-env %*',
+    'set "WMUX_CODEX_EXIT=%ERRORLEVEL%"',
+    'endlocal & set "WMUX_CODEX_EXIT=%WMUX_CODEX_EXIT%"',
+    'set "codex="',
+    '"%WMUX_APP%\\wmux.exe" "%WMUX_APP%\\resources\\cli-bundle\\index.js" codex --wmux-release %WMUX_CODEX_LEASE%',
+    'endlocal & exit /b %WMUX_CODEX_EXIT%',
     '',
   ].join('\r\n');
 }
@@ -325,6 +378,15 @@ export async function installCliShimAsync(execPath: string): Promise<void> {
     if (binDir) await runPathEditAsync(binDir, 'add');
   } catch (err) {
     console.warn('[cliShim] shim install failed (non-fatal):', err);
+  }
+}
+
+/** `<binDir>\wmux.cmd` is the script this build writes (a shim from an older build is not). */
+export function shimIsCurrent(binDir: string): boolean {
+  try {
+    return fs.readFileSync(path.join(binDir, 'wmux.cmd'), 'utf8') === buildShimCmd();
+  } catch {
+    return false;
   }
 }
 

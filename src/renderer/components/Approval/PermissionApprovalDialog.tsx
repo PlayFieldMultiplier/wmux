@@ -147,7 +147,9 @@ export function PermissionApprovalDialogView(
       <DialogBody className="!gap-3">
         {action ? (
           <div className="ui-group px-3.5 py-3 text-[13px] text-[var(--text-sub)]" data-browser-action={action.action}>
-            <p className="m-0">{t('permission.browserAction.hint')}</p>
+            {/* The hint says the pane is protected; an unprotected one's
+                question stands on its title and detail. */}
+            {action.unprotected ? null : <p className="m-0">{t('permission.browserAction.hint')}</p>}
             {/* Agent-authored: rendered as text, never markup. A long or
                 multi-line script opens to its whole text before approving. */}
             {action.detail && (action.detail.length > SCRIPT_PREVIEW_CHARS || action.detail.includes('\n')) ? (

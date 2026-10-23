@@ -112,7 +112,7 @@ import { registerA2aLinkRpc } from './a2aRemote/linkRpc';
 import { A2aOffers } from './a2aRemote/offers';
 import { OfferStore } from './a2aRemote/offerStore';
 import { A2aRemoteDelivery, shareOfferFeatures } from './a2aRemote/delivery';
-import { A2A_FEATURE_IMAGES, A2A_FEATURE_LINK_OFFER, isRemoteTaskId } from '../shared/a2aRemote';
+import { A2A_FEATURE_IMAGES, A2A_FEATURE_LINK_OFFER, A2A_FEATURE_STREAM_PING, isRemoteTaskId } from '../shared/a2aRemote';
 import type { A2aRemoteLinkEvent } from '../shared/rpc';
 import { ChannelService, ChannelStateWriter, ChannelWakeWorker, wakeAgentSlug, wrapChannelMessageEnvelope, wrapChannelCatalogEnvelope, stampChannelCaller, type CallerFieldSpec, type ChannelServiceEventLog } from './channels';
 import { AppendOnlyLog } from './eventlog/AppendOnlyLog';
@@ -124,11 +124,11 @@ import { isPrincipalUpsertInput } from '../shared/principals';
 import { DEFAULT_COMPANY_ID, CHANNELS_EPOCH } from '../shared/channels';
 // envelope PR4 (§5 D11): A2A 태스크 정본을 렌더러 인메모리에서 데몬 이벤트 로그로.
 // (로그·machineId는 채널 부트 게이트 산출물 공유 — 별도 개방 금지.)
-import { A2aTaskService } from './a2a/A2aTaskService';
+import { A2aTaskService, statusMessageFromWire } from './a2a/A2aTaskService';
 import { parsePublicCreateTask } from './a2a/publicCreateParams';
 import { WorkTaskService } from './worktask/WorkTaskService';
 import { listMissionsBatch } from './worktask/missionListBatch';
-import { isTaskState, type AgentStatus, type Task } from '../shared/types';
+import { isTaskState, type AgentStatus, type Message, type Task } from '../shared/types';
 import { ProcessMonitor } from './ProcessMonitor';
 import { AgentProcessTracker } from './AgentProcessTracker';
 import { liveRecoveryHint, namedAgentAlive, recordedTurnStillOpen, recordWasMidTurn, screenShowsLiveAgent, sightedRecoveredAgent } from './recoveryHint';
@@ -247,6 +247,7 @@ import { chatAgentStatus, confirmedStopAt, transcriptTurnEnd } from './transcrip
 import { DaemonPTYBridge } from './DaemonPTYBridge';
 import { createCodexSharedRuntime, runCodexDaemon } from './transcript/codexSharedRuntime';
 import { validChatAttachments } from '../shared/transcript/chatAttachments';
+import { agentStatesFor } from '../shared/agentStateBatch';
 import { ChatSessionService } from './chat/ChatSessionService';
 import { createChatV2Host } from './chat/v2/host';
 import { registerChatV2Rpc } from './chat/v2/rpc';
@@ -749,6 +750,7 @@ function createApprovalRegistry(sessionManager: DaemonSessionManager): ApprovalR
         rows: frame.rows,
         mark: { bytes: frame.mark, keyInputRevision, incarnation },
         ...(typeof cols === 'number' ? { cols } : {}),
+        ...(frame.unknown ? { unknown: frame.unknown } : {}),
       };
     },
     // The pane's own Claude transcript (the projector's containment-checked
@@ -5395,8 +5397,11 @@ function registerRpcHandlers(
       ? agentProcessTracker.idleShellState(original.meta.pid, original.meta.env, true, { fresh: true })
       : 'error');
   });
-  pipeServer.onRpc('daemon.getAgentState', async (params) => {
-    const id = typeof params['id'] === 'string' ? params['id'] : '';
+  // #2372 — `ids` reads several panes in one call (see agentStateBatch.ts).
+  pipeServer.onRpc('daemon.getAgentState', async (params) => (params['ids'] !== undefined
+    ? agentStatesFor(params['ids'], agentStateFor)
+    : agentStateFor(typeof params['id'] === 'string' ? params['id'] : '')));
+  function agentStateFor(id: string) {
     const state = readDaemonAgentState(id);
     const bridge = sessionManager.getSession(id)?.bridge;
     if (!bridge) return state;
@@ -5424,7 +5429,7 @@ function registerRpcHandlers(
       // since its agent started), so its idle window runs from that end.
       settledAgoMs: bridge.settledAgoMs(),
     };
-  });
+  }
   // #1594 — what main's terminal_send needs to paste into a session: the agent
   // and DECSET 2004 from the live output stream. A hidden pane's renderer xterm
   // may not have seen the bytes that set or cleared the mode; this stream has.
@@ -6468,6 +6473,12 @@ function registerRpcHandlers(
     // Only the app's main process reads the pane tree; take the list from it
     // alone. Anything else leaves it unknown (no relaxation).
     const livePaneIds = pipeServer.isFirstParty(ctx.clientId) ? normalizeLivePaneIds(p.livePaneIds) : undefined;
+    let message: Message | undefined;
+    try {
+      message = statusMessageFromWire(p.message, randomUUID);
+    } catch (err) {
+      return { ok: false, error: `a2a.task.update: ${err instanceof Error ? err.message : 'invalid message'}` };
+    }
     const moved = await a2aTaskService.transition({
       taskId,
       to: status,
@@ -6488,6 +6499,7 @@ function registerRpcHandlers(
       // 완료증거 게이트(PR-B)로 판정한다 — completed/failed는 구조화 증거 강제(거부는
       // completion_evidence_* 사유코드로 호출자에 포워딩).
       ...(p.evidence !== undefined ? { evidence: p.evidence } : {}),
+      ...(message ? { message } : {}),
       ...(typeof p.idempotencyKey === 'string' ? { idempotencyKey: p.idempotencyKey } : {}),
     });
     // A cross-host task: the peer hears this state in the same call (ledger first, then outbox).
@@ -7695,7 +7707,11 @@ function wireContextWatchers(
   sessionManager: DaemonSessionManager,
   pipeServer: DaemonPipeServer,
 ): () => void {
-  const gitWatcher = new GitContextWatcher();
+  // offLoop: a pane's cwd is read and watched only after a reader process
+  // opened it. On macOS the daemon is its own responsible process for the
+  // privacy check, and an open() under ~/Desktop it has no grant for blocked
+  // this loop until main force-respawned the daemon (health pings failing).
+  const gitWatcher = new GitContextWatcher(undefined, { offLoop: true });
   const portWatcher = new PortWatcher(() =>
     sessionManager.listLiveSessions().map((s) => ({ sessionId: s.id, pid: s.pid })),
   );
@@ -9354,9 +9370,10 @@ async function main(): Promise<void> {
         broadcast: (event) => pipeServer.broadcast(event),
         refreshLink: (linkId) => (refresh ? refresh({ linkId }) : Promise.resolve(null)),
         offers: a2aOffersRef,
-        // This build shows and accepts share offers, and takes images on
-        // messages: tell the servers it joins, and the joiners in its hello.
-        features: [A2A_FEATURE_LINK_OFFER, A2A_FEATURE_IMAGES],
+        // This build shows and accepts share offers, takes images on
+        // messages and pings its streams: tell the servers it joins, and the
+        // joiners in its hello.
+        features: [A2A_FEATURE_LINK_OFFER, A2A_FEATURE_IMAGES, A2A_FEATURE_STREAM_PING],
         uploadsRoot: path.join(wmuxDir, 'uploads'),
         // A live terminal of the sender's workspace (stamped at spawn by main), else none.
         spawnCwdOf: (ptyId, workspaceId) => {

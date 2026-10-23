@@ -843,6 +843,24 @@ describe('Bots page', () => {
     expect(chat).not.toMatch(/\bLead\b.*I built the login page/);
   });
 
+  it('a group chat\'s reactions sit under their card: one chip per emoji, naming who reacted or who saw it', async () => {
+    cards.push(card({
+      workspaceId: 'w1', actor: { kind: 'human' }, kind: 'human', title: 'PR 7 is merged', at: 500,
+      reactions: [{ botId: LEAD, emoji: '❤️' }, { botId: VERIFIER, emoji: '👀', ack: true }],
+    }));
+    cards.push(card({ workspaceId: 'w1', actor: by('w1', LEAD), title: 'Closing the issue', at: 510, reactions: [{ botId: VERIFIER, emoji: '👍' }, { botId: MOA, emoji: '👍', ack: true }] }));
+    seedRooms();
+    await render(<BotsPage />);
+    act(() => q('[data-bots-row="group:grp-000000a1"]')!.click());
+    const chips = (cardId: string) => [...container.querySelectorAll(`[data-room-card-id="${cardId}"] [data-bots-reaction]`)].map((el) => [el.getAttribute('data-bots-reaction'), el.getAttribute('aria-label')]);
+    const owner = cards.at(-2)!.id;
+    expect(chips(owner)).toEqual([['❤️', 'Lead reacted ❤️'], ['👀', 'Verifier saw this']]);
+    // The same emoji picked by one bot and left as another's acknowledgement: two chips.
+    expect(chips(cards.at(-1)!.id)).toEqual([['👍', 'Verifier reacted 👍'], ['👍', 'Moa saw this']]);
+    // A card nobody reacted to has no row.
+    expect(container.querySelectorAll('[data-bots-reactions]')).toHaveLength(2);
+  });
+
   it('Stop all bots: the header menu, an inline confirm, then the counts that are not zero', async () => {
     seedRooms();
     const stop = { stopAll: vi.fn(async () => ({ ok: true, botsInterrupted: 1, workersStopped: 3, gatesCancelled: 0 })) };

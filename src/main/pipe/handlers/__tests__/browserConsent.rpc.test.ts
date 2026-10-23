@@ -97,6 +97,35 @@ describe('browser.consent.request', () => {
     expect(authorize).not.toHaveBeenCalled();
   });
 
+  it('an unprotected pane asks when its agent skips a check, whatever its backend', async () => {
+    backend = 'builtin';
+    const r = await call(register(), 'browser.consent.request', { workspaceId: 'ws-1', action: 'evaluate', url: 'http://b.test/', unprotected: true }, 'pty-b');
+    expect(r.result).toMatchObject({ ok: true, operationId: 'op-1' });
+    expect(authorize).toHaveBeenCalledTimes(1);
+    expect(authorize.mock.calls[0][0]).toMatchObject({ workspaceId: 'ws-1', paneId: 'pane-b', ptyId: 'pty-b', unprotected: true });
+    expect(authorize.mock.calls[0][1]).toMatchObject({ action: 'evaluate', hosts: ['b.test'] });
+  });
+
+  it('an unprotected download is asked about and opens no pass', async () => {
+    const r = await call(register(), 'browser.consent.request', { workspaceId: 'ws-1', action: 'download', url: 'https://cdn.test/f.zip', detail: 'f.zip', unprotected: true }, 'pty-b');
+    expect(r.result).toMatchObject({ ok: true, operationId: 'op-1' });
+    expect(authorize.mock.calls[0][1]).toMatchObject({ action: 'download', hosts: ['cdn.test'], detail: 'f.zip' });
+    const wait = await call(register(), 'browser.consent.awaitDownload', { workspaceId: 'ws-1', operationId: 'op-1' }, 'pty-b');
+    expect(wait.error).toMatch(/no such approved download/);
+  });
+
+  it('a protected pane is never asked on unprotected terms', async () => {
+    const r = await call(register(), 'browser.consent.request', { workspaceId: 'ws-1', action: 'evaluate', url: 'http://a.test/', unprotected: true }, 'pty-a');
+    expect(r.error).toMatch(/^browser\.consent\.request: policy_denied: this pane is protected now/);
+    expect(authorize).not.toHaveBeenCalled();
+  });
+
+  it('an unprotected request with no attested pane is refused in its own words', async () => {
+    const r = await call(register(), 'browser.consent.request', { workspaceId: 'ws-1', action: 'evaluate', url: 'http://b.test/', unprotected: true });
+    expect(r.error).toMatch(/^browser\.consent\.request: policy_denied: .*Skipping this safety check needs the operator's consent/);
+    expect(authorize).not.toHaveBeenCalled();
+  });
+
   it('a caller with no attested pane is refused', async () => {
     const r = await call(register(), 'browser.consent.request', { workspaceId: 'ws-1', action: 'evaluate', url: 'http://a.test/' });
     expect(r.error).toMatch(/policy_denied/);

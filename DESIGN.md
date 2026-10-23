@@ -472,6 +472,17 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   written in before group chats became a group named after its workspace,
   with that workspace's bots, reading on in General; a room the owner never
   wrote in is just no longer listed.
+  In a group chat a bot woken by the owner's message or another bot's
+  mention may react instead of speaking, and one that stays silent leaves
+  an acknowledgement (shared/botGroupProtocol.ts). These sit under the card
+  they answer as one row of 20px chips: one chip per emoji and kind (a
+  picked reaction and an acknowledgement of the same emoji are two chips),
+  with `--selection` fill, 11px `--text-sub` text, and a tabular count when
+  more than one bot left that chip. The chip's label names who reacted ("Lead reacted ❤️")
+  or, for acknowledgements, who saw it ("Verifier saw this"). The emoji are
+  the bots' content, like an emoji in a message, so the no-emoji rule for
+  chrome does not apply. No colour, and nothing to click: a reaction is
+  read, not answered.
 - **Avatars (owner decision 2026-10-16, the Mochi crew; replaces the
   2026-10-14 shapes):** a bot's avatar is the picture the owner set for it —
   the picture always wins — else its **Mochi character**, one of eight
@@ -924,7 +935,9 @@ tests, changelog draft, issue triage) that open the composer filled in.
 ### Remote
 
 One page, Tailnet first, filling the sheet with 28px sides
-(14px under a 640px sheet). Top to bottom:
+(14px under a 640px sheet). It is the one place PCs are connected, seen and
+removed, whatever carries them (A2A, a workspace share, a LAN PIN);
+Settings › LAN keeps only the listener switches. Top to bottom:
 
 - **Header:** the 16px title, then one muted line that sums it up
   (`2 of 3 PCs connected · 1 of 1 phones connected`, or `Nothing connected
@@ -952,6 +965,33 @@ One page, Tailnet first, filling the sheet with 28px sides
   pair answers over HTTPS): ticked, the copy holds the invite and a
   view-only pairing link on a second line, and the other PC's one paste
   connects both.
+- **Tailscale** — inside the same band, under a `--stroke` hairline: four
+  checks from one read-only `tailscale status --json`, run when the page
+  opens and on **Check again** (never on the 10 s poll): Tailscale
+  installed · Running and signed in · This PC on the tailnet · Your other PC or phone
+  visible. All passing, the four sit on one line with a green tick each and
+  a muted "Ready · N other devices online". Otherwise each gets its own row;
+  the first failure says why (Tailscale is off, signed out, waiting for
+  approval, no other device online) and carries the ONE button that fixes
+  it, and the checks after it are muted "not checked yet". Buttons only
+  open: **Download Tailscale** (the official page), **Open Tailscale**
+  (brings the app forward; to sign in, with a muted line on what to do
+  there), or **How to add it** (unfolds how to sign the other device in to
+  the same account). Nothing ever runs `tailscale up` or installs anything.
+  The failed mark is the caution yellow warning glyph; the rows stay
+  neutral and no orange is spent.
+  The same button follows a Tailscale failure elsewhere: Share & pair's
+  notice and the phone wizard's first step, and every place a connection
+  to another PC starts (Connect a PC, Share & pair's Connect another
+  computer, the attach and Pair again dialog), which check Tailscale
+  before connecting to a piece whose every address is in the tailnet range.
+  An address that is surely Tailscale's (a `*.ts.net` name, or one its
+  status lists as a peer) is not tried when the check fails, which is said
+  at once. Any other 100.64/10 address (other overlays share the range) is
+  tried, and, when Tailscale is installed here, the reason is added only if
+  the other PC is not reached. An
+  unreadable status, or this PC offline from Tailscale's control server
+  (known peers still carry), never holds a connection back.
 - **Needs you** — drawn only while something waits, inside an
   `aria-live="polite"` region: ONE block with a 1px `--attention-hairline`
   border over `--selection-subtle` (no wash), rows split by `--stroke`
@@ -978,12 +1018,20 @@ One page, Tailnet first, filling the sheet with 28px sides
 - **One list** (one hairline container, 36px rows on shared columns: icon ·
   13px/500 name · 12px muted meta · status · actions), in groups with a muted
   heading and count:
-  - **Other PCs** — every A2A-paired PC (either role): its address, link
-    counts and "Messages to send N", the status, and a ⋯ menu named after it
+  - **Other PCs** — every A2A-paired PC (either role), one row per A2A
+    hostId and never merged with another transport's record (an A2A PC and
+    a LAN peer with the same name are two rows): its address, link
+    counts and "Messages to send N", then what this PC allows that PC, one
+    slot per permission ("Can see 2 panes here" for a PC that joined this
+    one, from its exposure; empty for a PC this PC joined), with one more
+    slot kept empty for starting new agents so it lands without reshaping
+    the row; the status, and a ⋯ menu named after it
     (Link panes…, Link Moa…, What this PC can see…, Remove; portalled so the
     list's clip never cuts it, Escape on its button closes it first). Removing
-    a PC says when the other PC was not told, and which side is left after a
-    partial failure. Its live links
+    a PC drops both pairings this PC holds for it (the one it joined and the
+    one that joined it); there is no one-sided removal. It says when the
+    other PC was not told, and which side is left after a partial failure.
+    Its live links
     sit nested under it (an elbow, `mine ↔ PC/theirs · direction`, or
     "waiting for PC to accept" with Check; Unlink asks twice). A pane this
     PC shared with it and not yet accepted sits there too (2026-10-21):
@@ -996,19 +1044,24 @@ One page, Tailnet first, filling the sheet with 28px sides
   - **Phones** — paired web devices: what each is viewing ("Viewing api /
     build", from the daemon's live streams, named here), whether it may
     type, and a direct Revoke asking twice (no ⋯ menu).
-  - **Message links** — LanLink peers, messages only.
+  - **Message links** — LanLink peers, messages only (a revoked one says
+    Revoked in its meta). Paired from Connect a PC's LAN tab.
   - Status words are three: Connected, Disconnected (with "Disconnected 3h
-    ago" when known), Waiting. The live dot is neutral, filled only while a
+    ago" when known), Waiting. A PC known only because it joined this one,
+    with no stream since wmux started, is Disconnected with its last-seen
+    time, never a standing Waiting. The live dot is neutral, filled only while a
     connection is held. With nothing anywhere, the list gives way to one line
     of explanation and Connect a PC… as the primary.
 - **Recent activity:** its own short list (paired, revoked, host added,
   connects seen while the page is open).
-- **Connect a PC dialog:** two tabs, and opening it has no side effect. It
+- **Connect a PC dialog:** three tabs, and opening it has no side effect. It
   opens on **Invite this PC** only while the A2A listener is already up;
   otherwise on **Paste an invite**, and choosing Invite is what turns the
   listener on (one muted line says so, and the page's line follows at once).
   Invite opens an invite and copies it at once (Copy reads "Copied" for
-  1.5 s, is the primary and stays for re-copying), lists the addresses the
+  1.5 s, is the primary and stays for re-copying), shows the 8-character
+  code grouped as ABCD-EFGH under it for reading out (display only: the
+  whole invite is what is copied and pasted), lists the addresses the
   other PC tries in order with "Tailscale" beside the tailnet ones, and
   counts down to expiry with Discard code. When a PC redeems the invite, the
   dialog turns into "<PC> joined. Choose what it can see" with the exposure
@@ -1019,6 +1072,12 @@ One page, Tailnet first, filling the sheet with 28px sides
   workspace share. Nothing connects before Connect.
   Under Paste, one ghost link, "No invite? Add a PC over SSH…", opens the
   Add PC over SSH dialog for a computer that cannot send an invite.
+  **LAN** pairs a message link with a PC on this network by a 6-digit PIN:
+  Generate PIN (never on open) shows the PIN in two groups of three, its
+  2-minute countdown and this PC's address, and Join takes the other PC's
+  address, port and PIN. While LAN messages are off or no network interface
+  is picked it says so and opens Settings › LAN. A PIN window the tab opened
+  survives switching tabs and is closed when the dialog closes.
 - **Link dialog from this page:** picks the PC when there is one, picks the
   other PC's pane when there is one choice or one on the same repo, and
   offers this PC's pane with the focused one preselected.
@@ -1508,6 +1567,14 @@ always neutral (the fill ladder).
   idle = no mark. Selection is never painted as a status. The collapsed
   rail draws the same marks (`StatusMarkView`), never text glyphs, and names
   each workspace `name, status` for assistive tech.
+- **Usage-limit chip and card** (owner handoff 2026-10-22).
+  - **The chip.** A pane held at its provider's usage limit shows one chip in its tab strip's flow, never a new row, so the terminal does not shrink: a muted clock, "Limit" and "resets 3:16 PM · 2h 4m", then Resume once the reset has passed, and ×. The clock wears `--accent` only while the pane will resume on its own, since that is when the system acts. Clicking the chip opens the usage-limit card.
+  - **The card.** It is a padded popover anchored to the chip and placed with `placePopover`, and it closes on Escape, an outside click or a resize. It opens by itself once per limit, and only for the pane in front. It holds:
+    - Resume automatically when it reopens: a switch, on by default.
+    - Continue on another account: shown only with 2+ accounts. One ghost button per account, then the opt-in "Always switch automatically" checkbox, which is the vendor's switch-by-quota setting.
+    - Continue in another agent: shown only for agents that are installed and signed in. It opens that agent in a new tab of the same pane and types a handoff note without sending it.
+    - When every account is out, one line with the earliest time one reopens.
+  - **Colour.** None beyond the armed clock.
 - **Needs you is the attention orange everywhere** — the sidebar ring, hairline,
   labels and counts, the collapsed rail's mark, the rail badge and dot,
   Fleet's Needs you chip, section dot and row word, and the titlebar count —
@@ -1684,7 +1751,7 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
   order: General · Appearance (theme, interface, sidebar, panes, terminal
   text, agent toolbar) · Terminal · Keyboard · Notifications. Group
   **Agents**: Claude Code · Accounts · Factory · Roles & fan-out ·
-  Token usage · Browser · Computer use. Group **Connections**: Plugins (a link to the Plugins page) · Remote & phone · LAN. Then
+  Token usage · Browser · Computer use. Group **Connections**: Plugins (a link to the Plugins page) · Remote & phone · LAN (the LanLink and A2A listener switches, and a link to the Remote page where PCs are paired and removed). Then
   About. Each tab answers one question; a setting lives on exactly one tab
   and the search catalog (`settings/catalog.ts`) names that tab. Retired tab
   ids resolve through `resolveSettingsTab` (Orchestrator, Agents and Moa all
@@ -1869,6 +1936,8 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
 | 2026-10-21 | Owner decision: a muted "Enjoying wmux? · Star on GitHub ×" row at the sidebar's foot, below "Agent not set up" in priority, plus a permanent Star row in Settings › About. It shows three days after first run and after 20 new agent sessions; each "Not now" doubles that number, restarts the count and adds a three-day cooldown (modelled on Orca and Superset). The star is one click through the user's own gh, else the repository page; no telemetry | Stars are how other developers find wmux, but a prompt that nags costs more than it earns. Asking only after real use, backing off on every no, and never asking again once starred keeps it to a few asks per user; gh makes the yes a single click without a new sign-in, and the counting stays on the machine |
 | 2026-10-22 | Owner decision: Windows glass gives muted text a glass-only value. On Paper, Amber, Catppuccin, Monochrome, Stars & Stripes, Red Dynasty, Gruvbox Dark Hard and Void, `--text-muted` under `html[data-glass][data-platform="win32"]` is the opaque token moved by lightness only, the least step that passes the coverage gate; the gate judges that value, and the worst-backdrop model is unchanged. macOS and glass Off keep the opaque token. Mono, Mono Light and Nightowl stay opaque on Windows (their `--text-sub` misses 4.5:1 at the cap) | After the opaque contrast lift, eleven themes were still opaque on Windows because muted text sized for the opaque sidebar missed 3:1 over the worst backdrop even at 90% coverage |
 | 2026-10-22 | Orchestrator decision (owner direction, recommended option): the selected row (`--selection`) joins the surfaces of the 2026-10-21 contrast floors, so muted text reads at ≥3:1 and secondary text at ≥4.5:1 on it over the sheet and the column. Paper, Mono, Mono Light, Amber, Catppuccin, Monochrome, Stars & Stripes, Red Dynasty, Nightowl, Gruvbox Dark Hard and Void were lifted again by HSL lightness only, the least that clears it (at most 4.5%); Nightowl's and Stars & Stripes' pinned `--text-sub2` moved with them so sub2 stays above subtle. The `--selection-hover` fill (a selected Fleet card, a hovered needs-you row, a hovered chip or button) draws muted text as `--text-subtle` instead, which reads at ≥3:1 there; the global tiers are not lifted for it. The stronger `--selection-emphasis` fill (an open chip, a pressed or active button) draws muted text as `--text-sub`, since subtle falls under 3:1 there on Mono, Amber, Nightowl and Gruvbox Dark Hard. The Windows glass-only muted values were re-derived from the new tokens by the same least-step rule: Amber, Catppuccin and Gruvbox Dark Hard no longer need one, and Mono now passes the Windows glass gate with its opaque tokens. Amends the 2026-10-21 contrast row and the 2026-10-22 glass row | Selected rows were never measured: on Gruvbox the selected row's muted text read 2.61:1, and on ten themes the largest selection mix that passed was the 5% hover fill itself, so lowering `--selection` alone would have merged selection into hover. Holding the 15% fill to the same floor needed lifts up to 8% and pushed muted into subtle on Amber and Gruvbox |
+| 2026-10-22 | Owner decision: the Remote page is the one place PCs are connected. Connect a PC gains a LAN tab (the LanLink PIN pairing, moved from Settings); Settings › LAN keeps the LanLink and A2A listener switches plus a link to the Remote page, and its A2A invite, join and PC lists are gone. PC rows stay keyed by the A2A hostId and never merge across transports; each says what this PC allows that PC, with a slot kept empty for starting new agents. The A2A invite stays 8 characters, shown grouped as ABCD-EFGH for reading out while the whole invite stays what is copied; a PC known only as a joiner reads Disconnected with its last-seen time | Connecting a PC lived in three Settings sections and on the Remote page at once, so it was unclear where to start or where a PC went. One page, one dialog keeps every way in together; the security limits (the 10-minute invite, attempts and backoff, the 2-minute PIN and its 5 failures) are unchanged, so the code length is too |
+| 2026-10-23 | Owner handoff: Tailscale easy connect. The Remote page's This computer band gains the four-check Tailscale checklist (installed, signed in, this PC on the tailnet, the other device visible), each failure with exactly one button that only opens the download page or the Tailscale app, or unfolds how to sign the other device in. A connection over the tailnet checks Tailscale first and fails at once with the reason and that button. A PC connection in use (an A2A PC with an active link, an attached workspace share) that drops gets one warning toast once the drop outlasts its grace (A2A 16 s, the first four redials; workspace share two failed polls in a row), naming Tailscale only when the connection's own address is surely Tailscale's (a `*.ts.net` name or a peer its status lists), and the toast goes away when it reconnects; phones are out. A silent A2A drop is seen after 40 s with nothing from the other end, on both sides of the pair (the side that was joined ends a stream whose joiner stopped pinging), so it is reported by 56 s | Getting two machines onto the tailnet was a sequence of unexplained timeouts. One glance says which step is missing and one click opens the place to fix it, while signing in and connecting stay the person's own act. The grace keeps a reconnect blip silent |
 
 ### Desktop conversation view
 

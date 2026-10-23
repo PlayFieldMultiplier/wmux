@@ -504,6 +504,21 @@ describe('opening on a tab id', () => {
   });
 });
 
+describe('Settings › LAN after pairing moved to the Remote page', () => {
+  it('keeps the listener switches, and the lanpair link lands on a way to the Remote page', async () => {
+    await openTab('lanlink');
+    expect(row('lanenable')).not.toBeNull();
+    expect(row('lannic')).not.toBeNull();
+    // No pairing form or peer list is left in Settings.
+    expect(container.querySelector('[data-testid="lanlink-pairing-section"]')).toBeNull();
+    expect(page().textContent).not.toContain('Generate PIN');
+    const link = row('lanpair')!;
+    expect(link.textContent).toContain('Manage connections on the Remote page');
+    await act(async () => { link.querySelector<HTMLButtonElement>('[data-testid="lanlink-open-remote"]')!.click(); });
+    expect(useStore.getState().appRoute).toBe('remote');
+  });
+});
+
 describe('one MCP state on the Claude Code tab', () => {
   it('re-reads every MCP view when one of them changes registration', async () => {
     await openTab('claude-integration');

@@ -1,5 +1,9 @@
 import {
+  A2A_FEATURE_STREAM_PING,
+  A2A_REDIAL_BACKOFF_MIN_MS,
   A2A_ROUTES,
+  A2A_STREAM_PING_MS,
+  A2A_STREAM_SILENCE_MS,
   formatPeerCredential,
   parseA2aFeatures,
   type A2aOutboxRecordV1,
@@ -15,7 +19,7 @@ import type { A2aRemoteHostStatus } from '../../shared/rpc';
 import type { OutboxStore } from './outboxStore';
 import { PinnedClientError, PinnedTlsClient, type PinnedClientOptions, type PinnedSseEvent } from './pinnedClient';
 import type { ImagePull } from './inbound';
-import { formatCursorId } from './streamHub';
+import { formatCursorId, parseCursorId } from './streamHub';
 import { errMsg, isPlainObject } from './storeFile';
 
 /**
@@ -64,14 +68,17 @@ export interface SessionTiming {
   livenessMs: number;
   connectMs: number;
   requestMs: number;
+  /** How often an open stream acks its cursor to a server that takes `stream-ping.1`. */
+  pingMs: number;
 }
 
 export const DEFAULT_SESSION_TIMING: SessionTiming = {
-  backoffMinMs: 1_000,
+  backoffMinMs: A2A_REDIAL_BACKOFF_MIN_MS,
   backoffMaxMs: 30_000,
-  livenessMs: 45_000,
+  livenessMs: A2A_STREAM_SILENCE_MS,
   connectMs: 5_000,
   requestMs: 15_000,
+  pingMs: A2A_STREAM_PING_MS,
 };
 
 /** What a session needs from a pinned client (a seam for tests). The byte transfers carry images (`images.1`). */
@@ -229,6 +236,10 @@ export class JoinerSession {
         if (liveness) clearTimeout(liveness);
         liveness = setTimeout(() => abort.abort(), this.timing.livenessMs);
       };
+      // Tells a `stream-ping.1` server this PC is still there. On its own
+      // timer, so a long image apply that holds up the event loop below
+      // still pings.
+      let ping: ReturnType<typeof setInterval> | null = null;
       try {
         alive();
         for await (const ev of client.openStream(A2A_ROUTES.stream, {
@@ -240,6 +251,13 @@ export class JoinerSession {
           if (ev.event === 'hello') {
             this.serverFeatures = parseA2aFeatures(isPlainObject(ev.data) && Array.isArray(ev.data['features']) ? ev.data['features'] : '');
             this.deps.onServerFeatures?.([...this.serverFeatures]);
+            if (ping) clearInterval(ping);
+            ping = null;
+            const epoch = isPlainObject(ev.data) && typeof ev.data['epoch'] === 'string' ? ev.data['epoch'] : null;
+            if (epoch !== null && this.serverFeatures.includes(A2A_FEATURE_STREAM_PING)) {
+              ping = setInterval(() => void this.ping(client, epoch), this.timing.pingMs);
+              ping.unref?.();
+            }
             this.streamBackoff = 0;
             this.setState('connected');
             void this.reconcile();
@@ -262,12 +280,28 @@ export class JoinerSession {
         this.setState('disconnected', streamError(err));
       } finally {
         if (liveness) clearTimeout(liveness);
+        if (ping) clearInterval(ping);
         abort.abort();
         this.abort = null;
       }
       if (!this.running) break;
       if (this.status.state === 'connected') this.setState('disconnected', 'stream dropped');
       await this.sleep(this.nextDelay('stream'));
+    }
+  }
+
+  /**
+   * Re-ack what this PC has applied on the current stream (nothing yet: seq 0,
+   * which acks nothing). The server only needs to hear from us; a failed ping
+   * is left to the stream's own liveness.
+   */
+  private async ping(client: SessionClient, epoch: string): Promise<void> {
+    const last = parseCursorId(this.lastEventId);
+    const cursor = last && last.epoch === epoch ? last : { epoch, seq: 0 };
+    try {
+      await client.requestJson('POST', A2A_ROUTES.ack, { cursor });
+    } catch {
+      // Not an error: a dead path ends the stream through liveness.
     }
   }
 

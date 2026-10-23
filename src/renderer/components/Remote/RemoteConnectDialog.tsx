@@ -16,11 +16,16 @@ import { pairReasonMessage } from '../Sidebar/AttachRemoteModal';
 import { pendingPairFlow, uniqueDeviceName, webComputerLink } from '../StatusBar/WebToggle';
 import { webComputerPairOrigin } from '../../../shared/web';
 import { maskPairInput, parseRemotePairInput } from '../../../shared/remotePairInput';
+import { HOST_UNREACHABLE_ERROR } from '../../../shared/remoteHosts';
 import type { A2aRemoteStatus } from '../../../shared/rpc';
+import LanLinkPairPanel from './LanLinkPairPanel';
+import { TailscaleFixButton } from './TailscaleChecklist';
+import { tailnetPrecheck, tailnetTargetOf, withTailnetNote, type TailnetNotice } from './tailnetCheck';
+import type { TailscaleFix } from '../../../shared/web';
 
 // ─── "Connect a PC…" on the Remote page ──────────────────────────────────────
 //
-// One dialog, two tabs. It opens on "Invite this PC" only when the A2A
+// One dialog, three tabs. It opens on "Invite this PC" only when the A2A
 // listener is already up (then the invite is opened and copied at once);
 // otherwise it opens on "Paste an invite", and choosing the Invite tab is
 // what turns the listener on. When a PC redeems the invite, the dialog turns
@@ -34,8 +39,11 @@ import type { A2aRemoteStatus } from '../../../shared/rpc';
 // Share & pair is reachable over HTTPS) adds a view-only computer pairing
 // link to the invite, one per line. Pasted on the other PC, each line
 // connects in turn: one paste, both connections.
+//
+// "LAN" pairs a message link with a PC on this network by a 6-digit PIN
+// (LanLinkPairPanel). It is never the first tab and starts nothing on open.
 
-export type ConnectTab = 'invite' | 'paste';
+export type ConnectTab = 'invite' | 'paste' | 'lan';
 
 /** How often the open invite is checked for a PC that redeemed it. */
 export const CONNECT_PAIR_POLL_MS = 2_000;
@@ -43,6 +51,14 @@ export const CONNECT_PAIR_POLL_MS = 2_000;
 export const CONNECT_REDEEM_GRACE_TICKS = 3;
 
 const A2A_INVITE_RE = /^wmux-a2a:\/\//i;
+
+/** Join failures that mean the other PC was never reached. */
+const JOIN_UNREACHABLE: ReadonlySet<string> = new Set(['connect-refused', 'timeout', 'not-found', 'failed']);
+
+/** A failed connect's line, with the Tailscale reason added when there is one. */
+function noteUnreachable(line: string, note: TailnetNotice | null): { ok: false; text: string; fix?: TailscaleFix } {
+  return { ok: false, text: withTailnetNote(line, note), ...(note?.fix ? { fix: note.fix } : {}) };
+}
 
 function kindOf(value: string): 'a2a' | 'link' | null {
   if (A2A_INVITE_RE.test(value)) return 'a2a';
@@ -90,6 +106,15 @@ export function maskPasted(text: string): string {
   return whole.split(/\r?\n/).map((l) => maskOne(l.trim())).join('\n');
 }
 
+/**
+ * The invite's 8-character code in two groups (ABCD-EFGH), to read out or
+ * check by eye. Display only: what is copied and pasted is the whole invite.
+ */
+export function inviteCodeGroups(invite: string): string | null {
+  const m = /^wmux-a2a:\/\/[^/\s]+\/([A-Z0-9]{8})#/i.exec(invite.trim());
+  return m ? `${m[1].slice(0, 4)}-${m[1].slice(4)}` : null;
+}
+
 /** How long a bundle stays on the clipboard when the link's expiry is unknown. */
 const BUNDLE_FALLBACK_TTL_MS = 600_000;
 
@@ -112,9 +137,11 @@ export interface RemoteConnectDialogProps {
   onLinkPane: (hostId: string) => void;
   /** Opens "Add PC over SSH" for a computer that cannot send an invite. */
   onAddOverSsh?: () => void;
+  /** A PC was paired on the LAN tab: the page re-reads its list. */
+  onLanPaired?: () => void;
 }
 
-export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, onA2aStatus, onAddOverSsh }: RemoteConnectDialogProps) {
+export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, onA2aStatus, onAddOverSsh, onLanPaired }: RemoteConnectDialogProps) {
   const t = useT();
   const api = window.electronAPI?.a2aRemote;
   const web = window.electronAPI?.web;
@@ -122,10 +149,13 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
   const { applyPairStatus } = invite;
   // null until the listener's state is known (it picks the first tab).
   const [tab, setTab] = useState<ConnectTab | null>(initialTab ?? null);
+  // The LAN panel stays mounted once shown, so switching tabs keeps its PIN;
+  // closing the dialog unmounts it, which closes a window it left open.
+  const [lanShown, setLanShown] = useState(initialTab === 'lan');
   const [paste, setPaste] = useState('');
   const [masked, setMasked] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<{ tone: 'muted' | 'danger'; text: string } | null>(null);
+  const [message, setMessage] = useState<{ tone: 'muted' | 'danger'; text: string; fix?: TailscaleFix } | null>(null);
   const [turnedOn, setTurnedOn] = useState(false);
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -373,7 +403,14 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
   }, [open, api, applyPairStatus]);
 
   /** Connect one pasted piece; the line it leaves for the message. */
-  const connectOne = useCallback(async (text: string): Promise<{ ok: boolean; text: string; hostId?: string; share?: boolean }> => {
+  const connectOne = useCallback(async (text: string): Promise<{ ok: boolean; text: string; hostId?: string; share?: boolean; fix?: TailscaleFix }> => {
+    // Every address this piece would try is in the tailnet range: when
+    // Tailscale here cannot carry it (off, signed out, the other device not
+    // on it), say so now instead of letting the connect run into its timeout,
+    // or, for an address Tailscale may not own, say it if the connect fails.
+    const tailnet = await tailnetPrecheck(tailnetTargetOf(text));
+    if (tailnet.held) return { ok: false, ...tailnet.held };
+    const unreachable = (line: string): { ok: false; text: string; fix?: TailscaleFix } => noteUnreachable(line, tailnet.ifUnreachable);
     if (kindOf(text) === 'a2a') {
       const r = await invite.join(text);
       if (!r) return { ok: false, text: t('remote.pairFailed') };
@@ -383,7 +420,8 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
       }
       const retry = r.retryAfterSec != null && r.retryAfterSec > 0
         ? ` ${t('settings.a2aRemoteJoinRetryIn', { time: formatRemaining(r.retryAfterSec) })}` : '';
-      return { ok: false, text: `${t(`settings.a2aRemoteJoinError.${r.error}`)}${retry}` };
+      const line = `${t(`settings.a2aRemoteJoinError.${r.error}`)}${retry}`;
+      return JOIN_UNREACHABLE.has(r.error) ? unreachable(line) : { ok: false, text: line };
     }
     const parsed = parseRemotePairInput(text);
     if (parsed.kind === 'error') return { ok: false, text: t(INPUT_ERROR[parsed.reason]) };
@@ -394,7 +432,11 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
         ? await remote.hostsPair(parsed.origin, parsed.code)
         : await remote.hostsAdd(parsed.url);
       if (res.ok) return { ok: true, text: t('remotePage.connect.hostAdded', { name: res.host.label }), share: true };
-      return { ok: false, text: 'reason' in res ? pairReasonMessage(t, res.reason, res.attemptsLeft) : res.error };
+      if ('reason' in res) {
+        const line = pairReasonMessage(t, res.reason, res.attemptsLeft);
+        return res.reason === 'unreachable' ? unreachable(line) : { ok: false, text: line };
+      }
+      return res.error === HOST_UNREACHABLE_ERROR ? unreachable(res.error) : { ok: false, text: res.error };
     } catch {
       return { ok: false, text: t('remote.pairFailed') };
     }
@@ -414,6 +456,7 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
     const left: string[] = [];
     let host: string | null = null;
     let shared = false;
+    let fix: TailscaleFix | undefined;
     try {
       for (const part of parts) {
         const r = await connectOne(part);
@@ -422,6 +465,7 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
         if (!r.ok) left.push(part);
         if (r.hostId) host = r.hostId;
         if (r.share) shared = true;
+        fix ??= r.fix;
       }
     } finally {
       if (mounted.current) setBusy(false);
@@ -433,12 +477,21 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
       if (left.length === 0) setMasked(false);
     }
     if (host) setLinkHost(host);
-    setMessage({ tone: left.length > 0 ? 'danger' : 'muted', text: lines.join('\n') });
+    setMessage({ tone: left.length > 0 ? 'danger' : 'muted', text: lines.join('\n'), ...(fix ? { fix } : {}) });
   }, [paste, connectOne, t]);
 
   if (tab === null) return null;
   const working = busy || invite.joinBusy;
   const remaining = invite.remainingSec;
+
+  // The LAN panel keeps its place in the body in both views below (second
+  // child of DialogBody, after the tabs or an empty slot), so a PC redeeming
+  // the invite does not unmount it and end a LAN PIN that is still open.
+  const lanPanel = lanShown ? (
+    <div hidden={tab !== 'lan' || joined !== null}>
+      <LanLinkPairPanel onPaired={onLanPaired} />
+    </div>
+  ) : null;
 
   if (joined) {
     return (
@@ -449,6 +502,8 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
           closeLabel={t('remotePage.connect.close')}
         />
         <DialogBody>
+          {null}
+          {lanPanel}
           <A2aExposureChecklist hostId={joined.hostId} pcName={joined.name} t={t} />
         </DialogBody>
         <DialogFooter>
@@ -464,15 +519,17 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
       <DialogBody>
         <SegmentedControl<ConnectTab>
           value={tab}
-          onValueChange={(v) => { setTab(v); setMessage(null); }}
+          onValueChange={(v) => { setTab(v); setMessage(null); if (v === 'lan') setLanShown(true); }}
           ariaLabel={t('remotePage.connect.title')}
           options={[
             { value: 'invite', label: t('remotePage.connect.tabInvite') },
             { value: 'paste', label: t('remotePage.connect.tabPaste') },
+            { value: 'lan', label: t('remotePage.connect.tabLan') },
           ]}
           data-testid="remote-connect-tabs"
         />
-        {tab === 'invite' ? (
+        {lanPanel}
+        {tab === 'lan' ? null : tab === 'invite' ? (
           <div className="wmux-remote-connect" data-testid="remote-connect-invite">
             <p className="wmux-remote-connect-note">{t('remotePage.connect.inviteDesc')}</p>
             {turnedOn && <p className="wmux-remote-connect-note" data-testid="remote-connect-turned-on">{t('remotePage.connect.turnedOn')}</p>}
@@ -495,6 +552,11 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
                     {invite.copied || bundleCopied ? t('web.copied') : t('web.copy')}
                   </Button>
                 </div>
+                {inviteCodeGroups(invite.invite) && (
+                  <p className="wmux-remote-connect-note" data-testid="remote-connect-code-groups">
+                    {t('remotePage.connect.codeGroups', { code: inviteCodeGroups(invite.invite) ?? '' })}
+                  </p>
+                )}
                 {invite.addresses.length > 0 && (
                   <div className="flex flex-col gap-1">
                     <span className="wmux-remote-connect-label">{t('remotePage.connect.addresses')}</span>
@@ -584,6 +646,11 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
               <p className="wmux-a2a-note whitespace-pre-line" data-tone={message.tone === 'danger' ? 'danger' : undefined} role={message.tone === 'danger' ? 'alert' : 'status'} data-testid="remote-connect-message">
                 {message.text}
               </p>
+            )}
+            {message?.fix && (
+              <div className="flex flex-wrap items-center gap-2" data-testid="remote-connect-tailscale-fix">
+                <TailscaleFixButton fix={message.fix} />
+              </div>
             )}
           </div>
         )}

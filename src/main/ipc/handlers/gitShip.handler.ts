@@ -10,9 +10,11 @@
 // to while the dialog was open.
 import { ensureSecretHook, secretHooks } from '../../git/secretHookHost';
 import { ipcMain } from 'electron';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
 import { IPC } from '../../../shared/constants';
 import { wrapHandler } from '../wrapHandler';
-import { resolveAccessiblePath } from './fs.handler';
+import { isNonLocalPath, isSensitivePath, resolveAccessiblePath } from './fs.handler';
 import { mergeStatus, repoLockKeyFor, withRepoLock } from './worktree.handler';
 import { shipActions, type ShipActionResult, type ShipExpect, type ShipStatus, type ShipStatusResult } from '../../git/shipActions';
 import { shipBlock, type ShipAction, type ShipInput } from '../../../shared/gitShip';
@@ -69,6 +71,14 @@ export async function checkWrite(cwd: string, action: ShipAction, expect: ShipEx
   return { ok: true, status: st };
 }
 
+/** The refusal for a repo path that does not resolve: its folder is gone, or
+ *  it is not one wmux may use. Only a path wmux may use is looked up on disk,
+ *  so every other path gets the same answer whether it exists or not. */
+function unresolved(repoPath: string): { ok: false; error: string; reason?: 'missing-folder' } {
+  if (isNonLocalPath(repoPath) || isSensitivePath(path.resolve(repoPath)) || existsSync(repoPath)) return { ok: false, error: 'repoPath required' };
+  return { ok: false, error: 'the folder is not there any more', reason: 'missing-folder' };
+}
+
 async function guarded(
   repoPath: unknown,
   rawExpect: unknown,
@@ -79,7 +89,7 @@ async function guarded(
   const expect = parseExpect(rawExpect);
   if (!expect) return { ok: false, error: 'the branch and commit to act on are required' };
   const cwd = await resolveAccessiblePath(repoPath);
-  if (!cwd) return { ok: false, error: 'repoPath required' };
+  if (!cwd) return unresolved(repoPath);
   const key = await repoLockKeyFor(cwd);
   if (!key) return { ok: false, error: 'not a git repository' };
   return withRepoLock(key, async () => {
@@ -110,7 +120,7 @@ export function registerGitShipHandlers(): () => void {
     wrapHandler(IPC.GIT_SHIP_STATUS, async (_e: Electron.IpcMainInvokeEvent, repoPath: unknown): Promise<ShipStatusResult> => {
       if (typeof repoPath !== 'string' || !repoPath) return { ok: false, error: 'repoPath required' };
       const cwd = await resolveAccessiblePath(repoPath);
-      if (!cwd) return { ok: false, error: 'repoPath required' };
+      if (!cwd) return unresolved(repoPath);
       // A repository opened in wmux gets the pre-commit secret check, so a
       // commit from any terminal is checked too (once per repo per run).
       ensureSecretHook(cwd);
@@ -119,8 +129,11 @@ export function registerGitShipHandlers(): () => void {
   );
   ipcMain.handle(
     IPC.GIT_SHIP_COMMIT,
-    wrapHandler(IPC.GIT_SHIP_COMMIT, (_e: Electron.IpcMainInvokeEvent, repoPath: unknown, message: unknown, expect: unknown) =>
-      guarded(repoPath, expect, 'commit', (cwd, ex) => shipActions.commit(cwd, typeof message === 'string' ? message : '', ex))),
+    wrapHandler(IPC.GIT_SHIP_COMMIT, (_e: Electron.IpcMainInvokeEvent, repoPath: unknown, message: unknown, expect: unknown, opts: unknown) => {
+      // Unsigned only when this one call asks for it (the user's click).
+      const noSign = !!opts && typeof opts === 'object' && (opts as { noSign?: unknown }).noSign === true;
+      return guarded(repoPath, expect, 'commit', (cwd, ex) => shipActions.commit(cwd, typeof message === 'string' ? message : '', ex, noSign ? { noSign: true } : {}));
+    }),
   );
   ipcMain.handle(
     IPC.GIT_SHIP_PUSH,
