@@ -36,8 +36,9 @@ describe('RPC dispatch provenance source invariant', () => {
       const text = fs.readFileSync(file, 'utf8');
       // A file that never spells the marker cannot write it: only the few
       // that do are parsed. Parsing every file of main for each marker ran
-      // past the test timeout on a loaded Windows runner (#2434).
-      if (!text.includes(marker)) continue;
+      // past the test timeout on a loaded Windows runner (#2434). A file
+      // with an escape is parsed too: `extern\u0061lWire` spells it.
+      if (!text.includes(marker) && !/\\[ux]/.test(text)) continue;
       const source = ts.createSourceFile(
         file,
         text,

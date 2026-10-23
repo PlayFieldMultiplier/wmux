@@ -917,12 +917,14 @@ describe('a folder a stop kept, after 7 days', () => {
       // Each retry comes from one timer period.
       vi.advanceTimersByTime(150);
       await waitFor(() => removeDir.mock.calls.length === 2, 5_000);
+      await deliberateSleep(50, 'negative: one period makes one retry');
+      expect(removeDir).toHaveBeenCalledTimes(2);
       vi.advanceTimersByTime(150);
       await waitFor(() => removeDir.mock.calls.length === 3, 5_000);
       // Bounded: no fourth try from this install, kicked or timed.
       installed.kick();
       vi.advanceTimersByTime(600);
-      await deliberateSleep(100, 'negative: no fourth try, kicked or timed');
+      await deliberateSleep(400, 'negative: no fourth try, kicked or timed');
       expect(removeDir).toHaveBeenCalledTimes(3);
     } finally {
       installed?.dispose();
