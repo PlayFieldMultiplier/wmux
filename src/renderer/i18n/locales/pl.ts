@@ -3773,7 +3773,6 @@ export const pl = {
   'firstRunWizard.agent.via.script': "Skrypt instalacyjny",
   'firstRunWizard.agent.via.powershell': "PowerShell",
   'firstRunWizard.agent.via.winget': "WinGet",
-  'firstRunWizard.agent.via.cmd': "Wiersz polecenia",
   'firstRunWizard.agent.guide.signInBody.grok': "Grok przy pierwszym uruchomieniu otwiera przeglądarkę do logowania. Dokończ tam; wmux nigdy nie loguje się za Ciebie. wmux nie może sprawdzić logowania Groka, więc ta karta się nie zmieni.",
   'firstRunWizard.agent.guide.signInBody.agy': "Antigravity przy pierwszym uruchomieniu pyta, jak się zalogować: wybierz i dokończ w karcie terminala i w przeglądarce. wmux nigdy nie wybiera za Ciebie i nie może potem sprawdzić logowania.",
   'firstRunWizard.closeButton': 'Zamknij',

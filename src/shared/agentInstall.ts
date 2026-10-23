@@ -23,13 +23,11 @@ export type AgentCommandShell =
    * and a WSL or cmd default shell would run a different (or no) install than
    * the Windows one wmux detects.
    */
-  | 'powershell'
-  /** cmd.exe, for a vendor line written for it (`&&`, `del`). */
-  | 'cmd';
+  | 'powershell';
 
 /** Which of an agent's documented lines: its main installer script, or one of
  *  the row's `install.more`. */
-export type AgentInstallVia = 'script' | 'winget' | 'cmd';
+export type AgentInstallVia = 'script' | 'winget';
 
 export interface AgentInstallMethod {
   via: AgentInstallVia;
@@ -62,7 +60,7 @@ export function agentInstallMethods(agent: AgentId, platform: NodeJS.Platform): 
     .map((m): AgentInstallMethod => ({
       via: m.via,
       command: m.command,
-      shell: m.via === 'cmd' ? 'cmd' : win ? 'powershell' : 'user',
+      shell: win ? 'powershell' : 'user',
       source: m.source,
       officialPage: install.officialPage,
       requires: m.requires,

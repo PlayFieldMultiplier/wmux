@@ -173,33 +173,47 @@ describe('FirstRunWizard agent ready step', () => {
     expect(primaries().map((b) => b.dataset.testid)).toEqual(['first-run-agent-claude-install']);
   });
 
-  it('an agent with several documented install lines lets the user pick one, and runs exactly that one in its shell', async () => {
-    const PS = 'irm https://antigravity.google/cli/install.ps1 | iex';
-    const CMD = 'curl -fsSL https://antigravity.google/cli/install.cmd -o install.cmd && install.cmd && del install.cmd';
+  it('an agent with several documented install lines lets the user pick one, and runs exactly that one from the home folder', async () => {
+    const PS = 'irm https://x.ai/cli/install.ps1 | iex';
+    const WINGET = 'winget install --id xAI.GrokBuild -e';
     const firstRun = installBridge([ready('claude'), notInstalled('codex'), {
-      agent: 'agy', readiness: 'not-installed', executable: null, version: null, updateRecommended: false, loginKnown: true, candidates: [],
+      agent: 'grok', readiness: 'not-installed', executable: null, version: null, updateRecommended: false, loginKnown: true, candidates: [],
     }]);
-    const ps = { via: 'script', command: PS, shell: 'powershell', officialPage: 'https://antigravity.google/docs/getting-started', missing: [] };
-    const cmd = { via: 'cmd', command: CMD, shell: 'cmd', officialPage: 'https://antigravity.google/docs/getting-started', missing: [] };
-    firstRun.agentPlan.mockResolvedValue({ agent: 'agy', install: ps, installs: [ps, cmd], login: null });
+    const ps = { via: 'script', command: PS, shell: 'powershell', officialPage: 'https://docs.x.ai/build/overview', missing: [] };
+    const winget = { via: 'winget', command: WINGET, shell: 'powershell', officialPage: 'https://docs.x.ai/build/overview', missing: [] };
+    firstRun.agentPlan.mockResolvedValue({ agent: 'grok', install: ps, installs: [ps, winget], login: null });
     tab.open.mockResolvedValue({ workspaceId: 'ws-1', ptyId: 'pty-1' });
+    // A workspace with its own startup folder: the install still runs from home.
+    act(() => {
+      useStore.setState((st) => ({ workspaces: st.workspaces.map((w, i) => (i === 0 ? { ...w, profile: { ...w.profile, startupCwd: '/work/project' } } : w)) }) as never);
+    });
     await act(async () => { root.render(createElement(FirstRunWizard, { mode: 'firstRun', onClose: vi.fn() })); });
     await settle();
 
-    await act(async () => { byId('first-run-agent-agy-install')?.click(); });
+    await act(async () => { byId('first-run-agent-grok-install')?.click(); });
     await settle();
-    const via = byId('first-run-agent-agy-via');
-    expect([...(via?.querySelectorAll('[role="radio"]') ?? [])].map((b) => b.textContent)).toEqual(['PowerShell', 'Command Prompt']);
-    expect(byId('first-run-agent-agy-command')?.textContent).toBe(PS);
+    const via = byId('first-run-agent-grok-via');
+    expect([...(via?.querySelectorAll('[role="radio"]') ?? [])].map((b) => b.textContent)).toEqual(['PowerShell', 'WinGet']);
+    expect(byId('first-run-agent-grok-command')?.textContent).toBe(PS);
 
-    const cmdOption = [...(via?.querySelectorAll('[role="radio"]') ?? [])].find((b) => b.textContent === 'Command Prompt') as HTMLButtonElement;
-    await act(async () => { cmdOption.click(); });
-    expect(byId('first-run-agent-agy-command')?.textContent).toBe(CMD);
+    const wingetOption = [...(via?.querySelectorAll('[role="radio"]') ?? [])].find((b) => b.textContent === 'WinGet') as HTMLButtonElement;
+    await act(async () => { wingetOption.click(); });
+    expect(byId('first-run-agent-grok-command')?.textContent).toBe(WINGET);
     expect(tab.open).not.toHaveBeenCalled();
 
-    await act(async () => { byId('first-run-agent-agy-run')?.click(); });
+    await act(async () => { byId('first-run-agent-grok-run')?.click(); });
     await settle();
-    expect(tab.open).toHaveBeenCalledWith(expect.objectContaining({ initialCommand: CMD, shell: 'cmd.exe' }));
+    // From the home folder (null), never a workspace's startup folder.
+    expect(tab.open).toHaveBeenCalledWith(expect.objectContaining({ initialCommand: WINGET, shell: 'powershell.exe', cwd: null }));
+  });
+
+  it('an installed agent whose sign-in wmux cannot check counts as set up: the footer is no longer Later', async () => {
+    installBridge([notInstalled('claude'), notInstalled('codex'), {
+      agent: 'agy', readiness: 'installed', executable: '/home/u/.local/bin/agy', version: '1.4.5', updateRecommended: false, loginKnown: false, candidates: [],
+    }]);
+    await act(async () => { root.render(createElement(FirstRunWizard, { mode: 'firstRun', onClose: vi.fn() })); });
+    await settle();
+    expect(byId('first-run-wizard-skip')?.textContent).not.toBe('Later');
   });
 
   it('Run on a card that is not the primary stays secondary', async () => {

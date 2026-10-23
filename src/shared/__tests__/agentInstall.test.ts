@@ -66,14 +66,13 @@ describe('Grok and Antigravity install lines', () => {
     }
   });
 
-  it('Windows: PowerShell first, then WinGet (Grok) or Command Prompt (Antigravity), each in its own shell', () => {
+  it('Windows: PowerShell first, then WinGet for Grok, both in PowerShell; Antigravity has the one PowerShell line', () => {
     expect(agentInstallMethods('grok', 'win32').map((m) => [m.via, m.shell, m.command, m.requires])).toEqual([
       ['script', 'powershell', 'irm https://x.ai/cli/install.ps1 | iex', []],
       ['winget', 'powershell', 'winget install --id xAI.GrokBuild -e', []],
     ]);
     expect(agentInstallMethods('agy', 'win32').map((m) => [m.via, m.shell, m.command, m.requires])).toEqual([
       ['script', 'powershell', 'irm https://antigravity.google/cli/install.ps1 | iex', []],
-      ['cmd', 'cmd', 'curl -fsSL https://antigravity.google/cli/install.cmd -o install.cmd && install.cmd && del install.cmd', ['curl.exe']],
     ]);
     // The first line stays the one agentInstallMethod gives.
     expect(agentInstallMethod('grok', 'win32')?.via).toBe('script');

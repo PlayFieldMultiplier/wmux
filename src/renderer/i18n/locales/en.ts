@@ -3799,7 +3799,6 @@ export const en = {
   'firstRunWizard.agent.via.script': "Install script",
   'firstRunWizard.agent.via.powershell': "PowerShell",
   'firstRunWizard.agent.via.winget': "WinGet",
-  'firstRunWizard.agent.via.cmd': "Command Prompt",
   'firstRunWizard.agent.guide.signInBody.grok': "Grok opens your browser to sign in on its first run. Finish there; wmux never signs in for you. wmux can't check Grok's sign-in, so this card stays as it is.",
   'firstRunWizard.agent.guide.signInBody.agy': "Antigravity asks how to sign in on its first run: choose and finish in the terminal tab and your browser. wmux never picks for you, and can't check the sign-in afterwards.",
   'firstRunWizard.closeButton': 'Close',

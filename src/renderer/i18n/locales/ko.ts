@@ -3206,7 +3206,6 @@ export const ko = {
   'firstRunWizard.agent.via.script': "설치 스크립트",
   'firstRunWizard.agent.via.powershell': "PowerShell",
   'firstRunWizard.agent.via.winget': "WinGet",
-  'firstRunWizard.agent.via.cmd': "명령 프롬프트",
   'firstRunWizard.agent.guide.signInBody.grok': "Grok은 처음 실행할 때 브라우저를 열어 로그인합니다. 브라우저에서 마치세요. wmux는 대신 로그인하지 않습니다. wmux는 Grok의 로그인 여부를 확인할 수 없어 이 카드는 그대로 둡니다.",
   'firstRunWizard.agent.guide.signInBody.agy': "Antigravity는 처음 실행할 때 로그인 방법을 묻습니다. 터미널 탭과 브라우저에서 고르고 마치세요. wmux는 대신 고르지 않으며, 로그인 후에도 확인할 수 없습니다.",
   'firstRunWizard.closeButton': '닫기',

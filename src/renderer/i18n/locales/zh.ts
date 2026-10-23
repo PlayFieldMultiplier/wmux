@@ -3373,7 +3373,6 @@ export const zh = {
   'firstRunWizard.agent.via.script': "安装脚本",
   'firstRunWizard.agent.via.powershell': "PowerShell",
   'firstRunWizard.agent.via.winget': "WinGet",
-  'firstRunWizard.agent.via.cmd': "命令提示符",
   'firstRunWizard.agent.guide.signInBody.grok': "Grok 首次运行时会打开浏览器进行登录。请在浏览器中完成；wmux 不会替你登录。wmux 无法检查 Grok 的登录状态，因此此卡片保持不变。",
   'firstRunWizard.agent.guide.signInBody.agy': "Antigravity 首次运行时会询问登录方式：请在终端标签页和浏览器中选择并完成。wmux 不会替你选择，之后也无法检查登录状态。",
   'firstRunWizard.closeButton': '关闭',

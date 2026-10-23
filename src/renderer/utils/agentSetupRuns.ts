@@ -180,8 +180,7 @@ export function effectivePaneShell(defaultShell: string | undefined): string | u
   return withDefaultShell({}, defaultShell).shell;
 }
 
-export function shellFor(shell: AgentCommandShell): string | undefined {
-  if (shell === 'cmd') return 'cmd.exe';
+function shellFor(shell: AgentCommandShell): string | undefined {
   return shell === 'powershell' ? 'powershell.exe' : undefined;
 }
 
@@ -247,7 +246,8 @@ async function openRun(
   const tab = await openTerminalTab({
     initialCommand: command,
     title,
-    cwd: runCwd(),
+    // An install runs from the home folder; a sign-in where the user works.
+    cwd: kind === 'install' ? null : runCwd(),
     plainEnv: true,
     ...(shell ? { shell } : {}),
   });

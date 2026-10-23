@@ -101,7 +101,7 @@ export function installViaKey(install: Pick<AgentSetupPlanInstall, 'via' | 'shel
 
 /**
  * Which card's action is the dialog's one primary, if any. Only while no agent
- * is ready and nothing is running: Claude first, then Codex.
+ * is ready and nothing is running: the first card in registry order.
  */
 export function decideAgentPrimary(
   statuses: AgentSetupStatus[] | null,

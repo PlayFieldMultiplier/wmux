@@ -113,7 +113,7 @@ export interface AgentTerminalChatSpec {
 /** Another documented install line for one platform ({@link AgentSetupSpec}). */
 export interface AgentInstallAlternative {
   readonly platform: 'posix' | 'win32';
-  readonly via: 'winget' | 'cmd';
+  readonly via: 'winget';
   readonly command: string;
   readonly requires: readonly string[];
   readonly source: string;
@@ -171,7 +171,7 @@ export interface AgentSetupSpec {
     readonly officialPage: string;
     /** The vendor's other documented ways on one platform, each verbatim with
      *  its own source, offered after the line above. `winget` runs in
-     *  PowerShell; `cmd` in cmd.exe. `requires` as above. */
+     *  PowerShell. `requires` as above. */
     readonly more?: readonly AgentInstallAlternative[];
   };
   /** The agent's own first-run screens have a guide card
@@ -475,13 +475,6 @@ export const AGENT_IDENTITIES = [
         win32: { command: 'irm https://antigravity.google/cli/install.ps1 | iex' },
         source: 'https://antigravity.google/docs/getting-started',
         officialPage: 'https://antigravity.google/docs/getting-started',
-        more: [{
-          platform: 'win32',
-          via: 'cmd',
-          command: 'curl -fsSL https://antigravity.google/cli/install.cmd -o install.cmd && install.cmd && del install.cmd',
-          requires: ['curl.exe'],
-          source: 'https://antigravity.google/docs/getting-started',
-        }],
       },
     },
   },

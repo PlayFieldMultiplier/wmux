@@ -72,3 +72,10 @@ export function isOlderVersion(version: string, floor: string): boolean {
 export function anyAgentReady(statuses: readonly AgentSetupStatus[]): boolean {
   return statuses.some((s) => s.readiness === 'ready');
 }
+
+/** At least one agent is set up as far as wmux can tell: signed in, or
+ *  installed with a sign-in it cannot check. What the sidebar's "Agent not
+ *  set up" row and the wizard's Later label ask. */
+export function anyAgentSetUp(statuses: readonly AgentSetupStatus[]): boolean {
+  return statuses.some((s) => s.readiness === 'ready' || s.readiness === 'installed');
+}
