@@ -1,5 +1,249 @@
 ## [Unreleased]
 
+## [4.10.0] — 2026-10-24
+
+### Added
+
+- **See when an agent is driving a browser tab, and stop it.** A browser tab
+  now shows a mark in its toolbar and on its tab while an agent is acting on
+  it. Stop ends the agent's current action and pauses it on that tab until
+  you resume; Take over hands the tab to you until you hand it back. Tabs of
+  your own Chrome that you lent to an agent can be returned from the
+  workspace's Chrome profile menu with Return to me. Before, the only sign
+  was the help bar, and there was no way to stop or take back a tab.
+
+- **Office shows every workspace at once.** The Office plugin (by @bluemas) now seats every local workspace's agents in one office, so everyone who needs you queues at the same boss desk. Clicking an employee takes you to that workspace's pane. The office is scaled to fit the page, so it never scrolls. This needs a new plugin permission, `agent.state.read.all`, which the approval prompt lists on its own line; without it, Office shows only the current workspace, as before. An installed Office updates itself and asks for approval again (#2613).
+
+- **Plugins shows what each catalog plugin looks like.** The detail for Office and Agent status now has a real screenshot of that plugin's page, between the credit line and the description. Before, you only saw a description until you installed and opened the plugin. A bundle you installed by hand shows no preview (#2618).
+
+- **Run now can end a finished run's leftover session and start.** A finished
+  schedule run keeps its agent session open for up to 10 minutes, and until
+  now a Run now in that window was only refused with "Not started: previous
+  run's session still open", so you had to wait. Now the schedule offers to
+  end that session and start: an inline confirm names the session, Cancel is
+  focused, and confirming ends only that one session before the run starts. A
+  run that is still going never gets the offer, and scheduled runs are
+  unchanged. (#2625)
+
+- **Bots in a group chat can react instead of replying, and a bot that stays quiet still shows it saw the message.** In a group chat, a bot woken by your message, or by another bot mentioning it, can answer with a single emoji. The emoji appears under that message as a small chip, the way a messenger shows a reaction. A bot that has nothing to add leaves a quiet acknowledgement there (👍, 👀, ✅ or 🙌, always the same one for that bot and message). Hover over a chip to see who reacted or who saw it. Before this, a bot with nothing to say left no trace, and a quick "agreed" took up a whole message. A reaction is only something you see: it never wakes a bot or starts any work.
+
+- **A pane that hits its usage limit now offers what you can do next.** Click the limit chip in the pane's tab bar to open a small card. It also opens once by itself when the pane you are looking at hits the limit. From the card you can:
+  - Resume automatically when the limit reopens.
+  - Move the conversation to another account, when you have two or more. You can also tick "Always switch automatically".
+  - Continue in another agent that is installed and signed in. It opens in a new tab of the same pane, with a note about the work typed in for you to send.
+  - When every account is out, see the earliest time one reopens.
+
+  Before, the chip only offered a resume toggle and an account menu, and resuming was off unless you turned it on.
+
+- **Keep the computer awake while agents work.** A new setting in Settings ›
+  General › Power stops the computer from going to sleep: Off, While working
+  (the default: only while an agent on this computer is working, as Fleet's
+  Running section counts it) or Always. The screen can still turn off.
+
+- **Runs missed while asleep.** If the computer slept through scheduled runs,
+  the Schedules page says how many were missed and offers Run now, which
+  starts each of those schedules once, or Skip.
+
+- **The Remote page checks Tailscale for you.** A short checklist shows
+  whether Tailscale is installed, signed in, has this PC on your network and
+  can see your other PC or phone, with one button next to the first thing
+  that's wrong (download it, open it, or how to add the other device).
+  Connecting to another PC over Tailscale now says straight away when
+  Tailscale is off instead of waiting (an address that another network in
+  the same range may own is still tried), and a connection you're using that
+  drops shows a notice within a minute: a PC link after 16 s down, or about
+  56 s when it went silent, on either PC; a workspace share after two failed
+  checks in a row. A brief blip that reconnects on its own stays quiet. wmux
+  never turns Tailscale on or installs it by itself.
+
+- **Voice input: dictate into the Chat and Bots composers, or into a terminal pane.** The composers get a microphone button: click to start, click again to stop, and the text lands at the cursor for you to edit before sending. In a terminal pane, "Dictate into this pane" (⌘⇧S / Ctrl+Shift+S, rebindable, also in the command palette) types the text at the prompt without pressing Enter. A small indicator shows while wmux listens, and Esc cancels. Speech is turned into text on your computer by a local Whisper model. Your audio stays in memory and is never stored or sent. The first time, wmux asks before it downloads the model (about 80 MB, from huggingface.co); after that, dictation works offline. Korean and English are both understood whatever language wmux is set to.
+
+- **A key for each plugin page.** Settings > Shortcuts and the command
+  palette list every page a plugin adds to the rail; give one a key and it
+  opens that page from anywhere, and closes it again. (#2646)
+
+- **A terminal waiting for an answer shows as Needs you in Fleet.** When a command in a plain shell stops to ask something (`git push`'s `(y/N)`, "Press Enter to continue", ssh asking whether to trust a new host, a password), Fleet moves the pane to Needs you and shows the question. A password prompt shows only that it needs you at the computer; its text is never passed on. Before, such a pane looked like an idle shell. (#2649)
+
+- **Let a paired PC start an agent on this one.** Settings › LAN has a new
+  section, off by default, where you pick which paired PCs may ask, which
+  folders (each the top of a git repository) and which agents, and the
+  permission mode the agent runs in. Each request shows a card with the PC,
+  the agent, the folder, the mode and the full prompt: Allow once, Always
+  allow this PC, folder and agent, or Deny. An allowed agent starts in a new
+  "From <PC>" workspace, on a fresh worktree of that repository, and its
+  header says who started it. By default every later instruction from that
+  PC asks again.
+
+- **Ask a paired PC to start an agent.** On the Remote page, a PC's menu has
+  **Start an agent…**: pick an agent and a folder that PC allows, write the
+  instruction, and choose the pane here that gets the replies. Agents can do
+  the same with the `remote_spawn` tool, and scripts with
+  `wmux remote spawn`. That PC's person approves it on their card. If the PC
+  is off, the request waits and starts once it is on (up to 72 hours). The
+  agent's replies arrive here as a task.
+
+- **The first run ends with your first bot's first task.** Once an agent is ready, the setup wizard picks a folder and offers "Give the bot its first job": explain the folder, or draft a README in the chat. It first asks you to confirm that the task uses your Claude usage. Then it makes one bot for the folder and shows that bot's first answer, with a way to open the conversation. The bot only reads: nothing is changed, pushed or opened as a pull request until you allow its workers. Running the setup again never makes a second bot. Before, the wizard ended with a terminal demo and left the Bots page empty. (#2656)
+
+- **Set up Grok and Antigravity from the first-run wizard.** The "Agent ready" step now has cards for Grok and the Antigravity CLI, next to Claude Code and Codex. Install shows the vendor's own install line and runs it in a terminal tab only when you click Run. Where the vendor documents more than one way on your system (Grok's WinGet package on Windows), you pick which one. Sign in then opens the agent, which signs in on its own; wmux can't check that sign-in, and the card says so. Before, these two had to be installed by hand. (#2657)
+
+- **Qwen Code and Kimi Code CLI are recognised.** A pane running `qwen` is
+  pinned to its conversation when it starts, and after a restart its resume
+  reopens exactly that conversation (`qwen --resume <id>`), or Qwen's own
+  picker when there is none. A pane running Kimi Code CLI (2.x) is offered
+  Kimi's own session picker (`kimi --session`). Neither is in quick launch
+  yet: both are listed as not verified for fan-out.
+
+- **Set up Qwen Code and Kimi Code CLI from the first-run wizard.** The "Agent ready" step now has cards for both. Install shows the vendor's own lines in the vendor's order: the install script first, then npm, then Homebrew for Qwen or pnpm for Kimi on macOS and Linux. Each line runs in a terminal tab only when you click Run. Sign in then opens the agent, which signs in inside its own session (`/auth` in Qwen, `/login` in Kimi). wmux can't check that sign-in, and the card says so. (#2659)
+
+### Changed
+
+- **The morning report carries no 1:1 thread titles.** Your 1:1 threads with bots still count as open threads. Before, the report listed each open 1:1's title, which is your first message there.
+
+- **A bot's wake no longer picks up replies from another bot's 1:1 with you.** Before, a room-wide message could be matched to a card in another bot's 1:1, and the replies after it there could reach the woken bot.
+
+- **Skipping a browser safety check now needs your approval.** On browser
+  panes without site protection, an agent that asks to skip a safety check
+  (running a blocked script, or reading sign-in data of email, banking or
+  login sites) or to save a download now needs your approval, in the same
+  prompt protected panes use. The prompt names the site, and the file name
+  for downloads; if nobody answers within 60 seconds, the request is
+  declined.
+
+- **wmux now runs on Electron 42** (from 41), with its newer Chromium. On macOS, a notification the system refuses to show (for example, from an unsigned development build) is now logged instead of disappearing without a trace.
+
+- **A fact addressed to one bot now reaches only that bot when bots read the fact log.** This covers a handoff delivery or refusal, your message to a bot, a schedule firing for a bot, and a notice to a bot. Only that bot was already woken by such a fact, but any bot in the workspace, and the Coordinator in every workspace, could still read it through the fact log. Handoff cards stay in their room threads as before.
+
+- **Windows glass now draws text the way macOS glass does.** Muted and secondary text use each theme's own colours, with the same row highlights as on macOS. Paper, Monochrome, Stars & Stripes, Red Dynasty and Void now show an opaque window on Windows when glass is on, because their text cannot stay readable over the worst-case window behind them (white behind a dark theme, black behind a light one); macOS is unchanged (#2619).
+
+- **PCs are connected in one place.** The Remote page's Connect a PC now has a LAN tab for pairing a PC on your network by a 6-digit PIN. Before, that pairing, the A2A invite and join, and the lists of paired PCs sat in three sections of Settings › LAN, apart from the Remote page. Settings › LAN keeps only the switches that turn the listeners on, plus a link to the Remote page. Each PC on the Remote page now says what this PC lets it see. The invite code also shows grouped (ABCD-EFGH), so it is easier to read out (#2620).
+
+- **Pull requests are checked against a new user's first run, on macOS and Windows.** Every pull request that is not a draft now packages wmux and walks the first-run path on it: the welcome wizard, the agent card, the sample task and the sidebar. The same job checks that package for the test-only stand-in agents: a package that carries one, under any name, fails. Release builds do not run this check. (#2623)
+
+- **The Mochi crew bot characters are not under the MIT License.** wmux's source code is still MIT. The bot characters' artwork and motion are all rights reserved, as ASSETS-LICENSE.md explains, so a fork must remove or replace them (#2624).
+
+- The onboarding tour's browser step now says what each browser is for: Built-in for the apps and docs your agents open inside wmux, Chrome with its own profile for sites where you stay signed in, and External for links in your usual browser. It points at the pane's browser button and links to Settings › Browser (#2628).
+
+- **Git failures are explained in plain words.** When Commit, Push or Create
+  PR on the Git page fails, it now says why and offers one next step instead
+  of showing raw git output: a commit-signing failure (with a one-time
+  "Commit once without signing"), a protected branch, new commits on the
+  remote, a refused key or sign-in, and a working folder that has moved.
+  Anything else still shows git's output, folded. A signer waiting for a
+  passphrase now fails in a moment instead of hanging for a minute.
+
+- **Bots in a group chat can no longer talk themselves into a loop.** Between one of your messages and the next, the bots in a group can post 8 messages in all and 2 each, and a chain of bots mentioning each other stops after 4 steps. Past that limit a bot's post is refused and its turn ends, so two bots answering each other stop after two messages each. Before this, a back-and-forth only stopped at the general limit of 6 handoffs. A group's coordinator is not limited, and the limits apply only to the group's own bots talking there, not to work they report back on. A round also ends after 30 minutes with no message in the chat.
+
+- **"Continue after a usage limit resets" starts on in a new setup.** An existing setup keeps its current setting; turn it on in Settings › Claude integration, or per pane from the card.
+
+- **A bot with no worker slots says so.** When a bot whose worker limit is 0 asks for workers, it now starts nothing and holds nothing. Its card says that nothing was started and how to allow workers. Before, it read as waiting for a slot that never frees. (#2656)
+
+- **Starting an agent from another PC offers only the agents verified for
+  unattended runs.** Settings › LAN no longer lists Gemini CLI there, and
+  this PC refuses a request for an agent outside that list.
+
+### Fixed
+
+- **The close-tab confirm says what actually stops.** Closing a tab with a
+  shell ends the shell and the programs running in it, while programs
+  started apart from the terminal (apps opened with `open` or `start`, tmux
+  sessions, background services) may keep running. A tab that only views a
+  session on another PC now says the session keeps running there. The
+  confirm used to say everything would be stopped.
+
+- **Text on a selected row is readable in every theme.** Muted and secondary text on the selected sidebar row and other selected rows now meets the same contrast floor as on the rest of the window; on Gruvbox the muted text there read 2.61:1 and now reads above 3:1. Eleven themes lift their muted (and on Mono, Mono Light and Nightowl, secondary) text by the smallest lightness step that clears it. On the stronger hover fill of a selected Fleet card, a hovered needs-you row and hovered chips and buttons, muted text now shows one tier brighter, and two tiers brighter on the stronger fill of an open chip or a pressed button. (#2607)
+
+- **An agent is recognised by the executable the OS reports.** Before wmux delivers a scheduled or queued prompt into a pane, it checks that the pane's agent is still running. That check used only the process's name and command line. On macOS and Linux, wmux now also checks the executable the system reports for the process: the agent's own binary, or a runtime running a script from inside the agent's installed package. Agents installed the usual ways (the native installers, npm, Homebrew, pipx and other Python environments) are recognised as before. Windows is unchanged.
+
+- A screen read that waited while its pane was restarted under the same id (for example the approval check or a chat bridge read) no longer answers with the new pane's screen; it reads as closed instead. A large attach parse can no longer bypass the one-at-a-time snapshot queue (#2616).
+
+- Updating an installed catalog plugin (such as Office) at startup can no longer lose the plugin when the update is interrupted or its files cannot be moved; the old copy is kept and restored at the next start (#2617).
+
+- **A PC that joined this one no longer shows Waiting forever.** Until it connects again, it reads Disconnected with when it was last seen (#2620).
+
+- **A new install's first terminal is a regular wmux session.** On the very first launch the first pane could start before the background service was ready. It then ran outside it, or, in a build where that could not start, the window opened with no terminal. (#2621)
+
+- **"Try sample task" says it worked only when it did.** It could report success while its command never reached the terminal, so nothing ran. It now waits until the command is typed, and shows an error when it could not be. (#2621)
+
+- **A task finished on another PC now reports back in full.** When an agent on another PC completed or failed a task you sent it, your copy of the task got only the outcome and a one-line summary. The agent's status message and its evidence were left behind, and nothing appeared in your pane, so you could miss the result unless you checked within half an hour. Now the status message and the evidence come back with the outcome, and the pane that sent the task gets a one-line note when it completes or fails. A PC on an older wmux still gets the outcome and the summary as before.
+
+- **A paused or taken-over browser tab stays yours.** After you stop an
+  agent or take over a browser tab, the agent can no longer close that tab
+  or its pane, and a Stop that lands while the agent is first connecting
+  ends that connection too.
+
+- **`wmux codex` works on Windows again.** Started through the `wmux` command, it stopped at once with "stdin is not a terminal": the launcher started Codex from `wmux.exe`, which has no console to give it. The `wmux.cmd` script now starts Codex from the terminal itself. `wmux codex resume` failed with "HTTP error: 403 Forbidden" because the pane link served only Codex's first connection, and Codex opens a new one after you pick a session. The link now takes the same Codex's next connection, one at a time. Codex 0.163's startup check for AWS GovCloud no longer shows a "Codex request not sent" notice (#2629).
+
+- **Many panes no longer crowd out the app's own reads from the background service.** When the app starts or reconnects, it reads every pane's agent state and name. Before, that was one request per pane. With about a hundred panes this went past the service's per-second limit, and some reads were refused, so an agent's name could be missing until a later refresh. The reads now go as one request. On older background services, the app still falls back to one request per pane.
+
+- **A Codex turn whose origin check runs out of time no longer goes to the wrong pane by default.** Before routing a Codex notification, wmux checks which process sent it. On Windows that check starts PowerShell, which takes about 0.4 s, and about 1 s when several Codex turns finish at once. That is past the check's 0.9 s limit. When the check ran out, wmux silently sent the notification to the pane named in the environment, even when it came from the shared Codex server, whose environment belongs to whichever pane started that server. Now a check that runs out is logged (`origin-lookup-timeout` in `codex-notify.log` / `codex-hooks.log`). The notification goes to the pane that owns the conversation when wmux has a record of it, and to the environment's pane only when it does not (#2633).
+
+- **The LAN pairing PIN counts down while agents are busy.** In Remote › Connect a PC › LAN, the countdown froze while the app was updating often, and a PIN the other PC had already used stayed on screen. A PC accepting your A2A invite also no longer ends a LAN PIN you have open in the same dialog (#2636).
+
+- **Searching Settings for LAN pairing finds "Connections".** The result now has the same name as the section it opens (#2636).
+
+- **Kiro hooks on Windows.** The documented Kiro hook line, `node "<path>"`, did not run on Windows when the line is handed to `cmd /C` the way Kiro's open-source predecessor does it: the quotes reach `node`, so the hook fails for every path and Kiro panes fall back to screen detection. On Windows the hook line is now `node <path>/wmux-kiro-bridge.mjs`, unquoted and with forward slashes, so the folder holding the hook files must have no spaces (for example `C:/wmux-hooks/`). A Windows `~/.kiro/agents/wmux.json` written from the old instructions needs both `command` values updated. macOS and Linux keep the quoted form (#1917).
+
+- **A commit or push whose signing key needs a passphrase fails at once on Windows.** With an SSH signing key that is not in the agent, a commit from the Git page waited a minute on a prompt nobody could see, then said Git took too long. A signed push waited two minutes. Both now stop right away and say the signing failed. (#2639)
+
+- **A subagent's permission dialog can be answered from the phone.** When a
+  subagent's command needed approval, the dialog's title ("Bash command ·
+  from the general-purpose agent") was not recognized. The phone then showed
+  the card with no question and no Yes/No, so the dialog could only be
+  answered at the computer. The phone now gets the question, the reason and
+  the choices, as it does for the lead agent's dialogs. (#2642)
+
+- **A dialog the phone cannot answer no longer locks the keyboard.** While
+  such a dialog was up, the phone refused every key except Esc and Ctrl-C.
+  Typed keys now reach the pane. The pane still shows that it needs you. (#2642)
+
+- **Every push path runs the same password and key check.** Pushing a task
+  branch, opening a task's pull request or merge request, and pushing from
+  the phone now check the outgoing commits the same way the Git page's push
+  does, and stop with the same message when a commit carries a key or a key
+  file. On the phone, the refusal names the file.
+
+- Answering a question form from the phone no longer fails with "the prompt changed" in a long session when Claude did not redraw a character of an option's text, such as the `|` in `Title | Subtitle`.
+
+- **A `cd` into a folder macOS protects (Desktop, Documents, Downloads) no longer freezes the background service.** The freeze made wmux restart the service and lose the session, because the new folder had not been saved yet. A folder's git branch is now read in a separate process that is stopped if it takes too long.
+
+- **Clearer split between what another PC is told and what this PC logs.**
+  When a message from another PC is refused, that PC now gets the short
+  reason code only, and the full detail goes to this PC's log, where it is
+  useful for troubleshooting.
+
+- **A shell prompt that was answered just as wmux reconnected no longer sticks at Needs you.** When wmux reconnected to its background service, a prompt's clear could arrive just before the list of waiting prompts and then be overwritten by it. Each change now carries its order, and an older one never replaces a newer one.
+
+- **Reloading a window with many panes no longer gets some of its panes' calls refused.** Each pane used to ask the background service for the whole session list and send its own visibility report, so a reload with 60 panes sent about 470 calls in under two seconds and was refused 95 times. The panes now share those reads and reports: about 215 calls, none refused (#2653).
+
+- An agent another PC started no longer stops on Claude Code's "trust this
+  folder?" prompt, and its workspace is listed as an ordinary row instead of
+  under "From closed workspace".
+
+- Another PC can send this one at most 120 new tasks an hour; more wait on
+  that PC and arrive later.
+
+- **An install line no longer says it needs npm or Homebrew when you have it.** On Windows the check now finds `npm.cmd`. On macOS it also looks at your login shell's PATH, which a wmux opened from Finder or the Dock doesn't inherit. (#2659)
+
+- **An agent waiting on a prompt is no longer reported as missing.** When the
+  agent in a linked pane on another PC was stopped on a permission prompt (or
+  someone was typing in its pane), the sender was told the pane had "no agent
+  running" and the task was held until someone acted. Now the task keeps
+  trying and goes in by itself once the prompt is answered or the typing
+  stops, and the sender is told the agent is waiting on a prompt there. A pane
+  with no agent is still reported as before.
+
+- **Codex work remains visible during quiet turns.** The sidebar and agent rosters keep showing a working session after activity updates pause, and restore its running state after reconnecting. The pane still settles when the turn ends quietly, is interrupted, or its agent exits, and a pane waiting on your approval keeps showing that. (#2664)
+
+- **The bottom of a pane takes clicks again while the agent toolbar is
+  hidden.** The empty box that holds the hidden toolbar caught every click in
+  the bottom 40px of the workspace column. In Chat view the composer's Dictate
+  and Send buttons did nothing, and in a terminal the last two rows could not
+  be clicked or drag-selected. The box now lets clicks through. The toolbar
+  still slides up when the pointer rests at the bottom edge, and its buttons
+  work once it is showing.
+
+- **`wmux codex` on Windows says why it could not start.** When it refused to start, for example because `CODEX_HOME` named another Codex account than the terminal's, or the app was not running, it exited without a word. The reason now appears in the terminal, and paths with non-English characters show correctly in any console code page.
+
 ## [4.9.0] — 2026-10-22
 
 ### Added
