@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { persisterWritesSettled } from '../versionedFile';
 import type { LedgerEntry } from '../../../shared/ledger';
 import { TaskWorktreeManager } from '../../worktask/TaskWorktreeManager';
 import {
@@ -35,7 +36,7 @@ import {
   type TaskMission,
 } from '../taskFolderCleanup';
 import { ReclaimedWorkers, resumeWorker, type ReclaimedWorker, type WorkerResumePorts } from '../workerReclaim';
-import { deliberateSleep } from '../../../test-utils/waitFor';
+import { deliberateSleep, waitFor } from '../../../test-utils/waitFor';
 import { UNKNOWN_ROOT_REFUSAL } from '../../../shared/rpc';
 
 // Every test here runs real git over real worktrees, several spawns in a
@@ -79,8 +80,11 @@ beforeEach(() => {
   git(repo, 'add', '.gitignore');
   git(repo, 'commit', '-m', 'one');
 });
-afterEach(() => {
-  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+afterEach(async () => {
+  // A store's fire-and-forget save can still be on its way: let it land
+  // before its folder goes, or the removal races it (ENOTEMPTY).
+  await persisterWritesSettled();
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 const roots = () => ({ worktrees: path.join(home, 'worktrees'), wmuxDir });
@@ -890,30 +894,42 @@ describe('a folder a stop kept, after 7 days', () => {
     await cleanTaskFolders(p, [stopped]);
     now = 50_000 + TASK_FOLDER_KEPT_TTL_MS;
     // One install; a failed removal is tried again only on the retry timer,
-    // never on a kick (a ledger change, a workspace closing).
-    const installed = installTaskFolderCleanup({ ...p, onTransition: () => () => undefined, allRows: () => [stopped], retryMs: 150 });
-    await vi.waitFor(() => expect(removeDir).toHaveBeenCalledTimes(1), { timeout: 10_000 });
-    await vi.waitFor(() => expect(p.store.get(stopped.id)).toMatchObject({ state: 'kept_stopped', at: 50_000, stopped: { botId: BOT, title: 'perf-A' } }), { timeout: 10_000 });
-    // The ordinary pass over its row records nothing new.
-    await cleanTaskFolders(p, [stopped]);
-    expect(p.store.get(stopped.id)?.at).toBe(50_000);
-    const times: number[] = [];
-    removeDir.mockImplementation(async () => {
-      times.push(Date.now());
-      throw busy;
-    });
-    for (let i = 0; i < 5; i++) installed.kick();
-    await deliberateSleep(50, 'negative: kicks do not retry a failed removal');
-    expect(removeDir).toHaveBeenCalledTimes(1);
-    await vi.waitFor(() => expect(removeDir).toHaveBeenCalledTimes(3), { timeout: 5_000 });
-    // Bounded: no fourth try from this install, kicked or timed.
-    installed.kick();
-    await deliberateSleep(400, 'negative: no fourth try, kicked or timed');
-    expect(removeDir).toHaveBeenCalledTimes(3);
-    installed.dispose();
-    // The retries came a timer period apart.
-    expect(times).toHaveLength(2);
-    expect(times[1] - times[0]).toBeGreaterThanOrEqual(100);
+    // never on a kick (a ledger change, a workspace closing). The timer is
+    // the test's to move: a real one fired inside the kicks' window on a
+    // loaded runner and read as a retry the kicks made (#2434).
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    let installed: ReturnType<typeof installTaskFolderCleanup> | null = null;
+    try {
+      installed = installTaskFolderCleanup({ ...p, onTransition: () => () => undefined, allRows: () => [stopped], retryMs: 150 });
+      // `waitFor` polls on real timeouts: vi.waitFor would move the faked interval itself.
+      await waitFor(() => removeDir.mock.calls.length === 1, 10_000);
+      await waitFor(() => p.store.get(stopped.id)?.state === 'kept_stopped', 10_000);
+      expect(p.store.get(stopped.id)).toMatchObject({ state: 'kept_stopped', at: 50_000, stopped: { botId: BOT, title: 'perf-A' } });
+      // The ordinary pass over its row records nothing new.
+      await cleanTaskFolders(p, [stopped]);
+      expect(p.store.get(stopped.id)?.at).toBe(50_000);
+      removeDir.mockImplementation(async () => {
+        throw busy;
+      });
+      for (let i = 0; i < 5; i++) installed.kick();
+      await deliberateSleep(50, 'negative: kicks do not retry a failed removal');
+      expect(removeDir).toHaveBeenCalledTimes(1);
+      // Each retry comes from one timer period.
+      vi.advanceTimersByTime(150);
+      await waitFor(() => removeDir.mock.calls.length === 2, 5_000);
+      await deliberateSleep(50, 'negative: one period makes one retry');
+      expect(removeDir).toHaveBeenCalledTimes(2);
+      vi.advanceTimersByTime(150);
+      await waitFor(() => removeDir.mock.calls.length === 3, 5_000);
+      // Bounded: no fourth try from this install, kicked or timed.
+      installed.kick();
+      vi.advanceTimersByTime(600);
+      await deliberateSleep(400, 'negative: no fourth try, kicked or timed');
+      expect(removeDir).toHaveBeenCalledTimes(3);
+    } finally {
+      installed?.dispose();
+      vi.useRealTimers();
+    }
     removeDir.mockImplementation(async (d: string) => {
       if (failing) throw busy;
       await removeTreeNoFollow(d);

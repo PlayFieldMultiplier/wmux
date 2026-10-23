@@ -17,7 +17,8 @@
 //     "retry": 1,                    // the configured retry count
 //     "tests": [
 //       { "file": "src/x/__tests__/a.test.ts", "name": "suite > test",
-//         "line": 12, "state": "passed", "retryCount": 1 }
+//         "line": 12, "state": "passed", "retryCount": 1,
+//         "errors": ["expected 3 to be 4"] }   // optional: why an attempt failed
 //     ]
 //   }
 // `state: "passed"` with retryCount > 0 is a flaky test. `state: "failed"` with
@@ -48,19 +49,38 @@ export function collectRetriedTests(testModules) {
     for (const test of module.children.allTests()) {
       const retryCount = test.diagnostic()?.retryCount ?? 0;
       if (retryCount === 0) continue;
-      const state = test.result().state;
+      const result = test.result();
+      const state = result.state;
       if (state !== 'passed' && state !== 'failed') continue;
+      // A test that passed on retry still carries the failed attempt's error:
+      // the only record of why it was flaky.
+      const errors = errorLines(result.errors);
       tests.push({
         file: toPosix(module.relativeModuleId),
         name: test.fullName,
         line: test.location?.line ?? null,
         state,
         retryCount,
+        ...(errors.length > 0 ? { errors } : {}),
       });
     }
   }
   for (const tests of byProject.values()) sortTests(tests);
   return byProject;
+}
+
+const ERROR_LINES_MAX = 3;
+const ERROR_LINE_CHARS = 300;
+
+/** The first line of each distinct error message, capped. */
+function errorLines(errors) {
+  const lines = [];
+  for (const e of Array.isArray(errors) ? errors : []) {
+    const line = String(e?.message ?? '').split('\n')[0].trim().slice(0, ERROR_LINE_CHARS);
+    if (line && !lines.includes(line)) lines.push(line);
+    if (lines.length === ERROR_LINES_MAX) break;
+  }
+  return lines;
 }
 
 export function sortTests(tests) {
@@ -118,9 +138,12 @@ export function mergeReports(reports) {
       const bucket = t.state === 'passed' ? flaky : t.state === 'failed' ? failed : null;
       if (!bucket) continue;
       const key = `${t.file}\0${t.name}`;
-      const row = bucket.get(key) ?? { file: t.file, name: t.name, line: t.line, seen: 0, where: [] };
+      const row = bucket.get(key) ?? { file: t.file, name: t.name, line: t.line, seen: 0, where: [], errors: [] };
       row.seen += 1;
       if (!row.where.includes(where)) row.where.push(where);
+      for (const e of Array.isArray(t.errors) ? t.errors : []) {
+        if (row.errors.length < ERROR_LINES_MAX && !row.errors.includes(e)) row.errors.push(e);
+      }
       bucket.set(key, row);
     }
   }
@@ -176,7 +199,8 @@ export function renderAnnotations(flaky) {
     const props = [`file=${escapeProperty(t.file)}`];
     if (t.line) props.push(`line=${t.line}`);
     props.push(`title=${escapeProperty('Flaky (passed on retry)')}`);
-    return `::warning ${props.join(',')}::${escapeData(`${t.name} failed, then passed on retry`)}`;
+    const why = t.errors?.[0] ? `: ${t.errors[0]}` : '';
+    return `::warning ${props.join(',')}::${escapeData(`${t.name} failed, then passed on retry${why}`)}`;
   });
 }
 

@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { persisterWritesSettled } from '../versionedFile';
 import type { LedgerEntry } from '../../../shared/ledger';
 import {
   ReclaimedWorkers,
@@ -75,10 +76,11 @@ beforeEach(() => {
   wt = path.join(dir, 'wt');
   fs.mkdirSync(wt);
 });
-afterEach(() => {
-  // A record write a test did not wait for may still land while the folder
-  // goes (ENOTEMPTY): retried.
-  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+afterEach(async () => {
+  // A record write a test did not wait for could still land while the folder
+  // goes (ENOTEMPTY): it is waited for, not retried over.
+  await persisterWritesSettled();
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 function session(over: Partial<WorkerSessionInfo> = {}): WorkerSessionInfo {
@@ -1635,10 +1637,14 @@ describe('the fan-out slot of an ended task, and a record left stopping (F25)', 
     const noticeBot = vi.fn();
     const { ports, note } = reclaimPorts(store, [], { row: () => row('working'), allRows: () => [], noticeBot });
     const off = installWorkerReclaim(ports);
-    await vi.waitFor(() => expect(store.get(TASK)?.stopResolved).toBe(true), { timeout: 10_000 });
+    // The bot hears it last, once the resolved record is on disk: waiting on
+    // the record alone asserted before a slow write had finished (#2434).
+    await vi.waitFor(() => {
+      expect(store.get(TASK)?.stopResolved).toBe(true);
+      expect(noticeBot).toHaveBeenCalledTimes(1);
+    }, { timeout: 10_000 });
     off();
     expect(note.mock.calls.map((call) => call[4]?.code)).toEqual(['worker.stopResolvedResumable']);
-    expect(noticeBot).toHaveBeenCalledTimes(1);
     expect(noticeBot.mock.calls[0][0].body).toContain('was not confirmed, and its Claude has exited since');
     await settled(store);
   });
