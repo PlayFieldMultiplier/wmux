@@ -69,7 +69,10 @@ import type {
 } from '../shared/tokenUsage/profileTypes';
 import type { SurfaceReconcileResult } from '../main/surfaces/reconcile';
 import type {
+  FirstBotRequest,
+  FirstBotResult,
   FirstRunCheckResult,
+  FirstRunFolderCheck,
   RegisterMcpResult,
   SampleTaskStartPayload,
 } from '../shared/firstRun';
@@ -1884,6 +1887,10 @@ const electronAPI = {
       ipcRenderer.invoke(IPC.FIRST_RUN_AGENT_SET_PATH, agent, input) as Promise<SetAgentPathResult>,
     startSampleTask: (payload: SampleTaskStartPayload) =>
       ipcRenderer.invoke(IPC.FIRST_RUN_START_SAMPLE_TASK, payload) as Promise<void>,
+    checkFolder: (folder: string) =>
+      ipcRenderer.invoke(IPC.FIRST_RUN_CHECK_FOLDER, folder) as Promise<FirstRunFolderCheck>,
+    firstBot: (req: FirstBotRequest) =>
+      ipcRenderer.invoke(IPC.FIRST_RUN_FIRST_BOT, req) as Promise<FirstBotResult>,
     onSampleTaskReady: (callback: () => void) => {
       const listener = () => callback();
       ipcRenderer.on(IPC.FIRST_RUN_SAMPLE_TASK_READY, listener);
