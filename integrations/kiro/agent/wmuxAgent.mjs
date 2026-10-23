@@ -58,7 +58,7 @@ const WINDOWS_BARE_PATH = /^[\p{L}\p{M}\p{N}_.\-~+:/\\]+$/u;
  * working directory, or read as an option.
  */
 export function isWindowsBarePath(p) {
-  return WINDOWS_BARE_PATH.test(p) && /^(?:[A-Za-z]:[\\/]|[\\/]{2})/.test(p);
+  return WINDOWS_BARE_PATH.test(p) && /^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/]+[\\/][^\\/]+[\\/])/.test(p);
 }
 
 /**

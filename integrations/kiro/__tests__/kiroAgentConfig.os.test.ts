@@ -129,6 +129,9 @@ describe('buildKiroAgentConfig', () => {
       // Rooted: on whatever drive the hook starts on.
       '/bridge.mjs',
       '\\bridge.mjs',
+      // A UNC path names a server and a share before the file.
+      '//b.mjs',
+      '\\\\server\\b.mjs',
     ]) {
       expect(() => buildKiroAgentConfig(bad, HOME, { platform: 'win32' }), JSON.stringify(bad))
         .toThrow(/no spaces[\s\S]*C:\/wmux-hooks\//);
