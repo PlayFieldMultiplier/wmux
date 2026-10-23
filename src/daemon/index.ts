@@ -9304,6 +9304,14 @@ async function main(): Promise<void> {
     // Remote spawn (receiver side): off until this PC's human opts a PC in.
     const a2aSpawnPolicy = new SpawnPolicyStore({ dir: a2aDir, log: a2aLog });
     const a2aSpawnRequests = new SpawnRequestStore({ dir: a2aDir, log: a2aLog });
+    // A PC removed while a write failed is dropped again on start; only when
+    // both pairing files read, so an unreadable one never clears the opt-ins.
+    if (a2aPeers.usable && a2aRemoteHosts.usable) {
+      const a2aPaired = (hostId: string): boolean =>
+        a2aPeers.list().some((p) => p.hostId === hostId && !p.revokedAt) || a2aRemoteHosts.get(hostId) !== undefined;
+      a2aSpawnPolicy.retainHosts(a2aPaired);
+      a2aSpawnRequests.retainHosts(a2aPaired);
+    }
     const a2aSpawn = new A2aSpawnReceiver({
       policy: a2aSpawnPolicy,
       requests: a2aSpawnRequests,
@@ -9327,6 +9335,11 @@ async function main(): Promise<void> {
         a2aSpawnRequests.forgetHost(hostId);
       } catch (err) {
         a2aLog('error', `[a2a-remote] revoke cascade: spawn requests for ${hostId}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      try {
+        a2aSpawn.forgetHost(hostId);
+      } catch (err) {
+        a2aLog('error', `[a2a-remote] revoke cascade: spawn receiver for ${hostId}: ${err instanceof Error ? err.message : String(err)}`);
       }
       a2aDelivery?.onPeerRevoked(hostId);
     };

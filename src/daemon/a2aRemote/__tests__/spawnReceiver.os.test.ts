@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { A2A_REMOTE_PROTOCOL, type A2aRemoteEnvelope } from '../../../shared/a2aRemote';
+import { A2A_REMOTE_MESSAGE_ID_RE, A2A_REMOTE_PROTOCOL, type A2aRemoteEnvelope } from '../../../shared/a2aRemote';
 import { SPAWN_DECIDED_PER_HOST_MAX, SPAWN_REQUEST_KEEP_MS, SPAWN_TARGETS_LINK_ID } from '../../../shared/a2aSpawn';
 import { A2aTaskService } from '../../a2a/A2aTaskService';
 import { AppendOnlyLog } from '../../eventlog/AppendOnlyLog';
@@ -17,6 +17,8 @@ import { linkAlias } from '../outbound';
 import { A2aSpawnReceiver, registerSpawnRpc, type SpawnReceiverDeps } from '../spawnReceiver';
 import { SpawnPolicyStore, samePath } from '../spawnPolicyStore';
 import { SpawnRequestStore } from '../spawnRequestStore';
+import { CheckBusy, CheckTimeout, SpawnChecks } from '../spawnChecks';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 const HOST = '11111111-1111-4111-8111-111111111111';
 const OTHER = '22222222-2222-4222-8222-222222222222';
@@ -38,6 +40,8 @@ function makeReceiver(over: Partial<SpawnReceiverDeps> = {}): A2aSpawnReceiver {
     enqueue: (hostId, env) => void sent.push({ hostId, env }),
     agentInstalled: async (agent) => installed.has(agent),
     refusalCoalesceMs: 0,
+    // Each receiver its own gate: a check left hanging by one test holds no slot of another.
+    checks: new SpawnChecks(8),
     log: quiet,
     ...over,
   });
@@ -127,12 +131,15 @@ describe('cheap checks: answered ok, refused with a code', () => {
     expect(requests.summaries()).toEqual([]);
   });
 
-  it('refusals of requests that are not stored answer once per code per PC per window', async () => {
+  it('every refused request gets its own answer; a resend of the same one is answered once per window', async () => {
     const coalescing = makeReceiver({ refusalCoalesceMs: 60_000 });
-    for (let i = 0; i < 5; i++) expect(coalescing.applyInbound(envelope(), { hostId: HOST })).toEqual({ ok: true, duplicate: false });
-    expect(sent).toHaveLength(1);
-    expect(coalescing.applyInbound(envelope(), { hostId: OTHER })).toEqual({ ok: true, duplicate: false });
-    expect(sent).toHaveLength(2);
+    const envs = [envelope(), envelope(), envelope()];
+    for (const env of envs) expect(coalescing.applyInbound(env, { hostId: HOST })).toEqual({ ok: true, duplicate: false });
+    expect(envs.map((e) => resultsFor(e).map((r) => r.env.spawnResult?.code))).toEqual([['not-allowed'], ['not-allowed'], ['not-allowed']]);
+    for (let i = 0; i < 4; i++) expect(coalescing.applyInbound(envs[0], { hostId: HOST })).toEqual({ ok: true, duplicate: false });
+    expect(resultsFor(envs[0])).toHaveLength(1);
+    expect(coalescing.applyInbound(envs[0], { hostId: OTHER })).toEqual({ ok: true, duplicate: false });
+    expect(sent.filter((r) => r.hostId === OTHER)).toHaveLength(1);
   });
 
   it('a refusal that cannot be queued is answered unavailable, so the asker sends it again', () => {
@@ -204,7 +211,7 @@ describe('the decision', () => {
 
   it('a check that never answers ends the request as failed instead of holding its place', async () => {
     await allowHost();
-    const stalled = makeReceiver({ agentInstalled: () => new Promise(() => undefined), checkTimeoutMs: 30 });
+    const stalled = makeReceiver({ agentInstalled: () => new Promise(() => undefined), checks: new SpawnChecks(8, 30) });
     expect(await decide(envelope(), HOST, stalled)).toBe('failed');
     expect(requests.pendingCount(HOST)).toBe(0);
   });
@@ -249,6 +256,127 @@ describe('the decision', () => {
   });
 });
 
+describe('retries, removal and bounded checks', () => {
+  it('an outcome that could not be stored is settled again later, and the decision leaves no slot behind', async () => {
+    await allowHost();
+    let fails = 1;
+    const flakyStore: SpawnReceiverDeps['requests'] = {
+      get: (h, id) => requests.get(h, id),
+      receive: (h, r) => requests.receive(h, r),
+      decide: (h, id, code) => {
+        if (fails-- > 0) throw new Error('disk full');
+        return requests.decide(h, id, code);
+      },
+      pending: () => requests.pending(),
+      pendingCount: (h) => requests.pendingCount(h),
+      markSent: (h, id) => requests.markSent(h, id),
+      unsent: () => requests.unsent(),
+    };
+    const r = makeReceiver({ requests: flakyStore, retryMinMs: 20 });
+    const env = envelope();
+    expect(r.applyInbound(env, { hostId: HOST })).toEqual({ ok: true, duplicate: false });
+    await r.idle();
+    expect(resultsFor(env)).toEqual([]);
+    expect(requests.get(HOST, env.linkId)?.state).toBe('pending');
+    await vi.waitFor(() => expect(resultsFor(env)[0]?.env.spawnResult?.code).toBe('not-supported'), { timeout: 5_000 });
+    expect(requests.get(HOST, env.linkId)?.state).toBe('decided');
+    r.stop();
+  });
+
+  it('a busy check gate keeps the request pending and tries again; stop() ends the retries', async () => {
+    await allowHost();
+    const gate = new SpawnChecks(1, 60_000);
+    let hold!: () => void;
+    void gate.run(() => new Promise<void>((res) => { hold = res; }));
+    const r = makeReceiver({ checks: gate, retryMinMs: 20 });
+    const env = envelope();
+    r.applyInbound(env, { hostId: HOST });
+    await r.idle();
+    expect(requests.get(HOST, env.linkId)?.state).toBe('pending');
+    hold();
+    await vi.waitFor(() => expect(resultsFor(env)[0]?.env.spawnResult?.code).toBe('not-supported'), { timeout: 5_000 });
+
+    const gate2 = new SpawnChecks(1, 60_000);
+    let hold2!: () => void;
+    void gate2.run(() => new Promise<void>((res) => { hold2 = res; }));
+    const stopped = makeReceiver({ checks: gate2, retryMinMs: 20 });
+    const later = envelope();
+    stopped.applyInbound(later, { hostId: HOST });
+    await stopped.idle();
+    stopped.stop();
+    hold2();
+    await deliberateSleep(150, 'proves a negative: no retry fires after stop(), though the gate is free again');
+    expect(resultsFor(later)).toEqual([]);
+  });
+
+  it('a removed PC leaves nothing in memory: no retry runs, and its targets start over at v1', async () => {
+    await allowHost();
+    const gate = new SpawnChecks(1, 60_000);
+    let hold!: () => void;
+    void gate.run(() => new Promise<void>((res) => { hold = res; }));
+    const r = makeReceiver({ checks: gate, retryMinMs: 20 });
+    const env = envelope();
+    r.applyInbound(env, { hostId: HOST });
+    await r.idle();
+    // Only the receiver forgets here: its waiting retry must go with it.
+    r.forgetHost(HOST);
+    hold();
+    await deliberateSleep(150, 'proves a negative: the removed PC\'s retry never fires, though the gate is free again');
+    expect(resultsFor(env)).toEqual([]);
+    expect(requests.get(HOST, env.linkId)?.state).toBe('pending');
+
+    const got: number[] = [];
+    const asker = makeReceiver({ onTargets: (_h, t) => got.push(t.version) });
+    const targets = (version: number): A2aRemoteEnvelope => ({
+      protocol: A2A_REMOTE_PROTOCOL, linkId: SPAWN_TARGETS_LINK_ID, linkVersion: 0, messageId: `st-${version}`, kind: 'link',
+      link: { state: 'spawn-targets', version: 0 }, spawnTargets: { v: 1, version, roots: [], agents: [] }, sentAt: new Date().toISOString(),
+    });
+    asker.applyInbound(targets(5), { hostId: HOST });
+    asker.forgetHost(HOST);
+    asker.applyInbound(targets(1), { hostId: HOST });
+    expect(got).toEqual([5, 1]);
+  });
+
+  it('a sub that could leave the root is refused before any disk check', async () => {
+    await allowHost();
+    const env = envelope();
+    // Stored as given (a file from another build): never parsed through the wire.
+    requests.receive(HOST, { ...env.spawn!, folder: { root: 'web', sub: '../outside' } } as never);
+    const touched: string[] = [];
+    const r = makeReceiver({ realpath: async (p) => { touched.push(p); return p; }, isDirectory: async () => true });
+    r.recover();
+    await r.idle();
+    expect(resultsFor(env)[0]?.env.spawnResult?.code).toBe('folder-not-allowed');
+    expect(touched).toEqual([]);
+  });
+
+  it('a check that times out keeps its slot until it really returns; past the cap a check is refused at once', async () => {
+    const gate = new SpawnChecks(2, 20);
+    let finish!: () => void;
+    await expect(gate.run(() => new Promise<void>((res) => { finish = res; }))).rejects.toBeInstanceOf(CheckTimeout);
+    expect(gate.running).toBe(1);
+    void gate.run(() => new Promise(() => undefined)).catch(() => undefined);
+    await expect(gate.run(async () => 1)).rejects.toBeInstanceOf(CheckBusy);
+    finish();
+    await vi.waitFor(() => expect(gate.running).toBe(1), { timeout: 5_000 });
+    await expect(gate.run(async () => 1)).resolves.toBe(1);
+  });
+
+  it('only "not there" errors refuse a folder; others keep the request pending', async () => {
+    await allowHost();
+    const err = (code: string): Error => Object.assign(new Error(code), { code });
+    const missing = makeReceiver({ realpath: async (p) => { if (p !== repo) throw err('ENOENT'); return p; } });
+    expect(await decide(envelope({ spawn: { folder: { root: 'web', sub: 'gone' } } }), HOST, missing)).toBe('folder-not-allowed');
+    const busy = makeReceiver({ realpath: async (p) => { if (p !== repo) throw err('EMFILE'); return p; }, retryMinMs: 60_000 });
+    const env = envelope({ spawn: { folder: { root: 'web', sub: 'apps' } } });
+    busy.applyInbound(env, { hostId: HOST });
+    await busy.idle();
+    expect(resultsFor(env)).toEqual([]);
+    expect(requests.get(HOST, env.linkId)?.state).toBe('pending');
+    busy.stop();
+  });
+});
+
 describe('replay, resend and room', () => {
   it('every result is its own message: one id per request and outcome', async () => {
     await allowHost();
@@ -256,21 +384,47 @@ describe('replay, resend and room', () => {
     const b = envelope();
     await decide(a);
     await decide(b);
+    // A resend of the answer is a message of its own too, so nothing on the way takes it for the first.
+    expect(receiver.applyInbound(a, { hostId: HOST })).toEqual({ ok: true, duplicate: true });
     const ids = sent.map((s) => s.env.messageId);
-    expect(new Set(ids).size).toBe(2);
-    expect(ids[0]).toBe(`res-${a.linkId}-not-supported`);
+    expect(ids).toHaveLength(3);
+    expect(new Set(ids).size).toBe(3);
+    for (const id of ids) expect(id).toMatch(A2A_REMOTE_MESSAGE_ID_RE);
+    // `_` is in neither a spawnId nor a code: the id splits back into exactly the two.
+    const [tag, spawnId, code] = ids[0].split('_');
+    expect([tag, spawnId, code]).toEqual(['res', a.linkId, 'not-supported']);
+    expect(ids[2].split('_').slice(0, 3)).toEqual(['res', a.linkId, 'not-supported']);
   });
 
   it('a resend gets the stored answer again (the first may have been lost); another body under the same id is a conflict', async () => {
     await allowHost();
     const env = envelope();
     await decide(env);
-    // Even with the PC turned off since, the stored outcome is what it gets.
-    await allowHost({ enabled: false });
     expect(receiver.applyInbound(env, { hostId: HOST })).toEqual({ ok: true, duplicate: true });
     expect(resultsFor(env).map((s) => s.env.spawnResult?.code)).toEqual(['not-supported', 'not-supported']);
     const other = envelope({ spawn: { spawnId: env.linkId, text: 'something else' } });
     expect(receiver.applyInbound(other, { hostId: HOST })).toEqual({ ok: false, error: 'conflict' });
+  });
+
+  it('a PC no longer allowed learns nothing from a resend: not-allowed, answered once per window', async () => {
+    await allowHost();
+    const coalescing = makeReceiver({ refusalCoalesceMs: 60_000 });
+    const env = envelope();
+    await decide(env, HOST, coalescing);
+    await allowHost({ enabled: false });
+    for (let i = 0; i < 5; i++) expect(coalescing.applyInbound(env, { hostId: HOST })).toEqual({ ok: true, duplicate: false });
+    expect(resultsFor(env).map((s) => s.env.spawnResult?.code)).toEqual(['not-supported', 'not-allowed']);
+  });
+
+  it('a resend of a stored answer is coalesced, and one the outbox will not take is unavailable', async () => {
+    await allowHost();
+    const r = makeReceiver({ refusalCoalesceMs: 60_000 });
+    const env = envelope();
+    await decide(env, HOST, r);
+    for (let i = 0; i < 3; i++) expect(r.applyInbound(env, { hostId: HOST })).toEqual({ ok: true, duplicate: true });
+    expect(resultsFor(env)).toHaveLength(1);
+    const later = makeReceiver({ enqueue: () => { throw new Error('outbox full'); } });
+    expect(later.applyInbound(env, { hostId: HOST })).toEqual({ ok: false, error: 'unavailable' });
   });
 
   it('a pending request nobody is deciding (after a restart) is decided on its resend; one decided but never sent goes out on recover', async () => {
@@ -294,7 +448,7 @@ describe('replay, resend and room', () => {
 
   it('at most 3 pending per PC: the next one is refused as rate-limited', async () => {
     await allowHost();
-    const hang = makeReceiver({ agentInstalled: () => new Promise(() => undefined), checkTimeoutMs: 60_000 });
+    const hang = makeReceiver({ agentInstalled: () => new Promise(() => undefined), checks: new SpawnChecks(8, 60_000) });
     for (let i = 0; i < 3; i++) expect(hang.applyInbound(envelope(), { hostId: HOST })).toEqual({ ok: true, duplicate: false });
     const fourth = envelope();
     expect(hang.applyInbound(fourth, { hostId: HOST })).toEqual({ ok: true, duplicate: false });
@@ -419,6 +573,28 @@ describe('SpawnPolicyStore', () => {
     releaseTop();
     expect(await pending).toMatchObject({ ok: false, conflict: true });
     expect(slow.get().hosts[HOST]).toBeUndefined();
+  });
+
+  it('a folder that does not answer fails its save in time, and the next save still runs', async () => {
+    let hang = true;
+    const slow = new SpawnPolicyStore({
+      dir: a2aDir, scheduleHarden: quiet, checks: new SpawnChecks(8, 30),
+      realpath: (p) => (hang ? new Promise(() => undefined) : fs.promises.realpath(p)),
+    });
+    const base = { ...slow.get(), roots: [{ id: 'web', label: 'Web', path: repo }] };
+    expect(await slow.set(base)).toMatchObject({ ok: false, error: 'Web: the folder did not answer in time' });
+    hang = false;
+    expect(await slow.set(base)).toMatchObject({ ok: true });
+  });
+
+  it('on start, PCs no longer paired are dropped from the policy and the requests', async () => {
+    await allowHost();
+    requests.receive(HOST, { ...envelope().spawn! });
+    expect(policy.retainHosts((h) => h !== HOST)).toBe(true);
+    expect(policy.get().hosts).toEqual({});
+    expect(requests.retainHosts((h) => h !== HOST)).toBe(1);
+    expect(new SpawnRequestStore({ dir: a2aDir, scheduleHarden: quiet }).summaries()).toEqual([]);
+    expect(policy.retainHosts(() => true)).toBe(false);
   });
 
   it('a removed PC is no longer allowed even when the file cannot be written', async () => {

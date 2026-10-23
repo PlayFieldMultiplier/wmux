@@ -6,6 +6,7 @@ import { scheduleTokenFileReHarden } from '../../shared/security';
 import { getExecEnv } from '../../shared/execEnv';
 import { coerceSpawnPolicy, defaultSpawnPolicy, type A2aSpawnPolicySetResult, type A2aSpawnPolicyV1 } from '../../shared/a2aSpawn';
 import type { HostId } from '../../shared/a2aRemote';
+import { CheckBusy, CheckTimeout, spawnChecks, type SpawnChecks } from './spawnChecks';
 import { loadStore, storeUnavailable, type StoreLog } from './storeFile';
 
 /**
@@ -37,6 +38,7 @@ export interface SpawnPolicyStoreOptions {
   scheduleHarden?: (filePath: string) => void;
   repoToplevel?: RepoToplevel;
   realpath?: (p: string) => Promise<string>;
+  checks?: SpawnChecks;
 }
 
 export class SpawnPolicyStore {
@@ -46,6 +48,7 @@ export class SpawnPolicyStore {
   private readonly scheduleHarden: (filePath: string) => void;
   private readonly repoToplevel: RepoToplevel;
   private readonly realpath: (p: string) => Promise<string>;
+  private readonly checks: SpawnChecks;
   private policy: A2aSpawnPolicyV1;
   private writable: boolean;
 
@@ -56,6 +59,7 @@ export class SpawnPolicyStore {
     this.scheduleHarden = opts.scheduleHarden ?? scheduleTokenFileReHarden;
     this.repoToplevel = opts.repoToplevel ?? gitToplevel;
     this.realpath = opts.realpath ?? ((p) => fs.promises.realpath(p));
+    this.checks = opts.checks ?? spawnChecks;
     const loaded = loadStore({
       filePath: this.filePath,
       fileName: SPAWN_POLICY_FILE,
@@ -90,19 +94,29 @@ export class SpawnPolicyStore {
 
   /** A paired PC was removed: it is no longer allowed and its rules go (a re-pair starts from nothing). */
   forgetHost(hostId: HostId): boolean {
-    const had = hostId in this.policy.hosts || this.policy.rules.some((r) => r.hostId === hostId);
-    if (!had) return false;
+    return this.retainHosts((h) => h !== hostId, `forgetting ${hostId}`);
+  }
+
+  /**
+   * Keep only the PCs `paired` still knows, e.g. on start: a removal whose
+   * write failed before a restart is applied again here.
+   *
+   * Memory first: the live policy stops allowing a removed PC even when the
+   * file cannot be written. That is logged, and the next write (a save, or
+   * this on the next start) writes the whole policy again.
+   */
+  retainHosts(paired: (hostId: HostId) => boolean, why = 'dropping PCs no longer paired'): boolean {
+    const gone = new Set([...Object.keys(this.policy.hosts), ...this.policy.rules.map((r) => r.hostId)].filter((h) => !paired(h)));
+    if (gone.size === 0) return false;
     const hosts = { ...this.policy.hosts };
-    delete hosts[hostId];
-    // Memory first: the live policy stops allowing that PC even when the
-    // file cannot be written (it is then logged, and the next save retries).
+    for (const h of gone) delete hosts[h];
     this.policy = {
       ...this.policy,
       hosts,
-      rules: this.policy.rules.filter((r) => r.hostId !== hostId),
+      rules: this.policy.rules.filter((r) => !gone.has(r.hostId)),
       version: this.policy.version + 1,
     };
-    this.persist(`forgetting ${hostId}`);
+    this.persist(why);
     return true;
   }
 
@@ -116,13 +130,18 @@ export class SpawnPolicyStore {
     const roots: A2aSpawnPolicyV1['roots'] = [];
     for (const root of next.roots) {
       if (!path.isAbsolute(root.path)) return { ok: false, error: `${root.label}: the folder must be an absolute path` };
+      // Bounded like a request's checks: a folder on a mount that does not
+      // answer fails this save instead of holding up every later one.
       let real: string;
+      let top: string | null;
       try {
-        real = await this.realpath(root.path);
-      } catch {
+        real = await this.checks.run(() => this.realpath(root.path));
+        top = await this.checks.run(() => this.repoToplevel(real));
+      } catch (err) {
+        if (err instanceof CheckTimeout) return { ok: false, error: `${root.label}: the folder did not answer in time` };
+        if (err instanceof CheckBusy) return { ok: false, error: 'other folder checks are still running; try again shortly' };
         return { ok: false, error: `${root.label}: the folder does not exist` };
       }
-      const top = await this.repoToplevel(real);
       if (top === null || !samePath(top, real)) return { ok: false, error: `${root.label}: the folder must be the top level of a git repository` };
       roots.push({ ...root, path: real });
     }

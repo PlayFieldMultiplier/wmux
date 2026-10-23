@@ -193,7 +193,16 @@ export class SpawnRequestStore {
    * a write that fails is logged. Returns the pending ones dropped.
    */
   forgetHost(hostId: HostId): number {
-    const gone = [...this.records.values()].filter((r) => r.hostId === hostId);
+    return this.retainHosts((h) => h !== hostId, `forgetting ${hostId}`);
+  }
+
+  /**
+   * Keep only the requests of PCs `paired` still knows, e.g. on start: a
+   * removal whose write failed before a restart is applied again here. A
+   * failed write is logged; the next write writes every record again.
+   */
+  retainHosts(paired: (hostId: HostId) => boolean, why = 'dropping PCs no longer paired'): number {
+    const gone = [...this.records.values()].filter((r) => !paired(r.hostId));
     if (gone.length === 0) return 0;
     for (const r of gone) this.records.delete(key(r.hostId, r.spawnId));
     try {
@@ -201,7 +210,7 @@ export class SpawnRequestStore {
       this.write(this.filePath, { v: 1, records: [...this.records.values()] });
       this.scheduleHarden(this.filePath);
     } catch (err) {
-      this.log('error', `[a2a-remote] ${SPAWN_REQUESTS_FILE}: not saved after forgetting ${hostId}: ${err instanceof Error ? err.message : String(err)}`);
+      this.log('error', `[a2a-remote] ${SPAWN_REQUESTS_FILE}: not saved after ${why}: ${err instanceof Error ? err.message : String(err)}`);
     }
     return gone.filter((r) => r.state === 'pending').length;
   }

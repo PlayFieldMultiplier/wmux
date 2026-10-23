@@ -7,6 +7,7 @@ import {
   A2A_SPAWN_RPC,
   SPAWN_TARGETS_LINK_ID,
   isFinalSpawnCode,
+  normalizeSpawnSub,
   parseSpawnRequest,
   parseSpawnResult,
   parseSpawnTargets,
@@ -22,6 +23,7 @@ import { sanitizeRemoteMessage } from '../../shared/a2aRemoteDelivery';
 import { whichOnPath } from '../web/agentLaunch';
 import type { SpawnPolicyStore } from './spawnPolicyStore';
 import { samePath } from './spawnPolicyStore';
+import { CheckTimeout, notThere, spawnChecks, type SpawnChecks } from './spawnChecks';
 import { spawnFingerprint, type SpawnRequestRecordV1, type SpawnRequestStore } from './spawnRequestStore';
 import { errMsg, isPlainObject } from './storeFile';
 
@@ -36,9 +38,9 @@ import { errMsg, isPlainObject } from './storeFile';
  * nothing that waits ever holds up the transport.
  *
  * Order of the checks, so a PC that may not ask learns nothing else:
- *   0. a request already here: its stored outcome is sent again (or its
- *      decision resumed); the same id with another body is a `conflict`
  *   1. this PC opted in (feature on, host allowed)  else `not-allowed`
+ *   -- a request already here: its stored outcome is sent again (or its
+ *      decision resumed); the same id with another body is a `conflict`
  *   2. B's clock window (`spawnClockOk`)              else `expired`
  *   3. room (pending per PC, records kept)            else `rate-limited`
  *   -- answered `ok` here; then, decided:
@@ -46,11 +48,13 @@ import { errMsg, isPlainObject } from './storeFile';
  *   5. the agent is installed                         else `agent-not-installed`
  *   6. the root is listed, still resolves to itself,
  *      and root + sub stays inside it, as a folder    else `folder-not-allowed`
- *   7. the policy, read again after those waits
+ *   7. the policy and the expiry, read again after those waits
  *   8. nothing starts a spawn in this build           `not-supported`
  *
- * Each disk or PATH check is bounded (`SPAWN_CHECK_TIMEOUT_MS`; past it the
- * request ends `failed`). Any other error keeps the request pending and
+ * The same answer to the same request goes out at most once per
+ * `SPAWN_REFUSAL_COALESCE_MS`. Each disk or PATH check goes through
+ * `spawnChecks` (bounded in time, and in number process-wide; past the time
+ * the request ends `failed`). Any other error keeps the request pending and
  * tries again later, until it expires.
  *
  * Receiving a result or targets (this PC is A): handed on only for a request
@@ -59,14 +63,14 @@ import { errMsg, isPlainObject } from './storeFile';
 
 /** Pending requests one PC may have here at once. */
 export const SPAWN_PENDING_PER_HOST_MAX = 3;
-/** Requests refused before they are stored: one answer per code per PC in this window. */
+/** The same answer to the same request of one PC is sent at most once in this window. */
 export const SPAWN_REFUSAL_COALESCE_MS = 60_000;
-/** One disk or PATH check of a decision. */
-export const SPAWN_CHECK_TIMEOUT_MS = 10_000;
 const RETRY_MIN_MS = 5_000;
 const RETRY_MAX_MS = 5 * 60_000;
 /** Final answers this PC remembers having handed on (as A). */
 const ANSWERED_MAX = 1000;
+/** Recent answers remembered for coalescing. */
+const ANSWERED_RECENTLY_MAX = 1000;
 
 export interface SpawnReceiverDeps {
   policy: Pick<SpawnPolicyStore, 'get'>;
@@ -76,6 +80,7 @@ export interface SpawnReceiverDeps {
   /** Whether this PC can run `agent` (its launcher on the login PATH). */
   agentInstalled?: (agent: AgentSlug) => Promise<boolean>;
   realpath?: (p: string) => Promise<string>;
+  /** Whether `p` is a folder; rejects with the stat error when it cannot tell. */
   isDirectory?: (p: string) => Promise<boolean>;
   /** As A: a request this PC sent to `hostId` that is still waiting for an answer. None yet in this build. */
   isOutstanding?: (hostId: HostId, spawnId: string) => boolean;
@@ -84,7 +89,7 @@ export interface SpawnReceiverDeps {
   onTargets?: (hostId: HostId, targets: A2aSpawnTargetsV1) => void;
   now?: () => number;
   /** Test seams. */
-  checkTimeoutMs?: number;
+  checks?: SpawnChecks;
   retryMinMs?: number;
   refusalCoalesceMs?: number;
   log: (level: 'info' | 'warn' | 'error', msg: string) => void;
@@ -97,7 +102,8 @@ export function isSpawnEnvelope(env: A2aRemoteEnvelope): env is A2aRemoteEnvelop
   return s === 'spawn' || s === 'spawn-result' || s === 'spawn-targets';
 }
 
-class CheckTimeout extends Error {}
+const OK: A2aRemoteDeliverResponse = { ok: true, duplicate: false };
+const UNAVAILABLE: A2aRemoteDeliverResponse = { ok: false, error: 'unavailable' };
 
 export class A2aSpawnReceiver {
   private readonly deps: SpawnReceiverDeps;
@@ -105,15 +111,19 @@ export class A2aSpawnReceiver {
   private readonly agentInstalled: (agent: AgentSlug) => Promise<boolean>;
   private readonly realpath: (p: string) => Promise<string>;
   private readonly isDirectory: (p: string) => Promise<boolean>;
-  private readonly checkTimeoutMs: number;
+  private readonly checks: SpawnChecks;
   private readonly retryMinMs: number;
   private readonly refusalCoalesceMs: number;
+  /** Makes every result's message id new, across restarts too. */
+  private readonly boot: string;
+  private sends = 0;
+  private stopped = false;
   /** Decisions in flight, by host:spawnId, so one is never decided twice at once. */
   private readonly deciding = new Map<string, Promise<void>>();
   /** Decisions waiting to try again, by host:spawnId. */
   private readonly retries = new Map<string, ReturnType<typeof setTimeout>>();
-  /** When each (host, code) refusal was last answered. */
-  private readonly refusedAt = new Map<string, number>();
+  /** When each answer (host:spawnId:code) was last sent. */
+  private readonly answeredAt = new Map<string, number>();
   /** As A: host:spawnId whose final answer was handed on. */
   private readonly answered = new Set<string>();
   /** As A: the newest targets version each PC sent. */
@@ -124,10 +134,11 @@ export class A2aSpawnReceiver {
     this.now = deps.now ?? Date.now;
     this.agentInstalled = deps.agentInstalled ?? agentOnPath;
     this.realpath = deps.realpath ?? ((p) => fs.promises.realpath(p));
-    this.isDirectory = deps.isDirectory ?? ((p) => fs.promises.stat(p).then((s) => s.isDirectory(), () => false));
-    this.checkTimeoutMs = deps.checkTimeoutMs ?? SPAWN_CHECK_TIMEOUT_MS;
+    this.isDirectory = deps.isDirectory ?? ((p) => fs.promises.stat(p).then((s) => s.isDirectory()));
+    this.checks = deps.checks ?? spawnChecks;
     this.retryMinMs = deps.retryMinMs ?? RETRY_MIN_MS;
     this.refusalCoalesceMs = deps.refusalCoalesceMs ?? SPAWN_REFUSAL_COALESCE_MS;
+    this.boot = this.now().toString(36);
   }
 
   /** One spawn envelope from an authenticated peer. Never waits on a decision. */
@@ -138,7 +149,7 @@ export class A2aSpawnReceiver {
       const result = parseSpawnResult(env.spawnResult);
       if (!result || result.spawnId !== env.linkId) return { ok: false, error: 'bad-request' };
       this.takeResult(peer.hostId, result);
-      return { ok: true, duplicate: false };
+      return OK;
     }
     if (state === 'spawn-targets') {
       const targets = parseSpawnTargets(env.spawnTargets);
@@ -147,7 +158,7 @@ export class A2aSpawnReceiver {
         this.targetsVersion.set(peer.hostId, targets.version);
         this.deps.onTargets?.(peer.hostId, targets);
       }
-      return { ok: true, duplicate: false };
+      return OK;
     }
     // The prompt reaches a terminal later: control characters and escape
     // sequences go first, and only then is it checked for being empty.
@@ -180,12 +191,27 @@ export class A2aSpawnReceiver {
     for (const rec of this.deps.requests.unsent()) this.sendDecided(rec);
   }
 
+  /**
+   * A paired PC was removed: whatever this receiver keeps for it in memory
+   * goes too, so a re-paired PC starts from nothing (its targets from v1).
+   * A decision already running ends without an answer: its record is gone.
+   */
+  forgetHost(hostId: HostId): void {
+    const mine = (k: string): boolean => k.startsWith(`${hostId}:`);
+    for (const [k, t] of this.retries) if (mine(k)) { clearTimeout(t); this.retries.delete(k); }
+    for (const k of [...this.deciding.keys()]) if (mine(k)) this.deciding.delete(k);
+    for (const k of [...this.answeredAt.keys()]) if (mine(k)) this.answeredAt.delete(k);
+    for (const k of [...this.answered]) if (mine(k)) this.answered.delete(k);
+    this.targetsVersion.delete(hostId);
+  }
+
   /** Settle every decision in flight (tests). Retries waiting on a timer are not waited for. */
   async idle(): Promise<void> {
     while (this.deciding.size > 0) await Promise.all([...this.deciding.values()]);
   }
 
   stop(): void {
+    this.stopped = true;
     for (const t of this.retries.values()) clearTimeout(t);
     this.retries.clear();
   }
@@ -193,21 +219,22 @@ export class A2aSpawnReceiver {
   // --- B: requests --------------------------------------------------------------
 
   private receive(hostId: HostId, req: A2aSpawnRequestV1, sentAt: string): A2aRemoteDeliverResponse {
+    // A PC that may not ask learns nothing else, not even what it asked before.
+    const policy = this.deps.policy.get();
+    if (!spawnHostAllowed(policy, hostId)) return this.refuse(hostId, req.spawnId, 'not-allowed');
+
     // A request already here is answered from what was stored, whatever the
-    // policy or the clock says now: the asker may have lost the first answer.
+    // clock says now: the asker may have lost the first answer.
     const known = this.deps.requests.get(hostId, req.spawnId);
     if (known) {
       if (known.fingerprint !== spawnFingerprint(req)) return { ok: false, error: 'conflict' };
-      this.resume(known);
-      return { ok: true, duplicate: true };
+      return this.resume(known);
     }
 
     // A request refused here is not stored: a PC that may not ask cannot
     // grow this PC's files. Its resend is refused the same way again.
-    const policy = this.deps.policy.get();
     let refused: A2aSpawnCode | undefined;
-    if (!spawnHostAllowed(policy, hostId)) refused = 'not-allowed';
-    else if (!spawnClockOk(sentAt, req.expiresAt, this.now())) refused = 'expired';
+    if (!spawnClockOk(sentAt, req.expiresAt, this.now())) refused = 'expired';
     else if (this.deps.requests.pendingCount(hostId) >= SPAWN_PENDING_PER_HOST_MAX) refused = 'rate-limited';
     if (refused) return this.refuse(hostId, req.spawnId, refused);
 
@@ -216,55 +243,59 @@ export class A2aSpawnReceiver {
       got = this.deps.requests.receive(hostId, req);
     } catch (err) {
       this.deps.log('warn', `[a2a-remote] spawn request from ${hostId} not stored: ${errMsg(err)}`);
-      return { ok: false, error: 'unavailable' };
+      return UNAVAILABLE;
     }
     if (got.kind === 'conflict') return { ok: false, error: 'conflict' };
-    if (got.kind === 'duplicate') {
-      this.resume(got.rec);
-      return { ok: true, duplicate: true };
-    }
+    if (got.kind === 'duplicate') return this.resume(got.rec);
     if (got.kind === 'full') return this.refuse(hostId, req.spawnId, 'rate-limited');
     this.deps.log('info', `[a2a-remote] spawn request ${req.spawnId} from ${hostId}: agent ${req.agent}, root ${req.folder.root}`);
     this.scheduleDecide(hostId, req.spawnId);
-    return { ok: true, duplicate: false };
+    return OK;
   }
 
   /**
-   * Answer a request that is not stored. At most one answer per code per PC
-   * per `SPAWN_REFUSAL_COALESCE_MS`, so refused requests cannot fill the
-   * outbox; one that could not be queued is `unavailable`, and resent.
+   * Answer a request that is not stored. A resend of the same request gets
+   * the same answer at most once per `SPAWN_REFUSAL_COALESCE_MS`; one that
+   * could not be queued is `unavailable`, so the asker sends it again.
    */
   private refuse(hostId: HostId, spawnId: string, code: A2aSpawnCode): A2aRemoteDeliverResponse {
     this.deps.log('info', `[a2a-remote] spawn request ${spawnId} from ${hostId}: ${code}`);
-    const k = `${hostId}:${code}`;
-    const last = this.refusedAt.get(k);
-    if (last !== undefined && this.now() - last < this.refusalCoalesceMs) return { ok: true, duplicate: false };
-    if (!this.sendResult(hostId, { v: 1, spawnId, code })) return { ok: false, error: 'unavailable' };
-    this.refusedAt.set(k, this.now());
-    return { ok: true, duplicate: false };
+    if (this.answeredRecently(hostId, spawnId, code)) return OK;
+    return this.sendResult(hostId, { v: 1, spawnId, code }) ? OK : UNAVAILABLE;
   }
 
-  /** A request already stored: send its outcome again, or make sure it is being decided. */
-  private resume(rec: SpawnRequestRecordV1): void {
-    if (rec.state === 'decided') this.sendDecided(rec);
-    else this.scheduleDecide(rec.hostId, rec.spawnId);
+  /** A request already stored: send its outcome again (coalesced), or make sure it is being decided. */
+  private resume(rec: SpawnRequestRecordV1): A2aRemoteDeliverResponse {
+    if (rec.state === 'pending') {
+      this.scheduleDecide(rec.hostId, rec.spawnId);
+      return { ok: true, duplicate: true };
+    }
+    if (rec.code && this.answeredRecently(rec.hostId, rec.spawnId, rec.code)) return { ok: true, duplicate: true };
+    return this.sendDecided(rec) ? { ok: true, duplicate: true } : UNAVAILABLE;
   }
 
-  private sendDecided(rec: SpawnRequestRecordV1): void {
-    if (!rec.code) return;
-    if (!this.sendResult(rec.hostId, { v: 1, spawnId: rec.spawnId, code: rec.code })) return;
+  private answeredRecently(hostId: HostId, spawnId: string, code: A2aSpawnCode): boolean {
+    const last = this.answeredAt.get(`${hostId}:${spawnId}:${code}`);
+    return last !== undefined && this.now() - last < this.refusalCoalesceMs;
+  }
+
+  private sendDecided(rec: SpawnRequestRecordV1): boolean {
+    if (!rec.code) return false;
+    if (!this.sendResult(rec.hostId, { v: 1, spawnId: rec.spawnId, code: rec.code })) return false;
     try {
       this.deps.requests.markSent(rec.hostId, rec.spawnId);
     } catch (err) {
       this.deps.log('warn', `[a2a-remote] spawn request ${rec.spawnId} from ${rec.hostId}: sent, not marked: ${errMsg(err)}`);
     }
+    return true;
   }
 
   private scheduleDecide(hostId: HostId, spawnId: string, attempt = 0): void {
+    if (this.stopped) return;
     const k = `${hostId}:${spawnId}`;
     if (this.deciding.has(k) || (attempt === 0 && this.retries.has(k))) return;
     this.retries.delete(k);
-    const run = (async () => {
+    const run: Promise<void> = (async () => {
       let code: A2aSpawnCode;
       try {
         code = await this.decide(hostId, spawnId);
@@ -276,25 +307,33 @@ export class A2aSpawnReceiver {
         this.deps.log('warn', `[a2a-remote] spawn request ${spawnId} from ${hostId}: a check did not answer in time`);
         code = 'failed';
       }
-      this.settle(hostId, spawnId, code);
-    })().finally(() => this.deciding.delete(k));
+      this.settle(hostId, spawnId, code, attempt);
+    })().finally(() => {
+      // Cleared whatever happened, so a retry is never turned away as "already deciding".
+      if (this.deciding.get(k) === run) this.deciding.delete(k);
+    });
     this.deciding.set(k, run);
   }
 
-  /** An unexpected error: the request stays pending and is tried again, until it expires. */
+  /**
+   * An error that may pass (a busy or failing disk, an outcome not stored):
+   * the request stays pending and is tried again later; once it has expired
+   * it ends `expired`.
+   */
   private retryLater(hostId: HostId, spawnId: string, attempt: number, err: unknown): void {
+    if (this.stopped) return;
     const rec = this.deps.requests.get(hostId, spawnId);
     if (!rec || rec.state !== 'pending') return;
-    if (this.now() > Date.parse(rec.expiresAt)) {
-      this.settle(hostId, spawnId, 'expired');
-      return;
-    }
     const delay = Math.min(this.retryMinMs * 2 ** attempt, RETRY_MAX_MS);
-    this.deps.log('warn', `[a2a-remote] spawn request ${spawnId} from ${hostId}: deciding failed, trying again in ${Math.round(delay / 1000)}s: ${errMsg(err)}`);
+    this.deps.log('warn', `[a2a-remote] spawn request ${spawnId} from ${hostId}: not decided yet, trying again in ${Math.round(delay / 1000)}s: ${errMsg(err)}`);
     const k = `${hostId}:${spawnId}`;
+    clearTimeout(this.retries.get(k));
     const t = setTimeout(() => {
       this.retries.delete(k);
-      this.scheduleDecide(hostId, spawnId, attempt + 1);
+      const now = this.deps.requests.get(hostId, spawnId);
+      if (!now || now.state !== 'pending') return;
+      if (this.now() > Date.parse(now.expiresAt)) this.settle(hostId, spawnId, 'expired', attempt + 1);
+      else this.scheduleDecide(hostId, spawnId, attempt + 1);
     }, delay);
     t.unref?.();
     this.retries.set(k, t);
@@ -309,14 +348,19 @@ export class A2aSpawnReceiver {
     if (!spawnHostAllowed(policy, hostId)) return 'not-allowed';
     if (this.now() > Date.parse(req.expiresAt)) return 'expired';
     if (!policy.agents.includes(req.agent)) return 'agent-not-allowed';
-    if (!(await this.bounded(this.agentInstalled(req.agent)))) return 'agent-not-installed';
+    // Nothing that could leave the root reaches the disk (parsed so already; checked again here).
+    const sub = normalizeSpawnSub(req.folder.sub);
     const root = policy.roots.find((r) => r.id === req.folder.root);
-    if (!root || !(await this.folderInside(root.path, req.folder.sub ?? ''))) return 'folder-not-allowed';
+    if (sub === null || !root) return 'folder-not-allowed';
+    if (!(await this.checks.run(() => this.agentInstalled(req.agent)))) return 'agent-not-installed';
+    if (!(await this.folderInside(root.path, sub))) return 'folder-not-allowed';
     // The checks above wait on the disk and the PATH: the human may have
-    // turned this PC (or that root, or that agent) off meanwhile.
+    // turned this PC (or that root, or that agent) off meanwhile, and the
+    // request may have expired.
     const now = this.deps.policy.get();
     if (!spawnHostAllowed(now, hostId)) return 'not-allowed';
     if (!now.agents.includes(req.agent) || !now.roots.some((r) => r.id === root.id && r.path === root.path)) return 'not-allowed';
+    if (this.now() > Date.parse(req.expiresAt)) return 'expired';
     return 'not-supported';
   }
 
@@ -327,42 +371,26 @@ export class A2aSpawnReceiver {
    * are compared as they are (no case folding: on a case-sensitive volume a
    * sibling that differs only by case is another folder). The folder is
    * resolved again after the directory check, so a swap in between is seen.
+   * Only "not there" errors refuse; any other (out of file handles, I/O)
+   * is thrown, and the decision is tried again.
    * Whatever starts an agent later checks again right before it does.
    */
   private async folderInside(rootPath: string, sub: string): Promise<boolean> {
     const target = (rootReal: string): string => (sub ? path.join(rootReal, ...sub.split('/')) : rootReal);
-    let rootReal: string;
-    let real: string;
     try {
-      rootReal = await this.bounded(this.realpath(rootPath));
-      real = await this.bounded(this.realpath(target(rootReal)));
+      const rootReal = await this.checks.run(() => this.realpath(rootPath));
+      const real = await this.checks.run(() => this.realpath(target(rootReal)));
+      if (!samePath(rootReal, rootPath) || !inside(rootReal, real)) return false;
+      if (!(await this.checks.run(() => this.isDirectory(real)))) return false;
+      return (await this.checks.run(() => this.realpath(target(rootReal)))) === real;
     } catch (err) {
-      if (err instanceof CheckTimeout) throw err;
-      return false;
+      if (notThere(err)) return false;
+      throw err;
     }
-    if (!samePath(rootReal, rootPath) || !inside(rootReal, real)) return false;
-    if (!(await this.bounded(this.isDirectory(real)))) return false;
-    let again: string;
-    try {
-      again = await this.bounded(this.realpath(target(rootReal)));
-    } catch (err) {
-      if (err instanceof CheckTimeout) throw err;
-      return false;
-    }
-    return again === real;
   }
 
-  /** `p`, or a `CheckTimeout` once it has taken longer than one check may. */
-  private bounded<T>(p: Promise<T>): Promise<T> {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new CheckTimeout('check timed out')), this.checkTimeoutMs);
-      timer.unref?.();
-    });
-    return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
-  }
-
-  private settle(hostId: HostId, spawnId: string, code: A2aSpawnCode): void {
+  private settle(hostId: HostId, spawnId: string, code: A2aSpawnCode, attempt: number): void {
+    if (this.stopped) return;
     // The PC was removed (its requests forgotten) while this was decided: nothing goes back.
     const rec = this.deps.requests.get(hostId, spawnId);
     if (!rec || rec.state !== 'pending') return;
@@ -370,8 +398,8 @@ export class A2aSpawnReceiver {
     try {
       decided = isFinalSpawnCode(code) ? this.deps.requests.decide(hostId, spawnId, code) : undefined;
     } catch (err) {
-      // Not stored: the request stays pending, so a resend or a restart decides it again.
-      this.deps.log('warn', `[a2a-remote] spawn request ${spawnId} from ${hostId}: outcome not stored: ${errMsg(err)}`);
+      // Not stored: the request stays pending and is settled again later.
+      this.retryLater(hostId, spawnId, attempt, err);
       return;
     }
     this.deps.log('info', `[a2a-remote] spawn request ${spawnId} from ${hostId}: ${code}`);
@@ -379,24 +407,31 @@ export class A2aSpawnReceiver {
     else this.sendResult(hostId, { v: 1, spawnId, code });
   }
 
-  /** Queue a result; false when the outbox would not take it. */
+  /**
+   * Queue a result; false when the outbox would not take it. Each send has
+   * its own message id: `_` is in neither a spawnId nor a code, and the last
+   * part is new for every send (this run's start, then a count).
+   */
   private sendResult(hostId: HostId, result: A2aSpawnResultV1): boolean {
     try {
       this.deps.enqueue(hostId, {
         protocol: A2A_REMOTE_PROTOCOL,
         linkId: result.spawnId,
         linkVersion: 0,
-        messageId: `res-${result.spawnId}-${result.code}`,
+        messageId: `res_${result.spawnId}_${result.code}_${this.boot}-${this.sends++}`,
         kind: 'link',
         link: { state: 'spawn-result', version: 0 },
         spawnResult: result,
         sentAt: new Date(this.now()).toISOString(),
       });
-      return true;
     } catch (err) {
       this.deps.log('warn', `[a2a-remote] spawn result ${result.spawnId} to ${hostId} not queued: ${errMsg(err)}`);
       return false;
     }
+    this.answeredAt.delete(`${hostId}:${result.spawnId}:${result.code}`);
+    this.answeredAt.set(`${hostId}:${result.spawnId}:${result.code}`, this.now());
+    if (this.answeredAt.size > ANSWERED_RECENTLY_MAX) this.answeredAt.delete(this.answeredAt.keys().next().value as string);
+    return true;
   }
 
   // --- A: answers ---------------------------------------------------------------
