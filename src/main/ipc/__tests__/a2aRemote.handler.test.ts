@@ -19,6 +19,7 @@ vi.mock('../../github/PrProvider', () => ({ detectRemote: vi.fn(async () => null
 
 import * as electron from 'electron';
 import { IPC } from '../../../shared/constants';
+import { defaultSpawnPolicy } from '../../../shared/a2aSpawn';
 import { registerA2aRemoteHandlers } from '../handlers/a2aRemote.handler';
 import type { DaemonClient } from '../../DaemonClient';
 
@@ -107,5 +108,23 @@ describe('a2aRemote share', () => {
     await expect(invoke(IPC.A2A_REMOTE_OFFERS_CREATE, { ...ask, label: 'forged' })).resolves.toMatchObject({ ok: true });
     expect(created).toEqual([{ hostId: 'h', end: { kind: 'pane', workspaceId: 'w2', workspaceName: 'API', paneId: 'p9', label: 'w1-1', agent: 'claude' }, allow: { outbound: true, inbound: false } }]);
     expect((client.a2aRemoteExposurePublish as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(publishes);
+  });
+});
+
+describe('a2aRemote spawn policy', () => {
+  it('refuses a policy coerceSpawnPolicy rejects before it reaches the daemon, and forwards a valid one', async () => {
+    const client = {
+      ...fakeClient(),
+      a2aSpawnPolicySet: vi.fn(async (policy: unknown) => ({ ok: true, policy })),
+    } as unknown as DaemonClient;
+    cleanups.push(registerA2aRemoteHandlers(client));
+    const policy = defaultSpawnPolicy();
+    // An unknown agent makes the whole policy invalid.
+    await expect(invoke(IPC.A2A_REMOTE_SPAWN_POLICY_SET, { ...policy, agents: ['not-an-agent'] })).resolves.toEqual({ ok: false, error: 'bad-request' });
+    await expect(invoke(IPC.A2A_REMOTE_SPAWN_POLICY_SET, 'nonsense')).resolves.toEqual({ ok: false, error: 'bad-request' });
+    expect(client.a2aSpawnPolicySet).not.toHaveBeenCalled();
+    const valid = { ...policy, enabled: true, agents: ['claude'], roots: [{ id: 'api', label: 'api', path: '/repo/api' }] };
+    await expect(invoke(IPC.A2A_REMOTE_SPAWN_POLICY_SET, valid)).resolves.toEqual({ ok: true, policy: valid });
+    expect(client.a2aSpawnPolicySet).toHaveBeenCalledWith(valid);
   });
 });

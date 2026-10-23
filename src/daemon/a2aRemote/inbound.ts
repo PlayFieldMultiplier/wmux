@@ -23,6 +23,7 @@ import type { A2aTaskService } from '../a2a/A2aTaskService';
 import { remoteTaskId } from './ids';
 import type { BrokenReason, LinkStore } from './linkStore';
 import { isPlainObject, isSafeId } from './storeFile';
+import { isSpawnEnvelope } from './spawnReceiver';
 
 /**
  * Cross-host A2A, receiving side: apply one envelope an authenticated peer
@@ -54,6 +55,8 @@ export interface InboundDeps {
   offers?: { applyInbound(env: A2aRemoteEnvelope, peer: { hostId: HostId }): A2aRemoteDeliverResponse | Promise<A2aRemoteDeliverResponse> };
   /** Images on task / reply envelopes (`images.1`); absent, refs are ignored and only the text is taken. */
   images?: InboundImages;
+  /** Remote spawn (`link` states `spawn`, `spawn-result`, `spawn-targets`); absent, they are an unknown link. */
+  spawn?: { applyInbound(env: A2aRemoteEnvelope, peer: { hostId: HostId }): A2aRemoteDeliverResponse };
   /** Where a refusal's detail goes: this PC's log. The peer gets the code alone. */
   log?: (level: 'info' | 'warn' | 'error', msg: string) => void;
 }
@@ -116,6 +119,8 @@ async function applyInbound(
   // A message with images may have no text (an image-only reply).
   if ((env.kind === 'task' || env.kind === 'reply') && !env.text && !env.images) return fail('bad-request');
 
+  // A spawn request names no link: it is answered before any link check.
+  if (deps.spawn && isSpawnEnvelope(env)) return deps.spawn.applyInbound(env, peer);
   if (env.kind === 'link' && deps.offers && (env.link?.state === 'offer' || env.link?.state === 'offer-withdrawn')) {
     return deps.offers.applyInbound(env, peer);
   }

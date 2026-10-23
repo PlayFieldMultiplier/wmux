@@ -616,6 +616,9 @@ export type RpcMethod =
   | 'a2a.remote.offers.withdraw'
   | 'a2a.remote.offers.accept'
   | 'a2a.remote.offers.decline'
+  | 'a2a.remote.spawnPolicy.get'
+  | 'a2a.remote.spawnPolicy.set'
+  | 'a2a.remote.spawnRequests.list'
   | 'a2a.resolve.identity'
   | 'a2a.whoami'
   | 'a2a.discover'
@@ -958,6 +961,9 @@ export const ALL_RPC_METHODS = [
   'a2a.remote.offers.withdraw',
   'a2a.remote.offers.accept',
   'a2a.remote.offers.decline',
+  'a2a.remote.spawnPolicy.get',
+  'a2a.remote.spawnPolicy.set',
+  'a2a.remote.spawnRequests.list',
   'a2a.resolve.identity',
   'a2a.whoami',
   'a2a.discover',

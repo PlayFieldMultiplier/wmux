@@ -28,13 +28,15 @@
 //     server derives it from its own link record for the authenticated peer.
 //   - Remote-origin work is message-only (no worker spawn) and a remote task
 //     whose target pane changed occupant is HELD, never re-routed to a sibling
-//     pane (a sibling may not be exposed).
+//     pane (a sibling may not be exposed). Starting a new agent is a separate,
+//     owner-gated request (`shared/a2aSpawn.ts`), never a task.
 //   - Every persisted record carries `v` so a downgrade or a future colleague
 //     tier can tell formats apart.
 //
 // Pure module: no node:* imports (the renderer imports these types).
 
 import type { CompletionEvidence, TaskState } from './types';
+import type { A2aSpawnRequestV1, A2aSpawnResultV1, A2aSpawnTargetsV1 } from './a2aSpawn';
 
 // ─── Versions ───────────────────────────────────────────────────────────────
 
@@ -105,6 +107,11 @@ export const A2A_FEATURE_LINK_OFFER = 'link-offer.1';
  * an omitted-images note instead: an older receiver would drop the refs unseen.
  */
 export const A2A_FEATURE_IMAGES = 'images.1';
+/**
+ * The PC takes remote spawn requests (`shared/a2aSpawn.ts`). A requester sends
+ * one only to a PC that advertises it.
+ */
+export const A2A_FEATURE_SPAWN = 'spawn.1';
 /**
  * Stream liveness both ways. A joiner with it acks its stream cursor every
  * `A2A_STREAM_PING_MS` while the stream is up (to a server whose hello lists
@@ -639,9 +646,21 @@ export interface A2aRemoteEnvelope {
    * link notice: `linkId` is then the offerId, both versions are 0, and the
    * payload is in `offer`. An older receiver refuses them as an unknown link.
    */
-  link?: { state: 'active' | 'revoked' | 'broken' | 'offer' | 'offer-withdrawn'; version: number; reason?: A2aLinkRecordV1['endedReason'] };
+  link?: {
+    state: 'active' | 'revoked' | 'broken' | 'offer' | 'offer-withdrawn' | 'spawn' | 'spawn-result' | 'spawn-targets';
+    version: number;
+    reason?: A2aLinkRecordV1['endedReason'];
+  };
   /** For a 'link' envelope whose state is `offer` / `offer-withdrawn`. */
   offer?: A2aOfferPayload;
+  /**
+   * Remote spawn (`shared/a2aSpawn.ts`), each on a 'link' envelope of the same
+   * state name. `linkId` is the spawnId (or `SPAWN_TARGETS_LINK_ID`); these
+   * never touch a link record. An older receiver refuses them as an unknown link.
+   */
+  spawn?: A2aSpawnRequestV1;
+  spawnResult?: A2aSpawnResultV1;
+  spawnTargets?: A2aSpawnTargetsV1;
   /** For 'receipt' (with `taskId`). */
   receipt?: A2aRemoteReceipt;
   /**

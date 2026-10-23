@@ -126,6 +126,11 @@ export class PeerStore {
     this.load();
   }
 
+  /** False when the file could not be read or written: the list may be missing peers. */
+  get usable(): boolean {
+    return this.writable;
+  }
+
   /** Display view. Never carries the hash, salt or KDF parameters. */
   list(): A2aPeerRecordV1[] {
     return [...this.peers.values()].map(project);

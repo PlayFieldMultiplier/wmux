@@ -70,6 +70,8 @@ export interface A2aRemoteDeliveryDeps {
   localWorkspaceName?: (workspaceId: string) => string | undefined;
   /** Share offers: received as link envelopes, refused by older builds, ended when a peer stops supporting them. */
   offers?: A2aOffers;
+  /** Remote spawn requests, results and targets (link envelopes; see `spawnReceiver.ts`). */
+  spawn?: InboundDeps['spawn'];
   /** Optional features this PC advertises: on its streams to the servers it joined, and in its own streams' `hello`. */
   features?: readonly string[];
   /**
@@ -658,6 +660,7 @@ export class A2aRemoteDelivery {
       aliasFor: (l) => this.aliasFor(l),
       ...(this.deps.localWorkspaceName ? { localWorkspaceName: this.deps.localWorkspaceName } : {}),
       ...(this.deps.offers ? { offers: this.deps.offers } : {}),
+      ...(this.deps.spawn ? { spawn: this.deps.spawn } : {}),
       ...(this.images ? { images: { store: this.images, pullAttempts: this.pullAttempts } } : {}),
       log: this.deps.log,
     };
