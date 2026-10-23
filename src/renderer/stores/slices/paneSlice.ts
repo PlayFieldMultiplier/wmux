@@ -33,6 +33,7 @@ import { panePrincipalId } from '../../../shared/principals';
 import { computePaneAutoName, paneDisplayName } from '../../utils/paneNaming';
 import { saveSessionNow } from '../../utils/sessionSaveBridge';
 import { recomputeWorkspacePorts } from './workspacePorts';
+import type { ShellPromptSignal } from '../../../shared/shellPrompt';
 
 // Per-workspace leaf cap. xterm.js + node-pty memory scales linearly with
 // pane count, and the project memory budget targets ~200 MB for 10 panes
@@ -269,6 +270,12 @@ export interface PaneSlice {
   // (SUBAGENT_COUNT_STALE_MS): a 0 that never arrived must not stick.
   surfaceSubagentsAt: Record<string, number>;
   setSurfaceSubagents: (ptyId: string, count: number) => void;
+  // A pane with no agent whose command waits on stdin, keyed by ptyId. From
+  // METADATA_UPDATE.shellPrompt (daemon/shellPrompt); null clears. Fleet and
+  // the sidebar read it as Needs you. Cleared at the same teardown sites as
+  // surfaceSubagents. Transient — never persisted.
+  surfaceShellPrompt: Record<string, ShellPromptSignal>;
+  setSurfaceShellPrompt: (ptyId: string, prompt: ShellPromptSignal | null) => void;
   /**
    * #1176 — the pendingQuestion text the user has already laid eyes on (they
    * focused the pane while it was blocked). The dot stays red — the agent IS
@@ -814,6 +821,7 @@ export const createPaneSlice: StateCreator<StoreState, [['zustand/immer', never]
   surfaceLastMessage: {},
   surfaceSubagents: {},
   surfaceSubagentsAt: {},
+  surfaceShellPrompt: {},
   surfaceQuestionSeen: {},
   surfaceDismissedQuestion: {},
   agentClockMs: Date.now(),
@@ -887,6 +895,12 @@ export const createPaneSlice: StateCreator<StoreState, [['zustand/immer', never]
       delete state.surfaceSubagents[ptyId];
       delete state.surfaceSubagentsAt[ptyId];
     }
+  }),
+
+  setSurfaceShellPrompt: (ptyId, prompt) => set((state: StoreState) => {
+    if (!ptyId) return;
+    if (prompt) state.surfaceShellPrompt[ptyId] = prompt;
+    else delete state.surfaceShellPrompt[ptyId];
   }),
 
   markSurfaceQuestionSeen: (ptyId) => set((state: StoreState) => {
@@ -1184,6 +1198,7 @@ export const createPaneSlice: StateCreator<StoreState, [['zustand/immer', never]
             delete state.surfaceLastMessage[s.ptyId];
             delete state.surfaceSubagents[s.ptyId];
             delete state.surfaceSubagentsAt[s.ptyId];
+            delete state.surfaceShellPrompt[s.ptyId];
             delete state.surfaceQuestionSeen[s.ptyId];
             delete state.surfaceDismissedQuestion[s.ptyId];
             delete state.surfaceActivityAt[s.ptyId];

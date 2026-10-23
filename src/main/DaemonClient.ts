@@ -1,5 +1,6 @@
 import net from 'node:net';
 import type { PaneUsageLimit, PaneUsageLimitPatch } from '../shared/usageLimit';
+import { parseShellPromptSignal, type ShellPromptSignal } from '../shared/shellPrompt';
 import { EventEmitter } from 'node:events';
 import crypto from 'node:crypto';
 import type { RpcResponse, DaemonEvent } from '../shared/rpc';
@@ -923,6 +924,27 @@ export class DaemonClient extends EventEmitter {
     }
   }
 
+  /**
+   * The shell prompts the daemon shows now (daemon/shellPrompt), each checked
+   * like an event. Null when it is unreachable or predates them: the caller
+   * then keeps what it has instead of clearing it.
+   */
+  async listShellPrompts(): Promise<Array<{ sessionId: string; prompt: ShellPromptSignal }> | null> {
+    if (!this.isConnected) return null;
+    try {
+      const response = await this.rpc('daemon.shellPrompt.list', {}) as { prompts?: unknown };
+      if (!Array.isArray(response?.prompts)) return null;
+      const out: Array<{ sessionId: string; prompt: ShellPromptSignal }> = [];
+      for (const item of response.prompts as Array<{ sessionId?: unknown; prompt?: unknown }>) {
+        const prompt = parseShellPromptSignal(item?.prompt);
+        if (typeof item?.sessionId === 'string' && item.sessionId && prompt) out.push({ sessionId: item.sessionId, prompt });
+      }
+      return out;
+    } catch {
+      return null;
+    }
+  }
+
   /** Edit one pane's usage-limit hold (auto-resume, dismiss, resume now, reset fill). */
   async updateUsageLimit(id: string, patch: PaneUsageLimitPatch): Promise<boolean> {
     if (!this.isConnected) return false;
@@ -1206,6 +1228,11 @@ export class DaemonClient extends EventEmitter {
           }
           break;
         }
+        case 'shell.prompt':
+          // A pane with no agent waits on stdin (daemon/shellPrompt); null clears.
+          // Checked here: a `secret` keeps no question whatever was sent.
+          this.emit('session:shellPrompt', { sessionId: event.sessionId, prompt: parseShellPromptSignal(event.data) });
+          break;
         case 'prompt.event':
           // OSC 133 shell-integration marker (A/B/C/D) parsed in the daemon.
           // DaemonNotificationRouter consumes this to tee the D variant onto

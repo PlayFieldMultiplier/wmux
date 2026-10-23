@@ -138,6 +138,9 @@ export type FleetSelectorState = Pick<StoreState, 'workspaces' | 'surfaceAgentSt
    *  needs input"); this pass has to read the same signal or the dot above the
    *  roster contradicts it. Optional so existing fixtures stay terse. */
   surfacePendingQuestion?: StoreState['surfacePendingQuestion'];
+  /** A pane with no agent whose command waits on stdin (daemon/shellPrompt):
+   *  Needs you, like a pending question. Optional so existing fixtures stay terse. */
+  surfaceShellPrompt?: StoreState['surfaceShellPrompt'];
   /** Liveness inputs for the `unverifiable` display state — the same two maps
    *  `isPaneAgentBusy` ranks above the heuristic. A pane whose shell is back at
    *  a prompt or whose agent process is gone is IDLE, not unverifiable, so a
@@ -422,13 +425,15 @@ const STATUS_RANK: Record<AgentStatus, number> = {
  * complete / waiting / error stays cleared.
  */
 export function surfaceAttentionStatus(
-  state: Pick<FleetSelectorState, 'surfaceAgentStatus' | 'surfaceAgent' | 'surfacePendingQuestion' | 'usageLimitWaiting'>,
+  state: Pick<FleetSelectorState, 'surfaceAgentStatus' | 'surfaceAgent' | 'surfacePendingQuestion' | 'surfaceShellPrompt' | 'usageLimitWaiting'>,
   ptyId: string,
 ): AgentStatus | undefined {
   // #1168 — a transcript-derived pending question outranks whatever the stop
   // payload settled this surface to, exactly as it does in
   // workspaceAgentRoster.
   if (state.surfacePendingQuestion?.[ptyId]?.trim()) return 'awaiting_input';
+  // A command in a pane with no agent waits on stdin: a person has to answer it.
+  if (state.surfaceShellPrompt?.[ptyId]) return 'awaiting_input';
   if (state.surfaceAgent?.[ptyId]?.status === 'awaiting_input') return 'awaiting_input';
   const status = state.surfaceAgentStatus[ptyId];
   return isQuietUsageLimitError(state.usageLimitWaiting, ptyId, status) ? undefined : status;
@@ -996,6 +1001,7 @@ export type FleetSection = 'needsYou' | 'finished' | 'running' | 'idle';
 /** Fallback detail keys — the renderer translates them. */
 export type FleetDetailKey =
   | 'fleet.needsYourInput'
+  | 'fleet.detail.shellSecret'
   | 'fleet.detail.error'
   | 'fleet.detail.unconfirmed'
   | 'fleet.detail.supervisionStopped'
@@ -1027,7 +1033,7 @@ export interface FleetGroups {
 
 export type FleetGroupContext = Pick<
   FleetSelectorState,
-  'surfacePendingQuestion' | 'surfaceLastMessage' | 'surfaceActivityAt' | 'surfaceTurnOpenAt'
+  'surfacePendingQuestion' | 'surfaceShellPrompt' | 'surfaceLastMessage' | 'surfaceActivityAt' | 'surfaceTurnOpenAt'
 > & {
   /** Read-time clock for elapsed time. Absent → no elapsed time on any row. */
   now?: number;
@@ -1233,10 +1239,17 @@ export function fleetRow(pane: FleetPane, ctx: FleetGroupContext = {}): FleetRow
     return { ...base, section, detailKey: 'fleet.detail.unconfirmed' };
   }
   switch (pane.agentStatus) {
-    case 'awaiting_input':
-      return question
-        ? { ...base, section, detail: question, detailSource: 'question', detailKey: 'fleet.needsYourInput' }
+    case 'awaiting_input': {
+      if (question) return { ...base, section, detail: question, detailSource: 'question', detailKey: 'fleet.needsYourInput' };
+      // A shell's stdin prompt: its row, or for a password only that it needs
+      // someone at the computer (the row itself never reaches the renderer).
+      const shell = target ? ctx.surfaceShellPrompt?.[target] : undefined;
+      if (shell?.shape === 'secret') return { ...base, section, detailKey: 'fleet.detail.shellSecret' };
+      const shellQuestion = shell ? flattenAgentText(shell.question ?? '') || undefined : undefined;
+      return shellQuestion
+        ? { ...base, section, detail: shellQuestion, detailSource: 'question', detailKey: 'fleet.needsYourInput' }
         : { ...base, section, detailKey: 'fleet.needsYourInput' };
+    }
     case 'waiting':
       return question
         ? { ...base, section, detail: question, detailSource: 'question', detailKey: 'fleet.needsYourInput' }
@@ -1358,6 +1371,7 @@ export function selectFleetBoard(
     surfaceOutputAt: state.surfaceOutputAt,
     surfaceTurnOpenAt: state.surfaceTurnOpenAt,
     surfacePendingQuestion: state.surfacePendingQuestion,
+    surfaceShellPrompt: state.surfaceShellPrompt,
     surfaceLastMessage: state.surfaceLastMessage,
     sortMode: opts.sortMode,
   });
@@ -1383,6 +1397,7 @@ function fleetBoardPanes(
     usageLimitWaiting: state.usageLimitWaiting,
     surfaceAgent: state.surfaceAgent,
     surfacePendingQuestion: state.surfacePendingQuestion,
+    surfaceShellPrompt: state.surfaceShellPrompt,
     surfaceActivityAt: state.surfaceActivityAt,
     surfaceTurnOpenAt: state.surfaceTurnOpenAt,
     commandRunningByPtyId: state.commandRunningByPtyId,
@@ -1429,7 +1444,7 @@ export function selectFleetSectionCounts(state: FleetBoardState): FleetSectionCo
     state.workspaces, state.surfaceAgentStatus, state.surfaceActivity, state.paneLabel,
     state.supervisionByPtyId, state.surfaceAgent, state.surfacePendingQuestion, state.surfaceActivityAt,
     state.surfaceTurnOpenAt, state.commandRunningByPtyId, state.agentAliveByPtyId, state.remoteWorkspaces,
-    state.usageLimitWaiting,
+    state.usageLimitWaiting, state.surfaceShellPrompt,
   ];
   const memo = sectionCountsMemo;
   if (memo && inputs.every((value, i) => Object.is(value, memo.inputs[i]))

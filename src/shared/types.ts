@@ -29,6 +29,7 @@ import type { SleepPreventionMode } from './sleepPrevention';
 import type { StarPromptState } from './starPrompt';
 import type { AgentSignalKind } from './hooks/signal-types';
 import type { DeadPaneRecovery } from './ptyRecovery';
+import type { ShellPromptSignal } from './shellPrompt';
 
 // Re-export for backward compatibility
 /** BYOB M0 — which runtime serves as a workspace's orchestrator brain.
@@ -561,6 +562,12 @@ export interface MetadataUpdatePayload {
    * payload to workspace metadata. 0 clears.
    */
   subagents?: number;
+  /**
+   * A pane with no agent whose command waits on stdin (daemon/shellPrompt):
+   * the prompt, or null to clear. Per-ptyId only, like `subagents`. A `secret`
+   * carries no question.
+   */
+  shellPrompt?: ShellPromptSignal | null;
   // P2 — pane label relay. MetadataStore's `pane.metadata.changed` is teed to
   // the renderer as a paneId-only update (no ptyId/workspaceId);
   // useNotificationListener routes on `paneId` and writes ONLY the per-pane

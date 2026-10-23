@@ -20,6 +20,7 @@ import { PrReviewRouter } from '../../metadata/PrReviewRouter';
 import { ghPrService } from '../../github/GhPrService';
 import { publishPrOwnerEvent } from '../../deck/prOwnerNotify';
 import { clearTurnEvidence, noteBroadcastStatus } from '../../notification/turnEvidence';
+import { shellPromptOf } from '../../shellPrompt/shellPromptMirror';
 
 // AO-style CI feedback (owner decision 2026-07-18). Module singletons set at
 // registration (they need getWindow for workspace resolution). The poll feeds
@@ -230,6 +231,8 @@ async function buildMetadataPayload(ptyId: string): Promise<MetadataUpdatePayloa
   const gitBranch = branchMap.get(ptyId)
     ?? (branchKnownAbsent.has(ptyId) ? '' : (await collector.getGitBranch(cwd)) ?? '');
   const payload: MetadataUpdatePayload = { ptyId, cwd, gitBranch };
+  // Rides every poll so a renderer that reloaded gets a waiting shell prompt back.
+  payload.shellPrompt = shellPromptOf(ptyId);
   const isWorktree = worktreeMap.get(ptyId);
   if (isWorktree !== undefined) payload.gitIsWorktree = isWorktree;
   const ports = portsMap.get(ptyId);

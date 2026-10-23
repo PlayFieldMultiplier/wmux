@@ -344,6 +344,29 @@ function liveGeometry(pane: RenderablePane): { cols: number; rows: number } | nu
 }
 
 /**
+ * The visible grid rebuilt from only the newest `maxBytes` of the ring, for a
+ * caller that reads plain shell output (the shell-prompt watcher): no whole-ring
+ * replay. Null when the pane is gone or muted, its geometry is unknown, the
+ * parse failed, or the pane was resized meanwhile.
+ */
+export async function renderPaneTail(
+  getPane: () => RenderablePane | undefined,
+  snapshot: TextSnapshot,
+  maxBytes: number = AWAITING_RENDER_WINDOW_BYTES,
+): Promise<string[] | null> {
+  const pane = getPane();
+  if (!pane || pane.bridge.isMuted) return null;
+  const geometry = liveGeometry(pane);
+  if (!geometry) return null;
+  const tail = readRingTailWithModesAndGeometry(pane.ringBuffer, pane.bridge.outputModes ?? null, maxBytes);
+  const outcome = await snapshot({ ...geometry, scrollback: 0, initial: tail.replay, geometry: tail.geometry });
+  if (!outcome.ok || getPane() !== pane) return null;
+  const after = liveGeometry(pane);
+  if (!after || after.cols !== geometry.cols || after.rows !== geometry.rows) return null;
+  return outcome.rows.map((r) => r.text);
+}
+
+/**
  * Read a pane's visible grid for the verifier. Null — "unreadable", which keeps
  * the pane awaiting — when the pane is gone or muted, its geometry is unknown,
  * the parse failed, or the pane was resized while the render waited in the

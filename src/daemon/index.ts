@@ -83,11 +83,11 @@ import { scheduleTokenFileReHarden } from '../shared/security';
 import { applyTaskQueryView } from '../shared/a2aTaskQueryView';
 import { normalizeLivePaneIds } from '../shared/a2aOrphanedTask';
 import type { WebTlsConfig } from '../shared/web';
-import { generateSnapshotUnqueued, enqueueSnapshotJob, generateTextSnapshot, capTextRowsToFrameBudget, MAX_SCROLLBACK } from './HeadlessSnapshot';
+import { generateSnapshotUnqueued, enqueueSnapshotJob, generateTextSnapshot, generateTextSnapshotUnqueued, runSmallSnapshotJob, capTextRowsToFrameBudget, MAX_SCROLLBACK } from './HeadlessSnapshot';
 import { queuedScreenText, queuedTextSnapshot } from './queuedSessionText';
 import type { TerminalPty } from '../shared/terminalPty';
 import { serializeSession } from './sessionSerialize';
-import { AwaitingScreenVerifier, AWAITING_NARROW_DIALOG_COLS, questionInFlight, renderPaneScreen } from './AwaitingScreenVerifier';
+import { AwaitingScreenVerifier, AWAITING_NARROW_DIALOG_COLS, questionInFlight, renderPaneScreen, renderPaneTail } from './AwaitingScreenVerifier';
 import { screenShowsAgentDialog, screenShowsActiveDialog, screenShowsPermissionDialog } from './transcript/chatScreenGate';
 import { ApprovalPushRouter } from './push/approvalPushRouter';
 import { readPendingToolUse } from './transcript/pendingToolUse';
@@ -192,6 +192,9 @@ import { agentSlugToDisplay, isAgentSignal, type AgentSignal } from '../shared/h
 import { checkNativeTranscriptPath } from './transcript/providers';
 import { TranscriptProjector } from './transcript/TranscriptProjector';
 import { TranscriptActivityWatcher } from './transcript/TranscriptActivityWatcher';
+import { ShellPromptWatcher } from './shellPrompt/ShellPromptWatcher';
+import { foregroundTtyWait } from './shellPrompt/foregroundTtyWait';
+import { lastLineOfOutput } from './shellPrompt/shellPromptShape';
 import { ApiErrorTurnEnds, stopFailureSignal } from './transcript/apiErrorTurnEnd';
 import { TeammateWakes, turnEndAt } from './transcript/teammateWake';
 import { TranscriptDiscovery, DISCOVERABLE_AGENT } from './transcript/TranscriptDiscovery';
@@ -359,6 +362,7 @@ let transcriptProjector: TranscriptProjector | null = null;
 // Fleet's now-doing line for panes with no per-tool hook (setup-hooks installs,
 // Codex): tails the agent's own transcript. Guarded like the projector.
 let transcriptActivity: TranscriptActivityWatcher | null = null;
+let shellPrompts: ShellPromptWatcher | null = null;
 let apiErrorTurnEnds: ApiErrorTurnEnds | null = null;
 let teammateWakes: TeammateWakes | null = null;
 // Phone native chat bridge (contract v0.3.1). Built in registerRpcHandlers next
@@ -5627,6 +5631,56 @@ function registerRpcHandlers(
     (error)=>log('warn','[codex] pane ownership cleanup failed:',error));
   sessionManager.on('session:died', (payload: { id: string }) => usageLimits?.drop(payload.id));
   sessionManager.on('session:destroyed', (payload: { id: string }) => usageLimits?.drop(payload.id));
+
+  // A pane with no agent whose command waits on stdin (y/N, Enter, a
+  // password): reported to main as the pane's Needs you. Informational only.
+  if (!shellPrompts) {
+    shellPrompts = new ShellPromptWatcher({
+      listSessionIds: () => sessionManager.listLiveSessions().map((s) => s.id),
+      probe: (id) => {
+        const managed = sessionManager.getSession(id);
+        if (!managed) return null;
+        const commandRunning = managed.promptLog.commandRunningIfKnown() === true;
+        return {
+          // Only asked while a command runs: the canonical agent reader is not free.
+          agentPresent: commandRunning && readDaemonAgentState(id).agentName !== null,
+          commandRunning,
+          altScreen: managed.bridge.outputModes?.altScreen === true,
+          bytes: managed.ringBuffer.totalBytesWritten,
+          keyRevision: managed.bridge.getKeyInputRevision(),
+          ...(typeof managed.meta.pid === 'number' ? { pid: managed.meta.pid } : {}),
+        };
+      },
+      // The last 4 KiB of raw output: a copy, no parse.
+      tailLine: (id) => {
+        const data = sessionManager.getSession(id)?.ringBuffer.readAll();
+        return data ? lastLineOfOutput(data.subarray(Math.max(0, data.length - 4096)).toString('utf8')) : null;
+      },
+      // Only the ring's tail, and under the small-snapshot gate: never a whole
+      // replay, never queued ahead of an attach or a reveal.
+      readRows: (id) => renderPaneTail(
+        () => sessionManager.getSession(id),
+        (req) => runSmallSnapshotJob(() => generateTextSnapshotUnqueued(req)),
+      ),
+      ttyWait: (pid) => (typeof pid === 'number' ? foregroundTtyWait(pid) : 'unknown'),
+      emit: (sessionId, prompt) => {
+        const event: DaemonEvent = { type: 'shell.prompt', sessionId, data: prompt };
+        pipeServer.broadcast(event);
+      },
+      log: (level, message) => log(level, message),
+    });
+    shellPrompts.start();
+  }
+  const watchedPrompts = shellPrompts;
+  // Main asks on every (re)connect: events are sent on change only, so a GUI
+  // that connects while a prompt waits, or missed a clear, starts from this.
+  pipeServer.onRpc('daemon.shellPrompt.list', async () => ({ prompts: watchedPrompts.list() }));
+  sessionManager.on('session:prompt', (payload: { sessionId: string; event?: { type?: string } }) => {
+    if (payload.event?.type === 'command_end') watchedPrompts.noteCommandEnd(payload.sessionId);
+  });
+  sessionManager.on('session:fenceInput', (payload: { sessionId: string }) => watchedPrompts.noteKey(payload.sessionId));
+  sessionManager.on('session:died', (payload: { id: string }) => watchedPrompts.dropSession(payload.id));
+  sessionManager.on('session:destroyed', (payload: { id: string }) => watchedPrompts.dropSession(payload.id));
 
   // Scheduled runs. Every effect goes through the same session RPCs and
   // readers a GUI pane uses; the engine owns only its store and run state.

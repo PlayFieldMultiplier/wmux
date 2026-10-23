@@ -60,6 +60,7 @@ import { PTYManager } from './pty/PTYManager';
 import { PTYBridge } from './pty/PTYBridge';
 import { createLocalApprovalScreenReader } from './pty/localApprovalScreen';
 import { pruneDaemonPidMapAtConnect } from './pty/pidMap';
+import { resyncShellPromptsAtConnect } from './shellPrompt/shellPromptMirror';
 import { registerAllHandlers } from './ipc/registerHandlers';
 import { registerConnectorTerminalHandlers } from './ipc/handlers/connectorTerminal.handler';
 import { registerConnectorOAuthHandlers } from './ipc/handlers/connectorOAuth.handler';
@@ -2417,6 +2418,12 @@ app.on('ready', async () => {
         onClaudeTurnEnd,
       );
       daemonNotificationRouter.start();
+      void resyncShellPromptsAtConnect(
+        () => client.listShellPrompts(),
+        (ptyId, shellPrompt) => broadcastMetadataUpdate(mainWindow, { ptyId, shellPrompt }),
+      ).catch((err: unknown) => {
+        logLine('warn', 'main', `shell prompt resync failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
       // LanLink PR-2 — mount the remote-inbox cursor-pull bridge. On every
       // (re)connect it pulls the daemon's durable inbox from its retained cursor
       // and materializes read-only remote items to the renderer over a dedicated
