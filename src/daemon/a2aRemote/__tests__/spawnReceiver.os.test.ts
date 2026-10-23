@@ -511,21 +511,32 @@ describe('SpawnRequestStore', () => {
 });
 
 describe('as the asker: answers and targets', () => {
-  it('an answer nobody here asked for, or one already answered, is not handed on; targets only when newer', () => {
+  it('an answer nobody here asked for, or one already answered, is not handed on; targets only when newer', async () => {
     const got: unknown[] = [];
     const outstanding = new Set<string>();
-    const asker = makeReceiver({ isOutstanding: (_h, id) => outstanding.has(id), onResult: (_h, r) => got.push(r), onTargets: (_h, t) => got.push(t) });
+    let takes = false;
+    const asker = makeReceiver({
+      isOutstanding: (_h, id) => outstanding.has(id),
+      onResult: async (_h, r) => {
+        got.push(r);
+        return takes;
+      },
+      onTargets: (_h, t) => got.push(t),
+    });
     const spawnId = `sp-${crypto.randomUUID()}`;
     const result = (code: string): A2aRemoteEnvelope => ({
       protocol: A2A_REMOTE_PROTOCOL, linkId: spawnId, linkVersion: 0, messageId: `res-${spawnId}-${code}`, kind: 'link',
       link: { state: 'spawn-result', version: 0 }, spawnResult: { v: 1, spawnId, code: code as 'not-supported' }, sentAt: new Date().toISOString(),
     });
-    expect(asker.applyInbound(result('not-supported'), { hostId: HOST })).toEqual({ ok: true, duplicate: false });
+    expect(await asker.applyInbound(result('not-supported'), { hostId: HOST })).toEqual({ ok: true, duplicate: false });
     expect(got).toEqual([]);
     outstanding.add(spawnId);
-    asker.applyInbound(result('not-supported'), { hostId: HOST });
-    asker.applyInbound(result('not-supported'), { hostId: HOST });
-    expect(got).toHaveLength(1);
+    // Not taken yet (the asking side could not write it): refused so it comes again, and not counted as answered.
+    expect(await asker.applyInbound(result('not-supported'), { hostId: HOST })).toEqual({ ok: false, error: 'unavailable' });
+    takes = true;
+    expect(await asker.applyInbound(result('not-supported'), { hostId: HOST })).toEqual({ ok: true, duplicate: false });
+    await asker.applyInbound(result('not-supported'), { hostId: HOST });
+    expect(got).toHaveLength(2);
 
     const targets = (version: number): A2aRemoteEnvelope => ({
       protocol: A2A_REMOTE_PROTOCOL, linkId: SPAWN_TARGETS_LINK_ID, linkVersion: 0, messageId: `st-${version}`, kind: 'link',
@@ -534,7 +545,41 @@ describe('as the asker: answers and targets', () => {
     asker.applyInbound(targets(2), { hostId: HOST });
     asker.applyInbound(targets(1), { hostId: HOST });
     asker.applyInbound(targets(2), { hostId: HOST });
-    expect(got).toHaveLength(2);
+    expect(got).toHaveLength(3);
+  });
+});
+
+describe('as the PC asked: telling other PCs what they may ask for', () => {
+  const targetsSent = () => sent.filter((x) => x.env.link?.state === 'spawn-targets').map((x) => ({ hostId: x.hostId, targets: x.env.spawnTargets }));
+
+  it('a save tells each PC allowed now its targets, and one no longer allowed empty lists; others hear nothing', async () => {
+    const handlers = new Map<string, (p: Record<string, unknown>) => Promise<unknown>>();
+    registerSpawnRpc((m, h) => void handlers.set(m, h), { policy, requests, onSaved: (previous) => receiver.sendTargets(previous) });
+    const save = async (over: Record<string, unknown>) => handlers.get('a2a.remote.spawnPolicy.set')!({
+      policy: {
+        v: 1, enabled: true, approval: 'ask', followUps: 'ask', permissionMode: 'auto', hosts: {}, roots: [{ id: 'web', label: 'Web', path: repo }],
+        agents: ['claude'], rules: [], version: policy.get().version, ...over,
+      },
+    });
+    expect(await save({ hosts: { [HOST]: { allowed: true } } })).toMatchObject({ ok: true });
+    expect(targetsSent()).toEqual([{ hostId: HOST, targets: { v: 1, version: policy.get().version, roots: [{ id: 'web', label: 'Web' }], agents: ['claude'] } }]);
+    sent.length = 0;
+    expect(await save({ hosts: { [HOST]: { allowed: false } } })).toMatchObject({ ok: true });
+    expect(targetsSent()).toEqual([{ hostId: HOST, targets: { v: 1, version: policy.get().version, roots: [], agents: [] } }]);
+    sent.length = 0;
+    expect(await save({ enabled: false })).toMatchObject({ ok: true });
+    expect(targetsSent()).toEqual([]);
+  });
+
+  it('on start, each allowed PC gets its targets unless they are still queued for it', async () => {
+    await allowHost();
+    let queued = true;
+    const r = makeReceiver({ targetsQueued: () => queued });
+    r.sendTargets();
+    expect(targetsSent()).toEqual([]);
+    queued = false;
+    r.sendTargets();
+    expect(targetsSent()).toHaveLength(1);
   });
 });
 

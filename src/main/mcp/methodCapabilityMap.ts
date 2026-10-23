@@ -521,8 +521,10 @@ export const METHOD_CAPABILITY: Record<RpcMethod, RequiredCapability> = {
   'a2a.remote.spawn.failed': { capability: 'wmux.internal' },
   'a2a.remote.spawn.ask': { capability: 'wmux.internal' },
   'a2a.remote.spawn.outgoing': { capability: 'wmux.internal' },
-  'a2a.remote.spawn': { capability: 'wmux.internal' },
-  'a2a.remote.spawnStatus': { capability: 'wmux.internal' },
+  // Asking another PC to start an agent: the same grant as fan-out (the
+  // caller's pane is server-resolved and depth-1 checked in the handler).
+  'a2a.remote.spawn': { capability: 'a2a.execute', riskClass: 'a2a' },
+  'a2a.remote.spawnStatus': { capability: 'a2a.read', riskClass: 'a2a' },
 
   // --- A2A (agent-to-agent) ---
   'a2a.resolve.identity': { capability: 'a2a.read',    riskClass: 'a2a' },

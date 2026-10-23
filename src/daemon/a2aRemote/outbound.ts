@@ -91,6 +91,8 @@ export interface OutboundDeps {
    * matches known key shapes and misses encoded ones.
    */
   spawnLink?: (linkId: string) => boolean;
+  /** A link this PC got by asking another PC to start an agent: no images go on it (that PC refuses them). */
+  askedLink?: (linkId: string) => boolean;
   log?: (level: 'info' | 'warn' | 'error', msg: string) => void;
 }
 
@@ -516,13 +518,14 @@ type Attached = { ok: true; text: string; images: PreparedImage[]; note?: string
  * since nothing says which of the two it is.
  */
 async function attachImages(
-  deps: Pick<OutboundDeps, 'images' | 'peerFeatures'>,
+  deps: Pick<OutboundDeps, 'images' | 'peerFeatures' | 'askedLink'>,
   link: A2aLinkRecordV1,
   paths: readonly string[] | undefined,
   caller: ImageCaller,
   text: string,
 ): Promise<Attached> {
   if (!paths || paths.length === 0) return { ok: true, text, images: [] };
+  if (deps.askedLink?.(link.linkId)) return { ok: false, error: 'bad-request: a link to an agent another PC started carries no images' };
   if (paths.length > A2A_REMOTE_IMAGE_LIMITS.PER_MESSAGE) {
     return { ok: false, error: `bad-request: at most ${A2A_REMOTE_IMAGE_LIMITS.PER_MESSAGE} images on one message` };
   }

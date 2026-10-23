@@ -7,7 +7,7 @@ import { A2A_REMOTE_PROTOCOL, type A2aRemoteEnvelope } from '../../../shared/a2a
 import { A2aTaskService } from '../../a2a/A2aTaskService';
 import { AppendOnlyLog } from '../../eventlog/AppendOnlyLog';
 import { remoteTaskId } from '../ids';
-import { acceptInbound, type InboundDeps } from '../inbound';
+import { PeerTaskBudget, acceptInbound, type InboundDeps } from '../inbound';
 import { LinkStore } from '../linkStore';
 import { linkAlias, syncRemoteTask } from '../outbound';
 import { OutboxStore } from '../outboxStore';
@@ -70,6 +70,34 @@ function env(linkId: string, o: Partial<A2aRemoteEnvelope>): A2aRemoteEnvelope {
 }
 
 const peer = { hostId: HOST };
+
+describe('acceptInbound — new tasks per PC', () => {
+  it('past the hourly limit a new task is refused; a resend is not counted, and a refused one leaves room for nothing', async () => {
+    let now = Date.parse('2026-10-23T00:00:00.000Z');
+    const budget = new PeerTaskBudget(2, () => now);
+    const limited = { ...deps, taskBudget: budget };
+    const linkId = activeLink();
+    const first = env(linkId, {});
+    expect(await acceptInbound(first, peer, limited)).toMatchObject({ ok: true, duplicate: false });
+    // The same task again is a resend: answered from the ledger, not counted.
+    expect(await acceptInbound(first, peer, limited)).toMatchObject({ ok: true, duplicate: true });
+    expect(await acceptInbound(env(linkId, {}), peer, limited)).toMatchObject({ ok: true, duplicate: false });
+    expect(await acceptInbound(env(linkId, {}), peer, limited)).toEqual({ ok: false, error: 'forbidden' });
+    // Another PC has its own count.
+    expect(budget.admit(OTHER_HOST)).toBe(true);
+    now += 60 * 60 * 1000;
+    expect(await acceptInbound(env(linkId, {}), peer, limited)).toMatchObject({ ok: true, duplicate: false });
+  });
+
+  it('a task that was not stored does not use up the limit', async () => {
+    const budget = new PeerTaskBudget(1);
+    const limited = { ...deps, taskBudget: budget };
+    const linkId = activeLink();
+    vi.spyOn(tasks, 'createTask').mockResolvedValueOnce({ ok: false, error: 'ledger busy' } as never);
+    expect(await acceptInbound(env(linkId, {}), peer, limited)).toMatchObject({ ok: false, error: 'unavailable' });
+    expect(await acceptInbound(env(linkId, {}), peer, limited)).toMatchObject({ ok: true, duplicate: false });
+  });
+});
 
 describe('acceptInbound — task', () => {
   it('lands an undelivered inbound task on the linked pane and broadcasts it', async () => {
