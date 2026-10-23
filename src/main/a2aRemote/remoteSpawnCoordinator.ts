@@ -10,7 +10,7 @@ import {
   type A2aSpawnWork,
 } from '../../shared/a2aSpawn';
 import type { ApprovalHandle, RemoteSpawnPromptInfo } from '../mcp/ApprovalQueue';
-import { createSpawnWorktree, type SpawnWorktreeInput, type SpawnWorktreeResult } from './spawnWorktree';
+import { createSpawnWorktree, removeSpawnWorktree, type SpawnWorktreeInput, type SpawnWorktreeResult } from './spawnWorktree';
 
 /**
  * Remote spawn on the receiving PC, the app's part. The daemon decides and
@@ -20,8 +20,11 @@ import { createSpawnWorktree, type SpawnWorktreeInput, type SpawnWorktreeResult 
  *   approved → `claim` (the daemon checks everything again) → a hardened
  *              worktree (spawnWorktree.ts) → the "From <PC>" workspace, its
  *              one pane running the agent's launcher alone, in the policy's
- *              permission mode → the depth stamp → `started` (the daemon then
- *              links it and queues the prompt as its first task)
+ *              permission mode, stamped depth 1 inside pty.create before the
+ *              agent starts → `started` (the daemon then links it and queues
+ *              the prompt as its first task)
+ *   Any step that fails after the workspace opened closes it and removes the
+ *   worktree and its branch, then the daemon is told `failed`.
  *   a held follow-up → its card → the hold is retried (delivered) or rejected
  *
  * Driven by the daemon's `a2a.remote.spawn.changed` and inbound broadcasts,
@@ -53,9 +56,8 @@ export interface RemoteSpawnCoordinatorDeps {
   };
   /** Deliver a held remote task now (RemoteA2aBridge.retryHeld). */
   retryHeld: (taskId: string) => Promise<unknown>;
-  /** Stamp the new workspace so its agent cannot fan out again (depth 1). Throws when it could not. */
-  markDepth: (workspaceId: string, owner: string) => void;
   createWorktree?: (input: SpawnWorktreeInput) => Promise<SpawnWorktreeResult>;
+  removeWorktree?: (input: { repoPath: string; spawnId: string }) => Promise<void>;
   backstopMs?: number;
   retryMs?: number;
   log: (level: 'info' | 'warn', msg: string) => void;
@@ -90,6 +92,10 @@ export class RemoteSpawnCoordinator {
     void this.refresh();
   }
 
+  /**
+   * Stop acting: no more passes or starts, and the cards this one showed are
+   * taken down (the next connection shows them again, and answers them).
+   */
   stop(): void {
     this.stopped = true;
     if (this.timer) clearInterval(this.timer);
@@ -98,6 +104,8 @@ export class RemoteSpawnCoordinator {
     this.unsubscribe = null;
     for (const t of this.retryTimers.values()) clearTimeout(t);
     this.retryTimers.clear();
+    for (const promptId of this.shown.values()) this.deps.consent.cancelPrompt(promptId, 'wmux reconnected to its background service');
+    this.shown.clear();
   }
 
   /** Read what the daemon has for this app and act on it. One at a time; a call meanwhile runs once more after. */
@@ -178,6 +186,8 @@ export class RemoteSpawnCoordinator {
     this.shown.set(key, handle.promptId);
     void handle.resolution
       .then(async (r) => {
+        // Answered after this one stopped: the next connection's card takes it.
+        if (this.stopped) return;
         const verdict = !r.approved ? 'deny' : r.remember ? 'always' : 'once';
         const res = await this.deps.daemonRpc(A2A_SPAWN_RPC.decide, { hostId: card.hostId, spawnId: card.spawnId, verdict });
         if (!isOk(res)) this.deps.log('warn', `[remote-spawn] ${card.spawnId}: answer not taken: ${errorOf(res)}`);
@@ -209,6 +219,7 @@ export class RemoteSpawnCoordinator {
     this.shown.set(key, handle.promptId);
     void handle.resolution
       .then(async (r) => {
+        if (this.stopped) return;
         if (r.approved) await this.deps.retryHeld(card.taskId);
         else await this.deps.daemonRpc(A2A_REMOTE_RPC.rejectHeld, { taskId: card.taskId, reason: 'declined on this PC' });
       })
@@ -222,55 +233,74 @@ export class RemoteSpawnCoordinator {
     const key = `${hostId}:${spawnId}`;
     if (this.starting.has(key) || this.retryTimers.has(key) || this.stopped) return;
     this.starting.add(key);
+    let claimed: A2aSpawnClaimResult;
     try {
-      let claimed: A2aSpawnClaimResult;
-      try {
-        claimed = (await this.deps.daemonRpc(A2A_SPAWN_RPC.claim, { hostId, spawnId })) as A2aSpawnClaimResult;
-      } catch (err) {
-        this.retryLater(key, hostId, spawnId, errText(err));
-        return;
+      claimed = (await this.deps.daemonRpc(A2A_SPAWN_RPC.claim, { hostId, spawnId })) as A2aSpawnClaimResult;
+    } catch (err) {
+      this.starting.delete(key);
+      this.retryLater(key, hostId, spawnId, errText(err));
+      return;
+    }
+    if (!claimed?.ok) {
+      this.starting.delete(key);
+      // Refused (the daemon answered the asker), or not checkable right now.
+      if (!claimed?.code) this.retryLater(key, hostId, spawnId, claimed?.error ?? 'no answer');
+      return;
+    }
+    const { claim } = claimed;
+    // What this start made so far, taken back if it does not finish.
+    let tree: { repoPath: string; spawnId: string } | null = null;
+    let workspaceId: string | null = null;
+    const undo = async (code: 'folder-not-allowed' | 'failed', why: string): Promise<void> => {
+      this.deps.log('warn', `[remote-spawn] ${spawnId} from ${hostId}: not started (${code}): ${why}`);
+      if (workspaceId) {
+        // Closing the workspace ends its pane and the agent in it.
+        await this.deps.sendToRenderer('workspace.close', { id: workspaceId }).catch((err: unknown) =>
+          this.deps.log('warn', `[remote-spawn] ${spawnId}: workspace ${workspaceId} not closed: ${errText(err)}`));
       }
-      if (!claimed?.ok) {
-        // Refused (the daemon answered the asker), or not checkable right now.
-        if (!claimed?.code) this.retryLater(key, hostId, spawnId, claimed?.error ?? 'no answer');
-        return;
+      if (tree) {
+        await (this.deps.removeWorktree ?? removeSpawnWorktree)(tree).catch((err: unknown) =>
+          this.deps.log('warn', `[remote-spawn] ${spawnId}: worktree not removed: ${errText(err)}`));
       }
-      const { claim } = claimed;
-      const failed = async (code: 'folder-not-allowed' | 'failed', why: string): Promise<void> => {
-        this.deps.log('warn', `[remote-spawn] ${spawnId} from ${hostId}: not started (${code}): ${why}`);
-        await this.deps.daemonRpc(A2A_SPAWN_RPC.failed, { hostId, spawnId, code }).catch(() => undefined);
-      };
+      await this.deps.daemonRpc(A2A_SPAWN_RPC.failed, { hostId, spawnId, code }).catch(() => undefined);
+    };
+    try {
       const row = agentRow(claim.agent);
-      if (!row) return failed('failed', `unknown agent ${claim.agent}`);
-      const tree = await (this.deps.createWorktree ?? createSpawnWorktree)({ repoPath: claim.repoPath, sub: claim.sub, spawnId });
-      if (!tree.ok) return failed(tree.code, tree.detail);
+      if (!row) return await undo('failed', `unknown agent ${claim.agent}`);
+      const made = await (this.deps.createWorktree ?? createSpawnWorktree)({ repoPath: claim.repoPath, sub: claim.sub, spawnId });
+      if (!made.ok) return await undo(made.code, made.detail);
+      tree = { repoPath: claim.repoPath, spawnId };
       // The renderer takes a name of at most 64 characters (it drops the marker otherwise).
       const spawnedBy: A2aRemoteSpawnedBy = { hostId, name: claim.hostName.slice(0, 64), spawnId, agent: claim.agent };
-      let ws: SpawnedWorkspace | null;
+      let opened: unknown;
       try {
-        ws = spawnedWorkspace(await this.deps.sendToRenderer('fanout.spawnWorkspace', {
+        opened = await this.deps.sendToRenderer('fanout.spawnWorkspace', {
           name: `From ${claim.hostName}`,
-          cwd: tree.cwd,
+          cwd: made.cwd,
           // The launcher alone: the prompt arrives as the link's first task, typed in once the agent is ready.
           initialCommand: agentLauncherStem(row),
           workerPermissionMode: claim.permissionMode,
+          // Also stamps the workspace depth 1 inside pty.create, before the agent starts.
           remoteSpawnedBy: spawnedBy,
-        }, { timeoutMs: SPAWN_WORKSPACE_TIMEOUT_MS }));
+        }, { timeoutMs: SPAWN_WORKSPACE_TIMEOUT_MS });
       } catch (err) {
-        return failed('failed', `the workspace did not open: ${errText(err)} (worktree left at ${tree.worktreePath})`);
+        return await undo('failed', `the workspace did not open: ${errText(err)}`);
       }
-      if (!ws) return failed('failed', `the workspace did not open (worktree left at ${tree.worktreePath})`);
+      const ws = spawnedWorkspace(opened);
+      // The renderer rolls back a workspace it could not finish; an id it did return is closed here.
+      workspaceId = ws?.workspaceId ?? workspaceIdOf(opened);
+      if (!ws) return await undo('failed', 'the workspace did not open');
+      if (this.stopped) return await undo('failed', 'wmux reconnected to its background service meanwhile');
+      let res: unknown;
       try {
-        this.deps.markDepth(ws.workspaceId, `remote-spawn:${hostId}`);
+        res = await this.deps.daemonRpc(A2A_SPAWN_RPC.started, { hostId, spawnId, ...ws });
       } catch (err) {
-        // The agent has no prompt yet; without the stamp it must not get one.
-        return failed('failed', `the workspace was not stamped: ${errText(err)}`);
+        return await undo('failed', `not linked: ${errText(err)}`);
       }
-      const res = await this.deps.daemonRpc(A2A_SPAWN_RPC.started, { hostId, spawnId, ...ws });
-      if (!isOk(res)) this.deps.log('warn', `[remote-spawn] ${spawnId} from ${hostId}: started, not linked: ${errorOf(res)}`);
-      else this.deps.log('info', `[remote-spawn] ${spawnId} from ${hostId}: started ${claim.agent} in workspace ${ws.workspaceId}`);
+      if (!isOk(res)) return await undo('failed', `not linked: ${errorOf(res)}`);
+      this.deps.log('info', `[remote-spawn] ${spawnId} from ${hostId}: started ${claim.agent} in workspace ${ws.workspaceId}`);
     } catch (err) {
-      this.deps.log('warn', `[remote-spawn] ${spawnId} from ${hostId}: start failed: ${errText(err)}`);
+      await undo('failed', `start failed: ${errText(err)}`);
     } finally {
       this.starting.delete(key);
     }
@@ -294,6 +324,11 @@ function spawnedWorkspace(res: unknown): SpawnedWorkspace | null {
   return typeof r['workspaceId'] === 'string' && r['workspaceId'] && typeof r['paneId'] === 'string' && r['paneId']
     ? { workspaceId: r['workspaceId'], paneId: r['paneId'] }
     : null;
+}
+
+function workspaceIdOf(res: unknown): string | null {
+  const id = typeof res === 'object' && res !== null ? (res as { workspaceId?: unknown }).workspaceId : undefined;
+  return typeof id === 'string' && id ? id : null;
 }
 
 function isOk(res: unknown): boolean {

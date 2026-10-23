@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { A2A_REMOTE_PROTOCOL, type A2aRemoteEnvelope } from '../../../shared/a2aRemote';
-import { SPAWN_TARGETS_LINK_ID, spawnLinkId, type A2aSpawnResultV1, type A2aSpawnTargetsV1 } from '../../../shared/a2aSpawn';
+import { SPAWN_TARGETS_LINK_ID, type A2aSpawnResultV1, type A2aSpawnTargetsV1 } from '../../../shared/a2aSpawn';
 import type { DaemonConfig } from '../../types';
 import { A2aTaskService } from '../../a2a/A2aTaskService';
 import { AppendOnlyLog } from '../../eventlog/AppendOnlyLog';
@@ -269,8 +269,10 @@ describe('remote spawn requests, end to end', () => {
       await until(() => a.results.length > 1);
       expect(a.results[1].result).toEqual({
         v: 1, spawnId: env.linkId, code: 'started', endpoint: { kind: 'pane', workspaceId: 'ws-b', paneId: 'pane-b' }, linkVersion: 1,
+        linkId: expect.stringMatching(/^[0-9a-f-]{36}$/),
       });
-      expect(b.links.get(spawnLinkId(env.linkId))).toMatchObject({ state: 'active', remote: { hostId: a.hostId, workspaceId: 'ws-a', paneId: 'pane-a' } });
+      const linkId = a.results[1].result.linkId!;
+      expect(b.links.get(linkId)).toMatchObject({ state: 'active', spawned: true, remote: { hostId: a.hostId, workspaceId: 'ws-a', paneId: 'pane-a' } });
     });
   }
 

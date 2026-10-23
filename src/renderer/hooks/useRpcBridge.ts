@@ -1726,12 +1726,16 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
       // again with nobody noticing, so name the reason it came off.
       console.warn('[wmux:worker-launch] model-env marker dropped', { role, reason: remarked.dropped });
     }
-    const createOptions = withWorkspaceProfile(
-      remarked.command === bound.initialCommand ? bound : { ...bound, initialCommand: remarked.command },
-      // profile.startupCwd = worktreePath 힌트(§1 — 초기 편의). split 상속에
-      // 밀리는 tolerant 힌트라 방어가 아니라 편의로만 계상한다.
-      { ...newWs.profile, startupCwd: cwd || newWs.profile?.startupCwd },
-    );
+    const createOptions = {
+      ...withWorkspaceProfile(
+        remarked.command === bound.initialCommand ? bound : { ...bound, initialCommand: remarked.command },
+        // profile.startupCwd = worktreePath 힌트(§1 — 초기 편의). split 상속에
+        // 밀리는 tolerant 힌트라 방어가 아니라 편의로만 계상한다.
+        { ...newWs.profile, startupCwd: cwd || newWs.profile?.startupCwd },
+      ),
+      // A pane another PC asked for: main stamps it (depth 1) inside the create, before the agent starts.
+      ...(remoteSpawnedBy ? { remoteSpawnOf: remoteSpawnedBy.hostId } : {}),
+    };
     // The line that will really be typed into the pane — after the role rewrite,
     // after the marker decision, and after the profile has had its say.
     const launchCommand = createOptions.initialCommand ?? '';

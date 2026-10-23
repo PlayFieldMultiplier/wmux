@@ -225,7 +225,8 @@ export class LinkStore {
    * The link a remote spawn makes, active at once (version 1). Only the spawn
    * path calls it, and only for a request this PC approved (B) or sent (A);
    * `proposer` says which side of that exchange this PC is: 'remote' on the
-   * PC that started the agent. The id is the spawn's (`spawnLinkId`).
+   * PC that started the agent, which marks the link `spawned`. The id is a
+   * fresh uuid that PC minted and names in its `started` answer.
    */
   createSpawned(input: NewLinkInput & { linkId: string; proposer: 'local' | 'remote' }): A2aLinkRecordV1 {
     this.assertWritable();
@@ -440,7 +441,12 @@ export class LinkStore {
 
     const at = new Date(this.now()).toISOString();
     const proposer = spawnedBy ?? (state === 'proposed-out' ? 'local' : 'remote');
-    const rec: A2aLinkRecordV1 = { v: A2A_REMOTE_RECORD_V, linkId, version: 1, state, ...clean, proposer, createdAt: at, updatedAt: at };
+    const rec: A2aLinkRecordV1 = {
+      v: A2A_REMOTE_RECORD_V, linkId, version: 1, state, ...clean, proposer,
+      // The PC that started the agent marks the link; its rules follow the record.
+      ...(state === 'active' && spawnedBy === 'remote' ? { spawned: true as const } : {}),
+      createdAt: at, updatedAt: at,
+    };
     this.links.set(linkId, rec);
     try {
       this.persist();
@@ -623,6 +629,7 @@ function coerceFile(raw: unknown): A2aLinkRecordV1[] | null {
       state: state as A2aLinkState,
       ...clean,
       proposer,
+      ...(r['spawned'] === true ? { spawned: true as const } : {}),
       createdAt,
       updatedAt,
       ...(endedReason !== undefined ? { endedReason: endedReason as EndedReason } : {}),

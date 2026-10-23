@@ -28,7 +28,7 @@ import {
   type A2aRemoteTarget,
   type A2aRemoteTaskState,
 } from '../../shared/a2aRemoteDelivery';
-import type { CompletionEvidence, Message, Part, Task } from '../../shared/types';
+import type { CompletionEvidence, EvidenceItem, Message, Part, Task } from '../../shared/types';
 import type { A2aTaskService } from '../a2a/A2aTaskService';
 import type { LinkStore } from './linkStore';
 import type { OutboxStore } from './outboxStore';
@@ -420,34 +420,44 @@ function envelope(
     linkId: link.linkId,
     linkVersion: link.version,
     messageId,
-    ...(deps.spawnLink?.(link.linkId) ? spawnLinkBody(body) : body),
+    // Marked on the link itself, so no path that sends on it can skip this.
+    ...(link.spawned === true || deps.spawnLink?.(link.linkId) ? spawnLinkBody(body) : body),
     sentAt: new Date((deps.now ?? Date.now)()).toISOString(),
   };
 }
 
-/** What may leave on a link a remote start made: every text redacted, no images. */
+/**
+ * What may leave on a link a remote start made: every string redacted, no
+ * images, and only the fields this build knows (rebuilt, not copied, so a
+ * field added later cannot pass unredacted).
+ */
 function spawnLinkBody(
   body: Pick<A2aRemoteEnvelope, 'kind' | 'taskId' | 'text' | 'state' | 'message' | 'evidence' | 'receipt' | 'images'>,
 ): typeof body {
-  const { images: _dropped, ...rest } = body;
-  const evidence = rest.evidence
+  const r = (v: string): string => redactSecrets(v);
+  const evidence: CompletionEvidence | undefined = body.evidence
     ? {
-      ...rest.evidence,
-      summary: redactSecrets(rest.evidence.summary),
-      items: rest.evidence.items.map((item) => ({
-        ...item,
-        summary: redactSecrets(item.summary),
-        ...('command' in item ? { command: redactSecrets(item.command) } : {}),
-        ...(item.output !== undefined ? { output: redactSecrets(item.output) } : {}),
-        ...('location' in item && item.location !== undefined ? { location: redactSecrets(item.location) } : {}),
-      })) as typeof rest.evidence.items,
+      summary: r(body.evidence.summary),
+      items: body.evidence.items.map((item): EvidenceItem =>
+        item.kind === 'command'
+          ? { kind: 'command', status: item.status, summary: r(item.summary), command: r(item.command), ...(item.output !== undefined ? { output: r(item.output) } : {}) }
+          : {
+            kind: item.kind, status: item.status, summary: r(item.summary),
+            ...(item.location !== undefined ? { location: r(item.location) } : {}),
+            ...(item.output !== undefined ? { output: r(item.output) } : {}),
+          }),
+      ...(body.evidence.files ? { files: body.evidence.files.map(r) } : {}),
     }
     : undefined;
   return {
-    ...rest,
-    ...(rest.text !== undefined ? { text: redactSecrets(rest.text) } : {}),
-    ...(rest.message !== undefined ? { message: redactSecrets(rest.message) } : {}),
+    kind: body.kind,
+    ...(body.taskId !== undefined ? { taskId: body.taskId } : {}),
+    ...(body.text !== undefined ? { text: r(body.text) } : {}),
+    ...(body.state !== undefined ? { state: body.state } : {}),
+    ...(body.message !== undefined ? { message: r(body.message) } : {}),
     ...(evidence ? { evidence } : {}),
+    // A receipt is one of two words; anything else is not sent.
+    ...(body.receipt === 'delivered' || body.receipt === 'read' ? { receipt: body.receipt } : {}),
   };
 }
 

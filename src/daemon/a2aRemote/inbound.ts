@@ -138,7 +138,7 @@ async function applyInbound(
   const link = check.link;
   const remoteWs = remoteWorkspaceId(link.linkId);
   // A link a remote start made carries no images either way.
-  if (deps.spawnLinks?.isSpawnLink(link.linkId) && env.images && env.images.length > 0) {
+  if ((link.spawned === true || deps.spawnLinks?.isSpawnLink(link.linkId)) && env.images && env.images.length > 0) {
     return fail('bad-request', 'a link a remote start made carries no images');
   }
 

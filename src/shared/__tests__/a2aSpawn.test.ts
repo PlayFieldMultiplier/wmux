@@ -63,11 +63,26 @@ describe('parseSpawnResult', () => {
     expect(parseSpawnResult({ v: 1, spawnId: ID, code: 'not-allowed' })).toEqual({ v: 1, spawnId: ID, code: 'not-allowed' });
     expect(parseSpawnResult({ v: 1, spawnId: ID, code: 'not-allowed', message: '/home/x' })).toBeNull();
     expect(parseSpawnResult({ v: 1, spawnId: ID, code: 'started' })).toBeNull();
-    expect(parseSpawnResult({ v: 1, spawnId: ID, code: 'started', endpoint: { kind: 'pane', workspaceId: 'w', paneId: 'p' }, linkVersion: 1 })).not.toBeNull();
+    const linkId = '0b5e2a4c-9d1f-4e3a-8b7c-6d5e4f3a2b1c';
+    const started = { v: 1, spawnId: ID, code: 'started', endpoint: { kind: 'pane', workspaceId: 'w', paneId: 'p' }, linkVersion: 1 };
+    // `started` names the link B minted: a uuid, required, and only with started.
+    expect(parseSpawnResult(started)).toBeNull();
+    expect(parseSpawnResult({ ...started, linkId: 'not-a-uuid' })).toBeNull();
+    expect(parseSpawnResult({ ...started, linkId })).toEqual({ ...started, linkId });
+    expect(parseSpawnResult({ v: 1, spawnId: ID, code: 'failed', linkId })).toBeNull();
   });
 });
 
 describe('the policy', () => {
+  it('keeps a rule\'s folder below its root, normalized, and refuses one that is not', () => {
+    const base = { ...defaultSpawnPolicy(), roots: [{ id: 'web', label: 'Web', path: '/r' }] };
+    const rule = { hostId: '11111111-1111-4111-8111-111111111111', rootId: 'web', agent: 'claude' };
+    expect(coerceSpawnPolicy({ ...base, rules: [{ ...rule, sub: 'apps/site' }] })?.rules).toEqual([{ ...rule, sub: 'apps/site' }]);
+    expect(coerceSpawnPolicy({ ...base, rules: [rule] })?.rules).toEqual([rule]);
+    expect(coerceSpawnPolicy({ ...base, rules: [{ ...rule, sub: '../out' }] })).toBeNull();
+    expect(coerceSpawnPolicy({ ...base, rules: [{ ...rule, sub: 'apps//site' }] })).toBeNull();
+  });
+
   it('is off by default with nobody allowed, and runs agents in auto mode', () => {
     expect(DEFAULT_SPAWN_POLICY).toMatchObject({ enabled: false, approval: 'ask', followUps: 'ask', permissionMode: 'auto', hosts: {}, roots: [], agents: [] });
     expect(coerceSpawnPolicy(defaultSpawnPolicy())).toEqual(defaultSpawnPolicy());

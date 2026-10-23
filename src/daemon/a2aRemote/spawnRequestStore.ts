@@ -59,9 +59,19 @@ export interface SpawnRequestRecordV1 {
   sent?: true;
   /** Open only (every state but `decided`). */
   request?: A2aSpawnRequestV1;
-  /** Decided `started` only: B's new pane and the link's version, for a resend of the answer. */
+  /** Decided `started` only: B's new pane, the link's id and version, for a resend of the answer. */
   endpoint?: { kind: 'pane'; workspaceId: string; paneId: string };
   linkVersion?: number;
+  linkId?: string;
+  /** Starting only: when main claimed it (a start that never reports back is ended after a while). */
+  claimedAt?: string;
+}
+
+/** What a `started` decision keeps. */
+export interface SpawnStarted {
+  endpoint: { kind: 'pane'; workspaceId: string; paneId: string };
+  linkVersion: number;
+  linkId: string;
 }
 
 const OPEN: ReadonlySet<A2aSpawnRequestState> = new Set(['pending', 'awaiting', 'approved', 'starting']);
@@ -148,6 +158,17 @@ export class SpawnRequestStore {
       (hostId === undefined || r.hostId === hostId) && r.approvedAt !== undefined && Date.parse(r.approvedAt) >= since).length;
   }
 
+  /**
+   * Starts at or after `since` (ms) for `hostId`: requests approved then that
+   * are starting or were started. `except` leaves one request out (the one
+   * being checked).
+   */
+  startsSince(since: number, hostId: HostId, except?: string): number {
+    return [...this.records.values()].filter((r) =>
+      r.hostId === hostId && r.spawnId !== except && r.approvedAt !== undefined && Date.parse(r.approvedAt) >= since &&
+      (r.state === 'starting' || r.code === 'started')).length;
+  }
+
   /** Requests approved or starting, of `hostId` or of every PC (they are about to be live). */
   startingCount(hostId?: HostId): number {
     return [...this.records.values()].filter((r) =>
@@ -162,10 +183,13 @@ export class SpawnRequestStore {
     const rec = this.records.get(key(hostId, spawnId));
     if (!rec || !from.includes(rec.state)) return undefined;
     this.assertWritable();
+    const at = new Date(this.now()).toISOString();
+    const { claimedAt: _claimed, ...rest } = rec;
     const next: SpawnRequestRecordV1 = {
-      ...rec,
+      ...rest,
       state: to,
-      ...(to === 'approved' && rec.approvedAt === undefined ? { approvedAt: new Date(this.now()).toISOString() } : {}),
+      ...(to === 'approved' && rec.approvedAt === undefined ? { approvedAt: at } : {}),
+      ...(to === 'starting' ? { claimedAt: at } : {}),
     };
     this.commit((m) => m.set(key(hostId, spawnId), next));
     return structuredClone(next);
@@ -216,18 +240,18 @@ export class SpawnRequestStore {
     hostId: HostId,
     spawnId: string,
     code: A2aSpawnCode,
-    started?: { endpoint: { kind: 'pane'; workspaceId: string; paneId: string }; linkVersion: number },
+    started?: SpawnStarted,
   ): SpawnRequestRecordV1 | undefined {
     const rec = this.records.get(key(hostId, spawnId));
     if (!rec || !OPEN.has(rec.state)) return undefined;
     this.assertWritable();
-    const { request: _dropped, ...rest } = rec;
+    const { request: _dropped, claimedAt: _claimed, ...rest } = rec;
     const next: SpawnRequestRecordV1 = {
       ...rest,
       state: 'decided',
       code,
       decidedAt: new Date(this.now()).toISOString(),
-      ...(code === 'started' && started ? { endpoint: { ...started.endpoint }, linkVersion: started.linkVersion } : {}),
+      ...(code === 'started' && started ? { endpoint: { ...started.endpoint }, linkVersion: started.linkVersion, linkId: started.linkId } : {}),
     };
     this.commit((m) => m.set(key(hostId, spawnId), next));
     return structuredClone(next);
@@ -304,16 +328,20 @@ function coerceRecord(raw: unknown): SpawnRequestRecordV1 | null {
     if (!request || request.spawnId !== spawnId) return null;
     return {
       v: 1, hostId, spawnId, fingerprint, agent: request.agent, rootId: request.folder.root,
-      state: state as A2aSpawnRequestState, receivedAt, expiresAt, ...approvedAt, request,
+      state: state as A2aSpawnRequestState, receivedAt, expiresAt, ...approvedAt,
+      ...(state === 'starting' && isIsoString(raw['claimedAt']) ? { claimedAt: raw['claimedAt'] } : {}),
+      request,
     };
   }
   if (state !== 'decided' || !isSpawnCode(code)) return null;
   // A `started` answer is resent with its pane, so it is kept only whole.
   const endpoint = raw['endpoint'];
   const linkVersion = raw['linkVersion'];
+  const linkId = raw['linkId'];
   const started = code === 'started' && isPlainObject(endpoint) && endpoint['kind'] === 'pane' &&
-    isSafeId(endpoint['workspaceId']) && isSafeId(endpoint['paneId']) && typeof linkVersion === 'number' && Number.isInteger(linkVersion) && linkVersion >= 1
-    ? { endpoint: { kind: 'pane' as const, workspaceId: endpoint['workspaceId'] as string, paneId: endpoint['paneId'] as string }, linkVersion }
+    isSafeId(endpoint['workspaceId']) && isSafeId(endpoint['paneId']) && typeof linkVersion === 'number' && Number.isInteger(linkVersion) && linkVersion >= 1 &&
+    isSafeId(linkId)
+    ? { endpoint: { kind: 'pane' as const, workspaceId: endpoint['workspaceId'] as string, paneId: endpoint['paneId'] as string }, linkVersion, linkId }
     : undefined;
   if (code === 'started' && !started) return null;
   const decidedAt = isIsoString(raw['decidedAt']) ? raw['decidedAt'] : receivedAt;

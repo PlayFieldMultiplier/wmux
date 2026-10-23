@@ -162,6 +162,24 @@ describe('createSpawnWorktree', () => {
     expect(fs.readFileSync(path.join(spawnDir(), 'README.md'), 'utf8')).toBe('r\n');
   });
 
+  it('runs no filter a global includeIf.onbranch defines for the new branch only', async () => {
+    // Applies once wmux/remote/<id> exists: after the config was first read.
+    fs.writeFileSync(path.join(repo, '.gitattributes'), '* filter=late\n');
+    g(repo, 'add', '.gitattributes');
+    g(repo, 'commit', '-qm', 'attrs');
+    const onBranch = path.join(root, 'onbranch.gitconfig');
+    fs.writeFileSync(onBranch, `[filter "late"]\n\tsmudge = ${touchMarker()}; cat\n\tclean = cat\n`);
+    fs.writeFileSync(globalConfig, `[includeIf "onbranch:wmux/remote/**"]\n\tpath = ${onBranch.replace(/\\/g, '/')}\n`);
+    g(repo, 'worktree', 'add', '-q', '-b', 'wmux/remote/control', path.join(root, 'control'), 'HEAD');
+    expect(fs.existsSync(marker)).toBe(true);
+    fs.unlinkSync(marker);
+
+    const r = await create();
+    expect(r.ok).toBe(true);
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(fs.readFileSync(path.join(spawnDir(), 'README.md'), 'utf8')).toBe('r\n');
+  });
+
   it.skipIf(process.platform === 'win32')('refuses a folder that is a link out of the worktree, and removes the worktree', async () => {
     fs.symlinkSync(root, path.join(repo, 'out'));
     g(repo, 'add', 'out');

@@ -1,9 +1,9 @@
+import crypto from 'node:crypto';
 import path from 'node:path';
 import {
   A2A_SPAWN_RPC,
   normalizeSpawnSub,
   spawnFirstMessageId,
-  spawnLinkId,
   type A2aSpawnFollowUpCardV1,
   type A2aSpawnRequestV1,
   type A2aSpawnVerdict,
@@ -27,24 +27,29 @@ import { errMsg, isSafeId } from './storeFile';
  * means for as long as it lives.
  *
  * `mint` (the receiver calls it from `started`):
- *   1. shows the new pane to that PC, unless it was shown already;
- *   2. records the link in `spawn-links.json` (before the link exists, so a
- *      link a start made is never without its rules);
- *   3. creates the link, active at once (`LinkStore.createSpawned`): this PC
- *      takes new tasks from the asker's pane on it, and sends none;
- *   4. queues the prompt as the link's first inbound task (`first_<id>`),
+ *   1. picks a fresh link id (a uuid nothing the asker sent predicts; it is
+ *      told the id in the `started` answer);
+ *   2. shows the new pane to that PC, unless it was shown already;
+ *   3. records the link in `spawn-links.json` (before the link exists, so a
+ *      link a start made is never without its put-back);
+ *   4. creates the link, active at once and marked `spawned`
+ *      (`LinkStore.createSpawned`): this PC takes new tasks from the asker's
+ *      pane on it, and sends none;
+ *   5. queues the prompt as the link's first inbound task (`first_<id>`),
  *      delivered like any remote task: typed into the pane once its agent is
  *      ready, never on a command line.
- *   Anything that fails undoes what came before it.
+ *   Anything that fails undoes what this call made. A start that fails later
+ *   (its `started` answer not stored, a restart, a start that never reported
+ *   back) ends the link again through `abandon`.
  *
  * On a spawn link (`isSpawnLink`): outgoing text is redacted and no images go
  * either way (outbound.ts, inbound.ts); with `followUps: 'ask'` each later
  * task waits for its card (`held: 'awaiting-approval'`).
  *
- * When the link ends (`onLinkTransition`, and `reconcile` on start): the
- * exposure the start added is put back, unless another live link to that PC
- * still uses the pane, and the record goes. The pane keeps running, owned by
- * this PC's person.
+ * When the link ends (`onLinkTransition`; `reconcile` on start and
+ * periodically): the exposure the start added is put back, unless another
+ * live link to that PC still uses the pane (then when that one ends), and the
+ * record goes. The pane keeps running, owned by this PC's person.
  */
 
 export interface SpawnStarterDeps {
@@ -73,9 +78,12 @@ export class A2aSpawnStarter {
     this.now = deps.now ?? Date.now;
   }
 
-  /** A link a remote start made here (it lives). */
+  /**
+   * A link a remote start made here: marked so on the link itself, or (a
+   * file an older build rewrote without the mark) still recorded here.
+   */
   isSpawnLink(linkId: string): boolean {
-    return this.deps.spawnLinks.has(linkId);
+    return this.deps.links.get(linkId)?.spawned === true || this.deps.spawnLinks.has(linkId);
   }
 
   /** A new task on this link waits for its card. */
@@ -92,10 +100,12 @@ export class A2aSpawnStarter {
     }).length;
   }
 
-  async mint(rec: SpawnRequestRecordV1, request: A2aSpawnRequestV1, end: { workspaceId: string; paneId: string }): Promise<{ linkVersion: number }> {
+  async mint(rec: SpawnRequestRecordV1, request: A2aSpawnRequestV1, end: { workspaceId: string; paneId: string }): Promise<{ linkId: string; linkVersion: number }> {
     if (!isSafeId(end.workspaceId) || !isSafeId(end.paneId)) throw new Error('the started pane is not named');
     const { hostId, spawnId } = rec;
-    const linkId = spawnLinkId(spawnId);
+    // A fresh id nothing the asker sent predicts, free in both stores before anything is written.
+    let linkId = crypto.randomUUID();
+    while (this.deps.links.get(linkId) || this.deps.spawnLinks.has(linkId)) linkId = crypto.randomUUID();
     const policy = this.deps.policy.get();
     const root = policy.roots.find((r) => r.id === request.folder.root);
     const sub = normalizeSpawnSub(request.folder.sub) ?? '';
@@ -103,6 +113,7 @@ export class A2aSpawnStarter {
 
     const shown = this.deps.exposures.isPaneExposed(hostId, end.workspaceId, end.paneId);
     const added = shown ? { added: false, addedWorkspace: false } : this.deps.exposures.addPane(hostId, end.workspaceId, end.paneId);
+    let recorded = false;
     let link: A2aLinkRecordV1;
     try {
       this.deps.spawnLinks.add({
@@ -110,24 +121,22 @@ export class A2aSpawnStarter {
         rootId: request.folder.root, folder, addedExposure: added.added, addedWorkspace: added.addedWorkspace,
         startedAt: new Date(this.now()).toISOString(),
       });
-      try {
-        link = this.deps.links.createSpawned({
-          linkId,
-          local: { kind: 'pane', workspaceId: end.workspaceId, paneId: end.paneId },
-          remote: { hostId, kind: 'pane', workspaceId: request.from.workspaceId, paneId: request.from.paneId },
-          allow: { inbound: true, outbound: false },
-          proposer: 'remote',
-        });
-      } catch (err) {
-        this.forget(linkId);
-        throw err;
-      }
+      recorded = true;
+      link = this.deps.links.createSpawned({
+        linkId,
+        local: { kind: 'pane', workspaceId: end.workspaceId, paneId: end.paneId },
+        remote: { hostId, kind: 'pane', workspaceId: request.from.workspaceId, paneId: request.from.paneId },
+        allow: { inbound: true, outbound: false },
+        proposer: 'remote',
+      });
     } catch (err) {
+      // Only what this call made goes again.
+      if (recorded) this.forget(linkId);
       if (added.added) this.unexpose(hostId, end, added.addedWorkspace);
       throw err;
     }
 
-    const messageId = spawnFirstMessageId(spawnId);
+    const messageId = spawnFirstMessageId(linkId);
     const taskId = remoteTaskId(linkId, messageId);
     let created: Awaited<ReturnType<SpawnStarterDeps['taskService']['createTask']>>;
     try {
@@ -148,29 +157,51 @@ export class A2aSpawnStarter {
     if (!created.ok) {
       // The agent runs but would never get its prompt: end the link (its
       // transition puts the exposure back) rather than leave it half made.
-      try {
-        this.deps.links.revoke(linkId, 'local');
-      } catch (err) {
-        this.deps.log('error', `[a2a-remote] spawn ${spawnId}: link ${linkId} not ended after its prompt was not queued: ${errMsg(err)}`);
-      }
+      this.endLink(linkId, spawnId);
       throw new Error(`the prompt was not queued: ${created.error}`);
     }
     this.deps.broadcast({ type: A2A_REMOTE_INBOUND_EVENT, taskId });
-    return { linkVersion: link.version };
+    return { linkId, linkVersion: link.version };
   }
 
-  /** A spawn link ended: put back what its start showed, and drop the record. */
+  /**
+   * A start that did not finish: end the link it made, if any (its
+   * transition puts the exposure back and drops the record).
+   */
+  abandon(hostId: HostId, spawnId: string): void {
+    for (const rec of this.deps.spawnLinks.list()) {
+      if (rec.hostId === hostId && rec.spawnId === spawnId) this.endLink(rec.linkId, spawnId);
+    }
+  }
+
+  /**
+   * Any link ended: put back what spawn links that ended showed. Not only
+   * this one: a put-back that waited for another live link to let go of the
+   * pane is done now, and one whose write failed is tried again.
+   */
   onLinkTransition(link: A2aLinkRecordV1): void {
-    if (!TERMINAL_LINK.has(link.state)) return;
-    const rec = this.deps.spawnLinks.get(link.linkId);
-    if (rec) this.end(rec.linkId);
+    if (TERMINAL_LINK.has(link.state)) this.reconcile();
   }
 
-  /** On start: links that ended (or vanished) while this daemon was down. */
+  /**
+   * Spawn links that ended (or vanished): put back their exposure and drop
+   * them. On start, on every link ending, and periodically, so a put-back
+   * that could not be done or written is retried.
+   */
   reconcile(): void {
     for (const rec of this.deps.spawnLinks.list()) {
       const link = this.deps.links.get(rec.linkId);
       if (!link || TERMINAL_LINK.has(link.state)) this.end(rec.linkId);
+    }
+  }
+
+  private endLink(linkId: string, spawnId: string): void {
+    const link = this.deps.links.get(linkId);
+    try {
+      if (link && !TERMINAL_LINK.has(link.state)) this.deps.links.revoke(linkId, 'local');
+      else this.reconcile();
+    } catch (err) {
+      this.deps.log('error', `[a2a-remote] spawn ${spawnId}: link ${linkId} not ended: ${errMsg(err)}`);
     }
   }
 

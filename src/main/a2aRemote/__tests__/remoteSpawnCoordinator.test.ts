@@ -9,7 +9,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { A2A_REMOTE_INBOUND_EVENT, A2A_REMOTE_RPC } from '../../../shared/a2aRemoteDelivery';
 import { A2A_SPAWN_EVENT, A2A_SPAWN_RPC, type A2aSpawnCardV1, type A2aSpawnClaimV1, type A2aSpawnWork } from '../../../shared/a2aSpawn';
 import type { ApprovalResult } from '../../mcp/ApprovalQueue';
-import { FanOutGuards } from '../../worktask/fanoutGuards';
+import { FanOutGuards, stampRemoteSpawnPane } from '../../worktask/fanoutGuards';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 import { RemoteSpawnCoordinator, type RemoteSpawnCoordinatorDeps } from '../remoteSpawnCoordinator';
 
 const HOST = '11111111-1111-4111-8111-111111111111';
@@ -29,7 +30,7 @@ interface Rig {
   prompts: Array<{ input: Parameters<RemoteSpawnCoordinatorDeps['consent']['requestConsent']>[0]; resolve: (r: Partial<ApprovalResult>) => void }>;
   cancelled: string[];
   retried: string[];
-  stamped: Array<[string, string]>;
+  removed: Array<{ repoPath: string; spawnId: string }>;
   worktree: ReturnType<typeof vi.fn>;
   emit: (type: string) => void;
 }
@@ -43,20 +44,24 @@ function rig(work: () => A2aSpawnWork, over: {
   claim?: () => unknown;
   render?: () => unknown;
   worktree?: () => unknown;
-  markDepth?: () => void;
+  started?: () => unknown;
   retryMs?: number;
 } = {}): Rig {
   let listener: ((e: { type?: unknown }) => void) | undefined;
   const prompts: Rig['prompts'] = [];
   const cancelled: string[] = [];
   const retried: string[] = [];
-  const stamped: Array<[string, string]> = [];
+  const removed: Rig['removed'] = [];
   const rpc = vi.fn(async (method: string) => {
     if (method === A2A_SPAWN_RPC.work) return work();
     if (method === A2A_SPAWN_RPC.claim) return over.claim ? over.claim() : { ok: true, claim };
+    if (method === A2A_SPAWN_RPC.started && over.started) return over.started();
     return { ok: true };
   });
-  const render = vi.fn(async () => (over.render ? over.render() : { workspaceId: 'ws-new', ptyId: 'pty-1', paneId: 'pane-new' }));
+  const render = vi.fn(async (method: string) => {
+    if (method === 'workspace.close') return { ok: true };
+    return over.render ? over.render() : { workspaceId: 'ws-new', ptyId: 'pty-1', paneId: 'pane-new' };
+  });
   const worktree = vi.fn(async () => (over.worktree ? over.worktree() : { ok: true, worktreePath: '/wt/remote-x', cwd: '/wt/remote-x/apps', branch: `wmux/remote/${SPAWN}` }));
   let n = 0;
   const coord = new RemoteSpawnCoordinator({
@@ -79,13 +84,13 @@ function rig(work: () => A2aSpawnWork, over: {
       cancelPrompt: (id) => void cancelled.push(id),
     },
     retryHeld: async (taskId) => void retried.push(taskId),
-    markDepth: over.markDepth ?? ((ws, owner) => void stamped.push([ws, owner])),
     createWorktree: worktree as RemoteSpawnCoordinatorDeps['createWorktree'],
+    removeWorktree: async (input) => void removed.push(input),
     backstopMs: 60_000,
     retryMs: over.retryMs ?? 60_000,
     log: () => undefined,
   });
-  const r: Rig = { coord, rpc, render, prompts, cancelled, retried, stamped, worktree, emit: (type) => listener?.({ type }) };
+  const r: Rig = { coord, rpc, render, prompts, cancelled, retried, removed, worktree, emit: (type) => listener?.({ type }) };
   rigs.push(r);
   return r;
 }
@@ -140,6 +145,17 @@ describe('cards', () => {
     await vi.waitFor(() => expect(calls(r, A2A_REMOTE_RPC.rejectHeld)).toEqual([{ taskId: 'rt-2', reason: 'declined on this PC' }]), { timeout: 5_000 });
   });
 
+  it('stop() takes its cards down, and an answer that comes after is not sent', async () => {
+    const r = rig(() => ({ ...empty(), awaiting: [card] }));
+    r.coord.start();
+    await r.coord.whenIdle();
+    r.coord.stop();
+    expect(r.cancelled).toEqual(['p1']);
+    r.prompts[0].resolve({ approved: true });
+    await deliberateSleep(50, 'proves a negative: no decide follows the late answer');
+    expect(calls(r, A2A_SPAWN_RPC.decide)).toEqual([]);
+  });
+
   it('an inbound nudge reads the requests again', async () => {
     const r = rig(empty);
     r.coord.start();
@@ -151,7 +167,7 @@ describe('cards', () => {
 });
 
 describe('starting an approved request', () => {
-  it('worktree, a workspace running the launcher alone, the depth stamp, then started; no wire field reaches the command line or env', async () => {
+  it('worktree, a workspace running the launcher alone (stamped inside its create), then started; no wire field reaches the command line or env', async () => {
     const r = rig(() => ({ ...empty(), approved: [{ hostId: HOST, spawnId: SPAWN }] }));
     r.coord.start();
     await vi.waitFor(() => expect(calls(r, A2A_SPAWN_RPC.started)).toHaveLength(1), { timeout: 5_000 });
@@ -167,21 +183,27 @@ describe('starting an approved request', () => {
       remoteSpawnedBy: { hostId: HOST, name: 'HOME-A', spawnId: SPAWN, agent: 'claude' },
     });
     expect(JSON.stringify(params)).not.toContain(PROMPT);
-    expect(r.stamped).toEqual([['ws-new', `remote-spawn:${HOST}`]]);
+    expect(r.removed).toEqual([]);
     expect(calls(r, A2A_SPAWN_RPC.started)).toEqual([{ hostId: HOST, spawnId: SPAWN, workspaceId: 'ws-new', paneId: 'pane-new' }]);
   });
 
-  it('a refused worktree, a workspace that did not open, or a missing stamp each end the request with a code', async () => {
-    const cases: Array<[Parameters<typeof rig>[1], string]> = [
-      [{ worktree: () => ({ ok: false, code: 'folder-not-allowed', detail: 'filter driver' }) }, 'folder-not-allowed'],
-      [{ render: () => ({ error: 'workspace creation failed' }) }, 'failed'],
-      [{ markDepth: () => { throw new Error('lineage store unreadable'); } }, 'failed'],
+  it('each failure ends the request with a code and leaves nothing running: the workspace closed, the worktree removed', async () => {
+    const cases: Array<[Parameters<typeof rig>[1], string, { closed: boolean; removed: boolean }]> = [
+      [{ worktree: () => ({ ok: false, code: 'folder-not-allowed', detail: 'filter driver' }) }, 'folder-not-allowed', { closed: false, removed: false }],
+      // The renderer rolled back a workspace it could not finish (the stamp failing inside pty.create too).
+      [{ render: () => ({ error: 'PTY create failed: lineage store unreadable' }) }, 'failed', { closed: false, removed: true }],
+      [{ render: () => { throw new Error('RPC timeout'); } }, 'failed', { closed: false, removed: true }],
+      // The daemon refused to link it (the PC was turned off meanwhile).
+      [{ started: () => ({ ok: false, error: 'not-allowed' }) }, 'failed', { closed: true, removed: true }],
+      [{ started: () => { throw new Error('daemon gone'); } }, 'failed', { closed: true, removed: true }],
     ];
-    for (const [over, code] of cases) {
+    for (const [over, code, left] of cases) {
       const r = rig(() => ({ ...empty(), approved: [{ hostId: HOST, spawnId: SPAWN }] }), over);
       r.coord.start();
       await vi.waitFor(() => expect(calls(r, A2A_SPAWN_RPC.failed)).toEqual([{ hostId: HOST, spawnId: SPAWN, code }]), { timeout: 5_000 });
-      expect(calls(r, A2A_SPAWN_RPC.started)).toEqual([]);
+      const closes = r.render.mock.calls.filter((c) => c[0] === 'workspace.close').map((c) => c[1]);
+      expect(closes).toEqual(left.closed ? [{ id: 'ws-new' }] : []);
+      expect(r.removed).toEqual(left.removed ? [{ repoPath: '/repo', spawnId: SPAWN }] : []);
       r.coord.stop();
     }
   });
@@ -208,8 +230,12 @@ describe('depth 1', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-remote-spawn-depth-'));
     try {
       const guards = new FanOutGuards({ dir, countLiveTasks: () => 0, ledgerTaskOwner: () => null });
-      guards.markTask('ws-new', `remote-spawn:${HOST}`);
+      // What pty.create does for a remote-started pane, before the PTY exists.
+      stampRemoteSpawnPane({ remoteSpawnOf: HOST, workspaceId: 'ws-new' }, guards);
       expect(guards.fanoutOwnerOf('ws-new')).toBe(`remote-spawn:${HOST}`);
+      expect(() => stampRemoteSpawnPane({ remoteSpawnOf: HOST }, guards)).toThrow(/workspaceId/);
+      stampRemoteSpawnPane({ workspaceId: 'ws-plain' }, guards);
+      expect(guards.fanoutOwnerOf('ws-plain')).toBeNull();
       // The documented limit: wmux's own RPCs can make a workspace that carries
       // no stamp, and a same-user agent there passes the depth check. What
       // stops a chain of PCs is each PC's own opt-in and card.

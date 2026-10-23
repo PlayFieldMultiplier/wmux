@@ -205,7 +205,6 @@ import { markRendererNotificationListenerNotReady } from './notification/rendere
 import { RemoteInboxBridge } from './lanlink/RemoteInboxBridge';
 import { RemoteA2aBridge } from './a2a/RemoteA2aBridge';
 import { RemoteSpawnCoordinator } from './a2aRemote/remoteSpawnCoordinator';
-import { getFanOutGuards } from './worktask/fanoutGuards';
 import { daemonRemoteA2aRpcDeps } from './a2a/remoteA2aRpcDeps';
 import { setA2aRemoteBridge } from './ipc/handlers/a2aRemote.handler';
 import { sendToRenderer } from './pipe/handlers/_bridge';
@@ -2462,8 +2461,6 @@ app.on('ready', async () => {
         },
         consent: approvalQueue,
         retryHeld: (taskId) => spawnBridge.retryHeld(taskId),
-        // Depth 1: an agent another PC started here cannot fan out again (loop damping, not a boundary).
-        markDepth: (workspaceId, owner) => getFanOutGuards().markTask(workspaceId, owner),
         log: (level, msg) => logLine(level, 'a2a-remote', msg),
       });
       remoteSpawnCoordinator.start();

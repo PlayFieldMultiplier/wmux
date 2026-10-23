@@ -475,6 +475,12 @@ export interface A2aLinkRecordV1 {
    * 'local' means this host is the joiner. Exposure applies to 'remote' links.
    */
   proposer: 'local' | 'remote';
+  /**
+   * The link a remote spawn made on THIS PC (it started the agent): what goes
+   * out on it is redacted, no images go either way, and later tasks may wait
+   * for a card. Local bookkeeping, never sent; an older build drops it.
+   */
+  spawned?: true;
 }
 
 // ─── Layer 2/3 wire ─────────────────────────────────────────────────────────

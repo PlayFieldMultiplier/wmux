@@ -120,25 +120,22 @@ export interface A2aSpawnResultV1 {
   endpoint?: { kind: 'pane'; workspaceId: string; paneId: string };
   /** `started` only: the link's version on B. */
   linkVersion?: number;
-}
-
-/**
- * The link a started spawn makes, on both PCs: the spawnId's uuid. Link ids
- * in `links.json` are uuids, and an older build refuses that whole file over
- * one that is not, so the `sp-` prefix stays off the link.
- */
-export function spawnLinkId(spawnId: string): string {
-  return spawnId.slice('sp-'.length);
+  /** `started` only: the link's id (a uuid B minted when it started the agent). */
+  linkId?: string;
 }
 
 /**
  * The message id of a started spawn's first task (the prompt), on both PCs:
- * with `spawnLinkId` it gives the same task id on each (`remoteTaskId`), so
- * the replies of the started agent land on the asker's copy.
+ * with the link id from the `started` answer it gives the same task id on
+ * each (`remoteTaskId`), so the replies of the started agent land on the
+ * asker's copy. The link id is a fresh uuid minted by B (`links.json` takes
+ * uuids only, and nothing the asker sent predicts it).
  */
-export function spawnFirstMessageId(spawnId: string): string {
-  return `first_${spawnLinkId(spawnId)}`;
+export function spawnFirstMessageId(linkId: string): string {
+  return `first_${linkId}`;
 }
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 /** B -> A: what A may ask for. Ids and labels only, never a path. */
 export interface A2aSpawnTargetsV1 {
@@ -167,6 +164,16 @@ export interface A2aSpawnRuleV1 {
   hostId: HostId;
   rootId: string;
   agent: AgentSlug;
+  /**
+   * The folder below the root it was granted for (normalized; '' = the root).
+   * Absent on a rule saved before it was recorded: it then covers the root only.
+   */
+  sub?: string;
+}
+
+/** A rule allows exactly the folder it was granted for. */
+export function spawnRuleMatches(rule: A2aSpawnRuleV1, hostId: HostId, rootId: string, agent: AgentSlug, sub: string): boolean {
+  return rule.hostId === hostId && rule.rootId === rootId && rule.agent === agent && (rule.sub ?? '') === sub;
 }
 
 export interface A2aSpawnPolicyV1 {
@@ -430,24 +437,27 @@ export function spawnClockOk(sentAt: string, expiresAt: string, now: number): bo
 }
 
 export function parseSpawnResult(raw: unknown): A2aSpawnResultV1 | null {
-  if (!isPlain(raw) || !onlyKeys(raw, ['v', 'spawnId', 'code', 'endpoint', 'linkVersion'])) return null;
+  if (!isPlain(raw) || !onlyKeys(raw, ['v', 'spawnId', 'code', 'endpoint', 'linkVersion', 'linkId'])) return null;
   if (raw['v'] !== 1 || !isSpawnId(raw['spawnId']) || !isSpawnCode(raw['code'])) return null;
   const code = raw['code'];
   const endpoint = raw['endpoint'];
   const linkVersion = raw['linkVersion'];
+  const linkId = raw['linkId'];
   if (code !== 'started') {
-    if (endpoint !== undefined || linkVersion !== undefined) return null;
+    if (endpoint !== undefined || linkVersion !== undefined || linkId !== undefined) return null;
     return { v: 1, spawnId: raw['spawnId'] as string, code };
   }
   if (!isPlain(endpoint) || !onlyKeys(endpoint, ['kind', 'workspaceId', 'paneId']) || endpoint['kind'] !== 'pane') return null;
   if (!safeId(endpoint['workspaceId']) || !safeId(endpoint['paneId'])) return null;
   if (typeof linkVersion !== 'number' || !Number.isInteger(linkVersion) || linkVersion < 1) return null;
+  if (typeof linkId !== 'string' || !UUID_RE.test(linkId)) return null;
   return {
     v: 1,
     spawnId: raw['spawnId'] as string,
     code,
     endpoint: { kind: 'pane', workspaceId: endpoint['workspaceId'] as string, paneId: endpoint['paneId'] as string },
     linkVersion,
+    linkId,
   };
 }
 
@@ -503,10 +513,12 @@ export function coerceSpawnPolicy(raw: unknown): A2aSpawnPolicyV1 | null {
   const cleanRules: A2aSpawnRuleV1[] = [];
   for (const r of rules) {
     if (!isPlain(r) || !isHostId(r['hostId']) || !isSpawnRootId(r['rootId']) || !isAgentSlug(r['agent'])) return null;
+    const sub = r['sub'] === undefined ? '' : normalizeSpawnSub(r['sub']);
+    if (sub === null || (r['sub'] !== undefined && sub !== r['sub'])) return null;
     // A rule for a folder no longer listed goes with it: a folder added later
     // under the same id must not inherit it.
     if (!cleanRoots.some((root) => root.id === r['rootId'])) continue;
-    cleanRules.push({ hostId: r['hostId'], rootId: r['rootId'] as string, agent: r['agent'] });
+    cleanRules.push({ hostId: r['hostId'], rootId: r['rootId'] as string, agent: r['agent'], ...(sub ? { sub } : {}) });
   }
   return {
     v: 1,

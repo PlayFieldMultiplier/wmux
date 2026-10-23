@@ -3,7 +3,7 @@ import { atomicWriteJSONSync } from '../util/atomicWrite';
 import { scheduleTokenFileReHarden } from '../../shared/security';
 import { isAgentSlug, type AgentSlug } from '../../shared/agentIdentity';
 import { isHostId, type HostId } from '../../shared/a2aRemote';
-import { isSpawnId, isSpawnRootId, spawnLinkId } from '../../shared/a2aSpawn';
+import { isSpawnId, isSpawnRootId } from '../../shared/a2aSpawn';
 import { isIsoString, isPlainObject, isSafeId, loadStore, storeUnavailable, type StoreLog } from './storeFile';
 
 /**
@@ -18,8 +18,13 @@ import { isIsoString, isPlainObject, isSafeId, loadStore, storeUnavailable, type
  */
 
 export const SPAWN_LINKS_FILE = 'spawn-links.json';
-/** Records kept at most (each is a started agent; the live caps keep this far lower). */
-const SPAWN_LINKS_MAX = 1000;
+/**
+ * Records kept at most. Each is a link that lives, or one whose exposure is
+ * still to be put back: none may be dropped to make room (it would lose its
+ * rules), so past this a new start is refused. The live caps keep it far lower.
+ */
+export const SPAWN_LINKS_MAX = 1000;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export interface SpawnLinkRecordV1 {
   v: 1;
@@ -95,9 +100,10 @@ export class SpawnLinkStore {
     if (!this.writable) throw storeUnavailable(SPAWN_LINKS_FILE);
     const clean = coerceRecord(rec);
     if (!clean) throw new Error('spawn link: invalid record');
+    if (this.records.has(clean.linkId)) throw new Error(`spawn link ${clean.linkId}: already recorded`);
+    if (this.records.size >= SPAWN_LINKS_MAX) throw new Error(`spawn links: ${SPAWN_LINKS_MAX} are recorded already`);
     const next = new Map(this.records);
     next.set(clean.linkId, clean);
-    while (next.size > SPAWN_LINKS_MAX) next.delete(next.keys().next().value as string);
     this.save(next);
   }
 
@@ -121,7 +127,7 @@ export class SpawnLinkStore {
 function coerceRecord(raw: unknown): SpawnLinkRecordV1 | null {
   if (!isPlainObject(raw) || raw['v'] !== 1) return null;
   const { linkId, hostId, spawnId, workspaceId, paneId, agent, rootId, folder, addedExposure, addedWorkspace, startedAt } = raw;
-  if (!isSpawnId(spawnId) || linkId !== spawnLinkId(spawnId) || !isHostId(hostId)) return null;
+  if (!isSpawnId(spawnId) || typeof linkId !== 'string' || !UUID_RE.test(linkId) || !isHostId(hostId)) return null;
   if (!isSafeId(workspaceId) || !isSafeId(paneId) || !isAgentSlug(agent) || !isSpawnRootId(rootId)) return null;
   if (typeof folder !== 'string' || folder.length > 4096) return null;
   if (typeof addedExposure !== 'boolean' || typeof addedWorkspace !== 'boolean' || !isIsoString(startedAt)) return null;

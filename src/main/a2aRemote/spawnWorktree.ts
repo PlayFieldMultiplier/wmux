@@ -65,26 +65,8 @@ export async function createSpawnWorktree(input: SpawnWorktreeInput, opts: Spawn
   const failed = (detail: string): SpawnWorktreeResult => ({ ok: false, code: 'failed', detail: detail.slice(0, DETAIL_MAX) });
   if (!isSpawnId(input.spawnId)) return failed('the spawn id is not sp-<uuid>');
 
-  const env = workerGitEnv({ ...getExecEnv(), ...(opts.env ?? {}) });
-  const gitExe = resolveExecutable('git', { env });
-  const safe = workerGitSafeArgs(path.resolve(opts.noHooksDir ?? path.join(getWmuxHomeDir(), 'factory', 'no-hooks')));
   const repo = input.repoPath;
-  // `pre`: further `-c` options, after the safe ones.
-  const git = async (args: string[], pre: string[] = []): Promise<GitOut> => {
-    try {
-      const { stdout, stderr } = await execFileAsync(gitExe, [...safe, ...pre, '-C', repo, ...args], {
-        cwd: repo,
-        env,
-        timeout: GIT_TIMEOUT_MS,
-        windowsHide: true,
-        maxBuffer: 16 * 1024 * 1024,
-      });
-      return { code: 0, stdout, stderr };
-    } catch (err) {
-      const e = err as { stdout?: string; stderr?: string; code?: number; killed?: boolean };
-      return { code: typeof e.code === 'number' ? e.code : 1, stdout: e.stdout ?? '', stderr: e.killed ? 'timed out' : (e.stderr || String(err)) };
-    }
-  };
+  const git = gitRunner(repo, opts);
 
   // 1. The repository's top level, as given.
   const repoReal = await realpathOrNull(repo);
@@ -103,13 +85,18 @@ export async function createSpawnWorktree(input: SpawnWorktreeInput, opts: Spawn
   const odd = drivers.find((n) => n.includes('='));
   if (odd !== undefined) return notAllowed(`a filter driver name holds '=' (${odd}), which -c cannot empty`);
   const noFilters = drivers.flatMap((n) => ['smudge=', 'clean=', 'process=', 'required=false'].flatMap((v) => ['-c', `filter.${n}.${v}`]));
+  // Nor does the checkout descend into submodules (their own config is not checked here).
+  const noSubmodules = ['-c', 'submodule.recurse=false'];
+  const ownBefore = ownConfig(conf.stdout);
 
   // 4. The worktree.
   let root: string;
   try {
     const wanted = opts.worktreesRoot ?? path.join(getWmuxHomeDir(), 'worktrees');
     fs.mkdirSync(wanted, { recursive: true });
-    root = await fs.promises.realpath(wanted);
+    const real = await realpathOrNull(wanted);
+    if (real === null) throw new Error(`${wanted} does not resolve`);
+    root = real;
   } catch (err) {
     return failed(`the worktrees folder is not usable: ${(err as Error).message}`);
   }
@@ -120,21 +107,40 @@ export async function createSpawnWorktree(input: SpawnWorktreeInput, opts: Spawn
   if (fs.existsSync(worktreePath)) return failed(`${worktreePath} already exists`);
   if ((await git(['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`])).code === 0) return failed(`branch ${branch} already exists`);
 
-  const undo = async (): Promise<void> => {
-    await git(['worktree', 'remove', '--force', worktreePath]);
-    await git(['worktree', 'prune']);
-    await git(['branch', '-D', branch]);
-    // A folder git no longer knows: removed only as a plain child of the root.
-    const rel = path.relative(root, worktreePath);
-    if (rel && isBelow(rel) && !rel.includes(path.sep)) {
-      try { fs.rmSync(worktreePath, { recursive: true, force: true }); } catch { /* reported by the caller's detail */ }
-    }
-  };
+  const undo = (): Promise<void> => removeWorktree(git, root, worktreePath, branch);
 
-  const add = await git(['worktree', 'add', '-b', branch, worktreePath, 'HEAD'], noFilters);
+  // No files yet: the config is read again first, as the new worktree sees it.
+  const add = await git(['worktree', 'add', '--no-checkout', '-b', branch, worktreePath, 'HEAD'], [...noSubmodules, ...noFilters]);
   if (add.code !== 0) {
     await undo();
     return failed(`git worktree add failed: ${add.stderr.trim()}`);
+  }
+
+  // 4b. On its own branch an `includeIf.onbranch` may now apply. The
+  // repository's own config must be what was checked (nothing changed it
+  // meanwhile) and still refuse nothing; every filter driver it now sees is
+  // emptied for the checkout, which only then writes the files.
+  const confAfter = await git(['config', '-z', '--list', '--show-scope'], [], worktreePath);
+  if (confAfter.code !== 0) {
+    await undo();
+    return failed(`git config --list failed in the new worktree: ${confAfter.stderr.trim()}`);
+  }
+  const refusedAfter = parseGitConfigList(confAfter.stdout).find((e) => (e.scope === 'local' || e.scope === 'worktree') && REFUSED_OWN_KEYS.test(e.key));
+  if (ownConfig(confAfter.stdout) !== ownBefore || refusedAfter) {
+    await undo();
+    return notAllowed(refusedAfter ? `the new worktree's git config sets ${refusedAfter.key}` : 'the repository\'s git config changed while the worktree was made');
+  }
+  const driversAfter = filterDriverNames(confAfter.stdout);
+  const oddAfter = driversAfter.find((n) => n.includes('='));
+  if (oddAfter !== undefined) {
+    await undo();
+    return notAllowed(`a filter driver name holds '=' (${oddAfter}), which -c cannot empty`);
+  }
+  const noFiltersAfter = driversAfter.flatMap((n) => ['smudge=', 'clean=', 'process=', 'required=false'].flatMap((v) => ['-c', `filter.${n}.${v}`]));
+  const checkout = await git(['reset', '--hard', '--no-recurse-submodules', 'HEAD'], [...noSubmodules, ...noFiltersAfter], worktreePath);
+  if (checkout.code !== 0) {
+    await undo();
+    return failed(`checking out the new worktree failed: ${checkout.stderr.trim()}`);
   }
 
   // 5. The folder inside it, never through a link out of it.
@@ -150,6 +156,61 @@ export async function createSpawnWorktree(input: SpawnWorktreeInput, opts: Spawn
     return notAllowed(`${input.sub || '.'} is not a folder inside the new worktree`);
   }
   return { ok: true, worktreePath: wtReal, cwd: cwdReal, branch };
+}
+
+/**
+ * Take back a worktree `createSpawnWorktree` made, and its branch: the start
+ * it was for did not finish. Only `<worktrees root>/remote-<spawnId>` and
+ * `wmux/remote/<spawnId>` are touched.
+ */
+export async function removeSpawnWorktree(input: { repoPath: string; spawnId: string }, opts: SpawnWorktreeOptions = {}): Promise<void> {
+  if (!isSpawnId(input.spawnId)) return;
+  const root = await realpathOrNull(opts.worktreesRoot ?? path.join(getWmuxHomeDir(), 'worktrees'));
+  if (root === null) return;
+  await removeWorktree(gitRunner(input.repoPath, opts), root, path.join(root, `remote-${input.spawnId}`), `wmux/remote/${input.spawnId}`);
+}
+
+type Git = (args: string[], pre?: string[], at?: string) => Promise<GitOut>;
+
+/** git with the worker hardening, in `repo` (or `at`); `pre`: further `-c` options, after the safe ones. */
+function gitRunner(repo: string, opts: SpawnWorktreeOptions): Git {
+  const env = workerGitEnv({ ...getExecEnv(), ...(opts.env ?? {}) });
+  const gitExe = resolveExecutable('git', { env });
+  const safe = workerGitSafeArgs(path.resolve(opts.noHooksDir ?? path.join(getWmuxHomeDir(), 'factory', 'no-hooks')));
+  return async (args, pre = [], at = repo) => {
+    try {
+      const { stdout, stderr } = await execFileAsync(gitExe, [...safe, ...pre, '-C', at, ...args], {
+        cwd: at,
+        env,
+        timeout: GIT_TIMEOUT_MS,
+        windowsHide: true,
+        maxBuffer: 16 * 1024 * 1024,
+      });
+      return { code: 0, stdout, stderr };
+    } catch (err) {
+      const e = err as { stdout?: string; stderr?: string; code?: number; killed?: boolean };
+      return { code: typeof e.code === 'number' ? e.code : 1, stdout: e.stdout ?? '', stderr: e.killed ? 'timed out' : (e.stderr || String(err)) };
+    }
+  };
+}
+
+async function removeWorktree(git: Git, root: string, worktreePath: string, branch: string): Promise<void> {
+  await git(['worktree', 'remove', '--force', worktreePath]);
+  await git(['worktree', 'prune']);
+  await git(['branch', '-D', branch]);
+  // A folder git no longer knows: removed only as a plain child of the root.
+  const rel = path.relative(root, worktreePath);
+  if (rel && isBelow(rel) && !rel.includes(path.sep)) {
+    try { fs.rmSync(worktreePath, { recursive: true, force: true }); } catch { /* reported by the caller's detail */ }
+  }
+}
+
+/** The repository's own config (local scope, shared by its worktrees), as one comparable string. */
+function ownConfig(stdout: string): string {
+  return parseGitConfigList(stdout)
+    .filter((e) => e.scope === 'local')
+    .map((e) => `${e.scope}\0${e.key}\0${e.value}`)
+    .join('\n');
 }
 
 /** Every filter driver name in `git config -z --list --show-scope` output,
@@ -172,8 +233,9 @@ function isBelow(rel: string): boolean {
   return rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
 }
 
+/** The OS realpath: on Windows it expands 8.3 short names, as the root it is compared with was. */
 async function realpathOrNull(p: string): Promise<string | null> {
-  try { return await fs.promises.realpath(p); } catch { return null; }
+  return new Promise((resolve) => fs.realpath.native(p, (err, real) => resolve(err ? null : real)));
 }
 
 function samePath(a: string, b: string): boolean {

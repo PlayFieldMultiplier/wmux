@@ -10,7 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { A2A_REMOTE_PROTOCOL, type A2aRemoteEnvelope } from '../../../shared/a2aRemote';
-import { spawnFirstMessageId, spawnLinkId, type A2aSpawnRequestState } from '../../../shared/a2aSpawn';
+import { spawnFirstMessageId, type A2aSpawnRequestState } from '../../../shared/a2aSpawn';
 import { A2aTaskService } from '../../a2a/A2aTaskService';
 import { AppendOnlyLog } from '../../eventlog/AppendOnlyLog';
 import { ExposureStore } from '../exposureStore';
@@ -20,10 +20,11 @@ import { LinkStore } from '../linkStore';
 import { linkAlias, syncRemoteTask } from '../outbound';
 import { OutboxStore } from '../outboxStore';
 import { SpawnChecks } from '../spawnChecks';
-import { SpawnLinkStore } from '../spawnLinkStore';
+import { SPAWN_LINKS_MAX, SpawnLinkStore } from '../spawnLinkStore';
 import { SpawnPolicyStore } from '../spawnPolicyStore';
 import { A2aSpawnReceiver, type SpawnReceiverDeps } from '../spawnReceiver';
 import { SpawnRequestStore } from '../spawnRequestStore';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 import { A2aSpawnStarter } from '../spawnStarter';
 
 const HOST = '11111111-1111-4111-8111-111111111111';
@@ -57,6 +58,7 @@ function makeReceiver(over: Partial<SpawnReceiverDeps> = {}): A2aSpawnReceiver {
     onChange: (_h, spawnId, state) => void changes.push({ spawnId, state }),
     hostName: () => 'HOME-A',
     mint: (rec, req, end) => starter.mint(rec, req, end),
+    abandon: (h, spawnId) => starter.abandon(h, spawnId),
     now: () => clock ?? Date.now(),
     log: quiet,
     ...over,
@@ -120,6 +122,8 @@ function request(over: { spawn?: Record<string, unknown>; expiresIn?: number } =
 const codes = (env: A2aRemoteEnvelope): Array<string | undefined> =>
   sent.filter((s) => s.env.linkId === env.linkId).map((s) => s.env.spawnResult?.code);
 const stateOf = (env: A2aRemoteEnvelope): string | undefined => requests.get(HOST, env.linkId)?.state;
+/** The link a started request made (its id comes with the `started` answer). */
+const linkOf = (env: A2aRemoteEnvelope): string => requests.get(HOST, env.linkId)!.linkId!;
 
 async function arrive(env: A2aRemoteEnvelope, r = receiver): Promise<void> {
   expect(r.applyInbound(env, { hostId: HOST })).toEqual({ ok: true, duplicate: false });
@@ -129,7 +133,7 @@ async function arrive(env: A2aRemoteEnvelope, r = receiver): Promise<void> {
 /** Through the card, the claim and a pane, to a linked agent. */
 async function startOne(env: A2aRemoteEnvelope, pane = 'pane-new'): Promise<void> {
   await arrive(env);
-  expect(await receiver.decideCard(HOST, env.linkId, 'once')).toEqual({ ok: true });
+  if (stateOf(env) === 'awaiting') expect(await receiver.decideCard(HOST, env.linkId, 'once')).toEqual({ ok: true });
   expect(await receiver.claim(HOST, env.linkId)).toMatchObject({ ok: true });
   expect(await receiver.started(HOST, env.linkId, { workspaceId: `ws-${pane}`, paneId: pane })).toEqual({ ok: true });
 }
@@ -157,17 +161,20 @@ describe('the card', () => {
     expect(await receiver.claim(HOST, env.linkId)).toMatchObject({ ok: false });
 
     expect(await receiver.started(HOST, env.linkId, { workspaceId: 'ws-new', paneId: 'pane-new' })).toEqual({ ok: true });
-    const linkId = spawnLinkId(env.linkId);
+    const linkId = linkOf(env);
     expect(sent.at(-1)!.env.spawnResult).toEqual({
-      v: 1, spawnId: env.linkId, code: 'started', endpoint: { kind: 'pane', workspaceId: 'ws-new', paneId: 'pane-new' }, linkVersion: 1,
+      v: 1, spawnId: env.linkId, code: 'started', endpoint: { kind: 'pane', workspaceId: 'ws-new', paneId: 'pane-new' }, linkVersion: 1, linkId,
     });
+    // A fresh id: nothing in the request predicts it.
+    expect(linkId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(linkId).not.toBe(env.linkId.slice('sp-'.length));
     expect(links.get(linkId)).toMatchObject({
-      state: 'active', version: 1, proposer: 'remote', allow: { inbound: true, outbound: false },
+      state: 'active', version: 1, proposer: 'remote', allow: { inbound: true, outbound: false }, spawned: true,
       local: { kind: 'pane', workspaceId: 'ws-new', paneId: 'pane-new' },
       remote: { hostId: HOST, kind: 'pane', workspaceId: 'ws-a', paneId: 'pane-a' },
     });
     expect(exposures.isPaneExposed(HOST, 'ws-new', 'pane-new')).toBe(true);
-    const first = tasks.getTask(remoteTaskId(linkId, spawnFirstMessageId(env.linkId)))!;
+    const first = tasks.getTask(remoteTaskId(linkId, spawnFirstMessageId(linkId)))!;
     expect(first.history[0].parts).toEqual([{ kind: 'text', text: 'fix the build\nthen run the tests' }]);
     expect(first.metadata.remote).toMatchObject({ linkId, direction: 'inbound', delivered: false });
     expect(first.metadata.remote).not.toHaveProperty('held');
@@ -192,7 +199,7 @@ describe('the card', () => {
   });
 
   it('allow-list: a matching rule skips the card, another asks; Always adds the rule', async () => {
-    await allow({ approval: 'allow-list', rules: [{ hostId: HOST, rootId: 'web', agent: 'claude' }] });
+    await allow({ approval: 'allow-list', rules: [{ hostId: HOST, rootId: 'web', agent: 'claude', sub: 'apps' }] });
     const ruled = request();
     await arrive(ruled);
     expect(stateOf(ruled)).toBe('approved');
@@ -203,7 +210,7 @@ describe('the card', () => {
     await arrive(other);
     expect(stateOf(other)).toBe('awaiting');
     expect(await receiver.decideCard(HOST, other.linkId, 'always')).toEqual({ ok: true });
-    expect(policy.get().rules).toContainEqual({ hostId: HOST, rootId: 'web', agent: 'codex' });
+    expect(policy.get().rules).toContainEqual({ hostId: HOST, rootId: 'web', agent: 'codex', sub: 'apps' });
     expect(stateOf(other)).toBe('approved');
   });
 
@@ -273,7 +280,7 @@ describe('room', () => {
     // Ended links free the running slots, but not the hourly count.
     for (const l of links.list()) links.revoke(l.linkId, 'local');
     await startOne(request(), 'p3');
-    links.revoke(spawnLinkId(sent.at(-1)!.env.linkId), 'local');
+    links.revoke(linkOf(sent.at(-1)!.env), 'local');
     const fourth = request();
     await arrive(fourth);
     expect(codes(fourth)).toEqual(['rate-limited']);
@@ -295,7 +302,7 @@ describe('the link a start made', () => {
     await allow();
     const env = request();
     await startOne(env);
-    const linkId = spawnLinkId(env.linkId);
+    const linkId = linkOf(env);
     const image = { sha256: 'a'.repeat(64), bytes: 10, mediaType: 'image/png' as const, name: 'x.png' };
     expect(await acceptInbound(task(linkId, { images: [image] }), { hostId: HOST }, inboundDeps())).toMatchObject({ ok: false, error: 'bad-request' });
 
@@ -317,8 +324,8 @@ describe('the link a start made', () => {
     await allow();
     const env = request();
     await startOne(env);
-    const linkId = spawnLinkId(env.linkId);
-    const taskId = remoteTaskId(linkId, spawnFirstMessageId(env.linkId));
+    const linkId = linkOf(env);
+    const taskId = remoteTaskId(linkId, spawnFirstMessageId(linkId));
     const key = `ghp_${'a1B2'.repeat(9)}`;
     await tasks.markRemote({ taskId, delivered: true });
     expect((await tasks.transition({ taskId, to: 'working', callerWorkspaceId: 'ws-pane-new' })).ok).toBe(true);
@@ -339,14 +346,173 @@ describe('the link a start made', () => {
     await allow();
     const env = request();
     await startOne(env, 'pane-x');
-    links.revoke(spawnLinkId(env.linkId), 'local');
+    links.revoke(linkOf(env), 'local');
     expect(exposures.isPaneExposed(HOST, 'ws-pane-x', 'pane-x')).toBe(false);
-    expect(starter.isSpawnLink(spawnLinkId(env.linkId))).toBe(false);
+    expect(starter.liveCount(HOST)).toBe(0);
 
     exposures.addPane(HOST, 'ws-pane-y', 'pane-y');
     const shown = request();
     await startOne(shown, 'pane-y');
-    links.revoke(spawnLinkId(shown.linkId), 'local');
+    links.revoke(linkOf(shown), 'local');
     expect(exposures.isPaneExposed(HOST, 'ws-pane-y', 'pane-y')).toBe(true);
+  });
+});
+
+describe('a start that does not finish leaves no link', () => {
+  it('the started answer not stored: the link and its exposure go again', async () => {
+    await allow();
+    const env = request();
+    await arrive(env);
+    await receiver.decideCard(HOST, env.linkId, 'once');
+    await receiver.claim(HOST, env.linkId);
+    // The first write after linking (the `started` answer) fails once.
+    vi.spyOn(requests, 'decide').mockImplementationOnce(() => { throw new Error('disk full'); });
+    expect(await receiver.started(HOST, env.linkId, { workspaceId: 'ws-x', paneId: 'pane-x' })).toMatchObject({ ok: false });
+    expect(links.list().filter((l) => l.state === 'active')).toEqual([]);
+    expect(exposures.isPaneExposed(HOST, 'ws-x', 'pane-x')).toBe(false);
+    expect(codes(env).at(-1)).toBe('failed');
+  });
+
+  it('a daemon that stopped after linking and before storing the answer ends the link on recovery', async () => {
+    await allow();
+    const env = request();
+    await arrive(env);
+    await receiver.decideCard(HOST, env.linkId, 'once');
+    await receiver.claim(HOST, env.linkId);
+    // Linked, never answered: the request is still starting.
+    const rec = requests.get(HOST, env.linkId)!;
+    const { linkId } = await starter.mint(rec, rec.request!, { workspaceId: 'ws-y', paneId: 'pane-y' });
+    expect(links.get(linkId)?.state).toBe('active');
+    makeReceiver().recover();
+    expect(links.get(linkId)?.state).toBe('revoked');
+    expect(exposures.isPaneExposed(HOST, 'ws-y', 'pane-y')).toBe(false);
+    expect(codes(env).at(-1)).toBe('failed');
+  });
+
+  it('a start main never reports back on ends failed after its deadline, freeing its slot', async () => {
+    await allow();
+    const env = request({ expiresIn: 72 * 3600_000 - 60_000 });
+    await arrive(env);
+    await receiver.decideCard(HOST, env.linkId, 'once');
+    await receiver.claim(HOST, env.linkId);
+    clock = Date.now() + 9 * 60_000;
+    receiver.sweep();
+    expect(stateOf(env)).toBe('starting');
+    clock = Date.now() + 11 * 60_000;
+    receiver.sweep();
+    expect(codes(env).at(-1)).toBe('failed');
+    expect(requests.startingCount(HOST)).toBe(0);
+  });
+});
+
+describe('caps on every path', () => {
+  it('a card answered when the PC is out of room is refused rate-limited', async () => {
+    await allow();
+    await startOne(request(), 'q1');
+    await startOne(request(), 'q2');
+    // Room was there when this card opened (ended links), not when it is answered.
+    const late = request();
+    for (const l of links.list()) links.revoke(l.linkId, 'local');
+    await arrive(late);
+    expect(stateOf(late)).toBe('awaiting');
+    await startOne(request(), 'q3');
+    expect(await receiver.decideCard(HOST, late.linkId, 'once')).toEqual({ ok: false, error: 'rate-limited' });
+    expect(codes(late).at(-1)).toBe('rate-limited');
+  });
+
+  it('claims run one at a time: the second waits until the first has checked and counted itself', async () => {
+    await allow({ approval: 'allow-list', rules: [{ hostId: HOST, rootId: 'web', agent: 'claude', sub: 'apps' }] });
+    let release!: () => void;
+    const held = new Promise<boolean>((r) => { release = () => r(true); });
+    let claiming = false;
+    let checks = 0;
+    // Only the claims' agent checks are counted, and the first one is held.
+    const serial = makeReceiver({ agentInstalled: () => (!claiming ? Promise.resolve(true) : ++checks === 1 ? held : Promise.resolve(true)) });
+    const a = request();
+    const b = request();
+    await arrive(a, serial);
+    await arrive(b, serial);
+    expect([stateOf(a), stateOf(b)]).toEqual(['approved', 'approved']);
+    claiming = true;
+    const both = Promise.all([serial.claim(HOST, a.linkId), serial.claim(HOST, b.linkId)]);
+    await vi.waitFor(() => expect(checks).toBe(1), { timeout: 5_000 });
+    await deliberateSleep(50, 'proves a negative: the second claim has not started its checks while the first holds them');
+    expect(checks).toBe(1);
+    release();
+    const [ra, rb] = await both;
+    expect([ra.ok, rb.ok]).toEqual([true, true]);
+    serial.stop();
+  });
+
+  it('a claim counts the other starts in flight: no third agent while two start', async () => {
+    await allow({ approval: 'allow-list', rules: [{ hostId: HOST, rootId: 'web', agent: 'claude', sub: 'apps' }] });
+    let live = 0;
+    const r = makeReceiver({ liveSpawns: () => live });
+    const a = request();
+    const b = request();
+    await arrive(a, r);
+    await arrive(b, r);
+    // Another agent started meanwhile (one the caps did not see when these were approved).
+    live = 1;
+    expect(await r.claim(HOST, a.linkId)).toMatchObject({ ok: false, code: 'rate-limited' });
+  });
+});
+
+describe('Always allow', () => {
+  it('covers exactly the folder its card showed: another folder of the same root asks again', async () => {
+    await allow({ approval: 'allow-list' });
+    const first = request();
+    await arrive(first);
+    expect(await receiver.decideCard(HOST, first.linkId, 'always')).toEqual({ ok: true });
+    expect(policy.get().rules).toEqual([{ hostId: HOST, rootId: 'web', agent: 'claude', sub: 'apps' }]);
+
+    // Approved ones count as about to run: end each here, so room is not what is tested.
+    expect(receiver.failed(HOST, first.linkId, 'failed')).toEqual({ ok: true });
+    const same = request();
+    await arrive(same);
+    expect(stateOf(same)).toBe('approved');
+    receiver.failed(HOST, same.linkId, 'failed');
+    const deeper = request({ spawn: { folder: { root: 'web', sub: 'apps/site' } } });
+    await arrive(deeper);
+    expect(stateOf(deeper)).toBe('awaiting');
+    const rootItself = request({ spawn: { folder: { root: 'web' } } });
+    await arrive(rootItself);
+    expect(stateOf(rootItself)).toBe('awaiting');
+  });
+});
+
+describe('the spawn-links record', () => {
+  it('at its cap a new start is refused; no live record is dropped to make room', () => {
+    const store = new SpawnLinkStore({ dir: a2aDir, scheduleHarden: quiet, write: () => undefined });
+    const row = (i: number) => ({
+      v: 1 as const, linkId: crypto.randomUUID(), hostId: HOST, spawnId: `sp-${crypto.randomUUID()}`, workspaceId: `ws-${i}`, paneId: `p-${i}`,
+      agent: 'claude' as const, rootId: 'web', folder: repo, addedExposure: false, addedWorkspace: false, startedAt: new Date().toISOString(),
+    });
+    const firstRow = row(0);
+    store.add(firstRow);
+    for (let i = 1; i < SPAWN_LINKS_MAX; i++) store.add(row(i));
+    expect(() => store.add(row(SPAWN_LINKS_MAX))).toThrow(/recorded already/);
+    expect(store.has(firstRow.linkId)).toBe(true);
+  });
+
+  it('the link record itself marks it, so redaction needs no other lookup', async () => {
+    await allow();
+    const env = request();
+    await startOne(env);
+    const linkId = linkOf(env);
+    const taskId = remoteTaskId(linkId, spawnFirstMessageId(linkId));
+    const key = `ghp_${'a1B2'.repeat(9)}`;
+    await tasks.markRemote({ taskId, delivered: true });
+    await tasks.transition({ taskId, to: 'working', callerWorkspaceId: 'ws-pane-new' });
+    await tasks.transition({
+      taskId, to: 'completed', callerWorkspaceId: 'ws-pane-new',
+      evidence: { summary: 'done', items: [{ kind: 'artifact', status: 'verified', summary: 'file', location: `/tmp/${key}` }], files: [`notes-${key}.md`] },
+    });
+    const outbox = new OutboxStore({ dir: a2aDir, scheduleHarden: quiet });
+    // No `spawnLink` here: the link's own mark is enough.
+    expect(await syncRemoteTask({ linkStore: links, taskService: tasks, outbox }, taskId)).toMatchObject({ ok: true });
+    const out = JSON.stringify(outbox.pending(HOST).map((r) => r.envelope));
+    expect(out).not.toContain(key);
+    expect(out).toContain('[redacted]');
   });
 });

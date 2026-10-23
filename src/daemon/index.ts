@@ -9405,7 +9405,9 @@ async function main(): Promise<void> {
         pipeServer.broadcast({ type: event.type, sessionId: '', data: event });
       },
       hostName: a2aHostName,
-      ...(a2aStarter ? { mint: (rec, request, end) => a2aStarter.mint(rec, request, end) } : {}),
+      ...(a2aStarter
+        ? { mint: (rec, request, end) => a2aStarter.mint(rec, request, end), abandon: (hostId, spawnId) => a2aStarter.abandon(hostId, spawnId) }
+        : {}),
       log: a2aLog,
     });
     const a2aForgetHost = forgetHostCascade({ links: a2aLinks, exposures: a2aExposures, offers: a2aOffersRef }, a2aLog);
@@ -9522,7 +9524,11 @@ async function main(): Promise<void> {
       a2aStarter?.reconcile();
       a2aSpawn.recover();
       // Cards and approved starts past their expiry end `expired` even with nobody looking.
-      const spawnSweep = setInterval(() => a2aSpawn.sweep(), 60_000);
+      // Put-backs of ended spawn links that could not be done yet are retried here too.
+      const spawnSweep = setInterval(() => {
+        a2aSpawn.sweep();
+        a2aStarter?.reconcile();
+      }, 60_000);
       spawnSweep.unref?.();
       if (a2aStarter) registerSpawnStartRpc(onA2aRpc, { receiver: a2aSpawn, starter: a2aStarter });
     } else {
