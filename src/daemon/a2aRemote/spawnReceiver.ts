@@ -14,10 +14,16 @@ import {
   spawnClockOk,
   spawnHostAllowed,
   spawnTargetsFor,
+  type A2aSpawnCardV1,
+  type A2aSpawnClaimResult,
   type A2aSpawnCode,
+  type A2aSpawnRequestState,
   type A2aSpawnRequestV1,
   type A2aSpawnResultV1,
+  type A2aSpawnStepResult,
   type A2aSpawnTargetsV1,
+  type A2aSpawnVerdict,
+  type A2aSpawnWork,
 } from '../../shared/a2aSpawn';
 import { sanitizeRemoteMessage } from '../../shared/a2aRemoteDelivery';
 import { whichOnPath } from '../web/agentLaunch';
@@ -49,7 +55,16 @@ import { errMsg, isPlainObject } from './storeFile';
  *   6. the root is listed, still resolves to itself,
  *      and root + sub stays inside it, as a folder    else `folder-not-allowed`
  *   7. the policy and the expiry, read again after those waits
- *   8. nothing starts a spawn in this build           `not-supported`
+ *   8. room: starts per PC per hour and per day, and
+ *      agents running at once, per PC and in all       else `rate-limited`
+ *   9. the app is up (it waits for it, until expiry)  else `app-not-ready`
+ *  10. a rule allows it (allow-list mode)             → approved
+ *      otherwise                                      → its card; `waiting-for-approval`
+ *
+ * Then, driven by main: the card's answer (`decideCard`); `claim`, which
+ * checks everything again right before the start (policy, room, agent,
+ * folder) and hands main what it needs; `started` / `failed`. A build with
+ * no `mint` cannot start anything and answers `not-supported` at step 10.
  *
  * The same answer to the same request goes out at most once per
  * `SPAWN_REFUSAL_COALESCE_MS`. Each disk or PATH check goes through
@@ -61,8 +76,16 @@ import { errMsg, isPlainObject } from './storeFile';
  * this PC sent and that has no final answer yet, and only newer targets.
  */
 
-/** Pending requests one PC may have here at once. */
+/** Requests one PC may have open here at once (deciding, on a card, or starting). */
 export const SPAWN_PENDING_PER_HOST_MAX = 3;
+/** Starts one PC may get here per hour, and per day. */
+export const SPAWN_STARTS_PER_HOUR_MAX = 3;
+export const SPAWN_STARTS_PER_DAY_MAX = 10;
+/** Agents a remote start made running at once: per PC, and in all. */
+export const SPAWN_LIVE_PER_HOST_MAX = 2;
+export const SPAWN_LIVE_MAX = 4;
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
 /** The same answer to the same request of one PC is sent at most once in this window. */
 export const SPAWN_REFUSAL_COALESCE_MS = 60_000;
 const RETRY_MIN_MS = 5_000;
@@ -73,8 +96,9 @@ const ANSWERED_MAX = 1000;
 const ANSWERED_RECENTLY_MAX = 1000;
 
 export interface SpawnReceiverDeps {
-  policy: Pick<SpawnPolicyStore, 'get'>;
-  requests: Pick<SpawnRequestStore, 'get' | 'receive' | 'decide' | 'pending' | 'pendingCount' | 'markSent' | 'unsent'>;
+  policy: Pick<SpawnPolicyStore, 'get'> & Partial<Pick<SpawnPolicyStore, 'set'>>;
+  requests: Pick<SpawnRequestStore, 'get' | 'receive' | 'decide' | 'pending' | 'pendingCount' | 'markSent' | 'unsent'>
+    & Partial<Pick<SpawnRequestStore, 'advance' | 'inState' | 'approvedSince' | 'startingCount'>>;
   /** Queue an envelope to `hostId` (the delivery outbox); throws when it cannot. */
   enqueue: (hostId: HostId, envelope: A2aRemoteEnvelope) => void;
   /** Whether this PC can run `agent` (its launcher on the login PATH). */
@@ -86,6 +110,20 @@ export interface SpawnReceiverDeps {
   isOutstanding?: (hostId: HostId, spawnId: string) => boolean;
   /** As A: an answer to one of this PC's requests, or newer targets. */
   onResult?: (hostId: HostId, result: A2aSpawnResultV1) => void;
+  /** The app has caught up with this daemon (it knows which panes exist). Until then a request waits. Default: ready. */
+  appReady?: () => boolean;
+  /** Live links remote starts made here: of `hostId`, or of every PC. Default: none. */
+  liveSpawns?: (hostId?: HostId) => number;
+  /** A request moved to a state main acts on (the `A2A_SPAWN_EVENT` broadcast). */
+  onChange?: (hostId: HostId, spawnId: string, state: A2aSpawnRequestState) => void;
+  /** This PC's name for `hostId`. */
+  hostName?: (hostId: HostId) => string | undefined;
+  /**
+   * Make the started agent reachable (spawnStarter.ts): the link, the pane
+   * shown to that PC, the prompt as the link's first task. Throws when it
+   * could not, leaving nothing behind. Absent: this build starts nothing.
+   */
+  mint?: (rec: SpawnRequestRecordV1, request: A2aSpawnRequestV1, end: { workspaceId: string; paneId: string }) => { linkVersion: number };
   onTargets?: (hostId: HostId, targets: A2aSpawnTargetsV1) => void;
   now?: () => number;
   /** Test seams. */
@@ -96,6 +134,11 @@ export interface SpawnReceiverDeps {
 }
 
 type SpawnEnvelopeState = 'spawn' | 'spawn-result' | 'spawn-targets';
+/** What deciding a pending request comes to: a final code, its card, or approved by a rule. */
+type Decision = A2aSpawnCode | 'awaiting' | 'approved';
+
+/** The app has not caught up with this daemon yet: the request waits (and ends `app-not-ready` at its expiry). */
+class AppNotReady extends Error {}
 
 export function isSpawnEnvelope(env: A2aRemoteEnvelope): env is A2aRemoteEnvelope & { link: { state: SpawnEnvelopeState } } {
   const s = env.kind === 'link' ? env.link?.state : undefined;
@@ -185,10 +228,199 @@ export class A2aSpawnReceiver {
     };
   }
 
-  /** After a restart: decide what is pending, send what was decided but never left. */
+  /**
+   * After a restart: decide what is pending, send what was decided but never
+   * left. A start main had claimed is not resumed (the agent may or may not
+   * be running): it ends `failed`. Approved ones are announced again for main.
+   */
   recover(): void {
     for (const rec of this.deps.requests.pending()) this.scheduleDecide(rec.hostId, rec.spawnId);
     for (const rec of this.deps.requests.unsent()) this.sendDecided(rec);
+    for (const rec of this.deps.requests.inState?.('starting') ?? []) this.finish(rec.hostId, rec.spawnId, 'failed');
+    this.sweep();
+    for (const rec of this.deps.requests.inState?.('approved') ?? []) this.deps.onChange?.(rec.hostId, rec.spawnId, 'approved');
+  }
+
+  /** Requests on a card, or approved and not started, past their expiry end `expired`. */
+  sweep(): void {
+    for (const state of ['awaiting', 'approved'] as const) {
+      for (const rec of this.deps.requests.inState?.(state) ?? []) {
+        if (this.now() > Date.parse(rec.expiresAt)) this.finish(rec.hostId, rec.spawnId, 'expired');
+      }
+    }
+  }
+
+  // --- B: what main does with a request ----------------------------------------
+
+  /** What main has to show (cards) or start (approved). Expired ones are swept first. */
+  work(): Pick<A2aSpawnWork, 'awaiting' | 'approved'> {
+    this.sweep();
+    const awaiting: A2aSpawnCardV1[] = [];
+    for (const rec of this.deps.requests.inState?.('awaiting') ?? []) {
+      const card = this.card(rec);
+      if (card) awaiting.push(card);
+    }
+    const approved = (this.deps.requests.inState?.('approved') ?? []).map((r) => ({ hostId: r.hostId, spawnId: r.spawnId }));
+    return { awaiting, approved };
+  }
+
+  /** The card for a request awaiting it: this PC's names for everything, and the full prompt. */
+  card(rec: SpawnRequestRecordV1): A2aSpawnCardV1 | null {
+    const req = rec.request;
+    if (!req) return null;
+    const policy = this.deps.policy.get();
+    const root = policy.roots.find((r) => r.id === req.folder.root);
+    if (!root) return null;
+    const sub = req.folder.sub ? normalizeSpawnSub(req.folder.sub) : '';
+    return {
+      hostId: rec.hostId,
+      hostName: this.deps.hostName?.(rec.hostId) || rec.hostId.slice(0, 8),
+      spawnId: rec.spawnId,
+      agent: req.agent,
+      rootId: root.id,
+      rootLabel: root.label,
+      folder: sub ? path.join(root.path, ...sub.split('/')) : root.path,
+      permissionMode: policy.permissionMode,
+      followUps: policy.followUps,
+      text: req.text,
+      expiresAt: req.expiresAt,
+    };
+  }
+
+  /**
+   * The card's answer. `deny` ends the request `declined`; `once` and
+   * `always` approve it, and `always` also adds the (PC, root, agent) rule,
+   * which allow-list mode honours from then on.
+   */
+  async decideCard(hostId: HostId, spawnId: string, verdict: A2aSpawnVerdict): Promise<A2aSpawnStepResult> {
+    const rec = this.deps.requests.get(hostId, spawnId);
+    if (!rec || rec.state !== 'awaiting' || !rec.request) return { ok: false, error: 'this request is not waiting for its card' };
+    if (this.now() > Date.parse(rec.expiresAt)) {
+      this.finish(hostId, spawnId, 'expired');
+      return { ok: false, error: 'this request has expired' };
+    }
+    if (verdict === 'deny') return this.finish(hostId, spawnId, 'declined') ? { ok: true } : { ok: false, error: 'the answer could not be stored' };
+    if (verdict === 'always') await this.addRule(hostId, rec.request);
+    let moved: SpawnRequestRecordV1 | undefined;
+    try {
+      moved = this.deps.requests.advance?.(hostId, spawnId, ['awaiting'], 'approved');
+    } catch (err) {
+      return { ok: false, error: `the answer could not be stored: ${errMsg(err)}` };
+    }
+    if (!moved) return { ok: false, error: 'this request is not waiting for its card' };
+    this.audit(moved, `approved (${verdict})`);
+    this.deps.onChange?.(hostId, spawnId, 'approved');
+    return { ok: true };
+  }
+
+  /**
+   * Main takes an approved request to start it. Everything is checked again
+   * right now: the PC still allowed, the agent still listed and installed,
+   * the root still listed and resolving to itself, the folder inside it, the
+   * expiry, and room for one more running agent. A refusal ends the request
+   * with its code (answered to the asker); a check that could not run now
+   * leaves it approved for main to try again.
+   */
+  async claim(hostId: HostId, spawnId: string): Promise<A2aSpawnClaimResult> {
+    let rec: SpawnRequestRecordV1 | undefined;
+    try {
+      rec = this.deps.requests.advance?.(hostId, spawnId, ['approved'], 'starting');
+    } catch (err) {
+      return { ok: false, error: `not claimed: ${errMsg(err)}` };
+    }
+    const req = rec?.request;
+    if (!rec || !req) return { ok: false, error: 'this request is not approved, or is already starting' };
+    const refuse = (code: A2aSpawnCode): A2aSpawnClaimResult => {
+      this.finish(hostId, spawnId, code);
+      return { ok: false, error: code, code };
+    };
+    const policy = this.deps.policy.get();
+    if (!spawnHostAllowed(policy, hostId)) return refuse('not-allowed');
+    if (this.now() > Date.parse(req.expiresAt)) return refuse('expired');
+    if (!policy.agents.includes(req.agent)) return refuse('agent-not-allowed');
+    const sub = normalizeSpawnSub(req.folder.sub);
+    const root = policy.roots.find((r) => r.id === req.folder.root);
+    if (sub === null || !root) return refuse('folder-not-allowed');
+    const live = this.deps.liveSpawns ?? ((): number => 0);
+    if (live(hostId) >= SPAWN_LIVE_PER_HOST_MAX || live() >= SPAWN_LIVE_MAX) return refuse('rate-limited');
+    try {
+      if (!(await this.checks.run(() => this.agentInstalled(req.agent)))) return refuse('agent-not-installed');
+      if (!(await this.folderInside(root.path, sub))) return refuse('folder-not-allowed');
+    } catch (err) {
+      if (err instanceof CheckTimeout) return refuse('failed');
+      // Busy or a passing error: back to approved, main tries again.
+      try {
+        this.deps.requests.advance?.(hostId, spawnId, ['starting'], 'approved');
+      } catch (e) {
+        this.deps.log('warn', `[a2a-remote] spawn request ${spawnId} from ${hostId}: not put back to approved: ${errMsg(e)}`);
+      }
+      return { ok: false, error: `not checked now, try again: ${errMsg(err)}` };
+    }
+    // The checks waited: the policy is read once more.
+    const now = this.deps.policy.get();
+    if (!spawnHostAllowed(now, hostId) || !now.agents.includes(req.agent) || !now.roots.some((r) => r.id === root.id && r.path === root.path)) {
+      return refuse('not-allowed');
+    }
+    this.audit(rec, 'starting');
+    return {
+      ok: true,
+      claim: {
+        hostId,
+        hostName: this.deps.hostName?.(hostId) || hostId.slice(0, 8),
+        spawnId,
+        agent: req.agent,
+        repoPath: root.path,
+        sub,
+        permissionMode: now.permissionMode,
+      },
+    };
+  }
+
+  /** Main started the agent in this pane: make it reachable and answer `started`. */
+  started(hostId: HostId, spawnId: string, end: { workspaceId: string; paneId: string }): A2aSpawnStepResult {
+    const rec = this.deps.requests.get(hostId, spawnId);
+    if (!rec || rec.state !== 'starting' || !rec.request) return { ok: false, error: 'this request is not starting' };
+    if (!this.deps.mint) return { ok: false, error: 'this build cannot start remote agents' };
+    let linkVersion: number;
+    try {
+      ({ linkVersion } = this.deps.mint(rec, rec.request, end));
+    } catch (err) {
+      this.deps.log('error', `[a2a-remote] spawn request ${spawnId} from ${hostId}: started, but not linked: ${errMsg(err)}`);
+      this.finish(hostId, spawnId, 'failed');
+      return { ok: false, error: `not linked: ${errMsg(err)}` };
+    }
+    const endpoint = { kind: 'pane' as const, workspaceId: end.workspaceId, paneId: end.paneId };
+    if (!this.finish(hostId, spawnId, 'started', { endpoint, linkVersion })) return { ok: false, error: 'the answer could not be stored' };
+    return { ok: true };
+  }
+
+  /** Main could not start a claimed request. */
+  failed(hostId: HostId, spawnId: string, code: 'folder-not-allowed' | 'failed'): A2aSpawnStepResult {
+    const rec = this.deps.requests.get(hostId, spawnId);
+    if (!rec || (rec.state !== 'starting' && rec.state !== 'approved')) return { ok: false, error: 'this request is not starting' };
+    return this.finish(hostId, spawnId, code) ? { ok: true } : { ok: false, error: 'the answer could not be stored' };
+  }
+
+  /** The (PC, root, agent) rule `always` adds; a save that conflicts is tried once more on a fresh read. */
+  private async addRule(hostId: HostId, req: A2aSpawnRequestV1): Promise<void> {
+    const set = this.deps.policy.set;
+    if (!set) return;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const policy = this.deps.policy.get();
+      if (policy.rules.some((r) => r.hostId === hostId && r.rootId === req.folder.root && r.agent === req.agent)) return;
+      // eslint-disable-next-line no-await-in-loop -- a retry needs the first answer
+      const res = await set.call(this.deps.policy, { ...policy, rules: [...policy.rules, { hostId, rootId: req.folder.root, agent: req.agent }] });
+      if (res.ok) return;
+      if (!res.conflict) {
+        this.deps.log('warn', `[a2a-remote] spawn rule for ${hostId} not saved: ${res.error}`);
+        return;
+      }
+    }
+  }
+
+  private audit(rec: Pick<SpawnRequestRecordV1, 'hostId' | 'spawnId' | 'agent' | 'rootId'>, what: string): void {
+    // Ids, the outcome, the agent and the root: never the prompt.
+    this.deps.log('info', `[a2a-remote] spawn ${rec.spawnId} from ${rec.hostId}: ${what} (agent ${rec.agent}, root ${rec.rootId})`);
   }
 
   /**
@@ -270,6 +502,12 @@ export class A2aSpawnReceiver {
       this.scheduleDecide(rec.hostId, rec.spawnId);
       return { ok: true, duplicate: true };
     }
+    if (rec.state !== 'decided') {
+      // On its card, approved or starting: the answer comes when it is decided.
+      // One on its card says so again (the first word may have been lost).
+      if (rec.state !== 'awaiting' || this.answeredRecently(rec.hostId, rec.spawnId, 'waiting-for-approval')) return { ok: true, duplicate: true };
+      return this.sendResult(rec.hostId, { v: 1, spawnId: rec.spawnId, code: 'waiting-for-approval' }) ? { ok: true, duplicate: true } : UNAVAILABLE;
+    }
     if (rec.code && this.answeredRecently(rec.hostId, rec.spawnId, rec.code)) return { ok: true, duplicate: true };
     return this.sendDecided(rec) ? { ok: true, duplicate: true } : UNAVAILABLE;
   }
@@ -281,7 +519,8 @@ export class A2aSpawnReceiver {
 
   private sendDecided(rec: SpawnRequestRecordV1): boolean {
     if (!rec.code) return false;
-    if (!this.sendResult(rec.hostId, { v: 1, spawnId: rec.spawnId, code: rec.code })) return false;
+    const started = rec.code === 'started' && rec.endpoint && rec.linkVersion ? { endpoint: rec.endpoint, linkVersion: rec.linkVersion } : {};
+    if (!this.sendResult(rec.hostId, { v: 1, spawnId: rec.spawnId, code: rec.code, ...started })) return false;
     try {
       this.deps.requests.markSent(rec.hostId, rec.spawnId);
     } catch (err) {
@@ -296,7 +535,7 @@ export class A2aSpawnReceiver {
     if (this.deciding.has(k) || (attempt === 0 && this.retries.has(k))) return;
     this.retries.delete(k);
     const run: Promise<void> = (async () => {
-      let code: A2aSpawnCode;
+      let code: Decision;
       try {
         code = await this.decide(hostId, spawnId);
       } catch (err) {
@@ -332,14 +571,14 @@ export class A2aSpawnReceiver {
       this.retries.delete(k);
       const now = this.deps.requests.get(hostId, spawnId);
       if (!now || now.state !== 'pending') return;
-      if (this.now() > Date.parse(now.expiresAt)) this.settle(hostId, spawnId, 'expired', attempt + 1);
+      if (this.now() > Date.parse(now.expiresAt)) this.settle(hostId, spawnId, err instanceof AppNotReady ? 'app-not-ready' : 'expired', attempt + 1);
       else this.scheduleDecide(hostId, spawnId, attempt + 1);
     }, delay);
     t.unref?.();
     this.retries.set(k, t);
   }
 
-  private async decide(hostId: HostId, spawnId: string): Promise<A2aSpawnCode> {
+  private async decide(hostId: HostId, spawnId: string): Promise<Decision> {
     const rec = this.deps.requests.get(hostId, spawnId);
     const req = rec?.request;
     if (!rec || rec.state !== 'pending' || !req) return 'failed';
@@ -361,7 +600,23 @@ export class A2aSpawnReceiver {
     if (!spawnHostAllowed(now, hostId)) return 'not-allowed';
     if (!now.agents.includes(req.agent) || !now.roots.some((r) => r.id === root.id && r.path === root.path)) return 'not-allowed';
     if (this.now() > Date.parse(req.expiresAt)) return 'expired';
-    return 'not-supported';
+    if (!this.deps.mint) return 'not-supported';
+    if (this.overCaps(hostId)) return 'rate-limited';
+    // Nothing is shown or started before the app has caught up: the request waits for it, until it expires.
+    if (this.deps.appReady && !this.deps.appReady()) throw new AppNotReady('the app is not ready');
+    const ruled = now.approval === 'allow-list' && now.rules.some((r) => r.hostId === hostId && r.rootId === root.id && r.agent === req.agent);
+    return ruled ? 'approved' : 'awaiting';
+  }
+
+  /** Starts per PC per hour and per day, and running agents per PC and in all (counting those about to start). */
+  private overCaps(hostId: HostId): boolean {
+    const r = this.deps.requests;
+    const now = this.now();
+    if ((r.approvedSince?.(now - HOUR_MS, hostId) ?? 0) >= SPAWN_STARTS_PER_HOUR_MAX) return true;
+    if ((r.approvedSince?.(now - DAY_MS, hostId) ?? 0) >= SPAWN_STARTS_PER_DAY_MAX) return true;
+    const live = this.deps.liveSpawns ?? ((): number => 0);
+    if (live(hostId) + (r.startingCount?.(hostId) ?? 0) >= SPAWN_LIVE_PER_HOST_MAX) return true;
+    return live() + (r.startingCount?.() ?? 0) >= SPAWN_LIVE_MAX;
   }
 
   /**
@@ -389,22 +644,49 @@ export class A2aSpawnReceiver {
     }
   }
 
-  private settle(hostId: HostId, spawnId: string, code: A2aSpawnCode, attempt: number): void {
+  private settle(hostId: HostId, spawnId: string, outcome: Decision, attempt: number): void {
     if (this.stopped) return;
     // The PC was removed (its requests forgotten) while this was decided: nothing goes back.
     const rec = this.deps.requests.get(hostId, spawnId);
     if (!rec || rec.state !== 'pending') return;
+    if (outcome === 'awaiting' || outcome === 'approved') {
+      let moved: SpawnRequestRecordV1 | undefined;
+      try {
+        moved = this.deps.requests.advance?.(hostId, spawnId, ['pending'], outcome);
+      } catch (err) {
+        this.retryLater(hostId, spawnId, attempt, err);
+        return;
+      }
+      if (!moved) return;
+      this.audit(moved, outcome === 'awaiting' ? 'waiting for its card' : 'approved (rule)');
+      // Informational: the asker learns its request waits for a person here.
+      if (outcome === 'awaiting') this.sendResult(hostId, { v: 1, spawnId, code: 'waiting-for-approval' });
+      this.deps.onChange?.(hostId, spawnId, outcome);
+      return;
+    }
+    // Not stored: the request stays pending and is settled again later.
+    if (!this.finish(hostId, spawnId, outcome)) this.retryLater(hostId, spawnId, attempt, new Error('the outcome could not be stored'));
+  }
+
+  /** Decide an open request and send its answer. False when the outcome could not be stored (nothing was sent). */
+  private finish(
+    hostId: HostId,
+    spawnId: string,
+    code: A2aSpawnCode,
+    started?: { endpoint: { kind: 'pane'; workspaceId: string; paneId: string }; linkVersion: number },
+  ): boolean {
     let decided: SpawnRequestRecordV1 | undefined;
     try {
-      decided = isFinalSpawnCode(code) ? this.deps.requests.decide(hostId, spawnId, code) : undefined;
+      decided = isFinalSpawnCode(code) ? this.deps.requests.decide(hostId, spawnId, code, started) : undefined;
     } catch (err) {
-      // Not stored: the request stays pending and is settled again later.
-      this.retryLater(hostId, spawnId, attempt, err);
-      return;
+      this.deps.log('warn', `[a2a-remote] spawn request ${spawnId} from ${hostId}: ${code} not stored: ${errMsg(err)}`);
+      return false;
     }
     this.deps.log('info', `[a2a-remote] spawn request ${spawnId} from ${hostId}: ${code}`);
     if (decided) this.sendDecided(decided);
     else this.sendResult(hostId, { v: 1, spawnId, code });
+    if (decided) this.deps.onChange?.(hostId, spawnId, 'decided');
+    return true;
   }
 
   /**

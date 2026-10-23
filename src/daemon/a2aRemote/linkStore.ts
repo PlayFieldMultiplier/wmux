@@ -37,6 +37,10 @@ import {
  *
  *   (none)        --proposeOut-------> proposed-out
  *   (none)        --receiveProposal--> proposed-in
+ *   (none)        --createSpawned----> active   (a remote spawn's link: no
+ *                                                proposal, both ends already
+ *                                                agreed by the request and
+ *                                                its approval)
  *   proposed-in   --accept-----------> active   (version + 1)
  *   proposed-out  --applyRemoteAccept> active   (remote version, EXACTLY ours + 1)
  *   proposed-*|active --revoke-------> revoked  (terminal, version + 1; a remote
@@ -215,6 +219,19 @@ export class LinkStore {
     if (typeof input.linkId !== 'string' || !UUID_RE.test(input.linkId)) throw new Error('link: invalid linkId');
     if (this.links.has(input.linkId)) throw new Error(`link ${input.linkId}: duplicate linkId`);
     return this.create(input.linkId, input, 'proposed-in');
+  }
+
+  /**
+   * The link a remote spawn makes, active at once (version 1). Only the spawn
+   * path calls it, and only for a request this PC approved (B) or sent (A);
+   * `proposer` says which side of that exchange this PC is: 'remote' on the
+   * PC that started the agent. The id is the spawn's (`spawnLinkId`).
+   */
+  createSpawned(input: NewLinkInput & { linkId: string; proposer: 'local' | 'remote' }): A2aLinkRecordV1 {
+    this.assertWritable();
+    if (typeof input.linkId !== 'string' || !UUID_RE.test(input.linkId)) throw new Error('link: invalid linkId');
+    if (this.links.has(input.linkId)) throw new Error(`link ${input.linkId}: duplicate linkId`);
+    return this.create(input.linkId, input, 'active', input.proposer);
   }
 
   /**
@@ -406,7 +423,12 @@ export class LinkStore {
 
   // --- internals --------------------------------------------------------------
 
-  private create(linkId: string, input: NewLinkInput, state: 'proposed-out' | 'proposed-in'): A2aLinkRecordV1 {
+  private create(
+    linkId: string,
+    input: NewLinkInput,
+    state: 'proposed-out' | 'proposed-in' | 'active',
+    spawnedBy?: 'local' | 'remote',
+  ): A2aLinkRecordV1 {
     const clean = cleanNewLink(input);
     if (typeof clean === 'string') throw new Error(`link ${linkId}: ${clean}`);
     const live = [...this.links.values()].filter((r) => !TERMINAL.has(r.state));
@@ -417,7 +439,7 @@ export class LinkStore {
     }
 
     const at = new Date(this.now()).toISOString();
-    const proposer = state === 'proposed-out' ? 'local' : 'remote';
+    const proposer = spawnedBy ?? (state === 'proposed-out' ? 'local' : 'remote');
     const rec: A2aLinkRecordV1 = { v: A2A_REMOTE_RECORD_V, linkId, version: 1, state, ...clean, proposer, createdAt: at, updatedAt: at };
     this.links.set(linkId, rec);
     try {
@@ -426,6 +448,8 @@ export class LinkStore {
       this.links.delete(linkId);
       throw err;
     }
+    // A link that starts active is a transition the app shows at once.
+    if (state === 'active') this.announce([rec]);
     return structuredClone(rec);
   }
 

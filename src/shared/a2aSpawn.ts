@@ -201,7 +201,7 @@ export const A2A_SPAWN_RPC = Object.freeze({
   policySet: 'a2a.remote.spawnPolicy.set',
   /** → `{ requests: A2aSpawnRequestSummary[] }` (newest first, no prompt text). */
   requestsList: 'a2a.remote.spawnRequests.list',
-  /** → `{ awaiting: A2aSpawnCardV1[], approved: A2aSpawnWorkItem[] }`: what main has to show or start (on connect and on each event). */
+  /** → `A2aSpawnWork`: what main has to show or start (on connect and on each event). */
   work: 'a2a.remote.spawn.work',
   /** `{ hostId, spawnId, verdict: A2aSpawnVerdict }` → `A2aSpawnStepResult`; only for a request awaiting its card. */
   decide: 'a2a.remote.spawn.decide',
@@ -274,6 +274,28 @@ export interface A2aRemoteSpawnedBy {
 export interface A2aSpawnWorkItem {
   hostId: HostId;
   spawnId: string;
+}
+
+/**
+ * A later instruction on a link a remote spawn made, held for its card
+ * (`followUps: 'ask'`). Allowed: main retries the hold (it is delivered like
+ * any held task); denied: main rejects the hold.
+ */
+export interface A2aSpawnFollowUpCardV1 {
+  taskId: string;
+  hostId: HostId;
+  hostName: string;
+  agent: AgentSlug;
+  folder: string;
+  permissionMode: A2aSpawnPermissionMode;
+  text: string;
+}
+
+/** `a2a.remote.spawn.work`'s answer. */
+export interface A2aSpawnWork {
+  awaiting: A2aSpawnCardV1[];
+  approved: A2aSpawnWorkItem[];
+  followUps: A2aSpawnFollowUpCardV1[];
 }
 
 /** What main needs to start a claimed request. No prompt: it goes as the link's first task. */

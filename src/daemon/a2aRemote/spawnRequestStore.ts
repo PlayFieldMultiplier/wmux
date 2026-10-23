@@ -11,10 +11,11 @@ import {
   isSpawnId,
   parseSpawnRequest,
   type A2aSpawnCode,
+  type A2aSpawnRequestState,
   type A2aSpawnRequestSummary,
   type A2aSpawnRequestV1,
 } from '../../shared/a2aSpawn';
-import { isIsoString, isPlainObject, loadStore, storeUnavailable, type StoreLog } from './storeFile';
+import { isIsoString, isPlainObject, isSafeId, loadStore, storeUnavailable, type StoreLog } from './storeFile';
 
 /**
  * Remote spawn requests this PC received (`spawn-requests.json`), keyed by
@@ -22,9 +23,10 @@ import { isIsoString, isPlainObject, loadStore, storeUnavailable, type StoreLog 
  * again is answered from here and never decided twice; the same id with
  * another body is a conflict.
  *
- * The prompt is kept only while a request is pending (its card and its first
- * task need it after a restart); a decided record keeps the fingerprint and
- * the outcome, never the text. A decided record goes `SPAWN_REQUEST_KEEP_MS`
+ * The prompt is kept only while a request is open (pending, awaiting its
+ * card, approved or starting: its card and its first task need it after a
+ * restart); a decided record keeps the fingerprint and the outcome, never
+ * the text. A decided record goes `SPAWN_REQUEST_KEEP_MS`
  * after it was decided (not after the expiry the asker chose); one PC may
  * hold at most `SPAWN_DECIDED_PER_HOST_MAX` decided records, and past that
  * its new requests wait. Each write lands before memory changes, so a
@@ -45,17 +47,24 @@ export interface SpawnRequestRecordV1 {
   fingerprint: string;
   agent: A2aSpawnRequestV1['agent'];
   rootId: string;
-  state: 'pending' | 'decided';
+  state: A2aSpawnRequestState;
   code?: A2aSpawnCode;
   receivedAt: string;
   expiresAt: string;
+  /** When it was approved (by its card or a rule); kept once decided, for the start caps. */
+  approvedAt?: string;
   /** Decided only. */
   decidedAt?: string;
   /** Decided only: its spawn-result is in the outbox. */
   sent?: true;
-  /** Pending only. */
+  /** Open only (every state but `decided`). */
   request?: A2aSpawnRequestV1;
+  /** Decided `started` only: B's new pane and the link's version, for a resend of the answer. */
+  endpoint?: { kind: 'pane'; workspaceId: string; paneId: string };
+  linkVersion?: number;
 }
+
+const OPEN: ReadonlySet<A2aSpawnRequestState> = new Set(['pending', 'awaiting', 'approved', 'starting']);
 
 export type SpawnReceive =
   | { kind: 'new'; rec: SpawnRequestRecordV1 }
@@ -121,11 +130,45 @@ export class SpawnRequestStore {
   }
 
   pending(): SpawnRequestRecordV1[] {
-    return [...this.records.values()].filter((r) => r.state === 'pending').map((r) => structuredClone(r));
+    return this.inState('pending');
   }
 
+  inState(state: A2aSpawnRequestState): SpawnRequestRecordV1[] {
+    return [...this.records.values()].filter((r) => r.state === state).map((r) => structuredClone(r));
+  }
+
+  /** Requests of `hostId` not decided yet (in any open state). */
   pendingCount(hostId: HostId): number {
-    return [...this.records.values()].filter((r) => r.hostId === hostId && r.state === 'pending').length;
+    return [...this.records.values()].filter((r) => r.hostId === hostId && OPEN.has(r.state)).length;
+  }
+
+  /** Requests approved at or after `since` (ms), of `hostId` or of every PC. */
+  approvedSince(since: number, hostId?: HostId): number {
+    return [...this.records.values()].filter((r) =>
+      (hostId === undefined || r.hostId === hostId) && r.approvedAt !== undefined && Date.parse(r.approvedAt) >= since).length;
+  }
+
+  /** Requests approved or starting, of `hostId` or of every PC (they are about to be live). */
+  startingCount(hostId?: HostId): number {
+    return [...this.records.values()].filter((r) =>
+      (hostId === undefined || r.hostId === hostId) && (r.state === 'approved' || r.state === 'starting')).length;
+  }
+
+  /**
+   * Move an open request on: `from` the states it may be in, `to` the next.
+   * Returns the record as stored, or undefined when it is not in one of them.
+   */
+  advance(hostId: HostId, spawnId: string, from: readonly A2aSpawnRequestState[], to: Exclude<A2aSpawnRequestState, 'decided'>): SpawnRequestRecordV1 | undefined {
+    const rec = this.records.get(key(hostId, spawnId));
+    if (!rec || !from.includes(rec.state)) return undefined;
+    this.assertWritable();
+    const next: SpawnRequestRecordV1 = {
+      ...rec,
+      state: to,
+      ...(to === 'approved' && rec.approvedAt === undefined ? { approvedAt: new Date(this.now()).toISOString() } : {}),
+    };
+    this.commit((m) => m.set(key(hostId, spawnId), next));
+    return structuredClone(next);
   }
 
   /** Newest first, without the prompt. */
@@ -168,13 +211,24 @@ export class SpawnRequestStore {
     return { kind: 'new', rec: structuredClone(rec) };
   }
 
-  /** A pending request was decided: keep the outcome, drop the text. */
-  decide(hostId: HostId, spawnId: string, code: A2aSpawnCode): SpawnRequestRecordV1 | undefined {
+  /** An open request was decided: keep the outcome, drop the text. `started` names the new pane. */
+  decide(
+    hostId: HostId,
+    spawnId: string,
+    code: A2aSpawnCode,
+    started?: { endpoint: { kind: 'pane'; workspaceId: string; paneId: string }; linkVersion: number },
+  ): SpawnRequestRecordV1 | undefined {
     const rec = this.records.get(key(hostId, spawnId));
-    if (!rec || rec.state !== 'pending') return undefined;
+    if (!rec || !OPEN.has(rec.state)) return undefined;
     this.assertWritable();
     const { request: _dropped, ...rest } = rec;
-    const next: SpawnRequestRecordV1 = { ...rest, state: 'decided', code, decidedAt: new Date(this.now()).toISOString() };
+    const next: SpawnRequestRecordV1 = {
+      ...rest,
+      state: 'decided',
+      code,
+      decidedAt: new Date(this.now()).toISOString(),
+      ...(code === 'started' && started ? { endpoint: { ...started.endpoint }, linkVersion: started.linkVersion } : {}),
+    };
     this.commit((m) => m.set(key(hostId, spawnId), next));
     return structuredClone(next);
   }
@@ -244,15 +298,28 @@ function coerceRecord(raw: unknown): SpawnRequestRecordV1 | null {
   const { hostId, spawnId, fingerprint, agent, rootId, state, code, receivedAt, expiresAt } = raw;
   if (!isHostId(hostId) || !isSpawnId(spawnId) || typeof fingerprint !== 'string' || !/^[0-9a-f]{64}$/.test(fingerprint)) return null;
   if (typeof agent !== 'string' || typeof rootId !== 'string' || !isIsoString(receivedAt) || !isIsoString(expiresAt)) return null;
-  if (state === 'pending') {
+  const approvedAt = isIsoString(raw['approvedAt']) ? { approvedAt: raw['approvedAt'] } : {};
+  if (typeof state === 'string' && OPEN.has(state as A2aSpawnRequestState)) {
     const request = parseSpawnRequest(raw['request']);
     if (!request || request.spawnId !== spawnId) return null;
-    return { v: 1, hostId, spawnId, fingerprint, agent: request.agent, rootId: request.folder.root, state, receivedAt, expiresAt, request };
+    return {
+      v: 1, hostId, spawnId, fingerprint, agent: request.agent, rootId: request.folder.root,
+      state: state as A2aSpawnRequestState, receivedAt, expiresAt, ...approvedAt, request,
+    };
   }
   if (state !== 'decided' || !isSpawnCode(code)) return null;
+  // A `started` answer is resent with its pane, so it is kept only whole.
+  const endpoint = raw['endpoint'];
+  const linkVersion = raw['linkVersion'];
+  const started = code === 'started' && isPlainObject(endpoint) && endpoint['kind'] === 'pane' &&
+    isSafeId(endpoint['workspaceId']) && isSafeId(endpoint['paneId']) && typeof linkVersion === 'number' && Number.isInteger(linkVersion) && linkVersion >= 1
+    ? { endpoint: { kind: 'pane' as const, workspaceId: endpoint['workspaceId'] as string, paneId: endpoint['paneId'] as string }, linkVersion }
+    : undefined;
+  if (code === 'started' && !started) return null;
   const decidedAt = isIsoString(raw['decidedAt']) ? raw['decidedAt'] : receivedAt;
   return {
-    v: 1, hostId, spawnId, fingerprint, agent: agent as A2aSpawnRequestV1['agent'], rootId, state, code, receivedAt, expiresAt, decidedAt,
+    v: 1, hostId, spawnId, fingerprint, agent: agent as A2aSpawnRequestV1['agent'], rootId, state, code, receivedAt, expiresAt, decidedAt, ...approvedAt,
+    ...(started ?? {}),
     ...(raw['sent'] === true ? { sent: true as const } : {}),
   };
 }
