@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { persisterWritesSettled } from '../versionedFile';
 import type { LedgerEntry } from '../../../shared/ledger';
 import { TaskWorktreeManager } from '../../worktask/TaskWorktreeManager';
 import {
@@ -79,8 +80,11 @@ beforeEach(() => {
   git(repo, 'add', '.gitignore');
   git(repo, 'commit', '-m', 'one');
 });
-afterEach(() => {
-  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+afterEach(async () => {
+  // A store's fire-and-forget save can still be on its way: let it land
+  // before its folder goes, or the removal races it (ENOTEMPTY).
+  await persisterWritesSettled();
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 const roots = () => ({ worktrees: path.join(home, 'worktrees'), wmuxDir });
