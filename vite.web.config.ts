@@ -62,6 +62,9 @@ export const WEB_STUBS: Record<string, string> = {
   // desktop's own "start wmux web" toggle have nothing to do in the browser.
   [r('src/renderer/components/Chat/ChatView.tsx')]: NULL_STUB,
   [r('src/renderer/components/StatusBar/WebToggle.tsx')]: NULL_STUB,
+  // Dictation needs main's model store; the browser shows no mic, so its
+  // speech engine (onnxruntime-web and its .wasm) stays out of the bundle.
+  [r('src/renderer/dictation/whisper.worker.ts')]: NULL_STUB,
 };
 
 export function webStubs(): Plugin {
