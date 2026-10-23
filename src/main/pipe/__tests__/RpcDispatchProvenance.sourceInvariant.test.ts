@@ -33,9 +33,14 @@ describe('RPC dispatch provenance source invariant', () => {
     const writers: string[] = [];
 
     for (const file of collectProductionTsFiles(MAIN_DIR)) {
+      const text = fs.readFileSync(file, 'utf8');
+      // A file that never spells the marker cannot write it: only the few
+      // that do are parsed. Parsing every file of main for each marker ran
+      // past the test timeout on a loaded Windows runner (#2434).
+      if (!text.includes(marker)) continue;
       const source = ts.createSourceFile(
         file,
-        fs.readFileSync(file, 'utf8'),
+        text,
         ts.ScriptTarget.Latest,
         true,
       );
