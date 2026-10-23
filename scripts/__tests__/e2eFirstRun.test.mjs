@@ -21,11 +21,15 @@ import {
   agentRanInPane,
   appEnvExtras,
   fakeAgentShims,
+  FIRST_TASK_REPO_ORIGIN,
+  firstTaskRepoFixture,
   INTERRUPT_EXIT_CODES,
   killSurvivors,
   mergeTrees,
   normalizeProcessRows,
+  oneBotProfile,
   onceAsync,
+  paneCdCommand,
   paneProbeCommand,
   paneProbeRefusal,
   parseRunArgs,
@@ -35,6 +39,7 @@ import {
   sandboxBase,
   sandboxEnv,
   sandboxShellProfiles,
+  sdkPromptWith,
   seededClaudeJson,
   squirrelInstallRefusal,
   survivors,
@@ -465,5 +470,51 @@ describe('the pane runs the fake claude (P2-2)', () => {
     expect(paneProbeRefusal(`Application|${path.win32.join('C:', 'Users', 'u', '.local', 'bin', 'claude.exe')}`, fake, 'win32')).toMatch(/real Claude Code/);
     expect(paneProbeRefusal('Alias|', fake, 'win32')).toMatch(/a Alias/);
     expect(paneProbeRefusal('|', fake, 'win32')).toMatch(/not found/);
+  });
+});
+
+describe('the first task', () => {
+  it('builds a repository with a GitHub origin and one commit, without reading any git config', () => {
+    const { files, git } = firstTaskRepoFixture();
+    expect(files.map((f) => f.name)).toEqual(['README.md']);
+    expect(git[0].slice(-2)).toEqual(['init', '-q']);
+    expect(git).toContainEqual(['remote', 'add', 'origin', FIRST_TASK_REPO_ORIGIN]);
+    expect(FIRST_TASK_REPO_ORIGIN).toMatch(/^https:\/\/github\.com\/[^/]+\/[^/]+\.git$/);
+    // The commit carries its own identity and never signs (no prompt, no key).
+    const commit = git.find((g) => g.includes('commit'));
+    expect(commit).toEqual(expect.arrayContaining(['-c', 'user.name=wmux e2e', 'commit.gpgsign=false', 'commit']));
+    expect(git.indexOf(commit)).toBe(git.length - 1);
+  });
+
+  it('moves a pane into the folder and writes where it landed, per shell; refuses a quote', () => {
+    expect(paneCdCommand('/tmp/wmux-fr-1/first-run-e2e', '/tmp/wmux-fr-1/pane-cwd.txt', 'darwin'))
+      .toBe("cd '/tmp/wmux-fr-1/first-run-e2e' && pwd -P > '/tmp/wmux-fr-1/pane-cwd.txt'");
+    expect(paneCdCommand('C:\\T\\fr\\first-run-e2e', 'C:\\T\\fr\\cwd.txt', 'win32'))
+      .toBe("Set-Location -LiteralPath 'C:\\T\\fr\\first-run-e2e'; (Get-Location).Path | Set-Content -Encoding UTF8 -LiteralPath 'C:\\T\\fr\\cwd.txt'");
+    expect(() => paneCdCommand("/tmp/it's", '/tmp/x', 'linux')).toThrow(/quote/);
+  });
+
+  it('reads bots.json as exactly one bot profile, naming what is wrong otherwise', () => {
+    const one = JSON.stringify({ version: 1, bots: [{ id: 'bot-1', name: 'Repo guide', repo: { repoPath: '/r' } }], removed: [] });
+    expect(oneBotProfile(one)).toEqual({ ok: true, bot: { id: 'bot-1', name: 'Repo guide', repoPath: '/r' } });
+    expect(oneBotProfile(JSON.stringify({ version: 1, bots: [] }))).toEqual({ ok: false, reason: 'bots.json holds 0 bot profiles, not 1' });
+    expect(oneBotProfile(JSON.stringify({ version: 1, bots: [{ id: 'a' }, { id: 'b' }] })).reason).toMatch(/2 bot profiles/);
+    expect(oneBotProfile(JSON.stringify({ version: 2, bots: [] })).ok).toBe(false);
+    expect(oneBotProfile('{').reason).toMatch(/not JSON/);
+  });
+
+  it('finds the Agent SDK prompt holding the task, whatever the prompt wraps around it', () => {
+    const log = [
+      JSON.stringify({ agent: 'claude', event: 'sdk-start' }),
+      JSON.stringify({ agent: 'claude', event: 'prompt', text: 'Explain this repository' }),
+      JSON.stringify({ agent: 'claude', event: 'sdk-prompt', prompt: 'You are a bot.\nThe owner wrote:\n  Explain   this\nrepository, briefly.' }),
+      'not json',
+    ].join('\n');
+    const found = sdkPromptWith(log, 'Explain this repository, briefly.');
+    expect(found.prompts).toHaveLength(1);
+    expect(found.match).toContain('The owner wrote');
+    // A TUI prompt (a pane's agent) is not the bot's turn.
+    expect(sdkPromptWith(log, 'Something else').match).toBeNull();
+    expect(sdkPromptWith('', 'x')).toEqual({ prompts: [], match: null });
   });
 });
