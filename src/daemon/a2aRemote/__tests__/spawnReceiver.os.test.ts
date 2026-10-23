@@ -658,12 +658,15 @@ describe('SpawnPolicyStore', () => {
     expect(await slow.set({ ...slow.get(), roots })).toEqual({ ok: false, error: 'the folders did not answer in time; nothing was saved' });
     expect(slow.get().version).toBe(0);
     expect(fs.existsSync(slow.filePath)).toBe(false);
-    // A save queued behind a slow one counts its wait too.
+    // A save queued behind a slow one counts its wait too: one folder (40 ms)
+    // fits in the budget alone, but not in what is left of it after the wait.
+    // (A save with nothing to check could still land in that remainder.)
     const first = slow.set({ ...slow.get(), roots });
-    const second = slow.set({ ...slow.get(), followUps: 'direct' });
+    const second = slow.set({ ...slow.get(), roots: roots.slice(0, 1) });
     await first;
     expect(await second).toMatchObject({ ok: false });
     expect(slow.get().version).toBe(0);
+    expect(await slow.set({ ...slow.get(), roots: roots.slice(0, 1) })).toMatchObject({ ok: true });
   });
 
   it('on start, PCs no longer paired are dropped from the policy and the requests', async () => {
