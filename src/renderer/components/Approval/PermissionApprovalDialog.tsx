@@ -50,7 +50,7 @@ export interface PermissionApprovalDialogProps {
    */
   title?: string;
   /** What is being asked. Absent (and 'plugin') keeps the plugin layout. */
-  kind?: 'plugin' | 'browser-borrow' | 'computer-app' | 'browser-action';
+  kind?: 'plugin' | 'browser-borrow' | 'computer-app' | 'browser-action' | 'remote-spawn';
   /** kind 'browser-action': the action, the site and the pane it is for. */
   browserAction?: BrowserActionPromptInfo;
   /** kind 'browser-action': the pane's display name (resolved by the container). */

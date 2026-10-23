@@ -122,6 +122,15 @@ export interface A2aSpawnResultV1 {
   linkVersion?: number;
 }
 
+/**
+ * The link a started spawn makes, on both PCs: the spawnId's uuid. Link ids
+ * in `links.json` are uuids, and an older build refuses that whole file over
+ * one that is not, so the `sp-` prefix stays off the link.
+ */
+export function spawnLinkId(spawnId: string): string {
+  return spawnId.slice('sp-'.length);
+}
+
 /** B -> A: what A may ask for. Ids and labels only, never a path. */
 export interface A2aSpawnTargetsV1 {
   v: 1;
@@ -192,7 +201,100 @@ export const A2A_SPAWN_RPC = Object.freeze({
   policySet: 'a2a.remote.spawnPolicy.set',
   /** → `{ requests: A2aSpawnRequestSummary[] }` (newest first, no prompt text). */
   requestsList: 'a2a.remote.spawnRequests.list',
+  /** → `{ awaiting: A2aSpawnCardV1[], approved: A2aSpawnWorkItem[] }`: what main has to show or start (on connect and on each event). */
+  work: 'a2a.remote.spawn.work',
+  /** `{ hostId, spawnId, verdict: A2aSpawnVerdict }` → `A2aSpawnStepResult`; only for a request awaiting its card. */
+  decide: 'a2a.remote.spawn.decide',
+  /**
+   * `{ hostId, spawnId }` → `A2aSpawnClaimResult`. Takes an approved request
+   * for starting, after checking everything again right now (policy, caps,
+   * folder). A refusal is settled and answered by the daemon itself.
+   */
+  claim: 'a2a.remote.spawn.claim',
+  /** `{ hostId, spawnId, workspaceId, paneId }` → `A2aSpawnStepResult`: the pane runs; mint the link, answer `started`, queue the prompt. */
+  started: 'a2a.remote.spawn.started',
+  /** `{ hostId, spawnId, code: 'folder-not-allowed' | 'failed' }` → `A2aSpawnStepResult`: starting a claimed request failed. */
+  failed: 'a2a.remote.spawn.failed',
 } as const);
+
+/** Daemon broadcast: a received request changed state (main shows its card, or starts it). */
+export const A2A_SPAWN_EVENT = 'a2a.remote.spawn.changed';
+export interface A2aSpawnEvent {
+  type: typeof A2A_SPAWN_EVENT;
+  hostId: HostId;
+  spawnId: string;
+  state: A2aSpawnRequestState;
+}
+
+/**
+ * A received request, on B:
+ *   pending  — checks running (or waiting for the app)
+ *   awaiting — its card is shown
+ *   approved — allowed (by its card, or a rule); main starts it
+ *   starting — main claimed it and is creating the worktree and pane
+ *   decided  — final; `code` says how
+ */
+export type A2aSpawnRequestState = 'pending' | 'awaiting' | 'approved' | 'starting' | 'decided';
+
+/** The card's three answers. `always` also adds the (PC, folder, agent) rule. */
+export type A2aSpawnVerdict = 'once' | 'always' | 'deny';
+
+/** What B's approval card shows. Machine-local only: it carries the prompt. */
+export interface A2aSpawnCardV1 {
+  hostId: HostId;
+  /** B's name for that PC. */
+  hostName: string;
+  spawnId: string;
+  agent: AgentSlug;
+  rootId: string;
+  rootLabel: string;
+  /** The folder as resolved on B (root realpath + sub), for display. */
+  folder: string;
+  permissionMode: A2aSpawnPermissionMode;
+  followUps: A2aSpawnFollowUps;
+  /** The full prompt (already sanitized on arrival). */
+  text: string;
+  expiresAt: string;
+}
+
+/**
+ * The workspace a remote spawn started, as the renderer keeps it for the
+ * workspace's whole life (`fanout.spawnWorkspace` param `remoteSpawnedBy`):
+ * its header chip and the start toast read it. Never the prompt.
+ */
+export interface A2aRemoteSpawnedBy {
+  hostId: HostId;
+  /** This PC's name for the asking PC. */
+  name: string;
+  spawnId: string;
+  agent: AgentSlug;
+}
+
+/** An approved request main has to start. */
+export interface A2aSpawnWorkItem {
+  hostId: HostId;
+  spawnId: string;
+}
+
+/** What main needs to start a claimed request. No prompt: it goes as the link's first task. */
+export interface A2aSpawnClaimV1 {
+  hostId: HostId;
+  hostName: string;
+  spawnId: string;
+  agent: AgentSlug;
+  /** The root's realpath: a git repository's top level. */
+  repoPath: string;
+  /** Normalized relative POSIX path below it ('' = the root). */
+  sub: string;
+  permissionMode: A2aSpawnPermissionMode;
+}
+
+export type A2aSpawnClaimResult =
+  | { ok: true; claim: A2aSpawnClaimV1 }
+  /** Not startable now; `code` is what the asker was told, when it was settled here. */
+  | { ok: false; error: string; code?: A2aSpawnCode };
+
+export type A2aSpawnStepResult = { ok: true } | { ok: false; error: string };
 
 /** `a2a.remote.spawnPolicy.set`'s answer: the saved policy, or why it was refused. */
 export type A2aSpawnPolicySetResult =
@@ -206,7 +308,7 @@ export interface A2aSpawnRequestSummary {
   spawnId: string;
   agent: AgentSlug;
   rootId: string;
-  state: 'pending' | 'decided';
+  state: A2aSpawnRequestState;
   code?: A2aSpawnCode;
   receivedAt: string;
   expiresAt: string;

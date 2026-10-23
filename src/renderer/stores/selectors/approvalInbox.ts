@@ -35,7 +35,7 @@ export type InboxItem =
       isCritical: boolean;
       /** What the prompt is asking for. Absent reads as a plugin declaring
        *  capabilities — every prompt before the live-Chrome tab borrow. */
-      kind?: 'plugin' | 'browser-borrow' | 'computer-app' | 'browser-action';
+      kind?: 'plugin' | 'browser-borrow' | 'computer-app' | 'browser-action' | 'remote-spawn';
       /** The question, when the generic plugin headline would be wrong. */
       title?: string;
       /** kind 'browser-action': the action, site and pane it is for. */

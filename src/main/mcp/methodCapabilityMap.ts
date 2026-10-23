@@ -514,6 +514,11 @@ export const METHOD_CAPABILITY: Record<RpcMethod, RequiredCapability> = {
   'a2a.remote.spawnPolicy.get': { capability: 'wmux.internal' },
   'a2a.remote.spawnPolicy.set': { capability: 'wmux.internal' },
   'a2a.remote.spawnRequests.list': { capability: 'wmux.internal' },
+  'a2a.remote.spawn.work': { capability: 'wmux.internal' },
+  'a2a.remote.spawn.decide': { capability: 'wmux.internal' },
+  'a2a.remote.spawn.claim': { capability: 'wmux.internal' },
+  'a2a.remote.spawn.started': { capability: 'wmux.internal' },
+  'a2a.remote.spawn.failed': { capability: 'wmux.internal' },
 
   // --- A2A (agent-to-agent) ---
   'a2a.resolve.identity': { capability: 'a2a.read',    riskClass: 'a2a' },

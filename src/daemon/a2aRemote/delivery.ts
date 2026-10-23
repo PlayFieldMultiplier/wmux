@@ -98,7 +98,7 @@ export interface A2aRemoteDeliveryDeps {
 const SYNC_MS = 5_000;
 const MAINTENANCE_MS = 60_000;
 const HELD_REASONS: ReadonlySet<string> = new Set<A2aRemoteHeldReason>([
-  'occupant-changed', 'pane-missing', 'link-not-active', 'delivery-unconfirmed', 'no-agent',
+  'occupant-changed', 'pane-missing', 'link-not-active', 'delivery-unconfirmed', 'no-agent', 'awaiting-approval',
 ]);
 /** What the sender's ledger shows while our pane has no agent to take its task. */
 export const NO_AGENT_SUMMARY = 'The linked pane on the receiving PC has no agent running; the task is held until someone there acts.';
