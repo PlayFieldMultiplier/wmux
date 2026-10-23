@@ -46,6 +46,10 @@ export class ErrorBoundary extends Component<Props, State> {
     if (this.state.hasError) {
       return (
         <div style={{
+          // A boundary can sit inside a pass-through overlay (the agent
+          // toolbar strip is `pointer-events: none`); the fallback is real
+          // content, so its Retry button has to opt back in.
+          pointerEvents: 'auto',
           padding: 16,
           color: 'var(--accent-red)',
           backgroundColor: 'var(--bg-base)',

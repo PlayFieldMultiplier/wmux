@@ -113,7 +113,7 @@ import { planAgentCandidateSeed, planLiveAgentSeed, asAgentSlug, markSeedAttempt
 import { agentSlugToDisplay } from '../../../shared/agentIdentity';
 import { RECONCILE_TIMEOUT_MS } from '../../../shared/timeouts';
 import ComposeHost from '../AgentToolbar/ComposeHost';
-import ToolbarHost, { AGENT_TOOLBAR_HEIGHT } from '../AgentToolbar/ToolbarHost';
+import { AgentToolbarStrip } from '../AgentToolbar/ToolbarHost';
 import Titlebar from '../Titlebar/Titlebar';
 import {
   createDeadPaneRecovery,
@@ -2312,22 +2312,7 @@ export default function AppLayout() {
         <ErrorBoundary name="ComposeHost">
           <ComposeHost />
         </ErrorBoundary>
-        {/* ToolbarHost is layout-neutral (it renders an absolute overlay), but
-            ErrorBoundary's fallback is a plain `height:100%` block — as a flex
-            child it would join the column's flow and squeeze the pane grid. So
-            the BOUNDARY is the absolutely-positioned thing: a crash costs the
-            bar's own 40px strip, never the terminals' height. ToolbarHost's
-            own `inset-0` fills this box, so the trigger band still measures to
-            the column's bottom edge. */}
-        <div
-          className="absolute inset-x-0 bottom-0"
-          style={{ height: AGENT_TOOLBAR_HEIGHT }}
-          data-agent-toolbar-strip
-        >
-          <ErrorBoundary name="AgentToolbar">
-            <ToolbarHost />
-          </ErrorBoundary>
-        </div>
+        <AgentToolbarStrip />
       </div>
       </ErrorBoundary>
       </div>

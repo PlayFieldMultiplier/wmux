@@ -5,6 +5,39 @@ import { useComposeShortcut } from './useComposeShortcut';
 import { useHoverReveal, HOVER_TRIGGER_ZONE_PX } from './useHoverReveal';
 import { isRemoteMirrorVisible } from '../../stores/slices/remoteWorkspacesSlice';
 import { selectOtherPcOnScreen } from '../../stores/shadowWorkspace';
+import { ErrorBoundary } from '../ErrorBoundary';
+
+/**
+ * The box AppLayout drops at the bottom of the workspace column to hold the
+ * bar and its crash boundary.
+ *
+ * ToolbarHost is layout-neutral (it renders an absolute overlay), but
+ * ErrorBoundary's fallback is a plain `height:100%` block — as a flex child it
+ * would join the column's flow and squeeze the pane grid. So the BOUNDARY is
+ * the absolutely-positioned thing: a crash costs the bar's own 40px strip,
+ * never the terminals' height. ToolbarHost's own `inset-0` fills this box, so
+ * the trigger band still measures to the column's bottom edge.
+ *
+ * `pointerEvents: 'none'`: this box sits over the bottom 40px of whatever the
+ * column shows — the terminal's last rows, the chat composer's Dictate and
+ * Send buttons. A positioned box is a hit target even when nothing inside it
+ * paints, so without this it swallowed every click there while the bar was
+ * hidden. The reveal needs no element to catch the pointer (useHoverReveal
+ * watches the document), and the bar's controls opt back in themselves.
+ */
+export function AgentToolbarStrip() {
+  return (
+    <div
+      className="absolute inset-x-0 bottom-0"
+      style={{ height: AGENT_TOOLBAR_HEIGHT, pointerEvents: 'none' }}
+      data-agent-toolbar-strip
+    >
+      <ErrorBoundary name="AgentToolbar">
+        <ToolbarHost />
+      </ErrorBoundary>
+    </div>
+  );
+}
 
 /**
  * Owns the reveal state for AgentToolbar and the element the trigger band is
