@@ -156,6 +156,27 @@ esac`);
   });
 });
 
+describe('Qwen Code on Windows', () => {
+  it('asks its version through the vendor qwen.cmd (cmd.exe, verbatim), from the home folder', async () => {
+    const shim = 'C:\\Users\\u\\AppData\\Local\\qwen-code\\qwen-code\\bin\\qwen.cmd';
+    const calls: { command: string; args: string[]; cwd: string; verbatim?: boolean }[] = [];
+    const d = new AgentSetupDetector({
+      env: () => ({ Path: 'C:\\Windows' }),
+      platform: 'win32',
+      homedir: () => 'C:\\Users\\u',
+      resolve: (agent) => (agent === 'qwen' ? shim : null),
+      run: async (command, args, opts) => {
+        calls.push({ command, args, cwd: opts.cwd, verbatim: opts.windowsVerbatimArguments });
+        return { code: 0, stdout: '0.26.0\n', stderr: '', timedOut: false };
+      },
+    });
+    expect(await d.detect('qwen')).toMatchObject({ readiness: 'installed', executable: shim, version: '0.26.0' });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ args: ['/d', '/s', '/c', `""${shim}" "--version""`], cwd: 'C:\\Users\\u', verbatim: true });
+    expect(calls[0].command.toLowerCase()).toMatch(/cmd\.exe$/);
+  });
+});
+
 describe('readLoginState', () => {
   const r = (code: number | null, stdout: string, timedOut = false) => ({ code, stdout, stderr: '', timedOut });
 
