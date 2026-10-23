@@ -234,3 +234,30 @@ describe('Codex candidates', () => {
     expect(resolveAgentExecutableWith(r, 'codex')).toBe('D:\\npm\\node_modules\\@openai\\codex\\bin\\codex.js');
   });
 });
+
+describe('Grok and Antigravity candidates', () => {
+  it('Windows: each vendor installer\'s folder, and the WinGet link for Grok, never an npm path', () => {
+    const r: ResolveClaudeEnv = {
+      platform: 'win32',
+      env: { PATH: 'C:\\tools', PATHEXT: '.EXE;.CMD', LOCALAPPDATA: 'C:\\Users\\u\\AppData\\Local', APPDATA: 'C:\\Users\\u\\AppData\\Roaming' },
+      homedir: 'C:\\Users\\u',
+      isFile: () => false,
+    };
+    expect(agentCandidates(r, 'grok')).toEqual([
+      'C:\\tools\\grok.exe',
+      'C:\\Users\\u\\.grok\\bin\\grok.exe',
+      'C:\\Users\\u\\AppData\\Local\\Microsoft\\WinGet\\Links\\grok.exe',
+    ]);
+    expect(agentCandidates(r, 'agy')).toEqual([
+      'C:\\tools\\agy.exe',
+      'C:\\Users\\u\\AppData\\Local\\agy\\bin\\agy.exe',
+    ]);
+  });
+
+  it('macOS and Linux: ~/.grok/bin/grok and ~/.local/bin/agy when PATH misses them', () => {
+    const files = new Set(['/home/u/.grok/bin/grok', '/home/u/.local/bin/agy']);
+    const r: ResolveClaudeEnv = { platform: 'linux', env: { PATH: '/usr/bin' }, homedir: '/home/u', isFile: (p) => files.has(p) };
+    expect(resolveAgentExecutableWith(r, 'grok')).toBe('/home/u/.grok/bin/grok');
+    expect(resolveAgentExecutableWith(r, 'agy')).toBe('/home/u/.local/bin/agy');
+  });
+});

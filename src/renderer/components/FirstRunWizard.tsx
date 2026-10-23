@@ -37,7 +37,7 @@ import { IconCheck, IconWarning } from './icons';
 import { FOCUS_RING } from './focusRing';
 import { AgentReadyGroup, AgentSetupCorner, cornerRun, decideAgentPrimary } from './FirstRunAgentCards';
 import { refreshAgentStatus, useAgentSetup } from '../utils/agentSetupRuns';
-import { anyAgentReady, type AgentId } from '../../shared/agentSetup';
+import { anyAgentSetUp, type AgentId } from '../../shared/agentSetup';
 import { FIRST_RUN_REOPEN_EVENT } from '../../shared/firstRun';
 
 // ─── Local type narrowing for electronAPI.firstRun ────────────────────────────
@@ -361,7 +361,7 @@ export default function FirstRunWizard({ mode, onClose }: FirstRunWizardProps) {
     if (before !== null && before !== installedKey) void refresh({ quiet: true });
   }, [installedKey, refresh]);
   const agentPrimary = decideAgentPrimary(statuses, runs);
-  const noAgentReady = statuses !== null && !anyAgentReady(statuses);
+  const noAgentReady = statuses !== null && !anyAgentSetUp(statuses);
 
   // ─── Statusline offer (opt-in; never auto-installs — owner decision 2026-07-17) ──
   // Fetched once on mount; the block renders only when Claude is detected AND

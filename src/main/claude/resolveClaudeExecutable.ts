@@ -128,20 +128,27 @@ export function agentCandidates(r: ResolveClaudeEnv, agent: AgentBinary): string
     else out.push(p.join(dir, name));
     // Windows npm in any prefix: the PATH folder holds an unspawnable .cmd
     // shim next to node_modules; run the package entrypoint instead.
-    if (win && spec.npm.besideShim && isFileSafe(r, p.join(dir, `${name}.cmd`))) {
-      for (const entry of spec.npm.winEntries) out.push(p.join(dir, 'node_modules', ...spec.npm.package, ...entry));
+    const npm = spec.npm;
+    if (win && npm?.besideShim && isFileSafe(r, p.join(dir, `${name}.cmd`))) {
+      for (const entry of npm.winEntries) out.push(p.join(dir, 'node_modules', ...npm.package, ...entry));
     }
   }
   // Native installer (self-updating).
   if (win) {
     const base = spec.native.win32.root === 'home' ? r.homedir : r.env[spec.native.win32.root];
     if (base) out.push(p.join(base, ...spec.native.win32.path));
+    // A WinGet portable install links its command here (on PATH once a new
+    // session reads it).
+    const localAppData = r.env.LOCALAPPDATA;
+    if (localAppData && spec.install.more?.some((m) => m.via === 'winget')) {
+      out.push(p.join(localAppData, 'Microsoft', 'WinGet', 'Links', `${name}.exe`));
+    }
   } else {
     out.push(p.join(r.homedir, ...spec.native.posix));
   }
   if (win) {
     const appData = r.env.APPDATA;
-    if (appData) {
+    if (appData && spec.npm) {
       const pkg = p.join(appData, 'npm', 'node_modules', ...spec.npm.package);
       for (const entry of spec.npm.winEntries) out.push(p.join(pkg, ...entry));
     }

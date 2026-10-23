@@ -12,13 +12,16 @@ export type AgentId = AgentSlugWith<'setup'>;
 export const AGENT_IDS: readonly AgentId[] = agentSlugsWith('setup');
 
 /**
- * The three card states.
+ * The card states.
  *   - `ready`         installed and signed in.
  *   - `login-needed`  installed; signed out, or the sign-in check gave no usable
  *                     answer (see {@link AgentSetupStatus.loginKnown}).
+ *   - `installed`     installed, and the agent has no documented sign-in check
+ *                     (its row's `loginStatus` is `none`): it signs in on its
+ *                     own first run, which wmux does not read.
  *   - `not-installed` no executable found.
  */
-export type AgentReadiness = 'ready' | 'login-needed' | 'not-installed';
+export type AgentReadiness = 'ready' | 'login-needed' | 'installed' | 'not-installed';
 
 export interface AgentSetupStatus {
   agent: AgentId;
@@ -68,4 +71,11 @@ export function isOlderVersion(version: string, floor: string): boolean {
 /** At least one agent can be used now: the wizard may continue. */
 export function anyAgentReady(statuses: readonly AgentSetupStatus[]): boolean {
   return statuses.some((s) => s.readiness === 'ready');
+}
+
+/** At least one agent is set up as far as wmux can tell: signed in, or
+ *  installed with a sign-in it cannot check. What the sidebar's "Agent not
+ *  set up" row and the wizard's Later label ask. */
+export function anyAgentSetUp(statuses: readonly AgentSetupStatus[]): boolean {
+  return statuses.some((s) => s.readiness === 'ready' || s.readiness === 'installed');
 }

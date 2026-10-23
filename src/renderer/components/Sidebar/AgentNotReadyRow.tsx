@@ -4,7 +4,7 @@ import { useT } from '../../hooks/useT';
 import { FOCUS_RING } from '../focusRing';
 import { IconWarning } from '../icons';
 import { FIRST_RUN_REOPEN_EVENT } from '../../../shared/firstRun';
-import { anyAgentReady } from '../../../shared/agentSetup';
+import { anyAgentSetUp } from '../../../shared/agentSetup';
 import { refreshAgentStatus, useAgentSetup } from '../../utils/agentSetupRuns';
 
 /** Wait after startup before probing, so the check never competes with restore. */
@@ -12,7 +12,8 @@ const FIRST_CHECK_DELAY_MS = 5_000;
 
 /**
  * "Agent not set up · Set up": one muted row at the sidebar's foot, shown only
- * while neither Claude Code nor Codex is ready (installed and signed in), for
+ * while no agent is set up (signed in, or installed with a sign-in wmux cannot
+ * check, see anyAgentSetUp), for
  * a user who chose "Later" in the setup wizard. The click reopens the wizard.
  *
  * Owner-approved sidebar slot (2026-10-21). Colour carries state only: neutral
@@ -31,7 +32,7 @@ export default function AgentNotReadyRow() {
     return () => clearTimeout(timer);
   }, [paneGate, statuses]);
 
-  if (!statuses || anyAgentReady(statuses)) return null;
+  if (!statuses || anyAgentSetUp(statuses)) return null;
   return (
     <button
       type="button"

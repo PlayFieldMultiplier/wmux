@@ -31,7 +31,7 @@ import type {
 import { AGENT_IDS, type AgentId, type AgentSetupStatus } from '../../shared/agentSetup';
 import {
   agentExecutableNames,
-  agentInstallMethod,
+  agentInstallMethods,
   agentLoginCommand,
   shellSyntax,
   type AgentSetupPlan,
@@ -144,14 +144,22 @@ export class FirstRunOrchestrator {
    * line for the exact executable the card shows.
    */
   async agentPlan(agent: AgentId, paneShell?: string): Promise<AgentSetupPlan> {
-    const method = agentInstallMethod(agent, process.platform);
+    const methods = agentInstallMethods(agent, process.platform);
+    const method = methods[0];
     if (!method) throw new Error(`first-run: no install line for ${agent}`);
     const env = this.agentDetector.probeEnvFor(process.execPath);
-    const missing = method.requires.filter((name) => !this.onPath(name, env));
+    const installs = methods.map((m) => ({
+      via: m.via,
+      command: m.command,
+      shell: m.shell,
+      officialPage: m.officialPage,
+      missing: m.requires.filter((name) => !this.onPath(name, env)),
+    }));
     const executable = this.agentDetector.resolveExecutable(agent);
     return {
       agent,
-      install: { command: method.command, shell: method.shell, officialPage: method.officialPage, missing },
+      install: installs[0],
+      installs,
       // The sign-in line is typed into the pane's shell, so it is quoted for that
       // shell: PowerShell on Windows; on macOS/Linux the shell the pane spawns
       // (the renderer's explicit choice, else $SHELL, as pty creation does),
