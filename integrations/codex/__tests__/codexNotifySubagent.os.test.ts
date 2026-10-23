@@ -319,7 +319,7 @@ describe('wmux-codex-notify with a sub-agent thread', { timeout: SPAWN_TEST_TIME
     // The root is still the best CONFIRMED one (CHILD's session_id names it
     // directly) and rides along for the log only.
     expect(logLines()).toEqual([expect.objectContaining({ outcome: 'ok', sessionId: CHILD, subagent: true, rootSessionId: ROOT })]);
-  }, 20_000);
+  }, SPAWN_TEST_TIMEOUT_MS);
 
   it('reports the root thread\'s own turn as agent.stop, as before', async () => {
     writeRollout(path.join(codexHome, 'sessions'), ROOT, meta(ROOT, 'cli', ROOT));
@@ -328,7 +328,7 @@ describe('wmux-codex-notify with a sub-agent thread', { timeout: SPAWN_TEST_TIME
       params: expect.objectContaining({ kind: 'agent.stop', agentSessionId: ROOT }),
     })]);
     expect(logLines()[0]).not.toHaveProperty('subagent');
-  }, 20_000);
+  }, SPAWN_TEST_TIMEOUT_MS);
 
   it('sends the rollout verdict with an agent.stop (#1765)', async () => {
     writeRollout(path.join(codexHome, 'sessions'), ROOT, meta(ROOT, 'cli', ROOT));
@@ -339,7 +339,7 @@ describe('wmux-codex-notify with a sub-agent thread', { timeout: SPAWN_TEST_TIME
       { 'turn-id': 'turn-1', rolloutMissing: false },
       { 'turn-id': 'turn-1', rolloutMissing: true },
     ]);
-  }, 20_000);
+  }, SPAWN_TEST_TIMEOUT_MS);
 
   it('looks again before calling a rollout missing (#1765)', async () => {
     const exited = run(ROOT);
@@ -347,7 +347,7 @@ describe('wmux-codex-notify with a sub-agent thread', { timeout: SPAWN_TEST_TIME
     writeRollout(path.join(codexHome, 'sessions'), ROOT, meta(ROOT, 'cli', ROOT));
     expect(await exited).toBe(0);
     expect(received[0].params?.payload).toEqual({ 'turn-id': 'turn-1', rolloutMissing: false });
-  }, 20_000);
+  }, SPAWN_TEST_TIMEOUT_MS);
 
   it('reclassifies a rollout that lands after the first look: a late sub-agent is not a pane stop (#1765)', async () => {
     writeRollout(path.join(codexHome, 'sessions'), ROOT, meta(ROOT, 'cli', ROOT));
@@ -358,32 +358,32 @@ describe('wmux-codex-notify with a sub-agent thread', { timeout: SPAWN_TEST_TIME
     expect(received).toHaveLength(1);
     expect(received[0].params).toEqual(expect.objectContaining({ kind: 'agent.subagent_stop', payload: { 'turn-id': 'turn-1' } }));
     expect(received[0].params).not.toHaveProperty('agentSessionId');
-  }, 20_000);
+  }, SPAWN_TEST_TIMEOUT_MS);
 
   it('sends no verdict with a legacy payload that names its own transcript (#1765)', async () => {
     const transcript = path.join(dir, 'legacy.jsonl');
     expect(await run(CHILD, {}, { transcript_path: transcript })).toBe(0);
     expect(received[0].params?.payload).toEqual({ transcript_path: transcript });
-  }, 20_000);
+  }, SPAWN_TEST_TIMEOUT_MS);
 
   it('does not spool a thread with no rollout when no wmux endpoint exists (#1765)', async () => {
     fs.rmSync(path.join(home, '.wmux-auth-token'), { force: true });
     expect(await run(CHILD)).toBe(0);
     expect(spoolFiles()).toEqual([]);
     expect(logLines()).toEqual([expect.objectContaining({ outcome: 'no-auth-token' })]);
-  }, 20_000);
+  }, SPAWN_TEST_TIMEOUT_MS);
 
   it('sends no verdict when the WSL launcher started it (#1765)', async () => {
     expect(await run(CHILD, { WMUX_WSL_CODEX_HOOK: '/tmp/codex-hook.sh' })).toBe(0);
     expect(received).toHaveLength(1);
     expect(received[0].params?.payload).toEqual({ 'turn-id': 'turn-1' });
-  }, 20_000);
+  }, SPAWN_TEST_TIMEOUT_MS);
 
   it('sends no verdict with a sub-agent turn', async () => {
     writeRollout(path.join(codexHome, 'sessions'), CHILD, meta(CHILD, { subagent: 'review' }));
     expect(await run(CHILD)).toBe(0);
     expect(received[0].params?.payload).toEqual({ 'turn-id': 'turn-1' });
-  }, 20_000);
+  }, SPAWN_TEST_TIMEOUT_MS);
 
   it('sends a parentless sub-agent turn without a session id, so it binds nothing', async () => {
     writeRollout(path.join(codexHome, 'sessions'), CHILD, meta(CHILD, { subagent: 'review' }));
@@ -391,7 +391,7 @@ describe('wmux-codex-notify with a sub-agent thread', { timeout: SPAWN_TEST_TIME
     expect(received).toHaveLength(1);
     expect(received[0].params).toEqual(expect.objectContaining({ kind: 'agent.subagent_stop' }));
     expect(received[0].params).not.toHaveProperty('agentSessionId');
-  }, 20_000);
+  }, SPAWN_TEST_TIMEOUT_MS);
 
   // #1697 review ("should fix" #5): a sub-agent completion must never replace
   // an older, valid agent.stop spool for the same pane — so it is not spooled
@@ -402,12 +402,12 @@ describe('wmux-codex-notify with a sub-agent thread', { timeout: SPAWN_TEST_TIME
     expect(await run(CHILD)).toBe(0);
     expect(spoolFiles()).toEqual([]);
     expect(logLines()).toEqual([expect.objectContaining({ outcome: 'no-auth-token', subagent: true })]);
-  }, 20_000);
+  }, SPAWN_TEST_TIMEOUT_MS);
 
   it('still spools the root thread\'s own turn when no wmux endpoint exists, as before', async () => {
     fs.rmSync(path.join(home, '.wmux-auth-token'), { force: true });
     writeRollout(path.join(codexHome, 'sessions'), ROOT, meta(ROOT, 'cli', ROOT));
     expect(await run(ROOT)).toBe(0);
     expect(spoolFiles()).toEqual(['pty-1.json']);
-  }, 20_000);
+  }, SPAWN_TEST_TIMEOUT_MS);
 });
