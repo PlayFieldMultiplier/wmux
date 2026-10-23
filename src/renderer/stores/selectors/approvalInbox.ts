@@ -1,6 +1,6 @@
 import type { StoreState } from '../index';
 import { groupCapabilities } from '../../components/Approval/capabilityGrouping';
-import type { BrowserActionPromptInfo } from '../../../main/mcp/ApprovalQueue';
+import type { BrowserActionPromptInfo, RemoteSpawnPromptInfo } from '../../../main/mcp/ApprovalQueue';
 
 // ─── S-C2 Approval Inbox — unified pending-approval list ──────────────────────
 //
@@ -40,6 +40,8 @@ export type InboxItem =
       title?: string;
       /** kind 'browser-action': the action, site and pane it is for. */
       browserAction?: BrowserActionPromptInfo;
+      /** kind 'remote-spawn': who asks, for which agent and folder. */
+      remoteSpawn?: RemoteSpawnPromptInfo;
     }
   | {
       source: 'browserHelp';
@@ -113,10 +115,12 @@ export function selectApprovalInbox(state: ApprovalInboxState): InboxItem[] {
     // ("let this agent see and control Outlook", risk class `computer`) is
     // critical by kind: it declares no capabilities, so the grouping alone
     // would read it as benign and let a stray Enter approve it. A dangerous
-    // action on a protected browser pane is critical by kind for the same reason.
+    // action on a protected browser pane is critical by kind for the same
+    // reason, and so is another PC asking to run an agent here.
     const isCritical =
       info.kind === 'computer-app' ||
       info.kind === 'browser-action' ||
+      info.kind === 'remote-spawn' ||
       groupCapabilities(info.declaredCapabilities).some((g) => g.copy.severity === 'critical');
     items.push({
       source: 'mcp',
@@ -129,6 +133,7 @@ export function selectApprovalInbox(state: ApprovalInboxState): InboxItem[] {
       ...(info.kind !== undefined && { kind: info.kind }),
       ...(info.title !== undefined && { title: info.title }),
       ...(info.kind === 'browser-action' && info.browserAction && { browserAction: info.browserAction }),
+      ...(info.kind === 'remote-spawn' && info.remoteSpawn && { remoteSpawn: info.remoteSpawn }),
     });
   }
 

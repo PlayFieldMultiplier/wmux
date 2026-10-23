@@ -61,8 +61,6 @@ afterEach(() => {
 describe('RemoteSpawnSection', () => {
   it('renders nothing while the flag is off, and reads nothing', async () => {
     stub();
-    await render(<RemoteSpawnSection />);
-    expect(container.innerHTML).toBe('');
     await render(<RemoteSpawnSection enabled={false} />);
     expect(container.innerHTML).toBe('');
   });

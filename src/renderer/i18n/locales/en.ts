@@ -5725,6 +5725,21 @@ export const en = {
   'remoteSpawn.unavailable': "This needs the wmux daemon. It will appear once the daemon connects.",
   'remoteSpawn.hostToggle': "Can start agents here",
   'remoteSpawn.hostToggleLabel': "{name} can start agents here",
+  'remoteSpawn.card.title': "{hostName} wants to start {agent} here",
+  'remoteSpawn.card.followUpTitle': "{hostName} sent a new instruction",
+  'remoteSpawn.card.pc': "PC",
+  'remoteSpawn.card.agent': "Agent",
+  'remoteSpawn.card.folder': "Folder",
+  'remoteSpawn.card.mode': "Permission mode",
+  'remoteSpawn.card.modeClaudeOnly': "The mode applies to Claude only.",
+  'remoteSpawn.card.prompt': "Instruction",
+  'remoteSpawn.card.meaningDirect': "Allowing this lets {hostName} run this agent as you in this folder. Its later instructions arrive without asking again.",
+  'remoteSpawn.card.meaningAsk': "Allowing this lets {hostName} run this agent as you in this folder. Each later instruction asks again.",
+  'remoteSpawn.card.meaningFollowUp': "Allowing this sends this instruction to the agent {hostName} started here.",
+  'remoteSpawn.card.allowOnce': "Allow once",
+  'remoteSpawn.card.always': "Always allow this PC, folder and agent",
+  'remoteSpawn.chip': "Started remotely by {name}",
+  'remoteSpawn.toast': "{name} started {agent} here",
 } as const;
 
 export type TranslationKey = keyof typeof en;

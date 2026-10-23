@@ -37,6 +37,7 @@ import {
 } from '../../shared/workerLaunch';
 import { handleCompanyRpc } from '../../company/renderer/rpcHandlers';
 import { t } from '../i18n';
+import { parseRemoteSpawnedBy, remoteSpawnToastMessage } from '../utils/remoteSpawnedBy';
 import { formatA2aMessage, formatA2aBroadcast, sanitizeA2aName, type A2aFormatOptions } from '../utils/a2aFormat';
 import type { A2aPriority } from '../utils/a2aFormat';
 import { findPendingExecuteRequest, requestExecuteApproval, requestFanOutApproval, requestTaskApproval } from '../utils/executeApprovalGate';
@@ -1639,6 +1640,9 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
     // Never re-resolved against today's layout — the requesting pane may have
     // closed since, and its ptyId may belong to another pane by now.
     const fanoutOrigin = sanitizeFanoutOrigin(params.fanoutOrigin);
+    // Another PC asked for this workspace (remote spawn). Strictly checked; a
+    // value that is not exactly one is ignored rather than failing the spawn.
+    const remoteSpawnedBy = parseRemoteSpawnedBy(params.remoteSpawnedBy);
 
     store.addWorkspace(name);
     const afterAdd = useStore.getState();
@@ -1648,6 +1652,7 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
     }
     const newWsId = newWs.id;
     const paneId = newWs.activePaneId;
+    if (remoteSpawnedBy) afterAdd.setWorkspaceRemoteSpawnedBy(newWsId, remoteSpawnedBy);
 
     // Depth-1 lineage: main stamps this workspace as a task of its owner
     // INSIDE pty.create, before the PTY (and the agent) exists; a failed stamp
@@ -1760,6 +1765,7 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
     }
     afterPty.addSurface(paneId, ptyId, '', cwd, newWsId);
     releaseLeaf();
+    if (remoteSpawnedBy) useStore.getState().pushToast({ level: 'info', message: remoteSpawnToastMessage(remoteSpawnedBy) });
 
     // 포커스 복원 — fan-out 스폰이 사람 화면을 훔치지 않는다. 아래 role 스탬프
     // 앞에 둔다: setRole은 IPC 왕복이고, 그 사이 사용자 화면이 새 워크스페이스에
@@ -1785,7 +1791,8 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
     // task would come back on the default (expensive) one with nothing said.
     // It carries the model-env marker exactly as launched, so main can tell
     // whether the neutralisation survived when it reports a stuck worker.
-    return { workspaceId: newWsId, ptyId, initialCommand: launchCommand, ...(fanoutOrigin ? { fanoutOrigin } : {}) };
+    // `paneId`: the new pane, for a remote spawn's link endpoint.
+    return { workspaceId: newWsId, ptyId, paneId, initialCommand: launchCommand, ...(fanoutOrigin ? { fanoutOrigin } : {}) };
   }
 
   // -------------------------------------------------------------------------

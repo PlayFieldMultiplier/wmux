@@ -30,6 +30,7 @@ export default function PermissionApprovalDialogContainer() {
   const latest = order[order.length - 1];
   const pending = latest ? prompts[latest] : null;
   const action = pending?.kind === 'browser-action' ? pending.browserAction : undefined;
+  const spawn = pending?.kind === 'remote-spawn' ? pending.remoteSpawn : undefined;
   // The pane's name as its header shows it; main only knows its id.
   const paneName = useStore((s) => {
     if (!action) return undefined;
@@ -50,7 +51,8 @@ export default function PermissionApprovalDialogContainer() {
   return (
     // Keyed by prompt: the next queued prompt mounts fresh, so nothing the
     // previous one had focused can answer it. An unprotected pane has no
-    // standing grant to remember, so it gets no "Always on this pane".
+    // standing grant to remember, so it gets no "Always on this pane"; a
+    // follow-up instruction adds no rule, so it gets no "Always allow" either.
     <PermissionApprovalDialogView
       key={pending.promptId}
       clientName={pending.clientName}
@@ -60,6 +62,8 @@ export default function PermissionApprovalDialogContainer() {
       {...(pending.kind !== undefined && { kind: pending.kind })}
       {...(action && { browserAction: action })}
       {...(action && !action.unprotected && { onApproveAlways: () => respond(true, true) })}
+      {...(spawn && { remoteSpawn: spawn })}
+      {...(spawn && !spawn.followUp && { onApproveAlways: () => respond(true, true) })}
       {...(paneName !== undefined && { paneName })}
       onApprove={() => respond(true)}
       onDeny={() => respond(false)}

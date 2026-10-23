@@ -11,6 +11,7 @@ import { deadlineForItem, remainingSeconds } from './approvalCountdown';
 import { focusNotificationTarget } from '../../hooks/useNotificationListener';
 import { beginApprovalCountdown, pauseApprovalCountdown } from '../../utils/executeApprovalGate';
 import { IconWarning } from '../icons';
+import { agentRow } from '../../../shared/agentIdentity';
 
 // Button recipes (theme-safe). Approve = the solid primary; deny = danger
 // tinted. The row still carries the critical/attention border + countdown, so
@@ -352,9 +353,11 @@ export default function ApprovalInboxList({ items, focusedIdx, onResolve, onNavi
                       ? 'fleet.approvals.agent'
                       : item.kind === 'browser-action'
                         ? 'fleet.approvals.pane'
-                        : 'fleet.approvals.plugin')}:{' '}
+                        : item.kind === 'remote-spawn'
+                          ? 'remoteSpawn.card.pc'
+                          : 'fleet.approvals.plugin')}:{' '}
                 </span>
-                {item.clientName}
+                {item.remoteSpawn ? item.remoteSpawn.hostName : item.clientName}
               </span>
               <div className="flex-1" />
               {/* C-3: only rendered once the approval record carries a deadline —
@@ -388,9 +391,34 @@ export default function ApprovalInboxList({ items, focusedIdx, onResolve, onNavi
             {/* The question itself, for a prompt that carries one. A borrow
                 declares no capabilities, so without this the row would say who
                 is asking and never what for. */}
-            {item.title && (
+            {item.title && !item.remoteSpawn && (
               <div className="text-xs font-medium" style={{ color: 'var(--text-main)' }}>
                 {item.title}
+              </div>
+            )}
+
+            {/* Another PC asks to run an agent here: the row is answered from
+                here too, so it carries the question and the whole prompt
+                (as text, scrollable, never cut). */}
+            {item.remoteSpawn && (
+              <div data-inbox-remote-spawn className="flex flex-col gap-1">
+                <div className="text-xs font-medium" style={{ color: 'var(--text-main)' }}>
+                  {item.remoteSpawn.followUp
+                    ? t('remoteSpawn.card.followUpTitle', { hostName: item.remoteSpawn.hostName })
+                    : t('remoteSpawn.card.title', {
+                        hostName: item.remoteSpawn.hostName,
+                        agent: agentRow(item.remoteSpawn.agent)?.display ?? item.remoteSpawn.agent,
+                      })}
+                </div>
+                <div className="text-[11px] font-mono truncate" style={{ color: 'var(--text-sub2)' }} title={item.remoteSpawn.folder}>
+                  {item.remoteSpawn.folder}
+                </div>
+                <pre
+                  className="m-0 text-xs whitespace-pre-wrap break-words overflow-auto"
+                  style={{ color: 'var(--text-sub)', maxHeight: 120, fontFamily: 'inherit' }}
+                >
+                  {item.remoteSpawn.text}
+                </pre>
               </div>
             )}
 
