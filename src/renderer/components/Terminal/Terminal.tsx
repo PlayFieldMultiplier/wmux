@@ -23,6 +23,8 @@ import ScrollToBottomButton from './ScrollToBottomButton';
 import { paneTagDropText } from '../../utils/paneTagDrag';
 import { getPaneLinkNotice, notePaneUserInput, subscribeDaemonLinkNotice } from '../../daemon/daemonLinkNotice';
 import DaemonLinkNotice from './DaemonLinkNotice';
+import { PaneDictationChip } from '../Dictation/PaneDictationChip';
+import { dictationAvailable } from '../Dictation/DictationButton';
 import '@xterm/xterm/css/xterm.css';
 
 const ChatView = lazy(() => import('../Chat/ChatView'));
@@ -598,6 +600,9 @@ export default function TerminalComponent({ chatView = false, ptyId: externalPty
           button's subscriptions and click handler must track the real
           terminal or scrolling/clicking silently no-ops. */}
       <ScrollToBottomButton terminal={terminalInstance} />
+
+      {/* Dictating into this pane: a corner chip over the terminal (no layout row). */}
+      {ptyId && dictationAvailable() && <PaneDictationChip ptyId={ptyId} />}
 
       {/* Search bar overlay */}
       {showSearchBar && (

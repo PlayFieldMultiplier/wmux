@@ -671,22 +671,41 @@ describe('SpawnPolicyStore', () => {
   });
 
   it('a save has one time budget from the call, so one the app gave up on has saved nothing', async () => {
-    const slowRoot = (): Promise<string> => new Promise((r) => setTimeout(() => r(repo), 40));
-    const slow = new SpawnPolicyStore({ dir: a2aDir, scheduleHarden: quiet, checks: new SpawnChecks(8, 5_000), setBudgetMs: 100, realpath: slowRoot });
-    // Each folder answers within its own timeout, but together they take longer than the save may.
-    const roots = ['a', 'b', 'c', 'd'].map((id) => ({ id, label: id.toUpperCase(), path: repo }));
-    expect(await slow.set({ ...slow.get(), roots })).toEqual({ ok: false, error: 'the folders did not answer in time; nothing was saved' });
-    expect(slow.get().version).toBe(0);
-    expect(fs.existsSync(slow.filePath)).toBe(false);
-    // A save queued behind a slow one counts its wait too: one folder (40 ms)
-    // fits in the budget alone, but not in what is left of it after the wait.
-    // (A save with nothing to check could still land in that remainder.)
-    const first = slow.set({ ...slow.get(), roots });
-    const second = slow.set({ ...slow.get(), roots: roots.slice(0, 1) });
-    await first;
-    expect(await second).toMatchObject({ ok: false });
-    expect(slow.get().version).toBe(0);
-    expect(await slow.set({ ...slow.get(), roots: roots.slice(0, 1) })).toMatchObject({ ok: true });
+    // The clock and every timer here are the test's: a folder takes exactly
+    // 40 ms and the budget is exactly 100 ms, however loaded the machine is
+    // (no git runs: the top-level check answers at once).
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      const slowRoot = (): Promise<string> => new Promise((r) => setTimeout(() => r(repo), 40));
+      const slow = new SpawnPolicyStore({
+        dir: a2aDir, scheduleHarden: quiet, checks: new SpawnChecks(8, 5_000), setBudgetMs: 100,
+        realpath: slowRoot, repoToplevel: async (dir) => dir, now: () => Date.now(),
+      });
+      // Each folder answers within its own timeout, but together they take longer than the save may.
+      const roots = ['a', 'b', 'c', 'd'].map((id) => ({ id, label: id.toUpperCase(), path: repo }));
+      const over = slow.set({ ...slow.get(), roots });
+      await vi.advanceTimersByTimeAsync(100);
+      expect(await over).toEqual({ ok: false, error: 'the folders did not answer in time; nothing was saved' });
+      expect(slow.get().version).toBe(0);
+      expect(fs.existsSync(slow.filePath)).toBe(false);
+      // A save queued behind a slow one counts its wait too: one folder (40 ms)
+      // fits in the budget alone, but not in what is left of it after the wait.
+      // (A save with nothing to check could still land in that remainder.)
+      await vi.advanceTimersByTimeAsync(200);
+      const first = slow.set({ ...slow.get(), roots });
+      const second = slow.set({ ...slow.get(), roots: roots.slice(0, 1) });
+      // Long enough for the queued one to finish its folder, had it a budget of its own.
+      await vi.advanceTimersByTimeAsync(200);
+      expect(await first).toMatchObject({ ok: false });
+      expect(await second).toMatchObject({ ok: false });
+      expect(slow.get().version).toBe(0);
+      await vi.advanceTimersByTimeAsync(200);
+      const alone = slow.set({ ...slow.get(), roots: roots.slice(0, 1) });
+      await vi.advanceTimersByTimeAsync(40);
+      expect(await alone).toMatchObject({ ok: true });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('on start, PCs no longer paired are dropped from the policy and the requests', async () => {

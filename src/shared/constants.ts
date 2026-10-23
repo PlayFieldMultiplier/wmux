@@ -598,6 +598,17 @@ export const IPC = {
   USAGE_LIMIT_CHANGED: 'usageLimit:changed',
   USAGE_LIMIT_LIST: 'usageLimit:list',
   USAGE_LIMIT_UPDATE: 'usageLimit:update',
+  // Voice dictation (shared/dictation). Renderer → main: the model's state,
+  // its one-time download (only from the owner's consent) and cancel, the
+  // engine's assets once the model checks out, and the microphone's OS
+  // access (macOS asks on first use). Main → renderer: the model's state as
+  // it changes (download progress).
+  DICTATION_STATUS: 'dictation:status',
+  DICTATION_DOWNLOAD: 'dictation:download',
+  DICTATION_CANCEL: 'dictation:cancel',
+  DICTATION_ASSETS: 'dictation:assets',
+  DICTATION_MIC_ACCESS: 'dictation:micAccess',
+  DICTATION_STATE: 'dictation:state',
   // Workspace settle / snooze (shared/workspaceSettle). Main owns and decides
   // the state; renderer → main snapshot read on boot and the user's verbs,
   // main → renderer push of the snapshot plus the changes behind it (toasts).

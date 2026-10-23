@@ -18,6 +18,8 @@
     - disable-library-validation: lets the process load the locally-built,
       separately-signed node-pty .node addon (and any other unbundled native
       module) without Apple rejecting the team-id mismatch.
+    - device.audio-input: the microphone, for voice dictation. Under hardened
+      runtime macOS refuses it without this, even after the user allows it.
 
   Keep this in sync with the RunAsNode fuse + the daemon spawn path. If RunAsNode
   is ever disabled, revisit whether allow-dyld-environment-variables is still
@@ -32,6 +34,8 @@
   <key>com.apple.security.cs.allow-dyld-environment-variables</key>
   <true/>
   <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+  <key>com.apple.security.device.audio-input</key>
   <true/>
 </dict>
 </plist>

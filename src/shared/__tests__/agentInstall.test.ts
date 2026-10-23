@@ -89,6 +89,42 @@ describe('Grok and Antigravity install lines', () => {
   });
 });
 
+describe('Qwen Code and Kimi Code CLI install lines', () => {
+  const lines = (agent: 'qwen' | 'kimi', platform: NodeJS.Platform) =>
+    agentInstallMethods(agent, platform).map((m) => [m.via, m.shell, m.command, m.requires]);
+
+  it('macOS and Linux: the vendor script first, then npm, then Homebrew (Qwen) or pnpm (Kimi), as their docs list them', () => {
+    for (const platform of ['darwin', 'linux'] as const) {
+      expect(lines('qwen', platform)).toEqual([
+        ['script', 'user', 'curl -fsSL https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen-standalone.sh | bash', ['curl', 'bash']],
+        ['npm', 'user', 'npm install -g @qwen-code/qwen-code@latest', ['npm']],
+        ['brew', 'user', 'brew install qwen-code', ['brew']],
+      ]);
+      expect(lines('kimi', platform)).toEqual([
+        ['script', 'user', 'curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash', ['curl', 'bash']],
+        ['npm', 'user', 'npm install -g @moonshot-ai/kimi-code', ['npm']],
+        ['pnpm', 'user', 'pnpm add -g @moonshot-ai/kimi-code', ['pnpm']],
+      ]);
+    }
+  });
+
+  it('Windows: the PowerShell script first, then npm, both in PowerShell', () => {
+    expect(lines('qwen', 'win32')).toEqual([
+      ['script', 'powershell', 'irm https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen-standalone.ps1 | iex', []],
+      ['npm', 'powershell', 'npm install -g @qwen-code/qwen-code@latest', ['npm']],
+    ]);
+    expect(lines('kimi', 'win32')).toEqual([
+      ['script', 'powershell', 'irm https://code.kimi.com/kimi-code/install.ps1 | iex', []],
+      ['npm', 'powershell', 'npm install -g @moonshot-ai/kimi-code', ['npm']],
+    ]);
+  });
+
+  it('signs in to Qwen on Windows through its own qwen.cmd, never as a bare script', () => {
+    const shim = 'C:\\Users\\u\\AppData\\Local\\qwen-code\\qwen-code\\bin\\qwen.cmd';
+    expect(agentLoginCommand(shim, 'powershell')).toBe(`& '${shim}'`);
+  });
+});
+
 describe('agentExecutableNames', () => {
   it('accepts the binary, its .exe and the npm entrypoints', () => {
     expect(agentExecutableNames('claude')).toEqual(['claude', 'claude.exe', 'cli.js']);
@@ -96,6 +132,8 @@ describe('agentExecutableNames', () => {
     // No npm entrypoints for an agent whose vendor documents no npm install.
     expect(agentExecutableNames('grok')).toEqual(['grok', 'grok.exe']);
     expect(agentExecutableNames('agy')).toEqual(['agy', 'agy.exe']);
+    expect(agentExecutableNames('qwen')).toEqual(['qwen', 'qwen.exe', 'cli-entry.js']);
+    expect(agentExecutableNames('kimi')).toEqual(['kimi', 'kimi.exe', 'main.mjs']);
   });
 });
 

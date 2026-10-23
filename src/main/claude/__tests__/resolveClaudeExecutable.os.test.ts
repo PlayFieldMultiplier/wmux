@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { agentCandidates, claudeCandidates, resolveAgentExecutableWith, resolveClaudeExecutableWith, type ResolveClaudeEnv } from '../resolveClaudeExecutable';
+import { agentCandidates, claudeCandidates, programOnPath, resolveAgentExecutableWith, resolveClaudeExecutableWith, type ResolveClaudeEnv } from '../resolveClaudeExecutable';
 
 function posix(files: string[], env: Record<string, string> = {}, platform: NodeJS.Platform = 'linux'): ResolveClaudeEnv {
   const set = new Set(files);
@@ -259,5 +259,66 @@ describe('Grok and Antigravity candidates', () => {
     const r: ResolveClaudeEnv = { platform: 'linux', env: { PATH: '/usr/bin' }, homedir: '/home/u', isFile: (p) => files.has(p) };
     expect(resolveAgentExecutableWith(r, 'grok')).toBe('/home/u/.grok/bin/grok');
     expect(resolveAgentExecutableWith(r, 'agy')).toBe('/home/u/.local/bin/agy');
+  });
+});
+
+describe('Qwen Code and Kimi Code CLI candidates', () => {
+  const LOCAL = 'C:\\Users\\u\\AppData\\Local';
+  const SHIM = `${LOCAL}\\qwen-code\\qwen-code\\bin\\qwen.cmd`;
+  const win = (files: string[]): ResolveClaudeEnv => {
+    const set = new Set(files.map((f) => f.toLowerCase()));
+    return {
+      platform: 'win32',
+      env: { PATH: 'C:\\tools', PATHEXT: '.EXE;.CMD', LOCALAPPDATA: LOCAL, APPDATA: 'C:\\Users\\u\\AppData\\Roaming' },
+      homedir: 'C:\\Users\\u',
+      isFile: (p) => set.has(p.toLowerCase()),
+    };
+  };
+
+  it('Windows: the standalone archive\'s own qwen.cmd, kimi.exe, and the npm entrypoints', () => {
+    expect(agentCandidates(win([]), 'qwen')).toEqual([
+      'C:\\tools\\qwen.exe',
+      SHIM,
+      'C:\\Users\\u\\AppData\\Roaming\\npm\\node_modules\\@qwen-code\\qwen-code\\cli-entry.js',
+    ]);
+    expect(agentCandidates(win([]), 'kimi')).toEqual([
+      'C:\\tools\\kimi.exe',
+      'C:\\Users\\u\\.kimi-code\\bin\\kimi.exe',
+      'C:\\Users\\u\\AppData\\Roaming\\npm\\node_modules\\@moonshot-ai\\kimi-code\\dist\\main.mjs',
+    ]);
+  });
+
+  it('Windows: picks the archive\'s qwen.cmd (which runs its bundled node.exe), not the PATH shim that calls it', () => {
+    const r = win([SHIM, `${LOCAL}\\qwen-code\\bin\\qwen.cmd`]);
+    expect(resolveAgentExecutableWith({ ...r, env: { ...r.env, PATH: `${LOCAL}\\qwen-code\\bin` } }, 'qwen')).toBe(SHIM);
+  });
+
+  it('macOS and Linux: ~/.local/bin/qwen and ~/.kimi-code/bin/kimi when PATH misses them', () => {
+    const r = posix(['/home/u/.local/bin/qwen', '/home/u/.kimi-code/bin/kimi'], { PATH: '/usr/bin' });
+    expect(resolveAgentExecutableWith(r, 'qwen')).toBe('/home/u/.local/bin/qwen');
+    expect(resolveAgentExecutableWith(r, 'kimi')).toBe('/home/u/.kimi-code/bin/kimi');
+  });
+});
+
+describe('programOnPath (what an install line needs)', () => {
+  it('Windows: npm is npm.cmd, found through PATHEXT', () => {
+    const r: ResolveClaudeEnv = {
+      platform: 'win32',
+      env: { Path: 'C:\\Program Files\\nodejs', PATHEXT: '.COM;.EXE;.BAT;.CMD' },
+      homedir: 'C:\\Users\\u',
+      isFile: (p) => p === 'C:\\Program Files\\nodejs\\npm.cmd',
+    };
+    expect(programOnPath(r, 'npm')).toBe(true);
+    expect(programOnPath(r, 'pnpm')).toBe(false);
+  });
+
+  it('macOS: Homebrew\'s folder from the login shell PATH counts when a Finder launch\'s PATH lacks it', () => {
+    const r: ResolveClaudeEnv = {
+      ...posix(['/opt/homebrew/bin/brew', '/usr/bin/curl'], { PATH: '/usr/bin:/bin' }, 'darwin'),
+      loginShellPath: () => '/opt/homebrew/bin:/usr/bin',
+    };
+    expect(programOnPath(r, 'brew')).toBe(true);
+    expect(programOnPath(r, 'curl')).toBe(true);
+    expect(programOnPath({ ...r, loginShellPath: () => null }, 'brew')).toBe(false);
   });
 });
