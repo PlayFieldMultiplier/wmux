@@ -112,6 +112,9 @@ import { registerA2aLinkRpc } from './a2aRemote/linkRpc';
 import { A2aOffers } from './a2aRemote/offers';
 import { OfferStore } from './a2aRemote/offerStore';
 import { A2aRemoteDelivery, shareOfferFeatures } from './a2aRemote/delivery';
+import { A2aSpawnReceiver, registerSpawnRpc } from './a2aRemote/spawnReceiver';
+import { SpawnPolicyStore } from './a2aRemote/spawnPolicyStore';
+import { SpawnRequestStore } from './a2aRemote/spawnRequestStore';
 import { A2A_FEATURE_IMAGES, A2A_FEATURE_LINK_OFFER, A2A_FEATURE_STREAM_PING, isRemoteTaskId } from '../shared/a2aRemote';
 import type { A2aRemoteLinkEvent } from '../shared/rpc';
 import { ChannelService, ChannelStateWriter, ChannelWakeWorker, wakeAgentSlug, wrapChannelMessageEnvelope, wrapChannelCatalogEnvelope, stampChannelCaller, type CallerFieldSpec, type ChannelServiceEventLog } from './channels';
@@ -9298,9 +9301,28 @@ async function main(): Promise<void> {
       log: a2aLog,
     });
     a2aOffers = a2aOffersRef;
+    // Remote spawn (receiver side): off until this PC's human opts a PC in.
+    const a2aSpawnPolicy = new SpawnPolicyStore({ dir: a2aDir, log: a2aLog });
+    const a2aSpawnRequests = new SpawnRequestStore({ dir: a2aDir, log: a2aLog });
+    const a2aSpawn = new A2aSpawnReceiver({
+      policy: a2aSpawnPolicy,
+      requests: a2aSpawnRequests,
+      enqueue: (hostId, envelope) => {
+        if (!a2aDelivery) throw new Error('messages between PCs are not carried this run');
+        a2aDelivery.outbox.enqueue(hostId, envelope);
+      },
+      log: a2aLog,
+    });
     const a2aForgetHost = forgetHostCascade({ links: a2aLinks, exposures: a2aExposures, offers: a2aOffersRef }, a2aLog);
     const a2aCascade = (hostId: string): void => {
       a2aForgetHost(hostId);
+      // A re-paired PC starts from nothing: no opt-in, no rules, no requests.
+      try {
+        a2aSpawnPolicy.forgetHost(hostId);
+        a2aSpawnRequests.forgetHost(hostId);
+      } catch (err) {
+        a2aLog('error', `[a2a-remote] revoke cascade: spawn policy for ${hostId}: ${err instanceof Error ? err.message : String(err)}`);
+      }
       a2aDelivery?.onPeerRevoked(hostId);
     };
     // Link nudges for the app (a proposal to accept, a state change to show).
@@ -9337,6 +9359,7 @@ async function main(): Promise<void> {
       cascade: a2aCascade,
       log: a2aLog,
     });
+    registerSpawnRpc(onA2aRpc, { policy: a2aSpawnPolicy, requests: a2aSpawnRequests });
     // Link control RPCs. Their handlers are also kept here: the delivery
     // layer's link reconcile reuses `a2a.remote.links.refresh` as is.
     const a2aLinkHandlers = new Map<string, (params: Record<string, unknown>) => Promise<unknown>>();
@@ -9370,6 +9393,7 @@ async function main(): Promise<void> {
         broadcast: (event) => pipeServer.broadcast(event),
         refreshLink: (linkId) => (refresh ? refresh({ linkId }) : Promise.resolve(null)),
         offers: a2aOffersRef,
+        spawn: a2aSpawn,
         // This build shows and accepts share offers, takes images on
         // messages and pings its streams: tell the servers it joins, and the
         // joiners in its hello.
@@ -9388,6 +9412,8 @@ async function main(): Promise<void> {
       a2aDeliveryRef = a2aDelivery;
       // A share that was mid-accept when the daemon stopped is settled by links.json.
       a2aOffersRef.recover();
+      // A spawn request still pending from before a restart is decided now.
+      a2aSpawn.recover();
     } else {
       log('warn', '[a2a-remote] task ledger unavailable: messages between PCs are not carried this run');
     }
