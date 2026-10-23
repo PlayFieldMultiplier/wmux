@@ -15,7 +15,6 @@
 // text stays legible over any backdrop (glassCoverage.ts), and a look that
 // cannot be legible is opaque there, as if glass were Off.
 import { isLight } from '../tailwindPalette';
-import { windowsGlassMuted } from '../themes';
 import {
   DEFAULT_WINDOW_GLASS,
   isWindowGlassSupported,
@@ -96,13 +95,14 @@ function readGlassTokens(root: HTMLElement, style: CSSStyleDeclaration): GlassTo
   const frameBg = readColor(root, style, '--frame-bg');
   const mantle = readColor(root, style, '--bg-mantle');
   const textMain = readColor(root, style, '--text-main');
+  const textSub2 = readColor(root, style, '--text-sub2');
   const textSub = readColor(root, style, '--text-sub');
-  // The look's glass-only muted text (WINDOWS_GLASS_MUTED), which globals.css
-  // paints only once Windows glass shows: the gate must judge the text glass
-  // will draw, not the opaque value it replaces.
-  const textMuted = windowsGlassMuted(root.getAttribute('data-theme')) ?? readColor(root, style, '--text-muted');
-  return frameBg && mantle && textMain && textSub && textMuted
-    ? { frameBg, mantle, textMain, textSub, textMuted }
+  const textSubtle = readColor(root, style, '--text-subtle');
+  // Glass draws the look's own text, as it does on macOS, so the gate
+  // judges the same tokens the page paints.
+  const textMuted = readColor(root, style, '--text-muted');
+  return frameBg && mantle && textMain && textSub2 && textSub && textSubtle && textMuted
+    ? { frameBg, mantle, textMain, textSub2, textSub, textSubtle, textMuted }
     : null;
 }
 
@@ -127,7 +127,7 @@ function windowsCoverage(
 ): GlassCoverage | null {
   const tokens = readGlassTokens(root, style);
   if (!tokens) return null;
-  const key = [appearance, level, tokens.frameBg, tokens.mantle, tokens.textMain, tokens.textSub, tokens.textMuted].join(' ');
+  const key = [appearance, level, tokens.frameBg, tokens.mantle, tokens.textMain, tokens.textSub2, tokens.textSub, tokens.textSubtle, tokens.textMuted].join(' ');
   if (last.coverage?.key !== key) last.coverage = { key, value: windowsGlassCoverage(tokens, appearance, level) };
   return last.coverage.value;
 }
