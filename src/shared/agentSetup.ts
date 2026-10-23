@@ -12,13 +12,16 @@ export type AgentId = AgentSlugWith<'setup'>;
 export const AGENT_IDS: readonly AgentId[] = agentSlugsWith('setup');
 
 /**
- * The three card states.
+ * The card states.
  *   - `ready`         installed and signed in.
  *   - `login-needed`  installed; signed out, or the sign-in check gave no usable
  *                     answer (see {@link AgentSetupStatus.loginKnown}).
+ *   - `installed`     installed, and the agent has no documented sign-in check
+ *                     (its row's `loginStatus` is `none`): it signs in on its
+ *                     own first run, which wmux does not read.
  *   - `not-installed` no executable found.
  */
-export type AgentReadiness = 'ready' | 'login-needed' | 'not-installed';
+export type AgentReadiness = 'ready' | 'login-needed' | 'installed' | 'not-installed';
 
 export interface AgentSetupStatus {
   agent: AgentId;

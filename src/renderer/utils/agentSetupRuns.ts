@@ -180,7 +180,8 @@ export function effectivePaneShell(defaultShell: string | undefined): string | u
   return withDefaultShell({}, defaultShell).shell;
 }
 
-function shellFor(shell: AgentCommandShell): string | undefined {
+export function shellFor(shell: AgentCommandShell): string | undefined {
+  if (shell === 'cmd') return 'cmd.exe';
   return shell === 'powershell' ? 'powershell.exe' : undefined;
 }
 

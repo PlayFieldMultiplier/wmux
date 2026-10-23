@@ -30,7 +30,8 @@ function status(readiness: AgentSetupStatus['readiness']): AgentSetupStatus[] {
 
 const plan: AgentSetupPlan = {
   agent: 'claude',
-  install: { command: 'curl -fsSL https://claude.ai/install.sh | bash', shell: 'user', officialPage: 'https://code.claude.com/docs/en/setup', missing: [] },
+  install: { via: 'script', command: 'curl -fsSL https://claude.ai/install.sh | bash', shell: 'user', officialPage: 'https://code.claude.com/docs/en/setup', missing: [] },
+  installs: [{ via: 'script', command: 'curl -fsSL https://claude.ai/install.sh | bash', shell: 'user', officialPage: 'https://code.claude.com/docs/en/setup', missing: [] }],
   login: { command: "'/u/.local/bin/claude'", shell: 'user' },
 };
 

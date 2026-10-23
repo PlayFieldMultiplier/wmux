@@ -158,6 +158,50 @@ describe('FirstRunWizard agent ready step', () => {
     expect(primaries().map((b) => b.dataset.testid)).toEqual(['first-run-agent-claude-run']);
   });
 
+  it('an agent whose sign-in wmux cannot check shows installed, says so, and offers Sign in as a secondary', async () => {
+    installBridge([notInstalled('claude'), notInstalled('codex'), {
+      agent: 'grok', readiness: 'installed', executable: '/home/u/.grok/bin/grok', version: '1.0.67', updateRecommended: false, loginKnown: false, candidates: [],
+    }]);
+    await act(async () => { root.render(createElement(FirstRunWizard, { mode: 'firstRun', onClose: vi.fn() })); });
+    await settle();
+    const card = byId('first-run-agent-grok');
+    expect(card?.dataset.status).toBe('ok');
+    expect(card?.textContent).toContain('Installed · 1.0.67');
+    expect(byId('first-run-agent-grok-sign-in-note')?.textContent).toContain("wmux can't check it");
+    expect(byId('first-run-agent-grok-login')?.className).not.toContain('ui-btn-primary');
+    // Claude's Install is still the one primary.
+    expect(primaries().map((b) => b.dataset.testid)).toEqual(['first-run-agent-claude-install']);
+  });
+
+  it('an agent with several documented install lines lets the user pick one, and runs exactly that one in its shell', async () => {
+    const PS = 'irm https://antigravity.google/cli/install.ps1 | iex';
+    const CMD = 'curl -fsSL https://antigravity.google/cli/install.cmd -o install.cmd && install.cmd && del install.cmd';
+    const firstRun = installBridge([ready('claude'), notInstalled('codex'), {
+      agent: 'agy', readiness: 'not-installed', executable: null, version: null, updateRecommended: false, loginKnown: true, candidates: [],
+    }]);
+    const ps = { via: 'script', command: PS, shell: 'powershell', officialPage: 'https://antigravity.google/docs/getting-started', missing: [] };
+    const cmd = { via: 'cmd', command: CMD, shell: 'cmd', officialPage: 'https://antigravity.google/docs/getting-started', missing: [] };
+    firstRun.agentPlan.mockResolvedValue({ agent: 'agy', install: ps, installs: [ps, cmd], login: null });
+    tab.open.mockResolvedValue({ workspaceId: 'ws-1', ptyId: 'pty-1' });
+    await act(async () => { root.render(createElement(FirstRunWizard, { mode: 'firstRun', onClose: vi.fn() })); });
+    await settle();
+
+    await act(async () => { byId('first-run-agent-agy-install')?.click(); });
+    await settle();
+    const via = byId('first-run-agent-agy-via');
+    expect([...(via?.querySelectorAll('[role="radio"]') ?? [])].map((b) => b.textContent)).toEqual(['PowerShell', 'Command Prompt']);
+    expect(byId('first-run-agent-agy-command')?.textContent).toBe(PS);
+
+    const cmdOption = [...(via?.querySelectorAll('[role="radio"]') ?? [])].find((b) => b.textContent === 'Command Prompt') as HTMLButtonElement;
+    await act(async () => { cmdOption.click(); });
+    expect(byId('first-run-agent-agy-command')?.textContent).toBe(CMD);
+    expect(tab.open).not.toHaveBeenCalled();
+
+    await act(async () => { byId('first-run-agent-agy-run')?.click(); });
+    await settle();
+    expect(tab.open).toHaveBeenCalledWith(expect.objectContaining({ initialCommand: CMD, shell: 'cmd.exe' }));
+  });
+
   it('Run on a card that is not the primary stays secondary', async () => {
     const fr = installBridge([notInstalled('claude'), notInstalled('codex')]);
     fr.agentPlan.mockResolvedValue({

@@ -1,6 +1,7 @@
 /**
- * The first-run wizard's "Agent ready" step: one row per agent (Claude Code,
- * Codex) in three states (ready, sign-in needed, not installed), plus the
+ * The first-run wizard's "Agent ready" step: one row per agent with a `setup`
+ * row (Claude Code, Codex, Grok, Antigravity) in four states (ready, sign-in
+ * needed, installed with a sign-in wmux cannot check, not installed), plus the
  * corner card the wizard shrinks to while an install or sign-in pane is in use.
  *
  * Nothing runs without a click. Install first shows the exact line and asks;
@@ -12,11 +13,12 @@ import { useEffect, useState } from 'react';
 import type { AgentId, AgentSetupStatus } from '../../shared/agentSetup';
 import { AGENT_IDS } from '../../shared/agentSetup';
 import { agentRow } from '../../shared/agentIdentity';
-import { agentOfficialPage, type AgentSetupPlan, type SetAgentPathResult } from '../../shared/agentInstall';
+import { agentOfficialPage, type AgentInstallVia, type AgentSetupPlan, type AgentSetupPlanInstall, type SetAgentPathResult } from '../../shared/agentInstall';
 import { useT } from '../hooks/useT';
 import { useStore } from '../stores';
 import Button from './ui/Button';
 import Input from './ui/Input';
+import SegmentedControl from './ui/SegmentedControl';
 import { IconCheck, IconWarning } from './icons';
 import {
   agentStatusOf,
@@ -91,6 +93,12 @@ function CopyLine({ text, t }: { text: string; t: T }) {
   );
 }
 
+/** The i18n key naming an install line by how it runs. */
+export function installViaKey(install: Pick<AgentSetupPlanInstall, 'via' | 'shell'>): string {
+  if (install.via !== 'script') return `firstRunWizard.agent.via.${install.via}`;
+  return install.shell === 'powershell' ? 'firstRunWizard.agent.via.powershell' : 'firstRunWizard.agent.via.script';
+}
+
 /**
  * Which card's action is the dialog's one primary, if any. Only while no agent
  * is ready and nothing is running: Claude first, then Codex.
@@ -154,6 +162,8 @@ export function AgentCard({ agent, status, loaded, run, primary, onShowPane }: {
   const t = useT();
   const name = agentName(agent);
   const [confirming, setConfirming] = useState<AgentSetupPlan | null>(null);
+  // Which of the plan's install lines the confirm step shows and runs.
+  const [via, setVia] = useState<AgentInstallVia>('script');
   const [planError, setPlanError] = useState(false);
   const [path, setPath] = useState('');
   const [pathResult, setPathResult] = useState<SetAgentPathResult | null>(null);
@@ -176,6 +186,7 @@ export function AgentCard({ agent, status, loaded, run, primary, onShowPane }: {
     if (!plan) return;
     // Retry: the failed run gives way to the confirm step.
     clearAgentRun(agent);
+    if (!(plan.installs ?? []).some((i) => i.via === via)) setVia(plan.install.via);
     setConfirming(plan);
   };
 
@@ -183,9 +194,9 @@ export function AgentCard({ agent, status, loaded, run, primary, onShowPane }: {
     if (showAgentRunPane(agent)) onShowPane?.(agent);
   };
 
-  const runInstall = async (plan: AgentSetupPlan) => {
+  const runInstall = async (plan: AgentSetupPlan, install: AgentSetupPlanInstall) => {
     setConfirming(null);
-    await startAgentRun(agent, 'install', plan, t('firstRunWizard.agent.tabInstall', { name }));
+    await startAgentRun(agent, 'install', { ...plan, install }, t('firstRunWizard.agent.tabInstall', { name }));
   };
 
   const runLogin = async () => {
@@ -306,6 +317,27 @@ export function AgentCard({ agent, status, loaded, run, primary, onShowPane }: {
     );
   }
 
+  if (status.readiness === 'installed') {
+    // Installed; the agent signs in on its own first run and documents no
+    // check wmux could run, so the card says that instead of guessing.
+    return (
+      <Row
+        status="ok"
+        testId={testId}
+        title={name}
+        detail={status.version ? t('firstRunWizard.agent.installedVersion', { version: status.version }) : t('firstRunWizard.agent.installed')}
+        action={
+          <Button size="sm" variant="secondary" onClick={() => void runLogin()} data-testid={`${testId}-login`}>
+            {t('firstRunWizard.agent.signInButton')}
+          </Button>
+        }>
+        <p className="ui-row-detail" data-testid={`${testId}-sign-in-note`}>{t('firstRunWizard.agent.signInOwn', { name })}</p>
+        {status.updateRecommended && <p className="ui-row-detail">{t('firstRunWizard.agent.updateRecommended')}</p>}
+        {planError && <p className="ui-row-error">{t('firstRunWizard.agent.planError')}</p>}
+      </Row>
+    );
+  }
+
   if (status.readiness === 'login-needed') {
     const closed = run?.kind === 'login' && run.phase === 'closed';
     const detail = closed
@@ -326,21 +358,35 @@ export function AgentCard({ agent, status, loaded, run, primary, onShowPane }: {
 
   // Not installed.
   if (confirming) {
-    const missing = confirming.install.missing;
+    const installs = confirming.installs?.length ? confirming.installs : [confirming.install];
+    const chosen = installs.find((i) => i.via === via) ?? installs[0];
+    const missing = chosen.missing;
+    // Every documented way on this platform, the vendor's main one first.
+    const choice = installs.length > 1 ? (
+      <SegmentedControl
+        value={chosen.via}
+        options={installs.map((i) => ({ value: i.via, label: t(installViaKey(i)) }))}
+        onValueChange={setVia}
+        ariaLabel={t('firstRunWizard.agent.viaLabel', { name })}
+        data-testid={`${testId}-via`}
+      />
+    ) : null;
     if (missing.length > 0) {
       return (
         <Row status="warn" testId={testId} title={name}
           detail={t('firstRunWizard.agent.missingTool', { tool: missing.join(', ') })}
           action={<Button size="sm" variant="secondary" onClick={() => { setConfirming(null); void askInstall(); }}>{t('firstRunWizard.agent.checkAgain')}</Button>}>
+          {choice}
           <div className="wmux-agent-setup-actions">{officialPage}</div>
         </Row>
       );
     }
     return (
       <Row status="todo" testId={testId} title={name} detail={t('firstRunWizard.agent.confirmInstall')}>
-        <code className="ui-code wmux-agent-setup-line" data-testid={`${testId}-command`}>{confirming.install.command}</code>
+        {choice}
+        <code className="ui-code wmux-agent-setup-line" data-testid={`${testId}-command`}>{chosen.command}</code>
         <div className="wmux-agent-setup-actions">
-          <Button size="sm" variant={variant(primary)} onClick={() => void runInstall(confirming)} data-testid={`${testId}-run`}>
+          <Button size="sm" variant={variant(primary)} onClick={() => void runInstall(confirming, chosen)} data-testid={`${testId}-run`}>
             {t('firstRunWizard.agent.confirmRun')}
           </Button>
           <Button size="sm" variant="ghost" onClick={() => setConfirming(null)}>{t('firstRunWizard.agent.cancel')}</Button>

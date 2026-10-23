@@ -169,7 +169,7 @@ export const execProbe: ProbeRunner = (command, args, opts) =>
  */
 export function readLoginState(agent: AgentId, result: ProbeResult): boolean | null {
   const spec = agentRow(agent)?.setup?.loginStatus;
-  if (!spec || result.timedOut || result.code === null) return null;
+  if (!spec || spec.read === 'none' || result.timedOut || result.code === null) return null;
   if (spec.read === 'json-logged-in') {
     let loggedIn: unknown;
     try {
@@ -284,16 +284,20 @@ export class AgentSetupDetector {
     const probeEnv = buildProbeEnv(env, executable, this.platform);
     const probe = (args: readonly string[]): Promise<ProbeResult> => this.probe(executable, probeEnv, args);
 
+    // An agent with no documented status subcommand is only run for its
+    // version: its sign-in is its own, and the card says wmux cannot check it.
+    const loginStatus = agentRow(agent)?.setup?.loginStatus;
+    const statusArgs = loginStatus && loginStatus.read !== 'none' ? loginStatus.args : null;
     const [versionResult, statusResult] = await Promise.all([
       probe(['--version']),
-      probe(agentRow(agent)?.setup?.loginStatus.args ?? ['--version']),
+      statusArgs ? probe(statusArgs) : Promise.resolve(null),
     ]);
     const version = versionResult.code === 0 ? parseAgentVersion(versionResult.stdout) : null;
-    const loggedIn = readLoginState(agent, statusResult);
+    const loggedIn = statusResult ? readLoginState(agent, statusResult) : null;
     const floor = agentUpdateFloor(agent);
     return {
       agent,
-      readiness: loggedIn === true ? 'ready' : 'login-needed',
+      readiness: !statusArgs ? 'installed' : loggedIn === true ? 'ready' : 'login-needed',
       executable,
       version,
       updateRecommended: version !== null && floor !== null && isOlderVersion(version, floor),
