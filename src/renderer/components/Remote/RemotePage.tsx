@@ -33,6 +33,10 @@ import { sshNeedsIdentityCheck, sshNeedsPerson, type SshTunnelState } from '../.
 import { pcRailHostState } from '../../../shared/pcRail';
 import RemoteRowMenu, { type RemoteRowMenuItem } from './RemoteRowMenu';
 import TailscaleChecklist from './TailscaleChecklist';
+import RemoteSpawnHostToggle from './RemoteSpawnHostToggle';
+import { REMOTE_SPAWN_UI_ENABLED } from './remoteSpawnFlag';
+import { readSpawnPolicy, saveSpawnPolicy } from './remoteSpawnPolicy';
+import type { A2aSpawnPolicyV1 } from '../../../shared/a2aSpawn';
 
 /** How often the page re-reads the roster, the hosts and the server state. */
 export const REMOTE_PAGE_POLL_MS = 10_000;
@@ -140,6 +144,8 @@ export default function RemotePage() {
    * claims nothing rather than "nothing".
    */
   const [exposures, setExposures] = useState<Record<string, A2aExposureV1 | null>>({});
+  /** Who may start new agents here (null: not read, or the feature is hidden). */
+  const [spawnPolicy, setSpawnPolicy] = useState<A2aSpawnPolicyV1 | null>(null);
   const [connect, setConnect] = useState<{ tab?: ConnectTab } | null>(null);
   const [addSsh, setAddSsh] = useState(false);
   const [checkSsh, setCheckSsh] = useState<{ id: string; label: string } | null>(null);
@@ -183,6 +189,8 @@ export default function RemotePage() {
     if (api?.remote?.hostsList) reads.push(api.remote.hostsList().then((v) => { if (mounted.current) setHosts(v); }, () => undefined));
     if (api?.remote?.sshStates) reads.push(api.remote.sshStates().then((v) => { if (mounted.current) setSshStates(v); }, () => undefined));
     if (api?.lanlink?.peersList) reads.push(api.lanlink.peersList().then((v) => { if (mounted.current) setPeers(v.peers); }, () => undefined));
+    // A failed read keeps the last policy.
+    if (REMOTE_SPAWN_UI_ENABLED) reads.push(readSpawnPolicy().then((p) => { if (mounted.current && p) setSpawnPolicy(p); }));
     await Promise.all(reads);
     // A PC that joined this one sees only what this PC lists for it.
     const exposureGet = api?.a2aRemote?.exposureGet;
@@ -355,6 +363,13 @@ export default function RemotePage() {
     const r = await call();
     return r.ok ? null : t('a2aDelivery.failed');
   });
+  // A PC's opt-in for starting new agents saves the whole policy at once.
+  const saveSpawn = useCallback(async (next: A2aSpawnPolicyV1) => {
+    setError(null);
+    const r = await saveSpawnPolicy(next, t('remoteSpawn.saveFailed'));
+    if (r.ok && mounted.current) setSpawnPolicy(r.policy);
+    return r;
+  }, [t]);
 
   const removeEntry = (entry: RemoteEntry) => run(entry.key, async () => {
     const api = window.electronAPI;
@@ -506,7 +521,15 @@ export default function RemotePage() {
             reshape the row. */}
         <span className="wmux-remote-perm" data-remote-perm>
           <span className="wmux-remote-perm-slot" data-perm-slot="see">{pc.peerId && pc.hostId in exposures ? seeLabel(exposedPaneCount(exposures[pc.hostId], workspaces)) : ''}</span>
-          <span className="wmux-remote-perm-slot" data-perm-slot="agents" />
+          <span className="wmux-remote-perm-slot" data-perm-slot="agents">
+            <RemoteSpawnHostToggle
+              hostId={pc.hostId}
+              name={pc.name}
+              policy={spawnPolicy}
+              onSave={saveSpawn}
+              onError={(message) => setError({ key, message })}
+            />
+          </span>
         </span>
         {statusCell(pc.word, pc.word === 'connected', pc.lastSeenAt)}
         <span className="wmux-remote-acts">

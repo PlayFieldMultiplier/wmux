@@ -748,6 +748,10 @@ export const IPC = {
   A2A_REMOTE_HELD_LIST: 'a2aRemote:held:list',
   A2A_REMOTE_HELD_RETRY: 'a2aRemote:held:retry',
   A2A_REMOTE_HELD_REJECT: 'a2aRemote:held:reject',
+  // Starting new agents from another PC: this PC's policy, and what it received.
+  A2A_REMOTE_SPAWN_POLICY_GET: 'a2aRemote:spawnPolicy:get',
+  A2A_REMOTE_SPAWN_POLICY_SET: 'a2aRemote:spawnPolicy:set',
+  A2A_REMOTE_SPAWN_REQUESTS_LIST: 'a2aRemote:spawnRequests:list',
   // Scheduled runs (renderer → main → daemon `automation.*`). Invoke channels
   // resolve even with no daemon (empty lists / `{ ok:false }`). AUTOMATION_PUSH
   // carries daemon events and connect-time snapshots main → renderer;

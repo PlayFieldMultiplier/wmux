@@ -1,6 +1,7 @@
 import { BrowserWindow, ipcMain } from 'electron';
 import { IPC } from '../../../shared/constants';
 import { A2A_REMOTE_RPC } from '../../../shared/a2aRemoteDelivery';
+import { coerceSpawnPolicy } from '../../../shared/a2aSpawn';
 import type {
   A2aRemoteExposureGetResult,
   A2aRemoteHostStatus,
@@ -155,6 +156,18 @@ export function registerA2aRemoteHandlers(daemonClient: DaemonClient | null, opt
     ],
     // A person's reject from the held list.
     [IPC.A2A_REMOTE_HELD_REJECT, async (taskId) => (await clientNow()).rpc(A2A_REMOTE_RPC.rejectHeld, { taskId: str(taskId), reason: 'rejected-by-person' })],
+    // Starting new agents from another PC. A policy that is not exactly one
+    // is refused here, before it reaches the daemon (which checks it again).
+    [IPC.A2A_REMOTE_SPAWN_POLICY_GET, async () => (await client()).a2aSpawnPolicyGet()],
+    [
+      IPC.A2A_REMOTE_SPAWN_POLICY_SET,
+      async (raw) => {
+        const policy = coerceSpawnPolicy(raw);
+        if (!policy) return { ok: false, error: 'bad-request' };
+        return (await clientNow()).a2aSpawnPolicySet(policy);
+      },
+    ],
+    [IPC.A2A_REMOTE_SPAWN_REQUESTS_LIST, async () => (await client()).a2aSpawnRequestsList()],
   ];
   for (const [channel, fn] of handlers) {
     ipcMain.removeHandler(channel);

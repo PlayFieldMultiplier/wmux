@@ -84,6 +84,7 @@ import { AccountsSection } from './AccountsSection';
 import { AgyAccountsSection } from './AgyAccountsSection';
 import { FanoutPresetsSection } from './FanoutPresetsSection';
 import { A2aRemoteSection } from './A2aRemoteSection';
+import { RemoteSpawnSection } from './RemoteSpawnSection';
 import { terminalFontFamilyCss } from '../../utils/terminalFont';
 import { hasBareFunctionKeyBinding } from '../../utils/functionKeyBinding';
 import { Icon, IconPuzzle, IconX, IconCheck, IconChevron, IconExternalLink, IconBrowser, IconComputer, IconUsers, IconRobot, IconRemoteDevices, IconPlus, IconWarning } from '../icons';
@@ -5417,7 +5418,7 @@ export default function SettingsPanel({ initialTab }: { initialTab?: string }) {
                     {activeTab === 'computer-use'       && <TabComputerUse />}
                     {activeTab === 'plugins'            && <PluginsSection />}
                     {activeTab === 'remote'             && <TabRemote />}
-                    {activeTab === 'lanlink'            && <><LanConnectionsLink /><LanLinkSection /><A2aRemoteSection /></>}
+                    {activeTab === 'lanlink'            && <><LanConnectionsLink /><LanLinkSection /><A2aRemoteSection /><RemoteSpawnSection /></>}
                     {activeTab === 'about'              && <TabAbout />}
                   </div>
                 </>

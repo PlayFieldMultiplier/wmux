@@ -34,6 +34,7 @@ import type {
   LanLinkSendArgs,
   LanLinkPeersListResult,
 } from './lanlink';
+import type { A2aSpawnPolicyV1, A2aSpawnRequestSummary } from './a2aSpawn';
 import type {
   A2aRemoteExposureGetResult,
   A2aRemoteExposureSetResult,
@@ -250,6 +251,12 @@ declare global {
          */
         /** `expected`: the list this save was computed from; a different saved list answers `conflict`. */
         exposureSet: (hostId: string, workspaceIds: string[], paneIds: Record<string, string[]>, brain: boolean, expected?: A2aRemoteExposureGetResult['exposure']) => Promise<A2aRemoteExposureSetResult>;
+        /** This PC's policy for other PCs starting new agents here. */
+        spawnPolicyGet: () => Promise<{ policy: A2aSpawnPolicyV1 }>;
+        /** Saves the whole policy; the daemon checks each folder and bumps `version`. A refusal carries the reason. */
+        spawnPolicySet: (policy: A2aSpawnPolicyV1) => Promise<{ ok: true; policy: A2aSpawnPolicyV1 } | { ok: false; error: string }>;
+        /** Requests other PCs sent, newest first, without their prompt. */
+        spawnRequestsList: () => Promise<{ requests: A2aSpawnRequestSummary[] }>;
         /** The panes a PC this PC joined shows to it. */
         hostsExposed: (hostId: string) => Promise<A2aRemoteHostsExposedResult>;
         linksList: () => Promise<A2aRemoteLinksListResult>;
