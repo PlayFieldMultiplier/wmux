@@ -131,6 +131,7 @@ import { A2aTaskService, statusMessageFromWire } from './a2a/A2aTaskService';
 import { parsePublicCreateTask } from './a2a/publicCreateParams';
 import { WorkTaskService } from './worktask/WorkTaskService';
 import { listMissionsBatch } from './worktask/missionListBatch';
+import { viewerVisibilityUpdates } from '../shared/viewerVisibilityBatch';
 import { isTaskState, type AgentStatus, type Message, type Task } from '../shared/types';
 import { ProcessMonitor } from './ProcessMonitor';
 import { AgentProcessTracker } from './AgentProcessTracker';
@@ -3095,6 +3096,12 @@ function registerRpcHandlers(
   // phone resize route. Unknown ids are a no-op (the report can race a
   // dispose), matching the fire-and-forget relay in pty.handler.
   pipeServer.onRpc('daemon.setSessionViewerVisibility', async (params) => {
+    // #2372 — `updates` sets several panes in one call, in order.
+    if (params['updates'] !== undefined) {
+      const updates = viewerVisibilityUpdates(params['updates']);
+      for (const u of updates) sessionManager.setSessionViewerVisibility(u.id, u.visible);
+      return { ok: true, batched: true };
+    }
     const p = params as unknown as { id: string; visible: boolean };
     if (typeof p.id !== 'string' || typeof p.visible !== 'boolean') {
       throw new Error('setSessionViewerVisibility: id (string) and visible (boolean) are required');

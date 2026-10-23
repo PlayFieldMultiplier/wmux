@@ -1363,7 +1363,7 @@ export function registerPTYHandlers(
   if (useDaemon && daemonClient) {
     ipcMain.on(IPC.PTY_SET_VIEWER_VISIBILITY, (_event: Electron.IpcMainEvent, id: string, visible: boolean) => {
       if (typeof id !== 'string' || typeof visible !== 'boolean') return;
-      daemonClient.rpc('daemon.setSessionViewerVisibility', { id, visible }).catch(() => undefined);
+      daemonClient.setViewerVisibility(id, visible);
     });
   }
 
