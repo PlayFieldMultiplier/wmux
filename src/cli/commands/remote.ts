@@ -28,7 +28,7 @@ async function senderPtyId(): Promise<string> {
   }
 }
 
-async function call(method: RpcMethod, params: Record<string, unknown>): Promise<Record<string, unknown>> {
+async function call(method: RpcMethod, params: Record<string, unknown>, jsonMode: boolean): Promise<Record<string, unknown>> {
   let response: RpcResponse;
   try {
     response = await sendRequest(method, params);
@@ -41,6 +41,10 @@ async function call(method: RpcMethod, params: Record<string, unknown>): Promise
     process.exit(1);
   }
   const result = (response.result ?? {}) as Record<string, unknown>;
+  if (result['ok'] === false && jsonMode) {
+    console.log(JSON.stringify(result, null, 2));
+    process.exit(1);
+  }
   if (result['ok'] === false) {
     const err = result['error'];
     const text = typeof err === 'string'
@@ -88,7 +92,7 @@ export async function handleRemote(sub: string | undefined, args: string[], json
       pc, agent, root, prompt, senderPtyId: pty,
       ...(subPath ? { sub: subPath } : {}),
       ...(hours ? { expiresInHours: Number(hours) } : {}),
-    })) as A2aSpawnAskResult;
+    }, jsonMode)) as A2aSpawnAskResult;
     if (jsonMode || !result.ok) {
       console.log(JSON.stringify(result, null, 2));
       return;
@@ -101,7 +105,7 @@ export async function handleRemote(sub: string | undefined, args: string[], json
   }
   if (sub === 'spawn-status') {
     const spawnId = args[0] && !args[0].startsWith('-') ? args[0] : undefined;
-    const result = (await call(A2A_SPAWN_PIPE_RPC.status, spawnId ? { spawnId } : {})) as unknown as A2aSpawnOutgoingList;
+    const result = (await call(A2A_SPAWN_PIPE_RPC.status, spawnId ? { spawnId } : {}, jsonMode)) as unknown as A2aSpawnOutgoingList;
     if (jsonMode) {
       console.log(JSON.stringify(result, null, 2));
       return;

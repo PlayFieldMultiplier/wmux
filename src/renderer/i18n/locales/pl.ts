@@ -5718,6 +5718,7 @@ export const pl = {
   'remoteSpawn.ask.tooLong': "To polecenie jest za długie.",
   'remoteSpawn.ask.repliesTo': "Odpowiedzi trafią do",
   'remoteSpawn.ask.noPane': "Najpierw ustaw fokus na panelu w obszarze roboczym. Odpowiedzi trafią do tego panelu.",
+  'remoteSpawn.ask.paneStartedFor': "Odpowiedzi nie mogą trafić do tego panelu: jego obszar roboczy sam został uruchomiony na czyjeś zlecenie. Ustaw fokus na własnym panelu.",
   'remoteSpawn.ask.expires': "Czekaj na odpowiedź do",
   'remoteSpawn.ask.hour': "{n} godzina",
   'remoteSpawn.ask.hours': "{n} godz.",

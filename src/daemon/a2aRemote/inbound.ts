@@ -65,7 +65,14 @@ export interface InboundDeps {
   log?: (level: 'info' | 'warn' | 'error', msg: string) => void;
 }
 
-/** New tasks one PC may send this PC per hour; past it they are refused (the sender's copy fails). Resends are not counted. */
+/**
+ * New tasks one PC may send this PC per hour, on any link; resends are not
+ * counted. Past it a task is answered `unavailable`: nothing is lost, the
+ * sender holds it (and what follows it to this PC) and sends it again later.
+ * It counts every link, not only spawn links: each link is one a person
+ * accepted, but a peer that floods one should slow down, not cost this PC
+ * unbounded work; the limit is far above a person's or an agent's pace.
+ */
 export const INBOUND_TASKS_PER_HOST_PER_HOUR = 120;
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -176,11 +183,14 @@ async function applyInbound(
     const text = env.text ?? '';
     // A task already here is answered from the ledger: its images were taken then.
     const known = deps.taskService.getTask(taskId) !== undefined;
-    const parts = await messageParts(env, peer, deps, known);
-    if ('error' in parts) return fail(parts.error);
-    // A resend of a task already here is not a new one.
+    // Counted before its images are fetched and stored; a resend of a task already here is not a new one.
     const budget = known ? undefined : deps.taskBudget;
-    if (budget && !budget.admit(peer.hostId)) return fail('forbidden', 'too many new tasks from that PC in the last hour');
+    if (budget && !budget.admit(peer.hostId)) return fail('unavailable', 'too many new tasks from that PC in the last hour; it sends this one again later');
+    const parts = await messageParts(env, peer, deps, known);
+    if ('error' in parts) {
+      budget?.unadmit(peer.hostId);
+      return fail(parts.error);
+    }
     const created = await deps.taskService.createTask(
       {
         id: taskId,

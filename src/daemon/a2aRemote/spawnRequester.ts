@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { A2A_FEATURE_SPAWN, A2A_REMOTE_PROTOCOL, isHostId, type A2aLinkRecordV1, type A2aRemoteEnvelope, type A2aRemoteErrorCode, type HostId } from '../../shared/a2aRemote';
+import { A2A_FEATURE_SPAWN, A2A_REMOTE_PROTOCOL, isHostId, type A2aLinkRecordV1, type A2aRemoteEnvelope, type A2aRemoteErrorCode, type A2aRemoteTaskMarkerV1, type HostId } from '../../shared/a2aRemote';
 import { remoteWorkspaceId, sanitizeRemoteMessage } from '../../shared/a2aRemoteDelivery';
 import { isAgentSlug } from '../../shared/agentIdentity';
 import {
@@ -146,7 +146,7 @@ export class A2aSpawnRequester {
 
   /** `A2aSpawnReceiver.isOutstanding`: a request of this PC to `hostId` with no final answer yet. */
   isOutstanding(hostId: HostId, spawnId: string): boolean {
-    return this.deps.store.isOpen(hostId, spawnId);
+    return this.deps.store.takesAnswer(hostId, spawnId);
   }
 
   /**
@@ -156,10 +156,12 @@ export class A2aSpawnRequester {
    */
   async onResult(hostId: HostId, result: A2aSpawnResultV1): Promise<boolean> {
     const rec = this.deps.store.get(hostId, result.spawnId);
-    if (!rec || (rec.state !== 'sent' && rec.state !== 'waiting')) return true;
+    // An expired request still takes its answer: the other PC may have started
+    // the agent just before the expiry while this PC was off.
+    if (!rec || !this.deps.store.takesAnswer(hostId, result.spawnId)) return true;
     try {
       if (result.code === 'waiting-for-approval') {
-        if (rec.state === 'sent') this.settle(rec, { state: 'waiting' });
+        if (rec.state !== 'waiting') this.settle(rec, { state: 'waiting' });
         return true;
       }
       if (result.code !== 'started') {
@@ -172,17 +174,39 @@ export class A2aSpawnRequester {
         this.settle(rec, { state: 'refused', code: 'failed' });
         return true;
       }
-      const link = this.deps.links.get(linkId) ?? this.deps.links.createSpawned({
-        linkId,
-        local: { kind: 'pane', workspaceId: rec.from.workspaceId, paneId: rec.from.paneId },
-        remote: { hostId, kind: 'pane', workspaceId: result.endpoint.workspaceId, paneId: result.endpoint.paneId },
-        allow: { outbound: true, inbound: false },
-        proposer: 'local',
-      });
-      if (link.remote.hostId !== hostId) throw new Error(`link ${linkId} belongs to another PC`);
+      // The link id is the other PC's word. An existing link is taken only when
+      // it is the one this request reserved (a retry after a partial write);
+      // any other id ends the request, so the other PC stops sending it.
+      const existing = this.deps.links.get(linkId);
+      const reservedElsewhere = this.deps.store.list().some((r) => r.linkId === linkId && !(r.hostId === hostId && r.spawnId === rec.spawnId));
+      if (reservedElsewhere || (rec.linkId !== undefined && rec.linkId !== linkId) || (existing && !ownLink(existing, rec, hostId))) {
+        this.deps.log('warn', `[a2a-remote] spawn result ${rec.spawnId} from ${hostId}: started on a link this request did not reserve`);
+        this.settle(rec, { state: 'refused', code: 'failed' });
+        return true;
+      }
+      let link = existing;
+      if (!link) {
+        // Reserved before the link exists, so a retry after a crash knows it as this request's.
+        if (rec.linkId !== linkId) this.deps.store.settle(hostId, rec.spawnId, { state: rec.state, linkId });
+        link = this.deps.links.createSpawned({
+          linkId,
+          local: { kind: 'pane', workspaceId: rec.from.workspaceId, paneId: rec.from.paneId },
+          remote: { hostId, kind: 'pane', workspaceId: result.endpoint.workspaceId, paneId: result.endpoint.paneId },
+          allow: { outbound: true, inbound: false },
+          proposer: 'local',
+        });
+      }
       const messageId = spawnFirstMessageId(linkId);
       const taskId = remoteTaskId(linkId, messageId);
-      if (!this.deps.taskService.getTask(taskId)) {
+      const task = this.deps.taskService.getTask(taskId);
+      if (task) {
+        const marker = task.metadata.remote as A2aRemoteTaskMarkerV1 | undefined;
+        if (marker?.linkId !== linkId || marker.direction !== 'outbound' || task.metadata.from.paneId !== rec.from.paneId) {
+          this.deps.log('warn', `[a2a-remote] spawn result ${rec.spawnId} from ${hostId}: its first task id is another task's`);
+          this.settle(rec, { state: 'refused', code: 'failed' });
+          return true;
+        }
+      } else {
         const text = rec.text ?? '';
         const created = await this.deps.taskService.createTask({
           id: taskId,
@@ -202,11 +226,6 @@ export class A2aSpawnRequester {
       this.deps.log('warn', `[a2a-remote] spawn result ${result.spawnId} from ${hostId} not taken yet: ${errMsg(err)}`);
       return false;
     }
-  }
-
-  /** A link this PC got by asking: it carries no images (the PC that started the agent refuses them). */
-  isAskedLink(linkId: string): boolean {
-    return this.deps.store.list().some((r) => r.linkId === linkId);
   }
 
   /** What `hostId` says this PC may ask for (only a newer version is kept). */
@@ -317,4 +336,10 @@ export function registerSpawnAskRpc(onRpc: (method: string, handler: RpcHandler)
     });
   });
   onRpc(A2A_SPAWN_RPC.outgoing, async (p) => requester.list(typeof p['spawnId'] === 'string' ? p['spawnId'] : undefined));
+}
+
+/** The link this request reserved and made: this PC's asking pane to that PC, marked as a spawn's. */
+function ownLink(link: A2aLinkRecordV1, rec: SpawnOutgoingRecordV1, hostId: HostId): boolean {
+  return rec.linkId === link.linkId && link.spawned === true && link.proposer === 'local' && link.remote.hostId === hostId &&
+    link.local.kind === 'pane' && link.local.workspaceId === rec.from.workspaceId && link.local.paneId === rec.from.paneId;
 }

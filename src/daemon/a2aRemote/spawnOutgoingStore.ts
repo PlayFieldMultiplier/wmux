@@ -21,15 +21,18 @@ import { isIsoString, isPlainObject, isSafeId, loadStore, storeUnavailable, type
  * The asking side of remote spawn (`spawn-outgoing.json`): the requests this
  * PC sent to other PCs, and what each of them last said this PC may ask for.
  *
- * The prompt is kept only until the request is final (it becomes this PC's
- * copy of the started agent's first task). A final record is kept for a day
- * past its expiry, then pruned; open ones are never dropped to make room.
+ * The prompt is kept until the request is started or refused (it becomes
+ * this PC's copy of the started agent's first task); an expired request keeps
+ * it, since the other PC may still answer `started`. A closed record is kept
+ * for a day past its expiry, then pruned; open ones are never dropped to make room.
  */
 
 export const SPAWN_OUTGOING_FILE = 'spawn-outgoing.json';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const STATES: ReadonlySet<string> = new Set<A2aSpawnOutgoingState>(['sent', 'waiting', 'started', 'refused', 'expired']);
 const OPEN: ReadonlySet<A2aSpawnOutgoingState> = new Set<A2aSpawnOutgoingState>(['sent', 'waiting']);
+/** Still takes the other PC's answer (and keeps the prompt for it): an expired one too, until it is pruned. */
+const TAKES_ANSWER: ReadonlySet<A2aSpawnOutgoingState> = new Set<A2aSpawnOutgoingState>(['sent', 'waiting', 'expired']);
 
 export interface SpawnOutgoingRecordV1 {
   v: 1;
@@ -111,9 +114,10 @@ export class SpawnOutgoingStore {
     return [...this.records.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map((r) => structuredClone(r));
   }
 
-  isOpen(hostId: HostId, spawnId: string): boolean {
+  /** Waiting for the other PC's answer, or expired here and still taking it. */
+  takesAnswer(hostId: HostId, spawnId: string): boolean {
     const rec = this.records.get(key(hostId, spawnId));
-    return rec !== undefined && OPEN.has(rec.state);
+    return rec !== undefined && TAKES_ANSWER.has(rec.state);
   }
 
   /** Requests to `hostId` still waiting for their answer. */
@@ -157,15 +161,16 @@ export class SpawnOutgoingStore {
     this.save(next, this.targetsBy);
   }
 
-  /** A new state; a final one drops the prompt. Written before memory changes. */
+  /** A new state; started or refused drops the prompt, refused its link id too. Written before memory changes. */
   settle(hostId: HostId, spawnId: string, patch: { state: A2aSpawnOutgoingState; code?: A2aSpawnCode; linkId?: string }): SpawnOutgoingRecordV1 {
     const k = key(hostId, spawnId);
     const rec = this.records.get(k);
     if (!rec) throw new Error(`spawn request ${spawnId}: not recorded`);
     if (!this.writable) throw storeUnavailable(SPAWN_OUTGOING_FILE);
     const { text: _text, ...rest } = rec;
+    const { linkId: _linkId, ...unlinked } = rest;
     const updated: SpawnOutgoingRecordV1 = {
-      ...(OPEN.has(patch.state) ? rec : rest),
+      ...(TAKES_ANSWER.has(patch.state) ? rec : patch.state === 'refused' ? unlinked : rest),
       state: patch.state,
       ...(patch.code ? { code: patch.code } : {}),
       ...(patch.linkId ? { linkId: patch.linkId } : {}),

@@ -21,13 +21,13 @@ export interface RemoteSpawnToolDeps {
 }
 
 const SHAPE = {
-  pc: z.string().max(256).optional().describe('The paired PC: its name here or its host id. Omit with spawn_id to read a request.'),
+  pc: z.string().max(256).optional().describe('The paired PC: its name here or its host id. Omit to read requests.'),
   agent: z.string().max(64).optional().describe('An agent the other PC allows, e.g. claude or codex.'),
   root: z.string().max(64).optional().describe('A folder id the other PC allows (remote_spawn with no pc lists them).'),
   sub: z.string().max(512).optional().describe('A relative path under that folder.'),
   prompt: z.string().optional().describe('The first instruction.'),
   expires_in_hours: z.number().int().min(1).max(72).optional().describe('How long it may wait for that PC (default 24).'),
-  spawn_id: z.string().max(64).optional().describe('Read this request instead of asking; with no other field, lists every request and what each PC allows.'),
+  spawn_id: z.string().max(64).optional().describe('Read this request (never asks). With neither pc nor spawn_id, lists every request and what each PC allows.'),
 };
 
 export function registerRemoteSpawnTools(server: McpServer, deps: RemoteSpawnToolDeps): void {
@@ -39,7 +39,8 @@ export function registerRemoteSpawnTools(server: McpServer, deps: RemoteSpawnToo
     async ({ pc, agent, root, sub, prompt, expires_in_hours, spawn_id }) => {
       try {
         let result: unknown;
-        if (!pc) {
+        // spawn_id reads, whatever else is given: a read never sends a request.
+        if (spawn_id || !pc) {
           result = await sendRpc(A2A_SPAWN_PIPE_RPC.status as RpcMethod, spawn_id ? { spawnId: spawn_id } : {});
         } else {
           if (deps.resolveWorkspaceId) {

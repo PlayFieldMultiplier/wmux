@@ -85,7 +85,8 @@ export class A2aSpawnStarter {
    * file an older build rewrote without the mark) still recorded here.
    */
   isSpawnLink(linkId: string): boolean {
-    return this.deps.links.get(linkId)?.spawned === true || this.deps.spawnLinks.has(linkId);
+    const link = this.deps.links.get(linkId);
+    return (link?.spawned === true && link.proposer === 'remote') || this.deps.spawnLinks.has(linkId);
   }
 
   /** A new task on this link waits for its card. */

@@ -4796,6 +4796,7 @@ export const zh = {
   'remoteSpawn.ask.tooLong': "指令太长。",
   'remoteSpawn.ask.repliesTo': "回复发送到",
   'remoteSpawn.ask.noPane': "请先聚焦某个工作区中的窗格，回复会发到该窗格。",
+  'remoteSpawn.ask.paneStartedFor': "回复不能发到这个窗格：它所在的工作区本身是为别人启动的。请聚焦你自己的窗格。",
   'remoteSpawn.ask.expires': "等待回复的时长",
   'remoteSpawn.ask.hour': "{n} 小时",
   'remoteSpawn.ask.hours': "{n} 小时",

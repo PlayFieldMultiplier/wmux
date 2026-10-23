@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { normalizeSpawnSub, SPAWN_SUB_MAX, SPAWN_TEXT_MAX, type A2aSpawnAskError, type A2aSpawnPlace, type A2aSpawnUiAsk } from '../../../shared/a2aSpawn';
 import { agentRow } from '../../../shared/agentIdentity';
@@ -48,8 +48,13 @@ function utf8Bytes(s: string): number {
 export interface RemoteSpawnAskDialogViewProps {
   pcName: string;
   place: A2aSpawnPlace;
-  /** The pane here that gets the replies (null: no pane is focused). */
+  /**
+   * The pane here that gets the replies. null: no pane is focused, or
+   * (`startedFor`) the focused one's workspace was itself started for
+   * someone (a fan-out task, or by another PC), which does not ask again.
+   */
   end: { workspaceId: string; paneId: string; name: string } | null;
+  startedFor?: boolean;
   agent: string;
   root: string;
   sub: string;
@@ -134,7 +139,7 @@ export function RemoteSpawnAskDialogView(p: RemoteSpawnAskDialogViewProps) {
             <Field label={t('remoteSpawn.ask.repliesTo')} layout="stacked">
               {p.end
                 ? <span className="text-[13px]" data-testid="remote-spawn-ask-end">{p.end.name}</span>
-                : <span className="wmux-a2a-note" data-testid="remote-spawn-ask-no-pane">{t('remoteSpawn.ask.noPane')}</span>}
+                : <span className="wmux-a2a-note" data-testid="remote-spawn-ask-no-pane">{t(p.startedFor ? 'remoteSpawn.ask.paneStartedFor' : 'remoteSpawn.ask.noPane')}</span>}
             </Field>
             <Field label={t('remoteSpawn.ask.expires')} layout="stacked">
               <Select value={String(p.hours)} disabled={p.busy} onChange={(e) => p.onHours(Number(e.target.value))} data-testid="remote-spawn-ask-hours">
@@ -166,20 +171,29 @@ export interface RemoteSpawnAskDialogProps {
   onClose: () => void;
 }
 
-/** The focused pane of the active workspace, when it is one of this PC's own. */
-function useReplyPane(): RemoteSpawnAskDialogViewProps['end'] {
-  return useStore(useShallow((s) => {
+/**
+ * The focused pane of the active workspace, when it is one of this PC's own
+ * and its workspace was not itself started for someone (main refuses those too).
+ */
+function useReplyPane(): { end: RemoteSpawnAskDialogViewProps['end']; startedFor: boolean } {
+  // Flat values: useShallow compares one level deep.
+  const pane = useStore(useShallow((s) => {
+    const none = { workspaceId: '', paneId: '', name: '', startedFor: false };
     const ws = s.workspaces.find((w) => w.id === s.activeWorkspaceId);
-    if (!ws || isShadowWorkspaceId(ws.id) || !ws.activePaneId) return null;
-    if (!getWorkspaceLeafPanes(ws).some((l) => l.id === ws.activePaneId)) return null;
+    if (!ws || isShadowWorkspaceId(ws.id) || !ws.activePaneId) return none;
+    if (s.fanoutLineage[ws.id] || s.fanoutSpawnOwner[ws.id] || s.missionByPaneGroup[ws.id]) return { ...none, startedFor: true };
+    if (!getWorkspaceLeafPanes(ws).some((l) => l.id === ws.activePaneId)) return none;
     const snap = buildPaneSnapshot({ workspaces: [ws], surfaceAgent: s.surfaceAgent, paneLabel: s.paneLabel }).workspaces[0].panes.find((x) => x.paneId === ws.activePaneId);
-    return { workspaceId: ws.id, paneId: ws.activePaneId, name: `${ws.name} / ${snap?.label ?? ws.activePaneId}` };
+    return { workspaceId: ws.id, paneId: ws.activePaneId, name: `${ws.name} / ${snap?.label ?? ws.activePaneId}`, startedFor: false };
   }));
+  const { workspaceId, paneId, name, startedFor } = pane;
+  const end = useMemo(() => (paneId ? { workspaceId, paneId, name } : null), [workspaceId, paneId, name]);
+  return { end, startedFor };
 }
 
 export default function RemoteSpawnAskDialog({ place, pcName, onClose }: RemoteSpawnAskDialogProps) {
   const t = useT();
-  const end = useReplyPane();
+  const { end, startedFor } = useReplyPane();
   const [agent, setAgent] = useState<string>(() => place.targets?.agents[0] ?? '');
   const [root, setRoot] = useState<string>(() => place.targets?.roots[0]?.id ?? '');
   const [sub, setSub] = useState('');
@@ -224,6 +238,7 @@ export default function RemoteSpawnAskDialog({ place, pcName, onClose }: RemoteS
       pcName={pcName}
       place={place}
       end={end}
+      startedFor={startedFor}
       agent={agent}
       root={root}
       sub={sub}

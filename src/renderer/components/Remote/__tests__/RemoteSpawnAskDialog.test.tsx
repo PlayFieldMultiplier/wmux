@@ -56,7 +56,7 @@ beforeEach(() => {
   spawnAsk = vi.fn<(ask: A2aSpawnUiAsk) => Promise<A2aSpawnAskResult>>();
   onClose.mockReset();
   (window as unknown as { electronAPI: unknown }).electronAPI = { a2aRemote: { spawnAsk } };
-  act(() => useStore.setState({ workspaces: [ws], activeWorkspaceId: ws.id, paneLabel: {}, surfaceAgent: {}, toasts: [] } as never));
+  act(() => useStore.setState({ workspaces: [ws], activeWorkspaceId: ws.id, paneLabel: {}, surfaceAgent: {}, toasts: [], fanoutLineage: {}, fanoutSpawnOwner: {}, missionByPaneGroup: {} } as never));
   el = document.createElement('div');
   document.body.appendChild(el);
   root = createRoot(el);
@@ -124,6 +124,15 @@ describe('RemoteSpawnAskDialog', () => {
     await act(async () => { send()!.click(); });
     expect(spawnAsk.mock.calls[0][0]).toMatchObject({ agent: 'claude', folder: { root: 'web' }, expiresInHours: 24 });
     expect(spawnAsk.mock.calls[0][0].folder).not.toHaveProperty('sub');
+  });
+
+  it('will not send replies to a pane whose workspace was itself started for someone', () => {
+    act(() => useStore.setState({ fanoutLineage: { [ws.id]: 'remote-spawn:22222222-2222-4222-8222-222222222222' } } as never));
+    render();
+    type('remote-spawn-ask-text', 'Go');
+    expect(q('remote-spawn-ask-no-pane')?.textContent).toContain('started for someone');
+    expect(send()?.disabled).toBe(true);
+    act(() => useStore.setState({ fanoutLineage: {} } as never));
   });
 
   it('flags a sub-folder that could leave the folder and will not send it', () => {

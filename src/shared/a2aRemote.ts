@@ -476,9 +476,10 @@ export interface A2aLinkRecordV1 {
    */
   proposer: 'local' | 'remote';
   /**
-   * The link a remote spawn made on THIS PC (it started the agent): what goes
-   * out on it is redacted, no images go either way, and later tasks may wait
-   * for a card. Local bookkeeping, never sent; an older build drops it.
+   * A link a remote spawn made. No images go on it either way. With
+   * `proposer: 'remote'` this PC started the agent: what goes out on it is
+   * redacted and later tasks may wait for a card. With `proposer: 'local'`
+   * this PC asked for it. Local bookkeeping, never sent; an older build drops it.
    */
   spawned?: true;
 }

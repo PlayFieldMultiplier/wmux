@@ -91,8 +91,6 @@ export interface OutboundDeps {
    * matches known key shapes and misses encoded ones.
    */
   spawnLink?: (linkId: string) => boolean;
-  /** A link this PC got by asking another PC to start an agent: no images go on it (that PC refuses them). */
-  askedLink?: (linkId: string) => boolean;
   log?: (level: 'info' | 'warn' | 'error', msg: string) => void;
 }
 
@@ -423,7 +421,7 @@ function envelope(
     linkVersion: link.version,
     messageId,
     // Marked on the link itself, so no path that sends on it can skip this.
-    ...(link.spawned === true || deps.spawnLink?.(link.linkId) ? spawnLinkBody(body) : body),
+    ...((link.spawned === true && link.proposer === 'remote') || deps.spawnLink?.(link.linkId) ? spawnLinkBody(body) : body),
     sentAt: new Date((deps.now ?? Date.now)()).toISOString(),
   };
 }
@@ -518,14 +516,15 @@ type Attached = { ok: true; text: string; images: PreparedImage[]; note?: string
  * since nothing says which of the two it is.
  */
 async function attachImages(
-  deps: Pick<OutboundDeps, 'images' | 'peerFeatures' | 'askedLink'>,
+  deps: Pick<OutboundDeps, 'images' | 'peerFeatures'>,
   link: A2aLinkRecordV1,
   paths: readonly string[] | undefined,
   caller: ImageCaller,
   text: string,
 ): Promise<Attached> {
   if (!paths || paths.length === 0) return { ok: true, text, images: [] };
-  if (deps.askedLink?.(link.linkId)) return { ok: false, error: 'bad-request: a link to an agent another PC started carries no images' };
+  // A spawn's link carries no images either way (the other PC refuses them).
+  if (link.spawned === true) return { ok: false, error: 'bad-request: a link a remote start made carries no images' };
   if (paths.length > A2A_REMOTE_IMAGE_LIMITS.PER_MESSAGE) {
     return { ok: false, error: `bad-request: at most ${A2A_REMOTE_IMAGE_LIMITS.PER_MESSAGE} images on one message` };
   }

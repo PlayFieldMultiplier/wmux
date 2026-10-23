@@ -5758,6 +5758,7 @@ export const en = {
   'remoteSpawn.ask.tooLong': "This instruction is too long.",
   'remoteSpawn.ask.repliesTo': "Replies go to",
   'remoteSpawn.ask.noPane': "Focus a pane in a workspace first. Replies go to that pane.",
+  'remoteSpawn.ask.paneStartedFor': "Replies cannot go to this pane: its workspace was itself started for someone. Focus a pane of your own.",
   'remoteSpawn.ask.expires': "Waits for an answer up to",
   'remoteSpawn.ask.hour': "{n} hour",
   'remoteSpawn.ask.hours': "{n} hours",

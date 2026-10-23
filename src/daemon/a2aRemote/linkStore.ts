@@ -443,8 +443,8 @@ export class LinkStore {
     const proposer = spawnedBy ?? (state === 'proposed-out' ? 'local' : 'remote');
     const rec: A2aLinkRecordV1 = {
       v: A2A_REMOTE_RECORD_V, linkId, version: 1, state, ...clean, proposer,
-      // The PC that started the agent marks the link; its rules follow the record.
-      ...(state === 'active' && spawnedBy === 'remote' ? { spawned: true as const } : {}),
+      // Both PCs mark a spawn's link; `proposer` says which side started the agent.
+      ...(state === 'active' && spawnedBy ? { spawned: true as const } : {}),
       createdAt: at, updatedAt: at,
     };
     this.links.set(linkId, rec);

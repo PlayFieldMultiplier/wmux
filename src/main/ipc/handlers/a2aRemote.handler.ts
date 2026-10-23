@@ -3,6 +3,7 @@ import { IPC } from '../../../shared/constants';
 import { A2A_REMOTE_RPC } from '../../../shared/a2aRemoteDelivery';
 import { A2A_SPAWN_OUTGOING_EVENT, coerceSpawnPolicy, type A2aSpawnUiAsk } from '../../../shared/a2aSpawn';
 import { isAgentSlug } from '../../../shared/agentIdentity';
+import { getFanOutGuards } from '../../worktask/fanoutGuards';
 import type {
   A2aRemoteExposureGetResult,
   A2aRemoteHostStatus,
@@ -178,6 +179,14 @@ export function registerA2aRemoteHandlers(daemonClient: DaemonClient | null, opt
         const workspaceId = str(p.end?.workspaceId);
         const paneId = str(p.end?.paneId);
         if (!publisher.hasPane(workspaceId, paneId)) return { ok: false, error: 'bad-request', message: 'that pane is not open on this PC' };
+        // Depth 1, as for an agent's ask: replies do not go to a fan-out task or an agent another PC started.
+        let owner: string | null;
+        try {
+          owner = getFanOutGuards().fanoutOwnerOf(workspaceId);
+        } catch {
+          return { ok: false, error: 'unavailable', message: 'could not tell whether that pane was itself started for someone' };
+        }
+        if (owner !== null) return { ok: false, error: 'bad-request', message: 'replies cannot go to a pane that was itself started for someone' };
         if (!isAgentSlug(p.agent) || typeof p.text !== 'string' || typeof p.folder?.root !== 'string') return { ok: false, error: 'bad-request' };
         return c.a2aSpawnAsk({
           pc: str(p.hostId),

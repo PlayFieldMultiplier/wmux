@@ -5272,6 +5272,7 @@ export const ko = {
   'remoteSpawn.ask.tooLong': "지시가 너무 깁니다.",
   'remoteSpawn.ask.repliesTo': "답장 받을 곳",
   'remoteSpawn.ask.noPane': "먼저 워크스페이스의 판에 포커스를 두세요. 답장은 그 판으로 옵니다.",
+  'remoteSpawn.ask.paneStartedFor': "이 판으로는 답장을 받을 수 없습니다. 이 워크스페이스는 다른 요청으로 시작되었습니다. 직접 연 판에 포커스를 두세요.",
   'remoteSpawn.ask.expires': "답을 기다리는 시간",
   'remoteSpawn.ask.hour': "{n}시간",
   'remoteSpawn.ask.hours': "{n}시간",

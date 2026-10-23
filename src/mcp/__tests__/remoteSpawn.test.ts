@@ -44,6 +44,10 @@ describe('remote_spawn', () => {
     mockSendRpc.mockResolvedValueOnce({ requests: [], places: [] });
     await tool({ spawn_id: 'sp-1' });
     expect(mockSendRpc).toHaveBeenLastCalledWith('a2a.remote.spawnStatus', { spawnId: 'sp-1' });
+    // spawn_id reads even with pc given: a read never sends a request.
+    mockSendRpc.mockResolvedValueOnce({ requests: [], places: [] });
+    await tool({ pc: 'DESK', agent: 'claude', root: 'web', prompt: 'x', spawn_id: 'sp-2' });
+    expect(mockSendRpc).toHaveBeenLastCalledWith('a2a.remote.spawnStatus', { spawnId: 'sp-2' });
     mockSendRpc.mockResolvedValueOnce({ ok: false, error: 'rate-limited', message: 'at most 3' });
     const res = await tool({ pc: 'DESK', agent: 'claude', root: 'web', prompt: 'again' });
     expect(res.isError).toBe(true);

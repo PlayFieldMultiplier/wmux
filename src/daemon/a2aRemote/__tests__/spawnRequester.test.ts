@@ -81,7 +81,7 @@ const askOk = (over: Partial<A2aSpawnAskInput> = {}): string => {
   return r.spawn.spawnId;
 };
 const stateOf = (spawnId: string) => asks.list(spawnId).requests[0];
-const started = (spawnId: string, linkId = crypto.randomUUID()): A2aSpawnResultV1 => ({
+const started = (spawnId: string, linkId: string = crypto.randomUUID()): A2aSpawnResultV1 => ({
   v: 1, spawnId, code: 'started', endpoint: { kind: 'pane', workspaceId: 'ws-b', paneId: 'pane-b' }, linkVersion: 1, linkId,
 });
 
@@ -185,18 +185,61 @@ describe('answers', () => {
     expect(asks.isOutstanding(C, id)).toBe(false);
   });
 
-  it('a link this PC asked for carries no images', async () => {
+  it('a link this PC asked for is marked on the link itself and carries no images, with no request record needed', async () => {
     const id = askOk();
     const result = started(id);
     await asks.onResult(B, result);
+    expect(links.get(result.linkId!)).toMatchObject({ spawned: true, proposer: 'local' });
+    // The request record goes (pruned, or its PC forgotten): the link keeps its rule.
+    asks.forgetHost(B);
     const deps = {
       linkStore: links, taskService: tasks, outbox: { enqueue: quiet }, aliasFor: (l: Parameters<typeof linkAlias>[0]) => linkAlias(l, 'DESK'),
-      askedLink: (linkId: string) => asks.isAskedLink(linkId),
     } as unknown as OutboundDeps;
     const out = await sendRemoteTask(deps, {
       linkId: result.linkId!, from: { workspaceId: 'ws-a', name: 'a', paneId: 'pane-a' }, title: '', text: 'look', images: ['/tmp/x.png'],
     });
     expect(out).toMatchObject({ ok: false, error: expect.stringContaining('no images') });
+  });
+
+  it('a started answer naming a link this request did not reserve ends the request, and that link is left as it was', async () => {
+    // An existing link between the same two PCs, made by a person.
+    const other = crypto.randomUUID();
+    links.receiveProposal({
+      linkId: other,
+      local: { kind: 'pane', workspaceId: 'ws-a', paneId: 'pane-other' },
+      remote: { hostId: B, kind: 'pane', workspaceId: 'ws-b', paneId: 'pane-b' },
+      allow: { outbound: true, inbound: true },
+    });
+    links.accept(other);
+    const before = links.get(other);
+    const id = askOk();
+    expect(await asks.onResult(B, started(id, other))).toBe(true);
+    expect(stateOf(id)).toMatchObject({ state: 'refused', code: 'failed' });
+    expect(stateOf(id).linkId).toBeUndefined();
+    expect(links.get(other)).toEqual(before);
+    expect(tasks.getTask(remoteTaskId(other, spawnFirstMessageId(asSpawnLinkId(other)!)))).toBeUndefined();
+    // Taken, so the other PC stops sending it.
+    expect(asks.isOutstanding(B, id)).toBe(false);
+  });
+
+  it('a link id another request already holds is refused too', async () => {
+    const first = askOk({ callerKey: 'pane-1' });
+    const result = started(first);
+    await asks.onResult(B, result);
+    const second = askOk({ callerKey: 'pane-2', from: { kind: 'pane', workspaceId: 'ws-a', paneId: 'pane-2' } });
+    expect(await asks.onResult(B, started(second, result.linkId!))).toBe(true);
+    expect(stateOf(second)).toMatchObject({ state: 'refused', code: 'failed' });
+    expect(links.list()).toHaveLength(1);
+  });
+
+  it('a first-task id that is another task\'s ends the request without touching that task', async () => {
+    const id = askOk();
+    const linkId = crypto.randomUUID();
+    const taskId = remoteTaskId(linkId, spawnFirstMessageId(asSpawnLinkId(linkId)!));
+    await tasks.createTask({ id: taskId, title: 'mine', from: { workspaceId: 'ws-x', name: 'x', paneId: 'pane-x' }, to: { workspaceId: 'ws-y', name: 'y' }, history: [] });
+    expect(await asks.onResult(B, started(id, linkId))).toBe(true);
+    expect(stateOf(id)).toMatchObject({ state: 'refused', code: 'failed' });
+    expect(tasks.getTask(taskId)?.metadata.from.workspaceId).toBe('ws-x');
   });
 });
 
@@ -209,6 +252,19 @@ describe('expiry, refusals, restarts', () => {
     clock += 2;
     asks.expire();
     expect(stateOf(id).state).toBe('expired');
+  });
+
+  it('an expired request still takes a late started answer: the agent the other PC started gets its link here', async () => {
+    const id = askOk({ expiresInHours: 1 });
+    clock += 3600_000 + SPAWN_ASK_GRACE_MS + 1;
+    asks.expire();
+    expect(stateOf(id).state).toBe('expired');
+    expect(asks.isOutstanding(B, id)).toBe(true);
+    const result = started(id);
+    expect(await asks.onResult(B, result)).toBe(true);
+    expect(stateOf(id)).toMatchObject({ state: 'started', linkId: result.linkId });
+    const linkId = asSpawnLinkId(result.linkId)!;
+    expect(tasks.getTask(remoteTaskId(linkId, spawnFirstMessageId(linkId)))?.history[0].parts).toEqual([{ kind: 'text', text: 'fix the build' }]);
   });
 
   it('a request the other PC refused for good is not supported there', () => {

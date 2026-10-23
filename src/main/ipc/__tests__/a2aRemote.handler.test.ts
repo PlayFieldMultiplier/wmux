@@ -17,6 +17,10 @@ vi.mock('electron', () => {
 
 vi.mock('../../github/PrProvider', () => ({ detectRemote: vi.fn(async () => null) }));
 
+// Lineage owners by workspace: what main's fan-out guards would say.
+const lineage = new Map<string, string>();
+vi.mock('../../worktask/fanoutGuards', () => ({ getFanOutGuards: () => ({ fanoutOwnerOf: (ws: string) => lineage.get(ws) ?? null }) }));
+
 import * as electron from 'electron';
 import { IPC } from '../../../shared/constants';
 import { defaultSpawnPolicy } from '../../../shared/a2aSpawn';
@@ -108,6 +112,22 @@ describe('a2aRemote share', () => {
     await expect(invoke(IPC.A2A_REMOTE_OFFERS_CREATE, { ...ask, label: 'forged' })).resolves.toMatchObject({ ok: true });
     expect(created).toEqual([{ hostId: 'h', end: { kind: 'pane', workspaceId: 'w2', workspaceName: 'API', paneId: 'p9', label: 'w1-1', agent: 'claude' }, allow: { outbound: true, inbound: false } }]);
     expect((client.a2aRemoteExposurePublish as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(publishes);
+  });
+});
+
+describe('a2aRemote spawn ask', () => {
+  it('sends replies only to a pane of this PC that was not itself started for someone, counted per pane', async () => {
+    const client = { ...fakeClient(), a2aSpawnAsk: vi.fn(async () => ({ ok: true })) } as unknown as DaemonClient;
+    cleanups.push(registerA2aRemoteHandlers(client));
+    await invoke(IPC.A2A_REMOTE_SNAPSHOT, { workspaces: [{ id: 'w1', name: 'API', panes: [{ paneId: 'p1' }] }, { id: 'w2', name: 'Task', panes: [{ paneId: 'p2' }] }] });
+    lineage.set('w2', 'remote-spawn:22222222-2222-4222-8222-222222222222');
+    const ask = { hostId: 'h', agent: 'claude', folder: { root: 'web' }, text: 'go' };
+    await expect(invoke(IPC.A2A_REMOTE_SPAWN_ASK, { ...ask, end: { workspaceId: 'w9', paneId: 'p9' } })).resolves.toMatchObject({ ok: false, error: 'bad-request' });
+    await expect(invoke(IPC.A2A_REMOTE_SPAWN_ASK, { ...ask, end: { workspaceId: 'w2', paneId: 'p2' } })).resolves.toMatchObject({ ok: false, error: 'bad-request' });
+    expect(client.a2aSpawnAsk).not.toHaveBeenCalled();
+    await expect(invoke(IPC.A2A_REMOTE_SPAWN_ASK, { ...ask, end: { workspaceId: 'w1', paneId: 'p1' } })).resolves.toEqual({ ok: true });
+    expect(client.a2aSpawnAsk).toHaveBeenCalledWith({ pc: 'h', agent: 'claude', folder: { root: 'web' }, text: 'go', from: { kind: 'pane', workspaceId: 'w1', paneId: 'p1' }, callerKey: 'p1' });
+    lineage.clear();
   });
 });
 

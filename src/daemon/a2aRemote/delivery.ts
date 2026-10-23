@@ -75,8 +75,8 @@ export interface A2aRemoteDeliveryDeps {
   spawn?: InboundDeps['spawn'];
   /** Links a remote start made here (spawnStarter.ts): redacted, no images, follow-ups held for their card. */
   spawnLinks?: NonNullable<InboundDeps['spawnLinks']>;
-  /** This PC's requests to start agents on other PCs (spawnRequester.ts): told of refusals; their links carry no images. */
-  spawnAsks?: { onRefused(hostId: HostId, envelope: A2aRemoteEnvelope, code: A2aRemoteErrorCode): void; isAskedLink(linkId: string): boolean };
+  /** This PC's requests to start agents on other PCs (spawnRequester.ts): told when the other PC refuses one for good. */
+  spawnAsks?: { onRefused(hostId: HostId, envelope: A2aRemoteEnvelope, code: A2aRemoteErrorCode): void };
   /** Optional features this PC advertises: on its streams to the servers it joined, and in its own streams' `hello`. */
   features?: readonly string[];
   /**
@@ -685,7 +685,6 @@ export class A2aRemoteDelivery {
       aliasFor: (l) => this.aliasFor(l),
       peerFeatures: (hostId) => this.peerFeatures(hostId),
       ...(this.deps.spawnLinks ? { spawnLink: (id: string) => this.deps.spawnLinks!.isSpawnLink(id) } : {}),
-      ...(this.deps.spawnAsks ? { askedLink: (id: string) => this.deps.spawnAsks!.isAskedLink(id) } : {}),
       ...(store
         ? {
           images: {
