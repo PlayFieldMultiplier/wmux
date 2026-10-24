@@ -1751,18 +1751,11 @@ always neutral (the fill ladder).
     on and switches that pane. A user who already had the chat view setting,
     on or off, is never asked and keeps the value; changing it in Settings
     ends the question for every agent.
-- **Continue in chat** (terminal → chat, macOS and Linux): chat 1's progress
-  row carries an underlined "Continue in chat" link beside Open Terminal
-  while a terminal Claude is at rest, and the handed-off notice of chat 2
-  carries the same link once its terminal Claude has exited. The link first
-  asks the daemon, which may refuse in the row's notice (plain text that
-  says why). Then a confirmation `Dialog` (420px): the title "Continue this
-  conversation in chat?", a description of what happens, the processes
-  Claude started that stop with it, listed by name ("node (MCP server)"),
-  or "Nothing else Claude started is running", and an 11px `--text-sub`
-  line saying that a process that already left Claude's tree keeps running.
-  Cancel is secondary and Continue in chat is the primary; while the move
-  runs, both are disabled and nothing is primary. No colour.
+- **Continue in chat** (macOS and Linux): a "Continue in chat" link beside
+  Open Terminal in chat 1's progress row (a terminal Claude at rest) and on
+  chat 2's handed-off notice (its Claude exited). It opens a confirmation
+  `Dialog` that names the processes the stop ends ("node (MCP server)") and
+  says that one that already left Claude's tree keeps running. No colour.
 
 ### Dialogs & forms
 
