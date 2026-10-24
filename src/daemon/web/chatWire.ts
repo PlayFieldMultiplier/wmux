@@ -355,6 +355,49 @@ export function validLaunchPrompt(prompt: string): boolean {
   return true;
 }
 
+/**
+ * The launch-mode fields of a phone agent launch, shared by `chat/launch` and
+ * `POST /api/sessions {agentLaunch}`: a known mode valid for the agent, and a
+ * string confirm when one is sent. Absent mode is `default`.
+ */
+export function parseLaunchMode(agent: unknown, mode: unknown, confirm: unknown):
+  { ok: true; mode: TerminalLaunchMode; confirm?: string } | { ok: false; detail: string } {
+  if (mode !== undefined && mode !== 'default' && mode !== 'bypass' && mode !== 'yolo') return { ok: false, detail: 'unknown mode' };
+  if (!validTerminalLaunchMode(agent, mode)) return { ok: false, detail: `mode ${String(mode)} is not valid for ${String(agent).slice(0, 64)}` };
+  if (confirm !== undefined && typeof confirm !== 'string') return { ok: false, detail: 'confirm must be a string' };
+  return { ok: true, mode: (mode ?? 'default') as TerminalLaunchMode, ...(typeof confirm === 'string' ? { confirm } : {}) };
+}
+
+/** The modes a phone may launch with on this server (`--allow-dangerous-launch` is the ceiling). */
+export function launchModeCeiling(allowDangerousLaunch: boolean): Record<TerminalLaunchAgent, TerminalLaunchMode[]> {
+  return {
+    claude: allowDangerousLaunch ? ['default', 'bypass'] : ['default'],
+    codex: allowDangerousLaunch ? ['default', 'yolo'] : ['default'],
+  };
+}
+
+/**
+ * Why a phone launch in `mode` is refused, or null when it may go ahead. The
+ * ceiling is checked first, then the exact `<agent>:<mode>` confirm. The
+ * caller adds its own request fields (`clientLaunchId`) to the body.
+ */
+export function dangerousLaunchRefusal(agent: TerminalLaunchAgent, mode: TerminalLaunchMode, confirm: string | undefined, allowDangerousLaunch: boolean):
+  { status: 403 | 428; body: { error: string; detail?: string; effect: 'none' } } | null {
+  if (mode === 'default') return null;
+  if (!allowDangerousLaunch) {
+    return {
+      status: 403,
+      body: {
+        error: 'dangerous-launch-disabled: server started without --allow-dangerous-launch',
+        detail: 'restart with: wmux web --allow-dangerous-launch <your other flags>',
+        effect: 'none',
+      },
+    };
+  }
+  if (confirm !== `${agent}:${mode}`) return { status: 428, body: { error: 'dangerous-mode-unconfirmed', effect: 'none' } };
+  return null;
+}
+
 export function parseLaunchBody(body: unknown): { ok: true; value: LaunchBody } | { ok: false; detail: string; clientLaunchId?: string } {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return { ok: false, detail: 'body must be a JSON object' };
   const o = body as Record<string, unknown>;
@@ -364,9 +407,8 @@ export function parseLaunchBody(body: unknown): { ok: true; value: LaunchBody } 
   // Model, effort, args, cwd and env stay on `POST /api/sessions {agentLaunch}`.
   if (extra.length > 0) return refuse(`unknown field: ${extra[0].slice(0, 64)}`);
   if (o.agent !== 'claude' && o.agent !== 'codex') return refuse('agent must be claude or codex');
-  if (o.mode !== undefined && o.mode !== 'default' && o.mode !== 'bypass' && o.mode !== 'yolo') return refuse('unknown mode');
-  if (!validTerminalLaunchMode(o.agent, o.mode)) return refuse(`mode ${String(o.mode)} is not valid for ${o.agent}`);
-  if (o.confirm !== undefined && typeof o.confirm !== 'string') return refuse('confirm must be a string');
+  const launchMode = parseLaunchMode(o.agent, o.mode, o.confirm);
+  if (!launchMode.ok) return refuse(launchMode.detail);
   if (typeof o.clientLaunchId !== 'string') return refuse('clientLaunchId must be a string');
   // Omitted or '' is a bare launch; any other text must be a valid first message.
   if (o.prompt !== undefined && o.prompt !== '' && (typeof o.prompt !== 'string' || !validLaunchPrompt(o.prompt))) {
@@ -377,8 +419,8 @@ export function parseLaunchBody(body: unknown): { ok: true; value: LaunchBody } 
     ok: true,
     value: {
       agent: o.agent,
-      mode: (o.mode ?? 'default') as TerminalLaunchMode,
-      ...(typeof o.confirm === 'string' ? { confirm: o.confirm } : {}),
+      mode: launchMode.mode,
+      ...(launchMode.confirm !== undefined ? { confirm: launchMode.confirm } : {}),
       clientLaunchId: o.clientLaunchId,
       ...(typeof o.prompt === 'string' && o.prompt !== '' ? { prompt: o.prompt } : {}),
       resume: o.resume === true,

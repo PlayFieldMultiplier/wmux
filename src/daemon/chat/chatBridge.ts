@@ -334,6 +334,14 @@ export interface DangerousLaunchTrace {
   outcome: string;
 }
 
+/** The desktop notice for a phone launch in a mode other than default, shared by
+ *  `chat/launch` and `POST /api/sessions {agentLaunch:{mode}}`. */
+export function dangerousLaunchNotice(owner: ChatOwner, agent: TerminalLaunchAgent, submitted: boolean, paneId: string): { title: string; body: string } {
+  const who = owner === 'operator' ? 'The operator token' : 'A phone';
+  const what = agent === 'codex' ? 'Codex with approvals and sandbox off' : 'Claude with permission prompts off';
+  return { title: 'Agent started from the phone', body: `${who} ${submitted ? 'started' : 'may have started'} ${what} in pane ${paneId}.` };
+}
+
 /** Daemon functions behind the phone chat routes. Injected lazily into WebTerminalServer. */
 export interface ChatBridge {
   resolve(id: string): Promise<ChatResolution>;

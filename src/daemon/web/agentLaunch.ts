@@ -5,6 +5,8 @@ import path from 'node:path';
 import { runCli } from '../../shared/runCli';
 import type { AgentSlug } from '../../shared/agentIdentity';
 import { agentExecEnv, LOGIN_PATH_RETRY_MS, resolveLoginShellPath } from '../../shared/execEnv';
+import type { TerminalLaunchMode } from '../../shared/transcript/terminalChat';
+import { terminalLaunchModeFlag } from '../transcript/terminalLaunch';
 
 // TODO(#1904): option discovery parses these two CLIs' `--help`; another agent
 // needs its own parser before it can join.
@@ -113,6 +115,25 @@ export async function pinnedAgentLaunch(command: string): Promise<string> {
   if (!bin || !shellSafe(bin) || !shellSafe(cli.path)) return command;
   return `/usr/bin/env PATH='${cli.path}' '${bin}'${command.slice(agent.length)}`;
 }
+/**
+ * What a phone-created agent pane spawns. `command` (a `buildAgentLaunch` line)
+ * is persisted as the pane's `exec.command` and replayed by a recovery, so it
+ * never carries a launch mode: the mode flag goes on this spawn's line only,
+ * and a recovered pane starts in the default mode. `relay` adds the Codex relay
+ * flags (they anchor on the leading `codex`); `pin` pins the verified binary.
+ * `launch` is set whenever it differs from `command`.
+ */
+export async function webPaneSpawn(
+  command: string,
+  mode: TerminalLaunchMode | undefined,
+  relay?: (command: string) => string,
+  pin: (command: string) => Promise<string> = pinnedAgentLaunch,
+): Promise<{ command: string; launch?: string }> {
+  const withMode = command + terminalLaunchModeFlag(mode);
+  const launch = await pin(relay ? relay(withMode) : withMode);
+  return { command, ...(launch !== command ? { launch } : {}) };
+}
+
 export async function installedAgentLaunchOptions(env: NodeJS.ProcessEnv = process.env): Promise<AgentLaunchOptions[]> {
   const cli = await installedHelp();
   const claude = claudeOptionsFromHelp(cli.claude.help);

@@ -120,9 +120,10 @@ WEB ACCESS (browser / PWA)
                                     paired phone (thinking, tool inputs, and
                                     contents of files the agent read). Off by
                                     default
-        [--allow-dangerous-launch]  Let a phone start Claude/Codex from chat
-                                    with approvals off (bypass/yolo), after
-                                    per-launch confirmation. Off by default
+        [--allow-dangerous-launch]  Let a phone start Claude/Codex (chat or a
+                                    new agent pane) with approvals off
+                                    (bypass/yolo), after per-launch
+                                    confirmation. Off by default
         [--allow-git-write]         Let a phone with an explicit input grant
                                     push, open PRs and squash-merge, after a
                                     preview and confirmation. Off by default

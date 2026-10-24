@@ -3365,13 +3365,50 @@ On a Windows host `~` means the user profile and only paths under it are
 listed; WSL paths are not browsed.
 
 `POST /api/sessions` optionally accepts
-`agentLaunch:{agent:"claude"|"codex",model?:id,effort?:level}`. The server validates
+`agentLaunch:{agent:"claude"|"codex",model?:id,effort?:level,mode?:mode,confirm?:string}`. The server validates
 against its current catalog and constructs only the known launcher and flags.
 The actual spawn uses the daemon's existing `exec.command` path; `cmd` continues
 to select the wrapper shell, not a command string. No arbitrary launch command,
-prompt, permission override, or environment is accepted through this field.
+prompt, permission flag, or environment is accepted through this field; the
+only permission choice is `mode` below.
 Omitting agentLaunch retains normal shell creation. A 201 confirms creation of
 the pane, not authentication or acceptance of the model by the provider.
+
+**Launch mode.** `mode` and `confirm` follow `POST …/chat/launch`'s rules
+(see "Dangerous modes" there):
+
+- `mode` is `"default"`, `"bypass"` (Claude only, `--dangerously-skip-permissions`)
+  or `"yolo"` (Codex only, `--dangerously-bypass-approvals-and-sandbox`). Omitted
+  means `default`, and the request is exactly the one an older app sends. Any
+  other value, or a mode for the other agent, is
+  `400 {error:"invalid-agent-launch", detail, effect:"none"}`.
+- A mode other than `default` needs the grants chat/launch needs (input and
+  `--allow-transcript`: without the transcript grant it is the transcript
+  refusal, `403`), then the host's ceiling `wmux web --allow-dangerous-launch`
+  (`403 {error:"dangerous-launch-disabled: …", effect:"none"}`, checked before
+  the confirm), then `confirm` equal to `"<agent>:<mode>"` exactly, inside
+  `agentLaunch` (e.g. `"codex:yolo"`); missing or different is
+  `428 {error:"dangerous-mode-unconfirmed", effect:"none"}`. `confirm` is
+  ignored for `default`.
+- These checks run before any lookup, and the ceiling is asked again right
+  before the spawn; off by then is the same `403`. No pane is created on any
+  refusal.
+- `/api/config` carries `agentLaunchModes: {claude:[…], codex:[…]}` whenever
+  `agentLaunch` is true: `default` only, plus `bypass` / `yolo` when both the
+  ceiling and the transcript grant are on (the same ceiling `chatLaunchModes`
+  states). Send `mode` only to a daemon whose `agentLaunchModes` lists it: an
+  older daemon ignores the field and starts the pane in `default`.
+- The 201 row adds `launchMode` (the mode applied) when the body named a `mode`.
+- The mode applies to this spawn only. The pane's stored launch command stays
+  the plain one, so the desktop shows it as a plain `claude` / `codex` pane and
+  a daemon recovery replays it in `default` (a recovered pane never regains a
+  dangerous mode on its own). To continue in that mode, launch again with
+  `chat/launch {resume:true, mode, confirm}`.
+- A pane started in a dangerous mode raises a notification on the host once its
+  process exists; the start and every refusal are written to the daemon log.
+- `POST /api/sessions` keeps no request receipt: a retried request creates
+  another pane. Reset the mode to `default` after every attempt and whenever
+  the agent changes; never persist it.
 
 Codex is advertised only when its installed CLI exposes `--model` and `--config`.
 Its visible model IDs and per-model effort levels come from that account's
@@ -5876,7 +5913,8 @@ The ceiling is re-read after the body and again before typing. `claude+yolo` or
 or ends `launch-unconfirmed`, raises a notification on the host; those outcomes
 and the two refusals above are written to the daemon's audit log (no prompt
 text). Reset the mode to `default` after every attempt and whenever the agent
-changes; never persist it.
+changes; never persist it. A new agent pane takes the same `mode` and
+`confirm` under the same rules: `POST /api/sessions {agentLaunch:{mode}}`.
 
 | Outcome | HTTP | Body | `effect` |
 | --- | --- | --- | --- |
