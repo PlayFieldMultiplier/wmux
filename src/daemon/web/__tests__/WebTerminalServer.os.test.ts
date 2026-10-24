@@ -488,7 +488,7 @@ describe('WebTerminalServer', () => {
   let emitApproval: (type: ApprovalEvent['type'], request: ApprovalRequest) => void;
   let approvalListeners: Set<(e: ApprovalEvent) => void>;
   let approvalBox: ReturnType<typeof makeApprovals>['approvalBox'];
-  let deviceRoster: Map<string, { secret: string; name?: string; revoked: boolean }>;
+  let deviceRoster: Map<string, { secret: string; name?: string; revoked: boolean; allowInput: boolean }>;
   let answerReceiptStore: AnswerReceiptStore;
   let reconcileCalls: number;
   let deviceMintCalls: Array<{ name?: string }>;
@@ -633,9 +633,9 @@ describe('WebTerminalServer', () => {
   // Port 0 → ephemeral bind; status() reports the actual port.
   const startRO = () => server.start({ port: 0, host: '127.0.0.1', allowInput: false, allowUpload: false });
   const startRW = () => server.start({ port: 0, host: '127.0.0.1', allowInput: true, allowUpload: false });
-  /** Uploads on, input OFF — the combination that proves the two grants are separate. */
+  /** Uploads on. An upload also takes the caller's input grant, so input is on too. */
   const startUpload = () =>
-    server.start({ port: 0, host: '127.0.0.1', allowInput: false, allowUpload: true });
+    server.start({ port: 0, host: '127.0.0.1', allowInput: true, allowUpload: true });
   /** #782 — transcript turn view armed (`--allow-transcript`); its own grant. */
   const startWithTranscript = () =>
     server.start({ port: 0, host: '127.0.0.1', allowInput: false, allowUpload: false, allowTranscript: true });
@@ -6832,6 +6832,71 @@ describe('WebTerminalServer', () => {
     expect(fs.readdirSync(uploadsDir)).toEqual([]);
   });
 
+  it('refuses an upload from a device paired read-only before writing or counting anything', async () => {
+    await startUpload();
+    const viewer = await pairDevice('Wall display', false);
+    // More refusals than there are upload slots: a refusal that took a slot
+    // and never gave it back would leave the operator's upload below a 429.
+    for (let i = 0; i < 5; i++) {
+      const res = await upload(viewer.token, jpegBytes());
+      expect(res.status).toBe(403);
+      expect((await res.json() as { error: string }).error).toBe(
+        'read-only: this device was paired without permission to type',
+      );
+      const file = await fetch(`${base()}/api/upload-file`, {
+        method: 'POST', headers: { ...bearer(viewer.token), 'X-Wmux-File-Extension': 'txt' }, body: 'x',
+      });
+      expect(file.status).toBe(403);
+      expect((await file.json() as { error: string }).error).toMatch(/^read-only: /);
+    }
+    expect(fs.readdirSync(uploadsDir)).toEqual([]);
+    const typer = await pairDevice('iPhone', true);
+    expect((await upload(typer.token, jpegBytes())).status).toBe(201);
+    expect(fs.readdirSync(uploadsDir)).toHaveLength(1);
+  });
+
+  it('refuses an upload whose input grant is withdrawn while the body is arriving', async () => {
+    const info = await startUpload();
+    const typer = await pairDevice('iPhone', true);
+    const bytes = jpegBytes();
+    const inFlight = () => (server as unknown as { inFlightUploads: number }).inFlightUploads;
+    const held = httpReq({
+      host: '127.0.0.1', port: info.port as number, path: '/api/upload', method: 'POST',
+      headers: { Authorization: `Bearer ${typer.token}`, 'Content-Length': String(bytes.length) },
+    });
+    const reply = new Promise<{ status: number; body: string }>((resolve, reject) => {
+      held.on('response', (r) => {
+        let body = '';
+        r.on('data', (c: Buffer) => { body += c.toString('utf8'); });
+        r.on('end', () => resolve({ status: r.statusCode ?? 0, body }));
+      });
+      held.on('error', reject);
+    });
+    held.write(bytes.subarray(0, 4));
+    // Past the entry checks: the handler holds an upload slot.
+    await vi.waitFor(() => expect(inFlight()).toBe(1), { timeout: 5_000 });
+    deviceRoster.get(typer.deviceId)!.allowInput = false;
+    held.end(bytes.subarray(4));
+    const { status, body } = await reply;
+    expect(status).toBe(403);
+    expect(JSON.parse(body)).toMatchObject({
+      error: 'read-only: this device was paired without permission to type',
+      detail: expect.stringContaining('Input permission changed'),
+    });
+    expect(fs.readdirSync(uploadsDir)).toEqual([]);
+    expect(inFlight()).toBe(0);
+  });
+
+  it('reports allowUpload on /api/config per caller, false for a device paired read-only', async () => {
+    await startUpload();
+    const viewer = await pairDevice('Wall display', false);
+    const typer = await pairDevice('iPhone', true);
+    const read = async (token: string) =>
+      (await fetch(`${base()}/api/config`, { headers: bearer(token) })).json();
+    expect(await read(viewer.token)).toMatchObject({ allowInput: false, allowUpload: false, generalFileUpload: false });
+    expect(await read(typer.token)).toMatchObject({ allowInput: true, allowUpload: true, generalFileUpload: true });
+  });
+
   it('413s a body over the 10 MB cap and writes nothing', async () => {
     const info = await startUpload();
     const oversized = Buffer.concat([jpegBytes(), Buffer.alloc(10 * 1024 * 1024)]);
@@ -6903,7 +6968,7 @@ describe('WebTerminalServer', () => {
       uploadsDir,
       now: () => clock,
     });
-    const info = await swept.start({ port: 0, host: '127.0.0.1', allowInput: false, allowUpload: true });
+    const info = await swept.start({ port: 0, host: '127.0.0.1', allowInput: true, allowUpload: true });
     try {
       const token = info.token as string;
       const url = `http://127.0.0.1:${info.port}/api/upload`;
@@ -6930,7 +6995,7 @@ describe('WebTerminalServer', () => {
   it('reports allowUpload on /api/config so the phone can hide the button', async () => {
     const info = await startUpload();
     const res = await fetch(`${base()}/api/config`, { headers: bearer(info.token as string) });
-    expect(await res.json()).toMatchObject({ allowInput: false, allowUpload: true, generalFileUpload: true });
+    expect(await res.json()).toMatchObject({ allowInput: true, allowUpload: true, generalFileUpload: true });
     // status() carries it too — that is what `wmux web --status` prints.
     expect(server.status().allowUpload).toBe(true);
   });
@@ -6941,7 +7006,7 @@ describe('WebTerminalServer', () => {
       sessionManager, log: () => { /* noop */ }, assetsDir: os.tmpdir(), uploadsDir,
       now: () => clock, uploadLimits: {maxFiles: 1},
     });
-    const info = await bounded.start({port:0,host:'127.0.0.1',allowInput:false,allowUpload:true});
+    const info = await bounded.start({port:0,host:'127.0.0.1',allowInput:true,allowUpload:true});
     const post = (endpoint: string, body: Buffer) => fetch(`http://127.0.0.1:${info.port}${endpoint}`, {
       method:'POST',headers:{...bearer(info.token as string),'X-Wmux-File-Extension':'txt'},body: new Uint8Array(body),
     });
@@ -6972,7 +7037,7 @@ describe('WebTerminalServer', () => {
       log: () => { /* silent */ },
       assetsDir: os.tmpdir(),
     });
-    const info = await bare.start({ port: 0, host: '127.0.0.1', allowInput: false, allowUpload: true });
+    const info = await bare.start({ port: 0, host: '127.0.0.1', allowInput: true, allowUpload: true });
     try {
       const res = await fetch(`http://127.0.0.1:${info.port}/api/upload`, {
         method: 'POST',
@@ -7003,7 +7068,7 @@ describe('WebTerminalServer', () => {
       uploadsDir,
       uploadLimits: { maxFiles: 2 },
     });
-    const info = await quota.start({ port: 0, host: '127.0.0.1', allowInput: false, allowUpload: true });
+    const info = await quota.start({ port: 0, host: '127.0.0.1', allowInput: true, allowUpload: true });
     try {
       const url = `http://127.0.0.1:${info.port}/api/upload`;
       const post = () =>
@@ -7038,7 +7103,7 @@ describe('WebTerminalServer', () => {
     // ours to count against a limit either.
     fs.writeFileSync(path.join(uploadsDir, 'photo-vacation.jpg'), 'operator file');
     fs.writeFileSync(path.join(uploadsDir, 'notes.txt'), 'operator file');
-    const info = await quota.start({ port: 0, host: '127.0.0.1', allowInput: false, allowUpload: true });
+    const info = await quota.start({ port: 0, host: '127.0.0.1', allowInput: true, allowUpload: true });
     try {
       const res = await fetch(`http://127.0.0.1:${info.port}/api/upload`, {
         method: 'POST',
@@ -7062,7 +7127,7 @@ describe('WebTerminalServer', () => {
       uploadsDir,
       uploadLimits: { maxConcurrent: 1 },
     });
-    const info = await busy.start({ port: 0, host: '127.0.0.1', allowInput: false, allowUpload: true });
+    const info = await busy.start({ port: 0, host: '127.0.0.1', allowInput: true, allowUpload: true });
     const token = info.token as string;
     const port = info.port as number;
     try {
@@ -7111,7 +7176,7 @@ describe('WebTerminalServer', () => {
       uploadsDir,
       now: () => clock,
     });
-    const info = await swept.start({ port: 0, host: '127.0.0.1', allowInput: false, allowUpload: true });
+    const info = await swept.start({ port: 0, host: '127.0.0.1', allowInput: true, allowUpload: true });
     try {
       // Ours, and expired: the exact shape handleUpload writes.
       const mine = path.join(uploadsDir, generatedName(clock, '0123abcd'));

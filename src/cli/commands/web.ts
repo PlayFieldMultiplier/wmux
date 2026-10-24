@@ -532,7 +532,7 @@ function report(
   const nativeTls = info.tls === true;
 
   console.log('');
-  console.log(`  wmux web ${mode === 'start' ? 'started' : 'running'} — ${info.allowInput ? 'INPUT ENABLED' : 'read-only'}${info.allowUpload ? '  ·  uploads ENABLED' : ''}${info.allowTranscript ? '  ·  transcript ENABLED' : ''}${info.allowDangerousLaunch ? '  ·  DANGEROUS LAUNCH ENABLED' : ''}${info.allowGitWrite ? '  ·  GIT WRITE ENABLED' : ''}${info.inlineImages === false ? '  ·  inline images off' : ''}`);
+  console.log(`  wmux web ${mode === 'start' ? 'started' : 'running'} — ${info.allowInput ? 'INPUT ENABLED' : 'read-only'}${info.allowUpload ? (info.allowInput ? '  ·  uploads ENABLED' : '  ·  uploads need input') : ''}${info.allowTranscript ? '  ·  transcript ENABLED' : ''}${info.allowDangerousLaunch ? '  ·  DANGEROUS LAUNCH ENABLED' : ''}${info.allowGitWrite ? '  ·  GIT WRITE ENABLED' : ''}${info.inlineImages === false ? '  ·  inline images off' : ''}`);
   console.log(`  bind ${info.host}:${info.port}${typeof info.clients === 'number' ? `  ·  ${info.clients} viewer(s)` : ''}`);
   console.log('');
 
@@ -631,7 +631,10 @@ function report(
       console.log('    `wmux setup-hooks --with-gate` and restart your Claude Code sessions.');
     }
   }
-  if (info.allowUpload) {
+  if (info.allowUpload && !info.allowInput) {
+    console.log('  Photo upload is on but needs input. A device that cannot type cannot');
+    console.log('  use an upload, so every upload is refused. Re-run with --allow-input too.');
+  } else if (info.allowUpload) {
     console.log('  Photo upload is ENABLED: a paired phone can write JPEG/PNG files');
     console.log('  into ~/.wmux/uploads/phone. They are deleted after 24 hours.');
   } else {

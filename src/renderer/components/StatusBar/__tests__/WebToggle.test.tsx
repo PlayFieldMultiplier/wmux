@@ -502,7 +502,7 @@ describe('WebPopoverBody — phone grants', () => {
   };
 
   it('offers conversation access and photo upload before a start', () => {
-    const html = renderBody({ allowTranscript: true });
+    const html = renderBody({ allowInput: true, allowTranscript: true });
     expect(html).toContain('web.allowTranscript');
     expect(html).toContain('web.allowTranscriptHint');
     expect(html).toContain('web.allowUpload');

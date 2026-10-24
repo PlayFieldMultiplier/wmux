@@ -84,8 +84,8 @@ const running: WebTerminalInfo = {
 
 describe('WebToggle phone grants', () => {
   it('applies a grant to the running server and shows what the server reports back', async () => {
-    status = running;
-    setGrants.mockResolvedValue({ ...running, allowTranscript: true });
+    status = { ...running, allowInput: true };
+    setGrants.mockResolvedValue({ ...running, allowInput: true, allowTranscript: true });
     await mountAndOpen();
 
     const transcript = checkbox('Conversation access');

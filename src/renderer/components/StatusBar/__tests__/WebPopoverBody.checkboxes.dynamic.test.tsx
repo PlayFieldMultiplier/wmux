@@ -29,13 +29,13 @@ afterEach(() => {
 
 const t = (key: string): string => key;
 
-function Harness({ running = false }: { running?: boolean }) {
+function Harness({ running = false, initialUpload = false }: { running?: boolean; initialUpload?: boolean }) {
   const [allowInput, setAllowInput] = useState(false);
   const [tailscale, setTailscale] = useState(false);
   const [expose, setExpose] = useState(false);
   const [pairAllowInput, setPairAllowInput] = useState(false);
   const [allowTranscript, setAllowTranscript] = useState(false);
-  const [allowUpload, setAllowUpload] = useState(false);
+  const [allowUpload, setAllowUpload] = useState(initialUpload);
   const [allowDangerousLaunch, setAllowDangerousLaunch] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const noop = vi.fn();
@@ -94,6 +94,8 @@ function press(el: Element, key: string) {
 describe('Remote popover options', () => {
   it.each(['web.allowInput', 'web.tailscale', 'web.expose', 'web.allowTranscript', 'web.allowUpload'])('%s toggles from its label text', (key) => {
     act(() => root.render(createElement(Harness)));
+    // Upload needs input on before it can be ticked.
+    if (key === 'web.allowUpload') act(() => checkboxFor('web.allowInput').label.click());
     const { label, box } = checkboxFor(key);
     expect(box.getAttribute('aria-checked')).toBe('false');
     act(() => label.click());
@@ -129,5 +131,22 @@ describe('Remote popover options', () => {
     const { label, box } = checkboxFor('web.pairAllowInput');
     act(() => label.click());
     expect(box.getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('Photo & file upload reads off and disabled, with the reason, while input is off', () => {
+    act(() => root.render(createElement(Harness, { initialUpload: true })));
+    const upload = checkboxFor('web.allowUpload');
+    const reason = () => document.getElementById(upload.box.getAttribute('aria-describedby') ?? '')?.textContent;
+    // Upload is on for the next start, but a device without input cannot use it.
+    expect(upload.box.getAttribute('aria-checked')).toBe('false');
+    expect(upload.box.disabled).toBe(true);
+    expect(reason()).toBe('web.allowUploadNeedsInput');
+    act(() => upload.label.click());
+    expect(upload.box.getAttribute('aria-checked')).toBe('false');
+    // Input on: the stored choice shows again and the row is live.
+    act(() => checkboxFor('web.allowInput').label.click());
+    expect(upload.box.getAttribute('aria-checked')).toBe('true');
+    expect(upload.box.disabled).toBe(false);
+    expect(reason()).toBe('web.allowUploadHint');
   });
 });

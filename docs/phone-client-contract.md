@@ -2701,7 +2701,10 @@ the bytes land on disk and you put the **path** in the composer.
 ```
 POST /api/upload      body: raw JPEG or PNG bytes (no multipart)
   → 201 {path, expiresAt}
+  → 400 {error: 'invalid-file-extension'}   (POST /api/upload-file only)
+  → 401 {error: 'authorization-expired'}
   → 403 {error: 'uploads-disabled: server started without --allow-upload'}
+  → 403 {error: 'read-only: …', detail}
   → 413 {error: 'payload too large'}
   → 415 {error: 'unsupported-format: only JPEG and PNG are accepted'}
   → 429 {error: 'too-many-uploads: try again in a moment'}
@@ -2710,18 +2713,39 @@ POST /api/upload      body: raw JPEG or PNG bytes (no multipart)
   → 507 {error: 'uploads-full: quota exceeded, try again later'}
 ```
 
-Any authenticated principal may call it — operator token or device credential,
-same as every other route.
+**An upload takes two grants.** The server needs `--allow-upload`, and the
+caller needs input permission — the same grant `POST /api/input` asks for
+(`--allow-input` on the server, and for a device credential its own pairing
+grant). Typing into a pane the operator is watching is a smaller thing than
+writing a file into their home directory, so input never implies upload; and
+an upload follows input, so a device paired read-only cannot upload either.
 
-**The grant is its own flag.** `--allow-upload`, not `--allow-input`: typing
-into a pane the operator is watching is a smaller thing than writing a file into
-their home directory, so one never implies the other. Gate the button on
-`allowUpload` from `/api/config`, and match the 403 by **prefix** — the text
-after the colon is prose and may be reworded, the `uploads-disabled:` tag is
-not. A daemon predating this route has no `allowUpload` key at all; read a
-missing key as `false` and hide the button. On the desktop the grant is the
-**Photo & file upload** toggle in the Remote popover; it persists the same way
-as Conversation access.
+Two 403s, told apart by their tag. Match each by **prefix** — the text after
+the colon is prose and may be reworded, the tags are not:
+
+- `uploads-disabled:` — the server runs without `--allow-upload`. Checked
+  before the caller's grant, so a server with uploads off answers this
+  whatever the caller may do.
+- `read-only:` — uploads are on, but this caller may not type: the server runs
+  without `--allow-input`, or this device was paired without permission to
+  type. Same body as the input routes' refusal, `detail` included. Nothing is
+  written and nothing counts toward the bounds below.
+
+The order, after authentication: on `POST /api/upload-file` only, a bad
+`X-Wmux-File-Extension` header is `400 invalid-file-extension` before
+anything else; then `uploads-disabled:`; then `read-only:`; then the body is
+read. The grant is read again once the whole body is in, so a grant withdrawn
+while the body was arriving is also `read-only:` (its `detail` says the input
+permission changed), and a device revoked meanwhile is
+`401 authorization-expired`. Neither writes the file.
+
+Gate the button on `allowUpload` from `/api/config`. It is **this caller's**
+effective grant, like `allowInput`: `true` only when the server allows uploads
+and this caller may type, so a read-only device reads `false`.
+`generalFileUpload` follows it. A daemon predating this route has no
+`allowUpload` key at all; read a missing key as `false` and hide the button.
+On the desktop the server grant is the **Photo & file upload** toggle in the
+Remote popover; it persists the same way as Conversation access.
 
 **The bytes decide the format, not your header.** JPEG (`FF D8 FF`) and PNG
 (the 8-byte signature) only; anything else is 415, including an empty body.
@@ -5142,9 +5166,9 @@ remain separate integration checks.
 ### General file attachments
 
 `generalFileUpload` in config advertises `POST /api/upload-file` when uploads
-are enabled and storage is wired. It uses the same authentication and explicit
-`--allow-upload` grant, 10 MiB body cap, concurrency/aggregate quota and expiry
-as photo upload. The raw body is stored unchanged with private 0600 permissions.
+are enabled for this caller (`allowUpload`) and storage is wired. It uses the
+same authentication, the same two grants and 403s (§8), 10 MiB body cap,
+concurrency/aggregate quota and expiry as photo upload. The raw body is stored unchanged with private 0600 permissions.
 It never executes or inserts the file into a pane.
 
 The optional `X-Wmux-File-Extension` header accepts 1–12 ASCII alphanumeric
