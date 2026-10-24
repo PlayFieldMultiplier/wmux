@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useSyncExternalStore } from 'react';
 import type { ChatV2TerminalProcess } from '../../../shared/chatv2/ipc';
 import { useT } from '../../hooks/useT';
 import Dialog, { DialogBody, DialogFooter, DialogHeader } from '../ui/Dialog';
@@ -6,39 +6,68 @@ import Button from '../ui/Button';
 import { getChatV2Bridge } from './bridge';
 import { setKnownBinding } from './controller';
 
+type Phase = 'idle' | 'checking' | 'confirm' | 'moving';
+interface PaneMove {
+  phase: Phase;
+  processes: ChatV2TerminalProcess[];
+  /** Why the last check or move failed; '' for none. */
+  error: string;
+  /** Started from the terminal projection (a TUI to stop), not from a handed-off chat. */
+  fromProjection: boolean;
+}
+
+const IDLE: PaneMove = { phase: 'idle', processes: [], error: '', fromProjection: false };
+// Kept per pane above the views: stopping the TUI swaps the projection for
+// another view, and the move (its dialog, a failure after the stop) must
+// outlive that swap.
+const moves = new Map<string, PaneMove>();
+const listeners = new Set<() => void>();
+
+function setMove(paneId: string, patch: Partial<PaneMove>): void {
+  moves.set(paneId, { ...(moves.get(paneId) ?? IDLE), ...patch });
+  for (const listener of listeners) listener();
+}
+
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => { listeners.delete(listener); };
+}
+
+/** The pane's move into chat: its phase, and why it last failed. */
+export function usePaneMove(paneId: string | undefined): PaneMove {
+  return useSyncExternalStore(subscribe, () => (paneId ? moves.get(paneId) ?? IDLE : IDLE));
+}
+
 /**
  * "Continue in chat": the pane's terminal Claude (or a handed-off chat whose
  * TUI already exited) continues as a chat-v2 conversation with the same
  * session id. The daemon checks first and names what the stop would end; the
  * owner confirms; the daemon stops the TUI, proves it gone and starts the
  * chat. Nothing happens without the confirmation. The pane switches to the
- * chat view once the binding comes back.
+ * chat view once the binding comes back. A failure shows through
+ * `usePaneMove(paneId).error` in whichever view the pane then shows.
  */
-export function ContinueInChat({ paneId, tombstone = false, className, onError }: {
+export function ContinueInChat({ paneId, tombstone = false, className }: {
   paneId: string;
   /** The pane holds a handed-off chat whose TUI already exited: nothing is stopped. */
   tombstone?: boolean;
   className?: string;
-  onError: (message: string) => void;
 }) {
   const t = useT();
-  const [phase, setPhase] = useState<'idle' | 'checking' | 'confirm' | 'moving'>('idle');
-  const [processes, setProcesses] = useState<ChatV2TerminalProcess[]>([]);
+  const { phase, processes } = usePaneMove(paneId);
+  const setPhase = (next: Phase) => setMove(paneId, { phase: next });
   const bridge = getChatV2Bridge();
   const platform = window.electronAPI?.platform;
   if (!bridge || (platform !== 'darwin' && platform !== 'linux')) return null;
 
   const check = async () => {
-    setPhase('checking');
-    onError('');
+    setMove(paneId, { phase: 'checking', error: '', fromProjection: !tombstone });
     const result = await bridge.call('fromTerminal', { paneId, preview: true }).catch(() => null);
     if (!result?.ok) {
-      onError(result ? result.error.message : t('chat.continueInChatFailed'));
-      setPhase('idle');
+      setMove(paneId, { phase: 'idle', error: result ? result.error.message : t('chat.continueInChatFailed') });
       return;
     }
-    setProcesses(result.processes ?? []);
-    setPhase('confirm');
+    setMove(paneId, { phase: 'confirm', processes: result.processes ?? [] });
   };
   const move = async () => {
     setPhase('moving');
@@ -48,8 +77,7 @@ export function ContinueInChat({ paneId, tombstone = false, className, onError }
       setPhase('idle');
       return;
     }
-    onError(result && !result.ok ? result.error.message : t('chat.continueInChatFailed'));
-    setPhase('idle');
+    setMove(paneId, { phase: 'idle', error: result && !result.ok ? result.error.message : t('chat.continueInChatFailed') });
     // The pane's record may have changed (a tombstone put back): ask again.
     void bridge.call('bindingForPane', { paneId }).then((answer) => { if (answer.ok) setKnownBinding(paneId, answer.binding); }, () => undefined);
   };

@@ -36,3 +36,8 @@ export function beginPaneMove(paneId: string): boolean {
 export function endPaneMove(paneId: string): void {
   moving.delete(paneId);
 }
+
+/** A move holds the pane: nothing else may start an agent or a chat in it. */
+export function isPaneMoving(paneId: string): boolean {
+  return moving.has(paneId);
+}

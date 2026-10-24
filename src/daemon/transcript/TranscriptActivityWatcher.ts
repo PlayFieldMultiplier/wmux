@@ -276,12 +276,13 @@ export class TranscriptActivityWatcher {
 
   /**
    * Whether the session's Claude has teammates still at work or subagents
-   * running, read now (a move into chat refuses while it does). An
-   * unreadable teammates folder counts as working.
+   * running, read now (a move into chat refuses while it does). No watch of
+   * the session's transcript, or an unreadable teammates folder, counts as
+   * working: nothing says they are idle.
    */
   helpersWorking(sessionId: string): boolean {
     const watch = this.watches.get(sessionId);
-    if (!watch) return false;
+    if (!watch) return true;
     if ((watch.subagents?.count ?? 0) > 0) return true;
     if (!watch.teammates) return false;
     try {

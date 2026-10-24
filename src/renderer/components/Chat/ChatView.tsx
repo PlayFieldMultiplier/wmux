@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AssistantRuntimeProvider, MessageNotSentError, useExternalStoreRuntime, type AppendMessage } from '@assistant-ui/react';
 import { useStore } from '../../stores';
+import { agentRow } from '../../../shared/agentIdentity';
 import { useT } from '../../hooks/useT';
 import { useTranscript } from './useTranscript';
 import { transcriptMessages } from './chatMessages';
@@ -9,7 +10,7 @@ import { ChatPtyContext, UserText } from './ChatMessage';
 import { chatRunState } from './chatRunState';
 import { ChatProgress } from './ChatProgress';
 import { ChatControls } from './ChatControls';
-import { ContinueInChat } from '../ChatV2/ContinueInChat';
+import { ContinueInChat, usePaneMove } from '../ChatV2/ContinueInChat';
 import type { TerminalLaunchAgent, TerminalLaunchMode } from '../../../shared/transcript/terminalChat';
 import { Thread } from './assistant-ui/Thread';
 import type { TurnEvent } from '../../../shared/transcript/turnEvents';
@@ -234,13 +235,15 @@ function ChatThread({ ptyId, data, onTerminal }: { ptyId: string; data: ReturnTy
     pasteImage: () => void pasteImage(),
   }), [showStop, stopState, stop, attachments.length, pasteImage]);
   // Continue in chat: a terminal Claude at rest (the daemon checks again, and names what the stop ends).
-  const [moveError, setMoveError] = useState('');
-  const canMoveToChat = !managed && data.status.terminal?.agent === 'claude' && data.status.agentAlive === true && ['ready', 'complete', 'stopped'].includes(progress) && !sending;
+  const move = usePaneMove(ptyId);
+  const moveError = move.error;
+  // In flight it stays: the stop has just ended the TUI it was offered for.
+  const canMoveToChat = move.phase !== 'idle' || !managed && !!agentRow(data.status.terminal?.agent)?.continueInChat && data.status.agentAlive === true && ['ready', 'complete', 'stopped'].includes(progress) && !sending;
   const reasonKey = ['no-hook', 'stale-session', 'no-transcript-path', 'not-claude', 'unsafe-transcript-path', 'unreadable'].includes(data.status.reason)
     ? `chat.reason.${data.status.reason}` : 'chat.reason.unavailable';
   return <ChatPtyContext.Provider value={ptyId}><AssistantRuntimeProvider runtime={runtime}>
     <Thread composer={runtime.thread.composer} status={<><ChatProgress state={canLaunch ? 'ready' : progress} lastSyncedAt={data.lastSyncedAt} onTerminal={onTerminal}
-      extra={canMoveToChat && <ContinueInChat paneId={ptyId} onError={setMoveError} />} /><ChatControls ptyId={ptyId} status={data.status} refresh={data.retry} /></>} empty={messages.length === 0} working={busy} disabled={canLaunch ? sending || data.loading : launched || readOnly || !data.status.available || data.loading || ended || !!managed && (managed.phase !== 'ready' || !managed.capabilities.send)}
+      extra={canMoveToChat && <ContinueInChat paneId={ptyId} />} /><ChatControls ptyId={ptyId} status={data.status} refresh={data.retry} /></>} empty={messages.length === 0} working={busy} disabled={canLaunch ? sending || data.loading : launched || readOnly || !data.status.available || data.loading || ended || !!managed && (managed.phase !== 'ready' || !managed.capabilities.send)}
       placeholder={canLaunch ? t('chat.initialMessage') : ended ? t('chat.placeholderEnded') : undefined}
       skillScope={!managed ? { ptyId, agent: canLaunch ? launchAgent : data.status.terminal?.agent ?? 'claude', composer: runtime.thread.composer, onTerminal, live: !!data.status.agentAlive } : undefined}
       maxLength={canLaunch ? 2000 : 16_000}

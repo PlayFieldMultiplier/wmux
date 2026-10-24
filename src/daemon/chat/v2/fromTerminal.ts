@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { CHATV2_PROVIDER_SESSION_ID, chatV2Error, type ChatV2Error, type ChatV2TerminalProcess } from '../../../shared/chatv2/ipc';
 import type { ResumeBinding } from '../../../shared/agentResume';
+import { agentRow } from '../../../shared/agentIdentity';
 import type { ProcessTreeEntry } from '../../AgentProcessTracker';
 import type { ChatV2TerminalDeps } from './types';
 
@@ -83,7 +84,7 @@ export function bindingRefusal(
   deps: Pick<FromTerminalDeps, 'stat' | 'isDirectory' | 'realpath'>,
 ): string | null {
   const unknown = 'This pane has no Claude conversation wmux can resume.';
-  if (!binding || binding.agent !== 'claude') return unknown;
+  if (!binding || !agentRow(binding.agent)?.continueInChat) return unknown;
   const { sessionId, transcriptPath, cwd } = binding;
   if (!CHATV2_PROVIDER_SESSION_ID.test(sessionId) || !transcriptPath || !path.isAbsolute(transcriptPath)) return unknown;
   const projectDir = path.dirname(transcriptPath);
@@ -112,9 +113,10 @@ export async function checkTerminal(deps: FromTerminalDeps, paneId: string, opts
   const bad = bindingRefusal(binding, opts.configDir, deps);
   if (bad || !binding) return refuse(bad ?? 'This pane has no Claude conversation wmux can resume.');
   const live = deps.liveAgent(paneId);
-  if (live !== undefined && live !== 'claude') return refuse('Another agent runs in this pane.');
+  const claude = live !== undefined && agentRow(live)?.continueInChat === true;
+  if (live !== undefined && !claude) return refuse('Another agent runs in this pane.');
   let tree: { root: ProcessTreeEntry; descendants: ProcessTreeEntry[] } | null = null;
-  if (live === 'claude') {
+  if (claude) {
     try {
       tree = await deps.tree(paneId);
     } catch {

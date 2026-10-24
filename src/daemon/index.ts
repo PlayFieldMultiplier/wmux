@@ -91,6 +91,7 @@ import { AwaitingScreenVerifier, AWAITING_NARROW_DIALOG_COLS, questionInFlight, 
 import { screenBlocksChatSend, screenShowsAgentDialog, screenShowsActiveDialog, screenShowsPermissionDialog, screenShowsRunningTurn, titleShowsRunningTurn } from './transcript/chatScreenGate';
 import { claudeComposerEmpty, claudeComposerVisible } from './transcript/deliverChatPrompt';
 import { CHATV2_LAUNCH_ALLOWED_RPC } from '../shared/chatv2/ipc';
+import { isPaneMoving } from './chat/v2/paneClaims';
 import { ApprovalPushRouter } from './push/approvalPushRouter';
 import { readPendingToolUse } from './transcript/pendingToolUse';
 import { isClaudeFamilyAgent } from './approvals/terminalPrompt';
@@ -4524,7 +4525,8 @@ function registerRpcHandlers(
           if (status === 'awaiting_input') return 'Claude is waiting for an answer in the terminal.';
           // No registry is "may be pending"; any kind of record holds the pane.
           if (!approvalRegistry || approvalRegistry.list().pending.some((r) => r.sessionId === id)) return 'Something in this pane waits for an approval.';
-          if (transcriptActivity?.helpersWorking(id)) return 'Claude\u2019s teammates or subagents are still working.';
+          // No watcher, or no watch of this pane's transcript, is "may be working".
+          if (!transcriptActivity || transcriptActivity.helpersWorking(id)) return 'Claude\u2019s teammates or subagents may still be working.';
           const outcome = await queuedScreenText(sessionManager, id, true);
           const rows = outcome?.ok
             ? Object.assign(outcome.rows.map((r) => r.text), { undimmed: outcome.rows.map((r) => r.undimmed ?? r.text) })
@@ -4538,11 +4540,15 @@ function registerRpcHandlers(
           }
           return null;
         },
+        // notAtRest again, right before the first signal, but for the screen
+        // read (async; notAtRest read it just before).
         stillIdle: (id) => {
           const bridge = sessionManager.getSession(id)?.bridge;
-          return !!bridge && !!approvalRegistry
+          return !!bridge && !!approvalRegistry && !!transcriptActivity
             && paneTurnClosed({ agentStatus: bridge.getAgentStatus(), turnOpen: bridge.isTurnOpen() })
-            && !approvalRegistry.list().pending.some((r) => r.sessionId === id);
+            && !approvalRegistry.list().pending.some((r) => r.sessionId === id)
+            && !transcriptActivity.helpersWorking(id)
+            && !titleShowsRunningTurn(bridge.getTitle(), 'claude', Date.now());
         },
         tree: (id) => agentProcessTracker.agentProcessTree(id, 'claude'),
         stop: (id, stillIdle) => stopAgentTree({
@@ -4553,7 +4559,7 @@ function registerRpcHandlers(
         }),
         processesWithArg: (marker) => agentProcessTracker.processesWithArg(marker),
         otherOwners: (id, sessionId) => sessionManager.listManagedSessions()
-          .filter((s) => s.meta.id !== id && s.meta.resumeBinding?.agent === 'claude' && s.meta.resumeBinding.sessionId === sessionId
+          .filter((s) => s.meta.id !== id && s.meta.resumeBinding?.sessionId === sessionId
             && agentProcessTracker.identityFor(s.meta.id)?.alive === true)
           .map((s) => s.meta.id),
       },
@@ -4564,11 +4570,14 @@ function registerRpcHandlers(
   }
   registerChatV2Rpc((method, handler) => pipeServer.onRpc(method, handler), chatV2Host, firstPartyOnly);
   // main asks before it types a line that starts an agent (the Resume pill,
-  // auto-resume): refused while chat v2 owns the pane or a move into chat holds it.
+  // auto-resume): refused while chat v2 owns the pane, a move holds it, or the
+  // line names a conversation an active chat holds (in any pane).
   pipeServer.onRpc(CHATV2_LAUNCH_ALLOWED_RPC, async (params, ctx) => {
     if (!firstPartyOnly(ctx.clientId, CHATV2_LAUNCH_ALLOWED_RPC)) return { allowed: false };
     const paneId = typeof params['paneId'] === 'string' ? params['paneId'] : '';
-    return { allowed: !!paneId && chatV2Host?.ownsPane(paneId) !== true };
+    const line = typeof params['line'] === 'string' ? params['line'] : '';
+    if (!paneId || isPaneMoving(paneId) || chatV2Host?.ownsPane(paneId) === true) return { allowed: false };
+    return { allowed: !chatV2Host?.activeSessionIds().some((id) => line.includes(id)) };
   });
   pipeServer.onRpc('daemon.chat.providers', async (_params, ctx) =>
     firstPartyOnly(ctx.clientId, 'chat.providers') ? chatSessions?.listProviders() ?? [] : []);
@@ -4763,7 +4772,7 @@ function registerRpcHandlers(
     // pipe, not session:notification, which would also reach phones as attention.
     notify: (paneId, title, body) => pipeServer.broadcast({ type: 'notification.event', sessionId: paneId,
       data: { source: 'security', title, body, ts: Date.now() } }),
-    chatOwnsPane: (id) => chatV2Host?.ownsPane(id) === true,
+    chatOwnsPane: (id) => chatV2Host?.ownsPane(id) === true || isPaneMoving(id),
   });
   chatBridge = bridge;
   nativeChatBridge = bridge;

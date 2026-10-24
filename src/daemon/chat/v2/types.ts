@@ -279,6 +279,8 @@ export interface ChatV2Host {
    * chat holds it. Nothing may type an agent launch or resume line into it.
    */
   ownsPane(paneId: string): boolean;
+  /** The provider session ids of every active (not handed-off) record: a launch line naming one is refused. */
+  activeSessionIds(): string[];
   /** In-process listener for every push (phone nudges). Returns an unsubscribe. */
   onPush(listener: (push: ChatV2EventsPush) => void): () => void;
   /** Load records, sweep orphan drivers (identity-matched only), expire their approvals. */

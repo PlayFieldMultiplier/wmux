@@ -184,9 +184,10 @@ export const CHATV2_RPC = {
 } as const;
 
 /**
- * Main → daemon, outside the renderer's table: whether a line that starts an
- * agent may be typed into the pane now. False while chat v2 owns or is taking
- * over the pane.
+ * Main → daemon, outside the renderer's table: whether `line`, which starts
+ * an agent, may be typed into `paneId` now (`{ paneId, line }` →
+ * `{ allowed }`). False while chat v2 owns or is taking over the pane, a move
+ * holds it, or the line names a conversation an active chat holds.
  */
 export const CHATV2_LAUNCH_ALLOWED_RPC = 'daemon.chatv2.launchAllowed';
 

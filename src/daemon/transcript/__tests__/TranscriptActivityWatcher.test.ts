@@ -320,3 +320,12 @@ describe('codexToolSummary', () => {
     expect(codexToolSummary('exec', 'await tools.apply_patch("*** Begin Patch\\n*** Update File: lib/x.ts\\n")')).toBe('✎ x.ts');
   });
 });
+
+describe('TranscriptActivityWatcher — helpersWorking', () => {
+  it('a pane with no watch of its transcript may have helpers at work', () => {
+    const h = harness('claude');
+    expect(h.watcher.helpersWorking('pty-1')).toBe(true);
+    h.watcher.tick();
+    expect(h.watcher.helpersWorking('pty-1')).toBe(false);
+  });
+});

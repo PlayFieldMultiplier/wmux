@@ -614,7 +614,8 @@ async function enumerateProcesses(): Promise<ProcessTreeEntry[]> {
   }
   const { stdout } = await execFileAsync(
     'ps',
-    ['-axo', 'pid=,ppid=,args='],
+    // `-ww`: never cut argv to a width (a conversation id past the cut would read as absent).
+    ['-ww', '-axo', 'pid=,ppid=,args='],
     { encoding: 'utf-8', timeout: 10_000, maxBuffer: 8 * 1024 * 1024 },
   );
   return parsePsOutput(stdout as string);

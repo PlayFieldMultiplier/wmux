@@ -1186,7 +1186,7 @@ export function registerPTYHandlers(
     const line = sanitizePtyText(guardedText) + (submit === true ? '\r' : '');
     // Chat v2 owns the pane, or a move into chat holds it: a resume typed now
     // would put a second process on the conversation. The daemon decides.
-    if (dc && startsAgent(text) && !(await launchAllowedByChat(dc, id))) {
+    if (dc && startsAgent(text) && !(await launchAllowedByChat(dc, id, text))) {
       throw new Error('PTY_WRITE_LAUNCH: a chat owns this pane, so nothing was typed');
     }
     // A task's pane: a new launch of the task, on disk before the line is

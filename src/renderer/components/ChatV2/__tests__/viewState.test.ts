@@ -124,4 +124,11 @@ describe('selectChatSurfaceView', () => {
     expect(selectChatSurfaceView({ chatViewEnabled: true, viewMode: 'chat', binding: handedOff, agentRunning: true })).toBe('projection');
     expect(selectChatSurfaceView({ chatViewEnabled: true, viewMode: 'chat', binding: handedOff, agentRunning: false })).toBe('chatv2');
   });
+  it('a move into chat from the projection keeps it while the stopped TUI has no chat yet', () => {
+    const handedOff = { paneId: PANE, status: 'handed-off' } as ChatV2Binding;
+    for (const binding of [null, handedOff]) {
+      expect(selectChatSurfaceView({ chatViewEnabled: true, viewMode: 'chat', binding, agentRunning: false, movingFromProjection: true })).toBe('projection');
+    }
+    expect(selectChatSurfaceView({ chatViewEnabled: true, viewMode: 'terminal', binding: null, agentRunning: false, movingFromProjection: true })).toBe('terminal');
+  });
 });

@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect } from 'react';
 import { useStore } from '../../stores';
 import { useT } from '../../hooks/useT';
 import { markChatV2Covering } from './coverage';
+import { usePaneMove } from './ContinueInChat';
 import { usePaneChatV2Binding } from './useChatV2';
 import { selectChatSurfaceView, type ChatSurfaceView } from './viewState';
 
@@ -13,8 +14,9 @@ export function useChatSurfaceView(ptyId: string | undefined, chatViewEnabled: b
   const binding = usePaneChatV2Binding(ptyId, chat);
   const agentRunning = useStore((s) => !!ptyId && !!s.surfaceAgent[ptyId]?.name
     && s.agentAliveByPtyId?.[ptyId] !== false && s.commandRunningByPtyId?.[ptyId] !== false);
+  const move = usePaneMove(ptyId);
   if (!ptyId) return chatViewEnabled && viewMode === 'chat' ? 'projection' : 'terminal';
-  return selectChatSurfaceView({ chatViewEnabled, viewMode, binding, agentRunning });
+  return selectChatSurfaceView({ chatViewEnabled, viewMode, binding, agentRunning, movingFromProjection: move.fromProjection && move.phase === 'moving' });
 }
 
 /** The chat-v2 view laid over the pane's (inert) anchor terminal. */
