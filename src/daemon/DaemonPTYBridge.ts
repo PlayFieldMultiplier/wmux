@@ -238,6 +238,10 @@ export class DaemonPTYBridge extends EventEmitter {
    * transcript end or the agent ending makes the close final.
    */
   private turnSoftClosed = false;
+  /** #2673 — when a submit that carried a prompt last reached Claude Code (0 = never). */
+  private claudePromptAt = 0;
+  /** #2673 — when Claude Code last set its running title `◐`/`◑` (0 = never). */
+  private claudeRunningTitleAt = 0;
   /**
    * F24 — the open episode was opened by output alone (a byte promotion) on a
    * pane whose hooks report, and no hook or submit has confirmed it since.
@@ -333,6 +337,8 @@ export class DaemonPTYBridge extends EventEmitter {
   private emptyShellPrompt = false;
   private completedShellCommand = false;
   private shellCommandRunning = false;
+  /** #2673 — the shell has drawn an OSC 133 prompt: `shellCommandRunning` then says whether a program, not the shell, owns the keys. */
+  private shellPromptSeen = false;
   private shellSubmittedKeyRevision: number | undefined;
   private shellCommandKeyRevision = 0;
   /**
@@ -501,6 +507,9 @@ export class DaemonPTYBridge extends EventEmitter {
       && /^[a-z]$/i.test(keyProbe);
     const hasSubmitBoundary = this.scanSubmittedInput(data);
     const answered = forceSubmitted || hasSubmitBoundary || answerKey;
+    // #2673: a submit that carried a prompt, not a bare Enter (a dialog's answer).
+    const promptSubmitted = (forceSubmitted || hasSubmitBoundary) && !wasAwaiting
+      && (forceSubmitted || this.draftPending || DaemonPTYBridge.typesDraftText(data));
     // An unsubmitted draft in the composer: typed or pasted text with no Enter
     // after it. Ctrl+C / Ctrl+U empty the composer. Read by the usage-limit
     // continue, which must never append to (and submit) a human's half-typed line.
@@ -536,7 +545,7 @@ export class DaemonPTYBridge extends EventEmitter {
       });
     }
     if (!answered) return;
-    this.startAnsweredTurn(wasAwaiting, 'input');
+    this.startAnsweredTurn(wasAwaiting, 'input', promptSubmitted);
   }
 
   /**
@@ -586,7 +595,7 @@ export class DaemonPTYBridge extends EventEmitter {
    * take, so an answer recognised from a key and one recognised from the
    * screen leave the bridge in the same state.
    */
-  private startAnsweredTurn(wasAwaiting: boolean, reason: 'input' | 'screen-cleared'): void {
+  private startAnsweredTurn(wasAwaiting: boolean, reason: 'input' | 'screen-cleared', promptSubmitted = false): void {
     // An answer resumes the episode it interrupted; a submit into a running
     // turn is queued by the agent's own composer. Anything else starts one.
     if (!wasAwaiting) {
@@ -608,6 +617,11 @@ export class DaemonPTYBridge extends EventEmitter {
       this.turnSoftClosed = false;
       this.openTurn();
       if (joined) this.bootEpisode = false;
+      // A prompt typed into Claude Code itself, not a dialog's bare Enter, nor
+      // the launch line the shell ran: the shell at its own OSC 133 prompt
+      // owns the keys there, whatever the tracker still reads alive.
+      const atShellPrompt = this.shellPromptSeen && !this.shellCommandRunning;
+      if (promptSubmitted && !atShellPrompt && this.paneAgentTitlesTurns()) this.claudePromptAt = Date.now();
     } else if (this.turnSoftClosed) {
       // Answering a dialog resumes the episode it interrupted, even one a
       // detector settle closed softly before the dialog went up.
@@ -856,9 +870,10 @@ export class DaemonPTYBridge extends EventEmitter {
    * too, and a shell without OSC 133 never settles it, so an agent must be
    * present: one whose hooks report (`hookSeen`, reset when the agent ends) or
    * a live agent process. A boot episode (the launch Enter or the TUI's first
-   * paint, with no hook or joining submit since) is not a turn yet; that also
-   * leaves out a hookless agent's first turn after its launch, which is the
-   * safe side: continuing an agent idle at its composer would invent work.
+   * paint, with no hook or joining submit since) is not a turn yet: continuing
+   * an agent idle at its composer would invent work. A hookless agent's first
+   * turn after its launch counts once Claude Code's running title shows it
+   * (noteClaudeTitle); a submit that only answered a dialog draws none.
    */
   isAgentMidTurn(): boolean {
     return this.turnOpen && !this.bootEpisode && (this.hookSeen || this.trackedAgent?.alive === true);
@@ -1150,6 +1165,36 @@ export class DaemonPTYBridge extends EventEmitter {
       // Main heard `running` from this turn; nothing else would retract it.
       this.emit('idle', { sessionId: this.sessionId, ...(preTurn ? { preTurn: true } : {}) });
     }
+  }
+
+  /**
+   * #2673 — Claude Code's running title (`◐`/`◑`, up for the whole of every
+   * turn it runs) over a boot episode that a prompt opened: the agent's word
+   * that the episode is a turn. #1670 keeps the first submit after a launch a
+   * boot episode because it may only have answered a dialog; the next submit
+   * would find this title and keep the turn (startAnsweredTurn). Left a boot
+   * episode, the turn never reached main as one, so its end could not settle
+   * the pane either. Only when the episode began with a prompt typed into
+   * Claude Code (claudePromptAt): the launch line, a startup paint and a
+   * dialog's bare Enter stay boot episodes.
+   */
+  private noteClaudeTitle(title: string): void {
+    if (!CLAUDE_RUNNING_TITLE.test(title)) return;
+    this.claudeRunningTitleAt = this.lastTitleAt;
+    if (!this.turnOpen || !this.bootEpisode || this.awaitingHuman || this.muted) return;
+    if (this.claudePromptAt === 0 || this.claudePromptAt < this.turnOpenedAt || !this.paneAgentTitlesTurns()) return;
+    this.bootEpisode = false;
+    this.reportMidTurn();
+  }
+
+  /** The pane's agent reads its turns off its title (registry `titleTurns`):
+   *  the tracked process's agent when it names one, else the agent on the screen. */
+  private paneAgentTitlesTurns(): boolean {
+    // A live pick with no slug (a wrapper, an unknown child) names no agent:
+    // the screen's then stands.
+    const tracked = this.trackedAgent?.alive ? this.trackedAgent.slug : undefined;
+    const slug = tracked ?? agentDisplayToSlug(this.agentDetector?.getLastAgent() ?? '');
+    return agentRow(slug)?.titleTurns === true;
   }
 
   /**
@@ -1593,6 +1638,22 @@ export class DaemonPTYBridge extends EventEmitter {
       // means no spinner either; the spinner title is output too. Softly, so
       // the next hook of a real turn resumes the same episode.
       if (this.byteOpenedTurn && !this.awaitingHuman) this.closeTurn(true);
+      // #2673: on a pane whose hooks have not reported, nothing else ends a
+      // turn: no Stop hook, and Claude Code's idle prompt draws nothing the
+      // detector reads. Claude Code refreshes its running title about once a
+      // second for the whole turn, so silence under its idle title `✳` is the
+      // turn over. Not the title edge alone: Claude Code also sets `✳` the
+      // moment a permission dialog opens, a few ms before the dialog's rows,
+      // and by now the detector has seen those (awaitingHuman). Softly, as a
+      // detector settle: a later running edge resumes the episode.
+      // Only a turn Claude Code's spinner ran in (a sample newer than the
+      // episode's start), under an idle title set after that sample.
+      if (
+        this.turnOpen && !this.bootEpisode && !this.hookSeen && !this.awaitingHuman
+        && this.paneAgentTitlesTurns()
+        && this.claudeRunningTitleAt > 0 && this.claudeRunningTitleAt >= this.turnOpenedAt
+        && titleShowsFinishedTurn({ title: this.lastTitle, at: this.lastTitleAt }, 'claude', this.claudeRunningTitleAt)
+      ) this.closeTurn(true);
       if (this.explicitTerminalStatus) return;
       this.emit('idle', { sessionId: ptyId, ...(this.isPreTurn() ? { preTurn: true } : {}) });
     });
@@ -1746,6 +1807,7 @@ export class DaemonPTYBridge extends EventEmitter {
         if (CLAUDE_RUNNING_TITLE.test(title)) this.noteSpinnerTitle();
         else if (this.spinnerOpenedTurn && this.turnOpen && !this.awaitingHuman && CLAUDE_IDLE_TITLE.test(title)) this.endSpinnerTurn();
         this.noteTitleAwaitingHuman(sessionId);
+        this.noteClaudeTitle(title);
         this.noteCodexTitleSpinner(sessionId);
         return;
       }
@@ -1795,6 +1857,7 @@ export class DaemonPTYBridge extends EventEmitter {
           // open (an agent's, or the Enter that launched the next one) is over.
           if (parsed.type === 'command_start' || parsed.type === 'command_end') this.noteAgentEnded();
           this.codexBootWindow = parsed.type === 'command_start' || (parsed.type !== 'command_end' && this.codexBootWindow);
+          if (parsed.type === 'prompt_start' || parsed.type === 'prompt_end') this.shellPromptSeen = true;
           if (parsed.type === 'prompt_end') {
             // The first prompt is empty when no key has reached the pane;
             // passive input (counted by inputRevision) does not type.
@@ -2161,6 +2224,7 @@ export class DaemonPTYBridge extends EventEmitter {
     this.keyInputRevision = 0;
     this.lastKeyInputAt = 0;
     this.shellCommandRunning = false;
+    this.shellPromptSeen = false;
     this.shellSubmittedKeyRevision = undefined;
     this.shellCommandKeyRevision = 0;
     this.emptyShellPrompt = false;

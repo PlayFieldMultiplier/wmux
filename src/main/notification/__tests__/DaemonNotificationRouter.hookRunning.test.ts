@@ -215,6 +215,45 @@ describe('DaemonNotificationRouter — turn start lights the pane', () => {
     router.stop();
   });
 
+  // #2673 — that idle edge carries no turn of its own, and an unmarked idle
+  // leaves the renderer's activity stamp holding Running for 120 s.
+  it('the idle edge after a daemon turn that ended while printing settles the pane', () => {
+    const { router, captured } = makeRouter();
+    captured.turn?.({ sessionId: PTY, running: true });
+    captured.active?.({ sessionId: PTY });
+    captured.turn?.({ sessionId: PTY, running: false });
+    captured.idle?.({ sessionId: PTY, agentMidTurn: false });
+    expect(broadcastMetadataUpdateMock).toHaveBeenLastCalledWith(null, { ptyId: PTY, agentStatus: 'idle', settled: true });
+    router.stop();
+    clearSuppression(PTY);
+  });
+
+  it.each([
+    ['a prompt submit', (c: Captured) => c.agent?.(metadataEvent('agent.user_prompt_submit'))],
+    ['a burst the byte heuristic lights', (c: Captured) => c.active?.({ sessionId: PTY })],
+  ])('a new turn before the idle edge (%s) keeps that silence a plain idle', (_label, startNext) => {
+    const { router, captured } = makeRouter(stubHookRouter(false));
+    captured.turn?.({ sessionId: PTY, running: true });
+    captured.active?.({ sessionId: PTY });
+    captured.turn?.({ sessionId: PTY, running: false });
+    startNext(captured);
+    captured.idle?.({ sessionId: PTY, agentMidTurn: false });
+    expect(broadcastMetadataUpdateMock.mock.calls.some(([, p]) => (p as { settled?: boolean }).settled === true)).toBe(false);
+    router.stop();
+    clearSuppression(PTY);
+  });
+
+  it('byte silence inside the next daemon turn is not that settle', () => {
+    const { router, captured } = makeRouter();
+    captured.turn?.({ sessionId: PTY, running: true });
+    captured.active?.({ sessionId: PTY });
+    captured.turn?.({ sessionId: PTY, running: false });
+    captured.turn?.({ sessionId: PTY, running: true }); // the next prompt, still printing
+    captured.idle?.({ sessionId: PTY, agentMidTurn: true });
+    expect(broadcastMetadataUpdateMock.mock.calls.some(([, p]) => (p as { settled?: boolean }).settled === true)).toBe(false);
+    router.stop();
+  });
+
   it('a daemon turn end never settles over the result or dialog the pane shows', () => {
     const { router, captured } = makeRouter();
     captured.turn?.({ sessionId: PTY, running: true });
@@ -634,6 +673,54 @@ describe('DaemonNotificationRouter — the interrupt row closes the turn', () =>
     markEscapeKey(PTY);
     captured.interrupted?.({ sessionId: PTY });
     expect(broadcastMetadataUpdateMock).not.toHaveBeenCalled();
+    router.stop();
+  });
+
+  // #2673 — with no UserPromptSubmit hook no latch is claimed, and the pane's
+  // Running comes from the renderer's 120 s activity stamp. Only a settle
+  // withdraws that stamp; an unmarked idle leaves it.
+  it.each([
+    ['tool hooks but no UserPromptSubmit', true],
+    ['no hooks at all', false],
+  ])('settles an unlatched running pane when the row follows an Escape (%s)', (_label, toolHook) => {
+    const { router, captured } = makeRouter(stubHookRouter(false));
+    captured.active?.({ sessionId: PTY, agentName: 'Claude Code' });
+    if (toolHook) captured.agent?.(metadataEvent('agent.tool_started'));
+    expect(metadataHandlerMocks.lastBroadcastAgentStatus.get(PTY)).toBe('running');
+
+    markEscapeKey(PTY);
+    captured.interrupted?.({ sessionId: PTY });
+    expect(broadcastMetadataUpdateMock).toHaveBeenLastCalledWith(null, { ptyId: PTY, agentStatus: 'idle', settled: true });
+    router.stop();
+  });
+
+  it.each([
+    ['latched', true],
+    ['unlatched', false],
+  ])('never clears a pending approval on an Escape and its row (%s)', (_label, latched) => {
+    const { router, captured } = makeRouter(stubHookRouter(latched));
+    captured.active?.({ sessionId: PTY, agentName: 'Claude Code' });
+    captured.agent?.({
+      sessionId: PTY,
+      event: { agent: 'Claude Code', status: 'awaiting_input', message: 'Allow Bash?', source: 'detector' },
+    });
+    expect(lastStatus()).toBe('awaiting_input');
+    broadcastMetadataUpdateMock.mockClear();
+
+    markEscapeKey(PTY);
+    captured.interrupted?.({ sessionId: PTY });
+    expect(broadcastMetadataUpdateMock.mock.calls.some(([, p]) => (p as { agentStatus?: string }).agentStatus === 'idle')).toBe(false);
+    expect(metadataHandlerMocks.lastBroadcastAgentStatus.get(PTY)).toBe('awaiting_input');
+    router.stop();
+  });
+
+  it('a lone Escape with no row ends nothing: the silence after it is not a settle', () => {
+    const { router, captured } = makeRouter(stubHookRouter(false));
+    captured.active?.({ sessionId: PTY, agentName: 'Claude Code' });
+    markEscapeKey(PTY);
+    captured.idle?.({ sessionId: PTY });
+    expect(broadcastMetadataUpdateMock.mock.calls.some(([, p]) => (p as { settled?: boolean }).settled === true)).toBe(false);
+    expect(metadataHandlerMocks.runningClaim.has(PTY)).toBe(true);
     router.stop();
   });
 });

@@ -257,6 +257,11 @@ export interface AgentIdentityRow {
    *  (agentTitleRules RUNNING_TITLE; DaemonPTYBridge noteCodexTitleSpinner).
    *  Claude's spinner has its own path in the bridge, so it is not listed. */
   readonly titleRunning?: true;
+  /** #2673 — a pane whose hooks do not report reads its turns off the agent's
+   *  window title: the running title (`◐`/`◑`) holds for the whole turn and
+   *  the idle one (`✳`) follows its end (DaemonPTYBridge noteClaudeTitle and
+   *  its idle edge). */
+  readonly titleTurns?: true;
   /** First-run "Agent ready" card; see {@link AgentSetupSpec}. */
   readonly setup?: AgentSetupSpec;
 }
@@ -297,6 +302,7 @@ export const AGENT_IDENTITIES = [
     rewindPicker: true,
     tokenUsage: true,
     modelCatalog: true,
+    titleTurns: true,
     setup: {
       binary: 'claude',
       // Native installer: https://code.claude.com/docs/en/setup (~/.local/bin).

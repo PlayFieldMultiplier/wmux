@@ -96,6 +96,30 @@ export function settleHookTurnToIdle(
 }
 
 /**
+ * Settle a pane whose agent confirmed a lone Escape as an interrupt (its
+ * "Interrupted" row, or Claude Code's idle title, right after the key).
+ *
+ * A latched pane settles through `settleHookTurnToIdle`. An UNLATCHED pane
+ * (#2673: no UserPromptSubmit hook, so no turn start ever claimed the latch)
+ * still has the renderer holding a running claim on its 120 s activity stamp,
+ * and no Stop hook follows an interrupt to withdraw it. The agent's own
+ * confirmation is proof the turn ended, so that claim is settled too, exactly
+ * as the process-death edge does. A pane showing an unread result or a dialog
+ * (`awaiting_input`) is left as it is. True when the pane was settled.
+ */
+export function settleConfirmedInterrupt(
+  ptyId: string,
+  router: HookSignalRouter | null,
+  win: BrowserWindow | null,
+  now: number = Date.now(),
+): boolean {
+  if (settleHookTurnToIdle(ptyId, router, win, now)) return true;
+  if (!ptyId || !holdsUnsettledRunningClaim(ptyId)) return false;
+  broadcastSettledIdle(ptyId, win, now);
+  return true;
+}
+
+/**
  * The one way main says `running` for an agent turn the daemon reports (its
  * `agent.turn` edge, a mid-turn idle edge, a resubscribe's snapshot): never
  * over a pane waiting on a human, which shows `awaiting_input` (an approval,

@@ -9,14 +9,20 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => {
   const lastBroadcastAgentStatus = new Map<string, string>();
+  // The funnel's outstanding running-claim record (#1463), same rule as metadata.handler.
+  const runningClaim = new Set<string>();
   const broadcastMetadataUpdate = vi.fn(
-    (_win: unknown, payload: { ptyId?: string; agentStatus?: string }) => {
+    (_win: unknown, payload: { ptyId?: string; agentStatus?: string; settled?: boolean }) => {
       if (payload.ptyId && payload.agentStatus !== undefined) {
         lastBroadcastAgentStatus.set(payload.ptyId, payload.agentStatus);
       }
+      if (payload.ptyId) {
+        if (payload.settled === true) runningClaim.delete(payload.ptyId);
+        else if (payload.agentStatus === 'running') runningClaim.add(payload.ptyId);
+      }
     },
   );
-  return { broadcastMetadataUpdate, lastBroadcastAgentStatus };
+  return { broadcastMetadataUpdate, lastBroadcastAgentStatus, runningClaim };
 });
 
 vi.mock('electron', () => ({
@@ -33,6 +39,7 @@ vi.mock('../../ipc/handlers/metadata.handler', () => ({
   broadcastMetadataUpdate: mocks.broadcastMetadataUpdate,
   getLastBroadcastAgentStatus: (ptyId: string) => mocks.lastBroadcastAgentStatus.get(ptyId),
   clearLastBroadcastAgentStatus: (ptyId: string) => { mocks.lastBroadcastAgentStatus.delete(ptyId); },
+  hasOutstandingRunningClaim: (ptyId: string) => mocks.runningClaim.has(ptyId),
 }));
 
 import { PTYBridge } from '../PTYBridge';
@@ -40,6 +47,7 @@ import type { PTYManager, PTYInstance } from '../PTYManager';
 import { HookSignalRouter } from '../../hooks/HookSignalRouter';
 import { SignalLatencyMeter } from '../../../shared/hooks/SignalLatencyMeter';
 import { clearPty as clearSuppression, recentlyEscaped, SETTLE_REDRAW_GUARD_MS } from '../../notification/idleSuppression';
+import { ESCAPE_WIN32 } from '../../../shared/win32InputKeys';
 
 interface MockProcess {
   onData: (cb: (data: string) => void) => void;
@@ -241,6 +249,7 @@ describe('PTYBridge lone Escape confirmed by the agent\'s "Interrupted" row', ()
     vi.useFakeTimers();
     mocks.broadcastMetadataUpdate.mockClear();
     mocks.lastBroadcastAgentStatus.clear();
+    mocks.runningClaim.clear();
     clearSuppression('p1');
   });
   afterEach(() => {
@@ -266,6 +275,28 @@ describe('PTYBridge lone Escape confirmed by the agent\'s "Interrupted" row', ()
     proc.emitData(ROW);
     vi.advanceTimersByTime(50);
     expect(router.governsRunningState('p1')).toBe(true);
+  });
+
+  // #2673 — no UserPromptSubmit hook, so no latch: the pane's Running is the
+  // byte heuristic's claim. Windows writes Esc as a win32-input-mode record.
+  it.each([
+    ['bare ESC', '\x1b'],
+    ['win32-input-mode record', ESCAPE_WIN32],
+  ])('settles an unlatched running pane when the row confirms a lone Escape (%s)', (_label, esc) => {
+    const { bridge, router, proc } = makeBridge();
+    bridge.setupDataForwarding('p1');
+    proc.emitData('Claude Code v2.1.309\r\n  bypass permissions on\r\n');
+    vi.advanceTimersByTime(50);
+    mocks.broadcastMetadataUpdate.mockClear();
+    mocks.lastBroadcastAgentStatus.set('p1', 'running');
+    mocks.runningClaim.add('p1');
+    expect(router.governsRunningState('p1')).toBe(false);
+
+    bridge.noteInterruptInput('p1', esc);
+    proc.emitData(ROW);
+    vi.advanceTimersByTime(50);
+    expect(mocks.broadcastMetadataUpdate).toHaveBeenCalledWith(expect.anything(), { ptyId: 'p1', agentStatus: 'idle', settled: true });
+    expect(recentlyEscaped('p1')).toBe(false);
   });
 });
 

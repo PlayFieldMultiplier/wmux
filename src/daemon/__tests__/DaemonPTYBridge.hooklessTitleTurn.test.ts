@@ -1,0 +1,262 @@
+// #2673 — Claude Code with no hooks fires no Stop, and the daemon read no other
+// turn end: a turn that finished on its own stayed open (Running in the
+// sidebar until the next prompt), and a session's first turn never counted as
+// one (#1670's boot episode), so its end reached main as plain byte silence.
+// Claude Code refreshes `◐`/`◑` in its title about once a second for the whole
+// of every turn and sets `✳` when the turn ends, or when a permission dialog
+// opens (titles from live 2.1.310 captures).
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import type { IPty } from 'node-pty';
+import { DaemonPTYBridge } from '../DaemonPTYBridge';
+import { PromptEventLog } from '../PromptEventLog';
+import { RingBuffer } from '../RingBuffer';
+import { recordWasMidTurn } from '../recoveryHint';
+
+const BIG = 'x'.repeat(3000); // > ActivityMonitor's 2 KB active threshold
+const LAUNCH_OUTPUT = '\x1b[?2004l\x1b]133;C\x07';
+const IDLE = '\x1b]0;✳ Claude Code\x07';
+const RUNNING = '\x1b]0;◐ Claude Code\x07';
+const SILENCE_MS = 6000; // past ActivityMonitor's idle delay
+
+function makeFakePty(): { pty: IPty; feed: (data: string) => void } {
+  let dataHandler: ((data: string) => void) | null = null;
+  const pty = {
+    onData: (cb: (data: string) => void) => {
+      dataHandler = cb;
+      return { dispose: () => { dataHandler = null; } };
+    },
+    onExit: () => ({ dispose: () => undefined }),
+  } as unknown as IPty;
+  return { pty, feed: (data: string) => dataHandler?.(data) };
+}
+
+describe('DaemonPTYBridge — a hookless Claude Code turn ends in silence under its idle title (#2673)', () => {
+  let bridge: DaemonPTYBridge;
+  let feed: (data: string) => void;
+  let edges: Array<number | null>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    bridge = new DaemonPTYBridge();
+    const fake = makeFakePty();
+    feed = fake.feed;
+    edges = [];
+    bridge.on('agentTurn', (p: { runningSince: number | null }) => edges.push(p.runningSince));
+    bridge.setupDataForwarding(fake.pty, new RingBuffer(65536), 'sess-1', new PromptEventLog());
+    // Launched from a shell with OSC 133, as wmux's shells are.
+    feed('\x1b]133;A\x07$ \x1b]133;B\x07');
+    bridge.noteInput('claude --safe-mode\r');
+    feed(LAUNCH_OUTPUT);
+    vi.advanceTimersByTime(300);
+    feed(IDLE + 'Claude Code v2.1.310\r\n  bypass permissions on\r\n' + BIG);
+    vi.advanceTimersByTime(SILENCE_MS);
+    bridge.noteAgentProcess({ slug: 'claude', alive: true });
+  });
+
+  afterEach(() => {
+    bridge.cleanup();
+    vi.useRealTimers();
+  });
+
+  /** Submit a prompt and let its turn run for a while under the spinner title. */
+  function runTurn(prompt: string): void {
+    bridge.noteInput(prompt);
+    bridge.noteInput('\r');
+    for (let i = 0; i < 3; i++) {
+      vi.advanceTimersByTime(1000);
+      feed(RUNNING + BIG);
+    }
+  }
+
+  it('the first turn after the launch counts once the title runs, and ends in silence under the idle title', () => {
+    runTurn('reply hi');
+    expect(bridge.isAgentMidTurn()).toBe(true);
+
+    feed(IDLE + 'hi\r\n');
+    expect(bridge.isTurnOpen()).toBe(true); // the idle title alone ends nothing
+    vi.advanceTimersByTime(SILENCE_MS);
+    expect(bridge.isTurnOpen()).toBe(false);
+    expect(edges).toEqual([expect.any(Number), null]);
+  });
+
+  it('a later turn ends the same way', () => {
+    runTurn('reply hi');
+    feed(IDLE);
+    vi.advanceTimersByTime(SILENCE_MS);
+    edges.length = 0;
+
+    runTurn('reply bye');
+    expect(bridge.isAgentMidTurn()).toBe(true);
+    feed(IDLE + 'bye\r\n');
+    vi.advanceTimersByTime(SILENCE_MS);
+    expect(bridge.isTurnOpen()).toBe(false);
+    expect(edges).toEqual([expect.any(Number), null]);
+  });
+
+  it('#1670: a first Enter that only answered a dialog stays a boot episode', () => {
+    bridge.noteInput('\r'); // "Trust this folder?" answered; no turn starts
+    vi.advanceTimersByTime(100);
+    feed(IDLE + BIG);
+    expect(bridge.isTurnOpen()).toBe(true);
+    expect(bridge.isAgentMidTurn()).toBe(false);
+    expect(edges).toEqual([]);
+  });
+
+  // Recovery continues a pane whose persisted record says its agent was
+  // mid-turn when the daemon died: DaemonSessionManager mirrors every
+  // agentTurn edge onto meta.turnRunningSince, and recordWasMidTurn reads it.
+  // (The transcript must still show the turn open: recordedTurnStillOpen.)
+  describe('what recovery reads after a crash', () => {
+    const recordAtCrash = () => ({
+      ...(edges.at(-1) != null ? { turnRunningSince: edges.at(-1) as number } : {}),
+      lastActivity: new Date().toISOString(),
+    });
+
+    it('a hookless first turn the daemon died in is continued', () => {
+      runTurn('refactor the parser');
+      expect(recordWasMidTurn(recordAtCrash(), Date.now())).toBe(true);
+    });
+
+    it('a first Enter that only answered the trust dialog is not', () => {
+      bridge.noteInput('\r'); // "Trust this folder?" answered; no turn starts
+      vi.advanceTimersByTime(100);
+      feed(IDLE + BIG); // the composer paints under the idle title
+      expect(recordWasMidTurn(recordAtCrash(), Date.now())).toBe(false);
+    });
+
+    it('a turn that already finished is not', () => {
+      runTurn('reply hi');
+      feed(IDLE + 'hi\r\n');
+      vi.advanceTimersByTime(SILENCE_MS);
+      expect(recordWasMidTurn(recordAtCrash(), Date.now())).toBe(false);
+    });
+  });
+
+  it('a silent stretch under an idle title from before the turn leaves the turn open', () => {
+    runTurn('reply hi');
+    feed(IDLE);
+    vi.advanceTimersByTime(SILENCE_MS);
+    // The next turn: a long tool that has not painted the spinner yet.
+    bridge.noteInput('run the migration');
+    bridge.noteInput('\r');
+    vi.advanceTimersByTime(80);
+    feed(BIG);
+    vi.advanceTimersByTime(SILENCE_MS);
+    expect(bridge.isTurnOpen()).toBe(true);
+  });
+
+  it('leaves a hookless Codex pane alone, whatever its title', () => {
+    bridge.noteAgentProcess({ slug: 'codex', alive: true });
+    runTurn('explain the parser'); // the boot episode
+    vi.advanceTimersByTime(SILENCE_MS);
+    runTurn('refactor the parser'); // a turn of its own
+    expect(bridge.isTurnOpen()).toBe(true);
+    feed(IDLE);
+    vi.advanceTimersByTime(SILENCE_MS);
+    expect(bridge.isTurnOpen()).toBe(true);
+  });
+
+  it('a spinner painted during the startup, before any prompt, does not make the launch a turn', () => {
+    feed(RUNNING + BIG); // the launch's own boot episode is still open
+    expect(bridge.isAgentMidTurn()).toBe(false);
+    expect(edges).toEqual([]);
+  });
+
+  it('#1670: a spinner right after the trust dialog\'s bare Enter does not make it a turn', () => {
+    bridge.noteInput('\r'); // "Trust this folder?" answered
+    vi.advanceTimersByTime(100);
+    feed(RUNNING + BIG); // Claude Code starting up behind it
+    expect(bridge.isAgentMidTurn()).toBe(false);
+    expect(edges).toEqual([]);
+  });
+
+  it('leaves a quiet turn alone when the title is not Claude Code\'s idle one', () => {
+    bridge.noteInput('reply hi\r');
+    vi.advanceTimersByTime(80);
+    feed('\x1b]0;⠋ Working\x07' + BIG); // another agent's title
+    vi.advanceTimersByTime(SILENCE_MS);
+    expect(bridge.isTurnOpen()).toBe(true);
+  });
+
+  it('leaves a turn a hook reports to its Stop hook', () => {
+    bridge.noteInput('reply hi\r');
+    bridge.noteAgentStatus('running', true); // UserPromptSubmit
+    feed(RUNNING + BIG);
+    feed(IDLE);
+    vi.advanceTimersByTime(SILENCE_MS);
+    expect(bridge.isAgentMidTurn()).toBe(true);
+    expect(edges).toEqual([expect.any(Number)]); // one start, from the hook; no end
+  });
+
+  it('never ends a turn waiting on a permission dialog, whose title is idle too', () => {
+    runTurn('run the build');
+    feed(IDLE); // set a few ms before the dialog's rows
+    bridge.noteAgentStatus('awaiting_input'); // the detector's permission dialog
+    // The dialog's own paint. Recognising the dialog ends the activity cycle,
+    // so without output behind it no idle edge would come to test at all.
+    feed(BIG);
+    vi.advanceTimersByTime(SILENCE_MS);
+    expect(bridge.isTurnOpen()).toBe(true);
+    expect(bridge.getAgentStatus()).toBe('awaiting_input');
+  });
+});
+
+// Who says the pane runs Claude Code when its first prompt is submitted: the
+// tracked process names it first, the screen when the pick names no agent,
+// and neither for the launch line the shell runs at its own prompt.
+describe('DaemonPTYBridge — the first prompt is read as Claude Code\'s from the tracker or the screen (#2673)', () => {
+  let bridge: DaemonPTYBridge;
+  let feed: (data: string) => void;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    bridge = new DaemonPTYBridge();
+    const fake = makeFakePty();
+    feed = fake.feed;
+    bridge.setupDataForwarding(fake.pty, new RingBuffer(65536), 'sess-1', new PromptEventLog());
+    feed('\x1b]133;A\x07$ \x1b]133;B\x07');
+  });
+
+  afterEach(() => {
+    bridge.cleanup();
+    vi.useRealTimers();
+  });
+
+  function launch(screen: string): void {
+    bridge.noteInput('claude --safe-mode\r');
+    feed(LAUNCH_OUTPUT);
+    vi.advanceTimersByTime(300);
+    feed(screen);
+    vi.advanceTimersByTime(SILENCE_MS);
+  }
+
+  function firstPrompt(): void {
+    bridge.noteInput('reply hi');
+    bridge.noteInput('\r');
+    vi.advanceTimersByTime(80);
+    feed(RUNNING + BIG);
+  }
+
+  it('a tracked Claude Code the screen has not named yet makes the first prompt a turn', () => {
+    launch(IDLE + BIG); // no splash the detector's gate reads
+    bridge.noteAgentProcess({ slug: 'claude', alive: true });
+    expect(bridge.getLastAgent()).toBeNull();
+    firstPrompt();
+    expect(bridge.isAgentMidTurn()).toBe(true);
+  });
+
+  it('a live pick that names no agent leaves it to the screen', () => {
+    launch(IDLE + 'Claude Code v2.1.310\r\n  bypass permissions on\r\n' + BIG);
+    bridge.noteAgentProcess({ alive: true }); // a wrapper the tracker picked
+    expect(bridge.getLastAgent()).toBe('Claude Code');
+    firstPrompt();
+    expect(bridge.isAgentMidTurn()).toBe(true);
+  });
+
+  it('the launch line at the shell\'s own prompt is not that prompt, whatever the tracker still reads alive', () => {
+    bridge.noteAgentProcess({ slug: 'claude', alive: true }); // the previous Claude, its death not seen yet
+    bridge.noteInput('claude --safe-mode\r');
+    feed(RUNNING + BIG); // a startup paint under a running title
+    expect(bridge.isAgentMidTurn()).toBe(false);
+  });
+});

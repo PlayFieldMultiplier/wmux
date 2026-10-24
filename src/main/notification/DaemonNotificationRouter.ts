@@ -21,7 +21,7 @@ import {
   clearLastBroadcastAgentStatus,
 } from '../ipc/handlers/metadata.handler';
 import { noteBootSettled } from './turnEvidence';
-import { settleHookTurnToIdle, broadcastSettledIdle, broadcastTurnRunning, holdsUnreadResult, holdsUnsettledRunningClaim, settleEndedDaemonTurn } from './turnSettle';
+import { settleHookTurnToIdle, settleConfirmedInterrupt, broadcastSettledIdle, broadcastTurnRunning, holdsUnreadResult, holdsUnsettledRunningClaim, settleEndedDaemonTurn } from './turnSettle';
 import { eventBus } from '../events/EventBus';
 import { starPromptSessions } from './starPromptSessions';
 import {
@@ -241,6 +241,16 @@ export class DaemonNotificationRouter {
    * row even when a transcript line was already on the wire.
    */
   private readonly hookActivityPanes = new Set<string>();
+  /**
+   * #2673 — panes whose daemon turn ended while they were still printing. The
+   * turn end could not settle them then (the tail would re-light the pane), so
+   * the idle edge that follows is that turn's settle, not byte silence.
+   */
+  private readonly endedTurnAwaitingIdle = new Set<string>();
+  /** A new turn, or a settle, on the pane: the marker's turn is not the pane's any more. */
+  private forgetEndedTurn(ptyId: string): void {
+    this.endedTurnAwaitingIdle.delete(ptyId);
+  }
   /** Rate limit for the vetoed-turn-end trace — see VETO_TRACE_THROTTLE_MS. */
   private vetoTraceThrottle = createLeadingEdgeThrottle(VETO_TRACE_THROTTLE_MS);
 
@@ -821,6 +831,7 @@ export class DaemonNotificationRouter {
             // pane never touches its authority map: this latch is a separate,
             // narrower claim. See HookSignalRouter.governsRunningState.
             this.getHookRouter?.()?.noteHookTurnStart(payload.sessionId, this.now(), promptSlug ?? null);
+            this.forgetEndedTurn(payload.sessionId);
             broadcastMetadataUpdate(win, {
               ptyId: payload.sessionId,
               agentStatus: 'running',
@@ -851,6 +862,7 @@ export class DaemonNotificationRouter {
               const toolSlug = agentDisplayToSlug(ev.agent);
               if (ev.agent) this.lastAgentNameByPty.set(payload.sessionId, ev.agent);
               this.getHookRouter?.()?.noteHookTurnStart(payload.sessionId, this.now(), toolSlug ?? null);
+              this.forgetEndedTurn(payload.sessionId);
               broadcastMetadataUpdate(win, {
                 ptyId: payload.sessionId,
                 agentStatus: 'running',
@@ -1245,6 +1257,7 @@ export class DaemonNotificationRouter {
         // 입력대기 hint가 "❯"만 남음)도 running 상태에서 agentName이 채워진다.
         // 없으면 필드를 생략해 이전 이름을 보존한다 — 빈 문자열로 덮으면 renderer의
         // Object.assign이 정당한 이름을 지워 사이드바 라벨이 매 버스트마다 깜빡인다.
+        this.forgetEndedTurn(payload.sessionId);
         broadcastMetadataUpdate(this.getWindow(), {
           ptyId: payload.sessionId,
           agentStatus: 'running',
@@ -1266,6 +1279,7 @@ export class DaemonNotificationRouter {
       // missed start edge instead of relying on the activity freshness TTL.
       // The turn's own end settles the pane if no output follows (onAgentTurn).
       if (payload.agentMidTurn === true) {
+        this.forgetEndedTurn(payload.sessionId);
         broadcastTurnRunning(payload.sessionId, this.getWindow(), { daemonTurnOpen: true });
         return;
       }
@@ -1273,6 +1287,13 @@ export class DaemonNotificationRouter {
       // The daemon's own word that no turn ran since the agent's SessionStart:
       // turn-end evidence for the bot workers' idle stops, whatever the dot does.
       if (payload.preTurn === true) noteBootSettled(payload.sessionId, now);
+      // #2673 — the silence after a daemon turn that ended while printing is
+      // that turn's settle. The pane is byte-idle by now (noteByteActivity
+      // above), so a refused settle means the pane no longer shows that turn's
+      // `running` (a result, a dialog, an earlier settle): nothing to retry.
+      if (this.endedTurnAwaitingIdle.delete(payload.sessionId)
+        && !this.getHookRouter?.()?.governsRunningState(payload.sessionId, now)
+        && settleEndedDaemonTurn(payload.sessionId, this.getWindow(), now)) return;
       // Daemon-mode twin of the PTYBridge.onActiveToIdle gate: byte silence on
       // a hook-governed pane is not a turn end (quiet reasoning, a long tool
       // call), so the clear would only make the dot flicker. The hook's Stop
@@ -1398,6 +1419,7 @@ export class DaemonNotificationRouter {
         const agent = this.lastAgentNameByPty.get(payload.sessionId);
         const slug = agent ? agentDisplayToSlug(agent) : undefined;
         this.getHookRouter?.()?.noteHookTurnStart(payload.sessionId, this.now(), slug ?? null);
+        this.forgetEndedTurn(payload.sessionId);
         broadcastMetadataUpdate(this.getWindow(), {
           ptyId: payload.sessionId,
           agentStatus: 'running',
@@ -1469,7 +1491,9 @@ export class DaemonNotificationRouter {
       try {
         if (!recentlyEscaped(payload.sessionId, ESC_INTERRUPT_CONFIRM_MS, this.now())) return;
         clearEscapeKey(payload.sessionId);
-        settleHookTurnToIdle(payload.sessionId, this.getHookRouter?.() ?? null, this.getWindow(), this.now());
+        // The interrupt is the turn's end: its idle edge has nothing left to settle.
+        this.forgetEndedTurn(payload.sessionId);
+        settleConfirmedInterrupt(payload.sessionId, this.getHookRouter?.() ?? null, this.getWindow(), this.now());
       } catch (err) {
         console.warn('[DaemonNotificationRouter] agent interrupted error:', err);
       }
@@ -1480,6 +1504,7 @@ export class DaemonNotificationRouter {
     // sidebar dot when the user closed a terminal intentionally (Codex P2).
     const onSessionEnd = (payload: { sessionId: string }) => {
       this.hookActivityPanes.delete(payload.sessionId);
+      this.forgetEndedTurn(payload.sessionId);
       try {
         broadcastMetadataUpdate(this.getWindow(), {
           ptyId: payload.sessionId,
@@ -1579,12 +1604,17 @@ export class DaemonNotificationRouter {
     const onAgentTurn = (payload: { sessionId: string; running: boolean; afterAnswer?: boolean }) => {
       const id = payload.sessionId;
       if (payload.running) {
+        this.forgetEndedTurn(id);
         if (payload.afterAnswer) broadcastMetadataUpdate(this.getWindow(), { ptyId: id, daemonTurnOpen: true, agentStatus: 'running' });
         else broadcastTurnRunning(id, this.getWindow(), { daemonTurnOpen: true });
         return;
       }
       broadcastMetadataUpdate(this.getWindow(), { ptyId: id, daemonTurnOpen: false });
-      if (!this.getHookRouter?.()?.governsRunningState(id, this.now())) settleEndedDaemonTurn(id, this.getWindow(), this.now());
+      if (this.getHookRouter?.()?.governsRunningState(id, this.now())) return;
+      // Still printing: its idle edge settles it. Only while the pane shows
+      // this turn's `running` (settleEndedDaemonTurn also refuses anything else).
+      if (!settleEndedDaemonTurn(id, this.getWindow(), this.now())
+        && getLastBroadcastAgentStatus(id) === 'running') this.endedTurnAwaitingIdle.add(id);
     };
 
     this.daemonClient.on('session:agentTurn', onAgentTurn);
