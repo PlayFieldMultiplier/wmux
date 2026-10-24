@@ -33,8 +33,9 @@ describe('agent.processExit daemon wiring', () => {
   it('sends it on the DEATH edge only — a launch settles nothing', () => {
     const body = listenerBody();
     const broadcastIdx = body.indexOf("type: 'agent.processExit'");
-    // The nearest preceding statement must be the not-alive guard.
-    const guardIdx = body.lastIndexOf('if (!state.alive) {', broadcastIdx);
+    // The nearest preceding statement must be the not-alive guard. #2673: a
+    // superseded death (a relaunch owns the screen) settles nothing either.
+    const guardIdx = body.lastIndexOf('if (!state.alive && !superseded) {', broadcastIdx);
     expect(guardIdx).toBeGreaterThan(-1);
     expect(guardIdx).toBeLessThan(broadcastIdx);
   });

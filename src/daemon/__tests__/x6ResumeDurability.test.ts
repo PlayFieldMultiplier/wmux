@@ -148,7 +148,8 @@ describe('X6 ② reboot-survival durability', () => {
     const src = fs.readFileSync(daemonIndexPath, 'utf-8');
     const idx = src.indexOf('agentProcessTracker.setStateChangeListener(');
     const body = src.slice(idx, idx + 8000);
-    expect(body).toMatch(/if \(!state\.alive && state\.slug === undefined && managed\.bridge\.getLastAgent\(\)\) \{\s*agentProcessTracker\.arm\(sessionId, managed\.meta\.pid\);/);
+    // #2673: so does a superseded death, whose relaunch owns the screen.
+    expect(body).toMatch(/if \(!state\.alive && \(state\.slug === undefined \|\| superseded\) && managed\.bridge\.getLastAgent\(\)\) \{\s*agentProcessTracker\.arm\(sessionId, managed\.meta\.pid\);/);
   });
 
   it('a hook that resolves to a live agent consumes the recovery offer', () => {

@@ -9257,6 +9257,12 @@ async function main(): Promise<void> {
     return { epoch: guard.epoch, isCurrent: () => sessionManager.getSession(sessionId) === managed && guard.isCurrent() };
   });
   agentProcessTracker.setStateChangeListener((sessionId, state) => {
+    // #2673 — the death of a process the pane no longer runs: a relaunch the
+    // tracker has not picked yet owns the pane. It does not settle that
+    // launch's pane status. Its hook authority still expires below: the
+    // detector veto belongs to the dead launch (#919), and the relaunch's
+    // own hooks earn it back.
+    const superseded = sessionManager.getSession(sessionId)?.bridge.isSupersededAgentDeath(state) === true;
     if (!state.alive) hookIngest?.expireAuthorityFor(sessionId, state.slug);
     if (!state.alive) automationEngine?.onAgentProcessExit(sessionId);
     // The agent that hit the limit is gone; a relaunch is a new agent.
@@ -9288,7 +9294,7 @@ async function main(): Promise<void> {
     // pane — so without this broadcast the dot would stay lit until the
     // authority TTL. Sent on the death edge only; `alive:true` is the launch
     // edge and settles nothing.
-    if (!state.alive) {
+    if (!state.alive && !superseded) {
       pipeServer.broadcast({
         type: 'agent.processExit',
         sessionId,
@@ -9313,7 +9319,9 @@ async function main(): Promise<void> {
     // alive, so an agent launched in the meantime was never attributed.
     // Probe again, or the launch edge that consumes the recovery offer and
     // names the pane never comes.
-    if (!state.alive && state.slug === undefined && managed.bridge.getLastAgent()) {
+    // A superseded death likewise: the relaunch that owns the screen is
+    // picked now, so its own launch and death edges follow.
+    if (!state.alive && (state.slug === undefined || superseded) && managed.bridge.getLastAgent()) {
       agentProcessTracker.arm(sessionId, managed.meta.pid);
     }
     // A death edge, or a launch edge for a different agent than the last one

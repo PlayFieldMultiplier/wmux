@@ -630,6 +630,10 @@ interface TrackedAgent {
   /** The last executable check of `pid` (isAgentImage), keyed by the slug and
    *  argv it was made for: one image read per launch, not per delivery. */
   image?: { key: string; ok: boolean };
+  /** #2673 — the pane detector's identity epoch once this process was picked
+   *  (after its launch edge applied). Its death edge carries it, so the pane
+   *  can tell the death of the launch it runs from a superseded one's. */
+  launchEpoch?: number;
 }
 
 /** #1727 — what the tracker needs to follow agents inside WSL panes. All
@@ -659,6 +663,9 @@ export interface TrackedAgentState {
   replacedLive?: true;
   /** Captured detector epoch on a fresh probe; null means its owner changed. */
   identityEpoch?: number | null;
+  /** Death edges only: the detector epoch the dead process was tracked under
+   *  (TrackedAgent.launchEpoch). Absent when the pick had no identity guard. */
+  launchEpoch?: number;
 }
 
 export class AgentProcessTracker {
@@ -771,6 +778,17 @@ export class AgentProcessTracker {
   /** Captures only detector-seeding authority; process liveness keeps its own generation guard. */
   setIdentityProbeGuard(capture: (sessionId: string) => { epoch: number; isCurrent: () => boolean } | undefined): void {
     this.identityProbeGuard = capture;
+  }
+
+  /** The death edge of a tracked process: its slug, and the epoch it was tracked under. */
+  private deathState(s: TrackedAgent): TrackedAgentState {
+    return { ...(s.slug ? { slug: s.slug } : {}), alive: false, ...(s.launchEpoch !== undefined ? { launchEpoch: s.launchEpoch } : {}) };
+  }
+
+  /** After a launch edge applied: the epoch the pane's detector now has, which its death edge carries. */
+  private stampLaunchEpoch(sessionId: string, s: TrackedAgent): void {
+    const epoch = this.identityProbeGuard?.(sessionId)?.epoch;
+    if (epoch !== undefined) s.launchEpoch = epoch;
   }
 
   private emitState(sessionId: string, state: TrackedAgentState): void {
@@ -888,7 +906,7 @@ export class AgentProcessTracker {
             // drop its watch so the monitor cannot report the same death again.
             this.watcher.unwatch(AgentProcessTracker.watchKey(sessionId));
             cur.alive = false;
-            this.emitState(sessionId, { ...(cur.slug ? { slug: cur.slug } : {}), alive: false });
+            this.emitState(sessionId, this.deathState(cur));
           }
           // No named agent → leave the session as it is.
           if (!pick?.slug) {
@@ -902,26 +920,25 @@ export class AgentProcessTracker {
           this.lastFailedAt.set(sessionId, Date.now());
           return;
         }
-        this.states.set(sessionId, {
+        const picked: TrackedAgent = {
           pid: pick.pid,
           alive: true,
           ...(pick.slug ? { slug: pick.slug } : {}),
-        });
+        };
+        this.states.set(sessionId, picked);
         this.watcher.watch(AgentProcessTracker.watchKey(sessionId), pick.pid, () => {
           const cur = this.states.get(sessionId);
           // Only the SAME watched pid may flip the flag — a re-probe that
           // landed after this watch was superseded must win.
           if (cur && cur.pid === pick.pid) {
             cur.alive = false;
-            this.emitState(sessionId, {
-              ...(cur.slug ? { slug: cur.slug } : {}),
-              alive: false,
-            });
+            this.emitState(sessionId, this.deathState(cur));
           }
         });
         this.emitState(sessionId, { ...(pick.slug ? { slug: pick.slug } : {}), alive: true, observedAt,
           ...(identity ? { identityEpoch: identity.isCurrent() ? (ownsSnapshot ? identity.epoch : undefined) : null } : {}),
         });
+        this.stampLaunchEpoch(sessionId, picked);
       } catch {
         // Enumeration failed (timeout, spawn error) — undecided, never a lie.
         if (requireSlug) this.slugProbeBlockedUntil.set(sessionId, Date.now() + ARM_BACKOFF_MS);
@@ -977,12 +994,13 @@ export class AgentProcessTracker {
       // Only the same tracked process may flip the flag.
       if (this.states.get(sessionId) !== state) return;
       state.alive = false;
-      this.emitState(sessionId, { slug: agent.slug, alive: false });
+      this.emitState(sessionId, this.deathState(state));
     });
     this.emitState(sessionId, { slug: agent.slug, alive: true, ...(observedAt !== undefined ? { observedAt } : {}),
       ...(replacedLive ? { replacedLive: true } : {}),
       ...(identity ? { identityEpoch: identity.isCurrent() ? identity.epoch : null } : {}),
     });
+    this.stampLaunchEpoch(sessionId, state);
   }
 
   /** true = agent process observed alive; false = it was observed and DIED
@@ -1174,7 +1192,7 @@ export class AgentProcessTracker {
     if (s.wsl) this.wsl.watcher?.unwatch(AgentProcessTracker.watchKey(sessionId));
     else this.watcher.unwatch(AgentProcessTracker.watchKey(sessionId));
     s.alive = false;
-    this.emitState(sessionId, { ...(s.slug ? { slug: s.slug } : {}), alive: false });
+    this.emitState(sessionId, this.deathState(s));
   }
 
   /** Drop all tracking for a session (died / interrupted / killed). */
