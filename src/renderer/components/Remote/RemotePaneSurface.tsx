@@ -143,6 +143,7 @@ export default function RemotePaneSurface({ hostId, sessionId, surfaceId, shell,
           sessionId={sessionId}
           onTitleChange={(title) => onTitleChange(surfaceId, title)}
           fixedFont={fixedFont}
+          dropSurfaceId={surfaceId}
         />
       </div>
     </div>

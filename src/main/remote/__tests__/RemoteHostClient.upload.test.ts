@@ -12,12 +12,15 @@ describe('RemoteHostClient.upload', () => {
   it('posts a photo to /api/upload and a file to /api/upload-file with its extension', async () => {
     const fetchImpl = vi.fn(async () => json(201, { path: '/p', expiresAt: 1 }));
     const client = new RemoteHostClient(host(), fetchImpl as unknown as typeof fetch);
-    expect(await client.upload(new Uint8Array([1]), null)).toEqual({ ok: true, path: '/p' });
+    const bytes = new Uint8Array([1]);
+    expect(await client.upload(bytes, null)).toEqual({ ok: true, path: '/p' });
     await client.upload(new Uint8Array([1]), 'pdf');
     const [[photoUrl, photoInit], [fileUrl, fileInit]] = fetchImpl.mock.calls as unknown as Array<[string, RequestInit]>;
     expect(photoUrl).toBe('https://desk.tail1.ts.net:9600/api/upload');
     expect(fileUrl).toBe('https://desk.tail1.ts.net:9600/api/upload-file');
     expect(photoInit.redirect).toBe('error');
+    // Sent as is: no second copy of up to 10 MB.
+    expect(photoInit.body).toBe(bytes);
     expect((photoInit.headers as Record<string, string>).Authorization).toBe('Bearer tok');
     expect((photoInit.headers as Record<string, string>)['X-Wmux-File-Extension']).toBeUndefined();
     expect((fileInit.headers as Record<string, string>)['X-Wmux-File-Extension']).toBe('pdf');

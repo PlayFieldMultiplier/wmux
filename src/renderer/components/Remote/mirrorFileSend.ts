@@ -1,4 +1,4 @@
-import type { RemoteSendFailure, RemoteSendResult } from '../../../shared/remoteUpload';
+import type { RemoteSendFailure, RemoteWriteResult } from '../../../shared/remoteUpload';
 import type { TranslationKey } from '../../i18n/locales/en';
 import { t as translate } from '../../i18n';
 import { useStore } from '../../stores';
@@ -7,35 +7,42 @@ import { useStore } from '../../stores';
 //
 // The app-wide drop handler (AppLayout) knows which surface is active, and only
 // the mirror showing it knows its attach and whether the remote app asked for
-// bracketed paste. Each mounted mirror registers here under its host and
-// session; a drop on that surface is handed to it.
+// bracketed paste. Each mirror shown as a tab registers here under its own
+// surface id; a drop on that surface is handed to it, with the function that
+// names the OS drop to main.
 
-type DropTarget = (paths: string[]) => void;
+/** Names an OS drop to main by a one-use token (from preload's onFileDrop). */
+export type RegisterDrop = () => Promise<string | null>;
+type DropTarget = (registerDrop: RegisterDrop) => void;
 
 const dropTargets = new Map<string, DropTarget>();
 
-const targetKey = (hostId: string, sessionId: string): string => `${hostId}\u0000${sessionId}`;
-
-/** Take drops for this host's session until the returned function runs. */
-export function registerMirrorDropTarget(hostId: string, sessionId: string, target: DropTarget): () => void {
-  const key = targetKey(hostId, sessionId);
-  dropTargets.set(key, target);
+/** Take drops for this surface until the returned function runs. */
+export function registerMirrorDropTarget(surfaceId: string, target: DropTarget): () => void {
+  dropTargets.set(surfaceId, target);
   return () => {
-    if (dropTargets.get(key) === target) dropTargets.delete(key);
+    if (dropTargets.get(surfaceId) === target) dropTargets.delete(surfaceId);
   };
 }
 
-/** Hand a drop to the mirror showing this session; false when none is mounted. */
-export function deliverMirrorDrop(hostId: string | undefined, sessionId: string | undefined, paths: string[]): boolean {
-  const target = hostId && sessionId ? dropTargets.get(targetKey(hostId, sessionId)) : undefined;
+/** Hand a drop to the mirror shown in this surface; false when none is mounted. */
+export function deliverMirrorDrop(surfaceId: string, registerDrop: RegisterDrop): boolean {
+  const target = dropTargets.get(surfaceId);
   if (!target) return false;
-  target(paths);
+  target(registerDrop);
   return true;
 }
 
-const FAILURE_KEYS: Record<RemoteSendFailure, TranslationKey> = {
+type WriteFailure = Exclude<RemoteWriteResult, { ok: true }>['reason'];
+
+/** Every reason a send can end with: the upload's, or the typed write's. */
+export type RemoteSendNotice = RemoteSendFailure | `write-${WriteFailure}`;
+
+const NOTICE_KEYS: Record<RemoteSendNotice, TranslationKey> = {
   'read-only': 'remote.mirror.send.read-only',
   'not-connected': 'remote.mirror.send.not-connected',
+  'pane-changed': 'remote.mirror.send.pane-changed',
+  'already-sending': 'remote.mirror.send.already-sending',
   'too-many': 'remote.mirror.send.too-many',
   'not-a-file': 'remote.mirror.send.not-a-file',
   'too-large': 'remote.mirror.send.too-large',
@@ -45,15 +52,19 @@ const FAILURE_KEYS: Record<RemoteSendFailure, TranslationKey> = {
   unsupported: 'remote.mirror.send.unsupported',
   busy: 'remote.mirror.send.busy',
   full: 'remote.mirror.send.full',
+  'host-unknown': 'remote.mirror.send.host-unknown',
   'bad-path': 'remote.mirror.send.bad-path',
   unquotable: 'remote.mirror.send.unquotable',
-  'prompt-active': 'remote.mirror.send.prompt-active',
   auth: 'remote.mirror.send.auth',
   failed: 'remote.mirror.send.failed',
+  'write-prompt-active': 'remote.mirror.send.prompt-active',
+  'write-auth': 'remote.mirror.send.auth',
+  'write-not-connected': 'remote.mirror.send.pane-changed',
+  'write-failed': 'remote.mirror.send.write-failed',
+  'write-unknown': 'remote.mirror.send.write-unknown',
 };
 
-/** A refused send is a warning toast naming why; a sent one shows in the pane itself. */
-export function showRemoteSendResult(result: RemoteSendResult, host: string): void {
-  if (result.ok) return;
-  useStore.getState().pushToast({ level: 'warn', message: translate(FAILURE_KEYS[result.reason], { host }) });
+/** A send that ended without typing (or may have typed) is a warning toast naming why. */
+export function showRemoteSendNotice(notice: RemoteSendNotice, host: string): void {
+  useStore.getState().pushToast({ level: 'warn', message: translate(NOTICE_KEYS[notice], { host }) });
 }

@@ -744,9 +744,9 @@ export class RemoteHostClient implements RemotePaneEvents {
    * JPEG or PNG (`ext` null), `POST /api/upload-file` otherwise. Answers the
    * host's `path` unchecked (the caller validates it before typing it) or the
    * refusal's status and error tag. A rejected credential latches like every
-   * other call.
+   * other call; `signal` stops the request when the pane is detached.
    */
-  async upload(bytes: Uint8Array, ext: string | null): Promise<RemoteUploadResult> {
+  async upload(bytes: Uint8Array, ext: string | null, signal?: AbortSignal): Promise<RemoteUploadResult> {
     this.assertSecure('upload');
     if (this.authRejected) throw new RemoteAuthRejectedError('upload');
     const route = ext === null ? '/api/upload' : '/api/upload-file';
@@ -757,9 +757,10 @@ export class RemoteHostClient implements RemotePaneEvents {
         'Content-Type': 'application/octet-stream',
         ...(ext === null ? {} : { 'X-Wmux-File-Extension': ext }),
       },
-      body: new Uint8Array(bytes),
+      // Sent as is, not copied: the bytes come from a file or clipboard read, never a shared buffer.
+      body: bytes as Uint8Array<ArrayBuffer>,
       redirect: 'error',
-      signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(UPLOAD_TIMEOUT_MS)]) : AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
     });
     if (!res.ok) {
       const body = await readErrorBody(res);

@@ -7,7 +7,7 @@ import type { ResumeBinding } from '../../../shared/agentResume';
 import { useStore } from '../../stores';
 import { useT } from '../../hooks/useT';
 import { t as translate } from '../../i18n';
-import { deliverMirrorDrop, showRemoteSendResult } from '../Remote/mirrorFileSend';
+import { deliverMirrorDrop, showRemoteSendNotice } from '../Remote/mirrorFileSend';
 import Sidebar from '../Sidebar/Sidebar';
 import MiniSidebar from '../Sidebar/MiniSidebar';
 import { SidebarSlot } from './SidebarSlot';
@@ -1124,7 +1124,7 @@ export default function AppLayout() {
 
   useEffect(() => {
     // File drop via preload onFileDrop (reliable cross-platform)
-    const removeDrop = window.electronAPI.onFileDrop((paths) => {
+    const removeDrop = window.electronAPI.onFileDrop((paths, registerDrop) => {
       setIsDragging(false);
       dragCounterRef.current = 0;
 
@@ -1155,8 +1155,8 @@ export default function AppLayout() {
       // Another PC's pane: a dropped path names a file on this machine, so the
       // mirror showing it uploads the files to that PC and types their paths there.
       if (activeSurface.surfaceType === 'remote-terminal') {
-        if (!deliverMirrorDrop(activeSurface.remoteHostId, activeSurface.remoteSessionId, paths)) {
-          showRemoteSendResult({ ok: false, reason: 'not-connected' }, translate('remote.hostFallback'));
+        if (!deliverMirrorDrop(activeSurface.id, registerDrop)) {
+          showRemoteSendNotice('not-connected', translate('remote.hostFallback'));
         }
         return;
       }

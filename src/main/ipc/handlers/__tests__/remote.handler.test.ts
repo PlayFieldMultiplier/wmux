@@ -35,9 +35,18 @@ vi.mock('electron', () => {
       appListeners.delete(event);
     }),
   };
-  return { ipcMain, app };
+  // The clipboard's image, for the send-files path.
+  const clipboard = {
+    readImage: vi.fn(() => ({
+      isEmpty: () => false,
+      getSize: () => ({ width: 2, height: 2 }),
+      toPNG: () => Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0]),
+    })),
+  };
+  return { ipcMain, app, clipboard };
 });
 
+import { clipboard } from 'electron';
 import { registerRemoteHandlers } from '../remote.handler';
 import { IPC } from '../../../../shared/constants';
 import type { RemoteAttachmentDescriptor, RemoteHost, RemoteHostPublic, RemoteWorkspacesResponse } from '../../../../shared/remoteHosts';
@@ -111,6 +120,7 @@ function fakeClient(host: RemoteHost) {
     refresh: vi.fn(),
     detachAll: vi.fn(),
     write: vi.fn(async () => undefined),
+    upload: vi.fn(async () => ({ ok: true, path: '/Users/o/.wmux/uploads/phone/photo-2026-10-24T01-02-03-456Z-0123abcd.png' })),
     listWorkspaces: vi.fn(async (): Promise<RemoteWorkspacesResponse> => ({ workspaces: [] })),
     createWorkspace: vi.fn(async (): Promise<{ sessionId: string }> => ({ sessionId: 'web-1' })),
     closeSession: vi.fn(async (): Promise<void> => undefined),
@@ -133,6 +143,7 @@ function fakeClient(host: RemoteHost) {
     detach: ReturnType<typeof vi.fn>;
     detachAll: ReturnType<typeof vi.fn>;
     write: ReturnType<typeof vi.fn>;
+    upload: ReturnType<typeof vi.fn>;
     listWorkspaces: ReturnType<typeof vi.fn>;
     createWorkspace: ReturnType<typeof vi.fn>;
     closeSession: ReturnType<typeof vi.fn>;
@@ -1739,5 +1750,134 @@ describe('remote.handler — bounds on what a host sends', () => {
     registerRemoteHandlers({ store: fakeStore() as never, attachments: fakeAttachments() as never, fetchImpl: vi.fn() as unknown as typeof fetch });
     const res = await getHandler(IPC.REMOTE_PANE_RESIZE_REQUEST)({}, 'a1', Number.NaN, 24);
     expect(res).toEqual({ ok: false, reason: 'cols and rows must be numbers' });
+  });
+});
+
+describe('remote.handler — sending files to a pane', () => {
+  const host: RemoteHost = { id: 'h1', label: 'desk', origin: 'https://desk.example.ts.net:9600', token: 'tok', addedAt: 0 };
+  const config = { allowInput: true, allowUpload: true, generalFileUpload: true, hostPlatform: 'darwin' };
+  const setup = (cfg: Record<string, unknown> = config) => {
+    const client = fakeClient(host);
+    const fetchImpl = vi.fn(async () => jsonResponse(cfg));
+    registerRemoteHandlers({ store: fakeStore([host]) as never, attachments: fakeAttachments() as never, clientFactory: () => client, fetchImpl: fetchImpl as unknown as typeof fetch });
+    return { client, fetchImpl };
+  };
+  const attach = async (sender: ReturnType<typeof fakeSender>) =>
+    (await getHandler(IPC.REMOTE_PANE_ATTACH)({ sender }, 'h1', 'session-1') as { attachId: string }).attachId;
+  const send = (sender: unknown, attachId: string, source: unknown) =>
+    getHandler(IPC.REMOTE_PANE_SEND_FILES)({ sender }, attachId, source, { wsl: false }) as Promise<{ ok: boolean; reason?: string; text?: string }>;
+
+  it('names a drop only by a token its own window registered, once', async () => {
+    const { client } = setup();
+    const a = fakeSender(301);
+    const attachId = await attach(a);
+    // Five paths: a valid token reaches the file check and is refused as too many, before any read.
+    const token = await getHandler(IPC.REMOTE_DROP_REGISTER)({ sender: fakeSender(302) }, ['/a', '/b', '/c', '/d', '/e']) as string;
+    expect(await send(a, attachId, { kind: 'drop', token })).toEqual({ ok: false, reason: 'not-a-file' });
+    const own = await getHandler(IPC.REMOTE_DROP_REGISTER)({ sender: a }, ['/a', '/b', '/c', '/d', '/e']) as string;
+    expect(await send(a, attachId, { kind: 'drop', token: own })).toEqual({ ok: false, reason: 'too-many' });
+    expect(await send(a, attachId, { kind: 'drop', token: own })).toEqual({ ok: false, reason: 'not-a-file' });
+    expect(await send(a, attachId, { kind: 'drop', paths: ['/etc/hosts'] })).toEqual({ ok: false, reason: 'not-a-file' });
+    expect(client.upload).not.toHaveBeenCalled();
+  });
+
+  it('refuses a send from a window that does not own the attach', async () => {
+    const { client } = setup();
+    const attachId = await attach(fakeSender(311));
+    expect(await send(fakeSender(312), attachId, { kind: 'clipboard-image' })).toEqual({ ok: false, reason: 'not-connected' });
+    expect(client.upload).not.toHaveBeenCalled();
+  });
+
+  it('probes an unprobed host first, and remembers its uploads-disabled answer', async () => {
+    const { client, fetchImpl } = setup();
+    const sender = fakeSender(321);
+    const attachId = await attach(sender);
+    client.upload.mockResolvedValueOnce({ ok: false, status: 403, error: 'uploads-disabled: server started without --allow-upload' });
+    expect(await send(sender, attachId, { kind: 'clipboard-image' })).toEqual({ ok: false, reason: 'uploads-disabled' });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(client.upload).toHaveBeenCalledTimes(1);
+    expect(await send(sender, attachId, { kind: 'clipboard-image' })).toEqual({ ok: false, reason: 'uploads-disabled' });
+    expect(client.upload).toHaveBeenCalledTimes(1);
+  });
+
+  it('a pane detached during the upload stops the send, and its write is refused', async () => {
+    const { client } = setup();
+    const sender = fakeSender(331);
+    const attachId = await attach(sender);
+    let signal: AbortSignal | undefined;
+    client.upload.mockImplementationOnce((_b: unknown, _e: unknown, s: AbortSignal) => {
+      signal = s;
+      return new Promise((_resolve, reject) => s.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))));
+    });
+    const pending = send(sender, attachId, { kind: 'clipboard-image' });
+    await vi.waitFor(() => expect(signal).toBeDefined());
+    await getHandler(IPC.REMOTE_PANE_DETACH)({}, attachId);
+    expect(await pending).toEqual({ ok: false, reason: 'pane-changed' });
+    expect(await getHandler(IPC.REMOTE_PANE_WRITE_CHECKED)({ sender }, attachId, "'/x'")).toEqual({ ok: false, reason: 'not-connected' });
+    expect(client.write).not.toHaveBeenCalled();
+  });
+
+  it('a window that goes away stops its send too', async () => {
+    const { client } = setup();
+    const sender = fakeSender(371);
+    const attachId = await attach(sender);
+    let signal: AbortSignal | undefined;
+    client.upload.mockImplementationOnce((_b: unknown, _e: unknown, s: AbortSignal) => {
+      signal = s;
+      return new Promise((_resolve, reject) => s.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))));
+    });
+    const pending = send(sender, attachId, { kind: 'clipboard-image' });
+    await vi.waitFor(() => expect(signal).toBeDefined());
+    sender.fireDestroyed();
+    expect(await pending).toEqual({ ok: false, reason: 'pane-changed' });
+  });
+
+  it('closing the view that started a send stops it, while another view of the session stays', async () => {
+    const { client } = setup();
+    const sender = fakeSender(381);
+    await attach(sender);
+    const second = await attach(sender);
+    let signal: AbortSignal | undefined;
+    client.upload.mockImplementationOnce((_b: unknown, _e: unknown, s: AbortSignal) => {
+      signal = s;
+      return new Promise((_resolve, reject) => s.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))));
+    });
+    const pending = send(sender, second, { kind: 'clipboard-image' });
+    await vi.waitFor(() => expect(signal).toBeDefined());
+    await getHandler(IPC.REMOTE_PANE_DETACH)({}, second);
+    expect(await pending).toEqual({ ok: false, reason: 'pane-changed' });
+    expect(client.detach).not.toHaveBeenCalled();
+  });
+
+  it('one send at a time per pane', async () => {
+    const { client } = setup();
+    const sender = fakeSender(341);
+    const attachId = await attach(sender);
+    let finish: (v: unknown) => void = () => undefined;
+    client.upload.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const first = send(sender, attachId, { kind: 'clipboard-image' });
+    await vi.waitFor(() => expect(client.upload).toHaveBeenCalledTimes(1));
+    expect(await send(sender, attachId, { kind: 'clipboard-image' })).toEqual({ ok: false, reason: 'already-sending' });
+    finish({ ok: true, path: '/Users/o/.wmux/uploads/phone/photo-2026-10-24T01-02-03-456Z-0123abcd.png' });
+    expect(await first).toEqual({ ok: true, count: 1, text: "'/Users/o/.wmux/uploads/phone/photo-2026-10-24T01-02-03-456Z-0123abcd.png'" });
+  });
+
+  it('refuses an oversized clipboard image before encoding it', async () => {
+    const { client } = setup();
+    const sender = fakeSender(361);
+    const attachId = await attach(sender);
+    const toPNG = vi.fn();
+    vi.mocked(clipboard.readImage).mockReturnValueOnce({ isEmpty: () => false, getSize: () => ({ width: 10_000, height: 10_000 }), toPNG } as never);
+    expect(await send(sender, attachId, { kind: 'clipboard-image' })).toEqual({ ok: false, reason: 'too-large' });
+    expect(toPNG).not.toHaveBeenCalled();
+    expect(client.upload).not.toHaveBeenCalled();
+  });
+
+  it('a checked write reports a waiting prompt (409) as prompt-active', async () => {
+    const { client } = setup();
+    const sender = fakeSender(351);
+    const attachId = await attach(sender);
+    client.write.mockRejectedValueOnce(new Error('terminal-prompt-active'));
+    expect(await getHandler(IPC.REMOTE_PANE_WRITE_CHECKED)({ sender }, attachId, "'/x'")).toEqual({ ok: false, reason: 'prompt-active' });
   });
 });

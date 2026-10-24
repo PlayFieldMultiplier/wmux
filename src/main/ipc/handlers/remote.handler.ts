@@ -28,6 +28,7 @@ import {
 import type { RemoteHostsStore } from '../../remote/RemoteHostsStore';
 import type { RemoteAttachmentsStore } from '../../remote/RemoteAttachmentsStore';
 import type { SshTunnelRegistry } from '../../remote/SshTunnelSupervisor';
+import { randomUUID } from 'crypto';
 import * as os from 'os';
 import * as path from 'path';
 import { addSshHost, observeSshHost, repairSshHost } from '../../remote/sshAddFlow';
@@ -47,8 +48,8 @@ import { HostStatusProber, combineHostStatus } from '../../remote/hostStatus';
 import { RemoteBodyTooLargeError, readBoundedJson } from '../../remote/readBoundedJson';
 import { REMOTE_LIMITS, clampRemoteGeometry } from '../../../shared/remoteLimits';
 import { credentialOriginProblem, isCredentialSafeOriginString } from '../../../shared/remotePairInput';
-import type { RemoteSendResult } from '../../../shared/remoteUpload';
-import { readDroppedFiles, sendFilesToRemote, type RemoteSendFile } from '../../remote/remoteFileSend';
+import { REMOTE_UPLOAD_LIMITS, type RemoteSendResult, type RemoteWriteResult } from '../../../shared/remoteUpload';
+import { readDroppedFiles, remoteWriteFailure, uploadFilesForRemote, type RemoteSendFile } from '../../remote/remoteFileSend';
 import type {
   PairFailureReason,
   RemoteAttachmentDescriptor,
@@ -66,6 +67,11 @@ import type {
 // Bearer-credentialed probe — never let a hung remote hang the add/refresh
 // flow forever.
 const PROBE_TIMEOUT_MS = 10_000;
+/** How long an OS drop's token stays usable, and how many are kept. */
+const DROP_TOKEN_TTL_MS = 2 * 60_000;
+const DROP_TOKEN_MAX = 16;
+/** The longest checked write: four quoted upload paths and the paste markers. */
+const WRITE_CHECKED_MAX_CHARS = 4096;
 
 /** Shape of a `GET /api/config` response we care about (WebTerminalServer.ts). */
 interface RemoteConfigProbe {
@@ -75,12 +81,14 @@ interface RemoteConfigProbe {
   allowInput?: boolean;
   allowUpload?: boolean;
   generalFileUpload?: boolean;
+  hostPlatform?: string;
 }
 
-/** What the host lets this desktop upload, as last probed. */
+/** What the host lets this desktop upload, as last probed, and the OS its paths follow. */
 interface UploadGrants {
   allowUpload: boolean;
   generalFileUpload: boolean;
+  hostPlatform?: string;
 }
 
 /** Distinguishes WHY a `/api/config` probe failed, so the caller can tell a
@@ -191,7 +199,11 @@ async function probeConfig(
   return {
     kind: 'ok',
     allowInput: config.allowInput === true,
-    uploads: { allowUpload: config.allowUpload === true, generalFileUpload: config.generalFileUpload === true },
+    uploads: {
+      allowUpload: config.allowUpload === true,
+      generalFileUpload: config.generalFileUpload === true,
+      ...(typeof config.hostPlatform === 'string' && /^[a-z0-9]{1,16}$/.test(config.hostPlatform) ? { hostPlatform: config.hostPlatform } : {}),
+    },
   };
 }
 
@@ -317,9 +329,15 @@ export function registerRemoteHandlers(deps: RegisterRemoteHandlersDeps): () => 
   // across an app restart, which just means the first list() after restart
   // shows no banner until the next workspacesList call re-probes it.
   const allowInputCache = new Map<string, boolean>(); // hostId -> allowInput
-  // Same lifetime as allowInputCache. A stale `true` meets the host's 403
-  // `uploads-disabled:` tag, so a send never probes first.
+  // Same lifetime as allowInputCache. A miss is probed before a send; a host's
+  // 403 `uploads-disabled:` is written back, so the next send asks no one.
   const uploadGrantsCache = new Map<string, UploadGrants>(); // hostId -> upload grants
+  // A send names an OS drop by the token preload asked for when the drop
+  // happened (REMOTE_DROP_REGISTER), never by a path. One use each.
+  const dropTokens = new Map<string, { senderId: number; paths: string[]; expiresAt: number }>();
+  // The send in flight per stream (one at a time per pane), and which view
+  // started it: closing that view or the stream stops it.
+  const sendsInFlight = new Map<string, { viewer: string; controller: AbortController }>(); // stream attachId -> send
   const attachByKey = new Map<string, string>(); // `${senderId}:${hostId}:${sessionId}` -> attachId
   const attachRecords = new Map<string, AttachRecord>(); // attachId -> record
   // #1323 — two views in one window can show the same session (a mirror-grid
@@ -435,6 +453,8 @@ export function registerRemoteHandlers(deps: RegisterRemoteHandlersDeps): () => 
     const record = streamRecord(viewer);
     viewerStreams.delete(viewer);
     if (!record) return;
+    const send = sendsInFlight.get(record.attachId);
+    if (send?.viewer === viewer) send.controller.abort();
     record.viewers.delete(viewer);
     if (record.viewers.size === 0) detachAttach(record.attachId);
   }
@@ -547,6 +567,7 @@ export function registerRemoteHandlers(deps: RegisterRemoteHandlersDeps): () => 
   function detachAttach(attachId: string): void {
     const record = attachRecords.get(attachId);
     if (!record) return;
+    sendsInFlight.get(attachId)?.controller.abort();
     clients.get(record.hostId)?.detach(attachId);
     attachRecords.delete(attachId);
     for (const viewer of record.viewers) viewerStreams.delete(viewer);
@@ -1026,41 +1047,96 @@ export function registerRemoteHandlers(deps: RegisterRemoteHandlersDeps): () => 
     client.write(record.attachId, data).catch(() => { /* see doc comment above */ });
   });
 
-  // A file dropped or an image pasted on a mirror: upload to the host, then
-  // type the host's paths into the pane, unsent. An invoke, not the
-  // fire-and-forget write above, so every refusal (the host's upload grant, a
-  // prompt waiting on the pane) reaches the renderer as a reason to show.
+  // Preload, at the moment of an OS drop: remember its paths under a token
+  // bound to this window. The renderer passes the token on to a send.
+  ipcMain.removeHandler(IPC.REMOTE_DROP_REGISTER);
+  ipcMain.handle(IPC.REMOTE_DROP_REGISTER, wrapHandler(IPC.REMOTE_DROP_REGISTER,
+    async (e: IpcMainInvokeEvent, paths: unknown): Promise<string | null> => {
+      if (!Array.isArray(paths) || paths.length === 0 || !paths.every((p) => typeof p === 'string' && p.length > 0 && p.length <= 4096)) return null;
+      const now = Date.now();
+      for (const [token, drop] of dropTokens) if (drop.expiresAt <= now) dropTokens.delete(token);
+      while (dropTokens.size >= DROP_TOKEN_MAX) dropTokens.delete(dropTokens.keys().next().value as string);
+      const token = randomUUID();
+      // One past the limit is kept, so a send can still say "too many".
+      dropTokens.set(token, { senderId: e.sender.id, paths: (paths as string[]).slice(0, REMOTE_UPLOAD_LIMITS.MAX_FILES + 1), expiresAt: now + DROP_TOKEN_TTL_MS });
+      return token;
+    }));
+
+  // A file dropped or an image pasted on a mirror: upload it to the host and
+  // answer the host's paths, checked and quoted. The renderer types them
+  // (REMOTE_PANE_WRITE_CHECKED) only if the pane is still the one it was.
   ipcMain.removeHandler(IPC.REMOTE_PANE_SEND_FILES);
   ipcMain.handle(IPC.REMOTE_PANE_SEND_FILES, wrapHandler(IPC.REMOTE_PANE_SEND_FILES,
-    async (_e: IpcMainInvokeEvent, attachId: unknown, source: unknown, opts: unknown): Promise<RemoteSendResult> => {
+    async (e: IpcMainInvokeEvent, attachId: unknown, source: unknown, opts: unknown): Promise<RemoteSendResult> => {
+      const viewer = assertString(attachId, 'attachId');
+      const record = streamRecord(viewer);
+      const client = record ? clients.get(record.hostId) : undefined;
+      const host = record ? store.get(record.hostId) : undefined;
+      if (!record || !client || !host || record.senderId !== e.sender.id) return { ok: false, reason: 'not-connected' };
+      if (sendsInFlight.has(record.attachId)) return { ok: false, reason: 'already-sending' };
+      const controller = new AbortController();
+      sendsInFlight.set(record.attachId, { viewer, controller });
+      try {
+        const o = (typeof opts === 'object' && opts !== null ? opts : {}) as { wsl?: unknown };
+        const src = (typeof source === 'object' && source !== null ? source : {}) as { kind?: unknown; token?: unknown };
+        let files: RemoteSendFile[];
+        if (src.kind === 'clipboard-image') {
+          const image = clipboard.readImage();
+          if (image.isEmpty()) return { ok: false, reason: 'no-image' };
+          const { width, height } = image.getSize();
+          if (width * height > REMOTE_UPLOAD_LIMITS.MAX_CLIPBOARD_PIXELS) return { ok: false, reason: 'too-large' };
+          files = [{ name: 'clipboard.png', bytes: image.toPNG() }];
+        } else if (src.kind === 'drop' && typeof src.token === 'string') {
+          const drop = dropTokens.get(src.token);
+          dropTokens.delete(src.token);
+          if (!drop || drop.senderId !== e.sender.id || drop.expiresAt <= Date.now()) return { ok: false, reason: 'not-a-file' };
+          const read = await readDroppedFiles(drop.paths);
+          if (!Array.isArray(read)) return { ok: false, reason: read.reason };
+          files = read;
+        } else {
+          return { ok: false, reason: 'not-a-file' };
+        }
+        // Never sent on a guess: a host this window has not probed yet is asked first.
+        let grants = uploadGrantsCache.get(record.hostId);
+        if (!grants || !allowInputCache.has(record.hostId)) {
+          const probe = await probeConfig(host.origin, host.token, fetchImpl);
+          if (probe.kind !== 'ok') return { ok: false, reason: 'failed' };
+          allowInputCache.set(record.hostId, probe.allowInput);
+          uploadGrantsCache.set(record.hostId, probe.uploads);
+          grants = probe.uploads;
+        }
+        const result = await uploadFilesForRemote(files, {
+          allowInput: allowInputCache.get(record.hostId),
+          allowUpload: grants.allowUpload,
+          generalFileUpload: grants.generalFileUpload,
+          hostPlatform: grants.hostPlatform,
+          wsl: o.wsl === true,
+        }, {
+          upload: (bytes, ext) => client.upload(bytes, ext, controller.signal),
+          signal: controller.signal,
+        });
+        if (!result.ok && result.reason === 'uploads-disabled') uploadGrantsCache.set(record.hostId, { ...grants, allowUpload: false });
+        return result;
+      } finally {
+        if (sendsInFlight.get(record.attachId)?.controller === controller) sendsInFlight.delete(record.attachId);
+      }
+    }));
+
+  // The typed paths, awaited so a refusal reaches the renderer: resolved
+  // afresh, so a pane detached since the upload gets nothing.
+  ipcMain.removeHandler(IPC.REMOTE_PANE_WRITE_CHECKED);
+  ipcMain.handle(IPC.REMOTE_PANE_WRITE_CHECKED, wrapHandler(IPC.REMOTE_PANE_WRITE_CHECKED,
+    async (e: IpcMainInvokeEvent, attachId: unknown, data: unknown): Promise<RemoteWriteResult> => {
       const record = streamRecord(assertString(attachId, 'attachId'));
       const client = record ? clients.get(record.hostId) : undefined;
-      if (!record || !client) return { ok: false, reason: 'not-connected' };
-      const o = (typeof opts === 'object' && opts !== null ? opts : {}) as { bracketed?: unknown; wsl?: unknown };
-      const src = (typeof source === 'object' && source !== null ? source : {}) as { kind?: unknown; paths?: unknown };
-      let files: RemoteSendFile[];
-      if (src.kind === 'clipboard-image') {
-        const image = clipboard.readImage();
-        if (image.isEmpty()) return { ok: false, reason: 'no-image' };
-        files = [{ name: 'clipboard.png', bytes: image.toPNG() }];
-      } else if (src.kind === 'drop' && Array.isArray(src.paths) && src.paths.every((p) => typeof p === 'string')) {
-        const read = await readDroppedFiles(src.paths as string[]);
-        if (!Array.isArray(read)) return { ok: false, reason: read.reason };
-        files = read;
-      } else {
-        return { ok: false, reason: 'not-a-file' };
+      if (!record || !client || record.senderId !== e.sender.id) return { ok: false, reason: 'not-connected' };
+      if (typeof data !== 'string' || data.length === 0 || data.length > WRITE_CHECKED_MAX_CHARS) return { ok: false, reason: 'failed' };
+      try {
+        await client.write(record.attachId, data);
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, reason: remoteWriteFailure(err) };
       }
-      const grants = uploadGrantsCache.get(record.hostId);
-      return sendFilesToRemote(files, {
-        allowInput: allowInputCache.get(record.hostId),
-        allowUpload: grants?.allowUpload,
-        generalFileUpload: grants?.generalFileUpload,
-        wsl: o.wsl === true,
-        bracketed: o.bracketed === true,
-      }, {
-        upload: (bytes, ext) => client.upload(bytes, ext),
-        write: (data) => client.write(record.attachId, data),
-      });
     }));
 
   // #1322 — a remote-terminal mirror's own fit-to-box request, resolved
@@ -1304,7 +1380,9 @@ export function registerRemoteHandlers(deps: RegisterRemoteHandlersDeps): () => 
     ipcMain.removeHandler(IPC.REMOTE_PANE_DETACH);
     ipcMain.removeAllListeners(IPC.REMOTE_PANE_WRITE);
     ipcMain.removeHandler(IPC.REMOTE_PANE_RESIZE_REQUEST);
+    ipcMain.removeHandler(IPC.REMOTE_DROP_REGISTER);
     ipcMain.removeHandler(IPC.REMOTE_PANE_SEND_FILES);
+    ipcMain.removeHandler(IPC.REMOTE_PANE_WRITE_CHECKED);
     ipcMain.removeHandler(IPC.REMOTE_POLL_SUBSCRIBE);
     ipcMain.removeHandler(IPC.REMOTE_POLL_UNSUBSCRIBE);
     ipcMain.removeHandler(REMOTE_SSH_IPC.CANDIDATES);
