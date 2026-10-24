@@ -5310,6 +5310,7 @@ export const en = {
   'remotePage.connect.connecting': "Connecting…",
   'remotePage.connect.joinedA2a': "Paired with {name}.",
   'remotePage.connect.linkPaneNow': "Link a pane now",
+  'remotePage.connect.nextStep': "Next, on {name}: choose which panes it shows this PC, or share one from a pane's menu.",
   'remotePage.connect.hostAdded': "Connected to {name}. Its workspaces are listed under Other PCs.",
   'remotePage.connect.shareWorkspaces': "Also let it see this PC's workspaces",
   'remotePage.connect.shareWorkspacesHint': "Adds a view-only pairing link on a second line. The other PC pastes both at once.",

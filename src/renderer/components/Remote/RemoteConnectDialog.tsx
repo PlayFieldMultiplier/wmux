@@ -160,7 +160,7 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [joined, setJoined] = useState<{ hostId: string; name: string } | null>(null);
-  const [linkHost, setLinkHost] = useState<string | null>(null);
+  const [linkHost, setLinkHost] = useState<{ hostId: string; name: string } | null>(null);
   // Share & pair answers on an HTTPS address another PC can reach.
   const [shareReady, setShareReady] = useState(false);
   const [shareOn, setShareOn] = useState(false);
@@ -403,7 +403,7 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
   }, [open, api, applyPairStatus]);
 
   /** Connect one pasted piece; the line it leaves for the message. */
-  const connectOne = useCallback(async (text: string): Promise<{ ok: boolean; text: string; hostId?: string; share?: boolean; fix?: TailscaleFix }> => {
+  const connectOne = useCallback(async (text: string): Promise<{ ok: boolean; text: string; host?: { hostId: string; name: string }; share?: boolean; fix?: TailscaleFix }> => {
     // Every address this piece would try is in the tailnet range: when
     // Tailscale here cannot carry it (off, signed out, the other device not
     // on it), say so now instead of letting the connect run into its timeout,
@@ -416,7 +416,7 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
       if (!r) return { ok: false, text: t('remote.pairFailed') };
       if (r.ok) {
         void refreshA2aRemote();
-        return { ok: true, text: t('remotePage.connect.joinedA2a', { name: r.name }), hostId: r.host.hostId };
+        return { ok: true, text: t('remotePage.connect.joinedA2a', { name: r.name }), host: { hostId: r.host.hostId, name: r.name } };
       }
       const retry = r.retryAfterSec != null && r.retryAfterSec > 0
         ? ` ${t('settings.a2aRemoteJoinRetryIn', { time: formatRemaining(r.retryAfterSec) })}` : '';
@@ -454,7 +454,7 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
     setBusy(true);
     const lines: string[] = [];
     const left: string[] = [];
-    let host: string | null = null;
+    let host: { hostId: string; name: string } | null = null;
     let shared = false;
     let fix: TailscaleFix | undefined;
     try {
@@ -463,7 +463,7 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
         if (!mounted.current) return;
         lines.push(r.text);
         if (!r.ok) left.push(part);
-        if (r.hostId) host = r.hostId;
+        if (r.host) host = r.host;
         if (r.share) shared = true;
         fix ??= r.fix;
       }
@@ -647,6 +647,12 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
                 {message.text}
               </p>
             )}
+            {/* The other PC shows this one nothing yet: say where that is chosen there. */}
+            {linkHost && !paste.trim() && (
+              <p className="wmux-remote-connect-note" data-testid="remote-connect-next-step">
+                {t('remotePage.connect.nextStep', { name: linkHost.name })}
+              </p>
+            )}
             {message?.fix && (
               <div className="flex flex-wrap items-center gap-2" data-testid="remote-connect-tailscale-fix">
                 <TailscaleFixButton fix={message.fix} />
@@ -670,7 +676,7 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
         )}
         <Button variant="ghost" size="md" onClick={onClose}>{t('remotePage.connect.close')}</Button>
         {tab === 'paste' && linkHost && !paste.trim() && (
-          <Button variant="primary" size="md" onClick={() => onLinkPane(linkHost)} data-testid="remote-connect-link-pane">
+          <Button variant="primary" size="md" onClick={() => onLinkPane(linkHost.hostId)} data-testid="remote-connect-link-pane">
             {t('remotePage.connect.linkPaneNow')}
           </Button>
         )}

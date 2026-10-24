@@ -124,6 +124,24 @@ describe('Connect a PC dialog', () => {
     expect(onLinkPane).toHaveBeenCalledWith(HOST);
   });
 
+  it('after an A2A join, says where the next step is: the other PC chooses what it shows, or shares from a pane menu', async () => {
+    stub(INVITE, false);
+    await render();
+    expect(q('remote-connect-next-step')).toBeNull();
+    await act(async () => { pasteButton().click(); });
+    await act(async () => { q<HTMLButtonElement>('remote-connect-submit')!.click(); });
+    expect(q('remote-connect-next-step')?.textContent).toBe("Next, on DESK: choose which panes it shows this PC, or share one from a pane's menu.");
+    // A workspace connection is not an A2A pairing: no pane step to point at.
+    act(() => root.unmount());
+    root = createRoot(container);
+    stub(LINK, false);
+    await render();
+    await act(async () => { pasteButton().click(); });
+    await act(async () => { q<HTMLButtonElement>('remote-connect-submit')!.click(); });
+    expect(remote.hostsPair).toHaveBeenCalled();
+    expect(q('remote-connect-next-step')).toBeNull();
+  });
+
   it('routes every remote-host shape to the remote-host pairing: a pairing link, a token URL, an address and a code', async () => {
     for (const [text, call, args] of [
       ['https://office.ts.net/pair#wmux-desktop-code=ABCD2345', 'hostsPair', ['https://office.ts.net', 'ABCD2345']],
@@ -165,6 +183,15 @@ describe('Connect a PC dialog', () => {
     await act(async () => { q<HTMLButtonElement>('remote-connect-discard')!.click(); });
     expect(a2a.pairCancel).toHaveBeenCalled();
     expect(q('remote-connect-new-code')).not.toBeNull();
+  });
+
+  it('an invite turns on only the listener: never the remote-spawn policy', async () => {
+    stub('', false);
+    a2a.spawnPolicySet = vi.fn();
+    await render({ initialTab: 'invite' });
+    expect(q('remote-connect-code')?.textContent).toBe(INVITE);
+    expect(a2a.configure.mock.calls).toEqual([[{ enabled: true }]]);
+    expect(a2a.spawnPolicySet).not.toHaveBeenCalled();
   });
 
   it('with A2A already listening, opens on Invite and copies without touching the listener', async () => {
