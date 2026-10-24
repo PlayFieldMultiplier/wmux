@@ -21,7 +21,7 @@ import {
   clearLastBroadcastAgentStatus,
 } from '../ipc/handlers/metadata.handler';
 import { noteBootSettled } from './turnEvidence';
-import { settleHookTurnToIdle, broadcastSettledIdle, broadcastTurnRunning, holdsUnreadResult, holdsUnsettledRunningClaim, settleEndedDaemonTurn } from './turnSettle';
+import { settleHookTurnToIdle, settleConfirmedInterrupt, broadcastSettledIdle, broadcastTurnRunning, holdsUnreadResult, holdsUnsettledRunningClaim, settleEndedDaemonTurn } from './turnSettle';
 import { eventBus } from '../events/EventBus';
 import { starPromptSessions } from './starPromptSessions';
 import {
@@ -1469,7 +1469,7 @@ export class DaemonNotificationRouter {
       try {
         if (!recentlyEscaped(payload.sessionId, ESC_INTERRUPT_CONFIRM_MS, this.now())) return;
         clearEscapeKey(payload.sessionId);
-        settleHookTurnToIdle(payload.sessionId, this.getHookRouter?.() ?? null, this.getWindow(), this.now());
+        settleConfirmedInterrupt(payload.sessionId, this.getHookRouter?.() ?? null, this.getWindow(), this.now());
       } catch (err) {
         console.warn('[DaemonNotificationRouter] agent interrupted error:', err);
       }

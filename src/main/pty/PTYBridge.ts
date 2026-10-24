@@ -19,7 +19,7 @@ import {
 } from '../ipc/handlers/metadata.handler';
 import { dispatchNotification } from '../notification/dispatchNotification';
 import { createLeadingEdgeThrottle, VETO_TRACE_THROTTLE_MS } from '../pipe/handlers/hooks.rpc';
-import { settleHookTurnToIdle } from '../notification/turnSettle';
+import { settleConfirmedInterrupt, settleHookTurnToIdle } from '../notification/turnSettle';
 import { InterruptKeystrokeDetector, isEscapeChunk } from '../../shared/hooks/interruptKeystroke';
 import { kittyChunkAsLegacy } from '../../shared/kittyKeyEvents';
 import {
@@ -447,7 +447,7 @@ export class PTYBridge {
     const confirmEscapeInterrupt = (): void => {
       if (!recentlyEscaped(ptyId) || recentlyResized(ptyId, RESIZE_REDRAW_GUARD_MS)) return;
       clearEscapeKey(ptyId);
-      settleHookTurnToIdle(ptyId, this.getHookRouter?.() ?? null, this.getWindow());
+      settleConfirmedInterrupt(ptyId, this.getHookRouter?.() ?? null, this.getWindow());
     };
     const titleTurnEdge = new ClaudeTitleTurnEdge();
 
