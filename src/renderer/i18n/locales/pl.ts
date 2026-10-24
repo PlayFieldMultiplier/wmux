@@ -5278,6 +5278,7 @@ export const pl = {
   'remotePage.connect.connecting': "Łączenie…",
   'remotePage.connect.joinedA2a': "Sparowano z {name}.",
   'remotePage.connect.linkPaneNow': "Połącz panel teraz",
+  'remotePage.connect.nextStep': "Dalej, na {name}: wybierz, które panele pokazuje temu komputerowi, albo udostępnij jeden z menu panelu.",
   'remotePage.connect.hostAdded': "Połączono z {name}. Jego obszary robocze są na liście Inne komputery.",
   'remotePage.connect.shareWorkspaces': "Pokaż mu też obszary robocze tego komputera",
   'remotePage.connect.shareWorkspacesHint': "Dodaje w drugim wierszu łącze parowania tylko do podglądu. Drugi komputer wkleja oba naraz.",

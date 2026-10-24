@@ -4832,6 +4832,7 @@ export const ko = {
   'remotePage.connect.connecting': "연결하는 중…",
   'remotePage.connect.joinedA2a': "{name} 페어링 완료.",
   'remotePage.connect.linkPaneNow': "지금 판 연결",
+  'remotePage.connect.nextStep': "다음 단계: {name}에서 이 PC에 보여줄 판을 고르거나, 판 메뉴에서 하나를 공유하세요.",
   'remotePage.connect.hostAdded': "{name}에 연결했습니다. 워크스페이스는 다른 PC 아래에 있습니다.",
   'remotePage.connect.shareWorkspaces': "이 PC 워크스페이스도 보여 주기",
   'remotePage.connect.shareWorkspacesHint': "보기 전용 페어링 링크를 둘째 줄에 붙입니다. 다른 PC는 한 번에 붙여넣습니다.",
