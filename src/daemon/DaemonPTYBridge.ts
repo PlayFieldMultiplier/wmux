@@ -1153,6 +1153,21 @@ export class DaemonPTYBridge extends EventEmitter {
   }
 
   /**
+   * #2673 — Claude Code's running title (`◐`/`◑`, up for the whole of every
+   * turn it runs) over a boot episode: the agent's word that the episode is a
+   * turn. #1670 keeps the first submit after a launch a boot episode because
+   * it may only have answered a dialog; the next submit would find this title
+   * and keep the turn (startAnsweredTurn). Left a boot episode, the turn never
+   * reached main as one, so its end could not settle the pane either.
+   */
+  private noteClaudeTitle(title: string): void {
+    if (!this.turnOpen || !this.bootEpisode || this.awaitingHuman || this.muted) return;
+    if (!CLAUDE_RUNNING_TITLE.test(title)) return;
+    this.bootEpisode = false;
+    this.reportMidTurn();
+  }
+
+  /**
    * Something other than the shell moved the pane's cwd (an agent's hook
    * reported its own directory). Forget the last shell-reported value so the
    * shell's next report re-emits even when it names the same directory again,
@@ -1593,6 +1608,18 @@ export class DaemonPTYBridge extends EventEmitter {
       // means no spinner either; the spinner title is output too. Softly, so
       // the next hook of a real turn resumes the same episode.
       if (this.byteOpenedTurn && !this.awaitingHuman) this.closeTurn(true);
+      // #2673: on a pane whose hooks have not reported, nothing else ends a
+      // turn: no Stop hook, and Claude Code's idle prompt draws nothing the
+      // detector reads. Claude Code refreshes its running title about once a
+      // second for the whole turn, so silence under its idle title `✳` is the
+      // turn over. Not the title edge alone: Claude Code also sets `✳` the
+      // moment a permission dialog opens, a few ms before the dialog's rows,
+      // and by now the detector has seen those (awaitingHuman). Softly, as a
+      // detector settle: a later running edge resumes the episode.
+      if (
+        this.turnOpen && !this.hookSeen && !this.awaitingHuman
+        && titleShowsFinishedTurn({ title: this.lastTitle, at: this.lastTitleAt }, 'claude', 0)
+      ) this.closeTurn(true);
       if (this.explicitTerminalStatus) return;
       this.emit('idle', { sessionId: ptyId, ...(this.isPreTurn() ? { preTurn: true } : {}) });
     });
@@ -1745,6 +1772,7 @@ export class DaemonPTYBridge extends EventEmitter {
         if (titleTurnEdge.observe(title)) this.noteTitleTurnEnd(sessionId);
         if (CLAUDE_RUNNING_TITLE.test(title)) this.noteSpinnerTitle();
         else if (this.spinnerOpenedTurn && this.turnOpen && !this.awaitingHuman && CLAUDE_IDLE_TITLE.test(title)) this.endSpinnerTurn();
+        this.noteClaudeTitle(title);
         this.noteTitleAwaitingHuman(sessionId);
         this.noteCodexTitleSpinner(sessionId);
         return;

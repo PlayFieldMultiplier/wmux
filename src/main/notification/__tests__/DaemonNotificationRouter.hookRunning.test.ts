@@ -215,6 +215,30 @@ describe('DaemonNotificationRouter — turn start lights the pane', () => {
     router.stop();
   });
 
+  // #2673 — that idle edge carries no turn of its own, and an unmarked idle
+  // leaves the renderer's activity stamp holding Running for 120 s.
+  it('the idle edge after a daemon turn that ended while printing settles the pane', () => {
+    const { router, captured } = makeRouter();
+    captured.turn?.({ sessionId: PTY, running: true });
+    captured.active?.({ sessionId: PTY });
+    captured.turn?.({ sessionId: PTY, running: false });
+    captured.idle?.({ sessionId: PTY, agentMidTurn: false });
+    expect(broadcastMetadataUpdateMock).toHaveBeenLastCalledWith(null, { ptyId: PTY, agentStatus: 'idle', settled: true });
+    router.stop();
+    clearSuppression(PTY);
+  });
+
+  it('byte silence inside the next daemon turn is not that settle', () => {
+    const { router, captured } = makeRouter();
+    captured.turn?.({ sessionId: PTY, running: true });
+    captured.active?.({ sessionId: PTY });
+    captured.turn?.({ sessionId: PTY, running: false });
+    captured.turn?.({ sessionId: PTY, running: true }); // the next prompt, still printing
+    captured.idle?.({ sessionId: PTY, agentMidTurn: true });
+    expect(broadcastMetadataUpdateMock.mock.calls.some(([, p]) => (p as { settled?: boolean }).settled === true)).toBe(false);
+    router.stop();
+  });
+
   it('a daemon turn end never settles over the result or dialog the pane shows', () => {
     const { router, captured } = makeRouter();
     captured.turn?.({ sessionId: PTY, running: true });

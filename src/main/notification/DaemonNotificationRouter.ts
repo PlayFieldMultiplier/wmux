@@ -241,6 +241,12 @@ export class DaemonNotificationRouter {
    * row even when a transcript line was already on the wire.
    */
   private readonly hookActivityPanes = new Set<string>();
+  /**
+   * #2673 — panes whose daemon turn ended while they were still printing. The
+   * turn end could not settle them then (the tail would re-light the pane), so
+   * the idle edge that follows is that turn's settle, not byte silence.
+   */
+  private readonly endedTurnAwaitingIdle = new Set<string>();
   /** Rate limit for the vetoed-turn-end trace — see VETO_TRACE_THROTTLE_MS. */
   private vetoTraceThrottle = createLeadingEdgeThrottle(VETO_TRACE_THROTTLE_MS);
 
@@ -1266,10 +1272,14 @@ export class DaemonNotificationRouter {
       // missed start edge instead of relying on the activity freshness TTL.
       // The turn's own end settles the pane if no output follows (onAgentTurn).
       if (payload.agentMidTurn === true) {
+        this.endedTurnAwaitingIdle.delete(payload.sessionId);
         broadcastTurnRunning(payload.sessionId, this.getWindow(), { daemonTurnOpen: true });
         return;
       }
       const now = Date.now();
+      if (this.endedTurnAwaitingIdle.delete(payload.sessionId)
+        && !this.getHookRouter?.()?.governsRunningState(payload.sessionId, now)
+        && settleEndedDaemonTurn(payload.sessionId, this.getWindow(), now)) return;
       // The daemon's own word that no turn ran since the agent's SessionStart:
       // turn-end evidence for the bot workers' idle stops, whatever the dot does.
       if (payload.preTurn === true) noteBootSettled(payload.sessionId, now);
@@ -1480,6 +1490,7 @@ export class DaemonNotificationRouter {
     // sidebar dot when the user closed a terminal intentionally (Codex P2).
     const onSessionEnd = (payload: { sessionId: string }) => {
       this.hookActivityPanes.delete(payload.sessionId);
+      this.endedTurnAwaitingIdle.delete(payload.sessionId);
       try {
         broadcastMetadataUpdate(this.getWindow(), {
           ptyId: payload.sessionId,
@@ -1579,12 +1590,14 @@ export class DaemonNotificationRouter {
     const onAgentTurn = (payload: { sessionId: string; running: boolean; afterAnswer?: boolean }) => {
       const id = payload.sessionId;
       if (payload.running) {
+        this.endedTurnAwaitingIdle.delete(id);
         if (payload.afterAnswer) broadcastMetadataUpdate(this.getWindow(), { ptyId: id, daemonTurnOpen: true, agentStatus: 'running' });
         else broadcastTurnRunning(id, this.getWindow(), { daemonTurnOpen: true });
         return;
       }
       broadcastMetadataUpdate(this.getWindow(), { ptyId: id, daemonTurnOpen: false });
-      if (!this.getHookRouter?.()?.governsRunningState(id, this.now())) settleEndedDaemonTurn(id, this.getWindow(), this.now());
+      if (this.getHookRouter?.()?.governsRunningState(id, this.now())) return;
+      if (!settleEndedDaemonTurn(id, this.getWindow(), this.now())) this.endedTurnAwaitingIdle.add(id);
     };
 
     this.daemonClient.on('session:agentTurn', onAgentTurn);
