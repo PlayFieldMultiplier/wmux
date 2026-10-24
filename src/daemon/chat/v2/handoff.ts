@@ -7,6 +7,7 @@ import {
 } from '../../../shared/chatv2/ipc';
 import { permissionFlagFor } from '../../../shared/agentResume';
 import { sameProcessStartTime } from '../../phantomExit';
+import { beginPaneMove, endPaneMove } from './paneClaims';
 import type { ChatV2Driver, ChatV2HostDeps, ChatV2StoredRecord } from './types';
 
 /**
@@ -126,7 +127,7 @@ function modePermission(mode: ChatV2RunMode): 'bypassPermissions' | 'default' {
  * exist, or it now belongs to another process (another start time, without the
  * conversation id in its command line). Anything unreadable is `unknown`.
  */
-async function driverState(
+export async function driverState(
   deps: Pick<ChatV2HandoffDeps, 'processIdentity' | 'probe'>,
   pid: number,
   record: ChatV2StoredRecord,
@@ -140,17 +141,14 @@ async function driverState(
   return 'gone';
 }
 
-/** Panes with a handoff in flight: a second one is refused, never interleaved. */
-const inFlight = new Set<string>();
-
 export async function handOffToTerminal(deps: ChatV2HandoffDeps, input: ChatV2HandoffInput): Promise<ChatV2HandoffResult> {
   const { paneId } = input.record;
-  if (inFlight.has(paneId)) return chatV2Error('handoff-refused', 'This chat is already moving to the terminal.');
-  inFlight.add(paneId);
+  // One move per pane, shared with terminal → chat and Continue on another account.
+  if (!beginPaneMove(paneId)) return chatV2Error('handoff-refused', 'This pane is already moving between the terminal and a chat.');
   try {
     return await handOff(deps, input);
   } finally {
-    inFlight.delete(paneId);
+    endPaneMove(paneId);
   }
 }
 

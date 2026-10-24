@@ -17,3 +17,22 @@ export function releaseChatV2Pane(paneId: string): void {
 export function chatV2OwnsPane(paneId: string): boolean {
   return claimed.has(paneId);
 }
+
+/**
+ * Panes with a move between the terminal and a chat (or between accounts)
+ * under way: chat → terminal, terminal → chat and Continue on another
+ * account each stop the pane's agent and start another, so a second one is
+ * refused, never interleaved.
+ */
+const moving = new Set<string>();
+
+/** False when another move holds the pane. Pair a true answer with `endPaneMove`. */
+export function beginPaneMove(paneId: string): boolean {
+  if (moving.has(paneId)) return false;
+  moving.add(paneId);
+  return true;
+}
+
+export function endPaneMove(paneId: string): void {
+  moving.delete(paneId);
+}

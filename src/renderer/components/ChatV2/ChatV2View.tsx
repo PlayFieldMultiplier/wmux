@@ -9,6 +9,7 @@ import { TranscriptRowView, type TranscriptActions } from './Transcript';
 import { useChatV2 } from './useChatV2';
 import { getChatV2Bridge } from './bridge';
 import { ChatKindBadge } from '../Chat/ChatKindBadge';
+import { ContinueInChat } from './ContinueInChat';
 
 const NEAR_BOTTOM_PX = 48;
 
@@ -77,6 +78,7 @@ export default function ChatV2View({ paneId, active, onTerminal, cwd }: {
   const [newModel, setNewModel] = useState('');
   const [newMode, setNewMode] = useState<ChatV2RunMode>('default');
   const [handingOff, setHandingOff] = useState(false);
+  const [moveError, setMoveError] = useState('');
   // Bumped to remount the composer when a draft moved under it.
   const [draftRev, setDraftRev] = useState(0);
   const scroller = useRef<HTMLDivElement>(null);
@@ -140,7 +142,9 @@ export default function ChatV2View({ paneId, active, onTerminal, cwd }: {
     );
   }
 
-  const error = state.error ? <div className="wmux-chatv2-notice" data-tone="error" role="alert">{state.error.message}</div> : null;
+  const error = state.error || moveError
+    ? <div className="wmux-chatv2-notice" data-tone="error" role="alert">{state.error?.message ?? moveError}</div>
+    : null;
 
   if (state.phase === 'empty' || !view) {
     return (
@@ -217,6 +221,8 @@ export default function ChatV2View({ paneId, active, onTerminal, cwd }: {
           <div className="wmux-chatv2-notice wmux-chatv2-handed-off">
             <span>{S.handedOff}</span>
             <button type="button" className="wmux-chatv2-link" onClick={onTerminal}>{t('chat.openTerminal')}</button>
+            {/* Shown only while no agent runs in the pane (viewState); the daemon checks again. */}
+            <ContinueInChat paneId={paneId} tombstone className="wmux-chatv2-link" onError={setMoveError} />
             <button type="button" className="wmux-chatv2-btn" title={S.startNewChatHint} onClick={() => void controller.close()}>{S.startNewChat}</button>
           </div>
         ) : (

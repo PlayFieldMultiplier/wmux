@@ -9,6 +9,7 @@ import { ChatPtyContext, UserText } from './ChatMessage';
 import { chatRunState } from './chatRunState';
 import { ChatProgress } from './ChatProgress';
 import { ChatControls } from './ChatControls';
+import { ContinueInChat } from '../ChatV2/ContinueInChat';
 import type { TerminalLaunchAgent, TerminalLaunchMode } from '../../../shared/transcript/terminalChat';
 import { Thread } from './assistant-ui/Thread';
 import type { TurnEvent } from '../../../shared/transcript/turnEvents';
@@ -232,10 +233,14 @@ function ChatThread({ ptyId, data, onTerminal }: { ptyId: string; data: ReturnTy
     },
     pasteImage: () => void pasteImage(),
   }), [showStop, stopState, stop, attachments.length, pasteImage]);
+  // Continue in chat: a terminal Claude at rest (the daemon checks again, and names what the stop ends).
+  const [moveError, setMoveError] = useState('');
+  const canMoveToChat = !managed && data.status.terminal?.agent === 'claude' && data.status.agentAlive === true && ['ready', 'complete', 'stopped'].includes(progress) && !sending;
   const reasonKey = ['no-hook', 'stale-session', 'no-transcript-path', 'not-claude', 'unsafe-transcript-path', 'unreadable'].includes(data.status.reason)
     ? `chat.reason.${data.status.reason}` : 'chat.reason.unavailable';
   return <ChatPtyContext.Provider value={ptyId}><AssistantRuntimeProvider runtime={runtime}>
-    <Thread composer={runtime.thread.composer} status={<><ChatProgress state={canLaunch ? 'ready' : progress} lastSyncedAt={data.lastSyncedAt} onTerminal={onTerminal} /><ChatControls ptyId={ptyId} status={data.status} refresh={data.retry} /></>} empty={messages.length === 0} working={busy} disabled={canLaunch ? sending || data.loading : launched || readOnly || !data.status.available || data.loading || ended || !!managed && (managed.phase !== 'ready' || !managed.capabilities.send)}
+    <Thread composer={runtime.thread.composer} status={<><ChatProgress state={canLaunch ? 'ready' : progress} lastSyncedAt={data.lastSyncedAt} onTerminal={onTerminal}
+      extra={canMoveToChat && <ContinueInChat paneId={ptyId} onError={setMoveError} />} /><ChatControls ptyId={ptyId} status={data.status} refresh={data.retry} /></>} empty={messages.length === 0} working={busy} disabled={canLaunch ? sending || data.loading : launched || readOnly || !data.status.available || data.loading || ended || !!managed && (managed.phase !== 'ready' || !managed.capabilities.send)}
       placeholder={canLaunch ? t('chat.initialMessage') : ended ? t('chat.placeholderEnded') : undefined}
       skillScope={!managed ? { ptyId, agent: canLaunch ? launchAgent : data.status.terminal?.agent ?? 'claude', composer: runtime.thread.composer, onTerminal, live: !!data.status.agentAlive } : undefined}
       maxLength={canLaunch ? 2000 : 16_000}
@@ -269,6 +274,7 @@ function ChatThread({ ptyId, data, onTerminal }: { ptyId: string; data: ReturnTy
         : messages.length === 0 ? <div className="wmux-chat-empty"><strong>{t('chat.empty')}</strong><p>{t('chat.emptyHint')}</p></div> : null}
       notices={<>
         {attachError && <div className="wmux-chat-notice" role="alert">{attachError}</div>}
+        {moveError && <div className="wmux-chat-notice" role="alert">{moveError}</div>}
         {stopState && <div className="wmux-chat-notice" role="status">{t(`chat.stopState.${stopState}`)}
           {['kept', 'blocked', 'failed'].includes(stopState) && <button type="button" onClick={onTerminal}>{t('chat.openTerminal')}</button>}</div>}
         {launched && <div className="wmux-chat-notice" role="status">{t('chat.terminalStarting')} <button type="button" onClick={onTerminal}>{t('chat.openTerminal')}</button></div>}

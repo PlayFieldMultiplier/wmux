@@ -1412,6 +1412,7 @@ details[open] > .wmux-chatv2-tool-line .wmux-chatv2-chevron { transform: rotate(
 [data-chat-state="complete"] .wmux-chat-progress-dot { background: var(--accent-green); }
 .wmux-chat-progress-detail { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; margin-top: 4px; color: var(--text-sub); }
 .wmux-chat-progress-detail button { text-decoration: underline; min-height: 24px; }
+.wmux-chat-progress-actions { display: inline-flex; align-items: center; gap: 12px; }
 /* Task records: Orca-inspired quiet navigation with the existing MIT assistant-ui
  * Thread composer treatment (components/Channels/LICENSE.assistant-ui). Channel
  * transport and mentions remain owned by Composer; no model runtime is added. */

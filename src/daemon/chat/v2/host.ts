@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { applyHarnessEvent, blockChangeFrom } from '../../../shared/chatv2/apply';
@@ -36,8 +37,11 @@ import { CLAUDE_SETTING_SOURCES, CLAUDE_SETTING_SOURCES_PATTERN } from './claude
 import { driverCwd } from './cwd';
 import { buildDriverEnv, DriverEnvError } from './env';
 import { boundEvent, EventBatcher } from './eventBatcher';
-import { claimChatV2Pane, releaseChatV2Pane } from './paneClaims';
-import { handOffToTerminal, handedOffRefusal } from './handoff';
+import { beginPaneMove, claimChatV2Pane, endPaneMove, releaseChatV2Pane } from './paneClaims';
+import { driverState, handOffToTerminal, handedOffRefusal } from './handoff';
+import { checkTerminal, describeProcesses, releaseTerminal, STOPPED_PREFIX, type FromTerminalDeps } from './fromTerminal';
+import { whichOnPath } from '../../web/agentLaunch';
+import type { ResumeBinding } from '../../../shared/agentResume';
 import { sameProcessStartTime } from '../../phantomExit';
 import { classifyShell } from '../../shell-integration';
 import { ChatV2Store } from './store';
@@ -49,6 +53,7 @@ import {
   type ChatV2Host,
   type ChatV2HostDeps,
   type ChatV2StoredRecord,
+  type ChatV2TerminalDeps,
 } from './types';
 
 /**
@@ -133,6 +138,8 @@ interface Live {
   batchBase: Session;
   persistTimer: ReturnType<typeof setTimeout> | null;
   lastBindingKey: string;
+  /** The pid of the last driver spawned, kept after a failed start: a rollback proves it exited first. */
+  lastPid?: number;
 }
 
 const PERMISSION_ACTIONS: DecisionForm['actions'] = [
@@ -206,6 +213,8 @@ class Host implements ChatV2Host {
   private readonly store: ChatV2Store;
   private readonly drivers: ChatV2DriverFactory;
   private readonly byPane = new Map<string, Live>();
+  /** Panes a move into chat holds (fromTerminal): no `create`, and no launch or resume line typed in. In memory only. */
+  private readonly reserved = new Set<string>();
   private readonly subscribers = new Map<string, Set<string>>();
   private readonly pushListeners = new Set<(push: ChatV2EventsPush) => void>();
   private started: Promise<void> | null = null;
@@ -312,6 +321,12 @@ class Host implements ChatV2Host {
     return live ? this.status(live) : null;
   }
 
+  ownsPane(paneId: string): boolean {
+    if (this.reserved.has(paneId)) return true;
+    const live = this.byPane.get(paneId);
+    return !!live && !live.closed && live.record.state !== 'handed-off';
+  }
+
   onPush(listener: (push: ChatV2EventsPush) => void): () => void {
     this.pushListeners.add(listener);
     return () => { this.pushListeners.delete(listener); };
@@ -397,6 +412,7 @@ class Host implements ChatV2Host {
     answer: (p) => this.answer(p),
     bodies: async (p) => this.bodies(p),
     toTerminal: (p) => this.toTerminal(p),
+    fromTerminal: (p) => this.fromTerminal(p),
     close: (p) => this.close(p),
   };
 
@@ -409,6 +425,7 @@ class Host implements ChatV2Host {
     const pane = this.deps.sessionManager.getSession(p.paneId);
     if (!pane) return chatV2Error('pane-not-found', 'That pane is gone.');
     if (this.byPane.has(p.paneId)) return chatV2Error('already-exists', 'This pane already has a chat.');
+    if (this.reserved.has(p.paneId)) return chatV2Error('handoff-refused', 'This pane is moving into a chat.');
     const meta = pane.meta;
     const cwd = await (this.deps.driverCwd ?? driverCwd)(meta);
     // Checked again after the await: the pane may have closed (or been replaced
@@ -418,6 +435,7 @@ class Host implements ChatV2Host {
       return chatV2Error('pane-not-found', 'That pane is gone.');
     }
     if (this.byPane.has(p.paneId)) return chatV2Error('already-exists', 'This pane already has a chat.');
+    if (this.reserved.has(p.paneId)) return chatV2Error('handoff-refused', 'This pane is moving into a chat.');
     if (!cwd) return chatV2Error('pane-not-found', 'The pane has no known working directory.');
     // The RPC layer validated it; the argv rule is checked again where it is used.
     if (p.model !== undefined && !CHATV2_MODEL.test(p.model)) return chatV2Error('invalid-params', 'Invalid model.');
@@ -725,6 +743,222 @@ class Host implements ChatV2Host {
   }
 
   /**
+   * Terminal → chat (fromTerminal.ts holds the TUI half). The pane is
+   * reserved in memory (no `create`, no launch or resume line typed in) and
+   * its keyboard held from the first check to the driver's start. The record
+   * is persisted only once the TUI is proved gone, and the driver re-checks
+   * the pane after it spawned. A refusal after the stop leaves the pane's
+   * resume binding, so the terminal's Resume reopens the conversation; a
+   * record whose driver failed to start is dropped only once that process is
+   * proved gone.
+   */
+  private async fromTerminal(p: ChatV2ParamsByMethod['fromTerminal']): Promise<Result<'fromTerminal'>> {
+    const terminal = this.deps.terminal;
+    if (!terminal) return chatV2Error('unavailable', 'Continuing in chat is unavailable.');
+    const pane = this.deps.sessionManager.getSession(p.paneId);
+    if (!pane) return chatV2Error('pane-not-found', 'That pane is gone.');
+    if (p.preview) {
+      const existing = this.byPane.get(p.paneId);
+      if (existing && existing.record.state !== 'handed-off') return chatV2Error('already-exists', 'This pane already has a chat.');
+      if (this.reserved.has(p.paneId)) return chatV2Error('handoff-refused', 'This pane is already moving into a chat.');
+      const env = await this.moveEnv(pane.meta.env, p.paneId);
+      if (!env.ok) return env;
+      const checked = await checkTerminal(this.fromTerminalDeps(terminal), p.paneId, { tombstone: !!existing, configDir: env.configDir });
+      if (!checked.ok) return checked;
+      return { ok: true, processes: describeProcesses(checked.tree?.descendants ?? []) };
+    }
+    if (!beginPaneMove(p.paneId)) return chatV2Error('handoff-refused', 'This pane is already moving between the terminal and a chat.');
+    try {
+      const releaseKeyboard = terminal.holdKeyboard(p.paneId);
+      if (!releaseKeyboard) return chatV2Error('handoff-refused', 'Something is typing into this pane. Try again in a moment.');
+      this.reserved.add(p.paneId);
+      claimChatV2Pane(p.paneId);
+      try {
+        return await this.moveIntoChat(terminal, p.paneId);
+      } finally {
+        releaseKeyboard();
+        this.reserved.delete(p.paneId);
+        if (!this.byPane.has(p.paneId)) releaseChatV2Pane(p.paneId);
+      }
+    } finally {
+      endPaneMove(p.paneId);
+    }
+  }
+
+  private async moveIntoChat(terminal: ChatV2TerminalDeps, paneId: string): Promise<Result<'fromTerminal'>> {
+    const pane = this.deps.sessionManager.getSession(paneId);
+    if (!pane) return chatV2Error('pane-not-found', 'That pane is gone.');
+    const existing = this.byPane.get(paneId) ?? null;
+    if (existing && existing.record.state !== 'handed-off') return chatV2Error('already-exists', 'This pane already has a chat.');
+    // Everything the driver can fail on without spawning, before the TUI is touched.
+    const env = await this.moveEnv(pane.meta.env, paneId);
+    if (!env.ok) return env;
+    const deps = this.fromTerminalDeps(terminal);
+    // 1. Check.
+    const checked = await checkTerminal(deps, paneId, { tombstone: !!existing, configDir: env.configDir });
+    if (!checked.ok) return checked;
+    // 2-3. Stop and prove.
+    const released = await releaseTerminal(deps, paneId, checked);
+    if (!released.ok) return released;
+    const stoppedFail = (message: string) => chatV2Error('handoff-refused', released.stopped ? `${STOPPED_PREFIX} ${message}` : message);
+    if (this.disposed || this.deps.sessionManager.getSession(paneId) !== pane) return stoppedFail('The pane closed.');
+    if ((this.byPane.get(paneId) ?? null) !== existing) return stoppedFail('The pane\u2019s chat changed meanwhile.');
+
+    // 4. The record: a revived tombstone, or a new one resuming the TUI's session.
+    const { binding } = released;
+    const before = existing ? (JSON.parse(JSON.stringify(existing.record)) as ChatV2StoredRecord) : null;
+    const live = existing ?? this.newLive(this.recordFromTerminal(paneId, binding));
+    if (existing) this.revive(existing, binding);
+    // A send or a close waits for the start below (`starting`).
+    live.starting = true;
+    this.byPane.set(paneId, live);
+    if (!(await this.persistNow(live))) {
+      live.starting = false;
+      await this.undoMove(live, before);
+      return stoppedFail('The chat could not be saved.');
+    }
+
+    // 5. Start the driver: startDriver re-checks the pane before and after the spawn.
+    const started = await this.startDriver(live);
+    if (!started.ok) {
+      const dropped = await this.dropFailedStart(live, before);
+      const why = started.error.message;
+      return stoppedFail(dropped ? why : `${why} Its process may still be running; the chat was kept so wmux can stop it.`);
+    }
+    this.stamp(live, { type: 'status', text: existing ? 'Back from the terminal. Turns made there are not shown here.' : 'Continued from the terminal.' });
+    void this.persistNow(live);
+    return { ok: true, binding: this.binding(live) };
+  }
+
+  /** The driver env a move would start with (as startDriver builds it), and the Claude config dir it names. */
+  private async moveEnv(paneEnv: Record<string, string>, paneId: string): Promise<{ ok: true; configDir: string } | { ok: false; error: ChatV2Error }> {
+    let env: Record<string, string>;
+    try {
+      env = buildDriverEnv(paneId, paneEnv, process.env);
+      env.PATH = (await agentExecEnv(env)).PATH ?? env.PATH;
+    } catch (error) {
+      return chatV2Error('driver-unavailable', error instanceof DriverEnvError ? error.message : 'The chat agent could not be prepared.');
+    }
+    const found = await (this.deps.claudeOnPath ?? ((p: string) => whichOnPath('claude', p)))(env.PATH ?? '').catch(() => undefined);
+    if (!found) return chatV2Error('driver-unavailable', 'Claude Code is not installed where the chat can run it.');
+    const configDir = env.CLAUDE_CONFIG_DIR ?? path.join(env.HOME || os.homedir(), '.claude');
+    return { ok: true, configDir };
+  }
+
+  private fromTerminalDeps(terminal: ChatV2TerminalDeps): FromTerminalDeps {
+    const files = this.deps.fs ?? {
+      stat: (file: string) => {
+        try {
+          const st = fs.statSync(file);
+          return st.isFile() ? { size: st.size, mtimeMs: st.mtimeMs, ino: st.ino } : null;
+        } catch {
+          return null;
+        }
+      },
+      isDirectory: (dir: string) => {
+        try { return fs.statSync(dir).isDirectory(); } catch { return false; }
+      },
+      realpath: (p: string) => fs.realpathSync.native(p),
+    };
+    return {
+      ...terminal,
+      ...files,
+      paneFree: this.deps.paneFree,
+      platform: this.deps.platform ?? process.platform,
+      ...(this.deps.moveTiming?.quietMs !== undefined ? { quietMs: this.deps.moveTiming.quietMs } : {}),
+      ...(this.deps.moveTiming?.freeWaitMs !== undefined ? { freeWaitMs: this.deps.moveTiming.freeWaitMs } : {}),
+    };
+  }
+
+  /** A new record for the TUI's conversation: the same session id, its folder, its permission mode. */
+  private recordFromTerminal(paneId: string, binding: ResumeBinding): ChatV2StoredRecord {
+    const chatSessionId = randomUUID();
+    // Only bypass carries over; any other mode (plan, acceptEdits) asks, never less.
+    const mode = binding.permissionMode === 'bypassPermissions' ? 'bypass' : 'default';
+    return {
+      version: 1,
+      paneId,
+      chatSessionId,
+      agent: 'claude',
+      mode,
+      model: '',
+      state: 'active',
+      providerSessionId: binding.sessionId,
+      resumeExisting: true,
+      seq: 0,
+      session: newChatSession({ id: chatSessionId, harness: 'claude', cwd: binding.cwd, model: '', runtimeMode: mode }),
+      bodies: {},
+      sends: [],
+      savedAt: this.deps.now(),
+    };
+  }
+
+  /** Bring a `handed-off` tombstone back for the TUI's conversation, under a new epoch. */
+  private revive(live: Live, binding: ResumeBinding): void {
+    const mode = binding.permissionMode === 'bypassPermissions' ? 'bypass' : 'default';
+    live.record.state = 'active';
+    live.record.providerSessionId = binding.sessionId;
+    live.record.resumeExisting = true;
+    live.record.mode = mode;
+    live.record.session = { ...live.record.session, cwd: binding.cwd, runtimeMode: mode };
+    live.shadow = { ...live.shadow, cwd: binding.cwd, runtimeMode: mode };
+    delete live.record.process;
+    live.error = undefined;
+    live.failed = false;
+    live.epoch = newEpoch();
+  }
+
+  /** Undo step 4 after nothing was started: drop the new record, or put the tombstone back. */
+  private async undoMove(live: Live, before: ChatV2StoredRecord | null): Promise<void> {
+    if (before) {
+      // A new epoch: the attempt may have stamped events past the tombstone's seq.
+      live.record = before;
+      live.shadow = before.session;
+      live.batchBase = before.session;
+      live.epoch = newEpoch();
+      live.error = undefined;
+      live.failed = false;
+      this.stamp(live, { type: 'status', text: 'The chat could not start. The conversation stays in the terminal.' });
+      await this.persistNow(live);
+      return;
+    }
+    live.closed = true;
+    live.batcher.dispose();
+    if (live.persistTimer) clearTimeout(live.persistTimer);
+    await live.saveChain;
+    if (this.byPane.get(live.record.paneId) === live) this.byPane.delete(live.record.paneId);
+    try {
+      this.store.remove(live.record.chatSessionId);
+    } catch (error) {
+      this.deps.log('warn', `[chatv2] could not remove record ${live.record.chatSessionId}: ${String(error)}`);
+    }
+  }
+
+  /**
+   * After a failed start: undo the record only once the driver it spawned (if
+   * any) is proved gone. Otherwise the record stays, stopped, with what the
+   * sweep needs to stop that process later. True when undone.
+   */
+  private async dropFailedStart(live: Live, before: ChatV2StoredRecord | null): Promise<boolean> {
+    const pid = live.lastPid;
+    let gone = !live.unreaped && !live.driver;
+    if (gone && pid !== undefined) {
+      const probe = { processIdentity: this.deps.processIdentity, ...(this.deps.processProbe ? { probe: this.deps.processProbe } : {}) };
+      gone = (await driverState(probe, pid, live.record).catch(() => 'unknown' as const)) === 'gone';
+    }
+    if (!gone) {
+      if (pid !== undefined && !live.record.process) {
+        const identity = await this.deps.processIdentity(pid).catch(() => null);
+        if (identity?.startTime) live.record.process = { pid, startTime: identity.startTime, marker: live.record.providerSessionId };
+      }
+      await this.persistNow(live);
+      return false;
+    }
+    await this.undoMove(live, before);
+    return true;
+  }
+
+  /**
    * The anchor shell's input revision while it sits at an empty prompt (shell
    * integration seen, no command running), or null. cmd.exe has no prompt
    * integration, so it never reads as empty.
@@ -852,7 +1086,7 @@ class Host implements ChatV2Host {
         return chatV2Error('agent-running-in-pane', 'Something is running in this pane. Finish it first.');
       }
       if (superseded()) return chatV2Error('session-not-found', 'The chat was closed.');
-      const resume = record.session.blocks.some((b) => b.role === 'user');
+      const resume = record.resumeExisting === true || record.session.blocks.some((b) => b.role === 'user');
       const fail = (message: string): { ok: false; error: ChatV2Error } => {
         this.deps.log('warn', `[chatv2] ${record.agent} driver failed to start on ${record.paneId}: ${message}`);
         live.failed = true;
@@ -888,9 +1122,11 @@ class Host implements ChatV2Host {
           exited: () => this.enqueue(live, { kind: 'exited', driver }),
         });
       } catch (error) {
+        live.lastPid = driver.pid;
         if (live.driver === driver) live.driver = null;
         return fail(error instanceof Error ? error.message : String(error));
       }
+      live.lastPid = driver.pid;
       if (live.driver !== driver) {
         // Stopped (close, dispose) or exited while starting: make sure nothing is left running.
         await driver.stop().catch(() => undefined);
@@ -907,6 +1143,16 @@ class Host implements ChatV2Host {
         await this.stopDriver(live);
         return chatV2Error('session-not-found', 'The chat was closed.');
       }
+      // The pane was free before the spawn, but the awaits since (the login
+      // shell's PATH, the spawn itself) leave a gap: a `claude` typed into the
+      // shell meanwhile would be a second writer. Checked again now.
+      const crowded = await this.secondWriter(record, resume, pid);
+      if (crowded) {
+        live.stopping = true;
+        await this.stopDriver(live);
+        this.deps.log('warn', `[chatv2] stopped the new driver on ${record.paneId}: ${crowded}`);
+        return chatV2Error('agent-running-in-pane', crowded);
+      }
       live.failed = false;
       live.error = undefined;
       return { ok: true };
@@ -914,6 +1160,28 @@ class Host implements ChatV2Host {
       live.starting = false;
       if (!live.closed && !this.disposed) void this.persistNow(live);
     }
+  }
+
+  /**
+   * Why the driver just spawned for `record` is not the conversation's only
+   * writer, or null: something runs in the pane's shell, or (on a resume)
+   * another process carries the session id in its argv.
+   */
+  private async secondWriter(record: ChatV2StoredRecord, resume: boolean, pid: number | undefined): Promise<string | null> {
+    if (!(await this.deps.paneFree(record.paneId).catch(() => false))) {
+      return 'Something started in this pane while the chat was starting. The chat was stopped.';
+    }
+    const scan = this.deps.terminal?.processesWithArg;
+    if (!resume || !scan) return null;
+    let others;
+    try {
+      others = (await scan(record.providerSessionId)).filter((e) => e.pid !== pid && e.ppid !== pid);
+    } catch {
+      return 'Could not confirm that the chat is the conversation’s only process. The chat was stopped.';
+    }
+    return others.length
+      ? `Another process holds this conversation: ${others.slice(0, 3).map((e) => `${e.name} (pid ${e.pid})`).join(', ')}. The chat was stopped.`
+      : null;
   }
 
   /** Stop the driver and wait until it is reaped. False: it did not exit, and it is kept. */

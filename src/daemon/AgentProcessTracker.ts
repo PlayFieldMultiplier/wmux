@@ -1142,6 +1142,13 @@ export class AgentProcessTracker {
     return { root, descendants };
   }
 
+  /** Every live process whose command line carries `marker` (a conversation
+   *  id), from a fresh table. Throws when the table cannot be read. */
+  async processesWithArg(marker: string): Promise<ProcessTreeEntry[]> {
+    if (!marker) return [];
+    return (await this.enumerate()).filter((e) => e.cmdline?.includes(marker) === true && e.pid !== process.pid);
+  }
+
   /** Of `entries`, the ones a fresh process table still shows as the same
    *  process: pid, image name and command line (a reused pid is another
    *  program, or the same program started with other arguments). Throws when

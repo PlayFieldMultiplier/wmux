@@ -119,4 +119,9 @@ describe('selectChatSurfaceView', () => {
   it('offers the empty chat-v2 composer on a free pane with no record', () => {
     expect(selectChatSurfaceView({ chatViewEnabled: true, viewMode: 'chat', binding: null, agentRunning: false })).toBe('chatv2');
   });
+  it('a handed-off chat shows the TUI\u2019s projection while it runs, and the tombstone once it exited', () => {
+    const handedOff = { paneId: PANE, status: 'handed-off' } as ChatV2Binding;
+    expect(selectChatSurfaceView({ chatViewEnabled: true, viewMode: 'chat', binding: handedOff, agentRunning: true })).toBe('projection');
+    expect(selectChatSurfaceView({ chatViewEnabled: true, viewMode: 'chat', binding: handedOff, agentRunning: false })).toBe('chatv2');
+  });
 });

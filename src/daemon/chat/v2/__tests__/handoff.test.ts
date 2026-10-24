@@ -147,7 +147,7 @@ describe('chat → terminal handoff', () => {
     const driver = { pid: 4242, stop: vi.fn(() => new Promise<void>((resolve) => { release = resolve; })) };
     const first = handOffToTerminal(deps, { record: record(), driver });
     expect(await handOffToTerminal(deps, { record: record(), driver: null }))
-      .toMatchObject({ ok: false, error: { message: 'This chat is already moving to the terminal.' } });
+      .toMatchObject({ ok: false, error: { message: 'This pane is already moving between the terminal and a chat.' } });
     release();
     expect((await first).ok).toBe(true);
     expect(deps.writeToPane).toHaveBeenCalledTimes(1);
