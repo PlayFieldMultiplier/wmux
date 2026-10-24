@@ -4019,6 +4019,7 @@ export const pl = {
   // Agent toolbar
   'toolbar.fileExplorer': 'Pliki',
   'toolbar.schedule': 'Harmonogram',
+  'toolbar.rewind': 'Cofnij',
   'toolbar.scheduleTooltip': 'Zarządzaj zaplanowanymi poleceniami dla tej sesji',
   'sessionSchedule.title': 'Harmonogramy sesji',
   'sessionSchedule.hint': 'wmux zaczeka na cichego, gotowego agenta, a następnie bezpiecznie wklei i wyśle polecenie. Dostarczanie wymaga trybu demona; oczekujące polecenia przetrwają restart aplikacji.',

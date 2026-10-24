@@ -4116,6 +4116,7 @@ export const ko = {
   'deck.decisionPlaceholder': '답을 입력하세요…',
   'deck.decisionAnswerLabel': '질문에 대한 내 답',
   'toolbar.schedule': '예약',
+  'toolbar.rewind': '되돌리기',
   'toolbar.scheduleTooltip': '이 세션의 예약 프롬프트 관리',
   'sessionSchedule.title': '세션 예약',
   'sessionSchedule.hint': 'wmux는 에이전트가 조용하고 입력 가능한 상태가 될 때까지 기다린 뒤 프롬프트를 안전하게 붙여 넣고 전송합니다. 전송에는 데몬 모드가 필요하며, 대기 중인 프롬프트는 앱 재시작 후에도 유지됩니다.',

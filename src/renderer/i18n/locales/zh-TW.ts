@@ -541,6 +541,7 @@ export const zhTW = {
   // ─── 代理工具列: fan-out / broadcast 按鈕 ───
   'toolbar.fanOut': 'Multi Task',
   'toolbar.schedule': '排程',
+  'toolbar.rewind': '回溯',
   'toolbar.scheduleTooltip': '管理這個 session 的排程提示',
   'sessionSchedule.title': 'Session 排程',
   'sessionSchedule.hint': 'wmux 會等待這個 agent 安靜且可接收新任務，再安全貼上並送出提示。投遞需要 daemon mode；到期提示可跨 app 重啟保留。',

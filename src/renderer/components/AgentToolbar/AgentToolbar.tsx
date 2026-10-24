@@ -9,6 +9,7 @@ import { toggleFileTreePanel } from '../FileTree/fileTreeToggle';
 import RichInput from './RichInput';
 import SnippetsMenu from './SnippetsMenu';
 import SessionSchedulesPopover from './SessionSchedulesPopover';
+import { useClaudeRewindAction } from '../Pane/usePaneClaudeRewind';
 import { IconFolder, IconStar, IconKeyboard, IconSparkles, IconLock, IconClock } from '../icons';
 
 /**
@@ -66,6 +67,10 @@ export default function AgentToolbar({ barHandlers, revealed, onHoldChange, onFo
   const ptyId = focusedTerminalPtyId(activeWorkspace);
   const activeAgent = useStore((s) => (ptyId ? s.surfaceAgent[ptyId] : undefined));
   const disabled = !ptyId;
+  // Claude's own Rewind, the pane menu's action and rule: shown only for a
+  // focused Claude pane on this computer.
+  const readOnly = useStore((s) => s.readOnly);
+  const claudeRewind = useClaudeRewindAction({ ptyId: ptyId ?? undefined, allowed: !readOnly });
 
   // Anything open below the bar must keep it on screen — a popover whose
   // trigger vanished under the pointer is the failure mode hover bars are
@@ -216,6 +221,24 @@ export default function AgentToolbar({ barHandlers, revealed, onHoldChange, onFo
       >
         <IconClock size={13} /> <span className="wmux-toolbar-label whitespace-nowrap">{t('toolbar.schedule')}</span>
       </button>
+      {/* Disabled while the pane reports a running turn; the daemon still
+          refuses any other state with a toast, as from the menu. */}
+      {claudeRewind.ready && (
+        <button
+          className={`${btn} ${idle}`}
+          disabled={claudeRewind.busy}
+          onClick={() => {
+            if (fanOutOpen) closeFanOut();
+            setPopover(null);
+            void claudeRewind.rewind();
+          }}
+          title={claudeRewind.busy ? t('pane.rewindBusy') : t('pane.rewindHint')}
+          aria-label={t('toolbar.rewind')}
+          data-testid="toolbar-rewind"
+        >
+          <IconClock size={13} /> <span className="wmux-toolbar-label whitespace-nowrap">{t('toolbar.rewind')}</span>
+        </button>
+      )}
       <div className="flex-1" />
       {disabled && <span className="text-[10px] text-[var(--text-muted)]">{t('toolbar.noTerminal')}</span>}
       {/* Multi Task (fan-out) — a fleet-spawn command, so it lives on the

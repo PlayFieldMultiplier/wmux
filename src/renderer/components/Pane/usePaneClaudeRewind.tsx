@@ -1,4 +1,5 @@
-// Pane actions menu → "Rewind…" for a terminal pane running Claude Code.
+// Pane actions menu → "Rewind…" for a terminal pane running Claude Code, and
+// the agent toolbar's Rewind button (useClaudeRewindAction).
 //
 // Opens Claude's own Rewind picker (its double ESC) through the daemon, which
 // refuses unless Claude is idle with an empty composer (openClaudeRewind.ts).
@@ -27,15 +28,21 @@ const REFUSAL_KEYS: Record<Exclude<ClaudeRewindResult, 'opened'>, string> = {
   error: 'pane.rewindUnavailable',
 };
 
-export function usePaneClaudeRewind(opts: {
+/**
+ * The Rewind action itself, shared by the pane menu and the agent toolbar.
+ * `ready` is when either offers it at all; `busy` is the pane's last reported
+ * status saying a turn runs. The daemon still decides on every press.
+ */
+export function useClaudeRewindAction(opts: {
   ptyId: string | undefined;
   /** False for a read-only mirror, whose ptyIds are not this main's panes. */
   allowed: boolean;
-}): PaneActionItem[] {
+}): { ready: boolean; busy: boolean; rewind: () => Promise<void> } {
   const { ptyId, allowed } = opts;
   const t = useT();
   const daemon = useDaemonModeActive();
   const isClaude = useStore((s) => (ptyId ? !!agentRow(s.surfaceAgent[ptyId]?.slug)?.rewindPicker : false));
+  const busy = useStore((s) => (ptyId ? s.surfaceAgent[ptyId]?.status === 'running' : false));
   const ready = allowed && daemon && isClaude && !!ptyId && !!window.electronAPI?.chat?.rewind;
 
   const rewind = useCallback(async () => {
@@ -54,6 +61,16 @@ export function usePaneClaudeRewind(opts: {
     useStore.getState().pushToast({ level: result === 'error' ? 'error' : 'warn', message: t(REFUSAL_KEYS[result] ?? 'pane.rewindUnavailable') });
   }, [ptyId, t]);
 
+  return { ready, busy, rewind };
+}
+
+export function usePaneClaudeRewind(opts: {
+  ptyId: string | undefined;
+  /** False for a read-only mirror, whose ptyIds are not this main's panes. */
+  allowed: boolean;
+}): PaneActionItem[] {
+  const t = useT();
+  const { ready, rewind } = useClaudeRewindAction(opts);
   return useMemo(() => (ready ? [{
     key: PANE_CLAUDE_REWIND_KEY,
     label: t('pane.rewind'),

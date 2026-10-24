@@ -4036,6 +4036,7 @@ export const zh = {
   'deck.decisionPlaceholder': '输入你的回答…',
   'deck.decisionAnswerLabel': '你对这个问题的回答',
   'toolbar.schedule': '计划',
+  'toolbar.rewind': '回溯',
   'toolbar.scheduleTooltip': '管理此会话的计划提示',
   'sessionSchedule.title': '会话计划',
   'sessionSchedule.hint': 'wmux 会等待此智能体安静且可接收输入，再安全粘贴并提交提示。投递需要守护进程模式；待处理的提示会在应用重启后保留。',

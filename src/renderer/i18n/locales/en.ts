@@ -4045,6 +4045,7 @@ export const en = {
   'toolbar.snippets': 'Snippets',
   'toolbar.richInput': 'Rich Input',
   'toolbar.schedule': 'Schedule',
+  'toolbar.rewind': 'Rewind',
   'toolbar.scheduleTooltip': 'Manage scheduled prompts for this session',
   'toolbar.compose': 'Compose',
   'toolbar.composeThisPane': 'This pane',
