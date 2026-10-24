@@ -175,10 +175,18 @@ describe('terminal → chat', () => {
     expect(r.host.ownsPane(PANE)).toBe(false);
 
     const other = path.join(dir, 'other-account');
-    fs.mkdirSync(other);
+    fs.mkdirSync(path.join(other, 'projects'), { recursive: true });
     const s = rig({ paneConfigDir: other });
     expect(await move(s)).toMatchObject({ ok: false, error: { message: 'This conversation belongs to another Claude account folder than this pane uses.' } });
     expect(s.term.stops).toBe(0);
+
+    // A `projects` folder that links to the conversation's is the same folder.
+    const linked = path.join(dir, 'linked-account');
+    fs.mkdirSync(linked);
+    fs.symlinkSync(path.join(dir, 'claude-home', 'projects'), path.join(linked, 'projects'));
+    const t = rig({ paneConfigDir: linked });
+    expect((await move(t)).ok).toBe(true);
+    await t.host.dispose();
   });
 
   it('a process holding the session id after the stop keeps the chat from starting', async () => {

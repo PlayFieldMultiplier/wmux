@@ -90,9 +90,10 @@ export function bindingRefusal(
   const projectsDir = path.dirname(projectDir);
   if (path.basename(transcriptPath) !== `${sessionId}.jsonl` || path.basename(projectsDir) !== 'projects') return unknown;
   if (!deps.stat(transcriptPath)) return unknown;
+  // The `projects` folders themselves: one may be a link to the other.
   let same = false;
   try {
-    same = deps.realpath(path.dirname(projectsDir)) === deps.realpath(configDir);
+    same = deps.realpath(projectsDir) === deps.realpath(path.join(configDir, 'projects'));
   } catch { /* either side gone */ }
   if (!same) return 'This conversation belongs to another Claude account folder than this pane uses.';
   if (!cwd || !path.isAbsolute(cwd) || CONTROL.test(cwd) || !deps.isDirectory(cwd)) return 'The conversation’s folder is gone.';
