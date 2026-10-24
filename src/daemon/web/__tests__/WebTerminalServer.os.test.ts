@@ -4405,6 +4405,18 @@ describe('WebTerminalServer', () => {
     const startBoth = () => server.start({port:0,host:'127.0.0.1',allowInput:true,allowTranscript:true,allowUpload:false});
     const post = (headers: Record<string,string>, body: unknown) => fetch(`${base()}/api/sessions`,{method:'POST',headers,body:JSON.stringify(body)});
 
+    it('a launch mode is refused before the account is looked up', async () => {
+      const calls = accountDesktop(['accounts.envForAccount'],{c2:second});
+      const info = await server.start({port:0,host:'127.0.0.1',allowInput:true,allowTranscript:true,allowUpload:false,allowDangerousLaunch:true});
+      const headers = bearer(info.token as string);
+      const before = lifecycleCalls.length;
+      const refused = await post(headers,{workspaceId:'ws-1',accountId:'c2',agentLaunch:{agent:'codex',mode:'yolo'}});
+      expect(refused.status).toBe(428);
+      expect(await refused.json()).toEqual({error:'dangerous-mode-unconfirmed',effect:'none'});
+      expect(calls).toEqual([]);
+      expect(lifecycleCalls).toHaveLength(before);
+    });
+
     it('an old desktop (command unknown) refuses the create and never spawns on the workspace env', async () => {
       accountDesktop(undefined,{c2:second});
       const headers = bearer((await startBoth()).token as string);

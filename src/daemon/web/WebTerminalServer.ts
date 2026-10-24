@@ -7060,23 +7060,13 @@ export class WebTerminalServer {
         const bad = this.rejectWorkspaceId(workspaceId, caller);
         if (bad) return this.json(res, 400, bad);
       }
-      let account: ResolvedPaneAccount | undefined;
-      if (lineage.value.accountId) {
-        const chosen = await resolvePaneAccount(this.availableDesktop(), workspaceId, lineage.value.accountId);
-        // The lookup was a round trip: answer only a caller that still holds the grant.
-        if (!await stillAuthorized()) return this.json(res,401,{error:'authorization-expired'});
-        if (!chosen.ok) return this.json(res, chosen.refusal.status, chosen.refusal.body);
-        account = chosen.account;
-      }
-      let agentLaunch: AgentLaunchChoice | undefined;
+      // `agentLaunch.mode` and `confirm` follow chat/launch's rules, checked
+      // before any lookup (the account one included): a known mode valid for
+      // the agent; a mode other than default needs the grants chat/launch needs
+      // (input and transcript), the --allow-dangerous-launch ceiling, and the
+      // exact `<agent>:<mode>` confirm. The rest of `agentLaunch` is checked below.
       let launchMode: TerminalLaunchMode = 'default';
-      if (b.agentLaunch !== undefined) {
-        if (!this.deps.agentLaunchOptions) return this.json(res,400,{error:'agent-launch-unavailable'});
-        if (!b.agentLaunch || typeof b.agentLaunch !== 'object' || Array.isArray(b.agentLaunch)) return this.json(res,400,{error:'invalid-agent-launch'});
-        // `mode` and `confirm` follow chat/launch's rules, checked before any
-        // lookup: a known mode valid for the agent; a mode other than default
-        // needs the grants chat/launch needs (input and transcript), the
-        // --allow-dangerous-launch ceiling, and the exact `<agent>:<mode>` confirm.
+      if (b.agentLaunch && typeof b.agentLaunch === 'object' && !Array.isArray(b.agentLaunch)) {
         const requestedMode = b.agentLaunch as { agent?: unknown; mode?: unknown; confirm?: unknown };
         const parsedMode = parseLaunchMode(requestedMode.agent, requestedMode.mode, requestedMode.confirm);
         if (!parsedMode.ok) return this.json(res,400,{error:'invalid-agent-launch',detail:parsedMode.detail,effect:'none'});
@@ -7094,6 +7084,19 @@ export class WebTerminalServer {
             return this.json(res, refused.status, refused.body);
           }
         }
+      }
+      let account: ResolvedPaneAccount | undefined;
+      if (lineage.value.accountId) {
+        const chosen = await resolvePaneAccount(this.availableDesktop(), workspaceId, lineage.value.accountId);
+        // The lookup was a round trip: answer only a caller that still holds the grant.
+        if (!await stillAuthorized()) return this.json(res,401,{error:'authorization-expired'});
+        if (!chosen.ok) return this.json(res, chosen.refusal.status, chosen.refusal.body);
+        account = chosen.account;
+      }
+      let agentLaunch: AgentLaunchChoice | undefined;
+      if (b.agentLaunch !== undefined) {
+        if (!this.deps.agentLaunchOptions) return this.json(res,400,{error:'agent-launch-unavailable'});
+        if (!b.agentLaunch || typeof b.agentLaunch !== 'object' || Array.isArray(b.agentLaunch)) return this.json(res,400,{error:'invalid-agent-launch'});
         // Any agent other than the account's vendor, not only the other known
         // one. The vendor is not echoed: the phone already knows which account it picked.
         if (account && (b.agentLaunch as { agent?: unknown }).agent !== account.vendor) {
