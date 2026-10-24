@@ -201,6 +201,9 @@ export interface LanLinkRuntimeStatus {
   listening: boolean;
   /** Set only when LanLink is enabled with a NIC selected but not listening. */
   stopReason: LanLinkStopReason | null;
+  /** A reconcile is queued or running (reading the network category, binding):
+   *  `listening` and `stopReason` are about to change. */
+  checking: boolean;
 }
 
 /** The persisted half of `LanLinkStatus` (what LanLinkController knows). */

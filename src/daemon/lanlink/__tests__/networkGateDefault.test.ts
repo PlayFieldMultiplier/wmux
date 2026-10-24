@@ -30,7 +30,7 @@ describe('LanLinkServer default network-category reader', () => {
     await server.settled();
     expect(readNetCategory).toHaveBeenCalledWith('192.168.1.10');
     expect(listen).not.toHaveBeenCalled();
-    expect(server.runtimeStatus()).toEqual({ listening: false, stopReason: 'network-public' });
+    expect(server.runtimeStatus()).toEqual({ listening: false, stopReason: 'network-public', checking: false });
     server.dispose();
   });
 });

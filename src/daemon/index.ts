@@ -9527,6 +9527,13 @@ async function main(): Promise<void> {
         sessionId: LANLINK_SENTINEL_SESSION_ID,
         data: { seq },
       }),
+    // A nudge only: the UI re-reads `lanlink.status`.
+    onStatusChange: () =>
+      pipeServer.broadcast({
+        type: 'lanlink.status.changed',
+        sessionId: LANLINK_SENTINEL_SESSION_ID,
+        data: {},
+      }),
   });
   lanLinkServerRef = lanLinkServer;
 

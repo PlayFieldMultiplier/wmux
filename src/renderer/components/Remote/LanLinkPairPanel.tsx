@@ -25,8 +25,10 @@ export interface LanLinkPairPanelViewProps {
   ready: boolean;
   /** A listener is open, so another PC can join this one. */
   listening: boolean;
-  /** Why LanLink is on but not listening (null while that is still being checked). */
+  /** Why LanLink is on but not listening. */
   stopReason: LanLinkStopReason | null;
+  /** The daemon is still deciding whether to listen. */
+  checking: boolean;
   /** This PC's host:port for the other PC's Join form. */
   selfAddress: string | null;
   pin: string | null;
@@ -92,9 +94,9 @@ export function LanLinkPairPanelView(p: LanLinkPairPanelViewProps) {
           <p className="wmux-a2a-note" data-tone="warning" role="status" data-testid="remote-connect-lan-stop-reason">
             {t(lanLinkStopReasonKey(p.stopReason))}
           </p>
-        ) : (
-          <p className="wmux-remote-connect-note">{t('settings.lanlinkLoading')}</p>
-        )
+        ) : p.checking ? (
+          <p className="wmux-remote-connect-note" data-testid="remote-connect-lan-checking">{t('settings.lanlinkLoading')}</p>
+        ) : null
       ) : p.pin ? (
         <>
           <div className="wmux-remote-code">
@@ -202,6 +204,7 @@ export default function LanLinkPairPanel({ onPaired }: LanLinkPairPanelProps) {
   const [effectivePort, setEffectivePort] = useState<number | null>(null);
   const [listening, setListening] = useState(false);
   const [stopReason, setStopReason] = useState<LanLinkStopReason | null>(null);
+  const [checking, setChecking] = useState(false);
   const [nics, setNics] = useState<NicInfo[]>([]);
   const [pin, setPin] = useState<string | null>(null);
   const [deadline, setDeadline] = useState<number | null>(null);
@@ -232,7 +235,8 @@ export default function LanLinkPairPanel({ onPaired }: LanLinkPairPanelProps) {
     setNic(r.data.nic);
     setEffectivePort(r.data.effectivePort);
     setListening(r.data.listening);
-    setStopReason(r.data.stopReason);
+    setStopReason(r.data.stopReason ?? null);
+    setChecking(r.data.checking === true);
     setNics(r.data.nics);
   }, [api, ipcInvoke]);
 
@@ -256,8 +260,9 @@ export default function LanLinkPairPanel({ onPaired }: LanLinkPairPanelProps) {
       window.electronAPI as unknown as { daemon?: { onConnected?: (cb: () => void) => () => void } }
     ).daemon;
     const off = daemonApi?.onConnected?.(() => { void refreshStatus(); });
+    const offStatus = api?.onStatusChanged?.(() => { void refreshStatus(); });
     const poll = window.setInterval(() => { void refreshStatus(); }, LAN_PANEL_POLL_MS);
-    return () => { off?.(); window.clearInterval(poll); };
+    return () => { off?.(); offStatus?.(); window.clearInterval(poll); };
   }, [refreshStatus]);
 
   // Countdown and window check only while a PIN is shown.
@@ -346,6 +351,7 @@ export default function LanLinkPairPanel({ onPaired }: LanLinkPairPanelProps) {
       ready={enabled && nic !== null}
       listening={listening}
       stopReason={stopReason}
+      checking={checking}
       selfAddress={selfAddress}
       pin={pin}
       countdownSec={countdownSec}

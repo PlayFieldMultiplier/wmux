@@ -19,7 +19,9 @@ feature with its own listener, its own credentials and its own settings
 section; turning one on does not turn on the other. On Windows, LanLink listens
 only while the selected adapter's network is **Private** or **Domain**; on a
 Public network, an adapter with no network profile, or when wmux cannot read
-the network type, it stays closed and Settings > LAN says why. macOS and Linux have no such network type, so there
+the network type, it stays closed, checks again within a minute, and Settings >
+LAN says why. While listening it reads the network type every minute and
+closes if the network turned Public. macOS and Linux have no such network type, so there
 LanLink listens on the adapter you select. Neither feature adds firewall rules.
 
 ## How it works

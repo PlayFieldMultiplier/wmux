@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron';
+import { BrowserWindow, ipcMain } from 'electron';
 import { IPC } from '../../../shared/constants';
 import { wrapHandler } from '../wrapHandler';
 import type { DaemonClient } from '../../DaemonClient';
@@ -113,7 +113,18 @@ export function registerLanLinkHandlers(daemonClient: DaemonClient): () => void 
     ),
   );
 
+  // The daemon says the listener state may have changed; Settings and the
+  // Remote page re-read `lanlink.status`.
+  const onEvent = (event: { type?: unknown }): void => {
+    if (event.type !== 'lanlink.status.changed') return;
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.webContents.send(IPC.LANLINK_STATUS_CHANGED);
+    }
+  };
+  daemonClient.on('event', onEvent);
+
   return () => {
+    daemonClient.off('event', onEvent);
     ipcMain.removeHandler(IPC.LANLINK_STATUS);
     ipcMain.removeHandler(IPC.LANLINK_CONFIGURE);
     ipcMain.removeHandler(IPC.LANLINK_PAIR_BEGIN);

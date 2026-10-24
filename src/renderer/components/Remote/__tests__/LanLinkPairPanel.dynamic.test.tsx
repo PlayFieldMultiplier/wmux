@@ -15,13 +15,13 @@ let root: Root;
 let lanlink: Record<string, ReturnType<typeof vi.fn>>;
 let pairActive = false;
 
-function stub(opts: { enabled?: boolean; nic?: boolean; listening?: boolean; stopReason?: string | null } = {}) {
-  const { enabled = true, nic = true, listening = true, stopReason = null } = opts;
+function stub(opts: { enabled?: boolean; nic?: boolean; listening?: boolean; stopReason?: string | null; checking?: boolean } = {}) {
+  const { enabled = true, nic = true, listening = true, stopReason = null, checking = false } = opts;
   pairActive = false;
   lanlink = {
     status: vi.fn(async () => ({
       enabled, nic: nic ? { name: 'en0', mac: 'aa:bb' } : null, port: null, effectivePort: 45651,
-      listening, stopReason,
+      listening, stopReason, checking,
       nics: [{ name: 'en0', mac: 'aa:bb', addresses: ['192.168.1.5'] }],
     })),
     pairBegin: vi.fn(async () => { pairActive = true; return { pin: '482913', expiresInMs: 120_000 }; }),
@@ -108,6 +108,20 @@ describe('Connect a PC › LAN', () => {
     stub({ listening: false, stopReason: 'network-public' });
     await render('lan');
     expect(q('remote-connect-lan-stop-reason')?.textContent).toContain('this network is Public');
+    expect(q('remote-connect-lan-begin')).toBeNull();
+    expect(q('remote-connect-lan-join')).not.toBeNull();
+  });
+
+  it('says it is checking only while the daemon is deciding, never as a resting state', async () => {
+    stub({ listening: false, stopReason: null, checking: true });
+    await render('lan');
+    expect(q('remote-connect-lan-checking')).not.toBeNull();
+    expect(q('remote-connect-lan-begin')).toBeNull();
+    act(() => root.unmount());
+    root = createRoot(container);
+    stub({ listening: false, stopReason: null, checking: false });
+    await render('lan');
+    expect(q('remote-connect-lan-checking')).toBeNull();
     expect(q('remote-connect-lan-begin')).toBeNull();
     expect(q('remote-connect-lan-join')).not.toBeNull();
   });

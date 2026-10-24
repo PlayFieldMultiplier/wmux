@@ -720,6 +720,8 @@ export const IPC = {
   // LanLink PR-3 control plane (renderer → main → daemon control pipe).
   LANLINK_STATUS: 'lanlink:status',
   LANLINK_CONFIGURE: 'lanlink:configure',
+  // main → renderer nudge: the daemon's LanLink listener state may have changed.
+  LANLINK_STATUS_CHANGED: 'lanlink:status:changed',
   // LanLink PR-5 pairing/peer control plane (renderer → main → daemon control pipe).
   // These bridge the PR-4 daemon control-pipe RPCs (machine-local, never on the LAN
   // net.Server) to the Settings pairing UI. Outbound-only (pair/send); no PTY paste.

@@ -31,6 +31,7 @@ function makeProps(overrides: Partial<LanLinkViewProps> = {}): LanLinkViewProps 
     onChangeNic: () => undefined,
     busy: false,
     stopReason: null,
+    hasNetworkCategory: true,
     t: tStub,
     ...overrides,
   };
@@ -88,6 +89,12 @@ describe('LanLinkView — markup', () => {
     expect(html).toContain('lanlink-stop-reason');
     expect(html).toContain('settings.lanlinkStopPublic');
     expect(html).toContain('data-tone="warning"');
+  });
+
+  it('says on macOS and Linux that there is no network category to gate on', () => {
+    const html = renderToStaticMarkup(createElement(LanLinkView, makeProps({ hasNetworkCategory: false })));
+    expect(html).toContain('settings.lanlinkWarningNoCategory');
+    expect(html).not.toContain('settings.lanlinkWarning<');
   });
 
   it('shows no reason line while listening, or when LanLink is off', () => {

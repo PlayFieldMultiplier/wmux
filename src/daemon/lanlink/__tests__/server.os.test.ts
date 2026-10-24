@@ -106,17 +106,14 @@ async function makeServer(onPeerPersist?: () => void): Promise<Harness> {
   const nudges: number[] = [];
   let seq = 0;
   let onConn: ((s: FakeSocket) => void) | null = null;
-  const fakeNetServer = {
-    on() {
-      /* no-op */
-    },
+  const fakeNetServer = Object.assign(new EventEmitter(), {
     listen() {
-      /* no-op */
+      setImmediate(() => fakeNetServer.emit('listening'));
     },
     close(cb?: () => void) {
       cb?.();
     },
-  };
+  });
   const server = new LanLinkServer({
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     inbox: { append: (rec: Omit<InboxRecord, 'seq'>) => { appended.push(rec); return { seq: ++seq }; } } as any,

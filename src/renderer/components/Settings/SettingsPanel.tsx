@@ -1094,6 +1094,8 @@ export interface LanLinkViewProps {
   busy: boolean;
   /** Why LanLink is on but not listening; null while it listens, is off, or has no NIC. */
   stopReason: LanLinkStopReason | null;
+  /** Windows: LanLink is gated on the network category. macOS/Linux have none. */
+  hasNetworkCategory: boolean;
   t: (key: string) => string;
 }
 
@@ -1109,6 +1111,7 @@ export function LanLinkView({
   onChangeNic,
   busy,
   stopReason,
+  hasNetworkCategory,
   t,
 }: LanLinkViewProps) {
   return (
@@ -1130,7 +1133,7 @@ export function LanLinkView({
         </SettingNote>
       )}
       <SettingNote data-testid="lanlink-warning">
-        {t('settings.lanlinkWarning')}
+        {t(hasNetworkCategory ? 'settings.lanlinkWarning' : 'settings.lanlinkWarningNoCategory')}
       </SettingNote>
       {busy && (
         <SettingNote>{t('settings.lanlinkApplying')}</SettingNote>
@@ -1151,7 +1154,13 @@ function LanLinkSection() {
 
   // Lazily access the API so the component is safe where preload hasn't exposed it.
   const lanlinkApi = (
-    window.electronAPI as unknown as { lanlink?: { status: () => Promise<LanLinkStatus>; configure: (p: { enabled?: boolean; nic?: LanLinkNic | null }) => Promise<LanLinkStatus> } }
+    window.electronAPI as unknown as {
+      lanlink?: {
+        status: () => Promise<LanLinkStatus>;
+        configure: (p: { enabled?: boolean; nic?: LanLinkNic | null }) => Promise<LanLinkStatus>;
+        onStatusChanged?: (cb: () => void) => () => void;
+      };
+    }
   ).lanlink;
 
   const refresh = useCallback(async () => {
@@ -1184,8 +1193,10 @@ function LanLinkSection() {
       window.electronAPI as unknown as { daemon?: { onConnected?: (cb: () => void) => () => void } }
     ).daemon;
     const off = daemonApi?.onConnected?.(() => void refresh());
-    return () => { off?.(); };
-  }, [refresh]);
+    // The daemon finished deciding (listening, or why not): re-read.
+    const offStatus = lanlinkApi?.onStatusChanged?.(() => void refresh());
+    return () => { off?.(); offStatus?.(); };
+  }, [refresh, lanlinkApi]);
 
   const apply = useCallback(
     async (patch: { enabled?: boolean; nic?: LanLinkNic | null }) => {
@@ -1236,6 +1247,7 @@ function LanLinkSection() {
       }}
       busy={busy}
       stopReason={status.stopReason}
+      hasNetworkCategory={window.electronAPI?.platform === 'win32'}
       t={t}
     />
   );

@@ -1224,6 +1224,9 @@ export interface DaemonEvent {
     // LANLINK_SENTINEL_SESSION_ID — no PTY session backs a remote message.
     //   lanlink.remote.received → { seq: number }
     | 'lanlink.remote.received'
+    // LanLink listener state may have changed (a reconcile finished, a network
+    // re-read closed it). A nudge only: re-read `lanlink.status`. `data` is {}.
+    | 'lanlink.status.changed'
     // Cross-host A2A link nudges (`A2aRemoteLinkEvent`, `sessionId` ''): a
     // proposal arrived or a link changed state. Re-read the link list.
     | 'a2a.remote.link.proposed'

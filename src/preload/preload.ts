@@ -2335,6 +2335,14 @@ document.addEventListener('DOMContentLoaded', () => {
   status: () => ipcRenderer.invoke(IPC.LANLINK_STATUS) as Promise<LanLinkStatus>,
   configure: (patch: LanLinkConfigurePatch) =>
     ipcRenderer.invoke(IPC.LANLINK_CONFIGURE, patch) as Promise<LanLinkStatus>,
+  // The listener state may have changed (a nudge: re-read status). Returns an unsubscribe fn.
+  onStatusChanged: (callback: () => void) => {
+    const listener = () => callback();
+    ipcRenderer.on(IPC.LANLINK_STATUS_CHANGED, listener);
+    return () => {
+      ipcRenderer.removeListener(IPC.LANLINK_STATUS_CHANGED, listener);
+    };
+  },
   // LanLink PR-5 pairing/peer control plane (Settings → LanLink pairing section).
   // Outbound-only (pair/send) + read-only queries; structurally unable to reach a
   // local PTY. Extends THIS literal in place (never a second .lanlink assignment).

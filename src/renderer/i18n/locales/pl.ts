@@ -2950,11 +2950,13 @@ export const pl = {
   'settings.lanlinkNicUnavailable': 'niedostępny',
   'settings.lanlinkWarning':
     'Włączenie otwiera port LAN na wybranym interfejsie — Windows może poprosić o zgodę. LanLink nasłuchuje tylko w sieciach prywatnych lub domenowych, nigdy w publicznej.',
+  'settings.lanlinkWarningNoCategory':
+    'Włączenie otwiera port LAN na wybranym interfejsie. Ten system nie ma typów sieci jak prywatna i publiczna w Windows, więc LanLink nasłuchuje na tym interfejsie w każdej sieci, do której się podłączy.',
   'settings.lanlinkLoading': 'Sprawdzanie statusu LanLink…',
   'settings.lanlinkApplying': 'Stosowanie…',
-  'settings.lanlinkStopPublic': 'Nie nasłuchuje: ta sieć jest publiczna. Ustaw ją jako prywatną w Ustawieniach systemu Windows › Sieć i Internet, a potem wyłącz i włącz LanLink.',
+  'settings.lanlinkStopPublic': 'Nie nasłuchuje: ta sieć jest publiczna. Ustaw ją jako prywatną w Ustawieniach systemu Windows › Sieć i Internet; LanLink sprawdzi ponownie w ciągu minuty.',
   'settings.lanlinkStopUnknown': 'Nie nasłuchuje: Windows nie ma profilu sieci dla tej karty. LanLink nie nasłuchuje w sieci, której Windows nie sklasyfikował.',
-  'settings.lanlinkStopCheckFailed': 'Nie nasłuchuje: nie udało się odczytać typu sieci z systemu Windows. Wyłącz i włącz LanLink, aby sprawdzić ponownie.',
+  'settings.lanlinkStopCheckFailed': 'Nie nasłuchuje: nie udało się odczytać typu sieci z systemu Windows. LanLink wkrótce spróbuje ponownie.',
   'settings.lanlinkStopNoAddress': 'Nie nasłuchuje: ta karta nie ma teraz adresu IPv4.',
   'settings.lanlinkStopListenFailed': 'Nie nasłuchuje: nie udało się otworzyć portu. Może go używać inny program.',
   'settings.lanlinkUnavailable': 'LanLink wymaga demona wmux — niedostępny w trybie tylko lokalnym. Pojawi się, gdy demon się połączy.',

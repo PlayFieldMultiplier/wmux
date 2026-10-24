@@ -60,6 +60,13 @@ const RECONNECT_HELLO: FrameType = 0x04;
 const RECONNECT2: FrameType = 0x05;
 const AEAD_RECORD: FrameType = 0x10;
 
+/** The NIC's address is compared this often (no category read). */
+const LIVENESS_MS = 10_000;
+/** While listening, the network category is read again this often. */
+const RECHECK_MS = 60_000;
+/** While refused, the network is read again after these delays, then every 60 s. */
+const RETRY_DELAYS_MS = [5_000, 15_000, 60_000];
+
 export interface LanLinkServerDeps {
   inbox: LanLinkInbox;
   controller: LanLinkController;
@@ -74,6 +81,9 @@ export interface LanLinkServerDeps {
   netCategory?: (ip: string) => Promise<NetCategoryResult>;
   /** Injectable net.createServer (tests). */
   createServer?: (onConn: (s: net.Socket) => void) => net.Server;
+  /** Called when the listener's state may have changed (a reconcile finished,
+   *  a re-read closed it). The daemon broadcasts it so the UI re-reads status. */
+  onStatusChange?: () => void;
 }
 
 // 'handshake-reconnect' is intentionally absent: the reconnect path is fully
@@ -111,8 +121,11 @@ export class LanLinkServer {
   private boundIp: string | null = null;
   private boundPort: number | null = null;
   private livenessTimer: NodeJS.Timeout | null = null;
+  private categoryTimer: NodeJS.Timeout | null = null;
+  private retryAttempt = 0;
+  private pendingPasses = 0;
   private reconcileChain: Promise<void> = Promise.resolve();
-  private runtime: LanLinkRuntimeStatus = { listening: false, stopReason: null };
+  private runtime: Omit<LanLinkRuntimeStatus, 'checking'> = { listening: false, stopReason: null };
   private disposed = false;
 
   // Admission (ISOLATED — never the control pipe's counters).
@@ -131,11 +144,23 @@ export class LanLinkServer {
     this.ifaces = deps.ifaces ?? (() => os.networkInterfaces());
     this.netCategory = deps.netCategory ?? ((ip) => readNetCategory(ip));
     this.createServer = deps.createServer ?? ((onConn) => net.createServer(onConn));
+    console.log(
+      `[LanLinkServer] network category reader: ${
+        deps.netCategory
+          ? 'injected'
+          : process.platform === 'win32'
+            ? 'Windows connection profile'
+            : 'none (this OS has no network category)'
+      }`,
+    );
 
     const s = deps.controller.getStatus(); // 'changed' does NOT fire at boot — read initial state
     this.status = { enabled: s.enabled, nic: s.nic, port: s.port };
     deps.controller.on(LANLINK_CONFIG_CHANGED, (cfg: { enabled: boolean; nic: LanLinkNic | null; port?: number }) => {
+      // Always a fresh object: a pass that awaited the category read compares
+      // identities to tell whether the config changed under it.
       this.status = { enabled: cfg.enabled, nic: cfg.nic, port: cfg.port ?? null };
+      this.retryAttempt = 0;
       this.scheduleReconcile();
     });
     if (this.status.enabled) this.scheduleReconcile();
@@ -143,28 +168,55 @@ export class LanLinkServer {
 
   // ── lifecycle (serialized, C14) ─────────────────────────────────────────────
 
-  private scheduleReconcile(): void {
-    this.reconcileChain = this.reconcileChain.then(() => this.doReconcile()).catch((err) => {
+  /** Queue an operation on the one chain every bind, close and category read runs on. */
+  private enqueue(op: () => Promise<void>): void {
+    this.reconcileChain = this.reconcileChain.then(op).catch((err) => {
       console.error('[LanLinkServer] reconcile failed:', err);
     });
   }
 
-  /** Resolves once every reconcile scheduled so far has finished. */
-  settled(): Promise<void> {
-    return this.reconcileChain;
+  private scheduleReconcile(): void {
+    this.pendingPasses += 1;
+    this.enqueue(async () => {
+      try {
+        await this.doReconcile();
+      } finally {
+        this.pendingPasses -= 1;
+        this.notifyStatus();
+      }
+    });
   }
 
-  /** Whether a listener is open, and why not when LanLink is on but closed. */
+  /** Resolves once the chain is idle, including passes queued by the ones it waited for. */
+  async settled(): Promise<void> {
+    let chain: Promise<void>;
+    do {
+      chain = this.reconcileChain;
+      await chain;
+    } while (chain !== this.reconcileChain);
+  }
+
+  /** Whether a listener is open, why not when LanLink is on but closed, and whether a pass is still deciding. */
   runtimeStatus(): LanLinkRuntimeStatus {
-    return { ...this.runtime };
+    return { ...this.runtime, checking: this.pendingPasses > 0 };
   }
 
   private stayStopped(reason: LanLinkStopReason | null): void {
     this.runtime = { listening: false, stopReason: reason };
   }
 
+  private notifyStatus(): void {
+    if (this.disposed) return;
+    try {
+      this.deps.onStatusChange?.();
+    } catch (err) {
+      console.warn('[LanLinkServer] status notify failed:', err instanceof Error ? err.message : err);
+    }
+  }
+
   private async doReconcile(): Promise<void> {
     // Always close first so a NIC/port/address change rebinds cleanly.
+    this.stopWatching();
     await this.closeServer();
     this.stayStopped(null);
     const status = this.status;
@@ -185,7 +237,7 @@ export class LanLinkServer {
     // ended the server); this pass must not open a listener behind it.
     if (this.disposed || this.status !== status) return;
     if (refused) {
-      this.stayStopped(refused);
+      this.refuse(refused);
       return;
     }
     const snap = this.ifaces();
@@ -194,15 +246,31 @@ export class LanLinkServer {
       this.scheduleReconcile();
       return;
     }
+    let opened = false;
     try {
-      this.listenOn(nic, ip, snap);
+      opened = await this.listenOn(ip, snap);
     } catch (err) {
       // assertLanBindAddress / listen pre-conditions failed -> stay stopped (C2).
       console.warn('[LanLinkServer] bind aborted, staying stopped:', err instanceof Error ? err.message : err);
-      await this.closeServer();
-      this.startLiveness(nic, ip);
-      this.stayStopped('listen-failed');
     }
+    if (opened) return;
+    await this.closeServer();
+    if (this.disposed) return;
+    this.refuse('listen-failed');
+  }
+
+  /**
+   * Stay closed for `reason` and read the network again later: 5 s, 15 s, then
+   * every 60 s. Right after a network change Windows can still be classifying
+   * it, and a read can fail once; neither should keep LanLink closed until it
+   * is turned off and on. The retry is a full reconcile, so it opens only
+   * after a fresh read allows it.
+   */
+  private refuse(reason: LanLinkStopReason): void {
+    this.stayStopped(reason);
+    const delay = RETRY_DELAYS_MS[Math.min(this.retryAttempt, RETRY_DELAYS_MS.length - 1)];
+    this.retryAttempt += 1;
+    this.armCategoryTimer(delay, () => this.scheduleReconcile());
   }
 
   /**
@@ -212,12 +280,14 @@ export class LanLinkServer {
    */
   private async categoryStopReason(ip: string): Promise<LanLinkStopReason | null> {
     let category: NetCategoryResult;
+    const started = performance.now();
     try {
       category = await this.netCategory(ip);
     } catch (err) {
       console.warn('[LanLinkServer] could not read the network category, staying stopped:', err instanceof Error ? err.message : err);
       return 'network-check-failed';
     }
+    console.log(`[LanLinkServer] network category: ${category} (${Math.round(performance.now() - started)} ms)`);
     switch (category) {
       case 'Private':
       case 'Domain':
@@ -232,8 +302,12 @@ export class LanLinkServer {
     }
   }
 
-  /** The ONLY place net.Server.listen() appears. One pinned ifaces snapshot (C14). */
-  private listenOn(nic: LanLinkNic, ip: string, snap: NodeJS.Dict<os.NetworkInterfaceInfo[]>): void {
+  /**
+   * The ONLY place net.Server.listen() appears. One pinned ifaces snapshot (C14).
+   * Resolves true once the socket is listening, false when it failed or was
+   * closed first: `listening` is reported only after the OS accepted the bind.
+   */
+  private listenOn(ip: string, snap: NodeJS.Dict<os.NetworkInterfaceInfo[]>): Promise<boolean> {
     assertLanBindAddress(ip, snap); // C2 fail-closed — throws to abort, caught by doReconcile
     const port = this.status.port ?? DEFAULT_PORT;
     const server = this.createServer((s) => this.onConn(s));
@@ -242,20 +316,67 @@ export class LanLinkServer {
     // accept-flood that would otherwise churn the event loop (G1). Mirrors
     // DaemonPipeServer.maxConnections.
     server.maxConnections = MAX_CONNECTIONS_TOTAL;
-    server.on('error', (err) => {
-      // C14: wired BEFORE listen; any listen error -> stop, never wildcard/retry-loop.
-      // A late error from a listener a later reconcile already replaced is ignored.
-      if (this.server !== server) return;
-      console.warn('[LanLinkServer] listen error, staying stopped:', err.message);
-      void this.closeServer();
-      this.startLiveness(nic, ip); // an address change tries again
-      this.stayStopped('listen-failed');
-    });
-    server.listen(port, ip);
     this.server = server;
     this.boundIp = ip;
     this.boundPort = port;
-    this.runtime = { listening: true, stopReason: null };
+    return new Promise((resolve) => {
+      let opened = false;
+      server.on('error', (err) => {
+        // C14: wired BEFORE listen; any listen error -> stop, never wildcard.
+        if (!opened) {
+          console.warn('[LanLinkServer] listen error, staying stopped:', err.message);
+          resolve(false); // the pass closes it and retries later
+          return;
+        }
+        // A listener that was open failed later. One a later reconcile already
+        // replaced is ignored.
+        if (this.server !== server) return;
+        console.warn('[LanLinkServer] listener error, closing:', err.message);
+        void this.closeServer();
+        if (this.disposed) return;
+        this.refuse('listen-failed');
+        this.notifyStatus();
+      });
+      server.once('close', () => {
+        if (!opened) resolve(false);
+      });
+      server.once('listening', () => {
+        if (this.disposed || this.server !== server) {
+          resolve(false);
+          return;
+        }
+        opened = true;
+        this.retryAttempt = 0;
+        this.runtime = { listening: true, stopReason: null };
+        this.armCategoryTimer(RECHECK_MS, () => this.enqueue(() => this.recheck()));
+        resolve(true);
+      });
+      server.listen(port, ip);
+    });
+  }
+
+  /**
+   * While listening, read the network category again every 60 s on the same
+   * chain as every reconcile, so reads never overlap and the next one is armed
+   * only after this one finishes. A network re-classified to Public while the
+   * address stays the same closes the listener here.
+   */
+  private async recheck(): Promise<void> {
+    const server = this.server;
+    const ip = this.boundIp;
+    const status = this.status;
+    if (this.disposed || !server || !ip || !this.runtime.listening) return;
+    const refused = await this.categoryStopReason(ip);
+    if (this.disposed || this.server !== server || this.status !== status) return;
+    if (!refused) {
+      this.armCategoryTimer(RECHECK_MS, () => this.enqueue(() => this.recheck()));
+      return;
+    }
+    console.warn('[LanLinkServer] the network no longer allows listening — closing');
+    await this.closeServer();
+    if (this.disposed) return;
+    this.refuse(refused);
+    this.notifyStatus();
   }
 
   private resolveIp(nics: NicInfo[], nic: LanLinkNic): string | null {
@@ -270,12 +391,13 @@ export class LanLinkServer {
   /**
    * Every 10 s, compare the NIC's live address with the one the last reconcile
    * evaluated (bound or refused). A change reconciles, which reads the network
-   * category again. The tick itself never reads the category: that read spawns
-   * powershell.exe. So a network re-classified while the address stays the same
-   * is picked up on the next address change or when LanLink is turned off and on.
+   * category again. The tick itself never reads the category (that read spawns
+   * powershell.exe); the 60 s re-read while listening and the retry while
+   * refused do.
    */
   private startLiveness(nic: LanLinkNic, evaluatedIp: string | null): void {
     this.clearLiveness();
+    if (this.disposed) return;
     this.livenessTimer = setInterval(() => {
       const ip = this.resolveIp(enumerateNics(this.ifaces()), nic);
       if (ip !== evaluatedIp) {
@@ -284,9 +406,10 @@ export class LanLinkServer {
         // rebinding to the new address if its network allows it, or staying
         // stopped. Never a wildcard; listenOn re-asserts the address (C2/C14).
         console.warn('[LanLinkServer] selected NIC address changed — reconciling');
+        this.retryAttempt = 0;
         this.scheduleReconcile();
       }
-    }, 10_000);
+    }, LIVENESS_MS);
     this.livenessTimer.unref?.();
   }
 
@@ -297,8 +420,30 @@ export class LanLinkServer {
     }
   }
 
-  private closeServer(): Promise<void> {
+  /** One timer for the next category read: the 60 s re-read while listening, or the retry while refused. */
+  private armCategoryTimer(ms: number, fire: () => void): void {
+    this.clearCategoryTimer();
+    if (this.disposed) return;
+    this.categoryTimer = setTimeout(() => {
+      this.categoryTimer = null;
+      fire();
+    }, ms);
+    this.categoryTimer.unref?.();
+  }
+
+  private clearCategoryTimer(): void {
+    if (this.categoryTimer) {
+      clearTimeout(this.categoryTimer);
+      this.categoryTimer = null;
+    }
+  }
+
+  private stopWatching(): void {
     this.clearLiveness();
+    this.clearCategoryTimer();
+  }
+
+  private closeServer(): Promise<void> {
     for (const conn of [...this.conns]) this.destroy(conn);
     const server = this.server;
     this.server = null;
@@ -311,6 +456,7 @@ export class LanLinkServer {
   dispose(): void {
     this.disposed = true;
     this.cancelPairing();
+    this.stopWatching();
     void this.closeServer();
     // AFTER the listener teardown: closing connections runs destroy(), whose own
     // flushSeen would otherwise re-dirty the store behind a dispose that already
