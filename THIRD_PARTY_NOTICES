@@ -3334,7 +3334,7 @@ SOFTWARE.
 
 ================================================================================
 
-body-parser@2.3.0
+body-parser@2.4.0
 License: MIT
 Repository: expressjs/body-parser
 
@@ -3833,7 +3833,7 @@ THE SOFTWARE.
 
 ================================================================================
 
-electron@42.11.9
+electron@42.11.16
 License: MIT
 Author: Electron Community
 Repository: https://github.com/electron/electron
@@ -4427,7 +4427,7 @@ For more information, please refer to <http://unlicense.org>
 
 ================================================================================
 
-fast-uri@3.1.8
+fast-uri@3.1.9
 License: BSD-3-Clause
 Author: Vincent Le Goff <vince.legoff@gmail.com> (https://github.com/zekth)
 Repository: https://github.com/fastify/fast-uri
@@ -10779,7 +10779,7 @@ Repository: https://github.com/kazuhikoarase/qrcode-generator
 
 ================================================================================
 
-qs@6.16.0
+qs@6.16.1
 License: BSD-3-Clause
 Repository: https://github.com/ljharb/qs
 
@@ -11947,7 +11947,7 @@ THIS SOFTWARE.
 
 ================================================================================
 
-zod@4.6.5
+zod@4.6.7
 License: MIT
 Author: Colin McDonnell <zod@colinhacks.com>
 Repository: https://github.com/colinhacks/zod
