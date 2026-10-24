@@ -106,13 +106,18 @@ describe('TranscriptProjector.status — unavailable reasons', () => {
     });
   });
 
-  it('unreadable when the transcript was purged', () => {
+  it('a transcript with nothing at its path yet reads as an empty conversation (a bare launch)', () => {
+    // Claude names it at SessionStart and writes it on the first prompt; a
+    // purged one reads the same. The chat bridge offers it only while the agent runs.
     harness.bindings.set('pty-1', binding({ transcriptPath: path.join(harness.projects, 'gone.jsonl') }));
-    expect(harness.projector.status('pty-1')).toEqual({
-      available: false,
-      reason: 'unreadable',
+    expect(harness.projector.status('pty-1')).toMatchObject({
+      available: true,
+      reason: 'ok',
       transcriptBasename: 'gone.jsonl',
+      agentSessionId: 'gone',
+      sizeBytes: 0,
     });
+    expect(harness.projector.snapshot('pty-1')?.events).toEqual([]);
   });
 
   it('ok, with the agent session id derived from the basename', () => {

@@ -1,3 +1,4 @@
+// @wmux-lane unit — 'win32' here is a host OS value under test; the one process.platform check only skips an assertion about a POSIX host.
 // `transcript_path` arrives on an authenticated but untrusted hook envelope, is
 // persisted, and is then opened and rendered as a pane's conversation. These are
 // the cases that decide whether that is a projection or an arbitrary-file-read.
@@ -6,7 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { checkTranscriptPath, claudeProjectRoots, isWslOwnTranscriptPath } from '../transcriptPathGuard';
+import { checkTranscriptPath, claudeProjectRoots, isHostAbsolute, isWslOwnTranscriptPath } from '../transcriptPathGuard';
 
 const SID = '920b9112-1111-4222-8333-444455556666';
 const root = path.join(os.homedir(), '.claude', 'projects');
@@ -14,7 +15,46 @@ const root = path.join(os.homedir(), '.claude', 'projects');
 describe('checkTranscriptPath', () => {
   it('accepts the real shape: inside the projects root, named after the session', () => {
     const p = path.join(root, '-Users-dev-repo', `${SID}.jsonl`);
-    expect(checkTranscriptPath(p, SID)).toEqual({ ok: true, reason: '' });
+    // Not on disk here, so also pending (see the not-yet-written case below).
+    expect(checkTranscriptPath(p, SID)).toEqual({ ok: true, reason: '', pending: true });
+  });
+
+  it('marks pending only a path with nothing at it yet, never an existing file, a link or a dot segment', () => {
+    // A bare launch: SessionStart names the transcript Claude writes on its
+    // first prompt. Pending is what lets the projector serve it as empty.
+    // Resolved, so macOS's /var alias cannot refuse a case for the wrong reason.
+    const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-guard-')));
+    try {
+      const projects = path.join(dir, 'projects', '-repo');
+      const elsewhere = path.join(dir, 'elsewhere');
+      fs.mkdirSync(projects, { recursive: true });
+      fs.mkdirSync(elsewhere);
+      const env = { CLAUDE_CONFIG_DIR: dir };
+      const file = path.join(projects, `${SID}.jsonl`);
+      expect(checkTranscriptPath(file, SID, env)).toEqual({ ok: true, reason: '', pending: true });
+      // Missing parents are fine while each one is truly absent.
+      expect(checkTranscriptPath(path.join(dir, 'projects', '-new', `${SID}.jsonl`), SID, env)).toEqual({ ok: true, reason: '', pending: true });
+      // A link at the name, dangling or not, is not a file Claude has yet to write.
+      fs.symlinkSync(path.join(dir, 'nowhere'), file);
+      expect(checkTranscriptPath(file, SID, env).ok).toBe(false);
+      fs.unlinkSync(file);
+      const other = path.join(projects, 'other.jsonl');
+      fs.writeFileSync(other, '{}\n');
+      fs.symlinkSync(other, file);
+      expect(checkTranscriptPath(file, SID, env).ok).toBe(false);
+      fs.unlinkSync(file);
+      // A dangling link as a missing directory, or a directory linked out of the root.
+      fs.symlinkSync(path.join(elsewhere, 'gone'), path.join(dir, 'projects', '-dangling'));
+      expect(checkTranscriptPath(path.join(dir, 'projects', '-dangling', `${SID}.jsonl`), SID, env).ok).toBe(false);
+      fs.symlinkSync(elsewhere, path.join(dir, 'projects', '-out'));
+      expect(checkTranscriptPath(path.join(dir, 'projects', '-out', `${SID}.jsonl`), SID, env).ok).toBe(false);
+      expect(checkTranscriptPath(`${projects}/missing/../${SID}.jsonl`, SID, env).ok).toBe(false);
+      // Once written, a regular file: no longer pending.
+      fs.writeFileSync(file, '');
+      expect(checkTranscriptPath(file, SID, env)).toEqual({ ok: true, reason: '' });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('refuses a path outside the projects root', () => {
@@ -62,10 +102,19 @@ describe('checkTranscriptPath', () => {
     const env = { CLAUDE_CONFIG_DIR: 'C:\\Users\\dev\\.claude' };
     const good = `C:\\Users\\dev\\.claude\\projects\\C--Users-dev-repo\\${SID}.jsonl`;
     expect(checkTranscriptPath(good, SID, env).ok).toBe(true);
+    // Off Windows it is the other OS's path: judged lexically, never pending (an empty conversation).
+    if (process.platform !== 'win32') expect(checkTranscriptPath(good, SID, env)).toEqual({ ok: true, reason: '' });
     const wrongName = 'C:\\Users\\dev\\.claude\\projects\\C--Users-dev-repo\\other.jsonl';
     expect(checkTranscriptPath(wrongName, SID, env).ok).toBe(false);
     const outside = `C:\\Windows\\Temp\\${SID}.jsonl`;
     expect(checkTranscriptPath(outside, SID, env).ok).toBe(false);
+  });
+
+  it('reads a path as this host\'s own only in its syntax', () => {
+    expect(isHostAbsolute('/Users/dev/x.jsonl', 'darwin')).toBe(true);
+    expect(isHostAbsolute('C:\\Users\\dev\\x.jsonl', 'darwin')).toBe(false);
+    expect(isHostAbsolute('C:\\Users\\dev\\x.jsonl', 'win32')).toBe(true);
+    for (const p of ['/home/u/x.jsonl', '\\\\server\\share\\x.jsonl', 'relative\\x.jsonl']) expect(isHostAbsolute(p, 'win32')).toBe(false);
   });
 
   it('accepts a not-yet-created transcript under a SYMLINKED root', () => {
@@ -81,7 +130,7 @@ describe('checkTranscriptPath', () => {
       const env = { CLAUDE_CONFIG_DIR: dir };
       const notYet = path.join(projects, `${SID}.jsonl`);
       expect(fs.existsSync(notYet)).toBe(false);
-      expect(checkTranscriptPath(notYet, SID, env)).toEqual({ ok: true, reason: '' });
+      expect(checkTranscriptPath(notYet, SID, env)).toEqual({ ok: true, reason: '', pending: true });
       // The ancestor walk must not widen containment.
       expect(checkTranscriptPath(path.join(dir, `${SID}.jsonl`), SID, env).ok).toBe(false);
     } finally {

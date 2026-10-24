@@ -19,9 +19,10 @@
 //
 // `realpath` is used where it can be: containment has to be checked on the
 // RESOLVED path or a symlink inside the projects directory walks straight out of
-// it. A transcript that does not exist yet cannot be resolved, so the lexical
-// form is checked instead — and a path that does not exist is refused later
-// anyway by `readTail`'s regular-file guard.
+// it. A transcript that does not exist yet cannot be resolved, so its nearest
+// existing ancestor is, and the check marks it `pending`: Claude writes the
+// file on its first prompt, so until then readers serve an empty conversation.
+// Every read re-runs this check, so the file that appears is judged again.
 
 import fs from 'node:fs';
 import os from 'node:os';
@@ -130,6 +131,48 @@ export function claudeTranscriptRoot(sessionEnv?: Record<string, string>): strin
   return configured ? path.join(configured, 'projects') : path.join(os.homedir(), '.claude', 'projects');
 }
 
+/** An absolute path in this host's own syntax: a drive path on Windows, `/…` elsewhere. */
+export function isHostAbsolute(value: string, platform: NodeJS.Platform = process.platform): boolean {
+  return platform === 'win32' ? /^[A-Za-z]:[\\/]/.test(value) : value.startsWith('/');
+}
+
+/**
+ * Where a transcript Claude has not written yet will land, or null when that
+ * cannot be proven. Claude names its transcript at session start but writes it
+ * on the first prompt, so a bare launch sits at its prompt with no file. Every
+ * missing component must be truly absent (nothing at all, not even a dangling
+ * link, which realpath reports as missing too), the path has no `.` or `..`
+ * segment, and the nearest component that does exist must resolve to a
+ * directory: the file, once written, is the resolved directory plus plain names.
+ */
+function notCreatedYetTarget(transcriptPath: string): string | null {
+  if (transcriptPath.split(/[\\/]/).some((segment) => segment === '.' || segment === '..')) return null;
+  const missing: string[] = [];
+  let current = transcriptPath;
+  for (let i = 0; i < 64; i++) {
+    let occupied = false;
+    try {
+      fs.lstatSync(current);
+      occupied = true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return null;
+    }
+    if (occupied) {
+      try {
+        const real = fs.realpathSync(current);
+        return fs.statSync(real).isDirectory() ? path.join(real, ...missing) : null;
+      } catch {
+        return null;
+      }
+    }
+    const parent = path.dirname(current);
+    if (!parent || parent === current) return null;
+    missing.unshift(path.basename(current));
+    current = parent;
+  }
+  return null;
+}
+
 export interface TranscriptPathCheck {
   ok: boolean;
   /** Why it was refused, for the warn log. Empty when `ok`. */
@@ -137,7 +180,7 @@ export interface TranscriptPathCheck {
   /**
    * `ok` for a file the agent has not created yet: its containment was proven
    * on the nearest existing ancestor (Codex writes its session file lazily, on
-   * the first turn). Readers treat a still-missing file as an empty conversation.
+   * the first turn, and Claude its transcript on the first prompt). Readers treat a still-missing file as an empty conversation.
    */
   pending?: boolean;
 }
@@ -168,10 +211,34 @@ export function checkTranscriptPath(
     return { ok: false, reason: `basename ${actual} != ${expected}` };
   }
 
-  const resolved = normalizeForCompare(resolveIfPossible(transcriptPath));
+  // An existing transcript is judged on its realpath and must be a regular
+  // file itself (a link at the name could name another session's file). A
+  // missing one in this host's syntax only through notCreatedYetTarget; any
+  // other failure refuses.
+  let target: string | null;
+  let pending = false;
+  let foreign = false;
+  try {
+    target = fs.realpathSync(transcriptPath);
+    if (!fs.lstatSync(transcriptPath).isFile()) return { ok: false, reason: 'not a regular file' };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return { ok: false, reason: 'unreadable' };
+    if (isHostAbsolute(transcriptPath)) {
+      target = notCreatedYetTarget(transcriptPath);
+      if (!target) return { ok: false, reason: 'not a file Claude has yet to write' };
+      pending = true;
+    } else {
+      // The other OS's syntax (a path relayed or replayed from there): this
+      // process cannot open it as that file, so it is judged lexically, as it
+      // always was, and never served as an empty conversation.
+      target = transcriptPath;
+      foreign = true;
+    }
+  }
+  const resolved = normalizeForCompare(target);
   for (const root of claudeProjectRoots(sessionEnv)) {
-    if (isInside(resolved, normalizeForCompare(resolveIfPossible(root)))) {
-      return { ok: true, reason: '' };
+    if (isInside(resolved, normalizeForCompare(foreign ? root : resolveIfPossible(root)))) {
+      return { ok: true, reason: '', ...(pending ? { pending: true } : {}) };
     }
   }
   return { ok: false, reason: 'outside the Claude projects root' };

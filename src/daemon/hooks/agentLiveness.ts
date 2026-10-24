@@ -29,6 +29,8 @@ interface LivenessSource {
   decision?: string;
   hookKind?: string;
   signal?: AgentSignal;
+  /** See `HookAgentEventData.atPrompt`. */
+  atPrompt?: boolean;
 }
 
 /**
@@ -79,6 +81,9 @@ export function isTerminalLiveness(state: AgentLivenessState): boolean {
   return state === 'idle' || state === 'awaiting_input' || state === 'awaiting_permission';
 }
 
+/** SessionStart `source` values after which Claude Code waits at its prompt. */
+const SESSION_START_AT_PROMPT = new Set(['startup', 'resume', 'clear']);
+
 /** A tool name is an identifier; anything longer than this is not one. */
 const MAX_TOOL_NAME_CHARS = 64;
 
@@ -128,6 +133,12 @@ export function deriveAgentLiveness(
   // limit read "working" until its next turn.
   else if (data.status === 'complete' || data.status === 'error') state = 'idle';
   else if (data.status === 'awaiting_input') state = 'awaiting_input';
+  // A session that just started (a launch, a resume, `/clear`) sits at its input
+  // prompt until a UserPromptSubmit says otherwise. Claude awaits SessionStart
+  // hooks before it takes the first message, so this cannot land after it. A
+  // `compact` settles only when no turn was open: one inside a turn goes on.
+  else if (data.hookKind === 'agent.session_start'
+    && (SESSION_START_AT_PROMPT.has(String(data.signal?.payload?.['source'])) || data.atPrompt === true)) state = 'idle';
   else if (data.hookKind === 'agent.awaiting_permission') state = 'awaiting_permission';
   else if (data.hookKind === 'agent.tool_started') state = 'tool';
   return {

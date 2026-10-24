@@ -4741,6 +4741,16 @@ function registerRpcHandlers(
       .map((s) => s.meta.id),
     agentState: (id) => readDaemonAgentState(id),
     chatAgentState: (id) => readChatAgentState(id),
+    agentLaunchAt: (id) => {
+      const commandAt = sessionManager.getSession(id)?.promptLog.recent(256).filter((e) => e.type === 'command_start').pop()?.ts;
+      // `pid@start` from the launch edge, only while that pid is still the pane's agent.
+      const read = agentCommandLineRead.get(id) ?? '';
+      const at = read.indexOf('@');
+      const startedAt = at > 0 && Number(read.slice(0, at)) === agentProcessTracker.pidFor(id) ? Number(read.slice(at + 1)) : NaN;
+      const known = [commandAt, startedAt > 0 ? startedAt : undefined].filter((v): v is number => v !== undefined);
+      return known.length > 0 ? Math.max(...known) : undefined;
+    },
+    transcriptBinding: resolveTranscriptBinding,
     projector,
     terminalChat: () => terminalChat,
     managed: () => chatSessions,

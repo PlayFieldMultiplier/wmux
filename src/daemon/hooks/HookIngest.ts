@@ -180,6 +180,12 @@ export interface HookAgentEventData extends HookArbitration {
    * minting a second event type for each of them.
    */
   signal: AgentSignal;
+  /**
+   * On a SessionStart: no turn was open when it came (the lead turn had ended
+   * and nothing reported work since), so the session is at its prompt. Tells a
+   * `/compact` typed at the prompt from a compaction inside a running turn.
+   */
+  atPrompt?: true;
 }
 
 /**
@@ -1448,6 +1454,7 @@ export class HookIngest {
         hookKind: signal.kind,
         decision: 'activity',
         signal,
+        ...(signal.kind === 'agent.session_start' && this.leadTurnEnded.has(sessionId) ? { atPrompt: true as const } : {}),
       });
     }
 
