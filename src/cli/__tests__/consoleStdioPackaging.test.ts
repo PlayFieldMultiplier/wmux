@@ -16,6 +16,12 @@ describe('koffi ships with the CLI bundle', () => {
     expect(pkg.scripts['build:cli']).toMatch(/esbuild dist\/cli\/cli\/index\.js [^&]*--external:koffi/);
   });
 
+  it('the CLI entry settles its streams before any other module loads, after only exeSearchGuard', () => {
+    const imports = fs.readFileSync(path.join(repo, 'src', 'cli', 'index.ts'), 'utf8').match(/^import .*$/gm) ?? [];
+    expect(imports.slice(0, 2)).toEqual(["import '../shared/exeSearchGuard';", "import './consoleStdioPrelude';"]);
+    expect(fs.readFileSync(path.join(repo, 'src', 'cli', 'consoleStdioPrelude.ts'), 'utf8')).toMatch(/^routeConsoleStdio\(\);$/m);
+  });
+
   it('postPackage copies koffi into cli-bundle/node_modules, and fails without the bundle', () => {
     const src = fs.readFileSync(path.join(repo, 'forge.config.ts'), 'utf8');
     expect(src).toMatch(/const cliBundleDir = path\.join\(resourcesDir, 'cli-bundle'\);/);

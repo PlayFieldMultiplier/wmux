@@ -18,8 +18,12 @@ const repo = nodePath.join(__dirname, '..', '..', '..');
 
 type Run = { exitCode: number; screen: string; file: string | null };
 
-/** A Squirrel-shaped root: `<root>\app-1.0.0\wmux.exe`, the CLI bundle beside the koffi it ships with, and `<root>\bin\wmux.cmd`. */
-function makeRoot(parent: string, installExe: (app: string) => void): string {
+/**
+ * A Squirrel-shaped root: `<root>\app-1.0.0\wmux.exe`, the CLI bundle (beside
+ * the koffi it ships with, unless `koffi` is false) and `<root>\bin\wmux.cmd`.
+ * The bundle directory also holds consoleStdio.ts on its own, for probes.
+ */
+function makeRoot(parent: string, installExe: (app: string) => void, koffi = true): string {
   const root = nodeFs.mkdtempSync(nodePath.join(parent, 'wmux console (a&b) '));
   const app = nodePath.join(root, 'app-1.0.0');
   const bundle = nodePath.join(app, 'resources', 'cli-bundle');
@@ -28,29 +32,33 @@ function makeRoot(parent: string, installExe: (app: string) => void): string {
   nodeFs.writeFileSync(nodePath.join(root, 'bin', 'wmux.cmd'), buildShimCmd());
   installExe(app);
   // As package.json's build:cli and forge.config.ts ship it.
-  buildSync({
-    entryPoints: [nodePath.join(repo, 'src', 'cli', 'index.ts')], bundle: true, platform: 'node', format: 'cjs',
-    outfile: nodePath.join(bundle, 'index.js'), external: ['koffi'], logLevel: 'silent',
-  });
-  nodeFs.cpSync(nodePath.join(repo, 'node_modules', 'koffi'), nodePath.join(bundle, 'node_modules', 'koffi'), { recursive: true });
-  const koromix = `koffi-win32-${process.arch}`;
-  nodeFs.cpSync(nodePath.join(repo, 'node_modules', '@koromix', koromix), nodePath.join(bundle, 'node_modules', '@koromix', koromix), { recursive: true });
+  for (const [entry, out] of [['index.ts', 'index.js'], ['consoleStdio.ts', 'consoleStdio.cjs']]) {
+    buildSync({
+      entryPoints: [nodePath.join(repo, 'src', 'cli', entry)], bundle: true, platform: 'node', format: 'cjs',
+      outfile: nodePath.join(bundle, out), external: ['koffi'], logLevel: 'silent',
+    });
+  }
+  if (koffi) {
+    nodeFs.cpSync(nodePath.join(repo, 'node_modules', 'koffi'), nodePath.join(bundle, 'node_modules', 'koffi'), { recursive: true });
+    const koromix = `koffi-win32-${process.arch}`;
+    nodeFs.cpSync(nodePath.join(repo, 'node_modules', '@koromix', koromix), nodePath.join(bundle, 'node_modules', '@koromix', koromix), { recursive: true });
+  }
   return root;
 }
 
-/** `wmux <args>` with `redirect` appended, in a console of its own under code page 949. */
-function run(root: string, args: string, redirect = ''): Promise<Run> {
+/** `line` in a console of its own under code page 949; FILE in it names a file the result reads back. */
+function runLine(root: string, line: string, extraEnv: Record<string, string> = {}): Promise<Run> {
   const file = nodePath.join(root, 'redirected.txt');
   nodeFs.rmSync(file, { force: true });
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
-    if (value !== undefined && !/^(wmux_|electron_run_as_node$)/i.test(key)) env[key] = value;
+    if (value !== undefined && !/^(wmux_|electron_run_as_node$|electron_no_attach_console$)/i.test(key)) env[key] = value;
   }
   // No daemon to reach: another data suffix, and a profile with no token or port file.
-  Object.assign(env, { WMUX_DATA_SUFFIX: `-console-test-${process.pid}`, USERPROFILE: root, HOME: root });
-  const line = `chcp 949 >nul & "${nodePath.join(root, 'bin', 'wmux.cmd')}" ${args} ${redirect.replace('FILE', `"${file}"`)}`;
+  Object.assign(env, { WMUX_DATA_SUFFIX: `-console-test-${process.pid}`, USERPROFILE: root, HOME: root }, extraEnv);
+  const command = `chcp 949 >nul & ${line.replace('FILE', `"${file}"`)}`;
   return new Promise((resolve) => {
-    const term = pty.spawn(process.env.ComSpec || 'cmd.exe', `/d /s /c "${line}"`, { cols: 400, rows: 30, cwd: root, env, useConpty: true });
+    const term = pty.spawn(process.env.ComSpec || 'cmd.exe', `/d /s /c "${command}"`, { cols: 400, rows: 30, cwd: root, env, useConpty: true });
     let out = '';
     term.onData((data) => { out += data; });
     // node-pty emits exit once the output pipe has closed: every byte is in.
@@ -61,6 +69,11 @@ function run(root: string, args: string, redirect = ''): Promise<Run> {
       file: nodeFs.existsSync(file) ? nodeFs.readFileSync(file, 'utf8') : null,
     }));
   });
+}
+
+/** `wmux <args>` through the shim, with `redirect` appended. */
+function run(root: string, args: string, redirect = '', extraEnv: Record<string, string> = {}): Promise<Run> {
+  return runLine(root, `"${nodePath.join(root, 'bin', 'wmux.cmd')}" ${args} ${redirect}`, extraEnv);
 }
 
 // wmux.exe is Electron run as Node, a GUI-subsystem program. With nothing
@@ -78,22 +91,54 @@ const electron = (() => {
   } catch { return ''; }
 })();
 
+/** Electron's files as `<app>\wmux.exe` and its siblings: hard links where they can be. */
+function installElectron(app: string): void {
+  const dist = nodePath.dirname(electron);
+  for (const entry of nodeFs.readdirSync(dist, { withFileTypes: true })) {
+    if (!entry.isFile()) continue;
+    const to = nodePath.join(app, entry.name === nodePath.basename(electron) ? 'wmux.exe' : entry.name);
+    try { nodeFs.linkSync(nodePath.join(dist, entry.name), to); } catch { nodeFs.copyFileSync(nodePath.join(dist, entry.name), to); }
+  }
+}
+
+// What the routed streams must keep of Node's own stdio, written to argv[2] as
+// JSON. The probe ends by returning, not by process.exit: the console only
+// closes if the routed streams leave the event loop free.
+const PROBE = `
+const fs = require('fs');
+const { Readable } = require('stream');
+const { spawnSync } = require('child_process');
+const { routeConsoleStdio, childStdio } = require('./consoleStdio.cjs');
+routeConsoleStdio();
+const out = process.stdout;
+const err = process.stderr;
+const facts = { isStdio: [out._isStdio, err._isStdio], isTTY: [!!out.isTTY, !!err.isTTY] };
+err.emit('error', new Error('the console stopped taking writes'));
+err.write('AFTER ERROR 한글\\n');
+Readable.from(['PIPED 한글\\n']).pipe(err).on('unpipe', () => {
+  err.write('AFTER PIPE 한글\\n');
+  spawnSync(process.env.ComSpec, ['/d', '/c', 'echo CHILD OUT& echo CHILD ERR 1>&2'], { stdio: childStdio() });
+  err.end();
+  err.destroy();
+  facts.fdOpenAfterEnd = (() => { try { fs.fstatSync(err.fd); return true; } catch { return false; } })();
+  fs.writeFileSync(process.argv[2], JSON.stringify(facts));
+});
+`;
+
 describe.skipIf(process.platform !== 'win32' || !electron || !nodeFs.existsSync(electron))('wmux CLI output on the console (Electron, code page 949)', () => {
+  // Beside node_modules, so Electron's files can be hard links rather than copies.
+  const parent = nodePath.join(repo, 'node_modules', '.cache');
   let root = '';
+  let bare = '';
   beforeAll(() => {
-    // Beside node_modules, so Electron's files can be hard links rather than copies.
-    const parent = nodePath.join(repo, 'node_modules', '.cache');
     nodeFs.mkdirSync(parent, { recursive: true });
-    root = makeRoot(parent, (app) => {
-      const dist = nodePath.dirname(electron);
-      for (const entry of nodeFs.readdirSync(dist, { withFileTypes: true })) {
-        if (!entry.isFile()) continue;
-        const to = nodePath.join(app, entry.name === nodePath.basename(electron) ? 'wmux.exe' : entry.name);
-        try { nodeFs.linkSync(nodePath.join(dist, entry.name), to); } catch { nodeFs.copyFileSync(nodePath.join(dist, entry.name), to); }
-      }
-    });
+    root = makeRoot(parent, installElectron);
+    nodeFs.writeFileSync(nodePath.join(root, 'app-1.0.0', 'resources', 'cli-bundle', 'probe.cjs'), PROBE);
+    bare = makeRoot(parent, installElectron, false);
   }, 120_000);
-  afterAll(() => { if (root) nodeFs.rmSync(root, { recursive: true, force: true }); });
+  afterAll(() => {
+    for (const dir of [root, bare]) if (dir) nodeFs.rmSync(dir, { recursive: true, force: true });
+  });
 
   it('shows Korean intact on stdout and stderr with nothing redirected', async () => {
     const err = await run(root, ON_STDERR);
@@ -126,4 +171,54 @@ describe.skipIf(process.platform !== 'win32' || !electron || !nodeFs.existsSync(
     expect(err.screen).not.toContain('Unknown command');
     expect(err.file).toContain(STDERR_LINE);
   }, 60_000);
+
+  it('does not attach to the console when ELECTRON_NO_ATTACH_CONSOLE is set', async () => {
+    const noAttach = { ELECTRON_NO_ATTACH_CONSOLE: '1' };
+    // Electron attached on its own: the streams are still put right.
+    expect((await run(root, ON_STDERR, '', noAttach)).screen).toContain(STDERR_LINE);
+    // Nothing attached: stderr stays where it was handed over, nowhere.
+    const redirected = await run(root, ON_STDERR, '>FILE', noAttach);
+    expect(redirected.exitCode).toBe(1);
+    expect(redirected.screen).not.toContain('Unknown command');
+  }, 60_000);
+
+  it('keeps today\'s streams without koffi, and says why under WMUX_DEBUG', async () => {
+    const quiet = await run(bare, ON_STDERR);
+    expect(quiet.exitCode).toBe(1);
+    expect(quiet.screen).not.toContain('koffi');
+    expect(quiet.screen).not.toContain(STDERR_LINE);
+    const debug = await run(bare, ON_STDERR, '', { WMUX_DEBUG: '1' });
+    expect(debug.screen).toContain('wmux: console output is not rerouted, koffi did not load');
+  }, 60_000);
+
+  describe('routed streams behave as Node\'s own stdio', () => {
+    const probe = (redirect: string) => {
+      const app = nodePath.join(root, 'app-1.0.0');
+      const facts = nodePath.join(root, 'facts.json');
+      nodeFs.rmSync(facts, { force: true });
+      return runLine(root, `"${nodePath.join(app, 'wmux.exe')}" "${nodePath.join(app, 'resources', 'cli-bundle', 'probe.cjs')}" "${facts}" ${redirect}`, { ELECTRON_RUN_AS_NODE: '1' })
+        .then((r) => ({ ...r, facts: JSON.parse(nodeFs.readFileSync(facts, 'utf8')) as Record<string, unknown> }));
+    };
+
+    it('survive an error, end(), destroy() and a pipe, and let the process end on its own', async () => {
+      const r = await probe('');
+      expect(r.facts.isStdio).toEqual([true, true]);
+      expect(r.facts.isTTY).toEqual([true, true]);
+      // An 'error' with no listener of the caller's would have thrown before this line was written.
+      expect(r.screen).toContain('AFTER ERROR 한글');
+      expect(r.facts.fdOpenAfterEnd).toBe(true);
+      expect(r.screen).toContain('PIPED 한글');
+      expect(r.screen).toContain('AFTER PIPE 한글');
+      expect(r.exitCode).toBe(0);
+    }, 60_000);
+
+    it('hand a child the console the process writes to, not the fds it was given', async () => {
+      // stdout to a file, so stderr arrived as no handle: 'inherit' would lose the child's stderr.
+      // (A GUI-subsystem child, like the daemon, gets no console handle from Windows next to a redirected one.)
+      const r = await probe('>FILE');
+      expect(r.exitCode).toBe(0);
+      expect(r.screen).toContain('CHILD ERR');
+      expect(r.file).toContain('CHILD OUT');
+    }, 60_000);
+  });
 });
