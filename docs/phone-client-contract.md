@@ -2701,6 +2701,8 @@ the bytes land on disk and you put the **path** in the composer.
 ```
 POST /api/upload      body: raw JPEG or PNG bytes (no multipart)
   → 201 {path, expiresAt}
+  → 400 {error: 'invalid-file-extension'}   (POST /api/upload-file only)
+  → 401 {error: 'authorization-expired'}
   → 403 {error: 'uploads-disabled: server started without --allow-upload'}
   → 403 {error: 'read-only: …', detail}
   → 413 {error: 'payload too large'}
@@ -2722,11 +2724,20 @@ Two 403s, told apart by their tag. Match each by **prefix** — the text after
 the colon is prose and may be reworded, the tags are not:
 
 - `uploads-disabled:` — the server runs without `--allow-upload`. Checked
-  first, so a server with uploads off answers this whatever the caller's grant.
+  before the caller's grant, so a server with uploads off answers this
+  whatever the caller may do.
 - `read-only:` — uploads are on, but this caller may not type: the server runs
   without `--allow-input`, or this device was paired without permission to
   type. Same body as the input routes' refusal, `detail` included. Nothing is
   written and nothing counts toward the bounds below.
+
+The order, after authentication: on `POST /api/upload-file` only, a bad
+`X-Wmux-File-Extension` header is `400 invalid-file-extension` before
+anything else; then `uploads-disabled:`; then `read-only:`; then the body is
+read. The grant is read again once the whole body is in, so a grant withdrawn
+while the body was arriving is also `read-only:` (its `detail` says the input
+permission changed), and a device revoked meanwhile is
+`401 authorization-expired`. Neither writes the file.
 
 Gate the button on `allowUpload` from `/api/config`. It is **this caller's**
 effective grant, like `allowInput`: `true` only when the server allows uploads

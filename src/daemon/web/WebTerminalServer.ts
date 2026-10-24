@@ -307,7 +307,7 @@ function decodeTurnCursor(
  *                              shows an answerable `terminal_prompt` dialog
  *                              (lone Esc / Ctrl-C excepted)
  *   POST /api/upload           raw JPEG/PNG bytes → a path on disk — 403
- *                              unless `--allow-upload` (its own grant)
+ *                              unless `--allow-upload` AND the caller may type
  *   GET  /api/approvals        pending + recently resolved approval requests
  *   POST /api/approvals/:id    resolve one — ALLOWED on a read-only server
  *   GET  /api/approvals/:id/detail   the full command of a pending, bound
@@ -3157,14 +3157,14 @@ export class WebTerminalServer {
       return this.handleInput(req, res, url, principal);
     }
     if (req.method === 'POST' && p === '/api/upload') {
-      return this.handleUpload(req, res, principal);
+      return this.handleUpload(req, res, url, principal);
     }
     if (req.method === 'POST' && p === '/api/upload-file') {
       const extension = req.headers['x-wmux-file-extension'] ?? 'bin';
       if (typeof extension !== 'string' || !/^[a-zA-Z0-9]{1,12}$/.test(extension)) {
         return this.json(res, 400, { error: 'invalid-file-extension' });
       }
-      return this.handleUpload(req, res, principal, extension.toLowerCase());
+      return this.handleUpload(req, res, url, principal, extension.toLowerCase());
     }
     if (req.method === 'GET' && p === '/api/approvals') {
       return this.handleApprovalsList(res, principal, {
@@ -7709,8 +7709,8 @@ export class WebTerminalServer {
    * through the existing input route.
    *
    * Modelled on handleInput down to the accumulate-and-cap shape. The three
-   * things it does differently are all refusals: the grant is its own flag, the
-   * format is decided by the BYTES rather than by a Content-Type the client
+   * things it does differently are all refusals: an upload takes two grants
+   * (`--allow-upload` and the caller's input grant), the format is decided by the BYTES rather than by a Content-Type the client
    * chose, and the filename is ours — a client-supplied name is a traversal
    * primitive and buys nothing, since nobody reads these by name.
    *
@@ -7720,6 +7720,7 @@ export class WebTerminalServer {
   private handleUpload(
     req: http.IncomingMessage,
     res: http.ServerResponse,
+    url: URL,
     principal: WebPrincipal,
     fileExtension?: string,
   ): void {
@@ -7774,48 +7775,61 @@ export class WebTerminalServer {
     });
     req.on('end', () => {
       if (aborted) return;
-      const body = Buffer.concat(chunks);
-      const ext = fileExtension ?? sniffImageExt(body);
-      if (!ext) {
+      void (async () => {
+        // The grant is read again once the body is in, as the other write
+        // routes do: it may have been withdrawn while the bytes were arriving.
+        const fresh = await this.authenticate(req, url, false).catch(() => ({ ok: false as const }));
+        if (!fresh.ok || !sameCaller(principal, fresh.principal)) {
+          release();
+          return this.json(res, 401, { error: 'authorization-expired' });
+        }
+        if (!this.mayInput(fresh.principal)) {
+          release();
+          return this.refuseInput(res, fresh.principal, 'Input permission changed');
+        }
+        const body = Buffer.concat(chunks);
+        const ext = fileExtension ?? sniffImageExt(body);
+        if (!ext) {
+          release();
+          return this.json(res, 415, {
+            error: 'unsupported-format: only JPEG and PNG are accepted',
+          });
+        }
+        const now = this.now();
+        // Before the write, not on a timer: a sweeper firing while the operator
+        // is reading a path would be a race we invented for ourselves, and an
+        // upload is the only moment this directory is known to be in use.
+        pruneUploads(dir, now);
+        // Measured AFTER the sweep, so a directory full of expired photos does
+        // not refuse an upload the sweep was about to make room for.
+        const held = measureUploads(dir);
+        if (
+          held.files + 1 > (limits.maxFiles ?? MAX_UPLOAD_FILES) ||
+          held.bytes + body.length > (limits.maxDirBytes ?? MAX_UPLOAD_DIR_BYTES)
+        ) {
+          release();
+          // 507, not 403: the permission is there and the request is well formed,
+          // the server simply has no room. "try again later" is honest — the TTL
+          // will free space on its own.
+          return this.json(res, 507, { error: 'uploads-full: quota exceeded, try again later' });
+        }
+        const name = `${fileExtension ? 'file' : 'photo'}-${new Date(now).toISOString().replace(/[:.]/g, '-')}-${crypto
+          .randomBytes(4)
+          .toString('hex')}.${ext}`;
+        const full = path.join(dir, name);
+        try {
+          fs.mkdirSync(dir, { recursive: true });
+          // `wx` refuses to overwrite. With 32 bits of randomness in the name a
+          // collision means something is wrong, and answering 500 is better than
+          // silently replacing a photo somebody is about to send.
+          fs.writeFileSync(full, body, { mode: 0o600, flag: 'wx' });
+        } catch (err) {
+          release();
+          return this.json(res, 500, { error: `write failed: ${errMsg(err)}` });
+        }
         release();
-        return this.json(res, 415, {
-          error: 'unsupported-format: only JPEG and PNG are accepted',
-        });
-      }
-      const now = this.now();
-      // Before the write, not on a timer: a sweeper firing while the operator
-      // is reading a path would be a race we invented for ourselves, and an
-      // upload is the only moment this directory is known to be in use.
-      pruneUploads(dir, now);
-      // Measured AFTER the sweep, so a directory full of expired photos does
-      // not refuse an upload the sweep was about to make room for.
-      const held = measureUploads(dir);
-      if (
-        held.files + 1 > (limits.maxFiles ?? MAX_UPLOAD_FILES) ||
-        held.bytes + body.length > (limits.maxDirBytes ?? MAX_UPLOAD_DIR_BYTES)
-      ) {
-        release();
-        // 507, not 403: the permission is there and the request is well formed,
-        // the server simply has no room. "try again later" is honest — the TTL
-        // will free space on its own.
-        return this.json(res, 507, { error: 'uploads-full: quota exceeded, try again later' });
-      }
-      const name = `${fileExtension ? 'file' : 'photo'}-${new Date(now).toISOString().replace(/[:.]/g, '-')}-${crypto
-        .randomBytes(4)
-        .toString('hex')}.${ext}`;
-      const full = path.join(dir, name);
-      try {
-        fs.mkdirSync(dir, { recursive: true });
-        // `wx` refuses to overwrite. With 32 bits of randomness in the name a
-        // collision means something is wrong, and answering 500 is better than
-        // silently replacing a photo somebody is about to send.
-        fs.writeFileSync(full, body, { mode: 0o600, flag: 'wx' });
-      } catch (err) {
-        release();
-        return this.json(res, 500, { error: `write failed: ${errMsg(err)}` });
-      }
-      release();
-      return this.json(res, 201, { path: full, expiresAt: now + UPLOAD_TTL_MS });
+        return this.json(res, 201, { path: full, expiresAt: now + UPLOAD_TTL_MS });
+      })();
     });
     req.on('error', () => {
       aborted = true;

@@ -488,7 +488,7 @@ describe('WebTerminalServer', () => {
   let emitApproval: (type: ApprovalEvent['type'], request: ApprovalRequest) => void;
   let approvalListeners: Set<(e: ApprovalEvent) => void>;
   let approvalBox: ReturnType<typeof makeApprovals>['approvalBox'];
-  let deviceRoster: Map<string, { secret: string; name?: string; revoked: boolean }>;
+  let deviceRoster: Map<string, { secret: string; name?: string; revoked: boolean; allowInput: boolean }>;
   let answerReceiptStore: AnswerReceiptStore;
   let reconcileCalls: number;
   let deviceMintCalls: Array<{ name?: string }>;
@@ -6730,6 +6730,38 @@ describe('WebTerminalServer', () => {
     const typer = await pairDevice('iPhone', true);
     expect((await upload(typer.token, jpegBytes())).status).toBe(201);
     expect(fs.readdirSync(uploadsDir)).toHaveLength(1);
+  });
+
+  it('refuses an upload whose input grant is withdrawn while the body is arriving', async () => {
+    const info = await startUpload();
+    const typer = await pairDevice('iPhone', true);
+    const bytes = jpegBytes();
+    const inFlight = () => (server as unknown as { inFlightUploads: number }).inFlightUploads;
+    const held = httpReq({
+      host: '127.0.0.1', port: info.port as number, path: '/api/upload', method: 'POST',
+      headers: { Authorization: `Bearer ${typer.token}`, 'Content-Length': String(bytes.length) },
+    });
+    const reply = new Promise<{ status: number; body: string }>((resolve, reject) => {
+      held.on('response', (r) => {
+        let body = '';
+        r.on('data', (c: Buffer) => { body += c.toString('utf8'); });
+        r.on('end', () => resolve({ status: r.statusCode ?? 0, body }));
+      });
+      held.on('error', reject);
+    });
+    held.write(bytes.subarray(0, 4));
+    // Past the entry checks: the handler holds an upload slot.
+    await vi.waitFor(() => expect(inFlight()).toBe(1), { timeout: 5_000 });
+    deviceRoster.get(typer.deviceId)!.allowInput = false;
+    held.end(bytes.subarray(4));
+    const { status, body } = await reply;
+    expect(status).toBe(403);
+    expect(JSON.parse(body)).toMatchObject({
+      error: 'read-only: this device was paired without permission to type',
+      detail: expect.stringContaining('Input permission changed'),
+    });
+    expect(fs.readdirSync(uploadsDir)).toEqual([]);
+    expect(inFlight()).toBe(0);
   });
 
   it('reports allowUpload on /api/config per caller, false for a device paired read-only', async () => {
