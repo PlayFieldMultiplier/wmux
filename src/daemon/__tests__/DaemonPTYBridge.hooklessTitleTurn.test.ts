@@ -116,13 +116,16 @@ describe('DaemonPTYBridge — a hookless Claude Code turn ends in silence under 
     feed(IDLE);
     vi.advanceTimersByTime(SILENCE_MS);
     expect(bridge.isAgentMidTurn()).toBe(true);
+    expect(edges).toEqual([expect.any(Number)]); // one start, from the hook; no end
   });
 
   it('never ends a turn waiting on a permission dialog, whose title is idle too', () => {
     runTurn('run the build');
     feed(IDLE); // set a few ms before the dialog's rows
     bridge.noteAgentStatus('awaiting_input'); // the detector's permission dialog
-    feed(BIG); // the dialog's own paint
+    // The dialog's own paint. Recognising the dialog ends the activity cycle,
+    // so without output behind it no idle edge would come to test at all.
+    feed(BIG);
     vi.advanceTimersByTime(SILENCE_MS);
     expect(bridge.isTurnOpen()).toBe(true);
     expect(bridge.getAgentStatus()).toBe('awaiting_input');
