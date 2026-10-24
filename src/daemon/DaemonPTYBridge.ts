@@ -617,7 +617,7 @@ export class DaemonPTYBridge extends EventEmitter {
       if (joined) this.bootEpisode = false;
       // A prompt typed into Claude Code itself, not the launch line the shell
       // ran (the agent is not on the screen yet) nor a dialog's bare Enter.
-      if (promptSubmitted && this.agentDetector?.getLastAgent() === 'Claude Code') this.claudePromptAt = Date.now();
+      if (promptSubmitted && agentRow(agentDisplayToSlug(this.agentDetector?.getLastAgent() ?? ''))?.titleTurns) this.claudePromptAt = Date.now();
     } else if (this.turnSoftClosed) {
       // Answering a dialog resumes the episode it interrupted, even one a
       // detector settle closed softly before the dialog went up.
@@ -1178,15 +1178,16 @@ export class DaemonPTYBridge extends EventEmitter {
     if (!CLAUDE_RUNNING_TITLE.test(title)) return;
     this.claudeRunningTitleAt = this.lastTitleAt;
     if (!this.turnOpen || !this.bootEpisode || this.awaitingHuman || this.muted) return;
-    if (this.claudePromptAt === 0 || this.claudePromptAt < this.turnOpenedAt || !this.paneAgentIsClaude()) return;
+    if (this.claudePromptAt === 0 || this.claudePromptAt < this.turnOpenedAt || !this.paneAgentTitlesTurns()) return;
     this.bootEpisode = false;
     this.reportMidTurn();
   }
 
-  /** The pane's agent is Claude Code: the tracked process when there is one, else the screen. */
-  private paneAgentIsClaude(): boolean {
-    if (this.trackedAgent?.alive) return this.trackedAgent.slug === 'claude';
-    return this.agentDetector?.getLastAgent() === 'Claude Code';
+  /** The pane's agent reads its turns off its title (registry `titleTurns`):
+   *  the tracked process when there is one, else the agent on the screen. */
+  private paneAgentTitlesTurns(): boolean {
+    const slug = this.trackedAgent?.alive ? this.trackedAgent.slug : agentDisplayToSlug(this.agentDetector?.getLastAgent() ?? '');
+    return agentRow(slug)?.titleTurns === true;
   }
 
   /**
@@ -1642,7 +1643,7 @@ export class DaemonPTYBridge extends EventEmitter {
       // episode's start), under an idle title set after that sample.
       if (
         this.turnOpen && !this.bootEpisode && !this.hookSeen && !this.awaitingHuman
-        && this.paneAgentIsClaude()
+        && this.paneAgentTitlesTurns()
         && this.claudeRunningTitleAt > 0 && this.claudeRunningTitleAt >= this.turnOpenedAt
         && titleShowsFinishedTurn({ title: this.lastTitle, at: this.lastTitleAt }, 'claude', this.claudeRunningTitleAt)
       ) this.closeTurn(true);
