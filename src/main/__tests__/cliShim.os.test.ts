@@ -260,8 +260,9 @@ describe.skipIf(process.platform !== 'win32')('wmux.cmd codex handoff errors (li
     expect(exe.readUInt16LE(subsystem)).toBe(3);
     exe.writeUInt16LE(2, subsystem);
     nodeFs.writeFileSync(nodePath.join(app, 'wmux.exe'), exe);
+    // koffi stays external, as in build:cli; without it beside the bundle the CLI keeps its streams.
     for (const [entry, out] of [['../../cli/index.ts', 'cli.cjs'], ['../../cli/commands/codex.ts', 'codex.cjs']]) {
-      buildSync({ entryPoints: [nodePath.join(__dirname, entry)], bundle: true, platform: 'node', format: 'cjs', outfile: nodePath.join(bundle, out), logLevel: 'silent' });
+      buildSync({ entryPoints: [nodePath.join(__dirname, entry)], bundle: true, platform: 'node', format: 'cjs', outfile: nodePath.join(bundle, out), external: ['koffi'], logLevel: 'silent' });
     }
     // The real CLI, or the real report of a message the test picks.
     nodeFs.writeFileSync(nodePath.join(bundle, 'index.js'), [

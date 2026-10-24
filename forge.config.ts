@@ -293,7 +293,7 @@ const config: ForgeConfig = {
       // @koromix/koffi-<platform>-<arch> package. Its loader resolves the
       // binary relative to the koffi package location, so both packages must
       // land in the SAME node_modules root wherever koffi is required from
-      // (app.asar for main, daemon-bundle for the daemon). Windows-only:
+      // (app.asar for main, daemon-bundle for the daemon, cli-bundle for the CLI). Windows-only:
       // winSnapshotNative guards on process.platform, so other targets never
       // require koffi at runtime.
       const koffiPlatform = targetPlatform ?? process.platform;
@@ -412,6 +412,16 @@ const config: ForgeConfig = {
         if (canPrune) pruneForeignPrebuilds(daemonNodePty, targetPlatform!, targetArch!);
         copyKoffiInto(path.join(daemonBundleDir, 'node_modules'));
         console.log('[postPackage] Done — node-pty available for daemon.');
+      }
+
+      // 5a. The CLI requires koffi to put its output on the console (src/cli/consoleStdio.ts).
+      // Without it the CLI quietly keeps garbled or lost output, so its absence fails the package.
+      if (wantKoffi) {
+        const cliBundleDir = path.join(resourcesDir, 'cli-bundle');
+        if (!fs.existsSync(cliBundleDir)) {
+          throw new Error(`[postPackage] ${cliBundleDir} missing — run \`npm run build:cli\` before packaging.`);
+        }
+        copyKoffiInto(path.join(cliBundleDir, 'node_modules'));
       }
 
       // 6. Remove .ps1 files from resources — NuGet 2.8 treats PowerShell files

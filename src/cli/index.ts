@@ -27,6 +27,7 @@ import { handleRemote } from './commands/remote';
 import { handleWeb } from './commands/web';
 import { handleDaemon } from './commands/daemon';
 import { CODEX_HANDOFF_FLAG, handleCodex, reportHandoffError } from './commands/codex';
+import { routeConsoleStdio } from './consoleStdio';
 
 const HELP_TEXT = `
 wmux CLI
@@ -276,6 +277,9 @@ const SYSTEM_CMDS = new Set([
 ]);
 
 async function main(): Promise<void> {
+  // Before anything prints: on Windows, wmux.exe's console output is otherwise garbled or lost.
+  routeConsoleStdio();
+
   // process.argv = ['node', 'index.js', ...userArgs]
   const argv = process.argv.slice(2);
 
