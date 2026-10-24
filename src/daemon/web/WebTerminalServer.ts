@@ -2689,8 +2689,10 @@ export class WebTerminalServer {
         // The panes' host OS: key encodings follow the machine the PTY runs on
         // (ConPTY's own ?9001h on win32), not the client drawing it.
         hostPlatform: process.platform,
-        allowUpload: this.opts?.allowUpload === true,
-        generalFileUpload: this.opts?.allowUpload === true && this.deps.uploadsDir !== undefined,
+        // Per caller as well: the upload routes refuse a caller that may not
+        // type, so a read-only device is not offered the button.
+        allowUpload: this.opts?.allowUpload === true && this.mayInput(principal),
+        generalFileUpload: this.opts?.allowUpload === true && this.mayInput(principal) && this.deps.uploadsDir !== undefined,
         allowTranscript: this.opts?.allowTranscript === true,
         // Whether the browser terminal may draw inline images (#1641). The
         // client still refuses where WebAssembly cannot compile.
@@ -3155,14 +3157,14 @@ export class WebTerminalServer {
       return this.handleInput(req, res, url, principal);
     }
     if (req.method === 'POST' && p === '/api/upload') {
-      return this.handleUpload(req, res);
+      return this.handleUpload(req, res, principal);
     }
     if (req.method === 'POST' && p === '/api/upload-file') {
       const extension = req.headers['x-wmux-file-extension'] ?? 'bin';
       if (typeof extension !== 'string' || !/^[a-zA-Z0-9]{1,12}$/.test(extension)) {
         return this.json(res, 400, { error: 'invalid-file-extension' });
       }
-      return this.handleUpload(req, res, extension.toLowerCase());
+      return this.handleUpload(req, res, principal, extension.toLowerCase());
     }
     if (req.method === 'GET' && p === '/api/approvals') {
       return this.handleApprovalsList(res, principal, {
@@ -7715,11 +7717,21 @@ export class WebTerminalServer {
    * No multipart. The daemon has no parser and is not getting one for a body
    * that is a single blob.
    */
-  private handleUpload(req: http.IncomingMessage, res: http.ServerResponse, fileExtension?: string): void {
+  private handleUpload(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    principal: WebPrincipal,
+    fileExtension?: string,
+  ): void {
     if (this.opts?.allowUpload !== true) {
       return this.json(res, 403, {
         error: 'uploads-disabled: server started without --allow-upload',
       });
+    }
+    // An upload also takes the caller's input grant, like every other write
+    // route. Refused before a slot is taken or a byte is read.
+    if (!this.mayInput(principal)) {
+      return this.refuseInput(res, principal, 'Uploading requires input permission');
     }
     const dir = this.deps.uploadsDir;
     if (!dir) {
