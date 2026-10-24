@@ -337,6 +337,8 @@ export class DaemonPTYBridge extends EventEmitter {
   private emptyShellPrompt = false;
   private completedShellCommand = false;
   private shellCommandRunning = false;
+  /** #2673 — the shell has drawn an OSC 133 prompt: `shellCommandRunning` then says whether a program, not the shell, owns the keys. */
+  private shellPromptSeen = false;
   private shellSubmittedKeyRevision: number | undefined;
   private shellCommandKeyRevision = 0;
   /**
@@ -615,9 +617,11 @@ export class DaemonPTYBridge extends EventEmitter {
       this.turnSoftClosed = false;
       this.openTurn();
       if (joined) this.bootEpisode = false;
-      // A prompt typed into Claude Code itself, not the launch line the shell
-      // ran (the agent is not on the screen yet) nor a dialog's bare Enter.
-      if (promptSubmitted && agentRow(agentDisplayToSlug(this.agentDetector?.getLastAgent() ?? ''))?.titleTurns) this.claudePromptAt = Date.now();
+      // A prompt typed into Claude Code itself, not a dialog's bare Enter, nor
+      // the launch line the shell ran: the shell at its own OSC 133 prompt
+      // owns the keys there, whatever the tracker still reads alive.
+      const atShellPrompt = this.shellPromptSeen && !this.shellCommandRunning;
+      if (promptSubmitted && !atShellPrompt && this.paneAgentTitlesTurns()) this.claudePromptAt = Date.now();
     } else if (this.turnSoftClosed) {
       // Answering a dialog resumes the episode it interrupted, even one a
       // detector settle closed softly before the dialog went up.
@@ -1184,9 +1188,12 @@ export class DaemonPTYBridge extends EventEmitter {
   }
 
   /** The pane's agent reads its turns off its title (registry `titleTurns`):
-   *  the tracked process when there is one, else the agent on the screen. */
+   *  the tracked process's agent when it names one, else the agent on the screen. */
   private paneAgentTitlesTurns(): boolean {
-    const slug = this.trackedAgent?.alive ? this.trackedAgent.slug : agentDisplayToSlug(this.agentDetector?.getLastAgent() ?? '');
+    // A live pick with no slug (a wrapper, an unknown child) names no agent:
+    // the screen's then stands.
+    const tracked = this.trackedAgent?.alive ? this.trackedAgent.slug : undefined;
+    const slug = tracked ?? agentDisplayToSlug(this.agentDetector?.getLastAgent() ?? '');
     return agentRow(slug)?.titleTurns === true;
   }
 
@@ -1850,6 +1857,7 @@ export class DaemonPTYBridge extends EventEmitter {
           // open (an agent's, or the Enter that launched the next one) is over.
           if (parsed.type === 'command_start' || parsed.type === 'command_end') this.noteAgentEnded();
           this.codexBootWindow = parsed.type === 'command_start' || (parsed.type !== 'command_end' && this.codexBootWindow);
+          if (parsed.type === 'prompt_start' || parsed.type === 'prompt_end') this.shellPromptSeen = true;
           if (parsed.type === 'prompt_end') {
             // The first prompt is empty when no key has reached the pane;
             // passive input (counted by inputRevision) does not type.
@@ -2216,6 +2224,7 @@ export class DaemonPTYBridge extends EventEmitter {
     this.keyInputRevision = 0;
     this.lastKeyInputAt = 0;
     this.shellCommandRunning = false;
+    this.shellPromptSeen = false;
     this.shellSubmittedKeyRevision = undefined;
     this.shellCommandKeyRevision = 0;
     this.emptyShellPrompt = false;

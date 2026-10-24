@@ -200,3 +200,63 @@ describe('DaemonPTYBridge — a hookless Claude Code turn ends in silence under 
     expect(bridge.getAgentStatus()).toBe('awaiting_input');
   });
 });
+
+// Who says the pane runs Claude Code when its first prompt is submitted: the
+// tracked process names it first, the screen when the pick names no agent,
+// and neither for the launch line the shell runs at its own prompt.
+describe('DaemonPTYBridge — the first prompt is read as Claude Code\'s from the tracker or the screen (#2673)', () => {
+  let bridge: DaemonPTYBridge;
+  let feed: (data: string) => void;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    bridge = new DaemonPTYBridge();
+    const fake = makeFakePty();
+    feed = fake.feed;
+    bridge.setupDataForwarding(fake.pty, new RingBuffer(65536), 'sess-1', new PromptEventLog());
+    feed('\x1b]133;A\x07$ \x1b]133;B\x07');
+  });
+
+  afterEach(() => {
+    bridge.cleanup();
+    vi.useRealTimers();
+  });
+
+  function launch(screen: string): void {
+    bridge.noteInput('claude --safe-mode\r');
+    feed(LAUNCH_OUTPUT);
+    vi.advanceTimersByTime(300);
+    feed(screen);
+    vi.advanceTimersByTime(SILENCE_MS);
+  }
+
+  function firstPrompt(): void {
+    bridge.noteInput('reply hi');
+    bridge.noteInput('\r');
+    vi.advanceTimersByTime(80);
+    feed(RUNNING + BIG);
+  }
+
+  it('a tracked Claude Code the screen has not named yet makes the first prompt a turn', () => {
+    launch(IDLE + BIG); // no splash the detector's gate reads
+    bridge.noteAgentProcess({ slug: 'claude', alive: true });
+    expect(bridge.getLastAgent()).toBeNull();
+    firstPrompt();
+    expect(bridge.isAgentMidTurn()).toBe(true);
+  });
+
+  it('a live pick that names no agent leaves it to the screen', () => {
+    launch(IDLE + 'Claude Code v2.1.310\r\n  bypass permissions on\r\n' + BIG);
+    bridge.noteAgentProcess({ alive: true }); // a wrapper the tracker picked
+    expect(bridge.getLastAgent()).toBe('Claude Code');
+    firstPrompt();
+    expect(bridge.isAgentMidTurn()).toBe(true);
+  });
+
+  it('the launch line at the shell\'s own prompt is not that prompt, whatever the tracker still reads alive', () => {
+    bridge.noteAgentProcess({ slug: 'claude', alive: true }); // the previous Claude, its death not seen yet
+    bridge.noteInput('claude --safe-mode\r');
+    feed(RUNNING + BIG); // a startup paint under a running title
+    expect(bridge.isAgentMidTurn()).toBe(false);
+  });
+});
