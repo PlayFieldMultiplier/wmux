@@ -123,6 +123,15 @@ describe('AgentToolbar — Rewind', () => {
     expect(btn.title).toBe(en['pane.rewindHint']);
   });
 
+  it('does not draw the Schedule clock beside it', () => {
+    mount();
+    const rewindIcon = shownRewindButton().querySelector('svg')?.innerHTML;
+    const scheduleIcon = container.querySelector('[data-testid="session-schedule-button"] svg')?.innerHTML;
+    expect(rewindIcon).toBeTruthy();
+    expect(scheduleIcon).toBeTruthy();
+    expect(rewindIcon).not.toBe(scheduleIcon);
+  });
+
   it('is not shown for a pane that does not run Claude', () => {
     setAgent('codex');
     mount();

@@ -10,7 +10,7 @@ import RichInput from './RichInput';
 import SnippetsMenu from './SnippetsMenu';
 import SessionSchedulesPopover from './SessionSchedulesPopover';
 import { useClaudeRewindAction } from '../Pane/usePaneClaudeRewind';
-import { IconFolder, IconStar, IconKeyboard, IconSparkles, IconLock, IconClock } from '../icons';
+import { IconFolder, IconStar, IconKeyboard, IconSparkles, IconLock, IconClock, IconCornerUpLeft } from '../icons';
 
 /**
  * Bar height — also the travel distance of the reveal transform. The 40px
@@ -236,7 +236,8 @@ export default function AgentToolbar({ barHandlers, revealed, onHoldChange, onFo
           aria-label={t('toolbar.rewind')}
           data-testid="toolbar-rewind"
         >
-          <IconClock size={13} /> <span className="wmux-toolbar-label whitespace-nowrap">{t('toolbar.rewind')}</span>
+          {/* The undo arrow, not the menu's clock: Schedule's clock sits beside it. */}
+          <IconCornerUpLeft size={13} /> <span className="wmux-toolbar-label whitespace-nowrap">{t('toolbar.rewind')}</span>
         </button>
       )}
       <div className="flex-1" />
