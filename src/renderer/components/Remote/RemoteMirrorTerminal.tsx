@@ -28,6 +28,8 @@ import { gateUserInput, type UserInputTerminal } from '../../../shared/terminal/
 import { installShellPromptModeReset, shellPromptModeResetFor } from '../../../shared/terminal/shellPromptModeReset';
 import { holdNewXtermReplies } from '../../../shared/terminal/replyParity';
 import { fitsHeld, onFitsReleased } from '../../utils/layoutTransitionGate';
+import type { RemoteSendSource } from '../../../shared/remoteUpload';
+import { registerMirrorDropTarget, showRemoteSendNotice, type RegisterDrop } from './mirrorFileSend';
 
 export interface RemoteMirrorTerminalProps {
   /** null while the pane attach is still in flight. */
@@ -60,6 +62,8 @@ export interface RemoteMirrorTerminalProps {
    *  shrinking (a shadow workspace — the host owns geometry, the viewer
    *  letterboxes). The resize request to the host is unchanged. */
   fixedFont?: boolean;
+  /** The tab surface this mirror is shown in: a file dropped on it is sent to the host. */
+  dropSurfaceId?: string;
 }
 
 /** Decode a base64 payload into raw bytes and hand it to xterm as-is — the
@@ -125,7 +129,7 @@ const MIN_REMOTE_RESIZE_ROWS = 8;
  * when it does not — the fallback is not a regression, it is what made this
  * safe to ship without a protocol bump.
  */
-export default function RemoteMirrorTerminal({ attachId, error, insecureTransport = false, readOnly, onTitleChange, hostLabel, hostId, sessionId, fixedFont = false }: RemoteMirrorTerminalProps) {
+export default function RemoteMirrorTerminal({ attachId, error, insecureTransport = false, readOnly, onTitleChange, hostLabel, hostId, sessionId, fixedFont = false, dropSurfaceId }: RemoteMirrorTerminalProps) {
   const t = useT();
   // Ref, same reason as readOnlyRef below: the title subscription is wired
   // once inside the mount-only effect, and a parent re-render passing a new
@@ -178,6 +182,15 @@ export default function RemoteMirrorTerminal({ attachId, error, insecureTranspor
   // re-create the terminal on every reconnect and drop the mirrored scrollback.
   const attachIdRef = useRef(attachId);
   attachIdRef.current = attachId;
+
+  // Set by the terminal effect below: upload files to the host and type their
+  // paths, in this mirror's own paste mode. A drop on this mirror's surface
+  // reaches it through the registry (AppLayout owns the app-wide drop listener).
+  const sendFilesRef = useRef<((source: 'clipboard-image' | RegisterDrop) => void) | null>(null);
+  useEffect(() => {
+    if (!dropSurfaceId) return;
+    return registerMirrorDropTarget(dropSurfaceId, (registerDrop) => sendFilesRef.current?.(registerDrop));
+  }, [dropSurfaceId]);
 
   /**
    * How many snapshot repaints are currently being fed to the parser. Second
@@ -802,6 +815,34 @@ export default function RemoteMirrorTerminal({ attachId, error, insecureTranspor
       ev.stopPropagation();
     };
     if (isMac) container.addEventListener('paste', blockNativePaste, true);
+
+    let disposed = false;
+    sendFilesRef.current = (source) => {
+      const host = hostLabelRef.current || translate('remote.hostFallback');
+      const id = attachIdRef.current;
+      const remote = window.electronAPI?.remote;
+      if (readOnlyRef.current) return showRemoteSendNotice('read-only', host);
+      if (!id) return showRemoteSendNotice('not-connected', host);
+      if (!remote) return showRemoteSendNotice('failed', host);
+      void (async () => {
+        let src: RemoteSendSource = { kind: 'clipboard-image' };
+        if (source !== 'clipboard-image') {
+          const token = await source();
+          if (!token) return showRemoteSendNotice('failed', host);
+          src = { kind: 'drop', token };
+        }
+        const sent = await remote.paneSendFiles(id, src, { wsl: remotePaneRef.current?.wsl === true })
+          .catch(() => ({ ok: false as const, reason: 'failed' as const }));
+        if (!sent.ok) return showRemoteSendNotice(sent.reason, host);
+        // The upload can take a while: type only into the pane it was meant
+        // for, with the paste mode and the input grant it has now.
+        if (disposed || attachIdRef.current !== id || readOnlyRef.current) return showRemoteSendNotice('pane-changed', host);
+        const modes = (term as unknown as { modes?: { bracketedPasteMode?: boolean } }).modes;
+        const data = modes?.bracketedPasteMode === true ? `\x1b[200~${sent.text}\x1b[201~` : sent.text;
+        const wrote = await remote.paneWriteChecked(id, data).catch(() => ({ ok: false as const, reason: 'unknown' as const }));
+        if (!wrote.ok) showRemoteSendNotice(`write-${wrote.reason}`, host);
+      })();
+    };
     const detachAltClickGuard = installAltClickTrackingGuard(container, term);
 
     // Auto-copy on selection, debounced exactly like a local pane's. Silent on
@@ -923,16 +964,13 @@ export default function RemoteMirrorTerminal({ attachId, error, insecureTranspor
           void (async () => {
             const text = await window.clipboardAPI.readText();
             if (!text) {
-              // An image alone is not pasted (see below): say so rather than do nothing.
-              if (await window.clipboardAPI.hasImage?.()) {
-                useStore.getState().pushToast({ level: 'info', message: translate('remote.mirror.imagePasteUnsupported') });
-              }
+              // An image alone is uploaded to the host and its path there typed.
+              if (await window.clipboardAPI.hasImage?.()) sendFilesRef.current?.('clipboard-image');
               return;
             }
-            // Text only. A local pane also pastes an image by writing the temp
-            // file's PATH, and that path names a file on THIS machine — on the
-            // other end of an attach it resolves to nothing, so the mirror
-            // stays quiet rather than typing a broken path into a live shell.
+            // A local pane pastes an image as a temp file's PATH on THIS
+            // machine, which resolves to nothing on the other end of an
+            // attach: the image-only branch above uploads it instead.
             //
             // `modes` is the mirror's own parse of the remote app's DECSET
             // 2004, so bracketed paste is bracketed for the app that asked.
@@ -956,6 +994,8 @@ export default function RemoteMirrorTerminal({ attachId, error, insecureTranspor
     // dispose the terminal and drop everything the remote has already sent.
     scheduleFitRef.current();
     return () => {
+      disposed = true;
+      sendFilesRef.current = null;
       if (isMac) container.removeEventListener('paste', blockNativePaste, true);
       detachAltClickGuard();
       container.removeEventListener('mousedown', onPressInside, true);

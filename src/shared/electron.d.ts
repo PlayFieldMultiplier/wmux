@@ -35,6 +35,7 @@ import type {
   LanLinkPeersListResult,
 } from './lanlink';
 import type { A2aSpawnAskResult, A2aSpawnOutgoingList, A2aSpawnPolicySetResult, A2aSpawnPolicyV1, A2aSpawnRequestSummary, A2aSpawnUiAsk } from './a2aSpawn';
+import type { RemoteSendResult, RemoteSendSource, RemoteWriteResult } from './remoteUpload';
 import type {
   A2aRemoteExposureGetResult,
   A2aRemoteExposureSetResult,
@@ -95,7 +96,8 @@ declare global {
     /** Only in the quick-launch composer window (quickLaunchPreload.ts). */
     quickLaunchAPI: QuickLaunchAPI;
     electronAPI: ElectronAPI & {
-      onFileDrop: (callback: (paths: string[]) => void) => () => void;
+      /** `registerDrop` names this OS drop to main by a one-use token (sends to another PC's pane). */
+      onFileDrop: (callback: (paths: string[], registerDrop: () => Promise<string | null>) => void) => () => void;
       fs?: {
         readDir: (dirPath: string) => Promise<{ name: string; path: string; isDirectory: boolean; isSymlink: boolean }[]>;
         readFile: (filePath: string) => Promise<string | null>;
@@ -458,6 +460,11 @@ declare global {
         >;
         paneDetach: (attachId: string) => Promise<void>;
         paneWrite: (attachId: string, data: string) => void;
+        /** Upload an OS drop's files or the clipboard image to the host and
+         *  answer the host's paths, quoted, for `paneWriteChecked`. All or nothing. */
+        paneSendFiles: (attachId: string, source: RemoteSendSource, opts: { wsl: boolean }) => Promise<RemoteSendResult>;
+        /** Write to the pane and await the host's answer; refused once detached. */
+        paneWriteChecked: (attachId: string, data: string) => Promise<RemoteWriteResult>;
         /** #1322 — ask the remote daemon to resize the PTY behind `attachId`
          *  via the same `POST /api/sessions/:id/resize` route the phone uses
          *  (#766). `{ ok: true }` only means the route accepted the request;

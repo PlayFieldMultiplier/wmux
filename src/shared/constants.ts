@@ -898,6 +898,12 @@ export const IPC = {
   REMOTE_PANE_ATTACH: 'remote:pane:attach',
   REMOTE_PANE_DETACH: 'remote:pane:detach',
   REMOTE_PANE_WRITE: 'remote:pane:write',
+  // Preload registers an OS drop's paths at drop time; a send names the drop by its token.
+  REMOTE_DROP_REGISTER: 'remote:drop:register',
+  // Upload dropped files or the clipboard image to the host; answers the paths to type (invoke).
+  REMOTE_PANE_SEND_FILES: 'remote:pane:send-files',
+  // An awaited write of those paths, refused once the pane is detached (invoke).
+  REMOTE_PANE_WRITE_CHECKED: 'remote:pane:write-checked',
   // renderer → main invoke (#1322): ask the remote daemon to resize the PTY
   // behind `attachId` via `RemoteHostClient.resizeSession` — the same
   // `POST /api/sessions/:id/resize` route the phone uses (#766). A GRANT

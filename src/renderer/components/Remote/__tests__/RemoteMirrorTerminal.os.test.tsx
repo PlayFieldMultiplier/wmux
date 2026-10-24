@@ -1292,27 +1292,70 @@ describe('RemoteMirrorTerminal', () => {
       unmount();
     });
 
-    it('Ctrl+V with only an image on the clipboard says it is not supported, and sends nothing', async () => {
-      const hasImage = vi.fn(() => Promise.resolve(true));
-      (window as unknown as { clipboardAPI: Record<string, unknown> }).clipboardAPI.hasImage = hasImage;
+    it('Ctrl+V with only an image uploads it, types the answer through the checked write, and a waiting prompt (409) comes back as its toast', async () => {
+      (window as unknown as { clipboardAPI: Record<string, unknown> }).clipboardAPI.hasImage = vi.fn(() => Promise.resolve(true));
+      const paneSendFiles = vi.fn(() => Promise.resolve({ ok: true, count: 1, text: "'/h/uploads/phone/p.png'" }));
+      const paneWriteChecked = vi.fn(() => Promise.resolve({ ok: false, reason: 'prompt-active' }));
+      Object.assign((window as unknown as { electronAPI: { remote: Record<string, unknown> } }).electronAPI.remote, { paneSendFiles, paneWriteChecked });
       const original = useStore.getState().pushToast;
       const pushToast = vi.fn(() => 'toast-1');
       useStore.setState({ pushToast });
-      const { unmount } = render(<RemoteMirrorTerminal attachId="a1" />);
+      const { unmount } = render(<RemoteMirrorTerminal attachId="a1" hostLabel="desk" />);
       const term = termInstances[0]!;
 
       await act(async () => {
         press(term, { key: 'v', code: 'KeyV', ctrlKey: true });
-        await Promise.resolve();
-        await Promise.resolve();
+        for (let i = 0; i < 6; i++) await Promise.resolve();
       });
 
-      expect(hasImage).toHaveBeenCalled();
-      expect(pushToast).toHaveBeenCalledWith({ level: 'info', message: "Pasting an image into another PC's pane is not supported yet. Only text is pasted." });
+      expect(paneSendFiles).toHaveBeenCalledWith('a1', { kind: 'clipboard-image' }, { wsl: false });
+      expect(paneWriteChecked).toHaveBeenCalledWith('a1', "'/h/uploads/phone/p.png'");
+      expect(pushToast).toHaveBeenCalledWith({ level: 'warn', message: 'Answer the prompt on that pane first, then send the file again.' });
       expect(paneWrite).not.toHaveBeenCalled();
 
       unmount();
       useStore.setState({ pushToast: original });
+    });
+
+    it('a pane that changed while the image went up gets nothing typed', async () => {
+      (window as unknown as { clipboardAPI: Record<string, unknown> }).clipboardAPI.hasImage = vi.fn(() => Promise.resolve(true));
+      let finish: (v: unknown) => void = () => undefined;
+      const paneSendFiles = vi.fn(() => new Promise((resolve) => { finish = resolve; }));
+      const paneWriteChecked = vi.fn();
+      Object.assign((window as unknown as { electronAPI: { remote: Record<string, unknown> } }).electronAPI.remote, { paneSendFiles, paneWriteChecked });
+      const original = useStore.getState().pushToast;
+      const pushToast = vi.fn(() => 'toast-1');
+      useStore.setState({ pushToast });
+      const { rerender, unmount } = render(<RemoteMirrorTerminal attachId="a1" hostLabel="desk" />);
+      const term = termInstances[0]!;
+      await act(async () => {
+        press(term, { key: 'v', code: 'KeyV', ctrlKey: true });
+        for (let i = 0; i < 4; i++) await Promise.resolve();
+      });
+      expect(paneSendFiles).toHaveBeenCalled();
+      rerender(<RemoteMirrorTerminal attachId="a2" hostLabel="desk" />);
+      await act(async () => {
+        finish({ ok: true, count: 1, text: "'/h/uploads/phone/p.png'" });
+        for (let i = 0; i < 4; i++) await Promise.resolve();
+      });
+      expect(paneWriteChecked).not.toHaveBeenCalled();
+      expect(pushToast).toHaveBeenCalledWith({ level: 'warn', message: 'That pane changed or closed while the file was being sent, so nothing was typed.' });
+      unmount();
+      useStore.setState({ pushToast: original });
+    });
+
+    it('a read-only mirror sends no image at all', async () => {
+      (window as unknown as { clipboardAPI: Record<string, unknown> }).clipboardAPI.hasImage = vi.fn(() => Promise.resolve(true));
+      const paneSendFiles = vi.fn();
+      (window as unknown as { electronAPI: { remote: Record<string, unknown> } }).electronAPI.remote.paneSendFiles = paneSendFiles;
+      const { unmount } = render(<RemoteMirrorTerminal attachId="a1" readOnly />);
+      const term = termInstances[0]!;
+      await act(async () => {
+        press(term, { key: 'v', code: 'KeyV', ctrlKey: true });
+        for (let i = 0; i < 4; i++) await Promise.resolve();
+      });
+      expect(paneSendFiles).not.toHaveBeenCalled();
+      unmount();
     });
 
     it('auto-copies a finished selection, debounced', () => {
