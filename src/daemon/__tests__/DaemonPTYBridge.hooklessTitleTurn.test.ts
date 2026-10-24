@@ -10,6 +10,7 @@ import type { IPty } from 'node-pty';
 import { DaemonPTYBridge } from '../DaemonPTYBridge';
 import { PromptEventLog } from '../PromptEventLog';
 import { RingBuffer } from '../RingBuffer';
+import { recordWasMidTurn } from '../recoveryHint';
 
 const BIG = 'x'.repeat(3000); // > ActivityMonitor's 2 KB active threshold
 const LAUNCH_OUTPUT = '\x1b[?2004l\x1b]133;C\x07';
@@ -99,6 +100,36 @@ describe('DaemonPTYBridge — a hookless Claude Code turn ends in silence under 
     expect(bridge.isTurnOpen()).toBe(true);
     expect(bridge.isAgentMidTurn()).toBe(false);
     expect(edges).toEqual([]);
+  });
+
+  // Recovery continues a pane whose persisted record says its agent was
+  // mid-turn when the daemon died: DaemonSessionManager mirrors every
+  // agentTurn edge onto meta.turnRunningSince, and recordWasMidTurn reads it.
+  // (The transcript must still show the turn open: recordedTurnStillOpen.)
+  describe('what recovery reads after a crash', () => {
+    const recordAtCrash = () => ({
+      ...(edges.at(-1) != null ? { turnRunningSince: edges.at(-1) as number } : {}),
+      lastActivity: new Date().toISOString(),
+    });
+
+    it('a hookless first turn the daemon died in is continued', () => {
+      runTurn('refactor the parser');
+      expect(recordWasMidTurn(recordAtCrash(), Date.now())).toBe(true);
+    });
+
+    it('a first Enter that only answered the trust dialog is not', () => {
+      bridge.noteInput('\r'); // "Trust this folder?" answered; no turn starts
+      vi.advanceTimersByTime(100);
+      feed(IDLE + BIG); // the composer paints under the idle title
+      expect(recordWasMidTurn(recordAtCrash(), Date.now())).toBe(false);
+    });
+
+    it('a turn that already finished is not', () => {
+      runTurn('reply hi');
+      feed(IDLE + 'hi\r\n');
+      vi.advanceTimersByTime(SILENCE_MS);
+      expect(recordWasMidTurn(recordAtCrash(), Date.now())).toBe(false);
+    });
   });
 
   it('leaves a quiet turn alone when the title is not Claude Code\'s idle one', () => {

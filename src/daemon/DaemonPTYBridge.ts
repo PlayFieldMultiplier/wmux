@@ -856,9 +856,10 @@ export class DaemonPTYBridge extends EventEmitter {
    * too, and a shell without OSC 133 never settles it, so an agent must be
    * present: one whose hooks report (`hookSeen`, reset when the agent ends) or
    * a live agent process. A boot episode (the launch Enter or the TUI's first
-   * paint, with no hook or joining submit since) is not a turn yet; that also
-   * leaves out a hookless agent's first turn after its launch, which is the
-   * safe side: continuing an agent idle at its composer would invent work.
+   * paint, with no hook or joining submit since) is not a turn yet: continuing
+   * an agent idle at its composer would invent work. A hookless agent's first
+   * turn after its launch counts once Claude Code's running title shows it
+   * (noteClaudeTitle); a submit that only answered a dialog draws none.
    */
   isAgentMidTurn(): boolean {
     return this.turnOpen && !this.bootEpisode && (this.hookSeen || this.trackedAgent?.alive === true);
