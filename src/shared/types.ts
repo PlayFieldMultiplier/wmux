@@ -140,6 +140,10 @@ export interface Surface {
    *  Not refreshed from OSC titles while locked — an agent retitles its tab
    *  many times a second, and each refresh would be a store write. */
   autoTitle?: string;
+  /** "Continue in another agent": the tab this one's work went on in, and on
+   *  that tab, the held one it came from. Each tab's tooltip names the other. */
+  continuedIn?: string;
+  continuedFrom?: string;
   /**
    * #2398 — this surface replaces a session the daemon confirmed dead, and has
    * not created its replacement yet. Carried with the surface (and so saved

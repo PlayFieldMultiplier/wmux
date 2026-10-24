@@ -61,6 +61,8 @@ export interface SurfaceSlice {
    *  title the rename replaced), falling back to the shell name. */
   resetSurfaceTitle: (surfaceId: string) => void;
   updateSurfaceTitleByPty: (ptyId: string, title: string) => void;
+  /** Tie a usage-limit-held tab to the tab its work went on in, each naming the other. */
+  linkContinuedSurfaces: (fromPtyId: string, toPtyId: string) => void;
   /** #1086/#1091 — the remote-terminal twin of updateSurfaceTitleByPty. A
    *  remote-terminal surface's ptyId is always '' (see createRemoteSurface),
    *  so it can never be found by that lookup — this one is keyed by surfaceId
@@ -523,6 +525,16 @@ export const createSurfaceSlice: StateCreator<StoreState, [['zustand/immer', nev
         }
       }
     }
+  }),
+
+  linkContinuedSurfaces: (fromPtyId, toPtyId) => set((state: StoreState) => {
+    if (!fromPtyId || !toPtyId) return;
+    const surfaces = state.workspaces.flatMap((ws) => getWorkspaceLeafPanes(ws).flatMap((pane) => pane.surfaces));
+    const from = surfaces.find((s) => s.ptyId === fromPtyId);
+    const to = surfaces.find((s) => s.ptyId === toPtyId);
+    if (!from || !to) return;
+    from.continuedIn = to.id;
+    to.continuedFrom = from.id;
   }),
 
   resetSurfaceTitle: (surfaceId) => set((state: StoreState) => {

@@ -10,19 +10,21 @@ vi.mock('../../hooks/useTerminal', () => ({ terminalRegistry: registry }));
 
 import { useStore } from '../../stores';
 import { deliberateSleep } from '../../../test-utils/waitFor';
-import { HANDOFF_REQUEST_MAX, continueInAgent, continueInAgentText } from '../continueInAgent';
+import { HANDOFF_FILES_MAX, HANDOFF_REPLY_MAX, HANDOFF_REQUEST_MAX, continueInAgent, continueInAgentText, unsentDraftOf } from '../continueInAgent';
 import { everyAccountOutUntil } from '../../components/Pane/usageLimitPresentation';
 
 const write = vi.fn();
 const snapshot = vi.fn();
+const diffRead = vi.fn();
 
 beforeEach(() => {
   openTerminalTab.mockReset();
   write.mockReset();
   snapshot.mockReset();
+  diffRead.mockReset();
   vi.stubGlobal('window', globalThis);
-  vi.stubGlobal('electronAPI', { pty: { write }, chat: { snapshot } });
-  useStore.setState({ surfaceAgent: {}, toasts: [] } as never);
+  vi.stubGlobal('electronAPI', { pty: { write }, chat: { snapshot }, diff: { read: diffRead } });
+  useStore.setState({ surfaceAgent: {}, toasts: [], surfaceGitBranch: {}, resumeBindingByPtyId: {} } as never);
   registry.clear();
   registry.set('pty-new', fakeTerm(['› Ask anything']));
 });
@@ -60,9 +62,48 @@ describe('the handoff note', () => {
   it('names who stopped and quotes the last request, capped', () => {
     expect(continueInAgentText('Claude Code', null)).toBe('Claude Code stopped at its usage limit. Please carry on with the work in this folder.');
     const long = 'x'.repeat(HANDOFF_REQUEST_MAX + 10);
-    const text = continueInAgentText('Claude Code', `  ${long}  `);
+    const text = continueInAgentText('Claude Code', { requests: [`  ${long}  `] });
     expect(text).toContain('\n\nThe last request was:\n');
     expect(text.endsWith(`${'x'.repeat(HANDOFF_REQUEST_MAX)}…`)).toBe(true);
+  });
+});
+
+describe('the handoff memo', () => {
+  const facts = {
+    requests: ['set up the billing page', 'add the invoice table', 'use the key sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123', 'paginate it', 'fix the empty state'],
+    reply: `${'y'.repeat(HANDOFF_REPLY_MAX)} done; pushed with ghp_abcdefghijklmnopqrstuvwxyz0123456789`,
+    planFiles: ['/home/me/.claude/plans/billing.md'],
+    branch: 'feat/billing',
+    files: Array.from({ length: HANDOFF_FILES_MAX + 2 }, (_, i) => ({ path: `src/f${i}.ts`, additions: i, deletions: 1 })),
+    transcriptPath: '/home/me/.claude/projects/repo/1234.jsonl',
+    draft: 'also add CSV export',
+  };
+
+  it('carries the first and latest requests, the reply end, plans, git state and transcript, with keys masked', () => {
+    const memo = continueInAgentText('Claude Code', facts);
+    expect(memo).toContain('The first request was:\nset up the billing page');
+    expect(memo).toContain('The latest requests were:\n1. use the key [redacted]\n2. paginate it\n3. fix the empty state');
+    expect(memo).not.toContain('add the invoice table');
+    expect(memo).not.toContain('sk-ant-');
+    expect(memo).toContain("The end of Claude Code's last reply:\n…");
+    expect(memo).toContain('done; pushed with [redacted]');
+    expect(memo).toContain('Plan and todo files:\n/home/me/.claude/plans/billing.md');
+    expect(memo).toContain('Branch: feat/billing\nUncommitted changes (git diff --stat):\n src/f0.ts | +0 -1');
+    expect(memo).toContain(' …and 2 more\nCheck the current changes first, then continue.');
+    expect(memo).toContain('The original conversation: /home/me/.claude/projects/repo/1234.jsonl');
+    // The draft only when the owner chose to carry it.
+    expect(memo).not.toContain('also add CSV export');
+    expect(continueInAgentText('Claude Code', facts, { carryDraft: true }).endsWith('A draft that was never sent:\nalso add CSV export')).toBe(true);
+  });
+
+  it('reads the draft from the input row, leaving dimmed suggestion text out', () => {
+    const cell = (ch: string, dim = false) => ({ getWidth: () => 1, getChars: () => ch, isDim: () => (dim ? 1 : 0) });
+    const row = (typed: string, ghost: string) => [...`│ > ${typed}`].map((c) => cell(c)).concat([...ghost].map((c) => cell(c, true)), [cell('│')]);
+    let cells = row('ship the fix', '');
+    registry.set('pty-held', { buffer: { active: { baseY: 0, cursorY: 3, getLine: (y: number) => (y === 3 ? { length: cells.length, getCell: (x: number) => cells[x] } : undefined) } } } as never);
+    expect(unsentDraftOf('pty-held')).toBe('ship the fix');
+    cells = row('', 'Try "fix lint errors"');
+    expect(unsentDraftOf('pty-held')).toBeNull();
   });
 });
 
@@ -177,6 +218,29 @@ describe('continueInAgent', () => {
     ready();
     expect(await first).toBe(true);
     expect(openTerminalTab).toHaveBeenCalledTimes(1);
+  });
+
+  it('builds the memo from the whole conversation and the folder, and types it without Enter', async () => {
+    snapshot.mockImplementation(async (_id: string, before?: number) => (before === undefined
+      ? { events: [
+        { kind: 'user_text', text: 'now add tests' },
+        { kind: 'tool_use', name: 'Write', input: { inline: '{"file_path":"/repo/docs/todo.md","content":"- tests"}' } },
+        { kind: 'assistant_text', text: 'Tests are half done.' },
+      ], cursor: { headOffset: 500 }, hasMore: true }
+      : { events: [{ kind: 'user_text', text: 'build the login page' }], cursor: { headOffset: 0 }, hasMore: false }));
+    diffRead.mockResolvedValue({ ok: true, numstat: [{ path: 'src/login.ts', additions: 12, deletions: 3 }], snapshot: { targetBranch: 'feat/login' } });
+    useStore.setState({ resumeBindingByPtyId: { 'pty-held': { transcriptPath: '/t/abc.jsonl' } } } as never);
+    openTerminalTab.mockResolvedValue({ workspaceId: 'ws-1', ptyId: 'pty-new' });
+    ready();
+    expect(await continueInAgent(req)).toBe(true);
+    expect(diffRead).toHaveBeenCalledWith('/repo', '', 'workspace');
+    const typed = write.mock.calls.map((c) => c[1]).join('');
+    for (const part of ['The first request was:\nbuild the login page', '1. now add tests', 'Tests are half done.', '/repo/docs/todo.md',
+      'Branch: feat/login', ' src/login.ts | +12 -3', 'Check the current changes first', 'The original conversation: /t/abc.jsonl']) {
+      expect(typed).toContain(part);
+    }
+    expect(typed.endsWith('\x1b[201~')).toBe(true);
+    expect(typed).not.toContain('\r');
   });
 
   it('quotes the owner\'s request, not wmux\'s own continue message', async () => {
