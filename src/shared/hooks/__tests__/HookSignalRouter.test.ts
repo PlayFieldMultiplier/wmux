@@ -623,6 +623,15 @@ describe('HookSignalRouter', () => {
       expect(router.authorityAgentFor('p1', 1100)).toBeUndefined();
     });
 
+    it('#2673 expireAuthorityFor scoped to an old launch keeps what a later launch\'s signal touched', () => {
+      router.touchAuthority('p1', 'claude', 1000); // the old launch's hook
+      router.expireAuthorityFor('p1', undefined, 2000); // relaunched at 2000
+      expect(router.isGovernedFor('p1', 'claude', 2100)).toBe(false);
+      router.touchAuthority('p1', 'claude', 2500); // the relaunch's own hook
+      router.expireAuthorityFor('p1', undefined, 2000);
+      expect(router.isGovernedFor('p1', 'claude', 2600)).toBe(true);
+    });
+
     it('#919 expireAuthorityFor scoped to another agent leaves the entry intact', () => {
       router.touchAuthority('p1', 'codex', 1000);
       router.expireAuthorityFor('p1', 'claude'); // claude's death, not codex's

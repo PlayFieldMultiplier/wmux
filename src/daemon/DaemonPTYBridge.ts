@@ -1184,59 +1184,23 @@ export class DaemonPTYBridge extends EventEmitter {
    * that, so its episode ends here, and the next agent's hooks are judged
    * afresh: until one reports, its detector settles count.
    */
-  /** Command starts the detector feed applied in stream order that the OSC 133 parse has not reached yet. */
-  private detectorCommandStarts = 0;
-  // eslint-disable-next-line no-control-regex -- OSC 133 framing bytes
-  private static readonly COMMAND_START_MARK = /\u001b\]133;C(?:;[^\u0007\u001b]{0,256})?(?:\u0007|\u001b\\)/g;
+  /** OSC 133 command starts this pane's shell reported (monotonic; read through getCommandStarts). */
+  private commandStarts = 0;
+  private parsesOsc133 = false;
 
   /**
-   * #2673 — feed a read to the detector with each OSC 133 command start
-   * applied where it sits in the stream. The OSC 133 parse that ends the
-   * previous agent (noteAgentEnded) runs after the detector has seen the whole
-   * read, so a read holding the command start and the next agent's splash
-   * cleared the gate that splash had just opened. A muted read, or a bridge
-   * with no OSC 133 parse at all, is fed as before: no parse ends an agent
-   * there. A marker split across reads is left to that parse, as before.
+   * #2673 — how many commands the pane's shell has started (OSC 133 C), or
+   * undefined when this bridge does not parse them. The process tracker reads
+   * it to tell whether a watched agent's death may have a successor.
    */
-  private feedDetectorInStreamOrder(detector: AgentDetector, data: string, parsesOsc133: boolean): void {
-    if (!parsesOsc133 || this.muted || !data.includes('\u001b]133;C')) {
-      detector.feed(data);
-      return;
-    }
-    let start = 0;
-    const mark = DaemonPTYBridge.COMMAND_START_MARK;
-    mark.lastIndex = 0;
-    for (let m = mark.exec(data); m; m = mark.exec(data)) {
-      const end = m.index + m[0].length;
-      detector.feed(data.slice(start, end));
-      detector.clearTrustedIdentity();
-      this.detectorCommandStarts += 1;
-      start = end;
-    }
-    detector.feed(data.slice(start));
+  getCommandStarts(): number | undefined {
+    return this.parsesOsc133 ? this.commandStarts : undefined;
   }
 
   noteAgentEnded(clearDetectorIdentity = true): void {
     this.closeTurn();
     this.hookSeen = false;
     if (clearDetectorIdentity) this.agentDetector?.clearTrustedIdentity();
-  }
-
-  /**
-   * #2673 — the death edge of an agent process this pane no longer runs. The
-   * tracker reports the death of the process it watches, but it may not have
-   * picked a relaunch yet: `/exit`, then `claude` again, and the monitor sees
-   * the previous Claude gone seconds after the new splash opened the gate.
-   * The process was tracked under an older detector epoch (a shell return or
-   * a command start has moved it since, and each of those already ended that
-   * agent here), and a newer launch owns the pane: its splash on the screen,
-   * or its own hook's identity. Ending the agent now would end that launch.
-   */
-  isSupersededAgentDeath(state: { alive: boolean; launchEpoch?: number }): boolean {
-    const detector = this.agentDetector;
-    return !state.alive && state.launchEpoch !== undefined && !!detector
-      && state.launchEpoch !== detector.getIdentityEpoch()
-      && (detector.getLastAgent() !== null || detector.getTrustedAgent() !== null);
   }
 
   /** The host supplies a parsed live viewport with output/geometry fences. */
@@ -1258,17 +1222,10 @@ export class DaemonPTYBridge extends EventEmitter {
   /**
    * The daemon's process tracker picked the pane's agent process, or saw it
    * die. Only the watched pid's death is reported, so a relaunch the tracker
-   * already picked is never ended by its predecessor's late death edge; one
-   * it has not picked yet is kept by isSupersededAgentDeath.
+   * already picked is never ended by its predecessor's late death edge.
    */
-  noteAgentProcess(state: { slug?: string; alive: boolean; observedAt?: number; replacedLive?: true; identityEpoch?: number | null; launchEpoch?: number }): void {
+  noteAgentProcess(state: { slug?: string; alive: boolean; observedAt?: number; replacedLive?: true; identityEpoch?: number | null }): void {
     const detector = this.agentDetector;
-    // That process is dead, and it was the tracked one; the newer launch is not touched.
-    if (this.isSupersededAgentDeath(state)) {
-      this.trackedAgent = { ...(state.slug ? { slug: state.slug } : {}), alive: false };
-      this.reportMidTurn();
-      return;
-    }
     const now = Date.now();
     const boundaryAt = Math.max(this.identityLifetimeAt, detector?.getIdentityBoundaryAt() ?? 0);
     const epochProven = state.identityEpoch !== undefined && state.identityEpoch !== null
@@ -1617,7 +1574,10 @@ export class DaemonPTYBridge extends EventEmitter {
       interpreter.seedModes(prefilled.toString('utf8'), ringBuffer.totalBytesWritten);
     }
 
-    const agentDetector = new AgentDetector();
+    // With OSC 133 parsed here, the detector ends the agent on its markers in
+    // stream order itself (see the command start/end branch below).
+    const agentDetector = new AgentDetector({ launchBoundaries: !!promptLog });
+    this.parsesOsc133 = !!promptLog;
     this.agentDetector = agentDetector;
     this.identityLifetimeAt = Date.now();
 
@@ -1843,19 +1803,18 @@ export class DaemonPTYBridge extends EventEmitter {
             this.shellCommandRunning = false;
           }
           if (parsed.type === 'command_start') {
+            this.commandStarts += 1;
             this.shellCommandKeyRevision = this.shellSubmittedKeyRevision ?? this.keyInputRevision;
             this.shellSubmittedKeyRevision = undefined;
             this.shellCommandRunning = true; this.completedShellCommand = false; this.emptyShellPrompt = false;
           }
           // The shell's foreground program changed hands: whatever episode was
           // open (an agent's, or the Enter that launched the next one) is over.
-          // A command start the detector feed already applied at its place in
-          // the stream (feedDetectorInStreamOrder) must not clear it again:
-          // the splash behind it in the same read already opened the gate.
-          if (parsed.type === 'command_start' && this.detectorCommandStarts > 0) {
-            this.detectorCommandStarts -= 1;
-            this.noteAgentEnded(false);
-          } else if (parsed.type === 'command_start' || parsed.type === 'command_end') this.noteAgentEnded();
+          // The detector already cleared its identity at this marker, where it
+          // sits in the stream (launchBoundaries). Clearing it again here,
+          // after the whole read, wiped the gate the next agent's splash in
+          // the same read had just opened (#2673).
+          if (parsed.type === 'command_start' || parsed.type === 'command_end') this.noteAgentEnded(false);
           this.codexBootWindow = parsed.type === 'command_start' || (parsed.type !== 'command_end' && this.codexBootWindow);
           if (parsed.type === 'prompt_end') {
             // The first prompt is empty when no key has reached the pane;
@@ -1954,11 +1913,6 @@ export class DaemonPTYBridge extends EventEmitter {
       } catch (err) {
         // Still forward raw data even if parsing failed
         forward();
-      } finally {
-        // The OSC 133 parse runs synchronously in this read: a command start
-        // the detector feed counted and the parse never reached is not left
-        // to skip a later one's clear.
-        this.detectorCommandStarts = 0;
       }
     };
     this.captureChunk = capture;
@@ -2002,7 +1956,7 @@ export class DaemonPTYBridge extends EventEmitter {
       // 미활성화되어 이후 모든 status 감지가 죽는다(daemon mode agent detection
       // 갭). activity보다 뒤에서 처리해 같은 chunk의 명시 상태가 최종 승자가 된다.
       try {
-        this.feedDetectorInStreamOrder(agentDetector, data, !!promptLog);
+        agentDetector.feed(data);
       } catch {
         // detection 실패가 데이터 포워딩을 막아선 안 된다.
       }

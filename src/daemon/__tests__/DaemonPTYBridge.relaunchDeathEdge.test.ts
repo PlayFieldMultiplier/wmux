@@ -2,23 +2,26 @@
 // `claude` again). The tracker still watched the previous Claude's pid, which
 // the process monitor reported dead a few seconds after the new splash had
 // opened the detector gate. That death edge ended the pane's agent: it cleared
-// the new launch's screen identity, and with no live edge for the new process
-// nothing opened the gate again. The new turn's "Interrupted" row was never
-// read, so Esc settled nothing (Windows, 11 instrumented runs).
+// the new launch's screen identity, and with no launch edge for the new
+// process nothing opened the gate again. The new turn's "Interrupted" row was
+// never read, so Esc settled nothing (Windows, 11 instrumented runs).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IPty } from 'node-pty';
 import { DaemonPTYBridge } from '../DaemonPTYBridge';
-import { AgentProcessTracker, type PidWatcher, type ProcessTreeEntry } from '../AgentProcessTracker';
+import { AgentProcessTracker, type PidWatcher, type ProcessTreeEntry, type TrackedAgentState } from '../AgentProcessTracker';
 import { RingBuffer } from '../RingBuffer';
 import { PromptEventLog } from '../PromptEventLog';
 import { RESIZE_REDRAW_GUARD_MS } from '../../main/notification/idleSuppression';
 
 const PROMPT = '\x1b]133;A\x07$ \x1b]133;B\x07';
 const COMMAND_START = '\x1b]133;C\x07';
-const SHELL_RETURN = '\x1b]133;D;0\x07' + PROMPT;
+const COMMAND_END = '\x1b]133;D;0\x07';
+const SHELL_RETURN = COMMAND_END + PROMPT;
 const SPLASH = 'Claude Code v2.1.310\r\n  bypass permissions on\r\n';
 const ROW = '  ⎿  Interrupted · What should Claude do instead?\r\n';
 const SHELL_PID = 100;
+const SHELL: ProcessTreeEntry = { pid: SHELL_PID, ppid: 1, name: 'zsh' };
+const claudeProcess = (pid: number): ProcessTreeEntry => ({ pid, ppid: SHELL_PID, name: 'claude' });
 
 function fakePty() {
   let data: ((chunk: string) => void) | null = null;
@@ -37,6 +40,7 @@ describe('a relaunched Claude Code keeps its identity through its predecessor\'s
   let tracker: AgentProcessTracker;
   let processes: ProcessTreeEntry[];
   let onDead: Map<number, () => void>;
+  let edges: TrackedAgentState[];
   let interrupted: number;
 
   beforeEach(() => {
@@ -47,8 +51,9 @@ describe('a relaunched Claude Code keeps its identity through its predecessor\'s
     bridge.setupDataForwarding(pty.pty, new RingBuffer(65536), 'pane-a', new PromptEventLog());
     interrupted = 0;
     bridge.on('turnInterrupted', () => { interrupted += 1; });
-    processes = [];
+    processes = [SHELL];
     onDead = new Map();
+    edges = [];
     const watcher: PidWatcher = {
       watch: (_key, pid, dead) => { onDead.set(pid, dead); },
       unwatch: () => undefined,
@@ -57,7 +62,11 @@ describe('a relaunched Claude Code keeps its identity through its predecessor\'s
     // The daemon's wiring (index.ts): the guard captures the detector epoch,
     // and every state change reaches the bridge.
     tracker.setIdentityProbeGuard(() => bridge.captureIdentityProbe());
-    tracker.setStateChangeListener((_id, state) => bridge.noteAgentProcess(state));
+    tracker.setLaunchCounter(() => bridge.getCommandStarts());
+    tracker.setStateChangeListener((_id, state) => {
+      edges.push(state);
+      bridge.noteAgentProcess(state);
+    });
     vi.advanceTimersByTime(1);
   });
 
@@ -67,11 +76,11 @@ describe('a relaunched Claude Code keeps its identity through its predecessor\'s
     vi.useRealTimers();
   });
 
-  /** `claude` typed at the shell prompt; `together` = OSC 133;C and the splash in one read. */
-  function launch(together: boolean): void {
+  /** `claude` typed at the shell prompt; `markers` precede the splash in the same read when given. */
+  function launch(markers?: string): void {
     bridge.noteInput('claude\r');
-    if (together) {
-      pty.feed(COMMAND_START + SPLASH);
+    if (markers !== undefined) {
+      pty.feed(markers + SPLASH);
     } else {
       pty.feed(COMMAND_START);
       vi.advanceTimersByTime(300);
@@ -79,17 +88,28 @@ describe('a relaunched Claude Code keeps its identity through its predecessor\'s
     }
   }
 
-  /** Launch the first Claude and let the tracker pick its process (pid 200). */
-  async function firstClaudeThenExit(): Promise<void> {
+  /** Launch the first Claude (pid 200) and let the tracker pick it. */
+  async function firstClaude(): Promise<void> {
     pty.feed(PROMPT);
-    launch(false);
-    processes = [{ pid: SHELL_PID, ppid: 1, name: 'zsh' }, { pid: 200, ppid: SHELL_PID, name: 'claude' }];
+    launch();
+    processes = [SHELL, claudeProcess(200)];
     tracker.arm('pane-a', SHELL_PID);
-    await vi.waitFor(() => expect(tracker.statusFor('pane-a')).toBe(true), { timeout: 5_000 });
+    await vi.waitFor(() => expect(tracker.pidFor('pane-a')).toBe(200), { timeout: 5_000 });
+  }
+
+  async function firstClaudeThenExit(): Promise<void> {
+    await firstClaude();
     bridge.noteInput('/exit\r');
-    processes = [{ pid: SHELL_PID, ppid: 1, name: 'zsh' }];
+    processes = [SHELL];
     pty.feed(SHELL_RETURN);
     vi.advanceTimersByTime(1000);
+  }
+
+  /** The monitor reports pid 200 dead while the relaunch (pid 201) runs, and the tracker settles. */
+  async function predecessorDiesAfterRelaunch(): Promise<void> {
+    processes = [SHELL, claudeProcess(201)];
+    onDead.get(200)?.();
+    await vi.waitFor(() => expect(tracker.pidFor('pane-a')).toBe(201), { timeout: 5_000 });
   }
 
   /** Esc during a turn, and the agent's own row confirming it. */
@@ -103,54 +123,96 @@ describe('a relaunched Claude Code keeps its identity through its predecessor\'s
   }
 
   it.each([
-    ['in separate reads', false],
-    ['in one read', true],
-  ])('the late death edge of the previous Claude leaves the new splash\'s gate open (command start and splash %s)', async (_label, together) => {
+    ['in separate reads', undefined],
+    ['command start and splash in one read', COMMAND_START],
+  ])('the late death edge of the previous Claude leaves the relaunch\'s gate open (%s)', async (_label, markers) => {
     await firstClaudeThenExit();
-    launch(together);
+    launch(markers);
     expect(bridge.getLastAgent()).toBe('Claude Code');
 
-    onDead.get(200)?.(); // the monitor reports the previous Claude dead
+    await predecessorDiesAfterRelaunch();
     expect(bridge.getLastAgent()).toBe('Claude Code');
+    // The pane heard its new agent's launch, never a death.
+    expect(edges.at(-1)).toMatchObject({ slug: 'claude', alive: true, replacedLive: true });
+    expect(edges.filter((e) => !e.alive)).toEqual([]);
 
     escAndRow();
     expect(interrupted).toBe(1);
   });
 
-  it('a relaunch known only by its own hook keeps that identity through the late death edge', async () => {
+  it('a read holding the old command end, the prompt, the command start and the splash leaves the gate open', async () => {
+    await firstClaude();
+    bridge.noteInput('/exit\r');
+    processes = [SHELL];
+    vi.advanceTimersByTime(1000);
+    bridge.noteInput('claude\r');
+    pty.feed(COMMAND_END + PROMPT + COMMAND_START + SPLASH);
+    expect(bridge.getLastAgent()).toBe('Claude Code');
+  });
+
+  it('a relaunch known only by its own hook keeps that identity, and gets tracked', async () => {
     await firstClaudeThenExit();
     bridge.noteInput('claude --permission-mode default\r');
     pty.feed(COMMAND_START); // no splash the gate reads
     vi.advanceTimersByTime(300);
-    const seeded = bridge.noteHookAgentIdentity(
+    expect(bridge.noteHookAgentIdentity(
       { kind: 'agent.session_start', agent: 'claude', ptyId: 'pane-a', cwd: '/repo', ts: Date.now(), payload: {} },
       { slug: 'claude', source: 'hook' },
-    );
-    expect(seeded).toBe(true);
-
+    )).toBe(true);
     const detector = (bridge as unknown as { agentDetector: { getTrustedAgent(): string | null } }).agentDetector;
+
+    await predecessorDiesAfterRelaunch();
     expect(detector.getTrustedAgent()).toBe('claude');
-    onDead.get(200)?.();
-    expect(detector.getTrustedAgent()).toBe('claude');
+    expect(edges.filter((e) => !e.alive)).toEqual([]);
   });
 
-  it('the previous Claude dying before the relaunch leaves the new launch to its own splash', async () => {
+  it('the previous Claude dying before the relaunch is reported, and the relaunch opens its own gate', async () => {
     await firstClaudeThenExit();
+    expect(bridge.getLastAgent()).toBeNull(); // the shell return ended it
     onDead.get(200)?.();
-    launch(false);
+    await vi.waitFor(() => expect(edges.at(-1)).toMatchObject({ slug: 'claude', alive: false }), { timeout: 5_000 });
+    launch();
     expect(bridge.getLastAgent()).toBe('Claude Code');
     escAndRow();
     expect(interrupted).toBe(1);
   });
 
   it('the death of the Claude the pane still runs ends it', async () => {
-    pty.feed(PROMPT);
-    launch(false);
-    processes = [{ pid: SHELL_PID, ppid: 1, name: 'zsh' }, { pid: 200, ppid: SHELL_PID, name: 'claude' }];
-    tracker.arm('pane-a', SHELL_PID);
-    await vi.waitFor(() => expect(tracker.statusFor('pane-a')).toBe(true), { timeout: 5_000 });
+    await firstClaude();
     expect(bridge.getLastAgent()).toBe('Claude Code');
+    processes = [SHELL];
     onDead.get(200)?.(); // killed, with no shell return yet
+    await vi.waitFor(() => expect(edges.at(-1)).toMatchObject({ slug: 'claude', alive: false }), { timeout: 5_000 });
+    expect(bridge.getLastAgent()).toBeNull();
+  });
+
+  it('another Claude under the shell does not hide the death of the one the pane ran when no command started since', async () => {
+    await firstClaude();
+    processes = [SHELL, claudeProcess(201)]; // a second Claude, started in the background earlier
+    onDead.get(200)?.();
+    expect(edges.at(-1)).toMatchObject({ slug: 'claude', alive: false });
+    expect(bridge.getLastAgent()).toBeNull();
+  });
+
+  it('a different agent in the relaunch does not hide the death of the Claude before it', async () => {
+    await firstClaudeThenExit();
+    bridge.noteInput('codex\r');
+    pty.feed(COMMAND_START);
+    processes = [SHELL, { pid: 301, ppid: SHELL_PID, name: 'codex' }];
+    onDead.get(200)?.();
+    await vi.waitFor(() => expect(edges.at(-1)).toMatchObject({ slug: 'claude', alive: false }), { timeout: 5_000 });
+  });
+
+  it('a real death still ends the agent after its own pane crossed a shell boundary and named it again', async () => {
+    await firstClaude();
+    // A subshell inside the session marks its own command start and end; the
+    // screen names Claude Code again afterwards. The process is the same.
+    pty.feed(COMMAND_START + COMMAND_END);
+    pty.feed(SPLASH);
+    expect(bridge.getLastAgent()).toBe('Claude Code');
+    processes = [SHELL];
+    onDead.get(200)?.();
+    await vi.waitFor(() => expect(edges.at(-1)).toMatchObject({ slug: 'claude', alive: false }), { timeout: 5_000 });
     expect(bridge.getLastAgent()).toBeNull();
   });
 });

@@ -1921,10 +1921,11 @@ export class HookIngest {
    * detector veto belongs to the dead launch's generation: left alone it keeps
    * suppressing every completion of a relaunched same-slug agent whose hooks
    * are broken. `onlyAgent` scopes the expiry so a death of process A never
-   * strips process B's authority.
+   * strips process B's authority; `signaledBefore` keeps an entry a later
+   * launch's signal touched (HookSignalRouter.expireAuthorityFor).
    */
-  expireAuthorityFor(sessionId: string, onlyAgent?: string): void {
-    this.router.expireAuthorityFor(sessionId, onlyAgent);
+  expireAuthorityFor(sessionId: string, onlyAgent?: string, signaledBefore?: number): void {
+    this.router.expireAuthorityFor(sessionId, onlyAgent, signaledBefore);
   }
 
   /**

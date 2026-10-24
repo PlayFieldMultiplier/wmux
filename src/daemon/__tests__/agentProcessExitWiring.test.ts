@@ -33,9 +33,8 @@ describe('agent.processExit daemon wiring', () => {
   it('sends it on the DEATH edge only — a launch settles nothing', () => {
     const body = listenerBody();
     const broadcastIdx = body.indexOf("type: 'agent.processExit'");
-    // The nearest preceding statement must be the not-alive guard. #2673: a
-    // superseded death (a relaunch owns the screen) settles nothing either.
-    const guardIdx = body.lastIndexOf('if (!state.alive && !superseded) {', broadcastIdx);
+    // The nearest preceding statement must be the not-alive guard.
+    const guardIdx = body.lastIndexOf('if (!state.alive) {', broadcastIdx);
     expect(guardIdx).toBeGreaterThan(-1);
     expect(guardIdx).toBeLessThan(broadcastIdx);
   });
@@ -48,5 +47,15 @@ describe('agent.processExit daemon wiring', () => {
     // #919's release. Both run on this edge and neither replaces the other:
     // authority expiry frees the detector veto, the broadcast settles the dot.
     expect(listenerBody()).toMatch(/hookIngest\?\.expireAuthorityFor\(/);
+  });
+
+  it('#2673 retires the dead launch on a relaunch edge, and feeds the tracker the pane\'s launch count', () => {
+    // A relaunch the tracker found where its watched agent died carries no
+    // death edge: its launch edge expires the old launch's authority, scoped
+    // to signals before the relaunch's command start.
+    const body = listenerBody();
+    expect(body).toMatch(/if \(state\.alive && state\.replacedLive\) \{[\s\S]*?hookIngest\?\.expireAuthorityFor\(sessionId, undefined, launchAt\);/);
+    expect(body).toMatch(/if \(!state\.alive \|\| state\.replacedLive\) usageLimits\?\.drop\(sessionId\);/);
+    expect(src).toMatch(/agentProcessTracker\.setLaunchCounter\(\(sessionId\) => sessionManager\.getSession\(sessionId\)\?\.bridge\.getCommandStarts\(\)\);/);
   });
 });

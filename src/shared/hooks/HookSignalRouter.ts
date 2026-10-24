@@ -368,12 +368,15 @@ export class HookSignalRouter {
    * veto belongs to the dead launch's generation: left alone it suppresses
    * every detector completion of a relaunched same-slug agent whose hooks are
    * broken. `onlyAgent` scopes the expiry to that agent's entry so a death of
-   * process A never strips process B's authority.
+   * process A never strips process B's authority. `signaledBefore` scopes it
+   * to the old launch (#2673): an entry a signal at or after that time
+   * touched belongs to the launch that replaced it.
    */
-  expireAuthorityFor(ptyId: string, onlyAgent?: string): void {
+  expireAuthorityFor(ptyId: string, onlyAgent?: string, signaledBefore?: number): void {
     const entry = this.authority.get(ptyId);
     if (!entry) return;
     if (onlyAgent !== undefined && entry.agent !== onlyAgent) return;
+    if (signaledBefore !== undefined && entry.lastSignalAt >= signaledBefore) return;
     this.authority.delete(ptyId);
   }
 

@@ -912,7 +912,32 @@ function isGrokChrome(line: string): boolean {
   return false;
 }
 
+/** OSC 133 prompt start / command end: the shell has the terminal again. */
+// eslint-disable-next-line no-control-regex
+const SHELL_RETURN_RE = /\u001b\]133;([AD])(?:;[^\u0007\u001b]{0,256})?(?:\u0007|\u001b\\)/g;
+/** The same, and the command start (C) that hands the terminal to a program (launchBoundaries). */
+// eslint-disable-next-line no-control-regex
+const LAUNCH_BOUNDARY_RE = /\u001b\]133;([ACD])(?:;[^\u0007\u001b]{0,256})?(?:\u0007|\u001b\\)/g;
+/** A read ending inside one of those markers: held until the next read completes it. */
+// eslint-disable-next-line no-control-regex
+const PARTIAL_SHELL_RETURN_RE = /^\u001b\]133;(?:[AD](?:;[^\u0007\u001b]{0,256})?)?(?:\u001b)?$/;
+// eslint-disable-next-line no-control-regex
+const PARTIAL_LAUNCH_BOUNDARY_RE = /^\u001b\]133;(?:[ACD](?:;[^\u0007\u001b]{0,256})?)?(?:\u001b)?$/;
+
 export class AgentDetector {
+  /**
+   * #2673 — the detector ends the pane's agent at every OSC 133 command start
+   * and command end itself, where each sits in the stream, instead of its
+   * owner doing it once the whole read has been seen. The daemon's bridge
+   * sets it: it ends the agent on those markers anyway, and doing it after the
+   * read wiped the gate a splash later in the same read had just opened.
+   */
+  private readonly launchBoundaries: boolean;
+
+  constructor(options: { launchBoundaries?: boolean } = {}) {
+    this.launchBoundaries = options.launchBoundaries === true;
+  }
+
   private callbacks: AgentEventCallback[] = [];
   private criticalCallbacks: CriticalEventCallback[] = [];
   private usageLimitCallbacks: UsageLimitLineCallback[] = [];
@@ -1188,12 +1213,15 @@ export class AgentDetector {
     // the old agent's last frame and the new agent's banner. OSC may itself
     // span reads; neither a chunk boundary nor an unterminated marker is a
     // shell return. Support both OSC terminators.
-    // eslint-disable-next-line no-control-regex
-    const boundary = /\u001b\]133;[AD](?:;[^\u0007\u001b]{0,256})?(?:\u0007|\u001b\\)/g;
+    const boundary = new RegExp(this.launchBoundaries ? LAUNCH_BOUNDARY_RE : SHELL_RETURN_RE);
     let start = 0;
     for (let match = boundary.exec(text); match; match = boundary.exec(text)) {
       this.feedOutput(text.slice(start, match.index));
-      this.noteShellReturn();
+      const kind = match[1];
+      if (kind !== 'C') this.noteShellReturn();
+      // The foreground program changed hands here: a launch starts (C) or the
+      // shell has the terminal back (D).
+      if (this.launchBoundaries && kind !== 'A') this.clearTrustedIdentity();
       start = match.index + match[0].length;
     }
     const rest = text.slice(start);
@@ -1201,8 +1229,7 @@ export class AgentDetector {
     const candidate = oscAt < 0 ? '' : rest.slice(oscAt);
     // Only hold a prefix that can still become our marker. Other escapes
     // (including agent titles) remain available to the detector immediately.
-    // eslint-disable-next-line no-control-regex
-    const partialBoundary = /^\u001b\]133;(?:[AD](?:;[^\u0007\u001b]{0,256})?)?(?:\u001b)?$/;
+    const partialBoundary = this.launchBoundaries ? PARTIAL_LAUNCH_BOUNDARY_RE : PARTIAL_SHELL_RETURN_RE;
     const holdAt = candidate && ('\u001b]133;'.startsWith(candidate) || partialBoundary.test(candidate))
       ? oscAt : rest.endsWith('\u001b') ? rest.length - 1 : rest.length;
     this.shellBoundaryBuffer = rest.slice(holdAt);

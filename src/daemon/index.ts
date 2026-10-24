@@ -9256,19 +9256,24 @@ async function main(): Promise<void> {
     if (!managed || !guard) return undefined;
     return { epoch: guard.epoch, isCurrent: () => sessionManager.getSession(sessionId) === managed && guard.isCurrent() };
   });
+  // #2673 — a watched agent's death is checked for a relaunch only after the
+  // pane's shell started a command since that agent was picked.
+  agentProcessTracker.setLaunchCounter((sessionId) => sessionManager.getSession(sessionId)?.bridge.getCommandStarts());
   agentProcessTracker.setStateChangeListener((sessionId, state) => {
-    // #2673 — the death of a process the pane no longer runs: a relaunch the
-    // tracker has not picked yet owns the pane. It does not settle that
-    // launch's pane status. Its hook authority still expires below: the
-    // detector veto belongs to the dead launch (#919), and the relaunch's
-    // own hooks earn it back.
-    const superseded = sessionManager.getSession(sessionId)?.bridge.isSupersededAgentDeath(state) === true;
     if (!state.alive) hookIngest?.expireAuthorityFor(sessionId, state.slug);
+    // #2673 — a launch edge that replaced a live process (the tracker found a
+    // relaunch where its watched agent died) carries no death edge, so the
+    // dead launch is retired here. Its hook authority expires, except an
+    // entry the relaunch's own hooks touched since its command start.
+    if (state.alive && state.replacedLive) {
+      const launchAt = sessionManager.getSession(sessionId)?.promptLog.recent(256).filter((e) => e.type === 'command_start').pop()?.ts;
+      hookIngest?.expireAuthorityFor(sessionId, undefined, launchAt);
+    }
     if (!state.alive) automationEngine?.onAgentProcessExit(sessionId);
     // The agent that hit the limit is gone; a relaunch is a new agent.
-    if (!state.alive) usageLimits?.drop(sessionId);
+    if (!state.alive || state.replacedLive) usageLimits?.drop(sessionId);
     // A question its agent can no longer be waiting on stops holding the pane.
-    if (!state.alive) reverifyAwaiting?.(sessionId);
+    if (!state.alive || state.replacedLive) reverifyAwaiting?.(sessionId);
     // An agent whose command line names its conversation (`--resume <id>`,
     // `resume <id>`, a pinned `--session-id <id>`) binds the pane to exactly that.
     if (state.alive && state.slug && resumeGrammarFor(state.slug)) {
@@ -9294,7 +9299,7 @@ async function main(): Promise<void> {
     // pane — so without this broadcast the dot would stay lit until the
     // authority TTL. Sent on the death edge only; `alive:true` is the launch
     // edge and settles nothing.
-    if (!state.alive && !superseded) {
+    if (!state.alive) {
       pipeServer.broadcast({
         type: 'agent.processExit',
         sessionId,
@@ -9319,9 +9324,7 @@ async function main(): Promise<void> {
     // alive, so an agent launched in the meantime was never attributed.
     // Probe again, or the launch edge that consumes the recovery offer and
     // names the pane never comes.
-    // A superseded death likewise: the relaunch that owns the screen is
-    // picked now, so its own launch and death edges follow.
-    if (!state.alive && (state.slug === undefined || superseded) && managed.bridge.getLastAgent()) {
+    if (!state.alive && state.slug === undefined && managed.bridge.getLastAgent()) {
       agentProcessTracker.arm(sessionId, managed.meta.pid);
     }
     // A death edge, or a launch edge for a different agent than the last one
