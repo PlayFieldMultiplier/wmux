@@ -447,6 +447,7 @@ function buildSessionData(dumped: Map<string, boolean>): SessionData {
     channelsTabVisible: state.channelsTabVisible,
     paneActionsVisible: state.paneActionsVisible,
     chatViewEnabled: state.chatViewEnabled,
+    chatViewFirstAsk: state.chatViewFirstAsk,
     titlebarClockVisible: state.titlebarClockVisible,
     titlebarVitalsAlwaysVisible: state.titlebarVitalsAlwaysVisible,
     paneNewTerminalButton: state.paneNewTerminalButton,

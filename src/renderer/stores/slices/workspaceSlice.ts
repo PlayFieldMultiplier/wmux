@@ -23,6 +23,7 @@ import { retentionMigrationDone, markRetentionMigrationDone } from '../retention
 import { decUnread } from './notificationSlice';
 import { mergeDeadPaneRecovery, normalizeDeadPaneRecovery, type DeadPaneRecovery } from '../../../shared/ptyRecovery';
 import { stashedPaneLiveness } from '../../../shared/paneStash';
+import { chatViewFirstAskFromSession } from '../../components/Chat/chatViewFirstAsk';
 import { resolveAttentionBlink, resolveAttentionBlinkFinished, resolveAttentionRemindMs } from '../../components/Sidebar/attentionBlink';
 import { resolveWindowGlass } from '../../utils/windowGlass';
 import { restorePcRail } from './pcRailSlice';
@@ -1524,6 +1525,7 @@ export const createWorkspaceSlice: StateCreator<StoreState, [['zustand/immer', n
       if (typeof data.chatViewEnabled === 'boolean') {
         state.chatViewEnabled = data.chatViewEnabled;
       }
+      state.chatViewFirstAsk = chatViewFirstAskFromSession(data);
       // Opt-in `+` — default OFF, so only an explicit true shows it. A session
       // written before this setting existed has no field, and must not be read
       // as consent to break one pane = one terminal.

@@ -1212,7 +1212,7 @@ export default function SurfaceTabs({
       {(() => {
         const surface = surfaces.find((s) => s.id === activeSurfaceId);
         if (!chatViewEnabled || readOnly || !surface || (surface.surfaceType && surface.surfaceType !== 'terminal')) return null;
-        return <div className="wmux-chat-toggle" role="group" aria-label={t('chat.viewMode')}>
+        return <div className="wmux-chat-toggle" role="group" aria-label={t('chat.viewMode')} title={t('chat.viewMode')}>
           {(['terminal', 'chat'] as const).map((view) => <button key={view} type="button"
             className={FOCUS_RING} data-surface-view={view}
             aria-pressed={(surface.viewMode ?? 'terminal') === view}

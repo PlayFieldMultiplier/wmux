@@ -8,8 +8,11 @@ import { S } from './strings';
 import { TranscriptRowView, type TranscriptActions } from './Transcript';
 import { useChatV2 } from './useChatV2';
 import { getChatV2Bridge } from './bridge';
+import { ChatKindBadge } from '../Chat/ChatKindBadge';
 
 const NEAR_BOTTOM_PX = 48;
+
+const kindRow = <div className="wmux-chatv2-kind"><ChatKindBadge kind="chatOnly" /></div>;
 
 /**
  * Keys of rows appended after the transcript first loaded, so only those fade
@@ -120,11 +123,12 @@ export default function ChatV2View({ paneId, active, onTerminal, cwd }: {
   const closeFind = useCallback(() => { setFindOpen(false); setFindId(null); }, []);
 
   if (state.phase === 'loading') {
-    return <div className="wmux-chatv2" data-chatv2="loading"><div className="wmux-chatv2-state" role="status">{t('chat.loading')}</div></div>;
+    return <div className="wmux-chatv2" data-chatv2="loading">{kindRow}<div className="wmux-chatv2-state" role="status">{t('chat.loading')}</div></div>;
   }
   if (state.phase === 'unavailable' || !controller) {
     return (
       <div className="wmux-chatv2" data-chatv2="unavailable">
+        {kindRow}
         <div className="wmux-chatv2-state" role="alert">
           <p>{state.error?.message ?? S.unavailable}</p>
           <div className="wmux-chatv2-card-actions">
@@ -141,6 +145,7 @@ export default function ChatV2View({ paneId, active, onTerminal, cwd }: {
   if (state.phase === 'empty' || !view) {
     return (
       <div className="wmux-chatv2" data-chatv2="empty">
+        {kindRow}
         <div className="wmux-chatv2-viewport">
           <div className="wmux-chatv2-column wmux-chatv2-empty">
             <strong>{S.newChat}</strong>
@@ -186,6 +191,7 @@ export default function ChatV2View({ paneId, active, onTerminal, cwd }: {
 
   return (
     <div className="wmux-chatv2" data-chatv2="ready" data-status={binding.status} onKeyDown={onKeyDown}>
+      {kindRow}
       {findOpen && <FindBar blocks={view.session.blocks} onNavigate={setFindId} onClose={closeFind} />}
       <div className="wmux-chatv2-viewport" ref={scroller} onScroll={onScroll}>
         <div className="wmux-chatv2-column" role="log" aria-label={t('chat.conversation')}>

@@ -1733,6 +1733,24 @@ always neutral (the fill ladder).
     round, 11px — dot, "Dictating 0:05", muted "Esc to cancel"; a spinner
     and "Transcribing…" after. It takes no layout row (the PTY is never
     resized) and lets the pointer through.
+- **Chat kind badge and "Show as chat"** (owner decision 2026-10-24):
+  - **Kind badge.** The top of each chat view names which chat it is with a
+    neutral `Badge` (11px, full round, no colour: the kind is not a state).
+    Chat 1, which follows the agent in the terminal, reads "Terminal-linked
+    chat" at the right of its progress row (under the status when the pane
+    is too narrow, never clipped); chat 2 reads "Chat only" in its
+    own top row. Each has a one-line hover explanation. Chat 1's approval
+    note is plain: "Waiting for your approval." and an Answer in Terminal
+    link that switches the pane to its terminal.
+  - **First-start question.** The pane header's Terminal / Chat switch is
+    labelled "Show as chat". The first time Claude or Codex runs in a pane,
+    a card floats in the terminal's top-right corner (`--bg-surface`, the
+    popover shadow, 12px radius, `--line` hairline; no layout row): "Show
+    this as a chat?" with Keep terminal (ghost) and Show (the primary). The
+    answer is kept per agent and never asked again; Show turns the chat view
+    on and switches that pane. A user who already had the chat view setting,
+    on or off, is never asked and keeps the value; changing it in Settings
+    ends the question for every agent.
 
 ### Dialogs & forms
 
@@ -1975,6 +1993,7 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
 | 2026-10-22 | Owner decision: the Remote page is the one place PCs are connected. Connect a PC gains a LAN tab (the LanLink PIN pairing, moved from Settings); Settings › LAN keeps the LanLink and A2A listener switches plus a link to the Remote page, and its A2A invite, join and PC lists are gone. PC rows stay keyed by the A2A hostId and never merge across transports; each says what this PC allows that PC, with a slot kept empty for starting new agents. The A2A invite stays 8 characters, shown grouped as ABCD-EFGH for reading out while the whole invite stays what is copied; a PC known only as a joiner reads Disconnected with its last-seen time | Connecting a PC lived in three Settings sections and on the Remote page at once, so it was unclear where to start or where a PC went. One page, one dialog keeps every way in together; the security limits (the 10-minute invite, attempts and backoff, the 2-minute PIN and its 5 failures) are unchanged, so the code length is too |
 | 2026-10-23 | Owner decision: voice dictation. A mic button in the Chat view and Bots composers (the text goes in the box, never sent), a one-time consent before the speech model is downloaded, and, for terminal panes, a rebindable "Dictate into this pane" shortcut and palette entry with an in-pane corner chip instead of a header button. Amends the Bots composer's "No microphone" | The owner dictates prompts instead of typing them. The pane cluster is fixed at five buttons, so the pane gets a key and a palette entry; a toggle rather than hold-to-talk because a held chord through a long sentence is awkward and keyup on chords is unreliable |
 | 2026-10-23 | Owner handoff: Tailscale easy connect. The Remote page's This computer band gains the four-check Tailscale checklist (installed, signed in, this PC on the tailnet, the other device visible), each failure with exactly one button that only opens the download page or the Tailscale app, or unfolds how to sign the other device in. A connection over the tailnet checks Tailscale first and fails at once with the reason and that button. A PC connection in use (an A2A PC with an active link, an attached workspace share) that drops gets one warning toast once the drop outlasts its grace (A2A 16 s, the first four redials; workspace share two failed polls in a row), naming Tailscale only when the connection's own address is surely Tailscale's (a `*.ts.net` name or a peer its status lists), and the toast goes away when it reconnects; phones are out. A silent A2A drop is seen after 40 s with nothing from the other end, on both sides of the pair (the side that was joined ends a stream whose joiner stopped pinging), so it is reported by 56 s | Getting two machines onto the tailnet was a sequence of unexplained timeouts. One glance says which step is missing and one click opens the place to fix it, while signing in and connecting stay the person's own act. The grace keeps a reconnect blip silent |
+| 2026-10-24 | Owner decision (chat view G2/G5): each chat view carries a neutral kind badge, "Terminal-linked chat" (chat 1) or "Chat only" (chat 2), with a hover line; chat 1's approval note reads "Waiting for your approval. Answer in Terminal". The Terminal / Chat switch is labelled "Show as chat", and the first Claude or Codex start in a pane asks once per agent "Show this as a chat?" (Show / Keep terminal); users who already set the chat view are never asked | Two chats looked alike and the approval note read like an error. Asking once, at the moment an agent first runs, finds the chat view for new users without changing anything for people who already chose |
 
 ### Desktop conversation view
 

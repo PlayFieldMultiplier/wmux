@@ -277,7 +277,7 @@ function ChatThread({ ptyId, data, onTerminal }: { ptyId: string; data: ReturnTy
         {/* A refusal already says why below; one state, one notice. */}
         {uncertain && !managed && !sendState && <div className="wmux-chat-notice">{t('chat.send.unconfirmed')}</div>}
         {data.error && <div className="wmux-chat-notice" role="alert">{t('chat.connectionError')} <button type="button" onClick={data.retry}>{t('chat.retry')}</button></div>}
-        {blocked && !managed && data.status.available && <div className="wmux-chat-notice">{t('chat.approvalHint')} <button type="button" onClick={onTerminal}>{t('chat.openTerminal')}</button></div>}
+        {blocked && !managed && data.status.available && <div className="wmux-chat-notice">{t('chat.approvalHint')} <button type="button" onClick={onTerminal}>{t('chat.answerInTerminal')}</button></div>}
         {sendState && <div className="wmux-chat-notice" role="status">{t(`chat.send.${sendState}`)}
           {sendState !== 'sent' && <button type="button" onClick={onTerminal}>{t('chat.openTerminal')}</button>}</div>}
       </>} />
