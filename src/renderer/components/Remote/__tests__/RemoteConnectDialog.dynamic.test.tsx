@@ -131,15 +131,13 @@ describe('Connect a PC dialog', () => {
     await act(async () => { pasteButton().click(); });
     await act(async () => { q<HTMLButtonElement>('remote-connect-submit')!.click(); });
     expect(q('remote-connect-next-step')?.textContent).toBe("Next, on DESK: choose which panes it shows this PC, or share one from a pane's menu.");
-    // A workspace connection is not an A2A pairing: no pane step to point at.
-    act(() => root.unmount());
-    root = createRoot(container);
-    stub(LINK, false);
-    await render();
+    // A workspace link connected next is not an A2A pairing: the last PC's step goes away.
+    clipboard.readText.mockResolvedValue(LINK);
     await act(async () => { pasteButton().click(); });
     await act(async () => { q<HTMLButtonElement>('remote-connect-submit')!.click(); });
     expect(remote.hostsPair).toHaveBeenCalled();
     expect(q('remote-connect-next-step')).toBeNull();
+    expect(q('remote-connect-link-pane')).toBeNull();
   });
 
   it('routes every remote-host shape to the remote-host pairing: a pairing link, a token URL, an address and a code', async () => {

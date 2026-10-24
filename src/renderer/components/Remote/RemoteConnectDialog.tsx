@@ -476,7 +476,8 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
       setPaste(left.join('\n'));
       if (left.length === 0) setMasked(false);
     }
-    if (host) setLinkHost(host);
+    // Only the PC this paste paired with: a workspace link or a failed join drops the last one.
+    setLinkHost(host);
     setMessage({ tone: left.length > 0 ? 'danger' : 'muted', text: lines.join('\n'), ...(fix ? { fix } : {}) });
   }, [paste, connectOne, t]);
 
