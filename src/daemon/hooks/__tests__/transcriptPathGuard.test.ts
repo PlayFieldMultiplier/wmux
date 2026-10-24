@@ -14,7 +14,29 @@ const root = path.join(os.homedir(), '.claude', 'projects');
 describe('checkTranscriptPath', () => {
   it('accepts the real shape: inside the projects root, named after the session', () => {
     const p = path.join(root, '-Users-dev-repo', `${SID}.jsonl`);
-    expect(checkTranscriptPath(p, SID)).toEqual({ ok: true, reason: '' });
+    // Not on disk here, so also pending (see the not-yet-written case below).
+    expect(checkTranscriptPath(p, SID)).toEqual({ ok: true, reason: '', pending: true });
+  });
+
+  it('marks pending only a path with nothing at it yet, never an existing file, a link or a dot segment', () => {
+    // A bare launch: SessionStart names the transcript Claude writes on its
+    // first prompt. Pending is what lets the projector serve it as empty.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-guard-'));
+    try {
+      const projects = path.join(dir, 'projects', '-repo');
+      fs.mkdirSync(projects, { recursive: true });
+      const env = { CLAUDE_CONFIG_DIR: dir };
+      const file = path.join(projects, `${SID}.jsonl`);
+      expect(checkTranscriptPath(file, SID, env)).toEqual({ ok: true, reason: '', pending: true });
+      fs.symlinkSync(path.join(dir, 'nowhere'), file);
+      expect(checkTranscriptPath(file, SID, env)).toEqual({ ok: true, reason: '' });
+      fs.unlinkSync(file);
+      fs.writeFileSync(file, '');
+      expect(checkTranscriptPath(file, SID, env)).toEqual({ ok: true, reason: '' });
+      expect(checkTranscriptPath(path.join(projects, 'missing', '..', `${SID}.jsonl`), SID, env).pending).toBeUndefined();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('refuses a path outside the projects root', () => {
@@ -81,7 +103,7 @@ describe('checkTranscriptPath', () => {
       const env = { CLAUDE_CONFIG_DIR: dir };
       const notYet = path.join(projects, `${SID}.jsonl`);
       expect(fs.existsSync(notYet)).toBe(false);
-      expect(checkTranscriptPath(notYet, SID, env)).toEqual({ ok: true, reason: '' });
+      expect(checkTranscriptPath(notYet, SID, env)).toEqual({ ok: true, reason: '', pending: true });
       // The ancestor walk must not widen containment.
       expect(checkTranscriptPath(path.join(dir, `${SID}.jsonl`), SID, env).ok).toBe(false);
     } finally {

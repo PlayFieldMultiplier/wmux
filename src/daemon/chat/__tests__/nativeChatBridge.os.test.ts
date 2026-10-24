@@ -191,6 +191,19 @@ describe('resolve', () => {
     expect(await f.bridge.status('pane')).not.toHaveProperty('turn');
   });
 
+  it('a bare-launched Claude binds before its first prompt; once it exits unwritten the pane can launch again', async () => {
+    const f = fixture(); f.liveClaude();
+    // SessionStart's binding, transcript not written yet: the projector's empty page.
+    f.state.projector = { ...FILE, sizeBytes: 0, mtimeMs: 0 };
+    expect(await f.bridge.resolve('pane')).toMatchObject({ source: 'file', epoch: fileHistoryEpoch('claude', 'conv', 'a.jsonl'),
+      status: { agentSessionId: 'conv', agentAlive: true, terminal: { capabilities: { send: true } } } });
+    expect(await f.bridge.send(phoneSend())).toMatchObject({ result: 'sent', effect: 'submitted' });
+    expect(f.written).toEqual(['\x1b[200~hello\x1b[201~', '\r']);
+    f.state.agent = { ...f.state.agent, agentName: null, agentVerified: false, agentStatus: 'idle' };
+    expect(await f.bridge.resolve('pane')).toMatchObject({ source: 'none', status: { available: false }, launch: { ready: true, reason: 'ok' } });
+    expect(await f.bridge.launch({ id: 'pane', agent: 'claude', refuseConversation: true })).toEqual({ ok: true, effect: 'submitted' });
+  });
+
   it('maps a live agent without a transcript to none/agent-running', async () => {
     const f = fixture(); f.state.agent.agentName = 'Codex CLI';
     expect(await f.bridge.resolve('pane')).toMatchObject({ source: 'none', launch: { ready: false, reason: 'agent-running' } });

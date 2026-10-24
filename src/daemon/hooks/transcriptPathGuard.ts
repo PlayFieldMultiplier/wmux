@@ -20,8 +20,8 @@
 // `realpath` is used where it can be: containment has to be checked on the
 // RESOLVED path or a symlink inside the projects directory walks straight out of
 // it. A transcript that does not exist yet cannot be resolved, so the lexical
-// form is checked instead — and a path that does not exist is refused later
-// anyway by `readTail`'s regular-file guard.
+// form is checked instead, and the check marks it `pending`: Claude writes the
+// file on its first prompt, so until then readers serve an empty conversation.
 
 import fs from 'node:fs';
 import os from 'node:os';
@@ -130,6 +130,22 @@ export function claudeTranscriptRoot(sessionEnv?: Record<string, string>): strin
   return configured ? path.join(configured, 'projects') : path.join(os.homedir(), '.claude', 'projects');
 }
 
+/**
+ * Nothing at all at the path yet (not even a dangling link), and no `.` or
+ * `..` segment, so the lexical containment above is where the file will land.
+ * Claude names its transcript at session start but writes it on the first
+ * prompt; a bare launch sits at its input prompt with no file.
+ */
+function notCreatedYet(transcriptPath: string): boolean {
+  if (transcriptPath.split(/[\\/]/).some((segment) => segment === '.' || segment === '..')) return false;
+  try {
+    fs.lstatSync(transcriptPath);
+    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT';
+  }
+}
+
 export interface TranscriptPathCheck {
   ok: boolean;
   /** Why it was refused, for the warn log. Empty when `ok`. */
@@ -137,7 +153,7 @@ export interface TranscriptPathCheck {
   /**
    * `ok` for a file the agent has not created yet: its containment was proven
    * on the nearest existing ancestor (Codex writes its session file lazily, on
-   * the first turn). Readers treat a still-missing file as an empty conversation.
+   * the first turn, and Claude its transcript on the first prompt). Readers treat a still-missing file as an empty conversation.
    */
   pending?: boolean;
 }
@@ -171,7 +187,7 @@ export function checkTranscriptPath(
   const resolved = normalizeForCompare(resolveIfPossible(transcriptPath));
   for (const root of claudeProjectRoots(sessionEnv)) {
     if (isInside(resolved, normalizeForCompare(resolveIfPossible(root)))) {
-      return { ok: true, reason: '' };
+      return { ok: true, reason: '', ...(notCreatedYet(transcriptPath) ? { pending: true } : {}) };
     }
   }
   return { ok: false, reason: 'outside the Claude projects root' };

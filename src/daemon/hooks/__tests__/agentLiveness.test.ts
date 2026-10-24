@@ -54,6 +54,14 @@ describe('deriveAgentLiveness', () => {
     }
   });
 
+  it('a session that just started waits at its prompt; a mid-turn compaction does not settle the pane', () => {
+    const start = (source?: string) => deriveAgentLiveness('s1', data({ hookKind: 'agent.session_start', decision: 'activity',
+      signal: signal('agent.session_start', source ? { source } : {}) }), 3).state;
+    for (const source of ['startup', 'resume', 'clear']) expect(start(source)).toBe('idle');
+    expect(start('compact')).toBe('busy');
+    expect(start()).toBe('busy');
+  });
+
   it('a stop hook that still names a tool settles the pane instead of showing the tool', () => {
     // PostToolUse-shaped payloads carry `tool_name` too. Reading the tool name
     // ahead of the status would leave the header saying "Bash running" on a pane

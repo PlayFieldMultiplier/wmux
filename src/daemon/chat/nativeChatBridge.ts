@@ -598,7 +598,14 @@ export function createChatBridge<P extends ChatPane>(deps: NativeChatBridgeDeps<
       const epoch = managed?.conversationEpoch(id);
       if (status && epoch) return { source: 'managed', status, epoch };
     }
-    const status = fileStatus(id);
+    let status = fileStatus(id);
+    // An empty transcript (Claude's before its first prompt, a fresh Codex
+    // thread's) is a conversation only while its agent runs: one that exited
+    // without writing a record left nothing to show, and the pane can launch.
+    if (status.available && !status.agentAlive && status.sizeBytes === 0) {
+      status = { available: false, reason: 'unreadable', agentStatus: status.agentStatus, agentAlive: false,
+        ...(status.transcriptBasename ? { transcriptBasename: status.transcriptBasename } : {}) };
+    }
     if (status.available) {
       // The web layer derives the same value when this is absent; keep them one formula.
       const agent = status.terminal?.agent;
