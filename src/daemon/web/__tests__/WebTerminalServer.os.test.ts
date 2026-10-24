@@ -4271,6 +4271,117 @@ describe('WebTerminalServer', () => {
     expect(lifecycleCalls.at(-1)).toMatchObject({op:'create',arg:{agentLaunch:{agent:'claude',model:'opus',effort:'high'}}});
   });
 
+  describe('agentLaunch.mode: a phone launch mode on a new agent pane', () => {
+    const startModes = (over: { allowDangerousLaunch?: boolean; allowTranscript?: boolean } = {}) => server.start({
+      port: 0, host: '127.0.0.1', allowInput: true, allowUpload: false, allowTranscript: true, allowDangerousLaunch: true, ...over,
+    });
+    const post = (headers: Record<string, string>, body: unknown) =>
+      fetch(`${base()}/api/sessions`, { method: 'POST', headers, body: JSON.stringify(body) });
+    const flipOpts = (over: { allowDangerousLaunch?: boolean }) =>
+      Object.assign((server as unknown as { opts: Record<string, unknown> }).opts, over);
+
+    it('a dangerous mode without its confirm, or with another one, is 428 and spawns nothing', async () => {
+      const headers = bearer((await startModes()).token as string);
+      const before = lifecycleCalls.length;
+      for (const extra of [{}, { confirm: 'claude:yolo' }, { confirm: 'codex:bypass' }, { confirm: 'claude:default' }, { confirm: 'claude' }]) {
+        const res = await post(headers, { agentLaunch: { agent: 'claude', mode: 'bypass', ...extra } });
+        expect(res.status, JSON.stringify(extra)).toBe(428);
+        expect(await res.json()).toEqual({ error: 'dangerous-mode-unconfirmed', effect: 'none' });
+      }
+      expect(lifecycleCalls).toHaveLength(before);
+      expect(lifecycleBox.spawned).toBe(false);
+    });
+
+    it('with the ceiling off it is refused before the confirm is looked at', async () => {
+      let headers = bearer((await startModes({ allowDangerousLaunch: false })).token as string);
+      const before = lifecycleCalls.length;
+      for (const extra of [{}, { confirm: 'claude:bypass' }]) {
+        const res = await post(headers, { agentLaunch: { agent: 'claude', mode: 'bypass', ...extra } });
+        expect(res.status).toBe(403);
+        expect(await res.json()).toMatchObject({ error: expect.stringMatching(/^dangerous-launch-disabled: /), effect: 'none' });
+      }
+      await server.stop();
+      // The grants chat/launch needs: without the transcript grant a mode is refused too.
+      headers = bearer((await startModes({ allowTranscript: false })).token as string);
+      const res = await post(headers, { agentLaunch: { agent: 'claude', mode: 'bypass', confirm: 'claude:bypass' } });
+      expect(res.status).toBe(403);
+      expect((await res.json()).error).toMatch(/^transcript-disabled/);
+      expect(lifecycleCalls).toHaveLength(before);
+    });
+
+    it('a mode that is unknown or not valid for the agent is 400', async () => {
+      const headers = bearer((await startModes()).token as string);
+      const before = lifecycleCalls.length;
+      for (const agentLaunch of [
+        { agent: 'claude', mode: 'yolo', confirm: 'claude:yolo' },
+        { agent: 'codex', mode: 'bypass', confirm: 'codex:bypass' },
+        { agent: 'claude', mode: 'plan' },
+        { agent: 'claude', mode: null },
+        { agent: 'opencode', mode: 'bypass', confirm: 'opencode:bypass' },
+        { agent: 'claude', mode: 'bypass', confirm: 42 },
+      ]) {
+        const res = await post(headers, { agentLaunch });
+        expect(res.status, JSON.stringify(agentLaunch)).toBe(400);
+        expect(await res.json()).toMatchObject({ error: 'invalid-agent-launch', effect: 'none' });
+      }
+      expect(lifecycleCalls).toHaveLength(before);
+    });
+
+    it('no mode, or default, creates the pane exactly as before', async () => {
+      const headers = bearer((await startModes()).token as string);
+      let res = await post(headers, { agentLaunch: { agent: 'claude', model: 'opus' } });
+      expect(res.status).toBe(201);
+      expect(lifecycleCalls.at(-1)).toEqual({ op: 'create', arg: { agentLaunch: { agent: 'claude', model: 'opus' } } });
+      expect(await res.json()).not.toHaveProperty('launchMode');
+      // A confirm without a mode is ignored, as on chat/launch.
+      res = await post(headers, { agentLaunch: { agent: 'claude', mode: 'default', confirm: 'claude:bypass' } });
+      expect(res.status).toBe(201);
+      expect(lifecycleCalls.at(-1)).toEqual({ op: 'create', arg: { agentLaunch: { agent: 'claude' } } });
+      expect(await res.json()).toMatchObject({ launchMode: 'default' });
+    });
+
+    it('a confirmed mode reaches the spawn as dangerousLaunch, never inside agentLaunch', async () => {
+      const headers = bearer((await startModes()).token as string);
+      const res = await post(headers, { agentLaunch: { agent: 'claude', model: 'opus', mode: 'bypass', confirm: 'claude:bypass' } });
+      expect(res.status).toBe(201);
+      expect(await res.json()).toMatchObject({ launchMode: 'bypass' });
+      expect(lifecycleCalls.at(-1)).toEqual({ op: 'create', arg: {
+        agentLaunch: { agent: 'claude', model: 'opus' },
+        dangerousLaunch: { mode: 'bypass', owner: 'operator' },
+      } });
+    });
+
+    it('the ceiling is asked again at the spawn: off by then is 403 and no pane', async () => {
+      const headers = bearer((await startModes()).token as string);
+      let open!: () => void;
+      lifecycleBox.createGate = new Promise<void>((resolve) => { open = resolve; });
+      const pending = post(headers, { agentLaunch: { agent: 'claude', mode: 'bypass', confirm: 'claude:bypass' } });
+      await vi.waitFor(() => expect(lifecycleCalls.at(-1)?.op).toBe('create'), { timeout: 5_000 });
+      flipOpts({ allowDangerousLaunch: false });
+      open();
+      const res = await pending;
+      expect(res.status).toBe(403);
+      expect(await res.json()).toMatchObject({ error: expect.stringMatching(/^dangerous-launch-disabled: /), effect: 'none' });
+      expect(lifecycleBox.spawned).toBe(false);
+    });
+
+    it('/api/config advertises agentLaunchModes with the same ceiling as chat/launch', async () => {
+      const modes = async (over: { allowDangerousLaunch?: boolean; allowTranscript?: boolean }) => {
+        const info = await startModes(over);
+        const body = await (await fetch(`${base()}/api/config`, { headers: bearer(info.token as string) })).json();
+        await server.stop();
+        return body.agentLaunchModes;
+      };
+      expect(await modes({})).toEqual({ claude: ['default', 'bypass'], codex: ['default', 'yolo'] });
+      expect(await modes({ allowDangerousLaunch: false })).toEqual({ claude: ['default'], codex: ['default'] });
+      expect(await modes({ allowTranscript: false })).toEqual({ claude: ['default'], codex: ['default'] });
+      const ro = await startRO();
+      const body = await (await fetch(`${base()}/api/config`, { headers: bearer(ro.token as string) })).json();
+      expect(body.agentLaunch).toBe(false);
+      expect(body).not.toHaveProperty('agentLaunchModes');
+    });
+  });
+
   describe('per-pane account and handoff lineage (contract v-next item 4)', () => {
     /** A desktop that answers `accounts.envForAccount` from `accounts`; `announce` is what it registered with. */
     const accountDesktop = (announce: string[] | undefined, accounts: Record<string, unknown>, calls: unknown[] = []) => {
@@ -4293,6 +4404,18 @@ describe('WebTerminalServer', () => {
     const second = {ok:true,vendor:'codex',env:{CODEX_HOME:'/acct/second'}};
     const startBoth = () => server.start({port:0,host:'127.0.0.1',allowInput:true,allowTranscript:true,allowUpload:false});
     const post = (headers: Record<string,string>, body: unknown) => fetch(`${base()}/api/sessions`,{method:'POST',headers,body:JSON.stringify(body)});
+
+    it('a launch mode is refused before the account is looked up', async () => {
+      const calls = accountDesktop(['accounts.envForAccount'],{c2:second});
+      const info = await server.start({port:0,host:'127.0.0.1',allowInput:true,allowTranscript:true,allowUpload:false,allowDangerousLaunch:true});
+      const headers = bearer(info.token as string);
+      const before = lifecycleCalls.length;
+      const refused = await post(headers,{workspaceId:'ws-1',accountId:'c2',agentLaunch:{agent:'codex',mode:'yolo'}});
+      expect(refused.status).toBe(428);
+      expect(await refused.json()).toEqual({error:'dangerous-mode-unconfirmed',effect:'none'});
+      expect(calls).toEqual([]);
+      expect(lifecycleCalls).toHaveLength(before);
+    });
 
     it('an old desktop (command unknown) refuses the create and never spawns on the workspace env', async () => {
       accountDesktop(undefined,{c2:second});

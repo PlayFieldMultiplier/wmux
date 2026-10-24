@@ -33,7 +33,7 @@ import { CHAT_CANCEL_OBSERVE_MS, type StoredCancelProgress } from '../../shared/
 import { isActiveQueueState, type ChatQueueReason, type ChatQueueRecord, type ChatQueueState, type ChatQueueStore } from './ChatQueue';
 import {
   CHAT_LAUNCH_MAX_UNITS, CHAT_MESSAGE_RETENTION_MS, CHAT_SEND_MAX_UNITS, OPENCODE_MAX_SEND_BYTES, OPENCODE_REQUEST_MAX_BYTES,
-  checkChatId, fileHistoryEpoch, openCodeSendBytes, tuiHistoryEpoch,
+  checkChatId, dangerousLaunchNotice, fileHistoryEpoch, openCodeSendBytes, tuiHistoryEpoch,
   type ChatBlocked, type ChatBridge, type ChatCancelOutcome, type ChatCancelRequest, type ChatCancelTag, type ChatEffect, type ChatLaunchOutcome, type ChatLaunchPreview, type ChatLaunchReason,
   type ChatLaunchRequest, type ChatLaunchTag, type ChatOwner, type ChatResolution, type ChatSendOutcome, type ChatSendRequest,
   type ChatSendTag, type ChatTurn, type DangerousLaunchTrace,
@@ -1907,10 +1907,8 @@ export function createChatBridge<P extends ChatPane>(deps: NativeChatBridgeDeps<
       const { at, owner, paneId, agent, mode, clientLaunchId, outcome } = trace;
       deps.log('info', `[chat] dangerous-launch ${JSON.stringify({ at, owner, paneId, agent, mode, clientLaunchId, outcome })}`);
       if (mode === 'default' || outcome !== 'submitted' && outcome !== 'launch-unconfirmed') return;
-      const who = owner === 'operator' ? 'The operator token' : 'A phone';
-      const what = agent === 'codex' ? 'Codex with approvals and sandbox off' : 'Claude with permission prompts off';
-      deps.notify(paneId, 'Agent started from the phone',
-        `${who} ${outcome === 'submitted' ? 'started' : 'may have started'} ${what} in pane ${paneId}.`);
+      const notice = dangerousLaunchNotice(owner, mode, outcome === 'submitted', paneId);
+      deps.notify(paneId, notice.title, notice.body);
     },
     status: async (id) => {
       const found = await route(id);

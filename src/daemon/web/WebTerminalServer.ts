@@ -1,6 +1,7 @@
 import { LiveSettingsError, type LiveAgentSettings } from './codexLiveSettings';
 import type { PaneSettingsChoice } from './paneCodexSettings';
 import { buildAgentLaunch, type AgentLaunchChoice, type AgentLaunchOptions } from './agentLaunch';
+import type { TerminalLaunchAgent, TerminalLaunchMode } from '../../shared/transcript/terminalChat';
 import { DesktopPhoneError, type DesktopPhoneBridge } from '../phone/DesktopPhoneBridge';
 import type { RunHistoryStore } from '../history/RunHistoryStore';
 import { agentAliveVerdict } from '../canonicalAgent';
@@ -164,12 +165,15 @@ import {
   chatV2LaunchResponse,
   chatV2Page,
   chatV2SendResponse,
+  dangerousLaunchRefusal,
   dequeueResponse,
   steerResponse,
   hasConversation,
+  launchModeCeiling,
   launchResponse,
   parseCancelBody,
   parseLaunchBody,
+  parseLaunchMode,
   parseSendBody,
   parseSteerBody,
   resolutionAgentSessionId,
@@ -707,6 +711,9 @@ export interface WebSessionLifecycle {
     handoffFrom?: StoredHandoffFrom;
     /** Name for a workspace this create starts. Ignored when a live pane already runs under `workspaceId`. */
     workspaceName?: string;
+    /** A launch mode other than default for `agentLaunch`, past the ceiling and confirm checks.
+     *  On this spawn only (never the persisted command); the desktop is told once the PTY exists. */
+    dangerousLaunch?: { mode: Exclude<TerminalLaunchMode, 'default'>; owner: ChatOwner };
   }): Promise<{ id: string }>;
   /** Close a pane and dispose its PTY. Called only for an id already resolved. */
   destroy(id: string): Promise<void>;
@@ -2732,6 +2739,10 @@ export class WebTerminalServer {
         // version. Every one listed is implemented by this daemon and CLI.
         capabilities: HOST_CAPABILITY_LIST,
         agentLaunch: this.mayInput(principal) && this.deps.agentLaunchOptions !== undefined,
+        // `agentLaunch.mode` is accepted, up to this ceiling (the one `chatLaunchModes` states).
+        // OMITTED, not false, when `agentLaunch` is false.
+        ...(this.mayInput(principal) && this.deps.agentLaunchOptions !== undefined
+          ? { agentLaunchModes: launchModeCeiling(this.opts?.allowDangerousLaunch === true && this.opts?.allowTranscript === true) } : {}),
         // Contract v-next item 4. OMITTED, not false: `paneAccount` needs both
         // grants and a desktop that announced the account command on this connection.
         ...(this.mayInput(principal) && this.opts?.allowTranscript === true && this.deps.lifecycle &&
@@ -5259,6 +5270,13 @@ export class WebTerminalServer {
     }
   }
 
+  /** The log line for `POST /api/sessions {agentLaunch:{mode}}` in a mode other than
+   *  default. The desktop notice is sent by the daemon at the spawn (`dangerousLaunch`). */
+  private traceSessionLaunch(principal: WebPrincipal, agent: TerminalLaunchAgent, mode: TerminalLaunchMode, outcome: string, paneId?: string): void {
+    const trace = { at: this.now(), owner: chatOwner(principal), ...(paneId ? { paneId } : {}), agent, mode, outcome };
+    this.deps.log('info', `[web] dangerous-launch ${JSON.stringify(trace)}`);
+  }
+
   /** The `/api/config` chat keys (contract §4), or none without the bridge. */
   private chatConfig(principal: WebPrincipal): Record<string, unknown> {
     if (!(this.deps.chat?.() ?? null)) return {};
@@ -5271,10 +5289,7 @@ export class WebTerminalServer {
       chatLaunch: writable,
       ...(writable
         ? {
-            chatLaunchModes: {
-              claude: dangerous ? ['default', 'bypass'] : ['default'],
-              codex: dangerous ? ['default', 'yolo'] : ['default'],
-            },
+            chatLaunchModes: launchModeCeiling(dangerous),
           }
         : {}),
       chatSkills: true,
@@ -6087,18 +6102,10 @@ export class WebTerminalServer {
             this.deps.log('warn', `[web] dangerous launch trace failed: ${errMsg(err)}`);
           }
         };
-        if (dangerous && this.opts?.allowDangerousLaunch !== true) {
-          trace('dangerous-launch-disabled');
-          return this.json(res, 403, {
-            error: 'dangerous-launch-disabled: server started without --allow-dangerous-launch',
-            detail: 'restart with: wmux web --allow-dangerous-launch <your other flags>',
-            effect: 'none',
-            clientLaunchId,
-          });
-        }
-        if (dangerous && parsed.value.confirm !== `${agent}:${mode}`) {
-          trace('dangerous-mode-unconfirmed');
-          return this.json(res, 428, { error: 'dangerous-mode-unconfirmed', effect: 'none', clientLaunchId });
+        const modeRefusal = dangerousLaunchRefusal(agent, mode, parsed.value.confirm, this.opts?.allowDangerousLaunch === true);
+        if (modeRefusal) {
+          trace(modeRefusal.status === 403 ? 'dangerous-launch-disabled' : 'dangerous-mode-unconfirmed');
+          return this.json(res, modeRefusal.status, { ...modeRefusal.body, clientLaunchId });
         }
 
         const fingerprint = JSON.stringify([id, incarnation ?? null, agent, mode, prompt ?? null, resume]);
@@ -7053,6 +7060,31 @@ export class WebTerminalServer {
         const bad = this.rejectWorkspaceId(workspaceId, caller);
         if (bad) return this.json(res, 400, bad);
       }
+      // `agentLaunch.mode` and `confirm` follow chat/launch's rules, checked
+      // before any lookup (the account one included): a known mode valid for
+      // the agent; a mode other than default needs the grants chat/launch needs
+      // (input and transcript), the --allow-dangerous-launch ceiling, and the
+      // exact `<agent>:<mode>` confirm. The rest of `agentLaunch` is checked below.
+      let launchMode: TerminalLaunchMode = 'default';
+      if (b.agentLaunch && typeof b.agentLaunch === 'object' && !Array.isArray(b.agentLaunch)) {
+        const requestedMode = b.agentLaunch as { agent?: unknown; mode?: unknown; confirm?: unknown };
+        const parsedMode = parseLaunchMode(requestedMode.agent, requestedMode.mode, requestedMode.confirm);
+        if (!parsedMode.ok) return this.json(res,400,{error:'invalid-agent-launch',detail:parsedMode.detail,effect:'none'});
+        launchMode = parsedMode.mode;
+        if (launchMode !== 'default') {
+          // A mode other than default is valid only for claude or codex (parseLaunchMode).
+          const modeAgent = requestedMode.agent as TerminalLaunchAgent;
+          if (this.opts?.allowTranscript !== true) {
+            this.traceSessionLaunch(caller, modeAgent, launchMode, 'transcript-disabled');
+            return this.refuseTranscript(res);
+          }
+          const refused = dangerousLaunchRefusal(modeAgent, launchMode, parsedMode.confirm, this.opts?.allowDangerousLaunch === true);
+          if (refused) {
+            this.traceSessionLaunch(caller, modeAgent, launchMode, refused.status === 403 ? 'dangerous-launch-disabled' : 'dangerous-mode-unconfirmed');
+            return this.json(res, refused.status, refused.body);
+          }
+        }
+      }
       let account: ResolvedPaneAccount | undefined;
       if (lineage.value.accountId) {
         const chosen = await resolvePaneAccount(this.availableDesktop(), workspaceId, lineage.value.accountId);
@@ -7102,6 +7134,10 @@ export class WebTerminalServer {
         },
         now: () => this.now(),
       }) : undefined;
+      const dangerousLaunch = agentLaunch && launchMode !== 'default'
+        ? { mode: launchMode, owner: chatOwner(caller) } : undefined;
+      // Set when the ceiling went off while the create prepared, so the refusal names it.
+      let ceilingClosed = false;
       lifecycle
         // The same question again at the spawn itself: `create` has its own
         // awaits after this point, and this check is the last one before a PTY.
@@ -7109,9 +7145,15 @@ export class WebTerminalServer {
           ...(workspaceId ? { workspaceId } : {}), ...(cwd ? { cwd } : {}), ...(agentLaunch ? {agentLaunch} : {}),
           ...(account ? { account } : {}), ...(handoffFrom ? { handoffFrom } : {}),
           ...(workspaceName ? { workspaceName } : {}),
-          authorized: stillAuthorized,
+          ...(dangerousLaunch ? { dangerousLaunch } : {}),
+          // A dangerous mode also needs the ceiling still on at the spawn.
+          authorized: !dangerousLaunch ? stillAuthorized : async () => {
+            if (this.opts?.allowDangerousLaunch !== true || this.opts?.allowTranscript !== true) { ceilingClosed = true; return false; }
+            return stillAuthorized();
+          },
         })
         .then(({ id }) => {
+          if (agentLaunch && dangerousLaunch) this.traceSessionLaunch(caller, agentLaunch.agent, dangerousLaunch.mode, 'submitted', id);
           // One serializer: the new pane is described by the SAME projection
           // `GET /api/sessions` uses, so a client can append the response to
           // its list without a second shape to keep in step. A create that
@@ -7123,13 +7165,22 @@ export class WebTerminalServer {
             ...(handoffFrom ? this.handoffRow(handoffFrom, caller) : {}),
             // Echoed so the phone can confirm the account was honoured.
             ...(lineage.value.accountId ? { accountId: lineage.value.accountId } : {}),
+            // Echoed when the body named a mode, so the phone can confirm the mode it got.
+            ...(agentLaunch && (b.agentLaunch as { mode?: unknown }).mode !== undefined ? { launchMode } : {}),
           });
         })
         .catch((err: unknown) => {
           // The grant went away while the create was preparing. Not the
           // operator's situation — the caller's — so it answers like the
           // pre-spawn re-check above, not like a refused create.
-          if (err instanceof SessionAuthorizationExpiredError) return this.json(res,401,{error:'authorization-expired'});
+          if (err instanceof SessionAuthorizationExpiredError) {
+            if (ceilingClosed && agentLaunch && dangerousLaunch) {
+              this.traceSessionLaunch(caller, agentLaunch.agent, dangerousLaunch.mode, 'dangerous-launch-disabled');
+              const refused = dangerousLaunchRefusal(agentLaunch.agent, dangerousLaunch.mode, undefined, false);
+              if (refused) return this.json(res, refused.status, refused.body);
+            }
+            return this.json(res,401,{error:'authorization-expired'});
+          }
           // The desktop went away or failed mid-create, or an account check
           // refused at the spawn: typed, and nothing was created.
           const failure = paneAccountFailure(err);

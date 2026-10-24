@@ -17,6 +17,11 @@ export function codexRuntimeEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   for (const [k, v] of Object.entries(env)) if (typeof v === 'string') defined[k] = v;
   return stripWmuxNamespace(defined);
 }
+/** The launch flag a phone launch mode adds (with its leading space), or '' for `default`. */
+export function terminalLaunchModeFlag(mode: unknown): string {
+  return mode === 'bypass' ? ' --dangerously-skip-permissions' : mode === 'yolo' ? ' --dangerously-bypass-approvals-and-sandbox' : '';
+}
+
 /** Quote an initial instruction for the verified POSIX shell.
  * Never accept controls, terminal escapes or a caller-supplied launcher.
  * `undefined` launches the agent with no first message (a blank string is
@@ -29,8 +34,7 @@ export function terminalLaunchCommand(agent: unknown, prompt: unknown, mode: unk
     throw new Error('Invalid initial message');
   }
   const head = agent;
-  const flags = mode === 'bypass' ? ' --dangerously-skip-permissions' : mode === 'yolo' ? ' --dangerously-bypass-approvals-and-sandbox' : '';
-  return head + flags + (prompt === undefined ? '' : " -- '" + prompt.replace(/'/g, "'\\''") + "'");
+  return head + terminalLaunchModeFlag(mode) + (prompt === undefined ? '' : " -- '" + prompt.replace(/'/g, "'\\''") + "'");
 }
 
 /** The cwd forms each shell's resume line takes: a POSIX absolute path, or a Windows one. */

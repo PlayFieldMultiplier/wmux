@@ -1,7 +1,9 @@
 import { execFileSync } from 'node:child_process';
 import { buildExecArgs } from '../../execWrapper';
 import { describe, expect, it } from 'vitest';
-import { buildAgentLaunch, claudeOptionsFromHelp, codexOptionsFromCache } from '../agentLaunch';
+import { buildAgentLaunch, claudeOptionsFromHelp, codexOptionsFromCache, webPaneSpawn } from '../agentLaunch';
+import { isPhoneCodexSession, withCodexRemote } from '../recoverCodexPane';
+import { toResumeCommand } from '../../../shared/agentResume';
 const help = "Claude Code\n --model <model> alias 'sonnet'\n --effort <level> Effort level (low, medium, high, xhigh, max)";
 describe('advertised agent launch flags', () => {
   it('discovers effort flags from the installed CLI help', () => {
@@ -60,4 +62,32 @@ it.skipIf(process.platform === 'win32')('passes model and effort as separate arg
   const fixture = 'codex() { printf "%s\\n" "$@"; }; ' + command;
   const output = execFileSync('/bin/sh',buildExecArgs('/bin/sh',fixture)!,{encoding:'utf8'});
   expect(output.trim().split('\n')).toEqual(['--model','model-a','-c','model_reasoning_effort=high']);
+});
+describe('webPaneSpawn: a phone launch mode is on the spawn line only', () => {
+  const same = async (command: string) => command;
+  const pinned = async (command: string) => `/usr/bin/env PATH='/p' '/bin/${command}'`;
+  it('adds the mode flag to the launch line and keeps the persisted command plain', async () => {
+    expect(await webPaneSpawn('claude --model opus', 'bypass', undefined, same))
+      .toEqual({ command: 'claude --model opus', launch: 'claude --model opus --dangerously-skip-permissions' });
+    expect(await webPaneSpawn('claude', 'bypass', undefined, pinned))
+      .toEqual({ command: 'claude', launch: "/usr/bin/env PATH='/p' '/bin/claude --dangerously-skip-permissions'" });
+  });
+  it('default or no mode spawns what it did before', async () => {
+    expect(await webPaneSpawn('claude --model opus', undefined, undefined, same)).toEqual({ command: 'claude --model opus' });
+    expect(await webPaneSpawn('claude', 'default', undefined, pinned)).toEqual({ command: 'claude', launch: "/usr/bin/env PATH='/p' '/bin/claude'" });
+  });
+  it('a Codex relay pane gets the flag after the relay flags, and stays recoverable as a phone Codex pane', async () => {
+    const relay = (command: string) => withCodexRemote(command, 'unix:///run/r.sock', "'/w'");
+    const spawn = await webPaneSpawn('codex --model gpt-5', 'yolo', relay, same);
+    expect(spawn).toEqual({
+      command: 'codex --model gpt-5',
+      launch: "codex --remote unix:///run/r.sock --cd '/w' --model gpt-5 --dangerously-bypass-approvals-and-sandbox",
+    });
+    expect(isPhoneCodexSession({ id: 'web-00000000-0000-4000-8000-000000000000', exec: { command: spawn.command } })).toBe(true);
+  });
+  it('a recovery replay of the persisted command does not re-grant the mode', async () => {
+    const { command } = await webPaneSpawn('claude', 'bypass', undefined, same);
+    const binding = { agent: 'claude', sessionId: '11111111-1111-4111-8111-111111111111', cwd: '/w', ts: 1, permissionMode: 'bypassPermissions' as const };
+    expect(toResumeCommand(command, binding, '/w')).toBe('claude --resume 11111111-1111-4111-8111-111111111111');
+  });
 });

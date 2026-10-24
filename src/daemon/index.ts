@@ -7,7 +7,7 @@ import { createStartupRecovery } from './startupRecovery';
 import { loadChatSkills } from './transcript/chatSkills';
 import { TerminalChatService } from './transcript/TerminalChatService';
 import { OpenCodeIdleSettler } from './transcript/openCodeIdleSettle';
-import type { ChatBridge, ChatLaunchRequest } from './chat/chatBridge';
+import { dangerousLaunchNotice, type ChatBridge, type ChatLaunchRequest } from './chat/chatBridge';
 import { ChatSendReceiptStore } from './chat/ChatSendReceiptStore';
 import { ChatCancelReceiptStore } from './chat/ChatCancelReceiptStore';
 import { ChatQueueStore } from './chat/ChatQueue';
@@ -20,7 +20,7 @@ import { paneCodexSettings } from './web/paneCodexSettings';
 import { createPaneJob } from './paneJob';
 import { CodexPaneRelays, paneCodexHome } from './web/codexPaneRelays';
 import { createCodexAccountStatusReader } from './web/codexAccountStatus';
-import { buildAgentLaunch, installedAgentLaunchOptions, pinnedAgentLaunch } from './web/agentLaunch';
+import { buildAgentLaunch, installedAgentLaunchOptions, webPaneSpawn } from './web/agentLaunch';
 import { agentExecEnv } from '../shared/execEnv';
 import { workspaceAccountEnv } from './phone/workspaceAccountEnv';
 import { applyPaneAccount, assertPaneAccountUsable } from './phone/paneAccount';
@@ -2805,7 +2805,7 @@ function registerRpcHandlers(
       release: () => { if (--held.holders === 0) startingWorkspaceNames.delete(workspaceId); },
     };
   };
-  const createWebPane: WebSessionLifecycle['create'] = async ({ workspaceId, cwd, agentLaunch, authorized, account, handoffFrom, workspaceName }) => {
+  const createWebPane: WebSessionLifecycle['create'] = async ({ workspaceId, cwd, agentLaunch, authorized, account, handoffFrom, workspaceName, dangerousLaunch }) => {
       const id = `web-${randomUUID()}`;
       // The human-readable workspace NAME is copied from a live sibling pane;
       // the daemon has no workspace registry of its own to look one up in.
@@ -2837,9 +2837,9 @@ function registerRpcHandlers(
       const agentCommand = agentLaunch ? buildAgentLaunch(agentLaunch, await installedAgentLaunchOptions(env)) : undefined;
       // The pane runs `$SHELL -lc '<agent>'`, whose profile rewrites PATH and skips
       // ~/.zshrc; the spawn is pinned to the binary and PATH the probe verified
-      // (the persisted exec command stays the plain one). The pane env gets the
-      // agent PATH too, for a later recovery that replays the plain command.
-      const launchCommand = agentCommand ? await pinnedAgentLaunch(agentCommand) : undefined;
+      // (the persisted exec command stays the plain one, without a launch mode:
+      // webPaneSpawn). The pane env gets the agent PATH too, for a later recovery
+      // that replays the plain command.
       if (agentCommand) env = { ...env, PATH: (await agentExecEnv(env)).PATH ?? env.PATH };
       let relay: Awaited<ReturnType<CodexPaneRelays['prepare']>> | undefined;
       if (agentLaunch?.agent === 'codex' && process.platform !== 'win32') {
@@ -2852,6 +2852,9 @@ function registerRpcHandlers(
       }
       try {
         if (relay && !/^unix:\/\/\/[A-Za-z0-9_./-]+$/.test(relay.url)) throw new Error('Unsupported Codex relay path');
+        const relayUrl = relay?.url;
+        const spawn = agentCommand ? await webPaneSpawn(agentCommand, dangerousLaunch?.mode,
+          relayUrl ? (command) => withCodexRemote(command, relayUrl, codexCdOperand(cwd ?? os.homedir())) : undefined) : undefined;
         // LAST check before a PTY exists. The HTTP layer re-authenticated after
         // reading the body, but everything above this line is asynchronous —
         // the workspace account environment, the installed-CLI lookup and the
@@ -2877,10 +2880,8 @@ function registerRpcHandlers(
           ...(cwd ? { cwd } : {}),
           env,
         }, {
-          ...(relay && agentCommand
-            // Relay flags first (they anchor on a leading `codex`), then pin the binary.
-            ? {execLaunchCommand:await pinnedAgentLaunch(withCodexRemote(agentCommand,relay.url,codexCdOperand(cwd ?? os.homedir())))}
-            : launchCommand !== agentCommand ? {execLaunchCommand:launchCommand} : {}),
+          // Relay flags first (they anchor on a leading `codex`), then pin the binary.
+          ...(spawn?.launch ? {execLaunchCommand:spawn.launch} : {}),
           // Lineage is on the meta from the moment the session exists, so the
           // first hook of the new pane already carries it.
           ...(handoffFrom ? {handoffFrom} : {}),
@@ -2889,6 +2890,13 @@ function registerRpcHandlers(
           // A remote client's pane outlives the ordinary detached TTL (bounded).
           remoteDurable: true,
         });
+        // The agent now runs in that mode: the desktop is told, as for chat/launch
+        // (a security toast), even if the pane closes again below.
+        if (dangerousLaunch) {
+          const notice = dangerousLaunchNotice(dangerousLaunch.owner, dangerousLaunch.mode, true, id);
+          pipeServer.broadcast({ type: 'notification.event', sessionId: id,
+            data: { source: 'security', title: notice.title, body: notice.body, ts: Date.now() } });
+        }
         if (relay) {
           const managed = sessionManager.getSession(id);
           if (!managed || !relay.commit(managed)) {
