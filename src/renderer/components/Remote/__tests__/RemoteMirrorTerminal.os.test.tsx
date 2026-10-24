@@ -1292,6 +1292,29 @@ describe('RemoteMirrorTerminal', () => {
       unmount();
     });
 
+    it('Ctrl+V with only an image on the clipboard says it is not supported, and sends nothing', async () => {
+      const hasImage = vi.fn(() => Promise.resolve(true));
+      (window as unknown as { clipboardAPI: Record<string, unknown> }).clipboardAPI.hasImage = hasImage;
+      const original = useStore.getState().pushToast;
+      const pushToast = vi.fn(() => 'toast-1');
+      useStore.setState({ pushToast });
+      const { unmount } = render(<RemoteMirrorTerminal attachId="a1" />);
+      const term = termInstances[0]!;
+
+      await act(async () => {
+        press(term, { key: 'v', code: 'KeyV', ctrlKey: true });
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(hasImage).toHaveBeenCalled();
+      expect(pushToast).toHaveBeenCalledWith({ level: 'info', message: "Pasting an image into another PC's pane is not supported yet. Only text is pasted." });
+      expect(paneWrite).not.toHaveBeenCalled();
+
+      unmount();
+      useStore.setState({ pushToast: original });
+    });
+
     it('auto-copies a finished selection, debounced', () => {
       vi.useFakeTimers();
       try {

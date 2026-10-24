@@ -942,6 +942,8 @@ export const ko = {
   'remote.pairUnreachable': '그 호스트에 연결할 수 없습니다',
   'remote.pairIncompatible': '그 컴퓨터의 wmux가 너무 오래되어 원격 연결을 쓸 수 없습니다',
   'remote.pairFailed': '페어링하지 못했습니다 — 앱 로그를 확인하세요',
+  'remote.mirror.dropUnsupported': '다른 PC의 판에 파일을 끌어 놓는 기능은 아직 지원하지 않습니다. 파일을 그 PC에 복사한 뒤 거기서 경로를 쓰세요.',
+  'remote.mirror.imagePasteUnsupported': '다른 PC의 판에 이미지를 붙여넣는 기능은 아직 지원하지 않습니다. 텍스트만 붙여넣습니다.',
   'remote.pairAgain': '다시 페어링',
   'remote.hostFallback': '원격 호스트',
   'remote.needsPairing': '다시 페어링 필요',

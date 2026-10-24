@@ -4921,6 +4921,8 @@ export const en = {
   'remote.pairUnreachable': 'Could not reach that host',
   'remote.pairIncompatible': "That machine's wmux is too old for remote attach",
   'remote.pairFailed': 'Pairing failed — check the app logs',
+  'remote.mirror.dropUnsupported': "Dropping files into another PC's pane is not supported yet. Copy the file to that PC, then use its path there.",
+  'remote.mirror.imagePasteUnsupported': "Pasting an image into another PC's pane is not supported yet. Only text is pasted.",
   'remote.hubOthers': 'Other computers',
   'remote.hubPairNew': 'Pair new computer',
   'remote.hubEmpty': 'No other computers yet. On the other computer, open Remote → Connect another computer and copy its link.',
