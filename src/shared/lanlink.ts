@@ -178,8 +178,36 @@ export interface LanLinkConfig {
   port?: number;
 }
 
-/** Result of `lanlink.status` (and the echo of `lanlink.configure`). */
-export interface LanLinkStatus {
+/**
+ * Why an enabled LanLink is not listening. The renderer maps each code to its
+ * own text; the daemon never sends prose.
+ *   - `no-address`: the selected NIC has no usable IPv4 address.
+ *   - `network-public`: Windows classifies the NIC's network as Public.
+ *     LanLink listens on Private and Domain networks only.
+ *   - `network-unknown`: the NIC has no Windows network profile.
+ *   - `network-check-failed`: the network category could not be read.
+ *   - `listen-failed`: the port could not be opened (in use, address gone).
+ */
+export type LanLinkStopReason =
+  | 'no-address'
+  | 'network-public'
+  | 'network-unknown'
+  | 'network-check-failed'
+  | 'listen-failed';
+
+/** The listener's live state, owned by the daemon's LanLinkServer. */
+export interface LanLinkRuntimeStatus {
+  /** A listener is open on the selected NIC. */
+  listening: boolean;
+  /** Set only when LanLink is enabled with a NIC selected but not listening. */
+  stopReason: LanLinkStopReason | null;
+  /** A reconcile is queued or running (reading the network category, binding):
+   *  `listening` and `stopReason` are about to change. */
+  checking: boolean;
+}
+
+/** The persisted half of `LanLinkStatus` (what LanLinkController knows). */
+export interface LanLinkConfigStatus {
   enabled: boolean;
   nic: LanLinkNic | null;
   /** Persisted port override; `null` means "use the default". */
@@ -190,6 +218,9 @@ export interface LanLinkStatus {
   /** Live LAN-capable NICs (re-enumerated each call); drives the Settings dropdown. */
   nics: NicInfo[];
 }
+
+/** Result of `lanlink.status` (and the echo of `lanlink.configure`). */
+export interface LanLinkStatus extends LanLinkConfigStatus, LanLinkRuntimeStatus {}
 
 /**
  * Partial update for `lanlink.configure`. A field absent from the object means

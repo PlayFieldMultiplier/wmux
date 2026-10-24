@@ -2937,9 +2937,17 @@ export const zh = {
   'settings.lanlinkNicDesc': 'LanLink 监听的网络适配器。',
   'settings.lanlinkNicNone': '— 无 —',
   'settings.lanlinkNicUnavailable': '不可用',
-  'settings.lanlinkWarning': '启用会在所选接口上打开一个局域网端口 — Windows 可能会提示你允许。仅使用「专用网络」配置文件；公共网络永不被暴露。',
+  'settings.lanlinkWarning':
+    '启用会在所选接口上打开一个局域网端口 — Windows 可能会提示你允许。LanLink 只在「专用网络」或域网络上监听，从不在「公用网络」上监听。',
+  'settings.lanlinkWarningNoCategory':
+    '启用会在所选接口上打开一个局域网端口。此系统没有 Windows 那样的「专用/公用」网络类型，因此 LanLink 会在此接口所连接的任何网络上监听。',
   'settings.lanlinkLoading': '正在检查 LanLink 状态…',
   'settings.lanlinkApplying': '正在应用…',
+  'settings.lanlinkStopPublic': '未监听：此网络为「公用网络」。请在 Windows 设置 › 网络和 Internet 中将其改为「专用网络」；LanLink 会在一分钟内重新检查。',
+  'settings.lanlinkStopUnknown': '未监听：Windows 没有此适配器的网络配置文件。LanLink 不在 Windows 未分类的网络上监听。',
+  'settings.lanlinkStopCheckFailed': '未监听：无法从 Windows 读取网络类型。LanLink 稍后会重试。',
+  'settings.lanlinkStopNoAddress': '未监听：此适配器当前没有 IPv4 地址。',
+  'settings.lanlinkStopListenFailed': '未监听：无法打开端口，可能有其他程序正在使用它。',
   'settings.lanlinkUnavailable': 'LanLink 需要 wmux 守护进程 — 在仅本地模式下不可用。守护进程连接后即会出现。',
   'settings.lanlinkPair': '配对',
   'settings.lanlinkPairDisabled': '请先在上方启用 LanLink 并选择网络接口，再与另一台机器配对。',

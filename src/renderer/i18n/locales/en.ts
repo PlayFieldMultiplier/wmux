@@ -2974,9 +2974,16 @@ export const en = {
   'settings.lanlinkNicNone': '— None —',
   'settings.lanlinkNicUnavailable': 'unavailable',
   'settings.lanlinkWarning':
-    'Enabling opens a LAN port on the selected interface — Windows may prompt you to allow it. Only the Private network profile is used; public networks are never exposed.',
+    'Enabling opens a LAN port on the selected interface — Windows may prompt you to allow it. LanLink listens only on Private or Domain networks, never on a Public one.',
+  'settings.lanlinkWarningNoCategory':
+    'Enabling opens a LAN port on the selected interface. This system has no network type like Windows\' Private and Public, so LanLink listens on this interface on any network it joins.',
   'settings.lanlinkLoading': 'Checking LanLink status…',
   'settings.lanlinkApplying': 'Applying…',
+  'settings.lanlinkStopPublic': 'Not listening: this network is Public. Set it to Private in Windows Settings › Network & internet; LanLink checks again within a minute.',
+  'settings.lanlinkStopUnknown': 'Not listening: Windows has no network profile for this adapter. LanLink does not listen on a network Windows has not classified.',
+  'settings.lanlinkStopCheckFailed': 'Not listening: the network type could not be read from Windows. LanLink tries again shortly.',
+  'settings.lanlinkStopNoAddress': 'Not listening: this adapter has no IPv4 address right now.',
+  'settings.lanlinkStopListenFailed': 'Not listening: the port could not be opened. Another program may be using it.',
   'settings.lanlinkUnavailable': 'LanLink needs the wmux daemon — unavailable in local-only mode. It will appear once the daemon connects.',
   // LanLink pairing (PR-5)
   'settings.lanlinkPair': 'Pairing',

@@ -217,6 +217,8 @@ declare global {
         status: () => Promise<LanLinkStatus>;
         /** PR-3 control plane — apply a partial enable/NIC update; echoes new status. */
         configure: (patch: LanLinkConfigurePatch) => Promise<LanLinkStatus>;
+        /** The listener state may have changed; re-read status. Returns an unsubscribe fn. */
+        onStatusChanged: (callback: () => void) => () => void;
         /** PR-5 pairing — mint a PIN + arm the ≤2min pairing window. */
         pairBegin: () => Promise<LanLinkPairBeginResult>;
         /** PR-5 pairing — read-only poll for the Settings countdown. */
