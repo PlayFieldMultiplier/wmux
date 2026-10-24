@@ -30,6 +30,7 @@ import { BOT_MEMORY_IPC } from '../shared/botMemory';
 import { BOT_COMMAND_IPC } from '../shared/botCommand';
 import { BOT_GROUP_IPC } from '../shared/botGroup';
 import type { PaneLabelRejection } from '../shared/paneLabelRules';
+import type { RemoteSendResult, RemoteSendSource } from '../shared/remoteUpload';
 import { CHROME_PANE_IPC, type ChromePaneBindings } from '../shared/chromePaneBinding';
 import {
   BROWSER_AGENT_CONTROL_IPC,
@@ -2466,6 +2467,8 @@ document.addEventListener('DOMContentLoaded', () => {
   paneWrite: (attachId: string, data: string) => {
     ipcRenderer.send(IPC.REMOTE_PANE_WRITE, attachId, data);
   },
+  paneSendFiles: (attachId: string, source: RemoteSendSource, opts: { bracketed: boolean; wsl: boolean }) =>
+    ipcRenderer.invoke(IPC.REMOTE_PANE_SEND_FILES, attachId, source, opts) as Promise<RemoteSendResult>,
   paneResize: (attachId: string, cols: number, rows: number) =>
     ipcRenderer.invoke(IPC.REMOTE_PANE_RESIZE_REQUEST, attachId, cols, rows) as Promise<
       { ok: true; cols: number; rows: number } | { ok: false; reason: string }

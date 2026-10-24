@@ -178,6 +178,11 @@ const WRITE_COALESCE_MS = 5;
 // write) — these are one-shot fetches, unlike the long-lived SSE stream,
 // so a hung remote must not leave the caller awaiting forever.
 const REQUEST_TIMEOUT_MS = 10_000;
+/** One upload of up to 10 MB, possibly over a slow tailnet hop. */
+const UPLOAD_TIMEOUT_MS = 60_000;
+
+/** What the host's upload route answered. `path` is the host's, not yet checked. */
+export type RemoteUploadResult = { ok: true; path: unknown } | { ok: false; status: number; error: string };
 
 interface Attachment {
   attachId: string;
@@ -732,6 +737,37 @@ export class RemoteHostClient implements RemotePaneEvents {
     for (const id of [...this.attachments.keys()]) {
       this.detach(id);
     }
+  }
+
+  /**
+   * Upload one file to the host's uploads folder: `POST /api/upload` for a
+   * JPEG or PNG (`ext` null), `POST /api/upload-file` otherwise. Answers the
+   * host's `path` unchecked (the caller validates it before typing it) or the
+   * refusal's status and error tag. A rejected credential latches like every
+   * other call.
+   */
+  async upload(bytes: Uint8Array, ext: string | null): Promise<RemoteUploadResult> {
+    this.assertSecure('upload');
+    if (this.authRejected) throw new RemoteAuthRejectedError('upload');
+    const route = ext === null ? '/api/upload' : '/api/upload-file';
+    const res = await this.fetchImpl(`${this.host.origin}${route}`, {
+      method: 'POST',
+      headers: {
+        ...this.authHeaders(),
+        'Content-Type': 'application/octet-stream',
+        ...(ext === null ? {} : { 'X-Wmux-File-Extension': ext }),
+      },
+      body: new Uint8Array(bytes),
+      redirect: 'error',
+      signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
+    });
+    if (!res.ok) {
+      const body = await readErrorBody(res);
+      if (isCredentialRejection(res.status, body)) throw this.rejected('upload');
+      return { ok: false, status: res.status, error: typeof body?.error === 'string' ? body.error : '' };
+    }
+    const body = await readBoundedJson(res, REMOTE_LIMITS.smallBodyBytes).catch(() => null);
+    return { ok: true, path: (body as { path?: unknown } | null)?.path };
   }
 
   write(attachId: string, utf8: string): Promise<void> {

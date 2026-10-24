@@ -1292,27 +1292,43 @@ describe('RemoteMirrorTerminal', () => {
       unmount();
     });
 
-    it('Ctrl+V with only an image on the clipboard says it is not supported, and sends nothing', async () => {
+    it('Ctrl+V with only an image uploads it through main, and a waiting prompt (409) comes back as its toast', async () => {
       const hasImage = vi.fn(() => Promise.resolve(true));
       (window as unknown as { clipboardAPI: Record<string, unknown> }).clipboardAPI.hasImage = hasImage;
+      const paneSendFiles = vi.fn(() => Promise.resolve({ ok: false, reason: 'prompt-active' }));
+      (window as unknown as { electronAPI: { remote: Record<string, unknown> } }).electronAPI.remote.paneSendFiles = paneSendFiles;
       const original = useStore.getState().pushToast;
       const pushToast = vi.fn(() => 'toast-1');
       useStore.setState({ pushToast });
-      const { unmount } = render(<RemoteMirrorTerminal attachId="a1" />);
+      const { unmount } = render(<RemoteMirrorTerminal attachId="a1" hostLabel="desk" />);
       const term = termInstances[0]!;
 
       await act(async () => {
         press(term, { key: 'v', code: 'KeyV', ctrlKey: true });
-        await Promise.resolve();
-        await Promise.resolve();
+        for (let i = 0; i < 4; i++) await Promise.resolve();
       });
 
-      expect(hasImage).toHaveBeenCalled();
-      expect(pushToast).toHaveBeenCalledWith({ level: 'info', message: "Pasting an image into another PC's pane is not supported yet. Only text is pasted." });
+      expect(paneSendFiles).toHaveBeenCalledWith('a1', { kind: 'clipboard-image' }, { bracketed: false, wsl: false });
+      expect(pushToast).toHaveBeenCalledWith({ level: 'warn', message: 'Answer the prompt on that pane first, then send the file again.' });
+      // The path is typed by main, after the upload; nothing goes down the raw write.
       expect(paneWrite).not.toHaveBeenCalled();
 
       unmount();
       useStore.setState({ pushToast: original });
+    });
+
+    it('a read-only mirror sends no image at all', async () => {
+      (window as unknown as { clipboardAPI: Record<string, unknown> }).clipboardAPI.hasImage = vi.fn(() => Promise.resolve(true));
+      const paneSendFiles = vi.fn();
+      (window as unknown as { electronAPI: { remote: Record<string, unknown> } }).electronAPI.remote.paneSendFiles = paneSendFiles;
+      const { unmount } = render(<RemoteMirrorTerminal attachId="a1" readOnly />);
+      const term = termInstances[0]!;
+      await act(async () => {
+        press(term, { key: 'v', code: 'KeyV', ctrlKey: true });
+        for (let i = 0; i < 4; i++) await Promise.resolve();
+      });
+      expect(paneSendFiles).not.toHaveBeenCalled();
+      unmount();
     });
 
     it('auto-copies a finished selection, debounced', () => {

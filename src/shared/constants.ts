@@ -894,6 +894,8 @@ export const IPC = {
   REMOTE_PANE_ATTACH: 'remote:pane:attach',
   REMOTE_PANE_DETACH: 'remote:pane:detach',
   REMOTE_PANE_WRITE: 'remote:pane:write',
+  // Upload dropped files or the clipboard image to the host, then type the paths (invoke).
+  REMOTE_PANE_SEND_FILES: 'remote:pane:send-files',
   // renderer → main invoke (#1322): ask the remote daemon to resize the PTY
   // behind `attachId` via `RemoteHostClient.resizeSession` — the same
   // `POST /api/sessions/:id/resize` route the phone uses (#766). A GRANT

@@ -15,7 +15,7 @@
 // Observer + input only: no route here ever calls a remote destroy/delete
 // endpoint (RemoteHostClient itself never exposes one either).
 
-import { app, ipcMain } from 'electron';
+import { app, clipboard, ipcMain } from 'electron';
 import type { IpcMainInvokeEvent, WebContents } from 'electron';
 import { IPC } from '../../../shared/constants';
 import { wrapHandler } from '../wrapHandler';
@@ -47,6 +47,8 @@ import { HostStatusProber, combineHostStatus } from '../../remote/hostStatus';
 import { RemoteBodyTooLargeError, readBoundedJson } from '../../remote/readBoundedJson';
 import { REMOTE_LIMITS, clampRemoteGeometry } from '../../../shared/remoteLimits';
 import { credentialOriginProblem, isCredentialSafeOriginString } from '../../../shared/remotePairInput';
+import type { RemoteSendResult } from '../../../shared/remoteUpload';
+import { readDroppedFiles, sendFilesToRemote, type RemoteSendFile } from '../../remote/remoteFileSend';
 import type {
   PairFailureReason,
   RemoteAttachmentDescriptor,
@@ -71,6 +73,14 @@ interface RemoteConfigProbe {
   protocolVersion?: number;
   minProtocolVersion?: number;
   allowInput?: boolean;
+  allowUpload?: boolean;
+  generalFileUpload?: boolean;
+}
+
+/** What the host lets this desktop upload, as last probed. */
+interface UploadGrants {
+  allowUpload: boolean;
+  generalFileUpload: boolean;
 }
 
 /** Distinguishes WHY a `/api/config` probe failed, so the caller can tell a
@@ -78,7 +88,7 @@ interface RemoteConfigProbe {
  *  incompatible (pre-remote-attach) build — flattening these into one "too
  *  old" message misdiagnoses the two recoverable cases. */
 type ProbeResult =
-  | { kind: 'ok'; allowInput: boolean }
+  | { kind: 'ok'; allowInput: boolean; uploads: UploadGrants }
   | { kind: 'unauthorized' }
   | { kind: 'unreachable' }
   /** Plain http to another machine: never probed, the token would go in the clear. */
@@ -177,8 +187,12 @@ async function probeConfig(
     return { kind: err instanceof RemoteBodyTooLargeError ? 'unusable' : 'incompatible' };
   }
   if (!parsed || typeof parsed !== 'object') return { kind: 'incompatible' };
-  const allowInput = (parsed as RemoteConfigProbe).allowInput === true;
-  return { kind: 'ok', allowInput };
+  const config = parsed as RemoteConfigProbe;
+  return {
+    kind: 'ok',
+    allowInput: config.allowInput === true,
+    uploads: { allowUpload: config.allowUpload === true, generalFileUpload: config.generalFileUpload === true },
+  };
 }
 
 /** Add-time error string for a probe failure — three distinct messages so a
@@ -303,6 +317,9 @@ export function registerRemoteHandlers(deps: RegisterRemoteHandlersDeps): () => 
   // across an app restart, which just means the first list() after restart
   // shows no banner until the next workspacesList call re-probes it.
   const allowInputCache = new Map<string, boolean>(); // hostId -> allowInput
+  // Same lifetime as allowInputCache. A stale `true` meets the host's 403
+  // `uploads-disabled:` tag, so a send never probes first.
+  const uploadGrantsCache = new Map<string, UploadGrants>(); // hostId -> upload grants
   const attachByKey = new Map<string, string>(); // `${senderId}:${hostId}:${sessionId}` -> attachId
   const attachRecords = new Map<string, AttachRecord>(); // attachId -> record
   // #1323 — two views in one window can show the same session (a mirror-grid
@@ -666,6 +683,7 @@ export function registerRemoteHandlers(deps: RegisterRemoteHandlersDeps): () => 
       if (!result.ok) return result;
 
       allowInputCache.set(result.host.id, probe.allowInput);
+      uploadGrantsCache.set(result.host.id, probe.uploads);
       return { ok: true, host: { ...result.host, allowInput: probe.allowInput } };
     }));
 
@@ -747,6 +765,7 @@ export function registerRemoteHandlers(deps: RegisterRemoteHandlersDeps): () => 
       statusProber.invalidate(result.host.id);
 
       allowInputCache.set(result.host.id, probe.allowInput);
+      uploadGrantsCache.set(result.host.id, probe.uploads);
       return { ok: true, host: { ...result.host, allowInput: probe.allowInput } };
     }));
 
@@ -767,6 +786,7 @@ export function registerRemoteHandlers(deps: RegisterRemoteHandlersDeps): () => 
       } catch { /* see above — an orphan descriptor restores as a stale row */ }
       syncAttentionSubs();
       allowInputCache.delete(hostId);
+      uploadGrantsCache.delete(hostId);
       statusProber.invalidate(hostId);
       const client = clients.get(hostId);
       if (client) {
@@ -795,7 +815,10 @@ export function registerRemoteHandlers(deps: RegisterRemoteHandlersDeps): () => 
       // Refresh allowInput opportunistically — best-effort, never blocks the
       // workspace list on a probe hiccup.
       const probe = await probeConfig(host.origin, host.token, fetchImpl);
-      if (probe.kind === 'ok') allowInputCache.set(id, probe.allowInput);
+      if (probe.kind === 'ok') {
+        allowInputCache.set(id, probe.allowInput);
+        uploadGrantsCache.set(id, probe.uploads);
+      }
 
       const client = getOrCreateClient(id);
       if (!client) return { ok: false, error: 'unknown host' };
@@ -1002,6 +1025,43 @@ export function registerRemoteHandlers(deps: RegisterRemoteHandlersDeps): () => 
     if (!client) return;
     client.write(record.attachId, data).catch(() => { /* see doc comment above */ });
   });
+
+  // A file dropped or an image pasted on a mirror: upload to the host, then
+  // type the host's paths into the pane, unsent. An invoke, not the
+  // fire-and-forget write above, so every refusal (the host's upload grant, a
+  // prompt waiting on the pane) reaches the renderer as a reason to show.
+  ipcMain.removeHandler(IPC.REMOTE_PANE_SEND_FILES);
+  ipcMain.handle(IPC.REMOTE_PANE_SEND_FILES, wrapHandler(IPC.REMOTE_PANE_SEND_FILES,
+    async (_e: IpcMainInvokeEvent, attachId: unknown, source: unknown, opts: unknown): Promise<RemoteSendResult> => {
+      const record = streamRecord(assertString(attachId, 'attachId'));
+      const client = record ? clients.get(record.hostId) : undefined;
+      if (!record || !client) return { ok: false, reason: 'not-connected' };
+      const o = (typeof opts === 'object' && opts !== null ? opts : {}) as { bracketed?: unknown; wsl?: unknown };
+      const src = (typeof source === 'object' && source !== null ? source : {}) as { kind?: unknown; paths?: unknown };
+      let files: RemoteSendFile[];
+      if (src.kind === 'clipboard-image') {
+        const image = clipboard.readImage();
+        if (image.isEmpty()) return { ok: false, reason: 'no-image' };
+        files = [{ name: 'clipboard.png', bytes: image.toPNG() }];
+      } else if (src.kind === 'drop' && Array.isArray(src.paths) && src.paths.every((p) => typeof p === 'string')) {
+        const read = await readDroppedFiles(src.paths as string[]);
+        if (!Array.isArray(read)) return { ok: false, reason: read.reason };
+        files = read;
+      } else {
+        return { ok: false, reason: 'not-a-file' };
+      }
+      const grants = uploadGrantsCache.get(record.hostId);
+      return sendFilesToRemote(files, {
+        allowInput: allowInputCache.get(record.hostId),
+        allowUpload: grants?.allowUpload,
+        generalFileUpload: grants?.generalFileUpload,
+        wsl: o.wsl === true,
+        bracketed: o.bracketed === true,
+      }, {
+        upload: (bytes, ext) => client.upload(bytes, ext),
+        write: (data) => client.write(record.attachId, data),
+      });
+    }));
 
   // #1322 — a remote-terminal mirror's own fit-to-box request, resolved
   // through the attachId the way write is: the record it was minted with
@@ -1244,6 +1304,7 @@ export function registerRemoteHandlers(deps: RegisterRemoteHandlersDeps): () => 
     ipcMain.removeHandler(IPC.REMOTE_PANE_DETACH);
     ipcMain.removeAllListeners(IPC.REMOTE_PANE_WRITE);
     ipcMain.removeHandler(IPC.REMOTE_PANE_RESIZE_REQUEST);
+    ipcMain.removeHandler(IPC.REMOTE_PANE_SEND_FILES);
     ipcMain.removeHandler(IPC.REMOTE_POLL_SUBSCRIBE);
     ipcMain.removeHandler(IPC.REMOTE_POLL_UNSUBSCRIBE);
     ipcMain.removeHandler(REMOTE_SSH_IPC.CANDIDATES);

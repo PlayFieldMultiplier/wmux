@@ -7,6 +7,7 @@ import type { ResumeBinding } from '../../../shared/agentResume';
 import { useStore } from '../../stores';
 import { useT } from '../../hooks/useT';
 import { t as translate } from '../../i18n';
+import { deliverMirrorDrop, showRemoteSendResult } from '../Remote/mirrorFileSend';
 import Sidebar from '../Sidebar/Sidebar';
 import MiniSidebar from '../Sidebar/MiniSidebar';
 import { SidebarSlot } from './SidebarSlot';
@@ -1151,10 +1152,12 @@ export default function AppLayout() {
       const activeSurface = leaf.surfaces.find((s) => s.id === leaf.activeSurfaceId);
       // browser/editor/diff는 PTY가 없어 경로 붙여넣기 대상이 아님(J2 — diff 추가).
       if (!activeSurface || activeSurface.surfaceType === 'browser' || activeSurface.surfaceType === 'editor' || activeSurface.surfaceType === 'preview' || activeSurface.surfaceType === 'diff') return;
-      // Another PC's pane: a dropped path names a file on this machine, so it
-      // is not typed there. Say so instead of ending without a word.
+      // Another PC's pane: a dropped path names a file on this machine, so the
+      // mirror showing it uploads the files to that PC and types their paths there.
       if (activeSurface.surfaceType === 'remote-terminal') {
-        state.pushToast({ level: 'info', message: translate('remote.mirror.dropUnsupported') });
+        if (!deliverMirrorDrop(activeSurface.remoteHostId, activeSurface.remoteSessionId, paths)) {
+          showRemoteSendResult({ ok: false, reason: 'not-connected' }, translate('remote.hostFallback'));
+        }
         return;
       }
 
