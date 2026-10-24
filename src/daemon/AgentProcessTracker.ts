@@ -631,6 +631,9 @@ interface TrackedAgent {
   /** The last executable check of `pid` (isAgentImage), keyed by the slug and
    *  argv it was made for: one image read per launch, not per delivery. */
   image?: { key: string; ok: boolean };
+  /** #2673 — the pane's launch count (setLaunchCounter) when this process was
+   *  picked: a later command start in the pane may have launched its successor. */
+  launchSeq?: number;
 }
 
 /** #1727 — what the tracker needs to follow agents inside WSL panes. All
@@ -655,8 +658,11 @@ export interface TrackedAgentState {
   /** Actual process snapshot start (or WSL hook payload time), only on fresh launch edges.
    * Cached identityFor reads deliberately omit it. */
   observedAt?: number;
-  /** A same-boot WSL launch edge replaced a different live process. Teardown evidence
-   * only; unlike observedAt, this cannot seed detector identity. */
+  /** This launch edge replaced a different process the pane ran: a same-boot WSL
+   * relaunch, or (#2673) the successor noteWatchedDeath found where its watched
+   * agent died. It is teardown evidence for the old process (the edge carries no
+   * death); on its own it cannot seed detector identity, which still needs
+   * observedAt, which the native successor's edge always carries. */
   replacedLive?: true;
   /** Captured detector epoch on a fresh probe; null means its owner changed. */
   identityEpoch?: number | null;
@@ -693,6 +699,7 @@ export class AgentProcessTracker {
   private readonly treeRoots = new WeakMap<ProcessTreeEntry, { sessionId: string; state: TrackedAgent }>();
   private snapshotStartedAt = 0;
   private identityProbeGuard?: (sessionId: string) => { epoch: number; isCurrent: () => boolean } | undefined;
+  private launchCounter?: (sessionId: string) => number | undefined;
   private stateListener: ((sessionId: string, state: TrackedAgentState) => void) | undefined;
 
   constructor(
@@ -767,6 +774,12 @@ export class AgentProcessTracker {
    *  authority (see daemon/index.ts). */
   setStateChangeListener(cb: (sessionId: string, state: TrackedAgentState) => void): void {
     this.stateListener = cb;
+  }
+
+  /** #2673 — how many commands the pane's shell has started (OSC 133 C), or
+   *  undefined when it does not report them. See noteWatchedDeath. */
+  setLaunchCounter(count: (sessionId: string) => number | undefined): void {
+    this.launchCounter = count;
   }
 
   /** Captures only detector-seeding authority; process liveness keeps its own generation guard. */
@@ -875,6 +888,7 @@ export class AgentProcessTracker {
         const entries = await snapshot;
         if ((this.generation.get(sessionId) ?? 0) !== gen) return; // disarmed meanwhile
         const pick = selectAgentProcess(entries, shellPid);
+        let replaced = false;
         if (requireSlug) {
           const cur = this.states.get(sessionId);
           if (cur?.alive) {
@@ -885,11 +899,15 @@ export class AgentProcessTracker {
             // Narrowing to the terminal's foreground process group needs a
             // pgid column no Windows listing has.)
             if (entries.some((e) => e.pid === cur.pid)) return;
-            // Gone before the monitor noticed: record its death edge now, and
-            // drop its watch so the monitor cannot report the same death again.
+            // Gone before the monitor noticed: drop its watch so the monitor
+            // cannot report the same death again, and record its death edge
+            // now, unless the same agent already took its place (#2673: the
+            // pick below is its relaunch's edge, and the pane's agent never
+            // ended). Another agent in its place ends it as before.
             this.watcher.unwatch(AgentProcessTracker.watchKey(sessionId));
             cur.alive = false;
-            this.emitState(sessionId, { ...(cur.slug ? { slug: cur.slug } : {}), alive: false });
+            if (pick?.slug !== undefined && pick.slug === cur.slug) replaced = true;
+            else this.emitState(sessionId, { ...(cur.slug ? { slug: cur.slug } : {}), alive: false });
           }
           // No named agent → leave the session as it is.
           if (!pick?.slug) {
@@ -903,26 +921,8 @@ export class AgentProcessTracker {
           this.lastFailedAt.set(sessionId, Date.now());
           return;
         }
-        this.states.set(sessionId, {
-          pid: pick.pid,
-          alive: true,
-          ...(pick.slug ? { slug: pick.slug } : {}),
-        });
-        this.watcher.watch(AgentProcessTracker.watchKey(sessionId), pick.pid, () => {
-          const cur = this.states.get(sessionId);
-          // Only the SAME watched pid may flip the flag — a re-probe that
-          // landed after this watch was superseded must win.
-          if (cur && cur.pid === pick.pid) {
-            cur.alive = false;
-            this.emitState(sessionId, {
-              ...(cur.slug ? { slug: cur.slug } : {}),
-              alive: false,
-            });
-          }
-        });
-        this.emitState(sessionId, { ...(pick.slug ? { slug: pick.slug } : {}), alive: true, observedAt,
-          ...(identity ? { identityEpoch: identity.isCurrent() ? (ownsSnapshot ? identity.epoch : undefined) : null } : {}),
-        });
+        this.commitPick(sessionId, pick, observedAt,
+          identity ? (identity.isCurrent() ? (ownsSnapshot ? identity.epoch : undefined) : null) : undefined, replaced);
       } catch {
         // Enumeration failed (timeout, spawn error) — undecided, never a lie.
         if (requireSlug) this.slugProbeBlockedUntil.set(sessionId, Date.now() + ARM_BACKOFF_MS);
@@ -944,6 +944,69 @@ export class AgentProcessTracker {
         }
       }
     })();
+  }
+
+  /** Track `pick` as the pane's agent: watch it and report its launch edge. */
+  private commitPick(sessionId: string, pick: AgentProcessPick, observedAt: number, identityEpoch: number | null | undefined, replacedLive: boolean): void {
+    const launchSeq = this.launchCounter?.(sessionId);
+    this.states.set(sessionId, {
+      pid: pick.pid,
+      alive: true,
+      ...(pick.slug ? { slug: pick.slug } : {}),
+      ...(launchSeq !== undefined ? { launchSeq } : {}),
+    });
+    this.watcher.watch(AgentProcessTracker.watchKey(sessionId), pick.pid, () => this.noteWatchedDeath(sessionId, pick.pid));
+    this.emitState(sessionId, { ...(pick.slug ? { slug: pick.slug } : {}), alive: true, observedAt,
+      ...(replacedLive ? { replacedLive: true as const } : {}),
+      ...(identityEpoch !== undefined ? { identityEpoch } : {}),
+    });
+  }
+
+  /**
+   * The watched agent process died. Only the SAME watched pid may flip the
+   * flag: a re-probe that landed after this watch was superseded must win.
+   *
+   * #2673 — the pane may already run that agent's successor. `/exit`, then
+   * `claude` again: the monitor reports the old pid gone seconds after the
+   * new process started, before anything probed for it. Reporting that as the
+   * pane's agent dying ended the relaunch: the bridge cleared the identity its
+   * splash had just opened, and no launch edge followed to restore it. So when
+   * the pane's shell has started a command since this process was picked
+   * (its launch count moved), a fresh process table is read first. The same
+   * agent under the pane's shell with another pid is the successor: it is
+   * tracked, and its launch edge (`replacedLive`) is what the pane hears.
+   * With no successor, no table, or no command started since, the death is
+   * reported, as it always was.
+   */
+  private noteWatchedDeath(sessionId: string, pid: number): void {
+    const dead = this.states.get(sessionId);
+    if (!dead || dead.pid !== pid || !dead.alive) return;
+    dead.alive = false;
+    const reportDeath = (): void => this.emitState(sessionId, { ...(dead.slug ? { slug: dead.slug } : {}), alive: false });
+    const shellPid = this.shellPids.get(sessionId);
+    const launches = this.launchCounter?.(sessionId);
+    if (shellPid === undefined || !dead.slug || dead.launchSeq === undefined || launches === undefined || launches <= dead.launchSeq) {
+      reportDeath();
+      return;
+    }
+    const gen = this.generation.get(sessionId) ?? 0;
+    const identity = this.identityProbeGuard?.(sessionId);
+    const observedAt = Date.now();
+    void this.enumerate().then(
+      (entries) => {
+        if ((this.generation.get(sessionId) ?? 0) !== gen || this.states.get(sessionId) !== dead) return; // disarmed, or a probe took over
+        const pick = selectAgentProcess(entries, shellPid);
+        if (!pick || pick.slug !== dead.slug || pick.pid === pid) {
+          reportDeath();
+          return;
+        }
+        this.commitPick(sessionId, pick, observedAt, identity ? (identity.isCurrent() ? identity.epoch : null) : undefined, true);
+      },
+      () => {
+        if ((this.generation.get(sessionId) ?? 0) !== gen || this.states.get(sessionId) !== dead) return;
+        reportDeath();
+      },
+    );
   }
 
   /**

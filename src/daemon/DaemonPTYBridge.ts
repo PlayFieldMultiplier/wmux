@@ -1229,10 +1229,23 @@ export class DaemonPTYBridge extends EventEmitter {
    * that, so its episode ends here, and the next agent's hooks are judged
    * afresh: until one reports, its detector settles count.
    */
-  noteAgentEnded(): void {
+  /** OSC 133 command starts this pane's shell reported (monotonic; read through getCommandStarts). */
+  private commandStarts = 0;
+  private parsesOsc133 = false;
+
+  /**
+   * #2673 — how many commands the pane's shell has started (OSC 133 C), or
+   * undefined when this bridge does not parse them. The process tracker reads
+   * it to tell whether a watched agent's death may have a successor.
+   */
+  getCommandStarts(): number | undefined {
+    return this.parsesOsc133 ? this.commandStarts : undefined;
+  }
+
+  noteAgentEnded(clearDetectorIdentity = true): void {
     this.closeTurn();
     this.hookSeen = false;
-    this.agentDetector?.clearTrustedIdentity();
+    if (clearDetectorIdentity) this.agentDetector?.clearTrustedIdentity();
   }
 
   /** The host supplies a parsed live viewport with output/geometry fences. */
@@ -1606,7 +1619,10 @@ export class DaemonPTYBridge extends EventEmitter {
       interpreter.seedModes(prefilled.toString('utf8'), ringBuffer.totalBytesWritten);
     }
 
-    const agentDetector = new AgentDetector();
+    // With OSC 133 parsed here, the detector ends the agent on its markers in
+    // stream order itself (see the command start/end branch below).
+    const agentDetector = new AgentDetector({ launchBoundaries: !!promptLog });
+    this.parsesOsc133 = !!promptLog;
     this.agentDetector = agentDetector;
     this.identityLifetimeAt = Date.now();
 
@@ -1849,13 +1865,18 @@ export class DaemonPTYBridge extends EventEmitter {
             this.shellCommandRunning = false;
           }
           if (parsed.type === 'command_start') {
+            this.commandStarts += 1;
             this.shellCommandKeyRevision = this.shellSubmittedKeyRevision ?? this.keyInputRevision;
             this.shellSubmittedKeyRevision = undefined;
             this.shellCommandRunning = true; this.completedShellCommand = false; this.emptyShellPrompt = false;
           }
           // The shell's foreground program changed hands: whatever episode was
           // open (an agent's, or the Enter that launched the next one) is over.
-          if (parsed.type === 'command_start' || parsed.type === 'command_end') this.noteAgentEnded();
+          // The detector already cleared its identity at this marker, where it
+          // sits in the stream (launchBoundaries). Clearing it again here,
+          // after the whole read, wiped the gate the next agent's splash in
+          // the same read had just opened (#2673).
+          if (parsed.type === 'command_start' || parsed.type === 'command_end') this.noteAgentEnded(false);
           this.codexBootWindow = parsed.type === 'command_start' || (parsed.type !== 'command_end' && this.codexBootWindow);
           if (parsed.type === 'prompt_start' || parsed.type === 'prompt_end') this.shellPromptSeen = true;
           if (parsed.type === 'prompt_end') {

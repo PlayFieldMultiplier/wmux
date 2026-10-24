@@ -48,4 +48,14 @@ describe('agent.processExit daemon wiring', () => {
     // authority expiry frees the detector veto, the broadcast settles the dot.
     expect(listenerBody()).toMatch(/hookIngest\?\.expireAuthorityFor\(/);
   });
+
+  it('#2673 retires the dead launch on a relaunch edge, and feeds the tracker the pane\'s launch count', () => {
+    // A relaunch the tracker found where its watched agent died carries no
+    // death edge: its launch edge expires the old launch's authority, scoped
+    // to signals before the relaunch's command start.
+    const body = listenerBody();
+    expect(body).toMatch(/if \(state\.alive && state\.replacedLive\) \{[\s\S]*?hookIngest\?\.expireAuthorityFor\(sessionId, undefined, launchAt\);/);
+    expect(body).toMatch(/if \(!state\.alive \|\| state\.replacedLive\) usageLimits\?\.drop\(sessionId\);/);
+    expect(src).toMatch(/agentProcessTracker\.setLaunchCounter\(\(sessionId\) => sessionManager\.getSession\(sessionId\)\?\.bridge\.getCommandStarts\(\)\);/);
+  });
 });
