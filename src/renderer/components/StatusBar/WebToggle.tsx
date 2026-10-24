@@ -555,14 +555,20 @@ export function WebPopoverBody({
   );
   // The phone grants, also declared once. Stopped, they are the choice for the
   // next start; running, they read the server's effective values from status,
-  // so what the rows say is what a paired phone can actually do.
-  const grantRows = (transcript: boolean, upload: boolean, disabled: boolean) => (
+  // so what the rows say is what a paired phone can actually do. An upload
+  // also takes input permission (the daemon refuses it otherwise), so with
+  // input off the upload row reads off, disabled, with the reason.
+  const grantRows = (transcript: boolean, upload: boolean, input: boolean, disabled: boolean) => (
     <>
       <Field label={t('web.allowTranscript')} description={t('web.allowTranscriptHint')} className="ui-row">
         <Checkbox checked={transcript} disabled={disabled} onCheckedChange={() => onToggleAllowTranscript()} />
       </Field>
-      <Field label={t('web.allowUpload')} description={t('web.allowUploadHint')} className="ui-row">
-        <Checkbox checked={upload} disabled={disabled} onCheckedChange={() => onToggleAllowUpload()} />
+      <Field
+        label={t('web.allowUpload')}
+        description={t(input ? 'web.allowUploadHint' : 'web.allowUploadNeedsInput')}
+        className="ui-row"
+      >
+        <Checkbox checked={upload && input} disabled={disabled || !input} onCheckedChange={() => onToggleAllowUpload()} />
       </Field>
     </>
   );
@@ -726,7 +732,7 @@ export function WebPopoverBody({
             <Field label={t('web.allowInput')} className="ui-row">
               <Checkbox checked={allowInput} onCheckedChange={() => onToggleAllowInput()} />
             </Field>
-            {grantRows(allowTranscript, allowUpload, false)}
+            {grantRows(allowTranscript, allowUpload, allowInput, false)}
             {/* The only transport a phone can actually pair over. Listed FIRST
                 of the transports because it is the one most operators opening
                 this popover want: a device credential never expires, so it is
@@ -978,7 +984,7 @@ export function WebPopoverBody({
           <Field label={t('web.allowInput')} className="ui-row">
             <Checkbox checked={info.allowInput === true} disabled={busy} onCheckedChange={() => onToggleAllowInput()} />
           </Field>
-          {grantRows(info.allowTranscript === true, info.allowUpload === true, busy)}
+          {grantRows(info.allowTranscript === true, info.allowUpload === true, info.allowInput === true, busy)}
         </div>
         {advanced(info.allowDangerousLaunch === true, busy)}
       </PopoverSection>

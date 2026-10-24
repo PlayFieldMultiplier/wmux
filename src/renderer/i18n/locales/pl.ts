@@ -1412,6 +1412,7 @@ export const pl = {
   'web.allowTranscriptHint': 'Widok czatu na telefonie: sparowane urządzenia mogą czytać rozmowy agentów, w tym wyniki narzędzi.',
   'web.allowUpload': 'Przesyłanie zdjęć i plików',
   'web.allowUploadHint': 'Sparowane urządzenia mogą wysyłać zdjęcia i pliki na ten komputer.',
+  'web.allowUploadNeedsInput': 'Wymaga włączenia opcji „Zezwól na wejście”. Urządzenie, które nie może pisać, nie skorzysta z przesłanego pliku.',
   'web.phoneAccess': 'Dostęp z telefonu',
   'web.advanced': 'Zaawansowane',
   'web.allowDangerousLaunch': 'Niebezpieczne uruchamianie',

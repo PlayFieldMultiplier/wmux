@@ -1432,6 +1432,7 @@ export const en = {
   'web.allowTranscriptHint': 'Phone Chat view: paired devices can read agent conversations, including tool output.',
   'web.allowUpload': 'Photo & file upload',
   'web.allowUploadHint': 'Paired devices can send photos and files to this computer.',
+  'web.allowUploadNeedsInput': 'Needs “Allow input” on. A device that can’t type can’t use an upload.',
   'web.phoneAccess': 'Phone access',
   'web.advanced': 'Advanced',
   'web.allowDangerousLaunch': 'Dangerous launch',
