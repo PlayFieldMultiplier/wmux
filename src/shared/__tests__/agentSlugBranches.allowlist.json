@@ -12,7 +12,7 @@
     "src/daemon/automation/draft.ts": 2,
     "src/daemon/automation/launch.ts": 1,
     "src/daemon/channels/channelWakeWorker.ts": 3,
-    "src/daemon/chat/nativeChatBridge.ts": 20,
+    "src/daemon/chat/nativeChatBridge.ts": 19,
     "src/daemon/chat/v2/host.ts": 2,
     "src/daemon/history/RunHistoryStore.ts": 1,
     "src/daemon/hooks/HookIngest.ts": 5,

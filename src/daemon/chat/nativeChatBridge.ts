@@ -1907,7 +1907,7 @@ export function createChatBridge<P extends ChatPane>(deps: NativeChatBridgeDeps<
       const { at, owner, paneId, agent, mode, clientLaunchId, outcome } = trace;
       deps.log('info', `[chat] dangerous-launch ${JSON.stringify({ at, owner, paneId, agent, mode, clientLaunchId, outcome })}`);
       if (mode === 'default' || outcome !== 'submitted' && outcome !== 'launch-unconfirmed') return;
-      const notice = dangerousLaunchNotice(owner, agent, outcome === 'submitted', paneId);
+      const notice = dangerousLaunchNotice(owner, mode, outcome === 'submitted', paneId);
       deps.notify(paneId, notice.title, notice.body);
     },
     status: async (id) => {

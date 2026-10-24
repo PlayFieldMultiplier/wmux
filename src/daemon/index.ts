@@ -2892,8 +2892,8 @@ function registerRpcHandlers(
         });
         // The agent now runs in that mode: the desktop is told, as for chat/launch
         // (a security toast), even if the pane closes again below.
-        if (agentLaunch && dangerousLaunch) {
-          const notice = dangerousLaunchNotice(dangerousLaunch.owner, agentLaunch.agent, true, id);
+        if (dangerousLaunch) {
+          const notice = dangerousLaunchNotice(dangerousLaunch.owner, dangerousLaunch.mode, true, id);
           pipeServer.broadcast({ type: 'notification.event', sessionId: id,
             data: { source: 'security', title: notice.title, body: notice.body, ts: Date.now() } });
         }
