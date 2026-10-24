@@ -15,6 +15,7 @@ import { useStore } from '../../stores';
 import { useT } from '../../hooks/useT';
 import TerminalComponent from '../Terminal/Terminal';
 import { ChatV2Overlay, useChatSurfaceView } from '../ChatV2/ChatSurface';
+import { ChatViewFirstAskCard } from '../Chat/ChatViewFirstAskCard';
 import { forgetChatV2Pane, usePaneChatV2Binding } from '../ChatV2/useChatV2';
 import BrowserPanel from '../Browser/BrowserPanel';
 import EditorPanel from '../Editor/EditorPanel';
@@ -1553,6 +1554,7 @@ function TerminalSurface({ surface, paneId, chatViewEnabled, isActive, visible, 
         />
       </div>
       {chatV2 && shown && isWorkspaceVisible && surface.ptyId && <ChatV2Overlay ptyId={surface.ptyId} surfaceId={surface.id} cwd={surface.cwd} />}
+      {view === 'terminal' && shown && isWorkspaceVisible && surface.ptyId && <ChatViewFirstAskCard ptyId={surface.ptyId} surfaceId={surface.id} />}
     </>
   );
 }

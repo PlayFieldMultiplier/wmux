@@ -3820,7 +3820,8 @@ function TabAppearance() {
         <SettingRow label={t('settings.chatView')} description={t('settings.chatViewDesc')}>
           <Toggle
             checked={chatViewEnabled}
-            onChange={setChatViewEnabled}
+            // Choosing here answers the first-start question for every agent.
+            onChange={(v) => { setChatViewEnabled(v); useStore.getState().stopChatViewFirstAsk(); }}
             label={t('settings.chatView')}
           />
         </SettingRow>

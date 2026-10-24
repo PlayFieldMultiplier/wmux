@@ -215,3 +215,23 @@ describe('sending while the agent works', () => {
     expect(host.querySelectorAll('.wmux-chat-pending')).toHaveLength(0);
   });
 });
+
+describe('approval hint', () => {
+  it('says the agent waits for approval and Answer in Terminal switches to the terminal', async () => {
+    fixture.extra = { agentAlive: true, agentStatus: 'awaiting_input', terminal: claude() };
+    const onTerminal = vi.fn();
+    await act(async () => root.render(<ChatView ptyId="pty-1" active onTerminal={onTerminal} />));
+    const hint = [...host.querySelectorAll('.wmux-chat-notice')].find((n) => n.textContent?.includes('chat.approvalHint'))!;
+    const button = hint.querySelector('button')!;
+    expect(button.textContent).toBe('chat.answerInTerminal');
+    await act(async () => button.click());
+    expect(onTerminal).toHaveBeenCalledTimes(1);
+  });
+
+  it('labels itself as the terminal-linked chat', async () => {
+    await render();
+    const badge = host.querySelector('.wmux-chat-kind')!;
+    expect(badge.textContent).toBe('chat.kind.terminal');
+    expect(badge.getAttribute('title')).toBe('chat.kind.terminalHint');
+  });
+});

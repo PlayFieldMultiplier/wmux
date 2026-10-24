@@ -917,6 +917,8 @@ export interface SessionData {
   /** Chat presentation for local Claude Code sessions. Default false while
    *  experimental; persisted so an opt-in survives restarts. */
   chatViewEnabled?: boolean;
+  /** The one-time "Show this as a chat?" question; see uiSlice.chatViewFirstAsk. */
+  chatViewFirstAsk?: ChatViewFirstAsk;
   // Titlebar wall-clock (2026-09-05). Default off; persisted so the people who
   // turn it on keep it across restarts.
   titlebarClockVisible?: boolean;
@@ -1886,3 +1888,13 @@ export function validateNavigationUrl(
   return { valid: true };
 }
 
+
+/** The agents the one-time "Show this as a chat?" question is asked for. */
+export type ChatViewAskAgent = 'claude' | 'codex';
+
+/**
+ * The one-time "Show this as a chat?" question: each supported agent's answer
+ * once given, or `'never'` when it is not asked at all (an existing user, or
+ * one who changed the setting in Settings).
+ */
+export type ChatViewFirstAsk = 'never' | Partial<Record<ChatViewAskAgent, 'show' | 'terminal'>>;

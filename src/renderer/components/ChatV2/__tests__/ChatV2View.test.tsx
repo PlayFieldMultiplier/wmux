@@ -138,6 +138,9 @@ describe('ChatV2View', () => {
     await act(async () => root.render(<ChatV2View paneId="daemon-free" active cwd="/reported/elsewhere" onTerminal={() => undefined} />));
     await flush();
     expect(host.querySelector('[data-chatv2="empty"]')?.textContent).toContain('New chat');
+    // Chat 2 names itself apart from the terminal-linked chat 1.
+    expect(host.querySelector('[data-chatv2="empty"] .wmux-chat-kind')?.textContent).toBe('chat.kind.chatOnly');
+    expect(host.querySelector('.wmux-chat-kind')?.getAttribute('title')).toBe('chat.kind.chatOnlyHint');
     expect(host.querySelector('[data-chatv2-runs-in]')?.textContent).toBe('Runs in …/verified/repo');
     expect(host.querySelector('[data-chatv2-runs-in]')?.getAttribute('title')).toBe('/home/me/verified/repo');
     expect(mock.calls.map((call) => call.method).sort()).toEqual(['bindingForPane', 'subscribe']);

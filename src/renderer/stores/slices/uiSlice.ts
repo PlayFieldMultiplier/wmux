@@ -127,6 +127,8 @@ import {
   type NotificationCategory,
   type AgentStatus,
   type FleetLayout,
+  type ChatViewAskAgent,
+  type ChatViewFirstAsk,
   BUILTIN_TEMPLATES,
   DEFAULT_PREFIX_CONFIG,
   buildDefaultCustomKeybindings,
@@ -414,6 +416,15 @@ export interface UISlice {
   // stored viewMode, so turning it back on restores what was open.
   chatViewEnabled: boolean;
   setChatViewEnabled: (enabled: boolean) => void;
+  /**
+   * The one-time "Show this as a chat?" question, asked the first time a
+   * supported agent starts in a pane: each agent's answer once given, or
+   * 'never' (an existing user, who already had the setting, or one who
+   * changed it in Settings). Only "Show" turns `chatViewEnabled` on.
+   */
+  chatViewFirstAsk: ChatViewFirstAsk;
+  answerChatViewFirstAsk: (agent: ChatViewAskAgent, answer: 'show' | 'terminal') => void;
+  stopChatViewFirstAsk: () => void;
 
   /**
    * Wall-clock in the titlebar status strip. Default OFF: every OS already
@@ -1567,6 +1578,18 @@ export const createUISlice: StateCreator<StoreState, [['zustand/immer', never]],
 
   setChatViewEnabled: (enabled) => set((state) => {
     state.chatViewEnabled = enabled;
+  }),
+
+  chatViewFirstAsk: {},
+
+  answerChatViewFirstAsk: (agent, answer) => set((state) => {
+    if (state.chatViewFirstAsk === 'never') return;
+    state.chatViewFirstAsk = { ...state.chatViewFirstAsk, [agent]: answer };
+    if (answer === 'show') state.chatViewEnabled = true;
+  }),
+
+  stopChatViewFirstAsk: () => set((state) => {
+    state.chatViewFirstAsk = 'never';
   }),
 
   // Off unless asked for — see the interface note above.
