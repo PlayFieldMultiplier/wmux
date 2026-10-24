@@ -249,6 +249,19 @@ export class AgentSetupDetector {
     return result.code === 0 ? parseAgentVersion(result.stdout) : null;
   }
 
+  /**
+   * Sign-in from the agent's own status command only (no `--version` run),
+   * with `env` as the pane or run would have it, so CLAUDE_CONFIG_DIR /
+   * CODEX_HOME pick the account: true / false, or null when it cannot be told.
+   */
+  async loginState(agent: AgentId, env: NodeJS.ProcessEnv = this.env()): Promise<boolean | null> {
+    const loginStatus = agentRow(agent)?.setup?.loginStatus;
+    if (!loginStatus || loginStatus.read === 'none') return null;
+    const executable = this.resolveExecutable(agent, env);
+    if (!executable) return null;
+    return readLoginState(agent, await this.probe(executable, buildProbeEnv(env, executable, this.platform), loginStatus.args));
+  }
+
   private probe(executable: string, probeEnv: NodeJS.ProcessEnv, args: readonly string[]): Promise<ProbeResult> {
     const launch = resolveClaudeLaunch(executable, { args, platform: this.platform });
     return this.run(launch.command, launch.args, {

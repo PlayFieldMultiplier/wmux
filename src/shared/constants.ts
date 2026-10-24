@@ -597,6 +597,10 @@ export const IPC = {
   // dismiss, resume now) relayed to the daemon, which owns the state.
   USAGE_LIMIT_CHANGED: 'usageLimit:changed',
   USAGE_LIMIT_LIST: 'usageLimit:list',
+  // N4 — an agent's lost sign-in (shared/agentAuthLost): main's entries, and the status check behind [Sign in again].
+  AGENT_AUTH_LOST_CHANGED: 'agentAuth:lostChanged',
+  AGENT_AUTH_LOST_LIST: 'agentAuth:lostList',
+  AGENT_AUTH_LOGIN_STATE: 'agentAuth:loginState',
   USAGE_LIMIT_UPDATE: 'usageLimit:update',
   // Voice dictation (shared/dictation). Renderer → main: the model's state,
   // its one-time download (only from the owner's consent) and cancel, the

@@ -119,6 +119,13 @@ export interface AutomationEnginePorts {
   sleep?: (ms: number) => Promise<void>;
   newId?: () => string;
   isDirectory?: (p: string) => boolean;
+  /**
+   * True when the agent's own status command says this run's account is signed
+   * out (daemon/agentLoginGate). Absent = not checked.
+   */
+  signedOut?: (agent: AutomationAgent, env: Record<string, string>) => Promise<boolean>;
+  /** A run was refused because its account is signed out: raise the desktop notice. */
+  authLost?: (agent: AutomationAgent, env: Record<string, string>) => void;
   /** buildAgentLaunch against the installed CLI (env: the run's env, for CODEX_HOME). Throws when unavailable. */
   buildBaseCommand: (choice: { agent: AutomationAgent; model?: string; effort?: string }, env: Record<string, string>) => Promise<string>;
   /** Internal exec-session create (bypasses the external `auto-` id refusal). */
@@ -170,6 +177,8 @@ export interface AgentEventSignal {
   /** HookIngest's arbitration. Only a confirmed turn end ('emit'/'dedup') completes a run. */
   decision?: string;
   agentSessionId?: string;
+  /** A StopFailure the provider classed as a sign-in failure (shared/phoneTurnFailure `auth`). */
+  authFailure?: boolean;
 }
 
 const CONFIRMED_DECISIONS: ReadonlySet<string> = new Set(['emit', 'dedup']);
@@ -845,6 +854,17 @@ export class AutomationEngine {
     const isDirectory = this.ports.isDirectory ?? defaultIsDirectory;
     let command: string;
     const env = buildAutomationEnv(ptyId, this.ports.parentEnv, account.env);
+    // A signed-out account would sit on the agent's sign-in screen until the
+    // ready check gave up; say so now instead.
+    if (await this.ports.signedOut?.(action.agent, env).catch(() => false)) {
+      if (isFinalRunState(run.state)) return; // cancelled while checking
+      this.ports.log('warn', `[automation] run ${run.id} refused: ${action.agent} is signed out`);
+      this.finish(run, 'failed', 'login_needed');
+      this.ports.authLost?.(action.agent, env);
+      delete run.ptyId;
+      await this.persistRuns();
+      return;
+    }
     try {
       if (!isDirectory(action.cwd)) throw new Error('Folder is missing');
       const base = await this.ports.buildBaseCommand(
@@ -1193,7 +1213,7 @@ export class AutomationEngine {
     }
     const confirmed = signal.decision === undefined || CONFIRMED_DECISIONS.has(signal.decision);
     if (signal.kind === 'agent.stop_failure' && confirmed) {
-      await this.complete(run, live, 'failed', 'agent_error');
+      await this.complete(run, live, 'failed', signal.authFailure ? 'login_needed' : 'agent_error');
       return;
     }
     if (signal.kind === 'agent.stop' && signal.status !== 'running' && confirmed) {

@@ -85,6 +85,7 @@ import type { ComputerUseSettingsPayload } from '../shared/computer/config';
 import type { QuickLaunchSettingsPayload } from '../shared/quickLaunch';
 import type { ResumeBinding } from '../shared/agentResume';
 import type { PaneUsageLimit, PaneUsageLimitPatch } from '../shared/usageLimit';
+import type { AuthLostEntry } from '../shared/agentAuthLost';
 import type { DictationAssetsResult, DictationMicAccess, DictationModelState } from '../shared/dictation';
 import type { PreviewChangedEvent, PreviewLinkEvent, PreviewOpenResult } from '../shared/filePreview';
 import type {
@@ -1982,6 +1983,19 @@ const electronAPI = {
     setEnabled: (enabled: boolean) => ipcRenderer.send(IPC.USAGE_TOGGLE, enabled),
     /** Manual refresh. UI is responsible for the 5-minute cooldown. */
     refresh: () => ipcRenderer.send(IPC.USAGE_REFRESH),
+  },
+  // N4 — agents whose sign-in was lost (shared/agentAuthLost), one entry per
+  // agent and account; `loginState` asks the agent's own status for an entry
+  // main already holds (main drops the entry when it says signed in).
+  agentAuth: {
+    list: () => ipcRenderer.invoke(IPC.AGENT_AUTH_LOST_LIST) as Promise<AuthLostEntry[]>,
+    onChanged: (callback: (entries: AuthLostEntry[]) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, entries: AuthLostEntry[]) => callback(entries);
+      ipcRenderer.on(IPC.AGENT_AUTH_LOST_CHANGED, listener);
+      return () => { ipcRenderer.removeListener(IPC.AGENT_AUTH_LOST_CHANGED, listener); };
+    },
+    loginState: (key: string) =>
+      ipcRenderer.invoke(IPC.AGENT_AUTH_LOGIN_STATE, key) as Promise<{ known: false } | { known: true; signedIn: boolean | null }>,
   },
   // Pane usage-limit pause (shared/usageLimit). The daemon owns the state;
   // `list` hydrates on boot, `onChanged` streams per-pane changes (null =

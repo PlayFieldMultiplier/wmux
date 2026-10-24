@@ -69,6 +69,7 @@ import { useResizeGuard } from '../../hooks/useResizeGuard';
 import { useApprovalInboxBridge } from '../../hooks/useApprovalInboxBridge';
 import { useBrowserHelpBridge } from '../../hooks/useBrowserHelpBridge';
 import { useUsageLimitBridge } from '../../hooks/useUsageLimitBridge';
+import { useAgentAuthBridge } from '../../hooks/useAgentAuthBridge';
 import { useWorkspaceSettleBridge } from '../../hooks/useWorkspaceSettleBridge';
 import { useStarPromptSessionBridge } from '../../utils/starPrompt';
 import { useRemoteInboxBridge } from '../../hooks/useRemoteInboxBridge';
@@ -954,6 +955,8 @@ export default function AppLayout() {
   // the store (and jump to its pane) whichever surface the operator is on.
   useBrowserHelpBridge();
   useUsageLimitBridge();
+  // N4 — agents whose sign-in was lost: the toast with [Sign in again].
+  useAgentAuthBridge();
   // Workspace settle / snooze — main owns the state; this mirrors it and
   // raises the Undo toasts.
   useWorkspaceSettleBridge();

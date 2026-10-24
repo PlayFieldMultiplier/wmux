@@ -17,6 +17,7 @@ import { selectSidebarUnseenWorkspaces, visibleWorkspaceIds } from '../../stores
 import { attentionPulseClass } from './attentionBlink';
 import { usePrefersReducedMotion } from '../ui/MediaPreview';
 import { workspaceHasUsageLimitWaiting } from '../../stores/slices/usageLimitSlice';
+import { workspaceHasAuthLost } from '../../stores/slices/agentAuthSlice';
 import { selectWorkspaceAttentionClasses } from '../../stores/selectors/fleet';
 import { IconCopy, IconX, IconGear, IconChevron, IconBell, IconFolder, IconTerminal, IconExternalLink, IconCheck, IconGitBranch, IconWorktree, IconWarning, IconFanOut, IconPin, IconBookmark } from '../icons';
 import { tokenAttrs } from '../../themes';
@@ -566,6 +567,8 @@ function WorkspaceItem({ workspaceId, isActive, isMultiview, index, shortcutNumb
   // A pane here is waiting out a usage limit: when nothing louder is going on
   // the workspace row draws the waiting clock instead of nothing (or a red ✕).
   const usageWaiting = useRowStore((s) => workspaceHasUsageLimitWaiting(s, workspaceId));
+  // N4 — an agent here lost its sign-in; it says so until the account works again.
+  const authLost = useRowStore((s) => workspaceHasAuthLost(s, workspaceId));
   // Glance board (2026-09-25): something here changed since it was last in
   // view, and it wants a look. Fleet's changed-dot rule: --text-main, never amber.
   const unseen = useRowStore((s) => !!selectSidebarUnseenWorkspaces(s)[workspaceId]);
@@ -1091,8 +1094,9 @@ function WorkspaceItem({ workspaceId, isActive, isMultiview, index, shortcutNumb
   // question) the question itself, like Fleet's row.
   const statusWord = needsYou ? t('workspace.needsYou')
     : unverifiableMinutes > 0 ? t('workspace.agentUnverifiable', { time: formatStaleMinutes(unverifiableMinutes) })
-      : markStatus !== 'idle' ? t(AGENT_STATUS_ICON[markStatus].labelKey)
-        : usageWaiting ? t('usageLimit.waiting') : undefined;
+      : authLost ? t('agentAuth.signedOutShort')
+        : markStatus !== 'idle' ? t(AGENT_STATUS_ICON[markStatus].labelKey)
+          : usageWaiting ? t('usageLimit.waiting') : undefined;
   const rowLabel = [displayName, statusWord, question].filter(Boolean).join(', ');
 
   // Keys on the row itself (the list moves between rows, Sidebar.tsx): Enter
@@ -1302,8 +1306,9 @@ function WorkspaceItem({ workspaceId, isActive, isMultiview, index, shortcutNumb
             usageWaiting={usageWaiting}
             label={unverifiableMinutes > 0
               ? t('workspace.agentUnverifiable', { time: formatStaleMinutes(unverifiableMinutes) })
-              : markStatus !== 'idle' ? t(AGENT_STATUS_ICON[markStatus].labelKey)
-                : usageWaiting ? t('usageLimit.waiting') : undefined}
+              : authLost ? t('agentAuth.signedOutShort')
+                : markStatus !== 'idle' ? t(AGENT_STATUS_ICON[markStatus].labelKey)
+                  : usageWaiting ? t('usageLimit.waiting') : undefined}
           />
         </span>
 
