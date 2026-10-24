@@ -7,6 +7,8 @@
  * provider's message text.
  */
 
+import { agentRow } from './agentIdentity';
+
 export type AuthLostAgent = 'claude' | 'codex';
 
 /** Where the daemon saw it: a failed turn, an agent start, or a scheduled run it refused. */
@@ -36,12 +38,21 @@ export interface AuthLostEntry {
   ptyIds: string[];
 }
 
+/** The registry's account variable for an agent whose sign-in can be checked, or undefined. */
+function accountEnvOf(slug: string): 'CLAUDE_CONFIG_DIR' | 'CODEX_HOME' | undefined {
+  const status = agentRow(slug)?.setup?.loginStatus;
+  return status && status.read !== 'none' ? status.accountEnv : undefined;
+}
+
+/** An agent with a sign-in status command and a per-account folder (its registry row says so). */
 export function isAuthLostAgent(value: unknown): value is AuthLostAgent {
-  return value === 'claude' || value === 'codex';
+  return typeof value === 'string' && accountEnvOf(value) !== undefined;
 }
 
 export function authConfigEnvKey(agent: AuthLostAgent): 'CLAUDE_CONFIG_DIR' | 'CODEX_HOME' {
-  return agent === 'codex' ? 'CODEX_HOME' : 'CLAUDE_CONFIG_DIR';
+  const key = accountEnvOf(agent);
+  if (!key) throw new Error(`no account variable for ${agent}`);
+  return key;
 }
 
 /** The account a pane or run uses, read from its env; null = the agent's default. */

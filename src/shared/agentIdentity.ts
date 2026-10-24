@@ -153,11 +153,14 @@ export interface AgentSetupSpec {
    * code (0 / 1). `exit-code`: 0 is signed in, 1 with `signedOutText` in the
    * output is signed out. `none`: the vendor documents no such subcommand
    * (the agent signs in on its own first run and keeps the result in its own
-   * store), so wmux does not check it; the card says so.
+   * store), so wmux does not check it; the card says so. `accountEnv` names the
+   * variable that points the agent (and its status command) at one account's
+   * folder; an agent with both is one whose lost sign-in wmux reports per
+   * account (shared/agentAuthLost).
    */
   readonly loginStatus:
-    | { readonly args: readonly string[]; readonly read: 'json-logged-in' }
-    | { readonly args: readonly string[]; readonly read: 'exit-code'; readonly signedOutText: string }
+    | { readonly args: readonly string[]; readonly read: 'json-logged-in'; readonly accountEnv?: 'CLAUDE_CONFIG_DIR' | 'CODEX_HOME' }
+    | { readonly args: readonly string[]; readonly read: 'exit-code'; readonly signedOutText: string; readonly accountEnv?: 'CLAUDE_CONFIG_DIR' | 'CODEX_HOME' }
     | { readonly read: 'none' };
   /** Below this version the card says "update recommended" (never forced). */
   readonly updateFloor: string;
@@ -301,7 +304,7 @@ export const AGENT_IDENTITIES = [
       npm: { package: ['@anthropic-ai', 'claude-code'], winEntries: [['bin', 'claude.exe'], ['cli.js']] },
       // `claude auth status --help`: "--json  Output as JSON (default)".
       // Measured on 2.1.305: exit 0 + "loggedIn": true / exit 1 + false.
-      loginStatus: { args: ['auth', 'status', '--json'], read: 'json-logged-in' },
+      loginStatus: { args: ['auth', 'status', '--json'], read: 'json-logged-in', accountEnv: 'CLAUDE_CONFIG_DIR' },
       // The interrupt / Stop hook findings the hook bridge is built on
       // (src/shared/hooks/interruptKeystroke.ts, HookSignalRouter.ts).
       updateFloor: '2.1.236',
@@ -351,7 +354,7 @@ export const AGENT_IDENTITIES = [
       npm: { package: ['@openai', 'codex'], winEntries: [['bin', 'codex.js']], besideShim: true },
       // `codex login --help`: "status  Show login status". Measured on
       // codex-cli 0.163.0: exit 0 signed in, exit 1 + "Not logged in".
-      loginStatus: { args: ['login', 'status'], read: 'exit-code', signedOutText: 'not logged in' },
+      loginStatus: { args: ['login', 'status'], read: 'exit-code', signedOutText: 'not logged in', accountEnv: 'CODEX_HOME' },
       // One background server per account, which pane identity relies on
       // (src/mcp/codexThreadIdentity.ts).
       updateFloor: '0.157.0',

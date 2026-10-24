@@ -196,7 +196,7 @@ import { DIALOG_RECHECK_MS, HookIngest, identifiedAgentPid, type HookArbitration
 import { DetectionAgreementLog } from './diagnostics/detectionAgreementLog';
 import { deriveAgentLiveness } from './hooks/agentLiveness';
 import { classifyClaudeStopFailure, classifyCodexTurnCompleted, type TurnFailure } from '../shared/phoneTurnFailure';
-import { authConfigDir, type AgentAuthLost, type AuthLostAgent, type AuthLostOrigin } from '../shared/agentAuthLost';
+import { authConfigDir, isAuthLostAgent, type AgentAuthLost, type AuthLostAgent, type AuthLostOrigin } from '../shared/agentAuthLost';
 import { AgentLoginGate } from './agentLoginGate';
 import { AgentSetupDetector } from '../main/firstRun/AgentSetupDetector';
 import { serveTurnFailure } from './turnFailure/serveTurnFailure';
@@ -4839,7 +4839,7 @@ function registerRpcHandlers(
           })
           : undefined;
         if (data.signal.kind === 'agent.stop' && data.status === 'complete' && historySession
-          && (data.signal.agent === 'claude' || data.signal.agent === 'codex')
+          && isAuthLostAgent(data.signal.agent)
           && !['internal', 'veto', 'pending'].includes(data.decision ?? '')) {
           noteAuthWorks?.(data.signal.agent, historySession.meta.env);
         }
@@ -9311,7 +9311,7 @@ async function main(): Promise<void> {
     // a scheduled run was already checked before its launch, and a WSL pane's
     // agent signs in inside Linux, which a host probe cannot see.
     if (!state.alive) loginCheckedProcess.delete(sessionId);
-    if (state.alive && (state.slug === 'claude' || state.slug === 'codex')) {
+    if (state.alive && isAuthLostAgent(state.slug)) {
       const managed = sessionManager.getSession(sessionId);
       const pid = agentProcessTracker.pidFor(sessionId);
       if (managed && pid !== undefined && loginCheckedProcess.get(sessionId) !== pid && !managed.meta.wslTarget && !isWslShell(managed.meta.cmd)
