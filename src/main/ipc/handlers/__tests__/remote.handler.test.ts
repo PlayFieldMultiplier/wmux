@@ -1800,6 +1800,27 @@ describe('remote.handler — sending files to a pane', () => {
     expect(client.upload).toHaveBeenCalledTimes(1);
   });
 
+  it('checks the host\'s grants before reading a drop or encoding the clipboard', async () => {
+    const { client } = setup({ ...config, allowUpload: false });
+    const sender = fakeSender(391);
+    const attachId = await attach(sender);
+    vi.mocked(clipboard.readImage).mockClear();
+    expect(await send(sender, attachId, { kind: 'clipboard-image' })).toEqual({ ok: false, reason: 'uploads-disabled' });
+    expect(clipboard.readImage).not.toHaveBeenCalled();
+    // A path that does not exist: read first, it would answer not-a-file.
+    const token = await getHandler(IPC.REMOTE_DROP_REGISTER)({ sender }, ['/no/such/file.png']) as string;
+    expect(await send(sender, attachId, { kind: 'drop', token })).toEqual({ ok: false, reason: 'uploads-disabled' });
+    expect(client.upload).not.toHaveBeenCalled();
+  });
+
+  it('a read-only host is refused before a drop is read', async () => {
+    setup({ ...config, allowInput: false });
+    const sender = fakeSender(392);
+    const attachId = await attach(sender);
+    const token = await getHandler(IPC.REMOTE_DROP_REGISTER)({ sender }, ['/no/such/file.png']) as string;
+    expect(await send(sender, attachId, { kind: 'drop', token })).toEqual({ ok: false, reason: 'read-only' });
+  });
+
   it('a pane detached during the upload stops the send, and its write is refused', async () => {
     const { client } = setup();
     const sender = fakeSender(331);

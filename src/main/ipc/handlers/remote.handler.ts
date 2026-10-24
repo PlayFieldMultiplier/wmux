@@ -49,7 +49,7 @@ import { RemoteBodyTooLargeError, readBoundedJson } from '../../remote/readBound
 import { REMOTE_LIMITS, clampRemoteGeometry } from '../../../shared/remoteLimits';
 import { credentialOriginProblem, isCredentialSafeOriginString } from '../../../shared/remotePairInput';
 import { REMOTE_UPLOAD_LIMITS, type RemoteSendResult, type RemoteWriteResult } from '../../../shared/remoteUpload';
-import { readDroppedFiles, remoteWriteFailure, uploadFilesForRemote, type RemoteSendFile } from '../../remote/remoteFileSend';
+import { grantRefusal, readDroppedFiles, remoteWriteFailure, uploadFilesForRemote, type RemoteSendFile } from '../../remote/remoteFileSend';
 import type {
   PairFailureReason,
   RemoteAttachmentDescriptor,
@@ -1079,6 +1079,25 @@ export function registerRemoteHandlers(deps: RegisterRemoteHandlersDeps): () => 
       try {
         const o = (typeof opts === 'object' && opts !== null ? opts : {}) as { wsl?: unknown };
         const src = (typeof source === 'object' && source !== null ? source : {}) as { kind?: unknown; token?: unknown };
+        // Never sent on a guess: a host this window has not probed yet is asked
+        // first, and its grants are checked before any file is read.
+        let grants = uploadGrantsCache.get(record.hostId);
+        if (!grants || !allowInputCache.has(record.hostId)) {
+          const probe = await probeConfig(host.origin, host.token, fetchImpl);
+          if (probe.kind !== 'ok') return { ok: false, reason: 'failed' };
+          allowInputCache.set(record.hostId, probe.allowInput);
+          uploadGrantsCache.set(record.hostId, probe.uploads);
+          grants = probe.uploads;
+        }
+        const target = {
+          allowInput: allowInputCache.get(record.hostId),
+          allowUpload: grants.allowUpload,
+          generalFileUpload: grants.generalFileUpload,
+          hostPlatform: grants.hostPlatform,
+          wsl: o.wsl === true,
+        };
+        const refused = grantRefusal(target);
+        if (refused) return { ok: false, reason: refused };
         let files: RemoteSendFile[];
         if (src.kind === 'clipboard-image') {
           const image = clipboard.readImage();
@@ -1096,22 +1115,7 @@ export function registerRemoteHandlers(deps: RegisterRemoteHandlersDeps): () => 
         } else {
           return { ok: false, reason: 'not-a-file' };
         }
-        // Never sent on a guess: a host this window has not probed yet is asked first.
-        let grants = uploadGrantsCache.get(record.hostId);
-        if (!grants || !allowInputCache.has(record.hostId)) {
-          const probe = await probeConfig(host.origin, host.token, fetchImpl);
-          if (probe.kind !== 'ok') return { ok: false, reason: 'failed' };
-          allowInputCache.set(record.hostId, probe.allowInput);
-          uploadGrantsCache.set(record.hostId, probe.uploads);
-          grants = probe.uploads;
-        }
-        const result = await uploadFilesForRemote(files, {
-          allowInput: allowInputCache.get(record.hostId),
-          allowUpload: grants.allowUpload,
-          generalFileUpload: grants.generalFileUpload,
-          hostPlatform: grants.hostPlatform,
-          wsl: o.wsl === true,
-        }, {
+        const result = await uploadFilesForRemote(files, target, {
           upload: (bytes, ext) => client.upload(bytes, ext, controller.signal),
           signal: controller.signal,
         });

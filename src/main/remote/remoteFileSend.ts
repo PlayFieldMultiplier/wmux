@@ -66,9 +66,13 @@ function uploadFailure(status: number, error: string): RemoteSendFailure {
   return 'failed';
 }
 
-/** A network share path (`\\server\share`, `//server/share`, `\\?\…`). */
-function isNetworkPath(p: string): boolean {
-  return p.startsWith('\\\\') || p.startsWith('//');
+/**
+ * An absolute path on a local disk: on Windows only a drive path (`C:\…`), so
+ * nothing starting with `\` or `/` (a share, `\??\…`); elsewhere not `//…`.
+ */
+export function isLocalAbsolutePath(p: string, platform: NodeJS.Platform = process.platform): boolean {
+  if (platform === 'win32') return /^[A-Za-z]:\\/.test(p);
+  return path.isAbsolute(p) && !p.startsWith('//') && !p.startsWith('\\\\');
 }
 
 /**
@@ -77,7 +81,7 @@ function isNetworkPath(p: string): boolean {
  * checked, at most the host's cap, and no longer than it was when checked.
  */
 async function readDroppedFile(p: string): Promise<RemoteSendFile | RemoteSendFailure> {
-  if (!path.isAbsolute(p) || isNetworkPath(p)) return 'not-a-file';
+  if (!isLocalAbsolutePath(p)) return 'not-a-file';
   const before = await fsp.lstat(p).catch(() => null);
   if (!before || !before.isFile()) return 'not-a-file';
   if (before.size > REMOTE_UPLOAD_LIMITS.MAX_BYTES) return 'too-large';
@@ -118,18 +122,27 @@ export async function readDroppedFiles(paths: readonly string[]): Promise<Remote
   return files;
 }
 
+/**
+ * Why the host's grants refuse a send before any file is read, or null.
+ * Unknown grants count as refused: main probes before asking.
+ */
+export function grantRefusal(target: RemoteSendTarget): RemoteSendFailure | null {
+  if (target.allowInput !== true) return 'read-only';
+  if (target.allowUpload !== true) return 'uploads-disabled';
+  if (!target.hostPlatform) return 'host-unknown';
+  return null;
+}
+
 export async function uploadFilesForRemote(
   files: readonly RemoteSendFile[],
   target: RemoteSendTarget,
   deps: RemoteSendDeps,
 ): Promise<RemoteSendResult> {
   const fail = (reason: RemoteSendFailure): RemoteSendResult => ({ ok: false, reason });
-  // Unknown grants count as refused: main probes before calling this.
-  if (target.allowInput !== true) return fail('read-only');
+  const refused = grantRefusal(target);
+  if (refused) return fail(refused);
   if (files.length === 0) return fail('not-a-file');
   if (files.length > REMOTE_UPLOAD_LIMITS.MAX_FILES) return fail('too-many');
-  if (target.allowUpload !== true) return fail('uploads-disabled');
-  if (!target.hostPlatform) return fail('host-unknown');
   const routes = files.map((f) => (sniffRoomImage(f.bytes) ? null : fileExtension(f.name)));
   // A host that does not advertise general files takes JPEG and PNG only.
   if (target.generalFileUpload !== true && routes.some((ext) => ext !== null)) return fail('photos-only');

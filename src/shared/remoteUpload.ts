@@ -100,7 +100,11 @@ export function remoteUploadPathText(
   if (CONTROL_RE.test(hostPath)) return { ok: false, reason: 'bad-path' };
   if (!opts.hostPlatform) return { ok: false, reason: 'host-unknown' };
   if (opts.hostPlatform !== 'win32') return posixPathText(hostPath);
-  if (!WINDOWS_ABS_RE.test(hostPath) || !isUploadTail(hostPath.slice(3).split('\\'))) return { ok: false, reason: 'bad-path' };
+  const segments = hostPath.slice(3).split('\\');
+  // Windows drops a segment's trailing dots and spaces (`.. ` reads as `..`), so none may end in either.
+  if (!WINDOWS_ABS_RE.test(hostPath) || !isUploadTail(segments) || segments.some((s) => /[. ]$/.test(s))) {
+    return { ok: false, reason: 'bad-path' };
+  }
   if (!WINDOWS_SAFE_RE.test(hostPath)) return { ok: false, reason: 'unquotable' };
   if (!opts.wsl) return { ok: true, text: `"${hostPath}"` };
   // The pane is a WSL shell: the /mnt form, checked again as the POSIX path it now is.

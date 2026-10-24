@@ -1,7 +1,8 @@
+// @wmux-lane unit — 'win32' here is a platform value under test, not this machine's platform.
 // Sending files to another PC's pane is all or nothing: every file is
 // uploaded first, and only then are the host's paths handed back to type.
 import { describe, expect, it, vi } from 'vitest';
-import { remoteWriteFailure, uploadFilesForRemote, type RemoteSendFile } from '../remoteFileSend';
+import { isLocalAbsolutePath, remoteWriteFailure, uploadFilesForRemote, type RemoteSendFile } from '../remoteFileSend';
 import { RemoteAuthRejectedError, type RemoteUploadResult } from '../RemoteHostClient';
 
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0]);
@@ -77,5 +78,14 @@ describe('remoteWriteFailure', () => {
     expect(remoteWriteFailure(new Error('write failed: HTTP 500'))).toBe('failed');
     expect(remoteWriteFailure(new TypeError('fetch failed'))).toBe('unknown');
     expect(remoteWriteFailure(Object.assign(new Error('timed out'), { name: 'TimeoutError' }))).toBe('unknown');
+  });
+});
+
+describe('isLocalAbsolutePath', () => {
+  it('takes only a drive path on Windows, whatever separators follow a leading slash', () => {
+    expect(isLocalAbsolutePath('C:\\Users\\o\\shot.png', 'win32')).toBe(true);
+    for (const p of ['\\\\server\\share\\a.png', '\\/server\\share\\a.png', '/\\server\\share\\a.png', '\\??\\UNC\\server\\share\\a.png', '/tmp/a.png', 'a.png']) {
+      expect(isLocalAbsolutePath(p, 'win32')).toBe(false);
+    }
   });
 });

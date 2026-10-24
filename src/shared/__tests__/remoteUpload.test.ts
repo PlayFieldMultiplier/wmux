@@ -58,6 +58,12 @@ describe('remoteUploadPathText', () => {
     expect(remoteUploadPathText(`\\\\server\\share\\uploads\\phone\\${NAME}`, win)).toEqual({ ok: false, reason: 'bad-path' });
   });
 
+  it('refuses a Windows segment ending in a dot or a space, which Windows trims', () => {
+    for (const seg of ['.. ', '...', 'a.', 'a ']) {
+      expect(remoteUploadPathText(`C:\\Users\\${seg}\\.wmux\\uploads\\phone\\${NAME}`, win)).toEqual({ ok: false, reason: 'bad-path' });
+    }
+  });
+
   it('maps a Windows path to /mnt for a WSL pane, and checks the result again', () => {
     expect(remoteUploadPathText(WIN, { ...win, wsl: true })).toEqual({ ok: true, text: `'/mnt/c/Users/o/.wmux/uploads/phone/${NAME}'` });
     // A colon is fine for cmd inside quotes, not in the POSIX character set the mapped path must meet.
