@@ -54,4 +54,20 @@ describe('lost sign-in bridge', () => {
     applyAuthLostEntries([]);
     expect(useStore.getState().toasts).toEqual([]);
   });
+
+  it('offers the toast again when the sign-in tab cannot open, and only once', async () => {
+    applyAuthLostEntries([entry()]);
+    const press = async () => {
+      const toast = useStore.getState().toasts[0];
+      useStore.getState().dismissToast(toast.id); // the container dismisses after the action runs
+      toast.action!.onClick();
+      await vi.waitFor(() => expect(useStore.getState().toasts).toHaveLength(1), { timeout: 5_000 });
+    };
+    openTerminalTab.mockRejectedValueOnce(new Error('pty create failed'));
+    await press();
+    // The wait is over, so a second press starts a fresh one; still one toast.
+    openTerminalTab.mockResolvedValueOnce(null);
+    await press();
+    expect(useStore.getState().toasts.map((t) => t.action?.label)).toEqual(['Sign in again']);
+  });
 });

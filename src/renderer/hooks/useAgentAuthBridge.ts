@@ -18,8 +18,8 @@ export const SIGN_IN_WAIT_MS = 10 * 60_000;
 
 /** key → the toast offering [Sign in again] for it. */
 const toasts = new Map<string, string>();
-/** Keys whose sign-in tab is open and being waited on (no toast meanwhile). */
-const waiting = new Set<string>();
+/** Keys whose sign-in tab is open and being waited on (no toast meanwhile), with that wait's token. */
+const waiting = new Map<string, symbol>();
 
 /** Mirror main's entries: store, then one toast per entry nobody is signing in to yet. */
 export function applyAuthLostEntries(entries: readonly AuthLostEntry[]): void {
@@ -31,11 +31,12 @@ export function applyAuthLostEntries(entries: readonly AuthLostEntry[]): void {
     store.dismissToast(toastId);
     toasts.delete(key);
   }
-  for (const key of waiting) if (!live.has(key)) waiting.delete(key);
+  for (const key of [...waiting.keys()]) if (!live.has(key)) waiting.delete(key);
   for (const entry of entries) if (!toasts.has(entry.key) && !waiting.has(entry.key)) offerSignIn(entry);
 }
 
 function offerSignIn(entry: AuthLostEntry): void {
+  if (toasts.has(entry.key)) return;
   const ptyId = entry.ptyIds[0];
   const toastId = useStore.getState().pushToast({
     level: 'warn',
@@ -64,34 +65,41 @@ export async function signInAgain(
 ): Promise<void> {
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const now = deps.now ?? Date.now;
-  waiting.add(entry.key);
-  const key = authConfigEnvKey(entry.agent);
-  const tab = await openTerminalTab({
-    // The account's own folder, or nothing: never the workspace's bound account,
-    // which is not necessarily the one that was signed out.
-    plainEnv: true,
-    ...(entry.configDir ? { env: { [key]: entry.configDir }, wslAccountLoginEnvKey: key } : {}),
-    initialCommand: loginInitialCommand(entry.agent),
-    title: t('agentAuth.signInTabTitle', { agent: AGENT_NAME[entry.agent] }),
-    cwd: null,
-  });
-  if (!tab) {
-    waiting.delete(entry.key);
-    if (stillLost(entry.key)) offerSignIn(entry);
-    return;
-  }
-  const until = now() + SIGN_IN_WAIT_MS;
-  while (waiting.has(entry.key) && now() < until) {
-    await sleep(SIGN_IN_POLL_MS);
-    if (!waiting.has(entry.key)) return;
-    const state = await window.electronAPI.agentAuth.loginState(entry.key).catch(() => null);
-    if (state && (!state.known || state.signedIn === true)) {
+  const token = Symbol(entry.key);
+  waiting.set(entry.key, token);
+  const mine = () => waiting.get(entry.key) === token;
+  let settled = false;
+  try {
+    const envKey = authConfigEnvKey(entry.agent);
+    const tab = await openTerminalTab({
+      // The account's own folder, or nothing: never the workspace's bound account,
+      // which is not necessarily the one that was signed out.
+      plainEnv: true,
+      ...(entry.configDir ? { env: { [envKey]: entry.configDir }, wslAccountLoginEnvKey: envKey } : {}),
+      initialCommand: loginInitialCommand(entry.agent),
+      title: t('agentAuth.signInTabTitle', { agent: AGENT_NAME[entry.agent] }),
+      cwd: null,
+    });
+    if (!tab) return;
+    const until = now() + SIGN_IN_WAIT_MS;
+    while (mine() && now() < until) {
+      await sleep(SIGN_IN_POLL_MS);
+      if (!mine()) return;
+      const state = await window.electronAPI.agentAuth.loginState(entry.key).catch(() => null);
+      if (state && (!state.known || state.signedIn === true)) {
+        settled = true;
+        return;
+      }
+    }
+  } catch {
+    // The tab or the check failed: the toast comes back below.
+  } finally {
+    // Only this wait's own state: a newer one (the entry went and came back) is left alone.
+    if (mine()) {
       waiting.delete(entry.key);
-      return;
+      if (!settled && stillLost(entry.key)) offerSignIn(entry);
     }
   }
-  if (!waiting.delete(entry.key)) return;
-  if (stillLost(entry.key)) offerSignIn(entry);
 }
 
 function stillLost(key: string): boolean {
@@ -109,8 +117,13 @@ export function useAgentAuthBridge(): void {
     const api = window.electronAPI?.agentAuth;
     if (!api) return;
     let alive = true;
-    void api.list().then((entries) => { if (alive) applyAuthLostEntries(entries); }).catch(() => undefined);
-    const off = api.onChanged((entries) => applyAuthLostEntries(entries));
+    let changed = false;
+    // A list that answers after a change was pushed is older than that change.
+    void api.list().then((entries) => { if (alive && !changed) applyAuthLostEntries(entries); }).catch(() => undefined);
+    const off = api.onChanged((entries) => {
+      changed = true;
+      applyAuthLostEntries(entries);
+    });
     return () => {
       alive = false;
       off();

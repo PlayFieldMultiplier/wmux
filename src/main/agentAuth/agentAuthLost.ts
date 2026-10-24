@@ -2,8 +2,9 @@
 // The daemon reports per pane; this folds the reports into one entry per agent
 // and account, raises one notification when an entry appears, and keeps the
 // renderer's copy (its toast and the sidebar's "Signed out") in step. An entry
-// goes when the account is seen to work again: a pane of it finished a normal
-// turn, or the renderer's [Sign in again] saw the agent's status say signed in.
+// goes when the account is seen to work again: any pane or run of it finished a
+// confirmed turn or its status said signed in (daemon), or the renderer's
+// [Sign in again] saw the agent's status say signed in.
 
 import { ipcMain, type BrowserWindow } from 'electron';
 import { IPC } from '../../shared/constants';
@@ -11,6 +12,7 @@ import {
   authConfigEnvKey,
   authLostKey,
   parseAgentAuthLost,
+  parseAuthAccount,
   type AgentAuthLost,
   type AuthLostEntry,
 } from '../../shared/agentAuthLost';
@@ -24,10 +26,13 @@ const AGENT_NAME = { claude: 'Claude Code', codex: 'Codex' } as const;
 /** The entries, keyed by agent and account. Pure, so the rules are testable without Electron. */
 export class AuthLostBoard {
   private readonly entries = new Map<string, AuthLostEntry>();
+  /** Bumped on every report, so a status check that started before one cannot clear it. */
+  private readonly generations = new Map<string, number>();
 
   /** Record a report; true when it opened a new entry (the one that gets a notification). */
   report(ptyId: string, lost: AgentAuthLost): boolean {
     const key = authLostKey(lost.agent, lost.configDir);
+    this.generations.set(key, (this.generations.get(key) ?? 0) + 1);
     const entry = this.entries.get(key);
     if (entry) {
       if (ptyId && !entry.ptyIds.includes(ptyId)) entry.ptyIds.push(ptyId);
@@ -37,15 +42,13 @@ export class AuthLostBoard {
     return true;
   }
 
-  /** A pane finished a normal turn: its account works, so its entry goes. */
-  paneWorks(ptyId: string): boolean {
-    for (const [key, entry] of this.entries) {
-      if (entry.ptyIds.includes(ptyId)) {
-        this.entries.delete(key);
-        return true;
-      }
-    }
-    return false;
+  /** The agent and account was seen to work: its entry goes, whichever pane or run reported it. */
+  accountWorks(agent: AuthLostEntry['agent'], configDir: string | null): boolean {
+    return this.clear(authLostKey(agent, configDir));
+  }
+
+  generation(key: string): number {
+    return this.generations.get(key) ?? 0;
   }
 
   /** A pane closed: it stops being one of the entry's panes; the entry stays. */
@@ -75,6 +78,19 @@ export class AuthLostBoard {
 }
 
 /**
+ * The env an entry's status check runs with: a copy of `base` (main's own
+ * environment is never written to) naming the entry's account folder, or
+ * none at all for the agent's default account, so an inherited one is out.
+ */
+export function loginProbeEnv(entry: Pick<AuthLostEntry, 'agent' | 'configDir'>, base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base };
+  const envKey = authConfigEnvKey(entry.agent);
+  if (entry.configDir) env[envKey] = entry.configDir;
+  else delete env[envKey];
+  return env;
+}
+
+/**
  * [Sign in again]'s check: the agent's own status for an entry the board holds.
  * Signed in drops the entry (returned as `cleared`). An unknown key is not
  * probed, so the renderer can only ask about accounts the daemon reported.
@@ -86,8 +102,11 @@ export async function answerLoginState(
 ): Promise<{ known: false } | { known: true; signedIn: boolean | null; cleared: boolean }> {
   const entry = typeof key === 'string' ? board.get(key) : undefined;
   if (!entry) return { known: false };
+  const started = board.generation(entry.key);
   const signedIn = await loginState(entry).catch(() => null);
-  return { known: true, signedIn, cleared: signedIn === true && board.clear(entry.key) };
+  // A newer report arrived while the status ran: that loss stands.
+  const cleared = signedIn === true && board.generation(entry.key) === started && board.clear(entry.key);
+  return { known: true, signedIn, cleared };
 }
 
 export function registerAgentAuthHandlers(
@@ -96,19 +115,17 @@ export function registerAgentAuthHandlers(
   deps: { loginState?: (entry: AuthLostEntry) => Promise<boolean | null> } = {},
 ): () => void {
   const board = new AuthLostBoard();
-  const loginState = deps.loginState ?? ((entry: AuthLostEntry) => {
-    const env = withFreshWindowsPath(process.env);
-    if (entry.configDir) env[authConfigEnvKey(entry.agent)] = entry.configDir;
-    return new AgentSetupDetector().loginState(entry.agent, env);
-  });
+  const loginState = deps.loginState
+    ?? ((entry: AuthLostEntry) => new AgentSetupDetector().loginState(entry.agent, loginProbeEnv(entry, withFreshWindowsPath(process.env))));
   const publish = (): void => {
     const win = getWindow();
     if (win && !win.isDestroyed()) win.webContents.send(IPC.AGENT_AUTH_LOST_CHANGED, board.list());
   };
 
-  const onAuthLost = (payload: { sessionId: string; lost: unknown }): void => {
-    if (payload.lost === null) {
-      if (board.paneWorks(payload.sessionId)) publish();
+  const onAuthLost = (payload: { sessionId: string; lost?: unknown; works?: unknown }): void => {
+    const works = parseAuthAccount(payload.works);
+    if (works) {
+      if (board.accountWorks(works.agent, works.configDir)) publish();
       return;
     }
     const lost = parseAgentAuthLost(payload.lost);

@@ -1147,9 +1147,10 @@ export interface DaemonEvent {
     | 'usage.limit.changed'
     // An agent's sign-in was lost (shared/agentAuthLost): a turn failed on it,
     // an agent started signed out, or a scheduled run was refused. sessionId is
-    // the pane ('' for a refused run, which has none); null = this pane works
-    // again. Additive: a main that predates it ignores the type.
-    //   agent.auth_lost → { lost: AgentAuthLost | null }
+    // the pane ('' for a refused run, which has none). `works` = that agent and
+    // account was seen to work again (sessionId ''). Additive: a main that
+    // predates it ignores the type.
+    //   agent.auth_lost → { lost: AgentAuthLost } | { works: AuthAccount }
     | 'agent.auth_lost'
     // An approval record was created, resolved or expired. A RE-LIST NUDGE
     // only — nothing from the record rides along (main reads

@@ -35,6 +35,29 @@ describe('AgentLoginGate', () => {
     expect(probe).toHaveBeenCalledTimes(4);
   });
 
+  it('ignores a probe that was running when the account was forgotten, and asks afresh after', async () => {
+    let release: (v: boolean) => void = () => undefined;
+    const probe = vi.fn(() => new Promise<boolean | null>((resolve) => { release = resolve; }));
+    const gate = new AgentLoginGate(probe);
+    const stale = gate.check('claude', account('/acc/a'));
+    // A turn of that account just failed on its sign-in (or just worked).
+    gate.forget('claude', '/acc/a');
+    release(true);
+    expect(await stale).toBeNull();
+    probe.mockResolvedValueOnce(false);
+    expect(await gate.check('claude', account('/acc/a'))).toBe(false);
+    expect(probe).toHaveBeenCalledTimes(2);
+  });
+
+  it('drops a cached signed-in answer when the account is forgotten', async () => {
+    const probe = vi.fn(async () => true as boolean | null);
+    const gate = new AgentLoginGate(probe, { now: () => 0 });
+    expect(await gate.check('codex', {})).toBe(true);
+    gate.forget('codex', null);
+    probe.mockResolvedValueOnce(false);
+    expect(await gate.signedOut('codex', {})).toBe(true);
+  });
+
   it('treats "cannot tell" and a failed probe as not signed out', async () => {
     expect(await new AgentLoginGate(async () => null).signedOut('codex', {})).toBe(false);
     expect(await new AgentLoginGate(async () => { throw new Error('spawn failed'); }).signedOut('codex', {})).toBe(false);

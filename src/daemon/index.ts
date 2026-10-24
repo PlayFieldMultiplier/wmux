@@ -447,8 +447,8 @@ let noteCodexTurnFailed: ((id:string, threadId:string, turn:unknown)=>void) | un
 let pushTurnFailed: ((sessionId:string, failure:TurnFailure)=>void) | undefined;
 /** N4 — an agent's sign-in was lost (shared/agentAuthLost); set at boot once the pipe server exists. */
 let noteAuthLost: ((sessionId: string, agent: AuthLostAgent, env: Record<string, string> | undefined, origin: AuthLostOrigin, providerCode?: string) => void) | undefined;
-/** N4 — a pane that reported a lost sign-in finished a turn normally again. */
-let noteAuthWorks: ((sessionId: string) => void) | undefined;
+/** N4 — an agent and account was seen to work (a confirmed turn end, or its status said signed in). */
+let noteAuthWorks: ((agent: AuthLostAgent, env: Record<string, string> | undefined) => void) | undefined;
 /** N4 — one status probe per agent and account a minute, before a scheduled run and as an agent starts. */
 const agentLoginGate = new AgentLoginGate((agent, env) => new AgentSetupDetector().loginState(agent, env));
 /** Re-run a pane's awaiting verification (#1901), set by wireEvents. */
@@ -4838,8 +4838,10 @@ function registerRpcHandlers(
             },
           })
           : undefined;
-        if (data.signal.kind === 'agent.stop' && data.status === 'complete' && !['internal', 'veto', 'pending'].includes(data.decision ?? '')) {
-          noteAuthWorks?.(sessionId);
+        if (data.signal.kind === 'agent.stop' && data.status === 'complete' && historySession
+          && (data.signal.agent === 'claude' || data.signal.agent === 'codex')
+          && !['internal', 'veto', 'pending'].includes(data.decision ?? '')) {
+          noteAuthWorks?.(data.signal.agent, historySession.meta.env);
         }
         const failure = served?.failure;
         const liveFailure = served?.current ? served.failure : undefined;
@@ -5738,7 +5740,11 @@ function registerRpcHandlers(
     log: (level, message) => log(level, message),
     emit: (event) => pipeServer.broadcast({ type: AUTOMATION_EVENT, sessionId: '', data: event }),
     buildBaseCommand: async (choice, env) => buildAgentLaunch(choice, await installedAgentLaunchOptions(env)),
-    signedOut: (agent, env) => agentLoginGate.signedOut(agent, env),
+    signedOut: async (agent, env) => {
+      const signedIn = await agentLoginGate.check(agent, env);
+      if (signedIn === true) noteAuthWorks?.(agent, env);
+      return signedIn === false;
+    },
     authLost: (agent, env) => noteAuthLost?.('', agent, env, 'schedule'),
     createSession: async ({ id, cwd, env, command }) => {
       await createSessionRpc({ id, cwd, env, exec: { command } });
@@ -8582,20 +8588,21 @@ async function main(): Promise<void> {
     pushSender.notify(buildTurnFailedPushPayload(sessionId, failure), { collapseId: turnFailedPushCollapseId(sessionId) });
   };
   const pipeServer = new DaemonPipeServer(config.daemon.pipeName);
-  // N4 — main folds these into one notice per agent and account. The panes
-  // that reported are remembered so a later normal turn end can take the
-  // pane's mark back; nothing about the account beyond its folder is sent.
-  const authLostPanes = new Set<string>();
+  // N4 — main folds these into one notice per agent and account, and drops it
+  // when any pane or run of that account is seen to work. Nothing about the
+  // account beyond its folder is sent. Either report makes the login gate
+  // forget the account, so a cached or in-flight answer from before is not used.
   noteAuthLost = (sessionId, agent, env, origin, providerCode) => {
-    for (const id of authLostPanes) if (!sessionManager.getSession(id)) authLostPanes.delete(id);
-    if (sessionId) authLostPanes.add(sessionId);
-    const lost: AgentAuthLost = { agent, configDir: authConfigDir(agent, env), origin, ...(providerCode ? { providerCode } : {}), at: Date.now() };
+    const configDir = authConfigDir(agent, env);
+    agentLoginGate.forget(agent, configDir);
+    const lost: AgentAuthLost = { agent, configDir, origin, ...(providerCode ? { providerCode } : {}), at: Date.now() };
     log('info', `[auth] ${sessionId || 'scheduled run'}: ${agent} is signed out (${origin}${providerCode ? `, ${providerCode}` : ''})`);
     pipeServer.broadcast({ type: 'agent.auth_lost', sessionId, data: { lost } });
   };
-  noteAuthWorks = (sessionId) => {
-    if (!authLostPanes.delete(sessionId)) return;
-    pipeServer.broadcast({ type: 'agent.auth_lost', sessionId, data: { lost: null } });
+  noteAuthWorks = (agent, env) => {
+    const configDir = authConfigDir(agent, env);
+    agentLoginGate.forget(agent, configDir);
+    pipeServer.broadcast({ type: 'agent.auth_lost', sessionId: '', data: { works: { agent, configDir } } });
   };
   // A re-list nudge for main's HQ approval lane (deck/hqApprovalLane.ts).
   // Subscribed here, not above: that listener runs before `pipeServer` exists.
@@ -9311,8 +9318,9 @@ async function main(): Promise<void> {
         && automationEngine?.ownsPane(sessionId) !== true && !isBrainPty({ id: sessionId, env: managed.meta.env })) {
         loginCheckedProcess.set(sessionId, pid);
         const agent = state.slug;
-        void agentLoginGate.signedOut(agent, managed.meta.env).then((out) => {
-          if (out && sessionManager.getSession(sessionId) === managed) noteAuthLost?.(sessionId, agent, managed.meta.env, 'start');
+        void agentLoginGate.check(agent, managed.meta.env).then((signedIn) => {
+          if (signedIn === true) noteAuthWorks?.(agent, managed.meta.env);
+          else if (signedIn === false && sessionManager.getSession(sessionId) === managed) noteAuthLost?.(sessionId, agent, managed.meta.env, 'start');
         });
       }
     }
@@ -9786,7 +9794,15 @@ async function main(): Promise<void> {
     // so a pane that moved to another thread does not show this failure.
     const served = serveTurnFailure(session.bridge, classified, { ts: now, agentSessionId: threadId, push: (f) => {
       pushTurnFailed?.(id, f);
-      if (f.reason === 'auth') noteAuthLost?.(id, 'codex', session.meta.env, 'turn', f.providerCode);
+      if (f.reason !== 'auth') return;
+      noteAuthLost?.(id, 'codex', session.meta.env, 'turn', f.providerCode);
+      // A scheduled run's Codex turn failed on sign-in: the relay is the proof
+      // the turn ended, so the run ends now, as login_needed (Claude's comes
+      // through its StopFailure hook).
+      if (automationEngine?.ownsPane(id)) {
+        automationEngine.onAgentEvent(id, { kind: 'agent.stop_failure', status: 'error', authFailure: true })
+          .catch((err) => log('warn', `[automation] agent event handling failed for ${id}:`, err));
+      }
     } });
     if (!served) return;
     const { failure } = served;

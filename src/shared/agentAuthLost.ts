@@ -22,6 +22,12 @@ export interface AgentAuthLost {
   at: number;
 }
 
+/** An agent and account that was seen to work (a confirmed turn end, or its status said signed in). */
+export interface AuthAccount {
+  agent: AuthLostAgent;
+  configDir: string | null;
+}
+
 /** One signed-out agent and account, with the panes that reported it (main → renderer). */
 export interface AuthLostEntry {
   key: string;
@@ -52,12 +58,23 @@ export function authLostKey(agent: AuthLostAgent, configDir: string | null): str
 const ORIGINS: ReadonlySet<string> = new Set(['turn', 'start', 'schedule']);
 const PROVIDER_CODE = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
 
+function validConfigDir(value: unknown): value is string | null {
+  return value === null || (typeof value === 'string' && value.length > 0 && value.length <= 4096);
+}
+
+/** Validate an "it works" report that crossed the daemon pipe; anything malformed is null. */
+export function parseAuthAccount(value: unknown): AuthAccount | null {
+  if (!value || typeof value !== 'object') return null;
+  const v = value as Record<string, unknown>;
+  return isAuthLostAgent(v.agent) && validConfigDir(v.configDir) ? { agent: v.agent, configDir: v.configDir } : null;
+}
+
 /** Validate a report that crossed the daemon pipe; anything malformed is null. */
 export function parseAgentAuthLost(value: unknown): AgentAuthLost | null {
   if (!value || typeof value !== 'object') return null;
   const v = value as Record<string, unknown>;
   if (!isAuthLostAgent(v.agent) || typeof v.origin !== 'string' || !ORIGINS.has(v.origin)) return null;
-  if (v.configDir !== null && (typeof v.configDir !== 'string' || v.configDir.length === 0 || v.configDir.length > 4096)) return null;
+  if (!validConfigDir(v.configDir)) return null;
   const at = typeof v.at === 'number' && Number.isFinite(v.at) ? v.at : Date.now();
   return {
     agent: v.agent,
