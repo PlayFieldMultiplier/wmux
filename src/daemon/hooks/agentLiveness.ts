@@ -29,6 +29,8 @@ interface LivenessSource {
   decision?: string;
   hookKind?: string;
   signal?: AgentSignal;
+  /** See `HookAgentEventData.atPrompt`. */
+  atPrompt?: boolean;
 }
 
 /**
@@ -132,9 +134,11 @@ export function deriveAgentLiveness(
   else if (data.status === 'complete' || data.status === 'error') state = 'idle';
   else if (data.status === 'awaiting_input') state = 'awaiting_input';
   // A session that just started (a launch, a resume, `/clear`) sits at its input
-  // prompt until a UserPromptSubmit says otherwise. Not `compact`: that one fires
-  // mid-turn, and the turn goes on.
-  else if (data.hookKind === 'agent.session_start' && SESSION_START_AT_PROMPT.has(String(data.signal?.payload?.['source']))) state = 'idle';
+  // prompt until a UserPromptSubmit says otherwise. Claude awaits SessionStart
+  // hooks before it takes the first message, so this cannot land after it. A
+  // `compact` settles only when no turn was open: one inside a turn goes on.
+  else if (data.hookKind === 'agent.session_start'
+    && (SESSION_START_AT_PROMPT.has(String(data.signal?.payload?.['source'])) || data.atPrompt === true)) state = 'idle';
   else if (data.hookKind === 'agent.awaiting_permission') state = 'awaiting_permission';
   else if (data.hookKind === 'agent.tool_started') state = 'tool';
   return {

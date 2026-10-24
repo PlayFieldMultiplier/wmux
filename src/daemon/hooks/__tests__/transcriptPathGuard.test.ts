@@ -21,19 +21,36 @@ describe('checkTranscriptPath', () => {
   it('marks pending only a path with nothing at it yet, never an existing file, a link or a dot segment', () => {
     // A bare launch: SessionStart names the transcript Claude writes on its
     // first prompt. Pending is what lets the projector serve it as empty.
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-guard-'));
+    // Resolved, so macOS's /var alias cannot refuse a case for the wrong reason.
+    const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-guard-')));
     try {
       const projects = path.join(dir, 'projects', '-repo');
+      const elsewhere = path.join(dir, 'elsewhere');
       fs.mkdirSync(projects, { recursive: true });
+      fs.mkdirSync(elsewhere);
       const env = { CLAUDE_CONFIG_DIR: dir };
       const file = path.join(projects, `${SID}.jsonl`);
       expect(checkTranscriptPath(file, SID, env)).toEqual({ ok: true, reason: '', pending: true });
+      // Missing parents are fine while each one is truly absent.
+      expect(checkTranscriptPath(path.join(dir, 'projects', '-new', `${SID}.jsonl`), SID, env)).toEqual({ ok: true, reason: '', pending: true });
+      // A link at the name, dangling or not, is not a file Claude has yet to write.
       fs.symlinkSync(path.join(dir, 'nowhere'), file);
-      expect(checkTranscriptPath(file, SID, env)).toEqual({ ok: true, reason: '' });
+      expect(checkTranscriptPath(file, SID, env).ok).toBe(false);
       fs.unlinkSync(file);
+      const other = path.join(projects, 'other.jsonl');
+      fs.writeFileSync(other, '{}\n');
+      fs.symlinkSync(other, file);
+      expect(checkTranscriptPath(file, SID, env).ok).toBe(false);
+      fs.unlinkSync(file);
+      // A dangling link as a missing directory, or a directory linked out of the root.
+      fs.symlinkSync(path.join(elsewhere, 'gone'), path.join(dir, 'projects', '-dangling'));
+      expect(checkTranscriptPath(path.join(dir, 'projects', '-dangling', `${SID}.jsonl`), SID, env).ok).toBe(false);
+      fs.symlinkSync(elsewhere, path.join(dir, 'projects', '-out'));
+      expect(checkTranscriptPath(path.join(dir, 'projects', '-out', `${SID}.jsonl`), SID, env).ok).toBe(false);
+      expect(checkTranscriptPath(`${projects}/missing/../${SID}.jsonl`, SID, env).ok).toBe(false);
+      // Once written, a regular file: no longer pending.
       fs.writeFileSync(file, '');
       expect(checkTranscriptPath(file, SID, env)).toEqual({ ok: true, reason: '' });
-      expect(checkTranscriptPath(path.join(projects, 'missing', '..', `${SID}.jsonl`), SID, env).pending).toBeUndefined();
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

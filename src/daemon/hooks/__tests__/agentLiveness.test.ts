@@ -60,6 +60,9 @@ describe('deriveAgentLiveness', () => {
     for (const source of ['startup', 'resume', 'clear']) expect(start(source)).toBe('idle');
     expect(start('compact')).toBe('busy');
     expect(start()).toBe('busy');
+    // `/compact` typed at the prompt: HookIngest saw no open turn.
+    expect(deriveAgentLiveness('s1', data({ hookKind: 'agent.session_start', decision: 'activity', atPrompt: true,
+      signal: signal('agent.session_start', { source: 'compact' }) }), 3).state).toBe('idle');
   });
 
   it('a stop hook that still names a tool settles the pane instead of showing the tool', () => {

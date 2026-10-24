@@ -221,6 +221,21 @@ describe('HookIngest', () => {
       expect(fixture.emitted.at(-1)?.data).toMatchObject({ status: 'running', hookKind: 'agent.subagent_stop' });
     });
 
+    it('marks a SessionStart at the prompt (no open turn), never one inside a running turn', () => {
+      const compact = () => makeSignal({ ptyId: 'pty-a', kind: 'agent.session_start', payload: { source: 'compact' } });
+      ingest.handle(makeSignal({ ptyId: 'pty-a', kind: 'agent.user_prompt_submit' }));
+      ingest.handle(compact());
+      // Auto-compaction inside the turn: the turn goes on.
+      expect(fixture.emitted.at(-1)?.data).toMatchObject({ hookKind: 'agent.session_start' });
+      expect(fixture.emitted.at(-1)?.data).not.toHaveProperty('atPrompt');
+      ingest.handle(makeSignal({ ptyId: 'pty-a', kind: 'agent.user_prompt_submit' }));
+      ingest.handle(makeSignal({ ptyId: 'pty-a', kind: 'agent.stop' }));
+      vi.advanceTimersByTime(DEFAULT_ALARM_WINDOW_MS);
+      // `/compact` typed at the prompt after the turn ended.
+      ingest.handle(compact());
+      expect(fixture.emitted.at(-1)?.data).toMatchObject({ hookKind: 'agent.session_start', atPrompt: true });
+    });
+
     it('maps subagent_stop and awaiting_input to their own shapes', () => {
       ingest.handle(makeSignal({ ptyId: 'pty-a', kind: 'agent.subagent_stop' }));
       // A subagent stop is never a lead-turn end: status-only, immediate, and

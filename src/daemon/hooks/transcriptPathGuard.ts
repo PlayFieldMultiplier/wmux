@@ -19,9 +19,10 @@
 //
 // `realpath` is used where it can be: containment has to be checked on the
 // RESOLVED path or a symlink inside the projects directory walks straight out of
-// it. A transcript that does not exist yet cannot be resolved, so the lexical
-// form is checked instead, and the check marks it `pending`: Claude writes the
+// it. A transcript that does not exist yet cannot be resolved, so its nearest
+// existing ancestor is, and the check marks it `pending`: Claude writes the
 // file on its first prompt, so until then readers serve an empty conversation.
+// Every read re-runs this check, so the file that appears is judged again.
 
 import fs from 'node:fs';
 import os from 'node:os';
@@ -131,19 +132,40 @@ export function claudeTranscriptRoot(sessionEnv?: Record<string, string>): strin
 }
 
 /**
- * Nothing at all at the path yet (not even a dangling link), and no `.` or
- * `..` segment, so the lexical containment above is where the file will land.
- * Claude names its transcript at session start but writes it on the first
- * prompt; a bare launch sits at its input prompt with no file.
+ * Where a transcript Claude has not written yet will land, or null when that
+ * cannot be proven. Claude names its transcript at session start but writes it
+ * on the first prompt, so a bare launch sits at its prompt with no file. Every
+ * missing component must be truly absent (nothing at all, not even a dangling
+ * link, which realpath reports as missing too), the path has no `.` or `..`
+ * segment, and the nearest component that does exist must resolve to a
+ * directory: the file, once written, is the resolved directory plus plain names.
  */
-function notCreatedYet(transcriptPath: string): boolean {
-  if (transcriptPath.split(/[\\/]/).some((segment) => segment === '.' || segment === '..')) return false;
-  try {
-    fs.lstatSync(transcriptPath);
-    return false;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'ENOENT';
+function notCreatedYetTarget(transcriptPath: string): string | null {
+  if (transcriptPath.split(/[\\/]/).some((segment) => segment === '.' || segment === '..')) return null;
+  const missing: string[] = [];
+  let current = transcriptPath;
+  for (let i = 0; i < 64; i++) {
+    let occupied = false;
+    try {
+      fs.lstatSync(current);
+      occupied = true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return null;
+    }
+    if (occupied) {
+      try {
+        const real = fs.realpathSync(current);
+        return fs.statSync(real).isDirectory() ? path.join(real, ...missing) : null;
+      } catch {
+        return null;
+      }
+    }
+    const parent = path.dirname(current);
+    if (!parent || parent === current) return null;
+    missing.unshift(path.basename(current));
+    current = parent;
   }
+  return null;
 }
 
 export interface TranscriptPathCheck {
@@ -184,10 +206,24 @@ export function checkTranscriptPath(
     return { ok: false, reason: `basename ${actual} != ${expected}` };
   }
 
-  const resolved = normalizeForCompare(resolveIfPossible(transcriptPath));
+  // An existing transcript is judged on its realpath and must be a regular
+  // file itself (a link at the name could name another session's file). A
+  // missing one only through notCreatedYetTarget; any other failure refuses.
+  let target: string | null;
+  let pending = false;
+  try {
+    target = fs.realpathSync(transcriptPath);
+    if (!fs.lstatSync(transcriptPath).isFile()) return { ok: false, reason: 'not a regular file' };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return { ok: false, reason: 'unreadable' };
+    target = notCreatedYetTarget(transcriptPath);
+    if (!target) return { ok: false, reason: 'not a file Claude has yet to write' };
+    pending = true;
+  }
+  const resolved = normalizeForCompare(target);
   for (const root of claudeProjectRoots(sessionEnv)) {
     if (isInside(resolved, normalizeForCompare(resolveIfPossible(root)))) {
-      return { ok: true, reason: '', ...(notCreatedYet(transcriptPath) ? { pending: true } : {}) };
+      return { ok: true, reason: '', ...(pending ? { pending: true } : {}) };
     }
   }
   return { ok: false, reason: 'outside the Claude projects root' };
