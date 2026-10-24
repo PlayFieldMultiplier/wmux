@@ -13,11 +13,25 @@
  *   it AND its anchor shell is idle with no child processes. `create`, and
  *   every later driver (re)start, re-checks this and fails with
  *   `agent-running-in-pane` otherwise.
- * - `toTerminal` is the only handoff: the host stops the driver, waits until
- *   its process tree is reaped, persists the record as `handed-off` (a
- *   tombstone), then types the agent's resume command into the anchor shell.
- *   A `handed-off` record refuses `send` (`handed-off`) and never restarts;
- *   `close` drops it. Terminal → chat is not offered.
+ * - `toTerminal` hands a chat to the terminal: the host stops the driver,
+ *   waits until its process tree is reaped, persists the record as
+ *   `handed-off` (a tombstone), then types the agent's resume command into
+ *   the anchor shell. A `handed-off` record refuses `send` (`handed-off`) and
+ *   never restarts on its own; `close` drops it.
+ * - `fromTerminal` is the other direction (darwin and linux): the host
+ *   reserves the pane (no `create`, no launch or resume line typed into it),
+ *   checks that the pane's Claude TUI is at rest (no turn, no approval, no
+ *   dialog or draft on screen), stops its process tree, proves it gone (the
+ *   tree, `paneFree`, no other process carrying the session id in its
+ *   argv, a quiet transcript), persists a record that resumes the TUI's
+ *   exact session id (`resumeExisting`), and only then starts the driver,
+ *   re-checking the pane once it spawned. A `handed-off` tombstone whose TUI
+ *   already exited is revived the same way, with nothing to stop. A failure
+ *   after the stop leaves the pane's resume binding, so the terminal's Resume
+ *   reopens the conversation. `preview` runs the checks only and names the
+ *   processes the stop would end.
+ * - One move at a time per pane, across `toTerminal`, `fromTerminal` and
+ *   Continue on another account.
  * - Every method is first-party only (the main app's socket). A renderer never
  *   supplies argv, env, account or cwd: the daemon derives them from the pane.
  *
@@ -88,9 +102,12 @@
  *   id in its command line) all match; it then expires that record's pending
  *   approvals.
  * - View selection (renderer): a surface with `viewMode: 'chat'` shows the
- *   chat-v2 view when `bindingForPane` returns a binding; without one it shows
- *   the terminal-projection chat while an agent runs in the pane, and the
- *   chat-v2 empty composer (which calls `create`) when the pane is free.
+ *   chat-v2 view when `bindingForPane` returns a binding, except a
+ *   `handed-off` one while an agent runs in the pane (the TUI owns the
+ *   conversation, so its terminal-projection chat shows, with Continue in
+ *   chat); without a binding it shows the terminal-projection chat while an
+ *   agent runs in the pane, and the chat-v2 empty composer (which calls
+ *   `create`) when the pane is free.
  *
  * ## Approvals and questions
  * - The host records a driver decision in the ApprovalRegistry
@@ -139,6 +156,7 @@ export const CHATV2_IPC = {
   answer: 'chatv2:answer',
   bodies: 'chatv2:bodies',
   toTerminal: 'chatv2:to-terminal',
+  fromTerminal: 'chatv2:from-terminal',
   close: 'chatv2:close',
   /** Main only: copy a picked image into the staging directory. */
   stageAttachment: 'chatv2:stage-attachment',
@@ -161,8 +179,17 @@ export const CHATV2_RPC = {
   answer: 'daemon.chatv2.answer',
   bodies: 'daemon.chatv2.bodies',
   toTerminal: 'daemon.chatv2.toTerminal',
+  fromTerminal: 'daemon.chatv2.fromTerminal',
   close: 'daemon.chatv2.close',
 } as const;
+
+/**
+ * Main → daemon, outside the renderer's table: whether `line`, which starts
+ * an agent, may be typed into `paneId` now (`{ paneId, line }` →
+ * `{ allowed }`). False while chat v2 owns or is taking over the pane, a move
+ * holds it, or the line names a conversation an active chat holds.
+ */
+export const CHATV2_LAUNCH_ALLOWED_RPC = 'daemon.chatv2.launchAllowed';
 
 export type ChatV2Method = keyof typeof CHATV2_RPC;
 
@@ -312,7 +339,7 @@ export type ChatV2ErrorCode =
   /** bodies: the full value is no longer kept. */
   | 'body-gone'
   | 'payload-too-large'
-  /** toTerminal: the driver could not be stopped and reaped, or the shell is not free. */
+  /** toTerminal / fromTerminal: a check refused the move, or the process could not be stopped and proved gone. */
   | 'handoff-refused'
   /** The driver process exited or failed mid-call. */
   | 'driver-failed';
@@ -360,6 +387,17 @@ export interface ChatV2InterruptParams extends ChatV2SessionParams {
   turnId?: string;
 }
 
+/** `preview`: run the checks only and name what the stop would end. */
+export interface ChatV2FromTerminalParams extends ChatV2PaneParams {
+  preview?: true;
+}
+
+/** A process the move would stop: its executable name, and whether it reads as an MCP server. */
+export interface ChatV2TerminalProcess {
+  name: string;
+  mcp: boolean;
+}
+
 export interface ChatV2HistoryParams extends ChatV2SessionParams {
   epoch: string;
   /** Return the blocks before this block, newest last. */
@@ -405,6 +443,7 @@ export interface ChatV2ParamsByMethod {
   answer: ChatV2AnswerParams;
   bodies: ChatV2BodiesParams;
   toTerminal: ChatV2SessionParams;
+  fromTerminal: ChatV2FromTerminalParams;
   close: ChatV2SessionParams;
 }
 
@@ -429,6 +468,12 @@ export interface ChatV2ResultByMethod {
   bodies: ChatV2Result<{ text: string; nextOffset?: number }>;
   /** The driver is reaped, the record is `handed-off`, and the resume command was typed. */
   toTerminal: ChatV2Result;
+  /**
+   * `preview`: the checks passed; `processes` = what the stop ends (the
+   * TUI's descendants; empty for a tombstone with nothing running). Else the
+   * TUI is proved gone and `binding` is the record now resuming its session.
+   */
+  fromTerminal: ChatV2Result<{ binding?: ChatV2Binding; processes?: ChatV2TerminalProcess[] }>;
   /** The driver is stopped and the record dropped (the agent's own history stays). */
   close: ChatV2Result;
 }
@@ -503,6 +548,10 @@ export function parseChatV2Params<M extends ChatV2Method>(method: M, value: unkn
       parsed = { paneId, agent: o.agent as ChatV2Agent, mode: o.mode, ...(o.model ? { model: o.model as string } : {}) };
       break;
     }
+    case 'fromTerminal':
+      if (o.preview !== undefined && o.preview !== true) return null;
+      parsed = { paneId, ...(o.preview === true ? { preview: true as const } : {}) };
+      break;
     case 'bindingForPane':
     case 'subscribe':
     case 'unsubscribe':

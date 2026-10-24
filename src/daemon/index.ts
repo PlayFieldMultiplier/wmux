@@ -88,7 +88,10 @@ import { queuedScreenText, queuedTextSnapshot } from './queuedSessionText';
 import type { TerminalPty } from '../shared/terminalPty';
 import { serializeSession } from './sessionSerialize';
 import { AwaitingScreenVerifier, AWAITING_NARROW_DIALOG_COLS, questionInFlight, renderPaneScreen, renderPaneTail } from './AwaitingScreenVerifier';
-import { screenShowsAgentDialog, screenShowsActiveDialog, screenShowsPermissionDialog } from './transcript/chatScreenGate';
+import { screenBlocksChatSend, screenShowsAgentDialog, screenShowsActiveDialog, screenShowsPermissionDialog, screenShowsRunningTurn, titleShowsRunningTurn } from './transcript/chatScreenGate';
+import { claudeComposerEmpty, claudeComposerVisible } from './transcript/deliverChatPrompt';
+import { CHATV2_LAUNCH_ALLOWED_RPC } from '../shared/chatv2/ipc';
+import { isPaneMoving } from './chat/v2/paneClaims';
 import { ApprovalPushRouter } from './push/approvalPushRouter';
 import { readPendingToolUse } from './transcript/pendingToolUse';
 import { isClaudeFamilyAgent } from './approvals/terminalPrompt';
@@ -4522,12 +4525,79 @@ function registerRpcHandlers(
         return startTime && commandLine ? { startTime, commandLine } : null;
       },
       killTree: (pid) => killProcessTree(pid),
+      // Terminal → chat (chat/v2/fromTerminal.ts): the pane's Claude TUI.
+      terminal: {
+        holdKeyboard: (id) => nativeChatBridge?.holdKeyboard(id) ?? null,
+        binding: (id) => sessionManager.getSession(id)?.meta.resumeBinding,
+        unsupported: (id) => {
+          const meta = sessionManager.getSession(id)?.meta;
+          if (!meta) return 'That pane is gone.';
+          if (meta.exec) return 'This pane runs a command, not a shell.';
+          return meta.wslTarget ? 'A WSL pane cannot move into chat yet.' : null;
+        },
+        liveAgent: (id) => paneLiveAgent(sessionManager, agentProcessTracker, id),
+        notAtRest: async (id) => {
+          const pane = sessionManager.getSession(id);
+          if (!pane) return 'That pane is gone.';
+          const status = pane.bridge.getAgentStatus();
+          if (pane.bridge.isTurnOpen() || status === 'running') return 'Claude is still working. Try once its turn ends.';
+          if (status === 'awaiting_input') return 'Claude is waiting for an answer in the terminal.';
+          // No registry is "may be pending"; any kind of record holds the pane.
+          if (!approvalRegistry || approvalRegistry.list().pending.some((r) => r.sessionId === id)) return 'Something in this pane waits for an approval.';
+          // No watcher, or no watch of this pane's transcript, is "may be working".
+          if (!transcriptActivity || transcriptActivity.helpersWorking(id)) return 'Claude\u2019s teammates or subagents may still be working.';
+          const outcome = await queuedScreenText(sessionManager, id, true);
+          const rows = outcome?.ok
+            ? Object.assign(outcome.rows.map((r) => r.text), { undimmed: outcome.rows.map((r) => r.undimmed ?? r.text) })
+            : null;
+          if (screenBlocksChatSend(rows)) return 'A dialog is open in the terminal, or its screen could not be read.';
+          if (screenShowsRunningTurn(rows, 'claude') || titleShowsRunningTurn(pane.bridge.getTitle(), 'claude', Date.now())) {
+            return 'Claude is still working. Try once its turn ends.';
+          }
+          if (!claudeComposerEmpty(rows)) {
+            return claudeComposerVisible(rows) ? 'Claude\u2019s input holds a draft. Send or clear it first.' : 'Claude\u2019s input is not on screen.';
+          }
+          return null;
+        },
+        // notAtRest again, right before the first signal, but for the screen
+        // read (async; notAtRest read it just before).
+        stillIdle: (id) => {
+          const bridge = sessionManager.getSession(id)?.bridge;
+          return !!bridge && !!approvalRegistry && !!transcriptActivity
+            && paneTurnClosed({ agentStatus: bridge.getAgentStatus(), turnOpen: bridge.isTurnOpen() })
+            && !approvalRegistry.list().pending.some((r) => r.sessionId === id)
+            && !transcriptActivity.helpersWorking(id)
+            && !titleShowsRunningTurn(bridge.getTitle(), 'claude', Date.now());
+        },
+        tree: (id) => agentProcessTracker.agentProcessTree(id, 'claude'),
+        stop: (id, stillIdle) => stopAgentTree({
+          tree: () => agentProcessTracker.agentProcessTree(id, 'claude'),
+          stillRunning: (entries) => agentProcessTracker.stillRunning(entries),
+          kill: (pid, signal) => process.kill(pid, signal),
+          stillIdle,
+        }),
+        processesWithArg: (marker) => agentProcessTracker.processesWithArg(marker),
+        otherOwners: (id, sessionId) => sessionManager.listManagedSessions()
+          .filter((s) => s.meta.id !== id && s.meta.resumeBinding?.sessionId === sessionId
+            && agentProcessTracker.identityFor(s.meta.id)?.alive === true)
+          .map((s) => s.meta.id),
+      },
     });
     chatV2Host = host;
     pipeServer.onClientClose((clientId) => host.clientGone(clientId));
     void host.start().catch((err) => log('error', `[chatv2] start failed: ${String(err)}`));
   }
   registerChatV2Rpc((method, handler) => pipeServer.onRpc(method, handler), chatV2Host, firstPartyOnly);
+  // main asks before it types a line that starts an agent (the Resume pill,
+  // auto-resume): refused while chat v2 owns the pane, a move holds it, or the
+  // line names a conversation an active chat holds (in any pane).
+  pipeServer.onRpc(CHATV2_LAUNCH_ALLOWED_RPC, async (params, ctx) => {
+    if (!firstPartyOnly(ctx.clientId, CHATV2_LAUNCH_ALLOWED_RPC)) return { allowed: false };
+    const paneId = typeof params['paneId'] === 'string' ? params['paneId'] : '';
+    const line = typeof params['line'] === 'string' ? params['line'] : '';
+    if (!paneId || isPaneMoving(paneId) || chatV2Host?.ownsPane(paneId) === true) return { allowed: false };
+    return { allowed: !chatV2Host?.activeSessionIds().some((id) => line.includes(id)) };
+  });
   pipeServer.onRpc('daemon.chat.providers', async (_params, ctx) =>
     firstPartyOnly(ctx.clientId, 'chat.providers') ? chatSessions?.listProviders() ?? [] : []);
   for (const action of ['start', 'reconnect', 'cancel', 'respond', 'close'] as const) {
@@ -4721,6 +4791,7 @@ function registerRpcHandlers(
     // pipe, not session:notification, which would also reach phones as attention.
     notify: (paneId, title, body) => pipeServer.broadcast({ type: 'notification.event', sessionId: paneId,
       data: { source: 'security', title, body, ts: Date.now() } }),
+    chatOwnsPane: (id) => chatV2Host?.ownsPane(id) === true || isPaneMoving(id),
   });
   chatBridge = bridge;
   nativeChatBridge = bridge;
@@ -7981,6 +8052,18 @@ async function sessionPaneFree(sessionManager: DaemonSessionManager, agentProces
   });
 }
 
+/** The pane's agent as the canonical tiers name it; none once the shell is
+ *  back at its prompt with no live agent process (#1392). */
+function paneLiveAgent(sessionManager: DaemonSessionManager, agentProcessTracker: AgentProcessTracker, id: string): string | undefined {
+  const pane = sessionManager.getSession(id);
+  if (!pane) return undefined;
+  const rawName = pane.bridge.getLastAgent();
+  const canonical = canonicalIdentityFor(agentProcessTracker, id, rawName ? agentDisplayToSlug(rawName) : undefined);
+  if (!canonical) return undefined;
+  const live = provesLiveAgent(agentProcessTracker.identityFor(id), canonical.slug);
+  return pane.promptLog.commandRunningIfKnown() === false && !live ? undefined : canonical.slug;
+}
+
 function sessionsToSave(sessionManager: DaemonSessionManager): DaemonSession[] {
   const managed = sessionManager.listSessions();
   diskOnlySessions = retireAdopted(managed, diskOnlySessions);
@@ -9218,17 +9301,7 @@ async function main(): Promise<void> {
     try {
       return await continueOnAccount({
         pane: (sid) => sessionManager.getSession(sid)?.meta,
-        // The pane's agent as the canonical tiers name it; none once the shell
-        // is back at its prompt with no live agent process (#1392).
-        liveAgent: (sid) => {
-          const pane = sessionManager.getSession(sid);
-          if (!pane) return undefined;
-          const rawName = pane.bridge.getLastAgent();
-          const canonical = canonicalIdentityFor(agentProcessTracker, sid, rawName ? agentDisplayToSlug(rawName) : undefined);
-          if (!canonical) return undefined;
-          const live = provesLiveAgent(agentProcessTracker.identityFor(sid), canonical.slug);
-          return pane.promptLog.commandRunningIfKnown() === false && !live ? undefined : canonical.slug;
-        },
+        liveAgent: (sid) => paneLiveAgent(sessionManager, agentProcessTracker, sid),
         turnClosed: (sid) => {
           const bridge = sessionManager.getSession(sid)?.bridge;
           if (!bridge) return false;
@@ -9250,6 +9323,7 @@ async function main(): Promise<void> {
           stillIdle,
         }),
         paneFree: (sid) => sessionPaneFree(sessionManager, agentProcessTracker, sid),
+        chatOwnsPane: (sid) => chatV2Host?.ownsPane(sid) === true,
         promptRevision: (sid) => {
           const pane = sessionManager.getSession(sid);
           if (!pane || pane.promptLog.size === 0 || pane.promptLog.isCommandRunning()) return null;

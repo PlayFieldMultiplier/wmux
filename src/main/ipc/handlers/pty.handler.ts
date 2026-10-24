@@ -86,6 +86,7 @@ import {
 import { createSessionPromptScheduleHandlers } from '../../pty/sessionPromptScheduleHandlers';
 import { localReconnectAnswer } from './localPtyReconnect';
 import { pendingRemovalRefusal } from '../../worktask/pendingWorktreeRemovals';
+import { launchAllowedByChat } from './chatLaunchGuard';
 
 /**
  * Allowed shell basenames (compared case-insensitively).
@@ -1183,6 +1184,11 @@ export function registerPTYHandlers(
       throw new Error('PTY_WRITE_LAUNCH: a bot worker\'s line for a Command Prompt pane holds characters cmd would read as more than one command');
     }
     const line = sanitizePtyText(guardedText) + (submit === true ? '\r' : '');
+    // Chat v2 owns the pane, or a move into chat holds it: a resume typed now
+    // would put a second process on the conversation. The daemon decides.
+    if (dc && startsAgent(text) && !(await launchAllowedByChat(dc, id, text))) {
+      throw new Error('PTY_WRITE_LAUNCH: a chat owns this pane, so nothing was typed');
+    }
     // A task's pane: a new launch of the task, on disk before the line is
     // typed (factory/workerSlots.ts); not recorded, not typed.
     let settleRelaunch: ((typed: boolean) => void) | null;

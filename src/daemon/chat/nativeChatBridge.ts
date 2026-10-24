@@ -165,6 +165,8 @@ export interface NativeChatBridgeDeps<P extends ChatPane> {
   platform?: NodeJS.Platform;
   /** Paste→Enter delay override (tests). */
   delay?: (ms: number) => Promise<void>;
+  /** Chat v2 owns the pane, or a move into chat holds it: nothing launches or resumes an agent there. */
+  chatOwnsPane?: (id: string) => boolean;
 }
 
 type QueueMethods = 'queueEnabled' | 'queue' | 'dequeue' | 'steer' | 'dropQueue' | 'delivered';
@@ -192,6 +194,12 @@ export interface NativeChatBridge extends Omit<ChatBridge, QueueMethods>, Requir
   desktopRewind(id: string, opts?: { kitty?: boolean }): Promise<ClaudeRewindResult>;
   /** A file-binding send is between its first check and its last write (Stop must wait). */
   sendInFlight(id: string): boolean;
+  /**
+   * Take the pane's keyboard for a move into chat: sends, Stop, Rewind and
+   * launches are refused until the release is called. Null while one of them
+   * holds it.
+   */
+  holdKeyboard(id: string): (() => void) | null;
   /**
    * The write-time approval fence for a chat write (send or Stop): any pending
    * record of any kind, or no registry at all. Kind-blind by design.
@@ -1744,6 +1752,8 @@ export function createChatBridge<P extends ChatPane>(deps: NativeChatBridgeDeps<
       head = withLaunchSessionId(head, launchId);
     }
     if (launching.has(id)) return fail('launch-pending');
+    // A chat-v2 record (or a move into chat) owns the pane: a launch would be a second writer.
+    if (deps.chatOwnsPane?.(id)) return fail(resume ? 'resume-in-use' : 'launch-not-ready', resume ? undefined : 'shell-busy');
     launching.add(id);
     let relay: LaunchRelay | undefined;
     let typing = false;
@@ -1940,6 +1950,12 @@ export function createChatBridge<P extends ChatPane>(deps: NativeChatBridgeDeps<
     desktopInterrupt,
     desktopRewind,
     sendInFlight: (id) => sending.has(id),
+    holdKeyboard: (id) => {
+      if (sending.has(id) || launching.has(id)) return null;
+      sending.add(id);
+      let held = true;
+      return () => { if (held) { held = false; sending.delete(id); } };
+    },
     hasOpenApproval,
     desktopSkills: (id, agent) => skillsWith(id, agent, 'cwd'),
     cancelOutcomeEnabled: () => !!deps.cancelReceipts,

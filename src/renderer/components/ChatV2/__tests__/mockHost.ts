@@ -245,6 +245,10 @@ export function createMockHost(options: MockHostOptions = {}): MockHost {
       emit(params.paneId, [{ type: 'session.ended', code: 0 }], true);
       return { ok: true };
     },
+    async fromTerminal(params) {
+      if (params.preview) return { ok: true, processes: [] };
+      return chatV2Error('handoff-refused', 'No Claude conversation runs in this pane.');
+    },
     async close(params) {
       if (!find(params)) return notFound();
       records.delete(params.paneId);

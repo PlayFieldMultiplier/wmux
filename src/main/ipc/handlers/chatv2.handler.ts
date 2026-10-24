@@ -119,7 +119,9 @@ export function registerChatV2Handlers(client: DaemonClient | undefined, getWind
   const call = async (method: ChatV2Method, params: unknown): Promise<{ result: unknown; thrown: boolean }> => {
     if (disposed || !client?.isConnected) return { result: unavailable(), thrown: false };
     try {
-      return { result: await client.rpc(CHATV2_RPC[method], params as Record<string, unknown>, { timeoutMs: 30_000 }), thrown: false };
+      // A move into chat stops a TUI (a 5 s grace), proves it gone and starts the agent.
+      const timeoutMs = method === 'fromTerminal' ? 120_000 : 30_000;
+      return { result: await client.rpc(CHATV2_RPC[method], params as Record<string, unknown>, { timeoutMs }), thrown: false };
     } catch {
       return { result: unavailable(), thrown: true };
     }

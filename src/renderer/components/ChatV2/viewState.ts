@@ -71,8 +71,16 @@ export function selectChatSurfaceView(input: {
   binding: ChatV2Binding | null | false | undefined;
   /** A TUI agent is tracked alive in the pane. */
   agentRunning: boolean;
+  /** A move into chat started from the projection is in flight. */
+  movingFromProjection?: boolean;
 }): ChatSurfaceView {
   if (!input.chatViewEnabled || input.viewMode !== 'chat') return 'terminal';
+  // The stop ends the TUI before the chat exists: the projection (and the
+  // move's dialog in it) stays until the move ends.
+  if (input.movingFromProjection) return 'projection';
+  // A tombstone while an agent runs in the pane: the TUI owns the conversation,
+  // so its live projection shows (with Continue in chat), not the stale chat.
+  if (input.binding && input.binding.status === 'handed-off' && input.agentRunning) return 'projection';
   if (input.binding) return 'chatv2';
   // The empty chat-v2 composer only for a free pane whose host said "no record";
   // until then, and without a host, the terminal-projection chat stays.

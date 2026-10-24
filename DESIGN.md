@@ -1751,6 +1751,11 @@ always neutral (the fill ladder).
     on and switches that pane. A user who already had the chat view setting,
     on or off, is never asked and keeps the value; changing it in Settings
     ends the question for every agent.
+- **Continue in chat** (macOS and Linux): a "Continue in chat" link beside
+  Open Terminal in chat 1's progress row (a terminal Claude at rest) and on
+  chat 2's handed-off notice (its Claude exited). It opens a confirmation
+  `Dialog` that names the processes the stop ends ("node (MCP server)") and
+  says that one that already left Claude's tree keeps running. No colour.
 
 ### Dialogs & forms
 

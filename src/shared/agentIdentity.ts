@@ -248,6 +248,9 @@ export interface AgentIdentityRow {
   /** A double ESC at rest, with an empty composer, opens the agent's own
    *  Rewind picker (src/daemon/transcript/openClaudeRewind.ts). */
   readonly rewindPicker?: true;
+  /** Its TUI conversation can continue in chat v2: the TUI is stopped and the
+   *  chat driver resumes the same session id (src/daemon/chat/v2/fromTerminal.ts). */
+  readonly continueInChat?: true;
   /** Listed in Settings -> Token usage (activeProviders). */
   readonly tokenUsage?: true;
   /** Has a model discovery source (modelCatalog). */
@@ -300,6 +303,7 @@ export const AGENT_IDENTITIES = [
     accounts: 'account-store',
     continueOnAccount: true,
     rewindPicker: true,
+    continueInChat: true,
     tokenUsage: true,
     modelCatalog: true,
     titleTurns: true,

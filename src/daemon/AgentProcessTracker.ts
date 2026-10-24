@@ -614,7 +614,8 @@ async function enumerateProcesses(): Promise<ProcessTreeEntry[]> {
   }
   const { stdout } = await execFileAsync(
     'ps',
-    ['-axo', 'pid=,ppid=,args='],
+    // `-ww`: never cut argv to a width (a conversation id past the cut would read as absent).
+    ['-ww', '-axo', 'pid=,ppid=,args='],
     { encoding: 'utf-8', timeout: 10_000, maxBuffer: 8 * 1024 * 1024 },
   );
   return parsePsOutput(stdout as string);
@@ -1140,6 +1141,13 @@ export class AgentProcessTracker {
     }
     this.treeRoots.set(root, { sessionId, state: s });
     return { root, descendants };
+  }
+
+  /** Every live process whose command line carries `marker` (a conversation
+   *  id), from a fresh table. Throws when the table cannot be read. */
+  async processesWithArg(marker: string): Promise<ProcessTreeEntry[]> {
+    if (!marker) return [];
+    return (await this.enumerate()).filter((e) => e.cmdline?.includes(marker) === true && e.pid !== process.pid);
   }
 
   /** Of `entries`, the ones a fresh process table still shows as the same

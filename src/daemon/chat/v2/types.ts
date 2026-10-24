@@ -31,6 +31,9 @@ import type { HarnessId, Session } from '../../../shared/chatv2/session';
 import type { ApprovalRegistry } from '../../approvals/ApprovalRegistry';
 import type { NativeDecisionOutcome, NativeDecisionRef, NativeDecisionReply } from '../../approvals/types';
 import type { DaemonSessionManager } from '../../DaemonSessionManager';
+import type { ProcessTreeEntry } from '../../AgentProcessTracker';
+import type { AgentStopResult } from '../../agentStop';
+import type { ResumeBinding } from '../../../shared/agentResume';
 
 /** The push's DaemonEvent type, checked against the union in shared/rpc.ts. */
 export const CHATV2_DAEMON_EVENT: DaemonEvent['type'] = CHATV2_PUSH_EVENT;
@@ -154,6 +157,11 @@ export interface ChatV2StoredRecord {
   /** `active` or the `handed-off` tombstone. */
   state: 'active' | 'handed-off';
   providerSessionId: string;
+  /**
+   * The conversation already exists in the agent (it came from the terminal),
+   * so the driver resumes it even before this record holds a user turn.
+   */
+  resumeExisting?: true;
   /** The last seq folded into `session`. */
   seq: number;
   /** The capped, authoritative folded session. */
@@ -165,6 +173,35 @@ export interface ChatV2StoredRecord {
   /** The driver process while one runs; cleared once it is reaped. */
   process?: ChatV2ProcessIdentity;
   savedAt: number;
+}
+
+// --- terminal side of fromTerminal ---------------------------------------
+
+/** What `fromTerminal` needs from the rest of the daemon about the pane's TUI (index.ts). */
+export interface ChatV2TerminalDeps {
+  /**
+   * Take the pane's keyboard (the chat bridge's send lock, which sends, Stop,
+   * Rewind and launches hold): the release, or null while one of them holds it.
+   */
+  holdKeyboard: (paneId: string) => (() => void) | null;
+  /** The pane's resume binding (its Claude conversation). */
+  binding: (paneId: string) => ResumeBinding | undefined;
+  /** Why this pane cannot move (a command pane, WSL), or null. */
+  unsupported: (paneId: string) => string | null;
+  /** The live agent's slug, or undefined when none runs. */
+  liveAgent: (paneId: string) => string | undefined;
+  /** Why the TUI is not at rest (turn, approval, dialog or draft on screen, teammates at work), or null. */
+  notAtRest: (paneId: string) => Promise<string | null>;
+  /** Right before the first signal: the turn is still closed and nothing waits on the user. */
+  stillIdle: (paneId: string) => boolean;
+  /** The tracked Claude and every process below it, or null when no tracked Claude runs. Throws when unreadable. */
+  tree: (paneId: string) => Promise<{ root: ProcessTreeEntry; descendants: ProcessTreeEntry[] } | null>;
+  /** Stop the tracked Claude's tree (agentStop.ts). */
+  stop: (paneId: string, stillIdle: () => boolean) => Promise<AgentStopResult>;
+  /** Live processes whose command line carries `marker`, from a fresh table. Throws when unreadable. */
+  processesWithArg: (marker: string) => Promise<ProcessTreeEntry[]>;
+  /** Other panes bound to this conversation whose agent is live. */
+  otherOwners: (paneId: string, sessionId: string) => string[];
 }
 
 // --- host ---------------------------------------------------------------
@@ -208,6 +245,20 @@ export interface ChatV2HostDeps {
    * (ESRCH). Defaults to signal 0. Tests pass fakes.
    */
   processProbe?: (pid: number) => 'gone' | 'exists' | 'unknown';
+  /** The TUI side of `fromTerminal`; without it the move is unavailable. */
+  terminal?: ChatV2TerminalDeps;
+  /** Where `claude` is on a PATH, or undefined (the driver's own lookup). Tests pass fakes. */
+  claudeOnPath?: (pathEnv: string) => Promise<string | undefined>;
+  /** Defaults to `process.platform`. Tests pass fakes. */
+  platform?: NodeJS.Platform;
+  /** Defaults to the file system. Tests pass fakes. */
+  fs?: {
+    stat: (file: string) => { size: number; mtimeMs: number; ino: number } | null;
+    isDirectory: (dir: string) => boolean;
+    realpath: (p: string) => string;
+  };
+  /** fromTerminal's waits (transcript quiet, pane free). Tests shorten them. */
+  moveTiming?: { quietMs?: number; freeWaitMs?: number };
 }
 
 export interface ChatV2Host {
@@ -223,6 +274,13 @@ export interface ChatV2Host {
   sessionForPane(paneId: string): Readonly<Session> | null;
   /** Status for agent-status overlays; null = no record. */
   statusForPane(paneId: string): ChatV2Status | null;
+  /**
+   * Chat v2 owns the pane: an active (not handed-off) record, or a move into
+   * chat holds it. Nothing may type an agent launch or resume line into it.
+   */
+  ownsPane(paneId: string): boolean;
+  /** The provider session ids of every active (not handed-off) record: a launch line naming one is refused. */
+  activeSessionIds(): string[];
   /** In-process listener for every push (phone nudges). Returns an unsubscribe. */
   onPush(listener: (push: ChatV2EventsPush) => void): () => void;
   /** Load records, sweep orphan drivers (identity-matched only), expire their approvals. */

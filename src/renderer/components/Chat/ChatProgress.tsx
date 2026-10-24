@@ -1,10 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useT } from '../../hooks/useT';
 import type { ChatRunState } from './chatRunState';
 import { ChatKindBadge } from './ChatKindBadge';
 
-export function ChatProgress({ state, lastSyncedAt, onTerminal }: {
+export function ChatProgress({ state, lastSyncedAt, onTerminal, extra }: {
   state: ChatRunState; lastSyncedAt: number | null; onTerminal: () => void;
+  /** Beside Open Terminal (Continue in chat). */
+  extra?: ReactNode;
 }) {
   const t = useT();
   const [now, setNow] = useState(Date.now);
@@ -19,7 +21,10 @@ export function ChatProgress({ state, lastSyncedAt, onTerminal }: {
     </div>
     <div className="wmux-chat-progress-detail">
       <span>{state === 'working' ? t('chat.recordedUpdates') : seconds === null ? state === 'ready' ? '' : t('chat.checkingConnection') : t('chat.lastSynced', { seconds })}</span>
-      <button type="button" onClick={onTerminal}>{t('chat.openTerminal')}</button>
+      <span className="wmux-chat-progress-actions">
+        {extra}
+        <button type="button" onClick={onTerminal}>{t('chat.openTerminal')}</button>
+      </span>
     </div>
   </div>;
 }

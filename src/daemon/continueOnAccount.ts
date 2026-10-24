@@ -26,6 +26,7 @@ import { CHATV2_PROVIDER_SESSION_ID } from '../shared/chatv2/ipc';
 import { permissionFlagFor, type ResumeBinding } from '../shared/agentResume';
 import { agentRow } from '../shared/agentIdentity';
 import { inResumeCwd, type ResumeShell } from './chat/v2/handoff';
+import { beginPaneMove, endPaneMove } from './chat/v2/paneClaims';
 import { withChosenAccountEnv } from './phone/paneAccountSpawn';
 import type { AgentStopResult } from './agentStop';
 
@@ -173,17 +174,18 @@ export interface ContinueOnAccountDeps {
   now?: () => number;
   /** How long to wait for the shell's prompt once the agent stopped. */
   promptWaitMs?: number;
+  /** A chat-v2 record owns the pane, or a move into chat holds it. */
+  chatOwnsPane?: (id: string) => boolean;
 }
 
-const inFlight = new Set<string>();
-
 export async function continueOnAccount(deps: ContinueOnAccountDeps, id: string, configDir: string): Promise<ContinueOnAccountResult> {
-  if (inFlight.has(id)) return { ok: false, code: 'busy' };
-  inFlight.add(id);
+  // One move per pane, shared with the chat ↔ terminal handoffs.
+  if (!beginPaneMove(id)) return { ok: false, code: 'busy' };
   try {
+    if (deps.chatOwnsPane?.(id)) return { ok: false, code: 'busy' };
     return await run(deps, id, configDir);
   } finally {
-    inFlight.delete(id);
+    endPaneMove(id);
   }
 }
 
