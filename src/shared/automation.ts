@@ -151,6 +151,8 @@ export type AutomationRunReason =
   | 'await_timeout'
   | 'timeout'
   | 'agent_error'
+  /** The agent's account is signed out: refused before launch, or a turn failed on sign-in. */
+  | 'login_needed'
   | 'process_exit'
   | 'interrupted'
   | 'cancelled'

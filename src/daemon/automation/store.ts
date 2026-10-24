@@ -51,7 +51,7 @@ const RUN_STATES: ReadonlySet<string> = new Set<AutomationRunState>([
 ]);
 const RUN_REASONS: ReadonlySet<string> = new Set<AutomationRunReason>([
   'overlap', 'missed', 'daemon_down', 'first_run_blocked', 'launch_failed', 'account_missing',
-  'await_timeout', 'timeout', 'agent_error', 'process_exit', 'interrupted', 'cancelled', 'needs_regrant',
+  'await_timeout', 'timeout', 'agent_error', 'login_needed', 'process_exit', 'interrupted', 'cancelled', 'needs_regrant',
 ]);
 const RUN_DETAILS: ReadonlySet<string> = new Set<AutomationRunDetail>([
   'submit_retried',

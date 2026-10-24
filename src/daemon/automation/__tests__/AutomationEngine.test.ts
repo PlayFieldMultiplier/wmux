@@ -387,6 +387,30 @@ describe('AutomationEngine — completion & caps', () => {
     expect(h.engine.listRuns()[0]).toMatchObject({ state: 'failed', reason: 'agent_error' });
   });
 
+  it('a StopFailure on sign-in fails the run as login_needed', async () => {
+    const h = harness();
+    const run = await startedRun(h);
+    await h.engine.onAgentEvent(`auto-${run.id}`, { kind: 'agent.stop_failure', status: 'error', authFailure: true });
+    expect(h.engine.listRuns()[0]).toMatchObject({ state: 'failed', reason: 'login_needed' });
+  });
+
+  it('refuses a run whose account is signed out before its pane exists, raises the notice, and keeps the reason on disk', async () => {
+    const lost: Array<{ agent: string; env: Record<string, string> }> = [];
+    const h = harness({ ports: { signedOut: async (agent) => agent === 'claude', authLost: (agent, env) => lost.push({ agent, env }) } });
+    const run = await startedRun(h);
+    expect(run).toMatchObject({ state: 'failed', reason: 'login_needed' });
+    expect(h.created).toEqual([]);
+    expect(lost).toHaveLength(1);
+    expect(lost[0].agent).toBe('claude');
+    // The final write lands after the run settles; then a fresh engine reads the reason back.
+    await vi.waitFor(() => {
+      expect(fs.readFileSync(path.join(h.dir, 'automation-runs.json'), 'utf8')).toContain('"login_needed"');
+    }, { timeout: 5000, interval: 20 });
+    const reread = harness({ dir: h.dir });
+    await reread.engine.start({ timers: false });
+    expect(reread.engine.listRuns()[0]).toMatchObject({ state: 'failed', reason: 'login_needed' });
+  });
+
   it('PTY exit decides by exit code', async () => {
     for (const [code, expected] of [[0, { state: 'completed' }], [3, { state: 'failed', reason: 'process_exit' }], [null, { state: 'unknown' }]] as const) {
       const h = harness();
