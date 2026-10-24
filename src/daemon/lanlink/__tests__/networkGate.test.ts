@@ -97,6 +97,14 @@ describe('LanLinkServer network gate', () => {
     server.dispose();
   });
 
+  it('listens on a Domain network', async () => {
+    const { server, net } = makeServer(async () => 'Domain');
+    await server.settled();
+    expect(net.listens).toEqual([{ port: 45651, ip: '192.168.1.10' }]);
+    expect(server.runtimeStatus()).toEqual({ listening: true, stopReason: null });
+    server.dispose();
+  });
+
   it('listens where the OS has no network category (macOS, Linux)', async () => {
     const { server, net } = makeServer(async () => 'not-applicable');
     await server.settled();
@@ -107,7 +115,6 @@ describe('LanLinkServer network gate', () => {
 
   it.each([
     ['Public', 'network-public'],
-    ['Domain', 'network-domain'],
     ['Unknown', 'network-unknown'],
   ] as const)('does not listen on a %s network, and says why', async (category, reason) => {
     const { server, net } = makeServer(async () => category);

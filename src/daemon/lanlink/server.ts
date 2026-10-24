@@ -206,8 +206,8 @@ export class LanLinkServer {
   }
 
   /**
-   * LanLink listens only on a network Windows classifies as Private. Public,
-   * Domain, no profile and a failed read all keep it closed. macOS and Linux
+   * LanLink listens only on a network Windows classifies as Private or Domain.
+   * Public, no profile and a failed or timed-out read all keep it closed. macOS and Linux
    * have no such category ('not-applicable'); there the NIC choice is the gate.
    */
   private async categoryStopReason(ip: string): Promise<LanLinkStopReason | null> {
@@ -220,14 +220,12 @@ export class LanLinkServer {
     }
     switch (category) {
       case 'Private':
+      case 'Domain':
       case 'not-applicable':
         return null;
       case 'Public':
         console.warn('[LanLinkServer] refusing to listen on a Public-category network');
         return 'network-public';
-      case 'Domain':
-        console.warn('[LanLinkServer] refusing to listen on a Domain-category network');
-        return 'network-domain';
       default:
         console.warn('[LanLinkServer] the selected NIC has no network profile — staying stopped');
         return 'network-unknown';

@@ -1,6 +1,7 @@
 // === LanLink network category (the listen gate's input) ===
 //
-// LanLink listens only on a network Windows classifies as Private. This reads
+// LanLink listens only on a network Windows classifies as Private or Domain,
+// never on a Public one. This reads
 // that classification for the one IPv4 address LanLink would bind: the address
 // is mapped to its interface index (Get-NetIPAddress) and that index to its
 // connection profile (Get-NetConnectionProfile). Nothing is matched by

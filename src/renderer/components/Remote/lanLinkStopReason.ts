@@ -5,8 +5,6 @@ export function lanLinkStopReasonKey(reason: LanLinkStopReason): string {
   switch (reason) {
     case 'network-public':
       return 'settings.lanlinkStopPublic';
-    case 'network-domain':
-      return 'settings.lanlinkStopDomain';
     case 'network-unknown':
       return 'settings.lanlinkStopUnknown';
     case 'network-check-failed':

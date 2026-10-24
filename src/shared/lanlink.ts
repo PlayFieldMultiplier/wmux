@@ -182,8 +182,8 @@ export interface LanLinkConfig {
  * Why an enabled LanLink is not listening. The renderer maps each code to its
  * own text; the daemon never sends prose.
  *   - `no-address`: the selected NIC has no usable IPv4 address.
- *   - `network-public` / `network-domain`: Windows classifies the NIC's network
- *     as Public / Domain. LanLink listens on Private networks only.
+ *   - `network-public`: Windows classifies the NIC's network as Public.
+ *     LanLink listens on Private and Domain networks only.
  *   - `network-unknown`: the NIC has no Windows network profile.
  *   - `network-check-failed`: the network category could not be read.
  *   - `listen-failed`: the port could not be opened (in use, address gone).
@@ -191,7 +191,6 @@ export interface LanLinkConfig {
 export type LanLinkStopReason =
   | 'no-address'
   | 'network-public'
-  | 'network-domain'
   | 'network-unknown'
   | 'network-check-failed'
   | 'listen-failed';
