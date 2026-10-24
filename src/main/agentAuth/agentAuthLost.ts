@@ -109,12 +109,19 @@ export async function answerLoginState(
   return { known: true, signedIn, cleared };
 }
 
+/**
+ * One board for the life of the app. The handlers are registered again on
+ * every daemon reconnect (registerAllHandlers); a loss seen before the
+ * reconnect is still a loss, so it must not start empty then.
+ */
+const appBoard = new AuthLostBoard();
+
 export function registerAgentAuthHandlers(
   daemonClient: DaemonClient | undefined,
   getWindow: () => BrowserWindow | null,
-  deps: { loginState?: (entry: AuthLostEntry) => Promise<boolean | null> } = {},
+  deps: { loginState?: (entry: AuthLostEntry) => Promise<boolean | null>; board?: AuthLostBoard } = {},
 ): () => void {
-  const board = new AuthLostBoard();
+  const board = deps.board ?? appBoard;
   const loginState = deps.loginState
     ?? ((entry: AuthLostEntry) => new AgentSetupDetector().loginState(entry.agent, loginProbeEnv(entry, withFreshWindowsPath(process.env))));
   const publish = (): void => {
@@ -159,6 +166,8 @@ export function registerAgentAuthHandlers(
     return { known: true as const, signedIn: answer.signedIn };
   });
 
+  // The renderer's copy is brought back in step with the board on every registration.
+  publish();
   if (daemonClient) {
     daemonClient.on('agent:authLost', onAuthLost);
     daemonClient.on('session:died', onGone);

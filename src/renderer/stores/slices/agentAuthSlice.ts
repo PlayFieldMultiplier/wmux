@@ -7,10 +7,10 @@
 
 import type { StateCreator } from 'zustand';
 import type { StoreState } from '../index';
-import { getLeafPanes } from '../../../shared/paneUtils';
+import { getWorkspaceLeafPanes } from '../../../shared/paneUtils';
 import type { AuthLostEntry } from '../../../shared/agentAuthLost';
 
-/** Whether any terminal surface of the workspace runs an agent whose sign-in was lost. */
+/** Whether any terminal surface the workspace owns (stashed panes too) runs an agent whose sign-in was lost. */
 export function workspaceHasAuthLost(
   state: Pick<StoreState, 'workspaces' | 'agentAuthLost'>,
   workspaceId: string,
@@ -19,7 +19,7 @@ export function workspaceHasAuthLost(
   const ws = state.workspaces.find((w) => w.id === workspaceId);
   if (!ws) return false;
   const lost = new Set(state.agentAuthLost.flatMap((e) => e.ptyIds));
-  return getLeafPanes(ws.rootPane).some((leaf) => leaf.surfaces.some((s) => !!s.ptyId && lost.has(s.ptyId)));
+  return getWorkspaceLeafPanes(ws).some((leaf) => leaf.surfaces.some((s) => !!s.ptyId && lost.has(s.ptyId)));
 }
 
 export interface AgentAuthSlice {

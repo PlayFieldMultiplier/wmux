@@ -70,4 +70,14 @@ describe('lost sign-in bridge', () => {
     await press();
     expect(useStore.getState().toasts.map((t) => t.action?.label)).toEqual(['Sign in again']);
   });
+
+  it("marks the workspace's row for a loss in a stashed pane", () => {
+    const stashed = {
+      ...ws(),
+      stashedPanes: [{ pane: { id: 'p2', type: 'leaf', activeSurfaceId: 's2', surfaces: [{ id: 's2', ptyId: 'pty-stashed', title: 't', shell: 'zsh', cwd: '/x', surfaceType: 'terminal' }] }, stashedAt: 1 }],
+    } as unknown as Workspace;
+    useStore.getState().loadSession({ workspaces: [stashed], activeWorkspaceId: 'ws-1', sidebarVisible: true } as SessionData);
+    applyAuthLostEntries([entry({ ptyIds: ['pty-stashed'] })]);
+    expect(workspaceHasAuthLost(useStore.getState(), 'ws-1')).toBe(true);
+  });
 });

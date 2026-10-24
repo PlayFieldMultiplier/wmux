@@ -3,7 +3,9 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('electron', () => ({ ipcMain: { handle: vi.fn(), removeHandler: vi.fn() } }));
 vi.mock('../../notification/dispatchNotification', () => ({ dispatchNotification: vi.fn() }));
 
-import { AuthLostBoard, answerLoginState, loginProbeEnv } from '../agentAuthLost';
+import { EventEmitter } from 'node:events';
+import { AuthLostBoard, answerLoginState, loginProbeEnv, registerAgentAuthHandlers } from '../agentAuthLost';
+import type { DaemonClient } from '../../DaemonClient';
 import { authLostKey, parseAgentAuthLost, type AgentAuthLost } from '../../../shared/agentAuthLost';
 
 const lost = (over: Partial<AgentAuthLost> = {}): AgentAuthLost => ({ agent: 'claude', configDir: null, origin: 'turn', at: 1, ...over });
@@ -83,5 +85,25 @@ describe('parseAgentAuthLost', () => {
     expect(parseAgentAuthLost({ agent: 'claude', configDir: '', origin: 'turn', at: 1 })).toBeNull();
     expect(parseAgentAuthLost({ agent: 'claude', configDir: null, origin: 'other', at: 1 })).toBeNull();
     expect(parseAgentAuthLost({ agent: 'claude', configDir: null, origin: 'turn', providerCode: 'a b', at: 1 })).not.toHaveProperty('providerCode');
+  });
+});
+
+describe('registerAgentAuthHandlers across a daemon reconnect', () => {
+  it('keeps a loss seen before the reconnect and hands it to the renderer again', () => {
+    const send = vi.fn();
+    const win = { isDestroyed: () => false, webContents: { send } } as unknown as import('electron').BrowserWindow;
+    const first = new EventEmitter();
+    const cleanup = registerAgentAuthHandlers(first as unknown as DaemonClient, () => win);
+    first.emit('agent:authLost', { sessionId: 'pty-1', lost: lost() });
+    cleanup();
+    send.mockClear();
+    // registerAllHandlers runs again with the reconnected client.
+    const second = new EventEmitter();
+    const cleanupAgain = registerAgentAuthHandlers(second as unknown as DaemonClient, () => win);
+    expect(send).toHaveBeenCalledWith('agentAuth:lostChanged', [expect.objectContaining({ key: authLostKey('claude', null), ptyIds: ['pty-1'] })]);
+    // The account works again on the new connection: the same entry goes.
+    second.emit('agent:authLost', { sessionId: '', works: { agent: 'claude', configDir: null } });
+    expect(send).toHaveBeenLastCalledWith('agentAuth:lostChanged', []);
+    cleanupAgain();
   });
 });
