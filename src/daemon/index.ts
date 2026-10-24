@@ -100,6 +100,7 @@ import { stripCredentialValues } from '../shared/envFilter';
 import { LanLinkInbox } from './lanlink/inbox';
 import { LanLinkController } from './lanlink/controller';
 import { LanLinkServer } from './lanlink/server';
+import { QUERY_TIMEOUT_MS } from './lanlink/netCategory';
 import { PeerStore } from './lanlink/peers';
 import { coerceLanLinkPatch } from '../shared/lanlink';
 import { A2aRemoteController } from './a2aRemote/controller';
@@ -6029,7 +6030,15 @@ function registerRpcHandlers(
   });
   pipeServer.onRpc('lanlink.configure', async (params) => {
     const status = lanLinkController.configure(coerceLanLinkPatch(params));
-    await lanLinkServer.settled();
+    // Bounded below the RPC timeout: a pass already reading the category can
+    // run ahead of the one this queued. Past the deadline the answer says
+    // `checking: true`, and the status-changed nudge follows.
+    let deadline: NodeJS.Timeout | undefined;
+    await Promise.race([
+      lanLinkServer.settled(),
+      new Promise<void>((resolve) => { deadline = setTimeout(resolve, QUERY_TIMEOUT_MS); }),
+    ]);
+    clearTimeout(deadline);
     return { ...status, ...lanLinkServer.runtimeStatus() };
   });
 
