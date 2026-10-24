@@ -1571,7 +1571,7 @@ always neutral (the fill ladder).
   - **The card.** It is a padded popover anchored to the chip and placed with `placePopover`, and it closes on Escape, an outside click or a resize. It opens by itself once per limit, and only for the pane in front. It holds:
     - Resume automatically when it reopens: a switch, on by default.
     - Continue on another account: shown only with 2+ accounts. One ghost button per account, then the opt-in "Always switch automatically" checkbox, which is the vendor's switch-by-quota setting.
-    - Continue in another agent: shown only for agents that are installed and signed in. It opens that agent in a new tab of the same pane and types a handoff note without sending it.
+    - Continue in another agent: shown only for agents that are installed and signed in. It opens that agent in a new tab of the same pane and types a handoff note without sending it. Under the buttons, the note itself in an 11px mono `--text-sub` block on a `--selection` fill (at most 120px, scrolling), then its length in 11px muted tabular figures. When the held agent's input holds an unsent draft, an "Include the unsent draft" checkbox (off) sits above the note and adds it. The two tabs name each other on their tooltips ("Continued in …" / "Continued from …").
     - When every account is out, one line with the earliest time one reopens.
   - **Colour.** None beyond the armed clock.
 - **Needs you is the attention orange everywhere** — the sidebar ring, hairline,

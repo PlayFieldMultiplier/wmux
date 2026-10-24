@@ -18,3 +18,10 @@ export function useComposerDraft(runtime: ReturnType<typeof useExternalStoreRunt
     });
   }, [runtime, key]);
 }
+
+/** `ptyId`'s most recently edited composer draft, in any of its conversations. */
+export function chatComposerDraft(ptyId: string): string | undefined {
+  let found: string | undefined;
+  for (const [key, text] of drafts) if (key.startsWith(`${ptyId}:`)) found = text;
+  return found;
+}

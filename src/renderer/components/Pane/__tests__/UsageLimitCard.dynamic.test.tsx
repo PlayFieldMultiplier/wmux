@@ -6,7 +6,11 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('../../../utils/continueInAgent', () => ({ continueInAgent: vi.fn(async () => true) }));
+vi.mock('../../../utils/continueInAgent', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../../utils/continueInAgent')>(),
+  continueInAgent: vi.fn(async () => true),
+  handoffFacts: vi.fn(async () => ({ requests: ['fix the login bug'], reply: null, planFiles: [], branch: 'main', files: [], transcriptPath: null, draft: 'and the logout one' })),
+}));
 
 import { useStore } from '../../../stores';
 import { setDaemonModeActive, resetDaemonModeForTests } from '../../../daemon/daemonMode';
@@ -139,8 +143,16 @@ describe('usage-limit card', () => {
     await render();
     // Never the agent that is out.
     expect(q('[data-usage-limit-card-agent="claude"]')).toBeNull();
+    // The note it types in, previewed with its length; the unsent draft only once ticked.
+    const memo = q('[data-usage-limit-card-memo]')!;
+    expect(memo.textContent).toContain('The last request was:\nfix the login bug');
+    expect(memo.textContent).not.toContain('and the logout one');
+    await act(async () => q('[data-usage-limit-card-action="carry-draft"]')!.click());
+    const note = q('[data-usage-limit-card-memo]')!.textContent!;
+    expect(note).toContain('A draft that was never sent:\nand the logout one');
+    expect(q('[data-usage-limit-card-memo-length]')!.textContent).toBe(`${note.length} characters`);
     await act(async () => q('[data-usage-limit-card-agent="codex"]')!.click());
-    expect(continueInAgent).toHaveBeenCalledWith({ heldPtyId: 'pty-1', fromAgent: 'Claude Code', agent: 'codex', workspaceId: 'ws-1', paneId: 'pane-1', cwd: '/repo' });
+    expect(continueInAgent).toHaveBeenCalledWith({ heldPtyId: 'pty-1', fromAgent: 'Claude Code', agent: 'codex', workspaceId: 'ws-1', paneId: 'pane-1', cwd: '/repo', note });
     expect(card()).toBeNull();
   });
 

@@ -6,7 +6,9 @@
 //   - Continue on another account, with 2+ accounts, and the opt-in "Always
 //     switch automatically" (the vendor's switch-by-quota setting);
 //   - Continue in another agent that is installed and signed in: a new tab
-//     with the handoff typed in, not sent (utils/continueInAgent.ts);
+//     with the handoff typed in, not sent (utils/continueInAgent.ts), the
+//     note previewed here with its length, an unsent draft carried only when
+//     the owner ticks it;
 //   - when every account is out, the earliest time one reopens.
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
@@ -15,7 +17,7 @@ import { useT } from '../../hooks/useT';
 import { getLocale } from '../../i18n';
 import { updateUsageLimit } from '../../hooks/useUsageLimitBridge';
 import { getAgentSetupState, refreshAgentStatus, useAgentSetup } from '../../utils/agentSetupRuns';
-import { continueInAgent } from '../../utils/continueInAgent';
+import { continueInAgent, continueInAgentText, handoffFacts, type HandoffFacts } from '../../utils/continueInAgent';
 import { agentRow } from '../../../shared/agentIdentity';
 import { formatResetClock } from '../../../shared/usageLimit';
 import { placePopover } from '../AgentToolbar/placePopover';
@@ -47,9 +49,19 @@ export default function UsageLimitCard({ ptyId, workspaceId, paneId, cwd, now, a
   const setup = useAgentSetup();
   const cardRef = useRef<HTMLDivElement>(null);
   const [height, setHeight] = useState(240);
+  const [facts, setFacts] = useState<HandoffFacts | null>(null);
+  const [carryDraft, setCarryDraft] = useState(false);
+  const canHandOff = !!limit && (setup.statuses ?? []).some((s) => s.readiness === 'ready' && s.agent !== limit.provider);
 
   // Probed once; later opens reuse what that found.
   useEffect(() => { if (!getAgentSetupState().statuses) void refreshAgentStatus(); }, []);
+  // Gathered once another agent can take over, so the note previewed is the one typed in.
+  useEffect(() => {
+    if (!canHandOff) return;
+    let live = true;
+    void handoffFacts(ptyId, cwd).then((f) => { if (live) setFacts(f); }, () => undefined);
+    return () => { live = false; };
+  }, [canHandOff, ptyId, cwd]);
   // Measured after each render, so placePopover can flip it above the chip.
   useLayoutEffect(() => {
     const h = cardRef.current?.offsetHeight;
@@ -91,6 +103,7 @@ export default function UsageLimitCard({ ptyId, workspaceId, paneId, cwd, now, a
   const outUntil = everyAccountOutUntil(rotation.state?.rows ?? [], vendor, now);
   const agents = (setup.statuses ?? []).filter((s) => s.readiness === 'ready' && s.agent !== vendor);
   const pos = placePopover(anchor, { width: USAGE_LIMIT_CARD_WIDTH, height });
+  const note = facts ? continueInAgentText(fromAgent, facts, { carryDraft }) : undefined;
 
   return createPortal(
     <Popover
@@ -166,7 +179,7 @@ export default function UsageLimitCard({ ptyId, workspaceId, paneId, cwd, now, a
                   className="justify-start"
                   title={t('usageLimit.continueInAgentHint')}
                   onClick={() => {
-                    void continueInAgent({ heldPtyId: ptyId, fromAgent, agent: s.agent, workspaceId, paneId, ...(cwd ? { cwd } : {}) })
+                    void continueInAgent({ heldPtyId: ptyId, fromAgent, agent: s.agent, workspaceId, paneId, ...(cwd ? { cwd } : {}), ...(note ? { note } : {}) })
                       .catch((err: unknown) => { console.warn('[usageLimit] continue in agent failed', err); });
                     onClose();
                   }}
@@ -177,6 +190,27 @@ export default function UsageLimitCard({ ptyId, workspaceId, paneId, cwd, now, a
               );
             })}
           </div>
+          {note !== undefined && (
+            <>
+              {facts?.draft && (
+                <label className="mt-2 flex items-center gap-2 text-[12px] text-[var(--text-sub)]">
+                  <Checkbox checked={carryDraft} onCheckedChange={setCarryDraft} data-usage-limit-card-action="carry-draft" />
+                  {t('usageLimit.carryDraft')}
+                </label>
+              )}
+              <pre
+                aria-label={t('usageLimit.handoffPreview')}
+                tabIndex={0}
+                className="mt-2 max-h-[120px] overflow-auto whitespace-pre-wrap break-words rounded-[var(--chip-radius)] bg-[var(--selection)] p-2 font-mono text-[11px] text-[var(--text-sub)]"
+                data-usage-limit-card-memo
+              >
+                {note}
+              </pre>
+              <p className="mt-1 text-[11px] text-[var(--text-muted)] tabular-nums" data-usage-limit-card-memo-length>
+                {t('usageLimit.handoffLength', { count: note.length })}
+              </p>
+            </>
+          )}
         </PopoverSection>
       )}
     </Popover>,
