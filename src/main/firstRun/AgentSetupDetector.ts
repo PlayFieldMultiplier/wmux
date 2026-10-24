@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -10,7 +11,7 @@ import {
   type AgentId,
   type AgentSetupStatus,
 } from '../../shared/agentSetup';
-import { agentRow } from '../../shared/agentIdentity';
+import { agentRow, type UnseenCredentials } from '../../shared/agentIdentity';
 import { isInternalEnvKey } from '../../shared/envFilter';
 import { withFreshWindowsPath } from '../../shared/windowsPathEnv';
 import { killProcessTree } from '../../daemon/automation/treeKill';
@@ -70,6 +71,8 @@ export interface AgentSetupDetectorDeps {
   platform?: NodeJS.Platform;
   homedir?: () => string;
   timeoutMs?: number;
+  /** A small config file's text, or null when it cannot be read (unseen-credential check). */
+  readFile?: (p: string) => string | null;
 }
 
 const PROBE_TIMEOUT_MS = 8_000;
@@ -162,6 +165,62 @@ export const execProbe: ProbeRunner = (command, args, opts) =>
   });
 
 /**
+ * The value a launch would use for `key` in a TOML config, read the way the
+ * agent does: the selected profile's table first (`profile = "x"` at the top
+ * selects `[<table>.x]`), then the top level. Other tables do not count. Only
+ * flat `key = value` lines are read; a value with an inline comment or quotes
+ * comes back bare.
+ */
+export function activeConfigValue(
+  text: string,
+  key: string,
+  profile?: { readonly key: string; readonly table: string },
+): string | undefined {
+  const tables = new Map<string, Map<string, string>>([['', new Map()]]);
+  let table = '';
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.replace(/#.*$/, '').trim();
+    const header = /^\[\s*([^\]]+?)\s*\]$/.exec(line);
+    if (header) {
+      table = header[1].replace(/["']/g, '');
+      if (!tables.has(table)) tables.set(table, new Map());
+      continue;
+    }
+    const eq = line.indexOf('=');
+    if (eq <= 0) continue;
+    tables.get(table)?.set(line.slice(0, eq).trim(), line.slice(eq + 1).trim().replace(/^["']|["']$/g, ''));
+  }
+  const top = tables.get('') ?? new Map<string, string>();
+  const selected = profile ? top.get(profile.key) : undefined;
+  return (selected && profile ? tables.get(`${profile.table}.${selected}`)?.get(key) : undefined) ?? top.get(key);
+}
+
+/**
+ * Does the agent have a way to run that its status command does not report?
+ * A non-empty listed environment variable, or the listed key, as the agent
+ * would read it (activeConfigValue), set to anything but the agent's own value
+ * in its config file (in the account folder, or the default one under the
+ * home folder).
+ */
+export function hasUnseenCredential(
+  unseen: UnseenCredentials | undefined,
+  accountEnv: string | undefined,
+  env: NodeJS.ProcessEnv,
+  home: string,
+  readFile: (p: string) => string | null,
+): boolean {
+  if (!unseen) return false;
+  if (unseen.env.some((name) => (env[name] ?? '').trim() !== '')) return true;
+  const config = unseen.configKey;
+  if (!config) return false;
+  const folder = (accountEnv && env[accountEnv]?.trim()) || path.join(home, config.dir);
+  const text = readFile(path.join(folder, config.file));
+  if (text === null) return false;
+  const value = activeConfigValue(text, config.key, config.profile);
+  return value !== undefined && value !== '' && value !== config.ownValue;
+}
+
+/**
  * Sign-in from a status probe: true / false, or null when it cannot be told.
  * How to read it is the row's `setup.loginStatus`. Only the exit code and a
  * single boolean (or the fixed signed-out line) are read; the rest of the
@@ -197,6 +256,7 @@ export class AgentSetupDetector {
   private readonly platform: NodeJS.Platform;
   private readonly homedir: () => string;
   private readonly timeoutMs: number;
+  private readonly readFile: (p: string) => string | null;
   /** Concurrent callers share one probe round instead of spawning twice. */
   private inflight: Promise<AgentSetupStatus[]> | null = null;
 
@@ -212,6 +272,7 @@ export class AgentSetupDetector {
     this.platform = deps.platform ?? process.platform;
     this.homedir = deps.homedir ?? os.homedir;
     this.timeoutMs = deps.timeoutMs ?? PROBE_TIMEOUT_MS;
+    this.readFile = deps.readFile ?? ((p) => { try { return fs.readFileSync(p, 'utf8'); } catch { return null; } });
   }
 
   detectAll(): Promise<AgentSetupStatus[]> {
@@ -259,7 +320,10 @@ export class AgentSetupDetector {
     if (!loginStatus || loginStatus.read === 'none') return null;
     const executable = this.resolveExecutable(agent, env);
     if (!executable) return null;
-    return readLoginState(agent, await this.probe(executable, buildProbeEnv(env, executable, this.platform), loginStatus.args));
+    const signedIn = readLoginState(agent, await this.probe(executable, buildProbeEnv(env, executable, this.platform), loginStatus.args));
+    // The agent may run on a credential its status command does not report.
+    if (signedIn === false && hasUnseenCredential(loginStatus.unseenCredentials, loginStatus.accountEnv, env, this.homedir(), this.readFile)) return null;
+    return signedIn;
   }
 
   private probe(executable: string, probeEnv: NodeJS.ProcessEnv, args: readonly string[]): Promise<ProbeResult> {
