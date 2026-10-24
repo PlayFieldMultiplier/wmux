@@ -922,7 +922,13 @@ export default function RemoteMirrorTerminal({ attachId, error, insecureTranspor
           if (isMac) lastPasteKeydownAt = Date.now();
           void (async () => {
             const text = await window.clipboardAPI.readText();
-            if (!text) return;
+            if (!text) {
+              // An image alone is not pasted (see below): say so rather than do nothing.
+              if (await window.clipboardAPI.hasImage?.()) {
+                useStore.getState().pushToast({ level: 'info', message: translate('remote.mirror.imagePasteUnsupported') });
+              }
+              return;
+            }
             // Text only. A local pane also pastes an image by writing the temp
             // file's PATH, and that path names a file on THIS machine — on the
             // other end of an attach it resolves to nothing, so the mirror

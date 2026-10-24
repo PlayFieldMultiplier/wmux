@@ -4866,6 +4866,8 @@ export const pl = {
   'remote.pairUnreachable': 'Nie udało się połączyć z tym hostem',
   'remote.pairIncompatible': 'wmux na tej maszynie jest za stary dla zdalnego dołączenia',
   'remote.pairFailed': 'Parowanie nie powiodło się — sprawdź logi aplikacji',
+  'remote.mirror.dropUnsupported': 'Upuszczanie plików do panelu innego komputera nie jest jeszcze obsługiwane. Skopiuj plik na tamten komputer i użyj tam jego ścieżki.',
+  'remote.mirror.imagePasteUnsupported': 'Wklejanie obrazu do panelu innego komputera nie jest jeszcze obsługiwane. Wklejany jest tylko tekst.',
   'remote.hubOthers': 'Inne komputery',
   'remote.hubPairNew': 'Sparuj nowy komputer',
   'remote.hubEmpty': 'Brak innych komputerów. Na drugim komputerze otwórz Zdalne → Połącz inny komputer i skopiuj link.',
