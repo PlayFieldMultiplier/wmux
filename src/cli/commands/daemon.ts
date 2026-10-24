@@ -1,6 +1,7 @@
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { spawn } from 'child_process';
+import { childStdio } from '../consoleStdio';
 import { sendDaemonStringRequest, isDefinitelyNotRunning } from '../client';
 import { printResult, ensureOk } from '../utils';
 import {
@@ -271,7 +272,8 @@ function runForeground(): void {
     return;
   }
   const child = spawn(process.execPath, [script], {
-    stdio: 'inherit',
+    // The daemon writes where this CLI does, including a console its fds 1 and 2 do not reach.
+    stdio: childStdio(),
     env: {
       ...process.env,
       [ENV_KEYS.SPAWNED_BY_VERSION]: resolveSpawnedByVersion(),

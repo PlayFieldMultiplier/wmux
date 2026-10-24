@@ -6,6 +6,8 @@ process.on('SIGINT', () => {
 
 // Must stay the first import: turns off working-directory executable lookup (Windows) before any module runs.
 import '../shared/exeSearchGuard';
+// Next, before any module can print or hold process.stdout/stderr: on Windows wmux.exe's console output is otherwise garbled or lost.
+import './consoleStdioPrelude';
 import { hasFlag } from './utils';
 import { handleWorkspace } from './commands/workspace';
 import { handleSurface } from './commands/surface';
