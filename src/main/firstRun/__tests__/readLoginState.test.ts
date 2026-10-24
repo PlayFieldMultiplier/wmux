@@ -35,7 +35,9 @@ describe('AgentSetupDetector.loginState and credentials the status does not see'
     run: async () => ({ code: 1, stdout: '', stderr: 'Not logged in', timedOut: false }),
     homedir: () => '/home/me',
     platform: 'darwin',
-    readFile: (p) => files[p] ?? null,
+    // The detector joins with the host's path module, so a Windows runner
+    // asks for backslash paths; the fixtures are keyed with forward slashes.
+    readFile: (p) => files[p.replace(/\\/g, '/')] ?? null,
   });
 
   it('reads Codex as signed out when nothing else would let it run', async () => {
