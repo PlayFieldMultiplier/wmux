@@ -235,6 +235,15 @@ describe('resolve', () => {
       expect(f.written).toEqual([]);
     });
 
+    it('judges the binding the projector reads: a live Codex relay\'s selection, with no stored binding', async () => {
+      const f = bareLaunched();
+      f.state.agent = { ...f.state.agent, agentName: 'Codex CLI' };
+      f.state.projector = { ...FILE, sizeBytes: 0, mtimeMs: 0, terminal: { ...FILE.terminal!, agent: 'codex' } };
+      delete f.state.pane!.meta.resumeBinding;
+      f.deps.transcriptBinding = () => ({ agent: 'codex', sessionId: 'conv', cwd: '/thread', transcriptPath: '/s/a.jsonl', ts: 5_000 });
+      expect(await f.bridge.resolve('pane')).toMatchObject({ source: 'file', status: { agentSessionId: 'conv', agentAlive: true } });
+    });
+
     it('a dialog still on screen (trust, sign-in) blocks the first send, and /turns says so', async () => {
       const f = bareLaunched();
       f.state.screen = ['Do you trust the files in this folder?', '', '❯ 1. Yes, proceed', '  2. No, exit', '', 'Enter to confirm · Esc to cancel'];

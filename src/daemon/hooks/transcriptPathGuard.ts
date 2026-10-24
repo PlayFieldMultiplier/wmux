@@ -131,6 +131,11 @@ export function claudeTranscriptRoot(sessionEnv?: Record<string, string>): strin
   return configured ? path.join(configured, 'projects') : path.join(os.homedir(), '.claude', 'projects');
 }
 
+/** An absolute path in this host's own syntax: a drive path on Windows, `/…` elsewhere. */
+export function isHostAbsolute(value: string, platform: NodeJS.Platform = process.platform): boolean {
+  return platform === 'win32' ? /^[A-Za-z]:[\\/]/.test(value) : value.startsWith('/');
+}
+
 /**
  * Where a transcript Claude has not written yet will land, or null when that
  * cannot be proven. Claude names its transcript at session start but writes it
@@ -208,21 +213,31 @@ export function checkTranscriptPath(
 
   // An existing transcript is judged on its realpath and must be a regular
   // file itself (a link at the name could name another session's file). A
-  // missing one only through notCreatedYetTarget; any other failure refuses.
+  // missing one in this host's syntax only through notCreatedYetTarget; any
+  // other failure refuses.
   let target: string | null;
   let pending = false;
+  let foreign = false;
   try {
     target = fs.realpathSync(transcriptPath);
     if (!fs.lstatSync(transcriptPath).isFile()) return { ok: false, reason: 'not a regular file' };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return { ok: false, reason: 'unreadable' };
-    target = notCreatedYetTarget(transcriptPath);
-    if (!target) return { ok: false, reason: 'not a file Claude has yet to write' };
-    pending = true;
+    if (isHostAbsolute(transcriptPath)) {
+      target = notCreatedYetTarget(transcriptPath);
+      if (!target) return { ok: false, reason: 'not a file Claude has yet to write' };
+      pending = true;
+    } else {
+      // The other OS's syntax (a path relayed or replayed from there): this
+      // process cannot open it as that file, so it is judged lexically, as it
+      // always was, and never served as an empty conversation.
+      target = transcriptPath;
+      foreign = true;
+    }
   }
   const resolved = normalizeForCompare(target);
   for (const root of claudeProjectRoots(sessionEnv)) {
-    if (isInside(resolved, normalizeForCompare(resolveIfPossible(root)))) {
+    if (isInside(resolved, normalizeForCompare(foreign ? root : resolveIfPossible(root)))) {
       return { ok: true, reason: '', ...(pending ? { pending: true } : {}) };
     }
   }

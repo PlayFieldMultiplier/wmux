@@ -1,3 +1,4 @@
+// @wmux-lane unit — 'win32' here is a host OS value under test; the one process.platform check only skips an assertion about a POSIX host.
 // `transcript_path` arrives on an authenticated but untrusted hook envelope, is
 // persisted, and is then opened and rendered as a pane's conversation. These are
 // the cases that decide whether that is a projection or an arbitrary-file-read.
@@ -6,7 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { checkTranscriptPath, claudeProjectRoots, isWslOwnTranscriptPath } from '../transcriptPathGuard';
+import { checkTranscriptPath, claudeProjectRoots, isHostAbsolute, isWslOwnTranscriptPath } from '../transcriptPathGuard';
 
 const SID = '920b9112-1111-4222-8333-444455556666';
 const root = path.join(os.homedir(), '.claude', 'projects');
@@ -101,10 +102,19 @@ describe('checkTranscriptPath', () => {
     const env = { CLAUDE_CONFIG_DIR: 'C:\\Users\\dev\\.claude' };
     const good = `C:\\Users\\dev\\.claude\\projects\\C--Users-dev-repo\\${SID}.jsonl`;
     expect(checkTranscriptPath(good, SID, env).ok).toBe(true);
+    // Off Windows it is the other OS's path: judged lexically, never pending (an empty conversation).
+    if (process.platform !== 'win32') expect(checkTranscriptPath(good, SID, env)).toEqual({ ok: true, reason: '' });
     const wrongName = 'C:\\Users\\dev\\.claude\\projects\\C--Users-dev-repo\\other.jsonl';
     expect(checkTranscriptPath(wrongName, SID, env).ok).toBe(false);
     const outside = `C:\\Windows\\Temp\\${SID}.jsonl`;
     expect(checkTranscriptPath(outside, SID, env).ok).toBe(false);
+  });
+
+  it('reads a path as this host\'s own only in its syntax', () => {
+    expect(isHostAbsolute('/Users/dev/x.jsonl', 'darwin')).toBe(true);
+    expect(isHostAbsolute('C:\\Users\\dev\\x.jsonl', 'darwin')).toBe(false);
+    expect(isHostAbsolute('C:\\Users\\dev\\x.jsonl', 'win32')).toBe(true);
+    for (const p of ['/home/u/x.jsonl', '\\\\server\\share\\x.jsonl', 'relative\\x.jsonl']) expect(isHostAbsolute(p, 'win32')).toBe(false);
   });
 
   it('accepts a not-yet-created transcript under a SYMLINKED root', () => {

@@ -137,6 +137,9 @@ export interface NativeChatBridgeDeps<P extends ChatPane> {
    * neither is known. A binding captured before it belongs to an earlier agent.
    */
   agentLaunchAt?(id: string): number | undefined;
+  /** The binding the projector reads the pane's transcript through (a live Codex relay's
+   *  selection first); default the pane's stored binding. */
+  transcriptBinding?(id: string): ResumeBinding | undefined;
   /** Panes whose resume binding names this agent session (the daemon's own records). */
   panesBoundTo?(agent: TerminalLaunchAgent, sessionId: string): string[];
   /** Whether the agent takes a first message on its resume line (default RESUME_TAKES_PROMPT). */
@@ -586,7 +589,7 @@ export function createChatBridge<P extends ChatPane>(deps: NativeChatBridgeDeps<
 
   /** The pane's binding is this conversation's, captured since its live agent started. */
   const runningAgentBound = (id: string, status: TranscriptStatus): boolean => {
-    const binding = deps.pane(id)?.meta.resumeBinding;
+    const binding = deps.transcriptBinding ? deps.transcriptBinding(id) : deps.pane(id)?.meta.resumeBinding;
     const since = deps.agentLaunchAt?.(id);
     return status.agentAlive === true && !!binding && binding.sessionId === status.agentSessionId
       && since !== undefined && binding.ts >= since;

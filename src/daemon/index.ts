@@ -4750,6 +4750,7 @@ function registerRpcHandlers(
       const known = [commandAt, startedAt > 0 ? startedAt : undefined].filter((v): v is number => v !== undefined);
       return known.length > 0 ? Math.max(...known) : undefined;
     },
+    transcriptBinding: resolveTranscriptBinding,
     projector,
     terminalChat: () => terminalChat,
     managed: () => chatSessions,
