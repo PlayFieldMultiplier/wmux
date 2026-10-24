@@ -228,6 +228,21 @@ describe('DaemonNotificationRouter — turn start lights the pane', () => {
     clearSuppression(PTY);
   });
 
+  it.each([
+    ['a prompt submit', (c: Captured) => c.agent?.(metadataEvent('agent.user_prompt_submit'))],
+    ['a burst the byte heuristic lights', (c: Captured) => c.active?.({ sessionId: PTY })],
+  ])('a new turn before the idle edge (%s) keeps that silence a plain idle', (_label, startNext) => {
+    const { router, captured } = makeRouter(stubHookRouter(false));
+    captured.turn?.({ sessionId: PTY, running: true });
+    captured.active?.({ sessionId: PTY });
+    captured.turn?.({ sessionId: PTY, running: false });
+    startNext(captured);
+    captured.idle?.({ sessionId: PTY, agentMidTurn: false });
+    expect(broadcastMetadataUpdateMock.mock.calls.some(([, p]) => (p as { settled?: boolean }).settled === true)).toBe(false);
+    router.stop();
+    clearSuppression(PTY);
+  });
+
   it('byte silence inside the next daemon turn is not that settle', () => {
     const { router, captured } = makeRouter();
     captured.turn?.({ sessionId: PTY, running: true });

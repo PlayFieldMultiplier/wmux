@@ -238,6 +238,10 @@ export class DaemonPTYBridge extends EventEmitter {
    * transcript end or the agent ending makes the close final.
    */
   private turnSoftClosed = false;
+  /** #2673 — when a submit that carried a prompt last reached Claude Code (0 = never). */
+  private claudePromptAt = 0;
+  /** #2673 — when Claude Code last set its running title `◐`/`◑` (0 = never). */
+  private claudeRunningTitleAt = 0;
   /**
    * F24 — the open episode was opened by output alone (a byte promotion) on a
    * pane whose hooks report, and no hook or submit has confirmed it since.
@@ -501,6 +505,9 @@ export class DaemonPTYBridge extends EventEmitter {
       && /^[a-z]$/i.test(keyProbe);
     const hasSubmitBoundary = this.scanSubmittedInput(data);
     const answered = forceSubmitted || hasSubmitBoundary || answerKey;
+    // #2673: a submit that carried a prompt, not a bare Enter (a dialog's answer).
+    const promptSubmitted = (forceSubmitted || hasSubmitBoundary) && !wasAwaiting
+      && (forceSubmitted || this.draftPending || DaemonPTYBridge.typesDraftText(data));
     // An unsubmitted draft in the composer: typed or pasted text with no Enter
     // after it. Ctrl+C / Ctrl+U empty the composer. Read by the usage-limit
     // continue, which must never append to (and submit) a human's half-typed line.
@@ -536,7 +543,7 @@ export class DaemonPTYBridge extends EventEmitter {
       });
     }
     if (!answered) return;
-    this.startAnsweredTurn(wasAwaiting, 'input');
+    this.startAnsweredTurn(wasAwaiting, 'input', promptSubmitted);
   }
 
   /**
@@ -586,7 +593,7 @@ export class DaemonPTYBridge extends EventEmitter {
    * take, so an answer recognised from a key and one recognised from the
    * screen leave the bridge in the same state.
    */
-  private startAnsweredTurn(wasAwaiting: boolean, reason: 'input' | 'screen-cleared'): void {
+  private startAnsweredTurn(wasAwaiting: boolean, reason: 'input' | 'screen-cleared', promptSubmitted = false): void {
     // An answer resumes the episode it interrupted; a submit into a running
     // turn is queued by the agent's own composer. Anything else starts one.
     if (!wasAwaiting) {
@@ -608,6 +615,9 @@ export class DaemonPTYBridge extends EventEmitter {
       this.turnSoftClosed = false;
       this.openTurn();
       if (joined) this.bootEpisode = false;
+      // A prompt typed into Claude Code itself, not the launch line the shell
+      // ran (the agent is not on the screen yet) nor a dialog's bare Enter.
+      if (promptSubmitted && this.agentDetector?.getLastAgent() === 'Claude Code') this.claudePromptAt = Date.now();
     } else if (this.turnSoftClosed) {
       // Answering a dialog resumes the episode it interrupted, even one a
       // detector settle closed softly before the dialog went up.
@@ -1155,17 +1165,28 @@ export class DaemonPTYBridge extends EventEmitter {
 
   /**
    * #2673 — Claude Code's running title (`◐`/`◑`, up for the whole of every
-   * turn it runs) over a boot episode: the agent's word that the episode is a
-   * turn. #1670 keeps the first submit after a launch a boot episode because
-   * it may only have answered a dialog; the next submit would find this title
-   * and keep the turn (startAnsweredTurn). Left a boot episode, the turn never
-   * reached main as one, so its end could not settle the pane either.
+   * turn it runs) over a boot episode that a prompt opened: the agent's word
+   * that the episode is a turn. #1670 keeps the first submit after a launch a
+   * boot episode because it may only have answered a dialog; the next submit
+   * would find this title and keep the turn (startAnsweredTurn). Left a boot
+   * episode, the turn never reached main as one, so its end could not settle
+   * the pane either. Only when the episode began with a prompt typed into
+   * Claude Code (claudePromptAt): the launch line, a startup paint and a
+   * dialog's bare Enter stay boot episodes.
    */
   private noteClaudeTitle(title: string): void {
-    if (!this.turnOpen || !this.bootEpisode || this.awaitingHuman || this.muted) return;
     if (!CLAUDE_RUNNING_TITLE.test(title)) return;
+    this.claudeRunningTitleAt = this.lastTitleAt;
+    if (!this.turnOpen || !this.bootEpisode || this.awaitingHuman || this.muted) return;
+    if (this.claudePromptAt === 0 || this.claudePromptAt < this.turnOpenedAt || !this.paneAgentIsClaude()) return;
     this.bootEpisode = false;
     this.reportMidTurn();
+  }
+
+  /** The pane's agent is Claude Code: the tracked process when there is one, else the screen. */
+  private paneAgentIsClaude(): boolean {
+    if (this.trackedAgent?.alive) return this.trackedAgent.slug === 'claude';
+    return this.agentDetector?.getLastAgent() === 'Claude Code';
   }
 
   /**
@@ -1617,9 +1638,13 @@ export class DaemonPTYBridge extends EventEmitter {
       // moment a permission dialog opens, a few ms before the dialog's rows,
       // and by now the detector has seen those (awaitingHuman). Softly, as a
       // detector settle: a later running edge resumes the episode.
+      // Only a turn Claude Code's spinner ran in (a sample newer than the
+      // episode's start), under an idle title set after that sample.
       if (
-        this.turnOpen && !this.hookSeen && !this.awaitingHuman
-        && titleShowsFinishedTurn({ title: this.lastTitle, at: this.lastTitleAt }, 'claude', 0)
+        this.turnOpen && !this.bootEpisode && !this.hookSeen && !this.awaitingHuman
+        && this.paneAgentIsClaude()
+        && this.claudeRunningTitleAt > 0 && this.claudeRunningTitleAt >= this.turnOpenedAt
+        && titleShowsFinishedTurn({ title: this.lastTitle, at: this.lastTitleAt }, 'claude', this.claudeRunningTitleAt)
       ) this.closeTurn(true);
       if (this.explicitTerminalStatus) return;
       this.emit('idle', { sessionId: ptyId, ...(this.isPreTurn() ? { preTurn: true } : {}) });
@@ -1773,8 +1798,8 @@ export class DaemonPTYBridge extends EventEmitter {
         if (titleTurnEdge.observe(title)) this.noteTitleTurnEnd(sessionId);
         if (CLAUDE_RUNNING_TITLE.test(title)) this.noteSpinnerTitle();
         else if (this.spinnerOpenedTurn && this.turnOpen && !this.awaitingHuman && CLAUDE_IDLE_TITLE.test(title)) this.endSpinnerTurn();
-        this.noteClaudeTitle(title);
         this.noteTitleAwaitingHuman(sessionId);
+        this.noteClaudeTitle(title);
         this.noteCodexTitleSpinner(sessionId);
         return;
       }

@@ -132,6 +132,44 @@ describe('DaemonPTYBridge — a hookless Claude Code turn ends in silence under 
     });
   });
 
+  it('a silent stretch under an idle title from before the turn leaves the turn open', () => {
+    runTurn('reply hi');
+    feed(IDLE);
+    vi.advanceTimersByTime(SILENCE_MS);
+    // The next turn: a long tool that has not painted the spinner yet.
+    bridge.noteInput('run the migration');
+    bridge.noteInput('\r');
+    vi.advanceTimersByTime(80);
+    feed(BIG);
+    vi.advanceTimersByTime(SILENCE_MS);
+    expect(bridge.isTurnOpen()).toBe(true);
+  });
+
+  it('leaves a hookless Codex pane alone, whatever its title', () => {
+    bridge.noteAgentProcess({ slug: 'codex', alive: true });
+    runTurn('explain the parser'); // the boot episode
+    vi.advanceTimersByTime(SILENCE_MS);
+    runTurn('refactor the parser'); // a turn of its own
+    expect(bridge.isTurnOpen()).toBe(true);
+    feed(IDLE);
+    vi.advanceTimersByTime(SILENCE_MS);
+    expect(bridge.isTurnOpen()).toBe(true);
+  });
+
+  it('a spinner painted during the startup, before any prompt, does not make the launch a turn', () => {
+    feed(RUNNING + BIG); // the launch's own boot episode is still open
+    expect(bridge.isAgentMidTurn()).toBe(false);
+    expect(edges).toEqual([]);
+  });
+
+  it('#1670: a spinner right after the trust dialog\'s bare Enter does not make it a turn', () => {
+    bridge.noteInput('\r'); // "Trust this folder?" answered
+    vi.advanceTimersByTime(100);
+    feed(RUNNING + BIG); // Claude Code starting up behind it
+    expect(bridge.isAgentMidTurn()).toBe(false);
+    expect(edges).toEqual([]);
+  });
+
   it('leaves a quiet turn alone when the title is not Claude Code\'s idle one', () => {
     bridge.noteInput('reply hi\r');
     vi.advanceTimersByTime(80);
