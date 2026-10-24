@@ -1737,7 +1737,8 @@ always neutral (the fill ladder).
   - **Kind badge.** The top of each chat view names which chat it is with a
     neutral `Badge` (11px, full round, no colour: the kind is not a state).
     Chat 1, which follows the agent in the terminal, reads "Terminal-linked
-    chat" at the right of its progress row; chat 2 reads "Chat only" in its
+    chat" at the right of its progress row (under the status when the pane
+    is too narrow, never clipped); chat 2 reads "Chat only" in its
     own top row. Each has a one-line hover explanation. Chat 1's approval
     note is plain: "Waiting for your approval." and an Answer in Terminal
     link that switches the pane to its terminal.
