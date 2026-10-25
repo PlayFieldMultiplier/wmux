@@ -2597,13 +2597,93 @@ also makes a sound.
 Suppressing the replacement entirely needs Apple's notification-filtering
 entitlement; nothing here depends on it.
 
+### Bot approvals — a bot waiting on the owner
+
+A bot's approval request (`/api/bot-approvals/:requestId`, the `approval`
+card in its Bots conversation) is pushed while it waits, **only to a device
+whose registration listed `capabilities: ["botApprovalPush"]`** (see
+Registering). A device that never listed it receives none of these. Sealed
+plaintext:
+
+```json
+{
+  "title": "Approval needed",
+  "body": "Reviewer: Merge PR #12 in owner/repo",
+  "approvalKind": "bot",
+  "botApprovalId": "apr-…",
+  "workspaceId": "<workspace id>",
+  "threadId": "pr:owner/repo#12",
+  "action": "merge",
+  "botId": "<bot id>",
+  "requiresInAppChoice": true,
+  "risk": "normal"
+}
+```
+
+- **Never an `approvalId`.** That field means a pane approval on
+  `/api/approvals`. Open the Bots conversation named by `workspaceId` and
+  `threadId`, read the request with `GET /api/bot-approvals/<botApprovalId>`,
+  and decide it with `POST …/decision`. `requiresInAppChoice` is always true:
+  there is no lock-screen affirmative.
+- `action` is one of `merge`, `push_default`, `issue_create`, `issue_close`,
+  `comment`, `release`. A skill proposal, a profile change or a native tool
+  request is decided on its desktop card and is never pushed.
+- `body` is `<bot name>: <summary>`. The summary is built from the request's
+  structured fields (the act, the repository, the PR or issue number), never
+  from text the bot wrote. A bot with no known name reads `A bot`.
+- `risk` is `critical` for an act no rule may approve (`release`,
+  `push_default`), which also rings while the desktop is in use, and `normal`
+  otherwise. Desktop presence holds a `normal` one the way it holds a pane
+  approval.
+- `botId` may be absent.
+- APNs collapse id: `bot-<botApprovalId>`.
+
+When the request stops waiting (decided on any surface, refused, withdrawn or
+expired), a retraction follows under the **same collapse id**, to the same
+devices:
+
+```json
+{
+  "title": "Approval resolved",
+  "body": "No longer waiting — nothing to do.",
+  "kind": "approval_retraction",
+  "retractsBotApprovalId": "apr-…"
+}
+```
+
+It carries neither `approvalId` nor `botApprovalId`. Handle it as a pane
+retraction (above): silent, no category, drop any local card for
+`retractsBotApprovalId`. No retraction is sent for a push that never left
+(presence still held it, or the held push was dropped).
+
+**Known limit: daemon restart.** The daemon does not persist what it pushed. A
+restarted daemon is sent the waiting requests again by the desktop app and
+pushes each once more under its collapse id, so the phone replaces the banner
+rather than stacking a second one. A request that stopped waiting while the
+daemon was down is not retracted.
+
+**A push is a nudge; the app's list is the record.** Open the Bots
+conversation and read what is waiting rather than relying on banners:
+
+- A request is pushed once, when it starts waiting. A device that registers
+  `botApprovalPush` later, or had no reachable registration then, is not sent
+  the requests already waiting; the app shows them when opened.
+- A push presence held and the park queue later evicted (past its cap) is
+  never sent, the same trade pane approvals make.
+- A device that re-registers without `botApprovalPush` gets no retraction for
+  a banner it already has.
+- At most the 200 oldest waiting requests are pushed.
+
+Bot questions, login requests and secret requests are not pushed yet.
+
 ---
 
 ### Registering
 
 ```
 POST /api/push-registration      (device credential, never the operator token)
-  body: {apnsToken, publicKey, apnsEnvironment?: 'development' | 'production'}
+  body: {apnsToken, publicKey, apnsEnvironment?: 'development' | 'production',
+         capabilities?: string[]}
   → 200 {ok: true}
   → 400 {error: 'bad-token' | 'bad-key' | 'bad-apns-environment'}
   → 403 {error: 'push-is-for-devices'}
@@ -2633,6 +2713,13 @@ A registration replaces the previous one wholesale, this field included: leaving
 it out on a later call **clears** a stage the daemon knew, rather than inheriting
 it. That is deliberate — the token now on file belongs to the build that just
 called, not to the one before it.
+
+`capabilities` lists the push kinds this build can open: `"botApprovalPush"`
+(Bot approvals, above). A push that needs a capability goes only to devices
+that listed it. Like the rest of the registration it is replaced wholesale, so
+send the full list every time; leaving it out clears it. Entries that are not
+names (`^[A-Za-z][A-Za-z0-9_]{0,63}$`) are dropped rather than refused, and
+names this daemon does not know are kept.
 
 A `410` from Apple makes the daemon forget your registration, so a reinstalled
 app must register again before it hears anything.

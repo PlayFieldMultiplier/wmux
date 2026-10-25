@@ -181,6 +181,28 @@ describe('PushSender — sealing', () => {
   });
 });
 
+describe('PushSender — capability gate', () => {
+  it('★ a push that requires a capability reaches only devices that registered it', async () => {
+    const capable = device('capable');
+    capable.target.push.capabilities = ['botApprovalPush'];
+    const old = device('old');
+    const other = device('other');
+    other.target.push.capabilities = ['somethingElse'];
+    const h = makeSender([200], [capable.target, old.target, other.target]);
+
+    h.sender.notify({ title: 't', body: 'b' }, { collapseId: 'bot-apr-x', requires: 'botApprovalPush' });
+    await h.sender.flush();
+    const tokens = h.calls.map((c) => JSON.parse(String(c.init.body)) as { ciphertext: string });
+    expect(tokens).toHaveLength(1);
+    expect(decodePushEnvelopeFromRelay(tokens[0].ciphertext)?.deviceId).toBe('capable');
+
+    // Without `requires`, every device hears it, as before.
+    h.sender.notify({ title: 't', body: 'b' });
+    await h.sender.flush();
+    expect(h.calls).toHaveLength(4);
+  });
+});
+
 describe('PushSender — failure handling', () => {
   it('retries once on a transport failure', async () => {
     const h = makeSender(['throw', 200], [device('d1').target]);

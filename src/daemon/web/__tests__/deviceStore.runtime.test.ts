@@ -803,6 +803,19 @@ describe('DeviceStore — APNs stage, per device', () => {
     expect(reloaded.pushTargets()[0]?.push.apnsEnvironment).toBe('development');
   });
 
+  it('★ keeps the capabilities a device registered across a restart, dropping junk entries, and a re-register without them clears them', async () => {
+    const first = store();
+    const minted = await first.mint({ name: 'Phone' });
+    expect(first.registerPush(minted.deviceId, {
+      apnsToken: APNS_TOKEN, publicKey: PUBLIC_KEY, capabilities: ['botApprovalPush', 42, 'not a name', 'botApprovalPush'],
+    }).ok).toBe(true);
+
+    const reloaded = store();
+    expect(reloaded.pushTargets()[0]?.push.capabilities).toEqual(['botApprovalPush']);
+    reloaded.registerPush(minted.deviceId, { apnsToken: APNS_TOKEN, publicKey: PUBLIC_KEY });
+    expect(reloaded.pushTargets()[0]?.push.capabilities).toBeUndefined();
+  });
+
   it('a junk stage on disk degrades to unknown rather than dropping the registration', async () => {
     const s = store();
     const minted = await s.mint({ name: 'Phone' });

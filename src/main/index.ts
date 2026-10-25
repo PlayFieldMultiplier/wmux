@@ -12,6 +12,7 @@ import { handlePhoneBrowser } from './phone/PhoneBrowser';
 import { handlePhoneWorkspaces } from './phone/PhoneWorkspaces';
 import { handlePhoneQuickCommands } from './quickCommands/QuickCommandStore';
 import { installPhoneBridge } from './phone/installPhoneBridge';
+import { botApprovalPushTable, createBotApprovalPushFeed, setBotApprovalPushFeed } from './phone/BotApprovalPushFeed';
 import { handlePhoneMoaWake } from './factory/phoneMessage';
 import { MOA_WAKE_COMMAND } from '../shared/moaWake';
 import { handlePhoneAccounts } from './phone/PhoneAccounts';
@@ -70,7 +71,8 @@ import { registerConnectorCheckHandlers } from './ipc/handlers/connectorCheck.ha
 import { RpcRouter } from './pipe/RpcRouter';
 import type { RpcMethod } from '../shared/rpc';
 import { liveNoChangesCheck } from './factory/noChangesCheck';
-import { getBotStore } from './factory/botStore';
+import { getBotDirectory, getBotStore } from './factory/botStore';
+import { getApprovalService } from './factory/approvals';
 import { PipeServer } from './pipe/PipeServer';
 import { registerWorkspaceRpc } from './pipe/handlers/workspace.rpc';
 import { registerSurfaceRpc } from './pipe/handlers/surface.rpc';
@@ -1445,6 +1447,20 @@ const workspaceFactsPublisher = createWorkspaceFactsPublisher({
   },
 });
 registerWorkspaceFactsPublisher(workspaceFactsPublisher);
+// A bot's approval requests waiting on the owner, pushed to the phone by the
+// daemon (phone/BotApprovalPushFeed.ts). The whole table on every change, and
+// again on each daemon connect.
+const botApprovalPushFeed = createBotApprovalPushFeed({
+  rows: () => {
+    const bots = getBotDirectory();
+    return botApprovalPushTable(getApprovalService()?.listForOperator() ?? null, (botId) => bots?.get(botId)?.name);
+  },
+  push: async (rows) => {
+    if (!daemonClient?.isConnected) throw new Error('Daemon not connected');
+    return daemonClient.rpc('daemon.botApprovals.set', { requests: rows });
+  },
+});
+setBotApprovalPushFeed(botApprovalPushFeed);
 // The track record (deck/trackRecordFeed.ts): counts from wmux's own task
 // data, running only while the agent factory is on — its switch starts and
 // stops it.
@@ -2397,6 +2413,9 @@ app.on('ready', async () => {
       // process, so read it fresh.
       invalidateAutonomyCache();
       void workspaceFactsPublisher.publishNow();
+      // A restarted daemon holds no bot approval table. Sent only once the
+      // approval store has an answer; its start publishes otherwise.
+      botApprovalPushFeed.publishNow();
       client.on('approvals:changed', () => { void trackRecordFeed.onApprovalsChanged(); });
       // Handler swap to daemon-routed mode. The microsecond window where
       // pty/* handlers are torn down and re-registered is the same

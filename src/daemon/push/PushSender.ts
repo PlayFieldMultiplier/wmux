@@ -44,6 +44,8 @@ export interface PushTarget {
      * uses whatever it was configured with. See `DevicePushRegistration`.
      */
     apnsEnvironment?: 'development' | 'production';
+    /** What the app said it can handle (`POST /api/push-registration`). */
+    capabilities?: string[];
   };
 }
 
@@ -77,6 +79,7 @@ const PRIORITY_IMMEDIATE = 10;
 interface QueuedPush {
   payload: PushPayload;
   collapseId?: string;
+  requires?: string;
 }
 
 export interface PushSendOutcome {
@@ -126,12 +129,16 @@ export class PushSender {
    * Queue one notification for every registered device. Returns immediately —
    * no caller of this is allowed to wait on a network round trip, least of all
    * the hook path.
+   *
+   * `requires` limits it to devices that registered that capability: a payload
+   * an older app cannot act on never reaches it.
    */
-  notify(payload: PushPayload, opts: { collapseId?: string } = {}): void {
+  notify(payload: PushPayload, opts: { collapseId?: string; requires?: string } = {}): void {
     if (!this.enabled) return;
     const item: QueuedPush = {
       payload,
       ...(opts.collapseId ? { collapseId: opts.collapseId } : {}),
+      ...(opts.requires ? { requires: opts.requires } : {}),
     };
     this.transport.enqueue(() => this.send(item).then(() => undefined));
   }
@@ -149,7 +156,10 @@ export class PushSender {
       failed: 0,
       lastStatus: null,
     };
-    const targets = this.deps.targets();
+    const requires = item.requires;
+    const targets = this.deps
+      .targets()
+      .filter((t) => requires === undefined || (t.push.capabilities?.includes(requires) ?? false));
     const ts = this.now();
 
     for (const target of targets) {
