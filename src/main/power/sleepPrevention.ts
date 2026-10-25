@@ -128,7 +128,7 @@ export class SleepPrevention {
     this.disposed = true;
     this.deps.power?.removeListener('suspend', this.onSuspend);
     this.deps.power?.removeListener('resume', this.onResume);
-    this.release();
+    this.release('teardown');
     this.stateListeners.clear();
   }
 
@@ -144,7 +144,9 @@ export class SleepPrevention {
       this.cancelRelease();
       if (this.blockerId === null || !this.deps.blocker.isStarted(this.blockerId)) {
         this.blockerId = this.deps.blocker.start('prevent-app-suspension');
-        this.deps.log?.(`[power] sleep blocker on id=${this.blockerId} mode=${this.mode} agents=${this.agentsWorking} phone=${this.phoneAttached}`);
+        // `started` is Electron's own answer, read back after the call.
+        const id = this.blockerId;
+        this.deps.log?.(`[power] blocker on id=${id} started=${this.deps.blocker.isStarted(id)} mode=${this.mode} (agents=${this.agentsWorking ? 1 : 0} phone=${this.phoneAttached ? 1 : 0})`);
       }
     } else if (this.mode === 'working' && this.blockerId !== null) {
       // The agents stopped and no phone is attached: let go after the grace,
@@ -167,13 +169,13 @@ export class SleepPrevention {
     this.releaseTimer = null;
   }
 
-  private release(): void {
+  private release(reason: 'released' | 'teardown' = 'released'): void {
     this.cancelRelease();
     if (this.blockerId === null) return;
     const id = this.blockerId;
     this.blockerId = null;
     if (this.deps.blocker.isStarted(id)) this.deps.blocker.stop(id);
-    this.deps.log?.(`[power] sleep blocker off id=${id} mode=${this.mode}`);
+    this.deps.log?.(`[power] blocker off id=${id} started=${this.deps.blocker.isStarted(id)} mode=${this.mode} (${reason})`);
     this.emitState();
   }
 

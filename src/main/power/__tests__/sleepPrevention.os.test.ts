@@ -214,6 +214,22 @@ describe.each(['win32', 'darwin'] as const)('SleepPrevention on %s', (platform) 
     expect(sp.state).toEqual({ mode: 'off', active: false });
   });
 
+  it('logs each hold and release with Electron\'s own started state, and the teardown as such', () => {
+    const lines: string[] = [];
+    const logged = new SleepPrevention({ blocker, log: (l) => lines.push(l) });
+    logged.setPhoneAttached(true);
+    logged.setPhoneAttached(false);
+    vi.advanceTimersByTime(RELEASE_GRACE_MS);
+    logged.setAgentsWorking(true);
+    logged.dispose();
+    expect(lines).toEqual([
+      '[power] blocker on id=1 started=true mode=working (agents=0 phone=1)',
+      '[power] blocker off id=1 started=false mode=working (released)',
+      '[power] blocker on id=2 started=true mode=working (agents=1 phone=0)',
+      '[power] blocker off id=2 started=false mode=working (teardown)',
+    ]);
+  });
+
   it('holds nothing after dispose, whatever reports arrive late', () => {
     sp.setMode('always');
     sp.dispose();
