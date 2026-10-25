@@ -195,6 +195,7 @@ function outcomeLine(c: FirewallState, t: T): string | null {
     return t('net.fw.failed', { error: 'key' in e ? t(e.key) : e.code });
   }
   if (o.kind === 'refused') return o.refusal === 'busy' ? t('net.fw.busy') : null;
+  if (o.kind === 'running') return t('net.fw.stillRunning');
   // ok: the check after it says what is true; only a failed check needs words.
   return c.readFailed ? t('net.fw.okUnchecked') : null;
 }

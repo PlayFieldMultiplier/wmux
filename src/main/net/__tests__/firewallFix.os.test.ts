@@ -60,6 +60,26 @@ describe('FirewallFixer.status', () => {
     expect(s.elevation).toBe('consent');
   });
 
+  it('an older answer that arrives after a newer one is not what the Fix acts on', async () => {
+    const answers: Array<(s: InboundStatus) => void> = [];
+    const t = setup();
+    (t.deps.rpc as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) => {
+      if (method === 'net.inboundStatus') return new Promise((r) => answers.push(r));
+      if (method === 'net.firewallTarget') return { listener: 'a2a', platform: 'win32', exe: EXE, applicable: true, port: 45660, tailnet: false };
+      return { ok: true };
+    });
+    const older = t.fixer.status('a2a');
+    const newer = t.fixer.status('a2a');
+    await vi.waitFor(() => expect(answers).toHaveLength(2), { timeout: 5_000 });
+    answers[1](status({ verdict: 'covered' }));
+    await newer;
+    answers[0](status());
+    await older;
+    // The newest check said covered: a Fix is refused, not run for the stale not-covered.
+    expect((await t.fixer.fix('a2a')).outcome).toEqual({ kind: 'refused', refusal: 'changed' });
+    expect(t.deps.elevateWindows).not.toHaveBeenCalled();
+  });
+
   it('a fresh check asks for a probe that starts now', async () => {
     const { fixer, calls } = setup();
     await fixer.status('a2a', { fresh: true });
@@ -166,7 +186,7 @@ describe('FirewallFixer.fix', () => {
     const stillRunning = new Promise<void>((r) => { exited = r; });
     const t = setup({ probes: [status(), status(), status(), status()], elevate: async () => ({ started: true, lastError: null, exitCode: null, stillRunning }) });
     await t.fixer.status('a2a');
-    expect((await t.fixer.fix('a2a')).outcome).toEqual({ kind: 'failed', stage: null, code: null });
+    expect((await t.fixer.fix('a2a')).outcome).toEqual({ kind: 'running' });
     await t.fixer.status('a2a');
     expect((await t.fixer.fix('a2a')).outcome).toEqual({ kind: 'refused', refusal: 'busy' });
     expect(t.deps.elevateWindows).toHaveBeenCalledTimes(1);

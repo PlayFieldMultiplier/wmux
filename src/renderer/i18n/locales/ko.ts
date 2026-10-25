@@ -4835,6 +4835,7 @@ export const ko = {
   'net.fw.detailLabel': "방화벽",
   'net.fw.macBlockAll': "\"모든 수신 연결 차단\"이 켜져 있어 이 Mac은 다른 PC에 참가만 할 수 있습니다.",
   'net.fw.inviteHint': "다른 PC가 연결하지 못하면 여기로 돌아와 방화벽을 확인하세요.",
+  'net.fw.stillRunning': "방화벽 변경이 아직 진행 중입니다. 잠시 후 방화벽을 다시 확인하세요.",
   'net.fw.allowedSignedMac': "허용됨: macOS가 wmux 같은 서명된 앱의 연결 수신을 허용합니다.",
   'net.fw.busy': "다른 방화벽 변경이 아직 진행 중입니다. 끝나면 방화벽을 다시 확인하세요.",
   'net.fw.okUnchecked': "변경은 실행됐지만 이후 방화벽을 읽지 못했습니다. 방화벽을 다시 확인하세요.",

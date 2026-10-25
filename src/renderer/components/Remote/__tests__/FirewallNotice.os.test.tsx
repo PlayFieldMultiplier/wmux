@@ -162,6 +162,17 @@ describe('the Fix and the one-primary rule', () => {
     expect(credential).toContain('data-firewall-copy');
   });
 
+  it('a Fix whose public block failed names that step even though the check says the Allow is there', () => {
+    const html = view(ctl({ status: status({ verdict: 'covered' }), outcome: { kind: 'failed', stage: 'pubblock', code: 12 } }), { quiet: true });
+    expect(html).toContain('net.fw.allowed(45660)');
+    expect(html).toContain('net.fw.failed(net.fw.stage.pubblock)');
+    expect(html).not.toContain('net.fw.nowRetry');
+  });
+
+  it('a change still running when the wait ended says so', () => {
+    expect(view(ctl({ outcome: { kind: 'running' } }))).toContain('net.fw.stillRunning');
+  });
+
   it('a failed stage is named, never stderr', () => {
     expect(view(ctl({ outcome: { kind: 'failed', stage: 'pubblock', code: 12 } }))).toContain('net.fw.failed(net.fw.stage.pubblock)');
     expect(view(ctl({ outcome: { kind: 'failed', stage: null, code: 5 } }))).toContain('net.fw.failed(5)');

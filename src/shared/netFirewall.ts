@@ -606,10 +606,15 @@ export function firewallDetailsText(s: InboundStatus): string {
 
 // ── After an elevated Fix or Remove ──────────────────────────────────────────
 
-/** How the elevated run ended. The re-probe that follows decides what the UI says about the rule. */
+/**
+ * How the elevated run ended. The re-probe that follows decides what the UI
+ * says about the rule. `running`: the child outlived the wait and may still
+ * change the firewall.
+ */
 export type ElevationOutcome =
   | { kind: 'ok' }
   | { kind: 'cancelled' }
+  | { kind: 'running' }
   | { kind: 'failed'; stage: 'cleanup' | 'allow' | 'pubblock' | null; code: number | null };
 
 /** ERROR_CANCELLED: the person declined the Windows permission request. */
@@ -624,11 +629,12 @@ export const FIX_STAGE_EXIT = { cleanup: 10, allow: 11, pubblock: 12 } as const;
  * child's exit code (null when it could not be read or the wait timed out).
  * No text is ever matched: an elevated child has no stderr to read.
  */
-export function elevationOutcome(r: { started: boolean; lastError?: number | null; exitCode?: number | null }): ElevationOutcome {
+export function elevationOutcome(r: { started: boolean; lastError?: number | null; exitCode?: number | null; stillRunning?: unknown }): ElevationOutcome {
   if (!r.started) {
     if (r.lastError === ERROR_CANCELLED) return { kind: 'cancelled' };
     return { kind: 'failed', stage: null, code: r.lastError ?? null };
   }
+  if (r.stillRunning) return { kind: 'running' };
   switch (r.exitCode) {
     case 0:
       return { kind: 'ok' };

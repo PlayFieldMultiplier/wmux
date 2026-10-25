@@ -80,6 +80,8 @@ function isStatus(v: unknown): v is InboundStatus {
 
 export class FirewallFixer {
   private readonly seen = new Map<FirewallListener, InboundStatus>();
+  /** Per listener, the newest status() call: an older answer arriving later is not what was shown last. */
+  private readonly asked = new Map<FirewallListener, number>();
   private busy = false;
   /** The elevated child of the action in progress, when it outlived the wait. */
   private stillRunning: Promise<void> | null = null;
@@ -93,9 +95,11 @@ export class FirewallFixer {
    */
   async status(listener: FirewallListener, opts: { fresh?: boolean } = {}): Promise<InboundStatusView> {
     const params: Record<string, unknown> = opts.fresh ? { listener, fresh: true } : { listener };
+    const n = (this.asked.get(listener) ?? 0) + 1;
+    this.asked.set(listener, n);
     const raw = await this.deps.rpc('net.inboundStatus', params, { timeoutMs: INBOUND_STATUS_RPC_TIMEOUT_MS });
     if (!isStatus(raw)) throw new Error('net.inboundStatus: malformed daemon response');
-    this.seen.set(listener, raw);
+    if (this.asked.get(listener) === n) this.seen.set(listener, raw);
     return { ...raw, elevation: elevationKind(this.deps.tokenType(), this.deps.selfElevated()) };
   }
 

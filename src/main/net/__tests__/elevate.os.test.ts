@@ -30,6 +30,14 @@ describe.runIf(process.platform === 'win32')('shellExecuteAndWait (open verb, no
     await r.stillRunning;
   }, 30_000);
 
+  it('a child that outlives the tracking deadline releases the caller while it still runs', async () => {
+    const started = Date.now();
+    const r = await shellExecuteAndWait({ verb: 'open', file: path.win32.join(system32, 'cmd.exe'), parameters: '/d /c ping -n 8 127.0.0.1 >nul', hwnd: null, waitMs: 100, trackMs: 500 });
+    await r.stillRunning;
+    // Released at the first poll after the deadline, well before ping's ~7 s.
+    expect(Date.now() - started).toBeLessThan(5_000);
+  }, 30_000);
+
   it('refuses a relative program path or a share', async () => {
     await expect(shellExecuteAndWait({ verb: 'open', file: 'cmd.exe', parameters: '', hwnd: null })).rejects.toThrow(/absolute/);
     await expect(shellExecuteAndWait({ verb: 'open', file: '\\\\server\\share\\cmd.exe', parameters: '', hwnd: null })).rejects.toThrow(/absolute/);

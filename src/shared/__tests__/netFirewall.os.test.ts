@@ -331,6 +331,8 @@ describe('elevationOutcome', () => {
     expect(elevationOutcome({ started: true, exitCode: 12 })).toEqual({ kind: 'failed', stage: 'pubblock', code: 12 });
     expect(elevationOutcome({ started: true, exitCode: 1 })).toEqual({ kind: 'failed', stage: null, code: 1 });
     expect(elevationOutcome({ started: true, exitCode: null })).toEqual({ kind: 'failed', stage: null, code: null });
+    // Outlived the wait: it may still change the firewall.
+    expect(elevationOutcome({ started: true, exitCode: null, stillRunning: Promise.resolve() })).toEqual({ kind: 'running' });
   });
   it('failedError says a stage (an i18n key) or a code, never stderr', () => {
     expect(failedError({ kind: 'failed', stage: 'pubblock', code: 12 })).toEqual({ key: 'net.fw.stage.pubblock' });

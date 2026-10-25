@@ -36,6 +36,12 @@ const WAIT_TIMEOUT = 0x102;
 export const ELEVATED_WAIT_MS = 60_000;
 /** After that wait, how often to look whether the child has exited. */
 export const ELEVATED_POLL_MS = 2_000;
+/**
+ * How long a child that outlived the wait is tracked at most. A firewall
+ * script that has not ended in 10 minutes is wedged (a hung PowerShell
+ * start); past that the slot is released rather than held until restart.
+ */
+export const ELEVATED_TRACK_MS = 10 * 60_000;
 
 export interface ShellRunResult {
   /** ShellExecuteExW returned TRUE (the child started). */
@@ -46,8 +52,9 @@ export interface ShellRunResult {
   exitCode: number | null;
   /**
    * Only when the wait timed out: the child still runs (a medium-integrity
-   * wmux cannot end an elevated one), and this settles when it exits. The
-   * caller starts no second elevation before then.
+   * wmux cannot end an elevated one), and this settles when it exits, or
+   * after ELEVATED_TRACK_MS. The caller starts no second elevation before
+   * then.
    */
   stillRunning?: Promise<void>;
 }
@@ -118,6 +125,8 @@ export interface ShellRunOptions {
   /** The window that parents the consent prompt (BrowserWindow.getNativeWindowHandle()), or null. */
   hwnd: Buffer | null;
   waitMs?: number;
+  /** How long a child that outlived `waitMs` is tracked (ELEVATED_TRACK_MS). */
+  trackMs?: number;
 }
 
 function hwndValue(buf: Buffer | null): bigint {
@@ -128,12 +137,14 @@ function hwndValue(buf: Buffer | null): bigint {
 /**
  * Look at a child that outlived the wait every ELEVATED_POLL_MS, with a
  * zero-timeout wait on the JS thread: a blocking wait would hold one of
- * libuv's four pool threads for as long as a wedged PowerShell lives.
+ * libuv's four pool threads for as long as a wedged PowerShell lives. Gives
+ * up after `trackMs`.
  */
-function whenExited(w: Win32, handle: bigint): Promise<void> {
+function whenExited(w: Win32, handle: bigint, trackMs: number): Promise<void> {
+  const until = Date.now() + trackMs;
   return new Promise((resolve) => {
     const timer = setInterval(() => {
-      if (w.WaitForSingleObject(handle, 0) === WAIT_TIMEOUT) return;
+      if (w.WaitForSingleObject(handle, 0) === WAIT_TIMEOUT && Date.now() < until) return;
       clearInterval(timer);
       w.CloseHandle(handle);
       resolve();
@@ -168,14 +179,15 @@ export async function shellExecuteAndWait(opts: ShellRunOptions): Promise<ShellR
   const ok = await callAsync<number>(w.ShellExecuteExW, sei);
   if (!ok) return { started: false, lastError: w.GetLastError() as number, exitCode: null };
   const handle = BigInt(sei['hProcess'] as number | bigint);
-  // NOCLOSEPROCESS can still leave no handle (the request went to an existing process).
+  // NOCLOSEPROCESS can still leave no handle (the request went to an existing
+  // process): nothing to wait on or track, so nothing holds the caller's slot.
   if (handle === 0n) return { started: true, lastError: null, exitCode: null };
   let keep = false;
   try {
     const waited = await callAsync<number>(w.WaitForSingleObject, handle, opts.waitMs ?? ELEVATED_WAIT_MS);
     if (waited === WAIT_TIMEOUT) {
       keep = true;
-      return { started: true, lastError: null, exitCode: null, stillRunning: whenExited(w, handle) };
+      return { started: true, lastError: null, exitCode: null, stillRunning: whenExited(w, handle, opts.trackMs ?? ELEVATED_TRACK_MS) };
     }
     if (waited !== WAIT_OBJECT_0) return { started: true, lastError: null, exitCode: null };
     const code = [0];
