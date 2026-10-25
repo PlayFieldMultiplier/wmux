@@ -16,8 +16,17 @@ export class FakeCodex {
   args: string[] = [];
   /** The version initialize reports in its userAgent. */
   version = '0.162.1';
-  /** Turns thread/resume reports. */
-  resumeTurns: Array<Record<string, unknown>> = [];
+  /** Turns thread/resume reports (undefined: none listed). */
+  resumeTurns: Array<Record<string, unknown>> | undefined = [];
+  /**
+   * How turn/start is answered: `id` (default) names the turn, `hold` waits
+   * for answerTurnStart(), `noId` answers without a turn id, `refuse` with a
+   * JSON-RPC error.
+   */
+  turnStart: 'id' | 'hold' | 'noId' | 'refuse' = 'id';
+  /** A reply line this returns true for fails its write, 20 ms later. */
+  failWrite: ((line: Record<string, unknown>) => boolean) | null = null;
+  private heldTurnStart: Record<string, unknown> | null = null;
   private turns = 0;
   private child: (EventEmitter & { stdout: PassThrough; stderr: PassThrough; exitCode: number | null; pid: number }) | null = null;
 
@@ -39,7 +48,9 @@ export class FakeCodex {
       this.out({ id: line.id, result: { thread: { id: params.threadId, turns: this.resumeTurns } } });
     } else if (line.method === 'turn/start') {
       this.turns += 1;
-      this.out({ id: line.id, result: { turn: { id: `turn-${this.turns}`, status: 'inProgress', items: [] } } });
+      if (this.turnStart === 'hold') this.heldTurnStart = line;
+      else if (this.turnStart === 'refuse') this.out({ id: line.id, error: { code: -32600, message: 'bad input' } });
+      else this.out({ id: line.id, result: { turn: this.turnStart === 'noId' ? { status: 'inProgress' } : { id: `turn-${this.turns}`, status: 'inProgress', items: [] } } });
     } else if (line.method === 'turn/interrupt') {
       this.out({ id: line.id, result: {} });
     }
@@ -57,6 +68,10 @@ export class FakeCodex {
         while ((index = buffer.indexOf('\n')) >= 0) {
           const line = JSON.parse(buffer.slice(0, index)) as Record<string, unknown>;
           buffer = buffer.slice(index + 1);
+          if (this.failWrite?.(line)) {
+            setTimeout(() => callback(new Error('EPIPE')), 20);
+            return;
+          }
           this.stdin.push(line);
           if (typeof line.method === 'string' && line.id !== undefined) this.answer(line);
         }
@@ -68,6 +83,17 @@ export class FakeCodex {
     this.child = child;
     setImmediate(() => child.emit('spawn'));
     return child as unknown as ChildProcessWithoutNullStreams;
+  }
+
+  /** Answer a held turn/start now. */
+  answerTurnStart(): void {
+    const line = this.heldTurnStart;
+    this.heldTurnStart = null;
+    if (line) this.out({ id: line.id, result: { turn: { id: `turn-${this.turns}`, status: 'inProgress', items: [] } } });
+  }
+
+  get exited(): boolean {
+    return this.child?.exitCode != null;
   }
 
   out(message: Record<string, unknown>): void {

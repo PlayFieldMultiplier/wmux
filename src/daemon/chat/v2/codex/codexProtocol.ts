@@ -18,10 +18,13 @@ import { asRecord } from '../claude/claudeProtocol';
 export const CODEX_MIN_VERSION = '0.162.1';
 /**
  * A config key Codex ignores, set on the launch line so the process carries
- * the chat's provider session id in its argv: the orphan sweep kills a driver
- * left by a previous daemon only when its command line holds that marker.
+ * the chat record's id in its argv: the orphan sweep kills a driver left by a
+ * previous daemon only when its command line holds that marker. Not the
+ * provider session id: a new thread's id is Codex's, known only after spawn.
  */
 export const CODEX_MARKER_KEY = 'wmux_chat_session';
+/** The `clientInfo.name` sent in `initialize`; Codex echoes it before its own version in the userAgent. */
+export const CODEX_CLIENT_NAME = 'wmux_chat';
 /** Always explicit: a chat Codex never inherits an unattended mode from config. */
 export const CODEX_APPROVAL_POLICY = 'on-request';
 export const CODEX_SANDBOX = 'workspace-write';
@@ -32,16 +35,21 @@ export function str(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
 
-export function codexSpawnArgs(providerSessionId: string): string[] {
-  return ['-c', `${CODEX_MARKER_KEY}="${providerSessionId}"`, 'app-server', '--listen', 'stdio://'];
+/** `chatSessionId` must already match CHATV2_PROVIDER_SESSION_ID (the driver checks). */
+export function codexSpawnArgs(chatSessionId: string): string[] {
+  return ['-c', `${CODEX_MARKER_KEY}="${chatSessionId}"`, 'app-server', '--listen', 'stdio://'];
 }
 
 /**
- * The version from the `initialize` response's userAgent, which names the
- * client first: `wmux_chat/0.162.1 (Mac OS 15.6.0; arm64) …`.
+ * Codex's own version from the `initialize` response's userAgent. Measured on
+ * 0.162.1: `wmux_chat/0.162.1 (Mac OS 15.6.0; arm64) dumb (wmux_chat; 1.0.0)`
+ * — the client name we sent, then Codex's version; our own version comes only
+ * in the trailing parentheses. Read after exactly that client name, or not at all.
  */
 export function codexVersionFromUserAgent(userAgent: unknown): string | null {
-  const match = /^[^/\s]+\/(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/.exec(str(userAgent));
+  const ua = str(userAgent);
+  if (!ua.startsWith(`${CODEX_CLIENT_NAME}/`)) return null;
+  const match = /^(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)(?:\s|$)/.exec(ua.slice(CODEX_CLIENT_NAME.length + 1));
   return match ? match[1] : null;
 }
 
@@ -66,22 +74,28 @@ export interface CodexFileChange {
   diff: string;
 }
 
-export function fileChangesOf(value: unknown): CodexFileChange[] {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((entry) => {
+/**
+ * A fileChange item's `changes` (FileUpdateChange[]: path, diff, and a kind
+ * of add, delete or update; the generated 0.162.1 schema spells an update's
+ * destination `move_path`). Null when any entry cannot be read, or names a
+ * kind this driver does not know: a set it cannot show is never approved
+ * in part.
+ */
+export function fileChangesOf(value: unknown): CodexFileChange[] | null {
+  if (!Array.isArray(value)) return null;
+  const changes: CodexFileChange[] = [];
+  for (const entry of value) {
     const change = asRecord(entry);
+    const kind = asRecord(change?.kind);
     const path = str(change?.path);
-    if (!change || !path) return [];
-    const kind = asRecord(change.kind);
     const type = str(kind?.type);
-    const movePath = str(kind?.move_path);
-    return [{
-      path,
-      kind: type === 'add' || type === 'delete' ? type : 'update',
-      ...(movePath ? { movePath } : {}),
-      diff: str(change.diff),
-    }];
-  });
+    if (!change || !kind || !path || typeof change.diff !== 'string') return null;
+    if (type !== 'add' && type !== 'delete' && type !== 'update') return null;
+    const move = kind.move_path;
+    if (move != null && (type !== 'update' || typeof move !== 'string' || !move)) return null;
+    changes.push({ path, kind: type, ...(typeof move === 'string' ? { movePath: move } : {}), diff: change.diff });
+  }
+  return changes;
 }
 
 function textLines(text: string): string[] {
@@ -158,13 +172,29 @@ export function changeTitle(changes: CodexFileChange[]): string {
   return `${verb} ${baseName(change.movePath ?? change.path)}`;
 }
 
-/** One card line: every path with its counts, e.g. `src/a.ts +3 −1, b.ts +2 −0`. */
-export function changeSummary(changes: CodexFileChange[]): string {
+/** A path as the card shows it: relative to the chat's folder when inside it. */
+function shownPath(path: string, cwd: string): string {
+  return cwd && (path.startsWith(`${cwd}/`) || path.startsWith(`${cwd}\\`)) ? path.slice(cwd.length + 1) : path;
+}
+
+/** One card line: every path with its counts, e.g. `src/a.ts +3 −1, b.ts → c.ts +2 −0`. */
+export function changeSummary(changes: CodexFileChange[], cwd = ''): string {
   return changes.map((change) => {
     const { additions, deletions } = changeLines(change);
-    const path = change.movePath ? `${change.path} → ${change.movePath}` : change.path;
+    const path = change.movePath ? `${shownPath(change.path, cwd)} → ${shownPath(change.movePath, cwd)}` : shownPath(change.path, cwd);
     return `${path} +${additions} −${deletions}`;
   }).join(', ');
+}
+
+/**
+ * The file-change card's line. Approve applies every change, so the line
+ * lists every file (and a move's destination); a set whose line would be cut
+ * on the card is refused rather than approved partly unseen.
+ */
+export function fileChangeCard(changes: CodexFileChange[], cwd: string): { ok: true; summary: string } | { ok: false; reason: string } {
+  const summary = changeSummary(changes, cwd);
+  if (summary.length > TERMINAL_PROMPT_SUMMARY_MAX) return { ok: false, reason: `Codex asked to change ${changes.length} files at once, more than one card can list` };
+  return { ok: true, summary };
 }
 
 /** A content fingerprint of a change set: a card shown for one diff must not approve another. */
@@ -184,10 +214,13 @@ export function denyDecision(availableDecisions: unknown): 'decline' | 'cancel' 
   return availableDecisions.includes('decline') ? 'decline' : 'cancel';
 }
 
-/** The command approval's card line. */
+/** The command approval's card line. Accept runs the whole command, so a network approval names it too. */
 export function commandSummary(params: Record<string, unknown>): string {
   const network = asRecord(params.networkApprovalContext);
-  if (network) return `Network access to ${str(network.host) || 'a host'} (${str(network.protocol) || 'unknown'})`;
+  if (network) {
+    const access = `Network access to ${str(network.host) || 'a host'} (${str(network.protocol) || 'unknown'})`;
+    return str(params.command) ? `${access}: ${str(params.command)}` : access;
+  }
   if (str(params.kind) === 'writeStdin') return `Send input to a running command${str(params.command) ? `: ${str(params.command)}` : ''}`;
   return str(params.command) || str(params.reason) || 'Run a command';
 }
@@ -197,22 +230,46 @@ export function commandSummary(params: Record<string, unknown>): string {
 const FILE_SYSTEM_KEYS = new Set(['read', 'write', 'entries', 'globScanMaxDepth']);
 const NETWORK_KEYS = new Set(['enabled']);
 const PROFILE_KEYS = new Set(['fileSystem', 'network']);
+const ACCESS_MODES = new Set(['read', 'write', 'deny']);
+/** FileSystemSpecialPath kinds with nothing but `kind` (project_roots may add a subpath; `unknown` is refused). */
+const SPECIAL_KINDS = new Set(['root', 'minimal', 'project_roots', 'tmpdir', 'slash_tmp']);
 
 export type PermissionsCard =
   | { ok: true; summary: string; grant: Record<string, unknown> }
   | { ok: false; reason: string };
 
-function entryLine(entry: unknown): string | null {
+/** Only these keys, ignoring absent (null) ones. */
+function onlyKeys(rec: Record<string, unknown>, allowed: readonly string[]): boolean {
+  return Object.keys(rec).every((k) => allowed.includes(k) || rec[k] == null);
+}
+
+/**
+ * One sandbox entry, as its card line and the entry granted: rebuilt from
+ * the fields the line shows, so the grant holds nothing the card did not.
+ */
+function sandboxEntry(entry: unknown): { line: string; grant: Record<string, unknown> } | null {
   const rec = asRecord(entry);
   const path = asRecord(rec?.path);
   const access = str(rec?.access);
-  if (!rec || !path || !access) return null;
+  if (!rec || !path || !ACCESS_MODES.has(access) || !onlyKeys(rec, ['access', 'path'])) return null;
   const type = str(path.type);
-  const target = type === 'path' ? str(path.path)
-    : type === 'glob_pattern' ? str(path.pattern)
-    : type === 'special' ? `(${str(asRecord(path.value)?.kind) || 'special'})`
-    : '';
-  return target ? `${access} ${target}` : null;
+  if (type === 'path' && str(path.path) && onlyKeys(path, ['type', 'path'])) {
+    return { line: `${access} ${str(path.path)}`, grant: { access, path: { type, path: str(path.path) } } };
+  }
+  if (type === 'glob_pattern' && str(path.pattern) && onlyKeys(path, ['type', 'pattern'])) {
+    return { line: `${access} ${str(path.pattern)}`, grant: { access, path: { type, pattern: str(path.pattern) } } };
+  }
+  const value = asRecord(path.value);
+  const kind = str(value?.kind);
+  if (type !== 'special' || !value || !SPECIAL_KINDS.has(kind) || !onlyKeys(path, ['type', 'value'])) return null;
+  const subpath = value.subpath;
+  if (!onlyKeys(value, kind === 'project_roots' ? ['kind', 'subpath'] : ['kind'])) return null;
+  if (subpath != null && (typeof subpath !== 'string' || !subpath)) return null;
+  const sub = typeof subpath === 'string' ? subpath : '';
+  return {
+    line: `${access} (${kind}${sub ? ` ${sub}` : ''})`,
+    grant: { access, path: { type, value: { kind, ...(sub ? { subpath: sub } : {}) } } },
+  };
 }
 
 function stringList(value: unknown): string[] | null {
@@ -244,17 +301,21 @@ export function permissionsCard(permissions: unknown): PermissionsCard {
     const read = stringList(fileSystem.read);
     const write = stringList(fileSystem.write);
     const rawEntries = fileSystem.entries == null ? [] : fileSystem.entries;
+    const depth = fileSystem.globScanMaxDepth;
     if (!read || !write || !Array.isArray(rawEntries)) return { ok: false, reason: 'unreadable file system permission' };
-    const entries = rawEntries.map(entryLine);
-    if (entries.some((line) => line === null)) return { ok: false, reason: 'unreadable file system entry' };
+    if (depth != null && !(typeof depth === 'number' && Number.isSafeInteger(depth) && depth >= 1)) return { ok: false, reason: 'unreadable glob scan depth' };
+    const entries = rawEntries.map(sandboxEntry);
+    if (entries.some((e) => e === null)) return { ok: false, reason: 'unreadable file system entry' };
+    const shown = entries as Array<{ line: string; grant: Record<string, unknown> }>;
     if (write.length) parts.push(`write ${write.join(', ')}`);
     if (read.length) parts.push(`read ${read.join(', ')}`);
-    parts.push(...entries as string[]);
+    parts.push(...shown.map((e) => e.line));
+    if (typeof depth === 'number') parts.push(`glob scan depth ${depth}`);
     const granted: Record<string, unknown> = {};
     if (write.length) granted.write = write;
     if (read.length) granted.read = read;
-    if (rawEntries.length) granted.entries = rawEntries;
-    if (typeof fileSystem.globScanMaxDepth === 'number') granted.globScanMaxDepth = fileSystem.globScanMaxDepth;
+    if (shown.length) granted.entries = shown.map((e) => e.grant);
+    if (typeof depth === 'number') granted.globScanMaxDepth = depth;
     if (Object.keys(granted).length) grant.fileSystem = granted;
   }
   if (network && typeof network.enabled === 'boolean') {
@@ -285,7 +346,8 @@ export function codexQuestions(value: unknown): CodexQuestionSet | null {
     const q = asRecord(entry);
     const id = str(q?.id);
     const prompt = str(q?.question);
-    if (!q || !id || !prompt || q.isSecret === true) return null;
+    // Any sign of a secret keeps the question out: its answer would sit in the transcript.
+    if (!q || !id || !prompt || q.isSecret) return null;
     const options = Array.isArray(q.options) ? q.options.flatMap((o) => {
       const option = asRecord(o);
       const label = str(option?.label);

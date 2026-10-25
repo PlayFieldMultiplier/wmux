@@ -10,10 +10,15 @@
 //   - Approve sends `accept` only, never a session-wide or policy-amending
 //     grant; Deny sends `decline`, or `cancel` where the request does not take
 //     `decline` (that card says it stops the turn);
-//   - a request nobody can answer is declined at once;
+//   - a request nobody can answer is declined at once, and so is one a turn
+//     left behind when it ended;
+//   - every permission decision carries a revision, and an approve must name
+//     the revision of the card it answers;
 //   - a file-change card always shows the diff it approves: when the diff
 //     arrives or changes after the card, the decision is raised again for the
-//     same request id, and the host replaces the card.
+//     same request id with a new revision, and the host replaces the card;
+//     a set of changes the card cannot list in full, or cannot read, is
+//     declined.
 import type { HarnessEvent } from '../../../../shared/chatv2/harnessEvents';
 import { CHATV2_PROVIDER_SESSION_ID } from '../../../../shared/chatv2/ipc';
 import { formQuestions, replyFromAnswers } from '../../../../shared/chatv2/questions';
@@ -29,7 +34,7 @@ import {
   CODEX_CANCEL_LABEL,
   CODEX_MIN_VERSION,
   CODEX_SANDBOX,
-  changeSummary,
+  CODEX_CLIENT_NAME,
   changeTitle,
   changesKey,
   codexQuestions,
@@ -38,6 +43,7 @@ import {
   codexVersionSupported,
   commandSummary,
   denyDecision,
+  fileChangeCard,
   fileChangePreview,
   fileChangesOf,
   permissionsCard,
@@ -56,13 +62,31 @@ const STDERR_TAIL_BYTES = 2_048;
 const OUTPUT_TAIL_CHARS = 4_000;
 const LOADING_SUMMARY = 'File changes (details loading)';
 
+/** Turn ids remembered as ended, so a late notification of one never reaches a newer turn. */
+const ENDED_TURNS_KEPT = 32;
+
 type RpcId = string | number;
 
+/** A server request's key: a number and the same digits as a string are different requests. */
+function requestKey(id: RpcId): string {
+  return typeof id === 'number' ? String(id) : `s:${id}`;
+}
+
+/** The server refused a call with a JSON-RPC error: it answered, so nothing it did is in doubt. */
+class CodexRefusal extends Error {}
+
 type Pending =
-  | { kind: 'command'; rpcId: RpcId; deny: 'decline' | 'cancel' }
-  | { kind: 'fileChange'; rpcId: RpcId; itemId: string; deny: 'decline' | 'cancel'; shown: string }
-  | { kind: 'permissions'; rpcId: RpcId; grant: Record<string, unknown> }
+  | { kind: 'command'; rpcId: RpcId; deny: 'decline' | 'cancel'; revision: string }
+  | { kind: 'fileChange'; rpcId: RpcId; itemId: string; deny: 'decline' | 'cancel'; shown: string; revision: string }
+  | { kind: 'permissions'; rpcId: RpcId; grant: Record<string, unknown>; revision: string }
   | { kind: 'questions'; rpcId: RpcId; set: CodexQuestionSet };
+
+/** The reply that grants nothing for a request still waiting. */
+function refusalOf(pending: Pending): Record<string, unknown> {
+  if (pending.kind === 'command' || pending.kind === 'fileChange') return { decision: pending.deny };
+  if (pending.kind === 'permissions') return { permissions: {}, scope: 'turn' };
+  return { answers: {} };
+}
 
 export interface CodexDriverOptions {
   /** The executable. Default: `codex` resolved on the child env's PATH (Windows: by the spawn). */
@@ -74,23 +98,30 @@ export class CodexDriver implements ChatV2Driver {
   readonly agent = 'codex' as const;
   private readonly backend: ChildBackend;
   private sink: ChatV2DriverSink | null = null;
+  private cwd = '';
+  private processMarker: string | undefined;
   private threadId = '';
   private nextRpcId = 0;
-  private readonly calls = new Map<number, { resolve: (result: unknown) => void; reject: (error: Error) => void }>();
+  private revisions = 0;
+  // Client calls use their own string ids (`wmux-<n>`), apart from the server's request ids.
+  private readonly calls = new Map<string, { resolve: (result: unknown) => void; reject: (error: Error) => void }>();
   private initialized = false;
   private stopping = false;
   private exitedOnce = false;
   private stderrTail = '';
 
-  // Requests waiting on an answer, by request id; answered or dropped ids stay settled.
+  // Requests waiting on an answer, by request key; answered or dropped keys
+  // stay settled until the next turn starts.
   private readonly pending = new Map<string, Pending>();
   private readonly settled = new Set<string>();
 
   // Per-turn state.
   private activeTurn = false;
   private turnId = '';
-  private interruptPending = false;
-  private readonly changes = new Map<string, CodexFileChange[]>();
+  private readonly endedTurns = new Set<string>();
+  private turnIdWaiters: Array<(turnId: string) => void> = [];
+  /** A fileChange item's changes; null when they could not be read. */
+  private readonly changes = new Map<string, CodexFileChange[] | null>();
   private readonly streamed = new Map<string, string>();
 
   constructor(private readonly options: CodexDriverOptions = {}) {
@@ -101,21 +132,31 @@ export class CodexDriver implements ChatV2Driver {
     return this.backend.pid;
   }
 
+  /** The chat record id on the launch line: Codex picks its own thread id, so the sweep matches this. */
+  get marker(): string | undefined {
+    return this.processMarker;
+  }
+
   async start(spec: ChatV2DriverStart, sink: ChatV2DriverSink): Promise<void> {
     if (this.sink) throw new Error('Driver already started');
     if (spec.mode === 'bypass') throw new Error('Codex chat always asks before it runs a command or changes a file; it has no bypass mode.');
+    const marker = spec.chatSessionId ?? '';
+    if (!CHATV2_PROVIDER_SESSION_ID.test(marker)) throw new Error('Codex chat needs the chat record id to start.');
     this.sink = sink;
+    this.cwd = spec.cwd;
     const command = this.options.command
       ?? (process.platform === 'win32' ? 'codex' : await whichOnPath('codex', spec.env.PATH ?? ''));
+    if (this.stopping) throw new Error('Codex was stopped during startup.');
     if (!command) throw new Error('Codex is not installed: `codex` was not found on PATH.');
-    await this.backend.start(command, codexSpawnArgs(spec.providerSession.id), spec.cwd, spec.env, {
+    this.processMarker = marker;
+    await this.backend.start(command, codexSpawnArgs(marker), spec.cwd, spec.env, {
       line: (line) => this.handleLine(line),
       exit: (info) => this.handleExit(info),
       stderr: (chunk) => { this.stderrTail = (this.stderrTail + chunk).slice(-STDERR_TAIL_BYTES); },
     });
     try {
       if (this.stopping) throw new Error('Codex was stopped during startup.');
-      const init = asRecord(await this.call('initialize', { clientInfo: { name: 'wmux_chat', title: 'wmux', version: '1.0.0' } }));
+      const init = asRecord(await this.call('initialize', { clientInfo: { name: CODEX_CLIENT_NAME, title: 'wmux', version: '1.0.0' } }));
       const version = codexVersionFromUserAgent(init?.userAgent);
       if (!codexVersionSupported(version)) {
         throw new Error(`Codex ${version ?? '(unknown version)'} is too old for chat; update to ${CODEX_MIN_VERSION} or later.`);
@@ -134,17 +175,21 @@ export class CodexDriver implements ChatV2Driver {
       if (!CHATV2_PROVIDER_SESSION_ID.test(threadId) || (resume && threadId !== spec.providerSession.id)) {
         throw new Error('Codex answered with a different conversation.');
       }
-      const turns = Array.isArray(thread?.turns) ? thread.turns : [];
-      if (turns.some((turn) => asRecord(turn)?.status === 'inProgress')) {
+      // A resumed thread must say what its turns are: only then is it known
+      // that none is still running (a new thread has none).
+      const turns = Array.isArray(thread?.turns) ? thread.turns : resume ? null : [];
+      if (!turns) throw new Error('Codex did not say whether this conversation is still running.');
+      if (turns.some((turn) => asRecord(turn)?.status !== 'completed' && asRecord(turn)?.status !== 'interrupted' && asRecord(turn)?.status !== 'failed')) {
         throw new Error('This Codex conversation is still running somewhere else.');
       }
       this.threadId = threadId;
       this.initialized = true;
     } catch (error) {
-      await this.stop().catch(() => undefined);
+      const exited = await this.stop().then(() => true, () => false);
       const detail = this.stderrTail.trim().split('\n').pop()?.slice(0, 300);
       const message = error instanceof Error ? error.message : String(error);
-      throw new Error(detail && !this.initialized ? `${message} ${detail}` : message);
+      const full = detail && !this.initialized ? `${message} ${detail}` : message;
+      throw new Error(exited ? full : `${full} Codex did not exit and may still be running.`);
     }
     this.emit({ type: 'session.providerBound', providerSessionId: this.threadId });
     this.emit({ type: 'session.started' });
@@ -152,6 +197,7 @@ export class CodexDriver implements ChatV2Driver {
 
   async send(turn: ChatV2DriverTurn): Promise<void> {
     if (!this.backend.alive || !this.initialized) throw new Error('Codex is not running.');
+    if (this.activeTurn) throw new Error('A Codex turn is still running; stop it before sending another.');
     const input: Array<Record<string, unknown>> = [{ type: 'text', text: turn.text }];
     for (const attachment of turn.attachments) input.push({ type: 'localImage', path: attachment.path });
     this.resetTurn();
@@ -159,19 +205,34 @@ export class CodexDriver implements ChatV2Driver {
     try {
       const started = asRecord(asRecord(await this.call('turn/start', { threadId: this.threadId, input }))?.turn);
       this.noteTurn(str(started?.id));
+      if (this.activeTurn && !this.turnId) throw new Error('Codex started a turn without naming it.');
     } catch (error) {
-      this.activeTurn = false;
+      await this.abandonTurn(error);
       throw error;
     }
   }
 
+  /**
+   * turn/start failed. Refused outright: no turn exists. Otherwise one may be
+   * running: stop it by the id turn/started gave, and with no id (or when the
+   * stop fails) stop the process, so no turn runs unseen.
+   */
+  private async abandonTurn(error: unknown): Promise<void> {
+    if (!this.activeTurn) return;
+    if (error instanceof CodexRefusal && !this.turnId) {
+      this.activeTurn = false;
+      this.releaseTurnIdWaiters();
+      return;
+    }
+    if (this.turnId && await this.sendInterrupt().then(() => true, () => false)) return;
+    await this.backend.stop().catch(() => false);
+  }
+
   async interrupt(): Promise<boolean> {
     if (!this.activeTurn || !this.backend.alive) return false;
-    if (!this.turnId) {
-      // turn/start has not answered yet: stop the turn as soon as it has an id.
-      this.interruptPending = true;
-      return true;
-    }
+    // turn/start has not named the turn yet: wait for its id, then stop it.
+    const turnId = this.turnId || await this.waitForTurnId();
+    if (!turnId || !this.activeTurn || turnId !== this.turnId) return false;
     await this.sendInterrupt();
     return true;
   }
@@ -180,6 +241,9 @@ export class CodexDriver implements ChatV2Driver {
     const pending = this.pending.get(requestId);
     if (!pending || this.settled.has(requestId)) return 'not-found';
     const approve = reply.decision === 'approve';
+    // An approve answers the card it was given on: a card raised again since
+    // (a diff that arrived or changed) has a new revision.
+    if (approve && pending.kind !== 'questions' && reply.revision !== pending.revision) return 'changed';
     // A card raised before its diff arrived approves nothing until it shows one.
     if (approve && pending.kind === 'fileChange' && !pending.shown) return 'changed';
     // Claimed before the write: a second answer for this id never writes.
@@ -210,9 +274,11 @@ export class CodexDriver implements ChatV2Driver {
     } catch {
       // Released so the request stays answerable. A write that timed out also
       // killed the child (ChildBackend.write), and its exit settles the request.
-      if (!this.backend.alive) return 'not-found';
+      if (!this.backend.alive || !this.activeTurn) return 'not-found';
       this.settled.delete(requestId);
       this.pending.set(requestId, pending);
+      // The diff may have moved while the write was out: the card shows it again.
+      if (pending.kind === 'fileChange') this.recheckFileChange(requestId, pending);
       return 'uncertain';
     }
   }
@@ -231,7 +297,7 @@ export class CodexDriver implements ChatV2Driver {
 
   private call(method: string, params: Record<string, unknown>): Promise<unknown> {
     this.nextRpcId += 1;
-    const id = this.nextRpcId;
+    const id = `wmux-${this.nextRpcId}`;
     return new Promise<unknown>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.calls.delete(id);
@@ -254,11 +320,16 @@ export class CodexDriver implements ChatV2Driver {
   }
 
   private reply(id: RpcId, result: Record<string, unknown>): void {
-    void this.backend.write(JSON.stringify({ id, result })).catch(() => undefined);
+    void this.backend.write(JSON.stringify({ id, result })).catch(() => this.dropUnanswered());
   }
 
   private replyError(id: RpcId): void {
-    void this.backend.write(JSON.stringify({ id, error: { code: -32601, message: 'Not supported by this client' } })).catch(() => undefined);
+    void this.backend.write(JSON.stringify({ id, error: { code: -32601, message: 'Not supported by this client' } })).catch(() => this.dropUnanswered());
+  }
+
+  /** A refusal that could not be written leaves the agent waiting on it: end the process. */
+  private dropUnanswered(): void {
+    if (this.backend.alive && !this.stopping) void this.backend.stop().catch(() => false);
   }
 
   private handleExit(info: { code: number | null; signal: string | null }): void {
@@ -269,6 +340,7 @@ export class CodexDriver implements ChatV2Driver {
     for (const requestId of this.pending.keys()) this.settled.add(requestId);
     this.pending.clear();
     this.activeTurn = false;
+    this.releaseTurnIdWaiters();
     const sink = this.sink;
     if (!sink) return;
     if (this.initialized) sink.event({ type: 'session.ended', code: info.code });
@@ -280,12 +352,12 @@ export class CodexDriver implements ChatV2Driver {
     if (!msg) return;
     const method = str(msg.method);
     const id = typeof msg.id === 'number' || typeof msg.id === 'string' ? msg.id : undefined;
-    if (!method && typeof id === 'number') {
-      const call = this.calls.get(id);
-      if (!call) return;
+    if (!method) {
+      const call = typeof id === 'string' ? this.calls.get(id) : undefined;
+      if (!call || typeof id !== 'string') return;
       this.calls.delete(id);
       const error = asRecord(msg.error);
-      if (error) call.reject(new Error(str(error.message) || 'Codex refused the request.'));
+      if (error) call.reject(new CodexRefusal(str(error.message) || 'Codex refused the request.'));
       else call.resolve(msg.result);
       return;
     }
@@ -301,19 +373,51 @@ export class CodexDriver implements ChatV2Driver {
 
   private resetTurn(): void {
     this.turnId = '';
-    this.interruptPending = false;
     this.changes.clear();
     this.streamed.clear();
+    // Keys of an earlier turn: a request reusing one is refused by its turn id.
+    this.settled.clear();
   }
 
+  /**
+   * The open turn's id, once known: from turn/start's answer, turn/started,
+   * or the first notification that names a turn not seen ending. send()
+   * refuses while a turn runs, so an unknown, unended id is the open turn.
+   */
   private noteTurn(turnId: string): void {
-    if (!turnId || this.turnId === turnId) return;
+    if (!turnId || !this.activeTurn || this.turnId || this.endedTurns.has(turnId)) return;
     this.turnId = turnId;
     this.emit({ type: 'turn.started', providerTurnId: turnId });
-    if (this.interruptPending) {
-      this.interruptPending = false;
-      void this.sendInterrupt().catch(() => undefined);
-    }
+    const waiters = this.turnIdWaiters;
+    this.turnIdWaiters = [];
+    for (const resolve of waiters) resolve(turnId);
+  }
+
+  private waitForTurnId(): Promise<string> {
+    return new Promise<string>((resolve) => {
+      const timer = setTimeout(() => {
+        this.turnIdWaiters = this.turnIdWaiters.filter((w) => w !== done);
+        resolve('');
+      }, CODEX_CALL_TIMEOUT_MS);
+      timer.unref();
+      const done = (turnId: string): void => { clearTimeout(timer); resolve(turnId); };
+      this.turnIdWaiters.push(done);
+    });
+  }
+
+  private releaseTurnIdWaiters(): void {
+    const waiters = this.turnIdWaiters;
+    this.turnIdWaiters = [];
+    for (const resolve of waiters) resolve('');
+  }
+
+  /** True when a notification belongs to the open turn (one naming no turn is taken as it). */
+  private ofOpenTurn(params: Record<string, unknown>): boolean {
+    if (!this.activeTurn) return false;
+    const turnId = str(params.turnId);
+    if (!turnId) return true;
+    this.noteTurn(turnId);
+    return turnId === this.turnId;
   }
 
   private async sendInterrupt(): Promise<void> {
@@ -321,17 +425,25 @@ export class CodexDriver implements ChatV2Driver {
   }
 
   private finishTurn(turn: Record<string, unknown>): void {
-    if (!this.activeTurn) return;
-    if (str(turn.id) && this.turnId && str(turn.id) !== this.turnId) return;
+    const turnId = str(turn.id);
+    if (!this.activeTurn || !turnId) return;
+    this.noteTurn(turnId);
+    if (turnId !== this.turnId) return;
     this.activeTurn = false;
+    this.endedTurns.add(turnId);
+    if (this.endedTurns.size > ENDED_TURNS_KEPT) this.endedTurns.delete(this.endedTurns.values().next().value as string);
+    this.releaseTurnIdWaiters();
     const status = str(turn.status);
     const outcome: TurnOutcome = status === 'interrupted' ? 'interrupted' : status === 'failed' ? 'failed' : 'completed';
     const error = str(asRecord(turn.error)?.message);
     if (outcome === 'failed' && error) this.emit({ type: 'session.error', message: error });
     this.emit({ type: 'message.completed' });
     this.emit({ type: 'reasoning.completed' });
-    // Requests a finished turn left behind can no longer be answered.
-    for (const requestId of this.pending.keys()) {
+    // Requests a finished turn left behind can no longer be answered: each
+    // still gets the reply that grants nothing, and its card goes.
+    const alive = this.backend.alive && !this.stopping;
+    for (const [requestId, pending] of this.pending) {
+      if (alive) this.reply(pending.rpcId, refusalOf(pending));
       this.settled.add(requestId);
       this.sink?.decisionGone(requestId);
     }
@@ -342,11 +454,26 @@ export class CodexDriver implements ChatV2Driver {
   private handleNotification(method: string, params: Record<string, unknown>): void {
     switch (method) {
       case 'turn/started':
-        if (this.activeTurn) this.noteTurn(str(asRecord(params.turn)?.id));
+        this.noteTurn(str(asRecord(params.turn)?.id));
         return;
       case 'turn/completed':
         this.finishTurn(asRecord(params.turn) ?? {});
         return;
+      case 'serverRequest/resolved': {
+        const raw = params.requestId;
+        const requestId = typeof raw === 'number' || typeof raw === 'string' ? requestKey(raw) : '';
+        if (this.pending.delete(requestId)) {
+          this.settled.add(requestId);
+          this.sink?.decisionGone(requestId);
+        }
+        return;
+      }
+      default:
+        break;
+    }
+    // Everything else is part of a turn: never one that ended, nor before one opened.
+    if (!this.ofOpenTurn(params)) return;
+    switch (method) {
       case 'item/agentMessage/delta': {
         const itemId = str(params.itemId);
         const delta = str(params.delta);
@@ -366,16 +493,7 @@ export class CodexDriver implements ChatV2Driver {
         return;
       case 'item/fileChange/patchUpdated': {
         const itemId = str(params.itemId);
-        const changes = fileChangesOf(params.changes);
-        if (itemId && changes.length) this.noteChanges(itemId, changes, 'in_progress');
-        return;
-      }
-      case 'serverRequest/resolved': {
-        const requestId = String(params.requestId ?? '');
-        if (this.pending.delete(requestId)) {
-          this.settled.add(requestId);
-          this.sink?.decisionGone(requestId);
-        }
+        if (itemId) this.noteChanges(itemId, fileChangesOf(params.changes), 'in_progress');
         return;
       }
       default:
@@ -385,7 +503,7 @@ export class CodexDriver implements ChatV2Driver {
 
   private handleItem(item: Record<string, unknown> | null, completed: boolean): void {
     const id = str(item?.id);
-    if (!item || !id || !this.activeTurn) return;
+    if (!item || !id) return;
     const type = str(item.type);
     const status = str(item.status);
     if (type === 'agentMessage') {
@@ -420,8 +538,11 @@ export class CodexDriver implements ChatV2Driver {
     if (type === 'fileChange') {
       const changes = fileChangesOf(item.changes);
       if (!completed) {
-        if (changes.length) this.noteChanges(id, changes, 'in_progress', true);
-        else this.emit({ type: 'tool.started', callId: id, title: 'Edit files', kind: 'edit', status: 'in_progress' });
+        if (changes?.length) this.noteChanges(id, changes, 'in_progress', true);
+        else {
+          if (!changes) this.noteChanges(id, null, 'in_progress');
+          this.emit({ type: 'tool.started', callId: id, title: 'Edit files', kind: 'edit', status: 'in_progress' });
+        }
         return;
       }
       this.emit({
@@ -429,7 +550,7 @@ export class CodexDriver implements ChatV2Driver {
         callId: id,
         status: status === 'completed' ? 'completed' : 'failed',
         ...(status === 'declined' ? { detail: 'Declined' } : {}),
-        ...(changes.length ? { preview: fileChangePreview(changes), paths: changes.map((c) => c.movePath ?? c.path) } : {}),
+        ...(changes?.length ? { preview: fileChangePreview(changes), paths: changes.map((c) => c.movePath ?? c.path) } : {}),
       });
       return;
     }
@@ -442,24 +563,47 @@ export class CodexDriver implements ChatV2Driver {
   }
 
   /**
-   * A fileChange item's diff, new or changed. The row shows it; a card
-   * already raised for it is raised again when the diff it showed is no
-   * longer the diff being approved.
+   * A fileChange item's diff, new or changed (null: unreadable). The row
+   * shows it; a card already raised for it is raised again when the diff it
+   * showed is no longer the diff being approved, or declined when the new
+   * one cannot be shown.
    */
-  private noteChanges(itemId: string, changes: CodexFileChange[], status: string, started = false): void {
+  private noteChanges(itemId: string, changes: CodexFileChange[] | null, status: string, started = false): void {
     const known = this.changes.has(itemId);
     this.changes.set(itemId, changes);
-    const preview = fileChangePreview(changes);
-    const paths = changes.map((c) => c.movePath ?? c.path);
-    if (started && !known) this.emit({ type: 'tool.started', callId: itemId, title: changeTitle(changes), kind: 'edit', status, ...(preview ? { preview } : {}), paths });
-    else this.emit({ type: 'tool.updated', callId: itemId, title: changeTitle(changes), kind: 'edit', status, ...(preview ? { preview } : {}), paths });
-    for (const [requestId, pending] of this.pending) {
-      if (pending.kind !== 'fileChange' || pending.itemId !== itemId) continue;
-      const key = changesKey(changes);
-      if (pending.shown === key) continue;
-      pending.shown = key;
-      this.raiseFileChange(requestId, pending, changes);
+    if (changes?.length) {
+      const preview = fileChangePreview(changes);
+      const paths = changes.map((c) => c.movePath ?? c.path);
+      if (started && !known) this.emit({ type: 'tool.started', callId: itemId, title: changeTitle(changes), kind: 'edit', status, ...(preview ? { preview } : {}), paths });
+      else this.emit({ type: 'tool.updated', callId: itemId, title: changeTitle(changes), kind: 'edit', status, ...(preview ? { preview } : {}), paths });
     }
+    for (const [requestId, pending] of [...this.pending]) {
+      if (pending.kind === 'fileChange' && pending.itemId === itemId) this.recheckFileChange(requestId, pending);
+    }
+  }
+
+  /** Raise a waiting file-change card again when its item's diff is not the one it shows. */
+  private recheckFileChange(requestId: string, pending: Extract<Pending, { kind: 'fileChange' }>): void {
+    const changes = this.changes.get(pending.itemId);
+    if (changes === undefined) return;
+    const key = changes ? changesKey(changes) : '';
+    if (changes && pending.shown === key) return;
+    pending.shown = key;
+    this.raiseFileChange(requestId, pending, changes);
+  }
+
+  /** Withdraw a waiting request with the reply that grants nothing, and say why. */
+  private withdraw(requestId: string, pending: Pending, why: string): void {
+    this.pending.delete(requestId);
+    this.settled.add(requestId);
+    this.reply(pending.rpcId, refusalOf(pending));
+    this.sink?.decisionGone(requestId);
+    this.emit({ type: 'status', text: why });
+  }
+
+  private nextRevision(): string {
+    this.revisions += 1;
+    return String(this.revisions);
   }
 
   // --- requests -----------------------------------------------------------
@@ -473,12 +617,21 @@ export class CodexDriver implements ChatV2Driver {
   }
 
   private handleRequest(method: string, params: Record<string, unknown>, id: RpcId): void {
-    const requestId = String(id);
-    // A request already answered (or already waiting) gets no second reply.
-    if (this.settled.has(requestId) || this.pending.has(requestId)) return;
+    const requestId = requestKey(id);
+    // An id already answered or waiting: declined, and a card waiting under it goes.
+    if (this.settled.has(requestId) || this.pending.has(requestId)) {
+      const waiting = this.pending.get(requestId);
+      if (waiting) {
+        this.pending.delete(requestId);
+        this.sink?.decisionGone(requestId);
+      }
+      this.settled.add(requestId);
+      this.refuse(method, id);
+      return;
+    }
     const sink = this.sink;
-    if (!sink || !this.initialized || this.stopping || !this.activeTurn || str(params.threadId) !== this.threadId
-      || (this.turnId && str(params.turnId) && str(params.turnId) !== this.turnId) || !ANSWERABLE_REQUEST_ID.test(requestId)) {
+    if (!sink || !this.initialized || this.stopping || str(params.threadId) !== this.threadId
+      || !this.ofOpenTurn(params) || !ANSWERABLE_REQUEST_ID.test(requestId)) {
       this.settled.add(requestId);
       this.refuse(method, id);
       return;
@@ -487,20 +640,21 @@ export class CodexDriver implements ChatV2Driver {
     switch (method) {
       case 'item/commandExecution/requestApproval': {
         const deny = denyDecision(params.availableDecisions);
-        this.pending.set(requestId, { kind: 'command', rpcId: id, deny });
+        const revision = this.nextRevision();
+        this.pending.set(requestId, { kind: 'command', rpcId: id, deny, revision });
         const command = str(params.command);
-        sink.decision({ kind: 'permission', requestId, question: 'Run this command?', toolName: 'Shell', summary: commandSummary(params), ...(deny === 'cancel' ? { denyLabel: CODEX_CANCEL_LABEL } : {}) });
+        sink.decision({ kind: 'permission', requestId, revision, question: 'Run this command?', toolName: 'Shell', summary: commandSummary(params), ...(deny === 'cancel' ? { denyLabel: CODEX_CANCEL_LABEL } : {}) });
         this.emit({ type: 'approval.requested', requestId, title: command || 'Run a command', kind: 'execute', ...(itemId ? { callId: itemId } : {}), ...(command ? { preview: { kind: 'shell', command } } : {}) });
         return;
       }
       case 'item/fileChange/requestApproval': {
-        const changes = this.changes.get(itemId) ?? [];
+        const changes = this.changes.get(itemId);
         const pending: Extract<Pending, { kind: 'fileChange' }> = {
-          kind: 'fileChange', rpcId: id, itemId, deny: denyDecision(params.availableDecisions), shown: changes.length ? changesKey(changes) : '',
+          kind: 'fileChange', rpcId: id, itemId, deny: denyDecision(params.availableDecisions), shown: changes?.length ? changesKey(changes) : '', revision: '',
         };
         this.pending.set(requestId, pending);
         // Raised at once even before the diff is known; it is raised again when the diff arrives.
-        this.raiseFileChange(requestId, pending, changes);
+        this.raiseFileChange(requestId, pending, changes === undefined ? [] : changes);
         return;
       }
       case 'item/permissions/requestApproval': {
@@ -511,8 +665,9 @@ export class CodexDriver implements ChatV2Driver {
           this.emit({ type: 'status', text: `Codex asked for more permissions and was refused (${card.reason}).` });
           return;
         }
-        this.pending.set(requestId, { kind: 'permissions', rpcId: id, grant: card.grant });
-        sink.decision({ kind: 'permission', requestId, question: 'Allow these permissions for this turn?', toolName: 'Permissions', summary: card.summary });
+        const revision = this.nextRevision();
+        this.pending.set(requestId, { kind: 'permissions', rpcId: id, grant: card.grant, revision });
+        sink.decision({ kind: 'permission', requestId, revision, question: 'Allow these permissions for this turn?', toolName: 'Permissions', summary: card.summary });
         this.emit({ type: 'approval.requested', requestId, title: str(params.reason) || 'Grant permissions for this turn', kind: 'other' });
         return;
       }
@@ -537,20 +692,29 @@ export class CodexDriver implements ChatV2Driver {
     }
   }
 
-  private raiseFileChange(requestId: string, pending: Extract<Pending, { kind: 'fileChange' }>, changes: CodexFileChange[]): void {
-    const preview = fileChangePreview(changes);
+  /** Changes null: unreadable; empty: not arrived yet (a card that approves nothing until they do). */
+  private raiseFileChange(requestId: string, pending: Extract<Pending, { kind: 'fileChange' }>, changes: CodexFileChange[] | null): void {
+    const card = changes === null ? { ok: false as const, reason: 'Codex sent file changes chat cannot read' }
+      : changes.length ? fileChangeCard(changes, this.cwd) : { ok: true as const, summary: LOADING_SUMMARY };
+    if (!card.ok) {
+      this.withdraw(requestId, pending, `${card.reason}; they were declined.`);
+      return;
+    }
+    pending.revision = this.nextRevision();
+    const preview = changes?.length ? fileChangePreview(changes) : undefined;
     this.sink?.decision({
       kind: 'permission',
       requestId,
+      revision: pending.revision,
       question: 'Apply these file changes?',
       toolName: 'Edit',
-      summary: changes.length ? changeSummary(changes) : LOADING_SUMMARY,
+      summary: card.summary,
       ...(pending.deny === 'cancel' ? { denyLabel: CODEX_CANCEL_LABEL } : {}),
     });
     this.emit({
       type: 'approval.requested',
       requestId,
-      title: changes.length ? changeTitle(changes) : 'Edit files',
+      title: changes?.length ? changeTitle(changes) : 'Edit files',
       kind: 'edit',
       ...(pending.itemId ? { callId: pending.itemId } : {}),
       ...(preview ? { preview } : {}),

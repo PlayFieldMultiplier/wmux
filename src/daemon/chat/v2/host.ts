@@ -141,6 +141,8 @@ interface Live {
   lastBindingKey: string;
   /** The pid of the last driver spawned, kept after a failed start: a rollback proves it exited first. */
   lastPid?: number;
+  /** The last driver's `marker`, kept with lastPid. */
+  lastMarker?: string;
 }
 
 const PERMISSION_ACTIONS: DecisionForm['actions'] = [
@@ -1019,7 +1021,7 @@ class Host implements ChatV2Host {
     if (!gone) {
       if (pid !== undefined && !live.record.process) {
         const identity = await this.deps.processIdentity(pid).catch(() => null);
-        if (identity?.startTime) live.record.process = { pid, startTime: identity.startTime, marker: live.record.providerSessionId };
+        if (identity?.startTime) live.record.process = { pid, startTime: identity.startTime, marker: live.lastMarker ?? live.record.providerSessionId };
       }
       await this.persistNow(live);
       return false;
@@ -1149,6 +1151,7 @@ class Host implements ChatV2Host {
     if (live.unreaped) return chatV2Error('driver-failed', 'The last agent process has not exited yet.');
     // Only a pid this start spawns may decide a rollback (dropFailedStart).
     live.lastPid = undefined;
+    live.lastMarker = undefined;
     const generation = ++live.generation;
     // A close or dispose that came in while this start was waiting wins.
     const superseded = (): boolean => live.closed || this.disposed || live.generation !== generation;
@@ -1187,6 +1190,7 @@ class Host implements ChatV2Host {
           mode: record.mode,
           model: record.model,
           providerSession: { id: record.providerSessionId, mode: resume ? 'resume' : 'new' },
+          chatSessionId: record.chatSessionId,
         }, {
           event: (event) => this.enqueue(live, { kind: 'event', driver, event }),
           decision: (decision) => this.enqueue(live, { kind: 'decision', driver, decision }),
@@ -1195,10 +1199,12 @@ class Host implements ChatV2Host {
         });
       } catch (error) {
         live.lastPid = driver.pid;
+        live.lastMarker = driver.marker;
         if (live.driver === driver) live.driver = null;
         return fail(error instanceof Error ? error.message : String(error));
       }
       live.lastPid = driver.pid;
+      live.lastMarker = driver.marker;
       if (live.driver !== driver) {
         // Stopped (close, dispose) or exited while starting: make sure nothing is left running.
         await driver.stop().catch(() => undefined);
@@ -1208,7 +1214,7 @@ class Host implements ChatV2Host {
       if (pid !== undefined) {
         const identity = await this.deps.processIdentity(pid).catch(() => null);
         // Without a start time the sweep could never prove it is the same process.
-        if (identity?.startTime) record.process = { pid, startTime: identity.startTime, marker: record.providerSessionId };
+        if (identity?.startTime) record.process = { pid, startTime: identity.startTime, marker: driver.marker ?? record.providerSessionId };
       }
       if (superseded()) {
         live.stopping = true;

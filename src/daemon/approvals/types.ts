@@ -408,6 +408,8 @@ export interface NativeDecisionReply {
    * what its agent takes (OpenCode: option indexes, then its own labels).
    */
   answers?: Array<{ keys: string[]; other?: string }>;
+  /** A chat-v2 permission decision's revision, passed back as it was raised (chat/v2/types.ts). */
+  revision?: string;
 }
 
 /**
