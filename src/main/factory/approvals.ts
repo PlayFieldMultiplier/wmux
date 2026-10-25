@@ -605,7 +605,11 @@ export class ApprovalService {
       return refuse('invalid', `action must be one of ${APPROVAL_ACTIONS.join(', ')}`);
     }
     const act = action as ApprovalAction;
-    if (CARD_ONLY_ACTIONS.has(act)) return refuse('invalid', act === 'skill' ? 'a skill is proposed with skill_propose' : 'a change to the owner\'s profile is proposed with memory_update');
+    if (CARD_ONLY_ACTIONS.has(act)) {
+      return refuse('invalid', act === 'skill' ? 'a skill is proposed with skill_propose'
+        : act === 'native_tool' ? 'a command approval comes from the bot\'s own engine, not approval_request'
+          : 'a change to the owner\'s profile is proposed with memory_update');
+    }
     const num = (v: unknown): number | undefined | null => (v === undefined ? undefined : Number.isSafeInteger(v) && (v as number) > 0 ? (v as number) : null);
     const prNumber = num(raw.prNumber);
     const issueNumber = num(raw.issueNumber);

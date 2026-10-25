@@ -383,10 +383,14 @@ export async function probeHermesMcp(exe: string, env: Record<string, string>, o
     child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
   });
   const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()));
-  child.once('error', () => {
-    for (const [, w] of waiting) w({ error: { message: 'hermes did not start' } });
+  const failWaiting = (message: string): void => {
+    for (const [, w] of waiting) w({ error: { message } });
     waiting.clear();
-  });
+  };
+  // A write to an agent that already exited is not an error of main's.
+  child.stdin.on('error', () => undefined);
+  child.once('error', () => failWaiting('hermes did not start'));
+  child.once('exit', () => failWaiting('hermes exited'));
   try {
     const init = await call('initialize', { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } } });
     if (init.error) return { ok: false, reason: 'failed', detail: 'ACP initialize failed' };
