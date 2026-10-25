@@ -980,7 +980,9 @@ Settings › LAN keeps only the listener switches. Top to bottom:
   with "PCs already paired must be invited again"), or the firewall check's
   verdict with its one fitting action (**Allow through firewall**, whose
   line says which prompt Windows will show; **Open network settings** for a
-  Public network; **Open Windows Firewall** for a Block rule; **Copy
+  Public network, which opens the Wi-Fi or Ethernet page of that network's
+  adapter when the check knows its kind (Network status otherwise), where
+  its profile is switched; **Open Windows Firewall** for a Block rule; **Copy
   details** for a Domain (work) network, policy, block-all, another
   firewall product or a refused program; **Check firewall** when the check
   could not be read). After a declined prompt the Allow row keeps **Allow
@@ -990,7 +992,11 @@ Settings › LAN keeps only the listener switches. Top to bottom:
   focus moves to the row or line that replaced it. Every click ends in a
   line: declined, failed (with the step that failed), another change still
   running, or the check after it failing (then the could-not-read row with
-  Check firewall). An earlier
+  Check firewall). On Windows, a listener offered on both a Private and a
+  Public network gets its own row for the Public one ("Works over
+  Tailscale; not over Wi-Fi (Public)." with "If you trust Wi-Fi, set it to
+  Private in Windows Settings.") and **Open network settings**, on every
+  surface, the Remote page included. An earlier
   Windows prompt that opened wmux to public networks gets its own row with
   **Open Windows Firewall** (after a Fix it adds that this port is now
   blocked on public networks). Tone: warning — the caution yellow on the
