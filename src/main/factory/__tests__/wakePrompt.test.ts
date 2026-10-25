@@ -248,6 +248,20 @@ describe('buildWakePrompt — what the room says now', () => {
     expect(cancelled).not.toContain('waiting for input');
   });
 
+  it('a task that made files has them posted in the same turn, also for handed work', () => {
+    const files = ['/tmp/research-1/banner.png'];
+    const wake = (t: { files?: string[] }) => buildWakePrompt({
+      item: item({ kind: 'facts', factIds: ['task.done:wtask-1@4'], trigger: { kind: 'task.done' } }),
+      profile,
+      tasks: [{ taskId: 'wtask-1', title: 'Banner', status: 'review_requested', ...t }],
+    });
+    const text = wake({ files });
+    expect(text).toContain('"/tmp/research-1/banner.png"');
+    expect(text).toContain('Post them in this turn, before anything else: one card with room_post `files` set to those paths');
+    expect(text).toContain('also when another bot handed you the work');
+    expect(wake({})).not.toContain('room_post `files` set to those paths');
+  });
+
   it('a relay\'s dispatch says where the result goes; its last result shows the trail; a stop says why', () => {
     const reason = { kind: 'handoff' as const, handoffId: 'h-f' };
     const base = { handoffId: 'h-f', kind: 'dispatch', from: 'Lead (moa)', title: 'Ship it', body: 'brief' };

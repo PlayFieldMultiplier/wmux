@@ -619,7 +619,7 @@ function throughNoLink(folder: string, root: string): boolean {
 
 /** The files a report hands over: its `artifact` items' locations, each an
  *  absolute path or a `file://` URL. Free text is never read for paths. */
-function reportArtifactPaths(entry: LedgerEntry): string[] {
+function reportArtifactPaths(entry: Pick<LedgerEntry, 'evidence'>): string[] {
   const out: string[] = [];
   for (const item of entry.evidence?.items ?? []) {
     if (item.kind !== 'artifact' || typeof item.location !== 'string') continue;
@@ -661,6 +661,24 @@ function fileInsideNoLink(file: string, folder: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * The files a task's report hands the owner, as a wake shows them: the
+ * `artifact` locations that are regular files now, at most `max` (what one
+ * room card carries). room_post checks each again when it copies it.
+ */
+export function reportFiles(entry: Pick<LedgerEntry, 'evidence'>, max: number): string[] {
+  const out: string[] = [];
+  for (const file of reportArtifactPaths(entry)) {
+    if (out.length >= max) break;
+    try {
+      if (fs.lstatSync(file).isFile() && !out.includes(file)) out.push(file);
+    } catch {
+      // Gone, or never there.
+    }
+  }
+  return out;
 }
 
 /**

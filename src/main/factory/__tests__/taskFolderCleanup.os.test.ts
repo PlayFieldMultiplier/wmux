@@ -29,6 +29,7 @@ import {
   MountPointError,
   parseMountInfo,
   removeEmptyResearchBatch,
+  reportFiles,
   restoreTaskFolder,
   ensureTaskFolderPrepared,
   taskFolderKind,
@@ -134,6 +135,29 @@ describe('taskFolderKind: only a bot task\'s own folder', () => {
     expect(taskFolderKind(path.join(home, 'phone-worktrees', 'x', 'y'), 'wtask/y', BOT, r)).toBeNull();
     expect(taskFolderKind(path.join(repo, '..', 'my-worktree'), 'wtask/y', BOT, r)).toBeNull();
     expect(taskFolderKind(path.join(r.worktrees, '..', 'worktrees-other', 'h', 's'), 'wtask/s', BOT, r)).toBeNull();
+  });
+});
+
+describe('reportFiles: the files a report hands the owner, for its wake', () => {
+  it('lists the artifact locations that are files now, by path or file URL, at most max', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-report-files-'));
+    try {
+      const a = path.join(dir, 'banner.png');
+      const b = path.join(dir, 'notes.md');
+      const c = path.join(dir, 'c.png');
+      for (const f of [a, b, c]) fs.writeFileSync(f, 'x');
+      fs.mkdirSync(path.join(dir, 'sub'));
+      const art = (location: string) => ({ kind: 'artifact' as const, status: 'verified' as const, summary: 'f', location });
+      const entry = { evidence: { summary: 'Made it.', items: [
+        art(a), art(pathToFileURL(b).href), { kind: 'inspection' as const, status: 'verified' as const, summary: 'x', location: c },
+        art(path.join(dir, 'gone.png')), art(path.join(dir, 'sub')), art('relative.png'), art(a), art(c),
+      ] } } as unknown as Pick<LedgerEntry, 'evidence'>;
+      expect(reportFiles(entry, 8)).toEqual([a, b, c]);
+      expect(reportFiles(entry, 2)).toEqual([a, b]);
+      expect(reportFiles({} as Pick<LedgerEntry, 'evidence'>, 8)).toEqual([]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

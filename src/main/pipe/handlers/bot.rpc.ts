@@ -49,6 +49,8 @@ import { installBotFanoutWake } from '../../deck/fanoutCallerNotify';
 import { isVerifyReport } from '../../factory/verifyPreset';
 import { getTaskLedger } from '../../deck/taskLedgerHost';
 import type { WakeTaskSummary } from '../../factory/wakePrompt';
+import { reportFiles } from '../../factory/taskFolderCleanup';
+import { ROOM_FILE_LIMITS } from '../../../shared/roomFiles';
 import { botRepoFromFolder, greetNewBot } from '../../factory/botCreate';
 import { DISMISSED_ANSWER, getHandoffRouter } from '../../factory/handoffRouter';
 import { getWakeTaint, guestGateProvenance, type GuestProvenance, type WakeTaint } from '../../factory/wakeTaint';
@@ -482,18 +484,20 @@ export function registerBotRpcHandlers(
   });
 }
 
-/** A task's ledger row as a wake reports it. */
-function taskSummaries(taskIds: readonly string[]): WakeTaskSummary[] {
+/** A task's ledger row as a wake reports it (exported for tests). */
+export function taskSummaries(taskIds: readonly string[]): WakeTaskSummary[] {
   const ledger = getTaskLedger();
   const out: WakeTaskSummary[] = [];
   for (const id of taskIds) {
     const e = ledger.get(id);
     if (!e) continue;
+    const files = reportFiles(e, ROOM_FILE_LIMITS.PER_CARD);
     out.push({
       taskId: e.id,
       title: e.title,
       status: e.status,
       ...(e.summary ? { summary: e.summary } : {}),
+      ...(files.length > 0 ? { files } : {}),
       ...(e.gate
         ? {
             gate: {

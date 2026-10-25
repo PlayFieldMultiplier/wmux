@@ -26,6 +26,8 @@ export interface WakeTaskSummary {
   status: string;
   summary?: string;
   gate?: { exitCode: number | null; headSha?: string; skipped?: string };
+  /** The files its report hands the owner (absolute paths of its `artifact` items). */
+  files?: string[];
 }
 
 /** A handoff as the wake reports it. */
@@ -485,6 +487,15 @@ export function buildWakePrompt(input: WakePromptInput): string {
         // Waiting only while the task still is: an older input_required fact
         // of a task that ended since (cancelled by the owner) is not a wait.
         if (task ? task.status === 'input_required' : id.startsWith('task.input_required:')) waiting = true;
+      }
+      // Files a worker made reach the owner only on a card: nothing else
+      // shows them, so they go up in this turn, not when someone asks.
+      if (r.factIds.some((id) => (tasks.get(taskIdOfFactId(id) ?? '')?.files?.length ?? 0) > 0)) {
+        lines.push(
+          '',
+          'A task above made files for the owner (its `files`). Post them in this turn, before anything else: one card with room_post `files` set to those paths, '
+            + 'in the task\'s thread — also when another bot handed you the work, since the owner sees the files only on a card. Then settle the task, and name the card in any `result` you send.',
+        );
       }
       if (r.factIds.some((id) => /^workflow\.ready:[A-Za-z0-9_-]+@\d+$/.test(id))) {
         lines.push(

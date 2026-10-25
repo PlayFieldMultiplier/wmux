@@ -30,7 +30,7 @@ vi.mock('../../../deck/taskLedgerHost', () => ({ getTaskLedger: () => ledgerMock
 
 import type { RpcContext } from '../../../../shared/rpc';
 import type { BrainAdapter, BrainEvent } from '../../../deck/BrainAdapter';
-import { registerBotRpcHandlers, botRuntimeModule, statusFor, wakeOnOwnerAnswer, type SetJobPorts } from '../bot.rpc';
+import { registerBotRpcHandlers, botRuntimeModule, statusFor, taskSummaries, wakeOnOwnerAnswer, type SetJobPorts } from '../bot.rpc';
 import { BOT_EVENT } from '../../../../shared/bot';
 import { DISMISSED_ANSWER } from '../../../factory/handoffRouter';
 import { WakeTaint } from '../../../factory/wakeTaint';
@@ -675,5 +675,28 @@ describe('statusFor', () => {
     expect(statusFor(bot, { ...status, quota: { accountName: 'Work' } })).not.toHaveProperty('quota');
     expect(statusFor({ kind: 'operator' }, status)?.lastError?.account).toBe('Work');
     expect(status.lastError.account).toBe('Work');
+  });
+});
+
+describe('taskSummaries', () => {
+  it('shows the files a task\'s report hands the owner, so its wake posts them', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-task-files-'));
+    try {
+      const banner = path.join(dir, 'banner.png');
+      fs.writeFileSync(banner, 'png');
+      ledgerMock.rows.set('wtask-files', {
+        id: 'wtask-files', title: 'Banner', status: 'review_requested', summary: 'Made the banner.',
+        evidence: { summary: 'Made it.', items: [{ kind: 'artifact', status: 'verified', summary: 'banner', location: banner }] },
+      });
+      ledgerMock.rows.set('wtask-plain', { id: 'wtask-plain', title: 'Notes', status: 'review_requested' });
+      expect(taskSummaries(['wtask-files', 'wtask-plain'])).toEqual([
+        { taskId: 'wtask-files', title: 'Banner', status: 'review_requested', summary: 'Made the banner.', files: [banner] },
+        { taskId: 'wtask-plain', title: 'Notes', status: 'review_requested' },
+      ]);
+    } finally {
+      ledgerMock.rows.delete('wtask-files');
+      ledgerMock.rows.delete('wtask-plain');
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
