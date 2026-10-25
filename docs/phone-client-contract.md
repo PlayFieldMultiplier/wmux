@@ -4938,8 +4938,12 @@ desktop must still keep a card of that room carrying the id.
 
 #### Files on bot cards (`roomFiles`)
 
-Additive. A daemon or desktop that predates this omits the key, never puts
-`files` on a card, and answers the route `404`.
+Additive. When either side predates it, `/api/config` omits the key and no
+card carries `files`. The route then answers by which side is older: a
+daemon that predates the route answers `404`; a newer daemon in front of a
+desktop that cannot serve files (one without `workspaces.roomFile`) answers
+`503 {error:"rooms-unavailable"}`. Neither means the file is missing: without
+`roomFiles`, draw no file chips.
 
 A bot hands the owner files it made (an image, a document, a video, a
 spreadsheet, a report) on its own cards. The desktop keeps a copy of each in
