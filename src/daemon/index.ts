@@ -94,6 +94,7 @@ import { CHATV2_LAUNCH_ALLOWED_RPC } from '../shared/chatv2/ipc';
 import { isPaneMoving } from './chat/v2/paneClaims';
 import { ApprovalPushRouter } from './push/approvalPushRouter';
 import { readPendingToolUse } from './transcript/pendingToolUse';
+import { STALL_AGENT, StallWatch, lastHumanPrompt, readTranscriptTail, stopAndPrefill } from './transcript/stallWatch';
 import { isClaudeFamilyAgent } from './approvals/terminalPrompt';
 import { StateWriter, scrubPersistedCredentials, detachedTtlHoursFor } from './StateWriter';
 import { stripCredentialValues } from '../shared/envFilter';
@@ -386,6 +387,7 @@ let transcriptProjector: TranscriptProjector | null = null;
 // Fleet's now-doing line for panes with no per-tool hook (setup-hooks installs,
 // Codex): tails the agent's own transcript. Guarded like the projector.
 let transcriptActivity: TranscriptActivityWatcher | null = null;
+let stallWatch: StallWatch | null = null;
 let shellPrompts: ShellPromptWatcher | null = null;
 let apiErrorTurnEnds: ApiErrorTurnEnds | null = null;
 let teammateWakes: TeammateWakes | null = null;
@@ -3121,6 +3123,7 @@ function registerRpcHandlers(
         type: 'agent.turn', sessionId: p.id,
         data: { running: managed.bridge.isAgentMidTurn() && managed.bridge.getAgentStatus() !== 'awaiting_input' },
       });
+      if (stallWatch) pipeServer.broadcast({ type: 'agent.stall', sessionId: p.id, data: { stalledSince: stallWatch.stalledSince(p.id) } });
     }
 
     return { ok: true };
@@ -4431,6 +4434,28 @@ function registerRpcHandlers(
     });
     transcriptActivity.start();
   }
+  if (!stallWatch) {
+    stallWatch = new StallWatch({
+      listSessionIds: () => sessionManager.listLiveSessions().map((s) => s.id),
+      getBinding: (id) => (currentMoaPane()?.sessionId === id ? undefined : resolveTranscriptBinding(id)),
+      midTurn: (id) => {
+        const bridge = sessionManager.getSession(id)?.bridge;
+        return bridge?.isAgentMidTurn() ? bridge.getTurn(bridge.getAgentStatus()).id : null;
+      },
+      awaitingHuman: (id) => sessionManager.getSession(id)?.bridge.getAgentStatus() === 'awaiting_input'
+        || approvalRegistry?.list().pending.some((r) => r.sessionId === id) === true,
+      readScreen: async (id) => {
+        const outcome = await queuedScreenText(sessionManager, id);
+        return outcome?.ok ? outcome.rows.map((r) => r.text) : null;
+      },
+      titleRunning: (id) => titleShowsRunningTurn(sessionManager.getSession(id)?.bridge.getTitle(), STALL_AGENT, Date.now()),
+      emit: (sessionId, stalledSince) => {
+        const event: DaemonEvent = { type: 'agent.stall', sessionId, data: { stalledSince } };
+        pipeServer.broadcast(event);
+      },
+    });
+    stallWatch.start();
+  }
 
   // Chat View — F9 early availability. Guarded like the projector: a second
   // registerRpcHandlers call must not mint a second searcher, or the first
@@ -5146,6 +5171,7 @@ function registerRpcHandlers(
         projector.nudge(sessionId, kind, agentSessionId);
         // A hook-fed session's own activity line wins over the transcript.
         transcriptActivity?.noteHookSignal(sessionId, kind);
+        stallWatch?.noteHookSignal(sessionId, kind);
         apiErrorTurnEnds?.noteHookSignal(sessionId, kind, ts, promptId);
         teammateWakes?.noteHookSignal(sessionId, kind, ts);
         // #782 — phone turn-view nudge. Non-recording: bypasses attentionLog so
@@ -5998,6 +6024,47 @@ function registerRpcHandlers(
     const id = typeof params['id'] === 'string' ? params['id'] : '';
     const agentSessionId = typeof params['agentSessionId'] === 'string' ? params['agentSessionId'] : '';
     return { result: await bridge.desktopInterrupt(id, agentSessionId) };
+  });
+
+  // A turn that seems stuck (StallWatch): Keep waiting doubles its threshold;
+  // Stop and prefill interrupts it and puts the last prompt back, unsent.
+  pipeServer.onRpc('daemon.chat.stallKeepWaiting', async (params, ctx) => {
+    if (!firstPartyOnly(ctx.clientId, 'stallKeepWaiting')) return { ok: false };
+    const id = typeof params['id'] === 'string' ? params['id'] : '';
+    return { ok: stallWatch?.keepWaiting(id) === true };
+  });
+  pipeServer.onRpc('daemon.chat.stallPrefill', async (params, ctx) => {
+    if (!firstPartyOnly(ctx.clientId, 'stallPrefill')) return { result: 'unavailable' };
+    const id = typeof params['id'] === 'string' ? params['id'] : '';
+    // Moa's brain pane is not watched, so it is never stopped from here either.
+    const binding = id && currentMoaPane()?.sessionId !== id ? resolveTranscriptBinding(id) : undefined;
+    if (binding?.agent !== STALL_AGENT || !binding.transcriptPath) return { result: 'unavailable' };
+    const transcriptPath = binding.transcriptPath;
+    const result = await stopAndPrefill({
+      interrupt: () => bridge.desktopInterrupt(id, binding.sessionId),
+      // The turn's own prompt, as written (not the projected, length-capped text).
+      lastPrompt: () => {
+        const tail = readTranscriptTail(transcriptPath);
+        return tail ? lastHumanPrompt(tail.entries) : null;
+      },
+      holdKeyboard: () => bridge.holdKeyboard(id),
+      readScreen: async () => {
+        const outcome = await queuedScreenText(sessionManager, id, true);
+        return outcome?.ok
+          ? Object.assign(outcome.rows.map((r) => r.text), { undimmed: outcome.rows.map((r) => r.undimmed ?? r.text) })
+          : null;
+      },
+      write: (data) => {
+        const managed = sessionManager.getSession(id);
+        if (!managed || resolveTranscriptBinding(id)?.sessionId !== binding.sessionId) return false;
+        managed.ptyProcess.write(data);
+        managed.bridge.noteInput(data);
+        return true;
+      },
+    });
+    // The send queue was held off the keyboard for the paste: let it try now.
+    void bridge.kickQueue(id);
+    return { result };
   });
 
   // Pane menu "Rewind" for a terminal Claude: its own double ESC, only at rest
@@ -7308,6 +7375,7 @@ function wireEvents(
     chatSubscribers.delete(payload.id);
     transcriptProjector?.dropPty(payload.id);
     transcriptActivity?.dropSession(payload.id);
+    stallWatch?.dropSession(payload.id);
     apiErrorTurnEnds?.dropSession(payload.id);
     teammateWakes?.dropSession(payload.id);
     terminalChat?.dropPty(payload.id);
@@ -7992,6 +8060,7 @@ function wireEvents(
     chatSubscribers.delete(payload.id);
     transcriptProjector?.dropPty(payload.id);
     transcriptActivity?.dropSession(payload.id);
+    stallWatch?.dropSession(payload.id);
     apiErrorTurnEnds?.dropSession(payload.id);
     teammateWakes?.dropSession(payload.id);
     terminalChat?.dropPty(payload.id);
@@ -8299,6 +8368,7 @@ async function shutdown(
   chatPushTimers.clear(); chatSubscribers.clear();
   transcriptProjector?.dispose();
   transcriptActivity?.dispose();
+  stallWatch?.dispose();
   terminalChat?.dispose();
   // Same for the discovery searches — unref'd watch handles and poll timers.
   transcriptDiscovery?.dispose();

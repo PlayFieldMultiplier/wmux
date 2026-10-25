@@ -613,7 +613,16 @@ export interface MetadataUpdatePayload {
   settled?: boolean;
   /** Daemon-owned agent turn; excludes boot paints and bare shell submissions. */
   daemonTurnOpen?: boolean;
+  /** The daemon reads the pane's Claude turn as stuck: no progress since this time. Null clears it. */
+  stalledSince?: number | null;
 }
+
+/**
+ * Stop and prefill on a stuck turn: `filled` = the last prompt was pasted into
+ * the empty input, unsent; `kept` = the input already held text (Claude puts an
+ * interrupted prompt back by itself); `stopped` = stopped, nothing pasted.
+ */
+export type StallPrefillResult = 'filled' | 'kept' | 'stopped' | 'not_running' | 'blocked' | 'unavailable' | 'error';
 
 // === Status indicator colors ===
 export type WorkspaceStatus = 'active' | 'idle' | 'error' | 'running';
