@@ -5,9 +5,10 @@
 // text: while it waits, Deny, Always allow (not for a release or a push to a
 // default branch) and Approve — the one primary, with one muted line under
 // them when a rule made from it could not merge by itself here (what it still
-// needs); once a merge is approved,
-// the seconds left with Undo; then what happened (merged, or why not, in
-// main's words and never its code — a new head needs a new request). "Started from outside text" says the bot's wake
+// needs); once a merge or an act (a comment, an issue, a close) is
+// approved, the seconds left with Undo; then what happened (merged or done,
+// or why not, in main's words and never its code — a new head needs a new
+// request). Approve on an act echoes the payloadHash of the card it shows. "Started from outside text" says the bot's wake
 // carried an issue's or a PR's words. Every answer goes to main
 // (BOT_APPROVAL_IPC.decide), which decides whether it counts.
 import { useEffect, useState } from 'react';
@@ -51,7 +52,10 @@ export function ApprovalAnswers({ card, t, api, readOnly = false, now }: {
     setBusy(true);
     setError(null);
     try {
-      const r = await bridge.decide({ requestId: id, decision });
+      const r = await bridge.decide({
+        requestId: id, decision, source: 'card',
+        ...(decision === 'approve' && req?.payloadHash ? { payloadHash: req.payloadHash } : {}),
+      });
       if (!r.ok) setError(r.message);
       await refreshApprovals();
     } catch (err) {
@@ -95,20 +99,23 @@ export function ApprovalAnswers({ card, t, api, readOnly = false, now }: {
       )}
       {phase.phase === 'undo' && (
         <div className="flex flex-wrap items-center gap-2 text-[12px] text-[var(--text-sub)]">
-          <span data-approval-countdown className="tabular-nums">{t('room.approval.mergingIn', { seconds: phase.secondsLeft })}</span>
+          <span data-approval-countdown className="tabular-nums">{t(phase.act ? 'room.approval.actIn' : 'room.approval.mergingIn', { seconds: phase.secondsLeft })}</span>
           {canAnswer && <Button size="sm" variant="secondary" data-testid="approval-undo" disabled={busy} onClick={() => void decide('undo')}>{t('room.approval.undo')}</Button>}
         </div>
       )}
       {phase.phase === 'merging' && <p className="text-[12px] text-[var(--text-sub)]">{t('room.approval.merging')}</p>}
+      {phase.phase === 'running' && <p className="text-[12px] text-[var(--text-sub)]">{t(phase.checking ? 'room.approval.actChecking' : 'room.approval.actRunning')}</p>}
       {phase.phase === 'approved' && (
         <p className="text-[12px] text-[var(--text-sub)]">{t(phase.byRule ? 'room.approval.approvedByRule' : 'room.approval.approved')}{phase.recordedOnly ? ` · ${t('room.approval.recordedOnly')}` : ''}</p>
       )}
       {phase.phase === 'executed' && (
-        <p className="text-[12px] text-[var(--accent-green)]">{t(phase.byRule ? 'room.approval.mergedByRule' : 'room.approval.merged')}</p>
+        <p className="text-[12px] text-[var(--accent-green)]">{t(phase.act ? 'room.approval.actDone' : phase.byRule ? 'room.approval.mergedByRule' : 'room.approval.merged')}</p>
       )}
       {phase.phase === 'refused' && (
         <p data-approval-refused className="text-[12px] text-[var(--accent-red)]">
-          {phase.headMoved ? t('room.approval.headMoved') : phase.text ? t('room.approval.refused', { reason: phase.text }) : t('room.approval.notMerged')}
+          {phase.act
+            ? phase.text ? t('room.approval.actRefused', { reason: phase.text }) : t('room.approval.actNotDone')
+            : phase.headMoved ? t('room.approval.headMoved') : phase.text ? t('room.approval.refused', { reason: phase.text }) : t('room.approval.notMerged')}
         </p>
       )}
       {phase.phase === 'denied' && <p className="text-[12px] text-[var(--text-muted)]">{t('room.approval.denied')}</p>}
@@ -128,7 +135,7 @@ export function ApprovePendingChip({ ids, t, api }: { ids: readonly string[]; t:
     if (busy) return;
     setBusy(true);
     try {
-      for (const requestId of ids) await bridge.decide({ requestId, decision: 'approve' });
+      for (const requestId of ids) await bridge.decide({ requestId, decision: 'approve', source: 'chip' });
       await refreshApprovals();
     } finally {
       setBusy(false);

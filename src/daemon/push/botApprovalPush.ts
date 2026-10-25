@@ -39,6 +39,8 @@ function summary(r: PhoneBotApproval): string {
       if (r.prNumber !== undefined) return `Comment on PR #${r.prNumber} in ${repo}`;
       if (r.issueNumber !== undefined) return `Comment on issue #${r.issueNumber} in ${repo}`;
       return `Comment in ${repo}`;
+    case 'pr_close':
+      return r.prNumber !== undefined ? `Close PR #${r.prNumber} in ${repo} without merging` : `Close a PR in ${repo}`;
     case 'release':
       return `Publish a release of ${repo}`;
     default:

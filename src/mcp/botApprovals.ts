@@ -9,8 +9,9 @@ import { z } from 'zod';
 import { BOT_APPROVAL_RPC, BOT_REQUESTABLE_ACTIONS, type ApprovalAction, type ApprovalState } from '../shared/botApproval';
 import { registerToolModule } from './toolModules';
 
-/** A merge request reads the PR (or GitLab MR) and the gh or glab login from its host first. */
-const REQUEST_TIMEOUT_MS = 30_000;
+/** A request reads the PR (or GitLab MR), the issue, the repository and the
+ *  gh or glab login from its host first. */
+const REQUEST_TIMEOUT_MS = 60_000;
 
 const NUMBER = z.number().int().positive();
 const STATES = ['pending', 'approved', 'denied', 'undone', 'executed', 'refused', 'expired'] as const satisfies readonly ApprovalState[];
@@ -30,19 +31,23 @@ registerToolModule({
 
     host.tool(
       'approval_request',
-      'Ask the owner to approve an irreversible or public act: merge a PR of your repository, push to its default branch, open or close an issue, '
-        + 'comment under the owner\'s name, or publish a release. Your workers cannot do these themselves. A card with Approve / Deny / Always allow '
-        + 'appears in your thread; list the requests to the owner there. wmux merges an approved PR itself (after a 10 s Undo window, re-checking '
-        + 'the head and CI); a new head needs a new request. Other acts are recorded only for now. Returns the request (requestId, state); '
-        + 'to the owner it is the approval card for that PR, never its requestId.',
+      'Ask the owner to approve an irreversible or public act: merge a PR of your repository, comment on a PR or an issue under the owner\'s name, '
+        + 'open an issue, close an issue, close a PR without merging, or publish a release. Your workers cannot do these themselves. A card with '
+        + 'Approve / Deny appears in your thread (Always allow for a merge); list the requests to the owner there. Once approved, wmux does it itself '
+        + 'after a 10 s Undo window, re-checking what it acts on: a merge (the head and CI), a comment or an issue (exactly the text the card showed), '
+        + 'a close (the issue or PR still open, a PR at the same head); a moved head or a closed target needs a new request. On GitLab only a merge '
+        + 'is carried out. A release is recorded only for now. Returns the request (requestId, state); to the owner it is the approval card, never its requestId.',
       {
         action: z.enum(BOT_REQUESTABLE_ACTIONS as unknown as [ApprovalAction, ...ApprovalAction[]]),
-        pr_number: NUMBER.optional().describe('merge, or a comment on a PR.'),
+        pr_number: NUMBER.optional().describe('merge, pr_close, or a comment on a PR.'),
         issue_number: NUMBER.optional().describe('issue_close, or a comment on an issue.'),
+        body: z.string().min(1).max(6000).optional().describe('comment (required) or issue_create: the Markdown text to publish, exactly as the owner should read it on the card. wmux adds one hidden marker line.'),
+        title: z.string().min(1).max(256).optional().describe('issue_create: the issue\'s title, one line.'),
+        state_reason: z.enum(['completed', 'not_planned']).optional().describe('issue_close: why it closes (default completed).'),
         reason: z.string().min(1).max(300).describe('One line for the owner, in your own words and in the owner\'s language (the wake block says which): what this act does and what you checked. The owner reads it on the approval card. Never quote the owner\'s messages.'),
       },
-      async ({ action, pr_number, issue_number, reason }) =>
-        call(BOT_APPROVAL_RPC.request, { action, prNumber: pr_number, issueNumber: issue_number, reason }, REQUEST_TIMEOUT_MS),
+      async ({ action, pr_number, issue_number, reason, body, title, state_reason }) =>
+        call(BOT_APPROVAL_RPC.request, { action, prNumber: pr_number, issueNumber: issue_number, reason, body, title, stateReason: state_reason }, REQUEST_TIMEOUT_MS),
     );
 
     host.tool(

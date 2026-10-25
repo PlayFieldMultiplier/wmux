@@ -99,7 +99,7 @@ export const COMMON_POWERS: Readonly<Record<string, string>> = {
   trust_metrics_read: 'read your repository\'s trust metrics: merged PRs, revert rate, 7-day survival, median time to revert.',
   pr_verdict: 'record a review verdict on one PR head, resting on a verify task whose gate wmux recorded at that SHA; it is evidence for the merge, not a merge.',
   plan_propose: 'post a plan as one plan card: ordered items, each with the workspace that takes it, a title, a size (S, M, L) and why; the owner answers it once.',
-  approval_request: 'ask the owner to approve an irreversible or public act — merging a PR, pushing to the default branch, opening or closing an issue, a public comment, a release; wmux shows an approval card and, once approved, carries the act out itself.',
+  approval_request: 'ask the owner to approve an irreversible or public act — merging a PR, a public comment, opening or closing an issue, closing a PR without merging, a release; wmux shows an approval card and, once approved, carries the act out itself.',
   approval_list: 'list your approval requests and where each stands.',
   secret_request: 'ask the owner to enter a named secret (an API key or token) in a private form; you only ever see its name, and a worker you start may receive it as an environment variable.',
   secret_list: 'list the names of the stored secrets; their values stay with wmux.',
@@ -123,7 +123,7 @@ export const ROOM_CONVENTIONS: readonly string[] = [
 export const TEAM_CONVENTIONS: readonly string[] = [
   'The owner may talk to the whole room (or group chat) or to you alone. In a room with a coordinator, the owner\'s message that names no bot goes to the coordinator alone, which hands the work on with handoff_send; in a room without one every bot hears it: answer with room_post only when it asks for your work or you know something the others lack, build on what the other bots already said, and correct a fact you know better.',
   'Ask another bot for something by mentioning it (mentions) or with a handoff (to_bot_id); bot_list shows who is there and what each one does.',
-  'Irreversible or public acts — merging a PR, pushing to the default branch, opening or closing an issue, a public comment, a release — go through approval_request; wmux carries them out once the owner approves. Its reason is your own one-line account of this act and what you checked; the owner\'s say is their answer on that card, so the reason quotes none of their earlier words. The owner reads the reason on the approval card: write it in the owner\'s language (the wake block says which), like every card.',
+  'Irreversible or public acts — merging a PR, a public comment, opening or closing an issue, closing a PR without merging, a release — go through approval_request; wmux carries them out once the owner approves. Its reason is your own one-line account of this act and what you checked; the owner\'s say is their answer on that card, so the reason quotes none of their earlier words. The owner reads the reason on the approval card: write it in the owner\'s language (the wake block says which), like every card.',
   'A key, a token or a login comes through secret_request or login_request: the owner enters it in a private form, and you see its name only.',
   'When the owner answers in chat instead of on your question card, act on their words: the card closes by itself.',
   'Write to the owner in the language of their latest message, and give times in their local time (the wake block says which).',

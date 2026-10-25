@@ -50,9 +50,10 @@ export const BOT_APPROVAL_IPC = {
   revokeRule: 'factory:approval:revokeRule',
 } as const;
 
-/** The acts that need the owner. `merge` is executed by main first; the
- *  others are requested and recorded, and their executors may follow (UI
- *  copy says so). `skill` is a bot's own skill proposal (shared/botSkill.ts):
+/** The acts that need the owner. `merge` and the ACT_ACTIONS are carried
+ *  out by main once approved (ACT_ACTIONS only for a request that carries
+ *  its `act`, written by a build that runs them); the others are requested
+ *  and recorded, and their executors may follow (UI copy says so). `skill` is a bot's own skill proposal (shared/botSkill.ts):
  *  main raises it from `skill_propose`, never from `approval_request`, and
  *  the owner's answer is the act (Approve loads the skill, Deny archives the
  *  proposal). `owner_profile` is a change a bot proposes to the owner's
@@ -62,17 +63,33 @@ export const BOT_APPROVAL_IPC = {
  *  (a command it flags as dangerous): main raises it from the agent's ACP
  *  permission request and answers the agent once (allow once, or deny). It
  *  lives only while that turn waits: never written to approvals.json. */
-export type ApprovalAction = 'merge' | 'push_default' | 'issue_create' | 'issue_close' | 'comment' | 'release' | 'skill' | 'owner_profile' | 'native_tool';
+export type ApprovalAction = 'merge' | 'push_default' | 'issue_create' | 'issue_close' | 'comment' | 'release' | 'pr_close' | 'skill' | 'owner_profile' | 'native_tool';
 
-export const APPROVAL_ACTIONS: readonly ApprovalAction[] = ['merge', 'push_default', 'issue_create', 'issue_close', 'comment', 'release', 'skill', 'owner_profile', 'native_tool'];
+export const APPROVAL_ACTIONS: readonly ApprovalAction[] = ['merge', 'push_default', 'issue_create', 'issue_close', 'comment', 'release', 'pr_close', 'skill', 'owner_profile', 'native_tool'];
+
+/** The public acts main carries out on GitHub after the Undo window
+ *  (factory/actExecutor.ts), for a request that carries its `act`. */
+export type ActAction = 'comment' | 'issue_create' | 'issue_close' | 'pr_close';
+
+export const ACT_ACTIONS: ReadonlySet<ApprovalAction> = new Set<ApprovalAction>(['comment', 'issue_create', 'issue_close', 'pr_close']);
+
+/** Acts that publish text a bot wrote: approved only with a button on their
+ *  card (desktop or phone) that echoes the card's payloadHash, never by
+ *  typed words or the "Approve N pending" chip. */
+export const TEXT_ACT_ACTIONS: ReadonlySet<ApprovalAction> = new Set<ApprovalAction>(['comment', 'issue_create']);
+
+/** Acts typed words and the "Approve N pending" chip may approve: a merge,
+ *  and a close that carries no text. */
+export const TYPED_APPROVABLE_ACTIONS: ReadonlySet<ApprovalAction> = new Set<ApprovalAction>(['merge', 'issue_close', 'pr_close']);
 
 /** Acts the owner decides on their own desktop card only, where the change
  *  is shown: never by a typed "ok", the "Approve N pending" chip, the phone
  *  or a rule, and never named in `approval_request` (main raises them). */
 export const CARD_ONLY_ACTIONS: ReadonlySet<ApprovalAction> = new Set<ApprovalAction>(['skill', 'owner_profile', 'native_tool']);
 
-/** The acts a bot may name in `approval_request`. */
-export const BOT_REQUESTABLE_ACTIONS: readonly ApprovalAction[] = APPROVAL_ACTIONS.filter((a) => !CARD_ONLY_ACTIONS.has(a));
+/** The acts a bot may name in `approval_request` (a push to a default
+ *  branch is not asked for: its executor has no safe source yet). */
+export const BOT_REQUESTABLE_ACTIONS: readonly ApprovalAction[] = APPROVAL_ACTIONS.filter((a) => !CARD_ONLY_ACTIONS.has(a) && a !== 'push_default');
 
 /** Acts no rule may cover: each one always needs the owner. */
 export const APPROVAL_NEVER_BY_RULE: ReadonlySet<ApprovalAction> = new Set<ApprovalAction>(['release', 'push_default', 'skill', 'owner_profile', 'native_tool']);
@@ -85,6 +102,22 @@ export type ApprovalState = 'pending' | 'approved' | 'denied' | 'undone' | 'exec
 
 /** `apr-` + 8..32 url-safe characters, minted by main. */
 export const APPROVAL_ID_RE = /^apr-[A-Za-z0-9_-]{8,32}$/;
+
+/** What an act request pins, read by main when the bot asked (never from
+ *  the bot, except the text it wrote): the repository as GitHub named it,
+ *  the target's node id and, on a PR, its head; the text, normalised. */
+export type ApprovalAct =
+  | { kind: 'comment'; target: 'pr' | 'issue'; number: number; targetNodeId: string; headSha?: string; title: string; body: string }
+  | { kind: 'issue_create'; title: string; body: string }
+  | { kind: 'issue_close'; number: number; targetNodeId: string; title: string; stateReason: 'completed' | 'not_planned' }
+  | { kind: 'pr_close'; number: number; targetNodeId: string; headSha: string; title: string };
+
+/** An act's pins of the repository. */
+export interface ApprovalActRepo {
+  /** `owner/repo` as GitHub answered it. */
+  fullName: string;
+  nodeId: string;
+}
 
 /** The record main writes for one request. */
 export interface ApprovalRequest {
@@ -109,6 +142,15 @@ export interface ApprovalRequest {
   /** `native_tool`: what the agent asked to run, as its permission request
    *  named it (secrets redacted, capped). `repoKey` is ''. */
   nativeTool?: { title: string; command: string };
+  /** An act main carries out (ACT_ACTIONS): what it pins. A request without
+   *  it (an older build's) stays recorded only. */
+  act?: ApprovalAct;
+  actRepo?: ApprovalActRepo;
+  /** sha256 (lowercase hex) of the card's `wmux-payload` fences' inner texts
+   *  joined by U+0000 (factory/actPayload.ts). An approval echoes it. */
+  payloadHash?: string;
+  /** What the act made on GitHub, once done. */
+  result?: { url: string; id?: number; number?: number };
   botId: string;
   workspaceId: string;
   threadId: ThreadId;
@@ -152,6 +194,12 @@ export interface ApprovalRequestParams {
   prNumber?: number;
   issueNumber?: number;
   reason: string;
+  /** comment / issue_create: the text to publish, shown whole on the card. */
+  body?: string;
+  /** issue_create: the issue's title. */
+  title?: string;
+  /** issue_close: completed (default) or not_planned. */
+  stateReason?: 'completed' | 'not_planned';
   /** Idempotency key; default `wake:<wakeId>:a<n>` from the running wake. */
   clientRequestId?: string;
 }
@@ -216,6 +264,13 @@ export interface ApprovalDecideRequest {
   decision: 'approve' | 'deny' | 'undo' | 'always';
   /** decision 'always': the rule's scope (default the requesting bot). */
   ruleScope?: 'bot' | 'workspace';
+  /** decision 'approve' on an act: the payloadHash of the card the owner
+   *  read. A text act refuses an approval without it
+   *  (`client_update_required`) and with another one (`changed`). */
+  payloadHash?: string;
+  /** Where the decision came from, logged with it: the card's button, the
+   *  "Approve N pending" chip. A text act refuses the chip. */
+  source?: 'card' | 'chip';
 }
 
 /** Seconds an approved merge waits with Undo on its card before main runs it. */
