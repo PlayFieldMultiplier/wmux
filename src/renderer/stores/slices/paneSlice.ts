@@ -376,6 +376,12 @@ export interface PaneSlice {
   // persisted; cleared on the same surface-teardown paths as surfaceActivity.
   surfaceOutputAt: Record<string, number>;
   stampSurfaceOutput: (ptyId: string) => void;
+  // Since when the daemon's StallWatch reads this pty's Claude turn as stuck
+  // (`stalledSince` on a metadata update). The daemon withdraws it on any
+  // progress, turn end or pane close; a turn end here drops it too.
+  // Transient, never persisted.
+  surfaceStalledAt: Record<string, number>;
+  setSurfaceStalled: (ptyId: string, since: number | null) => void;
   // Issue #173: transient map of pane id → cwd inherited from the pane that
   // was split. Written by splitPane, consumed (and cleared) by the AppLayout
   // empty-leaf PTY funnel. Deliberately NOT persisted — buildSessionData's
@@ -726,6 +732,7 @@ export const createPaneSlice: StateCreator<StoreState, [['zustand/immer', never]
     if (status && TURN_CLOSING_STATUSES.has(status)) {
       delete state.surfaceTurnOpenAt[ptyId];
       if (state.surfaceTurnOpenByDaemon) delete state.surfaceTurnOpenByDaemon[ptyId];
+      if (state.surfaceStalledAt) delete state.surfaceStalledAt[ptyId];
     }
   }),
 
@@ -1013,6 +1020,14 @@ export const createPaneSlice: StateCreator<StoreState, [['zustand/immer', never]
     state.surfaceOutputAt[ptyId] = Date.now();
   }),
 
+  surfaceStalledAt: {},
+
+  setSurfaceStalled: (ptyId, since) => set((state: StoreState) => {
+    if (!ptyId) return;
+    if (since === null) delete state.surfaceStalledAt[ptyId];
+    else state.surfaceStalledAt[ptyId] = since;
+  }),
+
   splitCwdSeed: {},
 
   clearSplitCwdSeed: (paneId) => set((state: StoreState) => {
@@ -1241,6 +1256,7 @@ export const createPaneSlice: StateCreator<StoreState, [['zustand/immer', never]
             if (state.surfaceTurnOpenByDaemon) delete state.surfaceTurnOpenByDaemon[s.ptyId];
             delete state.surfaceTurnEndAt[s.ptyId];
             delete state.surfaceOutputAt[s.ptyId];
+            delete state.surfaceStalledAt[s.ptyId];
             delete state.surfacePorts[s.ptyId];
             delete state.surfaceAgentStatus[s.ptyId];
             clearNudgesFor(s.ptyId); // A5: don't let a reused ptyId inherit this pane's nudge cap

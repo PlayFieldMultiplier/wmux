@@ -143,6 +143,10 @@ export function registerChatHandlers(
     [CHAT_IPC.rewind]: (e, args) => trusted(e) && args && validId(args.ptyId)
       ? rpc('daemon.transcript.rewind', { id: args.ptyId, kitty: args.kitty === true }, { result: 'error' }) : { result: 'unavailable' },
     [CHAT_IPC.attachment]: (e, args) => trusted(e) && args ? previewChatAttachment(args.path) : { ok: false, reason: 'missing' },
+    [CHAT_IPC.stallKeepWaiting]: (e, args) => trusted(e) && args && validId(args.ptyId)
+      ? rpc('daemon.chat.stallKeepWaiting', { id: args.ptyId }, { ok: false }) : { ok: false },
+    [CHAT_IPC.stallPrefill]: (e, args) => trusted(e) && args && validId(args.ptyId)
+      ? rpc('daemon.chat.stallPrefill', { id: args.ptyId }, { result: 'error' }) : { result: 'unavailable' },
   };
   handlers[CHAT_IPC.settings] = async (e, args) => {
     if (!trusted(e) || !args || !validId(args.ptyId) || disposed || !client?.isConnected) return { ok: false, error: 'unavailable' };
