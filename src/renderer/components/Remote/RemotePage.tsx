@@ -33,7 +33,7 @@ import { sshNeedsIdentityCheck, sshNeedsPerson, type SshTunnelState } from '../.
 import { pcRailHostState } from '../../../shared/pcRail';
 import RemoteRowMenu, { type RemoteRowMenuItem } from './RemoteRowMenu';
 import TailscaleChecklist from './TailscaleChecklist';
-import { FirewallDetailValue, FirewallNoticeView, ListenProblemView, useFirewall, useListenProblem } from './FirewallNotice';
+import { FirewallDetailActions, FirewallDetailValue, FirewallNoticeView, ListenProblemView, useFirewall, useListenProblem } from './FirewallNotice';
 import { isFixableVerdict } from '../../../shared/netFirewall';
 import RemoteSpawnHostToggle from './RemoteSpawnHostToggle';
 import { REMOTE_SPAWN_UI_ENABLED } from './remoteSpawnFlag';
@@ -505,9 +505,11 @@ export default function RemotePage() {
         ? a2aFw.status && isFixableVerdict(a2aFw.status.verdict)
           ? t('remotePage.a2aNoRule', { port: a2aStatus.port })
           : t('remotePage.a2aListening', { port: a2aStatus.port })
-        : a2aProblem && (a2aProblem.problem.kind === 'port-in-use' || a2aProblem.problem.kind === 'port-reserved')
+        : a2aProblem?.problem.kind === 'port-in-use'
           ? t('remotePage.a2aPortInUse', { port: a2aProblem.problem.port })
-          : t('remotePage.a2aError', { error: a2aStatus.lastError ?? t('remotePage.unknown') });
+          : a2aProblem && (a2aProblem.problem.kind === 'port-reserved' || a2aProblem.problem.kind === 'port-denied')
+            ? t('remotePage.a2aPortUnavailable', { port: a2aProblem.problem.port })
+            : t('remotePage.a2aError', { error: a2aStatus.lastError ?? t('remotePage.unknown') });
   const a2aListenFailed = !!(a2aStatus?.enabled && a2aStatus.lastErrorCode);
   // The page's one primary: the first Accept, else Connect a PC on an empty
   // page, else a port or firewall fix.
@@ -518,9 +520,19 @@ export default function RemotePage() {
     const configure = window.electronAPI?.a2aRemote?.configure;
     if (!configure) return;
     setBusy('a2a-port');
+    setError((e) => (e?.key === 'a2a-port' ? null : e));
     try {
       const next = await configure({ port }).catch(() => null);
-      if (mounted.current && next && typeof next.port === 'number') setA2aStatus(next);
+      if (!mounted.current) return;
+      if (!next || typeof next.port !== 'number') {
+        setError({ key: 'a2a-port', message: t('settings.a2aRemoteActionFailed') });
+        return;
+      }
+      setA2aStatus(next);
+      // The old listener kept serving: the move itself failed.
+      if (next.listening && next.port !== port) {
+        setError({ key: 'a2a-port', message: t('settings.a2aRemotePortFailed', { error: next.lastError ?? t('remotePage.unknown'), port: next.port }) });
+      }
     } finally {
       if (mounted.current) setBusy(null);
     }
@@ -874,8 +886,8 @@ export default function RemotePage() {
             {a2aStatus?.listening && (
               <>
                 <dt>{t('net.fw.detailLabel')}</dt>
-                <dd><FirewallDetailValue c={a2aFw} t={t} /></dd>
-                <dd />
+                <dd><FirewallDetailValue c={a2aFw} seenAt={a2aStatus.inboundSeenAt} t={t} /></dd>
+                <dd><FirewallDetailActions c={a2aFw} t={t} /></dd>
               </>
             )}
             {a2aStatus?.fingerprint256 && (
@@ -896,20 +908,25 @@ export default function RemotePage() {
           steady "allowed" state lives in Details; here only what needs doing,
           or what a Fix just did. */}
       {(a2aListenFailed || a2aStatus?.listening) && (
-        <div className="wmux-remote-fw" data-remote-firewall>
+        <div className="wmux-remote-fw" data-remote-firewall aria-live="polite">
           {a2aListenFailed && (
             <ListenProblemView
               report={a2aProblem}
               fallback={null}
               onUsePort={(port) => void moveA2aPort(port)}
               busy={busy !== null}
+              working={busy === 'a2a-port'}
               repair
               primary={pagePrimaryFree}
               listener="a2a"
+              live={false}
               t={t}
             />
           )}
-          {a2aStatus?.listening && <FirewallNoticeView c={a2aFw} listener="a2a" primary={pagePrimaryFree && !a2aListenFailed} quiet t={t} />}
+          {rowError('a2a-port')}
+          {a2aStatus?.listening && (
+            <FirewallNoticeView c={a2aFw} listener="a2a" primary={pagePrimaryFree && !a2aListenFailed} quiet seenAt={a2aStatus.inboundSeenAt} live={false} t={t} />
+          )}
         </div>
       )}
 

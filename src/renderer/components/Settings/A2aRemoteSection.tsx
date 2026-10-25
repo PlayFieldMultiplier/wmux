@@ -230,7 +230,7 @@ export function A2aRemoteSection() {
           t={t}
         />
       ) : undefined}
-      firewallNotice={<FirewallNoticeView c={firewall} listener="a2a" primary={false} t={t} />}
+      firewallNotice={<FirewallNoticeView c={firewall} listener="a2a" primary={false} seenAt={status.inboundSeenAt} t={t} />}
       t={t}
     />
   );

@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { FirewallDetailValue, FirewallNoticeView, ListenProblemView, type FirewallController } from '../FirewallNotice';
+import { FirewallDetailActions, FirewallDetailValue, FirewallNoticeView, ListenProblemView, type FirewallController } from '../FirewallNotice';
 import { VERDICT_PRECEDENCE, inapplicableStatus, type InboundStatusView, type InboundVerdict } from '../../../../shared/netFirewall';
 import type { ListenProblemReport } from '../../../../shared/netListen';
 
@@ -34,6 +34,7 @@ function ctl(over: Partial<FirewallController> = {}): FirewallController {
     outcome: null,
     fixed: false,
     copied: false,
+    settled: 0,
     check: noop,
     fix: noop,
     remove: noop,
@@ -42,8 +43,8 @@ function ctl(over: Partial<FirewallController> = {}): FirewallController {
     ...over,
   };
 }
-const view = (c: FirewallController, opts: { primary?: boolean; quiet?: boolean } = {}): string =>
-  renderToStaticMarkup(createElement(FirewallNoticeView, { c, listener: 'a2a', primary: opts.primary ?? true, quiet: opts.quiet ?? false, t }));
+const view = (c: FirewallController, opts: { primary?: boolean; quiet?: boolean; ownCheck?: boolean; seenAt?: number | null; live?: boolean } = {}): string =>
+  renderToStaticMarkup(createElement(FirewallNoticeView, { c, listener: 'a2a', primary: opts.primary ?? true, quiet: opts.quiet ?? false, ownCheck: opts.ownCheck, seenAt: opts.seenAt, live: opts.live, t }));
 const count = (html: string, needle: string): number => html.split(needle).length - 1;
 
 describe('FirewallNoticeView — one row per verdict', () => {
@@ -83,6 +84,32 @@ describe('FirewallNoticeView — one row per verdict', () => {
   it('another PC reaching this one is said with its time', () => {
     expect(view(ctl({ status: status({ verdict: 'covered', inboundSeenAt: Date.UTC(2026, 9, 25, 5, 2) }) }))).toContain('net.fw.inboundSeen(');
   });
+
+  it('"reached" comes from the listener\'s live time too, not only from the last check', () => {
+    // After a Fix the probe ran before the other PC connected; the polled status knows better.
+    const after = ctl({ status: status({ verdict: 'covered', inboundSeenAt: null }), outcome: { kind: 'ok' }, fixed: true });
+    expect(view(after, { quiet: true })).not.toContain('net.fw.inboundSeen(');
+    expect(view(after, { quiet: true, seenAt: Date.UTC(2026, 9, 25, 5, 2) })).toContain('net.fw.inboundSeen(');
+  });
+
+  it('a failed read hides the old verdict: the could-not-read row with Check, whatever was shown before', () => {
+    const html = view(ctl({ status: status({ verdict: 'covered' }), readFailed: true }));
+    expect(html).toContain('net.fw.unknown');
+    expect(html).toContain('data-firewall-check');
+    expect(html).not.toContain('net.fw.allowed');
+  });
+
+  it('rows are live by themselves, except inside a surface\'s live container', () => {
+    expect(view(ctl())).toContain('role="status"');
+    expect(view(ctl(), { live: false })).not.toContain('role="status"');
+    expect(view(ctl({ status: status({ verdict: 'covered' }) }), { live: false })).not.toContain('role="status"');
+  });
+
+  it('a surface with its own Check (the invite tab) gets neither "Checking…" nor a second Check', () => {
+    expect(view(ctl({ status: null, checking: true }), { ownCheck: true })).toBe('');
+    expect(view(ctl({ status: null, readFailed: true }), { ownCheck: true })).not.toContain('data-firewall-check');
+    expect(view(ctl({ status: status({ verdict: 'unknown' }) }), { ownCheck: true })).not.toContain('data-firewall-check');
+  });
 });
 
 describe('the Fix and the one-primary rule', () => {
@@ -92,6 +119,24 @@ describe('the Fix and the one-primary rule', () => {
     expect(view(ctl({ busy: 'fix' }))).not.toContain('ui-btn-primary');
     expect(view(ctl({ checking: true }))).not.toContain('ui-btn-primary');
     expect(count(view(ctl()), 'ui-btn-primary')).toBe(1);
+  });
+
+  it('while it runs the Fix says so and stays focusable: aria-disabled and aria-busy, not disabled', () => {
+    const html = view(ctl({ busy: 'fix' }));
+    expect(html).toContain('net.fw.working');
+    expect(html).toMatch(/aria-disabled="true"[^>]*aria-busy="true"[^>]*data-firewall-fix/);
+    expect(html).not.toMatch(/disabled=""[^>]*data-firewall-fix/);
+  });
+
+  it('a click refused because another change runs says so', () => {
+    expect(view(ctl({ outcome: { kind: 'refused', refusal: 'busy' } }))).toContain('net.fw.busy');
+    expect(view(ctl({ outcome: { kind: 'refused', refusal: 'changed' } }))).not.toContain('net.fw.busy');
+  });
+
+  it('a change that ran but whose check after it failed says so, with Check', () => {
+    const html = view(ctl({ status: null, readFailed: true, outcome: { kind: 'ok' } }));
+    expect(html).toContain('net.fw.okUnchecked');
+    expect(html).toContain('data-firewall-check');
   });
 
   it('the hint names the prompt Windows (or macOS) will show', () => {
@@ -119,6 +164,13 @@ describe('the Fix and the one-primary rule', () => {
 
   it('a failed stage is named, never stderr', () => {
     expect(view(ctl({ outcome: { kind: 'failed', stage: 'pubblock', code: 12 } }))).toContain('net.fw.failed(net.fw.stage.pubblock)');
+    expect(view(ctl({ outcome: { kind: 'failed', stage: null, code: 5 } }))).toContain('net.fw.failed(5)');
+  });
+
+  it('a declined macOS admin sheet is not called a Windows request', () => {
+    const mac = view(ctl({ outcome: { kind: 'cancelled' }, status: status({ platform: 'darwin', ruleIds: null }) }));
+    expect(mac).toContain('net.fw.cancelledMac');
+    expect(mac).not.toMatch(/net\.fw\.cancelled(?!Mac)/);
   });
 });
 
@@ -153,15 +205,29 @@ describe('exposedPublic', () => {
   });
 });
 
-describe('FirewallDetailValue', () => {
-  const detail = (c: FirewallController) => renderToStaticMarkup(createElement(FirewallDetailValue, { c, t }));
-  it('Not checked · Check, then the verdict with Remove for our rule', () => {
+describe('Details: the Firewall value and its actions', () => {
+  const detail = (c: FirewallController, seenAt?: number | null) => renderToStaticMarkup(createElement(FirewallDetailValue, { c, seenAt, t }));
+  const actions = (c: FirewallController) => renderToStaticMarkup(createElement(FirewallDetailActions, { c, t }));
+
+  it('the value: Not checked, the verdict, a failed read, never a bare dash', () => {
     expect(detail(ctl({ status: null }))).toContain('net.fw.notChecked');
-    expect(detail(ctl({ status: null }))).toContain('data-firewall-check');
-    const covered = detail(ctl({ status: status({ verdict: 'covered' }) }));
-    expect(covered).toContain('net.fw.allowed(45660)');
+    expect(detail(ctl({ status: status({ verdict: 'covered' }) }))).toContain('net.fw.allowed(45660)');
+    expect(detail(ctl({ status: status({ verdict: 'firewall-off' }) }))).toContain('net.fw.off');
+    expect(detail(ctl({ status: status({ verdict: 'covered' }), readFailed: true }))).toContain('net.fw.unknown');
+    expect(detail(ctl({ status: inapplicableStatus('a2a', 'win32', 'C:\\w\\wmux.exe', 1) as InboundStatusView }))).toContain('net.fw.notChecked');
+    expect(detail(ctl({ status: status({ verdict: 'covered' }) }))).not.toContain('—');
+    expect(detail(ctl({ status: status({ verdict: 'covered' }) }), Date.UTC(2026, 9, 25, 5, 2))).toContain('net.fw.inboundSeen(');
+  });
+
+  it('the actions: Check firewall always, Remove only for our rule, with its own name', () => {
+    for (const verdict of VERDICT_PRECEDENCE) expect(actions(ctl({ status: status({ verdict }) })), verdict).toContain('data-firewall-check');
+    expect(actions(ctl({ status: null }))).toContain('data-firewall-check');
+    const covered = actions(ctl({ status: status({ verdict: 'covered' }) }));
     expect(covered).toContain('data-firewall-remove');
-    expect(detail(ctl({ status: status({ verdict: 'covered-by-prompt' }) }))).not.toContain('data-firewall-remove');
+    expect(covered).toContain('aria-label="net.fw.removeAria"');
+    expect(actions(ctl({ status: status({ verdict: 'covered-by-prompt' }) }))).not.toContain('data-firewall-remove');
+    expect(actions(ctl({ status: status({ verdict: 'covered', platform: 'darwin', ruleIds: null }) }))).not.toContain('data-firewall-remove');
+    expect(actions(ctl({ status: status({ verdict: 'covered' }), busy: 'remove' }))).toContain('net.fw.working');
   });
 });
 
@@ -187,8 +253,10 @@ describe('ListenProblemView', () => {
     expect(lp({ problem: { kind: 'port-in-use', port: 7681 }, holder: null, suggestion: 7682 }, { repair: false })).not.toContain('net.listen.usePortRepair');
   });
 
-  it('reserved and gone-address sentences; no port, no button', () => {
+  it('reserved, denied and gone-address sentences; no port, no button', () => {
     expect(lp({ problem: { kind: 'port-reserved', port: 50000 }, holder: null, suggestion: null })).toContain('net.listen.portReserved(50000)');
+    expect(lp({ problem: { kind: 'port-denied', port: 50000 }, holder: null, suggestion: 50001 })).toContain('net.listen.portDenied(50000)');
+    expect(lp({ problem: { kind: 'port-in-use', port: 50000 }, holder: { kind: 'self', pid: 1 }, suggestion: null })).toContain('net.listen.portInUseSelf(50000)');
     const gone = lp({ problem: { kind: 'address-gone', address: '10.0.0.5' }, holder: null, suggestion: null });
     expect(gone).toContain('net.listen.addressGone');
     expect(gone).not.toContain('data-listen-use-port');

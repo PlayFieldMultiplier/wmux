@@ -566,8 +566,9 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
                 fallback={t('settings.a2aRemoteNotListening', { error: inviteFailure.code })}
                 onUsePort={(port) => void moveInvitePort(port)}
                 busy={creating}
+                working={creating}
                 repair
-                primary
+                primary={false}
                 listener="a2a"
                 t={t}
               />
@@ -616,7 +617,7 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
                     {firewall.checking ? t('net.fw.checking') : t('net.fw.check')}
                   </Button>
                 </div>
-                <FirewallNoticeView c={firewall} listener="a2a" primary={false} t={t} />
+                <FirewallNoticeView c={firewall} listener="a2a" primary={false} ownCheck t={t} />
               </>
             ) : creating ? (
               <p className="wmux-remote-connect-note">{t('remotePage.connect.creating')}</p>

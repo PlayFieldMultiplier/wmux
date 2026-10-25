@@ -14,7 +14,7 @@ const HUB_KEYS = Object.keys(en).filter((k) =>
   || /^remote\.hub/.test(k)
   // Remote pairing's firewall and port problems, and the joiner-side lines that point at them.
   || /^net\.(listen|fw)\./.test(k)
-  || /^remotePage\.a2a(PortInUse|NoRule)$/.test(k)
+  || /^remotePage\.a2a(PortInUse|PortUnavailable|NoRule)$/.test(k)
   || k === 'settings.a2aRemoteJoinError.timeout'
   || k === 'a2aLink.error.unreachable',
 ) as (keyof typeof en)[];

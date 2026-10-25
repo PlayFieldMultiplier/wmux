@@ -1830,7 +1830,7 @@ export default function WebToggle({ variant = 'icon', compact = false, onOpenCha
                 t={t}
               />
             ) : undefined}
-            firewallNotice={<FirewallNoticeView c={webFirewall} listener="web" primary={false} t={t} />}
+            firewallNotice={<FirewallNoticeView c={webFirewall} listener="web" primary={false} seenAt={info.inboundSeenAt} t={t} />}
             t={t}
           />
           </>
