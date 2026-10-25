@@ -313,10 +313,15 @@ export interface InProgressPr extends LinkedPr {
 
 export interface InProgress {
   prs: InProgressPr[];
-  /** Why the linked PRs are not known (not read, a failed read). */
+  /** Why some PRs are not known (the links not read or a failed read, a PR a
+   *  card named that could not be read): nothing in `prs` is no proof. */
   prsUnknown?: string;
   tasks: OpenTaskRow[];
+  /** Why the open tasks are not known. */
+  tasksUnknown?: string;
   cards: Array<{ seq: number; kind: string; title: string; botId: string; pr?: number }>;
+  /** Why the thread's cards are not known. */
+  cardsUnknown?: string;
 }
 
 function callerWorkspace(caller: Caller, scope: RepoScope): string {
@@ -324,66 +329,88 @@ function callerWorkspace(caller: Caller, scope: RepoScope): string {
 }
 
 /** The open tasks on these threads the caller may see (none across a guest
- *  workspace's boundary), at most IN_PROGRESS_TASKS. */
-function openTasksOn(threadIds: readonly string[], caller: Caller, scope: RepoScope, deps: Pick<FactoryReadDeps, 'openTasks'>): OpenTaskRow[] {
+ *  workspace's boundary), at most IN_PROGRESS_TASKS, or why they are not known. */
+function openTasksOn(threadIds: readonly string[], caller: Caller, scope: RepoScope, deps: Pick<FactoryReadDeps, 'openTasks'>): { tasks: OpenTaskRow[]; tasksUnknown?: string } {
+  if (!deps.openTasks) return { tasks: [], tasksUnknown: 'the open tasks are not read here' };
   let rows: OpenTaskRow[];
   try {
-    rows = deps.openTasks?.(threadIds) ?? [];
-  } catch {
-    rows = [];
+    rows = deps.openTasks(threadIds);
+  } catch (err) {
+    return { tasks: [], tasksUnknown: `the open tasks could not be read: ${String(err)}`.slice(0, 300) };
   }
   const from = callerWorkspace(caller, scope);
-  return rows.filter((t) => !crossesGuestBoundary(from, t.ownerWorkspaceId)).slice(0, FACTORY_READ_LIMITS.IN_PROGRESS_TASKS);
+  return { tasks: rows.filter((t) => !crossesGuestBoundary(from, t.ownerWorkspaceId)).slice(0, FACTORY_READ_LIMITS.IN_PROGRESS_TASKS) };
 }
 
-/** The latest bot cards of a thread in the scope's room (guest cards left out). */
-function threadBotCards(threadId: ThreadId, scope: RepoScope, deps: Pick<FactoryReadDeps, 'rooms'>): InProgress['cards'] {
+/** The latest bot cards of a thread in the scope's room (guest cards left
+ *  out), or why they are not known. */
+function threadBotCards(threadId: ThreadId, scope: RepoScope, deps: Pick<FactoryReadDeps, 'rooms'>): { cards: InProgress['cards']; cardsUnknown?: string } {
   let cards: RoomCard[];
   try {
-    cards = deps.rooms()?.read(scope.workspaceId, { threadId }).cards ?? [];
-  } catch {
-    cards = [];
+    const room = deps.rooms();
+    if (!room) return { cards: [], cardsUnknown: 'the room is not readable just now' };
+    cards = room.read(scope.workspaceId, { threadId }).cards;
+  } catch (err) {
+    return { cards: [], cardsUnknown: `the thread's cards could not be read: ${String(err)}`.slice(0, 300) };
   }
-  return cards
-    .filter((c) => c.actor.kind === 'bot')
-    .slice(-FACTORY_READ_LIMITS.IN_PROGRESS_CARDS)
-    .map((c) => ({
-      seq: c.seq, kind: c.kind, title: c.title, botId: c.actor.kind === 'bot' ? c.actor.botId : '',
-      ...(typeof c.refs?.pr === 'number' ? { pr: c.refs.pr } : {}),
-    }));
+  return {
+    cards: cards
+      .filter((c) => c.actor.kind === 'bot')
+      .slice(-FACTORY_READ_LIMITS.IN_PROGRESS_CARDS)
+      .map((c) => ({
+        seq: c.seq, kind: c.kind, title: c.title, botId: c.actor.kind === 'bot' ? c.actor.botId : '',
+        ...(typeof c.refs?.pr === 'number' ? { pr: c.refs.pr } : {}),
+      })),
+  };
 }
 
-/** The work already under way on one issue. */
+/** The work already under way on one issue. A part that could not be read
+ *  says so in its `*Unknown` field: what is missing there is not known to be
+ *  absent. */
 async function issueInProgress(issueNumber: number, caller: Caller, scope: RepoScope, deps: FactoryReadDeps): Promise<InProgress> {
   const L = FACTORY_READ_LIMITS;
-  const cards = threadBotCards(issueThreadId(scope.repoKey, issueNumber), scope, deps);
+  const { cards, cardsUnknown } = threadBotCards(issueThreadId(scope.repoKey, issueNumber), scope, deps);
   let prs: InProgressPr[] = [];
-  let prsUnknown: string | undefined;
-  if (!deps.linkedPrs) prsUnknown = 'the linked pull requests are not read here';
+  const unknown: string[] = [];
+  if (!deps.linkedPrs) unknown.push('the linked pull requests are not read here');
   else {
     const linked = await deps.linkedPrs(scope.repoPath, scope.repoKey, issueNumber).catch((err: unknown) => ({ error: String(err) }));
-    if ('error' in linked) prsUnknown = `the linked pull requests could not be read: ${linked.error}`.slice(0, 300);
+    if ('error' in linked) unknown.push(`the linked pull requests could not be read: ${linked.error}`.slice(0, 300));
     else prs = linked.slice(0, L.IN_PROGRESS_PRS);
   }
-  // A PR a bot's card here named that the host does not link (no closing
-  // keyword, another base branch): read fresh, kept while it is open.
-  const named = [...new Set(cards.map((c) => c.pr).filter((n): n is number => typeof n === 'number'))]
-    .filter((n) => !prs.some((p) => p.number === n))
-    .slice(-L.IN_PROGRESS_CARD_PR_READS);
-  for (const n of named) {
+  // The PRs bots' cards here named, newest first: one the host does not link
+  // (no closing keyword, another base branch) is read fresh and kept while
+  // it is open; one that cannot be read is named as unknown, never dropped
+  // as if it were closed.
+  const named: number[] = [];
+  for (const c of [...cards].reverse()) {
+    if (typeof c.pr === 'number' && !named.includes(c.pr)) named.push(c.pr);
+  }
+  const unreadable: number[] = [];
+  for (const n of named.filter((x) => !prs.some((p) => p.number === x)).slice(0, L.IN_PROGRESS_CARD_PR_READS)) {
     if (prs.length >= L.IN_PROGRESS_PRS) break;
     const r = await deps.readPr(scope.repoPath, scope.repoKey, n).catch(() => null);
-    if (!r?.ok || r.value.state !== 'OPEN') continue;
+    if (!r?.ok) { unreadable.push(n); continue; }
+    if (r.value.state !== 'OPEN') continue;
     const f = r.value;
     prs.push({ number: f.number, title: f.title ?? '', isDraft: f.isDraft, author: f.author, headRefName: f.headRefName, url: '' });
   }
-  const tasks = openTasksOn([issueThreadId(scope.repoKey, issueNumber), ...prs.map((p) => prThreadId(scope.repoKey, p.number))], caller, scope, deps);
+  if (unreadable.length > 0) unknown.push(`${unreadable.map((n) => `PR #${n}`).join(', ')} could not be read`);
+  // Every PR a card named is looked up for open tasks, whether or not it read.
+  const prThreads = [...new Set([...prs.map((p) => p.number), ...named])].map((n) => prThreadId(scope.repoKey, n));
+  const { tasks, tasksUnknown } = openTasksOn([issueThreadId(scope.repoKey, issueNumber), ...prThreads], caller, scope, deps);
   for (const p of prs) {
-    const by = [...cards].reverse().find((c) => c.pr === p.number)?.botId
-      ?? tasks.find((t) => t.threadId === prThreadId(scope.repoKey, p.number))?.botId;
+    // The bot whose open task is on the PR; else the first card naming it
+    // (the one that opened it, not a later verdict or report about it).
+    const by = tasks.find((t) => t.threadId === prThreadId(scope.repoKey, p.number))?.botId
+      ?? cards.find((c) => c.pr === p.number)?.botId;
     if (by) p.botId = by;
   }
-  return { prs, ...(prsUnknown ? { prsUnknown } : {}), tasks, cards };
+  return {
+    prs, ...(unknown.length > 0 ? { prsUnknown: unknown.join('; ') } : {}),
+    tasks, ...(tasksUnknown ? { tasksUnknown } : {}),
+    cards, ...(cardsUnknown ? { cardsUnknown } : {}),
+  };
 }
 
 // ── Handlers ───────────────────────────────────────────────────────────────
@@ -431,7 +458,7 @@ export async function handlePrRead(raw: unknown, ctx: RpcContext | undefined, de
       checksTruncated: f.checksTruncated || f.checks.length > L.PR_CHECKS,
     },
     // The open tasks already working on it.
-    inProgress: { tasks: openTasksOn([prThreadId(scope.repoKey, f.number)], caller, scope, deps) },
+    inProgress: openTasksOn([prThreadId(scope.repoKey, f.number)], caller, scope, deps),
   };
 }
 

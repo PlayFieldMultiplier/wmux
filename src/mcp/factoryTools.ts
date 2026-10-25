@@ -36,7 +36,7 @@ registerToolModule({
 
     host.tool(
       'pr_read',
-      'Read one pull request of your workspace\'s repository, fresh from its host (on GitLab a merge request: pr_number is its iid, checks are its head pipeline\'s jobs): state, head SHA and branch, base, author, labels, changed files (first 100) and checks with which are required, and inProgress: the open tasks on it.',
+      'Read one pull request of your workspace\'s repository, fresh from its host (on GitLab a merge request: pr_number is its iid, checks are its head pipeline\'s jobs): state, head SHA and branch, base, author, labels, changed files (first 100) and checks with which are required, and inProgress: the open tasks on it (tasksUnknown when they could not be read).',
       { pr_number: PR_NUMBER, workspace_id: WORKSPACE },
       async ({ pr_number, workspace_id }) => call(FACTORY_READ_RPC.prRead, { prNumber: pr_number, workspaceId: workspace_id }),
     );
@@ -44,7 +44,7 @@ registerToolModule({
     host.tool(
       'issue_read',
       'Read one issue of your workspace\'s repository (body and recent comments, cut to size), or without issue_number the open issues (first 30), optionally with one label. '
-        + 'One issue also carries inProgress: the open pull requests that close it, the open tasks on it or on those pull requests, and the latest bot cards in its thread.',
+        + 'One issue also carries inProgress: the open pull requests that close it, the open tasks on it or on those pull requests, and the latest bot cards in its thread. A part that could not be read is named in prsUnknown, tasksUnknown or cardsUnknown: what is missing there is not known to be absent.',
       {
         issue_number: PR_NUMBER.optional(),
         label: z.string().min(1).max(100).optional(),
