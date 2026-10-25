@@ -16,7 +16,7 @@
 import fs from 'node:fs';
 import { dialog, ipcMain, nativeImage, type BrowserWindow, type OpenDialogOptions } from 'electron';
 import { IPC } from '../../../shared/constants';
-import { BOT_ID_RE, isCoordinatorBot, type BotProfile, type BotStatus } from '../../../shared/bot';
+import { BOT_ID_RE, HERMES_BOT_ENGINE, isCoordinatorBot, type BotProfile, type BotStatus } from '../../../shared/bot';
 import { wrapHandler } from '../wrapHandler';
 import { getBotStore } from '../../factory/botStore';
 import { getBotRuntime } from '../../factory/BotRuntime';
@@ -52,6 +52,8 @@ import { resolveClaudeExecutable } from '../../claude/resolveClaudeExecutable';
 import { loadClaudeCredential } from '../../claude/claudeCredential';
 import { sendToRenderer } from '../../pipe/handlers/_bridge';
 import { ShellDetector } from '../../../shared/ShellDetector';
+import { getHermesHost, type HermesHost } from '../../factory/hermesHost';
+import type { HermesReadiness } from '../../../shared/hermesEngine';
 import { checkClaudeApiKey, getClaudeApiKeyStore, type ClaudeApiKeyCheck, type ClaudeApiKeySetResult, type ClaudeApiKeyStatus, type ClaudeApiKeyStore } from '../../factory/claudeApiKey';
 
 export interface FactoryBotRow {
@@ -279,6 +281,66 @@ function defaultEngineLoginDeps(getWindow: () => BrowserWindow | null): Omit<Eng
     openTab: async (shell, initialCommand) =>
       (await sendToRenderer(getWindow, 'surface.new', { ...(shell ? { shell } : {}), initialCommand }, { timeoutMs: 15_000 })) as { ptyId?: unknown; error?: unknown } | null,
     windowsShell: () => new ShellDetector().getDefault(),
+  };
+}
+
+/** FACTORY_HERMES_READINESS: main window only (any other sender reads as
+ *  unknown, never as ready). */
+export function factoryHermesReadinessHandler(
+  getWindow: () => BrowserWindow | null,
+  host: () => Pick<HermesHost, 'readiness'> = getHermesHost,
+): (e: { sender?: unknown; senderFrame?: unknown }) => Promise<HermesReadiness> {
+  return async (e) => {
+    if (!isMainWindowSender(e, getWindow())) return { ready: false, reason: 'unknown', message: 'only the main window may ask' };
+    return host().readiness();
+  };
+}
+
+/** FACTORY_HERMES_SETUP: open a terminal tab running Hermes's own `hermes
+ *  model` against wmux's Hermes home; main window only. */
+export function factoryHermesSetupHandler(
+  getWindow: () => BrowserWindow | null,
+  deps: Omit<EngineLoginDeps, 'platform' | 'configDir'> & { platform?: NodeJS.Platform; host?: () => Pick<HermesHost, 'setupLine'> },
+): (e: { sender?: unknown; senderFrame?: unknown }) => Promise<void> {
+  return async (e) => {
+    if (!isMainWindowSender(e, getWindow())) throw new Error('only the main window may start the Hermes setup');
+    const platform = deps.platform ?? process.platform;
+    const shell = platform === 'win32' ? deps.windowsShell() : undefined;
+    const line = (deps.host ?? getHermesHost)().setupLine(platform, shell);
+    if (line === null) throw new Error('wmux could not find Hermes, or cannot type its setup in this shell.');
+    let r: Awaited<ReturnType<EngineLoginDeps['openTab']>>;
+    try {
+      r = await deps.openTab(shell, line);
+    } catch {
+      r = null;
+    }
+    if (!(r && typeof r.ptyId === 'string' && r.ptyId)) throw new Error('wmux could not open a terminal for the Hermes setup.');
+  };
+}
+
+/** FACTORY_BOT_SET_ENGINE: the owner moves a bot to Claude or to Hermes.
+ *  Main window only: the pipe's bot.create/update cannot move a bot onto or
+ *  off an ACP engine (bot.rpc.ts acpEngineRefusal). The bot's next turn
+ *  starts on the new engine (BotRuntime.profileChanged). */
+export function factoryBotSetEngineHandler(
+  getWindow: () => BrowserWindow | null,
+  deps: { store?: typeof getBotStore; runtime?: () => Pick<NonNullable<ReturnType<typeof getBotRuntime>>, 'profileChanged'> | null } = {},
+): (e: { sender?: unknown; senderFrame?: unknown }, req: unknown) => Promise<{ ok: boolean; code?: string; message?: string }> {
+  return async (e, req) => {
+    if (!isMainWindowSender(e, getWindow())) return { ok: false, code: 'operator_only', message: 'only the main window may change a bot\'s engine' };
+    const s = (deps.store ?? getBotStore)();
+    if (!s) return { ok: false, code: 'not_started', message: 'The factory is not running.' };
+    const r = req && typeof req === 'object' && !Array.isArray(req) ? (req as Record<string, unknown>) : {};
+    if (typeof r.botId !== 'string' || !BOT_ID_RE.test(r.botId)) return { ok: false, code: 'invalid_argument', message: 'botId must be a bot id' };
+    if (r.engine !== 'claude-sdk' && r.engine !== 'hermes') return { ok: false, code: 'invalid_argument', message: 'engine must be claude-sdk or hermes' };
+    const current = s.get(r.botId);
+    if (!current) return { ok: false, code: 'not_found', message: `no bot ${r.botId}` };
+    // Already there: keep the engine as it is (a Claude bot keeps its model).
+    if (r.engine === 'claude-sdk' ? current.engine.kind === 'claude-sdk' : current.engine.kind === 'acp' && current.engine.preset === 'hermes') return { ok: true };
+    const saved = s.update(r.botId, { engine: r.engine === 'hermes' ? { ...HERMES_BOT_ENGINE } : { kind: 'claude-sdk' } });
+    if (!saved.ok) return { ok: false, code: saved.code, message: saved.message };
+    (deps.runtime ?? getBotRuntime)()?.profileChanged(r.botId);
+    return { ok: true };
   };
 }
 
@@ -524,6 +586,9 @@ export function registerFactoryHandlers(
     IPC.FACTORY_TASK_APPLY,
     IPC.FACTORY_ENGINE_READINESS,
     IPC.FACTORY_ENGINE_LOGIN,
+    IPC.FACTORY_HERMES_READINESS,
+    IPC.FACTORY_HERMES_SETUP,
+    IPC.FACTORY_BOT_SET_ENGINE,
     IPC.FACTORY_WORKER_AGENTS,
     IPC.FACTORY_TASK_FOLDERS_USAGE,
     IPC.FACTORY_TASK_FOLDERS_CLEAN,
@@ -581,6 +646,12 @@ export function registerFactoryHandlers(
   ipcMain.handle(IPC.FACTORY_ENGINE_READINESS, wrapHandler(IPC.FACTORY_ENGINE_READINESS, factoryEngineReadinessHandler(getWindow)));
 
   ipcMain.handle(IPC.FACTORY_ENGINE_LOGIN, wrapHandler(IPC.FACTORY_ENGINE_LOGIN, factoryEngineLoginHandler(getWindow, defaultEngineLoginDeps(getWindow))));
+
+  ipcMain.handle(IPC.FACTORY_HERMES_READINESS, wrapHandler(IPC.FACTORY_HERMES_READINESS, factoryHermesReadinessHandler(getWindow)));
+
+  ipcMain.handle(IPC.FACTORY_HERMES_SETUP, wrapHandler(IPC.FACTORY_HERMES_SETUP, factoryHermesSetupHandler(getWindow, defaultEngineLoginDeps(getWindow))));
+
+  ipcMain.handle(IPC.FACTORY_BOT_SET_ENGINE, wrapHandler(IPC.FACTORY_BOT_SET_ENGINE, factoryBotSetEngineHandler(getWindow)));
 
   ipcMain.handle(IPC.FACTORY_WORKER_AGENTS, wrapHandler(IPC.FACTORY_WORKER_AGENTS, factoryWorkerAgentsHandler(getWindow)));
 

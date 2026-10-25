@@ -134,6 +134,7 @@ import { registerLedgerRpc } from './pipe/handlers/ledger.rpc';
 import { registerTaskPushRpc } from './pipe/handlers/taskPush.rpc';
 import { registerVerifyRpc } from './pipe/handlers/verify.rpc';
 import { registerFactoryRpc } from './factory/factoryHost';
+import { getHermesHost } from './factory/hermesHost';
 import { getFactorySettings, onFactorySettingsChanged } from './factory/factorySettings';
 // The agent factory's modules register themselves on import.
 import './factory/modules';
@@ -3148,6 +3149,9 @@ const QUIT_HARD_DEADLINE_MS = 20_000;
 
 /** How long the agent factory's modules get to dispose on quit. */
 const FACTORY_DISPOSE_TIMEOUT_MS = 3_000;
+/** How long Hermes bots get on quit to let a cancelled turn settle and to
+ *  stop the Hermes gateway wmux started (hermesHost.ts shutdown). */
+const HERMES_SHUTDOWN_TIMEOUT_MS = 8_000;
 
 app.on('before-quit', async (e) => {
   if (isQuitting) return; // second pass — let quit proceed
@@ -3239,11 +3243,18 @@ app.on('before-quit', async (e) => {
     }
   }
 
-  // Agent factory: its modules persist and release what they hold. Bounded
-  // like the renderer save above; never throws.
-  await Promise.race([
-    factoryHost.dispose(),
-    new Promise((resolve) => setTimeout(resolve, FACTORY_DISPOSE_TIMEOUT_MS)),
+  // Agent factory: its modules persist and release what they hold, while
+  // Hermes bots cancel their turns and the Hermes gateway wmux started stops.
+  // Each bounded like the renderer save above; neither throws.
+  await Promise.all([
+    Promise.race([
+      factoryHost.dispose(),
+      new Promise((resolve) => setTimeout(resolve, FACTORY_DISPOSE_TIMEOUT_MS)),
+    ]),
+    Promise.race([
+      getHermesHost().shutdown().catch(() => undefined),
+      new Promise((resolve) => setTimeout(resolve, HERMES_SHUTDOWN_TIMEOUT_MS)),
+    ]),
   ]);
 
   // Every teardown step below is ISOLATED in its own try/catch. Two guarantees

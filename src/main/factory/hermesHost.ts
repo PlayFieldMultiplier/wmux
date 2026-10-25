@@ -40,6 +40,11 @@ const MCP_READY_MS = 15_000;
 /** How long a readiness answer serves the profile's polling. A spawn always
  *  checks afresh. */
 const READINESS_CACHE_MS = 15_000;
+/** App quit (bounded by index.ts HERMES_SHUTDOWN_TIMEOUT_MS): how long the
+ *  turns get to settle, then how long Hermes's own gateway stop gets before
+ *  the gateway's PID is signalled. */
+const QUIT_SETTLE_MS = 4_000;
+const QUIT_STOP_MS = 2_500;
 
 export interface HermesHostDeps {
   wmuxDir: () => string;
@@ -174,13 +179,13 @@ export class HermesHost {
 
   /** Stop R's gateway: Hermes's own stop (which interrupts live sessions,
    *  `--yes`), then its PID once gateway_state.json says it is R's. */
-  async stopGateway(): Promise<void> {
+  async stopGateway(stopMs = 15_000): Promise<void> {
     const root = this.root();
     const before = readHermesGatewayState(root);
     if (!before || !this.pidAlive(before.pid)) return;
     const exe = this.exe();
-    if (exe) await this.run(exe, ['gateway', 'stop', '--yes'], { env: this.env(), timeoutMs: 15_000 });
-    for (let i = 0; i < 20 && this.pidAlive(before.pid); i++) await new Promise((r) => setTimeout(r, 250));
+    if (exe) await this.run(exe, ['gateway', 'stop', '--yes'], { env: this.env(), timeoutMs: stopMs });
+    for (let i = 0; i < Math.ceil(stopMs / 3 / 250) && this.pidAlive(before.pid); i++) await new Promise((r) => setTimeout(r, 250));
     const still = readHermesGatewayState(root);
     if (still && still.pid === before.pid && this.pidAlive(still.pid) && isHermesGatewayOf(root, still)) {
       this.log(`[hermes] gateway ${still.pid} did not stop; signalling it`);
@@ -229,14 +234,18 @@ export class HermesHost {
     this.adapters.add(adapter);
   }
 
-  /** App quit: every Hermes turn is cancelled and settles (or its gateway is
-   *  stopped), then R's gateway is stopped when wmux started it. */
+  /** App quit: every Hermes turn is cancelled and gets QUIT_SETTLE_MS to
+   *  settle, then R's gateway is stopped when wmux started it (Hermes's stop
+   *  interrupts a turn still running). */
   shutdown(): Promise<void> {
     if (!this.stopping) {
       this.stopping = (async () => {
-        await Promise.allSettled([...this.adapters].map((a) => a.shutdown()));
+        await Promise.race([
+          Promise.allSettled([...this.adapters].map((a) => a.shutdown())),
+          new Promise((r) => setTimeout(r, QUIT_SETTLE_MS)),
+        ]);
         const state = readHermesGatewayState(this.root());
-        if (state && this.owned.has(state.pid) && this.pidAlive(state.pid)) await this.stopGateway();
+        if (state && this.owned.has(state.pid) && this.pidAlive(state.pid)) await this.stopGateway(QUIT_STOP_MS);
       })();
     }
     return this.stopping;
