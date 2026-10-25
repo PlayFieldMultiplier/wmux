@@ -267,6 +267,7 @@ import { deliverCallerNudge } from './callerNudgeDelivery';
 import { paneTurnClosed, stopAgentTree } from './agentStop';
 import { continueOnAccount } from './continueOnAccount';
 import { paneFree } from './paneFree';
+import { createOrphanSweep } from './winProcessSweep';
 import { classifyShell } from './shell-integration';
 import { UsageLimitRegistry } from './usageLimit/UsageLimitRegistry';
 import type { SessionPromptScheduleResult } from '../shared/sessionPromptSchedule';
@@ -4693,6 +4694,10 @@ function registerRpcHandlers(
           stillRunning: (entries) => agentProcessTracker.liveness(entries),
           kill: (pid, signal) => process.kill(pid, signal),
           stillIdle,
+          // Windows never reparents: a child started after the tree was read outlives the kill.
+          ...(process.platform === 'win32'
+            ? { sweep: createOrphanSweep({ read: () => agentProcessTracker.processTable(), kill: (pid) => process.kill(pid, 'SIGKILL') }) }
+            : {}),
         }),
         processesWithArg: (marker) => agentProcessTracker.processesWithArg(marker),
         otherOwners: (id, sessionId) => sessionManager.listManagedSessions()
