@@ -24,6 +24,7 @@ import {
   buildRemoveScript,
   currentRuleUser,
   elevatedPowerShellParameters,
+  exeRefusal,
   firewallRuleIds,
   psQuote,
   windowsPowerShellPath,
@@ -31,7 +32,7 @@ import {
   type RuleScope,
 } from '../../../shared/netFirewallScripts';
 import { assessInbound, elevationOutcome, parseProbeLine } from '../../../shared/netFirewall';
-import { onLocalFixedDrive, systemDirectory } from '../../../shared/netWinPaths';
+import { canonicalExePath, onLocalFixedDrive, systemDirectory } from '../../../shared/netWinPaths';
 import { shellExecuteAndWait } from '../elevate';
 
 const RUN = process.platform === 'win32' && process.env['GITHUB_ACTIONS'] === 'true' && process.env['WMUX_FIREWALL_ROUNDTRIP'] === '1';
@@ -77,13 +78,6 @@ async function rulesOutsideCi(): Promise<string> {
 }
 let outsideBefore = '';
 
-/**
- * The parameter-set diagnostic's rule names. Two have no group (they test
- * -Group itself), so they are removed by name here, in afterAll and by the
- * workflow's cleanup step.
- */
-const DIAG_NAMES = Array.from({ length: 12 }, (_, i) => `wmux-ci-diag-${String(i + 1).padStart(2, '0')}`);
-const removeDiagRules = () => ps(`Remove-NetFirewallRule -Name ${DIAG_NAMES.map((n) => psQuote(n)).join(',')} -ErrorAction SilentlyContinue`);
 
 /** Read-only: how many rules have this Name (0 or 1). */
 async function ruleCount(name: string): Promise<number> {
@@ -108,10 +102,10 @@ describe.runIf(RUN)('firewall Fix round trip (CI runner only, group wmux-ci)', (
   beforeAll(async () => {
     outsideBefore = await rulesOutsideCi();
     expect(outsideBefore.length).toBeGreaterThan(0);
-    // The runner's TEMP is an 8.3 short path (C:\Users\RUNNER~1\…); a real
-    // install path never is, so the round trip uses the long form.
+    // The runner's TEMP is an 8.3 short path (C:\Users\RUNNER~1\…), which
+    // -Program refuses; the round trip expands it the way the product does.
     shortRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-ci-fw-'));
-    root = fs.realpathSync.native(shortRoot);
+    root = canonicalExePath(shortRoot);
     // A Squirrel-shaped install: the rule IDs come from the parent of app-X.Y.Z.
     exe = path.join(root, 'wmux', 'app-1.2.3', 'wmux.exe');
     otherLiveExe = path.join(root, 'other', 'app-9.9.9', 'wmux.exe');
@@ -124,7 +118,6 @@ describe.runIf(RUN)('firewall Fix round trip (CI runner only, group wmux-ci)', (
   afterAll(async () => {
     // Unconditional: whatever the test made, in its own group only.
     await ps(`Remove-NetFirewallRule -Group ${psQuote(FIREWALL_CI_GROUP)} -ErrorAction SilentlyContinue`);
-    await removeDiagRules();
     if (root) fs.rmSync(root, { recursive: true, force: true });
     if (outsideBefore) expect(await rulesOutsideCi()).toBe(outsideBefore);
   }, 120_000);
@@ -134,45 +127,13 @@ describe.runIf(RUN)('firewall Fix round trip (CI runner only, group wmux-ci)', (
     expect(r.stdout.trim()).toBe('admin');
   }, 120_000);
 
-  // Diagnostic, not a check: which New-NetFirewallRule parameter sets this
-  // runner accepts. Run 40161566034 (windows-2025-vs2026) rejected the
-  // test's own setup rules and the Fix's Allow with Windows error 87 ("The
-  // parameter is incorrect"). Each variant adds one parameter to a minimal
-  // rule; the log line says which are refused. Every rule is removed by name
-  // right after.
-  it('diagnostic: which rule parameter sets this runner accepts (logged, never fails)', async () => {
-    const shortExe = path.join(shortRoot, 'wmux', 'app-1.2.3', 'wmux.exe');
-    const longMissing = path.join(root, 'gone', 'app-0.0.1', 'wmux.exe');
-    const base = (i: number, group = true) =>
-      `-Name ${psQuote(DIAG_NAMES[i])}${group ? ` -Group ${psQuote(FIREWALL_CI_GROUP)}` : ''} -DisplayName ${psQuote(`wmux-ci diag ${i + 1}`)} -Direction Inbound -Action Allow`;
-    const variants: Array<[string, string]> = [
-      ['minimal, no group', base(0, false)],
-      ['+ -Group', base(1)],
-      ['+ -Protocol TCP -LocalPort', `${base(2)} -Protocol TCP -LocalPort 45697`],
-      ['+ -Profile Private', `${base(3)} -Profile Private`],
-      ['+ -Program System32 cmd.exe', `${base(4)} -Program ${psQuote('C:\\Windows\\System32\\cmd.exe')}`],
-      ['+ -Program long temp path (exists)', `${base(5)} -Program ${psQuote(exe)}`],
-      ['+ -Program 8.3 temp path (exists)', `${base(6)} -Program ${psQuote(shortExe)}`],
-      ['+ -Program long temp path (missing)', `${base(7)} -Program ${psQuote(longMissing)}`],
-      ['+ -Program long temp path, no group', `${base(8, false)} -Program ${psQuote(exe)}`],
-      ['setup rule shape, long path', `${base(9)} -Protocol TCP -LocalPort 45697 -Program ${psQuote(exe)} -Profile Private`],
-      ['setup rule shape, 8.3 path', `${base(10)} -Protocol TCP -LocalPort 45697 -Program ${psQuote(shortExe)} -Profile Private`],
-      ['Fix Allow shape, long path', `${base(11)} -Description 'wmux-ci diag' -Protocol TCP -LocalPort 45697 -Program ${psQuote(exe)} -Profile Private -RemoteAddress 'LocalSubnet','100.64.0.0/10' -EdgeTraversalPolicy Block`],
-    ];
-    const results: Array<{ variant: string; ok: boolean; error?: string }> = [];
-    try {
-      for (const [variant, params] of variants) {
-        const r = await ps(`try { New-NetFirewallRule ${params} -ErrorAction Stop | Out-Null; 'ok' } catch { 'fail: ' + $_.Exception.Message }`);
-        const out = r.stdout.trim();
-        results.push(out === 'ok' ? { variant, ok: true } : { variant, ok: false, error: out.replace(/^fail: /, '') || r.stderr.trim() });
-      }
-    } finally {
-      await removeDiagRules();
-    }
-    console.log(`[firewall-diag] temp=${shortRoot} long=${root}`);
-    for (const r of results) console.log(`[firewall-diag] ${r.ok ? 'accepted' : 'REJECTED'}: ${r.variant}${r.error ? ` — ${r.error}` : ''}`);
-    expect(await ruleCount(DIAG_NAMES[0])).toBe(0);
-  }, 180_000);
+  it('the program path is the long form: an 8.3 path never reaches -Program', () => {
+    // Run 40163019967 (windows-2025): New-NetFirewallRule refused -Program
+    // under the runner's 8.3 TEMP with error 87 and took the same file's long
+    // path. The product expands with canonicalExePath; so does this test.
+    expect(exeRefusal(exe, FACTS)).toBeNull();
+    expect(exeRefusal(path.join(shortRoot, 'wmux', 'app-1.2.3', 'wmux.exe'), FACTS)).toBe(shortRoot.includes('~') ? 'short-path' : null);
+  });
 
   it('a Fix through ShellExecuteExW runas: not-covered → covered, with the rule fields of the design', async () => {
     const ids = firewallRuleIds('a2a', exe, SCOPE);
