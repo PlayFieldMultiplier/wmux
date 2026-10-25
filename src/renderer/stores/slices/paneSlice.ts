@@ -998,7 +998,10 @@ export const createPaneSlice: StateCreator<StoreState, [['zustand/immer', never]
   }),
 
   closeDaemonTurn: (ptyId) => set((state: StoreState) => {
-    if (!ptyId || !state.surfaceTurnOpenByDaemon?.[ptyId]) return;
+    if (!ptyId) return;
+    // The daemon's "no turn" ends a stall now, ahead of StallWatch's next tick.
+    delete state.surfaceStalledAt[ptyId];
+    if (!state.surfaceTurnOpenByDaemon?.[ptyId]) return;
     delete state.surfaceTurnOpenByDaemon[ptyId];
     delete state.surfaceTurnOpenAt[ptyId];
   }),
@@ -1011,6 +1014,7 @@ export const createPaneSlice: StateCreator<StoreState, [['zustand/immer', never]
     delete state.surfaceTurnOpenAt[ptyId];
     if (state.surfaceTurnOpenByDaemon) delete state.surfaceTurnOpenByDaemon[ptyId];
     delete state.surfaceActivityAt[ptyId];
+    delete state.surfaceStalledAt[ptyId];
   }),
 
   surfaceOutputAt: {},

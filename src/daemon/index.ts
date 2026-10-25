@@ -6041,6 +6041,9 @@ function registerRpcHandlers(
     if (binding?.agent !== STALL_AGENT || !binding.transcriptPath) return { result: 'unavailable' };
     const transcriptPath = binding.transcriptPath;
     const result = await stopAndPrefill({
+      // A dialog or approval that appeared after the chip: an ESC would answer it.
+      blocked: () => sessionManager.getSession(id)?.bridge.getAgentStatus() === 'awaiting_input'
+        || !approvalRegistry || approvalRegistry.list().pending.some((r) => r.sessionId === id),
       interrupt: () => bridge.desktopInterrupt(id, binding.sessionId),
       // The turn's own prompt, as written (not the projected, length-capped text).
       lastPrompt: () => {

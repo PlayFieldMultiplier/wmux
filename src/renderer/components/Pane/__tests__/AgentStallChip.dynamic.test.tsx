@@ -48,6 +48,14 @@ describe('AgentStallChip', () => {
     expect(chip()).toBeNull();
   });
 
+  it('goes at once with the daemon\'s turn end, ahead of its next stall tick', () => {
+    useStore.setState({ surfaceStalledAt: { 'pty-1': Date.now() - 4 * 60_000 } } as never);
+    act(() => root.render(<AgentStallChip ptyId="pty-1" />));
+    expect(chip()).not.toBeNull();
+    act(() => useStore.getState().closeDaemonTurn('pty-1'));
+    expect(chip()).toBeNull();
+  });
+
   it('Stop and prefill closes the card when done, and keeps it open with a line when the stop fails', async () => {
     useStore.setState({ surfaceStalledAt: { 'pty-1': Date.now() - 4 * 60_000 } } as never);
     act(() => root.render(<AgentStallChip ptyId="pty-1" />));

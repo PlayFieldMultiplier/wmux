@@ -88,20 +88,36 @@ const THINKING_PHASE = /\bthinking\b|\bthought\b/i;
  */
 export function spinnerTokenCount(rows: readonly string[] | null): string | undefined {
   if (!rows) return undefined;
-  const row = rows.find((line) => screenShowsRunningTurn([line], STALL_AGENT));
+  // The last match: the live row is drawn under any earlier output that looks like one.
+  const row = [...rows].reverse().find((line) => screenShowsRunningTurn([line], STALL_AGENT));
   if (!row || THINKING_PHASE.test(row)) return undefined;
   return /([\d.,]+k?) tokens\b/.exec(row)?.[1];
 }
 
 type Entry = Record<string, unknown>;
 
-/** A prompt the human sent: a user entry that is not a tool result, not meta, not a subagent's. */
-function isHumanTurnStart(entry: Entry): boolean {
-  if (entry['type'] !== 'user' || entry['isMeta'] === true || entry['isSidechain'] === true) return false;
+/** Claude's own wrappers for a turn it started from a command, a hook or a notice. */
+const NOT_A_TYPED_PROMPT = /<(?:command-name|command-message|command-args|local-command-stdout|task-notification|bash-input|bash-stdout)>/;
+const INTERRUPT_MARK = /^\[Request interrupted by user/;
+
+/** A user row with text (not a tool result, not meta, not a subagent's): its text, else null. */
+function userText(entry: Entry): string | null {
+  if (entry['type'] !== 'user' || entry['isMeta'] === true || entry['isSidechain'] === true) return null;
   const message = entry['message'];
-  if (isObject(message) && typeof message['content'] === 'string') return true;
+  if (isObject(message) && typeof message['content'] === 'string') return message['content'];
   const blocks = contentBlocks(entry);
-  return blocks.length > 0 && !blocks.some((b) => b['type'] === 'tool_result');
+  if (!blocks.length || blocks.some((b) => b['type'] === 'tool_result')) return null;
+  return blocks.map((b) => (typeof b['text'] === 'string' ? b['text'] : '')).join('\n');
+}
+
+/**
+ * A prompt the human typed. A notice Claude writes as a user row mid-turn (a
+ * background task finishing, a local command's output) is not one: it starts
+ * no new turn, so the calls still open stay open.
+ */
+function isHumanTurnStart(entry: Entry): boolean {
+  const text = userText(entry);
+  return text !== null && !NOT_A_TYPED_PROMPT.test(text);
 }
 
 /**
@@ -125,28 +141,19 @@ export function transcriptToolInFlight(entries: readonly unknown[], opts: { wind
   return opts.windowCut && !sawPrompt ? null : false;
 }
 
-/** Claude's own wrappers for a turn it started from a command, a hook or a notice. */
-const NOT_A_TYPED_PROMPT = /<(?:command-name|command-message|command-args|local-command-stdout|task-notification|bash-input|bash-stdout)>/;
-const INTERRUPT_MARK = /^\[Request interrupted by user/;
-
 /**
  * The prompt the current turn started from, exactly as written, or null when
  * it cannot be put back as typed: a slash command, a notice, an image, or no
- * prompt in the window. Never an earlier turn's prompt.
+ * prompt in the window. Never an earlier turn's prompt: the walk stops at the
+ * latest user row with text, notices included.
  */
 export function lastHumanPrompt(entries: readonly unknown[]): string | null {
   for (let i = entries.length - 1; i >= 0; i--) {
     const entry = entries[i];
-    if (!isObject(entry) || !isHumanTurnStart(entry)) continue;
-    const message = entry['message'];
-    let text: string;
-    if (isObject(message) && typeof message['content'] === 'string') {
-      text = message['content'];
-    } else {
-      const blocks = contentBlocks(entry);
-      if (blocks.some((b) => b['type'] !== 'text')) return null;
-      text = blocks.map((b) => (typeof b['text'] === 'string' ? b['text'] : '')).join('\n');
-    }
+    if (!isObject(entry)) continue;
+    const text = userText(entry);
+    if (text === null) continue;
+    if (contentBlocks(entry).some((b) => b['type'] !== 'text')) return null;
     // Claude's own row after an interrupt is not the prompt; the one before it may be.
     if (INTERRUPT_MARK.test(text.trim())) continue;
     return text.trim() && !NOT_A_TYPED_PROMPT.test(text) ? text : null;
@@ -338,6 +345,8 @@ export class StallWatch {
 }
 
 export interface StallPrefillDeps {
+  /** A dialog or an approval waits on the human: an ESC would answer it, so nothing is sent. */
+  blocked: () => boolean;
   interrupt: () => Promise<ChatInterruptResult>;
   /** The prompt to put back, read before the interrupt. */
   lastPrompt: () => string | null;
@@ -361,7 +370,10 @@ const PREFILL_READS = 24;
  * keyboard meanwhile, so its Enter cannot send the pasted prompt.
  */
 export async function stopAndPrefill(deps: StallPrefillDeps): Promise<StallPrefillResult> {
+  if (deps.blocked()) return 'blocked';
   const prompt = deps.lastPrompt()?.trim() || null;
+  // interruptChatTurn checks again right before its ESC (open approval,
+  // awaiting_input, a dialog on the screen read).
   const stopped = await deps.interrupt();
   if (stopped !== 'sent') return stopped === 'session_changed' ? 'unavailable' : stopped;
   if (!prompt) return 'stopped';

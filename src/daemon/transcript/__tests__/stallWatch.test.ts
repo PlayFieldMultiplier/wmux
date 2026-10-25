@@ -95,6 +95,17 @@ describe('StallWatch', () => {
     expect(h.stalled()).toBe(true);
   });
 
+  it('reads the last spinner-like row, the live one under earlier output', async () => {
+    const h = harness();
+    // An old frozen row in the scrollback above, the live counting row below.
+    let n = 100;
+    for (let i = 0; i < 25; i++) {
+      h.state.rows = [spinner('9.9k')[1], ...spinner(String(n += 37))];
+      await h.run(10_000);
+    }
+    expect(h.events).toEqual([]);
+  });
+
   it('reads a count shown while thinking as no count: it stands still through healthy thinking', async () => {
     const h = harness();
     h.state.rows = spinner('262', 'thinking');
@@ -127,6 +138,13 @@ describe('StallWatch', () => {
     append(sub.file, tool('a1', 'Agent'), subagentLine());
     await sub.run(15 * 60_000);
     expect(sub.events).toEqual([]);
+  });
+
+  it('keeps a call open across a notice Claude writes as a user row mid-turn', async () => {
+    const h = harness();
+    append(h.file, tool('a1', 'Agent'), prompt('<task-notification><task-id>b1</task-id><status>completed</status></task-notification>'));
+    await h.run(15 * 60_000);
+    expect(h.events).toEqual([]);
   });
 
   it('clears on an append and counts the silence again from there', async () => {
@@ -194,6 +212,8 @@ describe('the turn\'s own prompt and its open tools', () => {
     // Claude's interrupt row is skipped to the prompt it interrupted.
     expect(lastHumanPrompt(parse(prompt('fix it'), JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: '[Request interrupted by user]' }] } })))).toBe('fix it');
     expect(lastHumanPrompt(parse(tool('g', 'Glob'), result('g')))).toBeNull();
+    // A notice mid-turn: nothing to put back, and never the prompt before it.
+    expect(lastHumanPrompt(parse(prompt('fix it'), tool('a', 'Agent'), prompt('<task-notification>done</task-notification>')))).toBeNull();
   });
 
   it('cannot tell from a cut window with no prompt in it', () => {
@@ -210,6 +230,7 @@ describe('stopAndPrefill', () => {
   it('leaves the input alone when Claude put the interrupted prompt back itself', async () => {
     const writes: string[] = [];
     const res = await stopAndPrefill({
+      blocked: () => false,
       interrupt: async () => 'sent',
       lastPrompt: () => 'do the thing',
       readScreen: async () => composer('do the thing'),
@@ -223,6 +244,7 @@ describe('stopAndPrefill', () => {
   it('pastes the last prompt into an empty input, without Enter', async () => {
     const writes: string[] = [];
     const res = await stopAndPrefill({
+      blocked: () => false,
       interrupt: async () => 'sent',
       lastPrompt: () => 'line one\nline two',
       readScreen: async () => composer(''),
@@ -237,6 +259,7 @@ describe('stopAndPrefill', () => {
     const writes: string[] = [];
     let reads = 0;
     const res = await stopAndPrefill({
+      blocked: () => false,
       interrupt: async () => 'sent',
       lastPrompt: () => 'do the thing',
       readScreen: async () => (++reads <= 6 ? composer('') : composer('my own words')),
@@ -250,6 +273,7 @@ describe('stopAndPrefill', () => {
   it('pastes nothing while the chat send queue holds the keyboard', async () => {
     const writes: string[] = [];
     const res = await stopAndPrefill({
+      blocked: () => false,
       interrupt: async () => 'sent',
       lastPrompt: () => 'do the thing',
       readScreen: async () => composer(''),
@@ -261,9 +285,24 @@ describe('stopAndPrefill', () => {
     expect(writes).toEqual([]);
   });
 
+  it('sends no ESC at all while a dialog or an approval waits on the human', async () => {
+    let interrupted = false;
+    const res = await stopAndPrefill({
+      blocked: () => true,
+      interrupt: async () => { interrupted = true; return 'sent'; },
+      lastPrompt: () => 'do the thing',
+      readScreen: async () => composer(''),
+      write: () => true,
+      delay: async () => undefined,
+    });
+    expect(res).toBe('blocked');
+    expect(interrupted).toBe(false);
+  });
+
   it('pastes nothing when the turn could not be stopped', async () => {
     const writes: string[] = [];
     const res = await stopAndPrefill({
+      blocked: () => false,
       interrupt: async () => 'blocked',
       lastPrompt: () => 'do the thing',
       readScreen: async () => composer(''),
