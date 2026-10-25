@@ -251,11 +251,13 @@ export const DEFERRED_PUSH_TIMER_SLACK_MS = 1_000;
 interface ParkedPush {
   payload: PushPayload;
   collapseId?: string;
+  /** The device capability the push was sent under (PushSender.notify). */
+  requires?: string;
 }
 
 export interface DeferredPushQueueDeps {
   /** Hand a payload to the sender. Same collapseId as the original attempt. */
-  send: (payload: PushPayload, opts: { collapseId?: string }) => void;
+  send: (payload: PushPayload, opts: { collapseId?: string; requires?: string }) => void;
   /**
    * What finally happened to a held push: handed to `send` on release
    * (`delivered`), or evicted past {@link DEFERRED_PUSH_CAP} and never sent
@@ -310,7 +312,7 @@ export class DeferredPushQueue {
   }
 
   /** Hold a push that presence suppressed, and arm the expiry re-check. */
-  park(approvalId: string, payload: PushPayload, collapseId?: string): void {
+  park(approvalId: string, payload: PushPayload, collapseId?: string, requires?: string): void {
     if (!this.parked.has(approvalId) && this.parked.size >= DEFERRED_PUSH_CAP) {
       const oldest = this.parked.entries().next();
       if (!oldest.done) {
@@ -319,7 +321,7 @@ export class DeferredPushQueue {
         this.deps.onOutcome?.(droppedId, 'dropped', dropped.collapseId);
       }
     }
-    this.parked.set(approvalId, { payload, ...(collapseId ? { collapseId } : {}) });
+    this.parked.set(approvalId, { payload, ...(collapseId ? { collapseId } : {}), ...(requires ? { requires } : {}) });
     this.arm();
   }
 
@@ -360,7 +362,10 @@ export class DeferredPushQueue {
     for (const [approvalId, item] of entries) {
       // The approval id only — never the question or the choices.
       this.deps.log?.('info', `[push] desktop went away, delivering held push for ${approvalId}`);
-      this.deps.send(item.payload, item.collapseId ? { collapseId: item.collapseId } : {});
+      this.deps.send(item.payload, {
+        ...(item.collapseId ? { collapseId: item.collapseId } : {}),
+        ...(item.requires ? { requires: item.requires } : {}),
+      });
       this.deps.onOutcome?.(approvalId, 'delivered', item.collapseId);
     }
   }

@@ -93,6 +93,8 @@ import { claudeComposerEmpty, claudeComposerVisible } from './transcript/deliver
 import { CHATV2_LAUNCH_ALLOWED_RPC } from '../shared/chatv2/ipc';
 import { isPaneMoving } from './chat/v2/paneClaims';
 import { ApprovalPushRouter } from './push/approvalPushRouter';
+import { BOT_APPROVAL_PARK_PREFIX, BotApprovalPushRouter } from './push/botApprovalPush';
+import { parseBotApprovalPushRows, type BotApprovalPushRow } from '../shared/botApprovalPush';
 import { readPendingToolUse } from './transcript/pendingToolUse';
 import { isClaudeFamilyAgent } from './approvals/terminalPrompt';
 import { StateWriter, scrubPersistedCredentials, detachedTtlHoursFor } from './StateWriter';
@@ -456,6 +458,8 @@ let noteCodexServerLost: ((id:string)=>void) | undefined;
 let noteCodexTurnFailed: ((id:string, threadId:string, turn:unknown)=>void) | undefined;
 /** The `turn_failed` push (contract §7), set at boot once the push sender exists. */
 let pushTurnFailed: ((sessionId:string, failure:TurnFailure)=>void) | undefined;
+/** Main's table of waiting bot approvals (`daemon.botApprovals.set`), set at boot once the push sender exists. */
+let pushBotApprovals: ((rows: BotApprovalPushRow[]) => void) | undefined;
 /** N4 — an agent's sign-in was lost (shared/agentAuthLost); set at boot once the pipe server exists. */
 let noteAuthLost: ((sessionId: string, agent: AuthLostAgent, env: Record<string, string> | undefined, origin: AuthLostOrigin, providerCode?: string) => void) | undefined;
 /** N4 — an agent and account was seen to work (a confirmed turn end, or its status said signed in). */
@@ -5388,6 +5392,20 @@ function registerRpcHandlers(
   // main. Main pushes the whole table here on every change; until it does, the
   // store answers "not established" and an automated press is refused as
   // `scope-unavailable`. See approvals/workspaceFacts.ts.
+  // ── Main → daemon bot approvals waiting on the owner (phone push) ─────────
+  // The whole table, on every change; see shared/botApprovalPush.ts.
+  pipeServer.onRpc('daemon.botApprovals.set', async (params, ctx) => {
+    // First-party only: a client that could write this table would choose
+    // which approval banners reach the owner's phone.
+    if (!firstPartyOnly(ctx.clientId, 'daemon.botApprovals.set')) {
+      return { ok: false, error: 'daemon.botApprovals.set is first-party only' };
+    }
+    const rows = parseBotApprovalPushRows((params as { requests?: unknown } | undefined)?.requests);
+    if (!rows) return { ok: false, error: 'daemon.botApprovals.set requires a requests array' };
+    pushBotApprovals?.(rows);
+    return { ok: true, accepted: rows.length };
+  });
+
   pipeServer.onRpc('daemon.workspaceFacts.set', async (params, ctx) => {
     // FIRST-PARTY ONLY, and this one is load-bearing rather than hygienic: a
     // client that could write this table would be choosing which panes an
@@ -8666,7 +8684,9 @@ async function main(): Promise<void> {
     // Whether a held push went out or was evicted unsent decides whether its
     // record may later retract it. Only called on a release or an eviction,
     // both of which happen after the router below exists.
-    onOutcome: (id, outcome, collapseId) => approvalPushRouter.onParkedOutcome(id, outcome, collapseId),
+    onOutcome: (id, outcome, collapseId) => id.startsWith(BOT_APPROVAL_PARK_PREFIX)
+      ? botApprovalPushRouter.onParkedOutcome(id, outcome)
+      : approvalPushRouter.onParkedOutcome(id, outcome, collapseId),
     isPresent: desktopIsPresent,
     staleAfterMs: () => presenceConfig().staleAfterMs,
     log: (level, msg) => log(level, msg),
@@ -8786,6 +8806,23 @@ async function main(): Promise<void> {
   // normally empty — and a banner delivered before a restart is not retracted,
   // because which pushes were delivered is not persisted.
   approvalPushRouter.adopt(approvalRegistry.list().pending);
+  // A bot's approval requests live in main, which pushes the table of those
+  // waiting on the owner (shared/botApprovalPush.ts). Same presence rules and
+  // park queue as a pane approval; only devices that registered the
+  // capability receive them.
+  const botApprovalPushRouter = new BotApprovalPushRouter({
+    suppress: (payload) => shouldSuppressPush({
+      state: desktopPresence.snapshot(),
+      now: Date.now(),
+      config: presenceConfig(),
+      ...(payload.risk !== undefined ? { risk: payload.risk } : {}),
+    }),
+    send: (payload, opts) => pushSender.notify(payload, opts),
+    park: (key, payload, collapseId, requires) => deferredPush.park(key, payload, collapseId, requires),
+    forget: (key) => deferredPush.forget(key),
+    log: (level, msg) => log(level, msg),
+  });
+  pushBotApprovals = (rows) => botApprovalPushRouter.set(rows);
   // Contract §7 `turn_failed`: one push per failed turn (serveTurnFailure only
   // calls this for a failure it had not held). Presence is consulted like an
   // approval's, but a suppressed one is DROPPED, not parked: someone at the
