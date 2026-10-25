@@ -69,6 +69,12 @@ export function runnableAct(e: Pick<ActEffect, 'action'>): boolean {
   return ACT_ACTIONS.has(e.action);
 }
 
+/** Whether a row was claimed at least once (a write may have reached
+ *  GitHub): any row past pending, and a pending one an earlier try left. */
+export function actRowClaimed(e: Pick<ActEffect, 'status' | 'attempt'>): boolean {
+  return e.status !== 'pending' || e.attempt > 0;
+}
+
 export class ActEffectStore {
   private rows = new Map<string, ActEffect>();
 
@@ -139,7 +145,7 @@ export class ActEffectStore {
     const row = this.rows.get(id);
     if (!row || row.status !== 'inFlight') return null;
     const next: ActEffect = { ...row, status: 'pending', attempt: Math.max(0, row.attempt - 1), reason, updatedAt: this.now() };
-    return this.put(next) ? next : row;
+    return this.put(next) ? next : this.unjournaled(row);
   }
 
   /** How a claimed try ended. A done that is not on disk is uncertain. */
@@ -164,17 +170,33 @@ export class ActEffectStore {
     delete next.reason;
     if (reason) next.reason = reason;
     if (result) next.result = result;
-    if (this.put(next)) return next;
+    return this.put(next) ? next : this.unjournaled(row);
+  }
+
+  /** A move that did not reach the file: uncertain in memory, settled by a
+   *  read before anything is sent again. */
+  private unjournaled(row: ActEffect): ActEffect {
     const fallback: ActEffect = { ...row, status: 'uncertain', reason: 'write-failed', updatedAt: this.now() };
     this.rows.set(row.id, fallback);
     return fallback;
   }
 
-  /** Drop the row of a request that ended without running (it expired). */
+  /** Drop the row of a request that ended (it expired, or aged out). A row
+   *  that was claimed and has not ended stays until a read settles it. */
   remove(id: string): void {
     const row = this.rows.get(id);
-    if (!row || row.status === 'inFlight' || row.status === 'uncertain') return;
+    if (!row || (actRowClaimed(row) && row.status !== 'done' && row.status !== 'refused')) return;
+    this.drop(id);
+  }
+
+  /** Drop a row whatever its status (its request is gone). False when the
+   *  file was not written: the row stays. */
+  drop(id: string): boolean {
+    const row = this.rows.get(id);
+    if (!row) return true;
     this.rows.delete(id);
-    if (!this.save()) this.rows.set(id, row);
+    if (this.save()) return true;
+    this.rows.set(id, row);
+    return false;
   }
 }

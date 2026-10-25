@@ -4,9 +4,10 @@
 // card and the phone share (actPayload.ts) are checked here too.
 
 import * as fs from 'node:fs';
+import fsDefault from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ACT_MAX_ATTEMPTS, ActEffectStore, actEffectId } from '../actEffectStore';
 import { actTextProblem, normalizeActText, payloadFence, payloadHashOf } from '../actPayload';
 
@@ -64,6 +65,25 @@ describe('the act outbox', () => {
     s.finish(actEffectId(ID), 'uncertain', 'write-error');
     s.remove(actEffectId(ID));
     expect(s.get(actEffectId(ID))).not.toBeNull();
+  });
+
+  it('a try given back that cannot be journaled is uncertain, never left inFlight', () => {
+    const s = new ActEffectStore(file);
+    s.enqueue(input);
+    const id = actEffectId(ID);
+    s.claim(id);
+    const realWrite = fsDefault.writeFileSync;
+    const spy = vi.spyOn(fsDefault, 'writeFileSync').mockImplementation(((f: fs.PathOrFileDescriptor, ...rest: unknown[]) => {
+      if (typeof f === 'string' && path.dirname(f) === path.dirname(file)) throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+      return (realWrite as (...a: unknown[]) => void)(f, ...rest);
+    }) as typeof fsDefault.writeFileSync);
+    try {
+      expect(s.release(id, 'rate-limited')).toMatchObject({ status: 'uncertain', reason: 'write-failed' });
+      expect(spy).toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+    expect(s.get(id)).toMatchObject({ status: 'uncertain', reason: 'write-failed', attempt: 1 });
   });
 });
 

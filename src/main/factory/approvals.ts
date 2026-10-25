@@ -120,7 +120,7 @@ import type { BotDirectoryApi } from './triggerEngine';
 import { GUEST_TURN_STARTS_NO_WORKERS, guestOfRecord } from './wakeTaint';
 import { guestSide } from './guestWorkspaces';
 import { CONTEXT_FENCE_INFO, PAYLOAD_FENCE_INFO, actContentKey, actTextProblem, bodyWithMarker, fencedLines, normalizeActText, payloadHashOf } from './actPayload';
-import { actEffectId, type ActEffect, type ActEffectStatus } from './actEffectStore';
+import { actEffectId, actRowClaimed, type ActEffect, type ActEffectStatus } from './actEffectStore';
 import type { IssueFacts, PullFacts } from './actExecutor';
 
 export const APPROVALS_FILENAME = 'approvals.json';
@@ -1296,7 +1296,7 @@ export class ApprovalService {
    *  from then on it is not undone, and not taken back on a restart. */
   private actClaimed(r: Pick<StoredApproval, 'requestId'>): boolean {
     const e = this.actEffect(r);
-    return !!e && e.status !== 'pending';
+    return !!e && actRowClaimed(e);
   }
 
   rulesList(): ApprovalRule[] {
@@ -1734,17 +1734,24 @@ export class ApprovalService {
         this.onActEffect(e);
         continue;
       }
-      if (e && e.status !== 'pending') continue;
-      const back: StoredApproval = { ...r, state: 'pending', updatedAt: this.now() };
-      delete back.decidedBy;
-      delete back.decidedAt;
-      delete back.executeAfter;
-      delete back.effectId;
-      if (this.put(back)) {
-        this.reopenCard(back);
-        this.changed(back.workspaceId);
-      }
+      if (e && actRowClaimed(e)) continue;
+      this.handActBack(r);
     }
+  }
+
+  /** An approved act no try of which was claimed waits for the owner again,
+   *  its unclaimed outbox row dropped. */
+  private handActBack(r: StoredApproval): void {
+    const back: StoredApproval = { ...r, state: 'pending', updatedAt: this.now() };
+    delete back.decidedBy;
+    delete back.decidedAt;
+    delete back.executeAfter;
+    delete back.effectId;
+    if (!this.put(back)) return;
+    this.removeActEffect(back);
+    this.clearTimer(back.requestId);
+    this.reopenCard(back);
+    this.changed(back.workspaceId);
   }
 
   /** Run an approved act whose Undo window passed (its outbox row). */
@@ -1755,13 +1762,10 @@ export class ApprovalService {
       return;
     }
     const host = this.ports.acts?.() ?? null;
-    if (!host) {
-      this.log(`[factory] approval ${r.requestId}: the act outbox is not running; the owner approves it again after the next start`);
-      return;
-    }
-    const effect = host.enqueue(r);
-    if (!effect) {
-      this.log(`[factory] approval ${r.requestId}: its act could not be put in the outbox`);
+    const effect = host?.enqueue(r) ?? null;
+    if (!host || !effect) {
+      this.log(`[factory] approval ${r.requestId}: ${host ? 'its act could not be put in the outbox' : 'the act outbox is not running'}; it waits for the owner again`);
+      this.handActBack(r);
       return;
     }
     const cur = this.requests.get(r.requestId);

@@ -6,14 +6,14 @@
 // and hands the approval store its port (getApprovalActHost): the GitHub
 // reads a request pins, and the outbox. Registered from modules.ts before
 // the approvals module, so the outbox is up when the approval store resumes.
-// At start, and every SWEEP_MS, rows that may have run are settled by a read
-// and pending rows whose request allows it run; rows whose request is gone
-// are dropped. Quit waits a moment for a write in flight.
+// At start, and every SWEEP_MS, the executor's reconcileAll settles rows that
+// may have run, runs or refuses pending rows, and drops rows whose request is
+// gone. Quit waits a moment for a write in flight.
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { GhActService } from '../github/GhActService';
-import { ACT_EFFECTS_FILENAME, ActEffectStore, actEffectId } from './actEffectStore';
+import { ACT_EFFECTS_FILENAME, ActEffectStore } from './actEffectStore';
 import { ActExecutor, readIssue, readLogin, readPull, readRepo, repoPath } from './actExecutor';
 import { getApprovalService, type ApprovalActHost } from './approvals';
 import { registerFactoryRpcModule, type FactoryHostDeps } from './factoryHost';
@@ -77,13 +77,7 @@ export function createActModule(deps: Pick<FactoryHostDeps, 'wmuxDir'>): { start
         effect: (id) => effects.get(id),
         remove: (id) => effects.remove(id),
       };
-      const sweep = async (): Promise<void> => {
-        const approvals = getApprovalService();
-        if (approvals) {
-          for (const row of effects.list()) if (!approvals.get(row.requestId)) effects.remove(actEffectId(row.requestId));
-        }
-        await run.reconcileAll();
-      };
+      const sweep = (): Promise<void> => run.reconcileAll();
       // The approval store is not up yet on the first start: its resume runs
       // after this module, and the first sweep waits a moment for it.
       first = setTimeout(() => void sweep().catch(() => undefined), 5_000);

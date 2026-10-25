@@ -7,19 +7,21 @@
 
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
+import fsDefault from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BotBinding, BotProfile } from '../../../shared/bot';
-import { APPROVAL_UNDO_MS } from '../../../shared/botApproval';
+import { ACT_ACTIONS, APPROVAL_UNDO_MS } from '../../../shared/botApproval';
+import type { GhActAnswer } from '../../github/GhActService';
 import { ApprovalService, type ApprovalActHost, type ApprovalPorts, type ApprovalWake } from '../approvals';
 import { RoomWriter } from '../roomWriter';
 import { ActEffectStore, actEffectId } from '../actEffectStore';
 import { ActExecutor, readIssue, readLogin, readPull, readRepo, RECONCILE_AFTER_MS } from '../actExecutor';
 import { actMarker } from '../actPayload';
-import { FakeGithub } from './fakeGithubActs';
+import { FakeGithub, type FakeIssue } from './fakeGithubActs';
 import { handlePhoneBotApprovalCommand } from '../../phone/PhoneBotApprovals';
-import { PHONE_BOT_APPROVAL_COMMAND, PHONE_BOT_APPROVAL_DECIDE_COMMAND } from '../../../shared/phoneBotApprovals';
+import { PHONE_APPROVAL_ACTIONS, PHONE_BOT_APPROVAL_COMMAND, PHONE_BOT_APPROVAL_DECIDE_COMMAND, parsePhoneBotApproval } from '../../../shared/phoneBotApprovals';
 
 const WS = 'ws-1';
 const HEAD = 'a'.repeat(40);
@@ -477,5 +479,275 @@ describe('restarts', () => {
     await vi.advanceTimersByTimeAsync(APPROVAL_UNDO_MS * 3);
     expect(r.gh.writes).toEqual([]);
     expect(older.get(req.requestId)?.state).toBe('approved');
+  });
+});
+
+/** Make every write of the act outbox's file fail until the returned undo runs. */
+function failOutboxWrites(): () => void {
+  const realWrite = fsDefault.writeFileSync;
+  const spy = vi.spyOn(fsDefault, 'writeFileSync').mockImplementation(((file: fs.PathOrFileDescriptor, ...rest: unknown[]) => {
+    if (typeof file === 'string' && path.basename(file).startsWith('act-effects')) throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+    return (realWrite as (...a: unknown[]) => void)(file, ...rest);
+  }) as typeof fsDefault.writeFileSync);
+  return () => spy.mockRestore();
+}
+
+/** A try that timed out without landing, left uncertain. */
+async function timedOut(r: ReturnType<typeof rig>, requestId: string, payloadHash: string | undefined): Promise<void> {
+  r.approve(requestId, { payloadHash });
+  r.gh.nextWrite = { answer: { ok: false, kind: 'error', message: 'timeout' }, landed: false };
+  await vi.advanceTimersByTimeAsync(APPROVAL_UNDO_MS + 10);
+  await r.executor.idle();
+  expect(r.effects.get(actEffectId(requestId))?.status).toBe('uncertain');
+}
+
+describe('reading GitHub around a try', () => {
+  it('a login that cannot be read now gives the try back; only a 401 refuses it as identity-unknown', async () => {
+    const r = rig();
+    const req = await r.ask({ action: 'issue_close', issueNumber: 3, reason: 'fixed' });
+    const id = actEffectId(req.requestId);
+    r.approve(req.requestId, { payloadHash: req.payloadHash });
+    let answer: GhActAnswer = { ok: false, kind: 'rate-limited', message: 'GitHub rate limit' };
+    r.gh.answerRead = (e) => (e === 'user' ? answer : null);
+    await vi.advanceTimersByTimeAsync(APPROVAL_UNDO_MS + 10);
+    await r.executor.idle();
+    expect(r.effects.get(id)).toMatchObject({ status: 'pending', attempt: 0, reason: 'read-failed' });
+    for (const transient of [
+      { ok: false, kind: 'error', message: 'gh: Server Error (HTTP 502)' },
+      { ok: false, kind: 'unsent', message: 'gh could not be started (ENOENT)' },
+    ] as GhActAnswer[]) {
+      answer = transient;
+      await r.executor.reconcileAll();
+      expect(r.effects.get(id)).toMatchObject({ status: 'pending', attempt: 0, reason: 'read-failed' });
+      expect(r.svc.get(req.requestId)?.state).toBe('approved');
+    }
+    answer = { ok: false, kind: 'http', status: 401, message: 'gh: Bad credentials (HTTP 401)' };
+    await r.executor.reconcileAll();
+    expect(r.svc.get(req.requestId)).toMatchObject({ state: 'refused', refusal: 'identity-unknown' });
+    expect(r.gh.writes).toEqual([]);
+  });
+
+  it('a reconcile reads every page since the try: a post past the first hundred is found, and an incomplete listing sends nothing', async () => {
+    const r = rig();
+    const req = await r.ask(COMMENT);
+    for (let i = 0; i < 120; i += 1) r.gh.comments.push({ id: 1000 + i, issue: 1, body: `note ${i}`, user: { login: 'someone' }, html_url: `https://github.com/o/r/issues/1#c${i}` });
+    r.approve(req.requestId, { payloadHash: req.payloadHash });
+    r.gh.nextWrite = { answer: { ok: false, kind: 'error', message: 'timeout' }, landed: true };
+    await vi.advanceTimersByTimeAsync(APPROVAL_UNDO_MS + 10);
+    await r.executor.idle();
+    expect(r.effects.get(actEffectId(req.requestId))?.status).toBe('uncertain');
+    vi.setSystemTime(Date.now() + RECONCILE_AFTER_MS + 1);
+    // The second page cannot be read: the listing says nothing, nothing is sent.
+    r.gh.answerRead = (e) => (/[?&]page=2(&|$)/.test(e) ? { ok: false, kind: 'error', message: 'gh: Server Error (HTTP 502)' } : null);
+    await r.executor.reconcileAll();
+    expect(r.gh.writes).toHaveLength(1);
+    expect(r.effects.get(actEffectId(req.requestId))?.status).toBe('uncertain');
+    r.gh.answerRead = null;
+    await r.executor.reconcileAll();
+    expect(r.gh.writes).toHaveLength(1);
+    expect(r.gh.comments.filter((c) => c.body.includes(actMarker(req.requestId)))).toHaveLength(1);
+    expect(r.svc.get(req.requestId)).toMatchObject({ state: 'executed' });
+  });
+
+  it('a comment is not posted on an issue closed since the request, nor on a PR closed or merged since', async () => {
+    const r = rig();
+    const onIssue = await r.ask({ action: 'comment', issueNumber: 3, reason: 'note', body: 'A note.' });
+    r.approve(onIssue.requestId, { payloadHash: onIssue.payloadHash });
+    (r.gh.issues.get(3) as FakeIssue).state = 'closed';
+    await vi.advanceTimersByTimeAsync(APPROVAL_UNDO_MS + 10);
+    await r.executor.idle();
+    expect(r.svc.get(onIssue.requestId)).toMatchObject({ state: 'refused', refusal: 'already-closed' });
+    expect(r.gh.writes).toEqual([]);
+    for (const merged of [true, false]) {
+      const p = rig();
+      const onPr = await p.ask(COMMENT);
+      p.approve(onPr.requestId, { payloadHash: onPr.payloadHash });
+      (p.gh.issues.get(1) as FakeIssue).state = 'closed';
+      p.gh.pulls.set(1, { head: HEAD, merged });
+      await vi.advanceTimersByTimeAsync(APPROVAL_UNDO_MS + 10);
+      await p.executor.idle();
+      expect(p.svc.get(onPr.requestId)).toMatchObject({ state: 'refused', refusal: merged ? 'merged' : 'already-closed' });
+      expect(p.gh.writes).toEqual([]);
+    }
+  });
+
+  it('a close found on a reconcile is done only when it is this try: its reason, its head, who closed it and when', async () => {
+    // Closed by the owner's login, with another reason than the one approved.
+    const r = rig();
+    const req = await r.ask({ action: 'issue_close', issueNumber: 3, reason: 'fixed', stateReason: 'not_planned' });
+    await timedOut(r, req.requestId, req.payloadHash);
+    Object.assign(r.gh.issues.get(3) as FakeIssue, { state: 'closed', closed_by: { login: 'owner' }, closed_at: new Date(Date.now()).toISOString(), state_reason: 'completed' });
+    vi.setSystemTime(Date.now() + RECONCILE_AFTER_MS + 1);
+    await r.executor.reconcileAll();
+    expect(r.svc.get(req.requestId)).toMatchObject({ state: 'refused', refusal: 'closed-differently' });
+    expect(r.gh.writes).toHaveLength(1);
+    // A PR closed by the owner's login at another head than the card's.
+    const p = rig();
+    const pr = await p.ask({ action: 'pr_close', prNumber: 1, reason: 'superseded' });
+    await timedOut(p, pr.requestId, pr.payloadHash);
+    Object.assign(p.gh.issues.get(1) as FakeIssue, { state: 'closed', closed_by: { login: 'owner' }, closed_at: new Date(Date.now()).toISOString() });
+    p.gh.pulls.set(1, { head: HEAD2, merged: false });
+    vi.setSystemTime(Date.now() + RECONCILE_AFTER_MS + 1);
+    await p.executor.reconcileAll();
+    expect(p.svc.get(pr.requestId)).toMatchObject({ state: 'refused', refusal: 'head-moved' });
+    expect(p.gh.writes).toHaveLength(1);
+    // GitHub names nobody: done only when it closed after the first try started.
+    for (const after of [false, true]) {
+      const n = rig();
+      const q = await n.ask({ action: 'issue_close', issueNumber: 3, reason: 'fixed' });
+      await timedOut(n, q.requestId, q.payloadHash);
+      const started = n.effects.get(actEffectId(q.requestId))?.firstStartedAt as number;
+      Object.assign(n.gh.issues.get(3) as FakeIssue, { state: 'closed', closed_by: null, closed_at: new Date(started + (after ? 1_000 : -1_000)).toISOString(), state_reason: 'completed' });
+      vi.setSystemTime(Date.now() + RECONCILE_AFTER_MS + 1);
+      await n.executor.reconcileAll();
+      expect(n.svc.get(q.requestId)).toMatchObject(after ? { state: 'executed' } : { state: 'refused', refusal: 'closed-by-other' });
+      expect(n.gh.writes).toHaveLength(1);
+    }
+  });
+});
+
+describe('rows that may have run', () => {
+  it('a row tried once is claimed: Undo is too late, a restart keeps the approval, an expiry keeps the row', async () => {
+    const r = rig();
+    const req = await r.ask(COMMENT);
+    r.approve(req.requestId, { payloadHash: req.payloadHash });
+    r.svc.stop();
+    const id = actEffectId(req.requestId);
+    // A try that may have landed, then a read that found nothing; the app
+    // quit before the next claim.
+    r.effects.enqueue({ requestId: req.requestId, action: 'comment', repoKey: 'github.com/o/r', payloadHash: req.payloadHash as string });
+    r.effects.claim(id);
+    r.effects.finish(id, 'uncertain', 'write-error');
+    r.effects.settle(id, 'pending', 'not-found');
+    expect(r.effects.get(id)).toMatchObject({ status: 'pending', attempt: 1 });
+    expect(r.svc.decide({ requestId: req.requestId, decision: 'undo' }, 'desktop')).toMatchObject({ ok: false, code: 'too_late' });
+    const again = new ApprovalService(r.ports);
+    again.resume();
+    expect(again.get(req.requestId)?.state).toBe('approved');
+    r.effects.remove(id);
+    expect(r.effects.get(id)).toMatchObject({ status: 'pending', attempt: 1 });
+  });
+
+  it('a restart that hands an unclaimed approval back to the owner drops its row', async () => {
+    const r = rig();
+    const req = await r.ask({ action: 'issue_close', issueNumber: 3, reason: 'fixed' });
+    r.approve(req.requestId, { payloadHash: req.payloadHash });
+    r.svc.stop();
+    r.effects.enqueue({ requestId: req.requestId, action: 'issue_close', repoKey: 'github.com/o/r', payloadHash: req.payloadHash as string });
+    const again = new ApprovalService(r.ports);
+    again.resume();
+    expect(again.get(req.requestId)?.state).toBe('pending');
+    expect(r.effects.get(actEffectId(req.requestId))).toBeNull();
+  });
+
+  it('the sweep settles a waiting row whose request can never run again', async () => {
+    let directory: 'up' | 'throws' | 'moved' = 'up';
+    const r = rig({
+      ports: {
+        bots: () => {
+          if (directory === 'throws') throw new Error('directory unreadable');
+          const profile = directory === 'moved' ? { ...DEV, repo: { repoKey: 'o/other', repoPath: '/other' } } : DEV;
+          return { listEnabled: () => [profile], get: (id: string) => (id === DEV.id ? profile : null) };
+        },
+      },
+    });
+    const req = await r.ask({ action: 'issue_close', issueNumber: 3, reason: 'fixed' });
+    r.approve(req.requestId, { payloadHash: req.payloadHash });
+    directory = 'throws';
+    await vi.advanceTimersByTimeAsync(APPROVAL_UNDO_MS + 10);
+    await r.executor.idle();
+    expect(r.effects.get(actEffectId(req.requestId))).toMatchObject({ status: 'pending', reason: 'bots-unreadable' });
+    directory = 'moved';
+    await r.executor.reconcileAll();
+    expect(r.svc.get(req.requestId)).toMatchObject({ state: 'refused', refusal: 'repo-changed' });
+    expect(r.gh.writes).toEqual([]);
+  });
+
+  it('a row whose request is gone is dropped, a claimed one only once its read window passed; a store not up keeps both', async () => {
+    const r = rig();
+    const req = await r.ask(COMMENT);
+    const waiting = await r.ask({ action: 'issue_close', issueNumber: 3, reason: 'fixed' });
+    await timedOut(r, req.requestId, req.payloadHash);
+    r.effects.enqueue({ requestId: waiting.requestId, action: 'issue_close', repoKey: 'github.com/o/r', payloadHash: waiting.payloadHash as string });
+    const lines: string[] = [];
+    let answer = 'approval-not-running';
+    const orphans = new ActExecutor({ effects: r.effects, gh: r.gh, approval: { request: () => null, authorize: () => answer }, log: (l) => lines.push(l) });
+    await orphans.reconcileAll();
+    expect(r.effects.get(actEffectId(waiting.requestId))).not.toBeNull();
+    answer = 'approval-missing';
+    await orphans.reconcileAll();
+    expect(r.effects.get(actEffectId(waiting.requestId))).toBeNull();
+    expect(r.effects.get(actEffectId(req.requestId))?.status).toBe('uncertain');
+    vi.setSystemTime(Date.now() + RECONCILE_AFTER_MS + 1);
+    answer = 'approval-not-running';
+    await orphans.reconcileAll();
+    expect(r.effects.get(actEffectId(req.requestId))?.status).toBe('uncertain');
+    answer = 'approval-missing';
+    await orphans.reconcileAll();
+    expect(r.effects.get(actEffectId(req.requestId))).toBeNull();
+    expect(lines.some((l) => l.includes(req.requestId) && l.includes('dropped'))).toBe(true);
+    expect(r.gh.writes).toHaveLength(1);
+  });
+
+  it('a try given back whose journal fails is uncertain in memory, and a later read settles it', async () => {
+    const r = rig();
+    const req = await r.ask({ action: 'issue_close', issueNumber: 3, reason: 'fixed' });
+    r.approve(req.requestId, { payloadHash: req.payloadHash });
+    let undo: (() => void) | null = null;
+    r.gh.answerRead = (e) => {
+      if (e !== 'repos/o/r' || undo) return null;
+      undo = failOutboxWrites();
+      return { ok: false, kind: 'rate-limited', message: 'GitHub rate limit' };
+    };
+    try {
+      await vi.advanceTimersByTimeAsync(APPROVAL_UNDO_MS + 10);
+      await r.executor.idle();
+    } finally {
+      (undo as (() => void) | null)?.();
+    }
+    expect(r.effects.get(actEffectId(req.requestId))).toMatchObject({ status: 'uncertain', reason: 'write-failed' });
+    vi.setSystemTime(Date.now() + RECONCILE_AFTER_MS + 1);
+    await r.executor.reconcileAll();
+    expect(r.gh.writes).toHaveLength(1);
+    expect(r.svc.get(req.requestId)?.state).toBe('executed');
+  });
+
+  it('an approval whose act could not be put in the outbox waits for the owner again', async () => {
+    const r = rig();
+    const req = await r.ask({ action: 'issue_close', issueNumber: 3, reason: 'fixed' });
+    r.approve(req.requestId, { payloadHash: req.payloadHash });
+    const undo = failOutboxWrites();
+    try {
+      await vi.advanceTimersByTimeAsync(APPROVAL_UNDO_MS + 10);
+      await r.executor.idle();
+    } finally {
+      undo();
+    }
+    expect(r.svc.get(req.requestId)?.state).toBe('pending');
+    expect(r.effects.get(actEffectId(req.requestId))).toBeNull();
+    expect(r.gh.writes).toEqual([]);
+    r.approve(req.requestId, { payloadHash: req.payloadHash });
+    await vi.advanceTimersByTimeAsync(APPROVAL_UNDO_MS + 10);
+    await r.executor.idle();
+    expect(r.svc.get(req.requestId)?.state).toBe('executed');
+    expect(r.gh.writes).toHaveLength(1);
+  });
+});
+
+describe('the phone', () => {
+  it('shows and decides every act main carries out, pr_close included, through its own parser', async () => {
+    // APPROVAL_ACTIONS less the card-only ones (shared/phoneBotApprovals.ts).
+    for (const a of ACT_ACTIONS) expect(PHONE_APPROVAL_ACTIONS).toContain(a);
+    const r = rig();
+    const req = await r.ask({ action: 'pr_close', prNumber: 1, reason: 'superseded' });
+    const view = handlePhoneBotApprovalCommand(PHONE_BOT_APPROVAL_COMMAND, { requestId: req.requestId }, () => r.svc);
+    if (!view || !('request' in view)) throw new Error('no view');
+    expect(view.request).toMatchObject({ action: 'pr_close', prNumber: 1, headSha: HEAD, payloadHash: req.payloadHash, state: 'pending' });
+    expect(parsePhoneBotApproval(JSON.parse(JSON.stringify(view.request)))).toEqual(view.request);
+    expect(handlePhoneBotApprovalCommand(PHONE_BOT_APPROVAL_DECIDE_COMMAND, { requestId: req.requestId, decision: 'approve', payloadHash: req.payloadHash }, () => r.svc))
+      .toMatchObject({ request: { action: 'pr_close', state: 'approved' } });
+    await vi.advanceTimersByTimeAsync(APPROVAL_UNDO_MS + 10);
+    await r.executor.idle();
+    expect(r.gh.writes).toEqual([{ method: 'PATCH', endpoint: 'repos/o/r/pulls/1', body: { state: 'closed' } }]);
   });
 });

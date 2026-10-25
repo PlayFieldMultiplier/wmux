@@ -34,11 +34,14 @@ import { splitRepoKey } from '../github/GhIssueService';
 import type { GhActAnswer, GhActPort } from '../github/GhActService';
 import type { ApprovalAct, ApprovalActRepo } from '../../shared/botApproval';
 import { actMarker, bodyWithMarker, normalizeActText } from './actPayload';
-import { runnableAct, type ActEffect, type ActEffectStore } from './actEffectStore';
+import { actRowClaimed, runnableAct, type ActEffect, type ActEffectStore } from './actEffectStore';
 import type { StoredApproval } from './approvals';
 
 /** How long an uncertain try waits before a read settles it. */
 export const RECONCILE_AFTER_MS = 60_000;
+
+/** Pages of 100 a reconcile reads at most; a longer listing cannot say. */
+const LIST_PAGES_MAX = 10;
 
 /** Authorize answers that mean "not now", not "never": the row waits
  *  (the approval taken back or not due, the store or the bot directory not
@@ -73,6 +76,9 @@ export interface IssueFacts {
   isPr: boolean;
   title: string;
   closedBy: string | null;
+  /** `state_reason` (completed, not_planned, reopened), or null. */
+  stateReason: string | null;
+  closedAt: number | null;
   url: string;
 }
 
@@ -109,9 +115,18 @@ export function repoPath(repoKey: string): { host: string; base: string } | null
   return p ? { host: p.host, base: `repos/${p.owner}/${p.repo}` } : null;
 }
 
-export async function readLogin(gh: GhActPort, host: string): Promise<string | null> {
+/** The gh login, or why not. An answer without a status (a rate limit, a
+ *  timeout, GitHub's 5xx, a gh not started) says nothing about who is
+ *  signed in; one with a status is GitHub's own answer. */
+export async function readIdentity(gh: GhActPort, host: string): Promise<Read<string>> {
   const a = await gh.read(host, 'user');
-  return a.ok ? loginOf(a.value) : null;
+  if (!a.ok) return failed(a);
+  return loginOf(a.value) ?? { error: 'GitHub named no login', status: 200 };
+}
+
+export async function readLogin(gh: GhActPort, host: string): Promise<string | null> {
+  const a = await readIdentity(gh, host);
+  return typeof a === 'string' ? a : null;
 }
 
 export async function readRepo(gh: GhActPort, repoKey: string): Promise<Read<ApprovalActRepo>> {
@@ -130,7 +145,9 @@ export function mapIssue(value: unknown): IssueFacts | null {
   if (!v || typeof v.number !== 'number' || !str(v.node_id)) return null;
   return {
     number: v.number, nodeId: str(v.node_id), state: v.state === 'closed' ? 'closed' : 'open', locked: v.locked === true,
-    isPr: rec(v.pull_request) !== null, title: str(v.title), closedBy: loginOf(v.closed_by), url: str(v.html_url),
+    isPr: rec(v.pull_request) !== null, title: str(v.title), closedBy: loginOf(v.closed_by),
+    stateReason: str(v.state_reason) || null, closedAt: Number.isFinite(Date.parse(str(v.closed_at))) ? Date.parse(str(v.closed_at)) : null,
+    url: str(v.html_url),
   };
 }
 
@@ -162,6 +179,20 @@ export async function readPull(gh: GhActPort, repoKey: string, n: number): Promi
 
 function isError<T>(r: Read<T>): r is { error: string; status?: number } {
   return !!r && typeof r === 'object' && 'error' in r;
+}
+
+/** Every item of a listing (`endpoint` holds a query), read 100 a page, or
+ *  null when a page could not be read or there are more than LIST_PAGES_MAX:
+ *  a listing that is not whole proves nothing is there. */
+async function readList(gh: GhActPort, host: string, endpoint: string): Promise<unknown[] | null> {
+  const out: unknown[] = [];
+  for (let page = 1; page <= LIST_PAGES_MAX; page += 1) {
+    const a = await gh.read(host, `${endpoint}&per_page=100&page=${page}`);
+    if (!a.ok || !Array.isArray(a.value)) return null;
+    out.push(...(a.value as unknown[]));
+    if (a.value.length < 100) return out;
+  }
+  return null;
 }
 
 // ── What a write's answer must be ─────────────────────────────────────────
@@ -216,13 +247,27 @@ export class ActExecutor {
     while (this.running.size > 0) await Promise.allSettled([...this.running.values()]);
   }
 
-  /** Startup and the sweep: settle the rows that may have run, then run the
-   *  pending rows whose request allows it now. */
+  /** Startup and the sweep: settle the rows that may have run, run the
+   *  pending rows whose request allows it now, and settle the pending rows
+   *  whose request never will (the run refuses them); drop the rows whose
+   *  request is gone. */
   async reconcileAll(): Promise<void> {
     for (const row of this.ports.effects.list()) {
-      if (!runnableAct(row)) continue;
-      if (row.status === 'uncertain' || (row.status === 'pending' && this.ports.approval.authorize(row) === null)) await this.run(row.id);
+      if (!runnableAct(row) || (row.status !== 'uncertain' && row.status !== 'pending')) continue;
+      const denied = this.ports.approval.authorize(row);
+      if (denied === 'approval-missing') this.orphaned(row);
+      else if (row.status === 'uncertain' || denied === null || !ACT_NOT_NOW.has(denied)) await this.run(row.id);
     }
+  }
+
+  /** A row whose request is gone: the act's text and login went with it, so
+   *  no read can settle it. Dropped, and logged; a claimed row only once its
+   *  read window passed. */
+  private orphaned(row: ActEffect): void {
+    const claimed = actRowClaimed(row);
+    if (claimed && this.now() - (row.startedAt ?? row.updatedAt) < (this.ports.reconcileAfterMs ?? RECONCILE_AFTER_MS)) return;
+    if (!this.ports.effects.drop(row.id)) return;
+    this.ports.log?.(`[factory] act ${row.action} ${row.requestId} dropped: its request is gone (${row.status}, ${row.attempt} tries${claimed ? '; whether it reached GitHub is not known' : ''})`);
   }
 
   private emit(e: ActEffect | null): void {
@@ -266,8 +311,8 @@ export class ActExecutor {
       const act = r?.act;
       const p = r ? repoPath(r.repoKey) : null;
       if (!r || !act || !p || !r.actRepo || !r.ghLogin) return end('refused', 'approval-mismatch');
-      const login = await readLogin(this.ports.gh, p.host);
-      if (!login) return end('refused', 'identity-unknown');
+      const login = await readIdentity(this.ports.gh, p.host);
+      if (isError(login)) return login.status === undefined ? back('read-failed') : end('refused', 'identity-unknown');
       if (login !== r.ghLogin) return end('refused', 'identity-changed');
       const repo = await readRepo(this.ports.gh, r.repoKey);
       if (isError(repo)) return repo.status === 404 ? end('refused', 'repo-changed') : back('read-failed');
@@ -314,12 +359,12 @@ export class ActExecutor {
     }
     if (issue.isPr !== (act.target === 'pr')) return 'target-changed';
     if (issue.locked) return 'locked';
-    if (act.target === 'pr') {
-      const pr = await readPull(gh, repoKey, act.number);
-      if (isError(pr)) return 'read-failed';
-      if (pr.headSha !== act.headSha) return 'head-moved';
-    }
-    return null;
+    if (act.target === 'issue') return issue.state === 'closed' ? 'already-closed' : null;
+    const pr = await readPull(gh, repoKey, act.number);
+    if (isError(pr)) return 'read-failed';
+    if (pr.merged) return 'merged';
+    if (pr.state === 'closed') return 'already-closed';
+    return pr.headSha === act.headSha ? null : 'head-moved';
   }
 
   private write(p: { host: string; base: string }, r: StoredApproval, act: ApprovalAct): Promise<GhActAnswer> {
@@ -360,11 +405,11 @@ export class ActExecutor {
     const marker = actMarker(r.requestId);
     if (act.kind === 'comment' || act.kind === 'issue_create') {
       const endpoint = act.kind === 'comment'
-        ? `${p.base}/issues/${act.number}/comments?since=${since}&per_page=100`
-        : `${p.base}/issues?creator=${r.ghLogin}&state=all&since=${since}&per_page=100`;
-      const a = await gh.read(p.host, endpoint);
-      if (!a.ok || !Array.isArray(a.value)) return { status: 'unknown' };
-      const mine = (a.value as unknown[]).map(rec).filter((v): v is Record<string, unknown> => !!v
+        ? `${p.base}/issues/${act.number}/comments?since=${since}`
+        : `${p.base}/issues?creator=${r.ghLogin}&state=all&since=${since}`;
+      const list = await readList(gh, p.host, endpoint);
+      if (!list) return { status: 'unknown' };
+      const mine = list.map(rec).filter((v): v is Record<string, unknown> => !!v
         && loginOf(v.user) === r.ghLogin && str(v.body).includes(marker) && (act.kind === 'comment' || rec(v.pull_request) === null));
       if (mine.length === 0) return { status: 'none' };
       const want = bodyWithMarker(act.body, r.requestId);
@@ -375,15 +420,26 @@ export class ActExecutor {
         ? { status: 'done', result: { url, ...(typeof same.id === 'number' ? { id: same.id } : {}) } }
         : { status: 'done', result: { url, ...(typeof same.number === 'number' ? { number: same.number } : {}) } };
     }
+    // A close is this try's only when the target is the node the request
+    // read, closed as approved (an issue's reason; a PR unmerged at the
+    // card's head), by the owner's login; when GitHub names nobody, closed
+    // after this request's first try started.
     if (act.kind === 'pr_close') {
       const pr = await readPull(gh, r.repoKey, act.number);
       if (isError(pr)) return { status: 'unknown' };
+      if (pr.nodeId !== act.targetNodeId) return { status: 'refused', reason: 'target-changed' };
       if (pr.merged) return { status: 'refused', reason: 'merged' };
       if (pr.state === 'open') return { status: 'none' };
+      if (pr.headSha !== act.headSha) return { status: 'refused', reason: 'head-moved' };
     }
     const issue = await readIssue(gh, r.repoKey, act.number);
     if (isError(issue)) return { status: 'unknown' };
+    if (act.kind === 'issue_close' && (issue.nodeId !== act.targetNodeId || issue.isPr)) return { status: 'refused', reason: 'target-changed' };
     if (issue.state === 'open') return { status: 'none' };
-    return issue.closedBy === r.ghLogin ? { status: 'done', result: { url: issue.url, number: act.number } } : { status: 'refused', reason: 'closed-by-other' };
+    if (issue.closedBy !== null && issue.closedBy !== r.ghLogin) return { status: 'refused', reason: 'closed-by-other' };
+    if (act.kind === 'issue_close' && issue.stateReason !== act.stateReason) return { status: 'refused', reason: 'closed-differently' };
+    const ours = issue.closedBy !== null
+      || (row.firstStartedAt !== undefined && issue.closedAt !== null && issue.closedAt >= row.firstStartedAt);
+    return ours ? { status: 'done', result: { url: issue.url, number: act.number } } : { status: 'refused', reason: 'closed-by-other' };
   }
 }

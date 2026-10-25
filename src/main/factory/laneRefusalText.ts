@@ -87,6 +87,7 @@ const SENTENCES: Readonly<Record<string, string>> = {
   locked: 'The conversation is locked',
   'found-different': 'A post with this request\'s marker is on {host} with other text',
   'closed-by-other': 'Someone else closed it first',
+  'closed-differently': 'It was closed on {host}, but not as approved',
   'secret-in-body': 'Its text holds a secret stored since the request',
   'attempts-exhausted': 'wmux tried three times and could not tell whether it went through',
 };

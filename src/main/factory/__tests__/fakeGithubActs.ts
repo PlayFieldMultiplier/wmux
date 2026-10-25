@@ -11,6 +11,8 @@ export interface FakeIssue {
   locked?: boolean;
   pull_request?: Record<string, unknown>;
   closed_by?: { login: string } | null;
+  closed_at?: string | null;
+  state_reason?: string | null;
   user: { login: string };
   body?: string;
   html_url: string;
@@ -37,6 +39,9 @@ export class FakeGithub implements GhActPort {
   nextWrite: { answer: GhActAnswer; landed: boolean } | null = null;
   /** Called on every read (a test may change state mid-run). */
   onRead: ((endpoint: string) => void) | null = null;
+  /** A read's answer in place of GitHub's (a rate limit, a 401, a page that
+   *  fails), or null for GitHub's. */
+  answerRead: ((endpoint: string) => GhActAnswer | null) | null = null;
   private nextId = 100;
 
   addIssue(n: number, over: Partial<FakeIssue> = {}): FakeIssue {
@@ -60,12 +65,20 @@ export class FakeGithub implements GhActPort {
   async read(_host: string, endpoint: string): Promise<GhActAnswer> {
     this.reads.push(endpoint);
     this.onRead?.(endpoint);
+    const forced = this.answerRead?.(endpoint);
+    if (forced) return forced;
     const path = endpoint.split('?')[0];
     const query = new URLSearchParams(endpoint.split('?')[1] ?? '');
+    // A list answers one page: `per_page` (GitHub's default 30) from `page` (1).
+    const page = (all: unknown[]): unknown[] => {
+      const size = Number(query.get('per_page') ?? 30);
+      const from = (Number(query.get('page') ?? 1) - 1) * size;
+      return all.slice(from, from + size);
+    };
     if (path === 'user') return { ok: true, value: { login: this.login } };
     if (path === 'repos/o/r') return { ok: true, value: this.repo };
     let m = /^repos\/o\/r\/issues\/(\d+)\/comments$/.exec(path);
-    if (m) return { ok: true, value: this.comments.filter((c) => c.issue === Number(m?.[1])) };
+    if (m) return { ok: true, value: page(this.comments.filter((c) => c.issue === Number(m?.[1]))) };
     m = /^repos\/o\/r\/issues\/(\d+)$/.exec(path);
     if (m) {
       const i = this.issues.get(Number(m[1]));
@@ -78,7 +91,7 @@ export class FakeGithub implements GhActPort {
     }
     if (path === 'repos/o/r/issues') {
       const creator = query.get('creator');
-      return { ok: true, value: [...this.issues.values()].filter((i) => !creator || i.user.login === creator) };
+      return { ok: true, value: page([...this.issues.values()].filter((i) => !creator || i.user.login === creator)) };
     }
     return { ok: false, kind: 'http', status: 404, message: `gh: no such endpoint ${endpoint} (HTTP 404)` };
   }
@@ -106,6 +119,8 @@ export class FakeGithub implements GhActPort {
         if (!i) return { ok: false, kind: 'http', status: 404, message: 'gh: Not Found (HTTP 404)' };
         i.state = 'closed';
         i.closed_by = { login: this.login };
+        i.closed_at = new Date(Date.now()).toISOString();
+        i.state_reason = m[1] === 'issues' && typeof body.state_reason === 'string' ? body.state_reason : null;
         return { ok: true, value: m[1] === 'pulls' ? this.pullJson(i.number) : i };
       }
       return { ok: false, kind: 'http', status: 404, message: 'gh: Not Found (HTTP 404)' };
