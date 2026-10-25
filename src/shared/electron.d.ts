@@ -34,7 +34,7 @@ import type {
   LanLinkSendArgs,
   LanLinkPeersListResult,
 } from './lanlink';
-import type { FirewallActionResult, FirewallListener, InboundStatusView } from './netFirewall';
+import type { FirewallActionResult, FirewallListener, InboundStatusView, NetworkSettingsUri } from './netFirewall';
 import type { ListenProblemReport } from './netListen';
 import type { A2aSpawnAskResult, A2aSpawnOutgoingList, A2aSpawnPolicySetResult, A2aSpawnPolicyV1, A2aSpawnRequestSummary, A2aSpawnUiAsk } from './a2aSpawn';
 import type { RemoteSendResult, RemoteSendSource, RemoteWriteResult } from './remoteUpload';
@@ -247,7 +247,8 @@ declare global {
         listenProblem: (listener: FirewallListener) => Promise<ListenProblemReport | null>;
         fix: (listener: FirewallListener) => Promise<FirewallActionResult>;
         remove: (listener: FirewallListener) => Promise<FirewallActionResult>;
-        open: (which: 'firewall' | 'network') => Promise<{ ok: boolean }>;
+        /** `page` (Windows, with 'network'): one of NETWORK_SETTINGS_URIS; main refuses any other. */
+        open: (which: 'firewall' | 'network', page?: NetworkSettingsUri) => Promise<{ ok: boolean }>;
       };
       /** Cross-host A2A control plane (Settings → LAN). Daemon mode only. */
       a2aRemote?: {

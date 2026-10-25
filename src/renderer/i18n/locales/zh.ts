@@ -4333,6 +4333,7 @@ export const zh = {
   'net.fw.failed': "无法更改防火墙（{error}）。",
   'net.fw.publicNetwork': "{network} 被标记为公用网络，因此 Windows 会阻止其他电脑。如果你信任该网络，请在 Windows 设置中改为专用，或通过 Tailscale 连接。",
   'net.fw.partlyPublic': "可通过 {ok} 连接；无法通过 {network}（公用）连接。",
+  'net.fw.partlyPublicHint': "如果你信任 {network}，请在 Windows 设置中将其改为专用。",
   'net.fw.domainNetwork': "此电脑位于工作（域）网络上。wmux 只为专用网络添加规则；请让 IT 为 wmux 允许入站 TCP {port}。",
   'net.fw.exposedPublic': "之前的 Windows 提示允许公用网络上的设备通过任意端口访问 wmux。",
   'net.fw.exposedPublicFixed': "端口 {port} 现已在公用网络上被阻止。",

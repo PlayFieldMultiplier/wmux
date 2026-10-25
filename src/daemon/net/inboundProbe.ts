@@ -130,7 +130,12 @@ export async function probeInbound(target: ProbeTarget, deps: ProbeDeps): Promis
         exec(SOCKETFILTERFW, ['--getglobalstate'], { timeout: PROBE_TIMEOUT_MS }),
         exec(SOCKETFILTERFW, ['--getblockall'], { timeout: PROBE_TIMEOUT_MS }),
         exec(SOCKETFILTERFW, ['--getappblocked', exe], { timeout: PROBE_TIMEOUT_MS }),
-        exec(SOCKETFILTERFW, ['--getallowsigned'], { timeout: PROBE_TIMEOUT_MS }),
+        // Only an app the firewall does not list needs it: a failed read is
+        // an unknown allow-signed setting, not an unreadable firewall.
+        exec(SOCKETFILTERFW, ['--getallowsigned'], { timeout: PROBE_TIMEOUT_MS }).catch((err: unknown) => {
+          log(`[net] firewall probe: allow-signed could not be read: ${err instanceof Error ? err.message : String(err)}`);
+          return '';
+        }),
       ]);
       return { ...base, verdict: assessMac(parseMacFirewall(g, b, a, s)) };
     } catch (err) {
@@ -194,6 +199,7 @@ export async function probeInbound(target: ProbeTarget, deps: ProbeDeps): Promis
     legacyLanLink: a.legacyLanLink,
     okNetworks: uniqueNames(a.okIps, names),
     publicNetworks: uniqueNames(a.publicIps, names),
+    publicMedium: a.publicMedium,
     thirdPartyName: a.thirdPartyName,
   };
 }

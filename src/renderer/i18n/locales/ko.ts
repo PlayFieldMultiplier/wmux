@@ -4819,6 +4819,7 @@ export const ko = {
   'net.fw.failed': "방화벽을 바꾸지 못했습니다({error}).",
   'net.fw.publicNetwork': "{network}이(가) 공용 네트워크로 설정되어 있어 Windows가 다른 PC를 막습니다. 신뢰하는 네트워크라면 Windows 설정에서 개인으로 바꾸거나 Tailscale로 연결하세요.",
   'net.fw.partlyPublic': "{ok}에서는 되고 {network}(공용)에서는 안 됩니다.",
+  'net.fw.partlyPublicHint': "신뢰하는 네트워크라면 Windows 설정에서 {network}을(를) 개인으로 바꾸세요.",
   'net.fw.domainNetwork': "이 PC는 회사(도메인) 네트워크에 있습니다. wmux는 개인 네트워크용 규칙만 추가하므로 IT 담당자에게 wmux의 TCP {port} 인바운드 허용을 요청하세요.",
   'net.fw.exposedPublic': "이전에 Windows 확인 창에서 허용한 설정 때문에 공용 네트워크의 기기가 모든 포트로 wmux에 접근할 수 있습니다.",
   'net.fw.exposedPublicFixed': "이제 공용 네트워크에서 포트 {port}이(가) 차단됩니다.",

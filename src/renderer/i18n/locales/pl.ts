@@ -5265,6 +5265,7 @@ export const pl = {
   'net.fw.failed': "Nie udało się zmienić zapory ({error}).",
   'net.fw.publicNetwork': "Sieć {network} jest oznaczona jako publiczna, więc Windows blokuje inne komputery. Jeśli jej ufasz, ustaw ją jako prywatną w Ustawieniach Windows lub połącz się przez Tailscale.",
   'net.fw.partlyPublic': "Działa przez {ok}; nie przez {network} (publiczna).",
+  'net.fw.partlyPublicHint': "Jeśli ufasz sieci {network}, ustaw ją jako prywatną w Ustawieniach Windows.",
   'net.fw.domainNetwork': "Ten komputer jest w sieci firmowej (domenie). wmux dodaje reguły tylko dla sieci prywatnych; poproś dział IT o zezwolenie na ruch przychodzący TCP {port} dla wmux.",
   'net.fw.exposedPublic': "Wcześniejszy monit Windows pozwala urządzeniom w sieciach publicznych łączyć się z wmux na dowolnym porcie.",
   'net.fw.exposedPublicFixed': "Port {port} jest teraz blokowany w sieciach publicznych.",

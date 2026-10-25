@@ -134,6 +134,8 @@ export interface InboundStatus {
   okNetworks: string[];
   /** Adapter names of the Public networks the listener is offered on. */
   publicNetworks: string[];
+  /** The medium every one of those Public networks' adapters shares (Windows), or null: Open network settings opens that page. */
+  publicMedium: NetworkMedium | null;
   /** A registered third-party firewall's name, when it is printable ASCII. */
   thirdPartyName: string | null;
   /** The daemon's program path the rules name. */
@@ -166,6 +168,7 @@ export function inapplicableStatus(
     legacyLanLink: false,
     okNetworks: [],
     publicNetworks: [],
+    publicMedium: null,
     thirdPartyName: null,
     exe,
     refusal,
@@ -188,9 +191,36 @@ export interface ProfileFacts {
 
 export type AddressCategory = ProfileName | 'None';
 
+/** A network adapter's physical medium, as Windows Settings has a page for it. */
+export type NetworkMedium = 'wifi' | 'ethernet';
+
+/**
+ * The Windows Settings pages Open network settings may open: the adapter
+ * kind's own page (where its network profile is switched), or Network status.
+ * Main opens nothing else.
+ */
+export const NETWORK_SETTINGS_URIS = {
+  status: 'ms-settings:network-status',
+  wifi: 'ms-settings:network-wifi',
+  ethernet: 'ms-settings:network-ethernet',
+} as const;
+
+export type NetworkSettingsUri = (typeof NETWORK_SETTINGS_URIS)[keyof typeof NETWORK_SETTINGS_URIS];
+
+export function isNetworkSettingsUri(v: unknown): v is NetworkSettingsUri {
+  return Object.values(NETWORK_SETTINGS_URIS).some((u) => u === v);
+}
+
+/** The Settings page for the Public networks' adapters: their medium's page, else Network status. */
+export function networkSettingsUri(medium: NetworkMedium | null): NetworkSettingsUri {
+  return medium ? NETWORK_SETTINGS_URIS[medium] : NETWORK_SETTINGS_URIS.status;
+}
+
 export interface ProbeAddress {
   ip: string;
   category: AddressCategory;
+  /** Public or profile-less only: the adapter's medium, null when another or unread. */
+  medium: NetworkMedium | null;
   /**
    * A Hyper-V virtual switch adapter (WSL, containers): never where another
    * PC connects. Not part of the probe line; the daemon sets it from the
@@ -252,6 +282,7 @@ export function parseProfileList(v: unknown): ProfileName[] | null {
 }
 
 const CATEGORY_CODES: Record<number, AddressCategory> = { 0: 'Public', 1: 'Private', 2: 'Domain', [-1]: 'None' };
+const MEDIUM_CODES: Record<number, NetworkMedium> = { 1: 'wifi', 2: 'ethernet' };
 
 /**
  * Parse the probe's one JSON line. The output contract is printable ASCII
@@ -296,7 +327,9 @@ export function parseProbeLine(stdout: string): ProbeFacts | null {
     const ar = a as Record<string, unknown>;
     const category = typeof ar['cat'] === 'number' ? CATEGORY_CODES[ar['cat']] : undefined;
     if (!isIpv4(ar['ip']) || !category) return null;
-    addresses.push({ ip: ar['ip'], category, virtual: false });
+    const med = ar['med'] ?? 0;
+    if (typeof med !== 'number') return null;
+    addresses.push({ ip: ar['ip'], category, medium: MEDIUM_CODES[med] ?? null, virtual: false });
   }
 
   const rules: ProbeRule[] = [];
@@ -383,6 +416,8 @@ export interface InboundAssessment {
   /** IPs on Private or Domain networks, and on Public ones (virtual adapters left out). */
   okIps: string[];
   publicIps: string[];
+  /** The medium all of `publicIps` share, or null (none, mixed, or one unread). */
+  publicMedium: NetworkMedium | null;
   thirdPartyName: string | null;
 }
 
@@ -397,7 +432,10 @@ export function assessInbound(facts: ProbeFacts, ctx: AssessContext): InboundAss
   const real = facts.addresses.filter((a) => !a.virtual);
   const catOf = (a: ProbeAddress): ProfileName => (a.category === 'None' ? 'Public' : a.category);
   const okIps = real.filter((a) => catOf(a) !== 'Public').map((a) => a.ip);
-  const publicIps = real.filter((a) => catOf(a) === 'Public').map((a) => a.ip);
+  const publicReal = real.filter((a) => catOf(a) === 'Public');
+  const publicIps = publicReal.map((a) => a.ip);
+  const media = new Set(publicReal.map((a) => a.medium));
+  const publicMedium = media.size === 1 ? [...media][0] ?? null : null;
   const inUse = new Set<ProfileName>(real.map(catOf));
   // Nothing advertised (no LAN address yet): the Fix's network is the one to judge.
   if (inUse.size === 0) inUse.add('Private');
@@ -450,6 +488,7 @@ export function assessInbound(facts: ProbeFacts, ctx: AssessContext): InboundAss
     legacyLanLink: facts.legacyLanLink,
     okIps,
     publicIps,
+    publicMedium,
     thirdPartyName: facts.thirdParty ? facts.thirdPartyName : null,
   };
 }

@@ -5305,6 +5305,7 @@ export const en = {
   'net.fw.failed': "Could not change the firewall ({error}).",
   'net.fw.publicNetwork': "{network} is marked Public, so Windows blocks other PCs. If you trust it, set it to Private in Windows Settings, or connect through Tailscale.",
   'net.fw.partlyPublic': "Works over {ok}; not over {network} (Public).",
+  'net.fw.partlyPublicHint': "If you trust {network}, set it to Private in Windows Settings.",
   'net.fw.domainNetwork': "This PC is on a work (Domain) network. wmux only adds rules for private networks; ask IT to allow TCP {port} inbound for wmux.",
   'net.fw.exposedPublic': "An earlier Windows prompt lets devices on public networks reach wmux on any port.",
   'net.fw.exposedPublicFixed': "Port {port} is now blocked on public networks.",

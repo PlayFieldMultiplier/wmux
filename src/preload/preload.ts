@@ -109,7 +109,7 @@ import type {
   LanLinkSendArgs,
   LanLinkPeersListResult,
 } from '../shared/lanlink';
-import type { FirewallActionResult, FirewallListener, InboundStatusView } from '../shared/netFirewall';
+import type { FirewallActionResult, FirewallListener, InboundStatusView, NetworkSettingsUri } from '../shared/netFirewall';
 import type { ListenProblemReport } from '../shared/netListen';
 import type {
   A2aRemoteExposureGetResult,
@@ -2381,7 +2381,8 @@ document.addEventListener('DOMContentLoaded', () => {
     ipcRenderer.invoke(IPC.NET_LISTEN_PROBLEM, listener) as Promise<ListenProblemReport | null>,
   fix: (listener: FirewallListener) => ipcRenderer.invoke(IPC.NET_FIREWALL_FIX, listener) as Promise<FirewallActionResult>,
   remove: (listener: FirewallListener) => ipcRenderer.invoke(IPC.NET_FIREWALL_REMOVE, listener) as Promise<FirewallActionResult>,
-  open: (which: 'firewall' | 'network') => ipcRenderer.invoke(IPC.NET_FIREWALL_OPEN, which) as Promise<{ ok: boolean }>,
+  open: (which: 'firewall' | 'network', page?: NetworkSettingsUri) =>
+    (page === undefined ? ipcRenderer.invoke(IPC.NET_FIREWALL_OPEN, which) : ipcRenderer.invoke(IPC.NET_FIREWALL_OPEN, which, page)) as Promise<{ ok: boolean }>,
 };
 
 // Cross-host A2A control plane (Settings → LAN). Request/response via invoke,

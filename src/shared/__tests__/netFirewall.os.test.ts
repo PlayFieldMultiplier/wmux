@@ -10,7 +10,10 @@ import {
   firewallDetailsText,
   firewallOffer,
   inapplicableStatus,
+  isNetworkSettingsUri,
   markVirtual,
+  networkSettingsUri,
+  NETWORK_SETTINGS_URIS,
   parseMacFirewall,
   parseProbeLine,
   partlyPublicSentence,
@@ -74,6 +77,28 @@ describe('parseProbeLine', () => {
     expect(parseProbeLine(line({ prof: { Domain: on, Private: on } }))).toBeNull();
     // Every rule says whether it reaches the tailnet range.
     expect(parseProbeLine(line({ rules: [{ act: 'Allow', prof: 'Private' }] }).replace(',"tn":0', ''))).toBeNull();
+  });
+
+  it('a Public address carries its adapter medium; anything else is no page of its own', () => {
+    const f = facts({ addr: [{ ip: '192.168.45.28', cat: 0, med: 1 }, { ip: '10.0.0.5', cat: 0, med: 2 }, { ip: '10.0.0.6', cat: -1, med: 0 }, { ip: '10.0.0.7', cat: 0, med: 7 }, { ip: '10.0.0.8', cat: 1 }] });
+    expect(f.addresses.map((a) => a.medium)).toEqual(['wifi', 'ethernet', null, null, null]);
+    expect(parseProbeLine(line({ addr: [{ ip: '10.0.0.5', cat: 0, med: 'wifi' }] }))).toBeNull();
+    const medium = (addr: unknown[]) => assessInbound(facts({ addr }), ctx()).publicMedium;
+    expect(medium([{ ip: '192.168.45.28', cat: 0, med: 1 }, { ip: '10.0.0.8', cat: 1 }])).toBe('wifi');
+    expect(medium([{ ip: '192.168.45.28', cat: 0, med: 2 }, { ip: '10.0.0.9', cat: -1, med: 2 }])).toBe('ethernet');
+    expect(medium([{ ip: '192.168.45.28', cat: 0, med: 1 }, { ip: '10.0.0.9', cat: 0, med: 2 }])).toBeNull();
+    expect(medium([{ ip: '192.168.45.28', cat: 0, med: 1 }, { ip: '10.0.0.9', cat: 0 }])).toBeNull();
+    expect(medium([{ ip: '10.0.0.8', cat: 1 }])).toBeNull();
+  });
+
+  it('Open network settings opens only the three Settings pages', () => {
+    expect(networkSettingsUri('wifi')).toBe('ms-settings:network-wifi');
+    expect(networkSettingsUri('ethernet')).toBe('ms-settings:network-ethernet');
+    expect(networkSettingsUri(null)).toBe('ms-settings:network-status');
+    for (const u of Object.values(NETWORK_SETTINGS_URIS)) expect(isNetworkSettingsUri(u)).toBe(true);
+    for (const u of ['ms-settings:network-wifi ', 'MS-SETTINGS:network-wifi', 'ms-settings:windowsupdate', 'https://example.com', 'file:///C:/x', null, 1]) {
+      expect(isNetworkSettingsUri(u), String(u)).toBe(false);
+    }
   });
 
   it('"Any" profile means all three', () => {
