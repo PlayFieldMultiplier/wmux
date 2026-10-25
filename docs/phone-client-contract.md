@@ -4961,11 +4961,14 @@ Omitted, never `false`, otherwise.
 - At most 8 per card. Cards of other actors never carry it.
 - `name`: the file's own name as the bot made it (no folders), at most 200
   characters. Show it; never use it as a path.
-- `mediaType`: what the desktop inferred from the name's extension, e.g.
-  `image/png`, `application/pdf`, `text/markdown`, `video/mp4`,
-  `video/quicktime`, `video/webm`, `text/csv`; `application/octet-stream`
-  when unknown. A card stored before a type was known keeps the type it was
-  given (an older `.mp4` reads `application/octet-stream`).
+- `mediaType`: one of the types the phone may show in place: `image/png`,
+  `image/jpeg`, `image/gif`, `image/webp`, `video/mp4`, `video/quicktime`,
+  `video/webm`, `application/pdf`, `application/json`, `text/plain`,
+  `text/markdown`, `text/csv`, `text/tab-separated-values`, `text/x-diff`.
+  Anything else (unknown, or a type that can run script: HTML, SVG, XML) is
+  `application/octet-stream`: offer it to save or share, never preview it.
+  A card stored before a type was known keeps the type it was given (an
+  older `.mp4` reads `application/octet-stream`).
 - `bytes`: 1 to 10 MiB (10485760).
 - Cards reach the phone only through `GET /api/rooms/:workspaceId/cards`
   (there is no room event stream), and every page of it carries `files`: the
@@ -4978,14 +4981,16 @@ keep a bot's card of that room carrying the id.
 
 | Answer | Meaning |
 |---|---|
-| `200` | The file, streamed. `Content-Type` is exactly the card's `mediaType` (main's type, never sniffed from the bytes); `Content-Length` is exactly the card's `bytes`. Also `Content-Disposition: inline; filename*=UTF-8''<the name, percent-encoded>`, `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; sandbox`. No range requests: fetch the whole file, then preview it from the two headers. |
+| `200` | The file, streamed. `Content-Type` is exactly the card's `mediaType` (never sniffed from the bytes); `Content-Length` is exactly the card's `bytes`. Also `Content-Disposition: inline; filename*=UTF-8''<the name, percent-encoded>` (`attachment; …` for `application/octet-stream`), `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; sandbox`. No range requests: fetch the whole file, then preview it from the two headers. |
 | `403 {error:"transcript-disabled"}` | The server runs without `--allow-transcript`. |
 | `404 {error:"file-not-found"}` | No bot's card of that room carries the id, or its stored copy is gone or changed. Show the file as unavailable. |
+| `429 {error:"too-many-downloads"}` | This device already has 4 downloads open. `Retry-After: 1`; retry once one ends. |
 | `503 {error:"desktop-unavailable"}` / `503 {error:"rooms-unavailable"}` | No desktop, or one that cannot serve files. |
 | `504 {error:"desktop-timeout"}` | The desktop did not answer. |
 
 A body shorter than `Content-Length` (the connection cut mid-file) is a
-failed download: discard it and retry; never show a partial file.
+failed download: discard it and retry; never show a partial file. A download
+the phone stops reading is cut after 30 seconds without progress.
 
 #### Bot approvals (`/api/bot-approvals`)
 

@@ -14,6 +14,7 @@
 // confirmed or denied to a server that may not show it. No desktop, or one
 // whose factory has not started, is 503: nothing here answers from memory.
 
+import { once } from 'node:events';
 import fs from 'node:fs';
 import type { ServerResponse } from 'node:http';
 import path from 'node:path';
@@ -22,6 +23,7 @@ import {
   PHONE_ROOM_ATTACHMENT_COMMAND,
   PHONE_ROOM_CARDS_COMMAND,
   PHONE_ROOM_FILE_COMMAND,
+  PHONE_ROOM_FILE_DOWNLOAD_TYPE,
   PHONE_ROOM_LIMITS,
   PHONE_ROOM_THREADS_COMMAND,
   isPhoneRoomWorkspaceId,
@@ -47,6 +49,14 @@ export const ROOM_ATTACHMENT_ROUTE = /^\/api\/rooms\/([^/]+)\/attachments\/([^/]
 /** `GET /api/rooms/:workspaceId/files/:fileId`: one file on a bot card, the
  *  bytes of the room's stored copy. */
 export const ROOM_FILE_ROUTE = /^\/api\/rooms\/([^/]+)\/files\/([^/]+)$/;
+
+/** Downloads one caller (a device, or the operator) may have open at once;
+ *  one more is 429. */
+export const ROOM_FILE_STREAMS_PER_CALLER = 4;
+
+/** A download whose socket has sent nothing for this long (the phone
+ *  stopped reading) is cut. */
+export const ROOM_FILE_STALL_MS = 30_000;
 
 /** The part of the desktop bridge the routes use (DesktopPhoneBridge). */
 export interface RoomsDesktop {
@@ -255,15 +265,21 @@ export async function roomFileResponse(
   let handle: fs.promises.FileHandle | null = null;
   try {
     // Neither the store nor the room's folder may be a link.
+    let room: fs.Stats | null = null;
     for (const dir of [opts.roomFilesDir, folder]) {
-      const d = await fs.promises.lstat(dir);
-      if (!d.isDirectory() || d.isSymbolicLink()) return FILE_NOT_FOUND;
+      room = await fs.promises.lstat(dir);
+      if (!room.isDirectory() || room.isSymbolicLink()) return FILE_NOT_FOUND;
     }
     const st = await fs.promises.lstat(file);
     if (!st.isFile() || st.size !== meta.bytes || st.size > ROOM_FILE_LIMITS.MAX_BYTES) return FILE_NOT_FOUND;
     handle = await fs.promises.open(file, FILE_OPEN_FLAGS);
     const fst = await handle.stat();
-    if (!fst.isFile() || fst.size !== meta.bytes || fst.ino !== st.ino || fst.dev !== st.dev) {
+    // O_NOFOLLOW guards only the last name and Node has no openat, so the
+    // room's folder is checked again: still the directory it was, not a
+    // link swapped in while the file was opened.
+    const after = await fs.promises.lstat(folder);
+    const sameRoom = !!room && after.isDirectory() && after.ino === room.ino && after.dev === room.dev;
+    if (!sameRoom || !fst.isFile() || fst.size !== meta.bytes || fst.ino !== st.ino || fst.dev !== st.dev) {
       await handle.close().catch(() => undefined);
       return FILE_NOT_FOUND;
     }
@@ -282,21 +298,36 @@ function contentDispositionName(name: string): string {
 /**
  * Streams an opened bot file and closes it. Content-Length is the size main
  * named; a file that shrank mid-stream sends fewer bytes than that header
- * promised, so the socket is cut rather than ended cleanly.
+ * promised, so the socket is cut rather than ended cleanly. A file the phone
+ * may not show in place (parsePhoneRoomFile named it
+ * PHONE_ROOM_FILE_DOWNLOAD_TYPE) goes out as an attachment.
  */
-export async function sendRoomFile(res: ServerResponse, file: RoomFileOpen, headers: Record<string, string>): Promise<void> {
+export async function sendRoomFile(
+  res: ServerResponse,
+  file: RoomFileOpen,
+  headers: Record<string, string>,
+  opts: { stallMs?: number } = {},
+): Promise<void> {
+  let opened: fs.ReadStream | null = null;
   try {
+    const disposition = file.contentType === PHONE_ROOM_FILE_DOWNLOAD_TYPE ? 'attachment' : 'inline';
     res.writeHead(200, {
       ...headers,
       'Content-Type': file.contentType,
       'Content-Length': String(file.size),
-      'Content-Disposition': `inline; filename*=UTF-8''${contentDispositionName(file.name)}`,
+      'Content-Disposition': `${disposition}; filename*=UTF-8''${contentDispositionName(file.name)}`,
+      'X-Content-Type-Options': 'nosniff',
       'Cache-Control': 'no-store',
-      // Inert even if opened as a document (an HTML or SVG file).
+      // Inert even if opened as a document.
       'Content-Security-Policy': "default-src 'none'; sandbox",
     });
+    res.setTimeout(opts.stallMs ?? ROOM_FILE_STALL_MS, () => { res.destroy(); });
     // The handle stays ours to close (and to count against below).
     const stream = file.handle.createReadStream({ start: 0, end: file.size - 1, autoClose: false });
+    opened = stream;
+    // Heard for the stream's whole life: a read still in flight when the
+    // phone leaves can fail after pipe and finished have let go.
+    stream.on('error', () => undefined);
     // A phone that leaves mid-download: pipe never destroys its source.
     const abort = (): void => { stream.destroy(); };
     res.once('close', abort);
@@ -317,6 +348,13 @@ export async function sendRoomFile(res: ServerResponse, file: RoomFileOpen, head
   } catch {
     if (!res.destroyed) res.destroy();
   } finally {
+    // A destroyed stream finishes its read and closes the handle itself
+    // before 'close'; the handle is closed only after that.
+    if (opened && !opened.closed) {
+      const closed = once(opened, 'close');
+      opened.destroy();
+      await closed;
+    }
     await file.handle.close().catch(() => undefined);
   }
 }

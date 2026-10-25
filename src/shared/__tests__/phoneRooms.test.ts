@@ -45,6 +45,18 @@ describe('phone room cards', () => {
     expect(phoneRoomCard(card(11, { kind: 'human', actor: { kind: 'human' }, files: [file] }), () => null)).not.toHaveProperty('files');
   });
 
+  it('names a file the phone may not show in place (HTML, SVG, XML, script) a download, on the card and after the daemon parses it', () => {
+    const f = (n: number, name: string, mediaType: string) => ({ id: String(n).repeat(32), name, mediaType, bytes: 10 });
+    const out = phoneRoomCard(card(12, { kind: 'report', files: [
+      f(1, 'chart.png', 'image/png'), f(2, 'logo.svg', 'image/svg+xml'), f(3, 'page.html', 'text/html'),
+      f(4, 'notes.md', 'text/markdown'), f(5, 'feed.xml', 'application/xml'), f(6, 'clip.mov', 'video/quicktime'),
+    ] }), () => null);
+    expect(out?.files?.map((x) => x.mediaType)).toEqual([
+      'image/png', 'application/octet-stream', 'application/octet-stream', 'text/markdown', 'application/octet-stream', 'video/quicktime',
+    ]);
+    expect(parsePhoneRoomCard(out)).toEqual(out);
+  });
+
   it("carries a group card's reactions, palette only and one per bot; a card without any has none", () => {
     const out = phoneRoomCard(card(10, {
       kind: 'human', actor: { kind: 'human' },

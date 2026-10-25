@@ -158,6 +158,21 @@ export type PhoneRoomFile = RoomFile;
  *  copy has no extension and main inferred the type from the file's name. */
 const MEDIA_TYPE_RE = /^[a-z]+\/[a-z0-9][a-z0-9.+-]{0,99}$/;
 
+/** What a file the phone may not show in place goes out as: to save, not
+ *  to open (`Content-Disposition: attachment`). */
+export const PHONE_ROOM_FILE_DOWNLOAD_TYPE = 'application/octet-stream';
+
+/** The types the phone may show in place: pictures, video, PDF and plain
+ *  text, none of which runs script. Anything else main names (HTML, SVG,
+ *  XML, a script) reaches the phone, on the card and in the route's
+ *  Content-Type alike, as PHONE_ROOM_FILE_DOWNLOAD_TYPE. */
+const PHONE_ROOM_PREVIEW_TYPES = new Set([
+  'image/png', 'image/jpeg', 'image/gif', 'image/webp',
+  'video/mp4', 'video/quicktime', 'video/webm',
+  'application/pdf', 'application/json',
+  'text/plain', 'text/markdown', 'text/csv', 'text/tab-separated-values', 'text/x-diff',
+]);
+
 /** One file description, rebuilt from its allowed fields, or null. */
 export function parsePhoneRoomFile(value: unknown): PhoneRoomFile | null {
   if (!isRecord(value)) return null;
@@ -167,7 +182,7 @@ export function parsePhoneRoomFile(value: unknown): PhoneRoomFile | null {
   if (typeof name !== 'string' || !name || name.length > ROOM_FILE_LIMITS.NAME_MAX || /[\u0000-\u001f\u007f\\/]/.test(name)) return null;
   if (typeof mediaType !== 'string' || !MEDIA_TYPE_RE.test(mediaType)) return null;
   if (typeof bytes !== 'number' || !Number.isSafeInteger(bytes) || bytes <= 0 || bytes > ROOM_FILE_LIMITS.MAX_BYTES) return null;
-  return { id, name, mediaType, bytes };
+  return { id, name, mediaType: PHONE_ROOM_PREVIEW_TYPES.has(mediaType) ? mediaType : PHONE_ROOM_FILE_DOWNLOAD_TYPE, bytes };
 }
 
 function parsePhoneRoomFiles(value: unknown): PhoneRoomFile[] | undefined {

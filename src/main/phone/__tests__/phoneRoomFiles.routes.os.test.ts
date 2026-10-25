@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { EventEmitter } from 'node:events';
+import { EventEmitter, once } from 'node:events';
+import http from 'node:http';
 
 vi.mock('electron', () => ({ nativeImage: {} }));
 
@@ -82,6 +83,13 @@ describe('GET /api/rooms/:workspaceId/files/:fileId', () => {
     return {
       config: async () => (await (await fetch(`${base}/api/config`, { headers: auth })).json()) as Record<string, unknown>,
       file: (ws: string, id: string) => fetch(`${base}/api/rooms/${ws}/files/${id}`, { headers: auth }),
+      /** A download whose headers arrived and whose body is no longer read. */
+      held: async (ws: string, id: string) => {
+        const req = http.get(`${base}/api/rooms/${ws}/files/${id}`, { headers: auth });
+        const [res] = await once(req, 'response') as [http.IncomingMessage];
+        res.pause();
+        return { status: res.statusCode, drop: () => { req.destroy(); } };
+      },
     };
   }
 
@@ -101,6 +109,50 @@ describe('GET /api/rooms/:workspaceId/files/:fileId', () => {
     expect(res.headers.get('x-content-type-options')).toBe('nosniff');
     expect(res.headers.get('content-security-policy')).toBe("default-src 'none'; sandbox");
     expect(Buffer.from(await res.arrayBuffer()).equals(video)).toBe(true);
+  });
+
+  it('sends a type the phone may not show in place as a download: octet-stream, attachment', async () => {
+    const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>');
+    const f = store('ws-1', 'logo.svg', 'image/svg+xml', svg);
+    writer.post({ workspaceId: 'ws-1', kind: 'report', actor: BOT, title: 'Logo', files: [f] });
+    const s = await start();
+    const res = await s.file('ws-1', f.id);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('application/octet-stream');
+    expect(res.headers.get('content-disposition')).toBe("attachment; filename*=UTF-8''logo.svg");
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(Buffer.from(await res.arrayBuffer()).equals(svg)).toBe(true);
+  });
+
+  it('lets one caller hold four downloads at once; a fifth is 429 until one ends', async () => {
+    const f = store('ws-1', 'big.mp4', 'video/mp4', crypto.randomBytes(8 * 1024 * 1024));
+    writer.post({ workspaceId: 'ws-1', kind: 'report', actor: BOT, title: 'Video', files: [f] });
+    const s = await start();
+    const open = [];
+    for (let i = 0; i < 4; i++) open.push(await s.held('ws-1', f.id));
+    expect(open.map((d) => d.status)).toEqual([200, 200, 200, 200]);
+    const fifth = await s.file('ws-1', f.id);
+    expect(fifth.status).toBe(429);
+    expect(await fifth.json()).toEqual({ error: 'too-many-downloads' });
+    open.pop()?.drop();
+    await vi.waitFor(async () => {
+      const again = await s.held('ws-1', f.id);
+      again.drop();
+      expect(again.status).toBe(200);
+    }, { timeout: 10_000 });
+    for (const d of open) d.drop();
+  });
+
+  it('treats a bot card written in a guest\'s turn as the cards feed does: listed there, and served', async () => {
+    const f = store('ws-1', 'reply.txt', 'text/plain', Buffer.from('hi'));
+    expect(writer.post({ workspaceId: 'ws-1', kind: 'report', actor: BOT, title: 'For the guest', files: [f], origin: 'guest' })).toMatchObject({ ok: true });
+    const ports = {
+      rooms: () => writer, bots: () => [], roomFileExists: () => true, roomReadable: () => true,
+    } as unknown as PhoneFactoryPorts;
+    const page = handlePhoneRoomCommand('workspaces.roomCards', { workspaceId: 'ws-1', limit: 50 }, ports) as { cards: Array<{ title: string; files?: unknown }> };
+    expect(page.cards.find((c) => c.title === 'For the guest')?.files).toEqual([f]);
+    const s = await start();
+    expect((await s.file('ws-1', f.id)).status).toBe(200);
   });
 
   it('is the same 404 for a file no bot card of that room lists, another room, a changed copy or a link', async () => {

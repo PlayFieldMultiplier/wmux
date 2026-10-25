@@ -192,7 +192,7 @@ import { dmThreadBot, groupThreadGroup, parseThreadId } from '../../shared/room'
 import { PHONE_ROOM_ATTACHMENT_COMMAND, PHONE_ROOM_FILE_COMMAND, isPhoneRoomWorkspaceId } from '../../shared/phoneRooms';
 import { FLEET_TICKET_ROUTE_PREFIX, fleetTicketDetailResponse, fleetTicketsFields } from './fleetTickets';
 import { factoryOn, moaConfigFields } from './factoryConfig';
-import { ROOMS_ROUTE, ROOM_ATTACHMENT_ROUTE, ROOM_FILE_ROUTE, ROOM_MESSAGES_ROUTE, roomAttachmentResponse, roomFileResponse, roomsResponse, roomsSupported, sendRoomFile } from './rooms';
+import { ROOMS_ROUTE, ROOM_ATTACHMENT_ROUTE, ROOM_FILE_ROUTE, ROOM_FILE_STREAMS_PER_CALLER, ROOM_MESSAGES_ROUTE, roomAttachmentResponse, roomFileResponse, roomsResponse, roomsSupported, sendRoomFile } from './rooms';
 import { BOTS_ROUTE, botsResponse, botsSupported } from './bots';
 import { GuestRateLimiter, guestRouteResponse, readGuestBody, type GuestBotResolver } from './guestBotRoutes';
 import { isGuestRoute, looksLikeGuestCredential, type GuestBotGates } from '../../shared/guestBots';
@@ -1699,6 +1699,8 @@ export class WebTerminalServer {
   private readonly streamResponses = new StreamResponseLimits();
 
   private readonly streamTickets = new Map<string, StreamTicket>();
+  /** Bot-file downloads open per caller (`operator` or a device id). */
+  private readonly roomFileStreams = new Map<string, number>();
 
   // Bound so on()/off() reference the SAME listener across start()/stop().
   private readonly onSessionCritical = (payload: { sessionId: string; event?: unknown }): void =>
@@ -3116,12 +3118,23 @@ export class WebTerminalServer {
     }
     const roomFileRoute = req.method === 'GET' ? ROOM_FILE_ROUTE.exec(p) : null;
     if (roomFileRoute) {
+      const caller = principal.kind === 'device' ? principal.deviceId : 'operator';
+      const open = this.roomFileStreams.get(caller) ?? 0;
+      if (open >= ROOM_FILE_STREAMS_PER_CALLER) {
+        this.json(res, 429, { error: 'too-many-downloads' }, { 'Cache-Control': 'no-store', 'Retry-After': '1' });
+        return;
+      }
+      this.roomFileStreams.set(caller, open + 1);
       void roomFileResponse(roomFileRoute[1], roomFileRoute[2], {
         allowTranscript: this.opts?.allowTranscript === true, desktop: this.availableDesktop(), roomFilesDir: this.deps.roomFilesDir,
       }).then((r) => {
         if (!('handle' in r)) return this.json(res, r.status, r.body, { 'Cache-Control': 'no-store' });
         return sendRoomFile(res, r, this.securityHeaders());
-      }).catch((err: unknown) => this.failRequest(res, err));
+      }).catch((err: unknown) => this.failRequest(res, err)).finally(() => {
+        const left = (this.roomFileStreams.get(caller) ?? 1) - 1;
+        if (left > 0) this.roomFileStreams.set(caller, left);
+        else this.roomFileStreams.delete(caller);
+      });
       return;
     }
     const roomsRoute = req.method === 'GET' ? ROOMS_ROUTE.exec(p) : null;
