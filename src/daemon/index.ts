@@ -4665,7 +4665,7 @@ function registerRpcHandlers(
         tree: (id) => agentProcessTracker.agentProcessTree(id, 'claude'),
         stop: (id, stillIdle) => stopAgentTree({
           tree: () => agentProcessTracker.agentProcessTree(id, 'claude'),
-          stillRunning: (entries) => agentProcessTracker.stillRunning(entries),
+          stillRunning: (entries) => agentProcessTracker.liveness(entries),
           kill: (pid, signal) => process.kill(pid, signal),
           stillIdle,
         }),
@@ -9398,7 +9398,7 @@ async function main(): Promise<void> {
     try {
       return await stopAgentTree({
         tree: () => agentProcessTracker.agentProcessTree(id, 'claude'),
-        stillRunning: (entries) => agentProcessTracker.stillRunning(entries),
+        stillRunning: (entries) => agentProcessTracker.liveness(entries),
         kill: (pid, signal) => process.kill(pid, signal),
         ...(stillIdle ? { stillIdle } : {}),
       });
@@ -9435,7 +9435,7 @@ async function main(): Promise<void> {
         },
         stopClaude: (sid, stillIdle) => stopAgentTree({
           tree: () => agentProcessTracker.agentProcessTree(sid, 'claude'),
-          stillRunning: (entries) => agentProcessTracker.stillRunning(entries),
+          stillRunning: (entries) => agentProcessTracker.liveness(entries),
           kill: (pid, signal) => process.kill(pid, signal),
           stillIdle,
         }),

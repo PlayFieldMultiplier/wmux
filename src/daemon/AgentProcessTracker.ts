@@ -1180,10 +1180,10 @@ export class AgentProcessTracker {
    *
    *  Windows never reparents: a process whose parent died long ago keeps that
    *  parent's pid as its ppid, and the agent may have reused it. So there a
-   *  process is below the agent only when it is no older than its parent; an
-   *  older one (and what runs under it) is left out. One whose age cannot be
-   *  told is `uncertain`: never signalled, but a stop is not confirmed while
-   *  it runs. */
+   *  process is below the agent only when it started after its parent; an
+   *  older one (and what runs under it) is left out. One started in the same
+   *  millisecond as its parent, or whose age cannot be told, is `uncertain`:
+   *  never signalled, but a stop is not confirmed while it runs. */
   async agentProcessTree(sessionId: string, expectedSlug: AgentSlug): Promise<{ root: ProcessTreeEntry; descendants: ProcessTreeEntry[]; uncertain: ProcessTreeEntry[] } | null> {
     const s = this.states.get(sessionId);
     const shellPid = this.shellPids.get(sessionId);
@@ -1222,7 +1222,8 @@ export class AgentProcessTracker {
           // parent): its ppid names an earlier process that had this pid.
           if (born !== undefined && ((parentBorn !== undefined && born < parentBorn) ||
               (root.created !== undefined && born < root.created))) continue;
-          sure = sure && born !== undefined && parentBorn !== undefined;
+          // A tie at millisecond resolution does not tell which came first.
+          sure = sure && born !== undefined && parentBorn !== undefined && born > parentBorn;
         }
         seen.add(child.pid);
         (sure ? descendants : uncertain).push(child);
@@ -1245,9 +1246,28 @@ export class AgentProcessTracker {
    *  program, or the same program started with other arguments). Throws when
    *  the table cannot be read. */
   async stillRunning(entries: readonly ProcessTreeEntry[]): Promise<ProcessTreeEntry[]> {
-    if (entries.length === 0) return [];
+    const { same, unsure } = await this.liveness(entries);
+    return entries.filter((e) => same.includes(e) || unsure.includes(e));
+  }
+
+  /** stillRunning, split by how sure the match is. On Windows the creation
+   *  time is part of a process's identity too: a different one is another
+   *  process that took the pid (the same program with the same arguments is
+   *  not told apart otherwise), and one missing on either side leaves the
+   *  match `unsure`: still running, but not proven the same process. */
+  async liveness(entries: readonly ProcessTreeEntry[]): Promise<{ same: ProcessTreeEntry[]; unsure: ProcessTreeEntry[] }> {
+    if (entries.length === 0) return { same: [], unsure: [] };
     const table = await this.snapshot();
-    const left = entries.filter((e) => table.some((t) => t.pid === e.pid && t.name === e.name && t.cmdline === e.cmdline));
+    const same: ProcessTreeEntry[] = [];
+    const unsure: ProcessTreeEntry[] = [];
+    for (const e of entries) {
+      const row = table.find((t) => t.pid === e.pid && t.name === e.name && t.cmdline === e.cmdline);
+      if (!row) continue;
+      if (this.platform !== 'win32') same.push(e);
+      else if (row.created === undefined || e.created === undefined) unsure.push(e);
+      else if (row.created === e.created) same.push(e);
+    }
+    const left = [...same, ...unsure];
     // A tree read's root found gone is that tracked agent gone: the launch
     // the read was made for, or one tracked since on the same pid when no
     // process holds that pid any more (a re-probe of the same agent). A
@@ -1259,7 +1279,7 @@ export class AgentProcessTracker {
       if (!cur || cur.wsl) continue;
       if (cur === tracked.state || (cur.pid === e.pid && !table.some((t) => t.pid === e.pid))) this.recordDeath(tracked.sessionId, cur);
     }
-    return left;
+    return { same, unsure };
   }
 
   /** The agent's death edge, recorded by a fresh process table rather than

@@ -756,9 +756,11 @@ describe('the agent tree on Windows is dated', () => {
     expect(pids(tree?.uncertain)).toEqual([]);
   });
 
-  it('a child started in the same millisecond as its parent is its child', async () => {
-    const tree = await (await armed(() => [SHELL, AGENT, dated(201, 200, 'node.exe', 2_000)])).agentProcessTree('s1', 'claude');
-    expect(pids(tree?.descendants)).toEqual([201]);
+  it('a child started in the same millisecond as its parent is uncertain, with everything under it', async () => {
+    const table = [SHELL, AGENT, dated(201, 200, 'node.exe', 2_000), dated(202, 201, 'node.exe', 2_500)];
+    const tree = await (await armed(() => table)).agentProcessTree('s1', 'claude');
+    expect(pids(tree?.descendants)).toEqual([]);
+    expect(pids(tree?.uncertain)).toEqual([201, 202]);
   });
 
   it('a process whose age cannot be read is uncertain, with everything under it', async () => {
@@ -777,7 +779,7 @@ describe('the agent tree on Windows is dated', () => {
     const kill = vi.fn((pid: number) => { alive.delete(pid); });
     const r = await stopAgentTree({
       tree: () => tracker.agentProcessTree('s1', 'claude'),
-      stillRunning: (es) => tracker.stillRunning(es),
+      stillRunning: (es) => tracker.liveness(es),
       kill,
       sleep: async () => undefined,
     });
@@ -793,7 +795,58 @@ describe('the agent tree on Windows is dated', () => {
     const kill = vi.fn((pid: number) => { alive.delete(pid); });
     const r = await stopAgentTree({
       tree: () => tracker.agentProcessTree('s1', 'claude'),
-      stillRunning: (es) => tracker.stillRunning(es),
+      stillRunning: (es) => tracker.liveness(es),
+      kill,
+      sleep: async () => undefined,
+    });
+    expect(kill.mock.calls).toEqual([[200, 'SIGTERM']]);
+    expect(r).toEqual({ ok: false, code: 'still_running', pid: 200 });
+  });
+
+  it('a process is the same one only with the same creation time', async () => {
+    const mcp = dated(201, 200, 'node.exe', 2_500);
+    let table = [SHELL, AGENT, mcp];
+    const tracker = await armed(() => table);
+    expect(await tracker.liveness([mcp])).toEqual({ same: [mcp], unsure: [] });
+    // The pid taken by the same program with the same arguments, started later.
+    table = [SHELL, AGENT, dated(201, 200, 'node.exe', 4_000)];
+    expect(await tracker.liveness([mcp])).toEqual({ same: [], unsure: [] });
+    expect(await tracker.stillRunning([mcp])).toEqual([]);
+    // A creation time missing on either side proves nothing either way.
+    table = [SHELL, AGENT, dated(201, 200, 'node.exe')];
+    expect(await tracker.liveness([mcp])).toEqual({ same: [], unsure: [mcp] });
+    expect(await tracker.stillRunning([mcp])).toEqual([mcp]);
+  });
+
+  it('a stop never kills a process that took a tree pid during the grace', async () => {
+    let table = [SHELL, AGENT, dated(201, 200, 'node.exe', 2_500)];
+    const tracker = await armed(() => table);
+    const kill = vi.fn((pid: number) => {
+      // The agent exits with its MCP server, and an identical server started
+      // by something else gets pid 201 before the grace ends.
+      if (pid === 200) table = [SHELL, dated(201, 999, 'node.exe', 6_000)];
+      else table = table.filter((e) => e.pid !== pid);
+    });
+    const r = await stopAgentTree({
+      tree: () => tracker.agentProcessTree('s1', 'claude'),
+      stillRunning: (es) => tracker.liveness(es),
+      kill,
+      sleep: async () => undefined,
+    });
+    expect(kill.mock.calls).toEqual([[200, 'SIGTERM']]);
+    expect(r).toEqual({ ok: true, stopped: true, pid: 200, killed: 2 });
+  });
+
+  it('a stop never kills a tree process a later read cannot date, and is not confirmed while it runs', async () => {
+    let table = [SHELL, AGENT, dated(201, 200, 'node.exe', 2_500)];
+    const tracker = await armed(() => table);
+    const kill = vi.fn((pid: number) => {
+      if (pid === 200) table = [SHELL, dated(201, 200, 'node.exe')];
+      else table = table.filter((e) => e.pid !== pid);
+    });
+    const r = await stopAgentTree({
+      tree: () => tracker.agentProcessTree('s1', 'claude'),
+      stillRunning: (es) => tracker.liveness(es),
       kill,
       sleep: async () => undefined,
     });
@@ -803,10 +856,14 @@ describe('the agent tree on Windows is dated', () => {
 
   it('POSIX reparents, so its tree is the plain ppid walk', async () => {
     const table = [SHELL, dated(200, 100, 'claude', 2_000), dated(201, 200, 'node', 1_500), dated(202, 200, 'node')];
-    const tree = await (await armed(() => table, 'linux')).agentProcessTree('s1', 'claude');
+    const tracker = await armed(() => table, 'linux');
+    const tree = await tracker.agentProcessTree('s1', 'claude');
     expect(tree?.root.pid).toBe(200);
     expect(pids(tree?.descendants)).toEqual([201, 202]);
     expect(pids(tree?.uncertain)).toEqual([]);
+    // Nor is a creation time part of a process's identity there.
+    const later = [dated(201, 200, 'node', 9_000), dated(202, 200, 'node', 9_000)];
+    expect(await tracker.liveness(later)).toEqual({ same: later, unsure: [] });
   });
 });
 

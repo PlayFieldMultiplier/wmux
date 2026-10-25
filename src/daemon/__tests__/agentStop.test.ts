@@ -121,6 +121,19 @@ describe('stopAgentTree failures', () => {
     expect(r).toEqual({ ok: true, stopped: true, pid: 100, killed: 1 });
   });
 
+  it('a tree process a later read cannot prove the same is never killed, and fails the stop while it runs', async () => {
+    const alive = new Set([100, 101]);
+    const kill = vi.fn((pid: number) => { alive.delete(pid); });
+    const r = await stopAgentTree({
+      tree: async () => ({ root, descendants: [mcp] }),
+      stillRunning: async (es) => ({ same: [], unsure: es.filter((e) => alive.has(e.pid)) }),
+      kill,
+      sleep: async () => undefined,
+    });
+    expect(kill.mock.calls).toEqual([[100, 'SIGTERM']]);
+    expect(r).toEqual({ ok: false, code: 'still_running', pid: 100 });
+  });
+
   it('a process table that cannot be read fails the stop instead of reading as "nothing runs"', async () => {
     await expect(stopAgentTree({ tree: async () => { throw new Error('ps failed'); }, stillRunning: async () => [], kill: vi.fn() })).rejects.toThrow('ps failed');
   });
