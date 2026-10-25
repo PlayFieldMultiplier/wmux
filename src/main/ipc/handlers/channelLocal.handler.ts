@@ -39,6 +39,7 @@ import { wrapHandler } from '../wrapHandler';
 import type { DaemonClient } from '../../DaemonClient';
 import type { RpcMethod } from '../../../shared/rpc';
 import { teardownWorkspaceDeckState } from '../../deck/deckWorkspaceTeardown';
+import { getWorkspaceRepoStore } from '../../factory/workspaceRepos';
 import { renderStrandedDeckWorkBlock } from '../../deck/deckWorkStore';
 import { recordTaskState } from '../../workLink/a2aProducer';
 import { getWorkLinkStore } from '../../workLink/workLinkStore';
@@ -196,6 +197,8 @@ export function registerChannelLocalHandlers(getDaemonClient: () => DaemonClient
         // so no "running" card points at a workspace that no longer exists.
         const removedWs = (p.workspaceId as string).trim();
         void getWorkLinkStore().abandonOrphaned((id) => id !== removedWs);
+        // Its bots' remembered repository (or None) goes with it.
+        getWorkspaceRepoStore()?.clear(removedWs);
         try {
           const wsId = removedWs;
           await teardownWorkspaceDeckState(wsId, {

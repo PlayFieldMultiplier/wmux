@@ -51,6 +51,7 @@ vi.mock('electron', () => {
 
 import * as electron from 'electron';
 import { registerChannelLocalHandlers } from '../channelLocal.handler';
+import { setWorkspaceRepoStore, type WorkspaceRepoStore } from '../../../factory/workspaceRepos';
 import { IPC } from '../../../../shared/constants';
 import type { DaemonClient } from '../../../DaemonClient';
 
@@ -230,6 +231,21 @@ describe('channelLocal.handler — CHANNEL_MUTATE_LOCAL', () => {
         onStrandedWork: expect.any(Function),
       }));
       expect(res).toMatchObject({ ok: true });
+    });
+
+    it('forgets the removed workspace\'s remembered bot repository, and only on a whole-workspace purge', async () => {
+      const clear = vi.fn();
+      setWorkspaceRepoStore({ clear } as unknown as WorkspaceRepoStore);
+      try {
+        installHandler();
+        const handler = getHandler(IPC.CHANNEL_MUTATE_LOCAL);
+        await handler(fakeEvent, 'a2a.channel.purgeMembership', { verifiedWorkspaceId: 'ws-ceo', workspaceId: 'ws-remove-me', memberId: 'm-1' });
+        expect(clear).not.toHaveBeenCalled();
+        await handler(fakeEvent, 'a2a.channel.purgeMembership', { verifiedWorkspaceId: 'ws-ceo', workspaceId: 'ws-remove-me' });
+        expect(clear).toHaveBeenCalledWith('ws-remove-me');
+      } finally {
+        setWorkspaceRepoStore(null);
+      }
     });
 
     it('does not trigger teardown on per-member purge with memberId', async () => {

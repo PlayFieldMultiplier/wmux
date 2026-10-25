@@ -16,6 +16,8 @@ import { BOTS_PLAN_CONSENT_VERSION } from '../../../shared/factorySettings';
 import { FIRST_RUN_BOT_WORKERS } from '../../../shared/firstRun';
 import { FIRST_RUN_BOT_JOB, checkFirstRunFolder, firstRunBot } from '../firstBot';
 import { checkFolderHandler, firstBotHandler } from '../index';
+import { WorkspaceRepoStore, workspaceReposPath } from '../../factory/workspaceRepos';
+import { persisterWritesSettled } from '../../factory/versionedFile';
 import type { GitResult } from '../../git/git';
 
 let dir = '';
@@ -27,6 +29,7 @@ beforeEach(() => {
 });
 afterEach(async () => {
   await store.flush().catch(() => undefined);
+  await persisterWritesSettled();
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -75,6 +78,13 @@ describe('the first run\'s bot', () => {
     const again = await firstRunBot(reloaded, consented(), req, deps());
     expect(again).toMatchObject({ ok: true, created: false, bot: { id: a.bot.id } });
     expect(reloaded.list()).toHaveLength(1);
+  });
+
+  it('its folder\'s repository becomes the workspace\'s, so Add bot there does not ask again', async () => {
+    const records = new WorkspaceRepoStore({ file: workspaceReposPath(dir) });
+    records.load();
+    expect(await firstRunBot(store, consented(), req, { ...deps(), records })).toMatchObject({ ok: true, created: true });
+    expect(records.get('ws-1')).toMatchObject({ repo: { repoKey: 'github.com/example/app', repoPath: path.normalize('/src/app') } });
   });
 
   it('has no worker slots, a read-only job and its folder\'s repository', async () => {

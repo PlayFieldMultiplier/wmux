@@ -393,6 +393,55 @@ describe('Bots page', () => {
     expect(q('[data-bots-chat]')?.getAttribute('data-bots-chat')).toBe('bot:bot-0000000e');
   });
 
+  it('first screen: None pressed is sent with Start (noRepo), so main remembers it', async () => {
+    bots = [];
+    seedRooms();
+    act(() => useStore.setState({ activeWorkspaceId: 'w1' } as never));
+    const suggestRepo = vi.fn(async () => ({ ok: true as const, repoKey: 'github.com/acme/app', root: '/r/app', displayRoot: '/r/app', inherited: false }));
+    const created = botRow('bot-0000000e', 'lead', 'w1', 9, 'Ada').bot;
+    const create = vi.fn(async () => ({ ok: true as const, bot: created }));
+    setFactoryBotPort({ ...port, create, createTeam: vi.fn(), suggestRepo } as unknown as FactoryBotPort);
+    await render(<BotsPage engine={{}} />);
+    await act(async () => { await Promise.resolve(); });
+    const input = q<HTMLInputElement>('[data-bots-first-name]')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'Ada');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    act(() => { q<HTMLButtonElement>('[data-testid="factory-add-bot-repo-none"]')!.click(); });
+    await act(async () => { q<HTMLButtonElement>('[data-bots-first-start]')!.click(); });
+    await act(async () => { await Promise.resolve(); });
+    expect(create).toHaveBeenCalledWith({ workspaceId: 'w1', name: 'Ada', noRepo: true });
+  });
+
+  it('first screen: Start and Add a team wait for main\'s repository answer, then send it', async () => {
+    bots = [];
+    seedRooms();
+    act(() => useStore.setState({ activeWorkspaceId: 'w1' } as never));
+    let answer: (s: { ok: true; repoKey: string; root: string; displayRoot: string; inherited: boolean }) => void = () => undefined;
+    const suggestRepo = vi.fn(() => new Promise((r) => { answer = r; }));
+    const created = botRow('bot-0000000e', 'lead', 'w1', 9, 'Ada').bot;
+    const create = vi.fn(async () => ({ ok: true as const, bot: created }));
+    setFactoryBotPort({ ...port, create, createTeam: vi.fn(), suggestRepo } as unknown as FactoryBotPort);
+    await render(<BotsPage engine={{}} />);
+    const start = q<HTMLButtonElement>('[data-bots-first-start]')!;
+    const team = q<HTMLButtonElement>('[data-bots-first-team]')!;
+    const input = q<HTMLInputElement>('[data-bots-first-name]')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'Ada');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(q('[data-testid="factory-add-bot-repo-row"]')?.getAttribute('data-repo-kind')).toBe('checking');
+    expect(start.disabled).toBe(true);
+    expect(team.disabled).toBe(true);
+    await act(async () => { answer({ ok: true, repoKey: 'github.com/acme/app', root: '/r/app', displayRoot: '/r/app', inherited: false }); });
+    expect(start.disabled).toBe(false);
+    expect(team.disabled).toBe(false);
+    await act(async () => { start.click(); });
+    await act(async () => { await Promise.resolve(); });
+    expect(create).toHaveBeenCalledWith({ workspaceId: 'w1', name: 'Ada', repoFolder: '/r/app' });
+  });
+
   it('first screen: a team answer with nothing made says so and opens nothing; the lead opens wherever it is in the answer', async () => {
     bots = [];
     seedRooms();

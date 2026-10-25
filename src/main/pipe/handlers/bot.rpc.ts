@@ -52,7 +52,10 @@ import { taskIdOfFactId, type WakeTaskFiles, type WakeTaskSummary } from '../../
 import { getTaskFolderPorts, reportFiles, taskFolderKind, type TaskMission } from '../../factory/taskFolderCleanup';
 import type { LedgerEntry } from '../../../shared/ledger';
 import { ROOM_FILE_LIMITS } from '../../../shared/roomFiles';
-import { botRepoFromFolder, greetNewBot } from '../../factory/botCreate';
+import { botRepoFromFolder, greetNewBot, otherBotsRepo, recordWorkspaceRepo, withWorkspaceRepoLock, workspaceBotsRepo } from '../../factory/botCreate';
+import { normalizeRepoKey } from '../../../shared/repoKey';
+import { sameRepoKey } from '../../../shared/forgeHosts';
+import { WorkspaceRepoStore, getWorkspaceRepoStore, setWorkspaceRepoStore, workspaceReposPath } from '../../factory/workspaceRepos';
 import { DISMISSED_ANSWER, getHandoffRouter } from '../../factory/handoffRouter';
 import { getWakeTaint, guestGateProvenance, type GuestProvenance, type WakeTaint } from '../../factory/wakeTaint';
 import { TAINTED_CONVERSATION_SAVES_NOTHING, conversationTainted } from '../../factory/conversationMarks';
@@ -384,19 +387,37 @@ export function registerBotRpcHandlers(
       const acpRefused = acpEngineRefusal(patch.engine, l.store.get(botId) ?? undefined);
       if (acpRefused) return acpRefused;
     }
-    // A picked folder becomes the repo as "Add bot" resolves it (botCreate.ts).
-    if ('repoFolder' in patch) {
-      const { repoFolder, ...rest } = patch;
-      if ('repo' in rest) return refuse('invalid_argument', 'send repo or repoFolder, not both');
-      const resolved = await botRepoFromFolder(l.store, botId, repoFolder);
-      if (!resolved.ok) return refuse(resolved.code, resolved.message);
-      patch = { ...rest, repo: resolved.repo };
-    }
-    const r = l.store.update(botId, patch);
-    if (!r.ok) return refuse(r.code, r.message);
-    l.runtime.profileChanged(botId);
-    if ('job' in patch && r.bot.job) setJobPorts.jobGiven?.(botId);
-    return { ok: true, bot: pipeProfile(r.bot), status: l.runtime.status(botId) };
+    // A repository set here, from a picked folder or as a `repo` itself, is
+    // the workspace's: checked against its other bots' (a workspace works on
+    // one), saved, remembered and given to its bots without one, all under
+    // the workspace's lock (botCreate.ts withWorkspaceRepoLock).
+    const setsRepo = 'repoFolder' in patch || (!!patch.repo && typeof patch.repo === 'object');
+    const apply = async (): Promise<unknown> => {
+      if ('repoFolder' in patch) {
+        // A picked folder becomes the repo as "Add bot" resolves it.
+        const { repoFolder, ...rest } = patch;
+        if ('repo' in rest) return refuse('invalid_argument', 'send repo or repoFolder, not both');
+        const resolved = await botRepoFromFolder(l.store, botId, repoFolder);
+        if (!resolved.ok) return refuse(resolved.code, resolved.message);
+        patch = { ...rest, repo: resolved.repo };
+      } else if (setsRepo) {
+        const key = normalizeRepoKey((patch.repo as { repoKey?: unknown }).repoKey);
+        const current = otherBotsRepo(l.store, botId);
+        if (key && current && !sameRepoKey(current.repoKey, key)) {
+          return refuse('repo_mismatch', `This workspace's other bots work on ${current.repoKey} (${current.repoPath}); the repository given is ${key}. A workspace works on one repository.`);
+        }
+      }
+      // A repository a bot of the workspace already held is not newly chosen:
+      // the bots without one were left so by the owner and stay so.
+      const heldBefore = workspaceBotsRepo(l.store, l.store.get(botId)?.workspaceId) !== null;
+      const r = l.store.update(botId, patch);
+      if (!r.ok) return refuse(r.code, r.message);
+      l.runtime.profileChanged(botId);
+      if (setsRepo && r.bot.repo) recordWorkspaceRepo(l.store, r.bot.workspaceId, r.bot.repo, { profileChanged: (id) => l.runtime.profileChanged(id) }, { fill: !heldBefore });
+      if ('job' in patch && r.bot.job) setJobPorts.jobGiven?.(botId);
+      return { ok: true, bot: pipeProfile(r.bot), status: l.runtime.status(botId) };
+    };
+    return setsRepo ? withWorkspaceRepoLock(l.store.get(botId)?.workspaceId, apply) : apply();
   });
 
   // Removing a bot stops its work first, as Stop does for one bot
@@ -579,6 +600,9 @@ export function botRuntimeModule(router: FactoryRouter, deps: FactoryHostDeps, o
       setGuestWorkspaceStore(guestWorkspaces);
       const store = new BotStore(botsFilePath(wmuxDir), { defaultEngine: () => runnableDefaultEngine(settings.get().defaultEngine) });
       store.load();
+      const workspaceRepos = new WorkspaceRepoStore({ file: workspaceReposPath(wmuxDir) });
+      workspaceRepos.load();
+      setWorkspaceRepoStore(workspaceRepos);
       const sessions = new BotSessionStore(botSessionsPath(wmuxDir));
       sessions.load();
       const receipts = new BotFanoutReceipts(botFanoutReceiptsPath(wmuxDir));
@@ -731,9 +755,12 @@ export function botRuntimeModule(router: FactoryRouter, deps: FactoryHostDeps, o
       setHeldFanouts(null);
       setWakeQueue(null);
       setBotStore(null);
+      const workspaceRepos = getWorkspaceRepoStore();
+      setWorkspaceRepoStore(null);
       setGuestWorkspaceStore(null);
       setFactorySettingsStore(null);
       await l?.store.flush().catch(() => undefined);
+      await workspaceRepos?.flush().catch(() => undefined);
     },
   };
 }

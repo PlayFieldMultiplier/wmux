@@ -236,7 +236,11 @@ export function registerAllHandlers(
   const cleanupTrackRecord = registerTrackRecordHandlers(getWindow);
   // Agent factory bots: list, status and settings for the renderer.
   const cleanupWorkflows = registerWorkflowHandlers(getWindow);
-  const cleanupFactory = registerFactoryHandlers(getWindow, { cwdOf: getCwd });
+  const cleanupFactory = registerFactoryHandlers(getWindow, {
+    cwdOf: getCwd,
+    // A WSL pane's distro, for its Linux cwd (botCreate.ts workspaceFolders).
+    ...(daemonClient ? { daemonRpc: (method, params) => daemonClient.rpc(method, params) } : {}),
+  });
   const cleanupGitShip = registerGitShipHandlers();
   const cleanupGhLogin = registerGhLoginHandlers(getWindow);
   const cleanupStarPrompt = registerStarPromptHandlers(getWindow);
