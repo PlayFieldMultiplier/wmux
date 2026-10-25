@@ -148,6 +148,50 @@ describe('web.handler — forwarding', () => {
     expect(params['inheritUnsetGrants']).toBe(true);
   });
 
+  describe('the port (Use port N)', () => {
+    function installPorts(status: WebTerminalInfo, start: (params: Record<string, unknown>) => WebTerminalInfo | Error): void {
+      rpc = vi.fn(async (method: string, params: Record<string, unknown>) => {
+        if (method === 'daemon.web.status') return status;
+        const r = start(params);
+        if (r instanceof Error) throw r;
+        return r;
+      });
+      const dc = { rpc, isConnected: true } as unknown as DaemonClient;
+      registerWebHandlers(() => dc, execAbsent);
+    }
+
+    it('a chosen port is started on and remembered', async () => {
+      installPorts({ running: false, preferredPort: 7681 }, () => ({ running: true }));
+      await getHandler(IPC.WEB_START)(fakeEvent, { port: 7690 });
+      const params = rpc.mock.calls.find((c) => c[0] === 'daemon.web.start')?.[1] as Record<string, unknown>;
+      expect(params).toMatchObject({ port: 7690, rememberPort: true });
+    });
+
+    it('without one, the remembered port is used and not re-saved', async () => {
+      installPorts({ running: false, preferredPort: 7690 }, () => ({ running: true }));
+      await getHandler(IPC.WEB_START)(fakeEvent, {});
+      const params = rpc.mock.calls.find((c) => c[0] === 'daemon.web.start')?.[1] as Record<string, unknown>;
+      expect(params['port']).toBe(7690);
+      expect(params).not.toHaveProperty('rememberPort');
+    });
+
+    it('an out-of-range port is ignored', async () => {
+      installPorts({ running: false }, () => ({ running: true }));
+      await getHandler(IPC.WEB_START)(fakeEvent, { port: 80 });
+      const params = rpc.mock.calls.find((c) => c[0] === 'daemon.web.start')?.[1] as Record<string, unknown>;
+      expect(params['port']).toBe(WEB_DEFAULT_PORT);
+      expect(params).not.toHaveProperty('rememberPort');
+    });
+
+    it('a failed bind comes back with the code and port the daemon kept', async () => {
+      const listenError = { code: 'EADDRINUSE', port: 7681, host: WEB_LOOPBACK_HOST };
+      installPorts({ running: false, preferredPort: 7681, listenError }, () => new Error('listen EADDRINUSE: address already in use 127.0.0.1:7681'));
+      const res = (await getHandler(IPC.WEB_START)(fakeEvent, {})) as WebTerminalInfo;
+      expect(res).toMatchObject({ running: false, listenError });
+      expect(res.error).toContain('EADDRINUSE');
+    });
+  });
+
   describe('setGrants (apply while running)', () => {
     /** A daemon that answers status with `status` and echoes starts back as running. */
     function installRouted(status: WebTerminalInfo): void {

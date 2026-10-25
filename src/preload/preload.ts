@@ -109,6 +109,8 @@ import type {
   LanLinkSendArgs,
   LanLinkPeersListResult,
 } from '../shared/lanlink';
+import type { FirewallActionResult, FirewallListener, InboundStatusView } from '../shared/netFirewall';
+import type { ListenProblemReport } from '../shared/netListen';
 import type {
   A2aRemoteExposureGetResult,
   A2aRemoteExposureSetResult,
@@ -2356,6 +2358,18 @@ document.addEventListener('DOMContentLoaded', () => {
   peersList: () => ipcRenderer.invoke(IPC.LANLINK_PEERS_LIST) as Promise<LanLinkPeersListResult>,
   peersRemove: (peerUuid: string) =>
     ipcRenderer.invoke(IPC.LANLINK_PEERS_REMOVE, peerUuid) as Promise<{ ok: true }>,
+};
+
+// Firewall and port problems of the listeners other PCs reach. The Fix and
+// Remove each show one OS consent prompt; main refuses them from anything but
+// the main window.
+(electronAPI as Record<string, unknown>).netFirewall = {
+  status: (listener: FirewallListener) => ipcRenderer.invoke(IPC.NET_FIREWALL_STATUS, listener) as Promise<InboundStatusView>,
+  listenProblem: (listener: FirewallListener) =>
+    ipcRenderer.invoke(IPC.NET_LISTEN_PROBLEM, listener) as Promise<ListenProblemReport | null>,
+  fix: (listener: FirewallListener) => ipcRenderer.invoke(IPC.NET_FIREWALL_FIX, listener) as Promise<FirewallActionResult>,
+  remove: (listener: FirewallListener) => ipcRenderer.invoke(IPC.NET_FIREWALL_REMOVE, listener) as Promise<FirewallActionResult>,
+  open: (which: 'firewall' | 'network') => ipcRenderer.invoke(IPC.NET_FIREWALL_OPEN, which) as Promise<{ ok: boolean }>,
 };
 
 // Cross-host A2A control plane (Settings → LAN). Request/response via invoke,

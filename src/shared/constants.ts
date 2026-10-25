@@ -734,6 +734,12 @@ export const IPC = {
   LANLINK_PEERS_REMOVE: 'lanlink:peers:remove',
   // Cross-host A2A control plane (Settings → LAN → renderer → main → daemon
   // control pipe `a2a.remote.*`).
+  // Remote pairing's firewall and port problems (net.* in the daemon; the Fix runs in main).
+  NET_FIREWALL_STATUS: 'netFirewall:status',
+  NET_FIREWALL_FIX: 'netFirewall:fix',
+  NET_FIREWALL_REMOVE: 'netFirewall:remove',
+  NET_FIREWALL_OPEN: 'netFirewall:open',
+  NET_LISTEN_PROBLEM: 'netFirewall:listenProblem',
   A2A_REMOTE_STATUS: 'a2aRemote:status',
   A2A_REMOTE_CONFIGURE: 'a2aRemote:configure',
   A2A_REMOTE_PAIR_BEGIN: 'a2aRemote:pair:begin',
