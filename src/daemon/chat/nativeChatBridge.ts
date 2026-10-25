@@ -198,7 +198,8 @@ export interface NativeChatBridge extends Omit<ChatBridge, QueueMethods>, Requir
    * `daemon.transcript.interrupt`: the desktop Stop, through the same lock,
    * once-per-turn latch and cooldown as the phone cancel. No receipt.
    */
-  desktopInterrupt(id: string, agentSessionId: string): Promise<ChatInterruptResult>;
+  /** `turnId`: stop only that turn; another one running is `not_running`. */
+  desktopInterrupt(id: string, agentSessionId: string, turnId?: string): Promise<ChatInterruptResult>;
   /** `daemon.transcript.rewind`: Claude's own Rewind picker, under the same send lock as Stop. */
   desktopRewind(id: string, opts?: { kitty?: boolean }): Promise<ClaudeRewindResult>;
   /** A file-binding send is between its first check and its last write (Stop must wait). */
@@ -1705,7 +1706,7 @@ export function createChatBridge<P extends ChatPane>(deps: NativeChatBridgeDeps<
     sent: 'sent', not_running: 'not_running', pending: 'not_running', prompt_active: 'blocked', session_changed: 'session_changed', unconfirmed: 'error',
   };
 
-  const desktopInterrupt = async (id: string, agentSessionId: string): Promise<ChatInterruptResult> => {
+  const desktopInterrupt = async (id: string, agentSessionId: string, turnId?: string): Promise<ChatInterruptResult> => {
     if (!id) return 'unavailable';
     const found = await route(id);
     if (found.kind === 'native') {
@@ -1720,7 +1721,7 @@ export function createChatBridge<P extends ChatPane>(deps: NativeChatBridgeDeps<
     }
     // No registry = "may be pending".
     if (!deps.approvals()) return 'unavailable';
-    return DESKTOP_INTERRUPT[await interruptLocked(id, agentSessionId)];
+    return DESKTOP_INTERRUPT[await interruptLocked(id, agentSessionId, turnId !== undefined ? { turnId } : {})];
   };
 
   const desktopRewind = async (id: string, opts: { kitty?: boolean } = {}): Promise<ClaudeRewindResult> => {

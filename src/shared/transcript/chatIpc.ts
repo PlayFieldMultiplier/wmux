@@ -8,4 +8,5 @@ export const CHAT_IPC = {
   unsubscribe: 'chat:unsubscribe', codeBlock: 'chat:code-block',
   append: 'chat:append', gate: 'chat:gate', openGates: 'chat:open-gates', send: 'chat:send',
   interrupt: 'chat:interrupt', rewind: 'chat:rewind', attachment: 'chat:attachment',
+  stallKeepWaiting: 'chat:stall-keep-waiting', stallPrefill: 'chat:stall-prefill',
 } as const;

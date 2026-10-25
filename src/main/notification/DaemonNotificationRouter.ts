@@ -1617,7 +1617,13 @@ export class DaemonNotificationRouter {
         && getLastBroadcastAgentStatus(id) === 'running') this.endedTurnAwaitingIdle.add(id);
     };
 
+    // StallWatch's verdict for the pane's Claude turn, relayed as it is.
+    const onAgentStall = (payload: { sessionId: string; stalledSince: number | null }) => {
+      broadcastMetadataUpdate(this.getWindow(), { ptyId: payload.sessionId, stalledSince: payload.stalledSince });
+    };
+
     this.daemonClient.on('session:agentTurn', onAgentTurn);
+    this.daemonClient.on('session:agentStall', onAgentStall);
     this.daemonClient.on('session:agent', onAgent);
     this.daemonClient.on('session:active', onActive);
     this.daemonClient.on('session:idle', onIdle);
@@ -1658,6 +1664,7 @@ export class DaemonNotificationRouter {
 
     this.cleanups.push(
       () => this.daemonClient.off('session:agentTurn', onAgentTurn),
+      () => this.daemonClient.off('session:agentStall', onAgentStall),
       () => this.daemonClient.off('session:agent', onAgent),
       () => this.daemonClient.off('session:active', onActive),
       () => this.daemonClient.off('session:idle', onIdle),
