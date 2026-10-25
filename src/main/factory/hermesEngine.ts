@@ -251,16 +251,25 @@ export interface HermesGatewayState {
   argv: string[];
   hermesHome: string;
   platforms: Record<string, unknown>;
+  /** Hermes's start record of the gateway process (gateway/status.py:472-504): on
+   *  macOS and Windows its creation time in centiseconds since the epoch, on Linux
+   *  its start in clock ticks since boot (/proc/<pid>/stat field 22). */
+  startTime?: number;
+  /** When the file was last written (ms). */
+  writtenAt: number;
 }
 
 /** R's gateway_state.json, when it names a gateway. */
 export function readHermesGatewayState(root: string): HermesGatewayState | null {
   try {
-    const raw = JSON.parse(fs.readFileSync(path.join(root, 'gateway_state.json'), 'utf8')) as Record<string, unknown>;
+    const file = path.join(root, 'gateway_state.json');
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>;
     const pid = raw.pid;
     if (!Number.isSafeInteger(pid) || (pid as number) <= 0) return null;
     return {
       pid: pid as number,
+      ...(Number.isSafeInteger(raw.start_time) && (raw.start_time as number) > 0 ? { startTime: raw.start_time as number } : {}),
+      writtenAt: fs.statSync(file).mtimeMs,
       argv: Array.isArray(raw.argv) ? raw.argv.filter((a): a is string => typeof a === 'string') : [],
       hermesHome: typeof raw.hermes_home === 'string' ? raw.hermes_home : '',
       platforms: raw.platforms && typeof raw.platforms === 'object' && !Array.isArray(raw.platforms) ? raw.platforms as Record<string, unknown> : {},
@@ -284,9 +293,11 @@ export function isHermesGatewayOf(root: string, state: HermesGatewayState, same:
   return same(state.hermesHome, root) && state.argv.includes('gateway') && state.argv.includes('run');
 }
 
-/** A running process as the OS reports it: its command line, and its
- *  HERMES_HOME when the OS lets wmux read its environment (not Windows). */
-export interface LiveProcess { command: string; hermesHome?: string }
+/** A running process as the OS reports it: its command line, its
+ *  HERMES_HOME when the OS lets wmux read its environment (not Windows), and
+ *  when it was created: `createdAt` (ms since the epoch; macOS, Windows) or
+ *  `startTicks` (Linux, the unit Hermes records there). */
+export interface LiveProcess { command: string; hermesHome?: string; createdAt?: number; startTicks?: number }
 export type ProcessInfo = (pid: number) => Promise<LiveProcess | null>;
 
 const execText = (file: string, args: string[]): Promise<string | null> => new Promise((resolve) => {
@@ -297,17 +308,28 @@ const execText = (file: string, args: string[]): Promise<string | null> => new P
 export const processInfo: ProcessInfo = async (pid) => {
   if (!Number.isSafeInteger(pid) || pid <= 0) return null;
   if (process.platform === 'win32') {
-    const ps = await execText('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `(Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}').CommandLine`]);
-    const out = ps ?? await execText('wmic', ['process', 'where', `ProcessId=${pid}`, 'get', 'CommandLine', '/value']);
-    const command = (out ?? '').replace(/^\s*CommandLine=/m, '').trim();
-    return command ? { command } : null;
+    const powershell = path.win32.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+    // Line 1: creation time (ms since the epoch); the rest: the command line.
+    const script = `$p = Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}'; if ($p) { ([DateTimeOffset]$p.CreationDate).ToUnixTimeMilliseconds(); $p.CommandLine }`;
+    const ps = await execText(powershell, ['-NoProfile', '-NonInteractive', '-Command', script]);
+    if (ps !== null) return parseWindowsProcess(ps);
+    const wmic = await execText('wmic', ['process', 'where', `ProcessId=${pid}`, 'get', 'CommandLine,CreationDate', '/value']);
+    return wmic === null ? null : parseWmicProcess(wmic);
   }
   if (process.platform === 'linux') {
     try {
       const command = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').join(' ').trim();
-      const env = fs.readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0');
-      const home = env.find((e) => e.startsWith('HERMES_HOME='));
-      return command ? { command, ...(home ? { hermesHome: home.slice('HERMES_HOME='.length) } : {}) } : null;
+      if (!command) return null;
+      // Field 22, counted after the parenthesised name (which may hold spaces).
+      const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+      const ticks = Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]);
+      let home: string | undefined;
+      try {
+        home = fs.readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0').find((e) => e.startsWith('HERMES_HOME='))?.slice('HERMES_HOME='.length);
+      } catch {
+        home = undefined;
+      }
+      return { command, ...(home !== undefined ? { hermesHome: home } : {}), ...(Number.isSafeInteger(ticks) ? { startTicks: ticks } : {}) };
     } catch {
       return null;
     }
@@ -318,15 +340,52 @@ export const processInfo: ProcessInfo = async (pid) => {
   const withEnv = (await execText('ps', ['-E', '-ww', '-o', 'command=', '-p', String(pid)]))?.trim() ?? '';
   const env = withEnv.startsWith(command) ? withEnv.slice(command.length) : '';
   const m = /(?:^|\s)HERMES_HOME=(.*?)(?=\s[A-Za-z_][A-Za-z0-9_]*=|$)/.exec(env);
-  return { command, ...(m ? { hermesHome: m[1] } : {}) };
+  const started = Date.parse((await execText('ps', ['-o', 'lstart=', '-p', String(pid)]))?.trim() ?? '');
+  return { command, ...(m ? { hermesHome: m[1] } : {}), ...(Number.isFinite(started) ? { createdAt: started } : {}) };
 };
 
-/** Whether the live process is a Hermes gateway of R: its command line runs
- *  `hermes_cli … gateway run`, and its HERMES_HOME, where readable, is R.
- *  A PID reused by another process after a gateway died fails this. Pure. */
-export function liveGatewayOf(root: string, live: LiveProcess | null, same: (a: string, b: string) => boolean = samePath): boolean {
+/** PowerShell's answer: the creation time (ms) on its first line, the command line after. Pure. */
+export function parseWindowsProcess(out: string): LiveProcess | null {
+  const [first, ...rest] = out.replace(/\r/g, '').split('\n');
+  const command = rest.join(' ').trim();
+  const createdAt = Number(first.trim());
+  return command ? { command, ...(Number.isSafeInteger(createdAt) && createdAt > 0 ? { createdAt } : {}) } : null;
+}
+
+/** wmic's `/value` answer: CommandLine= and CreationDate=yyyymmddHHMMSS.ffffff±UUU (minutes from UTC). Pure. */
+export function parseWmicProcess(out: string): LiveProcess | null {
+  const command = /^\s*CommandLine=(.*)$/m.exec(out)?.[1]?.trim() ?? '';
+  const d = /^\s*CreationDate=(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})\.(\d{3})\d*([+-]\d+)/m.exec(out);
+  const createdAt = d ? Date.UTC(+d[1], +d[2] - 1, +d[3], +d[4], +d[5], +d[6], +d[7]) - Number(d[8]) * 60_000 : NaN;
+  return command ? { command, ...(Number.isFinite(createdAt) ? { createdAt } : {}) } : null;
+}
+
+/** How much later than the gateway's start record a genuine gateway process
+ *  may read as created (clock and rounding slack). */
+const CREATED_SLACK_MS = 2_000;
+
+/** Whether the live process is the gateway `state` names in R: its command
+ *  line runs `hermes_cli … gateway run`, and its HERMES_HOME is R. Where that
+ *  cannot be read (Windows, or an unreadable environment), the process must
+ *  instead be no newer than the state's start record (Hermes's start time,
+ *  else the file's last write): a PID reused after the gateway died fails
+ *  this. Unknown creation time: not the gateway. Pure. */
+export function liveGatewayOf(
+  root: string,
+  live: LiveProcess | null,
+  state: Pick<HermesGatewayState, 'startTime' | 'writtenAt'>,
+  same: (a: string, b: string) => boolean = samePath,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
   if (!live || !/hermes_cli/.test(live.command) || !/\bgateway\s+run\b/.test(live.command)) return false;
-  return live.hermesHome === undefined || same(live.hermesHome, root);
+  if (live.hermesHome !== undefined) return same(live.hermesHome, root);
+  if (platform === 'linux') {
+    // Hermes records Linux start ticks: the same process has the same value.
+    return live.startTicks !== undefined && state.startTime !== undefined && live.startTicks === state.startTime;
+  }
+  if (live.createdAt === undefined) return false;
+  const recorded = state.startTime !== undefined ? state.startTime * 10 : state.writtenAt;
+  return live.createdAt <= recorded + CREATED_SLACK_MS;
 }
 
 // ── the probe: can Hermes start an MCP server? ──────────────────────────────

@@ -28,13 +28,13 @@ describe('HermesHost gateway', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  const writeGateway = (pid: number, argv = ['python', '-m', 'hermes_cli.main', 'gateway', 'run', '--quiet', '--idle-exit']): void => {
+  const writeGateway = (pid: number, argv = ['python', '-m', 'hermes_cli.main', 'gateway', 'run', '--quiet', '--idle-exit'], startTime?: number): void => {
     const root = hermesRoot(dir);
     fs.mkdirSync(root, { recursive: true });
-    fs.writeFileSync(path.join(root, 'gateway_state.json'), JSON.stringify({ pid, argv, hermes_home: root, platforms: {} }));
+    fs.writeFileSync(path.join(root, 'gateway_state.json'), JSON.stringify({ pid, argv, hermes_home: root, platforms: {}, ...(startTime ? { start_time: startTime } : {}) }));
     alive.add(pid);
   };
-  const host = (): HermesHost => {
+  const host = (opts: { platform?: NodeJS.Platform; createdAt?: number } = {}): HermesHost => {
     const run: HermesRun = async (_exe, args) => {
       calls.push(args);
       if (args[0] === 'gateway' && args[1] === 'stop' && stopWorks) alive.clear();
@@ -45,7 +45,10 @@ describe('HermesHost gateway', () => {
       resolveExe: () => '/bin/hermes',
       run,
       pidAlive: (pid) => alive.has(pid),
-      processInfo: async (pid) => (alive.has(pid) ? { command: liveCommand, hermesHome: hermesRoot(dir) } : null),
+      // Windows: no environment to read, only the command line and creation time.
+      processInfo: async (pid) => (!alive.has(pid) ? null
+        : opts.platform === 'win32' ? { command: liveCommand, createdAt: opts.createdAt } : { command: liveCommand, hermesHome: hermesRoot(dir) }),
+      ...(opts.platform ? { platform: opts.platform } : {}),
       kill: (pid) => {
         killed.push(pid);
         alive.delete(pid);
@@ -100,5 +103,24 @@ describe('HermesHost gateway', () => {
     await stale.shutdown();
     expect(killed).toEqual([201]);
     expect(alive.has(202)).toBe(true);
+  });
+
+  it('on Windows signals only the process that is no newer than the gateway\'s start record', async () => {
+    stopWorks = false;
+    const started = Date.parse('2026-10-25T03:00:00Z');
+    // Another Hermes gateway (the owner's) later took the dead gateway's PID.
+    writeGateway(301, undefined, started / 10);
+    liveCommand = 'C:\\Users\\u\\hermes\\venv\\Scripts\\python.exe -m hermes_cli.main gateway run';
+    const reused = host({ platform: 'win32', createdAt: started + 60_000 });
+    reused.markOwned();
+    await reused.shutdown();
+    expect(killed).toEqual([]);
+    expect(alive.has(301)).toBe(true);
+
+    // The gateway itself (created when Hermes recorded it) is signalled.
+    const genuine = host({ platform: 'win32', createdAt: started + 400 });
+    genuine.markOwned();
+    await genuine.shutdown();
+    expect(killed).toEqual([301]);
   });
 });

@@ -59,6 +59,8 @@ export interface HermesHostDeps {
   pidAlive?: (pid: number) => boolean;
   /** The live process behind a PID (default: the OS's command line). */
   processInfo?: ProcessInfo;
+  /** The OS the PID check reads as (default process.platform). */
+  platform?: NodeJS.Platform;
   log?: (line: string) => void;
 }
 
@@ -201,7 +203,7 @@ export class HermesHost {
       // The state file may outlive its gateway: signal the PID only while the
       // live process is still R's gateway.
       const live = await (this.deps.processInfo ?? processInfo)(still.pid);
-      if (!liveGatewayOf(root, live)) {
+      if (!liveGatewayOf(root, live, still, undefined, this.deps.platform)) {
         this.log(`[hermes] pid ${still.pid} in gateway_state.json is not a Hermes gateway of wmux's home; not signalling it`);
       } else {
         this.log(`[hermes] gateway ${still.pid} did not stop; signalling it`);

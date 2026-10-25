@@ -10,6 +10,8 @@ import {
   hermesReadiness,
   hermesSettingsMismatches,
   liveGatewayOf,
+  parseWindowsProcess,
+  parseWmicProcess,
   type HermesProbeResult,
   type HermesRun,
 } from '../hermesEngine';
@@ -144,15 +146,27 @@ describe('hermesReadiness', () => {
 });
 
 describe('liveGatewayOf and the version range', () => {
-  it('a live gateway of R by its command line and HERMES_HOME; a pre-release is before its release', () => {
+  it('a live gateway of R by its command line and HERMES_HOME, else by its start record; a pre-release is before its release', () => {
     const same = (a: string, b: string) => a === b;
     const cmd = 'python -m hermes_cli.main --profile default gateway run --quiet --idle-exit';
-    expect(liveGatewayOf('/r', { command: cmd, hermesHome: '/r' }, same)).toBe(true);
-    expect(liveGatewayOf('/r', { command: cmd }, same)).toBe(true);
-    expect(liveGatewayOf('/r', { command: cmd, hermesHome: '/home/u/.hermes' }, same)).toBe(false);
-    expect(liveGatewayOf('/r', { command: 'python -m hermes_cli.main acp' }, same)).toBe(false);
-    expect(liveGatewayOf('/r', { command: '/usr/sbin/sshd -D' }, same)).toBe(false);
-    expect(liveGatewayOf('/r', null, same)).toBe(false);
+    const state = { startTime: 179289636767, writtenAt: 1_792_896_400_000 };
+    expect(liveGatewayOf('/r', { command: cmd, hermesHome: '/r' }, state, same, 'darwin')).toBe(true);
+    expect(liveGatewayOf('/r', { command: cmd, hermesHome: '/home/u/.hermes' }, state, same, 'darwin')).toBe(false);
+    expect(liveGatewayOf('/r', { command: 'python -m hermes_cli.main acp' }, state, same, 'darwin')).toBe(false);
+    expect(liveGatewayOf('/r', { command: '/usr/sbin/sshd -D' }, state, same, 'darwin')).toBe(false);
+    expect(liveGatewayOf('/r', null, state, same, 'darwin')).toBe(false);
+    // No environment (Windows): created by the recorded start (centiseconds), with 2 s slack.
+    expect(liveGatewayOf('/r', { command: cmd, createdAt: 1_792_896_367_670 + 1_500 }, state, same, 'win32')).toBe(true);
+    expect(liveGatewayOf('/r', { command: cmd, createdAt: 1_792_896_367_670 + 5_000 }, state, same, 'win32')).toBe(false);
+    expect(liveGatewayOf('/r', { command: cmd }, state, same, 'win32')).toBe(false);
+    // No start record: the file's last write stands in.
+    expect(liveGatewayOf('/r', { command: cmd, createdAt: 1_792_896_399_000 }, { writtenAt: 1_792_896_400_000 }, same, 'win32')).toBe(true);
+    // Linux: the same start ticks Hermes recorded.
+    expect(liveGatewayOf('/r', { command: cmd, startTicks: 5 }, { startTime: 5, writtenAt: 0 }, same, 'linux')).toBe(true);
+    expect(liveGatewayOf('/r', { command: cmd, startTicks: 6 }, { startTime: 5, writtenAt: 0 }, same, 'linux')).toBe(false);
+
+    expect(parseWindowsProcess('1792896367670\r\nC:\\py\\python.exe -m hermes_cli.main gateway run\r\n')).toEqual({ command: 'C:\\py\\python.exe -m hermes_cli.main gateway run', createdAt: 1792896367670 });
+    expect(parseWmicProcess('\r\nCommandLine=python -m hermes_cli.main gateway run\r\nCreationDate=20261025120607.670000+540\r\n')).toEqual({ command: 'python -m hermes_cli.main gateway run', createdAt: Date.UTC(2026, 9, 25, 3, 6, 7, 670) });
 
     expect(parseHermesVersion('Hermes Agent v0.22.5-rc1 (x)')).toBe('0.22.5-rc1');
     expect(hermesVersionStatus('0.22.5-rc1')).toBe('outdated');
