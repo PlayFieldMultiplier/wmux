@@ -551,6 +551,11 @@ export const BOT_EVENT = 'bot.event';
 export const BOT_MODE_ARG_PREFIX = '--bot=';
 /** `--bot-token-file=<path>`: where the bot token is read from (once). */
 export const BOT_TOKEN_FILE_ARG_PREFIX = '--bot-token-file=';
+/** `--bot-token-file-keep`: read the token file without deleting it. For an
+ *  agent host that starts the same MCP command more than once per session
+ *  (Hermes: one discovery child, then the one its turns use); the spawner
+ *  removes the file and revokes the token when the session ends. */
+export const BOT_TOKEN_FILE_KEEP_ARG = '--bot-token-file-keep';
 
 function lastArg(argv: readonly string[], prefix: string): string | undefined {
   const hit = [...argv].reverse().find((a) => a.startsWith(prefix));
@@ -570,6 +575,6 @@ export function botTokenFileArgValue(argv: readonly string[]): string | undefine
 
 /** The MCP server args (after the bundle path) for one bot spawn. The role
  *  is the legacy tag; every bot server lists the same shared surface. */
-export function botMcpArgs(role: BotRole, tokenFile: string): string[] {
-  return [`${BOT_MODE_ARG_PREFIX}${role}`, `${BOT_TOKEN_FILE_ARG_PREFIX}${tokenFile}`];
+export function botMcpArgs(role: BotRole, tokenFile: string, keep = false): string[] {
+  return [`${BOT_MODE_ARG_PREFIX}${role}`, `${BOT_TOKEN_FILE_ARG_PREFIX}${tokenFile}`, ...(keep ? [BOT_TOKEN_FILE_KEEP_ARG] : [])];
 }
