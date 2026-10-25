@@ -3101,6 +3101,8 @@ async function prepareInstallQuit(): Promise<void> {
   // must not outlive the app across an update install. It quits through
   // Browser.close like an ordinary quit (disposeAll bounds it at QUIT_GRACE_MS,
   // then signals what is left); the updater installs once this resolves.
+  // The flushes below run because disposeAll settles within QUIT_GRACE_MS,
+  // under the updater's INSTALL_PREPARE_CAP_MS (ChromeLauncher.os.test.ts).
   try {
     await chromeRegistry.disposeAll();
   } catch (err) {

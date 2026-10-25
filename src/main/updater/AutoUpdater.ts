@@ -106,7 +106,7 @@ const INSTALL_LOCK_BUDGET_MS = 60_000;
 const INSTALL_QUIT_WATCHDOG_MS = 30_000;
 // How long the macOS handoff waits on an async install-quit preparation (the
 // agent Chrome's graceful quit, itself bounded at 3 s) before installing anyway.
-const INSTALL_PREPARE_CAP_MS = 5_000;
+export const INSTALL_PREPARE_CAP_MS = 5_000;
 // #1056 — how long to wait for the waiter's heartbeat before concluding the
 // spawn itself did not survive (see waitForWaiterHeartbeat). Short on purpose:
 // unlike the lock budget, this is not waiting on anything that legitimately

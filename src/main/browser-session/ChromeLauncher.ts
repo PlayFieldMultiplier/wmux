@@ -44,7 +44,7 @@ import type { LentLiveTab } from '../../shared/browserAgentControl';
 const READY_TIMEOUT_MS = 10_000;
 const READY_POLL_MS = 250;
 /** How long a Chrome asked to quit through Browser.close gets before a signal. */
-const QUIT_GRACE_MS = 3_000;
+export const QUIT_GRACE_MS = 3_000;
 /** How long a fresh launch waits for session restore to settle its tabs. */
 const RESTORE_SETTLE_MS = 2_000;
 /** How often a protected profile's download guard re-asserts deny. */

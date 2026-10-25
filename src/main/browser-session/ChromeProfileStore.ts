@@ -235,8 +235,9 @@ export class ChromeProfileStore {
   suggestedProfile(): string | undefined {
     const file = this.ensureCache();
     const last = file.lastUsed;
-    if (!last || !file.profiles.includes(last)) return undefined;
-    return Object.values(file.paneBindings).some((b) => sameProfile(b.profile, last)) ? undefined : last;
+    const known = last ? file.profiles.find((p) => sameProfile(p, last)) : undefined;
+    if (!known) return undefined;
+    return Object.values(file.paneBindings).some((b) => sameProfile(b.profile, known)) ? undefined : known;
   }
 
   /** An automation call ran in `profile`: remember it as last used (named profiles only). */
