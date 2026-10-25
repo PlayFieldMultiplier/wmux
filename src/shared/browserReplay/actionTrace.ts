@@ -39,12 +39,30 @@ export const REPLAYABLE_TOOLS = [
   'browser_scroll_into_view',
   'browser_scroll',
   'browser_wait',
+  'browser_file_upload',
 ] as const;
 
 export type ReplayableTool = (typeof REPLAYABLE_TOOLS)[number];
 
 export function isReplayableTool(value: unknown): value is ReplayableTool {
   return typeof value === 'string' && (REPLAYABLE_TOOLS as readonly string[]).includes(value);
+}
+
+// ── File uploads ───────────────────────────────────────────────────────────
+//
+// An upload step never stores a path. The recorder writes one `{{file}}`
+// placeholder per uploaded file (`{{file}}`, `{{file_2}}`, …) joined on NUL,
+// and a replay takes the real paths as variables, so a trace never says which
+// files were sent and one trace serves many uploads. The replayed paths pass
+// the same uploads-root gate the live tool applies.
+
+/** Joins an upload step's per-file placeholders (NUL cannot occur in a path). */
+export const UPLOAD_FILE_SEPARATOR = '\u0000';
+
+/** The `files` argument an upload of `count` files is recorded with. */
+export function uploadFilesPlaceholder(count: number): string {
+  const n = Math.max(1, Math.floor(count));
+  return Array.from({ length: n }, (_, i) => (i === 0 ? '{{file}}' : `{{file_${i + 1}}}`)).join(UPLOAD_FILE_SEPARATOR);
 }
 
 // ── Element axis ───────────────────────────────────────────────────────────

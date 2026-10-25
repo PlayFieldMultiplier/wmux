@@ -18,11 +18,12 @@ unreplayable, so it will never run. Set the workspace's browser backend to
 
 ## Record
 
-There is no "start recording". Every successful action from the ten
+There is no "start recording". Every successful action from the twelve
 replayable tools (`browser_navigate`, `browser_click`, `browser_type`,
 `browser_fill`, `browser_press_key`, `browser_hover`, `browser_drag`,
-`browser_select`, `browser_scroll_into_view`, `browser_scroll`) already goes
-into a 40-slot ring on your connection. When a flow works, name it:
+`browser_select`, `browser_scroll_into_view`, `browser_scroll`,
+`browser_wait`, `browser_file_upload`) already goes into a 40-slot ring on
+your connection. When a flow works, name it:
 
 ```json
 { "action": "save", "name": "weekly-export" }
@@ -37,6 +38,23 @@ Saving the same name again re-records the flow. If the steps are the same, it
 keeps the name's success history and lifts any quarantine, because you are
 asserting these steps are still the current path. If the steps changed, the
 history starts over: the old flow's successes say nothing about the new one.
+
+### File uploads
+
+An upload step never stores the file paths. It is saved with one placeholder
+per file it sent, `{{file}}` and then `{{file_2}}`, `{{file_3}}`, …, so a run
+supplies the files to send, as absolute paths:
+
+```json
+{ "action": "run", "name": "post-photo", "variables": { "file": "<uploads root>/photo.jpg" } }
+```
+
+The paths go through the same check as `browser_file_upload` itself: each must
+be under the uploads root (`~/.wmux/uploads/`, instance suffix applied), or
+the run stops at that step and sends nothing. The step targets the file input
+or upload button it was recorded on. A replayed upload goes through
+Playwright, so one file can be at most 50 MB. A drop-zone-only uploader still
+cannot be recorded, because the live tool cannot drive it either.
 
 ## Replay
 
