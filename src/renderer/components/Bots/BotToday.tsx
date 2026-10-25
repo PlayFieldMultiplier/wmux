@@ -19,7 +19,7 @@ import { openFactorySettings } from './botsAddBot';
 
 type T = (key: string, vars?: Record<string, string | number>) => string;
 
-type EngineErrorCode = 'not_installed' | 'not_logged_in' | 'mcp_missing' | 'acp_test_only' | 'unusable' | 'api_key_missing' | 'subscription_refused' | 'other';
+type EngineErrorCode = 'not_installed' | 'not_logged_in' | 'mcp_missing' | 'acp_test_only' | 'unusable' | 'api_key_missing' | 'subscription_refused' | 'hermes_not_ready' | 'hermes_mcp_missing' | 'hermes_tools_changed' | 'other';
 
 /** "2h 10m", "6h", "45m", "0m". */
 export function workerTimeText(min: number, t: T): string {
@@ -85,6 +85,9 @@ const ENGINE_ERROR_KEYS: Record<EngineErrorCode, string> = {
   unusable: 'botsPage.engineError.unusable',
   api_key_missing: 'settings.factory.claudeAuth.engineError.apiKeyMissing',
   subscription_refused: 'settings.factory.claudeAuth.engineError.subscriptionRefused',
+  hermes_not_ready: 'botsPage.engineError.hermesNotReady',
+  hermes_mcp_missing: 'botsPage.engineError.hermesMcpMissing',
+  hermes_tools_changed: 'botsPage.engineError.hermesToolsChanged',
   other: 'botsPage.engineError.other',
 };
 

@@ -497,6 +497,14 @@ export const IPC = {
   // model turn, and the Claude sign-in (shared/factoryEngine.ts); main window only.
   FACTORY_ENGINE_READINESS: 'factory:engine:readiness',
   FACTORY_ENGINE_LOGIN: 'factory:engine:login',
+  // Whether the Hermes bot engine can run here, checked without a model turn,
+  // and its one-time model setup in a terminal tab (shared/hermesEngine.ts);
+  // main window only.
+  FACTORY_HERMES_READINESS: 'factory:hermes:readiness',
+  FACTORY_HERMES_SETUP: 'factory:hermes:setup',
+  // The owner picks a bot's engine (Claude (SDK) or Hermes); main window only.
+  // The pipe's bot.create / bot.update keep the bot's ACP engine as it is.
+  FACTORY_BOT_SET_ENGINE: 'factory:bot:setEngine',
   // The engines a bot's workers may run on that are installed here
   // (shared/botWorkerAgent.ts); main window only.
   FACTORY_WORKER_AGENTS: 'factory:worker:agents',

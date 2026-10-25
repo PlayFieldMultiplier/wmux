@@ -15,6 +15,12 @@ export type EngineErrorCode =
   | 'api_key_missing'
   /** The Claude subscription refused a bot's request (isSubscriptionRefusal). */
   | 'subscription_refused'
+  /** A Hermes bot's engine is not ready here (hermesEngine.ts readiness). */
+  | 'hermes_not_ready'
+  /** Hermes started without loading the wmux tools (its MCP support). */
+  | 'hermes_mcp_missing'
+  /** Hermes offered a Hermes bot a tool outside wmux's allowlist. */
+  | 'hermes_tools_changed'
   | 'other';
 
 /** How the Claude brain adapters (ClaudeSdkAdapter, ClaudePtyBrainAdapter)
@@ -25,6 +31,11 @@ export const CLAUDE_NOT_FOUND_LEAD = 'Claude Code not found —';
 export function claudeNotFoundMessage(brain: string): string {
   return `${CLAUDE_NOT_FOUND_LEAD} the ${brain} needs a claude install (native installer or npm global). Install it, then retry.`;
 }
+
+/** How the Hermes engine starts the errors it ends a turn with; matched below. */
+export const HERMES_NOT_READY_LEAD = 'Hermes is not ready for wmux bots:';
+export const HERMES_MCP_MISSING_LEAD = 'Hermes did not load the wmux tools:';
+export const HERMES_TOOLS_CHANGED_LEAD = 'Hermes offered a tool wmux does not allow:';
 
 const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -37,6 +48,9 @@ const RULES: readonly { code: EngineErrorCode; re: RegExp }[] = [
   { code: 'api_key_missing', re: /bots are set to run on a claude api key, but/i },
   { code: 'not_logged_in', re: /not signed in|not logged in|sign-?in could not be read|claude auth login/i },
   { code: 'mcp_missing', re: /mcp bundle was not found|would have no tools/i },
+  { code: 'hermes_not_ready', re: new RegExp(escapeRe(HERMES_NOT_READY_LEAD), 'i') },
+  { code: 'hermes_mcp_missing', re: new RegExp(escapeRe(HERMES_MCP_MISSING_LEAD), 'i') },
+  { code: 'hermes_tools_changed', re: new RegExp(escapeRe(HERMES_TOOLS_CHANGED_LEAD), 'i') },
   { code: 'acp_test_only', re: /acp engines run bots only in a test build|acp stub is not available/i },
   // The SDK's own launch failures: the process did not spawn, the native
   // binary is there and fails to start, or claude exited with an error code.

@@ -57,21 +57,25 @@ export const BOT_APPROVAL_IPC = {
  *  the owner's answer is the act (Approve loads the skill, Deny archives the
  *  proposal). `owner_profile` is a change a bot proposes to the owner's
  *  profile (shared/botMemory.ts, target `user`): main raises it from
- *  `memory_update`, and Approve applies the change the card shows. */
-export type ApprovalAction = 'merge' | 'push_default' | 'issue_create' | 'issue_close' | 'comment' | 'release' | 'skill' | 'owner_profile';
+ *  `memory_update`, and Approve applies the change the card shows.
+ *  `native_tool` is a Hermes bot's own tool asking for permission mid-turn
+ *  (a command it flags as dangerous): main raises it from the agent's ACP
+ *  permission request and answers the agent once (allow once, or deny). It
+ *  lives only while that turn waits: never written to approvals.json. */
+export type ApprovalAction = 'merge' | 'push_default' | 'issue_create' | 'issue_close' | 'comment' | 'release' | 'skill' | 'owner_profile' | 'native_tool';
 
-export const APPROVAL_ACTIONS: readonly ApprovalAction[] = ['merge', 'push_default', 'issue_create', 'issue_close', 'comment', 'release', 'skill', 'owner_profile'];
+export const APPROVAL_ACTIONS: readonly ApprovalAction[] = ['merge', 'push_default', 'issue_create', 'issue_close', 'comment', 'release', 'skill', 'owner_profile', 'native_tool'];
 
 /** Acts the owner decides on their own desktop card only, where the change
  *  is shown: never by a typed "ok", the "Approve N pending" chip, the phone
  *  or a rule, and never named in `approval_request` (main raises them). */
-export const CARD_ONLY_ACTIONS: ReadonlySet<ApprovalAction> = new Set<ApprovalAction>(['skill', 'owner_profile']);
+export const CARD_ONLY_ACTIONS: ReadonlySet<ApprovalAction> = new Set<ApprovalAction>(['skill', 'owner_profile', 'native_tool']);
 
 /** The acts a bot may name in `approval_request`. */
 export const BOT_REQUESTABLE_ACTIONS: readonly ApprovalAction[] = APPROVAL_ACTIONS.filter((a) => !CARD_ONLY_ACTIONS.has(a));
 
 /** Acts no rule may cover: each one always needs the owner. */
-export const APPROVAL_NEVER_BY_RULE: ReadonlySet<ApprovalAction> = new Set<ApprovalAction>(['release', 'push_default', 'skill', 'owner_profile']);
+export const APPROVAL_NEVER_BY_RULE: ReadonlySet<ApprovalAction> = new Set<ApprovalAction>(['release', 'push_default', 'skill', 'owner_profile', 'native_tool']);
 
 /** Who granted: the owner (card, chip, phone, matching message), or one of
  *  the owner's remembered rules. A rule approval is `'rule'` in MergeEffect.approvedBy. */
@@ -102,6 +106,9 @@ export interface ApprovalRequest {
    *  replaces or removes as it read when the bot asked; Approve applies the
    *  change only while that entry still reads so. */
   ownerProfile?: MemoryChange;
+  /** `native_tool`: what the agent asked to run, as its permission request
+   *  named it (secrets redacted, capped). `repoKey` is ''. */
+  nativeTool?: { title: string; command: string };
   botId: string;
   workspaceId: string;
   threadId: ThreadId;
@@ -156,7 +163,7 @@ export interface ApprovalListParams { state?: ApprovalState[]; limit?: number; }
  *  bot of the workspace asks for, whoever's worker authored the PR. */
 export interface ApprovalRule {
   ruleId: string;
-  action: Exclude<ApprovalAction, 'release' | 'push_default' | 'skill' | 'owner_profile'>;
+  action: Exclude<ApprovalAction, 'release' | 'push_default' | 'skill' | 'owner_profile' | 'native_tool'>;
   repoKey: string;
   /** One bot, or every bot of one workspace. */
   scope: { botId: string } | { workspaceId: string };

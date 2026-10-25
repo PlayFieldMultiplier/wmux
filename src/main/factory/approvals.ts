@@ -444,6 +444,7 @@ const ACTION_TITLE: Readonly<Record<ApprovalAction, string>> = {
   release: 'Publish a release of',
   skill: 'Load the skill',
   owner_profile: 'Change',
+  native_tool: 'Run',
 };
 
 /** A PR as its host names it: a GitLab merge request is `MR !n`. */
