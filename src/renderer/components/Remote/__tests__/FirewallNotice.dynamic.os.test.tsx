@@ -136,7 +136,7 @@ describe('useFirewall: re-checks and what each answer leaves on screen', () => {
     await settle();
     expect(api.status).toHaveBeenCalledTimes(1);
     await click('[data-firewall-open="network"]');
-    expect(api.open).toHaveBeenCalledWith('network');
+    expect(api.open).toHaveBeenCalledWith('network', 'ms-settings:network-status');
     await act(async () => { window.dispatchEvent(new Event('focus')); });
     await settle();
     expect(api.status).toHaveBeenCalledTimes(2);
@@ -145,6 +145,25 @@ describe('useFirewall: re-checks and what each answer leaves on screen', () => {
     await act(async () => { window.dispatchEvent(new Event('focus')); });
     await settle();
     expect(api.status).toHaveBeenCalledTimes(2);
+  });
+
+  it('Open network settings asks main for the page of the Public networks\' adapter kind', async () => {
+    const cases: Array<[Partial<InboundStatusView>, unknown[]]> = [
+      [{ verdict: 'public-network', publicNetworks: ['Wi-Fi'], publicMedium: 'wifi' }, ['network', 'ms-settings:network-wifi']],
+      [{ verdict: 'public-network', publicNetworks: ['Ethernet'], publicMedium: 'ethernet' }, ['network', 'ms-settings:network-ethernet']],
+      // The Public half of a mixed PC, on its own row.
+      [{ verdict: 'covered', okNetworks: ['Tailscale'], publicNetworks: ['Ethernet'], publicMedium: 'ethernet' }, ['network', 'ms-settings:network-ethernet']],
+      // Not Windows: no page, main opens its own.
+      [{ verdict: 'public-network', platform: 'darwin', ruleIds: null }, ['network']],
+    ];
+    for (const [over, args] of cases) {
+      api.open.mockClear();
+      api.status.mockResolvedValueOnce(status(over));
+      await act(async () => root.render(<Harness enabled checkKey={JSON.stringify(over)} tick={0} />));
+      await settle();
+      await click('[data-firewall-open="network"]');
+      expect(api.open.mock.calls, JSON.stringify(over)).toEqual([args]);
+    }
   });
 
   it('an action that ends while a check runs leaves no button stuck on Checking…', async () => {

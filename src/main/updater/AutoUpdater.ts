@@ -104,6 +104,9 @@ const INSTALL_LOCK_BUDGET_MS = 60_000;
 // exists for the paths where it is NOT armed — a quit that never reaches a
 // before-quit handler at all leaves nothing else to notice.
 const INSTALL_QUIT_WATCHDOG_MS = 30_000;
+// How long the macOS handoff waits on an async install-quit preparation (the
+// agent Chrome's graceful quit, itself bounded at 3 s) before installing anyway.
+export const INSTALL_PREPARE_CAP_MS = 5_000;
 // #1056 — how long to wait for the waiter's heartbeat before concluding the
 // spawn itself did not survive (see waitForWaiterHeartbeat). Short on purpose:
 // unlike the lock budget, this is not waiting on anything that legitimately
@@ -235,11 +238,12 @@ interface UpdateInfo {
  */
 export interface AutoUpdaterHooks {
   /**
-   * Invoked synchronously immediately before Squirrel is told to install. Must
-   * let windows actually close, and must flush any state the normal quit path
-   * would have flushed — that path is skipped entirely on this route.
+   * Invoked immediately before Squirrel is told to install. Must let windows
+   * actually close, and must flush any state the normal quit path would have
+   * flushed — that path is skipped entirely on this route. A returned promise
+   * is waited on, for at most INSTALL_PREPARE_CAP_MS, before the install.
    */
-  onBeforeInstallQuit: () => void;
+  onBeforeInstallQuit: () => void | Promise<void>;
   /**
    * Undo `onBeforeInstallQuit` after a handoff that never terminated us: clear
    * the quit flag, restore anything the prepare tore down, and bring a window
@@ -1691,14 +1695,30 @@ export class AutoUpdater {
         // from here Squirrel owns terminating us, and if it does not, ShipIt
         // waits forever on a process that will never exit.
         quitPrepared = true;
-        this.hooks.onBeforeInstallQuit();
-        armDeadline(INSTALL_HANDOFF_TIMEOUT_MS, () => {
-          failInstall(
-            `The update was downloaded and verified, but installing it did not restart wmux within ${Math.round(INSTALL_HANDOFF_TIMEOUT_MS / 1000)}s. ` +
-            `Quit wmux completely and try again, or install the latest release manually from https://github.com/${REPO}/releases`,
-          );
+        const handOff = () => {
+          if (settled) return; // the attempt failed while the preparation ran
+          armDeadline(INSTALL_HANDOFF_TIMEOUT_MS, () => {
+            failInstall(
+              `The update was downloaded and verified, but installing it did not restart wmux within ${Math.round(INSTALL_HANDOFF_TIMEOUT_MS / 1000)}s. ` +
+              `Quit wmux completely and try again, or install the latest release manually from https://github.com/${REPO}/releases`,
+            );
+          });
+          autoUpdater.quitAndInstall();
+        };
+        const prepared = this.hooks.onBeforeInstallQuit();
+        if (!prepared) {
+          handOff();
+          return;
+        }
+        // Bounded: a preparation that never settles must not hold the install.
+        let capTimer: ReturnType<typeof setTimeout> | undefined;
+        void Promise.race([
+          prepared.catch((err: unknown) => { console.error('[AutoUpdater] install-quit preparation failed — installing anyway:', err); }),
+          new Promise<void>((resolve) => { capTimer = setTimeout(resolve, INSTALL_PREPARE_CAP_MS); }),
+        ]).then(() => {
+          clearTimeout(capTimer);
+          handOff();
         });
-        autoUpdater.quitAndInstall();
       });
       autoUpdater.on('error', (err: Error) => {
         failInstall(this.describeDarwinInstallError(err));

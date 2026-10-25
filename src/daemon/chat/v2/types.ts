@@ -61,6 +61,12 @@ export interface ChatV2DriverStart {
    * the marker the orphan sweep matches.
    */
   providerSession: { id: string; mode: 'new' | 'resume' };
+  /**
+   * The chat record's id (`CHATV2_PROVIDER_SESSION_ID` shape). A driver whose
+   * agent picks its own conversation id (Codex) puts this in argv as the
+   * orphan sweep's marker instead, and reports it as `marker`.
+   */
+  chatSessionId?: string;
 }
 
 /** A user turn as the driver sends it. Attachments are staged paths the host already checked. */
@@ -86,6 +92,17 @@ export interface ChatV2DriverTurn {
  * and stamps `approval.resolved` / `question.resolved` with `cancelled`.
  * The driver emits `approval.requested` (with the gated tool's `callId`) or
  * `question.asked` with the same `requestId`.
+ *
+ * A permission decision raised again with the same `requestId` means what the
+ * agent asks has changed (a diff that arrived or moved after the card): the
+ * host records it again under the same native key, so the card is replaced
+ * and an answer to the old one is refused.
+ *
+ * A permission decision that carries a `revision` is answered with it: the
+ * host keeps the revision of the card it shows and passes it back as
+ * `NativeDecisionReply.revision`. The driver refuses (`changed`) an approve
+ * whose revision is not the latest raised, so an approve in flight never
+ * lands on a changed request.
  */
 export type ChatV2DriverDecision =
   | {
@@ -96,6 +113,10 @@ export type ChatV2DriverDecision =
       toolName: string;
       /** One line for the card and the phone (command, path, …). */
       summary: string;
+      /** The Deny button's label when denying does more than skip the call (Codex `cancel` also stops the turn). */
+      denyLabel?: string;
+      /** This card's revision, to be passed back with its answer (see above). */
+      revision?: string;
     }
   | {
       kind: 'questions';
@@ -117,6 +138,8 @@ export interface ChatV2Driver {
   readonly agent: HarnessId;
   /** The agent process pid once spawned. */
   readonly pid: number | undefined;
+  /** What the orphan sweep matches in the agent's command line, when it is not the provider session id. */
+  readonly marker?: string;
   /** Spawn and initialize. Rejects when the CLI is missing or fails its startup probe. */
   start(spec: ChatV2DriverStart, sink: ChatV2DriverSink): Promise<void>;
   /** Hand a user turn to the agent. Resolves once written, not when the turn ends. */

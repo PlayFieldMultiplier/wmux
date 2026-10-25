@@ -37,6 +37,7 @@ export default function WorkspaceChromeProfileMenu({
   const isChromeBackend = browserBackend === 'chrome';
   const [profiles, setProfiles] = useState<string[]>([]);
   const [bound, setBound] = useState<string | undefined>(undefined);
+  const [lastUsed, setLastUsed] = useState<string | undefined>(undefined);
   const [open, setOpen] = useState(false);
   // Inline "new profile" form (replaces window.prompt — see createProfile below).
   const [formOpen, setFormOpen] = useState(false);
@@ -64,6 +65,7 @@ export default function WorkspaceChromeProfileMenu({
     void api.list().then((res) => {
       setProfiles(res.profiles);
       setBound(res.bindings[workspaceId]);
+      setLastUsed(res.lastUsed);
     }).catch(() => { /* menu stays with stale rows */ });
   }, [workspaceId, isChromeBackend]);
 
@@ -226,6 +228,18 @@ export default function WorkspaceChromeProfileMenu({
           className={`absolute top-0 ${submenuPos} min-w-[200px] max-w-[300px] py-1 rounded-xl shadow-xl sidebar-popover-enter`}
           style={{ background: 'var(--bg-surface)', border: '1px solid color-mix(in srgb, var(--bg-overlay) 70%, transparent)' }}
         >
+          {/* An unbound workspace is offered the last-used profile; nothing binds until it is clicked. */}
+          {bound === undefined && lastUsed && profiles.includes(lastUsed) && (
+            <button
+              className="w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors hover:bg-[var(--bg-overlay)]"
+              style={{ color: 'var(--text-main)' }}
+              onClick={() => bind(lastUsed)}
+              data-testid="chrome-profile-use-last"
+            >
+              <span className="w-3" />
+              <span className="truncate flex-1">{t('chromeProfiles.useLastUsedRow', { name: lastUsed })}</span>
+            </button>
+          )}
           {/* Reserved: attach to the user's own live Chrome (Phase 3). */}
           <button
             className="w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors hover:bg-[var(--bg-overlay)]"

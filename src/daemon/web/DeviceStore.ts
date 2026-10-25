@@ -262,6 +262,13 @@ export interface DevicePushRegistration {
    * which is exactly what happened before this field existed.
    */
   apnsEnvironment?: 'development' | 'production';
+  /**
+   * Push kinds the app said it can handle (`botApprovalPush`, …). A push sent
+   * with `requires` reaches only devices listing it, so a registration from
+   * before the field gets nothing it cannot open. Replaced with the rest of
+   * the registration.
+   */
+  capabilities?: string[];
 }
 
 /**
@@ -765,7 +772,7 @@ export class DeviceStore {
    */
   registerPush(
     deviceId: string,
-    input: { apnsToken: string; publicKey: string; apnsEnvironment?: unknown },
+    input: { apnsToken: string; publicKey: string; apnsEnvironment?: unknown; capabilities?: unknown },
   ): {
     ok: boolean;
     reason?: 'not-found' | 'revoked' | 'bad-token' | 'bad-key' | 'bad-apns-environment' | 'persist-failed';
@@ -789,11 +796,13 @@ export class DeviceStore {
       return { ok: false, reason: 'bad-apns-environment' };
     }
 
+    const capabilities = pushCapabilities(input?.capabilities);
     const previous = record.push;
     record.push = {
       apnsToken,
       publicKey,
       registeredAt: this.now(),
+      ...(capabilities.length > 0 ? { capabilities } : {}),
       // A re-registration replaces the record wholesale, so an omitted stage
       // clears a previously known one rather than inheriting it. That is the
       // honest reading: the build now talking to us is the one whose token this
@@ -1469,7 +1478,33 @@ function coercePush(raw: unknown): DevicePushRegistration | null {
   // told its value was wrong.
   const rawEnv = o['apnsEnvironment'];
   const apnsEnvironment = rawEnv === 'development' || rawEnv === 'production' ? rawEnv : undefined;
-  return { apnsToken, publicKey, registeredAt, ...(apnsEnvironment ? { apnsEnvironment } : {}) };
+  const capabilities = pushCapabilities(o['capabilities']);
+  return {
+    apnsToken,
+    publicKey,
+    registeredAt,
+    ...(apnsEnvironment ? { apnsEnvironment } : {}),
+    ...(capabilities.length > 0 ? { capabilities } : {}),
+  };
+}
+
+const PUSH_CAPABILITY_PATTERN = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
+const PUSH_CAPABILITIES_MAX = 32;
+
+/**
+ * The capability names a registration lists. Lenient on purpose: an entry
+ * that is not a name is dropped and the rest kept, so a newer app's list never
+ * costs it its push registration. Names this daemon does not know are kept,
+ * since a later daemon may.
+ */
+function pushCapabilities(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out = new Set<string>();
+  for (const c of raw) {
+    if (typeof c === 'string' && PUSH_CAPABILITY_PATTERN.test(c)) out.add(c);
+    if (out.size >= PUSH_CAPABILITIES_MAX) break;
+  }
+  return [...out];
 }
 
 /**

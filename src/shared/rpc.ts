@@ -569,6 +569,12 @@ export type RpcMethod =
   // Main → daemon: "Keep the computer awake" mode and whether the blocker is held.
   | 'daemon.phone.keepAwake'
   | 'daemon.workspaceFacts.set'
+  // Main → daemon: the bot approval requests waiting on the owner, so the
+  // daemon can push them to the phone (shared/botApprovalPush.ts).
+  | 'daemon.botApprovals.set'
+  // Main → daemon: the bot prompts (question / login / secret cards) waiting
+  // on the owner (shared/botPromptPush.ts).
+  | 'daemon.botPrompts.set'
   // Main → daemon: which daemon session is the Moa (HQ brain) pane, or null.
   // The phone's access to that one brain pane stands only while it does.
   | 'daemon.moa.set'
@@ -926,6 +932,8 @@ export const ALL_RPC_METHODS = [
   'daemon.phone.complete',
   'daemon.phone.keepAwake',
   'daemon.workspaceFacts.set',
+  'daemon.botApprovals.set',
+  'daemon.botPrompts.set',
   'daemon.moa.set',
   'daemon.inbox.poll',
   'lanlink.status',
@@ -1172,6 +1180,9 @@ export interface DaemonEvent {
     | 'agent.event'
     // Daemon-owned agent turn, excluding boot paints and bare shell submits.
     | 'agent.turn'
+    // The pane's Claude turn seems stuck (StallWatch). `data` is
+    // `{ stalledSince: number | null }`; null clears it.
+    | 'agent.stall'
     | 'agent.critical'
     // The agent printed its own "turn interrupted" row (Claude Code fires no
     // Stop hook for an interrupted turn). `data` is `{ agent: string }`.

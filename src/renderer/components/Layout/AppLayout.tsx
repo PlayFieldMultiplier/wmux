@@ -61,6 +61,7 @@ import { useRpcBridge } from '../../hooks/useRpcBridge';
 import { useA2aLinkRequestToast, useA2aRemoteSnapshot } from '../../hooks/useA2aRemoteSnapshot';
 import { useA2aRemoteBridge } from '../../hooks/useA2aRemoteBridge';
 import { useConnectionDropNotice } from '../../hooks/useConnectionDropNotice';
+import { useChromeProfileFallbackToast } from '../../hooks/useChromeProfileFallbackToast';
 import { useCloseTabOnShellExit } from '../../hooks/useCloseTabOnShellExit';
 import AgentMentionPicker from '../Palette/AgentMentionPicker';
 import HandoffPopover from '../Git/HandoffPopover';
@@ -939,6 +940,7 @@ export default function AppLayout() {
   useA2aRemoteBridge();
   // A PC connection in use that really dropped (not a blip) gets one toast.
   useConnectionDropNotice();
+  useChromeProfileFallbackToast();
   // `exit` in a shell closes its tab (clean exit only).
   useCloseTabOnShellExit();
   // Keep the main-process WorkspaceMirror warm: push the workspace tree +

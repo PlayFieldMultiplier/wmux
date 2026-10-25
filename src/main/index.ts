@@ -13,6 +13,8 @@ import { handlePhoneWorkspaces } from './phone/PhoneWorkspaces';
 import { handlePhoneQuickCommands } from './quickCommands/QuickCommandStore';
 import { installPhoneBridge } from './phone/installPhoneBridge';
 import { installKeepAwakeLink } from './power/keepAwakeLink';
+import { botApprovalPushTable, createBotApprovalPushFeed, setBotApprovalPushFeed } from './phone/BotApprovalPushFeed';
+import { createBotPromptPushFeed, openBotPromptRows, setBotPromptPushFeed } from './phone/BotPromptPushFeed';
 import { handlePhoneMoaWake } from './factory/phoneMessage';
 import { MOA_WAKE_COMMAND } from '../shared/moaWake';
 import { handlePhoneAccounts } from './phone/PhoneAccounts';
@@ -71,7 +73,9 @@ import { registerConnectorCheckHandlers } from './ipc/handlers/connectorCheck.ha
 import { RpcRouter } from './pipe/RpcRouter';
 import type { RpcMethod } from '../shared/rpc';
 import { liveNoChangesCheck } from './factory/noChangesCheck';
-import { getBotStore } from './factory/botStore';
+import { getBotDirectory, getBotStore } from './factory/botStore';
+import { getApprovalService } from './factory/approvals';
+import { getRoomWriter } from './factory/roomWriter';
 import { PipeServer } from './pipe/PipeServer';
 import { registerWorkspaceRpc } from './pipe/handlers/workspace.rpc';
 import { registerSurfaceRpc } from './pipe/handlers/surface.rpc';
@@ -191,6 +195,8 @@ import { BrowserBackendStore } from './browser-session/BrowserBackendStore';
 import { registerBrowserPrivateNetworkIpc } from './ipc/handlers/browserPrivateNetwork.handler';
 import { ChromeLauncherRegistry } from './browser-session/ChromeLauncher';
 import { ChromeProfileStore, reconcilePaneBindingsFromMirror } from './browser-session/ChromeProfileStore';
+import { createChromeProfileUseHandler, setChromeProfileUseListener } from './browser-session/profileFallback';
+import { noteRunBrowserProfileUnbound } from './automation/runIdentity';
 import { CHROME_PANE_IPC } from '../shared/chromePaneBinding';
 import { BrowserPolicyStore, reconcileBrowserPoliciesFromMirror } from './browser-session/BrowserPolicyStore';
 import { isTrustedMainFrameSender, registerBrowserPolicyIpc, UNTRUSTED_SENDER_ERROR } from './ipc/handlers/browserPolicy.handler';
@@ -1445,6 +1451,29 @@ const workspaceFactsPublisher = createWorkspaceFactsPublisher({
   },
 });
 registerWorkspaceFactsPublisher(workspaceFactsPublisher);
+// A bot's approval requests waiting on the owner, pushed to the phone by the
+// daemon (phone/BotApprovalPushFeed.ts). The whole table on every change, and
+// again on each daemon connect.
+const botApprovalPushFeed = createBotApprovalPushFeed({
+  rows: () => {
+    const bots = getBotDirectory();
+    return botApprovalPushTable(getApprovalService()?.listForOperator() ?? null, (botId) => bots?.get(botId)?.name);
+  },
+  push: async (rows) => {
+    if (!daemonClient?.isConnected) throw new Error('Daemon not connected');
+    return daemonClient.rpc('daemon.botApprovals.set', { requests: rows });
+  },
+});
+setBotApprovalPushFeed(botApprovalPushFeed);
+// A bot's open question / login / secret cards, the same way.
+const botPromptPushFeed = createBotPromptPushFeed({
+  rows: () => openBotPromptRows(getRoomWriter(), getBotDirectory()),
+  push: async (rows) => {
+    if (!daemonClient?.isConnected) throw new Error('Daemon not connected');
+    return daemonClient.rpc('daemon.botPrompts.set', { prompts: rows });
+  },
+});
+setBotPromptPushFeed(botPromptPushFeed);
 // The track record (deck/trackRecordFeed.ts): counts from wmux's own task
 // data, running only while the agent factory is on — its switch starts and
 // stops it.
@@ -1818,7 +1847,19 @@ ipcMain.handle('browser:chrome-profiles:list', (event) => isTrustedMainFrameSend
   profiles: chromeProfileStore.listProfiles(),
   bindings: chromeProfileStore.getBindings(),
   paneBindings: chromeProfileStore.getPaneBindings(),
+  lastUsed: chromeProfileStore.suggestedProfile(),
 }) : { profiles: [], bindings: {}, paneBindings: {} });
+// A browser call that used the shared default profile because nothing was
+// bound: the run says so, and the workspace is told once with the last-used
+// profile offered. Nothing is bound on its own.
+setChromeProfileUseListener(createChromeProfileUseHandler({
+  store: chromeProfileStore,
+  noteRun: (ptyId) => noteRunBrowserProfileUnbound(ptyId),
+  tellWorkspace: (workspaceId, suggested) => {
+    const win = mainWindow;
+    if (win && !win.isDestroyed()) win.webContents.send(IPC.CHROME_PROFILE_FALLBACK, { workspaceId, ...(suggested ? { suggested } : {}) });
+  },
+}));
 ipcMain.handle('browser:chrome-profiles:create', async (event, name: unknown) => {
   if (!isTrustedMainFrameSender(event, () => mainWindow)) return { ok: false, error: UNTRUSTED_SENDER_ERROR };
   if (typeof name !== 'string') return { ok: false, error: 'invalid name' };
@@ -2389,6 +2430,10 @@ app.on('ready', async () => {
       // process, so read it fresh.
       invalidateAutonomyCache();
       void workspaceFactsPublisher.publishNow();
+      // A restarted daemon holds no bot approval table. Sent only once the
+      // approval store has an answer; its start publishes otherwise.
+      botApprovalPushFeed.publishNow();
+      botPromptPushFeed.publishNow();
       client.on('approvals:changed', () => { void trackRecordFeed.onApprovalsChanged(); });
       // Handler swap to daemon-routed mode. The microsecond window where
       // pty/* handlers are torn down and re-registered is the same
@@ -3089,19 +3134,25 @@ function adoptMainWindow(win: BrowserWindow): void {
   });
 }
 
-function prepareInstallQuit(): void {
+async function prepareInstallQuit(): Promise<void> {
   isQuitting = true;
   mcpBrokerSupervisor.stop();
   // The full before-quit teardown is skipped on this path — the agent Chrome
-  // must not outlive the app across an update install.
+  // must not outlive the app across an update install. It quits through
+  // Browser.close like an ordinary quit (disposeAll bounds it at QUIT_GRACE_MS,
+  // then signals what is left); the updater installs once this resolves.
+  // The flushes below run because disposeAll settles within QUIT_GRACE_MS,
+  // under the updater's INSTALL_PREPARE_CAP_MS (ChromeLauncher.os.test.ts).
   try {
-    // Signals at once: the installer ends this process right after this
-    // returns, before a graceful Chrome quit could be waited on.
-    void chromeRegistry.disposeAll({ immediate: true });
+    await chromeRegistry.disposeAll();
+  } catch (err) {
+    console.error('[Main] install-quit chromeRegistry.disposeAll failed:', err);
+  }
+  try {
     chromeSurfaceStore.flushSync();
     getActionCacheStore().flushSync();
   } catch (err) {
-    console.error('[Main] install-quit chromeRegistry.disposeAll failed:', err);
+    console.error('[Main] install-quit store flush failed:', err);
   }
   try {
     sessionManager.flushSync();

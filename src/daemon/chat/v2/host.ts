@@ -39,9 +39,10 @@ import { buildDriverEnv, DriverEnvError } from './env';
 import { boundEvent, EventBatcher } from './eventBatcher';
 import { beginPaneMove, claimChatV2Pane, endPaneMove, isPaneMoving, releaseChatV2Pane } from './paneClaims';
 import { driverState, handOffToTerminal, handedOffRefusal } from './handoff';
-import { checkTerminal, describeProcesses, releaseTerminal, STOPPED_PREFIX, type FromTerminalDeps } from './fromTerminal';
+import { checkTerminal, describeProcesses, holdersRefusal, releaseTerminal, STOPPED_PREFIX, type FromTerminalDeps } from './fromTerminal';
 import { whichOnPath } from '../../web/agentLaunch';
 import type { ResumeBinding } from '../../../shared/agentResume';
+import { findExecutable } from '../../../shared/exeSearch';
 import { sameProcessStartTime } from '../../phantomExit';
 import { classifyShell } from '../../shell-integration';
 import { ChatV2Store } from './store';
@@ -140,6 +141,8 @@ interface Live {
   lastBindingKey: string;
   /** The pid of the last driver spawned, kept after a failed start: a rollback proves it exited first. */
   lastPid?: number;
+  /** The last driver's `marker`, kept with lastPid. */
+  lastMarker?: string;
 }
 
 const PERMISSION_ACTIONS: DecisionForm['actions'] = [
@@ -198,6 +201,21 @@ function fieldOf(block: Block | undefined, field: 'text' | 'detail' | 'output'):
   if (field === 'text') return block.text;
   if (field === 'detail') return block.tool?.detail;
   return block.tool?.preview?.output;
+}
+
+/**
+ * Windows: the `claude` the chat driver's spawn will start from `env` (the
+ * pane env's Path, any key spelling), when it is a claude.exe; otherwise
+ * undefined. It is resolved exactly as spawnAgent resolves it (Path
+ * directories in order, each trying the PATHEXT extensions), so a
+ * `claude.cmd` in an earlier directory wins over a later claude.exe here
+ * too: only a native claude.exe is run, and a shim found first is refused
+ * before the TUI is stopped rather than started after it. Pure but for
+ * `isFile`.
+ */
+export function claudeForWindowsChat(env: Record<string, string | undefined>, isFile: (file: string) => boolean): string | undefined {
+  const found = findExecutable('claude', { env, platform: 'win32', extensions: 'pathext', isFile });
+  return found && /\.exe$/i.test(found) ? found : undefined;
 }
 
 /**
@@ -809,8 +827,12 @@ class Host implements ChatV2Host {
     const checked = await checkTerminal(deps, paneId, { tombstone: !!existing, configDir: env.configDir });
     if (!checked.ok) return checked;
     // 2-3. Stop and prove.
+    const keyMark = pane.bridge.getKeyInputRevision();
     const released = await releaseTerminal(deps, paneId, checked);
     if (!released.ok) return released;
+    // The keys typed so far went to the TUI wmux just stopped, not to the
+    // shell: the prompt it leaves reads empty, so the chat can come back.
+    if (released.stopped && this.deps.sessionManager.getSession(paneId) === pane) pane.bridge.rebaseShellKeyInput(keyMark);
     const stoppedFail = (message: string) => chatV2Error('handoff-refused', released.stopped ? `${STOPPED_PREFIX} ${message}` : message);
     if (this.disposed || this.deps.sessionManager.getSession(paneId) !== pane) return stoppedFail('The pane closed.');
     if ((this.byPane.get(paneId) ?? null) !== existing) return stoppedFail('The pane\u2019s chat changed meanwhile.');
@@ -882,14 +904,32 @@ class Host implements ChatV2Host {
     } catch (error) {
       return chatV2Error('driver-unavailable', error instanceof DriverEnvError ? error.message : 'The chat agent could not be prepared.');
     }
-    const found = await (this.deps.claudeOnPath ?? ((p: string) => whichOnPath('claude', p)))(env.PATH ?? '').catch(() => undefined);
+    const win = (this.deps.platform ?? process.platform) === 'win32';
+    const isFile = (file: string) => !!this.fromTerminalFiles().stat(file);
+    const found = this.deps.claudeOnPath || !win
+      ? await (this.deps.claudeOnPath ?? ((p: string) => whichOnPath('claude', p)))(env.PATH ?? '').catch(() => undefined)
+      : claudeForWindowsChat(env, isFile);
     if (!found) return chatV2Error('driver-unavailable', 'Claude Code is not installed where the chat can run it.');
     const configDir = env.CLAUDE_CONFIG_DIR ?? path.join(env.HOME || os.homedir(), '.claude');
     return { ok: true, configDir };
   }
 
   private fromTerminalDeps(terminal: ChatV2TerminalDeps): FromTerminalDeps {
-    const files = this.deps.fs ?? {
+    return {
+      ...terminal,
+      ...this.fromTerminalFiles(),
+      // A chat in another pane on the same conversation holds it as much as a TUI does.
+      otherOwners: (paneId, sessionId) => [...terminal.otherOwners(paneId, sessionId), ...this.chatHolders(paneId, sessionId)],
+      paneFree: this.deps.paneFree,
+      shellKind: (paneId) => this.shellKind(paneId),
+      platform: this.deps.platform ?? process.platform,
+      ...(this.deps.moveTiming?.quietMs !== undefined ? { quietMs: this.deps.moveTiming.quietMs } : {}),
+      ...(this.deps.moveTiming?.freeWaitMs !== undefined ? { freeWaitMs: this.deps.moveTiming.freeWaitMs } : {}),
+    };
+  }
+
+  private fromTerminalFiles(): Pick<FromTerminalDeps, 'stat' | 'isDirectory' | 'realpath'> {
+    return this.deps.fs ?? {
       stat: (file: string) => {
         try {
           const st = fs.statSync(file);
@@ -902,16 +942,6 @@ class Host implements ChatV2Host {
         try { return fs.statSync(dir).isDirectory(); } catch { return false; }
       },
       realpath: (p: string) => fs.realpathSync.native(p),
-    };
-    return {
-      ...terminal,
-      ...files,
-      // A chat in another pane on the same conversation holds it as much as a TUI does.
-      otherOwners: (paneId, sessionId) => [...terminal.otherOwners(paneId, sessionId), ...this.chatHolders(paneId, sessionId)],
-      paneFree: this.deps.paneFree,
-      platform: this.deps.platform ?? process.platform,
-      ...(this.deps.moveTiming?.quietMs !== undefined ? { quietMs: this.deps.moveTiming.quietMs } : {}),
-      ...(this.deps.moveTiming?.freeWaitMs !== undefined ? { freeWaitMs: this.deps.moveTiming.freeWaitMs } : {}),
     };
   }
 
@@ -995,7 +1025,7 @@ class Host implements ChatV2Host {
     if (!gone) {
       if (pid !== undefined && !live.record.process) {
         const identity = await this.deps.processIdentity(pid).catch(() => null);
-        if (identity?.startTime) live.record.process = { pid, startTime: identity.startTime, marker: live.record.providerSessionId };
+        if (identity?.startTime) live.record.process = { pid, startTime: identity.startTime, marker: live.lastMarker ?? live.record.providerSessionId };
       }
       await this.persistNow(live);
       return false;
@@ -1027,7 +1057,7 @@ class Host implements ChatV2Host {
     const shell = classifyShell(pane.meta.cmd ?? '');
     if (shell === 'pwsh') return 'pwsh';
     if (shell === 'bash' || shell === 'zsh') return 'posix';
-    return process.platform === 'win32' ? null : 'posix';
+    return (this.deps.platform ?? process.platform) === 'win32' ? null : 'posix';
   }
 
   private async close(p: ChatV2ParamsByMethod['close']): Promise<Result<'close'>> {
@@ -1125,6 +1155,7 @@ class Host implements ChatV2Host {
     if (live.unreaped) return chatV2Error('driver-failed', 'The last agent process has not exited yet.');
     // Only a pid this start spawns may decide a rollback (dropFailedStart).
     live.lastPid = undefined;
+    live.lastMarker = undefined;
     const generation = ++live.generation;
     // A close or dispose that came in while this start was waiting wins.
     const superseded = (): boolean => live.closed || this.disposed || live.generation !== generation;
@@ -1163,6 +1194,7 @@ class Host implements ChatV2Host {
           mode: record.mode,
           model: record.model,
           providerSession: { id: record.providerSessionId, mode: resume ? 'resume' : 'new' },
+          chatSessionId: record.chatSessionId,
         }, {
           event: (event) => this.enqueue(live, { kind: 'event', driver, event }),
           decision: (decision) => this.enqueue(live, { kind: 'decision', driver, decision }),
@@ -1171,10 +1203,12 @@ class Host implements ChatV2Host {
         });
       } catch (error) {
         live.lastPid = driver.pid;
+        live.lastMarker = driver.marker;
         if (live.driver === driver) live.driver = null;
         return fail(error instanceof Error ? error.message : String(error));
       }
       live.lastPid = driver.pid;
+      live.lastMarker = driver.marker;
       if (live.driver !== driver) {
         // Stopped (close, dispose) or exited while starting: make sure nothing is left running.
         await driver.stop().catch(() => undefined);
@@ -1184,7 +1218,7 @@ class Host implements ChatV2Host {
       if (pid !== undefined) {
         const identity = await this.deps.processIdentity(pid).catch(() => null);
         // Without a start time the sweep could never prove it is the same process.
-        if (identity?.startTime) record.process = { pid, startTime: identity.startTime, marker: record.providerSessionId };
+        if (identity?.startTime) record.process = { pid, startTime: identity.startTime, marker: driver.marker ?? record.providerSessionId };
       }
       if (superseded()) {
         live.stopping = true;
@@ -1228,9 +1262,7 @@ class Host implements ChatV2Host {
     } catch {
       return 'Could not confirm that the chat is the conversation’s only process. The chat was stopped.';
     }
-    return others.length
-      ? `Another process holds this conversation: ${others.slice(0, 3).map((e) => `${e.name} (pid ${e.pid})`).join(', ')}. The chat was stopped.`
-      : null;
+    return others.length ? `${holdersRefusal(others)} The chat was stopped.` : null;
   }
 
   /** Stop the driver and wait until it is reaped. False: it did not exit, and it is kept. */

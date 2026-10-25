@@ -2,6 +2,7 @@ import type { BrowserWindow, WebContents } from 'electron';
 import { Notification, nativeImage, shell, webContents } from 'electron';
 import type { RpcRouter } from '../RpcRouter';
 import { sendToRenderer } from './_bridge';
+import { noteChromeProfileUse } from '../../browser-session/profileFallback';
 import { logNotificationFailure } from '../../notification/notificationFailure';
 import { IPC } from '../../../shared/constants';
 import { HelpRequests } from '../../browser-session/HelpRequests';
@@ -1053,6 +1054,8 @@ export function registerBrowserRpc(
     /** The profile is the calling pane's exclusive one (R4 opener rule). */
     paneBound: boolean;
     callerPtyId?: string;
+    /** The calling pane, when the call resolved through pane bindings. */
+    paneId?: string;
   }
   interface ChromeCaller extends ChromeProfileChoice {
     client: ChromeBackendClient;
@@ -1094,7 +1097,7 @@ export function registerBrowserRpc(
       );
     }
     const profile = chromeRegistry.profileFor(workspaceId, paneId);
-    return { profile, paneBound: chromeRegistry.isPaneBound(profile), callerPtyId };
+    return { profile, paneBound: chromeRegistry.isPaneBound(profile), callerPtyId, paneId };
   };
 
   const resolveChromeClient = async (
@@ -1103,6 +1106,12 @@ export function registerBrowserRpc(
     workspaceId: string | undefined,
   ): Promise<ChromeCaller> => {
     const choice = await resolveChromeProfile(method, ctx, workspaceId);
+    noteChromeProfileUse({
+      profile: choice.profile,
+      ...(workspaceId ? { workspaceId } : {}),
+      ...(choice.paneId ? { paneId: choice.paneId } : {}),
+      ...(choice.callerPtyId ? { callerPtyId: choice.callerPtyId } : {}),
+    });
     // resolveChromeProfile threw already when no registry is wired.
     return { ...choice, client: (chromeRegistry as ChromeLauncherRegistry).forProfile(choice.profile) };
   };

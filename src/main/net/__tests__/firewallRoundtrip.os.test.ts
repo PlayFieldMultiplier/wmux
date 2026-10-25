@@ -77,6 +77,16 @@ async function rulesOutsideCi(): Promise<string> {
   return r.stdout.trim();
 }
 let outsideBefore = '';
+/** What changed outside wmux-ci since beforeAll, by name with its owner and program; empty when nothing did. */
+async function outsideDiff(): Promise<string> {
+  const now = await rulesOutsideCi();
+  if (now === outsideBefore) return '';
+  const a = new Set(outsideBefore.split(',')), b = new Set(now.split(','));
+  const added = [...b].filter((x) => !a.has(x)), removed = [...a].filter((x) => !b.has(x));
+  const r = await ps(`@(Get-NetFirewallRule -PolicyStore PersistentStore -ErrorAction SilentlyContinue | Where-Object { $_.Name -in @(${[...added, ...removed].map((x) => psQuote(x)).join(',') || "''"}) } | ForEach-Object { $_.Name + ' | ' + $_.DisplayName + ' | ' + $_.Group + ' | ' + $_.Owner + ' | ' + ($_ | Get-NetFirewallApplicationFilter).Program }) -join [char]10`);
+  return `added=${JSON.stringify(added)} removed=${JSON.stringify(removed)}
+${r.stdout}`;
+}
 
 
 /** Read-only: how many rules have this Name (0 or 1). */
@@ -119,7 +129,7 @@ describe.runIf(RUN)('firewall Fix round trip (CI runner only, group wmux-ci)', (
     // Unconditional: whatever the test made, in its own group only.
     await ps(`Remove-NetFirewallRule -Group ${psQuote(FIREWALL_CI_GROUP)} -ErrorAction SilentlyContinue`);
     if (root) fs.rmSync(root, { recursive: true, force: true });
-    if (outsideBefore) expect(await rulesOutsideCi()).toBe(outsideBefore);
+    if (outsideBefore) expect(await outsideDiff()).toBe('');
   }, 120_000);
 
   it('runs as an administrator (the round trip needs one)', async () => {
@@ -149,7 +159,7 @@ describe.runIf(RUN)('firewall Fix round trip (CI runner only, group wmux-ci)', (
     expect(allow['remote']).toEqual(['LocalSubnet']);
     const block = await ruleFields(ids.pubblock);
     expect(block).toMatchObject({ group: FIREWALL_CI_GROUP, action: 'Block', profile: 'Public', protocol: 'TCP', port: String(PORT), program: exe });
-    expect(await rulesOutsideCi()).toBe(outsideBefore);
+    expect(await outsideDiff()).toBe('');
   }, 180_000);
 
   it('a tailnet address: a LocalSubnet-only Allow no longer covers; the Fix adds 100.64.0.0/10 and the probe sees it', async () => {
@@ -161,7 +171,7 @@ describe.runIf(RUN)('firewall Fix round trip (CI runner only, group wmux-ci)', (
     expect(remote).toContain('LocalSubnet');
     expect(remote.some((a) => a === '100.64.0.0/10' || a === '100.64.0.0/255.192.0.0'), remote.join(' ')).toBe(true);
     expect(await verdict(PORT, true)).toBe('covered');
-    expect(await rulesOutsideCi()).toBe(outsideBefore);
+    expect(await outsideDiff()).toBe('');
   }, 180_000);
 
   it('a port change: the next Fix replaces the pair (same IDs), under Constrained Language Mode', async () => {
@@ -171,7 +181,7 @@ describe.runIf(RUN)('firewall Fix round trip (CI runner only, group wmux-ci)', (
     expect(await ruleCount(ids.allow)).toBe(1);
     expect((await ruleFields(ids.allow))['port']).toBe(String(NEW_PORT));
     expect((await ruleFields(ids.pubblock))['port']).toBe(String(NEW_PORT));
-    expect(await rulesOutsideCi()).toBe(outsideBefore);
+    expect(await outsideDiff()).toBe('');
   }, 180_000);
 
   it('stage 10 removes dead-path group rules and dead legacy rules, and keeps another live install\'s', async () => {
@@ -193,7 +203,7 @@ describe.runIf(RUN)('firewall Fix round trip (CI runner only, group wmux-ci)', (
     // Another install's rules are not ours to remove.
     expect(await ruleCount('wmux-ci-live-1')).toBe(1);
     expect(await ruleCount('wmux-ci-legacy-live')).toBe(1);
-    expect(await rulesOutsideCi()).toBe(outsideBefore);
+    expect(await outsideDiff()).toBe('');
   }, 180_000);
 
   it('Remove takes this listener\'s pair away and nothing else', async () => {
@@ -209,7 +219,7 @@ describe.runIf(RUN)('firewall Fix round trip (CI runner only, group wmux-ci)', (
     expect(await ruleCount(ids.pubblock)).toBe(0);
     expect(await ruleCount('wmux-ci-live-1')).toBe(1);
     expect(await verdict()).toBe('not-covered');
-    expect(await rulesOutsideCi()).toBe(outsideBefore);
+    expect(await outsideDiff()).toBe('');
   }, 180_000);
 });
 

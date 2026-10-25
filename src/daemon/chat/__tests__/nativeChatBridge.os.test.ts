@@ -1132,6 +1132,14 @@ describe('cancel', () => {
     expect(f.written).toEqual([]);
   });
 
+  it('a desktop Stop that names a turn stops only that turn', async () => {
+    const f = running();
+    expect(await f.bridge.desktopInterrupt('pane', 'conv', 't1:n.2')).toBe('not_running');
+    expect(f.written).toEqual([]);
+    expect(await f.bridge.desktopInterrupt('pane', 'conv', 't1:n.3')).toBe('sent');
+    expect(f.written).toEqual(['\x1b']);
+  });
+
   it('turn mismatch, idle turn, dead agent: turn-not-running and nothing written', async () => {
     const f = running();
     expect(await f.bridge.cancel(phoneCancel({ turnId: 't1:n.2' }))).toMatchObject({ error: 'turn-not-running', turn: { id: 't1:n.3' } });

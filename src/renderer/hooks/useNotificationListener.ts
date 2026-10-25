@@ -26,6 +26,7 @@ import { selectBotTaskOwners } from '../components/Sidebar/botTasks';
 import type { FanoutOrigin } from '../../shared/fanoutOrigin';
 import type { BotsWorkerPanel } from '../stores/slices/roomSlice';
 import { notePanePr } from './fanoutCallerNudge';
+import { t } from '../i18n';
 
 /**
  * J3 §4 — cwd가 태스크 worktree 경계 안인지(best-effort, OSC 협조 기반). 정규화
@@ -749,7 +750,7 @@ export function useNotificationListener() {
       // workspace metadata — pull it OUT here, alongside ptyId, so it can never
       // flow into `...rest` and get written into updateWorkspaceMetadata by
       // applyToWorkspace's spread.
-      const { ptyId, workspaceId: payloadWsId, activity, teammatesWorking, subagents, shellPrompt, pendingQuestion, lastMessage, lastActivity, paneId, paneLabel, paneRole, agentSlug, hookKind, settled, daemonTurnOpen, ...rest } = payload;
+      const { ptyId, workspaceId: payloadWsId, activity, teammatesWorking, subagents, shellPrompt, pendingQuestion, lastMessage, lastActivity, paneId, paneLabel, paneRole, agentSlug, hookKind, settled, daemonTurnOpen, stalledSince, ...rest } = payload;
 
       // The orchestrator's own brain pty (the `claude-pty` vendor's embedded
       // Claude Code TUI) is not a fleet agent. The daemon has no idea it is
@@ -851,6 +852,15 @@ export function useNotificationListener() {
         // The daemon's "no turn": withdraws only a latch the daemon opened.
         if (daemonTurnOpen === false) {
           state.closeDaemonTurn(ptyId);
+        }
+        // StallWatch: the pane's Claude turn seems stuck (a number) or moved on
+        // (null). The first edge of a stall also raises a system notification.
+        if (stalledSince === null) {
+          state.setSurfaceStalled(ptyId, null);
+        } else if (typeof stalledSince === 'number') {
+          const fresh = state.surfaceStalledAt[ptyId] === undefined;
+          state.setSurfaceStalled(ptyId, stalledSince);
+          if (fresh) handleNotification(ptyId, { type: 'warning', title: t('agentStall.notifyTitle'), body: t('agentStall.notifyBody'), category: 'system' });
         }
         // The surface's own branch (Moa's view pointer): the workspace record
         // above only follows the active pane, and only at the time it arrives.

@@ -556,7 +556,7 @@ export interface WebDeviceResolver {
    */
   registerPush?(
     deviceId: string,
-    input: { apnsToken: string; publicKey: string; apnsEnvironment?: unknown },
+    input: { apnsToken: string; publicKey: string; apnsEnvironment?: unknown; capabilities?: unknown },
   ): { ok: boolean; reason?: string };
   /**
    * Record where to reach this device's Live Activity. Optional for the same
@@ -7981,6 +7981,7 @@ export class WebTerminalServer {
         apnsToken?: unknown;
         publicKey?: unknown;
         apnsEnvironment?: unknown;
+        capabilities?: unknown;
       };
       const apnsToken = typeof b.apnsToken === 'string' ? b.apnsToken : '';
       const publicKey = typeof b.publicKey === 'string' ? b.publicKey : '';
@@ -8003,6 +8004,7 @@ export class WebTerminalServer {
           apnsToken,
           publicKey,
           ...(hasStage ? { apnsEnvironment: b.apnsEnvironment } : {}),
+          capabilities: b.capabilities,
         });
       } catch (err) {
         this.deps.log('warn', `[web] push registration threw: ${errMsg(err)}`);

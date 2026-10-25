@@ -1389,6 +1389,14 @@ export class DaemonClient extends EventEmitter {
           }
           break;
         }
+        case 'agent.stall': {
+          const data = event.data as { stalledSince?: unknown } | null;
+          const stalledSince = data?.stalledSince;
+          if (stalledSince === null || (typeof stalledSince === 'number' && Number.isFinite(stalledSince))) {
+            this.emit('session:agentStall', { sessionId: event.sessionId, stalledSince });
+          }
+          break;
+        }
         case 'agent.event':
           this.emit('session:agent', { sessionId: event.sessionId, event: event.data });
           break;

@@ -905,18 +905,28 @@ Decisions Log for the full contract.
 A 300px list beside a main pane. The list: the title, New schedule, a filter,
 then one row per schedule (its name over a muted `next run · schedule` line;
 turned-off schedules dimmed). The main pane shows the selected schedule,
-the composer, or — with nothing selected — "Schedule a task" and six
-development templates (repo briefing, nightly tests, dependency audit, flaky
-tests, changelog draft, issue triage) that open the composer filled in.
+the composer, or — with nothing selected — "Schedule a task" and seven
+templates that open the composer filled in: six development ones (repo
+briefing, nightly tests, dependency audit, flaky tests, changelog draft, issue
+triage) and "Publish through the browser". That one also fills Claude, Scoped
+and the wmux browser tools a publishing run needs (open, navigate, tabs,
+snapshot, screenshot, click, type, fill, press key, select, scroll, wait, file
+upload, dialog; never page script, cookies, storage or network), and opens
+with More options shown and the browser identity picker focused, a muted
+"Pick a browser identity so the run uses your logged-in profile." under it
+until one is picked. Nothing is picked or granted for the user; saving asks
+as always.
 
 - **Composer = one prompt box.** The name follows the prompt's first line
   until it is typed over. A row of chips under the box sets the schedule
   (daily, weekdays, weekly or picked days, and a time), the folder (the
   current workspace's by default) and the agent and account, each in a small
   popover. Permission, model, effort, the missed-run window and the response
-  limit sit behind More options at their defaults. One primary action
-  (Create, Save or Turn on) and Cancel; a problem shows under the part it is
-  about.
+  limit sit behind More options at their defaults. Under the permission, a
+  Claude run in Auto or Bypass with no browser identity gets one muted line,
+  "Browser tools are not included in Auto." (or Bypass): those runs start
+  without wmux's tools. One primary action (Create, Save or Turn on) and
+  Cancel; a problem shows under the part it is about.
 - **Missed while asleep:** after the computer slept through scheduled runs,
   one notice under the list header on the `--selection-subtle` fill: "N runs
   missed while asleep", a muted line that Run now starts each schedule once,
@@ -924,7 +934,9 @@ tests, changelog draft, issue triage) that open the composer filled in.
   it; until then the sidebar's Schedules row counts it once as needs you.
 - **Detail:** the name, the on/off switch, the next run, Run now and Edit,
   then the run history (status dot, start, duration, result, Open for a live
-  run). Dividers are `--stroke` hairlines.
+  run). Dividers are `--stroke` hairlines. A run whose browser calls used the
+  shared default Chrome profile because nothing was bound carries one
+  `ui-note` line under its row: "Ran in the shared default Chrome profile".
 - **Bot routines:** under the schedules, a muted "Bot routines" heading and
   one read-only row per routine a bot keeps for itself (its title over a
   muted `bot · schedule · next run` line; a paused one dimmed, with why). A
@@ -980,7 +992,9 @@ Settings › LAN keeps only the listener switches. Top to bottom:
   with "PCs already paired must be invited again"), or the firewall check's
   verdict with its one fitting action (**Allow through firewall**, whose
   line says which prompt Windows will show; **Open network settings** for a
-  Public network; **Open Windows Firewall** for a Block rule; **Copy
+  Public network, which opens the Wi-Fi or Ethernet page of that network's
+  adapter when the check knows its kind (Network status otherwise), where
+  its profile is switched; **Open Windows Firewall** for a Block rule; **Copy
   details** for a Domain (work) network, policy, block-all, another
   firewall product or a refused program; **Check firewall** when the check
   could not be read). After a declined prompt the Allow row keeps **Allow
@@ -990,7 +1004,11 @@ Settings › LAN keeps only the listener switches. Top to bottom:
   focus moves to the row or line that replaced it. Every click ends in a
   line: declined, failed (with the step that failed), another change still
   running, or the check after it failing (then the could-not-read row with
-  Check firewall). An earlier
+  Check firewall). On Windows, a listener offered on both a Private and a
+  Public network gets its own row for the Public one ("Works over
+  Tailscale; not over Wi-Fi (Public)." with "If you trust Wi-Fi, set it to
+  Private in Windows Settings.") and **Open network settings**, on every
+  surface, the Remote page included. An earlier
   Windows prompt that opened wmux to public networks gets its own row with
   **Open Windows Firewall** (after a Fix it adds that this port is now
   blocked on public networks). Tone: warning — the caution yellow on the
@@ -1624,6 +1642,10 @@ always neutral (the fill ladder).
     - In that dialog (and on the Remote page) the prompt is sent only as shown. While a typed value would still be masked, a `wmux-a2a-note` line says how many. Send then puts the masked text in the box and asks for a review, and the next Send sends it.
     - When every account is out, one line with the earliest time one reopens.
   - **Colour.** None beyond the armed clock.
+- **Stuck-turn chip and card** (owner approval 2026-10-25).
+  - **The chip.** A pane whose Claude turn the daemon reads as stuck (no transcript progress, no tool in flight, nobody asked) shows one chip in its tab strip's flow beside the usage-limit chip: the word "Seems stuck" in `--accent-yellow`, nothing else coloured. It shows only while the stall lasts. Clicking it opens the card.
+  - **The card.** The usage-limit card's popover (`placePopover`; Escape, an outside click or a resize closes it): one line saying how long nothing moved and that wmux never stops a turn on its own, then Stop and prefill (secondary) and Keep waiting (ghost). Stop and prefill interrupts the turn and puts the last prompt back into an empty input, unsent. A stop that fails keeps the card open with one line.
+  - **The sidebar.** The agent row's trailer reads "Seems stuck" in `--accent-yellow` in place of the live activity. The running mark and the status word stay; no new status mark, never the attention orange.
 - **Needs you is the attention orange everywhere** — the sidebar ring, hairline,
   labels and counts, the collapsed rail's mark, the rail badge and dot,
   Fleet's Needs you chip, section dot and row word, and the titlebar count —
@@ -2053,6 +2075,7 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
 | 2026-10-23 | Owner handoff: Tailscale easy connect. The Remote page's This computer band gains the four-check Tailscale checklist (installed, signed in, this PC on the tailnet, the other device visible), each failure with exactly one button that only opens the download page or the Tailscale app, or unfolds how to sign the other device in. A connection over the tailnet checks Tailscale first and fails at once with the reason and that button. A PC connection in use (an A2A PC with an active link, an attached workspace share) that drops gets one warning toast once the drop outlasts its grace (A2A 16 s, the first four redials; workspace share two failed polls in a row), naming Tailscale only when the connection's own address is surely Tailscale's (a `*.ts.net` name or a peer its status lists), and the toast goes away when it reconnects; phones are out. A silent A2A drop is seen after 40 s with nothing from the other end, on both sides of the pair (the side that was joined ends a stream whose joiner stopped pinging), so it is reported by 56 s | Getting two machines onto the tailnet was a sequence of unexplained timeouts. One glance says which step is missing and one click opens the place to fix it, while signing in and connecting stay the person's own act. The grace keeps a reconnect blip silent |
 | 2026-10-24 | Owner decision (chat view G2/G5): each chat view carries a neutral kind badge, "Terminal-linked chat" (chat 1) or "Chat only" (chat 2), with a hover line; chat 1's approval note reads "Waiting for your approval. Answer in Terminal". The Terminal / Chat switch is labelled "Show as chat", and the first Claude or Codex start in a pane asks once per agent "Show this as a chat?" (Show / Keep terminal); users who already set the chat view are never asked | Two chats looked alike and the approval note read like an error. Asking once, at the moment an agent first runs, finds the chat view for new users without changing anything for people who already chose |
 | 2026-10-25 | Owner decision (roadmap R2): Rewind gets a button on the agent toolbar after Schedule, besides its pane ⋮ menu item. It shows only for a Claude terminal and is disabled while Claude is mid-turn, with "Claude is working" as the tooltip; a draft or an open prompt is still refused at click time with the same toasts as the menu. The onboarding toolbar step names it | When an agent broke the code, people asked the agent to undo it and made it worse, because Rewind sat in a menu they never opened. A sixth pane-cluster button would break the five-button width contract; the toolbar is already the home of session verbs such as Schedule, and the onboarding step covers the bar being hover-revealed |
+| 2026-10-25 | Chrome profile for unbound workspaces: in the workspace's right-click Chrome profile submenu, an unbound workspace gets a first row "Use <name> (last used)" that binds that profile on click, and the default row reads "default (shared by workspaces with no profile)". Both are plain menu rows: no colour, no badge. The first time a browser call in an unbound workspace uses the shared default profile in a run of the app, one info toast says "This workspace has no Chrome profile, so the browser used the shared default profile." with a Use <name> action when a last-used profile exists; clicking the toast jumps to the workspace. Nothing binds on its own | Scheduled runs and agents in a new workspace opened the shared default Chrome, which is usually signed out, and nothing said why. The offer sits where the choice is already made, the toast comes at the moment it matters, and "no logins" is not claimed because the shared profile may be signed in |
 
 ### Desktop conversation view
 

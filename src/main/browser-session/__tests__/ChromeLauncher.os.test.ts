@@ -13,6 +13,9 @@ const { spawnMock, state } = vi.hoisted(() => ({
   state: { portFiles: {} as Record<string, string> },
 }));
 vi.mock('child_process', () => ({ spawn: spawnMock }));
+// AutoUpdater is imported for INSTALL_PREPARE_CAP_MS only; it reads the app
+// version at module load.
+vi.mock('electron', () => ({ app: { getVersion: () => '0.0.0' }, autoUpdater: {}, ipcMain: {}, net: {}, shell: {} }));
 vi.mock('node:fs', async (orig) => {
   const real = (await orig()) as Record<string, unknown>;
   return {
@@ -347,7 +350,8 @@ describe('ChromeLauncher', () => {
 
 // Registry: one launcher per profile, workspace-binding resolution (Phase 2.5).
 import { join } from 'node:path';
-import { ChromeLauncherRegistry } from '../ChromeLauncher';
+import { ChromeLauncherRegistry, QUIT_GRACE_MS } from '../ChromeLauncher';
+import { INSTALL_PREPARE_CAP_MS } from '../../updater/AutoUpdater';
 
 describe('ChromeLauncherRegistry', () => {
   function makeStore(bindings: Record<string, string>) {
@@ -482,6 +486,39 @@ describe('ChromeLauncherRegistry', () => {
     const again = registry.forProfile('during-install');
     expect(again).not.toBe(late);
     expect(registry.peekLauncher('during-install')).toBe(again);
+  });
+
+  it('disposeAll settles within the quit grace, under the install cap, with a wedged endpoint and children that never exit', async () => {
+    const childA = makeChild();
+    const childB = makeChild();
+    spawnWritesPortFile(childA);
+    spawnWritesPortFile(childB);
+    fetchMock.mockResolvedValue(fetchOk({}));
+    const registry = new ChromeLauncherRegistry({
+      defaultDir: '/tmp/default-prof',
+      profilesDir: '/tmp/profiles',
+      store: makeStore({}),
+    });
+    await registry.forProfile('wedged-a').endpoint();
+    await registry.forProfile('wedged-b').endpoint();
+    // Every CDP call hangs from here on, and neither child ever exits.
+    fetchMock.mockImplementation(() => new Promise(() => undefined));
+    const margin = 250;
+    // prepareInstallQuit's flushes run only if disposeAll settles before the
+    // updater stops waiting on it.
+    expect(QUIT_GRACE_MS + margin).toBeLessThan(INSTALL_PREPARE_CAP_MS);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      let settled = false;
+      const stopping = registry.disposeAll().then(() => { settled = true; });
+      await vi.advanceTimersByTimeAsync(QUIT_GRACE_MS + margin);
+      expect(settled).toBe(true);
+      await stopping;
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(childA.kill).toHaveBeenCalled();
+    expect(childB.kill).toHaveBeenCalled();
   });
 
   it('revealNewest activates the newest tab of a running pane profile and never launches one', async () => {

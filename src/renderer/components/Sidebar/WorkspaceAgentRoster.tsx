@@ -396,6 +396,8 @@ function WorkspaceAgentRoster({ workspaceId, pulsingPaneId, taskIds, renderTask,
   const unverifiableMinutesByPtyId = useRowStore(useShallow(selectUnverifiablePaneMinutes));
   // Glance board: per-pane "changed since you last looked".
   const unseenByPtyId = useRowStore(useShallow(selectSidebarUnseen));
+  // Panes whose Claude turn the daemon reads as stuck (StallWatch).
+  const stalledAtByPtyId = useRowStore((s) => s.surfaceStalledAt);
   // Browser mirror (wmux web /app): a stashed row cannot be brought back from here.
   const readOnly = useRowStore((s) => s.readOnly);
   // 2026-09-27 — this workspace's tasks, filed under the requesting pane.
@@ -470,6 +472,7 @@ function WorkspaceAgentRoster({ workspaceId, pulsingPaneId, taskIds, renderTask,
             // #1481 — last activity rides the title line (muted) unless the
             // agent is blocked on a question, which keeps its own red line.
             const inlineActivity = !row.pendingQuestion ? row.activity : undefined;
+            const stuck = !row.pendingQuestion && !!row.ptyId && stalledAtByPtyId?.[row.ptyId] !== undefined;
             // Subagents still at work: why a pane whose main turn ended may
             // still read as running.
             const subagentLabel = row.subagents
@@ -487,7 +490,7 @@ function WorkspaceAgentRoster({ workspaceId, pulsingPaneId, taskIds, renderTask,
               ? (exited ? t('roster.recoverAction') : t('roster.unstashAction'))
               : undefined;
             const stashedAgo = row.stashedAt ? timeAgo(row.stashedAt) : undefined;
-            const rowAriaLabel = [row.ptyId && unseenByPtyId[row.ptyId] ? t('sidebar.changedSinceSeen') : undefined, primary, agentLabel !== primary ? agentLabel : undefined, secondary, unverifiableLabel ?? statusLabel, subagentLabel, elapsed, stashedAgo, detail, verb]
+            const rowAriaLabel = [row.ptyId && unseenByPtyId[row.ptyId] ? t('sidebar.changedSinceSeen') : undefined, primary, agentLabel !== primary ? agentLabel : undefined, secondary, stuck ? t('agentStall.label') : undefined, unverifiableLabel ?? statusLabel, subagentLabel, elapsed, stashedAgo, detail, verb]
               .filter(Boolean)
               .join(', ');
             const rowTaskIds = firstRowOfPane.get(row.paneId) === index ? taskSplit.byPane.get(row.paneId) : undefined;
@@ -613,7 +616,16 @@ function WorkspaceAgentRoster({ workspaceId, pulsingPaneId, taskIds, renderTask,
                         coordinate-hidden row would end in a dangling dot.
                         #1481 — live activity takes the trailer's place while
                         it lasts; the coordinate stays in the tooltip. */}
-                    {inlineActivity ? (
+                    {/* A stuck turn takes the trailer's place, in the caution
+                        colour; the running mark and status word stay. */}
+                    {stuck ? (
+                      <>
+                        <span className="flex-none text-[11px] text-[var(--text-muted)]">·</span>
+                        <span className="min-w-0 max-w-[55%] flex-none truncate text-[11px] text-[var(--accent-yellow)]" data-roster-stalled>
+                          {t('agentStall.label')}
+                        </span>
+                      </>
+                    ) : inlineActivity ? (
                       <>
                         <span className="flex-none text-[11px] text-[var(--text-muted)]">·</span>
                         <span className="min-w-0 max-w-[55%] flex-none truncate text-[11px] text-[var(--text-muted)]" data-roster-activity>

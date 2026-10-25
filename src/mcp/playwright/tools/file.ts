@@ -24,6 +24,8 @@ import {
 import type { BrowserToolDeps } from '../browserScope';
 import { resolveRef } from '../snapshot';
 import { describeToolError } from '../toolError';
+import { recordAction } from '../../browser-replay/actionRing';
+import { uploadFilesPlaceholder } from '../../../shared/browserReplay/actionTrace';
 import {
   EFFECT_TRAILER_NOTE,
   taggedFailure,
@@ -189,7 +191,7 @@ function displayRoot(root: string): string {
  * and the upload — which needs write access to the uploads root and is no wider
  * than it was when Playwright did the reading.
  */
-function validateUploadPath(input: string): string {
+export function validateUploadPath(input: string): string {
   if (typeof input !== 'string' || input.length === 0) {
     throw new Error('browser_file_upload blocked: empty path');
   }
@@ -241,7 +243,7 @@ function validateUploadPath(input: string): string {
 // ---------------------------------------------------------------------------
 
 /** The default file input — the page's first one, as before `selector` existed. */
-const DEFAULT_FILE_INPUT_SELECTOR = 'input[type="file"]';
+export const DEFAULT_FILE_INPUT_SELECTOR = 'input[type="file"]';
 
 /**
  * Fallback wall-clock for the ref path. Nothing legitimate can reach it: that
@@ -647,7 +649,7 @@ const FILE_INPUT_PROXIMITY_HINT =
  * receive the files: the element itself when it already is one, otherwise the
  * nearest `input[type=file]` around it. Null when neither exists.
  */
-async function resolveFileInputFromRef(
+export async function resolveFileInputFromRef(
   el: ElementHandleLike,
 ): Promise<ElementHandleLike | null> {
   // Fail-open at every step: when the probe cannot run at all, the element the
@@ -753,6 +755,14 @@ export function registerFileTools(server: McpServer, deps: BrowserToolDeps): voi
           await effect.dispatch(() => setInputFilesTagged(fileInput, safePaths, resolvedTimeout));
         }
 
+        // Recorded with a placeholder per file, never the paths themselves.
+        recordAction(deps, {
+          scope,
+          tool: 'browser_file_upload',
+          page,
+          ...(ref ? { ref } : { selector: resolvedSelector }),
+          args: { files: uploadFilesPlaceholder(safePaths.length) },
+        });
         return withEffectTrailer(
           {
             content: [

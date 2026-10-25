@@ -194,6 +194,35 @@ describe('explain-only actions', () => {
     expect(mixed).toContain('net.fw.partlyPublic(Tailscale,Wi-Fi)');
   });
 
+  it('Open network settings names the Public networks\' adapter page, or Network status', () => {
+    const page = (publicMedium: 'wifi' | 'ethernet' | null): string | undefined =>
+      /data-settings-page="([^"]+)"/.exec(view(ctl({ status: status({ verdict: 'public-network', publicNetworks: ['Wi-Fi'], publicMedium }) })))?.[1];
+    expect(page('wifi')).toBe('ms-settings:network-wifi');
+    expect(page('ethernet')).toBe('ms-settings:network-ethernet');
+    expect(page(null)).toBe('ms-settings:network-status');
+  });
+
+  it('a Private and a Public network: the Public one gets its own row with Open network settings, Windows only', () => {
+    const mixed = status({ verdict: 'covered', okNetworks: ['Tailscale'], publicNetworks: ['Wi-Fi'], publicMedium: 'wifi' });
+    for (const quiet of [false, true]) {
+      const html = view(ctl({ status: mixed }), { quiet });
+      expect(count(html, 'data-firewall-partly="a2a"')).toBe(1);
+      expect(html).toContain('net.fw.partlyPublic(Tailscale,Wi-Fi)');
+      expect(html).toContain('net.fw.partlyPublicHint(Wi-Fi)');
+      expect(count(html, 'data-firewall-open="network"')).toBe(1);
+      expect(html).toContain('data-settings-page="ms-settings:network-wifi"');
+      expect(html).not.toMatch(/attention/);
+    }
+    // Beside another notice it stays its own row; the notice keeps its one action.
+    const withFix = view(ctl({ status: { ...mixed, verdict: 'not-covered' } }));
+    expect(count(withFix, 'data-firewall-partly="a2a"')).toBe(1);
+    expect(count(withFix, 'net.fw.partlyPublic(')).toBe(1);
+    expect(withFix).toContain('data-firewall-fix');
+    // Never on macOS, never when only one kind of network is in use.
+    expect(view(ctl({ status: { ...mixed, platform: 'darwin', ruleIds: null } }))).not.toContain('data-firewall-partly');
+    expect(view(ctl({ status: status({ verdict: 'covered', okNetworks: ['Tailscale'] }) }))).not.toContain('data-firewall-partly');
+  });
+
   it('a Block rule: Open Windows Firewall; unknown: Check', () => {
     expect(view(ctl({ status: status({ verdict: 'blocked-by-rule' }) }))).toContain('data-firewall-open="firewall"');
     expect(view(ctl({ status: status({ verdict: 'unknown' }) }))).toContain('data-firewall-check');

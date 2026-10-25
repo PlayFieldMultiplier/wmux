@@ -37,13 +37,35 @@ export interface AgentStopDeps {
    *  the tree is known, right before the first signal; false refuses the
    *  stop (`turn_open`) and nothing is signalled. */
   stillIdle?: () => boolean;
+  /** Windows (fromTerminal's stop, winProcessSweep.ts): the tree read can
+   *  be seconds old by the first signal, and a child started after it
+   *  outlives its killed parent. */
+  sweep?: AgentStopSweep;
+  now?: () => number;
+}
+
+export interface AgentStopSweep {
+  /** Once the tree is known, before the first signal, from a fresh read:
+   *  null when that read does not show the same root (or cannot be read), or
+   *  shows running a descendant it cannot confirm (or an uncertain one): a
+   *  clean stop cannot be proven, so nothing may be signalled. Otherwise the
+   *  descendants it shows as the same processes (`kill`) and those it does
+   *  not (`unsure`, gone by that read: never signalled). Never throws. */
+  arm: (tree: { root: ProcessTreeEntry; descendants: ProcessTreeEntry[]; uncertain?: ProcessTreeEntry[] }) => Promise<{ kill: ProcessTreeEntry[]; unsure: ProcessTreeEntry[] } | null>;
+  /** Once the tree is gone, with the time each of its processes was first
+   *  seen gone (the read that found it so): 'left'
+   *  when a process the stop may have orphaned still runs, which fails the
+   *  stop. */
+  run: (goneBy: ReadonlyMap<number, number>) => Promise<'clean' | 'left'>;
 }
 
 export type AgentStopResult =
   | { ok: true; stopped: false }
   | { ok: true; stopped: true; pid: number; killed: number }
   | { ok: false; code: 'still_running'; pid: number }
-  | { ok: false; code: 'turn_open' };
+  | { ok: false; code: 'turn_open' }
+  // The sweep's read did not confirm the tree: nothing was signalled.
+  | { ok: false; code: 'unverified' };
 
 /** Whether a pane's turn is over by the daemon's own state: a turn known
  *  closed, no running turn, no prompt waiting. Pure. */
@@ -55,8 +77,13 @@ export async function stopAgentTree(deps: AgentStopDeps): Promise<AgentStopResul
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const tree = await deps.tree();
   if (!tree) return { ok: true, stopped: false };
+  const armed = deps.sweep ? await deps.sweep.arm(tree) : null;
+  if (deps.sweep && !armed) return { ok: false, code: 'unverified' };
   if (deps.stillIdle && !deps.stillIdle()) return { ok: false, code: 'turn_open' };
-  const all = [tree.root, ...tree.descendants];
+  const all = armed ? [tree.root, ...armed.kill] : [tree.root, ...tree.descendants];
+  const now = deps.now ?? Date.now;
+  // When each process of the tree was known gone, for the sweep.
+  const goneBy = new Map<number, number>();
   const signal = (pid: number, sig: NodeJS.Signals): void => {
     try {
       deps.kill(pid, sig);
@@ -64,9 +91,15 @@ export async function stopAgentTree(deps: AgentStopDeps): Promise<AgentStopResul
       /* already gone */
     }
   };
+  // Each read also records, for the sweep, when a process was first seen gone.
   const running = async (entries: readonly ProcessTreeEntry[]) => {
     const r = await deps.stillRunning(entries);
-    return Array.isArray(r) ? { same: r, unsure: [] } : r;
+    const split = Array.isArray(r) ? { same: r, unsure: [] } : r;
+    const readAt = now();
+    for (const e of entries) {
+      if (!goneBy.has(e.pid) && !split.same.includes(e) && !split.unsure.includes(e)) goneBy.set(e.pid, readAt);
+    }
+    return split;
   };
   signal(tree.root.pid, 'SIGTERM');
   const graceMs = deps.graceMs ?? AGENT_STOP_GRACE_MS;
@@ -75,7 +108,7 @@ export async function stopAgentTree(deps: AgentStopDeps): Promise<AgentStopResul
     if (root.same.length + root.unsure.length === 0) break;
     await sleep(POLL_MS);
   }
-  const pending = [...all, ...(tree.uncertain ?? [])];
+  const pending = [...all, ...(tree.uncertain ?? []), ...(armed?.unsure ?? [])];
   let left = await running(pending);
   // Killed: only a process of the tree proven to be the one found then.
   const toKill = left.same.filter((e) => all.some((a) => a.pid === e.pid));
@@ -87,5 +120,8 @@ export async function stopAgentTree(deps: AgentStopDeps): Promise<AgentStopResul
   // Anything of the tree still running (a kill that was refused, a process
   // never signalled because it was uncertain or unsure) is not a stop.
   if (left.same.length + left.unsure.length > 0) return { ok: false, code: 'still_running', pid: tree.root.pid };
+  if (deps.sweep) {
+    if ((await deps.sweep.run(goneBy).catch(() => 'left' as const)) === 'left') return { ok: false, code: 'still_running', pid: tree.root.pid };
+  }
   return { ok: true, stopped: true, pid: tree.root.pid, killed: all.length };
 }

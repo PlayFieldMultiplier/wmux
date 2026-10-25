@@ -45,12 +45,23 @@ vi.mock('../../playwright/dom-intelligence', () => ({
   },
 }));
 
+/** Files a replayed upload step handed to setInputFiles, per call. */
+const uploads: string[][] = [];
+vi.mock('../../playwright/tools/file', () => ({
+  // The real gate allows only paths under the uploads root; `/uploads/` stands in for it.
+  validateUploadPath: (p: string) => {
+    if (!p.startsWith('/uploads/')) throw new Error(`browser_file_upload blocked: "${p}" is outside the upload root`);
+    return p;
+  },
+  resolveFileInputFromRef: async (el: unknown) => el,
+}));
+
 import { replayBlockedReason, replayTrace } from '../replayRunner';
 import type { NavigationPolicyOptions } from '../../../shared/types';
 
 // The private-network switch off, as main answers it by default.
 const policyOff = async (): Promise<NavigationPolicyOptions> => ({ allowPrivateNetwork: false });
-import { refMapShapeHash, type TraceRecord, type TraceStep } from '../../../shared/browserReplay/actionTrace';
+import { refMapShapeHash, uploadFilesPlaceholder, type TraceRecord, type TraceStep } from '../../../shared/browserReplay/actionTrace';
 
 const clicks: string[] = [];
 const pressed: string[] = [];
@@ -97,6 +108,7 @@ function element(tag: string) {
     scrollIntoViewIfNeeded: async () => undefined,
     evaluate: async () => undefined,
     boundingBox: async () => ({ x: 0, y: 0, width: 10, height: 10 }),
+    setInputFiles: async (files: string[]) => { uploads.push(files); },
   } as never;
 }
 
@@ -129,6 +141,7 @@ beforeEach(() => {
   // restore the last one's script leaks into the next.
   vi.restoreAllMocks();
   clicks.length = 0;
+  uploads.length = 0;
   pressed.length = 0;
   goneTo.length = 0;
   waits.length = 0;
@@ -1164,3 +1177,37 @@ describe('the mutating tools’ effect trailer does not reach a replay', () => {
     expect(JSON.stringify(result)).not.toContain('effect_state');
   });
 });
+
+describe('replayTrace — file uploads', () => {
+  const upload = (files = uploadFilesPlaceholder(1)) => refStep({ tool: 'browser_file_upload', args: { files } });
+
+  it('uploads the files supplied for the placeholders', async () => {
+    const mod = await import('../../playwright/snapshot');
+    vi.spyOn(mod, 'resolveRef').mockResolvedValue(element('upload'));
+    const result = await replayTrace(page, trace([upload(uploadFilesPlaceholder(2))]), {
+      file: '/uploads/a.png',
+      file_2: '/uploads/b.png',
+    }, policyOff);
+    expect(result.ok).toBe(true);
+    expect(uploads).toEqual([['/uploads/a.png', '/uploads/b.png']]);
+  });
+
+  it('refuses a path outside the upload root and uploads nothing', async () => {
+    const mod = await import('../../playwright/snapshot');
+    vi.spyOn(mod, 'resolveRef').mockResolvedValue(element('upload'));
+    const result = await replayTrace(page, trace([upload()]), { file: '/Users/me/.ssh/id_ed25519' }, policyOff);
+    expect(result.ok).toBe(false);
+    expect(result.steps[0].detail).toContain('outside the upload root');
+    expect(uploads).toEqual([]);
+  });
+
+  it('stops when no file was supplied', async () => {
+    const mod = await import('../../playwright/snapshot');
+    vi.spyOn(mod, 'resolveRef').mockResolvedValue(element('upload'));
+    const result = await replayTrace(page, trace([upload()]), {}, policyOff);
+    expect(result.ok).toBe(false);
+    expect(result.steps[0].detail).toContain('missing variable(s): file');
+    expect(uploads).toEqual([]);
+  });
+});
+

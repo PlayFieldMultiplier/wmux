@@ -26,6 +26,9 @@ import {
   stepsFingerprint,
   stripUrlUserinfo,
   traceVariableNames,
+  uploadFilesPlaceholder,
+  NO_AXIS,
+  UPLOAD_FILE_SEPARATOR,
   type TraceRecord,
   type TraceStep,
 } from '../actionTrace';
@@ -579,3 +582,13 @@ describe('stepsFingerprint', () => {
     );
   });
 });
+
+describe('uploadFilesPlaceholder', () => {
+  it('records one placeholder per file and never a path', () => {
+    expect(uploadFilesPlaceholder(1)).toBe('{{file}}');
+    expect(uploadFilesPlaceholder(3).split(UPLOAD_FILE_SEPARATOR)).toEqual(['{{file}}', '{{file_2}}', '{{file_3}}']);
+    expect(traceVariableNames({ steps: [{ tool: 'browser_file_upload', axis: NO_AXIS, args: { files: uploadFilesPlaceholder(2) } }] }))
+      .toEqual(['file', 'file_2']);
+  });
+});
+

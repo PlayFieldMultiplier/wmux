@@ -369,6 +369,8 @@ export const IPC = {
   BROWSER_HELP_OPEN: 'browser:help-open',
   BROWSER_HELP_RESOLVE: 'browser:help-resolve',
   BROWSER_HELP_CLOSED: 'browser:help-closed',
+  /** main → renderer: an unbound workspace's browser call used the shared default Chrome profile. */
+  CHROME_PROFILE_FALLBACK: 'browser:chrome-profile-fallback',
   // #898 — main → renderer push, once at startup, when a Claude Code plugin
   // install is found whose bridge still forces a permission prompt. wmux
   // refreshes its OWN copy of the bridge but never the plugin's, so this tells

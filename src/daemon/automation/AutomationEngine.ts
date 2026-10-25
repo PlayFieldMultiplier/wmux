@@ -423,6 +423,18 @@ export class AutomationEngine {
     return { ok: true };
   }
 
+  /** A browser call of the live run behind `ptyId` used the shared default Chrome profile: say so on the run. */
+  async noteRunBrowserProfile(ptyId: unknown): Promise<AutomationOkResult> {
+    const runId = typeof ptyId === 'string' ? this.panes.get(ptyId) : undefined;
+    const run = runId ? this.runs.find((r) => r.id === runId) : undefined;
+    if (!run || !this.live.has(run.id) || isFinalRunState(run.state)) return { ok: false, error: 'Not found' };
+    if (run.browserProfileUnbound) return { ok: true };
+    run.browserProfileUnbound = true;
+    this.emitRun(run);
+    await this.persistRuns();
+    return { ok: true };
+  }
+
   snapshot(runId: string): string | null {
     const run = this.runs.find((r) => r.id === runId);
     return run?.hasSnapshot ? readSnapshot(this.ports.wmuxDir, runId) : null;

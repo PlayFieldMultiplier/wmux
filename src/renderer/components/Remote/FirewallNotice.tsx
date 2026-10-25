@@ -6,11 +6,13 @@ import {
   failedError,
   firewallDetailsText,
   firewallOffer,
+  networkSettingsUri,
   partlyPublicSentence,
   type FirewallAction,
   type FirewallActionResult,
   type FirewallListener,
   type InboundStatusView,
+  type NetworkSettingsUri,
 } from '../../../shared/netFirewall';
 import { listenProblemSentence, type ListenProblemReport } from '../../../shared/netListen';
 
@@ -57,7 +59,8 @@ export interface FirewallActions {
   fix: () => void;
   remove: () => void;
   copyDetails: () => void;
-  open: (which: 'firewall' | 'network') => void;
+  /** `page`: a Windows Settings page (NETWORK_SETTINGS_URIS) for 'network'. */
+  open: (which: 'firewall' | 'network', page?: NetworkSettingsUri) => void;
 }
 
 export type FirewallController = FirewallState & FirewallActions;
@@ -175,9 +178,9 @@ export function useFirewall(listener: FirewallListener, opts: { enabled: boolean
     }, () => undefined);
   }, [state.status]);
 
-  const open = useCallback((which: 'firewall' | 'network') => {
+  const open = useCallback((which: 'firewall' | 'network', page?: NetworkSettingsUri) => {
     recheckOnReturn.current = true;
-    void api?.open(which);
+    void (page === undefined ? api?.open(which) : api?.open(which, page));
   }, [api]);
 
   return { ...state, check, fix: () => act('fix'), remove: () => act('remove'), copyDetails, open };
@@ -229,8 +232,16 @@ function actionButton(action: FirewallAction, c: FirewallController, primary: bo
     }
     case 'openFirewall':
       return <Button key="fw" size="sm" variant="secondary" onClick={() => c.open('firewall')} data-firewall-open="firewall">{t('net.fw.openFirewall')}</Button>;
-    case 'openNetworkSettings':
-      return <Button key="net" size="sm" variant="secondary" onClick={() => c.open('network')} data-firewall-open="network">{t('net.fw.openNetworkSettings')}</Button>;
+    case 'openNetworkSettings': {
+      // Windows: the page of the Public networks' adapter kind, where its
+      // network profile is switched; Network status when that is not known.
+      const page = c.status?.platform === 'win32' ? networkSettingsUri(c.status.publicMedium) : undefined;
+      return (
+        <Button key="net" size="sm" variant="secondary" onClick={() => c.open('network', page)} data-firewall-open="network" data-settings-page={page}>
+          {t('net.fw.openNetworkSettings')}
+        </Button>
+      );
+    }
     case 'copyDetails':
       return <Button key="copy" size="sm" variant="secondary" onClick={c.copyDetails} data-firewall-copy>{c.copied ? t('web.copied') : t('net.fw.copyDetails')}</Button>;
     case 'check':
@@ -335,7 +346,7 @@ export function FirewallNoticeView({ c, listener, primary, quiet = false, ownChe
       <NoticeRow
         key="main"
         title={t(offer.sentence.key, offer.sentence.vars)}
-        detail={[outcome, hint, partly ? t(partly.key, partly.vars) : null]}
+        detail={[outcome, hint]}
         actions={actions.map((a) => actionButton(a, c, primary, t, listener))}
         testId={{ 'data-firewall-notice': listener, 'data-verdict': s.verdict }}
         live={live}
@@ -348,8 +359,22 @@ export function FirewallNoticeView({ c, listener, primary, quiet = false, ownChe
     const seen = at ? t('net.fw.inboundSeen', { time: clockTime(at) }) : null;
     rows.push(
       <p key="line" ref={focusRef} tabIndex={-1} className="ui-note focus:outline-none" role={live ? 'status' : undefined} data-firewall-line={listener} data-verdict={s.verdict}>
-        {[t(offer.sentence.key, offer.sentence.vars), outcome, after, seen, partly ? t(partly.key, partly.vars) : null].filter(Boolean).join(' ')}
+        {[t(offer.sentence.key, offer.sentence.vars), outcome, after, seen].filter(Boolean).join(' ')}
       </p>,
+    );
+  }
+  // Offered on a Private and a Public network: the Public one gets its own
+  // row, with the page where its profile is switched.
+  if (partly && s.platform === 'win32') {
+    rows.push(
+      <NoticeRow
+        key="partly"
+        title={t(partly.key, partly.vars)}
+        detail={[t('net.fw.partlyPublicHint', { network: partly.vars.network })]}
+        actions={[actionButton('openNetworkSettings', c, false, t, listener)]}
+        testId={{ 'data-firewall-partly': listener }}
+        live={live}
+      />,
     );
   }
   if (s.exposedPublic && s.platform === 'win32') {

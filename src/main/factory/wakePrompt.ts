@@ -553,7 +553,10 @@ export function buildWakePrompt(input: WakePromptInput): string {
       lines.push(
         '',
         'No bot in this workspace has a repository, so nobody here can read or change a pull request, an issue or the code. '
-          + 'When the owner asks for such work, tell them so in one line and ask them to set a repository on a bot\'s profile; dispatch none of it.',
+          + 'When the owner asks for such work, tell them so in one line and ask them to set a repository on a bot\'s profile; dispatch none of it. '
+          + 'Making files the owner opens (an image, a document, a video, a spreadsheet) is not code work, even when local tools produce them: hand it with handoff_send to a bot that starts workers, '
+          + 'whose worker (preset "research") makes them in a scratch folder, and that bot hands the owner the files with room_post `files`. '
+          + 'Source code, scripts or patches meant for a repository are code work and stay refused.',
       );
     }
   }

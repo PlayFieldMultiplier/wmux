@@ -8,12 +8,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ResumeBinding } from '../../../../shared/agentResume';
 import type { ProcessTreeEntry } from '../../../AgentProcessTracker';
 import type { AgentStopResult } from '../../../agentStop';
+import type { IPty } from 'node-pty';
 import { continueOnAccount } from '../../../continueOnAccount';
+import { DaemonPTYBridge } from '../../../DaemonPTYBridge';
+import { PromptEventLog } from '../../../PromptEventLog';
+import { RingBuffer } from '../../../RingBuffer';
 import { ChildBackend } from '../childBackend';
 import { ClaudeDriver } from '../claude/claudeDriver';
 import { createChatV2Host } from '../host';
 import { beginPaneMove, endPaneMove } from '../paneClaims';
 import type { ChatV2Host, ChatV2HostDeps, ChatV2TerminalDeps } from '../types';
+import { STOPPED_PREFIX } from '../fromTerminal';
 import { FakeClaude, until } from './fakeClaude';
 
 // The login-shell PATH probe would run the user's real shell. `onExecEnv` lets
@@ -53,11 +58,24 @@ interface Rig {
   configDir: string;
   transcript: string;
   wmuxDir: string;
+  /** With `realShell`: the pane's bridge, and the shell's output into it. */
+  shell?: { bridge: DaemonPTYBridge; print: (data: string) => void };
 }
 
 const TREE = { root: { pid: 7001, ppid: 1, name: 'claude' }, descendants: [{ pid: 7002, ppid: 7001, name: 'node', cmdline: 'node github-mcp-server' }] };
 
-function rig(options: { stubborn?: boolean; paneConfigDir?: string } = {}): Rig {
+interface RigOptions {
+  stubborn?: boolean;
+  paneConfigDir?: string;
+  platform?: NodeJS.Platform;
+  shell?: string;
+  /** Look Claude up for real on the pane's `Path` instead of the stub, with these files present. */
+  windowsPath?: { path: string; files: string[] };
+  /** The pane's shell state from a real bridge fed OSC 133 markers, instead of an always-empty prompt. */
+  realShell?: boolean;
+}
+
+function rig(options: RigOptions = {}): Rig {
   const configDir = path.join(dir, 'claude-home');
   const transcript = path.join(configDir, 'projects', '-repo', `${SESSION}.jsonl`);
   fs.mkdirSync(path.dirname(transcript), { recursive: true });
@@ -79,10 +97,25 @@ function rig(options: { stubborn?: boolean; paneConfigDir?: string } = {}): Rig 
     },
   } as unknown as Rig;
   const pane = {
-    meta: { spawnCwd: dir, incarnationId: 'inc-1', env: { PATH: '/usr/bin', CLAUDE_CONFIG_DIR: options.paneConfigDir ?? configDir }, cmd: '/bin/zsh' },
-    promptLog: { size: 1, isCommandRunning: () => false },
-    bridge: { isEmptyShellPrompt: () => true, getInputRevision: () => 1 },
+    meta: {
+      spawnCwd: dir,
+      incarnationId: 'inc-1',
+      env: { ...(options.windowsPath ? { Path: options.windowsPath.path } : { PATH: '/usr/bin' }), CLAUDE_CONFIG_DIR: options.paneConfigDir ?? configDir },
+      cmd: options.shell ?? '/bin/zsh',
+    },
+    promptLog: { size: 1, isCommandRunning: () => false } as unknown,
+    bridge: { isEmptyShellPrompt: () => true, getInputRevision: () => 1, getKeyInputRevision: () => 1, rebaseShellKeyInput: () => undefined } as unknown,
   };
+  if (options.realShell) {
+    let output: ((data: string) => void) | null = null;
+    const pty = { onData: (cb: (data: string) => void) => { output = cb; return { dispose: () => undefined }; }, onExit: () => ({ dispose: () => undefined }) } as unknown as IPty;
+    const bridge = new DaemonPTYBridge();
+    const promptLog = new PromptEventLog();
+    bridge.setupDataForwarding(pty, new RingBuffer(65536), PANE, promptLog);
+    pane.bridge = bridge;
+    pane.promptLog = promptLog;
+    r.shell = { bridge, print: (data) => output?.(data) };
+  }
   const terminal: ChatV2TerminalDeps = {
     holdKeyboard: () => () => undefined,
     binding: () => r.term.binding,
@@ -114,8 +147,8 @@ function rig(options: { stubborn?: boolean; paneConfigDir?: string } = {}): Rig 
     processIdentity: async () => r.identity.value,
     killTree: async () => undefined,
     terminal,
-    claudeOnPath: async () => '/usr/local/bin/claude',
-    platform: 'darwin',
+    ...(options.windowsPath ? { fs: windowsFiles(options.windowsPath.files) } : { claudeOnPath: async () => '/usr/local/bin/claude' }),
+    platform: options.platform ?? 'darwin',
     moveTiming: { quietMs: 1, freeWaitMs: 30 },
     drivers: () => {
       const fake = new FakeClaude();
@@ -126,6 +159,24 @@ function rig(options: { stubborn?: boolean; paneConfigDir?: string } = {}): Rig 
   };
   r.host = createChatV2Host(deps);
   return r;
+}
+
+/** The real file system, plus the Windows `files` as regular files (names compared as Windows does, ignoring case). */
+function windowsFiles(files: string[]): NonNullable<ChatV2HostDeps['fs']> {
+  const present = new Set(files.map((f) => f.toLowerCase()));
+  return {
+    stat: (file) => {
+      if (present.has(file.toLowerCase())) return { size: 1, mtimeMs: 1, ino: 1 };
+      try {
+        const st = fs.statSync(file);
+        return st.isFile() ? { size: st.size, mtimeMs: st.mtimeMs, ino: st.ino } : null;
+      } catch {
+        return null;
+      }
+    },
+    isDirectory: (d) => { try { return fs.statSync(d).isDirectory(); } catch { return false; } },
+    realpath: (p) => fs.realpathSync.native(p),
+  };
 }
 
 const move = (r: Rig, paneId = PANE) => r.host.call('fromTerminal', { paneId }, 'main');
@@ -336,5 +387,176 @@ describe('terminal → chat', () => {
     }
     expect((await r.host.call('create', { paneId: PANE, agent: 'claude', mode: 'default' }, 'main')).ok).toBe(true);
     await r.host.dispose();
+  });
+});
+
+describe('terminal → chat on Windows', () => {
+  // A bare image name: path.basename of a Windows path is the whole string on POSIX.
+  const win = (options: RigOptions = {}) => rig({ platform: 'win32', shell: 'powershell.exe', ...options });
+
+  it('stops the TUI and resumes its session id from a PowerShell pane', async () => {
+    const r = win();
+    expect(await r.host.call('fromTerminal', { paneId: PANE, preview: true }, 'main')).toEqual({ ok: true, processes: [{ name: 'node', mcp: true }] });
+    const res = await move(r);
+    if (!res.ok) throw new Error(res.error.message);
+    expect(r.term.stops).toBe(1);
+    expect(res.binding).toMatchObject({ providerSessionId: SESSION, status: 'idle' });
+    expect(r.fakes[0].args).toContain('--resume');
+    await r.host.dispose();
+  });
+
+  it('a cmd.exe pane is refused before anything is stopped: it has no resume line', async () => {
+    const r = win({ shell: 'cmd.exe' });
+    const refused = { ok: false, error: { code: 'handoff-refused', message: 'This pane’s shell cannot reopen the conversation afterwards. Use PowerShell.' } };
+    expect(await r.host.call('fromTerminal', { paneId: PANE, preview: true }, 'main')).toMatchObject(refused);
+    expect(await move(r)).toMatchObject(refused);
+    expect(r.term.stops).toBe(0);
+    expect(r.fakes).toHaveLength(0);
+  });
+
+  it('a tree that does not die is reported as stopped, with Resume to reopen it', async () => {
+    const r = win();
+    r.term.stop = async () => ({ ok: false, code: 'still_running', pid: TREE.root.pid });
+    const res = await move(r);
+    expect(res).toMatchObject({ ok: false, error: { message: `${STOPPED_PREFIX} It did not exit; it may still be running in the terminal.` } });
+    expect(r.fakes).toHaveLength(0);
+    expect(r.host.bindingForPane(PANE)).toBeNull();
+  });
+
+  it('a pane without a session id wmux can resume is refused', async () => {
+    const r = win();
+    r.term.binding = undefined;
+    expect(await move(r)).toMatchObject({ ok: false, error: { message: 'This pane has no Claude conversation wmux can resume.' } });
+    const s = win();
+    s.term.binding = { ...s.term.binding!, sessionId: 'not-a-session-id' };
+    expect(await move(s)).toMatchObject({ ok: false, error: { message: 'This pane has no Claude conversation wmux can resume.' } });
+    expect(r.term.stops + s.term.stops).toBe(0);
+  });
+
+  it('another process with the session id in its argv keeps the conversation where it is', async () => {
+    const r = win();
+    r.term.holders = [{ pid: 9100, ppid: 1, name: 'claude.exe', cmdline: `claude.exe --resume ${SESSION}` }];
+    expect(await move(r)).toMatchObject({ ok: false, error: { message: 'Another process holds this conversation: claude.exe (pid 9100).' } });
+    expect(r.term.stops).toBe(0);
+  });
+
+  it('an agent process whose command line wmux cannot read counts as holding it, before and after the stop', async () => {
+    const r = win();
+    r.term.holders = [{ pid: 9200, ppid: 4, name: 'node.exe' }];
+    const message = 'A process wmux cannot read may hold this conversation: node.exe (pid 9200).';
+    expect(await move(r)).toMatchObject({ ok: false, error: { message } });
+    expect(r.term.stops).toBe(0);
+
+    const s = win();
+    s.term.stop = async () => {
+      s.term.holders = [{ pid: 9200, ppid: 4, name: 'node.exe' }];
+      return { ok: true, stopped: true, pid: TREE.root.pid, killed: 2 };
+    };
+    expect(await move(s)).toMatchObject({ ok: false, error: { message: `${STOPPED_PREFIX} ${message}` } });
+    expect(s.fakes).toHaveLength(0);
+    expect(s.host.bindingForPane(PANE)).toBeNull();
+  });
+
+  it('a stop whose read does not confirm Claude’s processes signals nothing and says so', async () => {
+    const r = win();
+    r.term.stop = async () => ({ ok: false, code: 'unverified' });
+    const res = await move(r);
+    expect(res).toMatchObject({ ok: false, error: { message: 'wmux could not confirm which processes are Claude’s, so nothing was stopped. Try again.' } });
+    expect(res.ok ? '' : res.error.message).not.toContain(STOPPED_PREFIX);
+    expect(r.fakes).toHaveLength(0);
+  });
+
+  it('names readable and unreadable holders apart', async () => {
+    const r = win();
+    r.term.holders = [{ pid: 9100, ppid: 1, name: 'claude.exe', cmdline: `claude.exe --resume ${SESSION}` }, { pid: 9200, ppid: 4, name: 'node.exe' }];
+    expect(await move(r)).toMatchObject({ ok: false, error: { message: 'Another process holds this conversation: claude.exe (pid 9100). A process wmux cannot read may hold it too: node.exe (pid 9200).' } });
+  });
+
+  it('finds claude.exe on the pane’s Path the way the driver’s spawn will', async () => {
+    const PATH = String.raw`C:\Windows\system32;;"D:\tools";C:\Users\u\.local\bin`;
+    const r = win({ windowsPath: { path: PATH, files: [String.raw`C:\Users\u\.local\bin\claude.exe`] } });
+    const res = await move(r);
+    if (!res.ok) throw new Error(res.error.message);
+    expect(r.term.stops).toBe(1);
+    await r.host.dispose();
+
+    // Only shims, no claude.exe: the chat runs only a native claude.exe, so it is refused and nothing is stopped.
+    const s = win({ windowsPath: { path: PATH, files: [String.raw`C:\Users\u\.local\bin\claude.cmd`, String.raw`D:\tools\claude.ps1`] } });
+    expect(await move(s)).toMatchObject({ ok: false, error: { message: 'Claude Code is not installed where the chat can run it.' } });
+    expect(s.term.stops).toBe(0);
+
+    // A quoted entry, padded with spaces.
+    const quoted = win({ windowsPath: { path: String.raw`C:\Windows; "C:\Program Files\Claude" ;`, files: [String.raw`C:\Program Files\Claude\claude.exe`] } });
+    expect((await move(quoted)).ok).toBe(true);
+    await quoted.host.dispose();
+  });
+
+  it('takes Claude from Path the way the spawn will: a shim in an earlier folder wins, so it is refused', async () => {
+    // The spawn walks the folders in order, trying each extension in a folder:
+    // A's claude.cmd comes before B's claude.exe.
+    const shimFirst = win({ windowsPath: { path: String.raw`C:\A;C:\B`, files: [String.raw`C:\A\claude.cmd`, String.raw`C:\B\claude.exe`] } });
+    expect(await move(shimFirst)).toMatchObject({ ok: false, error: { message: 'Claude Code is not installed where the chat can run it.' } });
+    expect(shimFirst.term.stops).toBe(0);
+
+    // The other way round: B's shim comes after A's claude.exe.
+    const exeFirst = win({ windowsPath: { path: String.raw`C:\A;C:\B`, files: [String.raw`C:\A\claude.exe`, String.raw`C:\B\claude.cmd`] } });
+    expect((await move(exeFirst)).ok).toBe(true);
+    await exeFirst.host.dispose();
+  });
+});
+
+describe('the prompt the moved TUI leaves', () => {
+  const PROMPT = '\x1b]133;A\x07$ \x1b]133;B\x07';
+  // `claude` run from an empty prompt and a turn typed into it: the keys went to the TUI.
+  const runTui = (r: Rig) => {
+    r.shell!.print(PROMPT);
+    r.shell!.bridge.noteInput('claude\r');
+    r.shell!.print('\x1b]133;C\x07');
+    r.shell!.bridge.noteInput('Reply with the single word ok.');
+    r.shell!.bridge.noteInput('\r');
+  };
+  // The TUI exits under the stop; the shell draws its prompt before the stop is proved.
+  const stopDrawsPrompt = (r: Rig) => {
+    r.term.stop = async () => {
+      r.shell!.print(`\x1b]133;D;0\x07${PROMPT}`);
+      return { ok: true, stopped: true, pid: TREE.root.pid, killed: 2 };
+    };
+  };
+  const back = (r: Rig) => r.host.call('toTerminal', { paneId: PANE, chatSessionId: r.host.bindingForPane(PANE)!.chatSessionId }, 'main');
+
+  for (const [platform, shell] of [['darwin', '/bin/zsh'], ['linux', '/bin/bash'], ['win32', 'powershell.exe']] as const) {
+    it(`reads empty, so the chat can go back to the terminal (${platform})`, async () => {
+      const r = rig({ platform, shell, realShell: true });
+      runTui(r);
+      stopDrawsPrompt(r);
+      const moved = await move(r);
+      if (!moved.ok) throw new Error(moved.error.message);
+      expect(r.shell!.bridge.isEmptyShellPrompt()).toBe(true);
+      const res = await back(r);
+      if (!res.ok) throw new Error(res.error.message);
+      await r.host.dispose();
+    });
+  }
+
+  it('a key typed after the stop still keeps the chat from typing into the shell', async () => {
+    const r = rig({ realShell: true });
+    runTui(r);
+    stopDrawsPrompt(r);
+    expect((await move(r)).ok).toBe(true);
+    r.shell!.bridge.noteInput('x');
+    expect(await back(r)).toMatchObject({ ok: false, error: { message: 'The terminal prompt is not empty.' } });
+    await r.host.dispose();
+  });
+
+  it('a move refused after the stop leaves the prompt as the shell drew it', async () => {
+    const r = rig({ realShell: true });
+    runTui(r);
+    r.term.stop = async () => {
+      r.shell!.print(`\x1b]133;D;0\x07${PROMPT}`);
+      r.term.holders = [{ pid: 9100, ppid: 1, name: 'tail', cmdline: `tail -f ${SESSION}.jsonl` }];
+      return { ok: true, stopped: true, pid: TREE.root.pid, killed: 2 };
+    };
+    expect((await move(r)).ok).toBe(false);
+    expect(r.shell!.bridge.isEmptyShellPrompt()).toBe(false);
   });
 });

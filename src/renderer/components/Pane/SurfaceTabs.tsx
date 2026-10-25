@@ -11,6 +11,7 @@ import {
 } from '../../utils/sessionInfoMarkdown';
 import { tokenAttrs } from '../../themes';
 import UsageLimitChip from './UsageLimitChip';
+import AgentStallChip from './AgentStallChip';
 import { computePaneAutoName, paneDisplayName, paneLabelRejectionKey, paneTag } from '../../utils/paneNaming';
 import { beginPaneTagDrag, endPaneTagDrag } from '../../utils/paneTagDrag';
 import { findPane } from '../../../shared/paneUtils';
@@ -1264,6 +1265,7 @@ export default function SurfaceTabs({
         paneId={paneId}
         cwd={surfaces.find((sf) => sf.id === activeSurfaceId)?.cwd}
       />
+      <AgentStallChip ptyId={surfaces.find((sf) => sf.id === activeSurfaceId)?.ptyId} readOnly={readOnly} />
       {supervision && (
         <span
           data-pane-supervision={supervision.status}
