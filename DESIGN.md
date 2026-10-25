@@ -945,6 +945,7 @@ Settings › LAN keeps only the listener switches. Top to bottom:
 - **This computer — one line** on a `--selection-subtle` band: this PC's
   name, phone access (`off` / this computer only / local network / Tailnet),
   the A2A state (`A2A :45660 listening`, `A2A: port 45660 in use`,
+  `A2A: port 45660 unavailable` for a port Windows reserves or refuses,
   `A2A: no firewall rule for port 45660`, another listener error, or
   `A2A off`; never "not reachable", which the host cannot know) and a
   **Details** toggle. While phone access is off, Share & pair sits on
@@ -960,8 +961,11 @@ Settings › LAN keeps only the listener switches. Top to bottom:
   the A2A port and the full security code (the certificate fingerprint;
   plain mono values; the code wraps anywhere, copy), and while A2A listens
   a **Firewall** line: what the last check said ("Allowed on private
-  networks · TCP 45660", with a ghost **Remove** for wmux's own rule) or
-  "Not checked" with a ghost **Check firewall**. Connecting another computer by A2A starts from
+  networks · TCP 45660", with "Another PC reached this one at 14:02" once
+  one has; "Not checked" before any check; "Could not read the firewall
+  settings" after a failed one; never a bare dash), and in the actions
+  column a ghost **Check firewall**, always, plus a ghost **Remove** for
+  wmux's own rule. Connecting another computer by A2A starts from
   Connect a PC…; as a workspace share it starts from Connect a PC… or from
   Share & pair's **Connect another computer**, which mints the pairing link
   and copies it in one click. Connect a PC's invite tab carries **Also let
@@ -977,8 +981,16 @@ Settings › LAN keeps only the listener switches. Top to bottom:
   verdict with its one fitting action (**Allow through firewall**, whose
   line says which prompt Windows will show; **Open network settings** for a
   Public network; **Open Windows Firewall** for a Block rule; **Copy
-  details** for policy, block-all, another firewall product or a refused
-  program; **Check firewall** when the check could not be read). An earlier
+  details** for a Domain (work) network, policy, block-all, another
+  firewall product or a refused program; **Check firewall** when the check
+  could not be read). After a declined prompt the Allow row keeps **Allow
+  through firewall** and adds **Copy details** beside it, the one row with
+  two actions: the next step may be someone else's. While an action runs
+  its button reads "Working…" and keeps focus; when its row is replaced,
+  focus moves to the row or line that replaced it. Every click ends in a
+  line: declined, failed (with the step that failed), another change still
+  running, or the check after it failing (then the could-not-read row with
+  Check firewall). An earlier
   Windows prompt that opened wmux to public networks gets its own row with
   **Open Windows Firewall** (after a Fix it adds that this port is now
   blocked on public networks). Tone: warning — the caution yellow on the
@@ -988,8 +1000,11 @@ Settings › LAN keeps only the listener switches. Top to bottom:
   the other PC" shows only right after a Fix, with "Another PC reached this
   one at 14:02" once one has. The copy never says "fixed". The check runs a
   PowerShell process, so it runs when the page opens, on Check firewall,
-  after a Fix and when the listener starts or moves to another port, never
-  on the 10 s poll. The same rows appear in Connect a PC's invite tab (a
+  after a Fix, when the listener starts or moves to another port, and once
+  when wmux comes back to the front after **Open network settings** or
+  **Open Windows Firewall**; never on the 10 s poll. The area under the band
+  is one polite live region, so a row that replaces another is announced.
+  The same rows appear in Connect a PC's invite tab (a
   bind failure; after copying, a muted "If the other PC can't connect, come
   back here and check the firewall." with a ghost Check firewall), Settings
   › LAN (A2A and LanLink) and Share & pair (a failed start with Use port N
