@@ -13,6 +13,7 @@ import { botActionsFor } from '../Room/BotChips';
 import { formatNoticeTime } from '../Room/roomFormat';
 import { botBudgetView, type BotBlocker, type BotTodayLine } from './botBudgetView';
 import { bridgeEnginePort } from './botsEngine';
+import { bridgeHermesPort, hermesReadinessView } from './botsHermes';
 import { showWorkspaces } from '../../utils/showWorkspaces';
 import { CLAUDE_CODE_INSTALL_URL } from '../../../shared/factoryEngine';
 import { openFactorySettings } from './botsAddBot';
@@ -141,8 +142,20 @@ function EngineErrorCard({
         openFactorySettings();
         return;
       }
-      // mcp_missing / unusable / other / acp: resume after the owner fixed it,
-      // or just open details — Resume is the recovery once the cause is gone.
+      // Hermes not ready: ask again first, and resume only once it is (else
+      // say what still stands in the way).
+      const ask = bridgeHermesPort().readiness;
+      if ((code === 'hermes_not_ready' || code === 'hermes_mcp_missing') && ask) {
+        const r = await ask();
+        if (!r.ready) {
+          const view = hermesReadinessView(r);
+          useStore.getState().pushToast({ message: t(view.key, view.vars), level: 'warn' });
+          return;
+        }
+      }
+      // mcp_missing / unusable / other / acp / hermes_tools_changed: resume
+      // after the owner fixed it, or just open details — Resume is the
+      // recovery once the cause is gone.
       if (canResume) onResume();
     } catch (err) {
       useStore.getState().pushToast({

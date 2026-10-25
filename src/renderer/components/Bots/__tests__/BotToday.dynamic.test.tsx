@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FactoryBotRow } from '../../Room/factoryPorts';
 import { DEFAULT_BOT_BUDGETS, type BotProfile, type BotStatus } from '../../../../shared/bot';
 import { en } from '../../../i18n/locales/en';
+import { useStore } from '../../../stores';
 import { BotToday } from '../BotToday';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -36,6 +37,7 @@ beforeEach(() => {
   root = createRoot(host);
 });
 afterEach(() => {
+  vi.unstubAllGlobals();
   act(() => root.unmount());
   host.remove();
 });
@@ -93,6 +95,22 @@ describe('BotToday', () => {
     expect(host.querySelector('[data-bots-profile-parked="error"]')?.textContent).toContain('Stopped after errors');
     expect(host.querySelector('[data-testid="bots-resume-bot"]')).not.toBeNull();
     expect(host.querySelector('[data-bots-today-line]')).toBeNull();
+  });
+
+  it('a bot stopped as Hermes was not ready: Fix asks Hermes again and resumes only once it is ready', async () => {
+    let answer: unknown = { ready: false, reason: 'outdated', version: '0.21.0' };
+    vi.stubGlobal('electronAPI', { factory: { factoryHermesReadiness: vi.fn(async () => answer) } });
+    act(() => useStore.setState({ toasts: [] } as never));
+    const actFn = vi.fn(async () => ({ ok: true }));
+    const r = row({ parked: { reason: 'error', at: 1 } }, { presence: 'parked', lastError: { message: 'hermes: not ready', at: 1, code: 'hermes_not_ready' } });
+    act(() => root.render(<BotToday row={r} act={actFn} t={t} />));
+    const fix = () => act(async () => { host.querySelector<HTMLButtonElement>('[data-bots-engine-error-fix]')!.click(); });
+    await fix();
+    expect(actFn).not.toHaveBeenCalled();
+    expect(useStore.getState().toasts.at(-1)?.message).toContain('Update Hermes to 0.22.5 or later');
+    answer = { ready: true, version: '0.22.6' };
+    await fix();
+    expect(actFn).toHaveBeenCalledWith('resume', 'bot-0000000a');
   });
 
   it('no blocker line when nothing stops the bot', () => {

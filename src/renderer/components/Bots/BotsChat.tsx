@@ -97,6 +97,7 @@ import { BotMemory } from './BotMemory';
 import { BotCommands } from './BotCommands';
 import { BotToday } from './BotToday';
 import { BrainModelLine, WorkerModelLine } from './BotModelLines';
+import { BotEngineLine } from './BotEngineLine';
 import { stopBotSummary, useWorkerStopUnfinished, type BotsStopPort } from './botsStop';
 import { InlineConfirm } from './InlineConfirm';
 import BotsWorkerPanel from './BotsWorkerPanel';
@@ -2253,7 +2254,8 @@ function ProfileState({ row, t }: { row: FactoryBotRow; t: T }) {
 }
 
 /** The bot's profile under its name pill: template, job (editable),
- *  workspace, repo, the model it thinks on, what its workers run on and
+ *  workspace, repo, its engine (with Hermes's readiness on Hermes), the
+ *  model it thinks on, what its workers run on and
  *  their model, on/off, what it used today of each limit (and what stops
  *  it, with Resume when parked), its routines
  *  (read-only), the recipe it was added from and what its connections still
@@ -2270,6 +2272,7 @@ function BotProfile({ row, workers, workspaceName, t, stopPort, jobPort, adminPo
       <JobLine key={`${row.bot.id}:${row.bot.job ?? ''}`} row={row} t={t} jobPort={jobPort} />
       <ProfileLine label={t('botsPage.profile.workspace')} value={workspaceName} />
       <RepoLine row={row} t={t} port={jobPort} />
+      <BotEngineLine row={row} t={t} />
       <BrainModelLine row={row} t={t} port={jobPort} />
       <WorkerEngineLine row={row} t={t} port={jobPort} />
       <WorkerModelLine row={row} t={t} port={jobPort} />

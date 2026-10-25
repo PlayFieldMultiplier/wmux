@@ -6,7 +6,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FactoryBotRow } from '../../Room/factoryPorts';
-import { DEFAULT_BOT_BUDGETS, type BotProfile } from '../../../../shared/bot';
+import { DEFAULT_BOT_BUDGETS, HERMES_BOT_ENGINE, type BotProfile } from '../../../../shared/bot';
 import { en } from '../../../i18n/locales/en';
 import { BrainModelLine, WorkerModelLine } from '../BotModelLines';
 
@@ -101,6 +101,12 @@ describe('Bots profile model pickers', () => {
     await click(q('[data-testid="bots-profile-worker-model-save"]'));
     expect(update).toHaveBeenCalledWith('bot-0000000a', { workerAgent: { agent: 'claude', model: 'opus' } });
     expect(q('[role="alert"]')?.textContent).toBe('workerAgent: refused by main');
+  });
+
+  it('a bot on Hermes offers no Claude model: it thinks on the model set in wmux\'s Hermes', () => {
+    act(() => root.render(<BrainModelLine row={row({ engine: HERMES_BOT_ENGINE })} t={t} port={{ update: vi.fn(async () => ({ ok: true })) }} />));
+    expect(q('[data-testid="bots-profile-brain-value"]')?.textContent).toBe('The model set in wmux\'s Hermes');
+    expect(q('[data-testid="bots-profile-brain-edit"]')).toBeNull();
   });
 
   it('a profile without update shows the models read-only', () => {

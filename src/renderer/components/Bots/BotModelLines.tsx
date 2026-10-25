@@ -19,6 +19,7 @@ import { effortChoicesFor } from '../Settings/SettingsPanel';
 import { CLAUDE_EFFORT_LEVELS } from '../../../shared/claudeModels';
 import { CATALOG_AGENTS, staticClaudeModels, type CatalogModel } from '../../../shared/modelCatalog';
 import { DEFAULT_BOT_WORKER_AGENT } from '../../../shared/botWorkerAgent';
+import { isHermesEngine } from '../../../shared/bot';
 import type { FactoryBotPort, FactoryBotRow } from '../Room/factoryPorts';
 import { botModelName, brainEngine, unusableBrainModel, workerAgentPick } from './botsProfile';
 
@@ -131,11 +132,15 @@ function shownModel(agent: string, model: string | undefined, effort: string | u
 const CLAUDE_EFFORTS = (): readonly string[] => CLAUDE_EFFORT_LEVELS;
 
 /** The bot's own model and effort. Another engine than claude-sdk shows
- *  that it has none to pick here. */
+ *  that it has none to pick here; Hermes thinks on the model set in wmux's
+ *  Hermes. */
 export function BrainModelLine({ row, t, port }: { row: FactoryBotRow; t: T; port?: Pick<FactoryBotPort, 'update'> }) {
   const engine = row.bot.engine;
   const models = useAgentModels(DEFAULT_BOT_WORKER_AGENT);
   const label = t('botsPage.models.thinksOn');
+  if (isHermesEngine(engine)) {
+    return <ModelPickLine label={label} testId="bots-profile-brain" shown={t('botsPage.models.hermesModel')} model0="" effort0="" models={[]} efforts={() => []} t={t} />;
+  }
   if (engine.kind !== 'claude-sdk') {
     return <ModelPickLine label={label} testId="bots-profile-brain" shown={t('botsPage.models.otherEngine')} model0="" effort0="" models={[]} efforts={() => []} t={t} />;
   }
