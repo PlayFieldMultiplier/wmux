@@ -80,6 +80,7 @@ import { ModelCombobox } from './ModelCombobox';
 import { MULTIVIEW_ARRANGEMENTS } from '../../utils/multiviewGrid';
 import type { NicInfo, LanLinkNic, LanLinkStatus, LanLinkStopReason } from '../../../shared/lanlink';
 import { lanLinkStopReasonKey } from '../Remote/lanLinkStopReason';
+import { FirewallNoticeView, ListenProblemView, useFirewall, useListenProblem } from '../Remote/FirewallNotice';
 import type { FirstRunCheckResult } from '../../../shared/firstRun';
 import { FIRST_RUN_REOPEN_EVENT } from '../../../shared/firstRun';
 import { ClaudeIntegrationSection } from './ClaudeIntegrationSection';
@@ -1096,6 +1097,10 @@ export interface LanLinkViewProps {
   stopReason: LanLinkStopReason | null;
   /** Windows: LanLink is gated on the network category. macOS/Linux have none. */
   hasNetworkCategory: boolean;
+  /** A failed bind explained (who holds the port, Use port N), in place of the listen-failed line. */
+  listenNotice?: ReactNode;
+  /** The firewall check of the open listener. */
+  firewallNotice?: ReactNode;
   t: (key: string) => string;
 }
 
@@ -1112,6 +1117,8 @@ export function LanLinkView({
   busy,
   stopReason,
   hasNetworkCategory,
+  listenNotice,
+  firewallNotice,
   t,
 }: LanLinkViewProps) {
   return (
@@ -1127,11 +1134,13 @@ export function LanLinkView({
           label={t('settings.lanlinkNic')}
         />
       </SettingRow>
-      {enabled && stopReason && (
+      {enabled && stopReason && (stopReason !== 'listen-failed' || !listenNotice) && (
         <SettingNote tone="warning" role="status" data-testid="lanlink-stop-reason">
           {t(lanLinkStopReasonKey(stopReason))}
         </SettingNote>
       )}
+      {enabled && stopReason === 'listen-failed' && listenNotice}
+      {enabled && !stopReason && firewallNotice}
       <SettingNote data-testid="lanlink-warning">
         {t(hasNetworkCategory ? 'settings.lanlinkWarning' : 'settings.lanlinkWarningNoCategory')}
       </SettingNote>
@@ -1157,7 +1166,7 @@ function LanLinkSection() {
     window.electronAPI as unknown as {
       lanlink?: {
         status: () => Promise<LanLinkStatus>;
-        configure: (p: { enabled?: boolean; nic?: LanLinkNic | null }) => Promise<LanLinkStatus>;
+        configure: (p: { enabled?: boolean; nic?: LanLinkNic | null; port?: number }) => Promise<LanLinkStatus>;
         onStatusChanged?: (cb: () => void) => () => void;
       };
     }
@@ -1199,7 +1208,7 @@ function LanLinkSection() {
   }, [refresh, lanlinkApi]);
 
   const apply = useCallback(
-    async (patch: { enabled?: boolean; nic?: LanLinkNic | null }) => {
+    async (patch: { enabled?: boolean; nic?: LanLinkNic | null; port?: number }) => {
       if (!lanlinkApi?.configure) return;
       setBusy(true);
       try {
@@ -1211,6 +1220,15 @@ function LanLinkSection() {
     },
     [ipcInvoke, lanlinkApi],
   );
+
+  // The listener's firewall, checked when it opens or moves (never on a poll),
+  // and a failed bind explained once per distinct failure.
+  const firewall = useFirewall('lanlink', {
+    enabled: status?.listening === true,
+    checkKey: `${status?.effectivePort ?? ''}:${status?.nic?.mac ?? ''}`,
+  });
+  const failed = status?.enabled && status.stopReason === 'listen-failed' && status.listenErrorCode ? status.listenErrorCode : null;
+  const problem = useListenProblem('lanlink', failed ? `${failed}:${status?.effectivePort ?? ''}` : null);
 
   // Local mode / daemon unreachable: the tab is always listed, so render an
   // explanatory placeholder rather than a blank pane. The on-mount probe +
@@ -1248,6 +1266,19 @@ function LanLinkSection() {
       busy={busy}
       stopReason={status.stopReason}
       hasNetworkCategory={window.electronAPI?.platform === 'win32'}
+      listenNotice={failed ? (
+        <ListenProblemView
+          report={problem}
+          fallback={t(lanLinkStopReasonKey('listen-failed'))}
+          onUsePort={(port) => void apply({ port })}
+          busy={busy}
+          repair={false}
+          primary={false}
+          listener="lanlink"
+          t={t}
+        />
+      ) : undefined}
+      firewallNotice={<FirewallNoticeView c={firewall} listener="lanlink" primary={false} t={t} />}
       t={t}
     />
   );

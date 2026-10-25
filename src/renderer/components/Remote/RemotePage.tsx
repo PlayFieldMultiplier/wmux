@@ -33,6 +33,8 @@ import { sshNeedsIdentityCheck, sshNeedsPerson, type SshTunnelState } from '../.
 import { pcRailHostState } from '../../../shared/pcRail';
 import RemoteRowMenu, { type RemoteRowMenuItem } from './RemoteRowMenu';
 import TailscaleChecklist from './TailscaleChecklist';
+import { FirewallDetailValue, FirewallNoticeView, ListenProblemView, useFirewall, useListenProblem } from './FirewallNotice';
+import { isFixableVerdict } from '../../../shared/netFirewall';
 import RemoteSpawnHostToggle from './RemoteSpawnHostToggle';
 import { REMOTE_SPAWN_UI_ENABLED } from './remoteSpawnFlag';
 import { readSpawnPolicy, saveSpawnPolicy, type SpawnPolicySaveResult } from './remoteSpawnPolicy';
@@ -136,6 +138,13 @@ export default function RemotePage() {
   };
   const [info, setInfo] = useState<WebTerminalInfo | null>(null);
   const [a2aStatus, setA2aStatus] = useState<A2aRemoteStatus | null>(null);
+  // The A2A listener's firewall: checked when the page opens and when the
+  // listener starts or moves to another port, never on the poll.
+  const a2aFw = useFirewall('a2a', { enabled: a2aStatus?.listening === true, checkKey: String(a2aStatus?.port ?? '') });
+  const a2aProblem = useListenProblem(
+    'a2a',
+    a2aStatus?.enabled && a2aStatus.lastErrorCode ? `${a2aStatus.lastErrorCode}:${a2aStatus.lastErrorPort ?? a2aStatus.port}` : null,
+  );
   const [devices, setDevices] = useState<WebDeviceSummary[] | null>(null);
   const [devicesError, setDevicesError] = useState(false);
   const [hosts, setHosts] = useState<RemoteHostPublic[] | null>(null);
@@ -492,8 +501,30 @@ export default function RemotePage() {
   };
   const a2aWord = !a2aStatus ? null
     : !a2aStatus.enabled ? t('remotePage.a2aOff')
-      : a2aStatus.listening ? t('remotePage.a2aListening', { port: a2aStatus.port })
-        : t('remotePage.a2aError', { error: a2aStatus.lastError ?? t('remotePage.unknown') });
+      : a2aStatus.listening
+        ? a2aFw.status && isFixableVerdict(a2aFw.status.verdict)
+          ? t('remotePage.a2aNoRule', { port: a2aStatus.port })
+          : t('remotePage.a2aListening', { port: a2aStatus.port })
+        : a2aProblem && (a2aProblem.problem.kind === 'port-in-use' || a2aProblem.problem.kind === 'port-reserved')
+          ? t('remotePage.a2aPortInUse', { port: a2aProblem.problem.port })
+          : t('remotePage.a2aError', { error: a2aStatus.lastError ?? t('remotePage.unknown') });
+  const a2aListenFailed = !!(a2aStatus?.enabled && a2aStatus.lastErrorCode);
+  // The page's one primary: the first Accept, else Connect a PC on an empty
+  // page, else a port or firewall fix.
+  const pagePrimaryFree = needsCount === 0 && !nothing;
+  // "Use port N" for a listener that could not bind: the listener moves there
+  // (a failed bind keeps the old one), and paired PCs must be invited again.
+  const moveA2aPort = async (port: number) => {
+    const configure = window.electronAPI?.a2aRemote?.configure;
+    if (!configure) return;
+    setBusy('a2a-port');
+    try {
+      const next = await configure({ port }).catch(() => null);
+      if (mounted.current && next && typeof next.port === 'number') setA2aStatus(next);
+    } finally {
+      if (mounted.current) setBusy(null);
+    }
+  };
   const dialogOpen = !!(connect || linkDialog || exposure || offerDialog || spawnAsk);
   const isConfirming = (kind: NonNullable<Confirm>['kind'], id: string) => confirming?.kind === kind && confirming.id === id;
   const rowError = (key: string) => (error?.key === key ? <p className="wmux-remote-row-error" role="alert">{error.message}</p> : null);
@@ -840,6 +871,13 @@ export default function RemotePage() {
                 <dd />
               </>
             )}
+            {a2aStatus?.listening && (
+              <>
+                <dt>{t('net.fw.detailLabel')}</dt>
+                <dd><FirewallDetailValue c={a2aFw} t={t} /></dd>
+                <dd />
+              </>
+            )}
             {a2aStatus?.fingerprint256 && (
               <>
                 <dt>{t('remotePage.fingerprint')}</dt>
@@ -854,6 +892,26 @@ export default function RemotePage() {
           </dl>
         )}
       </div>
+      {/* The A2A listener's port and firewall problems, under the band. The
+          steady "allowed" state lives in Details; here only what needs doing,
+          or what a Fix just did. */}
+      {(a2aListenFailed || a2aStatus?.listening) && (
+        <div className="wmux-remote-fw" data-remote-firewall>
+          {a2aListenFailed && (
+            <ListenProblemView
+              report={a2aProblem}
+              fallback={null}
+              onUsePort={(port) => void moveA2aPort(port)}
+              busy={busy !== null}
+              repair
+              primary={pagePrimaryFree}
+              listener="a2a"
+              t={t}
+            />
+          )}
+          {a2aStatus?.listening && <FirewallNoticeView c={a2aFw} listener="a2a" primary={pagePrimaryFree && !a2aListenFailed} quiet t={t} />}
+        </div>
+      )}
 
       <div aria-live="polite" data-remote-needs-live>
         {needsCount > 0 && (

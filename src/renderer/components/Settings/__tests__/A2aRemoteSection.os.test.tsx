@@ -79,6 +79,31 @@ describe('join error messages (used by Connect a PC)', () => {
   });
 });
 
+describe('A2aRemoteView — port and firewall notices', () => {
+  const notice = (id: string) => createElement('div', { 'data-slot': id });
+  it('a bind failure shows the explained notice in place of the raw note', () => {
+    const html = render(props({
+      status: { ...props().status, listening: false, lastError: 'EADDRINUSE', lastErrorCode: 'EADDRINUSE', lastErrorPort: 45660 },
+      listenNotice: notice('listen'),
+      firewallNotice: notice('firewall'),
+    }));
+    expect(html).toContain('data-slot="listen"');
+    expect(html).not.toContain('settings.a2aRemoteNotListening');
+    // Nothing listens, so there is no firewall to check.
+    expect(html).not.toContain('data-slot="firewall"');
+  });
+
+  it('a listener shows its firewall check; a failed port change keeps the still-listening note', () => {
+    expect(render(props({ firewallNotice: notice('firewall') }))).toContain('data-slot="firewall"');
+    const html = render(props({
+      status: { ...props().status, listening: true, lastError: 'EADDRINUSE', lastErrorCode: 'EADDRINUSE', lastErrorPort: 45661 },
+      listenNotice: notice('listen'),
+    }));
+    expect(html).toContain('data-slot="listen"');
+    expect(html).toContain('settings.a2aRemotePortFailed');
+  });
+});
+
 describe('fingerprintPrefix', () => {
   it('cuts on a byte boundary', () => {
     expect(fingerprintPrefix('03:5C:37:EC:BF:1A:22:33')).toBe('03:5C:37:EC:BF:1A…');

@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { A2aRemoteStatus } from '../../../shared/rpc';
+import { FirewallNoticeView, ListenProblemView, useFirewall, useListenProblem } from '../Remote/FirewallNotice';
 import { useT } from '../../hooks/useT';
 import { useIpc } from '../../hooks/useIpc';
 import UiButton from '../ui/Button';
@@ -40,6 +41,13 @@ export interface A2aRemoteViewProps {
   onPortDraft: (v: string) => void;
   onPortCommit: () => void;
   error: string | null;
+  /**
+   * The bind failure explained (who holds the port, Use port N), from the
+   * container. Shown in place of the raw "Not listening" note.
+   */
+  listenNotice?: ReactNode;
+  /** The firewall check of the running listener, from the container. */
+  firewallNotice?: ReactNode;
   t: T;
 }
 
@@ -50,7 +58,7 @@ export function formatRemaining(sec: number): string {
 }
 
 export function A2aRemoteView(props: A2aRemoteViewProps) {
-  const { status, platform, fingerprintCopied, onCopyFingerprint, busy, onToggleEnabled, portDraft, onPortDraft, onPortCommit, error, t } = props;
+  const { status, platform, fingerprintCopied, onCopyFingerprint, busy, onToggleEnabled, portDraft, onPortDraft, onPortCommit, error, listenNotice, firewallNotice, t } = props;
   return (
     <SettingsSection title={t('settings.a2aRemote')} description={t('settings.a2aRemoteSeparate')} data-testid="a2a-remote-section">
       <SettingRow label={t('settings.a2aRemoteEnable')} description={t('settings.a2aRemoteEnableDesc')}>
@@ -88,7 +96,8 @@ export function A2aRemoteView(props: A2aRemoteViewProps) {
           )}
         </div>
       </SettingRow>
-      {status.enabled && (
+      {status.enabled && listenNotice}
+      {status.enabled && !(listenNotice && !status.listening) && (
         <SettingNote data-testid="a2a-remote-listening" tone={status.listening && !status.lastError ? 'muted' : 'warning'}>
           {!status.listening
             ? t('settings.a2aRemoteNotListening', { error: status.lastError ?? '—' })
@@ -97,6 +106,7 @@ export function A2aRemoteView(props: A2aRemoteViewProps) {
               : t('settings.a2aRemoteListening', { port: status.port })}
         </SettingNote>
       )}
+      {status.enabled && status.listening && firewallNotice}
       {error && <SettingNote tone="danger">{error}</SettingNote>}
     </SettingsSection>
   );
@@ -113,6 +123,11 @@ export function A2aRemoteSection() {
   const [portDraft, setPortDraft] = useState('');
   const [fingerprintCopied, setFingerprintCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Checked when the tab opens and when the listener starts or moves, never on the 3 s poll.
+  const firewall = useFirewall('a2a', { enabled: status?.listening === true, checkKey: String(status?.port ?? '') });
+  const failed = status?.enabled && status.lastErrorCode ? { code: status.lastErrorCode, port: status.lastErrorPort ?? status.port } : null;
+  const problem = useListenProblem('a2a', failed ? `${failed.code}:${failed.port}` : null);
 
   // The port last shown, so a poll does not overwrite a port being typed.
   const shownPort = useRef<number | null>(null);
@@ -203,6 +218,19 @@ export function A2aRemoteSection() {
       onPortDraft={setPortDraft}
       onPortCommit={onPortCommit}
       error={error}
+      listenNotice={failed ? (
+        <ListenProblemView
+          report={problem}
+          fallback={status.listening ? null : t('settings.a2aRemoteNotListening', { error: status.lastError ?? '—' })}
+          onUsePort={(port) => void configure({ port })}
+          busy={busy}
+          repair
+          primary={false}
+          listener="a2a"
+          t={t}
+        />
+      ) : undefined}
+      firewallNotice={<FirewallNoticeView c={firewall} listener="a2a" primary={false} t={t} />}
       t={t}
     />
   );
