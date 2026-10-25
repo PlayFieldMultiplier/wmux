@@ -13,6 +13,9 @@
 //     stopTask(taskId: string): Promise<StopTaskResult>
 //   }
 //
+// The owner's New conversation for a bot rides the same port
+// (`newConversation(botId)`).
+//
 // All are optional: a build without one shows no control for it.
 import { useSyncExternalStore } from 'react';
 import { getFactoryBotPort, type FactoryBotPort } from '../Room/factoryPorts';
@@ -20,17 +23,20 @@ import { getFactoryBotPort, type FactoryBotPort } from '../Room/factoryPorts';
 export interface StopAllResult { ok: boolean; botsInterrupted: number; workersStopped: number; gatesCancelled: number; message?: string }
 export interface StopBotResult { ok: boolean; workersStopped: number; message?: string }
 export interface StopTaskResult { ok: boolean; workersStopped: number; tasksCancelled?: number; code?: string; message?: string }
+export interface NewConversationResult { ok: boolean; code?: string; message?: string }
 
 export interface BotsStopPort {
   stopAll?(): Promise<StopAllResult>;
   stopBot?(botId: string): Promise<StopBotResult>;
   stopTask?(taskId: string): Promise<StopTaskResult>;
+  newConversation?(botId: string): Promise<NewConversationResult>;
 }
 
 interface StopBridge {
   stopAll?: () => Promise<StopAllResult>;
   stopBot?: (botId: string) => Promise<StopBotResult>;
   stopTask?: (taskId: string) => Promise<StopTaskResult>;
+  newConversation?: (botId: string) => Promise<NewConversationResult>;
 }
 
 function bridge(): StopBridge | null {
@@ -45,7 +51,8 @@ export function botsStopPort(port?: FactoryBotPort & BotsStopPort): BotsStopPort
   const stopAll = p.stopAll ? p.stopAll.bind(p) : b?.stopAll;
   const stopBot = p.stopBot ? p.stopBot.bind(p) : b?.stopBot;
   const stopTask = p.stopTask ? p.stopTask.bind(p) : b?.stopTask;
-  return { ...(stopAll ? { stopAll } : {}), ...(stopBot ? { stopBot } : {}), ...(stopTask ? { stopTask } : {}) };
+  const newConversation = p.newConversation ? p.newConversation.bind(p) : b?.newConversation;
+  return { ...(stopAll ? { stopAll } : {}), ...(stopBot ? { stopBot } : {}), ...(stopTask ? { stopTask } : {}), ...(newConversation ? { newConversation } : {}) };
 }
 
 type T = (key: string, vars?: Record<string, string | number>) => string;

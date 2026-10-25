@@ -15,7 +15,7 @@ import { installBotFanoutWake } from '../../deck/fanoutCallerNotify';
 import { WorkerStopPendingError } from '../factoryWiring';
 import { UNKNOWN_ROOT_REFUSAL } from '../../../shared/rpc';
 import { STOPPED_BY_OWNER, STOPPED_WAKE_KEEP_MS, WORKSPACES_LOADING_MESSAGE, __lateStopCountForTesting, __resetFactoryStopForTesting, installLateStopSweep, isOpenBotTask, isStoppedByOwnerRow, isWakeStoppedByOwner, stopFactoryTask, stopFactoryWork, type FactoryStopPorts } from '../factoryStop';
-import { factorySettingsSetHandler, factoryStopHandler } from '../../ipc/handlers/factory.handler';
+import { factoryBotNewConversationHandler, factorySettingsSetHandler, factoryStopHandler } from '../../ipc/handlers/factory.handler';
 import { DEFAULT_FACTORY_SETTINGS, type FactorySettings, type FactorySettingsStore } from '../factorySettings';
 import { HeldFanouts, setHeldFanouts } from '../heldFanouts';
 import { WakeQueue, setWakeQueue, wakeQueuePath } from '../wakeQueue';
@@ -375,6 +375,34 @@ describe('a bot task report wakes from the system gate, not from the fan-out pat
     await ledger.update({ id: 't-1', status: 'failed', actor: { kind: 'worker', workspaceId: 't-1-ws' }, expectedRev: reported.rev });
     expect(enqueue.mock.calls.map((c) => c[0].reason.trigger.kind)).toEqual(['task.failed']);
     off();
+  });
+});
+
+describe('factoryBotNewConversationHandler (IPC guard)', () => {
+  const mainFrame = { id: 'top' };
+  const webContents = { mainFrame };
+  const win = { isDestroyed: () => false, webContents } as unknown as Electron.BrowserWindow;
+
+  it('answers only the main window\'s top frame, with a bot id, and passes the runtime\'s refusal on', () => {
+    const asked: string[] = [];
+    let running = false;
+    const runtime = () => ({
+      newConversation: (botId: string) => {
+        asked.push(botId);
+        return running ? { ok: false as const, code: 'running' as const, message: 'stop the turn first' } : { ok: true as const, status: {} as never };
+      },
+    });
+    const handler = factoryBotNewConversationHandler(() => win, runtime);
+    const ok = { sender: webContents, senderFrame: mainFrame };
+    expect(handler({ sender: {}, senderFrame: mainFrame }, { botId: LEAD })).toMatchObject({ ok: false, code: 'operator_only' });
+    expect(handler({ sender: webContents, senderFrame: { id: 'sub' } }, { botId: LEAD })).toMatchObject({ ok: false, code: 'operator_only' });
+    expect(handler(ok, { botId: '../x' })).toMatchObject({ ok: false, code: 'invalid_argument' });
+    expect(asked).toEqual([]);
+    expect(factoryBotNewConversationHandler(() => win, () => null)(ok, { botId: LEAD })).toMatchObject({ ok: false, code: 'not_started' });
+    expect(handler(ok, { botId: LEAD })).toEqual({ ok: true });
+    running = true;
+    expect(handler(ok, { botId: LEAD })).toEqual({ ok: false, code: 'running', message: 'stop the turn first' });
+    expect(asked).toEqual([LEAD, LEAD]);
   });
 });
 
