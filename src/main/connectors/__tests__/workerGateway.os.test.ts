@@ -259,6 +259,7 @@ describe('accepting a task with signed-in connections', () => {
     expect(gatewayShapeRefusal({ ...ok, all: [c, files] })).toMatch(/only signed-in connections.*files/);
     expect(gatewayShapeRefusal({ ...ok, wakeTainted: true })).toMatch(/outside text/);
     expect(gatewayShapeRefusal({ ...ok, conversationTainted: true })).toMatch(/conversation/);
+    expect(gatewayShapeRefusal({ ...ok, conversationTainted: true })).toContain('New conversation, on your profile in the Bots page');
     expect(gatewayShapeRefusal({ ...ok, preset: 'default' })).toMatch(/research/);
     expect(gatewayShapeRefusal({ ...ok, preset: undefined })).toMatch(/research/);
     expect(gatewayShapeRefusal({ ...ok, connectors: [{ ...c, tools: { mode: 'all', blocked: [] } }], all: [] })).toMatch(/tools/);
