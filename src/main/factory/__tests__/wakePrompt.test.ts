@@ -248,18 +248,35 @@ describe('buildWakePrompt — what the room says now', () => {
     expect(cancelled).not.toContain('waiting for input');
   });
 
-  it('a task that made files has them posted in the same turn, also for handed work', () => {
-    const files = ['/tmp/research-1/banner.png'];
-    const wake = (t: { files?: string[] }) => buildWakePrompt({
-      item: item({ kind: 'facts', factIds: ['task.done:wtask-1@4'], trigger: { kind: 'task.done' } }),
+  it('done tasks that made files: one line after the rest of the wake, each task\'s list a JSON array for a card in its own thread', () => {
+    const text = buildWakePrompt({
+      item: item({ kind: 'facts', factIds: ['task.input_required:wtask-q@2', 'task.done:wtask-1@4', 'task.done:wtask-2@3'], trigger: { kind: 'task.done' } }),
       profile,
-      tasks: [{ taskId: 'wtask-1', title: 'Banner', status: 'review_requested', ...t }],
+      tasks: [
+        { taskId: 'wtask-q', title: 'Ask', status: 'input_required', summary: 'Which logo?' },
+        { taskId: 'wtask-1', title: 'Banner', status: 'completed', files: ['/r/1/banner.png', '/r/1/notes.md'], threadId: 'general' },
+        { taskId: 'wtask-2', title: 'Video', status: 'review_requested', files: ['/r/2/cut.mp4'], filesLeftOut: 3, threadId: 't-video' },
+      ],
     });
-    const text = wake({ files });
-    expect(text).toContain('"/tmp/research-1/banner.png"');
-    expect(text).toContain('Post them in this turn, before anything else: one card with room_post `files` set to those paths');
+    const line = text.indexOf('Tasks wtask-1, wtask-2 made files for the owner');
+    expect(line).toBeGreaterThan(text.indexOf('A worker of yours is waiting for input'));
+    expect(text).toContain('After the rest of this wake\'s handling, post one card per task in that task\'s thread');
     expect(text).toContain('also when another bot handed you the work');
-    expect(wake({})).not.toContain('room_post `files` set to those paths');
+    expect(text).toContain('A file gone by then: leave it out, settle the task anyway and say so in its result; it is not a blocker.');
+    expect(text).toContain('- wtask-1, thread "general": ["/r/1/banner.png","/r/1/notes.md"]');
+    expect(text).toContain('- wtask-2, thread "t-video": ["/r/2/cut.mp4"] (3 more files its report named left out: a card carries 8)');
+    expect(text).not.toContain('before anything else');
+  });
+
+  it('names no files for a task that is not done: input_required carries none, nor does a done task without files', () => {
+    const wake = (factId: string, status: string, files?: string[]) => buildWakePrompt({
+      item: item({ kind: 'facts', factIds: [factId], trigger: { kind: 'task.done' } }),
+      profile,
+      tasks: [{ taskId: 'wtask-1', title: 'Banner', status, ...(files ? { files } : {}) }],
+    });
+    expect(wake('task.input_required:wtask-1@2', 'input_required', ['/r/1/banner.png'])).not.toContain('made files for the owner');
+    expect(wake('task.done:wtask-1@4', 'completed')).not.toContain('made files for the owner');
+    expect(wake('task.done:wtask-1@4', 'completed', ['/r/1/banner.png'])).toContain('Task wtask-1 made files for the owner');
   });
 
   it('a relay\'s dispatch says where the result goes; its last result shows the trail; a stop says why', () => {

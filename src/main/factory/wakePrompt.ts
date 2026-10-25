@@ -18,6 +18,7 @@ import { isGuestSourcedCard, type RoomCard, type ThreadId } from '../../shared/r
 import { botFanoutIdempotencyKey, type WakeItem } from '../../shared/wake';
 import { DEFAULT_BOT_WORKER_AGENT, botWorkerAgentLabel } from '../../shared/botWorkerAgent';
 import type { SkillIndexEntry } from '../../shared/botSkill';
+import { ROOM_FILE_LIMITS } from '../../shared/roomFiles';
 
 /** A fan-out task as the wake reports it (from its ledger row). */
 export interface WakeTaskSummary {
@@ -26,9 +27,17 @@ export interface WakeTaskSummary {
   status: string;
   summary?: string;
   gate?: { exitCode: number | null; headSha?: string; skipped?: string };
-  /** The files its report hands the owner (absolute paths of its `artifact` items). */
+  /** A done task of the woken bot that it has not settled yet: the files
+   *  its report hands the owner, found in the task's own folder
+   *  (bot.rpc.ts wakeTaskFiles); how many more files the report named than
+   *  one card carries; and the task's thread. */
   files?: string[];
+  filesLeftOut?: number;
+  threadId?: string;
 }
+
+/** What wakeTaskFiles adds to a task's summary. */
+export type WakeTaskFiles = Required<Pick<WakeTaskSummary, 'files'>> & Pick<WakeTaskSummary, 'filesLeftOut' | 'threadId'>;
 
 /** A handoff as the wake reports it. */
 export interface WakeHandoffSummary {
@@ -264,6 +273,31 @@ export function taskIdOfFactId(id: string): string | null {
   return m ? m[1] : null;
 }
 
+/**
+ * Files a worker made reach the owner only on a card: nothing else shows
+ * them, so the wake of a done task that made some has them posted in this
+ * turn, after the rest of its handling. Only a `task.done` fact counts;
+ * wakeTaskFiles gives files only to a done task the woken bot started and
+ * has not settled. Each list is a JSON array to pass through as it is.
+ */
+function taskFilesLines(factIds: readonly string[], tasks: ReadonlyMap<string, WakeTaskSummary>): string[] {
+  const named: WakeTaskSummary[] = [];
+  for (const id of factIds) {
+    const task = id.startsWith('task.done:') ? tasks.get(taskIdOfFactId(id) ?? '') : undefined;
+    if (task?.files?.length && !named.includes(task)) named.push(task);
+  }
+  if (named.length === 0) return [];
+  return [
+    '',
+    `Task${named.length > 1 ? 's' : ''} ${named.map((t) => t.taskId).join(', ')} made files for the owner, who sees them only on a card. `
+      + 'After the rest of this wake\'s handling, post one card per task in that task\'s thread: room_post with `files` set to the list below exactly as written — '
+      + 'also when another bot handed you the work. A file gone by then: leave it out, settle the task anyway and say so in its result; it is not a blocker. '
+      + 'Then settle the task, and name the card in any `result` you send.',
+    ...named.map((t) => `- ${t.taskId}${t.threadId ? `, thread ${JSON.stringify(t.threadId)}` : ''}: ${JSON.stringify(t.files)}`
+      + (t.filesLeftOut ? ` (${t.filesLeftOut} more file${t.filesLeftOut > 1 ? 's' : ''} its report named left out: a card carries ${ROOM_FILE_LIMITS.PER_CARD})` : '')),
+  ];
+}
+
 function factBlock(f: Fact): string {
   return fenceData(
     JSON.stringify({ kind: f.kind, at: new Date(f.at).toISOString(), repoKey: f.repoKey, ref: f.ref, payload: f.payload }, null, 2),
@@ -488,15 +522,6 @@ export function buildWakePrompt(input: WakePromptInput): string {
         // of a task that ended since (cancelled by the owner) is not a wait.
         if (task ? task.status === 'input_required' : id.startsWith('task.input_required:')) waiting = true;
       }
-      // Files a worker made reach the owner only on a card: nothing else
-      // shows them, so they go up in this turn, not when someone asks.
-      if (r.factIds.some((id) => (tasks.get(taskIdOfFactId(id) ?? '')?.files?.length ?? 0) > 0)) {
-        lines.push(
-          '',
-          'A task above made files for the owner (its `files`). Post them in this turn, before anything else: one card with room_post `files` set to those paths, '
-            + 'in the task\'s thread — also when another bot handed you the work, since the owner sees the files only on a card. Then settle the task, and name the card in any `result` you send.',
-        );
-      }
       if (r.factIds.some((id) => /^workflow\.ready:[A-Za-z0-9_-]+@\d+$/.test(id))) {
         lines.push(
           '',
@@ -521,6 +546,7 @@ export function buildWakePrompt(input: WakePromptInput): string {
             + 'Answer it yourself with worker_message when you can; ask the owner only what you cannot decide, then pass their answer on with worker_message.',
         );
       }
+      lines.push(...taskFilesLines(r.factIds, tasks));
       break;
     }
   }
