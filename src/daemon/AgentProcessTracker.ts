@@ -66,6 +66,10 @@ export interface ProcessTreeEntry {
   /** Full command line (POSIX args / Windows CommandLine) when available —
    *  the input for runtime→agent resolution. */
   cmdline?: string;
+  /** Windows only: the process's creation time (epoch ms), when it could be
+   *  read. Windows never reparents, so a ppid alone can name a dead parent
+   *  whose pid a later process reused; a child is never older than its parent. */
+  created?: number;
 }
 
 /** The watcher surface the tracker needs — ProcessMonitor satisfies it
@@ -240,23 +244,25 @@ export function resolveAgentSlug(cmdline: string | undefined): AgentSlug | undef
 }
 
 /**
- * Parse the normalized `pid|ppid|name|cmdline` lines produced by the Windows
- * enumeration script. CommandLine may itself contain pipes, so everything
- * after the image name joins back into the cmdline. Malformed lines
- * (PowerShell banners, blank tails) are skipped. Pure — exported for tests.
+ * Parse the normalized `pid|ppid|created|name|cmdline` lines produced by the
+ * Windows enumeration script (`created`: epoch ms, empty when unreadable).
+ * CommandLine may itself contain pipes, so everything after the image name
+ * joins back into the cmdline. Malformed lines (PowerShell banners, blank
+ * tails) are skipped. Pure — exported for tests.
  */
 export function parsePipeDelimited(stdout: string): ProcessTreeEntry[] {
   const entries: ProcessTreeEntry[] = [];
   for (const line of stdout.split('\n')) {
-    const m = line.trim().match(/^(\d+)\|(\d+)\|(.+)$/);
+    const m = line.trim().match(/^(\d+)\|(\d+)\|(\d*)\|(.+)$/);
     if (!m) continue;
-    const parts = m[3].split('|');
+    const parts = m[4].split('|');
     const cmdline = parts.slice(1).join('|');
     entries.push({
       pid: parseInt(m[1], 10),
       ppid: parseInt(m[2], 10),
       name: parts[0] ?? '',
       ...(cmdline ? { cmdline } : {}),
+      ...(m[3] ? { created: parseInt(m[3], 10) } : {}),
     });
   }
   return entries;
@@ -604,9 +610,10 @@ async function enumerateProcesses(): Promise<ProcessTreeEntry[]> {
       [
         '-NoProfile', '-NonInteractive', '-Command',
         // Pipe-delimited to keep the parser trivial (image names never
-        // contain '|'; CommandLine may — the parser rejoins it). Win32_Process
-        // is one WMI query — no per-PID walks.
-        "Get-CimInstance -ClassName Win32_Process | ForEach-Object { '{0}|{1}|{2}|{3}' -f $_.ProcessId, $_.ParentProcessId, $_.Name, $_.CommandLine }",
+        // contain '|'; CommandLine may — the parser rejoins it, so the
+        // creation time goes before the name). Win32_Process is one WMI
+        // query — no per-PID walks. A null CreationDate prints empty.
+        "Get-CimInstance -ClassName Win32_Process | ForEach-Object { '{0}|{1}|{2}|{3}|{4}' -f $_.ProcessId, $_.ParentProcessId, $(if ($_.CreationDate) { ([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds() }), $_.Name, $_.CommandLine }",
       ],
       { encoding: 'utf-8', timeout: 10_000, windowsHide: true, maxBuffer: 8 * 1024 * 1024 },
     );
@@ -1169,8 +1176,15 @@ export class AgentProcessTracker {
    *  such agent runs there. A WSL agent (a Linux pid) and an agent that is
    *  the pane's own root are never returned: stopping either is not a stop
    *  of the agent alone. Throws when the process table cannot be read (that
-   *  is not "nothing runs"). */
-  async agentProcessTree(sessionId: string, expectedSlug: AgentSlug): Promise<{ root: ProcessTreeEntry; descendants: ProcessTreeEntry[] } | null> {
+   *  is not "nothing runs").
+   *
+   *  Windows never reparents: a process whose parent died long ago keeps that
+   *  parent's pid as its ppid, and the agent may have reused it. So there a
+   *  process is below the agent only when it is no older than its parent; an
+   *  older one (and what runs under it) is left out. One whose age cannot be
+   *  told is `uncertain`: never signalled, but a stop is not confirmed while
+   *  it runs. */
+  async agentProcessTree(sessionId: string, expectedSlug: AgentSlug): Promise<{ root: ProcessTreeEntry; descendants: ProcessTreeEntry[]; uncertain: ProcessTreeEntry[] } | null> {
     const s = this.states.get(sessionId);
     const shellPid = this.shellPids.get(sessionId);
     if (!s?.alive || s.wsl || shellPid === undefined || s.pid === shellPid) return null;
@@ -1192,18 +1206,31 @@ export class AgentProcessTracker {
       else byParent.set(e.ppid, [e]);
     }
     const descendants: ProcessTreeEntry[] = [];
+    const uncertain: ProcessTreeEntry[] = [];
+    const dated = this.platform === 'win32';
     const seen = new Set<number>([root.pid, shellPid]);
-    const queue = [root.pid];
+    const queue: Array<{ entry: ProcessTreeEntry; sure: boolean }> = [{ entry: root, sure: true }];
     while (queue.length > 0) {
-      for (const child of byParent.get(queue.shift() as number) ?? []) {
+      const parent = queue.shift() as { entry: ProcessTreeEntry; sure: boolean };
+      for (const child of byParent.get(parent.entry.pid) ?? []) {
         if (seen.has(child.pid)) continue;
+        let sure = parent.sure;
+        if (dated) {
+          const born = child.created;
+          const parentBorn = parent.entry.created;
+          // Older than its parent, or than the agent (below an undated
+          // parent): its ppid names an earlier process that had this pid.
+          if (born !== undefined && ((parentBorn !== undefined && born < parentBorn) ||
+              (root.created !== undefined && born < root.created))) continue;
+          sure = sure && born !== undefined && parentBorn !== undefined;
+        }
         seen.add(child.pid);
-        descendants.push(child);
-        queue.push(child.pid);
+        (sure ? descendants : uncertain).push(child);
+        queue.push({ entry: child, sure });
       }
     }
     this.treeRoots.set(root, { sessionId, state: s });
-    return { root, descendants };
+    return { root, descendants, uncertain };
   }
 
   /** Every live process whose command line carries `marker` (a conversation

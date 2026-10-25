@@ -12,7 +12,9 @@
 // that was below it when the stop began and still has the same pid and image
 // name and command line — is killed. Only processes found under the
 // session's own verified agent are ever signalled, and a process table that
-// cannot be read fails the stop (it is never read as "nothing runs").
+// cannot be read fails the stop (it is never read as "nothing runs"). A
+// process the tree could not place for sure (`uncertain`) is never signalled,
+// but the stop is not confirmed while it still runs.
 
 import type { ProcessTreeEntry } from './AgentProcessTracker';
 
@@ -20,8 +22,9 @@ export const AGENT_STOP_GRACE_MS = 5_000;
 const POLL_MS = 200;
 
 export interface AgentStopDeps {
-  /** The agent and every process below it, or null when no such agent runs. */
-  tree: () => Promise<{ root: ProcessTreeEntry; descendants: ProcessTreeEntry[] } | null>;
+  /** The agent and every process below it, or null when no such agent runs.
+   *  `uncertain`: processes that may be below it, never signalled. */
+  tree: () => Promise<{ root: ProcessTreeEntry; descendants: ProcessTreeEntry[]; uncertain?: ProcessTreeEntry[] } | null>;
   /** Of these, the ones still running (same pid and image name). */
   stillRunning: (entries: readonly ProcessTreeEntry[]) => Promise<ProcessTreeEntry[]>;
   kill: (pid: number, signal: NodeJS.Signals) => void;
@@ -64,13 +67,16 @@ export async function stopAgentTree(deps: AgentStopDeps): Promise<AgentStopResul
     if ((await deps.stillRunning([tree.root])).length === 0) break;
     await sleep(POLL_MS);
   }
-  let left = await deps.stillRunning(all);
-  for (const e of left) signal(e.pid, 'SIGKILL');
-  if (left.length > 0) {
+  const pending = [...all, ...(tree.uncertain ?? [])];
+  let left = await deps.stillRunning(pending);
+  const toKill = left.filter((e) => all.some((a) => a.pid === e.pid));
+  for (const e of toKill) signal(e.pid, 'SIGKILL');
+  if (toKill.length > 0) {
     await sleep(POLL_MS);
-    left = await deps.stillRunning(all);
+    left = await deps.stillRunning(pending);
   }
-  // Anything of the tree still running (a kill that was refused) is not a stop.
+  // Anything of the tree still running (a kill that was refused, or an
+  // uncertain process never signalled) is not a stop.
   if (left.length > 0) return { ok: false, code: 'still_running', pid: tree.root.pid };
   return { ok: true, stopped: true, pid: tree.root.pid, killed: all.length - left.length };
 }

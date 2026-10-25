@@ -15,6 +15,7 @@ import {
   type PidWatcher,
   type ProcessTreeEntry,
 } from '../AgentProcessTracker';
+import { stopAgentTree } from '../agentStop';
 
 const entry = (pid: number, ppid: number, name: string, cmdline?: string): ProcessTreeEntry => ({
   pid,
@@ -44,16 +45,17 @@ describe('fresh idle-shell evidence', () => {
 });
 
 describe('parsePipeDelimited', () => {
-  it('parses pid|ppid|name|cmdline lines, rejoining pipes inside the cmdline', () => {
+  it('parses pid|ppid|created|name|cmdline lines, rejoining pipes inside the cmdline', () => {
     const out = parsePipeDelimited(
-      'Windows PowerShell banner\r\n4|0|System\r\n123|4|pwsh.exe\r\n\r\nnot-a-line\r\n'
-        + '77|123|claude.exe|claude --foo|bar\r\n'
-        + '78|123|codex.exe\r\n',
+      'Windows PowerShell banner\r\n4|0||System\r\n123|4|1792407685810|pwsh.exe\r\n\r\nnot-a-line\r\n'
+        + '77|123|1792407690000|claude.exe|claude --foo|bar\r\n'
+        + '78|123||codex.exe\r\n'
+        + '79|123|claude.exe\r\n',
     );
     expect(out).toEqual([
       entry(4, 0, 'System'),
-      entry(123, 4, 'pwsh.exe'),
-      entry(77, 123, 'claude.exe', 'claude --foo|bar'),
+      { ...entry(123, 4, 'pwsh.exe'), created: 1792407685810 },
+      { ...entry(77, 123, 'claude.exe', 'claude --foo|bar'), created: 1792407690000 },
       entry(78, 123, 'codex.exe'),
     ]);
   });
@@ -723,6 +725,88 @@ describe('owned native agent root', () => {
     expect(await tracker.verifyOwnedRoot('pane', 100, 'opencode')).toBe(false);
     tracker.disarm('pane');
     expect(await tracker.verifyOwnedRoot('pane', 100, 'opencode')).toBe(false);
+  });
+});
+
+// Windows never reparents: a process whose parent died before the agent
+// started keeps that parent's pid, which the agent may have reused.
+describe('the agent tree on Windows is dated', () => {
+  const dated = (pid: number, ppid: number, name: string, created?: number): ProcessTreeEntry =>
+    ({ ...entry(pid, ppid, name), ...(created !== undefined ? { created } : {}) });
+  const SHELL = dated(100, 1, 'pwsh.exe', 1_000);
+  const AGENT = dated(200, 100, 'claude.exe', 2_000);
+  const pids = (es: readonly ProcessTreeEntry[] | undefined) => (es ?? []).map((e) => e.pid);
+
+  async function armed(table: () => ProcessTreeEntry[], platform: NodeJS.Platform = 'win32') {
+    const tracker = new AgentProcessTracker(makeWatcher(), async () => table(), async () => '/Users/dev/.local/share/claude/versions/2.1.307',
+      '/Users/dev', {}, platform);
+    tracker.arm('s1', SHELL.pid);
+    await flush();
+    return tracker;
+  }
+
+  it('leaves out a process older than the agent, and everything under it', async () => {
+    const table = [SHELL, AGENT,
+      dated(201, 200, 'node.exe', 2_500), dated(202, 201, 'node.exe', 2_600),
+      // Started before the agent, under a dead parent that had pid 200.
+      dated(300, 200, 'Code.exe', 1_500), dated(301, 300, 'Code.exe', 3_000)];
+    const tree = await (await armed(() => table)).agentProcessTree('s1', 'claude');
+    expect(tree?.root.pid).toBe(200);
+    expect(pids(tree?.descendants)).toEqual([201, 202]);
+    expect(pids(tree?.uncertain)).toEqual([]);
+  });
+
+  it('a child started in the same millisecond as its parent is its child', async () => {
+    const tree = await (await armed(() => [SHELL, AGENT, dated(201, 200, 'node.exe', 2_000)])).agentProcessTree('s1', 'claude');
+    expect(pids(tree?.descendants)).toEqual([201]);
+  });
+
+  it('a process whose age cannot be read is uncertain, with everything under it', async () => {
+    const table = [SHELL, AGENT, dated(400, 200, 'node.exe'), dated(401, 400, 'node.exe', 3_000),
+      // Under an undated parent but older than the agent: not below it.
+      dated(402, 400, 'Code.exe', 1_500)];
+    const tree = await (await armed(() => table)).agentProcessTree('s1', 'claude');
+    expect(pids(tree?.descendants)).toEqual([]);
+    expect(pids(tree?.uncertain)).toEqual([400, 401]);
+  });
+
+  it('a stop kills the agent\'s own children and never the older process', async () => {
+    const alive = new Set([100, 200, 201, 300]);
+    const table = [SHELL, AGENT, dated(201, 200, 'node.exe', 2_500), dated(300, 200, 'Code.exe', 1_500)];
+    const tracker = await armed(() => table.filter((e) => alive.has(e.pid)));
+    const kill = vi.fn((pid: number) => { alive.delete(pid); });
+    const r = await stopAgentTree({
+      tree: () => tracker.agentProcessTree('s1', 'claude'),
+      stillRunning: (es) => tracker.stillRunning(es),
+      kill,
+      sleep: async () => undefined,
+    });
+    expect(kill.mock.calls).toEqual([[200, 'SIGTERM'], [201, 'SIGKILL']]);
+    expect(r).toEqual({ ok: true, stopped: true, pid: 200, killed: 2 });
+    expect(alive.has(300)).toBe(true);
+  });
+
+  it('a stop never signals an undated process, and is not confirmed while it runs', async () => {
+    const alive = new Set([100, 200, 400]);
+    const table = [SHELL, AGENT, dated(400, 200, 'node.exe')];
+    const tracker = await armed(() => table.filter((e) => alive.has(e.pid)));
+    const kill = vi.fn((pid: number) => { alive.delete(pid); });
+    const r = await stopAgentTree({
+      tree: () => tracker.agentProcessTree('s1', 'claude'),
+      stillRunning: (es) => tracker.stillRunning(es),
+      kill,
+      sleep: async () => undefined,
+    });
+    expect(kill.mock.calls).toEqual([[200, 'SIGTERM']]);
+    expect(r).toEqual({ ok: false, code: 'still_running', pid: 200 });
+  });
+
+  it('POSIX reparents, so its tree is the plain ppid walk', async () => {
+    const table = [SHELL, dated(200, 100, 'claude', 2_000), dated(201, 200, 'node', 1_500), dated(202, 200, 'node')];
+    const tree = await (await armed(() => table, 'linux')).agentProcessTree('s1', 'claude');
+    expect(tree?.root.pid).toBe(200);
+    expect(pids(tree?.descendants)).toEqual([201, 202]);
+    expect(pids(tree?.uncertain)).toEqual([]);
   });
 });
 
