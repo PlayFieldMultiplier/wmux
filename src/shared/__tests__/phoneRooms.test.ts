@@ -37,6 +37,14 @@ describe('phone room cards', () => {
     expect(phoneRoomCard(card(8, { attachments: [photo] }), () => null)).not.toHaveProperty('attachments');
   });
 
+  it("carries a bot card's files as their stored descriptions; a human card carries none, and a bad entry is left out", () => {
+    const file = { id: 'b'.repeat(32), name: 'cardnews.mp4', mediaType: 'video/mp4', bytes: 4_200_000 };
+    const bot = phoneRoomCard(card(9, { kind: 'report', files: [file, { ...file, id: 'c'.repeat(32), mediaType: 'video/mp4\r\nX-Evil: 1' }] }), () => null);
+    expect(bot?.files).toEqual([file]);
+    expect(parsePhoneRoomCard(bot)).toEqual(bot);
+    expect(phoneRoomCard(card(11, { kind: 'human', actor: { kind: 'human' }, files: [file] }), () => null)).not.toHaveProperty('files');
+  });
+
   it("carries a group card's reactions, palette only and one per bot; a card without any has none", () => {
     const out = phoneRoomCard(card(10, {
       kind: 'human', actor: { kind: 'human' },
@@ -46,13 +54,6 @@ describe('phone room cards', () => {
     expect(parsePhoneRoomCard(out)).toEqual(out);
     expect(parsePhoneRoomCard({ ...out, reactions: [{ botId: 'bot-1111bbbb', emoji: '🦄' }] })).not.toHaveProperty('reactions');
     expect(phoneRoomCard(card(11), () => null)).not.toHaveProperty('reactions');
-  });
-
-  it("leaves a bot card's files off the phone wire for now", () => {
-    const files = [{ id: 'b'.repeat(32), name: 'report.md', mediaType: 'text/markdown', bytes: 12 }];
-    const out = phoneRoomCard(card(9, { files }), () => ({ role: 'lead', name: 'Lead' }));
-    expect(out).not.toBeNull();
-    expect(out).not.toHaveProperty('files');
   });
 
   it("gives an owner card a phone sent its clientMessageId, and no other card any id", () => {

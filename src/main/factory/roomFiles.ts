@@ -68,6 +68,7 @@ const MEDIA_TYPES = new Map<string, string>(Object.entries({
   svg: 'image/svg+xml',
   png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp',
   pdf: 'application/pdf',
+  mp4: 'video/mp4', m4v: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm',
   diff: 'text/x-diff', patch: 'text/x-diff',
   // Code and config: shown as text.
   ts: TEXT, tsx: TEXT, js: TEXT, jsx: TEXT, mjs: TEXT, cjs: TEXT, py: TEXT, rs: TEXT, go: TEXT,

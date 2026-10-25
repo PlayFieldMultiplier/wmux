@@ -44,6 +44,7 @@ import {
 import {
   PHONE_ROOM_ATTACHMENT_COMMAND,
   PHONE_ROOM_CARDS_COMMAND,
+  PHONE_ROOM_FILE_COMMAND,
   PHONE_ROOM_LIMITS,
   PHONE_ROOM_THREADS_COMMAND,
   fitPhoneRoomPage,
@@ -66,6 +67,7 @@ import { guestWorkspaceFlag, isGuestWorkspace } from '../factory/guestWorkspaces
 import type { GuestProvenance } from '../factory/wakeTaint';
 import { parseGuestScope } from '../../shared/guestBots';
 import { ROOM_ATTACHMENT_ID_RE } from '../../shared/roomAttachments';
+import { ROOM_FILE_ID_RE } from '../../shared/roomFiles';
 import { phoneBot } from '../factory/phoneBot';
 import { getGroupStore } from '../factory/groupStore';
 import { getApprovalService } from '../factory/approvals';
@@ -79,7 +81,7 @@ export interface PhoneRoomReader {
   summary(workspaceId: string, threadId: ThreadId): ThreadSummary;
   threads(workspaceId: string): ThreadSummary[];
   /** The newest card of a room that matches (RoomWriter.find). */
-  find?(workspaceId: string, match: (c: RoomCard) => boolean): RoomCard | null;
+  find?(workspaceId: string, match: (c: RoomCard) => boolean, opts?: { guests?: boolean }): RoomCard | null;
 }
 
 export interface PhoneFactoryPorts {
@@ -222,6 +224,7 @@ type RoomCommandReply =
   | PhoneRoomThreadsReply
   | PhoneRoomCardsReply
   | { attachment: { mediaType: string; bytes: number } }
+  | { file: { name: string; mediaType: string; bytes: number } }
   | { unavailable: true }
   | { notFound: true }
   | { invalid: true };
@@ -254,9 +257,23 @@ function phoneRoomAttachment(payload: Record<string, unknown>, ports: PhoneFacto
   return a ? { attachment: { mediaType: a.mediaType, bytes: a.bytes } } : { notFound: true };
 }
 
-/** `workspaces.roomThreads` / `workspaces.roomCards` / `workspaces.roomAttachment`; null for any other command. */
+/** `workspaces.roomFile`: a file's name, size and type when a kept bot card
+ *  of the room carries it, the same card the desktop opens it from
+ *  (room.handler.ts). The daemon reads the bytes itself. */
+function phoneRoomFile(payload: Record<string, unknown>, ports: PhoneFactoryPorts): RoomCommandReply {
+  const { workspaceId, fileId } = payload;
+  if (!isPhoneRoomWorkspaceId(workspaceId) || typeof fileId !== 'string' || !ROOM_FILE_ID_RE.test(fileId)) return { invalid: true };
+  const rooms = ports.rooms();
+  if (!rooms?.find) return { unavailable: true };
+  const card = rooms.find(workspaceId, (c) => c.actor.kind === 'bot' && !!c.files?.some((f) => f.id === fileId), { guests: true });
+  const f = card?.files?.find((x) => x.id === fileId);
+  return f ? { file: { name: f.name, mediaType: f.mediaType, bytes: f.bytes } } : { notFound: true };
+}
+
+/** `workspaces.roomThreads` / `workspaces.roomCards` / `workspaces.roomAttachment` / `workspaces.roomFile`; null for any other command. */
 export function handlePhoneRoomCommand(command: string, payload: Record<string, unknown>, ports: PhoneFactoryPorts = defaultPhoneFactoryPorts()): RoomCommandReply | null {
   if (command === PHONE_ROOM_ATTACHMENT_COMMAND) return phoneRoomAttachment(payload, ports);
+  if (command === PHONE_ROOM_FILE_COMMAND) return phoneRoomFile(payload, ports);
   if (command !== PHONE_ROOM_THREADS_COMMAND && command !== PHONE_ROOM_CARDS_COMMAND) return null;
   const workspaceId = payload.workspaceId;
   if (!isPhoneRoomWorkspaceId(workspaceId)) return { invalid: true };

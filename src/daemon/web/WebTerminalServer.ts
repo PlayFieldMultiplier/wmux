@@ -189,10 +189,10 @@ import { MOA_WAKE_RETRY_AFTER, type MoaWakeService, type MoaWakeWire } from '../
 import { FACTORY_PHONE_MESSAGE_CAPABILITY, FACTORY_THREAD_ATTACHMENTS_CAPABILITY, FACTORY_THREAD_MESSAGE_CAPABILITY, MOA_WAKE_COMMAND, type MoaWakeAttachment } from '../../shared/moaWake';
 import { ROOM_ATTACHMENT_LIMITS, UPLOAD_NAME_RE } from '../../shared/roomAttachments';
 import { dmThreadBot, groupThreadGroup, parseThreadId } from '../../shared/room';
-import { PHONE_ROOM_ATTACHMENT_COMMAND, isPhoneRoomWorkspaceId } from '../../shared/phoneRooms';
+import { PHONE_ROOM_ATTACHMENT_COMMAND, PHONE_ROOM_FILE_COMMAND, isPhoneRoomWorkspaceId } from '../../shared/phoneRooms';
 import { FLEET_TICKET_ROUTE_PREFIX, fleetTicketDetailResponse, fleetTicketsFields } from './fleetTickets';
 import { factoryOn, moaConfigFields } from './factoryConfig';
-import { ROOMS_ROUTE, ROOM_ATTACHMENT_ROUTE, ROOM_MESSAGES_ROUTE, roomAttachmentResponse, roomsResponse, roomsSupported } from './rooms';
+import { ROOMS_ROUTE, ROOM_ATTACHMENT_ROUTE, ROOM_FILE_ROUTE, ROOM_MESSAGES_ROUTE, roomAttachmentResponse, roomFileResponse, roomsResponse, roomsSupported, sendRoomFile } from './rooms';
 import { BOTS_ROUTE, botsResponse, botsSupported } from './bots';
 import { GuestRateLimiter, guestRouteResponse, readGuestBody, type GuestBotResolver } from './guestBotRoutes';
 import { isGuestRoute, looksLikeGuestCredential, type GuestBotGates } from '../../shared/guestBots';
@@ -823,6 +823,12 @@ interface WebTerminalServerDeps {
    * main confirmed a kept card carries the photo. Absent: that route is 503.
    */
   roomAttachmentsDir?: string;
+  /**
+   * `<wmuxDir>/factory/room-files`, main's store of the files bots attach to
+   * their room cards. Read only, by `GET /api/rooms/:ws/files/:id`, after
+   * main confirmed a kept bot card carries the file. Absent: that route is 503.
+   */
+  roomFilesDir?: string;
   /**
    * Records one file served because the pane's agent sent it with
    * `SendUserFile` (the device audit log). Device, pane, basename and size
@@ -2874,6 +2880,8 @@ export class WebTerminalServer {
         ...(this.roomAttachmentsWritable(principal) ? { botAttachments: true } : {}),
         // `GET /api/rooms/:ws/attachments/:id` answers: the transcript grant and a desktop that serves them.
         ...(this.opts?.allowTranscript === true && this.availableDesktop()?.supports(PHONE_ROOM_ATTACHMENT_COMMAND) === true ? { roomAttachments: true } : {}),
+        // `GET /api/rooms/:ws/files/:id` answers: the same, for the files on bot cards.
+        ...(this.opts?.allowTranscript === true && this.availableDesktop()?.supports(PHONE_ROOM_FILE_COMMAND) === true ? { roomFiles: true } : {}),
         // Phone channel Inbox (§9): the four `/api/channels*` routes answer
         // here. OMITTED, not false, exactly when they would answer 503
         // `channels-unavailable` — the shape a pre-channels daemon serves.
@@ -3103,6 +3111,16 @@ export class WebTerminalServer {
           'Content-Security-Policy': "default-src 'none'; sandbox",
         });
         res.end(r.bytes);
+      }).catch((err: unknown) => this.failRequest(res, err));
+      return;
+    }
+    const roomFileRoute = req.method === 'GET' ? ROOM_FILE_ROUTE.exec(p) : null;
+    if (roomFileRoute) {
+      void roomFileResponse(roomFileRoute[1], roomFileRoute[2], {
+        allowTranscript: this.opts?.allowTranscript === true, desktop: this.availableDesktop(), roomFilesDir: this.deps.roomFilesDir,
+      }).then((r) => {
+        if (!('handle' in r)) return this.json(res, r.status, r.body, { 'Cache-Control': 'no-store' });
+        return sendRoomFile(res, r, this.securityHeaders());
       }).catch((err: unknown) => this.failRequest(res, err));
       return;
     }

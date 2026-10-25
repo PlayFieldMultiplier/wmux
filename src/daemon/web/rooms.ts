@@ -2,6 +2,8 @@
 //
 //   GET /api/rooms/:workspaceId/threads
 //   GET /api/rooms/:workspaceId/cards?thread=&sinceSeq=&limit=
+//   GET /api/rooms/:workspaceId/attachments/:attachmentId (an owner's photo)
+//   GET /api/rooms/:workspaceId/files/:fileId (a file a bot handed the owner)
 //
 // The rooms live in Electron main; this daemon gates, asks main over the
 // desktop bridge (shared/phoneRooms.ts names the two commands) and parses its
@@ -13,18 +15,23 @@
 // whose factory has not started, is 503: nothing here answers from memory.
 
 import fs from 'node:fs';
+import type { ServerResponse } from 'node:http';
 import path from 'node:path';
+import { finished } from 'node:stream/promises';
 import {
   PHONE_ROOM_ATTACHMENT_COMMAND,
   PHONE_ROOM_CARDS_COMMAND,
+  PHONE_ROOM_FILE_COMMAND,
   PHONE_ROOM_LIMITS,
   PHONE_ROOM_THREADS_COMMAND,
   isPhoneRoomWorkspaceId,
   parsePhoneRoomCardsReply,
+  parsePhoneRoomFile,
   parsePhoneRoomThreadsReply,
 } from '../../shared/phoneRooms';
 import { parseThreadId, type ThreadId } from '../../shared/room';
 import { ROOM_ATTACHMENT_ID_RE, ROOM_ATTACHMENT_LIMITS, ROOM_ATTACHMENT_MEDIA_TYPE, sniffRoomImage } from '../../shared/roomAttachments';
+import { ROOM_FILE_ID_RE, ROOM_FILE_LIMITS } from '../../shared/roomFiles';
 import { DesktopPhoneError } from '../phone/DesktopPhoneBridge';
 
 export const ROOMS_ROUTE = /^\/api\/rooms\/([^/]+)\/(threads|cards)$/;
@@ -36,6 +43,10 @@ export const ROOM_MESSAGES_ROUTE = /^\/api\/rooms\/([^/]+)\/messages$/;
 /** `GET /api/rooms/:workspaceId/attachments/:attachmentId`: one photo of an
  *  owner card, the bytes of the room's stored copy. */
 export const ROOM_ATTACHMENT_ROUTE = /^\/api\/rooms\/([^/]+)\/attachments\/([^/]+)$/;
+
+/** `GET /api/rooms/:workspaceId/files/:fileId`: one file on a bot card, the
+ *  bytes of the room's stored copy. */
+export const ROOM_FILE_ROUTE = /^\/api\/rooms\/([^/]+)\/files\/([^/]+)$/;
 
 /** The part of the desktop bridge the routes use (DesktopPhoneBridge). */
 export interface RoomsDesktop {
@@ -194,4 +205,118 @@ export async function roomAttachmentResponse(
   }
   if (sniffRoomImage(bytes.subarray(0, 16)) !== ROOM_ATTACHMENT_MEDIA_TYPE) return ATTACHMENT_NOT_FOUND;
   return { status: 200, bytes, contentType: ROOM_ATTACHMENT_MEDIA_TYPE };
+}
+
+/** A bot file ready to stream: the open stored copy, owned by the caller of
+ *  sendRoomFile, which closes it. */
+export interface RoomFileOpen {
+  status: 200;
+  handle: fs.promises.FileHandle;
+  size: number;
+  name: string;
+  contentType: string;
+}
+
+export type RoomFileResponse = RoomsResponse | RoomFileOpen;
+
+const FILE_NOT_FOUND: RoomsResponse = { status: 404, body: { error: 'file-not-found' } };
+
+/** No link followed, and a FIFO swapped in never blocks the open. */
+const FILE_OPEN_FLAGS = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0);
+
+/**
+ * `GET /api/rooms/:workspaceId/files/:fileId`. Gated like the photo route:
+ * the transcript grant, then main says whether a kept bot card of that room
+ * carries the id (with its name, size and media type). The stored copy is
+ * opened from `roomFilesDir` without following a link and must be that file
+ * and that size. Every way it is not there is the same 404. The type is
+ * main's, never sniffed (a stored copy has no extension). Files run to
+ * 10 MiB, so the bytes are streamed by sendRoomFile, not read whole.
+ */
+export async function roomFileResponse(
+  rawWorkspaceId: string,
+  rawFileId: string,
+  opts: { allowTranscript: boolean; desktop: RoomsDesktop | null; roomFilesDir: string | undefined },
+): Promise<RoomFileResponse> {
+  if (!opts.allowTranscript) return { status: 403, body: { error: 'transcript-disabled' } };
+  const workspaceId = decodeWorkspace(rawWorkspaceId);
+  if (!workspaceId || !ROOM_FILE_ID_RE.test(rawFileId)) return FILE_NOT_FOUND;
+  const desktop = opts.desktop;
+  if (!desktop) return { status: 503, body: { error: 'desktop-unavailable' } };
+  if (!desktop.supports(PHONE_ROOM_FILE_COMMAND) || !opts.roomFilesDir) return { status: 503, body: { error: 'rooms-unavailable' } };
+  const answered = await ask(desktop, PHONE_ROOM_FILE_COMMAND, { workspaceId, fileId: rawFileId });
+  if (!('reply' in answered)) return answered;
+  const reply = answered.reply !== null && typeof answered.reply === 'object' ? answered.reply as Record<string, unknown> : {};
+  if (reply.unavailable === true) return { status: 503, body: { error: 'rooms-unavailable' } };
+  const meta = parsePhoneRoomFile({ ...(reply.file !== null && typeof reply.file === 'object' ? reply.file : {}), id: rawFileId });
+  if (!meta) return FILE_NOT_FOUND;
+  const folder = path.join(opts.roomFilesDir, workspaceId);
+  const file = path.join(folder, rawFileId);
+  let handle: fs.promises.FileHandle | null = null;
+  try {
+    // Neither the store nor the room's folder may be a link.
+    for (const dir of [opts.roomFilesDir, folder]) {
+      const d = await fs.promises.lstat(dir);
+      if (!d.isDirectory() || d.isSymbolicLink()) return FILE_NOT_FOUND;
+    }
+    const st = await fs.promises.lstat(file);
+    if (!st.isFile() || st.size !== meta.bytes || st.size > ROOM_FILE_LIMITS.MAX_BYTES) return FILE_NOT_FOUND;
+    handle = await fs.promises.open(file, FILE_OPEN_FLAGS);
+    const fst = await handle.stat();
+    if (!fst.isFile() || fst.size !== meta.bytes || fst.ino !== st.ino || fst.dev !== st.dev) {
+      await handle.close().catch(() => undefined);
+      return FILE_NOT_FOUND;
+    }
+    return { status: 200, handle, size: fst.size, name: meta.name, contentType: meta.mediaType };
+  } catch {
+    await handle?.close().catch(() => undefined);
+    return FILE_NOT_FOUND;
+  }
+}
+
+/** RFC 5987 `filename*` value: every byte outside its attr-char set escaped. */
+function contentDispositionName(name: string): string {
+  return encodeURIComponent(name).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+}
+
+/**
+ * Streams an opened bot file and closes it. Content-Length is the size main
+ * named; a file that shrank mid-stream sends fewer bytes than that header
+ * promised, so the socket is cut rather than ended cleanly.
+ */
+export async function sendRoomFile(res: ServerResponse, file: RoomFileOpen, headers: Record<string, string>): Promise<void> {
+  try {
+    res.writeHead(200, {
+      ...headers,
+      'Content-Type': file.contentType,
+      'Content-Length': String(file.size),
+      'Content-Disposition': `inline; filename*=UTF-8''${contentDispositionName(file.name)}`,
+      'Cache-Control': 'no-store',
+      // Inert even if opened as a document (an HTML or SVG file).
+      'Content-Security-Policy': "default-src 'none'; sandbox",
+    });
+    // The handle stays ours to close (and to count against below).
+    const stream = file.handle.createReadStream({ start: 0, end: file.size - 1, autoClose: false });
+    // A phone that leaves mid-download: pipe never destroys its source.
+    const abort = (): void => { stream.destroy(); };
+    res.once('close', abort);
+    // It may already have left during the awaits before the first byte.
+    if (res.destroyed) {
+      stream.destroy();
+      return;
+    }
+    try {
+      stream.pipe(res, { end: false });
+      await finished(stream);
+    } finally {
+      res.off('close', abort);
+    }
+    if (res.destroyed) return;
+    if (stream.bytesRead !== file.size) res.destroy();
+    else res.end();
+  } catch {
+    if (!res.destroyed) res.destroy();
+  } finally {
+    await file.handle.close().catch(() => undefined);
+  }
 }

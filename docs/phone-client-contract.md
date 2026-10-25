@@ -4253,10 +4253,8 @@ anything in its own words, as it can any agent pane.
 
 #### The agent factory (`factory`, `rooms`, `/api/rooms`)
 
-> **Serving: not yet.** This section describes the 5.0 branch (local, not
-> released). No shipped daemon serves any key or route below; a daemon or
-> desktop that predates it omits every one of them, and the Moa sections above
-> describe what it serves.
+A daemon or desktop that predates this section omits every key and route
+below, and the Moa sections above describe what it serves.
 
 In 5.0 the desktop's Moa becomes the HQ bot of an **agent factory**: long-lived
 bots bound to workspaces by role (`lead`, `triage`, `verifier`, `maintainer`,
@@ -4647,9 +4645,8 @@ worded (the values listed); a value not listed means the English `title`.
 
 #### The Bots page (`bots`, `botMessages`, `/api/bots`, `/api/rooms/:workspaceId/messages`)
 
-> **Serving: not yet.** Like *The agent factory* above. Additive: every
-> route and key above is unchanged, and a daemon or desktop that predates
-> this section omits both keys and answers the two routes `404`.
+Additive: every route and key above is unchanged, and a daemon or desktop
+that predates this section omits both keys and answers the two routes `404`.
 
 The desktop's Bots page is a messenger: one conversation per bot (its 1:1,
 `dm:<botId>`) and one per group chat the owner made, across every workspace,
@@ -4938,6 +4935,53 @@ desktop must still keep a card of that room carrying the id.
 | `404 {error:"attachment-not-found"}` | No such photo on a kept card of that room, or its file is gone. Show the photo as unavailable. |
 | `503 {error:"desktop-unavailable"}` / `503 {error:"rooms-unavailable"}` | No desktop, or one that cannot serve photos. |
 | `504 {error:"desktop-timeout"}` | The desktop did not answer. |
+
+#### Files on bot cards (`roomFiles`)
+
+Additive. A daemon or desktop that predates this omits the key, never puts
+`files` on a card, and answers the route `404`.
+
+A bot hands the owner files it made (an image, a document, a video, a
+spreadsheet, a report) on its own cards. The desktop keeps a copy of each in
+the room, as long as the card, so the file stays when the bot's work folder
+is gone.
+
+**`/api/config`.** `roomFiles` — `true` when
+`GET /api/rooms/:workspaceId/files/:id` answers here: `--allow-transcript`
+and a desktop that serves files. Draw file chips on cards when it is present.
+Omitted, never `false`, otherwise.
+
+**On cards.** A bot's card (`actor: {kind:"bot"}`) of
+`GET /api/rooms/:workspaceId/cards` may carry:
+
+```
+"files": [ { "id": "9c1e…(32 lowercase hex)", "name": "cardnews.mp4", "mediaType": "video/mp4", "bytes": 4194304 } ]
+```
+
+- At most 8 per card. Cards of other actors never carry it.
+- `name`: the file's own name as the bot made it (no folders), at most 200
+  characters. Show it; never use it as a path.
+- `mediaType`: what the desktop inferred from the name's extension, e.g.
+  `image/png`, `application/pdf`, `text/markdown`, `video/mp4`,
+  `video/quicktime`, `video/webm`, `text/csv`; `application/octet-stream`
+  when unknown. A card stored before a type was known keeps the type it was
+  given (an older `.mp4` reads `application/octet-stream`).
+- `bytes`: 1 to 10 MiB (10485760).
+
+**`GET /api/rooms/:workspaceId/files/:fileId`** — the file's bytes.
+`--allow-transcript`, checked first; no input grant. The desktop must still
+keep a bot's card of that room carrying the id.
+
+| Answer | Meaning |
+|---|---|
+| `200` | The file, streamed. `Content-Type` is exactly the card's `mediaType` (main's type, never sniffed from the bytes); `Content-Length` is exactly the card's `bytes`. Also `Content-Disposition: inline; filename*=UTF-8''<the name, percent-encoded>`, `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; sandbox`. No range requests: fetch the whole file, then preview it from the two headers. |
+| `403 {error:"transcript-disabled"}` | The server runs without `--allow-transcript`. |
+| `404 {error:"file-not-found"}` | No bot's card of that room carries the id, or its stored copy is gone or changed. Show the file as unavailable. |
+| `503 {error:"desktop-unavailable"}` / `503 {error:"rooms-unavailable"}` | No desktop, or one that cannot serve files. |
+| `504 {error:"desktop-timeout"}` | The desktop did not answer. |
+
+A body shorter than `Content-Length` (the connection cut mid-file) is a
+failed download: discard it and retry; never show a partial file.
 
 #### Bot approvals (`/api/bot-approvals`)
 
@@ -6122,6 +6166,12 @@ computer". The directory is the pane's spawn directory for Claude (never the
 OSC 7 cwd, which pane output can aim), and for Codex the live native thread's
 own cwd when the daemon's relay knows it, else the spawn directory. Names and
 descriptions only; no bodies, no paths.
+
+### Renaming a Claude session
+
+There is no rename route. Send the text `/rename <name>` to the pane as a
+message (`POST /api/sessions/<id>/chat/messages`, or typed input), which
+needs the input grant like any send; Claude Code names the session itself.
 
 ### `chat.blocked` / `chat.unblocked` on `/api/events`
 
