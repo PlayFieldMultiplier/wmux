@@ -32,6 +32,25 @@ describe('ChromeProfileStore', () => {
     expect(store.profileFor(undefined)).toBe(DEFAULT_CHROME_PROFILE);
   });
 
+  it('remembers the last profile a workspace was bound to, offers it only while no pane owns it, and tells a fallback from a choice', async () => {
+    const store = new ChromeProfileStore(dir);
+    await store.create('work');
+    await store.create('solo');
+    expect(store.suggestedProfile()).toBeUndefined();
+    await store.setBinding('ws-1', 'work');
+    await store.setBinding('ws-2', DEFAULT_CHROME_PROFILE);
+    expect(new ChromeProfileStore(dir).suggestedProfile()).toBe('work');
+    // An explicit default binding is a choice; no binding at all is the fallback.
+    expect(store.fellBackToDefault('ws-2')).toBe(false);
+    expect(store.fellBackToDefault('ws-3')).toBe(true);
+    expect(store.fellBackToDefault(undefined)).toBe(true);
+    await store.noteUsed('solo');
+    expect(store.suggestedProfile()).toBe('solo');
+    await store.setPaneBinding('pane-1', 'ws-3', 'solo');
+    expect(store.suggestedProfile()).toBeUndefined();
+    expect(store.fellBackToDefault('ws-3', 'pane-1')).toBe(false);
+  });
+
   it('create + bind persist across a fresh instance; unbind falls back to default', async () => {
     const store = new ChromeProfileStore(dir);
     await store.create('youtube-a');

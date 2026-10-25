@@ -1131,6 +1131,8 @@ const electronAPI = {
         profiles: string[];
         bindings: Record<string, string>;
         paneBindings?: ChromePaneBindings;
+        /** The last-used profile an unbound workspace may be offered. */
+        lastUsed?: string;
       }> => ipcRenderer.invoke('browser:chrome-profiles:list'),
       create: (name: string): Promise<{ ok: boolean; error?: string }> =>
         ipcRenderer.invoke('browser:chrome-profiles:create', name),
@@ -1145,6 +1147,14 @@ const electronAPI = {
         ipcRenderer.invoke(CHROME_PANE_IPC.bind, { paneId, workspaceId, profileName }),
       revealPane: (paneId: string, workspaceId: string): Promise<{ ok: boolean; error?: string }> =>
         ipcRenderer.invoke(CHROME_PANE_IPC.reveal, { paneId, workspaceId }),
+      /** An unbound workspace's browser call used the shared default profile (once per workspace per run of the app). */
+      onFallback: (callback: (info: { workspaceId: string; suggested?: string }) => void): (() => void) => {
+        const listener = (_e: Electron.IpcRendererEvent, info: { workspaceId: string; suggested?: string }) => callback(info);
+        ipcRenderer.on(IPC.CHROME_PROFILE_FALLBACK, listener);
+        return () => {
+          ipcRenderer.removeListener(IPC.CHROME_PROFILE_FALLBACK, listener);
+        };
+      },
     },
     // Protected browser panes (src/shared/browserPolicy.ts). Operator-only:
     // main accepts these from the main window's top frame alone.

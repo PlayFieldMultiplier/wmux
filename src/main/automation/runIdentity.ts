@@ -297,6 +297,13 @@ export function noteRunBrowserRefusal(runId: string, detail: AutomationNoteRunBr
   t.rpc(AUTOMATION_RPC.noteRunBrowser, params as unknown as Record<string, unknown>, { timeoutMs: 3000 }).catch(() => undefined);
 }
 
+/** Mark the live run behind `ptyId` as having used the shared default Chrome profile (best effort). */
+export function noteRunBrowserProfileUnbound(ptyId: string): void {
+  const t = transport;
+  if (!t) return;
+  t.rpc(AUTOMATION_RPC.noteRunBrowserProfile, { ptyId }, { timeoutMs: 3000 }).catch(() => undefined);
+}
+
 // ── Which PTYs are identity runs (sync, for the RPC router) ────────────────
 
 /**

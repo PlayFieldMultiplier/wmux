@@ -290,6 +290,11 @@ function RunRow({ run, automation, showingOutput, onToggleOutput, onCancel }: {
           {t(`schedules.detail.${run.detail}`)}
         </p>
       )}
+      {run.browserProfileUnbound && (
+        <p className="ui-note px-[14px] pb-3" data-run-browser-profile-unbound>
+          {t('schedules.detail.browser_profile_unbound')}
+        </p>
+      )}
       {showingOutput && <RunOutput run={run} automation={automation} />}
     </li>
   );

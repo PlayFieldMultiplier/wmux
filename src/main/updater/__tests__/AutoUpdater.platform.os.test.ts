@@ -22,6 +22,7 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { IPC } from '../../../shared/constants';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 const FAKE_VERSION = '9.9.9';
 const EXPECTED_WIN32_FEED = `https://update.electronjs.org/openwong2kim/wmux/win32/${FAKE_VERSION}`;
@@ -1040,6 +1041,42 @@ describe('AutoUpdater darwin-arm64 install (Squirrel.Mac loopback feed)', () => 
     const preparedAt = hooks.onBeforeInstallQuit.mock.invocationCallOrder[0]!;
     const quitAt = loaded.nativeUpdater.quitAndInstall.mock.invocationCallOrder[0]!;
     expect(preparedAt).toBeLessThan(quitAt);
+  });
+
+  // The agent Chrome quits through Browser.close before the install, so the
+  // preparation is async: the install waits for it, but only so long.
+  it('waits for an async install-quit preparation before quitAndInstall, and no longer than the cap', async () => {
+    const { loaded, installHandler, hooks } = await downloadOnDarwin();
+    let finish!: () => void;
+    hooks.onBeforeInstallQuit.mockReturnValueOnce(new Promise<void>((resolve) => { finish = resolve; }));
+
+    await installHandler();
+    await until(() => loaded.nativeUpdater.setFeedURL.mock.calls.length > 0);
+    loaded.nativeUpdater.emit('update-downloaded');
+    await deliberateSleep(20, 'a negative check: nothing may install while the preparation is still running');
+    expect(hooks.onBeforeInstallQuit).toHaveBeenCalledTimes(1);
+    expect(loaded.nativeUpdater.quitAndInstall).not.toHaveBeenCalled();
+    finish();
+    await until(() => loaded.nativeUpdater.quitAndInstall.mock.calls.length === 1);
+  });
+
+  it('installs anyway when the install-quit preparation never settles', async () => {
+    const { loaded, installHandler, hooks } = await downloadOnDarwin();
+    hooks.onBeforeInstallQuit.mockReturnValueOnce(new Promise<void>(() => undefined));
+    vi.useFakeTimers();
+    try {
+      const install = installHandler();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await install;
+      loaded.nativeUpdater.emit('update-downloaded');
+      await vi.advanceTimersByTimeAsync(4_900);
+      expect(loaded.nativeUpdater.quitAndInstall).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(200);
+      expect(loaded.nativeUpdater.quitAndInstall).toHaveBeenCalledTimes(1);
+      expect(hooks.onInstallQuitAborted).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('a late Squirrel event after a failed attempt cannot re-trigger the install', async () => {

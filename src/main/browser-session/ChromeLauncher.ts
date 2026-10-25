@@ -44,7 +44,7 @@ import type { LentLiveTab } from '../../shared/browserAgentControl';
 const READY_TIMEOUT_MS = 10_000;
 const READY_POLL_MS = 250;
 /** How long a Chrome asked to quit through Browser.close gets before a signal. */
-const QUIT_GRACE_MS = 3_000;
+export const QUIT_GRACE_MS = 3_000;
 /** How long a fresh launch waits for session restore to settle its tabs. */
 const RESTORE_SETTLE_MS = 2_000;
 /** How often a protected profile's download guard re-asserts deny. */
@@ -1752,6 +1752,11 @@ export class ChromeLauncher implements ChromeBackendClient {
     this.proxy = null;
     if (!child) return;
     if (!opts?.immediate && port > 0 && (await this.closeGracefully(port, child, opts?.deadline))) return;
+    // On Windows the signal is a hard kill: cookie writes Chrome still held in
+    // memory are lost, so say when the grace ran out.
+    if (!opts?.immediate && port > 0) {
+      console.warn(`[ChromeLauncher] Chrome (${this.profileName}) did not quit within the grace — ${process.platform === 'win32' ? 'terminating it' : 'signalling it'}`);
+    }
     try {
       child.kill();
     } catch {
