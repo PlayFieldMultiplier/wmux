@@ -6036,8 +6036,9 @@ function registerRpcHandlers(
   pipeServer.onRpc('daemon.chat.stallPrefill', async (params, ctx) => {
     if (!firstPartyOnly(ctx.clientId, 'stallPrefill')) return { result: 'unavailable' };
     const id = typeof params['id'] === 'string' ? params['id'] : '';
-    // The card may be older than the stall: a turn that moved again is never stopped from it.
-    if (stallWatch?.stalledSince(id) == null) return { result: 'not_running' };
+    // The card may be older than the stall: only the turn the stall was recorded for is stopped.
+    const stalledTurn = stallWatch?.stalledTurn(id);
+    if (stalledTurn === undefined) return { result: 'not_running' };
     // Moa's brain pane is not watched, so it is never stopped from here either.
     const binding = id && currentMoaPane()?.sessionId !== id ? resolveTranscriptBinding(id) : undefined;
     if (binding?.agent !== STALL_AGENT || !binding.transcriptPath) return { result: 'unavailable' };
@@ -6046,7 +6047,7 @@ function registerRpcHandlers(
       // A dialog or approval that appeared after the chip: an ESC would answer it.
       blocked: () => sessionManager.getSession(id)?.bridge.getAgentStatus() === 'awaiting_input'
         || !approvalRegistry || approvalRegistry.list().pending.some((r) => r.sessionId === id),
-      interrupt: () => bridge.desktopInterrupt(id, binding.sessionId),
+      interrupt: () => bridge.desktopInterrupt(id, binding.sessionId, stalledTurn),
       turnId: () => {
         const paneBridge = sessionManager.getSession(id)?.bridge;
         return paneBridge?.getTurn(paneBridge.getAgentStatus()).id;

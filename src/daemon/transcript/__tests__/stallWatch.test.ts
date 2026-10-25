@@ -72,8 +72,12 @@ describe('StallWatch', () => {
     expect(h.stalled()).toBe(false);
     await h.run(10_000);
     expect(h.stalled()).toBe(true);
-    // Reported as stuck since the last progress.
+    // Reported as stuck since the last progress, for the turn it was seen in.
     expect(h.watch.stalledSince('pty-1')).toBe(1_000_000);
+    expect(h.watch.stalledTurn('pty-1')).toBe(h.state.turn);
+    h.state.turn = 'turn-2';
+    await h.run(10_000);
+    expect(h.watch.stalledTurn('pty-1')).toBeUndefined();
   });
 
   it('never reads a moving token count as stuck, even at 246 s of silence', async () => {

@@ -241,6 +241,12 @@ export class StallWatch {
     }
   }
 
+  /** The turn a recorded stall belongs to, or undefined when none is recorded. */
+  stalledTurn(id: string): string | undefined {
+    const w = this.watches.get(id);
+    return w?.stalledSince !== undefined ? w.turn : undefined;
+  }
+
   /** Keep waiting: double the threshold for this turn. False when not stalled. */
   keepWaiting(id: string): boolean {
     const w = this.watches.get(id);
