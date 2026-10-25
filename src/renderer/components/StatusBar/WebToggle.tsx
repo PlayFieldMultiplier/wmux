@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type ReactNode,
 } from 'react';
 import { buildQrPath, type QrPath } from './qrPath';
 import { useT } from '../../hooks/useT';
@@ -31,6 +32,7 @@ import OtherComputersSection from './OtherComputersSection';
 import AttachRemoteModal from '../Sidebar/AttachRemoteModal';
 import PairingScope from '../PcRail/PairingScope';
 import { TailscaleProblemFix } from '../Remote/TailscaleChecklist';
+import { FirewallNoticeView, ListenProblemView, useFirewall, useListenProblem } from '../Remote/FirewallNotice';
 import { useStore } from '../../stores';
 import {
   buildDesktopPairLink,
@@ -323,6 +325,13 @@ export interface WebPopoverBodyProps {
    * fix when Tailscale can front this computer but the box is unticked.
    */
   onTurnOnHttps?: () => void;
+  /**
+   * Stopped only: the last start's bind failure explained (who holds the
+   * port, Use port N), in place of the raw error. Built by the container.
+   */
+  listenNotice?: ReactNode;
+  /** Running and exposed only: the firewall check of this listener. Built by the container. */
+  firewallNotice?: ReactNode;
   t: (key: string) => string;
 }
 
@@ -495,6 +504,8 @@ export function WebPopoverBody({
   onOpenWizard,
   tailscaleCheck,
   onTurnOnHttps,
+  listenNotice,
+  firewallNotice,
   t,
 }: WebPopoverBodyProps) {
   // Same control in both bodies below — declared once so the running and
@@ -727,7 +738,7 @@ export function WebPopoverBody({
         </PopoverSection>
         <PopoverSection title={t('web.shareThisComputer')}>
           {wizardLink}
-          {info.error ? <p className="ui-note">{info.error}</p> : null}
+          {listenNotice ?? (info.error ? <p className="ui-note">{info.error}</p> : null)}
           <div className="ui-group">
             <Field label={t('web.allowInput')} className="ui-row">
               <Checkbox checked={allowInput} onCheckedChange={() => onToggleAllowInput()} />
@@ -991,6 +1002,7 @@ export function WebPopoverBody({
 
       <PopoverSection>
         {exposed ? <p className="ui-note">{t('web.exposeWarning')}</p> : null}
+        {exposed ? firewallNotice : null}
         {info.error ? <p className="ui-row-error">{info.error}</p> : null}
         <div className="flex items-center justify-between gap-2">
           {devicesLink}
@@ -1394,6 +1406,7 @@ export default function WebToggle({ variant = 'icon', compact = false, onOpenCha
   const ensureRunning = useCallback(async (
     a: WebApi,
     override?: { expose: boolean; tailscale: boolean },
+    port?: number,
   ): Promise<WebTerminalInfo | null> => {
     // Look again first: the popover may be up to a poll behind. A server
     // started (or stopped) elsewhere since then is not ours to restart.
@@ -1410,7 +1423,7 @@ export default function WebToggle({ variant = 'icon', compact = false, onOpenCha
     for (const key of ['allowTranscript', 'allowUpload', 'allowDangerousLaunch'] as const) {
       if (touchedGrants.current.has(key)) grants[key] = values[key];
     }
-    const args: WebStartArgs = { allowInput, ...transport, ...grants };
+    const args: WebStartArgs = { allowInput, ...transport, ...grants, ...(port !== undefined ? { port } : {}) };
     const next = await a.start(args);
     applyInfo(next);
     return next.running ? next : null;
@@ -1426,6 +1439,27 @@ export default function WebToggle({ variant = 'icon', compact = false, onOpenCha
       setBusy(false);
     }
   }, [ensureRunning]);
+
+  /** "Use port N": start on the port the daemon found free; it is remembered for the next start. */
+  const handleUsePort = useCallback(async (port: number) => {
+    const a = webApi();
+    if (!a) return;
+    setBusy(true);
+    try {
+      await ensureRunning(a, undefined, port);
+    } finally {
+      setBusy(false);
+    }
+  }, [ensureRunning]);
+
+  // Exposed beyond loopback, other machines connect: check the firewall when
+  // the popover opens on it (and when the port changes), never on its poll.
+  const webFirewall = useFirewall('web', {
+    enabled: open && info.running && webIsExposed(info),
+    checkKey: String(info.port ?? ''),
+  });
+  const listenError = !info.running ? info.listenError : undefined;
+  const webProblem = useListenProblem('web', open && listenError ? `${listenError.code}:${listenError.port}` : null);
 
   /**
    * A grant row was toggled. Stopped, it only changes what the next Start
@@ -1784,6 +1818,19 @@ export default function WebToggle({ variant = 'icon', compact = false, onOpenCha
             onOpenWizard={canWizard ? () => setView('wizard') : undefined}
             tailscaleCheck={tailscaleCheck}
             onTurnOnHttps={() => void handleTurnOnHttps()}
+            listenNotice={listenError ? (
+              <ListenProblemView
+                report={webProblem}
+                fallback={info.error ?? null}
+                onUsePort={(port) => void handleUsePort(port)}
+                busy={busy}
+                repair={false}
+                primary={false}
+                listener="web"
+                t={t}
+              />
+            ) : undefined}
+            firewallNotice={<FirewallNoticeView c={webFirewall} listener="web" primary={false} seenAt={info.inboundSeenAt} t={t} />}
             t={t}
           />
           </>

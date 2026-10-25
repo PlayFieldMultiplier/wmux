@@ -34,6 +34,8 @@ import type {
   LanLinkSendArgs,
   LanLinkPeersListResult,
 } from './lanlink';
+import type { FirewallActionResult, FirewallListener, InboundStatusView } from './netFirewall';
+import type { ListenProblemReport } from './netListen';
 import type { A2aSpawnAskResult, A2aSpawnOutgoingList, A2aSpawnPolicySetResult, A2aSpawnPolicyV1, A2aSpawnRequestSummary, A2aSpawnUiAsk } from './a2aSpawn';
 import type { RemoteSendResult, RemoteSendSource, RemoteWriteResult } from './remoteUpload';
 import type {
@@ -233,6 +235,19 @@ declare global {
         peersList: () => Promise<LanLinkPeersListResult>;
         /** PR-5 — revoke a peer (live destroy of its AEAD connection). */
         peersRemove: (peerUuid: string) => Promise<{ ok: true }>;
+      };
+      /**
+       * Firewall and port problems of the listeners other PCs reach. `status`
+       * runs the daemon's read-only probe (seconds, so only on a deliberate
+       * event); `fix` / `remove` each show one OS consent prompt.
+       */
+      netFirewall?: {
+        /** `fresh`: a probe that starts now, never one already running. */
+        status: (listener: FirewallListener, fresh?: boolean) => Promise<InboundStatusView>;
+        listenProblem: (listener: FirewallListener) => Promise<ListenProblemReport | null>;
+        fix: (listener: FirewallListener) => Promise<FirewallActionResult>;
+        remove: (listener: FirewallListener) => Promise<FirewallActionResult>;
+        open: (which: 'firewall' | 'network') => Promise<{ ok: boolean }>;
       };
       /** Cross-host A2A control plane (Settings → LAN). Daemon mode only. */
       a2aRemote?: {

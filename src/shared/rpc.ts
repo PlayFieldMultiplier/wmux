@@ -1641,6 +1641,16 @@ export interface A2aRemoteStatus {
   fingerprint256: string | null;
   /** Why the listener is not running although enabled (bind or identity failure). */
   lastError: string | null;
+  /**
+   * The failed bind's error code (EADDRINUSE, EACCES, EADDRNOTAVAIL…) and the
+   * port it tried, so the UI can say what holds the port. Null for an
+   * identity or TLS failure. Absent from an older daemon.
+   */
+  lastErrorCode?: string | null;
+  lastErrorPort?: number | null;
+  /** Epoch ms of the last connection from another machine since the listener started. Absent from an older daemon. */
+  inboundSeenAt?: number | null;
+  inboundCount?: number;
 }
 
 /** `a2a.remote.pair.begin` */

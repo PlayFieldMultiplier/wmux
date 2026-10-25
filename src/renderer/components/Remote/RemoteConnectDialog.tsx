@@ -20,6 +20,7 @@ import { HOST_UNREACHABLE_ERROR } from '../../../shared/remoteHosts';
 import type { A2aRemoteStatus } from '../../../shared/rpc';
 import LanLinkPairPanel from './LanLinkPairPanel';
 import { TailscaleFixButton } from './TailscaleChecklist';
+import { FirewallNoticeView, ListenProblemView, useFirewall, useListenProblem } from './FirewallNotice';
 import { tailnetPrecheck, tailnetTargetOf, withTailnetNote, type TailnetNotice } from './tailnetCheck';
 import type { TailscaleFix } from '../../../shared/web';
 
@@ -158,6 +159,11 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
   const [message, setMessage] = useState<{ tone: 'muted' | 'danger'; text: string; fix?: TailscaleFix } | null>(null);
   const [turnedOn, setTurnedOn] = useState(false);
   const [inviteError, setInviteError] = useState<string | null>(null);
+  // The listener could not bind: its code and port, explained by the daemon (who holds it, a port to try).
+  const [inviteFailure, setInviteFailure] = useState<{ code: string; port: number } | null>(null);
+  const inviteProblem = useListenProblem('a2a', inviteFailure ? `${inviteFailure.code}:${inviteFailure.port}` : null);
+  // Checked only when asked (Check firewall after copying): the dialog never runs it by itself.
+  const firewall = useFirewall('a2a', { enabled: false, checkKey: '' });
   const [creating, setCreating] = useState(false);
   const [joined, setJoined] = useState<{ hostId: string; name: string } | null>(null);
   const [linkHost, setLinkHost] = useState<{ hostId: string; name: string } | null>(null);
@@ -310,9 +316,12 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
         onA2aStatus?.(status);
       }
       if (!status.listening) {
-        if (mounted.current) setInviteError(status.lastError ?? t('settings.a2aRemoteActionFailed'));
+        if (!mounted.current) return;
+        if (status.lastErrorCode) setInviteFailure({ code: status.lastErrorCode, port: status.lastErrorPort ?? status.port });
+        else setInviteError(status.lastError ?? t('settings.a2aRemoteActionFailed'));
         return;
       }
+      setInviteFailure(null);
       // By pairing (peerId), not by PC: a PC that pairs again under this
       // invite keeps its hostId but gets a new peerId.
       const peers = await api.peersList().catch(() => null);
@@ -331,6 +340,22 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
       if (mounted.current) setCreating(false);
     }
   }, [api, invite, t, onA2aStatus, mintForInvite, copyBundle]);
+
+  /** "Use port N": move the listener there, then open the invite on it. */
+  const moveInvitePort = useCallback(async (port: number) => {
+    if (!api) return;
+    setCreating(true);
+    try {
+      const status = await api.configure({ port });
+      onA2aStatus?.(status);
+    } catch {
+      if (mounted.current) setInviteError(t('settings.a2aRemoteActionFailed'));
+      return;
+    } finally {
+      if (mounted.current) setCreating(false);
+    }
+    if (mounted.current) await startInvite();
+  }, [api, onA2aStatus, startInvite, t]);
 
   /** Tick: mint the link and copy both. Untick: cancel the link and copy the invite alone. */
   const toggleShare = useCallback(async () => {
@@ -535,6 +560,19 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
             <p className="wmux-remote-connect-note">{t('remotePage.connect.inviteDesc')}</p>
             {turnedOn && <p className="wmux-remote-connect-note" data-testid="remote-connect-turned-on">{t('remotePage.connect.turnedOn')}</p>}
             {inviteError && <p className="wmux-a2a-note" data-tone="danger" role="alert">{inviteError}</p>}
+            {inviteFailure && !invite.invite && (
+              <ListenProblemView
+                report={inviteProblem}
+                fallback={t('settings.a2aRemoteNotListening', { error: inviteFailure.code })}
+                onUsePort={(port) => void moveInvitePort(port)}
+                busy={creating}
+                working={creating}
+                repair
+                primary={false}
+                listener="a2a"
+                t={t}
+              />
+            )}
             {invite.invite ? (
               <>
                 <div className="wmux-remote-code">
@@ -572,6 +610,14 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
                     </ol>
                   </div>
                 )}
+                {/* The host cannot see a blocked connection; the person comes back here when the other PC could not connect. */}
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="wmux-remote-connect-note" data-testid="remote-connect-firewall-hint">{t('net.fw.inviteHint')}</p>
+                  <Button variant="ghost" size="sm" disabled={firewall.checking || firewall.busy !== null} onClick={firewall.check} data-testid="remote-connect-firewall-check">
+                    {firewall.checking ? t('net.fw.checking') : t('net.fw.check')}
+                  </Button>
+                </div>
+                <FirewallNoticeView c={firewall} listener="a2a" primary={false} ownCheck t={t} />
               </>
             ) : creating ? (
               <p className="wmux-remote-connect-note">{t('remotePage.connect.creating')}</p>

@@ -49,6 +49,7 @@ import { registerTokenUsageSurfaceHandlers } from './handlers/tokenUsageSurface.
 import { registerTokenUsageProfilesHandlers } from './handlers/tokenUsageProfiles.handler';
 import { registerLanLinkHandlers } from './handlers/lanlink.handler';
 import { registerA2aRemoteHandlers } from './handlers/a2aRemote.handler';
+import { registerNetFirewallHandlers } from './handlers/netFirewall.handler';
 import { registerPaneResourcesHandlers } from './handlers/paneResources.handler';
 import { registerChatHandlers } from './handlers/chat.handler';
 import { registerChatV2Handlers } from './handlers/chatv2.handler';
@@ -257,6 +258,9 @@ export function registerAllHandlers(
   // daemon), but registered before the daemon connects too: the renderer
   // reads the Remote feed at start, and its reads wait for the client.
   const cleanupA2aRemote = registerA2aRemoteHandlers(daemonClient ?? null);
+  // Firewall and port problems of the listeners other PCs reach. Unconditional:
+  // with no daemon the checks reject (the UI says it could not read them).
+  const cleanupNetFirewall = registerNetFirewallHandlers(() => daemonClient ?? null, getWindow);
 
   // TASK-6 Fleet View resource attribution — daemon-mode only (the shell PIDs
   // live in the daemon session list). Renderer polls this ONLY while Fleet View
@@ -624,6 +628,7 @@ export function registerAllHandlers(
     cleanupTokenUsageProfiles();
     if (cleanupLanLink) cleanupLanLink();
     if (cleanupA2aRemote) cleanupA2aRemote();
+    cleanupNetFirewall();
     if (cleanupPaneResources) cleanupPaneResources();
     if (cleanupPlanApprovals) cleanupPlanApprovals();
     cleanupWeb();

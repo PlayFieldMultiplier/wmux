@@ -41,6 +41,7 @@ import {
   type TurnSource,
 } from './hostSearch';
 import http from 'node:http';
+import { InboundCounter, isLoopbackHost } from '../net/inboundSeen';
 import type { AgentStatus } from '../../shared/types';
 import { isRemoteAgentStatus } from '../../shared/remoteHosts';
 import { isA2aRoute, looksLikePeerCredential, parsePeerCredential, type A2aRemoteErrorCode } from '../../shared/a2aRemote';
@@ -487,6 +488,13 @@ export interface WebTerminalInfo {
    * loopback URL — correct about the bind, useless to the operator.
    */
   allowedHosts?: string[];
+  /** Authenticated requests from other machines since start, while exposed beyond loopback (see shared/web.ts). */
+  inboundSeenAt?: number | null;
+  inboundCount?: number;
+  /** The last start's bind failure, set by the daemon's status RPC while not running. */
+  listenError?: { code: string; port: number; host: string };
+  /** The port the desktop popover starts on (set by the daemon's status RPC). */
+  preferredPort?: number;
 }
 
 /**
@@ -1458,6 +1466,8 @@ interface AttentionCursor {
 export class WebTerminalServer {
   private readonly inputEpoch = crypto.randomUUID();
   private server: http.Server | https.Server | null = null;
+  /** Connections from other machines, counted while the bind reaches beyond loopback. */
+  private inbound: InboundCounter | null = null;
   private token = '';
   private opts: WebTerminalStartOptions | null = null;
   private readonly clients = new Set<SseClient>();
@@ -1937,6 +1947,10 @@ export class WebTerminalServer {
     });
 
     this.server = server;
+    // "Another PC reached this one": only an exposed bind can be reached from
+    // elsewhere, and only an authenticated request counts (see the route
+    // handler's authenticate()), so a LAN scanner's bare connect does not.
+    this.inbound = isLoopbackHost(options.host) ? null : new InboundCounter();
 
     // Tee fleet-wide attention signals into EVERY connected SSE client — a
     // viewer watching pane A must still hear that pane B needs an answer.
@@ -2424,6 +2438,7 @@ export class WebTerminalServer {
         allowedHosts: this.advertisedHosts(),
         tailscale: this.opts.tailscale === true,
         pairRefusal: refusal,
+        ...this.inbound?.snapshot(),
       };
     }
     const pair = this.activePairCode();
@@ -2447,6 +2462,7 @@ export class WebTerminalServer {
       deviceCredentials: !!this.deps.devices,
       allowedHosts: this.advertisedHosts(),
       tailscale: this.opts.tailscale === true,
+      ...this.inbound?.snapshot(),
       // Only meaningful alongside a live code: `activePairCode` can regenerate
       // lazily, and a regenerated code has no name behind it even if the one it
       // replaced did.
@@ -2638,6 +2654,8 @@ export class WebTerminalServer {
       String(req.headers.accept ?? '').includes('text/event-stream');
     const isStream = (req.method === 'GET' && p === '/api/stream') || wantsEventStream;
     const auth = await this.authenticate(req, url, isStream);
+    // An authenticated request from another machine is "another PC reached this one".
+    if (auth.ok) this.inbound?.note(req.socket.remoteAddress);
     if (!auth.ok) {
       // The reason is the point: #599's 401 screen had to guess between "the
       // server restarted" and "you were thrown out", and guessed wrong either

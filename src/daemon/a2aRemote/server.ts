@@ -26,6 +26,7 @@ import { A2A_REMOTE_CONFIG_CHANGED, type A2aRemoteConfig, type A2aRemoteControll
 import { loadOrCreateHostIdentity, type HostIdentity, type HostIdentityOptions } from './hostIdentity';
 import { PairingSlot, inviteHost } from './pairing';
 import type { PeerAuthResult } from './peerStore';
+import { InboundCounter } from '../net/inboundSeen';
 
 /**
  * The dedicated cross-host A2A listener: a small HTTPS server serving the
@@ -201,6 +202,11 @@ export class A2aServer {
   private boundSlice: A2aRemoteConfig | null = null;
   private identity: HostIdentity | null = null;
   private lastError: string | null = null;
+  /** The bind's error code (EADDRINUSE, EACCES…) and the port it was for; null for other failures. */
+  private lastErrorCode: string | null = null;
+  private lastErrorPort: number | null = null;
+  /** Connections from other machines since the listener started (a finished TLS handshake each). */
+  private inbound = new InboundCounter();
   private chain: Promise<void> = Promise.resolve();
   private disposed = false;
 
@@ -253,7 +259,15 @@ export class A2aServer {
       name: this.name(),
       fingerprint256: this.identity?.fingerprint256 ?? null,
       lastError: this.lastError,
+      lastErrorCode: this.lastErrorCode,
+      lastErrorPort: this.lastErrorPort,
+      ...this.inbound.snapshot(),
     };
+  }
+
+  /** What the firewall probe needs: whether it listens, where, and on which addresses another PC is told to connect. */
+  firewallFacts(): { listening: boolean; port: number | null; ips: string[]; tailnetIps: string[] } {
+    return { listening: this.server !== null, port: this.port, ips: this.ipv4s(), tailnetIps: this.tailnetIpv4s() };
   }
 
   /**
@@ -319,7 +333,7 @@ export class A2aServer {
       // An invite names the listener it was minted for.
       this.pairing.cancel();
       await this.closeCurrent();
-      this.lastError = null;
+      this.setError(null);
       return;
     }
     const port = this.deps.controller.effectivePort();
@@ -331,7 +345,7 @@ export class A2aServer {
       // active generation (renewed when close to expiry).
       identity = this.readIdentity();
     } catch (err) {
-      this.lastError = `identity: ${errMsg(err)}`;
+      this.setError(`identity: ${errMsg(err)}`);
       this.log('error', `[a2a-remote] cannot load the host identity: ${errMsg(err)}`);
       this.keepPrevious();
       return;
@@ -341,7 +355,10 @@ export class A2aServer {
     // bound must not cost the PC the listener it already had.
     const bound = await this.bind(identity, port);
     if ('error' in bound) {
-      this.lastError = bound.error;
+      // With the old listener still serving, the message says the move failed
+      // (Settings: "Could not use the new port"); the code is only for a PC
+      // with no listener, whose notice offers another port.
+      this.setError(bound.error, this.server ? null : bound.code, port);
       this.keepPrevious();
       return;
     }
@@ -354,9 +371,19 @@ export class A2aServer {
     this.server = bound.server;
     this.port = (bound.server.address() as net.AddressInfo).port;
     this.boundSlice = { ...cfg };
-    this.lastError = null;
+    this.setError(null);
+    // A new listener: "another PC reached this one" starts over.
+    this.inbound = new InboundCounter();
+    const inbound = this.inbound;
+    bound.server.on('secureConnection', (socket: { remoteAddress?: string }) => inbound.note(socket.remoteAddress));
     if (old) await closeServer(old);
     this.log('info', `[a2a-remote] listening on ${this.deps.bindHost ?? '0.0.0.0'}:${this.port}`);
+  }
+
+  private setError(message: string | null, code: string | null = null, port: number | null = null): void {
+    this.lastError = message;
+    this.lastErrorCode = code;
+    this.lastErrorPort = code ? port : null;
   }
 
   /** A failed (re)bind: an old listener keeps serving, and its slice is put back on disk. */
@@ -369,7 +396,7 @@ export class A2aServer {
     }
   }
 
-  private async bind(identity: HostIdentity, port: number): Promise<{ server: https.Server } | { error: string }> {
+  private async bind(identity: HostIdentity, port: number): Promise<{ server: https.Server } | { error: string; code: string | null }> {
     let server: https.Server;
     try {
       server = https.createServer(
@@ -389,7 +416,7 @@ export class A2aServer {
       );
     } catch (err) {
       this.log('error', `[a2a-remote] cannot build the TLS listener: ${errMsg(err)}`);
-      return { error: `tls: ${errMsg(err)}` };
+      return { error: `tls: ${errMsg(err)}`, code: null };
     }
     server.headersTimeout = HEADERS_TIMEOUT_MS;
     server.requestTimeout = REQUEST_TIMEOUT_MS;
@@ -409,7 +436,7 @@ export class A2aServer {
       // Never listened, so there is nothing to close (close() would throw
       // ERR_SERVER_NOT_RUNNING). No retry loop: the operator changes the port.
       this.log('warn', `[a2a-remote] cannot listen on ${bindHost}:${port}: ${errMsg(listenError)}`);
-      return { error: listenError.code ?? errMsg(listenError) };
+      return { error: listenError.code ?? errMsg(listenError), code: listenError.code ?? null };
     }
     server.on('error', (err) => this.log('warn', `[a2a-remote] listener error: ${errMsg(err)}`));
     return { server };

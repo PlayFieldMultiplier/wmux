@@ -228,7 +228,8 @@ describe('LanLinkServer listen state', () => {
     const busy = Object.assign(new Error('listen EADDRINUSE'), { code: 'EADDRINUSE' });
     const { server, net } = makeServer(cat.fn, { outcomes: [busy] });
     await server.settled();
-    expect(server.runtimeStatus()).toEqual({ listening: false, stopReason: 'listen-failed', checking: false });
+    expect(server.runtimeStatus()).toEqual({ listening: false, stopReason: 'listen-failed', listenErrorCode: 'EADDRINUSE', checking: false });
+    expect(server.lastBindAttempt().port).toBe(45651);
     expect(server.isListening()).toBe(false);
 
     await advance(server, 5_000);
@@ -244,7 +245,7 @@ describe('LanLinkServer listen state', () => {
     onStatusChange.mockClear();
     net.servers[0].emit('error', new Error('socket gone'));
     expect(server.isListening()).toBe(false);
-    expect(server.runtimeStatus()).toEqual({ listening: false, stopReason: 'listen-failed', checking: false });
+    expect(server.runtimeStatus()).toEqual({ listening: false, stopReason: 'listen-failed', listenErrorCode: null, checking: false });
     expect(onStatusChange).toHaveBeenCalled();
     server.dispose();
   });

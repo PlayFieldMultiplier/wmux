@@ -391,3 +391,46 @@ describe('Remote page', () => {
     expect(share()).toBeNull();
   });
 });
+
+describe('Remote page: the A2A port', () => {
+  function stubPort(problem: 'port-reserved' | 'port-denied' | 'port-in-use') {
+    stub([]);
+    api.a2aRemote.status.mockResolvedValue({
+      enabled: true, port: 45660, listening: false, hostId: 'me', name: 'MacBook', fingerprint256: null,
+      lastError: 'EACCES', lastErrorCode: 'EACCES', lastErrorPort: 45660,
+    });
+    const netFirewall = {
+      status: vi.fn(async () => { throw new Error('not in this test'); }),
+      listenProblem: vi.fn(async () => ({ problem: { kind: problem, port: 45660 }, holder: null, suggestion: 45661 })),
+      fix: vi.fn(),
+      remove: vi.fn(),
+      open: vi.fn(),
+    };
+    vi.stubGlobal('electronAPI', { platform: 'darwin', ...api, netFirewall });
+  }
+
+  it('a reserved or denied port reads "unavailable" on the band, a held one "in use"', async () => {
+    stubPort('port-denied');
+    await render();
+    expect($('[data-remote-a2a]')?.textContent).toBe('A2A: port 45660 unavailable');
+    act(() => root.unmount());
+    root = createRoot(container);
+    stubPort('port-in-use');
+    await render();
+    expect($('[data-remote-a2a]')?.textContent).toBe('A2A: port 45660 in use');
+  });
+
+  it('Use port N that fails while the old listener keeps serving says so beside the notices', async () => {
+    stubPort('port-reserved');
+    api.a2aRemote.configure = vi.fn(async () => ({
+      enabled: true, port: 45659, listening: true, hostId: 'me', name: 'MacBook', fingerprint256: null,
+      lastError: 'EADDRINUSE', lastErrorCode: null, lastErrorPort: null,
+    }));
+    await render();
+    await act(async () => { $<HTMLButtonElement>('[data-listen-use-port="45661"]')?.click(); });
+    for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve(); });
+    expect(api.a2aRemote.configure).toHaveBeenCalledWith({ port: 45661 });
+    expect($('[data-remote-firewall]')?.textContent).toContain('Could not use the new port (EADDRINUSE). Still listening on port 45659.');
+    expect($('[data-remote-firewall]')?.getAttribute('aria-live')).toBe('polite');
+  });
+});

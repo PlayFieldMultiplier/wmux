@@ -22,7 +22,8 @@ Public network, an adapter with no network profile, or when wmux cannot read
 the network type, it stays closed, checks again within a minute, and Settings >
 LAN says why. While listening it reads the network type every minute and
 closes if the network turned Public. macOS and Linux have no such network type, so there
-LanLink listens on the adapter you select. Neither feature adds firewall rules.
+LanLink listens on the adapter you select. Neither feature adds firewall rules
+on its own; [Allow through firewall](#windows) adds them when you press it.
 
 ## How it works
 
@@ -229,28 +230,86 @@ Get-NetConnectionProfile
 ```
 
 The first time the listener starts, Windows may ask whether to allow wmux;
-the prompt may tick only Private networks. On a company network the adapter
-is usually in the **Domain** profile, so the prompt's choice may not cover it,
-and a Group Policy may hide the prompt altogether. To allow the port
-explicitly, run in an **administrator** PowerShell on the server PC:
+the prompt may tick only Private networks, or Public too. On a company
+network the adapter is usually in the **Domain** profile, so the prompt's
+choice may not cover it, and a Group Policy may hide the prompt altogether.
+
+**Allow through firewall.** The Remote page checks the firewall when it
+opens (and on **Check firewall**): when no rule lets other PCs reach the A2A
+port, the line under This computer says so and offers **Allow through
+firewall**. Settings > LAN does the same for LanLink, and Share & pair for
+a phone server started with "Expose to network". Pressing it shows one
+Windows permission request, which names **Windows PowerShell** (the program
+that adds the rules; there is no request when wmux itself runs as
+administrator), and adds two rules in the group `wmux`, for the wmux
+program and this port only:
+
+- an Allow for TCP on this port on **Private** networks, from the local
+  subnet (and from Tailscale's 100.64.0.0/10 when the invite offers a
+  Tailscale address), with edge traversal blocked;
+- a Block for TCP on this port on **Public** networks, so an earlier prompt
+  that allowed wmux on public networks no longer reaches this port.
+
+The **Domain** profile is left to your company's policy: on a Domain
+network wmux explains instead of adding a rule; ask IT to allow the port.
+A rule names the wmux program, so it stops matching when wmux updates to a
+new folder; the page then says "wmux was updated" and one more press allows
+the new version (and removes the old pair). The page also explains, without
+changing anything, when the network is marked Public (set it to Private in
+Windows Settings if you trust it, or use Tailscale), when a Block rule from
+an earlier prompt stops wmux, when Group Policy or "block all incoming
+connections" is in force, and when another firewall product is in charge;
+**Copy details** gives the port, program and proposed rule as text for
+whoever manages the PC. wmux adds no rule for a copy that runs from a
+network, SUBST or removable drive, from a folder whose name holds `[`,
+`]`, `*` or `?`, or from a short (8.3) path Windows cannot expand; Copy
+details gives what to add by hand. A rule that covers
+the port does not prove the other PC gets through (Wi-Fi isolation, a
+router); after allowing, press Connect again on the other PC.
+
+Remote > Details > Firewall shows what the last check found, with **Check
+firewall** to look again. After **Open network settings** or **Open Windows
+Firewall**, the page checks again by itself when you come back to wmux.
+
+To add the rule by hand instead, run in an **administrator** PowerShell on
+the server PC:
 
 ```powershell
 New-NetFirewallRule -DisplayName "wmux cross-PC A2A" `
   -Direction Inbound -Protocol TCP -LocalPort 45660 `
-  -Action Allow -Profile Domain,Private
+  -Action Allow -Profile Private
 ```
 
 Use your own port if you changed it. Leave `Public` out unless you have a
-reason to include it. If your company manages the firewall centrally, a local
-rule may have no effect; ask IT to allow the port.
+reason to include it; add `Domain` only where your company allows it. If
+your company manages the firewall centrally, a local rule may have no
+effect; ask IT to allow the port.
+
+#### Removing wmux's firewall rules
+
+Remote > Details > Firewall > **Remove** takes the A2A pair away (one
+permission request). Uninstalling wmux leaves its rules behind, pointing at
+a program that no longer exists, so they match nothing; the next **Allow
+through firewall** by any wmux install on the PC removes them. To remove all
+of them at once, run in an administrator PowerShell:
+
+```powershell
+Remove-NetFirewallRule -Group wmux
+```
 
 ### macOS
 
 If the application firewall is on (System Settings > Network > Firewall),
 macOS asks whether to allow incoming connections for wmux when the listener
 starts. Click **Allow**. If you denied it earlier, open **Options…** and set
-wmux to "Allow incoming connections". With "Block all incoming connections"
-turned on, the Mac can only be a joiner.
+wmux to "Allow incoming connections". The Remote page also offers **Allow
+through firewall** on a Mac, which asks for an administrator password and
+allows wmux; it has not yet been tried on a Mac, so if it fails, use the
+Options… list above. While "Automatically allow downloaded signed software"
+is on (the default), macOS lets a signed wmux accept connections without
+listing it, and the Remote page says so instead of offering the button.
+With "Block all incoming connections" turned on, the Mac can only be a
+joiner.
 
 ### Wi-Fi and the network itself
 
@@ -305,7 +364,7 @@ When **Connect** fails on the joiner, the message tells you which case it is:
 | This invite was created on this PC. | You pasted the invite on the PC that created it. | Paste it on the other PC. |
 | The other PC's identity does not match this invite. | A different machine answered at that address, or the server's certificate was re-created (for example after its wmux data was reset). | Create a new invite on the server and pair again. Do not try to work around it. |
 | The other PC refused the connection. | Nothing listens on that port: the feature is off on the server, wmux is not running there, or the port is wrong. | On the server, check that the section says "Listening on port …" and that the invite's port matches. |
-| The other PC did not answer in time. | Usually a firewall dropping the port, Wi-Fi client isolation, or the server is asleep or offline. | Check [Network and firewall](#network-and-firewall). Try the server's IPv4 address, or a wired connection. |
+| The other PC did not answer in time. | Usually a firewall dropping the port, Wi-Fi client isolation, or the server is asleep or offline. | On the server, open Remote and use **Check firewall** (see [Network and firewall](#network-and-firewall)). Try the server's IPv4 address, or a wired connection. |
 | The other PC's name could not be found on this network. | The machine name does not resolve, and no fallback address answered. | Use a fresh invite; it lists the server's current IPv4 addresses. Or fix the DNS name. |
 | This invite has expired or was cancelled. | More than 10 minutes passed, the invite was cancelled or replaced, or it ran out of attempts. | Create a new invite. |
 | The invite code was not accepted. | The code does not match the open invite (often a truncated copy). | Copy the whole invite again. Each wrong code uses one of the 5 attempts. |
@@ -314,8 +373,13 @@ When **Connect** fails on the joiner, the message tells you which case it is:
 | The other PC runs an incompatible wmux version. | The two PCs speak different protocol versions. | Update both PCs to the same wmux version. |
 | Connecting failed. Try again. | Any other failure, such as an unreadable answer from the server or this PC failing to save the pairing. | Try again. If it keeps failing, check that both PCs run the same wmux version. |
 
-On the server, "Not listening: …" means the listener could not start, most
-often because another program already uses the port. Pick another port.
+On the server, when the listener could not start, the Remote page and
+Settings > LAN say why: which program holds the port (another copy of
+wmux, or another wmux feature on this PC such as the phone server), or that
+Windows reserves the port (Hyper-V, WSL). **Use port N** moves the listener
+to a port that looked free; PCs already paired must be invited again. If
+the new port cannot be opened either, wmux keeps listening on the old one
+and says so.
 
 After pairing, if the server's certificate changes (it is re-created only
 when it is missing, damaged or within 30 days of expiry), the joiner stops
@@ -394,5 +458,5 @@ hardening and will come later.
 - No automatic discovery: pair with an invite. There is no PIN alternative.
 - Accepting a link from a phone is not supported.
 - Names in an alias are fixed when the link is made.
-- wmux does not add firewall rules for you.
+- wmux adds firewall rules only when you press **Allow through firewall**.
 - Only basic rate limits apply.

@@ -82,7 +82,7 @@ import { loadWebPrefs, saveWebPrefs } from './web/webPrefsStore';
 import { scheduleTokenFileReHarden } from '../shared/security';
 import { applyTaskQueryView } from '../shared/a2aTaskQueryView';
 import { normalizeLivePaneIds } from '../shared/a2aOrphanedTask';
-import type { WebTlsConfig } from '../shared/web';
+import { WEB_DEFAULT_PORT, type WebTlsConfig } from '../shared/web';
 import { generateSnapshotUnqueued, enqueueSnapshotJob, generateTextSnapshot, generateTextSnapshotUnqueued, runSmallSnapshotJob, capTextRowsToFrameBudget, MAX_SCROLLBACK } from './HeadlessSnapshot';
 import { queuedScreenText, queuedTextSnapshot } from './queuedSessionText';
 import type { TerminalPty } from '../shared/terminalPty';
@@ -104,7 +104,13 @@ import { QUERY_TIMEOUT_MS } from './lanlink/netCategory';
 import { PeerStore } from './lanlink/peers';
 import { coerceLanLinkPatch } from '../shared/lanlink';
 import { A2aRemoteController } from './a2aRemote/controller';
-import { A2aServer } from './a2aRemote/server';
+import { A2aServer, rankedExternalIpv4s } from './a2aRemote/server';
+import { registerNetRpc } from './net/rpc';
+import { FirewallRecordStore } from './net/firewallRecord';
+import type { ProbeTarget } from './net/inboundProbe';
+import { isLoopbackHost } from './net/inboundSeen';
+import { FIREWALL_GROUP, currentRuleUser } from '../shared/netFirewallScripts';
+import { isIpv4, type FirewallListener } from '../shared/netFirewall';
 import { forgetHostCascade, registerA2aRemoteRpc } from './a2aRemote/rpc';
 import { PeerStore as A2aPeerStore } from './a2aRemote/peerStore';
 import { RemoteHostStore } from './a2aRemote/remoteHostStore';
@@ -125,7 +131,7 @@ import { A2aSpawnRequester, registerSpawnAskRpc } from './a2aRemote/spawnRequest
 import { SpawnOutgoingStore } from './a2aRemote/spawnOutgoingStore';
 import { linkAlias } from './a2aRemote/outbound';
 import { A2A_SPAWN_EVENT, type A2aSpawnEvent } from '../shared/a2aSpawn';
-import { A2A_FEATURE_IMAGES, A2A_FEATURE_LINK_OFFER, A2A_FEATURE_SPAWN, A2A_FEATURE_STREAM_PING, isRemoteTaskId } from '../shared/a2aRemote';
+import { A2A_FEATURE_IMAGES, A2A_FEATURE_LINK_OFFER, A2A_FEATURE_SPAWN, A2A_FEATURE_STREAM_PING, isRemoteTaskId, isTailnetIpv4 } from '../shared/a2aRemote';
 import type { A2aRemoteLinkEvent } from '../shared/rpc';
 import { ChannelService, ChannelStateWriter, ChannelWakeWorker, wakeAgentSlug, wrapChannelMessageEnvelope, wrapChannelCatalogEnvelope, stampChannelCaller, type CallerFieldSpec, type ChannelServiceEventLog } from './channels';
 import { AppendOnlyLog } from './eventlog/AppendOnlyLog';
@@ -191,7 +197,7 @@ import { isWslDistroSpawnArgs } from '../shared/wslDistro';
 import { gitDirMapperFor, gitWatchCwdFor } from './gitWatchCwd';
 import { randomUUID } from 'node:crypto';
 import { monitorEventLoopDelay, performance as nodePerformance } from 'node:perf_hooks';
-import { DAEMON_EXIT_ALREADY_RUNNING, ENV_KEYS, isBrainPty } from '../shared/constants';
+import { DAEMON_EXIT_ALREADY_RUNNING, ENV_KEYS, dataSuffix, isBrainPty } from '../shared/constants';
 import { toResumeCommand, resumeGrammarFor, resumeOfferForRecovered, mergeResumeBinding, isProvisionalCapture, transcriptRelocated, normalizeResumeCwd, isUsableResumeBinding, isPlausibleResumeSessionId } from '../shared/agentResume';
 import type { ResumeBinding } from '../shared/agentResume';
 import { agentDisplayToSlug, agentRow, AGENT_SLUG_SET, isAgentSlug } from '../shared/agentIdentity';
@@ -3738,6 +3744,17 @@ function registerRpcHandlers(
   // Bumped by every operator stop. An in-place grant change
   // (`onlyIfRunning`) that a stop overtook must not bring the server back.
   let webStopGeneration = 0;
+  // The last start's bind failure (code, port, address), reported by status
+  // while the server is down so the popover can name the port's holder.
+  let webListenError: { code: string; port: number; host: string } | null = null;
+  const webStatus = (): WebTerminalInfo => {
+    const info = webServer.status();
+    return {
+      ...info,
+      ...(!info.running && webListenError ? { listenError: webListenError } : {}),
+      preferredPort: loadWebPrefs(wmuxDir).port ?? WEB_DEFAULT_PORT,
+    };
+  };
   pipeServer.onRpc('daemon.web.start', syncGateAfter(async (params) => {
     await afterRestore();
     const p = params as {
@@ -3756,6 +3773,7 @@ function registerRpcHandlers(
       newToken?: boolean;
       tailscale?: boolean;
       tls?: unknown;
+      rememberPort?: boolean;
     };
     const port =
       typeof p.port === 'number' && p.port > 0 && p.port < 65536 ? Math.floor(p.port) : 7681;
@@ -3774,7 +3792,7 @@ function registerRpcHandlers(
     // record the stop cleared is not written back.
     const onlyIfRunning = p.onlyIfRunning === true;
     const stopGeneration = webStopGeneration;
-    if (onlyIfRunning && !webServer.currentStartState) return webServer.status();
+    if (onlyIfRunning && !webServer.currentStartState) return webStatus();
     const loadedPrevious = loadWebStateWithDiagnostics(wmuxDir);
     // Each grant is its own opt-in and fail-closed: a caller that says nothing
     // gets a read-only server that cannot write files, read transcripts, or
@@ -3794,7 +3812,7 @@ function registerRpcHandlers(
     );
     // An explicit choice is an operator preference: it outlives this server,
     // including an operator stop (see webPrefsStore).
-    if (typeof p.inlineImages === 'boolean' && !saveWebPrefs(wmuxDir, { inlineImages })) {
+    if (typeof p.inlineImages === 'boolean' && !saveWebPrefs(wmuxDir, { ...loadWebPrefs(wmuxDir), inlineImages })) {
       log('warn', '[web] could not persist the inline images preference; it applies until the next restart');
     }
     const { tls, token, rotateCredentials } = decideWebStartPolicy({
@@ -3806,24 +3824,38 @@ function registerRpcHandlers(
       tailscale,
       newToken: p.newToken === true,
     });
-    const info = await webServer.start({
-      port,
-      host,
-      allowInput,
-      allowUpload,
-      allowTranscript,
-      allowDangerousLaunch,
-      allowGitWrite,
-      ...(gitWriteLogin ? { gitWriteLogin } : {}),
-      inlineImages,
-      allowedHosts,
-      tailscale,
-      ...(tls ? { tls } : {}),
-      token,
-    });
+    let info: WebTerminalInfo;
+    try {
+      info = await webServer.start({
+        port,
+        host,
+        allowInput,
+        allowUpload,
+        allowTranscript,
+        allowDangerousLaunch,
+        allowGitWrite,
+        ...(gitWriteLogin ? { gitWriteLogin } : {}),
+        inlineImages,
+        allowedHosts,
+        tailscale,
+        ...(tls ? { tls } : {}),
+        token,
+      });
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException)?.code;
+      webListenError = typeof code === 'string' && (err as NodeJS.ErrnoException).syscall === 'listen' ? { code, port, host } : null;
+      throw err;
+    }
+    webListenError = null;
+    // "Use port N" in the popover: the port it picked is where the next start goes too.
+    if (p.rememberPort === true && loadWebPrefs(wmuxDir).port !== info.port && typeof info.port === 'number') {
+      if (!saveWebPrefs(wmuxDir, { ...loadWebPrefs(wmuxDir), port: info.port })) {
+        log('warn', '[web] could not persist the web port; the next start uses the default again');
+      }
+    }
     if (onlyIfRunning && stopGeneration !== webStopGeneration) {
       await webServer.stop();
-      return webServer.status();
+      return webStatus();
     }
     if (rotateCredentials) {
       // A device authenticates with its own durable `deviceId.secret`, so
@@ -3864,6 +3896,7 @@ function registerRpcHandlers(
     // both the persisted listener and its paired devices.
     await afterRestore();
     webStopGeneration += 1;
+    webListenError = null;
     // #783 — the answering surface is going away, so every gate still holding a
     // bridge open is now unanswerable. Defer them here instead of making each
     // one wait out its own deadline in front of a blocked agent.
@@ -3885,8 +3918,52 @@ function registerRpcHandlers(
     // for a server that is about to come back, and the GUI popover would latch
     // that stale answer.
     await afterRestore();
-    return webServer.status();
+    return webStatus();
   });
+  // Firewall and port diagnosis for the three listeners another PC reaches
+  // (src/daemon/net/rpc.ts). Read-only: the elevated Fix runs in main.
+  const netTarget = (listener: FirewallListener): ProbeTarget => {
+    if (listener === 'a2a') {
+      const f = a2aServerRef?.firewallFacts();
+      return {
+        listener,
+        applicable: f?.listening === true,
+        port: f?.port ?? null,
+        ips: f?.ips ?? [],
+        inboundSeenAt: a2aServerRef?.status().inboundSeenAt ?? null,
+        tailnet: (f?.tailnetIps.length ?? 0) > 0,
+      };
+    }
+    if (listener === 'web') {
+      const info = webServer.status();
+      const host = info.host ?? '127.0.0.1';
+      const exposed = info.running && !isLoopbackHost(host);
+      const ranked = rankedExternalIpv4s();
+      const ips = !exposed ? [] : host === '0.0.0.0' || host === '::' ? ranked.map((r) => r.address) : isIpv4(host) ? [host] : [];
+      return { listener, applicable: exposed, port: info.port ?? null, ips, inboundSeenAt: info.inboundSeenAt ?? null, tailnet: ips.some(isTailnetIpv4) };
+    }
+    const f = lanLinkServer.firewallFacts();
+    return { listener, applicable: f.listening, port: f.port, ips: f.ip ? [f.ip] : [], inboundSeenAt: null, tailnet: f.ip ? isTailnetIpv4(f.ip) : false };
+  };
+  registerNetRpc((method, handler) => pipeServer.onRpc(method, handler), {
+    target: netTarget,
+    failure: (listener) => {
+      if (listener === 'a2a') {
+        const st = a2aServerRef?.status();
+        return st?.enabled && st.lastErrorCode ? { code: st.lastErrorCode, port: st.lastErrorPort ?? st.port, address: null } : null;
+      }
+      if (listener === 'web') {
+        return webListenError && !webServer.status().running ? { code: webListenError.code, port: webListenError.port, address: webListenError.host } : null;
+      }
+      const rt = lanLinkServer.runtimeStatus();
+      if (rt.stopReason !== 'listen-failed') return null;
+      const attempt = lanLinkServer.lastBindAttempt();
+      return attempt.port === null ? null : { code: rt.listenErrorCode ?? null, port: attempt.port, address: attempt.ip };
+    },
+    records: new FirewallRecordStore(wmuxDir),
+    scope: { dataSuffix: dataSuffix(), user: currentRuleUser(), group: FIREWALL_GROUP },
+  });
+
   // Operator-initiated pairing-code refresh — the escape hatch when a code has
   // been used or has expired and another device still needs to pair.
   pipeServer.onRpc('daemon.web.pairRefresh', async () => {

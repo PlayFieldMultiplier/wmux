@@ -547,3 +547,20 @@ describe('WebPopoverBody — phone grants', () => {
     expect(checked[checked.length - 1]).toBe('true');
   });
 });
+
+describe('WebPopoverBody — port and firewall notices', () => {
+  const slot = (id: string) => createElement('div', { 'data-slot': id });
+
+  it('stopped: the explained bind failure replaces the raw error', () => {
+    const html = renderBody({ info: { running: false, error: 'listen EADDRINUSE: address already in use 127.0.0.1:7681' }, listenNotice: slot('listen') });
+    expect(html).toContain('data-slot="listen"');
+    expect(html).not.toContain('listen EADDRINUSE');
+  });
+
+  it('running and exposed: the firewall notice; on loopback: none', () => {
+    const exposed = renderBody({ info: { running: true, port: 7681, host: '0.0.0.0', token: 'tok' }, firewallNotice: slot('firewall') });
+    expect(exposed).toContain('data-slot="firewall"');
+    const loopback = renderBody({ info: { running: true, port: 7681, host: '127.0.0.1', token: 'tok' }, firewallNotice: slot('firewall') });
+    expect(loopback).not.toContain('data-slot="firewall"');
+  });
+});

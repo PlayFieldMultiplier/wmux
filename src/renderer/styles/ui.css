@@ -933,6 +933,9 @@ details[open] > .wmux-chatv2-tool-line .wmux-chatv2-chevron { transform: rotate(
 .wmux-remote-machine-detail { display: grid; grid-template-columns: 120px minmax(0, 1fr) auto; align-items: center; gap: 2px 12px; margin: 0; padding: 4px 12px 10px; border-top: 1px solid var(--stroke); font-size: 13px; }
 .wmux-remote-machine-detail dt { font-size: 12px; color: var(--text-muted); }
 .wmux-remote-machine-detail dd { display: flex; align-items: center; min-width: 0; min-height: 28px; margin: 0; color: var(--text-main); }
+/* The A2A listener's port and firewall notices, right under the band. */
+.wmux-remote-fw { display: flex; flex-direction: column; gap: 8px; }
+.wmux-remote-fw:empty { display: none; }
 /* Tailscale checklist inside the This computer band: one line of four ticks
    while all pass, a row per check otherwise. Marks carry the state (green
    done, yellow caution); rows themselves stay neutral. */
@@ -1694,6 +1697,17 @@ details[open] > .wmux-chatv2-tool-line .wmux-chatv2-chevron { transform: rotate(
   .wmux-link-notice > .ui-row { flex-wrap: wrap; align-items: flex-start; }
   .wmux-link-notice .ui-row-text { flex-basis: calc(100% - 28px); min-width: min-content; }
   .wmux-link-notice .ui-row-action { min-width: 0; margin: 0 0 0 28px; padding-left: 0; border-left: 0; }
+}
+/* Remote pairing's firewall and port notices (Remote/FirewallNotice.tsx).
+ * Several actions sit side by side; in a narrow surface (the Share & pair
+ * popover, Settings) they wrap under the text, without the divider, as the
+ * pane's link notice does. */
+.wmux-fw-notice { container: wmux-fw-notice / inline-size; }
+.wmux-fw-notice .ui-row-action { gap: 6px; }
+@container wmux-fw-notice (max-width: 479px) {
+  .wmux-fw-notice > .ui-row { flex-wrap: wrap; align-items: flex-start; }
+  .wmux-fw-notice .ui-row-text { flex-basis: calc(100% - 28px); min-width: min-content; }
+  .wmux-fw-notice .ui-row-action { flex-wrap: wrap; justify-content: flex-start; min-width: 0; margin: 0 0 0 28px; padding-left: 0; border-left: 0; }
 }
 
 /* Field row: label + description on the left, control on the right

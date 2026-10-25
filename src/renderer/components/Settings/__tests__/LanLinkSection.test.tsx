@@ -129,3 +129,25 @@ describe('LanLinkView — onChange wiring', () => {
     expect(onChangeNic).toHaveBeenCalledWith(ethOption.value);
   });
 });
+
+describe('LanLinkView — port and firewall notices', () => {
+  const slot = (id: string) => createElement('div', { 'data-slot': id });
+  const render = (p: Partial<LanLinkViewProps>) => renderToStaticMarkup(createElement(LanLinkView, makeProps({ enabled: true, ...p })));
+
+  it('an explained bind failure replaces the listen-failed line', () => {
+    const html = render({ stopReason: 'listen-failed', listenNotice: slot('listen'), firewallNotice: slot('firewall') });
+    expect(html).toContain('data-slot="listen"');
+    expect(html).not.toContain('settings.lanlinkStopListenFailed');
+    expect(html).not.toContain('data-slot="firewall"');
+  });
+
+  it('other stop reasons keep their line and never show the listen notice', () => {
+    const html = render({ stopReason: 'network-public', listenNotice: slot('listen') });
+    expect(html).toContain('settings.lanlinkStopPublic');
+    expect(html).not.toContain('data-slot="listen"');
+  });
+
+  it('a listener shows its firewall check', () => {
+    expect(render({ stopReason: null, firewallNotice: slot('firewall') })).toContain('data-slot="firewall"');
+  });
+});

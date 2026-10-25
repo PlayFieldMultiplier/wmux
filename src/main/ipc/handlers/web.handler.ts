@@ -391,14 +391,22 @@ export function registerWebHandlers(
           ...(allowDangerousLaunch !== undefined ? { allowDangerousLaunch } : {}),
         };
 
+        // "Use port N" sends a port, which the daemon remembers once it
+        // binds; otherwise the remembered port (WEB_DEFAULT_PORT until one was
+        // chosen). The tailnet front registers the same port, so it is
+        // decided before anything starts.
+        const chosenPort = typeof args.port === 'number' && Number.isInteger(args.port) && args.port >= 1024 && args.port <= 65535 ? args.port : null;
+        const port = chosenPort ?? (await call('daemon.web.status', {})).preferredPort ?? WEB_DEFAULT_PORT;
+
         const start = await startWebTransport({
-          port: WEB_DEFAULT_PORT,
+          port,
           tailscale,
           expose,
           ...(exec ? { exec } : {}),
           startServer: async ({ host, allowedHosts }) => {
             const info = await call('daemon.web.start', {
-              port: WEB_DEFAULT_PORT,
+              port,
+              ...(chosenPort !== null ? { rememberPort: true } : {}),
               host,
               allowInput,
               ...grants,
@@ -430,6 +438,12 @@ export function registerWebHandlers(
         // We just registered it (or deliberately did not), so this is known
         // without asking tailscale again.
         frontState = tailscale ? 'ours' : null;
+        if (start.value.running !== true && start.value.error !== undefined) {
+          // The RPC error carries only Node's message; the daemon kept the
+          // bind's code and port, which the popover turns into a sentence.
+          const after = await call('daemon.web.status', {});
+          if (after.listenError) return { ...start.value, listenError: after.listenError, preferredPort: after.preferredPort };
+        }
         return start.value;
       },
     ),

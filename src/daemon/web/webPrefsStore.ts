@@ -12,6 +12,15 @@ import path from 'node:path';
 export interface WebPrefs {
   /** False when the operator ran `wmux web --no-inline-images` (#1641). */
   inlineImages: boolean;
+  /**
+   * The port the desktop popover starts on, saved when "Use port N" was
+   * pressed because the default one was taken. Absent: WEB_DEFAULT_PORT.
+   */
+  port?: number;
+}
+
+function savedPort(v: unknown): number | undefined {
+  return typeof v === 'number' && Number.isInteger(v) && v >= 1024 && v <= 65535 ? v : undefined;
 }
 
 const PREFS_FILE = 'web-prefs.json';
@@ -25,7 +34,8 @@ export function loadWebPrefs(wmuxDir: string): WebPrefs {
   try {
     const raw: unknown = JSON.parse(fs.readFileSync(getWebPrefsPath(wmuxDir), 'utf8'));
     const o = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
-    return { inlineImages: o['inlineImages'] !== false };
+    const port = savedPort(o['port']);
+    return { inlineImages: o['inlineImages'] !== false, ...(port ? { port } : {}) };
   } catch {
     return { inlineImages: true };
   }
@@ -37,7 +47,8 @@ export function saveWebPrefs(wmuxDir: string, prefs: WebPrefs): boolean {
   const tmp = `${file}.${process.pid}.tmp`;
   try {
     fs.mkdirSync(wmuxDir, { recursive: true });
-    fs.writeFileSync(tmp, `${JSON.stringify({ version: 1, inlineImages: prefs.inlineImages })}\n`, 'utf8');
+    const port = savedPort(prefs.port);
+    fs.writeFileSync(tmp, `${JSON.stringify({ version: 1, inlineImages: prefs.inlineImages, ...(port ? { port } : {}) })}\n`, 'utf8');
     fs.renameSync(tmp, file);
     return true;
   } catch {
