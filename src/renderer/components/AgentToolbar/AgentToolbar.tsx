@@ -222,10 +222,13 @@ export default function AgentToolbar({ barHandlers, revealed, onHoldChange, onFo
         <IconClock size={13} /> <span className="wmux-toolbar-label whitespace-nowrap">{t('toolbar.schedule')}</span>
       </button>
       {claudeRewind.ready && (
+        // aria-disabled, not disabled: keyboard users can still reach it and hear why.
         <button
-          className={`${btn} ${idle}`}
-          disabled={claudeRewind.busy}
+          className={`${btn} ${idle} aria-disabled:opacity-40 aria-disabled:cursor-not-allowed`}
+          aria-disabled={claudeRewind.busy || undefined}
+          aria-label={claudeRewind.busy ? `${t('toolbar.rewind')}: ${t('pane.rewindBusy')}` : t('toolbar.rewind')}
           onClick={() => {
+            if (claudeRewind.busy) return;
             if (fanOutOpen) closeFanOut();
             setPopover(null);
             void claudeRewind.rewind();

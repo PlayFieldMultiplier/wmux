@@ -89,13 +89,23 @@ describe('AgentToolbar — Rewind', () => {
     expect(rewindButton()).not.toBeNull();
   });
 
-  it('is disabled while Claude is mid-turn, with the reason as its tooltip', () => {
+  it('is marked disabled while Claude is mid-turn, with the reason as its tooltip and label', () => {
     mount();
     setAgent('claude', 'running');
-    expect(rewindButton()?.disabled).toBe(true);
-    expect(rewindButton()?.title).toBe('Claude is working — rewind once the turn ends');
-    setAgent('claude', 'complete');
+    // aria-disabled keeps it focusable, so keyboard users can reach the reason.
     expect(rewindButton()?.disabled).toBe(false);
+    expect(rewindButton()?.getAttribute('aria-disabled')).toBe('true');
+    expect(rewindButton()?.title).toBe('Claude is working — rewind once the turn ends');
+    expect(rewindButton()?.getAttribute('aria-label')).toContain('Claude is working');
+    setAgent('claude', 'complete');
+    expect(rewindButton()?.hasAttribute('aria-disabled')).toBe(false);
+  });
+
+  it('does nothing when clicked mid-turn', async () => {
+    mount();
+    setAgent('claude', 'running');
+    await act(async () => { rewindButton()?.click(); });
+    expect(rewind).not.toHaveBeenCalled();
   });
 
   it('opens the picker for the focused terminal on click', async () => {
