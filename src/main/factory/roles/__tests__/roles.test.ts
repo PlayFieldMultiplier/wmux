@@ -194,6 +194,8 @@ describe('bot prompts (job, powers and outputs)', () => {
     expect(lead).toMatch(/A relay's last result/);
     // A closed issue or a merged PR is not dispatched again (#2214 was re-sent after its PR merged).
     expect(lead).toMatch(/Before you dispatch work on an issue or a pull request.*issue_read or pr_read.*is not dispatched again/);
+    // An open issue another bot's PR or task already works on gets no second dispatch (#1 got a duplicate PR).
+    expect(lead).toMatch(/An open one whose read shows inProgress work .* gets no new work/);
     for (const template of BOT_TEMPLATES) {
       const prompt = rolePrompt(profile(template));
       expect(prompt).not.toMatch(/\bMoa\b/);

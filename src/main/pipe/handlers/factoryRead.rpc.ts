@@ -34,7 +34,7 @@ import type { RpcContext } from '../../../shared/rpc';
 import type { PrLaneFacts, PrReviewRead } from '../../../shared/prReview';
 import type { IssueDetailResult, IssueFilter, IssueSummary } from '../../../shared/issueSurface';
 import type { PrVerdictRecord } from '../../../shared/prVerdict';
-import { ROOM_LIMITS, type RoomCard, type ThreadId } from '../../../shared/room';
+import { ROOM_LIMITS, issueThreadId, prThreadId, type RoomCard, type ThreadId } from '../../../shared/room';
 import type { FactoryRouter } from '../../factory/factoryHost';
 import type { BotDirectoryApi } from '../../factory/botStore';
 import type { RoomWriter } from '../../factory/roomWriter';
@@ -61,6 +61,12 @@ export const FACTORY_READ_LIMITS = {
   TRUST_MAX_DAYS: 90,
   PLAN_ITEMS: 10,
   PLAN_TEXT: 300,
+  /** In-progress work on an issue or PR: linked PRs, open tasks, the
+   *  thread's latest bot cards, and PRs only a card named that are read. */
+  IN_PROGRESS_PRS: 10,
+  IN_PROGRESS_TASKS: 10,
+  IN_PROGRESS_CARDS: 10,
+  IN_PROGRESS_CARD_PR_READS: 3,
 } as const;
 
 const PR_NUMBER_MAX = 99_999_999;
@@ -76,6 +82,27 @@ export interface CiRollup {
   state: string | null;
   checks: Array<{ name: string; state: string }>;
   checksTotal: number;
+}
+
+/** An open pull request the host links to an issue as closing it. */
+export interface LinkedPr {
+  number: number;
+  title: string;
+  isDraft: boolean;
+  author: string | null;
+  headRefName: string;
+  url: string;
+}
+
+/** An open task (a ledger row) whose thread is an issue's or a PR's. */
+export interface OpenTaskRow {
+  taskId: string;
+  title: string;
+  status: string;
+  ownerWorkspaceId: string;
+  /** The bot that started it, when a bot did. */
+  botId?: string;
+  threadId: string;
 }
 
 export interface FactoryReadDeps {
@@ -104,6 +131,13 @@ export interface FactoryReadDeps {
    *  be reached just now), or null; createHostSetupGate. Absent: always
    *  readable. */
   hostReady?: (scope: RepoScope) => Promise<HostNotReady | null>;
+  /** The open PRs the host links to an issue as closing it (a `Fixes #n` in
+   *  a PR's body), read fresh, or why they could not be read. Absent: not
+   *  read (the answer says so). */
+  linkedPrs?: (repoPath: string, repoKey: string, issueNumber: number) => Promise<LinkedPr[] | { error: string }>;
+  /** The open ledger rows, of any workspace, whose task thread is one of
+   *  `threadIds`. Absent: none. */
+  openTasks?: (threadIds: readonly string[]) => OpenTaskRow[];
 }
 
 // ── Caller and repo scope ──────────────────────────────────────────────────
@@ -264,6 +298,94 @@ export function createHostSetupGate(ports: HostSetupGatePorts): (scope: RepoScop
   };
 }
 
+// ── In-progress work on an issue or PR ─────────────────────────────────────
+//
+// What a bot reads before it starts work on an issue or a PR: the open PRs
+// that close the issue (the host's link, plus a PR a bot's card in the
+// issue's thread named, read fresh), the open tasks whose thread is the
+// issue's or one of those PRs', and the thread's latest bot cards. A read
+// that fails leaves its part out and says why; the issue is still answered.
+
+export interface InProgressPr extends LinkedPr {
+  /** The bot whose card in the thread named it, or whose open task is on its thread. */
+  botId?: string;
+}
+
+export interface InProgress {
+  prs: InProgressPr[];
+  /** Why the linked PRs are not known (not read, a failed read). */
+  prsUnknown?: string;
+  tasks: OpenTaskRow[];
+  cards: Array<{ seq: number; kind: string; title: string; botId: string; pr?: number }>;
+}
+
+function callerWorkspace(caller: Caller, scope: RepoScope): string {
+  return caller.kind === 'bot' ? caller.bot.workspaceId : scope.workspaceId;
+}
+
+/** The open tasks on these threads the caller may see (none across a guest
+ *  workspace's boundary), at most IN_PROGRESS_TASKS. */
+function openTasksOn(threadIds: readonly string[], caller: Caller, scope: RepoScope, deps: Pick<FactoryReadDeps, 'openTasks'>): OpenTaskRow[] {
+  let rows: OpenTaskRow[];
+  try {
+    rows = deps.openTasks?.(threadIds) ?? [];
+  } catch {
+    rows = [];
+  }
+  const from = callerWorkspace(caller, scope);
+  return rows.filter((t) => !crossesGuestBoundary(from, t.ownerWorkspaceId)).slice(0, FACTORY_READ_LIMITS.IN_PROGRESS_TASKS);
+}
+
+/** The latest bot cards of a thread in the scope's room (guest cards left out). */
+function threadBotCards(threadId: ThreadId, scope: RepoScope, deps: Pick<FactoryReadDeps, 'rooms'>): InProgress['cards'] {
+  let cards: RoomCard[];
+  try {
+    cards = deps.rooms()?.read(scope.workspaceId, { threadId }).cards ?? [];
+  } catch {
+    cards = [];
+  }
+  return cards
+    .filter((c) => c.actor.kind === 'bot')
+    .slice(-FACTORY_READ_LIMITS.IN_PROGRESS_CARDS)
+    .map((c) => ({
+      seq: c.seq, kind: c.kind, title: c.title, botId: c.actor.kind === 'bot' ? c.actor.botId : '',
+      ...(typeof c.refs?.pr === 'number' ? { pr: c.refs.pr } : {}),
+    }));
+}
+
+/** The work already under way on one issue. */
+async function issueInProgress(issueNumber: number, caller: Caller, scope: RepoScope, deps: FactoryReadDeps): Promise<InProgress> {
+  const L = FACTORY_READ_LIMITS;
+  const cards = threadBotCards(issueThreadId(scope.repoKey, issueNumber), scope, deps);
+  let prs: InProgressPr[] = [];
+  let prsUnknown: string | undefined;
+  if (!deps.linkedPrs) prsUnknown = 'the linked pull requests are not read here';
+  else {
+    const linked = await deps.linkedPrs(scope.repoPath, scope.repoKey, issueNumber).catch((err: unknown) => ({ error: String(err) }));
+    if ('error' in linked) prsUnknown = `the linked pull requests could not be read: ${linked.error}`.slice(0, 300);
+    else prs = linked.slice(0, L.IN_PROGRESS_PRS);
+  }
+  // A PR a bot's card here named that the host does not link (no closing
+  // keyword, another base branch): read fresh, kept while it is open.
+  const named = [...new Set(cards.map((c) => c.pr).filter((n): n is number => typeof n === 'number'))]
+    .filter((n) => !prs.some((p) => p.number === n))
+    .slice(-L.IN_PROGRESS_CARD_PR_READS);
+  for (const n of named) {
+    if (prs.length >= L.IN_PROGRESS_PRS) break;
+    const r = await deps.readPr(scope.repoPath, scope.repoKey, n).catch(() => null);
+    if (!r?.ok || r.value.state !== 'OPEN') continue;
+    const f = r.value;
+    prs.push({ number: f.number, title: f.title ?? '', isDraft: f.isDraft, author: f.author, headRefName: f.headRefName, url: '' });
+  }
+  const tasks = openTasksOn([issueThreadId(scope.repoKey, issueNumber), ...prs.map((p) => prThreadId(scope.repoKey, p.number))], caller, scope, deps);
+  for (const p of prs) {
+    const by = [...cards].reverse().find((c) => c.pr === p.number)?.botId
+      ?? tasks.find((t) => t.threadId === prThreadId(scope.repoKey, p.number))?.botId;
+    if (by) p.botId = by;
+  }
+  return { prs, ...(prsUnknown ? { prsUnknown } : {}), tasks, cards };
+}
+
 // ── Handlers ───────────────────────────────────────────────────────────────
 
 export async function handlePrRead(raw: unknown, ctx: RpcContext | undefined, deps: FactoryReadDeps): Promise<unknown> {
@@ -308,6 +430,8 @@ export async function handlePrRead(raw: unknown, ctx: RpcContext | undefined, de
       checks: f.checks.slice(0, L.PR_CHECKS).map((c) => ({ name: c.name, bucket: c.bucket, required: c.isRequired === true })),
       checksTruncated: f.checksTruncated || f.checks.length > L.PR_CHECKS,
     },
+    // The open tasks already working on it.
+    inProgress: { tasks: openTasksOn([prThreadId(scope.repoKey, f.number)], caller, scope, deps) },
   };
 }
 
@@ -341,6 +465,9 @@ export async function handleIssueRead(raw: unknown, ctx: RpcContext | undefined,
         body: body.text, bodyTruncated: body.truncated || d.bodyTruncated,
         comments, commentsTruncated: d.comments.length > L.ISSUE_COMMENTS,
       },
+      // The work already under way on it: an open issue with a PR or a task
+      // here is being handled.
+      inProgress: await issueInProgress(d.number, caller, scope, deps),
     };
   }
   const filter: IssueFilter = typeof p.label === 'string' ? { kind: 'label', label: p.label.trim() } : { kind: 'all' };
@@ -540,6 +667,28 @@ export function registerFactoryReadHandlers(router: Pick<FactoryRouter, 'registe
 // ── The default-branch CI read (one GraphQL call) ──────────────────────────
 
 export const CI_ROLLUP_QUERY = `query($owner:String!,$repo:String!){repository(owner:$owner,name:$repo){defaultBranchRef{name target{... on Commit{oid committedDate statusCheckRollup{state contexts(first:${FACTORY_READ_LIMITS.CI_CHECKS}){totalCount nodes{__typename ... on CheckRun{name conclusion status} ... on StatusContext{context state}}}}}}}}}`;
+
+/** The open PRs GitHub links to an issue as closing it (one GraphQL call). */
+export const LINKED_PRS_QUERY = `query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){issue(number:$number){closedByPullRequestsReferences(first:${FACTORY_READ_LIMITS.IN_PROGRESS_PRS},includeClosedPrs:false){nodes{number title state isDraft url headRefName author{login}}}}}}`;
+
+/** The GraphQL answer → the open linked PRs, or null when it is not one. */
+export function mapLinkedPrs(raw: unknown): LinkedPr[] | null {
+  const refs = (raw as { data?: { repository?: { issue?: { closedByPullRequestsReferences?: { nodes?: unknown } } | null } } } | null)
+    ?.data?.repository?.issue?.closedByPullRequestsReferences;
+  if (!refs || !Array.isArray(refs.nodes)) return null;
+  return (refs.nodes as Array<Record<string, unknown> | null>).flatMap((n) => {
+    if (!n || typeof n.number !== 'number' || n.state !== 'OPEN') return [];
+    const author = (n.author as { login?: unknown } | null | undefined)?.login;
+    return [{
+      number: n.number,
+      title: typeof n.title === 'string' ? n.title : '',
+      isDraft: n.isDraft === true,
+      author: typeof author === 'string' ? author : null,
+      headRefName: typeof n.headRefName === 'string' ? n.headRefName : '',
+      url: typeof n.url === 'string' ? n.url : '',
+    }];
+  });
+}
 
 /** The GraphQL answer → CiRollup, or null when it is not one. */
 export function mapCiRollup(raw: unknown): CiRollup | null {

@@ -22,7 +22,11 @@ import {
   handleTrustMetricsRead,
   handleVerdictRead,
   mapCiRollup,
+  mapLinkedPrs,
   type FactoryReadDeps,
+  type InProgress as InProgressAnswer,
+  type LinkedPr,
+  type OpenTaskRow,
 } from '../factoryRead.rpc';
 
 const SHA = 'a'.repeat(40);
@@ -228,6 +232,78 @@ describe('role reads — bounded answers', () => {
     ] } } } } } } };
     expect(mapCiRollup(raw)).toEqual({ branch: 'main', headSha: SHA, committedAt: 'd', state: 'FAILURE', checks: [{ name: 'validate', state: 'FAILURE' }, { name: 'ci/legacy', state: 'SUCCESS' }], checksTotal: 2 });
     expect(mapCiRollup({ data: {} })).toBeNull();
+  });
+});
+
+describe('role reads — work already under way on an issue or a PR', () => {
+  const LEAD_A = BOTS[5];
+  const ISSUE_THREAD = 'issue:github.com/o/a#1';
+  const PR3: LinkedPr = { number: 3, title: 'fix: the bug of #1', isDraft: false, author: 'owner', headRefName: 'wtask/t-3', url: 'https://github.com/o/a/pull/3' };
+  const TASK: OpenTaskRow = { taskId: 't-3', title: 'Fix #1', status: 'in_progress', ownerWorkspaceId: 'ws-a', botId: TRIAGE.id, threadId: ISSUE_THREAD };
+
+  it('the coordinator asked to handle #1 reads the issue bot\'s open PR #3 that closes it and its open task', async () => {
+    const d = deps({ linkedPrs: async () => [PR3], openTasks: (ids) => [TASK].filter((t) => ids.includes(t.threadId)) });
+    (d.rooms() as RoomWriter).post({
+      workspaceId: 'ws-a', threadId: ISSUE_THREAD, kind: 'status', actor: { kind: 'bot', workspaceId: 'ws-a', botId: TRIAGE.id },
+      title: 'Opened PR #3 for #1', refs: { pr: 3 },
+    });
+    const r = (await handleIssueRead({ issueNumber: 1 }, ctxOf(LEAD_A), d)) as { issue: { state: string }; inProgress: InProgressAnswer };
+    expect(r.issue.state).toBe('open');
+    expect(r.inProgress.prs).toEqual([{ ...PR3, botId: TRIAGE.id }]);
+    expect(r.inProgress.tasks).toEqual([TASK]);
+    expect(r.inProgress.cards).toEqual([expect.objectContaining({ kind: 'status', title: 'Opened PR #3 for #1', botId: TRIAGE.id, pr: 3 })]);
+    expect(r.inProgress.prsUnknown).toBeUndefined();
+  });
+
+  it('a PR a bot\'s card named that the host does not link is read fresh and kept while open', async () => {
+    const readPr = vi.fn(async (_p: string, _k: string, n: number) => ({ ok: true as const, value: { ...FACTS, number: n, state: n === 4 ? 'OPEN' : 'CLOSED' } }));
+    const d = deps({ linkedPrs: async () => [], readPr });
+    for (const pr of [4, 5]) {
+      (d.rooms() as RoomWriter).post({ workspaceId: 'ws-a', threadId: ISSUE_THREAD, kind: 'status', actor: { kind: 'bot', workspaceId: 'ws-a', botId: MAINTAINER.id }, title: `PR #${pr}`, refs: { pr } });
+    }
+    const r = (await handleIssueRead({ issueNumber: 1 }, ctxOf(LEAD_A), d)) as { inProgress: InProgressAnswer };
+    expect(r.inProgress.prs.map((p) => [p.number, p.botId])).toEqual([[4, MAINTAINER.id]]);
+    expect(readPr).toHaveBeenCalledTimes(2);
+  });
+
+  it('a failed linked-PR read still answers the issue and says why the PRs are not known', async () => {
+    const d = deps({ linkedPrs: async () => ({ error: 'GitHub rate limit' }) });
+    const r = (await handleIssueRead({ issueNumber: 1 }, ctxOf(LEAD_A), d)) as { ok: boolean; inProgress: InProgressAnswer };
+    expect(r.ok).toBe(true);
+    expect(r.inProgress.prs).toEqual([]);
+    expect(r.inProgress.prsUnknown).toContain('GitHub rate limit');
+    const none = (await handleIssueRead({ issueNumber: 1 }, ctxOf(LEAD_A), deps())) as { inProgress: InProgressAnswer };
+    expect(none.inProgress.prsUnknown).toContain('not read');
+  });
+
+  it('the answer is bounded, and a task across a guest workspace\'s boundary is left out', async () => {
+    const many = Array.from({ length: 15 }, (_, i) => ({ ...PR3, number: 100 + i }));
+    const foreign: OpenTaskRow = { ...TASK, taskId: 't-x', ownerWorkspaceId: 'ws-guest' };
+    const d = deps({ linkedPrs: async () => many, openTasks: () => [TASK, foreign] });
+    expectGuestWorkspaces();
+    try {
+      const r = (await handleIssueRead({ issueNumber: 1 }, ctxOf(LEAD_A), d)) as { inProgress: InProgressAnswer };
+      expect(r.inProgress.prs).toHaveLength(FACTORY_READ_LIMITS.IN_PROGRESS_PRS);
+      expect(r.inProgress.tasks.map((t) => t.taskId)).toEqual(['t-3']);
+    } finally {
+      __resetGuestWorkspacesForTesting();
+    }
+  });
+
+  it('pr_read carries the open tasks on the PR\'s thread', async () => {
+    const onPr: OpenTaskRow = { ...TASK, threadId: 'pr:github.com/o/a#7' };
+    const d = deps({ openTasks: (ids) => [onPr].filter((t) => ids.includes(t.threadId)) });
+    const r = (await handlePrRead({ prNumber: 7 }, ctxOf(LEAD_A), d)) as { inProgress: { tasks: OpenTaskRow[] } };
+    expect(r.inProgress.tasks).toEqual([onPr]);
+  });
+
+  it('maps the linked-PR GraphQL answer: open PRs only', () => {
+    const raw = { data: { repository: { issue: { closedByPullRequestsReferences: { nodes: [
+      { number: 3, title: 'fix', state: 'OPEN', isDraft: true, url: 'u', headRefName: 'wtask/t-3', author: { login: 'owner' } },
+      { number: 2, title: 'old', state: 'MERGED', isDraft: false, url: 'u2', headRefName: 'b', author: null },
+    ] } } } } };
+    expect(mapLinkedPrs(raw)).toEqual([{ number: 3, title: 'fix', isDraft: true, author: 'owner', headRefName: 'wtask/t-3', url: 'u' }]);
+    expect(mapLinkedPrs({ data: { repository: { issue: null } } })).toBeNull();
   });
 });
 
