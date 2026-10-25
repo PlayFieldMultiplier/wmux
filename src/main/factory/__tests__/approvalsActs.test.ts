@@ -502,7 +502,7 @@ async function timedOut(r: ReturnType<typeof rig>, requestId: string, payloadHas
 }
 
 describe('reading GitHub around a try', () => {
-  it('a login that cannot be read now gives the try back; only a 401 refuses it as identity-unknown', async () => {
+  it('a login that cannot be read now gives the try back; only an answer from GitHub itself (a 401) refuses it as identity-unknown', async () => {
     const r = rig();
     const req = await r.ask({ action: 'issue_close', issueNumber: 3, reason: 'fixed' });
     const id = actEffectId(req.requestId);

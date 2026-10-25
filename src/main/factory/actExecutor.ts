@@ -267,7 +267,7 @@ export class ActExecutor {
     const claimed = actRowClaimed(row);
     if (claimed && this.now() - (row.startedAt ?? row.updatedAt) < (this.ports.reconcileAfterMs ?? RECONCILE_AFTER_MS)) return;
     if (!this.ports.effects.drop(row.id)) return;
-    this.ports.log?.(`[factory] act ${row.action} ${row.requestId} dropped: its request is gone (${row.status}, ${row.attempt} tries${claimed ? '; whether it reached GitHub is not known' : ''})`);
+    this.ports.log?.(`[factory] act ${row.action} ${row.requestId} dropped: its request is gone (${row.status}, attempt ${row.attempt}${claimed ? '; whether it reached GitHub is not known' : ''})`);
   }
 
   private emit(e: ActEffect | null): void {
