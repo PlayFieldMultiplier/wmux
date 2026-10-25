@@ -1778,13 +1778,15 @@ export class ApprovalService {
     if (this.botGone(r)) return 'bot-removed';
     if (r.state !== 'approved') return 'approval-not-approved';
     if (r.decidedBy !== 'owner' || r.payloadHash !== e.payloadHash || normalizeRepoKey(e.repoKey) !== r.repoKey) return 'approval-mismatch';
-    let profile: BotProfile | null = null;
+    // A directory that cannot be read now says nothing about the bot: not now.
+    let profile: BotProfile | null;
     try {
       profile = this.ports.bots()?.get(r.botId) ?? null;
     } catch {
-      profile = null;
+      return 'bots-unreadable';
     }
-    if (!profile || botRepo(profile)?.repoKey !== r.repoKey) return 'repo-changed';
+    if (!profile) return 'bots-unreadable';
+    if (botRepo(profile)?.repoKey !== r.repoKey) return 'repo-changed';
     // A secret stored since the request would now be hidden on the card the
     // owner reads, and published by the post.
     const texts = r.act.kind === 'comment' ? [r.act.body] : r.act.kind === 'issue_create' ? [r.act.title, r.act.body] : [];

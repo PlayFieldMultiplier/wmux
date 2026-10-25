@@ -291,6 +291,32 @@ describe('a comment the owner approves', () => {
     expect(r2.gh.writes).toEqual([]);
   });
 
+  it('a bot directory that cannot be read gives the try back; a bot moved to another repository is refused', async () => {
+    let directory: 'up' | 'throws' | 'moved' = 'up';
+    const r = rig({
+      ports: {
+        bots: () => {
+          if (directory === 'throws') throw new Error('directory unreadable');
+          const profile = directory === 'moved' ? { ...DEV, repo: { repoKey: 'o/other', repoPath: '/other' } } : DEV;
+          return { listEnabled: () => [profile], get: (id: string) => (id === DEV.id ? profile : null) };
+        },
+      },
+    });
+    const req = await r.ask({ action: 'issue_close', issueNumber: 3, reason: 'fixed' });
+    r.approve(req.requestId);
+    directory = 'throws';
+    await vi.advanceTimersByTimeAsync(APPROVAL_UNDO_MS + 10);
+    await r.executor.idle();
+    expect(r.effects.get(actEffectId(req.requestId))).toMatchObject({ status: 'pending', attempt: 0, reason: 'bots-unreadable' });
+    expect(r.svc.get(req.requestId)?.state).toBe('approved');
+    expect(r.gh.writes).toEqual([]);
+    directory = 'moved';
+    await r.executor.reconcileAll();
+    await r.executor.run(actEffectId(req.requestId));
+    expect(r.svc.get(req.requestId)).toMatchObject({ state: 'refused', refusal: 'repo-changed' });
+    expect(r.gh.writes).toEqual([]);
+  });
+
   it('a renamed or moved repository is refused repo-changed before any write', async () => {
     const r = rig();
     const req = await r.ask({ action: 'issue_close', issueNumber: 3, reason: 'fixed' });

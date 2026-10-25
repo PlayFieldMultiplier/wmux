@@ -37,8 +37,10 @@ import type { StoredApproval } from './approvals';
 /** How long an uncertain try waits before a read settles it. */
 export const RECONCILE_AFTER_MS = 60_000;
 
-/** Authorize answers that mean "not now", not "never": the row waits. */
-export const ACT_NOT_NOW: ReadonlySet<string> = new Set(['approval-not-approved', 'approval-undo-window']);
+/** Authorize answers that mean "not now", not "never": the row waits
+ *  (the approval taken back or not due, the store or the bot directory not
+ *  readable during a start or a quit). */
+export const ACT_NOT_NOW: ReadonlySet<string> = new Set(['approval-not-approved', 'approval-undo-window', 'approval-not-running', 'bots-unreadable']);
 
 export interface ActApprovalPort {
   request(requestId: string): StoredApproval | null;
