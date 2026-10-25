@@ -61,11 +61,17 @@ describe('approvalPhase', () => {
     expect(approvalPhase(req(), 0)).toEqual({ phase: 'pending', canAlways: true });
     expect(approvalPhase(req({ action: 'release' }), 0)).toEqual({ phase: 'pending', canAlways: false });
     expect(approvalPhase(req({ action: 'issue_create' }), 0)).toEqual({ phase: 'pending', canAlways: false });
-    expect(approvalPhase(req({ state: 'approved', executeAfter: 10_000 }), 1_000)).toEqual({ phase: 'undo', secondsLeft: 9 });
+    expect(approvalPhase(req({ state: 'approved', executeAfter: 10_000 }), 1_000)).toEqual({ phase: 'undo', secondsLeft: 9, act: false });
     expect(approvalPhase(req({ state: 'approved', executeAfter: 10_000 }), 10_000)).toEqual({ phase: 'merging' });
     expect(approvalPhase(req({ state: 'refused', refusal: 'head-moved' }), 0)).toMatchObject({ phase: 'refused', headMoved: true });
     expect(approvalPhase(req({ state: 'approved', action: 'issue_create' }), 0)).toMatchObject({ phase: 'approved', recordedOnly: true });
     expect(approvalPhase(undefined, 0)).toEqual({ phase: 'unknown' });
+    // An act wmux carries out: Undo until claimed, then running, checking, done.
+    const act = { kind: 'issue_close', number: 3, targetNodeId: 'I_3', title: 't', stateReason: 'completed' } as const;
+    expect(approvalPhase(req({ state: 'approved', action: 'issue_close', act, executeAfter: 10_000 }), 1_000)).toEqual({ phase: 'undo', secondsLeft: 9, act: true });
+    expect(approvalPhase(req({ state: 'approved', action: 'issue_close', act, executeAfter: 10_000, actStatus: 'inFlight' }), 1_000)).toEqual({ phase: 'running', checking: false });
+    expect(approvalPhase(req({ state: 'approved', action: 'issue_close', act, executeAfter: 10_000, actStatus: 'uncertain' }), 20_000)).toEqual({ phase: 'running', checking: true });
+    expect(approvalPhase(req({ state: 'executed', action: 'issue_close', act }), 0)).toMatchObject({ phase: 'executed', act: true });
   });
 
   it('the chip counts the thread\'s pending requests shown here (a 1:1: its bot\'s)', () => {
@@ -73,6 +79,8 @@ describe('approvalPhase', () => {
     const shown = [{ id: 'c1' }, { id: 'c2' }, { id: 'c3' }];
     expect(pendingForChip(list, shown, { workspaceId: WS, threadId: 'general' }).map((r) => r.requestId)).toEqual(['apr-aaaaaaaa1', 'apr-b']);
     expect(pendingForChip(list, shown, { workspaceId: WS, threadId: 'general', botId: 'bot-2' }).map((r) => r.requestId)).toEqual(['apr-b']);
+    // An act that publishes text is approved on its card only.
+    expect(pendingForChip([req({ action: 'comment' }), req({ requestId: 'apr-close', cardId: 'c2', action: 'pr_close' })], shown, { workspaceId: WS }).map((r) => r.requestId)).toEqual(['apr-close']);
   });
 
   it('the chip shows wherever the card is shown: the whole room or 1:1 counts a PR thread\'s request; a narrowed view only its thread', () => {
@@ -137,7 +145,7 @@ describe('ApprovalAnswers', () => {
     const approve = container.querySelector('[data-testid="approval-approve"]') as HTMLButtonElement;
     expect(container.querySelector('[data-testid="approval-always"]')).not.toBeNull();
     await act(async () => approve.click());
-    expect(api.decide).toHaveBeenCalledWith({ requestId: 'apr-aaaaaaaa1', decision: 'approve' });
+    expect(api.decide).toHaveBeenCalledWith({ requestId: 'apr-aaaaaaaa1', decision: 'approve', source: 'card' });
   });
 
   it('a release offers no Always allow; paused shows no answers', async () => {
@@ -154,21 +162,22 @@ describe('ApprovalAnswers', () => {
     await render(createElement(ApprovalAnswers, { card: card({ state: 'resolved' }), t, now: 1_000 }));
     expect(container.querySelector('[data-approval-countdown]')?.textContent).toBe('room.approval.mergingIn(seconds=8)');
     await act(async () => (container.querySelector('[data-testid="approval-undo"]') as HTMLButtonElement).click());
-    expect(api.decide).toHaveBeenCalledWith({ requestId: 'apr-aaaaaaaa1', decision: 'undo' });
+    expect(api.decide).toHaveBeenCalledWith({ requestId: 'apr-aaaaaaaa1', decision: 'undo', source: 'card' });
     setApprovalsApiForTests(fakeApi([req({ state: 'refused', refusal: 'head-moved' })]));
     await render(createElement(ApprovalAnswers, { card: card({ state: 'resolved' }), t }));
     expect(container.textContent).toContain('room.approval.headMoved');
   });
 
-  it('the chip approves each pending id through main', async () => {
+  it('the chip approves each pending request through main, echoing its payloadHash', async () => {
     const api = fakeApi([req()]);
     setApprovalsApiForTests(api);
-    await render(createElement(ApprovePendingChip, { ids: ['apr-aaaaaaaa1', 'apr-b'], t }));
+    const hash = 'e'.repeat(64);
+    await render(createElement(ApprovePendingChip, { pending: [{ requestId: 'apr-aaaaaaaa1', payloadHash: hash }, { requestId: 'apr-b' }], t }));
     const chip = container.querySelector('[data-testid="approve-pending-chip"]') as HTMLButtonElement;
     expect(chip.textContent).toBe('room.approval.chip(count=2)');
     await act(async () => chip.click());
-    expect(api.decide.mock.calls.map((c) => c[0])).toEqual([{ requestId: 'apr-aaaaaaaa1', decision: 'approve' }, { requestId: 'apr-b', decision: 'approve' }]);
-    await render(createElement(ApprovePendingChip, { ids: [], t }));
+    expect(api.decide.mock.calls.map((c) => c[0])).toEqual([{ requestId: 'apr-aaaaaaaa1', decision: 'approve', source: 'chip', payloadHash: hash }, { requestId: 'apr-b', decision: 'approve', source: 'chip' }]);
+    await render(createElement(ApprovePendingChip, { pending: [], t }));
     expect(container.querySelector('[data-testid="approve-pending-chip"]')).toBeNull();
   });
 });

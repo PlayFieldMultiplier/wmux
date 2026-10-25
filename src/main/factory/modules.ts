@@ -19,6 +19,7 @@ import '../pipe/handlers/group.rpc';
 import '../pipe/handlers/handoff.rpc';
 import './roles';
 import './mergeLaneHost';
+import './actHost';
 import './approvalsModule';
 import '../pipe/handlers/skill.rpc';
 import '../pipe/handlers/routine.rpc';

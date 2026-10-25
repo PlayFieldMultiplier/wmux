@@ -52,6 +52,11 @@ describe('buildBotApprovalPushPayload', () => {
       body: 'A bot: Publish a release of owner/repo',
       risk: 'critical',
     });
+    expect(buildBotApprovalPushPayload(row({ action: 'pr_close', prNumber: 12 }, null))).toMatchObject({
+      body: 'A bot: Close PR #12 in owner/repo without merging',
+      action: 'pr_close',
+      risk: 'normal',
+    });
   });
 });
 

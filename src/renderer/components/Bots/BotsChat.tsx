@@ -1400,8 +1400,8 @@ function BotsComposer({ conversation, threadId, workspaceId: workspaceOverride, 
   // narrowed to a thread shows that thread's cards and those linking it).
   const { list: approvals } = useApprovals();
   const scopeBot = conversation.kind === 'bot' ? conversation.row.bot.id : undefined;
-  const pendingIds = useMemo(() => (readOnly ? [] : pendingForChip(approvals, cards, scopeBot ? { botId: scopeBot } : { workspaceId })
-    .map((r) => r.requestId)), [approvals, cards, readOnly, scopeBot, workspaceId]);
+  const pendingForApproval = useMemo(() => (readOnly ? [] : pendingForChip(approvals, cards, scopeBot ? { botId: scopeBot } : { workspaceId })),
+    [approvals, cards, readOnly, scopeBot, workspaceId]);
   const picks = useMentionPicks(bots, workspaceId);
   // A group's bots that can take a message (oldest first).
   const roomCandidates = useMemo(() => (conversation.kind === 'room' ? conversation.bots.filter((r) => r.bot.enabled) : []), [conversation]);
@@ -1649,7 +1649,7 @@ function BotsComposer({ conversation, threadId, workspaceId: workspaceOverride, 
   };
   return (
     <div className="wmux-bots-composer-wrap">
-      <ApprovePendingChip ids={pendingIds} t={t} />
+      <ApprovePendingChip pending={pendingForApproval} t={t} />
       {suggesting && !menuOpen && (
         <Popover id={listId} role="listbox" data-bots-mention-list aria-label={t('botsPage.chat.mentionList')} className="wmux-bots-composer-menu">
           {suggestions.map((row, i) => (

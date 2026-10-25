@@ -10,9 +10,12 @@
 // below, and parses main's reply with the same allowlist main projected
 // with. A decision is main's:
 // `ApprovalService.decide(…, 'phone')`, the same rules as the desktop card
-// (an approved merge waits APPROVAL_UNDO_MS with Undo; `always` is offered
-// for a merge only). The view carries no bot-written text (the request's
-// reason is on its room card).
+// (an approved merge or act waits APPROVAL_UNDO_MS with Undo; `always` is
+// offered for a merge only). The view carries no bot-written text (the
+// request's reason, and an act's text, are on its room card); an act's view
+// carries the card's `payloadHash`, which an approval echoes (an act
+// refuses an approval without it: `client_update_required`, and with
+// another one: `changed`).
 //
 // Room cards: an `approval` card's refs carry `approvalId`, the requestId
 // these routes take (shared/phoneRooms.ts).
@@ -48,6 +51,10 @@ export interface PhoneBotApproval {
   executeAfter?: number;
   /** Main's reason for `refused` (head-moved, …). */
   refusal?: string;
+  /** An act main carries out: sha256 (lowercase hex) of its card's
+   *  `wmux-payload` fences' inner texts joined by U+0000 (the contract's
+   *  rule). Echoed by an approval. */
+  payloadHash?: string;
   createdAt: number;
   updatedAt: number;
   /** `always` may be sent (a merge still pending). */
@@ -59,6 +66,8 @@ export interface PhoneBotApprovalDecideBody {
   decision: PhoneBotApprovalDecision;
   /** decision `always`: one bot (default) or every bot of its workspace. */
   ruleScope?: 'bot' | 'workspace';
+  /** decision `approve` on an act: the payloadHash of the card shown. */
+  payloadHash?: string;
 }
 
 /** Main's reply to either command. */
@@ -70,6 +79,9 @@ export type PhoneBotApprovalReply =
   | { invalid: true };
 
 const LINE_MAX = 200;
+
+/** A payloadHash: sha256, lowercase hex. */
+const PAYLOAD_HASH_RE = /^[0-9a-f]{64}$/;
 
 /** The acts the phone shows and decides: not a bot's skill proposal or a
  *  change to the owner's profile, which are approved on their desktop card,
@@ -119,6 +131,7 @@ export function parsePhoneBotApproval(value: unknown): PhoneBotApproval | null {
   const decidedAt = time(value.decidedAt);
   const executeAfter = time(value.executeAfter);
   const refusal = line(value.refusal, 300);
+  const payloadHash = typeof value.payloadHash === 'string' && PAYLOAD_HASH_RE.test(value.payloadHash) ? value.payloadHash : undefined;
   return {
     requestId, action, workspaceId, threadId, botId, repoKey,
     ...(prNumber !== undefined ? { prNumber } : {}),
@@ -130,6 +143,7 @@ export function parsePhoneBotApproval(value: unknown): PhoneBotApproval | null {
     ...(decidedAt !== undefined ? { decidedAt } : {}),
     ...(executeAfter !== undefined ? { executeAfter } : {}),
     ...(refusal ? { refusal } : {}),
+    ...(payloadHash ? { payloadHash } : {}),
     createdAt, updatedAt,
     canAlwaysAllow: state === 'pending' && action === 'merge' && !APPROVAL_NEVER_BY_RULE.has(action),
   };
@@ -143,10 +157,15 @@ export function phoneBotApproval(r: ApprovalRequest & { executeAfter?: number })
 /** A decision body, or null when it is not one (unknown fields refused). */
 export function parsePhoneBotApprovalDecideBody(value: unknown): PhoneBotApprovalDecideBody | null {
   if (!isRecord(value)) return null;
-  if (Object.keys(value).some((k) => k !== 'decision' && k !== 'ruleScope')) return null;
+  if (Object.keys(value).some((k) => k !== 'decision' && k !== 'ruleScope' && k !== 'payloadHash')) return null;
   if (!(PHONE_BOT_APPROVAL_DECISIONS as readonly unknown[]).includes(value.decision)) return null;
   if (value.ruleScope !== undefined && (value.decision !== 'always' || (value.ruleScope !== 'bot' && value.ruleScope !== 'workspace'))) return null;
-  return { decision: value.decision as PhoneBotApprovalDecision, ...(value.ruleScope ? { ruleScope: value.ruleScope as 'bot' | 'workspace' } : {}) };
+  if (value.payloadHash !== undefined && (value.decision !== 'approve' || typeof value.payloadHash !== 'string' || !PAYLOAD_HASH_RE.test(value.payloadHash))) return null;
+  return {
+    decision: value.decision as PhoneBotApprovalDecision,
+    ...(value.ruleScope ? { ruleScope: value.ruleScope as 'bot' | 'workspace' } : {}),
+    ...(typeof value.payloadHash === 'string' ? { payloadHash: value.payloadHash } : {}),
+  };
 }
 
 /** Main's reply as the daemon accepts it, or null (a bad reply). */

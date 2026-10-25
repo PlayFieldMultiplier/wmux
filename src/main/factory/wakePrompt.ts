@@ -186,6 +186,8 @@ export interface WakeApprovalSummary {
   action?: string;
   /** An approved `skill`: where that skill stands now (wakeContext.ts). */
   skill?: 'loaded' | 'archived' | 'changed' | 'replaced';
+  /** An act wmux carries out once approved (a comment, an issue, a close). */
+  carried?: true;
 }
 
 /** Another bot's reply to the same owner message. */
@@ -665,9 +667,10 @@ const SKILL_APPROVED_TEXT: Readonly<Record<NonNullable<WakeApprovalSummary['skil
   replaced: 'approved, since replaced by another approved version',
 };
 
-function approvalStateText(a: Pick<WakeApprovalSummary, 'state' | 'action' | 'skill'>): string {
+function approvalStateText(a: Pick<WakeApprovalSummary, 'state' | 'action' | 'skill' | 'carried'>): string {
   const state = a.state;
   if (state === 'approved' && a.action === 'skill') return a.skill ? SKILL_APPROVED_TEXT[a.skill] : 'approved by the owner';
+  if (state === 'approved' && a.carried) return 'approved by the owner; wmux does it after the Undo window and tells you how it went';
   if (state === 'approved' && a.action !== undefined && a.action !== 'merge') return 'approved by the owner (recorded; wmux does not carry this act out yet)';
   switch (state) {
     case 'pending': return 'waiting for the owner';

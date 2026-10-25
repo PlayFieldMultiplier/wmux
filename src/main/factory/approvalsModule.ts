@@ -2,7 +2,7 @@
 // at start the store itself with main's ports, fed every fact (an owner's
 // message may approve) and resuming approved merges due after a restart.
 // Registered from modules.ts only, so it starts after the fact log, the bot
-// runtime, the rooms and the merge lane it reads.
+// runtime, the rooms, the merge lane and the act outbox it reads.
 
 import path from 'node:path';
 import type { Fact } from '../../shared/facts';
@@ -33,6 +33,7 @@ registerFactoryRpcModule('approvals', (router, deps: FactoryHostDeps) => {
       const { getSkillApprovalHost } = await import('../pipe/handlers/skill.rpc');
       const { getOwnerProfileApprovalHost } = await import('../pipe/handlers/memory.rpc');
       const { noticeBot } = await import('./botNotices');
+      const { getApprovalActHost } = await import('./actHost');
       let service: ApprovalService;
       try {
         service = new ApprovalService({
@@ -70,6 +71,7 @@ registerFactoryRpcModule('approvals', (router, deps: FactoryHostDeps) => {
           },
           skills: getSkillApprovalHost,
           ownerProfile: getOwnerProfileApprovalHost,
+          acts: getApprovalActHost,
         });
       } catch (err) {
         startFailure = String(err);

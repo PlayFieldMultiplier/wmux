@@ -60,6 +60,8 @@ export interface WakeContextPorts {
     action: string; prNumber?: number; issueNumber?: number; repoKey: string; state: string;
     skill?: { name: string; version: string; hash?: string };
     botId: string; createdAt: number; updatedAt: number; refusal?: string;
+    /** An act main carries out (approvals.ts `act`). */
+    act?: unknown;
   }>;
   botName: (botId: string) => string | null;
   /** The app's UI locale (e.g. "ko", "en", "zh-TW"). */
@@ -201,6 +203,7 @@ const ACTION_WORDS: Readonly<Record<string, string>> = {
   issue_close: 'Close',
   comment: 'Comment on',
   release: 'Publish a release of',
+  pr_close: 'Close without merging',
   skill: 'Load the skill',
 };
 
@@ -228,6 +231,7 @@ export function wakeApprovals(ports: WakeContextPorts, profile: BotProfile, now:
         at: r.updatedAt,
         ...(r.refusal ? { refusal: r.refusal } : {}),
         ...(skill ? { skill } : {}),
+        ...(r.act ? { carried: true as const } : {}),
       };
     });
 }
