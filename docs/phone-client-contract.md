@@ -4967,6 +4967,10 @@ Omitted, never `false`, otherwise.
   when unknown. A card stored before a type was known keeps the type it was
   given (an older `.mp4` reads `application/octet-stream`).
 - `bytes`: 1 to 10 MiB (10485760).
+- Cards reach the phone only through `GET /api/rooms/:workspaceId/cards`
+  (there is no room event stream), and every page of it carries `files`: the
+  newest page and a forward read (`sinceSeq`) alike. A guest's own read
+  (`/api/guest/v1/messages`) never carries them.
 
 **`GET /api/rooms/:workspaceId/files/:fileId`** — the file's bytes.
 `--allow-transcript`, checked first; no input grant. The desktop must still

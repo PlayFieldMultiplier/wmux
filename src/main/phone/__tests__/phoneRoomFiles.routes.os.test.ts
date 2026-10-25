@@ -138,6 +138,24 @@ describe('GET /api/rooms/:workspaceId/files/:fileId', () => {
   });
 });
 
+describe('the cards the phone reads', () => {
+  it('carry a bot card\'s files on the newest page and on a forward read alike: the one path cards reach the phone', () => {
+    const dir = fs.mkdtempSync(path.join(tmp, 'cards-'));
+    const writer = new RoomWriter({ dir: path.join(dir, 'rooms'), log: () => undefined });
+    const file = { id: 'd'.repeat(32), name: 'banner.png', mediaType: 'image/png', bytes: 9 };
+    writer.post({ workspaceId: 'ws-1', kind: 'status', actor: BOT, title: 'Working on it' });
+    writer.post({ workspaceId: 'ws-1', kind: 'report', actor: BOT, title: 'Banner', files: [file] });
+    const ports = {
+      rooms: () => writer, bots: () => [{ id: BOT.botId, workspaceId: 'ws-1', role: 'lead', name: 'Lead' }],
+      roomFileExists: () => true, roomReadable: () => true,
+    } as unknown as PhoneFactoryPorts;
+    const newest = handlePhoneRoomCommand('workspaces.roomCards', { workspaceId: 'ws-1', limit: 50 }, ports) as { cards: Array<{ title: string; files?: unknown }> };
+    const forward = handlePhoneRoomCommand('workspaces.roomCards', { workspaceId: 'ws-1', sinceSeq: 1, limit: 50 }, ports) as { cards: Array<{ title: string; files?: unknown }> };
+    expect(newest.cards.find((c) => c.title === 'Banner')?.files).toEqual([file]);
+    expect(forward.cards.map((c) => [c.title, c.files])).toEqual([['Banner', [file]]]);
+  });
+});
+
 describe('workspaces.roomFile', () => {
   it('names a file only from a bot\'s card, the card the desktop opens it from', () => {
     const file = { id: 'a'.repeat(32), name: 'a.png', mediaType: 'image/png', bytes: 3 };
