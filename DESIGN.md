@@ -836,7 +836,35 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   is off says so under the box and sends nothing. While a bot's approval
   request waits and its card is in the conversation — a group's view, or
   the asking bot's 1:1 — an "Approve N pending" chip sits above the box,
-  whatever thread the card is in.
+  whatever thread the card is in. The chip, like the owner's typed "ok",
+  approves only a merge or a close; a comment or a new issue is approved on
+  its own card.
+- **A bot's acts on its approval card (2026-10-25):** besides a merge, wmux
+  carries out an approved comment (on a PR or an issue), a new issue, an
+  issue close, and a PR close without merging (`pr_close`); a release stays
+  recorded only. The card's body is the bot's one line, then one plain
+  sentence of what Approve does, as whom and when ("Approve to post this
+  comment on PR #12 as @login, 10 s after you approve (Undo until then). It
+  is public and stays under your name…"; "…close issue #3 as completed…";
+  "…close PR #12 without merging… It can be reopened; its branch stays."),
+  then the target's title as GitHub has it ("PR #12 on GitHub:") in a
+  `text` code block, then each piece of text the act publishes in its own
+  `wmux-payload` code block, whole: a comment's body, or a new issue's title
+  then its body, each body ending in wmux's marker line, which the card
+  shows and GitHub does not. A text that would not fit the card is refused
+  to the bot, never cut. When the bot's conversation holds a signed-in
+  task's data, one more plain line asks the owner to check the text shares
+  none of it. The code blocks are the chat's own (Copy, the 320px cap);
+  nothing is tinted. A comment or a new issue has Approve / Deny only, and
+  only these card buttons (desktop or phone) approve it: typed words and
+  the chip do not, and an approval carries the card's payload hash, so a
+  phone that cannot show the text answers "Approve on the desktop". Once
+  approved, the answers row reads, in 12px `--text-sub`: "Doing it in
+  {n}s" with Undo (secondary) while the window runs, then "Doing it…", or
+  "Checking whether it went through…" while wmux reads GitHub after an
+  interrupted try; then "Done" in `--accent-green` (an outcome card links
+  the comment or issue) or "Not done: <why, in words>" in
+  `--accent-red`. Colour carries the state only: no wash, no tinted card.
 - **Bots off (owner decision 2026-10-15):** the page and its rail item
   exist only while the bots are on. They are turned on in Settings › Bots
   (the "Bots on" switch, whose description says it adds Bots to the
@@ -2075,6 +2103,7 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
 | 2026-10-23 | Owner handoff: Tailscale easy connect. The Remote page's This computer band gains the four-check Tailscale checklist (installed, signed in, this PC on the tailnet, the other device visible), each failure with exactly one button that only opens the download page or the Tailscale app, or unfolds how to sign the other device in. A connection over the tailnet checks Tailscale first and fails at once with the reason and that button. A PC connection in use (an A2A PC with an active link, an attached workspace share) that drops gets one warning toast once the drop outlasts its grace (A2A 16 s, the first four redials; workspace share two failed polls in a row), naming Tailscale only when the connection's own address is surely Tailscale's (a `*.ts.net` name or a peer its status lists), and the toast goes away when it reconnects; phones are out. A silent A2A drop is seen after 40 s with nothing from the other end, on both sides of the pair (the side that was joined ends a stream whose joiner stopped pinging), so it is reported by 56 s | Getting two machines onto the tailnet was a sequence of unexplained timeouts. One glance says which step is missing and one click opens the place to fix it, while signing in and connecting stay the person's own act. The grace keeps a reconnect blip silent |
 | 2026-10-24 | Owner decision (chat view G2/G5): each chat view carries a neutral kind badge, "Terminal-linked chat" (chat 1) or "Chat only" (chat 2), with a hover line; chat 1's approval note reads "Waiting for your approval. Answer in Terminal". The Terminal / Chat switch is labelled "Show as chat", and the first Claude or Codex start in a pane asks once per agent "Show this as a chat?" (Show / Keep terminal); users who already set the chat view are never asked | Two chats looked alike and the approval note read like an error. Asking once, at the moment an agent first runs, finds the chat view for new users without changing anything for people who already chose |
 | 2026-10-25 | Owner decision (roadmap R2): Rewind gets a button on the agent toolbar after Schedule, besides its pane ⋮ menu item. It shows only for a Claude terminal and is disabled while Claude is mid-turn, with "Claude is working" as the tooltip; a draft or an open prompt is still refused at click time with the same toasts as the menu. The onboarding toolbar step names it | When an agent broke the code, people asked the agent to undo it and made it worse, because Rewind sat in a menu they never opened. A sixth pane-cluster button would break the five-button width contract; the toolbar is already the home of session verbs such as Schedule, and the onboarding step covers the bar being hover-revealed |
+| 2026-10-25 | Approved bot acts are carried out (comment, issue_create, issue_close, pr_close); text acts are button-only; the decision echoes the payload hash. The card shows what Approve does, the target's title in a `text` block and each published text whole in its own `wmux-payload` block; the answers row reads Doing it in {n}s with Undo, Doing it…, Checking whether it went through…, then Done (`--accent-green`) or Not done: … (`--accent-red`) | An approval that only recorded the answer left the owner to do the act by hand; a public post under the owner's name is approved only where its exact text is in view, and the hash ties the phone's Approve to the bytes it displayed |
 | 2026-10-25 | Chrome profile for unbound workspaces: in the workspace's right-click Chrome profile submenu, an unbound workspace gets a first row "Use <name> (last used)" that binds that profile on click, and the default row reads "default (shared by workspaces with no profile)". Both are plain menu rows: no colour, no badge. The first time a browser call in an unbound workspace uses the shared default profile in a run of the app, one info toast says "This workspace has no Chrome profile, so the browser used the shared default profile." with a Use <name> action when a last-used profile exists; clicking the toast jumps to the workspace. Nothing binds on its own | Scheduled runs and agents in a new workspace opened the shared default Chrome, which is usually signed out, and nothing said why. The offer sits where the choice is already made, the toast comes at the moment it matters, and "no logins" is not claimed because the shared profile may be signed in |
 
 ### Desktop conversation view
