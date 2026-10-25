@@ -5293,7 +5293,7 @@ export const en = {
   'net.fw.allowHintElevated': "wmux runs as administrator, so the rule for TCP {port} is added without a prompt.",
   'net.fw.allowHintMac': "macOS will ask for an administrator's password to allow incoming connections for wmux.",
   'net.fw.allowed': "Allowed on private networks · TCP {port}",
-  'net.fw.allowedMac': "Allowed in the macOS firewall · TCP {port}",
+  'net.fw.allowedMac': "wmux is allowed in the macOS firewall · listening on TCP {port}",
   'net.fw.allowedByPrompt': "Allowed by an earlier Windows prompt.",
   'net.fw.nowRetry': "Now press Connect again on the other PC.",
   'net.fw.inboundSeen': "Another PC reached this one at {time}.",

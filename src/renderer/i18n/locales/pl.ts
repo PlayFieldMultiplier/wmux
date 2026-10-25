@@ -5253,7 +5253,7 @@ export const pl = {
   'net.fw.allowHintElevated': "wmux działa jako administrator, więc reguła dla TCP {port} zostanie dodana bez monitu.",
   'net.fw.allowHintMac': "macOS poprosi o hasło administratora, aby zezwolić na połączenia przychodzące dla wmux.",
   'net.fw.allowed': "Dozwolone w sieciach prywatnych · TCP {port}",
-  'net.fw.allowedMac': "Dozwolone w zaporze macOS · TCP {port}",
+  'net.fw.allowedMac': "wmux jest dozwolony w zaporze macOS · nasłuchuje na TCP {port}",
   'net.fw.allowedByPrompt': "Dozwolone przez wcześniejszy monit Windows.",
   'net.fw.nowRetry': "Teraz naciśnij Połącz ponownie na drugim komputerze.",
   'net.fw.inboundSeen': "Inny komputer połączył się z tym komputerem o {time}.",

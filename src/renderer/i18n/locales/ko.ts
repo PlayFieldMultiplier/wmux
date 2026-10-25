@@ -4807,7 +4807,7 @@ export const ko = {
   'net.fw.allowHintElevated': "wmux가 관리자로 실행 중이라 TCP {port} 규칙이 확인 창 없이 추가됩니다.",
   'net.fw.allowHintMac': "macOS가 wmux의 수신 연결을 허용하기 위해 관리자 암호를 요청합니다.",
   'net.fw.allowed': "개인 네트워크에서 허용됨 · TCP {port}",
-  'net.fw.allowedMac': "macOS 방화벽에서 허용됨 · TCP {port}",
+  'net.fw.allowedMac': "macOS 방화벽에서 wmux가 허용됨 · TCP {port}에서 수신 대기",
   'net.fw.allowedByPrompt': "이전 Windows 확인 창에서 허용됨.",
   'net.fw.nowRetry': "이제 다른 PC에서 연결을 다시 누르세요.",
   'net.fw.inboundSeen': "다른 PC가 {time}에 이 PC에 연결했습니다.",

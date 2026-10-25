@@ -4321,7 +4321,7 @@ export const zh = {
   'net.fw.allowHintElevated': "wmux 以管理员身份运行，TCP {port} 规则将直接添加，不会弹出提示。",
   'net.fw.allowHintMac': "macOS 会要求输入管理员密码，以允许 wmux 的传入连接。",
   'net.fw.allowed': "已在专用网络上允许 · TCP {port}",
-  'net.fw.allowedMac': "已在 macOS 防火墙中允许 · TCP {port}",
+  'net.fw.allowedMac': "macOS 防火墙已允许 wmux · 正在监听 TCP {port}",
   'net.fw.allowedByPrompt': "已由之前的 Windows 提示允许。",
   'net.fw.nowRetry': "现在请在另一台电脑上再次点击“连接”。",
   'net.fw.inboundSeen': "另一台电脑于 {time} 连接到了这台电脑。",
