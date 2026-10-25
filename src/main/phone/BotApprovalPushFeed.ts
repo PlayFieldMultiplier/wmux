@@ -69,11 +69,13 @@ export function createBotApprovalPushFeed(deps: BotApprovalPushFeedDeps): BotApp
   const clearTimer = deps.clearTimer ?? ((h: unknown) => clearTimeout(h as NodeJS.Timeout));
   let soon: unknown = null;
   let expiry: unknown = null;
-  let retried = false;
+  let retry: unknown = null;
+  let generation = 0;
 
-  const publishNow = (): void => {
+  const publishNow = (isRetry = false): void => {
     if (soon !== null) { clearTimer(soon); soon = null; }
     if (expiry !== null) { clearTimer(expiry); expiry = null; }
+    if (retry !== null) { clearTimer(retry); retry = null; }
     let rows: BotApprovalPushRow[] | null;
     try {
       rows = deps.rows();
@@ -82,16 +84,17 @@ export function createBotApprovalPushFeed(deps: BotApprovalPushFeedDeps): BotApp
     }
     if (rows === null) return;
     // A refused or timed-out push is tried once more, so a retraction is not
-    // lost until the next change; a daemon that is not connected gets the
-    // table on its next connect.
-    void deps.push(rows).then(() => { retried = false; }, () => {
-      if (retried) return;
-      retried = true;
-      schedule();
+    // lost until the next change. Each publication gets its own retry, and a
+    // retry gets none, so a daemon that stays unreachable costs two pushes per
+    // change; it gets the table on its next connect.
+    const gen = ++generation;
+    void deps.push(rows).catch(() => {
+      if (isRetry || gen !== generation) return;
+      retry = setTimer(() => { retry = null; publishNow(true); }, COALESCE_MS);
     });
     if (rows.length > 0) {
       const oldest = Math.min(...rows.map((row) => row.request.createdAt));
-      expiry = setTimer(publishNow, Math.max(0, oldest + APPROVAL_LIMITS.PENDING_TTL_MS - now()) + 1_000);
+      expiry = setTimer(() => publishNow(), Math.max(0, oldest + APPROVAL_LIMITS.PENDING_TTL_MS - now()) + 1_000);
     }
   };
 
@@ -101,11 +104,12 @@ export function createBotApprovalPushFeed(deps: BotApprovalPushFeedDeps): BotApp
 
   return {
     schedule,
-    publishNow,
+    publishNow: () => publishNow(),
     dispose() {
       if (soon !== null) clearTimer(soon);
       if (expiry !== null) clearTimer(expiry);
-      soon = expiry = null;
+      if (retry !== null) clearTimer(retry);
+      soon = expiry = retry = null;
     },
   };
 }

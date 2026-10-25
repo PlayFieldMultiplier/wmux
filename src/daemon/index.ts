@@ -460,6 +460,8 @@ let noteCodexTurnFailed: ((id:string, threadId:string, turn:unknown)=>void) | un
 let pushTurnFailed: ((sessionId:string, failure:TurnFailure)=>void) | undefined;
 /** Main's table of waiting bot approvals (`daemon.botApprovals.set`), set at boot once the push sender exists. */
 let pushBotApprovals: ((rows: BotApprovalPushRow[]) => void) | undefined;
+/** The pipe client that last published the bot approval table (main). */
+let botApprovalsPublisher: string | null = null;
 /** N4 — an agent's sign-in was lost (shared/agentAuthLost); set at boot once the pipe server exists. */
 let noteAuthLost: ((sessionId: string, agent: AuthLostAgent, env: Record<string, string> | undefined, origin: AuthLostOrigin, providerCode?: string) => void) | undefined;
 /** N4 — an agent and account was seen to work (a confirmed turn end, or its status said signed in). */
@@ -5403,6 +5405,7 @@ function registerRpcHandlers(
     const rows = parseBotApprovalPushRows((params as { requests?: unknown } | undefined)?.requests);
     if (!rows) return { ok: false, error: 'daemon.botApprovals.set requires a requests array' };
     pushBotApprovals?.(rows);
+    botApprovalsPublisher = ctx.clientId;
     return { ok: true, accepted: rows.length };
   });
 
@@ -8884,6 +8887,12 @@ async function main(): Promise<void> {
   // this, killing the app mid-focus would leave a fresh report standing for the
   // rest of the freshness window and swallow the pushes it was meant to hand off.
   pipeServer.onClientClose((clientId) => {
+    // Before presence drops below: the bot approval table's publisher took the
+    // only way to answer those requests with it, so its held pushes go first.
+    if (botApprovalsPublisher !== null && botApprovalsPublisher === clientId) {
+      botApprovalPushRouter.forgetParked();
+      botApprovalsPublisher = null;
+    }
     desktopPresence.forget(clientId);
     deferredPush.onPresenceChanged();
     // The press-scope table belongs to the main process that published it. Once

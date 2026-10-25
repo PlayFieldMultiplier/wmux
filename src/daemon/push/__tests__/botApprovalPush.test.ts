@@ -5,6 +5,7 @@ import {
   botApprovalPushCollapseId,
 } from '../botApprovalPush';
 import type { PushPayload } from '../../../shared/push/pushEnvelope';
+import { DeferredPushQueue } from '../presence';
 import type { BotApprovalPushRow } from '../../../shared/botApprovalPush';
 import type { PhoneBotApproval } from '../../../shared/phoneBotApprovals';
 
@@ -93,5 +94,38 @@ describe('BotApprovalPushRouter', () => {
     h.router.set([]);
     expect(h.forgotten).toEqual(['bot:apr-abcdefgh12']);
     expect(h.sent).toHaveLength(0);
+  });
+});
+
+describe('BotApprovalPushRouter — the publishing main quits', () => {
+  it('★ a held push is forgotten before presence releases it, and the next table pushes it once', () => {
+    let present = true;
+    const sent: PushPayload[] = [];
+    const queue = new DeferredPushQueue({
+      send: (payload) => sent.push(payload),
+      isPresent: () => present,
+      staleAfterMs: () => 60_000,
+      setTimer: () => 1,
+      clearTimer: () => undefined,
+    });
+    const router = new BotApprovalPushRouter({
+      suppress: () => present,
+      send: (payload) => sent.push(payload),
+      park: (key, payload, collapseId, requires) => queue.park(key, payload, collapseId, requires),
+      forget: (key) => queue.forget(key),
+    });
+    router.set([row()]);
+    expect(queue.size).toBe(1);
+
+    // The client close handler: the publisher's held pushes go, then presence drops.
+    router.forgetParked();
+    present = false;
+    queue.onPresenceChanged();
+    expect(sent).toHaveLength(0);
+
+    // The next main publishes the same table: never delivered, so pushed once.
+    router.set([row()]);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ botApprovalId: 'apr-abcdefgh12' });
   });
 });

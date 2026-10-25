@@ -136,6 +136,22 @@ export class BotApprovalPushRouter {
     }
   }
 
+  /**
+   * The main process that published the table went away. A push presence still
+   * holds would be released by that same exit ("desktop went away") for a
+   * request nobody can answer: `/api/bot-approvals/:id` needs the desktop. So
+   * held pushes are forgotten, and their rows dropped from the table, so the
+   * next main's table pushes them once (they were never delivered). Sent rows
+   * stay: their banners are not retracted on a quit.
+   */
+  forgetParked(): void {
+    for (const [id, state] of [...this.rows]) {
+      if (state !== 'parked') continue;
+      this.deps.forget(BOT_APPROVAL_PARK_PREFIX + id);
+      this.rows.delete(id);
+    }
+  }
+
   /** The park queue released or evicted one of ours. */
   onParkedOutcome(key: string, outcome: 'delivered' | 'dropped'): void {
     const id = key.slice(BOT_APPROVAL_PARK_PREFIX.length);

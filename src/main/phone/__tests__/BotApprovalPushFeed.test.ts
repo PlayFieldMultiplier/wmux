@@ -65,3 +65,32 @@ describe('createBotApprovalPushFeed', () => {
     expect((pushes[0] as Array<{ request: { requestId: string } }>).map((r) => r.request.requestId)).toEqual(['apr-merge00001']);
   });
 });
+
+describe('createBotApprovalPushFeed — retries', () => {
+  it('★ every publication gets one retry, a retry gets none, so a dead daemon is not a loop', async () => {
+    const timers: Array<() => void> = [];
+    let pushes = 0;
+    const feed = createBotApprovalPushFeed({
+      rows: () => botApprovalPushTable([], () => undefined),
+      push: async () => { pushes += 1; throw new Error('timeout'); },
+      setTimer: (fn) => { timers.push(fn); return timers.length; },
+      clearTimer: () => undefined,
+    });
+    const settle = async () => { for (let i = 0; i < 3; i++) await Promise.resolve(); };
+
+    feed.publishNow();
+    await settle();
+    timers.shift()?.(); // the retry
+    await settle();
+    expect(pushes).toBe(2);
+    expect(timers).toHaveLength(0);
+
+    // A later change still gets its own retry.
+    feed.publishNow();
+    await settle();
+    timers.shift()?.();
+    await settle();
+    expect(pushes).toBe(4);
+    expect(timers).toHaveLength(0);
+  });
+});
