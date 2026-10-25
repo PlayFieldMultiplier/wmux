@@ -76,6 +76,8 @@ export const ONBOARDING_STEPS: OnboardingStep[] = [
     revealsAgentToolbar: true,
     page: 'workspaces',
     placement: 'top',
+    // The same bar holds Rewind, the first thing to reach for when an agent broke something.
+    noteKey: 'onboarding.step2.rewindNote',
     // No clip: the recording showed a sidebar layout that has since changed.
   },
   {
