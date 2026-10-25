@@ -65,9 +65,11 @@ describe('FirewallNoticeView — one row per verdict', () => {
     });
   }
 
-  it('covered is a muted line; firewall-off draws nothing', () => {
+  it('covered and firewall-off are muted lines, not notices', () => {
     expect(view(ctl({ status: status({ verdict: 'covered' }) }))).toContain('net.fw.allowed(45660)');
-    expect(view(ctl({ status: status({ verdict: 'firewall-off' }) }))).toBe('');
+    const off = view(ctl({ status: status({ verdict: 'firewall-off' }) }));
+    expect(off).toContain('net.fw.off');
+    expect(off).not.toContain('data-firewall-notice');
   });
 
   it('quiet (the Remote page) hides the steady allowed line and Checking…, but not what a Fix just did', () => {
@@ -116,7 +118,7 @@ describe('the Fix and the one-primary rule', () => {
   });
 
   it('a failed stage is named, never stderr', () => {
-    expect(view(ctl({ outcome: { kind: 'failed', stage: 'pubblock', code: 12 } }))).toContain('net.fw.failed(public block)');
+    expect(view(ctl({ outcome: { kind: 'failed', stage: 'pubblock', code: 12 } }))).toContain('net.fw.failed(net.fw.stage.pubblock)');
   });
 });
 

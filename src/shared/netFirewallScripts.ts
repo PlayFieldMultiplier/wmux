@@ -111,28 +111,41 @@ function checkPort(port: number): void {
   }
 }
 
+// `Get-NetFirewallApplicationFilter -Program` reads these as a pattern
+// (checked: `svch?st.exe`, `svch*.exe` and `svc[h]ost.exe` all find
+// svchost's rules), so the probe would not find our rule by its path.
+const WILDCARD = /[[\]*?]/;
+
+/** What the caller knows about a path: it exists, and it is on a local fixed disk (netWinPaths.ts). */
+export interface PathFacts {
+  exists: (p: string) => boolean;
+  onLocalFixedDrive: (p: string) => boolean;
+}
+
 /**
  * Why `exe` may not get a rule, or null. The program must be an absolute
- * drive path named wmux.exe, free of the characters the script refuses, and
- * exist (`exists` is the caller's, so this stays pure).
+ * drive path named wmux.exe, free of the characters the scripts refuse,
+ * exist, and sit on a local fixed disk (`facts` is the caller's, so this
+ * stays pure).
  */
-export function exeRefusal(exe: string, exists: (p: string) => boolean): FixRefusal | null {
+export function exeRefusal(exe: string, facts: PathFacts): FixRefusal | null {
   if (!/^[A-Za-z]:\\/.test(exe) || !path.win32.isAbsolute(exe)) return 'exe-missing';
   const base = path.win32.basename(exe).toLowerCase();
   // A program rule for node.exe would open the port to every Node script on the PC.
   if (base === 'node.exe' || base === 'node') return 'node-daemon';
   if (base !== 'wmux.exe') return 'not-wmux-exe';
-  if (FORBIDDEN.test(exe)) return 'bad-path';
-  if (!exists(exe)) return 'exe-missing';
+  if (FORBIDDEN.test(exe) || WILDCARD.test(exe)) return 'bad-path';
+  if (!facts.exists(exe)) return 'exe-missing';
+  if (!facts.onLocalFixedDrive(exe)) return 'not-local-drive';
   return null;
 }
 
 /** `exe` when it may get a rule and is exactly the daemon's execPath as read at click time; throws otherwise. */
-function checkedExe(exe: string, reportedExe: string, exists: (p: string) => boolean): string {
+function checkedExe(exe: string, reportedExe: string, facts: PathFacts): string {
   if (exe !== reportedExe) {
     throw new FirewallInputError('bad-input', `the program changed since the check: ${JSON.stringify(exe)} is not ${JSON.stringify(reportedExe)}`);
   }
-  const refusal = exeRefusal(exe, exists);
+  const refusal = exeRefusal(exe, facts);
   if (refusal) throw new FirewallInputError(refusal, `no firewall rule for ${JSON.stringify(exe)}: ${refusal}`);
   return exe;
 }
@@ -164,7 +177,8 @@ export interface ProbeScriptInput {
  * The probe. Reads the effective (ActiveStore: local + Group Policy + MDM)
  * profile switches, each offered address's network category, every rule for
  * this program (one by-program query: ours, the prompt's Allows and Blocks,
- * the legacy LanLink pair), whether legacy LanLink rules exist at all, and a
+ * the legacy LanLink pair; for ours also whether the remote addresses reach
+ * the tailnet range), whether legacy LanLink rules exist at all, and a
  * registered third-party firewall. Whether an adapter is a Hyper-V virtual
  * switch is read from its name in Node (`vEthernet (…)`), which saves loading
  * the NetAdapter module (about 1.3 s).
@@ -190,7 +204,10 @@ export function buildProbeScript(input: ProbeScriptInput): string {
     "foreach ($ip in $ips) { $c=-1; $a=@(Get-NetIPAddress -IPAddress $ip -AddressFamily IPv4 -ErrorAction SilentlyContinue); if ($a.Count -eq 1) { $cp=@(Get-NetConnectionProfile -InterfaceIndex $a[0].InterfaceIndex -ErrorAction SilentlyContinue); if ($cp.Count -ge 1) { $n=$cp[0].NetworkCategory; $c=$(if ($n -eq 'Public') {0} elseif ($n -eq 'Private') {1} elseif ($n -eq 'DomainAuthenticated') {2} else {-1}) } }; $ad+=@{ip=$ip; cat=$c} }",
     "$o['addr']=$ad",
     '$rs=@()',
-    "foreach ($f in @(Get-NetFirewallApplicationFilter -PolicyStore ActiveStore -Program $exe -ErrorAction SilentlyContinue)) { foreach ($r in @($f | Get-NetFirewallRule -ErrorAction SilentlyContinue)) { if ($r.Direction -ne 'Inbound' -or $r.Enabled -ne 'True') { continue }; $pf=@($r | Get-NetFirewallPortFilter -ErrorAction SilentlyContinue); $proto='Any'; $hit=0; $any=0; if ($pf.Count -ge 1) { $proto='' + $pf[0].Protocol; foreach ($lp in @($pf[0].LocalPort)) { if ($lp -eq 'Any') { $hit=1; $any=1 } elseif ($lp -eq ('' + $port)) { $hit=1 } elseif ($lp -match '^(\\d+)-(\\d+)$') { if ((0 + $matches[1]) -le $port -and (0 + $matches[2]) -ge $port) { $hit=1 } } } } else { $hit=1; $any=1 }; $rs+=@{act=('' + $r.Action); prof=('' + $r.Profile); proto=$proto; hit=$hit; anyPort=$any; ours=$(if ($ids -contains $r.Name) {1} else {0}); legacy=$(if ($legacyNames -contains $r.DisplayName) {1} else {0}); src=('' + $r.PolicyStoreSourceType)} } }",
+    // Our rules' remote addresses: does the Allow reach tailnet peers? Windows may
+    // store the range as a prefix or a mask, so both spellings count, and Any.
+    "$tailnetRanges=@('Any','100.64.0.0/10','100.64.0.0/255.192.0.0')",
+    "foreach ($f in @(Get-NetFirewallApplicationFilter -PolicyStore ActiveStore -Program $exe -ErrorAction SilentlyContinue)) { foreach ($r in @($f | Get-NetFirewallRule -ErrorAction SilentlyContinue)) { if ($r.Direction -ne 'Inbound' -or $r.Enabled -ne 'True') { continue }; $pf=@($r | Get-NetFirewallPortFilter -ErrorAction SilentlyContinue); $proto='Any'; $hit=0; $any=0; if ($pf.Count -ge 1) { $proto='' + $pf[0].Protocol; foreach ($lp in @($pf[0].LocalPort)) { if ($lp -eq 'Any') { $hit=1; $any=1 } elseif ($lp -eq ('' + $port)) { $hit=1 } elseif ($lp -match '^(\\d+)-(\\d+)$') { if ((0 + $matches[1]) -le $port -and (0 + $matches[2]) -ge $port) { $hit=1 } } } } else { $hit=1; $any=1 }; $own=($ids -contains $r.Name); $tn=0; if ($own) { $af=@($r | Get-NetFirewallAddressFilter -ErrorAction SilentlyContinue); if ($af.Count -ge 1) { foreach ($ra in @($af[0].RemoteAddress)) { if ($tailnetRanges -contains ('' + $ra)) { $tn=1 } } } }; $rs+=@{act=('' + $r.Action); prof=('' + $r.Profile); proto=$proto; hit=$hit; anyPort=$any; ours=$(if ($own) {1} else {0}); tn=$tn; legacy=$(if ($legacyNames -contains $r.DisplayName) {1} else {0}); src=('' + $r.PolicyStoreSourceType)} } }",
     "$o['rules']=$rs",
     input.legacyScan
       ? "$o['legacy']=$(if (@(Get-NetFirewallRule -PolicyStore ActiveStore -DisplayName $legacyNames -ErrorAction SilentlyContinue).Count -gt 0) {1} else {0})"
@@ -215,23 +232,43 @@ export interface FixScriptInput {
   /** Also allow 100.64.0.0/10: the listener offers a tailnet address (CGNAT is not LocalSubnet). */
   tailnet: boolean;
   scope: RuleScope;
-  exists: (p: string) => boolean;
+  facts: PathFacts;
 }
 
 /**
- * Stage 10 (exit 10 on failure): remove this listener's pair for this install
- * (by ID, whatever port it had), every rule in our group whose program no
- * longer exists (uninstalled or updated-away installs, any listener), and the
- * legacy `wmux LanLink (…)` rules whose program is gone or belongs to this
- * install. A legacy rule of another live install is left alone.
+ * The elevated scripts load NetSecurity from Windows PowerShell's own folder
+ * and call its cmdlets by their module-qualified names. `-NoProfile` stops
+ * profiles, not module autoload, and autoload searches the user's Documents
+ * modules first: a module there exporting `New-NetFirewallRule` must not run
+ * elevated in its place.
+ */
+export const IMPORT_NETSECURITY = "Import-Module -Name (Join-Path $PSHOME 'Modules\\NetSecurity\\NetSecurity.psd1') -ErrorAction Stop";
+
+/**
+ * A rule program that is gone, judged where the elevated session can see:
+ * a drive-letter path (never `Any`, never a share) whose drive is present
+ * and whose file is not. A drive the elevated session does not see (a mapped
+ * or SUBST letter, an unplugged disk) says nothing, so its rules stay.
+ */
+export const PROGRAM_GONE = "(Test-Path -LiteralPath (Split-Path -Qualifier $p)) -and -not (Test-Path -LiteralPath $p)";
+export const ON_A_DRIVE = "($p -match '^[A-Za-z]:\\\\')";
+
+/**
+ * Stage 10 (exit 10 on failure): load NetSecurity, then remove this
+ * listener's pair for this install (by ID, whatever port it had), every rule
+ * in our group whose program is gone (uninstalled or updated-away installs,
+ * any listener), and the legacy `wmux LanLink (…)` rules whose program is
+ * gone or belongs to this install. A legacy rule of another live install, or
+ * one for any program, is left alone.
  */
 function cleanupStage(ids: RuleIds): string {
   const legacy = LEGACY_LANLINK_RULES.map((n) => psQuote(n)).join(',');
   return [
     'try {',
-    `Remove-NetFirewallRule -Name ${psQuote(ids.allow)},${psQuote(ids.pubblock)} -ErrorAction SilentlyContinue;`,
-    "Get-NetFirewallRule -Group $g -ErrorAction SilentlyContinue | Where-Object { $p=($_ | Get-NetFirewallApplicationFilter).Program; ($p -ne 'Any') -and -not (Test-Path -LiteralPath $p) } | Remove-NetFirewallRule -ErrorAction Stop;",
-    `Get-NetFirewallRule -DisplayName ${legacy} -ErrorAction SilentlyContinue | Where-Object { $p=($_ | Get-NetFirewallApplicationFilter).Program; (-not (Test-Path -LiteralPath $p)) -or ((Split-Path -Parent $p) -eq $root) -or ((Split-Path -Parent (Split-Path -Parent $p)) -eq $root) } | Remove-NetFirewallRule -ErrorAction Stop`,
+    `${IMPORT_NETSECURITY};`,
+    `NetSecurity\\Remove-NetFirewallRule -Name ${psQuote(ids.allow)},${psQuote(ids.pubblock)} -ErrorAction SilentlyContinue;`,
+    `NetSecurity\\Get-NetFirewallRule -Group $g -ErrorAction SilentlyContinue | Where-Object { $p=($_ | NetSecurity\\Get-NetFirewallApplicationFilter).Program; ${ON_A_DRIVE} -and ${PROGRAM_GONE} } | NetSecurity\\Remove-NetFirewallRule -ErrorAction Stop;`,
+    `NetSecurity\\Get-NetFirewallRule -DisplayName ${legacy} -ErrorAction SilentlyContinue | Where-Object { $p=($_ | NetSecurity\\Get-NetFirewallApplicationFilter).Program; ${ON_A_DRIVE} -and ((${PROGRAM_GONE}) -or ((Split-Path -Parent $p) -eq $root) -or ((Split-Path -Parent (Split-Path -Parent $p)) -eq $root)) } | NetSecurity\\Remove-NetFirewallRule -ErrorAction Stop`,
     `} catch { exit ${FIX_STAGE_EXIT.cleanup} }`,
   ].join(' ');
 }
@@ -245,7 +282,7 @@ function cleanupStage(ids: RuleIds): string {
  */
 export function buildFixScript(input: FixScriptInput): string {
   checkPort(input.port);
-  const exe = checkedExe(input.exe, input.reportedExe, input.exists);
+  const exe = checkedExe(input.exe, input.reportedExe, input.facts);
   const root = installRootOf(exe);
   const ids = firewallRuleIds(input.listener, exe, input.scope);
   const label = LISTENER_LABEL[input.listener];
@@ -257,20 +294,21 @@ export function buildFixScript(input: FixScriptInput): string {
     `$root=${psQuote(root)}`,
     `$g=${psQuote(input.scope.group)}`,
     cleanupStage(ids),
-    `try { New-NetFirewallRule -Name ${psQuote(ids.allow)} -Group $g -DisplayName ${psQuote(`wmux ${label} inbound (TCP ${input.port})`)} -Description ${description} -Direction Inbound -Action Allow -Protocol TCP -LocalPort ${input.port} -Program $exe -Profile Private -RemoteAddress ${remote} -EdgeTraversalPolicy Block -ErrorAction Stop | Out-Null } catch { exit ${FIX_STAGE_EXIT.allow} }`,
-    `try { New-NetFirewallRule -Name ${psQuote(ids.pubblock)} -Group $g -DisplayName ${psQuote(`wmux ${label} block on public networks (TCP ${input.port})`)} -Description ${description} -Direction Inbound -Action Block -Protocol TCP -LocalPort ${input.port} -Program $exe -Profile Public -ErrorAction Stop | Out-Null } catch { exit ${FIX_STAGE_EXIT.pubblock} }`,
+    `try { NetSecurity\\New-NetFirewallRule -Name ${psQuote(ids.allow)} -Group $g -DisplayName ${psQuote(`wmux ${label} inbound (TCP ${input.port})`)} -Description ${description} -Direction Inbound -Action Allow -Protocol TCP -LocalPort ${input.port} -Program $exe -Profile Private -RemoteAddress ${remote} -EdgeTraversalPolicy Block -ErrorAction Stop | Out-Null } catch { exit ${FIX_STAGE_EXIT.allow} }`,
+    `try { NetSecurity\\New-NetFirewallRule -Name ${psQuote(ids.pubblock)} -Group $g -DisplayName ${psQuote(`wmux ${label} block on public networks (TCP ${input.port})`)} -Description ${description} -Direction Inbound -Action Block -Protocol TCP -LocalPort ${input.port} -Program $exe -Profile Public -ErrorAction Stop | Out-Null } catch { exit ${FIX_STAGE_EXIT.pubblock} }`,
     'exit 0',
   ]);
 }
 
 export type RemoveScriptInput = Omit<FixScriptInput, 'port' | 'tailnet'>;
 
-/** Details › Remove: this listener's pair for this install, by ID. Nothing else. */
+/** Details › Remove: this listener's pair for this install, by ID. Nothing else. Exit 10 when NetSecurity cannot load. */
 export function buildRemoveScript(input: RemoveScriptInput): string {
-  const exe = checkedExe(input.exe, input.reportedExe, input.exists);
+  const exe = checkedExe(input.exe, input.reportedExe, input.facts);
   const ids = firewallRuleIds(input.listener, exe, input.scope);
   return oneLine([
-    `Remove-NetFirewallRule -Name ${psQuote(ids.allow)},${psQuote(ids.pubblock)} -ErrorAction SilentlyContinue`,
+    "$ErrorActionPreference='Stop'",
+    `try { ${IMPORT_NETSECURITY}; NetSecurity\\Remove-NetFirewallRule -Name ${psQuote(ids.allow)},${psQuote(ids.pubblock)} -ErrorAction SilentlyContinue } catch { exit ${FIX_STAGE_EXIT.cleanup} }`,
     'exit 0',
   ]);
 }
@@ -285,14 +323,27 @@ export function elevatedPowerShellParameters(script: string): string {
   return `-NoProfile -NonInteractive -WindowStyle Hidden -Command "${script}"`;
 }
 
-/** Absolute Windows PowerShell 5.1: never a PATH lookup. */
-export function windowsPowerShellPath(env: NodeJS.ProcessEnv = process.env): string {
-  return path.win32.join(env['SystemRoot'] || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+/** Absolute Windows PowerShell 5.1 under System32 (netWinPaths.ts `systemDirectory()`): never a PATH lookup. */
+export function windowsPowerShellPath(system32: string): string {
+  return path.win32.join(system32, 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 }
 
 // ── macOS (verify on Mac) ────────────────────────────────────────────────────
 
 export const SOCKETFILTERFW = '/usr/libexec/ApplicationFirewall/socketfilterfw';
+
+/**
+ * Why the macOS daemon's program may not be allowed, or null. As on Windows,
+ * only wmux itself: the packaged binary inside its .app bundle. Node would
+ * open the port to every Node script, and a development build's Electron
+ * binary to every Electron app. Unverified on a Mac.
+ */
+export function macExeRefusal(exe: string): FixRefusal | null {
+  if (!exe.startsWith('/')) return 'exe-missing';
+  if (path.posix.basename(exe) === 'node') return 'node-daemon';
+  if (!/\.app\/Contents\/MacOS\/wmux$/.test(exe)) return 'not-wmux-exe';
+  return null;
+}
 
 /**
  * The AppleScript that asks for an administrator and allows `app` in the
@@ -301,7 +352,9 @@ export const SOCKETFILTERFW = '/usr/libexec/ApplicationFirewall/socketfilterfw';
  * rather than escaped twice. Unverified on a Mac.
  */
 export function buildMacFixAppleScript(app: string): string {
-  if (!app.startsWith('/') || /['"\\\r\n$`]/.test(app)) {
+  const refusal = macExeRefusal(app);
+  if (refusal) throw new FirewallInputError(refusal, `no firewall entry for ${JSON.stringify(app)}: ${refusal}`);
+  if (/['"\\\r\n$`]/.test(app)) {
     throw new FirewallInputError('bad-path', `refusing an app path with a quote, a backslash or a line break: ${JSON.stringify(app)}`);
   }
   return `do shell script "${SOCKETFILTERFW} --add '${app}' --unblockapp '${app}'" with administrator privileges`;

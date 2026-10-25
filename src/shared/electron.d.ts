@@ -242,7 +242,8 @@ declare global {
        * event); `fix` / `remove` each show one OS consent prompt.
        */
       netFirewall?: {
-        status: (listener: FirewallListener) => Promise<InboundStatusView>;
+        /** `fresh`: a probe that starts now, never one already running. */
+        status: (listener: FirewallListener, fresh?: boolean) => Promise<InboundStatusView>;
         listenProblem: (listener: FirewallListener) => Promise<ListenProblemReport | null>;
         fix: (listener: FirewallListener) => Promise<FirewallActionResult>;
         remove: (listener: FirewallListener) => Promise<FirewallActionResult>;

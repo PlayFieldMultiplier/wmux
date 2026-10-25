@@ -35,9 +35,11 @@ import {
   buildProbeScript,
   exeRefusal,
   firewallRuleIds,
+  macExeRefusal,
   windowsPowerShellPath,
   type RuleScope,
 } from '../../shared/netFirewallScripts';
+import { onLocalFixedDrive, systemDirectory } from '../../shared/netWinPaths';
 import type { FirewallRuleRecord } from './firewallRecord';
 
 /** The probe's deadline: past it the answer is `unknown` ("Could not read the firewall settings"). */
@@ -51,6 +53,8 @@ export interface ProbeTarget {
   port: number | null;
   /** The IPv4s another PC is told to connect to. */
   ips: string[];
+  /** One of them is a tailnet address: our Allow must include 100.64.0.0/10. */
+  tailnet: boolean;
   inboundSeenAt: number | null;
 }
 
@@ -75,6 +79,9 @@ export interface ProbeDeps {
   exec?: ProbeExec;
   ifaces?: () => NodeJS.Dict<os.NetworkInterfaceInfo[]>;
   exists?: (p: string) => boolean;
+  onLocalFixedDrive?: (p: string) => boolean;
+  /** System32, where powershell.exe is run from (netWinPaths.ts). */
+  system32?: () => string | null;
   now?: () => number;
   log?: (msg: string) => void;
 }
@@ -117,7 +124,7 @@ export async function probeInbound(target: ProbeTarget, deps: ProbeDeps): Promis
   if (platform === 'darwin') {
     // Verify on Mac: the reads may need no root, and the app path the
     // firewall knows may be the bundle rather than the binary.
-    base.refusal = exe.startsWith('/') ? null : 'exe-missing';
+    base.refusal = macExeRefusal(exe);
     try {
       const [g, b, a] = await Promise.all([
         exec(SOCKETFILTERFW, ['--getglobalstate'], { timeout: PROBE_TIMEOUT_MS }),
@@ -133,7 +140,7 @@ export async function probeInbound(target: ProbeTarget, deps: ProbeDeps): Promis
 
   const ids = firewallRuleIds(target.listener, exe, deps.scope);
   base.ruleIds = { allow: ids.allow, pubblock: ids.pubblock };
-  base.refusal = exeRefusal(exe, exists);
+  base.refusal = exeRefusal(exe, { exists, onLocalFixedDrive: deps.onLocalFixedDrive ?? onLocalFixedDrive });
   let script: string;
   try {
     script = buildProbeScript({
@@ -148,10 +155,15 @@ export async function probeInbound(target: ProbeTarget, deps: ProbeDeps): Promis
     if (err instanceof FirewallInputError) return { ...base, refusal: base.refusal ?? 'bad-path' };
     throw err;
   }
+  const system32 = (deps.system32 ?? systemDirectory)();
+  if (!system32) {
+    log('[net] firewall probe: the System32 folder could not be read');
+    return base;
+  }
   const started = now();
   let stdout: string;
   try {
-    stdout = await exec(windowsPowerShellPath(), ['-NoProfile', '-NonInteractive', '-Command', script], { timeout: PROBE_TIMEOUT_MS });
+    stdout = await exec(windowsPowerShellPath(system32), ['-NoProfile', '-NonInteractive', '-Command', script], { timeout: PROBE_TIMEOUT_MS });
   } catch (err) {
     log(`[net] firewall probe failed after ${now() - started} ms: ${err instanceof Error ? err.message.split('\n')[0] : String(err)}`);
     return base;
@@ -163,7 +175,13 @@ export async function probeInbound(target: ProbeTarget, deps: ProbeDeps): Promis
   }
   const names = adapterNames((deps.ifaces ?? os.networkInterfaces)());
   const facts = markVirtual(parsed, (ip) => names.get(ip) ?? null);
-  const a = assessInbound(facts, { recordedExe: deps.record(target.listener)?.exe ?? null, exe });
+  const record = deps.record(target.listener);
+  const a = assessInbound(facts, {
+    recorded: record ? { exe: record.exe, id: record.id } : null,
+    exe,
+    ruleBase: ids.base,
+    tailnet: target.tailnet,
+  });
   return {
     ...base,
     verdict: a.verdict,

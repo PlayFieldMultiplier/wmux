@@ -1,3 +1,4 @@
+// @wmux-lane unit — 'win32' here is the platform the probe is told it runs on; its PowerShell, interfaces and paths are all fakes.
 import { afterEach, beforeEach, describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -78,5 +79,82 @@ describe('net.* RPCs', () => {
 
   it('net.inboundStatus answers (nothing to check on this OS)', async () => {
     expect(await setup().call('net.inboundStatus', { listener: 'a2a' })).toMatchObject({ listener: 'a2a', platform: 'other', applicable: false });
+  });
+});
+
+describe('net.inboundStatus: who shares a probe', () => {
+  const on = { en: 1, inb: 1, loc: 1 };
+  const LINE = `${JSON.stringify({ v: 1, prof: { Domain: on, Private: on, Public: on }, addr: [{ ip: '192.168.1.10', cat: 1 }], rules: [], legacy: 0, tp: 0, tpName: null })}\r\n`;
+
+  /** A Windows probe whose PowerShell answers only when the test says so. */
+  function slowProbes(over: Partial<NetRpcDeps> = {}) {
+    const pending: Array<() => void> = [];
+    let n = 0;
+    const s = setup({
+      platform: 'win32',
+      exe: EXE,
+      probe: {
+        exec: () => {
+          n += 1;
+          return new Promise<string>((resolve) => pending.push(() => resolve(LINE)));
+        },
+        ifaces: () => ({}),
+        exists: () => true,
+        onLocalFixedDrive: () => true,
+        system32: () => 'C:\\Windows\\System32',
+        log: () => undefined,
+      },
+      ...over,
+    });
+    const settle = async (i: number) => {
+      pending[i]();
+      await new Promise((r) => setTimeout(r, 0));
+    };
+    return { ...s, spawned: () => n, settle };
+  }
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+
+  it('two asks for the same listener and facts share one PowerShell', async () => {
+    const { call, spawned, settle } = slowProbes();
+    const a = call('net.inboundStatus', { listener: 'a2a' });
+    const b = call('net.inboundStatus', { listener: 'a2a' });
+    await tick();
+    expect(spawned()).toBe(1);
+    await settle(0);
+    expect(await a).toBe(await b);
+  });
+
+  it('fresh never joins a probe that started earlier; a later ask joins the fresh one', async () => {
+    const { call, spawned, settle } = slowProbes();
+    const before = call('net.inboundStatus', { listener: 'a2a' });
+    await tick();
+    const after = call('net.inboundStatus', { listener: 'a2a', fresh: true });
+    await tick();
+    expect(spawned()).toBe(2);
+    // The first probe ends first; its cleanup must not drop the fresh one's slot.
+    await settle(0);
+    const third = call('net.inboundStatus', { listener: 'a2a' });
+    await tick();
+    expect(spawned()).toBe(2);
+    await settle(1);
+    expect(await third).toBe(await after);
+    expect(await before).not.toBe(await after);
+  });
+
+  it('a probe started for another port never answers for the new one', async () => {
+    let port = 45660;
+    const { call, spawned, settle } = slowProbes({
+      target: (listener) => ({ listener, applicable: true, port, ips: ['192.168.1.10'], inboundSeenAt: null, tailnet: false }),
+    });
+    const old = call('net.inboundStatus', { listener: 'a2a' });
+    await tick();
+    port = 45661;
+    const moved = call('net.inboundStatus', { listener: 'a2a' });
+    await tick();
+    expect(spawned()).toBe(2);
+    await settle(0);
+    await settle(1);
+    expect(((await old) as { port: number }).port).toBe(45660);
+    expect(((await moved) as { port: number }).port).toBe(45661);
   });
 });

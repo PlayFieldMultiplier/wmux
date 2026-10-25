@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { InboundCounter, isLoopbackHost, normalizeRemote } from '../inboundSeen';
+import { InboundCounter, OWN_ADDRESSES_TTL_MS, isLoopbackHost, normalizeRemote } from '../inboundSeen';
 
 describe('InboundCounter', () => {
   const own = () => new Set(['192.168.1.10', '100.79.244.107', 'fe80::1']);
@@ -20,12 +20,26 @@ describe('InboundCounter', () => {
     expect(c.snapshot()).toEqual({ inboundSeenAt: null, inboundCount: 0 });
   });
 
-  it('reads this machine\'s addresses again on every connection', () => {
-    let mine = new Set<string>();
-    const c = new InboundCounter(() => mine, () => 1);
-    mine = new Set(['10.0.0.5']);
-    c.note('10.0.0.5');
-    expect(c.snapshot().inboundCount).toBe(0);
+  it('reads this machine\'s addresses at most once per TTL, and again for an unknown address after it', () => {
+    let t = 0;
+    let reads = 0;
+    let mine = new Set(['192.168.1.10']);
+    const c = new InboundCounter(() => { reads += 1; return mine; }, () => t);
+    for (let i = 0; i < 50; i += 1) c.note(`192.168.1.${100 + i}`);
+    expect(reads).toBe(1);
+    expect(c.snapshot().inboundCount).toBe(50);
+    // An address that came up later (Tailscale connecting) is this machine once the read is stale.
+    mine = new Set(['192.168.1.10', '100.79.244.107']);
+    c.note('100.79.244.107');
+    expect(c.snapshot().inboundCount).toBe(51);
+    t = OWN_ADDRESSES_TTL_MS;
+    c.note('100.79.244.107');
+    expect(reads).toBe(2);
+    expect(c.snapshot().inboundCount).toBe(51);
+    // A known address never reads again.
+    t = 10 * OWN_ADDRESSES_TTL_MS;
+    c.note('192.168.1.10');
+    expect(reads).toBe(2);
   });
 });
 

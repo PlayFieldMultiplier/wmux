@@ -16,6 +16,8 @@
 export type ListenProblem =
   | { kind: 'port-in-use'; port: number }
   | { kind: 'port-reserved'; port: number }
+  /** Windows refused the port (EACCES), and its reserved ranges could not be read to tell why. */
+  | { kind: 'port-denied'; port: number }
   | { kind: 'address-gone'; address: string | null }
   | { kind: 'other'; code: string };
 
@@ -36,13 +38,15 @@ export function portInRanges(port: number, ranges: readonly ExcludedPortRange[])
  * the port lies in a range Windows reserved (Hyper-V/WSL/winnat), or another
  * socket holds it with SO_EXCLUSIVEADDRUSE. Only the first is "reserved", and
  * only when the port is inside a parsed excluded range; any other EACCES is a
- * port in use. On macOS and Linux EACCES below 1024 is a privileged port.
+ * port in use. `excludedRanges` null: the ranges could not be read, so an
+ * EACCES is only "denied". On macOS and Linux EACCES below 1024 is a
+ * privileged port.
  */
 export function classifyListenError(
   code: string | null | undefined,
   port: number,
   platform: string,
-  excludedRanges: readonly ExcludedPortRange[] = [],
+  excludedRanges: readonly ExcludedPortRange[] | null = [],
   address: string | null = null,
 ): ListenProblem {
   switch (code) {
@@ -50,6 +54,7 @@ export function classifyListenError(
       return { kind: 'port-in-use', port };
     case 'EACCES':
       if (platform === 'win32') {
+        if (excludedRanges === null) return { kind: 'port-denied', port };
         return portInRanges(port, excludedRanges) ? { kind: 'port-reserved', port } : { kind: 'port-in-use', port };
       }
       return port < 1024 ? { kind: 'port-reserved', port } : { kind: 'other', code };
@@ -160,6 +165,8 @@ export async function pickFreePort(
 /** Who holds a busy port, as the daemon could tell. */
 export type PortHolder =
   | { kind: 'process'; pid: number; image: string }
+  /** This same daemon: another of its listeners (A2A set to the web server's port). */
+  | { kind: 'self'; pid: number }
   | { kind: 'wmux'; pid: number }
   | { kind: 'unnamed'; pid: number };
 
@@ -178,12 +185,15 @@ export function listenProblemSentence(report: ListenProblemReport): { key: strin
     case 'port-in-use': {
       const h = report.holder;
       if (h?.kind === 'process') return { key: 'net.listen.portInUse', vars: { port: p.port, process: h.image, pid: h.pid } };
+      if (h?.kind === 'self') return { key: 'net.listen.portInUseSelf', vars: { port: p.port } };
       if (h?.kind === 'wmux') return { key: 'net.listen.portInUseWmux', vars: { port: p.port } };
       if (h) return { key: 'net.listen.portInUseUnknown', vars: { port: p.port, pid: h.pid } };
       return { key: 'net.listen.portInUseNoHolder', vars: { port: p.port } };
     }
     case 'port-reserved':
       return { key: 'net.listen.portReserved', vars: { port: p.port } };
+    case 'port-denied':
+      return { key: 'net.listen.portDenied', vars: { port: p.port } };
     case 'address-gone':
       return { key: 'net.listen.addressGone', vars: {} };
     case 'other':

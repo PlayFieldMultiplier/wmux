@@ -125,7 +125,8 @@ describe('A2aServer lifecycle driven by the controller', () => {
       await pc.server.whenIdle();
       expect(pc.server.boundPort()).toBe(oldPort);
       expect(await connectRefused(oldPort)).toBe(false);
-      expect(pc.server.status()).toMatchObject({ listening: true, port: oldPort, lastError: 'EADDRINUSE' });
+      // No error code: the listen notice ("Use port N") is for a PC with no listener.
+      expect(pc.server.status()).toMatchObject({ listening: true, port: oldPort, lastError: 'EADDRINUSE', lastErrorCode: null, lastErrorPort: null });
       expect(pc.config.a2aRemote).toEqual({ enabled: true, port: oldPort });
       // The chain is still alive: a good port afterwards rebinds normally.
       const good = await freePort();

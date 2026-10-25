@@ -6,6 +6,7 @@ import { IPC, dataSuffix } from '../../../shared/constants';
 import { isFirewallListener, type ElevationOutcome, type FirewallActionResult, type InboundStatusView } from '../../../shared/netFirewall';
 import { FIREWALL_GROUP, currentRuleUser, elevatedPowerShellParameters, windowsPowerShellPath } from '../../../shared/netFirewallScripts';
 import type { ListenProblemReport } from '../../../shared/netListen';
+import { onLocalFixedDrive, systemDirectory } from '../../../shared/netWinPaths';
 import { wrapHandler } from '../wrapHandler';
 import { isMainWindowSender } from '../mainWindowSender';
 import type { DaemonClient } from '../../DaemonClient';
@@ -16,8 +17,10 @@ import { isSelfElevated } from '../../computer/selfElevation';
 // The firewall and port problems of remote pairing (A2A, Share & pair with
 // "Expose to network", LanLink): the read-only checks pass through to the
 // daemon (`net.*`), and the Fix / Remove run here, in main, through the OS
-// consent prompt. Only the main window's own top frame may ask for an
-// elevation, one click at a time (FirewallFixer).
+// consent prompt. Only the main window's own top frame may ask, for a check
+// as for an elevation, and elevations run one click at a time
+// (FirewallFixer). powershell.exe and mmc.exe come from System32 as
+// GetSystemDirectoryW reports it, never from the SystemRoot variable.
 
 let liveClient: (() => DaemonClient | null) | null = null;
 
@@ -40,12 +43,18 @@ function runAppleScript(script: string): Promise<ElevationOutcome> {
 
 let getMainWindow: () => BrowserWindow | null = () => null;
 
+function system32(): string {
+  const dir = systemDirectory();
+  if (!dir) throw new Error('the System32 folder could not be read');
+  return dir;
+}
+
 const fixer = new FirewallFixer({
   rpc: (method, params, opts) => rpcClient().rpc(method, params, opts),
-  elevateWindows: (script) =>
+  elevateWindows: async (script) =>
     shellExecuteAndWait({
       verb: 'runas',
-      file: windowsPowerShellPath(),
+      file: windowsPowerShellPath(system32()),
       parameters: elevatedPowerShellParameters(script),
       hwnd: (() => {
         const win = getMainWindow();
@@ -53,8 +62,10 @@ const fixer = new FirewallFixer({
       })(),
     }),
   elevateMac: runAppleScript,
-  exists: (p) => fs.existsSync(p),
-  scope: { dataSuffix: dataSuffix(), user: currentRuleUser(), group: FIREWALL_GROUP },
+  facts: { exists: (p) => fs.existsSync(p), onLocalFixedDrive },
+  // Per action: main sets WMUX_DATA_SUFFIX in appInit(), after this module loads.
+  scope: () => ({ dataSuffix: dataSuffix(), user: currentRuleUser(), group: FIREWALL_GROUP }),
+  selfExe: process.execPath,
   tokenType: tokenElevationType,
   selfElevated: isSelfElevated,
   log: (msg) => console.warn(msg),
@@ -65,8 +76,12 @@ const NOT_OPERATOR: FirewallActionResult = { outcome: { kind: 'refused', refusal
 function openFirewallSettings(): void {
   if (process.platform === 'win32') {
     // wf.msc through the absolute mmc.exe: Windows Defender Firewall with Advanced Security.
-    const root = process.env['SystemRoot'] || 'C:\\Windows';
-    const child = spawn(path.win32.join(root, 'System32', 'mmc.exe'), [path.win32.join(root, 'System32', 'wf.msc')], { detached: true, stdio: 'ignore' });
+    const dir = systemDirectory();
+    if (!dir) {
+      console.warn('[net] could not open Windows Firewall: the System32 folder could not be read');
+      return;
+    }
+    const child = spawn(path.win32.join(dir, 'mmc.exe'), [path.win32.join(dir, 'wf.msc')], { detached: true, stdio: 'ignore' });
     child.once('error', (err) => console.warn('[net] could not open Windows Firewall:', err.message));
     child.unref();
     return;
@@ -86,9 +101,24 @@ export function registerNetFirewallHandlers(getDaemonClient: () => DaemonClient 
     if (!isFirewallListener(v)) throw new Error('listener must be one of a2a, web, lanlink');
     return v;
   };
+  const fromMainWindow = (e: Electron.IpcMainInvokeEvent): void => {
+    if (!isMainWindowSender(e, getWindow())) throw new Error('only the main window may check the firewall');
+  };
   const handlers: Array<[string, (e: Electron.IpcMainInvokeEvent, ...args: unknown[]) => Promise<unknown>]> = [
-    [IPC.NET_FIREWALL_STATUS, async (_e, l): Promise<InboundStatusView> => fixer.status(listener(l))],
-    [IPC.NET_LISTEN_PROBLEM, async (_e, l): Promise<ListenProblemReport | null> => fixer.listenProblem(listener(l))],
+    [
+      IPC.NET_FIREWALL_STATUS,
+      async (e, l, fresh): Promise<InboundStatusView> => {
+        fromMainWindow(e);
+        return fixer.status(listener(l), { fresh: fresh === true });
+      },
+    ],
+    [
+      IPC.NET_LISTEN_PROBLEM,
+      async (e, l): Promise<ListenProblemReport | null> => {
+        fromMainWindow(e);
+        return fixer.listenProblem(listener(l));
+      },
+    ],
     [
       IPC.NET_FIREWALL_FIX,
       async (e, l): Promise<FirewallActionResult> => (isMainWindowSender(e, getWindow()) ? fixer.fix(listener(l)) : NOT_OPERATOR),

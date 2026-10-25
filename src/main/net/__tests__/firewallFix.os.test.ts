@@ -23,6 +23,8 @@ function setup(opts: {
   probes?: InboundStatus[];
   target?: Record<string, unknown>;
   elevate?: () => Promise<ShellRunResult>;
+  selfExe?: string;
+  scope?: () => RuleScope;
 } = {}) {
   const probes = [...(opts.probes ?? [status(), status({ verdict: 'covered' })])];
   const calls: Array<{ method: string; params: Record<string, unknown>; timeoutMs?: number }> = [];
@@ -40,8 +42,10 @@ function setup(opts: {
       return opts.elevate ? opts.elevate() : { started: true, lastError: null, exitCode: 0 };
     }),
     elevateMac: vi.fn(async () => ({ kind: 'ok' as const })),
-    exists: () => true,
-    scope: SCOPE,
+    facts: { exists: () => true, onLocalFixedDrive: () => true },
+    scope: opts.scope ?? (() => SCOPE),
+    selfExe: opts.selfExe ?? EXE,
+    platform: 'win32',
     tokenType: () => 3,
     selfElevated: () => false,
   };
@@ -55,6 +59,12 @@ describe('FirewallFixer.status', () => {
     expect(calls[0]).toEqual({ method: 'net.inboundStatus', params: { listener: 'a2a' }, timeoutMs: INBOUND_STATUS_RPC_TIMEOUT_MS });
     expect(s.elevation).toBe('consent');
   });
+
+  it('a fresh check asks for a probe that starts now', async () => {
+    const { fixer, calls } = setup();
+    await fixer.status('a2a', { fresh: true });
+    expect(calls[0].params).toEqual({ listener: 'a2a', fresh: true });
+  });
 });
 
 describe('FirewallFixer.fix', () => {
@@ -65,9 +75,10 @@ describe('FirewallFixer.fix', () => {
     expect(r.outcome).toEqual({ kind: 'ok' });
     expect(r.status?.verdict).toBe('covered');
     expect(scripts).toHaveLength(1);
-    expect(scripts[0]).toContain(`New-NetFirewallRule -Name '${IDS.allow}'`);
+    expect(scripts[0]).toContain(`NetSecurity\\New-NetFirewallRule -Name '${IDS.allow}'`);
     expect(records()).toEqual(['set']);
-    expect(calls.filter((c) => c.method === 'net.inboundStatus')).toHaveLength(2);
+    // The re-probe never joins a probe that began before the rules existed.
+    expect(calls.filter((c) => c.method === 'net.inboundStatus').map((c) => c.params)).toEqual([{ listener: 'a2a' }, { listener: 'a2a', fresh: true }]);
   });
 
   it('a declined prompt is cancelled; the probe still runs and nothing is recorded', async () => {
@@ -103,6 +114,30 @@ describe('FirewallFixer.fix', () => {
     }
   });
 
+  it('refuses a program that is not main\'s own, even when the daemon\'s two answers agree', async () => {
+    // Same install root, so the same rule IDs: only the program tells them apart (a daemon left from another version).
+    const other = 'C:\\Users\\me\\AppData\\Local\\wmux\\app-4.9.0\\wmux.exe';
+    const t = setup({ probes: [status({ exe: other })], target: { exe: other } });
+    await t.fixer.status('a2a');
+    expect((await t.fixer.fix('a2a')).outcome).toEqual({ kind: 'refused', refusal: 'changed' });
+    expect(t.deps.elevateWindows).not.toHaveBeenCalled();
+    // The same file in another case is main's own (Windows paths).
+    const upper = setup({ selfExe: EXE.toUpperCase() });
+    await upper.fixer.status('a2a');
+    expect((await upper.fixer.fix('a2a')).outcome).toEqual({ kind: 'ok' });
+  });
+
+  it('reads the rule scope at each click, not when the fixer was made', async () => {
+    let scope: RuleScope = { ...SCOPE, dataSuffix: '-dev' };
+    const t = setup({ scope: () => scope, probes: [status(), status(), status({ verdict: 'covered' })] });
+    await t.fixer.status('a2a');
+    // The probe showed IDs for the default instance; the scope still says -dev: refused.
+    expect((await t.fixer.fix('a2a')).outcome).toEqual({ kind: 'refused', refusal: 'changed' });
+    scope = SCOPE;
+    await t.fixer.status('a2a');
+    expect((await t.fixer.fix('a2a')).outcome).toEqual({ kind: 'ok' });
+  });
+
   it('refuses when the daemon now reports another program, port or rule ID', async () => {
     for (const target of [{ exe: EXE.replace('4.10.0', '4.11.0') }, { port: 45661 }, { applicable: false }]) {
       const t = setup({ target });
@@ -125,6 +160,23 @@ describe('FirewallFixer.fix', () => {
     release({ started: true, lastError: null, exitCode: 0 });
     expect((await first).outcome).toEqual({ kind: 'ok' });
   });
+
+  it('an elevated child that outlived the wait keeps the slot until it exits', async () => {
+    let exited: () => void = () => undefined;
+    const stillRunning = new Promise<void>((r) => { exited = r; });
+    const t = setup({ probes: [status(), status(), status(), status()], elevate: async () => ({ started: true, lastError: null, exitCode: null, stillRunning }) });
+    await t.fixer.status('a2a');
+    expect((await t.fixer.fix('a2a')).outcome).toEqual({ kind: 'failed', stage: null, code: null });
+    await t.fixer.status('a2a');
+    expect((await t.fixer.fix('a2a')).outcome).toEqual({ kind: 'refused', refusal: 'busy' });
+    expect(t.deps.elevateWindows).toHaveBeenCalledTimes(1);
+    exited();
+    await stillRunning;
+    await new Promise((r) => setTimeout(r, 0));
+    await t.fixer.status('a2a');
+    await t.fixer.fix('a2a');
+    expect(t.deps.elevateWindows).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('FirewallFixer.remove', () => {
@@ -133,7 +185,7 @@ describe('FirewallFixer.remove', () => {
     await t.fixer.status('a2a');
     const r = await t.fixer.remove('a2a');
     expect(r.outcome).toEqual({ kind: 'ok' });
-    expect(t.scripts[0]).toBe(`Remove-NetFirewallRule -Name '${IDS.allow}','${IDS.pubblock}' -ErrorAction SilentlyContinue; exit 0`);
+    expect(t.scripts[0]).toContain(`NetSecurity\\Remove-NetFirewallRule -Name '${IDS.allow}','${IDS.pubblock}' -ErrorAction SilentlyContinue }`);
     expect(t.records()).toEqual(['clear']);
 
     const n = setup({ probes: [status({ verdict: 'covered-by-prompt' })] });
@@ -145,7 +197,11 @@ describe('FirewallFixer.remove', () => {
 describe('macOS (unverified on a Mac)', () => {
   it('runs the AppleScript for the reported program', async () => {
     const mac = status({ platform: 'darwin', exe: '/Applications/wmux.app/Contents/MacOS/wmux', ruleIds: null });
-    const t = setup({ probes: [mac, { ...mac, verdict: 'covered' }], target: { platform: 'darwin', exe: '/Applications/wmux.app/Contents/MacOS/wmux' } });
+    const t = setup({
+      probes: [mac, { ...mac, verdict: 'covered' }],
+      target: { platform: 'darwin', exe: '/Applications/wmux.app/Contents/MacOS/wmux' },
+      selfExe: '/Applications/wmux.app/Contents/MacOS/wmux',
+    });
     await t.fixer.status('a2a');
     expect((await t.fixer.fix('a2a')).outcome).toEqual({ kind: 'ok' });
     expect(t.deps.elevateMac).toHaveBeenCalledWith(expect.stringContaining("--unblockapp '/Applications/wmux.app/Contents/MacOS/wmux'"));

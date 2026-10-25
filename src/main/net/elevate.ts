@@ -31,8 +31,11 @@ const SEE_MASK_NOASYNC = 0x100;
 const SEE_MASK_FLAG_NO_UI = 0x400;
 const SW_HIDE = 0;
 const WAIT_OBJECT_0 = 0;
+const WAIT_TIMEOUT = 0x102;
 /** How long to wait for the elevated child once it started. */
 export const ELEVATED_WAIT_MS = 60_000;
+/** After that wait, how often to look whether the child has exited. */
+export const ELEVATED_POLL_MS = 2_000;
 
 export interface ShellRunResult {
   /** ShellExecuteExW returned TRUE (the child started). */
@@ -41,6 +44,12 @@ export interface ShellRunResult {
   lastError: number | null;
   /** The child's exit code; null when it did not start, the wait timed out, or the code could not be read. */
   exitCode: number | null;
+  /**
+   * Only when the wait timed out: the child still runs (a medium-integrity
+   * wmux cannot end an elevated one), and this settles when it exits. The
+   * caller starts no second elevation before then.
+   */
+  stillRunning?: Promise<void>;
 }
 
 type KoffiFn = ((...args: unknown[]) => unknown) & { async: (...args: unknown[]) => void };
@@ -116,10 +125,28 @@ function hwndValue(buf: Buffer | null): bigint {
   return buf.length >= 8 ? buf.readBigInt64LE(0) : BigInt(buf.readInt32LE(0));
 }
 
+/**
+ * Look at a child that outlived the wait every ELEVATED_POLL_MS, with a
+ * zero-timeout wait on the JS thread: a blocking wait would hold one of
+ * libuv's four pool threads for as long as a wedged PowerShell lives.
+ */
+function whenExited(w: Win32, handle: bigint): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setInterval(() => {
+      if (w.WaitForSingleObject(handle, 0) === WAIT_TIMEOUT) return;
+      clearInterval(timer);
+      w.CloseHandle(handle);
+      resolve();
+    }, ELEVATED_POLL_MS);
+    timer.unref?.();
+  });
+}
+
 /** Start `file` through ShellExecuteExW and wait for it to exit. Windows only. */
 export async function shellExecuteAndWait(opts: ShellRunOptions): Promise<ShellRunResult> {
   if (process.platform !== 'win32') throw new Error('shellExecuteAndWait: Windows only');
-  if (!path.win32.isAbsolute(opts.file)) throw new Error('shellExecuteAndWait: the program must be an absolute path');
+  // A drive path: `path.win32.isAbsolute` also takes a UNC share.
+  if (!/^[A-Za-z]:\\/.test(opts.file) || !path.win32.isAbsolute(opts.file)) throw new Error('shellExecuteAndWait: the program must be an absolute drive path');
   const w = load();
   const sei: Record<string, unknown> = {
     cbSize: w.sizeofSei,
@@ -143,14 +170,19 @@ export async function shellExecuteAndWait(opts: ShellRunOptions): Promise<ShellR
   const handle = BigInt(sei['hProcess'] as number | bigint);
   // NOCLOSEPROCESS can still leave no handle (the request went to an existing process).
   if (handle === 0n) return { started: true, lastError: null, exitCode: null };
+  let keep = false;
   try {
     const waited = await callAsync<number>(w.WaitForSingleObject, handle, opts.waitMs ?? ELEVATED_WAIT_MS);
+    if (waited === WAIT_TIMEOUT) {
+      keep = true;
+      return { started: true, lastError: null, exitCode: null, stillRunning: whenExited(w, handle) };
+    }
     if (waited !== WAIT_OBJECT_0) return { started: true, lastError: null, exitCode: null };
     const code = [0];
     if (!w.GetExitCodeProcess(handle, code)) return { started: true, lastError: null, exitCode: null };
     return { started: true, lastError: null, exitCode: code[0] };
   } finally {
-    w.CloseHandle(handle);
+    if (!keep) w.CloseHandle(handle);
   }
 }
 

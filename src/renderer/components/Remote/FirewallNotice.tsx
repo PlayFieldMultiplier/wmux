@@ -3,7 +3,7 @@ import Button from '../ui/Button';
 import { IconWarning } from '../icons';
 import {
   allowHintKey,
-  failedErrorText,
+  failedError,
   firewallDetailsText,
   firewallOffer,
   partlyPublicSentence,
@@ -141,7 +141,10 @@ function outcomeLine(c: FirewallState, t: T): string | null {
   if (o.kind === 'cancelled') {
     return c.status?.elevation === 'credential' ? `${t('net.fw.cancelled')} ${t('net.fw.cancelledNoAdmin')}` : t('net.fw.cancelled');
   }
-  if (o.kind === 'failed') return t('net.fw.failed', { error: failedErrorText(o) });
+  if (o.kind === 'failed') {
+    const e = failedError(o);
+    return t('net.fw.failed', { error: 'key' in e ? t(e.key) : e.code });
+  }
   return null;
 }
 

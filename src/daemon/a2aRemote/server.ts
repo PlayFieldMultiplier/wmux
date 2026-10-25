@@ -355,7 +355,10 @@ export class A2aServer {
     // bound must not cost the PC the listener it already had.
     const bound = await this.bind(identity, port);
     if ('error' in bound) {
-      this.setError(bound.error, bound.code, port);
+      // With the old listener still serving, the message says the move failed
+      // (Settings: "Could not use the new port"); the code is only for a PC
+      // with no listener, whose notice offers another port.
+      this.setError(bound.error, this.server ? null : bound.code, port);
       this.keepPrevious();
       return;
     }

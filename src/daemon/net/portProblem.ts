@@ -8,7 +8,9 @@
 // succeed, and a failed rebind keeps the old listener (A2A) or says so again.
 //
 // Nothing is killed, no range or service is touched. Each tool gets the 3 s
-// lookup deadline; a tool that fails or times out just leaves its part empty.
+// lookup deadline; a tool that fails or times out just leaves its part empty,
+// except the reserved ranges: without them a Windows EACCES is only "denied",
+// never guessed to be "in use".
 //
 // Imports node builtins and shared modules only.
 
@@ -66,19 +68,22 @@ export interface ListenProblemDeps {
   isFree?: (port: number) => Promise<boolean>;
   /** This daemon's image name (wmux.exe; electron.exe in development): a holder with it is "another copy of wmux". */
   selfImage?: string;
+  /** This daemon's PID: a holder with it is one of this wmux's own listeners. */
+  selfPid?: number;
 }
 
-async function excludedRanges(exec: LookupExec): Promise<ExcludedPortRange[]> {
+/** The ranges Windows reserves, or null when netsh could not be read. */
+async function excludedRanges(exec: LookupExec): Promise<ExcludedPortRange[] | null> {
   try {
     return parseExcludedPortRanges(
       await exec(system32('netsh.exe'), ['interface', 'ipv4', 'show', 'excludedportrange', 'protocol=tcp'], { timeout: LOOKUP_TIMEOUT_MS }),
     );
   } catch {
-    return [];
+    return null;
   }
 }
 
-async function portHolder(port: number, exec: LookupExec, selfImage: string): Promise<PortHolder | null> {
+async function portHolder(port: number, exec: LookupExec, selfImage: string, selfPid: number): Promise<PortHolder | null> {
   let pid: number | undefined;
   try {
     pid = holderPids(parseNetstatListeners(await exec(system32('NETSTAT.EXE'), ['-ano', '-p', 'TCP'], { timeout: LOOKUP_TIMEOUT_MS })), port)[0];
@@ -89,6 +94,7 @@ async function portHolder(port: number, exec: LookupExec, selfImage: string): Pr
     return null;
   }
   if (pid === undefined) return null;
+  if (pid === selfPid) return { kind: 'self', pid };
   let image: string | null = null;
   try {
     image = parseTasklistImage(await exec(system32('tasklist.exe'), ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], { timeout: LOOKUP_TIMEOUT_MS }), pid);
@@ -105,12 +111,13 @@ export async function diagnoseListenProblem(failure: ListenFailure, deps: Listen
   const exec = deps.exec ?? defaultExec;
   const isFree = deps.isFree ?? loopbackPortFree;
   const selfImage = deps.selfImage ?? path.basename(process.execPath);
+  const selfPid = deps.selfPid ?? process.pid;
   const ranges = platform === 'win32' ? await excludedRanges(exec) : [];
   const problem = classifyListenError(failure.code, failure.port, platform, ranges, failure.address);
   if (problem.kind === 'address-gone' || problem.kind === 'other') return { problem, holder: null, suggestion: null };
   const [holder, suggestion] = await Promise.all([
-    problem.kind === 'port-in-use' && platform === 'win32' ? portHolder(failure.port, exec, selfImage) : Promise.resolve(null),
-    pickFreePort(failure.port, ranges, isFree),
+    problem.kind === 'port-in-use' && platform === 'win32' ? portHolder(failure.port, exec, selfImage, selfPid) : Promise.resolve(null),
+    pickFreePort(failure.port, ranges ?? [], isFree),
   ]);
   return { problem, holder, suggestion };
 }

@@ -6,7 +6,7 @@ import {
   assessMac,
   elevationKind,
   elevationOutcome,
-  failedErrorText,
+  failedError,
   firewallDetailsText,
   firewallOffer,
   inapplicableStatus,
@@ -16,6 +16,7 @@ import {
   partlyPublicSentence,
   pickVerdict,
   type InboundStatus,
+  type AssessContext,
   type InboundVerdict,
   type ProbeFacts,
 } from '../netFirewall';
@@ -24,13 +25,13 @@ const EXE = 'C:\\Users\\me\\AppData\\Local\\wmux\\app-4.10.0\\wmux.exe';
 const OLD_EXE = 'C:\\Users\\me\\AppData\\Local\\wmux\\app-4.9.0\\wmux.exe';
 
 const on = { en: 1, inb: 1, loc: 1 };
-type RawRule = { act: string; prof: string; proto?: string; hit?: number; anyPort?: number; ours?: number; legacy?: number; src?: string };
+type RawRule = { act: string; prof: string; proto?: string; hit?: number; anyPort?: number; ours?: number; tn?: number; legacy?: number; src?: string };
 function line(over: { prof?: Record<string, unknown>; addr?: unknown[]; rules?: RawRule[]; legacy?: number; tp?: number; tpName?: string | null } = {}): string {
   return JSON.stringify({
     v: 1,
     prof: over.prof ?? { Domain: on, Private: on, Public: on },
     addr: over.addr ?? [{ ip: '192.168.1.10', cat: 1 }],
-    rules: (over.rules ?? []).map((r) => ({ proto: 'TCP', hit: 1, anyPort: 0, ours: 0, legacy: 0, src: 'Local', ...r })),
+    rules: (over.rules ?? []).map((r) => ({ proto: 'TCP', hit: 1, anyPort: 0, ours: 0, tn: 0, legacy: 0, src: 'Local', ...r })),
     legacy: over.legacy ?? 0,
     tp: over.tp ?? 0,
     tpName: over.tpName ?? null,
@@ -41,7 +42,11 @@ function facts(over: Parameters<typeof line>[0] = {}): ProbeFacts {
   if (!f) throw new Error('fixture did not parse');
   return f;
 }
-const verdict = (f: ProbeFacts, recordedExe: string | null = null): InboundVerdict => assessInbound(f, { recordedExe, exe: EXE }).verdict;
+/** This install's rule ID base for A2A (any fixed value: the classifier only compares it). */
+const BASE = 'wmux-a2a-1451d14d';
+const ctx = (over: Partial<AssessContext> = {}): AssessContext => ({ recorded: null, exe: EXE, ruleBase: BASE, tailnet: false, ...over });
+const verdict = (f: ProbeFacts, recordedExe: string | null = null, over: Partial<AssessContext> = {}): InboundVerdict =>
+  assessInbound(f, ctx({ recorded: recordedExe ? { exe: recordedExe, id: BASE } : null, ...over })).verdict;
 
 const OURS_ALLOW: RawRule = { act: 'Allow', prof: 'Private', ours: 1 };
 const OURS_BLOCK: RawRule = { act: 'Block', prof: 'Public', ours: 1 };
@@ -50,7 +55,7 @@ const PROMPT_ALLOW_ANY: RawRule = { act: 'Allow', prof: 'Private, Public', anyPo
 describe('parseProbeLine', () => {
   it('reads a probe line from this box', () => {
     const f = parseProbeLine(
-      '{"v":1,"addr":[{"ip":"100.79.244.107","cat":1},{"ip":"192.168.45.28","cat":0},{"ip":"172.17.48.1","cat":-1}],"rules":[{"hit":1,"ours":0,"prof":"Private, Public","legacy":0,"anyPort":1,"act":"Allow","src":"Local","proto":"TCP"},{"hit":1,"ours":0,"prof":"Private, Public","legacy":0,"anyPort":1,"act":"Allow","src":"Local","proto":"UDP"}],"tp":0,"prof":{"Private":{"inb":1,"en":1,"loc":1},"Domain":{"inb":1,"en":1,"loc":1},"Public":{"inb":1,"en":1,"loc":1}},"tpName":null,"legacy":0}\r\n',
+      '{"v":1,"addr":[{"ip":"100.79.244.107","cat":1},{"ip":"192.168.45.28","cat":0},{"ip":"172.17.48.1","cat":-1}],"rules":[{"hit":1,"ours":0,"tn":0,"prof":"Private, Public","legacy":0,"anyPort":1,"act":"Allow","src":"Local","proto":"TCP"},{"hit":1,"ours":0,"tn":0,"prof":"Private, Public","legacy":0,"anyPort":1,"act":"Allow","src":"Local","proto":"UDP"}],"tp":0,"prof":{"Private":{"inb":1,"en":1,"loc":1},"Domain":{"inb":1,"en":1,"loc":1},"Public":{"inb":1,"en":1,"loc":1}},"tpName":null,"legacy":0}\r\n',
     );
     expect(f?.addresses.map((a) => a.category)).toEqual(['Private', 'Public', 'None']);
     expect(f?.rules.map((r) => r.tcp)).toEqual([true, false]);
@@ -67,6 +72,8 @@ describe('parseProbeLine', () => {
     expect(parseProbeLine(line({ rules: [{ act: 'Allow', prof: 'Private, Moon' }] }))).toBeNull();
     expect(parseProbeLine(line({ addr: [{ ip: '999.1.1.1', cat: 1 }] }))).toBeNull();
     expect(parseProbeLine(line({ prof: { Domain: on, Private: on } }))).toBeNull();
+    // Every rule says whether it reaches the tailnet range.
+    expect(parseProbeLine(line({ rules: [{ act: 'Allow', prof: 'Private' }] }).replace(',"tn":0', ''))).toBeNull();
   });
 
   it('"Any" profile means all three', () => {
@@ -98,6 +105,22 @@ describe('assessInbound — one verdict per case', () => {
     expect(verdict(facts({ rules: [OURS_ALLOW] }), OLD_EXE)).toBe('covered');
   });
 
+  it('another install sharing the data folder is not "updated": its record has another rule ID base', () => {
+    const other = { exe: 'D:\\portable\\wmux\\wmux.exe', id: 'wmux-a2a-0badf00d' };
+    expect(assessInbound(facts(), ctx({ recorded: other })).verdict).toBe('not-covered');
+    expect(assessInbound(facts(), ctx({ recorded: { ...other, id: BASE } })).verdict).toBe('stale-after-update');
+  });
+
+  it('tailnet: our Allow made before a tailnet address existed (LocalSubnet only) no longer covers', () => {
+    const tailnetAddr = { addr: [{ ip: '192.168.1.10', cat: 1 }, { ip: '100.79.244.107', cat: 1 }] };
+    expect(verdict(facts({ ...tailnetAddr, rules: [OURS_ALLOW, OURS_BLOCK] }), null, { tailnet: true })).toBe('not-covered');
+    expect(verdict(facts({ ...tailnetAddr, rules: [{ ...OURS_ALLOW, tn: 1 }, OURS_BLOCK] }), null, { tailnet: true })).toBe('covered');
+    // Updated since: the Fix it offers is the update's.
+    expect(verdict(facts({ ...tailnetAddr, rules: [OURS_ALLOW] }), OLD_EXE, { tailnet: true })).toBe('stale-after-update');
+    // No tailnet address offered: LocalSubnet is enough.
+    expect(verdict(facts({ rules: [OURS_ALLOW] }), null, { tailnet: false })).toBe('covered');
+  });
+
   it('blocked-by-rule: a Block for this exe beats every Allow; ours and legacy Blocks do not count', () => {
     expect(verdict(facts({ rules: [OURS_ALLOW, { act: 'Block', prof: 'Private, Public' }] }))).toBe('blocked-by-rule');
     expect(verdict(facts({ rules: [OURS_ALLOW, OURS_BLOCK] }))).toBe('covered');
@@ -117,10 +140,38 @@ describe('assessInbound — one verdict per case', () => {
   });
 
   it('mixed Private (Tailscale) and Public (Wi-Fi): judged on the Private one, both lists returned', () => {
-    const a = assessInbound(facts({ addr: [{ ip: '100.79.244.107', cat: 1 }, { ip: '192.168.45.28', cat: 0 }], rules: [OURS_ALLOW] }), { recordedExe: null, exe: EXE });
+    const a = assessInbound(facts({ addr: [{ ip: '100.79.244.107', cat: 1 }, { ip: '192.168.45.28', cat: 0 }], rules: [OURS_ALLOW] }), ctx());
     expect(a.verdict).toBe('covered');
     expect(a.okIps).toEqual(['100.79.244.107']);
     expect(a.publicIps).toEqual(['192.168.45.28']);
+  });
+
+  it('mixed Private + Public: a Public-only Block or profile switch does not hide the Private verdict', () => {
+    const mixed = { addr: [{ ip: '192.168.1.5', cat: 1 }, { ip: '10.8.0.2', cat: 0 }] };
+    // A Block the Windows prompt made when Cancel was pressed on a public network.
+    const promptPublicBlock: RawRule = { act: 'Block', prof: 'Public' };
+    expect(verdict(facts({ ...mixed, rules: [OURS_ALLOW, OURS_BLOCK, promptPublicBlock] }))).toBe('covered');
+    expect(verdict(facts({ ...mixed, rules: [promptPublicBlock] }))).toBe('not-covered');
+    // "Block all incoming connections" ticked for Public only.
+    expect(verdict(facts({ ...mixed, rules: [OURS_ALLOW], prof: { Domain: on, Private: on, Public: { ...on, inb: 0 } } }))).toBe('covered');
+    // Local rules ignored on Public only (a policy for public networks).
+    expect(verdict(facts({ ...mixed, rules: [OURS_ALLOW], prof: { Domain: on, Private: on, Public: { ...on, loc: 0 } } }))).toBe('covered');
+    // The Private side's own switches still decide.
+    expect(verdict(facts({ ...mixed, rules: [OURS_ALLOW], prof: { Domain: on, Private: { ...on, inb: 0 }, Public: on } }))).toBe('inbound-blocked-all');
+    expect(verdict(facts({ ...mixed, rules: [OURS_ALLOW, { act: 'Block', prof: 'Private' }] }))).toBe('blocked-by-rule');
+    // Firewall off on Private, on for Public: the Private side is open.
+    expect(verdict(facts({ ...mixed, prof: { Domain: on, Private: { ...on, en: 0 }, Public: on } }))).toBe('firewall-off');
+    // The Public side is still told apart.
+    const a = assessInbound(facts({ ...mixed, rules: [OURS_ALLOW, promptPublicBlock] }), ctx());
+    expect(a.publicIps).toEqual(['10.8.0.2']);
+  });
+
+  it('every address Public: the Public profile decides', () => {
+    const pub = { addr: [{ ip: '10.8.0.2', cat: 0 }] };
+    expect(verdict(facts({ ...pub, prof: { Domain: on, Private: on, Public: { ...on, inb: 0 } } }))).toBe('inbound-blocked-all');
+    expect(verdict(facts({ ...pub, prof: { Domain: on, Private: on, Public: { ...on, loc: 0 } } }))).toBe('policy-managed');
+    expect(verdict(facts({ ...pub, rules: [{ act: 'Block', prof: 'Public' }] }))).toBe('blocked-by-rule');
+    expect(verdict(facts(pub))).toBe('public-network');
   });
 
   it('domain-network: Domain only is explained unless something already allows it there', () => {
@@ -147,7 +198,7 @@ describe('assessInbound — one verdict per case', () => {
   });
 
   it('exposedPublic: a local prompt Allow on Public (any port or this one); not ours, not GPO', () => {
-    const a = (rules: RawRule[]) => assessInbound(facts({ rules }), { recordedExe: null, exe: EXE });
+    const a = (rules: RawRule[]) => assessInbound(facts({ rules }), ctx());
     expect(a([PROMPT_ALLOW_ANY]).exposedPublic).toBe(true);
     expect(a([{ act: 'Allow', prof: 'Public' }]).exposedPublic).toBe(true);
     expect(a([{ act: 'Allow', prof: 'Public', hit: 0 }]).exposedPublic).toBe(false);
@@ -158,7 +209,7 @@ describe('assessInbound — one verdict per case', () => {
   });
 
   it('legacy LanLink rules are flagged and never count as cover', () => {
-    const a = assessInbound(facts({ legacy: 1, rules: [{ act: 'Allow', prof: 'Private', legacy: 1 }] }), { recordedExe: null, exe: EXE });
+    const a = assessInbound(facts({ legacy: 1, rules: [{ act: 'Allow', prof: 'Private', legacy: 1 }] }), ctx());
     expect(a.legacyLanLink).toBe(true);
     expect(a.verdict).toBe('not-covered');
   });
@@ -218,9 +269,9 @@ describe('firewallOffer', () => {
     expect(firewallOffer(status({ verdict: 'unknown' })).actions).toEqual(['check']);
   });
 
-  it('covered is a muted line, firewall-off and inapplicable draw nothing', () => {
+  it('covered and firewall-off are muted lines; inapplicable draws nothing', () => {
     expect(firewallOffer(status({ verdict: 'covered' }))).toEqual({ notice: false, sentence: { key: 'net.fw.allowed', vars: { port: 45660 } }, actions: [] });
-    expect(firewallOffer(status({ verdict: 'firewall-off' })).sentence).toBeNull();
+    expect(firewallOffer(status({ verdict: 'firewall-off' }))).toEqual({ notice: false, sentence: { key: 'net.fw.off', vars: {} }, actions: [] });
     expect(firewallOffer(inapplicableStatus('a2a', 'win32', EXE, 0)).sentence).toBeNull();
   });
 
@@ -257,9 +308,10 @@ describe('elevationOutcome', () => {
     expect(elevationOutcome({ started: true, exitCode: 1 })).toEqual({ kind: 'failed', stage: null, code: 1 });
     expect(elevationOutcome({ started: true, exitCode: null })).toEqual({ kind: 'failed', stage: null, code: null });
   });
-  it('failedErrorText says a stage or a code, never stderr', () => {
-    expect(failedErrorText({ kind: 'failed', stage: 'pubblock', code: 12 })).toBe('public block');
-    expect(failedErrorText({ kind: 'failed', stage: null, code: 5 })).toBe('5');
+  it('failedError says a stage (an i18n key) or a code, never stderr', () => {
+    expect(failedError({ kind: 'failed', stage: 'pubblock', code: 12 })).toEqual({ key: 'net.fw.stage.pubblock' });
+    expect(failedError({ kind: 'failed', stage: null, code: 5 })).toEqual({ code: '5' });
+    expect(failedError({ kind: 'failed', stage: null, code: null })).toEqual({ key: 'remotePage.unknown' });
   });
 });
 

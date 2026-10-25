@@ -88,7 +88,17 @@ export type FixRefusal =
   | 'not-wmux-exe'
   /** The daemon's program path does not exist, or is not an absolute drive path. */
   | 'exe-missing'
-  /** The path holds a character the elevated script refuses (`$`, a backtick, a double quote, a line break). */
+  /**
+   * The program is on a network, SUBST or removable drive. The elevated
+   * session may not see a per-logon drive letter, and the firewall service
+   * cannot match a rule to it.
+   */
+  | 'not-local-drive'
+  /**
+   * The path holds a character the elevated script refuses (`$`, a backtick,
+   * a double quote, a line break), or a wildcard (`[`, `]`, `*`, `?`), which
+   * the firewall's by-program query would read as a pattern.
+   */
   | 'bad-path'
   /** macOS and Windows only; elsewhere the static hint stays. */
   | 'unsupported-platform';
@@ -197,6 +207,8 @@ export interface ProbeRule {
   legacy: boolean;
   /** Stored locally (prompt-created or added by hand), not by Group Policy or MDM. */
   local: boolean;
+  /** One of ours whose remote addresses include the tailnet range (100.64.0.0/10) or Any. */
+  tailnet: boolean;
 }
 
 export interface ProbeFacts {
@@ -292,7 +304,10 @@ export function parseProbeLine(stdout: string): ProbeFacts | null {
     const anyPort = bit(rr['anyPort']);
     const ours = bit(rr['ours']);
     const legacy = bit(rr['legacy']);
-    if ((action !== 'Allow' && action !== 'Block') || !profilesOf || coversPort === null || anyPort === null || ours === null || legacy === null) return null;
+    const tailnet = bit(rr['tn']);
+    if ((action !== 'Allow' && action !== 'Block') || !profilesOf || coversPort === null || anyPort === null || ours === null || legacy === null || tailnet === null) {
+      return null;
+    }
     if (typeof rr['proto'] !== 'string' || typeof rr['src'] !== 'string') return null;
     const proto = rr['proto'].toUpperCase();
     rules.push({
@@ -304,6 +319,7 @@ export function parseProbeLine(stdout: string): ProbeFacts | null {
       ours,
       legacy,
       local: rr['src'] === 'Local',
+      tailnet,
     });
   }
 
@@ -337,13 +353,19 @@ export function markVirtual(facts: ProbeFacts, adapterOf: (ip: string) => string
 
 export interface AssessContext {
   /**
-   * The program path firewall-rules.json last recorded a confirmed rule for
-   * on this listener, or null. A different path than the current one means
-   * wmux was updated since (Squirrel moves the exe to a new app-X.Y.Z).
+   * What firewall-rules.json last recorded a confirmed rule for on this
+   * listener, or null. The same rule ID base (same install root, instance
+   * and user) with a different program path means wmux was updated since
+   * (Squirrel moves the exe to a new app-X.Y.Z). Another install sharing the
+   * data folder has another base and is not "updated".
    */
-  recordedExe: string | null;
+  recorded: { exe: string; id: string } | null;
   /** The current program path. */
   exe: string;
+  /** This install's rule ID base for the listener (`wmux-a2a-1a2b3c4d`). */
+  ruleBase: string;
+  /** The listener offers a tailnet address: our Allow must include 100.64.0.0/10 to cover it. */
+  tailnet: boolean;
 }
 
 export interface InboundAssessment {
@@ -378,21 +400,31 @@ export function assessInbound(facts: ProbeFacts, ctx: AssessContext): InboundAss
   const allowsOn = (p: ProfileName, pred: (r: ProbeRule) => boolean): boolean =>
     tcpForPort.some((r) => r.action === 'Allow' && !r.legacy && r.profiles.includes(p) && pred(r));
 
+  // On a mixed Private + Public PC the listener works over the Private side,
+  // and the Public side is said separately (partlyPublic). So the profile
+  // switches and Blocks are judged on the networks that can work; only when
+  // every address is Public do the Public profile's switches decide.
+  const okCats = used.filter((p) => p !== 'Public');
+  const judged = okCats.length > 0 ? okCats : used;
+
   const held = new Set<InboundVerdict>();
   if (facts.thirdParty) held.add('third-party');
-  if (used.some((p) => !facts.profiles[p].allowLocalRules)) held.add('policy-managed');
-  if (used.some((p) => !facts.profiles[p].allowInboundRules)) held.add('inbound-blocked-all');
-  if (used.every((p) => !facts.profiles[p].enabled)) held.add('firewall-off');
+  if (judged.some((p) => !facts.profiles[p].allowLocalRules)) held.add('policy-managed');
+  if (judged.some((p) => !facts.profiles[p].allowInboundRules)) held.add('inbound-blocked-all');
+  if (judged.every((p) => !facts.profiles[p].enabled)) held.add('firewall-off');
   const blocking = tcpForPort.filter((r) => r.action === 'Block' && !r.ours && !r.legacy);
-  if (blocking.some((r) => used.some((p) => r.profiles.includes(p) && facts.profiles[p].enabled))) held.add('blocked-by-rule');
+  if (blocking.some((r) => judged.some((p) => r.profiles.includes(p) && facts.profiles[p].enabled))) held.add('blocked-by-rule');
 
-  const okCats = used.filter((p) => p !== 'Public');
+  const stale =
+    ctx.recorded !== null && ctx.recorded.id === ctx.ruleBase && ctx.recorded.exe.toLowerCase() !== ctx.exe.toLowerCase();
   if (okCats.length === 0) {
     held.add('public-network');
   } else if (okCats.includes('Private')) {
-    if (allowsOn('Private', (r) => r.ours)) held.add('covered');
+    // Our Allow made before a tailnet address existed is LocalSubnet only, and
+    // CGNAT is not LocalSubnet: a Fix makes it again with the tailnet range.
+    if (allowsOn('Private', (r) => r.ours && (!ctx.tailnet || r.tailnet))) held.add('covered');
     else if (allowsOn('Private', (r) => !r.ours)) held.add('covered-by-prompt');
-    else if (ctx.recordedExe !== null && ctx.recordedExe.toLowerCase() !== ctx.exe.toLowerCase()) held.add('stale-after-update');
+    else if (stale) held.add('stale-after-update');
     else held.add('not-covered');
   } else {
     // Domain only: our rules are Private only, so only an existing Allow helps.
@@ -515,7 +547,7 @@ export function firewallOffer(s: InboundStatus): FirewallOffer {
         ? { notice: true, sentence: { key: 'net.fw.thirdParty', vars: { product: s.thirdPartyName, port } }, actions: ['copyDetails'] }
         : { notice: true, sentence: { key: 'net.fw.thirdPartyUnnamed', vars: { port } }, actions: ['copyDetails'] };
     case 'firewall-off':
-      return none;
+      return { notice: false, sentence: { key: 'net.fw.off', vars: {} }, actions: [] };
     case 'unknown':
       return { notice: true, sentence: { key: 'net.fw.unknown', vars: {} }, actions: ['check'] };
   }
@@ -610,12 +642,13 @@ export function allowHintKey(kind: ElevationKind): string {
   return kind === 'elevated' ? 'net.fw.allowHintElevated' : kind === 'credential' ? 'net.fw.allowHintCredential' : 'net.fw.allowHintConsent';
 }
 
-/** The `{error}` of net.fw.failed: a stage name or a Win32/exit code, never stderr. */
-export function failedErrorText(o: Extract<ElevationOutcome, { kind: 'failed' }>): string {
-  if (o.stage === 'cleanup') return 'cleanup';
-  if (o.stage === 'allow') return 'allow rule';
-  if (o.stage === 'pubblock') return 'public block';
-  return o.code === null ? 'unknown' : String(o.code);
+/**
+ * The `{error}` of net.fw.failed: the failed stage's i18n key, or a Win32/exit
+ * code as is. Never stderr.
+ */
+export function failedError(o: Extract<ElevationOutcome, { kind: 'failed' }>): { key: string } | { code: string } {
+  if (o.stage) return { key: `net.fw.stage.${o.stage}` };
+  return o.code === null ? { key: 'remotePage.unknown' } : { code: String(o.code) };
 }
 
 /** The answer to a Fix or Remove: how the elevated run ended, and the fresh probe. */

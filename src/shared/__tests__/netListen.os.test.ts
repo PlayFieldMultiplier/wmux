@@ -44,6 +44,9 @@ describe('classifyListenError', () => {
     expect(classifyListenError('EACCES', 45660, 'win32', RANGES)).toEqual({ kind: 'port-in-use', port: 45660 });
     expect(classifyListenError('EACCES', 49180, 'win32', RANGES)).toEqual({ kind: 'port-in-use', port: 49180 });
     expect(classifyListenError('EACCES', 49200, 'win32', [])).toEqual({ kind: 'port-in-use', port: 49200 });
+    // The ranges could not be read: neither guess, just "denied".
+    expect(classifyListenError('EACCES', 49200, 'win32', null)).toEqual({ kind: 'port-denied', port: 49200 });
+    expect(classifyListenError('EADDRINUSE', 49200, 'win32', null)).toEqual({ kind: 'port-in-use', port: 49200 });
   });
 
   it('unix EACCES below 1024 is a privileged (reserved) port, above it is something else', () => {
@@ -154,6 +157,10 @@ describe('listenProblemSentence', () => {
       .toEqual({ key: 'net.listen.portInUse', vars: { port: 7681, process: 'node.exe', pid: 4 } });
     expect(listenProblemSentence({ problem: { kind: 'port-in-use', port: 7681 }, holder: { kind: 'wmux', pid: 4 }, suggestion: null })?.key)
       .toBe('net.listen.portInUseWmux');
+    expect(listenProblemSentence({ problem: { kind: 'port-in-use', port: 7681 }, holder: { kind: 'self', pid: 4 }, suggestion: null }))
+      .toEqual({ key: 'net.listen.portInUseSelf', vars: { port: 7681 } });
+    expect(listenProblemSentence({ problem: { kind: 'port-denied', port: 7681 }, holder: null, suggestion: 7682 }))
+      .toEqual({ key: 'net.listen.portDenied', vars: { port: 7681 } });
     expect(listenProblemSentence({ problem: { kind: 'port-in-use', port: 7681 }, holder: { kind: 'unnamed', pid: 4 }, suggestion: null })?.key)
       .toBe('net.listen.portInUseUnknown');
     expect(listenProblemSentence({ problem: { kind: 'port-in-use', port: 7681 }, holder: null, suggestion: null })?.key)

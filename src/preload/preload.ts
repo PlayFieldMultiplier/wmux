@@ -2364,7 +2364,8 @@ document.addEventListener('DOMContentLoaded', () => {
 // Remove each show one OS consent prompt; main refuses them from anything but
 // the main window.
 (electronAPI as Record<string, unknown>).netFirewall = {
-  status: (listener: FirewallListener) => ipcRenderer.invoke(IPC.NET_FIREWALL_STATUS, listener) as Promise<InboundStatusView>,
+  status: (listener: FirewallListener, fresh?: boolean) =>
+    ipcRenderer.invoke(IPC.NET_FIREWALL_STATUS, listener, fresh === true) as Promise<InboundStatusView>,
   listenProblem: (listener: FirewallListener) =>
     ipcRenderer.invoke(IPC.NET_LISTEN_PROBLEM, listener) as Promise<ListenProblemReport | null>,
   fix: (listener: FirewallListener) => ipcRenderer.invoke(IPC.NET_FIREWALL_FIX, listener) as Promise<FirewallActionResult>,

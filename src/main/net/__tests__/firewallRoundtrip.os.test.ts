@@ -25,9 +25,11 @@ import {
   firewallRuleIds,
   psQuote,
   windowsPowerShellPath,
+  type PathFacts,
   type RuleScope,
 } from '../../../shared/netFirewallScripts';
 import { assessInbound, elevationOutcome, parseProbeLine } from '../../../shared/netFirewall';
+import { onLocalFixedDrive, systemDirectory } from '../../../shared/netWinPaths';
 import { shellExecuteAndWait } from '../elevate';
 
 const RUN = process.platform === 'win32' && process.env['GITHUB_ACTIONS'] === 'true' && process.env['WMUX_FIREWALL_ROUNDTRIP'] === '1';
@@ -36,10 +38,12 @@ const SCOPE: RuleScope = { dataSuffix: '-ci', user: currentRuleUser(), group: FI
 const PORT = 45699;
 const NEW_PORT = 45698;
 const CLM_PREFIX = "Import-Module NetSecurity,Microsoft.PowerShell.Management; $ExecutionContext.SessionState.LanguageMode='ConstrainedLanguage'; ";
+const FACTS: PathFacts = { exists: (p) => fs.existsSync(p), onLocalFixedDrive };
+const powershell = (): string => windowsPowerShellPath(systemDirectory() ?? 'C:\\Windows\\System32');
 
 function ps(script: string): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
-    execFile(windowsPowerShellPath(), ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, timeout: 120_000, encoding: 'utf8' }, (err, stdout, stderr) => {
+    execFile(powershell(), ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, timeout: 120_000, encoding: 'utf8' }, (err, stdout, stderr) => {
       const code = err ? (typeof (err as { code?: unknown }).code === 'number' ? (err as { code: number }).code : -1) : 0;
       resolve({ code, stdout, stderr });
     });
@@ -57,7 +61,7 @@ async function verdict(): Promise<string> {
   expect(r.code, r.stderr).toBe(0);
   const facts = parseProbeLine(r.stdout);
   if (!facts) throw new Error(`unreadable probe line: ${r.stdout}`);
-  return assessInbound(facts, { recordedExe: null, exe }).verdict;
+  return assessInbound(facts, { recorded: null, exe, ruleBase: ids.base, tailnet: false }).verdict;
 }
 
 /** Read-only: how many rules have this Name (0 or 1). */
@@ -76,7 +80,7 @@ async function ruleFields(name: string): Promise<Record<string, unknown>> {
 }
 
 function fix(port: number): string {
-  return buildFixScript({ listener: 'a2a', port, exe, reportedExe: exe, tailnet: false, scope: SCOPE, exists: (p) => fs.existsSync(p) });
+  return buildFixScript({ listener: 'a2a', port, exe, reportedExe: exe, tailnet: false, scope: SCOPE, facts: FACTS });
 }
 
 describe.runIf(RUN)('firewall Fix round trip (CI runner only, group wmux-ci)', () => {
@@ -107,7 +111,7 @@ describe.runIf(RUN)('firewall Fix round trip (CI runner only, group wmux-ci)', (
     expect(ids.base.startsWith('wmux-ci-a2a-')).toBe(true);
     expect(await verdict()).toBe('not-covered');
 
-    const run = await shellExecuteAndWait({ verb: 'runas', file: windowsPowerShellPath(), parameters: elevatedPowerShellParameters(fix(PORT)), hwnd: null });
+    const run = await shellExecuteAndWait({ verb: 'runas', file: powershell(), parameters: elevatedPowerShellParameters(fix(PORT)), hwnd: null });
     expect(elevationOutcome(run)).toEqual({ kind: 'ok' });
     expect(await verdict()).toBe('covered');
 
@@ -152,8 +156,8 @@ describe.runIf(RUN)('firewall Fix round trip (CI runner only, group wmux-ci)', (
     const ids = firewallRuleIds('a2a', exe, SCOPE);
     const run = await shellExecuteAndWait({
       verb: 'runas',
-      file: windowsPowerShellPath(),
-      parameters: elevatedPowerShellParameters(buildRemoveScript({ listener: 'a2a', exe, reportedExe: exe, scope: SCOPE, exists: (p) => fs.existsSync(p) })),
+      file: powershell(),
+      parameters: elevatedPowerShellParameters(buildRemoveScript({ listener: 'a2a', exe, reportedExe: exe, scope: SCOPE, facts: FACTS })),
       hwnd: null,
     });
     expect(elevationOutcome(run)).toEqual({ kind: 'ok' });

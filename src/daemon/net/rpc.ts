@@ -5,12 +5,15 @@
 // them for the Remote page, Settings › LAN and Share & pair; nothing here
 // changes the firewall. The elevated Fix runs in main.
 //
-//   net.inboundStatus  { listener }       → InboundStatus (the read-only probe)
+//   net.inboundStatus  { listener, fresh? } → InboundStatus (the read-only probe)
 //   net.listenProblem  { listener }       → ListenProblemReport | null
 //   net.firewallTarget { listener }       → what main needs to build the Fix
 //   net.firewallRecord { listener, op }   → record (set) or forget (clear) a confirmed rule
 //
-// Concurrent asks for the same listener share one probe.
+// Concurrent asks for the same listener share one probe while the listener's
+// facts (port, addresses) are what that probe was started with. `fresh` asks
+// for a probe that starts now: after a Fix, a probe that began before the
+// rules existed must not answer for them.
 
 import { isFirewallListener, type FirewallListener, type InboundStatus } from '../../shared/netFirewall';
 import { firewallRuleIds, type RuleScope } from '../../shared/netFirewallScripts';
@@ -21,7 +24,7 @@ import { diagnoseListenProblem, type ListenFailure, type ListenProblemDeps } fro
 
 export interface NetRpcDeps {
   /** The listener's facts right now. */
-  target: (listener: FirewallListener) => ProbeTarget & { tailnet: boolean };
+  target: (listener: FirewallListener) => ProbeTarget;
   /** The listener's last bind failure, or null when it did not fail to bind. */
   failure: (listener: FirewallListener) => ListenFailure | null;
   records: FirewallRecordStore;
@@ -42,6 +45,11 @@ export interface FirewallTarget {
   tailnet: boolean;
 }
 
+/** What a probe was started for: a probe for other facts never answers for these. */
+function targetKey(t: ProbeTarget): string {
+  return `${t.applicable}|${t.port ?? ''}|${t.ips.join(',')}|${t.tailnet}`;
+}
+
 function listenerOf(params: Record<string, unknown>, method: string): FirewallListener {
   const l = params['listener'];
   if (!isFirewallListener(l)) throw new Error(`${method}: listener must be one of a2a, web, lanlink`);
@@ -52,23 +60,30 @@ export function registerNetRpc(onRpc: (method: string, handler: (params: Record<
   const exe = deps.exe ?? process.execPath;
   const platform = deps.platform ?? process.platform;
   const now = deps.now ?? Date.now;
-  const inFlight = new Map<FirewallListener, Promise<InboundStatus>>();
+  const inFlight = new Map<FirewallListener, { key: string; probe: Promise<InboundStatus> }>();
 
   onRpc('net.inboundStatus', async (params) => {
     const listener = listenerOf(params, 'net.inboundStatus');
-    let pending = inFlight.get(listener);
-    if (!pending) {
-      pending = probeInbound(deps.target(listener), {
+    const target = deps.target(listener);
+    const key = targetKey(target);
+    const running = inFlight.get(listener);
+    if (running && running.key === key && params['fresh'] !== true) return running.probe;
+    const entry = {
+      key,
+      probe: probeInbound(target, {
         ...deps.probe,
         platform,
         exe,
         now,
         scope: deps.scope,
         record: (l) => deps.records.get(l),
-      }).finally(() => inFlight.delete(listener));
-      inFlight.set(listener, pending);
-    }
-    return pending;
+      }).finally(() => {
+        // A later probe may have taken the slot; leave it.
+        if (inFlight.get(listener) === entry) inFlight.delete(listener);
+      }),
+    };
+    inFlight.set(listener, entry);
+    return entry.probe;
   });
 
   onRpc('net.listenProblem', async (params): Promise<ListenProblemReport | null> => {

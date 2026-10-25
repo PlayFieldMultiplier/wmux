@@ -3920,11 +3920,9 @@ function registerRpcHandlers(
     await afterRestore();
     return webStatus();
   });
-  // Operator-initiated pairing-code refresh — the escape hatch when a code has
-  // been used or has expired and another device still needs to pair.
   // Firewall and port diagnosis for the three listeners another PC reaches
   // (src/daemon/net/rpc.ts). Read-only: the elevated Fix runs in main.
-  const netTarget = (listener: FirewallListener): ProbeTarget & { tailnet: boolean } => {
+  const netTarget = (listener: FirewallListener): ProbeTarget => {
     if (listener === 'a2a') {
       const f = a2aServerRef?.firewallFacts();
       return {
@@ -3966,6 +3964,8 @@ function registerRpcHandlers(
     scope: { dataSuffix: dataSuffix(), user: currentRuleUser(), group: FIREWALL_GROUP },
   });
 
+  // Operator-initiated pairing-code refresh — the escape hatch when a code has
+  // been used or has expired and another device still needs to pair.
   pipeServer.onRpc('daemon.web.pairRefresh', async () => {
     await afterRestore();
     return webServer.refreshPairCode();

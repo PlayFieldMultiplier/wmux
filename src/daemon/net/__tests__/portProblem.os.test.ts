@@ -59,6 +59,26 @@ describe('diagnoseListenProblem (fake tools)', () => {
     const r = await diagnoseListenProblem({ code: 'EADDRINUSE', port: 45660, address: null }, { platform: 'win32', exec: async () => { throw new Error('timed out'); }, isFree: async () => true });
     expect(r).toEqual({ problem: { kind: 'port-in-use', port: 45660 }, holder: null, suggestion: 45661 });
   });
+
+  it('an EACCES whose reserved ranges could not be read is "denied", not guessed to be in use', async () => {
+    const calls: string[] = [];
+    const exec: LookupExec = async (file, args) => {
+      calls.push(`${file.split('\\').pop()} ${args.join(' ')}`);
+      throw new Error('timed out');
+    };
+    const r = await diagnoseListenProblem({ code: 'EACCES', port: 50000, address: null }, { platform: 'win32', exec, isFree: async () => true });
+    expect(r).toEqual({ problem: { kind: 'port-denied', port: 50000 }, holder: null, suggestion: 50001 });
+    expect(calls.some((c) => /netstat/i.test(c))).toBe(false);
+  });
+
+  it('a holder with this daemon\'s PID is one of its own listeners, whatever its image', async () => {
+    const netstat = '  TCP    0.0.0.0:45660    0.0.0.0:0    LISTENING    77\r\n';
+    const r = await diagnoseListenProblem(
+      { code: 'EADDRINUSE', port: 45660, address: null },
+      { platform: 'win32', exec: fakeExec(netstat, '"wmux.exe","77","Console","1","1 K"'), isFree: async () => true, selfImage: 'wmux.exe', selfPid: 77 },
+    );
+    expect(r.holder).toEqual({ kind: 'self', pid: 77 });
+  });
 });
 
 describe('a real port in use (loopback, owned by this test)', () => {
@@ -83,7 +103,8 @@ describe('a real port in use (loopback, owned by this test)', () => {
     const r = await diagnoseListenProblem({ code: 'EADDRINUSE', port, address: null }, { selfImage: 'wmux.exe' });
     expect(r.problem).toEqual({ kind: 'port-in-use', port });
     if (process.platform === 'win32') {
-      expect(r.holder).toMatchObject({ pid: process.pid });
+      // The holder is this process: one of this wmux's own listeners, not "another copy".
+      expect(r.holder).toEqual({ kind: 'self', pid: process.pid });
     }
     expect(r.suggestion === null || r.suggestion > port).toBe(true);
   }, 30_000);

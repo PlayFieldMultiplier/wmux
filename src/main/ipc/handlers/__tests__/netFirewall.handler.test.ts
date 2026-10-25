@@ -55,10 +55,18 @@ describe('netFirewall IPC', () => {
     }
   });
 
-  it('status passes through to the daemon probe', async () => {
-    const s = (await handler(IPC.NET_FIREWALL_STATUS)(fromElsewhere, 'a2a')) as { elevation: string };
+  it('status passes through to the daemon probe; fresh asks for a probe that starts now', async () => {
+    const s = (await handler(IPC.NET_FIREWALL_STATUS)(fromMain, 'a2a')) as { elevation: string };
     expect(rpc).toHaveBeenCalledWith('net.inboundStatus', { listener: 'a2a' }, { timeoutMs: 12_000 });
     expect(s.elevation).toBe('consent');
+    await handler(IPC.NET_FIREWALL_STATUS)(fromMain, 'a2a', true);
+    expect(rpc).toHaveBeenLastCalledWith('net.inboundStatus', { listener: 'a2a', fresh: true }, { timeoutMs: 12_000 });
+  });
+
+  it('status and the listen problem answer only the main window\'s top frame', async () => {
+    await expect(handler(IPC.NET_FIREWALL_STATUS)(fromElsewhere, 'a2a')).rejects.toThrow(/main window/);
+    await expect(handler(IPC.NET_LISTEN_PROBLEM)(fromElsewhere, 'a2a')).rejects.toThrow(/main window/);
+    expect(rpc).not.toHaveBeenCalled();
   });
 
   it('an unknown listener never reaches the daemon', async () => {

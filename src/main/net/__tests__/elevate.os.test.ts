@@ -23,8 +23,16 @@ describe.runIf(process.platform === 'win32')('shellExecuteAndWait (open verb, no
     expect(r.lastError).toBe(2); // ERROR_FILE_NOT_FOUND
   }, 30_000);
 
-  it('refuses a relative program path', async () => {
+  it('a child that outlives the wait is reported as still running, and settles when it exits', async () => {
+    const r = await shellExecuteAndWait({ verb: 'open', file: path.win32.join(system32, 'cmd.exe'), parameters: '/d /c ping -n 3 127.0.0.1 >nul & exit 7', hwnd: null, waitMs: 100 });
+    expect(r).toMatchObject({ started: true, lastError: null, exitCode: null });
+    expect(r.stillRunning).toBeInstanceOf(Promise);
+    await r.stillRunning;
+  }, 30_000);
+
+  it('refuses a relative program path or a share', async () => {
     await expect(shellExecuteAndWait({ verb: 'open', file: 'cmd.exe', parameters: '', hwnd: null })).rejects.toThrow(/absolute/);
+    await expect(shellExecuteAndWait({ verb: 'open', file: '\\\\server\\share\\cmd.exe', parameters: '', hwnd: null })).rejects.toThrow(/absolute/);
   });
 
   it('reads the token elevation type (1, 2 or 3)', () => {

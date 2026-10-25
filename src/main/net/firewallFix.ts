@@ -3,17 +3,22 @@
 // The renderer asks; main decides and runs. Main keeps the last probe each
 // listener showed the person, and a Fix runs only for what that probe said:
 // a fixable verdict, no refusal, and the same program and port the daemon
-// reports at click time (read again here). Then:
+// reports at click time (read again here). That program must also be main's
+// own: the packaged daemon runs wmux.exe itself, and an answer naming any
+// other wmux.exe (a stale daemon, or something else on the pipe) is refused.
+// Then:
 //
 //   build the script (netFirewallScripts.ts, every input validated)
 //   → one elevation (Windows consent prompt / macOS admin sheet)
-//   → re-probe, whatever the outcome: the fresh probe, not the exit code,
-//     is what the UI says about the rule
+//   → re-probe, whatever the outcome, with a probe that starts now (never
+//     one begun before the rules existed): the fresh probe, not the exit
+//     code, is what the UI says about the rule
 //   → record a rule the re-probe confirmed (firewall-rules.json), or forget
 //     one a Remove took away.
 //
 // One elevation at a time across all listeners; a second click while one
-// runs is refused as busy.
+// runs is refused as busy. An elevated child that outlives the wait keeps
+// that slot until it exits.
 
 import {
   elevationKind,
@@ -31,6 +36,7 @@ import {
   buildMacFixAppleScript,
   buildRemoveScript,
   firewallRuleIds,
+  type PathFacts,
   type RuleScope,
 } from '../../shared/netFirewallScripts';
 import type { ListenProblemReport } from '../../shared/netListen';
@@ -56,8 +62,12 @@ export interface FirewallFixDeps {
   elevateWindows: (script: string) => Promise<ShellRunResult>;
   /** macOS: run the AppleScript `with administrator privileges` (verify on Mac). */
   elevateMac: (appleScript: string) => Promise<ElevationOutcome>;
-  exists: (p: string) => boolean;
-  scope: RuleScope;
+  facts: PathFacts;
+  /** Read per action, not once: the data suffix is set after this module loads. */
+  scope: () => RuleScope;
+  /** Main's own program (process.execPath): the only one a rule may name. */
+  selfExe: string;
+  platform?: NodeJS.Platform;
   /** TOKEN_ELEVATION_TYPE and whether wmux itself runs elevated, for the hint's wording. */
   tokenType: () => number | null;
   selfElevated: () => boolean | null;
@@ -71,12 +81,19 @@ function isStatus(v: unknown): v is InboundStatus {
 export class FirewallFixer {
   private readonly seen = new Map<FirewallListener, InboundStatus>();
   private busy = false;
+  /** The elevated child of the action in progress, when it outlived the wait. */
+  private stillRunning: Promise<void> | null = null;
 
   constructor(private readonly deps: FirewallFixDeps) {}
 
-  /** Run the read-only probe and remember what it showed. */
-  async status(listener: FirewallListener): Promise<InboundStatusView> {
-    const raw = await this.deps.rpc('net.inboundStatus', { listener }, { timeoutMs: INBOUND_STATUS_RPC_TIMEOUT_MS });
+  /**
+   * Run the read-only probe and remember what it showed. `fresh`: a probe
+   * that starts now, never one already running (Check firewall, a re-check,
+   * the re-probe after an action).
+   */
+  async status(listener: FirewallListener, opts: { fresh?: boolean } = {}): Promise<InboundStatusView> {
+    const params: Record<string, unknown> = opts.fresh ? { listener, fresh: true } : { listener };
+    const raw = await this.deps.rpc('net.inboundStatus', params, { timeoutMs: INBOUND_STATUS_RPC_TIMEOUT_MS });
     if (!isStatus(raw)) throw new Error('net.inboundStatus: malformed daemon response');
     this.seen.set(listener, raw);
     return { ...raw, elevation: elevationKind(this.deps.tokenType(), this.deps.selfElevated()) };
@@ -97,11 +114,21 @@ export class FirewallFixer {
   private async once(listener: FirewallListener, action: 'fix' | 'remove'): Promise<FirewallActionResult> {
     if (this.busy) return { outcome: { kind: 'refused', refusal: 'busy' }, status: null };
     this.busy = true;
+    this.stillRunning = null;
     try {
       return await this.run(listener, action);
     } finally {
-      this.busy = false;
+      // Set by run(); TypeScript still narrows it to the null assigned above.
+      const running = this.stillRunning as Promise<void> | null;
+      if (running) void running.then(() => { this.busy = false; });
+      else this.busy = false;
     }
+  }
+
+  /** Main's program and the daemon's are the same file (case-insensitive on Windows). */
+  private isSelf(exe: string): boolean {
+    const win = (this.deps.platform ?? process.platform) === 'win32';
+    return win ? exe.toLowerCase() === this.deps.selfExe.toLowerCase() : exe === this.deps.selfExe;
   }
 
   private async run(listener: FirewallListener, action: 'fix' | 'remove'): Promise<FirewallActionResult> {
@@ -117,6 +144,7 @@ export class FirewallFixer {
 
     const target = (await this.deps.rpc('net.firewallTarget', { listener })) as FirewallTarget;
     if (!target || !target.applicable || target.port !== shown.port || target.exe !== shown.exe) return refused('changed');
+    if (!this.isSelf(target.exe)) return refused('changed');
 
     let outcome: ElevationOutcome;
     if (shown.platform === 'darwin') {
@@ -131,19 +159,22 @@ export class FirewallFixer {
       outcome = await this.deps.elevateMac(script);
     } else if (shown.platform === 'win32') {
       // The rule IDs the person saw must be the ones this script writes.
-      const ids = firewallRuleIds(listener, target.exe, this.deps.scope);
+      const scope = this.deps.scope();
+      const ids = firewallRuleIds(listener, target.exe, scope);
       if (shown.ruleIds?.allow !== ids.allow || shown.ruleIds?.pubblock !== ids.pubblock) return refused('changed');
       let script: string;
       try {
         script =
           action === 'fix'
-            ? buildFixScript({ listener, port: target.port, exe: shown.exe, reportedExe: target.exe, tailnet: target.tailnet, scope: this.deps.scope, exists: this.deps.exists })
-            : buildRemoveScript({ listener, exe: shown.exe, reportedExe: target.exe, scope: this.deps.scope, exists: this.deps.exists });
+            ? buildFixScript({ listener, port: target.port, exe: shown.exe, reportedExe: target.exe, tailnet: target.tailnet, scope, facts: this.deps.facts })
+            : buildRemoveScript({ listener, exe: shown.exe, reportedExe: target.exe, scope, facts: this.deps.facts });
       } catch (err) {
         if (err instanceof FirewallInputError) return refused(err.reason === 'bad-input' ? 'changed' : err.reason);
         throw err;
       }
-      outcome = elevationOutcome(await this.deps.elevateWindows(script));
+      const ran = await this.deps.elevateWindows(script);
+      this.stillRunning = ran.stillRunning ?? null;
+      outcome = elevationOutcome(ran);
     } else {
       return refused('unsupported-platform');
     }
@@ -152,7 +183,7 @@ export class FirewallFixer {
     // Whatever happened, the probe says what is true now.
     let status: InboundStatus | null = null;
     try {
-      status = await this.status(listener);
+      status = await this.status(listener, { fresh: true });
     } catch (err) {
       this.deps.log?.(`[net] re-probe after ${action} failed: ${err instanceof Error ? err.message : String(err)}`);
     }
