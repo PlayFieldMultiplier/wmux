@@ -968,3 +968,44 @@ describe('merges from before the start (review)', () => {
     expect(notices).toEqual([]);
   });
 });
+
+describe('native tool requests (a Hermes bot asks mid-turn)', () => {
+  const ask = { title: 'delete in root path: rm -rf /tmp/x', command: 'rm -rf /tmp/x' };
+
+  it('Approve on the card answers the turn true; the request never reaches approvals.json or the bot\'s list', async () => {
+    const r = rig();
+    const answer = r.svc.askNativeTool(binding(DEV), ask, { timeoutMs: 60_000 });
+    const req = r.svc.listForOperator(WS).find((x) => x.action === 'native_tool');
+    expect(req).toMatchObject({ state: 'pending', nativeTool: { command: 'rm -rf /tmp/x' } });
+    expect(r.writer.get(WS, req?.cardId as string)?.body).toContain('rm -rf /tmp/x');
+    // A typed "ok" approves nothing: the card is the only place.
+    r.ownerSays('ok');
+    expect(r.svc.get(req?.requestId as string)?.state).toBe('pending');
+    expect(r.svc.decide({ requestId: req?.requestId, decision: 'approve' }, 'desktop')).toMatchObject({ ok: true });
+    await expect(answer).resolves.toBe(true);
+    const onDisk = JSON.parse(fs.readFileSync(r.ports.file, 'utf8')) as { requests: Array<{ action: string }> };
+    expect(onDisk.requests.some((x) => x.action === 'native_tool')).toBe(false);
+    const own = r.svc.listFor(binding(DEV), {});
+    expect(own.ok && own.requests.some((x) => x.action === 'native_tool')).toBe(false);
+  });
+
+  it('Deny, a second request while one waits, the deadline and an abort all answer false', async () => {
+    const r = rig();
+    const first = r.svc.askNativeTool(binding(DEV), ask, { timeoutMs: 60_000 });
+    await expect(r.svc.askNativeTool(binding(DEV), ask, { timeoutMs: 60_000 })).resolves.toBe(false);
+    const id = r.svc.listForOperator(WS).find((x) => x.action === 'native_tool' && x.state === 'pending')?.requestId;
+    expect(r.svc.decide({ requestId: id, decision: 'deny' }, 'desktop')).toMatchObject({ ok: true });
+    await expect(first).resolves.toBe(false);
+
+    const lapsed = r.svc.askNativeTool(binding(DEV), ask, { timeoutMs: 20 });
+    await expect(lapsed).resolves.toBe(false);
+    const expired = r.svc.listForOperator(WS).filter((x) => x.action === 'native_tool').map((x) => x.state);
+    expect(expired).toContain('expired');
+
+    const ac = new AbortController();
+    const aborted = r.svc.askNativeTool(binding(DEV), ask, { timeoutMs: 60_000, signal: ac.signal });
+    ac.abort();
+    await expect(aborted).resolves.toBe(false);
+    expect(r.svc.listForOperator(WS).some((x) => x.action === 'native_tool' && x.state === 'pending')).toBe(false);
+  });
+});
