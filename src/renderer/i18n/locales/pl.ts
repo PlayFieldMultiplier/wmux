@@ -3935,6 +3935,7 @@ export const pl = {
   'onboarding.step1.description': 'Gdy agent czeka na Ciebie, pasek boczny od razu to pokazuje. Otwórz Flotę, aby zobaczyć wszystkich agentów naraz, najpierw tych, którzy na Ciebie czekają.',
   'onboarding.step2.title': 'Rozdziel pracę równolegle',
   'onboarding.step2.description': 'Przekaż jeden prompt kilku agentom. Każde zadanie działa we własnym drzewie roboczym git na gałęzi wtask/ i jest widoczne pod obszarem roboczym, który je uruchomił.',
+  'onboarding.step2.rewindNote': 'Gdy Claude coś zepsuje, przycisk Cofnij na tym pasku przywróci kod lub rozmowę do wcześniejszej tury.',
   'onboarding.step3.title': 'Przeglądarka Twoich agentów',
   'onboarding.step3.description': 'Agenci mogą otwierać strony internetowe i na nich pracować. Ty wybierasz, z której przeglądarki korzystają.',
   'onboarding.step3.builtin': 'Wbudowana (domyślna)',
@@ -4075,6 +4076,7 @@ export const pl = {
   // Agent toolbar
   'toolbar.fileExplorer': 'Pliki',
   'toolbar.schedule': 'Harmonogram',
+  'toolbar.rewind': 'Cofnij',
   'toolbar.scheduleTooltip': 'Zarządzaj zaplanowanymi poleceniami dla tej sesji',
   'sessionSchedule.title': 'Harmonogramy sesji',
   'sessionSchedule.hint': 'wmux zaczeka na cichego, gotowego agenta, a następnie bezpiecznie wklei i wyśle polecenie. Dostarczanie wymaga trybu demona; oczekujące polecenia przetrwają restart aplikacji.',
