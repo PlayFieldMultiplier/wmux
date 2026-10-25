@@ -14,6 +14,9 @@ export const HERMES_VERSION_MIN = '0.22.5';
 /** The first Hermes release wmux has not been tested against. */
 export const HERMES_VERSION_BELOW = '0.23.0';
 
+/** What adds Hermes's MCP support to an install that lacks it. */
+export const HERMES_MCP_FIX_COMMAND = 'hermes pm install --extra mcp';
+
 export type HermesNotReadyReason =
   | 'not-installed'
   /** Older than HERMES_VERSION_MIN: the owner updates Hermes. */
@@ -22,6 +25,9 @@ export type HermesNotReadyReason =
   | 'unsupported'
   /** wmux's Hermes home has no model yet: the owner runs the setup once. */
   | 'not-set-up'
+  /** Hermes cannot load MCP servers (its `mcp` extra is missing), so a bot
+   *  would run without the wmux tools: `hermes pm install --extra mcp`. */
+  | 'mcp-missing'
   /** A setting wmux writes does not read back as written. */
   | 'config-mismatch'
   | 'unknown';
