@@ -987,6 +987,8 @@ describe('native tool requests (a Hermes bot asks mid-turn)', () => {
     expect(onDisk.requests.some((x) => x.action === 'native_tool')).toBe(false);
     const own = r.svc.listFor(binding(DEV), {});
     expect(own.ok && own.requests.some((x) => x.action === 'native_tool')).toBe(false);
+    // Answered: nothing of it stays in memory either.
+    expect(r.svc.get(req?.requestId as string)).toBeFalsy();
   });
 
   it('Deny, a second request while one waits, the deadline and an abort all answer false', async () => {

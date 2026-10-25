@@ -1414,8 +1414,11 @@ export class BotRuntime {
     const subscriptionRefused = limitNotice === null && (outcome === 'failed' || outcome === 'engine')
       && profile.engine.kind === 'claude-sdk' && botClaudeAuthMode(this.deps.settings()) === 'subscription'
       && isSubscriptionRefusal(message);
-    // Neither does a missing API key.
-    const noRetry = subscriptionRefused || classifyEngineError(message) === 'api_key_missing';
+    // Neither does a missing API key, nor a Hermes that is not ready or
+    // offered a tool outside the allowed set (the owner fixes Hermes first).
+    const noRetryCode = classifyEngineError(message);
+    const noRetry = subscriptionRefused || noRetryCode === 'api_key_missing'
+      || noRetryCode === 'hermes_not_ready' || noRetryCode === 'hermes_mcp_missing' || noRetryCode === 'hermes_tools_changed';
     const retryIn = outcome === 'failed' && limitNotice === null && !noRetry ? this.transientRetryDelay(item.id, message) : null;
     const finalAttempt = outcome !== 'failed' || noRetry || item.attempts >= WAKE_LIMITS.MAX_ATTEMPTS;
     // Spent network retries stay counted until the wake ends, so the

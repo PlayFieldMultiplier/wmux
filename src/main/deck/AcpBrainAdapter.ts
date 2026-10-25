@@ -657,7 +657,10 @@ export class AcpBrainAdapter implements BrainAdapter {
     const hermes = this.deps.hermes;
     if (!hermes || !this.deps.mcpBundlePath) return null;
     const refused = hermes.sessionStarted();
-    if (refused) return refused;
+    if (refused) {
+      this._sessionAttached = false;
+      return refused;
+    }
     if (await hermes.mcpReady(this._commanderToken, since)) return null;
     this._sessionAttached = false;
     return `${HERMES_MCP_MISSING_LEAD} its session started, but the wmux tools never connected (if Hermes was installed without its MCP support, run \`hermes pm install --extra mcp\`)`;
@@ -796,8 +799,12 @@ export class AcpBrainAdapter implements BrainAdapter {
           // burning model budget as a zombie — the next turn respawns
           // cleanly (GLM review).
           if (/timed out/i.test(message)) {
-            if (this.deps.hermes) await this.cancelAndSettle();
-            else {
+            if (this.deps.hermes) {
+              // The timed-out request can no longer show the turn settling:
+              // cancel it, then stop the gateway that may still run it.
+              await this.cancelAndSettle();
+              await this.deps.hermes.unsettled().catch(() => undefined);
+            } else {
               this.interrupt();
               this.killChildTree();
             }
@@ -893,6 +900,12 @@ export class AcpBrainAdapter implements BrainAdapter {
     if (settled) return;
     console.warn(`[acp-brain:${this.deps.spawnSpec.command}] a cancelled turn did not settle in ${HERMES_SETTLE_MS} ms; stopping its gateway`);
     this.killChildTree();
+    // The detached child's exit no longer fails its requests: end the turn now.
+    for (const [, entry] of this.pending) {
+      clearTimeout(entry.timer);
+      entry.resolve({ error: { message: 'the cancelled turn did not settle' } });
+    }
+    this.pending.clear();
     try {
       await this.deps.hermes?.unsettled();
     } catch {
@@ -929,6 +942,12 @@ export class AcpBrainAdapter implements BrainAdapter {
     }
     this.pending.clear();
     this.killChildTree();
+  }
+
+  /** Whether the agent process is running (a Hermes viewer attached to its
+   *  gateway). */
+  agentLive(): boolean {
+    return !!this.child && this.child.exitCode === null && !this.child.killed;
   }
 
   /** Hermes: dispose and wait until the turn settled and the agent is gone

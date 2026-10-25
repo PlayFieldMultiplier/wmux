@@ -99,7 +99,8 @@ describe('BotToday', () => {
 
   it('a bot stopped as Hermes was not ready: Fix asks Hermes again and resumes only once it is ready', async () => {
     let answer: unknown = { ready: false, reason: 'outdated', version: '0.21.0' };
-    vi.stubGlobal('electronAPI', { factory: { factoryHermesReadiness: vi.fn(async () => answer) } });
+    const readiness = vi.fn(async (_opts?: { fresh?: boolean }) => answer);
+    vi.stubGlobal('electronAPI', { factory: { factoryHermesReadiness: readiness } });
     act(() => useStore.setState({ toasts: [] } as never));
     const actFn = vi.fn(async () => ({ ok: true }));
     const r = row({ parked: { reason: 'error', at: 1 } }, { presence: 'parked', lastError: { message: 'hermes: not ready', at: 1, code: 'hermes_not_ready' } });
@@ -111,6 +112,8 @@ describe('BotToday', () => {
     answer = { ready: true, version: '0.22.6' };
     await fix();
     expect(actFn).toHaveBeenCalledWith('resume', 'bot-0000000a');
+    // Asked afresh, never main's cached answer from before the fix.
+    expect(readiness.mock.calls.every(([opts]) => opts?.fresh === true)).toBe(true);
   });
 
   it('no blocker line when nothing stops the bot', () => {

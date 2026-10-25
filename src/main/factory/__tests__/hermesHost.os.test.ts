@@ -67,6 +67,13 @@ describe('HermesHost gateway', () => {
     h.markOwned();
     await h.ensureOwnGateway();
     expect(stops()).toBe(2);
+
+    // A bot's agent attached: its gateway is in use and kept.
+    const other = host();
+    other.register({ agentLive: () => true } as never);
+    writeGateway(104);
+    await other.ensureOwnGateway();
+    expect(stops()).toBe(2);
   });
 
   it('on quit stops only a gateway it started, signalling it when Hermes\'s stop does not', async () => {

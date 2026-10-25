@@ -4,7 +4,7 @@ import { describe, it, expect, vi } from 'vitest';
 
 vi.mock('electron', () => ({ app: { isPackaged: false, getAppPath: () => process.cwd(), getPath: () => '/tmp' }, dialog: {}, ipcMain: { handle: vi.fn(), removeHandler: vi.fn() }, nativeImage: {} }));
 
-import { factoryBotSetEngineHandler, factoryHermesSetupHandler } from '../factory.handler';
+import { factoryBotSetEngineHandler, factoryHermesReadinessHandler, factoryHermesSetupHandler } from '../factory.handler';
 import { HERMES_BOT_ENGINE, type BotEngine, type BotProfile } from '../../../../shared/bot';
 
 const BOT = 'bot-0000000a';
@@ -52,5 +52,16 @@ describe('factoryHermesSetupHandler', () => {
     line = 'x';
     openTab.mockResolvedValueOnce(null as never);
     await expect(handler(main)).rejects.toThrow(/could not open a terminal/);
+  });
+});
+
+describe('factoryHermesReadinessHandler', () => {
+  it('answers the main window only, afresh when asked', async () => {
+    const readiness = vi.fn(async (fresh?: boolean) => ({ ready: true, version: fresh ? 'fresh' : 'cached' }));
+    const handler = factoryHermesReadinessHandler(() => win as never, () => ({ readiness }) as never);
+    expect(await handler(other)).toMatchObject({ ready: false, reason: 'unknown' });
+    expect(await handler(main)).toMatchObject({ version: 'cached' });
+    expect(await handler(main, { fresh: true })).toMatchObject({ version: 'fresh' });
+    expect(readiness).toHaveBeenCalledTimes(2);
   });
 });

@@ -285,14 +285,15 @@ function defaultEngineLoginDeps(getWindow: () => BrowserWindow | null): Omit<Eng
 }
 
 /** FACTORY_HERMES_READINESS: main window only (any other sender reads as
- *  unknown, never as ready). */
+ *  unknown, never as ready). `{ fresh: true }`: checked again, not cached. */
 export function factoryHermesReadinessHandler(
   getWindow: () => BrowserWindow | null,
   host: () => Pick<HermesHost, 'readiness'> = getHermesHost,
-): (e: { sender?: unknown; senderFrame?: unknown }) => Promise<HermesReadiness> {
-  return async (e) => {
+): (e: { sender?: unknown; senderFrame?: unknown }, req?: unknown) => Promise<HermesReadiness> {
+  return async (e, req) => {
     if (!isMainWindowSender(e, getWindow())) return { ready: false, reason: 'unknown', message: 'only the main window may ask' };
-    return host().readiness();
+    const fresh = !!req && typeof req === 'object' && (req as { fresh?: unknown }).fresh === true;
+    return host().readiness(fresh);
   };
 }
 

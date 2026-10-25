@@ -1427,8 +1427,9 @@ const electronAPI = {
     // factoryEngineReadiness to see it land.
     factoryEngineLogin: (req?: { botId: string }) => ipcRenderer.invoke(IPC.FACTORY_ENGINE_LOGIN, req) as Promise<void>,
     // Can the Hermes bot engine run here? Checked without a model turn.
-    factoryHermesReadiness: () =>
-      ipcRenderer.invoke(IPC.FACTORY_HERMES_READINESS) as Promise<import('../shared/hermesEngine').HermesReadiness>,
+    // `fresh`: never the answer main cached for the polling (an owner's Check again).
+    factoryHermesReadiness: (opts?: { fresh?: boolean }) =>
+      ipcRenderer.invoke(IPC.FACTORY_HERMES_READINESS, opts) as Promise<import('../shared/hermesEngine').HermesReadiness>,
     // Start Hermes's own model setup for wmux's Hermes home in a terminal tab
     // of the active workspace; rejects when no tab could be opened. Poll
     // factoryHermesReadiness to see it land.

@@ -17,6 +17,7 @@ import { HOUR_MS } from '../budget';
 import { __resetConversationMarksForTesting, conversationMarks, conversationSignedIn, markConversation } from '../conversationMarks';
 import { expectWakeTaint } from '../wakeTaint';
 import { USAGE_LIMIT_RESUME_GRACE_MS, USAGE_LIMIT_UNKNOWN_HOLD_MS, parseUsageLimitReset } from '../../../shared/usageLimit';
+import { HERMES_TOOLS_CHANGED_LEAD } from '../engineError';
 
 /** A scripted engine session: each send waits for the test to end the turn. */
 class FakeAdapter implements BrainAdapter {
@@ -851,6 +852,19 @@ describe('BotRuntime', () => {
     expect(r.store.get(id)?.parked?.reason).toBe('error');
     expect(r.runtime.status(id)?.lastError?.message).toMatch(/claude-pty/);
     expect(hooks.filter((h) => h.type === 'bot.error')).toHaveLength(1);
+  });
+
+  it('a Hermes turn that offered a tool outside the allowed set parks at once (no rerun of the turn)', async () => {
+    const r = rig();
+    const id = createBot(r);
+    const item = must(r.runtime.wake(id));
+    await settle();
+    r.adapters[0].end([{ type: 'error', message: `${HERMES_TOOLS_CHANGED_LEAD} terminal` }]);
+    await settle(10);
+    expect(r.queue.get(item.id)?.attempts).toBe(1);
+    expect(r.adapters).toHaveLength(1);
+    expect(r.store.get(id)?.parked?.reason).toBe('error');
+    expect(r.runtime.status(id)?.lastError?.code).toBe('hermes_tools_changed');
   });
 
   it('interrupt ends the turn as interrupted, never replayed', async () => {

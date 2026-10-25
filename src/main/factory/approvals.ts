@@ -1198,6 +1198,9 @@ export class ApprovalService {
       this.tellDecided(next, 'The owner approved the change to their profile.', 'Every bot\'s next session starts with it.');
     } else if (next.action === 'native_tool') {
       this.answerNativeTool(next, true);
+      // Nothing is left to do or undo: the card keeps the answer.
+      this.requests.delete(next.requestId);
+      this.changed(next.workspaceId);
     } else if (next.action !== 'merge') {
       this.tellDecided(next, `The owner approved: ${ACTION_TITLE[next.action]} ${subject(next)}.`, 'wmux records it but does not carry this act out yet.');
     }

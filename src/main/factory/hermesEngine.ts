@@ -121,9 +121,13 @@ export function hermesSettingsMismatches(values: ReadonlyMap<string, unknown>): 
 
 // ── the environment every Hermes process gets ──────────────────────────────
 
+// Upper case: Windows names are matched ignoring case (its PATH is `Path`).
 const ENV_ALLOW = new Set(['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'LANG', 'TZ',
-  'SystemRoot', 'SYSTEMROOT', 'windir', 'ComSpec', 'PATHEXT', 'LOCALAPPDATA', 'APPDATA', 'USERPROFILE',
-  'HOMEDRIVE', 'HOMEPATH', 'TEMP', 'TMP', 'ProgramData', 'ProgramFiles', 'ProgramFiles(x86)', 'SystemDrive']);
+  'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT', 'LOCALAPPDATA', 'APPDATA', 'USERPROFILE',
+  'HOMEDRIVE', 'HOMEPATH', 'TEMP', 'TMP', 'PROGRAMDATA', 'PROGRAMFILES', 'PROGRAMFILES(X86)', 'SYSTEMDRIVE',
+  // A managed network's proxy and CA bundle, which Hermes's HTTP clients read.
+  'HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY', 'NO_PROXY', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'REQUESTS_CA_BUNDLE', 'CURL_CA_BUNDLE']);
+const PROXY_LOWER = new Set(['https_proxy', 'http_proxy', 'all_proxy', 'no_proxy']);
 
 /** The environment of a Hermes process wmux starts: an allowlist of `base`
  *  (no API keys, tokens or wmux pane identity reach Hermes; its credentials
@@ -132,7 +136,8 @@ const ENV_ALLOW = new Set(['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR',
 export function hermesEnv(root: string, base: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform, home: string = os.homedir()): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(base)) {
-    if (typeof v === 'string' && (ENV_ALLOW.has(k) || k.startsWith('LC_'))) out[k] = v;
+    const allowed = ENV_ALLOW.has(platform === 'win32' ? k.toUpperCase() : k) || PROXY_LOWER.has(k) || k.startsWith('LC_');
+    if (typeof v === 'string' && allowed) out[k] = v;
   }
   const sep = platform === 'win32' ? ';' : ':';
   const extra = hermesInstallDirs(base, platform, home);

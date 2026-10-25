@@ -15,8 +15,9 @@ import { HERMES_MCP_FIX_COMMAND, HERMES_VERSION_MIN, type HermesNotReadyReason, 
 export type PickableEngine = 'claude-sdk' | 'hermes';
 
 export interface HermesPort {
-  /** Absent: this build cannot tell (the readiness row is not drawn). */
-  readiness?: () => Promise<HermesReadiness>;
+  /** Absent: this build cannot tell (the readiness row is not drawn).
+   *  `fresh`: checked again in main, not its cached answer. */
+  readiness?: (opts?: { fresh?: boolean }) => Promise<HermesReadiness>;
   /** Absent: no setup here. Opens Hermes's own model setup for wmux's Hermes
    *  home in a terminal tab; rejects with a plain message when none opens. */
   setup?: () => Promise<void>;
@@ -25,7 +26,7 @@ export interface HermesPort {
 }
 
 interface HermesBridge {
-  factoryHermesReadiness?: () => Promise<unknown>;
+  factoryHermesReadiness?: (opts?: { fresh?: boolean }) => Promise<unknown>;
   factoryHermesSetup?: () => Promise<void>;
   setBotEngine?: (botId: string, engine: PickableEngine) => Promise<{ ok: boolean; code?: string; message?: string }>;
 }
@@ -56,7 +57,7 @@ export function bridgeHermesPort(): HermesPort {
   const setup = f.factoryHermesSetup;
   const setEngine = f.setBotEngine;
   return {
-    ...(readiness ? { readiness: async () => readHermesReadiness(await readiness()) } : {}),
+    ...(readiness ? { readiness: async (opts?: { fresh?: boolean }) => readHermesReadiness(await readiness(opts)) } : {}),
     ...(setup ? { setup: () => setup() } : {}),
     ...(setEngine ? { setEngine: (botId: string, engine: PickableEngine) => setEngine(botId, engine) } : {}),
   };
@@ -114,7 +115,8 @@ export function useHermesReadiness(ask: HermesPort['readiness'], active: boolean
     if (!ask) return;
     const mine = ++seq.current;
     if (shown) setChecking(true);
-    ask().then(
+    // The owner's Check again is answered afresh; the polling may be cached.
+    ask(shown ? { fresh: true } : undefined).then(
       (r) => { if (mine === seq.current) setReadiness(r); },
       () => { if (mine === seq.current) setReadiness({ ready: false, reason: 'unknown' }); },
     ).finally(() => { if (mine === seq.current) setChecking(false); });

@@ -407,6 +407,9 @@ function hermesAgent(script: {
         case 'session/new':
           c.emitLine({ jsonrpc: '2.0', id, result: { sessionId: 'h-1' } });
           return;
+        case 'session/load':
+          c.emitLine({ jsonrpc: '2.0', id, result: {} });
+          return;
         case 'session/cancel':
           if (held !== null) c.emitLine({ jsonrpc: '2.0', id: held, result: { stopReason: 'cancelled' } });
           held = null;
@@ -563,6 +566,20 @@ describe('AcpBrainAdapter (Hermes preset)', () => {
     expect((e1.at(-1) as { message: string }).message.startsWith(HERMES_MCP_MISSING_LEAD)).toBe(true);
     expect(agent.prompts()).toBe(0);
     a1.dispose();
+
+    // A refused session is checked again on the next turn, not reused.
+    const refusals = ['its gateway runs messaging platforms', null];
+    const sessionStarted = vi.fn(() => refusals.shift() ?? null);
+    const a3 = new AcpBrainAdapter({
+      spawnSpec: SPEC, newSessionSettleMs: 0, workspaceId: 'ws-1', mcpBundlePath: '/fake/mcp.js', spawnFn: agent.spawnFn,
+      hermes: hermesPolicy({ sessionStarted }).policy,
+    });
+    a3.start({});
+    expect((await collect(a3.send('go'))).at(-1)).toEqual({ type: 'error', message: 'its gateway runs messaging platforms' });
+    expect(agent.prompts()).toBe(0);
+    expect((await collect(a3.send('go'))).at(-1)?.type).toBe('turn-end');
+    expect(sessionStarted).toHaveBeenCalledTimes(2);
+    a3.dispose();
 
     const spawnFn = vi.fn(agent.spawnFn);
     const a2 = new AcpBrainAdapter({

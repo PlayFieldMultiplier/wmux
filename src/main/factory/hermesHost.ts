@@ -168,10 +168,15 @@ export class HermesHost {
   /** Before a Hermes process attaches: a running gateway of R that wmux did
    *  not see start this run, or that a viewer did not auto-start
    *  (`--idle-exit`), is stopped, so the next one starts with wmux's
-   *  environment. */
+   *  environment. Not while a bot's agent is attached: that gateway was
+   *  started by wmux's own viewer, and a stop would end its turn. */
   async ensureOwnGateway(): Promise<void> {
     const state = readHermesGatewayState(this.root());
     if (!state || !this.pidAlive(state.pid)) return;
+    if ([...this.adapters].some((a) => a.agentLive())) {
+      this.markOwned();
+      return;
+    }
     if (this.owned.has(state.pid) && state.argv.includes('--idle-exit')) return;
     this.log(`[hermes] restarting a gateway of wmux's Hermes home that wmux did not start (pid ${state.pid})`);
     await this.stopGateway();

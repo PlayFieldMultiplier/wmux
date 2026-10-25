@@ -146,7 +146,7 @@ function EngineErrorCard({
       // say what still stands in the way).
       const ask = bridgeHermesPort().readiness;
       if ((code === 'hermes_not_ready' || code === 'hermes_mcp_missing') && ask) {
-        const r = await ask();
+        const r = await ask({ fresh: true });
         if (!r.ready) {
           const view = hermesReadinessView(r);
           useStore.getState().pushToast({ message: t(view.key, view.vars), level: 'warn' });

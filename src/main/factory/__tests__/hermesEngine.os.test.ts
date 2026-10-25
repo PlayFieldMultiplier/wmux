@@ -83,6 +83,24 @@ describe('hermesEnv', () => {
       PYTHONIOENCODING: 'utf-8',
     });
   });
+
+  it('keeps Windows\' Path and a proxy under their own names', () => {
+    const env = hermesEnv('C:\\data\\factory\\hermes', {
+      Path: 'C:\\Windows\\System32',
+      SystemRoot: 'C:\\Windows',
+      LOCALAPPDATA: 'C:\\Users\\u\\AppData\\Local',
+      HTTPS_PROXY: 'http://proxy:3128',
+      OPENAI_API_KEY: 'k',
+    }, 'win32', 'C:\\Users\\u');
+    expect(env).toEqual({
+      Path: 'C:\\Windows\\System32;C:\\Users\\u\\AppData\\Local\\hermes\\bin',
+      SystemRoot: 'C:\\Windows',
+      LOCALAPPDATA: 'C:\\Users\\u\\AppData\\Local',
+      HTTPS_PROXY: 'http://proxy:3128',
+      HERMES_HOME: 'C:\\data\\factory\\hermes',
+      PYTHONIOENCODING: 'utf-8',
+    });
+  });
 });
 
 describe('hermesReadiness', () => {
