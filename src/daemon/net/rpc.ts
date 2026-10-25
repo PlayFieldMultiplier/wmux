@@ -17,6 +17,7 @@
 
 import { isFirewallListener, type FirewallListener, type InboundStatus } from '../../shared/netFirewall';
 import { firewallRuleIds, type RuleScope } from '../../shared/netFirewallScripts';
+import { canonicalExePath } from '../../shared/netWinPaths';
 import type { ListenProblemReport } from '../../shared/netListen';
 import type { FirewallRecordStore } from './firewallRecord';
 import { probeInbound, type ProbeDeps, type ProbeTarget } from './inboundProbe';
@@ -57,7 +58,8 @@ function listenerOf(params: Record<string, unknown>, method: string): FirewallLi
 }
 
 export function registerNetRpc(onRpc: (method: string, handler: (params: Record<string, unknown>) => Promise<unknown>) => void, deps: NetRpcDeps): void {
-  const exe = deps.exe ?? process.execPath;
+  // The long form: the rule, its IDs, the probe and the record all name this string.
+  const exe = deps.exe ?? canonicalExePath(process.execPath);
   const platform = deps.platform ?? process.platform;
   const now = deps.now ?? Date.now;
   const inFlight = new Map<FirewallListener, { key: string; probe: Promise<InboundStatus> }>();

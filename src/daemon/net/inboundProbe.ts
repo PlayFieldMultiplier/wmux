@@ -39,7 +39,7 @@ import {
   windowsPowerShellPath,
   type RuleScope,
 } from '../../shared/netFirewallScripts';
-import { onLocalFixedDrive, systemDirectory } from '../../shared/netWinPaths';
+import { canonicalExePath, onLocalFixedDrive, systemDirectory } from '../../shared/netWinPaths';
 import type { FirewallRuleRecord } from './firewallRecord';
 
 /** The probe's deadline: past it the answer is `unknown` ("Could not read the firewall settings"). */
@@ -105,7 +105,7 @@ function uniqueNames(ips: string[], names: Map<string, string>): string[] {
 
 export async function probeInbound(target: ProbeTarget, deps: ProbeDeps): Promise<InboundStatus> {
   const platform = platformOf(deps.platform ?? process.platform);
-  const exe = deps.exe ?? process.execPath;
+  const exe = deps.exe ?? canonicalExePath(process.execPath);
   const now = deps.now ?? Date.now;
   const exists = deps.exists ?? ((p: string) => fs.existsSync(p));
   const exec = deps.exec ?? defaultExec;

@@ -261,8 +261,9 @@ an earlier prompt stops wmux, when Group Policy or "block all incoming
 connections" is in force, and when another firewall product is in charge;
 **Copy details** gives the port, program and proposed rule as text for
 whoever manages the PC. wmux adds no rule for a copy that runs from a
-network, SUBST or removable drive, or from a folder whose name holds `[`,
-`]`, `*` or `?`; Copy details gives what to add by hand. A rule that covers
+network, SUBST or removable drive, from a folder whose name holds `[`,
+`]`, `*` or `?`, or from a short (8.3) path Windows cannot expand; Copy
+details gives what to add by hand. A rule that covers
 the port does not prove the other PC gets through (Wi-Fi isolation, a
 router); after allowing, press Connect again on the other PC.
 

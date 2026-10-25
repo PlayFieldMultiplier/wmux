@@ -91,6 +91,11 @@ export type FixRefusal =
   /** The daemon's program path does not exist, or is not an absolute drive path. */
   | 'exe-missing'
   /**
+   * The path still holds an 8.3 short name (`RUNNER~1`) that could not be
+   * expanded: New-NetFirewallRule refuses it in -Program (error 87).
+   */
+  | 'short-path'
+  /**
    * The program is on a network, SUBST or removable drive. The elevated
    * session may not see a per-logon drive letter, and the firewall service
    * cannot match a rule to it.

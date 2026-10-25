@@ -198,6 +198,20 @@ describe('psQuote and the inputs it refuses', () => {
     expect(refusalOf(() => buildRemoveScript({ listener: 'a2a', exe: EXE, reportedExe: EXE, scope: SCOPE, facts: notLocal }))).toBe('not-local-drive');
   });
 
+  it('refuses an 8.3 short-name path, which New-NetFirewallRule -Program rejects (error 87)', () => {
+    for (const short of [
+      'C:\\Users\\RUNNER~1\\AppData\\Local\\wmux\\app-1.2.3\\wmux.exe',
+      'C:\\PROGRA~1\\wmux\\wmux.exe',
+      'C:\\Users\\me\\AppData\\Local\\wmux\\APP-12~1.3\\wmux.exe',
+    ]) {
+      expect(exeRefusal(short, facts), short).toBe('short-path');
+      expect(refusalOf(() => fix({ exe: short })), short).toBe('short-path');
+    }
+    // A long name that merely holds a tilde is not an alias.
+    expect(exeRefusal('C:\\apps\\my~tools\\wmux.exe', facts)).toBeNull();
+    expect(exeRefusal('C:\\apps\\release~2026\\wmux.exe', facts)).toBeNull();
+  });
+
   it('refuses the wildcards the by-program query would read as a pattern', () => {
     for (const bad of ['C:\\apps\\[x]\\wmux.exe', 'C:\\apps\\x]\\wmux.exe', 'C:\\apps\\x*\\wmux.exe', 'C:\\apps\\x?\\wmux.exe']) {
       expect(exeRefusal(bad, facts), bad).toBe('bad-path');

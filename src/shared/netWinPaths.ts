@@ -7,6 +7,11 @@
 //   network drive or a SUBST drive is a per-logon letter that the elevated
 //   session and the firewall service do not see, and a removable drive may
 //   be gone the next time a Fix's cleanup looks.
+// - The program path is the long form (GetLongPathNameW). New-NetFirewallRule
+//   refuses an 8.3 short-name path in -Program with error 87 ("The parameter
+//   is incorrect"), seen on windows-2025 for C:\Users\RUNNER~1\… while the
+//   same file's long path was accepted. process.execPath keeps whatever form
+//   the program was started with.
 //
 // Main and the daemon both use it. koffi is required at runtime (external to
 // the bundle), as in elevate.ts and paneJob.ts.
@@ -16,6 +21,7 @@ const MAX_PATH_CHARS = 520;
 
 interface Kernel32Paths {
   GetSystemDirectoryW(buf: Buffer, size: number): number;
+  GetLongPathNameW(path: string, buf: Buffer, size: number): number;
   GetDriveTypeW(root: string): number;
   QueryDosDeviceW(name: string, buf: Buffer, size: number): number;
 }
@@ -32,6 +38,7 @@ function load(): Kernel32Paths | null {
     const k32 = koffi.load('kernel32.dll');
     kernel32 = {
       GetSystemDirectoryW: k32.func('GetSystemDirectoryW', 'uint32', ['void *', 'uint32']) as Kernel32Paths['GetSystemDirectoryW'],
+      GetLongPathNameW: k32.func('GetLongPathNameW', 'uint32', ['str16', 'void *', 'uint32']) as Kernel32Paths['GetLongPathNameW'],
       GetDriveTypeW: k32.func('GetDriveTypeW', 'uint32', ['str16']) as Kernel32Paths['GetDriveTypeW'],
       QueryDosDeviceW: k32.func('QueryDosDeviceW', 'uint32', ['str16', 'void *', 'uint32']) as Kernel32Paths['QueryDosDeviceW'],
     };
@@ -53,6 +60,26 @@ export function systemDirectory(): string | null {
   const dir = n > 0 && n < MAX_PATH_CHARS ? buf.toString('utf16le', 0, n * 2) : '';
   systemDir = /^[A-Za-z]:\\/.test(dir) ? dir : null;
   return systemDir;
+}
+
+/** The long form of an existing path (every 8.3 alias expanded), or null when Windows cannot give one. */
+export function longPathName(p: string): string | null {
+  const k = load();
+  if (!k) return null;
+  const buf = Buffer.alloc(32_768 * 2);
+  const n = k.GetLongPathNameW(p, buf, 32_768);
+  return n > 0 && n < 32_768 ? buf.toString('utf16le', 0, n * 2) : null;
+}
+
+/**
+ * The program path every side names a rule by (the daemon's report, the
+ * rule IDs, the probe's -Program, firewall-rules.json, main's own-program
+ * check): the long form on Windows, the path as given elsewhere or when
+ * Windows cannot expand it (exeRefusal then refuses an 8.3 alias).
+ */
+export function canonicalExePath(p: string): string {
+  if (process.platform !== 'win32') return p;
+  return longPathName(p) ?? p;
 }
 
 /** The program's drive is a local fixed disk: not a network share, a SUBST alias or a removable drive. */

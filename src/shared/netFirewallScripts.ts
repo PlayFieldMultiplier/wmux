@@ -116,6 +116,12 @@ function checkPort(port: number): void {
 // svchost's rules), so the probe would not find our rule by its path.
 const WILDCARD = /[[\]*?]/;
 
+// An 8.3 alias segment: up to six characters, `~`, a number, an optional
+// extension of up to three. New-NetFirewallRule refuses such a path in
+// -Program with error 87; callers pass the long form (netWinPaths.ts
+// canonicalExePath), so one here means it could not be expanded.
+const SHORT_NAME_SEGMENT = /(^|\\)[^\\~]{1,6}~\d+(\.[^\\.]{0,3})?(?=\\|$)/;
+
 /** What the caller knows about a path: it exists, and it is on a local fixed disk (netWinPaths.ts). */
 export interface PathFacts {
   exists: (p: string) => boolean;
@@ -135,6 +141,7 @@ export function exeRefusal(exe: string, facts: PathFacts): FixRefusal | null {
   if (base === 'node.exe' || base === 'node') return 'node-daemon';
   if (base !== 'wmux.exe') return 'not-wmux-exe';
   if (FORBIDDEN.test(exe) || WILDCARD.test(exe)) return 'bad-path';
+  if (SHORT_NAME_SEGMENT.test(exe)) return 'short-path';
   if (!facts.exists(exe)) return 'exe-missing';
   if (!facts.onLocalFixedDrive(exe)) return 'not-local-drive';
   return null;

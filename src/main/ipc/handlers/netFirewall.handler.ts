@@ -6,7 +6,7 @@ import { IPC, dataSuffix } from '../../../shared/constants';
 import { isFirewallListener, type ElevationOutcome, type FirewallActionResult, type InboundStatusView } from '../../../shared/netFirewall';
 import { FIREWALL_GROUP, currentRuleUser, elevatedPowerShellParameters, windowsPowerShellPath } from '../../../shared/netFirewallScripts';
 import type { ListenProblemReport } from '../../../shared/netListen';
-import { onLocalFixedDrive, systemDirectory } from '../../../shared/netWinPaths';
+import { canonicalExePath, onLocalFixedDrive, systemDirectory } from '../../../shared/netWinPaths';
 import { wrapHandler } from '../wrapHandler';
 import { isMainWindowSender } from '../mainWindowSender';
 import type { DaemonClient } from '../../DaemonClient';
@@ -65,7 +65,8 @@ const fixer = new FirewallFixer({
   facts: { exists: (p) => fs.existsSync(p), onLocalFixedDrive },
   // Per action: main sets WMUX_DATA_SUFFIX in appInit(), after this module loads.
   scope: () => ({ dataSuffix: dataSuffix(), user: currentRuleUser(), group: FIREWALL_GROUP }),
-  selfExe: process.execPath,
+  // The same long form the daemon reports for the same program.
+  selfExe: canonicalExePath(process.execPath),
   tokenType: tokenElevationType,
   selfElevated: isSelfElevated,
   log: (msg) => console.warn(msg),
