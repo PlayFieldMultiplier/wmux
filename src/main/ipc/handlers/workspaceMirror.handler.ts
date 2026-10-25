@@ -69,6 +69,10 @@ function parseEntry(raw: unknown): WorkspaceListEntry | null {
     };
   }
 
+  if (typeof raw.startupCwd === 'string' && raw.startupCwd.length > 0 && raw.startupCwd.length <= 4096) {
+    entry.startupCwd = raw.startupCwd;
+  }
+
   if (typeof raw.activePtyId === 'string' && PTY_ID_RE.test(raw.activePtyId)) {
     entry.activePtyId = raw.activePtyId;
   } else {

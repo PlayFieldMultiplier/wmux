@@ -567,7 +567,7 @@ export function factoryClaudeAuthHandlers(
 
 export function registerFactoryHandlers(
   getWindow: () => BrowserWindow | null,
-  suggestDeps: Pick<BotRepoSuggestDeps, 'cwdOf'> = {},
+  suggestDeps: Pick<BotRepoSuggestDeps, 'cwdOf' | 'daemonRpc'> = {},
 ): () => void {
   const channels = [
     IPC.FACTORY_BOT_LIST,

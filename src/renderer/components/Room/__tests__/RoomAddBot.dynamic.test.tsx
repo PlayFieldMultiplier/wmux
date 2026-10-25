@@ -333,7 +333,68 @@ describe('Add bot: the repository comes from the workspace', () => {
     expect(q('factory-add-bot-repo')).toBeNull();
     await typeInto('factory-add-bot-name', 'Dev');
     await act(async () => q<HTMLButtonElement>('factory-add-bot-submit')!.click());
-    expect(create).toHaveBeenLastCalledWith({ workspaceId: 'ws-b', name: 'Dev' });
+    // None is an answer: main remembers it for the workspace.
+    expect(create).toHaveBeenLastCalledWith({ workspaceId: 'ws-b', name: 'Dev', noRepo: true });
+  });
+
+  it('waits for main\'s answer: Add and Add team are off and the row says Checking until it lands', async () => {
+    let answer: (s: FactoryBotRepoSuggestion) => void = () => undefined;
+    const { port, create } = formPort([], () => new Promise((r) => { answer = r; }));
+    const createTeam = vi.fn(async (_req: FactoryBotCreateTeamRequest): Promise<FactoryBotCreateTeamResult> => ({ ok: true, bots: [] }));
+    await renderForm({ ...port, createTeam }, []);
+    await typeInto('factory-add-bot-name', 'Dev');
+    expect(q('factory-add-bot-repo-row')!.getAttribute('data-repo-kind')).toBe('checking');
+    expect(q('factory-add-bot-repo-checking')!.textContent).toBe('settings.factory.addBotRepoChecking');
+    const submit = q<HTMLButtonElement>('factory-add-bot-submit')!;
+    const team = q<HTMLButtonElement>('factory-add-team')!;
+    expect(submit.disabled).toBe(true);
+    expect(team.disabled).toBe(true);
+    expect(q('factory-add-bot-blocked')!.textContent).toBe('settings.factory.addBotRepoChecking(max=64)');
+    await act(async () => submit.click());
+    await act(async () => team.click());
+    expect(create).not.toHaveBeenCalled();
+    expect(createTeam).not.toHaveBeenCalled();
+    await act(async () => answer({ ok: true, repoKey: APP.repoKey, root: APP.repoPath, displayRoot: '~/code/app', inherited: false }));
+    expect(submit.disabled).toBe(false);
+    expect(team.disabled).toBe(false);
+    await act(async () => submit.click());
+    expect(create).toHaveBeenLastCalledWith({ workspaceId: WS, name: 'Dev', repoFolder: APP.repoPath });
+  });
+
+  it('a failed ask does not hold the form: it reads as no folder', async () => {
+    const { port, create } = formPort([], async () => { throw new Error('ipc gone'); });
+    await renderForm(port, []);
+    await typeInto('factory-add-bot-name', 'Dev');
+    expect(q('factory-add-bot-repo-row')!.getAttribute('data-repo-kind')).toBe('none');
+    await act(async () => q<HTMLButtonElement>('factory-add-bot-submit')!.click());
+    expect(create).toHaveBeenLastCalledWith({ workspaceId: WS, name: 'Dev' });
+  });
+
+  it('a refused folder says why in one muted line, and adding past it is remembered (noRepo)', async () => {
+    const why = '/home/me/notes has no origin remote. Set it with "git remote add origin <address>".';
+    const { port, create } = formPort([], async () => ({ ok: false, code: 'no_remote', message: why }));
+    await renderForm(port, []);
+    await typeInto('factory-add-bot-name', 'Dev');
+    expect(q('factory-add-bot-no-repo')).not.toBeNull();
+    expect(q('factory-add-bot-repo-reason')!.textContent).toBe(why);
+    await act(async () => q<HTMLButtonElement>('factory-add-bot-submit')!.click());
+    expect(create).toHaveBeenLastCalledWith({ workspaceId: WS, name: 'Dev', noRepo: true });
+    // A folder picked after the refusal is sent instead.
+    await act(async () => q<HTMLButtonElement>('factory-add-bot-folder')!.click());
+    expect(q('factory-add-bot-repo-reason')).toBeNull();
+    await act(async () => q<HTMLButtonElement>('factory-add-bot-submit')!.click());
+    expect(create).toHaveBeenLastCalledWith({ workspaceId: WS, name: 'Dev', repoFolder: '/src/picked' });
+  });
+
+  it('a remembered None: no repository, the remembered line and Choose folder…, never a suggestion', async () => {
+    const { port, create } = formPort([], async () => ({ ok: false, code: 'none' }));
+    await renderForm(port, []);
+    await typeInto('factory-add-bot-name', 'Dev');
+    expect(q('factory-add-bot-repo-row')!.getAttribute('data-repo-remembered')).toBe('true');
+    expect(q('factory-add-bot-repo-reason')!.textContent).toBe('settings.factory.addBotRepoRemembered');
+    expect(q('factory-add-bot-folder')!.textContent).toBe('settings.factory.addBotChooseFolder');
+    await act(async () => q<HTMLButtonElement>('factory-add-bot-submit')!.click());
+    expect(create).toHaveBeenLastCalledWith({ workspaceId: WS, name: 'Dev', noRepo: true });
   });
 
   it('asks again when the workspace\'s folder changes', async () => {
@@ -353,6 +414,12 @@ describe('Add bot: the repository comes from the workspace', () => {
     expect(addBotRepoView(own, 'ws-b', sug, null)).toMatchObject({ kind: 'suggested', root: '/r/api' });
     expect(addBotRepoView([], WS, sug, '/x')).toEqual({ kind: 'picked', folder: '/x' });
     expect(addBotRepoView([], WS, { ok: false, code: 'no_remote' }, null)).toEqual({ kind: 'none' });
+    expect(addBotRepoView([], WS, { ok: false, code: 'no_remote', message: 'why' }, null)).toEqual({ kind: 'none', reason: 'why' });
+    expect(addBotRepoView([], WS, { ok: false, code: 'none' }, null)).toEqual({ kind: 'none', remembered: true });
+    expect(addBotRepoView([], WS, null, null, false, true)).toEqual({ kind: 'checking' });
+    // A picked folder or None does not wait for main.
+    expect(addBotRepoView([], WS, null, '/x', false, true)).toEqual({ kind: 'picked', folder: '/x' });
+    expect(addBotRepoView([], WS, null, null, true, true)).toEqual({ kind: 'none' });
     expect(addBotRepoView([], WS, { ...sug, inherited: true }, '/x')).toMatchObject({ kind: 'inherited', root: '/r/api' });
     expect(repoKeyLabel('github.com/acme/app')).toBe('acme/app');
     expect(repoKeyLabel('ghe.example.com/acme/app')).toBe('ghe.example.com/acme/app');

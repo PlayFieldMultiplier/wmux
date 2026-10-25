@@ -29,6 +29,10 @@ export interface WorkspaceListEntry {
     status?: string | null;
     progress?: number | null;
   };
+  /** The folder the owner opened the workspace on (its profile's
+   *  `startupCwd`: Browse Folder…, the profile's Starting directory), or null.
+   *  The bots' repository suggestion reads it before any pane's cwd. */
+  startupCwd?: string | null;
   /** The active pane's active surface PTY id. Null when none has spawned. */
   activePtyId?: string | null;
   /**

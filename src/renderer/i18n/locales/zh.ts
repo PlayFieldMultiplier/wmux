@@ -4607,6 +4607,8 @@ export const zh = {
   'settings.factory.addBotWorksOn': "工作于",
   'settings.factory.addBotNoRepo': "没有仓库",
   'settings.factory.addBotRepoNone': "不使用",
+  'settings.factory.addBotRepoChecking': "正在检查工作区文件夹…",
+  'settings.factory.addBotRepoRemembered': "你已为此工作区选择不使用仓库。选择一个文件夹即可关联。",
   'settings.factory.addBotNeedName': "给机器人起个名字才能添加。",
   'settings.factory.addBotBadName': "这个名字不能用：只能一行，最多 {max} 个字符。",
   'settings.factory.addBotNeedWorkspace': "请先打开一个工作区：机器人在工作区里工作。",

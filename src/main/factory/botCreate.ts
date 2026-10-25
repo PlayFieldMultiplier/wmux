@@ -12,9 +12,12 @@
 // answer, so adding a remote and retrying works). Without either, the bot
 // has no repository yet. The profile itself goes through BotStore.create,
 // the same validation and defaults as `bot.create`. `suggestBotRepo` is what
-// "Add bot" offers before that: the sibling's repo, else the workspace's
-// current folder (the active pane's shell cwd main tracks, else the folder
-// the workspace mirror records), resolved like a picked folder.
+// "Add bot" offers before that: the workspace's remembered repository
+// (workspaceRepos.ts) or its sibling's, else the workspace's folders (the
+// folder it was opened on, its panes' shell cwds main tracks, the folder the
+// workspace mirror records), each resolved like a picked folder. A refused
+// folder's reason comes with the answer, and an owner's None is remembered
+// for the workspace, so the owner is asked once.
 //
 // A bot added here wakes once on its own (`greetNewBot`, wake reason
 // `intro`): it greets the owner and asks what to do, with choices.
@@ -44,10 +47,23 @@ import { isOriginPin } from '../../shared/originPin';
 import type { WorkspaceListEntry } from '../../shared/workspaceMirror';
 import type { BotStore } from './botStore';
 import type { WakeEnqueueInput } from './wakeQueue';
+import { getWorkspaceRepoStore, type WorkspaceRepo, type WorkspaceRepoStore } from './workspaceRepos';
+import { getBotRuntime } from './BotRuntime';
+import { hostCwdForPane, type DaemonRpc } from '../pty/wslCallerCwd';
 
 export interface BotRepoDeps {
   git?: (args: string[], cwd: string) => Promise<GitResult>;
   realpath?: (p: string) => string;
+  /** The workspaces' remembered repositories (default: the bot runtime's
+   *  store; null: none). */
+  records?: WorkspaceRepoStore | null;
+  /** Told of each bot given the workspace's repository here
+   *  (recordWorkspaceRepo; default: the bot runtime's profileChanged). */
+  profileChanged?: (botId: string) => void;
+}
+
+function recordsOf(deps: Pick<BotRepoDeps, 'records'>): WorkspaceRepoStore | null {
+  return deps.records === undefined ? getWorkspaceRepoStore() : deps.records;
 }
 
 export type BotRepoResult =
@@ -106,10 +122,16 @@ export async function resolveBotRepo(folder: unknown, deps: BotRepoDeps = {}): P
   return { ok: true, repo: { repoKey, repoPath, ...(originPin ? { originPin } : {}) } };
 }
 
-/** The repo a workspace's bots already work on (its oldest repo bot's), or
- *  null when none has one. */
-export function workspaceRepo(store: BotStore, workspaceId: unknown): { repoKey: string; repoPath: string; originPin?: string } | null {
+/** The repo a workspace's bots work on: the one remembered for it, else its
+ *  oldest repo bot's; null when there is neither. */
+export function workspaceRepo(
+  store: BotStore,
+  workspaceId: unknown,
+  records: WorkspaceRepoStore | null = getWorkspaceRepoStore(),
+): { repoKey: string; repoPath: string; originPin?: string } | null {
   if (typeof workspaceId !== 'string' || workspaceId.length === 0) return null;
+  const remembered = records?.get(workspaceId);
+  if (remembered && 'repo' in remembered) return remembered.repo;
   const withRepo = store.list({ workspaceId }).filter((b) => b.repo).sort((a, b) => a.createdAt - b.createdAt);
   return withRepo[0]?.repo ? { ...withRepo[0].repo } : null;
 }
@@ -122,16 +144,17 @@ export async function createBotFromFolder(
 ): Promise<FactoryBotCreateResult> {
   if (!store) return { ok: false, code: 'not_started', message: 'The factory is not running.' };
   const r = req && typeof req === 'object' && !Array.isArray(req) ? (req as Record<string, unknown>) : {};
+  const records = recordsOf(deps);
   let repo: { repoKey: string; repoPath: string; originPin?: string } | undefined;
   if (r.repoFolder === undefined) {
-    // No folder: the workspace's repo, when one of its bots has one.
-    const inherited = workspaceRepo(store, r.workspaceId);
+    // No folder: the workspace's repo, when it has one.
+    const inherited = workspaceRepo(store, r.workspaceId, records);
     if (inherited) repo = inherited;
   } else {
     const resolved = await resolveBotRepo(r.repoFolder, deps);
     if (!resolved.ok) return resolved;
     // Read after the await: a bot added meanwhile counts.
-    const current = workspaceRepo(store, r.workspaceId);
+    const current = workspaceRepo(store, r.workspaceId, records);
     if (current && !sameRepoKey(current.repoKey, resolved.repo.repoKey)) {
       return {
         ok: false,
@@ -154,13 +177,58 @@ export async function createBotFromFolder(
     ...(r.recipe !== undefined ? { recipe: r.recipe } : {}),
     ...(r.avatar !== undefined ? { avatar: r.avatar } : {}),
   });
-  return created.ok ? { ok: true, bot: created.bot } : created;
+  if (!created.ok) return created;
+  rememberWorkspaceAnswer(store, created.bot.workspaceId, repo, r.noRepo === true, deps);
+  return { ok: true, bot: created.bot };
+}
+
+/** What a create told about the workspace's repository: the repo its bots
+ *  now work on (recordWorkspaceRepo), or the owner's None (`noRepo`, sent
+ *  when the form showed no repository), so the next add does not ask
+ *  again. A None never takes a repository from anyone. */
+function rememberWorkspaceAnswer(
+  store: BotStore,
+  workspaceId: string,
+  repo: WorkspaceRepo | undefined,
+  noRepo: boolean,
+  deps: Pick<BotRepoDeps, 'records' | 'profileChanged'>,
+): void {
+  if (repo) recordWorkspaceRepo(store, workspaceId, repo, deps);
+  else if (noRepo) recordsOf(deps)?.setNone(workspaceId);
+}
+
+/** The workspace works on `repo` from now on: remembered for it, and given
+ *  to each of its bots that has no repository, each told to the bot runtime
+ *  (`profileChanged`). Called by every path that resolves a workspace's
+ *  repository (Add bot, Add team, the first run, a profile's Change), after
+ *  the store accepted it. A bot on another repository keeps it (that one was
+ *  refused, `repo_mismatch`, before this). Returns the ids filled in. */
+export function recordWorkspaceRepo(
+  store: BotStore,
+  workspaceId: string,
+  repo: WorkspaceRepo,
+  deps: Pick<BotRepoDeps, 'records' | 'profileChanged'> = {},
+): string[] {
+  recordsOf(deps)?.setRepo(workspaceId, repo);
+  const changed = deps.profileChanged ?? ((id: string) => getBotRuntime()?.profileChanged(id));
+  const filled: string[] = [];
+  for (const bot of store.list({ workspaceId })) {
+    if (bot.repo) continue;
+    // The store checks it as on every write (a guest workspace's bots hold
+    // no repository and stay as they are).
+    if (!store.update(bot.id, { repo }).ok) continue;
+    filled.push(bot.id);
+    changed(bot.id);
+  }
+  return filled;
 }
 
 /** The repo patch for an existing bot's "Change" (the Bots page profile):
  *  the folder resolved exactly as "Add bot" resolves it (git root, origin's
  *  owner/repo, never a local-path origin), refused when another bot of its
- *  workspace works on another repository (a workspace works on one). */
+ *  workspace works on another repository (a workspace works on one). Once
+ *  the patch is saved, recordWorkspaceRepo remembers it for the workspace
+ *  and gives it to the bots there without one. */
 export async function botRepoFromFolder(
   store: BotStore,
   botId: string,
@@ -230,12 +298,13 @@ export async function createTeamFromFolder(
   const early = refusal(firstNames);
   if (early) return early;
   // One repository for all five, resolved once, as "Add bot" resolves it.
-  let repo = workspaceRepo(store, workspaceId) ?? undefined;
+  const records = recordsOf(deps);
+  let repo = workspaceRepo(store, workspaceId, records) ?? undefined;
   if (r.repoFolder !== undefined) {
     const resolved = await resolveBotRepo(r.repoFolder, deps);
     if (!resolved.ok) return resolved;
     // Read after the await: a bot added meanwhile counts.
-    const current = workspaceRepo(store, workspaceId);
+    const current = workspaceRepo(store, workspaceId, records);
     if (current && !sameRepoKey(current.repoKey, resolved.repo.repoKey)) {
       return { ok: false, code: 'repo_mismatch', message: `This workspace's bots work on ${current.repoKey}; ${resolved.repo.repoPath} is ${resolved.repo.repoKey}. A workspace works on one repository.` };
     }
@@ -258,6 +327,7 @@ export async function createTeamFromFolder(
     }
     bots.push(made.bot);
   }
+  if (bots.length > 0) rememberWorkspaceAnswer(store, workspaceId, repo, r.noRepo === true, deps);
   return { ok: true, bots, ...(skipped.length > 0 ? { skipped } : {}) };
 }
 
@@ -279,30 +349,41 @@ export interface BotRepoSuggestDeps extends BotRepoDeps {
   entries?: () => WorkspaceListEntry[] | null;
   /** A pane's shell cwd as main tracks it (OSC 7, the daemon, the spawn). */
   cwdOf?: (ptyId: string) => string | undefined;
+  /** The daemon, read for a WSL pane's distro (its session's wslTarget). */
+  daemonRpc?: DaemonRpc;
   homeDir?: string;
+  platform?: NodeJS.Platform;
 }
 
-/** The workspace's current folder: its active pane's shell cwd as main
- *  tracks it, else the first of its other panes that has one, else the
- *  folder the workspace mirror records for it (`metadata.cwd`, which the
- *  renderer fills from its panes and pushes with the mirror), so a
- *  workspace whose panes have reported no cwd yet still has the one it was
- *  last seen in. Never a path sent with the suggestion request itself, and
- *  always resolved and checked like a picked folder. */
-export function workspaceFolder(
+/** The workspace's folders, most telling first: the folder it was opened
+ *  on (`startupCwd`, the owner's own link), its active pane's shell cwd as
+ *  main tracks it, its other panes', then the folder the workspace mirror
+ *  records for it (`metadata.cwd`, the last one any pane reported). A WSL
+ *  pane's Linux cwd is spelled as this process opens it (hostCwdForPane,
+ *  with the pane's distro); one that cannot be is left out, as is anything
+ *  not absolute. No duplicates. Never a path sent with the suggestion
+ *  request itself; each is resolved and checked like a picked folder. */
+export async function workspaceFolders(
   workspaceId: string,
   entries: WorkspaceListEntry[] | null,
   cwdOf: (ptyId: string) => string | undefined,
-): string | null {
+  opts: { platform?: NodeJS.Platform; daemonRpc?: DaemonRpc } = {},
+): Promise<string[]> {
   const entry = entries?.find((e) => e.id === workspaceId);
-  if (!entry) return null;
+  if (!entry) return [];
+  const platform = opts.platform ?? process.platform;
+  const absolute = platform === 'win32' ? path.win32.isAbsolute : path.posix.isAbsolute;
+  const raw: { cwd: string | null | undefined; ptyId: string }[] = [{ cwd: entry.startupCwd, ptyId: '' }];
   const ptys = [entry.activePtyId, ...(entry.ptyIds ?? [])].filter((p): p is string => typeof p === 'string' && p.length > 0);
-  for (const ptyId of ptys) {
-    const cwd = cwdOf(ptyId);
-    if (cwd && path.isAbsolute(cwd)) return cwd;
+  for (const ptyId of ptys) raw.push({ cwd: cwdOf(ptyId), ptyId });
+  raw.push({ cwd: entry.metadata?.cwd, ptyId: '' });
+  const out: string[] = [];
+  for (const { cwd, ptyId } of raw) {
+    if (!cwd) continue;
+    const host = await hostCwdForPane(cwd, ptyId, { platform, ...(opts.daemonRpc ? { daemonRpc: opts.daemonRpc } : {}) });
+    if ('cwd' in host && absolute(host.cwd) && !out.includes(host.cwd)) out.push(host.cwd);
   }
-  const recorded = entry.metadata?.cwd;
-  return recorded && path.isAbsolute(recorded) ? recorded : null;
+  return out;
 }
 
 /** `p` with the home folder shortened to `~`. */
@@ -312,7 +393,11 @@ export function homeShortPath(p: string, home: string): string {
   return p.startsWith(home + path.sep) ? `~${p.slice(home.length)}` : p;
 }
 
-/** FACTORY_BOT_SUGGEST_REPO's answer: the repo "Add bot" offers a workspace. */
+/** FACTORY_BOT_SUGGEST_REPO's answer: the repo "Add bot" offers a workspace.
+ *  The workspace's repository (inherited) when it has one; the owner's None
+ *  when one was remembered (`code: 'none'`, no folder read); else the first
+ *  of its folders that resolves; else the first folder's refusal, with its
+ *  reason, so the form says why before the owner picks anything. */
 export async function suggestBotRepo(
   store: BotStore | null,
   workspaceId: unknown,
@@ -320,17 +405,36 @@ export async function suggestBotRepo(
 ): Promise<FactoryBotRepoSuggestion> {
   if (typeof workspaceId !== 'string' || workspaceId.length === 0 || workspaceId.length > 256) return { ok: false, code: 'invalid_argument' };
   const home = deps.homeDir ?? os.homedir();
-  const inherited = store ? workspaceRepo(store, workspaceId) : null;
-  if (inherited) {
-    return { ok: true, repoKey: inherited.repoKey, root: inherited.repoPath, displayRoot: homeShortPath(inherited.repoPath, home), inherited: true };
+  const records = recordsOf(deps);
+  const inheritedOf = (): FactoryBotRepoSuggestion | null => {
+    const repo = store ? workspaceRepo(store, workspaceId, records) : null;
+    return repo ? { ok: true, repoKey: repo.repoKey, root: repo.repoPath, displayRoot: homeShortPath(repo.repoPath, home), inherited: true } : null;
+  };
+  const inherited = inheritedOf();
+  if (inherited) return inherited;
+  const remembered = records?.get(workspaceId);
+  if (remembered && 'none' in remembered) return { ok: false, code: 'none' };
+  const folders = await workspaceFolders(workspaceId, deps.entries?.() ?? null, deps.cwdOf ?? (() => undefined), {
+    ...(deps.platform ? { platform: deps.platform } : {}),
+    ...(deps.daemonRpc ? { daemonRpc: deps.daemonRpc } : {}),
+  });
+  let refusal: { code: 'not_a_repo' | 'repo_untrusted' | 'no_remote'; message: string } | null = null;
+  let found: Extract<BotRepoResult, { ok: true }> | null = null;
+  for (const folder of folders) {
+    const resolved = await resolveBotRepo(folder, deps);
+    if (resolved.ok) {
+      found = resolved;
+      break;
+    }
+    if (!refusal && resolved.code !== 'invalid_argument') refusal = { code: resolved.code, message: resolved.message };
   }
-  const folder = workspaceFolder(workspaceId, deps.entries?.() ?? null, deps.cwdOf ?? (() => undefined));
-  if (!folder) return { ok: false, code: 'no_folder' };
-  const resolved = await resolveBotRepo(folder, deps);
-  // Read after the await: a bot given a repo meanwhile is the workspace's repo.
-  const since = store ? workspaceRepo(store, workspaceId) : null;
-  if (since) return { ok: true, repoKey: since.repoKey, root: since.repoPath, displayRoot: homeShortPath(since.repoPath, home), inherited: true };
-  if (!resolved.ok) return { ok: false, code: resolved.code === 'invalid_argument' ? 'no_folder' : resolved.code };
-  const { repoKey, repoPath } = resolved.repo;
-  return { ok: true, repoKey, root: repoPath, displayRoot: homeShortPath(repoPath, home), inherited: false };
+  // Read after the awaits: a bot given a repo meanwhile is the workspace's repo.
+  const since = inheritedOf();
+  if (since) return since;
+  if (found) {
+    const { repoKey, repoPath } = found.repo;
+    return { ok: true, repoKey, root: repoPath, displayRoot: homeShortPath(repoPath, home), inherited: false };
+  }
+  if (!refusal) return { ok: false, code: 'no_folder' };
+  return { ok: false, code: refusal.code, message: refusal.message };
 }

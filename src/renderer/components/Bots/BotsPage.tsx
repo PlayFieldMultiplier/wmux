@@ -247,15 +247,17 @@ function FirstBotPanel({ t, workspace, botPort, settings, confirmOn, on, engine,
   const { readiness, checking, recheck, login } = useEngineReadiness(engine);
   const repo = useAddBotRepo(botPort, [], workspace?.id ?? '', pickFolderDialog);
   const typed = normalizeBotName(name);
-  const blocked = addBotBlockedReason({ canCreate: !!botPort.create, workspaceId: workspace?.id ?? '', name, jobOk: true });
+  const blocked = addBotBlockedReason({ canCreate: !!botPort.create, workspaceId: workspace?.id ?? '', name, jobOk: true, repoPending: repo.pending });
   const engineText = engineLine(readiness, t);
   const canLogin = !!engineText && readiness?.reason === 'claude-not-logged-in' && !!engine.login;
   // Start waits for the engine's first answer (a build that cannot ask never waits).
   const engineUnanswered = !!engine.readiness && readiness === null;
-  const startable = !busy && !blocked && !engineText && !engineUnanswered;
+  // Start and Add a team also wait for main's repository answer (a bot made
+  // before it would miss the workspace's repository).
+  const startable = !busy && !blocked && !engineText && !engineUnanswered && !repo.pending;
   // Add a team: the five team bots here at once, with no name to type; the
   // same readiness as Start, and its lead's chat opens.
-  const teamable = !busy && !!workspace && !!botPort.createTeam && !engineText && !engineUnanswered;
+  const teamable = !busy && !!workspace && !!botPort.createTeam && !engineText && !engineUnanswered && !repo.pending;
   const names = teamNames(t);
   const plan = teamPlan(rows, workspace?.id ?? '', t);
 
@@ -269,7 +271,7 @@ function FirstBotPanel({ t, workspace, botPort, settings, confirmOn, on, engine,
         if (r === 'declined') return;
         if (r !== 'on') { setError(t('settings.factory.notStarted')); return; }
       }
-      const r = await createBot(botPort, { workspaceId: workspace.id, name: typed, ...(repo.repoFolder ? { repoFolder: repo.repoFolder } : {}) });
+      const r = await createBot(botPort, { workspaceId: workspace.id, name: typed, ...repo.request });
       if (r.ok) onStarted(r.bot);
       else setError(r.message || t('settings.factory.addBotFailed'));
     } catch (err) {
@@ -288,7 +290,7 @@ function FirstBotPanel({ t, workspace, botPort, settings, confirmOn, on, engine,
         if (r === 'declined') return;
         if (r !== 'on') { setError(t('settings.factory.notStarted')); return; }
       }
-      const r = await botPort.createTeam({ workspaceId: workspace.id, names: plan.names, ...(repo.repoFolder ? { repoFolder: repo.repoFolder } : {}) });
+      const r = await botPort.createTeam({ workspaceId: workspace.id, names: plan.names, ...repo.request });
       if (!r.ok) setError(r.message || t('settings.factory.addTeamFailed'));
       else if (r.bots.length === 0) setError(t('settings.factory.addTeamWhole'));
       else {

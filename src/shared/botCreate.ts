@@ -38,6 +38,10 @@ export interface FactoryBotCreateRequest {
    *  of the workspace already has a repo (then it is that one). Absent and
    *  nothing to inherit: the bot has no repository yet. */
   repoFolder?: string;
+  /** The form showed no repository and the owner added anyway (None, or
+   *  past a refused folder): main remembers that the workspace works on no
+   *  repository, so the next add does not ask again (workspaceRepos.ts). */
+  noRepo?: boolean;
   /** A picture from FACTORY_BOT_PICK_AVATAR (BotProfile.avatar's shape). */
   avatar?: string;
 }
@@ -77,6 +81,8 @@ export interface FactoryBotCreateTeamRequest {
   names: Record<string, string>;
   /** As FactoryBotCreateRequest.repoFolder. */
   repoFolder?: string;
+  /** As FactoryBotCreateRequest.noRepo. */
+  noRepo?: boolean;
 }
 
 export type FactoryBotCreateTeamResult =
@@ -107,13 +113,16 @@ export function roleWorksOnRepo(role: BotRole): boolean {
 }
 
 /** FACTORY_BOT_SUGGEST_REPO: the repository "Add bot" offers for a
- *  workspace. `inherited`: a bot of the workspace already works on it, so a
- *  new repo bot there takes it. Otherwise it is the workspace's current
- *  folder as main tracks it, resolved like a picked folder. `displayRoot` is
- *  `root` with the home folder shortened to `~`. */
+ *  workspace. `inherited`: the workspace already works on it (remembered,
+ *  or a bot of it has it), so a new bot there takes it. Otherwise it is the
+ *  first of the workspace's folders (the folder it was opened on, its panes'
+ *  cwds) that resolves like a picked folder. `displayRoot` is `root` with
+ *  the home folder shortened to `~`. Refused: `none` when the owner chose no
+ *  repository for the workspace before (remembered), and for a refused
+ *  folder its reason (`message`, which says how to fix it). */
 export type FactoryBotRepoSuggestion =
   | { ok: true; repoKey: string; root: string; displayRoot: string; inherited: boolean }
-  | { ok: false; code: 'operator_only' | 'invalid_argument' | 'no_folder' | 'not_a_repo' | 'repo_untrusted' | 'no_remote' };
+  | { ok: false; code: 'operator_only' | 'invalid_argument' | 'no_folder' | 'none' | 'not_a_repo' | 'repo_untrusted' | 'no_remote'; message?: string };
 
 /** FACTORY_BOT_PICK_AVATAR: the picked image as a stored-avatar preview (not
  *  saved yet), or why there is none. */

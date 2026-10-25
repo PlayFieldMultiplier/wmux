@@ -109,11 +109,18 @@ describe('buildWorkspaceListEntries', () => {
         status: null,
         progress: null,
       },
+      startupCwd: null,
       activePtyId: 'pty-1',
       ptyIds: ['pty-1'],
     });
     expect(entries[1].activePtyId).toBe('pty-2a');
     expect(entries[1].ptyIds).toEqual(['pty-2a-first', 'pty-2a', 'pty-2b']);
+  });
+
+  it('carries the folder the workspace was opened on (its profile\'s startupCwd), for the bots\' repository', () => {
+    const opened = { ...w1, profile: { startupCwd: 'C:/repo/opened' } };
+    expect(buildWorkspaceListEntries([opened])[0].startupCwd).toBe('C:/repo/opened');
+    expect(buildWorkspaceListEntries([{ ...w1, profile: { startupCwd: '' } }])[0].startupCwd).toBeNull();
   });
 });
 

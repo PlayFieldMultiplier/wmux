@@ -5552,6 +5552,8 @@ export const pl = {
   'settings.factory.addBotWorksOn': "Pracuje na",
   'settings.factory.addBotNoRepo': "Bez repozytorium",
   'settings.factory.addBotRepoNone': "Brak",
+  'settings.factory.addBotRepoChecking': "Sprawdzanie folderu obszaru roboczego…",
+  'settings.factory.addBotRepoRemembered': "Wybrano brak repozytorium dla tego obszaru roboczego. Wybierz folder, aby je połączyć.",
   'settings.factory.addBotNeedName': "Nadaj botowi nazwę, aby go dodać.",
   'settings.factory.addBotBadName': "Tej nazwy nie można użyć: jedna linia, najwyżej {max} znaków.",
   'settings.factory.addBotNeedWorkspace': "Najpierw otwórz obszar roboczy: bot pracuje w jednym z nich.",

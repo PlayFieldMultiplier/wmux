@@ -23,7 +23,8 @@ import {
   type FirstRunFolderCheck,
 } from '../../shared/firstRun';
 import type { BotStore } from '../factory/botStore';
-import { homeShortPath, resolveBotRepo, workspaceRepo, type BotRepoDeps } from '../factory/botCreate';
+import { homeShortPath, recordWorkspaceRepo, resolveBotRepo, workspaceRepo, type BotRepoDeps } from '../factory/botCreate';
+import { getWorkspaceRepoStore } from '../factory/workspaceRepos';
 import { sameRepoKey } from '../../shared/forgeHosts';
 
 /** The first-run bot's job: part of its system prompt. */
@@ -92,7 +93,8 @@ export async function firstRunBot(
   // Read after the await: a first-run bot made meanwhile is the one.
   const made = findFirstRunBot(store);
   if (made) return answer(made, false);
-  const current = workspaceRepo(store, r.workspaceId);
+  const records = deps.records === undefined ? getWorkspaceRepoStore() : deps.records;
+  const current = workspaceRepo(store, r.workspaceId, records);
   if (current && !sameRepoKey(current.repoKey, resolved.repo.repoKey)) {
     return {
       ok: false,
@@ -111,5 +113,7 @@ export async function firstRunBot(
   if (!created.ok) {
     return { ok: false, code: created.code === 'too_many_bots' ? 'too_many_bots' : 'invalid_argument', message: created.message };
   }
+  // The workspace's repository from now on: Add bot there does not ask again.
+  if (created.bot.repo) recordWorkspaceRepo(store, created.bot.workspaceId, created.bot.repo, { records, ...(deps.profileChanged ? { profileChanged: deps.profileChanged } : {}) });
   return answer(created.bot, true);
 }

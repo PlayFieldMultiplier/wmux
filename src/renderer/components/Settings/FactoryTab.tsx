@@ -286,12 +286,16 @@ export function workspaceRepoOf(rows: readonly FactoryBotRow[], workspaceId: str
 
 /** What "Add bot" shows for the repository: the workspace's (inherited, no
  *  picker), main's suggestion (with Change…), the folder the owner picked,
- *  or nothing yet (the picker is required). */
+ *  main's answer still on its way (`checking`: nothing can be added yet), or
+ *  none: with why main's suggestion was refused (`reason`, its fix in
+ *  main's words), or `remembered` when the owner chose no repository for the
+ *  workspace before. */
 export type AddBotRepoView =
   | { kind: 'inherited'; repoKey: string; root: string; displayRoot: string }
   | { kind: 'suggested'; repoKey: string; root: string; displayRoot: string }
   | { kind: 'picked'; folder: string }
-  | { kind: 'none' };
+  | { kind: 'checking' }
+  | { kind: 'none'; reason?: string; remembered?: boolean };
 
 export function addBotRepoView(
   rows: readonly FactoryBotRow[],
@@ -301,6 +305,8 @@ export function addBotRepoView(
   /** The owner pressed None: no repository (an inherited one still holds:
    *  main gives every bot of the workspace its repository). */
   none = false,
+  /** Main's suggestion was asked and has not answered yet. */
+  pending = false,
 ): AddBotRepoView {
   const s = suggestion?.ok ? suggestion : null;
   const own = workspaceRepoOf(rows, workspaceId);
@@ -312,6 +318,11 @@ export function addBotRepoView(
   if (none) return { kind: 'none' };
   if (folder) return { kind: 'picked', folder };
   if (s) return { kind: 'suggested', repoKey: s.repoKey, root: s.root, displayRoot: s.displayRoot };
+  if (pending) return { kind: 'checking' };
+  if (suggestion && !suggestion.ok) {
+    if (suggestion.code === 'none') return { kind: 'none', remembered: true };
+    if (suggestion.message) return { kind: 'none', reason: suggestion.message };
+  }
   return { kind: 'none' };
 }
 
@@ -351,12 +362,13 @@ export interface AddBotFormProps {
 }
 
 /** Why Add cannot be pressed, as one line's key, or null. Pure. */
-export function addBotBlockedReason(p: { canCreate: boolean; workspaceId: string; name: string; jobOk: boolean }): string | null {
+export function addBotBlockedReason(p: { canCreate: boolean; workspaceId: string; name: string; jobOk: boolean; repoPending?: boolean }): string | null {
   if (!p.canCreate) return 'settings.factory.notStarted';
   if (!p.workspaceId) return 'settings.factory.addBotNeedWorkspace';
   if (p.name.trim() === '') return 'settings.factory.addBotNeedName';
   if (!normalizeBotName(p.name)) return 'settings.factory.addBotBadName';
   if (!p.jobOk) return 'settings.factory.addBotBadJob';
+  if (p.repoPending) return 'settings.factory.addBotRepoChecking';
   return null;
 }
 
@@ -370,14 +382,15 @@ export function AddBotRepoRow({ view, t, busy, onChoose, onNone }: {
   onChoose: () => void;
   onNone: () => void;
 }): React.ReactElement {
-  const works = view.kind !== 'none';
+  const works = view.kind !== 'none' && view.kind !== 'checking';
   return (
-    <div data-testid="factory-add-bot-repo-row" data-repo-kind={view.kind} className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
+    <div data-testid="factory-add-bot-repo-row" data-repo-kind={view.kind} data-repo-remembered={view.kind === 'none' && view.remembered ? 'true' : undefined} className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
       {works && <span className="shrink-0 text-[12px] text-[var(--text-sub)]">{t('settings.factory.addBotWorksOn')}</span>}
       {(view.kind === 'inherited' || view.kind === 'suggested') && (
         <RepoLine repoKey={view.repoKey} folder={view.displayRoot} testId="factory-add-bot-repo" />
       )}
       {view.kind === 'picked' && <span data-testid="factory-add-bot-path" className="min-w-0 truncate font-mono text-[11px] text-[var(--text-main)]" title={view.folder}>{view.folder}</span>}
+      {view.kind === 'checking' && <span data-testid="factory-add-bot-repo-checking" className="shrink-0 text-[12px] text-[var(--text-muted)]">{t('settings.factory.addBotRepoChecking')}</span>}
       {view.kind === 'none' && <span data-testid="factory-add-bot-no-repo" className="shrink-0 text-[13px] text-[var(--text-main)]">{t('settings.factory.addBotNoRepo')}</span>}
       {view.kind !== 'inherited' && (
         <span className="flex shrink-0 items-center gap-1">
@@ -391,6 +404,11 @@ export function AddBotRepoRow({ view, t, busy, onChoose, onNone }: {
           )}
         </span>
       )}
+      {view.kind === 'none' && (view.reason || view.remembered) && (
+        <p data-testid="factory-add-bot-repo-reason" className="basis-full text-[11px] leading-snug text-[var(--text-muted)]">
+          {view.reason ?? t('settings.factory.addBotRepoRemembered')}
+        </p>
+      )}
     </div>
   );
 }
@@ -400,7 +418,11 @@ export function AddBotRepoRow({ view, t, busy, onChoose, onNone }: {
  *  workspace, its bots' repo or its folder changes), a picked folder, or
  *  None. A folder the owner picked (or None) is theirs: it stays when the
  *  workspace changes; until then the folder follows the workspace. Shared
- *  with the first screen. */
+ *  with the first screen. `pending`: main has not answered yet, so Add
+ *  waits (an add then would make a bot without the workspace's repository).
+ *  `request` is what a create sends: the folder, or `noRepo` when the form
+ *  shows no repository that the owner chose or was told why (main
+ *  remembers it, so the next add does not ask). */
 export function useAddBotRepo(port: FactoryBotPort, rows: readonly FactoryBotRow[], workspaceId: string, pickFolder: () => Promise<string | null>) {
   const [folder, setFolder] = useState<string | null>(null);
   const [none, setNone] = useState(false);
@@ -415,11 +437,18 @@ export function useAddBotRepo(port: FactoryBotPort, rows: readonly FactoryBotRow
     setSuggestion(null);
     if (!port.suggestRepo || !workspaceId) return;
     let live = true;
-    port.suggestRepo(workspaceId).then((s) => { if (live) setSuggestion(s); }, () => undefined);
+    // A failed ask answers "no folder", so the form never waits for good.
+    port.suggestRepo(workspaceId).then(
+      (s) => { if (live) setSuggestion(s); },
+      () => { if (live) setSuggestion({ ok: false, code: 'no_folder' }); },
+    );
     return () => { live = false; };
   }, [port, workspaceId, ownKey, shownCwd]);
-  const view = addBotRepoView(rows, workspaceId, suggestion, folder, none);
+  const asked = !!port.suggestRepo && !!workspaceId;
+  const view = addBotRepoView(rows, workspaceId, suggestion, folder, none, asked && suggestion === null);
   const repoFolder = view.kind === 'picked' ? view.folder : view.kind === 'suggested' ? view.root : undefined;
+  const noRepo = view.kind === 'none' && (none || !!view.reason || !!view.remembered);
+  const request: { repoFolder?: string; noRepo?: true } = repoFolder ? { repoFolder } : noRepo ? { noRepo: true } : {};
   const choose = async () => {
     try {
       const picked = await pickFolder();
@@ -428,7 +457,7 @@ export function useAddBotRepo(port: FactoryBotPort, rows: readonly FactoryBotRow
       setError(err instanceof Error ? err.message : String(err));
     }
   };
-  return { view, repoFolder, choose, chooseNone: () => { setNone(true); setFolder(null); }, error };
+  return { view, repoFolder, request, pending: view.kind === 'checking', choose, chooseNone: () => { setNone(true); setFolder(null); }, error };
 }
 
 /** The names "Add team" gives its bots, in the owner's language. */
@@ -503,7 +532,7 @@ export function AddBotForm(props: AddBotFormProps): React.ReactElement {
   const typedName = normalizeBotName(name);
   const typedJob = normalizeBotJob(job);
   const jobOk = job.trim() === '' || typedJob !== undefined;
-  const blocked = addBotBlockedReason({ canCreate: !!port.create, workspaceId, name, jobOk });
+  const blocked = addBotBlockedReason({ canCreate: !!port.create, workspaceId, name, jobOk, repoPending: repo.pending });
   // "Add team": the team bots this workspace is missing (all five for a
   // new team, the lead first), offered while one is missing.
   const teamMode = props.mode === 'team';
@@ -547,7 +576,7 @@ export function AddBotForm(props: AddBotFormProps): React.ReactElement {
         name: typedName,
         ...(recipe ? { template: recipe.template, recipe: recipe.id } : template ? { template } : {}),
         ...(typedJob ? { job: typedJob } : {}),
-        ...(repo.repoFolder ? { repoFolder: repo.repoFolder } : {}),
+        ...repo.request,
         ...(avatar ? { avatar } : {}),
       });
       if (r.ok) onDone(r.bot);
@@ -560,7 +589,7 @@ export function AddBotForm(props: AddBotFormProps): React.ReactElement {
     }
   };
   const addTeam = async (turnOnFirst: boolean) => {
-    if (!port.createTeam || !canTeam) return;
+    if (!port.createTeam || !canTeam || repo.pending) return;
     setBusy(true);
     setError(null);
     try {
@@ -570,7 +599,7 @@ export function AddBotForm(props: AddBotFormProps): React.ReactElement {
         if (on === 'declined') return;
         if (on !== 'on') { setError(t('settings.factory.notStarted')); return; }
       }
-      const r = await port.createTeam({ workspaceId, names: plan.names, ...(repo.repoFolder ? { repoFolder: repo.repoFolder } : {}) });
+      const r = await port.createTeam({ workspaceId, names: plan.names, ...repo.request });
       if (!r.ok) setError(r.message || t('settings.factory.addTeamFailed'));
       else if (r.bots.length === 0) setError(t('settings.factory.addTeamWhole'));
       else {
@@ -706,7 +735,7 @@ export function AddBotForm(props: AddBotFormProps): React.ReactElement {
             data-testid="factory-add-team"
             title={teamHint}
             onClick={() => (props.botsOff ? setConfirmOn('team') : void addTeam(false))}
-            disabled={busy || !canTeam}
+            disabled={busy || !canTeam || repo.pending}
           >
             {t('settings.factory.addTeam')}
           </Button>
@@ -721,7 +750,7 @@ export function AddBotForm(props: AddBotFormProps): React.ReactElement {
               data-testid="factory-add-team"
               title={teamLine}
               onClick={() => (props.botsOff ? setConfirmOn('team') : void addTeam(false))}
-              disabled={busy}
+              disabled={busy || repo.pending}
             >
               {t('settings.factory.addTeam')}
             </Button>

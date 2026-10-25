@@ -116,6 +116,7 @@ export function buildWorkspaceListEntries(workspaces: Workspace[]): WorkspaceLis
       status: w.metadata?.status ?? null,
       progress: w.metadata?.progress ?? null,
     },
+    startupCwd: w.profile?.startupCwd || null,
     // Phase 1 hook plugin support — bridge scripts resolve hook payload's
     // cwd → workspace → activePtyId. activePtyId is the active pane's active
     // surface; ptyIds is the union over the whole workspace.

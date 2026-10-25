@@ -33,6 +33,14 @@ describe('parseWorkspaceMirrorPayload — defensive renderer-trust validation', 
     expect(parsed?.fleets[0].panes[0].agentStatus).toBe('running');
   });
 
+  it('keeps the folder a workspace was opened on (startupCwd) when it is a string, and drops anything else', () => {
+    const entry = (startupCwd: unknown) => parseWorkspaceMirrorPayload({ ts: 1, entries: [{ id: 'ws-1', name: 'a', startupCwd }], fleets: [] })?.entries[0];
+    expect(entry('C:/repo/a')?.startupCwd).toBe('C:/repo/a');
+    expect(entry(42)?.startupCwd).toBeUndefined();
+    expect(entry('')?.startupCwd).toBeUndefined();
+    expect(entry('x'.repeat(5000))?.startupCwd).toBeUndefined();
+  });
+
   it('drops a non-object / missing-arrays payload entirely (keep last-good)', () => {
     expect(parseWorkspaceMirrorPayload(null)).toBeNull();
     expect(parseWorkspaceMirrorPayload('nope')).toBeNull();

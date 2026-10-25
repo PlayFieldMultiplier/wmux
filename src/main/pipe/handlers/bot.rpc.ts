@@ -49,7 +49,8 @@ import { installBotFanoutWake } from '../../deck/fanoutCallerNotify';
 import { isVerifyReport } from '../../factory/verifyPreset';
 import { getTaskLedger } from '../../deck/taskLedgerHost';
 import type { WakeTaskSummary } from '../../factory/wakePrompt';
-import { botRepoFromFolder, greetNewBot } from '../../factory/botCreate';
+import { botRepoFromFolder, greetNewBot, recordWorkspaceRepo } from '../../factory/botCreate';
+import { WorkspaceRepoStore, getWorkspaceRepoStore, setWorkspaceRepoStore, workspaceReposPath } from '../../factory/workspaceRepos';
 import { DISMISSED_ANSWER, getHandoffRouter } from '../../factory/handoffRouter';
 import { getWakeTaint, guestGateProvenance, type GuestProvenance, type WakeTaint } from '../../factory/wakeTaint';
 import { TAINTED_CONVERSATION_SAVES_NOTHING, conversationTainted } from '../../factory/conversationMarks';
@@ -381,7 +382,8 @@ export function registerBotRpcHandlers(
       if (acpRefused) return acpRefused;
     }
     // A picked folder becomes the repo as "Add bot" resolves it (botCreate.ts).
-    if ('repoFolder' in patch) {
+    const fromFolder = 'repoFolder' in patch;
+    if (fromFolder) {
       const { repoFolder, ...rest } = patch;
       if ('repo' in rest) return refuse('invalid_argument', 'send repo or repoFolder, not both');
       const resolved = await botRepoFromFolder(l.store, botId, repoFolder);
@@ -391,6 +393,9 @@ export function registerBotRpcHandlers(
     const r = l.store.update(botId, patch);
     if (!r.ok) return refuse(r.code, r.message);
     l.runtime.profileChanged(botId);
+    // A repo from a folder is the workspace's: remembered, and given to its
+    // bots without one (a different repository was refused above).
+    if (fromFolder && r.bot.repo) recordWorkspaceRepo(l.store, r.bot.workspaceId, r.bot.repo, { profileChanged: (id) => l.runtime.profileChanged(id) });
     if ('job' in patch && r.bot.job) setJobPorts.jobGiven?.(botId);
     return { ok: true, bot: pipeProfile(r.bot), status: l.runtime.status(botId) };
   });
@@ -539,6 +544,9 @@ export function botRuntimeModule(router: FactoryRouter, deps: FactoryHostDeps, o
       setGuestWorkspaceStore(guestWorkspaces);
       const store = new BotStore(botsFilePath(wmuxDir), { defaultEngine: () => runnableDefaultEngine(settings.get().defaultEngine) });
       store.load();
+      const workspaceRepos = new WorkspaceRepoStore({ file: workspaceReposPath(wmuxDir) });
+      workspaceRepos.load();
+      setWorkspaceRepoStore(workspaceRepos);
       const sessions = new BotSessionStore(botSessionsPath(wmuxDir));
       sessions.load();
       const receipts = new BotFanoutReceipts(botFanoutReceiptsPath(wmuxDir));
@@ -687,9 +695,12 @@ export function botRuntimeModule(router: FactoryRouter, deps: FactoryHostDeps, o
       setHeldFanouts(null);
       setWakeQueue(null);
       setBotStore(null);
+      const workspaceRepos = getWorkspaceRepoStore();
+      setWorkspaceRepoStore(null);
       setGuestWorkspaceStore(null);
       setFactorySettingsStore(null);
       await l?.store.flush().catch(() => undefined);
+      await workspaceRepos?.flush().catch(() => undefined);
     },
   };
 }

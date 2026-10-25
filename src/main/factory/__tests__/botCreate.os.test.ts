@@ -11,7 +11,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('electron', () => ({ ipcMain: { handle: vi.fn(), removeHandler: vi.fn() } }));
 
 import { BotStore, botsFilePath } from '../botStore';
-import { botRepoFromFolder, createBotFromFolder, createTeamFromFolder, greetNewBot, homeShortPath, resolveBotRepo, suggestBotRepo, workspaceFolder, workspaceRepo } from '../botCreate';
+import { botRepoFromFolder, createBotFromFolder, createTeamFromFolder, greetNewBot, homeShortPath, recordWorkspaceRepo, resolveBotRepo, suggestBotRepo, workspaceFolders, workspaceRepo } from '../botCreate';
+import { WorkspaceRepoStore, workspaceReposPath } from '../workspaceRepos';
+import { persisterWritesSettled } from '../versionedFile';
 import { DEFAULT_FACTORY_SETTINGS, type FactorySettings } from '../factorySettings';
 import { factoryBotClearRemovedHandler, factoryBotCreateHandler, factoryBotCreateTeamHandler, factoryBotSuggestRepoHandler, factorySettingsSetHandler } from '../../ipc/handlers/factory.handler';
 import type { WorkspaceListEntry } from '../../../shared/workspaceMirror';
@@ -27,6 +29,7 @@ beforeEach(() => {
 });
 afterEach(async () => {
   await store.flush().catch(() => undefined);
+  await persisterWritesSettled();
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -312,19 +315,25 @@ describe('suggestBotRepo', () => {
     const r = await suggestBotRepo(store, 'ws-1', { ...base, git: appGit, entries: entries({ metadata: { cwd: APP } }), cwdOf: () => undefined });
     expect(r).toEqual({ ok: true, repoKey: 'github.com/acme/app', root: APP, displayRoot: path.join('~', 'code', 'app'), inherited: false });
     // A pane's own cwd still comes first.
-    expect(workspaceFolder('ws-1', entries({ metadata: { cwd: APP } })(), (p) => (p === 'pty-b' ? '/elsewhere' : undefined))).toBe('/elsewhere');
+    const elsewhere = path.resolve('/elsewhere');
+    expect(await workspaceFolders('ws-1', entries({ metadata: { cwd: APP } })(), (p) => (p === 'pty-b' ? elsewhere : undefined))).toEqual([elsewhere, APP]);
   });
 
-  it('a folder that is not a git checkout, or has no origin', async () => {
-    const cwdOf = () => '/home/me/notes';
-    expect(await suggestBotRepo(store, 'ws-1', { ...base, git: fakeGit(fail, fail), entries: entries(), cwdOf })).toEqual({ ok: false, code: 'not_a_repo' });
-    expect(await suggestBotRepo(store, 'ws-1', { ...base, git: fakeGit(ok('/home/me/notes\n'), fail), entries: entries(), cwdOf }))
-      .toEqual({ ok: false, code: 'no_remote' });
+  it('a folder that is not a git checkout, or has no origin: refused with the reason and its fix', async () => {
+    const NOTES = path.join(HOME, 'notes');
+    const cwdOf = () => NOTES;
+    expect(await suggestBotRepo(store, 'ws-1', { ...base, git: fakeGit(fail, fail), entries: entries(), cwdOf }))
+      .toEqual({ ok: false, code: 'not_a_repo', message: `${NOTES} is not a git checkout.` });
+    const noOrigin = await suggestBotRepo(store, 'ws-1', { ...base, git: fakeGit(ok(`${NOTES}\n`), fail), entries: entries(), cwdOf });
+    expect(noOrigin).toMatchObject({ ok: false, code: 'no_remote' });
+    if (noOrigin.ok) throw new Error('unreachable');
+    expect(noOrigin.message).toContain(`${NOTES} has no origin remote.`);
+    expect(noOrigin.message).toContain('git remote add origin');
   });
 
   it('no folder known: no mirror, an unknown workspace, no pane, no tracked cwd, a relative cwd', async () => {
     const git = vi.fn();
-    const cwd = () => '/home/me/code/app';
+    const cwd = () => APP;
     expect(await suggestBotRepo(store, 'ws-1', { ...base, git, entries: () => null, cwdOf: cwd })).toEqual({ ok: false, code: 'no_folder' });
     expect(await suggestBotRepo(store, 'ws-9', { ...base, git, entries: entries(), cwdOf: cwd })).toEqual({ ok: false, code: 'no_folder' });
     expect(await suggestBotRepo(store, 'ws-1', { ...base, git, entries: entries({ activePtyId: null, ptyIds: [] }), cwdOf: cwd })).toEqual({ ok: false, code: 'no_folder' });
@@ -335,8 +344,9 @@ describe('suggestBotRepo', () => {
     expect(git).not.toHaveBeenCalled();
   });
 
-  it('falls back from an active pane with no cwd to the workspace\'s other panes', () => {
-    expect(workspaceFolder('ws-1', entries()(), (p) => (p === 'pty-b' ? '/x/b' : undefined))).toBe('/x/b');
+  it('falls back from an active pane with no cwd to the workspace\'s other panes', async () => {
+    const b = path.resolve('/x/b');
+    expect(await workspaceFolders('ws-1', entries()(), (p) => (p === 'pty-b' ? b : undefined))).toEqual([b]);
   });
 
   it('a workspace whose bot has a repo answers that repo, inherited, without reading any folder', async () => {
@@ -356,7 +366,7 @@ describe('suggestBotRepo', () => {
       await gate;
       return args[0] === 'rev-parse' ? ok('/home/me/code/api\n') : ok('git@github.com:acme/api.git\n');
     });
-    const pending = suggestBotRepo(store, 'ws-1', { ...base, git, entries: entries(), cwdOf: () => '/home/me/code/api' });
+    const pending = suggestBotRepo(store, 'ws-1', { ...base, git, entries: entries(), cwdOf: () => path.join(HOME, 'code', 'api') });
     store.create({ workspaceId: 'ws-1', role: 'lead', repo: { repoKey: 'github.com/acme/app', repoPath: '/home/me/code/app' } });
     release();
     expect(await pending).toMatchObject({ ok: true, repoKey: 'github.com/acme/app', inherited: true });
@@ -375,6 +385,168 @@ describe('suggestBotRepo', () => {
   });
 });
 
+describe('the workspace\'s repository is asked once (workspace-repos.json)', () => {
+  const entries = (over: Partial<WorkspaceListEntry> = {}): (() => WorkspaceListEntry[]) =>
+    () => [{ id: 'ws-1', name: 'App', activePtyId: 'pty-a', ptyIds: ['pty-a', 'pty-b'], ...over }];
+  const HOME = path.resolve('/home/me');
+  const APP = path.join(HOME, 'code', 'app');
+  const NOTES = path.join(HOME, 'notes');
+  let records: WorkspaceRepoStore;
+  beforeEach(() => {
+    records = new WorkspaceRepoStore({ file: workspaceReposPath(dir) });
+    records.load();
+  });
+  const reload = async (): Promise<WorkspaceRepoStore> => {
+    await records.flush();
+    const again = new WorkspaceRepoStore({ file: workspaceReposPath(dir) });
+    again.load();
+    return again;
+  };
+  const appGit = () => fakeGit(ok(`${APP}\n`), ok('git@github.com:acme/app.git\n'));
+
+  it('a folder with no origin: refused once with its fix, then the owner\'s None is remembered and no folder is read again', async () => {
+    const git = fakeGit(ok(`${NOTES}\n`), fail);
+    const deps = { realpath: (p: string) => p, homeDir: HOME, records, git, entries: entries(), cwdOf: () => NOTES };
+    const first = await suggestBotRepo(store, 'ws-1', deps);
+    expect(first).toMatchObject({ ok: false, code: 'no_remote' });
+    if (first.ok) throw new Error('unreachable');
+    expect(first.message).toContain('git remote add origin');
+    // The owner adds anyway: the form sends noRepo.
+    const made = await createBotFromFolder(store, { workspaceId: 'ws-1', name: 'Ann', noRepo: true }, deps);
+    expect(made).toMatchObject({ ok: true });
+    expect(records.get('ws-1')).toMatchObject({ none: true });
+    git.mockClear();
+    expect(await suggestBotRepo(store, 'ws-1', deps)).toEqual({ ok: false, code: 'none' });
+    expect(git).not.toHaveBeenCalled();
+    // Kept on disk, across a restart.
+    const again = await reload();
+    expect(await suggestBotRepo(store, 'ws-1', { ...deps, records: again })).toEqual({ ok: false, code: 'none' });
+    // A folder picked later becomes the workspace's repository.
+    const picked = await createBotFromFolder(store, { workspaceId: 'ws-1', name: 'Bo', repoFolder: APP }, { ...deps, git: appGit() });
+    expect(picked).toMatchObject({ ok: true, bot: { repo: { repoKey: 'github.com/acme/app' } } });
+    expect(await suggestBotRepo(store, 'ws-1', deps)).toMatchObject({ ok: true, repoKey: 'github.com/acme/app', inherited: true });
+  });
+
+  it('an add without a folder and without noRepo remembers nothing (no answer was given)', async () => {
+    const deps = { realpath: (p: string) => p, records };
+    expect(await createBotFromFolder(store, { workspaceId: 'ws-1', name: 'Ann' }, deps)).toMatchObject({ ok: true });
+    expect(records.get('ws-1')).toBeNull();
+  });
+
+  it('the folder the workspace was opened on comes before a stray active pane', async () => {
+    const stray = path.resolve('/elsewhere');
+    const git = vi.fn(async (args: string[], cwd: string) => {
+      if (args[0] === 'rev-parse') return cwd === APP ? ok(`${APP}\n`) : fail;
+      return ok('git@github.com:acme/app.git\n');
+    });
+    const deps = { realpath: (p: string) => p, homeDir: HOME, records, git, entries: entries({ startupCwd: APP }), cwdOf: () => stray };
+    expect(await suggestBotRepo(store, 'ws-1', deps)).toMatchObject({ ok: true, repoKey: 'github.com/acme/app', root: APP, inherited: false });
+    expect(git.mock.calls[0]).toEqual([['rev-parse', '--show-toplevel'], APP]);
+    expect(await workspaceFolders('ws-1', entries({ startupCwd: APP, metadata: { cwd: stray } })(), () => stray)).toEqual([APP, stray]);
+  });
+
+  it('a refused folder the workspace was opened on still lets a pane\'s repository answer; its refusal is the one said otherwise', async () => {
+    const git = vi.fn(async (args: string[], cwd: string) => {
+      if (args[0] === 'rev-parse') return cwd === APP ? ok(`${APP}\n`) : fail;
+      return ok('git@github.com:acme/app.git\n');
+    });
+    const deps = { realpath: (p: string) => p, homeDir: HOME, records, git };
+    expect(await suggestBotRepo(store, 'ws-1', { ...deps, entries: entries({ startupCwd: NOTES }), cwdOf: () => APP })).toMatchObject({ ok: true, root: APP });
+    expect(await suggestBotRepo(store, 'ws-1', { ...deps, entries: entries({ startupCwd: NOTES }), cwdOf: () => undefined }))
+      .toEqual({ ok: false, code: 'not_a_repo', message: `${NOTES} is not a git checkout.` });
+  });
+
+  it('a WSL pane\'s Linux cwd is spelled as Windows opens it, with the pane\'s distro', async () => {
+    const daemonRpc = vi.fn(async () => [{ id: 'pty-a', wslTarget: { distribution: 'Ubuntu' } }, { id: 'pty-b' }]);
+    const cwdOf = (p: string) => (p === 'pty-a' ? '/home/me/repo' : '/mnt/d/src/app');
+    expect(await workspaceFolders('ws-1', entries()(), cwdOf, { platform: 'win32', daemonRpc }))
+      .toEqual(['\\\\wsl$\\Ubuntu\\home\\me\\repo', 'D:\\src\\app']);
+    // No distro known: only the drive mount translates; nothing is guessed.
+    expect(await workspaceFolders('ws-1', entries()(), cwdOf, { platform: 'win32' })).toEqual(['D:\\src\\app']);
+    // Elsewhere a Linux cwd is a real path.
+    expect(await workspaceFolders('ws-1', entries()(), cwdOf, { platform: 'linux' })).toEqual(['/home/me/repo', '/mnt/d/src/app']);
+  });
+
+  it('an add after a team never asks again: the team\'s repository, or its None', async () => {
+    const names = { coordinator: 'Lead', researcher: 'Res', developer: 'Dev', issue: 'Iss', reviewer: 'Rev' };
+    const git = appGit();
+    const deps = { realpath: (p: string) => p, homeDir: HOME, records, git, entries: entries(), cwdOf: () => APP };
+    expect(await createTeamFromFolder(store, { workspaceId: 'ws-1', names, repoFolder: APP }, deps)).toMatchObject({ ok: true });
+    expect(records.get('ws-1')).toMatchObject({ repo: { repoKey: 'github.com/acme/app' } });
+    git.mockClear();
+    expect(await suggestBotRepo(store, 'ws-1', deps)).toMatchObject({ ok: true, inherited: true });
+    expect(git).not.toHaveBeenCalled();
+    // A team made with no repository (None): the next add is not asked either.
+    expect(await createTeamFromFolder(store, { workspaceId: 'ws-2', names, noRepo: true }, deps)).toMatchObject({ ok: true });
+    expect(await suggestBotRepo(store, 'ws-2', { ...deps, entries: () => [{ id: 'ws-2', name: 'Two', activePtyId: 'pty-a' }] })).toEqual({ ok: false, code: 'none' });
+    expect(git).not.toHaveBeenCalled();
+  });
+
+  it('None first, then Add bot with a picked repository: the earlier bots get it too, and the runtime is told', async () => {
+    const told = vi.fn();
+    const deps = { git: fakeGit(ok('/src/app\n'), ok('https://github.com/acme/app.git\n')), realpath: (p: string) => p, records, profileChanged: told };
+    const first = await createBotFromFolder(store, { workspaceId: 'ws-1', name: 'Ann', noRepo: true }, deps);
+    if (!first.ok) throw new Error('not made');
+    expect(first.bot.repo).toBeUndefined();
+    // A bot on another workspace, and one with a repository of its own, stay as they are.
+    const far = await createBotFromFolder(store, { workspaceId: 'ws-2', name: 'Far' }, deps);
+    if (!far.ok) throw new Error('not made');
+    const second = await createBotFromFolder(store, { workspaceId: 'ws-1', name: 'Bo', repoFolder: '/src/app' }, deps);
+    if (!second.ok) throw new Error('not made');
+    expect(store.get(first.bot.id)?.repo).toMatchObject({ repoKey: 'github.com/acme/app' });
+    expect(told).toHaveBeenCalledWith(first.bot.id);
+    expect(told).not.toHaveBeenCalledWith(second.bot.id);
+    expect(store.get(far.bot.id)?.repo).toBeUndefined();
+    expect(records.get('ws-1')).toMatchObject({ repo: { repoKey: 'github.com/acme/app' } });
+    // A None never takes a repository from anyone.
+    expect(await createBotFromFolder(store, { workspaceId: 'ws-1', name: 'Cy', noRepo: true }, deps)).toMatchObject({ ok: true, bot: { repo: { repoKey: 'github.com/acme/app' } } });
+    expect(store.get(first.bot.id)?.repo).toMatchObject({ repoKey: 'github.com/acme/app' });
+  });
+
+  it('a team with a repository fills the workspace\'s earlier bots without one; a bot on another repository keeps it', async () => {
+    const told = vi.fn();
+    const app = { git: fakeGit(ok('/src/app\n'), ok('https://github.com/acme/app.git\n')), realpath: (p: string) => p, records, profileChanged: told };
+    const bare = store.create({ workspaceId: 'ws-1', name: 'Bare' });
+    if (!bare.ok) throw new Error('not made');
+    const names = { coordinator: 'Lead', researcher: 'Res', developer: 'Dev', issue: 'Iss', reviewer: 'Rev' };
+    expect(await createTeamFromFolder(store, { workspaceId: 'ws-1', names, repoFolder: '/src/app' }, app)).toMatchObject({ ok: true });
+    expect(store.get(bare.bot.id)?.repo).toMatchObject({ repoKey: 'github.com/acme/app' });
+    expect(told).toHaveBeenCalledWith(bare.bot.id);
+    // Filled straight from the record, a bot on another repository is not touched.
+    const other = store.create({ workspaceId: 'ws-3', name: 'Api', repo: { repoKey: 'github.com/acme/api', repoPath: '/src/api' } });
+    const none = store.create({ workspaceId: 'ws-3', name: 'None' });
+    if (!other.ok || !none.ok) throw new Error('not made');
+    expect(recordWorkspaceRepo(store, 'ws-3', { repoKey: 'github.com/acme/app', repoPath: '/src/app' }, { records, profileChanged: told })).toEqual([none.bot.id]);
+    expect(store.get(other.bot.id)?.repo).toMatchObject({ repoKey: 'github.com/acme/api' });
+  });
+
+  it('a remembered repository is the workspace\'s even with no bot left on it', async () => {
+    records.setRepo('ws-1', { repoKey: 'github.com/acme/app', repoPath: APP });
+    const git = vi.fn();
+    expect(workspaceRepo(store, 'ws-1', records)).toEqual({ repoKey: 'github.com/acme/app', repoPath: APP });
+    expect(await createBotFromFolder(store, { workspaceId: 'ws-1', name: 'Ann' }, { git, records })).toMatchObject({ ok: true, bot: { repo: { repoKey: 'github.com/acme/app' } } });
+    expect(git).not.toHaveBeenCalled();
+  });
+
+  it('a profile Change gives the repository to the workspace\'s bots without one; another repository stays repo_mismatch', async () => {
+    const app = { git: fakeGit(ok('/src/app\n'), ok('https://github.com/acme/app.git\n')), realpath: (p: string) => p, records };
+    const api = { git: fakeGit(ok('/src/api\n'), ok('git@github.com:acme/api.git\n')), realpath: (p: string) => p, records };
+    const names = { coordinator: 'Lead', researcher: 'Res', developer: 'Dev', issue: 'Iss', reviewer: 'Rev' };
+    const team = await createTeamFromFolder(store, { workspaceId: 'ws-1', names }, app);
+    if (!team.ok) throw new Error('no team');
+    const [lead, ...rest] = team.bots;
+    const changed = await botRepoFromFolder(store, lead.id, '/src/app', app);
+    if (!changed.ok) throw new Error('not resolved');
+    expect(store.update(lead.id, { repo: changed.repo }).ok).toBe(true);
+    const told = vi.fn();
+    expect(recordWorkspaceRepo(store, 'ws-1', changed.repo, { records, profileChanged: told }).sort()).toEqual(rest.map((b) => b.id).sort());
+    expect(told.mock.calls.map((c) => c[0]).sort()).toEqual(rest.map((b) => b.id).sort());
+    for (const b of rest) expect(store.get(b.id)?.repo).toMatchObject({ repoKey: 'github.com/acme/app' });
+    expect(records.get('ws-1')).toMatchObject({ repo: { repoKey: 'github.com/acme/app' } });
+    expect(await botRepoFromFolder(store, rest[0].id, '/src/api', api)).toMatchObject({ ok: false, code: 'repo_mismatch' });
+  });
+});
+
 describe('factoryBotSuggestRepoHandler (IPC guard)', () => {
   const mainFrame = { id: 'top' };
   const webContents = { mainFrame };
@@ -384,7 +556,8 @@ describe('factoryBotSuggestRepoHandler (IPC guard)', () => {
     const git = fakeGit(ok('/src/app\n'), ok('git@github.com:acme/app.git\n'));
     const cwdOf = vi.fn(() => '/src/app');
     const handler = factoryBotSuggestRepoHandler(() => win, {
-      store: () => store, git, realpath: (p) => p, homeDir: '/home/me', cwdOf,
+      // A Linux host: on Windows a Linux-shaped cwd is a WSL pane's.
+      store: () => store, git, realpath: (p) => p, homeDir: '/home/me', cwdOf, platform: 'linux',
       entries: () => [{ id: 'ws-1', name: 'App', activePtyId: 'pty-a' }],
     });
     const req = { workspaceId: 'ws-1', folder: '/evil', cwd: '/evil' };
