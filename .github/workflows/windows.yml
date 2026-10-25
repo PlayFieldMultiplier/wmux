@@ -83,6 +83,19 @@ jobs:
       - name: Test (both lanes, shard ${{ matrix.shard }}/2)
         run: npm run test:parallel -- --shard=${{ matrix.shard }}/2
 
+      # Remote pairing's firewall Fix, for real: creates, probes and removes
+      # Windows Firewall rules in group wmux-ci, through the same
+      # ShellExecuteExW runas path the app uses (this runner's user is an
+      # administrator with UAC off, so nothing prompts). The test skips
+      # wherever this variable is not set, so it never writes a rule on a
+      # developer's machine or in ci.yml, and it removes the whole wmux-ci
+      # group when it ends. One shard is enough.
+      - name: Firewall round trip (group wmux-ci)
+        if: matrix.shard == 1
+        env:
+          WMUX_FIREWALL_ROUNDTRIP: '1'
+        run: npx vitest run --project integration src/main/net/__tests__/firewallRoundtrip.os.test.ts
+
       # Same as validate's two steps in ci.yml: list tests that passed only on
       # retry (one report per lane, retries-unit.json and
       # retries-integration.json) and keep them, so a unit test that is flaky
