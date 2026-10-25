@@ -380,7 +380,7 @@ GET /api/events?since=<cursor>     (Bearer)
 GET /api/config    → {allowInput, allowUpload, allowTranscript, inlineImages?, liveActivityPush?,
                       gatedTools, gateEnabled?, fleetSidebar?, moaDelegations?, fleetTickets?, moa?, moaSessionId?, moaWake?,
                       moaWakeBlocked?, factory?, rooms?, channels?, terminalPromptDetail?,
-                      terminalPromptDecline?, protocolVersion, minProtocolVersion,
+                      terminalPromptDecline?, keepAwake?, protocolVersion, minProtocolVersion,
                       serverVersion, hostPlatform}
 GET /api/sessions  → {sessions: [{id, cwd, spawnCwd?, cols, rows, state, agent, lastActivity,
                       workspace?, workspaceId?, shell?, lastDetectedAgent?, agentAlive?, cwdLeaf?,
@@ -1070,6 +1070,38 @@ differences:
 
 Every refusal is the same `404 {error: 'image not found'}`, and the types and the
 8 MiB cap are unchanged.
+
+### Keep the computer awake — `keepAwake`
+
+The desktop's Settings › General "Keep the computer awake" holds off system
+sleep (never the display). Its default mode, "While working", holds while an
+agent is working **or a paired phone is attached**, and lets go 75 s after
+neither is true. "Always" and "Off" ignore the phone.
+
+```
+GET /api/config → { ..., keepAwake?: { mode: 'off' | 'working' | 'always', active: boolean } }
+```
+
+- `mode` is the desktop's setting. `active` says whether the computer is being
+  kept awake **right now** (the desktop holds its sleep blocker), for any
+  reason: a working agent, an attached phone, "Always", or the 75 s after the
+  last reason ended.
+- The key is **omitted, not `false`**, when no desktop app is attached to the
+  daemon (a headless daemon), and in the moment after a desktop attaches and
+  before it has reported. Absent means "not known"; never draw it as off.
+- The value is the desktop's last report. A phone that just attached (its
+  request counts) may still read the state from just before: the desktop is
+  told and reports back within a moment, so read it again on the next
+  `/api/config` rather than treating one answer as final.
+
+**Attached** means one of your paired devices (a phone, or a device that did
+not say what it is; never another computer paired with this one) holds an SSE
+stream open (`/api/stream` or `/api/events`), or made an authenticated
+request in the last 10 minutes. A revoked device stops counting at once. A
+stream on a socket that died silently (the phone left Wi-Fi or lost its
+signal) counts until the daemon's next heartbeat write fails, so the
+computer may stay awake a few minutes after the phone drops off the network.
+Additive — no protocol version bump.
 
 ---
 

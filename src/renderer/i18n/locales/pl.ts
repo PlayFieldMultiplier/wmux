@@ -1565,7 +1565,7 @@ export const pl = {
   'settings.startOnLoginDesc': 'Automatycznie uruchamiaj wmux po zalogowaniu',
   'settings.power': "Zasilanie",
   'settings.sleepPrevention': "Nie usypiaj komputera",
-  'settings.sleepPreventionDesc': "Komputer nie przechodzi w stan uśpienia, żeby agenci mogli dokończyć pracę. Ekran nadal może się wyłączyć.",
+  'settings.sleepPreventionDesc': "Komputer nie przechodzi w stan uśpienia, gdy agenci pracują lub telefon jest połączony. Ekran nadal może się wyłączyć.",
   'settings.sleepPreventionOff': "Wyłączone",
   'settings.sleepPreventionWorking': "Podczas pracy",
   'settings.sleepPreventionAlways': "Zawsze",

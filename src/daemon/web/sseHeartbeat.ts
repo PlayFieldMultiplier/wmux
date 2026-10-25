@@ -31,7 +31,7 @@ export interface SseWritable {
  * both an explicit teardown and the socket's own `close`.
  *
  * A failed write is swallowed: a broken stream is discovered and cleaned up by
- * the request's `close` handler, and throwing out of a timer callback would
+ * the response's `close` handler (onSseClose), and throwing out of a timer callback would
  * take down the daemon's event loop instead.
  */
 export function startSseHeartbeat(res: SseWritable, intervalMs: number = SSE_HEARTBEAT_MS): () => void {
@@ -51,4 +51,25 @@ export function startSseHeartbeat(res: SseWritable, intervalMs: number = SSE_HEA
     stopped = true;
     clearInterval(timer);
   };
+}
+
+/** The two things onSseClose needs from an `http.ServerResponse`. */
+export interface SseClosable {
+  readonly destroyed: boolean;
+  once(event: 'close', listener: () => void): unknown;
+}
+
+/**
+ * Run `onClose` once when a long-lived SSE response ends. A stream lives as
+ * long as its response, not its request: on Node 24 (Electron's) a request
+ * whose empty body has been read emits `close` while the response is still
+ * streaming. A response that closed before the caller got here (the client
+ * left during async auth) never emits `close` again, so `onClose` runs at once.
+ */
+export function onSseClose(res: SseClosable, onClose: () => void): void {
+  if (res.destroyed) {
+    onClose();
+    return;
+  }
+  res.once('close', onClose);
 }

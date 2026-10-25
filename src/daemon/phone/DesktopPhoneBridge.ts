@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { isKeepAwakeState, type KeepAwakeState } from '../../shared/sleepPrevention';
 
 export type DesktopPhoneCommand = 'accounts.list' | 'accounts.bind' | 'accounts.usage' | 'accounts.env' | 'accounts.envForAccount' | 'prompts.list' | 'prompts.replace' | 'workspaces.list' | 'workspaces.create' | 'workspaces.fleetTicket' | 'browser.list' | 'browser.capture' | 'browser.viewport' | 'browser.navigate' | 'browser.type' | 'browser.key' | 'browser.tap' | 'browser.open' | 'browser.scroll' | 'moa.wake' | 'workspaces.roomThreads' | 'workspaces.roomCards' | 'workspaces.roomAttachment' | 'workspaces.roomFile' | 'workspaces.botApproval' | 'workspaces.botApprovalDecide' | 'workspaces.workerResume' | 'workspaces.guestPost';
 export class DesktopPhoneError extends Error {
@@ -20,6 +21,8 @@ export class DesktopPhoneBridge {
   private owner: string | null = null;
   /** Optional commands the attached desktop announced at register; reset with the owner. */
   private commands = new Set<string>();
+  /** The owner's last "Keep the computer awake" report; reset with the owner. */
+  private awake: KeepAwakeState | null = null;
   private pending = new Map<string, Pending>();
   constructor(private readonly send: (clientId: string, event: unknown) => boolean, private readonly timeoutMs = DESKTOP_PHONE_TIMEOUT_MS) {}
   get available() { return this.owner !== null; }
@@ -31,6 +34,7 @@ export class DesktopPhoneBridge {
   register(clientId: string, commands?: unknown) {
     if (this.owner !== null && this.owner !== clientId) return false;
     this.owner = clientId;
+    this.awake = null;
     this.commands = new Set(Array.isArray(commands)
       ? commands.filter((c): c is string => typeof c === 'string' && c.length <= 64).slice(0, 32)
       : []);
@@ -42,11 +46,31 @@ export class DesktopPhoneBridge {
     if (this.owner !== clientId) return;
     this.owner = null;
     this.commands = new Set();
+    this.awake = null;
     for (const [id, pending] of this.pending) {
       clearTimeout(pending.timer);
       pending.reject(new DesktopPhoneError('desktop-disconnected'));
       this.pending.delete(id);
     }
+  }
+  /**
+   * The desktop's keep-awake mode and whether its blocker is held now, as its
+   * owner last reported it. Only the owner may report; anything malformed is
+   * refused. Null until the first report, and again once the owner leaves.
+   */
+  setKeepAwake(clientId: string, state: unknown): boolean {
+    if (this.owner === null || this.owner !== clientId || !isKeepAwakeState(state)) return false;
+    this.awake = { mode: state.mode, active: state.active };
+    return true;
+  }
+  get keepAwake(): KeepAwakeState | null { return this.owner !== null ? this.awake : null; }
+  /** Tell the desktop whether a paired phone is attached. False when no desktop is attached. */
+  notifyPhonePresence(attached: boolean): boolean {
+    const owner = this.owner;
+    if (!owner) return false;
+    if (this.send(owner,{type:'phone.presence',sessionId:'',data:{attached}})) return true;
+    this.disconnect(owner);
+    return false;
   }
   request(command: DesktopPhoneCommand, payload: Record<string,unknown>): Promise<unknown> {
     const owner = this.owner;
@@ -81,4 +105,16 @@ export class DesktopPhoneBridge {
     else pending.reject(new DesktopPhoneError('desktop-request-failed'));
     return true;
   }
+}
+
+/**
+ * `daemon.phone.keepAwake`: main's keep-awake mode and blocker, for
+ * `/api/config`. Only a first-party client (main's own process) is heard, and
+ * only when it is the registered desktop.
+ */
+export function keepAwakeRpc(
+  bridge: DesktopPhoneBridge,
+  firstParty: (clientId: string) => boolean,
+): (params: unknown, ctx: { clientId: string }) => Promise<{ ok: boolean }> {
+  return async (params, ctx) => ({ ok: firstParty(ctx.clientId) && bridge.setKeepAwake(ctx.clientId, params) });
 }

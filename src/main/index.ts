@@ -12,6 +12,7 @@ import { handlePhoneBrowser } from './phone/PhoneBrowser';
 import { handlePhoneWorkspaces } from './phone/PhoneWorkspaces';
 import { handlePhoneQuickCommands } from './quickCommands/QuickCommandStore';
 import { installPhoneBridge } from './phone/installPhoneBridge';
+import { installKeepAwakeLink } from './power/keepAwakeLink';
 import { botApprovalPushTable, createBotApprovalPushFeed, setBotApprovalPushFeed } from './phone/BotApprovalPushFeed';
 import { createBotPromptPushFeed, openBotPromptRows, setBotPromptPushFeed } from './phone/BotPromptPushFeed';
 import { handlePhoneMoaWake } from './factory/phoneMessage';
@@ -774,6 +775,7 @@ webviewCdpManager.setLeaseObserver((surfaceId, leases) => browserAgentControl.no
 // Daemon client — initialized on app ready, used if daemon is available
 let daemonClient: DaemonClient | null = null;
 let disposePhoneBridge: (() => void) | null = null;
+let disposeKeepAwakeLink: (() => void) | null = null;
 
 // envelope PR4 C12: 워커 전이는 데몬 A2aTaskService(정본 로그)에 먼저 커밋된다 —
 // getter 주입이라 앱-레디 이후 연결되는 daemonClient를 자연 추적한다.
@@ -2410,6 +2412,10 @@ app.on('ready', async () => {
           }) : command.startsWith('workspaces.') ? handlePhoneWorkspaces(command,payload,() => mainWindow) : command.startsWith('prompts.') ? handlePhoneQuickCommands(command,payload) : handlePhoneAccounts(command,payload,{
             store:getAccountStore(),usage:accountUsageService,
           }));
+          // Keep the computer awake while a paired phone is attached. Installed in
+          // the same tick as the register above, before the daemon's answer to it.
+          disposeKeepAwakeLink?.();
+          disposeKeepAwakeLink = sleepPrevention ? installKeepAwakeLink(client, sleepPrevention.controller) : null;
         })
         .catch(() => {
           // Old daemon: no identify, therefore no presence, therefore pushes.
@@ -2546,6 +2552,9 @@ app.on('ready', async () => {
     },
     onUninstall: () => {
       console.warn('[Main] Daemon disconnected, falling back to local PTY');
+      // The daemon's "phone attached" goes with it.
+      disposeKeepAwakeLink?.();
+      disposeKeepAwakeLink = null;
       daemonNotificationRouter?.stop();
       daemonNotificationRouter = null;
       remoteInboxBridge?.stop();
@@ -3348,6 +3357,7 @@ app.on('before-quit', async (e) => {
   safeStep('disposeUsagePollerListener', () => disposeUsagePollerListener());
   safeStep('usagePoller.dispose', () => usagePoller.dispose());
   safeStep('disposePhoneBridge', () => { disposePhoneBridge?.(); disposePhoneBridge = null; });
+  safeStep('disposeKeepAwakeLink', () => { disposeKeepAwakeLink?.(); disposeKeepAwakeLink = null; });
   safeStep('disposeAccountUsageListener', () => disposeAccountUsageListener());
   safeStep('accountUsageService.dispose', () => accountUsageService.dispose());
   safeStep('cleanupAccountUsageIpc', () => {
