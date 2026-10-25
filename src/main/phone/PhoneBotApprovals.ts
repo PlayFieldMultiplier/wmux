@@ -42,7 +42,11 @@ export function handlePhoneBotApprovalCommand(
   // where the change is shown.
   const act = service.get(requestId)?.action;
   if (act && CARD_ONLY_ACTIONS.has(act)) return { refused: { code: 'not_on_phone', message: `${act === 'skill' ? 'a skill' : 'a change to your profile'} is approved in wmux on its card, where the change is shown` } };
-  const body = parsePhoneBotApprovalDecideBody({ decision: payload.decision, ...(payload.ruleScope !== undefined ? { ruleScope: payload.ruleScope } : {}) });
+  const body = parsePhoneBotApprovalDecideBody({
+    decision: payload.decision,
+    ...(payload.ruleScope !== undefined ? { ruleScope: payload.ruleScope } : {}),
+    ...(payload.payloadHash !== undefined ? { payloadHash: payload.payloadHash } : {}),
+  });
   if (!body) return { invalid: true };
   const deviceId = typeof payload.deviceId === 'string' && DEVICE_ID_RE.test(payload.deviceId) ? payload.deviceId : undefined;
   const res = service.decide({ requestId, ...body }, 'phone', deviceId);

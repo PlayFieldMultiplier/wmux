@@ -94,7 +94,7 @@ interface Rig {
   spawns: BotEngineSpawnInput[];
 }
 
-function rig(opts: { mode?: FakeAdapter['mode']; engines?: BotEngineFactory; load?: boolean; timers?: Array<{ fn: () => void; at: number }>; claudeQuota?: BotRuntimeDeps['claudeQuota']; workerLoad?: BotRuntimeDeps['workerLoad']; claudeAccountName?: BotRuntimeDeps['claudeAccountName'] } = {}): Rig {
+function rig(opts: { mode?: FakeAdapter['mode']; engines?: BotEngineFactory; load?: boolean; timers?: Array<{ fn: () => void; at: number }>; claudeQuota?: BotRuntimeDeps['claudeQuota']; workerLoad?: BotRuntimeDeps['workerLoad']; claudeAccountName?: BotRuntimeDeps['claudeAccountName']; resolveTasks?: BotRuntimeDeps['resolveTasks']; resolveTaskFiles?: BotRuntimeDeps['resolveTaskFiles'] } = {}): Rig {
   const store = new BotStore(botsFilePath(dir), { now: () => clock });
   const sessions = new BotSessionStore(botSessionsPath(dir));
   let runtime: BotRuntime | null = null;
@@ -121,6 +121,8 @@ function rig(opts: { mode?: FakeAdapter['mode']; engines?: BotEngineFactory; loa
     ...(opts.claudeQuota ? { claudeQuota: opts.claudeQuota } : {}),
     ...(opts.workerLoad ? { workerLoad: opts.workerLoad } : {}),
     ...(opts.claudeAccountName ? { claudeAccountName: opts.claudeAccountName } : {}),
+    ...(opts.resolveTasks ? { resolveTasks: opts.resolveTasks } : {}),
+    ...(opts.resolveTaskFiles ? { resolveTaskFiles: opts.resolveTaskFiles } : {}),
     ...(timers ? {
       setTimer: (fn: () => void, ms: number) => { timers.push({ fn, at: clock + ms }); return timers.length; },
       clearTimer: () => undefined,
@@ -979,6 +981,22 @@ describe('BotRuntime', () => {
     expect(r.adapters[0].prompts[0]).toContain('PR TITLE');
   });
 
+  it('a task.done wake reads its tasks\' files for this bot before the prompt, and the prompt names them', async () => {
+    const asked: Array<[string, readonly string[]]> = [];
+    const r = rig({
+      resolveTasks: (ids) => ids.map((taskId) => ({ taskId, title: 'Banner', status: 'completed' })),
+      resolveTaskFiles: async (botId, factIds) => {
+        asked.push([botId, factIds]);
+        return new Map([['wtask-1', { files: ['/r/1/banner.png'], threadId: 'general' }]]);
+      },
+    });
+    const id = createBot(r);
+    r.queue.enqueue({ botId: id, workspaceId: 'ws-1', reason: { kind: 'facts', factIds: ['task.done:wtask-1@4'], trigger: { kind: 'task.done' } }, priority: 2 });
+    await settle();
+    expect(asked).toEqual([[id, ['task.done:wtask-1@4']]]);
+    expect(r.adapters[0].prompts[0]).toContain('- wtask-1, thread "general": ["/r/1/banner.png"]');
+  });
+
   it('a facts wake shows no fact from another bot\'s 1:1 with the owner (a Coordinator\'s correction trigger, the gardener), and its own 1:1\'s facts still', async () => {
     const r = rig();
     const id = createBot(r);
@@ -1322,6 +1340,70 @@ describe('room-wide owner messages, wake context and turn ends', () => {
 
 describe('external guests and the bot\'s conversation', () => {
   const GUEST = '0b5f6a7e-1c2d-4e3f-8a9b-0c1d2e3f4a5b';
+
+  it('New conversation is refused mid-turn and that turn still saves its session; between turns the next wake starts clean, marks and all', async () => {
+    // The owner's own words: only the mark set below taints the conversation.
+    setBotRuntimePorts({ wakeTainted: () => false });
+    const r = rig();
+    const id = createBot(r);
+    r.runtime.wake(id, { text: 'hello' });
+    await settle();
+    markConversation(id, 'tainted');
+    expect(r.runtime.newConversation(id)).toEqual({ ok: false, code: 'running', message: 'stop the turn first' });
+    r.adapters[0].end();
+    await settle();
+    expect(r.sessions.get(id)).toMatchObject({ sessionId: 'sess-1', tainted: true });
+    expect(r.runtime.newConversation(id)).toMatchObject({ ok: true });
+    expect(r.adapters[0].disposed).toBe(true);
+    expect(r.sessions.get(id)).toBeNull();
+    expect(conversationMarks(id)).toBeNull();
+    r.runtime.wake(id, { text: 'again' });
+    await settle();
+    expect(r.adapters[1].started?.resumeSessionId).toBeUndefined();
+    expect(conversationMarks(id)).toEqual({ tainted: false, signedIn: false });
+    expect(r.runtime.newConversation('bot-0000ffff')).toMatchObject({ ok: false, code: 'not_found' });
+  });
+
+  it('New conversation stays refused after the turn saved its session and until the turn settles, so nothing writes the old id back', async () => {
+    let release: () => void = () => undefined;
+    const posting = new Promise<void>((r) => { release = r; });
+    setBotRuntimePorts({ wakeTainted: () => false, postTurnText: () => posting });
+    const r = rig();
+    const id = createBot(r);
+    r.runtime.wake(id, { text: 'hello' });
+    await settle();
+    r.adapters[0].end([{ type: 'text-delta', text: 'hi' }, { type: 'turn-end', sessionId: 'sess-1' }]);
+    await settle();
+    // The record is written; the turn still runs (its reply is being posted).
+    expect(r.sessions.get(id)?.sessionId).toBe('sess-1');
+    expect(r.runtime.newConversation(id)).toMatchObject({ ok: false, code: 'running' });
+    release();
+    await settle();
+    expect(r.runtime.newConversation(id)).toMatchObject({ ok: true });
+    expect(r.sessions.get(id)).toBeNull();
+    await settle();
+    expect(r.sessions.get(id)).toBeNull();
+  });
+
+  it('a wake queued before New conversation marks the new conversation as its content says: a reset launders nothing', async () => {
+    setBotRuntimePorts({ wakeTainted: (item) => item.reason.kind === 'routine' });
+    const r = rig();
+    const id = createBot(r);
+    r.runtime.wake(id, { text: 'hello' });
+    await settle();
+    r.adapters[0].end();
+    await settle();
+    expect(r.runtime.park(id)).toMatchObject({ ok: true });
+    must(r.queue.enqueue({ botId: id, workspaceId: 'ws-1', reason: { kind: 'routine', routineId: 'r-1', dueAt: clock }, priority: 1 }));
+    expect(r.runtime.newConversation(id)).toMatchObject({ ok: true });
+    expect(r.runtime.resume(id)).toMatchObject({ ok: true });
+    await settle();
+    expect(r.adapters[1].started?.resumeSessionId).toBeUndefined();
+    expect(conversationMarks(id)).toEqual({ tainted: true, signedIn: false });
+    r.adapters[1].end([{ type: 'turn-end', sessionId: 'sess-2' }]);
+    await settle();
+    expect(r.sessions.get(id)).toMatchObject({ sessionId: 'sess-2', tainted: true });
+  });
 
   it('a guest\'s wake runs in a fresh conversation that is never saved; the owner\'s conversation resumes after it', async () => {
     const r = rig();

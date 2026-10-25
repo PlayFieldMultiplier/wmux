@@ -25,7 +25,7 @@ import { agentExecEnv } from '../shared/execEnv';
 import { workspaceAccountEnv } from './phone/workspaceAccountEnv';
 import { applyPaneAccount, assertPaneAccountUsable } from './phone/paneAccount';
 import type { PaneAccountVendor, StoredHandoffFrom } from '../shared/phonePaneAccount';
-import { DesktopPhoneBridge } from './phone/DesktopPhoneBridge';
+import { DesktopPhoneBridge, keepAwakeRpc } from './phone/DesktopPhoneBridge';
 import { RunHistoryStore } from './history/RunHistoryStore';
 import { AutomationEngine } from './automation/AutomationEngine';
 import { assertExternalSessionId, registerAutomationRpc } from './automation/rpc';
@@ -991,6 +991,7 @@ async function restoreWebServer(sessionManager: DaemonSessionManager): Promise<v
         // reachable by browser_file_upload without a second policy.
         uploadsDir: path.join(wmuxDir, 'uploads', 'phone'),
         roomAttachmentsDir: path.join(wmuxDir, 'factory', 'room-attachments'),
+        roomFilesDir: path.join(wmuxDir, 'factory', 'room-files'),
         // Each file served because an agent sent it with SendUserFile.
         auditSentFile: (entry) => getDeviceStore().recordSentFile(entry),
         // The Moa (HQ brain) pane main last vouched for, read per request so a
@@ -3723,6 +3724,7 @@ function registerRpcHandlers(
       // See the restore path for why this directory and not another.
       uploadsDir: path.join(wmuxDir, 'uploads', 'phone'),
         roomAttachmentsDir: path.join(wmuxDir, 'factory', 'room-attachments'),
+        roomFilesDir: path.join(wmuxDir, 'factory', 'room-files'),
       // See the restore path.
       auditSentFile: (entry) => getDeviceStore().recordSentFile(entry),
       // See the restore path.
@@ -4590,8 +4592,15 @@ function registerRpcHandlers(
   desktopPhoneBridge ??= new DesktopPhoneBridge((id,event) => pipeServer.sendTo(id,event));
   pipeServer.onRpc('daemon.phone.register', async (params,ctx) => {
     if (!firstPartyOnly(ctx.clientId,'daemon.phone.register')) return {ok:false};
-    return {ok:desktopPhoneBridge!.register(ctx.clientId,(params as {commands?:unknown} | undefined)?.commands)};
+    const ok = desktopPhoneBridge!.register(ctx.clientId,(params as {commands?:unknown} | undefined)?.commands);
+    // Keep the computer awake: a (re)connected desktop learns at once whether
+    // a paired phone is attached, and answers with its own keep-awake state.
+    if (ok) desktopPhoneBridge?.notifyPhonePresence(webTerminalServer?.phoneAttached() ?? false);
+    return {ok};
   });
+  // Main's "Keep the computer awake" mode and whether its blocker is held,
+  // for `/api/config` `keepAwake`. Only the registered desktop may report it.
+  pipeServer.onRpc('daemon.phone.keepAwake', keepAwakeRpc(desktopPhoneBridge,(clientId) => firstPartyOnly(clientId,'daemon.phone.keepAwake')));
   pipeServer.onRpc('daemon.phone.complete', async (params,ctx) => {
     if (!firstPartyOnly(ctx.clientId,'daemon.phone.complete')) return {ok:false};
     return {ok:desktopPhoneBridge!.complete(ctx.clientId,params)};

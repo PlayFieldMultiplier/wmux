@@ -11,7 +11,8 @@
 // FACTORY_STOP_BOT: factory/factoryStop.ts), and the owner's resume of a
 // stopped worker (FACTORY_WORKER_RESUME: factory/workerReclaim.ts), and the
 // owner's Apply of a bot task's changes to the bot's repository folder
-// (FACTORY_TASK_APPLY: factory/taskApply.ts).
+// (FACTORY_TASK_APPLY: factory/taskApply.ts), and the owner's New
+// conversation for a bot (FACTORY_BOT_NEW_CONVERSATION).
 // A bot row carries the bot's tasks with their stage (factory/botTasks.ts).
 import fs from 'node:fs';
 import { dialog, ipcMain, nativeImage, type BrowserWindow, type OpenDialogOptions } from 'electron';
@@ -19,7 +20,7 @@ import { IPC } from '../../../shared/constants';
 import { BOT_ID_RE, HERMES_BOT_ENGINE, isCoordinatorBot, type BotProfile, type BotStatus } from '../../../shared/bot';
 import { wrapHandler } from '../wrapHandler';
 import { getBotStore } from '../../factory/botStore';
-import { getBotRuntime } from '../../factory/BotRuntime';
+import { getBotRuntime, type BotRuntime } from '../../factory/BotRuntime';
 import { getFactorySettings, getFactorySettingsStore, type FactorySettings } from '../../factory/factorySettings';
 import { createBotFromFolder, createTeamFromFolder, greetNewBot, suggestBotRepo, type BotRepoDeps, type BotRepoSuggestDeps } from '../../factory/botCreate';
 import { getWakeQueue } from '../../factory/wakeQueue';
@@ -127,6 +128,23 @@ export function factoryStopHandler(
     const p = ports();
     if (!p) return { ok: false, ...STOP_NONE, code: 'not_started', message: 'The factory is not running.' };
     return stopFactoryWork(p, botId !== undefined ? { botId } : {});
+  };
+}
+
+/** FACTORY_BOT_NEW_CONVERSATION's body: the sender check, the bot id, then
+ *  BotRuntime.newConversation. */
+export function factoryBotNewConversationHandler(
+  getWindow: () => BrowserWindow | null,
+  runtime: () => Pick<BotRuntime, 'newConversation'> | null = getBotRuntime,
+): (e: { sender?: unknown; senderFrame?: unknown }, req?: unknown) => { ok: true } | { ok: false; code: string; message: string } {
+  return (e, req) => {
+    if (!isMainWindowSender(e, getWindow())) return { ok: false, code: 'operator_only', message: 'only the main window may start a bot\'s new conversation' };
+    const raw = req && typeof req === 'object' && !Array.isArray(req) ? (req as { botId?: unknown }).botId : undefined;
+    if (typeof raw !== 'string' || !BOT_ID_RE.test(raw)) return { ok: false, code: 'invalid_argument', message: 'botId must be a bot id' };
+    const r = runtime();
+    if (!r) return { ok: false, code: 'not_started', message: 'The factory is not running.' };
+    const res = r.newConversation(raw);
+    return res.ok ? { ok: true } : { ok: false, code: res.code, message: res.message };
   };
 }
 
@@ -582,6 +600,7 @@ export function registerFactoryHandlers(
     IPC.FACTORY_BOT_CLEAR_REMOVED,
     IPC.FACTORY_STOP_ALL,
     IPC.FACTORY_STOP_BOT,
+    IPC.FACTORY_BOT_NEW_CONVERSATION,
     IPC.FACTORY_STOP_TASK,
     IPC.FACTORY_WORKER_RESUME,
     IPC.FACTORY_TASK_APPLY,
@@ -637,6 +656,8 @@ export function registerFactoryHandlers(
   ipcMain.handle(IPC.FACTORY_STOP_ALL, wrapHandler(IPC.FACTORY_STOP_ALL, factoryStopHandler(getWindow, 'all')));
 
   ipcMain.handle(IPC.FACTORY_STOP_BOT, wrapHandler(IPC.FACTORY_STOP_BOT, factoryStopHandler(getWindow, 'bot')));
+
+  ipcMain.handle(IPC.FACTORY_BOT_NEW_CONVERSATION, wrapHandler(IPC.FACTORY_BOT_NEW_CONVERSATION, factoryBotNewConversationHandler(getWindow)));
 
   ipcMain.handle(IPC.FACTORY_STOP_TASK, wrapHandler(IPC.FACTORY_STOP_TASK, factoryStopHandler(getWindow, 'task')));
 

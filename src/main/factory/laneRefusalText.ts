@@ -77,6 +77,19 @@ const SENTENCES: Readonly<Record<string, string>> = {
   'pr-mismatch': '{host} answered for a different PR',
   'behind-updated': 'The branch was behind; it was updated and needs fresh checks',
   invalid: '{host} refused the merge request',
+  // The act executor (actExecutor.ts): a comment, an issue, a close.
+  'approval-mismatch': 'The request no longer matches what was approved',
+  'repo-changed': 'The repository was renamed, moved or changed since the request',
+  'target-gone': 'The issue or PR is no longer on {host}',
+  'target-changed': 'The issue or PR is not the one the request named',
+  'already-closed': 'It was already closed',
+  merged: 'The PR was merged',
+  locked: 'The conversation is locked',
+  'found-different': 'A post with this request\'s marker is on {host} with other text',
+  'closed-by-other': 'Someone else closed it first',
+  'closed-differently': 'It was closed on {host}, but not as approved',
+  'secret-in-body': 'Its text holds a secret stored since the request',
+  'attempts-exhausted': 'wmux tried three times and could not tell whether it went through',
 };
 
 /** Sentences for code families with a variable tail. */
@@ -84,6 +97,7 @@ const PREFIX_SENTENCES: ReadonlyArray<readonly [string, string]> = [
   ['required-check-', 'A required check did not pass'],
   ['behind-update-', 'The branch is behind and could not be updated'],
   ['blocked-', '{host} blocked the merge'],
+  ['gh-', '{host} refused it'],
 ];
 
 const CODE = /^[a-z0-9-]+(?::[a-z0-9-]+)?$/;

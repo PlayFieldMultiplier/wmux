@@ -14,6 +14,21 @@ export function isSleepPreventionMode(value: unknown): value is SleepPreventionM
   return typeof value === 'string' && (SLEEP_PREVENTION_MODES as readonly string[]).includes(value);
 }
 
+/**
+ * What main reports to the daemon (`daemon.phone.keepAwake`) and a phone reads
+ * as `/api/config` `keepAwake`: the mode, and whether the blocker is held now.
+ */
+export interface KeepAwakeState {
+  mode: SleepPreventionMode;
+  active: boolean;
+}
+
+export function isKeepAwakeState(value: unknown): value is KeepAwakeState {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as Record<string, unknown>;
+  return isSleepPreventionMode(v['mode']) && typeof v['active'] === 'boolean';
+}
+
 /** The stretch the system was asleep for, main → renderer after a resume. */
 export interface SleepWindow {
   suspendedAt: number;

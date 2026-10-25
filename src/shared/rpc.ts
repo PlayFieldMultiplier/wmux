@@ -566,6 +566,8 @@ export type RpcMethod =
   // pushes the whole table on every change; the daemon holds the last one.
   | 'daemon.phone.register'
   | 'daemon.phone.complete'
+  // Main → daemon: "Keep the computer awake" mode and whether the blocker is held.
+  | 'daemon.phone.keepAwake'
   | 'daemon.workspaceFacts.set'
   // Main → daemon: the bot approval requests waiting on the owner, so the
   // daemon can push them to the phone (shared/botApprovalPush.ts).
@@ -928,6 +930,7 @@ export const ALL_RPC_METHODS = [
   'daemon.setResumeBinding',
   'daemon.phone.register',
   'daemon.phone.complete',
+  'daemon.phone.keepAwake',
   'daemon.workspaceFacts.set',
   'daemon.botApprovals.set',
   'daemon.botPrompts.set',
@@ -1170,6 +1173,10 @@ export interface DaemonEvent {
     | 'input.typed'
     | 'session.output'
     | 'phone.request'
+    // Daemon → the registered desktop only: whether a paired phone is attached
+    // (sent on each change and right after daemon.phone.register).
+    //   phone.presence → { attached: boolean }
+    | 'phone.presence'
     | 'agent.event'
     // Daemon-owned agent turn, excluding boot paints and bare shell submits.
     | 'agent.turn'

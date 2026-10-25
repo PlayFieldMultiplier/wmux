@@ -18,6 +18,7 @@ import { isGuestSourcedCard, type RoomCard, type ThreadId } from '../../shared/r
 import { botFanoutIdempotencyKey, type WakeItem } from '../../shared/wake';
 import { DEFAULT_BOT_WORKER_AGENT, botWorkerAgentLabel } from '../../shared/botWorkerAgent';
 import type { SkillIndexEntry } from '../../shared/botSkill';
+import { ROOM_FILE_LIMITS } from '../../shared/roomFiles';
 
 /** A fan-out task as the wake reports it (from its ledger row). */
 export interface WakeTaskSummary {
@@ -26,7 +27,17 @@ export interface WakeTaskSummary {
   status: string;
   summary?: string;
   gate?: { exitCode: number | null; headSha?: string; skipped?: string };
+  /** A done task of the woken bot that it has not settled yet: the files
+   *  its report hands the owner, found in the task's own folder
+   *  (bot.rpc.ts wakeTaskFiles); how many more files the report named than
+   *  one card carries; and the task's thread. */
+  files?: string[];
+  filesLeftOut?: number;
+  threadId?: string;
 }
+
+/** What wakeTaskFiles adds to a task's summary. */
+export type WakeTaskFiles = Required<Pick<WakeTaskSummary, 'files'>> & Pick<WakeTaskSummary, 'filesLeftOut' | 'threadId'>;
 
 /** A handoff as the wake reports it. */
 export interface WakeHandoffSummary {
@@ -175,6 +186,8 @@ export interface WakeApprovalSummary {
   action?: string;
   /** An approved `skill`: where that skill stands now (wakeContext.ts). */
   skill?: 'loaded' | 'archived' | 'changed' | 'replaced';
+  /** An act wmux carries out once approved (a comment, an issue, a close). */
+  carried?: true;
 }
 
 /** Another bot's reply to the same owner message. */
@@ -260,6 +273,31 @@ export function taskFactId(status: string, taskId: string, rev: number): string 
 export function taskIdOfFactId(id: string): string | null {
   const m = /^task\.[a-z_]+:(.+)@[0-9]+$/.exec(id);
   return m ? m[1] : null;
+}
+
+/**
+ * Files a worker made reach the owner only on a card: nothing else shows
+ * them, so the wake of a done task that made some has them posted in this
+ * turn, after the rest of its handling. Only a `task.done` fact counts;
+ * wakeTaskFiles gives files only to a done task the woken bot started and
+ * has not settled. Each list is a JSON array to pass through as it is.
+ */
+function taskFilesLines(factIds: readonly string[], tasks: ReadonlyMap<string, WakeTaskSummary>): string[] {
+  const named: WakeTaskSummary[] = [];
+  for (const id of factIds) {
+    const task = id.startsWith('task.done:') ? tasks.get(taskIdOfFactId(id) ?? '') : undefined;
+    if (task?.files?.length && !named.includes(task)) named.push(task);
+  }
+  if (named.length === 0) return [];
+  return [
+    '',
+    `Task${named.length > 1 ? 's' : ''} ${named.map((t) => t.taskId).join(', ')} made files for the owner, who sees them only on a card. `
+      + 'After the rest of this wake\'s handling, post one card per task in that task\'s thread: room_post with `files` set to the list below exactly as written — '
+      + 'also when another bot handed you the work. A file gone by then: leave it out, settle the task anyway and say so in its result; it is not a blocker. '
+      + 'Then settle the task, and name the card in any `result` you send.',
+    ...named.map((t) => `- ${t.taskId}${t.threadId ? `, thread ${JSON.stringify(t.threadId)}` : ''}: ${JSON.stringify(t.files)}`
+      + (t.filesLeftOut ? ` (${t.filesLeftOut} more file${t.filesLeftOut > 1 ? 's' : ''} its report named left out: a card carries ${ROOM_FILE_LIMITS.PER_CARD})` : '')),
+  ];
 }
 
 function factBlock(f: Fact): string {
@@ -510,6 +548,7 @@ export function buildWakePrompt(input: WakePromptInput): string {
             + 'Answer it yourself with worker_message when you can; ask the owner only what you cannot decide, then pass their answer on with worker_message.',
         );
       }
+      lines.push(...taskFilesLines(r.factIds, tasks));
       break;
     }
   }
@@ -628,9 +667,10 @@ const SKILL_APPROVED_TEXT: Readonly<Record<NonNullable<WakeApprovalSummary['skil
   replaced: 'approved, since replaced by another approved version',
 };
 
-function approvalStateText(a: Pick<WakeApprovalSummary, 'state' | 'action' | 'skill'>): string {
+function approvalStateText(a: Pick<WakeApprovalSummary, 'state' | 'action' | 'skill' | 'carried'>): string {
   const state = a.state;
   if (state === 'approved' && a.action === 'skill') return a.skill ? SKILL_APPROVED_TEXT[a.skill] : 'approved by the owner';
+  if (state === 'approved' && a.carried) return 'approved by the owner; wmux does it after the Undo window and tells you how it went';
   if (state === 'approved' && a.action !== undefined && a.action !== 'merge') return 'approved by the owner (recorded; wmux does not carry this act out yet)';
   switch (state) {
     case 'pending': return 'waiting for the owner';

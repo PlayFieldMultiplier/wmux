@@ -380,7 +380,7 @@ GET /api/events?since=<cursor>     (Bearer)
 GET /api/config    → {allowInput, allowUpload, allowTranscript, inlineImages?, liveActivityPush?,
                       gatedTools, gateEnabled?, fleetSidebar?, moaDelegations?, fleetTickets?, moa?, moaSessionId?, moaWake?,
                       moaWakeBlocked?, factory?, rooms?, channels?, terminalPromptDetail?,
-                      terminalPromptDecline?, protocolVersion, minProtocolVersion,
+                      terminalPromptDecline?, keepAwake?, protocolVersion, minProtocolVersion,
                       serverVersion, hostPlatform}
 GET /api/sessions  → {sessions: [{id, cwd, spawnCwd?, cols, rows, state, agent, lastActivity,
                       workspace?, workspaceId?, shell?, lastDetectedAgent?, agentAlive?, cwdLeaf?,
@@ -1070,6 +1070,38 @@ differences:
 
 Every refusal is the same `404 {error: 'image not found'}`, and the types and the
 8 MiB cap are unchanged.
+
+### Keep the computer awake — `keepAwake`
+
+The desktop's Settings › General "Keep the computer awake" holds off system
+sleep (never the display). Its default mode, "While working", holds while an
+agent is working **or a paired phone is attached**, and lets go 75 s after
+neither is true. "Always" and "Off" ignore the phone.
+
+```
+GET /api/config → { ..., keepAwake?: { mode: 'off' | 'working' | 'always', active: boolean } }
+```
+
+- `mode` is the desktop's setting. `active` says whether the computer is being
+  kept awake **right now** (the desktop holds its sleep blocker), for any
+  reason: a working agent, an attached phone, "Always", or the 75 s after the
+  last reason ended.
+- The key is **omitted, not `false`**, when no desktop app is attached to the
+  daemon (a headless daemon), and in the moment after a desktop attaches and
+  before it has reported. Absent means "not known"; never draw it as off.
+- The value is the desktop's last report. A phone that just attached (its
+  request counts) may still read the state from just before: the desktop is
+  told and reports back within a moment, so read it again on the next
+  `/api/config` rather than treating one answer as final.
+
+**Attached** means one of your paired devices (a phone, or a device that did
+not say what it is; never another computer paired with this one) holds an SSE
+stream open (`/api/stream` or `/api/events`), or made an authenticated
+request in the last 10 minutes. A revoked device stops counting at once. A
+stream on a socket that died silently (the phone left Wi-Fi or lost its
+signal) counts until the daemon's next heartbeat write fails, so the
+computer may stay awake a few minutes after the phone drops off the network.
+Additive — no protocol version bump.
 
 ---
 
@@ -2626,8 +2658,8 @@ plaintext:
   and decide it with `POST …/decision`. `requiresInAppChoice` is always true:
   there is no lock-screen affirmative.
 - `action` is one of `merge`, `push_default`, `issue_create`, `issue_close`,
-  `comment`, `release`. A skill proposal, a profile change or a native tool
-  request is decided on its desktop card and is never pushed.
+  `comment`, `release`, `pr_close`. A skill proposal, a profile change or a
+  native tool request is decided on its desktop card and is never pushed.
 - `body` is `<bot name>: <summary>`. The summary is built from the request's
   structured fields (the act, the repository, the PR or issue number), never
   from text the bot wrote. A bot with no known name reads `A bot`.
@@ -4302,10 +4334,8 @@ anything in its own words, as it can any agent pane.
 
 #### The agent factory (`factory`, `rooms`, `/api/rooms`)
 
-> **Serving: not yet.** This section describes the 5.0 branch (local, not
-> released). No shipped daemon serves any key or route below; a daemon or
-> desktop that predates it omits every one of them, and the Moa sections above
-> describe what it serves.
+A daemon or desktop that predates this section omits every key and route
+below, and the Moa sections above describe what it serves.
 
 In 5.0 the desktop's Moa becomes the HQ bot of an **agent factory**: long-lived
 bots bound to workspaces by role (`lead`, `triage`, `verifier`, `maintainer`,
@@ -4541,7 +4571,7 @@ arrival order (`seq`, increasing; never sort by `at`).
   may be absent (the desktop wrote none, or its value was not of its type).
 - `approvalAction` — on an `approval` card only: the act its request asks
   for — `merge`, `push_default`, `issue_create`, `issue_close`, `comment`,
-  `release`, or `skill` (a skill a bot wrote for itself). A `skill`
+  `release`, `pr_close`, or `skill` (a skill a bot wrote for itself). A `skill`
   approval, and any action the app does not know (any lower-case name may
   come), is approved on the desktop only: show "Approve on the desktop" with
   no buttons. Absent when the desktop no longer has the request.
@@ -4696,9 +4726,8 @@ worded (the values listed); a value not listed means the English `title`.
 
 #### The Bots page (`bots`, `botMessages`, `/api/bots`, `/api/rooms/:workspaceId/messages`)
 
-> **Serving: not yet.** Like *The agent factory* above. Additive: every
-> route and key above is unchanged, and a daemon or desktop that predates
-> this section omits both keys and answers the two routes `404`.
+Additive: every route and key above is unchanged, and a daemon or desktop
+that predates this section omits both keys and answers the two routes `404`.
 
 The desktop's Bots page is a messenger: one conversation per bot (its 1:1,
 `dm:<botId>`) and one per group chat the owner made, across every workspace,
@@ -4988,11 +5017,71 @@ desktop must still keep a card of that room carrying the id.
 | `503 {error:"desktop-unavailable"}` / `503 {error:"rooms-unavailable"}` | No desktop, or one that cannot serve photos. |
 | `504 {error:"desktop-timeout"}` | The desktop did not answer. |
 
+#### Files on bot cards (`roomFiles`)
+
+Additive. When either side predates it, `/api/config` omits the key and no
+card carries `files`. The route then answers by which side is older: a
+daemon that predates the route answers `404`; a newer daemon in front of a
+desktop that cannot serve files (one without `workspaces.roomFile`) answers
+`503 {error:"rooms-unavailable"}`. Neither means the file is missing: without
+`roomFiles`, draw no file chips.
+
+A bot hands the owner files it made (an image, a document, a video, a
+spreadsheet, a report) on its own cards. The desktop keeps a copy of each in
+the room, as long as the card, so the file stays when the bot's work folder
+is gone.
+
+**`/api/config`.** `roomFiles` — `true` when
+`GET /api/rooms/:workspaceId/files/:id` answers here: `--allow-transcript`
+and a desktop that serves files. Draw file chips on cards when it is present.
+Omitted, never `false`, otherwise.
+
+**On cards.** A bot's card (`actor: {kind:"bot"}`) of
+`GET /api/rooms/:workspaceId/cards` may carry:
+
+```
+"files": [ { "id": "9c1e…(32 lowercase hex)", "name": "cardnews.mp4", "mediaType": "video/mp4", "bytes": 4194304 } ]
+```
+
+- At most 8 per card. Cards of other actors never carry it.
+- `name`: the file's own name as the bot made it (no folders), at most 200
+  characters. Show it; never use it as a path.
+- `mediaType`: one of the types the phone may show in place: `image/png`,
+  `image/jpeg`, `image/gif`, `image/webp`, `video/mp4`, `video/quicktime`,
+  `video/webm`, `application/pdf`, `application/json`, `text/plain`,
+  `text/markdown`, `text/csv`, `text/tab-separated-values`, `text/x-diff`.
+  Anything else (unknown, or a type that can run script: HTML, SVG, XML) is
+  `application/octet-stream`: offer it to save or share, never preview it.
+  A card stored before a type was known keeps the type it was given (an
+  older `.mp4` reads `application/octet-stream`).
+- `bytes`: 1 to 10 MiB (10485760).
+- Cards reach the phone only through `GET /api/rooms/:workspaceId/cards`
+  (there is no room event stream), and every page of it carries `files`: the
+  newest page and a forward read (`sinceSeq`) alike. A guest's own read
+  (`/api/guest/v1/messages`) never carries them.
+
+**`GET /api/rooms/:workspaceId/files/:fileId`** — the file's bytes.
+`--allow-transcript`, checked first; no input grant. The desktop must still
+keep a bot's card of that room carrying the id.
+
+| Answer | Meaning |
+|---|---|
+| `200` | The file, streamed. `Content-Type` is exactly the card's `mediaType` (never sniffed from the bytes); `Content-Length` is exactly the card's `bytes`. Also `Content-Disposition: inline; filename*=UTF-8''<the name, percent-encoded>` (`attachment; …` for `application/octet-stream`), `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; sandbox`. No range requests: fetch the whole file, then preview it from the two headers. |
+| `403 {error:"transcript-disabled"}` | The server runs without `--allow-transcript`. |
+| `404 {error:"file-not-found"}` | No bot's card of that room carries the id, or its stored copy is gone or changed. Show the file as unavailable. |
+| `429 {error:"too-many-downloads"}` | This device already has 4 downloads open. `Retry-After: 1`; retry once one ends. |
+| `503 {error:"desktop-unavailable"}` / `503 {error:"rooms-unavailable"}` | No desktop, or one that cannot serve files. |
+| `504 {error:"desktop-timeout"}` | The desktop did not answer. |
+
+A body shorter than `Content-Length` (the connection cut mid-file) is a
+failed download: discard it and retry; never show a partial file. A download
+the phone stops reading is cut after 30 seconds without progress.
+
 #### Bot approvals (`/api/bot-approvals`)
 
-A bot asks the owner before a merge, a push to a default branch, opening or
-closing an issue, a comment or a release; the request shows as an `approval`
-card whose `refs.approvalId` names it. The owner answers it here.
+A bot asks the owner before a merge, a comment, opening or closing an issue,
+closing a pull request without merging, or a release; the request shows as an
+`approval` card whose `refs.approvalId` names it. The owner answers it here.
 
 - **Read** (`GET`): the operator token or any paired device that is not
   revoked. No input grant is needed: the view carries no bot-written text.
@@ -5015,10 +5104,12 @@ this caller may decide; a refused decision answers `403` as below.
 **`GET /api/bot-approvals/:requestId`** — the request now.
 
 **`POST /api/bot-approvals/:requestId/decision`** — body
-`{"decision": "approve" | "deny" | "undo" | "always", "ruleScope"?: "bot" | "workspace"}`
-(`ruleScope` only with `always`; any other field is 400). The decision is the
-desktop card's: an approved merge waits 10 seconds (`executeAfter`) with
-`undo` available, then the desktop re-checks the head and CI and merges;
+`{"decision": "approve" | "deny" | "undo" | "always", "ruleScope"?: "bot" | "workspace", "payloadHash"?: "<64 lowercase hex>"}`
+(`ruleScope` only with `always`, `payloadHash` only with `approve`; any other
+field is 400). The decision is the desktop card's: an approved merge or act
+waits 10 seconds (`executeAfter`) with `undo` available, then the desktop
+carries it out: a merge after re-checking the head and CI; a comment, a new
+issue, or closing an issue or a PR after re-checking what it acts on (below).
 `always` approves and remembers a rule for that bot (or its whole workspace)
 and repository, merges only (`canAlwaysAllow`).
 
@@ -5033,13 +5124,75 @@ and repository, merges only (`canAlwaysAllow`).
 ```
 
 - `action`: `merge`, `push_default`, `issue_create`, `issue_close`,
-  `comment`, `release`. Only a merge is carried out; the others are recorded.
+  `comment`, `release`, `pr_close`. The desktop carries out `merge`,
+  `comment`, `issue_create`, `issue_close` and `pr_close` (on GitHub; on
+  GitLab only a merge); `push_default` and `release` are recorded only. A
+  request a desktop older than this one stored is recorded only too (its card
+  says so); it carries no `payloadHash`.
 - `state`: `pending`, `approved`, `denied`, `executed`, `refused`, `expired`
-  (`undo` returns an approved merge to `pending`). `refusal` names why a
-  `refused` one did not merge (`head-moved`: the bot must ask again).
+  (`undo` returns an approved merge or act to `pending`). `refusal` names why
+  a `refused` one was not carried out (`head-moved`: the bot must ask again;
+  the card's text says it in words). A refused act is never tried again: the
+  bot asks with a new request.
+- `payloadHash` — on a request the desktop carries out as an act
+  (`comment`, `issue_create`, `issue_close`, `pr_close`): see "An act's text
+  on its card" below. Absent on a merge and on a recorded-only request.
 - `tainted: true` — the work started from outside text (an issue or PR);
   show it on the card. `decidedBy`: `owner` or `rule`.
-- No bot-written text: the reason is the card's `body`.
+- No bot-written text: the reason is the card's `body`, and so is an act's
+  text.
+
+##### An act's text on its card, and the hash an approval echoes
+
+A `comment` or an `issue_create` publishes text a bot wrote, under the
+owner's GitHub login. Its `approval` card's `body` shows that text whole, and
+the phone approves exactly what the card shows:
+
+- **Fences.** Each bot-text field is its own CommonMark fenced code block, in
+  a fixed order: `comment` → [the body with wmux's marker line];
+  `issue_create` → [the title], then [the body with wmux's marker line].
+  Fence lines start at column 0, never indented. A fence is a run of
+  backticks longer than any backtick or tilde run inside its text (at least
+  3), so nothing inside closes it.
+- **Info strings.** A payload fence carries the info string `wmux-payload`.
+  A context fence (the target issue's or PR's title as GitHub has it, and
+  similar) carries `text` and is not part of the payload. `issue_close` and
+  `pr_close` cards have context fences only.
+- **The marker.** The body's last line is `<!-- wmux-approval:<requestId> -->`
+  after a blank line (the marker alone for an empty `issue_create` body).
+  GitHub does not render it; it is how the desktop finds the post again after
+  a retry or a restart. It is part of the body's inner text.
+- **Newlines.** `\n` only. The desktop normalises the text when the bot asks
+  (line ends, trailing whitespace at the end) and refuses text with control,
+  bidi or zero-width characters, a stored secret the room would redact, or
+  `wmux-approval` of its own, so the bytes the card shows are the bytes
+  GitHub gets.
+- **`payloadHash`** is the lowercase hex sha256 of the UTF-8 bytes of the
+  `wmux-payload` fences' inner texts, in card order, joined by a single
+  U+0000. The inner text is exactly the lines between the opening and the
+  closing fence line, joined by `\n`, with no trailing newline. For a card
+  with no `wmux-payload` fence (`issue_close`, `pr_close`) it is the sha256
+  of the empty string.
+- **The phone** recomputes the hash from the card it displays and shows
+  Approve only when it equals the request's `payloadHash`; it sends it as the
+  decision's `payloadHash`. payloadHash is required on approve for every
+  request that carries it: `comment`, `issue_create`, `issue_close` and
+  `pr_close` (for the two closes it is the sha256 of the empty string). The
+  desktop refuses an approval without it (`409 client_update_required`: the
+  app says "Approve on the desktop") and with another one (`409 changed`:
+  read the card again). A request without a `payloadHash` (recorded only,
+  stored by an older build) is approved without one. Deny and undo take no
+  hash.
+- Typed words ("ok") and the desktop's "Approve N pending" chip never approve
+  a `comment` or an `issue_create`; a close or a merge they may.
+
+Once approved and past its Undo window, the desktop carries the act out with
+the owner's gh login and re-checks, right before it writes: the login is the
+one the request read, the repository still has the name and id the request
+read, the target is the same issue or PR, still open, and a PR still at the
+head the card showed (`refusal: head-moved` otherwise). While it runs, or
+while it reads GitHub to learn whether an interrupted try went through, the
+request stays `approved`; it ends `executed` or `refused`.
 
 | Answer | Meaning |
 |---|---|
@@ -5051,7 +5204,7 @@ and repository, merges only (`canAlwaysAllow`).
 | `403 {error:"read-only: this device was paired without permission to type", detail}` | A decision from a device without the input grant. |
 | `403 {error:"read-only: this device has no explicit input grant", detail}` | A decision from a device whose grant was never set explicitly (paired before grants existed). The desktop has to set it first. |
 | `404 {error:"approval-not-found"}` | No such request. |
-| `409 {error:"approval-refused", code, message}` | The decision does not apply now: `not_pending`, `too_late` (the merge started), `not_ruleable`, `too_many`, `write_failed`. |
+| `409 {error:"approval-refused", code, message}` | The decision does not apply now: `not_pending`, `too_late` (the desktop has already started it), `not_ruleable`, `too_many`, `write_failed`, `client_update_required` (an act approved without its `payloadHash`), `changed` (a `payloadHash` other than the request's), `not_on_phone` (decided on its desktop card only). |
 | `503 {error:"desktop-unavailable"}` / `503 {error:"approvals-unavailable"}` | No desktop, or one that cannot answer approvals (too old, factory not started). |
 | `504 {error:"desktop-timeout"}` / `502 {error:"desktop-bad-reply"}` | The desktop did not answer, or answered badly. |
 
@@ -6171,6 +6324,12 @@ computer". The directory is the pane's spawn directory for Claude (never the
 OSC 7 cwd, which pane output can aim), and for Codex the live native thread's
 own cwd when the daemon's relay knows it, else the spawn directory. Names and
 descriptions only; no bodies, no paths.
+
+### Renaming a Claude session
+
+There is no rename route. Send the text `/rename <name>` to the pane as a
+message (`POST /api/sessions/<id>/chat/messages`, or typed input), which
+needs the input grant like any send; Claude Code names the session itself.
 
 ### `chat.blocked` / `chat.unblocked` on `/api/events`
 

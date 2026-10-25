@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DesktopPhoneBridge } from '../DesktopPhoneBridge';
+import { DesktopPhoneBridge, keepAwakeRpc } from '../DesktopPhoneBridge';
 
 afterEach(() => vi.useRealTimers());
 describe('desktop phone request ownership', () => {
@@ -41,5 +41,43 @@ describe('desktop phone request ownership', () => {
   });
   it('fails closed without a desktop owner', async () => {
     await expect(new DesktopPhoneBridge(() => true).request('accounts.list', {})).rejects.toThrow('desktop-unavailable');
+  });
+});
+describe('keep the computer awake', () => {
+  it('holds the registered desktop\'s report only, and forgets it with the desktop', () => {
+    const bridge = new DesktopPhoneBridge(() => true);
+    expect(bridge.setKeepAwake('main', { mode: 'working', active: true })).toBe(false);
+    bridge.register('main');
+    expect(bridge.keepAwake).toBeNull();
+    expect(bridge.setKeepAwake('other', { mode: 'always', active: true })).toBe(false);
+    expect(bridge.setKeepAwake('main', { mode: 'sometimes', active: true })).toBe(false);
+    expect(bridge.setKeepAwake('main', { mode: 'working', active: 'yes' })).toBe(false);
+    expect(bridge.setKeepAwake('main', { mode: 'working', active: true, extra: 1 })).toBe(true);
+    expect(bridge.keepAwake).toEqual({ mode: 'working', active: true });
+    bridge.disconnect('main');
+    expect(bridge.keepAwake).toBeNull();
+    bridge.register('next');
+    expect(bridge.keepAwake).toBeNull();
+  });
+  it('tells only the registered desktop whether a phone is attached', () => {
+    const send = vi.fn(() => true);
+    const bridge = new DesktopPhoneBridge(send);
+    expect(bridge.notifyPhonePresence(true)).toBe(false);
+    expect(send).not.toHaveBeenCalled();
+    bridge.register('main');
+    expect(bridge.notifyPhonePresence(true)).toBe(true);
+    expect(send).toHaveBeenCalledWith('main', { type: 'phone.presence', sessionId: '', data: { attached: true } });
+  });
+  it('daemon.phone.keepAwake is first-party only', async () => {
+    const bridge = new DesktopPhoneBridge(() => true);
+    bridge.register('main');
+    const firstParty = new Set<string>();
+    const rpc = keepAwakeRpc(bridge, (id) => firstParty.has(id));
+    // The registered owner, but not classified first-party (an MCP server or CLI on the same pipe).
+    expect(await rpc({ mode: 'always', active: true }, { clientId: 'main' })).toEqual({ ok: false });
+    expect(bridge.keepAwake).toBeNull();
+    firstParty.add('main');
+    expect(await rpc({ mode: 'always', active: true }, { clientId: 'main' })).toEqual({ ok: true });
+    expect(bridge.keepAwake).toEqual({ mode: 'always', active: true });
   });
 });

@@ -115,6 +115,15 @@ describe('/api/bot-approvals', () => {
     expect(parsePhoneBotApprovalDecideBody({ decision: 'always' })).toEqual({ decision: 'always' });
   });
 
+  it('an act\'s view carries its payloadHash; an approval may echo it, nothing else may carry one', () => {
+    const hash = 'a'.repeat(64);
+    expect(parsePhoneBotApproval({ ...VIEW, action: 'pr_close', payloadHash: hash })).toMatchObject({ action: 'pr_close', payloadHash: hash, canAlwaysAllow: false });
+    expect(parsePhoneBotApproval({ ...VIEW, action: 'comment', payloadHash: 'not-a-hash' })?.payloadHash).toBeUndefined();
+    expect(parsePhoneBotApprovalDecideBody({ decision: 'approve', payloadHash: hash })).toEqual({ decision: 'approve', payloadHash: hash });
+    expect(parsePhoneBotApprovalDecideBody({ decision: 'approve', payloadHash: 'A'.repeat(64) })).toBeNull();
+    expect(parsePhoneBotApprovalDecideBody({ decision: 'deny', payloadHash: hash })).toBeNull();
+  });
+
   it('an approval card reaches the phone with its request id', () => {
     const card = parsePhoneRoomCard({ id: 'c1', seq: 1, threadId: 'general', kind: 'approval', at: 1, actor: { kind: 'system' }, title: 'Merge PR #3?', refs: { approvalId: ID, pr: 3 } });
     expect(card).toMatchObject({ kind: 'approval', refs: { approvalId: ID, pr: 3 } });

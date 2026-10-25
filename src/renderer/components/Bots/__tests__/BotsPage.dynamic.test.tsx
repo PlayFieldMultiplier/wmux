@@ -677,6 +677,26 @@ describe('Bots page', () => {
     expect(useStore.getState().toasts.at(-1)?.message).toBe('Stopped Lead and 2 of its workers.');
   });
 
+  it('New conversation in a bot\'s profile asks in place, then starts it; mid-turn it says to stop the turn first', async () => {
+    seedRooms();
+    let running = false;
+    const stop = { newConversation: vi.fn(async () => (running ? { ok: false, code: 'running', message: 'stop the turn first' } : { ok: true })) };
+    act(() => useStore.setState({ toasts: [] } as never));
+    await render(<BotsPage stop={stop} />);
+    act(() => q(`[data-bots-row="bot:${LEAD}"]`)?.click());
+    act(() => q('[data-bots-pill]')?.click());
+    act(() => q('[data-testid="bots-new-conversation"]')?.click());
+    expect(stop.newConversation).not.toHaveBeenCalled();
+    expect(q('[data-testid="bots-new-conversation-confirm-row"]')?.textContent).toContain('Start a new conversation with Lead?');
+    await act(async () => { q('[data-testid="bots-new-conversation-confirm"]')?.click(); });
+    expect(stop.newConversation).toHaveBeenCalledWith(LEAD);
+    expect(useStore.getState().toasts.at(-1)?.message).toBe('Lead starts a new conversation on its next turn.');
+    running = true;
+    act(() => q('[data-testid="bots-new-conversation"]')?.click());
+    await act(async () => { q('[data-testid="bots-new-conversation-confirm"]')?.click(); });
+    expect(useStore.getState().toasts.at(-1)).toMatchObject({ message: 'Lead is in a turn. Stop the turn first.', level: 'error' });
+  });
+
   it('Pause in a bot\'s profile parks it at once (no confirm), and the profile then shows Paused with Resume', async () => {
     const act$ = vi.fn(async (action: string, botId: string) => {
       if (action === 'park') {

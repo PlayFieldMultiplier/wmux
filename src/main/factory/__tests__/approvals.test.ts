@@ -170,7 +170,7 @@ describe('approval requests (bot side)', () => {
     // An owner card in another thread is not answered across threads.
     const other = r.ownerSays('and the issue', 'task:t-2');
     r.state.wakes.set(DEV.id, { wakeId: 'w-2', attempt: 1, threadId: 'general' as never, tainted: false, ownerCardId: other.id });
-    const next = await r.ask(DEV, { action: 'comment', prNumber: 1, reason: 'note' });
+    const next = await r.ask(DEV, { action: 'release', reason: 'note' });
     const card = r.writer.get(WS, next.cardId as string);
     expect(card?.threadId).toBe('general');
     expect(card?.replyTo).toBeUndefined();
@@ -197,8 +197,8 @@ describe('approval requests (bot side)', () => {
     expect(r.writer.get(WS, req.cardId as string)?.body).not.toContain('머지');
     // Nothing of its own left: main names the act.
     r.state.wakes.set(DEV.id, { wakeId: 'w-2', attempt: 1, threadId: 'general' as never, tainted: false });
-    const bare = await r.ask(DEV, { action: 'issue_close', issueNumber: 3, reason: '"머지할거 머지해"' });
-    expect(bare).toMatchObject({ reason: 'Close issue #3.' });
+    const bare = await r.ask(DEV, { action: 'release', reason: '"머지할거 머지해"' });
+    expect(bare).toMatchObject({ reason: 'Publish a release of github.com/o/r.' });
   });
 
   it('a request lands in the thread of the owner\'s latest words to the bot, else the owner wake\'s own thread', async () => {
@@ -268,12 +268,12 @@ describe('approval requests (bot side)', () => {
 
   it('a turn still running keeps its request count while many other turns ask', async () => {
     const r = rig();
-    const a = await r.ask(DEV, { action: 'issue_create', reason: 'first' });
+    const a = await r.ask(DEV, { action: 'release', reason: 'first' });
     for (let i = 0; i < 210; i += 1) {
       r.state.wakes.set(OTHER.id, { wakeId: `w-o${i}`, attempt: 1, threadId: null, tainted: false });
-      await r.svc.request(binding(OTHER), { action: 'issue_create', reason: 'x' });
+      await r.svc.request(binding(OTHER), { action: 'release', reason: 'x' });
     }
-    const b = await r.svc.request(binding(DEV), { action: 'issue_create', reason: 'second' });
+    const b = await r.svc.request(binding(DEV), { action: 'release', reason: 'second' });
     expect(b).toMatchObject({ ok: true });
     expect((b as { duplicate?: true }).duplicate).toBeUndefined();
     expect((b as { request: { requestId: string } }).request.requestId).not.toBe(a.requestId);
@@ -281,15 +281,15 @@ describe('approval requests (bot side)', () => {
 
   it('a retried turn (the next attempt) asks again under the same default keys', async () => {
     const r = rig();
-    const a = await r.ask(DEV, { action: 'issue_create', reason: 'file it' });
+    const a = await r.ask(DEV, { action: 'release', reason: 'file it' });
     r.state.wakes.set(DEV.id, { wakeId: 'w-1', attempt: 2, threadId: null, tainted: false });
-    expect(await r.svc.request(binding(DEV), { action: 'issue_create', reason: 'file it' })).toMatchObject({ ok: true, duplicate: true, request: { requestId: a.requestId } });
+    expect(await r.svc.request(binding(DEV), { action: 'release', reason: 'file it' })).toMatchObject({ ok: true, duplicate: true, request: { requestId: a.requestId } });
   });
 
   it('approval_list returns only the caller\'s requests', async () => {
     const r = rig();
     await r.ask(DEV, { action: 'merge', prNumber: 1, reason: 'x' });
-    await r.ask(OTHER, { action: 'issue_create', reason: 'y' });
+    await r.ask(OTHER, { action: 'release', reason: 'y' });
     const mine = r.svc.listFor(binding(DEV), {});
     expect(mine).toMatchObject({ ok: true, requests: [{ botId: DEV.id }] });
     expect((mine as { requests: unknown[] }).requests).toHaveLength(1);
@@ -385,10 +385,10 @@ describe('owner decisions', () => {
     expect(cards.at(-1)).toMatchObject({ kind: 'refusal', title: expect.stringContaining('needs a new approval') });
   });
 
-  it('acts other than merge are recorded, never executed', async () => {
+  it('a release is recorded, never executed', async () => {
     vi.useFakeTimers();
     const r = rig();
-    const req = await r.ask(DEV, { action: 'issue_create', reason: 'file the crash' });
+    const req = await r.ask(DEV, { action: 'release', reason: 'ship it' });
     expect(r.writer.get(WS, req.cardId as string)?.body).toContain('does not carry this act out yet');
     expect(r.svc.decide({ requestId: req.requestId, decision: 'approve' }, 'desktop')).toMatchObject({ ok: true, request: { state: 'approved' } });
     await vi.advanceTimersByTimeAsync(APPROVAL_UNDO_MS * 2);
@@ -661,7 +661,7 @@ describe('always allow (remembered rules)', () => {
     }
     expect(r.svc.rulesList()).toEqual([]);
     expect(r.svc.get(a.requestId)?.state).toBe('pending');
-    const issue = await r.ask(DEV, { action: 'issue_create', reason: 'y' });
+    const issue = await r.ask(DEV, { action: 'release', reason: 'y' });
     expect(r.svc.decide({ requestId: issue.requestId, decision: 'always' }, 'desktop')).toMatchObject({ ok: false, code: 'not_ruleable' });
   });
 

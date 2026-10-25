@@ -48,6 +48,9 @@ describe('room file rules', () => {
     expect(roomFileMediaType('x.svg')).toBe('image/svg+xml');
     expect(roomFileMediaType('main.ts')).toBe('text/plain');
     expect(roomFileMediaType('change.patch')).toBe('text/x-diff');
+    expect(roomFileMediaType('cardnews.mp4')).toBe('video/mp4');
+    expect(roomFileMediaType('clip.MOV')).toBe('video/quicktime');
+    expect(roomFileMediaType('clip.webm')).toBe('video/webm');
     expect(roomFileMediaType('blob.bin')).toBe('application/octet-stream');
     expect(roomFileMediaType('Makefile')).toBe('application/octet-stream');
     expect(roomFileName('/a/b/report.md')).toBe('report.md');

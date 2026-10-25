@@ -42,6 +42,7 @@ import {
 } from './hostSearch';
 import http from 'node:http';
 import { InboundCounter, isLoopbackHost } from '../net/inboundSeen';
+import { PhonePresence, type PresenceDevice } from './phonePresence';
 import type { AgentStatus } from '../../shared/types';
 import { isRemoteAgentStatus } from '../../shared/remoteHosts';
 import { isA2aRoute, looksLikePeerCredential, parsePeerCredential, type A2aRemoteErrorCode } from '../../shared/a2aRemote';
@@ -133,7 +134,7 @@ import {
   MIN_PHONE_PROTOCOL_VERSION,
   PHONE_PROTOCOL_VERSION,
 } from './protocolVersion';
-import { startSseHeartbeat } from './sseHeartbeat';
+import { onSseClose, startSseHeartbeat } from './sseHeartbeat';
 import { StreamResponseLimits } from './StreamResponseLimits';
 import {
   CHAT_LAUNCH_RETENTION_MS,
@@ -189,10 +190,10 @@ import { MOA_WAKE_RETRY_AFTER, type MoaWakeService, type MoaWakeWire } from '../
 import { FACTORY_PHONE_MESSAGE_CAPABILITY, FACTORY_THREAD_ATTACHMENTS_CAPABILITY, FACTORY_THREAD_MESSAGE_CAPABILITY, MOA_WAKE_COMMAND, type MoaWakeAttachment } from '../../shared/moaWake';
 import { ROOM_ATTACHMENT_LIMITS, UPLOAD_NAME_RE } from '../../shared/roomAttachments';
 import { dmThreadBot, groupThreadGroup, parseThreadId } from '../../shared/room';
-import { PHONE_ROOM_ATTACHMENT_COMMAND, isPhoneRoomWorkspaceId } from '../../shared/phoneRooms';
+import { PHONE_ROOM_ATTACHMENT_COMMAND, PHONE_ROOM_FILE_COMMAND, isPhoneRoomWorkspaceId } from '../../shared/phoneRooms';
 import { FLEET_TICKET_ROUTE_PREFIX, fleetTicketDetailResponse, fleetTicketsFields } from './fleetTickets';
 import { factoryOn, moaConfigFields } from './factoryConfig';
-import { ROOMS_ROUTE, ROOM_ATTACHMENT_ROUTE, ROOM_MESSAGES_ROUTE, roomAttachmentResponse, roomsResponse, roomsSupported } from './rooms';
+import { ROOMS_ROUTE, ROOM_ATTACHMENT_ROUTE, ROOM_FILE_ROUTE, ROOM_FILE_STREAMS_PER_CALLER, ROOM_MESSAGES_ROUTE, roomAttachmentResponse, roomFileResponse, roomsResponse, roomsSupported, sendRoomFile } from './rooms';
 import { BOTS_ROUTE, botsResponse, botsSupported } from './bots';
 import { GuestRateLimiter, guestRouteResponse, readGuestBody, type GuestBotResolver } from './guestBotRoutes';
 import { isGuestRoute, looksLikeGuestCredential, type GuestBotGates } from '../../shared/guestBots';
@@ -576,6 +577,11 @@ export interface WebDeviceResolver {
    */
   list?(): WebDeviceSummary[];
   /**
+   * Each device's kind, last request and revocation, for "Keep the computer
+   * awake" (phonePresence.ts). Optional: without it no phone counts as attached.
+   */
+  presenceDevices?(): PresenceDevice[];
+  /**
    * Whether the device's input grant was set explicitly (a record that
    * predates grants answers false). Absent: no device passes the git write gate.
    */
@@ -823,6 +829,12 @@ interface WebTerminalServerDeps {
    * main confirmed a kept card carries the photo. Absent: that route is 503.
    */
   roomAttachmentsDir?: string;
+  /**
+   * `<wmuxDir>/factory/room-files`, main's store of the files bots attach to
+   * their room cards. Read only, by `GET /api/rooms/:ws/files/:id`, after
+   * main confirmed a kept bot card carries the file. Absent: that route is 503.
+   */
+  roomFilesDir?: string;
   /**
    * Records one file served because the pane's agent sent it with
    * `SendUserFile` (the device audit log). Device, pane, basename and size
@@ -1475,6 +1487,8 @@ export class WebTerminalServer {
   private readonly pendingStreams = new Set<SseClient>();
   /** Live `/api/events` subscribers — fleet attention, no pane stream attached. */
   private readonly eventClients = new Set<EventClient>();
+  /** Whether a paired phone is attached (phonePresence.ts); created on first use. */
+  private presenceTracker: PhonePresence | null = null;
   /** The Moa pane id the last `moa` event carried. */
   private lastMoaEventId: string | null = null;
   /**
@@ -1693,6 +1707,8 @@ export class WebTerminalServer {
   private readonly streamResponses = new StreamResponseLimits();
 
   private readonly streamTickets = new Map<string, StreamTicket>();
+  /** Bot-file downloads open per caller (`operator` or a device id). */
+  private readonly roomFileStreams = new Map<string, number>();
 
   // Bound so on()/off() reference the SAME listener across start()/stop().
   private readonly onSessionCritical = (payload: { sessionId: string; event?: unknown }): void =>
@@ -2006,6 +2022,8 @@ export class WebTerminalServer {
     // must never be what keeps the daemon alive.
     this.chatWatchSweep = setInterval(() => this.sweepChatWatches(), CHAT_WATCH_SWEEP_MS);
     this.chatWatchSweep.unref?.();
+    // A device seen shortly before a restart is still attached for the rest of its window.
+    this.presence.start();
     return this.status();
   }
 
@@ -2050,6 +2068,7 @@ export class WebTerminalServer {
       }
     }
     this.eventClients.clear();
+    this.presence.stop();
     // #782 — clear pending non-recording nudge timers and the watcher set; the
     // SSE clients they would reach are gone, and a fresh start() re-arms nothing
     // stale (a device re-opens its panes and re-registers as it reads them).
@@ -2272,7 +2291,27 @@ export class WebTerminalServer {
     // Revoke and a withdrawn input grant both land here: the device's queued
     // chat messages go with its streams, before any of them could be typed.
     this.dropChatQueue((owner) => owner === `device:${deviceId}`, 'authorization-revoked');
+    // A revoked device no longer keeps the computer awake.
+    this.presence.update();
     return closed;
+  }
+
+  /** Whether a paired phone is attached now (phonePresence.ts). */
+  phoneAttached(): boolean {
+    return this.presence.isAttached;
+  }
+
+  private get presence(): PhonePresence {
+    this.presenceTracker ??= new PhonePresence({
+      devices: () => (this.server ? this.deps.devices?.presenceDevices?.() ?? [] : []),
+      liveDeviceIds: () => this.liveDeviceIds(),
+      now: () => this.now(),
+      onChange: (attached) => {
+        this.deps.log('info', `[web] paired phone ${attached ? 'attached' : 'detached'}`);
+        this.availableDesktop()?.notifyPhonePresence(attached);
+      },
+    });
+    return this.presenceTracker;
   }
 
   private dropChatQueue(match: (owner: ChatOwner) => boolean, reason: 'authorization-revoked' | 'daemon-restart'): void {
@@ -2874,6 +2913,8 @@ export class WebTerminalServer {
         ...(this.roomAttachmentsWritable(principal) ? { botAttachments: true } : {}),
         // `GET /api/rooms/:ws/attachments/:id` answers: the transcript grant and a desktop that serves them.
         ...(this.opts?.allowTranscript === true && this.availableDesktop()?.supports(PHONE_ROOM_ATTACHMENT_COMMAND) === true ? { roomAttachments: true } : {}),
+        // `GET /api/rooms/:ws/files/:id` answers: the same, for the files on bot cards.
+        ...(this.opts?.allowTranscript === true && this.availableDesktop()?.supports(PHONE_ROOM_FILE_COMMAND) === true ? { roomFiles: true } : {}),
         // Phone channel Inbox (§9): the four `/api/channels*` routes answer
         // here. OMITTED, not false, exactly when they would answer 503
         // `channels-unavailable` — the shape a pre-channels daemon serves.
@@ -2912,6 +2953,9 @@ export class WebTerminalServer {
               ...(this.chatQueueWorks(principal) && typeof this.deps.chat?.()?.steer === 'function' ? { chatSteer: true } : {}),
             }
           : {}),
+        // Keep the computer awake: the desktop's mode and whether it holds
+        // off sleep now. Omitted with no desktop attached, or before it reported.
+        ...(this.availableDesktop()?.keepAwake ? { keepAwake: this.availableDesktop()?.keepAwake } : {}),
         protocolVersion: PHONE_PROTOCOL_VERSION,
         minProtocolVersion: MIN_PHONE_PROTOCOL_VERSION,
         serverVersion: daemonServerVersion(),
@@ -3104,6 +3148,27 @@ export class WebTerminalServer {
         });
         res.end(r.bytes);
       }).catch((err: unknown) => this.failRequest(res, err));
+      return;
+    }
+    const roomFileRoute = req.method === 'GET' ? ROOM_FILE_ROUTE.exec(p) : null;
+    if (roomFileRoute) {
+      const caller = principal.kind === 'device' ? principal.deviceId : 'operator';
+      const open = this.roomFileStreams.get(caller) ?? 0;
+      if (open >= ROOM_FILE_STREAMS_PER_CALLER) {
+        this.json(res, 429, { error: 'too-many-downloads' }, { 'Cache-Control': 'no-store', 'Retry-After': '1' });
+        return;
+      }
+      this.roomFileStreams.set(caller, open + 1);
+      void roomFileResponse(roomFileRoute[1], roomFileRoute[2], {
+        allowTranscript: this.opts?.allowTranscript === true, desktop: this.availableDesktop(), roomFilesDir: this.deps.roomFilesDir,
+      }).then((r) => {
+        if (!('handle' in r)) return this.json(res, r.status, r.body, { 'Cache-Control': 'no-store' });
+        return sendRoomFile(res, r, this.securityHeaders());
+      }).catch((err: unknown) => this.failRequest(res, err)).finally(() => {
+        const left = (this.roomFileStreams.get(caller) ?? 1) - 1;
+        if (left > 0) this.roomFileStreams.set(caller, left);
+        else this.roomFileStreams.delete(caller);
+      });
       return;
     }
     const roomsRoute = req.method === 'GET' ? ROOMS_ROUTE.exec(p) : null;
@@ -7525,10 +7590,12 @@ export class WebTerminalServer {
     };
     const client: SseClient = { res, sessionId, detach, principal };
     this.clients.add(client);
+    if (principal.kind === 'device') this.presence.update();
 
-    req.on('close', () => {
+    onSseClose(res, () => {
       detach();
       this.clients.delete(client);
+      if (principal.kind === 'device') this.presence.update();
     });
     return true;
   }
@@ -9903,10 +9970,12 @@ export class WebTerminalServer {
     const detach = startSseHeartbeat(res);
     const client: EventClient = { res, detach, principal, caps: clientCaps(req) };
     this.eventClients.add(client);
+    if (principal.kind === 'device') this.presence.update();
 
-    req.on('close', () => {
+    onSseClose(res, () => {
       detach();
       this.eventClients.delete(client);
+      if (principal.kind === 'device') this.presence.update();
     });
   }
 
@@ -10355,6 +10424,8 @@ export class WebTerminalServer {
     } catch (err) {
       this.deps.log('warn', `[web] device touch failed: ${errMsg(err)}`);
     }
+    // The request opens (or extends) the device's attach window.
+    this.presence.update();
   }
 
   /**

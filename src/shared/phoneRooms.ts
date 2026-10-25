@@ -22,6 +22,7 @@ import { parseThreadId, ROOM_LIMITS, type CardKind, type RoomCard, type ThreadId
 import { PHONE_BOT_ROLES, clampSidebarString, type PhoneBotRole } from './phoneFleetSidebar';
 import { PHONE_NOTICE_ARG_MAX, PHONE_ROOM_NOTICE_CODES, RESUMABLE_NOTICE_CODES } from './phoneRoomNotices';
 import { parseRoomAttachments, type RoomAttachment } from './roomAttachments';
+import { ROOM_FILE_ID_RE, ROOM_FILE_LIMITS, type RoomFile } from './roomFiles';
 
 /** Bridge commands; `workspaces.` routes them through main's PhoneWorkspaces. */
 export const PHONE_ROOM_THREADS_COMMAND = 'workspaces.roomThreads';
@@ -31,6 +32,10 @@ export const PHONE_ROOM_CARDS_COMMAND = 'workspaces.roomCards';
  *  The daemon then reads the stored copy from disk itself: a photo never
  *  rides the bridge (its replies are capped at 128 KiB). */
 export const PHONE_ROOM_ATTACHMENT_COMMAND = 'workspaces.roomAttachment';
+/** `{workspaceId, fileId}` → `{file: {name, mediaType, bytes}}` when a kept
+ *  bot card of that room carries the file, else `{notFound: true}`. As for
+ *  a photo, the daemon then reads the stored copy itself. */
+export const PHONE_ROOM_FILE_COMMAND = 'workspaces.roomFile';
 
 export const PHONE_ROOM_LIMITS = {
   /** Threads one list carries (open questions first, as the room sorts them). */
@@ -139,6 +144,55 @@ export interface PhoneRoomCard {
    *  stayed silent. A reaction rewrites its card at the same seq, as a
    *  question's resolution does. */
   reactions?: CardReaction[];
+  /** A bot's card only: the files it handed the owner, drawn from
+   *  `GET /api/rooms/:workspaceId/files/:id`. */
+  files?: PhoneRoomFile[];
+}
+
+/** A file on a bot card as the phone sees it: the stored copy's
+ *  description, never a path. */
+export type PhoneRoomFile = RoomFile;
+
+/** A media type as main named it: `type/subtype`, plain token characters
+ *  only, so it is safe as a Content-Type header. Never sniffed: the stored
+ *  copy has no extension and main inferred the type from the file's name. */
+const MEDIA_TYPE_RE = /^[a-z]+\/[a-z0-9][a-z0-9.+-]{0,99}$/;
+
+/** What a file the phone may not show in place goes out as: to save, not
+ *  to open (`Content-Disposition: attachment`). */
+export const PHONE_ROOM_FILE_DOWNLOAD_TYPE = 'application/octet-stream';
+
+/** The types the phone may show in place: pictures, video, PDF and plain
+ *  text, none of which runs script. Anything else main names (HTML, SVG,
+ *  XML, a script) reaches the phone, on the card and in the route's
+ *  Content-Type alike, as PHONE_ROOM_FILE_DOWNLOAD_TYPE. */
+const PHONE_ROOM_PREVIEW_TYPES = new Set([
+  'image/png', 'image/jpeg', 'image/gif', 'image/webp',
+  'video/mp4', 'video/quicktime', 'video/webm',
+  'application/pdf', 'application/json',
+  'text/plain', 'text/markdown', 'text/csv', 'text/tab-separated-values', 'text/x-diff',
+]);
+
+/** One file description, rebuilt from its allowed fields, or null. */
+export function parsePhoneRoomFile(value: unknown): PhoneRoomFile | null {
+  if (!isRecord(value)) return null;
+  const { id, name, mediaType, bytes } = value;
+  if (typeof id !== 'string' || !ROOM_FILE_ID_RE.test(id)) return null;
+  // eslint-disable-next-line no-control-regex
+  if (typeof name !== 'string' || !name || name.length > ROOM_FILE_LIMITS.NAME_MAX || /[\u0000-\u001f\u007f\\/]/.test(name)) return null;
+  if (typeof mediaType !== 'string' || !MEDIA_TYPE_RE.test(mediaType)) return null;
+  if (typeof bytes !== 'number' || !Number.isSafeInteger(bytes) || bytes <= 0 || bytes > ROOM_FILE_LIMITS.MAX_BYTES) return null;
+  return { id, name, mediaType: PHONE_ROOM_PREVIEW_TYPES.has(mediaType) ? mediaType : PHONE_ROOM_FILE_DOWNLOAD_TYPE, bytes };
+}
+
+function parsePhoneRoomFiles(value: unknown): PhoneRoomFile[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const out: PhoneRoomFile[] = [];
+  for (const raw of value.slice(0, ROOM_FILE_LIMITS.PER_CARD)) {
+    const f = parsePhoneRoomFile(raw);
+    if (f && !out.some((o) => o.id === f.id)) out.push(f);
+  }
+  return out.length > 0 ? out : undefined;
 }
 
 /** A photo as the phone sees it: no upload name, no path. */
@@ -312,6 +366,7 @@ export function parsePhoneRoomCard(value: unknown): PhoneRoomCard | null {
   const attachments = kind === 'human' && actor.kind === 'human' ? parseRoomAttachments(value.attachments, { keepUpload: false }) : undefined;
   const resumable = value.resumable === true && !!notice && RESUMABLE_NOTICE_CODES.has(notice.code) && !!refs?.taskId;
   const reactions = sanitizeReactions(value.reactions, (botId) => BOT_ID_RE.test(botId));
+  const files = actor.kind === 'bot' ? parsePhoneRoomFiles(value.files) : undefined;
   return {
     id, seq, threadId, kind, at, actor, title,
     ...(text !== undefined ? { body: text } : {}),
@@ -326,6 +381,7 @@ export function parsePhoneRoomCard(value: unknown): PhoneRoomCard | null {
     ...(resumable ? { resumable: true as const } : {}),
     ...(attachments ? { attachments } : {}),
     ...(reactions ? { reactions } : {}),
+    ...(files ? { files } : {}),
   };
 }
 
@@ -409,9 +465,7 @@ export function phoneRoomCard(
         return { kind: 'bot' as const, botId: card.actor.botId, ...(info ? { role: info.role, name: info.name } : {}) };
       })()
     : { kind: card.actor.kind };
-  // A bot card's files reach the phone in a later contract change.
-  const { clientPostId, files: _files, ...rest } = card;
-  void _files;
+  const { clientPostId, ...rest } = card;
   const sent = clientPostId ? PHONE_POST_ID.exec(clientPostId)?.[1] : undefined;
   const approvalId = card.kind === 'approval' ? card.refs?.approvalId : undefined;
   const action = approvalId && approvalAction ? approvalAction(approvalId) : null;

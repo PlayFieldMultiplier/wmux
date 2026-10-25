@@ -8,12 +8,18 @@
 import { useSyncExternalStore } from 'react';
 import type { ElectronAPI } from '../../../preload/preload';
 import type { ApprovalAction, ApprovalRequest } from '../../../shared/botApproval';
-import { APPROVAL_NEVER_BY_RULE, CARD_ONLY_ACTIONS } from '../../../shared/botApproval';
+import { APPROVAL_NEVER_BY_RULE, CARD_ONLY_ACTIONS, TYPED_APPROVABLE_ACTIONS } from '../../../shared/botApproval';
 import type { RoomCard } from '../../../shared/room';
 
 export type ApprovalsApi = ElectronAPI['approvals'];
 /** A request as main shows it to the main window. */
-export type ApprovalView = ApprovalRequest & { executeAfter?: number; effectId?: string; ruleSkipped?: string };
+export type ApprovalView = ApprovalRequest & {
+  executeAfter?: number;
+  effectId?: string;
+  ruleSkipped?: string;
+  /** An act's outbox row (main's factory/actEffectStore.ts status). */
+  actStatus?: 'pending' | 'inFlight' | 'done' | 'refused' | 'uncertain';
+};
 
 let apiOverride: ApprovalsApi | null | undefined;
 
@@ -95,12 +101,15 @@ export function setApprovalsApiForTests(api: ApprovalsApi | null | undefined): v
 /** What an approval card shows now. Pure. */
 export type ApprovalPhase =
   | { phase: 'pending'; canAlways: boolean }
-  | { phase: 'undo'; secondsLeft: number }
+  | { phase: 'undo'; secondsLeft: number; act: boolean }
   | { phase: 'merging' }
+  /** An approved act wmux is carrying out; `checking`: a try may have
+   *  reached GitHub and wmux is reading whether it did. */
+  | { phase: 'running'; checking: boolean }
   | { phase: 'approved'; byRule: boolean; recordedOnly: boolean }
-  | { phase: 'executed'; byRule: boolean }
+  | { phase: 'executed'; byRule: boolean; act: boolean }
   /** `reason` is main's code; `text` the same in the owner's words. */
-  | { phase: 'refused'; headMoved: boolean; reason: string; text: string | null }
+  | { phase: 'refused'; headMoved: boolean; reason: string; text: string | null; act: boolean }
   | { phase: 'denied' }
   | { phase: 'expired' }
   | { phase: 'unknown' };
@@ -112,16 +121,25 @@ export function approvalPhase(r: ApprovalView | undefined, now: number): Approva
       // A rule carries out merges only (never a release or a default-branch push).
       return { phase: 'pending', canAlways: r.action === 'merge' && !APPROVAL_NEVER_BY_RULE.has(r.action) };
     case 'approved':
+      // An act wmux carries out (a comment, an issue, a close): Undo until
+      // its window ends and its outbox row is claimed, then running.
+      if (r.act) {
+        const claimed = r.actStatus !== undefined && r.actStatus !== 'pending';
+        if (!claimed && r.executeAfter !== undefined && now < r.executeAfter) {
+          return { phase: 'undo', secondsLeft: Math.max(1, Math.ceil((r.executeAfter - now) / 1000)), act: true };
+        }
+        return { phase: 'running', checking: r.actStatus === 'uncertain' };
+      }
       // An approved skill or profile change is in place already: approving was the act.
       if (r.action !== 'merge') return { phase: 'approved', byRule: r.decidedBy === 'rule', recordedOnly: !CARD_ONLY_ACTIONS.has(r.action) };
       if (!r.effectId && r.executeAfter !== undefined && now < r.executeAfter) {
-        return { phase: 'undo', secondsLeft: Math.max(1, Math.ceil((r.executeAfter - now) / 1000)) };
+        return { phase: 'undo', secondsLeft: Math.max(1, Math.ceil((r.executeAfter - now) / 1000)), act: false };
       }
       return { phase: 'merging' };
     case 'executed':
-      return { phase: 'executed', byRule: r.decidedBy === 'rule' };
+      return { phase: 'executed', byRule: r.decidedBy === 'rule', act: !!r.act };
     case 'refused':
-      return { phase: 'refused', headMoved: r.refusal === 'head-moved', reason: r.refusal ?? '', text: r.refusalText?.trim() || null };
+      return { phase: 'refused', headMoved: r.refusal === 'head-moved', reason: r.refusal ?? '', text: r.refusalText?.trim() || null, act: !!r.act };
     case 'denied':
       return { phase: 'denied' };
     case 'expired':
@@ -143,8 +161,9 @@ export function pendingForChip(
   scope: { workspaceId?: string; threadId?: string | null; botId?: string },
 ): ApprovalView[] {
   const shown = new Set(cards.map((c) => c.id));
-  // A skill or a profile change is approved on its own card, where the change is shown.
-  return list.filter((r) => r.state === 'pending' && !CARD_ONLY_ACTIONS.has(r.action)
+  // A skill, a profile change or an act that publishes text is approved on
+  // its own card, where the change or the text is shown.
+  return list.filter((r) => r.state === 'pending' && !CARD_ONLY_ACTIONS.has(r.action) && TYPED_APPROVABLE_ACTIONS.has(r.action)
     && (!scope.workspaceId || r.workspaceId === scope.workspaceId)
     && (!scope.threadId || r.threadId === scope.threadId)
     && (!scope.botId || r.botId === scope.botId) && !!r.cardId && shown.has(r.cardId));

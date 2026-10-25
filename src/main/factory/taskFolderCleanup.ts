@@ -619,7 +619,7 @@ function throughNoLink(folder: string, root: string): boolean {
 
 /** The files a report hands over: its `artifact` items' locations, each an
  *  absolute path or a `file://` URL. Free text is never read for paths. */
-function reportArtifactPaths(entry: LedgerEntry): string[] {
+function reportArtifactPaths(entry: Pick<LedgerEntry, 'evidence'>): string[] {
   const out: string[] = [];
   for (const item of entry.evidence?.items ?? []) {
     if (item.kind !== 'artifact' || typeof item.location !== 'string') continue;
@@ -661,6 +661,31 @@ function fileInsideNoLink(file: string, folder: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** A path a wake may show the bot: no control character and no quote, so
+ *  it cannot end the line or the JSON string it sits in. */
+// eslint-disable-next-line no-control-regex
+const UNSHOWABLE_PATH = /[\u0000-\u001f\u007f-\u009f"'`]/;
+
+/**
+ * The files a task's report hands the owner, as its wake shows them: the
+ * `artifact` locations that are regular files with one name inside the
+ * task's own folder, reached through no link (fileInsideNoLink, the rule
+ * that keeps a folder). At most `max` (what one room card carries);
+ * `leftOut` counts the rest. room_post checks each again when it copies it.
+ */
+export function reportFiles(entry: Pick<LedgerEntry, 'evidence'>, folder: string, max: number): { files: string[]; leftOut: number } {
+  const files: string[] = [];
+  const seen = new Set<string>();
+  let leftOut = 0;
+  for (const file of reportArtifactPaths(entry)) {
+    if (seen.has(file) || UNSHOWABLE_PATH.test(file) || !fileInsideNoLink(file, folder)) continue;
+    seen.add(file);
+    if (files.length < max) files.push(file);
+    else leftOut++;
+  }
+  return { files, leftOut };
 }
 
 /**
