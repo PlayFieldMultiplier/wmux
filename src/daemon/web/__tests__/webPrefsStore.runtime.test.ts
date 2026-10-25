@@ -34,4 +34,13 @@ describe('webPrefsStore (#1641 inline images switch)', () => {
     expect(fs.existsSync(getWebStatePath(dir))).toBe(false);
     expect(loadWebPrefs(dir)).toEqual({ inlineImages: false });
   });
+
+  it('remembers the popover port next to the image switch, and ignores a bad one', () => {
+    expect(saveWebPrefs(dir, { inlineImages: false, port: 7690 })).toBe(true);
+    expect(loadWebPrefs(dir)).toEqual({ inlineImages: false, port: 7690 });
+    expect(saveWebPrefs(dir, { ...loadWebPrefs(dir), inlineImages: true })).toBe(true);
+    expect(loadWebPrefs(dir)).toEqual({ inlineImages: true, port: 7690 });
+    fs.writeFileSync(getWebPrefsPath(dir), JSON.stringify({ version: 1, inlineImages: true, port: 80 }));
+    expect(loadWebPrefs(dir)).toEqual({ inlineImages: true });
+  });
 });

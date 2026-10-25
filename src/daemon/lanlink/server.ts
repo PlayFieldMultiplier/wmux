@@ -126,6 +126,9 @@ export class LanLinkServer {
   private pendingPasses = 0;
   private reconcileChain: Promise<void> = Promise.resolve();
   private runtime: Omit<LanLinkRuntimeStatus, 'checking'> = { listening: false, stopReason: null };
+  /** The last listen error's code (EADDRINUSE…), reported with a 'listen-failed' stop. */
+  private listenErrorCode: string | null = null;
+  private lastAttempt: { ip: string | null; port: number | null } = { ip: null, port: null };
   private disposed = false;
 
   // Admission (ISOLATED — never the control pipe's counters).
@@ -202,7 +205,18 @@ export class LanLinkServer {
   }
 
   private stayStopped(reason: LanLinkStopReason | null): void {
-    this.runtime = { listening: false, stopReason: reason };
+    this.runtime = { listening: false, stopReason: reason, ...(reason === 'listen-failed' ? { listenErrorCode: this.listenErrorCode } : {}) };
+  }
+
+  /** What the firewall probe needs: the bound address and port. */
+  firewallFacts(): { listening: boolean; ip: string | null; port: number | null } {
+    const listening = this.runtime.listening;
+    return { listening, ip: listening ? this.boundIp : null, port: listening ? this.boundPort : null };
+  }
+
+  /** The address and port the last bind tried, for a listen-failed explanation. */
+  lastBindAttempt(): { ip: string | null; port: number | null } {
+    return { ...this.lastAttempt };
   }
 
   private notifyStatus(): void {
@@ -218,6 +232,7 @@ export class LanLinkServer {
     // Always close first so a NIC/port/address change rebinds cleanly.
     this.stopWatching();
     await this.closeServer();
+    this.listenErrorCode = null;
     this.stayStopped(null);
     const status = this.status;
     const nic = status.nic;
@@ -319,12 +334,14 @@ export class LanLinkServer {
     this.server = server;
     this.boundIp = ip;
     this.boundPort = port;
+    this.lastAttempt = { ip, port };
     return new Promise((resolve) => {
       let opened = false;
       server.on('error', (err) => {
         // C14: wired BEFORE listen; any listen error -> stop, never wildcard.
         if (!opened) {
           console.warn('[LanLinkServer] listen error, staying stopped:', err.message);
+          this.listenErrorCode = (err as NodeJS.ErrnoException).code ?? null;
           resolve(false); // the pass closes it and retries later
           return;
         }
@@ -332,6 +349,7 @@ export class LanLinkServer {
         // replaced is ignored.
         if (this.server !== server) return;
         console.warn('[LanLinkServer] listener error, closing:', err.message);
+        this.listenErrorCode = (err as NodeJS.ErrnoException).code ?? null;
         void this.closeServer();
         if (this.disposed) return;
         this.refuse('listen-failed');

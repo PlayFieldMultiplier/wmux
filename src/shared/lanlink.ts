@@ -201,6 +201,12 @@ export interface LanLinkRuntimeStatus {
   listening: boolean;
   /** Set only when LanLink is enabled with a NIC selected but not listening. */
   stopReason: LanLinkStopReason | null;
+  /**
+   * With `stopReason: 'listen-failed'`: the bind's error code (EADDRINUSE,
+   * EACCES, EADDRNOTAVAIL), null when it had none. Absent otherwise and from
+   * an older daemon.
+   */
+  listenErrorCode?: string | null;
   /** A reconcile is queued or running (reading the network category, binding):
    *  `listening` and `stopReason` are about to change. */
   checking: boolean;

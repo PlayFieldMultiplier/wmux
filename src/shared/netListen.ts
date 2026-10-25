@@ -128,22 +128,30 @@ export function parseTasklistImage(text: string, pid: number): string | null {
   return null;
 }
 
-/** How far past the busy port a suggestion looks. */
+/** How many candidate ports a suggestion tries. */
 export const FREE_PORT_SPAN = 20;
 
 /**
- * The first port in port+1 … port+FREE_PORT_SPAN that is a registered port
- * (1024-65535), outside every excluded range, and that `isFree` accepts. A
- * suggestion only: the caller's trial bind is on loopback, which does not
- * prove the listener's real bind will succeed.
+ * The first port above `port` that is a registered port (1024-65535), outside
+ * every excluded range, and that `isFree` accepts, trying at most
+ * FREE_PORT_SPAN candidates. Excluded ranges are stepped over without using
+ * up a try: a reserved port usually sits inside a range ~100 wide, and the
+ * suggestion has to land past it. A suggestion only: the caller's trial bind
+ * is on loopback, which does not prove the listener's real bind will succeed.
  */
 export async function pickFreePort(
   port: number,
   excludedRanges: readonly ExcludedPortRange[],
   isFree: (port: number) => Promise<boolean>,
 ): Promise<number | null> {
-  for (let p = port + 1; p <= port + FREE_PORT_SPAN; p += 1) {
-    if (p < 1024 || p > 65535 || portInRanges(p, excludedRanges)) continue;
+  let tries = 0;
+  for (let p = Math.max(port + 1, 1024); p <= 65535 && tries < FREE_PORT_SPAN; p += 1) {
+    const range = excludedRanges.find((r) => p >= r.start && p <= r.end);
+    if (range) {
+      p = range.end;
+      continue;
+    }
+    tries += 1;
     if (await isFree(p)) return p;
   }
   return null;

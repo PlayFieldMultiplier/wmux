@@ -126,13 +126,19 @@ describe('pickFreePort', () => {
       tried.push(p);
       return !busy.has(p);
     });
-    // 49180 is busy, 49181-49199 are excluded: nothing within 20.
-    expect(port).toBeNull();
-    expect(tried).toEqual([49180]);
+    // 49180 is busy, 49181-49380 are excluded: the next candidate is past them.
+    expect(port).toBe(49381);
+    expect(tried).toEqual([49180, 49381]);
   });
 
   it('returns the first free port above the busy one', async () => {
     expect(await pickFreePort(45660, RANGES, async (p) => p !== 45661)).toBe(45662);
+  });
+
+  it('tries at most 20 candidates', async () => {
+    const tried: number[] = [];
+    expect(await pickFreePort(45660, [], async (p) => { tried.push(p); return false; })).toBeNull();
+    expect(tried).toEqual(Array.from({ length: 20 }, (_, i) => 45661 + i));
   });
 
   it('stays inside 1024-65535', async () => {
