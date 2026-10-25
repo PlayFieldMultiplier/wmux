@@ -5,7 +5,8 @@
   (A2A), Settings > LAN (A2A and LanLink) and Share & pair (a phone server
   started with "Expose to network") say when no firewall rule lets other PCs
   reach the port, and offer **Allow through firewall**. On Windows it shows
-  one permission request (it names Windows PowerShell) and adds two rules in
+  one permission request (it names Windows PowerShell; none when wmux runs
+  as administrator) and adds two rules in
   the group `wmux`, for the wmux program and that port only: allowed on
   private networks from the local subnet (and Tailscale), blocked on public
   networks. Domain networks are left to company policy. After a wmux update
@@ -14,8 +15,9 @@
   Windows prompt, Group Policy, "block all incoming connections", or another
   firewall product, with **Copy details** for whoever manages the PC. When an
   earlier Windows prompt allowed wmux on public networks, the page says so.
-  Remote > Details shows the firewall state with **Remove**. Before, the host
-  could not tell, and the other PC only saw a timeout.
+  Remote > Details shows the firewall state with **Check firewall** and
+  **Remove**. Before, the host could not tell, and the other PC only saw a
+  timeout.
 
 ### Changed
 
@@ -24,7 +26,8 @@
   Share & pair now name the program holding it (or another copy of wmux),
   or say that Windows reserves the port, and offer **Use port N** with a
   port that looked free. Share & pair remembers the port it moved to.
-  Before, they showed a raw error code such as "EADDRINUSE".
+  Before, A2A and Share & pair showed a raw error code such as
+  "EADDRINUSE", and LanLink showed nothing.
 - **Timeouts point at the other PC's firewall check.** When the other PC
   does not answer, the message now says to open Remote on that PC and use
   Check firewall.

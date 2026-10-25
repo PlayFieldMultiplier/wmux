@@ -240,7 +240,8 @@ port, the line under This computer says so and offers **Allow through
 firewall**. Settings > LAN does the same for LanLink, and Share & pair for
 a phone server started with "Expose to network". Pressing it shows one
 Windows permission request, which names **Windows PowerShell** (the program
-that adds the rules), and adds two rules in the group `wmux`, for the wmux
+that adds the rules; there is no request when wmux itself runs as
+administrator), and adds two rules in the group `wmux`, for the wmux
 program and this port only:
 
 - an Allow for TCP on this port on **Private** networks, from the local
@@ -259,9 +260,15 @@ Windows Settings if you trust it, or use Tailscale), when a Block rule from
 an earlier prompt stops wmux, when Group Policy or "block all incoming
 connections" is in force, and when another firewall product is in charge;
 **Copy details** gives the port, program and proposed rule as text for
-whoever manages the PC. A rule that covers the port does not prove the
-other PC gets through (Wi-Fi isolation, a router); after allowing, press
-Connect again on the other PC.
+whoever manages the PC. wmux adds no rule for a copy that runs from a
+network, SUBST or removable drive, or from a folder whose name holds `[`,
+`]`, `*` or `?`; Copy details gives what to add by hand. A rule that covers
+the port does not prove the other PC gets through (Wi-Fi isolation, a
+router); after allowing, press Connect again on the other PC.
+
+Remote > Details > Firewall shows what the last check found, with **Check
+firewall** to look again. After **Open network settings** or **Open Windows
+Firewall**, the page checks again by itself when you come back to wmux.
 
 To add the rule by hand instead, run in an **administrator** PowerShell on
 the server PC:
@@ -294,10 +301,11 @@ Remove-NetFirewallRule -Group wmux
 If the application firewall is on (System Settings > Network > Firewall),
 macOS asks whether to allow incoming connections for wmux when the listener
 starts. Click **Allow**. If you denied it earlier, open **Options…** and set
-wmux to "Allow incoming connections", or press **Allow through firewall** on
-the Remote page, which asks for an administrator password and allows wmux.
-With "Block all incoming connections" turned on, the Mac can only be a
-joiner.
+wmux to "Allow incoming connections". The Remote page also offers **Allow
+through firewall** on a Mac, which asks for an administrator password and
+allows wmux; it has not yet been tried on a Mac, so if it fails, use the
+Options… list above. With "Block all incoming connections" turned on, the
+Mac can only be a joiner.
 
 ### Wi-Fi and the network itself
 
@@ -362,10 +370,12 @@ When **Connect** fails on the joiner, the message tells you which case it is:
 | Connecting failed. Try again. | Any other failure, such as an unreadable answer from the server or this PC failing to save the pairing. | Try again. If it keeps failing, check that both PCs run the same wmux version. |
 
 On the server, when the listener could not start, the Remote page and
-Settings > LAN say why: which program holds the port (or that another copy
-of wmux does), or that Windows reserves the port (Hyper-V, WSL). **Use port
-N** moves the listener to a port that looked free; PCs already paired must
-be invited again.
+Settings > LAN say why: which program holds the port (another copy of
+wmux, or another wmux feature on this PC such as the phone server), or that
+Windows reserves the port (Hyper-V, WSL). **Use port N** moves the listener
+to a port that looked free; PCs already paired must be invited again. If
+the new port cannot be opened either, wmux keeps listening on the old one
+and says so.
 
 After pairing, if the server's certificate changes (it is re-created only
 when it is missing, damaged or within 30 days of expiry), the joiner stops
