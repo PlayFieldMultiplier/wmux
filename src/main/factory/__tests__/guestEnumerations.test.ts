@@ -132,6 +132,7 @@ const ROOM_READ_CALLERS: Record<string, Why> = {
   'src/main/phone/PhoneFactory.ts#openQuestionsIn': { kind: 'owner', why: 'the owner\'s phone' },
   'src/main/phone/PhoneFactory.ts#phoneFactoryState': { kind: 'owner', why: 'the owner\'s phone' },
   'src/main/phone/PhoneFactory.ts#phoneRoomAttachment': { kind: 'owner', why: 'the owner\'s phone' },
+  'src/main/phone/PhoneFactory.ts#phoneRoomFile': { kind: 'owner', why: 'the owner\'s phone: a bot card\'s file, guest-sourced ones too, as the desktop opens them (room.handler.ts roomFileRead)' },
   'src/main/phone/PhoneFactory.ts#threads': { kind: 'owner', why: 'the owner\'s phone' },
   'src/main/pipe/handlers/botSecret.rpc.ts#openRequestCard': { kind: 'one-workspace', why: 'the request\'s own card' },
   'src/main/pipe/handlers/factoryRead.rpc.ts#handlePlanPropose': { kind: 'one-workspace', why: 'the proposing bot\'s own room' },
