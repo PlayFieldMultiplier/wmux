@@ -8,7 +8,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ResumeBinding } from '../../../../shared/agentResume';
 import type { ProcessTreeEntry } from '../../../AgentProcessTracker';
 import type { AgentStopResult } from '../../../agentStop';
+import type { IPty } from 'node-pty';
 import { continueOnAccount } from '../../../continueOnAccount';
+import { DaemonPTYBridge } from '../../../DaemonPTYBridge';
+import { PromptEventLog } from '../../../PromptEventLog';
+import { RingBuffer } from '../../../RingBuffer';
 import { ChildBackend } from '../childBackend';
 import { ClaudeDriver } from '../claude/claudeDriver';
 import { createChatV2Host } from '../host';
@@ -54,6 +58,8 @@ interface Rig {
   configDir: string;
   transcript: string;
   wmuxDir: string;
+  /** With `realShell`: the pane's bridge, and the shell's output into it. */
+  shell?: { bridge: DaemonPTYBridge; print: (data: string) => void };
 }
 
 const TREE = { root: { pid: 7001, ppid: 1, name: 'claude' }, descendants: [{ pid: 7002, ppid: 7001, name: 'node', cmdline: 'node github-mcp-server' }] };
@@ -65,6 +71,8 @@ interface RigOptions {
   shell?: string;
   /** Look Claude up for real on the pane's `Path` instead of the stub, with these files present. */
   windowsPath?: { path: string; files: string[] };
+  /** The pane's shell state from a real bridge fed OSC 133 markers, instead of an always-empty prompt. */
+  realShell?: boolean;
 }
 
 function rig(options: RigOptions = {}): Rig {
@@ -95,9 +103,19 @@ function rig(options: RigOptions = {}): Rig {
       env: { ...(options.windowsPath ? { Path: options.windowsPath.path } : { PATH: '/usr/bin' }), CLAUDE_CONFIG_DIR: options.paneConfigDir ?? configDir },
       cmd: options.shell ?? '/bin/zsh',
     },
-    promptLog: { size: 1, isCommandRunning: () => false },
-    bridge: { isEmptyShellPrompt: () => true, getInputRevision: () => 1 },
+    promptLog: { size: 1, isCommandRunning: () => false } as unknown,
+    bridge: { isEmptyShellPrompt: () => true, getInputRevision: () => 1, getKeyInputRevision: () => 1, rebaseShellKeyInput: () => undefined } as unknown,
   };
+  if (options.realShell) {
+    let output: ((data: string) => void) | null = null;
+    const pty = { onData: (cb: (data: string) => void) => { output = cb; return { dispose: () => undefined }; }, onExit: () => ({ dispose: () => undefined }) } as unknown as IPty;
+    const bridge = new DaemonPTYBridge();
+    const promptLog = new PromptEventLog();
+    bridge.setupDataForwarding(pty, new RingBuffer(65536), PANE, promptLog);
+    pane.bridge = bridge;
+    pane.promptLog = promptLog;
+    r.shell = { bridge, print: (data) => output?.(data) };
+  }
   const terminal: ChatV2TerminalDeps = {
     holdKeyboard: () => () => undefined,
     binding: () => r.term.binding,
@@ -454,7 +472,7 @@ describe('terminal → chat on Windows', () => {
     expect(await move(r)).toMatchObject({ ok: false, error: { message: 'Another process holds this conversation: claude.exe (pid 9100). A process wmux cannot read may hold it too: node.exe (pid 9200).' } });
   });
 
-  it('finds claude.exe on the pane’s Path the way the driver’s shell-less spawn will', async () => {
+  it('finds claude.exe on the pane’s Path the way the driver’s spawn will', async () => {
     const PATH = String.raw`C:\Windows\system32;;"D:\tools";C:\Users\u\.local\bin`;
     const r = win({ windowsPath: { path: PATH, files: [String.raw`C:\Users\u\.local\bin\claude.exe`] } });
     const res = await move(r);
@@ -462,7 +480,7 @@ describe('terminal → chat on Windows', () => {
     expect(r.term.stops).toBe(1);
     await r.host.dispose();
 
-    // Only a shim a shell would run: not where the chat can run it, and nothing is stopped.
+    // Only shims, no claude.exe: the chat runs only a native claude.exe, so it is refused and nothing is stopped.
     const s = win({ windowsPath: { path: PATH, files: [String.raw`C:\Users\u\.local\bin\claude.cmd`, String.raw`D:\tools\claude.ps1`] } });
     expect(await move(s)).toMatchObject({ ok: false, error: { message: 'Claude Code is not installed where the chat can run it.' } });
     expect(s.term.stops).toBe(0);
@@ -484,5 +502,61 @@ describe('terminal → chat on Windows', () => {
     const exeFirst = win({ windowsPath: { path: String.raw`C:\A;C:\B`, files: [String.raw`C:\A\claude.exe`, String.raw`C:\B\claude.cmd`] } });
     expect((await move(exeFirst)).ok).toBe(true);
     await exeFirst.host.dispose();
+  });
+});
+
+describe('the prompt the moved TUI leaves', () => {
+  const PROMPT = '\x1b]133;A\x07$ \x1b]133;B\x07';
+  // `claude` run from an empty prompt and a turn typed into it: the keys went to the TUI.
+  const runTui = (r: Rig) => {
+    r.shell!.print(PROMPT);
+    r.shell!.bridge.noteInput('claude\r');
+    r.shell!.print('\x1b]133;C\x07');
+    r.shell!.bridge.noteInput('Reply with the single word ok.');
+    r.shell!.bridge.noteInput('\r');
+  };
+  // The TUI exits under the stop; the shell draws its prompt before the stop is proved.
+  const stopDrawsPrompt = (r: Rig) => {
+    r.term.stop = async () => {
+      r.shell!.print(`\x1b]133;D;0\x07${PROMPT}`);
+      return { ok: true, stopped: true, pid: TREE.root.pid, killed: 2 };
+    };
+  };
+  const back = (r: Rig) => r.host.call('toTerminal', { paneId: PANE, chatSessionId: r.host.bindingForPane(PANE)!.chatSessionId }, 'main');
+
+  for (const [platform, shell] of [['darwin', '/bin/zsh'], ['linux', '/bin/bash'], ['win32', 'powershell.exe']] as const) {
+    it(`reads empty, so the chat can go back to the terminal (${platform})`, async () => {
+      const r = rig({ platform, shell, realShell: true });
+      runTui(r);
+      stopDrawsPrompt(r);
+      const moved = await move(r);
+      if (!moved.ok) throw new Error(moved.error.message);
+      expect(r.shell!.bridge.isEmptyShellPrompt()).toBe(true);
+      const res = await back(r);
+      if (!res.ok) throw new Error(res.error.message);
+      await r.host.dispose();
+    });
+  }
+
+  it('a key typed after the stop still keeps the chat from typing into the shell', async () => {
+    const r = rig({ realShell: true });
+    runTui(r);
+    stopDrawsPrompt(r);
+    expect((await move(r)).ok).toBe(true);
+    r.shell!.bridge.noteInput('x');
+    expect(await back(r)).toMatchObject({ ok: false, error: { message: 'The terminal prompt is not empty.' } });
+    await r.host.dispose();
+  });
+
+  it('a move refused after the stop leaves the prompt as the shell drew it', async () => {
+    const r = rig({ realShell: true });
+    runTui(r);
+    r.term.stop = async () => {
+      r.shell!.print(`\x1b]133;D;0\x07${PROMPT}`);
+      r.term.holders = [{ pid: 9100, ppid: 1, name: 'tail', cmdline: `tail -f ${SESSION}.jsonl` }];
+      return { ok: true, stopped: true, pid: TREE.root.pid, killed: 2 };
+    };
+    expect((await move(r)).ok).toBe(false);
+    expect(r.shell!.bridge.isEmptyShellPrompt()).toBe(false);
   });
 });

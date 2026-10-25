@@ -13,7 +13,13 @@
 //     `refs/wmux/keep/<taskId>`, so removal never leaves them to gc.
 //   - A research task's scratch folder
 //     (`<wmux data>/factory/bots/<botId>/research/<batch>/<task>`) is removed;
-//     its report is in the ledger and the room.
+//     its report is in the ledger and the room. Unless its report's
+//     `artifact` evidence names a file still inside it (reportNamesFileIn,
+//     a regular file with one name, reached through no link): files a worker made for the
+//     owner, which its bot hands over with room_post `files` (a copy the card
+//     keeps) after the task ended. Such a folder is kept like one a stop kept
+//     (`kept_stopped`), and goes after TASK_FOLDER_KEPT_TTL_MS or with Clean
+//     up now.
 //   - Only once the task's processes are stopped: its worker is not resumed
 //     or still stopping (workerReclaim.ts), and no daemon session was started
 //     in the folder or has its working directory there. A failed task's
@@ -62,10 +68,12 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import type { LedgerEntry } from '../../shared/ledger';
 import { BOT_ID_RE } from '../../shared/bot';
 import { getExecEnv } from '../../shared/execEnv';
 import { createFilePersister, readVersionedFile, type FilePersister } from './versionedFile';
+import { strictlyInside } from './roomFiles';
 import { assertNothingRunsIn, sessionHostDir } from '../worktask/stopSessionsInDir';
 import { treeKillRefusal } from '../../daemon/automation/verifiedTreeKill';
 import { STOPPED_BY_OWNER, STOP_SYSTEM_WORKSPACE, isStoppedByOwnerRow } from './factoryStop';
@@ -609,6 +617,86 @@ function throughNoLink(folder: string, root: string): boolean {
   }
 }
 
+/** The files a report hands over: its `artifact` items' locations, each an
+ *  absolute path or a `file://` URL. Free text is never read for paths. */
+function reportArtifactPaths(entry: Pick<LedgerEntry, 'evidence'>): string[] {
+  const out: string[] = [];
+  for (const item of entry.evidence?.items ?? []) {
+    if (item.kind !== 'artifact' || typeof item.location !== 'string') continue;
+    const location = item.location.trim();
+    let file = location;
+    if (/^file:/i.test(location)) {
+      try {
+        file = fileURLToPath(location);
+      } catch {
+        continue;
+      }
+    }
+    if (path.isAbsolute(file)) out.push(file);
+  }
+  return out;
+}
+
+/** Path comparison as the file system makes it: case-blind on macOS and
+ *  Windows. */
+function samePath(a: string, b: string): boolean {
+  return process.platform === 'darwin' || process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
+}
+
+/**
+ * Whether `file` is a regular file with one name, strictly inside `folder`,
+ * reached through no link: its real path below the folder's real path is the
+ * path as written. Never throws.
+ */
+function fileInsideNoLink(file: string, folder: string): boolean {
+  try {
+    const lst = fs.lstatSync(file);
+    if (!lst.isFile() || lst.nlink > 1) return false;
+    const realFolder = fs.realpathSync.native(folder);
+    const rel = strictlyInside(realFolder, fs.realpathSync.native(file));
+    if (rel === null) return false;
+    const written = path.resolve(file);
+    const lexical = strictlyInside(path.resolve(folder), written) ?? strictlyInside(realFolder, written);
+    return lexical !== null && samePath(lexical, rel);
+  } catch {
+    return false;
+  }
+}
+
+/** A path a wake may show the bot: no control character and no quote, so
+ *  it cannot end the line or the JSON string it sits in. */
+// eslint-disable-next-line no-control-regex
+const UNSHOWABLE_PATH = /[\u0000-\u001f\u007f-\u009f"'`]/;
+
+/**
+ * The files a task's report hands the owner, as its wake shows them: the
+ * `artifact` locations that are regular files with one name inside the
+ * task's own folder, reached through no link (fileInsideNoLink, the rule
+ * that keeps a folder). At most `max` (what one room card carries);
+ * `leftOut` counts the rest. room_post checks each again when it copies it.
+ */
+export function reportFiles(entry: Pick<LedgerEntry, 'evidence'>, folder: string, max: number): { files: string[]; leftOut: number } {
+  const files: string[] = [];
+  const seen = new Set<string>();
+  let leftOut = 0;
+  for (const file of reportArtifactPaths(entry)) {
+    if (seen.has(file) || UNSHOWABLE_PATH.test(file) || !fileInsideNoLink(file, folder)) continue;
+    seen.add(file);
+    if (files.length < max) files.push(file);
+    else leftOut++;
+  }
+  return { files, leftOut };
+}
+
+/**
+ * Whether a research task's report hands over a file still inside its
+ * folder: an `artifact` item naming a regular file there (fileInsideNoLink).
+ * A path outside the folder keeps nothing.
+ */
+export function reportNamesFileIn(entry: LedgerEntry, folder: string): boolean {
+  return reportArtifactPaths(entry).some((file) => fileInsideNoLink(file, folder));
+}
+
 /**
  * Remove one ended bot task's folder when the rules allow it. `force`: the
  * owner's Clean up now (a folder kept dirty, or one a stop kept, is looked
@@ -749,6 +837,29 @@ async function cleanTaskFolderNow(
     return 'skipped';
   }
   if (kind === 'research') {
+    // Files the worker made and named in its report wait for its bot to hand
+    // them over; recorded so they go after the kept TTL. Only from no record,
+    // a kept one (whose time is never reset), or one put back for a resume
+    // (a resumed worker's files count too).
+    if ((!prior || !!prior.stopped || prior.state === 'restored') && opts.force !== true && !expired && reportNamesFileIn(entry, mission.folder)) {
+      if (prior?.state !== 'kept_stopped') {
+        const thread = entry.dispatch?.threadId;
+        const recorded = await ports.store.put({
+          taskId: entry.id, kind, path: mission.folder, state: 'kept_stopped',
+          ...(prior?.prepFailed ? { prepFailed: true as const } : {}),
+          stopped: prior?.stopped ?? {
+            botId,
+            ...(entry.title ? { title: entry.title } : {}),
+            ...(entry.ownerWorkspaceId ? { workspaceId: entry.ownerWorkspaceId } : {}),
+            ...(entry.ownerWorkspaceId ? { threadId: typeof thread === 'string' && thread ? thread : `task:${entry.id}` } : {}),
+          },
+          at: keptAt ?? now(),
+        }).then(() => true, () => false);
+        // Not kept unless recorded: the next pass tries again.
+        if (!recorded) return fail('its kept record could not be written');
+      }
+      return 'skipped';
+    }
     try {
       if (!fs.lstatSync(mission.folder).isDirectory()) return 'skipped';
       await ports.store.put({ taskId: entry.id, kind, path: mission.folder, state: 'removing', ...stoppedMark, at: keptAt ?? now() });

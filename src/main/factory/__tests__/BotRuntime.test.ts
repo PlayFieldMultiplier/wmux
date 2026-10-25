@@ -94,7 +94,7 @@ interface Rig {
   spawns: BotEngineSpawnInput[];
 }
 
-function rig(opts: { mode?: FakeAdapter['mode']; engines?: BotEngineFactory; load?: boolean; timers?: Array<{ fn: () => void; at: number }>; claudeQuota?: BotRuntimeDeps['claudeQuota']; workerLoad?: BotRuntimeDeps['workerLoad']; claudeAccountName?: BotRuntimeDeps['claudeAccountName'] } = {}): Rig {
+function rig(opts: { mode?: FakeAdapter['mode']; engines?: BotEngineFactory; load?: boolean; timers?: Array<{ fn: () => void; at: number }>; claudeQuota?: BotRuntimeDeps['claudeQuota']; workerLoad?: BotRuntimeDeps['workerLoad']; claudeAccountName?: BotRuntimeDeps['claudeAccountName']; resolveTasks?: BotRuntimeDeps['resolveTasks']; resolveTaskFiles?: BotRuntimeDeps['resolveTaskFiles'] } = {}): Rig {
   const store = new BotStore(botsFilePath(dir), { now: () => clock });
   const sessions = new BotSessionStore(botSessionsPath(dir));
   let runtime: BotRuntime | null = null;
@@ -121,6 +121,8 @@ function rig(opts: { mode?: FakeAdapter['mode']; engines?: BotEngineFactory; loa
     ...(opts.claudeQuota ? { claudeQuota: opts.claudeQuota } : {}),
     ...(opts.workerLoad ? { workerLoad: opts.workerLoad } : {}),
     ...(opts.claudeAccountName ? { claudeAccountName: opts.claudeAccountName } : {}),
+    ...(opts.resolveTasks ? { resolveTasks: opts.resolveTasks } : {}),
+    ...(opts.resolveTaskFiles ? { resolveTaskFiles: opts.resolveTaskFiles } : {}),
     ...(timers ? {
       setTimer: (fn: () => void, ms: number) => { timers.push({ fn, at: clock + ms }); return timers.length; },
       clearTimer: () => undefined,
@@ -977,6 +979,22 @@ describe('BotRuntime', () => {
     await settle();
     expect(r.adapters[0].started?.systemPrompt).toBe('ROLE PROMPT verifier');
     expect(r.adapters[0].prompts[0]).toContain('PR TITLE');
+  });
+
+  it('a task.done wake reads its tasks\' files for this bot before the prompt, and the prompt names them', async () => {
+    const asked: Array<[string, readonly string[]]> = [];
+    const r = rig({
+      resolveTasks: (ids) => ids.map((taskId) => ({ taskId, title: 'Banner', status: 'completed' })),
+      resolveTaskFiles: async (botId, factIds) => {
+        asked.push([botId, factIds]);
+        return new Map([['wtask-1', { files: ['/r/1/banner.png'], threadId: 'general' }]]);
+      },
+    });
+    const id = createBot(r);
+    r.queue.enqueue({ botId: id, workspaceId: 'ws-1', reason: { kind: 'facts', factIds: ['task.done:wtask-1@4'], trigger: { kind: 'task.done' } }, priority: 2 });
+    await settle();
+    expect(asked).toEqual([[id, ['task.done:wtask-1@4']]]);
+    expect(r.adapters[0].prompts[0]).toContain('- wtask-1, thread "general": ["/r/1/banner.png"]');
   });
 
   it('a facts wake shows no fact from another bot\'s 1:1 with the owner (a Coordinator\'s correction trigger, the gardener), and its own 1:1\'s facts still', async () => {

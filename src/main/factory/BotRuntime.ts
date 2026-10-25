@@ -73,6 +73,7 @@ import {
   type WakePromptThread,
   type WakeRosterEntry,
   type WakeRoutineSummary,
+  type WakeTaskFiles,
   type WakeTaskSummary,
 } from './wakePrompt';
 import type { WakeQueue } from './wakeQueue';
@@ -199,6 +200,10 @@ export interface BotRuntimeDeps {
   resolveFacts?: (ids: readonly string[]) => Fact[];
   /** Resolve fan-out task ids to their ledger rows. */
   resolveTasks?: (taskIds: readonly string[]) => WakeTaskSummary[];
+  /** The files of the bot's done tasks it has not settled, by task id
+   *  (bot.rpc.ts wakeTaskFiles). Read before the prompt is built: a task's
+   *  folder is named by the daemon. */
+  resolveTaskFiles?: (botId: string, factIds: readonly string[]) => Promise<ReadonlyMap<string, WakeTaskFiles>>;
   /** Resolve a handoff (the handoff router), when wired. */
   resolveHandoff?: (handoffId: string) => WakeHandoffSummary | null;
   /** A bot's status changed. */
@@ -1161,7 +1166,17 @@ export class BotRuntime {
     return { ok: true, live };
   }
 
-  private prompt(profile: BotProfile, item: WakeItem): string {
+  private async wakeTaskFiles(botId: string, item: WakeItem): Promise<ReadonlyMap<string, WakeTaskFiles>> {
+    if (item.reason.kind !== 'facts' || !this.deps.resolveTaskFiles) return new Map();
+    try {
+      return await this.deps.resolveTaskFiles(botId, item.reason.factIds);
+    } catch (err) {
+      console.warn(`[factory] the files of ${item.id}'s tasks could not be read: ${String(err)}`);
+      return new Map();
+    }
+  }
+
+  private prompt(profile: BotProfile, item: WakeItem, taskFiles: ReadonlyMap<string, WakeTaskFiles> = new Map()): string {
     const r = item.reason;
     let facts: Fact[] = [];
     let tasks: WakeTaskSummary[] = [];
@@ -1180,7 +1195,7 @@ export class BotRuntime {
         // prompt, whichever path queued the wake (a trigger, the gardener).
         facts = ((this.deps.resolveFacts ?? ports.resolveFacts)?.(r.factIds) ?? []).filter((f) => !inAnotherBotsDm(f.payload?.threadId, profile.id));
         const taskIds = r.factIds.map(taskIdOfFactId).filter((t): t is string => t !== null);
-        if (taskIds.length > 0) tasks = this.deps.resolveTasks?.(taskIds) ?? [];
+        if (taskIds.length > 0) tasks = (this.deps.resolveTasks?.(taskIds) ?? []).map((t) => ({ ...t, ...taskFiles.get(t.taskId) }));
         const parentId = ports.taskHandoff?.(item);
         if (parentId) taskParent = (this.deps.resolveHandoff ?? ports.resolveHandoff)?.(parentId) ?? null;
       } else if (r.kind === 'handoff' || r.kind === 'mention') {
@@ -1245,7 +1260,8 @@ export class BotRuntime {
       if (signedIn === true) markConversation(botId, 'signedIn');
       else if (signedIn === 'unknown') holdSignedInForWake(botId);
       const photos = this.wakePhotos(profile, item);
-      const result = await this.drive(s.live, this.prompt(profile, item) + photos.note, profile.budget.turnTimeoutMs, () => run?.interrupted === true, run?.stopped, photos.images);
+      const taskFiles = await this.wakeTaskFiles(profile.id, item);
+      const result = await this.drive(s.live, this.prompt(profile, item, taskFiles) + photos.note, profile.budget.turnTimeoutMs, () => run?.interrupted === true, run?.stopped, photos.images);
       // A failed turn that reached the model cost as much as a finished one.
       if (result.costUsd !== undefined) {
         const usd = result.costUsd;
