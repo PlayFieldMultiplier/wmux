@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('electron', () => ({ ipcMain: { handle: vi.fn(), removeHandler: vi.fn() } }));
 
 import { BotStore, botsFilePath } from '../botStore';
-import { botRepoFromFolder, createBotFromFolder, createTeamFromFolder, greetNewBot, homeShortPath, recordWorkspaceRepo, resolveBotRepo, suggestBotRepo, workspaceFolders, workspaceRepo } from '../botCreate';
+import { botRepoFromFolder, createBotFromFolder, createTeamFromFolder, greetNewBot, homeShortPath, recordWorkspaceRepo, resolveBotRepo, suggestBotRepo, workspaceFolderList, workspaceFolders, workspaceRepo } from '../botCreate';
 import { WorkspaceRepoStore, workspaceReposPath } from '../workspaceRepos';
 import { persisterWritesSettled } from '../versionedFile';
 import { DEFAULT_FACTORY_SETTINGS, type FactorySettings } from '../factorySettings';
@@ -275,17 +275,19 @@ describe('createBotFromFolder: one repository per workspace', () => {
     expect(r).toMatchObject({ ok: true, bot: { repo: { repoKey: 'github.com/acme/app' } } });
   });
 
-  it('checks the workspace\'s repo after resolving the folder (a bot added meanwhile counts)', async () => {
+  it('two adds with different folders at once: one runs after the other, and the second is repo_mismatch', async () => {
     let release!: () => void;
     const gate = new Promise<void>((r) => { release = r; });
     const slowGit = vi.fn(async (args: string[]) => {
       await gate;
       return args[0] === 'rev-parse' ? ok('/src/api\n') : ok('git@github.com:acme/api.git\n');
     });
-    const pending = createBotFromFolder(store, { workspaceId: 'ws-1', role: 'verifier', repoFolder: '/src/api' }, { git: slowGit, realpath: (p) => p });
-    await createBotFromFolder(store, { workspaceId: 'ws-1', role: 'lead', repoFolder: '/src/app' }, deps);
+    const first = createBotFromFolder(store, { workspaceId: 'ws-1', role: 'verifier', repoFolder: '/src/api' }, { git: slowGit, realpath: (p) => p });
+    const second = createBotFromFolder(store, { workspaceId: 'ws-1', role: 'lead', repoFolder: '/src/app' }, deps);
     release();
-    expect(await pending).toMatchObject({ ok: false, code: 'repo_mismatch' });
+    expect(await first).toMatchObject({ ok: true, bot: { repo: { repoKey: 'github.com/acme/api' } } });
+    expect(await second).toMatchObject({ ok: false, code: 'repo_mismatch' });
+    expect(store.list({ workspaceId: 'ws-1' })).toHaveLength(1);
   });
 
   it('a coordinator takes the workspace\'s repo like any bot', async () => {
@@ -445,15 +447,27 @@ describe('the workspace\'s repository is asked once (workspace-repos.json)', () 
     expect(await workspaceFolders('ws-1', entries({ startupCwd: APP, metadata: { cwd: stray } })(), () => stray)).toEqual([APP, stray]);
   });
 
-  it('a refused folder the workspace was opened on still lets a pane\'s repository answer; its refusal is the one said otherwise', async () => {
+  it('a refused folder the workspace was opened on is the answer: no pane\'s repository is offered instead', async () => {
     const git = vi.fn(async (args: string[], cwd: string) => {
       if (args[0] === 'rev-parse') return cwd === APP ? ok(`${APP}\n`) : fail;
       return ok('git@github.com:acme/app.git\n');
     });
     const deps = { realpath: (p: string) => p, homeDir: HOME, records, git };
-    expect(await suggestBotRepo(store, 'ws-1', { ...deps, entries: entries({ startupCwd: NOTES }), cwdOf: () => APP })).toMatchObject({ ok: true, root: APP });
-    expect(await suggestBotRepo(store, 'ws-1', { ...deps, entries: entries({ startupCwd: NOTES }), cwdOf: () => undefined }))
+    expect(await suggestBotRepo(store, 'ws-1', { ...deps, entries: entries({ startupCwd: NOTES }), cwdOf: () => APP }))
       .toEqual({ ok: false, code: 'not_a_repo', message: `${NOTES} is not a git checkout.` });
+    expect(git.mock.calls.map((c) => c[1])).toEqual([NOTES]);
+    // A workspace opened on no folder still falls back to its panes.
+    expect(await suggestBotRepo(store, 'ws-1', { ...deps, entries: entries(), cwdOf: () => APP })).toMatchObject({ ok: true, root: APP });
+  });
+
+  it('on Windows a Linux folder the workspace was opened on is read through its pane\'s distro, and one that cannot be is refused, never read on the host', async () => {
+    const daemonRpc = vi.fn(async () => [{ id: 'pty-a', wslTarget: { distribution: 'Ubuntu' } }]);
+    const list = await workspaceFolderList('ws-1', entries({ startupCwd: '/home/me/repo' })(), () => undefined, { platform: 'win32', daemonRpc });
+    expect(list.opened).toEqual({ folder: '\\\\wsl$\\Ubuntu\\home\\me\\repo' });
+    const git = vi.fn();
+    const noDistro = await suggestBotRepo(store, 'ws-1', { realpath: (p: string) => p, records, git, platform: 'win32', entries: entries({ startupCwd: '/home/me/repo' }), cwdOf: () => APP });
+    expect(noDistro).toMatchObject({ ok: false, code: 'not_a_repo' });
+    expect(git).not.toHaveBeenCalled();
   });
 
   it('a WSL pane\'s Linux cwd is spelled as Windows opens it, with the pane\'s distro', async () => {
@@ -498,9 +512,56 @@ describe('the workspace\'s repository is asked once (workspace-repos.json)', () 
     expect(told).not.toHaveBeenCalledWith(second.bot.id);
     expect(store.get(far.bot.id)?.repo).toBeUndefined();
     expect(records.get('ws-1')).toMatchObject({ repo: { repoKey: 'github.com/acme/app' } });
-    // A None never takes a repository from anyone.
-    expect(await createBotFromFolder(store, { workspaceId: 'ws-1', name: 'Cy', noRepo: true }, deps)).toMatchObject({ ok: true, bot: { repo: { repoKey: 'github.com/acme/app' } } });
+    // A None is this bot's: it takes no repository, and takes none from anyone.
+    const cy = await createBotFromFolder(store, { workspaceId: 'ws-1', name: 'Cy', noRepo: true }, deps);
+    expect(cy.ok && cy.bot.repo).toBeUndefined();
     expect(store.get(first.bot.id)?.repo).toMatchObject({ repoKey: 'github.com/acme/app' });
+    expect(records.get('ws-1')).toMatchObject({ repo: { repoKey: 'github.com/acme/app' } });
+  });
+
+  it('None and a check that could not be made are honoured: no repository is inherited, and only None is remembered', async () => {
+    const git = vi.fn();
+    records.setRepo('ws-1', { repoKey: 'github.com/acme/app', repoPath: APP });
+    const held = store.create({ workspaceId: 'ws-2', name: 'Held', repo: { repoKey: 'github.com/acme/app', repoPath: APP } });
+    if (!held.ok) throw new Error('not made');
+    const names = { coordinator: 'Lead', researcher: 'Res', developer: 'Dev', issue: 'Iss', reviewer: 'Rev' };
+    const none = await createBotFromFolder(store, { workspaceId: 'ws-2', name: 'Ann', noRepo: true }, { git, records });
+    expect(none.ok && none.bot.repo).toBeUndefined();
+    const team = await createTeamFromFolder(store, { workspaceId: 'ws-2', names, noRepo: true }, { git, records });
+    expect(team.ok && team.bots.map((b) => b.repo)).toEqual([undefined, undefined, undefined, undefined, undefined]);
+    // A None where a bot holds the repository keeps the repository remembered.
+    expect(records.get('ws-2')).toBeNull();
+    // Unchecked: no repository, nothing remembered.
+    const unchecked = await createBotFromFolder(store, { workspaceId: 'ws-1', name: 'Bo', noInherit: true }, { git, records });
+    expect(unchecked.ok && unchecked.bot.repo).toBeUndefined();
+    expect(records.get('ws-1')).toMatchObject({ repo: { repoKey: 'github.com/acme/app' } });
+    // A None where no bot holds the remembered repository replaces it.
+    expect(await createBotFromFolder(store, { workspaceId: 'ws-1', name: 'Cy', noRepo: true }, { git, records })).toMatchObject({ ok: true });
+    expect(records.get('ws-1')).toMatchObject({ none: true });
+    expect(git).not.toHaveBeenCalled();
+  });
+
+  it('a None saved while the suggestion reads the folder is the answer', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const git = vi.fn(async (args: string[]) => {
+      await gate;
+      return args[0] === 'rev-parse' ? ok(`${APP}\n`) : ok('git@github.com:acme/app.git\n');
+    });
+    const pending = suggestBotRepo(store, 'ws-1', { realpath: (p: string) => p, homeDir: HOME, records, git, entries: entries(), cwdOf: () => APP });
+    expect(await createBotFromFolder(store, { workspaceId: 'ws-1', name: 'Ann', noRepo: true }, { records })).toMatchObject({ ok: true });
+    release();
+    expect(await pending).toEqual({ ok: false, code: 'none' });
+  });
+
+  it('the fill skips a role that works on no repository (the legacy HQ moa)', async () => {
+    const moa = store.create({ workspaceId: 'ws-1', name: 'Moa', role: 'moa' });
+    const dev = store.create({ workspaceId: 'ws-1', name: 'Dev' });
+    if (!moa.ok || !dev.ok) throw new Error('not made');
+    const told = vi.fn();
+    expect(recordWorkspaceRepo(store, 'ws-1', { repoKey: 'github.com/acme/app', repoPath: APP }, { records, profileChanged: told })).toEqual([dev.bot.id]);
+    expect(store.get(moa.bot.id)?.repo).toBeUndefined();
+    expect(told).not.toHaveBeenCalledWith(moa.bot.id);
   });
 
   it('a team with a repository fills the workspace\'s earlier bots without one; a bot on another repository keeps it', async () => {
@@ -520,12 +581,61 @@ describe('the workspace\'s repository is asked once (workspace-repos.json)', () 
     expect(store.get(other.bot.id)?.repo).toMatchObject({ repoKey: 'github.com/acme/api' });
   });
 
-  it('a remembered repository is the workspace\'s even with no bot left on it', async () => {
+  it('a remembered repository no bot holds is resolved again before a new bot takes it, and offered with Change', async () => {
+    records.setRepo('ws-1', { repoKey: 'github.com/acme/app', repoPath: APP, originPin: 'git@github.com:acme/app.git' });
+    const git = appGit();
+    expect(workspaceRepo(store, 'ws-1', records)).toEqual({ repoKey: 'github.com/acme/app', repoPath: APP, originPin: 'git@github.com:acme/app.git' });
+    expect(await suggestBotRepo(store, 'ws-1', { realpath: (p: string) => p, homeDir: HOME, records, git }))
+      .toMatchObject({ ok: true, repoKey: 'github.com/acme/app', root: APP, inherited: false });
+    expect(await createBotFromFolder(store, { workspaceId: 'ws-1', name: 'Ann' }, { git, realpath: (p: string) => p, records })).toMatchObject({ ok: true, bot: { repo: { repoKey: 'github.com/acme/app' } } });
+    expect(git).toHaveBeenCalledWith(['rev-parse', '--show-toplevel'], APP);
+  });
+
+  it('a remembered repository whose folder is gone, untrusted, or now names another repository or pin is forgotten', async () => {
+    const remembered = { repoKey: 'github.com/acme/app', repoPath: APP, originPin: 'git@github.com:acme/app.git' };
+    const dubious: GitResult = { stdout: '', stderr: `fatal: detected dubious ownership in repository at '${APP}'\nTo add an exception for this directory, call:\n\n\tgit config --global --add safe.directory '${APP}'\n`, code: 128 };
+    const cases: Array<[string, ReturnType<typeof fakeGit>]> = [
+      ['gone', fakeGit(fail, fail)],
+      ['untrusted', fakeGit(dubious, fail)],
+      ['another repository', fakeGit(ok(`${APP}\n`), ok('git@github.com:acme/api.git\n'))],
+      ['another pin', fakeGit(ok(`${APP}\n`), ok('https://github.com/acme/app.git\n'))],
+    ];
+    for (const [why, git] of cases) {
+      records.setRepo('ws-1', remembered);
+      const r = await createBotFromFolder(store, { workspaceId: 'ws-1', name: `Bot ${why}` }, { git, realpath: (p: string) => p, records });
+      expect(r.ok && r.bot.repo, why).toBeUndefined();
+      expect(records.get('ws-1'), why).toBeNull();
+    }
+  });
+
+  it('an add that inherits and an add with another folder at once never leave the workspace on two repositories', async () => {
+    records.setRepo('ws-1', { repoKey: 'github.com/acme/app', repoPath: APP, originPin: 'git@github.com:acme/app.git' });
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const slowApp = vi.fn(async (args: string[]) => {
+      await gate;
+      if (args[0] === 'rev-parse') return ok(`${APP}\n`);
+      if (args.includes('config')) return ok('local\0remote.origin.url\ngit@github.com:acme/app.git\0');
+      return ok('git@github.com:acme/app.git\n');
+    });
+    const api = { git: fakeGit(ok('/src/api\n'), ok('git@github.com:acme/api.git\n')), realpath: (p: string) => p, records };
+    const inheriting = createBotFromFolder(store, { workspaceId: 'ws-1', name: 'Ann' }, { git: slowApp, realpath: (p: string) => p, records });
+    const picking = createBotFromFolder(store, { workspaceId: 'ws-1', name: 'Bo', repoFolder: '/src/api' }, api);
+    await new Promise((r) => setTimeout(r, 0));
+    release();
+    const results = await Promise.all([inheriting, picking]);
+    const keys = new Set(store.list({ workspaceId: 'ws-1' }).map((b) => b.repo?.repoKey));
+    expect(keys.size, JSON.stringify(results)).toBe(1);
+    expect(results[1]).toMatchObject({ ok: false, code: 'repo_mismatch' });
+  });
+
+  it('a picked folder replaces a remembered repository no bot holds; one a bot holds still refuses it', async () => {
     records.setRepo('ws-1', { repoKey: 'github.com/acme/app', repoPath: APP });
-    const git = vi.fn();
-    expect(workspaceRepo(store, 'ws-1', records)).toEqual({ repoKey: 'github.com/acme/app', repoPath: APP });
-    expect(await createBotFromFolder(store, { workspaceId: 'ws-1', name: 'Ann' }, { git, records })).toMatchObject({ ok: true, bot: { repo: { repoKey: 'github.com/acme/app' } } });
-    expect(git).not.toHaveBeenCalled();
+    const api = { git: fakeGit(ok('/src/api\n'), ok('git@github.com:acme/api.git\n')), realpath: (p: string) => p, records };
+    expect(await createBotFromFolder(store, { workspaceId: 'ws-1', name: 'Ann', repoFolder: '/src/api' }, api)).toMatchObject({ ok: true, bot: { repo: { repoKey: 'github.com/acme/api' } } });
+    expect(records.get('ws-1')).toMatchObject({ repo: { repoKey: 'github.com/acme/api' } });
+    const app = { git: appGit(), realpath: (p: string) => p, records };
+    expect(await createBotFromFolder(store, { workspaceId: 'ws-1', name: 'Bo', repoFolder: APP }, app)).toMatchObject({ ok: false, code: 'repo_mismatch' });
   });
 
   it('a profile Change gives the repository to the workspace\'s bots without one; another repository stays repo_mismatch', async () => {

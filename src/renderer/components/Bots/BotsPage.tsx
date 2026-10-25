@@ -245,7 +245,7 @@ function FirstBotPanel({ t, workspace, botPort, settings, confirmOn, on, engine,
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { readiness, checking, recheck, login } = useEngineReadiness(engine);
-  const repo = useAddBotRepo(botPort, [], workspace?.id ?? '', pickFolderDialog);
+  const repo = useAddBotRepo(botPort, rows, workspace?.id ?? '', pickFolderDialog);
   const typed = normalizeBotName(name);
   const blocked = addBotBlockedReason({ canCreate: !!botPort.create, workspaceId: workspace?.id ?? '', name, jobOk: true, repoPending: repo.pending });
   const engineText = engineLine(readiness, t);

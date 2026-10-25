@@ -288,14 +288,15 @@ export function workspaceRepoOf(rows: readonly FactoryBotRow[], workspaceId: str
  *  picker), main's suggestion (with Change…), the folder the owner picked,
  *  main's answer still on its way (`checking`: nothing can be added yet), or
  *  none: with why main's suggestion was refused (`reason`, its fix in
- *  main's words), or `remembered` when the owner chose no repository for the
- *  workspace before. */
+ *  main's words), `remembered` when the owner chose no repository for the
+ *  workspace before, or `unchecked` when main could not be asked (`failed`)
+ *  or did not answer in time (`slow`). */
 export type AddBotRepoView =
   | { kind: 'inherited'; repoKey: string; root: string; displayRoot: string }
   | { kind: 'suggested'; repoKey: string; root: string; displayRoot: string }
   | { kind: 'picked'; folder: string }
   | { kind: 'checking' }
-  | { kind: 'none'; reason?: string; remembered?: boolean };
+  | { kind: 'none'; reason?: string; remembered?: boolean; unchecked?: 'failed' | 'slow' };
 
 export function addBotRepoView(
   rows: readonly FactoryBotRow[],
@@ -307,6 +308,8 @@ export function addBotRepoView(
   none = false,
   /** Main's suggestion was asked and has not answered yet. */
   pending = false,
+  /** Main could not be asked, or did not answer in time. */
+  unchecked: 'failed' | 'slow' | null = null,
 ): AddBotRepoView {
   const s = suggestion?.ok ? suggestion : null;
   const own = workspaceRepoOf(rows, workspaceId);
@@ -318,6 +321,7 @@ export function addBotRepoView(
   if (none) return { kind: 'none' };
   if (folder) return { kind: 'picked', folder };
   if (s) return { kind: 'suggested', repoKey: s.repoKey, root: s.root, displayRoot: s.displayRoot };
+  if (unchecked) return { kind: 'none', unchecked };
   if (pending) return { kind: 'checking' };
   if (suggestion && !suggestion.ok) {
     if (suggestion.code === 'none') return { kind: 'none', remembered: true };
@@ -404,7 +408,17 @@ export function AddBotRepoRow({ view, t, busy, onChoose, onNone }: {
           )}
         </span>
       )}
-      {view.kind === 'none' && (view.reason || view.remembered) && (
+      {view.kind === 'none' && view.unchecked && (
+        <p
+          data-testid="factory-add-bot-repo-reason"
+          data-repo-unchecked={view.unchecked}
+          {...(view.unchecked === 'failed' ? { role: 'alert' } : {})}
+          className={`basis-full text-[11px] leading-snug ${view.unchecked === 'failed' ? 'text-[var(--accent-red)]' : 'text-[var(--text-muted)]'}`}
+        >
+          {t(view.unchecked === 'failed' ? 'settings.factory.addBotRepoCheckFailed' : 'settings.factory.addBotRepoCheckSlow')}
+        </p>
+      )}
+      {view.kind === 'none' && !view.unchecked && (view.reason || view.remembered) && (
         <p data-testid="factory-add-bot-repo-reason" className="basis-full text-[11px] leading-snug text-[var(--text-muted)]">
           {view.reason ?? t('settings.factory.addBotRepoRemembered')}
         </p>
@@ -413,42 +427,60 @@ export function AddBotRepoRow({ view, t, busy, onChoose, onNone }: {
   );
 }
 
+/** How long the form waits for main's suggestion before it lets the owner
+ *  add without one. */
+export const REPO_SUGGEST_TIMEOUT_MS = 10_000;
+
 /** What "Add bot" shows for a workspace's repository and what it sends:
  *  main's suggestion (the chosen workspace's folder, asked again when the
- *  workspace, its bots' repo or its folder changes), a picked folder, or
+ *  workspace, its bots' repo or its folders change), a picked folder, or
  *  None. A folder the owner picked (or None) is theirs: it stays when the
  *  workspace changes; until then the folder follows the workspace. Shared
- *  with the first screen. `pending`: main has not answered yet, so Add
- *  waits (an add then would make a bot without the workspace's repository).
- *  `request` is what a create sends: the folder, or `noRepo` when the form
- *  shows no repository that the owner chose or was told why (main
- *  remembers it, so the next add does not ask). */
+ *  with the first screen. Main's answer belongs to the ask it answers (the
+ *  workspace and what triggered it): a new ask reads as `pending` on the
+ *  same render, and Add waits (an add then would make a bot without the
+ *  workspace's repository), for REPO_SUGGEST_TIMEOUT_MS at most. `request`
+ *  is what a create sends: the folder; `noRepo` when the owner pressed None
+ *  (main remembers it, so the next add does not ask); `noInherit` when main
+ *  could not be asked or did not answer in time (the bot gets no repository
+ *  it was not shown). A refusal alone sends nothing, so a folder fixed later
+ *  is offered again. */
 export function useAddBotRepo(port: FactoryBotPort, rows: readonly FactoryBotRow[], workspaceId: string, pickFolder: () => Promise<string | null>) {
   const [folder, setFolder] = useState<string | null>(null);
   const [none, setNone] = useState(false);
-  const [suggestion, setSuggestion] = useState<FactoryBotRepoSuggestion | null>(null);
+  const [answer, setAnswer] = useState<{ ask: string; suggestion: FactoryBotRepoSuggestion | null; unchecked: 'failed' | 'slow' | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const own = workspaceRepoOf(rows, workspaceId);
   const ownKey = own ? `${own.repoKey}\n${own.repoPath}` : '';
   // Main's suggestion for the workspace, asked again when its bots' repo or
-  // its folder changes (the folder only triggers the ask; main reads its own).
+  // its folders change (they only trigger the ask; main reads its own).
   const shownCwd = useStore((s) => s.workspaces.find((w) => w.id === workspaceId)?.metadata?.cwd ?? '');
+  const shownStartup = useStore((s) => s.workspaces.find((w) => w.id === workspaceId)?.profile?.startupCwd ?? '');
+  const ask = [workspaceId, ownKey, shownCwd, shownStartup].join('\0');
   useEffect(() => {
-    setSuggestion(null);
     if (!port.suggestRepo || !workspaceId) return;
     let live = true;
-    // A failed ask answers "no folder", so the form never waits for good.
-    port.suggestRepo(workspaceId).then(
-      (s) => { if (live) setSuggestion(s); },
-      () => { if (live) setSuggestion({ ok: false, code: 'no_folder' }); },
-    );
-    return () => { live = false; };
-  }, [port, workspaceId, ownKey, shownCwd]);
+    const settle = (suggestion: FactoryBotRepoSuggestion | null, unchecked: 'failed' | 'slow' | null) => {
+      if (live) setAnswer({ ask, suggestion, unchecked });
+    };
+    port.suggestRepo(workspaceId).then((s) => settle(s, null), () => settle(null, 'failed'));
+    // Too slow: the owner may add without one (never inheriting one unseen).
+    const timer = setTimeout(() => {
+      if (live) setAnswer((a) => (a?.ask === ask ? a : { ask, suggestion: null, unchecked: 'slow' }));
+    }, REPO_SUGGEST_TIMEOUT_MS);
+    return () => { live = false; clearTimeout(timer); };
+  }, [port, workspaceId, ask]);
   const asked = !!port.suggestRepo && !!workspaceId;
-  const view = addBotRepoView(rows, workspaceId, suggestion, folder, none, asked && suggestion === null);
+  const current = answer?.ask === ask ? answer : null;
+  const view = addBotRepoView(rows, workspaceId, current?.suggestion ?? null, folder, none, asked && !current, current?.unchecked ?? null);
   const repoFolder = view.kind === 'picked' ? view.folder : view.kind === 'suggested' ? view.root : undefined;
-  const noRepo = view.kind === 'none' && (none || !!view.reason || !!view.remembered);
-  const request: { repoFolder?: string; noRepo?: true } = repoFolder ? { repoFolder } : noRepo ? { noRepo: true } : {};
+  const request: { repoFolder?: string; noRepo?: true; noInherit?: true } = repoFolder
+    ? { repoFolder }
+    : view.kind === 'none' && none
+      ? { noRepo: true }
+      : view.kind === 'none' && view.unchecked
+        ? { noInherit: true }
+        : {};
   const choose = async () => {
     try {
       const picked = await pickFolder();

@@ -89,4 +89,18 @@ describe('bot.update repoFolder: the workspace\'s repository', () => {
     expect(r.records.get('ws-1')).toMatchObject({ repo: { repoKey: 'github.com/acme/app' } });
     await r.store.flush();
   });
+
+  it('a `repo` patch itself is checked against the other bots, then remembered and given to the bots without one', async () => {
+    const r = rig();
+    const lead = r.make('Lead');
+    const dev = r.make('Dev');
+    const app = { repoKey: 'github.com/acme/app', repoPath: path.join(dir, 'app') };
+    expect(await r.update(lead, { repo: app })).toMatchObject({ ok: true, bot: { repo: { repoKey: 'github.com/acme/app' } } });
+    expect(r.store.get(dev)?.repo).toMatchObject({ repoKey: 'github.com/acme/app' });
+    expect(r.changed).toHaveBeenCalledWith(dev);
+    expect(r.records.get('ws-1')).toMatchObject({ repo: { repoKey: 'github.com/acme/app' } });
+    expect(await r.update(dev, { repo: { repoKey: 'github.com/acme/api', repoPath: path.join(dir, 'api') } })).toMatchObject({ ok: false, code: 'repo_mismatch' });
+    expect(r.store.get(dev)?.repo).toMatchObject({ repoKey: 'github.com/acme/app' });
+    await r.store.flush();
+  });
 });

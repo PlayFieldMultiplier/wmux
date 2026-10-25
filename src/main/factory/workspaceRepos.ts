@@ -6,10 +6,13 @@
 //   - `repo`: the repository its bots work on, written whenever a bot of the
 //     workspace gets one from a folder (Add bot, Add team, the first run, a
 //     profile's Change, a pipe `bot.update` that sets a repo);
-//   - `none`: the owner chose no repository there (None, or Add after the
-//     workspace's folder was refused), so the suggestion stops reading the
-//     workspace's folder until a folder is picked.
-// botCreate.ts workspaceRepo reads `repo` before the bots themselves.
+//   - `none`: the owner pressed None there, so the suggestion stops reading
+//     the workspace's folder until a folder is picked.
+// A remembered repository no bot holds is resolved again before a new bot
+// takes it (botCreate.ts liveWorkspaceRepo) and forgotten when it no longer
+// resolves to the same repository; a picked folder replaces it. The
+// workspace's answer is forgotten when the workspace is removed
+// (channelLocal.handler.ts, with the Deck's teardown).
 //
 // The file is main-owned and versioned like the factory's other stores
 // (versionedFile.ts). One that cannot be read is never overwritten: the
@@ -118,10 +121,20 @@ export class WorkspaceRepoStore {
   }
 
   /** Remember that the workspace works on no repository. A remembered
-   *  repository is kept: main gives every bot of the workspace its repo. */
-  setNone(workspaceId: unknown): void {
-    if (this.get(workspaceId)) return;
+   *  repository is kept unless `replace` (the caller checked that no bot of
+   *  the workspace holds it). */
+  setNone(workspaceId: unknown, opts: { replace?: boolean } = {}): void {
+    const current = this.get(workspaceId);
+    if (current && ('none' in current || !opts.replace)) return;
     this.write(workspaceId, { none: true, at: new Date(this.now()).toISOString() });
+  }
+
+  /** Forget the workspace's answer (its remembered repository no longer
+   *  resolves, or the workspace was removed). */
+  clear(workspaceId: unknown): void {
+    if (this.state !== 'loaded' || !validWorkspaceId(workspaceId) || !this.records.has(workspaceId)) return;
+    this.records.delete(workspaceId);
+    void this.persister.schedule().catch((err) => this.log(`${this.opts.file} write failed: ${String(err)}`));
   }
 
   private write(workspaceId: unknown, record: WorkspaceRepoRecord): void {

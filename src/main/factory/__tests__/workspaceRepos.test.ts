@@ -36,11 +36,25 @@ describe('WorkspaceRepoStore', () => {
     expect(again.get('ws-2')).toEqual({ none: true, at: '2026-10-25T00:00:00.000Z' });
   });
 
-  it('None never replaces a remembered repository; a repository replaces None', () => {
+  it('a workspace\'s answer is forgotten on clear, on disk too', async () => {
+    const s = open();
+    s.setRepo('ws-1', APP);
+    s.setNone('ws-2');
+    s.clear('ws-1');
+    await s.flush();
+    const again = open();
+    expect(again.get('ws-1')).toBeNull();
+    expect(again.get('ws-2')).toMatchObject({ none: true });
+  });
+
+  it('None replaces a remembered repository only when asked to (no bot holds it); a repository replaces None', () => {
     const s = open();
     s.setRepo('ws-1', APP);
     s.setNone('ws-1');
     expect(s.get('ws-1')).toMatchObject({ repo: APP });
+    s.setNone('ws-1', { replace: true });
+    expect(s.get('ws-1')).toMatchObject({ none: true });
+    s.setRepo('ws-1', APP);
     s.setNone('ws-2');
     s.setRepo('ws-2', APP);
     expect(s.get('ws-2')).toMatchObject({ repo: APP });

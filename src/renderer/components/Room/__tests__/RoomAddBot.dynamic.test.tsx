@@ -14,7 +14,7 @@ import { DEFAULT_BOT_BUDGETS } from '../../../../shared/bot';
 import { MentionChips, RoomComposer, roomBots, roomLead } from '../RoomComposer';
 import { BotChips } from '../BotChips';
 import { en } from '../../../i18n/locales/en';
-import { AddBotForm, FactoryTab, addBotRepoView, repoKeyLabel } from '../../Settings/FactoryTab';
+import { AddBotForm, FactoryTab, REPO_SUGGEST_TIMEOUT_MS, addBotRepoView, repoKeyLabel, useAddBotRepo } from '../../Settings/FactoryTab';
 import type { FactoryBotPort, FactoryBotRow } from '../factoryPorts';
 import type { FactoryBotCreateRequest, FactoryBotCreateResult, FactoryBotCreateTeamRequest, FactoryBotCreateTeamResult, FactoryBotRepoSuggestion } from '../../../../shared/botCreate';
 
@@ -361,16 +361,68 @@ describe('Add bot: the repository comes from the workspace', () => {
     expect(create).toHaveBeenLastCalledWith({ workspaceId: WS, name: 'Dev', repoFolder: APP.repoPath });
   });
 
-  it('a failed ask does not hold the form: it reads as no folder', async () => {
+  it('a failed ask says so in a red line, and Add makes the bot without a repository it was not shown (noInherit)', async () => {
     const { port, create } = formPort([], async () => { throw new Error('ipc gone'); });
     await renderForm(port, []);
     await typeInto('factory-add-bot-name', 'Dev');
     expect(q('factory-add-bot-repo-row')!.getAttribute('data-repo-kind')).toBe('none');
+    const line = q('factory-add-bot-repo-reason')!;
+    expect(line.getAttribute('data-repo-unchecked')).toBe('failed');
+    expect(line.getAttribute('role')).toBe('alert');
+    expect(line.textContent).toBe('settings.factory.addBotRepoCheckFailed');
     await act(async () => q<HTMLButtonElement>('factory-add-bot-submit')!.click());
-    expect(create).toHaveBeenLastCalledWith({ workspaceId: WS, name: 'Dev' });
+    expect(create).toHaveBeenLastCalledWith({ workspaceId: WS, name: 'Dev', noInherit: true });
   });
 
-  it('a refused folder says why in one muted line, and adding past it is remembered (noRepo)', async () => {
+  it('a slow answer: after the timeout Add is on, says so, and sends noInherit', async () => {
+    vi.useFakeTimers();
+    try {
+      const { port, create } = formPort([], () => new Promise(() => undefined));
+      await renderForm(port, []);
+      await typeInto('factory-add-bot-name', 'Dev');
+      const submit = q<HTMLButtonElement>('factory-add-bot-submit')!;
+      expect(submit.disabled).toBe(true);
+      await act(async () => { vi.advanceTimersByTime(REPO_SUGGEST_TIMEOUT_MS); });
+      expect(submit.disabled).toBe(false);
+      expect(q('factory-add-bot-repo-reason')!.getAttribute('data-repo-unchecked')).toBe('slow');
+      await act(async () => submit.click());
+      expect(create).toHaveBeenLastCalledWith({ workspaceId: WS, name: 'Dev', noInherit: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a switch of workspace reads as checking on the same render: the last workspace\'s answer is never shown or sent for the next', async () => {
+    const seen: Array<[string, string, string | undefined]> = [];
+    const answers = new Map<string, (s: FactoryBotRepoSuggestion) => void>();
+    const { port } = formPort([], (ws) => new Promise((r) => { answers.set(ws, r); }));
+    function Probe({ ws }: { ws: string }) {
+      const r = useAddBotRepo(port, [], ws, async () => null);
+      seen.push([ws, r.view.kind, r.request.repoFolder]);
+      return null;
+    }
+    await render(createElement(Probe, { ws: WS }));
+    await act(async () => answers.get(WS)!({ ok: true, repoKey: APP.repoKey, root: APP.repoPath, displayRoot: APP.repoPath, inherited: false }));
+    expect(seen.at(-1)).toEqual([WS, 'suggested', APP.repoPath]);
+    await render(createElement(Probe, { ws: 'ws-b' }));
+    const onB = seen.filter(([ws]) => ws === 'ws-b');
+    expect(onB.length).toBeGreaterThan(0);
+    for (const [, kind, folder] of onB) {
+      expect(kind).toBe('checking');
+      expect(folder).toBeUndefined();
+    }
+  });
+
+  it('asks again when the folder the workspace was opened on changes', async () => {
+    useStore.setState({ workspaces: [{ id: WS, name: 'App', profile: { startupCwd: '/a' } }] as never, activeWorkspaceId: WS });
+    const { port, suggestRepo } = formPort([], async () => ({ ok: false, code: 'not_a_repo' }));
+    await renderForm(port, []);
+    expect(suggestRepo).toHaveBeenCalledTimes(1);
+    await act(async () => useStore.setState({ workspaces: [{ id: WS, name: 'App', profile: { startupCwd: '/b' } }] as never }));
+    expect(suggestRepo).toHaveBeenCalledTimes(2);
+  });
+
+  it('a refused folder says why in one muted line; adding past it remembers nothing, so a folder fixed later is offered again', async () => {
     const why = '/home/me/notes has no origin remote. Set it with "git remote add origin <address>".';
     const { port, create } = formPort([], async () => ({ ok: false, code: 'no_remote', message: why }));
     await renderForm(port, []);
@@ -378,7 +430,7 @@ describe('Add bot: the repository comes from the workspace', () => {
     expect(q('factory-add-bot-no-repo')).not.toBeNull();
     expect(q('factory-add-bot-repo-reason')!.textContent).toBe(why);
     await act(async () => q<HTMLButtonElement>('factory-add-bot-submit')!.click());
-    expect(create).toHaveBeenLastCalledWith({ workspaceId: WS, name: 'Dev', noRepo: true });
+    expect(create).toHaveBeenLastCalledWith({ workspaceId: WS, name: 'Dev' });
     // A folder picked after the refusal is sent instead.
     await act(async () => q<HTMLButtonElement>('factory-add-bot-folder')!.click());
     expect(q('factory-add-bot-repo-reason')).toBeNull();
@@ -394,7 +446,7 @@ describe('Add bot: the repository comes from the workspace', () => {
     expect(q('factory-add-bot-repo-reason')!.textContent).toBe('settings.factory.addBotRepoRemembered');
     expect(q('factory-add-bot-folder')!.textContent).toBe('settings.factory.addBotChooseFolder');
     await act(async () => q<HTMLButtonElement>('factory-add-bot-submit')!.click());
-    expect(create).toHaveBeenLastCalledWith({ workspaceId: WS, name: 'Dev', noRepo: true });
+    expect(create).toHaveBeenLastCalledWith({ workspaceId: WS, name: 'Dev' });
   });
 
   it('asks again when the workspace\'s folder changes', async () => {

@@ -38,10 +38,14 @@ export interface FactoryBotCreateRequest {
    *  of the workspace already has a repo (then it is that one). Absent and
    *  nothing to inherit: the bot has no repository yet. */
   repoFolder?: string;
-  /** The form showed no repository and the owner added anyway (None, or
-   *  past a refused folder): main remembers that the workspace works on no
-   *  repository, so the next add does not ask again (workspaceRepos.ts). */
+  /** The owner pressed None: the bot gets no repository, and main
+   *  remembers that the workspace works on none, so the next add does not
+   *  ask again (workspaceRepos.ts). */
   noRepo?: boolean;
+  /** The form could not check the workspace's repository (main did not
+   *  answer, or not in time): the bot gets no repository, never one it was
+   *  not shown, and nothing is remembered. */
+  noInherit?: boolean;
   /** A picture from FACTORY_BOT_PICK_AVATAR (BotProfile.avatar's shape). */
   avatar?: string;
 }
@@ -83,6 +87,8 @@ export interface FactoryBotCreateTeamRequest {
   repoFolder?: string;
   /** As FactoryBotCreateRequest.noRepo. */
   noRepo?: boolean;
+  /** As FactoryBotCreateRequest.noInherit. */
+  noInherit?: boolean;
 }
 
 export type FactoryBotCreateTeamResult =
@@ -113,10 +119,11 @@ export function roleWorksOnRepo(role: BotRole): boolean {
 }
 
 /** FACTORY_BOT_SUGGEST_REPO: the repository "Add bot" offers for a
- *  workspace. `inherited`: the workspace already works on it (remembered,
- *  or a bot of it has it), so a new bot there takes it. Otherwise it is the
- *  first of the workspace's folders (the folder it was opened on, its panes'
- *  cwds) that resolves like a picked folder. `displayRoot` is `root` with
+ *  workspace. `inherited`: a bot of the workspace already works on it, so a
+ *  new bot there takes it. Otherwise it is the repository remembered for
+ *  the workspace, checked again, or the folder the workspace was opened on
+ *  (its panes' cwds when it was opened on none), resolved like a picked
+ *  folder. `displayRoot` is `root` with
  *  the home folder shortened to `~`. Refused: `none` when the owner chose no
  *  repository for the workspace before (remembered), and for a refused
  *  folder its reason (`message`, which says how to fix it). */

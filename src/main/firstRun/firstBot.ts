@@ -23,8 +23,7 @@ import {
   type FirstRunFolderCheck,
 } from '../../shared/firstRun';
 import type { BotStore } from '../factory/botStore';
-import { homeShortPath, recordWorkspaceRepo, resolveBotRepo, workspaceRepo, type BotRepoDeps } from '../factory/botCreate';
-import { getWorkspaceRepoStore } from '../factory/workspaceRepos';
+import { homeShortPath, recordWorkspaceRepo, resolveBotRepo, withWorkspaceRepoLock, workspaceBotsRepo, type BotRepoDeps } from '../factory/botCreate';
 import { sameRepoKey } from '../../shared/forgeHosts';
 
 /** The first-run bot's job: part of its system prompt. */
@@ -85,35 +84,39 @@ export async function firstRunBot(
   if (typeof r.workspaceId !== 'string' || r.workspaceId.length === 0) {
     return { ok: false, code: 'invalid_argument', message: 'workspaceId must be a workspace id' };
   }
-  const resolved = await resolveBotRepo(r.folder, deps);
-  if (!resolved.ok) {
-    if (resolved.code === 'not_a_repo' || resolved.code === 'no_remote') return { ok: false, code: resolved.code, message: resolved.message };
-    return { ok: false, code: 'invalid_argument', message: resolved.message };
-  }
-  // Read after the await: a first-run bot made meanwhile is the one.
-  const made = findFirstRunBot(store);
-  if (made) return answer(made, false);
-  const records = deps.records === undefined ? getWorkspaceRepoStore() : deps.records;
-  const current = workspaceRepo(store, r.workspaceId, records);
-  if (current && !sameRepoKey(current.repoKey, resolved.repo.repoKey)) {
-    return {
-      ok: false,
-      code: 'repo_mismatch',
-      message: `This workspace's bots work on ${current.repoKey} (${current.repoPath}); ${resolved.repo.repoPath} is ${resolved.repo.repoKey}. A workspace works on one repository.`,
-    };
-  }
-  const created = store.create({
-    workspaceId: r.workspaceId,
-    template: 'custom',
-    repo: current ?? resolved.repo,
-    job: FIRST_RUN_BOT_JOB,
-    budget: { maxConcurrentWorkers: FIRST_RUN_BOT_WORKERS },
-    firstRun: true,
+  const workspaceId = r.workspaceId;
+  return withWorkspaceRepoLock(workspaceId, async (): Promise<FirstBotResult> => {
+    const resolved = await resolveBotRepo(r.folder, deps);
+    if (!resolved.ok) {
+      if (resolved.code === 'not_a_repo' || resolved.code === 'no_remote') return { ok: false, code: resolved.code, message: resolved.message };
+      return { ok: false, code: 'invalid_argument', message: resolved.message };
+    }
+    // Read after the await: a first-run bot made meanwhile is the one.
+    const made = findFirstRunBot(store);
+    if (made) return answer(made, false);
+    // Only a bot of the workspace binds it; a remembered repository no bot
+    // holds gives way to the folder picked here.
+    const current = workspaceBotsRepo(store, workspaceId);
+    if (current && !sameRepoKey(current.repoKey, resolved.repo.repoKey)) {
+      return {
+        ok: false,
+        code: 'repo_mismatch',
+        message: `This workspace's bots work on ${current.repoKey} (${current.repoPath}); ${resolved.repo.repoPath} is ${resolved.repo.repoKey}. A workspace works on one repository.`,
+      };
+    }
+    const created = store.create({
+      workspaceId,
+      template: 'custom',
+      repo: current ?? resolved.repo,
+      job: FIRST_RUN_BOT_JOB,
+      budget: { maxConcurrentWorkers: FIRST_RUN_BOT_WORKERS },
+      firstRun: true,
+    });
+    if (!created.ok) {
+      return { ok: false, code: created.code === 'too_many_bots' ? 'too_many_bots' : 'invalid_argument', message: created.message };
+    }
+    // The workspace's repository from now on: Add bot there does not ask again.
+    if (created.bot.repo) recordWorkspaceRepo(store, created.bot.workspaceId, created.bot.repo, deps);
+    return answer(created.bot, true);
   });
-  if (!created.ok) {
-    return { ok: false, code: created.code === 'too_many_bots' ? 'too_many_bots' : 'invalid_argument', message: created.message };
-  }
-  // The workspace's repository from now on: Add bot there does not ask again.
-  if (created.bot.repo) recordWorkspaceRepo(store, created.bot.workspaceId, created.bot.repo, { records, ...(deps.profileChanged ? { profileChanged: deps.profileChanged } : {}) });
-  return answer(created.bot, true);
 }
