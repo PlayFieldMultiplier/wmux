@@ -42,6 +42,7 @@ import {
 } from './hostSearch';
 import http from 'node:http';
 import { InboundCounter, isLoopbackHost } from '../net/inboundSeen';
+import { PhonePresence, type PresenceDevice } from './phonePresence';
 import type { AgentStatus } from '../../shared/types';
 import { isRemoteAgentStatus } from '../../shared/remoteHosts';
 import { isA2aRoute, looksLikePeerCredential, parsePeerCredential, type A2aRemoteErrorCode } from '../../shared/a2aRemote';
@@ -575,6 +576,11 @@ export interface WebDeviceResolver {
    * daemon injects here.
    */
   list?(): WebDeviceSummary[];
+  /**
+   * Each device's kind, last request and revocation, for "Keep the computer
+   * awake" (phonePresence.ts). Optional: without it no phone counts as attached.
+   */
+  presenceDevices?(): PresenceDevice[];
   /**
    * Whether the device's input grant was set explicitly (a record that
    * predates grants answers false). Absent: no device passes the git write gate.
@@ -1475,6 +1481,8 @@ export class WebTerminalServer {
   private readonly pendingStreams = new Set<SseClient>();
   /** Live `/api/events` subscribers — fleet attention, no pane stream attached. */
   private readonly eventClients = new Set<EventClient>();
+  /** Whether a paired phone is attached (phonePresence.ts); created on first use. */
+  private presenceTracker: PhonePresence | null = null;
   /** The Moa pane id the last `moa` event carried. */
   private lastMoaEventId: string | null = null;
   /**
@@ -2006,6 +2014,8 @@ export class WebTerminalServer {
     // must never be what keeps the daemon alive.
     this.chatWatchSweep = setInterval(() => this.sweepChatWatches(), CHAT_WATCH_SWEEP_MS);
     this.chatWatchSweep.unref?.();
+    // A device seen shortly before a restart is still attached for the rest of its window.
+    this.presence.update();
     return this.status();
   }
 
@@ -2050,6 +2060,7 @@ export class WebTerminalServer {
       }
     }
     this.eventClients.clear();
+    this.presence.stop();
     // #782 — clear pending non-recording nudge timers and the watcher set; the
     // SSE clients they would reach are gone, and a fresh start() re-arms nothing
     // stale (a device re-opens its panes and re-registers as it reads them).
@@ -2272,7 +2283,27 @@ export class WebTerminalServer {
     // Revoke and a withdrawn input grant both land here: the device's queued
     // chat messages go with its streams, before any of them could be typed.
     this.dropChatQueue((owner) => owner === `device:${deviceId}`, 'authorization-revoked');
+    // A revoked device no longer keeps the computer awake.
+    this.presence.update();
     return closed;
+  }
+
+  /** Whether a paired phone is attached now (phonePresence.ts). */
+  phoneAttached(): boolean {
+    return this.presence.isAttached;
+  }
+
+  private get presence(): PhonePresence {
+    this.presenceTracker ??= new PhonePresence({
+      devices: () => (this.server ? this.deps.devices?.presenceDevices?.() ?? [] : []),
+      liveDeviceIds: () => this.liveDeviceIds(),
+      now: () => this.now(),
+      onChange: (attached) => {
+        this.deps.log('info', `[web] paired phone ${attached ? 'attached' : 'detached'}`);
+        this.availableDesktop()?.notifyPhonePresence(attached);
+      },
+    });
+    return this.presenceTracker;
   }
 
   private dropChatQueue(match: (owner: ChatOwner) => boolean, reason: 'authorization-revoked' | 'daemon-restart'): void {
@@ -2912,6 +2943,9 @@ export class WebTerminalServer {
               ...(this.chatQueueWorks(principal) && typeof this.deps.chat?.()?.steer === 'function' ? { chatSteer: true } : {}),
             }
           : {}),
+        // Keep the computer awake: the desktop's mode and whether it holds
+        // off sleep now. Omitted with no desktop attached, or before it reported.
+        ...(this.availableDesktop()?.keepAwake ? { keepAwake: this.availableDesktop()?.keepAwake } : {}),
         protocolVersion: PHONE_PROTOCOL_VERSION,
         minProtocolVersion: MIN_PHONE_PROTOCOL_VERSION,
         serverVersion: daemonServerVersion(),
@@ -7525,10 +7559,12 @@ export class WebTerminalServer {
     };
     const client: SseClient = { res, sessionId, detach, principal };
     this.clients.add(client);
+    if (principal.kind === 'device') this.presence.update();
 
     req.on('close', () => {
       detach();
       this.clients.delete(client);
+      if (principal.kind === 'device') this.presence.update();
     });
     return true;
   }
@@ -9901,10 +9937,12 @@ export class WebTerminalServer {
     const detach = startSseHeartbeat(res);
     const client: EventClient = { res, detach, principal, caps: clientCaps(req) };
     this.eventClients.add(client);
+    if (principal.kind === 'device') this.presence.update();
 
     req.on('close', () => {
       detach();
       this.eventClients.delete(client);
+      if (principal.kind === 'device') this.presence.update();
     });
   }
 
@@ -10353,6 +10391,8 @@ export class WebTerminalServer {
     } catch (err) {
       this.deps.log('warn', `[web] device touch failed: ${errMsg(err)}`);
     }
+    // The request opens (or extends) the device's attach window.
+    this.presence.update();
   }
 
   /**

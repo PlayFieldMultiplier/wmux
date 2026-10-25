@@ -1787,7 +1787,7 @@ export const zh = {
   'settings.startOnLoginDesc': '登录时自动启动 wmux',
   'settings.power': "电源",
   'settings.sleepPrevention': "保持电脑唤醒",
-  'settings.sleepPreventionDesc': "阻止电脑进入睡眠，让代理能完成工作。屏幕仍可关闭。",
+  'settings.sleepPreventionDesc': "在代理工作或手机已连接时阻止电脑进入睡眠。屏幕仍可关闭。",
   'settings.sleepPreventionOff': "关闭",
   'settings.sleepPreventionWorking': "工作时",
   'settings.sleepPreventionAlways': "始终",

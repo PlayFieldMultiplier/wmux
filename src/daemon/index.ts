@@ -25,7 +25,7 @@ import { agentExecEnv } from '../shared/execEnv';
 import { workspaceAccountEnv } from './phone/workspaceAccountEnv';
 import { applyPaneAccount, assertPaneAccountUsable } from './phone/paneAccount';
 import type { PaneAccountVendor, StoredHandoffFrom } from '../shared/phonePaneAccount';
-import { DesktopPhoneBridge } from './phone/DesktopPhoneBridge';
+import { DesktopPhoneBridge, keepAwakeRpc } from './phone/DesktopPhoneBridge';
 import { RunHistoryStore } from './history/RunHistoryStore';
 import { AutomationEngine } from './automation/AutomationEngine';
 import { assertExternalSessionId, registerAutomationRpc } from './automation/rpc';
@@ -4552,8 +4552,15 @@ function registerRpcHandlers(
   desktopPhoneBridge ??= new DesktopPhoneBridge((id,event) => pipeServer.sendTo(id,event));
   pipeServer.onRpc('daemon.phone.register', async (params,ctx) => {
     if (!firstPartyOnly(ctx.clientId,'daemon.phone.register')) return {ok:false};
-    return {ok:desktopPhoneBridge!.register(ctx.clientId,(params as {commands?:unknown} | undefined)?.commands)};
+    const ok = desktopPhoneBridge!.register(ctx.clientId,(params as {commands?:unknown} | undefined)?.commands);
+    // Keep the computer awake: a (re)connected desktop learns at once whether
+    // a paired phone is attached, and answers with its own keep-awake state.
+    if (ok) desktopPhoneBridge?.notifyPhonePresence(webTerminalServer?.phoneAttached() ?? false);
+    return {ok};
   });
+  // Main's "Keep the computer awake" mode and whether its blocker is held,
+  // for `/api/config` `keepAwake`. Only the registered desktop may report it.
+  pipeServer.onRpc('daemon.phone.keepAwake', keepAwakeRpc(desktopPhoneBridge,(clientId) => firstPartyOnly(clientId,'daemon.phone.keepAwake')));
   pipeServer.onRpc('daemon.phone.complete', async (params,ctx) => {
     if (!firstPartyOnly(ctx.clientId,'daemon.phone.complete')) return {ok:false};
     return {ok:desktopPhoneBridge!.complete(ctx.clientId,params)};

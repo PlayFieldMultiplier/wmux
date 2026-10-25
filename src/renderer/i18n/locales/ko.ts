@@ -1240,7 +1240,7 @@ export const ko = {
   'settings.startOnLoginDesc': '로그인하면 wmux를 자동으로 실행합니다',
   'settings.power': "전원",
   'settings.sleepPrevention': "컴퓨터 깨어 있게 하기",
-  'settings.sleepPreventionDesc': "에이전트가 일을 마칠 수 있게 컴퓨터가 절전 모드로 들어가지 않도록 합니다. 화면은 꺼질 수 있어요.",
+  'settings.sleepPreventionDesc': "에이전트가 일하는 동안이나 휴대폰이 연결되어 있는 동안 컴퓨터가 절전 모드로 들어가지 않도록 합니다. 화면은 꺼질 수 있어요.",
   'settings.sleepPreventionOff': "끔",
   'settings.sleepPreventionWorking': "작업 중일 때",
   'settings.sleepPreventionAlways': "항상",

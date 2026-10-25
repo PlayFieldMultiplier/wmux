@@ -1113,6 +1113,20 @@ export class DeviceStore {
   }
 
   /**
+   * What "Keep the computer awake" reads to tell whether a phone is attached
+   * (phonePresence.ts): each device's kind, last request and revocation. Not
+   * the roster view (`list`), so a roster lookup stays a route's own act.
+   */
+  presenceDevices(): Array<{ deviceId: string; kind: DeviceKind; lastSeenAt: number; revokedAt?: number }> {
+    return [...this.devices.values()].map((d) => ({
+      deviceId: d.deviceId,
+      kind: d.kind ?? 'unknown',
+      lastSeenAt: d.lastSeenAt,
+      ...(d.revokedAt !== undefined ? { revokedAt: d.revokedAt } : {}),
+    }));
+  }
+
+  /**
    * Note a successful auth. Always in memory; on disk at most once a minute per
    * device, because `lastSeenAt` is a convenience for the roster UI and is not
    * worth a write per request.

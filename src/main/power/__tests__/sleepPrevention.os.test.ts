@@ -155,4 +155,71 @@ describe.each(['win32', 'darwin'] as const)('SleepPrevention on %s', (platform) 
     power.emit('resume');
     expect(sp.heldId).toBe(id);
   });
+
+  it('"while working" also holds while a paired phone is attached, with no agent working', () => {
+    sp.setPhoneAttached(true);
+    expect(blocker.start).toHaveBeenCalledTimes(1);
+    const id = sp.heldId as number;
+    sp.setPhoneAttached(false);
+    // The same grace as after the last agent.
+    vi.advanceTimersByTime(RELEASE_GRACE_MS - 1);
+    expect(sp.heldId).toBe(id);
+    vi.advanceTimersByTime(1);
+    expect(sp.heldId).toBeNull();
+    expect(blocker.stop).toHaveBeenCalledWith(id);
+  });
+
+  it('a phone and an agent are one reason to hold: released only after both end', () => {
+    sp.setPhoneAttached(true);
+    sp.setAgentsWorking(true);
+    sp.setPhoneAttached(false);
+    vi.advanceTimersByTime(RELEASE_GRACE_MS * 2);
+    expect(sp.heldId).not.toBeNull();
+    sp.setAgentsWorking(false);
+    vi.advanceTimersByTime(RELEASE_GRACE_MS);
+    expect(sp.heldId).toBeNull();
+    expect(blocker.start).toHaveBeenCalledTimes(1);
+  });
+
+  it('"off" never holds for a phone; "always" is unchanged by one', () => {
+    sp.setMode('off');
+    sp.setPhoneAttached(true);
+    expect(blocker.start).not.toHaveBeenCalled();
+    sp.setMode('always');
+    const id = sp.heldId;
+    sp.setPhoneAttached(false);
+    vi.advanceTimersByTime(RELEASE_GRACE_MS * 2);
+    expect(sp.heldId).toBe(id);
+  });
+
+  it('a gone renderer leaves an attached phone holding', () => {
+    sp.setPhoneAttached(true);
+    sp.setAgentsWorking(true);
+    sp.rendererGone();
+    expect(sp.heldId).not.toBeNull();
+  });
+
+  it('reports each change of mode and of held/released, once', () => {
+    const seen: Array<{ mode: string; active: boolean }> = [];
+    sp.onState((s) => seen.push(s));
+    sp.setPhoneAttached(true);
+    sp.setAgentsWorking(true); // still held: nothing new
+    sp.setMode('always');
+    sp.setMode('off');
+    expect(seen).toEqual([
+      { mode: 'working', active: true },
+      { mode: 'always', active: true },
+      { mode: 'off', active: false },
+    ]);
+    expect(sp.state).toEqual({ mode: 'off', active: false });
+  });
+
+  it('holds nothing after dispose, whatever reports arrive late', () => {
+    sp.setMode('always');
+    sp.dispose();
+    sp.setPhoneAttached(true);
+    sp.setAgentsWorking(true);
+    expect(sp.heldId).toBeNull();
+    expect(blocker.started.size).toBe(0);
+  });
 });

@@ -1586,7 +1586,7 @@ export const en = {
   'settings.startOnLoginDesc': 'Launch wmux automatically when you sign in',
   'settings.power': "Power",
   'settings.sleepPrevention': "Keep the computer awake",
-  'settings.sleepPreventionDesc': "Stops the computer from going to sleep so agents can finish their work. The screen can still turn off.",
+  'settings.sleepPreventionDesc': "Stops the computer from going to sleep while agents are working or your phone is connected. The screen can still turn off.",
   'settings.sleepPreventionOff': "Off",
   'settings.sleepPreventionWorking': "While working",
   'settings.sleepPreventionAlways': "Always",
