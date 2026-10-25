@@ -187,6 +187,16 @@ export function IconRefresh({ size = 14 }: { size?: number }) {
   );
 }
 
+/** Rewind — counter-clockwise arrow for Claude's Rewind (agent toolbar). */
+export function IconRewind({ size = 14 }: { size?: number }) {
+  return (
+    <Icon size={size}>
+      <path d="M3 5.5 A4.2 4.2 0 1 1 2.4 8.7" />
+      <polyline points="5.4,5.2 2.6,5.6 2.3,2.9" />
+    </Icon>
+  );
+}
+
 /** Directional chevron for the sidebar collapse/expand buttons (issue #151).
  *  `dir` is computed by sidebarGlyphs.ts so the arrow logic stays unit-testable. */
 export function IconChevronDir({ dir, size = 12 }: { dir: 'left' | 'right'; size?: number }) {

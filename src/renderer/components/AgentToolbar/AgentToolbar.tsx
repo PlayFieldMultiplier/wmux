@@ -9,7 +9,8 @@ import { toggleFileTreePanel } from '../FileTree/fileTreeToggle';
 import RichInput from './RichInput';
 import SnippetsMenu from './SnippetsMenu';
 import SessionSchedulesPopover from './SessionSchedulesPopover';
-import { IconFolder, IconStar, IconKeyboard, IconSparkles, IconLock, IconClock } from '../icons';
+import { IconFolder, IconStar, IconKeyboard, IconSparkles, IconLock, IconClock, IconRewind } from '../icons';
+import { useClaudeRewind } from '../Pane/usePaneClaudeRewind';
 
 /**
  * Bar height — also the travel distance of the reveal transform. The 40px
@@ -66,6 +67,10 @@ export default function AgentToolbar({ barHandlers, revealed, onHoldChange, onFo
   const ptyId = focusedTerminalPtyId(activeWorkspace);
   const activeAgent = useStore((s) => (ptyId ? s.surfaceAgent[ptyId] : undefined));
   const disabled = !ptyId;
+  // Rewind is offered only while the focused terminal runs Claude; mid-turn it
+  // is disabled with the reason, the daemon refuses the rest at click time.
+  const readOnly = useStore((s) => s.readOnly);
+  const claudeRewind = useClaudeRewind(ptyId ?? undefined, !readOnly);
 
   // Anything open below the bar must keep it on screen — a popover whose
   // trigger vanished under the pointer is the failure mode hover bars are
@@ -216,6 +221,24 @@ export default function AgentToolbar({ barHandlers, revealed, onHoldChange, onFo
       >
         <IconClock size={13} /> <span className="wmux-toolbar-label whitespace-nowrap">{t('toolbar.schedule')}</span>
       </button>
+      {claudeRewind.ready && (
+        // aria-disabled, not disabled: keyboard users can still reach it and hear why.
+        <button
+          className={`${btn} ${idle} aria-disabled:opacity-40 aria-disabled:cursor-not-allowed`}
+          aria-disabled={claudeRewind.busy || undefined}
+          aria-label={claudeRewind.busy ? `${t('toolbar.rewind')}: ${t('pane.rewindBusy')}` : t('toolbar.rewind')}
+          onClick={() => {
+            if (claudeRewind.busy) return;
+            if (fanOutOpen) closeFanOut();
+            setPopover(null);
+            void claudeRewind.rewind();
+          }}
+          title={claudeRewind.busy ? t('pane.rewindBusy') : t('pane.rewindHint')}
+          data-testid="toolbar-rewind"
+        >
+          <IconRewind size={13} /> <span className="wmux-toolbar-label whitespace-nowrap">{t('toolbar.rewind')}</span>
+        </button>
+      )}
       <div className="flex-1" />
       {disabled && <span className="text-[10px] text-[var(--text-muted)]">{t('toolbar.noTerminal')}</span>}
       {/* Multi Task (fan-out) — a fleet-spawn command, so it lives on the

@@ -1,4 +1,5 @@
-// Pane actions menu → "Rewind…" for a terminal pane running Claude Code.
+// Pane actions menu → "Rewind…" for a terminal pane running Claude Code,
+// and the same action behind the agent toolbar's Rewind button.
 //
 // Opens Claude's own Rewind picker (its double ESC) through the daemon, which
 // refuses unless Claude is idle with an empty composer (openClaudeRewind.ts).
@@ -27,15 +28,21 @@ const REFUSAL_KEYS: Record<Exclude<ClaudeRewindResult, 'opened'>, string> = {
   error: 'pane.rewindUnavailable',
 };
 
-export function usePaneClaudeRewind(opts: {
-  ptyId: string | undefined;
-  /** False for a read-only mirror, whose ptyIds are not this main's panes. */
-  allowed: boolean;
-}): PaneActionItem[] {
-  const { ptyId, allowed } = opts;
+/**
+ * Rewind for one terminal: whether it can be offered (a daemon pane running
+ * Claude), whether Claude is mid-turn right now, and the action itself.
+ * Shared by the pane menu item and the agent toolbar's button.
+ */
+export function useClaudeRewind(ptyId: string | undefined, allowed: boolean): {
+  ready: boolean;
+  busy: boolean;
+  rewind: () => Promise<void>;
+} {
   const t = useT();
   const daemon = useDaemonModeActive();
   const isClaude = useStore((s) => (ptyId ? !!agentRow(s.surfaceAgent[ptyId]?.slug)?.rewindPicker : false));
+  // surfaceAgent keeps the live status; surfaceAgentStatus drops running entries.
+  const busy = useStore((s) => (ptyId ? s.surfaceAgent[ptyId]?.status === 'running' : false));
   const ready = allowed && daemon && isClaude && !!ptyId && !!window.electronAPI?.chat?.rewind;
 
   const rewind = useCallback(async () => {
@@ -53,6 +60,18 @@ export function usePaneClaudeRewind(opts: {
     }
     useStore.getState().pushToast({ level: result === 'error' ? 'error' : 'warn', message: t(REFUSAL_KEYS[result] ?? 'pane.rewindUnavailable') });
   }, [ptyId, t]);
+
+  return { ready, busy, rewind };
+}
+
+export function usePaneClaudeRewind(opts: {
+  ptyId: string | undefined;
+  /** False for a read-only mirror, whose ptyIds are not this main's panes. */
+  allowed: boolean;
+}): PaneActionItem[] {
+  const { ptyId, allowed } = opts;
+  const t = useT();
+  const { ready, rewind } = useClaudeRewind(ptyId, allowed);
 
   return useMemo(() => (ready ? [{
     key: PANE_CLAUDE_REWIND_KEY,
