@@ -181,6 +181,15 @@ function isError<T>(r: Read<T>): r is { error: string; status?: number } {
   return !!r && typeof r === 'object' && 'error' in r;
 }
 
+/** What a failed read means for the try: with no HTTP status (a rate limit,
+ *  a gh that did not start) it is `read-failed` and the try is given back;
+ *  GitHub's 404 or 410 is `gone`; any other status (a 403 from SSO, a 422)
+ *  refuses as `gh-<status>`, so the row never goes round again for it. */
+function readRefusal(e: { status?: number }, gone: string): string {
+  if (e.status === undefined) return 'read-failed';
+  return e.status === 404 || e.status === 410 ? gone : `gh-${e.status}`;
+}
+
 /** Every item of a listing (`endpoint` holds a query), read 100 a page, or
  *  null when a page could not be read or there are more than LIST_PAGES_MAX:
  *  a listing that is not whole proves nothing is there. */
@@ -315,7 +324,10 @@ export class ActExecutor {
       if (isError(login)) return login.status === undefined ? back('read-failed') : end('refused', 'identity-unknown');
       if (login !== r.ghLogin) return end('refused', 'identity-changed');
       const repo = await readRepo(this.ports.gh, r.repoKey);
-      if (isError(repo)) return repo.status === 404 ? end('refused', 'repo-changed') : back('read-failed');
+      if (isError(repo)) {
+        const why = readRefusal(repo, 'repo-changed');
+        return why === 'read-failed' ? back(why) : end('refused', why);
+      }
       // The name, node id and numeric id the request read (a rename or a
       // transfer changes the name; a repository made again changes the ids).
       if (repo.fullName.toLowerCase() !== r.actRepo.fullName.toLowerCase() || repo.nodeId !== r.actRepo.nodeId || repo.id !== r.actRepo.id) return end('refused', 'repo-changed');
@@ -344,14 +356,14 @@ export class ActExecutor {
     if (act.kind === 'issue_create') return null;
     if (act.kind === 'pr_close') {
       const pr = await readPull(gh, repoKey, act.number);
-      if (isError(pr)) return pr.status === 404 || pr.status === 410 ? 'target-gone' : 'read-failed';
+      if (isError(pr)) return readRefusal(pr, 'target-gone');
       if (pr.nodeId !== act.targetNodeId) return 'target-changed';
       if (pr.merged) return 'merged';
       if (pr.state === 'closed') return 'already-closed';
       return pr.headSha === act.headSha ? null : 'head-moved';
     }
     const issue = await readIssue(gh, repoKey, act.number);
-    if (isError(issue)) return issue.status === 404 || issue.status === 410 ? 'target-gone' : 'read-failed';
+    if (isError(issue)) return readRefusal(issue, 'target-gone');
     if (issue.nodeId !== act.targetNodeId) return 'target-changed';
     if (act.kind === 'issue_close') {
       if (issue.isPr) return 'target-changed';
@@ -361,7 +373,7 @@ export class ActExecutor {
     if (issue.locked) return 'locked';
     if (act.target === 'issue') return issue.state === 'closed' ? 'already-closed' : null;
     const pr = await readPull(gh, repoKey, act.number);
-    if (isError(pr)) return 'read-failed';
+    if (isError(pr)) return readRefusal(pr, 'target-gone');
     if (pr.merged) return 'merged';
     if (pr.state === 'closed') return 'already-closed';
     return pr.headSha === act.headSha ? null : 'head-moved';

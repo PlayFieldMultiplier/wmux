@@ -431,7 +431,7 @@ describe('restarts', () => {
     const r = rig();
     const waiting = await r.ask({ action: 'issue_close', issueNumber: 3, reason: 'fixed' });
     const sent = await r.ask(COMMENT);
-    r.approve(waiting.requestId);
+    expect(r.approve(waiting.requestId, { payloadHash: waiting.payloadHash })).toMatchObject({ ok: true, request: { state: 'approved' } });
     r.approve(sent.requestId, { payloadHash: sent.payloadHash });
     // The comment's try was journaled and landed, then the app quit.
     r.gh.nextWrite = { answer: { ok: false, kind: 'error', message: 'killed' }, landed: true };
@@ -525,6 +525,23 @@ describe('reading GitHub around a try', () => {
     await r.executor.reconcileAll();
     expect(r.svc.get(req.requestId)).toMatchObject({ state: 'refused', refusal: 'identity-unknown' });
     expect(r.gh.writes).toEqual([]);
+  });
+
+  it('a 4xx on a later read (a 403 on the repository, a 422 on the target) refuses once; it is never given back to go round again', async () => {
+    for (const [endpoint, status, refusal] of [['repos/o/r', 403, 'gh-403'], ['repos/o/r/issues/3', 422, 'gh-422'], ['repos/o/r/issues/3', 410, 'target-gone']] as const) {
+      const r = rig();
+      const req = await r.ask({ action: 'issue_close', issueNumber: 3, reason: 'fixed' });
+      r.approve(req.requestId, { payloadHash: req.payloadHash });
+      r.gh.answerRead = (e) => (e === endpoint ? { ok: false, kind: 'http', status, message: `gh: refused (HTTP ${status})` } : null);
+      await vi.advanceTimersByTimeAsync(APPROVAL_UNDO_MS + 10);
+      await r.executor.idle();
+      expect(r.svc.get(req.requestId)).toMatchObject({ state: 'refused', refusal });
+      const reads = r.gh.reads.filter((e) => e === endpoint).length;
+      await r.executor.reconcileAll();
+      expect(r.gh.reads.filter((e) => e === endpoint)).toHaveLength(reads);
+      expect(r.effects.get(actEffectId(req.requestId))).toMatchObject({ status: 'refused', attempt: 1 });
+      expect(r.gh.writes).toEqual([]);
+    }
   });
 
   it('a reconcile reads every page since the try: a post past the first hundred is found, and an incomplete listing sends nothing', async () => {
