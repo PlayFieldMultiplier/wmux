@@ -96,6 +96,14 @@ jobs:
           WMUX_FIREWALL_ROUNDTRIP: '1'
         run: npx vitest run --project integration src/main/net/__tests__/firewallRoundtrip.os.test.ts
 
+      # The test removes group wmux-ci when it ends; this runs whatever
+      # happened to it (a failed assertion, a crashed or timed-out worker), so
+      # the runner is left with no wmux-ci rule. Only that group, never wmux.
+      - name: Firewall round trip cleanup (group wmux-ci)
+        if: always() && matrix.shard == 1
+        shell: powershell
+        run: Remove-NetFirewallRule -Group 'wmux-ci' -ErrorAction SilentlyContinue
+
       # Same as validate's two steps in ci.yml: list tests that passed only on
       # retry (one report per lane, retries-unit.json and
       # retries-integration.json) and keep them, so a unit test that is flaky
