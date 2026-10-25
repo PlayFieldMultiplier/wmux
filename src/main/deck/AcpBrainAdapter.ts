@@ -91,7 +91,7 @@ export interface AcpBrainAdapterDeps {
 export interface AcpHermesPolicy {
   /** Before each agent spawn: readiness, the settings read back and the
    *  gateway check. `env` replaces the agent's whole environment. */
-  prepare(): Promise<{ ok: true; env: Record<string, string> } | { ok: false; message: string }>;
+  prepare(): Promise<{ ok: true; env: Record<string, string>; exe?: string } | { ok: false; message: string }>;
   /** After session/new or session/load: an error that ends the turn, or null. */
   sessionStarted(): string | null;
   /** The owner's answer to the agent's permission request (an approval
@@ -120,18 +120,20 @@ export function hermesToolName(title: unknown): string {
 }
 
 /** The tool names in Hermes's `/tools` answer ("Available tools (N):" then
- *  "  <toolset>: a, b" lines), or null when it does not read so. Pure. */
+ *  "  <toolset>: a, b" lines), or null when it does not read so: no header,
+ *  or a name count other than N (a changed format reads as unknown). Pure. */
 export function parseHermesToolsList(text: string): string[] | null {
   const lines = text.split('\n');
   const head = lines.findIndex((l) => /^Available tools \(\d+\):/.test(l.trim()));
   if (head < 0) return null;
+  const count = Number(/\((\d+)\)/.exec(lines[head])?.[1]);
   const names: string[] = [];
   for (const line of lines.slice(head + 1)) {
     const m = /^\s+[^:]+:\s*(.+)$/.exec(line);
     if (!m) continue;
     for (const n of m[1].split(',')) if (n.trim()) names.push(n.trim());
   }
-  return names;
+  return names.length > 0 && names.length === count ? names : null;
 }
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
@@ -189,6 +191,8 @@ export class AcpBrainAdapter implements BrainAdapter {
   private _disposed = false;
   /** Hermes: the environment `prepare` gave the next spawn. */
   private hermesEnv: Record<string, string> | null = null;
+  /** Hermes: the executable `prepare` verified, spawned instead of spawnSpec's. */
+  private hermesExe: string | null = null;
   /** Hermes: the in-flight session/prompt, so a stop can wait for it. */
   private promptInFlight: Promise<JsonRpcMessage> | null = null;
   /** Hermes: the one permission request waiting for the owner. */
@@ -238,7 +242,7 @@ export class AcpBrainAdapter implements BrainAdapter {
           // Hermes: an allowlisted environment, never main's (hermesEngine.ts hermesEnv).
           ...(this.hermesEnv ? { env: { ...this.hermesEnv } } : this.deps.spawnEnv ? { env: { ...process.env, ...this.deps.spawnEnv } } : {}),
         }));
-    const child = spawnFn(this.deps.spawnSpec.command, this.deps.spawnSpec.args);
+    const child = spawnFn(this.hermesExe ?? this.deps.spawnSpec.command, this.deps.spawnSpec.args);
     this.child = child;
     this._initialized = false;
     this._sessionAttached = false;
@@ -290,6 +294,8 @@ export class AcpBrainAdapter implements BrainAdapter {
       // killChildTree detached it, its stragglers are already handled.
       if (this.child !== child) return;
       this.child = null;
+      // Its permission request went with it: the card stops waiting.
+      this.dropPendingPermission();
       for (const [, entry] of this.pending) {
         clearTimeout(entry.timer);
         entry.resolve({ error: { message: 'ACP agent process exited' } });
@@ -434,6 +440,13 @@ export class AcpBrainAdapter implements BrainAdapter {
     });
   }
 
+  /** Forget the waiting permission request (its agent is gone): the card is withdrawn. */
+  private dropPendingPermission(): void {
+    const p = this.pendingPermission;
+    this.pendingPermission = null;
+    p?.abort.abort();
+  }
+
   /** Reject the permission request waiting for the owner, if any. */
   private rejectPendingPermission(): void {
     const p = this.pendingPermission;
@@ -463,8 +476,9 @@ export class AcpBrainAdapter implements BrainAdapter {
         // Hermes: a started tool outside the allowlist ends the turn. A
         // permission card's own tool_call (`perm-check-*`) is not a tool.
         if (this.deps.hermes && !(toolCallId ?? '').startsWith('perm-check-')) {
-          const tool = hermesToolName(update.title);
-          if (tool && !this.deps.hermes.toolAllowed(tool) && !this.drift) {
+          // A tool call without a title cannot be checked: it counts as drift.
+          const tool = hermesToolName(update.title) || '(untitled tool)';
+          if (!this.deps.hermes.toolAllowed(tool) && !this.drift) {
             this.drift = tool;
             console.warn(`[acp-brain:${this.deps.spawnSpec.command}] tool outside the allowlist started: ${tool.slice(0, 80)}`);
             this.interrupt();
@@ -578,6 +592,7 @@ export class AcpBrainAdapter implements BrainAdapter {
       const prepared = await hermes.prepare();
       if (!prepared.ok) return { error: prepared.message };
       this.hermesEnv = prepared.env;
+      this.hermesExe = prepared.exe ?? null;
     }
     this.ensureChild();
     if (!this._initialized) {
@@ -857,6 +872,8 @@ export class AcpBrainAdapter implements BrainAdapter {
    *  probes) alive — exactly the population whose leaked pipe handles caused
    *  the dogfood deadlock — so use a tree kill there (GLM review). */
   private killChildTree(): void {
+    // A request waiting on the owner is answered before its agent goes.
+    if (this.deps.hermes) this.rejectPendingPermission();
     const child = this.child;
     this.child = null;
     if (!child || child.exitCode !== null) return;
@@ -942,6 +959,11 @@ export class AcpBrainAdapter implements BrainAdapter {
     }
     this.pending.clear();
     this.killChildTree();
+  }
+
+  /** The bot this adapter runs, or null (a workspace commander). */
+  botId(): string | null {
+    return this.deps.bot?.binding.botId ?? null;
   }
 
   /** Whether the agent process is running (a Hermes viewer attached to its

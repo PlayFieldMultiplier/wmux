@@ -546,12 +546,20 @@ describe('AcpBrainAdapter (Hermes preset)', () => {
     expect(drift.children[0].killed).toBe(true);
     a1.dispose();
 
-    const listed = hermesAgent({ tools: 'Available tools (2):\n  web: web_search\n  terminal: terminal, process\n' });
+    const listed = hermesAgent({ tools: 'Available tools (3):\n  web: web_search\n  terminal: terminal, process\n' });
     const a2 = new AcpBrainAdapter({ spawnSpec: SPEC, newSessionSettleMs: 0, workspaceId: 'ws-1', mcpBundlePath: null, spawnFn: listed.spawnFn, hermes: hermesPolicy().policy });
     a2.start({});
     const e2 = await collect(a2.send('go'));
     expect(e2.at(-1)).toEqual({ type: 'error', message: `${HERMES_TOOLS_CHANGED_LEAD} terminal, process` });
     a2.dispose();
+
+    // A /tools answer whose names do not add up to its count reads as unknown: refused.
+    const odd = hermesAgent({ tools: 'Available tools (4):\n  web: web_search\n' });
+    const a4 = new AcpBrainAdapter({ spawnSpec: SPEC, newSessionSettleMs: 0, workspaceId: 'ws-1', mcpBundlePath: null, spawnFn: odd.spawnFn, hermes: hermesPolicy().policy });
+    a4.start({});
+    const e4 = await collect(a4.send('go'));
+    expect(e4.at(-1)).toEqual({ type: 'error', message: `${HERMES_TOOLS_CHANGED_LEAD} wmux could not read the tools of this Hermes session` });
+    a4.dispose();
   });
 
   it('a session whose wmux tools never connect, or a Hermes that is not ready, gets no prompt', async () => {

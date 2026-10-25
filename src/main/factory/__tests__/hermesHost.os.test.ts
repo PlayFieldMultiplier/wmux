@@ -14,6 +14,7 @@ describe('HermesHost gateway', () => {
   let calls: string[][];
   let killed: number[];
   let stopWorks: boolean;
+  let liveCommand: string;
 
   beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-host-'));
@@ -21,6 +22,7 @@ describe('HermesHost gateway', () => {
     calls = [];
     killed = [];
     stopWorks = true;
+    liveCommand = '/opt/hermes/venv/bin/python -m hermes_cli.main --profile default gateway run --quiet --idle-exit';
   });
   afterEach(() => {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -43,6 +45,7 @@ describe('HermesHost gateway', () => {
       resolveExe: () => '/bin/hermes',
       run,
       pidAlive: (pid) => alive.has(pid),
+      processInfo: async (pid) => (alive.has(pid) ? { command: liveCommand, hermesHome: hermesRoot(dir) } : null),
       kill: (pid) => {
         killed.push(pid);
         alive.delete(pid);
@@ -88,5 +91,14 @@ describe('HermesHost gateway', () => {
     await h.shutdown();
     expect(stops()).toBe(1);
     expect(killed).toEqual([201]);
+
+    // A stale state file whose PID now belongs to another process: never signalled.
+    writeGateway(202);
+    liveCommand = '/usr/bin/some-other-tool --serve';
+    const stale = host();
+    stale.markOwned();
+    await stale.shutdown();
+    expect(killed).toEqual([201]);
+    expect(alive.has(202)).toBe(true);
   });
 });

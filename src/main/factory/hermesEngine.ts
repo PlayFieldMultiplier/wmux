@@ -171,7 +171,9 @@ export function resolveHermesExecutable(
   const p = platform === 'win32' ? path.win32 : path.posix;
   const sep = platform === 'win32' ? ';' : ':';
   const dirs = [...(env.PATH ?? env.Path ?? '').split(sep).filter((d) => d && p.isAbsolute(d)), ...hermesInstallDirs(env, platform, home)];
-  const exts = platform === 'win32' ? ['.exe', '.cmd', '.bat', ''] : [''];
+  // Windows: the installer publishes hermes.exe (Hermes hermes_cli/_launchers.py:248-306); its
+  // .cmd fallback (:339) cannot be started without a shell.
+  const exts = platform === 'win32' ? ['.exe'] : [''];
   for (const d of dirs) {
     for (const ext of exts) {
       const c = p.join(d, `hermes${ext}`);
@@ -280,6 +282,51 @@ const samePath = (a: string, b: string): boolean => {
  *  --idle-exit`, Hermes's own auto-start). Pure over its inputs. */
 export function isHermesGatewayOf(root: string, state: HermesGatewayState, same: (a: string, b: string) => boolean = samePath): boolean {
   return same(state.hermesHome, root) && state.argv.includes('gateway') && state.argv.includes('run');
+}
+
+/** A running process as the OS reports it: its command line, and its
+ *  HERMES_HOME when the OS lets wmux read its environment (not Windows). */
+export interface LiveProcess { command: string; hermesHome?: string }
+export type ProcessInfo = (pid: number) => Promise<LiveProcess | null>;
+
+const execText = (file: string, args: string[]): Promise<string | null> => new Promise((resolve) => {
+  execFile(file, args, { timeout: 5_000, windowsHide: true, maxBuffer: 1024 * 1024 }, (err, stdout) => resolve(err ? null : String(stdout)));
+});
+
+/** The live process `pid`, or null when it is gone or cannot be read. */
+export const processInfo: ProcessInfo = async (pid) => {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return null;
+  if (process.platform === 'win32') {
+    const ps = await execText('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `(Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}').CommandLine`]);
+    const out = ps ?? await execText('wmic', ['process', 'where', `ProcessId=${pid}`, 'get', 'CommandLine', '/value']);
+    const command = (out ?? '').replace(/^\s*CommandLine=/m, '').trim();
+    return command ? { command } : null;
+  }
+  if (process.platform === 'linux') {
+    try {
+      const command = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').join(' ').trim();
+      const env = fs.readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0');
+      const home = env.find((e) => e.startsWith('HERMES_HOME='));
+      return command ? { command, ...(home ? { hermesHome: home.slice('HERMES_HOME='.length) } : {}) } : null;
+    } catch {
+      return null;
+    }
+  }
+  const command = (await execText('ps', ['-ww', '-o', 'command=', '-p', String(pid)]))?.trim();
+  if (!command) return null;
+  // macOS appends a same-user process's environment after its command.
+  const withEnv = (await execText('ps', ['-E', '-ww', '-o', 'command=', '-p', String(pid)]))?.trim() ?? '';
+  const env = withEnv.startsWith(command) ? withEnv.slice(command.length) : '';
+  const m = /(?:^|\s)HERMES_HOME=(.*?)(?=\s[A-Za-z_][A-Za-z0-9_]*=|$)/.exec(env);
+  return { command, ...(m ? { hermesHome: m[1] } : {}) };
+};
+
+/** Whether the live process is a Hermes gateway of R: its command line runs
+ *  `hermes_cli … gateway run`, and its HERMES_HOME, where readable, is R.
+ *  A PID reused by another process after a gateway died fails this. Pure. */
+export function liveGatewayOf(root: string, live: LiveProcess | null, same: (a: string, b: string) => boolean = samePath): boolean {
+  if (!live || !/hermes_cli/.test(live.command) || !/\bgateway\s+run\b/.test(live.command)) return false;
+  return live.hermesHome === undefined || same(live.hermesHome, root);
 }
 
 // ── the probe: can Hermes start an MCP server? ──────────────────────────────
@@ -454,6 +501,6 @@ export function hermesSetupLine(platform: NodeJS.Platform, shell: string | undef
     return `$env:HERMES_HOME=${q(root)}; & ${q(exe)} model`;
   }
   const q = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
-  const vars = Object.entries(env).map(([k, v]) => `${k}=${q(v)}`).join(' ');
+  const vars = Object.entries(env).filter(([k]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(k)).map(([k, v]) => `${k}=${q(v)}`).join(' ');
   return `env -i ${vars} ${q(exe)} model`;
 }

@@ -24,12 +24,15 @@ import {
   hermesSetupLine,
   hermesToolAllowed,
   isHermesGatewayOf,
+  liveGatewayOf,
   probeHermesMcp,
+  processInfo,
   readHermesGatewayState,
   resolveHermesExecutable,
   runHermes,
   type HermesProbeResult,
   type HermesRun,
+  type ProcessInfo,
 } from './hermesEngine';
 
 /** How long the owner has to answer a Hermes permission card (Hermes's own
@@ -54,6 +57,8 @@ export interface HermesHostDeps {
   /** Signal a PID (default process.kill; Windows: taskkill /T /F). */
   kill?: (pid: number) => void;
   pidAlive?: (pid: number) => boolean;
+  /** The live process behind a PID (default: the OS's command line). */
+  processInfo?: ProcessInfo;
   log?: (line: string) => void;
 }
 
@@ -193,11 +198,18 @@ export class HermesHost {
     for (let i = 0; i < Math.ceil(stopMs / 3 / 250) && this.pidAlive(before.pid); i++) await new Promise((r) => setTimeout(r, 250));
     const still = readHermesGatewayState(root);
     if (still && still.pid === before.pid && this.pidAlive(still.pid) && isHermesGatewayOf(root, still)) {
-      this.log(`[hermes] gateway ${still.pid} did not stop; signalling it`);
-      try {
-        (this.deps.kill ?? defaultKill)(still.pid);
-      } catch (err) {
-        this.log(`[hermes] could not signal gateway ${still.pid}: ${String(err)}`);
+      // The state file may outlive its gateway: signal the PID only while the
+      // live process is still R's gateway.
+      const live = await (this.deps.processInfo ?? processInfo)(still.pid);
+      if (!liveGatewayOf(root, live)) {
+        this.log(`[hermes] pid ${still.pid} in gateway_state.json is not a Hermes gateway of wmux's home; not signalling it`);
+      } else {
+        this.log(`[hermes] gateway ${still.pid} did not stop; signalling it`);
+        try {
+          (this.deps.kill ?? defaultKill)(still.pid);
+        } catch (err) {
+          this.log(`[hermes] could not signal gateway ${still.pid}: ${String(err)}`);
+        }
       }
     }
     this.owned.delete(before.pid);
@@ -211,7 +223,9 @@ export class HermesHost {
       prepare: async () => {
         const r = await this.readiness(true);
         if (!r.ready) return { ok: false, message: hermesNotReadyMessage(r) };
-        return { ok: true, env: this.env() };
+        const exe = this.exe();
+        if (!exe) return { ok: false, message: hermesNotReadyMessage({ ready: false, reason: 'not-installed', message: 'Hermes is not installed (no hermes executable found).' }) };
+        return { ok: true, env: this.env(), exe };
       },
       sessionStarted: () => {
         this.markOwned();
@@ -228,7 +242,12 @@ export class HermesHost {
       },
       toolAllowed: hermesToolAllowed,
       mcpReady: (token, since) => waitForCommanderTokenUse(token, since, MCP_READY_MS),
-      unsettled: () => this.stopGateway(),
+      unsettled: () => {
+        // Every Hermes bot shares the gateway: say whose turns the stop ends.
+        const cut = [...this.adapters].filter((a) => a.agentLive()).map((a) => a.botId() ?? 'commander');
+        this.log(`[hermes] stopping the gateway for ${binding.botId}'s unsettled turn; live Hermes bots: ${cut.join(', ') || 'none'}`);
+        return this.stopGateway();
+      },
       disposed: (adapter) => {
         this.adapters.delete(adapter);
       },

@@ -42,11 +42,11 @@ export interface HermesReadiness {
   message?: string;
 }
 
-/** `X.Y.Z` from `hermes --version` output ("Hermes Agent v0.22.5 (…)"), or
- *  null. Pure. */
+/** `X.Y.Z` (or `X.Y.Z-<pre>`) from `hermes --version` output ("Hermes Agent
+ *  v0.22.5 (…)"), or null. Pure. */
 export function parseHermesVersion(text: string): string | null {
-  const m = /\bv?(\d{1,4})\.(\d{1,4})\.(\d{1,6})\b/.exec(typeof text === 'string' ? text.split('\n', 1)[0] : '');
-  return m ? `${Number(m[1])}.${Number(m[2])}.${Number(m[3])}` : null;
+  const m = /\bv?(\d{1,4})\.(\d{1,4})\.(\d{1,6})(?:-([0-9A-Za-z.]{1,40}))?\b/.exec(typeof text === 'string' ? text.split('\n', 1)[0] : '');
+  return m ? `${Number(m[1])}.${Number(m[2])}.${Number(m[3])}${m[4] ? `-${m[4]}` : ''}` : null;
 }
 
 function compareVersions(a: string, b: string): number {
@@ -59,9 +59,12 @@ function compareVersions(a: string, b: string): number {
   return 0;
 }
 
-/** Where `version` (X.Y.Z) stands against the tested range. Pure. */
+/** Where `version` (X.Y.Z, or X.Y.Z-<pre>) stands against the tested range.
+ *  A pre-release comes before its release, so 0.22.5-rc1 is outdated. Pure. */
 export function hermesVersionStatus(version: string): 'ok' | 'outdated' | 'unsupported' {
-  if (compareVersions(version, HERMES_VERSION_MIN) < 0) return 'outdated';
-  if (compareVersions(version, HERMES_VERSION_BELOW) >= 0) return 'unsupported';
+  const [core, pre] = version.split('-', 2);
+  const min = compareVersions(core, HERMES_VERSION_MIN);
+  if (min < 0 || (min === 0 && pre !== undefined)) return 'outdated';
+  if (compareVersions(core, HERMES_VERSION_BELOW) >= 0) return 'unsupported';
   return 'ok';
 }

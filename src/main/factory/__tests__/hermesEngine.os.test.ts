@@ -2,12 +2,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { hermesVersionStatus, parseHermesVersion } from '../../../shared/hermesEngine';
 import {
   HERMES_SETTINGS,
   clearHermesProbeCache,
   hermesEnv,
   hermesReadiness,
   hermesSettingsMismatches,
+  liveGatewayOf,
   type HermesProbeResult,
   type HermesRun,
 } from '../hermesEngine';
@@ -138,5 +140,23 @@ describe('hermesReadiness', () => {
     expect(await hermesReadiness(deps(fixed.run, missing))).toMatchObject({ ready: false, reason: 'mcp-missing' });
     // The extra added in a terminal leaves the executable as it was: probed again.
     expect(await hermesReadiness(deps(fixed.run))).toEqual({ ready: true, version: '0.22.5' });
+  });
+});
+
+describe('liveGatewayOf and the version range', () => {
+  it('a live gateway of R by its command line and HERMES_HOME; a pre-release is before its release', () => {
+    const same = (a: string, b: string) => a === b;
+    const cmd = 'python -m hermes_cli.main --profile default gateway run --quiet --idle-exit';
+    expect(liveGatewayOf('/r', { command: cmd, hermesHome: '/r' }, same)).toBe(true);
+    expect(liveGatewayOf('/r', { command: cmd }, same)).toBe(true);
+    expect(liveGatewayOf('/r', { command: cmd, hermesHome: '/home/u/.hermes' }, same)).toBe(false);
+    expect(liveGatewayOf('/r', { command: 'python -m hermes_cli.main acp' }, same)).toBe(false);
+    expect(liveGatewayOf('/r', { command: '/usr/sbin/sshd -D' }, same)).toBe(false);
+    expect(liveGatewayOf('/r', null, same)).toBe(false);
+
+    expect(parseHermesVersion('Hermes Agent v0.22.5-rc1 (x)')).toBe('0.22.5-rc1');
+    expect(hermesVersionStatus('0.22.5-rc1')).toBe('outdated');
+    expect(hermesVersionStatus('0.22.6-rc1')).toBe('ok');
+    expect(hermesVersionStatus('0.23.0-rc1')).toBe('unsupported');
   });
 });
