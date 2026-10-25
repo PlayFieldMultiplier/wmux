@@ -1428,6 +1428,17 @@ const electronAPI = {
     // active workspace); rejects when no tab could be opened. Poll
     // factoryEngineReadiness to see it land.
     factoryEngineLogin: (req?: { botId: string }) => ipcRenderer.invoke(IPC.FACTORY_ENGINE_LOGIN, req) as Promise<void>,
+    // Can the Hermes bot engine run here? Checked without a model turn.
+    // `fresh`: never the answer main cached for the polling (an owner's Check again).
+    factoryHermesReadiness: (opts?: { fresh?: boolean }) =>
+      ipcRenderer.invoke(IPC.FACTORY_HERMES_READINESS, opts) as Promise<import('../shared/hermesEngine').HermesReadiness>,
+    // Start Hermes's own model setup for wmux's Hermes home in a terminal tab
+    // of the active workspace; rejects when no tab could be opened. Poll
+    // factoryHermesReadiness to see it land.
+    factoryHermesSetup: () => ipcRenderer.invoke(IPC.FACTORY_HERMES_SETUP) as Promise<void>,
+    // The owner picks a bot's engine: Claude (SDK) or Hermes.
+    setBotEngine: (botId: string, engine: 'claude-sdk' | 'hermes') =>
+      ipcRenderer.invoke(IPC.FACTORY_BOT_SET_ENGINE, { botId, engine }) as Promise<{ ok: boolean; code?: string; message?: string }>,
     // The engines a bot's workers may run on, and which are installed here.
     workerAgents: () =>
       ipcRenderer.invoke(IPC.FACTORY_WORKER_AGENTS) as Promise<import('../shared/botWorkerAgent').BotWorkerAgentOption[]>,

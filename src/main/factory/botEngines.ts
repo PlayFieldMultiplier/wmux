@@ -6,8 +6,10 @@
 // built around one embedded pane per workspace brain, not a headless bot).
 //
 // Bots run only on engines whose native tools are verified blocked (design
-// §11 R5). In this release that is `claude-sdk`: an ACP bot (any ACP command,
-// and the scripted smoke stub) starts only in an unpackaged build running on
+// §11 R5): `claude-sdk`, and Hermes (the ACP engine's `hermes` preset), whose
+// tool surface wmux writes and checks itself (hermesEngine.ts) before every
+// spawn and after a session's first turn. Any other ACP command (and the
+// scripted smoke stub) starts only in an unpackaged build running on
 // isolated data — the factory smoke's test instances — and is refused with
 // `engine_unavailable` everywhere else (`acpEnginesAllowed`).
 //
@@ -25,7 +27,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { app } from 'electron';
-import type { BotBinding, BotEngine, BotProfile } from '../../shared/bot';
+import { isHermesEngine, type BotBinding, type BotEngine, type BotProfile } from '../../shared/bot';
 import { CLAUDE_EFFORT_LEVELS, type ClaudeEffort } from '../../shared/claudeModels';
 import { validateBotBrainModel } from '../../shared/fanoutPreset';
 import type { BrainAdapter } from '../deck/BrainAdapter';
@@ -37,6 +39,8 @@ import { botRepoReadRoot } from './botRepoRead';
 import { recordBotAuthSource, resolveBotClaudeAuth, type BotClaudeAuth } from './claudeApiKey';
 import { markBotExecFailed, probeBotExecSupport, type BotExecSupport } from './botExecSandbox';
 import { getFactorySettings } from './factorySettings';
+import { getHermesHost, type HermesHost } from './hermesHost';
+import { HERMES_NOT_READY_LEAD } from './engineError';
 
 export interface BotEngineSpawnInput {
   profile: BotProfile;
@@ -125,6 +129,8 @@ export interface DefaultBotEngineDeps {
   /** Whether the command reviewer judges unlisted commands (default the
    *  factory setting `botCommandReviewer`, read on every command). */
   commandReviewer?: () => boolean;
+  /** The Hermes engine host (default getHermesHost). */
+  hermes?: () => HermesHost;
 }
 
 /** ACP bots may start: an unpackaged build on isolated data (a test
@@ -138,7 +144,8 @@ export function acpEnginesAllowed(): boolean {
  *  refused at the bot's first turn). */
 export function runnableDefaultEngine(engine: BotEngine, acpAllowed: () => boolean = acpEnginesAllowed): BotEngine {
   if (engine.kind === 'claude-sdk') return engine;
-  if (engine.kind === 'acp' && acpAllowed()) return engine;
+  // Hermes is picked per bot in its profile, never inherited as the default.
+  if (engine.kind === 'acp' && !isHermesEngine(engine) && acpAllowed()) return engine;
   return { kind: 'claude-sdk' };
 }
 
@@ -160,6 +167,7 @@ export function createDefaultBotEngineFactory(deps: DefaultBotEngineDeps = {}): 
   const onAuthSeen = deps.onAuthSeen ?? recordBotAuthSource;
   const execSupport = deps.execSupport ?? ((exe: string | null) => probeBotExecSupport(exe));
   const commandReviewer = deps.commandReviewer ?? (() => getFactorySettings().botCommandReviewer);
+  const hermesHost = deps.hermes ?? getHermesHost;
   const refuse = (message: string): BotEngineSpawn => ({ ok: false, code: 'engine_unavailable', message });
 
   return (input) => {
@@ -208,6 +216,22 @@ export function createDefaultBotEngineFactory(deps: DefaultBotEngineDeps = {}): 
         };
       }
       case 'acp': {
+        if (isHermesEngine(engine)) {
+          // Readiness, the settings read back and the gateway check run
+          // before each agent spawn (the adapter's `hermes.prepare`); a
+          // failure ends the turn with a hermes_not_ready error.
+          const host = hermesHost();
+          const exe = host.exe();
+          if (!exe) return refuse(`${HERMES_NOT_READY_LEAD} Hermes is not installed (no hermes executable found).`);
+          const adapter = new AcpBrainAdapter({
+            spawnSpec: { command: exe, args: ['acp'] },
+            mcpBundlePath: bundle,
+            bot,
+            hermes: host.policyFor(input.binding),
+          });
+          host.register(adapter);
+          return { ok: true, adapter };
+        }
         if (!acpAllowed()) return refuse(ACP_TEST_ONLY_MESSAGE);
         const exe = resolveCommand(engine.command);
         if (!exe) return refuse(`the ACP command "${engine.command}" is not an executable on PATH`);

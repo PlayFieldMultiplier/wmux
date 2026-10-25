@@ -36,7 +36,7 @@ import { GuestWorkspaceStore, crossesGuestBoundary, expectGuestWorkspaces, guest
 import { WakeQueue, wakeQueuePath, setWakeQueue } from '../../factory/wakeQueue';
 import { FactorySettingsStore, factorySettingsPath, onFactorySettingsChanged, setFactorySettingsStore } from '../../factory/factorySettings';
 import { BotRuntime, BotSessionStore, botSessionsPath, setBotRuntime } from '../../factory/BotRuntime';
-import { createDefaultBotEngineFactory, runnableDefaultEngine, type BotEngineFactory } from '../../factory/botEngines';
+import { acpEnginesAllowed, createDefaultBotEngineFactory, runnableDefaultEngine, type BotEngineFactory } from '../../factory/botEngines';
 import { recordWorkerEnd } from '../../factory/budget';
 import { workerStopsConfirmed } from '../../factory/workerRunEnds';
 import { botAccountName, botAccountQuota, type ClaudeUsageCache } from '../../factory/botQuota';
@@ -315,6 +315,17 @@ export function registerBotRpcHandlers(
     return { ok: true, bot: pipeProfile(r.bot), previous: r.previous, ...(next === r.previous ? { unchanged: true } : {}) };
   });
 
+  // A bot's ACP engine (Hermes, or any ACP command) is picked by the owner in
+  // its profile (FACTORY_BOT_SET_ENGINE, main window only): over the pipe,
+  // bot.create and bot.update neither set nor change one. A test build on
+  // isolated data (acpEnginesAllowed) keeps the pipe route for its smoke.
+  const acpEngineRefusal = (engine: unknown, current?: BotProfile): ReturnType<typeof refuse> | null => {
+    if (acpEnginesAllowed()) return null;
+    const wantsAcp = !!engine && typeof engine === 'object' && (engine as { kind?: unknown }).kind === 'acp';
+    if (!wantsAcp && current?.engine.kind !== 'acp') return null;
+    return refuse('not_authorized', 'a bot\'s ACP engine (Hermes) is picked in the bot\'s profile in wmux, not over the pipe');
+  };
+
   const operatorOnly = (
     method: RpcMethod,
     run: (l: Live, params: Record<string, unknown>) => unknown | Promise<unknown>,
@@ -336,6 +347,8 @@ export function registerBotRpcHandlers(
   operatorOnly(BOT_RPC.create, (l, params) => {
     if (params['avatar'] !== undefined) return refuse('invalid_argument', 'a bot\'s picture is set in Settings, not through bot.create');
     if (params['greet'] !== undefined && typeof params['greet'] !== 'boolean') return refuse('invalid_argument', 'greet must be a boolean');
+    const acpRefused = params['engine'] !== undefined ? acpEngineRefusal(params['engine']) : null;
+    if (acpRefused) return acpRefused;
     const r = l.store.create({
       workspaceId: params['workspaceId'],
       template: params['template'],
@@ -363,6 +376,10 @@ export function registerBotRpcHandlers(
     const raw = params['patch'];
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return refuse('invalid_argument', 'patch must be an object');
     let patch = raw as Record<string, unknown>;
+    if ('engine' in patch) {
+      const acpRefused = acpEngineRefusal(patch.engine, l.store.get(botId) ?? undefined);
+      if (acpRefused) return acpRefused;
+    }
     // A picked folder becomes the repo as "Add bot" resolves it (botCreate.ts).
     if ('repoFolder' in patch) {
       const { repoFolder, ...rest } = patch;

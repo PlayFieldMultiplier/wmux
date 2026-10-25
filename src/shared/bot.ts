@@ -111,13 +111,30 @@ export function normalizeBotJob(raw: unknown): string | undefined {
 }
 
 /** The agent behind a bot. v1 default is `claude-sdk`; `claude-pty` stays as a
- *  billing hedge; `acp` runs any ACP command and is opt-in. */
+ *  billing hedge; `acp` runs any ACP command and is opt-in. An `acp` engine
+ *  with `preset: 'hermes'` runs Hermes Agent with the settings wmux writes and
+ *  verifies (main/factory/hermesEngine.ts); its `command`/`args` are stored
+ *  only so a build without presets keeps the bot (it refuses ACP), and main
+ *  ignores them. `mode` is how wmux attaches to Hermes: `managed` (wmux's own
+ *  Hermes home and settings), the only mode this version runs; a missing or
+ *  unknown mode reads as managed. */
 export type BotEngine =
   | { kind: 'claude-sdk'; model?: string; effort?: string }
   | { kind: 'claude-pty'; model?: string }
-  | { kind: 'acp'; command: string; args: string[] };
+  | { kind: 'acp'; command: string; args: string[]; preset?: 'hermes'; mode?: HermesAttachMode };
+
+/** How a Hermes bot attaches to Hermes (BotEngine `mode`). */
+export type HermesAttachMode = 'managed';
 
 export const DEFAULT_BOT_ENGINE: BotEngine = { kind: 'claude-sdk' };
+
+/** The engine a bot on Hermes stores. */
+export const HERMES_BOT_ENGINE: BotEngine = Object.freeze({ kind: 'acp', command: 'hermes', args: ['acp'], preset: 'hermes', mode: 'managed' }) as BotEngine;
+
+/** Whether `engine` is the Hermes preset. Pure. */
+export function isHermesEngine(engine: BotEngine | undefined): boolean {
+  return engine?.kind === 'acp' && engine.preset === 'hermes';
+}
 
 /** The agent CLI the default engine runs (claude-sdk spawns Claude Code): a
  *  new bot's turns need this agent ready. */
@@ -125,7 +142,9 @@ export const DEFAULT_BOT_ENGINE_AGENT: AgentId = 'claude';
 
 /** Whether a bot's engine refuses its built-in tools per call in a wake not
  *  known clean of a guest's words (ClaudeSdkAdapter's guest gate). A bot on
- *  any other engine takes no such wake. Pure. */
+ *  any other engine takes no such wake. This is the one wake-source gate for
+ *  an engine: every guest-wake check reads it (a Hermes bot, managed mode
+ *  included, takes no guest wake). Pure. */
 export function botEngineGatesTools(engine: BotEngine | undefined): boolean {
   return (engine?.kind ?? DEFAULT_BOT_ENGINE.kind) === 'claude-sdk';
 }
@@ -374,7 +393,7 @@ export interface BotStatus {
     message: string;
     at: number;
     /** A stable cause when the park came from engine_unavailable (engineError.ts). */
-    code?: 'not_installed' | 'not_logged_in' | 'mcp_missing' | 'acp_test_only' | 'unusable' | 'api_key_missing' | 'subscription_refused' | 'other';
+    code?: 'not_installed' | 'not_logged_in' | 'mcp_missing' | 'acp_test_only' | 'unusable' | 'api_key_missing' | 'subscription_refused' | 'hermes_not_ready' | 'hermes_mcp_missing' | 'hermes_tools_changed' | 'other';
     /** `not_logged_in` on a registered account (not the default sign-in):
      *  that account's name. */
     account?: string;
@@ -532,6 +551,11 @@ export const BOT_EVENT = 'bot.event';
 export const BOT_MODE_ARG_PREFIX = '--bot=';
 /** `--bot-token-file=<path>`: where the bot token is read from (once). */
 export const BOT_TOKEN_FILE_ARG_PREFIX = '--bot-token-file=';
+/** `--bot-token-file-keep`: read the token file without deleting it. For an
+ *  agent host that starts the same MCP command more than once per session
+ *  (Hermes: one discovery child, then the one its turns use); the spawner
+ *  removes the file and revokes the token when the session ends. */
+export const BOT_TOKEN_FILE_KEEP_ARG = '--bot-token-file-keep';
 
 function lastArg(argv: readonly string[], prefix: string): string | undefined {
   const hit = [...argv].reverse().find((a) => a.startsWith(prefix));
@@ -551,6 +575,6 @@ export function botTokenFileArgValue(argv: readonly string[]): string | undefine
 
 /** The MCP server args (after the bundle path) for one bot spawn. The role
  *  is the legacy tag; every bot server lists the same shared surface. */
-export function botMcpArgs(role: BotRole, tokenFile: string): string[] {
-  return [`${BOT_MODE_ARG_PREFIX}${role}`, `${BOT_TOKEN_FILE_ARG_PREFIX}${tokenFile}`];
+export function botMcpArgs(role: BotRole, tokenFile: string, keep = false): string[] {
+  return [`${BOT_MODE_ARG_PREFIX}${role}`, `${BOT_TOKEN_FILE_ARG_PREFIX}${tokenFile}`, ...(keep ? [BOT_TOKEN_FILE_KEEP_ARG] : [])];
 }

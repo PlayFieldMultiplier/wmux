@@ -153,6 +153,9 @@ export function sanitizeBotEngine(raw: unknown, opts: { read?: boolean } = {}): 
       const command = boundedString(r.command, ACP_COMMAND_MAX);
       if (!command || !Array.isArray(r.args) || r.args.length > ACP_ARGS_MAX) return null;
       if (!r.args.every((a) => typeof a === 'string' && a.length <= ACP_ARG_MAX)) return null;
+      // The Hermes preset: an unknown preset is a plain ACP command (refused
+      // outside test builds); a missing or unknown mode reads as managed.
+      if (r.preset === 'hermes') return { kind: 'acp', command, args: [...(r.args as string[])], preset: 'hermes', mode: 'managed' };
       return { kind: 'acp', command, args: [...(r.args as string[])] };
     }
     default:

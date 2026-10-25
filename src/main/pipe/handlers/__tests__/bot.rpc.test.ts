@@ -604,6 +604,37 @@ describe('bot-runtime module', () => {
     await mod.dispose();
   });
 
+  it('over the pipe, bot.create and bot.update neither set nor change an ACP engine outside a test build', async () => {
+    fs.mkdirSync(path.join(dir, 'factory'), { recursive: true });
+    fs.writeFileSync(factorySettingsPath(dir), JSON.stringify({ version: 1, enabled: false }));
+    const { router, handlers } = captureRouter();
+    const deps = { wmuxDir: () => dir, getMainWindow: () => null } as unknown as FactoryHostDeps;
+    const mod = botRuntimeModule(router, deps, { engines: () => ({ ok: true, adapter: new OkAdapter() }) });
+    const call = (m: string, p: Record<string, unknown>) => (handlers.get(m) as Handler)(p, OPERATOR);
+    const saved = process.env.WMUX_DATA_SUFFIX;
+    await mod.start();
+    try {
+      const hermes = { kind: 'acp', command: 'hermes', args: ['acp'], preset: 'hermes' };
+      delete process.env.WMUX_DATA_SUFFIX;
+      expect(await call('bot.create', { workspaceId: 'ws-1', name: 'H', engine: hermes })).toMatchObject({ ok: false, code: 'not_authorized' });
+      const plain = (await call('bot.create', { workspaceId: 'ws-1', name: 'P' })) as { bot: { id: string } };
+      expect(await call('bot.update', { botId: plain.bot.id, patch: { engine: hermes } })).toMatchObject({ ok: false, code: 'not_authorized' });
+      // A claude-sdk model edit stays a pipe edit.
+      expect(await call('bot.update', { botId: plain.bot.id, patch: { engine: { kind: 'claude-sdk', effort: 'low' } } })).toMatchObject({ ok: true });
+      // A test build on isolated data keeps the route for its smoke.
+      process.env.WMUX_DATA_SUFFIX = '-e2e-test';
+      expect(await call('bot.update', { botId: plain.bot.id, patch: { engine: hermes } })).toMatchObject({ ok: true });
+      delete process.env.WMUX_DATA_SUFFIX;
+      // Leaving an ACP engine over the pipe is refused too.
+      expect(await call('bot.update', { botId: plain.bot.id, patch: { engine: { kind: 'claude-sdk' } } })).toMatchObject({ ok: false, code: 'not_authorized' });
+    } finally {
+      if (saved === undefined) delete process.env.WMUX_DATA_SUFFIX;
+      else process.env.WMUX_DATA_SUFFIX = saved;
+      await settle();
+      await mod.dispose();
+    }
+  });
+
   it('stop (quit, before any module disposes) ends the running bot sessions', async () => {
     fs.mkdirSync(path.join(dir, 'factory'), { recursive: true });
     fs.writeFileSync(factorySettingsPath(dir), JSON.stringify({ version: 1, enabled: true }));

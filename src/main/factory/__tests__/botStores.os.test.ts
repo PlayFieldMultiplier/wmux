@@ -57,6 +57,19 @@ function newStore(): BotStore {
 }
 
 describe('BotStore', () => {
+  it('a Hermes bot round-trips through bots.json with its preset, and an unknown mode reads as managed', async () => {
+    const s = newStore();
+    const r = s.create({ workspaceId: 'ws-1', name: 'Herm' });
+    if (!r.ok) throw new Error('create');
+    expect(s.update(r.bot.id, { engine: { kind: 'acp', command: 'hermes', args: ['acp'], preset: 'hermes', mode: 'managed' } })).toMatchObject({ ok: true });
+    await s.flush();
+    const again = new BotStore(botsFilePath(dir), { now, platform: 'darwin' });
+    again.load();
+    expect(again.get(r.bot.id)?.engine).toEqual({ kind: 'acp', command: 'hermes', args: ['acp'], preset: 'hermes', mode: 'managed' });
+    const stored = { ...again.get(r.bot.id)!, engine: { kind: 'acp', command: 'hermes', args: ['acp'], preset: 'hermes', mode: 'full' } };
+    expect(parseBotProfile(stored)?.engine).toMatchObject({ preset: 'hermes', mode: 'managed' });
+  });
+
   it('keeps the owner\'s worker engine: set, cleared, validated on update and on read', async () => {
     const s = newStore();
     const r = s.create({ workspaceId: 'ws-1', name: 'Dev' });

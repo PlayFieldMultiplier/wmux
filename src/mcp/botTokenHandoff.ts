@@ -2,13 +2,15 @@
 //
 // In bot mode (`--bot=<role>`) the token comes from the file named by
 // `--bot-token-file=<path>` (main/factory/botTokenHandoff.ts writes it for one
-// spawn), never from the environment. The file is read once and deleted.
+// spawn), never from the environment. The file is read once and deleted,
+// unless `--bot-token-file-keep` says the host starts this command again in
+// the same session (the spawner removes it then).
 // Anything off — no flag, an unreadable or oversized file, a file other users
 // can read, an empty token — yields '' and the server claims the bot role
 // with an empty token, which main refuses on every call (fail closed).
 
 import fs from 'node:fs';
-import { botTokenFileArgValue } from '../shared/bot';
+import { BOT_TOKEN_FILE_KEEP_ARG, botTokenFileArgValue } from '../shared/bot';
 
 /** Longer than any token main mints (two UUIDs). */
 const MAX_TOKEN_FILE_BYTES = 256;
@@ -41,10 +43,12 @@ export function readBotTokenFromArgv(argv: readonly string[], io: TokenFileIo = 
   } catch {
     token = '';
   }
-  try {
-    io.unlink(file);
-  } catch {
-    /* already gone */
+  if (!argv.includes(BOT_TOKEN_FILE_KEEP_ARG)) {
+    try {
+      io.unlink(file);
+    } catch {
+      /* already gone */
+    }
   }
   return /^[A-Za-z0-9-]+$/.test(token) ? token : '';
 }

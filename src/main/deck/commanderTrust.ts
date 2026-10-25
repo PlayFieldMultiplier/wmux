@@ -73,10 +73,53 @@ export function mintBotToken(binding: BotBinding): string {
   return token;
 }
 
+/** token → when RpcRouter last accepted a call carrying it. */
+const lastUse = new Map<string, number>();
+/** token → callers waiting for its next accepted call. */
+const useWaiters = new Map<string, Set<(at: number) => void>>();
+
 /** Revoke a token — called from the adapter's dispose so a dead brain's
  *  token cannot be replayed by a later process. Idempotent. */
 export function revokeCommanderToken(token: string): void {
   live.delete(token);
+  lastUse.delete(token);
+  for (const wake of useWaiters.get(token) ?? []) wake(-1);
+  useWaiters.delete(token);
+}
+
+/** RpcRouter accepted a call carrying this live token (its MCP child is up
+ *  and authenticated: every bot MCP child calls `mcp.identify` once its host
+ *  initialises it). */
+export function noteCommanderTokenUse(token: string, at: number = Date.now()): void {
+  if (!live.has(token)) return;
+  lastUse.set(token, at);
+  const waiting = useWaiters.get(token);
+  if (!waiting) return;
+  useWaiters.delete(token);
+  for (const wake of waiting) wake(at);
+}
+
+/** Resolves true once a call carrying `token` is accepted at or after
+ *  `since` (ms), false after `timeoutMs` or when the token is revoked. */
+export function waitForCommanderTokenUse(token: string, since: number, timeoutMs: number): Promise<boolean> {
+  const seen = lastUse.get(token);
+  if (seen !== undefined && seen >= since) return Promise.resolve(true);
+  if (!live.has(token)) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    let waiting = useWaiters.get(token);
+    if (!waiting) useWaiters.set(token, (waiting = new Set()));
+    const set = waiting;
+    const wake = (at: number) => {
+      clearTimeout(timer);
+      set.delete(wake);
+      resolve(at >= since);
+    };
+    const timer = setTimeout(() => {
+      set.delete(wake);
+      resolve(false);
+    }, timeoutMs);
+    set.add(wake);
+  });
 }
 
 /** Whether `token` is a live commander token. */
@@ -107,4 +150,6 @@ export function botTokenBinding(token: unknown): BotBinding | null {
 /** Test-only: clear all registered tokens. */
 export function __resetCommanderTrustForTesting(): void {
   live.clear();
+  lastUse.clear();
+  useWaiters.clear();
 }

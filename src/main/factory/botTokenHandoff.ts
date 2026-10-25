@@ -39,7 +39,7 @@ export function botTokenHandoffDir(dir: string = getWmuxDir()): string {
 export function writeBotTokenHandoff(
   binding: BotBinding,
   token: string,
-  opts: { dir?: string } = {},
+  opts: { dir?: string; keep?: boolean } = {},
 ): BotTokenHandoff {
   if (!isBotBinding(binding)) throw new Error('writeBotTokenHandoff: malformed bot binding');
   if (typeof token !== 'string' || token.length === 0) throw new Error('writeBotTokenHandoff: empty token');
@@ -50,7 +50,7 @@ export function writeBotTokenHandoff(
   fs.writeFileSync(filePath, token, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
   return {
     filePath,
-    mcpArgs: botMcpArgs(binding.role, filePath),
+    mcpArgs: botMcpArgs(binding.role, filePath, opts.keep === true),
     dispose: () => {
       try {
         fs.unlinkSync(filePath);

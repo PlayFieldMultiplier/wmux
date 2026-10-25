@@ -54,6 +54,22 @@ describe('bot token hand-off', () => {
     }
   });
 
+  it('keep mode: every child the host starts reads the token; dispose removes the file', () => {
+    const token = mintBotToken(BINDING);
+    try {
+      const handoff = writeBotTokenHandoff(BINDING, token, { dir, keep: true });
+      const argv = ['node', '/bundle/index.js', ...handoff.mcpArgs];
+      // Hermes starts the same MCP command twice per session (discovery, then its turns).
+      expect(readBotTokenFromArgv(argv)).toBe(token);
+      expect(readBotTokenFromArgv(argv)).toBe(token);
+      handoff.dispose();
+      expect(fs.existsSync(handoff.filePath)).toBe(false);
+      expect(readBotTokenFromArgv(argv)).toBe('');
+    } finally {
+      revokeCommanderToken(token);
+    }
+  });
+
   it.skipIf(process.platform === 'win32')('writes the file owner-only', () => {
     const handoff = writeBotTokenHandoff(BINDING, 'tok-1', { dir });
     expect(fs.statSync(handoff.filePath).mode & 0o777).toBe(0o600);

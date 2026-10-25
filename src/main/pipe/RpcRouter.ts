@@ -11,7 +11,7 @@ import { hostedBindingOf, isHostedCaller, sanitizeClientDisplayName } from '../.
 import { check as enforcerCheck } from '../mcp/PermissionEnforcer';
 import { METHOD_CAPABILITY, isAlwaysEnforcedMethod, type RequiredCapability } from '../mcp/methodCapabilityMap';
 import { isLocalExternalWireContext } from '../mcp/rpcProvenance';
-import { resolveCommanderToken } from '../deck/commanderTrust';
+import { noteCommanderTokenUse, resolveCommanderToken } from '../deck/commanderTrust';
 import { COMMANDER_TEARDOWN_DENY } from '../../shared/commanderSurface';
 import { GUEST_SAFE_RPC, GUEST_TURN_SURFACE_REFUSAL, botSurfaceRefusal, type BotRefusal } from '../../shared/botSurface';
 import { guestGateProvenance } from '../factory/wakeTaint';
@@ -405,6 +405,7 @@ export class RpcRouter {
       }
       const boundWorkspace = binding.workspaceId;
       ctx.commanderWorkspace = boundWorkspace;
+      noteCommanderTokenUse(request.commanderToken as string);
       // Agent factory bot gate (deny by default). A bot token reaches exactly
       // the methods on the shared bot surface (shared/botSurface.ts); everything
       // else is refused here, before trust lookup and permission enforcement,

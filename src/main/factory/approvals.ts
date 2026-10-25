@@ -435,6 +435,9 @@ export function typedApprovalTargets(
   return above.sort((a, b) => a.seq - b.seq).map((a) => a.id);
 }
 
+/** The longest command a `native_tool` card shows. */
+const NATIVE_TOOL_COMMAND_MAX = 1_500;
+
 const ACTION_TITLE: Readonly<Record<ApprovalAction, string>> = {
   merge: 'Merge',
   push_default: 'Push to the default branch of',
@@ -444,6 +447,7 @@ const ACTION_TITLE: Readonly<Record<ApprovalAction, string>> = {
   release: 'Publish a release of',
   skill: 'Load the skill',
   owner_profile: 'Change',
+  native_tool: 'Run',
 };
 
 /** A PR as its host names it: a GitLab merge request is `MR !n`. */
@@ -517,6 +521,8 @@ export class ApprovalService {
   private readonly typedSeen = new Set<string>();
   /** Merge approvals the file held, now pending again (reopened on resume). */
   private readonly reloaded = new Set<string>();
+  /** `native_tool` requests: the turn waiting for the owner's answer. */
+  private readonly nativeWaiters = new Map<string, (approved: boolean) => void>();
   private readonly now: () => number;
   private readonly log: (line: string) => void;
 
@@ -553,7 +559,9 @@ export class ApprovalService {
   private save(): boolean {
     try {
       fs.mkdirSync(path.dirname(this.ports.file), { recursive: true });
-      atomicWriteJSONSync(this.ports.file, { version: 1, requests: [...this.requests.values()], rules: [...this.rules.values()] });
+      // A `native_tool` request lives only while its turn waits; an older
+      // build reading the file would refuse the unknown action.
+      atomicWriteJSONSync(this.ports.file, { version: 1, requests: [...this.requests.values()].filter((r) => r.action !== 'native_tool'), rules: [...this.rules.values()] });
       return true;
     } catch (err) {
       this.log(`[factory] approvals not written: ${String(err)}`);
@@ -597,7 +605,11 @@ export class ApprovalService {
       return refuse('invalid', `action must be one of ${APPROVAL_ACTIONS.join(', ')}`);
     }
     const act = action as ApprovalAction;
-    if (CARD_ONLY_ACTIONS.has(act)) return refuse('invalid', act === 'skill' ? 'a skill is proposed with skill_propose' : 'a change to the owner\'s profile is proposed with memory_update');
+    if (CARD_ONLY_ACTIONS.has(act)) {
+      return refuse('invalid', act === 'skill' ? 'a skill is proposed with skill_propose'
+        : act === 'native_tool' ? 'a command approval comes from the bot\'s own engine, not approval_request'
+          : 'a change to the owner\'s profile is proposed with memory_update');
+    }
     const num = (v: unknown): number | undefined | null => (v === undefined ? undefined : Number.isSafeInteger(v) && (v as number) > 0 ? (v as number) : null);
     const prNumber = num(raw.prNumber);
     const issueNumber = num(raw.issueNumber);
@@ -766,6 +778,72 @@ export class ApprovalService {
     return { ok: true, request: approvalView(this.get(record.requestId) ?? record) };
   }
 
+  /** A Hermes bot's own tool asks for permission mid-turn (its ACP
+   *  permission request, main/deck/AcpBrainAdapter.ts): one `native_tool`
+   *  request whose desktop card shows the command. Resolves the owner's
+   *  answer: true on Approve; false on Deny, after `timeoutMs`, when
+   *  `signal` aborts, or when no card could be posted. One waits per bot;
+   *  the request lives only while it waits (never in approvals.json). */
+  askNativeTool(bot: BotBinding, input: { title: string; command: string }, opts: { timeoutMs: number; signal?: AbortSignal }): Promise<boolean> {
+    const wake = this.ports.runningWake(bot.botId);
+    if (!wake || opts.signal?.aborted) return Promise.resolve(false);
+    let profile: BotProfile | null = null;
+    try {
+      profile = this.ports.bots()?.get(bot.botId) ?? null;
+    } catch {
+      profile = null;
+    }
+    if (!profile || !profile.enabled || profile.workspaceId !== bot.workspaceId) return Promise.resolve(false);
+    if ([...this.requests.values()].some((r) => r.botId === bot.botId && r.action === 'native_tool' && r.state === 'pending')) return Promise.resolve(false);
+    const command = redactStoredSecrets(String(input.command ?? '')).slice(0, NATIVE_TOOL_COMMAND_MAX);
+    const title = oneLine(redactStoredSecrets(String(input.title ?? '')), APPROVAL_LIMITS.REASON_MAX);
+    const at = this.now();
+    const record: StoredApproval = {
+      requestId: newRequestId(),
+      action: 'native_tool',
+      repoKey: '',
+      repoPath: '',
+      nativeTool: { title, command },
+      botId: bot.botId,
+      workspaceId: bot.workspaceId,
+      threadId: this.conversationThread(bot.botId, wake),
+      reason: 'Hermes wants to run a command it flags as needing your approval.',
+      tainted: wake.tainted || guestSourcedWake(wake),
+      guest: guestSourcedWake(wake),
+      state: 'pending',
+      clientRequestId: `native:${wake.wakeId}:${at}`,
+      createdAt: at,
+      updatedAt: at,
+    };
+    const fence = fenceFor(command);
+    const card = this.postCard(record, profile, wake, ['', 'Approve to let it run this once; Deny refuses it. No answer in a few minutes refuses it too.', '', `${fence}text`, command, fence]);
+    if (!card) return Promise.resolve(false);
+    const stored: StoredApproval = { ...record, cardId: card.id };
+    this.requests.set(stored.requestId, stored);
+    this.changed(stored.workspaceId);
+    return new Promise<boolean>((resolve) => {
+      const done = (approved: boolean): void => {
+        clearTimeout(timer);
+        opts.signal?.removeEventListener('abort', onAbort);
+        this.nativeWaiters.delete(stored.requestId);
+        resolve(approved);
+      };
+      const lapse = (): void => {
+        this.withdraw(stored.requestId);
+        done(false);
+      };
+      const onAbort = (): void => lapse();
+      const timer = setTimeout(lapse, opts.timeoutMs);
+      opts.signal?.addEventListener('abort', onAbort, { once: true });
+      this.nativeWaiters.set(stored.requestId, done);
+    });
+  }
+
+  /** The turn waiting on a `native_tool` request gets the owner's answer. */
+  private answerNativeTool(r: StoredApproval, approved: boolean): void {
+    if (r.action === 'native_tool') this.nativeWaiters.get(r.requestId)?.(approved);
+  }
+
   /** A bot's change to the owner's profile (the memory module, from
    *  `memory_update` target `user`): one `owner_profile` request whose card
    *  shows the exact change. The same change waiting already is that
@@ -867,6 +945,7 @@ export class ApprovalService {
     const next: StoredApproval = { ...r, state: 'expired', updatedAt: this.now() };
     if (!this.put(next)) return false;
     this.closeCard(next);
+    this.answerNativeTool(next, false);
     this.changed(next.workspaceId);
     return true;
   }
@@ -947,7 +1026,7 @@ export class ApprovalService {
       readerGuest = false;
     }
     const rows = [...this.requests.values()]
-      .filter((r) => r.botId === bot.botId && (!want || want.includes(r.state)))
+      .filter((r) => r.botId === bot.botId && r.action !== 'native_tool' && (!want || want.includes(r.state)))
       .sort((a, b) => b.createdAt - a.createdAt)
       .slice(0, limit)
       .map((r) => botApprovalView(r, readerGuest));
@@ -1018,13 +1097,16 @@ export class ApprovalService {
         this.closeCard(next);
         if (next.action === 'skill') this.skillDenied(next);
         this.changed(next.workspaceId);
-        this.tellDecided(next, `The owner denied: ${ACTION_TITLE[next.action]} ${subject(next)}.`, 'Do not ask for it again unless the owner says so.');
+        // A native tool hears the answer in its own turn.
+        if (next.action === 'native_tool') this.answerNativeTool(next, false);
+        else this.tellDecided(next, `The owner denied: ${ACTION_TITLE[next.action]} ${subject(next)}.`, 'Do not ask for it again unless the owner says so.');
         return { ok: true, request: approvalView(next) };
       }
       case 'undo': {
         if (cur.state !== 'approved') return refuse('not_pending', `the request is ${cur.state}`);
         // An approved skill is loaded already; the profile's Archive unloads it.
         if (cur.action === 'skill') return refuse('too_late', 'the skill is loaded; archive it from the bot\'s profile');
+        if (cur.action === 'native_tool') return refuse('too_late', 'the tool was told already');
         if (cur.effectId || (cur.executeAfter !== undefined && this.now() >= cur.executeAfter)) return refuse('too_late', 'the merge has started');
         const next: StoredApproval = { ...cur, state: 'pending', updatedAt: this.now() };
         delete next.decidedBy;
@@ -1118,6 +1200,11 @@ export class ApprovalService {
       this.tellDecided(next, `The owner approved your skill ${subject(next)}.`, 'It is listed in your wakes from now on; read it with skill_read.');
     } else if (next.action === 'owner_profile') {
       this.tellDecided(next, 'The owner approved the change to their profile.', 'Every bot\'s next session starts with it.');
+    } else if (next.action === 'native_tool') {
+      this.answerNativeTool(next, true);
+      // Nothing is left to do or undo: the card keeps the answer.
+      this.requests.delete(next.requestId);
+      this.changed(next.workspaceId);
     } else if (next.action !== 'merge') {
       this.tellDecided(next, `The owner approved: ${ACTION_TITLE[next.action]} ${subject(next)}.`, 'wmux records it but does not carry this act out yet.');
     }
@@ -1522,6 +1609,7 @@ export class ApprovalService {
       for (const r of stale) {
         this.closeCard(r);
         if (r.action === 'skill') this.skillDenied(r);
+        this.answerNativeTool(r, false);
       }
     }
   }
@@ -1544,6 +1632,7 @@ export class ApprovalService {
     const what = r.skill
       ? `${r.skill.update ? 'Update the skill' : 'Add the skill'} ${subject(r)}?`
       : r.ownerProfile ? OWNER_PROFILE_TITLE[r.ownerProfile.action]
+      : r.nativeTool ? 'Let Hermes run this command?'
       : `${ACTION_TITLE[r.action]} ${subject(r)}${r.headSha ? ` at ${r.headSha.slice(0, 7)}` : ''}?`;
     const subjectThread = r.prNumber !== undefined ? prThreadId(r.repoKey, r.prNumber) : r.issueNumber !== undefined ? issueThreadId(r.repoKey, r.issueNumber) : null;
     const lines = [

@@ -36,6 +36,7 @@ import { writeBotTokenHandoff, type BotTokenHandoff } from '../factory/botTokenH
 import type { BotBinding } from '../../shared/bot';
 import { COMMANDER_MODE_ARG } from '../../shared/commanderSurface';
 import { getWmuxDir } from '../../daemon/config';
+import { HERMES_MCP_MISSING_LEAD, HERMES_TOOLS_CHANGED_LEAD } from '../factory/engineError';
 
 // ── wire types (structural subset of ACP; validated defensively) ────────────
 
@@ -78,6 +79,61 @@ export interface AcpBrainAdapterDeps {
   /** Extra environment for the agent process (e.g. ELECTRON_RUN_AS_NODE for
    *  a node script run on the Electron binary). */
   spawnEnv?: Record<string, string>;
+  /** The Hermes preset (main/factory/hermesHost.ts). Absent: a generic ACP
+   *  agent, whose permission requests are refused. */
+  hermes?: AcpHermesPolicy;
+}
+
+/** What the Hermes preset changes in the adapter. Hermes runs each turn in a
+ *  gateway process the ACP child only views (killing the child does not stop
+ *  the turn), so a stop is a `session/cancel` that waits for the turn to
+ *  settle, and an unanswered permission request stays live until answered. */
+export interface AcpHermesPolicy {
+  /** Before each agent spawn: readiness, the settings read back and the
+   *  gateway check. `env` replaces the agent's whole environment. */
+  prepare(): Promise<{ ok: true; env: Record<string, string>; exe?: string } | { ok: false; message: string }>;
+  /** After session/new or session/load: an error that ends the turn, or null. */
+  sessionStarted(): string | null;
+  /** The owner's answer to the agent's permission request (an approval
+   *  card); false on deny, expiry or `signal` aborting. */
+  askOwner(req: { title: string; command: string }, signal: AbortSignal): Promise<boolean>;
+  /** Whether the bot may hold the tool `name`. */
+  toolAllowed(name: string): boolean;
+  /** Resolves true once the session's MCP child called main with `token`
+   *  after `since` (ms). */
+  mcpReady(token: string, since: number): Promise<boolean>;
+  /** A turn did not settle after a cancel: stop the gateway that runs it. */
+  unsettled(): Promise<void>;
+  /** The adapter is gone (unregister from quit). */
+  disposed?(adapter: AcpBrainAdapter): void;
+}
+
+/** How long a cancelled Hermes turn may take to settle before its gateway is stopped. */
+const HERMES_SETTLE_MS = 10_000;
+
+/** The tool name in a Hermes tool_call title (`<tool>: <preview>`, or the
+ *  bare name; Hermes acp_adapter/tools.py build_tool_title). Pure. */
+export function hermesToolName(title: unknown): string {
+  if (typeof title !== 'string') return '';
+  const i = title.indexOf(': ');
+  return (i >= 0 ? title.slice(0, i) : title).trim();
+}
+
+/** The tool names in Hermes's `/tools` answer ("Available tools (N):" then
+ *  "  <toolset>: a, b" lines), or null when it does not read so: no header,
+ *  or a name count other than N (a changed format reads as unknown). Pure. */
+export function parseHermesToolsList(text: string): string[] | null {
+  const lines = text.split('\n');
+  const head = lines.findIndex((l) => /^Available tools \(\d+\):/.test(l.trim()));
+  if (head < 0) return null;
+  const count = Number(/\((\d+)\)/.exec(lines[head])?.[1]);
+  const names: string[] = [];
+  for (const line of lines.slice(head + 1)) {
+    const m = /^\s+[^:]+:\s*(.+)$/.exec(line);
+    if (!m) continue;
+    for (const n of m[1].split(',')) if (n.trim()) names.push(n.trim());
+  }
+  return names.length > 0 && names.length === count ? names : null;
 }
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
@@ -133,6 +189,19 @@ export class AcpBrainAdapter implements BrainAdapter {
   private _startOptions: BrainStartOptions = {};
   private _initialized = false;
   private _disposed = false;
+  /** Hermes: the environment `prepare` gave the next spawn. */
+  private hermesEnv: Record<string, string> | null = null;
+  /** Hermes: the executable `prepare` verified, spawned instead of spawnSpec's. */
+  private hermesExe: string | null = null;
+  /** Hermes: the in-flight session/prompt, so a stop can wait for it. */
+  private promptInFlight: Promise<JsonRpcMessage> | null = null;
+  /** Hermes: the one permission request waiting for the owner. */
+  private pendingPermission: { id: number | string; rejectId: string | null; abort: AbortController } | null = null;
+  /** Hermes: a tool outside the allowlist started in this turn. */
+  private drift: string | null = null;
+  /** Hermes: sessions whose tools were checked after their first turn. */
+  private toolsChecked = new Set<string>();
+  private shutdownPromise: Promise<void> | null = null;
 
   constructor(deps: AcpBrainAdapterDeps) {
     this.deps = deps;
@@ -170,9 +239,10 @@ export class AcpBrainAdapter implements BrainAdapter {
           // post-kill communicate() deadlock (py-spy, 2026-07-17). A non-repo
           // data-dir cwd makes the workspace probe a no-op.
           cwd: this.sessionCwd(),
-          ...(this.deps.spawnEnv ? { env: { ...process.env, ...this.deps.spawnEnv } } : {}),
+          // Hermes: an allowlisted environment, never main's (hermesEngine.ts hermesEnv).
+          ...(this.hermesEnv ? { env: { ...this.hermesEnv } } : this.deps.spawnEnv ? { env: { ...process.env, ...this.deps.spawnEnv } } : {}),
         }));
-    const child = spawnFn(this.deps.spawnSpec.command, this.deps.spawnSpec.args);
+    const child = spawnFn(this.hermesExe ?? this.deps.spawnSpec.command, this.deps.spawnSpec.args);
     this.child = child;
     this._initialized = false;
     this._sessionAttached = false;
@@ -224,6 +294,8 @@ export class AcpBrainAdapter implements BrainAdapter {
       // killChildTree detached it, its stragglers are already handled.
       if (this.child !== child) return;
       this.child = null;
+      // Its permission request went with it: the card stops waiting.
+      this.dropPendingPermission();
       for (const [, entry] of this.pending) {
         clearTimeout(entry.timer);
         entry.resolve({ error: { message: 'ACP agent process exited' } });
@@ -296,7 +368,9 @@ export class AcpBrainAdapter implements BrainAdapter {
     // ride MCP, which does not pass through here — denying costs the brain
     // nothing it is supposed to have.
     if (msg.id !== undefined && msg.method !== undefined) {
-      if (msg.method === 'session/request_permission') {
+      if (msg.method === 'session/request_permission' && this.deps.hermes) {
+        this.onHermesPermission(msg.id, msg.params ?? {});
+      } else if (msg.method === 'session/request_permission') {
         const options = (msg.params?.options ?? []) as Array<Record<string, unknown>>;
         const reject = options.find((o) => o.kind === 'reject_once' || o.kind === 'reject_always');
         console.warn(
@@ -322,6 +396,70 @@ export class AcpBrainAdapter implements BrainAdapter {
     if (msg.method === 'session/update') this.onSessionUpdate(msg.params ?? {});
   }
 
+  /** A Hermes permission request. Under Hermes's gateway a cancelled or
+   *  dropped answer is no answer: the request stays live (and is shown again
+   *  to the next viewer) until Hermes's own timeout, so every request gets an
+   *  explicit reject unless the owner approves it on its card. Only command
+   *  and edit approvals reach the owner; Hermes's clarify questions and model
+   *  confirmations are rejected at once, as is a second request while one
+   *  waits. The owner's card cannot be enforced inside Hermes: another viewer
+   *  of the same Hermes home could answer the request first. */
+  private onHermesPermission(id: number | string, params: Record<string, unknown>): void {
+    const options = (Array.isArray(params.options) ? params.options : []) as Array<Record<string, unknown>>;
+    const optionId = (kind: string): string | null => {
+      const o = options.find((x) => x && x.kind === kind && typeof x.optionId === 'string');
+      return o ? (o.optionId as string) : null;
+    };
+    const rejectId = optionId('reject_once') ?? optionId('reject_always');
+    const reject = (): void => this.writeMessage({
+      jsonrpc: '2.0',
+      id,
+      result: rejectId ? { outcome: { outcome: 'selected', optionId: rejectId } } : { outcome: { outcome: 'cancelled' } },
+    });
+    const tc = (params.toolCall && typeof params.toolCall === 'object' ? params.toolCall : {}) as Record<string, unknown>;
+    const toolCallId = typeof tc.toolCallId === 'string' ? tc.toolCallId : '';
+    const kind = typeof tc.kind === 'string' ? tc.kind : '';
+    const asksOwner = toolCallId.startsWith('perm-check-') || kind === 'execute' || kind === 'edit';
+    if (!asksOwner || this.pendingPermission || this._disposed) {
+      reject();
+      return;
+    }
+    const allowId = optionId('allow_once');
+    const raw = (tc.rawInput && typeof tc.rawInput === 'object' ? tc.rawInput : {}) as Record<string, unknown>;
+    const title = typeof tc.title === 'string' ? tc.title : '';
+    const command = typeof raw.command === 'string' && raw.command ? raw.command : title;
+    const abort = new AbortController();
+    const pending = { id, rejectId, abort };
+    this.pendingPermission = pending;
+    const hermes = this.deps.hermes as AcpHermesPolicy;
+    void hermes.askOwner({ title, command }, abort.signal).catch(() => false).then((approved) => {
+      if (this.pendingPermission !== pending) return; // answered (rejected) by a stop already
+      this.pendingPermission = null;
+      if (approved && allowId) this.writeMessage({ jsonrpc: '2.0', id, result: { outcome: { outcome: 'selected', optionId: allowId } } });
+      else reject();
+    });
+  }
+
+  /** Forget the waiting permission request (its agent is gone): the card is withdrawn. */
+  private dropPendingPermission(): void {
+    const p = this.pendingPermission;
+    this.pendingPermission = null;
+    p?.abort.abort();
+  }
+
+  /** Reject the permission request waiting for the owner, if any. */
+  private rejectPendingPermission(): void {
+    const p = this.pendingPermission;
+    if (!p) return;
+    this.pendingPermission = null;
+    p.abort.abort();
+    this.writeMessage({
+      jsonrpc: '2.0',
+      id: p.id,
+      result: p.rejectId ? { outcome: { outcome: 'selected', optionId: p.rejectId } } : { outcome: { outcome: 'cancelled' } },
+    });
+  }
+
   private onSessionUpdate(params: Record<string, unknown>): void {
     const sink = this.turnSink;
     if (!sink) return; // update outside a turn — nothing to render into
@@ -335,6 +473,17 @@ export class AcpBrainAdapter implements BrainAdapter {
       }
       case 'tool_call': {
         const toolCallId = typeof update.toolCallId === 'string' ? update.toolCallId : undefined;
+        // Hermes: a started tool outside the allowlist ends the turn. A
+        // permission card's own tool_call (`perm-check-*`) is not a tool.
+        if (this.deps.hermes && !(toolCallId ?? '').startsWith('perm-check-')) {
+          // A tool call without a title cannot be checked: it counts as drift.
+          const tool = hermesToolName(update.title) || '(untitled tool)';
+          if (!this.deps.hermes.toolAllowed(tool) && !this.drift) {
+            this.drift = tool;
+            console.warn(`[acp-brain:${this.deps.spawnSpec.command}] tool outside the allowlist started: ${tool.slice(0, 80)}`);
+            this.interrupt();
+          }
+        }
         const name =
           (typeof update.title === 'string' && update.title) ||
           (typeof update.kind === 'string' && update.kind) ||
@@ -407,7 +556,9 @@ export class AcpBrainAdapter implements BrainAdapter {
       : [];
     if (this.deps.bot) {
       // One hand-off per MCP child: every session/new or session/load starts one.
-      const handoff = writeBotTokenHandoff(this.deps.bot.binding, this._commanderToken, { dir: this.deps.bot.wmuxDir });
+      // Hermes starts this command twice per session (discovery, then its
+      // turns), so the file stays until dispose.
+      const handoff = writeBotTokenHandoff(this.deps.bot.binding, this._commanderToken, { dir: this.deps.bot.wmuxDir, keep: !!this.deps.hermes });
       this.handoffs.push(handoff);
       return [
         {
@@ -436,6 +587,13 @@ export class AcpBrainAdapter implements BrainAdapter {
   }
 
   private async ensureSession(): Promise<string | { error: string }> {
+    const hermes = this.deps.hermes;
+    if (hermes && !(this.child && this.child.exitCode === null && !this.child.killed)) {
+      const prepared = await hermes.prepare();
+      if (!prepared.ok) return { error: prepared.message };
+      this.hermesEnv = prepared.env;
+      this.hermesExe = prepared.exe ?? null;
+    }
     this.ensureChild();
     if (!this._initialized) {
       const init = await this.request('initialize', {
@@ -452,6 +610,7 @@ export class AcpBrainAdapter implements BrainAdapter {
       // (same soft-resume contract as ClaudeSdkAdapter P3a). Some agents
       // report an unknown id as a successful empty load — that case is
       // caught at prompt time via _resumeUnvalidated (send()'s retry).
+      const since = Date.now();
       const loaded = await this.request('session/load', {
         sessionId: this._sessionId,
         cwd: this.sessionCwd(),
@@ -459,6 +618,8 @@ export class AcpBrainAdapter implements BrainAdapter {
       });
       if (!loaded.error) {
         this._sessionAttached = true;
+        const refused = await this.hermesSessionCheck(since);
+        if (refused) return { error: refused };
         return this._sessionId;
       }
       this._sessionId = null;
@@ -473,6 +634,7 @@ export class AcpBrainAdapter implements BrainAdapter {
     // probe in milliseconds, closing the race window — and the brain's
     // workspace is the wmux FLEET, not whatever directory main happens to
     // run from.
+    const since = Date.now();
     const created = await this.request('session/new', {
       cwd: this.sessionCwd(),
       mcpServers: this.mcpServersParam(),
@@ -484,6 +646,8 @@ export class AcpBrainAdapter implements BrainAdapter {
     this._sessionId = sid;
     this._sessionAttached = true;
     this._resumeUnvalidated = false;
+    const refused = await this.hermesSessionCheck(since);
+    if (refused) return { error: refused };
     // Windows spawn-race guard (live-debug finding, py-spy 2026-07-17): at
     // session start the agent boots its own MCP server subprocesses; a prompt
     // arriving IMMEDIATELY makes the agent's first-turn context gathering
@@ -498,6 +662,47 @@ export class AcpBrainAdapter implements BrainAdapter {
     const settle = this.deps.newSessionSettleMs ?? NEW_SESSION_SETTLE_MS;
     if (settle > 0) await new Promise((r) => setTimeout(r, settle));
     return sid;
+  }
+
+  /** Hermes, after session/new or session/load: the gateway check, then the
+   *  session's MCP child must call main with this adapter's token (Hermes
+   *  starts the session's servers while it opens the session; without its
+   *  `mcp` extra it skips them and the bot would run without its tools). */
+  private async hermesSessionCheck(since: number): Promise<string | null> {
+    const hermes = this.deps.hermes;
+    if (!hermes || !this.deps.mcpBundlePath) return null;
+    const refused = hermes.sessionStarted();
+    if (refused) {
+      this._sessionAttached = false;
+      return refused;
+    }
+    if (await hermes.mcpReady(this._commanderToken, since)) return null;
+    this._sessionAttached = false;
+    return `${HERMES_MCP_MISSING_LEAD} its session started, but the wmux tools never connected (if Hermes was installed without its MCP support, run \`hermes pm install --extra mcp\`)`;
+  }
+
+  /** Hermes, after a session's first completed turn: the tools it really
+   *  holds (`/tools`, answered by Hermes without a model turn) must all be
+   *  allowed. Null when they are; else the error that ends the bot's turn. */
+  private async hermesToolsCheck(sessionId: string): Promise<string | null> {
+    const hermes = this.deps.hermes;
+    if (!hermes || this.toolsChecked.has(sessionId)) return null;
+    let text = '';
+    this.turnSink = (ev) => {
+      if (ev.type === 'text-delta') text += ev.text;
+    };
+    try {
+      const r = await this.request('session/prompt', { sessionId, prompt: [{ type: 'text', text: '/tools' }] });
+      if (r.error) return `${HERMES_TOOLS_CHANGED_LEAD} wmux could not read the tools of this Hermes session (${r.error.message ?? 'no answer'})`;
+    } finally {
+      this.turnSink = null;
+    }
+    const names = parseHermesToolsList(text);
+    if (!names) return `${HERMES_TOOLS_CHANGED_LEAD} wmux could not read the tools of this Hermes session`;
+    const outside = names.filter((n) => !hermes.toolAllowed(n));
+    if (outside.length > 0) return `${HERMES_TOOLS_CHANGED_LEAD} ${outside.slice(0, 5).join(', ')}`;
+    this.toolsChecked.add(sessionId);
+    return null;
   }
 
   // ── the turn ────────────────────────────────────────────────────────────
@@ -544,6 +749,7 @@ export class AcpBrainAdapter implements BrainAdapter {
       const queue: BrainEvent[] = [];
       let wake: (() => void) | null = null;
       let producedContent = false;
+      this.drift = null;
       this.turnSink = (ev) => {
         queue.push(ev);
         wake?.();
@@ -554,6 +760,10 @@ export class AcpBrainAdapter implements BrainAdapter {
         PROMPT_TIMEOUT_MS,
       ).finally(() => {
         wake?.();
+      });
+      this.promptInFlight = promptDone;
+      void promptDone.finally(() => {
+        if (this.promptInFlight === promptDone) this.promptInFlight = null;
       });
       let settled = false;
       void promptDone.then(() => {
@@ -580,6 +790,15 @@ export class AcpBrainAdapter implements BrainAdapter {
           producedContent = true;
           yield queue.shift() as BrainEvent;
         }
+        if (this.drift) {
+          // A tool outside the allowlist started: the turn was cancelled;
+          // the next turn starts on a fresh agent process.
+          const tool = this.drift;
+          this.drift = null;
+          this.killChildTree();
+          yield { type: 'error', message: `${HERMES_TOOLS_CHANGED_LEAD} ${tool}` };
+          return;
+        }
         if (response.error) {
           const message = response.error.message ?? 'ACP prompt failed';
           if (resumingUnvalidated && !producedContent && attempt === 0) {
@@ -595,8 +814,15 @@ export class AcpBrainAdapter implements BrainAdapter {
           // burning model budget as a zombie — the next turn respawns
           // cleanly (GLM review).
           if (/timed out/i.test(message)) {
-            this.interrupt();
-            this.killChildTree();
+            if (this.deps.hermes) {
+              // The timed-out request can no longer show the turn settling:
+              // cancel it, then stop the gateway that may still run it.
+              await this.cancelAndSettle();
+              await this.deps.hermes.unsettled().catch(() => undefined);
+            } else {
+              this.interrupt();
+              this.killChildTree();
+            }
           }
           yield { type: 'error', message };
           return;
@@ -610,6 +836,14 @@ export class AcpBrainAdapter implements BrainAdapter {
           fleetContext: undefined,
         };
         const stopReason = response.result?.stopReason;
+        if (stopReason !== 'cancelled') {
+          const toolsRefused = await this.hermesToolsCheck(session);
+          if (toolsRefused) {
+            this.killChildTree();
+            yield { type: 'error', message: toolsRefused };
+            return;
+          }
+        }
         if (stopReason === 'refusal') {
           yield { type: 'error', message: 'the brain refused the turn' };
           return;
@@ -638,6 +872,8 @@ export class AcpBrainAdapter implements BrainAdapter {
    *  probes) alive — exactly the population whose leaked pipe handles caused
    *  the dogfood deadlock — so use a tree kill there (GLM review). */
   private killChildTree(): void {
+    // A request waiting on the owner is answered before its agent goes.
+    if (this.deps.hermes) this.rejectPendingPermission();
     const child = this.child;
     this.child = null;
     if (!child || child.exitCode !== null) return;
@@ -664,6 +900,43 @@ export class AcpBrainAdapter implements BrainAdapter {
         params: { sessionId: this._sessionId },
       });
     }
+    // Hermes: the gateway owns the turn. A permission request waiting for the
+    // owner is rejected (a cancelled turn would leave it live), and a turn
+    // that does not settle has its gateway stopped.
+    if (this.deps.hermes) {
+      this.rejectPendingPermission();
+      const inFlight = this.promptInFlight;
+      if (inFlight) void this.watchSettle(inFlight);
+    }
+  }
+
+  /** Hermes: wait for a cancelled turn to settle; past HERMES_SETTLE_MS kill
+   *  the agent and stop the gateway that runs the turn. */
+  private async watchSettle(inFlight: Promise<JsonRpcMessage>): Promise<void> {
+    const settled = await Promise.race([inFlight.then(() => true), new Promise<boolean>((r) => setTimeout(() => r(false), HERMES_SETTLE_MS))]);
+    if (settled) return;
+    console.warn(`[acp-brain:${this.deps.spawnSpec.command}] a cancelled turn did not settle in ${HERMES_SETTLE_MS} ms; stopping its gateway`);
+    this.killChildTree();
+    // The detached child's exit no longer fails its requests: end the turn now.
+    for (const [, entry] of this.pending) {
+      clearTimeout(entry.timer);
+      entry.resolve({ error: { message: 'the cancelled turn did not settle' } });
+    }
+    this.pending.clear();
+    try {
+      await this.deps.hermes?.unsettled();
+    } catch {
+      /* logged by the host */
+    }
+  }
+
+  /** Hermes: cancel the running turn, wait for it to settle, then kill the agent. */
+  private async cancelAndSettle(): Promise<void> {
+    const inFlight = this.promptInFlight;
+    if (this._sessionId) this.writeMessage({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId: this._sessionId } });
+    this.rejectPendingPermission();
+    if (inFlight) await this.watchSettle(inFlight);
+    this.killChildTree();
   }
 
   dispose(): void {
@@ -673,11 +946,52 @@ export class AcpBrainAdapter implements BrainAdapter {
     // fails closed at the router before the process winds down.
     revokeCommanderToken(this._commanderToken);
     for (const h of this.handoffs.splice(0)) h.dispose();
+    if (this.deps.hermes) {
+      // The turn lives in Hermes's gateway: cancel it and let it settle
+      // before the agent goes (shutdown()). Requests still waiting on the
+      // agent end now.
+      void this.shutdown();
+      return;
+    }
     for (const [, entry] of this.pending) {
       clearTimeout(entry.timer);
       entry.resolve({ error: { message: 'adapter disposed' } });
     }
     this.pending.clear();
     this.killChildTree();
+  }
+
+  /** The bot this adapter runs, or null (a workspace commander). */
+  botId(): string | null {
+    return this.deps.bot?.binding.botId ?? null;
+  }
+
+  /** Whether the agent process is running (a Hermes viewer attached to its
+   *  gateway). */
+  agentLive(): boolean {
+    return !!this.child && this.child.exitCode === null && !this.child.killed;
+  }
+
+  /** Hermes: dispose and wait until the turn settled and the agent is gone
+   *  (app quit awaits it). Resolves at once for a generic agent. */
+  shutdown(): Promise<void> {
+    if (!this._disposed) this.dispose();
+    if (!this.deps.hermes) return Promise.resolve();
+    if (!this.shutdownPromise) {
+      this.shutdownPromise = (async () => {
+        try {
+          await this.cancelAndSettle();
+        } finally {
+          for (const [, entry] of this.pending) {
+            clearTimeout(entry.timer);
+            entry.resolve({ error: { message: 'adapter disposed' } });
+          }
+          this.pending.clear();
+          this.killChildTree();
+          this.deps.hermes?.disposed?.(this);
+        }
+      })();
+    }
+    return this.shutdownPromise;
   }
 }

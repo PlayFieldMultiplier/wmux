@@ -13,13 +13,14 @@ import { botActionsFor } from '../Room/BotChips';
 import { formatNoticeTime } from '../Room/roomFormat';
 import { botBudgetView, type BotBlocker, type BotTodayLine } from './botBudgetView';
 import { bridgeEnginePort } from './botsEngine';
+import { bridgeHermesPort, hermesReadinessView } from './botsHermes';
 import { showWorkspaces } from '../../utils/showWorkspaces';
 import { CLAUDE_CODE_INSTALL_URL } from '../../../shared/factoryEngine';
 import { openFactorySettings } from './botsAddBot';
 
 type T = (key: string, vars?: Record<string, string | number>) => string;
 
-type EngineErrorCode = 'not_installed' | 'not_logged_in' | 'mcp_missing' | 'acp_test_only' | 'unusable' | 'api_key_missing' | 'subscription_refused' | 'other';
+type EngineErrorCode = 'not_installed' | 'not_logged_in' | 'mcp_missing' | 'acp_test_only' | 'unusable' | 'api_key_missing' | 'subscription_refused' | 'hermes_not_ready' | 'hermes_mcp_missing' | 'hermes_tools_changed' | 'other';
 
 /** "2h 10m", "6h", "45m", "0m". */
 export function workerTimeText(min: number, t: T): string {
@@ -85,6 +86,9 @@ const ENGINE_ERROR_KEYS: Record<EngineErrorCode, string> = {
   unusable: 'botsPage.engineError.unusable',
   api_key_missing: 'settings.factory.claudeAuth.engineError.apiKeyMissing',
   subscription_refused: 'settings.factory.claudeAuth.engineError.subscriptionRefused',
+  hermes_not_ready: 'botsPage.engineError.hermesNotReady',
+  hermes_mcp_missing: 'botsPage.engineError.hermesMcpMissing',
+  hermes_tools_changed: 'botsPage.engineError.hermesToolsChanged',
   other: 'botsPage.engineError.other',
 };
 
@@ -138,8 +142,20 @@ function EngineErrorCard({
         openFactorySettings();
         return;
       }
-      // mcp_missing / unusable / other / acp: resume after the owner fixed it,
-      // or just open details — Resume is the recovery once the cause is gone.
+      // Hermes not ready: ask again first, and resume only once it is (else
+      // say what still stands in the way).
+      const ask = bridgeHermesPort().readiness;
+      if ((code === 'hermes_not_ready' || code === 'hermes_mcp_missing') && ask) {
+        const r = await ask({ fresh: true });
+        if (!r.ready) {
+          const view = hermesReadinessView(r);
+          useStore.getState().pushToast({ message: t(view.key, view.vars), level: 'warn' });
+          return;
+        }
+      }
+      // mcp_missing / unusable / other / acp / hermes_tools_changed: resume
+      // after the owner fixed it, or just open details — Resume is the
+      // recovery once the cause is gone.
       if (canResume) onResume();
     } catch (err) {
       useStore.getState().pushToast({

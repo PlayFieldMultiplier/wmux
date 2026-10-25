@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
-import { AcpBrainAdapter } from '../AcpBrainAdapter';
+import { AcpBrainAdapter, type AcpHermesPolicy } from '../AcpBrainAdapter';
+import { HERMES_MCP_MISSING_LEAD, HERMES_TOOLS_CHANGED_LEAD } from '../../factory/engineError';
 import { commanderTokenWorkspace } from '../commanderTrust';
 import type { BrainEvent } from '../BrainAdapter';
 
@@ -374,5 +375,228 @@ describe('AcpBrainAdapter', () => {
     adapter.dispose();
     const events = await collect(adapter.send('go'));
     expect(events).toEqual([{ type: 'error', message: 'commander session disposed' }]);
+  });
+});
+
+// ── the Hermes preset ───────────────────────────────────────────────────────
+
+const HERMES_TOOLS_OK = 'Available tools (2):\n  web: web_search\n  mcp-wmux: mcp__editor_wmux_ab12__room_post\n';
+
+/** A Hermes-like agent: `/tools` answers from `tools`; any other prompt runs
+ *  `onPrompt`, and a prompt it holds ends `cancelled` on session/cancel.
+ *  `onReply` sees the adapter's answers to the agent's own requests. */
+function hermesAgent(script: {
+  onPrompt?: (c: FakeChild, promptId: number, sessionId: unknown) => 'hold' | void;
+  onReply?: (c: FakeChild, msg: Record<string, unknown>) => void;
+  tools?: string;
+}): { spawnFn: () => ChildProcessWithoutNullStreams; children: FakeChild[]; prompts: () => number } {
+  const children: FakeChild[] = [];
+  let held: number | null = null;
+  let prompts = 0;
+  const spawnFn = () => {
+    const child = new FakeChild((c, msg) => {
+      const id = msg.id as number;
+      if (msg.method === undefined) {
+        script.onReply?.(c, msg);
+        return;
+      }
+      switch (msg.method) {
+        case 'initialize':
+          c.emitLine({ jsonrpc: '2.0', id, result: { protocolVersion: 1 } });
+          return;
+        case 'session/new':
+          c.emitLine({ jsonrpc: '2.0', id, result: { sessionId: 'h-1' } });
+          return;
+        case 'session/load':
+          c.emitLine({ jsonrpc: '2.0', id, result: {} });
+          return;
+        case 'session/cancel':
+          if (held !== null) c.emitLine({ jsonrpc: '2.0', id: held, result: { stopReason: 'cancelled' } });
+          held = null;
+          return;
+        case 'session/prompt': {
+          const params = msg.params as Record<string, unknown>;
+          const text = ((params.prompt as Array<Record<string, unknown>>)[0]?.text ?? '') as string;
+          if (text === '/tools') {
+            const update = { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: script.tools ?? HERMES_TOOLS_OK } };
+            c.emitLine({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: params.sessionId, update } });
+            c.emitLine({ jsonrpc: '2.0', id, result: { stopReason: 'end_turn' } });
+            return;
+          }
+          prompts++;
+          if (script.onPrompt?.(c, id, params.sessionId) === 'hold') held = id;
+          else if (!script.onPrompt) c.emitLine({ jsonrpc: '2.0', id, result: { stopReason: 'end_turn' } });
+          return;
+        }
+      }
+    });
+    children.push(child);
+    return child as unknown as ChildProcessWithoutNullStreams;
+  };
+  return { spawnFn, children, prompts: () => prompts };
+}
+
+function hermesPolicy(over: Partial<AcpHermesPolicy> = {}) {
+  const asks: Array<{ req: { title: string; command: string }; signal: AbortSignal; answer: (ok: boolean) => void }> = [];
+  const policy: AcpHermesPolicy = {
+    prepare: async () => ({ ok: true, env: { HERMES_HOME: '/r' } }),
+    sessionStarted: () => null,
+    askOwner: (req, signal) => new Promise<boolean>((answer) => {
+      asks.push({ req, signal, answer });
+    }),
+    toolAllowed: (n) => n === 'web_search' || n.startsWith('mcp__editor_wmux_'),
+    mcpReady: async () => true,
+    unsettled: vi.fn(async () => undefined),
+    ...over,
+  };
+  return { policy, asks };
+}
+
+const PERM_OPTIONS = [
+  { optionId: 'allow_once', kind: 'allow_once' },
+  { optionId: 'allow_always', kind: 'allow_always' },
+  { optionId: 'deny', kind: 'reject_once' },
+];
+const permRequest = (id: string, toolCallId: string, kind: string, command?: string) => ({
+  jsonrpc: '2.0',
+  id,
+  method: 'session/request_permission',
+  params: { sessionId: 'h-1', options: PERM_OPTIONS, toolCall: { toolCallId, kind, title: command ?? toolCallId, rawInput: command ? { command } : {} } },
+});
+const answerOf = (child: FakeChild, id: string) =>
+  (child.sent.find((s) => s.msg.id === id && s.msg.method === undefined)?.msg.result as Record<string, unknown> | undefined)?.outcome;
+
+describe('AcpBrainAdapter (Hermes preset)', () => {
+  it('cards only command approvals: clarify, model confirmation and a second request are rejected at once; approve answers allow_once', async () => {
+    const { policy, asks } = hermesPolicy();
+    let promptId = 0;
+    const agent = hermesAgent({
+      onPrompt: (c, id) => {
+        promptId = id;
+        c.emitLine(permRequest('r-clarify', 'clarify-1', 'other'));
+        c.emitLine(permRequest('r-model', 'model-confirm-1', 'other'));
+        c.emitLine(permRequest('r-cmd', 'perm-check-1', 'execute', 'rm -rf build'));
+        c.emitLine(permRequest('r-second', 'perm-check-2', 'execute', 'ls'));
+        return 'hold';
+      },
+      onReply: (c, msg) => {
+        if (msg.id === 'r-cmd') c.emitLine({ jsonrpc: '2.0', id: promptId, result: { stopReason: 'end_turn' } });
+      },
+    });
+    const adapter = new AcpBrainAdapter({ spawnSpec: SPEC, newSessionSettleMs: 0, workspaceId: 'ws-1', mcpBundlePath: null, spawnFn: agent.spawnFn, hermes: policy });
+    adapter.start({});
+    const turn = collect(adapter.send('go'));
+    await vi.waitFor(() => expect(asks).toHaveLength(1), { timeout: 5_000 });
+    const child = agent.children[0];
+    for (const id of ['r-clarify', 'r-model', 'r-second']) expect(answerOf(child, id)).toEqual({ outcome: 'selected', optionId: 'deny' });
+    expect(answerOf(child, 'r-cmd')).toBeUndefined();
+    expect(asks[0].req).toEqual({ title: 'rm -rf build', command: 'rm -rf build' });
+    asks[0].answer(true);
+    const events = await turn;
+    expect(answerOf(child, 'r-cmd')).toEqual({ outcome: 'selected', optionId: 'allow_once' });
+    expect(events.at(-1)?.type).toBe('turn-end');
+    adapter.dispose();
+  });
+
+  it('a stop rejects the waiting request, cancels the turn and lets it settle; dispose rejects and adds no prompt', async () => {
+    const { policy, asks } = hermesPolicy();
+    const agent = hermesAgent({
+      onPrompt: (c) => {
+        c.emitLine(permRequest('r-cmd', 'perm-check-1', 'execute', 'make'));
+        return 'hold';
+      },
+    });
+    const adapter = new AcpBrainAdapter({ spawnSpec: SPEC, newSessionSettleMs: 0, workspaceId: 'ws-1', mcpBundlePath: null, spawnFn: agent.spawnFn, hermes: policy });
+    adapter.start({});
+    const turn = collect(adapter.send('go'));
+    await vi.waitFor(() => expect(asks).toHaveLength(1), { timeout: 5_000 });
+    adapter.interrupt();
+    const child = agent.children[0];
+    expect(answerOf(child, 'r-cmd')).toEqual({ outcome: 'selected', optionId: 'deny' });
+    expect(asks[0].signal.aborted).toBe(true);
+    expect(child.sent.some((s) => s.msg.method === 'session/cancel')).toBe(true);
+    await turn;
+    // The cancelled turn ran no /tools check and no other prompt.
+    expect(child.sent.filter((s) => s.msg.method === 'session/prompt')).toHaveLength(1);
+
+    // Dispose while a request waits: rejected, the turn settles, the agent goes.
+    const turn2 = collect(adapter.send('again'));
+    await vi.waitFor(() => expect(asks).toHaveLength(2), { timeout: 5_000 });
+    await adapter.shutdown();
+    expect(answerOf(child, 'r-cmd')).toEqual({ outcome: 'selected', optionId: 'deny' });
+    expect(child.sent.filter((s) => s.msg.id === 'r-cmd' && s.msg.method === undefined)).toHaveLength(2);
+    expect(child.killed).toBe(true);
+    expect(policy.unsettled).not.toHaveBeenCalled();
+    await turn2;
+    expect(agent.prompts()).toBe(2);
+  });
+
+  it('a tool outside the allowlist ends the turn, as does one /tools names after the first turn', async () => {
+    const drift = hermesAgent({
+      onPrompt: (c, id, sessionId) => {
+        c.emitLine({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'tc-1', title: 'terminal: ls -la' } } });
+        return 'hold';
+      },
+    });
+    const a1 = new AcpBrainAdapter({ spawnSpec: SPEC, newSessionSettleMs: 0, workspaceId: 'ws-1', mcpBundlePath: null, spawnFn: drift.spawnFn, hermes: hermesPolicy().policy });
+    a1.start({});
+    const e1 = await collect(a1.send('go'));
+    expect(e1.at(-1)).toEqual({ type: 'error', message: `${HERMES_TOOLS_CHANGED_LEAD} terminal` });
+    expect(drift.children[0].sent.some((s) => s.msg.method === 'session/cancel')).toBe(true);
+    expect(drift.children[0].killed).toBe(true);
+    a1.dispose();
+
+    const listed = hermesAgent({ tools: 'Available tools (3):\n  web: web_search\n  terminal: terminal, process\n' });
+    const a2 = new AcpBrainAdapter({ spawnSpec: SPEC, newSessionSettleMs: 0, workspaceId: 'ws-1', mcpBundlePath: null, spawnFn: listed.spawnFn, hermes: hermesPolicy().policy });
+    a2.start({});
+    const e2 = await collect(a2.send('go'));
+    expect(e2.at(-1)).toEqual({ type: 'error', message: `${HERMES_TOOLS_CHANGED_LEAD} terminal, process` });
+    a2.dispose();
+
+    // A /tools answer whose names do not add up to its count reads as unknown: refused.
+    const odd = hermesAgent({ tools: 'Available tools (4):\n  web: web_search\n' });
+    const a4 = new AcpBrainAdapter({ spawnSpec: SPEC, newSessionSettleMs: 0, workspaceId: 'ws-1', mcpBundlePath: null, spawnFn: odd.spawnFn, hermes: hermesPolicy().policy });
+    a4.start({});
+    const e4 = await collect(a4.send('go'));
+    expect(e4.at(-1)).toEqual({ type: 'error', message: `${HERMES_TOOLS_CHANGED_LEAD} wmux could not read the tools of this Hermes session` });
+    a4.dispose();
+  });
+
+  it('a session whose wmux tools never connect, or a Hermes that is not ready, gets no prompt', async () => {
+    const agent = hermesAgent({});
+    const a1 = new AcpBrainAdapter({
+      spawnSpec: SPEC, newSessionSettleMs: 0, workspaceId: 'ws-1', mcpBundlePath: '/fake/mcp.js', spawnFn: agent.spawnFn,
+      hermes: hermesPolicy({ mcpReady: async () => false }).policy,
+    });
+    a1.start({});
+    const e1 = await collect(a1.send('go'));
+    expect(e1.at(-1)?.type).toBe('error');
+    expect((e1.at(-1) as { message: string }).message.startsWith(HERMES_MCP_MISSING_LEAD)).toBe(true);
+    expect(agent.prompts()).toBe(0);
+    a1.dispose();
+
+    // A refused session is checked again on the next turn, not reused.
+    const refusals = ['its gateway runs messaging platforms', null];
+    const sessionStarted = vi.fn(() => refusals.shift() ?? null);
+    const a3 = new AcpBrainAdapter({
+      spawnSpec: SPEC, newSessionSettleMs: 0, workspaceId: 'ws-1', mcpBundlePath: '/fake/mcp.js', spawnFn: agent.spawnFn,
+      hermes: hermesPolicy({ sessionStarted }).policy,
+    });
+    a3.start({});
+    expect((await collect(a3.send('go'))).at(-1)).toEqual({ type: 'error', message: 'its gateway runs messaging platforms' });
+    expect(agent.prompts()).toBe(0);
+    expect((await collect(a3.send('go'))).at(-1)?.type).toBe('turn-end');
+    expect(sessionStarted).toHaveBeenCalledTimes(2);
+    a3.dispose();
+
+    const spawnFn = vi.fn(agent.spawnFn);
+    const a2 = new AcpBrainAdapter({
+      spawnSpec: SPEC, newSessionSettleMs: 0, workspaceId: 'ws-1', mcpBundlePath: null, spawnFn,
+      hermes: hermesPolicy({ prepare: async () => ({ ok: false, message: 'not ready' }) }).policy,
+    });
+    a2.start({});
+    expect(await collect(a2.send('go'))).toEqual([{ type: 'error', message: 'not ready' }]);
+    expect(spawnFn).not.toHaveBeenCalled();
+    a2.dispose();
   });
 });
