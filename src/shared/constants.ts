@@ -486,6 +486,7 @@ export const IPC = {
   // factoryStop.ts): turns, gates, workers; main window only.
   FACTORY_STOP_ALL: 'factory:stop:all',
   FACTORY_STOP_BOT: 'factory:stop:bot',
+  FACTORY_BOT_NEW_CONVERSATION: 'factory:bot:newConversation',
   // Stop one bot task's worker (factoryStop.ts stopFactoryTask): its row
   // cancelled, its gate and worker stopped; main window only.
   FACTORY_STOP_TASK: 'factory:stop:task',

@@ -121,7 +121,7 @@ export function gatewayShapeRefusal(input: {
   const others = input.all.filter((c) => !input.connectors.some((g) => g.id === c.id));
   if (others.length > 0) return `a task with a signed-in connection carries only signed-in connections; start ${others.map((c) => c.name).join(', ')} in a task of its own`;
   if (input.wakeTainted) return 'this turn started from outside text (or as a researcher), and such a turn cannot use a signed-in connection; ask the owner to start it from their own message';
-  if (input.conversationTainted) return 'this conversation has taken in outside text, and a signed-in connection is used only from a conversation that has not; ask the owner to start it in a new conversation';
+  if (input.conversationTainted) return 'this conversation has taken in outside text, and a signed-in connection is used only from a conversation that has not; ask the owner to start a new conversation with you (New conversation, on your profile in the Bots page) and to start it from there';
   if (input.preset !== 'research') return 'a task with a signed-in connection runs only with preset "research" (no repository, no push)';
   for (const c of input.connectors) {
     if (c.tools.mode !== 'listed' || c.tools.allowed.length === 0) {

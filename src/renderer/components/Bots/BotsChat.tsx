@@ -1872,14 +1872,18 @@ function ProfileLine({ label, value }: { label: string; value: React.ReactNode }
 
 /** Pause (park the bot: it takes no new turn until Resume; reversible, so
  *  no confirm) beside Stop (the bot's turn and its workers, after an inline
- *  confirm; the result is a toast). A paused bot shows Resume in Today. */
+ *  confirm; the result is a toast) and New conversation (the bot's next
+ *  wake starts clean, after an inline confirm; refused mid-turn). A paused
+ *  bot shows Resume in Today. */
 function StopBot({ row, port, act, t }: { row: FactoryBotRow; port: BotsStopPort; act?: FactoryBotPort['act']; t: T }) {
   const [confirming, setConfirming] = useState(false);
+  const [confirmingNew, setConfirmingNew] = useState(false);
   const [busy, setBusy] = useState(false);
   const [pausing, setPausing] = useState(false);
   const stopBot = port.stopBot;
+  const newConversation = port.newConversation;
   const canPause = !!act && row.bot.enabled && botActionsFor(row).park;
-  if (!stopBot && !canPause) return null;
+  if (!stopBot && !canPause && !newConversation) return null;
   const run = async () => {
     if (!stopBot) return;
     setBusy(true);
@@ -1889,6 +1893,24 @@ function StopBot({ row, port, act, t }: { row: FactoryBotRow; port: BotsStopPort
       if (r.ok) setConfirming(false);
     } catch (err) {
       useStore.getState().pushToast({ message: `${t('botsPage.stop.failed')} ${err instanceof Error ? err.message : String(err)}`, level: 'error' });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const startNew = async () => {
+    if (!newConversation) return;
+    setBusy(true);
+    try {
+      const r = await newConversation(row.bot.id);
+      const message = r.ok
+        ? t('botsPage.newConversation.done', { name: row.bot.name })
+        : r.code === 'running'
+          ? t('botsPage.newConversation.running', { name: row.bot.name })
+          : t('room.bot.actionFailed', { name: row.bot.name, reason: r.message ?? '' });
+      useStore.getState().pushToast({ message, level: r.ok ? 'info' : 'error' });
+      if (r.ok) setConfirmingNew(false);
+    } catch (err) {
+      useStore.getState().pushToast({ message: t('room.bot.actionFailed', { name: row.bot.name, reason: err instanceof Error ? err.message : String(err) }), level: 'error' });
     } finally {
       setBusy(false);
     }
@@ -1917,9 +1939,20 @@ function StopBot({ row, port, act, t }: { row: FactoryBotRow; port: BotsStopPort
           onCancel={() => setConfirming(false)}
           testId="bots-stop-bot"
         />
+      ) : confirmingNew && newConversation ? (
+        <InlineConfirm
+          text={t('botsPage.newConversation.confirm', { name: row.bot.name })}
+          confirmLabel={t('botsPage.newConversation')}
+          cancelLabel={t('room.hq.cancel')}
+          busy={busy}
+          onConfirm={() => void startNew()}
+          onCancel={() => setConfirmingNew(false)}
+          testId="bots-new-conversation"
+        />
       ) : (
         <div className="flex items-center gap-2">
           {canPause && <Button size="sm" variant="secondary" data-testid="bots-pause-bot" disabled={pausing} onClick={() => void pause()}>{t('botsPage.pause.bot')}</Button>}
+          {newConversation && <Button size="sm" variant="secondary" data-testid="bots-new-conversation" onClick={() => setConfirmingNew(true)}>{t('botsPage.newConversation')}</Button>}
           {stopBot && <Button size="sm" variant="destructive" data-testid="bots-stop-bot" onClick={() => setConfirming(true)}>{t('botsPage.stop.bot')}</Button>}
         </div>
       )}

@@ -41,6 +41,9 @@
 //         // gates, stop every bot worker (optional: without it there is no stop)
 //     stopBot(botId: string): Promise<FactoryStopResult>
 //         // IPC.FACTORY_STOP_BOT: the same for one bot (optional)
+//     newConversation(botId: string): Promise<{ ok: boolean; code?: string; message?: string }>
+//         // IPC.FACTORY_BOT_NEW_CONVERSATION: the bot's next wake starts a
+//         // clean conversation (optional)
 //     stopTask(taskId: string): Promise<FactoryStopResult>
 //         // IPC.FACTORY_STOP_TASK: one bot task's worker, its task
 //         // cancelled (optional)

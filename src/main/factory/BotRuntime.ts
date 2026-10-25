@@ -456,7 +456,7 @@ export function __resetBotRuntimePortsForTesting(): void {
   ports = {};
 }
 
-export type BotActionResult = { ok: true; status: BotStatus } | { ok: false; code: 'not_found' | 'not_running'; message: string };
+export type BotActionResult = { ok: true; status: BotStatus } | { ok: false; code: 'not_found' | 'not_running' | 'running'; message: string };
 
 export function botCwd(wmuxDir: string, botId: string): string {
   return path.join(wmuxDir, 'factory', 'bots', botId);
@@ -718,6 +718,21 @@ export class BotRuntime {
     } catch {
       /* best effort */
     }
+    return { ok: true, status: this.status(botId) as BotStatus };
+  }
+
+  /** The owner's New conversation (factory.handler.ts, the main window
+   *  only; no pipe RPC, so a bot cannot reset its own marks): end the live
+   *  conversation and forget the saved one in one step, so the next wake
+   *  starts clean, with no resume id and clean marks. Refused while a turn
+   *  runs, since its end writes the session record back. The queue and the
+   *  bot's open cards are left as they are. */
+  newConversation(botId: string): BotActionResult {
+    if (!this.deps.store.get(botId)) return notFound(botId);
+    if (this.running.has(botId)) return { ok: false, code: 'running', message: 'stop the turn first' };
+    this.endSession(botId);
+    this.deps.sessions.delete(botId);
+    this.pushStatus(botId);
     return { ok: true, status: this.status(botId) as BotStatus };
   }
 
