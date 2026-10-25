@@ -61,6 +61,27 @@ describe.runIf(process.platform === 'win32')('the firewall probe under Constrain
     }, 60_000);
   }
 
+  it('the adapter medium read runs constrained, and a missing NetAdapter module is only an unknown medium', async () => {
+    const exe = process.execPath;
+    const script = buildProbeScript({
+      exe,
+      port: 45699,
+      ips: externalIpv4s(),
+      ruleIds: firewallRuleIds('a2a', exe, { dataSuffix: '-clmtest', user: 'TEST\\clm', group: 'wmux-ci' }),
+      legacyScan: false,
+    });
+    // With the module (a managed PC loads it as a trusted System32 module).
+    const withModule = await runPs(CLM_PREFIX.replace('CimCmdlets;', 'CimCmdlets,NetAdapter;') + script);
+    expect(withModule.failed).toBe(false);
+    expect(parseProbeLine(withModule.stdout)).not.toBeNull();
+    // Without it, Get-NetAdapter cannot run at all; the line still parses.
+    const noModule = await runPs(`${CLM_PREFIX}function Get-NetAdapter { throw 'no NetAdapter' }; ${script}`);
+    expect(noModule.failed).toBe(false);
+    const facts = parseProbeLine(noModule.stdout);
+    expect(facts).not.toBeNull();
+    expect(facts?.addresses.every((a) => a.medium === null)).toBe(true);
+  }, 60_000);
+
   it('the elevated scripts load NetSecurity from $PSHOME and call it module-qualified', async () => {
     const r = await runPs(`${CLM_PREFIX}${IMPORT_NETSECURITY}; 'rules:' + @(NetSecurity\\Get-NetFirewallRule -Name 'wmux-ci-clmtest-none' -ErrorAction SilentlyContinue).Count`);
     expect(r.failed).toBe(false);

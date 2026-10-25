@@ -219,7 +219,12 @@ export function buildProbeScript(input: ProbeScriptInput): string {
     "foreach ($p in @(Get-NetFirewallProfile -PolicyStore ActiveStore)) { $pr[$p.Name]=@{en=$(if ($p.Enabled -eq 'False') {0} else {1}); inb=$(if ($p.AllowInboundRules -eq 'False') {0} else {1}); loc=$(if ($p.AllowLocalFirewallRules -eq 'False') {0} else {1})} }",
     "$o['prof']=$pr",
     '$ad=@()',
-    "foreach ($ip in $ips) { $c=-1; $a=@(Get-NetIPAddress -IPAddress $ip -AddressFamily IPv4 -ErrorAction SilentlyContinue); if ($a.Count -eq 1) { $cp=@(Get-NetConnectionProfile -InterfaceIndex $a[0].InterfaceIndex -ErrorAction SilentlyContinue); if ($cp.Count -ge 1) { $n=$cp[0].NetworkCategory; $c=$(if ($n -eq 'Public') {0} elseif ($n -eq 'Private') {1} elseif ($n -eq 'DomainAuthenticated') {2} else {-1}) } }; $ad+=@{ip=$ip; cat=$c} }",
+    // A Public (or profile-less) address also says its adapter's medium, so
+    // Open network settings can go to that adapter's page: NdisPhysicalMedium
+    // 9 is Native 802.11 (Wi-Fi), 14 is 802.3 (Ethernet), a number in every
+    // display language. Read only then (the NetAdapter module costs a load),
+    // and a failed read is only an unknown medium, never a failed probe.
+    "foreach ($ip in $ips) { $c=-1; $m=0; $a=@(Get-NetIPAddress -IPAddress $ip -AddressFamily IPv4 -ErrorAction SilentlyContinue); if ($a.Count -eq 1) { $cp=@(Get-NetConnectionProfile -InterfaceIndex $a[0].InterfaceIndex -ErrorAction SilentlyContinue); if ($cp.Count -ge 1) { $n=$cp[0].NetworkCategory; $c=$(if ($n -eq 'Public') {0} elseif ($n -eq 'Private') {1} elseif ($n -eq 'DomainAuthenticated') {2} else {-1}) }; if ($c -le 0) { try { $na=@(Get-NetAdapter -InterfaceIndex $a[0].InterfaceIndex -ErrorAction SilentlyContinue); if ($na.Count -eq 1) { $pm=$na[0].NdisPhysicalMedium; $m=$(if ($pm -eq 9) {1} elseif ($pm -eq 14) {2} else {0}) } } catch { $m=0 } } }; $ad+=@{ip=$ip; cat=$c; med=$m} }",
     "$o['addr']=$ad",
     '$rs=@()',
     // Our rules' remote addresses: does the Allow reach tailnet peers? Windows may

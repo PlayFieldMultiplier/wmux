@@ -1,3 +1,4 @@
+// @wmux-lane unit — 'win32' here is the platform openTarget is told; shell.openExternal is a mock and nothing is opened.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('electron', () => {
@@ -25,7 +26,7 @@ vi.mock('../../../computer/selfElevation', () => ({ isSelfElevated: () => false 
 
 import * as electron from 'electron';
 import type { BrowserWindow } from 'electron';
-import { registerNetFirewallHandlers } from '../netFirewall.handler';
+import { openTarget, registerNetFirewallHandlers } from '../netFirewall.handler';
 import { IPC } from '../../../../shared/constants';
 import type { DaemonClient } from '../../../DaemonClient';
 
@@ -91,5 +92,36 @@ describe('netFirewall IPC', () => {
   it('Open accepts only the two targets', async () => {
     expect(await handler(IPC.NET_FIREWALL_OPEN)(fromMain, 'https://example.com')).toEqual({ ok: false });
     expect(shell.openExternal).not.toHaveBeenCalledWith('https://example.com');
+  });
+
+  it('Open refuses any page that is not one of the listed Settings pages, on every platform', async () => {
+    shell.openExternal.mockClear();
+    for (const page of ['https://example.com', 'ms-settings:windowsupdate', 'ms-settings:network-wifi?x=1', 'MS-SETTINGS:network-wifi', 'file:///C:/Windows/System32/cmd.exe', null, 7]) {
+      expect(await handler(IPC.NET_FIREWALL_OPEN)(fromMain, 'network', page), String(page)).toEqual({ ok: false });
+    }
+    // A page belongs to network settings only.
+    expect(await handler(IPC.NET_FIREWALL_OPEN)(fromMain, 'firewall', 'ms-settings:network-status')).toEqual({ ok: false });
+    expect(await handler(IPC.NET_FIREWALL_OPEN)(fromElsewhere, 'network', 'ms-settings:network-wifi')).toEqual({ ok: false });
+    expect(shell.openExternal).not.toHaveBeenCalled();
+  });
+});
+
+describe('openTarget', () => {
+  it('on Windows, exactly the three Settings pages', () => {
+    for (const page of ['ms-settings:network-status', 'ms-settings:network-wifi', 'ms-settings:network-ethernet']) {
+      expect(openTarget('network', page, 'win32')).toEqual({ kind: 'network', page });
+    }
+    for (const page of ['ms-settings:windowsupdate', 'ms-settings:network-wifi ', 'https://example.com', '', null]) {
+      expect(openTarget('network', page, 'win32'), String(page)).toBeNull();
+    }
+  });
+
+  it('a page is Windows only; the two plain targets stay as they were', () => {
+    expect(openTarget('network', 'ms-settings:network-wifi', 'darwin')).toBeNull();
+    expect(openTarget('network', 'ms-settings:network-wifi', 'linux')).toBeNull();
+    expect(openTarget('network', undefined, 'darwin')).toEqual({ kind: 'network' });
+    expect(openTarget('firewall', undefined, 'win32')).toEqual({ kind: 'firewall' });
+    expect(openTarget('firewall', 'ms-settings:network-status', 'win32')).toBeNull();
+    expect(openTarget('ms-settings:network-wifi', undefined, 'win32')).toBeNull();
   });
 });

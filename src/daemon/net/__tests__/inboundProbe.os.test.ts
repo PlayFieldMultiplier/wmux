@@ -88,6 +88,23 @@ describe('probeInbound on Windows', () => {
     expect(s.ruleIds?.allow).toMatch(/^wmux-a2a-[0-9a-f]{8}-allow$/);
   });
 
+  it('the Public networks\' adapter medium names the Settings page; the script reads it for Public addresses only', async () => {
+    let script = '';
+    const wifi = await run(async (_f, args) => {
+      script = args[3];
+      return line([], [{ ip: '100.79.244.107', cat: 1 }, { ip: '192.168.45.28', cat: 0, med: 1 }, { ip: '172.17.48.1', cat: -1 }]);
+    });
+    expect(wifi.publicMedium).toBe('wifi');
+    expect(script).toContain('if ($c -le 0) { try { $na=@(Get-NetAdapter -InterfaceIndex');
+    expect(script).toContain('med=$m');
+    // Not read (another medium, an older line): no page of its own.
+    expect((await run(async () => line())).publicMedium).toBeNull();
+    // Two Public adapters of different kinds: Network status.
+    const both = await run(async () => line([], [{ ip: '192.168.45.28', cat: 0, med: 1 }, { ip: '100.79.244.107', cat: 0, med: 2 }]));
+    expect(both.publicNetworks).toEqual(['Wi-Fi', 'Tailscale']);
+    expect(both.publicMedium).toBeNull();
+  });
+
   it('stale-after-update comes from this install\'s record of an older exe; another install\'s record is not an update', async () => {
     const id = firewallRuleIds('a2a', EXE, SCOPE).base;
     const record: FirewallRuleRecord = { listener: 'a2a', id, port: 45660, exe: EXE.replace('4.10.0', '4.9.0'), createdAt: 1 };
@@ -166,6 +183,32 @@ describe('probeInbound elsewhere', () => {
     expect(s.verdict).toBe('not-covered');
     expect(s.ruleIds).toBeNull();
     expect(s.refusal).toBeNull();
+  });
+
+  it('macOS: a failed or garbled allow-signed read leaves the rest of the check standing (unverified on a Mac)', async () => {
+    const MAC = '/Applications/wmux.app/Contents/MacOS/wmux';
+    const mac = (app: string, signed: () => string) => async (_f: string, args: string[]): Promise<string> => {
+      if (args[0] === '--getglobalstate') return 'Firewall is enabled. (State = 1)';
+      if (args[0] === '--getblockall') return 'Firewall has block all state set to disabled.';
+      if (args[0] === '--getallowsigned') return signed();
+      return app;
+    };
+    const fails = () => { throw new Error('socketfilterfw: timed out'); };
+    const garbled = () => '\u0000??';
+    const listed = { permitted: `The application ${MAC} is permitted`, blocked: `The application ${MAC} is blocked`, none: `The application ${MAC} is not part of the firewall` };
+    for (const signed of [fails, garbled]) {
+      // The firewall state and the app's listing still decide.
+      expect((await run(mac(listed.permitted, signed), { platform: 'darwin', exe: MAC })).verdict).toBe('covered');
+      expect((await run(mac(listed.blocked, signed), { platform: 'darwin', exe: MAC })).verdict).toBe('not-covered');
+      // Not listed: allow-signed would decide, and it is unknown.
+      expect((await run(mac(listed.none, signed), { platform: 'darwin', exe: MAC })).verdict).toBe('unknown');
+    }
+    // A failure of any other read still fails the check.
+    const noState = async (_f: string, args: string[]): Promise<string> => {
+      if (args[0] === '--getglobalstate') throw new Error('socketfilterfw: timed out');
+      return mac(listed.permitted, () => 'Automatically allow downloaded signed software ENABLED.')(_f, args);
+    };
+    expect((await run(noState, { platform: 'darwin', exe: MAC })).verdict).toBe('unknown');
   });
 
   it('macOS refuses the Fix for a node or development Electron daemon (unverified on a Mac)', async () => {

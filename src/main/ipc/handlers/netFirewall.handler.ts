@@ -3,7 +3,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { ipcMain, shell, type BrowserWindow } from 'electron';
 import { IPC, dataSuffix } from '../../../shared/constants';
-import { isFirewallListener, type ElevationOutcome, type FirewallActionResult, type InboundStatusView } from '../../../shared/netFirewall';
+import {
+  NETWORK_SETTINGS_URIS,
+  isFirewallListener,
+  isNetworkSettingsUri,
+  type ElevationOutcome,
+  type FirewallActionResult,
+  type InboundStatusView,
+  type NetworkSettingsUri,
+} from '../../../shared/netFirewall';
 import { FIREWALL_GROUP, currentRuleUser, elevatedPowerShellParameters, windowsPowerShellPath } from '../../../shared/netFirewallScripts';
 import type { ListenProblemReport } from '../../../shared/netListen';
 import { canonicalExePath, onLocalFixedDrive, systemDirectory } from '../../../shared/netWinPaths';
@@ -90,8 +98,19 @@ function openFirewallSettings(): void {
   if (process.platform === 'darwin') void shell.openExternal('x-apple.systempreferences:com.apple.Network-Settings.extension?Firewall');
 }
 
-function openNetworkSettings(): void {
-  if (process.platform === 'win32') void shell.openExternal('ms-settings:network-status');
+/**
+ * What an Open request may open: Windows Firewall, network settings, or on
+ * Windows exactly one of the listed Settings pages (NETWORK_SETTINGS_URIS).
+ * Null refuses it: the renderer never names anything else. Pure.
+ */
+export function openTarget(which: unknown, page: unknown, platform: NodeJS.Platform): { kind: 'firewall' } | { kind: 'network'; page?: NetworkSettingsUri } | null {
+  if (page === undefined) return which === 'firewall' ? { kind: 'firewall' } : which === 'network' ? { kind: 'network' } : null;
+  return which === 'network' && platform === 'win32' && isNetworkSettingsUri(page) ? { kind: 'network', page } : null;
+}
+
+/** `page`: one of the Windows Settings pages, checked by openTarget. */
+function openNetworkSettings(page: NetworkSettingsUri = NETWORK_SETTINGS_URIS.status): void {
+  if (process.platform === 'win32') void shell.openExternal(page);
   else if (process.platform === 'darwin') void shell.openExternal('x-apple.systempreferences:com.apple.Network-Settings.extension');
 }
 
@@ -130,11 +149,12 @@ export function registerNetFirewallHandlers(getDaemonClient: () => DaemonClient 
     ],
     [
       IPC.NET_FIREWALL_OPEN,
-      async (e, which): Promise<{ ok: boolean }> => {
+      async (e, which, page): Promise<{ ok: boolean }> => {
         if (!isMainWindowSender(e, getWindow())) return { ok: false };
-        if (which === 'firewall') openFirewallSettings();
-        else if (which === 'network') openNetworkSettings();
-        else return { ok: false };
+        const target = openTarget(which, page, process.platform);
+        if (!target) return { ok: false };
+        if (target.kind === 'firewall') openFirewallSettings();
+        else openNetworkSettings(target.page);
         return { ok: true };
       },
     ],
