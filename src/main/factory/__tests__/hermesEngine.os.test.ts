@@ -116,6 +116,9 @@ describe('hermesReadiness', () => {
     expect(await hermesReadiness(deps(fakeHermes().run))).toMatchObject({ ready: false, reason: 'not-set-up' });
 
     const missing = async (): Promise<HermesProbeResult> => ({ ok: false, reason: 'mcp-missing', detail: 'no mcp' });
-    expect(await hermesReadiness(deps(fakeHermes({ config: { model: 'm1' } }).run, missing))).toMatchObject({ ready: false, reason: 'mcp-missing' });
+    const fixed = fakeHermes({ config: { model: 'm1' } });
+    expect(await hermesReadiness(deps(fixed.run, missing))).toMatchObject({ ready: false, reason: 'mcp-missing' });
+    // The extra added in a terminal leaves the executable as it was: probed again.
+    expect(await hermesReadiness(deps(fixed.run))).toEqual({ ready: true, version: '0.22.5' });
   });
 });

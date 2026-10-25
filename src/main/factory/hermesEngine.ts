@@ -413,8 +413,9 @@ export async function hermesReadiness(deps: HermesReadinessDeps): Promise<Hermes
     let probe = probeCache.get(key);
     if (!probe) {
       probe = await deps.probe(exe, env);
-      // A failed probe (not a missing extra) is not remembered: it may pass next time.
-      if (probe.ok || probe.reason === 'mcp-missing') probeCache.set(key, probe);
+      // Only a pass is remembered: the missing extra is added in a terminal
+      // (HERMES_MCP_FIX_COMMAND) without touching the executable.
+      if (probe.ok) probeCache.set(key, probe);
     }
     if (!probe.ok) return notReady(probe.reason === 'mcp-missing' ? 'mcp-missing' : 'unknown', probe.detail, version);
     return { ready: true, version };
