@@ -153,15 +153,16 @@ describe('probeInbound on Windows', () => {
 });
 
 describe('probeInbound elsewhere', () => {
-  it('macOS reads socketfilterfw three times (unverified on a Mac)', async () => {
+  it('macOS reads socketfilterfw four times (unverified on a Mac)', async () => {
     const files: string[][] = [];
     const s = await run(async (file, args) => {
       files.push([file, ...args]);
       if (args[0] === '--getglobalstate') return 'Firewall is enabled. (State = 1)';
       if (args[0] === '--getblockall') return 'Firewall has block all state set to disabled.';
+      if (args[0] === '--getallowsigned') return 'Automatically allow built-in signed software ENABLED.\nAutomatically allow downloaded signed software ENABLED.';
       return 'The application /Applications/wmux.app/Contents/MacOS/wmux is blocked';
     }, { platform: 'darwin', exe: '/Applications/wmux.app/Contents/MacOS/wmux' });
-    expect(files.map((f) => f[1])).toEqual(['--getglobalstate', '--getblockall', '--getappblocked']);
+    expect(files.map((f) => f[1])).toEqual(['--getglobalstate', '--getblockall', '--getappblocked', '--getallowsigned']);
     expect(s.verdict).toBe('not-covered');
     expect(s.ruleIds).toBeNull();
     expect(s.refusal).toBeNull();

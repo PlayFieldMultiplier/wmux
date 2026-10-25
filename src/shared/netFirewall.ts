@@ -27,7 +27,9 @@ export function isFirewallListener(v: unknown): v is FirewallListener {
  *
  * - `covered`: our Allow rule exists for this program and port on Private.
  * - `covered-by-prompt`: no rule of ours, but an Allow from an earlier
- *   Windows prompt (or an admin) covers the port on Private.
+ *   Windows prompt (or an admin) covers the port on Private; on macOS, wmux
+ *   is not listed but "Automatically allow downloaded signed software" lets
+ *   it accept connections.
  * - `not-covered`: nothing allows this program and port on Private.
  * - `stale-after-update`: our rule was made for an older wmux.exe path
  *   (firewall-rules.json says so) and nothing covers the current one.
@@ -456,15 +458,23 @@ export interface MacFirewallFacts {
   blockAll: boolean | null;
   /** `--getappblocked <path>`. */
   app: 'permitted' | 'blocked' | 'not-listed' | null;
+  /**
+   * `--getallowsigned`: "Automatically allow downloaded signed software" (the
+   * macOS default). On, a signed app the firewall has not listed is allowed
+   * without a prompt.
+   */
+  allowSigned: boolean | null;
 }
 
 /**
  * Read socketfilterfw's English sentences ("Firewall is enabled. (State = 1)",
  * "Block all INCOMING connections is disabled", "The application … is
- * permitted"). Unverified on a Mac: the wording is from Apple's man page and
- * public transcripts; anything else reads as null.
+ * permitted", "Automatically allow downloaded signed software ENABLED.").
+ * Unverified on a Mac: the wording is from Apple's man page and public
+ * transcripts; anything else reads as null. Older macOS prints one "allow
+ * signed software" line instead of the built-in / downloaded pair.
  */
-export function parseMacFirewall(globalState: string, blockAll: string, appBlocked: string): MacFirewallFacts {
+export function parseMacFirewall(globalState: string, blockAll: string, appBlocked: string, allowSigned = ''): MacFirewallFacts {
   let enabled: boolean | null = null;
   const state = /\(State = (\d)\)/.exec(globalState);
   if (state) enabled = state[1] !== '0';
@@ -475,7 +485,8 @@ export function parseMacFirewall(globalState: string, blockAll: string, appBlock
   if (/\bis permitted\b|\ballowed\b/i.test(appBlocked)) app = 'permitted';
   else if (/\bis blocked\b/i.test(appBlocked)) app = 'blocked';
   else if (/not part of the firewall/i.test(appBlocked)) app = 'not-listed';
-  return { enabled, blockAll: b ? b[1].toLowerCase() === 'enabled' : null, app };
+  const signed = /downloaded signed software\W+(enabled|disabled)/i.exec(allowSigned) ?? /allow signed software\W+(enabled|disabled)/i.exec(allowSigned);
+  return { enabled, blockAll: b ? b[1].toLowerCase() === 'enabled' : null, app, allowSigned: signed ? signed[1].toLowerCase() === 'enabled' : null };
 }
 
 export function assessMac(facts: MacFirewallFacts): InboundVerdict {
@@ -484,7 +495,12 @@ export function assessMac(facts: MacFirewallFacts): InboundVerdict {
   if (facts.blockAll === null) return 'unknown';
   if (facts.blockAll) return 'inbound-blocked-all';
   if (facts.app === 'permitted') return 'covered';
-  if (facts.app === 'blocked' || facts.app === 'not-listed') return 'not-covered';
+  if (facts.app === 'blocked') return 'not-covered';
+  if (facts.app === 'not-listed') {
+    // Allowed without a listing when downloaded signed software is (the default).
+    if (facts.allowSigned === true) return 'covered-by-prompt';
+    return facts.allowSigned === false ? 'not-covered' : 'unknown';
+  }
   return 'unknown';
 }
 
@@ -518,7 +534,7 @@ export function firewallOffer(s: InboundStatus): FirewallOffer {
     case 'covered':
       return { notice: false, sentence: { key: mac ? 'net.fw.allowedMac' : 'net.fw.allowed', vars: { port } }, actions: [] };
     case 'covered-by-prompt':
-      return { notice: false, sentence: { key: 'net.fw.allowedByPrompt', vars: {} }, actions: [] };
+      return { notice: false, sentence: { key: mac ? 'net.fw.allowedSignedMac' : 'net.fw.allowedByPrompt', vars: {} }, actions: [] };
     case 'not-covered':
     case 'stale-after-update': {
       const key = s.verdict === 'stale-after-update' ? 'net.fw.staleAfterUpdate' : mac ? 'net.fw.notCoveredMac' : 'net.fw.notCovered';

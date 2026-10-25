@@ -304,8 +304,11 @@ starts. Click **Allow**. If you denied it earlier, open **Options…** and set
 wmux to "Allow incoming connections". The Remote page also offers **Allow
 through firewall** on a Mac, which asks for an administrator password and
 allows wmux; it has not yet been tried on a Mac, so if it fails, use the
-Options… list above. With "Block all incoming connections" turned on, the
-Mac can only be a joiner.
+Options… list above. While "Automatically allow downloaded signed software"
+is on (the default), macOS lets a signed wmux accept connections without
+listing it, and the Remote page says so instead of offering the button.
+With "Block all incoming connections" turned on, the Mac can only be a
+joiner.
 
 ### Wi-Fi and the network itself
 

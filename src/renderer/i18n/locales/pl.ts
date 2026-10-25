@@ -5281,6 +5281,7 @@ export const pl = {
   'net.fw.detailLabel': "Zapora",
   'net.fw.macBlockAll': "Włączono „Blokuj wszystkie połączenia przychodzące”, więc ten Mac może tylko dołączać do innych komputerów.",
   'net.fw.inviteHint': "Jeśli drugi komputer nie może się połączyć, wróć tutaj i sprawdź zaporę.",
+  'net.fw.allowedSignedMac': "Dozwolone: macOS pozwala podpisanym aplikacjom, takim jak wmux, przyjmować połączenia.",
   'net.fw.busy': "Inna zmiana zapory wciąż trwa. Gdy się skończy, sprawdź zaporę ponownie.",
   'net.fw.okUnchecked': "Zmiana została wykonana, ale potem nie udało się odczytać zapory. Sprawdź zaporę ponownie.",
   'net.fw.cancelledMac': "Bez zmian. Prośba o uprawnienia administratora została odrzucona.",

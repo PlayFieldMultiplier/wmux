@@ -9,7 +9,7 @@
 // Windows: one non-elevated Windows PowerShell 5.1 by absolute path, the
 // script from netFirewallScripts.ts, an 8 s deadline. A timeout, a failed
 // spawn or an unreadable line is `unknown`, which the UI says plainly.
-// macOS: three socketfilterfw reads (verify on Mac). Elsewhere: nothing to
+// macOS: four socketfilterfw reads (verify on Mac). Elsewhere: nothing to
 // check; the static hint stays.
 //
 // Imports node builtins and shared modules only.
@@ -126,12 +126,13 @@ export async function probeInbound(target: ProbeTarget, deps: ProbeDeps): Promis
     // firewall knows may be the bundle rather than the binary.
     base.refusal = macExeRefusal(exe);
     try {
-      const [g, b, a] = await Promise.all([
+      const [g, b, a, s] = await Promise.all([
         exec(SOCKETFILTERFW, ['--getglobalstate'], { timeout: PROBE_TIMEOUT_MS }),
         exec(SOCKETFILTERFW, ['--getblockall'], { timeout: PROBE_TIMEOUT_MS }),
         exec(SOCKETFILTERFW, ['--getappblocked', exe], { timeout: PROBE_TIMEOUT_MS }),
+        exec(SOCKETFILTERFW, ['--getallowsigned'], { timeout: PROBE_TIMEOUT_MS }),
       ]);
-      return { ...base, verdict: assessMac(parseMacFirewall(g, b, a)) };
+      return { ...base, verdict: assessMac(parseMacFirewall(g, b, a, s)) };
     } catch (err) {
       log(`[net] firewall probe failed: ${err instanceof Error ? err.message : String(err)}`);
       return base;

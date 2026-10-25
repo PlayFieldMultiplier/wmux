@@ -4349,6 +4349,7 @@ export const zh = {
   'net.fw.detailLabel': "防火墙",
   'net.fw.macBlockAll': "已开启“阻止所有传入连接”，因此这台 Mac 只能加入其他电脑。",
   'net.fw.inviteHint': "如果另一台电脑无法连接，请回到这里检查防火墙。",
+  'net.fw.allowedSignedMac': "已允许：macOS 允许 wmux 等已签名的应用接受连接。",
   'net.fw.busy': "另一项防火墙更改仍在进行。完成后请再次检查防火墙。",
   'net.fw.okUnchecked': "更改已执行，但之后无法读取防火墙。请再次检查防火墙。",
   'net.fw.cancelledMac': "未更改。管理员请求被拒绝。",

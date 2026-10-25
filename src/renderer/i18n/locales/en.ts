@@ -5321,6 +5321,7 @@ export const en = {
   'net.fw.detailLabel': "Firewall",
   'net.fw.macBlockAll': "\"Block all incoming connections\" is on, so this Mac can only join other PCs.",
   'net.fw.inviteHint': "If the other PC can't connect, come back here and check the firewall.",
+  'net.fw.allowedSignedMac': "Allowed: macOS lets signed apps such as wmux accept connections.",
   'net.fw.busy': "Another firewall change is still running. Check the firewall again when it ends.",
   'net.fw.okUnchecked': "The change ran, but reading the firewall afterwards failed. Check the firewall again.",
   'net.fw.cancelledMac': "Not changed. The administrator request was declined.",

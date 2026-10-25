@@ -230,12 +230,34 @@ describe('pickVerdict', () => {
 describe('macOS (unverified on a Mac)', () => {
   it('reads socketfilterfw sentences', () => {
     expect(parseMacFirewall('Firewall is enabled. (State = 1)', 'Firewall has block all state set to disabled.', 'The application /Applications/wmux.app is permitted'))
-      .toEqual({ enabled: true, blockAll: false, app: 'permitted' });
+      .toEqual({ enabled: true, blockAll: false, app: 'permitted', allowSigned: null });
     expect(assessMac(parseMacFirewall('Firewall is disabled. (State = 0)', '', ''))).toBe('firewall-off');
     expect(assessMac(parseMacFirewall('(State = 1)', 'block all state set to enabled', ''))).toBe('inbound-blocked-all');
     expect(assessMac(parseMacFirewall('(State = 1)', 'disabled', 'The application x is blocked'))).toBe('not-covered');
-    expect(assessMac(parseMacFirewall('(State = 1)', 'disabled', 'x is not part of the firewall'))).toBe('not-covered');
     expect(assessMac(parseMacFirewall('?', '?', '?'))).toBe('unknown');
+  });
+
+  it('an unlisted app: allowed while "downloaded signed software" is allowed (the default), not covered when that is off', () => {
+    const on = 'Automatically allow built-in signed software ENABLED.\nAutomatically allow downloaded signed software ENABLED.';
+    const off = 'Automatically allow built-in signed software ENABLED.\nAutomatically allow downloaded signed software DISABLED.';
+    const unlisted = 'The application x is not part of the firewall';
+    expect(parseMacFirewall('(State = 1)', 'disabled', unlisted, on).allowSigned).toBe(true);
+    expect(assessMac(parseMacFirewall('(State = 1)', 'disabled', unlisted, on))).toBe('covered-by-prompt');
+    expect(assessMac(parseMacFirewall('(State = 1)', 'disabled', unlisted, off))).toBe('not-covered');
+    // Older macOS: one line for all signed software.
+    expect(assessMac(parseMacFirewall('(State = 1)', 'disabled', unlisted, 'Automatically allow signed software ENABLED'))).toBe('covered-by-prompt');
+    // Unreadable: neither a warning nor "allowed".
+    expect(assessMac(parseMacFirewall('(State = 1)', 'disabled', unlisted, '?'))).toBe('unknown');
+    // A blocked app stays blocked whatever the setting.
+    expect(assessMac(parseMacFirewall('(State = 1)', 'disabled', 'The application x is blocked', on))).toBe('not-covered');
+  });
+
+  it('macOS covered-by-prompt is a muted "signed apps are allowed" line, never the Windows prompt wording', () => {
+    expect(firewallOffer(status({ platform: 'darwin', ruleIds: null, verdict: 'covered-by-prompt' }))).toEqual({
+      notice: false,
+      sentence: { key: 'net.fw.allowedSignedMac', vars: {} },
+      actions: [],
+    });
   });
 });
 
