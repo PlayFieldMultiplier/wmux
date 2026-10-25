@@ -4,12 +4,14 @@ import { waitForIsolated } from '../playwright/isolated-eval';
 import { countSmartNamedPopulation } from '../playwright/dom-intelligence';
 import { describeToolError } from '../playwright/toolError';
 import { validateNavigationUrl, type NavigationPolicyOptions } from '../../shared/types';
+import { resolveFileInputFromRef, validateUploadPath } from '../playwright/tools/file';
 import {
   applyVariables,
   describeAxis,
   hasUnrecordableStep,
   refMapShapeHash,
   stripUrlUserinfo,
+  UPLOAD_FILE_SEPARATOR,
   type RefAxis,
   type StepAxis,
   type TraceRecord,
@@ -538,6 +540,24 @@ async function runStep(
       await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, { steps: 10 });
       await page.mouse.up();
       return { detail: `dragged ${describeAxis(step.axis)}` };
+    }
+    case 'browser_file_upload': {
+      // The paths arrive as variables (the trace holds only placeholders), so
+      // they are caller-supplied input and take the live tool's uploads-root
+      // gate. A path it refuses stops the run here.
+      const raw = String(args.files ?? '').split(UPLOAD_FILE_SEPARATOR);
+      if (raw.length === 0 || raw.some((p) => p === '')) return { error: 'the upload step has no file to send' };
+      let paths: string[];
+      try {
+        paths = raw.map(validateUploadPath);
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : String(error) };
+      }
+      // The recorded element may be the visible upload button: find its input.
+      const input = await resolveFileInputFromRef(element);
+      if (!input) return { error: `no file input at or near ${describeAxis(step.axis)}` };
+      await (input as unknown as ElementHandle).setInputFiles(paths);
+      return { detail: `uploaded ${paths.length} file(s) at ${describeAxis(step.axis)}` };
     }
     default:
       return { error: `${step.tool} cannot be replayed by this version` };
