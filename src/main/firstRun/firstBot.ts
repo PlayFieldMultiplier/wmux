@@ -122,7 +122,7 @@ export async function firstRunBot(
       return { ok: false, code: created.code === 'too_many_bots' ? 'too_many_bots' : 'invalid_argument', message: created.message };
     }
     // The workspace's repository from now on: Add bot there does not ask again.
-    if (created.bot.repo) recordWorkspaceRepo(store, created.bot.workspaceId, created.bot.repo, deps);
+    if (created.bot.repo) recordWorkspaceRepo(store, created.bot.workspaceId, created.bot.repo, deps, { fill: current === null });
     return answer(created.bot, true);
   });
 }

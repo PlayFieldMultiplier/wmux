@@ -549,6 +549,25 @@ describe('the workspace\'s repository is asked once (workspace-repos.json)', () 
     expect(records.get('ws-1')).toMatchObject({ repo: { repoKey: 'github.com/acme/app' } });
   });
 
+  it('a repository a bot already holds fills nobody: a bot added with None keeps none when a later bot inherits it', async () => {
+    const told = vi.fn();
+    const deps = { git: fakeGit(ok('/src/app\n'), ok('https://github.com/acme/app.git\n')), realpath: (p: string) => p, records, profileChanged: told };
+    const a = await createBotFromFolder(store, { workspaceId: 'ws-1', name: 'Ann', repoFolder: '/src/app' }, deps);
+    if (!a.ok) throw new Error('not made');
+    const b = await createBotFromFolder(store, { workspaceId: 'ws-1', name: 'Bo', noRepo: true }, deps);
+    if (!b.ok) throw new Error('not made');
+    told.mockClear();
+    const c = await createBotFromFolder(store, { workspaceId: 'ws-1', name: 'Cy' }, deps);
+    expect(c.ok && c.bot.repo).toMatchObject({ repoKey: 'github.com/acme/app' });
+    expect(store.get(b.bot.id)?.repo).toBeUndefined();
+    expect(told).not.toHaveBeenCalledWith(b.bot.id);
+    // A team added there inherits it too, and still fills nobody.
+    const names = { coordinator: 'Lead', researcher: 'Res', developer: 'Dev', issue: 'Iss', reviewer: 'Rev' };
+    expect(await createTeamFromFolder(store, { workspaceId: 'ws-1', names }, deps)).toMatchObject({ ok: true });
+    expect(store.get(b.bot.id)?.repo).toBeUndefined();
+    expect(records.get('ws-1')).toMatchObject({ repo: { repoKey: 'github.com/acme/app' } });
+  });
+
   it('None and a check that could not be made are honoured: no repository is inherited, and only None is remembered', async () => {
     const git = vi.fn();
     records.setRepo('ws-1', { repoKey: 'github.com/acme/app', repoPath: APP });

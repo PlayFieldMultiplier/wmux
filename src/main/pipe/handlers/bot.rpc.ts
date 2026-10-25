@@ -52,7 +52,7 @@ import { taskIdOfFactId, type WakeTaskFiles, type WakeTaskSummary } from '../../
 import { getTaskFolderPorts, reportFiles, taskFolderKind, type TaskMission } from '../../factory/taskFolderCleanup';
 import type { LedgerEntry } from '../../../shared/ledger';
 import { ROOM_FILE_LIMITS } from '../../../shared/roomFiles';
-import { botRepoFromFolder, greetNewBot, otherBotsRepo, recordWorkspaceRepo, withWorkspaceRepoLock } from '../../factory/botCreate';
+import { botRepoFromFolder, greetNewBot, otherBotsRepo, recordWorkspaceRepo, withWorkspaceRepoLock, workspaceBotsRepo } from '../../factory/botCreate';
 import { normalizeRepoKey } from '../../../shared/repoKey';
 import { sameRepoKey } from '../../../shared/forgeHosts';
 import { WorkspaceRepoStore, getWorkspaceRepoStore, setWorkspaceRepoStore, workspaceReposPath } from '../../factory/workspaceRepos';
@@ -407,10 +407,13 @@ export function registerBotRpcHandlers(
           return refuse('repo_mismatch', `This workspace's other bots work on ${current.repoKey} (${current.repoPath}); the repository given is ${key}. A workspace works on one repository.`);
         }
       }
+      // A repository a bot of the workspace already held is not newly chosen:
+      // the bots without one were left so by the owner and stay so.
+      const heldBefore = workspaceBotsRepo(l.store, l.store.get(botId)?.workspaceId) !== null;
       const r = l.store.update(botId, patch);
       if (!r.ok) return refuse(r.code, r.message);
       l.runtime.profileChanged(botId);
-      if (setsRepo && r.bot.repo) recordWorkspaceRepo(l.store, r.bot.workspaceId, r.bot.repo, { profileChanged: (id) => l.runtime.profileChanged(id) });
+      if (setsRepo && r.bot.repo) recordWorkspaceRepo(l.store, r.bot.workspaceId, r.bot.repo, { profileChanged: (id) => l.runtime.profileChanged(id) }, { fill: !heldBefore });
       if ('job' in patch && r.bot.job) setJobPorts.jobGiven?.(botId);
       return { ok: true, bot: pipeProfile(r.bot), status: l.runtime.status(botId) };
     };

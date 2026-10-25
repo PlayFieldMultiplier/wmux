@@ -256,6 +256,7 @@ export async function createBotFromFolder(
     const chosen = await repoForNewBot(store, r.workspaceId, r, deps);
     if (!chosen.ok) return chosen;
     const repo = chosen.repo;
+    const heldBefore = workspaceBotsRepo(store, r.workspaceId) !== null;
     // The name, job, template, role, recipe and picture are checked by the store
     // (shared/bot.ts normalizeBotName / normalizeBotJob, botAvatar.ts), as on
     // every other write.
@@ -270,7 +271,7 @@ export async function createBotFromFolder(
       ...(r.avatar !== undefined ? { avatar: r.avatar } : {}),
     });
     if (!created.ok) return created;
-    rememberWorkspaceAnswer(store, created.bot.workspaceId, repo, r.repoFolder === undefined && r.noRepo === true, deps);
+    rememberWorkspaceAnswer(store, created.bot.workspaceId, repo, r.repoFolder === undefined && r.noRepo === true, heldBefore, deps);
     return { ok: true, bot: created.bot };
   });
 }
@@ -279,22 +280,27 @@ export async function createBotFromFolder(
  *  now work on (recordWorkspaceRepo), or the owner's None (`noRepo`, sent
  *  when the owner pressed None), so the next add does not ask again. A None
  *  replaces a remembered repository no bot holds, and never takes a
- *  repository from any bot. */
+ *  repository from any bot. `heldBefore`: a bot held the repository before
+ *  this create, so the repo-less bots there are ones the owner left without
+ *  one, and none is filled. */
 function rememberWorkspaceAnswer(
   store: BotStore,
   workspaceId: string,
   repo: WorkspaceRepo | undefined,
   noRepo: boolean,
+  heldBefore: boolean,
   deps: Pick<BotRepoDeps, 'records' | 'profileChanged'>,
 ): void {
-  if (repo) recordWorkspaceRepo(store, workspaceId, repo, deps);
+  if (repo) recordWorkspaceRepo(store, workspaceId, repo, deps, { fill: !heldBefore });
   else if (noRepo && !workspaceBotsRepo(store, workspaceId)) recordsOf(deps)?.setNone(workspaceId, { replace: true });
 }
 
-/** The workspace works on `repo` from now on: remembered for it, and given
- *  to each of its bots that has no repository (every role, as Add team
- *  gives it to every template), each told to the bot runtime
- *  (`profileChanged`).
+/** The workspace works on `repo` from now on: remembered for it, and, when
+ *  it is newly chosen for the workspace (`fill`: no bot held a repository
+ *  before this write), given to each of its bots that has no repository
+ *  (every role, as Add team gives it to every template), each told to the
+ *  bot runtime (`profileChanged`). When a bot already held it, a bot
+ *  without one is one the owner left without one (None), and keeps none.
  *  Called by every path that resolves a workspace's repository (Add bot,
  *  Add team, the first run, a profile's Change, a pipe `bot.update` that
  *  sets one), after the store accepted it, inside withWorkspaceRepoLock. A
@@ -305,8 +311,10 @@ export function recordWorkspaceRepo(
   workspaceId: string,
   repo: WorkspaceRepo,
   deps: Pick<BotRepoDeps, 'records' | 'profileChanged'> = {},
+  opts: { fill: boolean } = { fill: true },
 ): string[] {
   recordsOf(deps)?.setRepo(workspaceId, repo);
+  if (!opts.fill) return [];
   const changed = deps.profileChanged ?? ((id: string) => getBotRuntime()?.profileChanged(id));
   const filled: string[] = [];
   for (const bot of store.list({ workspaceId })) {
@@ -400,6 +408,7 @@ export async function createTeamFromFolder(
     const chosen = await repoForNewBot(store, workspaceId, r, deps);
     if (!chosen.ok) return chosen;
     const repo = chosen.repo;
+    const heldBefore = workspaceBotsRepo(store, workspaceId) !== null;
     const templates = missing();
     const names = named(templates);
     if (!Array.isArray(names)) return names;
@@ -417,7 +426,7 @@ export async function createTeamFromFolder(
       }
       bots.push(made.bot);
     }
-    if (bots.length > 0) rememberWorkspaceAnswer(store, workspaceId, repo, r.repoFolder === undefined && r.noRepo === true, deps);
+    if (bots.length > 0) rememberWorkspaceAnswer(store, workspaceId, repo, r.repoFolder === undefined && r.noRepo === true, heldBefore, deps);
     return { ok: true, bots, ...(skipped.length > 0 ? { skipped } : {}) };
   });
 }
