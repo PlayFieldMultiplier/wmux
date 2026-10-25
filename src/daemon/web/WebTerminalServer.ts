@@ -134,7 +134,7 @@ import {
   MIN_PHONE_PROTOCOL_VERSION,
   PHONE_PROTOCOL_VERSION,
 } from './protocolVersion';
-import { startSseHeartbeat } from './sseHeartbeat';
+import { onSseClose, startSseHeartbeat } from './sseHeartbeat';
 import { StreamResponseLimits } from './StreamResponseLimits';
 import {
   CHAT_LAUNCH_RETENTION_MS,
@@ -7561,7 +7561,7 @@ export class WebTerminalServer {
     this.clients.add(client);
     if (principal.kind === 'device') this.presence.update();
 
-    req.on('close', () => {
+    onSseClose(res, () => {
       detach();
       this.clients.delete(client);
       if (principal.kind === 'device') this.presence.update();
@@ -9941,7 +9941,7 @@ export class WebTerminalServer {
     this.eventClients.add(client);
     if (principal.kind === 'device') this.presence.update();
 
-    req.on('close', () => {
+    onSseClose(res, () => {
       detach();
       this.eventClients.delete(client);
       if (principal.kind === 'device') this.presence.update();

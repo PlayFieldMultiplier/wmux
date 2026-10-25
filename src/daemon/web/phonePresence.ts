@@ -19,6 +19,10 @@ import type { DeviceKind } from '../../shared/web';
 /** How long after its last request a device still counts as attached. */
 export const PHONE_ATTACH_WINDOW_MS = 600_000;
 
+/** The longest the expiry timer waits before it re-checks. A delay above
+ *  2^31-1 ms makes Node fire after 1 ms, which would loop. */
+export const PRESENCE_RECHECK_MAX_MS = 3_600_000;
+
 export interface PresenceDevice {
   deviceId: string;
   kind?: DeviceKind;
@@ -50,6 +54,11 @@ export function phonePresenceAt(
       attached = true;
       continue;
     }
+    // A lastSeenAt in the future (a clock moved back, a bad devices.json)
+    // does not say when the device was seen, so it holds nothing: counted as
+    // now, it would be "now" again at every re-check and never expire. The
+    // device's next request stamps the current time.
+    if (device.lastSeenAt > now) continue;
     const end = device.lastSeenAt + windowMs;
     if (now < end) {
       attached = true;
@@ -65,6 +74,8 @@ export interface PhonePresenceDeps {
   /** Called on each change of the answer, never with the same value twice. */
   onChange: (attached: boolean) => void;
   now?: () => number;
+  /** The request window; PHONE_ATTACH_WINDOW_MS unless a test sets it. */
+  windowMs?: number;
 }
 
 export class PhonePresence {
@@ -93,13 +104,13 @@ export class PhonePresence {
       return;
     }
     const now = (this.deps.now ?? Date.now)();
-    const { attached, expiresAt } = phonePresenceAt(devices, this.deps.liveDeviceIds(), now);
+    const { attached, expiresAt } = phonePresenceAt(devices, this.deps.liveDeviceIds(), now, this.deps.windowMs);
     this.clearTimer();
     if (expiresAt !== null) {
       this.timer = setTimeout(() => {
         this.timer = null;
         this.update();
-      }, Math.max(0, expiresAt - now));
+      }, Math.min(PRESENCE_RECHECK_MAX_MS, Math.max(0, expiresAt - now)));
       this.timer.unref?.();
     }
     this.set(attached);

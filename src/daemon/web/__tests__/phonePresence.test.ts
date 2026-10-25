@@ -2,7 +2,7 @@
 // window, from a device that is neither revoked nor another computer. The
 // window ends on a timer, never a poll.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PHONE_ATTACH_WINDOW_MS, PhonePresence, phonePresenceAt, type PresenceDevice } from '../phonePresence';
+import { PHONE_ATTACH_WINDOW_MS, PRESENCE_RECHECK_MAX_MS, PhonePresence, phonePresenceAt, type PresenceDevice } from '../phonePresence';
 
 const T0 = 1_700_000_000_000;
 const phone = (over: Partial<PresenceDevice> = {}): PresenceDevice => ({ deviceId: 'p1', kind: 'phone', lastSeenAt: T0, ...over });
@@ -49,6 +49,38 @@ describe('PhonePresence', () => {
     vi.useRealTimers();
   });
   const advance = (ms: number) => { clock += ms; vi.advanceTimersByTime(ms); };
+
+  it('a lastSeenAt in the future holds nothing and arms no timer; a stream still attaches', () => {
+    devices = [phone({ lastSeenAt: T0 + 30 * 24 * 3_600_000 })];
+    expect(phonePresenceAt(devices, new Set(), T0)).toEqual({ attached: false, expiresAt: null });
+    presence.update();
+    expect(presence.isAttached).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+    live.add('p1');
+    presence.update();
+    expect(changes).toEqual([true]);
+    // Its next request stamps the current time: one window from there.
+    live.delete('p1');
+    devices = [phone({ lastSeenAt: T0 })];
+    presence.update();
+    advance(PHONE_ATTACH_WINDOW_MS);
+    expect(changes).toEqual([true, false]);
+  });
+
+  it('a window longer than a timer can wait re-checks at the cap instead of firing at once', () => {
+    presence.stop();
+    const windowMs = 2 ** 31 + 5_000;
+    presence = new PhonePresence({ devices: () => devices, liveDeviceIds: () => live, onChange: (a) => changes.push(a), now: () => clock, windowMs });
+    devices = [phone()];
+    const armed = vi.spyOn(globalThis, 'setTimeout');
+    presence.update();
+    expect(armed.mock.calls.at(-1)?.[1]).toBe(PRESENCE_RECHECK_MAX_MS);
+    advance(PRESENCE_RECHECK_MAX_MS);
+    expect(presence.isAttached).toBe(true);
+    expect(armed.mock.calls.at(-1)?.[1]).toBe(PRESENCE_RECHECK_MAX_MS);
+    expect(changes).toEqual([true]);
+    armed.mockRestore();
+  });
 
   it('a stream opening attaches; its close leaves the request window, which ends on its own', () => {
     devices = [phone()];
