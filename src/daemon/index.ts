@@ -6062,6 +6062,8 @@ function registerRpcHandlers(
         return true;
       },
     });
+    // The turn was stopped: its stall is over now, not at the next tick.
+    if (result === 'filled' || result === 'kept' || result === 'stopped') stallWatch?.dropSession(id);
     // The send queue was held off the keyboard for the paste: let it try now.
     void bridge.kickQueue(id);
     return { result };
