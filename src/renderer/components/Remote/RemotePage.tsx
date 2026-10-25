@@ -923,7 +923,8 @@ export default function RemotePage() {
               t={t}
             />
           )}
-          {rowError('a2a-port')}
+          {/* Inside the live region already: no role="alert" of its own, or it is read twice. */}
+          {error?.key === 'a2a-port' && <p className="wmux-remote-row-error">{error.message}</p>}
           {a2aStatus?.listening && (
             <FirewallNoticeView c={a2aFw} listener="a2a" primary={pagePrimaryFree && !a2aListenFailed} quiet seenAt={a2aStatus.inboundSeenAt} live={false} t={t} />
           )}
