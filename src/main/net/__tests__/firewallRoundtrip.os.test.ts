@@ -8,7 +8,9 @@
 //
 // Every rule it makes is in group `wmux-ci` with IDs prefixed `wmux-ci-`
 // (never the real `wmux` group), and `afterAll` removes the whole group
-// whatever happened.
+// whatever happened. Every rule outside that group is listed first and must
+// be exactly the same after each Fix, Remove and the cleanup: an empty
+// pipeline must never reach Remove-NetFirewallRule without a filter.
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -55,14 +57,24 @@ let exe = '';
 let otherLiveExe = '';
 
 /** The probe as the daemon runs it, with no advertised address (judged on Private). */
-async function verdict(): Promise<string> {
+async function verdict(port = PORT, tailnet = false): Promise<string> {
   const ids = firewallRuleIds('a2a', exe, SCOPE);
-  const r = await ps(buildProbeScript({ exe, port: PORT, ips: [], ruleIds: ids, legacyScan: false }));
+  const r = await ps(buildProbeScript({ exe, port, ips: [], ruleIds: ids, legacyScan: false }));
   expect(r.code, r.stderr).toBe(0);
   const facts = parseProbeLine(r.stdout);
   if (!facts) throw new Error(`unreadable probe line: ${r.stdout}`);
-  return assessInbound(facts, { recorded: null, exe, ruleBase: ids.base, tailnet: false }).verdict;
+  return assessInbound(facts, { recorded: null, exe, ruleBase: ids.base, tailnet }).verdict;
 }
+
+/** Read-only: the sorted names of every local rule outside group wmux-ci. */
+async function rulesOutsideCi(): Promise<string> {
+  const r = await ps(
+    `@(Get-NetFirewallRule -PolicyStore PersistentStore -ErrorAction SilentlyContinue | Where-Object { $_.Group -ne ${psQuote(FIREWALL_CI_GROUP)} } | Sort-Object Name | ForEach-Object { $_.Name }) -join ','`,
+  );
+  expect(r.code, r.stderr).toBe(0);
+  return r.stdout.trim();
+}
+let outsideBefore = '';
 
 /** Read-only: how many rules have this Name (0 or 1). */
 async function ruleCount(name: string): Promise<number> {
@@ -79,12 +91,14 @@ async function ruleFields(name: string): Promise<Record<string, unknown>> {
   return JSON.parse(r.stdout) as Record<string, unknown>;
 }
 
-function fix(port: number): string {
-  return buildFixScript({ listener: 'a2a', port, exe, reportedExe: exe, tailnet: false, scope: SCOPE, facts: FACTS });
+function fix(port: number, tailnet = false): string {
+  return buildFixScript({ listener: 'a2a', port, exe, reportedExe: exe, tailnet, scope: SCOPE, facts: FACTS });
 }
 
 describe.runIf(RUN)('firewall Fix round trip (CI runner only, group wmux-ci)', () => {
-  beforeAll(() => {
+  beforeAll(async () => {
+    outsideBefore = await rulesOutsideCi();
+    expect(outsideBefore.length).toBeGreaterThan(0);
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-ci-fw-'));
     // A Squirrel-shaped install: the rule IDs come from the parent of app-X.Y.Z.
     exe = path.join(root, 'wmux', 'app-1.2.3', 'wmux.exe');
@@ -99,6 +113,7 @@ describe.runIf(RUN)('firewall Fix round trip (CI runner only, group wmux-ci)', (
     // Unconditional: whatever the test made, in its own group only.
     await ps(`Remove-NetFirewallRule -Group ${psQuote(FIREWALL_CI_GROUP)} -ErrorAction SilentlyContinue`);
     if (root) fs.rmSync(root, { recursive: true, force: true });
+    if (outsideBefore) expect(await rulesOutsideCi()).toBe(outsideBefore);
   }, 120_000);
 
   it('runs as an administrator (the round trip needs one)', async () => {
@@ -120,6 +135,19 @@ describe.runIf(RUN)('firewall Fix round trip (CI runner only, group wmux-ci)', (
     expect(allow['remote']).toEqual(['LocalSubnet']);
     const block = await ruleFields(ids.pubblock);
     expect(block).toMatchObject({ group: FIREWALL_CI_GROUP, action: 'Block', profile: 'Public', protocol: 'TCP', port: String(PORT), program: exe });
+    expect(await rulesOutsideCi()).toBe(outsideBefore);
+  }, 180_000);
+
+  it('a tailnet address: a LocalSubnet-only Allow no longer covers; the Fix adds 100.64.0.0/10 and the probe sees it', async () => {
+    expect(await verdict(PORT, true)).toBe('not-covered');
+    const r = await ps(fix(PORT, true));
+    expect(r.code, r.stderr).toBe(0);
+    const remote = (await ruleFields(firewallRuleIds('a2a', exe, SCOPE).allow))['remote'] as string[];
+    expect(remote).toHaveLength(2);
+    expect(remote).toContain('LocalSubnet');
+    expect(remote.some((a) => a === '100.64.0.0/10' || a === '100.64.0.0/255.192.0.0'), remote.join(' ')).toBe(true);
+    expect(await verdict(PORT, true)).toBe('covered');
+    expect(await rulesOutsideCi()).toBe(outsideBefore);
   }, 180_000);
 
   it('a port change: the next Fix replaces the pair (same IDs), under Constrained Language Mode', async () => {
@@ -129,6 +157,7 @@ describe.runIf(RUN)('firewall Fix round trip (CI runner only, group wmux-ci)', (
     expect(await ruleCount(ids.allow)).toBe(1);
     expect((await ruleFields(ids.allow))['port']).toBe(String(NEW_PORT));
     expect((await ruleFields(ids.pubblock))['port']).toBe(String(NEW_PORT));
+    expect(await rulesOutsideCi()).toBe(outsideBefore);
   }, 180_000);
 
   it('stage 10 removes dead-path group rules and dead legacy rules, and keeps another live install\'s', async () => {
@@ -150,6 +179,7 @@ describe.runIf(RUN)('firewall Fix round trip (CI runner only, group wmux-ci)', (
     // Another install's rules are not ours to remove.
     expect(await ruleCount('wmux-ci-live-1')).toBe(1);
     expect(await ruleCount('wmux-ci-legacy-live')).toBe(1);
+    expect(await rulesOutsideCi()).toBe(outsideBefore);
   }, 180_000);
 
   it('Remove takes this listener\'s pair away and nothing else', async () => {
@@ -165,6 +195,7 @@ describe.runIf(RUN)('firewall Fix round trip (CI runner only, group wmux-ci)', (
     expect(await ruleCount(ids.pubblock)).toBe(0);
     expect(await ruleCount('wmux-ci-live-1')).toBe(1);
     expect(await verdict()).toBe('not-covered');
+    expect(await rulesOutsideCi()).toBe(outsideBefore);
   }, 180_000);
 });
 
