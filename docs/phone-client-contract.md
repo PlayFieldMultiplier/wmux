@@ -5086,11 +5086,14 @@ the phone approves exactly what the card shows:
   of the empty string.
 - **The phone** recomputes the hash from the card it displays and shows
   Approve only when it equals the request's `payloadHash`; it sends it as the
-  decision's `payloadHash`. The desktop refuses an approval of a `comment` or
-  an `issue_create` without it (`409 client_update_required`: an app that
-  cannot show the text says "Approve on the desktop") and an approval of any
-  act with another one (`409 changed`: read the card again). Deny and undo
-  take no hash.
+  decision's `payloadHash`. payloadHash is required on approve for every
+  request that carries it: `comment`, `issue_create`, `issue_close` and
+  `pr_close` (for the two closes it is the sha256 of the empty string). The
+  desktop refuses an approval without it (`409 client_update_required`: the
+  app says "Approve on the desktop") and with another one (`409 changed`:
+  read the card again). A request without a `payloadHash` (recorded only,
+  stored by an older build) is approved without one. Deny and undo take no
+  hash.
 - Typed words ("ok") and the desktop's "Approve N pending" chip never approve
   a `comment` or an `issue_create`; a close or a merge they may.
 
@@ -5112,7 +5115,7 @@ request stays `approved`; it ends `executed` or `refused`.
 | `403 {error:"read-only: this device was paired without permission to type", detail}` | A decision from a device without the input grant. |
 | `403 {error:"read-only: this device has no explicit input grant", detail}` | A decision from a device whose grant was never set explicitly (paired before grants existed). The desktop has to set it first. |
 | `404 {error:"approval-not-found"}` | No such request. |
-| `409 {error:"approval-refused", code, message}` | The decision does not apply now: `not_pending`, `too_late` (the desktop has already started it), `not_ruleable`, `too_many`, `write_failed`, `client_update_required` (a text act approved without its `payloadHash`), `changed` (a `payloadHash` other than the request's), `not_on_phone` (decided on its desktop card only). |
+| `409 {error:"approval-refused", code, message}` | The decision does not apply now: `not_pending`, `too_late` (the desktop has already started it), `not_ruleable`, `too_many`, `write_failed`, `client_update_required` (an act approved without its `payloadHash`), `changed` (a `payloadHash` other than the request's), `not_on_phone` (decided on its desktop card only). |
 | `503 {error:"desktop-unavailable"}` / `503 {error:"approvals-unavailable"}` | No desktop, or one that cannot answer approvals (too old, factory not started). |
 | `504 {error:"desktop-timeout"}` / `502 {error:"desktop-bad-reply"}` | The desktop did not answer, or answered badly. |
 

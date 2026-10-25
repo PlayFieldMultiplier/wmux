@@ -13,7 +13,7 @@
 // (an approved merge or act waits APPROVAL_UNDO_MS with Undo; `always` is
 // offered for a merge only). The view carries no bot-written text (the
 // request's reason, and an act's text, are on its room card); an act's view
-// carries the card's `payloadHash`, which an approval echoes (a text act
+// carries the card's `payloadHash`, which an approval echoes (an act
 // refuses an approval without it: `client_update_required`, and with
 // another one: `changed`).
 //

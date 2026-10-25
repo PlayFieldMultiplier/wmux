@@ -284,7 +284,7 @@ describe('a comment the owner approves', () => {
     const r2 = rig();
     const req2 = await r2.ask({ action: 'issue_close', issueNumber: 3, reason: 'fixed' });
     r2.gh.login = 'someone-else';
-    r2.approve(req2.requestId);
+    r2.approve(req2.requestId, { payloadHash: req2.payloadHash });
     await vi.advanceTimersByTimeAsync(APPROVAL_UNDO_MS + 10);
     await r2.executor.idle();
     expect(r2.svc.get(req2.requestId)).toMatchObject({ state: 'refused', refusal: 'identity-changed' });
@@ -303,7 +303,7 @@ describe('a comment the owner approves', () => {
       },
     });
     const req = await r.ask({ action: 'issue_close', issueNumber: 3, reason: 'fixed' });
-    r.approve(req.requestId);
+    r.approve(req.requestId, { payloadHash: req.payloadHash });
     directory = 'throws';
     await vi.advanceTimersByTimeAsync(APPROVAL_UNDO_MS + 10);
     await r.executor.idle();
@@ -321,7 +321,7 @@ describe('a comment the owner approves', () => {
     const r = rig();
     const req = await r.ask({ action: 'issue_close', issueNumber: 3, reason: 'fixed' });
     r.gh.repo = { full_name: 'o/renamed', node_id: 'R_1', id: 4242 };
-    r.approve(req.requestId);
+    r.approve(req.requestId, { payloadHash: req.payloadHash });
     await vi.advanceTimersByTimeAsync(APPROVAL_UNDO_MS + 10);
     await r.executor.idle();
     expect(r.svc.get(req.requestId)).toMatchObject({ state: 'refused', refusal: 'repo-changed' });
@@ -331,7 +331,7 @@ describe('a comment the owner approves', () => {
     const two = await again.ask({ action: 'issue_close', issueNumber: 3, reason: 'fixed' });
     expect(again.svc.get(two.requestId)?.actRepo).toEqual({ fullName: 'o/r', nodeId: 'R_1', id: 4242 });
     again.gh.repo = { full_name: 'o/r', node_id: 'R_1', id: 9999 };
-    again.approve(two.requestId);
+    again.approve(two.requestId, { payloadHash: two.payloadHash });
     await vi.advanceTimersByTimeAsync(APPROVAL_UNDO_MS + 10);
     await again.executor.idle();
     expect(again.svc.get(two.requestId)).toMatchObject({ state: 'refused', refusal: 'repo-changed' });
@@ -363,17 +363,33 @@ describe('the other acts', () => {
     expect(r.svc.get(close.requestId)?.state).toBe('executed');
     const pr = await r.ask({ action: 'pr_close', prNumber: 1, reason: 'superseded' });
     expect(pr).toMatchObject({ action: 'pr_close', headSha: HEAD });
-    r.approve(pr.requestId, { source: 'chip' });
+    r.approve(pr.requestId, { source: 'chip', payloadHash: pr.payloadHash });
     await vi.advanceTimersByTimeAsync(APPROVAL_UNDO_MS + 10);
     await r.executor.idle();
     expect(r.gh.writes.at(-1)).toEqual({ method: 'PATCH', endpoint: 'repos/o/r/pulls/1', body: { state: 'closed' } });
     expect(r.svc.get(pr.requestId)?.state).toBe('executed');
   });
 
+  it('a close is approved only with its payloadHash, the empty text\'s: an older phone app sending none is refused and nothing runs', async () => {
+    const r = rig();
+    const close = await r.ask({ action: 'issue_close', issueNumber: 3, reason: 'fixed' });
+    expect(close.payloadHash).toBe(createHash('sha256').update('', 'utf8').digest('hex'));
+    expect(handlePhoneBotApprovalCommand(PHONE_BOT_APPROVAL_DECIDE_COMMAND, { requestId: close.requestId, decision: 'approve' }, () => r.svc))
+      .toEqual({ refused: { code: 'client_update_required', message: expect.any(String) } });
+    expect(r.approve(close.requestId, { source: 'chip' })).toMatchObject({ ok: false, code: 'client_update_required' });
+    await vi.advanceTimersByTimeAsync(APPROVAL_UNDO_MS + 10);
+    await r.executor.idle();
+    expect(r.svc.get(close.requestId)?.state).toBe('pending');
+    expect(r.effects.get(actEffectId(close.requestId))).toBeNull();
+    expect(r.gh.writes).toEqual([]);
+    expect(handlePhoneBotApprovalCommand(PHONE_BOT_APPROVAL_DECIDE_COMMAND, { requestId: close.requestId, decision: 'approve', payloadHash: close.payloadHash }, () => r.svc))
+      .toMatchObject({ request: { state: 'approved' } });
+  });
+
   it('an issue someone else closed first is refused already-closed, nothing written', async () => {
     const r = rig();
     const req = await r.ask({ action: 'issue_close', issueNumber: 3, reason: 'fixed' });
-    r.approve(req.requestId);
+    r.approve(req.requestId, { payloadHash: req.payloadHash });
     (r.gh.issues.get(3) as { state: string }).state = 'closed';
     await vi.advanceTimersByTimeAsync(APPROVAL_UNDO_MS + 10);
     await r.executor.idle();

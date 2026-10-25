@@ -47,9 +47,10 @@
 // A comment, a new issue, or closing an issue or a PR (ACT_ACTIONS) is
 // carried out the same way once approved: the request pins what it acts on
 // and the text it publishes (`act`), the card shows that text whole (fenced,
-// actPayload.ts), an approval of a text act echoes the card's payloadHash
-// from a button on the card (never typed words or the chip), and after the
-// Undo window the act outbox runs it (actHost.ts, actExecutor.ts) under the
+// actPayload.ts), an approval from a button (the card's, the chip's or the
+// phone's) echoes the card's payloadHash (a text act is approved from its
+// card only, never by typed words or the chip), and after the Undo window
+// the act outbox runs it (actHost.ts, actExecutor.ts) under the
 // same gates as a merge; the outcome comes back here (onActEffect). A
 // request an older build stored (no `act`), and every other act, is recorded
 // and decided only (the card says so). A bot's workers are refused all of
@@ -1331,8 +1332,10 @@ export class ApprovalService {
         if (p.source === 'chip' && !TYPED_APPROVABLE_ACTIONS.has(cur.action)) {
           return refuse('not_here', 'this act publishes text: approve it with Approve on its card, where the text is shown');
         }
-        if (cur.act && TEXT_ACT_ACTIONS.has(cur.action) && typeof p.payloadHash !== 'string') {
-          return refuse('client_update_required', 'this act publishes text that this app version cannot show: update the app, or approve it on the desktop');
+        // Every request that carries a payloadHash needs it echoed: an app
+        // that sends none does not know what it approves, a close included.
+        if (cur.payloadHash !== undefined && typeof p.payloadHash !== 'string') {
+          return refuse('client_update_required', 'this app version cannot show this act: update the app, or approve it on the desktop');
         }
         if (cur.act && p.payloadHash !== undefined && p.payloadHash !== cur.payloadHash) {
           return refuse('changed', 'the card changed since you read it: read it again before you approve');

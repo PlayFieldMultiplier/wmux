@@ -168,15 +168,16 @@ describe('ApprovalAnswers', () => {
     expect(container.textContent).toContain('room.approval.headMoved');
   });
 
-  it('the chip approves each pending id through main', async () => {
+  it('the chip approves each pending request through main, echoing its payloadHash', async () => {
     const api = fakeApi([req()]);
     setApprovalsApiForTests(api);
-    await render(createElement(ApprovePendingChip, { ids: ['apr-aaaaaaaa1', 'apr-b'], t }));
+    const hash = 'e'.repeat(64);
+    await render(createElement(ApprovePendingChip, { pending: [{ requestId: 'apr-aaaaaaaa1', payloadHash: hash }, { requestId: 'apr-b' }], t }));
     const chip = container.querySelector('[data-testid="approve-pending-chip"]') as HTMLButtonElement;
     expect(chip.textContent).toBe('room.approval.chip(count=2)');
     await act(async () => chip.click());
-    expect(api.decide.mock.calls.map((c) => c[0])).toEqual([{ requestId: 'apr-aaaaaaaa1', decision: 'approve', source: 'chip' }, { requestId: 'apr-b', decision: 'approve', source: 'chip' }]);
-    await render(createElement(ApprovePendingChip, { ids: [], t }));
+    expect(api.decide.mock.calls.map((c) => c[0])).toEqual([{ requestId: 'apr-aaaaaaaa1', decision: 'approve', source: 'chip', payloadHash: hash }, { requestId: 'apr-b', decision: 'approve', source: 'chip' }]);
+    await render(createElement(ApprovePendingChip, { pending: [], t }));
     expect(container.querySelector('[data-testid="approve-pending-chip"]')).toBeNull();
   });
 });

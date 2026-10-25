@@ -267,7 +267,7 @@ export interface ApprovalDecideRequest {
   /** decision 'always': the rule's scope (default the requesting bot). */
   ruleScope?: 'bot' | 'workspace';
   /** decision 'approve' on an act: the payloadHash of the card the owner
-   *  read. A text act refuses an approval without it
+   *  read. A request that carries one refuses an approval without it
    *  (`client_update_required`) and with another one (`changed`). */
   payloadHash?: string;
   /** Where the decision came from, logged with it: the card's button, the

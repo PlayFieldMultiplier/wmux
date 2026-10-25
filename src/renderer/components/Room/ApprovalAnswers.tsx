@@ -16,7 +16,7 @@ import type { ApprovalRuleNeed } from '../../../shared/botApproval';
 import type { RoomCard as RoomCardData } from '../../../shared/room';
 import Button from '../ui/Button';
 import { FOCUS_RING } from '../focusRing';
-import { approvalPhase, approvalsApi, refreshApprovals, useApprovals, type ApprovalsApi } from './approvalsStore';
+import { approvalPhase, approvalsApi, refreshApprovals, useApprovals, type ApprovalView, type ApprovalsApi } from './approvalsStore';
 
 type T = (key: string, vars?: Record<string, string | number>) => string;
 
@@ -127,15 +127,17 @@ export function ApprovalAnswers({ card, t, api, readOnly = false, now }: {
 
 /** The composer's "Approve N pending" chip: approves, through main, the
  *  pending requests the conversation shows in this thread. */
-export function ApprovePendingChip({ ids, t, api }: { ids: readonly string[]; t: T; api?: ApprovalsApi | null }): React.ReactElement | null {
+export function ApprovePendingChip({ pending, t, api }: { pending: readonly Pick<ApprovalView, 'requestId' | 'payloadHash'>[]; t: T; api?: ApprovalsApi | null }): React.ReactElement | null {
   const [busy, setBusy] = useState(false);
   const bridge = api === undefined ? approvalsApi() : api;
-  if (!bridge || ids.length === 0) return null;
+  if (!bridge || pending.length === 0) return null;
   const approveAll = async () => {
     if (busy) return;
     setBusy(true);
     try {
-      for (const requestId of ids) await bridge.decide({ requestId, decision: 'approve', source: 'chip' });
+      for (const { requestId, payloadHash } of pending) {
+        await bridge.decide({ requestId, decision: 'approve', source: 'chip', ...(payloadHash ? { payloadHash } : {}) });
+      }
       await refreshApprovals();
     } finally {
       setBusy(false);
@@ -145,12 +147,12 @@ export function ApprovePendingChip({ ids, t, api }: { ids: readonly string[]; t:
     <button
       type="button"
       data-testid="approve-pending-chip"
-      data-approve-ids={ids.join(' ')}
+      data-approve-ids={pending.map((r) => r.requestId).join(' ')}
       disabled={busy}
       onClick={() => void approveAll()}
       className={`h-[26px] self-start px-2.5 rounded-[var(--chip-radius)] bg-[var(--selection)] text-[12px] text-[var(--text-main)] hover:bg-[var(--selection-hover)] hover:[--text-muted:var(--text-subtle)] disabled:opacity-60 ${FOCUS_RING}`}
     >
-      {ids.length === 1 ? t('room.approval.chipOne') : t('room.approval.chip', { count: ids.length })}
+      {pending.length === 1 ? t('room.approval.chipOne') : t('room.approval.chip', { count: pending.length })}
     </button>
   );
 }
