@@ -524,7 +524,9 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   pill opens
   the bot's profile (template, job — the owner's words, with Edit —
   workspace, repository — with Change, Add bot's folder picker, checked
-  as at creation (a refusal says why in one line) — the model it thinks
+  as at creation (a refusal says why in one line); the repository set
+  there is the workspace's, remembered for it and given to its bots that
+  have none, while another repository is refused — the model it thinks
   on (its own model and effort, as text with a muted Change that opens the
   model combobox of Settings › Agents roles and an effort Select, with
   Cancel and Save; an invalid model id is refused in one red line before
@@ -855,7 +857,17 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   only its own prefill, never words the owner typed — the job (an optional
   plain textarea) and the repository, always shown as one line — "Works on
   owner/repo" with Change and None (inherited, suggested, or a picked
-  folder; None works on no repository), never attached silently. No role
+  folder; None works on no repository), never attached silently. A
+  workspace's repository is asked once (owner decision 2026-10-25): the
+  suggestion reads the folder the workspace was opened on before its
+  panes' folders; while main is still answering the line reads "Checking
+  the workspace's folder…" and Add, Add team and the first-run Start wait;
+  a refused folder shows "No repository" with one muted line saying why and
+  how to fix it, and an add from there, or None, is remembered for the
+  workspace ("You chose no repository for this workspace…", with Choose
+  folder…), so later adds and Add team do not ask again. Whenever the
+  workspace gets a repository (Add bot, Add team, the first run, a
+  profile's Change) its bots without one take it. No role
   picker. In Settings › Bots, Add is there whether the bots are on or off;
   while they are off it asks once in place ("Bots are off. Adding <name>
   turns bots on.", Turn bots on and add). A
@@ -893,7 +905,9 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   it can. A build that cannot tell never blocks Start. Beside Start, a
   secondary **Add a team (lead + 4 roles)** does the same for the five-bot
   team (no name to type), opens the lead's chat and offers the group chat
-  row (Add bot, above).
+  row (Add bot, above). Under them the repository line of Add bot, with its
+  Checking state and its reason line; Start and Add a team wait while it
+  checks.
 
 ### Fleet
 
@@ -2066,6 +2080,7 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
 | 2026-10-24 | Owner decision (chat view G2/G5): each chat view carries a neutral kind badge, "Terminal-linked chat" (chat 1) or "Chat only" (chat 2), with a hover line; chat 1's approval note reads "Waiting for your approval. Answer in Terminal". The Terminal / Chat switch is labelled "Show as chat", and the first Claude or Codex start in a pane asks once per agent "Show this as a chat?" (Show / Keep terminal); users who already set the chat view are never asked | Two chats looked alike and the approval note read like an error. Asking once, at the moment an agent first runs, finds the chat view for new users without changing anything for people who already chose |
 | 2026-10-25 | Owner decision (roadmap R2): Rewind gets a button on the agent toolbar after Schedule, besides its pane ⋮ menu item. It shows only for a Claude terminal and is disabled while Claude is mid-turn, with "Claude is working" as the tooltip; a draft or an open prompt is still refused at click time with the same toasts as the menu. The onboarding toolbar step names it | When an agent broke the code, people asked the agent to undo it and made it worse, because Rewind sat in a menu they never opened. A sixth pane-cluster button would break the five-button width contract; the toolbar is already the home of session verbs such as Schedule, and the onboarding step covers the bar being hover-revealed |
 | 2026-10-25 | Chrome profile for unbound workspaces: in the workspace's right-click Chrome profile submenu, an unbound workspace gets a first row "Use <name> (last used)" that binds that profile on click, and the default row reads "default (shared by workspaces with no profile)". Both are plain menu rows: no colour, no badge. The first time a browser call in an unbound workspace uses the shared default profile in a run of the app, one info toast says "This workspace has no Chrome profile, so the browser used the shared default profile." with a Use <name> action when a last-used profile exists; clicking the toast jumps to the workspace. Nothing binds on its own | Scheduled runs and agents in a new workspace opened the shared default Chrome, which is usually signed out, and nothing said why. The offer sits where the choice is already made, the toast comes at the moment it matters, and "no logins" is not claimed because the shared profile may be signed in |
+| 2026-10-25 | Owner decision: a workspace's repository is asked once. Main remembers each workspace's answer (`factory/workspace-repos.json`: its repository, or the owner's None) and new bots and teams there take it without asking; the suggestion reads the folder the workspace was opened on before its panes' folders (a WSL pane's Linux path read through its distro); a refused folder shows its reason and fix in one muted line under "No repository"; Add, Add team and the first-run Start wait, saying "Checking the workspace's folder…", until main answers; whenever the workspace gets a repository (Add bot, Add team, the first run, a bot profile's Change) it is remembered and its bots without one take it, while a bot on another repository keeps it and a None takes no repository from anyone. Amends the 2026-10-14 row's repository line, and Add bot, Chat and First run | The owner linked a workspace to a folder and was then asked for the repository again for the bots, and again in each bot's profile: the suggestion read only the active pane's folder, said nothing when it was refused, remembered nothing, and a bot added before it arrived got no repository |
 
 ### Desktop conversation view
 
