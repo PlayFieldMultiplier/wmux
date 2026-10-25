@@ -41,7 +41,6 @@ import {
   type TurnSource,
 } from './hostSearch';
 import http from 'node:http';
-import type net from 'node:net';
 import { InboundCounter, isLoopbackHost } from '../net/inboundSeen';
 import type { AgentStatus } from '../../shared/types';
 import { isRemoteAgentStatus } from '../../shared/remoteHosts';
@@ -489,7 +488,7 @@ export interface WebTerminalInfo {
    * loopback URL — correct about the bind, useless to the operator.
    */
   allowedHosts?: string[];
-  /** Connections from other machines since start, while exposed beyond loopback (see shared/web.ts). */
+  /** Authenticated requests from other machines since start, while exposed beyond loopback (see shared/web.ts). */
   inboundSeenAt?: number | null;
   inboundCount?: number;
   /** The last start's bind failure, set by the daemon's status RPC while not running. */
@@ -1948,10 +1947,10 @@ export class WebTerminalServer {
     });
 
     this.server = server;
-    // "Another PC reached this one": only an exposed bind can be reached from elsewhere.
-    const inbound = isLoopbackHost(options.host) ? null : new InboundCounter();
-    this.inbound = inbound;
-    if (inbound) server.on('connection', (socket: net.Socket) => inbound.note(socket.remoteAddress));
+    // "Another PC reached this one": only an exposed bind can be reached from
+    // elsewhere, and only an authenticated request counts (see the route
+    // handler's authenticate()), so a LAN scanner's bare connect does not.
+    this.inbound = isLoopbackHost(options.host) ? null : new InboundCounter();
 
     // Tee fleet-wide attention signals into EVERY connected SSE client — a
     // viewer watching pane A must still hear that pane B needs an answer.
@@ -2655,6 +2654,8 @@ export class WebTerminalServer {
       String(req.headers.accept ?? '').includes('text/event-stream');
     const isStream = (req.method === 'GET' && p === '/api/stream') || wantsEventStream;
     const auth = await this.authenticate(req, url, isStream);
+    // An authenticated request from another machine is "another PC reached this one".
+    if (auth.ok) this.inbound?.note(req.socket.remoteAddress);
     if (!auth.ok) {
       // The reason is the point: #599's 401 screen had to guess between "the
       // server restarted" and "you were thrown out", and guessed wrong either

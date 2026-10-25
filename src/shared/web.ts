@@ -145,7 +145,8 @@ export interface WebTerminalInfo {
    */
   pairStartError?: string;
   /**
-   * Connections from other machines since this server started, counted only
+   * Authenticated requests from other machines since this server started
+   * (a bare connect, such as a LAN scanner's, does not count), counted only
    * while it listens beyond loopback ("Expose to network"): the epoch ms of
    * the last one and how many. Loopback and this PC's own addresses never
    * count. Absent from an older daemon.

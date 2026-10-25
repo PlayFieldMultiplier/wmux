@@ -4,7 +4,8 @@
 // connect to its own LAN address takes the loopback path, which the firewall
 // does not filter. What it can see is a connection that really arrived from
 // elsewhere. A listener counts those (A2A: a finished TLS handshake; the
-// exposed web server: an accepted socket) so the UI can say "Another PC
+// exposed web server: an authenticated request, so a scanner's connect does
+// not count) so the UI can say "Another PC
 // reached this one at 14:02" after a Fix. Loopback and this machine's own
 // addresses never count. The counter is per listener start.
 //
