@@ -1323,6 +1323,29 @@ describe('room-wide owner messages, wake context and turn ends', () => {
 describe('external guests and the bot\'s conversation', () => {
   const GUEST = '0b5f6a7e-1c2d-4e3f-8a9b-0c1d2e3f4a5b';
 
+  it('New conversation is refused mid-turn and that turn still saves its session; between turns the next wake starts clean, marks and all', async () => {
+    // The owner's own words: only the mark set below taints the conversation.
+    setBotRuntimePorts({ wakeTainted: () => false });
+    const r = rig();
+    const id = createBot(r);
+    r.runtime.wake(id, { text: 'hello' });
+    await settle();
+    markConversation(id, 'tainted');
+    expect(r.runtime.newConversation(id)).toEqual({ ok: false, code: 'running', message: 'stop the turn first' });
+    r.adapters[0].end();
+    await settle();
+    expect(r.sessions.get(id)).toMatchObject({ sessionId: 'sess-1', tainted: true });
+    expect(r.runtime.newConversation(id)).toMatchObject({ ok: true });
+    expect(r.adapters[0].disposed).toBe(true);
+    expect(r.sessions.get(id)).toBeNull();
+    expect(conversationMarks(id)).toBeNull();
+    r.runtime.wake(id, { text: 'again' });
+    await settle();
+    expect(r.adapters[1].started?.resumeSessionId).toBeUndefined();
+    expect(conversationMarks(id)).toEqual({ tainted: false, signedIn: false });
+    expect(r.runtime.newConversation('bot-0000ffff')).toMatchObject({ ok: false, code: 'not_found' });
+  });
+
   it('a guest\'s wake runs in a fresh conversation that is never saved; the owner\'s conversation resumes after it', async () => {
     const r = rig();
     const id = createBot(r);

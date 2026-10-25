@@ -322,6 +322,8 @@ describe('plan.propose', () => {
   it('a conversation that took in outside text proposes no plan, even when its wake is the owner\'s', async () => {
     const d = deps({ conversationTainted: () => true });
     expect(await handlePlanPropose({ title: 'Plan', items: [ITEM] }, ctxOf(MOA), d)).toMatchObject({ ok: false, code: 'not_authorized', message: expect.stringContaining('saves nothing that runs later') });
+    // It names the owner's control that starts a clean one.
+    expect(await handlePlanPropose({ title: 'Plan', items: [ITEM] }, ctxOf(MOA), d)).toMatchObject({ message: expect.stringContaining('New conversation, on your profile in the Bots page') });
     expect((d.rooms() as RoomWriter).read('ws-hq', { guests: true }).cards).toHaveLength(0);
   });
 
