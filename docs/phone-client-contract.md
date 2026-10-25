@@ -2662,6 +2662,18 @@ pushes each once more under its collapse id, so the phone replaces the banner
 rather than stacking a second one. A request that stopped waiting while the
 daemon was down is not retracted.
 
+**A push is a nudge; the app's list is the record.** Open the Bots
+conversation and read what is waiting rather than relying on banners:
+
+- A request is pushed once, when it starts waiting. A device that registers
+  `botApprovalPush` later, or had no reachable registration then, is not sent
+  the requests already waiting; the app shows them when opened.
+- A push presence held and the park queue later evicted (past its cap) is
+  never sent, the same trade pane approvals make.
+- A device that re-registers without `botApprovalPush` gets no retraction for
+  a banner it already has.
+- At most the 200 oldest waiting requests are pushed.
+
 Bot questions, login requests and secret requests are not pushed yet.
 
 ---

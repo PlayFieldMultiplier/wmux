@@ -12,7 +12,7 @@ import { handlePhoneBrowser } from './phone/PhoneBrowser';
 import { handlePhoneWorkspaces } from './phone/PhoneWorkspaces';
 import { handlePhoneQuickCommands } from './quickCommands/QuickCommandStore';
 import { installPhoneBridge } from './phone/installPhoneBridge';
-import { botApprovalPushRows, createBotApprovalPushFeed, setBotApprovalPushFeed } from './phone/BotApprovalPushFeed';
+import { botApprovalPushTable, createBotApprovalPushFeed, setBotApprovalPushFeed } from './phone/BotApprovalPushFeed';
 import { handlePhoneMoaWake } from './factory/phoneMessage';
 import { MOA_WAKE_COMMAND } from '../shared/moaWake';
 import { handlePhoneAccounts } from './phone/PhoneAccounts';
@@ -1451,7 +1451,7 @@ registerWorkspaceFactsPublisher(workspaceFactsPublisher);
 const botApprovalPushFeed = createBotApprovalPushFeed({
   rows: () => {
     const bots = getBotDirectory();
-    return botApprovalPushRows(getApprovalService()?.listForOperator() ?? [], (botId) => bots?.get(botId)?.name);
+    return botApprovalPushTable(getApprovalService()?.listForOperator() ?? null, (botId) => bots?.get(botId)?.name);
   },
   push: async (rows) => {
     if (!daemonClient?.isConnected) throw new Error('Daemon not connected');
@@ -2399,7 +2399,8 @@ app.on('ready', async () => {
       // process, so read it fresh.
       invalidateAutonomyCache();
       void workspaceFactsPublisher.publishNow();
-      // A restarted daemon holds no bot approval table.
+      // A restarted daemon holds no bot approval table. Sent only once the
+      // approval store has an answer; its start publishes otherwise.
       botApprovalPushFeed.publishNow();
       client.on('approvals:changed', () => { void trackRecordFeed.onApprovalsChanged(); });
       // Handler swap to daemon-routed mode. The microsecond window where

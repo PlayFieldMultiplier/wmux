@@ -9,7 +9,7 @@ import type { Fact } from '../../shared/facts';
 import { APPROVALS_FILENAME, APPROVAL_LIMITS, ApprovalService, getApprovalService, registerApprovalRpc, setApprovalService } from './approvals';
 import { registerFactoryRpcModule, type FactoryHostDeps } from './factoryHost';
 import { conversationSignedIn, conversationTainted } from './conversationMarks';
-import { noteBotApprovalsChanged } from '../phone/BotApprovalPushFeed';
+import { noteBotApprovalStoreUnavailable, noteBotApprovalsChanged } from '../phone/BotApprovalPushFeed';
 
 registerFactoryRpcModule('approvals', (router, deps: FactoryHostDeps) => {
   // Why the store did not start: bots asking for approval are told, so the
@@ -74,6 +74,7 @@ registerFactoryRpcModule('approvals', (router, deps: FactoryHostDeps) => {
       } catch (err) {
         startFailure = String(err);
         console.error(`[factory] approvals did not start: ${startFailure}`);
+        noteBotApprovalStoreUnavailable();
         return;
       }
       startFailure = null;
@@ -98,8 +99,6 @@ registerFactoryRpcModule('approvals', (router, deps: FactoryHostDeps) => {
       off = null;
       getApprovalService()?.stop();
       setApprovalService(null);
-      // Nothing can be answered with the store stopped: the phone's banners go.
-      noteBotApprovalsChanged();
     },
   };
 });
