@@ -944,8 +944,10 @@ Settings › LAN keeps only the listener switches. Top to bottom:
   **Connect a PC…** (secondary).
 - **This computer — one line** on a `--selection-subtle` band: this PC's
   name, phone access (`off` / this computer only / local network / Tailnet),
-  the A2A state (`A2A :45660 listening`, the listener's error, or `A2A off`)
-  and a **Details** toggle. While phone access is off, Share & pair sits on
+  the A2A state (`A2A :45660 listening`, `A2A: port 45660 in use`,
+  `A2A: no firewall rule for port 45660`, another listener error, or
+  `A2A off`; never "not reachable", which the host cannot know) and a
+  **Details** toggle. While phone access is off, Share & pair sits on
   the line (its popover leads with Pair a phone, which starts sharing and
   shows the QR in the same click. It is offered only once the address will
   be reachable: a usable tailnet ticks HTTPS over Tailscale visibly first,
@@ -956,7 +958,10 @@ Settings › LAN keeps only the listener switches. Top to bottom:
   Details unfolds in place: the phone
   address without its token (copy), whether input is allowed, Share & pair,
   the A2A port and the full security code (the certificate fingerprint;
-  plain mono values; the code wraps anywhere, copy). Connecting another computer by A2A starts from
+  plain mono values; the code wraps anywhere, copy), and while A2A listens
+  a **Firewall** line: what the last check said ("Allowed on private
+  networks · TCP 45660", with a ghost **Remove** for wmux's own rule) or
+  "Not checked" with a ghost **Check firewall**. Connecting another computer by A2A starts from
   Connect a PC…; as a workspace share it starts from Connect a PC… or from
   Share & pair's **Connect another computer**, which mints the pairing link
   and copies it in one click. Connect a PC's invite tab carries **Also let
@@ -964,6 +969,32 @@ Settings › LAN keeps only the listener switches. Top to bottom:
   pair answers over HTTPS): ticked, the copy holds the invite and a
   view-only pairing link on a second line, and the other PC's one paste
   connects both.
+- **Port and firewall notices** — directly under the band, drawn only
+  when something needs doing or explaining, one notice row each (icon ·
+  title + one line · vertical hairline · action): a listener that could
+  not bind (who holds the port, or that Windows reserves it; **Use port N**
+  with "PCs already paired must be invited again"), or the firewall check's
+  verdict with its one fitting action (**Allow through firewall**, whose
+  line says which prompt Windows will show; **Open network settings** for a
+  Public network; **Open Windows Firewall** for a Block rule; **Copy
+  details** for policy, block-all, another firewall product or a refused
+  program; **Check firewall** when the check could not be read). An earlier
+  Windows prompt that opened wmux to public networks gets its own row with
+  **Open Windows Firewall** (after a Fix it adds that this port is now
+  blocked on public networks). Tone: warning — the caution yellow on the
+  glyph and the notice hairline only; no wash, never the needs-you orange,
+  no rail badge, not counted in Needs you. The steady "allowed" state lives
+  in Details; under the band a muted "Allowed … Now press Connect again on
+  the other PC" shows only right after a Fix, with "Another PC reached this
+  one at 14:02" once one has. The copy never says "fixed". The check runs a
+  PowerShell process, so it runs when the page opens, on Check firewall,
+  after a Fix and when the listener starts or moves to another port, never
+  on the 10 s poll. The same rows appear in Connect a PC's invite tab (a
+  bind failure; after copying, a muted "If the other PC can't connect, come
+  back here and check the firewall." with a ghost Check firewall), Settings
+  › LAN (A2A and LanLink) and Share & pair (a failed start with Use port N
+  in the stopped body; the firewall row while exposed to the network);
+  there their actions are always secondary.
 - **Tailscale** — inside the same band, under a `--stroke` hairline: four
   checks from one read-only `tailscale status --json`, run when the page
   opens and on **Check again** (never on the 10 s poll): Tailscale
@@ -1085,7 +1116,9 @@ Settings › LAN keeps only the listener switches. Top to bottom:
   work + PCs whose security code changed, the same count from one store
   slice, cleared while the daemon is away). Link request toasts offer Review
   only: the repo a request names is the other PC's claim. The summary line, headings and activity stay neutral. The page's
-  one primary is the first Accept, else (empty page) Connect a PC….
+  one primary is the first Accept, else (empty page) Connect a PC…, else
+  the port or firewall notice's action (Use port N, or Allow through
+  firewall). The firewall and port notices spend no orange.
 - Ids show only as needed and never in full; tokens and invite codes render
   only inside the dialog that made them.
 
