@@ -23,7 +23,7 @@ import {
   type FirstRunFolderCheck,
 } from '../../shared/firstRun';
 import type { BotStore } from '../factory/botStore';
-import { homeShortPath, recordWorkspaceRepo, resolveBotRepo, withWorkspaceRepoLock, workspaceBotsRepo, type BotRepoDeps } from '../factory/botCreate';
+import { brokenRepoRefusal, homeShortPath, liveWorkspaceRepo, recordWorkspaceRepo, resolveBotRepo, withWorkspaceRepoLock, workspaceBotsRepo, type BotRepoDeps } from '../factory/botCreate';
 import { sameRepoKey } from '../../shared/forgeHosts';
 
 /** The first-run bot's job: part of its system prompt. */
@@ -103,6 +103,12 @@ export async function firstRunBot(
         code: 'repo_mismatch',
         message: `This workspace's bots work on ${current.repoKey} (${current.repoPath}); ${resolved.repo.repoPath} is ${resolved.repo.repoKey}. A workspace works on one repository.`,
       };
+    }
+    // The bots' repository is resolved again before a new bot takes it.
+    const live = current ? await liveWorkspaceRepo(store, workspaceId, deps) : null;
+    if (live && 'broken' in live) {
+      const refused = brokenRepoRefusal(live.broken);
+      return { ok: false, code: refused.code === 'repo_untrusted' ? 'not_a_repo' : refused.code, message: refused.message };
     }
     const created = store.create({
       workspaceId,

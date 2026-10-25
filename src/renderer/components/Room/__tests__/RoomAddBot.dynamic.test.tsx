@@ -286,7 +286,7 @@ describe('Add bot: the repository comes from the workspace', () => {
     expect(create).toHaveBeenLastCalledWith({ workspaceId: WS, name: 'Dev', repoFolder: '/src/picked' });
   });
 
-  it('the folder follows the chosen workspace until the owner picks one, which then stays', async () => {
+  it('a folder picked for one workspace is never sent for another: each workspace starts from its own suggestion', async () => {
     const { port, suggestRepo, create } = formPort([], async (ws) => (ws === WS
       ? { ok: false, code: 'no_folder' }
       : { ok: true, repoKey: 'github.com/acme/api', root: '/r/api', displayRoot: '/r/api', inherited: false }));
@@ -301,18 +301,19 @@ describe('Add bot: the repository comes from the workspace', () => {
     await choose('ws-b');
     expect(suggestRepo).toHaveBeenLastCalledWith('ws-b');
     expect(q('factory-add-bot-repo')!.textContent).toBe('acme/api·/r/api');
-    // Picked by hand: the folder stays the owner's whatever workspace follows.
+    // Picked by hand for ws-b: it is ws-b's only.
     await act(async () => q<HTMLButtonElement>('factory-add-bot-folder')!.click());
     expect(q('factory-add-bot-path')!.textContent).toBe('/src/picked');
     await choose(WS);
     expect(suggestRepo).toHaveBeenLastCalledWith(WS);
-    expect(q('factory-add-bot-path')!.textContent).toBe('/src/picked');
+    expect(q('factory-add-bot-path')).toBeNull();
+    expect(q('factory-add-bot-repo-row')!.getAttribute('data-repo-kind')).toBe('none');
     await typeInto('factory-add-bot-name', 'Dev');
     await act(async () => q<HTMLButtonElement>('factory-add-bot-submit')!.click());
-    expect(create).toHaveBeenLastCalledWith({ workspaceId: WS, name: 'Dev', repoFolder: '/src/picked' });
+    expect(create).toHaveBeenLastCalledWith({ workspaceId: WS, name: 'Dev' });
   });
 
-  it('None is the owner\'s too: it survives a switch, and A→B→A without a hand edit follows each workspace', async () => {
+  it('None is the workspace\'s it was pressed for: a switch drops it, and A→B→A without a hand edit follows each workspace', async () => {
     const sug = (root: string): FactoryBotRepoSuggestion => ({ ok: true, repoKey: `github.com/acme/${root}`, root: `/r/${root}`, displayRoot: `/r/${root}`, inherited: false });
     const { port, create } = formPort([], async (ws) => sug(ws === WS ? 'app' : 'api'));
     await renderForm(port, []);
@@ -329,11 +330,14 @@ describe('Add bot: the repository comes from the workspace', () => {
     await act(async () => q<HTMLButtonElement>('factory-add-bot-repo-none')!.click());
     expect(q('factory-add-bot-no-repo')).not.toBeNull();
     await choose('ws-b');
-    expect(q('factory-add-bot-no-repo')).not.toBeNull();
-    expect(q('factory-add-bot-repo')).toBeNull();
+    expect(q('factory-add-bot-no-repo')).toBeNull();
+    expect(q('factory-add-bot-repo')!.textContent).toBe('acme/api·/r/api');
     await typeInto('factory-add-bot-name', 'Dev');
     await act(async () => q<HTMLButtonElement>('factory-add-bot-submit')!.click());
-    // None is an answer: main remembers it for the workspace.
+    expect(create).toHaveBeenLastCalledWith({ workspaceId: 'ws-b', name: 'Dev', repoFolder: '/r/api' });
+    // Pressed for ws-b: None is an answer, and main remembers it for ws-b.
+    await act(async () => q<HTMLButtonElement>('factory-add-bot-repo-none')!.click());
+    await act(async () => q<HTMLButtonElement>('factory-add-bot-submit')!.click());
     expect(create).toHaveBeenLastCalledWith({ workspaceId: 'ws-b', name: 'Dev', noRepo: true });
   });
 

@@ -870,10 +870,15 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   nothing, so the folder is offered again once it is fixed; None is
   remembered for the workspace ("You chose no repository for this
   workspace…", with Choose folder…), so later adds and Add team do not ask
-  again. A remembered repository no bot holds is checked again before a
-  new bot takes it (offered with Change) and forgotten when it no longer
-  resolves to the same repository; a picked folder replaces it; removing
-  the workspace forgets it. Whenever the workspace gets a repository (Add
+  again. The workspace's repository is checked again before every new bot
+  takes it: one no bot holds is offered with Change and forgotten when it
+  no longer resolves to the same repository (a picked folder replaces it);
+  one its bots hold that no longer works refuses the add in one line
+  ("The workspace's repository folder no longer works (…); change it on a
+  bot's profile."), and no bot is re-pointed. Removing the workspace
+  forgets it. A folder picked, or None pressed, is for the workspace
+  chosen then: choosing another workspace starts from its own
+  suggestion. Whenever the workspace gets a repository (Add
   bot, Add team, the first run, a profile's Change) its bots without one
   take it. No role
   picker. In Settings › Bots, Add is there whether the bots are on or off;

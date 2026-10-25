@@ -250,12 +250,42 @@ describe('createBotFromFolder: one repository per workspace', () => {
     expect(workspaceRepo(store, 'ws-1')).toEqual({ repoKey: 'github.com/acme/app', repoPath: path.normalize('/src/app'), originPin: 'https://github.com/acme/app.git' });
   });
 
-  it('a later repo bot without a folder takes the workspace\'s repo, without running git', async () => {
+  it('a later repo bot without a folder takes the workspace\'s repo, resolved once again first (one resolve, no extra git)', async () => {
     await createBotFromFolder(store, { workspaceId: 'ws-1', role: 'lead', repoFolder: '/src/app' }, deps);
-    const git = vi.fn();
-    const r = await createBotFromFolder(store, { workspaceId: 'ws-1', role: 'verifier' }, { git });
+    const git = fakeGit(ok('/src/app\n'), ok('https://github.com/acme/app.git\n'));
+    const r = await createBotFromFolder(store, { workspaceId: 'ws-1', role: 'verifier' }, { git, realpath: (p: string) => p });
     expect(r).toMatchObject({ ok: true, bot: { role: 'verifier', repo: { repoKey: 'github.com/acme/app', repoPath: path.normalize('/src/app') } } });
-    expect(git).not.toHaveBeenCalled();
+    expect(git.mock.calls.filter((c) => c[0][1] === '--show-toplevel')).toHaveLength(1);
+  });
+
+  it('the bots\' repository no longer works: a new bot is refused with the reason and the fix, and no bot is re-pointed', async () => {
+    const lead = await createBotFromFolder(store, { workspaceId: 'ws-1', role: 'lead', repoFolder: '/src/app' }, deps);
+    if (!lead.ok) throw new Error('not made');
+    const names = { coordinator: 'Lead', researcher: 'Res', developer: 'Dev', issue: 'Iss', reviewer: 'Rev' };
+    const cases: Array<[string, ReturnType<typeof fakeGit>]> = [
+      ['gone', fakeGit(fail, fail)],
+      ['another repository', fakeGit(ok('/src/app\n'), ok('git@github.com:acme/api.git\n'))],
+      ['another pin', fakeGit(ok('/src/app\n'), ok('git@github.com:acme/app.git\n'))],
+    ];
+    for (const [why, git] of cases) {
+      const r = await createBotFromFolder(store, { workspaceId: 'ws-1', name: `Bot ${why}` }, { git, realpath: (p: string) => p });
+      expect(r, why).toMatchObject({ ok: false });
+      if (r.ok) continue;
+      expect(r.message, why).toContain('The workspace\'s repository folder no longer works (');
+      expect(r.message, why).toContain('change it on a bot\'s profile');
+      // A picked folder of the same repository does not slip past it either.
+      expect(await createBotFromFolder(store, { workspaceId: 'ws-1', name: `Picked ${why}`, repoFolder: '/src/app' }, { git, realpath: (p: string) => p }), why).toMatchObject({ ok: false });
+      expect(await createTeamFromFolder(store, { workspaceId: 'ws-1', names }, { git, realpath: (p: string) => p }), why).toMatchObject({ ok: false });
+    }
+    expect(store.list({ workspaceId: 'ws-1' })).toHaveLength(1);
+    expect(store.get(lead.bot.id)?.repo).toMatchObject({ repoKey: 'github.com/acme/app', originPin: 'https://github.com/acme/app.git' });
+  });
+
+  it('noInherit goes with neither noRepo nor a folder', async () => {
+    for (const extra of [{ noRepo: true }, { repoFolder: '/src/app' }]) {
+      expect(await createBotFromFolder(store, { workspaceId: 'ws-1', name: 'Ann', noInherit: true, ...extra }, deps)).toMatchObject({ ok: false, code: 'invalid_argument' });
+    }
+    expect(store.list()).toHaveLength(0);
   });
 
   it('refuses a folder of another repository in that workspace, and creates nothing', async () => {
@@ -554,16 +584,6 @@ describe('the workspace\'s repository is asked once (workspace-repos.json)', () 
     expect(await pending).toEqual({ ok: false, code: 'none' });
   });
 
-  it('the fill skips a role that works on no repository (the legacy HQ moa)', async () => {
-    const moa = store.create({ workspaceId: 'ws-1', name: 'Moa', role: 'moa' });
-    const dev = store.create({ workspaceId: 'ws-1', name: 'Dev' });
-    if (!moa.ok || !dev.ok) throw new Error('not made');
-    const told = vi.fn();
-    expect(recordWorkspaceRepo(store, 'ws-1', { repoKey: 'github.com/acme/app', repoPath: APP }, { records, profileChanged: told })).toEqual([dev.bot.id]);
-    expect(store.get(moa.bot.id)?.repo).toBeUndefined();
-    expect(told).not.toHaveBeenCalledWith(moa.bot.id);
-  });
-
   it('a team with a repository fills the workspace\'s earlier bots without one; a bot on another repository keeps it', async () => {
     const told = vi.fn();
     const app = { git: fakeGit(ok('/src/app\n'), ok('https://github.com/acme/app.git\n')), realpath: (p: string) => p, records, profileChanged: told };
@@ -766,7 +786,7 @@ describe('"Add team"', () => {
     expect(store.list({ workspaceId: 'ws-3' })).toEqual([]);
     // Without a folder the team takes the workspace's repository, when it has one.
     store.create({ workspaceId: 'ws-5', template: 'custom', name: 'Old', repo: { repoKey: 'github.com/acme/old', repoPath: '/src/old' } });
-    const inherited = await createTeamFromFolder(store, { workspaceId: 'ws-5', names });
+    const inherited = await createTeamFromFolder(store, { workspaceId: 'ws-5', names }, { git: fakeGit(ok('/src/old\n'), ok('https://github.com/acme/old.git\n')), realpath: (p) => p });
     expect(inherited.ok && inherited.bots.every((b) => b.repo?.repoKey === 'github.com/acme/old')).toBe(true);
   });
 

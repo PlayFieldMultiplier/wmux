@@ -434,9 +434,10 @@ export const REPO_SUGGEST_TIMEOUT_MS = 10_000;
 /** What "Add bot" shows for a workspace's repository and what it sends:
  *  main's suggestion (the chosen workspace's folder, asked again when the
  *  workspace, its bots' repo or its folders change), a picked folder, or
- *  None. A folder the owner picked (or None) is theirs: it stays when the
- *  workspace changes; until then the folder follows the workspace. Shared
- *  with the first screen. Main's answer belongs to the ask it answers (the
+ *  None. Everything here belongs to the workspace it was given for: a folder
+ *  picked (or None pressed) for one workspace is never shown or sent for
+ *  another, and choosing another workspace starts from its own suggestion.
+ *  Shared with the first screen. Main's answer belongs to the ask it answers (the
  *  workspace and what triggered it): a new ask reads as `pending` on the
  *  same render, and Add waits (an add then would make a bot without the
  *  workspace's repository), for REPO_SUGGEST_TIMEOUT_MS at most. `request`
@@ -446,8 +447,11 @@ export const REPO_SUGGEST_TIMEOUT_MS = 10_000;
  *  it was not shown). A refusal alone sends nothing, so a folder fixed later
  *  is offered again. */
 export function useAddBotRepo(port: FactoryBotPort, rows: readonly FactoryBotRow[], workspaceId: string, pickFolder: () => Promise<string | null>) {
-  const [folder, setFolder] = useState<string | null>(null);
-  const [none, setNone] = useState(false);
+  // The owner's own choice, kept with the workspace it was made for.
+  const [choice, setChoice] = useState<{ workspaceId: string; folder: string | null; none: boolean } | null>(null);
+  const mine = choice?.workspaceId === workspaceId ? choice : null;
+  const folder = mine?.folder ?? null;
+  const none = mine?.none ?? false;
   const [answer, setAnswer] = useState<{ ask: string; suggestion: FactoryBotRepoSuggestion | null; unchecked: 'failed' | 'slow' | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const own = workspaceRepoOf(rows, workspaceId);
@@ -482,14 +486,16 @@ export function useAddBotRepo(port: FactoryBotPort, rows: readonly FactoryBotRow
         ? { noInherit: true }
         : {};
   const choose = async () => {
+    // A folder is the workspace's that was chosen when the picker opened.
+    const forWorkspace = workspaceId;
     try {
       const picked = await pickFolder();
-      if (picked) { setFolder(picked); setNone(false); setError(null); }
+      if (picked) { setChoice({ workspaceId: forWorkspace, folder: picked, none: false }); setError(null); }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
   };
-  return { view, repoFolder, request, pending: view.kind === 'checking', choose, chooseNone: () => { setNone(true); setFolder(null); }, error };
+  return { view, repoFolder, request, pending: view.kind === 'checking', choose, chooseNone: () => setChoice({ workspaceId, folder: null, none: true }), error };
 }
 
 /** The names "Add team" gives its bots, in the owner's language. */
