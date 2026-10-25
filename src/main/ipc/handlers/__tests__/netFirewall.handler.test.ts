@@ -19,6 +19,9 @@ vi.mock('../../../net/elevate', () => ({
   }),
   tokenElevationType: () => 3,
 }));
+// The prompt kind comes from these two, never from the host running the test
+// (a CI runner's token is already elevated).
+vi.mock('../../../computer/selfElevation', () => ({ isSelfElevated: () => false }));
 
 import * as electron from 'electron';
 import type { BrowserWindow } from 'electron';
