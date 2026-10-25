@@ -320,12 +320,22 @@ describe('a comment the owner approves', () => {
   it('a renamed or moved repository is refused repo-changed before any write', async () => {
     const r = rig();
     const req = await r.ask({ action: 'issue_close', issueNumber: 3, reason: 'fixed' });
-    r.gh.repo = { full_name: 'o/renamed', node_id: 'R_1' };
+    r.gh.repo = { full_name: 'o/renamed', node_id: 'R_1', id: 4242 };
     r.approve(req.requestId);
     await vi.advanceTimersByTimeAsync(APPROVAL_UNDO_MS + 10);
     await r.executor.idle();
     expect(r.svc.get(req.requestId)).toMatchObject({ state: 'refused', refusal: 'repo-changed' });
     expect(r.gh.writes).toEqual([]);
+    // Same name, another numeric id: a repository made again under that name.
+    const again = rig();
+    const two = await again.ask({ action: 'issue_close', issueNumber: 3, reason: 'fixed' });
+    expect(again.svc.get(two.requestId)?.actRepo).toEqual({ fullName: 'o/r', nodeId: 'R_1', id: 4242 });
+    again.gh.repo = { full_name: 'o/r', node_id: 'R_1', id: 9999 };
+    again.approve(two.requestId);
+    await vi.advanceTimersByTimeAsync(APPROVAL_UNDO_MS + 10);
+    await again.executor.idle();
+    expect(again.svc.get(two.requestId)).toMatchObject({ state: 'refused', refusal: 'repo-changed' });
+    expect(again.gh.writes).toEqual([]);
   });
 });
 

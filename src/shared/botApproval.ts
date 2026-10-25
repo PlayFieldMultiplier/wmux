@@ -117,6 +117,8 @@ export interface ApprovalActRepo {
   /** `owner/repo` as GitHub answered it. */
   fullName: string;
   nodeId: string;
+  /** GitHub's numeric repository id (it survives a rename, as node_id does). */
+  id: number;
 }
 
 /** The record main writes for one request. */

@@ -14,8 +14,11 @@
 //               still there on the same repository. Taken back (Undo) or
 //               not due: the row returns to pending, nothing written;
 //   identity    the gh login is the one the request recorded;
-//   pins        the repository still answers as the full name and node id
-//               the request read, the target is the same node, open, and on
+//   pins        the repository still answers as the full name, node id and
+//               numeric id the request read (writes go to `repos/<owner>/
+//               <repo>`: GitHub's `repositories/<id>` paths answer reads but
+//               are undocumented, so no write goes through them), the target
+//               is the same node, open, and on
 //               a PR still at the head the card showed;
 //   late gate   authorize again, right before the write;
 //   write       gh api with a JSON body main built (GhActService.ts); the
@@ -119,7 +122,7 @@ export async function readRepo(gh: GhActPort, repoKey: string): Promise<Read<App
   const v = rec(a.value);
   const fullName = str(v?.full_name);
   const nodeId = str(v?.node_id);
-  return fullName && nodeId ? { fullName, nodeId } : { error: 'the repository could not be read' };
+  return fullName && nodeId && typeof v?.id === 'number' ? { fullName, nodeId, id: v.id } : { error: 'the repository could not be read' };
 }
 
 export function mapIssue(value: unknown): IssueFacts | null {
@@ -268,7 +271,9 @@ export class ActExecutor {
       if (login !== r.ghLogin) return end('refused', 'identity-changed');
       const repo = await readRepo(this.ports.gh, r.repoKey);
       if (isError(repo)) return repo.status === 404 ? end('refused', 'repo-changed') : back('read-failed');
-      if (repo.fullName.toLowerCase() !== r.actRepo.fullName.toLowerCase() || repo.nodeId !== r.actRepo.nodeId) return end('refused', 'repo-changed');
+      // The name, node id and numeric id the request read (a rename or a
+      // transfer changes the name; a repository made again changes the ids).
+      if (repo.fullName.toLowerCase() !== r.actRepo.fullName.toLowerCase() || repo.nodeId !== r.actRepo.nodeId || repo.id !== r.actRepo.id) return end('refused', 'repo-changed');
       const pre = await this.precondition(r.repoKey, act);
       if (pre === 'read-failed') return back(pre);
       if (pre) return end('refused', pre);

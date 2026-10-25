@@ -26,7 +26,7 @@ export interface FakeComment {
 
 export class FakeGithub implements GhActPort {
   login = 'owner';
-  repo = { full_name: 'o/r', node_id: 'R_1' };
+  repo = { full_name: 'o/r', node_id: 'R_1', id: 4242 };
   issues = new Map<number, FakeIssue>();
   pulls = new Map<number, { head: string; merged: boolean }>();
   comments: FakeComment[] = [];
