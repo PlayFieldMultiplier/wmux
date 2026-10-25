@@ -141,6 +141,9 @@ export async function probeInbound(target: ProbeTarget, deps: ProbeDeps): Promis
   const ids = firewallRuleIds(target.listener, exe, deps.scope);
   base.ruleIds = { allow: ids.allow, pubblock: ids.pubblock };
   base.refusal = exeRefusal(exe, { exists, onLocalFixedDrive: deps.onLocalFixedDrive ?? onLocalFixedDrive });
+  // A path the query would read as a pattern (or cannot carry) matches other
+  // programs' rules: nothing it reads would be about wmux.
+  if (base.refusal === 'bad-path') return base;
   let script: string;
   try {
     script = buildProbeScript({

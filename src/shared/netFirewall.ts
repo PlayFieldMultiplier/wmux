@@ -549,7 +549,8 @@ export function firewallOffer(s: InboundStatus): FirewallOffer {
     case 'firewall-off':
       return { notice: false, sentence: { key: 'net.fw.off', vars: {} }, actions: [] };
     case 'unknown':
-      return { notice: true, sentence: { key: 'net.fw.unknown', vars: {} }, actions: ['check'] };
+      // A refused program (a path the probe cannot query) will not read better on a second try.
+      return { notice: true, sentence: { key: 'net.fw.unknown', vars: {} }, actions: s.refusal ? ['copyDetails'] : ['check'] };
   }
 }
 

@@ -267,6 +267,8 @@ describe('firewallOffer', () => {
     expect(firewallOffer(status({ verdict: 'blocked-by-rule' })).actions).toEqual(['openFirewall']);
     expect(firewallOffer(status({ verdict: 'public-network', publicNetworks: ['Wi-Fi'] })).sentence).toEqual({ key: 'net.fw.publicNetwork', vars: { network: 'Wi-Fi' } });
     expect(firewallOffer(status({ verdict: 'unknown' })).actions).toEqual(['check']);
+    // A path the probe refused to query: Copy details, not another try.
+    expect(firewallOffer(status({ verdict: 'unknown', refusal: 'bad-path' })).actions).toEqual(['copyDetails']);
   });
 
   it('covered and firewall-off are muted lines; inapplicable draws nothing', () => {

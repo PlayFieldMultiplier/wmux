@@ -159,6 +159,17 @@ function oneLine(statements: string[]): string {
 
 // ── Probe (read-only, not elevated) ──────────────────────────────────────────
 
+/**
+ * A FirewallProduct registered with Windows Security Center counts only while
+ * it is on: a product that stays registered after it was turned off (an
+ * expired trial) would otherwise hide the Fix behind "another firewall
+ * controls this PC". `productState` is not documented by Microsoft; the
+ * decoding used here is the one security tools commonly use (bits 12-15 of
+ * the 24-bit value are 1 when the product is on, 0 when off). Checked on a
+ * Windows 11 PC: Microsoft Defender Antivirus reports 0x061100 (on).
+ */
+export const FIREWALL_PRODUCT_ON = '((($_.productState -shr 12) -band 0xF) -eq 1)';
+
 export interface ProbeScriptInput {
   exe: string;
   port: number;
@@ -179,7 +190,7 @@ export interface ProbeScriptInput {
  * this program (one by-program query: ours, the prompt's Allows and Blocks,
  * the legacy LanLink pair; for ours also whether the remote addresses reach
  * the tailnet range), whether legacy LanLink rules exist at all, and a
- * registered third-party firewall. Whether an adapter is a Hyper-V virtual
+ * registered third-party firewall that is turned on. Whether an adapter is a Hyper-V virtual
  * switch is read from its name in Node (`vEthernet (…)`), which saves loading
  * the NetAdapter module (about 1.3 s).
  */
@@ -207,12 +218,12 @@ export function buildProbeScript(input: ProbeScriptInput): string {
     // Our rules' remote addresses: does the Allow reach tailnet peers? Windows may
     // store the range as a prefix or a mask, so both spellings count, and Any.
     "$tailnetRanges=@('Any','100.64.0.0/10','100.64.0.0/255.192.0.0')",
-    "foreach ($f in @(Get-NetFirewallApplicationFilter -PolicyStore ActiveStore -Program $exe -ErrorAction SilentlyContinue)) { foreach ($r in @($f | Get-NetFirewallRule -ErrorAction SilentlyContinue)) { if ($r.Direction -ne 'Inbound' -or $r.Enabled -ne 'True') { continue }; $pf=@($r | Get-NetFirewallPortFilter -ErrorAction SilentlyContinue); $proto='Any'; $hit=0; $any=0; if ($pf.Count -ge 1) { $proto='' + $pf[0].Protocol; foreach ($lp in @($pf[0].LocalPort)) { if ($lp -eq 'Any') { $hit=1; $any=1 } elseif ($lp -eq ('' + $port)) { $hit=1 } elseif ($lp -match '^(\\d+)-(\\d+)$') { if ((0 + $matches[1]) -le $port -and (0 + $matches[2]) -ge $port) { $hit=1 } } } } else { $hit=1; $any=1 }; $own=($ids -contains $r.Name); $tn=0; if ($own) { $af=@($r | Get-NetFirewallAddressFilter -ErrorAction SilentlyContinue); if ($af.Count -ge 1) { foreach ($ra in @($af[0].RemoteAddress)) { if ($tailnetRanges -contains ('' + $ra)) { $tn=1 } } } }; $rs+=@{act=('' + $r.Action); prof=('' + $r.Profile); proto=$proto; hit=$hit; anyPort=$any; ours=$(if ($own) {1} else {0}); tn=$tn; legacy=$(if ($legacyNames -contains $r.DisplayName) {1} else {0}); src=('' + $r.PolicyStoreSourceType)} } }",
+    "foreach ($f in @(Get-NetFirewallApplicationFilter -PolicyStore ActiveStore -Program $exe -ErrorAction SilentlyContinue)) { foreach ($r in @($f | Get-NetFirewallRule -PolicyStore ActiveStore -ErrorAction SilentlyContinue)) { if ($r.Direction -ne 'Inbound' -or $r.Enabled -ne 'True') { continue }; $pf=@($r | Get-NetFirewallPortFilter -PolicyStore ActiveStore -ErrorAction SilentlyContinue); $proto='Any'; $hit=0; $any=0; if ($pf.Count -ge 1) { $proto='' + $pf[0].Protocol; foreach ($lp in @($pf[0].LocalPort)) { if ($lp -eq 'Any') { $hit=1; $any=1 } elseif ($lp -eq ('' + $port)) { $hit=1 } elseif ($lp -match '^(\\d+)-(\\d+)$') { if ((0 + $matches[1]) -le $port -and (0 + $matches[2]) -ge $port) { $hit=1 } } } } else { $hit=1; $any=1 }; $own=($ids -contains $r.Name); $tn=0; if ($own) { $af=@($r | Get-NetFirewallAddressFilter -PolicyStore ActiveStore -ErrorAction SilentlyContinue); if ($af.Count -ge 1) { foreach ($ra in @($af[0].RemoteAddress)) { if ($tailnetRanges -contains ('' + $ra)) { $tn=1 } } } }; $rs+=@{act=('' + $r.Action); prof=('' + $r.Profile); proto=$proto; hit=$hit; anyPort=$any; ours=$(if ($own) {1} else {0}); tn=$tn; legacy=$(if ($legacyNames -contains $r.DisplayName) {1} else {0}); src=('' + $r.PolicyStoreSourceType)} } }",
     "$o['rules']=$rs",
     input.legacyScan
       ? "$o['legacy']=$(if (@(Get-NetFirewallRule -PolicyStore ActiveStore -DisplayName $legacyNames -ErrorAction SilentlyContinue).Count -gt 0) {1} else {0})"
       : "$o['legacy']=0",
-    '$tp=@(Get-CimInstance -Namespace root/SecurityCenter2 -ClassName FirewallProduct -ErrorAction SilentlyContinue)',
+    `$tp=@(Get-CimInstance -Namespace root/SecurityCenter2 -ClassName FirewallProduct -ErrorAction SilentlyContinue | Where-Object { ${FIREWALL_PRODUCT_ON} })`,
     "$o['tp']=$(if ($tp.Count -gt 0) {1} else {0})",
     "$o['tpName']=$null",
     "if ($tp.Count -gt 0 -and $tp[0].displayName -cmatch '^[ -~]{1,64}$') { $o['tpName']=$tp[0].displayName }",

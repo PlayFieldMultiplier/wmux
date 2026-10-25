@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { execFile } from 'node:child_process';
 import { describe, it, expect } from 'vitest';
-import { IMPORT_NETSECURITY, ON_A_DRIVE, PROGRAM_GONE, buildProbeScript, firewallRuleIds, windowsPowerShellPath } from '../netFirewallScripts';
+import { FIREWALL_PRODUCT_ON, IMPORT_NETSECURITY, ON_A_DRIVE, PROGRAM_GONE, buildProbeScript, firewallRuleIds, windowsPowerShellPath } from '../netFirewallScripts';
 import { parseProbeLine } from '../netFirewall';
 import { systemDirectory } from '../netWinPaths';
 
@@ -65,6 +65,14 @@ describe.runIf(process.platform === 'win32')('the firewall probe under Constrain
     const r = await runPs(`${CLM_PREFIX}${IMPORT_NETSECURITY}; 'rules:' + @(NetSecurity\\Get-NetFirewallRule -Name 'wmux-ci-clmtest-none' -ErrorAction SilentlyContinue).Count`);
     expect(r.failed).toBe(false);
     expect(r.stdout.trim()).toBe('rules:0');
+  }, 60_000);
+
+  it('a registered firewall product counts only while it is on (productState)', async () => {
+    // Microsoft Defender Antivirus as read on a Windows 11 PC (on), the same product off, and a snoozed one.
+    const products = "@(@{displayName='on'; productState=0x061100}, @{displayName='off'; productState=0x060100}, @{displayName='snoozed'; productState=0x062100})";
+    const r = await runPs(`${CLM_PREFIX}'on:' + ((${products} | Where-Object { ${FIREWALL_PRODUCT_ON} } | ForEach-Object { $_.displayName }) -join ',')`);
+    expect(r.failed).toBe(false);
+    expect(r.stdout.trim()).toBe('on:on');
   }, 60_000);
 
   it('the cleanup filter: only a drive-letter program, on a drive this session sees, that is gone', async () => {

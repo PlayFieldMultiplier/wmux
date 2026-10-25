@@ -138,6 +138,10 @@ describe('probeInbound on Windows', () => {
     expect(ran).toBe(false);
     expect(s.verdict).toBe('unknown');
     expect(s.refusal).toBe('bad-path');
+    // A wildcard: -Program would match other programs' rules, so nothing is read.
+    const wild = await run(async () => { ran = true; return line(); }, { exe: 'C:\\apps\\x[1]\\wmux.exe' });
+    expect(ran).toBe(false);
+    expect(wild).toMatchObject({ verdict: 'unknown', refusal: 'bad-path' });
   });
 
   it('nothing to check while the listener is down: no process at all', async () => {

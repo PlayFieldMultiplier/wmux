@@ -233,8 +233,13 @@ describe('the probe', () => {
     expect(s).toContain("$o['legacy']=0");
     // Our rules say whether their remote addresses reach the tailnet range.
     expect(s).toContain("$tailnetRanges=@('Any','100.64.0.0/10','100.64.0.0/255.192.0.0')");
-    expect(s).toContain('$af=@($r | Get-NetFirewallAddressFilter -ErrorAction SilentlyContinue)');
-    expect(s).toContain("$own=($ids -contains $r.Name); $tn=0; if ($own) { $af=@($r | Get-NetFirewallAddressFilter -ErrorAction SilentlyContinue); if ($af.Count -ge 1) { foreach ($ra in @($af[0].RemoteAddress)) { if ($tailnetRanges -contains ('' + $ra)) { $tn=1 } } } };");
+    expect(s).toContain("$own=($ids -contains $r.Name); $tn=0; if ($own) { $af=@($r | Get-NetFirewallAddressFilter -PolicyStore ActiveStore -ErrorAction SilentlyContinue); if ($af.Count -ge 1) { foreach ($ra in @($af[0].RemoteAddress)) { if ($tailnetRanges -contains ('' + $ra)) { $tn=1 } } } };");
+    // Every read in the rule loop is from the ActiveStore, like the filter query it starts from.
+    expect(s).toContain('foreach ($r in @($f | Get-NetFirewallRule -PolicyStore ActiveStore -ErrorAction SilentlyContinue))');
+    expect(s).toContain('$pf=@($r | Get-NetFirewallPortFilter -PolicyStore ActiveStore -ErrorAction SilentlyContinue)');
+    expect(s.match(/\| Get-NetFirewall\w+ -ErrorAction/g)).toBeNull();
+    // A registered firewall product counts only while it is on.
+    expect(s).toContain("ClassName FirewallProduct -ErrorAction SilentlyContinue | Where-Object { ((($_.productState -shr 12) -band 0xF) -eq 1) })");
     expect(s).toContain('tn=$tn;');
     expect(refusalOf(() => buildProbeScript({ exe: EXE, port: 45660, ips: ["1.2.3.4'; Remove-Item x; '"], ruleIds: firewallRuleIds('a2a', EXE, SCOPE), legacyScan: false }))).toBe('bad-input');
   });
