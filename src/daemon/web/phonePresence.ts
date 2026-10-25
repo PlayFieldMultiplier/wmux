@@ -70,6 +70,8 @@ export interface PhonePresenceDeps {
 export class PhonePresence {
   private attached = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
+  /** Set by stop(), cleared by start(): a stopped server's late events change nothing. */
+  private stopped = false;
 
   constructor(private readonly deps: PhonePresenceDeps) {}
 
@@ -77,13 +79,18 @@ export class PhonePresence {
     return this.attached;
   }
 
-  /** Read the devices and streams again; re-arm the window timer. */
+  /**
+   * Read the devices and streams again; re-arm the window timer. Nothing while
+   * stopped. A roster that cannot be read changes nothing either: the last
+   * answer and its timer stand, rather than a read error detaching a phone.
+   */
   update(): void {
+    if (this.stopped) return;
     let devices: readonly PresenceDevice[];
     try {
       devices = this.deps.devices();
     } catch {
-      devices = [];
+      return;
     }
     const now = (this.deps.now ?? Date.now)();
     const { attached, expiresAt } = phonePresenceAt(devices, this.deps.liveDeviceIds(), now);
@@ -98,8 +105,19 @@ export class PhonePresence {
     this.set(attached);
   }
 
-  /** The server stopped: no phone can reach it, whatever its last request. */
+  /** The server (re)started: recompute, a device seen shortly before counting again. */
+  start(): void {
+    this.stopped = false;
+    this.update();
+  }
+
+  /**
+   * The server stopped: no phone can reach it, whatever its last request.
+   * Sticky until start(): its streams' close handlers run later and must not
+   * attach the phone again from its last request.
+   */
   stop(): void {
+    this.stopped = true;
     this.clearTimer();
     this.set(false);
   }

@@ -14,7 +14,7 @@ import { PHONE_ATTACH_WINDOW_MS } from '../phonePresence';
 import { DesktopPhoneBridge } from '../../phone/DesktopPhoneBridge';
 import type { DaemonSessionManager } from '../../DaemonSessionManager';
 import type { DeviceKind } from '../../../shared/web';
-import { waitFor } from '../../../test-utils/waitFor';
+import { deliberateSleep, waitFor } from '../../../test-utils/waitFor';
 
 describe('keep the computer awake while a phone is attached', () => {
   let dir: string;
@@ -153,14 +153,18 @@ describe('keep the computer awake while a phone is attached', () => {
     events.ac.abort();
   });
 
-  it('a request attaches, and stopping the server detaches', async () => {
+  it('a request attaches, and stopping the server detaches for good, whatever its streams do while closing', async () => {
     const server = makeServer(bridge);
     bridge.register('main');
     await start(server);
     const phone = await pair('phone');
     await config(server, bearer(phone.token));
+    const events = await openEvents(server, bearer(phone.token));
+    expect(events.res.status).toBe(200);
     expect(server.phoneAttached()).toBe(true);
     await server.stop();
+    events.ac.abort();
+    await deliberateSleep(200, 'a negative check: the stream close handlers of a stopped server must not attach the phone again');
     expect(server.phoneAttached()).toBe(false);
     expect(presence()).toEqual([true, false]);
   });

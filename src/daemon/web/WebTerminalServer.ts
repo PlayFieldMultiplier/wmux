@@ -2015,7 +2015,7 @@ export class WebTerminalServer {
     this.chatWatchSweep = setInterval(() => this.sweepChatWatches(), CHAT_WATCH_SWEEP_MS);
     this.chatWatchSweep.unref?.();
     // A device seen shortly before a restart is still attached for the rest of its window.
-    this.presence.update();
+    this.presence.start();
     return this.status();
   }
 

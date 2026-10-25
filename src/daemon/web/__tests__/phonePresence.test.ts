@@ -105,9 +105,46 @@ describe('PhonePresence', () => {
     expect(changes).toEqual([true, false]);
   });
 
-  it('an unreadable roster reads as no device', () => {
+  it('stop is sticky: a stream closing afterwards does not attach the phone again or arm a timer', () => {
+    devices = [phone()];
+    live.add('p1');
+    presence.update();
+    presence.stop();
+    // The stopped server's close handlers run on a later turn.
+    live.delete('p1');
+    presence.update();
+    expect(presence.isAttached).toBe(false);
+    expect(changes).toEqual([true, false]);
+    expect(vi.getTimerCount()).toBe(0);
+    // A restart counts the device again for the rest of its window.
+    presence.start();
+    expect(changes).toEqual([true, false, true]);
+    advance(PHONE_ATTACH_WINDOW_MS);
+    expect(changes).toEqual([true, false, true, false]);
+  });
+
+  it('a roster read that fails keeps the last answer and its timer', () => {
+    let fail = false;
+    devices = [phone()];
+    presence = new PhonePresence({
+      devices: () => { if (fail) throw new Error('roster'); return devices; },
+      liveDeviceIds: () => live, onChange: (a) => changes.push(a), now: () => clock,
+    });
+    presence.update();
+    expect(changes).toEqual([true]);
+    fail = true;
+    expect(() => presence.update()).not.toThrow();
+    expect(presence.isAttached).toBe(true);
+    expect(vi.getTimerCount()).toBe(1);
+    fail = false;
+    advance(PHONE_ATTACH_WINDOW_MS);
+    expect(changes).toEqual([true, false]);
+  });
+
+  it('a roster that cannot be read before anything was known reads as nothing attached', () => {
     presence = new PhonePresence({ devices: () => { throw new Error('roster'); }, liveDeviceIds: () => live, onChange: (a) => changes.push(a), now: () => clock });
     expect(() => presence.update()).not.toThrow();
     expect(presence.isAttached).toBe(false);
+    expect(changes).toEqual([]);
   });
 });
