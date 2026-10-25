@@ -15,14 +15,16 @@ let script = '';
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-fake-gh-'));
   script = path.join(dir, 'fake-gh.cjs');
-  // Records its argv and stdin; answers by the endpoint.
+  // Records its argv and stdin next to itself (not through an env var: on
+  // Linux and macOS getExecEnv() keeps the env it first saw); answers by the
+  // endpoint.
   fs.writeFileSync(script, `
 const fs = require('node:fs');
 const args = process.argv.slice(2);
 let input = '';
 process.stdin.on('data', (d) => { input += d; });
 process.stdin.on('end', () => {
-  fs.writeFileSync(process.env.FAKE_GH_LOG, JSON.stringify({ args, input, cwd: process.cwd() }));
+  fs.writeFileSync(require('node:path').join(__dirname, 'log.json'), JSON.stringify({ args, input, cwd: process.cwd() }));
   const endpoint = args.find((a) => a.startsWith('repos/') || a === 'user');
   if (endpoint === 'repos/o/r/issues/404') { process.stderr.write('gh: Not Found (HTTP 404)\\n'); process.exit(1); }
   if (endpoint === 'repos/o/r/issues/429') { process.stderr.write('gh: API rate limit exceeded (HTTP 403)\\n'); process.exit(1); }
@@ -32,13 +34,11 @@ process.stdin.on('end', () => {
 `);
 });
 afterEach(() => {
-  delete process.env.FAKE_GH_LOG;
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
 function service(): { gh: GhActService; log: () => { args: string[]; input: string; cwd: string } } {
   const logFile = path.join(dir, 'log.json');
-  process.env.FAKE_GH_LOG = logFile;
   const gh = new GhActService(() => dir, { file: process.execPath, prefix: [script] }, new GhRateBreaker());
   return { gh, log: () => JSON.parse(fs.readFileSync(logFile, 'utf8')) as { args: string[]; input: string; cwd: string } };
 }
