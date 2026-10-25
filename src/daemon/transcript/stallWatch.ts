@@ -350,6 +350,8 @@ export interface StallPrefillDeps {
   interrupt: () => Promise<ChatInterruptResult>;
   /** The prompt to put back, read before the interrupt. */
   lastPrompt: () => string | null;
+  /** The pane's turn identity: a turn started after the interrupt never gets the stopped turn's prompt. */
+  turnId?: () => string | undefined;
   readScreen: () => Promise<ChatScreenRows | null>;
   write: (data: string) => boolean;
   /** Take the pane's keyboard from the chat send queue for the paste; null when it is taken. */
@@ -372,6 +374,7 @@ const PREFILL_READS = 24;
 export async function stopAndPrefill(deps: StallPrefillDeps): Promise<StallPrefillResult> {
   if (deps.blocked()) return 'blocked';
   const prompt = deps.lastPrompt()?.trim() || null;
+  const stoppedTurn = deps.turnId?.();
   // interruptChatTurn checks again right before its ESC (open approval,
   // awaiting_input, a dialog on the screen read).
   const stopped = await deps.interrupt();
@@ -392,6 +395,7 @@ export async function stopAndPrefill(deps: StallPrefillDeps): Promise<StallPrefi
       if (claudeComposerEmpty(rows)) {
         if (++empty < EMPTY_READS) continue;
         if (!claudeComposerEmpty(await read())) return 'kept';
+        if (deps.turnId && deps.turnId() !== stoppedTurn) return 'kept';
         return deps.write(formatBracketedPastePayload(prompt)) ? 'filled' : 'error';
       }
       empty = 0;

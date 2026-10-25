@@ -270,6 +270,24 @@ describe('stopAndPrefill', () => {
     expect(writes).toEqual([]);
   });
 
+  it('pastes nothing when a new turn started after the interrupt', async () => {
+    const writes: string[] = [];
+    let turn = 't1:a.3';
+    let reads = 0;
+    const res = await stopAndPrefill({
+      blocked: () => false,
+      interrupt: async () => 'sent',
+      lastPrompt: () => 'do the thing',
+      turnId: () => turn,
+      // The user typed and sent their own prompt while the input sat empty.
+      readScreen: async () => { if (++reads === 3) turn = 't1:a.4'; return composer(''); },
+      write: (data) => { writes.push(data); return true; },
+      delay: async () => undefined,
+    });
+    expect(res).toBe('kept');
+    expect(writes).toEqual([]);
+  });
+
   it('pastes nothing while the chat send queue holds the keyboard', async () => {
     const writes: string[] = [];
     const res = await stopAndPrefill({

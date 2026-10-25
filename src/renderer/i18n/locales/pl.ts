@@ -4060,7 +4060,7 @@ export const pl = {
   'agentStall.stopAndPrefill': 'Zatrzymaj i wstaw ponownie',
   'agentStall.stopAndPrefillTitle': 'Przerwij turę i wstaw ostatni prompt z powrotem do pola, bez wysyłania',
   'agentStall.keepWaiting': 'Czekaj dalej',
-  'agentStall.keepWaitingTitle': 'Zapytaj ponownie dopiero po dwa razy dłuższym czasie, w tej turze',
+  'agentStall.keepWaitingTitle': 'Sprawdź ponownie dopiero po dwukrotnie dłuższym czasie, w tej turze',
   'agentStall.failed': 'Nie udało się zatrzymać tury. Spróbuj Esc w terminalu.',
   'agentStall.notifyTitle': 'Claude chyba utknął',
   'agentStall.notifyBody': 'Od dłuższego czasu brak postępu i działającego narzędzia. Otwórz panel, aby go zatrzymać lub czekać dalej.',

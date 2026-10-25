@@ -6036,6 +6036,8 @@ function registerRpcHandlers(
   pipeServer.onRpc('daemon.chat.stallPrefill', async (params, ctx) => {
     if (!firstPartyOnly(ctx.clientId, 'stallPrefill')) return { result: 'unavailable' };
     const id = typeof params['id'] === 'string' ? params['id'] : '';
+    // The card may be older than the stall: a turn that moved again is never stopped from it.
+    if (stallWatch?.stalledSince(id) == null) return { result: 'not_running' };
     // Moa's brain pane is not watched, so it is never stopped from here either.
     const binding = id && currentMoaPane()?.sessionId !== id ? resolveTranscriptBinding(id) : undefined;
     if (binding?.agent !== STALL_AGENT || !binding.transcriptPath) return { result: 'unavailable' };
@@ -6045,6 +6047,10 @@ function registerRpcHandlers(
       blocked: () => sessionManager.getSession(id)?.bridge.getAgentStatus() === 'awaiting_input'
         || !approvalRegistry || approvalRegistry.list().pending.some((r) => r.sessionId === id),
       interrupt: () => bridge.desktopInterrupt(id, binding.sessionId),
+      turnId: () => {
+        const paneBridge = sessionManager.getSession(id)?.bridge;
+        return paneBridge?.getTurn(paneBridge.getAgentStatus()).id;
+      },
       // The turn's own prompt, as written (not the projected, length-capped text).
       lastPrompt: () => {
         const tail = readTranscriptTail(transcriptPath);
