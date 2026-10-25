@@ -86,6 +86,11 @@ export interface ChatV2DriverTurn {
  * and stamps `approval.resolved` / `question.resolved` with `cancelled`.
  * The driver emits `approval.requested` (with the gated tool's `callId`) or
  * `question.asked` with the same `requestId`.
+ *
+ * A permission decision raised again with the same `requestId` means what the
+ * agent asks has changed (a diff that arrived or moved after the card): the
+ * host records it again under the same native key, so the card is replaced
+ * and an answer to the old one is refused.
  */
 export type ChatV2DriverDecision =
   | {
@@ -96,6 +101,8 @@ export type ChatV2DriverDecision =
       toolName: string;
       /** One line for the card and the phone (command, path, …). */
       summary: string;
+      /** The Deny button's label when denying does more than skip the call (Codex `cancel` also stops the turn). */
+      denyLabel?: string;
     }
   | {
       kind: 'questions';
