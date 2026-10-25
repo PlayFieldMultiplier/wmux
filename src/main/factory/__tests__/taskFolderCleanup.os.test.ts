@@ -29,6 +29,7 @@ import {
   MountPointError,
   parseMountInfo,
   removeEmptyResearchBatch,
+  reportFiles,
   restoreTaskFolder,
   ensureTaskFolderPrepared,
   taskFolderKind,
@@ -134,6 +135,56 @@ describe('taskFolderKind: only a bot task\'s own folder', () => {
     expect(taskFolderKind(path.join(home, 'phone-worktrees', 'x', 'y'), 'wtask/y', BOT, r)).toBeNull();
     expect(taskFolderKind(path.join(repo, '..', 'my-worktree'), 'wtask/y', BOT, r)).toBeNull();
     expect(taskFolderKind(path.join(r.worktrees, '..', 'worktrees-other', 'h', 's'), 'wtask/s', BOT, r)).toBeNull();
+  });
+});
+
+describe('reportFiles: the files a report hands the owner, for its wake', () => {
+  const art = (location: string) => ({ kind: 'artifact' as const, status: 'verified' as const, summary: 'f', location });
+  const report = (...items: unknown[]) => ({ evidence: { summary: 'Made it.', items } }) as unknown as Pick<LedgerEntry, 'evidence'>;
+
+  it('lists the files in the task\'s own folder, by path or file URL, at most max, and counts the rest', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-report-files-'));
+    try {
+      const task = path.join(dir, 'task');
+      fs.mkdirSync(path.join(task, 'sub'), { recursive: true });
+      const [a, b, c] = ['banner.png', 'notes.md', 'c.png'].map((n) => path.join(task, n));
+      for (const f of [a, b, c]) fs.writeFileSync(f, 'x');
+      const outside = path.join(dir, 'outside.png');
+      fs.writeFileSync(outside, 'x');
+      const entry = report(
+        art(a), art(pathToFileURL(b).href), { kind: 'inspection', status: 'verified', summary: 'x', location: c },
+        art(path.join(task, 'gone.png')), art(path.join(task, 'sub')), art('relative.png'), art(outside), art(a), art(c),
+      );
+      expect(reportFiles(entry, task, 8)).toEqual({ files: [a, b, c], leftOut: 0 });
+      expect(reportFiles(entry, task, 2)).toEqual({ files: [a, b], leftOut: 1 });
+      expect(reportFiles({} as Pick<LedgerEntry, 'evidence'>, task, 8)).toEqual({ files: [], leftOut: 0 });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('leaves out a hard link, a file reached through a linked folder, and a name with a line break or a quote', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-report-files-'));
+    try {
+      const task = path.join(dir, 'task');
+      const elsewhere = path.join(dir, 'elsewhere');
+      fs.mkdirSync(task);
+      fs.mkdirSync(elsewhere);
+      const secret = path.join(elsewhere, 'secret.txt');
+      fs.writeFileSync(secret, 'x');
+      const hard = path.join(task, 'hard.txt');
+      fs.linkSync(secret, hard);
+      fs.symlinkSync(elsewhere, path.join(task, 'linked'), process.platform === 'win32' ? 'junction' : 'dir');
+      const viaLink = path.join(task, 'linked', 'secret.txt');
+      const ok = path.join(task, 'ok.txt');
+      fs.writeFileSync(ok, 'x');
+      // Windows takes neither character in a name.
+      const odd = process.platform === 'win32' ? [] : ['line\nbreak.txt', 'say "hi".txt'].map((n) => path.join(task, n));
+      for (const f of odd) fs.writeFileSync(f, 'x');
+      expect(reportFiles(report(art(hard), art(viaLink), ...odd.map(art), art(ok)), task, 8)).toEqual({ files: [ok], leftOut: 0 });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

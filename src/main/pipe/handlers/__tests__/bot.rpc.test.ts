@@ -30,7 +30,7 @@ vi.mock('../../../deck/taskLedgerHost', () => ({ getTaskLedger: () => ledgerMock
 
 import type { RpcContext } from '../../../../shared/rpc';
 import type { BrainAdapter, BrainEvent } from '../../../deck/BrainAdapter';
-import { registerBotRpcHandlers, botRuntimeModule, statusFor, wakeOnOwnerAnswer, type SetJobPorts } from '../bot.rpc';
+import { registerBotRpcHandlers, botRuntimeModule, statusFor, wakeOnOwnerAnswer, wakeTaskFiles, type SetJobPorts } from '../bot.rpc';
 import { BOT_EVENT } from '../../../../shared/bot';
 import { DISMISSED_ANSWER } from '../../../factory/handoffRouter';
 import { WakeTaint } from '../../../factory/wakeTaint';
@@ -675,5 +675,48 @@ describe('statusFor', () => {
     expect(statusFor(bot, { ...status, quota: { accountName: 'Work' } })).not.toHaveProperty('quota');
     expect(statusFor({ kind: 'operator' }, status)?.lastError?.account).toBe('Work');
     expect(status.lastError.account).toBe('Work');
+  });
+});
+
+describe('wakeTaskFiles', () => {
+  it('names the files of the woken bot\'s done tasks it has not settled, from each task\'s own folder, with its thread', async () => {
+    const wmux = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-task-files-'));
+    const BOT = 'bot-1111aaaa';
+    try {
+      const folder = (id: string) => path.join(wmux, 'factory', 'bots', BOT, 'research', 'batch-1', id);
+      const row = (id: string, over: Record<string, unknown>) => {
+        fs.mkdirSync(folder(id), { recursive: true });
+        const file = path.join(folder(id), `${id}.png`);
+        fs.writeFileSync(file, 'png');
+        ledgerMock.rows.set(id, {
+          id, title: id, status: 'completed', ownerWorkspaceId: 'ws-1', updatedBy: { kind: 'worker', workspaceId: 'ws-w' },
+          dispatch: { origin: { kind: 'bot', botId: BOT }, threadId: `t-${id}` },
+          evidence: { summary: 'Made it.', items: [{ kind: 'artifact', status: 'verified', summary: 'f', location: file }] },
+          ...over,
+        });
+        return file;
+      };
+      const mine = row('wtask-mine', {});
+      row('wtask-review', { status: 'review_requested', dispatch: { origin: { kind: 'bot', botId: BOT } } });
+      row('wtask-foreign', { dispatch: { origin: { kind: 'bot', botId: 'bot-2222bbbb' }, threadId: 't-x' } });
+      row('wtask-settled', { updatedBy: { kind: 'brain', workspaceId: 'ws-1' } });
+      row('wtask-ask', { status: 'input_required' });
+      row('wtask-gone', { status: 'cancelled' });
+      const ids = ['wtask-mine', 'wtask-review', 'wtask-foreign', 'wtask-settled', 'wtask-ask', 'wtask-gone'];
+      const folders = {
+        roots: { wmuxDir: wmux, worktrees: path.join(wmux, 'worktrees') },
+        missions: async () => new Map(ids.map((id) => [id, { folder: folder(id) }])),
+      } as unknown as Parameters<typeof wakeTaskFiles>[2];
+      const facts = ['task.done:wtask-mine@4', 'task.done:wtask-review@3', 'task.done:wtask-foreign@2', 'task.done:wtask-settled@5', 'task.input_required:wtask-ask@2', 'task.done:wtask-gone@6'];
+      const out = await wakeTaskFiles(BOT, facts, folders);
+      expect([...out]).toEqual([
+        ['wtask-mine', { files: [mine], threadId: 't-wtask-mine' }],
+        ['wtask-review', { files: [path.join(folder('wtask-review'), 'wtask-review.png')] }],
+      ]);
+      expect([...await wakeTaskFiles(BOT, ['task.input_required:wtask-mine@4'], folders)]).toEqual([]);
+    } finally {
+      for (const id of [...ledgerMock.rows.keys()]) if (id.startsWith('wtask-')) ledgerMock.rows.delete(id);
+      fs.rmSync(wmux, { recursive: true, force: true });
+    }
   });
 });
