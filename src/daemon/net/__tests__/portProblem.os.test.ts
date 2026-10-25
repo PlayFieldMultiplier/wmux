@@ -3,6 +3,9 @@ import net from 'node:net';
 import { diagnoseListenProblem, loopbackPortFree, type LookupExec } from '../portProblem';
 import { disposeAll, makePc } from '../../a2aRemote/__tests__/a2aServerRig';
 
+// The tools are faked, so their folder is too: these run the same on any OS.
+const WIN = { platform: 'win32' as const, system32: () => 'C:\\Windows\\System32' };
+
 const NETSH = ['', 'Protocol tcp Port Exclusion Ranges', '', 'Start Port    End Port', '----------    --------', '     49181       49280', '     50000       50059     *', ''].join('\r\n');
 
 function fakeExec(netstat: string, tasklist: string, calls: string[] = []): LookupExec {
@@ -18,7 +21,7 @@ function fakeExec(netstat: string, tasklist: string, calls: string[] = []): Look
 describe('diagnoseListenProblem (fake tools)', () => {
   it('Windows EACCES inside an excluded range: reserved, no holder lookup, a port past the range', async () => {
     const calls: string[] = [];
-    const r = await diagnoseListenProblem({ code: 'EACCES', port: 50000, address: null }, { platform: 'win32', exec: fakeExec('', '', calls), isFree: async () => true });
+    const r = await diagnoseListenProblem({ code: 'EACCES', port: 50000, address: null }, { ...WIN, exec: fakeExec('', '', calls), isFree: async () => true });
     expect(r).toEqual({ problem: { kind: 'port-reserved', port: 50000 }, holder: null, suggestion: 50060 });
     expect(calls.some((c) => /netstat/i.test(c))).toBe(false);
   });
@@ -27,7 +30,7 @@ describe('diagnoseListenProblem (fake tools)', () => {
     const r = await diagnoseListenProblem(
       { code: 'EADDRINUSE', port: 7681, address: '127.0.0.1' },
       {
-        platform: 'win32',
+        ...WIN,
         exec: fakeExec('  TCP    127.0.0.1:7681    0.0.0.0:0    LISTENING    4242\r\n', '"node.exe","4242","Console","1","45,000 K"\r\n'),
         isFree: async (p) => p !== 7682,
         selfImage: 'wmux.exe',
@@ -38,25 +41,25 @@ describe('diagnoseListenProblem (fake tools)', () => {
 
   it('our own image is "another copy of wmux"; an unreadable image keeps only the PID', async () => {
     const netstat = '  TCP    0.0.0.0:45660    0.0.0.0:0    LISTENING    9\r\n';
-    const wmux = await diagnoseListenProblem({ code: 'EADDRINUSE', port: 45660, address: null }, { platform: 'win32', exec: fakeExec(netstat, '"wmux.exe","9","Console","1","1 K"'), isFree: async () => true, selfImage: 'wmux.exe' });
+    const wmux = await diagnoseListenProblem({ code: 'EADDRINUSE', port: 45660, address: null }, { ...WIN, exec: fakeExec(netstat, '"wmux.exe","9","Console","1","1 K"'), isFree: async () => true, selfImage: 'wmux.exe' });
     expect(wmux.holder).toEqual({ kind: 'wmux', pid: 9 });
-    const garbled = await diagnoseListenProblem({ code: 'EADDRINUSE', port: 45660, address: null }, { platform: 'win32', exec: fakeExec(netstat, '"ÇÁ.exe","9","Console","1","1 K"'), isFree: async () => true, selfImage: 'wmux.exe' });
+    const garbled = await diagnoseListenProblem({ code: 'EADDRINUSE', port: 45660, address: null }, { ...WIN, exec: fakeExec(netstat, '"ÇÁ.exe","9","Console","1","1 K"'), isFree: async () => true, selfImage: 'wmux.exe' });
     expect(garbled.holder).toEqual({ kind: 'unnamed', pid: 9 });
   });
 
   it('an EACCES outside every range is a port in use', async () => {
-    const r = await diagnoseListenProblem({ code: 'EACCES', port: 45660, address: null }, { platform: 'win32', exec: fakeExec('', ''), isFree: async () => true });
+    const r = await diagnoseListenProblem({ code: 'EACCES', port: 45660, address: null }, { ...WIN, exec: fakeExec('', ''), isFree: async () => true });
     expect(r.problem).toEqual({ kind: 'port-in-use', port: 45660 });
     expect(r.holder).toBeNull();
   });
 
   it('a gone address suggests no port', async () => {
-    const r = await diagnoseListenProblem({ code: 'EADDRNOTAVAIL', port: 45651, address: '10.0.0.5' }, { platform: 'win32', exec: fakeExec('', ''), isFree: async () => true });
+    const r = await diagnoseListenProblem({ code: 'EADDRNOTAVAIL', port: 45651, address: '10.0.0.5' }, { ...WIN, exec: fakeExec('', ''), isFree: async () => true });
     expect(r).toEqual({ problem: { kind: 'address-gone', address: '10.0.0.5' }, holder: null, suggestion: null });
   });
 
   it('a failing tool leaves its part empty', async () => {
-    const r = await diagnoseListenProblem({ code: 'EADDRINUSE', port: 45660, address: null }, { platform: 'win32', exec: async () => { throw new Error('timed out'); }, isFree: async () => true });
+    const r = await diagnoseListenProblem({ code: 'EADDRINUSE', port: 45660, address: null }, { ...WIN, exec: async () => { throw new Error('timed out'); }, isFree: async () => true });
     expect(r).toEqual({ problem: { kind: 'port-in-use', port: 45660 }, holder: null, suggestion: 45661 });
   });
 
@@ -66,16 +69,26 @@ describe('diagnoseListenProblem (fake tools)', () => {
       calls.push(`${file.split('\\').pop()} ${args.join(' ')}`);
       throw new Error('timed out');
     };
-    const r = await diagnoseListenProblem({ code: 'EACCES', port: 50000, address: null }, { platform: 'win32', exec, isFree: async () => true });
+    const r = await diagnoseListenProblem({ code: 'EACCES', port: 50000, address: null }, { ...WIN, exec, isFree: async () => true });
     expect(r).toEqual({ problem: { kind: 'port-denied', port: 50000 }, holder: null, suggestion: 50001 });
     expect(calls.some((c) => /netstat/i.test(c))).toBe(false);
+  });
+
+  it('no System32 from Windows: no tool runs, and an EACCES is only "denied"', async () => {
+    const calls: string[] = [];
+    const r = await diagnoseListenProblem(
+      { code: 'EACCES', port: 50000, address: null },
+      { ...WIN, system32: () => null, exec: fakeExec('', '', calls), isFree: async () => true },
+    );
+    expect(calls).toEqual([]);
+    expect(r.problem).toEqual({ kind: 'port-denied', port: 50000 });
   });
 
   it('a holder with this daemon\'s PID is one of its own listeners, whatever its image', async () => {
     const netstat = '  TCP    0.0.0.0:45660    0.0.0.0:0    LISTENING    77\r\n';
     const r = await diagnoseListenProblem(
       { code: 'EADDRINUSE', port: 45660, address: null },
-      { platform: 'win32', exec: fakeExec(netstat, '"wmux.exe","77","Console","1","1 K"'), isFree: async () => true, selfImage: 'wmux.exe', selfPid: 77 },
+      { ...WIN, exec: fakeExec(netstat, '"wmux.exe","77","Console","1","1 K"'), isFree: async () => true, selfImage: 'wmux.exe', selfPid: 77 },
     );
     expect(r.holder).toEqual({ kind: 'self', pid: 77 });
   });

@@ -28,6 +28,7 @@ import {
   type ListenProblemReport,
   type PortHolder,
 } from '../../shared/netListen';
+import { systemDirectory } from '../../shared/netWinPaths';
 
 export const LOOKUP_TIMEOUT_MS = 3_000;
 
@@ -52,9 +53,6 @@ export function loopbackPortFree(port: number): Promise<boolean> {
   });
 }
 
-function system32(file: string): string {
-  return path.win32.join(process.env['SystemRoot'] || 'C:\\Windows', 'System32', file);
-}
 
 export interface ListenFailure {
   code: string | null;
@@ -70,25 +68,38 @@ export interface ListenProblemDeps {
   selfImage?: string;
   /** This daemon's PID: a holder with it is one of this wmux's own listeners. */
   selfPid?: number;
+  /** System32, where the tools are run from (netWinPaths.ts); null leaves every tool's part empty. */
+  system32?: () => string | null;
+}
+
+type Tool = (file: string) => string;
+
+/** A System32 tool's absolute path; throws (as a failed tool) when System32 could not be read. */
+function toolIn(system32: () => string | null): Tool {
+  return (file) => {
+    const dir = system32();
+    if (!dir) throw new Error('the System32 folder could not be read');
+    return path.win32.join(dir, file);
+  };
 }
 
 /** The ranges Windows reserves, or null when netsh could not be read. */
-async function excludedRanges(exec: LookupExec): Promise<ExcludedPortRange[] | null> {
+async function excludedRanges(exec: LookupExec, tool: Tool): Promise<ExcludedPortRange[] | null> {
   try {
     return parseExcludedPortRanges(
-      await exec(system32('netsh.exe'), ['interface', 'ipv4', 'show', 'excludedportrange', 'protocol=tcp'], { timeout: LOOKUP_TIMEOUT_MS }),
+      await exec(tool('netsh.exe'), ['interface', 'ipv4', 'show', 'excludedportrange', 'protocol=tcp'], { timeout: LOOKUP_TIMEOUT_MS }),
     );
   } catch {
     return null;
   }
 }
 
-async function portHolder(port: number, exec: LookupExec, selfImage: string, selfPid: number): Promise<PortHolder | null> {
+async function portHolder(port: number, exec: LookupExec, tool: Tool, selfImage: string, selfPid: number): Promise<PortHolder | null> {
   let pid: number | undefined;
   try {
-    pid = holderPids(parseNetstatListeners(await exec(system32('NETSTAT.EXE'), ['-ano', '-p', 'TCP'], { timeout: LOOKUP_TIMEOUT_MS })), port)[0];
+    pid = holderPids(parseNetstatListeners(await exec(tool('NETSTAT.EXE'), ['-ano', '-p', 'TCP'], { timeout: LOOKUP_TIMEOUT_MS })), port)[0];
     if (pid === undefined) {
-      pid = holderPids(parseNetstatListeners(await exec(system32('NETSTAT.EXE'), ['-ano', '-p', 'TCPv6'], { timeout: LOOKUP_TIMEOUT_MS })), port)[0];
+      pid = holderPids(parseNetstatListeners(await exec(tool('NETSTAT.EXE'), ['-ano', '-p', 'TCPv6'], { timeout: LOOKUP_TIMEOUT_MS })), port)[0];
     }
   } catch {
     return null;
@@ -97,7 +108,7 @@ async function portHolder(port: number, exec: LookupExec, selfImage: string, sel
   if (pid === selfPid) return { kind: 'self', pid };
   let image: string | null = null;
   try {
-    image = parseTasklistImage(await exec(system32('tasklist.exe'), ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], { timeout: LOOKUP_TIMEOUT_MS }), pid);
+    image = parseTasklistImage(await exec(tool('tasklist.exe'), ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], { timeout: LOOKUP_TIMEOUT_MS }), pid);
   } catch {
     image = null;
   }
@@ -112,11 +123,12 @@ export async function diagnoseListenProblem(failure: ListenFailure, deps: Listen
   const isFree = deps.isFree ?? loopbackPortFree;
   const selfImage = deps.selfImage ?? path.basename(process.execPath);
   const selfPid = deps.selfPid ?? process.pid;
-  const ranges = platform === 'win32' ? await excludedRanges(exec) : [];
+  const tool = toolIn(deps.system32 ?? systemDirectory);
+  const ranges = platform === 'win32' ? await excludedRanges(exec, tool) : [];
   const problem = classifyListenError(failure.code, failure.port, platform, ranges, failure.address);
   if (problem.kind === 'address-gone' || problem.kind === 'other') return { problem, holder: null, suggestion: null };
   const [holder, suggestion] = await Promise.all([
-    problem.kind === 'port-in-use' && platform === 'win32' ? portHolder(failure.port, exec, selfImage, selfPid) : Promise.resolve(null),
+    problem.kind === 'port-in-use' && platform === 'win32' ? portHolder(failure.port, exec, tool, selfImage, selfPid) : Promise.resolve(null),
     pickFreePort(failure.port, ranges ?? [], isFree),
   ]);
   return { problem, holder, suggestion };
