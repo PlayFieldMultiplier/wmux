@@ -204,6 +204,8 @@ export interface AutomationRun {
   browserIdentity?: AutomationBrowserIdentity;
   /** Set on broadcast run events in place of `browserIdentity`, which the event stream never carries. */
   hasBrowserIdentity?: true;
+  /** A browser call of this run used the shared default Chrome profile because nothing was bound. */
+  browserProfileUnbound?: true;
 }
 
 /** Terminal states — a run never leaves these. */
@@ -269,6 +271,8 @@ export const AUTOMATION_RPC = {
   identityRuns: 'automation.identityRuns',
   /** First-party: record a refused browser call on a live run's detail. */
   noteRunBrowser: 'automation.noteRunBrowser',
+  /** First-party: a browser call of the live run behind `ptyId` used the shared default Chrome profile. */
+  noteRunBrowserProfile: 'automation.noteRunBrowserProfile',
 } as const;
 
 export interface AutomationCapabilitiesResult { capabilities: string[] }

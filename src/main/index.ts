@@ -190,6 +190,8 @@ import { BrowserBackendStore } from './browser-session/BrowserBackendStore';
 import { registerBrowserPrivateNetworkIpc } from './ipc/handlers/browserPrivateNetwork.handler';
 import { ChromeLauncherRegistry } from './browser-session/ChromeLauncher';
 import { ChromeProfileStore, reconcilePaneBindingsFromMirror } from './browser-session/ChromeProfileStore';
+import { createChromeProfileUseHandler, setChromeProfileUseListener } from './browser-session/profileFallback';
+import { noteRunBrowserProfileUnbound } from './automation/runIdentity';
 import { CHROME_PANE_IPC } from '../shared/chromePaneBinding';
 import { BrowserPolicyStore, reconcileBrowserPoliciesFromMirror } from './browser-session/BrowserPolicyStore';
 import { isTrustedMainFrameSender, registerBrowserPolicyIpc, UNTRUSTED_SENDER_ERROR } from './ipc/handlers/browserPolicy.handler';
@@ -1816,7 +1818,19 @@ ipcMain.handle('browser:chrome-profiles:list', (event) => isTrustedMainFrameSend
   profiles: chromeProfileStore.listProfiles(),
   bindings: chromeProfileStore.getBindings(),
   paneBindings: chromeProfileStore.getPaneBindings(),
+  lastUsed: chromeProfileStore.suggestedProfile(),
 }) : { profiles: [], bindings: {}, paneBindings: {} });
+// A browser call that used the shared default profile because nothing was
+// bound: the run says so, and the workspace is told once with the last-used
+// profile offered. Nothing is bound on its own.
+setChromeProfileUseListener(createChromeProfileUseHandler({
+  store: chromeProfileStore,
+  noteRun: (ptyId) => noteRunBrowserProfileUnbound(ptyId),
+  tellWorkspace: (workspaceId, suggested) => {
+    const win = mainWindow;
+    if (win && !win.isDestroyed()) win.webContents.send(IPC.CHROME_PROFILE_FALLBACK, { workspaceId, ...(suggested ? { suggested } : {}) });
+  },
+}));
 ipcMain.handle('browser:chrome-profiles:create', async (event, name: unknown) => {
   if (!isTrustedMainFrameSender(event, () => mainWindow)) return { ok: false, error: UNTRUSTED_SENDER_ERROR };
   if (typeof name !== 'string') return { ok: false, error: 'invalid name' };
@@ -3080,19 +3094,23 @@ function adoptMainWindow(win: BrowserWindow): void {
   });
 }
 
-function prepareInstallQuit(): void {
+async function prepareInstallQuit(): Promise<void> {
   isQuitting = true;
   mcpBrokerSupervisor.stop();
   // The full before-quit teardown is skipped on this path — the agent Chrome
-  // must not outlive the app across an update install.
+  // must not outlive the app across an update install. It quits through
+  // Browser.close like an ordinary quit (disposeAll bounds it at QUIT_GRACE_MS,
+  // then signals what is left); the updater installs once this resolves.
   try {
-    // Signals at once: the installer ends this process right after this
-    // returns, before a graceful Chrome quit could be waited on.
-    void chromeRegistry.disposeAll({ immediate: true });
+    await chromeRegistry.disposeAll();
+  } catch (err) {
+    console.error('[Main] install-quit chromeRegistry.disposeAll failed:', err);
+  }
+  try {
     chromeSurfaceStore.flushSync();
     getActionCacheStore().flushSync();
   } catch (err) {
-    console.error('[Main] install-quit chromeRegistry.disposeAll failed:', err);
+    console.error('[Main] install-quit store flush failed:', err);
   }
   try {
     sessionManager.flushSync();

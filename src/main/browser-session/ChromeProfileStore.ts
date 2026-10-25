@@ -47,6 +47,11 @@ interface ChromeProfilesFile {
   profiles: string[];
   bindings: ChromeProfileBindings;
   paneBindings: ChromePaneBindings;
+  /**
+   * The named profile a workspace was last bound to, or an automation call
+   * last ran in. Offered to an unbound workspace, never applied by itself.
+   */
+  lastUsed?: string;
 }
 
 export function getChromeProfilesPath(dir: string = getWmuxDir()): string {
@@ -118,6 +123,9 @@ function sanitizeFile(raw: unknown, knownWorkspaceIds?: ReadonlySet<string>): Ch
       if (knownWorkspaceIds && !knownWorkspaceIds.has(workspaceId)) continue;
       file.paneBindings[paneId] = { workspaceId, profile };
     }
+  }
+  if (isValidProfileName(r.lastUsed) && r.lastUsed !== DEFAULT_CHROME_PROFILE && file.profiles.includes(r.lastUsed)) {
+    file.lastUsed = r.lastUsed;
   }
   return file;
 }
@@ -211,6 +219,35 @@ export class ChromeProfileStore {
     return file.bindings[workspaceId] ?? DEFAULT_CHROME_PROFILE;
   }
 
+  /**
+   * True when `profileFor` lands in 'default' only because nothing is bound:
+   * no workspace, or no pane or workspace binding. An explicit binding to
+   * 'default' is a choice, not a fallback.
+   */
+  fellBackToDefault(workspaceId: string | undefined, paneId?: string): boolean {
+    if (!workspaceId || isUnsafeKey(workspaceId)) return true;
+    const file = this.ensureCache();
+    if (paneId && !isUnsafeKey(paneId) && file.paneBindings[paneId]?.workspaceId === workspaceId) return false;
+    return file.bindings[workspaceId] === undefined;
+  }
+
+  /** The last-used profile when a workspace could still be bound to it (it exists and no pane owns it). */
+  suggestedProfile(): string | undefined {
+    const file = this.ensureCache();
+    const last = file.lastUsed;
+    if (!last || !file.profiles.includes(last)) return undefined;
+    return Object.values(file.paneBindings).some((b) => sameProfile(b.profile, last)) ? undefined : last;
+  }
+
+  /** An automation call ran in `profile`: remember it as last used (named profiles only). */
+  async noteUsed(profile: string): Promise<void> {
+    const file = this.ensureCache();
+    if (profile === DEFAULT_CHROME_PROFILE || file.lastUsed === profile || !file.profiles.includes(profile)) return;
+    await this.mutate((next) => {
+      if (next.profiles.includes(profile)) next.lastUsed = profile;
+    });
+  }
+
   /** Whether any pane of this workspace has its own profile — the cheap test
    *  that decides whether a call has to find out which pane is calling. */
   hasPaneBindings(workspaceId: string | undefined): boolean {
@@ -287,6 +324,7 @@ export class ChromeProfileStore {
         );
       }
       file.bindings[workspaceId] = profileName;
+      if (profileName !== LIVE_CHROME_PROFILE && profileName !== DEFAULT_CHROME_PROFILE) file.lastUsed = profileName;
     });
   }
 

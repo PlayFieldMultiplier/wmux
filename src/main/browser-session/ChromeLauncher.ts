@@ -1752,6 +1752,11 @@ export class ChromeLauncher implements ChromeBackendClient {
     this.proxy = null;
     if (!child) return;
     if (!opts?.immediate && port > 0 && (await this.closeGracefully(port, child, opts?.deadline))) return;
+    // On Windows the signal is a hard kill: cookie writes Chrome still held in
+    // memory are lost, so say when the grace ran out.
+    if (!opts?.immediate && port > 0) {
+      console.warn(`[ChromeLauncher] Chrome (${this.profileName}) did not quit within the grace — ${process.platform === 'win32' ? 'terminating it' : 'signalling it'}`);
+    }
     try {
       child.kill();
     } catch {
