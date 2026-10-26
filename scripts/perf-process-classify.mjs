@@ -84,7 +84,8 @@ export function classifyProcess(row, opts = {}) {
   if (daemonPid != null && pid != null && pid === daemonPid) return 'daemon';
 
   // 2. conhost.exe — ConPTY's pseudo-console host backing each shell PTY.
-  if (name === 'conhost.exe' || name.startsWith('conhost')) return 'conhost';
+  //    With the bundled ConPTY the host is OpenConsole.exe instead.
+  if (name === 'conhost.exe' || name.startsWith('conhost') || name === 'openconsole.exe') return 'conhost';
 
   // 3. Electron children carry an explicit --type= role.
   const type = extractChromiumType(commandLine);

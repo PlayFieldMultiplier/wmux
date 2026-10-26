@@ -84,6 +84,10 @@ describe('classifyProcess — conhost and fallback', () => {
     expect(classifyProcess({ name: 'conhost.exe', commandLine: null })).toBe('conhost');
   });
 
+  it('buckets the bundled ConPTY host OpenConsole.exe as conhost', () => {
+    expect(classifyProcess({ name: 'OpenConsole.exe', commandLine: null })).toBe('conhost');
+  });
+
   it('buckets a user shell as other', () => {
     expect(classifyProcess({ name: 'powershell.exe', commandLine: 'powershell.exe -NoLogo' })).toBe('other');
   });
