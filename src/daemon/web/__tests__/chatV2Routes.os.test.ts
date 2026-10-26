@@ -179,7 +179,7 @@ describe('phone chat routes for a chat-v2 record', () => {
   it('shows the pending driver approval as blocked, by its registry id', async () => {
     approvals.push({
       id: 'apr_1', sessionId: 's1', agent: 'claude', kind: 'terminal_prompt', state: 'pending', createdAt: 1,
-      native: { adapter: 'claude', requestId: 'r1', threadId: 'c1', relayId: EPOCH },
+      native: { adapter: 'claude', via: 'chat-v2', requestId: 'r1', threadId: 'c1', relayId: EPOCH },
     } as unknown as ApprovalRequest);
     const token = await start();
     expect((await turns(token)).body.chat.blocked).toEqual({ by: 'approval', approvalId: 'apr_1' });
@@ -291,7 +291,7 @@ describe('phone chat routes for a chat-v2 record', () => {
     const events = await sse(token);
     approvals.push({
       id: 'apr_2', sessionId: 's1', agent: 'claude', kind: 'terminal_prompt', state: 'pending', createdAt: 1,
-      native: { adapter: 'claude', requestId: 'r1', threadId: 'c1', relayId: EPOCH },
+      native: { adapter: 'claude', via: 'chat-v2', requestId: 'r1', threadId: 'c1', relayId: EPOCH },
     } as unknown as ApprovalRequest);
     pushListeners[0]({ paneId: 's1', chatSessionId: 'c1', epoch: EPOCH, events: [], blockCount: 2, lastBlockId: '2.1', touchedFrom: 1 });
     expect(await events.until('event: chat.blocked')).toContain('"approvalId":"apr_2"');
@@ -304,7 +304,7 @@ describe('phone chat routes for a chat-v2 record', () => {
   it('ignores a claude approval of another conversation or an earlier load', async () => {
     approvals.push({
       id: 'apr_old', sessionId: 's1', agent: 'claude', kind: 'terminal_prompt', state: 'pending', createdAt: 1,
-      native: { adapter: 'claude', requestId: 'r0', threadId: 'c1', relayId: 'b'.repeat(16) },
+      native: { adapter: 'claude', via: 'chat-v2', requestId: 'r0', threadId: 'c1', relayId: 'b'.repeat(16) },
     } as unknown as ApprovalRequest);
     const token = await start();
     expect((await turns(token)).body.chat.blocked).toBeUndefined();

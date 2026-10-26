@@ -5,10 +5,13 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { applyHarnessEvent, blockChangeFrom } from '../../../shared/chatv2/apply';
 import type { HarnessEvent, StampedHarnessEvent } from '../../../shared/chatv2/harnessEvents';
 import {
+  CHATV2_AGENT_CAPS,
+  CHATV2_AGENTS,
   CHATV2_ATTACHMENT_DIR,
   CHATV2_MODEL,
   CHATV2_PROVIDER_SESSION_ID,
   chatV2Error,
+  type ChatV2Agent,
   type ChatV2Binding,
   type ChatV2Capabilities,
   type ChatV2Error,
@@ -33,6 +36,7 @@ import { newChatSession, sessionNeedsInput, type Attachment, type Block, type Se
 import { CHAT_IMAGE_EXTENSIONS, CHAT_IMAGE_MAX_BYTES } from '../../../shared/transcript/chatAttachments';
 import type { DecisionForm, NativeDecisionOutcome, NativeDecisionRef, NativeDecisionReply } from '../../approvals/types';
 import { ClaudeDriver } from './claude/claudeDriver';
+import { CodexDriver } from './codex/codexDriver';
 import { CLAUDE_SETTING_SOURCES, CLAUDE_SETTING_SOURCES_PATTERN } from './claude/claudeProtocol';
 import { driverCwd } from './cwd';
 import { buildDriverEnv, DriverEnvError } from './env';
@@ -69,7 +73,11 @@ export const CHATV2_SETTING_SOURCES_ENV = 'WMUX_CHATV2_SETTING_SOURCES';
 export function defaultChatV2Drivers(env: NodeJS.ProcessEnv = process.env): ChatV2DriverFactory {
   const requested = env[CHATV2_SETTING_SOURCES_ENV];
   const settingSources = requested && CLAUDE_SETTING_SOURCES_PATTERN.test(requested) ? requested : CLAUDE_SETTING_SOURCES;
-  return (agent) => (agent === 'claude' ? new ClaudeDriver({ settingSources }) : null);
+  const make: Record<ChatV2Agent, () => ChatV2Driver> = {
+    claude: () => new ClaudeDriver({ settingSources }),
+    codex: () => new CodexDriver(),
+  };
+  return (agent) => ((CHATV2_AGENTS as readonly string[]).includes(agent) ? make[agent as ChatV2Agent]() : null);
 }
 
 type Result<M extends ChatV2Method> = ChatV2ResultByMethod[M];
@@ -77,6 +85,10 @@ type Result<M extends ChatV2Method> = ChatV2ResultByMethod[M];
 /** One decision the host holds for the driver, by its request id. */
 interface HeldDecision {
   kind: 'permission' | 'questions';
+  /** The driver's own request id (`native.requestId` carries the driver's tag in front). */
+  requestId: string;
+  /** The permission card's revision as the driver raised it, passed back with its answer. */
+  revision?: string;
   native: NativeDecisionRef;
   /** The registry record, or null when none was made (failed closed). */
   registryId: string | null;
@@ -143,7 +155,17 @@ interface Live {
   lastPid?: number;
   /** The last driver's `marker`, kept with lastPid. */
   lastMarker?: string;
+  /**
+   * New for every driver spawned, in front of its request ids in the registry:
+   * a Codex app-server numbers its requests from 0 in each process, so the
+   * same id from another pane or a restarted driver is never taken for one
+   * the registry already settled, and an answer never reaches a later driver.
+   */
+  driverTag: string;
 }
+
+/** Why a Codex chat does not resume its thread. */
+const CODEX_THREAD_HELD = 'This conversation is open in a terminal Codex.';
 
 const PERMISSION_ACTIONS: DecisionForm['actions'] = [
   { id: 'approve', label: 'Allow once' },
@@ -292,13 +314,10 @@ class Host implements ChatV2Host {
     } catch (error) {
       this.deps.log('warn', `[chatv2] could not stop driver ${process.pid}: ${String(error)}`);
     }
-    // Its decisions died with it; a registry that already exists drops their cards.
-    const registry = this.deps.approvals();
-    if (registry) {
-      const ids = record.session.blocks.flatMap((b) => (b.approval && !b.approval.decided ? [b.approval.requestId] : []));
-      if (record.session.pendingQuestion) ids.push(record.session.pendingQuestion.requestId);
-      if (ids.length) await registry.expireNativeRequests(record.paneId, 'claude', ids).catch(() => 0);
-    }
+    // Its decisions died with it. Their registry cards are already gone: the
+    // registry expires every pending record when the daemon starts again
+    // (ApprovalRegistry's constructor), and none is made from this record
+    // until its next driver runs.
   }
 
   async dispose(): Promise<void> {
@@ -379,7 +398,8 @@ class Host implements ChatV2Host {
 
   private capabilities(live: Live): ChatV2Capabilities {
     const active = live.record.state === 'active';
-    return { send: active, interrupt: active, approvals: active, questions: active, images: active, toTerminal: active };
+    // Only an agent with a terminal handoff continues there (handoff.ts types `claude --resume`).
+    return { send: active, interrupt: active, approvals: active, questions: active, images: active, toTerminal: active && CHATV2_AGENT_CAPS[live.record.agent].terminalHandoff };
   }
 
   private binding(live: Live): ChatV2Binding {
@@ -468,6 +488,8 @@ class Host implements ChatV2Host {
     if (!cwd) return chatV2Error('pane-not-found', 'The pane has no known working directory.');
     // The RPC layer validated it; the argv rule is checked again where it is used.
     if (p.model !== undefined && !CHATV2_MODEL.test(p.model)) return chatV2Error('invalid-params', 'Invalid model.');
+    // An agent with no bypass mode always asks before a command or an edit (Codex runs on-request).
+    if (p.mode === 'bypass' && !CHATV2_AGENT_CAPS[p.agent].bypass) return chatV2Error('invalid-params', 'This chat always asks before it runs a command or edits a file.');
     const chatSessionId = randomUUID();
     const providerSessionId = randomUUID();
     const model = p.model ?? '';
@@ -704,6 +726,7 @@ class Host implements ChatV2Host {
         decision: p.decision === 'allow' ? 'approve' : 'deny',
         formKind: held.kind,
         ...(p.answers && held.kind === 'questions' ? { answers: p.answers } : {}),
+        ...(held.revision !== undefined ? { revision: held.revision } : {}),
       };
       const outcome = await this.settleAnswer(live, held, driver, reply);
       if (outcome === 'ok') {
@@ -732,6 +755,7 @@ class Host implements ChatV2Host {
     if (!live) return chatV2Error('session-not-found', 'No chat for this pane.');
     const handedOff = handedOffRefusal(live.record);
     if (handedOff) return handedOff;
+    if (!CHATV2_AGENT_CAPS[live.record.agent].terminalHandoff) return chatV2Error('handoff-refused', 'Only a Claude chat can continue in the terminal.');
     const { session } = live.record;
     if (session.busy || sessionNeedsInput(session) || live.sending || live.starting) {
       return chatV2Error('handoff-refused', 'The agent is still working. Stop the turn first.');
@@ -782,6 +806,9 @@ class Host implements ChatV2Host {
    * proved gone.
    */
   private async fromTerminal(p: ChatV2ParamsByMethod['fromTerminal']): Promise<Result<'fromTerminal'>> {
+    // The terminal side is Claude's only (fromTerminal.ts).
+    const held = this.byPane.get(p.paneId);
+    if (held && !CHATV2_AGENT_CAPS[held.record.agent].terminalHandoff) return chatV2Error('handoff-refused', 'Only a Claude conversation moves between the terminal and a chat.');
     const terminal = this.deps.terminal;
     if (!terminal) return chatV2Error('unavailable', 'Continuing in chat is unavailable.');
     const pane = this.deps.sessionManager.getSession(p.paneId);
@@ -1090,17 +1117,20 @@ class Host implements ChatV2Host {
 
   async answerNative(native: NativeDecisionRef, reply: NativeDecisionReply, paneId: string): Promise<NativeDecisionOutcome> {
     const live = this.byPane.get(paneId);
-    if (!live || live.closed || native.adapter !== 'claude') return 'not-found';
+    if (!live || live.closed || native.via !== 'chat-v2' || native.adapter !== live.record.agent) return 'not-found';
     if (native.threadId !== live.record.chatSessionId || native.relayId !== live.epoch) return 'not-found';
-    const held = live.decisions.get(native.requestId);
+    const held = [...live.decisions.values()].find((h) => h.native.requestId === native.requestId);
     const driver = live.driver;
     if (!held || held.failClosed || held.desktopOnly || !driver) return 'not-found';
-    return this.settleAnswer(live, held, driver, reply);
+    // The record answered is the card the driver raised last: a request raised
+    // again (its diff changed) has a new revision and a new record.
+    if (native.digest !== held.native.digest) return 'changed';
+    return this.settleAnswer(live, held, driver, { ...reply, ...(held.revision !== undefined ? { revision: held.revision } : {}) });
   }
 
   /** Hand one reply to the driver; on `ok` / `not-found` the card settles in the transcript. */
   private async settleAnswer(live: Live, held: HeldDecision, driver: ChatV2Driver, reply: NativeDecisionReply): Promise<NativeDecisionOutcome> {
-    const requestId = held.native.requestId;
+    const { requestId } = held;
     const outcome = await driver.answer(requestId, reply);
     if (outcome === 'ok' || outcome === 'not-found') {
       live.decisions.delete(requestId);
@@ -1140,6 +1170,7 @@ class Host implements ChatV2Host {
       batchBase: record.session,
       persistTimer: null,
       lastBindingKey: '',
+      driverTag: newEpoch(),
     };
     live.lastBindingKey = this.bindingKey(this.binding(live));
     return live;
@@ -1166,6 +1197,9 @@ class Host implements ChatV2Host {
       }
       if (superseded()) return chatV2Error('session-not-found', 'The chat was closed.');
       const resume = record.resumeExisting === true || record.session.blocks.some((b) => b.role === 'user');
+      // Before the spawn, so a second app-server never even loads a thread a
+      // terminal Codex has open; secondWriter checks again after it.
+      if (resume && this.codexThreadHeld(record)) return chatV2Error('agent-running-in-pane', CODEX_THREAD_HELD);
       const fail = (message: string): { ok: false; error: ChatV2Error } => {
         this.deps.log('warn', `[chatv2] ${record.agent} driver failed to start on ${record.paneId}: ${message}`);
         live.failed = true;
@@ -1187,6 +1221,7 @@ class Host implements ChatV2Host {
       const driver = this.drivers(record.agent);
       if (!driver) return chatV2Error('driver-unavailable', `${record.agent} cannot run in chat.`);
       live.driver = driver;
+      live.driverTag = newEpoch();
       try {
         await driver.start({
           cwd: record.session.cwd,
@@ -1254,6 +1289,7 @@ class Host implements ChatV2Host {
     if (!resume) return null;
     const chats = this.chatHolders(record.paneId, record.providerSessionId);
     if (chats.length) return 'This conversation is open in a chat in another pane. The chat was stopped.';
+    if (this.codexThreadHeld(record)) return `${CODEX_THREAD_HELD} The chat was stopped.`;
     const scan = this.deps.terminal?.processesWithArg;
     if (!scan) return null;
     let others;
@@ -1263,6 +1299,11 @@ class Host implements ChatV2Host {
       return 'Could not confirm that the chat is the conversation’s only process. The chat was stopped.';
     }
     return others.length ? `${holdersRefusal(others)} The chat was stopped.` : null;
+  }
+
+  /** A Codex record's thread is held by a terminal Codex, which talks to the shared app-server (its argv names no thread). */
+  private codexThreadHeld(record: ChatV2StoredRecord): boolean {
+    return CHATV2_AGENT_CAPS[record.agent].sharedServerThreads && (this.deps.codexThreadOwners?.(record.providerSessionId) ?? []).length > 0;
   }
 
   /** Stop the driver and wait until it is reaped. False: it did not exit, and it is kept. */
@@ -1388,10 +1429,21 @@ class Host implements ChatV2Host {
    */
   private async recordDecision(live: Live, driver: ChatV2Driver, decision: ChatV2DriverDecision): Promise<void> {
     const { record } = live;
-    const native: NativeDecisionRef = { adapter: 'claude', requestId: decision.requestId, threadId: record.chatSessionId, relayId: live.epoch };
+    const revision = decision.kind === 'permission' ? decision.revision : undefined;
+    const native: NativeDecisionRef = {
+      adapter: record.agent,
+      via: 'chat-v2',
+      requestId: `${live.driverTag}.${decision.requestId}`,
+      threadId: record.chatSessionId,
+      relayId: live.epoch,
+      // Part of the record's fingerprint: a card raised again is a new record.
+      ...(revision !== undefined ? { digest: revision } : {}),
+    };
     let recorded!: () => void;
     const held: HeldDecision = {
       kind: decision.kind,
+      requestId: decision.requestId,
+      ...(revision !== undefined ? { revision } : {}),
       native,
       registryId: null,
       failClosed: false,
@@ -1418,12 +1470,13 @@ class Host implements ChatV2Host {
       try {
         id = await registry.noteNativeDecision({
           sessionId: record.paneId,
-          agent: 'claude',
+          agent: record.agent,
           ...(workspaceId ? { workspaceId } : {}),
           native,
           ...(decision.kind === 'permission'
             ? {
-                form: { v: 1, kind: 'permission', actions: PERMISSION_ACTIONS },
+                // Deny is labelled by what it sends (Codex `cancel` also stops the turn).
+                form: { v: 1, kind: 'permission', actions: decision.denyLabel ? [PERMISSION_ACTIONS[0], { ...PERMISSION_ACTIONS[1], label: decision.denyLabel }] : PERMISSION_ACTIONS },
                 question: decision.question,
                 toolName: decision.toolName,
                 summary: decision.summary,

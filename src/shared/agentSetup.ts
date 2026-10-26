@@ -68,6 +68,19 @@ export function isOlderVersion(version: string, floor: string): boolean {
   return false;
 }
 
+/**
+ * The agents the "Agent ready" step shows a card for, in registry order: every
+ * `setup` row, except a `card: 'when-installed'` one that was not found (or
+ * not checked yet).
+ */
+export function shownAgentIds(statuses: readonly AgentSetupStatus[] | null): AgentId[] {
+  return AGENT_IDS.filter((agent) => {
+    if (agentRow(agent)?.setup?.card !== 'when-installed') return true;
+    const status = statuses?.find((s) => s.agent === agent);
+    return !!status && status.readiness !== 'not-installed';
+  });
+}
+
 /** At least one agent can be used now: the wizard may continue. */
 export function anyAgentReady(statuses: readonly AgentSetupStatus[]): boolean {
   return statuses.some((s) => s.readiness === 'ready');

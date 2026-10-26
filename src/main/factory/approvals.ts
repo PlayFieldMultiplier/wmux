@@ -97,6 +97,7 @@ import {
   type ApprovalApprover,
   type ApprovalDecideRequest,
   type ApprovalRequest,
+  type ApprovalRoutine,
   type ApprovalRule,
   type ApprovalRuleNeed,
   type ApprovalState,
@@ -107,6 +108,7 @@ import type { MergeEffect } from '../../shared/moaDecision';
 import type { PrLaneFacts } from '../../shared/prReview';
 import type { RpcContext } from '../../shared/rpc';
 import { GENERAL_THREAD, ROOM_LIMITS, dmThreadBot, dmThreadId, issueThreadId, parseThreadId, prThreadId, type RoomCard, type ThreadId } from '../../shared/room';
+import { secretValueKind } from '../../shared/secretGuard';
 import type { FactoryRouter } from './factoryHost';
 import { factFromMergeEffect } from './factIngest';
 import { fenceFor } from '../../shared/markdownFence';
@@ -120,7 +122,9 @@ import type { BotNoticeInput } from './botNotices';
 import type { BotDirectoryApi } from './triggerEngine';
 import { GUEST_TURN_STARTS_NO_WORKERS, guestOfRecord } from './wakeTaint';
 import { guestSide } from './guestWorkspaces';
-import { CONTEXT_FENCE_INFO, PAYLOAD_FENCE_INFO, actContentKey, actTextProblem, bodyWithMarker, fencedLines, normalizeActText, payloadHashOf } from './actPayload';
+import { CONTEXT_FENCE_INFO, PAYLOAD_FENCE_INFO, UNSHOWABLE, actContentKey, actTextProblem, bodyWithMarker, fencedLines, normalizeActText, payloadHashOf } from './actPayload';
+import { nextSlot, scheduleLabel } from './routines';
+import type { OwnerCardProof } from './ownerAsked';
 import { actEffectId, actRowClaimed, type ActEffect, type ActEffectStatus } from './actEffectStore';
 import type { IssueFacts, PullFacts } from './actExecutor';
 import { releaseTagProblem, type ReleaseAsk, type ReleaseAskInput, type ReleaseAskRefusal } from './releaseAct';
@@ -205,6 +209,8 @@ export function botApprovalView(r: StoredApproval, readerGuest: boolean): Approv
   const hidden: ApprovalView = { ...view, reason: GUEST_REASON_HIDDEN };
   delete hidden.skill;
   delete hidden.ownerProfile;
+  delete hidden.routine;
+  delete hidden.botMemory;
   delete hidden.act;
   return hidden;
 }
@@ -298,10 +304,14 @@ export interface ApprovalPorts {
    *  act. `approve` returns why the proposal on the card cannot be approved
    *  (it changed since), or null once it is the approved version. */
   skills?: () => ApprovalSkillHost | null;
-  /** The memory store, for `owner_profile` requests: `approve` applies the
-   *  change on the card, checked again, and returns why it cannot, or null
-   *  once it is written. */
+  /** The memory store, for `owner_profile` and `bot_memory` requests:
+   *  `approve` applies the change on the card, checked again, and returns
+   *  why it cannot, or null once it is written. */
   ownerProfile?: () => ApprovalOwnerProfileHost | null;
+  /** The routine store, for `routine` requests: `approve` saves the routine
+   *  on the card, checked again as of now, and returns why it cannot, or
+   *  null once it is saved. */
+  routines?: () => ApprovalRoutineHost | null;
   /** The act outbox, for ACT_ACTIONS requests. Absent: none is asked for. */
   acts?: () => ApprovalActHost | null;
   now?: () => number;
@@ -315,10 +325,22 @@ export interface ApprovalSkillHost {
   deny(r: StoredApproval): void;
 }
 
-/** What an `owner_profile` request's Approve does to the owner's profile. */
+/** What an `owner_profile` request's Approve does to the owner's profile,
+ *  and a `bot_memory` request's to the bot's notes. */
 export interface ApprovalOwnerProfileHost {
   approve(r: StoredApproval): string | null;
 }
+
+/** What a `routine` request's Approve does: saves its routine. */
+export interface ApprovalRoutineHost {
+  approve(r: StoredApproval): string | null;
+}
+
+/** What the owner asked a bot for in a conversation that took in outside
+ *  text (proposeOwnerAsked). */
+export type OwnerAsk =
+  | { action: 'routine'; routine: ApprovalRoutine }
+  | { action: 'bot_memory' | 'owner_profile'; change: MemoryChange };
 
 /** What `proposeSkill` takes (the store has written the proposal). */
 export interface SkillApprovalInput {
@@ -497,6 +519,8 @@ const ACTION_TITLE: Readonly<Record<ApprovalAction, string>> = {
   skill: 'Load the skill',
   owner_profile: 'Change',
   native_tool: 'Run',
+  routine: 'Set up the routine',
+  bot_memory: 'Change',
 };
 
 /** What a done act's outcome card says it did. */
@@ -513,10 +537,12 @@ function prName(repoKey: string, n: number): string {
   return isGitlabRepoKey(repoKey) ? `MR !${n}` : `PR #${n}`;
 }
 
-function subject(r: Pick<ApprovalRequest, 'action' | 'repoKey' | 'prNumber' | 'issueNumber' | 'skill' | 'act'>): string {
+function subject(r: Pick<ApprovalRequest, 'action' | 'repoKey' | 'prNumber' | 'issueNumber' | 'skill' | 'act' | 'routine'>): string {
   if (r.skill) return `${r.skill.name} ${r.skill.version}`;
   if (r.act?.kind === 'release') return `${r.repoKey} (${r.act.tagName})`;
   if (r.action === 'owner_profile') return 'your profile';
+  if (r.action === 'bot_memory') return 'your notes';
+  if (r.routine) return `"${r.routine.title}"`;
   if (r.prNumber !== undefined) return prName(r.repoKey, r.prNumber);
   if (r.issueNumber !== undefined) return `issue #${r.issueNumber}`;
   return r.repoKey;
@@ -547,15 +573,23 @@ const OWNER_PROFILE_TITLE: Readonly<Record<MemoryChange['action'], string>> = {
   remove: 'Remove this from your profile?',
 };
 
+const BOT_MEMORY_TITLE: Readonly<Record<MemoryChange['action'], string>> = {
+  add: 'Add this to the bot\'s notes?',
+  replace: 'Change this in the bot\'s notes?',
+  remove: 'Remove this from the bot\'s notes?',
+};
+
+function textBlock(text: string): string[] {
+  const fence = fenceFor(text);
+  return [`${fence}text`, text, fence];
+}
+
 /** An owner-profile card's lines after the bot's: what Approve does, then
  *  the exact entry (replace: as it reads, then as it would), each in a
- *  fence no backtick run in it can close. Pure. */
-export function ownerProfileCardLines(change: MemoryChange): string[] {
-  const block = (text: string): string[] => {
-    const fence = fenceFor(text);
-    return [`${fence}text`, text, fence];
-  };
-  const shared = 'Every bot of yours reads your profile when its session starts.';
+ *  fence no backtick run in it can close. `shared` says who reads it (the
+ *  bot's own notes: that bot). Pure. */
+export function ownerProfileCardLines(change: MemoryChange, shared = 'Every bot of yours reads your profile when its session starts.'): string[] {
+  const block = textBlock;
   if (change.action === 'add') {
     return ['', `Approve to add this entry; Deny drops it. ${shared}`, '', ...block(change.text ?? '')];
   }
@@ -563,6 +597,56 @@ export function ownerProfileCardLines(change: MemoryChange): string[] {
     return ['', `Approve to remove this entry; Deny keeps it. ${shared}`, '', ...block(change.old ?? '')];
   }
   return ['', `Approve to replace this entry; Deny keeps it as it is. ${shared}`, '', 'Now:', ...block(change.old ?? ''), '', 'Becomes:', ...block(change.text ?? '')];
+}
+
+/** The lines an owner-asked card starts with (proposeOwnerAsked): why it is
+ *  asked, and the owner's own message it was asked on. Pure. */
+export function ownerAskedLines(excerpt: string): string[] {
+  return [
+    '',
+    'This conversation has read outside text (a pull request, an issue, CI, or work that read them), so nothing it asks for that stays is saved without you. Check that this is what you asked for. Your message:',
+    ...textBlock(excerpt),
+  ];
+}
+
+function hhmm(at: number): string {
+  const d = new Date(at);
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** A routine card's lines after the owner-asked ones: what Approve does,
+ *  then every field that changes what runs and when (the schedule in words
+ *  with the time zone and its next run, quiet hours, the thread), then the
+ *  title and the whole prompt, each fenced. Pure. */
+export function routineCardLines(r: ApprovalRoutine, o: { botId: string; botName: string; now: number; timeZone: string }): string[] {
+  const s = r.schedule;
+  const next = s.kind === 'interval' ? `first run ${scheduleLabel(s).replace(/^every /, '')} after you approve` : `next run ${hhmm(nextSlot(s, o.now))}`;
+  const thread = !r.threadId || r.threadId === GENERAL_THREAD ? 'General' : r.threadId === dmThreadId(o.botId) ? `your 1:1 with ${o.botName}` : r.threadId;
+  return [
+    '',
+    `Approve to save this routine; Deny drops it. Each run wakes ${o.botName} afresh, with the prompt below as its instructions.`,
+    '',
+    `Schedule: ${scheduleLabel(s)} (${o.timeZone} time); ${next}`,
+    `Quiet hours: ${r.quietHours ? `${r.quietHours.start}–${r.quietHours.end} (runs inside it are skipped)` : 'none'}`,
+    `Runs in: ${thread}`,
+    '',
+    'Title:',
+    ...textBlock(r.title),
+    '',
+    'Prompt:',
+    ...textBlock(r.prompt),
+  ];
+}
+
+/** Why a text an owner-asked card would show is not shown as it is saved,
+ *  or null: what the card shows is what is saved, nothing hidden or cut. */
+export function ownerAskedTextProblem(text: string): string | null {
+  if (UNSHOWABLE.test(text)) return 'it holds control, bidi or zero-width characters, which the card would not show as they are saved';
+  if (redactStoredSecrets(text) !== text) return 'it holds a stored secret, which the card would hide';
+  const key = text.split('\n').map(secretValueKind).find((k) => k !== null);
+  if (key) return `it holds a key (${key}); a secret goes through secret_request`;
+  return null;
 }
 
 /** The longest text an act publishes (the card's room is the real cap). */
@@ -753,7 +837,9 @@ export class ApprovalService {
     if (CARD_ONLY_ACTIONS.has(act)) {
       return refuse('invalid', act === 'skill' ? 'a skill is proposed with skill_propose'
         : act === 'native_tool' ? 'a command approval comes from the bot\'s own engine, not approval_request'
-          : 'a change to the owner\'s profile is proposed with memory_update');
+          : act === 'routine' ? 'a routine is proposed with routine_set'
+            : act === 'bot_memory' ? 'a change to your notes is proposed with memory_update target memory'
+              : 'a change to the owner\'s profile is proposed with memory_update');
     }
     if (!(BOT_REQUESTABLE_ACTIONS as readonly string[]).includes(act)) {
       return refuse('invalid', `${act} is not asked for with approval_request; it has no executor yet`);
@@ -1239,6 +1325,93 @@ export class ApprovalService {
     return { ok: true, request: approvalView(this.get(record.requestId) ?? record) };
   }
 
+  /** What the owner asked the bot for in a conversation that took in
+   *  outside text (routine_set, memory_update): one card-only request, asked
+   *  in the wake that runs on the owner's card (`proof`), whose card shows
+   *  that message and the whole change. One per action and owner message:
+   *  the same change again while it waits is that request, another one, or
+   *  any once the owner answered, is refused. The caller has
+   *  refused a guest's wake, a tainted wake and a signed-in conversation. */
+  proposeOwnerAsked(bot: BotBinding, ask: OwnerAsk, proof: OwnerCardProof): { ok: true; request: ApprovalView; duplicate?: true } | Refusal {
+    const tool = ask.action === 'routine' ? 'routine_set' : 'memory_update';
+    const wake = this.ports.runningWake(bot.botId);
+    if (!wake || wake.wakeId !== proof.wakeId) return refuse('not_running', `${tool}: the turn the owner's message started has ended`);
+    if (guestSourcedWake(wake)) return refuse('not_now', `${tool}: ${GUEST_TURN_STARTS_NO_WORKERS}`);
+    let profile: BotProfile | null = null;
+    try {
+      profile = this.ports.bots()?.get(bot.botId) ?? null;
+    } catch {
+      profile = null;
+    }
+    if (!profile || !profile.enabled || profile.workspaceId !== bot.workspaceId) return refuse('not_bot', 'this bot is not running in the factory');
+    // A replace or remove shows the entry it changes too.
+    const texts = ask.action === 'routine' ? [ask.routine.title, ask.routine.prompt] : [ask.change.text ?? '', ask.change.old ?? ''];
+    for (const t of texts) {
+      const problem = ownerAskedTextProblem(t);
+      if (problem) return refuse('invalid', `${tool}: this cannot go on the owner's card as it is: ${problem}`);
+    }
+    // The owner's words on the card are held to the same: shown as stored.
+    if (ownerAskedTextProblem(proof.excerpt)) return refuse('invalid', `${tool}: the owner's message cannot be quoted on a card as it is; tell the owner what you would save`);
+    const payload = ask.action === 'routine' ? ask.routine : ask.change;
+    const contentKey = createHash('sha256').update(JSON.stringify([ask.action, payload])).digest('hex').slice(0, 32);
+    // One per action and owner message, whichever wake runs on it, so
+    // outside text cannot fill the owner's inbox.
+    const clientRequestId = `${ask.action}:${proof.cardId}`;
+    const prior = [...this.requests.values()].find((r) => r.botId === bot.botId && r.clientRequestId === clientRequestId);
+    if (prior) {
+      if (prior.state !== 'pending') return refuse('not_pending', `${tool}: the owner already answered this request (${prior.state}); do not ask again unless they say so`);
+      return prior.contentKey === contentKey
+        ? { ok: true, request: approvalView(prior), duplicate: true }
+        : refuse('too_many', `${tool}: one such request per owner message, and one waits already; tell the owner what else you would save`);
+    }
+    const open = [...this.requests.values()].filter((r) => r.botId === bot.botId && r.state === 'pending').length;
+    if (open >= APPROVAL_LIMITS.PENDING_PER_BOT) return refuse('too_many', `${open} requests already wait for the owner`);
+    const reason = ask.action === 'routine' ? 'Set up this routine you asked for.'
+      : ask.action === 'bot_memory' ? 'Keep this in my notes, as you asked.'
+        : 'Remember this about you, for every bot.';
+    const lines = [
+      ...ownerAskedLines(proof.excerpt),
+      ...(ask.action === 'routine'
+        ? routineCardLines(ask.routine, { botId: bot.botId, botName: profile.name || 'the bot', now: this.now(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone })
+        : ownerProfileCardLines(ask.change, ask.action === 'bot_memory' ? 'This bot reads its notes when its session starts.' : undefined)),
+    ];
+    // Measured as posted, and never cut: the owner reads all of what they
+    // approve.
+    if ([askLine(profile, reason), ...lines].join('\n').length > ROOM_LIMITS.CARD_BODY_MAX) {
+      return refuse('invalid', `${tool}: this does not fit on the owner's card; make it shorter`);
+    }
+    const at = this.now();
+    const record: StoredApproval = {
+      requestId: newRequestId(),
+      action: ask.action,
+      repoKey: '',
+      repoPath: '',
+      ...(ask.action === 'routine' ? { routine: { ...ask.routine } } : ask.action === 'bot_memory' ? { botMemory: { ...ask.change } } : { ownerProfile: { ...ask.change } }),
+      ownerCardId: proof.cardId,
+      botId: bot.botId,
+      workspaceId: bot.workspaceId,
+      threadId: this.conversationThread(bot.botId, wake),
+      reason,
+      tainted: true,
+      guest: false,
+      state: 'pending',
+      clientRequestId,
+      contentKey,
+      createdAt: at,
+      updatedAt: at,
+    };
+    // Approved on its card only: the card is posted first and the request
+    // stored once, with it.
+    const card = this.postCard(record, profile, wake, lines);
+    if (!card) return refuse('write_failed', `${tool}: the approval card could not be posted; ask again`);
+    if (!this.put({ ...record, cardId: card.id })) {
+      this.closeCard({ ...record, cardId: card.id });
+      return refuse('write_failed', `${tool}: the request could not be stored; ask again`);
+    }
+    this.changed(record.workspaceId);
+    return { ok: true, request: approvalView(this.get(record.requestId) ?? record) };
+  }
+
   /** The bot was deleted: each of its requests still waiting expires and
    *  its card closes (a skill's proposal is shelved), and so does a merge
    *  approved but still inside its Undo window. Returns how many. */
@@ -1263,6 +1436,15 @@ export class ApprovalService {
     if (next.action === 'skill') this.skillDenied(next);
     this.changed(next.workspaceId);
     return true;
+  }
+
+  /** The bot that asked is there and switched on. */
+  private botEnabled(r: Pick<StoredApproval, 'botId'>): boolean {
+    try {
+      return this.ports.bots()?.get(r.botId)?.enabled === true;
+    } catch {
+      return false;
+    }
   }
 
   /** The bot that asked was deleted (a directory that is running says so). */
@@ -1481,6 +1663,8 @@ export class ApprovalService {
         // An approved skill is loaded already; the profile's Archive unloads it.
         if (cur.action === 'skill') return refuse('too_late', 'the skill is loaded; archive it from the bot\'s profile');
         if (cur.action === 'native_tool') return refuse('too_late', 'the tool was told already');
+        // Approving saved it already: there is no window to take it back in.
+        if (cur.action === 'owner_profile' || cur.action === 'bot_memory' || cur.action === 'routine') return refuse('too_late', 'it is saved already; change it from the bot\'s profile or the Schedules page');
         if (cur.act) {
           if (this.actClaimed(cur) || (cur.executeAfter !== undefined && this.now() >= cur.executeAfter)) return refuse('too_late', 'wmux has already started it');
         } else if (cur.effectId || (cur.executeAfter !== undefined && this.now() >= cur.executeAfter)) return refuse('too_late', 'the merge has started');
@@ -1509,8 +1693,13 @@ export class ApprovalService {
     }
     const skillHost = cur.action === 'skill' ? this.ports.skills?.() ?? null : null;
     if (cur.action === 'skill' && !skillHost) return refuse('not_started', 'skills are not running yet');
-    const profileHost = cur.action === 'owner_profile' ? this.ports.ownerProfile?.() ?? null : null;
-    if (cur.action === 'owner_profile' && !profileHost) return refuse('not_started', 'memory is not running yet');
+    const memory = cur.action === 'owner_profile' || cur.action === 'bot_memory';
+    const profileHost = memory ? this.ports.ownerProfile?.() ?? null : null;
+    if (memory && !profileHost) return refuse('not_started', 'memory is not running yet');
+    const routineHost = cur.action === 'routine' ? this.ports.routines?.() ?? null : null;
+    if (cur.action === 'routine' && !routineHost) return refuse('not_started', 'routines are not running yet');
+    // What it saves runs in the bot's later turns.
+    if ((cur.action === 'routine' || cur.action === 'bot_memory') && !this.botEnabled(cur)) return refuse('not_now', 'the bot is switched off: switch it on, then approve');
     const at = this.now();
     const next: StoredApproval = {
       ...cur,
@@ -1548,13 +1737,15 @@ export class ApprovalService {
         return refuse('stale', why);
       }
     }
-    if (profileHost) {
-      // The owner's answer is the act, checked again as the profile stands
-      // now (the scanner, the limit, the entry it was for). When it cannot be
-      // applied the decision is taken back and the card is moot.
+    const applier = profileHost ?? routineHost;
+    if (applier) {
+      // The owner's answer is the act, checked again as things stand now
+      // (the scanner, the limit, the entry it was for; a routine's schedule
+      // and the bot's cap). When it cannot be applied the decision is taken
+      // back and the card is moot.
       let why: string | null;
       try {
-        why = profileHost.approve(next);
+        why = applier.approve(next);
       } catch (err) {
         why = `the change could not be applied: ${String(err)}`;
       }
@@ -1576,6 +1767,10 @@ export class ApprovalService {
       this.tellDecided(next, `The owner approved your skill ${subject(next)}.`, 'It is listed in your wakes from now on; read it with skill_read.');
     } else if (next.action === 'owner_profile') {
       this.tellDecided(next, 'The owner approved the change to their profile.', 'Every bot\'s next session starts with it.');
+    } else if (next.action === 'bot_memory') {
+      this.tellDecided(next, 'The owner approved the change to your notes.', 'Your next session starts with it.');
+    } else if (next.action === 'routine') {
+      this.tellDecided(next, `The owner approved the routine ${subject(next)}.`, 'It runs on its schedule from now on; routine_list shows it.');
     } else if (next.action === 'native_tool') {
       this.answerNativeTool(next, true);
       // Nothing is left to do or undo: the card keeps the answer.
@@ -2142,6 +2337,8 @@ export class ApprovalService {
     const what = r.skill
       ? `${r.skill.update ? 'Update the skill' : 'Add the skill'} ${subject(r)}?`
       : r.ownerProfile ? OWNER_PROFILE_TITLE[r.ownerProfile.action]
+      : r.botMemory ? BOT_MEMORY_TITLE[r.botMemory.action]
+      : r.routine ? 'Save this routine?'
       : r.nativeTool ? 'Let Hermes run this command?'
       : r.act?.kind === 'release' ? releaseCardTitle(r.act, r.actRepo?.fullName ?? r.repoKey)
       : `${ACTION_TITLE[r.action]} ${subject(r)}${r.headSha ? ` at ${r.headSha.slice(0, 7)}` : ''}?`;

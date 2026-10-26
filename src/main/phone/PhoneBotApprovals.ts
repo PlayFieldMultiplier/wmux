@@ -6,7 +6,7 @@
 // shared/phoneBotApprovals.ts.
 
 import { getApprovalService, type ApprovalService } from '../factory/approvals';
-import { CARD_ONLY_ACTIONS } from '../../shared/botApproval';
+import { CARD_ONLY_ACTIONS, type ApprovalAction } from '../../shared/botApproval';
 import {
   PHONE_BOT_APPROVAL_COMMAND,
   PHONE_BOT_APPROVAL_DECIDE_COMMAND,
@@ -17,6 +17,15 @@ import {
 } from '../../shared/phoneBotApprovals';
 
 type Approvals = Pick<ApprovalService, 'get' | 'decide'>;
+
+/** What the phone's refusal names, per card-only act. */
+const CARD_ONLY_SUBJECT: Partial<Record<ApprovalAction, string>> = {
+  skill: 'a skill',
+  owner_profile: 'a change to your profile',
+  bot_memory: 'a change to a bot\'s notes',
+  routine: 'a routine',
+  native_tool: 'a command',
+};
 
 /** A paired device's id as the daemon sends it (a log tag only). */
 const DEVICE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
@@ -38,10 +47,10 @@ export function handlePhoneBotApprovalCommand(
     const view = r ? phoneBotApproval(r) : null;
     return view ? { request: view } : { notFound: true };
   }
-  // A skill proposal or a profile change is decided on its desktop card,
-  // where the change is shown.
+  // A skill proposal, a profile or notes change or a routine is decided on
+  // its desktop card, where the change is shown.
   const act = service.get(requestId)?.action;
-  if (act && CARD_ONLY_ACTIONS.has(act)) return { refused: { code: 'not_on_phone', message: `${act === 'skill' ? 'a skill' : 'a change to your profile'} is approved in wmux on its card, where the change is shown` } };
+  if (act && CARD_ONLY_ACTIONS.has(act)) return { refused: { code: 'not_on_phone', message: `${CARD_ONLY_SUBJECT[act] ?? 'this request'} is approved in wmux on its card, where the change is shown` } };
   const body = parsePhoneBotApprovalDecideBody({
     decision: payload.decision,
     ...(payload.ruleScope !== undefined ? { ruleScope: payload.ruleScope } : {}),

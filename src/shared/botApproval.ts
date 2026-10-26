@@ -30,6 +30,7 @@
 
 import type { ThreadId } from './room';
 import type { MemoryChange } from './botMemory';
+import type { RoutineQuietHours, RoutineSchedule } from './botRoutine';
 
 export const BOT_APPROVAL_RPC = {
   /** `approval_request`: ask the owner for one act (ApprovalRequestParams). */
@@ -62,10 +63,14 @@ export const BOT_APPROVAL_IPC = {
  *  `native_tool` is a Hermes bot's own tool asking for permission mid-turn
  *  (a command it flags as dangerous): main raises it from the agent's ACP
  *  permission request and answers the agent once (allow once, or deny). It
- *  lives only while that turn waits: never written to approvals.json. */
-export type ApprovalAction = 'merge' | 'push_default' | 'issue_create' | 'issue_close' | 'comment' | 'release' | 'pr_close' | 'skill' | 'owner_profile' | 'native_tool';
+ *  lives only while that turn waits: never written to approvals.json.
+ *  `routine` and `bot_memory` are what the owner asked a bot for (a new
+ *  routine, a change to the bot's own notes) in a conversation that took in
+ *  outside text: main raises them from `routine_set` / `memory_update`
+ *  instead of refusing, and Approve saves what the card shows. */
+export type ApprovalAction = 'merge' | 'push_default' | 'issue_create' | 'issue_close' | 'comment' | 'release' | 'pr_close' | 'skill' | 'owner_profile' | 'native_tool' | 'routine' | 'bot_memory';
 
-export const APPROVAL_ACTIONS: readonly ApprovalAction[] = ['merge', 'push_default', 'issue_create', 'issue_close', 'comment', 'release', 'pr_close', 'skill', 'owner_profile', 'native_tool'];
+export const APPROVAL_ACTIONS: readonly ApprovalAction[] = ['merge', 'push_default', 'issue_create', 'issue_close', 'comment', 'release', 'pr_close', 'skill', 'owner_profile', 'native_tool', 'routine', 'bot_memory'];
 
 /** The public acts main carries out on GitHub after the Undo window
  *  (factory/actExecutor.ts), for a request that carries its `act`. */
@@ -85,14 +90,14 @@ export const TYPED_APPROVABLE_ACTIONS: ReadonlySet<ApprovalAction> = new Set<App
 /** Acts the owner decides on their own desktop card only, where the change
  *  is shown: never by a typed "ok", the "Approve N pending" chip, the phone
  *  or a rule, and never named in `approval_request` (main raises them). */
-export const CARD_ONLY_ACTIONS: ReadonlySet<ApprovalAction> = new Set<ApprovalAction>(['skill', 'owner_profile', 'native_tool']);
+export const CARD_ONLY_ACTIONS: ReadonlySet<ApprovalAction> = new Set<ApprovalAction>(['skill', 'owner_profile', 'native_tool', 'routine', 'bot_memory']);
 
 /** The acts a bot may name in `approval_request` (a push to a default
  *  branch is not asked for: its executor has no safe source yet). */
 export const BOT_REQUESTABLE_ACTIONS: readonly ApprovalAction[] = APPROVAL_ACTIONS.filter((a) => !CARD_ONLY_ACTIONS.has(a) && a !== 'push_default');
 
 /** Acts no rule may cover: each one always needs the owner. */
-export const APPROVAL_NEVER_BY_RULE: ReadonlySet<ApprovalAction> = new Set<ApprovalAction>(['release', 'push_default', 'skill', 'owner_profile', 'native_tool']);
+export const APPROVAL_NEVER_BY_RULE: ReadonlySet<ApprovalAction> = new Set<ApprovalAction>(['release', 'push_default', 'skill', 'owner_profile', 'native_tool', 'routine', 'bot_memory']);
 
 /** Who granted: the owner (card, chip, phone, matching message), or one of
  *  the owner's remembered rules. A rule approval is `'rule'` in MergeEffect.approvedBy. */
@@ -167,6 +172,15 @@ export interface ApprovalRequest {
   /** `native_tool`: what the agent asked to run, as its permission request
    *  named it (secrets redacted, capped). `repoKey` is ''. */
   nativeTool?: { title: string; command: string };
+  /** `routine`: the new routine as routine_set checked it, shown whole on
+   *  the card; Approve saves it, checked again. `repoKey` is ''. */
+  routine?: ApprovalRoutine;
+  /** `bot_memory`: the change to the bot's own notes the card shows (`old`
+   *  as for ownerProfile). `repoKey` is ''. */
+  botMemory?: MemoryChange;
+  /** `routine` / `bot_memory`, and an `owner_profile` asked from such a
+   *  conversation: the owner's `human` card the request was asked on. */
+  ownerCardId?: string;
   /** An act main carries out (ACT_ACTIONS): what it pins. A request without
    *  it (an older build's) stays recorded only. */
   act?: ApprovalAct;
@@ -212,6 +226,15 @@ export interface ApprovalRequest {
   updatedAt: number;
 }
 
+/** A routine a `routine` request saves (shared/botRoutine.ts). */
+export interface ApprovalRoutine {
+  title: string;
+  prompt: string;
+  schedule: RoutineSchedule;
+  quietHours?: RoutineQuietHours;
+  threadId?: ThreadId;
+}
+
 /** `botApproval.request` params (bot). Head, login, workspace and thread are
  *  main's to read; the bot names only what it asks for. */
 export interface ApprovalRequestParams {
@@ -244,7 +267,7 @@ export interface ApprovalListParams { state?: ApprovalState[]; limit?: number; }
  *  bot of the workspace asks for, whoever's worker authored the PR. */
 export interface ApprovalRule {
   ruleId: string;
-  action: Exclude<ApprovalAction, 'release' | 'push_default' | 'skill' | 'owner_profile' | 'native_tool'>;
+  action: Exclude<ApprovalAction, 'release' | 'push_default' | 'skill' | 'owner_profile' | 'native_tool' | 'routine' | 'bot_memory'>;
   repoKey: string;
   /** One bot, or every bot of one workspace. */
   scope: { botId: string } | { workspaceId: string };

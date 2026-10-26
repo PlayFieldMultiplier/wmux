@@ -816,6 +816,7 @@ details[open] > .wmux-chatv2-tool-line .wmux-chatv2-chevron { transform: rotate(
 .wmux-chatv2-chip select { appearance: none; field-sizing: content; background: transparent; color: inherit; font: inherit; cursor: pointer; outline: none; }
 .wmux-chatv2-chip select:disabled { cursor: default; }
 .wmux-chatv2-chip[aria-disabled="true"] { color: var(--text-muted); }
+.wmux-chatv2-chip[aria-disabled="true"] select:disabled { opacity: 1; }
 .wmux-chatv2-chip[data-mode="bypass"] { color: var(--accent-red); }
 .wmux-chatv2-attachments { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 .wmux-chatv2-chip[data-attachment] { gap: 2px; padding-right: 0; background: var(--bg-surface); color: var(--text-main); }

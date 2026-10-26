@@ -1,6 +1,7 @@
 /**
  * The first-run wizard's "Agent ready" step: one row per agent with a `setup`
- * row (Claude Code, Codex, Grok, Antigravity) in four states (ready, sign-in
+ * row (Claude Code, Codex, Grok, Antigravity; a `card: 'when-installed'` row
+ * only once found) in four states (ready, sign-in
  * needed, installed with a sign-in wmux cannot check, not installed), plus the
  * corner card the wizard shrinks to while an install or sign-in pane is in use.
  *
@@ -11,7 +12,7 @@
  */
 import { useEffect, useState } from 'react';
 import type { AgentId, AgentSetupStatus } from '../../shared/agentSetup';
-import { AGENT_IDS } from '../../shared/agentSetup';
+import { AGENT_IDS, shownAgentIds } from '../../shared/agentSetup';
 import { agentRow } from '../../shared/agentIdentity';
 import { agentOfficialPage, type AgentInstallVia, type AgentSetupPlan, type AgentSetupPlanInstall, type SetAgentPathResult } from '../../shared/agentInstall';
 import { useT } from '../hooks/useT';
@@ -112,7 +113,7 @@ export function decideAgentPrimary(
   if (Object.values(runs).some((r) => r?.phase === 'running')) return null;
   // The first card whose own action can be the primary (Install, Retry, Log
   // in); a card that only offers "Check again" is never the primary.
-  return AGENT_IDS.find((a) => {
+  return shownAgentIds(statuses).find((a) => {
     const status = agentStatusOf(a, statuses);
     const phase = runs[a]?.phase;
     if (!status || phase === 'not-found' || phase === 'no-tab') return false;
@@ -135,7 +136,7 @@ export function AgentReadyGroup({ primary, onShowPane }: { primary: AgentId | nu
         <p className="ui-row-detail">{t('firstRunWizard.agent.groupHint')}</p>
       </div>
       <div className="ui-group">
-        {AGENT_IDS.map((agent) => (
+        {shownAgentIds(statuses).map((agent) => (
           <AgentCard
             key={agent}
             agent={agent}

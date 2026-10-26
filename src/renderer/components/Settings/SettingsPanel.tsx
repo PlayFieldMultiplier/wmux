@@ -99,7 +99,7 @@ import { QuickLaunchSection } from './QuickLaunchSection';
 import PairedDevicesModal from '../StatusBar/PairedDevicesModal';
 import { FOCUS_RING } from '../focusRing';
 import { SETTINGS_CATALOG, SETTINGS_NAV_GROUPS, catalogEntryOnPlatform, resolveSettingsTab, type SettingsTabId } from '../../settings/catalog';
-import { windowGlassSupported, type WindowGlassLevel } from '../../utils/windowGlass';
+import { themeBlocksWindowGlass, windowGlassSupported, type WindowGlassLevel } from '../../utils/windowGlass';
 import { matchSettings, tabHitCount } from '../../settings/searchSettings';
 import { CursorShapePicker } from './CursorShapePicker';
 import { SettingsSearchResults } from './SettingsSearchResults';
@@ -3454,23 +3454,31 @@ function FontFamilyField() {
 
 /**
  * The window glass row. Without a material (Windows before 11 22H2) it reads
- * Off with every level disabled and says why.
+ * Off with every level disabled and says why. When the theme keeps the
+ * window opaque on Windows (`themeBlocked`), the levels stay enabled on the
+ * user's saved level, which applies again on a theme that can keep glass,
+ * and the description says why nothing shows.
  */
 export function WindowGlassSetting({
   supported,
+  themeBlocked = false,
   value,
   onChange,
 }: {
   supported: boolean;
+  themeBlocked?: boolean;
   value: WindowGlassLevel;
   onChange: (level: WindowGlassLevel) => void;
 }) {
   const t = useT();
+  const description = !supported
+    ? t('settings.windowGlassUnsupported')
+    : themeBlocked ? t('settings.windowGlassThemeOpaque') : t('settings.windowGlassDesc');
   return (
     <SettingRow
       id="windowglass"
       label={t('settings.windowGlass')}
-      description={supported ? t('settings.windowGlassDesc') : t('settings.windowGlassUnsupported')}
+      description={description}
     >
       <SegmentedControl
         value={supported ? value : 'off'}
@@ -3544,6 +3552,8 @@ function TabAppearance() {
   const windowGlass = useStore((s) => s.windowGlass);
   const setWindowGlass = useStore((s) => s.setWindowGlass);
   const glassSupported = windowGlassSupported();
+  const windowGlassEffective = useStore((s) => s.windowGlassEffective);
+  const glassThemeBlocked = themeBlocksWindowGlass(window.electronAPI?.platform, windowGlass, windowGlassEffective);
   const setAttentionBlinkFinished = useStore((s) => s.setAttentionBlinkFinished);
   const workspaceSettleIdleDays = useStore((s) => s.workspaceSettle.idleDays);
   const fleetLayout = useStore((s) => s.fleetLayout);
@@ -3666,7 +3676,7 @@ function TabAppearance() {
             reason, so nobody picks a level that changes nothing. Linux has
             no material and no row. */}
         {(window.electronAPI?.platform === 'darwin' || window.electronAPI?.platform === 'win32') && (
-          <WindowGlassSetting supported={glassSupported} value={windowGlass} onChange={setWindowGlass} />
+          <WindowGlassSetting supported={glassSupported} themeBlocked={glassThemeBlocked} value={windowGlass} onChange={setWindowGlass} />
         )}
         <SettingRow id="chrome" label={t('settings.chromePreset')} description={t('settings.chromePresetDesc')}>
           <ChromePresetActionsView onApply={applyChromePresetWithFeedback} />

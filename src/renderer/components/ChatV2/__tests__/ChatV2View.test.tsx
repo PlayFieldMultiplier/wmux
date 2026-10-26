@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -145,6 +147,42 @@ describe('ChatV2View', () => {
     expect(host.querySelector('[data-chatv2-runs-in]')?.getAttribute('title')).toBe('/home/me/verified/repo');
     expect(mock.calls.map((call) => call.method).sort()).toEqual(['bindingForPane', 'subscribe']);
     expect(ptyCalls).toEqual([]);
+  });
+
+  it('starts a Codex chat from the agent chip, on its own default model and always asking', async () => {
+    await act(async () => root.render(<ChatV2View paneId="daemon-codex" active onTerminal={() => undefined} />));
+    await flush();
+    const set = (el: HTMLSelectElement | HTMLTextAreaElement, value: string) => {
+      const proto = el instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLTextAreaElement.prototype;
+      Object.getOwnPropertyDescriptor(proto, 'value')?.set?.call(el, value);
+      el.dispatchEvent(new Event(el instanceof HTMLSelectElement ? 'change' : 'input', { bubbles: true }));
+    };
+    const agent = () => host.querySelector('[data-chatv2-agent]') as HTMLElement;
+    const mode = () => host.querySelector('[data-mode] select') as HTMLSelectElement;
+    expect(agent().querySelector('select')?.value).toBe('claude');
+    // Bypass picked for Claude does not carry over to Codex.
+    await act(async () => { set(mode(), 'bypass'); });
+    await act(async () => { set(agent().querySelector('select') as HTMLSelectElement, 'codex'); });
+    expect(mode().value).toBe('default');
+    expect(mode().disabled).toBe(true);
+    // The always-asks chip wears the fixed-chip style: muted, no hover highlight.
+    const chip = mode().closest('.wmux-chatv2-chip') as HTMLElement;
+    const hoverable = fs.readFileSync(path.resolve('src/renderer/styles/ui.css'), 'utf8').match(/^(\.wmux-chatv2-chip:hover[^{]*)\{/m)?.[1].replace(':hover', '').trim();
+    expect(hoverable).toBeTruthy();
+    expect(chip.getAttribute('aria-disabled')).toBe('true');
+    expect(chip.matches(hoverable as string)).toBe(false);
+    expect(host.querySelector('.wmux-chatv2-chips')?.textContent).toContain('Codex default');
+    const box = host.querySelector('textarea') as HTMLTextAreaElement;
+    expect(box.placeholder).toBe('What should Codex do?');
+    expect(host.querySelector('.wmux-chatv2-empty')?.textContent).toContain('Starts Codex in this pane');
+    await act(async () => { set(box, 'fix the build'); });
+    await act(async () => { (host.querySelector('.wmux-chatv2-send') as HTMLButtonElement).click(); });
+    await flush();
+    expect(mock.calls.find((call) => call.method === 'create')?.params).toEqual({ paneId: 'daemon-codex', agent: 'codex', mode: 'default' });
+    // The started chat names its agent, fixed.
+    expect(agent().tagName).toBe('SPAN');
+    expect(agent().textContent).toContain('Codex');
+    expect((host.querySelector('textarea') as HTMLTextAreaElement).placeholder).toBe('Message Codex…');
   });
 
   it('renders a streaming turn, an approval card and the finished footer from pushes', async () => {

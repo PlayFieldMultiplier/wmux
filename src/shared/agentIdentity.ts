@@ -187,6 +187,9 @@ export interface AgentSetupSpec {
   /** The agent's own first-run screens have a guide card
    *  (src/shared/claudeFirstRun.ts `claudeSetupScreen`). */
   readonly firstRunScreens?: 'claude';
+  /** The "Agent ready" step shows this card only once the agent is found:
+   *  wmux knows the agent, but does not ask a new user to install it. */
+  readonly card?: 'when-installed';
 }
 
 /**
@@ -405,7 +408,50 @@ export const AGENT_IDENTITIES = [
   },
   { slug: 'aider', display: 'Aider', detect: 'screen', tuiComposer: true },
   { slug: 'opencode', display: 'OpenCode', detect: 'screen', hooks: 'opencode', tuiComposer: true, sendQueue: true },
-  { slug: 'copilot', display: 'GitHub Copilot CLI', detect: 'screen', hooks: 'copilot', tuiComposer: true },
+  {
+    // https://docs.github.com/en/copilot/reference/cli-command-reference and
+    // https://github.com/github/copilot-cli/blob/main/changelog.md, checked
+    // 2026-10-26: "Bare `--resume` (no value) shows an interactive session
+    // picker", `--resume=SESSION-ID` resumes one, and a session id is a UUID.
+    // `--session-id` (1.0.51) could pin a fresh launch, but a pin rewrites the
+    // launch line, so it waits for a live check.
+    slug: 'copilot',
+    display: 'GitHub Copilot CLI',
+    detect: 'screen',
+    hooks: 'copilot',
+    tuiComposer: true,
+    resume: { picker: '--resume', exact: '--resume={id}', idFormat: 'uuid' },
+    setup: {
+      binary: 'copilot',
+      card: 'when-installed',
+      // https://github.com/github/copilot-cli/blob/main/install.sh:
+      // PREFIX="${PREFIX:-$HOME/.local}", INSTALL_DIR="$PREFIX/bin". The WinGet
+      // package is a portable zip whose command is `copilot`
+      // (microsoft/winget-pkgs manifests/g/GitHub/Copilot), linked here.
+      native: { posix: ['.local', 'bin', 'copilot'], win32: { root: 'LOCALAPPDATA', path: ['Microsoft', 'WinGet', 'Links', 'copilot.exe'] } },
+      // package.json `bin`: { "copilot": "npm-loader.js" }.
+      npm: { package: ['@github', 'copilot'], winEntries: [['npm-loader.js']], besideShim: true },
+      // Copilot signs in on its first run (/login) or with `copilot login`;
+      // no status subcommand is documented.
+      loginStatus: { read: 'none' },
+      // 0.0.407: "`--resume` creates new sessions with provided UUID", the
+      // oldest entry showing `--resume` taking an id.
+      updateFloor: '0.0.407',
+      // https://docs.github.com/en/copilot/how-tos/set-up/install-copilot-cli,
+      // checked 2026-10-26. Homebrew is left out: the README and the docs give
+      // it two different ways.
+      install: {
+        posix: { command: 'curl -fsSL https://gh.io/copilot-install | bash', requires: ['curl', 'bash'] },
+        win32: { command: 'winget install GitHub.Copilot' },
+        source: 'https://docs.github.com/en/copilot/how-tos/set-up/install-copilot-cli',
+        officialPage: 'https://docs.github.com/en/copilot/how-tos/set-up/install-copilot-cli',
+        more: [
+          { platform: 'posix', via: 'npm', command: 'npm install -g @github/copilot', requires: ['npm'], source: 'https://docs.github.com/en/copilot/how-tos/set-up/install-copilot-cli' },
+          { platform: 'win32', via: 'npm', command: 'npm install -g @github/copilot', requires: ['npm'], source: 'https://docs.github.com/en/copilot/how-tos/set-up/install-copilot-cli' },
+        ],
+      },
+    },
+  },
   { slug: 'openclaude', display: 'OpenClaude', detect: 'screen', hooks: 'openclaude', dialogs: 'claude' },
   {
     slug: 'kiro',
@@ -628,6 +674,169 @@ export const AGENT_IDENTITIES = [
         ],
       },
     },
+  },
+  {
+    // Amp. https://ampcode.com/docs/cli, checked 2026-10-26. It resumes with
+    // `amp threads continue T-<uuid>`: a subcommand with its own id form and no
+    // picker, which a picker flag after the launcher cannot express, so no
+    // `resume`. Its native binary is named `amp`, which the process tracker
+    // matches by the slug. No screen profile yet: none captured from a live TUI.
+    slug: 'amp',
+    display: 'Amp',
+    roleBinding: false,
+    setup: {
+      binary: 'amp',
+      card: 'when-installed',
+      // install.sh: "Installs Amp into ~/.amp/bin and links it onto your PATH";
+      // install.ps1: "$HOME\.amp\bin (default)". Both honour AMP_HOME.
+      native: { posix: ['.amp', 'bin', 'amp'], win32: { root: 'home', path: ['.amp', 'bin', 'amp.exe'] } },
+      // `amp login` adds an account; no status subcommand is documented.
+      loginStatus: { read: 'none' },
+      // Nothing version-dependent is relied on.
+      updateFloor: '0.0.0',
+      // https://ampcode.com/docs/cli, its macOS/Linux and Windows tabs. The npm
+      // package is not offered: https://ampcode.com/news/npm-package-changes
+      // recommends the install script over it. Checked 2026-10-26.
+      install: {
+        posix: { command: 'curl -fsSL https://ampcode.com/install.sh | bash', requires: ['curl', 'bash'] },
+        win32: { command: 'powershell -c "irm https://ampcode.com/install.ps1 | iex"' },
+        source: 'https://ampcode.com/docs/cli',
+        officialPage: 'https://ampcode.com/docs/cli',
+        more: [{
+          platform: 'posix',
+          via: 'brew',
+          command: 'brew install ampcode/tap/ampcode',
+          requires: ['brew'],
+          source: 'https://ampcode.com/docs/cli',
+        }],
+      },
+    },
+  },
+  {
+    // Droid (Factory). https://docs.factory.com/droid-cli/cli-reference.md and
+    // https://docs.factory.com/changelog/release-notes.md, checked 2026-10-26.
+    // No `resume`: a bare `--resume` opens a picker only since v0.211.0 ("Use
+    // --resume to choose a recent session"); before that, and as the reference
+    // still says, it "defaults to last modified", which would reopen the
+    // folder's newest conversation in every pane (#1946). Nothing here knows the
+    // installed version when a pane is restored. `--resume <sessionId>` documents
+    // no id format, and no launch flag sets a new id.
+    // The native binary is named `droid`, which the tracker matches by the slug.
+    slug: 'droid',
+    display: 'Droid',
+    roleBinding: false,
+    setup: {
+      binary: 'droid',
+      card: 'when-installed',
+      // https://app.factory.ai/cli: DST="$HOME/.local/bin";
+      // https://app.factory.ai/cli/windows: Join-Path $env:USERPROFILE "bin".
+      native: { posix: ['.local', 'bin', 'droid'], win32: { root: 'home', path: ['bin', 'droid.exe'] } },
+      // Droid signs in through the browser on its first run (or FACTORY_API_KEY);
+      // `/status` is a slash command, not a status subcommand.
+      loginStatus: { read: 'none' },
+      // Nothing version-dependent is relied on.
+      updateFloor: '0.0.0',
+      install: {
+        posix: { command: 'curl -fsSL https://app.factory.ai/cli | sh', requires: ['curl', 'sh'] },
+        win32: { command: 'irm https://app.factory.ai/cli/windows | iex' },
+        source: 'https://docs.factory.com/droid-cli/cli-reference.md',
+        officialPage: 'https://docs.factory.com/droid-cli/quickstart.md',
+        // The npm package's Windows bin is an extension-less node script, so
+        // no `npm` entrypoint is listed; its PATH `.cmd` shim is still found.
+        more: [
+          { platform: 'posix', via: 'npm', command: 'npm install -g droid', requires: ['npm'], source: 'https://docs.factory.com/droid-cli/cli-reference.md' },
+          { platform: 'win32', via: 'npm', command: 'npm install -g droid', requires: ['npm'], source: 'https://docs.factory.com/droid-cli/cli-reference.md' },
+        ],
+      },
+    },
+  },
+  {
+    // Pi. https://github.com/earendil-works/pi at d5b3de22d0e24a3e9c38a9410d3329b099717283,
+    // packages/coding-agent/docs/cli.md and docs/sessions.md, checked
+    // 2026-10-26: `-r, --resume` "Opens the session selector", `--session
+    // <path|id>` opens that session, and a session id "is a UUID" by default.
+    // `--session-id` (0.76.0) could pin a fresh launch, but a pin rewrites the
+    // launch line, so it waits for a live check. It sets process.title to `pi`;
+    // on Windows the image stays node, matched by its package below.
+    slug: 'pi',
+    display: 'Pi',
+    roleBinding: false,
+    resume: { picker: '--resume', exact: '--session {id}', idFormat: 'uuid' },
+    process: { packages: ['@earendil-works/pi-coding-agent', '@mariozechner/pi-coding-agent'] },
+    setup: {
+      binary: 'pi',
+      card: 'when-installed',
+      // From https://pi.dev/install.sh and https://pi.dev/install.ps1 (read
+      // 2026-10-26): the launcher is ~/.pi/agent/bin/pi, linked into a PATH
+      // folder; on Windows %USERPROFILE%\.pi\agent\bin\pi.cmd.
+      native: { posix: ['.pi', 'agent', 'bin', 'pi'], win32: { root: 'home', path: ['.pi', 'agent', 'bin', 'pi.cmd'] } },
+      // package.json `bin`: { "pi": "dist/bundle/cli.js" }. The old
+      // @mariozechner name is deprecated.
+      npm: { package: ['@earendil-works', 'pi-coding-agent'], winEntries: [['dist', 'bundle', 'cli.js']], besideShim: true },
+      // Pi signs in inside its session (/login); `pi auth check` needs a
+      // provider or model to ask about, so the card does not run it.
+      loginStatus: { read: 'none' },
+      // The first release under the @earendil-works package the card looks for.
+      updateFloor: '0.74.0',
+      // packages/coding-agent/README.md at the commit above.
+      install: {
+        posix: { command: 'curl -fsSL https://pi.dev/install.sh | sh', requires: ['curl', 'sh'] },
+        win32: { command: 'powershell -c "irm https://pi.dev/install.ps1 | iex"' },
+        source: 'https://github.com/earendil-works/pi/blob/d5b3de22d0e24a3e9c38a9410d3329b099717283/packages/coding-agent/README.md',
+        officialPage: 'https://github.com/earendil-works/pi/tree/main/packages/coding-agent',
+        more: [
+          { platform: 'posix', via: 'npm', command: 'npm install -g --ignore-scripts @earendil-works/pi-coding-agent', requires: ['npm'], source: 'https://github.com/earendil-works/pi/blob/d5b3de22d0e24a3e9c38a9410d3329b099717283/packages/coding-agent/README.md' },
+          { platform: 'win32', via: 'npm', command: 'npm install -g --ignore-scripts @earendil-works/pi-coding-agent', requires: ['npm'], source: 'https://github.com/earendil-works/pi/blob/d5b3de22d0e24a3e9c38a9410d3329b099717283/packages/coding-agent/README.md' },
+        ],
+      },
+    },
+  },
+  {
+    // Cursor CLI. https://cursor.com/docs/cli/reference/parameters and
+    // https://cursor.com/docs/cli/changelog, checked 2026-10-26. Its primary
+    // command is now `agent`, with `cursor-agent` kept "as a
+    // backward-compatible alias"; the slug and launcher are `cursor-agent`,
+    // since a bare `agent` (or `cursor`, the editor's own command) would name
+    // other programs. 2026-07-06: "`agent ls`, `agent --resume`, and `/resume`
+    // open All chats", so a bare `--resume` is the picker; `--resume [chatId]`
+    // documents no id format, so wmux offers the picker only.
+    // The tracker names a native `cursor-agent` image; an install that runs it
+    // as node on versions/<v>/index.js is not named (it never was).
+    slug: 'cursor-agent',
+    display: 'Cursor CLI',
+    roleBinding: false,
+    resume: { picker: '--resume', idFormat: 'picker-only' },
+    setup: {
+      binary: 'cursor-agent',
+      card: 'when-installed',
+      // https://cursor.com/install links ~/.local/bin/cursor-agent (and agent)
+      // to the versioned executable; https://cursor.com/install?win32=true
+      // copies cursor-agent.exe into %LOCALAPPDATA%\cursor-agent.
+      native: { posix: ['.local', 'bin', 'cursor-agent'], win32: { root: 'LOCALAPPDATA', path: ['cursor-agent', 'cursor-agent.exe'] } },
+      // `agent status` exists, but its output and exit code are not documented.
+      loginStatus: { read: 'none' },
+      // The picker form of `--resume` (above). Versions are YYYY.MM.DD-<hash>.
+      updateFloor: '2026.7.6',
+      // https://cursor.com/docs/cli/installation, checked 2026-10-26.
+      install: {
+        posix: { command: 'curl https://cursor.com/install -fsS | bash', requires: ['curl', 'bash'] },
+        win32: { command: "irm 'https://cursor.com/install?win32=true' | iex" },
+        source: 'https://cursor.com/docs/cli/installation',
+        officialPage: 'https://cursor.com/docs/cli/installation',
+      },
+    },
+  },
+  {
+    // DeepSeek Harness (`dsh`). https://github.com/deepseek-ai/deepseek-harness
+    // at 22ddee3792402c3e70ec5f86a63c3e3e895a2f60, checked 2026-10-26.
+    // Pre-1.0 (npm latest 0.2.1-rc.2): flags may change. It documents no resume
+    // picker, and `--session-id` only adopts an existing headless session, so
+    // no `resume`. npm only (`npx @deepseek-ai/dsh web`) and no native
+    // installer, so no setup card. package.json `bin`: { "dsh": "lib/bin.js" }.
+    slug: 'dsh',
+    display: 'DeepSeek Harness',
+    roleBinding: false,
+    process: { packages: ['@deepseek-ai/dsh'] },
   },
 ] as const satisfies readonly AgentIdentityRow[];
 

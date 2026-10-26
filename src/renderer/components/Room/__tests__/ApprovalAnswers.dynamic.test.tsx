@@ -81,6 +81,8 @@ describe('approvalPhase', () => {
     expect(pendingForChip(list, shown, { workspaceId: WS, threadId: 'general', botId: 'bot-2' }).map((r) => r.requestId)).toEqual(['apr-b']);
     // An act that publishes text is approved on its card only.
     expect(pendingForChip([req({ action: 'comment' }), req({ requestId: 'apr-close', cardId: 'c2', action: 'pr_close' })], shown, { workspaceId: WS }).map((r) => r.requestId)).toEqual(['apr-close']);
+    // So is a routine or a note the owner asked for in a tainted conversation.
+    expect(pendingForChip([req({ action: 'routine' }), req({ requestId: 'apr-note', cardId: 'c2', action: 'bot_memory' })], shown, { workspaceId: WS })).toEqual([]);
   });
 
   it('the chip shows wherever the card is shown: the whole room or 1:1 counts a PR thread\'s request; a narrowed view only its thread', () => {

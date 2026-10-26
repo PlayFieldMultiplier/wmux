@@ -18,7 +18,8 @@ registerToolModule({
       'Keep a short note for your later sessions. target "memory": your own notes (a non-obvious environment fact, a convention '
         + `the owner wants, a lesson), ${MEMORY_LIMITS.MEMORY_CHARS} characters in all, saved at once. target "user": the owner `
         + `(who they are, their preferences), shared by all their bots, ${MEMORY_LIMITS.USER_CHARS} characters: proposed in a turn on `
-        + 'the owner\'s words, it waits for the owner\'s approval card and applies when they approve it. Both load when a session '
+        + 'the owner\'s words, it waits for the owner\'s approval card and applies when they approve it. In a conversation that has '
+        + 'read outside text, a change the owner asked for goes to their approval card for either target (pending). Both load when a session '
         + 'starts, so a change applies from your next session. add saves an entry; replace and remove take the one entry holding '
         + 'match. Over the limit it is refused with the entries: remove or merge some first. Keep notes to lasting facts and '
         + 'preferences (task progress, what the repository says and secrets stay out). The owner sees and can clear both.',
