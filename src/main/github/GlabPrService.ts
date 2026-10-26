@@ -54,6 +54,8 @@ export const GLAB_ENV: NodeJS.ProcessEnv = {
   GLAB_NO_PROMPT: '1',
   GLAB_PAGER: 'cat',
   NO_COLOR: '1',
+  // A glab wmux starts on its own sends no usage_data to the user's GitLab host.
+  GLAB_SEND_TELEMETRY: '0',
 };
 
 // 캐시 키 — 파일시스템 대소문자 정책 반영(gh 경로와 동일). POSIX는 원형 유지.
