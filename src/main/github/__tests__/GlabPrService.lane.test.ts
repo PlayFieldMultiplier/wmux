@@ -67,21 +67,29 @@ function mrAnswer(over: Record<string, unknown> = {}, pipeline: Record<string, u
   };
 }
 
-type Handler = (args: string[]) => unknown;
+/** A write's JSON body (stdin), parsed; undefined for a GET. */
+type Body = Record<string, unknown> | undefined;
+type Handler = (args: string[], body: Body) => unknown;
 
 function makeService(handler: Handler) {
   const calls: string[][] = [];
-  const exec = vi.fn(async (_cmd: string, args: string[]) => {
+  const bodies: Body[] = [];
+  const exec = vi.fn(async (_cmd: string, args: string[], opts: { input?: string }) => {
+    const body = opts.input === undefined ? undefined : (JSON.parse(opts.input) as Record<string, unknown>);
     calls.push(args);
-    const r = handler(args);
+    bodies.push(body);
+    const r = handler(args, body);
     if (r instanceof Error) throw r;
     return { stdout: JSON.stringify(r) };
   });
-  return { svc: new GlabPrService(() => 1000, exec as never), calls };
+  return { svc: new GlabPrService(() => 1000, exec as never), calls, bodies };
 }
 
-const isGraphql = (args: string[]) => args[3] === 'graphql';
-const queryOf = (args: string[]) => args.find((a) => a.startsWith('query=')) ?? '';
+/** `glab api` reading a write's JSON body from stdin. */
+const JSON_INPUT = ['--input', '-', '-H', 'Content-Type: application/json'];
+const isGraphql = (args: string[]) => args.includes('graphql');
+const queryOf = (body: Body) => (typeof body?.query === 'string' ? body.query : '');
+const varsOf = (body: Body) => body?.variables as Record<string, unknown> | undefined;
 
 describe('mapGlabLaneFacts', () => {
   it('maps an open merge request: iid as number, labels, files, jobs with allow-failure as not required', () => {
@@ -171,15 +179,15 @@ describe('mapGlabLaneFacts', () => {
 
 describe('laneFacts', () => {
   it('reads the named project on the key\'s host, fresh each time', async () => {
-    const { svc, calls } = makeService(() => mrAnswer());
+    const { svc, calls, bodies } = makeService(() => mrAnswer());
     const r = await svc.laneFacts('/repo', KEY, 7);
     expect(r).toMatchObject({ ok: true, value: { number: 7, headRefOid: HEAD } });
     await svc.laneFacts('/repo', KEY, 7);
     // Each read: the MR, then its target branch's tip.
     expect(calls).toHaveLength(4);
-    expect(calls[0].slice(0, 4)).toEqual(['api', '--hostname', 'gitlab.example.com', 'graphql']);
-    expect(calls[0]).toContain('fullPath=group/sub/proj');
-    expect(calls[0]).toContain('iid=7');
+    expect(calls[0]).toEqual(['api', '--hostname', 'gitlab.example.com', '-X', 'POST', 'graphql', ...JSON_INPUT]);
+    expect(Object.keys(bodies[0] ?? {})).toEqual(['query', 'variables']);
+    expect(varsOf(bodies[0])).toEqual({ fullPath: 'group/sub/proj', iid: '7' });
   });
 
   it('a merged-results pipeline counts for the head only when the head is a parent of its merge commit', async () => {
@@ -233,13 +241,13 @@ describe('defaultBranchCi', () => {
   };
 
   it('maps the head of the default branch and its newest pipeline there', async () => {
-    const { svc, calls } = makeService((args) => (queryOf(args).includes('rootRef') ? ROOT : CI));
+    const { svc, bodies } = makeService((_args, body) => (queryOf(body).includes('rootRef') ? ROOT : CI));
     expect(await svc.defaultBranchCi('/repo', KEY)).toEqual({
       branch: 'main', headSha: HEAD, committedAt: '2026-10-21T00:00:00Z', state: 'FAILURE',
       checks: [{ name: 'test', state: 'FAILURE' }, { name: 'flaky', state: 'NEUTRAL' }, { name: 'lint', state: 'SUCCESS' }],
       checksTotal: 3,
     });
-    expect(calls[1]).toContain('ref=main');
+    expect(varsOf(bodies[1])?.ref).toBe('main');
   });
 
   it('no pipeline on the head yet: no state, no checks; an unreadable answer is an error', () => {
@@ -258,14 +266,14 @@ describe('merge', () => {
   const req = { expectHead: HEAD, subject: '', body: '' };
 
   it('squash-merges at the expected head with the title and !iid as subject', async () => {
-    const { svc, calls } = makeService((args) => (isGraphql(args) ? mrAnswer() : { state: 'merged' }));
+    const { svc, calls, bodies } = makeService((args) => (isGraphql(args) ? mrAnswer() : { state: 'merged' }));
     const gate = vi.fn(() => null);
     expect(await svc.merge('/repo', KEY, 7, req, gate)).toEqual({ ok: true, url: 'https://gitlab.example.com/group/sub/proj/-/merge_requests/7' });
     expect(gate).toHaveBeenCalledTimes(1);
     expect(calls[1]).toEqual([
-      'api', '--hostname', 'gitlab.example.com', '-X', 'PUT', 'projects/group%2Fsub%2Fproj/merge_requests/7/merge',
-      '-f', `sha=${HEAD}`, '-F', 'squash=true', '-f', 'squash_commit_message=feat: x (!7)',
+      'api', '--hostname', 'gitlab.example.com', '-X', 'PUT', 'projects/group%2Fsub%2Fproj/merge_requests/7/merge', ...JSON_INPUT,
     ]);
+    expect(bodies[1]).toEqual({ sha: HEAD, squash: true, squash_commit_message: 'feat: x (!7)' });
   });
 
   it('a PUT that exits 0 without a merged MR is an error (the executor records it uncertain)', async () => {
@@ -396,6 +404,32 @@ describe('createMergeRequest', () => {
   });
 });
 
+describe('writes and GraphQL carry their fields on stdin', () => {
+  const LONG = `-${'q'.repeat(39_999)}`;
+
+  it('a 40,000-character squash commit message reaches the PUT as JSON on stdin, never argv', async () => {
+    const { svc, calls, bodies } = makeService((args) => (isGraphql(args) ? mrAnswer() : { state: 'merged' }));
+    expect(await svc.merge('/repo', KEY, 7, { expectHead: HEAD, subject: LONG, body: '' })).toMatchObject({ ok: true });
+    const put = calls.findIndex((a) => a.includes('PUT'));
+    expect(calls[put].join(' ').length).toBeLessThan(500);
+    expect(bodies[put]).toEqual({ sha: HEAD, squash: true, squash_commit_message: LONG });
+  });
+
+  it('a 40,000-character GraphQL query and variable reach glab as {query, variables} on stdin, never argv', async () => {
+    const { svc, calls, bodies } = makeService(() => ({ data: { project: {} } }));
+    expect(await svc.watchGraphql('/wmux', KEY, LONG, { fullPath: 'group/sub/proj', note: LONG })).toMatchObject({ ok: true });
+    expect(calls[0].join(' ').length).toBeLessThan(500);
+    expect(bodies[0]).toEqual({ query: LONG, variables: { fullPath: 'group/sub/proj', note: LONG } });
+  });
+
+  it('a GET carries no body and its query stays in the path', async () => {
+    const { svc, calls, bodies } = makeService(() => ({ username: 'alice' }));
+    await svc.currentLogin('/repo', KEY);
+    expect(calls[0]).toEqual(['api', '--hostname', 'gitlab.example.com', 'user']);
+    expect(bodies[0]).toBeUndefined();
+  });
+});
+
 describe('GlabPrService.watchGraphql (the factory repo watch read)', () => {
   const svcOf = (exec: (cmd: string, args: string[]) => Promise<{ stdout: string }>) => new GlabPrService(() => 1000, exec as never);
 
@@ -403,7 +437,7 @@ describe('GlabPrService.watchGraphql (the factory repo watch read)', () => {
     const seen: string[][] = [];
     const ok = svcOf(async (_c, args) => { seen.push(args); return { stdout: JSON.stringify({ data: { project: {} } }) }; });
     expect(await ok.watchGraphql('/wmux', KEY, 'query { x }', { fullPath: 'group/sub/proj' })).toEqual({ ok: true, value: { data: { project: {} } } });
-    expect(seen[0].slice(0, 4)).toEqual(['api', '--hostname', 'gitlab.example.com', 'graphql']);
+    expect(seen[0]).toEqual(['api', '--hostname', 'gitlab.example.com', '-X', 'POST', 'graphql', ...JSON_INPUT]);
     const missing = svcOf(async () => { throw Object.assign(new Error('spawn glab ENOENT'), { code: 'ENOENT' }); });
     expect(await missing.watchGraphql('/wmux', KEY, 'q', {})).toMatchObject({ ok: false, code: 'cli-missing' });
     const out = svcOf(async () => { throw Object.assign(new Error('failed'), { stderr: 'glab: 401 Unauthorized (HTTP 401)' }); });
@@ -446,10 +480,10 @@ describe('GitLab on a port or under a sub-path (glab\'s host entry)', () => {
     gh: new Set(),
     glab: new Map(list.map(([name, subfolder]) => [name, { name, subfolder }])),
   });
-  const withEnv = (handler: Handler) => {
-    const calls: Array<{ args: string[]; host: string | undefined }> = [];
-    const exec = vi.fn(async (_cmd: string, args: string[], opts: { env: NodeJS.ProcessEnv }) => {
-      calls.push({ args, host: opts.env.GITLAB_HOST });
+  const withEnv = (handler: (args: string[]) => unknown) => {
+    const calls: Array<{ args: string[]; host: string | undefined; input?: string }> = [];
+    const exec = vi.fn(async (_cmd: string, args: string[], opts: { env: NodeJS.ProcessEnv; input?: string }) => {
+      calls.push({ args, host: opts.env.GITLAB_HOST, input: opts.input });
       return { stdout: JSON.stringify(handler(args)) };
     });
     return { svc: new GlabPrService(() => 1000, exec as never), calls };
@@ -461,7 +495,7 @@ describe('GitLab on a port or under a sub-path (glab\'s host entry)', () => {
     const { svc, calls } = withEnv((args) => (graphqlCall(args) ? mrAnswer() : { state: 'merged' }));
     expect(await svc.merge('/repo', KEY, 7, { expectHead: HEAD, subject: '', body: '' }))
       .toEqual({ ok: true, url: 'https://gitlab.example.com:8443/group/sub/proj/-/merge_requests/7' });
-    expect(calls[0].args.slice(0, 2)).toEqual(['api', 'graphql']);
+    expect(calls[0].args).toEqual(['api', '-X', 'POST', 'graphql', ...JSON_INPUT]);
     expect(calls.every((c) => c.host === 'gitlab.example.com:8443' && !c.args.includes('--hostname'))).toBe(true);
   });
 
@@ -489,7 +523,7 @@ describe('GitLab on a port or under a sub-path (glab\'s host entry)', () => {
     const { svc, calls } = withEnv((args) => (graphqlCall(args) ? mrAnswer() : { state: 'merged' }));
     expect(await svc.merge('/repo', key, 7, { expectHead: HEAD, subject: '', body: '' }))
       .toEqual({ ok: true, url: 'https://gitlab.example.com/gitlab/group/proj/-/merge_requests/7' });
-    expect(calls[0].args).toContain('fullPath=group/proj');
+    expect(JSON.parse(calls[0].input ?? '').variables.fullPath).toBe('group/proj');
     expect(calls[1].args).toContain('projects/group%2Fproj/merge_requests/7/merge');
   });
 

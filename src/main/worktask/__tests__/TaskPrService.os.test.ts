@@ -318,7 +318,7 @@ function glHappy(cmd: string, args: string[]): { stdout: string } | { throw: str
     if (a === '--version') return { stdout: 'glab 1.50.0' };
     const api = apiArgs(args);
     if (api[0] === 'user') return { stdout: JSON.stringify({ username: 'alice' }) };
-    if (api[0] === 'graphql') return { stdout: JSON.stringify({ data: { project: { repository: { rootRef: 'main' } } } }) };
+    if (api.includes('graphql')) return { stdout: JSON.stringify({ data: { project: { repository: { rootRef: 'main' } } } }) };
     if (api[0] === '-X' && api[1] === 'POST') return { stdout: JSON.stringify({ iid: 7, web_url: GL_MR, source_project_id: 10, target_project_id: 10 }) };
     if (api[0]?.startsWith(`${GL_PROJECT}/merge_requests?`)) return { stdout: '[]' };
   }
@@ -338,7 +338,7 @@ function makeGlService(behavior: (cmd: string, args: string[]) => { stdout: stri
   };
   const glab = new GlabPrService(Date.now, exec);
   const svc = new TaskPrService({ daemon, cache: { invalidate: vi.fn() }, exec, glab, scanGit: cleanScan });
-  const posts = () => calls.filter((c) => isGlab(c.cmd) && apiArgs(c.args)[0] === '-X');
+  const posts = () => calls.filter((c) => isGlab(c.cmd) && apiArgs(c.args)[0] === '-X' && !c.args.includes('graphql'));
   return { svc, calls, daemonCalls, posts };
 }
 
@@ -611,7 +611,7 @@ describe('task_pr: the branch is a plain name before anything is pushed', () => 
 describe('task_pr on GitLab: the rest of the contract', () => {
   it('an unreadable default branch is pr-failed, and no MR is opened', async () => {
     const { svc, posts } = makeGlService((cmd, args) =>
-      isGlab(cmd) && apiArgs(args)[0] === 'graphql' ? { stdout: JSON.stringify({ data: { project: null }, errors: [{ message: 'not found' }] }) } : glHappy(cmd, args),
+      isGlab(cmd) && apiArgs(args).includes('graphql') ? { stdout: JSON.stringify({ data: { project: null }, errors: [{ message: 'not found' }] }) } : glHappy(cmd, args),
     );
     const res = await svc.createPr(INPUT);
     expect(res.ok === false && res.reason).toBe('pr-failed');
