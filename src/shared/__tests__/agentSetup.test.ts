@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { anyAgentReady, anyAgentSetUp, isOlderVersion, parseAgentVersion, type AgentSetupStatus } from '../agentSetup';
+import { anyAgentReady, anyAgentSetUp, isOlderVersion, parseAgentVersion, shownAgentIds, type AgentSetupStatus } from '../agentSetup';
 
 describe('agent version helpers', () => {
   it('reads the version from each agent\'s --version line', () => {
@@ -26,5 +26,24 @@ describe('anyAgentSetUp', () => {
     expect(anyAgentReady(installedOnly)).toBe(false);
     expect(anyAgentSetUp([st('claude', 'login-needed'), st('agy', 'not-installed')])).toBe(false);
     expect(anyAgentSetUp([st('codex', 'ready')])).toBe(true);
+  });
+});
+
+describe('shownAgentIds', () => {
+  const st = (agent: AgentSetupStatus['agent'], readiness: AgentSetupStatus['readiness']): AgentSetupStatus => ({
+    agent, readiness, executable: null, version: null, updateRecommended: false, loginKnown: false, candidates: [],
+  });
+  const original = ['claude', 'codex', 'grok', 'agy', 'qwen', 'kimi'];
+
+  it('always shows the original six cards, installed or not', () => {
+    expect(shownAgentIds(null)).toEqual(original);
+    expect(shownAgentIds(original.map((a) => st(a as AgentSetupStatus['agent'], 'not-installed')))).toEqual(original);
+  });
+
+  it('shows a newer agent only once it is found, in registry order', () => {
+    const absent = (['copilot', 'amp', 'droid', 'pi', 'cursor-agent'] as const).map((a) => st(a, 'not-installed'));
+    expect(shownAgentIds(absent)).toEqual(original);
+    expect(shownAgentIds([...absent.filter((s) => s.agent !== 'pi' && s.agent !== 'copilot'), st('pi', 'installed'), st('copilot', 'login-needed')]))
+      .toEqual(['claude', 'codex', 'copilot', 'grok', 'agy', 'qwen', 'kimi', 'pi']);
   });
 });
