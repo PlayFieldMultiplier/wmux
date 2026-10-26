@@ -33,7 +33,14 @@ import {
   rotateBackupsSync,
 } from './rotation';
 import { quarantineFile, quarantineFileSync } from './quarantine';
-import { commitRename, commitRenameSync, type RenameRetryPolicy } from './core';
+import {
+  chainAsyncWrite,
+  commitRename,
+  commitRenameSync,
+  rollbackBak,
+  rollbackBakSync,
+  type RenameRetryPolicy,
+} from './core';
 
 // ── Public types ─────────────────────────────────────────────────────
 
@@ -159,33 +166,47 @@ export async function atomicWriteText(
     }
   }
 
-  const tmp = makeTmpPath(targetPath);
-  const bak = bakPathFor(targetPath);
+  // Serialised per target, as in core.ts: the retry sleep must not let two
+  // async writers interleave while the primary is rotated away.
+  return chainAsyncWrite(targetPath, async () => {
+    const tmp = makeTmpPath(targetPath);
+    const bak = bakPathFor(targetPath);
 
-  await ensureDir(targetPath);
+    await ensureDir(targetPath);
 
-  try {
-    await fsp.writeFile(tmp, content, { encoding: 'utf-8', mode: 0o600 });
-
-    if (opts.rotationEnabled) {
-      await rotateBackups(targetPath);
-    }
-
+    let movedToBak = false;
     try {
-      await fsp.rename(targetPath, bak);
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code !== 'ENOENT') {
-        // eslint-disable-next-line no-console
-        console.warn('[atomicWriteText] Failed to create backup:', err);
-      }
-    }
+      await fsp.writeFile(tmp, content, { encoding: 'utf-8', mode: 0o600 });
 
-    await commitRename(tmp, targetPath, opts.renameRetry);
-  } catch (err) {
-    await unlinkIfExists(tmp);
-    throw err;
-  }
+      if (opts.rotationEnabled) {
+        await rotateBackups(targetPath);
+      }
+
+      // Rotate current → .bak with the same retry as the commit (see core.ts).
+      try {
+        await commitRename(targetPath, bak, opts.renameRetry);
+        movedToBak = true;
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code !== 'ENOENT') {
+          // eslint-disable-next-line no-console
+          console.warn('[atomicWriteText] Failed to create backup:', err);
+        }
+      }
+
+      try {
+        await commitRename(tmp, targetPath, opts.renameRetry);
+      } catch (err) {
+        // The primary is at `.bak` and the new content never landed: put the
+        // previous generation back so a failed write leaves the previous state.
+        if (movedToBak) await rollbackBak(bak, targetPath);
+        throw err;
+      }
+    } catch (err) {
+      await unlinkIfExists(tmp);
+      throw err;
+    }
+  });
 }
 
 // ── Async read ───────────────────────────────────────────────────────
@@ -274,16 +295,26 @@ export function atomicWriteTextSync(
       rotateBackupsSync(targetPath);
     }
 
+    // Rotate current → .bak with the same retry as the commit (see core.ts).
+    let movedToBak = false;
     if (fs.existsSync(targetPath)) {
       try {
-        fs.renameSync(targetPath, bak);
+        commitRenameSync(targetPath, bak, opts.renameRetry);
+        movedToBak = true;
       } catch (bakErr) {
         // eslint-disable-next-line no-console
         console.warn('[atomicWriteText] Failed to create backup:', bakErr);
       }
     }
 
-    commitRenameSync(tmp, targetPath, opts.renameRetry);
+    try {
+      commitRenameSync(tmp, targetPath, opts.renameRetry);
+    } catch (err) {
+      // Restore the previous generation so a retry-exhausted write does not
+      // leave the caller with no primary file at all.
+      if (movedToBak) rollbackBakSync(bak, targetPath);
+      throw err;
+    }
   } catch (err) {
     unlinkIfExistsSync(tmp);
     throw err;

@@ -328,7 +328,7 @@ export async function commitRename(
  * primary still being absent: if a concurrent writer recreated it during the
  * retry window, their newer data must not be clobbered with our old backup.
  */
-function rollbackBakSync(bak: string, targetPath: string): void {
+export function rollbackBakSync(bak: string, targetPath: string): void {
   try {
     if (fs.existsSync(targetPath) || !fs.existsSync(bak)) return;
     fs.renameSync(bak, targetPath);
@@ -341,7 +341,7 @@ function rollbackBakSync(bak: string, targetPath: string): void {
   }
 }
 
-async function rollbackBak(bak: string, targetPath: string): Promise<void> {
+export async function rollbackBak(bak: string, targetPath: string): Promise<void> {
   try {
     await fsp.access(targetPath);
     return; // primary exists again — leave it alone
@@ -370,7 +370,7 @@ async function rollbackBak(bak: string, targetPath: string): Promise<void> {
 // the sync variant blocks the loop so it cannot interleave with itself).
 const asyncWriteChains = new Map<string, Promise<void>>();
 
-function chainAsyncWrite(targetPath: string, run: () => Promise<void>): Promise<void> {
+export function chainAsyncWrite(targetPath: string, run: () => Promise<void>): Promise<void> {
   const prev = asyncWriteChains.get(targetPath) ?? Promise.resolve();
   const next = prev.catch(() => undefined).then(run);
   asyncWriteChains.set(targetPath, next);
