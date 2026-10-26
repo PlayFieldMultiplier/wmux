@@ -90,6 +90,7 @@ const SENTENCES: Readonly<Record<string, string>> = {
   'closed-differently': 'It was closed on {host}, but not as approved',
   'secret-in-body': 'Its text holds a secret stored since the request',
   'attempts-exhausted': 'wmux tried three times and could not tell whether it went through',
+  'approval-stale': 'The approval is more than a day old and nothing was done: the bot asks again if it is still wanted',
   // A release (releaseAct.ts).
   'tag-taken': 'The tag already exists on {host}',
   'release-exists': 'A release with this tag is already on {host}, published or as a draft',

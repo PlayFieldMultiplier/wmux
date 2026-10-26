@@ -28,7 +28,10 @@
 // GitHub's 4xx is a refusal (nothing was written); a rate limit or a gh that
 // did not start gives the try back; anything else is uncertain and settled
 // by a read no sooner than RECONCILE_AFTER_MS later. A refusal is final for
-// its request: the bot asks again with a new request.
+// its request: the bot asks again with a new request. A row no try of which
+// started (actRowClaimed) a day after its approval is refused
+// `approval-stale` before it is claimed (approvals.ts authorizeAct): a try
+// whose reads keep failing gives itself back, so its count never runs out.
 //
 // A release (releaseAct.ts) runs its own steps after the pins: the default
 // branch, the commit on it, the tag and the release still free, the checks
@@ -325,6 +328,14 @@ export class ActExecutor {
       row = settled;
     }
     if (!row || row.status !== 'pending') return row;
+    // An approval no try of which started in a day (its reads kept failing,
+    // say) ends here, before a try is claimed: nothing was sent for it.
+    if (!actRowClaimed(row) && this.ports.approval.authorize(row) === 'approval-stale') {
+      const out = effects.settle(id, 'refused', 'approval-stale');
+      this.ports.log?.(`[factory] act ${row.action} ${row.requestId} ${out?.status ?? 'refused'} (approval-stale)`);
+      this.emit(out);
+      return out;
+    }
     const claimed = effects.claim(id);
     if (!claimed) return effects.get(id);
     this.emit(claimed);

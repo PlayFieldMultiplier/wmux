@@ -134,6 +134,9 @@ export const APPROVALS_FILENAME = 'approvals.json';
 export const APPROVAL_LIMITS = {
   /** A pending request older than this expires. */
   PENDING_TTL_MS: 24 * 3600_000,
+  /** An approved act no try of which was started this long after its
+   *  decision is refused (`approval-stale`). */
+  APPROVED_TTL_MS: 24 * 3600_000,
   /** Settled requests older than this are dropped from the file. */
   RETAIN_MS: 30 * 24 * 3600_000,
   REQUESTS_MAX: 500,
@@ -2101,8 +2104,11 @@ export class ApprovalService {
   /** The act outbox's gate for a row, asked on every try and again right
    *  before the write: null when the request allows it now. Not approved
    *  (undone, denied, waiting again) or inside the Undo window means "not
-   *  now" (the row waits; actExecutor.ts ACT_NOT_NOW). */
-  authorizeAct(e: Pick<ActEffect, 'requestId' | 'action' | 'payloadHash' | 'repoKey'>): string | null {
+   *  now" (the row waits; actExecutor.ts ACT_NOT_NOW). A row no try of
+   *  which was started (actRowClaimed) whose approval is APPROVED_TTL_MS
+   *  old is refused `approval-stale`; a row that may have reached GitHub is
+   *  left to its read. */
+  authorizeAct(e: Pick<ActEffect, 'requestId' | 'action' | 'payloadHash' | 'repoKey' | 'status' | 'attempt' | 'draftId'>): string | null {
     const r = this.requests.get(e.requestId);
     if (!r) return 'approval-missing';
     if (!r.act || r.action !== e.action) return 'approval-mismatch';
@@ -2123,6 +2129,9 @@ export class ApprovalService {
     const texts = r.act.kind === 'comment' ? [r.act.body] : r.act.kind === 'issue_create' ? [r.act.title, r.act.body]
       : r.act.kind === 'release' ? [r.act.title, r.act.notes] : [];
     if (texts.some((t) => redactStoredSecrets(t) !== t)) return 'secret-in-body';
+    // After the refusals that name a cause; an approval with no decision
+    // time (none is made without one) counts as stale.
+    if (!actRowClaimed(e) && this.now() - (r.decidedAt ?? 0) >= APPROVAL_LIMITS.APPROVED_TTL_MS) return 'approval-stale';
     if (r.executeAfter !== undefined && this.now() < r.executeAfter) return 'approval-undo-window';
     return null;
   }
