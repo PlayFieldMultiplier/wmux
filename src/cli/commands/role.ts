@@ -24,7 +24,7 @@ import {
   type RoleBinding, type WmuxTools,
 } from '../../shared/orchestratorRole';
 import { tokenize } from '../../shared/agentResume';
-import { customAgentLaunchLine, findCustomAgent, normalizeCustomAgentsReport, type CustomAgent } from '../../shared/customAgents';
+import { customAgentLaunchLine, customAgentStem, findCustomAgent, normalizeCustomAgentsReport, type CustomAgent } from '../../shared/customAgents';
 import { agyEffortOf } from '../../shared/modelCatalog';
 
 /** Electron's `app.getPath('userData')` for productName "wmux", with the same
@@ -143,6 +143,8 @@ export interface RoleDeps {
   log: (line: string) => void;
   error: (line: string) => void;
   exit: (code: number) => void;
+  /** The platform the custom agents are validated for (main's rules). */
+  platform: NodeJS.Platform;
 }
 
 const USAGE = 'Usage: wmux role resolve <Role> [--json] [--session <path>]';
@@ -157,6 +159,7 @@ export async function handleRole(args: string[], jsonMode: boolean, overrides: P
     log: (l) => console.log(l),
     error: (l) => console.error(l),
     exit: (c) => process.exit(c),
+    platform: process.platform,
     ...overrides,
   };
   const [sub, role, ...rest] = args;
@@ -194,7 +197,19 @@ export async function handleRole(args: string[], jsonMode: boolean, overrides: P
   // bare name, as main would refuse to launch it.
   let customAgents: CustomAgent[] = [];
   try {
-    customAgents = normalizeCustomAgentsReport((JSON.parse(deps.readFile(deps.customAgentsPath)) as { agents?: unknown })?.agents, { platform: process.platform }).agents;
+    const raw = (JSON.parse(deps.readFile(deps.customAgentsPath)) as { agents?: unknown })?.agents;
+    const report = normalizeCustomAgentsReport(raw, { platform: deps.platform });
+    customAgents = report.agents;
+    // A custom agent the file holds but main would refuse here: say why the
+    // bare name follows, rather than print it silently.
+    const agent = binding.agent;
+    if (agent && Array.isArray(raw) && !findCustomAgent(agent, customAgents)) {
+      const entry = (raw as Array<{ name?: unknown; command?: unknown }>).find(
+        (a) => typeof a?.command === 'string' && customAgentStem({ command: a.command }) === agent.toLowerCase(),
+      );
+      const drop = entry ? report.dropped.find((d) => d.name === entry.name) : undefined;
+      if (drop) deps.error(`wmux role: the custom agent "${drop.name}" in ${deps.customAgentsPath} is not used: ${drop.issue.error}`);
+    }
   } catch {
     // missing or unreadable
   }

@@ -81,8 +81,30 @@ describe('wmux role resolve', () => {
       log: (l) => out.push(l),
       error: () => undefined,
       exit: () => undefined,
+      platform: 'linux',
     });
     expect(out).toEqual(['/opt/tern/bin/tern --fast -m m1']);
+  });
+
+  it('says why a custom agent this platform refuses is printed as its bare name', async () => {
+    const files: Record<string, string> = {
+      '/fake/session.json': JSON.stringify({ orchestratorRoleBindings: { Builder: { agent: 'tern' } } }),
+      '/fake/custom-agents.json': JSON.stringify({ agents: [{ name: 'Tern', command: '/opt/tern/bin/tern' }] }),
+    };
+    const out: string[] = [];
+    const err: string[] = [];
+    await handleRole(['resolve', 'Builder'], false, {
+      sessionPath: '/fake/session.json',
+      customAgentsPath: '/fake/custom-agents.json',
+      readFile: (p) => files[p] ?? '',
+      log: (l) => out.push(l),
+      error: (l) => err.push(l),
+      exit: () => undefined,
+      platform: 'win32',
+    });
+    expect(out).toEqual(['tern']);
+    expect(err).toEqual([expect.stringContaining('"Tern"')]);
+    expect(err[0]).toContain('not a Windows path');
   });
 
   it('drops an unsafe model through the app normalizer', async () => {
