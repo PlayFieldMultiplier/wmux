@@ -50,6 +50,10 @@ export interface FakeWorkflowRun extends FakeRun {
   event: string;
   head_branch: string;
   html_url: string;
+  /** The workflow it is a run of, its id, and which attempt it is. */
+  workflow_id?: number;
+  id?: number;
+  run_attempt?: number;
 }
 
 const NOT_FOUND: GhActAnswer = { ok: false, kind: 'http', status: 404, message: 'gh: Not Found (HTTP 404)' };
@@ -76,6 +80,13 @@ export class FakeGithub implements GhActPort {
    *  refuses (only their blob answers). */
   files = new Map<string, string>();
   bigFiles = new Set<string>();
+  /** A path listed as something other than a plain file: `symlink`, or
+   *  `submodule` (which a listing reports as a file with no download link). */
+  entryTypes = new Map<string, 'symlink' | 'submodule'>();
+  /** A workflow file's state on GitHub (`active` when unset). */
+  workflowStates = new Map<string, string>();
+  /** GitHub Actions on for the repository; `forbidden`: its switch cannot be read. */
+  actions: 'on' | 'off' | 'forbidden' = 'on';
   /** Called before every write is applied (a test may change state there). */
   onWrite: ((w: { method: string; endpoint: string; body: Record<string, unknown> }) => void) | null = null;
   private tagObjects = new Map<string, string>();
@@ -208,6 +219,19 @@ export class FakeGithub implements GhActPort {
       return r ? { ok: true, value: r } : NOT_FOUND;
     }
     if (path === 'repos/o/r/releases') return { ok: true, value: page(this.releases) };
+    m = /^repos\/o\/r\/releases\/(\d+)$/.exec(path);
+    if (m) {
+      const r = this.releases.find((x) => x.id === Number(m?.[1]));
+      return r ? { ok: true, value: { ...r } } : NOT_FOUND;
+    }
+    if (path === 'repos/o/r/actions/permissions') {
+      return this.actions === 'forbidden' ? { ok: false, kind: 'http', status: 403, message: 'gh: Must have admin rights to Repository. (HTTP 403)' } : { ok: true, value: { enabled: this.actions === 'on' } };
+    }
+    m = /^repos\/o\/r\/actions\/workflows\/([^/]+)$/.exec(path);
+    if (m) {
+      const file = `.github/workflows/${decodeURIComponent(m[1])}`;
+      return this.files.has(file) ? { ok: true, value: { path: file, state: this.workflowStates.get(file) ?? 'active' } } : NOT_FOUND;
+    }
     if (path === 'repos/o/r/actions/runs') {
       const sha = query.get('head_sha');
       const runs = this.workflowRuns.filter((r) => (sha === null || r.head_sha === sha)
@@ -220,7 +244,12 @@ export class FakeGithub implements GhActPort {
       if (!this.known(query.get('ref') ?? '')) return NOT_FOUND;
       const prefix = file ? `${file}/` : '';
       const inDir = [...this.files.keys()].filter((f) => f.startsWith(prefix) && !f.slice(prefix.length).includes('/'));
-      if (inDir.length > 0) return { ok: true, value: inDir.map((f) => ({ type: 'file', name: f.slice(prefix.length), path: f, sha: blobOf(f), size: (this.files.get(f) ?? '').length })) };
+      if (inDir.length > 0) {
+        return { ok: true, value: inDir.map((f) => {
+          const kind = this.entryTypes.get(f);
+          return { type: kind === 'symlink' ? 'symlink' : 'file', name: f.slice(prefix.length), path: f, sha: blobOf(f), size: (this.files.get(f) ?? '').length, download_url: kind === 'submodule' ? null : `https://raw.example/${f}` };
+        }) };
+      }
       const text = this.files.get(file);
       if (text === undefined) return NOT_FOUND;
       // Over 1 MB, the JSON media type gh asks for is refused.
@@ -258,6 +287,12 @@ export class FakeGithub implements GhActPort {
         this.releases.splice(at, 1);
         return { ok: true, value: null };
       }
+      // The fields the request names, as GitHub takes them.
+      if (typeof body.tag_name === 'string') r.tag_name = body.tag_name;
+      if (typeof body.target_commitish === 'string') r.target_commitish = body.target_commitish;
+      if (typeof body.name === 'string') r.name = body.name;
+      if (typeof body.body === 'string') r.body = body.body;
+      if (typeof body.prerelease === 'boolean') r.prerelease = body.prerelease;
       if (body.draft === false && r.draft) {
         // Publishing makes the tag at the target, or takes the tag as it is.
         if (!this.tags.has(r.tag_name)) this.tags.set(r.tag_name, { sha: r.target_commitish });

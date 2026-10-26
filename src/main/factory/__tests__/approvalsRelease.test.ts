@@ -21,6 +21,7 @@ import { ActExecutor, readIssue, readLogin, readPull, readRepo, RECONCILE_AFTER_
 import { payloadHashOf } from '../actPayload';
 import { readReleaseAsk } from '../releaseAct';
 import { FakeGithub, type FakeRelease } from './fakeGithubActs';
+import type { GhActAnswer } from '../../github/GhActService';
 import { handlePhoneBotApprovalCommand } from '../../phone/PhoneBotApprovals';
 import { PHONE_BOT_APPROVAL_COMMAND, PHONE_BOT_APPROVAL_DECIDE_COMMAND, parsePhoneBotApproval } from '../../../shared/phoneBotApprovals';
 
@@ -149,6 +150,28 @@ function rig(opts: { workflow?: boolean; wake?: Partial<ApprovalWake>; ports?: P
 }
 
 const NOTES = { title: 'wmux 1.2.3', notes: 'Fixes.\n\n- one\n- two' };
+
+/** The publish body of NOTES at C3: every approved field again. */
+const PUBLISH = { tag_name: TAG, target_commitish: C3, name: NOTES.title, body: NOTES.notes, prerelease: false, draft: false, make_latest: 'true' };
+
+/** A FakeRelease to put on GitHub by hand. */
+const release = (over: Partial<FakeRelease>): FakeRelease => ({
+  id: 500, tag_name: TAG, draft: true, prerelease: false, name: NOTES.title, body: NOTES.notes, target_commitish: C3, author: { login: 'owner' },
+  html_url: `https://github.com/o/r/releases/tag/${TAG}`, ...over,
+});
+
+/** The first publish of a release rig answers this (GitHub's answer, applied or not). */
+const onFirstPatch = (r: ReturnType<typeof rig>, answer: () => { answer: GhActAnswer; landed: boolean }, before?: () => void) => {
+  let first = true;
+  r.gh.onWrite = (w) => {
+    if (w.method !== 'PATCH' || !first) return;
+    first = false;
+    before?.();
+    r.gh.nextWrite = answer();
+  };
+};
+const RATE_LIMITED = (): { answer: GhActAnswer; landed: boolean } => ({ answer: { ok: false, kind: 'rate-limited', message: 'GitHub rate limit' }, landed: false });
+const TIMEOUT = (): { answer: GhActAnswer; landed: boolean } => ({ answer: { ok: false, kind: 'error', message: 'timeout' }, landed: false });
 
 /** A release request's stored act. */
 function actOf(r: ReturnType<typeof rig>, requestId: string): ApprovalReleaseAct {
@@ -283,7 +306,7 @@ describe('publishing a release (release mode)', () => {
     const id = r.gh.releases[0]?.id;
     expect(r.gh.writes).toEqual([
       { method: 'POST', endpoint: 'repos/o/r/releases', body: { tag_name: TAG, target_commitish: C3, name: NOTES.title, body: NOTES.notes, draft: true, prerelease: false } },
-      { method: 'PATCH', endpoint: `repos/o/r/releases/${id}`, body: { draft: false, make_latest: 'true' } },
+      { method: 'PATCH', endpoint: `repos/o/r/releases/${id}`, body: PUBLISH },
     ]);
     expect(r.gh.tags.get(TAG)).toEqual({ sha: C3 });
     expect(r.svc.get(req.requestId)).toMatchObject({ state: 'executed', result: { url: `https://github.com/o/r/releases/tag/${TAG}`, id } });
@@ -297,7 +320,7 @@ describe('publishing a release (release mode)', () => {
     const r = rig();
     const req = await r.ask({ ...NOTES, prerelease: true });
     await r.run(req);
-    expect(r.gh.writes.at(-1)?.body).toEqual({ draft: false, make_latest: 'false' });
+    expect(r.gh.writes.at(-1)?.body).toEqual({ ...PUBLISH, prerelease: true, make_latest: 'false' });
     expect(r.svc.get(req.requestId)?.state).toBe('executed');
   });
 
@@ -312,25 +335,52 @@ describe('publishing a release (release mode)', () => {
     expect(r.gh.writes).toHaveLength(1);
   });
 
-  it('a 4xx on publishing is read back at once: nothing published deletes the draft and refuses; published is done', async () => {
+  it('a 4xx on publishing is uncertain, settled by a read later: published is done; nothing published publishes the same draft', async () => {
+    const UNPROCESSABLE = (landed: boolean) => (): { answer: GhActAnswer; landed: boolean } => ({ answer: { ok: false, kind: 'http', status: 422, message: 'gh: Validation Failed (HTTP 422)' }, landed });
+    for (const landed of [true, false]) {
+      const r = rig();
+      const req = await r.ask(NOTES);
+      onFirstPatch(r, UNPROCESSABLE(landed));
+      await r.run(req);
+      expect(r.effects.get(actEffectId(req.requestId))).toMatchObject({ status: 'uncertain', reason: 'gh-422' });
+      expect(r.gh.writes.map((w) => w.method)).toEqual(['POST', 'PATCH']);
+      await r.sweep();
+      expect(r.gh.writes.map((w) => w.method), String(landed)).toEqual(landed ? ['POST', 'PATCH'] : ['POST', 'PATCH', 'PATCH']);
+      expect(r.svc.get(req.requestId)?.state).toBe('executed');
+    }
+  });
+
+  it('a 4xx that made the tag at the commit and left the release a draft: the next try publishes that draft, no bare tag is left', async () => {
+    const r = rig();
+    const req = await r.ask(NOTES);
+    onFirstPatch(r, () => ({ answer: { ok: false, kind: 'http', status: 422, message: 'gh: Validation Failed (HTTP 422)' }, landed: false }), () => r.gh.tags.set(TAG, { sha: C3 }));
+    await r.run(req);
+    expect(r.gh.releases[0]?.draft).toBe(true);
+    await r.sweep();
+    expect(r.gh.writes.map((w) => w.method)).toEqual(['POST', 'PATCH', 'PATCH']);
+    expect(r.gh.releases).toMatchObject([{ draft: false, tag_name: TAG }]);
+    expect(r.svc.get(req.requestId)?.state).toBe('executed');
+  });
+
+  it('publishing sends the approved fields again: a collaborator\'s edit of the draft since is not what goes out', async () => {
     const r = rig();
     const req = await r.ask(NOTES);
     r.gh.onWrite = (w) => {
-      if (w.method === 'PATCH') r.gh.nextWrite = { answer: { ok: false, kind: 'http', status: 422, message: 'gh: Validation Failed (HTTP 422)' }, landed: false };
+      if (w.method === 'PATCH') Object.assign(r.gh.releases[0] as FakeRelease, { name: 'Edited', body: 'An edit.' });
     };
     await r.run(req);
-    expect(r.gh.writes.map((w) => w.method)).toEqual(['POST', 'PATCH', 'DELETE']);
-    expect(r.gh.releases).toEqual([]);
-    expect(r.svc.get(req.requestId)).toMatchObject({ state: 'refused', refusal: 'gh-422' });
-    // GitHub answered 4xx and published it all the same: done, as it is.
-    const p = rig();
-    const two = await p.ask(NOTES);
-    p.gh.onWrite = (w) => {
-      if (w.method === 'PATCH') p.gh.nextWrite = { answer: { ok: false, kind: 'http', status: 422, message: 'gh: Validation Failed (HTTP 422)' }, landed: true };
-    };
-    await p.run(two);
-    expect(p.gh.writes.map((w) => w.method)).toEqual(['POST', 'PATCH']);
-    expect(p.svc.get(two.requestId)?.state).toBe('executed');
+    expect(r.gh.releases).toMatchObject([{ draft: false, name: NOTES.title, body: NOTES.notes }]);
+    expect(r.svc.get(req.requestId)?.state).toBe('executed');
+  });
+
+  it('a published answer with other name or notes than approved is found-different, with its link', async () => {
+    const r = rig();
+    const req = await r.ask(NOTES);
+    onFirstPatch(r, () => ({ answer: { ok: true, value: { ...(r.gh.releases[0] as FakeRelease), draft: false, body: 'Not the notes.' } }, landed: true }));
+    await r.run(req);
+    expect(r.svc.get(req.requestId)).toMatchObject({ state: 'refused', refusal: 'found-different', result: { url: `https://github.com/o/r/releases/tag/${TAG}` } });
+    // Published: the draft is not deleted.
+    expect(r.gh.writes.map((w) => w.method)).toEqual(['POST', 'PATCH']);
   });
 
   it('a tag made between the late read and publishing: the release is reported published on another commit, with its link', async () => {
@@ -494,17 +544,33 @@ describe('a try that may have run, settled by a read', () => {
     (r.gh.releases[0] as FakeRelease).prerelease = true;
     await r.sweep();
     expect(r.svc.get(req.requestId)).toMatchObject({ state: 'refused', refusal: 'found-different' });
+
+    // Notes edited after it was published: not what was approved.
+    ({ r, req } = await timedOut({ landed: true }));
+    (r.gh.releases[0] as FakeRelease).body = 'Edited after.';
+    await r.sweep();
+    expect(r.svc.get(req.requestId)).toMatchObject({ state: 'refused', refusal: 'found-different' });
+
+    // GitHub's own line ends and a trailing newline read as the approved notes.
+    ({ r, req } = await timedOut({ landed: true }));
+    (r.gh.releases[0] as FakeRelease).body = `${NOTES.notes.replace(/\n/g, '\r\n')}\r\n`;
+    await r.sweep();
+    expect(r.svc.get(req.requestId)?.state).toBe('executed');
   });
 
-  it('release mode: a tag with no release (at the commit or not) is not this act\'s: tag-taken, and its draft deleted', async () => {
-    for (const sha of [C3, C2]) {
-      const { r, req } = await timedOut({ landed: false });
-      r.gh.tags.set(TAG, { sha });
-      await r.sweep();
-      expect(r.svc.get(req.requestId)).toMatchObject({ state: 'refused', refusal: 'tag-taken' });
-      expect(r.gh.writes.map((w) => w.method)).toEqual(['POST', 'PATCH', 'DELETE']);
-      expect(r.gh.releases).toEqual([]);
-    }
+  it('release mode: a tag at another commit is not this act\'s: tag-taken, and its draft deleted; at the commit, the draft is published', async () => {
+    let { r, req } = await timedOut({ landed: false });
+    r.gh.tags.set(TAG, { sha: C2 });
+    await r.sweep();
+    expect(r.svc.get(req.requestId)).toMatchObject({ state: 'refused', refusal: 'tag-taken' });
+    expect(r.gh.writes.map((w) => w.method)).toEqual(['POST', 'PATCH', 'DELETE']);
+    expect(r.gh.releases).toEqual([]);
+
+    ({ r, req } = await timedOut({ landed: false }));
+    r.gh.tags.set(TAG, { sha: C3 });
+    await r.sweep();
+    expect(r.svc.get(req.requestId)?.state).toBe('executed');
+    expect(r.gh.writes.map((w) => w.method)).toEqual(['POST', 'PATCH', 'PATCH']);
   });
 
   it('release mode: nothing published, the draft still there: the next try publishes that draft, never a second one', async () => {
@@ -586,9 +652,146 @@ describe('a try that may have run, settled by a read', () => {
     const draft = r.gh.releases[0]?.id;
     expect(r.gh.writes).toEqual([
       expect.objectContaining({ method: 'POST', endpoint: 'repos/o/r/releases' }),
-      { method: 'PATCH', endpoint: `repos/o/r/releases/${draft}`, body: { draft: false, make_latest: 'true' } },
+      { method: 'PATCH', endpoint: `repos/o/r/releases/${draft}`, body: PUBLISH },
     ]);
     expect(effects.get(id)).toMatchObject({ status: 'done', draftId: draft });
     expect(r.svc.get(req.requestId)?.state).toBe('executed');
+  });
+});
+
+describe('a release row\'s draft is never left behind', () => {
+  /** A release whose publish was rate limited: its draft is on GitHub and
+   *  journaled, the row pending with its try counted. */
+  const drafted = async () => {
+    const r = rig();
+    const req = await r.ask(NOTES);
+    onFirstPatch(r, RATE_LIMITED);
+    await r.run(req);
+    r.gh.onWrite = null;
+    const id = actEffectId(req.requestId);
+    expect(r.effects.get(id)).toMatchObject({ status: 'pending', attempt: 1, draftId: r.gh.releases[0]?.id });
+    return { r, req, id };
+  };
+
+  it('a refusal before the release steps (a changed login) deletes it', async () => {
+    const { r, req } = await drafted();
+    r.gh.login = 'someone-else';
+    await r.sweep();
+    expect(r.svc.get(req.requestId)).toMatchObject({ state: 'refused', refusal: 'identity-changed' });
+    expect(r.gh.writes.map((w) => w.method)).toEqual(['POST', 'PATCH', 'DELETE']);
+    expect(r.gh.releases).toEqual([]);
+  });
+
+  it('a precondition that refuses before the releases are listed deletes the journaled draft', async () => {
+    const { r, req } = await drafted();
+    r.gh.repo.default_branch = 'trunk';
+    await r.sweep();
+    expect(r.svc.get(req.requestId)).toMatchObject({ state: 'refused', refusal: 'default-branch-changed' });
+    expect(r.gh.releases).toEqual([]);
+  });
+
+  it('a row dropped because its request is gone deletes it', async () => {
+    const { r, id } = await drafted();
+    const lines: string[] = [];
+    const orphans = new ActExecutor({ effects: r.effects, gh: r.gh, approval: { request: () => null, authorize: () => 'approval-missing' }, log: (l) => lines.push(l) });
+    vi.setSystemTime(Date.now() + RECONCILE_AFTER_MS + 1);
+    await orphans.reconcileAll();
+    expect(r.effects.get(id)).toBeNull();
+    expect(r.gh.releases).toEqual([]);
+    expect(lines.some((l) => /draft \d+ deleted/.test(l))).toBe(true);
+  });
+
+  it('tries that run out delete it', async () => {
+    const r = rig();
+    const req = await r.ask(NOTES);
+    r.gh.onWrite = (w) => {
+      if (w.method === 'PATCH') r.gh.nextWrite = TIMEOUT();
+    };
+    await r.run(req);
+    await r.sweep();
+    await r.sweep();
+    await r.sweep();
+    expect(r.svc.get(req.requestId)).toMatchObject({ state: 'refused', refusal: 'attempts-exhausted' });
+    expect(r.gh.writes.map((w) => w.method)).toEqual(['POST', 'PATCH', 'PATCH', 'PATCH', 'DELETE']);
+    expect(r.gh.releases).toEqual([]);
+  });
+
+  it('a try given back once the draft exists (a login not read now) keeps its count', async () => {
+    const { r, id } = await drafted();
+    r.gh.answerRead = (e) => (e === 'user' ? { ok: false, kind: 'rate-limited', message: 'GitHub rate limit' } : null);
+    await r.sweep();
+    expect(r.effects.get(id)).toMatchObject({ status: 'pending', attempt: 2, reason: 'read-failed' });
+    expect(r.gh.releases).toHaveLength(1);
+  });
+
+  it('a draft identical to the act, made by the owner before this act wrote anything, is not adopted: release-exists, and it stays', async () => {
+    const r = rig();
+    const req = await r.ask(NOTES);
+    r.gh.releases.push(release({ id: 900 }));
+    await r.run(req);
+    expect(r.svc.get(req.requestId)).toMatchObject({ state: 'refused', refusal: 'release-exists' });
+    expect(r.gh.writes).toEqual([]);
+    expect(r.gh.releases).toMatchObject([{ id: 900, draft: true }]);
+  });
+});
+
+describe('workflows and checks, read again', () => {
+  it('a CI that skips tags does not refuse the release; one with no push filter is named on the card', async () => {
+    const r = rig();
+    r.gh.files.set('.github/workflows/ci.yml', 'on:\n  push:\n    branches: [main]\n    tags-ignore: ["**"]\n');
+    r.gh.files.set('.github/workflows/lint.yml', 'on: push\n');
+    const req = await r.ask(NOTES);
+    expect(actOf(r, req.requestId)).toMatchObject({ mode: 'release' });
+    expect(r.cardBody(req.cardId)).toContain('\n.github/workflows/lint.yml also runs on this tag push.\n');
+    expect(r.cardBody(req.cardId)).not.toContain('ci.yml also runs');
+  });
+
+  it('a push workflow with path filters is not waited for: no run at all is not checks-not-started', async () => {
+    const r = rig();
+    r.gh.checkRuns.delete(C3);
+    r.gh.files.set('.github/workflows/ci.yml', 'on:\n  push:\n    branches: [main]\n    paths: ["src/**"]\n');
+    const req = await r.ask(NOTES);
+    await r.run(req);
+    expect(r.svc.get(req.requestId)?.state).toBe('executed');
+  });
+
+  it('a push run still queued (no check run yet) holds it, though another app\'s checks are green', async () => {
+    const r = rig();
+    const req = await r.ask(NOTES);
+    r.gh.workflowRuns.push({ head_sha: C3, event: 'push', head_branch: 'main', status: 'queued', conclusion: null, html_url: 'https://github.com/o/r/actions/runs/5', workflow_id: 1, id: 5 });
+    await r.run(req);
+    expect(r.svc.get(req.requestId)).toMatchObject({ state: 'refused', refusal: 'checks-pending' });
+    expect(r.gh.writes).toEqual([]);
+  });
+
+  it('a release workflow disabled since the request refuses the push', async () => {
+    const r = rig({ workflow: true });
+    const req = await r.ask();
+    r.gh.workflowStates.set('.github/workflows/release.yml', 'disabled_manually');
+    await r.run(req);
+    expect(r.svc.get(req.requestId)).toMatchObject({ state: 'refused', refusal: 'workflow-disabled' });
+    expect(r.gh.writes).toEqual([]);
+  });
+
+  it('a tag left out of the prerelease flag reads its own shape in release mode', async () => {
+    const r = rig();
+    r.gh.files.set('package.json', JSON.stringify({ version: '1.2.4-rc.1' }));
+    const req = await r.ask({ ...NOTES, tagName: 'v1.2.4-rc.1' });
+    expect(actOf(r, req.requestId)).toMatchObject({ mode: 'release', prerelease: true });
+    expect(r.cardBody(req.cardId)).toContain('\nPrerelease, never Latest.\n');
+  });
+});
+
+describe('pushing a tag that exists already', () => {
+  it('a 422 "already exists" with the tag at the commit is done, linking the run', async () => {
+    const r = rig({ workflow: true });
+    const req = await r.ask();
+    r.gh.onWrite = () => {
+      r.gh.tags.set(TAG, { sha: C3 });
+      r.gh.workflowRuns.push({ head_sha: C3, event: 'push', head_branch: TAG, status: 'queued', conclusion: null, html_url: 'https://github.com/o/r/actions/runs/78' });
+    };
+    await r.run(req);
+    expect(r.svc.get(req.requestId)).toMatchObject({ state: 'executed', result: { url: 'https://github.com/o/r/actions/runs/78' } });
+    expect(r.gh.writes).toHaveLength(1);
   });
 });
