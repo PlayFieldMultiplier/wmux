@@ -1,0 +1,76 @@
+# One isolated wmux per person behind Traefik. Copy a user block to add one.
+#
+# Isolation: each user has their own container, home volume and network.
+# Only Traefik joins every user network, so one user's container cannot
+# reach another's. Containers run unprivileged with no added capabilities,
+# never get the Docker socket, and have CPU, memory and process limits.
+# Whoever administers the host can still see every container.
+#
+# TLS is Traefik's job (for a VPN-only host, a DNS-challenge certificate
+# keeps the name public and the address private). Fill in the resolver below.
+
+x-wmux-user: &wmux-user
+  image: wmux-server:4.11.0
+  build: .
+  restart: unless-stopped
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  pids_limit: 2048
+  mem_limit: 8g
+  cpus: 4
+
+services:
+  traefik:
+    image: traefik:v3.6
+    restart: unless-stopped
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.websecure.address=:443
+      # - --certificatesresolvers.le.acme.dnschallenge.provider=<your-dns-provider>
+      # - --certificatesresolvers.le.acme.email=<admin email>
+      # - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
+    ports: ["443:443"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - letsencrypt:/letsencrypt
+    networks: [wmux-alice, wmux-bob]
+
+  alice:
+    <<: *wmux-user
+    hostname: alice
+    environment:
+      WMUX_ALLOW_HOST: alice.wmux.example.com
+    volumes: [alice-home:/home/wmux]
+    networks: [wmux-alice]
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.alice.rule=Host(`alice.wmux.example.com`)
+      - traefik.http.routers.alice.entrypoints=websecure
+      - traefik.http.routers.alice.tls=true
+      # - traefik.http.routers.alice.tls.certresolver=le
+      - traefik.http.services.alice.loadbalancer.server.port=7681
+
+  bob:
+    <<: *wmux-user
+    hostname: bob
+    environment:
+      WMUX_ALLOW_HOST: bob.wmux.example.com
+    volumes: [bob-home:/home/wmux]
+    networks: [wmux-bob]
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.bob.rule=Host(`bob.wmux.example.com`)
+      - traefik.http.routers.bob.entrypoints=websecure
+      - traefik.http.routers.bob.tls=true
+      # - traefik.http.routers.bob.tls.certresolver=le
+      - traefik.http.services.bob.loadbalancer.server.port=7681
+
+networks:
+  wmux-alice: {}
+  wmux-bob: {}
+
+volumes:
+  letsencrypt: {}
+  alice-home: {}
+  bob-home: {}
