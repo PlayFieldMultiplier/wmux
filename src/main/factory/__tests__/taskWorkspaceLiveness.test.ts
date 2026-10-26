@@ -18,6 +18,17 @@ type Task = { id: string; status: LedgerEntry['status']; pty: string };
 
 // Every temp dir a case makes, removed after it.
 const tempDirs: string[] = [];
+// The worker-slot stores a case opens. A store coalesces its writes on a
+// timer; one still pending when the case ends would write after its dir is
+// removed and make it again, so each store writes now, before the removal.
+const slotStores: WorkerSlots[] = [];
+function settleSlotStores(): void {
+  for (const s of slotStores.splice(0)) {
+    // A store whose folder is unusable (the cases that break it on purpose)
+    // throws here, and its timer only logs: it can make nothing on disk.
+    try { s.flushForTests(); } catch { /* see above */ }
+  }
+}
 const tmpDir = (): string => {
   const dir = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'wmux-task-liveness-'));
   tempDirs.push(dir);
@@ -116,6 +127,7 @@ afterEach(async () => {
   setFanOutGuardsForTests(null);
   setDormantRefresh(null);
   vi.useRealTimers();
+  settleSlotStores();
   await removeTempDirs(tempDirs);
 }, REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS);
 
@@ -713,6 +725,7 @@ describe('sightings by task (#2393 holder set)', () => {
 
   it('C5.1/C5.2: an adopted pane resumed in another task\'s workspace: that workspace stays its task\'s, the sighting is the pane\'s task\'s', async () => {
     const slots = new WorkerSlots(nodePath.join(tmpDir(), 'factory', WORKER_SLOTS_FILENAME), () => [], () => undefined);
+    slotStores.push(slots);
     slots.load();
     for (const [task, ws, pane] of [['t-a', 'ws-w', 'p-a'], ['t-b', 'ws-b', 'p-b']]) {
       const { gen } = slots.beginLaunch({ taskId: task, origin: 'bot', botId: 'bot-0000000a', ownerWorkspaceId: 'ws-owner' });

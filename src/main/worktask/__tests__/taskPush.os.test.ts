@@ -625,13 +625,17 @@ describe('task.push: a repository inside WSL', () => {
 
 describe('task.push RPC', () => {
   type Handler = (params: Record<string, unknown>, ctx?: Record<string, unknown>) => Promise<unknown>;
-  // Every wmux dir a case's setup makes, removed after it.
+  // Every wmux dir a case makes, removed after it.
   const dirs: string[] = [];
   afterEach(() => removeTempDirs(dirs), REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS);
-  const setup = (over: { row?: unknown; tasks?: unknown[]; caller?: string | null; repoDefault?: string | null; botRepo?: string; head?: string; fail?: boolean; ended?: unknown; reclaimed?: (ws: string, pty: string) => { taskId: string; botId: string; ownerWorkspaceId: string } | null } = {}) => {
-    const handlers = new Map<string, Handler>();
+  const rpcDir = (): string => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-task-push-rpc-'));
     dirs.push(dir);
+    return dir;
+  };
+  const setup = (over: { row?: unknown; tasks?: unknown[]; caller?: string | null; repoDefault?: string | null; botRepo?: string; head?: string; fail?: boolean; ended?: unknown; reclaimed?: (ws: string, pty: string) => { taskId: string; botId: string; ownerWorkspaceId: string } | null } = {}) => {
+    const handlers = new Map<string, Handler>();
+    const dir = rpcDir();
     const push = vi.fn(async (i: { branch: string }) => (over.fail
       ? { ok: false as const, reason: 'rejected' as const, error: 'non-fast-forward' }
       : { ok: true as const, branch: i.branch, remote: 'origin' as const, head: over.head ?? 'abc', output: '' }));
@@ -686,7 +690,7 @@ describe('task.push RPC', () => {
         resolveCallerWorkspace: async () => 'ws-resumed',
         reclaimedWorkerOfPane: () => ({ taskId: 'wtask-1', botId: 'bot-1', ownerWorkspaceId: 'ws-owner' }),
         exists: () => true,
-        wmuxDir: () => fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-task-push-rpc-')),
+        wmuxDir: rpcDir,
         push: push as never,
         repoDefaultBranch: async () => 'main',
       });
@@ -726,7 +730,7 @@ describe('task.push RPC', () => {
         resolveCallerWorkspace: async () => 'ws-resumed',
         reclaimedWorkerOfPane: () => ({ taskId: id, botId: 'bot-1', ownerWorkspaceId: 'ws-owner' }),
         exists: () => true,
-        wmuxDir: () => fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-task-push-rpc-')),
+        wmuxDir: rpcDir,
         push: push as never,
         repoDefaultBranch: async () => 'main',
       });
@@ -756,7 +760,7 @@ describe('task.push RPC', () => {
           getLedger: () => ({ findOpenByTaskWorkspace: () => ledger.get(row.id as string), get: (id: string) => ledger.get(id), recordOriginPin: (id: string, p: string) => ledger.recordOriginPin(id, p) }) as never,
           resolveCallerWorkspace: async () => 'ws-task',
           exists: () => true,
-          wmuxDir: () => fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-task-push-rpc-')),
+          wmuxDir: rpcDir,
           push: push as never,
           repoDefaultBranch: async () => 'main',
           botOriginPin: () => profilePin,

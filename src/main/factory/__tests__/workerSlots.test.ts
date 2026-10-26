@@ -17,6 +17,18 @@ import { REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS, removeTempDirs } from '../../../test-u
 const BOT = 'bot-0000000a';
 // Every temp dir a case makes, removed after it.
 const tempDirs: string[] = [];
+// The worker-slot stores a case opens. A store coalesces its writes on a
+// timer; one still pending when the case ends would write after its dir is
+// removed and make it again, so each store writes now, before the removal.
+const slotStores: WorkerSlots[] = [];
+function settleSlotStores(): void {
+  for (const s of slotStores.splice(0)) {
+    // A store whose folder is unusable (the cases that break it on purpose)
+    // throws here, and its timer only logs: it can make nothing on disk.
+    try { s.flushForTests(); } catch { /* see above */ }
+  }
+}
+
 const tmp = (): string => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-worker-slots-'));
   tempDirs.push(dir);
@@ -26,6 +38,7 @@ const tmp = (): string => {
 function store(dir: string, opts: { rows?: LedgerEntry[]; now?: () => number; warn?: string[] } = {}): WorkerSlots {
   const s = new WorkerSlots(path.join(dir, 'factory', WORKER_SLOTS_FILENAME), () => opts.rows ?? [], (l) => opts.warn?.push(l), opts.now ?? Date.now);
   s.load();
+  slotStores.push(s);
   return s;
 }
 
@@ -38,6 +51,7 @@ afterEach(async () => {
   setWorkerSlotsForTests(null);
   setFanOutGuardsForTests(null);
   __resetWorkspaceMirrorForTest();
+  settleSlotStores();
   await removeTempDirs(tempDirs);
 }, REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS);
 
@@ -97,6 +111,7 @@ describe('WorkerSlots', () => {
     const dir = tmp();
     fs.writeFileSync(path.join(dir, 'factory'), 'not a folder');
     const s = new WorkerSlots(path.join(dir, 'factory', WORKER_SLOTS_FILENAME), () => [], () => undefined);
+    slotStores.push(s);
     s.load();
     expect(() => s.beginLaunch({ taskId: 't', origin: 'owner', ownerWorkspaceId: 'ws-owner' })).toThrow(/could not be recorded/);
     expect(s.launchOf('t')).toBeNull();

@@ -204,6 +204,18 @@ interface Rig {
 
 // Every temp dir a rig makes, removed after the case.
 const tempDirs: string[] = [];
+// The worker-slot stores a case opens. A store coalesces its writes on a
+// timer; one still pending when the case ends would write after its dir is
+// removed and make it again, so each store writes now, before the removal.
+const slotStores: WorkerSlots[] = [];
+function settleSlotStores(): void {
+  for (const s of slotStores.splice(0)) {
+    // A store whose folder is unusable (the cases that break it on purpose)
+    // throws here, and its timer only logs: it can make nothing on disk.
+    try { s.flushForTests(); } catch { /* see above */ }
+  }
+}
+
 
 function rig(over: Partial<HolderSnapshot> = {}): Rig {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-holders-'));
@@ -215,6 +227,7 @@ function rig(over: Partial<HolderSnapshot> = {}): Rig {
   const open = (): WorkerSlots => {
     const s = new WorkerSlots(file, () => r.snap.rows ?? [], () => undefined, () => clock.now);
     s.load();
+    slotStores.push(s);
     setWorkerSlotsForTests(s);
     return s;
   };
@@ -281,6 +294,7 @@ afterEach(async () => {
   setHolderSource(null);
   setFanOutGuardsForTests(null);
   setWorkerSlotsForTests(null);
+  settleSlotStores();
   await removeTempDirs(tempDirs);
 }, REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS);
 
