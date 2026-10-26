@@ -1,13 +1,14 @@
 // task.fetch: main fetches origin's default branch and the task branch into a
 // worker's task repository (real git, local bare remote), for the caller's
 // own open task only, and never pushes or moves the checkout.
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fetchTaskRefs as fetchTask, parseLsRemoteHeads, taskFetchArgs, taskFetchConfigRefusal } from '../taskFetch';
 import { registerTaskPushRpc } from '../../pipe/handlers/taskPush.rpc';
+import { trackedTempDir } from '../../../test-utils/trackedTempDir';
 
 vi.mock('electron', () => ({ app: { getPath: () => os.tmpdir() } }));
 
@@ -20,7 +21,7 @@ describe('fetchTaskRefs', () => {
   let origin: string;
   let other: string;
   beforeEach(() => {
-    root = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-task-fetch-'));
+    root = trackedTempDir('wmux-task-fetch-');
     origin = path.join(root, 'origin.git');
     work = path.join(root, 'work');
     other = path.join(root, 'other');
@@ -43,7 +44,6 @@ describe('fetchTaskRefs', () => {
     git(other, 'tag', 'v1');
     git(other, 'push', '-q', 'origin', 'main', 'v1');
   });
-  afterEach(() => { fs.rmSync(root, { recursive: true, force: true }); });
 
   const input = (over: Partial<Parameters<typeof fetchTask>[0]> = {}) => ({
     worktreePath: work, branch: 'wtask/one', noHooksDir: path.join(root, 'no-hooks'),
@@ -164,7 +164,8 @@ describe('task.fetch RPC', () => {
       reclaimedWorkerOfPane: over.reclaimed ?? (() => null),
       exists: () => over.exists ?? true,
       resolveCallerWorkspace: async () => (over.caller === undefined ? 'ws-task' : over.caller),
-      wmuxDir: () => fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-task-fetch-rpc-')),
+      // A fresh wmux dir on every call, removed after the case.
+      wmuxDir: () => trackedTempDir('wmux-task-fetch-rpc-'),
       fetch: fetch as never,
       push: push as never,
       repoDefaultBranch: async () => 'main',

@@ -13,11 +13,10 @@
 // before writing and a different one is refused ("moved"). A review and a line
 // comment name that commit to GitHub; a merge also asks GitHub to refuse any
 // other head (--match-head-commit). Nothing here reruns CI by itself.
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { ghIssueEnv, splitRepoKey } from './GhIssueService';
 import { capBody } from './GhPrService';
 import { GhRateBreaker, ghRateBreaker, isRateLimitError } from './ghRateBreaker';
+import { execWithInput, type ExecWithInputOptions } from './execWithInput';
 import { DIFF_FILE_CAP_BYTES, DIFF_TOTAL_CAP_BYTES, parseUnifiedDiff } from '../../shared/diffParse';
 import {
   cleanLogTail,
@@ -43,14 +42,14 @@ import {
 type Exec = (
   cmd: string,
   args: string[],
-  opts: { cwd: string; timeout: number; env: NodeJS.ProcessEnv; windowsHide: boolean; maxBuffer: number },
+  opts: ExecWithInputOptions,
 ) => Promise<{ stdout: string; stderr?: string }>;
-
-const execFileAsync = promisify(execFile) as unknown as Exec;
 
 const READ_TIMEOUT_MS = 15_000;
 const WRITE_TIMEOUT_MS = 60_000;
 const GH_MAX_BUFFER = 16 * 1024 * 1024;
+/** `gh api` reading the request's JSON body from stdin (`--input -`). */
+const JSON_INPUT = ['--input', '-', '-H', 'Content-Type: application/json'];
 const CHECKS_TTL_MS = 15_000;
 const THREADS_TTL_MS = 30_000;
 const LOG_TTL_MS = 60_000;
@@ -350,13 +349,14 @@ export class GhPrReviewService {
 
   constructor(
     private now: () => number = Date.now,
-    private exec: Exec = execFileAsync,
+    private exec: Exec = execWithInput,
     breaker?: GhRateBreaker,
   ) {
     this.breaker = breaker ?? new GhRateBreaker(now);
   }
 
-  private async gh(host: string, args: string[], cwd: string, write = false): Promise<string> {
+  /** `input`: written to gh's stdin (a body of any length; never argv). */
+  private async gh(host: string, args: string[], cwd: string, write = false, input?: string): Promise<string> {
     const until = this.breaker.retryAt(host);
     if (until !== null) throw new RateLimited(until);
     try {
@@ -366,6 +366,7 @@ export class GhPrReviewService {
         env: ghIssueEnv(),
         windowsHide: true,
         maxBuffer: GH_MAX_BUFFER,
+        input,
       });
       this.breaker.reset(host);
       return stdout;
@@ -578,10 +579,8 @@ export class GhPrReviewService {
       if (refused) return refused;
       const { host, owner, repo } = this.repo(key);
       const out = await this.gh(host, [
-        'api', '--hostname', host, '-X', 'POST', `repos/${owner}/${repo}/pulls/${number}/comments`,
-        '-f', `body=${req.body}`, '-f', `commit_id=${req.expectHead}`, '-f', `path=${req.path}`,
-        '-F', `line=${req.line}`, '-f', `side=${req.side}`,
-      ], repoPath, true);
+        'api', '--hostname', host, '-X', 'POST', `repos/${owner}/${repo}/pulls/${number}/comments`, ...JSON_INPUT,
+      ], repoPath, true, JSON.stringify({ body: req.body, commit_id: req.expectHead, path: req.path, line: req.line, side: req.side }));
       this.forgetThreads(key, number);
       return { ok: true, ...urlOf(out) };
     });
@@ -592,9 +591,8 @@ export class GhPrReviewService {
     return this.write(async () => {
       const { host, owner, repo } = this.repo(key);
       const out = await this.gh(host, [
-        'api', '--hostname', host, '-X', 'POST', `repos/${owner}/${repo}/pulls/${number}/comments/${commentId}/replies`,
-        '-f', `body=${body}`,
-      ], repoPath, true);
+        'api', '--hostname', host, '-X', 'POST', `repos/${owner}/${repo}/pulls/${number}/comments/${commentId}/replies`, ...JSON_INPUT,
+      ], repoPath, true, JSON.stringify({ body }));
       this.forgetThreads(key, number);
       return { ok: true, ...urlOf(out) };
     });
@@ -607,9 +605,8 @@ export class GhPrReviewService {
       if (refused) return refused;
       const { host, owner, repo } = this.repo(key);
       const out = await this.gh(host, [
-        'api', '--hostname', host, '-X', 'POST', `repos/${owner}/${repo}/pulls/${number}/reviews`,
-        '-f', `event=${req.event}`, '-f', `commit_id=${req.expectHead}`, ...(req.body ? ['-f', `body=${req.body}`] : []),
-      ], repoPath, true);
+        'api', '--hostname', host, '-X', 'POST', `repos/${owner}/${repo}/pulls/${number}/reviews`, ...JSON_INPUT,
+      ], repoPath, true, JSON.stringify({ event: req.event, commit_id: req.expectHead, ...(req.body ? { body: req.body } : {}) }));
       this.checksCache.delete(`${key}#${number}`);
       this.forgetThreads(key, number);
       return { ok: true, ...urlOf(out) };
@@ -636,9 +633,10 @@ export class GhPrReviewService {
       const { host } = this.repo(key);
       await this.gh(host, [
         'pr', 'merge', String(number), '--repo', key, '--squash',
-        // `=` forms: a subject or body starting with "-" stays a value.
-        `--subject=${req.subject}`, `--body=${req.body}`, `--match-head-commit=${req.expectHead}`,
-      ], repoPath, true);
+        // `=` forms: a subject starting with "-" stays a value. The body goes
+        // on stdin (an empty one still sets an empty body).
+        `--subject=${req.subject}`, '--body-file', '-', `--match-head-commit=${req.expectHead}`,
+      ], repoPath, true, req.body);
       this.checksCache.delete(`${key}#${number}`);
       return { ok: true, url: state.head.url };
     });
@@ -702,4 +700,4 @@ function urlOf(out: string): { url?: string } {
   }
 }
 
-export const ghPrReviewService = new GhPrReviewService(Date.now, execFileAsync, ghRateBreaker);
+export const ghPrReviewService = new GhPrReviewService(Date.now, execWithInput, ghRateBreaker);

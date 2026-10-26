@@ -203,6 +203,8 @@ export class AutomationEngine {
   private tickTimer: NodeJS.Timeout | null = null;
   private monitorTimer: NodeJS.Timeout | null = null;
   private saveChain: Promise<unknown> = Promise.resolve();
+  /** Work started and not awaited (a launch, a scheduled start, a timed monitor pass): each may save later. */
+  private readonly detached = new Set<Promise<unknown>>();
   private stopped = false;
 
   constructor(private readonly ports: AutomationEnginePorts) {}
@@ -258,7 +260,7 @@ export class AutomationEngine {
       this.tickTimer = setInterval(() => this.tick(), AUTOMATION_TICK_MS);
       this.tickTimer.unref?.();
       this.monitorTimer = setInterval(() => {
-        this.monitorOnce().catch((err) => this.ports.log('error', `[automation] monitor failed: ${String(err)}`));
+        this.detach(this.monitorOnce().catch((err) => this.ports.log('error', `[automation] monitor failed: ${String(err)}`)));
       }, AUTOMATION_MONITOR_MS);
       this.monitorTimer.unref?.();
       this.tick();
@@ -271,6 +273,27 @@ export class AutomationEngine {
     if (this.monitorTimer) clearInterval(this.monitorTimer);
     this.tickTimer = null;
     this.monitorTimer = null;
+  }
+
+  /**
+   * Resolves once the work this engine started without awaiting it (a launch,
+   * a scheduled start, a timed monitor pass) has ended and every save queued
+   * so far, and any queued meanwhile, has settled. After stop() nothing new
+   * starts, so this is the point past which the engine writes nothing.
+   */
+  async whenSaved(): Promise<void> {
+    for (;;) {
+      const chain = this.saveChain;
+      await Promise.allSettled([...this.detached]);
+      await chain;
+      if (this.detached.size === 0 && chain === this.saveChain) return;
+    }
+  }
+
+  /** Keep `work` (already caught) until it settles, for whenSaved. */
+  private detach(work: Promise<unknown>): void {
+    this.detached.add(work);
+    void work.finally(() => this.detached.delete(work));
   }
 
   /** Idle keepalive: an enabled schedule or a live run keeps the daemon up. */
@@ -708,8 +731,8 @@ export class AutomationEngine {
         automationsDirty = true;
       }
       if (plan.fire !== null) {
-        this.startRun(automation, plan.fire, 'scheduled')
-          .catch((err) => this.ports.log('error', `[automation] start failed: ${String(err)}`));
+        this.detach(this.startRun(automation, plan.fire, 'scheduled')
+          .catch((err) => this.ports.log('error', `[automation] start failed: ${String(err)}`)));
       }
     }
     if (runsDirty) {
@@ -839,7 +862,7 @@ export class AutomationEngine {
       void this.persistRuns();
       return run;
     }
-    this.launch(run, snapshot, mode).catch(async (err) => {
+    this.detach(this.launch(run, snapshot, mode).catch(async (err) => {
       this.ports.log('error', `[automation] run ${run.id} launch crashed: ${String(err)}`);
       try {
         if (this.live.has(run.id)) await this.terminate(run, 'failed', 'launch_failed');
@@ -849,7 +872,7 @@ export class AutomationEngine {
           await this.persistRuns();
         }
       } catch { /* nothing left to do */ }
-    });
+    }));
     return run;
   }
 

@@ -13,7 +13,7 @@ import { CodexUsageLimitLineScanner } from '../../shared/usageLimit';
 import type { AgentStatus } from '../../shared/types';
 import type { AgentSlug } from '../../shared/agentIdentity';
 import type { ApprovalScreenSnapshot } from '../../shared/approvalScreen';
-import { agyScreenApproval, claudeScreenApproval, codexScreenApproval, openCodeScreenApproval, piScreenApproval, type ScreenApproval } from './approvalScreen';
+import { agyScreenApproval, claudeScreenApproval, codexScreenApproval, openCodeScreenApproval, piScreenApproval, qwenScreenApproval, type ScreenApproval } from './approvalScreen';
 export type { AgentSlug };
 export { agentDisplayToSlug } from '../../shared/agentIdentity';
 
@@ -142,14 +142,19 @@ interface AgentPattern {
   /** Strict live-grid recovery, used only after a fresh external identity. */
   approvalScreen?: (rows: readonly string[]) => ScreenApproval | null;
   /**
-   * A question no line pattern reads (the grid is its only reader): its
-   * question row, and the row that finishes it. The question row arms it and a
-   * later finishing row makes it ready, however far apart the two are drawn.
-   * Ready after identity arrived, it asks the host for that identity's one
-   * recheck (takeApprovalRecheckRequest); no recheck is spent before it is
-   * ready, because a read then would see half a question.
+   * A question the grid can read: its question row, and the row that
+   * finishes it. The question row arms it and a later finishing row makes it
+   * ready, however far apart the two are drawn. Ready after identity arrived,
+   * it asks the host for that identity's one recheck
+   * (takeApprovalRecheckRequest) unless a line pattern reported awaiting_input
+   * in the same read, since the grid could then add nothing; no recheck is
+   * spent before it is ready, because a read then would see half a question.
+   *
+   * `shared`: the screen reader also reads dialogs that line patterns or the
+   * stream report (Claude, Codex). Their recheck is not held for this
+   * question, and spending it does not spend the one this question asks for.
    */
-  approvalReady?: { question: RegExp; end: RegExp };
+  approvalReady?: { question: RegExp; end: RegExp; shared?: true };
   patterns: {
     regex: RegExp;
     status: AgentEvent['status'];
@@ -252,6 +257,12 @@ const AGENT_PATTERNS: AgentPattern[] = [
     agent: 'Claude Code',
     slug: 'claude',
     approvalScreen: claudeScreenApproval,
+    // The folder-trust screen (2.1.310 live capture, __tests__/fixtures/
+    // claude-code-2.1.310-trust-120x40.json) comes before any banner or
+    // footer, so the gate is closed and no line pattern reads it; its choices
+    // are unnumbered (`❯ No, exit`). Read from the grid once process identity
+    // has seeded the profile: the question, then the key footer, its last row.
+    approvalReady: { question: /Is\s*this\s*a\s*project\s*you\s*created\s*or\s*one\s*you\s*trust\?/, end: /Enter\s*to\s*confirm\s*·\s*Esc\s*to\s*cancel/, shared: true },
     // \s* — Claude Code TUI는 배너 "Claude Code"를 셀 단위 커서 이동으로 그려,
     // ANSI strip 후 "Claude"와 "Code" 사이 공백이 사라진 "ClaudeCode"가 된다.
     // 공백을 선택적으로 둬야 daemon mode에서도 gate가 매칭된다(핵심 race 원인).
@@ -389,6 +400,11 @@ const AGENT_PATTERNS: AgentPattern[] = [
     agent: 'Codex CLI',
     slug: 'codex',
     approvalScreen: codexScreenApproval,
+    // codex-cli 0.162.1 (live capture, __tests__/fixtures/
+    // codex-0.162.1-trust-120x40.json) draws the trust screen in the alternate
+    // screen with CUP only, no CR/LF, so no line pattern below sees it. Read
+    // from the grid once process identity has seeded the profile.
+    approvalReady: { question: /Trust\s*this\s*folder\?\s*Codex\s*can/, end: /enter\s*continue\s*·\s*esc\s*back/, shared: true },
     // The trust-prompt phrase is part of the gate because on a first boot in
     // an untrusted directory Codex shows it BEFORE the "OpenAI Codex" banner
     // — with the banner-only gate the trust pattern below could never fire.
@@ -430,8 +446,12 @@ const AGENT_PATTERNS: AgentPattern[] = [
       // higher risk..."), so only the start is anchored.
       { regex: /^\s*Do you trust the contents of this directory\?/,     status: 'awaiting_input', message: 'Directory trust prompt' },
       // codex-cli 0.157's wording ("Folder access" / "Trust this folder?" /
-      // "› 1. Trust and continue"): the question has its own row.
-      { regex: /^\s*Trust\s*this\s*folder\?\s*$/,                      status: 'awaiting_input', message: 'Directory trust prompt' },
+      // "› 1. Trust and continue"): the question has its own row. 0.162.1
+      // goes on with the explanation on the same row ("Trust this folder?
+      // Codex can read, …", a narrow pane may wrap after `Codex`). Only that
+      // sentence: Kimi Code CLI asks the bare question too, and this must
+      // claim no more of it than before.
+      { regex: /^\s*Trust\s*this\s*folder\?(?:\s*Codex(?:\s*can|\s*$)|\s*$)/, status: 'awaiting_input', message: 'Directory trust prompt' },
     ],
   },
 
@@ -465,6 +485,14 @@ const AGENT_PATTERNS: AgentPattern[] = [
   {
     agent: 'Qwen Code',
     slug: 'qwen',
+    // The dialog read off the grid once a process or hook identity arrives
+    // after it was drawn, when no line pattern was reading for Qwen yet.
+    approvalScreen: qwenScreenApproval,
+    // Its question (shell, or file write and edit), then the confirmation
+    // spinner row drawn below the choices, without the counters a running
+    // spinner adds beside it (or, when narrow, on the next row) just after
+    // an answer.
+    approvalReady: { question: /Allow\s*execution\s*of:|Apply\s*this\s*change\?/, end: /Waiting\s*for\s*user\s*confirmation\.\.\.(?!\s*\()/ },
     gate: /Qwen\s*Code\s*\(v\d|Qwen - /,
     chrome: isQwenChrome,
     completeChromeRow: true,
@@ -908,7 +936,8 @@ function isCodexChrome(line: string): boolean {
   const v = visibleChrome(stripped);
   return /^>_\s*OpenAI\s*Codex\b/.test(v)
     || /^Do\s*you\s*trust\s*the\s*contents\s*of\s*this\s*directory\?/.test(v)
-    || /^Trust\s*this\s*folder\?$/.test(v);
+    // 0.162.1 explains on the same row; the bare question is also Kimi's.
+    || /^Trust\s*this\s*folder\?(?:\s*Codex(?:\s*can|$)|$)/.test(v);
 }
 
 /**
@@ -1137,6 +1166,8 @@ export class AgentDetector {
   private approvalHintTail = '';
   private approvalHintAt: number | null = null;
   private approvalRecheckEpoch: number | null = null;
+  // The owner's approvalReady question's own recheck (see `shared`).
+  private approvalReadyRecheckEpoch: number | null = null;
   // Kiro uses a compound gate so another agent merely mentioning "Kiro CLI"
   // cannot steal this PTY's identity. Evidence is scoped to this detector/PTy.
   private kiroChromeSeen = false;
@@ -1274,7 +1305,9 @@ export class AgentDetector {
     }
     // Evidence an identity change kept: a grid-only question this owner drew
     // before its seed is still read once ready; any other profile drops it.
-    if (this.approvalEvidenceRetired && !profile.approvalReady) this.invalidateApprovalScreen();
+    // A `shared` profile keeps it only for that question, once drawn.
+    const ready = profile.approvalReady;
+    if (this.approvalEvidenceRetired && !(ready && (!ready.shared || this.approvalArmed.has(slug)))) this.invalidateApprovalScreen();
     this.approvalEvidenceRetired = false;
     this.trustedAgent = slug;
     this.lastAgent = profile.agent;
@@ -1301,6 +1334,7 @@ export class AgentDetector {
     this.approvalHintTail = '';
     this.approvalHintAt = null;
     this.approvalRecheckEpoch = null;
+    this.approvalReadyRecheckEpoch = null;
     this.approvalRecheckRequested = false;
     this.approvalArmed = new Set();
     this.approvalReadySlugs = new Set();
@@ -1339,10 +1373,13 @@ export class AgentDetector {
     const generation = this.approvalScreenGeneration;
     const fresh = (): boolean => this.approvalHintAt !== null
       && Date.now() >= this.approvalHintAt && Date.now() - this.approvalHintAt <= 30_000;
-    if (!owner || !profile?.approvalScreen || !fresh() || this.approvalRecheckEpoch === epoch) return false;
+    if (!owner || !profile?.approvalScreen || !fresh()) return false;
+    const readyRead = this.approvalReadySlugs.has(owner);
     // Not spent on half a question: the row that finishes it asks again.
-    if (profile.approvalReady && !this.approvalReadySlugs.has(profile.slug)) return false;
-    this.approvalRecheckEpoch = epoch;
+    if (profile.approvalReady && !profile.approvalReady.shared && !readyRead) return false;
+    if ((readyRead ? this.approvalReadyRecheckEpoch : this.approvalRecheckEpoch) === epoch) return false;
+    if (readyRead) this.approvalReadyRecheckEpoch = epoch;
+    else this.approvalRecheckEpoch = epoch;
     const owns = (): boolean => this.trustedAgent === owner && this.identityEpoch === epoch
       && this.approvalScreenGeneration === generation && !this.shellPromptSinceOwner && fresh();
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -1355,7 +1392,8 @@ export class AgentDetector {
       const approval = profile.approvalScreen(snapshot.rows);
       if (!approval) return false;
       const key = `${profile.agent}:awaiting_input`;
-      if (this.lastEmittedFor.get(key) === approval.text) return false;
+      // Whitespace-insensitive, like emitDialog's stored value.
+      if (this.lastEmittedFor.get(key)?.replace(/\s+/g, '') === approval.text.replace(/\s+/g, '')) return false;
       this.lastEmittedFor.set(key, approval.text);
       for (const cb of this.callbacks) cb({ agent: profile.agent, status: 'awaiting_input', message: approval.message });
       return true;
@@ -1474,7 +1512,8 @@ export class AgentDetector {
     const previousLength = stripAnsi(this.approvalHintTail).length;
     const probe = this.approvalHintTail + data;
     const cleanProbe = stripAnsi(probe);
-    const hint = /Do\s*you\s*(?:want|trust)|Would\s*you\s*like|Allow\s*tool\s*use|Permission\s*required|Trust\s*project\s*folder/g;
+    // Keep in step with the approvalReady questions (READY_PROFILES).
+    const hint = /Do\s*you\s*(?:want|trust)|Would\s*you\s*like|Allow\s*tool\s*use|Permission\s*required|Trust\s*project\s*folder|Allow\s*execution\s*of:|Apply\s*this\s*change\?|Trust\s*this\s*folder|Is\s*this\s*a\s*project\s*you\s*created/g;
     for (const match of cleanProbe.matchAll(hint)) {
       // Only newly drawn text refreshes freshness. Retaining an old question
       // in the tail across a title update must not make it recent again.
@@ -1487,6 +1526,7 @@ export class AgentDetector {
     }
     // Readiness reads only the newly drawn text, with room for a match that
     // began just before it; positions below are relative to `recentAt`.
+    let readyForOwner = false;
     const recentAt = Math.max(0, previousLength - READY_MATCH_REACH);
     const recent = cleanProbe.slice(recentAt);
     const drawnAfter = previousLength - recentAt;
@@ -1503,7 +1543,7 @@ export class AgentDetector {
       for (const match of recent.matchAll(end)) {
         if (match.index < from || match.index + match[0].length <= drawnAfter) continue;
         this.approvalReadySlugs.add(slug);
-        if (slug === this.trustedAgent && this.approvalRecheckEpoch !== this.identityEpoch) this.approvalRecheckRequested = true;
+        if (slug === this.trustedAgent && this.approvalReadyRecheckEpoch !== this.identityEpoch) readyForOwner = true;
       }
     }
     this.approvalHintTail = probe.slice(-4096);
@@ -1552,6 +1592,8 @@ export class AgentDetector {
     // its name inside the OSC window-title escape, which the strip removes.
     if (this.lineBuffer) this.checkGates(this.lineBuffer);
 
+    // Asked only when no line pattern reported the dialog in this read.
+    if (readyForOwner && !this.approvalEmittedInFeed) this.approvalRecheckRequested = true;
     this.scanDialog(data);
   }
 

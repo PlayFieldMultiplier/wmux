@@ -12,6 +12,11 @@ afterEach(() => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+// The loader validates for the machine it runs on, and Windows refuses a path
+// starting with '/' ('command-posix-path'). A drive path is accepted on every
+// platform and names the same process, so the test reads the same everywhere.
+const TERN_COMMAND = 'C:\\tern\\bin\\tern.exe';
+
 const write = (agents: unknown) => fs.writeFileSync(path.join(dir, 'custom-agents.json'), JSON.stringify({ agents }), 'utf8');
 
 describe('CustomAgentNames', () => {
@@ -21,7 +26,7 @@ describe('CustomAgentNames', () => {
     const later = () => { now += 2_000; };
     expect(names.names().size).toBe(0);
     // Made-up CLIs. The second entry names a registry agent and is refused.
-    write([{ name: 'Tern', command: '/opt/tern/bin/tern' }, { name: 'Mine', command: 'claude' }]);
+    write([{ name: 'Tern', command: TERN_COMMAND }, { name: 'Mine', command: 'claude' }]);
     // One read answers for a moment: a labelled pane asks on every event.
     expect(names.names().size).toBe(0);
     later();

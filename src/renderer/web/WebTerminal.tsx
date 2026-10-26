@@ -29,6 +29,11 @@ export function setWebPtyHub(next: WebPtyHub | null): void {
   hub = next;
 }
 
+/** The page's hub, or null before main.tsx installed it. */
+export function webPtyHub(): WebPtyHub | null {
+  return hub;
+}
+
 const noopSubscribe = () => () => undefined;
 const zero = () => 0;
 

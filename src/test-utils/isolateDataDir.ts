@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { afterAll } from 'vitest';
+import { REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS, removeTempDir } from './removeTempDir';
 
 // Save the real home before overriding; do not overwrite if already set.
 if (!process.env.WMUX_TEST_REAL_HOME) {
@@ -31,13 +33,22 @@ process.env.WMUX_DATA_SUFFIX ??= '-vitest';
 // live data dir even when HOME was never overridden.
 process.env.WMUX_TEST_ISOLATED = '1';
 
-// Register best-effort removal of the temp dir on process exit (never throw).
+// Remove the temp HOME once this file's tests are done; a setup file's afterAll
+// runs after the file's own. A process 'exit' handler used to be the only
+// removal: it left one of these dirs per test file in %TEMP% on Windows (tens
+// of thousands), and it swallowed every error, so nothing said why. Here a
+// HOME that is still held past removeTempDir's bounded wait fails the file and
+// names what is held: usually a handle the file's tests left open (a child, a
+// watcher, a stream).
+afterAll(() => removeTempDir(tempDir), REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS);
+
+// Backstop for a file whose hooks never ran (an import error, a crashed
+// worker, a hook that timed out): best effort when the worker exits. The
+// afterAll above is the removal that reports.
 process.once('exit', () => {
   try {
-    if (fs.existsSync(tempDir)) {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
+    fs.rmSync(tempDir, { recursive: true, force: true });
   } catch {
-    // Best-effort cleanup on exit; never throw.
+    // Best effort; afterAll already reported a HOME it could not remove.
   }
 });

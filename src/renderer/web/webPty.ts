@@ -28,6 +28,8 @@
  *    inputs, capped at the alive-shell level: every pane this page streams has
  *    a live shell, and that shell owns bracketed paste (?2004).
  *  - create / dispose / promote / resize are NOT here — the shim denies them.
+ *    The page's own "New terminal" button calls `createTerminal` on the hub
+ *    directly (`POST /api/sessions`); no desktop component reaches it.
  *
  * Live streams are rationed: at most WEB_LIVE_STREAM_CAP panes hold a slot.
  * The browser allows six HTTP/1.1 connections per origin (and the daemon eight
@@ -73,6 +75,41 @@ export interface InputHalt {
   reason: string;
   /** Keystrokes (writes) that were not sent after the halt. */
   dropped: number;
+}
+
+/** Where `createTerminal` puts the new pane: an existing workspace, or a new one it names. */
+export interface NewTerminalTarget {
+  workspaceId: string;
+  workspaceName?: string;
+}
+
+/**
+ * `createTerminal`'s outcome. `id` is the new pane's session id. `code` is the
+ * daemon's error code, or one of read-only | unauthorized | offline; `detail`
+ * is the daemon's own wording when it gave one (the session cap, for one).
+ */
+export type NewTerminalResult = { ok: true; id: string } | { ok: false; code: string; detail?: string };
+
+/**
+ * A new pane goes into the active workspace, or the first one while the active
+ * id is stale. With none (a fresh headless server) it starts one: the daemon
+ * lists only panes that carry a workspace id, so a pane created without one
+ * would never appear on this page. `pending` is the workspace an earlier,
+ * unconfirmed create minted: a retry reuses it rather than starting a second
+ * one. getRandomValues, not randomUUID: the page may be served over plain
+ * HTTP, where randomUUID does not exist.
+ */
+export function newTerminalTarget(
+  activeWorkspaceId: string,
+  workspaceIds: readonly string[],
+  name: string,
+  pending?: NewTerminalTarget,
+): NewTerminalTarget {
+  if (workspaceIds.length > 0) return { workspaceId: workspaceIds.includes(activeWorkspaceId) ? activeWorkspaceId : workspaceIds[0] };
+  if (pending) return pending;
+  const bytes = crypto.getRandomValues(new Uint8Array(12));
+  const id = `ws-${Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')}`;
+  return { workspaceId: id, workspaceName: name };
 }
 
 type DataListener = (ptyId: string, data: string, replay?: boolean) => void;
@@ -573,6 +610,44 @@ export function createWebPty(deps: WebPtyDeps) {
     /** The user acknowledged a halt: this pane's input goes out again. */
     resumeInput(ptyId: string): void {
       if (halts.delete(ptyId)) notify();
+    },
+    /**
+     * Start a shell pane (`POST /api/sessions`). The daemon gates it on the
+     * same grant as typing: its "read-only" 403 makes this page read-only, as
+     * a refused keystroke does. Never retried: an unanswered create may still
+     * have made a pane.
+     */
+    async createTerminal(target: NewTerminalTarget): Promise<NewTerminalResult> {
+      // Not request(): its timeout ends with the headers. One abort covers the
+      // body too, so a reply that stalls mid-body releases its connection (the
+      // page has few to spare), and an unread 201 is as unknown as no answer.
+      const ctl = new AbortController();
+      const timer = setTimer(() => ctl.abort(), REQUEST_TIMEOUT_MS);
+      let res: Response;
+      let body: Record<string, unknown>;
+      try {
+        res = await fetchImpl('/api/sessions', {
+          method: 'POST',
+          headers: { ...auth, 'Content-Type': 'application/json' },
+          body: JSON.stringify(target),
+          signal: ctl.signal,
+        });
+        const parsed: unknown = await res.json().catch((err: unknown) => {
+          if (ctl.signal.aborted) throw err;
+          return {}; // not JSON (a proxy's error page): the status still speaks
+        });
+        body = parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {};
+      } catch {
+        return { ok: false, code: 'offline' };
+      } finally {
+        clearTimer(timer);
+      }
+      const error = typeof body.error === 'string' ? body.error : '';
+      const detail = typeof body.detail === 'string' && body.detail ? body.detail : undefined;
+      if (res.status === 201 && typeof body.id === 'string') return { ok: true, id: body.id };
+      if (res.status === 401) { deps.onUnauthorized?.(); return { ok: false, code: 'unauthorized' }; }
+      if (res.status === 403 && error.startsWith('read-only')) { setInputState('read-only'); return { ok: false, code: 'read-only' }; }
+      return { ok: false, code: error || String(res.status), ...(detail ? { detail } : {}) };
     },
     subscribe(listener: () => void): () => void {
       viewListeners.add(listener);

@@ -5220,7 +5220,14 @@ whose tries ran out with the release still a draft ends `refused` with
 it was published ends `refused` with `draft-gone` (nothing is published, and
 no new draft is made), and one whose tag name is also a branch's with
 `tag-name-is-branch`. Any act whose GitHub answer had a shape the desktop
-cannot read ends `refused` with `unreadable-answer`.
+cannot read ends `refused` with `unreadable-answer`. An act no try of which
+may have reached GitHub (it was never tried, or every try stopped before
+anything was sent: its reads kept failing, say) ends `refused` with
+`approval-stale` on its first try or sweep 24 hours or more after
+`decidedAt`, or once the clock reads more than 24 hours earlier than
+`decidedAt` (a clock less far behind waits, as in the Undo window); nothing was
+sent, and the bot asks again with a new request if it is still wanted. An act a try of which may
+have reached GitHub is not aged out: a read of GitHub settles it.
 
 `refusal` may be a list of codes joined by `, `; show one sentence per code.
 A refused `release` that made a draft adds one last code saying what became
