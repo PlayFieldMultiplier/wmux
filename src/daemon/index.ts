@@ -4252,11 +4252,13 @@ function registerRpcHandlers(
       // transitions once (absent → present), so no per-turn write amplification.
       || prev.transcriptPath !== next.transcriptPath;
     managed.meta.resumeBinding = next;
-    // #2730: the pane's running agent now holds this conversation (a resume
-    // typed by hand, the TUI's own /resume). The terminal wins: a chat in
-    // another pane on the same conversation gives way. Running only, as
-    // `otherOwners` counts a holder; the binding is stored either way.
-    if (agentProcessTracker.identityFor(id)?.alive === true) chatV2Host?.terminalHolds(id, next.agent, next.sessionId);
+    // #2730: the pane's agent now holds this conversation (a resume typed by
+    // hand, the TUI's own /resume). The terminal wins: a chat in another pane
+    // on the same conversation gives way. No liveness gate: every writer here
+    // is driven by a running agent (its hook, its command line on the alive
+    // edge), and the tracker's probe is still pending at a fresh launch's
+    // SessionStart, whose newer ts then makes the command-line capture stale.
+    chatV2Host?.terminalHolds(id, next.agent, next.sessionId);
     // X6 ③ (Rung 1): a captured binding PROVES claude ran in this pane, so the
     // hook is a SECOND, independent writer of the pill gate (lastDetectedAgent) —
     // the live AgentDetector banner is once-per-session and is never re-armed from
