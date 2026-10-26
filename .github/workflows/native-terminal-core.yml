@@ -1,7 +1,13 @@
 name: Native terminal core
 on:
   pull_request:
-    paths: ['core/wmux-term/**', 'src/daemon/**', 'src/shared/**', 'src/main/pty/**', 'src/main/ipc/handlers/*terminalCore*', 'src/renderer/components/Settings/**', 'bench/native-core-verify.ts', 'bench/native-interpreter-verify.ts', 'bench/fixtures/**', 'scripts/*native*', 'scripts/*rust*', 'scripts/__tests__/generateRustUnicode11.os.test.mjs', 'scripts/__tests__/nativeTerminalPackage.os.test.mjs', '.github/workflows/release.yml', 'forge.config.ts', 'package.json', 'package-lock.json', '.github/workflows/native-terminal-core.yml']
+    paths: ['core/wmux-term/**', 'src/daemon/**', 'src/shared/**', 'src/main/pty/**', 'src/main/ipc/handlers/*terminalCore*', 'src/renderer/components/Settings/**', 'bench/native-core-verify.ts', 'bench/native-interpreter-verify.ts', 'bench/fixtures/**', 'scripts/*native*', 'scripts/*rust*', 'scripts/__tests__/generateRustUnicode11.os.test.mjs', 'scripts/__tests__/nativeTerminalPackage.os.test.mjs', '.github/workflows/release.yml', 'forge.config.ts', 'package.json', 'package-lock.json', '.github/workflows/native-terminal-core.yml', 'vitest.rust-engine.config.ts']
+  # Nightly on main: runs `linux-rust-daemon` without a path match, so main
+  # keeps daemon coverage on the rust engine between engine PRs. The other
+  # jobs stay on pull requests and dispatch.
+  schedule:
+    # 18:41 UTC = 03:41 KST. Off the hour: scheduled runs on :00 queue longest.
+    - cron: '41 18 * * *'
   workflow_dispatch:
     inputs:
       soak:
@@ -10,6 +16,7 @@ on:
         default: false
 jobs:
   native-terminal:
+    if: github.event_name != 'schedule'
     strategy:
       fail-fast: false
       matrix:
@@ -56,7 +63,10 @@ jobs:
         if: runner.os == 'Linux'
         run: xvfb-run -a npx electron --no-sandbox core/wmux-term/spike/native-transport-electron.cjs
       - name: Backend, snapshot, input and lifecycle contracts
-        run: npx vitest run src/shared/__tests__/terminalPty.os.test.ts src/shared/__tests__/terminalCoreSettings.test.ts src/daemon/__tests__/RingBuffer.test.ts src/daemon/__tests__/TextSnapshotBackend.test.ts src/daemon/__tests__/AnsiSnapshotBackend.test.ts src/daemon/__tests__/RustSnapshot.test.ts src/daemon/__tests__/DaemonPTYBridge.nativeOutput.test.ts src/daemon/__tests__/SessionPipe.inputBackpressure.os.test.ts src/main/pty/__tests__/PTYManager.wsl.test.ts src/main/ipc/handlers/__tests__/terminalCore.handler.test.ts src/renderer/components/Settings/__tests__/TerminalEngineSetting.test.tsx
+        run: npx vitest run src/shared/__tests__/terminalPty.os.test.ts src/shared/__tests__/terminalCoreSettings.test.ts src/daemon/__tests__/RingBuffer.test.ts src/daemon/__tests__/TextSnapshotBackend.test.ts src/daemon/__tests__/AnsiSnapshotBackend.test.ts src/daemon/__tests__/RustSnapshot.test.ts src/daemon/__tests__/DaemonPTYBridge.nativeOutput.test.ts src/daemon/__tests__/SessionPipe.inputBackpressure.os.test.ts src/main/pty/__tests__/PTYManager.wsl.test.ts src/main/ipc/handlers/__tests__/terminalCore.handler.test.ts src/renderer/components/Settings/__tests__/TerminalEngineSetting.test.tsx src/daemon/__tests__/sessionReattach.engines.os.test.ts
+        env:
+          # The module is built above: its rust cases must run, not skip.
+          WMUX_REQUIRE_RUST_CORE: '1'
       - name: Output interpretation contracts
         run: npx vitest run src/daemon/__tests__/OutputInterpreter.test.ts src/daemon/util/__tests__/outputModeTracker.test.ts src/main/pty/__tests__/OscParser.test.ts
       - name: Retain native verification evidence
@@ -69,6 +79,58 @@ jobs:
             out/native-soak-mismatch-*.json
             out/native-input-progress.json
           if-no-files-found: ignore
+  # The daemon's own tests on the rust engine, on Linux, against real shells:
+  # vitest.rust-engine.config.ts runs src/daemon with WMUX_TERMINAL_CORE=rust
+  # (and lists the files that assume the node engine). Among them,
+  # sessionReattach.engines.os.test.ts drives a real /bin/sh through
+  # DaemonSessionManager and SessionPipe: attach, reattach, the attach
+  # snapshot, a restart that restores the dumped ring, resize and exit.
+  linux-rust-daemon:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '>=24.21.0 <25'
+          cache: npm
+      - run: npm install -g npm@11
+      - run: npm ci
+      - name: Install Rust toolchain
+        run: rustup toolchain install stable --profile minimal
+      - name: Build the native terminal core
+        run: npm run build:terminal-core
+      - name: Daemon tests on the rust engine
+        # The absolute module path, as scripts/native-core-verify.mjs passes
+        # it. WMUX_REQUIRE_RUST_CORE turns a module that fails to load (the
+        # engine would fall back to node) into a failure instead of a pass.
+        run: WMUX_TERMINAL_CORE_MODULE="$PWD/core/wmux-term/dist/native-core/index.cjs" npx vitest run --config vitest.rust-engine.config.ts
+        env:
+          WMUX_TERMINAL_CORE: rust
+          WMUX_REQUIRE_RUST_CORE: '1'
+  # A red nightly opens (or comments on) the `Nightly red: <workflow>` issue
+  # and a green one closes it, as in runtime.yml; scripts/lib/ci-failure-issue.mjs
+  # has the rules. Scheduled runs only: a pull request's run is read on the PR.
+  report:
+    name: Report to issue
+    needs: linux-rust-daemon
+    if: always() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+      checks: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '>=24.21.0 <25'
+      - name: Open, update or close the nightly issue
+        run: node scripts/ci-failure-issue.mjs
+        env:
+          GH_TOKEN: ${{ github.token }}
   soak:
     if: github.event_name == 'workflow_dispatch' && inputs.soak
     strategy:
