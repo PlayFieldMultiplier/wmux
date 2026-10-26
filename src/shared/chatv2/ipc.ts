@@ -228,9 +228,11 @@ export const CHATV2_AGENT_CAPS: Readonly<Record<ChatV2Agent, {
    * the thread.
    */
   sharedServerThreads: boolean;
+  /** A new chat picks its model from the Claude list; without it the agent starts on its own default. */
+  claudeModels: boolean;
 }>> = {
-  claude: { bypass: true, terminalHandoff: true, sharedServerThreads: false },
-  codex: { bypass: false, terminalHandoff: false, sharedServerThreads: true },
+  claude: { bypass: true, terminalHandoff: true, sharedServerThreads: false, claudeModels: true },
+  codex: { bypass: false, terminalHandoff: false, sharedServerThreads: true, claudeModels: false },
 };
 
 /** `default` adds no permission flags; `bypass` = the agent's skip-permissions mode. */
