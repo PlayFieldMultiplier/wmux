@@ -34,10 +34,11 @@ import {
   toggleAgentToolbarPin,
 } from '../utils/commandActions';
 import { dictateIntoActivePane } from '../utils/paneDictation';
+import { addAt as addScrollbackBookmark } from '../components/Terminal/scrollbackBookmarks';
 
 // Lightweight bookmark toast — reuses the same DOM element pattern as showCopyToast
 let bookmarkToastTimer: ReturnType<typeof setTimeout> | null = null;
-function showBookmarkToast() {
+function showBookmarkToast(key: 'terminal.bookmarkAdded' | 'terminal.bookmarkAltScreen') {
   let el = document.getElementById('wmux-bookmark-toast');
   if (!el) {
     el = document.createElement('div');
@@ -45,7 +46,7 @@ function showBookmarkToast() {
     el.style.cssText = 'position:fixed;bottom:28px;left:50%;transform:translateX(-50%);background:var(--accent-yellow);color:var(--bg-base);font-family:monospace;font-size:11px;font-weight:600;padding:3px 12px;border-radius:4px;z-index:9999;pointer-events:none;opacity:0;transition:opacity 0.2s';
     document.body.appendChild(el);
   }
-  el.textContent = t('terminal.bookmarkAdded');
+  el.textContent = t(key);
   el.style.opacity = '1';
   if (bookmarkToastTimer) clearTimeout(bookmarkToastTimer);
   bookmarkToastTimer = setTimeout(() => { el!.style.opacity = '0'; }, 1200);
@@ -571,7 +572,6 @@ export function useKeyboard() {
       },
       // Scrollback bookmark at the current scroll position.
       addBookmark: () => {
-        const state = store.getState();
         const ws = activeWorkspace();
         if (!ws) return;
         const pane = findLeaf(ws.rootPane, ws.activePaneId);
@@ -580,9 +580,9 @@ export function useKeyboard() {
         if (!surface?.ptyId) return;
         const term = terminalRegistry.get(surface.ptyId);
         if (!term) return;
-        const line = term.buffer.active.baseY + term.buffer.active.viewportY;
-        state.addBookmark(surface.ptyId, line);
-        showBookmarkToast();
+        // A full-screen app's alternate screen has no scrollback to mark.
+        const added = addScrollbackBookmark(term, surface.ptyId, store);
+        showBookmarkToast(added ? 'terminal.bookmarkAdded' : 'terminal.bookmarkAltScreen');
       },
       toggleMessageFeed: () => { store.getState().toggleMessageFeed(); },
       toggleFileTree: () => { toggleFileTreePanel(store.getState()); },

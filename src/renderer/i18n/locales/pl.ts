@@ -1215,6 +1215,7 @@ export const pl = {
   'terminal.openPathBlocked': 'Plik wykonywalny zablokowany — otwarto folder nadrzędny',
   'terminal.openPathFailed': 'Nie udało się otworzyć — pokazuję folder',
   'terminal.bookmarkAdded': 'Dodano zakładkę',
+  'terminal.bookmarkAltScreen': 'Zakładki nie są dostępne w aplikacjach pełnoekranowych',
   'terminal.scrollToBottom': 'Przewiń na dół',
   'terminal.imeInputRecovered': 'Wejście klawiatury utknęło w IME i zostało automatycznie odzyskane',
 

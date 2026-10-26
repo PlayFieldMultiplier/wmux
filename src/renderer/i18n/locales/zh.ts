@@ -535,6 +535,7 @@ export const zh = {
   'terminal.openPathBlocked': '已阻止可执行文件 — 仅打开父文件夹',
   'terminal.openPathFailed': '无法打开 — 显示文件夹位置',
   'terminal.bookmarkAdded': '已添加书签',
+  'terminal.bookmarkAltScreen': '全屏应用中无法使用书签',
 
   // Context menu
   'contextMenu.copy': '复制',

@@ -1,27 +1,29 @@
 import { useEffect, useState, useCallback } from 'react';
 import type { Terminal } from '@xterm/xterm';
+import { rowsInView } from './scrollbackBookmarks';
 
 interface BookmarkIndicatorProps {
   terminal: Terminal | null;
-  bookmarks: number[]; // absolute line numbers (baseY + viewportY at time of creation)
+  ptyId: string | null;
+  bookmarks: number[]; // ids of the xterm markers (scrollbackBookmarks.ts)
   containerRef: React.RefObject<HTMLDivElement | null>;
 }
 
 /**
  * Renders small colored markers on the left edge of the terminal container
- * at the scroll positions where bookmarks were created.
+ * on the lines where bookmarks were created.
  *
- * Each marker is absolutely positioned. We translate from absolute buffer line
- * numbers to pixel offsets by using the terminal's current viewport metrics:
+ * Each bookmark is an xterm marker that follows its line as the buffer
+ * changes; rowsInView turns it into a viewport row:
  *
- *   visibleLine = absoluteLine - term.buffer.active.baseY
- *   pixelTop    = visibleLine * lineHeight
+ *   row      = marker.line - term.buffer.active.viewportY
+ *   pixelTop = row * lineHeight
  *
  * Lines outside the current viewport are not rendered (the marker would be
  * off-screen). We re-compute on every scroll event so markers track correctly
  * as the user scrolls.
  */
-export default function BookmarkIndicator({ terminal, bookmarks, containerRef }: BookmarkIndicatorProps) {
+export default function BookmarkIndicator({ terminal, ptyId, bookmarks, containerRef }: BookmarkIndicatorProps) {
   // Re-render whenever the terminal scrolls or the bookmarks list changes
   const [, forceUpdate] = useState(0);
 
@@ -38,7 +40,7 @@ export default function BookmarkIndicator({ terminal, bookmarks, containerRef }:
   // Also re-render when bookmarks array reference changes (handled by the
   // parent passing a new array reference via Zustand selector)
 
-  if (!terminal || bookmarks.length === 0) return null;
+  if (!terminal || !ptyId || bookmarks.length === 0) return null;
 
   const container = containerRef.current;
   if (!container) return null;
@@ -55,29 +57,16 @@ export default function BookmarkIndicator({ terminal, bookmarks, containerRef }:
   const lineHeight = screenEl ? screenEl.offsetHeight / rows : container.offsetHeight / rows;
   if (lineHeight <= 0) return null;
 
-  const baseY = terminal.buffer.active.baseY;
-  const viewportY = terminal.buffer.active.viewportY;
-
-  // Visible line range in absolute coordinates
-  const visibleTop = baseY + viewportY;
-  const visibleBottom = visibleTop + rows;
-
-  const markers: { top: number; absoluteLine: number }[] = [];
-
-  for (const absoluteLine of bookmarks) {
-    if (absoluteLine < visibleTop || absoluteLine >= visibleBottom) continue;
-    const rowInViewport = absoluteLine - visibleTop;
-    markers.push({
-      top: rowInViewport * lineHeight + lineHeight / 2 - 4, // center the 8px dot vertically in the row
-      absoluteLine,
-    });
-  }
+  const markers = rowsInView(terminal, ptyId, bookmarks).map(({ id, row }) => ({
+    top: row * lineHeight + lineHeight / 2 - 4, // center the 8px dot vertically in the row
+    id,
+  }));
 
   return (
     <>
-      {markers.map(({ top, absoluteLine }) => (
+      {markers.map(({ top, id }) => (
         <div
-          key={absoluteLine}
+          key={id}
           style={{
             position: 'absolute',
             left: 2,

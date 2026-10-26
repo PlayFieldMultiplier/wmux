@@ -1076,9 +1076,13 @@ export interface UISlice {
   ) => void;
 
   // ─── Scrollback bookmarks ─────────────────────────────────────────
+  /** ptyId → ids of the xterm markers that hold its scrollback bookmarks
+   *  (Ctrl+M). The markers themselves live in
+   *  components/Terminal/scrollbackBookmarks.ts, never here: immer freezes
+   *  what the store holds, and a frozen marker stops tracking its line. */
   terminalBookmarks: Record<string, number[]>;
-  addBookmark: (ptyId: string, line: number) => void;
-  removeBookmark: (ptyId: string, line: number) => void;
+  addBookmark: (ptyId: string, markerId: number) => void;
+  removeBookmark: (ptyId: string, markerId: number) => void;
   clearBookmarks: (ptyId: string) => void;
 
   // ─── Floating pane ────────────────────────────────────────────────
@@ -2543,20 +2547,19 @@ export const createUISlice: StateCreator<StoreState, [['zustand/immer', never]],
   // ─── Scrollback bookmarks ─────────────────────────────────────────
   terminalBookmarks: {},
 
-  addBookmark: (ptyId, line) => set((state) => {
+  addBookmark: (ptyId, markerId) => set((state) => {
     if (!state.terminalBookmarks[ptyId]) {
       state.terminalBookmarks[ptyId] = [];
     }
-    const lines = state.terminalBookmarks[ptyId];
-    if (!lines.includes(line)) {
-      lines.push(line);
-      lines.sort((a, b) => a - b);
-    }
+    const ids = state.terminalBookmarks[ptyId];
+    if (!ids.includes(markerId)) ids.push(markerId);
   }),
 
-  removeBookmark: (ptyId, line) => set((state) => {
+  removeBookmark: (ptyId, markerId) => set((state) => {
     if (!state.terminalBookmarks[ptyId]) return;
-    state.terminalBookmarks[ptyId] = state.terminalBookmarks[ptyId].filter((l) => l !== line);
+    const ids = state.terminalBookmarks[ptyId].filter((id) => id !== markerId);
+    if (ids.length > 0) state.terminalBookmarks[ptyId] = ids;
+    else delete state.terminalBookmarks[ptyId];
   }),
 
   clearBookmarks: (ptyId) => set((state) => {
