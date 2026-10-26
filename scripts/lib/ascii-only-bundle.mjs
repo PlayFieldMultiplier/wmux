@@ -121,6 +121,16 @@ export function firstWideChar(code) {
   return { at, codePoint: code.codePointAt(at), context: code.slice(Math.max(0, at - 40), at + 20) };
 }
 
+/** The build error for `hit` (from firstWideChar), which the rewrite above cannot reach, in `fileName`. */
+export function wideCharMessage(fileName, hit) {
+  return (
+    `${fileName} holds U+${hit.codePoint.toString(16).toUpperCase().padStart(4, '0')} at ${hit.at}: ${JSON.stringify(hit.context)}. ` +
+    'One character above U+00FF makes V8 keep the whole script as UTF-16, and this one sits where no rewrite keeps the code ' +
+    'the same: a String.raw or other tagged template, or the hashbang line. Write it as \\uXXXX in the source ' +
+    '(see scripts/lib/ascii-only-bundle.mjs).'
+  );
+}
+
 export function asciiOnlyBundle() {
   return {
     name: 'wmux-ascii-only-bundle',
@@ -141,12 +151,7 @@ export function asciiOnlyBundle() {
         // A worker script reaches the parent build as an asset.
         const code = file.type === 'chunk' ? file.code : typeof file.source === 'string' ? file.source : Buffer.from(file.source).toString('utf8');
         const hit = firstWideChar(code);
-        if (hit) {
-          this.error(
-            `${file.fileName} holds U+${hit.codePoint.toString(16).toUpperCase().padStart(4, '0')} at ${hit.at}: ${JSON.stringify(hit.context)}. ` +
-              'One character above U+00FF makes V8 keep the whole script as UTF-16; write it as a \\u escape (see scripts/lib/ascii-only-bundle.mjs).',
-          );
-        }
+        if (hit) this.error(wideCharMessage(file.fileName, hit));
       }
     },
   };

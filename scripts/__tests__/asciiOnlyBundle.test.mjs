@@ -1,6 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import { parseAst } from 'vite';
+import { mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { asciiOnlyBundle, escapeRegexLiteral, escapeRegexesAndComments } from '../lib/ascii-only-bundle.mjs';
+import { asciiOnlyFiles } from '../ascii-only-files.mjs';
 
 const isOneByte = (text) => !/[\u0100-\uffff]/.test(text);
 const NBSP = String.fromCharCode(0xa0);
@@ -113,5 +117,28 @@ describe('asciiOnlyBundle', () => {
   it('checks emitted worker scripts, which reach the parent build as assets', () => {
     const bundle = { 'w.js': { type: 'asset', fileName: 'w.js', source: new TextEncoder().encode('const s="→";') } };
     expect(() => asciiOnlyBundle().generateBundle.call({ error: fail }, {}, bundle)).toThrow(/w\.js holds U\+2192/);
+  });
+});
+
+describe('asciiOnlyFiles', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ascii-only-files-'));
+  const file = (name, code) => {
+    const path = join(dir, name);
+    writeFileSync(path, code);
+    return path;
+  };
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  it('rewrites a bundle in place, leaves a one-byte one untouched, and fails on what it cannot escape', () => {
+    const wide = file('wide.js', '// 한글 →\nconst r = /→/;\nif (r) return;\n');
+    const plain = file('plain.js', '// café\n');
+    utimesSync(plain, 1000, 1000);
+    const raw = file('raw.js', 'const s = String.raw`→`;\n');
+
+    expect(() => asciiOnlyFiles([wide, plain])).not.toThrow();
+    expect(readFileSync(wide, 'utf8')).toBe('// \\ud55c\\uae00 \\u2192\nconst r = /\\u2192/;\nif (r) return;\n');
+    expect(statSync(plain).mtimeMs).toBe(1_000_000);
+    expect(() => asciiOnlyFiles([raw])).toThrow(/raw\.js holds U\+2192 .*String\.raw/);
+    expect(readFileSync(raw, 'utf8')).toBe('const s = String.raw`→`;\n');
   });
 });

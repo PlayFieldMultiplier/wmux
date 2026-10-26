@@ -20,6 +20,7 @@ import {
   resolveReplBrowser,
 } from '../tools';
 import { BROWSER_REPL_TOOLS, REPL_RUN_BROWSER_TOOLS } from '../../browser-repl/bridge';
+import { BROWSER_REPL_WORKER_SOURCE } from '../../browser-repl/workerSource';
 import type { CollectedTool } from '../../playwright/toolCollector';
 import { REPL_RUNNER_SOURCE, buildRunnerBootstrap } from '../replRunnerSource';
 import { DEFAULT_SESSION_NAME, isValidSessionName } from '../replRegistry';
@@ -246,6 +247,13 @@ describe('repl_run browser binding', () => {
     const base64 = Buffer.from(REPL_RUNNER_SOURCE, 'utf8').toString('base64');
     expect(base64.length).toBeLessThanOrEqual(17_600);
     expect(buildRunnerBootstrap()).toContain(base64);
+  });
+
+  it('keeps both child-program sources one-byte, since esbuild cannot escape a String.raw', () => {
+    // Write such a character as \uXXXX inside the child's own string literals
+    // (build:mcp fails otherwise; scripts/ascii-only-files.mjs).
+    expect(REPL_RUNNER_SOURCE).not.toMatch(/[\u0100-\uffff]/);
+    expect(BROWSER_REPL_WORKER_SOURCE).not.toMatch(/[\u0100-\uffff]/);
   });
 
   it('names the browser object in the description without spending the budget', () => {
