@@ -118,10 +118,16 @@ const RESOLVE_SUFFIXES = ['', '.ts', '.tsx', '.mts', '.mjs', '.js', '/index.ts',
 
 const toPosix = (p) => p.split(path.sep).join('/');
 
-/** Source with each one-line string literal (and template) emptied to `''`. */
-export const stripStrings = (text) => text.replace(/'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`/g, "''");
-/** Source without its comments; run stripStrings first, or a `//` in a URL counts. */
-export const stripComments = (text) => text.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '');
+/** One line with each string literal (and template) emptied to `''`. */
+export const stripStrings = (line) => line.replace(/'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`/g, "''");
+// Strings and comments in one left-to-right pass: whichever opens first owns
+// the text up to its end. A `//` in a URL stays inside its string, and a
+// backtick in a comment stays inside the comment instead of opening a
+// template that runs on to the next backtick lines below. A real template
+// literal still spans its lines.
+const STRING_OR_COMMENT = /'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`|\/\*[\s\S]*?\*\/|\/\/[^\n]*/g;
+/** Source without its comments, and with each string literal emptied to `''`. */
+export const stripStringsAndComments = (text) => text.replace(STRING_OR_COMMENT, (m) => (m[0] === '/' ? '' : "''"));
 const IN_TESTS_DIR = /(?:^|\/)__tests__\//;
 const TEST_SOURCE = /\.test\.[^/]+$/;
 // A relative specifier that can reach a helper: src/test-utils, a __tests__
@@ -160,11 +166,11 @@ export function isTypeOnlyImport(source, index) {
   const window = source.slice(Math.max(0, index - 2000), index);
   // Fast path: a type-only import names `type` after the statement before it.
   if (!/\btype\b/.test(window.slice(window.lastIndexOf(';') + 1))) return false;
-  // Strings, then comments, go first (a `//` in a URL is no comment), and the
+  // Strings and comments go first (stripStringsAndComments), and the
   // statement starts at the last `import` or `export` word: that word in a
   // comment or inside a name is no statement start, and `export ... from`
   // is a statement of its own.
-  const before = stripComments(stripStrings(window));
+  const before = stripStringsAndComments(window);
   const starts = [...before.matchAll(/\b(?:import|export)\b/g)];
   if (starts.length === 0) return false;
   const stmt = before.slice(starts[starts.length - 1].index);

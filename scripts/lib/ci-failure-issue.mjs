@@ -158,16 +158,23 @@ function readJobs(gh, { repo, runId }) {
 /**
  * The newest green run of this workflow on this branch, or 0. A red run that
  * finishes after a newer run already came back green reports a state the
- * branch has left, so it files nothing. A pull request run is not one of the
- * branch's: a fork's branch may be named `main` too.
+ * branch has left, so it files nothing. Only the branch's own runs count,
+ * asked for by event so GitHub filters them: a pull request run is not one,
+ * as a fork's branch may be named `main` too. A nightly-only workflow has no
+ * push runs, so its scheduled and manual runs count as well.
  */
+const OWN_RUN_EVENTS = ['push', 'schedule', 'workflow_dispatch'];
+
 export function newestGreenRun(gh, { repo, workflow, branch }) {
   if (!branch) return 0;
-  const out = gh(['run', 'list', '-R', repo, '--workflow', workflow, '--branch', branch,
-    '--status', 'success', '--limit', '20', '--json', 'databaseId,event']);
-  const runs = parseJson(out || '[]', 'gh run list');
-  const own = runs.find((run) => run.event !== 'pull_request' && run.event !== 'pull_request_target');
-  return own ? Number(own.databaseId) || 0 : 0;
+  let newest = 0;
+  for (const event of OWN_RUN_EVENTS) {
+    const out = gh(['run', 'list', '-R', repo, '--workflow', workflow, '--branch', branch, '--event', event,
+      '--status', 'success', '--limit', '1', '--json', 'databaseId']);
+    const runs = parseJson(out || '[]', 'gh run list');
+    if (runs.length > 0) newest = Math.max(newest, Number(runs[0].databaseId) || 0);
+  }
+  return newest;
 }
 
 const TIMED_OUT = /exceeded the maximum execution time/i;

@@ -14,12 +14,13 @@ name: Windows full suite
 #   range of merges. A newer push cancels the run in flight, so a burst of
 #   merges costs two Windows runners once;
 # - on a ready (non-draft) pull request that touches scripts/, a vite or
-#   vitest config, the shared test setup (src/test-utils/), .gitattributes or
-#   this file. Those load into every suite, but their own tests sit in the
-#   unit lane, which a pull request runs on Linux only; a CRLF checkout broke
-#   them on Windows alone (#2769). Such a run takes only the unit lane (ci.yml
-#   already runs the integration lane on Windows) and skips the firewall
-#   round trip: two Windows shards, up to about 10 minutes each, per push;
+#   vitest config, the shared test setup (src/test-utils/), .gitattributes,
+#   package.json or its lockfile, or this file. Those load into every suite
+#   (or, for a vite or vitest upgrade, change the transform itself), but
+#   their own tests sit in the unit lane, which a pull request runs on Linux
+#   only; a CRLF checkout broke them on Windows alone (#2769). Such a run
+#   takes only the unit lane (ci.yml already runs the integration lane on
+#   Windows) and skips the firewall round trip: two Windows shards per push.
 # - on demand: `gh workflow run windows.yml --ref <branch>` for a pull request
 #   that touches platform code without saying win32.
 #
@@ -42,6 +43,9 @@ on:
       - 'src/test-utils/**'
       - '.gitattributes'
       - '.github/workflows/windows.yml'
+      # A vite or vitest upgrade changes the transform itself (#2769).
+      - 'package.json'
+      - 'package-lock.json'
   workflow_dispatch:
 
 permissions:

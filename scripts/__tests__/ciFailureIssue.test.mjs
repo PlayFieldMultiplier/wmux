@@ -46,9 +46,13 @@ function fakeGh({
   const calls = [];
   const gh = (args, options = {}) => {
     calls.push({ args, options });
-    // A green run is an id (a push or nightly run) or { databaseId, event }.
+    // A green run is an id (a push run) or { databaseId, event }, newest
+    // first; GitHub filters them by `--event` and cuts them at `--limit`.
     if (args[0] === 'run' && args[1] === 'list') {
-      return JSON.stringify(greenRuns.map((run) => (typeof run === 'number' ? { databaseId: run, event: 'push' } : run)));
+      const runs = greenRuns.map((run) => (typeof run === 'number' ? { databaseId: run, event: 'push' } : run));
+      const event = args.includes('--event') ? args[args.indexOf('--event') + 1] : null;
+      const limit = Number(args[args.indexOf('--limit') + 1]);
+      return JSON.stringify(runs.filter((run) => !event || run.event === event).slice(0, limit).map(({ databaseId }) => ({ databaseId })));
     }
     if (args[0] === 'api') {
       expect(args.slice(0, 2)).toEqual(['api', '--paginate']);
@@ -271,15 +275,22 @@ describe('report --state auto (the report job)', () => {
     const fake = fakeGh({ issues: [], jobs: [RED, REPORT], greenRuns: [57] });
     expect(report({ env: ENV, gh: fake.gh })).toBe('none');
     expect(fake.writes()).toEqual([]);
-    expect(fake.calls.find((c) => c.args[1] === 'list' && c.args[0] === 'run').args).toEqual([
-      'run', 'list', '-R', 'acme/app', '--workflow', 'Runtime suite', '--branch', 'main',
-      '--status', 'success', '--limit', '20', '--json', 'databaseId,event',
-    ]);
+    expect(fake.calls.filter((c) => c.args[1] === 'list' && c.args[0] === 'run').map((c) => c.args)).toEqual(
+      ['push', 'schedule', 'workflow_dispatch'].map((event) => [
+        'run', 'list', '-R', 'acme/app', '--workflow', 'Runtime suite', '--branch', 'main', '--event', event,
+        '--status', 'success', '--limit', '1', '--json', 'databaseId',
+      ]),
+    );
   });
 
   it('a green pull request run from a branch named main does not make a red main run stale', () => {
     const fake = fakeGh({ issues: [], jobs: [RED, REPORT], greenRuns: [{ databaseId: 57, event: 'pull_request' }, 40] });
     expect(report({ env: ENV, gh: fake.gh })).toBe('created');
+  });
+
+  it('a newer green nightly run makes a red run stale on a workflow with no push runs', () => {
+    const fake = fakeGh({ issues: [], jobs: [RED, REPORT], greenRuns: [{ databaseId: 57, event: 'schedule' }] });
+    expect(report({ env: ENV, gh: fake.gh })).toBe('none');
   });
 
   it('reports a red run newer than the last green one', () => {
