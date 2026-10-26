@@ -43,6 +43,9 @@ export interface FakeRelease {
 export interface FakeRun {
   status: string;
   conclusion: string | null;
+  /** The ref whose check suite the run is in: `main` when unset; null for
+   *  a suite an app made with no branch. */
+  suiteBranch?: string | null;
 }
 
 export interface FakeWorkflowRun extends FakeRun {
@@ -57,6 +60,11 @@ export interface FakeWorkflowRun extends FakeRun {
 }
 
 const NOT_FOUND: GhActAnswer = { ok: false, kind: 'http', status: 404, message: 'gh: Not Found (HTTP 404)' };
+
+/** A check suite's id: one suite per ref (null: an app's, with no branch). */
+function suiteId(branch: string | null): number {
+  return branch === null ? 1 : 1000 + [...branch].reduce((n, c) => (n * 31 + c.charCodeAt(0)) % 100_000, 7);
+}
 
 /** A file's blob sha: a hash of its path (the fake's files do not change). */
 function blobOf(file: string): string {
@@ -198,9 +206,14 @@ export class FakeGithub implements GhActPort {
     }
     m = /^repos\/o\/r\/commits\/([0-9a-f]{40})$/.exec(path);
     if (m) return this.known(m[1]) ? { ok: true, value: { sha: m[1] } } : { ok: false, kind: 'http', status: 422, message: 'gh: No commit found for SHA (HTTP 422)' };
+    m = /^repos\/o\/r\/commits\/([0-9a-f]{40})\/check-suites$/.exec(path);
+    if (m) {
+      const branches = [...new Set((this.checkRuns.get(m[1]) ?? []).map((r) => (r.suiteBranch === undefined ? 'main' : r.suiteBranch)))];
+      return { ok: true, value: { total_count: branches.length, check_suites: page(branches.map((b) => ({ id: suiteId(b), head_branch: b, head_sha: m?.[1] }))) } };
+    }
     m = /^repos\/o\/r\/commits\/([0-9a-f]{40})\/check-runs$/.exec(path);
     if (m) {
-      const runs = this.checkRuns.get(m[1]) ?? [];
+      const runs = (this.checkRuns.get(m[1]) ?? []).map((r) => ({ status: r.status, conclusion: r.conclusion, check_suite: { id: suiteId(r.suiteBranch === undefined ? 'main' : r.suiteBranch) } }));
       return { ok: true, value: { total_count: runs.length, check_runs: page(runs) } };
     }
     m = /^repos\/o\/r\/commits\/([0-9a-f]{40})\/status$/.exec(path);

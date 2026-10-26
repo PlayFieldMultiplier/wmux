@@ -9,6 +9,7 @@
 
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
+import fsDefault from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -222,12 +223,12 @@ describe('a release card', () => {
   it('the card says what the checks are when the bot asks: failed, running, not started', async () => {
     const r = rig();
     r.gh.checkRuns.set(C3, [{ status: 'completed', conclusion: 'failure' }]);
-    expect(r.cardBody((await r.ask()).cardId)).toContain('Checks on 3333333: one failed; wmux does not publish while a check fails.');
+    expect(r.cardBody((await r.ask()).cardId)).toContain('Checks on 3333333: one did not pass; approving now is refused, and the bot asks again once they pass.');
     r.gh.checkRuns.set(C2, [{ status: 'in_progress', conclusion: null }]);
-    expect(r.cardBody((await r.ask({ targetSha: C2, clientRequestId: 'k2' })).cardId)).toContain('Checks on 2222222: still running');
+    expect(r.cardBody((await r.ask({ targetSha: C2, clientRequestId: 'k2' })).cardId)).toContain('Checks on 2222222: still running; approving now is refused, and the bot asks again once they pass.');
     r.gh.checkRuns.delete(C1);
     r.gh.files.set('.github/workflows/ci.yml', CI_YML);
-    expect(r.cardBody((await r.ask({ targetSha: C1, clientRequestId: 'k3' })).cardId)).toContain('Checks on 1111111: not started yet');
+    expect(r.cardBody((await r.ask({ targetSha: C1, clientRequestId: 'k3' })).cardId)).toContain('Checks on 1111111: not started yet; approving now is refused, and the bot asks again once they pass.');
   });
 });
 
@@ -409,23 +410,16 @@ describe('publishing a release (release mode)', () => {
 });
 
 describe('pushing a tag (workflow mode)', () => {
-  it('one write, the tag ref alone; the done card says the workflow is building it and links its run', async () => {
+  it('one write, the tag ref alone; the done card says the workflow is building it and links the tag\'s runs', async () => {
     const r = rig({ workflow: true });
     const req = await r.ask();
-    r.gh.onWrite = () => r.gh.workflowRuns.push({ head_sha: C3, event: 'push', head_branch: TAG, status: 'queued', conclusion: null, html_url: 'https://github.com/o/r/actions/runs/77' });
     await r.run(req);
     expect(r.gh.writes).toEqual([{ method: 'POST', endpoint: 'repos/o/r/git/refs', body: { ref: `refs/tags/${TAG}`, sha: C3 } }]);
     expect(r.gh.tags.get(TAG)).toEqual({ sha: C3 });
     expect(r.gh.releases).toEqual([]);
-    expect(r.outcome(req.requestId)).toMatchObject({ kind: 'status', title: `Tag pushed — the release workflow is building it (${TAG} on o/r, approved by you)`, body: 'https://github.com/o/r/actions/runs/77' });
-  });
-
-  it('a run that cannot be read yet: done all the same, with no link', async () => {
-    const r = rig({ workflow: true });
-    const req = await r.ask();
-    await r.run(req);
-    expect(r.svc.get(req.requestId)).toMatchObject({ state: 'executed', result: { url: '' } });
-    expect(r.outcome(req.requestId)?.body).toBeUndefined();
+    expect(r.outcome(req.requestId)).toMatchObject({ kind: 'status', title: `Tag pushed — the release workflow is building it (${TAG} on o/r, approved by you)`, body: 'https://github.com/o/r/actions?query=event%3Apush+branch%3Av1.2.3' });
+    // The link needs no read: GitHub makes the run a moment after the push.
+    expect(r.gh.reads.filter((e) => e.includes('actions/runs') && e.includes(`branch=${TAG}`))).toEqual([]);
   });
 
   it('a 422 "already exists" is tag-taken and sends nothing more', async () => {
@@ -441,8 +435,9 @@ describe('pushing a tag (workflow mode)', () => {
 });
 
 describe('what is read again right before the write', () => {
-  const refusedBeforeAnyWrite = async (mutate: (r: ReturnType<typeof rig>) => void, refusal: string, workflow = false) => {
+  const refusedBeforeAnyWrite = async (mutate: (r: ReturnType<typeof rig>) => void, refusal: string, workflow = false, before?: (r: ReturnType<typeof rig>) => void) => {
     const r = rig({ workflow });
+    before?.(r);
     const req = await r.ask(NOTES);
     mutate(r);
     await r.run(req);
@@ -468,7 +463,7 @@ describe('what is read again right before the write', () => {
     await refusedBeforeAnyWrite((r) => { r.gh.checkRuns.set(C3, [{ status: 'completed', conclusion: 'failure' }]); }, 'checks-failing');
     await refusedBeforeAnyWrite((r) => { r.gh.statuses.set(C3, { state: 'failure', total_count: 1 }); }, 'checks-failing');
     await refusedBeforeAnyWrite((r) => { r.gh.checkRuns.set(C3, [{ status: 'in_progress', conclusion: null }]); }, 'checks-pending', true);
-    await refusedBeforeAnyWrite((r) => { r.gh.checkRuns.delete(C3); r.gh.files.set('.github/workflows/ci.yml', CI_YML); }, 'checks-not-started');
+    await refusedBeforeAnyWrite((r) => { r.gh.checkRuns.delete(C3); }, 'checks-not-started', false, (r) => r.gh.files.set('.github/workflows/ci.yml', CI_YML));
     // A repository without CI releases.
     const r = rig();
     r.gh.checkRuns.delete(C3);
@@ -607,7 +602,7 @@ describe('a try that may have run, settled by a read', () => {
     expect(r.svc.get(req.requestId)?.state).toBe('executed');
   });
 
-  it('a try given back once its draft exists stays counted: a restart keeps the approval, and the draft is published, never a second one', async () => {
+  it('a try given back once its draft exists keeps the row claimed: a restart keeps the approval, and the draft is published, never a second one', async () => {
     const r = rig();
     const req = await r.ask(NOTES);
     let first = true;
@@ -620,7 +615,7 @@ describe('a try that may have run, settled by a read', () => {
     await r.run(req);
     const id = actEffectId(req.requestId);
     const draft = r.gh.releases[0]?.id;
-    expect(r.effects.get(id)).toMatchObject({ status: 'pending', attempt: 1, reason: 'rate-limited', draftId: draft });
+    expect(r.effects.get(id)).toMatchObject({ status: 'pending', attempt: 0, reason: 'rate-limited', draftId: draft });
     // A restart: the request is not handed back to the owner, its row stays.
     const again = new ApprovalService(r.ports);
     again.resume();
@@ -669,7 +664,7 @@ describe('a release row\'s draft is never left behind', () => {
     await r.run(req);
     r.gh.onWrite = null;
     const id = actEffectId(req.requestId);
-    expect(r.effects.get(id)).toMatchObject({ status: 'pending', attempt: 1, draftId: r.gh.releases[0]?.id });
+    expect(r.effects.get(id)).toMatchObject({ status: 'pending', attempt: 0, draftId: r.gh.releases[0]?.id });
     return { r, req, id };
   };
 
@@ -716,12 +711,17 @@ describe('a release row\'s draft is never left behind', () => {
     expect(r.gh.releases).toEqual([]);
   });
 
-  it('a try given back once the draft exists (a login not read now) keeps its count', async () => {
-    const { r, id } = await drafted();
+  it('tries given back once the draft exists (a login not read now, three times) use up none: the release still goes out', async () => {
+    const { r, req, id } = await drafted();
     r.gh.answerRead = (e) => (e === 'user' ? { ok: false, kind: 'rate-limited', message: 'GitHub rate limit' } : null);
+    for (let i = 0; i < 3; i += 1) {
+      await r.sweep();
+      expect(r.effects.get(id)).toMatchObject({ status: 'pending', attempt: 0, reason: 'read-failed', draftId: r.gh.releases[0]?.id });
+    }
+    r.gh.answerRead = null;
     await r.sweep();
-    expect(r.effects.get(id)).toMatchObject({ status: 'pending', attempt: 2, reason: 'read-failed' });
-    expect(r.gh.releases).toHaveLength(1);
+    expect(r.svc.get(req.requestId)?.state).toBe('executed');
+    expect(r.gh.writes.map((w) => w.method)).toEqual(['POST', 'PATCH', 'PATCH']);
   });
 
   it('a draft identical to the act, made by the owner before this act wrote anything, is not adopted: release-exists, and it stays', async () => {
@@ -788,10 +788,99 @@ describe('pushing a tag that exists already', () => {
     const req = await r.ask();
     r.gh.onWrite = () => {
       r.gh.tags.set(TAG, { sha: C3 });
-      r.gh.workflowRuns.push({ head_sha: C3, event: 'push', head_branch: TAG, status: 'queued', conclusion: null, html_url: 'https://github.com/o/r/actions/runs/78' });
+
     };
     await r.run(req);
-    expect(r.svc.get(req.requestId)).toMatchObject({ state: 'executed', result: { url: 'https://github.com/o/r/actions/runs/78' } });
+    expect(r.svc.get(req.requestId)).toMatchObject({ state: 'executed', result: { url: 'https://github.com/o/r/actions?query=event%3Apush+branch%3Av1.2.3' } });
     expect(r.gh.writes).toHaveLength(1);
+  });
+});
+
+/** Make the next write of the act outbox's file fail, once. */
+function failNextOutboxWrite(): () => void {
+  const realWrite = fsDefault.writeFileSync;
+  let failed = false;
+  const spy = vi.spyOn(fsDefault, 'writeFileSync').mockImplementation(((file: fs.PathOrFileDescriptor, ...rest: unknown[]) => {
+    if (!failed && typeof file === 'string' && path.basename(file).startsWith('act-effects')) {
+      failed = true;
+      throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+    }
+    return (realWrite as (...a: unknown[]) => void)(file, ...rest);
+  }) as typeof fsDefault.writeFileSync);
+  return () => spy.mockRestore();
+}
+
+describe('code review round', () => {
+  it('a tag-push run on the same commit (after a publish that made the tag) does not hold the release, nor a beta tag\'s failed run', async () => {
+    const r = rig();
+    const req = await r.ask(NOTES);
+    // The tag's own CI on the commit failed; the branch's run passed.
+    r.gh.workflowRuns.push(
+      { head_sha: C3, event: 'push', head_branch: 'main', status: 'completed', conclusion: 'success', html_url: 'https://github.com/o/r/actions/runs/1', workflow_id: 4, id: 1 },
+      { head_sha: C3, event: 'push', head_branch: 'v1.2.3-beta.1', status: 'completed', conclusion: 'failure', html_url: 'https://github.com/o/r/actions/runs/2', workflow_id: 4, id: 2 },
+    );
+    r.gh.checkRuns.set(C3, [{ status: 'completed', conclusion: 'success' }, { status: 'completed', conclusion: 'failure', suiteBranch: 'v1.2.3-beta.1' }]);
+    await r.run(req);
+    expect(r.svc.get(req.requestId)?.state).toBe('executed');
+  });
+
+  it('a found draft is journaled before the row is settled: a journal that fails settles nothing, and the next read deletes the draft', async () => {
+    const r = rig();
+    const req = await r.ask(NOTES);
+    // The draft landed, its answer never reached the journal.
+    r.gh.nextWrite = { answer: { ok: false, kind: 'error', message: 'killed' }, landed: true };
+    await r.run(req);
+    const id = actEffectId(req.requestId);
+    expect(r.effects.get(id)?.draftId).toBeUndefined();
+    r.gh.tags.set(TAG, { sha: C2 });
+    vi.setSystemTime(Date.now() + RECONCILE_AFTER_MS + 1);
+    const undo = failNextOutboxWrite();
+    try {
+      await r.executor.reconcileAll();
+    } finally {
+      undo();
+    }
+    expect(r.effects.get(id)?.status).toBe('uncertain');
+    expect(r.gh.releases).toHaveLength(1);
+    await r.executor.reconcileAll();
+    expect(r.svc.get(req.requestId)).toMatchObject({ state: 'refused', refusal: 'tag-taken' });
+    expect(r.gh.releases).toEqual([]);
+  });
+
+  it('an answer GitHub gave in a shape this build cannot read refuses as unreadable-answer, never gh-200', async () => {
+    const r = rig();
+    const req = await r.ask(NOTES);
+    r.gh.answerRead = (e) => (e === `repos/o/r/commits/${C3}/status` ? { ok: true, value: { state: 'success' } } : null);
+    await r.run(req);
+    expect(r.svc.get(req.requestId)).toMatchObject({ state: 'refused', refusal: 'unreadable-answer' });
+    expect(r.outcome(req.requestId)?.title).toMatch(/GitHub answered something wmux cannot read/);
+  });
+
+  it('a try reads no workflow file again: what the workflows expect of the checks was read with the request', async () => {
+    const r = rig();
+    r.gh.files.set('.github/workflows/ci.yml', CI_YML);
+    const req = await r.ask(NOTES);
+    expect(actOf(r, req.requestId)).toMatchObject({ checksExpected: true });
+    const before = r.gh.reads.length;
+    await r.run(req);
+    const during = r.gh.reads.slice(before);
+    expect(during.filter((e) => e.includes('/git/blobs/') || e.includes('/contents'))).toEqual([]);
+    expect(r.svc.get(req.requestId)?.state).toBe('executed');
+  });
+
+  it('a request lists the root once for package.json and package-lock.json', async () => {
+    const r = rig();
+    r.gh.files.set('package-lock.json', JSON.stringify({ version: '1.2.3', packages: { '': { version: '1.2.3' } } }));
+    const before = r.gh.reads.length;
+    await r.ask(NOTES);
+    expect(r.gh.reads.slice(before).filter((e) => /^repos\/o\/r\/contents\?ref=/.test(e))).toHaveLength(1);
+  });
+
+  it('a workflow that only leaves some tags out is no release workflow: the release is published, and the card says it also runs', async () => {
+    const r = rig();
+    r.gh.files.set('.github/workflows/ci.yml', 'on:\n  push:\n    tags-ignore: ["*-rc*"]\n');
+    const req = await r.ask(NOTES);
+    expect(actOf(r, req.requestId)).toMatchObject({ mode: 'release', workflows: [] });
+    expect(r.cardBody(req.cardId)).toContain('\n.github/workflows/ci.yml also runs on this tag push.\n');
   });
 });

@@ -121,8 +121,13 @@ describe('which workflows run on a push', () => {
     // tags-ignore leaves this tag in is one.
     const skipsTags = { path: '.github/workflows/ci.yml', push: { branches: ['main'], tagsIgnore: ['**'] } };
     expect(releaseMode([skipsTags], 'v1')).toEqual({ mode: 'release' });
-    expect(releaseMode([{ path: '.github/workflows/rc.yml', push: { tagsIgnore: ['*-rc*'] } }], 'v1')).toEqual({ mode: 'workflow', workflows: ['.github/workflows/rc.yml'] });
-    expect(releaseMode([{ path: '.github/workflows/rc.yml', push: { tagsIgnore: ['*-rc*'] } }], 'v1-rc1')).toEqual({ mode: 'release' });
+    // A workflow that only leaves some tags out runs on this one too, but is
+    // no release workflow: Mode W needs a tags list that takes the tag.
+    const leavesOut = { path: '.github/workflows/rc.yml', push: { tagsIgnore: ['*-rc*'] } };
+    expect(releaseMode([leavesOut], 'v1')).toEqual({ mode: 'release' });
+    expect(alsoOnTagPush([leavesOut], 'v1')).toEqual(['.github/workflows/rc.yml']);
+    expect(releaseMode([leavesOut], 'v1-rc1')).toEqual({ mode: 'release' });
+    expect(alsoOnTagPush([leavesOut], 'v1-rc1')).toEqual([]);
     // The workflows with no filter run on the tag push too: named on the card.
     expect(alsoOnTagPush([ci, rel, skipsTags], 'v1')).toEqual(['.github/workflows/ci.yml']);
   });
@@ -186,7 +191,7 @@ describe('the versions at the commit', () => {
 
 describe('the bodies main sends', () => {
   const act: ApprovalReleaseAct = {
-    kind: 'release', mode: 'release', tagName: 'v1.2.3', targetSha: C3, defaultBranch: 'main', title: 'wmux 1.2.3', notes: 'Fixes.', prerelease: false, workflows: [], draft: false,
+    kind: 'release', mode: 'release', tagName: 'v1.2.3', targetSha: C3, defaultBranch: 'main', title: 'wmux 1.2.3', notes: 'Fixes.', prerelease: false, workflows: [], checksExpected: false, draft: false,
   };
   it('a draft, then publishing it with make_latest as one of two constants; a tag ref alone', () => {
     expect(draftBody(act)).toEqual({ tag_name: 'v1.2.3', target_commitish: C3, name: 'wmux 1.2.3', body: 'Fixes.', draft: true, prerelease: false });
@@ -222,7 +227,7 @@ describe('what a release request reads', () => {
   it('pins the default branch\'s head and states the facts the card shows', async () => {
     const gh = github();
     expect(await readReleaseAsk(gh, 'github.com/o/r', { tagName: 'v1.2.3' })).toEqual({
-      mode: 'release', workflows: [], alsoRuns: [], targetSha: C3, defaultBranch: 'main', behindBy: 0, checks: 'passed', version: '1.2.3', prerelease: false,
+      mode: 'release', workflows: [], alsoRuns: [], targetSha: C3, defaultBranch: 'main', behindBy: 0, checks: 'passed', version: '1.2.3', prerelease: false, checksExpected: false,
     });
     expect(await readReleaseAsk(gh, 'github.com/o/r', { tagName: 'v1.2.3', targetSha: C1, prerelease: true })).toMatchObject({ targetSha: C1, behindBy: 2, prerelease: true });
     gh.files.set('.github/workflows/release.yml', RELEASE_YML);
@@ -347,5 +352,29 @@ describe('what a release request reads', () => {
     gh.tags.set('v1', { sha: C2, annotated: true });
     expect(await readTagTarget(gh, P, 'v1')).toBe(C2);
     expect(await readTagTarget(gh, P, 'v2')).toBeNull();
+  });
+});
+
+describe('the checks as the default branch ran them', () => {
+  it('a tag pushed on the same commit (its runs and check runs) says nothing about the commit on the branch', async () => {
+    const gh = github();
+    // Green on main; a beta tag's release workflow failed on the same commit.
+    gh.checkRuns.set(C3, [{ status: 'completed', conclusion: 'success' }, { status: 'completed', conclusion: 'failure', suiteBranch: 'v1.2.3-beta.1' }]);
+    gh.workflowRuns.push(
+      { head_sha: C3, event: 'push', head_branch: 'main', status: 'completed', conclusion: 'success', html_url: 'https://github.com/o/r/actions/runs/1', workflow_id: 9, id: 1 },
+      { head_sha: C3, event: 'push', head_branch: 'v1.2.3-beta.1', status: 'completed', conclusion: 'failure', html_url: 'https://github.com/o/r/actions/runs/2', workflow_id: 9, id: 2 },
+    );
+    expect(await readReleaseAsk(gh, 'github.com/o/r', { tagName: 'v1.2.3' })).toMatchObject({ checks: 'passed' });
+    // An app's suite with no branch counts.
+    gh.checkRuns.set(C3, [{ status: 'completed', conclusion: 'success' }, { status: 'in_progress', conclusion: null, suiteBranch: null }]);
+    expect(await readReleaseAsk(gh, 'github.com/o/r', { tagName: 'v1.2.3' })).toMatchObject({ checks: 'running' });
+  });
+
+  it('an answer GitHub gave in a shape this build cannot read refuses as unreadable-answer, never gh-200', async () => {
+    const gh = github();
+    gh.answerRead = (e) => (e === `repos/o/r/commits/${C3}/status` ? { ok: true, value: { state: 'success' } } : null);
+    const a = await readReleaseAsk(gh, 'github.com/o/r', { tagName: 'v1.2.3' });
+    expect(a).toMatchObject({ refuse: 'read_failed' });
+    expect(JSON.stringify(a)).not.toContain('200');
   });
 });
