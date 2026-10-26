@@ -114,6 +114,11 @@ warning.
   its fixed address there is the only one wmux accepts. Requests from the
   network's gateway or from inside the container itself never count, so a
   terminal in the container cannot pose as the proxy.
+- **Wiring your own proxy.** The address you trust must be one that every
+  connection reaches only through the sign-in. That rules out a TCP
+  passthrough, a NAT or gateway address, or a tunnel: through any of them,
+  every client looks like the proxy. Your proxy must also remove the
+  identity header from the browser's request before it sets its own.
 - **The token still works.** The token address remains a fallback, for
   example for a script. Read the token with
   `docker compose -f compose.example.yaml exec alice wmux web --status`. Open

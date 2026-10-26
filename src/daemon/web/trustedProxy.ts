@@ -216,6 +216,10 @@ export function decideTrustedProxy(
     const origin = rawHeaderValues(req.rawHeaders, 'origin');
     if (origin.length === 0) return refused('origin-missing');
     if (origin.length > 1 || !originMatchesHost(origin[0], req.hostHeader)) return refused('origin-not-allowed');
+    // A write must prove it came from this page. Origin alone cannot: a
+    // browser without Fetch Metadata may send a cross-scheme form post whose
+    // Origin names this host over http. Every browser that runs the app sends it.
+    if (site.length !== 1 || site[0] !== 'same-origin') return refused('cross-site');
   }
   return { kind: 'accepted', user: config.user };
 }

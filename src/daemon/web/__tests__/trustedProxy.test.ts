@@ -40,7 +40,7 @@ describe('decideTrustedProxy', () => {
     ['sec-fetch-site same-origin', request({}, ['Sec-Fetch-Site', 'same-origin']), accepted],
     ['sec-fetch-site none', request({}, ['Sec-Fetch-Site', 'none']), accepted],
     ['a POST whose Origin matches Host with a port',
-      withHeaders(['X-Auth-Request-Email', 'me@example.com', 'Origin', 'https://wmux.example.com:8443'], { method: 'POST', hostHeader: 'wmux.example.com:8443' }),
+      withHeaders(['X-Auth-Request-Email', 'me@example.com', 'Origin', 'https://wmux.example.com:8443', 'Sec-Fetch-Site', 'same-origin'], { method: 'POST', hostHeader: 'wmux.example.com:8443' }),
       accepted],
     ['a HEAD without Origin', request({ method: 'HEAD' }), accepted],
 
@@ -65,6 +65,8 @@ describe('decideTrustedProxy', () => {
     ['sec-fetch-site same-site', request({}, ['Sec-Fetch-Site', 'same-site']), refused('cross-site')],
     ['sec-fetch-site duplicated', request({}, ['Sec-Fetch-Site', 'same-origin', 'sec-fetch-site', 'same-origin']), refused('cross-site')],
     ['a POST without Origin', request({ method: 'POST' }), refused('origin-missing')],
+    ['a POST whose Origin matches but sends no Fetch Metadata', request({ method: 'POST' }, ['Origin', `https://${HOST}`]), refused('cross-site')],
+    ['a POST whose Origin matches with Sec-Fetch-Site none', request({ method: 'POST' }, ['Origin', `https://${HOST}`, 'Sec-Fetch-Site', 'none']), refused('cross-site')],
     ['a request with no method and no Origin', request({ method: undefined }), refused('origin-missing')],
     ['a POST with Origin null', request({ method: 'POST' }, ['Origin', 'null']), refused('origin-not-allowed')],
     ['a POST with an unparseable Origin', request({ method: 'POST' }, ['Origin', 'not a url']), refused('origin-not-allowed')],
