@@ -52,18 +52,25 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { chromium } from 'playwright-core';
 import { sampleRafDeltas } from './perf-frame-sample.mjs';
 import { summarizeSamples } from './perf-scenarios.mjs';
-import { collectProcessTree } from './perf-process-tree.mjs';
+import { collectProcessTree, looksLikeDaemonRow, parseCimDate } from './perf-process-tree.mjs';
 import { accumulateBreakdown, RAM_CATEGORIES } from './perf-process-classify.mjs';
 import { parsePsRows, groupMemory } from './lib/idle-memory.mjs';
 import {
-  parseArgs, planLayout, pickStreaming, markerFor, stripTerminalControls,
-  producerCommand, producerSource, shellPrepCommand, summarizeRun, renderSummary,
+  parseArgs, planLayout, assignClasses, markerFor, stripTerminalControls,
+  producerCommand, producerSource, shellPrepCommand, summarizeRun, renderSummary, verifyEngine,
+  CLAUDE_PROMPT, CLAUDE_README, claudeProjectSettings, claudeHookSource, claudeLaunchCommand,
+  newClaudeState, applyClaudeEvents, nextClaudeAction, inTurnAt, gapInTurnMs, trustPromptKeys, profileDiff,
+  daemonPidVerdict, leftoverPids, runTeardown,
 } from './lib/twenty-pane-stability.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
 const PLATFORM = process.platform;
 const USERNAME = os.userInfo().username || 'default';
+const HARNESS_START_MS = Date.now();
+// The user's real profile, before the sandbox replaces it. Only a Claude
+// pane's claude process gets it back (see claudeLaunchCommand).
+const REAL_PROFILE = { USERPROFILE: process.env.USERPROFILE ?? os.homedir(), HOME: process.env.HOME ?? null };
 
 let ARGS;
 try {
@@ -85,7 +92,14 @@ if (ARGS.help) {
   --stall-ms N           output gap that counts as a stall (default 5000)
   --rate-kib N           producer output per streaming pane, KiB/s (default 16)
   --probe-timeout-ms N / --key-timeout-ms N   echo wait (default 3000)
-  --app PATH             wmux executable (default: packaged build under out/)
+  --app PATH             wmux executable or macOS .app to run (default: packaged build under out/)
+  --engine node|rust     terminal engine for the instance; verified after launch, the run aborts on a mismatch
+  --claude N             panes running Claude Code on a light prompt loop (default 0)
+  --claude-config-dir DIR  another Claude Code config dir (default: your real profile; see the doc)
+  --claude-cmd CMD       command typed to start Claude Code (default "claude")
+  --claude-max-turns N   prompts per Claude pane (default 20)
+  --claude-interval-sec N  seconds between prompts (default 60)
+  --claude-turn-timeout-sec N  a longer turn stops that pane's loop (default 120)
   --out DIR              output directory (must not exist)
   --keep-app             leave the instance running at the end (debugging)`);
   process.exit(0);
@@ -101,9 +115,17 @@ function defaultAppPath() {
   }
   return path.join(REPO_ROOT, 'out', `wmux-linux-${process.arch}`, 'wmux');
 }
-const APP_EXE = path.resolve(ARGS.app ?? defaultAppPath());
+// A macOS .app bundle may be passed as is.
+const APP_EXE = (() => {
+  const p = path.resolve(ARGS.app ?? defaultAppPath());
+  return PLATFORM === 'darwin' && p.endsWith('.app') ? path.join(p, 'Contents', 'MacOS', path.basename(p, '.app')) : p;
+})();
 if (!fs.existsSync(APP_EXE)) {
   console.error(`wmux executable not found at ${APP_EXE}. Run \`npm run package\` or pass --app.`);
+  process.exit(2);
+}
+if (ARGS.claude > 0 && ARGS.claudeConfigDir && !fs.existsSync(path.join(path.resolve(ARGS.claudeConfigDir), '.claude.json')) && !fs.existsSync(path.join(path.resolve(ARGS.claudeConfigDir), '.credentials.json'))) {
+  console.error(`--claude-config-dir ${ARGS.claudeConfigDir} does not look like a Claude Code config directory (no .claude.json). Log in once with CLAUDE_CONFIG_DIR set to it, then rerun.`);
   process.exit(2);
 }
 // Identity guard: only renderer pages served from the launched app's own
@@ -228,7 +250,8 @@ function runPowerShell(script, timeoutMs = 15000) {
 }
 function runPs(args) {
   return new Promise((resolve, reject) => {
-    execFile('ps', args, { timeout: 5000, maxBuffer: 16 * 1024 * 1024, encoding: 'utf8' }, (err, stdout) => {
+    // C locale: lstart dates must parse regardless of the user's language.
+    execFile('ps', args, { timeout: 5000, maxBuffer: 16 * 1024 * 1024, encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' } }, (err, stdout) => {
       if (err) reject(err); else resolve(stdout);
     });
   });
@@ -244,7 +267,9 @@ function makeInstance() {
   const env = { ...process.env };
   // Never inherit the identity of the wmux pane this script may run in.
   for (const key of Object.keys(env)) {
-    if (key.startsWith('WMUX_') || key === 'ZDOTDIR' || key === 'XDG_CONFIG_HOME' || key === 'XDG_DATA_HOME') delete env[key];
+    // Also no Claude Code session identity: a Claude pane gets only the
+    // config dir the operator passed.
+    if (key.startsWith('WMUX_') || (key.startsWith('CLAUDE') && key !== 'CLAUDE_CODE_GIT_BASH_PATH') || key === 'ZDOTDIR' || key === 'XDG_CONFIG_HOME' || key === 'XDG_DATA_HOME') delete env[key];
   }
   Object.assign(env, {
     HOME: home,
@@ -277,6 +302,10 @@ function makeInstance() {
     },
   }, null, 2), 'utf8');
   fs.writeFileSync(path.join(wmuxDir, 'config.json'), JSON.stringify({ mcp: { mode: 'enforce' } }, null, 2), 'utf8');
+  // Settings > Terminal > Performance > Terminal engine writes this file
+  // (src/shared/terminalCoreSettings.ts); the daemon reads it once at start.
+  // This instance's daemon has not started yet, so no restart is needed.
+  if (ARGS.engine) fs.writeFileSync(path.join(wmuxDir, 'terminal-core.json'), JSON.stringify({ engine: ARGS.engine }), 'utf8');
 
   // The first-run wizard would swallow focus; seed its marker in userData.
   // Where Electron puts appData depends on the platform (and on macOS it may
@@ -309,12 +338,18 @@ function readDaemonPid(inst) {
     return Number.isInteger(pid) && pid > 0 ? pid : null;
   } catch { return null; }
 }
-function readDaemonPipeName(inst) {
-  try {
-    const name = fs.readFileSync(path.join(inst.wmuxDir, 'daemon-pipe'), 'utf8').trim();
-    if (name) return name;
-  } catch { /* default below */ }
+function defaultDaemonPipe(inst) {
   return PLATFORM === 'win32' ? `\\\\.\\pipe\\wmux-daemon${inst.suffix}-${USERNAME}` : path.join(inst.wmuxDir, 'daemon.sock');
+}
+function readDaemonPipeName(inst) {
+  let name = '';
+  try { name = fs.readFileSync(path.join(inst.wmuxDir, 'daemon-pipe'), 'utf8').trim(); } catch { /* default below */ }
+  if (!name) return defaultDaemonPipe(inst);
+  // Never talk to a daemon of another instance.
+  if (![`${inst.suffix}-`, `${inst.suffix}/`, `${inst.suffix}\\`].some((s) => name.includes(s))) {
+    throw new Error(`the daemon-pipe file names a pipe without this run's suffix ${inst.suffix}`);
+  }
+  return name;
 }
 function readDaemonToken(inst) {
   for (const p of [path.join(inst.wmuxDir, 'daemon-auth-token'), path.join(inst.home, '.wmux', 'daemon-auth-token')]) {
@@ -415,7 +450,7 @@ function hookSource(stallMs) {
   return `(() => {
   if (window.__wmuxSoak) return;
   const strip = ${stripTerminalControls.toString()};
-  const H = { gapMs: ${Number(stallMs)}, last: {}, bytes: {}, tails: {}, gaps: [], pending: new Map(), results: [], late: [], key: null, ready: false };
+  const H = { gapMs: ${Number(stallMs)}, last: {}, bytes: {}, tails: {}, gaps: [], pending: new Map(), results: [], late: [], key: null, ready: false, watch: {} };
   window.__wmuxSoak = H;
   window.addEventListener('keydown', (e) => {
     const k = H.key;
@@ -431,6 +466,7 @@ function hookSource(stallMs) {
     if (prev !== undefined && now - prev >= H.gapMs) H.gaps.push({ ptyId: id, gapMs: Math.round(now - prev), at: Date.now() });
     H.last[id] = now;
     H.bytes[id] = (H.bytes[id] || 0) + (data ? data.length : 0);
+    if (H.watch[id] !== undefined && typeof data === 'string') H.watch[id] = (H.watch[id] + data).slice(-8192);
     if (H.pending.size === 0 || typeof data !== 'string') return;
     let tail = (H.tails[id] || '') + data;
     if (tail.length > 2048) tail = tail.slice(-2048);
@@ -459,6 +495,10 @@ function hookSource(stallMs) {
 }
 
 async function bootInstance(inst) {
+  // A fresh suffix should have no listeners; if one does, it is not ours.
+  for (const pipe of [inst.mainPipe, defaultDaemonPipe(inst)]) {
+    if (await pipeAlive(pipe)) throw new Error(`a pipe of this run's suffix ${inst.suffix} is already in use; refusing to start`);
+  }
   const port = await spawnInstance(inst);
   console.log(`[setup] app pid ${inst.proc.pid}, CDP port ${port} (verified by the app)`);
   inst.browser = await waitFor(`CDP connect :${port}`, async () => {
@@ -472,7 +512,10 @@ async function bootInstance(inst) {
   await inst.page.evaluate(hook);
   await waitFor('renderer hook', () => inst.page.evaluate(() => window.__wmuxSoak?.ready === true), 15000);
   if (inst.userDataLogged && !inst.userDataCandidates.some((d) => path.resolve(d) === path.resolve(inst.userDataLogged))) {
-    console.error('[setup] warning: the app chose a userData dir this harness did not seed; a first-run wizard may take focus');
+    // Unseeded, the first-run wizard takes focus and every sample drops.
+    // The dir carries this run's suffix, so it is ours to remove.
+    if (path.basename(inst.userDataLogged).endsWith(inst.suffix)) inst.createdUserData.push(inst.userDataLogged);
+    throw new Error('the app chose a userData dir this harness did not seed (the first-run wizard would take focus)');
   }
   await waitFor('main pipe', () => pipeAlive(inst.mainPipe), 30000);
   const token = await waitFor('main auth token', () => {
@@ -481,6 +524,18 @@ async function bootInstance(inst) {
   inst.main = new PipeClient(inst.mainPipe, token);
   await inst.main.connect();
   await dismissOverlays(inst.page);
+}
+
+/**
+ * The daemon's own report of its terminal engine. With `requested` set it
+ * aborts on a mismatch; with null it only records (the end-of-run check, so
+ * a changed engine is reported instead of lost in a throw).
+ */
+async function checkEngine(inst, requested) {
+  const dc = await waitFor('daemon pipe', () => daemonClient(inst).catch(() => null), 30000, 500);
+  const ping = await dc.call('daemon.ping', { includeTerminalCore: true }, 5000);
+  const runtime = verifyEngine(requested, ping);
+  return { runtime, daemonPid: ping?.pid ?? null, daemonVersion: ping?.version ?? null };
 }
 
 async function daemonClient(inst) {
@@ -493,48 +548,94 @@ async function daemonClient(inst) {
   return c;
 }
 
-async function pidLooksLikeWmuxDaemon(pid) {
-  try {
-    if (PLATFORM === 'win32') {
-      const out = await runPowerShell(`Get-CimInstance Win32_Process -Filter "ProcessId=${Number(pid)}" | Select-Object Name,CommandLine | ConvertTo-Json -Compress`, 5000);
-      if (!out.trim()) return false;
-      const p = JSON.parse(out);
-      const name = String(p.Name ?? '').toLowerCase();
-      return (name.includes('wmux') || name.includes('node')) && String(p.CommandLine ?? '').toLowerCase().includes('daemon');
-    }
-    const out = await runPs(['-p', String(pid), '-o', 'command=']);
-    return /daemon/i.test(out);
-  } catch { return true; } // lookup failed: the pid came from our own sandbox's pid file
+/** One process listing: [{ pid, ppid, createdMs, commandLine, name, workingSetBytes, commitBytes, raw }]. */
+async function listProcesses() {
+  if (PLATFORM === 'win32') {
+    const out = await runPowerShell('Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine,CreationDate,WorkingSetSize,PageFileUsage | ConvertTo-Json -Compress', 30000);
+    const rows = JSON.parse(out);
+    return (Array.isArray(rows) ? rows : [rows]).map((r) => ({
+      pid: r.ProcessId, ppid: r.ParentProcessId, name: r.Name, commandLine: r.CommandLine ?? null,
+      createdMs: parseCimDate(r.CreationDate), workingSetBytes: Number(r.WorkingSetSize) || 0,
+      commitBytes: (Number(r.PageFileUsage) || 0) * 1024, raw: r,
+    }));
+  }
+  const out = await runPs(['-axww', '-o', 'pid=,ppid=,lstart=,command=']);
+  const rows = [];
+  for (const line of out.split('\n')) {
+    // lstart is five fields: "Mon Oct 26 16:53:52 2026".
+    const m = /^\s*(\d+)\s+(\d+)\s+(\w{3}\s+\w{3}\s+\d+\s+[\d:]+\s+\d{4})\s+(.*)$/.exec(line);
+    if (m) rows.push({ pid: Number(m[1]), ppid: Number(m[2]), createdMs: Date.parse(m[3]), commandLine: m[4] });
+  }
+  return rows;
 }
 
+/** Kill `pid` only when one lookup proves it is this run's daemon; false on any doubt. */
+async function killDaemonIfOurs(pid) {
+  if (!pid || !pidAlive(pid)) return false;
+  let row = null;
+  try { row = (await listProcesses()).find((r) => r.pid === pid) ?? null; } catch { return false; }
+  if (!daemonPidVerdict(row, { harnessStartMs: HARNESS_START_MS, appDir: APP_ROOT, platform: PLATFORM })) {
+    console.error(`[teardown] pid ${pid} is not provably this run's daemon; not killing it`);
+    return false;
+  }
+  try { process.kill(pid); } catch { /* exited */ }
+  await sleep(500);
+  if (pidAlive(pid)) { try { process.kill(pid, 'SIGKILL'); } catch { /* exited */ } }
+  await sleep(300);
+  return !pidAlive(pid);
+}
+
+/** Order and rationale: runTeardown in scripts/lib/twenty-pane-stability.mjs. */
 async function shutdownInstance(inst) {
-  if (inst.shuttingDown) return;
+  if (inst.shuttingDown) return null;
   inst.shuttingDown = true;
   try { await inst.browser?.close(); } catch { /* noop */ }
   inst.main?.close();
-  const daemonPid = readDaemonPid(inst);
-  try {
-    const dc = await daemonClient(inst);
-    if (dc) await dc.call('daemon.shutdown', {}, 5000).catch(() => { /* ack may race the exit */ });
-  } catch { /* pid fallback below */ }
   inst.daemon?.close();
-  const deadline = Date.now() + 8000;
-  while (daemonPid && pidAlive(daemonPid) && Date.now() < deadline) await sleep(150);
-  if (daemonPid && pidAlive(daemonPid) && await pidLooksLikeWmuxDaemon(daemonPid)) {
-    try { process.kill(daemonPid); } catch { /* noop */ }
-    await sleep(300);
-    if (pidAlive(daemonPid)) { try { process.kill(daemonPid, 'SIGKILL'); } catch { /* noop */ } }
+  inst.daemon = null;
+  const daemonPid = readDaemonPid(inst);
+  let daemonPipe = defaultDaemonPipe(inst);
+  try { daemonPipe = readDaemonPipeName(inst); } catch { /* keep the default */ }
+  const report = await runTeardown({
+    killApp: async () => { if (inst.proc && inst.proc.exitCode === null) { try { inst.proc.kill(); } catch { /* exited */ } } },
+    waitAppExit: async () => {
+      if (!inst.proc) return true;
+      const deadline = Date.now() + 8000;
+      while (inst.proc.exitCode === null && inst.proc.signalCode === null && Date.now() < deadline) await sleep(100);
+      if (inst.proc.exitCode === null && inst.proc.signalCode === null) { try { inst.proc.kill('SIGKILL'); } catch { /* exited */ } await sleep(500); }
+      return inst.proc.exitCode !== null || inst.proc.signalCode !== null;
+    },
+    shutdownDaemon: async () => {
+      const token = readDaemonToken(inst);
+      if (!token || !(await pipeAlive(daemonPipe))) return false;
+      const c = new PipeClient(daemonPipe, token);
+      await c.connect();
+      await c.call('daemon.shutdown', {}, 5000).catch(() => { /* the ack may race the exit */ });
+      c.close();
+      return true;
+    },
+    daemonPipeAlive: () => pipeAlive(daemonPipe),
+    killDaemonIfOurs: () => killDaemonIfOurs(daemonPid),
+    findLeftovers: async () => {
+      try {
+        return leftoverPids(await listProcesses(), {
+          needles: [inst.home, ...inst.userDataCandidates, inst.userDataLogged],
+          harnessStartMs: HARNESS_START_MS, platform: PLATFORM, excludePids: [process.pid],
+        });
+      } catch { return []; }
+    },
+    killPid: async (pid) => { try { process.kill(pid, 'SIGKILL'); return true; } catch { return false; } },
+    removeSandbox: async () => {
+      for (const dir of [inst.home, ...inst.createdUserData]) {
+        try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 }); } catch { /* best effort */ }
+      }
+    },
+    sleep,
+  });
+  if (!report.daemonPipeGone) {
+    console.error(`[teardown] the daemon of suffix ${inst.suffix} is still running; the sandbox was kept. See "Manual cleanup" in docs/performance/twenty-panes.md (run.json has the paths).`);
   }
-  if (inst.proc && inst.proc.exitCode === null) {
-    try { inst.proc.kill(); } catch { /* noop */ }
-    const exitDeadline = Date.now() + 5000;
-    while (inst.proc.exitCode === null && Date.now() < exitDeadline) await sleep(100);
-    if (inst.proc.exitCode === null) { try { inst.proc.kill('SIGKILL'); } catch { /* noop */ } }
-  }
-  await sleep(500);
-  for (const dir of [inst.home, ...inst.createdUserData]) {
-    try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 }); } catch { /* best effort */ }
-  }
+  return report;
 }
 
 // ---------------------------------------------------------------------------
@@ -603,8 +704,8 @@ async function setup(inst) {
     return true;
   }, 60000, 1000);
   panes.forEach((p, i) => { p.index = i; });
-  const streaming = pickStreaming(panes, ARGS.streaming);
-  panes.forEach((p, i) => { p.cls = streaming.has(i) ? 'streaming' : 'idle'; });
+  const classes = assignClasses(panes, ARGS.streaming, ARGS.claude);
+  panes.forEach((p, i) => { p.cls = classes[i]; });
 
   // Short prompt everywhere so markers never wrap; then start the producers.
   for (const p of panes) {
@@ -635,8 +736,140 @@ async function setup(inst) {
   } catch {
     throw new Error(`${(await flowing()).length} streaming pane(s) produce no output after 45 s; the producer did not start`);
   }
+  await startClaude(inst, panes);
   await inst.page.evaluate(() => { window.__wmuxSoak.gaps.length = 0; });
   return { panes, workspaceIds, layout };
+}
+
+/** Claude Code's profile locations: the operator's config dir, or the real home. */
+function claudeProfilePaths() {
+  if (ARGS.claudeConfigDir) {
+    const dir = path.resolve(ARGS.claudeConfigDir);
+    return { projectsDir: path.join(dir, 'projects'), configFile: path.join(dir, '.claude.json') };
+  }
+  const home = PLATFORM === 'win32' ? REAL_PROFILE.USERPROFILE : (REAL_PROFILE.HOME ?? os.homedir());
+  return { projectsDir: path.join(home, '.claude', 'projects'), configFile: path.join(home, '.claude.json') };
+}
+
+/**
+ * A Claude pane runs with the real home but this run's WMUX_DATA_SUFFIX, so
+ * wmux hooks in the user's own Claude settings may create
+ * `<real home>/.wmux<suffix>*` paths. The suffix is unique to this run, so
+ * those exact names, created after the harness started, are this run's.
+ */
+function removeRealHomeSuffixPaths() {
+  if (!inst) return [];
+  const home = PLATFORM === 'win32' ? REAL_PROFILE.USERPROFILE : (REAL_PROFILE.HOME ?? os.homedir());
+  const removed = [];
+  for (const name of [`.wmux${inst.suffix}`, `.wmux${inst.suffix}-auth-token`, `.wmux${inst.suffix}.sock`, `.wmux-mcpb${inst.suffix}.sock`]) {
+    const target = path.join(home, name);
+    try {
+      const st = fs.lstatSync(target);
+      if ((st.birthtimeMs || st.mtimeMs) < HARNESS_START_MS - 1000) continue;
+      fs.rmSync(target, { recursive: true, force: true });
+      removed.push(name);
+    } catch { /* absent */ }
+  }
+  return removed;
+}
+
+/** Names only: project entry names and config keys, never their contents. */
+function snapshotClaudeProfile() {
+  const { projectsDir, configFile } = claudeProfilePaths();
+  let projects = [];
+  try { projects = fs.readdirSync(projectsDir); } catch { /* none yet */ }
+  let configKeys = [];
+  let configProjects = [];
+  try {
+    const cfg = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+    configKeys = Object.keys(cfg);
+    configProjects = Object.keys(cfg.projects ?? {});
+  } catch { /* none yet */ }
+  return { projects, configKeys, configProjects };
+}
+
+/**
+ * Claude Code panes: a tiny fixture repo whose project settings install two
+ * hooks (UserPromptSubmit, Stop) that log turn start and end to a per-pane
+ * status file, so the harness knows when a turn runs. The operator's config
+ * dir is used in place; nothing is copied out of it.
+ */
+async function startClaude(inst, panes) {
+  const claudePanes = panes.filter((p) => p.cls === 'claude');
+  if (claudePanes.length === 0) return;
+  claudeProfileBefore = snapshotClaudeProfile();
+  const repoDir = path.join(inst.home, 'claude-repo');
+  fs.mkdirSync(path.join(repoDir, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(repoDir, 'README.md'), CLAUDE_README, 'utf8');
+  const hookPath = path.join(inst.home, 'claude-turn-hook.cjs');
+  fs.writeFileSync(hookPath, claudeHookSource(), 'utf8');
+  fs.writeFileSync(path.join(repoDir, '.claude', 'settings.json'), JSON.stringify(claudeProjectSettings(process.execPath, hookPath), null, 2), 'utf8');
+  // Keep the recent screen text of these panes, to answer startup prompts.
+  const ids = claudePanes.map((p) => p.ptyId);
+  await inst.page.evaluate((list) => { for (const id of list) window.__wmuxSoak.watch[id] = ''; }, ids);
+  for (const p of claudePanes) {
+    p.statusFile = path.join(inst.home, `claude-status-${p.index}.ndjson`);
+    p.statusOffset = 0;
+    p.claude = newClaudeState();
+    const cmd = claudeLaunchCommand(PLATFORM, {
+      repoDir, configDir: ARGS.claudeConfigDir ? path.resolve(ARGS.claudeConfigDir) : null,
+      statusFile: p.statusFile, cmd: ARGS.claudeCmd, realProfile: REAL_PROFILE,
+    });
+    await callPaced(inst.main, 'input.send', { ptyId: p.ptyId, text: cmd, submit: true, raw: true });
+    await sleep(500);
+  }
+  // Wait for startup to settle: output quiet for 3 s (at most 45 s).
+  const readBytes = () => inst.page.evaluate((list) => list.map((id) => window.__wmuxSoak.bytes[id] ?? 0), ids);
+  await sleep(5000);
+  let prev = await readBytes();
+  for (let waited = 0; waited < 40000; waited += 3000) {
+    await sleep(3000);
+    const cur = await readBytes();
+    if (cur.every((b, i) => b === prev[i])) break;
+    prev = cur;
+  }
+  // A folder Claude Code has not seen asks whether to trust it, with
+  // "No, exit" preselected: move to "Yes" and confirm. Only when the prompt
+  // is on screen; nothing is sent otherwise.
+  const screens = await inst.page.evaluate((list) => list.map((id) => window.__wmuxSoak.watch[id] ?? ''), ids);
+  let trusted = 0;
+  for (let i = 0; i < claudePanes.length; i++) {
+    const keys = trustPromptKeys(stripTerminalControls(screens[i]));
+    if (!keys) continue;
+    for (const key of keys) {
+      await callPaced(inst.main, 'input.sendKey', { ptyId: claudePanes[i].ptyId, key });
+      await sleep(300);
+    }
+    trusted++;
+  }
+  await sleep(4000);
+  await inst.page.evaluate((list) => { for (const id of list) delete window.__wmuxSoak.watch[id]; }, ids);
+  console.log(`[setup] ${claudePanes.length} Claude Code pane(s) started (${trusted} answered the folder-trust prompt)`);
+}
+
+/** Read new hook events for each Claude pane, then submit or interrupt as the loop says. */
+async function driveClaude(inst, panes, runEnded) {
+  for (const p of panes.filter((x) => x.cls === 'claude')) {
+    let text = '';
+    try {
+      const buf = fs.readFileSync(p.statusFile);
+      text = buf.subarray(p.statusOffset).toString('utf8');
+      const lastNl = text.lastIndexOf('\n');
+      text = lastNl === -1 ? '' : text.slice(0, lastNl + 1);
+      p.statusOffset += Buffer.byteLength(text);
+    } catch { /* no events yet */ }
+    const events = text.split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+    applyClaudeEvents(p.claude, events);
+    const action = nextClaudeAction(p.claude, Date.now(), {
+      maxTurns: ARGS.claudeMaxTurns, intervalSec: ARGS.claudeIntervalSec, turnTimeoutSec: ARGS.claudeTurnTimeoutSec, runEnded,
+    });
+    try {
+      if (action === 'submit') await callPaced(inst.main, 'input.send', { ptyId: p.ptyId, text: CLAUDE_PROMPT, submit: true });
+      else if (action === 'interrupt') await callPaced(inst.main, 'input.sendKey', { ptyId: p.ptyId, key: 'escape' });
+    } catch (e) {
+      p.claude.stopped = `send-failed: ${e.message}`;
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -720,14 +953,17 @@ async function sampleMemory(inst, withTree) {
       mem.electronProcesses = procs.length;
     }
   } catch (e) { mem.electronError = e.message; }
+  // The daemon's own pid from daemon.ping is authoritative; the pid file is a
+  // fallback that sampleProcessTree checks before trusting.
   let daemonPid = readDaemonPid(inst);
+  let daemonPidVerified = false;
   try {
     const dc = await daemonClient(inst);
     const pong = dc ? await dc.call('daemon.ping', { includeMemory: true }, 5000) : null;
     if (pong && Number.isFinite(pong.eventLoopLagMs)) mem.daemonEventLoopLagMs = pong.eventLoopLagMs;
     const d = pong?.memory;
     if (d) {
-      daemonPid = d.pid ?? daemonPid;
+      if (Number.isInteger(d.pid)) { daemonPid = d.pid; daemonPidVerified = true; }
       mem.daemonRssBytes = d.rssBytes;
       mem.daemonHeapUsedBytes = d.heapUsedBytes;
       const sum = (k) => d.sessions.reduce((a, s) => a + (s[k] || 0), 0);
@@ -744,29 +980,43 @@ async function sampleMemory(inst, withTree) {
     inst.daemon = null;
   }
   if (withTree) {
-    try { Object.assign(mem, await sampleProcessTree(inst.proc.pid, daemonPid)); } catch (e) { mem.treeError = e.message; }
+    try { Object.assign(mem, await sampleProcessTree(inst.proc.pid, daemonPid, daemonPidVerified)); } catch (e) { mem.treeError = e.message; }
   }
   return mem;
 }
 
-/** OS process-tree working set / RSS of the app and the daemon, incl. shells and producers. */
-async function sampleProcessTree(appPid, daemonPid) {
+/**
+ * OS process-tree working set / RSS of the app and the daemon, incl. shells
+ * and producers. On Windows also commit (PageFileUsage), which, unlike the
+ * working set, the OS does not trim.
+ */
+async function sampleProcessTree(appPid, daemonPidIn, daemonPidVerified) {
+  let daemonPid = daemonPidIn;
   if (PLATFORM === 'win32') {
-    const out = await runPowerShell('Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine,CreationDate,WorkingSetSize,PageFileUsage | ConvertTo-Json -Compress', 30000);
-    const rows = JSON.parse(out);
+    const rows = (await listProcesses()).map((r) => r.raw);
     const byPid = new Map(rows.map((r) => [r.ProcessId, r]));
+    // A pid-file pid could be recycled: require it to look like our daemon
+    // (perf-bench.mjs measureRam does the same).
+    if (daemonPid && !daemonPidVerified && !looksLikeDaemonRow(byPid.get(daemonPid), byPid.get(appPid))) daemonPid = null;
     const { pids, rejectedEdgeCount } = collectProcessTree(rows, daemonPid ? [appPid, daemonPid] : [appPid]);
     const treeRows = [...pids].map((pid) => byPid.get(pid)).filter(Boolean).map((p) => ({
       pid: p.ProcessId, name: p.Name, commandLine: p.CommandLine,
       workingSetBytes: Number(p.WorkingSetSize) || 0, commitBytes: (Number(p.PageFileUsage) || 0) * 1024,
     }));
     const breakdown = accumulateBreakdown(treeRows, { mainPid: appPid, daemonPid });
+    const daemonRow = daemonPid ? byPid.get(daemonPid) : null;
     return {
       treeBytes: treeRows.reduce((a, r) => a + r.workingSetBytes, 0),
+      treeCommitBytes: treeRows.reduce((a, r) => a + r.commitBytes, 0),
+      ...(daemonRow ? { daemonCommitBytes: (Number(daemonRow.PageFileUsage) || 0) * 1024 } : {}),
       treeProcesses: treeRows.length,
       treeRejectedEdges: rejectedEdgeCount,
       treeBreakdown: Object.fromEntries(RAM_CATEGORIES.map((c) => [c, { bytes: breakdown[c].workingSetBytes, processes: breakdown[c].processCount }])),
     };
+  }
+  if (daemonPid && !daemonPidVerified) {
+    const row = (await listProcesses().catch(() => [])).find((r) => r.pid === daemonPid);
+    if (!daemonPidVerdict(row, { harnessStartMs: HARNESS_START_MS, appDir: APP_ROOT, platform: PLATFORM })) daemonPid = null;
   }
   const rows = parsePsRows(await runPs(['-axo', 'pid=,ppid=,rss=,comm=']));
   const g = groupMemory(rows, appPid, daemonPid ?? -1, -1);
@@ -777,24 +1027,24 @@ async function sampleProcessTree(appPid, daemonPid) {
   };
 }
 
-async function focusActiveTerminal(page) {
-  const focused = () => page.evaluate(() => !!document.activeElement?.classList?.contains('xterm-helper-textarea'));
+/**
+ * Does a terminal hold keyboard focus after pane.focus? One more pane.focus
+ * if not; no clicking, since a click could land in a Claude Code pane.
+ */
+async function focusActiveTerminal(inst, paneId, workspaceId) {
+  // The store must name the target as the active pane, and the DOM must have
+  // a terminal focused. (The DOM does not say which pane's terminal that is;
+  // an echo from another pane is counted as wrongPane and stops the sample.)
+  const focused = async () => {
+    const domOk = await inst.page.evaluate(() => !!document.activeElement?.classList?.contains('xterm-helper-textarea'));
+    if (!domOk) return false;
+    const rows = await listPanes(inst, workspaceId).catch(() => []);
+    return rows.some((r) => r.id === paneId && r.active);
+  };
   if (await focused()) return true;
-  // The active pane did not take keyboard focus by itself: click the largest
-  // visible terminal, as a user would. Counted as a focus miss either way.
-  const box = await page.evaluate(() => {
-    let best = null;
-    for (const el of document.querySelectorAll('.xterm-screen')) {
-      const r = el.getBoundingClientRect();
-      if (r.width >= 60 && r.height >= 40 && (!best || r.width * r.height > best.w * best.h)) best = { x: r.x, y: r.y, w: r.width, h: r.height };
-    }
-    return best;
-  });
-  if (box) {
-    await page.mouse.click(box.x + box.w / 2, box.y + box.h / 2);
-    await sleep(250);
-  }
-  return false;
+  await inst.main.call('pane.focus', { id: paneId }).catch(() => { /* counted as a miss */ });
+  await sleep(400);
+  return focused();
 }
 
 async function runSample(inst, ctx, tick, t0) {
@@ -804,12 +1054,15 @@ async function runSample(inst, ctx, tick, t0) {
 
   // 1. Move focus: a workspace switch every N samples, a pane switch always.
   const switchWs = ARGS.workspaceSwitchEvery > 0 && tick > 0 && tick % ARGS.workspaceSwitchEvery === 0 && ctx.layout.length > 1;
+  let wsBefore = null;
   if (switchWs) {
+    wsBefore = await currentWorkspaceId(inst).catch(() => null);
     await page.keyboard.press('Alt+ArrowDown');
     await sleep(500);
   }
   const wsId = await currentWorkspaceId(inst).catch(() => null);
-  const inWs = ctx.panes.filter((p) => p.workspaceId === wsId);
+  // Keystrokes and markers never go into Claude Code panes.
+  const inWs = ctx.panes.filter((p) => p.workspaceId === wsId && p.cls !== 'claude');
   let target = null;
   if (inWs.length) {
     ctx.rotation[wsId] = ((ctx.rotation[wsId] ?? -1) + 1) % inWs.length;
@@ -817,12 +1070,19 @@ async function runSample(inst, ctx, tick, t0) {
     await inst.main.call('pane.focus', { id: target.paneId }).catch(() => { /* recorded via focus miss */ });
     await sleep(250);
   }
-  sample.focus = { workspaceSwitch: switchWs, workspaceIndex: target?.workspaceIndex ?? null, paneIndex: target?.index ?? null };
-  sample.focus.focused = await focusActiveTerminal(page);
-  await dismissOverlays(page);
+  sample.focus = {
+    workspaceSwitch: switchWs,
+    ...(switchWs ? { switched: wsBefore !== null && wsId !== null && wsBefore !== wsId } : {}),
+    workspaceIndex: target?.workspaceIndex ?? null, paneIndex: target?.index ?? null,
+  };
+  if (target) {
+    await dismissOverlays(page);
+    sample.focus.focused = await focusActiveTerminal(inst, target.paneId, target.workspaceId);
+  }
 
-  // 2. Focused keystrokes.
-  for (let k = 0; k < ARGS.keysPerSample; k++) {
+  // 2. Focused keystrokes, only into a focused non-Claude pane. A focus miss
+  //    skips them and is counted instead.
+  for (let k = 0; target && sample.focus.focused && k < ARGS.keysPerSample; k++) {
     const { rec } = await keyboardMarker(page, target?.index ?? 99, target?.ptyId ?? null);
     sample.keyboard.push({
       phase: k === 0 ? 'afterSwitch' : 'steady',
@@ -831,10 +1091,14 @@ async function runSample(inst, ctx, tick, t0) {
       ptyId: rec?.ptyId ?? null,
       wrongPane: !!(rec && target && rec.ptyId !== target.ptyId),
     });
+    // A lost or misrouted key may mean focus sits in another pane (possibly
+    // a Claude pane): stop typing for this sample.
+    const last = sample.keyboard[sample.keyboard.length - 1];
+    if (last.echoMs === null || last.wrongPane) break;
   }
 
   // 3. Probe every pane.
-  for (const r of await probeAll(page, ctx.panes)) {
+  for (const r of await probeAll(page, ctx.panes.filter((p) => p.cls !== 'claude'))) {
     sample.probes.push({
       ptyId: r.ptyId, paneIndex: r.pane.index, cls: r.pane.cls,
       echoMs: r.rec && r.rec.ptyId === r.ptyId ? Math.round(r.rec.echoMs * 1000) / 1000 : null,
@@ -853,9 +1117,24 @@ async function runSample(inst, ctx, tick, t0) {
   });
   sample.late = state.late.map((r) => ({ kind: r.kind, ptyId: r.ptyId, lateMs: Math.round(r.echoMs) }));
   const clsOf = new Map(ctx.panes.map((p) => [p.ptyId, p.cls]));
-  sample.stalls = state.gaps.filter((g) => clsOf.get(g.ptyId) === 'streaming')
-    .map((g) => ({ ptyId: g.ptyId, cls: 'streaming', gapMs: g.gapMs, atSec: Math.round((g.at - t0) / 100) / 10 }));
-  sample.silent = ctx.panes.filter((p) => p.cls === 'streaming' && (state.sinceLast[p.ptyId] ?? Infinity) > ARGS.stallMs)
+  // A Claude pane counts as streaming only while one of its turns runs.
+  const byPty = new Map(ctx.panes.map((p) => [p.ptyId, p]));
+  const expectsOutput = (ptyId, t) => {
+    const p = byPty.get(ptyId);
+    return p?.cls === 'streaming' || (p?.cls === 'claude' && inTurnAt(p.claude.intervals, t));
+  };
+  // A Claude pane's gap counts only for the part inside its turn.
+  const stallMs = (g) => {
+    const p = byPty.get(g.ptyId);
+    if (p?.cls === 'streaming') return g.gapMs;
+    if (p?.cls === 'claude') return Math.round(gapInTurnMs(p.claude.intervals, g.at - g.gapMs, g.at));
+    return 0;
+  };
+  sample.stalls = state.gaps.map((g) => ({ g, ms: stallMs(g) })).filter((x) => x.ms >= ARGS.stallMs)
+    .map(({ g, ms }) => ({ ptyId: g.ptyId, cls: clsOf.get(g.ptyId), gapMs: ms, atSec: Math.round((g.at - t0) / 100) / 10 }));
+  const nowWall = Date.now();
+  sample.silent = ctx.panes.filter((p) => (state.sinceLast[p.ptyId] ?? Infinity) > ARGS.stallMs
+      && expectsOutput(p.ptyId, nowWall - (state.sinceLast[p.ptyId] ?? 0)) && expectsOutput(p.ptyId, nowWall))
     .map((p) => ({ ptyId: p.ptyId, cls: p.cls, silentMs: state.sinceLast[p.ptyId] ?? null }));
   sample.outputBytes = ctx.panes.reduce((a, p) => a + (state.bytes[p.ptyId] ?? 0), 0);
   const raf = summarizeSamples(await sampleRafDeltas(page, 20));
@@ -863,6 +1142,12 @@ async function runSample(inst, ctx, tick, t0) {
 
   // 5. Memory.
   sample.memory = await sampleMemory(inst, ARGS.treeEvery > 0 && tick % ARGS.treeEvery === 0);
+
+  // 6. Claude Code loop (after the probes, so no marker sits in an input box).
+  if (ARGS.claude > 0) {
+    await driveClaude(inst, ctx.panes, false);
+    sample.claude = ctx.panes.filter((p) => p.cls === 'claude').map((p) => ({ ptyId: p.ptyId, inTurn: p.claude.inTurn, turns: p.claude.turns, completed: p.claude.completed, stopped: p.claude.stopped }));
+  }
   return sample;
 }
 
@@ -878,10 +1163,43 @@ let inst = null;
 let outDir = null;
 let samples = [];
 let finished = false;
+let runCtx = null;
+let claudeProfileBefore = null;
+
+/**
+ * run.json: everything needed to clean up an interrupted run by hand (local
+ * paths, pids, pipes). It stays in the gitignored output dir.
+ */
+function writeRunInfo(extra = {}) {
+  if (!outDir || !inst) return;
+  runInfo = {
+    ...runInfo,
+    suffix: inst.suffix, home: inst.home, wmuxDir: inst.wmuxDir, app: APP_EXE,
+    userDataDirs: [...new Set([...inst.userDataCandidates, ...(inst.userDataLogged ? [inst.userDataLogged] : [])])],
+    mainPipe: inst.mainPipe, daemonPipe: defaultDaemonPipe(inst),
+    harnessPid: process.pid, appPid: inst.proc?.pid ?? null, daemonPid: readDaemonPid(inst),
+    ...extra,
+  };
+  try { fs.writeFileSync(path.join(outDir, 'run.json'), JSON.stringify(runInfo, null, 2)); } catch { /* best effort */ }
+}
+let runInfo = {};
+// What the daemon reported as its terminal engine, at start and at the end.
+const engine = { requested: ARGS.engine, start: null, end: null, daemonPidStart: null, daemonPidEnd: null, daemonVersion: null };
 
 function writeSummary(reason) {
   if (!outDir) return null;
-  const summary = { reason, ...summarizeRun(samples, { stallMs: ARGS.stallMs }) };
+  const claude = (runCtx?.panes ?? []).filter((p) => p.cls === 'claude' && p.claude)
+    .map((p) => ({ paneIndex: p.index, ptyId: p.ptyId, ...p.claude }));
+  const summary = { reason, engine, ...summarizeRun(samples, { stallMs: ARGS.stallMs, claude }) };
+  if (engine.start && !engine.end) {
+    summary.flags.unshift(`the daemon's terminal engine could not be read at the end${engine.endError ? ` (${engine.endError})` : ''}`);
+  }
+  if (engine.end && engine.start && engine.end.effective !== engine.start.effective) {
+    summary.flags.unshift(`the daemon's terminal engine changed during the run (${engine.start.effective} -> ${engine.end.effective})`);
+  }
+  if (engine.daemonPidEnd && engine.daemonPidStart && engine.daemonPidEnd !== engine.daemonPidStart) {
+    summary.flags.unshift('the daemon was replaced during the run (its pid changed)');
+  }
   fs.writeFileSync(path.join(outDir, 'summary.json'), JSON.stringify(summary, null, 2));
   const text = renderSummary(summary);
   fs.writeFileSync(path.join(outDir, 'summary.txt'), text + '\n');
@@ -891,9 +1209,29 @@ function writeSummary(reason) {
 async function finish(reason, code) {
   if (finished) return;
   finished = true;
+  if (inst && runCtx && ARGS.claude > 0 && inst.proc?.exitCode === null) {
+    try { await driveClaude(inst, runCtx.panes, true); } catch { /* reporting only */ }
+  }
+  if (inst && engine.start && inst.proc?.exitCode === null) {
+    try {
+      const end = await checkEngine(inst, null);
+      engine.end = end.runtime;
+      engine.daemonPidEnd = end.daemonPid;
+    } catch (e) { engine.endError = e.message; }
+  }
   const text = writeSummary(reason);
   if (text) console.log(`\n${text}\n\nresults: ${outDir}`);
-  if (inst && !ARGS.keepApp) await shutdownInstance(inst);
+  if (inst && !ARGS.keepApp) {
+    writeRunInfo();
+    const teardown = await shutdownInstance(inst);
+    writeRunInfo({ teardown });
+    if (teardown) console.log(`[teardown] ${JSON.stringify(teardown)}`);
+  }
+  if (claudeProfileBefore && outDir) {
+    const diff = { ...profileDiff(claudeProfileBefore, snapshotClaudeProfile()), wmuxPathsRemoved: removeRealHomeSuffixPaths() };
+    fs.writeFileSync(path.join(outDir, 'claude-profile-diff.json'), JSON.stringify(diff, null, 2));
+    console.log(`[claude] profile changes: ${diff.projectsAdded.length} project dir(s), ${diff.configProjectsAdded.length} .claude.json project(s), ${diff.configKeysAdded.length} new key(s) (claude-profile-diff.json)`);
+  }
   process.exit(code);
 }
 
@@ -907,23 +1245,33 @@ async function main() {
 
   inst = makeInstance();
   console.log(`[setup] isolated instance, data suffix ${inst.suffix}`);
+  writeRunInfo({ startedAt: new Date().toISOString() });
   await bootInstance(inst);
+  writeRunInfo();
+  const started = await checkEngine(inst, ARGS.engine);
+  engine.start = started.runtime;
+  engine.daemonPidStart = started.daemonPid;
+  engine.daemonVersion = started.daemonVersion;
+  console.log(`[setup] terminal engine: ${ARGS.engine ?? 'app default'} requested; the daemon reports ${started.runtime?.effective ?? 'nothing (older build)'}`);
   const ctx = await setup(inst);
+  runCtx = ctx;
   ctx.rotation = {};
   const config = {
     platform: PLATFORM, arch: process.arch, osRelease: os.release(), node: process.version,
     cpus: os.cpus().length, totalMemBytes: os.totalmem(),
     startedAt: new Date().toISOString(),
-    args: { ...ARGS, app: path.basename(APP_EXE), out: undefined },
+    // The Claude config dir and command can carry paths or env values: record only whether they were set.
+    args: { ...ARGS, app: path.basename(APP_EXE), out: undefined, claudeConfigDir: ARGS.claudeConfigDir ? '(set)' : null, claudeCmd: ARGS.claudeCmd === 'claude' ? 'claude' : '(custom)' },
     layout: ctx.layout,
     panes: ctx.panes.map((p) => ({ index: p.index, workspaceIndex: p.workspaceIndex, ptyId: p.ptyId, cls: p.cls })),
+    engine,
   };
   fs.writeFileSync(path.join(outDir, 'config.json'), JSON.stringify(config, null, 2));
-  console.log(`[run] ${ctx.panes.length} panes (${ctx.panes.filter((p) => p.cls === 'streaming').length} streaming) for ${ARGS.minutes} min, a sample every ${ARGS.sampleSec} s`);
+  console.log(`[run] ${ctx.panes.length} panes (${ctx.panes.filter((p) => p.cls === 'streaming').length} streaming, ${ctx.panes.filter((p) => p.cls === 'claude').length} Claude) for ${ARGS.minutes} min, a sample every ${ARGS.sampleSec} s`);
 
   const t0 = Date.now();
   const endAt = t0 + ARGS.minutes * 60000;
-  for (let tick = 0; Date.now() < endAt; tick++) {
+  for (let tick = 0; Date.now() < endAt && !finished; tick++) {
     const started = Date.now();
     if (inst.proc.exitCode !== null) throw new Error(`the app exited (code ${inst.proc.exitCode}) during the run`);
     const sample = await runSample(inst, ctx, tick, t0);
@@ -943,6 +1291,9 @@ async function main() {
 }
 
 main().catch(async (e) => {
+  // After Ctrl+C the teardown closes the page under a running sample; that
+  // error is expected and the interrupted summary is already written.
+  if (finished) return;
   console.error(`[fatal] ${e.stack || e.message}`);
   if (inst?.logTail?.length) console.error(`[fatal] last app output lines:\n${inst.logTail.slice(-15).join('\n')}`);
   await finish(`failed: ${e.message}`, 1);

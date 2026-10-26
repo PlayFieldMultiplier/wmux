@@ -19,6 +19,10 @@ export const DEFAULTS = Object.freeze({
   keyTimeoutMs: 3000,
   stallMs: 5000,
   rateKiB: 16,
+  claude: 0,
+  claudeMaxTurns: 20,
+  claudeIntervalSec: 60,
+  claudeTurnTimeoutSec: 120,
 });
 
 const INT_FLAGS = {
@@ -33,11 +37,18 @@ const INT_FLAGS = {
   '--key-timeout-ms': 'keyTimeoutMs',
   '--stall-ms': 'stallMs',
   '--rate-kib': 'rateKiB',
+  '--claude': 'claude',
+  '--claude-max-turns': 'claudeMaxTurns',
+  '--claude-interval-sec': 'claudeIntervalSec',
+  '--claude-turn-timeout-sec': 'claudeTurnTimeoutSec',
 };
 
 /** Parse CLI flags. Throws on unknown flags or invalid values. */
 export function parseArgs(argv) {
-  const out = { ...DEFAULTS, out: null, app: null, keepApp: false, help: false };
+  const out = {
+    ...DEFAULTS, out: null, app: null, keepApp: false, help: false,
+    engine: null, claudeConfigDir: null, claudeCmd: 'claude',
+  };
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i];
     const value = () => {
@@ -49,6 +60,15 @@ export function parseArgs(argv) {
     else if (flag === '--keep-app') out.keepApp = true;
     else if (flag === '--out') out.out = value();
     else if (flag === '--app') out.app = value();
+    else if (flag === '--engine') {
+      const v = value();
+      if (v !== 'node' && v !== 'rust') throw new Error('--engine must be node or rust');
+      out.engine = v;
+    } else if (flag === '--claude-config-dir') out.claudeConfigDir = value();
+    else if (flag === '--claude-cmd') {
+      out.claudeCmd = value().trim();
+      if (!out.claudeCmd) throw new Error('--claude-cmd must not be empty');
+    }
     else if (flag === '--minutes') {
       const n = Number(value());
       if (!Number.isFinite(n) || n <= 0) throw new Error('--minutes must be a positive number');
@@ -60,7 +80,10 @@ export function parseArgs(argv) {
     } else throw new Error(`unknown flag ${flag}`);
   }
   if (out.panes < 1) throw new Error('--panes must be at least 1');
-  if (out.streaming > out.panes) throw new Error('--streaming cannot exceed --panes');
+  if (out.streaming + out.claude > out.panes) throw new Error('--streaming plus --claude cannot exceed --panes');
+  if (out.claude > 0 && (out.claudeMaxTurns < 1 || out.claudeIntervalSec < 1 || out.claudeTurnTimeoutSec < 1)) {
+    throw new Error('--claude-max-turns, --claude-interval-sec and --claude-turn-timeout-sec must be at least 1');
+  }
   if (out.perWorkspace < 1) throw new Error('--per-workspace must be at least 1');
   if (out.sampleSec < 1) throw new Error('--sample-sec must be at least 1');
   return out;
@@ -74,16 +97,211 @@ export function planLayout(panes, perWorkspace) {
 }
 
 /**
- * Which panes stream: spread across workspaces (first pane of each workspace,
- * then the second, ...) so hidden and visible workspaces both carry output.
- * `panes` is [{ workspaceIndex, indexInWorkspace, ... }]; returns a Set of
- * positions into that array.
+ * Pane classes, spread across workspaces (first pane of each workspace, then
+ * the second, ...) so hidden and visible workspaces both carry load: the
+ * first `streaming` positions run the producer, the next `claude` run Claude
+ * Code, the rest stay idle. `panes` is [{ workspaceIndex, indexInWorkspace }];
+ * returns one class per pane, in the same order.
  */
-export function pickStreaming(panes, count) {
+export function assignClasses(panes, streaming, claude = 0) {
   const order = panes
     .map((p, pos) => ({ pos, ws: p.workspaceIndex, idx: p.indexInWorkspace }))
     .sort((a, b) => a.idx - b.idx || a.ws - b.ws);
-  return new Set(order.slice(0, count).map((o) => o.pos));
+  const cls = panes.map(() => 'idle');
+  order.forEach((o, rank) => {
+    if (rank < streaming) cls[o.pos] = 'streaming';
+    else if (rank < streaming + claude) cls[o.pos] = 'claude';
+  });
+  return cls;
+}
+
+/**
+ * Check the daemon's own report of its terminal engine
+ * (`daemon.ping {includeTerminalCore}` -> `terminalCore`) against the engine
+ * the run asked for. Throws, so an A/B can never compare an engine with
+ * itself. With no requested engine it only records what is running.
+ */
+export function verifyEngine(requested, ping) {
+  const core = ping && typeof ping === 'object' ? ping.terminalCore : undefined;
+  if (!core || (core.effective !== 'node' && core.effective !== 'rust')) {
+    if (!requested) return null;
+    throw new Error(`cannot verify the terminal engine: this daemon does not report it (daemon.ping terminalCore is missing; version ${ping?.version ?? 'unknown'})`);
+  }
+  const runtime = {
+    requested: core.requested, effective: core.effective,
+    rustAvailable: core.rustAvailable === true, environmentOverride: core.environmentOverride === true,
+  };
+  if (!requested) return runtime;
+  if (!runtime.rustAvailable) {
+    throw new Error('the Rust terminal module is unavailable in this build, so a node vs rust comparison cannot run on it');
+  }
+  if (runtime.environmentOverride) {
+    throw new Error('WMUX_TERMINAL_CORE is set for the daemon and overrides the saved engine; unset it and rerun');
+  }
+  if (runtime.requested !== requested) {
+    throw new Error(`the daemon started with the ${runtime.requested} engine, not ${requested}: the saved setting did not reach it`);
+  }
+  if (runtime.effective !== requested) {
+    throw new Error(`asked for the ${requested} engine but the daemon runs ${runtime.effective}`);
+  }
+  return runtime;
+}
+
+// ---------------------------------------------------------------------------
+// Claude Code panes
+// ---------------------------------------------------------------------------
+
+export const CLAUDE_PROMPT = 'Read README.md and reply with its first line only.';
+
+export const CLAUDE_README = '# wmux soak fixture\n\nA tiny repository for the wmux 20-pane stability benchmark.\n';
+
+/** Claude Code project settings: hooks that record turn start and end. */
+export function claudeProjectSettings(nodePath, hookPath) {
+  // Forward slashes and double quotes work in the shell Claude Code runs hooks
+  // in on every platform (Git Bash on Windows).
+  const q = (p) => `"${String(p).replace(/\\/g, '/')}"`;
+  const hook = (ev) => [{ hooks: [{ type: 'command', command: `${q(nodePath)} ${q(hookPath)} ${ev}` }] }];
+  return { hooks: { UserPromptSubmit: hook('start'), Stop: hook('end') } };
+}
+
+/** The hook: appends {ev, t} to $SOAK_STATUS_FILE. */
+export function claudeHookSource() {
+  return `'use strict';
+const fs = require('fs');
+const file = process.env.SOAK_STATUS_FILE;
+process.stdin.resume();
+process.stdin.on('data', () => {});
+if (file) fs.appendFileSync(file, JSON.stringify({ ev: process.argv[2], t: Date.now() }) + '\\n');
+setTimeout(() => process.exit(0), 50);
+`;
+}
+
+/**
+ * The line typed into a pane to start Claude Code in the fixture repo. Claude
+ * Code runs with the user's REAL profile (`realProfile`: USERPROFILE and HOME
+ * as they were before the sandbox), so its own login works; nothing is copied
+ * or passed through the environment. Only this pane's shell gets them back;
+ * every wmux path stays suffixed and sandboxed. `configDir` (optional) points
+ * Claude Code at another config dir the operator chose.
+ */
+export function claudeLaunchCommand(platform, { repoDir, configDir = null, statusFile, cmd, realProfile }) {
+  if (platform === 'win32') {
+    return [
+      `Set-Location -LiteralPath ${quoteArg(platform, repoDir)}`,
+      `$env:USERPROFILE=${quoteArg(platform, realProfile.USERPROFILE)}`,
+      realProfile.HOME ? `$env:HOME=${quoteArg(platform, realProfile.HOME)}` : 'Remove-Item Env:HOME -ErrorAction SilentlyContinue',
+      ...(configDir ? [`$env:CLAUDE_CONFIG_DIR=${quoteArg(platform, configDir)}`] : []),
+      `$env:SOAK_STATUS_FILE=${quoteArg(platform, statusFile)}`,
+      cmd,
+    ].join('; ');
+  }
+  const config = configDir ? `CLAUDE_CONFIG_DIR=${quoteArg(platform, configDir)} ` : '';
+  return `cd ${quoteArg(platform, repoDir)} && HOME=${quoteArg(platform, realProfile.HOME)} ${config}SOAK_STATUS_FILE=${quoteArg(platform, statusFile)} ${cmd}`;
+}
+
+/**
+ * What a Claude Code run added to the user's profile: new ~/.claude/projects
+ * entries and new top-level / project keys of ~/.claude.json. Snapshots are
+ * { projects: string[], configKeys: string[], configProjects: string[] }.
+ */
+export function profileDiff(before, after) {
+  const added = (a = [], b = []) => b.filter((x) => !a.includes(x));
+  return {
+    projectsAdded: added(before.projects, after.projects),
+    configKeysAdded: added(before.configKeys, after.configKeys),
+    configKeysRemoved: added(after.configKeys, before.configKeys),
+    configProjectsAdded: added(before.configProjects, after.configProjects),
+  };
+}
+
+/**
+ * Keys that answer Claude Code's folder-trust prompt with "Yes", read from the
+ * pane's control-stripped screen text: null when no prompt is shown or the
+ * selection cannot be read (then nothing is sent). The option order differs
+ * between versions, so the selected option (after the last ❯) decides.
+ */
+export function trustPromptKeys(text) {
+  if (!/trust\s*this\s*folder/i.test(text)) return null;
+  const at = text.lastIndexOf('\u276f');
+  if (at === -1) return null;
+  const selected = text.slice(at + 1).replace(/^[\s\d.]+/, '');
+  if (/^Yes/i.test(selected)) return ['enter'];
+  if (/^No/i.test(selected) && /^No[^]*?Yes/i.test(selected)) return ['down', 'enter'];
+  return null;
+}
+
+export function newClaudeState() {
+  return { turns: 0, completed: 0, inTurn: false, turnStartedAt: null, lastSubmitAt: null, awaitingStartSince: null, stopped: null, intervals: [], turnMs: [] };
+}
+
+/** Fold hook events ({ev: 'start'|'end', t}) into a pane's loop state. */
+export function applyClaudeEvents(state, events) {
+  for (const e of events) {
+    if (e.ev === 'start' && !state.inTurn) {
+      state.inTurn = true;
+      state.turnStartedAt = e.t;
+      state.awaitingStartSince = null;
+      state.intervals.push({ start: e.t, end: null });
+    } else if (e.ev === 'end' && state.inTurn) {
+      state.inTurn = false;
+      state.completed++;
+      state.turnMs.push(e.t - state.turnStartedAt);
+      state.intervals[state.intervals.length - 1].end = e.t;
+      state.turnStartedAt = null;
+    }
+  }
+  return state;
+}
+
+/**
+ * The loop's next step at `now`: 'submit' a prompt, 'interrupt' a turn over
+ * the timeout (and stop), or null. Caps: at most maxTurns prompts per pane,
+ * one every intervalSec, none after the run ends; a turn over turnTimeoutSec,
+ * or a prompt whose turn never starts, stops the pane's loop for good.
+ */
+export function nextClaudeAction(state, now, { maxTurns, intervalSec, turnTimeoutSec, runEnded = false }) {
+  if (state.stopped) return null;
+  if (state.inTurn) {
+    if (now - state.turnStartedAt > turnTimeoutSec * 1000) {
+      // Escape does not fire the Stop hook: close the turn here, or the pane
+      // would count as streaming (and stall) for the rest of the run.
+      state.stopped = 'turn-timeout';
+      state.inTurn = false;
+      state.intervals[state.intervals.length - 1].end = now;
+      state.turnStartedAt = null;
+      return 'interrupt';
+    }
+    if (runEnded) state.stopped = 'run-ended';
+    return null;
+  }
+  if (state.awaitingStartSince !== null && now - state.awaitingStartSince > turnTimeoutSec * 1000) {
+    state.stopped = 'turn-not-observed';
+    return 'interrupt';
+  }
+  if (runEnded) { state.stopped = 'run-ended'; return null; }
+  if (state.turns >= maxTurns) { state.stopped = 'max-turns'; return null; }
+  if (state.awaitingStartSince !== null) return null;
+  if (state.lastSubmitAt !== null && now - state.lastSubmitAt < intervalSec * 1000) return null;
+  state.turns++;
+  state.lastSubmitAt = now;
+  state.awaitingStartSince = now;
+  return 'submit';
+}
+
+/** Is wall-clock `t` inside one of the pane's turns? (A Claude pane counts as streaming only then.) */
+export function inTurnAt(intervals, t) {
+  return intervals.some((iv) => t >= iv.start && (iv.end === null || t < iv.end));
+}
+
+/**
+ * The part of an output gap [start, end] that falls inside the turn running
+ * at `start`, in ms (0 outside turns). A reply printed just before the Stop
+ * hook, followed by the idle wait for the next prompt, is not a stall.
+ */
+export function gapInTurnMs(intervals, start, end) {
+  const iv = intervals.find((i) => start >= i.start && (i.end === null || start < i.end));
+  if (!iv) return 0;
+  return Math.max(0, Math.min(end, iv.end ?? end) - start);
 }
 
 /**
@@ -258,7 +476,7 @@ function outcome(events) {
  *   focus: { workspaceSwitch, focused } }.
  * Fields may be missing on a sample; the summary skips what it does not have.
  */
-export function summarizeRun(samples, { stallMs = DEFAULTS.stallMs, windowMin = 5 } = {}) {
+export function summarizeRun(samples, { stallMs = DEFAULTS.stallMs, windowMin = 5, claude = [] } = {}) {
   const keyboard = samples.flatMap((s) => s.keyboard ?? []);
   const probes = samples.flatMap((s) => (s.probes ?? []).map((p) => ({ ...p, tSec: s.tSec })));
   const stalls = samples.flatMap((s) => s.stalls ?? []);
@@ -337,6 +555,9 @@ export function summarizeRun(samples, { stallMs = DEFAULTS.stallMs, windowMin = 
       renderer: memoryTrend(series('rendererBytes')),
       gpu: memoryTrend(series('gpuBytes')),
       processTree: memoryTrend(series('treeBytes')),
+      // Commit (private) bytes: Windows trims working sets, commit it cannot.
+      processTreeCommit: memoryTrend(series('treeCommitBytes')),
+      daemonCommit: memoryTrend(series('daemonCommitBytes')),
     },
     frames: {
       rafP50Ms: summarizeSamples(rafP50),
@@ -344,12 +565,29 @@ export function summarizeRun(samples, { stallMs = DEFAULTS.stallMs, windowMin = 
     },
     focus: {
       workspaceSwitches: samples.filter((s) => s.focus?.workspaceSwitch).length,
+      workspaceSwitchMisses: samples.filter((s) => s.focus?.workspaceSwitch && s.focus.switched === false).length,
       focusMisses: samples.filter((s) => s.focus && s.focus.focused === false).length,
     },
     windows,
+    claude: summarizeClaude(claude),
   };
   summary.flags = flagsFor(summary);
   return summary;
+}
+
+/** Claude Code panes: [{ paneIndex, ptyId, turns, completed, turnMs: [], stopped }]. */
+export function summarizeClaude(panes) {
+  if (!panes.length) return null;
+  const stopped = {};
+  for (const p of panes) if (p.stopped) stopped[p.stopped] = (stopped[p.stopped] ?? 0) + 1;
+  return {
+    panes: panes.length,
+    turnsSubmitted: panes.reduce((a, p) => a + p.turns, 0),
+    turnsCompleted: panes.reduce((a, p) => a + p.completed, 0),
+    turnMs: summarizeSamples(panes.flatMap((p) => p.turnMs)),
+    stopped,
+    perPane: panes.map((p) => ({ paneIndex: p.paneIndex, ptyId: p.ptyId, turns: p.turns, completed: p.completed, stopped: p.stopped })),
+  };
 }
 
 /** Plain-language findings a reader should not miss. Never a pass/fail gate. */
@@ -361,15 +599,23 @@ export function flagsFor(summary) {
   if (summary.stalls.episodes > 0) flags.push(`${summary.stalls.episodes} output stall(s) over ${summary.stalls.thresholdMs} ms on ${summary.stalls.panes} pane(s)`);
   if (summary.stalls.silentAtEnd.length > 0) flags.push(`${summary.stalls.silentAtEnd.length} streaming pane(s) silent at the last sample`);
   if (summary.frames.throttledSamples > 0) flags.push(`${summary.frames.throttledSamples} sample(s) with a throttled window (rAF p50 > 50 ms): frame numbers there are not trustworthy`);
+  const cs = summary.claude?.stopped ?? {};
+  if (cs['turn-timeout']) flags.push(`${cs['turn-timeout']} Claude pane(s) stopped after a turn ran past the timeout`);
+  if (cs['turn-not-observed']) flags.push(`${cs['turn-not-observed']} Claude pane(s) stopped: a submitted prompt never started a turn`);
+  if (summary.focus.workspaceSwitchMisses > 0) flags.push(`${summary.focus.workspaceSwitchMisses} workspace switch(es) left the same workspace active`);
   if (summary.focus.focusMisses > 0) flags.push(`${summary.focus.focusMisses} sample(s) where no terminal had keyboard focus after a switch`);
   return flags;
 }
 
 /** Compact console rendering of the summary. */
 export function renderSummary(summary) {
+  const engine = summary.engine
+    ? `terminal engine: ${summary.engine.requested ?? 'app default'} requested; daemon reports ${summary.engine.start?.effective ?? 'unknown'} at start, ${summary.engine.end?.effective ?? 'unknown'} at end`
+    : null;
   const lat = (o) => `p50 ${o.echoMs.p50 ?? '-'} / p95 ${o.echoMs.p95 ?? '-'} / max ${o.echoMs.max ?? '-'} ms (${o.echoed}/${o.sent} echoed, ${o.dropped} dropped)`;
   const mem = (t) => (t ? `${t.firstMiB} -> ${t.lastMiB} MiB (max ${t.maxMiB}, ${t.growthMiBPerHour ?? '-'} MiB/h)` : 'unavailable');
   return [
+    ...(engine ? [engine] : []),
     `samples: ${summary.samples} over ${Math.round(summary.durationSec)} s`,
     `keyboard echo (focused pane): ${lat(summary.keyboard)}`,
     `  first key after a switch: ${lat(summary.keyboard.afterSwitch)}`,
@@ -377,13 +623,102 @@ export function renderSummary(summary) {
     `  next frame: p50 ${summary.keyboard.frameMs.p50 ?? '-'} / p95 ${summary.keyboard.frameMs.p95 ?? '-'} ms`,
     `pane probes, streaming: ${lat(summary.probes.streaming)}`,
     `pane probes, idle: ${lat(summary.probes.idle)}`,
+    ...(summary.claude ? [
+      `Claude turns: ${summary.claude.turnsCompleted}/${summary.claude.turnsSubmitted} completed on ${summary.claude.panes} pane(s), p50 ${summary.claude.turnMs.p50 ?? '-'} / max ${summary.claude.turnMs.max ?? '-'} ms; stopped: ${JSON.stringify(summary.claude.stopped)}`,
+    ] : []),
     `stalls (> ${summary.stalls.thresholdMs} ms): ${summary.stalls.episodes} on ${summary.stalls.panes} pane(s), worst ${summary.stalls.worstGapMs ?? '-'} ms; silent at end: ${summary.stalls.silentAtEnd.length}`,
     `daemon RSS: ${mem(summary.memory.daemonRss)}`,
     `Electron working sets: ${mem(summary.memory.electronTotal)}`,
     `  renderer: ${mem(summary.memory.renderer)}; main: ${mem(summary.memory.electronMain)}; gpu: ${mem(summary.memory.gpu)}`,
     `process tree: ${mem(summary.memory.processTree)}`,
+    `commit, Windows only: process tree ${mem(summary.memory.processTreeCommit)}; daemon ${mem(summary.memory.daemonCommit)}`,
     `rAF p50 per sample: median ${summary.frames.rafP50Ms.p50 ?? '-'} ms; throttled samples: ${summary.frames.throttledSamples}`,
-    `workspace switches: ${summary.focus.workspaceSwitches}; focus misses: ${summary.focus.focusMisses}`,
+    `workspace switches: ${summary.focus.workspaceSwitches} (${summary.focus.workspaceSwitchMisses} did not switch); focus misses: ${summary.focus.focusMisses}`,
     ...(summary.flags.length ? ['flags:', ...summary.flags.map((f) => `  - ${f}`)] : ['flags: none']),
   ].join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// Process identity and teardown
+// ---------------------------------------------------------------------------
+
+const normPath = (p, platform) => {
+  const s = String(p ?? '').replace(/\\/g, '/').replace(/^"/, '');
+  return platform === 'win32' ? s.toLowerCase() : s;
+};
+
+/**
+ * May the harness kill `pid` as its own daemon? Only with positive evidence
+ * from one process lookup: the process started after the harness did, and its
+ * command line runs the app this harness launched. Missing data or a failed
+ * lookup is a no: a recycled pid may belong to the user's installed wmux.
+ */
+export function daemonPidVerdict(row, { harnessStartMs, appDir, platform }) {
+  if (!row || !Number.isFinite(row.createdMs) || typeof row.commandLine !== 'string') return false;
+  // ps reports start times to the second.
+  if (row.createdMs < Math.floor(harnessStartMs / 1000) * 1000) return false;
+  const dir = normPath(appDir, platform).replace(/\/$/, '') + '/';
+  return normPath(row.commandLine, platform).includes(dir);
+}
+
+/**
+ * Processes left behind by this run: started after the harness and naming one
+ * of the run's own sandbox paths on their command line.
+ * rows: [{ pid, createdMs, commandLine }].
+ */
+export function leftoverPids(rows, { needles, harnessStartMs, platform, excludePids = [] }) {
+  const keys = needles.filter(Boolean).map((n) => normPath(n, platform).replace(/\/$/, ''));
+  return rows.filter((r) => !excludePids.includes(r.pid)
+    && Number.isFinite(r.createdMs) && r.createdMs >= Math.floor(harnessStartMs / 1000) * 1000
+    && typeof r.commandLine === 'string'
+    && keys.some((k) => containsPath(normPath(r.commandLine, platform), k)))
+    .map((r) => r.pid);
+}
+
+/** `path` occurs in `text` as a whole path: `.../wmux-s1a` must not match `.../wmux-s1ab`. */
+export function containsPath(text, path) {
+  for (let i = text.indexOf(path); i !== -1; i = text.indexOf(path, i + 1)) {
+    const next = text[i + path.length];
+    if (next === undefined || next === '/' || next === '"' || next === "'" || next === ' ') return true;
+  }
+  return false;
+}
+
+/**
+ * Stop an instance in the only order that leaves nothing running:
+ *   1. kill the app and wait for it to exit (its daemon respawn controller
+ *      would otherwise restart a daemon whose socket closes);
+ *   2. daemon.shutdown;
+ *   3. wait until the daemon pipe is gone; if not, kill the daemon pid only
+ *      when the identity check passes;
+ *   4. one process pass over the sandbox paths, killing leftovers;
+ *   5. remove the sandbox, but only once the daemon pipe is gone, so a daemon
+ *      that survived keeps its token for manual cleanup.
+ * `io` supplies every side effect, so the order is unit-tested with fakes.
+ */
+export async function runTeardown(io, { pipeWaitMs = 10000, pollMs = 200 } = {}) {
+  const report = { appExited: false, daemonShutdownSent: false, daemonPipeGone: false, daemonKilled: false, leftoversKilled: 0, removed: false };
+  await io.killApp();
+  report.appExited = await io.waitAppExit();
+  try { report.daemonShutdownSent = await io.shutdownDaemon(); } catch { report.daemonShutdownSent = false; }
+  const pipeGone = async () => {
+    for (let waited = 0; waited <= pipeWaitMs; waited += pollMs) {
+      if (!(await io.daemonPipeAlive())) return true;
+      await io.sleep(pollMs);
+    }
+    return false;
+  };
+  report.daemonPipeGone = await pipeGone();
+  if (!report.daemonPipeGone) {
+    report.daemonKilled = await io.killDaemonIfOurs();
+    if (report.daemonKilled) report.daemonPipeGone = await pipeGone();
+  }
+  for (const pid of await io.findLeftovers()) {
+    if (await io.killPid(pid)) report.leftoversKilled++;
+  }
+  if (report.daemonPipeGone) {
+    await io.removeSandbox();
+    report.removed = true;
+  }
+  return report;
 }
