@@ -415,6 +415,14 @@ describe('writes and GraphQL carry their fields on stdin', () => {
     expect(bodies[put]).toEqual({ sha: HEAD, squash: true, squash_commit_message: LONG });
   });
 
+  it('the squash commit message keeps a multi-paragraph body after the subject and a blank line', async () => {
+    const { svc, calls, bodies } = makeService((args) => (isGraphql(args) ? mrAnswer() : { state: 'merged' }));
+    const body = 'First paragraph.\n\n- a list item\n\nCloses #12';
+    expect(await svc.merge('/repo', KEY, 7, { expectHead: HEAD, subject: 'feat: x (!7)', body })).toMatchObject({ ok: true });
+    const put = calls.findIndex((a) => a.includes('PUT'));
+    expect(bodies[put]?.squash_commit_message).toBe(`feat: x (!7)\n\n${body}`);
+  });
+
   it('a 40,000-character GraphQL query and variable reach glab as {query, variables} on stdin, never argv', async () => {
     const { svc, calls, bodies } = makeService(() => ({ data: { project: {} } }));
     expect(await svc.watchGraphql('/wmux', KEY, LONG, { fullPath: 'group/sub/proj', note: LONG })).toMatchObject({ ok: true });

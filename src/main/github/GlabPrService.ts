@@ -768,7 +768,7 @@ export class GlabPrService implements PrProvider {
     host: string,
     path: string,
     cwd: string,
-    write?: { method: 'POST' | 'PUT' | 'PATCH'; fields: Record<string, unknown> },
+    write?: { method: 'POST' | 'PUT'; fields: Record<string, unknown> },
   ): Promise<{ stdout: string }> {
     const target = glabHostTarget(host);
     const args = write ? ['-X', write.method, path, '--input', '-', '-H', 'Content-Type: application/json'] : [path];
@@ -1021,7 +1021,9 @@ export class GlabPrService implements PrProvider {
    * merge does: a fresh read right before it refuses another head (`moved`)
    * or an MR that cannot merge now (glabMergeBlock), `authorize` is asked
    * last, and the PUT sends `sha` so GitLab itself refuses a head that moved
-   * in between (409). An empty subject takes the title and `!iid`.
+   * in between (409). An empty subject takes the title and `!iid`. The
+   * squash commit message is the subject, then the body after a blank line
+   * when there is one (GitLab has one message field where gh has two).
    */
   async merge(repoPath: string, key: string, iid: number, req: PrMergeRequest, authorize?: () => string | null): Promise<PrWriteResult> {
     let project: GlabProject;
@@ -1044,11 +1046,12 @@ export class GlabPrService implements PrProvider {
     const denied = authorize?.() ?? null;
     if (denied) return { ok: false, code: 'invalid', message: `the merge is not authorized now (${denied})` };
     const subject = req.subject.trim() || glabSquashSubject(f.title ?? '', iid);
+    const message = req.body ? `${subject}\n\n${req.body}` : subject;
     let answer: string;
     try {
       ({ stdout: answer } = await this.api(project.host, `projects/${encodeURIComponent(project.path)}/merge_requests/${iid}/merge`, repoPath, {
         method: 'PUT',
-        fields: { sha: req.expectHead, squash: true, squash_commit_message: subject },
+        fields: { sha: req.expectHead, squash: true, squash_commit_message: message },
       }));
     } catch (err) {
       return glabMergeFailure(err);
