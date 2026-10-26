@@ -15,7 +15,13 @@ const REFRESH_MS = 10_000;
 
 type Task = { id: string; status: LedgerEntry['status']; pty: string };
 
-const tmpDir = (): string => fs.mkdtempSync(nodePath.join(os.tmpdir(), 'wmux-task-liveness-'));
+// Every temp dir a case makes, removed after it.
+const tempDirs: string[] = [];
+const tmpDir = (): string => {
+  const dir = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'wmux-task-liveness-'));
+  tempDirs.push(dir);
+  return dir;
+};
 
 /** A world of task workspaces (`tasks`, by workspace id), the mirror's view
  *  of them (null: not pushed yet), the daemon's sessions and whether it has
@@ -109,6 +115,7 @@ afterEach(() => {
   setFanOutGuardsForTests(null);
   setDormantRefresh(null);
   vi.useRealTimers();
+  for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
 describe('task workspace liveness (#2387)', () => {

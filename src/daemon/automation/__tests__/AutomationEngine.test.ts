@@ -1,13 +1,28 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import type { AutomationEvent, AutomationRun } from '../../../shared/automation';
 import type { SessionPromptScheduleResult } from '../../../shared/sessionPromptSchedule';
 import { AutomationEngine, screenShowsPrompt, type AutomationAgentView, type AutomationEnginePorts } from '../AutomationEngine';
 import { AUTOMATION_RUNS_FILE, AUTOMATIONS_FILE, snapshotPath } from '../store';
 
 const MIN = 60_000;
+
+// Every temp dir and engine this file makes. Once the file ends the engines
+// are stopped (a started one keeps timers that write into its dir), then the
+// dirs are removed.
+const tempDirs: string[] = [];
+const engines: AutomationEngine[] = [];
+function tempDir(prefix: string): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
+}
+afterAll(() => {
+  for (const engine of engines.splice(0)) engine.stop();
+  for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+});
 
 const draft = (over: Record<string, unknown> = {}) => ({
   name: 'Nightly',
@@ -31,7 +46,7 @@ interface Harness {
 }
 
 function harness(opts: { dir?: string; ports?: Partial<AutomationEnginePorts> } = {}): Harness {
-  const dir = opts.dir ?? fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-engine-'));
+  const dir = opts.dir ?? tempDir('wmux-engine-');
   const clock = { t: new Date(2026, 8, 28, 9, 0).getTime() };
   let seq = 0;
   const h: Omit<Harness, 'engine'> = {
@@ -68,7 +83,9 @@ function harness(opts: { dir?: string; ports?: Partial<AutomationEnginePorts> } 
     killTree: async (pid) => { h.killed.push(pid); },
     ...opts.ports,
   };
-  return { ...h, engine: new AutomationEngine(ports) };
+  const engine = new AutomationEngine(ports);
+  engines.push(engine);
+  return { ...h, engine };
 }
 
 const settle = async (): Promise<void> => {
@@ -150,7 +167,7 @@ describe('AutomationEngine — revision & grants', () => {
   });
 
   it('boot: a schedule already holding a stale grant gets one needs-regrant notice', async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-engine-'));
+    const dir = tempDir('wmux-engine-');
     fs.writeFileSync(path.join(dir, AUTOMATIONS_FILE), JSON.stringify({
       version: 1,
       automations: [
@@ -292,7 +309,7 @@ describe('AutomationEngine — launch & readiness', () => {
   });
 
   it('a claim that cannot be persisted never spawns', async () => {
-    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-ro-')), 'not-a-dir');
+    const file = path.join(tempDir('wmux-ro-'), 'not-a-dir');
     fs.writeFileSync(file, 'x');
     const h = harness({ dir: file });
     const run = await startedRun(h);
@@ -311,7 +328,7 @@ describe('AutomationEngine — launch & readiness', () => {
   });
 
   it('boot: a run left launching/running is marked unknown and never relaunched', async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-boot-'));
+    const dir = tempDir('wmux-boot-');
     fs.writeFileSync(path.join(dir, AUTOMATIONS_FILE), JSON.stringify({
       version: 1,
       automations: [{ ...draft(), id: 'a1', enabled: false, revision: 1, createdAt: 1 }],

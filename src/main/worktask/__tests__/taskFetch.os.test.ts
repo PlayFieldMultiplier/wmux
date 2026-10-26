@@ -152,8 +152,13 @@ describe('fetchTaskRefs', () => {
 describe('task.fetch RPC', () => {
   type Handler = (params: Record<string, unknown>, ctx?: Record<string, unknown>) => Promise<unknown>;
   type Rec = { taskId: string; botId: string; ownerWorkspaceId: string };
+  // Every wmux dir a case's setup makes, removed after it.
+  const dirs: string[] = [];
+  afterEach(() => { for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
   const setup = (over: { tasks?: unknown[]; caller?: string | null; botRepo?: string; row?: unknown; ended?: unknown; reclaimed?: (ws: string, pty: string) => Rec | null; exists?: boolean } = {}) => {
     const handlers = new Map<string, Handler>();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-task-fetch-rpc-'));
+    dirs.push(dir);
     const fetch = vi.fn(async () => ({ ok: true as const, remote: 'origin' as const, defaultBranch: 'main', fetchCommand: 'git fetch --no-tags R +refs/heads/main:refs/remotes/origin/main', fetchCommandShell: 'linux' as const, fetched: [{ ref: 'origin/main', sha: 'abc' }], missing: [] }));
     const push = vi.fn();
     const row = over.row === undefined ? { id: 'wtask-1', ownerWorkspaceId: 'ws-owner', taskWorkspaceId: 'ws-task', dispatch: { origin: { kind: 'pane' }, repoKey: 'github.com/acme/app', gitCommonDir: '/r/.git' } } : over.row;
@@ -164,7 +169,7 @@ describe('task.fetch RPC', () => {
       reclaimedWorkerOfPane: over.reclaimed ?? (() => null),
       exists: () => over.exists ?? true,
       resolveCallerWorkspace: async () => (over.caller === undefined ? 'ws-task' : over.caller),
-      wmuxDir: () => fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-task-fetch-rpc-')),
+      wmuxDir: () => dir,
       fetch: fetch as never,
       push: push as never,
       repoDefaultBranch: async () => 'main',

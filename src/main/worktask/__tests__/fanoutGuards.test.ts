@@ -25,9 +25,13 @@ import {
   type FanOutAuditRecord,
 } from '../fanoutGuards';
 
+// Every temp dir a case makes, removed after it.
+const tempDirs: string[] = [];
+
 afterEach(() => {
   setHolderSource(null);
   setFanOutGuardsForTests(null);
+  for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
 /** What the worker lifecycle host installs: the holder set every live cap
@@ -51,8 +55,10 @@ const ledgerRow = (id: string, ws: string, status: LedgerEntry['status']): Ledge
   updatedBy: { kind: 'worker', workspaceId: ws }, dispatch: { origin: { kind: 'pane' } },
 });
 
-function tmpDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-fanout-guards-'));
+function tmpDir(prefix = 'wmux-fanout-guards-'): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
 }
 
 function guards(dir: string, opts: {
@@ -442,7 +448,7 @@ describe('a bot worker is named even without its stamp (ledger dispatch fallback
 
 describe('FanOutGuards.refundStart', () => {
   it('gives back the hour for tasks that never got a workspace, on disk too', () => {
-    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-guards-refund-'));
+    const d = tmpDir('wmux-guards-refund-');
     const g = new FanOutGuards({ dir: d, countLiveTasks: () => 0, ledgerTaskOwner: () => null });
     expect(g.reserve('k', 3).ok).toBe(true);
     g.commitStart('k');

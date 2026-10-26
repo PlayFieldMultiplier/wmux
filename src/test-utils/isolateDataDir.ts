@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { afterAll } from 'vitest';
 
 // Save the real home before overriding; do not overwrite if already set.
 if (!process.env.WMUX_TEST_REAL_HOME) {
@@ -31,13 +32,18 @@ process.env.WMUX_DATA_SUFFIX ??= '-vitest';
 // live data dir even when HOME was never overridden.
 process.env.WMUX_TEST_ISOLATED = '1';
 
-// Register best-effort removal of the temp dir on process exit (never throw).
-process.once('exit', () => {
+// Remove the temp HOME once this file's tests are done; a setup file's afterAll
+// runs after the file's own. The process 'exit' handler this replaces left one
+// of these dirs per test file in %TEMP% on Windows (tens of thousands), and it
+// swallowed every error, so nothing said why. Here a HOME that cannot be
+// removed fails the file and names what is still in it: a test left a handle
+// open (a child, a watcher, a stream) in its HOME.
+afterAll(() => {
   try {
-    if (fs.existsSync(tempDir)) {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
-  } catch {
-    // Best-effort cleanup on exit; never throw.
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  } catch (err) {
+    let left: string[] = [];
+    try { left = fs.readdirSync(tempDir, { recursive: true }).map(String); } catch { /* the dir itself is what failed */ }
+    throw new Error(`could not remove the test HOME ${tempDir}: ${(err as Error).message}\nstill there: ${left.join(', ') || '(nothing listed)'}`);
   }
 });

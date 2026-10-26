@@ -13,15 +13,27 @@ const TARGET = { pid: 1, windowId: 'w1' };
 const FAKE = path.join(__dirname, 'fixtures', 'fakeHelper.mjs');
 
 const helpers: HelperProcess[] = [];
+// The helpers' children and log dirs: a dir goes once every child that may
+// still append to its log has exited.
+const children: ChildProcessWithoutNullStreams[] = [];
+const logDirs: string[] = [];
 
 function makeHelper(mode: string, extra: Partial<ConstructorParameters<typeof HelperProcess>[0]> = {}) {
-  const logFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-helper-')), 'requests.log');
+  const logDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-helper-'));
+  logDirs.push(logDir);
+  const logFile = path.join(logDir, 'requests.log');
+  const spawnChild = extra.spawn ?? ((cmd, args) => spawn(cmd, [...args], { stdio: 'pipe', windowsHide: true }));
   const helper = new HelperProcess({
     command: process.execPath,
     args: [FAKE, mode, logFile],
     helloTimeoutMs: 2_000,
     timeoutFor: () => 1_000,
     ...extra,
+    spawn: (cmd, args) => {
+      const child = spawnChild(cmd, args);
+      children.push(child);
+      return child;
+    },
   });
   helpers.push(helper);
   // The helper appends while these poll, so a read can land between the
@@ -53,8 +65,12 @@ async function waitFor(check: () => boolean, ms = 3_000): Promise<boolean> {
   return check();
 }
 
-afterEach(() => {
+afterEach(async () => {
   for (const h of helpers.splice(0)) h.dispose();
+  await Promise.all(children.splice(0).map((child) => (child.exitCode !== null || child.signalCode !== null
+    ? undefined
+    : new Promise<void>((resolve) => { child.once('exit', () => resolve()); }))));
+  for (const dir of logDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
 describe('HelperProcess', () => {

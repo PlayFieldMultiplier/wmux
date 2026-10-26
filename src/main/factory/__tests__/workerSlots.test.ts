@@ -14,7 +14,13 @@ import { setTaskLedgerForTests } from '../../deck/taskLedgerHost';
 import { FanOutGuards, recordFanoutTaskPane, setFanOutGuardsForTests, stampFanoutTaskPane, taskOfWorkspace } from '../../worktask/fanoutGuards';
 
 const BOT = 'bot-0000000a';
-const tmp = (): string => fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-worker-slots-'));
+// Every temp dir a case makes, removed after it.
+const tempDirs: string[] = [];
+const tmp = (): string => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-worker-slots-'));
+  tempDirs.push(dir);
+  return dir;
+};
 
 function store(dir: string, opts: { rows?: LedgerEntry[]; now?: () => number; warn?: string[] } = {}): WorkerSlots {
   const s = new WorkerSlots(path.join(dir, 'factory', WORKER_SLOTS_FILENAME), () => opts.rows ?? [], (l) => opts.warn?.push(l), opts.now ?? Date.now);
@@ -31,6 +37,7 @@ afterEach(() => {
   setWorkerSlotsForTests(null);
   setFanOutGuardsForTests(null);
   __resetWorkspaceMirrorForTest();
+  for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
 describe('WorkerSlots', () => {

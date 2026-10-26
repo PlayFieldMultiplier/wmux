@@ -201,8 +201,12 @@ interface Rig {
   build: () => HolderSnapshot;
 }
 
+// Every temp dir a rig makes, removed after the case.
+const tempDirs: string[] = [];
+
 function rig(over: Partial<HolderSnapshot> = {}): Rig {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-holders-'));
+  tempDirs.push(dir);
   const guards = new FanOutGuards({ dir, now: () => NOW, openWorkspaceIds: () => [], ledgerTaskOwner: () => null, ledgerBotTask: () => null });
   setFanOutGuardsForTests(guards);
   const clock = { now: NOW };
@@ -276,6 +280,7 @@ afterEach(() => {
   setHolderSource(null);
   setFanOutGuardsForTests(null);
   setWorkerSlotsForTests(null);
+  for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
 describe('the four caps agree on the paths that used to split them (#2393)', () => {

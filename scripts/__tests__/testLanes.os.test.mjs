@@ -11,7 +11,7 @@
 // The rule half: synthetic trees pin what each rule counts and what it skips.
 // Fixture sources spell module names through a variable, so this file's own
 // text never reads as an OS import to the rule it tests.
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -87,9 +87,16 @@ describe('the named lanes', () => {
   });
 });
 
+// Every throwaway tree a case makes, removed after it.
+const trees = [];
+afterEach(() => {
+  for (const root of trees.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+});
+
 /** A throwaway repo-shaped tree: { 'rel/path': source }. */
 function tree(files) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-lanes-')));
+  trees.push(root);
   for (const [rel, text] of Object.entries(files)) {
     fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
     fs.writeFileSync(path.join(root, rel), text);

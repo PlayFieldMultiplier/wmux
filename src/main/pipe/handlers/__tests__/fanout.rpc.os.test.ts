@@ -22,7 +22,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as nodePath from 'node:path';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RpcContext } from '../../../../shared/rpc';
 import { FANOUT_MAX_TASKS, FANOUT_PROMPT_MAX_BYTES } from '../../../../shared/workTask';
 import { CHANNEL_TOPIC_MAX, HUMAN_WORKSPACE_ID } from '../../../../shared/channels';
@@ -47,6 +47,19 @@ import type { LedgerEntry } from '../../../../shared/ledger';
 import type { FanoutPreset } from '../../../../shared/fanoutPreset';
 import type { DaemonClient } from '../../../DaemonClient';
 import { validateFanoutTaskGraph } from '../../../../shared/fanoutTaskGraph';
+
+// Every temp dir this file makes, removed once it ends. A fan-out run is
+// detached and its guards may still append to their audit file after a case
+// returns, so the dirs go when nothing of the file can write any more.
+const tempDirs: string[] = [];
+function tempDir(prefix: string): string {
+  const dir = fs.mkdtempSync(nodePath.join(os.tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
+}
+afterAll(() => {
+  for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+});
 
 const CALLER_WS = 'ws-caller';
 // Resolved to NATIVE form. The handler runs the caller's cwd through
@@ -238,7 +251,7 @@ function setup(opts?: {
   const guards =
     opts?.guards ??
     new FanOutGuards({
-      dir: fs.mkdtempSync(nodePath.join(os.tmpdir(), 'wmux-fanout-rpc-')),
+      dir: tempDir('wmux-fanout-rpc-'),
       countLiveTasks: () => 0,
       ledgerTaskOwner: () => null,
     });
@@ -505,7 +518,7 @@ describe('files and dependsOn travel with the tasks', () => {
 
   it('charges a dependent task on the hour when it starts, refunds it once, and settles the fan-out after the last one', async () => {
     const guards = new FanOutGuards({
-      dir: fs.mkdtempSync(nodePath.join(os.tmpdir(), 'wmux-fanout-rpc-')),
+      dir: tempDir('wmux-fanout-rpc-'),
       countLiveTasks: () => 0,
       ledgerTaskOwner: () => null,
     });
@@ -684,7 +697,7 @@ describe('an evicted key can never restart a fan-out that already spawned', () =
     // past the 24-task hourly cap unless each unspawned task is refunded on
     // disk, and the forgotten key answers expired instead of running again.
     const guards = new FanOutGuards({
-      dir: fs.mkdtempSync(nodePath.join(os.tmpdir(), 'wmux-fanout-rpc-')),
+      dir: tempDir('wmux-fanout-rpc-'),
       countLiveTasks: () => 0,
       ledgerTaskOwner: () => null,
     });
@@ -1406,7 +1419,7 @@ function guardsIn(dir: string, opts: { ledger?: (ws: string) => string | null; l
 }
 
 function tmp(): string {
-  return fs.mkdtempSync(nodePath.join(os.tmpdir(), 'wmux-fanout-brakes-'));
+  return tempDir('wmux-fanout-brakes-');
 }
 
 describe('task.fanout.start — depth-1', () => {
@@ -1786,7 +1799,7 @@ describe('task.fanout.start — preset and agents', () => {
   });
 
   it('gives back the hourly quota for tasks that never got a workspace', async () => {
-    const dir = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'wmux-fanout-refund-'));
+    const dir = tempDir('wmux-fanout-refund-');
     const g = new FanOutGuards({ dir, countLiveTasks: () => 0, ledgerTaskOwner: () => null });
     const h = setup({ guards: g, presets: [IMAGE], requireApproval: false });
     // The harness service returns { ok: true, tasks: [] }: nothing spawned.
@@ -1884,7 +1897,7 @@ describe('task.fanout.start — preset and agents', () => {
   });
 
   it('worktree:false needs no repository: a non-repo caller is accepted', async () => {
-    const outside = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'wmux-fanout-norepo-'));
+    const outside = tempDir('wmux-fanout-norepo-');
     const h = setup({ presets: [IMAGE], cwd: outside });
     const res = await h.call(goodParams({ preset: 'Image' }));
     expect(res).toMatchObject({ ok: true, status: 'accepted', repoPath: fs.realpathSync(outside) });
@@ -1903,7 +1916,7 @@ describe('task.fanout.start — preset and agents', () => {
   it('the depth guard refuses fan-out from a worktree:false worker', async () => {
     // A codex worker in an output folder is still a stamped task workspace —
     // the lineage stamp is written by the same pty.create path.
-    const g = new FanOutGuards({ dir: fs.mkdtempSync(nodePath.join(os.tmpdir(), 'wmux-fanout-d1-')), countLiveTasks: () => 0, ledgerTaskOwner: () => null });
+    const g = new FanOutGuards({ dir: tempDir('wmux-fanout-d1-'), countLiveTasks: () => 0, ledgerTaskOwner: () => null });
     g.markTask(CALLER_WS, 'ws-brain');
     const h = setup({ guards: g, presets: [IMAGE] });
     const err = errorOf(await h.call(goodParams({ preset: 'Image' })));
