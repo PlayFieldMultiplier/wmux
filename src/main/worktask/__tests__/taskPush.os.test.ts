@@ -694,75 +694,83 @@ describe('task.push RPC', () => {
   it('a skip a later report superseded holds nothing back: sent back, reported again, completed by its merged PR, the resumed worker pushes', async () => {
     const ledgerDir = trackedTempDir('wmux-task-push-ledger-');
     const ledger = new TaskLedger({ dir: ledgerDir });
-    const id = 'wtask-1';
-    await ledger.register({ id, taskWorkspaceId: 'ws-task', ownerWorkspaceId: 'ws-owner', title: 't', dispatch: { origin: { kind: 'bot', botId: 'bot-1' }, preset: 'default', repoKey: 'github.com/acme/app', gitCommonDir: '/r/.git' } });
-    const step = async (status: string, actor: { kind: 'worker' | 'brain'; workspaceId: string }): Promise<void> => {
-      const r = await ledger.update({ id, status, actor, expectedRev: (ledger.get(id) as { rev: number }).rev });
-      if (!r.ok) throw new Error(r.message);
-    };
-    // A no-changes report (rev 2), its skip (rev 3), sent back (rev 4).
-    await step('review_requested', { kind: 'worker', workspaceId: 'ws-task' });
-    expect(await recordNoChangesGate(ledger, id, 'no commits', Date.now, 'b'.repeat(40))).toBe(true);
-    await step('input_required', { kind: 'brain', workspaceId: 'ws-owner' });
-    // A code report (rev 5) whose gate recorded nothing, completed by its merged PR (rev 6).
-    await step('review_requested', { kind: 'worker', workspaceId: 'ws-task' });
-    const merged = await completeMergedTask(ledger, id, 7, (ledger.get(id) as { rev: number }).rev);
-    expect(merged.entry).toMatchObject({ status: 'completed', completion: { source: 'merge', pr: 7 }, reportedAtRev: 5, gate: { skipped: 'no_changes', reportRev: 2 } });
-    const handlers = new Map<string, Handler>();
-    const push = vi.fn(async (i: { branch: string }) => ({ ok: true as const, branch: i.branch, remote: 'origin' as const, head: 'f'.repeat(40), output: '' }));
-    registerTaskPushRpc({ register: (m: string, h: Handler) => handlers.set(m, h) } as never, {
-      getWindow: () => null,
-      daemon: { rpc: vi.fn(async () => ({ ok: true, tasks: [{ id, status: 'closed', branch: 'wtask/one', worktreePath: '/w/one' }] })) },
-      getLedger: () => ledger,
-      resolveCallerWorkspace: async () => 'ws-resumed',
-      reclaimedWorkerOfPane: () => ({ taskId: id, botId: 'bot-1', ownerWorkspaceId: 'ws-owner' }),
-      exists: () => true,
-      wmuxDir: rpcDir,
-      push: push as never,
-      repoDefaultBranch: async () => 'main',
-    });
-    expect(await (handlers.get('task.push') as Handler)({ senderPtyId: 'pty-9' }, local)).toMatchObject({ ok: true });
-    expect(push).toHaveBeenCalledTimes(1);
-    // Its writes land before its dir is removed.
-    await ledger.flush();
+    try {
+      const id = 'wtask-1';
+      await ledger.register({ id, taskWorkspaceId: 'ws-task', ownerWorkspaceId: 'ws-owner', title: 't', dispatch: { origin: { kind: 'bot', botId: 'bot-1' }, preset: 'default', repoKey: 'github.com/acme/app', gitCommonDir: '/r/.git' } });
+      const step = async (status: string, actor: { kind: 'worker' | 'brain'; workspaceId: string }): Promise<void> => {
+        const r = await ledger.update({ id, status, actor, expectedRev: (ledger.get(id) as { rev: number }).rev });
+        if (!r.ok) throw new Error(r.message);
+      };
+      // A no-changes report (rev 2), its skip (rev 3), sent back (rev 4).
+      await step('review_requested', { kind: 'worker', workspaceId: 'ws-task' });
+      expect(await recordNoChangesGate(ledger, id, 'no commits', Date.now, 'b'.repeat(40))).toBe(true);
+      await step('input_required', { kind: 'brain', workspaceId: 'ws-owner' });
+      // A code report (rev 5) whose gate recorded nothing, completed by its merged PR (rev 6).
+      await step('review_requested', { kind: 'worker', workspaceId: 'ws-task' });
+      const merged = await completeMergedTask(ledger, id, 7, (ledger.get(id) as { rev: number }).rev);
+      expect(merged.entry).toMatchObject({ status: 'completed', completion: { source: 'merge', pr: 7 }, reportedAtRev: 5, gate: { skipped: 'no_changes', reportRev: 2 } });
+      const handlers = new Map<string, Handler>();
+      const push = vi.fn(async (i: { branch: string }) => ({ ok: true as const, branch: i.branch, remote: 'origin' as const, head: 'f'.repeat(40), output: '' }));
+      registerTaskPushRpc({ register: (m: string, h: Handler) => handlers.set(m, h) } as never, {
+        getWindow: () => null,
+        daemon: { rpc: vi.fn(async () => ({ ok: true, tasks: [{ id, status: 'closed', branch: 'wtask/one', worktreePath: '/w/one' }] })) },
+        getLedger: () => ledger,
+        resolveCallerWorkspace: async () => 'ws-resumed',
+        reclaimedWorkerOfPane: () => ({ taskId: id, botId: 'bot-1', ownerWorkspaceId: 'ws-owner' }),
+        exists: () => true,
+        wmuxDir: rpcDir,
+        push: push as never,
+        repoDefaultBranch: async () => 'main',
+      });
+      expect(await (handlers.get('task.push') as Handler)({ senderPtyId: 'pty-9' }, local)).toMatchObject({ ok: true });
+      expect(push).toHaveBeenCalledTimes(1);
+    } finally {
+      // Its pending writes land before its dir is removed, whatever failed.
+      await ledger.flush();
+    }
   });
 
   it('holds the push to the pin on the dispatch, else the bot\'s profile\'s; a row with neither is pinned on the ledger at its first use', async () => {
     const ledgerDir = trackedTempDir('wmux-task-push-ledger-');
     const ledger = new TaskLedger({ dir: ledgerDir });
-    const dispatch = { origin: { kind: 'bot', botId: 'bot-1' }, repoKey: 'github.com/acme/app', gitCommonDir: '/r/.git' };
-    const pushWith = async (row: Record<string, unknown>, profilePin?: string) => {
-      const handlers = new Map<string, Handler>();
-      const push = vi.fn(async (i: { branch: string; recordOriginPin?: (p: string) => Promise<string | null> }) => {
-        // The push records origin's pin as read from the recorded repository.
-        if (i.recordOriginPin) await i.recordOriginPin('git@github.com:acme/app');
-        return { ok: true as const, branch: i.branch, remote: 'origin' as const, head: 'f'.repeat(40), output: '' };
-      });
-      await ledger.register({ id: row.id as string, taskWorkspaceId: 'ws-task', ownerWorkspaceId: 'ws-owner', title: 't', dispatch: row.dispatch as never });
-      registerTaskPushRpc({ register: (m: string, h: Handler) => handlers.set(m, h) } as never, {
-        getWindow: () => null,
-        daemon: { rpc: vi.fn(async () => ({ ok: true, tasks: [{ id: row.id, status: 'open', branch: 'wtask/one', worktreePath: '/w/one' }] })) },
-        getLedger: () => ({ findOpenByTaskWorkspace: () => ledger.get(row.id as string), get: (id: string) => ledger.get(id), recordOriginPin: (id: string, p: string) => ledger.recordOriginPin(id, p) }) as never,
-        resolveCallerWorkspace: async () => 'ws-task',
-        exists: () => true,
-        wmuxDir: rpcDir,
-        push: push as never,
-        repoDefaultBranch: async () => 'main',
-        botOriginPin: () => profilePin,
-      });
-      expect(await (handlers.get('task.push') as Handler)({ senderPtyId: 'pty-1' }, local)).toMatchObject({ ok: true });
-      return push.mock.calls[0][0] as { expectedOriginPin?: string; recordOriginPin?: unknown };
-    };
-    const pinned = await pushWith({ id: 'wtask-a', dispatch: { ...dispatch, originPin: 'https://github.com/acme/app.git' } }, 'git@github.com:acme/other');
-    expect(pinned).toMatchObject({ expectedOriginPin: 'https://github.com/acme/app.git' });
-    expect(pinned.recordOriginPin).toBeUndefined();
-    expect(await pushWith({ id: 'wtask-b', dispatch }, 'git@github.com:acme/app')).toMatchObject({ expectedOriginPin: 'git@github.com:acme/app' });
-    // A legacy row: pinned at its first push, and held to that pin after a reload.
-    const legacy = await pushWith({ id: 'wtask-c', dispatch });
-    expect(legacy.expectedOriginPin).toBeUndefined();
-    expect(typeof legacy.recordOriginPin).toBe('function');
-    await ledger.flush();
-    expect(new TaskLedger({ dir: ledgerDir }).get('wtask-c')?.dispatch?.originPin).toBe('git@github.com:acme/app');
+    try {
+      const dispatch = { origin: { kind: 'bot', botId: 'bot-1' }, repoKey: 'github.com/acme/app', gitCommonDir: '/r/.git' };
+      const pushWith = async (row: Record<string, unknown>, profilePin?: string) => {
+        const handlers = new Map<string, Handler>();
+        const push = vi.fn(async (i: { branch: string; recordOriginPin?: (p: string) => Promise<string | null> }) => {
+          // The push records origin's pin as read from the recorded repository.
+          if (i.recordOriginPin) await i.recordOriginPin('git@github.com:acme/app');
+          return { ok: true as const, branch: i.branch, remote: 'origin' as const, head: 'f'.repeat(40), output: '' };
+        });
+        await ledger.register({ id: row.id as string, taskWorkspaceId: 'ws-task', ownerWorkspaceId: 'ws-owner', title: 't', dispatch: row.dispatch as never });
+        registerTaskPushRpc({ register: (m: string, h: Handler) => handlers.set(m, h) } as never, {
+          getWindow: () => null,
+          daemon: { rpc: vi.fn(async () => ({ ok: true, tasks: [{ id: row.id, status: 'open', branch: 'wtask/one', worktreePath: '/w/one' }] })) },
+          getLedger: () => ({ findOpenByTaskWorkspace: () => ledger.get(row.id as string), get: (id: string) => ledger.get(id), recordOriginPin: (id: string, p: string) => ledger.recordOriginPin(id, p) }) as never,
+          resolveCallerWorkspace: async () => 'ws-task',
+          exists: () => true,
+          wmuxDir: rpcDir,
+          push: push as never,
+          repoDefaultBranch: async () => 'main',
+          botOriginPin: () => profilePin,
+        });
+        expect(await (handlers.get('task.push') as Handler)({ senderPtyId: 'pty-1' }, local)).toMatchObject({ ok: true });
+        return push.mock.calls[0][0] as { expectedOriginPin?: string; recordOriginPin?: unknown };
+      };
+      const pinned = await pushWith({ id: 'wtask-a', dispatch: { ...dispatch, originPin: 'https://github.com/acme/app.git' } }, 'git@github.com:acme/other');
+      expect(pinned).toMatchObject({ expectedOriginPin: 'https://github.com/acme/app.git' });
+      expect(pinned.recordOriginPin).toBeUndefined();
+      expect(await pushWith({ id: 'wtask-b', dispatch }, 'git@github.com:acme/app')).toMatchObject({ expectedOriginPin: 'git@github.com:acme/app' });
+      // A legacy row: pinned at its first push, and held to that pin after a reload.
+      const legacy = await pushWith({ id: 'wtask-c', dispatch });
+      expect(legacy.expectedOriginPin).toBeUndefined();
+      expect(typeof legacy.recordOriginPin).toBe('function');
+      await ledger.flush();
+      expect(new TaskLedger({ dir: ledgerDir }).get('wtask-c')?.dispatch?.originPin).toBe('git@github.com:acme/app');
+    } finally {
+      // Its pending writes land before its dir is removed, whatever failed.
+      await ledger.flush();
+    }
   });
 
   it('a push under way reads as unknown in main\'s record until it ends', async () => {

@@ -12,19 +12,17 @@ import { MODEL_ENV_MARKER } from '../../../shared/workerLaunch';
 import { setTaskLedgerForTests } from '../../deck/taskLedgerHost';
 import { FanOutGuards, recordFanoutTaskPane, setFanOutGuardsForTests, stampFanoutTaskPane, taskOfWorkspace } from '../../worktask/fanoutGuards';
 import { trackedTempDir } from '../../../test-utils/trackedTempDir';
+import { workerSlotStores } from '../../../test-utils/workerSlotStores';
 
 const BOT = 'bot-0000000a';
-// The worker-slot stores a case opens, disposed after it: a coalesced write
-// still pending would otherwise land after the case's dir is removed and make
-// it again.
-const slotStores: WorkerSlots[] = [];
+const slotStores = workerSlotStores();
 
 const tmp = (): string => trackedTempDir('wmux-worker-slots-');
 
 function store(dir: string, opts: { rows?: LedgerEntry[]; now?: () => number; warn?: string[] } = {}): WorkerSlots {
   const s = new WorkerSlots(path.join(dir, 'factory', WORKER_SLOTS_FILENAME), () => opts.rows ?? [], (l) => opts.warn?.push(l), opts.now ?? Date.now);
   s.load();
-  slotStores.push(s);
+  slotStores.track(s);
   return s;
 }
 
@@ -37,18 +35,18 @@ afterEach(() => {
   setWorkerSlotsForTests(null);
   setFanOutGuardsForTests(null);
   __resetWorkspaceMirrorForTest();
-  for (const s of slotStores.splice(0)) s.dispose();
+  slotStores.settle();
 });
 
 describe('WorkerSlots', () => {
-  it('dispose makes a pending coalesced write now, and its timer writes nothing later', () => {
+  it('settlePendingWriteForTests makes a pending coalesced write now, and its timer writes nothing later', () => {
     vi.useFakeTimers();
     try {
       const dir = tmp();
       const s = store(dir);
       const { gen } = s.beginLaunch({ taskId: 't1', origin: 'owner', ownerWorkspaceId: 'ws-owner' });
       s.launched('t1', gen, 'ws-t1', 'pty-1');
-      s.dispose();
+      s.settlePendingWriteForTests();
       expect(store(dir).paneOf('pty-1')).toEqual({ taskId: 't1', gen: 1, workspaceId: 'ws-t1' });
       fs.rmSync(path.join(dir, 'factory'), { recursive: true, force: true });
       vi.advanceTimersByTime(60_000);
@@ -113,7 +111,7 @@ describe('WorkerSlots', () => {
     const dir = tmp();
     fs.writeFileSync(path.join(dir, 'factory'), 'not a folder');
     const s = new WorkerSlots(path.join(dir, 'factory', WORKER_SLOTS_FILENAME), () => [], () => undefined);
-    slotStores.push(s);
+    slotStores.track(s);
     s.load();
     expect(() => s.beginLaunch({ taskId: 't', origin: 'owner', ownerWorkspaceId: 'ws-owner' })).toThrow(/could not be recorded/);
     expect(s.launchOf('t')).toBeNull();

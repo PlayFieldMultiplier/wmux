@@ -10,15 +10,13 @@ import { WORKER_SLOTS_FILENAME, WorkerSlots } from '../workerSlots';
 import type { ReclaimedWorker, WorkerSessionInfo } from '../workerReclaim';
 import { FanOutGuards, refreshDormantTaskWorkspaces, setDormantRefresh, setFanOutGuardsForTests } from '../../worktask/fanoutGuards';
 import { trackedTempDir } from '../../../test-utils/trackedTempDir';
+import { workerSlotStores } from '../../../test-utils/workerSlotStores';
 
 const REFRESH_MS = 10_000;
 
 type Task = { id: string; status: LedgerEntry['status']; pty: string };
 
-// The worker-slot stores a case opens, disposed after it: a coalesced write
-// still pending would otherwise land after the case's dir is removed and make
-// it again.
-const slotStores: WorkerSlots[] = [];
+const slotStores = workerSlotStores();
 const tmpDir = (): string => trackedTempDir('wmux-task-liveness-');
 
 /** A world of task workspaces (`tasks`, by workspace id), the mirror's view
@@ -112,7 +110,7 @@ afterEach(() => {
   setHolderSource(null);
   setFanOutGuardsForTests(null);
   setDormantRefresh(null);
-  for (const s of slotStores.splice(0)) s.dispose();
+  slotStores.settle();
   vi.useRealTimers();
 });
 
@@ -710,7 +708,7 @@ describe('sightings by task (#2393 holder set)', () => {
 
   it('C5.1/C5.2: an adopted pane resumed in another task\'s workspace: that workspace stays its task\'s, the sighting is the pane\'s task\'s', async () => {
     const slots = new WorkerSlots(nodePath.join(tmpDir(), 'factory', WORKER_SLOTS_FILENAME), () => [], () => undefined);
-    slotStores.push(slots);
+    slotStores.track(slots);
     slots.load();
     for (const [task, ws, pane] of [['t-a', 'ws-w', 'p-a'], ['t-b', 'ws-b', 'p-b']]) {
       const { gen } = slots.beginLaunch({ taskId: task, origin: 'bot', botId: 'bot-0000000a', ownerWorkspaceId: 'ws-owner' });

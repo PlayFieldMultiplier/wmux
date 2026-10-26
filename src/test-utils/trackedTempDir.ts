@@ -22,7 +22,9 @@ afterEach(async () => {
   inTest = false;
   await removeTempDirs(testDirs);
 }, REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS);
-afterAll(() => removeTempDirs(fileDirs), REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS);
+// Test dirs too: one made after its test's removal ran (in a later afterEach),
+// or left by an afterEach that failed.
+afterAll(() => removeTempDirs([...testDirs.splice(0), ...fileDirs.splice(0)]), REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS);
 
 /**
  * mkdtemp under os.tmpdir(). Removed after the current test when made inside

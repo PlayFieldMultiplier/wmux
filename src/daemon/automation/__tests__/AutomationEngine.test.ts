@@ -1038,4 +1038,22 @@ describe('AutomationEngine — whenSaved', () => {
     expect(onDisk.automations).toHaveLength(1);
     expect((await created).ok).toBe(true);
   });
+
+  it('after stop, waits for a launch still under way, so nothing is written once it resolves', async () => {
+    const h = harness();
+    await h.engine.start({ timers: false });
+    const created = await h.engine.create(draft());
+    if (!created.ok) throw new Error(created.error);
+    const res = await h.engine.runNow(created.automation.id, 'manual');
+    if (!res.ok) throw new Error(res.error);
+    // runNow returns once the claim is on disk; the launch goes on detached.
+    expect(res.run.state).toBe('launching');
+    h.engine.stop();
+    await h.engine.whenSaved();
+    expect(h.engine.listRuns().some((r) => r.state === 'launching')).toBe(false);
+    const runsFile = path.join(h.dir, AUTOMATION_RUNS_FILE);
+    const written = fs.readFileSync(runsFile, 'utf8');
+    await settle();
+    expect(fs.readFileSync(runsFile, 'utf8')).toBe(written);
+  });
 });

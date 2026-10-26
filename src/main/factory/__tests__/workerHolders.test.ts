@@ -16,6 +16,7 @@ import { FanOutGuards, recordFanoutTaskPane, setFanOutGuardsForTests, stampFanou
 import { WORKER_SLOTS_FILENAME, WorkerSlots, setReclaimedPaneSource, setWorkerSlotsForTests, taskOfPane } from '../workerSlots';
 import { STOPPED_BY_OWNER } from '../factoryStop';
 import { trackedTempDir } from '../../../test-utils/trackedTempDir';
+import { workerSlotStores } from '../../../test-utils/workerSlotStores';
 
 const NOW = 10_000_000_000;
 const DAY = 24 * 3_600_000;
@@ -201,10 +202,7 @@ interface Rig {
   build: () => HolderSnapshot;
 }
 
-// The worker-slot stores a case opens, disposed after it: a coalesced write
-// still pending would otherwise land after the case's dir is removed and make
-// it again.
-const slotStores: WorkerSlots[] = [];
+const slotStores = workerSlotStores();
 
 function rig(over: Partial<HolderSnapshot> = {}): Rig {
   const dir = trackedTempDir('wmux-holders-');
@@ -215,7 +213,7 @@ function rig(over: Partial<HolderSnapshot> = {}): Rig {
   const open = (): WorkerSlots => {
     const s = new WorkerSlots(file, () => r.snap.rows ?? [], () => undefined, () => clock.now);
     s.load();
-    slotStores.push(s);
+    slotStores.track(s);
     setWorkerSlotsForTests(s);
     return s;
   };
@@ -282,7 +280,7 @@ afterEach(() => {
   setHolderSource(null);
   setFanOutGuardsForTests(null);
   setWorkerSlotsForTests(null);
-  for (const s of slotStores.splice(0)) s.dispose();
+  slotStores.settle();
 });
 
 describe('the four caps agree on the paths that used to split them (#2393)', () => {

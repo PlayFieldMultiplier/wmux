@@ -513,9 +513,9 @@ export class WorkerSlots {
     this.persistTimer = t;
   }
 
-  /** Make a coalesced write still pending now and cancel its timer, so nothing
-   *  is written after this; a failure is logged as the timer's would be. */
-  dispose(): void {
+  /** Tests: make a coalesced write still pending now and cancel its timer, so
+   *  nothing is written after this; a failure is logged as the timer's would be. */
+  settlePendingWriteForTests(): void {
     if (!this.persistTimer) return;
     clearTimeout(this.persistTimer);
     this.persistTimer = null;
