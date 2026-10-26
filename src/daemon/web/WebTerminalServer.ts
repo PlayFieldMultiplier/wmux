@@ -2724,8 +2724,8 @@ export class WebTerminalServer {
       String(req.headers.accept ?? '').includes('text/event-stream');
     const isStream = (req.method === 'GET' && p === '/api/stream') || wantsEventStream;
     const auth = await this.authenticate(req, url, isStream);
-    // An authenticated request from another machine is "another PC reached this one".
-    // The proxy's own connection is not another PC reaching this one.
+    // An authenticated request from another machine is "another PC reached
+    // this one"; the trusted proxy's own connection is not.
     if (auth.ok && !(auth.principal.kind === 'operator' && auth.principal.proxyUser !== undefined)) {
       this.inbound?.note(req.socket.remoteAddress);
     }
@@ -10333,6 +10333,10 @@ export class WebTerminalServer {
    * query string is the one place a credential is guaranteed to be written down
    * (history, proxy logs, Referer). So a device credential presented in the
    * query authenticates nothing, on any route.
+   *
+   * A request with no usable credential at all may still be the operator by
+   * the trusted proxy's word (authenticateViaProxy), never one whose
+   * credential failed.
    */
   private async authenticate(req: http.IncomingMessage, url: URL, allowQuery: boolean): Promise<AuthOutcome> {
     if (!this.token) return { ok: false, reason: 'unknown' };
