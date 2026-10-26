@@ -409,8 +409,8 @@ const AGENT_PATTERNS: AgentPattern[] = [
   // __tests__/fixtures/qwen-code-0.26.1.json). Qwen Code is a Gemini CLI fork
   // and draws Gemini's composer row (`>   Type your message or
   // @path/to/file`), which opens the Gemini gate. Its banner row comes first
-  // in every frame, so it is listed before Gemini: once Qwen owns the pane,
-  // the Gemini gate is a blocked takeover.
+  // in every frame, so Qwen owns the pane before that row arrives, and the
+  // Gemini gate is then a blocked takeover.
   // Each frame is a full repaint, one row per CRLF line:
   //   - footer `⏸ Ask permissions (shift + tab to cycle)` (`Auto mode (…)` in
   //     auto mode) on a row of its own only while idle. Mid-turn the same row
