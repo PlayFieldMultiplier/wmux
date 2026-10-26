@@ -324,7 +324,7 @@ describe('ChatV2View', () => {
   it('says a chat a terminal in another pane took continued there, and shows that pane (#2730)', async () => {
     await mock.call('create', { paneId: 'daemon-elsewhere', agent: 'claude', mode: 'default' });
     const record = mock.record('daemon-elsewhere')!;
-    record.binding = { ...record.binding, status: 'handed-off', continuedInPaneId: 'pty-other', capabilities: { ...record.binding.capabilities, send: false, toTerminal: false } };
+    record.binding = { ...record.binding, status: 'handed-off', continuedIn: { paneId: 'pty-other' }, capabilities: { ...record.binding.capabilities, send: false, toTerminal: false } };
     await act(async () => root.render(<ChatV2View paneId="daemon-elsewhere" active onTerminal={() => undefined} />));
     await flush();
     expect(host.querySelector('textarea')).toBeNull();
@@ -332,5 +332,16 @@ describe('ChatV2View', () => {
     expect(host.textContent).not.toContain('chat.openTerminal');
     await act(async () => { [...host.querySelectorAll('button')].find((b) => b.textContent === 'chat.showPane')!.click(); });
     expect(focusPaneByPtyId).toHaveBeenCalledWith(expect.any(Function), 'pty-other');
+  });
+
+  it('names no pane when the terminal that took the chat was matched by its folder (#2730)', async () => {
+    await mock.call('create', { paneId: 'daemon-folder', agent: 'claude', mode: 'default' });
+    const record = mock.record('daemon-folder')!;
+    record.binding = { ...record.binding, status: 'handed-off', continuedIn: {}, capabilities: { ...record.binding.capabilities, send: false, toTerminal: false } };
+    await act(async () => root.render(<ChatV2View paneId="daemon-folder" active onTerminal={() => undefined} />));
+    await flush();
+    expect(host.textContent).toContain('chat.continuedInTerminal');
+    expect(host.textContent).not.toContain('chat.showPane');
+    expect(host.textContent).not.toContain('chat.openTerminal');
   });
 });

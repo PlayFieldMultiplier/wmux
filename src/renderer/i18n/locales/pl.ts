@@ -294,6 +294,7 @@ export const pl = {
   'chat.openTerminal': 'Otwórz Terminal',
   'chat.continuedInPane': "Ta rozmowa jest kontynuowana w terminalu w innym panelu.",
   'chat.showPane': "Pokaż ten panel",
+  'chat.continuedInTerminal': "Ta rozmowa jest kontynuowana w terminalu.",
   'chat.continueInChat': "Kontynuuj w czacie",
   'chat.continueInChatHint': "Zatrzymuje Claude w tym terminalu i kontynuuje tę samą rozmowę jako czat w tym panelu.",
   'chat.continueInChatChecking': "Sprawdzanie…",

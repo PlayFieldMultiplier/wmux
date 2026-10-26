@@ -291,6 +291,15 @@ class Host implements ChatV2Host {
       }
       void this.persistNow(live);
     }
+    // Bindings the daemon learned before these records were loaded (or while
+    // the sweep awaited) found no chat to yield; check them once now.
+    let held: ReturnType<NonNullable<ChatV2HostDeps['terminalBindings']>> = [];
+    try {
+      held = this.deps.terminalBindings?.() ?? [];
+    } catch (error) {
+      this.deps.log('warn', `[chatv2] could not read the terminals' conversations: ${String(error)}`);
+    }
+    for (const h of held) this.terminalHolds(h.paneId, h.agent, h.sessionId, h.paneExact);
   }
 
   /** Kill a driver left by a previous daemon only when pid, start time and argv marker all match. */
@@ -368,12 +377,12 @@ class Host implements ChatV2Host {
     return [...this.byPane.values()].filter((l) => !l.closed && l.record.state !== 'handed-off').map((l) => l.record.providerSessionId);
   }
 
-  terminalHolds(paneId: string, agent: string, sessionId: string): void {
+  terminalHolds(paneId: string, agent: string, sessionId: string, paneExact: boolean): void {
     if (this.disposed) return;
     for (const live of this.byPane.values()) {
       const { record } = live;
       if (live.closed || record.state !== 'active' || record.paneId === paneId || record.agent !== agent || record.providerSessionId !== sessionId) continue;
-      void this.yieldToTerminal(live, paneId).catch((error) => {
+      void this.yieldToTerminal(live, paneId, paneExact).catch((error) => {
         this.deps.log('error', `[chatv2] ${record.paneId} could not give way to ${paneId}: ${String(error)}`);
       });
     }
@@ -381,16 +390,20 @@ class Host implements ChatV2Host {
 
   /**
    * The chat gives its conversation up to the terminal agent in `paneId`: the
-   * tombstone first, so no send or start (an in-flight one is superseded)
-   * reaches the driver again, then the driver stops. An open turn is closed in
-   * the transcript, as after a daemon restart.
+   * tombstone first, in memory so no send or start (an in-flight one is
+   * superseded) reaches the driver again, and on disk so a crash during the
+   * stop does not load the chat as active again; then the driver stops. An
+   * open turn is closed in the transcript, as after a daemon restart. The
+   * pane is named to the view only when the binding came from that pane
+   * itself, not from a hook routed to it by its folder.
    */
-  private async yieldToTerminal(live: Live, paneId: string): Promise<void> {
+  private async yieldToTerminal(live: Live, paneId: string, paneExact: boolean): Promise<void> {
     const { record } = live;
     this.deps.log('info', `[chatv2] the conversation of ${record.paneId} continued in a terminal in ${paneId}; stopping the chat`);
     live.generation += 1;
     record.state = 'handed-off';
-    record.continuedInPaneId = paneId;
+    record.continuedIn = paneExact ? { paneId } : {};
+    if (!(await this.persistNow(live))) this.deps.log('warn', `[chatv2] could not save ${record.paneId} as handed off`);
     if (!(await this.stopDriver(live))) this.deps.log('warn', `[chatv2] the driver of ${record.paneId} did not exit`);
     if (live.closed) return;
     if (record.session.busy || sessionNeedsInput(record.session)) this.stamp(live, { type: 'session.ended', code: null });
@@ -447,7 +460,7 @@ class Host implements ChatV2Host {
       seq: record.seq,
       capabilities: this.capabilities(live),
       ...(live.error ? { error: { ...live.error } } : {}),
-      ...(record.state === 'handed-off' && record.continuedInPaneId ? { continuedInPaneId: record.continuedInPaneId } : {}),
+      ...(record.state === 'handed-off' && record.continuedIn ? { continuedIn: { ...record.continuedIn } } : {}),
     };
   }
 
@@ -691,6 +704,11 @@ class Host implements ChatV2Host {
       if (!(await this.persistNow(live))) {
         failTurn('The message could not be saved, so it was not sent.');
         return chatV2Error('driver-failed', 'The message could not be saved.');
+      }
+      // A terminal took the conversation (terminalHolds) or the driver went during the save.
+      if (live.record.state !== 'active' || live.driver !== driver) {
+        failTurn('The message was not sent: the agent stopped.');
+        return handedOffRefusal(live.record) ?? chatV2Error('driver-failed', 'The agent stopped.');
       }
       try {
         await driver.send({ text: p.text, attachments: attachments.map((a) => ({ path: a.path, mimeType: a.mimeType })) });
@@ -1031,7 +1049,7 @@ class Host implements ChatV2Host {
   private revive(live: Live, binding: ResumeBinding): void {
     const mode = binding.permissionMode === 'bypassPermissions' ? 'bypass' : 'default';
     live.record.state = 'active';
-    delete live.record.continuedInPaneId;
+    delete live.record.continuedIn;
     live.record.providerSessionId = binding.sessionId;
     live.record.resumeExisting = true;
     live.record.mode = mode;

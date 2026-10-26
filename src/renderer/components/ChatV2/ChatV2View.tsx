@@ -198,7 +198,8 @@ export default function ChatV2View({ paneId, active, onTerminal, cwd }: {
   const binding = view.binding;
   const handedOff = binding.status === 'handed-off';
   // Handed off because a terminal agent in another pane took the conversation.
-  const continuedIn = handedOff ? binding.continuedInPaneId : undefined;
+  const continuedIn = handedOff ? binding.continuedIn : undefined;
+  const continuedInPane = continuedIn?.paneId;
   const running = !!view.session.busy || binding.status === 'running' || binding.status === 'needs-input';
   const canHandOff = binding.capabilities.toTerminal && !handedOff && !running && binding.status !== 'starting';
   const continueInTerminal = async () => {
@@ -232,10 +233,10 @@ export default function ChatV2View({ paneId, active, onTerminal, cwd }: {
         {error}
         {handedOff ? (
           <div className="wmux-chatv2-notice wmux-chatv2-handed-off">
-            <span>{continuedIn ? t('chat.continuedInPane') : S.handedOff}</span>
-            {continuedIn ? (
-              <button type="button" className="wmux-chatv2-link" onClick={() => focusPaneByPtyId(() => useStore.getState(), continuedIn)}>{t('chat.showPane')}</button>
-            ) : (
+            <span>{continuedIn ? t(continuedInPane ? 'chat.continuedInPane' : 'chat.continuedInTerminal') : S.handedOff}</span>
+            {continuedInPane ? (
+              <button type="button" className="wmux-chatv2-link" onClick={() => focusPaneByPtyId(() => useStore.getState(), continuedInPane)}>{t('chat.showPane')}</button>
+            ) : !continuedIn && (
               <button type="button" className="wmux-chatv2-link" onClick={onTerminal}>{t('chat.openTerminal')}</button>
             )}
             {/* Shown only while no agent runs in the pane (viewState); the daemon checks again. */}

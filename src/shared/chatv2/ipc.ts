@@ -21,7 +21,8 @@
  * - A terminal agent in another pane that binds to a conversation an active
  *   chat holds (a resume a person typed, the TUI's own `/resume`) wins: the
  *   host stops that chat's driver and leaves its record `handed-off`, with
- *   `continuedInPaneId` naming that pane. Nothing refuses the terminal.
+ *   `continuedIn` (naming that pane when the binding came from it). Nothing
+ *   refuses the terminal; lines wmux types itself still refuse a chat-held id.
  * - `fromTerminal` is the other direction (darwin and linux): the host
  *   reserves the pane (no `create`, no launch or resume line typed into it),
  *   checks that the pane's Claude TUI is at rest (no turn, no approval, no
@@ -279,8 +280,11 @@ export interface ChatV2Binding {
   capabilities: ChatV2Capabilities;
   /** Set with `failed`, and on `stopped` after an unexpected exit. */
   error?: ChatV2Error;
-  /** On `handed-off`: the other pane whose terminal agent took the conversation. */
-  continuedInPaneId?: string;
+  /**
+   * On `handed-off`: a terminal agent in another pane took the conversation.
+   * `paneId` names it when the binding came from that pane itself.
+   */
+  continuedIn?: { paneId?: string };
 }
 
 /** The session without its blocks. */

@@ -53,7 +53,7 @@ interface Rig {
 
 const PANE_ENV = { PATH: '/usr/bin', WMUX_WORKSPACE_ID: 'ws-1', CLAUDECODE: '1', WMUX_AUTH_TOKEN: 'x' };
 
-function rig(options: { registry?: boolean; nativeOn?: boolean; paneEnv?: Record<string, string>; stubborn?: boolean; paneCwd?: string; panePid?: number; driverCwd?: ChatV2HostDeps['driverCwd'] } = {}): Rig {
+function rig(options: { registry?: boolean; nativeOn?: boolean; paneEnv?: Record<string, string>; stubborn?: boolean; paneCwd?: string; panePid?: number; driverCwd?: ChatV2HostDeps['driverCwd']; terminalBindings?: ChatV2HostDeps['terminalBindings'] } = {}): Rig {
   const r = {
     fakes: [] as FakeClaude[],
     pushes: [] as Rig['pushes'],
@@ -119,6 +119,7 @@ function rig(options: { registry?: boolean; nativeOn?: boolean; paneEnv?: Record
     processIdentity: async () => r.identity.value,
     killTree: async (pid) => { r.killed.push(pid); },
     ...(options.driverCwd ? { driverCwd: options.driverCwd } : {}),
+    ...(options.terminalBindings ? { terminalBindings: options.terminalBindings } : {}),
     drivers: () => {
       const fake = new FakeClaude();
       fake.stubborn = options.stubborn ?? false;
@@ -631,23 +632,23 @@ describe('chat v2 host: handoff and interrupt guards', () => {
     const b = r.host.bindingForPane(PANE)!;
     const id = b.providerSessionId!;
     // Another conversation, another agent, and the chat's own pane (its driver's hooks carry it) change nothing.
-    r.host.terminalHolds('pty-other', 'claude', '0d6f1c2e-9b8a-4c3d-8e7f-112233445566');
-    r.host.terminalHolds('pty-other', 'codex', id);
-    r.host.terminalHolds(PANE, 'claude', id);
+    r.host.terminalHolds('pty-other', 'claude', '0d6f1c2e-9b8a-4c3d-8e7f-112233445566', true);
+    r.host.terminalHolds('pty-other', 'codex', id, true);
+    r.host.terminalHolds(PANE, 'claude', id, true);
     await tick(20);
     expect(r.host.statusForPane(PANE)).toBe('idle');
     expect(r.host.activeSessionIds()).toEqual([id]);
 
     // The terminal is never refused: the call returns nothing and throws nothing.
-    expect(r.host.terminalHolds('pty-other', 'claude', id)).toBeUndefined();
+    expect(r.host.terminalHolds('pty-other', 'claude', id, true)).toBeUndefined();
     await until(() => r.host.statusForPane(PANE) === 'handed-off');
-    expect(r.host.bindingForPane(PANE)).toMatchObject({ status: 'handed-off', continuedInPaneId: 'pty-other', capabilities: { send: false } });
+    expect(r.host.bindingForPane(PANE)).toMatchObject({ status: 'handed-off', continuedIn: { paneId: 'pty-other' }, capabilities: { send: false } });
     // No active chat names the id any more, so nothing typed in that terminal is refused for it.
     expect(r.host.activeSessionIds()).toEqual([]);
     await until(() => {
       const file = path.join(dir, 'chat-sessions', 'v2', `${b.chatSessionId}.json`);
       const stored = JSON.parse(fs.readFileSync(file, 'utf8'));
-      return stored.state === 'handed-off' && stored.continuedInPaneId === 'pty-other' && stored.process === undefined;
+      return stored.state === 'handed-off' && stored.continuedIn?.paneId === 'pty-other' && stored.process === undefined;
     });
     expect(await sent(r, 'again', 'msg-00002')).toMatchObject({ ok: false, error: { code: 'handed-off' } });
     expect(r.fakes).toHaveLength(1);
@@ -660,12 +661,73 @@ describe('chat v2 host: handoff and interrupt guards', () => {
     await created(r);
     await sent(r);
     expect(r.host.statusForPane(PANE)).toBe('running');
-    r.host.terminalHolds('pty-other', 'claude', r.host.bindingForPane(PANE)!.providerSessionId!);
+    r.host.terminalHolds('pty-other', 'claude', r.host.bindingForPane(PANE)!.providerSessionId!, true);
     await until(() => r.host.statusForPane(PANE) === 'handed-off');
     await until(() => r.host.sessionForPane(PANE)!.busy === false);
     expect(await sent(r, 'again', 'msg-00002')).toMatchObject({ ok: false, error: { code: 'handed-off' } });
     expect(r.fakes).toHaveLength(1);
     await r.host.dispose();
+  });
+
+  it('types no resume when a terminal in another pane takes the conversation during a handoff (#2730)', async () => {
+    const r = rig();
+    await created(r);
+    await sent(r);
+    r.fake().result();
+    await until(() => r.host.statusForPane(PANE) === 'idle');
+    const b = r.host.bindingForPane(PANE)!;
+    let release!: () => void;
+    r.paneGate.value = new Promise<void>((resolve) => { release = resolve; });
+    const handing = r.host.call('toTerminal', { paneId: PANE, chatSessionId: b.chatSessionId }, 'main');
+    await tick(20);
+    r.host.terminalHolds('pty-other', 'claude', b.providerSessionId!, true);
+    await tick(20);
+    release();
+    expect(await handing).toMatchObject({ ok: false, error: { code: 'handoff-refused', message: expect.stringContaining('another pane') } });
+    expect(r.typed).toEqual([]);
+    expect(r.host.bindingForPane(PANE)).toMatchObject({ status: 'handed-off', continuedIn: { paneId: 'pty-other' } });
+    expect(r.host.activeSessionIds()).toEqual([]);
+    await r.host.dispose();
+  });
+
+  it('does not deliver a send whose save a terminal takeover overlapped (#2730)', async () => {
+    const r = rig();
+    await created(r);
+    await sent(r);
+    r.fake().result();
+    await until(() => r.host.statusForPane(PANE) === 'idle');
+    await tick(150);
+    const b = r.host.bindingForPane(PANE)!;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const rename = fs.promises.rename.bind(fs.promises);
+    const spy = vi.spyOn(fs.promises, 'rename').mockImplementationOnce(async (from, to) => { await gate; return rename(from, to); });
+    try {
+      const sending = sent(r, 'again', 'msg-00002');
+      await until(() => spy.mock.calls.length > 0);
+      r.host.terminalHolds('pty-other', 'claude', b.providerSessionId!, true);
+      release();
+      expect(await sending).toMatchObject({ ok: false, error: { code: 'handed-off' } });
+      expect(r.fake().stdin.filter((line) => line.type === 'user')).toHaveLength(1);
+      await until(() => r.host.statusForPane(PANE) === 'handed-off');
+    } finally {
+      spy.mockRestore();
+    }
+    await r.host.dispose();
+  });
+
+  it('checks the terminals\' conversations once its records load, naming no pane for a folder-routed binding (#2730)', async () => {
+    const first = rig();
+    const b = await created(first);
+    await first.host.dispose();
+    const held = [{ paneId: 'pty-other', agent: 'claude', sessionId: b.providerSessionId!, paneExact: false }];
+    const again = rig({ terminalBindings: () => held });
+    await again.host.start();
+    await until(() => again.host.statusForPane(PANE) === 'handed-off');
+    const yielded = again.host.bindingForPane(PANE)!;
+    expect(yielded.continuedIn).toEqual({});
+    expect(again.host.activeSessionIds()).toEqual([]);
+    await again.host.dispose();
   });
 
   it('refuses a handoff while a turn runs, and when the driver cannot be proven gone', async () => {

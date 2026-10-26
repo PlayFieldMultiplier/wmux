@@ -255,6 +255,7 @@ export const en = {
   'chat.openTerminal': "Open Terminal",
   'chat.continuedInPane': "This conversation continued in a terminal in another pane.",
   'chat.showPane': "Show that pane",
+  'chat.continuedInTerminal': "This conversation continued in a terminal.",
   'chat.continueInChat': "Continue in chat",
   'chat.continueInChatHint': "Stops Claude in this terminal and continues the same conversation as a chat in this pane.",
   'chat.continueInChatChecking': "Checking…",

@@ -409,6 +409,8 @@ let chatQueue: ChatQueueStore | null | undefined;
 let chatSessions: ChatSessionService | null = null;
 // Chat v2: daemon-owned agent drivers bound to an anchor pane (src/shared/chatv2/ipc.ts).
 let chatV2Host: ChatV2Host | null = null;
+/** Pane → whether the capture that started its pending transcript search was pane-exact (#2730). */
+const discoveryPaneExact = new Map<string, boolean>();
 let terminalChat: TerminalChatService | null = null;
 /** OpenCode permissions/questions as native records (built with terminalChat). */
 let openCodeDecisions: ReturnType<typeof createOpenCodeDecisions> | null = null;
@@ -4151,11 +4153,18 @@ function registerRpcHandlers(
   // daemon directly and main never sees the signal, so this must not stay
   // reachable only over the wire. Returns false when there is nothing to
   // apply (dead session / empty binding) — the callers report it differently.
-  const applyResumeBinding = (id: string, resumeBinding: ResumeBinding | undefined): boolean => {
+  //
+  // `paneExact`: the capture came from the pane itself (its WMUX_PTY_ID, its
+  // agent's command line or relay), not a hook routed to it by its folder.
+  const applyResumeBinding = (id: string, resumeBinding: ResumeBinding | undefined, paneExact: boolean): boolean => {
     const managed = sessionManager.getSession(id);
     // A binding without its folder can never be resumed (`--resume` is
     // cwd-scoped) and must not be stored: refuse it like an empty one.
     if (!managed || !isUsableResumeBinding(resumeBinding)) return false;
+    // A capture without a path may start a transcript search, whose find
+    // re-enters below: it keeps this capture's exactness (#2730).
+    if (resumeBinding.transcriptPath) discoveryPaneExact.delete(id);
+    else discoveryPaneExact.set(id, paneExact);
     // #1823: the RPC and main's hooks.signal fallback reach here without
     // HookIngest's checks; an id the agent cannot resume is never stored.
     if (!isPlausibleResumeSessionId(resumeBinding.agent, resumeBinding.sessionId)) {
@@ -4258,7 +4267,7 @@ function registerRpcHandlers(
     // is driven by a running agent (its hook, its command line on the alive
     // edge), and the tracker's probe is still pending at a fresh launch's
     // SessionStart, whose newer ts then makes the command-line capture stale.
-    chatV2Host?.terminalHolds(id, next.agent, next.sessionId);
+    chatV2Host?.terminalHolds(id, next.agent, next.sessionId, paneExact);
     // X6 ③ (Rung 1): a captured binding PROVES claude ran in this pane, so the
     // hook is a SECOND, independent writer of the pill gate (lastDetectedAgent) —
     // the live AgentDetector banner is once-per-session and is never re-armed from
@@ -4278,7 +4287,8 @@ function registerRpcHandlers(
 
   pipeServer.onRpc('daemon.setResumeBinding', async (params) => {
     const p = params as unknown as DaemonSetResumeBindingParams;
-    return { ok: applyResumeBinding(p.id, p.resumeBinding) };
+    // Main relays only a pane-exact hook route (hooks.rpc.ts, #1523).
+    return { ok: applyResumeBinding(p.id, p.resumeBinding, true) };
   });
 
   // M1 — daemon.hooks.signal. The hook bridge's daemon-first target: the
@@ -4491,13 +4501,15 @@ function registerRpcHandlers(
       onFound: ({ sessionId, agentSessionId, transcriptPath, cwd, agent }) => {
         // Re-enter through the normal writer so the discovered path is vetted,
         // sticky-merged, and saveImmediate'd exactly like a hook-supplied one.
+        const paneExact = discoveryPaneExact.get(sessionId) ?? false;
+        discoveryPaneExact.delete(sessionId);
         applyResumeBinding(sessionId, {
           agent: agent ?? DISCOVERABLE_AGENT,
           sessionId: agentSessionId,
           cwd,
           transcriptPath,
           ts: Date.now(),
-        });
+        }, paneExact);
         // `status()` re-reads the binding on every call, so availability flips
         // on its own; this is only for a Chat surface that is ALREADY open and
         // would otherwise wait for the next hook nudge to notice the path.
@@ -4537,7 +4549,7 @@ function registerRpcHandlers(
       bind: (id, match) => {
         log('info', `[codex] bound ${id} to rollout ${match.threadId} by cwd`);
         // Same writer as a hook-supplied path: vetted, merged, saveImmediate'd.
-        applyResumeBinding(id, { agent: 'codex', sessionId: match.threadId, cwd: match.cwd, transcriptPath: match.transcriptPath, ts: Date.now() });
+        applyResumeBinding(id, { agent: 'codex', sessionId: match.threadId, cwd: match.cwd, transcriptPath: match.transcriptPath, ts: Date.now() }, true);
         transcriptProjector?.rebind(id);
       },
       log: (level, message) => log(level, message),
@@ -4575,7 +4587,7 @@ function registerRpcHandlers(
       if (!binding) return;
       log('info', `[resume] bound ${id} to ${slug} conversation ${binding.sessionId} from its command line`);
       // Same writer as a hook-supplied binding: vetted, merged, saveImmediate'd.
-      if (applyResumeBinding(id, binding)) transcriptProjector?.rebind(id);
+      if (applyResumeBinding(id, binding, true)) transcriptProjector?.rebind(id);
     }).catch(() => undefined).finally(() => commandLineReading.delete(flight));
   };
 
@@ -4677,6 +4689,18 @@ function registerRpcHandlers(
       // terminal Codex while the chat is there (paneFree), so a relay of its
       // own on that thread is one that has not let go of it yet.
       codexThreadOwners: (threadId) => codexPaneRelays.threadHolders(threadId),
+      // #2730: what terminal agents hold once the records load. A Codex relay's
+      // selection is the pane's own; a stored Claude binding may have come
+      // from a hook routed by folder, so it does not name the pane.
+      terminalBindings: () => sessionManager.listManagedSessions().flatMap((pane) => {
+        const id = pane.meta.id;
+        const held: Array<{ paneId: string; agent: string; sessionId: string; paneExact: boolean }> = [];
+        const relay = codexPaneRelays.liveSelection(id, sessionManager.getSession(id));
+        if (relay.live && relay.selection) held.push({ paneId: id, agent: 'codex', sessionId: relay.selection.threadId, paneExact: true });
+        const binding = pane.meta.resumeBinding;
+        if (binding && agentProcessTracker.identityFor(id)?.alive === true) held.push({ paneId: id, agent: binding.agent, sessionId: binding.sessionId, paneExact: false });
+        return held;
+      }),
       // Terminal → chat (chat/v2/fromTerminal.ts): the pane's Claude TUI.
       terminal: {
         holdKeyboard: (id) => nativeChatBridge?.holdKeyboard(id) ?? null,
@@ -5166,7 +5190,7 @@ function registerRpcHandlers(
           );
         }
       },
-      applyResumeBinding: (id, binding) => { applyResumeBinding(id, binding); },
+      applyResumeBinding: (id, binding, paneExact) => { applyResumeBinding(id, binding, paneExact); },
       liveAgentFor: (id) => {
         const tracked = agentProcessTracker.identityFor(id);
         return tracked?.alive ? tracked.slug : undefined;
@@ -10171,7 +10195,7 @@ async function main(): Promise<void> {
     // #2730: the pane's terminal Codex selected this thread; a chat in another
     // pane on it gives way (chat v2 host terminalHolds, never throws).
     const selectedThread = observed.live ? observed.selection?.threadId : undefined;
-    if (selectedThread) chatV2Host?.terminalHolds(id, 'codex', selectedThread);
+    if (selectedThread) chatV2Host?.terminalHolds(id, 'codex', selectedThread, true);
     const codeHome = codexPaneRelays.accountHome(id,owner);
     if (codeHome) persistCodexThreadOwner(owner.meta, observed, codeHome);
     captureCodexRelayResume(owner.meta, observed);

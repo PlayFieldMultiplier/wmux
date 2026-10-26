@@ -256,6 +256,7 @@ export const ko = {
   'chat.openTerminal': "터미널로 전환",
   'chat.continuedInPane': "이 대화는 다른 판의 터미널에서 이어졌습니다.",
   'chat.showPane': "그 판 보기",
+  'chat.continuedInTerminal': "이 대화는 터미널에서 이어졌습니다.",
   'chat.continueInChat': "채팅으로 이어가기",
   'chat.continueInChatHint': "이 터미널의 Claude를 멈추고 같은 대화를 이 판의 채팅으로 이어갑니다.",
   'chat.continueInChatChecking': "확인하는 중…",
