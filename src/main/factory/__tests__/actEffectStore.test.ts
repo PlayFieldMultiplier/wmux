@@ -47,6 +47,22 @@ describe('the act outbox', () => {
     expect(s.get(id)).toMatchObject({ status: 'refused', reason: 'attempts-exhausted' });
   });
 
+  it('a release\'s draft id is journaled while its row is claimed or being settled, and kept through the moves after', () => {
+    const s = new ActEffectStore(file);
+    const id = actEffectId(ID);
+    s.enqueue({ ...input, action: 'release' });
+    s.claim(id);
+    expect(s.noteDraft(id, 0)).toBeNull();
+    expect(s.noteDraft(id, 42)).toMatchObject({ status: 'inFlight', draftId: 42 });
+    // A restart mid-write: the id is on disk with the uncertain row.
+    const again = new ActEffectStore(file);
+    expect(again.get(id)).toMatchObject({ status: 'uncertain', draftId: 42 });
+    expect(again.settle(id, 'pending', 'not-found')).toMatchObject({ status: 'pending', draftId: 42 });
+    expect(again.claim(id)).toMatchObject({ status: 'inFlight', draftId: 42 });
+    expect(again.finish(id, 'done', undefined, { url: 'https://github.com/o/r/releases/tag/v1', id: 42 })).toMatchObject({ status: 'done', draftId: 42 });
+    expect(again.noteDraft(id, 43)).toBeNull();
+  });
+
   it('a malformed file is refused; a row of an act this build does not know is kept and never run', () => {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, JSON.stringify({ version: 1, effects: [{ id: 'x' }] }));
