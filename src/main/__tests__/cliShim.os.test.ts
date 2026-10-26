@@ -449,13 +449,17 @@ describe.skipIf(process.platform !== 'win32')('PATH edit (live registry, sandbox
   const SEED = '%USERPROFILE%\\AppData\\Roaming\\npm;C:\\Program Files\\nodejs';
   const PS = `${process.env.SystemRoot || 'C:\\Windows'}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`;
 
-  // The first powershell.exe in a process pays a one-time cold start — its own
-  // binaries and the .NET images are not in the OS file cache yet. #576
-  // measured 5.6s for it; a run on this branch exceeded 10s. It is absorbed
-  // once in a hook with a budget of its own rather than billed to whichever
-  // case happens to run first, which is how #576 flaked and what its 5s → 15s
-  // widening left unaddressed — a wider budget moves that threshold, it does
-  // not stop a one-time cost from landing inside a per-test one.
+  // The first runs on a fresh machine pay one-time cold starts: powershell.exe
+  // itself, and the C# compile behind the edit script's Add-Type (the
+  // WM_SETTINGCHANGE broadcast), the first one on the machine. #576 measured
+  // 5.6s for the first case. The compile is the large one: on the Windows
+  // runner the first Add-Type took 0.7-1.1 s against 0.1-0.2 s for the next ones
+  // in new processes, and in the slow runs the first FullLanguage add took up
+  // to 19 s, or was killed at 20 s, while every later add took 1-2 s. They are
+  // absorbed once in a hook with a budget of its own rather than billed to
+  // whichever case happens to run first, which is how #576 flaked and what its
+  // 5s → 15s widening left unaddressed — a wider budget moves that threshold,
+  // it does not stop a one-time cost from landing inside a per-test one.
   const WARMUP_TIMEOUT_MS = 60_000;
 
   const ps = (script: string, timeoutMs: number = SPAWN_TIMEOUT_MS) => {
@@ -505,7 +509,7 @@ describe.skipIf(process.platform !== 'win32')('PATH edit (live registry, sandbox
     subs.map((s) => `if (Test-Path 'HKCU:\\${s}') { Remove-Item 'HKCU:\\${s}' -Recurse -Force }`).join('\n'),
   );
 
-  const seed = () => psOk('seed sandbox key',
+  const seed = (timeoutMs?: number) => psOk('seed sandbox key',
     `$ErrorActionPreference = 'Stop'\n` +
     `if (Test-Path 'HKCU:\\${SUB}') { Remove-Item 'HKCU:\\${SUB}' -Recurse -Force }\n` +
     `New-Item -Path 'HKCU:\\${SUB}' -Force | Out-Null\n` +
@@ -516,6 +520,7 @@ describe.skipIf(process.platform !== 'win32')('PATH edit (live registry, sandbox
     // that is the property these cases exist to protect.
     `$raw = (Get-Item 'HKCU:\\${SUB}').GetValue('Path', $null, 'DoNotExpandEnvironmentNames')\n` +
     `if ($raw -ne '${SEED}') { throw "seed left Path as '$raw'" }`,
+    timeoutMs,
   );
 
   /** Raw (unexpanded) current value of the sandbox Path, via reg.exe. */
@@ -542,12 +547,18 @@ describe.skipIf(process.platform !== 'win32')('PATH edit (live registry, sandbox
     return ps(prefix + buildPathEditScript(BIN, op, SUB, BAK));
   };
 
-  // Pay the cold start here, where it has its own budget and its own name. If
-  // PowerShell is genuinely unusable this reports that once, up front, instead
-  // of disguising it as the first case's failure.
+  // Pay the cold starts here, where they have their own budget and their own
+  // name. Starting powershell.exe alone is not enough: the large one-time cost
+  // is the first Add-Type compile, which only the real FullLanguage edit script
+  // reaches (an add that changes the key). If PowerShell is genuinely unusable
+  // this reports that once, up front, instead of disguising it as the first
+  // case's failure.
   beforeAll(() => {
     psOk('warm up powershell', 'exit 0', WARMUP_TIMEOUT_MS);
-  }, WARMUP_TIMEOUT_MS + 5_000);
+    seed(WARMUP_TIMEOUT_MS);
+    psOk('warm up the PATH edit', buildPathEditScript(BIN, 'add', SUB, BAK), WARMUP_TIMEOUT_MS);
+    dropKeys('warm-up sandbox keys', SUB, BAK);
+  }, 3 * WARMUP_TIMEOUT_MS + SPAWN_TIMEOUT_MS + 5_000);
 
   afterEach(() => {
     // Also checked: teardown that could not run leaves keys behind, and the
