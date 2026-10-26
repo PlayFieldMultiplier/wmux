@@ -29,13 +29,28 @@
 // did not start gives the try back; anything else is uncertain and settled
 // by a read no sooner than RECONCILE_AFTER_MS later. A refusal is final for
 // its request: the bot asks again with a new request.
+//
+// A release (releaseAct.ts) runs its own steps after the pins: the default
+// branch, the commit on it, the tag and the release still free, the checks
+// on the commit; then either the tag alone (its workflow publishes it), or a
+// draft whose id is journaled, the late gate, and publishing that draft. A
+// 4xx from publishing is read back at once (GitHub was measured making a tag
+// on a 4xx from a call that publishes), and a refusal deletes this act's own
+// draft.
 
 import { splitRepoKey } from '../github/GhIssueService';
 import type { GhActAnswer, GhActPort } from '../github/GhActService';
-import type { ApprovalAct, ApprovalActRepo } from '../../shared/botApproval';
+import type { ApprovalAct, ApprovalActRepo, ApprovalReleaseAct } from '../../shared/botApproval';
 import { actMarker, bodyWithMarker, normalizeActText } from './actPayload';
 import { actRowClaimed, runnableAct, type ActEffect, type ActEffectStore } from './actEffectStore';
 import type { StoredApproval } from './approvals';
+import {
+  deleteDraft, draftBody, draftWritten, findRelease, isFail, mapRelease, publishBody, publishedWritten, readTagTarget, releasePrecondition,
+  tagRefBody, tagRefWritten, tagRunUrl,
+} from './releaseAct';
+
+/** The acts that take one write (a release has its own steps). */
+type OneWriteAct = Exclude<ApprovalAct, ApprovalReleaseAct>;
 
 /** How long an uncertain try waits before a read settles it. */
 export const RECONCILE_AFTER_MS = 60_000;
@@ -224,12 +239,30 @@ export function writeResult(r: Pick<StoredApproval, 'requestId' | 'ghLogin'>, ac
       return v.number === act.number && v.state === 'closed' ? { url, number: act.number } : null;
     case 'pr_close':
       return v.number === act.number && v.state === 'closed' && v.merged !== true ? { url, number: act.number } : null;
+    case 'release':
+      // Checked by its own steps (releaseAct.ts), never from one answer.
+      return null;
   }
 }
 
 // ── The executor ───────────────────────────────────────────────────────────
 
-type Found = { status: 'done'; result: NonNullable<ActEffect['result']> } | { status: 'refused'; reason: string } | { status: 'none' } | { status: 'unknown' };
+/** What a read says of a row that may have run. `draft`: a release's own
+ *  draft, still on GitHub; `result`: what a refusal still made (a release
+ *  published on a tag that points elsewhere). */
+type Found =
+  | { status: 'done'; result: NonNullable<ActEffect['result']> }
+  | { status: 'refused'; reason: string; result?: ActEffect['result']; draft?: number }
+  | { status: 'none'; draft?: number }
+  | { status: 'unknown' };
+
+/** How one claimed try ends (runOnce's own moves). */
+interface TryEnds {
+  gate: () => string | null;
+  end: (status: 'done' | 'refused' | 'uncertain', reason?: string, result?: ActEffect['result']) => ActEffect | null;
+  back: (reason: string) => ActEffect | null;
+  stop: (denied: string) => ActEffect | null;
+}
 
 export class ActExecutor {
   private readonly running = new Map<string, Promise<ActEffect | null>>();
@@ -331,6 +364,7 @@ export class ActExecutor {
       // The name, node id and numeric id the request read (a rename or a
       // transfer changes the name; a repository made again changes the ids).
       if (repo.fullName.toLowerCase() !== r.actRepo.fullName.toLowerCase() || repo.nodeId !== r.actRepo.nodeId || repo.id !== r.actRepo.id) return end('refused', 'repo-changed');
+      if (act.kind === 'release') return await this.runRelease(id, r.requestId, r.ghLogin, act, p, claimed.draftId, { gate, end, back, stop });
       const pre = await this.precondition(r.repoKey, act);
       if (pre === 'read-failed') return back(pre);
       if (pre) return end('refused', pre);
@@ -350,8 +384,91 @@ export class ActExecutor {
     }
   }
 
+  /** A release's try from its preconditions on (releaseAct.ts): the tag
+   *  alone (`workflow`), or a draft, then the late gate, then publishing it
+   *  (`release`). */
+  private async runRelease(id: string, requestId: string, login: string, act: ApprovalReleaseAct, p: { host: string; base: string }, draftId: number | undefined, t: TryEnds): Promise<ActEffect | null> {
+    const gh = this.ports.gh;
+    const drop = async (draft: number | undefined): Promise<void> => {
+      if (draft !== undefined && !(await deleteDraft(gh, p, draft))) this.ports.log?.(`[factory] act release ${requestId}: its draft ${draft} could not be deleted`);
+    };
+    const pre = await releasePrecondition(gh, p, act, login, draftId);
+    if (pre.refusal === 'read-failed') return t.back(pre.refusal);
+    if (pre.refusal) {
+      await drop(pre.draft?.id);
+      return t.end('refused', pre.refusal);
+    }
+    let draft = pre.draft;
+    if (act.mode === 'release' && !draft) {
+      // Write 1: a draft, which makes no tag (a 4xx on it leaves none).
+      const ans = await gh.write(p.host, 'POST', `${p.base}/releases`, draftBody(act));
+      if (!ans.ok) {
+        if (ans.kind === 'http') return t.end('refused', `gh-${ans.status}`);
+        if (ans.kind === 'rate-limited' || ans.kind === 'unsent') return t.back(ans.kind);
+        return t.end('uncertain', 'write-error');
+      }
+      draft = draftWritten(ans.value, act, login);
+      if (!draft) {
+        // A draft of this tag by the owner's login, not as approved: its id
+        // is journaled so a read finds it (and a refusal deletes it).
+        const made = mapRelease(ans.value);
+        if (made?.draft && made.tagName === act.tagName && made.author === login) this.ports.effects.noteDraft(id, made.id);
+        return t.end('uncertain', 'unexpected-response');
+      }
+    }
+    if (draft && !this.ports.effects.noteDraft(id, draft.id)) {
+      this.ports.log?.(`[factory] act release ${requestId}: draft ${draft.id} not journaled; a read settles it`);
+      const row = this.ports.effects.get(id);
+      this.emit(row);
+      return row;
+    }
+    // The late gate, right before the write that makes the tag: the approval
+    // again, then the tag still free.
+    const denied = t.gate();
+    if (denied) {
+      if (!ACT_NOT_NOW.has(denied)) await drop(draft?.id);
+      return t.stop(denied);
+    }
+    const tag = await readTagTarget(gh, p, act.tagName);
+    if (isFail(tag) || tag !== null) {
+      const why = isFail(tag) ? readRefusal(tag, 'tag-taken') : 'tag-taken';
+      if (why === 'read-failed') return t.back(why);
+      await drop(draft?.id);
+      return t.end('refused', why);
+    }
+    if (act.mode === 'workflow') {
+      const ans = await gh.write(p.host, 'POST', `${p.base}/git/refs`, tagRefBody(act));
+      if (ans.ok) return tagRefWritten(ans.value, act) ? t.end('done', undefined, { url: await tagRunUrl(gh, p, act) }) : t.end('uncertain', 'unexpected-response');
+      if (ans.kind === 'http') return t.end('refused', ans.status === 422 && /already exists/i.test(ans.message) ? 'tag-taken' : `gh-${ans.status}`);
+      if (ans.kind === 'rate-limited' || ans.kind === 'unsent') return t.back(ans.kind);
+      return t.end('uncertain', 'write-error');
+    }
+    if (!draft) return t.end('uncertain', 'executor-error');
+    // Write 2: publish the draft; this makes the tag.
+    const ans = await gh.write(p.host, 'PATCH', `${p.base}/releases/${draft.id}`, publishBody(act));
+    if (ans.ok) {
+      const shown = publishedWritten(ans.value, act, login, draft.id);
+      const at = shown ? await readTagTarget(gh, p, act.tagName) : null;
+      if (!shown || at === null || isFail(at)) return t.end('uncertain', 'unexpected-response');
+      // GitHub puts a release on a tag that exists, wherever it points: one
+      // made since the late read is reported as it is, published.
+      return at === act.targetSha ? t.end('done', undefined, shown) : t.end('refused', 'published-other-target', shown);
+    }
+    if (ans.kind === 'rate-limited' || ans.kind === 'unsent') return t.back(ans.kind);
+    if (ans.kind === 'http') {
+      const found = await findRelease(gh, p, act, login, draft.id).catch((): Found => ({ status: 'unknown' }));
+      if (found.status === 'done') return t.end('done', undefined, found.result);
+      if (found.status === 'none' || found.status === 'refused') {
+        await drop(found.draft);
+        return found.status === 'none' ? t.end('refused', `gh-${ans.status}`) : t.end('refused', found.reason, found.result);
+      }
+      return t.end('uncertain', `gh-${ans.status}`);
+    }
+    return t.end('uncertain', 'write-error');
+  }
+
   /** Why the act may not run on GitHub as it stands now, `read-failed`, or null. */
-  private async precondition(repoKey: string, act: ApprovalAct): Promise<string | null> {
+  private async precondition(repoKey: string, act: OneWriteAct): Promise<string | null> {
     const gh = this.ports.gh;
     if (act.kind === 'issue_create') return null;
     if (act.kind === 'pr_close') {
@@ -379,7 +496,7 @@ export class ActExecutor {
     return pr.headSha === act.headSha ? null : 'head-moved';
   }
 
-  private write(p: { host: string; base: string }, r: StoredApproval, act: ApprovalAct): Promise<GhActAnswer> {
+  private write(p: { host: string; base: string }, r: StoredApproval, act: OneWriteAct): Promise<GhActAnswer> {
     const gh = this.ports.gh;
     switch (act.kind) {
       case 'comment':
@@ -402,8 +519,18 @@ export class ActExecutor {
     if (found.status === 'unknown') return 'unknown';
     let next: ActEffect | null;
     if (found.status === 'done') next = this.ports.effects.settle(row.id, 'done', undefined, found.result);
-    else if (found.status === 'refused') next = this.ports.effects.settle(row.id, 'refused', found.reason);
-    else next = this.ports.effects.settle(row.id, 'pending', 'not-found');
+    else if (found.status === 'refused') next = this.ports.effects.settle(row.id, 'refused', found.reason, found.result);
+    else {
+      next = this.ports.effects.settle(row.id, 'pending', 'not-found');
+      // A release's own draft found: the next try publishes it.
+      if (found.draft !== undefined && next?.status === 'pending') next = this.ports.effects.noteDraft(row.id, found.draft) ?? next;
+    }
+    // A release's own draft goes with a refusal (a draft makes no tag).
+    const draft = found.status === 'refused' || found.status === 'none' ? found.draft : undefined;
+    const p = repoPath(r.repoKey);
+    if (draft !== undefined && next?.status === 'refused' && p && !(await deleteDraft(this.ports.gh, p, draft))) {
+      this.ports.log?.(`[factory] act release ${row.requestId}: its draft ${draft} could not be deleted`);
+    }
     if (next && (next.status !== row.status || next.reason !== row.reason)) this.emit(next);
     return next;
   }
@@ -413,6 +540,7 @@ export class ActExecutor {
     const p = repoPath(r.repoKey);
     if (!p) return { status: 'unknown' };
     const gh = this.ports.gh;
+    if (act.kind === 'release') return findRelease(gh, p, act, r.ghLogin as string, row.draftId);
     const since = new Date((row.firstStartedAt ?? row.createdAt) - RECONCILE_AFTER_MS).toISOString();
     const marker = actMarker(r.requestId);
     if (act.kind === 'comment' || act.kind === 'issue_create') {

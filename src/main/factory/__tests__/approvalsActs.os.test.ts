@@ -19,6 +19,7 @@ import { RoomWriter } from '../roomWriter';
 import { ActEffectStore, actEffectId } from '../actEffectStore';
 import { ActExecutor, readIssue, readLogin, readPull, readRepo, RECONCILE_AFTER_MS } from '../actExecutor';
 import { actMarker } from '../actPayload';
+import { readReleaseAsk } from '../releaseAct';
 import { FakeGithub, type FakeIssue } from './fakeGithubActs';
 import { handlePhoneBotApprovalCommand } from '../../phone/PhoneBotApprovals';
 import { PHONE_APPROVAL_ACTIONS, PHONE_BOT_APPROVAL_COMMAND, PHONE_BOT_APPROVAL_DECIDE_COMMAND, parsePhoneBotApproval } from '../../../shared/phoneBotApprovals';
@@ -94,6 +95,7 @@ function rig(opts: { wake?: Partial<ApprovalWake>; ports?: Partial<ApprovalPorts
     repo: (k) => readRepo(gh, k),
     issue: (k, n) => readIssue(gh, k, n),
     pull: (k, n) => readPull(gh, k, n),
+    release: (k, input) => readReleaseAsk(gh, k, input),
     enqueue: (r) => (r.act && r.payloadHash ? effects.enqueue({ requestId: r.requestId, action: r.act.kind, repoKey: r.repoKey, payloadHash: r.payloadHash }) : null),
     run: (id) => executor.run(id),
     effect: (id) => effects.get(id),
@@ -450,6 +452,7 @@ describe('restarts', () => {
     });
     svc = new ApprovalService({ ...r.ports, acts: () => ({
       login: async () => 'owner', repo: (k) => readRepo(r.gh, k), issue: (k, n) => readIssue(r.gh, k, n), pull: (k, n) => readPull(r.gh, k, n),
+      release: (k, input) => readReleaseAsk(r.gh, k, input),
       enqueue: (q) => (q.act ? effects.enqueue({ requestId: q.requestId, action: q.act.kind, repoKey: q.repoKey, payloadHash: q.payloadHash as string }) : null),
       run: (id) => executor.run(id), effect: (id) => effects.get(id), remove: (id) => effects.remove(id),
     }) });

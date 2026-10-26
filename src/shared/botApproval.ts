@@ -69,9 +69,9 @@ export const APPROVAL_ACTIONS: readonly ApprovalAction[] = ['merge', 'push_defau
 
 /** The public acts main carries out on GitHub after the Undo window
  *  (factory/actExecutor.ts), for a request that carries its `act`. */
-export type ActAction = 'comment' | 'issue_create' | 'issue_close' | 'pr_close';
+export type ActAction = 'comment' | 'issue_create' | 'issue_close' | 'pr_close' | 'release';
 
-export const ACT_ACTIONS: ReadonlySet<ApprovalAction> = new Set<ApprovalAction>(['comment', 'issue_create', 'issue_close', 'pr_close']);
+export const ACT_ACTIONS: ReadonlySet<ApprovalAction> = new Set<ApprovalAction>(['comment', 'issue_create', 'issue_close', 'pr_close', 'release']);
 
 /** Acts that publish text a bot wrote: approved only with a button on their
  *  card (desktop or phone) that echoes the card's payloadHash, never by
@@ -110,8 +110,31 @@ export type ApprovalAct =
   | { kind: 'comment'; target: 'pr' | 'issue'; number: number; targetNodeId: string; headSha?: string; title: string; body: string }
   | { kind: 'issue_create'; title: string; body: string }
   | { kind: 'issue_close'; number: number; targetNodeId: string; title: string; stateReason: 'completed' | 'not_planned' }
-  | { kind: 'pr_close'; number: number; targetNodeId: string; headSha: string; title: string };
+  | { kind: 'pr_close'; number: number; targetNodeId: string; headSha: string; title: string }
+  | ApprovalReleaseAct;
 
+/** A release, pinned at a commit main read on the default branch. `mode`
+ *  is decided when the bot asks, from the workflows at `targetSha` (a
+ *  commit's contents never change): `workflow` when a workflow there runs on
+ *  pushing this tag, so main pushes the tag alone and the workflow builds
+ *  and publishes the release (`workflows`: their paths); `release` when none
+ *  does, so main publishes it itself (a draft first, then published), with
+ *  `title`, `notes` and `prerelease` as the card shows them. In `workflow`
+ *  mode `title` and `notes` are empty and `prerelease` is the tag's own
+ *  shape. Never a draft once done. */
+export interface ApprovalReleaseAct {
+  kind: 'release';
+  mode: 'workflow' | 'release';
+  tagName: string;
+  targetSha: string;
+  /** The default branch main read; the commit must still be on it. */
+  defaultBranch: string;
+  title: string;
+  notes: string;
+  prerelease: boolean;
+  workflows: string[];
+  draft: false;
+}
 /** An act's pins of the repository. */
 export interface ApprovalActRepo {
   /** `owner/repo` as GitHub answered it. */
@@ -202,6 +225,14 @@ export interface ApprovalRequestParams {
   title?: string;
   /** issue_close: completed (default) or not_planned. */
   stateReason?: 'completed' | 'not_planned';
+  /** release: the tag to publish (one ref segment). */
+  tagName?: string;
+  /** release: the full commit SHA; default the default branch's head now. */
+  targetSha?: string;
+  /** release: the release notes (`title` is its name, default the tag). */
+  notes?: string;
+  /** release: a prerelease, never marked Latest (default false). */
+  prerelease?: boolean;
   /** Idempotency key; default `wake:<wakeId>:a<n>` from the running wake. */
   clientRequestId?: string;
 }

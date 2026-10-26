@@ -77,7 +77,7 @@ const SENTENCES: Readonly<Record<string, string>> = {
   'pr-mismatch': '{host} answered for a different PR',
   'behind-updated': 'The branch was behind; it was updated and needs fresh checks',
   invalid: '{host} refused the merge request',
-  // The act executor (actExecutor.ts): a comment, an issue, a close.
+  // The act executor (actExecutor.ts): a comment, an issue, a close, a release.
   'approval-mismatch': 'The request no longer matches what was approved',
   'repo-changed': 'The repository was renamed, moved or changed since the request',
   'target-gone': 'The issue or PR is no longer on {host}',
@@ -90,6 +90,20 @@ const SENTENCES: Readonly<Record<string, string>> = {
   'closed-differently': 'It was closed on {host}, but not as approved',
   'secret-in-body': 'Its text holds a secret stored since the request',
   'attempts-exhausted': 'wmux tried three times and could not tell whether it went through',
+  // A release (releaseAct.ts).
+  'tag-taken': 'The tag already exists on {host}',
+  'release-exists': 'A release with this tag is already on {host}, published or as a draft',
+  'not-on-default-branch': 'The commit is no longer on the default branch',
+  'default-branch-changed': 'The repository\'s default branch changed since the request',
+  'checks-failing': 'A check on the commit failed',
+  'checks-pending': 'A check on the commit is still running',
+  'checks-not-started': 'The commit\'s checks have not started',
+  'version-mismatch': 'The version in package.json or package-lock.json is not the tag\'s',
+  'prerelease-mismatch': 'The tag reads as a prerelease and the request does not, or the other way round',
+  'tag-not-matching-release-workflow': 'The repository\'s tag workflows do not run on this tag',
+  'workflow-unreadable': 'A workflow file at the commit could not be read',
+  'release-by-other': 'Someone else published a release with this tag',
+  'published-other-target': 'A release was published, but its tag points at another commit',
 };
 
 /** Sentences for code families with a variable tail. */

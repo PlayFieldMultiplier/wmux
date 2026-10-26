@@ -29,6 +29,7 @@ process.stdin.on('end', () => {
   if (endpoint === 'repos/o/r/issues/404') { process.stderr.write('gh: Not Found (HTTP 404)\\n'); process.exit(1); }
   if (endpoint === 'repos/o/r/issues/429') { process.stderr.write('gh: API rate limit exceeded (HTTP 403)\\n'); process.exit(1); }
   if (endpoint === 'repos/o/r/issues/500') { process.stderr.write('gh: Server Error (HTTP 502)\\n'); process.exit(1); }
+  if (endpoint === 'repos/o/r/releases/7') process.exit(0);
   process.stdout.write(JSON.stringify({ echoed: input ? JSON.parse(input) : null }));
 });
 `);
@@ -64,6 +65,12 @@ describe('GhActService (a stand-in gh process)', () => {
     const fresh = service().gh;
     expect(await fresh.write('github.com', 'PATCH', 'repos/o/r/issues/500', { state: 'closed' })).toMatchObject({ ok: false, kind: 'error' });
     expect(await fresh.read('github.com', 'repos/o/r --jq .x')).toMatchObject({ ok: false, kind: 'unsent' });
+  });
+
+  it('a DELETE GitHub answers with no content (204) is ok, with no value', async () => {
+    const { gh, log } = service();
+    expect(await gh.write('github.com', 'DELETE', 'repos/o/r/releases/7', {})).toEqual({ ok: true, value: null });
+    expect(log().args).toEqual(['api', '--hostname', 'github.com', '-X', 'DELETE', 'repos/o/r/releases/7', '--input', '-']);
   });
 
   it('reads the HTTP status gh reports', () => {

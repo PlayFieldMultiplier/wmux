@@ -15,6 +15,11 @@
 // nothing: the executor asks the approval store on every try. A row whose
 // action this build does not know is kept and never run; a malformed row
 // refuses the file (the outbox is not dropped).
+//
+// A release published through the API takes two writes: a draft (which makes
+// no tag), then publishing it. The draft's id is journaled on the row as soon
+// as GitHub names it (noteDraft), so a later try publishes that draft rather
+// than making a second one.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -43,6 +48,8 @@ export interface ActEffect {
   firstStartedAt?: number;
   startedAt?: number;
   result?: { url: string; id?: number; number?: number };
+  /** A release's draft on GitHub, made by an earlier write of this row. */
+  draftId?: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -61,6 +68,7 @@ function wellFormed(v: unknown): v is ActEffect {
     && STATUSES.has(e.status) && Number.isSafeInteger(e.attempt) && e.attempt >= 0
     && (e.reason === undefined || typeof e.reason === 'string')
     && (e.result === undefined || (typeof e.result === 'object' && e.result !== null && typeof e.result.url === 'string'))
+    && (e.draftId === undefined || (Number.isSafeInteger(e.draftId) && e.draftId > 0))
     && Number.isSafeInteger(e.createdAt) && Number.isSafeInteger(e.updatedAt);
 }
 
@@ -137,6 +145,22 @@ export class ActEffectStore {
     const next: ActEffect = { ...row, status: 'inFlight', attempt: row.attempt + 1, startedAt: at, firstStartedAt: row.firstStartedAt ?? at, updatedAt: at };
     delete next.reason;
     return this.put(next) ? next : null;
+  }
+
+  /** Journal the draft a row's write made (or found), while the row is
+   *  claimed or being settled. Null when the row is not one of those or the
+   *  file was not written (the row is then uncertain in memory). */
+  noteDraft(id: string, draftId: number): ActEffect | null {
+    const row = this.rows.get(id);
+    if (!row || !Number.isSafeInteger(draftId) || draftId <= 0) return null;
+    if (row.status !== 'inFlight' && row.status !== 'uncertain' && row.status !== 'pending') return null;
+    if (row.draftId === draftId) return row;
+    const next: ActEffect = { ...row, draftId, updatedAt: this.now() };
+    if (this.put(next)) return next;
+    // A claimed row whose draft is not on disk: settled by a read (the draft
+    // scan finds it), never written again blind.
+    if (row.status === 'inFlight') this.unjournaled(row);
+    return null;
   }
 
   /** inFlight → pending: nothing was written (the approval was taken back,
