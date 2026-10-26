@@ -210,6 +210,18 @@ describe('quiet approval recovery reads only the current interactive viewport', 
     expect(events.mock.calls.map(([event]) => event.status)).toEqual(['awaiting_input']);
   });
 
+  it('asks once per drawn footer, not again on later output', () => {
+    const det = new AgentDetector();
+    det.seedTrustedIdentity('pi', det.getIdentityEpoch());
+    const { trust } = piCapture.chunks;
+    // The first draw only: its footer, then the redraw's opening bytes.
+    const firstFooterEnd = trust.indexOf('cancel', trust.indexOf('escape/ctrl+c')) + 'cancel'.length;
+    det.feed(trust.slice(0, firstFooterEnd));
+    expect(det.takeApprovalRecheckRequest()).toBe(true);
+    det.feed('\u001b[?25l');
+    expect(det.takeApprovalRecheckRequest()).toBe(false);
+  });
+
   it('drops a pending Pi recheck once input or a resize makes the screen stale', () => {
     const det = new AgentDetector();
     det.seedTrustedIdentity('pi', det.getIdentityEpoch());

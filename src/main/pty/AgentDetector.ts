@@ -1305,13 +1305,12 @@ export class AgentDetector {
   }
 
   /**
-   * An identity change: no read in flight may land and the recheck is reset,
-   * but the evidence (and output drawn before the next seed) stays for that
-   * seed to judge.
+   * An identity change (its callers advance the identity epoch, which resets
+   * the recheck): no read in flight may land, but the evidence, and output
+   * drawn before the next seed, stays for that seed to judge.
    */
   private retireApprovalScreen(): void {
     this.approvalScreenGeneration++;
-    this.approvalRecheckEpoch = null;
     this.approvalRecheckRequested = false;
     this.approvalEvidenceRetired = true;
   }
