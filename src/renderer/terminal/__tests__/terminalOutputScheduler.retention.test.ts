@@ -14,6 +14,7 @@ import {
   markTerminalDirty,
   markTerminalClean,
   noteTerminalDirectWrite,
+  __setQueryFlushPosterForTests,
   __resetTerminalOutputSchedulerForTests,
   type SchedulableTerminal,
 } from '../terminalOutputScheduler';
@@ -178,11 +179,10 @@ describe('terminalOutputScheduler — hidden-pane retention', () => {
 });
 
 // A retained pane still answers terminal queries: xterm is its only responder,
-// so a chunk that completes a query hands the whole backlog to xterm shortly
-// after (one coalesced flush per window).
+// so a chunk that completes a query hands the whole backlog to xterm in the
+// next task (one coalesced flush for every query chunk that lands before it).
 describe('terminalOutputScheduler — hidden-pane retention answers queries', () => {
   const DA1 = '\x1b[c';
-  const QUERY_FLUSH_DELAY_MS = 4; // scheduler constant (kept in sync manually)
 
   /** Fake xterm that "answers" every query it parses, like onData → pty.write. */
   function makeAnsweringTerminal(): SchedulableTerminal & { writes: string[]; answers: number } {
@@ -198,21 +198,24 @@ describe('terminalOutputScheduler — hidden-pane retention answers queries', ()
     return t;
   }
 
-  const settle = () => vi.advanceTimersByTime(QUERY_FLUSH_DELAY_MS);
+  /** Run the next posted flush task (routed through fake timers below). */
+  const settle = () => vi.advanceTimersByTime(1);
 
   beforeEach(() => {
     vi.useFakeTimers();
     __resetTerminalOutputSchedulerForTests();
+    __setQueryFlushPosterForTests((run) => { setTimeout(run, 0); });
   });
 
   afterEach(() => {
+    __setQueryFlushPosterForTests(null);
     __resetTerminalOutputSchedulerForTests();
     vi.useRealTimers();
   });
 
   const hidden = { foreground: false, retainWhenHidden: true } as const;
 
-  it('a query chunk flushes the retained backlog in order, within the coalescing window', () => {
+  it('a query chunk flushes the retained backlog in order, in the next task', () => {
     const t = makeAnsweringTerminal();
     writeTerminalOutput(t, 'one ', hidden);
     writeTerminalOutput(t, 'two ', hidden);
@@ -225,7 +228,7 @@ describe('terminalOutputScheduler — hidden-pane retention answers queries', ()
     expect(getQueuedCharCount(t)).toBe(0);
   });
 
-  it('ten query chunks in one window produce one flush, answered in order and once each', () => {
+  it('ten query chunks in one tick produce one flush, answered in order and once each', () => {
     const t = makeAnsweringTerminal();
     let expected = '';
     for (let i = 0; i < 10; i++) {
@@ -347,22 +350,53 @@ describe('terminalOutputScheduler — hidden-pane retention answers queries', ()
     expect(isTerminalRetained(t)).toBe(true);
   });
 
-  it('a query chunk that overflows the cap marks the pane dirty instead of parsing', () => {
+  it('a query chunk that overflows the cap is parsed at once, not dropped with the backlog', () => {
     const t = makeAnsweringTerminal();
     writeTerminalOutput(t, 'x'.repeat(MAX_QUEUE_CHARS), hidden);
     writeTerminalOutput(t, DA1, hidden);
+    expect(joined(t)).toBe('x'.repeat(MAX_QUEUE_CHARS) + DA1);
+    expect(t.answers).toBe(1);
+    expect(isTerminalDirty(t)).toBe(false);
+  });
+
+  it('a pending query is parsed at once when the backlog overflows before its flush runs', () => {
+    const t = makeAnsweringTerminal();
+    writeTerminalOutput(t, DA1, hidden);
+    writeTerminalOutput(t, 'x'.repeat(MAX_QUEUE_CHARS), hidden);
+    expect(t.answers).toBe(1);
+    expect(isTerminalDirty(t)).toBe(false);
+    settle(); // the posted flush finds nothing left to do
+    expect(t.writes.join('')).toBe(DA1 + 'x'.repeat(MAX_QUEUE_CHARS));
+  });
+
+  it('an overflow without a query still marks the pane dirty', () => {
+    const t = makeAnsweringTerminal();
+    writeTerminalOutput(t, 'x'.repeat(MAX_QUEUE_CHARS), hidden);
+    writeTerminalOutput(t, 'y', hidden);
     settle();
     expect(t.writes).toEqual([]);
     expect(isTerminalDirty(t)).toBe(true);
   });
 
-  it('a pending query flush is dropped when the backlog overflows before it runs', () => {
+  it('a reveal flush clears the pending query, so a new hidden backlog stays retained', () => {
     const t = makeAnsweringTerminal();
     writeTerminalOutput(t, DA1, hidden);
-    writeTerminalOutput(t, 'x'.repeat(MAX_QUEUE_CHARS), hidden);
+    flushTerminalOutput(t); // shown before the task ran
+    writeTerminalOutput(t, 'hidden again', hidden);
     settle();
-    expect(t.writes).toEqual([]);
-    expect(isTerminalDirty(t)).toBe(true);
+    expect(joined(t)).toBe(DA1);
+    expect(isTerminalRetained(t)).toBe(true);
+  });
+
+  it('several panes querying at once are flushed one per task', () => {
+    const a = makeAnsweringTerminal();
+    const b = makeAnsweringTerminal();
+    writeTerminalOutput(a, `a${DA1}`, hidden);
+    writeTerminalOutput(b, `b${DA1}`, hidden);
+    vi.advanceTimersToNextTimer();
+    expect([a.answers, b.answers]).toEqual([1, 0]);
+    vi.advanceTimersToNextTimer();
+    expect([a.answers, b.answers]).toEqual([1, 1]);
   });
 
   it('showing the pane before the flush runs leaves the backlog to the normal path, answered once', () => {
@@ -420,5 +454,25 @@ describe('terminalOutputScheduler — hidden-pane retention answers queries', ()
     } finally {
       log.mockRestore();
     }
+  });
+});
+
+describe('terminalOutputScheduler — query flush task (default poster)', () => {
+  beforeEach(() => __resetTerminalOutputSchedulerForTests());
+  afterEach(() => {
+    __resetTerminalOutputSchedulerForTests();
+    vi.useRealTimers();
+  });
+
+  it('runs the flush in a posted task, not on a timer (timers throttle in a hidden window)', async () => {
+    // setTimeout is frozen: only a non-timer task can deliver the flush.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const t = makeTerminal();
+    writeTerminalOutput(t, 'x\x1b[c', { foreground: false, retainWhenHidden: true });
+    expect(t.writes).toEqual([]);
+    for (let i = 0; i < 50 && t.writes.length === 0; i++) {
+      await new Promise<void>((resolve) => { setImmediate(resolve); });
+    }
+    expect(joined(t)).toBe('x\x1b[c');
   });
 });

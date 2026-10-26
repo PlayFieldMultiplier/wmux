@@ -1066,6 +1066,7 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
       try {
         for (const chunk of st.buffer) {
           writePtyDataImmediately(term, chunk, replayMuteRef.current);
+          noteTerminalDirectWrite(term, chunk.data);
         }
       } catch { /* disposed mid-abort — teardown owns cleanup */ }
     }

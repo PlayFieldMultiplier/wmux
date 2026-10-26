@@ -46,8 +46,8 @@
 // backlog went unanswered while the pane stayed hidden (a TUI started in a
 // background workspace gave up on its probes, e.g. Claude Code never enabled
 // the kitty keyboard). A retained chunk that completes a query flushes the
-// whole backlog (on a short coalescing timer, so a burst of query chunks
-// costs one parse) and xterm answers in order with its real state.
+// whole backlog in the next task (so a burst of query chunks costs one parse)
+// and xterm answers in order with its real state.
 // Dirty panes (overflowed backlog, bytes dropped) are not covered: their
 // queries are answered by nothing until the reveal resync, which strips them.
 
@@ -217,14 +217,16 @@ const QUERY_SPLITTER_MAX_HELD = 4096;
  *  re-parses its hidden pane every frame — visible in the log, not flooding it. */
 const QUERY_PARSE_LOG_INTERVAL_MS = 10_000;
 const queryParseLog = new Map<SchedulableTerminal, { lastAt: number; suppressed: number }>();
-/** Coalescing window for query flushes. Every query chunk that lands before
- *  the timer fires joins one flush, so a TUI that queries in each of many
- *  chunks pays one parse per window rather than one per chunk. Same cadence as
- *  the priority drain: the answer stays in the low milliseconds. */
-const QUERY_FLUSH_DELAY_MS = 4;
-/** Terminals with a query waiting in their retained backlog → log label. */
+/** Terminals with a query waiting in their retained backlog → log label.
+ *  Query flushes run in the next macrotask: every query chunk that lands
+ *  before it joins the same flush, so a burst costs one parse, not one per
+ *  chunk. The task is a MessageChannel post, not a timer: Chromium stretches
+ *  even setTimeout(0) to about a second in a minimized or occluded window,
+ *  which is when background panes start agents, and their probes time out. */
 const pendingQueryFlushes = new Map<SchedulableTerminal, string | undefined>();
-let queryFlushTimer: ReturnType<typeof setTimeout> | null = null;
+let queryFlushPosted = false;
+let queryFlushChannel: MessageChannel | null = null;
+let queryFlushPosterForTests: ((run: () => void) => void) | null = null;
 
 /** Monotonic-ish clock for the interactive window. Falls back to Date.now() in
  *  environments without `performance` (jsdom-less unit tests). */
@@ -490,15 +492,44 @@ function resolveSyncOpen(prevOpen: boolean, data: string): boolean {
  *  already owns the backlog, query included, in order. An entry that is gone
  *  was flushed, discarded or overflowed to dirty. */
 function runQueryFlushes(): void {
-  queryFlushTimer = null;
-  const due = [...pendingQueryFlushes];
-  pendingQueryFlushes.clear();
-  for (const [terminal, ptyId] of due) {
-    const entry = queue.get(terminal);
-    if (!entry || !entry.retained || !hasQueuedChunks(entry)) continue;
-    logQueryParse(terminal, ptyId, entry.queuedChars);
-    flushTerminalOutput(terminal);
+  queryFlushPosted = false;
+  // One terminal per task: several hidden panes querying at once must not
+  // parse all their backlogs in one task and block input for the visible pane.
+  const next = pendingQueryFlushes.entries().next();
+  if (next.done) return;
+  const [terminal, ptyId] = next.value;
+  pendingQueryFlushes.delete(terminal);
+  if (pendingQueryFlushes.size > 0) postQueryFlush();
+  const entry = queue.get(terminal);
+  if (!entry || !entry.retained || !hasQueuedChunks(entry)) return;
+  logQueryParse(terminal, ptyId, entry.queuedChars);
+  flushTerminalOutput(terminal);
+}
+
+function postQueryFlush(): void {
+  if (queryFlushPosted) return;
+  queryFlushPosted = true;
+  if (queryFlushPosterForTests) {
+    queryFlushPosterForTests(runQueryFlushes);
+    return;
   }
+  if (typeof MessageChannel === 'undefined') {
+    setTimeout(runQueryFlushes, 0);
+    return;
+  }
+  if (!queryFlushChannel) {
+    queryFlushChannel = new MessageChannel();
+    queryFlushChannel.port1.onmessage = runQueryFlushes;
+    // Node keeps a port with a listener alive; Chromium has no unref.
+    (queryFlushChannel.port1 as { unref?: () => void }).unref?.();
+  }
+  queryFlushChannel.port2.postMessage(null);
+}
+
+/** Test only: run query flushes through `post` (e.g. fake timers) instead of
+ *  the MessageChannel task; null restores the default. */
+export function __setQueryFlushPosterForTests(post: ((run: () => void) => void) | null): void {
+  queryFlushPosterForTests = post;
 }
 
 function feedQuerySplitter(terminal: SchedulableTerminal, data: string): string {
@@ -519,7 +550,7 @@ export function noteTerminalDirectWrite(terminal: SchedulableTerminal, data: str
 
 function scheduleQueryFlush(terminal: SchedulableTerminal, ptyId: string | undefined): void {
   pendingQueryFlushes.set(terminal, ptyId);
-  queryFlushTimer ??= setTimeout(runQueryFlushes, QUERY_FLUSH_DELAY_MS);
+  postQueryFlush();
 }
 
 function logQueryParse(terminal: SchedulableTerminal, ptyId: string | undefined, chars: number): void {
@@ -716,22 +747,30 @@ export function writeTerminalOutput(
     }
     entry.chunks.push({ data, customWrite: options.write !== undefined });
     entry.queuedChars += data.length;
+    const queryInBacklog = pendingQueryFlushes.has(terminal) || containsTerminalQuery(completed);
+    if (entry.queuedChars > MAX_QUEUE_CHARS && queryInBacklog) {
+      // Dropping this backlog would drop a query nothing else will answer
+      // (the reveal resync strips queries). Parse it now instead: bounded
+      // memory, and the same hand-off the coalesced flush would have made.
+      logQueryParse(terminal, options.ptyId, entry.queuedChars);
+      flushTerminalOutput(terminal);
+      return;
+    }
     if (entry.queuedChars > MAX_QUEUE_CHARS) {
       queue.delete(terminal);
       dirtyTerminals.add(terminal);
       querySplitters.delete(terminal);
       escapeCarry.delete(terminal);
-      pendingQueryFlushes.delete(terminal);
       console.log(`[wmux:hidden-retention] backlog overflow (${entry.queuedChars} chars) — pane marked dirty, will resync from daemon on reveal`);
       return;
     }
-    if (containsTerminalQuery(completed)) {
+    if (queryInBacklog) {
       // The app is waiting on an answer only xterm can give. Hand the whole
       // backlog over shortly, in order, so xterm answers from its real state.
       // A full flush (not a priority promote): it deletes the entry, so the
       // next hidden chunk starts a fresh retained one, where a promoted entry
       // would be re-retained by that chunk with the query still unparsed.
-      // Until the timer fires, later hidden chunks join the same backlog and
+      // Until the task runs, later hidden chunks join the same backlog and
       // the same flush. Worst case is one parse of a backlog just under the cap.
       scheduleQueryFlush(terminal, options.ptyId);
     }
@@ -829,6 +868,9 @@ export function writeTerminalOutput(
  * parses asynchronously, exactly as it did when useTerminal wrote directly.
  */
 export function flushTerminalOutput(terminal: SchedulableTerminal): void {
+  // Whatever query was waiting is handed over with the backlog below; a stale
+  // pending flag would later parse an unrelated, query-free backlog.
+  pendingQueryFlushes.delete(terminal);
   // A forced full hand-off ends any open sync frame: its bytes are about to
   // reach xterm now, so a lingering hold state (and its safety timer) would be
   // stale.
@@ -920,7 +962,6 @@ export function markTerminalDirty(terminal: SchedulableTerminal): void {
  *  from the daemon — retained writes may accumulate again. */
 export function markTerminalClean(terminal: SchedulableTerminal): void {
   dirtyTerminals.delete(terminal);
-  querySplitters.delete(terminal);
 }
 
 /** Test/debug: chars currently queued for a terminal (0 when absent). */
@@ -946,9 +987,6 @@ export function __resetTerminalOutputSchedulerForTests(): void {
   querySplitters.clear();
   queryParseLog.clear();
   pendingQueryFlushes.clear();
-  if (queryFlushTimer !== null) {
-    clearTimeout(queryFlushTimer);
-    queryFlushTimer = null;
-  }
+  queryFlushPosted = false;
   retentionEngagedLogged = false;
 }
