@@ -30,7 +30,7 @@ vi.mock('../launchdDaemonJob', async () => {
   return { ...actual, startDaemonViaLaunchd: (...a: unknown[]) => startMock(...a) };
 });
 
-import { ensureDaemon, shouldLaunchDaemonViaLaunchd, type DaemonLauncherDeps } from '../daemonLauncherCore';
+import { argvIdentifiesDaemonScript, daemonProcessArgs, ensureDaemon, shouldLaunchDaemonViaLaunchd, type DaemonLauncherDeps } from '../daemonLauncherCore';
 import { LaunchdUnavailableError } from '../launchdDaemonJob';
 
 describe('shouldLaunchDaemonViaLaunchd', () => {
@@ -94,7 +94,11 @@ describe('daemonLauncherCore — launch strategy', () => {
     const [opts] = startMock.mock.calls[0] as [{ baseLabel: string; plistDir: string; programArguments: string[]; env: Record<string, string> }];
     expect(opts.baseLabel).toBe(`com.wmux.daemon${process.env.WMUX_DATA_SUFFIX}`);
     expect(opts.plistDir).toBe(path.join(wmuxDir, 'launchd'));
-    expect(opts.programArguments).toEqual([process.execPath, scriptPath]);
+    // The V8 semi-space cap rides argv ahead of the script (not NODE_OPTIONS,
+    // which PTY children would inherit), and the daemon still reads as ours.
+    expect(opts.programArguments).toEqual([process.execPath, ...daemonProcessArgs(scriptPath)]);
+    expect(opts.programArguments).toContain('--max-semi-space-size=8');
+    expect(argvIdentifiesDaemonScript(opts.programArguments, [scriptPath])).toBe(true);
     expect(opts.env.ELECTRON_RUN_AS_NODE).toBe('1');
     expect(opts.env.WMUX_SPAWNED_BY_VERSION).toBe('9.9.9-test');
   });
@@ -147,5 +151,9 @@ describe('daemonLauncherCore — launch strategy', () => {
     fakeChild.emit('error', new Error('spawn EACCES'));
     await expect(p).rejects.toThrow(/Failed to spawn daemon/);
     expect(startMock).not.toHaveBeenCalled();
+    const [cmd, args] = spawnMock.mock.calls[0] as unknown as [string, string[]];
+    expect(args).toEqual(daemonProcessArgs(scriptPath));
+    expect(args.indexOf('--max-semi-space-size=8')).toBe(0);
+    expect(argvIdentifiesDaemonScript([cmd, ...args], [scriptPath])).toBe(true);
   });
 });
