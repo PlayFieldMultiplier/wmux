@@ -104,6 +104,20 @@ describe('Codex pane relay lifetime',()=>{
     expect(registry.liveSelection('pane',pane)).toEqual({live:true,selection:{threadId:'thread',cwd:'/repo',generation:1}});
     await registry.shutdown();
   });
+  it('names the panes holding a thread, a reconnecting link included, for a chat that would resume it',async()=>{
+    const connection=relay();const registry=new CodexPaneRelays(async()=>connection);
+    const lease=await registry.prepare('pane','/h/.codex');
+    expect(registry.threadHolders('thread')).toEqual([]);
+    lease.commit(owner());
+    expect(registry.threadHolders('thread')).toEqual(['pane']);
+    connection.state.disconnected=true;connection.state.linked=false;
+    expect(registry.liveIds()).toEqual([]);
+    expect(registry.threadHolders('thread')).toEqual(['pane']);
+    expect(registry.threadHolders('other')).toEqual([]);
+    connection.state.retired=true;
+    expect(registry.threadHolders('thread')).toEqual([]);
+    await registry.shutdown();
+  });
   it('names the account home only for a live, committed relay (account status)',async()=>{
     const connection=relay();const registry=new CodexPaneRelays(async()=>connection);
     const lease=await registry.prepare('pane','/h/account-a');const pane=owner();

@@ -202,6 +202,21 @@ export class CodexPaneRelays {
     return this.entries.get(id)?.codeHome ?? path.join(os.homedir(),'.codex');
   }
 
+  /**
+   * Panes whose terminal Codex holds thread `threadId`: a relay committed to
+   * an owner that has it selected, linked or reconnecting, or the pane that
+   * started, resumed or forked it while that pane's relay is not retired.
+   */
+  threadHolders(threadId:string):string[] {
+    const panes = new Set<string>();
+    for (const entry of this.entries.values()) {
+      if (!entry.retired && entry.owner && entry.relay && !entry.relay.retired() && entry.relay.current()?.threadId === threadId) panes.add(entry.id);
+    }
+    const owner = this.ownerOf(threadId);
+    if (owner?.live) panes.add(owner.paneId);
+    return [...panes];
+  }
+
   /** Panes whose relay is live and committed to an owner. */
   liveIds():string[] {
     return [...this.entries.values()].filter(entry=>!entry.retired && !!entry.owner && !!entry.relay && !entry.relay.retired() && !entry.relay.disconnected() && entry.relay.linked()).map(entry=>entry.id);

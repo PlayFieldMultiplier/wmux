@@ -37,7 +37,8 @@ describe('parseChatV2Params', () => {
   });
 
   it('refuses agents, modes and models v1 does not run, and drops renderer-supplied paths or argv', () => {
-    expect(parseChatV2Params('create', { paneId: 'pty-1', agent: 'codex', mode: 'default' })).toBeNull();
+    expect(parseChatV2Params('create', { paneId: 'pty-1', agent: 'opencode', mode: 'default' })).toBeNull();
+    expect(parseChatV2Params('create', { paneId: 'pty-1', agent: 'codex', mode: 'default' })).toEqual({ paneId: 'pty-1', agent: 'codex', mode: 'default' });
     expect(parseChatV2Params('create', { paneId: 'pty-1', agent: 'claude', mode: 'yolo' })).toBeNull();
     for (const model of ['x; rm', '--dangerously-skip-permissions', '-p', '', '.hidden']) {
       expect(parseChatV2Params('create', { paneId: 'pty-1', agent: 'claude', mode: 'default', model })).toBeNull();

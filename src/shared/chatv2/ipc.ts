@@ -210,8 +210,28 @@ export const CHATV2_BLOCK_ID = /^[0-9]{1,15}\.[0-9]{1,6}$/;
 // --- shared shapes ------------------------------------------------------
 
 /** Agents v1 creates. The fold model (`HarnessId`) is wider; creation is not. */
-export type ChatV2Agent = Extract<HarnessId, 'claude'>;
-export const CHATV2_AGENTS: readonly ChatV2Agent[] = ['claude'];
+export type ChatV2Agent = Extract<HarnessId, 'claude' | 'codex'>;
+export const CHATV2_AGENTS: readonly ChatV2Agent[] = ['claude', 'codex'];
+
+/**
+ * What each chat-v2 agent can do, read by the host and the composer: a
+ * capability on the agent's row, not a branch on its slug (#1904).
+ */
+export const CHATV2_AGENT_CAPS: Readonly<Record<ChatV2Agent, {
+  /** It has a skip-permissions mode a chat may start in (`bypass`). */
+  bypass: boolean;
+  /** Its conversation moves between a chat and its terminal TUI (handoff.ts, fromTerminal.ts). */
+  terminalHandoff: boolean;
+  /**
+   * A terminal agent holds its conversations on a shared server whose argv
+   * names none (Codex's app-server): a resume asks the pane relays who holds
+   * the thread.
+   */
+  sharedServerThreads: boolean;
+}>> = {
+  claude: { bypass: true, terminalHandoff: true, sharedServerThreads: false },
+  codex: { bypass: false, terminalHandoff: false, sharedServerThreads: true },
+};
 
 /** `default` adds no permission flags; `bypass` = the agent's skip-permissions mode. */
 export type ChatV2RunMode = 'default' | 'bypass';
