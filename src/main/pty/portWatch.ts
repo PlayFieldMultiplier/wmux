@@ -47,6 +47,13 @@ export type SnapshotFn = () => Promise<PortSnapshot>;
 const DEFAULT_INTERVAL_MS = 10_000;
 /** Snapshot subprocess timeout (Unix path) — well under the tick interval. */
 const SNAPSHOT_TIMEOUT_MS = 8_000;
+/**
+ * How long tick() waits for a snapshot before counting it as failed. The Unix
+ * path runs `ps` then `lsof`, each with its own timeout, plus a margin. A child
+ * stuck in an uninterruptible kernel wait never closes, so the execFile promise
+ * may never settle; this deadline keeps one such child from freezing polling.
+ */
+export const SNAPSHOT_DEADLINE_MS = 2 * SNAPSHOT_TIMEOUT_MS + 2_000;
 /** After this many consecutive snapshot failures, pause polling briefly. */
 const FAILURE_BACKOFF_THRESHOLD = 3;
 const FAILURE_BACKOFF_MS = 60_000;
@@ -91,6 +98,7 @@ async function snapshotUnix(): Promise<PortSnapshot> {
   try {
     const { stdout } = await execFileAsync('ps', ['-axo', 'pid=,ppid='], {
       timeout: SNAPSHOT_TIMEOUT_MS,
+      killSignal: 'SIGKILL',
       maxBuffer: 16 * 1024 * 1024,
     });
     for (const line of stdout.split('\n')) {
@@ -104,6 +112,7 @@ async function snapshotUnix(): Promise<PortSnapshot> {
     // -F p n: machine-readable "p<pid>" / "n<addr>" lines.
     const { stdout } = await execFileAsync('lsof', ['-nP', '-iTCP', '-sTCP:LISTEN', '-Fpn'], {
       timeout: SNAPSHOT_TIMEOUT_MS,
+      killSignal: 'SIGKILL',
       maxBuffer: 16 * 1024 * 1024,
     });
     let currentPid: number | null = null;
@@ -189,6 +198,8 @@ export class PortWatcher extends EventEmitter {
   private lastBySession = new Map<string, string>();
   private consecutiveFailures = 0;
   private backoffUntil = 0;
+  /** The snapshot still running, kept past its deadline until it settles. */
+  private outstanding: Promise<PortSnapshot> | null = null;
   private readonly intervalMs: number;
   private readonly snapshot: SnapshotFn;
 
@@ -257,7 +268,7 @@ export class PortWatcher extends EventEmitter {
       }
       if (sessions.length === 0) return;
 
-      const snap = await this.snapshot();
+      const snap = await this.boundedSnapshot();
       this.consecutiveFailures = 0;
       const matched = matchSessionPorts(snap, sessions);
       for (const [sessionId, ports] of matched) {
@@ -282,5 +293,27 @@ export class PortWatcher extends EventEmitter {
     } finally {
       this.ticking = false;
     }
+  }
+
+  /**
+   * Run one snapshot, but give up waiting at SNAPSHOT_DEADLINE_MS. A snapshot
+   * that outlived its deadline stays outstanding until it settles, and no new
+   * one starts meanwhile, so at most one is ever in flight. Both cases reject,
+   * which tick() counts as a failure toward the backoff.
+   */
+  private boundedSnapshot(): Promise<PortSnapshot> {
+    if (this.outstanding) return Promise.reject(new Error('previous snapshot still pending'));
+    const pending = this.snapshot();
+    this.outstanding = pending;
+    const clear = (): void => {
+      if (this.outstanding === pending) this.outstanding = null;
+    };
+    pending.then(clear, clear);
+    let deadline: NodeJS.Timeout | undefined;
+    const expired = new Promise<never>((_, reject) => {
+      deadline = setTimeout(() => reject(new Error('snapshot deadline exceeded')), SNAPSHOT_DEADLINE_MS);
+      deadline.unref?.();
+    });
+    return Promise.race([pending, expired]).finally(() => clearTimeout(deadline));
   }
 }
