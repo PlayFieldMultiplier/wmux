@@ -22,9 +22,17 @@ vi.mock('../../../../shared/execEnv', () => ({
 
 const PANE = 'pty-chat-1';
 let dir: string;
+/** Every host a test made, so none is still writing into `dir` when it goes. */
+let hosts: ChatV2Host[] = [];
 
 beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'chatv2-host-')); });
-afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); });
+afterEach(async () => {
+  // dispose() waits (up to its timeout) for the record each host is writing.
+  // Newest first, one at a time: several hosts can hold the same record.
+  for (const host of hosts.reverse()) await host.dispose();
+  hosts = [];
+  fs.rmSync(dir, { recursive: true, force: true });
+});
 
 interface Rig {
   host: ChatV2Host;
@@ -131,6 +139,7 @@ function rig(options: { registry?: boolean; nativeOn?: boolean; paneEnv?: Record
   };
   host = createChatV2Host(deps);
   r.host = host;
+  hosts.push(host);
   return r;
 }
 
