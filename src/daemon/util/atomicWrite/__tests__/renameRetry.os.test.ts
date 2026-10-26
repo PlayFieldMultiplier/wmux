@@ -339,4 +339,24 @@ describe('atomicWriteText commit-rename retry (shares the core policy)', () => {
       expect(fs.readFileSync(bakPath, 'utf-8')).toBe('gen 1');
     });
   });
+
+  it('sync: an exhausted .bak rename is logged as the backup step and the write still lands', async () => {
+    await asPlatform('win32', () => {
+      atomicWriteTextSync(targetPath, 'gen 1', { renameRetry: fastRetry });
+      const bakPath = `${targetPath}.bak`;
+      const real = fs.renameSync.bind(fs);
+      vi.spyOn(fs, 'renameSync').mockImplementation((from: fs.PathLike, to: fs.PathLike) => {
+        if (to === bakPath) throw errno('EPERM');
+        return real(from, to);
+      });
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      atomicWriteTextSync(targetPath, 'gen 2', { renameRetry: fastRetry });
+
+      expect(fs.readFileSync(targetPath, 'utf-8')).toBe('gen 2');
+      const exhausted = warn.mock.calls.map((c) => String(c[0])).find((m) => m.includes('still failing'));
+      expect(exhausted).toMatch(/^\[atomicWrite\] Backup rename to ".*\.bak" still failing/);
+      expect(exhausted).toContain('The write continues without a fresh backup.');
+    });
+  });
 });

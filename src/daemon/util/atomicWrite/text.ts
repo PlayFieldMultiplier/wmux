@@ -184,7 +184,7 @@ export async function atomicWriteText(
 
       // Rotate current → .bak with the same retry as the commit (see core.ts).
       try {
-        await commitRename(targetPath, bak, opts.renameRetry);
+        await commitRename(targetPath, bak, opts.renameRetry, 'backup');
         movedToBak = true;
       } catch (err) {
         const code = (err as NodeJS.ErrnoException).code;
@@ -299,7 +299,7 @@ export function atomicWriteTextSync(
     let movedToBak = false;
     if (fs.existsSync(targetPath)) {
       try {
-        commitRenameSync(targetPath, bak, opts.renameRetry);
+        commitRenameSync(targetPath, bak, opts.renameRetry, 'backup');
         movedToBak = true;
       } catch (bakErr) {
         // eslint-disable-next-line no-console
