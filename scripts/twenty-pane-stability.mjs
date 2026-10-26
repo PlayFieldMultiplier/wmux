@@ -620,12 +620,21 @@ async function setup(inst) {
     await callPaced(inst.main, 'input.send', { ptyId: p.ptyId, text: cmd, submit: true, raw: true });
     await sleep(250);
   }
-  await sleep(4000);
-  const bytes1 = await inst.page.evaluate(() => ({ ...window.__wmuxSoak.bytes }));
-  await sleep(2000);
-  const bytes2 = await inst.page.evaluate(() => ({ ...window.__wmuxSoak.bytes }));
-  const notFlowing = panes.filter((p) => p.cls === 'streaming' && !((bytes2[p.ptyId] ?? 0) > (bytes1[p.ptyId] ?? 0)));
-  if (notFlowing.length) throw new Error(`${notFlowing.length} streaming pane(s) produce no output; the producer did not start`);
+  // Cold node starts under PowerShell on a loaded machine can take a while:
+  // wait until every streaming pane shows a producer status row, then check
+  // that its output keeps growing.
+  const streamingIds = panes.filter((p) => p.cls === 'streaming').map((p) => p.ptyId);
+  const flowing = async () => {
+    const before = await inst.page.evaluate(() => ({ ...window.__wmuxSoak.bytes }));
+    await sleep(1500);
+    const after = await inst.page.evaluate(() => ({ ...window.__wmuxSoak.bytes }));
+    return streamingIds.filter((id) => !((after[id] ?? 0) > (before[id] ?? 0) + 1024));
+  };
+  try {
+    await waitFor('streaming panes producing output', async () => (await flowing()).length === 0, 45000, 500);
+  } catch {
+    throw new Error(`${(await flowing()).length} streaming pane(s) produce no output after 45 s; the producer did not start`);
+  }
   await inst.page.evaluate(() => { window.__wmuxSoak.gaps.length = 0; });
   return { panes, workspaceIds, layout };
 }

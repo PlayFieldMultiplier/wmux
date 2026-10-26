@@ -7,7 +7,7 @@ latency, lost input, output stalls and memory every 10 seconds.
 
 Script: `scripts/twenty-pane-stability.mjs` (measurement core in
 `scripts/lib/twenty-pane-stability.mjs`, unit-tested by
-`scripts/__tests__/twentyPaneStability.test.mjs`).
+`scripts/__tests__/twentyPaneStability.os.test.mjs`).
 
 ## Method
 
