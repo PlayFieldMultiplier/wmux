@@ -35,8 +35,6 @@ export const IDENTITY_TTL_MS = 2 * 60_000;
  *  its liveness still participates, its name does not. */
 export interface CanonicalProcessState {
   slug?: AgentSlug;
-  /** A live custom agent (AgentProcessTracker): a label, never a slug. */
-  custom?: string;
   alive: boolean;
 }
 
@@ -90,6 +88,8 @@ export function resolveCanonicalAgentIdentity(inputs: {
   proc?: CanonicalProcessState;
   auth?: CanonicalHookAuthority;
   screenSlug?: AgentSlug;
+  /** The pane runs one of the operator's custom agents (a label, never a slug). */
+  customAgent?: boolean;
   identityTtlMs?: number;
 }): CanonicalAgentIdentity | undefined {
   const ttl = inputs.identityTtlMs ?? IDENTITY_TTL_MS;
@@ -108,7 +108,7 @@ export function resolveCanonicalAgentIdentity(inputs: {
     return { slug: auth.slug, source: 'hook', observedAgoMs: auth.ageMs };
   }
   if (proc?.slug && proc.alive) return { slug: proc.slug, source: 'process' };
-  if (proc?.custom !== undefined && proc.alive) return undefined;
+  if (inputs.customAgent) return undefined;
   if (screenSlug) return { slug: screenSlug, source: 'screen' };
   return undefined;
 }

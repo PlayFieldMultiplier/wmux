@@ -578,6 +578,7 @@ function canonicalIdentityFor(
     ...(proc ? { proc } : {}),
     ...(auth ? { auth } : {}),
     ...(screenSlug ? { screenSlug } : {}),
+    ...(agentProcessTracker.customAgentNameFor(sessionId) !== undefined ? { customAgent: true } : {}),
   });
 }
 
@@ -7869,10 +7870,7 @@ function wireEvents(
         // (alive=false lets it re-probe), and rearm() would burn its 10s
         // cooldown for nothing, potentially blocking the real launch probe
         // moments later (review #3).
-        // A live custom agent is conflicting evidence too: its wrapper may
-        // have exec'd the agent this banner names, and a plain arm() may sit
-        // in the backoff a fruitless probe through it left.
-        if (tracked?.alive && (tracked.slug !== undefined ? tracked.slug !== slug : tracked.custom !== undefined)) {
+        if (tracked?.slug !== undefined && tracked.slug !== slug && tracked.alive) {
           agentProcessTracker.rearm(payload.sessionId, managed.meta.pid);
         } else {
           agentProcessTracker.arm(payload.sessionId, managed.meta.pid);

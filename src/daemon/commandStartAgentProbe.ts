@@ -13,11 +13,10 @@
 // worth a process probe: a TUI agent is up by then, while `ls` or `git status`
 // has long returned and costs nothing. One later retry catches a slow starter
 // (a cold `npx` download, a wrapper that execs late); after that the window
-// closes. The probe itself only commits a pick that resolves to an agent slug
-// or to one of the operator's custom agents, and backs off on a miss
-// (AgentProcessTracker.armIfAgent). A custom agent does not count as named
-// here, so the retry still runs and can find the registry agent its wrapper
-// starts late.
+// closes. The probe itself only commits a pick that resolves to an agent slug,
+// and backs off on a miss (AgentProcessTracker.armIfAgent). It also re-reads
+// the pane's custom-agent label, which is not a named agent: the retry still
+// runs and can find a registry agent a custom wrapper starts late.
 
 /** How long a foreground command must outlive its command-start marker. */
 export const COMMAND_SETTLE_MS = 1_500;

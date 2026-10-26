@@ -186,7 +186,7 @@ describe('reportedAgentName (#1303 no-banner sessions)', () => {
     // "Tern" is a made-up CLI the operator defined.
     // Through the real tier rule: a live custom process leaves no screen-tier
     // identity, so neither the label nor the persisted slug is the banner's.
-    const canonical = resolveCanonicalAgentIdentity({ proc: { custom: 'tern', alive: true }, screenSlug: 'claude' });
+    const canonical = resolveCanonicalAgentIdentity({ customAgent: true, screenSlug: 'claude' });
     expect(canonical).toBeUndefined();
     expect(reportedAgentName({ rawName: 'Claude Code', screenSlug: 'claude', canonical, customName: 'Tern' })).toBe('Tern');
     expect(reportedAgentName({ rawName: undefined, screenSlug: undefined, customName: 'Tern' })).toBe('Tern');
