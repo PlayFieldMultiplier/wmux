@@ -1295,4 +1295,29 @@ describe('AutomationEngine — failure breaker', () => {
     again.h.engine.tick(again.h.clock.t + MIN);
     expect(again.h.events.filter((e) => e.type === 'attention')).toEqual([]);
   });
+
+  it('an edit to what runs starts the streak over and answers the notice; a time-only edit keeps it', async () => {
+    const b = await breaker();
+    await failures(b, 2);
+    const later = draft({ trigger: { kind: 'schedule', weekdays: [0, 1, 2, 3, 4, 5, 6], time: '09:45', graceMinutes: 60 } });
+    expect((await b.h.engine.update(b.id, later)).ok).toBe(true);
+    expect(schedule(b).failureStreak).toEqual({ reason: 'launch_failed', count: 2 });
+
+    await failures(b, 1);
+    expect(pausedItems(b)).toHaveLength(1);
+    const fixed = draft({ action: { kind: 'launch', cwd: '/work/other', agent: 'claude', prompt: 'do the thing' } });
+    expect((await b.h.engine.update(b.id, fixed)).ok).toBe(true);
+    expect(schedule(b).failureStreak).toBeUndefined();
+    expect(pausedItems(b)).toEqual([]);
+    expect(schedule(b).enabled).toBe(false);
+  });
+
+  it('a person turning a paused schedule off answers its notice', async () => {
+    const b = await breaker();
+    await failures(b, 3);
+    expect(pausedItems(b)).toHaveLength(1);
+    await b.h.engine.setEnabled(b.id, false);
+    expect(pausedItems(b)).toEqual([]);
+    expect(schedule(b).failureStreak).toBeUndefined();
+  });
 });

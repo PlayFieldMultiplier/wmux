@@ -526,7 +526,10 @@ export class AutomationEngine {
     const identity = automation.action.browserIdentity;
     const nextAction = identity ? { ...draft.value.action, browserIdentity: identity } : draft.value.action;
     const bumped = changesWhatRuns(automation.action, nextAction);
-    if (bumped) automation.revision += 1;
+    if (bumped) {
+      automation.revision += 1;
+      this.resetBreaker(automation);
+    }
     automation.name = draft.value.name;
     automation.trigger = draft.value.trigger;
     automation.action = nextAction;
@@ -566,9 +569,7 @@ export class AutomationEngine {
     automation.enabled = enabled;
     // A human enabling a draft is what turns it into a schedule.
     if (enabled) delete automation.proposed;
-    // Any human toggle starts a fresh streak; turning it back on answers the breaker's notice.
-    delete automation.failureStreak;
-    if (enabled) this.attention = this.attention.filter((x) => !(x.automationId === automation.id && x.kind === 'failure-paused'));
+    this.resetBreaker(automation);
     automation.nextRunAt = enabled ? nextOccurrenceAfter(automation.trigger, this.now()) : null;
     automation.updatedAt = this.now();
     await this.persistAutomations();
@@ -1343,9 +1344,19 @@ export class AutomationEngine {
     } else {
       return;
     }
-    // The streak, the pause and the notice go out in one automations.json write.
+    // The run's end is queued first: a crash between the two writes leaves a
+    // failed run and the older streak, never a pause whose last run reads
+    // `unknown` after the restart sweep. The streak, the pause and the notice
+    // share the automations.json write.
+    void this.persistRuns();
     void this.persistAutomations();
     this.emitAutomations();
+  }
+
+  /** A person toggled the schedule or changed what it runs: the streak starts over and the breaker's notice is answered. */
+  private resetBreaker(automation: Automation): void {
+    delete automation.failureStreak;
+    this.attention = this.attention.filter((x) => !(x.automationId === automation.id && x.kind === 'failure-paused'));
   }
 
   /** A turn ended: record it, then keep the session for the linger window. */
