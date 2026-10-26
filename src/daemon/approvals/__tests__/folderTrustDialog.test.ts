@@ -16,6 +16,8 @@ const TRUST_FIXTURES = [
   'claude-folder-trust-60x30',
   'codex-folder-trust-120x40',
   'codex-folder-trust-60x30',
+  // Both choices and the key hint wrap at 22 columns.
+  'codex-folder-trust-22x30',
 ];
 
 describe('looksLikeFolderTrustDialog', () => {

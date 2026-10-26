@@ -169,6 +169,8 @@ const TRUST_CHOICE = choiceRow(`${TRUST_GRANTS}|${TRUST_DECLINES}`);
 /** The key hint under the choices ("Enter to confirm · Esc to cancel", "enter continue · esc back"). */
 const TRUST_FOOTER = /^(?:press\s+)?(?:↑\/↓|↑↓)?.{0,24}\benter\b.{0,30}\b(?:cancel|back|continue|confirm)$/i;
 const SELECTION_CURSOR = /^[❯›>»]\s*\S/;
+/** Where a choice starts even when a narrow pane wrapped its label: the cursor, or its digit. */
+const CHOICE_START = /^(?:[❯›>»]\s*\S|\d{1,2}[.)]\s)/;
 const isTrustDialogRow = (row: string): boolean => TRUST_CHOICE.test(row) || TRUST_FOOTER.test(row);
 /** Rows a wrapped question may span: one or two at 60 columns (measured), four at about 14; six leaves room. */
 const TRUST_QUESTION_ROWS = 6;
@@ -198,10 +200,10 @@ export function looksLikeFolderTrustDialog(rows: readonly string[]): boolean {
     const question = tail.slice(q, q + TRUST_QUESTION_ROWS).join(' ');
     if (!TRUST_HEADLINE.test(question) && !CODEX_TRUST_HEADLINE.test(question)) continue;
     const below = tail.slice(q + 1);
-    const first = below.findIndex((row) => TRUST_CHOICE.test(row));
+    const first = below.findIndex((row) => TRUST_CHOICE.test(row) || CHOICE_START.test(row));
     if (first < 0) return false;
     // Rejoin what a narrow pane wrapped: "Yes, I trust this" + "folder",
-    // "Enter to confirm · Esc to" + "cancel".
+    // "› 1. Trust and" + "continue", "Enter to confirm · Esc to" + "cancel".
     const block: string[] = [];
     for (const row of below.slice(first)) {
       const last = block.at(-1);
