@@ -6,8 +6,8 @@
 
 import { describe, expect, it } from 'vitest';
 import {
-  alsoRunsOn, checksExpected, checksRefusal, checksVerdict, deleteDraft, draftBody, filterRegex, latestPerWorkflow, publishBody, publishedWritten,
-  readReleaseAsk, readReleases, readTagTarget, readWorkflows, releaseMode, releasePrecondition, releaseTagProblem, runsOnBranch, runsOnPublish, runsOnTag,
+  alsoRunsOn, checksRefusal, checksVerdict, deleteDraft, draftBody, filterRegex, latestPerWorkflow, publishBody, publishedWritten,
+  pushWorkflowsOf, readReleaseAsk, readReleases, readTagTarget, readWorkflows, releaseMode, releasePrecondition, releaseTagProblem, runsOnBranch, runsOnPublish, runsOnTag,
   sameText, tagPrereleaseShape, tagRefBody, tagVersion, versionProblem, workflowOn, type ReleaseChecks,
 } from '../releaseAct';
 import type { ApprovalReleaseAct } from '../../../shared/botApproval';
@@ -81,8 +81,8 @@ describe('which workflows run on a push', () => {
   it('notes path filters: such a push to the default branch may not run, so it does not make checks expected', () => {
     const paths = workflowPush('on:\n  push:\n    branches: [main]\n    paths: ["src/**"]\n');
     expect(paths).toEqual({ branches: ['main'], paths: true });
-    expect(checksExpected([{ path: 'ci.yml', push: paths }], 'main')).toBe(false);
-    expect(checksExpected([{ path: 'ci.yml', push: { branches: ['main'] } }], 'main')).toBe(true);
+    expect(pushWorkflowsOf([{ path: 'ci.yml', push: paths }], 'main')).toEqual([]);
+    expect(pushWorkflowsOf([{ path: 'ci.yml', push: { branches: ['main'] } }], 'main')).toEqual(['ci.yml']);
     expect(workflowPush('on:\n  push:\n    paths-ignore: [docs/**]\n')).toEqual({ paths: true });
   });
 
@@ -179,9 +179,10 @@ describe('which workflows run on a push', () => {
 describe('the checks on the commit', () => {
   const ok = { status: 'completed', conclusion: 'success' };
   const none = { state: 'pending', total: 0 };
-  const v = (o: Partial<Parameters<typeof checksVerdict>[0]>): ReleaseChecks => checksVerdict({ runs: [], status: none, workflowRuns: [], expected: false, branch: 'main', ...o });
+  const v = (o: Partial<Parameters<typeof checksVerdict>[0]>): ReleaseChecks => checksVerdict({ runs: [], status: none, workflowRuns: [], expected: [], branch: 'main', ...o });
   /** A workflow run, by default a push to main. */
-  const wr = (status: string, conclusion: string | null, event = 'push', branch = 'main') => ({ status, conclusion, event, branch });
+  const wr = (status: string, conclusion: string | null, event = 'push', branch = 'main', path = 'ci.yml') => ({ status, conclusion, event, branch, path });
+  const CI = ['ci.yml'];
   it('passes only when every run passed and the combined status is success or has no statuses', () => {
     expect(v({ runs: [ok, { status: 'completed', conclusion: 'neutral' }, { status: 'completed', conclusion: 'skipped' }] })).toBe('passed');
     // GitHub answers `pending` with no statuses at all: that is none, not running.
@@ -196,23 +197,28 @@ describe('the checks on the commit', () => {
 
   it('reads the push workflow runs with the check runs: a queued run is running, though other checks passed; none at all is allowed unless a push workflow should have run', () => {
     expect(v({})).toBe('none');
-    expect(v({ expected: true })).toBe('not-started');
+    expect(v({ expected: CI })).toBe('not-started');
     // Passing statuses are checks, though no run is there.
     expect(v({ status: { state: 'success', total: 2 } })).toBe('passed');
-    expect(v({ workflowRuns: [wr('queued', null)], expected: true })).toBe('running');
+    expect(v({ workflowRuns: [wr('queued', null)], expected: CI })).toBe('running');
     expect(v({ runs: [ok], workflowRuns: [wr('queued', null)] })).toBe('running');
     expect(v({ runs: [ok], workflowRuns: [wr('completed', 'failure')] })).toBe('failed');
     expect(v({ workflowRuns: [wr('completed', 'failure')] })).toBe('failed');
-    expect(v({ runs: [ok], workflowRuns: [wr('completed', 'success')], expected: true })).toBe('passed');
+    expect(v({ runs: [ok], workflowRuns: [wr('completed', 'success')], expected: CI })).toBe('passed');
   });
 
   it('a push to the default branch that should have run its workflows and did not is not-started, whatever else passed', () => {
     // A bot's green check, a deploy preview's status, another event's run: push CI never ran (`[skip ci]`, Actions off).
-    expect(v({ runs: [ok], expected: true })).toBe('not-started');
-    expect(v({ status: { state: 'success', total: 2 }, expected: true })).toBe('not-started');
-    expect(v({ runs: [ok], workflowRuns: [wr('completed', 'success', 'pull_request')], expected: true })).toBe('not-started');
-    expect(v({ runs: [ok], workflowRuns: [wr('completed', 'success', 'push', 'feature-x')], expected: true })).toBe('not-started');
-    expect(v({ runs: [ok], expected: false })).toBe('passed');
+    expect(v({ runs: [ok], expected: CI })).toBe('not-started');
+    expect(v({ status: { state: 'success', total: 2 }, expected: CI })).toBe('not-started');
+    expect(v({ runs: [ok], workflowRuns: [wr('completed', 'success', 'pull_request')], expected: CI })).toBe('not-started');
+    expect(v({ runs: [ok], workflowRuns: [wr('completed', 'success', 'push', 'feature-x')], expected: CI })).toBe('not-started');
+    expect(v({ runs: [ok], expected: [] })).toBe('passed');
+    // Every push workflow waited for must have run: another one's green run (a labeler's) is not CI's.
+    expect(v({ workflowRuns: [wr('completed', 'success', 'push', 'main', 'labeler.yml')], expected: ['ci.yml', 'labeler.yml'] })).toBe('not-started');
+    expect(v({ workflowRuns: [wr('completed', 'success', 'push', 'main', 'labeler.yml'), wr('completed', 'success')], expected: ['ci.yml', 'labeler.yml'] })).toBe('passed');
+    // A run's path may carry the ref it was read at.
+    expect(v({ workflowRuns: [wr('completed', 'success', 'push', 'main', 'ci.yml@refs/heads/main')], expected: CI })).toBe('passed');
     expect(checksRefusal('failed')).toBe('checks-failing');
     expect(checksRefusal('running')).toBe('checks-pending');
     expect(checksRefusal('not-started')).toBe('checks-not-started');
@@ -221,7 +227,7 @@ describe('the checks on the commit', () => {
   });
 
   it('takes the latest run, then the latest attempt, of each workflow', () => {
-    const run = (workflowId: string, id: number, attempt: number, conclusion: string) => ({ workflowId, id, attempt, status: 'completed', conclusion, event: 'push', branch: 'main' });
+    const run = (workflowId: string, id: number, attempt: number, conclusion: string) => ({ workflowId, id, attempt, status: 'completed', conclusion, event: 'push', branch: 'main', path: 'ci.yml' });
     const latest = latestPerWorkflow([run('1', 10, 1, 'failure'), run('1', 11, 1, 'success'), run('2', 20, 1, 'failure'), run('2', 20, 2, 'success'), run('3', 30, 1, 'success')]);
     expect(latest.map((r) => [r.workflowId, r.id, r.attempt])).toEqual([['1', 11, 1], ['2', 20, 2], ['3', 30, 1]]);
     expect(v({ workflowRuns: latest })).toBe('passed');
@@ -247,7 +253,7 @@ describe('the versions at the commit', () => {
 
 describe('the bodies main sends', () => {
   const act: ApprovalReleaseAct = {
-    kind: 'release', mode: 'release', tagName: 'v1.2.3', targetSha: C3, defaultBranch: 'main', title: 'wmux 1.2.3', notes: 'Fixes.', prerelease: false, workflows: [], checksExpected: false, draft: false,
+    kind: 'release', mode: 'release', tagName: 'v1.2.3', targetSha: C3, defaultBranch: 'main', title: 'wmux 1.2.3', notes: 'Fixes.', prerelease: false, workflows: [], checksExpected: false, pushWorkflows: [], draft: false,
   };
   it('a draft, then publishing it with make_latest as one of two constants; a tag ref alone', () => {
     expect(draftBody(act)).toEqual({ tag_name: 'v1.2.3', target_commitish: C3, name: 'wmux 1.2.3', body: 'Fixes.', draft: true, prerelease: false });
@@ -283,7 +289,7 @@ describe('what a release request reads', () => {
   it('pins the default branch\'s head and states the facts the card shows', async () => {
     const gh = github();
     expect(await readReleaseAsk(gh, 'github.com/o/r', { tagName: 'v1.2.3' })).toEqual({
-      mode: 'release', workflows: [], alsoRuns: [], targetSha: C3, defaultBranch: 'main', behindBy: 0, checks: 'passed', version: '1.2.3', prerelease: false, checksExpected: false,
+      mode: 'release', workflows: [], alsoRuns: [], targetSha: C3, defaultBranch: 'main', behindBy: 0, checks: 'passed', version: '1.2.3', prerelease: false, pushWorkflows: [], checksExpected: false,
     });
     expect(await readReleaseAsk(gh, 'github.com/o/r', { tagName: 'v1.2.3', targetSha: C1, prerelease: true })).toMatchObject({ targetSha: C1, behindBy: 2, prerelease: true });
     gh.files.set('.github/workflows/release.yml', RELEASE_YML);
@@ -408,7 +414,7 @@ describe('what a release request reads', () => {
 
 describe('the checks on the commit, whatever ref ran them', () => {
   const act: ApprovalReleaseAct = {
-    kind: 'release', mode: 'release', tagName: 'v1.2.3', targetSha: C3, defaultBranch: 'main', title: 'wmux 1.2.3', notes: 'Fixes.', prerelease: false, workflows: [], checksExpected: false, draft: false,
+    kind: 'release', mode: 'release', tagName: 'v1.2.3', targetSha: C3, defaultBranch: 'main', title: 'wmux 1.2.3', notes: 'Fixes.', prerelease: false, workflows: [], checksExpected: false, pushWorkflows: [], draft: false,
   };
   const pre = (gh: FakeGithub, over: Partial<ApprovalReleaseAct> = {}) => releasePrecondition(gh, P, { ...act, ...over }, { login: 'owner', branch: 'main', draftId: undefined, wroteBefore: false });
   const failure = { status: 'completed', conclusion: 'failure' };
@@ -473,10 +479,10 @@ describe('the checks on the commit, whatever ref ran them', () => {
     expect(await readReleaseAsk(gh, 'github.com/o/r', { tagName: 'v1.2.3' })).toMatchObject({ refuse: 'read_failed' });
   });
 
-  it('a request an earlier build stored without checksExpected reads the workflows now', async () => {
+  it('a request an earlier build stored without pushWorkflows reads the workflows now', async () => {
     const gh = github();
     gh.checkRuns.delete(C3);
-    const legacy = { checksExpected: undefined };
+    const legacy = { checksExpected: undefined, pushWorkflows: undefined };
     expect(await pre(gh, legacy)).toMatchObject({ refusal: null });
     gh.files.set('.github/workflows/ci.yml', 'on:\n  push:\n    branches: [main]\n');
     expect(await pre(gh, legacy)).toMatchObject({ refusal: 'checks-not-started' });
@@ -495,7 +501,7 @@ describe('the checks on the commit, whatever ref ran them', () => {
 
 describe('second code review round', () => {
   const act: ApprovalReleaseAct = {
-    kind: 'release', mode: 'release', tagName: 'v1.2.3', targetSha: C3, defaultBranch: 'main', title: 'wmux 1.2.3', notes: 'Fixes.', prerelease: false, workflows: [], checksExpected: false, draft: false,
+    kind: 'release', mode: 'release', tagName: 'v1.2.3', targetSha: C3, defaultBranch: 'main', title: 'wmux 1.2.3', notes: 'Fixes.', prerelease: false, workflows: [], checksExpected: false, pushWorkflows: [], draft: false,
   };
   const pre = (gh: FakeGithub) => releasePrecondition(gh, P, act, { login: 'owner', branch: 'main', draftId: undefined, wroteBefore: false });
 
@@ -581,20 +587,21 @@ describe('second code review round', () => {
 
 describe('Mac review round 2', () => {
   const act: ApprovalReleaseAct = {
-    kind: 'release', mode: 'release', tagName: 'v1.2.3', targetSha: C3, defaultBranch: 'main', title: 'wmux 1.2.3', notes: 'Fixes.', prerelease: false, workflows: [], checksExpected: true, draft: false,
+    kind: 'release', mode: 'release', tagName: 'v1.2.3', targetSha: C3, defaultBranch: 'main', title: 'wmux 1.2.3', notes: 'Fixes.', prerelease: false, workflows: [], checksExpected: false, pushWorkflows: [], draft: false,
   };
   const pre = (gh: FakeGithub, o: { draftId?: number; over?: Partial<ApprovalReleaseAct> } = {}) =>
     releasePrecondition(gh, P, { ...act, ...o.over }, { login: 'owner', branch: 'main', draftId: o.draftId, wroteBefore: false });
-  const pushRun = { head_sha: C3, event: 'push', head_branch: 'main', status: 'completed', conclusion: 'success', html_url: 'https://github.com/o/r/actions/runs/1', workflow_id: 9, id: 1 };
+  const pushRun = { head_sha: C3, event: 'push', head_branch: 'main', status: 'completed', conclusion: 'success', html_url: 'https://github.com/o/r/actions/runs/1', workflow_id: 9, id: 1, path: '.github/workflows/ci.yml' };
+  const ci = { over: { checksExpected: true, pushWorkflows: ['.github/workflows/ci.yml'] } };
 
   it('a green third-party check with no push run on the default branch is not-started, never passed', async () => {
     const gh = github();
     gh.files.set('.github/workflows/ci.yml', 'on:\n  push:\n    branches: [main]\n');
     // github() puts one green check run on every commit: a bot's.
-    expect(await pre(gh)).toMatchObject({ refusal: 'checks-not-started' });
-    expect(await readReleaseAsk(gh, 'github.com/o/r', { tagName: 'v1.2.3' })).toMatchObject({ checks: 'not-started' });
+    expect(await pre(gh, ci)).toMatchObject({ refusal: 'checks-not-started' });
+    expect(await readReleaseAsk(gh, 'github.com/o/r', { tagName: 'v1.2.3' })).toMatchObject({ checks: 'not-started', pushWorkflows: ['.github/workflows/ci.yml'] });
     gh.workflowRuns.push(pushRun);
-    expect(await pre(gh)).toMatchObject({ refusal: null });
+    expect(await pre(gh, ci)).toMatchObject({ refusal: null });
     expect(await readReleaseAsk(gh, 'github.com/o/r', { tagName: 'v1.2.3' })).toMatchObject({ checks: 'passed' });
   });
 
@@ -605,10 +612,17 @@ describe('Mac review round 2', () => {
     // The draft there, but no longer this act's (its tag edited): found-different.
     gh.releases.push({ id: 77, tag_name: 'v9', draft: true, prerelease: false, name: 'wmux 1.2.3', body: 'Fixes.', target_commitish: C3, author: { login: 'owner' }, html_url: 'https://github.com/o/r/releases/tag/x' });
     expect(await pre(gh, { draftId: 77 })).toMatchObject({ refusal: 'found-different' });
-    // Listed late: read again later.
+    // Not listed (the listing late), but there by its id: decided from that answer.
     gh.releases = [];
+    const answer = (over: Record<string, unknown>) => ({ id: 77, tag_name: 'v1.2.3', draft: true, prerelease: false, name: 'wmux 1.2.3', body: 'Fixes.', target_commitish: C3, author: { login: 'owner' }, html_url: 'https://github.com/o/r/releases/tag/x', ...over });
+    gh.answerRead = (e) => (e === 'repos/o/r/releases/77' ? { ok: true, value: answer({}) } : null);
+    expect(await pre(gh, { draftId: 77 })).toMatchObject({ refusal: null, draft: { id: 77 } });
+    gh.answerRead = (e) => (e === 'repos/o/r/releases/77' ? { ok: true, value: answer({ tag_name: 'v9' }) } : null);
+    expect(await pre(gh, { draftId: 77 })).toMatchObject({ refusal: 'found-different' });
+    gh.answerRead = (e) => (e === 'repos/o/r/releases/77' ? { ok: true, value: answer({ draft: false }) } : null);
+    expect(await pre(gh, { draftId: 77 })).toMatchObject({ refusal: 'release-exists' });
     gh.answerRead = (e) => (e === 'repos/o/r/releases/77' ? { ok: true, value: { id: 77 } } : null);
-    expect(await pre(gh, { draftId: 77 })).toMatchObject({ refusal: 'read-failed' });
+    expect(await pre(gh, { draftId: 77 })).toMatchObject({ refusal: 'unreadable-answer' });
     // The draft as journaled: no refusal.
     gh.answerRead = null;
     gh.releases.push({ id: 77, tag_name: 'v1.2.3', draft: true, prerelease: false, name: 'wmux 1.2.3', body: 'Fixes.', target_commitish: C3, author: { login: 'owner' }, html_url: 'https://github.com/o/r/releases/tag/x' });
@@ -626,5 +640,52 @@ describe('Mac review round 2', () => {
     gh.answerRead = null;
     gh.branches.clear();
     expect(await pre(gh)).toMatchObject({ refusal: null });
+  });
+
+  it('a deleted draft is draft-gone before any tag test: a tag made elsewhere since does not hide it', async () => {
+    const gh = github();
+    gh.tags.set('v1.2.3', { sha: C2 });
+    expect(await pre(gh, { draftId: 77 })).toMatchObject({ refusal: 'draft-gone' });
+  });
+
+  it('a 2xx naming another ref is unreadable, for a branch as for a tag', async () => {
+    const gh = github();
+    gh.answerRead = (e) => (e === 'repos/o/r/git/ref/heads/v1.2.3' ? { ok: true, value: { ref: 'refs/heads/v1.2.30', object: { type: 'commit', sha: C1 } } } : null);
+    expect(await pre(gh)).toMatchObject({ refusal: 'unreadable-answer' });
+    gh.answerRead = (e) => (e === 'repos/o/r/git/ref/heads/v1.2.3' ? { ok: true, value: 'not a ref' } : null);
+    expect(await pre(gh)).toMatchObject({ refusal: 'unreadable-answer' });
+    gh.answerRead = (e) => (e === 'repos/o/r/git/ref/heads/v1.2.3' ? { ok: true, value: [{ ref: 'refs/heads/v1.2.30', object: { type: 'commit', sha: C1 } }] } : null);
+    expect(await pre(gh)).toMatchObject({ refusal: null });
+    gh.answerRead = (e) => (e === 'repos/o/r/git/ref/tags/v1.2.3' ? { ok: true, value: { ref: 'refs/tags/v1.2.30', object: { type: 'commit', sha: C1 } } } : null);
+    expect(await readTagTarget(gh, P, 'v1.2.3')).toMatchObject({ unreadable: true });
+  });
+
+  it('the push workflows waited for are pinned when the bot asks (enabled ones only); one disabled since refuses workflow-disabled', async () => {
+    const gh = github();
+    gh.files.set('.github/workflows/ci.yml', 'on:\n  push:\n    branches: [main]\n');
+    gh.files.set('.github/workflows/labeler.yml', 'on: push\n');
+    gh.files.set('.github/workflows/old.yml', 'on: push\n');
+    gh.workflowStates.set('.github/workflows/old.yml', 'disabled_manually');
+    const ask = await readReleaseAsk(gh, 'github.com/o/r', { tagName: 'v1.2.3' });
+    expect(ask).toMatchObject({ pushWorkflows: ['.github/workflows/ci.yml', '.github/workflows/labeler.yml'], checksExpected: true, checks: 'not-started' });
+    const pinned = { over: { checksExpected: true, pushWorkflows: ['.github/workflows/ci.yml', '.github/workflows/labeler.yml'] } };
+    // The labeler ran on the push; CI did not.
+    gh.workflowRuns.push({ ...pushRun, path: '.github/workflows/labeler.yml', workflow_id: 8, id: 2 });
+    expect(await pre(gh, pinned)).toMatchObject({ refusal: 'checks-not-started' });
+    gh.workflowRuns.push(pushRun);
+    expect(await pre(gh, pinned)).toMatchObject({ refusal: null });
+    gh.workflowStates.set('.github/workflows/ci.yml', 'disabled_manually');
+    expect(await pre(gh, pinned)).toMatchObject({ refusal: 'workflow-disabled' });
+    // Actions off: no push run is waited for when the bot asks.
+    gh.workflowStates.clear();
+    gh.actions = 'off';
+    expect(await readReleaseAsk(gh, 'github.com/o/r', { tagName: 'v1.2.3' })).toMatchObject({ pushWorkflows: [], checksExpected: false });
+  });
+
+  it('a draft whose tag was changed on GitHub is the owner\'s now: never deleted', async () => {
+    const gh = github();
+    gh.releases = [{ id: 50, tag_name: 'v9', draft: true, prerelease: false, name: 'x', body: '', target_commitish: C3, author: { login: 'owner' }, html_url: 'https://github.com/o/r/releases/tag/x' }];
+    expect(await deleteDraft(gh, P, 50, { tagName: 'v1.2.3', targetSha: C3 })).toBe('kept-not-ours');
+    expect(gh.writes).toEqual([]);
   });
 });

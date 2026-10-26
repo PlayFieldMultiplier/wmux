@@ -228,10 +228,10 @@ describe('a release card', () => {
     expect(r.cardBody((await r.ask({ targetSha: C2, clientRequestId: 'k2' })).cardId)).toContain('Checks on 2222222: still running; approving now is refused, and the bot asks again once they pass.');
     r.gh.checkRuns.delete(C3);
     r.gh.files.set('.github/workflows/ci.yml', CI_YML);
-    expect(r.cardBody((await r.ask({ targetSha: C3, clientRequestId: 'k3' })).cardId)).toContain('Checks on 3333333: not started yet; approving now is refused, and the bot asks again once they pass.');
+    expect(r.cardBody((await r.ask({ targetSha: C3, clientRequestId: 'k3' })).cardId)).toContain('Checks on 3333333: its push CI has not run yet; approving now is refused, and the bot asks again once it passes.');
     // Behind the head, the card says the checks may never run.
     r.gh.checkRuns.delete(C1);
-    expect(r.cardBody((await r.ask({ targetSha: C1, clientRequestId: 'k4' })).cardId)).toContain('Checks on 1111111: not started yet (a commit behind the head may never run them); approving now is refused');
+    expect(r.cardBody((await r.ask({ targetSha: C1, clientRequestId: 'k4' })).cardId)).toContain('Checks on 1111111: its push CI has not run yet (a commit behind the head may never run it); approving now is refused');
   });
 });
 
@@ -864,7 +864,7 @@ describe('code review round', () => {
     const r = rig();
     r.gh.files.set('.github/workflows/ci.yml', CI_YML);
     // The push to main ran CI on the commit.
-    r.gh.workflowRuns.push({ head_sha: C3, event: 'push', head_branch: 'main', status: 'completed', conclusion: 'success', html_url: 'https://github.com/o/r/actions/runs/1', workflow_id: 4, id: 1 });
+    r.gh.workflowRuns.push({ head_sha: C3, event: 'push', head_branch: 'main', status: 'completed', conclusion: 'success', html_url: 'https://github.com/o/r/actions/runs/1', workflow_id: 4, id: 1, path: '.github/workflows/ci.yml' });
     const req = await r.ask(NOTES);
     expect(actOf(r, req.requestId)).toMatchObject({ checksExpected: true });
     const before = r.gh.reads.length;

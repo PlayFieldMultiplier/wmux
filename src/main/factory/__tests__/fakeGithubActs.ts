@@ -64,6 +64,8 @@ export interface FakeWorkflowRun extends FakeRun {
   workflow_id?: number;
   id?: number;
   run_attempt?: number;
+  /** The workflow file it is a run of. */
+  path?: string;
 }
 
 const NOT_FOUND: GhActAnswer = { ok: false, kind: 'http', status: 404, message: 'gh: Not Found (HTTP 404)' };
