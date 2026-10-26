@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { approvedRoleBindings, fanoutTaskRoleBinding } from '../fanoutPreset';
+import { approvedRoleBindings, describeFanoutRole, fanoutTaskRoleBinding } from '../fanoutPreset';
 
 describe('approvedRoleBindings', () => {
   it('holds each requested role once, its binding normalized, or null when it is shown as unbound', () => {
@@ -14,6 +14,16 @@ describe('approvedRoleBindings', () => {
       Tester: null,
     });
     expect(approvedRoleBindings(['Builder'], 'not an object')).toEqual({ Builder: null });
+  });
+});
+
+describe('describeFanoutRole', () => {
+  it('shows every field a binding launches with, an agent or not', () => {
+    expect(describeFanoutRole('R', { agent: 'claude', skipPermissions: true, tools: 'full' }, []))
+      .toBe('R → claude (permission prompts skipped) (wmux tools: full)');
+    // With no agent named, neither flag reaches the launch, and the line says so by omitting them.
+    expect(describeFanoutRole('R', { skipPermissions: true, tools: 'full' }, [])).toBe('R → the default agent');
+    expect(describeFanoutRole('R', undefined, [])).toBe('R → the default agent (no binding)');
   });
 });
 

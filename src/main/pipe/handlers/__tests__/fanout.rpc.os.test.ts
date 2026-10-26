@@ -429,6 +429,11 @@ describe('roles choose the agent per task, without naming one', () => {
     await h.call(goodParams({ titles: ['a', 'b'], roles: ['Builder', 'Reviewer'] }));
     await h.flush();
     expect(h.request().roleBindings).toEqual({ Builder: { agent: 'codex', model: 'o3' }, Reviewer: null });
+    // A verdict that carries none freezes the roles as unbound, never the live bindings.
+    const bare = setup({ approval: { approved: true, outcome: 'approved' } });
+    await bare.call(goodParams({ titles: ['a', 'b'], roles: ['Builder', 'Reviewer'] }));
+    await bare.flush();
+    expect(bare.request().roleBindings).toEqual({ Builder: null, Reviewer: null });
     // No roles: nothing to freeze.
     const plain = setup({ approval: { approved: true, outcome: 'approved', roleBindings: {} } });
     await plain.call(goodParams());

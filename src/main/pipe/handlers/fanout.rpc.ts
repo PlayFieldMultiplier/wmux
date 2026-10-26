@@ -2077,9 +2077,9 @@ export function registerFanOutRpc(
             ...req,
             // The bindings the approval showed: a role rebound while a
             // dependent task waits does not change what that task runs.
-            ...(verdict.roleBindings !== null && typeof verdict.roleBindings === 'object' && parsed.roles.some((r) => r)
-              ? { roleBindings: approvedRoleBindings(parsed.roles, verdict.roleBindings) }
-              : {}),
+            // A verdict without them freezes every role as unbound (fails
+            // closed) rather than letting tasks read the live bindings.
+            ...(parsed.roles.some((r) => r) ? { roleBindings: approvedRoleBindings(parsed.roles, verdict.roleBindings) } : {}),
             // A bot's worker is launched only while the bot may still spend:
             // asked again right before each pane spawns.
             ...(bot && botPort ? { mayLaunch: () => botPort.launchRefusal(bot.botId, botWakeId) } : {}),

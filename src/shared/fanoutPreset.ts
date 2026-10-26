@@ -24,7 +24,7 @@ import type { AgentSlug } from './agentIdentity';
 import { customAgentLaunchLine, customAgentStem, customLaunchPrefixLength, findCustomAgent, normalizeCustomAgentsReport, type CustomAgent } from './customAgents';
 import { tokenize } from './agentResume';
 import { EFFORT_TOKEN_RE, launchGrammarFor } from './agentLaunchOptions';
-import { bindingEnforcesModel, bindingEnforcesSkipPermissions, KNOWN_AGENT_STEMS, normalizeRoleBinding, ROLE_BINDING_MODEL_MAX, type RoleBinding } from './orchestratorRole';
+import { bindingEnforcesFreshContext, bindingEnforcesModel, bindingEnforcesSkipPermissions, KNOWN_AGENT_STEMS, normalizeRoleBinding, ROLE_BINDING_MODEL_MAX, type RoleBinding } from './orchestratorRole';
 import { FANOUT_MAX_TASKS } from './workTask';
 
 /** Why a CLI is listed but not selectable. */
@@ -692,7 +692,8 @@ export function fanoutTaskRoleBinding(params: Record<string, unknown>, current: 
 /** One "Roles resolve to" line of a fan-out approval: what the role launches,
  *  a custom agent as its own command line. */
 export function describeFanoutRole(role: string, b: RoleBinding | undefined, customAgents: readonly CustomAgent[]): string {
-  if (!b || (!b.agent && !b.model && !b.args)) return `${role} → the default agent (no binding)`;
+  // Any field is part of what the task launches, an agent or not.
+  if (!b || Object.keys(b).length === 0) return `${role} → the default agent (no binding)`;
   if (unresolvedCustomAgent(b.agent, customAgents)) return `${role} → ${b.agent} (not an agent a role can launch: the task will not launch)`;
   const custom = b.agent ? findCustomAgent(b.agent, customAgents) : undefined;
   const parts: string[] = [custom ? customAgentLaunchLine(custom) : b.agent || 'the default agent'];
@@ -705,6 +706,9 @@ export function describeFanoutRole(role: string, b: RoleBinding | undefined, cus
   // A custom agent gets neither: wmux knows no launch grammar for it.
   if (b.effort && !custom) parts.push(`effort ${b.effort}`);
   if (bindingEnforcesSkipPermissions(b)) parts.push('(permission prompts skipped)');
+  if (bindingEnforcesFreshContext(b)) parts.push('(fresh context)');
+  // The tool level rides only on the agent the binding names (withRoleBinding).
+  if (b.tools && b.agent) parts.push(`(wmux tools: ${b.tools})`);
   return `${role} → ${parts.join(' ')}`;
 }
 

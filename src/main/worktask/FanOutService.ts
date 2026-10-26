@@ -286,6 +286,13 @@ export interface FanOutProjectPort {
 }
 
 /** fan-out 호출 입력(렌더러 다이얼로그 → IPC). */
+/** A task's `roleBinding` field: the binding its approval showed for `role`
+ *  (null = shown as unbound), or no field when the request carries none. */
+function approvedRoleBindingFor(req: FanOutRequest, role: string | undefined): { roleBinding?: RoleBinding | null } {
+  if (!role || !req.roleBindings || !Object.hasOwn(req.roleBindings, role)) return {};
+  return { roleBinding: req.roleBindings[role] };
+}
+
 export interface FanOutRequest {
   /** 호출 단위 멱등키(렌더러가 제출 시 1회 발급 — §2 G1). */
   idempotencyKey: string;
@@ -944,7 +951,7 @@ export class FanOutService {
       missionIdemKey: `${req.idempotencyKey}-${k}`,
       reservationKey: req.idempotencyKey,
       ...(entries[k].role ? { role: entries[k].role } : {}),
-      ...(entries[k].role && req.roleBindings && Object.hasOwn(req.roleBindings, entries[k].role) ? { roleBinding: req.roleBindings[entries[k].role] } : {}),
+      ...approvedRoleBindingFor(req, entries[k].role),
       ...(entries[k].agent ? { agentChoice: entries[k].agent } : {}),
       ...(req.customAgents ? { customAgents: req.customAgents } : {}),
       ...(req.branches?.[k] ? { branch: req.branches[k] } : {}),
@@ -1258,7 +1265,7 @@ export class FanOutService {
         reservationKey: req.idempotencyKey,
         output: { batchDir },
         ...(entries[k].role ? { role: entries[k].role } : {}),
-        ...(entries[k].role && req.roleBindings && Object.hasOwn(req.roleBindings, entries[k].role) ? { roleBinding: req.roleBindings[entries[k].role] } : {}),
+        ...approvedRoleBindingFor(req, entries[k].role),
         ...(entries[k].agent ? { agentChoice: entries[k].agent } : {}),
         ...(req.customAgents ? { customAgents: req.customAgents } : {}),
         // A bot's research task runs here: its preset, thread, handoff,
