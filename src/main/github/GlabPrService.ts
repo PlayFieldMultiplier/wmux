@@ -54,7 +54,8 @@ export const GLAB_ENV: NodeJS.ProcessEnv = {
   GLAB_NO_PROMPT: '1',
   GLAB_PAGER: 'cat',
   NO_COLOR: '1',
-  // A glab wmux starts on its own sends no usage_data to the user's GitLab host.
+  // A glab wmux starts on its own sends no usage_data to the user's GitLab
+  // host; this overrides the user's own setting for those processes only.
   GLAB_SEND_TELEMETRY: '0',
 };
 
