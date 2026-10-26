@@ -5,7 +5,7 @@ import codex from '../../../daemon/approvals/__tests__/fixtures/terminal-prompts
 import openCode from '../../../daemon/approvals/__tests__/fixtures/terminal-prompts/opencode-permission-bash-01.json';
 import claude from '../../../daemon/approvals/__tests__/fixtures/terminal-prompts/claude-write-01-create.json';
 import type { ApprovalScreenSnapshot } from '../../../shared/approvalScreen';
-import { codexScreenApproval, piScreenApproval } from '../approvalScreen';
+import { claudeScreenApproval, codexScreenApproval, piScreenApproval } from '../approvalScreen';
 import piCapture from './fixtures/pi-1.4.0-capture.json';
 import claudeTrust from './fixtures/claude-code-2.1.310-trust-120x40.json';
 import codexTrust from './fixtures/codex-0.162.1-trust-120x40.json';
@@ -124,11 +124,13 @@ describe('quiet approval recovery reads only the current interactive viewport', 
   it.each([
     ['claude', claudeTrust.frames.trust, 'Claude Code', 'Project trust prompt', 'Enter'],
     ['codex', codexTrust.frames.trust, 'Codex CLI', 'Directory trust prompt', 'enter'],
-  ] as const)('reads the captured %s folder-trust screen as awaiting_input, never running', async (slug, output, agent, message, footer) => {
+  ] as const)('reads the captured %s folder-trust screen as awaiting_input, and ends on it', async (slug, output, agent, message, footer) => {
     const rendered = await generateTextSnapshot({ cols: 120, rows: 40, scrollback: 0, initial: Buffer.from(output) });
     if (!rendered.ok) throw new Error('the capture did not render');
     const rows = rendered.rows.map((row) => row.text);
-    for (const order of ['identity, then the screen', 'the screen, then identity', 'identity before the footer'] as const) {
+    const orders = ['identity, then the screen', 'the screen, then identity', 'identity before the footer', 'identity after another question',
+      'the screen while the previous agent still owned the pane'] as const;
+    for (const order of orders) {
       const det = new AgentDetector();
       const events = vi.fn();
       det.onEvent(events);
@@ -139,12 +141,27 @@ describe('quiet approval recovery reads only the current interactive viewport', 
         expect(await det.revalidateApprovalScreen(read)).toBe(false);
         det.feed(output);
         expect(det.takeApprovalRecheckRequest()).toBe(true);
+      } else if (order === 'the screen while the previous agent still owned the pane') {
+        // Its late death edge lands after the screen is drawn.
+        det.seedTrustedIdentity('agy', det.getIdentityEpoch());
+        det.feed(output);
+        det.clearTrustedIdentity();
+        det.seedTrustedIdentity(slug, det.getIdentityEpoch());
+      } else if (order === 'identity after another question') {
+        // A question shortly before the launch: the seed-time recheck reads
+        // (and spends) the general recheck, not the trust screen's.
+        det.feed('Would you like me to run the tests?\r\n');
+        det.seedTrustedIdentity(slug, det.getIdentityEpoch());
+        expect(await det.revalidateApprovalScreen(async () => frame([]))).toBe(false);
+        det.feed(output);
+        expect(det.takeApprovalRecheckRequest()).toBe(true);
       } else if (order === 'identity before the footer') {
         const split = output.lastIndexOf(footer);
         det.feed(output.slice(0, split));
         det.seedTrustedIdentity(slug, det.getIdentityEpoch());
-        // The question is drawn but unfinished: the seed-time recheck waits.
-        expect(await det.revalidateApprovalScreen(read)).toBe(false);
+        // The seed-time recheck sees the screen unfinished; the footer asks again.
+        const half = await generateTextSnapshot({ cols: 120, rows: 40, scrollback: 0, initial: Buffer.from(output.slice(0, split)) });
+        expect(await det.revalidateApprovalScreen(async () => frame(half.ok ? half.rows.map((row) => row.text) : []))).toBe(false);
         det.feed(output.slice(split));
         expect(det.takeApprovalRecheckRequest()).toBe(true);
       } else {
@@ -156,9 +173,13 @@ describe('quiet approval recovery reads only the current interactive viewport', 
       const statuses = events.mock.calls.map(([event]) => event);
       expect(statuses.at(-1)).toEqual({ agent, status: 'awaiting_input', message });
       // Codex's loading banner opens its gate ("Agent started") when no identity came first.
-      expect(statuses.slice(0, -1)).toEqual(order !== 'identity, then the screen' && slug === 'codex'
+      expect(statuses.slice(0, -1)).toEqual((order === 'the screen, then identity' || order === 'identity before the footer') && slug === 'codex'
         ? [{ agent, status: 'running', message: 'Agent started' }] : []);
     }
+    // A narrow pane wraps the question row; the reader keys on its start.
+    const q = rows.findIndex((row) => /Quick safety check:|Trust this folder\?/.test(row));
+    const wrapped = [...rows.slice(0, q), rows[q].slice(0, 32), ` ${rows[q].slice(32)}`, ...rows.slice(q + 1)];
+    expect((slug === 'claude' ? claudeScreenApproval : codexScreenApproval)(wrapped)?.message).toBe(message);
   });
 
   it('asks for Pi\'s recheck only once the selector\'s last row is drawn, however the reads split', () => {
@@ -224,6 +245,8 @@ describe('quiet approval recovery reads only the current interactive viewport', 
 
   it.each([
     ['Pi, from another agent\'s question', 'pi', TRUST.join('\r\n'), false],
+    // Claude keeps a retired hint only for its own trust question.
+    ['Claude, from another agent\'s question', 'claude', TRUST.join('\r\n'), false],
     ['Pi, from its selector answered before the seed', 'pi', piCapture.chunks.trust, true],
     // A profile with line patterns keeps the old rule: an identity change drops the hint.
     ['agy, from its own question drawn under the previous owner', 'agy', TRUST.join('\r\n'), false],

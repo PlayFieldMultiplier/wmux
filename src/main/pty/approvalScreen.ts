@@ -15,7 +15,8 @@ function rowsAtBottom(rows: readonly string[]): string[] {
 export function claudeScreenApproval(rows: readonly string[]): ScreenApproval | null {
   const prompt = parseTerminalPrompt(rows);
   if (prompt?.active) return { text: prompt.question.replace(/\s+/g, ''), message: 'Approval requested' };
-  const text = choiceDialog(rows, /^Quick safety check: Is this a project\b/, /^Enter to confirm · Esc to cancel$/, CLAUDE_TRUST_CHOICES);
+  // Unnumbered Yes/No choices, `No, exit` first. A narrow pane wraps the question.
+  const text = choiceDialog(rows, /^Quick safety check:/, /^Enter to confirm · Esc to cancel$/);
   return text ? { text, message: 'Project trust prompt' } : null;
 }
 
@@ -31,13 +32,6 @@ const YES_NO_CHOICES: ChoiceRows = {
   option: /^[❯›>]?\s*(?:\d+[.)]\s*)?(?:Yes|No)\b/i,
   selected: /^[❯›>]/,
   required: [/\bYes\b/i, /\bNo\b/i],
-};
-
-/** Claude Code 2.1.310 folder-trust choices (live capture): unnumbered, `No, exit` first. */
-const CLAUDE_TRUST_CHOICES: ChoiceRows = {
-  option: /^(?:❯\s*)?(?:No, exit|Yes, I trust this folder)$/,
-  selected: /^❯/,
-  required: [/No, exit$/, /Yes, I trust this folder$/],
 };
 
 /** Codex 0.162.1 folder-trust choices (live capture): numbered, the first is to trust. */

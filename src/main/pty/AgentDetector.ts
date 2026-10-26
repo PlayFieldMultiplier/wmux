@@ -150,8 +150,8 @@ interface AgentPattern {
    * ready, because a read then would see half a question.
    *
    * `shared`: the screen reader also reads dialogs that line patterns or the
-   * stream report (Claude, Codex). Their recheck waits only while this
-   * question is drawn and unfinished, not for a question that never came.
+   * stream report (Claude, Codex). Their recheck is not held for this
+   * question, and spending it does not spend the one this question asks for.
    */
   approvalReady?: { question: RegExp; end: RegExp; shared?: true };
   patterns: {
@@ -447,9 +447,10 @@ const AGENT_PATTERNS: AgentPattern[] = [
       // codex-cli 0.157's wording ("Folder access" / "Trust this folder?" /
       // "› 1. Trust and continue"): the question has its own row. 0.162.1
       // goes on with the explanation on the same row ("Trust this folder?
-      // Codex can read, …"). Only that sentence: Kimi Code CLI asks the bare
-      // question too, and this must claim no more of it than before.
-      { regex: /^\s*Trust\s*this\s*folder\?(?:\s*$|\s*Codex\s*can\b)/,     status: 'awaiting_input', message: 'Directory trust prompt' },
+      // Codex can read, …", a narrow pane may wrap after `Codex`). Only that
+      // sentence: Kimi Code CLI asks the bare question too, and this must
+      // claim no more of it than before.
+      { regex: /^\s*Trust\s*this\s*folder\?(?:\s*Codex(?:\s*can|\s*$)|\s*$)/, status: 'awaiting_input', message: 'Directory trust prompt' },
     ],
   },
 
@@ -927,7 +928,7 @@ function isCodexChrome(line: string): boolean {
   return /^>_\s*OpenAI\s*Codex\b/.test(v)
     || /^Do\s*you\s*trust\s*the\s*contents\s*of\s*this\s*directory\?/.test(v)
     // 0.162.1 explains on the same row; the bare question is also Kimi's.
-    || /^Trust\s*this\s*folder\?(?:$|\s*Codex\s*can\b)/.test(v);
+    || /^Trust\s*this\s*folder\?(?:\s*Codex(?:\s*can|$)|$)/.test(v);
 }
 
 /**
@@ -1156,6 +1157,8 @@ export class AgentDetector {
   private approvalHintTail = '';
   private approvalHintAt: number | null = null;
   private approvalRecheckEpoch: number | null = null;
+  // The owner's approvalReady question's own recheck (see `shared`).
+  private approvalReadyRecheckEpoch: number | null = null;
   // Kiro uses a compound gate so another agent merely mentioning "Kiro CLI"
   // cannot steal this PTY's identity. Evidence is scoped to this detector/PTy.
   private kiroChromeSeen = false;
@@ -1293,23 +1296,15 @@ export class AgentDetector {
     }
     // Evidence an identity change kept: a grid-only question this owner drew
     // before its seed is still read once ready; any other profile drops it.
-    if (this.approvalEvidenceRetired && !this.waitsForReadyQuestion(profile)) this.invalidateApprovalScreen();
+    // A `shared` profile keeps it only for that question, once drawn.
+    const ready = profile.approvalReady;
+    if (this.approvalEvidenceRetired && !(ready && (!ready.shared || this.approvalArmed.has(slug)))) this.invalidateApprovalScreen();
     this.approvalEvidenceRetired = false;
     this.trustedAgent = slug;
     this.lastAgent = profile.agent;
     this.activeAgents.add(profile.agent);
     this.shellPromptSinceOwner = false;
     return true;
-  }
-
-  /**
-   * Whether this profile's recheck belongs to its approvalReady question: a
-   * profile whose grid reader reads only that question always; a `shared`
-   * one only once the question is drawn.
-   */
-  private waitsForReadyQuestion(profile: AgentPattern): boolean {
-    const ready = profile.approvalReady;
-    return ready !== undefined && (!ready.shared || this.approvalArmed.has(profile.slug));
   }
 
   /** Confirmed death/disposal: revoke all launch identity, without an event. */
@@ -1330,6 +1325,7 @@ export class AgentDetector {
     this.approvalHintTail = '';
     this.approvalHintAt = null;
     this.approvalRecheckEpoch = null;
+    this.approvalReadyRecheckEpoch = null;
     this.approvalRecheckRequested = false;
     this.approvalArmed = new Set();
     this.approvalReadySlugs = new Set();
@@ -1368,10 +1364,13 @@ export class AgentDetector {
     const generation = this.approvalScreenGeneration;
     const fresh = (): boolean => this.approvalHintAt !== null
       && Date.now() >= this.approvalHintAt && Date.now() - this.approvalHintAt <= 30_000;
-    if (!owner || !profile?.approvalScreen || !fresh() || this.approvalRecheckEpoch === epoch) return false;
+    if (!owner || !profile?.approvalScreen || !fresh()) return false;
+    const readyRead = this.approvalReadySlugs.has(owner);
     // Not spent on half a question: the row that finishes it asks again.
-    if (this.waitsForReadyQuestion(profile) && !this.approvalReadySlugs.has(profile.slug)) return false;
-    this.approvalRecheckEpoch = epoch;
+    if (profile.approvalReady && !profile.approvalReady.shared && !readyRead) return false;
+    if ((readyRead ? this.approvalReadyRecheckEpoch : this.approvalRecheckEpoch) === epoch) return false;
+    if (readyRead) this.approvalReadyRecheckEpoch = epoch;
+    else this.approvalRecheckEpoch = epoch;
     const owns = (): boolean => this.trustedAgent === owner && this.identityEpoch === epoch
       && this.approvalScreenGeneration === generation && !this.shellPromptSinceOwner && fresh();
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -1532,7 +1531,7 @@ export class AgentDetector {
       for (const match of recent.matchAll(end)) {
         if (match.index < from || match.index + match[0].length <= drawnAfter) continue;
         this.approvalReadySlugs.add(slug);
-        if (slug === this.trustedAgent && this.approvalRecheckEpoch !== this.identityEpoch) this.approvalRecheckRequested = true;
+        if (slug === this.trustedAgent && this.approvalReadyRecheckEpoch !== this.identityEpoch) this.approvalRecheckRequested = true;
       }
     }
     this.approvalHintTail = probe.slice(-4096);

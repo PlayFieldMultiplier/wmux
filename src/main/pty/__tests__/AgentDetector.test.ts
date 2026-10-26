@@ -439,6 +439,12 @@ describe('AgentDetector', () => {
         { agent: 'Codex CLI', status: 'running', message: 'Agent started' },
         { agent: 'Codex CLI', status: 'awaiting_input', message: 'Directory trust prompt' },
       ]);
+      // A narrow pane wraps right after `Codex`.
+      const narrow = new AgentDetector();
+      const narrowCb = vi.fn();
+      narrow.onEvent(narrowCb);
+      narrow.feed('  Trust this folder? Codex\r\n  can read, edit, and run files here,\r\n');
+      expect(narrowCb.mock.calls.map((c) => c[0].status)).toEqual(['running', 'awaiting_input']);
       // The bare question is also Kimi Code CLI's: no other sentence after it makes it Codex's.
       const other = new AgentDetector();
       const otherCb = vi.fn();
