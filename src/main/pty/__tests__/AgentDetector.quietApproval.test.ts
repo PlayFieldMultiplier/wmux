@@ -222,6 +222,20 @@ describe('quiet approval recovery reads only the current interactive viewport', 
     expect(det.takeApprovalRecheckRequest()).toBe(false);
   });
 
+  it.each(['a seed', 'its title'] as const)(
+    'gives a new Pi launch nothing of the last one\'s unfinished selector (identified by %s)', (by) => {
+      const det = new AgentDetector();
+      if (by === 'a seed') det.seedTrustedIdentity('pi', det.getIdentityEpoch());
+      else det.feed(piCapture.chunks.startup);
+      det.feed(' Trust project folder?\r\n');
+      det.clearTrustedIdentity();
+      det.seedTrustedIdentity('pi', det.getIdentityEpoch());
+      // Any Pi picker draws this footer; it finishes no question of this launch.
+      det.feed(' ↑↓ navigate  enter select  escape/ctrl+c cancel\r\n');
+      expect(det.takeApprovalRecheckRequest()).toBe(false);
+    },
+  );
+
   it('drops a pending Pi recheck once input or a resize makes the screen stale', () => {
     const det = new AgentDetector();
     det.seedTrustedIdentity('pi', det.getIdentityEpoch());

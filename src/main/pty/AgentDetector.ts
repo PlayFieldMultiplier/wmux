@@ -1314,6 +1314,13 @@ export class AgentDetector {
     this.approvalScreenGeneration++;
     this.approvalRecheckRequested = false;
     this.approvalEvidenceRetired = true;
+    // A question the ending owner drew belongs to that lifetime: its next
+    // launch must not inherit it half-drawn or ready.
+    const ending = this.trustedAgent ?? AGENT_PATTERNS.find((ap) => ap.agent === this.lastAgent)?.slug;
+    if (ending) {
+      this.approvalArmed.delete(ending);
+      this.approvalReadySlugs.delete(ending);
+    }
   }
 
   /**

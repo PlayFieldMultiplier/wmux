@@ -288,6 +288,21 @@ describe('local hook RPC → PTYBridge trusted screen identity', () => {
     expect(read).toHaveBeenCalledTimes(1);
   });
 
+  it('reads no viewport for a question the user\'s own input flushed and answered', async () => {
+    const r = rig();
+    const pi = JSON.parse(readFileSync(join(__dirname, 'fixtures/pi-1.4.0-capture.json'), 'utf8')) as { chunks: { trust: string } };
+    const read = vi.fn(async () => null);
+    r.bridge.setApprovalScreenReader(read);
+    await r.dispatch({ agent: 'pi' });
+    // Still in the 8ms batch when the user types: the input flushes it, then
+    // invalidates the screen it drew.
+    r.output(pi.chunks.trust);
+    r.bridge.noteUserInput('pty-1');
+    vi.advanceTimersByTime(8);
+    await Promise.resolve();
+    expect(read).not.toHaveBeenCalled();
+  });
+
   it.each(['input', 'shell', 'dispose', 'same-id-reuse'] as const)('rejects a quiet local viewport after %s', async (change) => {
     const r = rig();
     let resolve: (value: { rows: string[]; isCurrent: () => boolean }) => void = () => undefined;
