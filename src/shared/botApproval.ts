@@ -143,6 +143,11 @@ export interface ApprovalReleaseAct {
    *  request: the workflows at a commit do not change). Absent on a request
    *  an earlier build stored: the run reads the workflows. */
   checksExpected?: boolean;
+  /** The workflows (paths) a push to the default branch surely ran at
+   *  `targetSha` and GitHub runs: each must have a push run there before the
+   *  checks pass. Absent on a request an earlier build stored: the run reads
+   *  the workflows. */
+  pushWorkflows?: string[];
   draft: false;
 }
 /** An act's pins of the repository. */

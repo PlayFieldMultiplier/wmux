@@ -701,7 +701,7 @@ const CHECK_WORDS: Readonly<Record<ReleaseAsk['checks'], string>> = {
   failed: 'one did not pass; approving now is refused, and the bot asks again once they pass',
   running: 'still running; approving now is refused, and the bot asks again once they pass',
   none: 'none',
-  'not-started': 'not started yet; approving now is refused, and the bot asks again once they pass',
+  'not-started': 'its push CI has not run yet; approving now is refused, and the bot asks again once it passes',
 };
 
 /** What starts another workflow, as the card says it. */
@@ -743,7 +743,7 @@ export function releaseCardLines(act: ApprovalReleaseAct, fields: readonly strin
   const behind = o.facts.behindBy === 0 ? `${at} is its head` : `${at} is ${o.facts.behindBy} ${o.facts.behindBy === 1 ? 'commit' : 'commits'} behind its head`;
   // A push runs the checks on the pushed head only: one behind it may never run them.
   const checks = o.facts.checks === 'not-started' && o.facts.behindBy > 0
-    ? 'not started yet (a commit behind the head may never run them); approving now is refused, and the bot asks again once they pass'
+    ? 'its push CI has not run yet (a commit behind the head may never run it); approving now is refused, and the bot asks again once it passes'
     : CHECK_WORDS[o.facts.checks];
   lines.push('', `Default branch ${act.defaultBranch}: ${behind}.`, `Checks on ${at}: ${checks}.`);
   if (o.facts.version) lines.push(`package.json version: ${o.facts.version}.`);
@@ -1082,7 +1082,7 @@ export class ApprovalService {
       actPin = {
         kind: 'release', mode: read.mode, tagName, targetSha: read.targetSha, defaultBranch: read.defaultBranch,
         title: read.mode === 'release' ? title || tagName : '', notes: read.mode === 'release' ? notes : '',
-        prerelease: read.prerelease, workflows: read.workflows, checksExpected: read.checksExpected, draft: false,
+        prerelease: read.prerelease, workflows: read.workflows, checksExpected: read.checksExpected, pushWorkflows: read.pushWorkflows, draft: false,
       };
     } else if (act === 'issue_create') {
       actPin = { kind: 'issue_create', title, body };

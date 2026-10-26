@@ -5204,9 +5204,11 @@ one the request read, the repository still has the name and id the request
 read, the target is the same issue or PR, still open, and a PR still at the
 head the card showed (`refusal: head-moved` otherwise). A `release` re-checks
 that the default branch is the same, the commit is still on it, the tag and
-any release of it (a draft included) are still absent, and the commit's
-checks have passed or there are none, and a release workflow it relies on is
-still enabled (`refusal` `default-branch-changed`, `not-on-default-branch`,
+any release of it (a draft included) are still absent, every check on the
+commit has passed (or there are none) and each workflow a push to the
+default branch runs there (as read when the bot asked) has a push run on it,
+and the release workflow and those push workflows are still enabled
+(`refusal` `default-branch-changed`, `not-on-default-branch`,
 `tag-taken`, `release-exists`, `checks-failing`, `checks-pending`,
 `checks-not-started`, `workflow-disabled`, `workflow-unreadable`); a release
 published on a tag that was made elsewhere meanwhile ends `refused` with
