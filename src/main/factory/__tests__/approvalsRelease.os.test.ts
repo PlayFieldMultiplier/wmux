@@ -226,10 +226,9 @@ describe('a release card', () => {
     expect(r.cardBody((await r.ask()).cardId)).toContain('Checks on 3333333: one did not pass; approving now is refused, and the bot asks again once they pass.');
     r.gh.checkRuns.set(C2, [{ status: 'in_progress', conclusion: null }]);
     expect(r.cardBody((await r.ask({ targetSha: C2, clientRequestId: 'k2' })).cardId)).toContain('Checks on 2222222: still running; approving now is refused, and the bot asks again once they pass.');
-    // Not started is the head's: a commit behind it whose checks never ran is refused (checks-never-ran).
     r.gh.checkRuns.delete(C3);
     r.gh.files.set('.github/workflows/ci.yml', CI_YML);
-    expect(r.cardBody((await r.ask({ targetSha: C3, clientRequestId: 'k3' })).cardId)).toContain('Checks on 3333333: not started yet; approving now is refused, and the bot asks again once they pass.');
+    expect(r.cardBody((await r.ask({ targetSha: C3, clientRequestId: 'k3' })).cardId)).toContain('Checks on 3333333: not started yet (a commit behind the head may never run them); approving now is refused, and the bot asks again once they pass.');
   });
 });
 
@@ -694,7 +693,7 @@ describe('a release row\'s draft is never left behind', () => {
     await orphans.reconcileAll();
     expect(r.effects.get(id)).toBeNull();
     expect(r.gh.releases).toEqual([]);
-    expect(lines.some((l) => /draft \d+ deleted/.test(l))).toBe(true);
+    expect(lines.some((l) => /draft \d+: deleted/.test(l))).toBe(true);
   });
 
   it('tries that run out delete it', async () => {
@@ -812,17 +811,18 @@ function failNextOutboxWrite(): () => void {
 }
 
 describe('code review round', () => {
-  it('a tag-push run on the same commit (after a publish that made the tag) does not hold the release, nor a beta tag\'s failed run', async () => {
-    const r = rig();
-    const req = await r.ask(NOTES);
-    // The tag's own CI on the commit failed; the branch's run passed.
-    r.gh.workflowRuns.push(
-      { head_sha: C3, event: 'push', head_branch: 'main', status: 'completed', conclusion: 'success', html_url: 'https://github.com/o/r/actions/runs/1', workflow_id: 4, id: 1 },
-      { head_sha: C3, event: 'push', head_branch: 'v1.2.3-beta.1', status: 'completed', conclusion: 'failure', html_url: 'https://github.com/o/r/actions/runs/2', workflow_id: 4, id: 2 },
-    );
-    r.gh.checkRuns.set(C3, [{ status: 'completed', conclusion: 'success' }, { status: 'completed', conclusion: 'failure', suiteBranch: 'v1.2.3-beta.1' }]);
-    await r.run(req);
-    expect(r.svc.get(req.requestId)?.state).toBe('executed');
+  it('the run of the act\'s own tag on the commit (after a publish that made it) does not hold the release; a beta tag\'s failed run does', async () => {
+    for (const ref of [TAG, 'v1.2.3-beta.1']) {
+      const r = rig();
+      const req = await r.ask(NOTES);
+      r.gh.workflowRuns.push(
+        { head_sha: C3, event: 'push', head_branch: 'main', status: 'completed', conclusion: 'success', html_url: 'https://github.com/o/r/actions/runs/1', workflow_id: 4, id: 1 },
+        { head_sha: C3, event: 'push', head_branch: ref, status: 'completed', conclusion: 'failure', html_url: 'https://github.com/o/r/actions/runs/2', workflow_id: 4, id: 2 },
+      );
+      r.gh.checkRuns.set(C3, [{ status: 'completed', conclusion: 'success' }, { status: 'completed', conclusion: 'failure', suiteBranch: ref }]);
+      await r.run(req);
+      expect(r.svc.get(req.requestId), ref).toMatchObject(ref === TAG ? { state: 'executed' } : { state: 'refused', refusal: 'checks-failing' });
+    }
   });
 
   it('a found draft is journaled before the row is settled: a journal that fails settles nothing, and the next read deletes the draft', async () => {
@@ -917,8 +917,10 @@ describe('second code review round', () => {
     await r.sweep();
     await r.sweep();
     await r.sweep();
-    expect(r.svc.get(req.requestId)).toMatchObject({ state: 'refused', refusal: 'tag-made-draft-kept' });
-    expect(r.outcome(req.requestId)?.title).toMatch(/its draft is kept on GitHub for you to publish or delete/);
+    expect(r.svc.get(req.requestId)).toMatchObject({ state: 'refused', refusal: 'tag-made-not-published, draft-kept-tag-made' });
+    expect(r.outcome(req.requestId)?.title).toMatch(/The tag was made, but publishing the release did not go through/);
+    // The title may be cut: the body says what became of the draft.
+    expect(r.outcome(req.requestId)?.body).toBe('The tag was already made: its draft release is kept on GitHub for you to publish or delete');
     expect(r.gh.writes.map((w) => w.method)).toEqual(['POST', 'PATCH', 'PATCH', 'PATCH']);
     expect(r.gh.releases).toMatchObject([{ draft: true, tag_name: TAG }]);
   });
@@ -934,7 +936,7 @@ describe('second code review round', () => {
       r.gh.onWrite = null;
       r.gh.checkRuns.set(C3, [{ status: 'completed', conclusion: 'failure' }]);
       await r.sweep();
-      expect(r.svc.get(req.requestId), String(made)).toMatchObject({ state: 'refused', refusal: 'checks-failing' });
+      expect(r.svc.get(req.requestId), String(made)).toMatchObject({ state: 'refused', refusal: made ? 'checks-failing, draft-kept-tag-made' : 'checks-failing' });
       expect(r.gh.releases, String(made)).toHaveLength(made ? 1 : 0);
     }
   });
@@ -966,5 +968,69 @@ describe('second code review round', () => {
     expect(r.svc.get(req.requestId)?.state).toBe('executed');
     // The default branch is not stored with the repository's pins.
     expect(r.svc.get(req.requestId)?.actRepo).toEqual({ fullName: 'o/r', nodeId: 'R_1', id: 4242 });
+  });
+});
+
+describe('a kept release draft is told to the owner', () => {
+  /** A release whose publish was rate limited: its draft on GitHub and
+   *  journaled, the row pending. */
+  const drafted = async () => {
+    const r = rig();
+    const req = await r.ask(NOTES);
+    onFirstPatch(r, RATE_LIMITED);
+    await r.run(req);
+    r.gh.onWrite = null;
+    return { r, req, id: actEffectId(req.requestId) };
+  };
+
+  it('any refusal while the tag is made at the commit keeps the draft and says so: the card, the request\'s refusal, the effect row', async () => {
+    const { r, req, id } = await drafted();
+    r.gh.tags.set(TAG, { sha: C3 });
+    r.gh.login = 'someone-else';
+    await r.sweep();
+    expect(r.svc.get(req.requestId)).toMatchObject({ state: 'refused', refusal: 'identity-changed, draft-kept-tag-made' });
+    expect(r.effects.get(id)).toMatchObject({ status: 'refused', reason: 'identity-changed, draft-kept-tag-made' });
+    expect(r.outcome(req.requestId)?.body).toBe('The tag was already made: its draft release is kept on GitHub for you to publish or delete');
+    expect(r.gh.writes.map((w) => w.method)).toEqual(['POST', 'PATCH']);
+    expect(r.gh.releases).toMatchObject([{ draft: true }]);
+  });
+
+  it('a tag that cannot be read keeps the draft, never silently: the refusal says it could not be checked', async () => {
+    const { r, req } = await drafted();
+    r.gh.login = 'someone-else';
+    // The executor's read of the tag before deleting fails (no status).
+    const draft = r.gh.releases[0]?.id;
+    r.gh.onRead = (e) => {
+      if (e === `repos/o/r/releases/${draft}`) r.gh.answerRead = (x) => (x === TAG_REF ? { ok: false, kind: 'error', message: 'timeout' } : null);
+    };
+    await r.sweep();
+    expect(r.svc.get(req.requestId)).toMatchObject({ state: 'refused', refusal: 'identity-changed, draft-kept-unchecked' });
+    expect(r.outcome(req.requestId)?.body).toMatch(/^Whether the tag was made could not be checked: its draft release is kept on GitHub/);
+    expect(r.gh.releases).toHaveLength(1);
+  });
+
+  it('a delete that fails says so', async () => {
+    const { r, req } = await drafted();
+    r.gh.login = 'someone-else';
+    r.gh.onWrite = (w) => {
+      if (w.method === 'DELETE') r.gh.nextWrite = { answer: { ok: false, kind: 'http', status: 500, message: 'gh: Server Error (HTTP 500)' }, landed: false };
+    };
+    await r.sweep();
+    expect(r.svc.get(req.requestId)).toMatchObject({ state: 'refused', refusal: 'identity-changed, draft-not-deleted' });
+    expect(r.outcome(req.requestId)?.body).toBe('Its draft release could not be deleted: delete it on GitHub');
+  });
+
+  it('a row whose request is gone reads the tag from its own draft: made at the draft\'s target, the draft is kept and logged', async () => {
+    for (const made of [true, false]) {
+      const { r, id } = await drafted();
+      if (made) r.gh.tags.set(TAG, { sha: C3 });
+      const lines: string[] = [];
+      const orphans = new ActExecutor({ effects: r.effects, gh: r.gh, approval: { request: () => null, authorize: () => 'approval-missing' }, log: (l) => lines.push(l) });
+      vi.setSystemTime(Date.now() + RECONCILE_AFTER_MS + 1);
+      await orphans.reconcileAll();
+      expect(r.effects.get(id), String(made)).toBeNull();
+      expect(r.gh.releases, String(made)).toHaveLength(made ? 1 : 0);
+      expect(lines.some((l) => (made ? /kept-tag-made \(The tag was already made: its draft release is kept on GitHub/ : /: deleted$/).test(l)), String(made)).toBe(true);
+    }
   });
 });

@@ -46,6 +46,10 @@ export interface FakeRun {
   /** The ref whose check suite the run is in: `main` when unset; null for
    *  a suite an app made with no branch. */
   suiteBranch?: string | null;
+  /** The check's name (`check-<n>` by its place when unset) and the run's
+   *  id (its place when unset): a re-run is a newer id with the same name. */
+  name?: string;
+  id?: number;
 }
 
 export interface FakeWorkflowRun extends FakeRun {
@@ -216,11 +220,12 @@ export class FakeGithub implements GhActPort {
       const branches = [...new Set((this.checkRuns.get(sha) ?? []).map(suiteOf))];
       return { ok: true, value: { total_count: branches.length, check_suites: page(branches.map((b) => ({ id: suiteId(sha, b), head_branch: b, head_sha: sha }))) } };
     }
-    m = /^repos\/o\/r\/check-suites\/(\d+)\/check-runs$/.exec(path);
+    m = /^repos\/o\/r\/commits\/([0-9a-f]{40})\/check-runs$/.exec(path);
     if (m) {
-      const id = Number(m[1]);
-      const runs = [...this.checkRuns].flatMap(([sha, rs]) => rs.filter((r) => suiteId(sha, suiteOf(r)) === id))
-        .map((r) => ({ status: r.status, conclusion: r.conclusion, check_suite: { id } }));
+      const sha = m[1];
+      const runs = (this.checkRuns.get(sha) ?? []).map((r, i) => ({
+        id: r.id ?? i + 1, name: r.name ?? `check-${i + 1}`, status: r.status, conclusion: r.conclusion, check_suite: { id: suiteId(sha, suiteOf(r)) },
+      }));
       return { ok: true, value: { total_count: runs.length, check_runs: page(runs) } };
     }
     m = /^repos\/o\/r\/commits\/([0-9a-f]{40})\/status$/.exec(path);

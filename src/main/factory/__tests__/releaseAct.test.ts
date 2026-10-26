@@ -6,9 +6,9 @@
 
 import { describe, expect, it } from 'vitest';
 import {
-  alsoRunsOn, checksExpected, checksRefusal, checksVerdict, draftBody, filterRegex, latestPerWorkflow, publishBody, publishedWritten, readFileAt,
-  readReleaseAsk, readReleases, readTagTarget, readWorkflows, releaseMode, releasePrecondition, releaseTagProblem, runsOnBranch, runsOnTag, sameText,
-  tagPrereleaseShape, tagRefBody, tagVersion, versionProblem, workflowOn, workflowPush, type ReleaseChecks,
+  alsoRunsOn, checksExpected, checksRefusal, checksVerdict, deleteDraft, draftBody, filterRegex, latestPerWorkflow, publishBody, publishedWritten,
+  readReleaseAsk, readReleases, readTagTarget, readWorkflows, releaseMode, releasePrecondition, releaseTagProblem, runsOnBranch, runsOnPublish, runsOnTag,
+  sameText, tagPrereleaseShape, tagRefBody, tagVersion, versionProblem, workflowOn, type ReleaseChecks,
 } from '../releaseAct';
 import type { ApprovalReleaseAct } from '../../../shared/botApproval';
 import { FakeGithub } from './fakeGithubActs';
@@ -19,6 +19,9 @@ const C3 = '3'.repeat(40);
 const OFF = '9'.repeat(40);
 const RELEASE_YML = 'name: release\non:\n  push:\n    tags: [\'v*\']\n';
 const P = { host: 'github.com', base: 'repos/o/r' };
+
+/** A workflow's `on.push` alone. */
+const workflowPush = (text: string) => workflowOn(text).push;
 
 describe('the tag', () => {
   it('is one plain ref segment', () => {
@@ -125,40 +128,51 @@ describe('which workflows run on a push', () => {
     // no release workflow: Mode W needs a tags list that takes the tag.
     const leavesOut = { path: '.github/workflows/rc.yml', push: { tagsIgnore: ['*-rc*'] } };
     expect(releaseMode([leavesOut], 'v1')).toEqual({ mode: 'release' });
-    expect(alsoRunsOn([leavesOut], 'v1', 'release')).toEqual([{ path: '.github/workflows/rc.yml', on: ['tag-push'] }]);
+    expect(alsoRunsOn([leavesOut], 'v1', 'release', false)).toEqual([{ path: '.github/workflows/rc.yml', on: ['tag-push'] }]);
     expect(releaseMode([leavesOut], 'v1-rc1')).toEqual({ mode: 'release' });
-    expect(alsoRunsOn([leavesOut], 'v1-rc1', 'release')).toEqual([]);
+    expect(alsoRunsOn([leavesOut], 'v1-rc1', 'release', false)).toEqual([]);
     // The workflows with no filter run on the tag push too: named on the card.
-    expect(alsoRunsOn([ci, rel, skipsTags], 'v1', 'workflow')).toEqual([{ path: '.github/workflows/ci.yml', on: ['tag-push'] }]);
+    expect(alsoRunsOn([ci, rel, skipsTags], 'v1', 'workflow', false)).toEqual([{ path: '.github/workflows/ci.yml', on: ['tag-push'] }]);
   });
 
   it('reads `on.release` and `on.create`: what else runs when the tag is made or the release is published', () => {
     expect(workflowOn('on: release\n')).toEqual({ push: null, release: true, create: false });
-    expect(workflowOn('on: [create, pull_request]\n')).toEqual({ push: null, release: false, create: true });
+    expect(workflowOn('on: [create, pull_request]\n')).toEqual({ push: null, create: true });
     expect(workflowOn('on:\n  release:\n')).toMatchObject({ release: true });
-    expect(workflowOn('on:\n  release:\n    types: [published]\n')).toMatchObject({ release: true });
-    expect(workflowOn('on:\n  release:\n    types: prereleased\n')).toMatchObject({ release: true });
-    // Types publishing never fires.
-    expect(workflowOn('on:\n  release:\n    types: [edited, deleted]\n')).toMatchObject({ release: false });
-    expect(workflowOn('on:\n  create:\n  push:\n    branches: [main]\n')).toEqual({ push: { branches: ['main'] }, release: false, create: true });
+    expect(workflowOn('on:\n  release:\n    types: [published]\n')).toMatchObject({ release: ['published'] });
+    expect(workflowOn('on:\n  release:\n    types: prereleased\n')).toMatchObject({ release: ['prereleased'] });
+    expect(workflowOn('on:\n  create:\n  push:\n    branches: [main]\n')).toEqual({ push: { branches: ['main'] }, create: true });
+    // Publishing a draft fires `published`, and `released` or `prereleased`;
+    // `created` is not fired for a draft, nor are edits.
+    for (const pre of [false, true]) {
+      expect(runsOnPublish(true, pre)).toBe(true);
+      expect(runsOnPublish(['published'], pre)).toBe(true);
+      expect(runsOnPublish(['released'], pre)).toBe(!pre);
+      expect(runsOnPublish(['prereleased'], pre)).toBe(pre);
+      expect(runsOnPublish(['created', 'edited', 'deleted'], pre)).toBe(false);
+      expect(runsOnPublish(undefined, pre)).toBe(false);
+    }
+    const onlyReleased = { path: 'r.yml', push: null, release: ['released'] };
+    expect(alsoRunsOn([onlyReleased], 'v1', 'release', false)).toEqual([{ path: 'r.yml', on: ['release-published'] }]);
+    expect(alsoRunsOn([onlyReleased], 'v1', 'release', true)).toEqual([]);
     expect(() => workflowOn('on:\n  release: [published]\n')).toThrow(/on.release/);
     expect(() => workflowOn('on:\n  release:\n    types: [{a: 1}]\n')).toThrow(/types/);
     const ci = { path: '.github/workflows/ci.yml', push: {} };
-    const published = { path: '.github/workflows/notify.yml', push: null, release: true };
+    const published = { path: '.github/workflows/notify.yml', push: null, release: true as const };
     const created = { path: '.github/workflows/created.yml', push: null, create: true };
     const rel = { path: '.github/workflows/release.yml', push: { tags: ['v*'] }, create: true };
     // Main publishes in release mode, so a release workflow there runs; in
     // workflow mode the tag workflow publishes the release, not main.
-    expect(alsoRunsOn([ci, published, created], 'v1', 'release')).toEqual([
+    expect(alsoRunsOn([ci, published, created], 'v1', 'release', false)).toEqual([
       { path: '.github/workflows/ci.yml', on: ['tag-push'] },
       { path: '.github/workflows/created.yml', on: ['tag-create'] },
       { path: '.github/workflows/notify.yml', on: ['release-published'] },
     ]);
-    expect(alsoRunsOn([ci, published, created, rel], 'v1', 'workflow')).toEqual([
+    expect(alsoRunsOn([ci, published, created, rel], 'v1', 'workflow', false)).toEqual([
       { path: '.github/workflows/ci.yml', on: ['tag-push'] },
       { path: '.github/workflows/created.yml', on: ['tag-create'] },
     ]);
-    expect(alsoRunsOn([{ path: 'all.yml', push: {}, create: true, release: true }], 'v1', 'release')).toEqual([{ path: 'all.yml', on: ['tag-push', 'tag-create', 'release-published'] }]);
+    expect(alsoRunsOn([{ path: 'all.yml', push: {}, create: true, release: true as const }], 'v1', 'release', false)).toEqual([{ path: 'all.yml', on: ['tag-push', 'tag-create', 'release-published'] }]);
   });
 });
 
@@ -314,25 +328,20 @@ describe('what a release request reads', () => {
 
   it('reads a file at a commit through its folder\'s listing and its blob, whatever its size', async () => {
     const gh = github();
-    gh.files.set('package-lock.json', '{"version":"1.2.3"}');
-    gh.files.set('.github/workflows/release.yml', RELEASE_YML);
+    gh.files.set('package-lock.json', '{"version":"1.2.0"}');
     // Over 1 MB, contents/ refuses the JSON gh asks for (HTTP 403).
     gh.bigFiles.add('package-lock.json');
-    expect(await readFileAt(gh, P, 'package-lock.json', C3)).toBe('{"version":"1.2.3"}');
-    expect(await readFileAt(gh, P, '.github/workflows/release.yml', C3)).toBe(RELEASE_YML);
-    expect(await readFileAt(gh, P, 'missing.json', C3)).toBeNull();
-    expect(await readFileAt(gh, P, 'no/such/folder.json', C3)).toBeNull();
+    expect(await readReleaseAsk(gh, 'github.com/o/r', { tagName: 'v1.2.3' })).toMatchObject({ refuse: 'invalid', message: expect.stringMatching(/^version-mismatch: package-lock.json says 1.2.0/) });
     expect(gh.reads.filter((e) => /\/contents\/package-lock\.json/.test(e))).toEqual([]);
   });
 
   it('does not read through a symlink or a submodule where a file or a workflow is', async () => {
     let gh = github();
     gh.entryTypes.set('package.json', 'symlink');
-    expect(await readFileAt(gh, P, 'package.json', C3)).toMatchObject({ error: expect.stringMatching(/is a symlink/) });
+    expect(await readReleaseAsk(gh, 'github.com/o/r', { tagName: 'v1.2.3' })).toMatchObject({ refuse: 'read_failed', message: expect.stringMatching(/is a symlink/) });
     gh = github();
     gh.entryTypes.set('package.json', 'submodule');
-    expect(await readFileAt(gh, P, 'package.json', C3)).toMatchObject({ error: expect.stringMatching(/is a submodule/) });
-    expect(await readReleaseAsk(gh, 'github.com/o/r', { tagName: 'v1.2.3' })).toMatchObject({ refuse: 'read_failed' });
+    expect(await readReleaseAsk(gh, 'github.com/o/r', { tagName: 'v1.2.3' })).toMatchObject({ refuse: 'read_failed', message: expect.stringMatching(/is a submodule/) });
     gh = github();
     gh.files.set('.github/workflows/release.yml', RELEASE_YML);
     gh.entryTypes.set('.github/workflows/release.yml', 'symlink');
@@ -385,19 +394,74 @@ describe('what a release request reads', () => {
   });
 });
 
-describe('the checks as the default branch ran them', () => {
-  it('a tag pushed on the same commit (its runs and check runs) says nothing about the commit on the branch', async () => {
+describe('the checks on the commit, whatever ref ran them', () => {
+  const act: ApprovalReleaseAct = {
+    kind: 'release', mode: 'release', tagName: 'v1.2.3', targetSha: C3, defaultBranch: 'main', title: 'wmux 1.2.3', notes: 'Fixes.', prerelease: false, workflows: [], checksExpected: false, draft: false,
+  };
+  const pre = (gh: FakeGithub, over: Partial<ApprovalReleaseAct> = {}) => releasePrecondition(gh, P, { ...act, ...over }, { login: 'owner', branch: 'main', draftId: undefined, wroteBefore: false });
+  const failure = { status: 'completed', conclusion: 'failure' };
+  const success = { status: 'completed', conclusion: 'success' };
+
+  it('only the act\'s own tag\'s runs are left out: another tag, a branch an app named, a merge queue all count', async () => {
     const gh = github();
-    // Green on main; a beta tag's release workflow failed on the same commit.
-    gh.checkRuns.set(C3, [{ status: 'completed', conclusion: 'success' }, { status: 'completed', conclusion: 'failure', suiteBranch: 'v1.2.3-beta.1' }]);
+    // The publish made the tag, and its own workflows failed on the commit.
+    gh.checkRuns.set(C3, [success, { ...failure, suiteBranch: 'v1.2.3' }]);
     gh.workflowRuns.push(
       { head_sha: C3, event: 'push', head_branch: 'main', status: 'completed', conclusion: 'success', html_url: 'https://github.com/o/r/actions/runs/1', workflow_id: 9, id: 1 },
-      { head_sha: C3, event: 'push', head_branch: 'v1.2.3-beta.1', status: 'completed', conclusion: 'failure', html_url: 'https://github.com/o/r/actions/runs/2', workflow_id: 9, id: 2 },
+      { head_sha: C3, event: 'push', head_branch: 'v1.2.3', status: 'completed', conclusion: 'failure', html_url: 'https://github.com/o/r/actions/runs/2', workflow_id: 9, id: 2 },
     );
-    expect(await readReleaseAsk(gh, 'github.com/o/r', { tagName: 'v1.2.3' })).toMatchObject({ checks: 'passed' });
-    // An app's suite with no branch counts.
-    gh.checkRuns.set(C3, [{ status: 'completed', conclusion: 'success' }, { status: 'in_progress', conclusion: null, suiteBranch: null }]);
-    expect(await readReleaseAsk(gh, 'github.com/o/r', { tagName: 'v1.2.3' })).toMatchObject({ checks: 'running' });
+    expect(await pre(gh)).toMatchObject({ refusal: null });
+    for (const ref of ['v1.2.3-beta.1', 'feature-x', 'gh-readonly-queue/main/pr-1-abc', null]) {
+      gh.checkRuns.set(C3, [success, { ...failure, suiteBranch: ref }]);
+      expect(await pre(gh), String(ref)).toMatchObject({ refusal: 'checks-failing' });
+    }
+    gh.checkRuns.set(C3, [success]);
+    gh.workflowRuns.push({ head_sha: C3, event: 'push', head_branch: 'v1.2.3-beta.1', status: 'completed', conclusion: 'failure', html_url: 'https://github.com/o/r/actions/runs/3', workflow_id: 9, id: 3 });
+    expect(await pre(gh)).toMatchObject({ refusal: 'checks-failing' });
+  });
+
+  it('takes the newest run of each check in each suite: a re-run that passed stands for the failed one', async () => {
+    const gh = github();
+    gh.checkRuns.set(C3, [{ ...failure, name: 'build', id: 1 }, { ...success, name: 'build', id: 2 }, { ...success, name: 'lint', id: 3 }]);
+    expect(await pre(gh)).toMatchObject({ refusal: null });
+    gh.checkRuns.set(C3, [{ ...success, name: 'build', id: 2 }, { ...failure, name: 'build', id: 1, suiteBranch: null }]);
+    expect(await pre(gh)).toMatchObject({ refusal: 'checks-failing' });
+    // One listing of the commit's check runs and one of its suites; none per suite.
+    expect(gh.reads.filter((e) => /check-suites\/\d+\/check-runs/.test(e))).toEqual([]);
+    expect(gh.reads.filter((e) => e.startsWith(`repos/o/r/commits/${C3}/check-runs?filter=all&`))).toHaveLength(2);
+  });
+
+  it('a workflow run of another event on the commit counts, and a later one does not hide it', async () => {
+    const gh = github();
+    gh.workflowRuns.push(
+      { head_sha: C3, event: 'pull_request', head_branch: 'feature-x', status: 'completed', conclusion: 'failure', html_url: 'https://github.com/o/r/actions/runs/1', workflow_id: 9, id: 1 },
+      { head_sha: C3, event: 'push', head_branch: 'main', status: 'completed', conclusion: 'success', html_url: 'https://github.com/o/r/actions/runs/2', workflow_id: 9, id: 2 },
+    );
+    expect(await pre(gh)).toMatchObject({ refusal: 'checks-failing' });
+  });
+
+  it('fails closed on what it cannot read', async () => {
+    const gh = github();
+    gh.answerRead = (e) => (e.includes('/check-runs?') ? { ok: true, value: { check_runs: [{ id: 1, status: 'completed', conclusion: 'success', check_suite: { id: 5 } }] } } : null);
+    expect(await pre(gh)).toMatchObject({ refusal: 'unreadable-answer' });
+    gh.answerRead = (e) => (e.includes('/check-suites?') ? { ok: true, value: { check_suites: [{ id: 'x', head_branch: 'main' }] } } : null);
+    expect(await pre(gh)).toMatchObject({ refusal: 'unreadable-answer' });
+    gh.answerRead = (e) => (e.includes('/check-suites?') ? { ok: false, kind: 'http', status: 403, message: 'gh: Forbidden (HTTP 403)' } : null);
+    expect(await pre(gh)).toMatchObject({ refusal: 'gh-403' });
+    gh.answerRead = (e) => (e.includes('/check-runs?') ? { ok: false, kind: 'error', message: 'gh: Server Error (HTTP 502)' } : null);
+    expect(await pre(gh)).toMatchObject({ refusal: 'read-failed' });
+    expect(await readReleaseAsk(gh, 'github.com/o/r', { tagName: 'v1.2.3' })).toMatchObject({ refuse: 'read_failed' });
+  });
+
+  it('a request an earlier build stored without checksExpected reads the workflows now', async () => {
+    const gh = github();
+    gh.checkRuns.delete(C3);
+    const legacy = { checksExpected: undefined };
+    expect(await pre(gh, legacy)).toMatchObject({ refusal: null });
+    gh.files.set('.github/workflows/ci.yml', 'on:\n  push:\n    branches: [main]\n');
+    expect(await pre(gh, legacy)).toMatchObject({ refusal: 'checks-not-started' });
+    gh.files.set('.github/workflows/odd.yml', 'on: 5\n');
+    expect(await pre(gh, legacy)).toMatchObject({ refusal: 'workflow-unreadable' });
   });
 
   it('an answer GitHub gave in a shape this build cannot read refuses as unreadable-answer, never gh-200', async () => {
@@ -435,31 +499,37 @@ describe('second code review round', () => {
     expect(await releasePrecondition(gh, P, act, { login: 'owner', branch: '', draftId: undefined, wroteBefore: false })).toMatchObject({ refusal: 'unreadable-answer' });
   });
 
-  it('a commit behind the head whose push checks never ran is refused when the bot asks; the head with none yet is not', async () => {
+  it('a commit behind the head with no check yet is asked for, not refused: GitHub may still be making its runs', async () => {
     const gh = github();
     gh.files.set('.github/workflows/ci.yml', 'on:\n  push:\n    branches: [main]\n');
     gh.checkRuns.delete(C1);
-    gh.checkRuns.delete(C3);
-    expect(await readReleaseAsk(gh, 'github.com/o/r', { tagName: 'v1.2.3', targetSha: C1 })).toMatchObject({ refuse: 'invalid', message: expect.stringMatching(/^checks-never-ran: /) });
-    expect(await readReleaseAsk(gh, 'github.com/o/r', { tagName: 'v1.2.3' })).toMatchObject({ checks: 'not-started' });
-    // Without a push workflow there is nothing to wait for.
-    gh.files.delete('.github/workflows/ci.yml');
-    expect(await readReleaseAsk(gh, 'github.com/o/r', { tagName: 'v1.2.3', targetSha: C1 })).toMatchObject({ checks: 'none' });
+    expect(await readReleaseAsk(gh, 'github.com/o/r', { tagName: 'v1.2.3', targetSha: C1 })).toMatchObject({ checks: 'not-started', behindBy: 2 });
   });
 
-  it('lists the check runs of each default-branch suite from the suite, fail closed', async () => {
-    const gh = github();
-    gh.checkRuns.set(C3, [{ status: 'completed', conclusion: 'success' }, { status: 'completed', conclusion: 'failure', suiteBranch: 'v0-beta' }]);
-    expect(await readReleaseAsk(gh, 'github.com/o/r', { tagName: 'v1.2.3' })).toMatchObject({ checks: 'passed' });
-    expect(gh.reads.filter((e) => e.includes(`commits/${C3}/check-runs`))).toEqual([]);
-    expect(gh.reads.filter((e) => /^repos\/o\/r\/check-suites\/\d+\/check-runs\?filter=latest&/.test(e))).toHaveLength(1);
-    gh.answerRead = (e) => (/check-suites\/\d+\/check-runs/.test(e) ? { ok: false, kind: 'error', message: 'gh: Server Error (HTTP 502)' } : null);
-    expect(await readReleaseAsk(gh, 'github.com/o/r', { tagName: 'v1.2.3' })).toMatchObject({ refuse: 'read_failed' });
-    expect(await pre(gh)).toMatchObject({ refusal: 'read-failed' });
-    gh.answerRead = (e) => (e.includes('/check-suites?') ? { ok: true, value: { check_suites: [{ id: 'x', head_branch: 'main' }] } } : null);
-    expect(await pre(gh)).toMatchObject({ refusal: 'unreadable-answer' });
-    gh.answerRead = (e) => (e.includes('/check-suites?') ? { ok: false, kind: 'http', status: 403, message: 'gh: Forbidden (HTTP 403)' } : null);
-    expect(await pre(gh)).toMatchObject({ refusal: 'gh-403' });
+  it('a draft is deleted only while its tag is not made at the commit, and kept when that cannot be checked', async () => {
+    const draft = (gh: FakeGithub) => {
+      gh.releases = [{ id: 50, tag_name: 'v1.2.3', draft: true, prerelease: false, name: 'x', body: '', target_commitish: C3, author: { login: 'owner' }, html_url: 'https://github.com/o/r/releases/tag/x' }];
+    };
+    const want = { tagName: 'v1.2.3', targetSha: C3 };
+    let gh = github();
+    draft(gh);
+    gh.tags.set('v1.2.3', { sha: C3 });
+    expect(await deleteDraft(gh, P, 50, want)).toBe('kept-tag-made');
+    // A row whose request is gone: the draft's own tag and target.
+    expect(await deleteDraft(gh, P, 50)).toBe('kept-tag-made');
+    gh.answerRead = (e) => (e === 'repos/o/r/git/ref/tags/v1.2.3' ? { ok: false, kind: 'error', message: 'timeout' } : null);
+    expect(await deleteDraft(gh, P, 50, want)).toBe('kept-unchecked');
+    expect(await deleteDraft(gh, P, 50)).toBe('kept-unchecked');
+    gh.answerRead = (e) => (e === 'repos/o/r/releases/50' ? { ok: false, kind: 'error', message: 'timeout' } : null);
+    expect(await deleteDraft(gh, P, 50, want)).toBe('kept-unchecked');
+    expect(gh.writes).toEqual([]);
+    gh = github();
+    draft(gh);
+    gh.tags.set('v1.2.3', { sha: C2 });
+    gh.nextWrite = { answer: { ok: false, kind: 'http', status: 500, message: 'gh: Server Error (HTTP 500)' }, landed: false };
+    expect(await deleteDraft(gh, P, 50, want)).toBe('failed');
+    expect(await deleteDraft(gh, P, 50, want)).toBe('deleted');
+    expect(gh.releases).toEqual([]);
   });
 
   it('reads no release by its tag when the listing holds one, nor the repository again when the default branch is given', async () => {
