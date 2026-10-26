@@ -874,6 +874,7 @@ describe('AgentDetector', () => {
       for (const [codex, owner] of [
         [' Trust this folder?\r\n', 'Kimi Code CLI'],
         [' Trust this folder?\r\n │ >_ OpenAI Codex (v0.157.0) │\r\n', 'Codex CLI'],
+        [' │ >_ OpenAI Codex (v0.157.0) │\r\n', 'Codex CLI'],
       ] as const) {
         const det = new AgentDetector();
         det.feed(codex);
