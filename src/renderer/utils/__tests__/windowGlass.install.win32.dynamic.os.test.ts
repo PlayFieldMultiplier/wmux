@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { installWindowGlass } from '../windowGlass';
+import { installWindowGlass, resolveWindowGlass, themeBlocksWindowGlass, type WindowGlassLevel } from '../windowGlass';
 import { mixHex } from '../../tailwindPalette';
 
 // Windows: the renderer gate follows the preload's build number, and the
@@ -192,6 +192,19 @@ describe('installWindowGlass coverage on Windows', () => {
     paint(TINT);
     await flush();
     expect(heardLevels).toEqual(['off', 'soft']);
+    stop();
+  });
+
+  it('leaves the saved level alone while the look blocks glass, so Settings can say why', async () => {
+    const root = document.documentElement;
+    const blocked = () => themeBlocksWindowGlass('win32', resolveWindowGlass(root.getAttribute('data-glass-level')), (heardLevels.at(-1) ?? null) as WindowGlassLevel | null);
+    const stop = mount('clear', MURKY, 26200, true);
+    expect(root.getAttribute('data-glass-level')).toBe('clear');
+    expect(blocked()).toBe(true);
+    paint(TINT);
+    await flush();
+    expect(root.getAttribute('data-glass-level')).toBe('clear');
+    expect(blocked()).toBe(false);
     stop();
   });
 

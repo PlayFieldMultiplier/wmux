@@ -37,6 +37,20 @@ export function windowGlassSupported(): boolean {
   return isWindowGlassSupported(api?.platform, api?.windowsBuildNumber);
 }
 
+/**
+ * Whether the current theme keeps the window opaque on Windows although the
+ * user picked Soft or Clear. It reads the level the glass sync last applied
+ * (`effective`, reported through installWindowGlass's onGlassLevel), so the
+ * legibility rule stays in one place: sync() and glassCoverage.ts.
+ */
+export function themeBlocksWindowGlass(
+  platform: string | undefined,
+  chosen: WindowGlassLevel,
+  effective: WindowGlassLevel | null,
+): boolean {
+  return platform === 'win32' && chosen !== 'off' && effective === 'off';
+}
+
 /** The theme's polarity from its base colour, or null while it cannot be read. */
 export function themeAppearance(bgBase: string): 'dark' | 'light' | null {
   const hex = bgBase.trim();
