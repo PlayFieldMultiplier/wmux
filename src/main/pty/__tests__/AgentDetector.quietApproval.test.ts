@@ -447,12 +447,16 @@ describe('Qwen Code 0.26.1 permission dialogs (live capture)', () => {
     expect(events.mock.calls.map(([event]) => event)).toEqual([ASKED]);
   });
 
-  it('leaves a dialog the stream reported to the stream, and its recheck agrees', async () => {
+  it.each([
+    ['as captured', qwenNarrow.frames.shellApprovalMidSession],
+    // The same frames with the confirmation row's spaces drawn as cursor moves.
+    ['drawn with cursor moves', qwenNarrow.frames.shellApprovalMidSession.replace(/Waiting for user/g, 'Waiting\u001b[1Cfor\u001b[1Cuser')],
+  ])('leaves a dialog the stream reported to the stream, and its recheck agrees (%s)', async (_label, output) => {
     const det = new AgentDetector();
     const events = vi.fn();
     det.onEvent(events);
     det.seedTrustedIdentity('qwen', det.getIdentityEpoch());
-    det.feed(qwenNarrow.frames.shellApprovalMidSession);
+    det.feed(output);
     expect(events.mock.calls.map(([event]) => event)).toEqual([ASKED]);
     // Reported in the same read: no grid read is asked for.
     expect(det.takeApprovalRecheckRequest()).toBe(false);
