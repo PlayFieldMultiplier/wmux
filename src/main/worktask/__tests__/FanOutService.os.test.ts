@@ -138,6 +138,8 @@ function makeRendererFake(opts?: {
     env?: Record<string, string>;
     /** Per-task orchestrator role main forwards for binding resolution. */
     role?: string;
+    /** main's approved custom agents (FanOutRequest.customAgents). */
+    customAgents?: unknown[];
     returnedPtyId?: string;
   }> = [];
   let seq = 0;
@@ -1567,6 +1569,15 @@ describe('per-task roles', () => {
     );
 
     expect(renderer.spawned.map((s) => s.role)).toEqual(['Builder', 'Reviewer']);
+  });
+
+  it('hands each worktree task the custom agents main approved', async () => {
+    // "Tern" is a made-up CLI; a role-bound task launches main's approved copy.
+    const tern = { name: 'Tern', command: 'tern', args: '--fast' };
+    const renderer = makeRendererFake();
+    const svc = new FanOutService({ daemon: makeDaemonFake().port, renderer: renderer.port, worktrees: makeWorktreesFake() });
+    await svc.start(baseReq({ roles: ['Builder', 'Builder'], customAgents: [tern] }));
+    expect(renderer.spawned.map((s) => s.customAgents)).toEqual([[tern], [tern]]);
   });
 
   it('forwards no role for an unroled task', async () => {

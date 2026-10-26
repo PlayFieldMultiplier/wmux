@@ -74,6 +74,26 @@ function service(daemon: FanOutDaemonPort, renderer: FanOutRendererPort) {
 }
 
 describe('FanOutService — worktree:false', () => {
+  it('hands every task the custom agents main approved, as main read them', async () => {
+    // "Tern" is a made-up CLI the operator defined.
+    const tern = { name: 'Tern', command: 'tern', args: '--fast' };
+    const renderer = rendererFake();
+    const res = await service(daemonFake().port, renderer.port).start({
+      idempotencyKey: 'k-custom',
+      prompt: 'draw a cat',
+      titles: ['one', 'two'],
+      repoPath: '',
+      agentCmd: 'claude',
+      verifiedWorkspaceId: 'ws-owner',
+      agents: [{ agent: 'tern' }, { agent: 'tern' }],
+      customAgents: [tern],
+      worktree: false,
+      outputFolder: 'image',
+    });
+    expect(res.ok).toBe(true);
+    expect(renderer.spawned.map((p) => p.customAgents)).toEqual([[tern], [tern]]);
+  });
+
   it('creates both tasks on the SAME agent, each in its own folder', async () => {
     const daemon = daemonFake();
     const renderer = rendererFake();
@@ -107,6 +127,7 @@ describe('FanOutService — worktree:false', () => {
     // The pane runs IN the folder, with the agent choice as data.
     expect(renderer.spawned[0].cwd).toBe(a.outputDir);
     expect(renderer.spawned[0].agentChoice).toEqual({ agent: 'codex' });
+    expect(renderer.spawned[0].customAgents).toBeUndefined();
     expect(renderer.spawned[0].fanoutTaskOf).toBe('ws-owner');
     // Main still sends the default launcher; the renderer swaps it.
     // (POSIX `$(cat '…')`, win32 `$(Get-Content …)` — the same launch shape.)

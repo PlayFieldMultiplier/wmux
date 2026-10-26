@@ -45,6 +45,7 @@ import * as crypto from 'node:crypto';
 import { TaskWorktreeManager, taskIdSuffix } from './TaskWorktreeManager';
 import { getWmuxHomeDir } from '../../shared/constants';
 import { type FanoutAgentChoice } from '../../shared/fanoutPreset';
+import type { CustomAgent } from '../../shared/customAgents';
 import { sanitizeFanoutOrigin, type FanoutOrigin } from '../../shared/fanoutOrigin';
 import type { TaskWorktreePlan } from './TaskWorktreeManager';
 import type { ProjectConfigState } from '../../shared/wmuxProjectConfig';
@@ -221,6 +222,9 @@ export interface FanOutRendererPort {
      *  task runs on. Data, not a command — the renderer re-validates it and
      *  turns it into a RoleBinding on the same rewrite path a role uses. */
     agentChoice?: FanoutAgentChoice;
+    /** The operator's custom agents as main read them when the fan-out was
+     *  approved: the renderer launches these definitions, not a later read. */
+    customAgents?: CustomAgent[];
     /** A bot worker's single-use secret grant: an opaque id the renderer
      *  hands to pty.create unchanged (it carries no name and no value). */
     secretGrant?: string;
@@ -316,6 +320,9 @@ export interface FanOutRequest {
    * table in shared/fanoutPreset.ts. Mutually exclusive with `roles`.
    */
   agents?: FanoutAgentChoice[];
+  /** The operator's custom agents as main read them for the approval: every
+   *  task launches these definitions (main's snapshot, never the caller's). */
+  customAgents?: CustomAgent[];
   /**
    * false = no git worktree (preset option). Each task gets its own folder
    * under `<wmux data>/outputs/<outputFolder>/<batch>/`, no branch, no fetch,
@@ -931,6 +938,7 @@ export class FanOutService {
       reservationKey: req.idempotencyKey,
       ...(entries[k].role ? { role: entries[k].role } : {}),
       ...(entries[k].agent ? { agentChoice: entries[k].agent } : {}),
+      ...(req.customAgents?.length ? { customAgents: req.customAgents } : {}),
       ...(req.branches?.[k] ? { branch: req.branches[k] } : {}),
       ...(req.preset ? { preset: req.preset } : {}),
       ...(req.checkout ? { checkout: { sha: req.checkout.sha } } : {}),
@@ -1243,6 +1251,7 @@ export class FanOutService {
         output: { batchDir },
         ...(entries[k].role ? { role: entries[k].role } : {}),
         ...(entries[k].agent ? { agentChoice: entries[k].agent } : {}),
+        ...(req.customAgents?.length ? { customAgents: req.customAgents } : {}),
         // A bot's research task runs here: its preset, thread, handoff,
         // launch check, agent slot and secrets as on a worktree.
         ...(req.preset ? { preset: req.preset } : {}),
@@ -1399,6 +1408,8 @@ export class FanOutService {
     workerMode: FanoutWorkerPermissionMode;
     /** Preset row / caller agents[k] (absent = the default agent). */
     agentChoice?: FanoutAgentChoice;
+    /** FanOutRequest.customAgents. */
+    customAgents?: CustomAgent[];
     /** worktree:false — create an output folder in this batch instead of a worktree. */
     output?: { batchDir: string };
     /** Who asked (see FanOutRequest.caller) — the same origin for every task
@@ -1901,6 +1912,7 @@ export class FanOutService {
         ...(Object.keys(paneEnv).length > 0 ? { env: paneEnv } : {}),
         ...(ctx.role ? { role: ctx.role } : {}),
         ...(ctx.agentChoice ? { agentChoice: ctx.agentChoice } : {}),
+        ...(ctx.customAgents ? { customAgents: ctx.customAgents } : {}),
         fanoutTaskOf: ctx.verifiedWorkspaceId,
         ...(ctx.requester ? { fanoutOrigin: ctx.requester } : {}),
         ...(secretGrant ? { secretGrant } : {}),

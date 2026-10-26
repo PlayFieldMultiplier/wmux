@@ -21,10 +21,10 @@
 // reason it is not selectable, and is refused rather than launched on a guess.
 
 import type { AgentSlug } from './agentIdentity';
-import { customAgentStem, customLaunchPrefixLength, findCustomAgent, type CustomAgent } from './customAgents';
+import { customAgentLaunchLine, customAgentStem, customLaunchPrefixLength, findCustomAgent, normalizeCustomAgentsReport, type CustomAgent } from './customAgents';
 import { tokenize } from './agentResume';
 import { EFFORT_TOKEN_RE, launchGrammarFor } from './agentLaunchOptions';
-import { KNOWN_AGENT_STEMS, ROLE_BINDING_MODEL_MAX, type RoleBinding } from './orchestratorRole';
+import { bindingEnforcesModel, KNOWN_AGENT_STEMS, ROLE_BINDING_MODEL_MAX, type RoleBinding } from './orchestratorRole';
 import { FANOUT_MAX_TASKS } from './workTask';
 
 /** Why a CLI is listed but not selectable. */
@@ -641,6 +641,36 @@ export function describeFanoutAgentChoice(c: FanoutAgentChoice, customAgents?: r
   ]
     .filter((p) => p.length > 0)
     .join(' ');
+}
+
+/** The custom agents a fan-out task launches from: main's snapshot of the
+ *  list its approval described, when main sent one, so an edit in Settings
+ *  after the approval cannot change what runs; otherwise `current`. */
+export function fanoutLaunchCustomAgents(snapshot: unknown, current: readonly CustomAgent[]): readonly CustomAgent[] {
+  return Array.isArray(snapshot) ? normalizeCustomAgentsReport(snapshot).agents : current;
+}
+
+/** A binding agent that no registry, fan-out or custom agent answers to: its
+ *  definition is gone or not loaded. A task bound to it must not launch, as
+ *  the swap would leave the default agent's line in place. */
+export function unresolvedCustomAgent(agent: string | undefined, customAgents: readonly CustomAgent[]): boolean {
+  return !!agent && !KNOWN_AGENT_STEMS.has(agent) && !fanoutAgentSpec(agent) && !findCustomAgent(agent, customAgents);
+}
+
+/** One "Roles resolve to" line of a fan-out approval: what the role launches,
+ *  a custom agent as its own command line. */
+export function describeFanoutRole(role: string, b: RoleBinding | undefined, customAgents: readonly CustomAgent[]): string {
+  if (!b || (!b.agent && !b.model && !b.args)) return `${role} → the default agent (no binding)`;
+  if (unresolvedCustomAgent(b.agent, customAgents)) return `${role} → ${b.agent} (no such custom agent: the task will not launch)`;
+  const custom = b.agent ? findCustomAgent(b.agent, customAgents) : undefined;
+  const parts: string[] = [custom ? customAgentLaunchLine(custom) : b.agent || 'the default agent'];
+  // A custom agent's model goes after the flag the operator gave it.
+  const modelFlag = custom?.modelFlag ?? '--model';
+  if (b.model) {
+    parts.push(bindingEnforcesModel(b, customAgents) ? `${modelFlag} ${b.model}` : `(model "${b.model}" is configured but will NOT be applied)`);
+  }
+  if (b.args) parts.push(b.args);
+  return `${role} → ${parts.join(' ')}`;
 }
 
 /** Shipped when no preset file exists yet: agents filled, models blank,

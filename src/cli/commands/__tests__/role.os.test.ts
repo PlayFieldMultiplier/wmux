@@ -86,25 +86,40 @@ describe('wmux role resolve', () => {
     expect(out).toEqual(['/opt/tern/bin/tern --fast -m m1']);
   });
 
-  it('says why a custom agent this platform refuses is printed as its bare name', async () => {
-    const files: Record<string, string> = {
-      '/fake/session.json': JSON.stringify({ orchestratorRoleBindings: { Builder: { agent: 'tern' } } }),
-      '/fake/custom-agents.json': JSON.stringify({ agents: [{ name: 'Tern', command: '/opt/tern/bin/tern' }] }),
+  it('refuses a role whose custom agent cannot launch, and says why', async () => {
+    const resolve = async (customFile: string | undefined, json = false) => {
+      const files: Record<string, string> = {
+        '/fake/session.json': JSON.stringify({ orchestratorRoleBindings: { Builder: { agent: 'tern' } } }),
+      };
+      if (customFile !== undefined) files['/fake/custom-agents.json'] = customFile;
+      const out: string[] = [];
+      const err: string[] = [];
+      let code: number | undefined;
+      await handleRole(['resolve', 'Builder'], json, {
+        sessionPath: '/fake/session.json',
+        customAgentsPath: '/fake/custom-agents.json',
+        readFile: (p) => {
+          if (!(p in files)) throw new Error('ENOENT');
+          return files[p];
+        },
+        log: (l) => out.push(l),
+        error: (l) => err.push(l),
+        exit: (c) => { code = c; },
+        platform: 'win32',
+      });
+      return { out, err, code };
     };
-    const out: string[] = [];
-    const err: string[] = [];
-    await handleRole(['resolve', 'Builder'], false, {
-      sessionPath: '/fake/session.json',
-      customAgentsPath: '/fake/custom-agents.json',
-      readFile: (p) => files[p] ?? '',
-      log: (l) => out.push(l),
-      error: (l) => err.push(l),
-      exit: () => undefined,
-      platform: 'win32',
-    });
-    expect(out).toEqual(['tern']);
-    expect(err).toEqual([expect.stringContaining('"Tern"')]);
-    expect(err[0]).toContain('not a Windows path');
+    // Refused on this platform: its own reason.
+    const refused = await resolve(JSON.stringify({ agents: [{ name: 'Tern', command: '/opt/tern/bin/tern' }] }));
+    expect(refused.out).toEqual([]);
+    expect(refused.code).toBe(1);
+    expect(refused.err).toEqual([expect.stringContaining('not a Windows path')]);
+    // No file at all: never a bare `tern` with bound:true.
+    const missing = await resolve(undefined, true);
+    expect(missing.code).toBe(1);
+    expect(JSON.parse(missing.out[0])).toEqual({ role: 'Builder', bound: true, unavailable: expect.stringContaining('cannot read') });
+    // A file without it.
+    expect((await resolve(JSON.stringify({ agents: [] }))).err).toEqual([expect.stringContaining('no custom agent "tern"')]);
   });
 
   it('finds the refused entry by its place in the file, and says nothing for a known agent', async () => {

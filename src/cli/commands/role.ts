@@ -20,11 +20,12 @@ import { ROLE_TOOL_SURFACES, resolveRoleName, roleMcpArgv } from '../../shared/r
 import { CORE_TOOL_SURFACE } from '../../shared/coreSurface';
 import { codexConfigPath, codexHasWmuxServer } from '../../shared/mcpRegistration';
 import {
-  applyRoleBinding, bindingEnforcesFreshContext, bindingEnforcesSkipPermissions, KNOWN_AGENT_STEMS, normalizeRoleBindings,
+  applyRoleBinding, bindingEnforcesFreshContext, bindingEnforcesSkipPermissions, normalizeRoleBindings,
   type RoleBinding, type WmuxTools,
 } from '../../shared/orchestratorRole';
 import { tokenize } from '../../shared/agentResume';
-import { customAgentLaunchLine, customAgentStem, findCustomAgent, normalizeCustomAgentsReport, type CustomAgent } from '../../shared/customAgents';
+import { customAgentLaunchLine, customAgentStem, findCustomAgent, normalizeCustomAgentsReport, type CustomAgent, type CustomAgentDropped } from '../../shared/customAgents';
+import { unresolvedCustomAgent } from '../../shared/fanoutPreset';
 import { agyEffortOf } from '../../shared/modelCatalog';
 
 /** Electron's `app.getPath('userData')` for productName "wmux", with the same
@@ -193,26 +194,37 @@ export async function handleRole(args: string[], jsonMode: boolean, overrides: P
     deps.exit(2);
     return;
   }
-  // No readable list is no custom agents: a role bound to one then prints its
-  // bare name, as main would refuse to launch it.
   let customAgents: CustomAgent[] = [];
+  let raw: unknown;
+  let unreadable: string | undefined;
+  let dropped: CustomAgentDropped[] = [];
   try {
-    const raw = (JSON.parse(deps.readFile(deps.customAgentsPath)) as { agents?: unknown })?.agents;
+    raw = (JSON.parse(deps.readFile(deps.customAgentsPath)) as { agents?: unknown })?.agents;
     const report = normalizeCustomAgentsReport(raw, { platform: deps.platform });
     customAgents = report.agents;
-    // A custom agent the file holds but main would refuse here: say why the
-    // bare name follows, rather than print it silently. A known agent's name
-    // resolves to that agent, so an entry clashing with it needs no note.
-    const agent = binding.agent?.toLowerCase();
-    if (agent && Array.isArray(raw) && !KNOWN_AGENT_STEMS.has(agent) && !findCustomAgent(agent, customAgents)) {
-      const drop = report.dropped.find((d) => {
+    dropped = report.dropped;
+  } catch (err) {
+    unreadable = (err as Error).message;
+  }
+  // A role bound to a custom agent main cannot find would not launch: say so,
+  // and why, rather than print a command line nothing will run.
+  const agent = binding.agent?.toLowerCase();
+  if (agent && unresolvedCustomAgent(agent, customAgents)) {
+    const drop = Array.isArray(raw)
+      ? dropped.find((d) => {
         const entry = raw[d.index] as { command?: unknown } | null;
         return typeof entry?.command === 'string' && customAgentStem({ command: entry.command }) === agent;
-      });
-      if (drop) deps.error(`wmux role: ${drop.issue.error} (${deps.customAgentsPath}); "${agent}" is printed as typed.`);
-    }
-  } catch {
-    // missing or unreadable
+      })
+      : undefined;
+    const why = drop
+      ? drop.issue.error
+      : unreadable !== undefined
+        ? `cannot read ${deps.customAgentsPath}: ${unreadable}`
+        : `no custom agent "${agent}" is defined in ${deps.customAgentsPath}`;
+    if (jsonMode) deps.log(JSON.stringify({ role, bound: true, unavailable: why }));
+    else deps.error(`wmux role: Role "${role}" runs "${agent}", which cannot launch: ${why}`);
+    deps.exit(1);
+    return;
   }
   const resolved = resolveRole(role, binding, deps.mcpEntry, undefined, customAgents);
   // Never print an argv that points at a bundle that is not there (a dev

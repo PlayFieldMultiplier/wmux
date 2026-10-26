@@ -2,7 +2,10 @@
 // `win32` here is a platform name handed to a pure validator; nothing reaches the OS.
 import { describe, expect, it } from 'vitest';
 import { normalizeCustomAgent, validateCustomAgents, type CustomAgent } from '../customAgents';
-import { applyFanoutAgentFlags, describeFanoutAgentChoice, normalizeFanoutPreset, validateFanoutAgentChoice } from '../fanoutPreset';
+import {
+  applyFanoutAgentFlags, describeFanoutAgentChoice, describeFanoutRole, fanoutLaunchCustomAgents, normalizeFanoutPreset,
+  unresolvedCustomAgent, validateFanoutAgentChoice,
+} from '../fanoutPreset';
 import { applyRoleAgent, applyRoleBinding, bindingEnforcesModel } from '../orchestratorRole';
 
 // "Tern" is a made-up CLI: no real agent is named in these fixtures.
@@ -125,6 +128,28 @@ describe('code review', () => {
     for (const command of ['wsl', 'tsx', 'pypy3', 'ssh', 'docker']) expect(code({ name: 'Tern', command })).toBe('command-generic');
     expect(code({ name: 'Tern', command: 'tern', args: ['--fast'] })).toBe('args-invalid');
     expect(code({ name: 'Tern', command: 'tern', promptFlag: ['-p'] })).toBe('flag-invalid');
+  });
+});
+
+describe('launching what was approved', () => {
+  it('launches the definitions main approved, not the list as it is now', () => {
+    const edited: CustomAgent = { ...tern, args: '--slow' };
+    expect(fanoutLaunchCustomAgents([tern], [edited])).toEqual([tern]);
+    // Another launcher sends no snapshot: the current list.
+    expect(fanoutLaunchCustomAgents(undefined, [edited])).toEqual([edited]);
+  });
+
+  it('knows a role bound to a custom agent whose definition is missing', () => {
+    expect(unresolvedCustomAgent('tern', [])).toBe(true);
+    expect(unresolvedCustomAgent('tern', [tern])).toBe(false);
+    expect(unresolvedCustomAgent('claude', [])).toBe(false);
+    expect(unresolvedCustomAgent(undefined, [])).toBe(false);
+  });
+
+  it('shows a custom role as its command line in the approval, and a missing one as not launching', () => {
+    expect(describeFanoutRole('Builder', { agent: 'tern', model: 'm1' }, [tern])).toBe('Builder → /opt/tern/bin/tern --fast -m m1');
+    expect(describeFanoutRole('Builder', { agent: 'tern' }, [])).toBe('Builder → tern (no such custom agent: the task will not launch)');
+    expect(describeFanoutRole('Builder', { agent: 'codex', model: 'o3' }, [])).toBe('Builder → codex --model o3');
   });
 });
 

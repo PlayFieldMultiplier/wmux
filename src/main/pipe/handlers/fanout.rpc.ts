@@ -1844,6 +1844,9 @@ export function registerFanOutRpc(
       // table, never a command: the renderer re-validates it and turns it into
       // a RoleBinding on the same rewrite path a role uses.
       ...(agentChoices.length > 0 ? { agents: agentChoices } : {}),
+      // The definitions the approval described, so a later edit in Settings
+      // cannot change what an approved task launches.
+      ...(customAgents.length > 0 ? { customAgents } : {}),
       ...(worktree
         ? {}
         : {
@@ -1928,6 +1931,9 @@ export function registerFanOutRpc(
               // Main decides whether anyone is asked (see fanoutWorkerPolicy.ts);
               // the renderer only carries it out.
               requireApproval,
+              // The renderer expands role-bound custom agents from main's
+              // snapshot, the same one every task then launches.
+              ...(customAgents.length > 0 ? { customAgents } : {}),
               // What a claude worker's line gets appended, so an approval covers
               // the permission mode and tool rules, not just the prompt.
               promptPreview:

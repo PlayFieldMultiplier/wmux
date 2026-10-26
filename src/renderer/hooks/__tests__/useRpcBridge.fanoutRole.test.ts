@@ -139,12 +139,13 @@ describe('useRpcBridge — fan-out task roles', () => {
     // "[role: Reviewer]" without seeing it means another CLI, another model, or
     // extra flags would make the approved text and the executed command differ.
     const m = src.match(/if \(method === 'fanout\.requestApproval'\)[\s\S]*?\n {2}\}\n/);
-    expect(m?.[0]).toMatch(/fanOutRoleLines\(params\.roles\)/);
+    // From main's approval snapshot of the custom agents, the one every task launches.
+    expect(m?.[0]).toMatch(/fanOutRoleLines\(params\.roles, fanoutLaunchCustomAgents\(params\.customAgents, /);
     expect(m?.[0]).toMatch(/describeFanOutRoles\(roleCommands\)/);
     // Only claim a model that will actually be injected.
     const helper = src.match(/function fanOutRoleLines\([\s\S]*?\n\}/);
-    expect(helper?.[0]).toMatch(/bindingEnforcesModel\(b, customAgents\)/);
-    expect(helper?.[0]).toMatch(/no binding/);
+    // The line itself is shared/fanoutPreset describeFanoutRole (unit-tested there).
+    expect(helper?.[0]).toMatch(/describeFanoutRole\(role, bindings\[role\], customAgents\)/);
   });
 
   it('hands the lineage owner to pty.create (main stamps it inside the create), with no await before it', () => {
