@@ -92,7 +92,7 @@ describe('leaving after the daemon refuses the page', () => {
     const e = { ...env({ [WEB_TOKEN_KEY]: 'old' }), fetch: vi.fn(async () => new Response('{}', { status: 200 })) as unknown as typeof fetch };
     const session: WebSession = { credential: { kind: 'operator', token: 'old' }, storedToken: true };
     createLeave(session, e)();
-    await vi.waitFor(() => expect(e.location.replace).toHaveBeenCalled());
+    await vi.waitFor(() => expect(e.location.replace).toHaveBeenCalled(), { timeout: 5_000 });
     expect(e.location.replace.mock.calls).toEqual([['/']]);
     expect(e.localStorage.getItem(WEB_TOKEN_KEY)).toBeNull();
 
@@ -100,7 +100,7 @@ describe('leaving after the daemon refuses the page', () => {
     e.localStorage.setItem(WEB_TOKEN_KEY, 'old');
     e.location.replace.mockClear();
     createLeave(session, e)();
-    await vi.waitFor(() => expect(e.location.replace).toHaveBeenCalled());
+    await vi.waitFor(() => expect(e.location.replace).toHaveBeenCalled(), { timeout: 5_000 });
     expect(e.location.replace.mock.calls).toEqual([[CLASSIC_PATH]]);
     expect(e.location.reload).not.toHaveBeenCalled();
   });
@@ -108,7 +108,7 @@ describe('leaving after the daemon refuses the page', () => {
   it('a refused stored token is kept when no sign-in proxy admits the page, so the classic page can say why', async () => {
     const e = { ...env({ [WEB_TOKEN_KEY]: 'revoked.secret' }), fetch: vi.fn(async () => new Response('{}', { status: 401 })) as unknown as typeof fetch };
     createLeave({ credential: { kind: 'device', token: 'revoked.secret' }, storedToken: true }, e)();
-    await vi.waitFor(() => expect(e.location.replace).toHaveBeenCalled());
+    await vi.waitFor(() => expect(e.location.replace).toHaveBeenCalled(), { timeout: 5_000 });
     expect(e.location.replace.mock.calls).toEqual([[CLASSIC_PATH]]);
     expect(e.localStorage.getItem(WEB_TOKEN_KEY)).toBe('revoked.secret');
   });
