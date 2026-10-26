@@ -18,14 +18,11 @@ function readImage(): string {
   if (probes.image === null || probes.exited) throw new Error('Process image lookup unavailable');
   return probes.image;
 }
-// The process handle (Windows) reads 424242 as running until a lookup sees it exit.
+// Liveness reads 424242 as running until a lookup sees it exit: its process
+// handle on Windows, `kill(pid, 0)` elsewhere (spied below).
 vi.mock('../../../main/pty/winSnapshotNative', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../main/pty/winSnapshotNative')>()),
-  tryProcessHandleApi: () => ({
-    open: (pid: number) => (pid === 424242 ? { handle: {}, createdAt: 1n, canTerminate: true } : { gone: true }),
-    hasExited: () => probes.exited,
-    close: () => undefined,
-  }),
+  readProcessExitState: (pid: number) => (pid === 424242 && !probes.exited ? 'running' : 'exited'),
 }));
 vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('child_process')>();
@@ -66,7 +63,10 @@ describe('killVerifiedDaemonPid — unavailable command line', () => {
     probes.exitDuring = null;
     probes.exited = false;
     // No real PID is signalled by these failure-injection tests.
-    vi.spyOn(process, 'kill').mockReturnValue(true);
+    vi.spyOn(process, 'kill').mockImplementation((_pid, signal) => {
+      if (signal === 0 && probes.exited) throw Object.assign(new Error('ESRCH'), { code: 'ESRCH' });
+      return true;
+    });
   });
   afterEach(() => vi.restoreAllMocks());
 

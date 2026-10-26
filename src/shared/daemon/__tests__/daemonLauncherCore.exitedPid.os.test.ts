@@ -2,8 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { spawn, type ChildProcess } from 'child_process';
-import type { ProcessHandle, ProcessHandleApi } from '../../../main/pty/winSnapshotNative';
 
 /**
  * #2774: a start that runs while the recorded daemon is still exiting saw it
@@ -12,21 +10,21 @@ import type { ProcessHandle, ProcessHandleApi } from '../../../main/pty/winSnaps
  * An exited process is a dead daemon; only a process that is still running
  * and cannot be read is case (c).
  *
- * The probes are faked for FAKE_PID, so the exit can be placed at any step:
- * the process handle (Windows), the image lookup (tasklist / /proc comm /
- * ps comm=), the command-line lookup (CIM / /proc cmdline / ps command=),
- * and POSIX liveness (`process.kill(pid, 0)`).
+ * The probes are faked for FAKE_PID, so the exit can be placed at any step.
+ * Liveness is read the way each platform reads it: the process handle on
+ * Windows (tasklist when the handle cannot be read), `process.kill(pid, 0)`
+ * elsewhere. The image lookup is tasklist / /proc comm / ps comm=, the
+ * command-line lookup CIM / /proc cmdline / ps command=.
  */
 const FAKE_PID = 424242;
 
 const probes = vi.hoisted(() => ({
-  /** The process has finished exiting: the handle is signaled and the lookups no longer find it. */
+  /** The process has finished exiting: liveness reads dead and the lookups no longer find it. */
   exited: false,
-  /** Handle opens (FAKE_PID only) before the process exits; -1 never. */
-  exitAfterOpens: -1,
-  opens: 0,
-  closes: 0,
-  /** Whether the native handle API is available. */
+  /** Liveness reads (FAKE_PID only) before the process exits; -1 never. */
+  exitAfterReads: -1,
+  reads: 0,
+  /** Whether the native handle read works (Windows). */
   handleApi: true,
   /** Image the lookup returns while running; null = the probe is blocked. */
   image: 'node.exe' as string | null,
@@ -39,28 +37,22 @@ const probes = vi.hoisted(() => ({
   listedAfterExit: false,
 }));
 
-vi.mock('../../../main/pty/winSnapshotNative', async (importOriginal) => {
-  const handle = {} as ProcessHandle;
-  const api: ProcessHandleApi = {
-    processTable: () => [],
-    open: (pid) => {
-      if (pid !== FAKE_PID) return { gone: true };
-      if (probes.exitAfterOpens >= 0 && probes.opens >= probes.exitAfterOpens) probes.exited = true;
-      probes.opens++;
-      return { handle, createdAt: 1n, canTerminate: true };
-    },
-    terminate: () => false,
-    hasExited: () => probes.exited,
-    close: () => {
-      probes.closes++;
-    },
-    now: () => 0n,
-  };
-  return {
-    ...(await importOriginal<typeof import('../../../main/pty/winSnapshotNative')>()),
-    tryProcessHandleApi: () => (probes.handleApi ? api : null),
-  };
-});
+/** One liveness read of FAKE_PID: whether it has exited by now. */
+function livenessRead(): boolean {
+  if (probes.exitAfterReads >= 0 && probes.reads >= probes.exitAfterReads) probes.exited = true;
+  probes.reads++;
+  return probes.exited;
+}
+
+// As in production, the handle is read on Windows only.
+vi.mock('../../../main/pty/winSnapshotNative', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../main/pty/winSnapshotNative')>()),
+  readProcessExitState: (pid: number) => {
+    if (process.platform !== 'win32' || !probes.handleApi) return 'unknown';
+    if (pid !== FAKE_PID) return 'exited';
+    return livenessRead() ? 'exited' : 'running';
+  },
+}));
 
 /** The image lookup's answer; null when the process is gone, throws when blocked. */
 function readImage(): string | null {
@@ -91,7 +83,8 @@ const notFound = (): never => {
 vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('child_process')>();
   const execFileSync = vi.fn((command: string, args: string[], ...rest: unknown[]) => {
-    const forFake = Array.isArray(args) && args.includes(`PID eq ${FAKE_PID}`) || args.includes(String(FAKE_PID)) || args.some((a) => a.includes(`ProcessId=${FAKE_PID}`));
+    const forFake = Array.isArray(args)
+      && (args.includes(`PID eq ${FAKE_PID}`) || args.includes(String(FAKE_PID)) || args.some((a) => a.includes(`ProcessId=${FAKE_PID}`)));
     if (!forFake) return Reflect.apply(actual.execFileSync, actual, [command, args, ...rest]);
     if (command.endsWith('tasklist.exe')) {
       const image = readImage();
@@ -113,12 +106,7 @@ vi.mock('fs', async (importOriginal) => {
   return { ...actual, default: { ...actual, readFileSync }, readFileSync };
 });
 
-import {
-  checkProcessLiveness,
-  ensureDaemon,
-  processExitState,
-  type DaemonLauncherDeps,
-} from '../daemonLauncherCore';
+import { checkProcessLiveness, ensureDaemon, type DaemonLauncherDeps } from '../daemonLauncherCore';
 
 // The command line each platform's probe returns: NUL-separated /proc cmdline
 // on Linux, the quoted CIM string on Windows, the `ps -o command=` line on macOS.
@@ -127,45 +115,6 @@ function argvLine(script: string): string {
   if (process.platform === 'win32') return `"${process.execPath}" ${script}`;
   return `${process.execPath} ${script}`;
 }
-
-function fakeApi(overrides: Partial<ProcessHandleApi>): ProcessHandleApi & { closed: number } {
-  const api = {
-    closed: 0,
-    processTable: () => [],
-    open: () => ({ handle: {} as ProcessHandle, createdAt: 1n, canTerminate: true }),
-    terminate: () => false,
-    hasExited: () => false,
-    close: () => {
-      api.closed++;
-    },
-    now: () => 0n,
-    ...overrides,
-  };
-  return api;
-}
-
-describe('processExitState', () => {
-  it('reads a pid with no process as exited', () => {
-    expect(processExitState(FAKE_PID, fakeApi({ open: () => ({ gone: true }) }))).toBe('exited');
-  });
-
-  it('reads a signaled handle as exited and a waiting one as running, closing it each time', () => {
-    const exited = fakeApi({ hasExited: () => true });
-    expect(processExitState(FAKE_PID, exited)).toBe('exited');
-    expect(exited.closed).toBe(1);
-    const running = fakeApi({ hasExited: () => false });
-    expect(processExitState(FAKE_PID, running)).toBe('running');
-    expect(running.closed).toBe(1);
-  });
-
-  it('reads a failed open, a failed wait or no API as unknown', () => {
-    expect(processExitState(FAKE_PID, fakeApi({ open: () => ({ failure: 'denied' }) }))).toBe('unknown');
-    const failedWait = fakeApi({ hasExited: () => null });
-    expect(processExitState(FAKE_PID, failedWait)).toBe('unknown');
-    expect(failedWait.closed).toBe(1);
-    expect(processExitState(FAKE_PID, null)).toBe('unknown');
-  });
-});
 
 describe('ensureDaemon — a recorded daemon that exits during the start (#2774)', () => {
   let wmuxDir: string;
@@ -176,7 +125,7 @@ describe('ensureDaemon — a recorded daemon that exits during the start (#2774)
 
   beforeEach(() => {
     Object.assign(probes, {
-      exited: false, exitAfterOpens: -1, opens: 0, closes: 0, handleApi: true,
+      exited: false, exitAfterReads: -1, reads: 0, handleApi: true,
       image: 'node.exe', imageReads: 0, argv: null, exitDuring: null, listedAfterExit: false,
     });
     const suffix = `-exited-pid-test-${process.pid}-${Math.floor(Math.random() * 1e6)}`;
@@ -188,12 +137,11 @@ describe('ensureDaemon — a recorded daemon that exits during the start (#2774)
     fs.writeFileSync(pidFile, String(FAKE_PID));
     logs = [];
     askUser = vi.fn<DaemonLauncherDeps['askUserToRecoverFromStalePid']>(async () => false);
-    // POSIX liveness is `kill(pid, 0)`: FAKE_PID reads as present until the
-    // lookups stop finding it. Nothing real is signalled.
+    // POSIX liveness is `kill(pid, 0)`. Nothing real is signalled.
     const realKill = process.kill.bind(process);
     vi.spyOn(process, 'kill').mockImplementation((pid: number, signal?: string | number) => {
       if (pid !== FAKE_PID) return realKill(pid, signal);
-      if (probes.exited) throw Object.assign(new Error('ESRCH'), { code: 'ESRCH' });
+      if (livenessRead()) throw Object.assign(new Error('ESRCH'), { code: 'ESRCH' });
       return true;
     });
   });
@@ -229,31 +177,49 @@ describe('ensureDaemon — a recorded daemon that exits during the start (#2774)
 
   const exitedLine = (): string | undefined => logs.find((line) => line.includes('names a process that has exited'));
 
-  it('cleans up and spawns when the daemon exits after the liveness check, without reading its image', async () => {
-    // On Windows the liveness check is the first handle open; elsewhere it is kill(0).
-    probes.exitAfterOpens = process.platform === 'win32' ? 1 : 0;
-    expect(await startError()).toMatch(/Daemon script not found/);
+  function expectCleanedUp(err: string): void {
+    expect(err).toMatch(/Daemon script not found/);
     expect(askUser).not.toHaveBeenCalled();
-    expect(probes.imageReads).toBe(0);
     expect(exitedLine()).toBeDefined();
     expect(fs.existsSync(pidFile)).toBe(false);
+  }
+
+  it('cleans up and spawns when the daemon exits after the liveness check, without reading its image', async () => {
+    probes.exitAfterReads = 1;
+    expectCleanedUp(await startError());
+    expect(probes.imageReads).toBe(0);
   });
 
   it('cleans up and spawns when the daemon exits during the image lookup', async () => {
     probes.exitDuring = 'image';
-    expect(await startError()).toMatch(/Daemon script not found/);
-    expect(askUser).not.toHaveBeenCalled();
-    expect(exitedLine()).toBeDefined();
-    expect(fs.existsSync(pidFile)).toBe(false);
+    expectCleanedUp(await startError());
   });
 
   it('cleans up and spawns when the daemon exits during the command-line lookup', async () => {
     probes.image = path.basename(process.execPath);
     probes.exitDuring = 'argv';
-    expect(await startError()).toMatch(/Daemon script not found/);
-    expect(askUser).not.toHaveBeenCalled();
-    expect(exitedLine()).toBeDefined();
-    expect(fs.existsSync(pidFile)).toBe(false);
+    expectCleanedUp(await startError());
+  });
+
+  // Reads: the liveness check, the one before the identity checks, the one
+  // after the null lookup; the next one, before the dialog, sees it gone.
+  it('cleans up instead of asking when a daemon whose image lookup is blocked exits before the dialog', async () => {
+    probes.image = null;
+    probes.exitAfterReads = 3;
+    expectCleanedUp(await startError());
+  });
+
+  it('cleans up instead of asking when a daemon whose command-line lookup is blocked exits before the dialog', async () => {
+    probes.image = path.basename(process.execPath);
+    probes.exitAfterReads = 3;
+    expectCleanedUp(await startError());
+  });
+
+  it('cleans up instead of asking when a daemon whose command line does not match exits before the dialog', async () => {
+    probes.image = path.basename(process.execPath);
+    probes.argv = argvLine('/test/someone-elses-app/index.js');
+    probes.exitAfterReads = 2;
+    expectCleanedUp(await startError());
   });
 
   it('still asks, then refuses, when a running process blocks the image lookup', async () => {
@@ -265,7 +231,7 @@ describe('ensureDaemon — a recorded daemon that exits during the start (#2774)
     expect(fs.existsSync(pidFile)).toBe(true);
   });
 
-  it('still asks, then refuses, when the handle API is unavailable and the image lookup is blocked', async () => {
+  it('still asks, then refuses, when the handle cannot be read and the image lookup is blocked', async () => {
     probes.handleApi = false;
     probes.image = null;
     expect(await startError()).toMatch(/image lookup failed; refusing/);
@@ -273,7 +239,7 @@ describe('ensureDaemon — a recorded daemon that exits during the start (#2774)
     expect(fs.existsSync(pidFile)).toBe(true);
   });
 
-  it('judges a reused pid by the existing identity checks while its handle says running', async () => {
+  it('judges a reused pid by the existing identity checks while it runs', async () => {
     probes.image = 'some-other-app.exe';
     probes.argv = argvLine('/test/someone-elses-app/index.js');
     expect(await startError()).toMatch(/command line does not identify the wmux daemon script; refusing/);
@@ -292,39 +258,5 @@ describe('ensureDaemon — a recorded daemon that exits during the start (#2774)
     // An unreadable handle leaves the answer to tasklist.
     probes.handleApi = false;
     expect(checkProcessLiveness(FAKE_PID)).toBe('alive');
-  });
-});
-
-describe.runIf(process.platform === 'win32')('processExitState — a real child on Windows', () => {
-  let child: ChildProcess | null = null;
-
-  afterEach(async () => {
-    if (child?.pid && child.exitCode === null && child.signalCode === null) {
-      child.kill('SIGKILL');
-      await new Promise<void>((resolve) => child?.once('exit', () => resolve()));
-    }
-    child = null;
-  });
-
-  it('reads a terminated process as exited while a handle still holds it', async () => {
-    const real = await vi.importActual<typeof import('../../../main/pty/winSnapshotNative')>('../../../main/pty/winSnapshotNative');
-    const api = real.tryProcessHandleApi();
-    expect(api).not.toBeNull();
-    if (!api) return;
-    child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
-    const pid = child.pid as number;
-    expect(processExitState(pid, api)).toBe('running');
-    // Hold the process object open, as a slow-closing handle does after a kill.
-    const held = api.open(pid);
-    expect('handle' in held).toBe(true);
-    if (!('handle' in held)) return;
-    try {
-      const exited = new Promise<void>((resolve) => child?.once('exit', () => resolve()));
-      child.kill('SIGKILL');
-      await exited;
-      expect(processExitState(pid, api)).toBe('exited');
-    } finally {
-      api.close(held.handle);
-    }
   });
 });

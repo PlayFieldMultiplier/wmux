@@ -268,6 +268,7 @@ import type { ApprovalDecision, DecisionFormKind, NativeDecisionOutcome, NativeD
 import type { AgentSlug } from '../shared/events';
 import { LANLINK_SENTINEL_SESSION_ID } from '../shared/lanlink';
 import { classifyTasklistOutput, classifyKillOutcome, lockOwnerIsReclaimable, type ProcessLiveness } from '../shared/processLiveness';
+import { handleLiveness } from '../shared/processHandleLiveness';
 import { deliverScheduledPrompt, deliveryInputFence, type ScheduledPromptDeliveryDeps } from './sessionPromptDelivery';
 import { deliverCallerNudge } from './callerNudgeDelivery';
 import { paneTurnClosed, stopAgentTree } from './agentStop';
@@ -1655,6 +1656,10 @@ function ingestResumeSpool(
  */
 async function processLiveness(pid: number): Promise<ProcessLiveness> {
   if (process.platform === 'win32') {
+    // The process handle first, as the launcher asks it (#2774): a terminated
+    // process can stay listed by tasklist while its last handles close.
+    const fromHandle = handleLiveness(pid);
+    if (fromHandle !== 'unknown') return fromHandle;
     // process.kill(pid, 0) is unreliable on Windows — it succeeds for stale PIDs
     // — so probe with tasklist. A thrown probe leaves stdout null → unknown.
     let stdout: string | null = null;
