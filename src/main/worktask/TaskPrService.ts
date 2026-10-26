@@ -39,7 +39,7 @@
  * approved (`pushTarget`) or first-read one.
  */
 
-import { execWithInput } from '../github/execWithInput';
+import { execWithInput, type ExecWithInputOptions } from '../github/execWithInput';
 import { WORKTASK_PR_URL_RE, githubPullUrlHost, isGithubPullUrl } from '../../shared/workTask';
 import { forgeHosts } from '../../shared/forgeHosts';
 import { getExecEnv } from '../../shared/execEnv';
@@ -73,8 +73,7 @@ export interface PrCachePort {
 export type PrExec = (
   cmd: string,
   args: string[],
-  /** `input`: written to the process's stdin and closed. */
-  opts: { cwd: string; timeout: number; env: NodeJS.ProcessEnv; windowsHide: boolean; input?: string },
+  opts: ExecWithInputOptions,
 ) => Promise<{ stdout: string; stderr: string }>;
 
 export interface TaskPrServiceOptions {

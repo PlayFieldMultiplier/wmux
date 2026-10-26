@@ -29,8 +29,7 @@ import { mergeBlock, type MergeBlock, type PrCheck, type PrCheckBucket, type PrL
 import type { CiRollup } from '../pipe/handlers/factoryRead.rpc';
 import { WORKTASK_MR_URL_RE } from '../../shared/workTask';
 import { forgeHosts, glabEntryFor, type ForgeHosts } from '../../shared/forgeHosts';
-import { execWithInput } from './execWithInput';
-
+import { execWithInput, type ExecWithInputOptions } from './execWithInput';
 
 const LIST_TTL_MS = 30_000;
 const GLAB_TIMEOUT_MS = 10_000;
@@ -67,8 +66,7 @@ function cacheKey(repoPath: string): string {
 type Exec = (
   cmd: string,
   args: string[],
-  /** `input`: written to the process's stdin and closed. */
-  opts: { cwd: string; timeout: number; env: NodeJS.ProcessEnv; windowsHide: boolean; maxBuffer?: number; input?: string },
+  opts: ExecWithInputOptions,
 ) => Promise<{ stdout: string }>;
 
 // ── GitLab REST 페이로드 매핑(순수, 테스트용 export) ─────────────────────────
