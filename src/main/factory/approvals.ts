@@ -125,7 +125,7 @@ import { guestSide } from './guestWorkspaces';
 import { CONTEXT_FENCE_INFO, PAYLOAD_FENCE_INFO, UNSHOWABLE, actContentKey, actTextProblem, bodyWithMarker, fencedLines, normalizeActText, payloadHashOf } from './actPayload';
 import { nextSlot, scheduleLabel } from './routines';
 import type { OwnerCardProof } from './ownerAsked';
-import { actEffectId, actRowClaimed, type ActEffect, type ActEffectStatus } from './actEffectStore';
+import { actEffectId, actRowClaimed, draftUndecided, type ActEffect, type ActEffectStatus } from './actEffectStore';
 import type { IssueFacts, PullFacts } from './actExecutor';
 import { releaseTagProblem, type AlsoRunsOn, type ReleaseAsk, type ReleaseAskInput, type ReleaseAskRefusal } from './releaseAct';
 
@@ -172,6 +172,9 @@ export interface StoredApproval extends ApprovalRequest {
   /** An act: its bot text and target without the marker (one request per
    *  content while it waits; a reused clientRequestId must carry the same). */
   contentKey?: string;
+  /** A refused release whose bot was told to wait while its draft was
+   *  undecided: told again once it is decided. */
+  draftWait?: true;
 }
 
 /** A request as the main window and the bot see it (no checkout path). An
@@ -185,6 +188,7 @@ export function approvalView(r: StoredApproval): ApprovalView {
   delete view.clientRequestId;
   delete view.guest;
   delete view.contentKey;
+  delete view.draftWait;
   // What the owner reads: sentences, never the raw codes.
   delete view.refusalText;
   delete view.ruleSkippedText;
@@ -706,6 +710,28 @@ const CHECK_WORDS: Readonly<Record<ReleaseAsk['checks'], string>> = {
   none: 'none',
   'not-started': 'its push CI has not run yet; approving now is refused, and the bot asks again once it passes',
 };
+
+/** A release refusal's code that says what became of its draft. */
+function isDraftCode(code: string): boolean {
+  return code.startsWith('draft-');
+}
+
+const ASK_AGAIN = 'Nothing more is tried for this request; ask again with a new request if it is still wanted.';
+
+/** What a bot told of a release refusal is to do: wait while its draft is
+ *  undecided (asking again would find it), leave the release alone while
+ *  its draft stays, or may stay, on GitHub, else ask again if wanted. Pure. */
+function releaseRefusalAdvice(refusal: string, draftOpen: boolean): string {
+  if (draftOpen) return 'Its draft release is not settled yet: do not ask for this release again until you are told it is.';
+  const codes = laneRefusalCodes(refusal);
+  if (codes.includes('draft-kept-unchecked')) {
+    return 'Its draft release may still be on GitHub until the owner publishes or deletes it: do not ask for this release again meanwhile.';
+  }
+  if (codes.some((c) => isDraftCode(c) && c !== 'draft-gone')) {
+    return 'Its draft release stays on GitHub until the owner publishes or deletes it: do not ask for this release again meanwhile.';
+  }
+  return ASK_AGAIN;
+}
 
 /** What starts another workflow, as the card says it. */
 const ALSO_RUNS_WORDS: Readonly<Record<AlsoRunsOn, string>> = {
@@ -2154,6 +2180,36 @@ export class ApprovalService {
       this.changed(r.workspaceId);
       return;
     }
+    if (r.state === 'refused' && e.status === 'refused' && r.act.kind === 'release') {
+      // A refusal told before its draft was decided (a quit, or GitHub not
+      // answering, came between): its draft's code added, told in one more
+      // outcome card and to the bot. Within 300 characters the refusal as
+      // told stays first (cut at its end), the draft's code last. A bot told
+      // to wait is told once it is decided, whatever became of the draft.
+      if (e.draftOpen) return;
+      const had = laneRefusalCodes(r.refusal ?? '');
+      const added = laneRefusalCodes(e.reason ?? '').filter((c) => isDraftCode(c) && !had.includes(c));
+      if (added.length === 0 && !r.draftWait) return;
+      const tail = added.join(', ');
+      const base = r.refusal ?? 'refused';
+      const room = 300 - tail.length - 2;
+      const amended: StoredApproval = {
+        ...r,
+        ...(tail ? { refusal: `${base.length <= room ? base : base.slice(0, Math.max(0, room))}, ${tail}` } : {}),
+        updatedAt: this.now(),
+      };
+      delete amended.draftWait;
+      if (!this.put(amended)) return;
+      if (tail) this.outcomeCard(amended, 'draft');
+      this.changed(amended.workspaceId);
+      this.tellDecided(
+        amended,
+        `Not done: ${ACTION_TITLE[amended.action]} ${subject(amended)} (${laneRefusalLine(tail || (amended.refusal ?? ''), amended.repoKey) || 'refused'}).`,
+        tail ? releaseRefusalAdvice(amended.refusal ?? '', false) : `Its draft release is settled. ${ASK_AGAIN}`,
+        'draft',
+      );
+      return;
+    }
     if (r.state === 'executed' || r.state === 'refused') return;
     const done = e.status === 'done';
     const next: StoredApproval = {
@@ -2164,6 +2220,7 @@ export class ApprovalService {
       // tag that points elsewhere).
       ...(e.result ? { result: e.result } : {}),
       ...(!done ? { refusal: (e.reason ?? 'refused').slice(0, 300) } : {}),
+      ...(!done && r.act.kind === 'release' && e.draftOpen ? { draftWait: true as const } : {}),
       updatedAt: this.now(),
     };
     this.put(next);
@@ -2175,7 +2232,7 @@ export class ApprovalService {
       this.tellDecided(next, `Done: ${ACTION_TITLE[next.action]} ${subject(next)}${next.result?.url ? ` (${next.result.url})` : ''}.`, 'It is done: do not ask the owner for it again.');
     } else {
       this.tellDecided(next, `Not done: ${ACTION_TITLE[next.action]} ${subject(next)} (${laneRefusalLine(next.refusal ?? '', next.repoKey) || 'refused'}).`,
-        'Nothing more is tried for this request; ask again with a new request if it is still wanted.');
+        next.act?.kind === 'release' ? releaseRefusalAdvice(next.refusal ?? '', next.draftWait === true) : ASK_AGAIN);
     }
   }
 
@@ -2262,8 +2319,9 @@ export class ApprovalService {
   }
 
   /** A request was decided: its bot, and the bots that spoke in its thread
-   *  since its card, are told once. */
-  private tellDecided(r: StoredApproval, title: string, body?: string): void {
+   *  since its card, are told once (once per `again`: a later word on the
+   *  same decision, under a key of its own). */
+  private tellDecided(r: StoredApproval, title: string, body?: string, again?: 'draft'): void {
     const cardSeq = r.cardId ? this.ports.rooms()?.get(r.workspaceId, r.cardId)?.seq ?? null : null;
     const bots = new Set([r.botId, ...this.speakersAfter(r.workspaceId, r.threadId, cardSeq)]);
     // As guest-sourced as the request (an older one without the field: as
@@ -2271,7 +2329,7 @@ export class ApprovalService {
     const guest = guestOfRecord(r.guest, r.tainted) !== false;
     for (const botId of [...bots].slice(0, APPROVAL_LIMITS.NOTIFY_MAX)) {
       this.notice({
-        botId, workspaceId: r.workspaceId, key: `approval:${r.requestId}:${r.state}`, topic: 'approval.decided',
+        botId, workspaceId: r.workspaceId, key: `approval:${r.requestId}:${r.state}${again ? `:${again}` : ''}`, topic: 'approval.decided',
         title, ...(body ? { body } : {}), threadId: r.threadId, repoKey: r.repoKey,
         ...(guest ? { guest: true, tainted: true } : {}),
         ...(r.prNumber !== undefined ? { pr: r.prNumber } : {}),
@@ -2332,12 +2390,15 @@ export class ApprovalService {
   private expire(): void {
     const at = this.now();
     const stale = [...this.requests.values()].filter((r) => r.state === 'pending' && at - r.createdAt >= APPROVAL_LIMITS.PENDING_TTL_MS);
-    const old = [...this.requests.values()].filter((r) => r.state !== 'pending' && r.state !== 'approved' && at - r.updatedAt >= APPROVAL_LIMITS.RETAIN_MS);
+    // A refused release whose draft is undecided stays: its refusal is
+    // amended, and its bot told, once the draft is decided.
+    const ends = (r: StoredApproval): boolean => r.state !== 'pending' && r.state !== 'approved' && !this.draftUndecidedOf(r);
+    const old = [...this.requests.values()].filter((r) => ends(r) && at - r.updatedAt >= APPROVAL_LIMITS.RETAIN_MS);
     if (stale.length === 0 && old.length === 0 && this.requests.size <= APPROVAL_LIMITS.REQUESTS_MAX) return;
     const ok = this.commit(() => {
       for (const r of stale) this.requests.set(r.requestId, { ...r, state: 'expired', updatedAt: at });
       for (const r of old) this.requests.delete(r.requestId);
-      const settled = [...this.requests.values()].filter((r) => r.state !== 'pending' && r.state !== 'approved').sort((a, b) => a.updatedAt - b.updatedAt);
+      const settled = [...this.requests.values()].filter(ends).sort((a, b) => a.updatedAt - b.updatedAt);
       while (this.requests.size > APPROVAL_LIMITS.REQUESTS_MAX && settled.length > 0) this.requests.delete((settled.shift() as StoredApproval).requestId);
     });
     if (ok) {
@@ -2349,6 +2410,17 @@ export class ApprovalService {
         if (r.action === 'skill') this.skillDenied(r);
         this.answerNativeTool(r, false);
       }
+    }
+  }
+
+  /** Whether a refused release's outbox row has its draft undecided. */
+  private draftUndecidedOf(r: StoredApproval): boolean {
+    if (r.state !== 'refused' || r.act?.kind !== 'release') return false;
+    try {
+      const row = this.ports.acts?.()?.effect(actEffectId(r.requestId));
+      return !!row && draftUndecided(row);
+    } catch {
+      return false;
     }
   }
 
@@ -2433,7 +2505,9 @@ export class ApprovalService {
     }
   }
 
-  private outcomeCard(r: StoredApproval): void {
+  /** `amend`: the card that tells a refusal amended after it was told (its
+   *  own clientPostId, so it is posted once). */
+  private outcomeCard(r: StoredApproval, amend?: 'draft'): void {
     const writer = this.ports.rooms();
     if (!writer) return;
     const by = r.decidedBy === 'rule' ? 'a rule you set' : 'you';
@@ -2442,9 +2516,11 @@ export class ApprovalService {
     const full = r.actRepo?.fullName ?? r.repoKey;
     // A release draft's fate (`draft-*` codes) is told in the body, not the title.
     const codes = laneRefusalCodes(r.refusal ?? '');
-    const isDraft = (c: string): boolean => r.act?.kind === 'release' && c.startsWith('draft-');
+    const isDraft = (c: string): boolean => r.act?.kind === 'release' && isDraftCode(c);
     const why = laneRefusalLine(codes.filter((c) => !isDraft(c)).join(', '), r.repoKey);
-    const title = r.act?.kind === 'release' && done
+    const title = amend
+      ? `${codes.includes('draft-kept-unchecked') ? 'Draft release may still be on GitHub' : 'Draft release still on GitHub'}: ${ACTION_TITLE[r.action]} ${subject(r)}`
+      : r.act?.kind === 'release' && done
       ? r.act.mode === 'workflow'
         ? `Tag pushed — the release workflow is building it (${r.act.tagName} on ${full}, approved by you)`
         : `${ACT_DONE_TITLE.release} release ${r.act.tagName} of ${full} (approved by you)`
@@ -2466,7 +2542,7 @@ export class ApprovalService {
       title,
       ...(body ? { body } : {}),
       refs: { approvalId: r.requestId, ...(r.prNumber !== undefined ? { pr: r.prNumber } : {}), ...(r.issueNumber !== undefined ? { issue: r.issueNumber } : {}) },
-      clientPostId: `approval-outcome:${r.requestId}`,
+      clientPostId: `approval-outcome:${r.requestId}${amend ? `:${amend}` : ''}`,
     });
   }
 }

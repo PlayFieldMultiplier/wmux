@@ -546,10 +546,18 @@ describe('second code review round', () => {
     expect(await deleteDraft(gh, P, 50, want)).toBe('kept-tag-made');
     // A row whose request is gone: the draft's own tag and target.
     expect(await deleteDraft(gh, P, 50)).toBe('kept-tag-made');
+    // GitHub did not answer (no HTTP status): retry later, nothing deleted.
     gh.answerRead = (e) => (e === 'repos/o/r/git/ref/tags/v1.2.3' ? { ok: false, kind: 'error', message: 'timeout' } : null);
-    expect(await deleteDraft(gh, P, 50, want)).toBe('kept-unchecked');
-    expect(await deleteDraft(gh, P, 50)).toBe('kept-unchecked');
+    expect(await deleteDraft(gh, P, 50, want)).toBe('retry');
+    expect(await deleteDraft(gh, P, 50)).toBe('retry');
     gh.answerRead = (e) => (e === 'repos/o/r/releases/50' ? { ok: false, kind: 'error', message: 'timeout' } : null);
+    expect(await deleteDraft(gh, P, 50, want)).toBe('retry');
+    // GitHub's own refusal, or an answer this build cannot read: kept, unchecked.
+    gh.answerRead = (e) => (e === 'repos/o/r/git/ref/tags/v1.2.3' ? { ok: false, kind: 'http', status: 403, message: 'gh: Forbidden (HTTP 403)' } : null);
+    expect(await deleteDraft(gh, P, 50, want)).toBe('kept-unchecked');
+    gh.answerRead = (e) => (e === 'repos/o/r/git/ref/tags/v1.2.3' ? { ok: true, value: 'not a ref' } : null);
+    expect(await deleteDraft(gh, P, 50, want)).toBe('kept-unchecked');
+    gh.answerRead = (e) => (e === 'repos/o/r/releases/50' ? { ok: false, kind: 'http', status: 403, message: 'gh: Forbidden (HTTP 403)' } : null);
     expect(await deleteDraft(gh, P, 50, want)).toBe('kept-unchecked');
     expect(gh.writes).toEqual([]);
     // The tag at the commit, but another release holds it: the draft could
@@ -564,21 +572,27 @@ describe('second code review round', () => {
     draft(gh);
     gh.tags.set('v1.2.3', { sha: C3 });
     gh.answerRead = (e) => (e.startsWith('repos/o/r/releases?') ? { ok: false, kind: 'error', message: 'timeout' } : null);
-    expect(await deleteDraft(gh, P, 50, want)).toBe('kept-unchecked');
-    // The release listing refused (403) or the read itself threw: kept, never deleted.
+    expect(await deleteDraft(gh, P, 50, want)).toBe('retry');
+    // The release listing refused (403): kept; the read itself threw: retry. Never deleted.
     gh.answerRead = (e) => (e.startsWith('repos/o/r/releases?') ? { ok: false, kind: 'http', status: 403, message: 'gh: Forbidden (HTTP 403)' } : null);
     expect(await deleteDraft(gh, P, 50, want)).toBe('kept-unchecked');
     gh.answerRead = (e) => {
       if (e.startsWith('repos/o/r/releases?')) throw new Error('gh did not start');
       return null;
     };
-    expect(await deleteDraft(gh, P, 50, want)).toBe('kept-unchecked');
+    expect(await deleteDraft(gh, P, 50, want)).toBe('retry');
     expect(gh.writes).toEqual([]);
     gh = github();
     draft(gh);
     gh.tags.set('v1.2.3', { sha: C2 });
-    gh.nextWrite = { answer: { ok: false, kind: 'http', status: 500, message: 'gh: Server Error (HTTP 500)' }, landed: false };
+    // GitHub refused the delete (4xx): failed. A server error may have
+    // deleted it: retry, and the next read tells.
+    gh.nextWrite = { answer: { ok: false, kind: 'http', status: 403, message: 'gh: Forbidden (HTTP 403)' }, landed: false };
     expect(await deleteDraft(gh, P, 50, want)).toBe('failed');
+    gh.nextWrite = { answer: { ok: false, kind: 'http', status: 500, message: 'gh: Server Error (HTTP 500)' }, landed: false };
+    expect(await deleteDraft(gh, P, 50, want)).toBe('retry');
+    gh.nextWrite = { answer: { ok: false, kind: 'error', message: 'timeout' }, landed: false };
+    expect(await deleteDraft(gh, P, 50, want)).toBe('retry');
     expect(await deleteDraft(gh, P, 50, want)).toBe('deleted');
     expect(gh.releases).toEqual([]);
   });
@@ -718,5 +732,45 @@ describe('Mac review round 2', () => {
     expect(await pre(gh)).toMatchObject({ refusal: 'gh-410' });
     gh.answerRead = (e) => (e === 'repos/o/r/git/ref/heads/v1.2.3' ? { ok: false, kind: 'http', status: 403, message: 'gh: Forbidden (HTTP 403)' } : null);
     expect(await pre(gh)).toMatchObject({ refusal: 'gh-403' });
+  });
+});
+
+describe('a workflow run listed without its path (GitHub Enterprise Server)', () => {
+  const act: ApprovalReleaseAct = {
+    kind: 'release', mode: 'release', tagName: 'v1.2.3', targetSha: C3, defaultBranch: 'main', title: 'wmux 1.2.3', notes: 'Fixes.', prerelease: false, workflows: [], checksExpected: true, pushWorkflows: ['.github/workflows/ci.yml'], draft: false,
+  };
+  const pre = (gh: FakeGithub) => releasePrecondition(gh, P, act, { login: 'owner', branch: 'main', draftId: undefined, wroteBefore: false });
+  const run = { head_sha: C3, event: 'push', head_branch: 'main', status: 'completed', conclusion: 'success', html_url: 'https://ghe.example/o/r/actions/runs/1', id: 1 };
+
+  it('is matched on its workflow\'s id, read only then', async () => {
+    const gh = github();
+    gh.files.set('.github/workflows/ci.yml', 'on:\n  push:\n    branches: [main]\n');
+    gh.workflowRuns.push({ ...run, workflow_id: gh.workflowId('.github/workflows/ci.yml') });
+    expect(await pre(gh)).toMatchObject({ refusal: null });
+    // Another workflow's run without a path is not CI's; CI's record is read
+    // once, for the id and for whether it still runs.
+    gh.workflowRuns = [{ ...run, workflow_id: gh.workflowId('.github/workflows/lint.yml') }];
+    const at = gh.reads.length;
+    expect(await pre(gh)).toMatchObject({ refusal: 'checks-not-started' });
+    expect(gh.reads.slice(at).filter((e) => e === 'repos/o/r/actions/workflows/ci.yml')).toHaveLength(1);
+    // Runs that name their path read no workflow record for this.
+    gh.workflowRuns = [{ ...run, workflow_id: 9, path: '.github/workflows/ci.yml' }];
+    const before = gh.reads.length;
+    expect(await pre(gh)).toMatchObject({ refusal: null });
+    expect(gh.reads.slice(before).filter((e) => e.startsWith('repos/o/r/actions/workflows/'))).toEqual([]);
+  });
+
+  it('a workflow record that cannot be read fails closed', async () => {
+    const gh = github();
+    gh.files.set('.github/workflows/ci.yml', 'on:\n  push:\n    branches: [main]\n');
+    gh.workflowRuns.push({ ...run, workflow_id: gh.workflowId('.github/workflows/ci.yml') });
+    gh.answerRead = (e) => (e === 'repos/o/r/actions/workflows/ci.yml' ? { ok: false, kind: 'error', message: 'timeout' } : null);
+    expect(await pre(gh)).toMatchObject({ refusal: 'read-failed' });
+    gh.answerRead = (e) => (e === 'repos/o/r/actions/workflows/ci.yml' ? { ok: true, value: { path: '.github/workflows/ci.yml' } } : null);
+    expect(await pre(gh)).toMatchObject({ refusal: 'unreadable-answer' });
+    // GitHub's own refusal of the record (a 410): the workflow's state is not
+    // known, as without the fallback, never a failed check.
+    gh.answerRead = (e) => (e === 'repos/o/r/actions/workflows/ci.yml' ? { ok: false, kind: 'http', status: 410, message: 'gh: Gone (HTTP 410)' } : null);
+    expect(await pre(gh)).toMatchObject({ refusal: 'workflow-disabled' });
   });
 });

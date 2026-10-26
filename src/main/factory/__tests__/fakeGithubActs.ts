@@ -128,6 +128,11 @@ export class FakeGithub implements GhActPort {
   answerRead: ((endpoint: string) => GhActAnswer | null) | null = null;
   private nextId = 100;
 
+  /** A workflow file's id, as `actions/workflows/<file>` answers it. */
+  workflowId(file: string): number {
+    return 500 + [...file].reduce((n, c) => (n * 31 + c.charCodeAt(0)) % 100_000, 7);
+  }
+
   addIssue(n: number, over: Partial<FakeIssue> = {}): FakeIssue {
     const i: FakeIssue = { number: n, node_id: `I_${n}`, title: `issue ${n}`, state: 'open', user: { login: 'someone' }, html_url: `https://github.com/o/r/issues/${n}`, ...over };
     this.issues.set(n, i);
@@ -265,7 +270,7 @@ export class FakeGithub implements GhActPort {
     m = /^repos\/o\/r\/actions\/workflows\/([^/]+)$/.exec(path);
     if (m) {
       const file = `.github/workflows/${decodeURIComponent(m[1])}`;
-      return this.files.has(file) ? { ok: true, value: { path: file, state: this.workflowStates.get(file) ?? 'active' } } : NOT_FOUND;
+      return this.files.has(file) ? { ok: true, value: { id: this.workflowId(file), path: file, state: this.workflowStates.get(file) ?? 'active' } } : NOT_FOUND;
     }
     if (path === 'repos/o/r/actions/runs') {
       const sha = query.get('head_sha');
