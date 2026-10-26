@@ -15,7 +15,7 @@ const KEY = 'github.com/Acme/Widgets';
 const SHA = 'a'.repeat(40);
 const OTHER = 'b'.repeat(40);
 
-type Call = { args: string[]; env: NodeJS.ProcessEnv; timeout: number };
+type Call = { args: string[]; env: NodeJS.ProcessEnv; timeout: number; input?: string };
 
 const ROLLUP = [
   { __typename: 'CheckRun', name: 'validate', workflowName: 'CI', status: 'COMPLETED', conclusion: 'SUCCESS', detailsUrl: 'https://github.com/Acme/Widgets/actions/runs/11/job/22', startedAt: 's', completedAt: 'c' },
@@ -31,8 +31,8 @@ function headJson(over: Record<string, unknown> = {}) {
 
 function make(handler: (args: string[]) => string | Error, nowRef = { t: 1_000 }) {
   const calls: Call[] = [];
-  const exec = vi.fn(async (_cmd: string, args: string[], opts: { env: NodeJS.ProcessEnv; timeout: number }) => {
-    calls.push({ args, env: opts.env, timeout: opts.timeout });
+  const exec = vi.fn(async (_cmd: string, args: string[], opts: { env: NodeJS.ProcessEnv; timeout: number; input?: string }) => {
+    calls.push({ args, env: opts.env, timeout: opts.timeout, input: opts.input });
     const r = handler(args);
     if (r instanceof Error) throw r;
     return { stdout: r };
@@ -41,6 +41,8 @@ function make(handler: (args: string[]) => string | Error, nowRef = { t: 1_000 }
   return { svc, calls, nowRef, exec };
 }
 const gh = (calls: Call[], verb: string, sub?: string) => calls.filter((c) => c.args[0] === verb && (sub === undefined || c.args[1] === sub));
+/** `gh api` reading its JSON body from stdin. */
+const JSON_INPUT = ['--input', '-', '-H', 'Content-Type: application/json'];
 const errWith = (props: Record<string, unknown>) => Object.assign(new Error('gh failed'), props);
 
 let savedRepo: string | undefined;
@@ -139,7 +141,18 @@ describe('merge', () => {
     expect(await svc.merge('/r', KEY, 7, { expectHead: SHA, subject: 'feat: x (#7)', body: '' })).toEqual({ ok: true, url: 'https://github.com/Acme/Widgets/pull/7' });
     expect(gh(calls, 'pr', 'view')).toHaveLength(1);
     const merge = gh(calls, 'pr', 'merge')[0].args;
-    expect(merge).toEqual(['pr', 'merge', '7', '--repo', KEY, '--squash', '--subject=feat: x (#7)', '--body=', `--match-head-commit=${SHA}`]);
+    expect(merge).toEqual(['pr', 'merge', '7', '--repo', KEY, '--squash', '--subject=feat: x (#7)', '--body-file', '-', `--match-head-commit=${SHA}`]);
+    expect(gh(calls, 'pr', 'merge')[0].input).toBe('');
+  });
+
+  it('a 40,000-character squash body goes on stdin, never argv', async () => {
+    const { svc, calls } = make(okState());
+    const body = `-${'b'.repeat(39_999)}`;
+    expect(await svc.merge('/r', KEY, 7, { expectHead: SHA, subject: 's', body })).toMatchObject({ ok: true });
+    const merge = gh(calls, 'pr', 'merge')[0];
+    expect(merge.args.join(' ').length).toBeLessThan(500);
+    expect(merge.args).toContain('--body-file');
+    expect(merge.input).toBe(body);
   });
 
   it('refuses when the head moved since it was shown, without merging', async () => {
@@ -229,7 +242,8 @@ describe('review writes', () => {
       ok: true, url: 'https://github.com/Acme/Widgets/pull/7#pullrequestreview-1',
     });
     const post = gh(calls, 'api').at(-1)!.args;
-    expect(post).toEqual(['api', '--hostname', 'github.com', '-X', 'POST', 'repos/Acme/Widgets/pulls/7/reviews', '-f', 'event=APPROVE', '-f', `commit_id=${SHA}`]);
+    expect(post).toEqual(['api', '--hostname', 'github.com', '-X', 'POST', 'repos/Acme/Widgets/pulls/7/reviews', ...JSON_INPUT]);
+    expect(JSON.parse(gh(calls, 'api').at(-1)!.input ?? '')).toEqual({ event: 'APPROVE', commit_id: SHA });
   });
 
   it('a review on a PR that is no longer open is refused, nothing posted', async () => {
@@ -245,15 +259,28 @@ describe('review writes', () => {
     expect(gh(calls, 'api')).toHaveLength(0);
   });
 
-  it('a line comment posts the path, line, side and commit; text is a raw field, never a file or flag', async () => {
+  it('a line comment posts the path, line, side and commit; text is a JSON string on stdin, never a file or flag', async () => {
     const { svc, calls } = make((a) => (a[1] === 'view' ? headJson() : '{}'));
     await svc.comment('/r', KEY, 7, { expectHead: SHA, path: 'src/a.ts', line: 3, side: 'LEFT', body: '@/etc/passwd --flag' });
-    expect(gh(calls, 'api')[0].args).toEqual([
-      'api', '--hostname', 'github.com', '-X', 'POST', 'repos/Acme/Widgets/pulls/7/comments',
-      '-f', 'body=@/etc/passwd --flag', '-f', `commit_id=${SHA}`, '-f', 'path=src/a.ts', '-F', 'line=3', '-f', 'side=LEFT',
-    ]);
+    expect(gh(calls, 'api')[0].args).toEqual(['api', '--hostname', 'github.com', '-X', 'POST', 'repos/Acme/Widgets/pulls/7/comments', ...JSON_INPUT]);
+    expect(JSON.parse(gh(calls, 'api')[0].input ?? '')).toEqual({ body: '@/etc/passwd --flag', commit_id: SHA, path: 'src/a.ts', line: 3, side: 'LEFT' });
     await svc.reply('/r', KEY, 7, 99, 'thanks');
-    expect(gh(calls, 'api')[1].args).toEqual(['api', '--hostname', 'github.com', '-X', 'POST', 'repos/Acme/Widgets/pulls/7/comments/99/replies', '-f', 'body=thanks']);
+    expect(gh(calls, 'api')[1].args).toEqual(['api', '--hostname', 'github.com', '-X', 'POST', 'repos/Acme/Widgets/pulls/7/comments/99/replies', ...JSON_INPUT]);
+    expect(JSON.parse(gh(calls, 'api')[1].input ?? '')).toEqual({ body: 'thanks' });
+  });
+
+  const LONG = `-${'c'.repeat(39_999)}`;
+  it.each([
+    ['line comment', (svc: GhPrReviewService) => svc.comment('/r', KEY, 7, { expectHead: SHA, path: 'src/a.ts', line: 3, side: 'RIGHT', body: LONG })],
+    ['reply', (svc: GhPrReviewService) => svc.reply('/r', KEY, 7, 99, LONG)],
+    ['review', (svc: GhPrReviewService) => svc.submitReview('/r', KEY, 7, { expectHead: SHA, event: 'COMMENT', body: LONG })],
+  ])('a 40,000-character %s body goes on stdin, never argv', async (_site, send) => {
+    const { svc, calls } = make((a) => (a[1] === 'view' ? headJson() : '{}'));
+    await send(svc);
+    const posts = gh(calls, 'api');
+    expect(posts).toHaveLength(1);
+    expect(posts[0].args.join(' ').length).toBeLessThan(500);
+    expect(JSON.parse(posts[0].input ?? '').body).toBe(LONG);
   });
 });
 
