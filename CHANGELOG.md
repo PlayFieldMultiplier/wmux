@@ -1,5 +1,406 @@
 ## [Unreleased]
 
+## [4.11.0] — 2026-10-26
+
+### Added
+
+- **Pasting an invite says what comes next.** After a PC joins another with
+  its invite (Remote › Connect a PC › Paste an invite), the dialog now says
+  that the other PC chooses which panes it shows this one, or shares one from
+  a pane's menu. Before, it stopped at "Paired with …" and left the person to
+  find out why there was nothing to link. (#2678)
+
+- **Chat view asks once whether to show an agent as a chat.** The first time
+  Claude or Codex runs in a pane, a small card asks "Show this as a chat?"
+  (Show / Keep terminal). The answer is remembered for each agent. Before, the
+  chat view had to be found in Settings. Anyone who already set the chat view
+  option is never asked, and Settings can still change it. (#2680)
+
+- **Each chat view says which chat it is.** A small label reads
+  "Terminal-linked chat" or "Chat only", and hovering it explains the
+  difference. Before, the two looked alike. (#2680)
+
+- **A new agent pane from the phone can start in bypass or YOLO mode.**
+  `POST /api/sessions {agentLaunch}` now accepts the `mode` and `confirm`
+  that `chat/launch` takes, under the same rules: the agent's own mode only,
+  the transcript grant, the `wmux web --allow-dangerous-launch` ceiling and
+  the exact `<agent>:<mode>` confirm, with the same 403 and 428 refusals.
+  `/api/config` lists the allowed modes as `agentLaunchModes`. The mode
+  applies to that start only: a recovered pane comes back in the default
+  mode, and the desktop shows the same notice a dangerous chat launch raises.
+  Before this, the mode could be chosen only when launching into an
+  existing pane.
+
+- **wmux now says when an agent is signed out.** When Claude Code or Codex
+  loses its sign-in, wmux shows one notice for that agent and account, with
+  a Sign in again button that opens the agent's own sign-in. The workspace's
+  row reads "Signed out" until the account works again. This happens when a
+  turn fails on sign-in or when an agent starts on a signed-out account.
+  Before, a run in that state failed with a generic error or waited on the
+  agent's sign-in screen. (#2686)
+
+- **Continue a terminal Claude in chat.** On macOS and Linux, a Claude Code
+  conversation in a terminal pane can now move into the chat view and continue
+  there under the same session id. Before, a conversation could only move from
+  chat to the terminal. wmux first checks that Claude is idle: no turn running,
+  nothing waiting for approval, and no dialog or draft on screen. A
+  confirmation then lists the processes Claude started that stop with it.
+  wmux stops Claude and makes sure it has exited before the chat resumes the
+  conversation, so the two are never running it at the same time. If the move
+  fails after Claude was stopped, the terminal's Resume reopens the
+  conversation. A chat that was moved to the terminal can come back the same
+  way. (#2688)
+
+- **Drop a file or paste an image into another PC's pane.** On a pane
+  attached from another PC, a dropped file or a pasted image is uploaded to
+  that PC and its path there is typed into the pane, ready to send. That PC
+  must have Photo & file upload turned on; files other than JPEG and PNG need
+  it to run this version too. When something stops the send (uploads off, a
+  prompt waiting on the pane, a file over 10 MB, a full upload folder), a
+  notice says why and nothing is typed. (#2689)
+
+- **Continue a usage-limited conversation on another PC.** The usage-limit card
+  now lists the paired PCs that let this one start an agent there. Choosing one
+  opens the "Start an agent…" dialog with a note about the work as the first
+  prompt, replies going to the held pane, and a wait that ends before the limit
+  resets (four hours at most). Quoted parts of the note are fenced and marked
+  as reference only. The note never carries the transcript or local user and
+  machine names: in quoted text the folder, home folders, `file:` URLs and
+  network paths are replaced, and its file lists leave out paths outside the
+  folder and paths named like secrets. It masks values that look like secrets
+  while keeping branch names and paths readable. The other PC still decides,
+  with its own approval card. (#2694)
+
+- **A bot can run on Hermes Agent.** The bot profile has a new Engine line:
+  Claude (SDK) or Hermes. wmux runs its own Hermes, separate from any Hermes
+  you already use, so you pick a model and sign in once more there; the
+  profile opens that setup in a terminal tab. Before you switch, the profile
+  shows whether Hermes can run on this computer and the one step that fixes
+  it (get Hermes, set it up, add its MCP support, or update it). A Hermes bot
+  works with the wmux tools plus web search and a to-do list. It has no
+  shell, file, browser, memory or skills tools of its own. Commands Hermes
+  wants to run come to you as a Run card in the room. Stopping the bot
+  cancels its turn, and quitting wmux stops the Hermes process wmux started.
+  Hermes 0.22.x is supported. (#2699)
+
+- **Allow through firewall, from the Remote page.** When another PC cannot
+  reach this one, wmux now checks the firewall for you: the Remote page
+  (A2A), Settings > LAN (A2A and LanLink) and Share & pair (a phone server
+  started with "Expose to network") say when no firewall rule lets other PCs
+  reach the port, and offer **Allow through firewall**. On Windows it shows
+  one permission request (it names Windows PowerShell; none when wmux runs
+  as administrator) and adds two rules in
+  the group `wmux`, for the wmux program and that port only: allowed on
+  private networks from the local subnet (and Tailscale), blocked on public
+  networks. Domain networks are left to company policy. After a wmux update
+  the page says to allow the new version again. Cases a rule cannot fix are
+  explained instead: a network marked Public, a Block rule from an earlier
+  Windows prompt, Group Policy, "block all incoming connections", or another
+  firewall product, with **Copy details** for whoever manages the PC. When an
+  earlier Windows prompt allowed wmux on public networks, the page says so.
+  Remote > Details shows the firewall state with **Check firewall** and
+  **Remove**. Before, the host could not tell, and the other PC only saw a
+  timeout. (#2700)
+
+- **Rewind on the agent toolbar.** When the focused terminal runs Claude,
+  the agent toolbar now shows a Rewind button after Schedule. It opens
+  Claude's own Rewind picker, so you can put the code or the conversation
+  back to an earlier turn without asking the agent to undo its work. While
+  Claude is working the button is disabled and says why; a draft in
+  Claude's input or an open prompt is still explained when you click. The
+  pane menu's Rewind item stays, and the toolbar step of the tour now
+  mentions the button. (#2701)
+
+- **Continue in chat on Windows.** A Claude Code conversation running in a
+  PowerShell pane can now move into a chat in the same pane, as on macOS and
+  Linux: wmux stops Claude in the terminal, checks that it is gone, and the
+  chat resumes the same conversation. "Continue in Terminal" moves it back.
+  The move is refused, before anything is stopped, when the pane runs cmd.exe
+  (it cannot reopen the conversation afterwards; use PowerShell), when
+  `claude.exe` is not on the pane's PATH (an npm `claude.cmd` shim is not
+  enough), when another process holds the conversation, including a Claude or
+  Node process whose command line wmux cannot read, or when wmux cannot
+  confirm which processes belong to Claude. Processes Claude started after the
+  stop began are ended with it when they are provably its own; anything else
+  is left running, and the chat then says Claude may still be running so you
+  can reopen it with Resume. (#2702)
+
+- **wmux says when a Claude turn seems stuck.** When Claude in a terminal pane
+  is mid-turn but has stopped making progress in its transcript, has no tool running
+  and is not waiting on you, the pane's sidebar row reads "Seems stuck" and a
+  chip appears in its tab strip. The chip opens a card with **Stop and
+  prefill**, which interrupts the turn and puts your last prompt back into the
+  input without sending it, and **Keep waiting**, which asks again only after
+  twice as long for that turn. A system notification goes out once per stall.
+  Nothing is stopped on its own. The wait is 3 minutes while Claude's spinner
+  shows a token count that does not move outside a thinking phase, and 10
+  minutes otherwise, because thinking can run for minutes with nothing written
+  and no count moving. Long builds, tests and subagents never count as stuck.
+  Before, a hung turn looked exactly like a working one.
+
+- **Saved browser flows can include file uploads.** A flow saved with
+  `browser_replay` now keeps its upload steps. It stores a placeholder per
+  file (`{{file}}`, `{{file_2}}`, …), never the paths, so each run says which
+  files to send. The files must be under the uploads folder, the same rule as
+  a live upload; a path outside it stops the run before anything is sent.
+  (#2706)
+
+- **wmux says when a browser call used the shared default Chrome profile.**
+  A workspace with no Chrome profile runs its browser calls in `default`, one
+  profile every such workspace shares, which may not be signed in for the
+  work at hand. Its right-click Chrome profile submenu now offers the profile
+  you last used ("Use work (last used)") and names the default row "default
+  (shared by workspaces with no profile)". The first call that lands there in
+  a session shows a toast with the same offer, and a scheduled run that used
+  it says "Ran in the shared default Chrome profile" on its Schedules row.
+  Nothing is bound until you choose. Before, such a call opened a Chrome that
+  was often signed out, with no sign why.
+
+- **A bot waiting for your approval now reaches your phone.** When a bot asks
+  to merge a PR, push to the default branch, open or close an issue, comment,
+  or publish a release, a paired iPhone whose app supports it gets an
+  "Approval needed" notification naming the bot and the act, and opening it
+  takes you to that bot's conversation. The notification is replaced once the
+  request is decided, withdrawn or expires. Before, nothing was sent while a
+  bot waited, so a merge could sit unanswered until you came back to the
+  desktop.
+
+- **A Browser publish template for schedules.** The Schedules page offers a
+  template that sets up Claude with only the wmux browser tools a publishing
+  run needs, and asks you to pick the browser identity whose logged-in profile
+  it should use. When a Claude schedule runs in Auto or Bypass without a
+  browser identity, the form now says that browser tools are not included.
+  (#2710)
+
+- **A bot's question, login request or secret request now reaches your
+  phone.** A paired iPhone whose app supports it gets "<bot> needs you" with
+  a one-line summary (a question, which service to sign in to, or which
+  secret by name, never a value). Opening it takes you to that bot's
+  conversation, and the notification is replaced once the card is answered.
+
+- **Open the files a bot hands you, on your phone.** A bot's card in the
+  phone app now lists the files it attached (an image, a document, a video,
+  a spreadsheet), and the phone can open each one. Before, those files showed
+  only on the desktop's Bots page. Videos (`.mp4`, `.mov`, `.webm`) are also
+  typed as video now instead of an unknown file. A web page or vector image
+  is offered to save or share rather than shown in place.
+
+- **Bots' approved comments, issues and closes are carried out.** Before, an
+  approved request to comment on a PR or an issue, open an issue, or close an
+  issue was only recorded: the card said "wmux does not carry this act out
+  yet", and nothing reached GitHub. Now wmux does it with your gh login 10
+  seconds after you approve (Undo until then), after checking again that the
+  issue or PR is the same one, still open, and on a PR still at the head the
+  card showed. A bot can also ask to close a pull request without merging it.
+  The card shows the whole text a comment or an issue will publish, and only
+  the card's own Approve button (on the desktop or the phone) approves it:
+  typed words and "Approve N pending" approve merges and closes only. A phone
+  app too old to show an act, a close included, asks you to approve it on
+  the desktop. A try
+  interrupted by a crash or a timeout is checked on GitHub before anything is
+  sent again, so nothing is posted twice. A request a bot asked for before
+  this version stays recorded only. A push to a default branch is no longer
+  asked for; a release is still recorded only; on GitLab only merges are
+  carried out.
+
+- **Start a bot's new conversation.** A bot's profile on the Bots page now
+  has New conversation: the bot's next turn starts fresh, without what its
+  current conversation holds. When a bot says its conversation can't save a
+  routine, a job or a workflow because it read outside text, this is the
+  control it now points you to. Before, turning the bot off and on kept the
+  same conversation.
+
+### Changed
+
+- **Plainer approval note in the chat view.** It now reads "Waiting for your
+  approval." Its Answer in Terminal button switches to the terminal. The
+  Terminal / Chat switch is labelled "Show as chat". (#2680)
+
+- **Continue in another agent hands over a real memo.** When a pane stops at
+  its usage limit and you continue in another agent, the note typed into the
+  new agent used to name only who stopped and the last request. It now carries
+  the first request and the latest three, the end of the last reply, any plan
+  or todo files the agent wrote, the branch with its uncommitted changes in
+  `git diff --stat` form and a line asking to check them first, and the path
+  of the original conversation. It is built without any model call, and keys
+  and tokens are masked. The card previews the note and its length. An unsent
+  draft in the stopped agent's input goes in only if you tick it. The note is
+  still typed, never sent, and the two tabs name each other in their tooltips.
+  (#2681)
+
+- **Another PC's pane says when it cannot take a file.** Dropping a file on a
+  pane attached from another PC, or pasting an image into it, used to do
+  nothing. It now says this is not supported yet: the dropped path names a
+  file on this machine, and the pane pastes text only. (#2685)
+
+- **Scheduled runs check sign-in first.** A scheduled run whose account is
+  signed out is not started. It is listed as "signed out" instead of timing
+  out on the sign-in screen, and a run whose turn fails on sign-in reads
+  "signed out" instead of "agent error". (#2686)
+
+- **Uploads follow the input permission.** Photo and file uploads from a phone
+  or browser now also need permission to type, the same as every other write.
+  A device paired read-only no longer sees the upload button, and a request
+  from one is refused with the input routes' "read-only" message. With
+  **Allow input** off, the Remote popover's **Photo & file upload** reads off
+  and disabled with the reason, and `wmux web` says uploads need input. (#2687)
+
+- **A phone can't open a Claude Code or Codex pane on a signed-out account.**
+  Starting one from the phone used to give a pane stuck on the agent's
+  sign-in screen. Now the request is refused, and the computer shows its
+  "signed out" notice with Sign in again. If the sign-in can't be checked
+  within a few seconds, the pane opens as before. (#2691)
+
+- **"Start an agent…" sends the prompt only as shown.** When a prompt holds a
+  value that looks like a secret, Send first shows it masked for review; the
+  next Send sends exactly that. A retry after a failed send never starts a
+  second agent. (#2694)
+
+- **More credentials are masked in logs and outgoing text.** A URL's password
+  (`scheme://user:[redacted]@host`), a key-like user with no password, and
+  query parameters such as `access_token`, `api_key`, `password` and AWS
+  pre-signed signatures are now masked; a URL inside JSON or a log line no
+  longer runs into the text after it. (#2694)
+
+- **LanLink never listens on a Public network.** On Windows, LanLink now
+  reads the network type of the adapter you selected and opens its port only
+  when that network is Private or Domain. It reads the type again every
+  minute while listening and closes if the network turned Public; while
+  closed it checks again after 5 s, 15 s and then every minute, so it opens
+  once the network is Private or Domain. On a Public network, an adapter with
+  no network profile, or when the type cannot be read, it stays closed, and
+  Settings > LAN and the Remote page's LAN pairing say why in one line, with
+  what to change. Before, that check never ran. LanLink also no longer tries
+  to add Windows Firewall rules, which needed administrator rights wmux does
+  not have. macOS and Linux have no network type, so LanLink there keeps
+  listening on the adapter you select, and Settings says so. (#2696)
+
+- **A port that is in use says who holds it.** When a listener cannot open
+  its port, the Remote page, the Connect a PC invite, Settings > LAN and
+  Share & pair now name the program holding it (or another copy of wmux),
+  or say that Windows reserves the port, and offer **Use port N** with a
+  port that looked free. Share & pair remembers the port it moved to.
+  Before, A2A and Share & pair showed a raw error code such as
+  "EADDRINUSE", and LanLink showed nothing. (#2700)
+
+- **Timeouts point at the other PC's firewall check.** When the other PC
+  does not answer, the message now says to open Remote on that PC and use
+  Check firewall. (#2700)
+
+- **Open network settings goes to the network's own page on Windows.** When a
+  Public network keeps other PCs out, the button now opens that network's Wi-Fi
+  or Ethernet page in Windows Settings, where it can be set to Private. A PC
+  reachable over a Private network but not over a Public one now shows its own
+  row with that button, on the Remote page too. (#2705)
+
+- **A macOS update quits the agent Chrome the way an ordinary quit does.**
+  The install now waits for Chrome's own orderly close (at most 3 seconds)
+  before it restarts wmux, instead of signalling Chrome at once, so Chrome
+  shuts down cleanly with its tabs closed. wmux also logs when a Chrome does
+  not close in time and has to be stopped, which on Windows ends it hard.
+
+- **"Keep the computer awake" now also covers a connected phone.** In its
+  default "While working" mode, wmux keeps the computer from sleeping while an
+  agent is working or a paired phone is connected (or used wmux in the last
+  10 minutes), and lets it sleep 75 seconds after neither holds. The screen
+  can still turn off. The phone app can read the current state from
+  `/api/config` as `keepAwake`. (#2708)
+
+- **Downgrading turns bot approvals off until you upgrade again.** An older
+  wmux cannot read an approval request that closes a pull request, and stops
+  its approval store instead of dropping it.
+
+### Fixed
+
+- **Claude Code panes stop reading Running once a turn is over.** When Esc
+  stopped a Claude Code tool call, the sidebar could keep the pane Running for
+  up to two minutes if the Claude hooks had no prompt-submit hook, or if there
+  were no hooks at all. The pane now goes Idle as soon as Claude Code prints
+  its "Interrupted" row. With no hooks, a turn that finished on its own also
+  kept the pane Running: for up to two minutes on the session's first turn,
+  and until the next prompt on later turns. Such a pane now goes Idle a few
+  seconds after Claude Code's title shows the turn has ended. A pending
+  approval still stays on screen.
+
+- **The `wmux` command's output on Windows is no longer garbled or lost.** On a console using a non-UTF-8 code page, such as 949 on a Korean system, non-English text printed by `wmux` came out garbled; it now shows correctly. Redirecting one stream also made the other one vanish: with `> file`, `| more` or `> nul`, error messages never reached the screen, and with `2> file` the normal output did not. Whatever is not redirected now reaches the terminal, and redirected output is written as before (#2672).
+
+- **A relaunched Claude Code is no longer forgotten when its predecessor's
+  process exits.** After `/exit` and `claude` again in the same pane, wmux
+  could learn that the previous Claude had exited only after the new one had
+  started, and it then dropped the new one too. For the rest of that session
+  Esc and finished turns were not seen, so the pane could stay Running for
+  about two minutes. The late exit now ends only the process it belongs to.
+
+- **Starting Claude from the phone without a first message no longer hangs.**
+  The phone now reaches the new conversation as soon as Claude is at its
+  prompt, and the first message sent from the phone goes through. Before, the
+  phone stayed on "Starting Claude…" until someone typed in the terminal, and
+  the pane read "thinking" while Claude sat idle. (#2695)
+
+- **Stopping an agent on Windows no longer touches an unrelated older
+  process.** When a factory worker's agent was stopped, or a pane's agent was
+  stopped from the session, wmux ended the agent and every process it found
+  below it. Windows keeps a dead parent's process id on its children, and a new
+  agent can be given that same id, so a program started long before the agent
+  could be read as one of its children and ended with it. wmux now also checks
+  each process's start time: only a process started after its parent counts as
+  below the agent, and a process that took one of their ids while the agent
+  was exiting is never ended in its place. A process whose start time cannot
+  be read, or that started in the same millisecond as its parent, is left
+  running, and the stop then reports that something is still running instead
+  of claiming success. (#2703)
+
+- **The macOS firewall check no longer fails when one setting cannot be read.**
+  If the "allow signed software" setting cannot be read, the check still
+  answers from the firewall state and wmux's own listing. (#2705)
+
+- **Continue in Terminal works right after a move into chat.** After a Claude
+  conversation moved from the terminal into chat, going back could be refused
+  with "The terminal prompt is not empty" until you pressed Enter in the shell.
+  The keys typed into Claude before the move no longer count as unsent shell
+  input; keys typed after it still do. (#2711)
+
+- **Bots make files even when no bot has a repository.** Asking the
+  coordinator of such a workspace for card images or a document used to get
+  "rendering needs code and no bot has a repository". It now hands the work
+  to a worker in a scratch folder, and the files arrive on the bot's card.
+  That folder is now kept until the files are handed over (removed after
+  7 days, or with Clean up now) instead of going the moment the task ended.
+
+- **Bots ask for a workspace's repository once.** After you opened a
+  workspace on a folder, adding bots could ask for the repository again, and
+  then again in each bot's profile. wmux now remembers each workspace's
+  repository, or that you chose none, and later bots and teams there use it
+  without asking. The suggestion uses the folder you opened the workspace
+  on, and reads a WSL pane's folder correctly. When the folder cannot be
+  used, for example because it has no origin remote, the add form says why
+  and how to fix it, and offers it again once it is fixed. Add, Add team and
+  Start wait until the folder is checked, for ten seconds at most; if wmux
+  cannot check it, the form says so and the bot is made without a
+  repository. A remembered repository is checked again before a new bot
+  uses it, and is forgotten when the workspace is removed.
+  When a workspace first gets a repository, from an added bot, a team, the
+  first run or one bot's profile, its other bots that had none take it too.
+  A bot you added with no repository keeps none when a later bot uses the
+  workspace's repository.
+
+- **Files a bot's worker made reach you right away.** When a worker finished
+  with files for you (an image, a document, a video), they could sit unseen
+  until you asked the bot for them, most often when another bot had handed
+  it the work. The bot now posts them on a card in the same turn it hears
+  the task is done.
+
+- **The coordinator no longer starts a second fix for an issue already being
+  worked on.** When the owner asked the coordinator to handle an issue that
+  another bot had already opened a pull request for, the coordinator saw only
+  that the issue was still open and dispatched a developer, who opened a
+  duplicate pull request. Reading one issue now also returns the work already
+  under way on it: the open pull requests that close it, the open tasks on it
+  or on those pull requests, and the latest bot cards in its thread. The
+  coordinator reports that work, or sends the next step to the bot that owns
+  it, instead of starting new work. Reading a pull request also lists the open
+  tasks on it. On GitLab, linked merge requests are not read yet.
+
 ## [4.10.0] — 2026-10-24
 
 ### Added
