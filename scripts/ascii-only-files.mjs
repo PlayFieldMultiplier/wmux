@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// The ASCII-only step for the scripts esbuild writes or copy-bridge copies
-// straight to disk: the daemon, the CLI and its bridges, and the MCP server
-// (Vite builds use the plugin in scripts/lib/ascii-only-bundle.mjs instead).
+// The ASCII-only step for the bundles esbuild writes straight to disk: the
+// daemon, the CLI and the MCP server (Vite builds use the plugin in
+// scripts/lib/ascii-only-bundle.mjs instead).
 // esbuild's default charset already escapes strings, templates and
 // identifiers; this rewrites what it prints as written (comments, which an
 // unminified bundle keeps, and regex literals), then fails the build if a

@@ -8,7 +8,7 @@
 // Cross-platform: pure Node built-ins, no shell `cp`. Creates the destination
 // directory (mkdir -p equivalent) before copying.
 
-import { mkdirSync, existsSync } from 'node:fs';
+import { mkdirSync, copyFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildSync } from 'esbuild';
@@ -64,12 +64,7 @@ for (const { src, dest: destBasename } of bridges) {
     process.exit(1);
   }
   const dest = join(destDir, destBasename);
-  // Printed by esbuild (no bundling) rather than copied: its default ASCII
-  // charset escapes the strings, so each bridge starts as a one-byte source.
-  // The printed copy drops comments and folds constant string concatenation.
-  // An empty tsconfig keeps the repo's `strict` from adding "use strict" to a
-  // sloppy-mode script.
-  buildSync({ entryPoints: [src], outfile: dest, tsconfigRaw: {}, logLevel: 'error' });
+  copyFileSync(src, dest);
   console.log(`copy-bridge: ${src} -> ${dest}`);
 }
 
@@ -80,9 +75,8 @@ buildSync({
   outfile: join(destDir, 'wmux-wsl-codex-config.mjs'),
   bundle: true, platform: 'node', format: 'esm',
 });
-
-// The statusline and hook bridges start on every refresh and every hook, so
-// each keeps its source one-byte too; this fails the build if a character
-// above U+00FF is left (scripts/ascii-only-files.mjs). Only the copies change;
-// the sources in integrations/ stay as written.
-asciiOnlyFiles([...bridges.map(({ dest }) => join(destDir, dest)), join(destDir, 'wmux-wsl-codex-config.mjs')]);
+// Only this bundled file gets the ASCII-only step (scripts/ascii-only-files.mjs).
+// The bridges above stay byte-for-byte copies: the installers find a wmux-owned
+// copy by a marker in a source comment (src/shared/lifecycleIntegrations.ts),
+// and compare quota-sink.js byte for byte with its installed copy.
+asciiOnlyFiles([join(destDir, 'wmux-wsl-codex-config.mjs')]);
