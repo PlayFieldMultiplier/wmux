@@ -267,11 +267,14 @@ describe('useTerminal stale-replay reset wiring (source-level lock)', () => {
     // The resync completion path must include it (regression lock for PR-A).
     const resyncIdx = src.indexOf('const completeResyncFromFlush');
     expect(resyncIdx).toBeGreaterThan(-1);
-    // Window widened from 1200: the function gained the #998 comment block
-    // explaining why its buffer flush is muted, and the in-stream reset/END
-    // writes. The assertion is "the reset is in this function", not "within
-    // N characters of its opening brace".
-    expect(src.slice(resyncIdx, resyncIdx + 3400)).toMatch(/resetStaleReplayModes\(recoveredBytes\)/);
+    // The assertion is "the reset is in this function", not "within N
+    // characters of its opening brace": the window is the whole function, up
+    // to the next declaration, so comment blocks and other steps added to it
+    // (#998's muted flush, the in-stream reset/END writes, the scrollback
+    // bookmark carry) cannot push the call out of view.
+    const resyncEnd = src.indexOf('let firstDataFired', resyncIdx);
+    expect(resyncEnd).toBeGreaterThan(resyncIdx);
+    expect(src.slice(resyncIdx, resyncEnd)).toMatch(/resetStaleReplayModes\(recoveredBytes\)/);
   });
 
   it('pairs STALE_REPLAY_DISPLAY_RESETS with STALE_REPLAY_INPUT_MODE_RESETS at both call sites (frozen-scroll-window fix)', () => {
