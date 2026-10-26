@@ -3374,6 +3374,7 @@ export const en = {
   'settings.customAgentsIssue.model-in-use': '{by} pin a model to "{stem}", so its model flag cannot change. Clear those models first.',
   'settings.customAgentsIssue.unattended-in-use': '{by} run "{stem}" unattended, so its unattended flags cannot change. Turn Unattended off there first.',
   'settings.customAgentsKnownBy': 'Known by its process: {names}',
+  'settings.customAgentsNoLabel': 'Its name is an agent wmux knows, so its panes are not labelled with it',
   'settings.customAgentsProcessNames': 'Process names',
   'settings.customAgentsProcessNamesDesc': 'What wmux looks for to tell the agent is running. Defaults to the command\'s name.',
   'settings.customAgentsIssue.process-invalid': '"{process}" is not a program name. Use a name without folders.',

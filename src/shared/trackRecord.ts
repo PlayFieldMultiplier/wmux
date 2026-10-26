@@ -11,7 +11,9 @@
 // Everything here is pure: main (src/main/deck/trackRecordFeed.ts) feeds it
 // events and a clock, and owns the file (trackRecordStore.ts).
 
-import { AGENT_SLUG_SET, agentDisplayToSlug } from './agentIdentity';
+import { AGENT_IDENTITIES, AGENT_SLUG_SET } from './agentIdentity';
+
+const REGISTRY_DISPLAY_LOWER: ReadonlySet<string> = new Set(AGENT_IDENTITIES.map((a) => a.display.toLowerCase()));
 
 /** Weeks kept, the current one included. Older weeks are dropped. */
 export const TRACK_RETENTION_WEEKS = 12;
@@ -515,13 +517,11 @@ export function formatDuration(ms: number): string {
 
 /** An agent's display name as a slug (`Claude Code` → `claude`), or `-`. */
 export function agentSlug(name: string | null | undefined): string {
-  const trimmed = (name ?? '').trim();
-  const known = agentDisplayToSlug(trimmed);
-  if (known) return known;
-  const first = trimmed.toLowerCase().split(/\s+/)[0] ?? '';
+  const lower = (name ?? '').trim().toLowerCase();
+  const first = lower.split(/\s+/)[0] ?? '';
   const slug = first.replace(/[^a-z0-9-]/g, '').slice(0, 24);
   // A name that only starts like a registry agent ("Codex Mini", a custom
   // agent's label) is not that agent: its record is not that agent's.
-  if (AGENT_SLUG_SET.has(slug) && trimmed.toLowerCase() !== slug) return '-';
+  if (AGENT_SLUG_SET.has(slug) && lower !== slug && !REGISTRY_DISPLAY_LOWER.has(lower)) return '-';
   return slug || '-';
 }

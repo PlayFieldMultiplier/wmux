@@ -14,6 +14,7 @@ import {
   CUSTOM_AGENT_FLAG_MAX,
   CUSTOM_AGENT_NAME_MAX,
   customAgentLaunchLine,
+  customAgentLabelAllowed,
   customAgentProcessNames,
   customAgentStem,
   type CustomAgent,
@@ -246,7 +247,9 @@ function CustomAgentRow({
         {/* What gets launched: machine evidence, mono. */}
         <p className="ui-row-detail truncate font-mono">{customAgentLaunchLine(agent)}</p>
         <p className="ui-row-detail truncate" data-testid="custom-agent-unattended">
-          {t('settings.customAgentsKnownBy', { names: customAgentProcessNames(agent).join(', ') })}
+          {customAgentLabelAllowed(agent.name)
+            ? t('settings.customAgentsKnownBy', { names: customAgentProcessNames(agent).join(', ') })
+            : t('settings.customAgentsNoLabel')}
           {' · '}
           {agent.unattendedFlags
             ? t('settings.customAgentsUnattended', { flags: agent.unattendedFlags })

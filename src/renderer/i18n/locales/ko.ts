@@ -2876,6 +2876,7 @@ export const ko = {
   'settings.customAgentsIssue.model-in-use': '{by}에서 "{stem}"에 모델을 고정해 두어 모델 플래그를 바꿀 수 없습니다. 먼저 그 모델을 지우세요.',
   'settings.customAgentsIssue.unattended-in-use': '{by}에서 "{stem}"을(를) 무인 실행하고 있어 무인 실행 플래그를 바꿀 수 없습니다. 먼저 그쪽에서 무인 실행을 끄세요.',
   'settings.customAgentsKnownBy': '프로세스 이름: {names}',
+  'settings.customAgentsNoLabel': 'wmux가 아는 에이전트의 이름이라 페인에 이 이름을 붙이지 않습니다',
   'settings.customAgentsProcessNames': '프로세스 이름',
   'settings.customAgentsProcessNamesDesc': 'wmux가 에이전트 실행 여부를 판단할 때 찾는 이름입니다. 비우면 명령 이름을 씁니다.',
   'settings.customAgentsIssue.process-invalid': '"{process}"은(는) 프로그램 이름이 아닙니다. 폴더 없이 쓰세요.',

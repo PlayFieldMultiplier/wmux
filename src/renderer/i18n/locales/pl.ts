@@ -3348,6 +3348,7 @@ export const pl = {
   'settings.customAgentsIssue.model-in-use': '{by} przypina model do "{stem}", więc jego flagi modelu nie można zmienić. Najpierw usuń te modele.',
   'settings.customAgentsIssue.unattended-in-use': '{by} uruchamia "{stem}" bez nadzoru, więc jego flag trybu bez nadzoru nie można zmienić. Najpierw wyłącz tam ten tryb.',
   'settings.customAgentsKnownBy': 'Rozpoznawany po procesie: {names}',
+  'settings.customAgentsNoLabel': 'Jego nazwa należy do agenta, którego wmux zna, więc nie oznacza nią paneli',
   'settings.customAgentsProcessNames': 'Nazwy procesów',
   'settings.customAgentsProcessNamesDesc': 'Po tych nazwach wmux poznaje, że agent działa. Domyślnie nazwa polecenia.',
   'settings.customAgentsIssue.process-invalid': '"{process}" nie jest nazwą programu. Podaj nazwę bez folderów.',

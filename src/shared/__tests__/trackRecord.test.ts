@@ -210,6 +210,9 @@ describe('agentSlug', () => {
     expect(agentSlug('Claude Code')).toBe('claude');
     expect(agentSlug('Codex')).toBe('codex');
     expect(agentSlug('Codex CLI')).toBe('codex');
+    // Keys already on disk stay as they were.
+    expect(agentSlug('GitHub Copilot CLI')).toBe('github');
+    expect(agentSlug('claude code')).toBe('claude');
     // A custom agent's label that only starts like a registry agent is not it.
     expect(agentSlug('Codex Mini')).toBe('-');
     expect(agentSlug(null)).toBe('-');

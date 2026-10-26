@@ -48,15 +48,28 @@ export function loadCustomAgentsReport(dir?: string): CustomAgentsReport {
   if (hit && hit.mtimeMs === stat.mtimeMs && hit.size === stat.size) return hit.report;
   let report: CustomAgentsReport;
   try {
-    // The daemon reads this file too: an oversized one is unreadable, not parsed.
-    if (stat.size > CUSTOM_AGENTS_FILE_MAX) throw new Error('custom-agents.json is too large');
-    const raw = JSON.parse(fs.readFileSync(p, 'utf8')) as { agents?: unknown };
+    const raw = JSON.parse(readCapped(p)) as { agents?: unknown };
     report = normalizeCustomAgentsReport(raw?.agents, { platform: process.platform });
   } catch {
     report = { agents: [], dropped: [], unreadable: true };
   }
   cache.set(p, { mtimeMs: stat.mtimeMs, size: stat.size, report });
   return report;
+}
+
+/** The file's text, read through one descriptor so the size checked is the
+ *  size read. The daemon reads this file too: an oversized one is unreadable. */
+function readCapped(p: string): string {
+  const fd = fs.openSync(p, 'r');
+  try {
+    const size = fs.fstatSync(fd).size;
+    if (size > CUSTOM_AGENTS_FILE_MAX) throw new Error('custom-agents.json is too large');
+    const buf = Buffer.alloc(size);
+    const n = fs.readSync(fd, buf, 0, size, 0);
+    return buf.toString('utf8', 0, n);
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 export function loadCustomAgents(dir?: string): CustomAgent[] {
