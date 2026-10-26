@@ -13,7 +13,7 @@ import { validateMessage } from '../../../shared/types';
 import { EXECUTE_SEND_MAIN_TIMEOUT_MS } from '../../../shared/executeApprovalBounds';
 import { GATED_DELIVERY_DEADLINE_MARGIN_MS, GATED_NEW_TASK_SEND_MAIN_TIMEOUT_MS, NEW_TASK_SEND_MAIN_TIMEOUT_MS } from '../../../shared/freshContext';
 import { flagOrphanedTask, isPagedTaskQuery, pagedTaskId, shapeTaskQueryResult, summarizeTask, applyTaskQueryView } from '../../../shared/a2aTaskQueryView';
-import { defaultSnapshot } from '../../pty/portWatch';
+import { defaultSnapshot, snapshotWithDeadline, SNAPSHOT_DEADLINE_MS } from '../../pty/portWatch';
 import { claimTokenForPane, claimTokenForRun } from '../../workspace/workspaceClaimTrust';
 import { isIdentityRunPty, liveIdentityRunAnchors } from '../../automation/runIdentity';
 import type { PortSnapshot, SnapshotFn } from '../../pty/portWatch';
@@ -555,7 +555,9 @@ export function registerA2aRpc(
   let snapInflight: Promise<PortSnapshot> | null = null;
   async function getCoalescedSnapshot(): Promise<PortSnapshot | null> {
     if (!snapInflight) {
-      snapInflight = snapshotFn().finally(() => { snapInflight = null; });
+      // Bounded, so a snapshot child that never exits frees the slot for the
+      // next handshake instead of every later one joining it forever.
+      snapInflight = snapshotWithDeadline(snapshotFn(), SNAPSHOT_DEADLINE_MS).finally(() => { snapInflight = null; });
     }
     try {
       return await snapInflight;

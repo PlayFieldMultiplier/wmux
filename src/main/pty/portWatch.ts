@@ -140,6 +140,20 @@ export async function defaultSnapshot(): Promise<PortSnapshot> {
 }
 
 /**
+ * Reject if `pending` has not settled within `ms`; the timer is cleared either
+ * way. The caller's failure path then runs instead of waiting on a snapshot
+ * whose child may never exit.
+ */
+export function snapshotWithDeadline(pending: Promise<PortSnapshot>, ms: number): Promise<PortSnapshot> {
+  let deadline: NodeJS.Timeout | undefined;
+  const expired = new Promise<never>((_, reject) => {
+    deadline = setTimeout(() => reject(new Error('snapshot deadline exceeded')), ms);
+    deadline.unref?.();
+  });
+  return Promise.race([pending, expired]).finally(() => clearTimeout(deadline));
+}
+
+/**
  * Match a snapshot against a set of session root PIDs. Exported for the
  * daemon wiring and unit tests — pure, no I/O.
  */
@@ -309,11 +323,6 @@ export class PortWatcher extends EventEmitter {
       if (this.outstanding === pending) this.outstanding = null;
     };
     pending.then(clear, clear);
-    let deadline: NodeJS.Timeout | undefined;
-    const expired = new Promise<never>((_, reject) => {
-      deadline = setTimeout(() => reject(new Error('snapshot deadline exceeded')), SNAPSHOT_DEADLINE_MS);
-      deadline.unref?.();
-    });
-    return Promise.race([pending, expired]).finally(() => clearTimeout(deadline));
+    return snapshotWithDeadline(pending, SNAPSHOT_DEADLINE_MS);
   }
 }
