@@ -99,6 +99,8 @@ const SENTENCES: Readonly<Record<string, string>> = {
   'checks-pending': 'A check on the commit is still running',
   'checks-not-started': 'No check has started on this commit yet. If it is not the branch head, its checks may never run: ask for the head instead',
   'tag-made-not-published': 'The tag was made, but publishing the release did not go through',
+  'draft-gone': 'Its draft release was deleted on {host}, so nothing was published',
+  'tag-name-is-branch': 'A branch on {host} has the same name as the tag',
   // What became of a release's draft, after the reason it was refused.
   'draft-kept-tag-made': 'The tag was already made: its draft release is kept on {host} for you to publish or delete',
   'draft-kept-unchecked': 'Whether the tag was made could not be checked: its draft release is kept on {host} for you to publish or delete',

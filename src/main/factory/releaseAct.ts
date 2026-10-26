@@ -314,6 +314,9 @@ const CONCLUSION_OK: ReadonlySet<string> = new Set(['success', 'neutral', 'skipp
 
 type Run = { status: string; conclusion: string | null };
 
+/** A workflow run: a check, with the event and the ref it ran for. */
+type WorkflowRun = Run & { event: string; branch: string };
+
 /** The latest attempt of each workflow's runs (by workflow, then the newest
  *  run, then its latest attempt). Pure. */
 export function latestPerWorkflow<T extends { workflowId: string; id: number; attempt: number }>(runs: readonly T[]): T[] {
@@ -327,17 +330,19 @@ export function latestPerWorkflow<T extends { workflowId: string; id: number; at
 
 /** The verdict over what GitHub listed: check runs, the combined status, and
  *  the latest run of each workflow (a queued run has no check run yet).
- *  `expected`: a push to the default branch surely ran a workflow, so a
- *  commit with nothing at all has not started its checks. Pure. */
-export function checksVerdict(o: { runs: readonly Run[]; status: { state: string; total: number }; workflowRuns: readonly Run[]; expected: boolean }): ReleaseChecks {
+ *  `expected`: a push to the default branch (`branch`) surely ran a
+ *  workflow, so with no push run on that branch the commit has not started
+ *  its checks, whatever other checks passed (a bot's, a deploy preview's).
+ *  Pure. */
+export function checksVerdict(o: { runs: readonly Run[]; status: { state: string; total: number }; workflowRuns: readonly WorkflowRun[]; expected: boolean; branch: string }): ReleaseChecks {
   const bad = (r: Run): boolean => r.status === 'completed' && !CONCLUSION_OK.has(r.conclusion ?? '');
   const running = (r: Run): boolean => r.status !== 'completed';
   // GitHub answers `pending` for a commit with no statuses: read the count.
   const statuses = o.status.total > 0;
   if (o.runs.some(bad) || o.workflowRuns.some(bad) || (statuses && (o.status.state === 'failure' || o.status.state === 'error'))) return 'failed';
   if (o.runs.some(running) || o.workflowRuns.some(running) || (statuses && o.status.state !== 'success')) return 'running';
-  if (o.runs.length > 0 || o.workflowRuns.length > 0 || statuses) return 'passed';
-  return o.expected ? 'not-started' : 'none';
+  if (o.expected && !o.workflowRuns.some((r) => r.event === 'push' && r.branch === o.branch)) return 'not-started';
+  return o.runs.length > 0 || o.workflowRuns.length > 0 || statuses ? 'passed' : 'none';
 }
 
 /** The run-time refusal for a verdict, or null. Pure. */
@@ -484,6 +489,17 @@ export async function readBranchHead(gh: GhActPort, p: RepoPath, branch: string)
   if (!a.ok) return failed(a);
   const o = rec(rec(a.value)?.object);
   return o?.type === 'commit' && FULL_SHA_RE.test(str(o.sha)) ? str(o.sha) : unreadable('the branch head could not be read');
+}
+
+/** Whether a branch has this name (a ref segment, RELEASE_TAG_RE): its
+ *  runs and suites would read as the tag's. */
+export async function readBranchNamed(gh: GhActPort, p: RepoPath, name: string): Promise<Read<boolean>> {
+  const a = await gh.read(p.host, `${p.base}/git/ref/heads/${name}`);
+  if (!a.ok) return a.kind === 'http' && a.status === 404 ? false : failed(a);
+  // Refs that only start with the name: the exact one, or none.
+  if (Array.isArray(a.value)) return (a.value as unknown[]).some((r) => rec(r)?.ref === `refs/heads/${name}`);
+  const ref = rec(a.value);
+  return ref ? ref.ref === `refs/heads/${name}` : unreadable('GitHub answered something that is not a ref');
 }
 
 /** Whether `sha` names a commit: true, false (GitHub's 404 or 422), or why not known. */
@@ -654,7 +670,8 @@ export async function readDisabledWorkflow(gh: GhActPort, p: RepoPath, workflows
  *  of the act's own tag (`ownTag`): pushing it runs its own workflows there,
  *  which are the release, not its checks. The combined status cannot be
  *  told apart by ref: all of it counts. */
-export async function readChecks(gh: GhActPort, p: RepoPath, sha: string, ownTag: string, expected: boolean): Promise<Read<ReleaseChecks>> {
+export async function readChecks(gh: GhActPort, p: RepoPath, sha: string, o: { ownTag: string; branch: string; expected: boolean }): Promise<Read<ReleaseChecks>> {
+  const { ownTag, branch, expected } = o;
   const run = (v: unknown): Run => {
     const r = rec(v);
     return { status: str(r?.status), conclusion: typeof r?.conclusion === 'string' ? r.conclusion : null };
@@ -698,13 +715,15 @@ export async function readChecks(gh: GhActPort, p: RepoPath, sha: string, ownTag
   const runs = listed.map(rec).filter((r) => r?.head_branch !== ownTag);
   const latest = latestPerWorkflow(runs.map((r) => ({
     ...run(r),
+    event: str(r?.event),
+    branch: str(r?.head_branch),
     // Each workflow's runs per event and ref: a later run of another event
     // does not hide a failed one.
     workflowId: `${String(r?.workflow_id ?? r?.id ?? '')}\u0000${str(r?.event)}\u0000${str(r?.head_branch)}`,
     id: typeof r?.id === 'number' ? r.id : 0,
     attempt: typeof r?.run_attempt === 'number' ? r.run_attempt : 1,
   })));
-  return checksVerdict({ runs: counted, status: { state: str(sv.state), total: sv.total_count }, workflowRuns: latest, expected });
+  return checksVerdict({ runs: counted, status: { state: str(sv.state), total: sv.total_count }, workflowRuns: latest, expected, branch });
 }
 
 /** The Actions page of the runs the pushed tag starts: a link that needs no
@@ -812,6 +831,9 @@ export async function readReleaseAsk(gh: GhActPort, repoKey: string, input: Rele
   const taken = await readTagTarget(gh, p, tag);
   if (isFail(taken)) return unread(`the tag ${tag}`, taken);
   if (taken !== null) return no('tag-taken', `the tag ${tag} already exists`);
+  const branchNamed = await readBranchNamed(gh, p, tag);
+  if (isFail(branchNamed)) return unread(`the branch ${tag}`, branchNamed);
+  if (branchNamed) return no('tag-name-is-branch', `a branch is named ${tag}: its checks would read as the tag's; pick another tag`);
   const all = await readReleases(gh, p);
   if (isFail(all)) return unread('the releases', all);
   const listed = all.find((r) => r.tagName === tag);
@@ -854,7 +876,7 @@ export async function readReleaseAsk(gh: GhActPort, repoKey: string, input: Rele
     version = read.version;
   }
   const expected = checksExpected(workflows, defaultBranch);
-  const checks = await readChecks(gh, p, targetSha, tag, expected);
+  const checks = await readChecks(gh, p, targetSha, { ownTag: tag, branch: defaultBranch, expected });
   if (isFail(checks)) return unread('the checks', checks);
   const prerelease = input.prerelease ?? shape ?? false;
   return {
@@ -890,12 +912,23 @@ export async function releasePrecondition(gh: GhActPort, p: RepoPath, act: Appro
   if (isFail(all)) return stop(readRefusal(all, 'repo-changed'));
   const same = all.filter((r) => r.tagName === act.tagName);
   const own = act.mode === 'release' ? same.find((r) => ownDraft(r, act, login, draftId, wroteBefore)) ?? null : null;
+  const branchNamed = await readBranchNamed(gh, p, act.tagName);
+  if (isFail(branchNamed)) return stop(readRefusal(branchNamed, 'tag-name-is-branch'), own);
+  if (branchNamed) return stop('tag-name-is-branch', own);
   if (tag !== null && !tagIsOurs(act, tag, own)) return stop('tag-taken', own);
   if (same.some((r) => r !== own)) return stop('release-exists', own);
   // None other listed: GitHub's answer for the tag itself, in case the listing lags.
   const published = await readReleaseByTag(gh, p, act.tagName);
   if (isFail(published)) return stop(readRefusal(published, 'release-exists'), own);
   if (published) return stop('release-exists', own);
+  // The draft the row journaled is not this act's draft any more: deleted on
+  // GitHub (the owner cancelled it), or changed. No draft is made in its place.
+  if (act.mode === 'release' && draftId !== undefined && !own) {
+    if (all.some((r) => r.id === draftId)) return stop('found-different');
+    const gone = await gh.read(p.host, `${p.base}/releases/${draftId}`);
+    // There after all: the listing was late, and a later try reads again.
+    return stop(gone.ok ? 'read-failed' : readRefusal(failed(gone), 'draft-gone'));
+  }
   // The draft this act made was changed on GitHub since: not what was approved.
   if (own && !sameDraft(own, act)) return stop('found-different', own);
   if (act.mode === 'workflow') {
@@ -913,7 +946,7 @@ export async function releasePrecondition(gh: GhActPort, p: RepoPath, act: Appro
     if (isFail(workflows)) return stop(readRefusal(workflows, 'workflow-unreadable'), own);
     expected = checksExpected(workflows, act.defaultBranch);
   }
-  const checks = await readChecks(gh, p, act.targetSha, act.tagName, expected);
+  const checks = await readChecks(gh, p, act.targetSha, { ownTag: act.tagName, branch: act.defaultBranch, expected });
   if (isFail(checks)) return stop(readRefusal(checks, 'checks-failing'), own);
   const why = checksRefusal(checks);
   return why ? stop(why, own) : { refusal: null, draft: own };

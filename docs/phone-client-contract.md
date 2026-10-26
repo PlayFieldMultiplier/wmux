@@ -5214,7 +5214,10 @@ published on a tag that was made elsewhere meanwhile ends `refused` with
 `release-by-other`, and one published with another name or notes than the
 card's with `found-different`. A release whose publish made its tag but
 whose tries ran out with the release still a draft ends `refused` with
-`tag-made-not-published`. Any act whose GitHub answer had a shape the desktop
+`tag-made-not-published`. A release whose draft was deleted on GitHub before
+it was published ends `refused` with `draft-gone` (nothing is published, and
+no new draft is made), and one whose tag name is also a branch's with
+`tag-name-is-branch`. Any act whose GitHub answer had a shape the desktop
 cannot read ends `refused` with `unreadable-answer`.
 
 `refusal` may be a list of codes joined by `, `; show one sentence per code.
