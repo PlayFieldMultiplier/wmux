@@ -316,10 +316,39 @@ function customOnly(state: { slug?: AgentSlug; custom?: string }): boolean {
   return state.custom !== undefined && state.slug === undefined;
 }
 
-/** Shells, runtimes and package runners a custom agent may run under
- *  (`sh /usr/local/bin/tern`, `python3.12 /opt/tern.py`, `npx -y tern`), with
- *  any version suffix. */
-const SCRIPT_HOST_RE = /^(sh|bash|zsh|dash|fish|node|nodejs|bun|deno|python|pythonw|pypy|npx|npx-cli|bunx|yarn|uvx|pipx)[\d.]*$/;
+/** Runtimes and package runners a custom agent may run under
+ *  (`python3.12 /opt/tern.py`, `npx -y tern`), with any version suffix. */
+const SCRIPT_HOST_RE = /^(node|nodejs|bun|deno|python|pythonw|pypy|npx|npx-cli|bunx|yarn|uvx|pipx)[\d.]*$/;
+/** Shells that run a wrapper script (`sh /usr/local/bin/tern`). */
+const SHELL_HOST_RE = /^(sh|bash|zsh|dash|fish)$/;
+
+/** What a host image runs, as candidate tokens: a shell's script or the
+ *  program its `-c` command starts with, cmd's `/c` program, PowerShell's
+ *  `-File`, or a runtime's script slot under resolveAgentSlug's discipline. */
+function hostedCandidates(stem: string, cmdline: string | undefined): string[] {
+  if (!cmdline) return [];
+  const argv = tokenizeCmdline(cmdline);
+  if (stem === 'cmd') {
+    // `cmd /d /s /c "C:\Tools\tern.cmd --fast"`: the first word after /c or /k.
+    const at = argv.findIndex((t) => /^\/[ck]$/i.test(t));
+    return at >= 0 ? tokenizeCmdline(argv.slice(at + 1).join(' ')).slice(0, 1) : [];
+  }
+  if (stem === 'pwsh' || stem === 'powershell') {
+    const at = argv.findIndex((t) => /^-f(ile)?$/i.test(t));
+    return at >= 0 && argv[at + 1] ? [argv[at + 1]] : [];
+  }
+  if (SHELL_HOST_RE.test(stem)) {
+    // `sh -c '/opt/tern/bin/tern --fast'` runs its first word; a word of
+    // `tail -f /var/log/tern` is not the program.
+    for (const [i, t] of argv.entries()) {
+      if (i === 0) continue;
+      if (!t.startsWith('-')) break;
+      if (/^-[A-Za-z]*c/.test(t)) return tokenizeCmdline(argv[i + 1] ?? '').slice(0, 1);
+    }
+    return scriptCandidates(cmdline);
+  }
+  return SCRIPT_HOST_RE.test(stem) ? scriptCandidates(cmdline) : [];
+}
 
 /**
  * The custom-agent process name `entry` runs as: its image name, or, for a
@@ -331,12 +360,11 @@ function customNameOf(entry: ProcessTreeEntry, names: { has(name: string): boole
   if (!names) return undefined;
   const stem = customProcessNameForm(entry.name);
   if (names.has(stem)) return stem;
-  if (!SCRIPT_HOST_RE.test(stem)) return undefined;
-  // The same candidates resolveAgentSlug reads: the script slot in PATH form,
-  // a runner's or `python -m`'s package, and a `node_modules/<pkg>` boundary
-  // (an npm-installed CLI runs as `node …/node_modules/tern/bin/cli.js`).
-  for (const c of scriptCandidates(entry.cmdline)) {
-    if (isScopedCandidate(c)) continue;
+  // For a runtime, the same candidates resolveAgentSlug reads: the script slot
+  // in PATH form, a runner's or `python -m`'s package, and a
+  // `node_modules/<pkg>` boundary (`node …/node_modules/tern/bin/cli.js`).
+  for (const c of hostedCandidates(stem, entry.cmdline)) {
+    if (isScopedCandidate(c) || (!/[\\/]/.test(c) && !SCRIPT_HOST_RE.test(stem))) continue;
     const form = customProcessNameForm(c);
     if (names.has(form)) return form;
   }
@@ -373,7 +401,7 @@ export function selectAgentProcess(
   /** The operator's custom-agent process names (CustomAgentNames). Matched
    *  only where no registry agent is found: a registry agent inside a custom
    *  wrapper keeps its name. */
-  customNames?: { has(name: string): boolean },
+  customNames?: ReadonlyMap<string, string>,
 ): AgentProcessPick | undefined {
   const byParent = new Map<number, ProcessTreeEntry[]>();
   for (const e of entries) {
@@ -425,7 +453,8 @@ export function selectAgentProcess(
           if (!custom || childDepth < custom.depth) {
             custom = { pid: child.pid, depth: childDepth, name };
             customAmbiguous = false;
-          } else if (childDepth === custom.depth && name !== custom.name) {
+          } else if (childDepth === custom.depth && customNames?.get(name) !== customNames?.get(custom.name)) {
+            // Compared by agent: two process names of one agent are not a tie.
             customAmbiguous = true;
           }
         } else if (RUNTIME_STEMS.has(stem) && (!sluglessRuntime || childDepth < sluglessRuntime.depth)) {
@@ -704,6 +733,9 @@ interface TrackedAgent {
   slug?: AgentSlug;
   /** A custom agent's process name (AgentProcessPick.custom). */
   custom?: string;
+  /** The custom agent whose wrapper started this registry agent as a child;
+   *  it is tracked again if it outlives the agent. */
+  wrapper?: { pid: number; custom: string };
   /** #1727 — set for an agent inside a WSL pane: `pid` is a LINUX pid, and
    *  this says where it lives and how to tell it from a reused one. */
   wsl?: WslWatchedAgent;
@@ -996,10 +1028,19 @@ export class AgentProcessTracker {
         // started or exec'd one (`exec codex`, same pid). The custom pick
         // carried no slug, so no agent ended; otherwise it stays as it was.
         const tracked = this.states.get(sessionId);
+        let wrapper: { pid: number; custom: string } | undefined;
         if (tracked?.alive && customOnly(tracked) && entries.some((e) => e.pid === tracked.pid)) {
-          if (!pick?.slug) return;
+          if (!pick?.slug) {
+            // arm() probes through a live custom agent; a miss backs it off
+            // like any other, so a chatty banner cannot list processes per event.
+            if (!requireSlug) this.lastFailedAt.set(sessionId, Date.now());
+            return;
+          }
           this.watcher.unwatch(AgentProcessTracker.watchKey(sessionId));
           tracked.alive = false;
+          // A child of the wrapper (not an exec): the wrapper gets its label
+          // back when that agent exits first.
+          if (pick.pid !== tracked.pid && tracked.custom) wrapper = { pid: tracked.pid, custom: tracked.custom };
         }
         if (requireSlug) {
           const cur = this.states.get(sessionId);
@@ -1035,7 +1076,7 @@ export class AgentProcessTracker {
           return;
         }
         this.commitPick(sessionId, pick, observedAt,
-          identity ? (identity.isCurrent() ? (ownsSnapshot ? identity.epoch : undefined) : null) : undefined, replaced);
+          identity ? (identity.isCurrent() ? (ownsSnapshot ? identity.epoch : undefined) : null) : undefined, replaced, wrapper);
       } catch {
         // Enumeration failed (timeout, spawn error) — undecided, never a lie.
         if (requireSlug) this.slugProbeBlockedUntil.set(sessionId, Date.now() + ARM_BACKOFF_MS);
@@ -1060,11 +1101,19 @@ export class AgentProcessTracker {
   }
 
   /** Track `pick` as the pane's agent: watch it and report its launch edge. */
-  private commitPick(sessionId: string, pick: AgentProcessPick, observedAt: number, identityEpoch: number | null | undefined, replacedLive: boolean): void {
+  private commitPick(
+    sessionId: string,
+    pick: AgentProcessPick,
+    observedAt: number,
+    identityEpoch: number | null | undefined,
+    replacedLive: boolean,
+    wrapper?: { pid: number; custom: string },
+  ): void {
     const launchSeq = this.launchCounter?.(sessionId);
     this.states.set(sessionId, {
       pid: pick.pid,
       alive: true,
+      ...(wrapper ? { wrapper } : {}),
       ...(pick.slug ? { slug: pick.slug } : {}),
       ...(pick.custom ? { custom: pick.custom } : {}),
       ...(launchSeq !== undefined ? { launchSeq } : {}),
@@ -1097,6 +1146,21 @@ export class AgentProcessTracker {
     if (!dead || dead.pid !== pid || !dead.alive) return;
     dead.alive = false;
     const reportDeath = (): void => this.emitState(sessionId, { ...(dead.slug ? { slug: dead.slug } : {}), alive: false });
+    const wrapper = dead.wrapper;
+    if (wrapper) {
+      reportDeath();
+      const gen = this.generation.get(sessionId) ?? 0;
+      void this.enumerate().then(
+        (entries) => {
+          if ((this.generation.get(sessionId) ?? 0) !== gen || this.states.get(sessionId) !== dead) return;
+          if (entries.some((e) => e.pid === wrapper.pid)) {
+            this.commitPick(sessionId, { pid: wrapper.pid, custom: wrapper.custom }, Date.now(), undefined, false);
+          }
+        },
+        () => undefined,
+      );
+      return;
+    }
     const shellPid = this.shellPids.get(sessionId);
     const launches = this.launchCounter?.(sessionId);
     if (shellPid === undefined || !dead.slug || dead.launchSeq === undefined || launches === undefined || launches <= dead.launchSeq) {

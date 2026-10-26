@@ -303,10 +303,13 @@ export function normalizeCustomAgent(
   if (!BARE_COMMAND_RE.test(stem) || stem.length > CUSTOM_AGENT_STEM_MAX) {
     return fail(issue('command-invalid', { name, command: shown }, `"${name}": command must be a program name or an absolute path`));
   }
-  if (REGISTRY_NAMES.has(stem)) {
+  // The process name it is tracked by by default must pass the same checks:
+  // `node.js` runs as `node`, and would claim every node process.
+  const tracked = customProcessNameForm(stem);
+  if (REGISTRY_NAMES.has(stem) || REGISTRY_NAMES.has(tracked)) {
     return fail(issue('command-known', { name, stem }, `"${name}": "${stem}" is an agent wmux already knows`));
   }
-  if (isGenericCommand(stem)) {
+  if (isGenericCommand(stem) || isGenericCommand(tracked)) {
     return fail(issue('command-generic', { name, stem }, `"${name}": "${stem}" runs other programs; use a wrapper on PATH that starts the agent`));
   }
 

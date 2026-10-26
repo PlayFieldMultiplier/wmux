@@ -537,14 +537,74 @@ describe('AgentProcessTracker', () => {
     expect(tracker.identityFor('s1')).toEqual({ custom: 'tern', alive: true });
     expect(listener).not.toHaveBeenCalled();
 
-    // `exec codex`: the same pid now runs codex. The banner's arm names it.
+    // `exec codex`: the same pid now runs codex. The banner's forced probe
+    // names it, past the backoff the fruitless arm above left.
     table = [entry(200, SHELL, 'codex')];
     tracker.arm('s1', SHELL);
+    await flush();
+    expect(tracker.identityFor('s1')).toEqual({ custom: 'tern', alive: true });
+    tracker.rearm('s1', SHELL);
     await flush();
     expect(tracker.identityFor('s1')).toEqual({ slug: 'codex', alive: true });
     expect(tracker.customAgentNameFor('s1')).toBeUndefined();
     expect(listener).toHaveBeenCalledTimes(1);
     expect(listener).toHaveBeenCalledWith('s1', { slug: 'codex', alive: true, observedAt: expect.any(Number) });
+  });
+
+  it('a custom wrapper is tracked again when the registry agent it started exits first', async () => {
+    const watcher = makeWatcher();
+    const listener = vi.fn();
+    let table = [entry(200, SHELL, 'tern'), entry(201, 200, 'claude')];
+    const tracker = new AgentProcessTracker(watcher, async () => table);
+    tracker.setStateChangeListener(listener);
+    tracker.setCustomAgentNames(() => new Map([['tern', 'Tern']]));
+    table = [entry(200, SHELL, 'tern')];
+    tracker.armIfAgent('s1', SHELL);
+    await flush();
+    table = [entry(200, SHELL, 'tern'), entry(201, 200, 'claude', 'claude -p hi')];
+    tracker.arm('s1', SHELL);
+    await flush();
+    expect(tracker.identityFor('s1')).toEqual({ slug: 'claude', alive: true });
+    listener.mockClear();
+    table = [entry(200, SHELL, 'tern')];
+    watcher.watches.get('agent:s1')?.onDead();
+    await flush();
+    expect(listener).toHaveBeenNthCalledWith(1, 's1', { slug: 'claude', alive: false });
+    expect(tracker.identityFor('s1')).toEqual({ custom: 'tern', alive: true });
+    expect(tracker.customAgentNameFor('s1')).toBe('Tern');
+  });
+
+  it('a hook or banner arm on a custom pane that finds no registry agent backs off', async () => {
+    const watcher = makeWatcher();
+    let listings = 0;
+    const tracker = new AgentProcessTracker(watcher, async () => {
+      listings++;
+      return [entry(200, SHELL, 'tern')];
+    });
+    tracker.setCustomAgentNames(() => new Map([['tern', 'Tern']]));
+    tracker.armIfAgent('s1', SHELL);
+    await flush();
+    tracker.arm('s1', SHELL);
+    await flush();
+    const after = listings;
+    tracker.arm('s1', SHELL);
+    tracker.arm('s1', SHELL);
+    await flush();
+    expect(listings).toBe(after);
+    expect(tracker.identityFor('s1')).toEqual({ custom: 'tern', alive: true });
+  });
+
+  it('selectAgentProcess reads a shell, cmd or PowerShell wrapper, never an inline command, and ties by agent', () => {
+    const names = new Map([['tern', 'Tern'], ['tern-daemon', 'Tern']]);
+    const pick = (image: string, cmdline: string) => selectAgentProcess([entry(200, SHELL, image, cmdline)], SHELL, names);
+    expect(pick('bash', 'bash -c "tail -f /var/log/tern"')).toEqual({ pid: 200 });
+    expect(pick('sh', "sh -lc 'make -C /home/u/src/tern'")).toEqual({ pid: 200 });
+    expect(pick('bash', 'bash /usr/local/bin/tern -c x')).toEqual({ pid: 200, custom: 'tern' });
+    expect(pick('sh', "sh -c '/opt/tern/bin/tern --fast'")).toEqual({ pid: 200, custom: 'tern' });
+    expect(pick('cmd.exe', 'cmd.exe /d /s /c "C:\\Tools\\tern.cmd --fast"')).toEqual({ pid: 200, custom: 'tern' });
+    expect(pick('pwsh.exe', 'pwsh.exe -NoProfile -File C:\\Tools\\tern.ps1')).toEqual({ pid: 200, custom: 'tern' });
+    // Two process names of one agent at one depth: that agent, not a tie.
+    expect(selectAgentProcess([entry(200, SHELL, 'tern'), entry(201, SHELL, 'tern-daemon')], SHELL, names)).toEqual({ pid: 200, custom: 'tern' });
   });
 
   it('the command-start retry finds the registry agent a custom wrapper starts late', async () => {

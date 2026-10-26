@@ -184,7 +184,11 @@ describe('detectorSuppressedBy (#919 detector veto)', () => {
 describe('reportedAgentName (#1303 no-banner sessions)', () => {
   it('names a live custom agent when no registry agent is canonical, over the screen', () => {
     // "Tern" is a made-up CLI the operator defined.
-    expect(reportedAgentName({ rawName: 'Claude Code', screenSlug: 'claude', customName: 'Tern' })).toBe('Tern');
+    // Through the real tier rule: a live custom process leaves no screen-tier
+    // identity, so neither the label nor the persisted slug is the banner's.
+    const canonical = resolveCanonicalAgentIdentity({ proc: { custom: 'tern', alive: true }, screenSlug: 'claude' });
+    expect(canonical).toBeUndefined();
+    expect(reportedAgentName({ rawName: 'Claude Code', screenSlug: 'claude', canonical, customName: 'Tern' })).toBe('Tern');
     expect(reportedAgentName({ rawName: undefined, screenSlug: undefined, customName: 'Tern' })).toBe('Tern');
     // A canonical registry agent keeps its own name.
     expect(reportedAgentName({

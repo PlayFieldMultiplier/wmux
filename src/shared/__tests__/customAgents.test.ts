@@ -193,6 +193,11 @@ describe('process names, review', () => {
     for (const name of ['Claude Code', 'claude code', 'codex']) expect(code({ name, command: 'tern' })).toBe('name-known');
   });
 
+  it('checks the process name a command is tracked by, not only its stem', () => {
+    expect(code({ name: 'Tern', command: 'node.js' })).toBe('command-generic');
+    expect(code({ name: 'Tern', command: '/opt/bin/claude.py' })).toBe('command-known');
+  });
+
   it('keeps an agent\'s own command name for it, even with other process names listed', () => {
     const r = validateCustomAgents([
       { name: 'Tern', command: 'tern', processNames: ['tern-d'] },

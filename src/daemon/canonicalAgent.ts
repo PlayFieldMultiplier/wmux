@@ -35,6 +35,8 @@ export const IDENTITY_TTL_MS = 2 * 60_000;
  *  its liveness still participates, its name does not. */
 export interface CanonicalProcessState {
   slug?: AgentSlug;
+  /** A live custom agent (AgentProcessTracker): a label, never a slug. */
+  custom?: string;
   alive: boolean;
 }
 
@@ -79,7 +81,10 @@ export interface CanonicalAgentIdentity {
  *  4. Live process truth — an attributed, live process beats a stale hook
  *     and the screen. This row is the #916 fix: after claude exits and codex
  *     re-arms the tracker, claude's stale authority cannot win.
- *  5. Screen — the fallback for unattributable panes (remote/SSH).
+ *  5. Screen — the fallback for unattributable panes (remote/SSH). Not on a
+ *     pane whose live process is one of the operator's custom agents: the
+ *     screen there may be a registry banner the custom agent draws or wraps,
+ *     and the custom agent, not that slug, is what runs.
  */
 export function resolveCanonicalAgentIdentity(inputs: {
   proc?: CanonicalProcessState;
@@ -103,6 +108,7 @@ export function resolveCanonicalAgentIdentity(inputs: {
     return { slug: auth.slug, source: 'hook', observedAgoMs: auth.ageMs };
   }
   if (proc?.slug && proc.alive) return { slug: proc.slug, source: 'process' };
+  if (proc?.custom !== undefined && proc.alive) return undefined;
   if (screenSlug) return { slug: screenSlug, source: 'screen' };
   return undefined;
 }

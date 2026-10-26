@@ -330,7 +330,7 @@ function CustomAgentEditor({
       {text('processNames', t('settings.customAgentsProcessNames'), t('settings.customAgentsProcessNamesDesc'), {
         max: CUSTOM_AGENT_ARGS_MAX,
         // What an empty field means: the Command's own name.
-        placeholder: draft.command.trim() ? customAgentStem({ command: draft.command }) : undefined,
+        placeholder: draft.command.trim() ? customAgentProcessNames({ command: draft.command })[0] : undefined,
       })}
       {error && <SettingNote tone="danger" role="alert" className="!p-0" data-testid="custom-agent-error">{error}</SettingNote>}
       <div className="flex justify-end gap-2">
