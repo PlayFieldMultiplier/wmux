@@ -21,7 +21,8 @@ import { FOCUS_RING } from '../components/focusRing';
 import { IconPlus } from '../components/icons';
 import { useT } from '../hooks/useT';
 import { useWebInputState, webPtyHub } from './WebTerminal';
-import { newTerminalTarget } from './webPty';
+import { newTerminalTarget, type NewTerminalTarget } from './webPty';
+import { desktopOwnsLayout, subscribeDesktopLayout } from './webSync';
 
 export const PHONE_QUERY = '(max-width: 640px)';
 
@@ -92,11 +93,23 @@ function InputStateChip() {
 
 /** How long the page waits for a new pane to show up in the poll before it stops trying to select it. */
 const NEW_TERMINAL_SELECT_MS = 15_000;
+/** How long a failed create's message stays up. */
+const NEW_TERMINAL_ERROR_MS = 8_000;
 /** The name of the workspace the first terminal starts (the self-host image uses the same). */
 const FIRST_WORKSPACE_NAME = 'main';
 
-/** Select the new pane's tab once the poll has brought it in. */
-function selectWhenListed(ptyId: string): void {
+/** A workspace minted by a create no poll has listed yet: a retry reuses it. */
+let pendingTarget: NewTerminalTarget | undefined;
+/** Cancels the selection still waiting for the last created pane. */
+let cancelPendingSelect: (() => void) | undefined;
+
+/**
+ * Select the new pane's tab once the poll has brought it in. Gives up when
+ * the user moves to another workspace first: a late pane must not pull them
+ * back. One wait at a time; a newer create replaces it.
+ */
+function selectWhenListed(ptyId: string, workspaceId: string): void {
+  cancelPendingSelect?.();
   const trySelect = (): boolean => {
     const s = useStore.getState();
     for (const ws of s.workspaces) {
@@ -104,6 +117,8 @@ function selectWhenListed(ptyId: string): void {
         const surface = leaf.surfaces.find((x) => x.ptyId === ptyId);
         if (!surface) continue;
         if (s.activeWorkspaceId !== ws.id) s.setActiveWorkspace(ws.id);
+        // The phone shows only the active pane, so the leaf must become it too.
+        s.setActivePane(leaf.id);
         s.setActiveSurface(leaf.id, surface.id, ws.id);
         return true;
       }
@@ -111,25 +126,49 @@ function selectWhenListed(ptyId: string): void {
     return false;
   };
   if (trySelect()) return;
-  const timer = setTimeout(() => unsubscribe(), NEW_TERMINAL_SELECT_MS);
-  const unsubscribe = useStore.subscribe((state, prev) => {
-    if (state.workspaces === prev.workspaces || !trySelect()) return;
+  const startedOn = useStore.getState().activeWorkspaceId;
+  const done = () => {
     clearTimeout(timer);
     unsubscribe();
+    if (cancelPendingSelect === done) cancelPendingSelect = undefined;
+  };
+  const timer = setTimeout(done, NEW_TERMINAL_SELECT_MS);
+  const unsubscribe = useStore.subscribe((state, prev) => {
+    const moved = state.activeWorkspaceId !== prev.activeWorkspaceId
+      && state.activeWorkspaceId !== startedOn && state.activeWorkspaceId !== workspaceId;
+    if (moved) return done();
+    if (state.workspaces !== prev.workspaces && trySelect()) done();
   });
+  cancelPendingSelect = done;
+}
+
+/** The daemon's refusal as the page words it. */
+function newTerminalError(t: ReturnType<typeof useT>, result: { code: string; detail?: string }): string {
+  if (result.code === 'offline') return t('web.newTerminalOffline');
+  // A paired device may add panes to a workspace it can see running, but not
+  // start a new one; the daemon's own wording is about its API, not this page.
+  if (result.code === 'unknown-workspace-id') return t('web.newTerminalNoWorkspaceGrant');
+  return t('web.newTerminalFailed', { reason: result.detail ?? result.code });
 }
 
 /**
  * Starts a shell pane (`POST /api/sessions`). Shown only while this page may
- * type: the daemon gates creating a shell on the same grant, and a button a
- * read-only viewer cannot use would be a dead control.
+ * type, since the daemon gates creating a shell on the same grant, and only on
+ * a headless daemon: with a desktop attached it owns the tree and would never
+ * place the pane (see webSync's `desktopOwnsLayout`).
  */
 function NewTerminalButton({ variant }: { variant: 'primary' | 'icon' }) {
   const t = useT();
   const state = useWebInputState();
+  const desktop = useSyncExternalStore(subscribeDesktopLayout, desktopOwnsLayout);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  if (state !== 'allowed') return null;
+  useEffect(() => {
+    if (!error) return undefined;
+    const timer = setTimeout(() => setError(''), NEW_TERMINAL_ERROR_MS);
+    return () => clearTimeout(timer);
+  }, [error]);
+  if (state !== 'allowed' || desktop) return null;
 
   const create = async () => {
     const hub = webPtyHub();
@@ -137,10 +176,14 @@ function NewTerminalButton({ variant }: { variant: 'primary' | 'icon' }) {
     setBusy(true);
     setError('');
     const s = useStore.getState();
-    const result = await hub.createTerminal(newTerminalTarget(s.activeWorkspaceId, s.workspaces.map((w) => w.id), FIRST_WORKSPACE_NAME));
+    const ids = s.workspaces.map((w) => w.id);
+    if (ids.length > 0) pendingTarget = undefined;
+    const target = newTerminalTarget(s.activeWorkspaceId, ids, FIRST_WORKSPACE_NAME, pendingTarget);
+    if (target.workspaceName) pendingTarget = target;
+    const result = await hub.createTerminal(target);
     setBusy(false);
-    if (result.ok) selectWhenListed(result.id);
-    else setError(result.reason === 'offline' ? t('web.newTerminalOffline') : t('web.newTerminalFailed', { reason: result.reason }));
+    if (result.ok) selectWhenListed(result.id, target.workspaceId);
+    else setError(newTerminalError(t, result));
   };
 
   const errorLine = error && (

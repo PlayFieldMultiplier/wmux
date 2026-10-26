@@ -84,21 +84,29 @@ export interface NewTerminalTarget {
 }
 
 /**
- * `createTerminal`'s outcome. `id` is the new pane's session id. `reason` is
- * the daemon's own wording when it gave one (session cap, unknown workspace),
- * else a short code: read-only | unauthorized | offline | refused:<status>.
+ * `createTerminal`'s outcome. `id` is the new pane's session id. `code` is the
+ * daemon's error code, or one of read-only | unauthorized | offline; `detail`
+ * is the daemon's own wording when it gave one (the session cap, for one).
  */
-export type NewTerminalResult = { ok: true; id: string } | { ok: false; reason: string };
+export type NewTerminalResult = { ok: true; id: string } | { ok: false; code: string; detail?: string };
 
 /**
- * A new pane goes into the active workspace. With none (a fresh headless
- * server), it starts one: the daemon lists only panes that carry a workspace
- * id, so a pane created without one would never appear on this page.
- * getRandomValues, not randomUUID: the page may be served over plain HTTP,
- * where randomUUID does not exist.
+ * A new pane goes into the active workspace, or the first one while the active
+ * id is stale. With none (a fresh headless server) it starts one: the daemon
+ * lists only panes that carry a workspace id, so a pane created without one
+ * would never appear on this page. `pending` is the workspace an earlier,
+ * unconfirmed create minted: a retry reuses it rather than starting a second
+ * one. getRandomValues, not randomUUID: the page may be served over plain
+ * HTTP, where randomUUID does not exist.
  */
-export function newTerminalTarget(activeWorkspaceId: string, workspaceIds: readonly string[], name: string): NewTerminalTarget {
-  if (activeWorkspaceId && workspaceIds.includes(activeWorkspaceId)) return { workspaceId: activeWorkspaceId };
+export function newTerminalTarget(
+  activeWorkspaceId: string,
+  workspaceIds: readonly string[],
+  name: string,
+  pending?: NewTerminalTarget,
+): NewTerminalTarget {
+  if (workspaceIds.length > 0) return { workspaceId: workspaceIds.includes(activeWorkspaceId) ? activeWorkspaceId : workspaceIds[0] };
+  if (pending) return pending;
   const bytes = crypto.getRandomValues(new Uint8Array(12));
   const id = `ws-${Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')}`;
   return { workspaceId: id, workspaceName: name };
@@ -605,8 +613,9 @@ export function createWebPty(deps: WebPtyDeps) {
     },
     /**
      * Start a shell pane (`POST /api/sessions`). The daemon gates it on the
-     * same grant as typing, so a 403 means this caller is read-only. Never
-     * retried: an unanswered create may still have made a pane.
+     * same grant as typing: its "read-only" 403 makes this page read-only, as
+     * a refused keystroke does. Never retried: an unanswered create may still
+     * have made a pane.
      */
     async createTerminal(target: NewTerminalTarget): Promise<NewTerminalResult> {
       let res: Response;
@@ -617,14 +626,23 @@ export function createWebPty(deps: WebPtyDeps) {
           body: JSON.stringify(target),
         });
       } catch {
-        return { ok: false, reason: 'offline' };
+        return { ok: false, code: 'offline' };
       }
-      const body = await res.json().then((b: unknown) => (b && typeof b === 'object' ? b as Record<string, unknown> : {}), () => ({} as Record<string, unknown>));
+      // request()'s timeout ends with the headers; a body that stalls after
+      // them gets the same bound, and an unread 201 is as unknown as no answer.
+      const stalled = Symbol('stalled');
+      const parsed = await Promise.race([
+        res.json().then((b: unknown) => (b && typeof b === 'object' ? b as Record<string, unknown> : {}), () => ({} as Record<string, unknown>)),
+        sleep(REQUEST_TIMEOUT_MS).then((): typeof stalled => stalled),
+      ]);
+      if (parsed === stalled) return { ok: false, code: 'offline' };
+      const body = parsed;
+      const error = typeof body.error === 'string' ? body.error : '';
+      const detail = typeof body.detail === 'string' && body.detail ? body.detail : undefined;
       if (res.status === 201 && typeof body.id === 'string') return { ok: true, id: body.id };
-      if (res.status === 401) { deps.onUnauthorized?.(); return { ok: false, reason: 'unauthorized' }; }
-      if (res.status === 403) { setInputState('read-only'); return { ok: false, reason: 'read-only' }; }
-      if (typeof body.detail === 'string' && body.detail) return { ok: false, reason: body.detail };
-      return { ok: false, reason: `refused:${typeof body.error === 'string' && body.error ? body.error : res.status}` };
+      if (res.status === 401) { deps.onUnauthorized?.(); return { ok: false, code: 'unauthorized' }; }
+      if (res.status === 403 && error.startsWith('read-only')) { setInputState('read-only'); return { ok: false, code: 'read-only' }; }
+      return { ok: false, code: error || String(res.status), ...(detail ? { detail } : {}) };
     },
     subscribe(listener: () => void): () => void {
       viewListeners.add(listener);

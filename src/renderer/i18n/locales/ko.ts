@@ -392,6 +392,7 @@ export const ko = {
   'web.newTerminal': '새 터미널',
   'web.newTerminalFailed': '터미널을 시작하지 못했습니다: {reason}',
   'web.newTerminalOffline': '서버에 연결하지 못했습니다. 다시 시도하기 전에 터미널 목록을 확인하세요.',
+  'web.newTerminalNoWorkspaceGrant': '이 기기는 실행 중인 워크스페이스에 터미널을 추가할 수는 있지만 새로 시작할 수는 없습니다. 첫 터미널은 서버 접속 토큰으로 이 페이지를 열어 시작하세요.',
   'web.noTerminals': '아직 터미널이 없습니다',
   'web.noTerminalsBody': '이 서버에서 시작한 터미널이 여기에 표시됩니다.',
 

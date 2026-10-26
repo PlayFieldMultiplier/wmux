@@ -403,25 +403,36 @@ describe('createTerminal', () => {
     expect(call.headers?.Authorization).toBe('Bearer secret');
   });
 
-  it('a 403 turns the page read-only; a refusal carries the daemon\'s own words', async () => {
-    const denied = make({ reply: (url) => (url === '/api/sessions' ? new Response('{"error":"input-disabled"}', { status: 403 }) : undefined) });
+  it('only the daemon\'s read-only 403 turns the page read-only; other refusals keep their code and words', async () => {
+    const denied = make({ reply: (url) => (url === '/api/sessions'
+      ? new Response(JSON.stringify({ error: 'read-only: server started without --allow-input', detail: 'x' }), { status: 403 }) : undefined) });
     denied.hub.setAllowInput(true);
-    await expect(denied.hub.createTerminal({ workspaceId: 'ws-a' })).resolves.toEqual({ ok: false, reason: 'read-only' });
+    await expect(denied.hub.createTerminal({ workspaceId: 'ws-a' })).resolves.toEqual({ ok: false, code: 'read-only' });
     expect(denied.hub.inputState()).toBe('read-only');
+
+    const other = make({ reply: (url) => (url === '/api/sessions' ? new Response('{"ok":false,"error":"forbidden"}', { status: 403 }) : undefined) });
+    other.hub.setAllowInput(true);
+    await expect(other.hub.createTerminal({ workspaceId: 'ws-a' })).resolves.toEqual({ ok: false, code: 'forbidden' });
+    expect(other.hub.inputState()).toBe('allowed');
 
     const capped = make({ reply: (url) => (url === '/api/sessions'
       ? new Response(JSON.stringify({ error: 'create-failed', detail: 'Session limit reached' }), { status: 409 }) : undefined) });
-    await expect(capped.hub.createTerminal({ workspaceId: 'ws-a' })).resolves.toEqual({ ok: false, reason: 'Session limit reached' });
+    await expect(capped.hub.createTerminal({ workspaceId: 'ws-a' })).resolves.toEqual({ ok: false, code: 'create-failed', detail: 'Session limit reached' });
   });
 });
 
 describe('newTerminalTarget', () => {
-  it('uses the active workspace, and starts a valid new one when there is none', () => {
-    expect(newTerminalTarget('ws-a', ['ws-a', 'ws-b'], 'main')).toEqual({ workspaceId: 'ws-a' });
+  it('uses the active workspace, or the first while the active id is stale', () => {
+    expect(newTerminalTarget('ws-a', ['ws-b', 'ws-a'], 'main')).toEqual({ workspaceId: 'ws-a' });
+    expect(newTerminalTarget('ws-gone', ['ws-b', 'ws-a'], 'main')).toEqual({ workspaceId: 'ws-b' });
+  });
+
+  it('starts a valid new workspace when there is none, and a retry reuses it', () => {
     const fresh = newTerminalTarget('', [], 'main');
     expect(fresh.workspaceName).toBe('main');
     // The daemon's own rule for a workspace id it stamps into a pane.
     expect(fresh.workspaceId).toMatch(/^[A-Za-z0-9_-]{1,64}$/);
     expect(newTerminalTarget('', [], 'main').workspaceId).not.toBe(fresh.workspaceId);
+    expect(newTerminalTarget('', [], 'main', fresh)).toBe(fresh);
   });
 });
