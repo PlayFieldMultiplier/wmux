@@ -77,7 +77,7 @@ const SENTENCES: Readonly<Record<string, string>> = {
   'pr-mismatch': '{host} answered for a different PR',
   'behind-updated': 'The branch was behind; it was updated and needs fresh checks',
   invalid: '{host} refused the merge request',
-  // The act executor (actExecutor.ts): a comment, an issue, a close.
+  // The act executor (actExecutor.ts): a comment, an issue, a close, a release.
   'approval-mismatch': 'The request no longer matches what was approved',
   'repo-changed': 'The repository was renamed, moved or changed since the request',
   'target-gone': 'The issue or PR is no longer on {host}',
@@ -90,6 +90,30 @@ const SENTENCES: Readonly<Record<string, string>> = {
   'closed-differently': 'It was closed on {host}, but not as approved',
   'secret-in-body': 'Its text holds a secret stored since the request',
   'attempts-exhausted': 'wmux tried three times and could not tell whether it went through',
+  // A release (releaseAct.ts).
+  'tag-taken': 'The tag already exists on {host}',
+  'release-exists': 'A release with this tag is already on {host}, published or as a draft',
+  'not-on-default-branch': 'The commit is no longer on the default branch',
+  'default-branch-changed': 'The repository\'s default branch changed since the request',
+  'checks-failing': 'A check on the commit did not pass',
+  'checks-pending': 'A check on the commit is still running',
+  'checks-not-started': 'The commit\'s push CI has not run yet. If it is not the branch head, or the push skipped CI, it may never run: ask for the head instead',
+  'tag-made-not-published': 'The tag was made, but publishing the release did not go through',
+  'draft-gone': 'Its draft release was deleted on {host}, so nothing was published',
+  'tag-name-is-branch': 'A branch on {host} has the same name as the tag',
+  // What became of a release's draft, after the reason it was refused.
+  'draft-kept-tag-made': 'The tag was already made: its draft release is kept on {host} for you to publish or delete',
+  'draft-kept-unchecked': 'Whether the tag was made could not be checked: its draft release is kept on {host} for you to publish or delete',
+  'draft-not-deleted': 'Its draft release could not be deleted: delete it on {host}',
+  'draft-kept-changed': 'Its draft release was changed on {host}, so it is kept there',
+  'version-mismatch': 'The version in package.json or package-lock.json is not the tag\'s',
+  'prerelease-mismatch': 'The tag reads as a prerelease and the request does not, or the other way round',
+  'tag-not-matching-release-workflow': 'The repository\'s tag workflows do not run on this tag',
+  'workflow-unreadable': 'A workflow file at the commit could not be read',
+  'workflow-disabled': 'A workflow the release relies on is disabled, or GitHub Actions is off for the repository',
+  'unreadable-answer': '{host} answered something wmux cannot read',
+  'release-by-other': 'Someone else published a release with this tag',
+  'published-other-target': 'A release was published, but its tag points at another commit',
 };
 
 /** Sentences for code families with a variable tail. */

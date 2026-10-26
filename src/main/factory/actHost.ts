@@ -16,6 +16,7 @@ import { GhActService } from '../github/GhActService';
 import { ACT_EFFECTS_FILENAME, ActEffectStore } from './actEffectStore';
 import { ActExecutor, readIssue, readLogin, readPull, readRepo, repoPath } from './actExecutor';
 import { getApprovalService, type ApprovalActHost } from './approvals';
+import { readReleaseAsk } from './releaseAct';
 import { registerFactoryRpcModule, type FactoryHostDeps } from './factoryHost';
 
 const SWEEP_MS = 5 * 60_000;
@@ -70,6 +71,7 @@ export function createActModule(deps: Pick<FactoryHostDeps, 'wmuxDir'>): { start
         repo: (key) => readRepo(gh, key),
         issue: (key, n) => readIssue(gh, key, n),
         pull: (key, n) => readPull(gh, key, n),
+        release: (key, input) => readReleaseAsk(gh, key, input),
         enqueue: (r) => (r.act && r.payloadHash
           ? effects.enqueue({ requestId: r.requestId, action: r.act.kind, repoKey: r.repoKey, payloadHash: r.payloadHash })
           : null),

@@ -15,6 +15,11 @@
 // nothing: the executor asks the approval store on every try. A row whose
 // action this build does not know is kept and never run; a malformed row
 // refuses the file (the outbox is not dropped).
+//
+// A release published through the API takes two writes: a draft (which makes
+// no tag), then publishing it. The draft's id is journaled on the row as soon
+// as GitHub names it (noteDraft), so a later try publishes that draft rather
+// than making a second one.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -43,6 +48,8 @@ export interface ActEffect {
   firstStartedAt?: number;
   startedAt?: number;
   result?: { url: string; id?: number; number?: number };
+  /** A release's draft on GitHub, made by an earlier write of this row. */
+  draftId?: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -61,6 +68,7 @@ function wellFormed(v: unknown): v is ActEffect {
     && STATUSES.has(e.status) && Number.isSafeInteger(e.attempt) && e.attempt >= 0
     && (e.reason === undefined || typeof e.reason === 'string')
     && (e.result === undefined || (typeof e.result === 'object' && e.result !== null && typeof e.result.url === 'string'))
+    && (e.draftId === undefined || (Number.isSafeInteger(e.draftId) && e.draftId > 0))
     && Number.isSafeInteger(e.createdAt) && Number.isSafeInteger(e.updatedAt);
 }
 
@@ -70,9 +78,10 @@ export function runnableAct(e: Pick<ActEffect, 'action'>): boolean {
 }
 
 /** Whether a row was claimed at least once (a write may have reached
- *  GitHub): any row past pending, and a pending one an earlier try left. */
-export function actRowClaimed(e: Pick<ActEffect, 'status' | 'attempt'>): boolean {
-  return e.status !== 'pending' || e.attempt > 0;
+ *  GitHub): any row past pending, a pending one an earlier try left, and one
+ *  whose release draft is on GitHub (whatever its tries). */
+export function actRowClaimed(e: Pick<ActEffect, 'status' | 'attempt' | 'draftId'>): boolean {
+  return e.status !== 'pending' || e.attempt > 0 || e.draftId !== undefined;
 }
 
 export class ActEffectStore {
@@ -139,8 +148,26 @@ export class ActEffectStore {
     return this.put(next) ? next : null;
   }
 
+  /** Journal the draft a row's write made (or found), while the row is
+   *  claimed or being settled. Null when the row is not one of those or the
+   *  file was not written (the row is then uncertain in memory). */
+  noteDraft(id: string, draftId: number): ActEffect | null {
+    const row = this.rows.get(id);
+    if (!row || !Number.isSafeInteger(draftId) || draftId <= 0) return null;
+    if (row.status !== 'inFlight' && row.status !== 'uncertain' && row.status !== 'pending') return null;
+    if (row.draftId === draftId) return row;
+    const next: ActEffect = { ...row, draftId, updatedAt: this.now() };
+    if (this.put(next)) return next;
+    // A claimed row whose draft is not on disk: settled by a read (the draft
+    // scan finds it), never written again blind.
+    if (row.status === 'inFlight') this.unjournaled(row);
+    return null;
+  }
+
   /** inFlight → pending: nothing was written (the approval was taken back,
-   *  GitHub's rate limit refused it before it was sent); the try is given back. */
+   *  GitHub's rate limit refused it before it was sent); the try is given back.
+   *  A release's draft made by an earlier write keeps the row claimed
+   *  (actRowClaimed), not its count of tries. */
   release(id: string, reason: string): ActEffect | null {
     const row = this.rows.get(id);
     if (!row || row.status !== 'inFlight') return null;
@@ -153,6 +180,15 @@ export class ActEffectStore {
     const row = this.rows.get(id);
     if (!row || row.status !== 'inFlight') return null;
     return this.end(row, status, reason, result);
+  }
+
+  /** A refused row's reason, told more (what became of its release draft).
+   *  Null when the row is not refused or the file was not written. */
+  amendRefusal(id: string, reason: string): ActEffect | null {
+    const row = this.rows.get(id);
+    if (!row || row.status !== 'refused') return null;
+    const next: ActEffect = { ...row, reason, updatedAt: this.now() };
+    return this.put(next) ? next : null;
   }
 
   /** What a read of GitHub says about a row that may have run (uncertain, or

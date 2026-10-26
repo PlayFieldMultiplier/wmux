@@ -44,17 +44,17 @@
 // waits for the owner, its card naming why the rule did not apply. No rule
 // covers a release or a push to a default branch.
 //
-// A comment, a new issue, or closing an issue or a PR (ACT_ACTIONS) is
-// carried out the same way once approved: the request pins what it acts on
-// and the text it publishes (`act`), the card shows that text whole (fenced,
-// actPayload.ts), an approval from a button (the card's, the chip's or the
-// phone's) echoes the card's payloadHash (a text act is approved from its
-// card only, never by typed words or the chip), and after the Undo window
-// the act outbox runs it (actHost.ts, actExecutor.ts) under the
-// same gates as a merge; the outcome comes back here (onActEffect). A
-// request an older build stored (no `act`), and every other act, is recorded
-// and decided only (the card says so). A bot's workers are refused all of
-// them (shared/botWorkerGuard.ts).
+// A comment, a new issue, closing an issue or a PR, or a release
+// (ACT_ACTIONS) is carried out the same way once approved: the request pins
+// what it acts on and the text it publishes (`act`), the card shows that text
+// whole (fenced, actPayload.ts), an approval from a button (the card's, the
+// chip's or the phone's) echoes the card's payloadHash (a text act and a
+// release are approved from their card only, never by typed words or the
+// chip), and after the Undo window the act outbox runs it (actHost.ts,
+// actExecutor.ts, releaseAct.ts) under the same gates as a merge; the outcome
+// comes back here (onActEffect). A request an older build stored (no `act`),
+// and every other act, is recorded and decided only (the card says so). A
+// bot's workers are refused all of them (shared/botWorkerGuard.ts).
 //
 // Persistence: `<wmuxDir>/factory/approvals.json` ({version:1, requests,
 // rules}), written on every change; a change that did not reach the file is
@@ -93,6 +93,7 @@ import {
   type ApprovalAct,
   type ApprovalActRepo,
   type ApprovalAction,
+  type ApprovalReleaseAct,
   type ApprovalApprover,
   type ApprovalDecideRequest,
   type ApprovalRequest,
@@ -126,6 +127,7 @@ import { nextSlot, scheduleLabel } from './routines';
 import type { OwnerCardProof } from './ownerAsked';
 import { actEffectId, actRowClaimed, type ActEffect, type ActEffectStatus } from './actEffectStore';
 import type { IssueFacts, PullFacts } from './actExecutor';
+import { releaseTagProblem, type AlsoRunsOn, type ReleaseAsk, type ReleaseAskInput, type ReleaseAskRefusal } from './releaseAct';
 
 export const APPROVALS_FILENAME = 'approvals.json';
 
@@ -263,9 +265,13 @@ export interface ApprovalMergeHost {
  *  a request's pins (gh, from a folder main owns), and the outbox. */
 export interface ApprovalActHost {
   login(repoKey: string): Promise<string | null>;
-  repo(repoKey: string): Promise<ApprovalActRepo | { error: string; status?: number }>;
+  /** The repository's pins, and the default branch it names now (not pinned). */
+  repo(repoKey: string): Promise<(ApprovalActRepo & { defaultBranch?: string }) | { error: string; status?: number }>;
   issue(repoKey: string, n: number): Promise<IssueFacts | { error: string; status?: number }>;
   pull(repoKey: string, n: number): Promise<PullFacts | { error: string; status?: number }>;
+  /** What a release request pins and its card states (releaseAct.ts), or
+   *  why the repository cannot take it as asked. */
+  release(repoKey: string, input: ReleaseAskInput): Promise<ReleaseAsk | ReleaseAskRefusal>;
   /** The outbox row of an approved request (one per request), or null when
    *  it could not be stored. */
   enqueue(r: StoredApproval): ActEffect | null;
@@ -524,6 +530,7 @@ const ACT_DONE_TITLE: Readonly<Record<ActAction, string>> = {
   issue_create: 'Opened',
   issue_close: 'Closed',
   pr_close: 'Closed without merging',
+  release: 'Published',
 };
 
 /** A PR as its host names it: a GitLab merge request is `MR !n`. */
@@ -531,8 +538,9 @@ function prName(repoKey: string, n: number): string {
   return isGitlabRepoKey(repoKey) ? `MR !${n}` : `PR #${n}`;
 }
 
-function subject(r: Pick<ApprovalRequest, 'action' | 'repoKey' | 'prNumber' | 'issueNumber' | 'skill' | 'routine'>): string {
+function subject(r: Pick<ApprovalRequest, 'action' | 'repoKey' | 'prNumber' | 'issueNumber' | 'skill' | 'act' | 'routine'>): string {
   if (r.skill) return `${r.skill.name} ${r.skill.version}`;
+  if (r.act?.kind === 'release') return `${r.repoKey} (${r.act.tagName})`;
   if (r.action === 'owner_profile') return 'your profile';
   if (r.action === 'bot_memory') return 'your notes';
   if (r.routine) return `"${r.routine.title}"`;
@@ -649,7 +657,7 @@ export const ACT_TITLE_MAX = 256;
 /** An act card's lines after the bot's: what Approve does, then the target's
  *  GitHub title as context (fence `text`), then each payload field in its
  *  own `wmux-payload` fence, in order (actPayload.ts). Pure. */
-export function actCardLines(act: ApprovalAct, fields: readonly string[], o: { login: string; repoKey: string; signedIn: boolean }): string[] {
+export function actCardLines(act: Exclude<ApprovalAct, ApprovalReleaseAct>, fields: readonly string[], o: { login: string; repoKey: string; signedIn: boolean }): string[] {
   const secs = Math.round(APPROVAL_UNDO_MS / 1000);
   const when = `${secs} s after you approve (Undo until then)`;
   const target = act.kind === 'issue_create' ? '' : act.kind === 'pr_close' || (act.kind === 'comment' && act.target === 'pr') ? prName(o.repoKey, act.number) : `issue #${act.number}`;
@@ -663,6 +671,86 @@ export function actCardLines(act: ApprovalAct, fields: readonly string[], o: { l
   const lines = ['', what];
   if (o.signedIn) lines.push('This bot\'s conversation holds data from a task you signed in to: check that the text shares none of it.');
   if (act.kind !== 'issue_create') lines.push('', `${target} on GitHub:`, ...fencedLines(act.title, CONTEXT_FENCE_INFO));
+  for (const f of fields) lines.push('', ...fencedLines(f, PAYLOAD_FENCE_INFO));
+  return lines;
+}
+
+/** A release's payload fields, in card order: the tag, the commit, then
+ *  what the owner approves of the release itself (its title, notes and
+ *  `release` or `prerelease`), or the workflows a pushed tag starts. Pure. */
+export function releaseFields(act: ApprovalReleaseAct): string[] {
+  return act.mode === 'workflow'
+    ? [act.tagName, act.targetSha, act.workflows.join('\n')]
+    : [act.tagName, act.targetSha, act.title, act.notes, act.prerelease ? 'prerelease' : 'release'];
+}
+
+/** A release card's title: the tag, the repository, the commit, and that it
+ *  cannot be undone. Pure. */
+export function releaseCardTitle(act: ApprovalReleaseAct, fullName: string): string {
+  const at = act.targetSha.slice(0, 7);
+  return act.mode === 'workflow'
+    ? `Push tag ${act.tagName} to ${fullName} at ${at} — starts its release workflow, cannot be undone`
+    : `Publish release ${act.tagName} of ${fullName} at ${at} — publishes a release, cannot be undone`;
+}
+
+/** What the card says of the checks the bot's request read. An approval
+ *  while they have not passed is refused, not held: the bot asks again once
+ *  they pass (a held approval would keep an irreversible act waiting). */
+const CHECK_WORDS: Readonly<Record<ReleaseAsk['checks'], string>> = {
+  passed: 'passed',
+  failed: 'one did not pass; approving now is refused, and the bot asks again once they pass',
+  running: 'still running; approving now is refused, and the bot asks again once they pass',
+  none: 'none',
+  'not-started': 'its push CI has not run yet; approving now is refused, and the bot asks again once it passes',
+};
+
+/** What starts another workflow, as the card says it. */
+const ALSO_RUNS_WORDS: Readonly<Record<AlsoRunsOn, string>> = {
+  'tag-push': 'on this tag push',
+  'tag-create': 'when the tag is created',
+  'release-published': 'when the release is published',
+};
+
+/** `a`, `a and b`, `a, b and c`. Pure. */
+function joinWords(words: readonly string[]): string {
+  return words.length <= 1 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`;
+}
+
+/** A release card's lines after the bot's: what Approve does and whether it
+ *  is marked Latest, the workflows the tag push also starts, what main read when the bot asked (the default branch,
+ *  the checks, package.json's version), then each payload field in its own
+ *  `wmux-payload` fence, in order. Pure. */
+export function releaseCardLines(act: ApprovalReleaseAct, fields: readonly string[], o: { login: string; facts: Pick<ReleaseAsk, 'behindBy' | 'checks' | 'version' | 'alsoRuns'>; signedIn: boolean }): string[] {
+  const secs = Math.round(APPROVAL_UNDO_MS / 1000);
+  const when = `${secs} s after you approve (Undo until then)`;
+  const at = act.targetSha.slice(0, 7);
+  const lines = [''];
+  if (act.mode === 'release') {
+    lines.push(
+      `Approve publishes this release on GitHub as @${o.login}, ${when}. A published release and its tag cannot be taken back by wmux. On a repository whose workflows run on a tag push (wmux's own builds installers and publishes to WinGet and Chocolatey), this starts them.`,
+      act.prerelease ? 'Prerelease, never Latest.' : 'Marked Latest.',
+    );
+  } else {
+    const runs = act.workflows.length === 1 ? `the workflow ${act.workflows[0]} runs on it` : `the workflows ${act.workflows.join(', ')} run on it`;
+    lines.push(
+      `Approve pushes the tag ${act.tagName} at ${at} as @${o.login}, ${when}; ${runs} and builds and publishes the release (wmux's own builds installers and publishes to WinGet and Chocolatey). A pushed tag cannot be taken back by wmux.`,
+      'The workflow decides whether it is marked Latest.',
+    );
+  }
+  // Other workflows the act starts (they build nothing that is published,
+  // but they run).
+  for (const w of o.facts.alsoRuns) lines.push(`${w.path} also runs ${joinWords(w.on.map((e) => ALSO_RUNS_WORDS[e]))}.`);
+  const behind = o.facts.behindBy === 0 ? `${at} is its head` : `${at} is ${o.facts.behindBy} ${o.facts.behindBy === 1 ? 'commit' : 'commits'} behind its head`;
+  // A push runs the checks on the pushed head only: one behind it may never run them.
+  const checks = o.facts.checks === 'not-started' && o.facts.behindBy > 0
+    ? 'its push CI has not run yet (a commit behind the head may never run it); approving now is refused, and the bot asks again once it passes'
+    : CHECK_WORDS[o.facts.checks];
+  lines.push('', `Default branch ${act.defaultBranch}: ${behind}.`, `Checks on ${at}: ${checks}.`);
+  if (o.facts.version) lines.push(`package.json version: ${o.facts.version}.`);
+  if (o.signedIn) lines.push('This bot\'s conversation holds data from a task you signed in to: check that the title and notes share none of it.');
+  lines.push('', act.mode === 'release'
+    ? 'The blocks are the tag, the commit, the release\'s title, its notes, and release or prerelease.'
+    : `The blocks are the tag, the commit, and the ${act.workflows.length === 1 ? 'workflow' : 'workflows'} it starts.`);
   for (const f of fields) lines.push('', ...fencedLines(f, PAYLOAD_FENCE_INFO));
   return lines;
 }
@@ -786,6 +874,7 @@ export class ApprovalService {
     if (act === 'pr_close' && (prNumber === undefined || issueNumber !== undefined)) return refuse('invalid', 'closing a pull request names its prNumber');
     if (act === 'issue_close' && prNumber !== undefined) return refuse('invalid', 'closing an issue names its issueNumber; a pull request is closed with pr_close');
     if (act === 'issue_create' && (prNumber !== undefined || issueNumber !== undefined)) return refuse('invalid', 'a new issue names no number');
+    if (act === 'release' && (prNumber !== undefined || issueNumber !== undefined)) return refuse('invalid', 'a release names its tagName, no number');
     if (prNumber !== undefined && issueNumber !== undefined) return refuse('invalid', 'name a prNumber or an issueNumber, not both');
     const given = oneLine(raw.reason, APPROVAL_LIMITS.REASON_MAX);
     if (!given) return refuse('invalid', 'reason is required (one line)');
@@ -923,12 +1012,32 @@ export class ApprovalService {
     const isRefusal = (v: unknown): v is Refusal => typeof v === 'object' && v !== null && (v as Refusal).ok === false;
     const body = act === 'comment' || act === 'issue_create' ? text(raw.body, 'body', ACT_TEXT_MAX, act === 'comment') : '';
     if (isRefusal(body)) return body;
-    const title = act === 'issue_create' ? text(raw.title, 'title', ACT_TITLE_MAX, true) : '';
+    const title = act === 'issue_create' || act === 'release' ? text(raw.title, 'title', ACT_TITLE_MAX, act === 'issue_create') : '';
     if (isRefusal(title)) return title;
     if (title.includes('\n')) return refuse('invalid', 'title is one line');
     const stateReason = raw.stateReason === undefined || raw.stateReason === 'completed' ? 'completed' : raw.stateReason === 'not_planned' ? 'not_planned' : null;
     if (stateReason === null) return refuse('invalid', 'stateReason is completed or not_planned');
-    const contentKey = actContentKey([act, repoKey, prNumber ?? null, issueNumber ?? null, title, body, act === 'issue_close' ? stateReason : null]);
+    // A release: its tag, the commit (default: the default branch's head
+    // when main reads it), its notes, and whether it is a prerelease.
+    let tagName = '';
+    let targetSha: string | undefined;
+    let notes = '';
+    let prerelease: boolean | undefined;
+    if (act === 'release') {
+      if (typeof raw.tagName !== 'string') return refuse('invalid', 'a release names its tagName');
+      tagName = raw.tagName;
+      const bad = releaseTagProblem(tagName) ?? actTextProblem(tagName, redactStoredSecrets);
+      if (bad) return refuse('invalid', `tagName cannot be used: ${bad}`);
+      if (raw.targetSha !== undefined && (typeof raw.targetSha !== 'string' || !/^[0-9a-f]{40}$/i.test(raw.targetSha))) return refuse('invalid', 'targetSha is a full 40-character commit SHA');
+      targetSha = typeof raw.targetSha === 'string' ? raw.targetSha.toLowerCase() : undefined;
+      const n = text(raw.notes, 'notes', ACT_TEXT_MAX, false);
+      if (isRefusal(n)) return n;
+      notes = n;
+      if (raw.prerelease !== undefined && typeof raw.prerelease !== 'boolean') return refuse('invalid', 'prerelease is true or false');
+      prerelease = raw.prerelease as boolean | undefined;
+    }
+    const contentKey = actContentKey([act, repoKey, prNumber ?? null, issueNumber ?? null, title, body, act === 'issue_close' ? stateReason : null,
+      ...(act === 'release' ? [tagName, targetSha ?? null, notes, prerelease ?? null] : [])]);
     const readerGuest = wake.guest === true;
 
     // One request per (bot, key), and one per content while it waits.
@@ -959,7 +1068,23 @@ export class ApprovalService {
       : refuse('read_failed', `${what} could not be read: ${r.error}`.slice(0, 300)));
     let actPin: ApprovalAct;
     let headSha: string | undefined;
-    if (act === 'issue_create') {
+    let ask: ReleaseAsk | null = null;
+    if (act === 'release') {
+      const read = await host.release(repoKey, {
+        tagName, ...(targetSha ? { targetSha } : {}), ...(prerelease !== undefined ? { prerelease } : {}),
+        ...(repoPin.defaultBranch ? { defaultBranch: repoPin.defaultBranch } : {}),
+      })
+        .catch((err: unknown): ReleaseAskRefusal => ({ refuse: 'read_failed', message: `the repository could not be read: ${String(err)}`.slice(0, 300) }));
+      if ('refuse' in read) return refuse(read.refuse, read.message);
+      ask = read;
+      headSha = read.targetSha;
+      // In workflow mode the workflow writes the release: no title or notes.
+      actPin = {
+        kind: 'release', mode: read.mode, tagName, targetSha: read.targetSha, defaultBranch: read.defaultBranch,
+        title: read.mode === 'release' ? title || tagName : '', notes: read.mode === 'release' ? notes : '',
+        prerelease: read.prerelease, workflows: read.workflows, checksExpected: read.checksExpected, pushWorkflows: read.pushWorkflows, draft: false,
+      };
+    } else if (act === 'issue_create') {
       actPin = { kind: 'issue_create', title, body };
     } else if (act === 'pr_close') {
       const pr = await host.pull(repoKey, n).catch((err: unknown) => ({ error: String(err) }));
@@ -998,11 +1123,13 @@ export class ApprovalService {
     const requestId = newRequestId();
     const fields = actPin.kind === 'comment' ? [bodyWithMarker(actPin.body, requestId)]
       : actPin.kind === 'issue_create' ? [actPin.title, bodyWithMarker(actPin.body, requestId)]
-        : [];
-    const reason = withoutOwnerQuotes(given, this.ownerTexts(bot.workspaceId)) || `${ACTION_TITLE[act]} ${subject({ action: act, repoKey, prNumber, issueNumber })}.`;
-    const lines = actCardLines(actPin, fields, {
-      login, repoKey, signedIn: TEXT_ACT_ACTIONS.has(act) && (signedInWake(wake) || signedInWake(still)),
-    });
+        : actPin.kind === 'release' ? releaseFields(actPin)
+          : [];
+    const reason = withoutOwnerQuotes(given, this.ownerTexts(bot.workspaceId)) || `${ACTION_TITLE[act]} ${subject({ action: act, repoKey, prNumber, issueNumber, act: actPin })}.`;
+    const signedIn = signedInWake(wake) || signedInWake(still);
+    const lines = actPin.kind === 'release' && ask
+      ? releaseCardLines(actPin, fields, { login, facts: ask, signedIn: actPin.mode === 'release' && signedIn })
+      : actPin.kind !== 'release' ? actCardLines(actPin, fields, { login, repoKey, signedIn: TEXT_ACT_ACTIONS.has(act) && signedIn }) : [];
     // Measured as the room stores it: the owner reads all of what they approve.
     if (redactStoredSecrets([askLine(profile, reason), ...lines].join('\n')).length > ROOM_LIMITS.CARD_BODY_MAX) {
       return refuse('invalid', 'the text does not fit on the owner\'s card; write a shorter one');
@@ -1018,7 +1145,7 @@ export class ApprovalService {
       ...(headSha ? { headSha } : {}),
       ghLogin: login.toLowerCase(),
       act: actPin,
-      actRepo: repoPin,
+      actRepo: { fullName: repoPin.fullName, nodeId: repoPin.nodeId, id: repoPin.id },
       payloadHash: payloadHashOf(fields),
       contentKey,
       botId: bot.botId,
@@ -1512,7 +1639,9 @@ export class ApprovalService {
         // The chip approves a merge and a close without text only; a text act
         // is approved from its card, echoing the text the card shows.
         if (p.source === 'chip' && !TYPED_APPROVABLE_ACTIONS.has(cur.action)) {
-          return refuse('not_here', 'this act publishes text: approve it with Approve on its card, where the text is shown');
+          return refuse('not_here', cur.action === 'release'
+            ? 'a release is approved with Approve on its card, where what it publishes is shown'
+            : 'this act publishes text: approve it with Approve on its card, where the text is shown');
         }
         // Every request that carries a payloadHash needs it echoed: an app
         // that sends none does not know what it approves, a close included.
@@ -1991,7 +2120,8 @@ export class ApprovalService {
     if (botRepo(profile)?.repoKey !== r.repoKey) return 'repo-changed';
     // A secret stored since the request would now be hidden on the card the
     // owner reads, and published by the post.
-    const texts = r.act.kind === 'comment' ? [r.act.body] : r.act.kind === 'issue_create' ? [r.act.title, r.act.body] : [];
+    const texts = r.act.kind === 'comment' ? [r.act.body] : r.act.kind === 'issue_create' ? [r.act.title, r.act.body]
+      : r.act.kind === 'release' ? [r.act.title, r.act.notes] : [];
     if (texts.some((t) => redactStoredSecrets(t) !== t)) return 'secret-in-body';
     if (r.executeAfter !== undefined && this.now() < r.executeAfter) return 'approval-undo-window';
     return null;
@@ -2012,7 +2142,9 @@ export class ApprovalService {
       ...r,
       state: done ? 'executed' : 'refused',
       effectId: e.id,
-      ...(done && e.result ? { result: e.result } : {}),
+      // A refusal may carry what it still made (a release published on a
+      // tag that points elsewhere).
+      ...(e.result ? { result: e.result } : {}),
       ...(!done ? { refusal: (e.reason ?? 'refused').slice(0, 300) } : {}),
       updatedAt: this.now(),
     };
@@ -2231,6 +2363,7 @@ export class ApprovalService {
       : r.botMemory ? BOT_MEMORY_TITLE[r.botMemory.action]
       : r.routine ? 'Save this routine?'
       : r.nativeTool ? 'Let Hermes run this command?'
+      : r.act?.kind === 'release' ? releaseCardTitle(r.act, r.actRepo?.fullName ?? r.repoKey)
       : `${ACTION_TITLE[r.action]} ${subject(r)}${r.headSha ? ` at ${r.headSha.slice(0, 7)}` : ''}?`;
     const subjectThread = r.prNumber !== undefined ? prThreadId(r.repoKey, r.prNumber) : r.issueNumber !== undefined ? issueThreadId(r.repoKey, r.issueNumber) : null;
     const lines = [
@@ -2288,19 +2421,32 @@ export class ApprovalService {
     const by = r.decidedBy === 'rule' ? 'a rule you set' : 'you';
     const done = r.state === 'executed';
     const moved = r.refusal === 'head-moved';
-    const title = r.act
+    const full = r.actRepo?.fullName ?? r.repoKey;
+    // A release draft's fate (`draft-*` codes) is told in the body, not the title.
+    const codes = laneRefusalCodes(r.refusal ?? '');
+    const isDraft = (c: string): boolean => r.act?.kind === 'release' && c.startsWith('draft-');
+    const why = laneRefusalLine(codes.filter((c) => !isDraft(c)).join(', '), r.repoKey);
+    const title = r.act?.kind === 'release' && done
+      ? r.act.mode === 'workflow'
+        ? `Tag pushed — the release workflow is building it (${r.act.tagName} on ${full}, approved by you)`
+        : `${ACT_DONE_TITLE.release} release ${r.act.tagName} of ${full} (approved by you)`
+      : r.act
       ? done ? `${ACT_DONE_TITLE[r.act.kind]} ${r.act.kind === 'issue_create' ? `issue #${r.result?.number ?? '?'} on ${r.repoKey}` : subject(r)} (approved by you)`
-        : `Not done: ${ACTION_TITLE[r.action]} ${subject(r)} (${laneRefusalLine(r.refusal ?? '', r.repoKey) || 'refused'})`
+        : `Not done: ${ACTION_TITLE[r.action]} ${subject(r)} (${why || 'refused'})`
       : done
         ? `Merged ${subject(r)} (approved by ${by})`
         : moved ? `Not merged: ${subject(r)} has a new head since the request; it needs a new approval` : `Not merged: ${subject(r)} (${laneRefusalLine(r.refusal ?? '') || 'refused'})`;
+    // What became of a refused release's draft (its refusal's `draft-*`
+    // code), in the body too: a long title is cut.
+    const draft = done ? '' : laneRefusalLine(codes.filter(isDraft).join(', '), r.repoKey);
+    const body = [draft, r.act ? r.result?.url ?? '' : ''].filter(Boolean).join('\n\n');
     writer.post({
       workspaceId: r.workspaceId,
       threadId: r.threadId,
       kind: done ? 'status' : 'refusal',
       actor: { kind: 'system' },
       title,
-      ...(r.act && done && r.result?.url ? { body: r.result.url } : {}),
+      ...(body ? { body } : {}),
       refs: { approvalId: r.requestId, ...(r.prNumber !== undefined ? { pr: r.prNumber } : {}), ...(r.issueNumber !== undefined ? { issue: r.issueNumber } : {}) },
       clientPostId: `approval-outcome:${r.requestId}`,
     });

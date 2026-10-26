@@ -8,9 +8,10 @@
 // touch the text the owner approved. The working folder is one main owns,
 // never a bot's checkout (a worker can write there).
 //
-// An answer is classified for the executor: ok (the parsed JSON), http (GitHub
-// answered 4xx: nothing was written), rate-limited or unsent (nothing reached
-// GitHub), or error (anything else: it may have been written).
+// An answer is classified for the executor: ok (the parsed JSON, or null for
+// an empty answer such as a DELETE's 204), http (GitHub answered 4xx: nothing
+// was written), rate-limited or unsent (nothing reached GitHub), or error
+// (anything else: it may have been written).
 
 import { execFile } from 'node:child_process';
 import { ghIssueEnv } from './GhIssueService';
@@ -27,9 +28,11 @@ export type GhActAnswer =
    *  could not be started). */
   | { ok: false; kind: 'rate-limited' | 'unsent' | 'error'; message: string };
 
+export type GhActMethod = 'POST' | 'PATCH' | 'DELETE';
+
 export interface GhActPort {
   read(host: string, endpoint: string): Promise<GhActAnswer>;
-  write(host: string, method: 'POST' | 'PATCH', endpoint: string, body: Record<string, unknown>): Promise<GhActAnswer>;
+  write(host: string, method: GhActMethod, endpoint: string, body: Record<string, unknown>): Promise<GhActAnswer>;
 }
 
 /** The program gh runs as: `gh` (tests: node and a script). */
@@ -66,7 +69,7 @@ export class GhActService implements GhActPort {
     return this.run(host, endpoint, [], undefined, READ_TIMEOUT_MS);
   }
 
-  write(host: string, method: 'POST' | 'PATCH', endpoint: string, body: Record<string, unknown>): Promise<GhActAnswer> {
+  write(host: string, method: GhActMethod, endpoint: string, body: Record<string, unknown>): Promise<GhActAnswer> {
     return this.run(host, endpoint, ['-X', method], JSON.stringify(body), WRITE_TIMEOUT_MS);
   }
 
@@ -99,7 +102,8 @@ export class GhActService implements GhActPort {
         }
         this.breaker.reset(host);
         try {
-          resolve({ ok: true, value: JSON.parse(String(stdout)) as unknown });
+          const text = String(stdout).trim();
+          resolve({ ok: true, value: text ? JSON.parse(text) as unknown : null });
         } catch {
           resolve({ ok: false, kind: 'error', message: 'gh answered something that is not JSON' });
         }
