@@ -13,7 +13,7 @@ import { CodexUsageLimitLineScanner } from '../../shared/usageLimit';
 import type { AgentStatus } from '../../shared/types';
 import type { AgentSlug } from '../../shared/agentIdentity';
 import type { ApprovalScreenSnapshot } from '../../shared/approvalScreen';
-import { agyScreenApproval, claudeScreenApproval, codexScreenApproval, openCodeScreenApproval, type ScreenApproval } from './approvalScreen';
+import { agyScreenApproval, claudeScreenApproval, codexScreenApproval, openCodeScreenApproval, piScreenApproval, type ScreenApproval } from './approvalScreen';
 export type { AgentSlug };
 export { agentDisplayToSlug } from '../../shared/agentIdentity';
 
@@ -141,6 +141,15 @@ interface AgentPattern {
   takesOverFrom?: readonly AgentSlug[];
   /** Strict live-grid recovery, used only after a fresh external identity. */
   approvalScreen?: (rows: readonly string[]) => ScreenApproval | null;
+  /**
+   * A question no line pattern reads (the grid is its only reader): its
+   * question row, and the row that finishes it. The question row arms it and a
+   * later finishing row makes it ready, however far apart the two are drawn.
+   * Ready after identity arrived, it asks the host for that identity's one
+   * recheck (takeApprovalRecheckRequest); no recheck is spent before it is
+   * ready, because a read then would see half a question.
+   */
+  approvalReady?: { question: RegExp; end: RegExp };
   patterns: {
     regex: RegExp;
     status: AgentEvent['status'];
@@ -548,6 +557,30 @@ const AGENT_PATTERNS: AgentPattern[] = [
     ],
   },
 
+  // ── Pi ────────────────────────────────────────────────────────────────────
+  // Live capture 2026-10-26, @earendil-works/pi-coding-agent 1.4.0 on macOS
+  // (120x40, loopback fake model; __tests__/fixtures/pi-1.4.0-capture.json).
+  // Pi owns the alternate screen and places every row with CUP: it writes no
+  // CR/LF until it exits, so no line pattern ever sees its composer or its
+  // `── ⠦ Working ──` border, and running/idle come from output activity.
+  // Identity is its native title, `π - <cwd basename>`, written once at
+  // startup. Tools (bash included) run without asking. The one question it
+  // asks is the project-trust selector, drawn as CRLF rows before the title:
+  // it is read only structurally (approvalScreen, the current grid) once
+  // process identity has seeded the profile. Its question row alone is no
+  // evidence: a seeded `pi -p` or a shell after Pi exits can print it.
+  {
+    agent: 'Pi',
+    slug: 'pi',
+    approvalScreen: piScreenApproval,
+    // The question, then the key footer that is the selector's last row (a
+    // narrow pane wraps `cancel`).
+    approvalReady: { question: /Trust\s*project\s*folder\?/, end: /escape\/ctrl\+c\s*cancel/ },
+    gate: /π - /,
+    chrome: isPiChrome,
+    patterns: [],
+  },
+
   // ── GitHub Copilot CLI ────────────────────────────────────────────────────
   {
     agent: 'GitHub Copilot CLI',
@@ -583,6 +616,14 @@ const AGENT_PATTERNS: AgentPattern[] = [
  *  (src/shared/agentIdentity.ts) must name exactly these; a test holds them
  *  together. */
 export const DETECTOR_PROFILE_SLUGS: readonly AgentSlug[] = AGENT_PATTERNS.map((ap) => ap.slug);
+/** The profiles with an approvalReady question, its patterns compiled global once. */
+const READY_PROFILES = AGENT_PATTERNS.flatMap((ap) => (ap.approvalReady
+  ? [{ slug: ap.slug, question: globalRegExp(ap.approvalReady.question), end: globalRegExp(ap.approvalReady.end) }]
+  : []));
+
+function globalRegExp(re: RegExp): RegExp {
+  return re.global ? re : new RegExp(re.source, `${re.flags}g`);
+}
 
 // Derive the Claude waiting patterns from the table above so the gate replay
 // and the ordinary pattern pass can never disagree about which fragment a line
@@ -959,6 +1000,18 @@ function isOpenCodeChrome(line: string): boolean {
 }
 
 /**
+ * Pi's native title, `π - <cwd basename>` or `π - <session> - <cwd basename>`
+ * (pi 1.4.0 interactive-mode setTitle, OSC 0 / BEL in the live capture). The
+ * basename is empty at `/` or a drive root, and a session name has no length
+ * bound. Both OSC title selectors and terminators are accepted; an unfinished
+ * OSC or the same words as visible text are not evidence.
+ */
+function isPiChrome(line: string): boolean {
+  // eslint-disable-next-line no-control-regex
+  return /\x1b\][02];π - [^\x07\x1b\r\n]*(?:\x07|\x1b\\)/.test(line);
+}
+
+/**
  * Welcome rows documented by github/gh-copilot's README and
  * github/copilot-cli's changelog. Command echoes (`gh copilot`, `copilot-cli`)
  * are not provider output. Keep the optional historical `in the` spelling.
@@ -1039,6 +1092,14 @@ export class AgentDetector {
   // must precede it (idleSuppression.recentlyEscaped). A dedup here would let a
   // redrawn old row use up the report the real interrupt needs.
   private interruptedCallbacks: InterruptedCallback[] = [];
+  // The owner's approvalReady question became ready: see takeApprovalRecheckRequest.
+  private approvalRecheckRequested = false;
+  // approvalReady questions whose question row was drawn, and those whose
+  // finishing row followed it, since the screen was last invalidated.
+  private approvalArmed = new Set<AgentSlug>();
+  private approvalReadySlugs = new Set<AgentSlug>();
+  // The approval evidence an identity change retired (retireApprovalScreen).
+  private retiredApprovalHint: { tail: string; at: number | null; armed: Set<AgentSlug>; ready: Set<AgentSlug> } | null = null;
   private codexLimitScanner = new CodexUsageLimitLineScanner();
   private lineBuffer = '';
   /** Incomplete OSC 133 boundary, bounded to a short shell payload. */
@@ -1196,10 +1257,21 @@ export class AgentDetector {
     if (!sameOwner) {
       if (this.lastAgent !== null && this.lastAgent !== profile.agent) {
         this.advanceIdentityBoundary();
-        this.invalidateApprovalScreen();
+        this.retireApprovalScreen();
       }
       this.resetLaunchEvidence();
       this.lastScreenAgent = null;
+    }
+    // A grid-only question this owner drew before its seed outlives the
+    // previous owner's retirement; revalidateApprovalScreen still reads it
+    // only once it is ready.
+    const retired = this.retiredApprovalHint;
+    this.retiredApprovalHint = null;
+    if (retired && profile.approvalReady) {
+      this.approvalHintTail = retired.tail;
+      this.approvalHintAt = retired.at;
+      this.approvalArmed = retired.armed;
+      this.approvalReadySlugs = retired.ready;
     }
     this.trustedAgent = slug;
     this.lastAgent = profile.agent;
@@ -1210,7 +1282,7 @@ export class AgentDetector {
 
   /** Confirmed death/disposal: revoke all launch identity, without an event. */
   clearTrustedIdentity(): void {
-    this.invalidateApprovalScreen();
+    this.retireApprovalScreen();
     this.advanceIdentityBoundary();
     this.trustedAgent = null;
     this.lastAgent = null;
@@ -1226,6 +1298,17 @@ export class AgentDetector {
     this.approvalHintTail = '';
     this.approvalHintAt = null;
     this.approvalRecheckEpoch = null;
+    this.approvalRecheckRequested = false;
+    this.approvalArmed = new Set();
+    this.approvalReadySlugs = new Set();
+    this.retiredApprovalHint = null;
+  }
+
+  /** An identity change: invalidate, but keep the evidence for the next seed to judge. */
+  private retireApprovalScreen(): void {
+    const retired = { tail: this.approvalHintTail, at: this.approvalHintAt, armed: this.approvalArmed, ready: this.approvalReadySlugs };
+    this.invalidateApprovalScreen();
+    this.retiredApprovalHint = retired;
   }
 
   /**
@@ -1243,6 +1326,8 @@ export class AgentDetector {
     const fresh = (): boolean => this.approvalHintAt !== null
       && Date.now() >= this.approvalHintAt && Date.now() - this.approvalHintAt <= 30_000;
     if (!owner || !profile?.approvalScreen || !fresh() || this.approvalRecheckEpoch === epoch) return false;
+    // Not spent on half a question: the row that finishes it asks again.
+    if (profile.approvalReady && !this.approvalReadySlugs.has(profile.slug)) return false;
     this.approvalRecheckEpoch = epoch;
     const owns = (): boolean => this.trustedAgent === owner && this.identityEpoch === epoch
       && this.approvalScreenGeneration === generation && !this.shellPromptSinceOwner && fresh();
@@ -1331,6 +1416,18 @@ export class AgentDetector {
     this.feedOutput(rest.slice(0, holdAt));
   }
 
+  /**
+   * Whether the output fed since the last call finished a grid-only question
+   * on a pane whose owner's one recheck is still unused (approvalReady).
+   * The host calls this once the same output is on the screen it reads, and
+   * answers true with revalidateApprovalScreen. Reading clears the request.
+   */
+  takeApprovalRecheckRequest(): boolean {
+    const requested = this.approvalRecheckRequested;
+    this.approvalRecheckRequested = false;
+    return requested;
+  }
+
   private noteShellReturn(): void {
     this.invalidateApprovalScreen();
     this.advanceIdentityBoundary();
@@ -1363,11 +1460,27 @@ export class AgentDetector {
     const previousLength = stripAnsi(this.approvalHintTail).length;
     const probe = this.approvalHintTail + data;
     const cleanProbe = stripAnsi(probe);
-    const hint = /Do\s*you\s*(?:want|trust)|Would\s*you\s*like|Allow\s*tool\s*use|Permission\s*required/g;
+    const hint = /Do\s*you\s*(?:want|trust)|Would\s*you\s*like|Allow\s*tool\s*use|Permission\s*required|Trust\s*project\s*folder/g;
     for (const match of cleanProbe.matchAll(hint)) {
       // Only newly drawn text refreshes freshness. Retaining an old question
       // in the tail across a title update must not make it recent again.
       if (match.index + match[0].length > previousLength) this.approvalHintAt = Date.now();
+    }
+    for (const { slug, question, end } of READY_PROFILES) {
+      // An end counts only after a question: from 0 once one is armed.
+      let from = this.approvalArmed.has(slug) ? 0 : -1;
+      for (const match of cleanProbe.matchAll(question)) {
+        if (match.index + match[0].length <= previousLength) continue;
+        from = match.index + match[0].length;
+        this.approvalArmed.add(slug);
+        this.approvalReadySlugs.delete(slug);
+      }
+      if (from < 0) continue;
+      for (const match of cleanProbe.matchAll(end)) {
+        if (match.index < from || match.index + match[0].length <= previousLength) continue;
+        this.approvalReadySlugs.add(slug);
+        if (slug === this.trustedAgent && this.approvalRecheckEpoch !== this.identityEpoch) this.approvalRecheckRequested = true;
+      }
     }
     this.approvalHintTail = probe.slice(-4096);
     this.lineBuffer += data;

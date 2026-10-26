@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { AgentDetector, CRITICAL_REPEAT_WINDOW_MS, CRITICAL_SEEN_MAX } from '../AgentDetector';
 import { hasElevatedRisk } from '../../../shared/criticalPatterns';
+import piCapture from './fixtures/pi-1.4.0-capture.json';
 
 describe('AgentDetector', () => {
   // Helper: feed both banner AND prompt to open the Claude compound gate (#850).
@@ -700,6 +701,7 @@ describe('AgentDetector', () => {
       'Welcome to the Antigravity CLI. is the welcome message\n',
       'Welcome to GitHub Copilot CLI! is the welcome message\n',
       'Do you trust the contents of this project?\n',
+      'π - proj\n',
     ];
 
     it.each(mentions)('does not start an agent from shell output, at any split: %j', (output) => {
@@ -732,6 +734,14 @@ describe('AgentDetector', () => {
       ['OpenCode', '\u001b]0;OpenCode\u0007'],
       // The session title form is source-verified in upstream tui/app.tsx.
       ['OpenCode', '\u001b]2;OC | New session\u001b\\'],
+      // Pi 1.4.0 live capture: OSC 0 / BEL. The session-name form is
+      // interactive-mode setTitle in the same build.
+      ['Pi', '\u001b]0;π - proj\u0007'],
+      ['Pi', '\u001b]2;π - fix tests - proj\u001b\\'],
+      // At `/` or a drive root the basename is empty.
+      ['Pi', '\u001b]0;π - \u0007'],
+      // A session name has no length bound.
+      ['Pi', `\u001b]0;π - ${'a long session name '.repeat(15)}- proj\u0007`],
     ])('keeps %s provider chrome detection independent of chunk splits (%j)', (agent, output) => {
       for (let split = 0; split <= output.length; split++) {
         const det = new AgentDetector();
@@ -816,6 +826,55 @@ describe('AgentDetector', () => {
       det.feed(`? for shortcuts${FOOTER_TAIL}\n`);
       expect(det.getLastAgent()).toBe('Claude Code');
       expect(cb.mock.calls.map((c) => c[0].agent)).not.toContain('Antigravity CLI');
+    });
+  });
+
+  describe('Pi (pi-coding-agent 1.4.0, live capture 2026-10-26)', () => {
+    const { startup, working, replyEnd, tool, trust } = piCapture.chunks;
+
+    it('takes the pane from the startup title and nothing later in the session emits', () => {
+      for (let split = 0; split <= startup.length; split++) {
+        const det = new AgentDetector();
+        const cb = vi.fn();
+        det.onEvent(cb);
+        det.feed(startup.slice(0, split));
+        det.feed(startup.slice(split));
+        expect(det.getLastAgent()).toBe('Pi');
+        expect(cb.mock.calls.map((c) => c[0])).toEqual([{ agent: 'Pi', status: 'running', message: 'Agent started' }]);
+      }
+      // A streamed reply, then a bash tool call Pi runs without asking: every
+      // row is CUP-placed on the alternate screen, so no status or approval.
+      // Critical lines are not asserted: with no CR/LF the whole screen stays
+      // in the line buffer and reaches the critical scan only as one stale
+      // line at exit, a gap of every CUP-only screen, not of this profile.
+      const det = new AgentDetector();
+      const cb = vi.fn();
+      det.onEvent(cb);
+      for (const chunk of [startup, working, replyEnd, tool]) {
+        for (let i = 0; i < chunk.length; i += 512) det.feed(chunk.slice(i, i + 512));
+      }
+      expect(cb.mock.calls.map((c) => c[0].message)).toEqual(['Agent started']);
+    });
+
+    it('never reads the project-trust question off the stream, even on a seeded pane', () => {
+      const det = new AgentDetector();
+      const cb = vi.fn();
+      det.onEvent(cb);
+      det.feed(trust);
+      // Drawn before Pi's title: the screen alone does not know whose it is.
+      expect(cb).not.toHaveBeenCalled();
+
+      // Seeded, the live selector is left to quiet recovery of the grid, and
+      // the question printed on a line of its own (`pi -p`, a shell after Pi
+      // exits) is no approval at all.
+      for (const output of [trust, 'Trust project folder?\r\n']) {
+        const seeded = new AgentDetector();
+        const seededCb = vi.fn();
+        seeded.onEvent(seededCb);
+        seeded.seedTrustedIdentity('pi', seeded.getIdentityEpoch());
+        seeded.feed(output);
+        expect(seededCb).not.toHaveBeenCalled();
+      }
     });
   });
 

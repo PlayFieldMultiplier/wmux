@@ -2053,6 +2053,9 @@ export class DaemonPTYBridge extends EventEmitter {
       } catch {
         // detection 실패가 데이터 포워딩을 막아선 안 된다.
       }
+      // A grid-only question this chunk finished (approvalReady): read the
+      // screen once the chunk is in the ring, below. Muted, it is dropped.
+      const approvalRecheck = agentDetector.takeApprovalRecheckRequest();
 
       // Muted: keep the chunk out of the ring before any side effect. Recovery
       // sessions run muted until their first resize so the geometry mismatch
@@ -2071,6 +2074,7 @@ export class DaemonPTYBridge extends EventEmitter {
         return;
       }
       capture(data, buf, nativeChunk);
+      if (approvalRecheck) this.recheckQuietApproval(agentDetector);
     };
     const nativePty = ptyProcess as TerminalPty;
     const onDataDisposable = nativePty.onNativeData

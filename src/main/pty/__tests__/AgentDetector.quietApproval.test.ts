@@ -5,7 +5,8 @@ import codex from '../../../daemon/approvals/__tests__/fixtures/terminal-prompts
 import openCode from '../../../daemon/approvals/__tests__/fixtures/terminal-prompts/opencode-permission-bash-01.json';
 import claude from '../../../daemon/approvals/__tests__/fixtures/terminal-prompts/claude-write-01-create.json';
 import type { ApprovalScreenSnapshot } from '../../../shared/approvalScreen';
-import { codexScreenApproval } from '../approvalScreen';
+import { codexScreenApproval, piScreenApproval } from '../approvalScreen';
+import piCapture from './fixtures/pi-1.4.0-capture.json';
 
 const TRUST = ['Do you trust the contents of this project?', '❯ Yes, I trust this folder', '  No, exit', '↑/↓ Navigate · enter Confirm'];
 const CODEX_EDIT = ['Would you like to make the following edits?', '› 1. Yes, proceed (y)',
@@ -56,6 +57,165 @@ describe('quiet approval recovery reads only the current interactive viewport', 
     const { det, events } = setup(slug, output);
     expect(await det.revalidateApprovalScreen(async () => frame(rows))).toBe(true);
     expect(events.mock.calls.map(([event]) => event.status)).toEqual(['awaiting_input']);
+  });
+
+  // The folder path wrapped so that a row of it starts like a choice.
+  const narrow = piCapture.screens.trustNarrow;
+  const pathRow = narrow.indexOf(' er-name/and-a-deeper-trustproj');
+  if (pathRow < 0) throw new Error('pi-1.4.0-capture.json: the wrapped path row this test rewrites is gone');
+  const trustRepoPath = narrow.map((row, i) => (i === pathRow ? ' Trust-repo/and-a-deeper-trustproj' : row));
+
+  it.each([
+    ['120 columns', piCapture.chunks.trust, piCapture.screens.trust],
+    // The parent-folder path and the key footer wrap onto rows of their own.
+    ['44 columns', piCapture.chunks.trustNarrow, piCapture.screens.trustNarrow],
+    ['44 columns, a path row reading Trust-repo/…', piCapture.chunks.trustNarrow, trustRepoPath],
+  ])('recovers Pi\'s captured project-trust selector at %s', async (_label, output, rows) => {
+    // Drawn before Pi's title, so only a later process identity can claim it.
+    const { det, events } = setup('pi', output);
+    expect(await det.revalidateApprovalScreen(async () => frame(rows))).toBe(true);
+    expect(events.mock.calls.map(([event]) => event)).toEqual([
+      { agent: 'Pi', status: 'awaiting_input', message: 'Project trust prompt' },
+    ]);
+  });
+
+  it.each(['identity, then the selector', 'the selector, then identity', 'identity between the question and its footer'] as const)(
+    'reads Pi\'s selector once, whichever comes first: %s', async (order) => {
+      const det = new AgentDetector();
+      const events = vi.fn();
+      det.onEvent(events);
+      const read = vi.fn(async () => frame(piCapture.screens.trust));
+      if (order === 'identity between the question and its footer') {
+        const { trust } = piCapture.chunks;
+        const split = trust.indexOf('Trust project folder?') + 'Trust project folder?'.length;
+        det.feed(trust.slice(0, split));
+        det.seedTrustedIdentity('pi', det.getIdentityEpoch());
+        // The question is fresh but unfinished: the seed-time recheck waits.
+        expect(await det.revalidateApprovalScreen(read)).toBe(false);
+        expect(read).not.toHaveBeenCalled();
+        det.feed(trust.slice(split));
+        expect(det.takeApprovalRecheckRequest()).toBe(true);
+      } else if (order === 'identity, then the selector') {
+        det.seedTrustedIdentity('pi', det.getIdentityEpoch());
+        // The host's seed-time recheck: nothing is fresh yet, and it is not spent.
+        expect(await det.revalidateApprovalScreen(read)).toBe(false);
+        det.feed(piCapture.chunks.trust);
+        expect(det.takeApprovalRecheckRequest()).toBe(true);
+        expect(det.takeApprovalRecheckRequest()).toBe(false);
+      } else {
+        det.feed(piCapture.chunks.trust);
+        det.seedTrustedIdentity('pi', det.getIdentityEpoch());
+        // No owner when the question was drawn: the seed-time recheck reads it.
+        expect(det.takeApprovalRecheckRequest()).toBe(false);
+      }
+      expect(await det.revalidateApprovalScreen(read)).toBe(true);
+      expect(events.mock.calls.map(([event]) => event)).toEqual([
+        { agent: 'Pi', status: 'awaiting_input', message: 'Project trust prompt' },
+      ]);
+      // The one recheck is spent: a redraw of the selector asks for nothing.
+      det.feed(piCapture.chunks.trust);
+      expect(det.takeApprovalRecheckRequest()).toBe(false);
+    },
+  );
+
+  it('asks for Pi\'s recheck only once the selector\'s last row is drawn, however the reads split', () => {
+    const { trust, trustNarrow } = piCapture.chunks;
+    for (const output of [trust, trustNarrow]) {
+      // Where the first draw's key footer ends on the wire (SGR runs sit inside it).
+      const footerEnd = output.indexOf('cancel', output.indexOf('escape/ctrl+c')) + 'cancel'.length;
+      for (const size of [1, 7, 64, 500]) {
+        const det = new AgentDetector();
+        det.seedTrustedIdentity('pi', det.getIdentityEpoch());
+        let before = -1;
+        let after = -1;
+        for (let at = 0; at < output.length && after < 0; at += size) {
+          det.feed(output.slice(at, at + size));
+          if (det.takeApprovalRecheckRequest()) [before, after] = [at, at + size];
+        }
+        expect(before).toBeLessThan(footerEnd);
+        expect(after).toBeGreaterThanOrEqual(footerEnd);
+      }
+    }
+  });
+
+  it.each([
+    ['a profile whose questions reach its line patterns', 'agy', TRUST.join('\r\n')],
+    // Generic question words in a Pi reply are not its selector.
+    ['a Pi reply asking a question', 'pi', 'Would you like me to run the tests?\r\n'],
+    // The captured key footer under a reply's question words: another Pi picker.
+    ['Pi\'s key footer under no trust question', 'pi', 'Would you like me to run the tests?\r\n ↑↓ navigate  enter select  escape/ctrl+c cancel\r\n'],
+    // The question is not finished by a footer drawn above it.
+    ['a footer drawn before the trust question in one read', 'pi', ' ↑↓ navigate  enter select  escape/ctrl+c cancel\r\n Trust project folder?\r\n'],
+  ] as const)('asks for no recheck on %s', (_label, slug, output) => {
+    const det = new AgentDetector();
+    det.seedTrustedIdentity(slug, det.getIdentityEpoch());
+    det.feed(output);
+    expect(det.takeApprovalRecheckRequest()).toBe(false);
+  });
+
+  it.each(['the bridge ends it first', 'the seed replaces it'] as const)(
+    'reads Pi\'s selector drawn while a previous agent still owned the pane (%s)', async (how) => {
+      const det = new AgentDetector();
+      const events = vi.fn();
+      det.onEvent(events);
+      det.seedTrustedIdentity('claude', det.getIdentityEpoch());
+      det.feed(piCapture.chunks.trust);
+      if (how === 'the bridge ends it first') det.clearTrustedIdentity();
+      det.seedTrustedIdentity('pi', det.getIdentityEpoch());
+      expect(await det.revalidateApprovalScreen(async () => frame(piCapture.screens.trust))).toBe(true);
+      expect(events.mock.calls.map(([event]) => event)).toEqual([
+        { agent: 'Pi', status: 'awaiting_input', message: 'Project trust prompt' },
+      ]);
+    },
+  );
+
+  it.each([
+    ['Pi, from another agent\'s question', 'pi', TRUST.join('\r\n'), false],
+    ['Pi, from its selector answered before the seed', 'pi', piCapture.chunks.trust, true],
+    // A profile with line patterns keeps the old rule: an identity change drops the hint.
+    ['agy, from its own question drawn under the previous owner', 'agy', TRUST.join('\r\n'), false],
+  ] as const)('keeps no retired hint for %s', async (_label, slug, output, answered) => {
+    const det = new AgentDetector();
+    det.seedTrustedIdentity('claude', det.getIdentityEpoch());
+    det.feed(output);
+    det.clearTrustedIdentity();
+    if (answered) det.invalidateApprovalScreen();
+    det.seedTrustedIdentity(slug, det.getIdentityEpoch());
+    const read = vi.fn(async () => frame(slug === 'pi' ? piCapture.screens.trust : TRUST));
+    expect(await det.revalidateApprovalScreen(read)).toBe(false);
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it.each([0, 1024])('reads Pi\'s selector on a 400-column pane (reads of %i bytes; 0 = one read)', async (size) => {
+    // The captured selector with each row's padding widened from 120 to 400
+    // columns: its question and its footer end up more than 4 KB apart.
+    const wide = piCapture.chunks.trust.replace(/ {20,}/g, (pad) => pad + ' '.repeat(280));
+    const det = new AgentDetector();
+    const events = vi.fn();
+    det.onEvent(events);
+    det.seedTrustedIdentity('pi', det.getIdentityEpoch());
+    for (let at = 0; at < wide.length; at += size || wide.length) det.feed(wide.slice(at, at + (size || wide.length)));
+    expect(det.takeApprovalRecheckRequest()).toBe(true);
+    expect(await det.revalidateApprovalScreen(async () => frame(piCapture.screens.trust))).toBe(true);
+    expect(events.mock.calls.map(([event]) => event.status)).toEqual(['awaiting_input']);
+  });
+
+  it('drops a pending Pi recheck once input or a resize makes the screen stale', () => {
+    const det = new AgentDetector();
+    det.seedTrustedIdentity('pi', det.getIdentityEpoch());
+    det.feed(piCapture.chunks.trust);
+    det.invalidateApprovalScreen();
+    expect(det.takeApprovalRecheckRequest()).toBe(false);
+  });
+
+  it('reads no approval from Pi\'s other captured screens', () => {
+    const { idle, working, done, tool, trust } = piCapture.screens;
+    // The selector with no selected choice, or with no way to decline, is not it.
+    const unselected = trust.filter((row) => !row.startsWith(' →'));
+    const noDecline = trust.filter((row) => !row.includes('Do not trust'));
+    for (const rows of [idle, working, done, tool, unselected, noDecline]) {
+      expect(piScreenApproval(rows)).toBeNull();
+    }
   });
 
   it('recovers a live edit dialog whose body exceeds 24 nonblank viewport rows', async () => {
