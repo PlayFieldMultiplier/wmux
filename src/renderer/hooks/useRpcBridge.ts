@@ -20,13 +20,14 @@ import { isTaskEnded, isVerifiedTaskSender } from '../../shared/a2aReopen';
 import { applyTaskQueryView } from '../../shared/a2aTaskQueryView';
 import { getLeafPanes, getWorkspaceLeafPanes, getWorkspacePtyIds, getWorkspaceRemoteSessions } from '../../shared/paneUtils';
 import { findStashedEntry, paneStashedError, stashedPaneLiveness } from '../../shared/paneStash';
-import { applyRoleAgent, launchRefusesPositionalPrompt, normalizeRoleBinding, sanitizeOrchRole } from '../../shared/orchestratorRole';
+import { applyRoleAgent, KNOWN_AGENT_STEMS, launchRefusesPositionalPrompt, normalizeRoleBinding, sanitizeOrchRole } from '../../shared/orchestratorRole';
 import type { CustomAgent } from '../../shared/customAgents';
 import {
   FANOUT_EXTRA_AGENT_STEMS,
   applyFanoutAgentFlags,
   commandLauncherStem,
   describeFanoutRole,
+  fanoutAgentSpec,
   fanoutChoiceBinding,
   fanoutLaunchCustomAgents,
   unresolvedCustomAgent,
@@ -1571,7 +1572,7 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
     const named = (params.agentChoice as { agent?: unknown } | undefined)?.agent;
     const roleAgent = role ? useStore.getState().orchestratorRoleBindings[role]?.agent : undefined;
     const wanted = typeof named === 'string' ? named : roleAgent;
-    if (!Array.isArray(params.customAgents) && wanted && unresolvedCustomAgent(wanted, useStore.getState().customAgents)) {
+    if (!Array.isArray(params.customAgents) && wanted && !KNOWN_AGENT_STEMS.has(wanted) && !fanoutAgentSpec(wanted)) {
       try {
         const fresh = await window.electronAPI?.fanout?.getCustomAgents?.();
         if (fresh && Array.isArray(fresh.agents)) useStore.getState().setCustomAgents(fresh.agents);
@@ -1600,12 +1601,13 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
       : role
         ? useStore.getState().orchestratorRoleBindings[role]
         : undefined;
-    // A role bound to a custom agent whose definition is missing would launch
-    // the default agent's line: the task fails instead.
-    if (roleBinding?.agent && unresolvedCustomAgent(roleBinding.agent, customAgents)) {
-      return { error: `fanout.spawnWorkspace: no custom agent "${roleBinding.agent}" is defined, so the ${role ?? ''} task was not launched` };
-    }
     const extraAgents = agentChoice ? FANOUT_EXTRA_AGENT_STEMS : undefined;
+    // An agent the swap cannot put in (a missing custom agent, or a fan-out-only
+    // CLI bound to a role) would launch the default agent's line: the task
+    // fails instead.
+    if (roleBinding?.agent && unresolvedCustomAgent(roleBinding.agent, customAgents, extraAgents)) {
+      return { error: `fanout.spawnWorkspace: "${roleBinding.agent}" is not an agent ${role ? `the ${role} role` : 'this task'} can launch, so the task was not launched` };
+    }
     // Two steps, and BOTH are needed. applyRoleBinding (inside withRoleBinding
     // below) refuses to touch a command whose launcher differs from the
     // binding's agent — right for a line a human typed, wrong here, where wmux

@@ -24,7 +24,7 @@ import type { AgentSlug } from './agentIdentity';
 import { customAgentLaunchLine, customAgentStem, customLaunchPrefixLength, findCustomAgent, normalizeCustomAgentsReport, type CustomAgent } from './customAgents';
 import { tokenize } from './agentResume';
 import { EFFORT_TOKEN_RE, launchGrammarFor } from './agentLaunchOptions';
-import { bindingEnforcesModel, KNOWN_AGENT_STEMS, ROLE_BINDING_MODEL_MAX, type RoleBinding } from './orchestratorRole';
+import { bindingEnforcesModel, bindingEnforcesSkipPermissions, KNOWN_AGENT_STEMS, ROLE_BINDING_MODEL_MAX, type RoleBinding } from './orchestratorRole';
 import { FANOUT_MAX_TASKS } from './workTask';
 
 /** Why a CLI is listed but not selectable. */
@@ -650,18 +650,23 @@ export function fanoutLaunchCustomAgents(snapshot: unknown, current: readonly Cu
   return Array.isArray(snapshot) ? normalizeCustomAgentsReport(snapshot).agents : current;
 }
 
-/** A binding agent that no registry, fan-out or custom agent answers to: its
- *  definition is gone or not loaded. A task bound to it must not launch, as
- *  the swap would leave the default agent's line in place. */
-export function unresolvedCustomAgent(agent: string | undefined, customAgents: readonly CustomAgent[]): boolean {
-  return !!agent && !KNOWN_AGENT_STEMS.has(agent) && !fanoutAgentSpec(agent) && !findCustomAgent(agent, customAgents);
+/** A binding agent the launch cannot swap in: not a registry agent a role
+ *  runs, not one of `extraAgents` (a preset row's fan-out-only CLIs), and not
+ *  a custom agent in the list (gone, or not loaded). A task bound to it must
+ *  not launch, as the swap would leave the default agent's line in place. */
+export function unresolvedCustomAgent(
+  agent: string | undefined,
+  customAgents: readonly CustomAgent[],
+  extraAgents?: ReadonlySet<string>,
+): boolean {
+  return !!agent && !KNOWN_AGENT_STEMS.has(agent) && !extraAgents?.has(agent) && !findCustomAgent(agent, customAgents);
 }
 
 /** One "Roles resolve to" line of a fan-out approval: what the role launches,
  *  a custom agent as its own command line. */
 export function describeFanoutRole(role: string, b: RoleBinding | undefined, customAgents: readonly CustomAgent[]): string {
   if (!b || (!b.agent && !b.model && !b.args)) return `${role} → the default agent (no binding)`;
-  if (unresolvedCustomAgent(b.agent, customAgents)) return `${role} → ${b.agent} (no such custom agent: the task will not launch)`;
+  if (unresolvedCustomAgent(b.agent, customAgents)) return `${role} → ${b.agent} (not an agent a role can launch: the task will not launch)`;
   const custom = b.agent ? findCustomAgent(b.agent, customAgents) : undefined;
   const parts: string[] = [custom ? customAgentLaunchLine(custom) : b.agent || 'the default agent'];
   // A custom agent's model goes after the flag the operator gave it.
@@ -670,6 +675,9 @@ export function describeFanoutRole(role: string, b: RoleBinding | undefined, cus
     parts.push(bindingEnforcesModel(b, customAgents) ? `${modelFlag} ${b.model}` : `(model "${b.model}" is configured but will NOT be applied)`);
   }
   if (b.args) parts.push(b.args);
+  // A custom agent gets neither: wmux knows no launch grammar for it.
+  if (b.effort && !custom) parts.push(`effort ${b.effort}`);
+  if (bindingEnforcesSkipPermissions(b)) parts.push('(permission prompts skipped)');
   return `${role} → ${parts.join(' ')}`;
 }
 

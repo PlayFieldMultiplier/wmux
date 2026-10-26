@@ -204,7 +204,8 @@ export async function handleRole(args: string[], jsonMode: boolean, overrides: P
     customAgents = report.agents;
     dropped = report.dropped;
   } catch (err) {
-    unreadable = (err as Error).message;
+    // No file is no custom agents, not a read problem.
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') unreadable = (err as Error).message;
   }
   // A role bound to a custom agent main cannot find would not launch: say so,
   // and why, rather than print a command line nothing will run.

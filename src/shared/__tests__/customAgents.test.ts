@@ -148,8 +148,14 @@ describe('launching what was approved', () => {
 
   it('shows a custom role as its command line in the approval, and a missing one as not launching', () => {
     expect(describeFanoutRole('Builder', { agent: 'tern', model: 'm1' }, [tern])).toBe('Builder → /opt/tern/bin/tern --fast -m m1');
-    expect(describeFanoutRole('Builder', { agent: 'tern' }, [])).toBe('Builder → tern (no such custom agent: the task will not launch)');
+    expect(describeFanoutRole('Builder', { agent: 'tern' }, [])).toBe('Builder → tern (not an agent a role can launch: the task will not launch)');
     expect(describeFanoutRole('Builder', { agent: 'codex', model: 'o3' }, [])).toBe('Builder → codex --model o3');
+    // Effort and a skipped permission prompt are part of what was approved.
+    expect(describeFanoutRole('R', { agent: 'codex', model: 'o3', effort: 'high', skipPermissions: true }, []))
+      .toBe('R → codex --model o3 effort high (permission prompts skipped)');
+    // A fan-out-only CLI cannot be swapped in for a role; a preset row can run it.
+    expect(unresolvedCustomAgent('grok', [])).toBe(true);
+    expect(unresolvedCustomAgent('grok', [], new Set(['grok']))).toBe(false);
   });
 });
 

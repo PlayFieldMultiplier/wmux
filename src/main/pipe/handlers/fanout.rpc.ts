@@ -1846,7 +1846,7 @@ export function registerFanOutRpc(
       ...(agentChoices.length > 0 ? { agents: agentChoices } : {}),
       // The definitions the approval described, so a later edit in Settings
       // cannot change what an approved task launches.
-      ...(customAgents.length > 0 ? { customAgents } : {}),
+      customAgents,
       ...(worktree
         ? {}
         : {
@@ -1933,7 +1933,7 @@ export function registerFanOutRpc(
               requireApproval,
               // The renderer expands role-bound custom agents from main's
               // snapshot, the same one every task then launches.
-              ...(customAgents.length > 0 ? { customAgents } : {}),
+              customAgents,
               // What a claude worker's line gets appended, so an approval covers
               // the permission mode and tool rules, not just the prompt.
               promptPreview:

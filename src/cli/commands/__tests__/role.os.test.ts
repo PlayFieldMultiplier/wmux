@@ -87,7 +87,7 @@ describe('wmux role resolve', () => {
   });
 
   it('refuses a role whose custom agent cannot launch, and says why', async () => {
-    const resolve = async (customFile: string | undefined, json = false) => {
+    const resolve = async (customFile: string | undefined, json = false, errno = 'ENOENT') => {
       const files: Record<string, string> = {
         '/fake/session.json': JSON.stringify({ orchestratorRoleBindings: { Builder: { agent: 'tern' } } }),
       };
@@ -99,7 +99,7 @@ describe('wmux role resolve', () => {
         sessionPath: '/fake/session.json',
         customAgentsPath: '/fake/custom-agents.json',
         readFile: (p) => {
-          if (!(p in files)) throw new Error('ENOENT');
+          if (!(p in files)) throw Object.assign(new Error(errno), { code: errno });
           return files[p];
         },
         log: (l) => out.push(l),
@@ -114,10 +114,12 @@ describe('wmux role resolve', () => {
     expect(refused.out).toEqual([]);
     expect(refused.code).toBe(1);
     expect(refused.err).toEqual([expect.stringContaining('not a Windows path')]);
-    // No file at all: never a bare `tern` with bound:true.
+    // No file at all is no custom agents: never a bare `tern` with bound:true.
     const missing = await resolve(undefined, true);
     expect(missing.code).toBe(1);
-    expect(JSON.parse(missing.out[0])).toEqual({ role: 'Builder', bound: true, unavailable: expect.stringContaining('cannot read') });
+    expect(JSON.parse(missing.out[0])).toEqual({ role: 'Builder', bound: true, unavailable: expect.stringContaining('no custom agent "tern"') });
+    // A file it cannot read says so.
+    expect((await resolve(undefined, false, 'EACCES')).err).toEqual([expect.stringContaining('cannot read')]);
     // A file without it.
     expect((await resolve(JSON.stringify({ agents: [] }))).err).toEqual([expect.stringContaining('no custom agent "tern"')]);
   });

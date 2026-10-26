@@ -113,7 +113,7 @@ describe('useRpcBridge — fanout.spawnWorkspace wiring for agent choices', () =
     expect(block).toMatch(/validateFanoutAgentChoice\(params\.agentChoice, \{\s*allowUnattended: true,\s*allowEffort: true,\s*customAgents,\s*\}\)/);
     // main's approval snapshot, else the current list; a role bound to a missing custom agent fails the task.
     expect(block).toMatch(/const customAgents = fanoutLaunchCustomAgents\(params\.customAgents, useStore\.getState\(\)\.customAgents\)/);
-    expect(block).toMatch(/if \(roleBinding\?\.agent && unresolvedCustomAgent\(roleBinding\.agent, customAgents\)\) \{\s*return \{ error:/);
+    expect(block).toMatch(/if \(roleBinding\?\.agent && unresolvedCustomAgent\(roleBinding\.agent, customAgents, extraAgents\)\) \{\s*return \{ error:/);
     expect(block).toMatch(/normalizeRoleBinding\(fanoutChoiceBinding\(checked\.choice\)\)/);
     expect(block).toMatch(/return \{ error: `fanout\.spawnWorkspace: invalid agent choice/);
   });

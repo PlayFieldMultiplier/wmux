@@ -938,7 +938,7 @@ export class FanOutService {
       reservationKey: req.idempotencyKey,
       ...(entries[k].role ? { role: entries[k].role } : {}),
       ...(entries[k].agent ? { agentChoice: entries[k].agent } : {}),
-      ...(req.customAgents?.length ? { customAgents: req.customAgents } : {}),
+      ...(req.customAgents ? { customAgents: req.customAgents } : {}),
       ...(req.branches?.[k] ? { branch: req.branches[k] } : {}),
       ...(req.preset ? { preset: req.preset } : {}),
       ...(req.checkout ? { checkout: { sha: req.checkout.sha } } : {}),
@@ -1251,7 +1251,7 @@ export class FanOutService {
         output: { batchDir },
         ...(entries[k].role ? { role: entries[k].role } : {}),
         ...(entries[k].agent ? { agentChoice: entries[k].agent } : {}),
-        ...(req.customAgents?.length ? { customAgents: req.customAgents } : {}),
+        ...(req.customAgents ? { customAgents: req.customAgents } : {}),
         // A bot's research task runs here: its preset, thread, handoff,
         // launch check, agent slot and secrets as on a worktree.
         ...(req.preset ? { preset: req.preset } : {}),
