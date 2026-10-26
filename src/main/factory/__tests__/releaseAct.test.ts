@@ -565,6 +565,15 @@ describe('second code review round', () => {
     gh.tags.set('v1.2.3', { sha: C3 });
     gh.answerRead = (e) => (e.startsWith('repos/o/r/releases?') ? { ok: false, kind: 'error', message: 'timeout' } : null);
     expect(await deleteDraft(gh, P, 50, want)).toBe('kept-unchecked');
+    // The release listing refused (403) or the read itself threw: kept, never deleted.
+    gh.answerRead = (e) => (e.startsWith('repos/o/r/releases?') ? { ok: false, kind: 'http', status: 403, message: 'gh: Forbidden (HTTP 403)' } : null);
+    expect(await deleteDraft(gh, P, 50, want)).toBe('kept-unchecked');
+    gh.answerRead = (e) => {
+      if (e.startsWith('repos/o/r/releases?')) throw new Error('gh did not start');
+      return null;
+    };
+    expect(await deleteDraft(gh, P, 50, want)).toBe('kept-unchecked');
+    expect(gh.writes).toEqual([]);
     gh = github();
     draft(gh);
     gh.tags.set('v1.2.3', { sha: C2 });

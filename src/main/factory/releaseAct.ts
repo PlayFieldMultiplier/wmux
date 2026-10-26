@@ -788,10 +788,10 @@ export async function deleteDraft(gh: GhActPort, p: RepoPath, draftId: number, w
   const tagName = want?.tagName ?? release.tagName;
   const targetSha = want?.targetSha ?? release.target;
   if (!RELEASE_TAG_RE.test(tagName)) return 'kept-unchecked';
-  const tag = await readTagTarget(gh, p, tagName).catch((err: unknown) => ({ error: String(err) }));
+  const tag = await readTagTarget(gh, p, tagName).catch((err: unknown): ReadFail => ({ error: String(err) }));
   if (isFail(tag)) return 'kept-unchecked';
   if (tag !== null && tag === targetSha) {
-    const all = await readReleases(gh, p).catch((err: unknown) => ({ error: String(err) }));
+    const all = await readReleases(gh, p).catch((err: unknown): ReadFail => ({ error: String(err) }));
     if (isFail(all)) return 'kept-unchecked';
     if (!all.some((o) => o.tagName === tagName && o.id !== draftId)) return 'kept-tag-made';
   }
