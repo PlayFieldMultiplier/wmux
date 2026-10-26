@@ -561,6 +561,7 @@ export const AGENT_IDENTITIES = [
     display: 'Qwen Code',
     resume: { picker: '--resume', exact: '--resume {id}', pin: '--session-id', idFormat: 'uuid' },
     process: { packages: ['@qwen-code/qwen-code'] },
+    detect: 'screen',
     setup: {
       binary: 'qwen',
       // The standalone installers (install-qwen-standalone.sh: ~/.local/bin;

@@ -403,6 +403,37 @@ const AGENT_PATTERNS: AgentPattern[] = [
     ],
   },
 
+  // ── Qwen Code ─────────────────────────────────────────────────────────────
+  // Live capture 2026-10-26, @qwen-code/qwen-code 0.26.1 on macOS (120x40,
+  // `--approval-mode default`, a loopback model; the frames are in
+  // __tests__/fixtures/qwen-code-0.26.1.json). Qwen Code is a Gemini CLI fork
+  // and draws Gemini's composer row (`>   Type your message or
+  // @path/to/file`), which opens the Gemini gate. Its banner row comes first
+  // in every frame, so it is listed before Gemini: once Qwen owns the pane,
+  // the Gemini gate is a blocked takeover.
+  // Each frame is a full repaint, one row per CRLF line:
+  //   - footer `⏸ Ask permissions (shift + tab to cycle)` (`Auto mode (…)` in
+  //     auto mode) on a row of its own only while idle. Mid-turn the same row
+  //     reads `Enter to steer · Ctrl+Q to queue · ⏸ Ask permissions (…)`, and a
+  //     prompt typed but not yet sent adds ` ⏳ 1 queued` after it;
+  //   - spinner row `⠸ <phrase>... (1s · ↓ 8 tokens · esc to cancel)` while a
+  //     turn runs, its counters changing on every frame;
+  //   - the shell tool's permission dialog asks `Allow execution of: 'touch'?`
+  //     on its own row, above `› 1. Yes, allow once`.
+  {
+    agent: 'Qwen Code',
+    slug: 'qwen',
+    gate: /Qwen\s*Code\s*\(v\d/,
+    chrome: isQwenChrome,
+    completeChromeRow: true,
+    patterns: [
+      { regex: /^Allow\s*execution\s*of:\s*'[^']+'\?$/,                                      status: 'awaiting_input', message: 'Command approval requested' },
+      // Only the fixed tail, so the ticking counters do not re-emit each frame.
+      { regex: /(?<=\(\d+[smh]\b[^()]*)·\s*esc\s*to\s*cancel\)$/,                           status: 'running',        message: 'Working' },
+      { regex: /^(?:⏸\s*)?[A-Za-z][A-Za-z -]{0,40}\(shift\s*\+\s*tab\s*to\s*cycle\)$/,       status: 'waiting',        message: 'Ready for input' },
+    ],
+  },
+
   // ── Gemini CLI ────────────────────────────────────────────────────────────
   {
     agent: 'Gemini CLI',
@@ -784,6 +815,17 @@ function isCodexChrome(line: string): boolean {
   return /^>_\s*OpenAI\s*Codex\b/.test(v)
     || /^Do\s*you\s*trust\s*the\s*contents\s*of\s*this\s*directory\?/.test(v)
     || /^Trust\s*this\s*folder\?$/.test(v);
+}
+
+/**
+ * Qwen Code's banner row, `│ >_ Qwen Code (v0.26.1) │`, drawn beside the logo
+ * (0.26.1 live capture). Like the Codex banner, it must be the row's whole
+ * visible text once the logo and frame are stripped.
+ */
+function isQwenChrome(line: string): boolean {
+  const stripped = stripAnsi(line);
+  if (SOURCE_LINE_RE.test(stripped)) return false;
+  return /^>_\s*Qwen\s*Code\s*\(v\d+\.\d+\.\d+[\w.+-]*\)$/.test(visibleChrome(stripped));
 }
 
 /**
