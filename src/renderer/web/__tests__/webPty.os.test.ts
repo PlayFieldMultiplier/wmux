@@ -8,6 +8,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { Terminal } from '@xterm/headless';
 import { createWebPty, newTerminalTarget, snapshotTail, STREAM_FAIL_LIMIT, WEB_LIVE_STREAM_CAP, type WebPtyDeps } from '../webPty';
 import { installViewerParser } from '../viewerParser';
+import type { WebCredential } from '../webCredential';
 import { deliberateSleep } from '../../../test-utils/waitFor';
 
 type Listener = (ev: MessageEvent) => void;
@@ -41,18 +42,18 @@ const until = async (cond: () => boolean, ms = 2000) => {
 
 type Reply = (url: string, init?: RequestInit) => Response | Promise<Response> | undefined;
 
-function make(opts: { operator?: boolean; reply?: Reply; deps?: Partial<WebPtyDeps> } = {}) {
+function make(opts: { operator?: boolean; credential?: WebCredential; reply?: Reply; deps?: Partial<WebPtyDeps> } = {}) {
   FakeEventSource.all = [];
-  const calls: { url: string; method: string; body?: unknown; headers?: Record<string, string> }[] = [];
+  const calls: { url: string; method: string; body?: unknown; headers?: Record<string, string>; redirect?: RequestRedirect }[] = [];
   const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
-    calls.push({ url, method: init?.method ?? 'GET', body: init?.body, headers: init?.headers as Record<string, string> });
+    calls.push({ url, method: init?.method ?? 'GET', body: init?.body, headers: init?.headers as Record<string, string>, redirect: init?.redirect });
     const custom = opts.reply?.(url, init);
     if (custom) return custom;
     if (url === '/api/stream-ticket') return new Response(JSON.stringify({ ticket: 'tk', expiresAt: Date.now() + 120_000 }), { status: 200 });
     return new Response('{}', { status: 200 });
   });
   const hub = createWebPty({
-    token: opts.operator ? 'secret' : 'dev1.secret',
+    credential: opts.credential ?? (opts.operator ? { kind: 'operator', token: 'secret' } : { kind: 'device', token: 'dev1.secret' }),
     fetchImpl: fetchImpl as unknown as typeof fetch,
     createEventSource: (url) => new FakeEventSource(url),
     ...opts.deps,
@@ -159,6 +160,67 @@ describe('credentials on the stream URL', () => {
     await showLive(hub, 'a');
     expect(FakeEventSource.all[0].url).toBe('/api/stream?session=a&token=secret');
     expect(calls.some((c) => c.url === '/api/stream-ticket')).toBe(false);
+  });
+});
+
+describe('a sign-in proxy session', () => {
+  const proxy = { kind: 'proxy' } as const;
+  // A sign-in proxy's 302 to its provider, as `redirect: 'manual'` sees it.
+  const opaqueRedirect = () => ({ type: 'opaqueredirect', status: 0, ok: false, json: async () => ({}) }) as unknown as Response;
+
+  it('carries no credential anywhere: no Authorization, no ?token=, no ticket, no redirects followed', async () => {
+    const { hub, calls } = make({
+      credential: proxy,
+      reply: (url) => (url === '/api/config' ? new Response(JSON.stringify({ allowInput: true }), { status: 200 }) : undefined),
+    });
+    await hub.refreshConfig();
+    await showLive(hub, 'a');
+    await hub.pty.write('a', 'x');
+    await hub.createTerminal({ workspaceId: 'ws-a' });
+    expect(FakeEventSource.all.map((e) => e.url)).toEqual(['/api/stream?session=a']);
+    expect(calls.map((c) => c.url)).toEqual(['/api/config', '/api/input?session=a', '/api/sessions']);
+    for (const c of calls) {
+      expect(c.headers?.Authorization).toBeUndefined();
+      expect(c.redirect).toBe('manual');
+    }
+  });
+
+  it('a sign-in that ended (a redirect to the provider, or a 401) is handed over, not retried', async () => {
+    for (const ended of [opaqueRedirect, () => new Response('', { status: 401 })]) {
+      const onUnauthorized = vi.fn();
+      const { hub } = make({ credential: proxy, reply: (url) => (url === '/api/config' ? ended() : undefined), deps: { onUnauthorized } });
+      await hub.refreshConfig();
+      expect(onUnauthorized).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('a keystroke refused by an ended sign-in halts the pane and hands over', async () => {
+    const onUnauthorized = vi.fn();
+    const { hub } = make({ credential: proxy, reply: (url) => (url.startsWith('/api/input') ? opaqueRedirect() : undefined), deps: { onUnauthorized } });
+    hub.setAllowInput(true);
+    await hub.pty.write('a', 'x');
+    expect(hub.inputHaltOf('a')?.reason).toBe('unauthorized');
+    expect(onUnauthorized).toHaveBeenCalledTimes(1);
+  });
+
+  it('a stream that keeps failing re-reads /api/config, which finds the sign-in ended', async () => {
+    const onUnauthorized = vi.fn();
+    const timers: Array<{ fn: () => void; ms: number }> = [];
+    const { hub } = make({
+      credential: proxy,
+      reply: (url) => (url === '/api/config' ? opaqueRedirect() : undefined),
+      deps: { onUnauthorized, setTimer: (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, clearTimer: () => undefined },
+    });
+    await showLive(hub, 'a');
+    for (let i = 0; i < STREAM_FAIL_LIMIT; i++) {
+      openStreams().find((e) => e.url.includes('session=a'))!.fail();
+      if (i < STREAM_FAIL_LIMIT - 1) {
+        timers.filter((t) => t.ms >= 1000 && t.ms <= 30_000).pop()!.fn();
+        await flush();
+      }
+    }
+    await until(() => onUnauthorized.mock.calls.length > 0);
+    expect(onUnauthorized).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -382,7 +444,7 @@ describe('the caller\'s grant', () => {
 
   it('a 403 on input turns input off until the grant is re-read', async () => {
     const fetchImpl = vi.fn(async () => new Response('{}', { status: 403 }));
-    const ro = createWebPty({ token: 't', fetchImpl: fetchImpl as unknown as typeof fetch, createEventSource: (u) => new FakeEventSource(u) });
+    const ro = createWebPty({ credential: { kind: 'operator', token: 't' }, fetchImpl: fetchImpl as unknown as typeof fetch, createEventSource: (u) => new FakeEventSource(u) });
     ro.setAllowInput(true);
     await ro.pty.write('a', 'a');
     expect(ro.inputState()).toBe('read-only');
