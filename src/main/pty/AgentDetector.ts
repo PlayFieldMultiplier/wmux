@@ -1045,13 +1045,6 @@ function isOpenCodeChrome(line: string): boolean {
 }
 
 /**
- * Pi's native title, `π - <cwd basename>` or `π - <session> - <cwd basename>`
- * (pi 1.4.0 interactive-mode setTitle, OSC 0 / BEL in the live capture). The
- * basename is empty at `/` or a drive root, and a session name has no length
- * bound. Both OSC title selectors and terminators are accepted; an unfinished
- * OSC or the same words as visible text are not evidence.
- */
-/**
  * Kimi Code CLI's welcome banner row (2.3.2 live capture), `│ <logo>  Welcome
  * to Kimi Code! │`: the row's whole visible text once its frame and logo
  * glyphs are stripped. The same words inside a sentence or source are not it.
@@ -1062,6 +1055,13 @@ function isKimiChrome(line: string): boolean {
   return /^(?:[\u2580-\u259f]\s*)*Welcome to Kimi Code!$/.test(visibleChrome(stripped));
 }
 
+/**
+ * Pi's native title, `π - <cwd basename>` or `π - <session> - <cwd basename>`
+ * (pi 1.4.0 interactive-mode setTitle, OSC 0 / BEL in the live capture). The
+ * basename is empty at `/` or a drive root, and a session name has no length
+ * bound. Both OSC title selectors and terminators are accepted; an unfinished
+ * OSC or the same words as visible text are not evidence.
+ */
 function isPiChrome(line: string): boolean {
   // eslint-disable-next-line no-control-regex
   return /\x1b\][02];π - [^\x07\x1b\r\n]*(?:\x07|\x1b\\)/.test(line);
