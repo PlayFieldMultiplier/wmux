@@ -169,7 +169,9 @@ describe('Phase 3 PR-B — useTerminal snapshot-resync ladder (source-level)', (
     // Window is the whole paint fn, up to the next declaration (#1256's
     // scroll-preservation block and the scrollback-bookmark carry live in it);
     // the ordering contract below is unchanged.
-    const paint = src.slice(idx, src.indexOf('const startResync', idx));
+    const end = src.indexOf('const startResync', idx);
+    expect(end).toBeGreaterThan(idx);
+    const paint = src.slice(idx, end);
     // discard stale backlog → reset → write payload → write held bytes → clean.
     // The payload write is writeReplayed() since #998 (clipboard bridge muted
     // while stored bytes are parsed); the order is what this locks.
