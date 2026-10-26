@@ -620,6 +620,30 @@ describe('Bots page', () => {
     expect(create).not.toHaveBeenCalled();
   });
 
+  it('"+" › Add bot opens on the current workspace, not the workspace of the conversation the page opened on', async () => {
+    bots = [botRow(LEAD, 'lead', 'w1', 2, 'Lead'), botRow('bot-0000000f', 'lead', 'w2', 3, 'Web lead')];
+    seedRooms();
+    act(() => useStore.setState({ workspaces: [ws('hq', 'Headquarters'), ws('w1', 'api'), ws('w2', 'web')], activeWorkspaceId: 'w2' } as never));
+    setFactoryBotPort({ ...port, create: vi.fn(), createTeam: vi.fn() } as unknown as FactoryBotPort);
+    await render(<BotsPage />);
+    act(() => q<HTMLElement>(`[data-bots-row="bot:${LEAD}"]`)!.click());
+    expect(q('[data-bots-chat]')?.getAttribute('data-bots-chat')).toBe(`bot:${LEAD}`);
+    openAddBot();
+    const select = () => document.querySelector<HTMLSelectElement>('[data-testid="bots-add-bot"] [data-testid="factory-add-bot-workspace"]');
+    expect(select()?.value).toBe('w2');
+  });
+
+  it('"+" › Add bot opens on the selected conversation\'s workspace when the current one is not a workspace a bot may join', async () => {
+    bots = [botRow(LEAD, 'lead', 'w1', 2, 'Lead'), botRow('bot-0000000f', 'lead', 'w2', 3, 'Web lead')];
+    seedRooms();
+    act(() => useStore.setState({ workspaces: [ws('hq', 'Headquarters'), ws('w1', 'api'), ws('w2', 'web'), ws('t1', 'wtask: fix login')], activeWorkspaceId: 't1' } as never));
+    setFactoryBotPort({ ...port, create: vi.fn() } as unknown as FactoryBotPort);
+    await render(<BotsPage />);
+    act(() => q<HTMLElement>(`[data-bots-row="bot:${LEAD}"]`)!.click());
+    openAddBot();
+    expect(document.querySelector<HTMLSelectElement>('[data-testid="bots-add-bot"] [data-testid="factory-add-bot-workspace"]')?.value).toBe('w1');
+  });
+
   it('first screen: a build that cannot tell the engine\'s state never blocks Start', async () => {
     bots = [];
     seedRooms();
