@@ -13,6 +13,7 @@ import { registerInputRpc } from '../input.rpc';
 import type { GatedSubmitResult } from '../../../../shared/ptyMessageDelivery';
 import { registerApprovalsRpc, PRESS_POLICY_REFUSALS, type AnswerPolicy } from '../approvals.rpc';
 import { mintCommanderToken, revokeCommanderToken } from '../../../deck/commanderTrust';
+import { deliberateSleep } from '../../../../test-utils/waitFor';
 import type { BrowserWindow } from 'electron';
 import type { PTYManager } from '../../../pty/PTYManager';
 import type { TaskLedger } from '../../../../daemon/ledger/TaskLedger';
@@ -49,7 +50,8 @@ const live: {
   screen: string | null;
   betweenPasteAndEnter?: () => void;
   afterScreenRead?: () => void;
-  lastReadOpts?: { timeoutMs?: number };
+  /** A screen read this slow returns null to a caller whose budget is shorter. */
+  readDelayMs?: number;
 } = {
   policy: { allowed: false, reason: 'autonomy-off' },
   screen: '',
@@ -99,7 +101,11 @@ function wire(options: {
     {
       answerPolicy: async () => live.policy,
       readScreenText: async (_ptyId, opts) => {
-        live.lastReadOpts = opts;
+        if (live.readDelayMs !== undefined) {
+          const budget = opts?.timeoutMs ?? Infinity;
+          await deliberateSleep(Math.min(budget, live.readDelayMs), 'latency of a slow screen read, inside the stub');
+          if (budget < live.readDelayMs) return null;
+        }
         const screen = live.screen;
         live.afterScreenRead?.();
         return screen;
@@ -130,6 +136,7 @@ beforeEach(() => {
   live.screen = '';
   live.betweenPasteAndEnter = undefined;
   live.afterScreenRead = undefined;
+  live.readDelayMs = undefined;
   w = wire();
 });
 afterEach(() => {
@@ -546,8 +553,6 @@ describe('a folder-trust dialog on screen', () => {
       const escape = await asBrain('input.sendKey', { ptyId: 'pty-w', key: 'escape' });
       expect(escape.ok).toBe(false);
       expect(escape.error).toContain('folder-trust prompt; answer it in the pane');
-      // The interrupt path reads the screen on a short budget.
-      expect(live.lastReadOpts).toEqual({ timeoutMs: 300 });
       expect(w.writes).toHaveLength(0);
       // ctrl+c still stops the agent, and the human is never refused.
       expect((await asBrain('input.sendKey', { ptyId: 'pty-w', key: 'ctrl+c' })).ok).toBe(true);
@@ -572,6 +577,25 @@ describe('a folder-trust dialog on screen', () => {
     expect(res.error).toContain('folder-trust prompt; answer it in the pane');
     expect(res.error).toContain('Nothing of the text was written');
     expect(w.writes).toHaveLength(0);
+  });
+
+  it('Escape waits out a slow screen read (a hidden pane) and is still refused', async () => {
+    live.screen = TRUST_SCREENS.claude;
+    live.readDelayMs = 400;
+    const escape = await asBrain('input.sendKey', { ptyId: 'pty-w', key: 'escape' });
+    expect(escape.ok).toBe(false);
+    expect(escape.error).toContain('folder-trust prompt; answer it in the pane');
+    expect(w.writes).toHaveLength(0);
+  });
+
+  it('a typed multi-line body refused before its Enter says it may have been partly submitted', async () => {
+    live.policy = DANGER;
+    live.screen = '$ ';
+    trustAfterReads(2);
+    const res = await asPaneAgent('input.send', { ptyId: 'pty-w', text: 'echo one\necho two', submit: true });
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain('may have been partly submitted');
+    expect(w.writes.map((x) => x.data).join('')).not.toMatch(/\r$/);
   });
 
   it('`send --submit`: a trust prompt drawn after the text gets no Enter, and says the text is on the line', async () => {

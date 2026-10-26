@@ -1662,7 +1662,7 @@ export function registerInputRpc(
         } catch (err) {
           if (!(err instanceof Error)) throw err;
           const onLine = chunksWritten > 0
-            ? ' The text is already on its input line, not submitted; read the pane before sending it again.'
+            ? ` The text is already on its input line, ${!pasted && wroteLineBreak ? 'and may have been partly submitted' : 'not submitted'}; read the pane before sending it again.`
             : ' Nothing of the text was written.';
           const cleared = fresh?.freshContext === 'applied' ? " The pane's conversation was already cleared (fresh context)." : '';
           throw new Error(`${err.message}${onLine}${cleared}`);
@@ -1826,8 +1826,10 @@ export function registerInputRpc(
     if (!APPROVAL_BLOCK_EXEMPT_KEYS.has(key)) {
       await assertNotTypingAtAnApproval(approvalGate, ctx, ptyId, 'input.sendKey');
     } else if (key === 'escape') {
-      // The interrupt path: a short read, the receipt poll's budget, not 5s.
-      await assertNotAtFolderTrust(approvalGate, ctx, ptyId, 'input.sendKey', { timeoutMs: SUBMIT_RECEIPT_READ_TIMEOUT_MS });
+      // The gate's full read budget: a hidden pane reads slowly, and a short
+      // read would wave Escape through exactly there. A read that still fails
+      // lets the stop key through.
+      await assertNotAtFolderTrust(approvalGate, ctx, ptyId, 'input.sendKey');
     }
     // After every refusal: attach (promoting) a session with no pipe here.
     await startIfSuspended('input.sendKey', ptyId, clock, !stopKey);
