@@ -38,6 +38,7 @@ services:
     restart: unless-stopped
     command:
       - --providers.docker=true
+      - --providers.docker.endpoint=tcp://docker-proxy:2375
       - --providers.docker.exposedbydefault=false
       - --entrypoints.websecure.address=:443
       # - --certificatesresolvers.le.acme.dnschallenge.provider=<your-dns-provider>
@@ -45,9 +46,24 @@ services:
       # - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
     ports: ["443:443"]
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
       - letsencrypt:/letsencrypt
-    networks: [auth, wmux-alice, wmux-bob]
+    networks: [docker-api, auth, wmux-alice, wmux-bob]
+
+  # Traefik reads containers through this filter, never the raw socket: a
+  # read-only bind mount does not make the Docker API read-only, so a
+  # compromised Traefik with the socket could control every container. The
+  # proxy passes only GET on containers, events and version.
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:v0.5.0
+    restart: unless-stopped
+    environment:
+      CONTAINERS: 1
+      EVENTS: 1
+      VERSION: 1
+      POST: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [docker-api]
 
   oauth2-proxy:
     image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.5
@@ -122,6 +138,8 @@ secrets:
     environment: OAUTH2_PROXY_COOKIE_SECRET
 
 networks:
+  docker-api:
+    internal: true
   auth: {}
   wmux-alice: {}
   wmux-bob: {}

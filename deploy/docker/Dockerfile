@@ -3,7 +3,7 @@
 #
 #   docker build -t wmux-server --build-arg WMUX_VERSION=4.11.0 deploy/docker
 #     [--build-arg WMUX_SHA256=<sha256 of the tarball for your architecture>]
-#   docker run -d -v wmux-home:/home/wmux -p 7681:7681 \
+#   docker run -d -v wmux-home:/home/wmux -p 127.0.0.1:7681:7681 \
 #     -e WMUX_ALLOW_HOST=wmux.example.com wmux-server
 #
 # The proxy terminates TLS; inside the container `wmux web` serves plain HTTP

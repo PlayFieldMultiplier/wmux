@@ -21,7 +21,8 @@ The files are in [`deploy/docker/`](../../deploy/docker/):
   user network.
 - **Limits.** Each container runs as an unprivileged user with every Linux
   capability dropped, `no-new-privileges`, and CPU, memory and process caps.
-  No user container gets the Docker socket.
+  No user container gets the Docker socket, and Traefik reaches Docker only
+  through a filtering proxy that allows read-only container listing.
 - **Sign-in.** Every request first needs a company sign-in through
   oauth2-proxy. A per-user rule then admits only that person's address, so a
   signed-in colleague who opens someone else's address gets `403`.
