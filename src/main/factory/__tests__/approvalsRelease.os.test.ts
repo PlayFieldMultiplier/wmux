@@ -863,6 +863,8 @@ describe('code review round', () => {
   it('a try reads no workflow file again: what the workflows expect of the checks was read with the request', async () => {
     const r = rig();
     r.gh.files.set('.github/workflows/ci.yml', CI_YML);
+    // The push to main ran CI on the commit.
+    r.gh.workflowRuns.push({ head_sha: C3, event: 'push', head_branch: 'main', status: 'completed', conclusion: 'success', html_url: 'https://github.com/o/r/actions/runs/1', workflow_id: 4, id: 1 });
     const req = await r.ask(NOTES);
     expect(actOf(r, req.requestId)).toMatchObject({ checksExpected: true });
     const before = r.gh.reads.length;

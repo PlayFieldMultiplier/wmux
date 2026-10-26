@@ -179,7 +179,9 @@ describe('which workflows run on a push', () => {
 describe('the checks on the commit', () => {
   const ok = { status: 'completed', conclusion: 'success' };
   const none = { state: 'pending', total: 0 };
-  const v = (o: Partial<Parameters<typeof checksVerdict>[0]>): ReleaseChecks => checksVerdict({ runs: [], status: none, workflowRuns: [], expected: false, ...o });
+  const v = (o: Partial<Parameters<typeof checksVerdict>[0]>): ReleaseChecks => checksVerdict({ runs: [], status: none, workflowRuns: [], expected: false, branch: 'main', ...o });
+  /** A workflow run, by default a push to main. */
+  const wr = (status: string, conclusion: string | null, event = 'push', branch = 'main') => ({ status, conclusion, event, branch });
   it('passes only when every run passed and the combined status is success or has no statuses', () => {
     expect(v({ runs: [ok, { status: 'completed', conclusion: 'neutral' }, { status: 'completed', conclusion: 'skipped' }] })).toBe('passed');
     // GitHub answers `pending` with no statuses at all: that is none, not running.
@@ -196,11 +198,21 @@ describe('the checks on the commit', () => {
     expect(v({})).toBe('none');
     expect(v({ expected: true })).toBe('not-started');
     // Passing statuses are checks, though no run is there.
-    expect(v({ status: { state: 'success', total: 2 }, expected: true })).toBe('passed');
-    expect(v({ workflowRuns: [{ status: 'queued', conclusion: null }], expected: true })).toBe('running');
-    expect(v({ runs: [ok], workflowRuns: [{ status: 'queued', conclusion: null }] })).toBe('running');
-    expect(v({ runs: [ok], workflowRuns: [{ status: 'completed', conclusion: 'failure' }] })).toBe('failed');
-    expect(v({ workflowRuns: [{ status: 'completed', conclusion: 'failure' }] })).toBe('failed');
+    expect(v({ status: { state: 'success', total: 2 } })).toBe('passed');
+    expect(v({ workflowRuns: [wr('queued', null)], expected: true })).toBe('running');
+    expect(v({ runs: [ok], workflowRuns: [wr('queued', null)] })).toBe('running');
+    expect(v({ runs: [ok], workflowRuns: [wr('completed', 'failure')] })).toBe('failed');
+    expect(v({ workflowRuns: [wr('completed', 'failure')] })).toBe('failed');
+    expect(v({ runs: [ok], workflowRuns: [wr('completed', 'success')], expected: true })).toBe('passed');
+  });
+
+  it('a push to the default branch that should have run its workflows and did not is not-started, whatever else passed', () => {
+    // A bot's green check, a deploy preview's status, another event's run: push CI never ran (`[skip ci]`, Actions off).
+    expect(v({ runs: [ok], expected: true })).toBe('not-started');
+    expect(v({ status: { state: 'success', total: 2 }, expected: true })).toBe('not-started');
+    expect(v({ runs: [ok], workflowRuns: [wr('completed', 'success', 'pull_request')], expected: true })).toBe('not-started');
+    expect(v({ runs: [ok], workflowRuns: [wr('completed', 'success', 'push', 'feature-x')], expected: true })).toBe('not-started');
+    expect(v({ runs: [ok], expected: false })).toBe('passed');
     expect(checksRefusal('failed')).toBe('checks-failing');
     expect(checksRefusal('running')).toBe('checks-pending');
     expect(checksRefusal('not-started')).toBe('checks-not-started');
@@ -209,7 +221,7 @@ describe('the checks on the commit', () => {
   });
 
   it('takes the latest run, then the latest attempt, of each workflow', () => {
-    const run = (workflowId: string, id: number, attempt: number, conclusion: string) => ({ workflowId, id, attempt, status: 'completed', conclusion });
+    const run = (workflowId: string, id: number, attempt: number, conclusion: string) => ({ workflowId, id, attempt, status: 'completed', conclusion, event: 'push', branch: 'main' });
     const latest = latestPerWorkflow([run('1', 10, 1, 'failure'), run('1', 11, 1, 'success'), run('2', 20, 1, 'failure'), run('2', 20, 2, 'success'), run('3', 30, 1, 'success')]);
     expect(latest.map((r) => [r.workflowId, r.id, r.attempt])).toEqual([['1', 11, 1], ['2', 20, 2], ['3', 30, 1]]);
     expect(v({ workflowRuns: latest })).toBe('passed');
@@ -564,5 +576,55 @@ describe('second code review round', () => {
     expect(gh.reads.filter((e) => e === 'repos/o/r')).toEqual([]);
     // Listed none: GitHub's answer for the tag itself is read.
     expect(gh.reads.filter((e) => e.includes('/releases/tags/'))).toHaveLength(1);
+  });
+});
+
+describe('Mac review round 2', () => {
+  const act: ApprovalReleaseAct = {
+    kind: 'release', mode: 'release', tagName: 'v1.2.3', targetSha: C3, defaultBranch: 'main', title: 'wmux 1.2.3', notes: 'Fixes.', prerelease: false, workflows: [], checksExpected: true, draft: false,
+  };
+  const pre = (gh: FakeGithub, o: { draftId?: number; over?: Partial<ApprovalReleaseAct> } = {}) =>
+    releasePrecondition(gh, P, { ...act, ...o.over }, { login: 'owner', branch: 'main', draftId: o.draftId, wroteBefore: false });
+  const pushRun = { head_sha: C3, event: 'push', head_branch: 'main', status: 'completed', conclusion: 'success', html_url: 'https://github.com/o/r/actions/runs/1', workflow_id: 9, id: 1 };
+
+  it('a green third-party check with no push run on the default branch is not-started, never passed', async () => {
+    const gh = github();
+    gh.files.set('.github/workflows/ci.yml', 'on:\n  push:\n    branches: [main]\n');
+    // github() puts one green check run on every commit: a bot's.
+    expect(await pre(gh)).toMatchObject({ refusal: 'checks-not-started' });
+    expect(await readReleaseAsk(gh, 'github.com/o/r', { tagName: 'v1.2.3' })).toMatchObject({ checks: 'not-started' });
+    gh.workflowRuns.push(pushRun);
+    expect(await pre(gh)).toMatchObject({ refusal: null });
+    expect(await readReleaseAsk(gh, 'github.com/o/r', { tagName: 'v1.2.3' })).toMatchObject({ checks: 'passed' });
+  });
+
+  it('a journaled draft deleted on GitHub refuses draft-gone: no new draft in its place', async () => {
+    const gh = github();
+    gh.workflowRuns.push(pushRun);
+    expect(await pre(gh, { draftId: 77 })).toMatchObject({ refusal: 'draft-gone' });
+    // The draft there, but no longer this act's (its tag edited): found-different.
+    gh.releases.push({ id: 77, tag_name: 'v9', draft: true, prerelease: false, name: 'wmux 1.2.3', body: 'Fixes.', target_commitish: C3, author: { login: 'owner' }, html_url: 'https://github.com/o/r/releases/tag/x' });
+    expect(await pre(gh, { draftId: 77 })).toMatchObject({ refusal: 'found-different' });
+    // Listed late: read again later.
+    gh.releases = [];
+    gh.answerRead = (e) => (e === 'repos/o/r/releases/77' ? { ok: true, value: { id: 77 } } : null);
+    expect(await pre(gh, { draftId: 77 })).toMatchObject({ refusal: 'read-failed' });
+    // The draft as journaled: no refusal.
+    gh.answerRead = null;
+    gh.releases.push({ id: 77, tag_name: 'v1.2.3', draft: true, prerelease: false, name: 'wmux 1.2.3', body: 'Fixes.', target_commitish: C3, author: { login: 'owner' }, html_url: 'https://github.com/o/r/releases/tag/x' });
+    expect(await pre(gh, { draftId: 77 })).toMatchObject({ refusal: null, draft: { id: 77 } });
+  });
+
+  it('a branch named like the tag refuses when the bot asks and when it runs', async () => {
+    const gh = github();
+    gh.workflowRuns.push(pushRun);
+    gh.branches.add('v1.2.3');
+    expect(await readReleaseAsk(gh, 'github.com/o/r', { tagName: 'v1.2.3' })).toMatchObject({ refuse: 'invalid', message: expect.stringMatching(/^tag-name-is-branch: /) });
+    expect(await pre(gh)).toMatchObject({ refusal: 'tag-name-is-branch' });
+    gh.answerRead = (e) => (e === 'repos/o/r/git/ref/heads/v1.2.3' ? { ok: false, kind: 'error', message: 'timeout' } : null);
+    expect(await pre(gh)).toMatchObject({ refusal: 'read-failed' });
+    gh.answerRead = null;
+    gh.branches.clear();
+    expect(await pre(gh)).toMatchObject({ refusal: null });
   });
 });

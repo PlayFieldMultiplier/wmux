@@ -89,6 +89,8 @@ export class FakeGithub implements GhActPort {
   history: string[] = [];
   /** Commits that are not on the default branch. */
   otherCommits = new Set<string>();
+  /** Branches other than the default one (their head is not read). */
+  branches = new Set<string>();
   /** Tags: the commit each points at; `annotated`: through a tag object. */
   tags = new Map<string, { sha: string; annotated?: boolean }>();
   releases: FakeRelease[] = [];
@@ -197,7 +199,9 @@ export class FakeGithub implements GhActPort {
     let m = /^repos\/o\/r\/git\/ref\/heads\/(.+)$/.exec(path);
     if (m) {
       const head = this.history.at(-1);
-      return decodeURIComponent(m[1]) === this.repo.default_branch && head ? { ok: true, value: { ref: `refs/heads/${this.repo.default_branch}`, object: { type: 'commit', sha: head } } } : NOT_FOUND;
+      const name = decodeURIComponent(m[1]);
+      if (name === this.repo.default_branch && head) return { ok: true, value: { ref: `refs/heads/${name}`, object: { type: 'commit', sha: head } } };
+      return this.branches.has(name) ? { ok: true, value: { ref: `refs/heads/${name}`, object: { type: 'commit', sha: '0'.repeat(40) } } } : NOT_FOUND;
     }
     m = /^repos\/o\/r\/git\/ref\/tags\/(.+)$/.exec(path);
     if (m) {
