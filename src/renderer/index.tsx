@@ -1,3 +1,5 @@
+// First: the window's language table loads while the app below evaluates.
+import { firstLocale, firstLocaleLoaded } from './i18n/firstLocale';
 import { createRoot } from 'react-dom/client';
 import App from './App';
 import { useStore } from './stores';
@@ -6,7 +8,6 @@ import { installWindowGlass } from './utils/windowGlass';
 import { hasRoundedWindowCorners } from '../shared/windowCorners';
 import { rememberStartPolarity, settleStartTheme, startTheme } from './utils/startTheme';
 import { installDocumentHiddenMotion, installSystemReducedMotion } from './utils/reducedMotion';
-import { START_LOCALE_STORAGE_KEY, loadLocale, resolveStartLocale } from './i18n';
 import './styles/globals.css';
 import './styles/ui.css';
 import './styles/onboarding.css';
@@ -59,17 +60,9 @@ else {
 }
 
 // The first render is already in the window's language: only English ships in
-// the bundle, so that language's table loads first. loadSession then finds it
+// the bundle, so it waits for that language's table. loadSession then finds it
 // in, and the language does not change under the user.
-function storedStartLocale(): string | null {
-  try {
-    return window.sessionStorage.getItem(START_LOCALE_STORAGE_KEY);
-  } catch {
-    return null;
-  }
-}
-const firstLocale = resolveStartLocale(storedStartLocale(), window.electronAPI?.startLocale);
-void loadLocale(firstLocale).then(() => {
+void firstLocaleLoaded.then(() => {
   useStore.getState().setLocale(firstLocale);
   const root = createRoot(document.getElementById('root')!);
   root.render(<App />);

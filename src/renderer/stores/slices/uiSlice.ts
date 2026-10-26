@@ -8,7 +8,7 @@ import {
   recordStarPromptAgentSession,
   type StarPromptState,
 } from '../../../shared/starPrompt';
-import { isLocaleLoaded, loadLocale, setLocale as i18nSetLocale, t, type Locale } from '../../i18n';
+import { isLocaleLoaded, requestLocale, setLocale as i18nSetLocale, t, type Locale } from '../../i18n';
 import { collectLeafIds, findPane, getLeafPanes, getWorkspaceLeafPanes } from '../../../shared/paneUtils';
 import { canStashPaneSurfaces } from '../../../shared/paneStash';
 import { isDaemonModeActive } from '../../daemon/daemonMode';
@@ -1223,10 +1223,6 @@ function handOffBeforeLeavingGrid(state: StoreState, wsId: string): void {
   if (next && next !== wsId) state.setActiveWorkspace?.(next);
 }
 
-// The language last asked for by setLocale; one whose table loads later than a
-// newer pick's does not switch to it.
-let localeRequest: Locale | null = null;
-
 export const createUISlice: StateCreator<StoreState, [['zustand/immer', never]], [], UISlice> = (set, get) => ({
   // ─── Startup gate (Fix 0) ─────────────────────────────────────────────
   paneGate: 'pending',
@@ -1441,11 +1437,10 @@ export const createUISlice: StateCreator<StoreState, [['zustand/immer', never]],
 
   setLocale: (locale) => {
     // A language whose table is not loaded yet switches once it is: the UI
-    // stays in the current language meanwhile, never English or keys. The
-    // last pick wins over one still loading.
-    localeRequest = locale;
+    // stays in the current language meanwhile, never English or keys. A
+    // newer pick wins over one still loading; a table that fails to load
+    // leaves the language as it was.
     const apply = () => {
-      if (localeRequest !== locale) return;
       // Sync i18n module state immediately (outside immer — pure function call)
       i18nSetLocale(locale);
       set((state) => {
@@ -1453,7 +1448,7 @@ export const createUISlice: StateCreator<StoreState, [['zustand/immer', never]],
       });
     };
     if (isLocaleLoaded(locale)) apply();
-    else void loadLocale(locale).then(apply);
+    else void requestLocale(locale).then((current) => { if (current) apply(); });
   },
 
   // ─── VI copy mode ─────────────────────────────────────────────────────────

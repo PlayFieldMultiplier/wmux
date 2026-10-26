@@ -6,7 +6,8 @@ import type { AgentSlug } from '../../../shared/events';
 import type { ResumeBinding } from '../../../shared/agentResume';
 import { useStore } from '../../stores';
 import { useT } from '../../hooks/useT';
-import { detectSupportedLocale, loadLocale, t as translate, type Locale } from '../../i18n';
+import { loadLocale, t as translate } from '../../i18n';
+import { sessionLocaleOf } from '../../stores/slices/workspaceSlice';
 import { deliverMirrorDrop, showRemoteSendNotice } from '../Remote/mirrorFileSend';
 import Sidebar from '../Sidebar/Sidebar';
 import MiniSidebar from '../Sidebar/MiniSidebar';
@@ -1583,10 +1584,9 @@ export default function AppLayout() {
         const { saved, daemonConnected } = await loadSessionThenDaemonDecision({
           load: async () => {
             const saved = await window.electronAPI.session.load();
-            // loadSession switches to the session's language in the same tick
-            // (its own rule: the saved one, else the OS's), so that table
-            // loads first. index.tsx has normally loaded it already.
-            if (saved) await loadLocale((saved.locale as Locale | undefined) || detectSupportedLocale(window.electronAPI?.systemLocale ?? ''));
+            // loadSession switches to the session's language in the same tick,
+            // so its table loads first. index.tsx has normally loaded it already.
+            if (saved) await loadLocale(sessionLocaleOf(saved));
             return saved;
           },
           nothingSaved: () => {

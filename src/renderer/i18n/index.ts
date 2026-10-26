@@ -7,6 +7,7 @@
  */
 
 import { en, type TranslationKey } from './locales/en';
+import { LOCALE_LOADERS } from './localeLoaders';
 
 export type Locale =
   | 'en'
@@ -37,39 +38,17 @@ export type Locale =
 // Partial<> lets other locales fall back to `en` for missing keys.
 type TranslationMap = Record<TranslationKey, string>;
 
-// Only English, the fallback, ships in the bundle. Every other table is its
-// own chunk, loaded when a window first needs it (the main process loads them
-// the same way: main/quit/quitAndStopCopy.ts).
-const LOADERS: Record<Exclude<Locale, 'en'>, () => Promise<Partial<TranslationMap>>> = {
-  ko: async () => (await import('./locales/ko')).ko,
-  ja: async () => (await import('./locales/ja')).ja,
-  zh: async () => (await import('./locales/zh')).zh,
-  'zh-TW': async () => (await import('./locales/zh-TW')).zhTW,
-  ar: async () => (await import('./locales/ar')).ar,
-  bs: async () => (await import('./locales/bs')).bs,
-  da: async () => (await import('./locales/da')).da,
-  de: async () => (await import('./locales/de')).de,
-  es: async () => (await import('./locales/es')).es,
-  fr: async () => (await import('./locales/fr')).fr,
-  hi: async () => (await import('./locales/hi')).hi,
-  id: async () => (await import('./locales/id')).id,
-  it: async () => (await import('./locales/it')).it,
-  ms: async () => (await import('./locales/ms')).ms,
-  nb: async () => (await import('./locales/nb')).nb,
-  pl: async () => (await import('./locales/pl')).pl,
-  'pt-BR': async () => (await import('./locales/pt-BR')).ptBR,
-  ru: async () => (await import('./locales/ru')).ru,
-  th: async () => (await import('./locales/th')).th,
-  tr: async () => (await import('./locales/tr')).tr,
-  uk: async () => (await import('./locales/uk')).uk,
-  vi: async () => (await import('./locales/vi')).vi,
-};
-
+// Only English, the fallback, ships in the bundle; every other table is its own
+// chunk, loaded when a window first needs it (localeLoaders.ts).
 const translations: Partial<Record<Locale, Partial<TranslationMap>>> = { en: en as TranslationMap };
 
 // ─── State ────────────────────────────────────────────────────────────────────
 
 let currentLocale: Locale = 'en';
+
+// Bumped by every switch and every request, so a request whose table lands
+// after a newer one, or after a direct switch, does not apply.
+let switchSeq = 0;
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
@@ -88,7 +67,7 @@ export function isLocaleLoaded(locale: Locale): boolean {
  */
 export async function loadLocale(locale: Locale): Promise<void> {
   if (isLocaleLoaded(locale)) return;
-  const loader = (LOADERS as Partial<Record<Locale, () => Promise<Partial<TranslationMap>>>>)[locale];
+  const loader = (LOCALE_LOADERS as Partial<Record<Locale, () => Promise<Partial<TranslationMap>>>>)[locale];
   if (!loader) return;
   try {
     translations[locale] = await loader();
@@ -98,10 +77,21 @@ export async function loadLocale(locale: Locale): Promise<void> {
 }
 
 /**
+ * Load `locale`'s table, then say whether to switch to it now: not when the
+ * table did not load, nor when another switch or request came after this one.
+ */
+export async function requestLocale(locale: Locale): Promise<boolean> {
+  const seq = ++switchSeq;
+  await loadLocale(locale);
+  return seq === switchSeq && isLocaleLoaded(locale);
+}
+
+/**
  * Switch the language. A table not loaded yet reads as English until it is,
- * so callers that can wait load it first (`loadLocale`).
+ * so callers that can wait load it first (`loadLocale`, `requestLocale`).
  */
 export function setLocale(locale: Locale): void {
+  switchSeq++;
   // The page's language follows the app's, so screen readers, hyphenation
   // and CJK glyph choice read the UI as written.
   if (typeof document !== 'undefined') document.documentElement.lang = locale;
