@@ -479,6 +479,46 @@ describe('AgentProcessTracker', () => {
     expect(listener).toHaveBeenCalledWith('s1', { slug: 'codex', alive: true, observedAt: expect.any(Number) });
   });
 
+  it('armIfAgent names a custom agent for its label only, and never as a slug', async () => {
+    // "Tern" is a made-up CLI the operator defined (Settings → Custom agents).
+    const watcher = makeWatcher();
+    const listener = vi.fn();
+    let table = [entry(200, SHELL, 'sh', 'sh /usr/local/bin/tern --fast')];
+    const tracker = new AgentProcessTracker(watcher, async () => table);
+    tracker.setStateChangeListener(listener);
+    tracker.setCustomAgentNames(() => new Map([['tern', 'Tern']]));
+
+    tracker.armIfAgent('s1', SHELL);
+    await flush();
+    expect(tracker.identityFor('s1')).toEqual({ custom: 'tern', alive: true });
+    expect(tracker.customAgentNameFor('s1')).toBe('Tern');
+    // The launch edge names no agent: its listeners keep treating it as unnamed.
+    expect(listener).toHaveBeenCalledWith('s1', { alive: true, observedAt: expect.any(Number) });
+
+    // Dead: no label.
+    watcher.watches.get('agent:s1')?.onDead();
+    expect(tracker.customAgentNameFor('s1')).toBeUndefined();
+
+    // A registry agent inside the custom wrapper keeps its own name.
+    table = [entry(300, SHELL, 'tern'), entry(301, 300, 'claude')];
+    tracker.armIfAgent('s1', SHELL);
+    await flush();
+    expect(tracker.identityFor('s1')).toEqual({ slug: 'claude', alive: true });
+    expect(tracker.customAgentNameFor('s1')).toBeUndefined();
+  });
+
+  it('selectAgentProcess matches a custom agent by its image or a PATH-form script, exactly', () => {
+    const names = new Map([['tern', 'Tern'], ['gull', 'Gull']]);
+    expect(selectAgentProcess([entry(200, SHELL, '/opt/gull/bin/gull')], SHELL, names)).toEqual({ pid: 200, custom: 'gull' });
+    // A bare script name is the user's own file; a longer name is another program.
+    expect(selectAgentProcess([entry(200, SHELL, 'bash', 'bash tern')], SHELL, names)).toEqual({ pid: 200 });
+    expect(selectAgentProcess([entry(200, SHELL, 'ternary')], SHELL, names)).toEqual({ pid: 200 });
+    // Two custom agents at one depth: liveness only, no guess.
+    expect(selectAgentProcess([entry(200, SHELL, 'tern'), entry(201, SHELL, 'gull')], SHELL, names)).toEqual({ pid: 200 });
+    // No custom agents defined: as before.
+    expect(selectAgentProcess([entry(200, SHELL, 'tern')], SHELL)).toEqual({ pid: 200 });
+  });
+
   it('armIfAgent leaves no trace for a non-agent command and backs off only itself', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     try {

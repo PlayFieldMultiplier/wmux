@@ -157,6 +157,7 @@ import { viewerVisibilityUpdates } from '../shared/viewerVisibilityBatch';
 import { isTaskState, type AgentStatus, type Message, type Task } from '../shared/types';
 import { ProcessMonitor } from './ProcessMonitor';
 import { AgentProcessTracker } from './AgentProcessTracker';
+import { CustomAgentNames } from './customAgentNames';
 import { liveRecoveryHint, namedAgentAlive, recordedTurnStillOpen, recordWasMidTurn, screenShowsLiveAgent, sightedRecoveredAgent } from './recoveryHint';
 import { checkWslAgentRunning, reportedAgentForPane, stopWslAgent, WslPidWatcher } from './wslAgentProcess';
 import { GateFlagFile } from './gateFlagFile';
@@ -5670,7 +5671,7 @@ function registerRpcHandlers(
     }
     const agentVerified = liveProcess;
     return {
-      agentName: reportedAgentName({ rawName, screenSlug, canonical }),
+      agentName: reportedAgentName({ rawName, screenSlug, canonical, customName: agentProcessTracker.customAgentNameFor(id) }),
       agentVerified,
       ...state,
     };
@@ -7435,7 +7436,7 @@ function wireEvents(
       sessionManager.getSession(sessionId)?.promptLog.commandRunningIfKnown() === true,
     named: (sessionId) => {
       const tracked = agentProcessTracker.identityFor(sessionId);
-      return tracked?.alive === true && tracked.slug !== undefined;
+      return tracked?.alive === true && (tracked.slug !== undefined || tracked.custom !== undefined);
     },
     probe: armIfAgent,
   });
@@ -7832,11 +7833,13 @@ function wireEvents(
       // path that fills running-state agentName (local mode stays on
       // PTYBridge's getLastAgent). Undefined canonical with a mappable screen
       // slug is the residue veto: null, not the dead agent's sticky label.
-      data: activeCanonical
-        ? agentSlugToDisplay(activeCanonical.slug)
-        : activeScreenSlug
-          ? null
-          : payload.agentName ?? null,
+      // A live custom agent names the pane when no registry agent does.
+      data: reportedAgentName({
+        rawName: payload.agentName,
+        screenSlug: activeScreenSlug,
+        canonical: activeCanonical,
+        customName: agentProcessTracker.customAgentNameFor(payload.sessionId),
+      }),
     };
     pipeServer.broadcast(event);
   });
@@ -9554,6 +9557,10 @@ async function main(): Promise<void> {
     watcher: new WslPidWatcher(),
     isRunning: (agent) => checkWslAgentRunning(agent),
   });
+  // The operator's custom agents (Settings → Roles & fan-out): a pane running
+  // one is labelled with its name. Read from main's file, never written here.
+  const customAgentNames = new CustomAgentNames(getWmuxDir());
+  agentProcessTracker.setCustomAgentNames(() => customAgentNames.names());
   // Whether a session is a WSL pane whose agent is live right now, for main's
   // browser-identity check of a WSL pane (Windows cannot walk Linux processes,
   // so main asks the daemon, which follows that agent from inside the distro).

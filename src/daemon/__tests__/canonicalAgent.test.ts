@@ -182,6 +182,19 @@ describe('detectorSuppressedBy (#919 detector veto)', () => {
 });
 
 describe('reportedAgentName (#1303 no-banner sessions)', () => {
+  it('names a live custom agent when no registry agent is canonical, over the screen', () => {
+    // "Tern" is a made-up CLI the operator defined.
+    expect(reportedAgentName({ rawName: 'Claude Code', screenSlug: 'claude', customName: 'Tern' })).toBe('Tern');
+    expect(reportedAgentName({ rawName: undefined, screenSlug: undefined, customName: 'Tern' })).toBe('Tern');
+    // A canonical registry agent keeps its own name.
+    expect(reportedAgentName({
+      rawName: undefined,
+      screenSlug: undefined,
+      canonical: resolveCanonicalAgentIdentity({ auth: auth('claude', 30_000) }),
+      customName: 'Tern',
+    })).toBe('Claude Code');
+  });
+
   it('a fresh exact-routed hook names a pane the detector never named — the #1303 regression guard', () => {
     expect(
       reportedAgentName({

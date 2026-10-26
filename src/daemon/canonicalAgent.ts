@@ -228,9 +228,14 @@ export function reportedAgentName(inputs: {
   rawName?: string | null;
   screenSlug?: AgentSlug;
   canonical?: CanonicalAgentIdentity;
+  /** The live custom agent the process tracker found (customAgentNameFor). */
+  customName?: string;
 }): string | null {
-  const { rawName, screenSlug, canonical } = inputs;
+  const { rawName, screenSlug, canonical, customName } = inputs;
   if (canonical) return agentSlugToDisplay(canonical.slug);
+  // A custom agent's process outranks the screen: it is live process truth,
+  // and its own screen may carry another agent's banner it wraps.
+  if (customName) return customName;
   // #919 residue veto: a mappable screen slug with no canonical backing is
   // sticky detector residue, not a live agent.
   if (!rawName || screenSlug) return null;

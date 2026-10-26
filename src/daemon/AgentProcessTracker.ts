@@ -296,6 +296,29 @@ export function parsePsOutput(stdout: string): ProcessTreeEntry[] {
 export interface AgentProcessPick {
   pid: number;
   slug?: AgentSlug;
+  /** The process name of one of the operator's custom agents, when no
+   *  registry agent was found (see selectAgentProcess). Never a slug. */
+  custom?: string;
+}
+
+/** Shells a custom agent's wrapper script may run under (`sh /usr/local/bin/tern`). */
+const SCRIPT_HOST_STEMS: ReadonlySet<string> = new Set(['sh', 'bash', 'zsh', 'dash', 'fish', ...RUNTIME_STEMS]);
+
+/**
+ * The custom-agent process name `entry` runs as: its image name, or, for a
+ * shell or runtime image, the script it runs in PATH FORM only
+ * (`sh /usr/local/bin/tern`; a bare `bash tern` is the user's own file, the
+ * same discipline as resolveAgentSlug). Exact names only.
+ */
+function customNameOf(entry: ProcessTreeEntry, names: { has(name: string): boolean } | undefined): string | undefined {
+  if (!names) return undefined;
+  const stem = imageStem(entry.name);
+  if (names.has(stem)) return stem;
+  if (!SCRIPT_HOST_STEMS.has(stem) || !entry.cmdline) return undefined;
+  const script = tokenizeCmdline(entry.cmdline).slice(1).find((t) => !t.startsWith('-'));
+  if (!script || !/[\\/]/.test(script)) return undefined;
+  const form = lookupForm(script);
+  return names.has(form) ? form : undefined;
 }
 
 /**
@@ -325,6 +348,10 @@ export interface AgentProcessPick {
 export function selectAgentProcess(
   entries: ReadonlyArray<ProcessTreeEntry>,
   shellPid: number,
+  /** The operator's custom-agent process names (CustomAgentNames). Matched
+   *  only where no registry agent is found: a registry agent inside a custom
+   *  wrapper keeps its name. */
+  customNames?: { has(name: string): boolean },
 ): AgentProcessPick | undefined {
   const byParent = new Map<number, ProcessTreeEntry[]>();
   for (const e of entries) {
@@ -344,6 +371,12 @@ export function selectAgentProcess(
   if (rootSlug) return { pid: shellPid, slug: rootSlug };
   let attributed: { pid: number; depth: number; slug: AgentSlug } | undefined;
   let ambiguous = false;
+  // An exec-rooted custom agent is the root itself, as for a registry one,
+  // but only once no registry agent turns up below it.
+  const rootCustom = root ? customNameOf(root, customNames) : undefined;
+  let custom: { pid: number; depth: number; name: string } | undefined =
+    rootCustom ? { pid: shellPid, depth: 0, name: rootCustom } : undefined;
+  let customAmbiguous = false;
   let sluglessRuntime: { pid: number; depth: number } | undefined;
   let directChild: number | undefined;
   const visited = new Set<number>([shellPid]);
@@ -364,13 +397,24 @@ export function selectAgentProcess(
         } else if (childDepth === attributed.depth && slug !== attributed.slug) {
           ambiguous = true;
         }
-      } else if (RUNTIME_STEMS.has(stem) && (!sluglessRuntime || childDepth < sluglessRuntime.depth)) {
-        sluglessRuntime = { pid: child.pid, depth: childDepth };
+      } else {
+        const name = customNameOf(child, customNames);
+        if (name) {
+          if (!custom || childDepth < custom.depth) {
+            custom = { pid: child.pid, depth: childDepth, name };
+            customAmbiguous = false;
+          } else if (childDepth === custom.depth && name !== custom.name) {
+            customAmbiguous = true;
+          }
+        } else if (RUNTIME_STEMS.has(stem) && (!sluglessRuntime || childDepth < sluglessRuntime.depth)) {
+          sluglessRuntime = { pid: child.pid, depth: childDepth };
+        }
       }
       queue.push({ pid: child.pid, depth: childDepth });
     }
   }
   if (attributed) return ambiguous ? { pid: attributed.pid } : { pid: attributed.pid, slug: attributed.slug };
+  if (custom) return customAmbiguous ? { pid: custom.pid } : { pid: custom.pid, custom: custom.name };
   if (sluglessRuntime) return { pid: sluglessRuntime.pid };
   return directChild !== undefined ? { pid: directChild } : undefined;
 }
@@ -636,6 +680,8 @@ interface TrackedAgent {
   pid: number;
   alive: boolean;
   slug?: AgentSlug;
+  /** A custom agent's process name (AgentProcessPick.custom). */
+  custom?: string;
   /** #1727 — set for an agent inside a WSL pane: `pid` is a LINUX pid, and
    *  this says where it lives and how to tell it from a reused one. */
   wsl?: WslWatchedAgent;
@@ -665,6 +711,10 @@ export interface WslTrackingOptions {
 /** Identity/liveness snapshot handed to the state-change listener. */
 export interface TrackedAgentState {
   slug?: AgentSlug;
+  /** identityFor only: the custom agent's process name, for its pane label.
+   *  Launch and death edges never carry it, so their listeners keep treating
+   *  the pick as unnamed. */
+  custom?: string;
   alive: boolean;
   /** Actual process snapshot start (or WSL hook payload time), only on fresh launch edges.
    * Cached identityFor reads deliberately omit it. */
@@ -711,6 +761,7 @@ export class AgentProcessTracker {
   private snapshotStartedAt = 0;
   private identityProbeGuard?: (sessionId: string) => { epoch: number; isCurrent: () => boolean } | undefined;
   private launchCounter?: (sessionId: string) => number | undefined;
+  private customNames?: () => ReadonlyMap<string, string>;
   private stateListener: ((sessionId: string, state: TrackedAgentState) => void) | undefined;
 
   constructor(
@@ -791,6 +842,20 @@ export class AgentProcessTracker {
    *  undefined when it does not report them. See noteWatchedDeath. */
   setLaunchCounter(count: (sessionId: string) => number | undefined): void {
     this.launchCounter = count;
+  }
+
+  /** The operator's custom agents, process name → display name
+   *  (CustomAgentNames), read on each probe. */
+  setCustomAgentNames(names: () => ReadonlyMap<string, string>): void {
+    this.customNames = names;
+  }
+
+  /** The display name of the custom agent the pane runs right now, or
+   *  undefined. A label only: it never becomes the pane's agent slug. */
+  customAgentNameFor(sessionId: string): string | undefined {
+    const s = this.states.get(sessionId);
+    if (!s?.alive || !s.custom) return undefined;
+    return this.customNames?.().get(s.custom);
   }
 
   /** Captures only detector-seeding authority; process liveness keeps its own generation guard. */
@@ -898,7 +963,7 @@ export class AgentProcessTracker {
         const observedAt = this.snapshotStartedAt;
         const entries = await snapshot;
         if ((this.generation.get(sessionId) ?? 0) !== gen) return; // disarmed meanwhile
-        const pick = selectAgentProcess(entries, shellPid);
+        const pick = selectAgentProcess(entries, shellPid, this.customNames?.());
         let replaced = false;
         if (requireSlug) {
           const cur = this.states.get(sessionId);
@@ -920,8 +985,9 @@ export class AgentProcessTracker {
             if (pick?.slug !== undefined && pick.slug === cur.slug) replaced = true;
             else this.emitState(sessionId, { ...(cur.slug ? { slug: cur.slug } : {}), alive: false });
           }
-          // No named agent → leave the session as it is.
-          if (!pick?.slug) {
+          // No named agent → leave the session as it is. A custom agent is
+          // named too: it is what the operator said this pane may run.
+          if (!pick?.slug && !pick?.custom) {
             this.slugProbeBlockedUntil.set(sessionId, Date.now() + AGENT_MISS_BACKOFF_MS);
             return;
           }
@@ -964,6 +1030,7 @@ export class AgentProcessTracker {
       pid: pick.pid,
       alive: true,
       ...(pick.slug ? { slug: pick.slug } : {}),
+      ...(pick.custom ? { custom: pick.custom } : {}),
       ...(launchSeq !== undefined ? { launchSeq } : {}),
     });
     this.watcher.watch(AgentProcessTracker.watchKey(sessionId), pick.pid, () => this.noteWatchedDeath(sessionId, pick.pid));
@@ -1072,7 +1139,7 @@ export class AgentProcessTracker {
   identityFor(sessionId: string): TrackedAgentState | undefined {
     const s = this.states.get(sessionId);
     if (!s) return undefined;
-    return { ...(s.slug ? { slug: s.slug } : {}), alive: s.alive };
+    return { ...(s.slug ? { slug: s.slug } : {}), ...(s.custom ? { custom: s.custom } : {}), alive: s.alive };
   }
 
   /** True while the session's agent is a live process inside WSL, attributed

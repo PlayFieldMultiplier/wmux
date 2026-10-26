@@ -159,6 +159,28 @@ describe('launching what was approved', () => {
   });
 });
 
+describe('process names', () => {
+  it('are program names, stored as the tracker compares them, and never a known agent or a runtime', () => {
+    expect(normalizeCustomAgent({ name: 'Tern', command: 'tern', processNames: ['Tern.EXE', 'tern-daemon', 'tern'] }))
+      .toEqual({ ok: true, agent: { name: 'Tern', command: 'tern', processNames: ['tern', 'tern-daemon'] } });
+    expect(code({ name: 'Tern', command: 'tern', processNames: ['bin/tern'] })).toBe('process-invalid');
+    expect(code({ name: 'Tern', command: 'tern', processNames: 'tern' })).toBe('process-invalid');
+    expect(code({ name: 'Tern', command: 'tern', processNames: ['kiro-cli'] })).toBe('process-known');
+    expect(code({ name: 'Tern', command: 'tern', processNames: ['python3'] })).toBe('process-generic');
+  });
+
+  it('name one agent only', () => {
+    const r = validateCustomAgents([
+      { name: 'Tern', command: 'tern', processNames: ['tern', 'seabird'] },
+      { name: 'Gull', command: 'gull', processNames: ['seabird'] },
+    ]);
+    expect(r).toMatchObject({ ok: false, code: 'process-duplicate', params: { process: 'seabird' } });
+    // The default process name (the command's) counts too.
+    expect(validateCustomAgents([{ name: 'Tern', command: 'tern' }, { name: 'Gull', command: 'gull', processNames: ['tern'] }]))
+      .toMatchObject({ ok: false, code: 'process-duplicate' });
+  });
+});
+
 describe('validateCustomAgents', () => {
   it('refuses a duplicate name and two agents running the same program, case-insensitive', () => {
     const dupName = validateCustomAgents([{ name: 'Tern', command: 'tern' }, { name: 'tern', command: 'gull' }]);
