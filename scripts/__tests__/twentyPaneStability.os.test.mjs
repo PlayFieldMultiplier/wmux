@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyClaudeEvents, assignClasses, claudeLaunchCommand, claudeProjectSettings, containsPath, daemonPidVerdict,
-  gapInTurnMs, inTurnAt, trustPromptKeys,
+  answerTrustPrompts, gapInTurnMs, inTurnAt, isRunEntry, trustPromptKeys,
   leftoverPids, linearSlope, markerFor, newClaudeState, nextClaudeAction, parseArgs, planLayout, producerCommand,
   producerSource, profileDiff, runTeardown, stripTerminalControls, summarizeRun, verifyEngine,
 } from '../lib/twenty-pane-stability.mjs';
@@ -285,12 +285,79 @@ describe('twenty-pane stability Claude loop', () => {
 });
 
 describe('twenty-pane stability Claude profile diff', () => {
-  it('lists only what the run added', () => {
-    const before = { projects: ['-a'], configKeys: ['projects', 'theme'], configProjects: ['/a'] };
-    const after = { projects: ['-a', '-tmp-wsk-1-claude-repo'], configKeys: ['projects', 'theme', 'x'], configProjects: ['/a', '/tmp/wsk-1/claude-repo'] };
-    expect(profileDiff(before, after)).toEqual({
-      projectsAdded: ['-tmp-wsk-1-claude-repo'], configKeysAdded: ['x'], configKeysRemoved: [], configProjectsAdded: ['/tmp/wsk-1/claude-repo'],
+  it('keeps only entries for this run\'s fixture repo, by path or slug', () => {
+    const repo = ['/tmp/wsk-1/claude-repo', '/private/tmp/wsk-1/claude-repo'];
+    const before = { projects: ['-a'], configKeys: ['projects'], configProjects: ['/a'] };
+    const after = {
+      // another session opened /work/app during the run
+      projects: ['-a', '-private-tmp-wsk-1-claude-repo', '-work-app'],
+      configKeys: ['projects', 'tipsHistory'],
+      configProjects: ['/a', '/private/tmp/wsk-1/claude-repo', '/work/app'],
+    };
+    expect(profileDiff(before, after, repo, 'darwin')).toEqual({
+      projectsAdded: ['-private-tmp-wsk-1-claude-repo'],
+      configProjectsAdded: ['/private/tmp/wsk-1/claude-repo'],
+      configKeysAddedAnySession: ['tipsHistory'],
+      configKeysRemovedAnySession: [],
     });
+  });
+
+  it('matches the exact path or slug only', () => {
+    const repo = ['/tmp/wsk-aB12cD/claude-repo'];
+    expect(isRunEntry('-tmp-wsk-aB12cD-claude-repo', repo, 'darwin')).toBe(true);
+    // another run's mkdtemp name differing only in case, and a longer path
+    expect(isRunEntry('-tmp-wsk-Ab12Cd-claude-repo', repo, 'darwin')).toBe(false);
+    expect(isRunEntry('/tmp/wsk-aB12cD/claude-repo-old', repo, 'darwin')).toBe(false);
+    const win = ['C:\\Users\\me\\AppData\\Local\\Temp\\wsk-ab12\\claude-repo'];
+    expect(isRunEntry('c:/users/me/appdata/local/temp/wsk-ab12/claude-repo', win, 'win32')).toBe(true);
+    expect(isRunEntry('C--Users-me-AppData-Local-Temp-wsk-ab12-claude-repo', win, 'win32')).toBe(true);
+    expect(isRunEntry('C--Users-me-work', win, 'win32')).toBe(false);
+  });
+});
+
+describe('twenty-pane stability folder-trust answer', () => {
+  const pane = (ptyId) => ({ ptyId, claude: newClaudeState() });
+  const prompt = 'Quick safety check \u276f No, exit  Yes, I trust this folder';
+  // screens after the answer, per pane
+  function io(after, { throwOn = null } = {}) {
+    const writes = [];
+    return {
+      writes,
+      beforeAnswer: () => Promise.resolve(),
+      write: async (id, d) => { if (id === throwOn) throw new Error('page closed'); writes.push([id, d]); },
+      screenAfter: async (id) => after[id] ?? '',
+      sleep: () => Promise.resolve(),
+    };
+  }
+
+  it('types the answer, only where the prompt shows, and confirms it on screen', async () => {
+    const x = io({ a: '> Try "how does this repo work"' });
+    const panes = [pane('a'), pane('b')];
+    expect(await answerTrustPrompts(panes, [prompt, '> '], x)).toEqual({ trusted: 1, refused: 0 });
+    expect(x.writes).toEqual([['a', '\x1b[B'], ['a', '\r']]);
+    expect(panes[0].claude.stopped).toBeNull();
+  });
+
+  it('stops a pane whose prompt is still there (pty.write cannot report a drop), and cancels it', async () => {
+    const x = io({ a: prompt, b: '' });
+    const panes = [pane('a'), pane('b')];
+    expect(await answerTrustPrompts(panes, [prompt, prompt], x)).toEqual({ trusted: 0, refused: 2 });
+    expect(panes[0].claude).toMatchObject({ stopped: 'trust-refused', stoppedDetail: /still on screen/ });
+    expect(panes[1].claude.stoppedDetail).toMatch(/no output/);
+    // Escape after the keys: no half-answered prompt waits for a stray Enter
+    expect(x.writes.filter(([id]) => id === 'a').map(([, d]) => d)).toEqual(['\x1b[B', '\r', '\x1b']);
+    // a stopped pane never submits a prompt
+    expect(nextClaudeAction(panes[0].claude, 0, { maxTurns: 5, intervalSec: 60, turnTimeoutSec: 120 })).toBeNull();
+  });
+
+  it('stops only the pane whose write fails, and flags it in the summary', async () => {
+    const panes = [pane('a'), pane('b')];
+    const res = await answerTrustPrompts(panes, [prompt, prompt], io({ b: '> ' }, { throwOn: 'a' }));
+    expect(res).toEqual({ trusted: 1, refused: 1 });
+    expect(panes[0].claude).toMatchObject({ stopped: 'trust-refused', stoppedDetail: 'page closed' });
+    const sum = summarizeRun([sample(0)], { claude: [{ paneIndex: 0, ptyId: 'a', ...panes[0].claude }] });
+    expect(sum.claude.stopped).toEqual({ 'trust-refused': 1 });
+    expect(sum.flags.some((f) => f.includes('folder-trust prompt could not be answered'))).toBe(true);
   });
 });
 
