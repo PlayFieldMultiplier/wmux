@@ -13,7 +13,7 @@ import { CodexUsageLimitLineScanner } from '../../shared/usageLimit';
 import type { AgentStatus } from '../../shared/types';
 import type { AgentSlug } from '../../shared/agentIdentity';
 import type { ApprovalScreenSnapshot } from '../../shared/approvalScreen';
-import { agyScreenApproval, claudeScreenApproval, codexScreenApproval, openCodeScreenApproval, piScreenApproval, type ScreenApproval } from './approvalScreen';
+import { agyScreenApproval, claudeScreenApproval, codexScreenApproval, openCodeScreenApproval, piScreenApproval, qwenScreenApproval, type ScreenApproval } from './approvalScreen';
 export type { AgentSlug };
 export { agentDisplayToSlug } from '../../shared/agentIdentity';
 
@@ -465,6 +465,12 @@ const AGENT_PATTERNS: AgentPattern[] = [
   {
     agent: 'Qwen Code',
     slug: 'qwen',
+    // The dialog read off the grid once a process or hook identity arrives
+    // after it was drawn, when no line pattern was reading for Qwen yet.
+    approvalScreen: qwenScreenApproval,
+    // Its question (shell or file write), then the confirmation spinner row
+    // drawn below the choices.
+    approvalReady: { question: /Allow\s*execution\s*of:|Apply\s*this\s*change\?/, end: /Waiting\s*for\s*user\s*confirmation\.\.\./ },
     gate: /Qwen\s*Code\s*\(v\d|Qwen - /,
     chrome: isQwenChrome,
     completeChromeRow: true,
@@ -1474,7 +1480,7 @@ export class AgentDetector {
     const previousLength = stripAnsi(this.approvalHintTail).length;
     const probe = this.approvalHintTail + data;
     const cleanProbe = stripAnsi(probe);
-    const hint = /Do\s*you\s*(?:want|trust)|Would\s*you\s*like|Allow\s*tool\s*use|Permission\s*required|Trust\s*project\s*folder/g;
+    const hint = /Do\s*you\s*(?:want|trust)|Would\s*you\s*like|Allow\s*tool\s*use|Permission\s*required|Trust\s*project\s*folder|Allow\s*execution\s*of:|Apply\s*this\s*change\?/g;
     for (const match of cleanProbe.matchAll(hint)) {
       // Only newly drawn text refreshes freshness. Retaining an old question
       // in the tail across a title update must not make it recent again.

@@ -5,8 +5,9 @@ import codex from '../../../daemon/approvals/__tests__/fixtures/terminal-prompts
 import openCode from '../../../daemon/approvals/__tests__/fixtures/terminal-prompts/opencode-permission-bash-01.json';
 import claude from '../../../daemon/approvals/__tests__/fixtures/terminal-prompts/claude-write-01-create.json';
 import type { ApprovalScreenSnapshot } from '../../../shared/approvalScreen';
-import { codexScreenApproval, piScreenApproval } from '../approvalScreen';
+import { codexScreenApproval, piScreenApproval, qwenScreenApproval } from '../approvalScreen';
 import piCapture from './fixtures/pi-1.4.0-capture.json';
+import qwenCapture from './fixtures/qwen-0.26.1-approval.json';
 
 const TRUST = ['Do you trust the contents of this project?', '❯ Yes, I trust this folder', '  No, exit', '↑/↓ Navigate · enter Confirm'];
 const CODEX_EDIT = ['Would you like to make the following edits?', '› 1. Yes, proceed (y)',
@@ -418,5 +419,52 @@ describe('quiet approval recovery reads only the current interactive viewport', 
     const { det, events } = setup();
     expect(await det.revalidateApprovalScreen(async () => { if (outcome) throw outcome; return null; })).toBe(false);
     expect(events).not.toHaveBeenCalled();
+  });
+});
+
+describe('Qwen Code 0.26.1 permission dialogs (live capture)', () => {
+  const ASKED = { agent: 'Qwen Code', status: 'awaiting_input', message: 'Approval requested' };
+  const { chunks, screens } = qwenCapture;
+
+  it.each([
+    ['the 120x40 shell dialog', chunks.shellWide, screens.shellWide],
+    ['the 60x30 file-write dialog', chunks.writeNarrow, screens.writeNarrow],
+    ['the 60x30 shell dialog under a scrollbar thumb', chunks.shellNarrow, screens.shellNarrowScrollbar],
+  ])('recovers %s drawn before Qwen\'s identity arrived', async (_label, output, rows) => {
+    // Drawn while another agent's identity still held the pane, so no Qwen
+    // line pattern read it; Qwen's seed then reads the grid once.
+    const det = new AgentDetector();
+    const events = vi.fn();
+    det.onEvent(events);
+    det.seedTrustedIdentity('claude', det.getIdentityEpoch());
+    det.feed(output);
+    det.clearTrustedIdentity();
+    det.seedTrustedIdentity('qwen', det.getIdentityEpoch());
+    expect(await det.revalidateApprovalScreen(async () => frame(rows))).toBe(true);
+    expect(events.mock.calls.map(([event]) => event)).toEqual([ASKED]);
+  });
+
+  it('reports a dialog drawn after identity once, from the stream, and its recheck agrees', async () => {
+    const det = new AgentDetector();
+    const events = vi.fn();
+    det.onEvent(events);
+    det.seedTrustedIdentity('qwen', det.getIdentityEpoch());
+    det.feed(chunks.shellNarrow);
+    expect(events.mock.calls.map(([event]) => event)).toEqual([ASKED]);
+    // The confirmation row finished the question: the host reads the grid,
+    // which finds the same dialog and reports nothing new.
+    expect(det.takeApprovalRecheckRequest()).toBe(true);
+    expect(await det.revalidateApprovalScreen(async () => frame(screens.shellNarrowScrollbar))).toBe(false);
+    expect(events).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads no dialog once it is answered or cancelled', () => {
+    // After Enter the spinner keeps the confirmation phrase, beside its counters.
+    expect(qwenScreenApproval(screens.answeredWide)).toBeNull();
+    expect(qwenScreenApproval(screens.afterEscNarrow)).toBeNull();
+    const det = new AgentDetector();
+    det.seedTrustedIdentity('qwen', det.getIdentityEpoch());
+    det.feed(chunks.answeredWide);
+    expect(det.takeApprovalRecheckRequest()).toBe(false);
   });
 });
