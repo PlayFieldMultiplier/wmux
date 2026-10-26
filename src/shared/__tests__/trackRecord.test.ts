@@ -215,6 +215,8 @@ describe('agentSlug', () => {
     expect(agentSlug('claude code')).toBe('claude');
     // A custom agent's label that only starts like a registry agent is not it.
     expect(agentSlug('Codex Mini')).toBe('-');
+    // ...nor one that starts like a display name's first word.
+    expect(agentSlug('GitHub Tools')).toBe('-');
     expect(agentSlug(null)).toBe('-');
   });
 });
