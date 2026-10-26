@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+// @wmux-lane unit
+// 'win32' here is only a platform value passed to pure helpers; nothing reaches the OS.
 //
 // The window glass row: on a Windows build without the acrylic material it
 // reads Off, every level is disabled and the reason is shown, whatever level
