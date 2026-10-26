@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-const { verifyIntegrity } = createRequire(import.meta.url)('../verify-native-terminal-package.cjs');
+const { verifyIntegrity, recordShippedDigest } = createRequire(import.meta.url)('../verify-native-terminal-package.cjs');
 let directory;
 let manifest;
 beforeEach(() => {
@@ -42,6 +42,29 @@ describe('copied native terminal resource integrity', () => {
   it('rejects an incompatible manifest ABI', () => {
     fs.writeFileSync(path.join(directory, 'manifest.json'), JSON.stringify({ ...manifest, abi: 2 }));
     expect(() => verifyIntegrity(directory, 'win32', 'x64')).toThrow(/ABI mismatch/);
+  });
+});
+
+describe('recording the digest of the binary as shipped', () => {
+  it('describes a binary that signing rewrote, and changes nothing else', () => {
+    // macOS code signing embeds a signature in the Mach-O after the build
+    // recorded its digest.
+    fs.appendFileSync(path.join(directory, manifest.binary), 'embedded signature');
+    expect(() => verifyIntegrity(directory, 'win32', 'x64')).toThrow(/checksum mismatch/);
+    const digest = recordShippedDigest(directory);
+    const shipped = fs.readFileSync(path.join(directory, manifest.binary));
+    expect(digest).toBe(createHash('sha256').update(shipped).digest('hex'));
+    const recorded = JSON.parse(fs.readFileSync(path.join(directory, 'manifest.json'), 'utf8'));
+    expect(recorded).toEqual({ ...manifest, sha256: digest });
+    expect(() => verifyIntegrity(directory, 'win32', 'x64')).not.toThrow();
+  });
+  it('refuses a manifest that does not name a terminal binary', () => {
+    fs.writeFileSync(path.join(directory, 'manifest.json'), JSON.stringify({ ...manifest, binary: '../escape.node' }));
+    expect(() => recordShippedDigest(directory)).toThrow(/Invalid native binary filename/);
+  });
+  it('refuses a missing binary', () => {
+    fs.unlinkSync(path.join(directory, manifest.binary));
+    expect(() => recordShippedDigest(directory)).toThrow();
   });
 });
 
