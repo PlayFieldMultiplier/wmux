@@ -17,6 +17,8 @@ const SIGN_IN_RELOAD_KEY = 'wmux-web-sign-in-reload-at';
 /** A second refusal this soon after a sign-in reload means reloading does not help. */
 const SIGN_IN_RELOAD_GAP_MS = 60_000;
 const PROBE_TIMEOUT_MS = 10_000;
+/** After a refusal the page is already leaving; a slow probe must not hold it. */
+const LEAVE_PROBE_TIMEOUT_MS = 3_000;
 
 export type WebCredential =
   | { kind: 'operator'; token: string }
@@ -46,9 +48,9 @@ export function isRefused(res: Response): boolean {
 }
 
 /** Whether the daemon admits this page with no token at all (a trusted sign-in proxy). */
-export async function probeProxySession(fetchImpl: typeof fetch): Promise<boolean> {
+export async function probeProxySession(fetchImpl: typeof fetch, timeoutMs = PROBE_TIMEOUT_MS): Promise<boolean> {
   const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), PROBE_TIMEOUT_MS);
+  const timer = setTimeout(() => ctl.abort(), timeoutMs);
   try {
     const res = await fetchImpl('/api/config', { cache: 'no-store', redirect: 'manual', signal: ctl.signal });
     return res.status === 200;
@@ -100,7 +102,7 @@ export function createLeave(session: WebSession, env: LeaveEnv): () => void {
       env.location.replace(CLASSIC_PATH);
       return;
     }
-    void probeProxySession(env.fetch).then((proxied) => {
+    void probeProxySession(env.fetch, LEAVE_PROBE_TIMEOUT_MS).then((proxied) => {
       env.location.replace(proxied && dropStaleToken(env) ? '/' : CLASSIC_PATH);
     });
   };

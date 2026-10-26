@@ -230,6 +230,22 @@ describe('web.handler — forwarding', () => {
       expect(res.allowDangerousLaunch).toBe(true);
     });
 
+    it('keeps proxy sign-in across an in-place grant change', async () => {
+      installRouted({
+        running: true,
+        port: 7681,
+        host: '0.0.0.0',
+        allowInput: true,
+        allowedHosts: ['alice.example.com'],
+        tailscale: false,
+        trustedProxy: { header: 'x-auth-request-email', user: 'alice@example.com', from: ['172.30.1.2'], refusals: {} },
+      });
+      await getHandler(IPC.WEB_SET_GRANTS)(fakeEvent, { allowTranscript: true });
+      expect(rpc).toHaveBeenCalledWith('daemon.web.start', expect.objectContaining({
+        trustedProxy: { header: 'x-auth-request-email', user: 'alice@example.com', from: ['172.30.1.2'] },
+      }));
+    });
+
     it('does not start a stopped server', async () => {
       installRouted({ running: false });
       const res = (await getHandler(IPC.WEB_SET_GRANTS)(fakeEvent, { allowUpload: true })) as WebTerminalInfo;
