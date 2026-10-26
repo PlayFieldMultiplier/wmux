@@ -228,7 +228,10 @@ describe('a release card', () => {
     expect(r.cardBody((await r.ask({ targetSha: C2, clientRequestId: 'k2' })).cardId)).toContain('Checks on 2222222: still running; approving now is refused, and the bot asks again once they pass.');
     r.gh.checkRuns.delete(C3);
     r.gh.files.set('.github/workflows/ci.yml', CI_YML);
-    expect(r.cardBody((await r.ask({ targetSha: C3, clientRequestId: 'k3' })).cardId)).toContain('Checks on 3333333: not started yet (a commit behind the head may never run them); approving now is refused, and the bot asks again once they pass.');
+    expect(r.cardBody((await r.ask({ targetSha: C3, clientRequestId: 'k3' })).cardId)).toContain('Checks on 3333333: not started yet; approving now is refused, and the bot asks again once they pass.');
+    // Behind the head, the card says the checks may never run.
+    r.gh.checkRuns.delete(C1);
+    expect(r.cardBody((await r.ask({ targetSha: C1, clientRequestId: 'k4' })).cardId)).toContain('Checks on 1111111: not started yet (a commit behind the head may never run them); approving now is refused');
   });
 });
 
@@ -918,7 +921,7 @@ describe('second code review round', () => {
     await r.sweep();
     await r.sweep();
     expect(r.svc.get(req.requestId)).toMatchObject({ state: 'refused', refusal: 'tag-made-not-published, draft-kept-tag-made' });
-    expect(r.outcome(req.requestId)?.title).toMatch(/The tag was made, but publishing the release did not go through/);
+    expect(r.outcome(req.requestId)?.title).toMatch(/\(The tag was made, but publishing the release did not go through\)$/);
     // The title may be cut: the body says what became of the draft.
     expect(r.outcome(req.requestId)?.body).toBe('The tag was already made: its draft release is kept on GitHub for you to publish or delete');
     expect(r.gh.writes.map((w) => w.method)).toEqual(['POST', 'PATCH', 'PATCH', 'PATCH']);
@@ -990,6 +993,9 @@ describe('a kept release draft is told to the owner', () => {
     await r.sweep();
     expect(r.svc.get(req.requestId)).toMatchObject({ state: 'refused', refusal: 'identity-changed, draft-kept-tag-made' });
     expect(r.effects.get(id)).toMatchObject({ status: 'refused', reason: 'identity-changed, draft-kept-tag-made' });
+    // Told once, in the body; the title keeps the reason.
+    expect(r.outcome(req.requestId)?.title).toMatch(/\(The GitHub login changed since the check\)$/);
+    expect(r.outcome(req.requestId)?.title).not.toMatch(/draft release/);
     expect(r.outcome(req.requestId)?.body).toBe('The tag was already made: its draft release is kept on GitHub for you to publish or delete');
     expect(r.gh.writes.map((w) => w.method)).toEqual(['POST', 'PATCH']);
     expect(r.gh.releases).toMatchObject([{ draft: true }]);

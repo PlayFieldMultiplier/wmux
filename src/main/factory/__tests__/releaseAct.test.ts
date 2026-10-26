@@ -420,15 +420,23 @@ describe('the checks on the commit, whatever ref ran them', () => {
     expect(await pre(gh)).toMatchObject({ refusal: 'checks-failing' });
   });
 
-  it('takes the newest run of each check in each suite: a re-run that passed stands for the failed one', async () => {
+  it('a re-run (same check, same suite, started after the run completed) that passed stands for the failed one; overlapping runs all count', async () => {
     const gh = github();
-    gh.checkRuns.set(C3, [{ ...failure, name: 'build', id: 1 }, { ...success, name: 'build', id: 2 }, { ...success, name: 'lint', id: 3 }]);
+    const at = (m: number) => new Date(Date.UTC(2026, 9, 26, 12, m)).toISOString();
+    const failed1 = { ...failure, name: 'build', id: 1, startedAt: at(0), completedAt: at(5) };
+    gh.checkRuns.set(C3, [failed1, { ...success, name: 'build', id: 2, startedAt: at(6), completedAt: at(9) }, { ...success, name: 'lint', id: 3 }]);
     expect(await pre(gh)).toMatchObject({ refusal: null });
-    gh.checkRuns.set(C3, [{ ...success, name: 'build', id: 2 }, { ...failure, name: 'build', id: 1, suiteBranch: null }]);
+    // Two runs of one name in one suite at once (an app's), or no times given: both count.
+    gh.checkRuns.set(C3, [failed1, { ...success, name: 'build', id: 2, startedAt: at(3), completedAt: at(9) }]);
+    expect(await pre(gh)).toMatchObject({ refusal: 'checks-failing' });
+    gh.checkRuns.set(C3, [{ ...failure, name: 'build', id: 1 }, { ...success, name: 'build', id: 2 }]);
+    expect(await pre(gh)).toMatchObject({ refusal: 'checks-failing' });
+    // Another suite's run of the same name is not a re-run.
+    gh.checkRuns.set(C3, [failed1, { ...success, name: 'build', id: 2, startedAt: at(6), completedAt: at(9), suiteBranch: null }]);
     expect(await pre(gh)).toMatchObject({ refusal: 'checks-failing' });
     // One listing of the commit's check runs and one of its suites; none per suite.
     expect(gh.reads.filter((e) => /check-suites\/\d+\/check-runs/.test(e))).toEqual([]);
-    expect(gh.reads.filter((e) => e.startsWith(`repos/o/r/commits/${C3}/check-runs?filter=all&`))).toHaveLength(2);
+    expect(gh.reads.filter((e) => e.startsWith(`repos/o/r/commits/${C3}/check-runs?filter=all&`))).toHaveLength(4);
   });
 
   it('a workflow run of another event on the commit counts, and a later one does not hide it', async () => {
@@ -523,6 +531,19 @@ describe('second code review round', () => {
     gh.answerRead = (e) => (e === 'repos/o/r/releases/50' ? { ok: false, kind: 'error', message: 'timeout' } : null);
     expect(await deleteDraft(gh, P, 50, want)).toBe('kept-unchecked');
     expect(gh.writes).toEqual([]);
+    // The tag at the commit, but another release holds it: the draft could
+    // never be published, and goes.
+    gh = github();
+    draft(gh);
+    gh.tags.set('v1.2.3', { sha: C3 });
+    gh.releases.push({ id: 60, tag_name: 'v1.2.3', draft: false, prerelease: false, name: 'y', body: '', target_commitish: C3, author: { login: 'someone' }, html_url: 'https://github.com/o/r/releases/tag/v1.2.3' });
+    expect(await deleteDraft(gh, P, 50, want)).toBe('deleted');
+    expect(gh.releases.map((r) => r.id)).toEqual([60]);
+    gh = github();
+    draft(gh);
+    gh.tags.set('v1.2.3', { sha: C3 });
+    gh.answerRead = (e) => (e.startsWith('repos/o/r/releases?') ? { ok: false, kind: 'error', message: 'timeout' } : null);
+    expect(await deleteDraft(gh, P, 50, want)).toBe('kept-unchecked');
     gh = github();
     draft(gh);
     gh.tags.set('v1.2.3', { sha: C2 });

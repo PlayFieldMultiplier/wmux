@@ -50,6 +50,9 @@ export interface FakeRun {
    *  id (its place when unset): a re-run is a newer id with the same name. */
   name?: string;
   id?: number;
+  /** When it started and completed (ISO), when given. */
+  startedAt?: string;
+  completedAt?: string;
 }
 
 export interface FakeWorkflowRun extends FakeRun {
@@ -225,6 +228,7 @@ export class FakeGithub implements GhActPort {
       const sha = m[1];
       const runs = (this.checkRuns.get(sha) ?? []).map((r, i) => ({
         id: r.id ?? i + 1, name: r.name ?? `check-${i + 1}`, status: r.status, conclusion: r.conclusion, check_suite: { id: suiteId(sha, suiteOf(r)) },
+        started_at: r.startedAt ?? null, completed_at: r.completedAt ?? null,
       }));
       return { ok: true, value: { total_count: runs.length, check_runs: page(runs) } };
     }
