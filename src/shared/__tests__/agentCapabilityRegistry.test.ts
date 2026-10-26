@@ -33,7 +33,8 @@ import { FANOUT_EXTRA_AGENT_STEMS } from '../fanoutPreset';
 import { mayCarryBody } from '../../daemon/channels/channelWakeWorker';
 import { keystrokesForAgent } from '../../daemon/approvals/approvalKeystrokes';
 import { isClaudeFamilyAgent } from '../../daemon/approvals/terminalPrompt';
-import { resolveAgentSlug } from '../../daemon/AgentProcessTracker';
+import { resolveAgentSlug, selectAgentProcess } from '../../daemon/AgentProcessTracker';
+import { resolveCanonicalAgentIdentity } from '../../daemon/canonicalAgent';
 import { DETECTOR_PROFILE_SLUGS } from '../../main/pty/AgentDetector';
 
 /** The agents the replaced literals covered, in registry order. */
@@ -94,14 +95,17 @@ describe('derived lists match the literals they replaced', () => {
     expect([...PROBES, 'kiro-cli'].filter(launcherSupportsModelFlag)).toEqual(['claude', 'codex', 'grok', 'agy']);
   });
 
-  it('RESUME_BY_LAUNCHER (claude, codex)', () => {
+  it('RESUME_BY_LAUNCHER (claude, codex, copilot)', () => {
     expect(resumeGrammarFor('claude')?.picker).toBe('--resume');
     expect(resumeGrammarFor('claude')?.withId(UUID)).toBe(`--resume ${UUID}`);
     expect(resumeGrammarFor('codex')?.picker).toBe('resume');
     expect(resumeGrammarFor('codex')?.withId(UUID)).toBe(`resume ${UUID}`);
+    // Copilot joins its id to the flag (`--resume=SESSION-ID`).
+    expect(resumeGrammarFor('copilot')?.picker).toBe('--resume');
+    expect(resumeGrammarFor('copilot')?.withId(UUID)).toBe(`--resume=${UUID}`);
     // The id is inserted literally, never read as a replacement pattern.
     expect(resumeGrammarFor('claude')?.withId('a$&b')).toBe('--resume a$&b');
-    for (const agent of PROBES.filter((s) => s !== 'claude' && s !== 'codex')) {
+    for (const agent of PROBES.filter((s) => s !== 'claude' && s !== 'codex' && s !== 'copilot')) {
       expect(resumeGrammarFor(agent)).toBeUndefined();
       expect(resumeOfferForRecovered({ lastDetectedAgent: agent })).toBeUndefined();
     }
@@ -182,6 +186,21 @@ describe('derived lists match the literals they replaced', () => {
     expect(resolveAgentSlug('npx -y gemini-cli')).toBe('gemini');
     expect(resolveAgentSlug('npx -y kiro-cli')).toBe('kiro');
     expect(resolveAgentSlug('npx -y @acme/claude')).toBeUndefined();
+  });
+
+  it('names the npm-hosted Pi and DeepSeek Harness, and a Cursor CLI pane apart from Claude', () => {
+    expect(resolveAgentSlug('node /u/lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js')).toBe('pi');
+    expect(resolveAgentSlug('node /u/lib/node_modules/@deepseek-ai/dsh/lib/bin.js')).toBe('dsh');
+    expect(resolveAgentSlug('npx @deepseek-ai/dsh web')).toBe('dsh');
+    // Cursor CLI also runs the Claude hooks from ~/.claude/settings.json: its
+    // live process outranks the claude hook, so the pane reads as Cursor CLI.
+    const tree = (name: string) => [{ pid: 1, ppid: 0, name: 'zsh' }, { pid: 2, ppid: 1, name, cmdline: name }];
+    const pick = selectAgentProcess(tree('/home/u/.local/bin/cursor-agent'), 1);
+    expect(pick).toEqual({ pid: 2, slug: 'cursor-agent' });
+    expect(resolveCanonicalAgentIdentity({ proc: { slug: pick?.slug, alive: true }, auth: { slug: 'claude', ageMs: 1_000, exact: true } }))
+      .toEqual({ slug: 'cursor-agent', source: 'process' });
+    // Its new primary command, `agent`, is too generic a name to claim.
+    expect(selectAgentProcess(tree('/home/u/.local/bin/agent'), 1)?.slug).toBeUndefined();
   });
 
   it('account kinds behind the closed Vendor union', () => {
