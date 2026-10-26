@@ -6,6 +6,8 @@
 // node env.
 
 import {
+  CUSTOM_AGENT_PROCESS_NAMES_MAX,
+  CUSTOM_AGENT_STEM_MAX,
   customAgentStem,
   validateCustomAgents,
   type CustomAgent,
@@ -24,6 +26,10 @@ export interface CustomAgentDraft {
   /** Space- or comma-separated; empty = the Command's own name. */
   processNames: string;
 }
+
+/** Room for the most process names validation allows, each at its longest,
+ *  with a `, ` between them. */
+export const PROCESS_NAMES_FIELD_MAX = CUSTOM_AGENT_PROCESS_NAMES_MAX * CUSTOM_AGENT_STEM_MAX + (CUSTOM_AGENT_PROCESS_NAMES_MAX - 1) * 2;
 
 export function emptyCustomAgentDraft(): CustomAgentDraft {
   return { name: '', command: '', args: '', promptFlag: '', modelFlag: '', unattendedFlags: '', processNames: '' };

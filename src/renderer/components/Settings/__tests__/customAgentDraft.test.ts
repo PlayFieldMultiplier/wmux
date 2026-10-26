@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { applyCustomAgentDraft, customAgentUsers, draftFromCustomAgent } from '../customAgentDraft';
-import type { CustomAgent } from '../../../../shared/customAgents';
+import { applyCustomAgentDraft, customAgentUsers, draftFromCustomAgent, PROCESS_NAMES_FIELD_MAX } from '../customAgentDraft';
+import { CUSTOM_AGENT_PROCESS_NAMES_MAX, CUSTOM_AGENT_STEM_MAX, type CustomAgent } from '../../../../shared/customAgents';
 
 // Made-up CLIs.
 const agents: CustomAgent[] = [
@@ -10,6 +10,14 @@ const agents: CustomAgent[] = [
 const unused = () => ({ roles: [], presets: [], modelPins: [], unattendedPins: [] });
 
 describe('applyCustomAgentDraft', () => {
+  it('the process names field holds every name validation allows, each at its longest', () => {
+    const names = Array.from({ length: CUSTOM_AGENT_PROCESS_NAMES_MAX }, (_, i) => `${String.fromCharCode(97 + i)}`.repeat(CUSTOM_AGENT_STEM_MAX));
+    const processNames = names.join(', ');
+    expect(processNames.length).toBeLessThanOrEqual(PROCESS_NAMES_FIELD_MAX);
+    const r = applyCustomAgentDraft([], { ...draftFromCustomAgent({ name: 'Tern', command: 'tern' }), processNames }, null, unused);
+    expect(r).toMatchObject({ ok: true, next: [{ name: 'Tern', command: 'tern', processNames: names }] });
+  });
+
   it('saves an edit in place, so the list keeps its order', () => {
     const r = applyCustomAgentDraft(agents, { ...draftFromCustomAgent(agents[0]), args: '--fast' }, 0, unused);
     expect(r).toEqual({ ok: true, next: [{ name: 'Tern', command: 'tern', args: '--fast' }, agents[1]] });

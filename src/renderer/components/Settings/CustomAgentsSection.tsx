@@ -34,6 +34,7 @@ import {
   draftFromCustomAgent,
   emptyCustomAgentDraft,
   isCustomAgentUsed,
+  PROCESS_NAMES_FIELD_MAX,
   type CustomAgentDraft,
   type CustomAgentUsers,
 } from './customAgentDraft';
@@ -331,7 +332,7 @@ function CustomAgentEditor({
         placeholder: none,
       })}
       {text('processNames', t('settings.customAgentsProcessNames'), t('settings.customAgentsProcessNamesDesc'), {
-        max: CUSTOM_AGENT_ARGS_MAX,
+        max: PROCESS_NAMES_FIELD_MAX,
         // What an empty field means: the Command's own name.
         placeholder: draft.command.trim() ? customAgentProcessNames({ command: draft.command })[0] : undefined,
       })}
