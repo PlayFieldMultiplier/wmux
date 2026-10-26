@@ -102,6 +102,7 @@ const SENTENCES: Readonly<Record<string, string>> = {
   'prerelease-mismatch': 'The tag reads as a prerelease and the request does not, or the other way round',
   'tag-not-matching-release-workflow': 'The repository\'s tag workflows do not run on this tag',
   'workflow-unreadable': 'A workflow file at the commit could not be read',
+  'workflow-disabled': 'The release workflow is disabled, or GitHub Actions is off for the repository',
   'release-by-other': 'Someone else published a release with this tag',
   'published-other-target': 'A release was published, but its tag points at another commit',
 };

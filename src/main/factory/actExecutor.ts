@@ -33,10 +33,12 @@
 // A release (releaseAct.ts) runs its own steps after the pins: the default
 // branch, the commit on it, the tag and the release still free, the checks
 // on the commit; then either the tag alone (its workflow publishes it), or a
-// draft whose id is journaled, the late gate, and publishing that draft. A
-// 4xx from publishing is read back at once (GitHub was measured making a tag
-// on a 4xx from a call that publishes), and a refusal deletes this act's own
-// draft.
+// draft whose id is journaled, the late gate, and publishing that draft with
+// the approved fields. A 4xx from publishing is uncertain, settled by a read
+// later (GitHub was measured making a tag on a 4xx from a call that
+// publishes). Once a row's draft is on GitHub, a try given back stays
+// counted, and any refusal or drop of the row deletes that draft while it is
+// still a draft.
 
 import { splitRepoKey } from '../github/GhIssueService';
 import type { GhActAnswer, GhActPort } from '../github/GhActService';
@@ -46,7 +48,7 @@ import { actRowClaimed, runnableAct, type ActEffect, type ActEffectStore } from 
 import type { StoredApproval } from './approvals';
 import {
   deleteDraft, draftBody, draftWritten, findRelease, isFail, mapRelease, publishBody, publishedWritten, readTagTarget, releasePrecondition,
-  tagRefBody, tagRefWritten, tagRunUrl,
+  tagIsOurs, tagRefBody, tagRefWritten, tagRunUrl,
 } from './releaseAct';
 
 /** The acts that take one write (a release has its own steps). */
@@ -256,14 +258,12 @@ type Found =
   | { status: 'none'; draft?: number }
   | { status: 'unknown' };
 
-/** How one claimed try ends (runOnce's own moves). */
+/** How one claimed try ends (runOnce's own moves). `back` keeps the try
+ *  counted once the row's draft is on GitHub. */
 interface TryEnds {
   gate: () => string | null;
-  end: (status: 'done' | 'refused' | 'uncertain', reason?: string, result?: ActEffect['result']) => ActEffect | null;
+  end: (status: 'done' | 'refused' | 'uncertain', reason?: string, result?: ActEffect['result']) => Promise<ActEffect | null>;
   back: (reason: string) => ActEffect | null;
-  /** Back to pending with the try counted: a write of it is on GitHub. */
-  hold: (reason: string) => ActEffect | null;
-  stop: (denied: string) => ActEffect | null;
 }
 
 export class ActExecutor {
@@ -299,7 +299,7 @@ export class ActExecutor {
     for (const row of this.ports.effects.list()) {
       if (!runnableAct(row) || (row.status !== 'uncertain' && row.status !== 'pending')) continue;
       const denied = this.ports.approval.authorize(row);
-      if (denied === 'approval-missing') this.orphaned(row);
+      if (denied === 'approval-missing') await this.orphaned(row);
       else if (row.status === 'uncertain' || denied === null || !ACT_NOT_NOW.has(denied)) await this.run(row.id);
     }
   }
@@ -307,11 +307,22 @@ export class ActExecutor {
   /** A row whose request is gone: the act's text and login went with it, so
    *  no read can settle it. Dropped, and logged; a claimed row only once its
    *  read window passed. */
-  private orphaned(row: ActEffect): void {
+  private async orphaned(row: ActEffect): Promise<void> {
     const claimed = actRowClaimed(row);
     if (claimed && this.now() - (row.startedAt ?? row.updatedAt) < (this.ports.reconcileAfterMs ?? RECONCILE_AFTER_MS)) return;
     if (!this.ports.effects.drop(row.id)) return;
     this.ports.log?.(`[factory] act ${row.action} ${row.requestId} dropped: its request is gone (${row.status}, attempt ${row.attempt}${claimed ? '; whether it reached GitHub is not known' : ''})`);
+    await this.dropDraft(row);
+  }
+
+  /** A release row that ended refused, or was dropped, with a draft of its
+   *  own on GitHub: the draft goes while it is still a draft (one published
+   *  since stays), best effort, and the log says what became of it. */
+  private async dropDraft(row: ActEffect | null): Promise<void> {
+    if (!row || row.action !== 'release' || row.draftId === undefined) return;
+    const p = repoPath(row.repoKey);
+    const what = p ? await deleteDraft(this.ports.gh, p, row.draftId).catch(() => 'failed' as const) : 'failed';
+    this.ports.log?.(`[factory] act release ${row.requestId}: its draft ${row.draftId} ${what === 'failed' ? 'could not be deleted' : what}`);
   }
 
   private emit(e: ActEffect | null): void {
@@ -335,22 +346,24 @@ export class ActExecutor {
     const claimed = effects.claim(id);
     if (!claimed) return effects.get(id);
     this.emit(claimed);
-    const end = (status: 'done' | 'refused' | 'uncertain', reason?: string, result?: ActEffect['result']): ActEffect | null => {
+    const end = async (status: 'done' | 'refused' | 'uncertain', reason?: string, result?: ActEffect['result']): Promise<ActEffect | null> => {
       const out = effects.finish(id, status, reason, result);
       this.ports.log?.(`[factory] act ${claimed.action} ${claimed.requestId} ${out?.status ?? status}${out?.reason ? ` (${out.reason})` : ''}`);
       this.emit(out);
+      if (out?.status === 'refused') await this.dropDraft(out);
       return out;
     };
-    const back = (reason: string, kept = false): ActEffect | null => {
-      const out = effects.release(id, reason, kept);
+    // A row whose draft is on GitHub has written: the try stays counted.
+    const back = (reason: string): ActEffect | null => {
+      const out = effects.release(id, reason, effects.get(id)?.draftId !== undefined);
       this.emit(out);
       return out;
     };
-    const stop = (denied: string): ActEffect | null => (ACT_NOT_NOW.has(denied) ? back(denied) : end('refused', denied));
+    const stop = (denied: string): Promise<ActEffect | null> | ActEffect | null => (ACT_NOT_NOW.has(denied) ? back(denied) : end('refused', denied));
     try {
       const gate = (): string | null => this.ports.approval.authorize(claimed);
       const denied = gate();
-      if (denied) return stop(denied);
+      if (denied) return await stop(denied);
       const r = this.ports.approval.request(claimed.requestId);
       const act = r?.act;
       const p = r ? repoPath(r.repoKey) : null;
@@ -366,12 +379,12 @@ export class ActExecutor {
       // The name, node id and numeric id the request read (a rename or a
       // transfer changes the name; a repository made again changes the ids).
       if (repo.fullName.toLowerCase() !== r.actRepo.fullName.toLowerCase() || repo.nodeId !== r.actRepo.nodeId || repo.id !== r.actRepo.id) return end('refused', 'repo-changed');
-      if (act.kind === 'release') return await this.runRelease(id, r.requestId, r.ghLogin, act, p, claimed.draftId, { gate, end, back, hold: (why) => back(why, true), stop });
+      if (act.kind === 'release') return await this.runRelease(id, claimed, r.ghLogin, act, p, { gate, end, back });
       const pre = await this.precondition(r.repoKey, act);
       if (pre === 'read-failed') return back(pre);
       if (pre) return end('refused', pre);
       const late = gate();
-      if (late) return stop(late);
+      if (late) return await stop(late);
       const ans = await this.write(p, r, act);
       if (ans.ok) {
         const result = writeResult(r, act, ans.value);
@@ -388,21 +401,18 @@ export class ActExecutor {
 
   /** A release's try from its preconditions on (releaseAct.ts): the tag
    *  alone (`workflow`), or a draft, then the late gate, then publishing it
-   *  (`release`). */
-  private async runRelease(id: string, requestId: string, login: string, act: ApprovalReleaseAct, p: { host: string; base: string }, draftId: number | undefined, t: TryEnds): Promise<ActEffect | null> {
+   *  (`release`). A refusal deletes the row's draft (`end`). */
+  private async runRelease(id: string, claimed: ActEffect, login: string, act: ApprovalReleaseAct, p: { host: string; base: string }, t: TryEnds): Promise<ActEffect | null> {
     const gh = this.ports.gh;
-    const drop = async (draft: number | undefined): Promise<void> => {
-      if (draft !== undefined && !(await deleteDraft(gh, p, draft))) this.ports.log?.(`[factory] act release ${requestId}: its draft ${draft} could not be deleted`);
-    };
-    // Once this act's draft is on GitHub, a try given back stays counted.
-    const giveBack = (why: string, draft: number | undefined): ActEffect | null => (draft === undefined ? t.back(why) : t.hold(why));
-    const pre = await releasePrecondition(gh, p, act, login, draftId);
-    if (pre.refusal === 'read-failed') return giveBack(pre.refusal, pre.draft?.id ?? draftId);
-    if (pre.refusal) {
-      await drop(pre.draft?.id);
-      return t.end('refused', pre.refusal);
-    }
+    const { effects } = this.ports;
+    // An earlier try of the row may have written (its count was kept).
+    const pre = await releasePrecondition(gh, p, act, login, claimed.draftId, claimed.attempt > 1);
+    // This act's draft, found by its content after a crash: journaled now,
+    // so a refusal deletes it and the next try publishes it.
     let draft = pre.draft;
+    if (draft && claimed.draftId !== draft.id && !effects.noteDraft(id, draft.id)) return this.unjournaled(id, claimed, draft.id);
+    if (pre.refusal === 'read-failed') return t.back(pre.refusal);
+    if (pre.refusal) return t.end('refused', pre.refusal);
     if (act.mode === 'release' && !draft) {
       // Write 1: a draft, which makes no tag (a 4xx on it leaves none).
       const ans = await gh.write(p.host, 'POST', `${p.base}/releases`, draftBody(act));
@@ -416,60 +426,62 @@ export class ActExecutor {
         // A draft of this tag by the owner's login, not as approved: its id
         // is journaled so a read finds it (and a refusal deletes it).
         const made = mapRelease(ans.value);
-        if (made?.draft && made.tagName === act.tagName && made.author === login) this.ports.effects.noteDraft(id, made.id);
+        if (made?.draft && made.tagName === act.tagName && made.author === login) effects.noteDraft(id, made.id);
         return t.end('uncertain', 'unexpected-response');
       }
-    }
-    if (draft && !this.ports.effects.noteDraft(id, draft.id)) {
-      this.ports.log?.(`[factory] act release ${requestId}: draft ${draft.id} not journaled; a read settles it`);
-      const row = this.ports.effects.get(id);
-      this.emit(row);
-      return row;
+      if (!effects.noteDraft(id, draft.id)) return this.unjournaled(id, claimed, draft.id);
     }
     // The late gate, right before the write that makes the tag: the approval
-    // again, then the tag still free.
+    // again, then the tag still free (or made at the commit by an earlier
+    // publish of this very draft).
     const denied = t.gate();
-    if (denied) {
-      if (ACT_NOT_NOW.has(denied)) return giveBack(denied, draft?.id);
-      await drop(draft?.id);
-      return t.end('refused', denied);
-    }
+    if (denied) return ACT_NOT_NOW.has(denied) ? t.back(denied) : t.end('refused', denied);
     const tag = await readTagTarget(gh, p, act.tagName);
-    if (isFail(tag) || tag !== null) {
-      const why = isFail(tag) ? readRefusal(tag, 'tag-taken') : 'tag-taken';
-      if (why === 'read-failed') return giveBack(why, draft?.id);
-      await drop(draft?.id);
-      return t.end('refused', why);
+    if (isFail(tag)) {
+      const why = readRefusal(tag, 'tag-taken');
+      return why === 'read-failed' ? t.back(why) : t.end('refused', why);
     }
+    if (tag !== null && !tagIsOurs(act, tag, draft)) return t.end('refused', 'tag-taken');
     if (act.mode === 'workflow') {
       const ans = await gh.write(p.host, 'POST', `${p.base}/git/refs`, tagRefBody(act));
       if (ans.ok) return tagRefWritten(ans.value, act) ? t.end('done', undefined, { url: await tagRunUrl(gh, p, act) }) : t.end('uncertain', 'unexpected-response');
-      if (ans.kind === 'http') return t.end('refused', ans.status === 422 && /already exists/i.test(ans.message) ? 'tag-taken' : `gh-${ans.status}`);
+      if (ans.kind === 'http' && ans.status === 422 && /already exists/i.test(ans.message)) {
+        // The tag exists: at the commit it is what this act makes (as a
+        // read settles it); elsewhere it is someone else's.
+        const at = await readTagTarget(gh, p, act.tagName);
+        if (isFail(at) || at === null) return t.end('uncertain', 'gh-422');
+        return at === act.targetSha ? t.end('done', undefined, { url: await tagRunUrl(gh, p, act) }) : t.end('refused', 'tag-taken');
+      }
+      if (ans.kind === 'http') return t.end('refused', `gh-${ans.status}`);
       if (ans.kind === 'rate-limited' || ans.kind === 'unsent') return t.back(ans.kind);
       return t.end('uncertain', 'write-error');
     }
     if (!draft) return t.end('uncertain', 'executor-error');
-    // Write 2: publish the draft; this makes the tag.
+    // Write 2: publish the draft with every approved field; this makes the tag.
     const ans = await gh.write(p.host, 'PATCH', `${p.base}/releases/${draft.id}`, publishBody(act));
-    if (!ans.ok && (ans.kind === 'rate-limited' || ans.kind === 'unsent')) return t.hold(ans.kind);
     if (ans.ok) {
       const shown = publishedWritten(ans.value, act, login, draft.id);
+      if (shown === 'different') return t.end('refused', 'found-different', { url: mapRelease(ans.value)?.url ?? '', id: draft.id });
       const at = shown ? await readTagTarget(gh, p, act.tagName) : null;
       if (!shown || at === null || isFail(at)) return t.end('uncertain', 'unexpected-response');
       // GitHub puts a release on a tag that exists, wherever it points: one
       // made since the late read is reported as it is, published.
       return at === act.targetSha ? t.end('done', undefined, shown) : t.end('refused', 'published-other-target', shown);
     }
-    if (ans.kind === 'http') {
-      const found = await findRelease(gh, p, act, login, draft.id).catch((): Found => ({ status: 'unknown' }));
-      if (found.status === 'done') return t.end('done', undefined, found.result);
-      if (found.status === 'none' || found.status === 'refused') {
-        await drop(found.draft);
-        return found.status === 'none' ? t.end('refused', `gh-${ans.status}`) : t.end('refused', found.reason, found.result);
-      }
-      return t.end('uncertain', `gh-${ans.status}`);
-    }
-    return t.end('uncertain', 'write-error');
+    if (ans.kind === 'rate-limited' || ans.kind === 'unsent') return t.back(ans.kind);
+    // A 4xx from a call that publishes is not proof nothing was published
+    // (it can leave the tag made and the release a draft): a read settles it
+    // after RECONCILE_AFTER_MS.
+    return t.end('uncertain', ans.kind === 'http' ? `gh-${ans.status}` : 'write-error');
+  }
+
+  /** A draft whose id did not reach the journal: the row is uncertain in
+   *  memory, and a read (the draft scan) settles it. */
+  private unjournaled(id: string, claimed: ActEffect, draftId: number): ActEffect | null {
+    this.ports.log?.(`[factory] act release ${claimed.requestId}: draft ${draftId} not journaled; a read settles it`);
+    const row = this.ports.effects.get(id);
+    this.emit(row);
+    return row;
   }
 
   /** Why the act may not run on GitHub as it stands now, `read-failed`, or null. */
@@ -522,20 +534,15 @@ export class ActExecutor {
     if (!r?.act || !r.ghLogin) return 'unknown';
     const found = await this.find(r, r.act, row).catch((): Found => ({ status: 'unknown' }));
     if (found.status === 'unknown') return 'unknown';
+    // A release's own draft found: journaled first, so the next try
+    // publishes it, and a refusal (attempts exhausted included) deletes it.
+    const draft = found.status === 'refused' || found.status === 'none' ? found.draft : undefined;
+    if (draft !== undefined && row.draftId !== draft) this.ports.effects.noteDraft(row.id, draft);
     let next: ActEffect | null;
     if (found.status === 'done') next = this.ports.effects.settle(row.id, 'done', undefined, found.result);
     else if (found.status === 'refused') next = this.ports.effects.settle(row.id, 'refused', found.reason, found.result);
-    else {
-      next = this.ports.effects.settle(row.id, 'pending', 'not-found');
-      // A release's own draft found: the next try publishes it.
-      if (found.draft !== undefined && next?.status === 'pending') next = this.ports.effects.noteDraft(row.id, found.draft) ?? next;
-    }
-    // A release's own draft goes with a refusal (a draft makes no tag).
-    const draft = found.status === 'refused' || found.status === 'none' ? found.draft : undefined;
-    const p = repoPath(r.repoKey);
-    if (draft !== undefined && next?.status === 'refused' && p && !(await deleteDraft(this.ports.gh, p, draft))) {
-      this.ports.log?.(`[factory] act release ${row.requestId}: its draft ${draft} could not be deleted`);
-    }
+    else next = this.ports.effects.settle(row.id, 'pending', 'not-found');
+    if (next?.status === 'refused') await this.dropDraft(next);
     if (next && (next.status !== row.status || next.reason !== row.reason)) this.emit(next);
     return next;
   }

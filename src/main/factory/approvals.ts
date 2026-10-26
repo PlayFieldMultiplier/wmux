@@ -617,10 +617,10 @@ const CHECK_WORDS: Readonly<Record<ReleaseAsk['checks'], string>> = {
 };
 
 /** A release card's lines after the bot's: what Approve does and whether it
- *  is marked Latest, what main read when the bot asked (the default branch,
+ *  is marked Latest, the workflows the tag push also starts, what main read when the bot asked (the default branch,
  *  the checks, package.json's version), then each payload field in its own
  *  `wmux-payload` fence, in order. Pure. */
-export function releaseCardLines(act: ApprovalReleaseAct, fields: readonly string[], o: { login: string; facts: Pick<ReleaseAsk, 'behindBy' | 'checks' | 'version'>; signedIn: boolean }): string[] {
+export function releaseCardLines(act: ApprovalReleaseAct, fields: readonly string[], o: { login: string; facts: Pick<ReleaseAsk, 'behindBy' | 'checks' | 'version' | 'alsoRuns'>; signedIn: boolean }): string[] {
   const secs = Math.round(APPROVAL_UNDO_MS / 1000);
   const when = `${secs} s after you approve (Undo until then)`;
   const at = act.targetSha.slice(0, 7);
@@ -637,6 +637,9 @@ export function releaseCardLines(act: ApprovalReleaseAct, fields: readonly strin
       'The workflow decides whether it is marked Latest.',
     );
   }
+  // Workflows with no push filter run on the tag push as well (they build
+  // nothing that is published, but they run).
+  for (const file of o.facts.alsoRuns) lines.push(`${file} also runs on this tag push.`);
   const behind = o.facts.behindBy === 0 ? `${at} is its head` : `${at} is ${o.facts.behindBy} ${o.facts.behindBy === 1 ? 'commit' : 'commits'} behind its head`;
   lines.push('', `Default branch ${act.defaultBranch}: ${behind}.`, `Checks on ${at}: ${CHECK_WORDS[o.facts.checks]}.`);
   if (o.facts.version) lines.push(`package.json version: ${o.facts.version}.`);
