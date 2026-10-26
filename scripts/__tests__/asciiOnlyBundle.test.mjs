@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { parseAst } from 'vite';
 import { asciiOnlyBundle, escapeRegexLiteral, escapeRegexesAndComments } from '../lib/ascii-only-bundle.mjs';
 
+const isOneByte = (text) => !/[\u0100-\uffff]/.test(text);
+const NBSP = String.fromCharCode(0xa0);
+const LS = String.fromCharCode(0x2028);
 const isAscii = (text) => /^[\x20-\x7e\n]*$/.test(text);
 
 // Builds the escaped literal back into a RegExp, the way the engine reads it.
@@ -53,9 +56,22 @@ describe('escapeRegexesAndComments', () => {
   it('keeps whitespace and line terminators between tokens meaning the same', () => {
     const code = 'let a = 1\u00a0+\u20282;// x\u2028a = 3';
     const out = run(code);
-    expect(isAscii(out)).toBe(true);
+    expect(isOneByte(out)).toBe(true);
     // The U+2028 ends the line comment, so `a = 3` still runs.
     expect(new Function(`${out}; return a;`)()).toBe(3);
+  });
+
+  it('handles whitespace and line terminators beside a regex and inside a block comment', () => {
+    const code = `let a = /→/g${LS}/* ${NBSP}→ */a = a.test('\\u2192');`;
+    const out = run(code);
+    expect(isOneByte(out)).toBe(true);
+    expect(out).toContain('/\\u2192/g\n');
+    expect(new Function(`${out}; return a;`)()).toBe(true);
+  });
+
+  it('leaves a hashbang line alone: the OS reads it', () => {
+    const code = '#!/opt/→/node\nconst r=/→/;';
+    expect(run(code)).toBe('#!/opt/→/node\nconst r=/\\u2192/;');
   });
 
   it('leaves strings, templates and identifiers to esbuild', () => {
@@ -79,7 +95,8 @@ describe('asciiOnlyBundle', () => {
 
   it('escapes regex literals and comments in the emitted chunk', () => {
     const code = emit('entry.js', '/*! © 한글 */\nexport const r = /^[가-힣]+ → $/u;');
-    expect(isAscii(code)).toBe(true);
+    expect(code).toContain('/*! © \\ud55c\\uae00 */');
+    expect(isOneByte(code)).toBe(true);
     expect(code).toContain('/^[\\uac00-\\ud7a3]+ \\u2192 $/u');
   });
 
@@ -87,8 +104,10 @@ describe('asciiOnlyBundle', () => {
     expect(() => emit('entry.js', 'export const s = String.raw`😀`;')).toThrow(/entry\.js holds U\+1F600/);
   });
 
-  it('lets one-byte characters through: they keep the source one-byte', () => {
+  it('lets one-byte characters through and stops at U+0100', () => {
     expect(() => emit('entry.js', 'export const s = String.raw`é`;')).not.toThrow();
+    expect(() => emit('entry.js', 'export const s = String.raw`ÿ`;')).not.toThrow();
+    expect(() => emit('entry.js', 'export const s = String.raw`Ā`;')).toThrow(/entry\.js holds U\+0100/);
   });
 
   it('checks emitted worker scripts, which reach the parent build as assets', () => {

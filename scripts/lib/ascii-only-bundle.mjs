@@ -13,7 +13,6 @@
 // Not covered: pdf.js's own worker and data files, which the renderer config
 // copies verbatim into `pdfjs/` (loaded only while a PDF preview is open).
 
-const NON_ASCII = /[\u0080-\uffff]/;
 const WIDE = /[\u0100-\uffff]/;
 // Outside every token a character is whitespace or comment text.
 const SPACE = /[\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000\ufeff]/;
@@ -46,10 +45,10 @@ export function escapeRegexLiteral(raw) {
   return out;
 }
 
-/** [start, end, isRegex] for every leaf token that can hold non-ASCII text, in source order. */
-function tokenSpans(ast) {
+/** [start, end, isRegex] for every leaf token holding a character above U+00FF, in source order. */
+function tokenSpans(code, ast) {
   const spans = [];
-  // An explicit stack: minified code nests deeply enough to overflow recursion.
+  const holdsWide = (node) => WIDE.test(code.slice(node.start, node.end));
   const stack = [ast];
   while (stack.length > 0) {
     const node = stack.pop();
@@ -60,12 +59,12 @@ function tokenSpans(ast) {
     if (!node || typeof node.type !== 'string') continue;
     switch (node.type) {
       case 'Literal':
-        if (node.regex || typeof node.value === 'string') spans.push([node.start, node.end, Boolean(node.regex)]);
+        if ((node.regex || typeof node.value === 'string') && holdsWide(node)) spans.push([node.start, node.end, Boolean(node.regex)]);
         continue;
       case 'TemplateElement':
       case 'Identifier':
       case 'PrivateIdentifier':
-        spans.push([node.start, node.end, false]);
+        if (holdsWide(node)) spans.push([node.start, node.end, false]);
         continue;
     }
     for (const key in node) {
@@ -77,21 +76,25 @@ function tokenSpans(ast) {
 }
 
 /**
- * `code` (whose ESTree is `ast`, UTF-16 offsets) with non-ASCII escaped where
- * that cannot change what runs: inside regex literals, and between tokens,
- * where it is comment text (escaped) or whitespace (a space or a newline).
- * Strings, templates and identifiers are left to esbuild's charset: a raw
- * character there is a tagged template's observable `raw` text, which no
- * rewrite keeps, so the guard reports it instead.
+ * `code` (whose ESTree is `ast`, UTF-16 offsets) with each character above
+ * U+00FF escaped where that keeps how the code runs: inside regex literals,
+ * and between tokens, where it is comment text (escaped) or whitespace (a
+ * space or a newline). Comment text is still visible to
+ * `Function.prototype.toString`, which nothing here reads. A hashbang line is
+ * read by the OS, not the engine, so it is left alone. Strings, templates and
+ * identifiers are left to esbuild's charset: a raw character there is a tagged
+ * template's observable `raw` text, which no rewrite keeps, so the guard
+ * reports it instead.
  */
 export function escapeRegexesAndComments(code, ast) {
-  const spans = tokenSpans(ast);
+  const spans = tokenSpans(code, ast);
   let out = '';
   let from = 0;
   let next = 0;
-  for (let i = 0; i < code.length; i++) {
+  const hashbangEnd = code.startsWith('#!') ? code.search(/[\n\r\u2028\u2029]|$/) : 0;
+  for (let i = hashbangEnd; i < code.length; i++) {
     const unit = code.charCodeAt(i);
-    if (unit <= 0x7f) continue;
+    if (unit <= 0xff) continue;
     while (next < spans.length && spans[next][1] <= i) next++;
     const span = next < spans.length && spans[next][0] <= i ? spans[next] : null;
     if (span) {
@@ -127,7 +130,7 @@ export function asciiOnlyBundle() {
     renderChunk: {
       order: 'post',
       handler(code) {
-        if (!NON_ASCII.test(code)) return null;
+        if (!WIDE.test(code)) return null;
         const out = escapeRegexesAndComments(code, this.parse(code));
         return out === code ? null : { code: out, map: null };
       },
