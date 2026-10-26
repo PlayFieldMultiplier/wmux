@@ -12,9 +12,10 @@ afterEach(() => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-// The loader validates for the platform it runs on, and Windows refuses a POSIX
-// path ('command-posix-path'), so the absolute-path entry is spelled for it.
-const TERN_COMMAND = process.platform === 'win32' ? 'C:\\tern\\bin\\tern.exe' : '/opt/tern/bin/tern';
+// The loader validates for the machine it runs on, and Windows refuses a path
+// starting with '/' ('command-posix-path'). A drive path is accepted on every
+// platform and names the same process, so the test reads the same everywhere.
+const TERN_COMMAND = 'C:\\tern\\bin\\tern.exe';
 
 const write = (agents: unknown) => fs.writeFileSync(path.join(dir, 'custom-agents.json'), JSON.stringify({ agents }), 'utf8');
 
