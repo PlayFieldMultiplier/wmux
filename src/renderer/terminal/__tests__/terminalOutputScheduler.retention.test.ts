@@ -254,6 +254,26 @@ describe('terminalOutputScheduler — hidden-pane retention answers queries', ()
     expect(joined(t)).toBe(`${DA1}tail\x1b]11;?\x07`);
   });
 
+  it('a query split across a hide (visible start, hidden end) still flushes', () => {
+    const t = makeAnsweringTerminal();
+    noteTerminalInput(t);
+    writeTerminalOutput(t, 'shown\x1b[', { foreground: true, retainWhenHidden: true });
+    expect(joined(t)).toBe('shown\x1b[');
+    writeTerminalOutput(t, 'c', hidden);
+    expect(joined(t)).toBe(`shown${DA1}`);
+    expect(t.answers).toBe(1);
+  });
+
+  it('a long unfinished payload does not hide a later query', () => {
+    const t = makeAnsweringTerminal();
+    writeTerminalOutput(t, `\x1b]52;c;${'A'.repeat(10_000)}`, hidden);
+    writeTerminalOutput(t, `${'B'.repeat(10_000)}\x07text`, hidden);
+    expect(t.writes).toEqual([]);
+    writeTerminalOutput(t, DA1, hidden);
+    expect(t.answers).toBe(1);
+    expect(getQueuedCharCount(t)).toBe(0);
+  });
+
   it('a dirty pane drops the query chunk like any other hidden bytes', () => {
     const t = makeAnsweringTerminal();
     markTerminalDirty(t);
@@ -297,4 +317,3 @@ describe('terminalOutputScheduler — hidden-pane retention answers queries', ()
     }
   });
 });
-

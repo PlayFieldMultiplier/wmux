@@ -203,11 +203,15 @@ let drainTimer: ReturnType<typeof setTimeout> | null = null;
 let drainDelayMs: number | null = null;
 /** One-shot diagnostic latch — see the retention branch in writeTerminalOutput. */
 let retentionEngagedLogged = false;
-/** Per-terminal escape state across RETAINED writes, so a query split across
- *  two hidden chunks (`ESC[` | `c`) is still seen once it completes. Outlives
- *  the queue entry: a query flush deletes the entry, while xterm's parser holds
- *  the same unfinished tail the splitter does. */
-const retainedQuerySplitters = new Map<SchedulableTerminal, IncompleteEscapeSplitter>();
+/** Per-terminal escape state over every write of a retention-enabled pane,
+ *  visible or hidden, in arrival order — so a query split across two chunks
+ *  (`ESC[` | `c`), even across a hide, is seen once it completes. Outlives the
+ *  queue entry: a query flush deletes the entry, while xterm's parser holds the
+ *  same unfinished tail the splitter does. */
+const querySplitters = new Map<SchedulableTerminal, IncompleteEscapeSplitter>();
+/** Queries are short; a longer unfinished sequence is a payload (image, OSC 52)
+ *  and its held copy is dropped instead of duplicating the queued bytes. */
+const QUERY_SPLITTER_MAX_HELD = 4096;
 /** Rate limit for the query-parse log: a TUI that sends CPR every frame
  *  re-parses its hidden pane every frame — visible in the log, not flooding it. */
 const QUERY_PARSE_LOG_INTERVAL_MS = 10_000;
@@ -620,6 +624,19 @@ export function writeTerminalOutput(
   data: string,
   options: WriteOptions,
 ): void {
+  // Fed before the carry is prepended: the carry is bytes it has already seen.
+  let completed = '';
+  if (options.retainWhenHidden) {
+    let splitter = querySplitters.get(terminal);
+    if (!splitter) {
+      splitter = new IncompleteEscapeSplitter(QUERY_SPLITTER_MAX_HELD);
+      querySplitters.set(terminal, splitter);
+    }
+    // Only completed sequences: a query is flushed once all of it is queued.
+    completed = splitter.push(data);
+  } else {
+    querySplitters.delete(terminal);
+  }
   const carried = escapeCarry.get(terminal);
   if (carried) {
     data = carried + data;
@@ -652,19 +669,12 @@ export function writeTerminalOutput(
         console.log('[wmux:hidden-retention] engaged — hidden pane output retained without parsing');
       }
     }
-    let splitter = retainedQuerySplitters.get(terminal);
-    if (!splitter) {
-      splitter = new IncompleteEscapeSplitter();
-      retainedQuerySplitters.set(terminal, splitter);
-    }
-    // Only completed sequences: a query is flushed once all of it is queued.
-    const completed = splitter.push(data);
     entry.chunks.push({ data, customWrite: options.write !== undefined });
     entry.queuedChars += data.length;
     if (entry.queuedChars > MAX_QUEUE_CHARS) {
       queue.delete(terminal);
       dirtyTerminals.add(terminal);
-      retainedQuerySplitters.delete(terminal);
+      querySplitters.delete(terminal);
       console.log(`[wmux:hidden-retention] backlog overflow (${entry.queuedChars} chars) — pane marked dirty, will resync from daemon on reveal`);
       return;
     }
@@ -680,8 +690,6 @@ export function writeTerminalOutput(
     }
     return;
   }
-  // Bytes now reach xterm on the normal path, which keeps its own parse state.
-  retainedQuerySplitters.delete(terminal);
 
   // DEC 2026 synchronized-output coalescing for VISIBLE panes. While a frame is
   // open, hold the pane's chunks out of xterm (no parse, no raster); release
@@ -821,7 +829,7 @@ export function discardTerminalOutput(terminal: SchedulableTerminal): void {
   dirtyTerminals.delete(terminal);
   lastInputAt.delete(terminal);
   escapeCarry.delete(terminal);
-  retainedQuerySplitters.delete(terminal);
+  querySplitters.delete(terminal);
   queryParseLog.delete(terminal);
 }
 
@@ -856,7 +864,7 @@ export function markTerminalDirty(terminal: SchedulableTerminal): void {
   queue.delete(terminal);
   dirtyTerminals.add(terminal);
   escapeCarry.delete(terminal);
-  retainedQuerySplitters.delete(terminal);
+  querySplitters.delete(terminal);
 }
 
 /** Phase 3: the owner finished re-synchronizing this terminal's screen state
@@ -885,7 +893,7 @@ export function __resetTerminalOutputSchedulerForTests(): void {
   dirtyTerminals.clear();
   lastInputAt.clear();
   escapeCarry.clear();
-  retainedQuerySplitters.clear();
+  querySplitters.clear();
   queryParseLog.clear();
   retentionEngagedLogged = false;
 }

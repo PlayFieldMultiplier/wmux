@@ -69,4 +69,12 @@ describe('IncompleteEscapeSplitter', () => {
     expect(splitter.push(body)).toBe('');
     expect(splitter.take()).toBe(`\x1b]52;c;${body}${body}`);
   });
+
+  it('maxHeld drops a long held prefix but keeps the scan state', () => {
+    const splitter = new IncompleteEscapeSplitter(8);
+    expect(splitter.push(`\x1b]52;c;${'A'.repeat(20)}`)).toBe('');
+    // Still inside the OSC: its end completes, the dropped prefix is gone.
+    expect(splitter.push('B\x07x\x1b[')).toBe('B\x07x');
+    expect(splitter.push('c')).toBe('\x1b[c');
+  });
 });
