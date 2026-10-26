@@ -1,0 +1,8 @@
+# CodeRabbit reviews a PR once when it opens; later reviews are on request
+# (`@coderabbitai review`). Severity labels come from the Claude review
+# workflow, so CodeRabbit does not apply labels.
+reviews:
+  auto_review:
+    enabled: true
+    auto_incremental_review: false
+  auto_apply_labels: false
