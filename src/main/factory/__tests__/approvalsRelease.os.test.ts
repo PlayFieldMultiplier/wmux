@@ -1003,18 +1003,42 @@ describe('a kept release draft is told to the owner', () => {
     expect(r.gh.releases).toMatchObject([{ draft: true }]);
   });
 
-  it('a tag that cannot be read keeps the draft, never silently: the refusal says it could not be checked', async () => {
+  it('a tag GitHub refuses to show keeps the draft, never silently: the refusal says it could not be checked', async () => {
     const { r, req } = await drafted();
     r.gh.login = 'someone-else';
-    // The executor's read of the tag before deleting fails (no status).
+    // The executor's read of the tag before deleting is refused (HTTP 403).
     const draft = r.gh.releases[0]?.id;
     r.gh.onRead = (e) => {
-      if (e === `repos/o/r/releases/${draft}`) r.gh.answerRead = (x) => (x === TAG_REF ? { ok: false, kind: 'error', message: 'timeout' } : null);
+      if (e === `repos/o/r/releases/${draft}`) r.gh.answerRead = (x) => (x === TAG_REF ? { ok: false, kind: 'http', status: 403, message: 'gh: Forbidden (HTTP 403)' } : null);
     };
     await r.sweep();
     expect(r.svc.get(req.requestId)).toMatchObject({ state: 'refused', refusal: 'identity-changed, draft-kept-unchecked' });
     expect(r.outcome(req.requestId)?.body).toMatch(/^Whether the tag was made could not be checked: its draft release is kept on GitHub/);
     expect(r.gh.releases).toHaveLength(1);
+  });
+
+  it('a tag read GitHub did not answer leaves the draft open: the refusal is told, and a later sweep decides the draft and amends it once', async () => {
+    const { r, req, id } = await drafted();
+    r.gh.login = 'someone-else';
+    const draft = r.gh.releases[0]?.id;
+    r.gh.onRead = (e) => {
+      if (e === `repos/o/r/releases/${draft}`) r.gh.answerRead = (x) => (x === TAG_REF ? { ok: false, kind: 'error', message: 'timeout' } : null);
+    };
+    await r.sweep();
+    expect(r.svc.get(req.requestId)).toMatchObject({ state: 'refused', refusal: 'identity-changed' });
+    expect(r.effects.get(id)).toMatchObject({ status: 'refused', draftOpen: true });
+    expect(r.gh.releases).toHaveLength(1);
+    // GitHub answers again, and the tag was made at the commit meanwhile.
+    r.gh.onRead = null;
+    r.gh.answerRead = null;
+    r.gh.tags.set(TAG, { sha: C3 });
+    await r.sweep();
+    expect(r.svc.get(req.requestId)).toMatchObject({ state: 'refused', refusal: 'identity-changed, draft-kept-tag-made' });
+    expect(r.effects.get(id)).not.toHaveProperty('draftOpen');
+    const cards = r.writer.read(WS, {}).cards.filter((c) => c.clientPostId?.startsWith(`approval-outcome:${req.requestId}`));
+    expect(cards.map((c) => c.clientPostId)).toEqual([`approval-outcome:${req.requestId}`, `approval-outcome:${req.requestId}:draft`]);
+    await r.sweep();
+    expect(r.writer.read(WS, {}).cards.filter((c) => c.clientPostId?.startsWith(`approval-outcome:${req.requestId}`))).toHaveLength(2);
   });
 
   it('a draft the owner changed on GitHub is refused found-different and kept, and the refusal says so', async () => {

@@ -546,10 +546,18 @@ describe('second code review round', () => {
     expect(await deleteDraft(gh, P, 50, want)).toBe('kept-tag-made');
     // A row whose request is gone: the draft's own tag and target.
     expect(await deleteDraft(gh, P, 50)).toBe('kept-tag-made');
+    // GitHub did not answer (no HTTP status): retry later, nothing deleted.
     gh.answerRead = (e) => (e === 'repos/o/r/git/ref/tags/v1.2.3' ? { ok: false, kind: 'error', message: 'timeout' } : null);
-    expect(await deleteDraft(gh, P, 50, want)).toBe('kept-unchecked');
-    expect(await deleteDraft(gh, P, 50)).toBe('kept-unchecked');
+    expect(await deleteDraft(gh, P, 50, want)).toBe('retry');
+    expect(await deleteDraft(gh, P, 50)).toBe('retry');
     gh.answerRead = (e) => (e === 'repos/o/r/releases/50' ? { ok: false, kind: 'error', message: 'timeout' } : null);
+    expect(await deleteDraft(gh, P, 50, want)).toBe('retry');
+    // GitHub's own refusal, or an answer this build cannot read: kept, unchecked.
+    gh.answerRead = (e) => (e === 'repos/o/r/git/ref/tags/v1.2.3' ? { ok: false, kind: 'http', status: 403, message: 'gh: Forbidden (HTTP 403)' } : null);
+    expect(await deleteDraft(gh, P, 50, want)).toBe('kept-unchecked');
+    gh.answerRead = (e) => (e === 'repos/o/r/git/ref/tags/v1.2.3' ? { ok: true, value: 'not a ref' } : null);
+    expect(await deleteDraft(gh, P, 50, want)).toBe('kept-unchecked');
+    gh.answerRead = (e) => (e === 'repos/o/r/releases/50' ? { ok: false, kind: 'http', status: 403, message: 'gh: Forbidden (HTTP 403)' } : null);
     expect(await deleteDraft(gh, P, 50, want)).toBe('kept-unchecked');
     expect(gh.writes).toEqual([]);
     // The tag at the commit, but another release holds it: the draft could
@@ -564,21 +572,23 @@ describe('second code review round', () => {
     draft(gh);
     gh.tags.set('v1.2.3', { sha: C3 });
     gh.answerRead = (e) => (e.startsWith('repos/o/r/releases?') ? { ok: false, kind: 'error', message: 'timeout' } : null);
-    expect(await deleteDraft(gh, P, 50, want)).toBe('kept-unchecked');
-    // The release listing refused (403) or the read itself threw: kept, never deleted.
+    expect(await deleteDraft(gh, P, 50, want)).toBe('retry');
+    // The release listing refused (403): kept; the read itself threw: retry. Never deleted.
     gh.answerRead = (e) => (e.startsWith('repos/o/r/releases?') ? { ok: false, kind: 'http', status: 403, message: 'gh: Forbidden (HTTP 403)' } : null);
     expect(await deleteDraft(gh, P, 50, want)).toBe('kept-unchecked');
     gh.answerRead = (e) => {
       if (e.startsWith('repos/o/r/releases?')) throw new Error('gh did not start');
       return null;
     };
-    expect(await deleteDraft(gh, P, 50, want)).toBe('kept-unchecked');
+    expect(await deleteDraft(gh, P, 50, want)).toBe('retry');
     expect(gh.writes).toEqual([]);
     gh = github();
     draft(gh);
     gh.tags.set('v1.2.3', { sha: C2 });
     gh.nextWrite = { answer: { ok: false, kind: 'http', status: 500, message: 'gh: Server Error (HTTP 500)' }, landed: false };
     expect(await deleteDraft(gh, P, 50, want)).toBe('failed');
+    gh.nextWrite = { answer: { ok: false, kind: 'error', message: 'timeout' }, landed: false };
+    expect(await deleteDraft(gh, P, 50, want)).toBe('retry');
     expect(await deleteDraft(gh, P, 50, want)).toBe('deleted');
     expect(gh.releases).toEqual([]);
   });
