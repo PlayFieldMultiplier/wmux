@@ -863,7 +863,7 @@ function spawnDaemon(deps: DaemonLauncherDeps): Promise<number> {
 
     const nodePath = findNodePath();
 
-    (deps.log ?? console.log)(`[launcher] Spawning daemon: ${nodePath} ${daemonScript}`);
+    (deps.log ?? console.log)(`[launcher] Spawning daemon: ${[nodePath, ...daemonProcessArgs(daemonScript)].join(' ')}`);
 
     const env: Record<string, string | undefined> = { ...process.env };
     if (deps.isElectronHost()) {
