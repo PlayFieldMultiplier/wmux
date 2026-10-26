@@ -701,7 +701,7 @@ const CHECK_WORDS: Readonly<Record<ReleaseAsk['checks'], string>> = {
   failed: 'one did not pass; approving now is refused, and the bot asks again once they pass',
   running: 'still running; approving now is refused, and the bot asks again once they pass',
   none: 'none',
-  'not-started': 'not started yet (a commit behind the head may never run them); approving now is refused, and the bot asks again once they pass',
+  'not-started': 'not started yet; approving now is refused, and the bot asks again once they pass',
 };
 
 /** What starts another workflow, as the card says it. */
@@ -741,7 +741,11 @@ export function releaseCardLines(act: ApprovalReleaseAct, fields: readonly strin
   // but they run).
   for (const w of o.facts.alsoRuns) lines.push(`${w.path} also runs ${joinWords(w.on.map((e) => ALSO_RUNS_WORDS[e]))}.`);
   const behind = o.facts.behindBy === 0 ? `${at} is its head` : `${at} is ${o.facts.behindBy} ${o.facts.behindBy === 1 ? 'commit' : 'commits'} behind its head`;
-  lines.push('', `Default branch ${act.defaultBranch}: ${behind}.`, `Checks on ${at}: ${CHECK_WORDS[o.facts.checks]}.`);
+  // A push runs the checks on the pushed head only: one behind it may never run them.
+  const checks = o.facts.checks === 'not-started' && o.facts.behindBy > 0
+    ? 'not started yet (a commit behind the head may never run them); approving now is refused, and the bot asks again once they pass'
+    : CHECK_WORDS[o.facts.checks];
+  lines.push('', `Default branch ${act.defaultBranch}: ${behind}.`, `Checks on ${at}: ${checks}.`);
   if (o.facts.version) lines.push(`package.json version: ${o.facts.version}.`);
   if (o.signedIn) lines.push('This bot\'s conversation holds data from a task you signed in to: check that the title and notes share none of it.');
   lines.push('', act.mode === 'release'
@@ -2418,20 +2422,23 @@ export class ApprovalService {
     const done = r.state === 'executed';
     const moved = r.refusal === 'head-moved';
     const full = r.actRepo?.fullName ?? r.repoKey;
+    // A release draft's fate (`draft-*` codes) is told in the body, not the title.
+    const codes = laneRefusalCodes(r.refusal ?? '');
+    const isDraft = (c: string): boolean => r.act?.kind === 'release' && c.startsWith('draft-');
+    const why = laneRefusalLine(codes.filter((c) => !isDraft(c)).join(', '), r.repoKey);
     const title = r.act?.kind === 'release' && done
       ? r.act.mode === 'workflow'
         ? `Tag pushed — the release workflow is building it (${r.act.tagName} on ${full}, approved by you)`
         : `${ACT_DONE_TITLE.release} release ${r.act.tagName} of ${full} (approved by you)`
       : r.act
       ? done ? `${ACT_DONE_TITLE[r.act.kind]} ${r.act.kind === 'issue_create' ? `issue #${r.result?.number ?? '?'} on ${r.repoKey}` : subject(r)} (approved by you)`
-        : `Not done: ${ACTION_TITLE[r.action]} ${subject(r)} (${laneRefusalLine(r.refusal ?? '', r.repoKey) || 'refused'})`
+        : `Not done: ${ACTION_TITLE[r.action]} ${subject(r)} (${why || 'refused'})`
       : done
         ? `Merged ${subject(r)} (approved by ${by})`
         : moved ? `Not merged: ${subject(r)} has a new head since the request; it needs a new approval` : `Not merged: ${subject(r)} (${laneRefusalLine(r.refusal ?? '') || 'refused'})`;
     // What became of a refused release's draft (its refusal's `draft-*`
     // code), in the body too: a long title is cut.
-    const draft = r.act?.kind === 'release' && !done
-      ? laneRefusalLine(laneRefusalCodes(r.refusal ?? '').filter((c) => c.startsWith('draft-')).join(', '), r.repoKey) : '';
+    const draft = done ? '' : laneRefusalLine(codes.filter(isDraft).join(', '), r.repoKey);
     const body = [draft, r.act ? r.result?.url ?? '' : ''].filter(Boolean).join('\n\n');
     writer.post({
       workspaceId: r.workspaceId,

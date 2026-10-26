@@ -666,17 +666,26 @@ export async function readChecks(gh: GhActPort, p: RepoPath, sha: string, ownTag
     if (!v || !Number.isSafeInteger(v.id)) return unreadable('a check suite could not be read');
     if (v.head_branch === ownTag) ownSuites.add(v.id as number);
   }
-  // Every run, re-runs included: the newest of each check in each suite.
+  // Every run, re-runs included. A run counts unless a run of the same
+  // check in the same suite started after it completed (a re-run of it):
+  // runs that overlap, or whose times are not given, all count.
   const all = await readPaged(gh, p.host, `${p.base}/commits/${sha}/check-runs?filter=all`, 'check_runs');
   if (isFail(all)) return all;
-  const newest = new Map<string, { id: number; run: Run }>();
+  const groups = new Map<string, Array<{ run: Run; started: number; completed: number }>>();
   for (const v of all.map(rec)) {
     const suite = rec(v?.check_suite)?.id;
     if (!v || !Number.isSafeInteger(v.id) || !Number.isSafeInteger(suite) || typeof v.name !== 'string') return unreadable('a check run could not be read');
     if (ownSuites.has(suite as number)) continue;
     const key = `${suite as number}\u0000${v.name}`;
-    const b = newest.get(key);
-    if (!b || (v.id as number) > b.id) newest.set(key, { id: v.id as number, run: run(v) });
+    const group = groups.get(key) ?? [];
+    group.push({ run: run(v), started: Date.parse(str(v.started_at)), completed: Date.parse(str(v.completed_at)) });
+    groups.set(key, group);
+  }
+  const counted: Run[] = [];
+  for (const group of groups.values()) {
+    for (const r of group) {
+      if (!group.some((o) => o !== r && Number.isFinite(r.completed) && Number.isFinite(o.started) && o.started > r.completed)) counted.push(r.run);
+    }
   }
   const s = await gh.read(p.host, `${p.base}/commits/${sha}/status`);
   if (!s.ok) return failed(s);
@@ -695,7 +704,7 @@ export async function readChecks(gh: GhActPort, p: RepoPath, sha: string, ownTag
     id: typeof r?.id === 'number' ? r.id : 0,
     attempt: typeof r?.run_attempt === 'number' ? r.run_attempt : 1,
   })));
-  return checksVerdict({ runs: [...newest.values()].map((n) => n.run), status: { state: str(sv.state), total: sv.total_count }, workflowRuns: latest, expected });
+  return checksVerdict({ runs: counted, status: { state: str(sv.state), total: sv.total_count }, workflowRuns: latest, expected });
 }
 
 /** The Actions page of the runs the pushed tag starts: a link that needs no
@@ -713,9 +722,11 @@ export function tagRunsUrl(p: RepoPath, act: ApprovalReleaseAct): string {
 export type DraftFate = 'deleted' | 'gone' | 'published' | 'kept-tag-made' | 'kept-unchecked' | 'failed';
 
 /** Delete a draft a release row made, best effort: read it first, keep it
- *  while it is published or its tag is made at the commit (or that cannot be
- *  read), and delete it only then. `want`: the act's tag and commit; absent
- *  (the request is gone), the draft's own tag and target. */
+ *  while it is published or its tag is made at the commit with no other
+ *  release on it (or that cannot be read), and delete it only then: a draft
+ *  on a tag another release holds could never be published. `want`: the
+ *  act's tag and commit; absent (the request is gone), the draft's own tag
+ *  and target. */
 export async function deleteDraft(gh: GhActPort, p: RepoPath, draftId: number, want?: { tagName: string; targetSha: string }): Promise<DraftFate> {
   const r = await gh.read(p.host, `${p.base}/releases/${draftId}`).catch(() => null);
   if (!r) return 'kept-unchecked';
@@ -728,7 +739,11 @@ export async function deleteDraft(gh: GhActPort, p: RepoPath, draftId: number, w
   if (!RELEASE_TAG_RE.test(tagName)) return 'kept-unchecked';
   const tag = await readTagTarget(gh, p, tagName).catch((err: unknown) => ({ error: String(err) }));
   if (isFail(tag)) return 'kept-unchecked';
-  if (tag !== null && tag === targetSha) return 'kept-tag-made';
+  if (tag !== null && tag === targetSha) {
+    const all = await readReleases(gh, p).catch((err: unknown) => ({ error: String(err) }));
+    if (isFail(all)) return 'kept-unchecked';
+    if (!all.some((o) => o.tagName === tagName && o.id !== draftId)) return 'kept-tag-made';
+  }
   const a = await gh.write(p.host, 'DELETE', `${p.base}/releases/${draftId}`, {}).catch(() => null);
   if (!a) return 'failed';
   return a.ok ? 'deleted' : a.kind === 'http' && a.status === 404 ? 'gone' : 'failed';
