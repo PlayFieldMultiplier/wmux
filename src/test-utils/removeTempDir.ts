@@ -62,10 +62,10 @@ export async function removeTempDir(dir: string): Promise<void> {
   try {
     await fs.promises.rm(dir, { recursive: true, force: true, maxRetries: RETRIES, retryDelay: RETRY_DELAY_MS });
   } catch (err) {
-    throw new Error(
-      `could not remove ${dir}: ${(err as Error).message}\nstill held: ${heldEntries(dir).join(', ') || '(nothing; removed on the last look)'}`,
-      { cause: err },
-    );
+    const held = heldEntries(dir);
+    // The holder let go after rm's last try and the last look removed the rest.
+    if (!fs.existsSync(dir)) return;
+    throw new Error(`could not remove ${dir}: ${(err as Error).message}\nstill held: ${held.join(', ')}`, { cause: err });
   }
 }
 

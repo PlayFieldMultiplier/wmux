@@ -476,8 +476,16 @@ describe('T3 worktree base — one fetch per fan-out, OID pinned, warning surfac
 });
 
 describe('each task\'s launch generation (#2393)', () => {
+  // Worker-slot stores a case opens, disposed before its dir is removed: a
+  // coalesced write still pending would make the dir again.
+  const slotStores: WorkerSlots[] = [];
+  afterEach(() => {
+    for (const s of slotStores.splice(0)) s.dispose();
+  });
+
   function launches(dir: string): WorkerSlots {
     const s = new WorkerSlots(path.join(dir, 'factory', WORKER_SLOTS_FILENAME), () => [], () => undefined);
+    slotStores.push(s);
     s.load();
     return s;
   }

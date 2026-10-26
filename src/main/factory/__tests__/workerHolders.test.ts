@@ -5,7 +5,6 @@
 // workspace is, and when its worker launched, come from a real launch record
 // (workerSlots.ts, #2411).
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { holderInputsRevision } from '../holderInputs';
@@ -16,7 +15,7 @@ import { openBotWorkers } from '../openBotWorkers';
 import { FanOutGuards, recordFanoutTaskPane, setFanOutGuardsForTests, stampFanoutTaskPane, taskOfWorkspace } from '../../worktask/fanoutGuards';
 import { WORKER_SLOTS_FILENAME, WorkerSlots, setReclaimedPaneSource, setWorkerSlotsForTests, taskOfPane } from '../workerSlots';
 import { STOPPED_BY_OWNER } from '../factoryStop';
-import { REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS, removeTempDirs } from '../../../test-utils/removeTempDir';
+import { trackedTempDir } from '../../../test-utils/trackedTempDir';
 
 const NOW = 10_000_000_000;
 const DAY = 24 * 3_600_000;
@@ -202,24 +201,13 @@ interface Rig {
   build: () => HolderSnapshot;
 }
 
-// Every temp dir a rig makes, removed after the case.
-const tempDirs: string[] = [];
-// The worker-slot stores a case opens. A store coalesces its writes on a
-// timer; one still pending when the case ends would write after its dir is
-// removed and make it again, so each store writes now, before the removal.
+// The worker-slot stores a case opens, disposed after it: a coalesced write
+// still pending would otherwise land after the case's dir is removed and make
+// it again.
 const slotStores: WorkerSlots[] = [];
-function settleSlotStores(): void {
-  for (const s of slotStores.splice(0)) {
-    // A store whose folder is unusable (the cases that break it on purpose)
-    // throws here, and its timer only logs: it can make nothing on disk.
-    try { s.flushForTests(); } catch { /* see above */ }
-  }
-}
-
 
 function rig(over: Partial<HolderSnapshot> = {}): Rig {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-holders-'));
-  tempDirs.push(dir);
+  const dir = trackedTempDir('wmux-holders-');
   const guards = new FanOutGuards({ dir, now: () => NOW, openWorkspaceIds: () => [], ledgerTaskOwner: () => null, ledgerBotTask: () => null });
   setFanOutGuardsForTests(guards);
   const clock = { now: NOW };
@@ -289,14 +277,13 @@ function rig(over: Partial<HolderSnapshot> = {}): Rig {
   return r;
 }
 
-afterEach(async () => {
+afterEach(() => {
   setReclaimedPaneSource(null);
   setHolderSource(null);
   setFanOutGuardsForTests(null);
   setWorkerSlotsForTests(null);
-  settleSlotStores();
-  await removeTempDirs(tempDirs);
-}, REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS);
+  for (const s of slotStores.splice(0)) s.dispose();
+});
 
 describe('the four caps agree on the paths that used to split them (#2393)', () => {
   it('cold restart, daemon down: a task seen gone before frees every cap, one running at shutdown holds every cap', () => {

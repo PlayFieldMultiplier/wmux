@@ -513,6 +513,19 @@ export class WorkerSlots {
     this.persistTimer = t;
   }
 
+  /** Make a coalesced write still pending now and cancel its timer, so nothing
+   *  is written after this; a failure is logged as the timer's would be. */
+  dispose(): void {
+    if (!this.persistTimer) return;
+    clearTimeout(this.persistTimer);
+    this.persistTimer = null;
+    try {
+      this.write();
+    } catch (err) {
+      this.warn(`[factory] worker slots not written: ${String(err)}`);
+    }
+  }
+
   /** Tests: make a coalesced write now. */
   flushForTests(): void {
     if (this.persistTimer) this.write();

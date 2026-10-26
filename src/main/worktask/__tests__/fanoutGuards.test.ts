@@ -4,7 +4,6 @@
 // restarts the app must not get a fresh hour.
 
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { endedTaskAgentRuns, type WorkerSessionInfo } from '../../factory/workerReclaim';
@@ -24,16 +23,12 @@ import {
   stampFanoutTaskPane,
   type FanOutAuditRecord,
 } from '../fanoutGuards';
-import { REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS, removeTempDirs } from '../../../test-utils/removeTempDir';
+import { trackedTempDir } from '../../../test-utils/trackedTempDir';
 
-// Every temp dir a case makes, removed after it.
-const tempDirs: string[] = [];
-
-afterEach(async () => {
+afterEach(() => {
   setHolderSource(null);
   setFanOutGuardsForTests(null);
-  await removeTempDirs(tempDirs);
-}, REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS);
+});
 
 /** What the worker lifecycle host installs: the holder set every live cap
  *  reads (factory/workerHolders.ts), over `g` (the hosted guards) and the
@@ -57,9 +52,7 @@ const ledgerRow = (id: string, ws: string, status: LedgerEntry['status']): Ledge
 });
 
 function tmpDir(prefix = 'wmux-fanout-guards-'): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  tempDirs.push(dir);
-  return dir;
+  return trackedTempDir(prefix);
 }
 
 function guards(dir: string, opts: {

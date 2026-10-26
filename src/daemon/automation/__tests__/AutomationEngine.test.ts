@@ -1,29 +1,25 @@
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import { afterAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AutomationEvent, AutomationRun } from '../../../shared/automation';
 import type { SessionPromptScheduleResult } from '../../../shared/sessionPromptSchedule';
 import { AutomationEngine, screenShowsPrompt, type AutomationAgentView, type AutomationEnginePorts } from '../AutomationEngine';
 import { AUTOMATION_RUNS_FILE, AUTOMATIONS_FILE, snapshotPath } from '../store';
-import { REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS, removeTempDirs } from '../../../test-utils/removeTempDir';
+import { trackedTempDir } from '../../../test-utils/trackedTempDir';
 
 const MIN = 60_000;
 
-// Every temp dir and engine this file makes. Once the file ends the engines
-// are stopped (a started one keeps timers that write into its dir), then the
-// dirs are removed.
-const tempDirs: string[] = [];
+// Every engine a case makes is stopped after it (a started one keeps timers
+// that write into its dir), and its queued saves are let finish: a save makes
+// the dir again if it is gone. Only then does trackedTempDir remove the dirs.
 const engines: AutomationEngine[] = [];
-function tempDir(prefix: string): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  tempDirs.push(dir);
-  return dir;
-}
-afterAll(async () => {
-  for (const engine of engines.splice(0)) engine.stop();
-  await removeTempDirs(tempDirs);
-}, REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS);
+afterEach(async () => {
+  for (const engine of engines.splice(0)) {
+    engine.stop();
+    await engine.whenSaved();
+  }
+});
+const tempDir = (prefix: string): string => trackedTempDir(prefix);
 
 const draft = (over: Record<string, unknown> = {}) => ({
   name: 'Nightly',
@@ -1028,5 +1024,18 @@ describe('AutomationEngine — browser identity', () => {
     expect(h.created[0].command).toBe('claude --permission-mode auto --disallowedTools mcp__wmux');
     expect(h.engine.listRuns()[0].browserIdentity).toBeUndefined();
     expect(h.engine.runIdentity(h.engine.listRuns()[0].ptyId).run).toBeNull();
+  });
+});
+
+describe('AutomationEngine — whenSaved', () => {
+  it('resolves only once the saves queued before it are on disk', async () => {
+    const h = harness();
+    await h.engine.start({ timers: false });
+    // Not awaited: create queues its save before its first await.
+    const created = h.engine.create(draft());
+    await h.engine.whenSaved();
+    const onDisk = JSON.parse(fs.readFileSync(path.join(h.dir, AUTOMATIONS_FILE), 'utf8')) as { automations: unknown[] };
+    expect(onDisk.automations).toHaveLength(1);
+    expect((await created).ok).toBe(true);
   });
 });

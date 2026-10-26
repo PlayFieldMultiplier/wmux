@@ -1,14 +1,14 @@
 // task.fetch: main fetches origin's default branch and the task branch into a
 // worker's task repository (real git, local bare remote), for the caller's
 // own open task only, and never pushes or moves the checkout.
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fetchTaskRefs as fetchTask, parseLsRemoteHeads, taskFetchArgs, taskFetchConfigRefusal } from '../taskFetch';
 import { registerTaskPushRpc } from '../../pipe/handlers/taskPush.rpc';
-import { REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS, removeTempDirs } from '../../../test-utils/removeTempDir';
+import { trackedTempDir } from '../../../test-utils/trackedTempDir';
 
 vi.mock('electron', () => ({ app: { getPath: () => os.tmpdir() } }));
 
@@ -21,7 +21,7 @@ describe('fetchTaskRefs', () => {
   let origin: string;
   let other: string;
   beforeEach(() => {
-    root = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-task-fetch-'));
+    root = trackedTempDir('wmux-task-fetch-');
     origin = path.join(root, 'origin.git');
     work = path.join(root, 'work');
     other = path.join(root, 'other');
@@ -44,7 +44,6 @@ describe('fetchTaskRefs', () => {
     git(other, 'tag', 'v1');
     git(other, 'push', '-q', 'origin', 'main', 'v1');
   });
-  afterEach(() => { fs.rmSync(root, { recursive: true, force: true }); });
 
   const input = (over: Partial<Parameters<typeof fetchTask>[0]> = {}) => ({
     worktreePath: work, branch: 'wtask/one', noHooksDir: path.join(root, 'no-hooks'),
@@ -153,13 +152,8 @@ describe('fetchTaskRefs', () => {
 describe('task.fetch RPC', () => {
   type Handler = (params: Record<string, unknown>, ctx?: Record<string, unknown>) => Promise<unknown>;
   type Rec = { taskId: string; botId: string; ownerWorkspaceId: string };
-  // Every wmux dir a case's setup makes, removed after it.
-  const dirs: string[] = [];
-  afterEach(() => removeTempDirs(dirs), REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS);
   const setup = (over: { tasks?: unknown[]; caller?: string | null; botRepo?: string; row?: unknown; ended?: unknown; reclaimed?: (ws: string, pty: string) => Rec | null; exists?: boolean } = {}) => {
     const handlers = new Map<string, Handler>();
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-task-fetch-rpc-'));
-    dirs.push(dir);
     const fetch = vi.fn(async () => ({ ok: true as const, remote: 'origin' as const, defaultBranch: 'main', fetchCommand: 'git fetch --no-tags R +refs/heads/main:refs/remotes/origin/main', fetchCommandShell: 'linux' as const, fetched: [{ ref: 'origin/main', sha: 'abc' }], missing: [] }));
     const push = vi.fn();
     const row = over.row === undefined ? { id: 'wtask-1', ownerWorkspaceId: 'ws-owner', taskWorkspaceId: 'ws-task', dispatch: { origin: { kind: 'pane' }, repoKey: 'github.com/acme/app', gitCommonDir: '/r/.git' } } : over.row;
@@ -170,7 +164,8 @@ describe('task.fetch RPC', () => {
       reclaimedWorkerOfPane: over.reclaimed ?? (() => null),
       exists: () => over.exists ?? true,
       resolveCallerWorkspace: async () => (over.caller === undefined ? 'ws-task' : over.caller),
-      wmuxDir: () => dir,
+      // A fresh wmux dir on every call, removed after the case.
+      wmuxDir: () => trackedTempDir('wmux-task-fetch-rpc-'),
       fetch: fetch as never,
       push: push as never,
       repoDefaultBranch: async () => 'main',

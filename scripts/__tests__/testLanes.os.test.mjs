@@ -11,9 +11,8 @@
 // The rule half: synthetic trees pin what each rule counts and what it skips.
 // Fixture sources spell module names through a variable, so this file's own
 // text never reads as an OS import to the rule it tests.
-import { afterEach, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import config from '../../vitest.config.ts';
 import {
@@ -25,7 +24,7 @@ import {
   listTestFiles,
   nameForLane,
 } from '../lib/test-lanes.mjs';
-import { REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS, removeTempDirs } from '../../src/test-utils/removeTempDir.ts';
+import { trackedTempDir } from '../../src/test-utils/trackedTempDir.ts';
 
 const CP = 'node:' + 'child_process';
 const NET = 'net';
@@ -88,14 +87,9 @@ describe('the named lanes', () => {
   });
 });
 
-// Every throwaway tree a case makes, removed after it.
-const trees = [];
-afterEach(() => removeTempDirs(trees), REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS);
-
-/** A throwaway repo-shaped tree: { 'rel/path': source }. */
+/** A throwaway repo-shaped tree: { 'rel/path': source }, removed after the case (or the file, made outside one). */
 function tree(files) {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-lanes-')));
-  trees.push(root);
+  const root = fs.realpathSync(trackedTempDir('wmux-lanes-'));
   for (const [rel, text] of Object.entries(files)) {
     fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
     fs.writeFileSync(path.join(root, rel), text);
@@ -213,15 +207,18 @@ describe('lane names', () => {
 });
 
 describe('laneMismatches', () => {
-  const root = tree({
-    'src/a/__tests__/spawns.test.ts': `import { spawn } from '${CP}';\n`,
-    'src/a/__tests__/pure.os.test.ts': 'export {};\n',
-    'src/a/__tests__/ok.os.test.ts': `import { spawn } from '${CP}';\n`,
-    'src/a/__tests__/ok.test.ts': 'export {};\n',
-    'src/a/__tests__/kept.os.test.ts': '// @wmux-lane integration\nexport {};\n',
-    'src/a/__tests__/mocked.test.ts': `// @wmux-lane unit\nimport { spawn } from '${CP}';\n`,
+  let found;
+  beforeAll(() => {
+    const root = tree({
+      'src/a/__tests__/spawns.test.ts': `import { spawn } from '${CP}';\n`,
+      'src/a/__tests__/pure.os.test.ts': 'export {};\n',
+      'src/a/__tests__/ok.os.test.ts': `import { spawn } from '${CP}';\n`,
+      'src/a/__tests__/ok.test.ts': 'export {};\n',
+      'src/a/__tests__/kept.os.test.ts': '// @wmux-lane integration\nexport {};\n',
+      'src/a/__tests__/mocked.test.ts': `// @wmux-lane unit\nimport { spawn } from '${CP}';\n`,
+    });
+    found = laneMismatches(classifyAll({ root }));
   });
-  const found = laneMismatches(classifyAll({ root }));
 
   it('names both directions with the reason, the git mv and the pragma', () => {
     expect(found.map(({ file, lane, to }) => ({ file, lane, to }))).toEqual([

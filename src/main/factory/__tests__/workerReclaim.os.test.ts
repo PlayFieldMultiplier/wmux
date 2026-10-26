@@ -937,6 +937,12 @@ describe('worker lifecycle cards stay out of the conversation that started the t
 });
 
 describe('resumeWorker', () => {
+  // Worker-slot stores a case opens, disposed before its dir is removed: a
+  // coalesced write still pending would make the dir again.
+  const slotStores: WorkerSlots[] = [];
+  afterEach(() => {
+    for (const s of slotStores.splice(0)) s.dispose();
+  });
   async function reclaimed(): Promise<ReclaimedWorkers> {
     const store = ReclaimedWorkers.at(dir);
     await reclaimWorker(reclaimPorts(store, [session()]).ports, row('completed'), 'completed');
@@ -967,6 +973,7 @@ describe('resumeWorker', () => {
   it('a resume in the pane is the task\'s next launch generation, recorded before the line is typed (#2393)', async () => {
     const store = await reclaimed();
     const launches = new WorkerSlots(path.join(dir, 'factory', WORKER_SLOTS_FILENAME), () => [], () => undefined);
+    slotStores.push(launches);
     launches.load();
     launches.beginLaunch({ taskId: 'wtask-abc-12345678', origin: 'bot', botId: BOT, ownerWorkspaceId: 'ws-owner' });
     const { ports } = resumePorts(store, [session({ agentProcessAlive: false })], { launches });

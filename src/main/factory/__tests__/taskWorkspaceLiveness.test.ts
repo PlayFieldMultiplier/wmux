@@ -1,5 +1,4 @@
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as nodePath from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LedgerEntry } from '../../../shared/ledger';
@@ -10,30 +9,17 @@ import { computeHolders, holderCounts, setHolderSource, type HolderSnapshot } fr
 import { WORKER_SLOTS_FILENAME, WorkerSlots } from '../workerSlots';
 import type { ReclaimedWorker, WorkerSessionInfo } from '../workerReclaim';
 import { FanOutGuards, refreshDormantTaskWorkspaces, setDormantRefresh, setFanOutGuardsForTests } from '../../worktask/fanoutGuards';
-import { REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS, removeTempDirs } from '../../../test-utils/removeTempDir';
+import { trackedTempDir } from '../../../test-utils/trackedTempDir';
 
 const REFRESH_MS = 10_000;
 
 type Task = { id: string; status: LedgerEntry['status']; pty: string };
 
-// Every temp dir a case makes, removed after it.
-const tempDirs: string[] = [];
-// The worker-slot stores a case opens. A store coalesces its writes on a
-// timer; one still pending when the case ends would write after its dir is
-// removed and make it again, so each store writes now, before the removal.
+// The worker-slot stores a case opens, disposed after it: a coalesced write
+// still pending would otherwise land after the case's dir is removed and make
+// it again.
 const slotStores: WorkerSlots[] = [];
-function settleSlotStores(): void {
-  for (const s of slotStores.splice(0)) {
-    // A store whose folder is unusable (the cases that break it on purpose)
-    // throws here, and its timer only logs: it can make nothing on disk.
-    try { s.flushForTests(); } catch { /* see above */ }
-  }
-}
-const tmpDir = (): string => {
-  const dir = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'wmux-task-liveness-'));
-  tempDirs.push(dir);
-  return dir;
-};
+const tmpDir = (): string => trackedTempDir('wmux-task-liveness-');
 
 /** A world of task workspaces (`tasks`, by workspace id), the mirror's view
  *  of them (null: not pushed yet), the daemon's sessions and whether it has
@@ -122,14 +108,13 @@ function world(tasks: Record<string, Task>, opts: { dir?: string; closed?: Recor
 const exited = (pty: string): WorkerSessionInfo => ({ id: pty, agentProcessAlive: false });
 const running = (pty: string): WorkerSessionInfo => ({ id: pty, agentProcessAlive: true });
 
-afterEach(async () => {
+afterEach(() => {
   setHolderSource(null);
   setFanOutGuardsForTests(null);
   setDormantRefresh(null);
+  for (const s of slotStores.splice(0)) s.dispose();
   vi.useRealTimers();
-  settleSlotStores();
-  await removeTempDirs(tempDirs);
-}, REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS);
+});
 
 describe('task workspace liveness (#2387)', () => {
   it('a read before the workspace list is pushed is not kept: the previous values stay and the next read is not held off', async () => {

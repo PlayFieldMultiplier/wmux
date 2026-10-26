@@ -20,9 +20,8 @@
 // and a denial must be reported instead of going quiet.
 
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as nodePath from 'node:path';
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RpcContext } from '../../../../shared/rpc';
 import { FANOUT_MAX_TASKS, FANOUT_PROMPT_MAX_BYTES } from '../../../../shared/workTask';
 import { CHANNEL_TOPIC_MAX, HUMAN_WORKSPACE_ID } from '../../../../shared/channels';
@@ -47,18 +46,19 @@ import type { LedgerEntry } from '../../../../shared/ledger';
 import type { FanoutPreset } from '../../../../shared/fanoutPreset';
 import type { DaemonClient } from '../../../DaemonClient';
 import { validateFanoutTaskGraph } from '../../../../shared/fanoutTaskGraph';
-import { REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS, removeTempDirs } from '../../../../test-utils/removeTempDir';
+import { trackedTempDir } from '../../../../test-utils/trackedTempDir';
 
-// Every temp dir this file makes, removed once it ends. A fan-out run is
-// detached and its guards may still append to their audit file after a case
-// returns, so the dirs go when nothing of the file can write any more.
-const tempDirs: string[] = [];
-function tempDir(prefix: string): string {
-  const dir = fs.mkdtempSync(nodePath.join(os.tmpdir(), prefix));
-  tempDirs.push(dir);
-  return dir;
-}
-afterAll(() => removeTempDirs(tempDirs), REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS);
+// A fan-out run is detached: the handler appends to its guards' audit file
+// (making the dir again if it is gone) once the service's start settles, which
+// can be after the case returns. Each harness can release a run its case left
+// hanging and wait for every start it made; that runs after every case, and
+// the guard dirs (trackedTempDir) are removed only after it.
+const runSettlers: Array<() => Promise<void>> = [];
+afterEach(async () => {
+  for (const settle of runSettlers.splice(0)) await settle();
+});
+/** A guard store dir, removed once the file ends. */
+const tempDir = (prefix: string): string => trackedTempDir(prefix, { until: 'file' });
 
 const CALLER_WS = 'ws-caller';
 // Resolved to NATIVE form. The handler runs the caller's cwd through
@@ -173,6 +173,12 @@ function setup(opts?: {
       });
     }
     return Promise.resolve(settle(opts?.startResult ?? { ok: true, tasks: [] }));
+  });
+  runSettlers.push(async () => {
+    releaseRun?.({ ok: true, tasks: [] });
+    await Promise.allSettled(start.mock.results.map((r) => r.value as Promise<FanOutResult>));
+    // The handler's own continuation (refunds, the audit append) after start.
+    await new Promise<void>((resolve) => setImmediate(resolve));
   });
 
   const statusOf = vi.fn((key: string): FanOutStatus => state.get(key) ?? { state: 'unknown' });

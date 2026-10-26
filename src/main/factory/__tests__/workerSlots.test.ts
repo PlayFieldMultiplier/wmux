@@ -1,8 +1,7 @@
 // Each task's launch generation and its panes, on disk (#2393).
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LedgerEntry } from '../../../shared/ledger';
 import { WORKER_SLOTS_FILENAME, WORKER_SLOTS_MAX, WORKER_SLOTS_VERSION, WorkerSlots, beginPaneRelaunch, launchStillCurrent, resolvePaneOwner, setReclaimedPaneSource, setWorkerSlotsForTests, startsAgent, taskOfPane } from '../workerSlots';
 import { AGENT_GONE_FILENAME, AgentGoneFacts } from '../agentGoneFacts';
@@ -12,28 +11,15 @@ import { noteBotWorkerSession } from '../../agents/botWorkerMergeGuard';
 import { MODEL_ENV_MARKER } from '../../../shared/workerLaunch';
 import { setTaskLedgerForTests } from '../../deck/taskLedgerHost';
 import { FanOutGuards, recordFanoutTaskPane, setFanOutGuardsForTests, stampFanoutTaskPane, taskOfWorkspace } from '../../worktask/fanoutGuards';
-import { REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS, removeTempDirs } from '../../../test-utils/removeTempDir';
+import { trackedTempDir } from '../../../test-utils/trackedTempDir';
 
 const BOT = 'bot-0000000a';
-// Every temp dir a case makes, removed after it.
-const tempDirs: string[] = [];
-// The worker-slot stores a case opens. A store coalesces its writes on a
-// timer; one still pending when the case ends would write after its dir is
-// removed and make it again, so each store writes now, before the removal.
+// The worker-slot stores a case opens, disposed after it: a coalesced write
+// still pending would otherwise land after the case's dir is removed and make
+// it again.
 const slotStores: WorkerSlots[] = [];
-function settleSlotStores(): void {
-  for (const s of slotStores.splice(0)) {
-    // A store whose folder is unusable (the cases that break it on purpose)
-    // throws here, and its timer only logs: it can make nothing on disk.
-    try { s.flushForTests(); } catch { /* see above */ }
-  }
-}
 
-const tmp = (): string => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-worker-slots-'));
-  tempDirs.push(dir);
-  return dir;
-};
+const tmp = (): string => trackedTempDir('wmux-worker-slots-');
 
 function store(dir: string, opts: { rows?: LedgerEntry[]; now?: () => number; warn?: string[] } = {}): WorkerSlots {
   const s = new WorkerSlots(path.join(dir, 'factory', WORKER_SLOTS_FILENAME), () => opts.rows ?? [], (l) => opts.warn?.push(l), opts.now ?? Date.now);
@@ -47,15 +33,31 @@ const row = (id: string, over: Partial<LedgerEntry> = {}): LedgerEntry => ({
   updatedAt: 1_000, updatedBy: { kind: 'worker', workspaceId: `ws-${id}` }, dispatch: { origin: { kind: 'bot', botId: BOT } }, ...over,
 });
 
-afterEach(async () => {
+afterEach(() => {
   setWorkerSlotsForTests(null);
   setFanOutGuardsForTests(null);
   __resetWorkspaceMirrorForTest();
-  settleSlotStores();
-  await removeTempDirs(tempDirs);
-}, REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS);
+  for (const s of slotStores.splice(0)) s.dispose();
+});
 
 describe('WorkerSlots', () => {
+  it('dispose makes a pending coalesced write now, and its timer writes nothing later', () => {
+    vi.useFakeTimers();
+    try {
+      const dir = tmp();
+      const s = store(dir);
+      const { gen } = s.beginLaunch({ taskId: 't1', origin: 'owner', ownerWorkspaceId: 'ws-owner' });
+      s.launched('t1', gen, 'ws-t1', 'pty-1');
+      s.dispose();
+      expect(store(dir).paneOf('pty-1')).toEqual({ taskId: 't1', gen: 1, workspaceId: 'ws-t1' });
+      fs.rmSync(path.join(dir, 'factory'), { recursive: true, force: true });
+      vi.advanceTimersByTime(60_000);
+      expect(fs.existsSync(path.join(dir, 'factory'))).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('a restart keeps each task\'s generation and each pane\'s task', () => {
     const dir = tmp();
     const s = store(dir);

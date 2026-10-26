@@ -273,6 +273,14 @@ export class AutomationEngine {
     this.monitorTimer = null;
   }
 
+  /** Resolves once every save queued so far, and any queued meanwhile, has settled. */
+  async whenSaved(): Promise<void> {
+    for (let chain = this.saveChain; ; chain = this.saveChain) {
+      await chain;
+      if (chain === this.saveChain) return;
+    }
+  }
+
   /** Idle keepalive: an enabled schedule or a live run keeps the daemon up. */
   holdsDaemon(): boolean {
     return this.panes.size > 0 || this.automations.some((a) => a.enabled);
