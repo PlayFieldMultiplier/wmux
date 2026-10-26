@@ -1051,13 +1051,16 @@ function spawnDaemon(deps: DaemonLauncherDeps): Promise<number> {
  * identity from the command line before reuse, wait or kill, and the marker is
  * only consulted after that proof (parseBootMarker).
  *
- * Best effort: returns whether the pid file was written, never throws.
+ * Best effort: returns whether the pid file names `pid`, never throws.
  */
 export function claimSpawnedDaemonFiles(wmuxDir: string, pid: number): boolean {
+  const pidFile = path.join(wmuxDir, 'daemon.pid');
   try {
-    fs.writeFileSync(path.join(wmuxDir, 'daemon.pid'), String(pid), { encoding: 'utf-8', mode: 0o600, flag: 'wx' });
+    fs.writeFileSync(pidFile, String(pid), { encoding: 'utf-8', mode: 0o600, flag: 'wx' });
   } catch {
-    return false;
+    // A launchd job's pid is known only after launchctl reports it, by which
+    // time the daemon may have written both files itself.
+    try { return fs.readFileSync(pidFile, 'utf-8').trim() === String(pid); } catch { return false; }
   }
   try {
     fs.writeFileSync(path.join(wmuxDir, 'daemon-booting'), String(pid), { encoding: 'utf-8', mode: 0o600, flag: 'wx' });

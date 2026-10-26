@@ -197,6 +197,8 @@ describe.skipIf(process.platform === 'win32')('daemonLauncherCore — concurrent
   }, 30_000);
 
   it('a first-run booting daemon (no auth token yet) is waited on, not killed', async () => {
+    // readDaemonAuthToken also reads the unsuffixed legacy token; where one
+    // exists this case passes without exercising the no-token path.
     fs.unlinkSync(getDaemonAuthTokenPath());
     const owner = spawn(process.execPath, [scriptPath], {
       detached: true,
@@ -285,6 +287,9 @@ describe('claimSpawnedDaemonFiles', () => {
     expect(claimSpawnedDaemonFiles(dir, 5353)).toBe(false);
     expect(fs.readFileSync(path.join(dir, 'daemon.pid'), 'utf8')).toBe('4242');
     // No marker for a daemon whose pid file was not ours: it may be past boot.
+    expect(fs.existsSync(path.join(dir, 'daemon-booting'))).toBe(false);
+    // The daemon got there first (a launchd job): its own files stand.
+    expect(claimSpawnedDaemonFiles(dir, 4242)).toBe(true);
     expect(fs.existsSync(path.join(dir, 'daemon-booting'))).toBe(false);
   });
 });
