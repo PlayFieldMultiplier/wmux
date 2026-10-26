@@ -189,19 +189,48 @@ process only, so its own login works.
   directory you chose instead of the default one.
 - With `--claude 0`, nothing touches the real profile.
 
+The real profile also brings your global `CLAUDE.md`, MCP servers and hooks,
+and your default model. That is fine for the engine A/B, where both runs see
+the same profile. For any other run, use a separate logged-in config and a
+small model:
+
+```sh
+--claude-config-dir <separate logged-in config> --claude-cmd "claude --model haiku"
+```
+
+The harness prints a warning at start when `--claude` is used without
+`--claude-config-dir`.
+
+Claude panes add realistic terminal load but do not exercise wmux's own
+Claude Code hook and status path. Your wmux hook bridge looks for the run's
+suffix under your real home, finds no auth token and exits; any
+`~/.wmux<suffix>` path it leaves on the way is removed afterwards (see above).
+
 Claude Code records the sandbox repo in that profile. Before the Claude
 panes start and after teardown, the harness snapshots the names, never the
 contents, of:
 
 - `~/.claude/projects` entries;
-- `~/.claude.json` keys and projects.
+- `~/.claude.json` keys and project keys.
 
-The difference goes to `claude-profile-diff.json` in the output dir, so you
-can remove those entries afterwards.
+The changes go to `claude-profile-diff.json` in the output dir:
+
+- New project entries that are exactly the fixture repo's path or slug. You
+  can remove these afterwards. Entries your other sessions add during the run
+  are left out.
+- Top-level `~/.claude.json` keys added or removed, listed by name and
+  unfiltered, because they cannot be tied to one session.
 
 The first start in the fixture folder shows Claude Code's folder-trust
 prompt. The harness answers "Yes" only when that prompt is on the pane's
+screen. It types the keys through the renderer's `pty.write`, as the probes
+do, because `input.sendKey` is refused while an approval-like prompt is on
 screen.
+
+`pty.write` does not report dropped bytes, so the answer is confirmed from
+the screen. If the prompt is still there, or nothing new appears, the harness
+sends Escape so no half-answered prompt is left. That pane's loop then stops
+(`trust-refused`, flagged in the summary), and the run goes on.
 
 **Turn tracking.** The project settings add two hooks, `UserPromptSubmit` and
 `Stop`, that append the turn start and end to a per-pane status file. That

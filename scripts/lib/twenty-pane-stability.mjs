@@ -200,18 +200,87 @@ export function claudeLaunchCommand(platform, { repoDir, configDir = null, statu
 }
 
 /**
- * What a Claude Code run added to the user's profile: new ~/.claude/projects
- * entries and new top-level / project keys of ~/.claude.json. Snapshots are
+ * Is a profile entry this run's? ~/.claude.json keys projects by path and
+ * ~/.claude/projects names them by slug (every non-alphanumeric character
+ * becomes '-'), so an entry is this run's when it IS the fixture repo's path
+ * or slug: no substring match, which would also take '.../claude-repo-old'
+ * or another run's mixed-case mkdtemp name. Case is folded only for Windows
+ * paths. `repoPaths` lists the repo as created and as resolved (macOS /tmp is
+ * /private/tmp).
+ */
+export function isRunEntry(entry, repoPaths, platform = process.platform) {
+  const fold = (x) => (platform === 'win32' ? x.toLowerCase() : x);
+  const e = fold(String(entry).replace(/\\/g, '/'));
+  return repoPaths.filter(Boolean).some((p) =>
+    e === fold(String(p).replace(/\\/g, '/')) || e === fold(String(p).replace(/[^a-zA-Z0-9]/g, '-')));
+}
+
+/**
+ * What changed in the Claude Code profile during the run. Project entries
+ * (~/.claude/projects names, ~/.claude.json project keys) are filtered to the
+ * fixture repo, so entries other sessions add are left out. Top-level
+ * ~/.claude.json key changes cannot be attributed to a session; they are
+ * listed by name, unfiltered. Snapshots are
  * { projects: string[], configKeys: string[], configProjects: string[] }.
  */
-export function profileDiff(before, after) {
+export function profileDiff(before, after, repoPaths, platform = process.platform) {
   const added = (a = [], b = []) => b.filter((x) => !a.includes(x));
+  const ours = (list) => list.filter((x) => isRunEntry(x, repoPaths, platform));
   return {
-    projectsAdded: added(before.projects, after.projects),
-    configKeysAdded: added(before.configKeys, after.configKeys),
-    configKeysRemoved: added(after.configKeys, before.configKeys),
-    configProjectsAdded: added(before.configProjects, after.configProjects),
+    projectsAdded: ours(added(before.projects, after.projects)),
+    configProjectsAdded: ours(added(before.configProjects, after.configProjects)),
+    configKeysAddedAnySession: added(before.configKeys, after.configKeys),
+    configKeysRemovedAnySession: added(after.configKeys, before.configKeys),
   };
+}
+
+// The same bytes input.sendKey writes (src/main/pipe/handlers/input.rpc.ts KEY_MAP).
+const KEY_BYTES = { down: '\x1b[B', enter: '\r', escape: '\x1b' };
+
+/**
+ * Answer the folder-trust prompt in each Claude pane whose screen shows it.
+ * The keys go through `write` (the renderer's pty.write, i.e. the operator's
+ * own typing): input.sendKey is refused while an approval-like prompt is on
+ * screen. pty.write reports nothing when main drops the bytes, so success is
+ * read from the screen: `screenAfter(ptyId)` returns the control-stripped
+ * output since the answer, and a pane still showing the prompt (or showing
+ * nothing new) is not trusted. Such a pane gets Escape, so no half-answered
+ * prompt is left waiting for a stray Enter, and its loop stops
+ * ('trust-refused'); the run goes on. panes: [{ ptyId, claude }], screens:
+ * control-stripped text per pane. `beforeAnswer(ptyId)` resets the capture
+ * just before the confirming key.
+ */
+export async function answerTrustPrompts(panes, screens, io) {
+  let trusted = 0;
+  let refused = 0;
+  for (let i = 0; i < panes.length; i++) {
+    const keys = trustPromptKeys(screens[i] ?? '');
+    if (!keys) continue;
+    const { ptyId } = panes[i];
+    let ok = false;
+    let detail = 'the prompt was still on screen after the answer';
+    try {
+      // Capture only what follows the confirming key: moving the selection
+      // repaints the prompt itself.
+      for (const [k, key] of keys.entries()) {
+        if (k === keys.length - 1) await io.beforeAnswer(ptyId);
+        await io.write(ptyId, KEY_BYTES[key]);
+        await io.sleep(300);
+      }
+      await io.sleep(2500);
+      const after = await io.screenAfter(ptyId);
+      ok = after.length > 0 && !/trust\s*this\s*folder/i.test(after);
+      if (after.length === 0) detail = 'no output after the answer';
+    } catch (e) {
+      detail = e instanceof Error ? e.message : String(e);
+    }
+    if (ok) { trusted++; continue; }
+    try { await io.write(ptyId, KEY_BYTES.escape); } catch { /* the pane is stopped either way */ }
+    panes[i].claude.stopped = 'trust-refused';
+    panes[i].claude.stoppedDetail = detail;
+    refused++;
+  }
+  return { trusted, refused };
 }
 
 /**
@@ -586,7 +655,10 @@ export function summarizeClaude(panes) {
     turnsCompleted: panes.reduce((a, p) => a + p.completed, 0),
     turnMs: summarizeSamples(panes.flatMap((p) => p.turnMs)),
     stopped,
-    perPane: panes.map((p) => ({ paneIndex: p.paneIndex, ptyId: p.ptyId, turns: p.turns, completed: p.completed, stopped: p.stopped })),
+    perPane: panes.map((p) => ({
+      paneIndex: p.paneIndex, ptyId: p.ptyId, turns: p.turns, completed: p.completed, stopped: p.stopped,
+      ...(p.stoppedDetail ? { stoppedDetail: p.stoppedDetail } : {}),
+    })),
   };
 }
 
@@ -601,6 +673,7 @@ export function flagsFor(summary) {
   if (summary.frames.throttledSamples > 0) flags.push(`${summary.frames.throttledSamples} sample(s) with a throttled window (rAF p50 > 50 ms): frame numbers there are not trustworthy`);
   const cs = summary.claude?.stopped ?? {};
   if (cs['turn-timeout']) flags.push(`${cs['turn-timeout']} Claude pane(s) stopped after a turn ran past the timeout`);
+  if (cs['trust-refused']) flags.push(`${cs['trust-refused']} Claude pane(s) stopped at start: the folder-trust prompt could not be answered`);
   if (cs['turn-not-observed']) flags.push(`${cs['turn-not-observed']} Claude pane(s) stopped: a submitted prompt never started a turn`);
   if (summary.focus.workspaceSwitchMisses > 0) flags.push(`${summary.focus.workspaceSwitchMisses} workspace switch(es) left the same workspace active`);
   if (summary.focus.focusMisses > 0) flags.push(`${summary.focus.focusMisses} sample(s) where no terminal had keyboard focus after a switch`);

@@ -59,7 +59,7 @@ import {
   parseArgs, planLayout, assignClasses, markerFor, stripTerminalControls,
   producerCommand, producerSource, shellPrepCommand, summarizeRun, renderSummary, verifyEngine,
   CLAUDE_PROMPT, CLAUDE_README, claudeProjectSettings, claudeHookSource, claudeLaunchCommand,
-  newClaudeState, applyClaudeEvents, nextClaudeAction, inTurnAt, gapInTurnMs, trustPromptKeys, profileDiff,
+  newClaudeState, applyClaudeEvents, nextClaudeAction, inTurnAt, gapInTurnMs, answerTrustPrompts, profileDiff,
   daemonPidVerdict, leftoverPids, runTeardown,
 } from './lib/twenty-pane-stability.mjs';
 
@@ -127,6 +127,9 @@ if (!fs.existsSync(APP_EXE)) {
 if (ARGS.claude > 0 && ARGS.claudeConfigDir && !fs.existsSync(path.join(path.resolve(ARGS.claudeConfigDir), '.claude.json')) && !fs.existsSync(path.join(path.resolve(ARGS.claudeConfigDir), '.credentials.json'))) {
   console.error(`--claude-config-dir ${ARGS.claudeConfigDir} does not look like a Claude Code config directory (no .claude.json). Log in once with CLAUDE_CONFIG_DIR set to it, then rerun.`);
   process.exit(2);
+}
+if (ARGS.claude > 0 && !ARGS.claudeConfigDir) {
+  console.warn('[setup] warning: Claude panes use your real Claude Code profile (global CLAUDE.md, MCP servers, hooks, default model); for runs beyond the engine A/B prefer --claude-config-dir <separate logged-in config> --claude-cmd "claude --model haiku"');
 }
 // Identity guard: only renderer pages served from the launched app's own
 // directory (the .app bundle on macOS) are driven.
@@ -773,7 +776,7 @@ function removeRealHomeSuffixPaths() {
   return removed;
 }
 
-/** Names only: project entry names and config keys, never their contents. */
+/** Names only: project entry names and ~/.claude.json keys, never their contents. */
 function snapshotClaudeProfile() {
   const { projectsDir, configFile } = claudeProfilePaths();
   let projects = [];
@@ -799,8 +802,10 @@ async function startClaude(inst, panes) {
   if (claudePanes.length === 0) return;
   claudeProfileBefore = snapshotClaudeProfile();
   const repoDir = path.join(inst.home, 'claude-repo');
+  claudeRepoPaths = [repoDir];
   fs.mkdirSync(path.join(repoDir, '.claude'), { recursive: true });
   fs.writeFileSync(path.join(repoDir, 'README.md'), CLAUDE_README, 'utf8');
+  try { claudeRepoPaths.push(fs.realpathSync.native(repoDir)); } catch { /* as created */ }
   const hookPath = path.join(inst.home, 'claude-turn-hook.cjs');
   fs.writeFileSync(hookPath, claudeHookSource(), 'utf8');
   fs.writeFileSync(path.join(repoDir, '.claude', 'settings.json'), JSON.stringify(claudeProjectSettings(process.execPath, hookPath), null, 2), 'utf8');
@@ -828,23 +833,18 @@ async function startClaude(inst, panes) {
     if (cur.every((b, i) => b === prev[i])) break;
     prev = cur;
   }
-  // A folder Claude Code has not seen asks whether to trust it, with
-  // "No, exit" preselected: move to "Yes" and confirm. Only when the prompt
-  // is on screen; nothing is sent otherwise.
+  // A folder Claude Code has not seen asks whether to trust it. Answer "Yes"
+  // only where the prompt is on screen; nothing is sent otherwise.
   const screens = await inst.page.evaluate((list) => list.map((id) => window.__wmuxSoak.watch[id] ?? ''), ids);
-  let trusted = 0;
-  for (let i = 0; i < claudePanes.length; i++) {
-    const keys = trustPromptKeys(stripTerminalControls(screens[i]));
-    if (!keys) continue;
-    for (const key of keys) {
-      await callPaced(inst.main, 'input.sendKey', { ptyId: claudePanes[i].ptyId, key });
-      await sleep(300);
-    }
-    trusted++;
-  }
+  const { trusted, refused } = await answerTrustPrompts(claudePanes, screens.map((t) => stripTerminalControls(t)), {
+    beforeAnswer: (ptyId) => inst.page.evaluate((id) => { window.__wmuxSoak.watch[id] = ''; }, ptyId),
+    write: (ptyId, data) => inst.page.evaluate(({ id, d }) => window.electronAPI.pty.write(id, d), { id: ptyId, d: data }),
+    screenAfter: async (ptyId) => stripTerminalControls(await inst.page.evaluate((id) => window.__wmuxSoak.watch[id] ?? '', ptyId)),
+    sleep,
+  });
   await sleep(4000);
   await inst.page.evaluate((list) => { for (const id of list) delete window.__wmuxSoak.watch[id]; }, ids);
-  console.log(`[setup] ${claudePanes.length} Claude Code pane(s) started (${trusted} answered the folder-trust prompt)`);
+  console.log(`[setup] ${claudePanes.length} Claude Code pane(s) started (${trusted} answered the folder-trust prompt${refused ? `, ${refused} refused: those panes are stopped` : ''})`);
 }
 
 /** Read new hook events for each Claude pane, then submit or interrupt as the loop says. */
@@ -1165,6 +1165,7 @@ let samples = [];
 let finished = false;
 let runCtx = null;
 let claudeProfileBefore = null;
+let claudeRepoPaths = [];
 
 /**
  * run.json: everything needed to clean up an interrupted run by hand (local
@@ -1228,9 +1229,9 @@ async function finish(reason, code) {
     if (teardown) console.log(`[teardown] ${JSON.stringify(teardown)}`);
   }
   if (claudeProfileBefore && outDir) {
-    const diff = { ...profileDiff(claudeProfileBefore, snapshotClaudeProfile()), wmuxPathsRemoved: removeRealHomeSuffixPaths() };
+    const diff = { ...profileDiff(claudeProfileBefore, snapshotClaudeProfile(), claudeRepoPaths, PLATFORM), wmuxPathsRemoved: removeRealHomeSuffixPaths() };
     fs.writeFileSync(path.join(outDir, 'claude-profile-diff.json'), JSON.stringify(diff, null, 2));
-    console.log(`[claude] profile changes: ${diff.projectsAdded.length} project dir(s), ${diff.configProjectsAdded.length} .claude.json project(s), ${diff.configKeysAdded.length} new key(s) (claude-profile-diff.json)`);
+    console.log(`[claude] profile entries for the fixture repo: ${diff.projectsAdded.length} project dir(s), ${diff.configProjectsAdded.length} .claude.json project(s) (claude-profile-diff.json)`);
   }
   process.exit(code);
 }
