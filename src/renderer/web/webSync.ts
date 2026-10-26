@@ -15,6 +15,7 @@ import {
   type WebSessionsReply,
   type WebWorkspacesReply,
 } from './webHydration';
+import { isRefused, requestInitFor, type WebCredential } from './webCredential';
 
 export const WEB_POLL_MS = 2500;
 
@@ -42,11 +43,11 @@ function setDesktopLayout(next: boolean): void {
 export const WEB_POLL_TIMEOUT_MS = 10_000;
 
 export interface WebSyncOptions {
-  token: string;
+  credential: WebCredential;
   fetchImpl?: typeof fetch;
   intervalMs?: number;
   timeoutMs?: number;
-  /** Called when the daemon refuses the credential (401/403); the pairing flow lives on the classic page. */
+  /** Called when the daemon refuses the credential (401/403) or the sign-in proxy ended the session. */
   onUnauthorized: () => void;
   /** Every successful poll's `/api/sessions` rows (pane geometry for the terminals), before the store updates. */
   onSessions?: (rows: ReadonlyArray<{ id: string; cols?: unknown; rows?: unknown }>) => void;
@@ -56,7 +57,7 @@ class Refused extends Error {}
 
 export function startWebSync(opts: WebSyncOptions): () => void {
   const fetchImpl = opts.fetchImpl ?? fetch.bind(globalThis);
-  const headers = { Authorization: `Bearer ${opts.token}` };
+  const init = requestInitFor(opts.credential);
   const cache = new Map<string, HydrationCacheEntry>();
   let lastServer: ServerSelection = { activePane: {}, activeSurface: {} };
   let lastText = '';
@@ -65,8 +66,8 @@ export function startWebSync(opts: WebSyncOptions): () => void {
   let inflight: AbortController | undefined;
 
   const get = async (path: string, signal: AbortSignal): Promise<string> => {
-    const res = await fetchImpl(path, { method: 'GET', headers, cache: 'no-store', signal });
-    if (res.status === 401 || res.status === 403) throw new Refused(`${path} ${res.status}`);
+    const res = await fetchImpl(path, { ...init, method: 'GET', cache: 'no-store', signal });
+    if (isRefused(res) || res.status === 403) throw new Refused(`${path} ${res.status}`);
     if (!res.ok) throw new Error(`${path} ${res.status}`);
     return res.text();
   };

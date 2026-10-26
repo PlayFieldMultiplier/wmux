@@ -5447,13 +5447,22 @@ whose app page was not built serves the classic page at `/`.
   rejected promise and is never wired to the daemon. It also installs a
   `window.clipboardAPI` on the browser clipboard (secure contexts only) and
   registers `/sw.js` in a secure context, as the classic page does.
-- No stored credential, a 401, or a browser that cannot run the es2022 bundle
-  (iOS before 16.4) → the page goes to `/classic`. After pairing, the classic
-  page lands on `/` again (and an old browser falls straight back).
+- No stored credential → the page asks `GET /api/config` with no credential.
+  A 200 means a trusted sign-in proxy vouches for it (`wmux web
+  --trust-proxy-*`): the page runs with no token, sends no `Authorization`
+  header, opens streams with no `?token=` or ticket, and uses
+  `redirect: 'manual'`, so an ended sign-in (a redirect to the identity
+  provider) reloads the page through the sign-in. Anything else → `/classic`.
+- A 401 for a stored token goes to `/classic`, unless that same probe now
+  answers 200: then the token is dropped and the page boots again from `/`.
+  A browser that cannot run the es2022 bundle (iOS before 16.4) → `/classic`.
+  After pairing, the classic page lands on `/` again (and an old browser falls
+  straight back).
 - Terminals are the desktop's own `Terminal` component over the web routes:
   - A pane's stream (`GET /api/stream`, with a stream ticket for a device
-    credential — `<deviceId>.<secret>` — and `?token=` for the operator token,
-    which never asks for a ticket) is open only while the pane is shown and its
+    credential — `<deviceId>.<secret>` — `?token=` for the operator token,
+    which never asks for a ticket, and nothing for a proxy session, whose
+    cookies reach the sign-in proxy) is open only while the pane is shown and its
     terminal reports itself visible; it closes on hide. A device credential
     never goes into the URL: no ticket, no stream.
   - Inline images (sixel / iTerm2) are off in the browser: the image decoder

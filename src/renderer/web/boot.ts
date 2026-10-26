@@ -3,8 +3,10 @@
  * es2017 so every browser that can open the classic page can run it.
  *
  *  1. Credential: take `?token=` into the same storage key the classic page
- *     uses, then drop it from the URL. No credential at all → the classic page,
- *     which owns the token form and pairing.
+ *     uses, then drop it from the URL. With no token, ask the daemon whether a
+ *     trusted sign-in proxy already vouches for this browser (webCredential.ts).
+ *     Neither → the classic page, which owns the token form and pairing. The
+ *     bundle waits for `__wmuxWebSession` before it talks to the daemon.
  *  2. Install the deny-by-default `window.electronAPI` (and the clipboard
  *     bridge) before the bundle runs. Its `pty` members forward to the
  *     terminal bridge the bundle publishes (webElectronApi.ts).
@@ -15,12 +17,11 @@
  */
 import { createElectronApiShim } from './electronApiShim';
 import { CLASSIC_PATH, WEB_PTY_BRIDGE_KEY, webClipboardApi, webElectronApiImpl } from './webElectronApi';
-
-export const WEB_TOKEN_KEY = 'wmux-web-token';
+import { startingSession, WEB_TOKEN_KEY, type WebSession } from './webCredential';
 
 interface BootWindow extends Window {
   __wmuxAppBooted?: boolean;
-  __wmuxWebToken?: string;
+  __wmuxWebSession?: Promise<WebSession>;
   __wmuxDeniedCalls?: string[];
   [WEB_PTY_BRIDGE_KEY]?: Record<string, (...args: unknown[]) => unknown>;
 }
@@ -35,17 +36,17 @@ interface BootWindow extends Window {
   } catch {
     /* private mode — the URL token still works for this load */
   }
-  const token = fromUrl || stored;
   if (fromUrl && w.history && w.history.replaceState) {
     params.delete('token');
     const rest = params.toString();
     w.history.replaceState(null, '', w.location.pathname + (rest ? `?${rest}` : ''));
   }
-  if (!token) {
+  // Never settles when the page leaves for the classic one.
+  w.__wmuxWebSession = startingSession({ fromUrl, stored }, w.fetch.bind(w)).then((session) => {
+    if (session) return session;
     w.location.replace(CLASSIC_PATH);
-    return;
-  }
-  w.__wmuxWebToken = token;
+    return new Promise<WebSession>(() => undefined);
+  });
 
   const denied: string[] = [];
   w.__wmuxDeniedCalls = denied;

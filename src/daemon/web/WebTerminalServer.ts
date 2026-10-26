@@ -41,7 +41,8 @@ import {
   type TurnSource,
 } from './hostSearch';
 import http from 'node:http';
-import { InboundCounter, isLoopbackHost } from '../net/inboundSeen';
+import { InboundCounter, isLoopbackHost, OwnAddresses } from '../net/inboundSeen';
+import { decideTrustedProxy, type TrustedProxyConfig, type TrustedProxyRefusal } from './trustedProxy';
 import { PhonePresence, type PresenceDevice } from './phonePresence';
 import type { AgentStatus } from '../../shared/types';
 import { isRemoteAgentStatus } from '../../shared/remoteHosts';
@@ -112,6 +113,7 @@ import {
   type PairFlow,
   type PairRefusal,
   type WebTlsConfig,
+  type WebTrustedProxyInfo,
 } from '../../shared/web';
 import type { RemotePaneSummary, RemoteResumeInfo } from '../../shared/remoteHosts';
 import { HOST_CAPABILITIES, type HostCapability } from '../../shared/sshPcContract';
@@ -407,6 +409,12 @@ export interface WebTerminalStartOptions {
    */
   allowedHosts?: string[];
   /**
+   * Treat a credential-less request from this signing-in proxy, carrying this
+   * user, as the operator (`--trust-proxy-*`, trustedProxy.ts). Never
+   * persisted: a start without it runs without it.
+   */
+  trustedProxy?: TrustedProxyConfig;
+  /**
    * Whether the caller put a `tailscale serve` front in place before starting.
    *
    * Recorded and reported, never acted on: registering and tearing down the
@@ -492,6 +500,8 @@ export interface WebTerminalInfo {
   /** Authenticated requests from other machines since start, while exposed beyond loopback (see shared/web.ts). */
   inboundSeenAt?: number | null;
   inboundCount?: number;
+  /** The trusted proxy sign-in, present only while this server runs with one. */
+  trustedProxy?: WebTrustedProxyInfo;
   /** The last start's bind failure, set by the daemon's status RPC while not running. */
   listenError?: { code: string; port: number; host: string };
   /** The port the desktop popover starts on (set by the daemon's status RPC). */
@@ -662,7 +672,8 @@ export interface WebDeviceSummary {
  * device watching panes until it happens to reconnect.
  */
 export type WebPrincipal =
-  | { kind: 'operator' }
+  /** `proxyUser`: signed in by the trusted proxy as this user, not by the token. */
+  | { kind: 'operator'; proxyUser?: string }
   /**
    * A paired device. `allowInput` is ITS grant, not the server's — the server
    * flag remains the ceiling and is applied on top by `mayInput`.
@@ -1210,7 +1221,7 @@ const MAX_TURN_VIDEO_BYTES = 128 * 1024 * 1024;
  * trail has to keep making sense after that.
  */
 function describePrincipal(principal: WebPrincipal): string {
-  if (principal.kind === 'operator') return 'operator';
+  if (principal.kind === 'operator') return principal.proxyUser ? `operator (proxy ${principal.proxyUser})` : 'operator';
   return principal.name
     ? `device ${principal.name} (${principal.deviceId})`
     : `device ${principal.deviceId}`;
@@ -1480,6 +1491,10 @@ export class WebTerminalServer {
   private server: http.Server | https.Server | null = null;
   /** Connections from other machines, counted while the bind reaches beyond loopback. */
   private inbound: InboundCounter | null = null;
+  private readonly ownAddresses = new OwnAddresses();
+  /** Trusted proxy requests refused since start, by reason. */
+  private proxyRefusals = new Map<TrustedProxyRefusal, number>();
+  private proxyAnnounced = false;
   private token = '';
   private opts: WebTerminalStartOptions | null = null;
   private readonly clients = new Set<SseClient>();
@@ -1967,6 +1982,7 @@ export class WebTerminalServer {
     // elsewhere, and only an authenticated request counts (see the route
     // handler's authenticate()), so a LAN scanner's bare connect does not.
     this.inbound = isLoopbackHost(options.host) ? null : new InboundCounter();
+    this.proxyRefusals = new Map();
 
     // Tee fleet-wide attention signals into EVERY connected SSE client — a
     // viewer watching pane A must still hear that pane B needs an answer.
@@ -2478,6 +2494,7 @@ export class WebTerminalServer {
         tailscale: this.opts.tailscale === true,
         pairRefusal: refusal,
         ...this.inbound?.snapshot(),
+        ...this.trustedProxyStatus(),
       };
     }
     const pair = this.activePairCode();
@@ -2502,6 +2519,7 @@ export class WebTerminalServer {
       allowedHosts: this.advertisedHosts(),
       tailscale: this.opts.tailscale === true,
       ...this.inbound?.snapshot(),
+      ...this.trustedProxyStatus(),
       // Only meaningful alongside a live code: `activePairCode` can regenerate
       // lazily, and a regenerated code has no name behind it even if the one it
       // replaced did.
@@ -2512,6 +2530,19 @@ export class WebTerminalServer {
             pendingPairFlow: this.pendingPairFlow ?? 'phone',
           }
         : {}),
+    };
+  }
+
+  private trustedProxyStatus(): { trustedProxy?: WebTrustedProxyInfo } {
+    const proxy = this.opts?.trustedProxy;
+    if (!proxy) return {};
+    return {
+      trustedProxy: {
+        header: proxy.header,
+        user: proxy.user,
+        from: [...proxy.from],
+        ...(this.proxyRefusals.size > 0 ? { refusals: Object.fromEntries(this.proxyRefusals) } : {}),
+      },
     };
   }
 
@@ -2693,8 +2724,11 @@ export class WebTerminalServer {
       String(req.headers.accept ?? '').includes('text/event-stream');
     const isStream = (req.method === 'GET' && p === '/api/stream') || wantsEventStream;
     const auth = await this.authenticate(req, url, isStream);
-    // An authenticated request from another machine is "another PC reached this one".
-    if (auth.ok) this.inbound?.note(req.socket.remoteAddress);
+    // An authenticated request from another machine is "another PC reached
+    // this one"; the trusted proxy's own connection is not.
+    if (auth.ok && !(auth.principal.kind === 'operator' && auth.principal.proxyUser !== undefined)) {
+      this.inbound?.note(req.socket.remoteAddress);
+    }
     if (!auth.ok) {
       // The reason is the point: #599's 401 screen had to guess between "the
       // server restarted" and "you were thrown out", and guessed wrong either
@@ -10299,6 +10333,10 @@ export class WebTerminalServer {
    * query string is the one place a credential is guaranteed to be written down
    * (history, proxy logs, Referer). So a device credential presented in the
    * query authenticates nothing, on any route.
+   *
+   * A request with no usable credential at all may still be the operator by
+   * the trusted proxy's word (authenticateViaProxy), never one whose
+   * credential failed.
    */
   private async authenticate(req: http.IncomingMessage, url: URL, allowQuery: boolean): Promise<AuthOutcome> {
     if (!this.token) return { ok: false, reason: 'unknown' };
@@ -10324,7 +10362,7 @@ export class WebTerminalServer {
         this.touchDevice(viaTicket.deviceId);
         return { ok: true, principal: viaTicket };
       }
-      return { ok: false, reason: 'unknown' };
+      return this.authenticateViaProxy(req, url);
     }
     const deviceId = fromHeader!.slice(0, cut);
     const secret = fromHeader!.slice(cut + 1);
@@ -10359,6 +10397,41 @@ export class WebTerminalServer {
         ...(result.canCreateWorkspace === true ? { canCreateWorkspace: true as const } : {}),
       },
     };
+  }
+
+  /**
+   * The last way in: a request with no usable wmux credential that the
+   * trusted proxy vouches for (trustedProxy.ts). Every other outcome is the
+   * same 401 an unknown credential gets. Refusals are counted by reason and
+   * never log a header value.
+   */
+  private authenticateViaProxy(req: http.IncomingMessage, url: URL): AuthOutcome {
+    const decision = decideTrustedProxy(
+      this.opts?.trustedProxy,
+      {
+        remoteAddress: req.socket.remoteAddress,
+        rawHeaders: req.rawHeaders,
+        method: req.method,
+        hostHeader: req.headers.host,
+        queryCredential: url.searchParams.has('token') || url.searchParams.has('ticket'),
+      },
+      { isOwnAddress: (ip) => this.ownAddresses.has(ip) },
+    );
+    if (decision.kind === 'accepted') {
+      if (!this.proxyAnnounced) {
+        this.proxyAnnounced = true;
+        this.deps.log('info', `[web] trusted proxy: first request as ${decision.user}`);
+      }
+      return { ok: true, principal: { kind: 'operator', proxyUser: decision.user } };
+    }
+    if (decision.kind === 'refused') {
+      const count = (this.proxyRefusals.get(decision.reason) ?? 0) + 1;
+      this.proxyRefusals.set(decision.reason, count);
+      if (count === 1) {
+        this.deps.log('warn', `[web] trusted proxy: refused a request (${decision.reason}); later ones are counted in status`);
+      }
+    }
+    return { ok: false, reason: 'unknown' };
   }
 
   /**

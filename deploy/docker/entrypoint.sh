@@ -7,6 +7,10 @@
 #   WMUX_ALLOW_HOST     the proxy's public host name(s), comma-separated
 #   WMUX_ALLOW_INPUT    1 (default) lets paired devices type into terminals
 #   WMUX_INSTALL_CLAUDE 1 (default) installs Claude Code on first start
+#   WMUX_TRUST_PROXY_USER, WMUX_TRUST_PROXY_FROM
+#                       both set: admit a request without the wmux token when
+#                       it comes from the proxy at _FROM (one IP address) with
+#                       X-Auth-Request-Email equal to _USER
 set -eu
 
 port="${WMUX_WEB_PORT:-7681}"
@@ -41,6 +45,15 @@ if [ -n "${WMUX_ALLOW_HOST:-}" ]; then
   for h in $WMUX_ALLOW_HOST; do set -- "$@" --allow-host "$h"; done
   IFS=$old_ifs
 fi
+proxy_user="${WMUX_TRUST_PROXY_USER:-}"
+proxy_from="${WMUX_TRUST_PROXY_FROM:-}"
+trust_proxy=0
+if [ -n "$proxy_user" ] && [ -n "$proxy_from" ]; then
+  set -- "$@" --trust-proxy-header X-Auth-Request-Email --trust-proxy-user "$proxy_user" --trust-proxy-from "$proxy_from"
+  trust_proxy=1
+elif [ -n "$proxy_user" ] || [ -n "$proxy_from" ]; then
+  echo "Set both WMUX_TRUST_PROXY_USER and WMUX_TRUST_PROXY_FROM to sign in through the proxy; using the token only." >&2
+fi
 wmux "$@" >/dev/null
 
 # The web UI starts from existing terminals, so a fresh home gets one, and the
@@ -58,9 +71,11 @@ else
   elif [ -z "$count" ]; then
     echo "Could not list terminals; skipped creating the first one." >&2
   fi
+  if [ "$trust_proxy" = "1" ] && [ -n "${WMUX_ALLOW_HOST:-}" ]; then
+    echo "wmux is ready. Open: https://${WMUX_ALLOW_HOST%%,*}/"
   # Sign in first, then open the token address: a token in the URL during
   # sign-in would travel to the identity provider inside the return address.
-  if [ -n "${WMUX_ALLOW_HOST:-}" ]; then
+  elif [ -n "${WMUX_ALLOW_HOST:-}" ]; then
     echo "wmux is ready. After signing in, open: https://${WMUX_ALLOW_HOST%%,*}/?token=$token"
   else
     echo "wmux is ready on port $port. Token: $token"

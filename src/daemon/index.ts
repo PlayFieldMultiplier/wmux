@@ -36,6 +36,7 @@ import { pendingRemovalRefusalAt } from '../main/worktask/pendingWorktreeRemoval
 import { recordedRunPtyIds } from './automation/store';
 import { AUTOMATION_EVENT } from '../shared/automation';
 import { InputReceiptStore } from './web/InputReceiptStore';
+import { parseTrustedProxyConfig } from './web/trustedProxy';
 import { PhoneWorktreeService } from './web/phoneWorktree';
 import { ProjectConfigStore } from '../main/project/ProjectConfigStore';
 import { phonePrepSummary, prepareNewWorktree } from '../main/worktask/workspacePrep';
@@ -83,7 +84,7 @@ import { loadWebPrefs, saveWebPrefs } from './web/webPrefsStore';
 import { scheduleTokenFileReHarden } from '../shared/security';
 import { applyTaskQueryView } from '../shared/a2aTaskQueryView';
 import { normalizeLivePaneIds } from '../shared/a2aOrphanedTask';
-import { WEB_DEFAULT_PORT, type WebTlsConfig } from '../shared/web';
+import { WEB_DEFAULT_PORT, webHostIsLoopback, type WebTlsConfig } from '../shared/web';
 import { generateSnapshotUnqueued, enqueueSnapshotJob, generateTextSnapshot, generateTextSnapshotUnqueued, runSmallSnapshotJob, capTextRowsToFrameBudget, MAX_SCROLLBACK } from './HeadlessSnapshot';
 import { queuedScreenText, queuedTextSnapshot } from './queuedSessionText';
 import type { TerminalPty } from '../shared/terminalPty';
@@ -3787,6 +3788,7 @@ function registerRpcHandlers(
       newToken?: boolean;
       tailscale?: boolean;
       tls?: unknown;
+      trustedProxy?: unknown;
       rememberPort?: boolean;
     };
     const port =
@@ -3800,6 +3802,13 @@ function registerRpcHandlers(
       ? p.allowedHosts.filter((h): h is string => typeof h === 'string')
       : [];
     const requestedTls = parseWebTlsConfig(p.tls);
+    // Never persisted and never inherited: a start that does not send it runs without it.
+    const trustedProxy = parseTrustedProxyConfig(p.trustedProxy);
+    if (trustedProxy && webHostIsLoopback(host)) {
+      throw new Error(
+        `--trust-proxy-* needs a non-loopback bind: a proxy at ${[...trustedProxy.from].join(', ')} cannot reach ${host}. Add --expose or --host <address>`,
+      );
+    }
     const tailscale = p.tailscale === true;
     // The desktop's in-place grant change restarts a RUNNING server. A stop
     // that landed after it read status wins: nothing is started, and the
@@ -3853,6 +3862,7 @@ function registerRpcHandlers(
         allowedHosts,
         tailscale,
         ...(tls ? { tls } : {}),
+        ...(trustedProxy ? { trustedProxy } : {}),
         token,
       });
     } catch (err) {
