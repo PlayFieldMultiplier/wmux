@@ -157,6 +157,9 @@ interface Live {
   driverTag: string;
 }
 
+/** Why a Codex chat does not resume its thread. */
+const CODEX_THREAD_HELD = 'This conversation is open in a terminal Codex.';
+
 const PERMISSION_ACTIONS: DecisionForm['actions'] = [
   { id: 'approve', label: 'Allow once' },
   { id: 'deny', label: 'Reject' },
@@ -304,13 +307,10 @@ class Host implements ChatV2Host {
     } catch (error) {
       this.deps.log('warn', `[chatv2] could not stop driver ${process.pid}: ${String(error)}`);
     }
-    // Its decisions died with it; a registry that already exists drops their cards.
-    const registry = this.deps.approvals();
-    if (registry) {
-      const ids = record.session.blocks.flatMap((b) => (b.approval && !b.approval.decided ? [b.approval.requestId] : []));
-      if (record.session.pendingQuestion) ids.push(record.session.pendingQuestion.requestId);
-      if (ids.length) await registry.expireNativeRequests(record.paneId, record.agent, ids).catch(() => 0);
-    }
+    // Its decisions died with it. Their registry cards are already gone: the
+    // registry expires every pending record when the daemon starts again
+    // (ApprovalRegistry's constructor), and none is made from this record
+    // until its next driver runs.
   }
 
   async dispose(): Promise<void> {
@@ -1190,6 +1190,9 @@ class Host implements ChatV2Host {
       }
       if (superseded()) return chatV2Error('session-not-found', 'The chat was closed.');
       const resume = record.resumeExisting === true || record.session.blocks.some((b) => b.role === 'user');
+      // Before the spawn, so a second app-server never even loads a thread a
+      // terminal Codex has open; secondWriter checks again after it.
+      if (resume && this.codexThreadHeld(record)) return chatV2Error('agent-running-in-pane', CODEX_THREAD_HELD);
       const fail = (message: string): { ok: false; error: ChatV2Error } => {
         this.deps.log('warn', `[chatv2] ${record.agent} driver failed to start on ${record.paneId}: ${message}`);
         live.failed = true;
@@ -1279,10 +1282,7 @@ class Host implements ChatV2Host {
     if (!resume) return null;
     const chats = this.chatHolders(record.paneId, record.providerSessionId);
     if (chats.length) return 'This conversation is open in a chat in another pane. The chat was stopped.';
-    // A terminal Codex talks to the shared app-server, whose argv names no thread.
-    if (record.agent === 'codex' && (this.deps.codexThreadOwners?.(record.paneId, record.providerSessionId) ?? []).length) {
-      return 'This conversation is open in a terminal Codex in another pane. The chat was stopped.';
-    }
+    if (this.codexThreadHeld(record)) return `${CODEX_THREAD_HELD} The chat was stopped.`;
     const scan = this.deps.terminal?.processesWithArg;
     if (!scan) return null;
     let others;
@@ -1292,6 +1292,11 @@ class Host implements ChatV2Host {
       return 'Could not confirm that the chat is the conversation’s only process. The chat was stopped.';
     }
     return others.length ? `${holdersRefusal(others)} The chat was stopped.` : null;
+  }
+
+  /** A Codex record's thread is held by a terminal Codex, which talks to the shared app-server (its argv names no thread). */
+  private codexThreadHeld(record: ChatV2StoredRecord): boolean {
+    return record.agent === 'codex' && (this.deps.codexThreadOwners?.(record.providerSessionId) ?? []).length > 0;
   }
 
   /** Stop the driver and wait until it is reaped. False: it did not exit, and it is kept. */
@@ -1464,7 +1469,7 @@ class Host implements ChatV2Host {
           ...(decision.kind === 'permission'
             ? {
                 // Deny is labelled by what it sends (Codex `cancel` also stops the turn).
-                form: { v: 1, kind: 'permission', actions: decision.denyLabel ? [PERMISSION_ACTIONS[0], { id: 'deny', label: decision.denyLabel }] : PERMISSION_ACTIONS },
+                form: { v: 1, kind: 'permission', actions: decision.denyLabel ? [PERMISSION_ACTIONS[0], { ...PERMISSION_ACTIONS[1], label: decision.denyLabel }] : PERMISSION_ACTIONS },
                 question: decision.question,
                 toolName: decision.toolName,
                 summary: decision.summary,

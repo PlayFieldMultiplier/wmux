@@ -281,8 +281,8 @@ export interface ChatV2HostDeps {
     isDirectory: (dir: string) => boolean;
     realpath: (p: string) => string;
   };
-  /** Other panes whose terminal Codex has thread `threadId` selected on the shared app-server. */
-  codexThreadOwners?: (paneId: string, threadId: string) => string[];
+  /** Panes whose terminal Codex holds thread `threadId` on the shared app-server. */
+  codexThreadOwners?: (threadId: string) => string[];
   /** fromTerminal's waits (transcript quiet, pane free). Tests shorten them. */
   moveTiming?: { quietMs?: number; freeWaitMs?: number };
 }

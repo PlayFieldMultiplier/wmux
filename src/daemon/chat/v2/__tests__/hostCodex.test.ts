@@ -24,7 +24,8 @@ let dir: string;
 beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'chatv2-host-codex-')); });
 afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); });
 
-function rig(options: { owners?: string[]; nativeOn?: boolean; commandLine?: string } = {}) {
+function rig(options: { owners?: (call: number) => string[]; nativeOn?: boolean; commandLine?: string } = {}) {
+  let ownerCalls = 0;
   const killed: number[] = [];
   const clock = { now: 100_000 };
   const fakes: FakeCodex[] = [];
@@ -51,7 +52,7 @@ function rig(options: { owners?: string[]; nativeOn?: boolean; commandLine?: str
     processIdentity: async () => ({ startTime: 'start-1', commandLine: options.commandLine ?? '' }),
     killTree: async (pid) => { killed.push(pid); },
     processProbe: () => 'gone',
-    codexThreadOwners: (paneId, threadId) => (threadId === THREAD_ID ? options.owners ?? [] : []),
+    codexThreadOwners: (threadId) => (threadId === THREAD_ID ? options.owners?.(++ownerCalls) ?? [] : []),
     // Present, so a refusal is the agent's and not "unavailable".
     terminal: {} as ChatV2TerminalDeps,
     drivers: (agent) => {
@@ -156,7 +157,7 @@ describe('chat v2 host: a Codex chat', () => {
   });
 
   it('refuses bypass, the terminal handoff both ways, and a resume while a terminal Codex holds the thread', async () => {
-    const r = rig({ owners: ['pty-other'] });
+    const r = rig({ owners: () => ['pty-other'] });
     expect(await r.host.call('create', { paneId: PANE, agent: 'codex', mode: 'bypass' }, 'main')).toMatchObject({ ok: false, error: { code: 'invalid-params' } });
     const b = await r.create();
     expect(await r.host.call('toTerminal', { paneId: PANE, chatSessionId: b.chatSessionId }, 'main')).toMatchObject({ ok: false, error: { code: 'handoff-refused' } });
@@ -169,20 +170,47 @@ describe('chat v2 host: a Codex chat', () => {
     await until(() => r.host.statusForPane(PANE) === 'stopped');
     const res = await r.send('again', 'msg-00002');
     expect(res).toMatchObject({ ok: false, error: { code: 'agent-running-in-pane', message: expect.stringContaining('terminal Codex') } });
+    // Refused before a second app-server could load the thread.
+    expect(r.fakes).toHaveLength(1);
+    await r.host.dispose();
+  });
+
+  it('stops a resumed chat whose thread a terminal Codex took while it was starting', async () => {
+    // Free before the spawn, held by the time the driver is up.
+    const r = rig({ owners: (call) => (call > 1 ? ['pty-other'] : []) });
+    await r.create();
+    await r.send();
+    r.fake().note('turn/completed', { turn: { id: 'turn-1', status: 'completed' } });
+    await until(() => r.host.statusForPane(PANE) === 'idle');
+    r.fake().exit(1, null);
+    await until(() => r.host.statusForPane(PANE) === 'stopped');
+    expect(await r.send('again', 'msg-00002')).toMatchObject({ ok: false, error: { code: 'agent-running-in-pane', message: expect.stringContaining('The chat was stopped') } });
     expect(r.fakes[1].calls('thread/resume')).toHaveLength(1);
+    await until(() => r.fakes[1].exited);
     await r.host.dispose();
   });
 
   it('a daemon that starts again stops the app-server the last one left, by the chat id in its argv', async () => {
     const first = rig();
     const b = await first.create();
+    // A card left open in the transcript, its id a bare 3.
+    await first.send();
+    first.fake().note('item/started', { item: { type: 'commandExecution', id: 'call_1', command: 'ls', status: 'inProgress' } });
+    first.fake().request(3, 'item/commandExecution/requestApproval', { itemId: 'call_1', command: 'ls', availableDecisions: ['accept', 'decline'] });
+    await until(() => first.pending().length === 1);
     const saved = JSON.parse(fs.readFileSync(path.join(dir, 'chat-sessions', 'v2', `${b.chatSessionId}.json`), 'utf8')) as { process?: { pid: number; marker: string } };
     expect(saved.process?.marker).toBe(b.chatSessionId);
     const pid = saved.process?.pid;
     // The daemon dies: nothing is disposed, the record keeps the process.
     const again = rig({ commandLine: `codex -c wmux_chat_session="${b.chatSessionId}" app-server --listen stdio://` });
+    // A terminal Codex card on this pane under the same bare id: not the dead process's.
+    const relayCard = await again.registry.noteNativeDecision({
+      sessionId: PANE, agent: 'codex', native: { adapter: 'codex', requestId: '3', threadId: THREAD_ID, relayId: 'relay-1' },
+      form: { v: 1, kind: 'permission', actions: [{ id: 'approve', label: 'Allow once' }, { id: 'deny', label: 'Reject' }] }, question: 'Run ls?', toolName: 'Shell', summary: 'ls',
+    });
     await again.host.start();
     expect(again.killed).toEqual([pid]);
+    expect(again.pending().map((p) => p.id)).toEqual([relayCard]);
     const other = rig({ commandLine: 'codex app-server --listen stdio://' });
     await other.host.start();
     expect(other.killed).toEqual([]);

@@ -4665,9 +4665,11 @@ function registerRpcHandlers(
         return startTime && commandLine ? { startTime, commandLine } : null;
       },
       killTree: (pid) => killProcessTree(pid),
-      // A Codex chat resuming its thread: a terminal Codex on the shared app-server holding it.
-      codexThreadOwners: (paneId, threadId) => codexPaneRelays.liveIds()
-        .filter((id) => id !== paneId && codexPaneRelays.selection(id, sessionManager.getSession(id))?.threadId === threadId),
+      // A Codex chat resuming its thread: a terminal Codex on the shared
+      // app-server holding it. The chat's own pane counts too: it runs no
+      // terminal Codex while the chat is there (paneFree), so a relay of its
+      // own on that thread is one that has not let go of it yet.
+      codexThreadOwners: (threadId) => codexPaneRelays.threadHolders(threadId),
       // Terminal → chat (chat/v2/fromTerminal.ts): the pane's Claude TUI.
       terminal: {
         holdKeyboard: (id) => nativeChatBridge?.holdKeyboard(id) ?? null,
