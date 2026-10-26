@@ -81,6 +81,10 @@ function validRecord(value: unknown): value is ChatV2StoredRecord {
   if (r.mode !== 'default' && r.mode !== 'bypass') return false;
   if (typeof r.model !== 'string') return false;
   if (r.state !== 'active' && r.state !== 'handed-off') return false;
+  if (r.continuedIn !== undefined) {
+    const c = r.continuedIn;
+    if (!c || typeof c !== 'object' || (c.paneId !== undefined && (typeof c.paneId !== 'string' || !c.paneId))) return false;
+  }
   if (typeof r.providerSessionId !== 'string' || !CHATV2_PROVIDER_SESSION_ID.test(r.providerSessionId)) return false;
   if (!Number.isSafeInteger(r.seq) || (r.seq as number) < 0) return false;
   const s = r.session;
