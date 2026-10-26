@@ -2130,7 +2130,9 @@ export class ApprovalService {
       : r.act.kind === 'release' ? [r.act.title, r.act.notes] : [];
     if (texts.some((t) => redactStoredSecrets(t) !== t)) return 'secret-in-body';
     // After the refusals that name a cause; an approval with no decision
-    // time (none is made without one) counts as stale.
+    // time (none is made without one) counts as stale. Counted from the
+    // decision on purpose, a long sleep before the first try included: a
+    // day on, things may have changed, so the bot asks again.
     if (!actRowClaimed(e) && this.now() - (r.decidedAt ?? 0) >= APPROVAL_LIMITS.APPROVED_TTL_MS) return 'approval-stale';
     if (r.executeAfter !== undefined && this.now() < r.executeAfter) return 'approval-undo-window';
     return null;
