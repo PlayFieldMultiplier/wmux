@@ -186,7 +186,7 @@ jobs:
         if: env.HAS_TOKEN == 'true' && steps.pr.outputs.skip != 'true' && steps.review.outputs.structured_output != ''
         env:
           GH_TOKEN: ${{ github.token }}
-          SUMMARY: ${{ fromJSON(steps.review.outputs.structured_output).summary }}
+          SUMMARY: ${{ fromJSON(steps.review.outputs.structured_output || '{}').summary }}
         run: |
           { echo '<!-- claude-review -->'; printf '%s\n' "$SUMMARY"; } > "$RUNNER_TEMP/summary.md"
           gh pr comment "$PR_NUMBER" --body-file "$RUNNER_TEMP/summary.md"
@@ -195,7 +195,7 @@ jobs:
         if: env.HAS_TOKEN == 'true' && steps.pr.outputs.skip != 'true' && steps.review.outputs.structured_output != ''
         env:
           GH_TOKEN: ${{ github.token }}
-          SEVERITY: ${{ fromJSON(steps.review.outputs.structured_output).max_severity }}
+          SEVERITY: ${{ fromJSON(steps.review.outputs.structured_output || '{}').max_severity }}
         run: |
           case "$SEVERITY" in P1|P2|P3|clean) ;; *) echo "unexpected severity '$SEVERITY'"; exit 1 ;; esac
           gh label create review:P1 --color B60205 --description "Claude review: merge-blocking finding" --force
