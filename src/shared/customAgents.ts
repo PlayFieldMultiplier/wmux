@@ -330,6 +330,8 @@ function listClash(agent: CustomAgent, kept: readonly CustomAgent[]): CustomAgen
 /** A custom agent the loader could not keep, and why (shown in Settings). */
 export interface CustomAgentDropped {
   name?: string;
+  /** Its position in the file's list. */
+  index: number;
   issue: CustomAgentIssue;
 }
 
@@ -346,22 +348,22 @@ export function normalizeCustomAgentsReport(
   const agents: CustomAgent[] = [];
   const dropped: CustomAgentDropped[] = [];
   if (!Array.isArray(input)) return { agents, dropped };
-  for (const raw of input) {
+  for (const [index, raw] of input.entries()) {
     const n = (raw as { name?: unknown } | null)?.name;
     const name = typeof n === 'string' && n.trim() ? { name: n.trim().slice(0, CUSTOM_AGENT_NAME_MAX) } : {};
     if (agents.length >= CUSTOM_AGENTS_MAX) {
       const cap = String(CUSTOM_AGENTS_MAX);
-      dropped.push({ ...name, issue: issue('agents-over-cap', { cap }, `more than ${cap} custom agents`) });
+      dropped.push({ ...name, index, issue: issue('agents-over-cap', { cap }, `more than ${cap} custom agents`) });
       continue;
     }
     const r = normalizeCustomAgent(raw, opts);
     if (!r.ok) {
-      dropped.push({ ...name, issue: { code: r.code, params: r.params, error: r.error } });
+      dropped.push({ ...name, index, issue: { code: r.code, params: r.params, error: r.error } });
       continue;
     }
     const clash = listClash(r.agent, agents);
     if (clash) {
-      dropped.push({ name: r.agent.name, issue: clash });
+      dropped.push({ name: r.agent.name, index, issue: clash });
       continue;
     }
     agents.push(r.agent);

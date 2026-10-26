@@ -20,7 +20,7 @@ import { ROLE_TOOL_SURFACES, resolveRoleName, roleMcpArgv } from '../../shared/r
 import { CORE_TOOL_SURFACE } from '../../shared/coreSurface';
 import { codexConfigPath, codexHasWmuxServer } from '../../shared/mcpRegistration';
 import {
-  applyRoleBinding, bindingEnforcesFreshContext, bindingEnforcesSkipPermissions, normalizeRoleBindings,
+  applyRoleBinding, bindingEnforcesFreshContext, bindingEnforcesSkipPermissions, KNOWN_AGENT_STEMS, normalizeRoleBindings,
   type RoleBinding, type WmuxTools,
 } from '../../shared/orchestratorRole';
 import { tokenize } from '../../shared/agentResume';
@@ -201,14 +201,15 @@ export async function handleRole(args: string[], jsonMode: boolean, overrides: P
     const report = normalizeCustomAgentsReport(raw, { platform: deps.platform });
     customAgents = report.agents;
     // A custom agent the file holds but main would refuse here: say why the
-    // bare name follows, rather than print it silently.
-    const agent = binding.agent;
-    if (agent && Array.isArray(raw) && !findCustomAgent(agent, customAgents)) {
-      const entry = (raw as Array<{ name?: unknown; command?: unknown }>).find(
-        (a) => typeof a?.command === 'string' && customAgentStem({ command: a.command }) === agent.toLowerCase(),
-      );
-      const drop = entry ? report.dropped.find((d) => d.name === entry.name) : undefined;
-      if (drop) deps.error(`wmux role: the custom agent "${drop.name}" in ${deps.customAgentsPath} is not used: ${drop.issue.error}`);
+    // bare name follows, rather than print it silently. A known agent's name
+    // resolves to that agent, so an entry clashing with it needs no note.
+    const agent = binding.agent?.toLowerCase();
+    if (agent && Array.isArray(raw) && !KNOWN_AGENT_STEMS.has(agent) && !findCustomAgent(agent, customAgents)) {
+      const drop = report.dropped.find((d) => {
+        const entry = raw[d.index] as { command?: unknown } | null;
+        return typeof entry?.command === 'string' && customAgentStem({ command: entry.command }) === agent;
+      });
+      if (drop) deps.error(`wmux role: ${drop.issue.error} (${deps.customAgentsPath}); "${agent}" is printed as typed.`);
     }
   } catch {
     // missing or unreadable

@@ -107,6 +107,31 @@ describe('wmux role resolve', () => {
     expect(err[0]).toContain('not a Windows path');
   });
 
+  it('finds the refused entry by its place in the file, and says nothing for a known agent', async () => {
+    const resolve = async (agent: string, agents: unknown[]) => {
+      const files: Record<string, string> = {
+        '/fake/session.json': JSON.stringify({ orchestratorRoleBindings: { Builder: { agent } } }),
+        '/fake/custom-agents.json': JSON.stringify({ agents }),
+      };
+      const err: string[] = [];
+      await handleRole(['resolve', 'Builder'], false, {
+        sessionPath: '/fake/session.json',
+        customAgentsPath: '/fake/custom-agents.json',
+        readFile: (p) => files[p] ?? '',
+        log: () => undefined,
+        error: (l) => err.push(l),
+        exit: () => undefined,
+        platform: 'win32',
+      });
+      return err;
+    };
+    // An unnamed bad entry first, and a name with stray spaces: still its own reason.
+    const err = await resolve('tern', [null, { name: ' Tern ', command: '/opt/tern/bin/tern' }]);
+    expect(err).toHaveLength(1);
+    expect(err[0]).toContain('not a Windows path');
+    expect(await resolve('claude', [{ name: 'Mine', command: 'claude' }])).toEqual([]);
+  });
+
   it('drops an unsafe model through the app normalizer', async () => {
     const r = JSON.parse((await run(['resolve', 'Tester'])).out[0]);
     expect(r.model).toBeUndefined();
