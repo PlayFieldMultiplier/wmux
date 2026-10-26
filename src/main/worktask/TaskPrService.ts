@@ -40,7 +40,6 @@
  */
 
 import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { WORKTASK_PR_URL_RE, githubPullUrlHost, isGithubPullUrl } from '../../shared/workTask';
 import { forgeHosts } from '../../shared/forgeHosts';
 import { getExecEnv } from '../../shared/execEnv';
@@ -50,8 +49,6 @@ import { GLAB_ENV, glabLoginHint, glabPrService, type GlabPrService } from '../g
 import { scanCommits, secretRefusal, spawnGitLines, type GitLines } from '../git/secretScan';
 import { secretGuardEnabled } from '../git/secretGuardSetting';
 import type { SecretFinding } from '../../shared/secretGuard';
-
-const execFileAsync = promisify(execFile);
 
 const GH_TIMEOUT_MS = 20_000;
 const GIT_TIMEOUT_MS = 60_000;
@@ -84,20 +81,18 @@ export type PrExec = (
  * The default exec. Text of any length (a PR body) goes as `input` on stdin:
  * on argv it can pass Windows' 32,767-character command line, and the spawn
  * then fails before the tool starts. Rejects as promisify(execFile) does,
- * with `stdout` and `stderr` on the error.
+ * with `stdout` and `stderr` on the error; a spawn that throws (that very
+ * ENAMETOOLONG) rejects too. Without `input`, stdin is left as it was.
  */
-export const execWithInput: PrExec = (cmd, args, { input, ...rest }) => {
-  const opts = { ...rest, encoding: 'utf8' as const };
-  if (input === undefined) return execFileAsync(cmd, args, opts);
-  return new Promise((resolve, reject) => {
-    const child = execFile(cmd, args, opts, (error, stdout, stderr) => {
-      if (error) return reject(Object.assign(error, { stdout, stderr }));
-      resolve({ stdout, stderr });
-    });
-    child.stdin?.on('error', () => { /* the tool exited before reading its input; the exit says why */ });
-    child.stdin?.end(input);
+export const execWithInput: PrExec = (cmd, args, { input, ...opts }) => new Promise((resolve, reject) => {
+  const child = execFile(cmd, args, { ...opts, encoding: 'utf8' }, (error, stdout, stderr) => {
+    if (error) return reject(Object.assign(error, { stdout, stderr }));
+    resolve({ stdout, stderr });
   });
-};
+  if (input === undefined) return;
+  child.stdin?.on('error', () => { /* the tool exited before reading its input; the exit says why */ });
+  child.stdin?.end(input);
+});
 
 export interface TaskPrServiceOptions {
   daemon: PrDaemonPort;
@@ -210,7 +205,7 @@ export class TaskPrService {
       timeout: GH_TIMEOUT_MS,
       env: GH_ENV,
       windowsHide: true,
-      ...(input !== undefined ? { input } : {}),
+      input,
     });
   }
 
