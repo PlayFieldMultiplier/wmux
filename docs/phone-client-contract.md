@@ -5109,7 +5109,8 @@ this caller may decide; a refused decision answers `403` as below.
 field is 400). The decision is the desktop card's: an approved merge or act
 waits 10 seconds (`executeAfter`) with `undo` available, then the desktop
 carries it out: a merge after re-checking the head and CI; a comment, a new
-issue, or closing an issue or a PR after re-checking what it acts on (below).
+issue, closing an issue or a PR, or a release after re-checking what it acts
+on (below).
 `always` approves and remembers a rule for that bot (or its whole workspace)
 and repository, merges only (`canAlwaysAllow`).
 
@@ -5125,8 +5126,8 @@ and repository, merges only (`canAlwaysAllow`).
 
 - `action`: `merge`, `push_default`, `issue_create`, `issue_close`,
   `comment`, `release`, `pr_close`. The desktop carries out `merge`,
-  `comment`, `issue_create`, `issue_close` and `pr_close` (on GitHub; on
-  GitLab only a merge); `push_default` and `release` are recorded only. A
+  `comment`, `issue_create`, `issue_close`, `pr_close` and `release` (on
+  GitHub; on GitLab only a merge); `push_default` is recorded only. A
   request a desktop older than this one stored is recorded only too (its card
   says so); it carries no `payloadHash`.
 - `state`: `pending`, `approved`, `denied`, `executed`, `refused`, `expired`
@@ -5135,8 +5136,10 @@ and repository, merges only (`canAlwaysAllow`).
   the card's text says it in words). A refused act is never tried again: the
   bot asks with a new request.
 - `payloadHash` — on a request the desktop carries out as an act
-  (`comment`, `issue_create`, `issue_close`, `pr_close`): see "An act's text
-  on its card" below. Absent on a merge and on a recorded-only request.
+  (`comment`, `issue_create`, `issue_close`, `pr_close`, `release`): see "An
+  act's text on its card" below. Absent on a merge and on a recorded-only
+  request.
+- `headSha` on a `release` is the full SHA of the commit it publishes.
 - `tainted: true` — the work started from outside text (an issue or PR);
   show it on the card. `decidedBy`: `owner` or `rule`.
 - No bot-written text: the reason is the card's `body`, and so is an act's
@@ -5151,6 +5154,13 @@ the phone approves exactly what the card shows:
 - **Fences.** Each bot-text field is its own CommonMark fenced code block, in
   a fixed order: `comment` → [the body with wmux's marker line];
   `issue_create` → [the title], then [the body with wmux's marker line].
+  A `release` card's payload fences are what it publishes, in one of two
+  orders the card's mode decides: when a workflow at the commit runs on
+  pushing the tag, the desktop pushes the tag alone → [the tag], [the
+  commit's full SHA], [the workflow paths, one per line]; otherwise it
+  publishes the release itself → [the tag], [the commit's full SHA], [the
+  title], [the notes, possibly empty], [`release` or `prerelease`]. The
+  phone needs no mode: it hashes the fences in card order.
   Fence lines start at column 0, never indented. A fence is a run of
   backticks longer than any backtick or tilde run inside its text (at least
   3), so nothing inside closes it.
@@ -5176,21 +5186,30 @@ the phone approves exactly what the card shows:
 - **The phone** recomputes the hash from the card it displays and shows
   Approve only when it equals the request's `payloadHash`; it sends it as the
   decision's `payloadHash`. payloadHash is required on approve for every
-  request that carries it: `comment`, `issue_create`, `issue_close` and
-  `pr_close` (for the two closes it is the sha256 of the empty string). The
+  request that carries it: `comment`, `issue_create`, `issue_close`,
+  `pr_close` and `release` (for the two closes it is the sha256 of the empty
+  string). The
   desktop refuses an approval without it (`409 client_update_required`: the
   app says "Approve on the desktop") and with another one (`409 changed`:
   read the card again). A request without a `payloadHash` (recorded only,
   stored by an older build) is approved without one. Deny and undo take no
   hash.
 - Typed words ("ok") and the desktop's "Approve N pending" chip never approve
-  a `comment` or an `issue_create`; a close or a merge they may.
+  a `comment`, an `issue_create` or a `release`; a close or a merge they may.
+  No rule ever approves a `release`.
 
 Once approved and past its Undo window, the desktop carries the act out with
 the owner's gh login and re-checks, right before it writes: the login is the
 one the request read, the repository still has the name and id the request
 read, the target is the same issue or PR, still open, and a PR still at the
-head the card showed (`refusal: head-moved` otherwise). While it runs, or
+head the card showed (`refusal: head-moved` otherwise). A `release` re-checks
+that the default branch is the same, the commit is still on it, the tag and
+any release of it (a draft included) are still absent, and the commit's
+checks have passed or there are none (`refusal` `default-branch-changed`,
+`not-on-default-branch`, `tag-taken`, `release-exists`, `checks-failing`,
+`checks-pending`, `checks-not-started`); a release published on a tag that
+was made elsewhere meanwhile ends `refused` with `published-other-target`.
+While it runs, or
 while it reads GitHub to learn whether an interrupted try went through, the
 request stays `approved`; it ends `executed` or `refused`.
 
