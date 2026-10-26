@@ -66,6 +66,7 @@ import { awaitParseBarrier } from '../terminal/parseBarrier';
 import { STALE_REPLAY_INPUT_MODE_RESETS, STALE_REPLAY_ALIVE_SHELL_RESETS, STALE_REPLAY_DISPLAY_RESETS, staleReplayResetLevel } from '../../shared/terminal/staleReplayModeReset';
 import { installShellPromptModeReset, shellPromptModeResetFor } from '../../shared/terminal/shellPromptModeReset';
 import { holdNewXtermReplies } from '../../shared/terminal/replyParity';
+import { markUserInput, type UserInputTerminal } from '../../shared/terminal/userInputGate';
 import { ATTACH_SNAPSHOT_MIN_BYTES } from '../../shared/terminal/attachSnapshot';
 import { paneForegroundProbe } from '../terminal/paneForegroundProbe';
 import { attachAltScreenWheel, PAGE_SCROLL_AGENTS } from '../terminal/altScreenWheel';
@@ -2791,7 +2792,15 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
     // silent backstop in `pty.handler.ts`. The helper preserves xterm's
     // own bracketed-paste markers if it pre-wrapped the payload.
     let inputBuffer = '';
+    // onData carries the user's input AND xterm's own answers to queries in
+    // the output (DA1/DA2, cursor and status reports, kitty keyboard flags,
+    // colour reports), which a program sends whether or not anyone looks at
+    // the pane. Both go to the PTY; only the user's input counts as typing.
+    const userInput = markUserInput(terminal as unknown as UserInputTerminal);
     const onDataDisposable = terminal.onData((data) => {
+      // Consumed first, before any early return, so the signal of one chunk
+      // can never carry over to the next.
+      const fromUser = userInput.consume();
       // #1794: a reset is owed for leaked mouse / focus modes but has not
       // applied yet (process truth pending, or queued behind output): the
       // reports are the dead TUI's, not the shell's. Before anything else.
@@ -2799,18 +2808,17 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
       // X6 ②: the user is driving this shell themselves — retract any pending
       // resume offer so the pill can't fire into a session they've moved on in.
       //
-      // BUT onData also carries terminal REPORTS that are not user typing — most
-      // notably focus-tracking (CSI I / CSI O), which xterm emits every time the
-      // pane mounts or refocuses. A recovered agent pane fires CSI I on mount, so
-      // without this guard the resume pill is cleared the instant it hydrates and
-      // never renders (the bug that made the pill invisible after every reboot).
-      // Focus reports are the only non-input bytes observed here; real keys,
-      // pastes, and IME commits all still clear as intended.
-      if (data !== '\x1b[I' && data !== '\x1b[O') {
+      // BUT onData also carries terminal REPORTS that are not user typing:
+      // focus-tracking (CSI I / CSI O), which xterm emits every time the pane
+      // mounts or refocuses (a recovered agent pane fires CSI I on mount, which
+      // cleared the resume pill the instant it hydrated), and every reply to a
+      // query. Neither carries xterm's user-input signal. The focus check by
+      // shape stays for a terminal without that signal.
+      if (fromUser && data !== '\x1b[I' && data !== '\x1b[O') {
         noteUserKeystroke(data);
       } else if (interruptKeystrokes.observe(ptyId, data)) {
         // Not user input, but the interrupt detector still consumes every
-        // chunk: a focus report between two ESC taps is "something else" and
+        // chunk: a report between two ESC taps is "something else" and
         // must cancel the double-tap. (Pre-#1228 this observe ran
         // unconditionally — the split keeps that contract while the pill /
         // watchdog / scheduler side effects stay gated on real input.)
@@ -2821,6 +2829,8 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
         data,
       ).catch((err) => console.error('[wmux:onData] chunk write failed:', err));
 
+      // A reply is not part of a command the user typed.
+      if (!fromUser) return;
       if (data === '\r' || data === '\n') {
         const cmd = inputBuffer.trim();
         if (cmd.length > 1) {
@@ -3633,6 +3643,7 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
       // other listeners are already torn down. Dropping this disposable here
       // stops stray input during the defer window.
       onDataDisposable.dispose();
+      userInput.dispose();
       container.removeEventListener('mousedown', onHintMouseDown);
       document.removeEventListener('mousemove', onHintMouseMove);
       document.removeEventListener('mouseup', onHintMouseUp);

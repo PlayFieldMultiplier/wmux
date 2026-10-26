@@ -22,6 +22,7 @@ import { createLeadingEdgeThrottle, VETO_TRACE_THROTTLE_MS } from '../pipe/handl
 import { settleConfirmedInterrupt, settleHookTurnToIdle } from '../notification/turnSettle';
 import { InterruptKeystrokeDetector, isEscapeChunk } from '../../shared/hooks/interruptKeystroke';
 import { kittyChunkAsLegacy } from '../../shared/kittyKeyEvents';
+import { stripPassiveInput } from '../../shared/terminal/passiveInput';
 import {
   recentlyResized,
   RESIZE_REDRAW_GUARD_MS,
@@ -298,12 +299,15 @@ export class PTYBridge {
    * recentlyEscaped and the onInterrupted handlers).
    */
   noteInterruptInput(ptyId: string, data: string): void {
+    // A focus report, pure mouse motion or the terminal's reply to a query is
+    // not someone typing (DaemonPTYBridge draws the same line).
+    const typed = stripPassiveInput(data).length > 0;
     if (data.length > 0) {
       this.flushPending(ptyId);
-      this.agentDetectors.get(ptyId)?.invalidateApprovalScreen();
+      if (typed) this.agentDetectors.get(ptyId)?.invalidateApprovalScreen();
     }
     try {
-      markUserInput(ptyId);
+      if (typed) markUserInput(ptyId);
       if (isEscapeChunk(kittyChunkAsLegacy(data))) markEscapeKey(ptyId);
       if (!this.interruptKeystrokes.observe(ptyId, data)) return;
       settleHookTurnToIdle(ptyId, this.getHookRouter?.() ?? null, this.getWindow());
