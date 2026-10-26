@@ -5205,10 +5205,13 @@ read, the target is the same issue or PR, still open, and a PR still at the
 head the card showed (`refusal: head-moved` otherwise). A `release` re-checks
 that the default branch is the same, the commit is still on it, the tag and
 any release of it (a draft included) are still absent, and the commit's
-checks have passed or there are none (`refusal` `default-branch-changed`,
-`not-on-default-branch`, `tag-taken`, `release-exists`, `checks-failing`,
-`checks-pending`, `checks-not-started`); a release published on a tag that
-was made elsewhere meanwhile ends `refused` with `published-other-target`.
+checks have passed or there are none, and a release workflow it relies on is
+still enabled (`refusal` `default-branch-changed`, `not-on-default-branch`,
+`tag-taken`, `release-exists`, `checks-failing`, `checks-pending`,
+`checks-not-started`, `workflow-disabled`); a release published on a tag that
+was made elsewhere meanwhile ends `refused` with `published-other-target`, and
+one published with another name or notes than the card's with
+`found-different`.
 While it runs, or
 while it reads GitHub to learn whether an interrupted try went through, the
 request stays `approved`; it ends `executed` or `refused`.
