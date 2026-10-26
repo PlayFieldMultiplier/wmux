@@ -17,7 +17,9 @@ import { spawn, spawnSync } from 'child_process';
  * daemon.lock with O_EXCL (refuse a live owner), write daemon.pid and the
  * daemon-booting marker, unlink and rebind the socket, write the daemon-pipe
  * hint, drop the marker, answer daemon.ping with pid. FAKE_WMUX_BOOT_MS is the
- * time before it takes the lock (the real daemon's bundle load).
+ * time before it takes the lock (the real daemon's bundle load);
+ * FAKE_WMUX_CRASH makes it exit 3 there instead, and FAKE_WMUX_TOKEN is a token
+ * file it creates while booting, as a first-run daemon does.
  */
 const FAKE_DAEMON = `
 const fs = require('fs'), net = require('net'), path = require('path');
@@ -34,6 +36,7 @@ function take() {
   }
 }
 setTimeout(() => {
+  if (process.env.FAKE_WMUX_CRASH) process.exit(3);
   if (!take()) process.exit(1);
   fs.writeFileSync(path.join(dir, 'daemon.pid'), String(process.pid));
   fs.writeFileSync(path.join(dir, 'daemon-booting'), String(process.pid));
@@ -44,6 +47,7 @@ setTimeout(() => {
       s.write(JSON.stringify({ id, ok: true, result: { status: 'ok', pid: process.pid } }) + '\\n');
     });
   }).listen(sock, () => {
+    if (process.env.FAKE_WMUX_TOKEN) fs.writeFileSync(process.env.FAKE_WMUX_TOKEN, 'test-token');
     fs.writeFileSync(path.join(dir, 'daemon-pipe'), sock);
     fs.unlinkSync(path.join(dir, 'daemon-booting'));
   });
@@ -95,6 +99,7 @@ describe.skipIf(process.platform === 'win32')('daemonLauncherCore — concurrent
     delete process.env.FAKE_WMUX_DIR;
     delete process.env.FAKE_WMUX_SOCK;
     delete process.env.FAKE_WMUX_BOOT_MS;
+    delete process.env.FAKE_WMUX_CRASH;
     if (prevSuffix === undefined) delete process.env.WMUX_DATA_SUFFIX;
     else process.env.WMUX_DATA_SUFFIX = prevSuffix;
     fs.rmSync(wmuxDir, { recursive: true, force: true });
@@ -189,6 +194,30 @@ describe.skipIf(process.platform === 'win32')('daemonLauncherCore — concurrent
     expect(isAlive(owner.pid as number)).toBe(true);
     expect(fs.readFileSync(path.join(wmuxDir, 'daemon.lock'), 'utf8')).toBe(String(owner.pid));
     expect(livePidFile()).toBe(owner.pid);
+  }, 30_000);
+
+  it('a first-run booting daemon (no auth token yet) is waited on, not killed', async () => {
+    fs.unlinkSync(getDaemonAuthTokenPath());
+    const owner = spawn(process.execPath, [scriptPath], {
+      detached: true,
+      stdio: 'ignore',
+      env: { ...process.env, FAKE_WMUX_BOOT_MS: '1500', FAKE_WMUX_TOKEN: getDaemonAuthTokenPath() },
+    });
+    launched.push(owner.pid as number);
+    expect(claimSpawnedDaemonFiles(wmuxDir, owner.pid as number)).toBe(true);
+
+    const info = await ensureDaemon(deps());
+    if (info.pid && info.pid !== owner.pid) launched.push(info.pid);
+    expect(info).toMatchObject({ pid: owner.pid, spawned: false, authToken: 'test-token' });
+    expect(isAlive(owner.pid as number)).toBe(true);
+  }, 30_000);
+
+  it('a child that dies during boot leaves no pid file or marker behind', async () => {
+    process.env.FAKE_WMUX_BOOT_MS = '300';
+    process.env.FAKE_WMUX_CRASH = '1';
+    await expect(ensureDaemon(deps())).rejects.toThrow(/exited during startup \(code 3\)/);
+    expect(fs.existsSync(path.join(wmuxDir, 'daemon.pid'))).toBe(false);
+    expect(fs.existsSync(path.join(wmuxDir, 'daemon-booting'))).toBe(false);
   }, 30_000);
 
   it('full shutdown finds and kills a daemon that is still booting', async () => {

@@ -871,7 +871,12 @@ function spawnDaemon(deps: DaemonLauncherDeps): Promise<number> {
       onExit(cb: (code: number | null) => void): void;
       dispose(): void;
     }) => {
-      claimSpawnedDaemonFiles(getWmuxDir(), proc.pid);
+      const wmuxDir = getWmuxDir();
+      if (!claimSpawnedDaemonFiles(wmuxDir, proc.pid)) {
+        (deps.warn ?? console.warn)(
+          `[launcher] daemon.pid not written for PID ${proc.pid}: another pid file appeared after the stale cleanup, or the write failed`,
+        );
+      }
       deps.markBoot?.('daemon-spawned');
       (deps.log ?? console.log)(`[launcher] Daemon spawned with PID: ${proc.pid}`);
       // pid the ready ping came from (absent from a daemon older than Step ③).
@@ -934,7 +939,10 @@ function spawnDaemon(deps: DaemonLauncherDeps): Promise<number> {
       // otherwise idle out the whole hard ceiling instead of failing fast).
       // readiness.cancel routes through the poll's own settled-guard, so a
       // post-ready exit here is a harmless no-op.
-      proc.onExit((code) => settled.cancel(daemonStartupExitError(code)));
+      proc.onExit((code) => {
+        releaseSpawnedDaemonFiles(wmuxDir, proc.pid);
+        settled.cancel(daemonStartupExitError(code));
+      });
     };
 
     const spawnDirect = () => {
@@ -1029,16 +1037,17 @@ function spawnDaemon(deps: DaemonLauncherDeps): Promise<number> {
  *
  * With both files naming the child, a second starter reaches the verified
  * branch of ensureDaemon and waits the boot out (#546) instead of spawning or
- * killing, and the backstop finds the pid. The daemon's own acquireLock()
- * overwrites both with the same value; it never reads daemon.pid.
+ * killing, and the backstop finds the pid. The daemon's acquireLock() never
+ * reads daemon.pid; holding the lock, it overwrites both with its own pid.
  *
  * `wx` on daemon.pid: a pid file that appeared after our stale cleanup was
  * written by the daemon itself or by another starter's daemon, and is never
  * replaced. The marker is written only when the pid file was ours, so it
  * cannot name a daemon that has already finished booting and dropped it.
  *
- * PID reuse: a child that dies during boot leaves both files naming a dead
- * pid, the same state a crashed daemon leaves. Every reader proves daemon
+ * PID reuse: a child that dies during boot has both files removed by its
+ * exit handler (releaseSpawnedDaemonFiles); if this launcher is gone too, they
+ * name a dead pid, the state a crashed daemon leaves. Every reader proves daemon
  * identity from the command line before reuse, wait or kill, and the marker is
  * only consulted after that proof (parseBootMarker).
  *
@@ -1054,6 +1063,21 @@ export function claimSpawnedDaemonFiles(wmuxDir: string, pid: number): boolean {
     fs.writeFileSync(path.join(wmuxDir, 'daemon-booting'), String(pid), { encoding: 'utf-8', mode: 0o600, flag: 'wx' });
   } catch { /* the daemon writes it at acquireLock */ }
   return true;
+}
+
+/**
+ * Drop the files claimSpawnedDaemonFiles wrote once their daemon has exited, so
+ * a child that died during boot does not leave a pid that a later, unrelated
+ * process can reuse, nor a marker a second starter would wait on. Only files
+ * still naming `pid` are removed; a daemon that took them over keeps them.
+ */
+function releaseSpawnedDaemonFiles(wmuxDir: string, pid: number): void {
+  for (const name of ['daemon-booting', 'daemon.pid']) {
+    const file = path.join(wmuxDir, name);
+    try {
+      if (fs.readFileSync(file, 'utf-8').trim() === String(pid)) fs.unlinkSync(file);
+    } catch { /* absent */ }
+  }
 }
 
 /** How a daemon this process spawned ended: Node's child 'exit' arguments. */
@@ -1481,9 +1505,17 @@ async function ensureDaemonUnlocked(deps: DaemonLauncherDeps): Promise<DaemonInf
             //     so escalated re-ping (→ reuse) is the only thing that
             //     actually preserves kept sessions. A confirmed-wedged daemon
             //     leaves SIGKILL+respawn as the single-daemon recovery.
-            if (token) {
+            // A first-run daemon creates the auth token while it boots, so a
+            // booting daemon (marker naming it) is waited on even without one,
+            // reading the token again at each ping.
+            const currentToken = (): string => token || readDaemonAuthToken();
+            const pingCurrent = (timeoutMs: number): Promise<boolean> => {
+              const t = currentToken();
+              return t ? pingDaemon(pipeName, t, timeoutMs) : Promise.resolve(false);
+            };
+            if (token || parseBootMarker(readBootMarker(wmuxDir), existingPid)) {
               const recovered = await tryEscalatedReping(
-                (timeoutMs) => pingDaemon(pipeName, token, timeoutMs),
+                pingCurrent,
                 [500, 1000],
                 200,
                 (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
@@ -1492,7 +1524,7 @@ async function ensureDaemonUnlocked(deps: DaemonLauncherDeps): Promise<DaemonInf
                 (deps.log ?? console.log)(
                   `[launcher] Daemon (PID ${existingPid}) recovered on escalated re-ping — reusing, no kill`,
                 );
-                return { pid: existingPid, authToken: token, pipeName, spawned: false };
+                return { pid: existingPid, authToken: currentToken(), pipeName, spawned: false };
               }
               // Issue #546 — the escalated re-ping (~1.9 s) is far too short for
               // a daemon that is cold-recovering a big session set (~19-23 s for
@@ -1502,7 +1534,7 @@ async function ensureDaemonUnlocked(deps: DaemonLauncherDeps): Promise<DaemonInf
               // wedged-daemon path below adds ZERO latency.
               if (parseBootMarker(readBootMarker(wmuxDir), existingPid)) {
                 const outcome = await waitOutRecoveringDaemon({
-                  ping: (timeoutMs) => pingDaemon(pipeName, token, timeoutMs),
+                  ping: pingCurrent,
                   readMarker: () => readBootMarker(wmuxDir),
                   expectedPid: existingPid,
                   sleep: (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
@@ -1519,7 +1551,7 @@ async function ensureDaemonUnlocked(deps: DaemonLauncherDeps): Promise<DaemonInf
                   (deps.log ?? console.log)(
                     `[launcher] Daemon (PID ${existingPid}) finished recovery and answered — reusing, no kill`,
                   );
-                  return { pid: existingPid, authToken: token, pipeName, spawned: false };
+                  return { pid: existingPid, authToken: currentToken(), pipeName, spawned: false };
                 }
                 if (outcome === 'gone') {
                   // The marker was dropped: either the daemon just became ready
@@ -1527,7 +1559,7 @@ async function ensureDaemonUnlocked(deps: DaemonLauncherDeps): Promise<DaemonInf
                   // file, so a ping can lag it by a hair) or it died. One more
                   // escalated re-ping tells those apart before we escalate.
                   const readyNow = await tryEscalatedReping(
-                    (timeoutMs) => pingDaemon(pipeName, token, timeoutMs),
+                    pingCurrent,
                     [500, 1000],
                     200,
                     (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
@@ -1536,7 +1568,7 @@ async function ensureDaemonUnlocked(deps: DaemonLauncherDeps): Promise<DaemonInf
                     (deps.log ?? console.log)(
                       `[launcher] Daemon (PID ${existingPid}) became ready as its boot marker cleared — reusing, no kill`,
                     );
-                    return { pid: existingPid, authToken: token, pipeName, spawned: false };
+                    return { pid: existingPid, authToken: currentToken(), pipeName, spawned: false };
                   }
                 } else {
                   (deps.warn ?? console.warn)(
