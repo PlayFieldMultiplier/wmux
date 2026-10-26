@@ -1,5 +1,7 @@
 import { agentDisplayToSlug, type AgentSlug } from '../shared/agentIdentity';
 import type { ResumeBinding } from '../shared/agentResume';
+import { isUncOrDevicePath } from '../shared/cwdShape';
+import { isWslShell } from '../shared/wslTarget';
 import { screenShowsActiveDialog, screenShowsAgentDialog } from './transcript/chatScreenGate';
 import { transcriptTurnState } from './transcript/chatAgentStatus';
 import { fileTranscriptProvider } from './transcript/providers';
@@ -29,6 +31,26 @@ export function liveRecoveryHint<S, B>(
     return undefined;
   }
   return slug;
+}
+
+/**
+ * The binding a person-driven pane lists, marked `cwdMissing` when the folder
+ * its conversation ran in is gone (a removed worktree) while the transcript
+ * still exists. `--resume <id>` runs only from that folder, so the pane names
+ * the conversation and its folder instead of opening a picker that cannot list
+ * it. Read on a copy: the stored binding never carries the mark. Exec and
+ * supervised panes resume on their own and are not marked; a WSL pane's folder
+ * is in the distro and a network or device path is not probed, so neither is.
+ */
+export function markCwdMissing(
+  binding: ResumeBinding,
+  pane: { exec?: unknown; supervision?: unknown; wslTarget?: unknown; cmd?: string },
+  transcriptLives: (binding: ResumeBinding) => boolean,
+  folderExists: (dir: string) => boolean,
+): ResumeBinding {
+  if (pane.exec || pane.supervision || pane.wslTarget || isWslShell(pane.cmd)) return binding;
+  if (!binding.cwd || isUncOrDevicePath(binding.cwd) || folderExists(binding.cwd)) return binding;
+  return transcriptLives(binding) ? { ...binding, cwdMissing: true } : binding;
 }
 
 /** How recent a recovered pane's last output must be for its turn to be continued. */

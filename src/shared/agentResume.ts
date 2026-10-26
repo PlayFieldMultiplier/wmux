@@ -214,6 +214,12 @@ export interface ResumeBinding {
   transcriptPath?: string;
   /** Capture time (ms). Staleness is decided by existence-probe, not a TTL. */
   ts: number;
+  /**
+   * Set only on the copy the daemon lists for a person-driven pane: `cwd` no
+   * longer exists (a removed worktree) while the transcript does, so the exact
+   * `--resume` cannot run from anywhere until the folder is back. Never stored.
+   */
+  cwdMissing?: boolean;
 }
 
 /**

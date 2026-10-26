@@ -1052,6 +1052,10 @@ export const ko = {
   'resume.pickLabel': '{agent} 세션 고르기',
   'resume.pickTooltip': '이 창에서 이어갈 대화를 고릅니다',
   'resume.pickerNote': '이 창에 연결된 저장된 대화가 없어, 추측하지 않고 이 폴더의 세션 선택 화면을 엽니다. 다른 창이 같은 폴더를 쓰고 있을 수 있습니다. 거기서 대화를 고르세요. 권한 우회 플래그는 붙이지 않습니다.',
+  'resume.folderGone': '{agent} 대화 {id}는 {cwd}에 있었지만, 그 폴더는 이제 없습니다',
+  'resume.copyCommand': '이어가기 명령 복사',
+  'resume.copyCommandTooltip': '이 대화를 그대로 이어가는 명령을 복사합니다. 폴더가 다시 생기면(예: 워크트리를 다시 추가한 뒤) 실행할 수 있습니다. 대신 입력하거나 실행하지 않습니다.',
+  'resume.copiesLine': '복사할 명령: {command}',
 
   // Browser
   'browser.urlPlaceholder': 'URL 입력...',

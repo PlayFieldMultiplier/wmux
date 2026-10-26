@@ -43,7 +43,7 @@ import { ErrorBoundary } from '../ErrorBoundary';
 import { type ResumeBinding, agentSupportsPermissionFlag, defaultResumeSkipPermissions, normalizeResumeCwd, permissionFlagFor, resumeGrammarFor, resumePermissionFlag } from '../../../shared/agentResume';
 import { applyRoleBinding, type RoleBinding } from '../../../shared/orchestratorRole';
 import { CHATV2_PROVIDER_SESSION_ID } from '../../../shared/chatv2/ipc';
-import { ResumeInfoChipGate } from './ResumeInfoChip';
+import { ResumeInfoChipGate, lostFolderResumeCommand, lostFolderShell } from './ResumeInfoChip';
 import { tokenAttrs } from '../../themes';
 import PaneDecorations from '../../plugins/PaneDecorations';
 import { isRemoteMirrorVisible } from '../../stores/slices/remoteWorkspacesSlice';
@@ -959,6 +959,8 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
   // mode (defaultResumeSkipPermissions), computed at render because the
   // binding can land after the hint.
   const [resumeSkipOverride, setResumeSkipOverride] = useState<boolean | undefined>(undefined);
+  // The lost-folder Copy button's brief "Copied".
+  const [resumeCopied, setResumeCopied] = useState(false);
   // Never carry a stale stage/toggle across panes or a re-offer.
   useEffect(() => {
     setResumeStage(0);
@@ -1112,6 +1114,7 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
             pane.surfaces.find((s) => s.id === pane.activeSurfaceId)?.cwd,
             workspace.metadata?.cwd,
           ]}
+          shell={pane.surfaces.find((s) => s.id === pane.activeSurfaceId)?.shell}
         />
       )}
       {/* #645 — drop indicator. Drawn by the pane being hovered, not by the
@@ -1245,6 +1248,30 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
         const agentMatches = resumeBinding?.agent === launcher;
         const exactOk = cwdMatches && agentMatches;
         const sessionId = exactOk ? resumeBinding?.sessionId : undefined;
+        // The conversation's folder is gone (a removed worktree): the picker
+        // here cannot list it, so the row names it and offers its exact line
+        // to copy. Nothing is typed (it runs only once the folder is back).
+        const lostFolder = !exactOk && agentMatches && resumeBinding?.cwdMissing === true;
+        const lostCommand = lostFolder && resumeBinding
+          ? lostFolderResumeCommand(resumeBinding, lostFolderShell(
+            window.electronAPI.platform,
+            pane.surfaces.find((s) => s.id === pane.activeSurfaceId)?.shell,
+          ))
+          : null;
+        const lostNotice = lostFolder && resumeBinding
+          ? (id: string) => t('resume.folderGone', { agent: agentName, id, cwd: resumeBinding.cwd })
+          : null;
+        const onCopyLost = (e: React.MouseEvent) => {
+          e.stopPropagation();
+          if (!lostCommand) return;
+          void navigator.clipboard?.writeText(lostCommand).then(
+            () => {
+              setResumeCopied(true);
+              window.setTimeout(() => setResumeCopied(false), 1200);
+            },
+            () => { /* clipboard blocked — the tooltip still shows the line */ },
+          );
+        };
         // #1916: the skip toggle and the permission flag (see the helper).
         const { canSkip, skipChecked, forceSkip, permFlag } = resolveRecoveryPillPermissions({
           launcher,
@@ -1408,7 +1435,23 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
                 overflow: 'hidden',
               }}
             >
-            <button
+            {lostFolder ? lostCommand && (
+              <button
+                onClick={onCopyLost}
+                title={[t('resume.copyCommandTooltip'), t('resume.copiesLine', { command: lostCommand })].join('\n')}
+                aria-label={t('resume.copyCommand')}
+                style={{
+                  padding: '1px 6px',
+                  font: 'inherit',
+                  color: 'inherit',
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                }}
+              >
+                {resumeCopied ? `✓ ${t('common.copied')}` : `⧉ ${t('resume.copyCommand')}`}
+              </button>
+            ) : <button
               onClick={onPrimary}
               disabled={!resumePtyReady}
               title={primaryTooltip}
@@ -1424,7 +1467,7 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
               }}
             >
               {primaryLabel}
-            </button>
+            </button>}
             <button
               onClick={(e) => {
                 e.stopPropagation();
@@ -1449,7 +1492,7 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
                 cwd is visible before the click. A path, so mono, muted
                 metadata with no colour (DESIGN.md); it ellipsizes at the
                 START so the folder name stays visible, full path on hover. */}
-            {runCwd && (
+            {runCwd && !lostFolder && (
               <span
                 data-resume-cwd
                 title={t('resume.runsIn', { cwd: runCwd })}
@@ -1467,6 +1510,26 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
                 }}
               >
                 <bdi>{t('resume.inCwd', { cwd: runCwd })}</bdi>
+              </span>
+            )}
+            {/* The lost folder's notice, in place of the run folder: muted
+                metadata with no colour; the tooltip has the full UUID. */}
+            {lostNotice && resumeBinding && (
+              <span
+                data-resume-lost-folder
+                title={lostNotice(resumeBinding.sessionId)}
+                style={{
+                  flex: '0 1 auto',
+                  minWidth: 0,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  fontWeight: 400,
+                  letterSpacing: 0,
+                  color: 'var(--text-muted)',
+                }}
+              >
+                {lostNotice(resumeBinding.sessionId.slice(0, 8))}
               </span>
             )}
           </span>

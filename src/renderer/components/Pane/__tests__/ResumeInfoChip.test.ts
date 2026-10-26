@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { createElement } from 'react';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import ResumeInfoChip, { buildPaneResumeCommand } from '../ResumeInfoChip';
+import ResumeInfoChip, { buildPaneResumeCommand, lostFolderResumeCommand } from '../ResumeInfoChip';
 import type { ResumeBinding } from '../../../../shared/agentResume';
 
 // buildPaneResumeCommand — the per-pane resume affordance's command builder.
@@ -309,5 +309,23 @@ describe('buildPaneResumeCommand — no exact session opens the picker (#1946)',
     expect(src).toMatch(/built\.exact\s*\?\s*t\('resume\.label', \{ agent: agentName \}\)\s*:\s*t\('resume\.pickLabel', \{ agent: agentName \}\)/);
     expect(src).toContain("t('resume.pickerNote')");
     expect(src).toContain("title={built.exact ? t('resume.tooltip') : t('resume.pickTooltip')}");
+  });
+});
+
+// A conversation whose folder is gone: the copied line changes to that folder
+// first and resumes exactly that id, or there is no line at all.
+describe('lostFolderResumeCommand', () => {
+  const id = 'a1b2c3d4-0000-0000-0000-9f8e7d6c5b4a';
+  it('builds the cd-guarded exact line for each shell grammar', () => {
+    expect(lostFolderResumeCommand(claude({ cwd: '/repo/wt-gone' }), 'posix')).toBe(`cd -- '/repo/wt-gone' && claude --resume ${id}`);
+    expect(lostFolderResumeCommand(claude({ cwd: 'C:\\repo\\wt' }), 'pwsh'))
+      .toBe(`if (Set-Location -LiteralPath 'C:\\repo\\wt' -PassThru -ErrorAction SilentlyContinue) { claude --resume ${id} }`);
+  });
+
+  it('gives no line for an unusable folder, a bad id or a shell it is not written for', () => {
+    expect(lostFolderResumeCommand(claude({ cwd: "/repo/it's" }), 'posix')).toBeNull();
+    expect(lostFolderResumeCommand(claude({ cwd: 'relative/dir' }), 'posix')).toBeNull();
+    expect(lostFolderResumeCommand(claude({ cwd: '/repo/wt', sessionId: 'not-a-uuid' }), 'posix')).toBeNull();
+    expect(lostFolderResumeCommand(claude({ cwd: '/repo/wt' }), null)).toBeNull(); // e.g. cmd.exe
   });
 });

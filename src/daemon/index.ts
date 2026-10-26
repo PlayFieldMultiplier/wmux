@@ -159,7 +159,7 @@ import { isTaskState, type AgentStatus, type Message, type Task } from '../share
 import { ProcessMonitor } from './ProcessMonitor';
 import { AgentProcessTracker } from './AgentProcessTracker';
 import { CustomAgentNames } from './customAgentNames';
-import { liveRecoveryHint, namedAgentAlive, recordedTurnStillOpen, recordWasMidTurn, screenShowsLiveAgent, sightedRecoveredAgent } from './recoveryHint';
+import { liveRecoveryHint, markCwdMissing, namedAgentAlive, recordedTurnStillOpen, recordWasMidTurn, screenShowsLiveAgent, sightedRecoveredAgent } from './recoveryHint';
 import { checkWslAgentRunning, reportedAgentForPane, stopWslAgent, WslPidWatcher } from './wslAgentProcess';
 import { GateFlagFile } from './gateFlagFile';
 import { WSL_GATE_FLAG_FILE } from '../shared/wslIntegration';
@@ -1429,7 +1429,10 @@ function resumeLaunchCommand(
   if (!session.exec) return undefined;
   const phoneResume = codexRelayResumeCommand({...session,env:session.env ?? {}});
   if (phoneResume !== undefined) return phoneResume;
-  if (!isWslShell(session.cmd) && !fs.existsSync(session.cwd)) return undefined; // cwd gone → fresh, not wrong-target resume
+  if (!isWslShell(session.cmd) && !fs.existsSync(session.cwd)) { // cwd gone → fresh, not wrong-target resume
+    log('info', `[resume] ${session.id}: folder ${session.cwd} no longer exists; starting fresh, not resuming${session.resumeBinding ? ` ${session.resumeBinding.agent} conversation ${session.resumeBinding.sessionId}` : ''}`);
+    return undefined;
+  }
   // Prefer the persisted binding; fall back to a spool-captured one (the live
   // capture RPC failed, so the exact id only survived in the spool) so an exec
   // agent pane replays as `--resume <id>` instead of an ambiguous `--continue`.
@@ -3445,7 +3448,11 @@ function registerRpcHandlers(
       const withAlive = managedForPrompt?.recoveredAgentUnconfirmed === true && agentProcessAlive !== true
         ? { ...withAlive0, recoveredAgentUnconfirmed: true as const }
         : withAlive0;
-      return surfacedBinding ? { ...withAlive, resumeBinding: surfacedBinding } : withAlive;
+      // A person-driven pane whose conversation folder is gone says so, instead
+      // of the picker in a folder that cannot list that conversation.
+      return surfacedBinding
+        ? { ...withAlive, resumeBinding: markCwdMissing(surfacedBinding, s, bindingTranscriptLives, fs.existsSync) }
+        : withAlive;
     });
 
     // Fix B: when includeSuspended is requested, append cap-skipped suspended
