@@ -32,6 +32,7 @@ registerFactoryRpcModule('approvals', (router, deps: FactoryHostDeps) => {
       ]);
       const { getSkillApprovalHost } = await import('../pipe/handlers/skill.rpc');
       const { getOwnerProfileApprovalHost } = await import('../pipe/handlers/memory.rpc');
+      const { getRoutineApprovalHost } = await import('../pipe/handlers/routine.rpc');
       const { noticeBot } = await import('./botNotices');
       const { getApprovalActHost } = await import('./actHost');
       let service: ApprovalService;
@@ -71,6 +72,7 @@ registerFactoryRpcModule('approvals', (router, deps: FactoryHostDeps) => {
           },
           skills: getSkillApprovalHost,
           ownerProfile: getOwnerProfileApprovalHost,
+          routines: getRoutineApprovalHost,
           acts: getApprovalActHost,
         });
       } catch (err) {

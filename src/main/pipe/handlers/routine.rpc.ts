@@ -9,6 +9,14 @@
 //                   instruction the owner gave. Never from a conversation
 //                   that took in outside text (conversationMarks.ts): the
 //                   owner's words in it do not make what it read clean.
+//                   There, a new routine the owner's own message asked for
+//                   (their stored card, factory/ownerAsked.ts) becomes a
+//                   `routine` approval card showing it whole instead, and
+//                   their Approve on it saves it (approvals.ts
+//                   proposeOwnerAsked); never from a turn started from
+//                   outside text or a conversation holding a signed-in
+//                   task's data, never a change to a routine, never in a
+//                   thread other than the bot's 1:1 or the message's.
 //                   Idempotent by clientRoutineId
 //                   (default `wake:<wakeId>:r<n>` from the running wake).
 //   routine.list    a bot: its own; the operator: one bot's (botId) or all.
@@ -27,11 +35,14 @@
 // bots" switch.
 
 import path from 'node:path';
-import { BOT_EVENT, BOT_RPC, type BotEventPayload } from '../../../shared/bot';
+import { BOT_EVENT, BOT_RPC, type BotBinding, type BotEventPayload } from '../../../shared/bot';
 import { ROUTINE_RPC, ROUTINE_LIMITS, type RoutineSetParams } from '../../../shared/botRoutine';
+import { GENERAL_THREAD, dmThreadId, parseThreadId } from '../../../shared/room';
 import type { RpcContext } from '../../../shared/rpc';
 import { registerFactoryRpcModule, type FactoryHostDeps, type FactoryRouter } from '../../factory/factoryHost';
-import { TAINTED_CONVERSATION_SAVES_NOTHING, conversationTainted } from '../../factory/conversationMarks';
+import { TAINTED_CONVERSATION_SAVES_NOTHING, conversationSignedIn, conversationTainted } from '../../factory/conversationMarks';
+import { getApprovalService, type ApprovalRoutineHost, type ApprovalService } from '../../factory/approvals';
+import { runningOwnerCardProof, type OwnerCardProof } from '../../factory/ownerAsked';
 import { RoutineStore, getRoutineStore, routinesPath, scheduleLabel, setRoutineStore } from '../../factory/routines';
 import { getBotDirectory } from '../../factory/botStore';
 import { getWakeQueue, currentWakeItem } from '../../factory/wakeQueue';
@@ -40,7 +51,7 @@ import { getRoomWriter, resolveRoomPorts, runningWake, wakeOrdinals, wakeReplyTo
 import { getFactorySettings, onFactorySettingsChanged } from '../../factory/factorySettings';
 import { setBotRuntimePorts, type BotLifecycleEvent } from '../../factory/BotRuntime';
 import { summarizeHandoff } from '../../factory/handoffRouter';
-import { GUEST_TURN_STARTS_NO_WORKERS, guestOfRunningWake, type GuestProvenance } from '../../factory/wakeTaint';
+import { GUEST_TURN_STARTS_NO_WORKERS, guestOfRunningWake, runningWakeTainted, type GuestProvenance } from '../../factory/wakeTaint';
 import { getFactoryStopPorts, stopFactoryWork } from '../../factory/factoryStop';
 
 type Refusal = { ok: false; code: 'not_authorized' | 'not_started' | 'invalid_argument'; message: string };
@@ -54,6 +65,15 @@ function obj(raw: unknown): Record<string, unknown> {
 }
 
 const NOT_STARTED = refuse('not_started', 'routines are not running yet');
+
+/** What a bot hears when its routine waits on the owner's card. */
+export const ROUTINE_PENDING = 'Waiting for the owner: this conversation has read outside text, so the routine is on an approval card that shows it whole, and only their Approve saves it. Tell them it is there.';
+
+/** Why a routine is not changed from a conversation that took in outside text. */
+export const ROUTINE_CHANGE_REFUSED = 'this conversation has taken in outside text, so it changes no routine, even on the owner\'s words (it may only propose a new one for the owner to approve); ask the owner to start a new conversation with you (New conversation, on your profile in the Bots page) and to ask for it again there';
+
+/** Why a routine from such a conversation does not run in that thread. */
+export const ROUTINE_THREAD_REFUSED = 'a routine proposed from a conversation that has read outside text runs in your 1:1 or in the thread the owner asked in; leave thread_id out or name one of those';
 
 /** The running turn of a bot is on the owner's words: their message, or an
  *  answer to the bot's question (not one closed without an answer). Never
@@ -80,6 +100,15 @@ export interface RoutineHandlerDeps {
   /** Whether the bot's live conversation took in outside text (none: yes).
    *  Default: conversationMarks.ts. */
   conversationTainted?: (botId: string) => boolean;
+  /** Whether the bot's live conversation holds a signed-in task's data
+   *  (none: yes). Default: conversationMarks.ts. */
+  conversationSignedIn?: (botId: string) => boolean;
+  /** Whether the bot's running wake is tainted (unknown: yes). Default: wakeTaint.ts. */
+  wakeTainted?: (botId: string) => boolean;
+  /** The owner's card the running wake is on, or null. Default: ownerAsked.ts. */
+  ownerCard?: (botId: string) => OwnerCardProof | null;
+  /** The approval store. Default: getApprovalService. */
+  approvals?: () => Pick<ApprovalService, 'proposeOwnerAsked'> | null;
   /** The default idempotency key of a routine set in the running turn. */
   defaultKey?: (botId: string) => string | undefined;
   stop?: (botId: string) => Promise<{ ok: boolean; workersStopped: number; gatesCancelled: number; routinesPaused?: number; code?: string; message?: string }>;
@@ -97,10 +126,11 @@ export function registerRoutineHandlers(router: Pick<FactoryRouter, 'register'>,
     // The owner's answer to a guest-sourced question is guest-sourced too:
     // a routine runs later as clean work, so none is saved from it.
     if ((deps.guestWake ?? guestOfRunningWake)(bot.botId) !== false) return refuse('not_authorized', GUEST_TURN_STARTS_NO_WORKERS);
-    // A routine runs later as clean work: none is saved from a conversation
-    // that took in outside text, whatever the owner answered in it.
-    if ((deps.conversationTainted ?? conversationTainted)(bot.botId) !== false) return refuse('not_authorized', TAINTED_CONVERSATION_SAVES_NOTHING);
     const p = obj(raw) as Partial<RoutineSetParams>;
+    // A routine runs later as clean work: none is saved from a conversation
+    // that took in outside text, whatever the owner answered in it, but the
+    // owner's own message there may have it proposed on their card.
+    if ((deps.conversationTainted ?? conversationTainted)(bot.botId) !== false) return proposeRoutine(bot, store, p, deps);
     const key = p.clientRoutineId ?? deps.defaultKey?.(bot.botId);
     return store.set({ botId: bot.botId, workspaceId: bot.workspaceId }, { ...(p as RoutineSetParams), ...(key ? { clientRoutineId: key } : {}) });
   });
@@ -137,6 +167,55 @@ export function registerRoutineHandlers(router: Pick<FactoryRouter, 'register'>,
     if (!store) return NOT_STARTED;
     return { ok: true, workersStopped: 0, gatesCancelled: 0, routinesPaused: store.pauseFor(botId, 'stop') };
   });
+}
+
+/** routine.set from a conversation that took in outside text: a new
+ *  routine the owner's own card asked for goes to their approval card;
+ *  anything else is refused as before. Fails closed. */
+function proposeRoutine(bot: BotBinding, store: RoutineStore, p: Partial<RoutineSetParams>, deps: RoutineHandlerDeps): unknown {
+  const refused = refuse('not_authorized', TAINTED_CONVERSATION_SAVES_NOTHING);
+  try {
+    // Before any card: a turn started from outside text, and a conversation
+    // holding what a signed-in task read (a prompt could carry it out), or
+    // none at all, save nothing.
+    if ((deps.wakeTainted ?? runningWakeTainted)(bot.botId) !== false) return refused;
+    if ((deps.conversationSignedIn ?? conversationSignedIn)(bot.botId) !== false) return refused;
+    const proof = (deps.ownerCard ?? runningOwnerCardProof)(bot.botId);
+    if (!proof) return refused;
+    // Rewriting a routine the owner already trusts is not proposed.
+    if (p.routineId !== undefined) return refuse('not_authorized', ROUTINE_CHANGE_REFUSED);
+    const thread = p.threadId === undefined ? GENERAL_THREAD : parseThreadId(p.threadId);
+    if (thread !== null && thread !== dmThreadId(bot.botId) && thread !== proof.threadId) return refuse('not_authorized', ROUTINE_THREAD_REFUSED);
+    const checked = store.check(bot, p as RoutineSetParams);
+    if (!checked.ok) return checked;
+    const service = (deps.approvals ?? getApprovalService)();
+    if (!service) return refuse('not_started', 'approvals are not running yet, so this routine cannot be put to the owner; ask again later');
+    const asked = service.proposeOwnerAsked(bot, { action: 'routine', routine: checked.fields }, proof);
+    if (!asked.ok) return { ok: false, code: asked.code === 'invalid' ? 'invalid_argument' : asked.code === 'too_many' || asked.code === 'not_started' ? asked.code : 'not_authorized', message: asked.message };
+    return { ok: true, pending: true, approvalId: asked.request.requestId, message: ROUTINE_PENDING };
+  } catch {
+    return refused;
+  }
+}
+
+/** What a `routine` request's Approve does: the routine on the card, saved
+ *  through routine.set's checks as of now, keyed by the request so it is
+ *  saved once. */
+export function routineApprovalHost(store: () => RoutineStore | null): ApprovalRoutineHost {
+  return {
+    approve(r) {
+      const s = store();
+      if (!s) return 'routines are not running';
+      if (!r.routine) return 'the request names no routine';
+      const res = s.set({ botId: r.botId, workspaceId: r.workspaceId }, { ...r.routine, clientRoutineId: `approval:${r.requestId}` });
+      return res.ok ? null : res.message;
+    },
+  };
+}
+
+/** The approval store's `routine` host, once the module started. */
+export function getRoutineApprovalHost(): ApprovalRoutineHost | null {
+  return getRoutineStore() ? routineApprovalHost(getRoutineStore) : null;
 }
 
 /** The interval floor: ROUTINE_LIMITS.MIN_INTERVAL_MS, or, on an isolated

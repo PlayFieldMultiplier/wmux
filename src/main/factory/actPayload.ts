@@ -46,7 +46,7 @@ export function normalizeActText(text: string): string {
 
 /** C0/C1 controls but \n and \t, bidi controls, zero-width characters. */
 // eslint-disable-next-line no-control-regex
-const UNSHOWABLE =/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/u;
+export const UNSHOWABLE =/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/u;
 
 /** Why a normalised text cannot be shown and posted as the same bytes, or
  *  null. `redact` is the room's redaction (stored secrets). Pure. */
