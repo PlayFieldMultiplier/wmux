@@ -11,6 +11,10 @@ function fetchFrom(reply: Reply) {
   return vi.fn((path: string, init: RequestInit) => reply(path, init)) as unknown as typeof fetch & ReturnType<typeof vi.fn>;
 }
 
+const credential = { kind: 'operator', token: 't' } as const;
+// A sign-in proxy's 302 to its provider, as `redirect: 'manual'` sees it.
+const opaqueRedirect = () => ({ type: 'opaqueredirect', status: 0, ok: false }) as Response;
+
 const flush = async () => { for (let i = 0; i < 5; i++) await Promise.resolve(); };
 
 describe('startWebSync', () => {
@@ -26,7 +30,7 @@ describe('startWebSync', () => {
       if (path === '/api/sessions' && failSessions) return new Response('', { status: 503 });
       return new Response(path === '/api/workspaces' ? ws : sess, { status: 200 });
     });
-    const stop = startWebSync({ token: 't', fetchImpl, intervalMs: 100, onUnauthorized: () => undefined });
+    const stop = startWebSync({ credential, fetchImpl, intervalMs: 100, onUnauthorized: () => undefined });
     await vi.advanceTimersByTimeAsync(10);
     const title = () => (useStore.getState().workspaces[0]?.rootPane as { surfaces: { title: string }[] }).surfaces[0].title;
     expect(title()).toBe('first');
@@ -41,12 +45,33 @@ describe('startWebSync', () => {
     for (const status of [401, 403]) {
       const onUnauthorized = vi.fn();
       const fetchImpl = fetchFrom(async () => new Response('', { status }));
-      startWebSync({ token: 't', fetchImpl, intervalMs: 100, onUnauthorized });
+      startWebSync({ credential, fetchImpl, intervalMs: 100, onUnauthorized });
       await vi.advanceTimersByTimeAsync(500);
       expect(onUnauthorized).toHaveBeenCalledTimes(1);
       // The two GETs run one after the other; a refusal ends the poll at the first.
       expect(fetchImpl.mock.calls.length).toBe(1);
     }
+  });
+
+  it('a sign-in proxy session sends no credential and does not follow redirects', async () => {
+    const fetchImpl = fetchFrom(async (path) => new Response(path === '/api/workspaces' ? ws : sess, { status: 200 }));
+    const stop = startWebSync({ credential: { kind: 'proxy' }, fetchImpl, intervalMs: 100, onUnauthorized: () => undefined });
+    await vi.advanceTimersByTimeAsync(10);
+    expect(fetchImpl.mock.calls.map(([path]) => path)).toEqual(['/api/workspaces', '/api/sessions']);
+    for (const [, init] of fetchImpl.mock.calls as Array<[string, RequestInit]>) {
+      expect(new Headers(init.headers).has('Authorization')).toBe(false);
+      expect(init.redirect).toBe('manual');
+    }
+    stop();
+  });
+
+  it('a sign-in that ended (a redirect to the provider) stops polling and hands over once', async () => {
+    const onUnauthorized = vi.fn();
+    const fetchImpl = fetchFrom(async () => opaqueRedirect());
+    startWebSync({ credential: { kind: 'proxy' }, fetchImpl, intervalMs: 100, onUnauthorized });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(onUnauthorized).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls.length).toBe(1);
   });
 
   it('aborts a request that hangs (body included) and keeps polling', async () => {
@@ -58,7 +83,7 @@ describe('startWebSync', () => {
       });
     });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    const stop = startWebSync({ token: 't', fetchImpl, intervalMs: 100, timeoutMs: 1000, onUnauthorized: () => undefined });
+    const stop = startWebSync({ credential, fetchImpl, intervalMs: 100, timeoutMs: 1000, onUnauthorized: () => undefined });
     await vi.advanceTimersByTimeAsync(1050);
     expect(signals[0].aborted).toBe(true);
     await vi.advanceTimersByTimeAsync(150);
