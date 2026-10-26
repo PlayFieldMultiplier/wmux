@@ -22,6 +22,7 @@ const ATTENTION_TOAST_KIND: Record<AutomationAttentionKind, AutomationToastKind>
   proposed: 'proposed',
   'grant-raised': 'grantRaised',
   'needs-regrant': 'needsRegrant',
+  'failure-paused': 'failurePaused',
 };
 
 function isAttentionKind(kind: unknown): kind is AutomationAttentionKind {

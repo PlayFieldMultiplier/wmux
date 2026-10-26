@@ -130,6 +130,11 @@ export interface Automation {
   createdAt: number;
   updatedAt: number;
   createdBy: 'desktop-ui' | 'mcp-proposal';
+  /**
+   * Daemon-written only, never read from a draft. Consecutive scheduled runs
+   * that failed with one reason; see isBreakerPaused.
+   */
+  failureStreak?: AutomationFailureStreak;
 }
 
 export type AutomationRunState =
@@ -208,6 +213,33 @@ export interface AutomationRun {
   browserProfileUnbound?: true;
 }
 
+/**
+ * The ends of a launched run that count toward the failure breaker. Every other
+ * end is neutral: a person cancelled it, it never launched (skipped), or the
+ * daemon cannot tell what happened (unknown).
+ */
+export const AUTOMATION_FAILURE_REASONS = [
+  'first_run_blocked',
+  'launch_failed',
+  'account_missing',
+  'await_timeout',
+  'timeout',
+  'agent_error',
+  'login_needed',
+  'process_exit',
+] as const satisfies readonly AutomationRunReason[];
+export type AutomationFailureReason = (typeof AUTOMATION_FAILURE_REASONS)[number];
+
+export function isFailureReason(reason: unknown): reason is AutomationFailureReason {
+  return (AUTOMATION_FAILURE_REASONS as readonly unknown[]).includes(reason);
+}
+
+export interface AutomationFailureStreak {
+  reason: AutomationFailureReason;
+  /** 1..AUTOMATION_DEFAULTS.failureBreakerRuns */
+  count: number;
+}
+
 /** Terminal states — a run never leaves these. */
 export const AUTOMATION_FINAL_RUN_STATES: readonly AutomationRunState[] = [
   'completed',
@@ -229,7 +261,18 @@ export const AUTOMATION_DEFAULTS = {
   snapshotMaxBytes: 64 * 1024,
   maxAutomations: 50,
   maxPromptChars: 8000,
+  /** Consecutive same-reason scheduled failures that turn a schedule off. */
+  failureBreakerRuns: 3,
 } as const;
+
+/**
+ * The breaker turned this schedule off and nobody has turned it back on: any
+ * human toggle deletes the streak, so a full streak on a schedule that is off
+ * can only be the breaker's.
+ */
+export function isBreakerPaused(a: Pick<Automation, 'enabled' | 'failureStreak'>): boolean {
+  return !a.enabled && (a.failureStreak?.count ?? 0) >= AUTOMATION_DEFAULTS.failureBreakerRuns;
+}
 
 /** Daemon PTY ids for scheduled runs carry this prefix (UX filtering only — not a trust signal). */
 export const AUTOMATION_PTY_PREFIX = 'auto-';
@@ -304,8 +347,9 @@ export interface AutomationNoteRunBrowserParams {
 /**
  * `needs-regrant`: an update changed what runs after a non-approval grant, so
  * the schedule is skipped until a human grants it again.
+ * `failure-paused`: the failure breaker turned the schedule off.
  */
-export type AutomationAttentionKind = 'proposed' | 'grant-raised' | 'needs-regrant';
+export type AutomationAttentionKind = 'proposed' | 'grant-raised' | 'needs-regrant' | 'failure-paused';
 
 /**
  * A queued `attention` event. The daemon keeps these until a first-party
@@ -318,6 +362,8 @@ export interface AutomationAttention {
   automationName: string;
   kind: AutomationAttentionKind;
   at: number;
+  /** Set only for `failure-paused`: the reason the streak shared. */
+  reason?: AutomationFailureReason;
 }
 
 export interface AutomationListResult {

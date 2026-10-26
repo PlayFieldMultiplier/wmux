@@ -110,6 +110,41 @@ describe('store', () => {
     expect(state.attention.map((x) => x.kind)).toEqual(['needs-regrant']);
   });
 
+  it('keeps a valid failure streak, drops a malformed one and keeps the schedule', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-auto-'));
+    const at = (id: string, failureStreak: unknown) => ({ ...draft, id, enabled: false, revision: 1, createdAt: 1, failureStreak });
+    fs.writeFileSync(path.join(dir, AUTOMATIONS_FILE), JSON.stringify({
+      version: 1,
+      automations: [
+        at('a1', { reason: 'login_needed', count: 3 }),
+        at('a2', { reason: 'login_needed', count: 9 }),
+        at('a3', { reason: 'cancelled', count: 2 }),
+        at('a4', { reason: 'bogus', count: 2 }),
+        at('a5', { reason: 'agent_error', count: 0 }),
+        at('a6', { reason: 'agent_error', count: 1.5 }),
+      ],
+      attention: [
+        { id: 'x1', automationId: 'a1', automationName: 'n', kind: 'failure-paused', reason: 'login_needed', at: 1 },
+        { id: 'x2', automationId: 'a1', automationName: 'n', kind: 'failure-paused', reason: 'cancelled', at: 2 },
+        { id: 'x3', automationId: 'a1', automationName: 'n', kind: 'grant-raised', reason: 'login_needed', at: 3 },
+      ],
+    }));
+    const state = loadAutomations(dir);
+    expect(state.automations.map((a) => [a.id, a.failureStreak])).toEqual([
+      ['a1', { reason: 'login_needed', count: 3 }],
+      ['a2', { reason: 'login_needed', count: 3 }],
+      ['a3', undefined],
+      ['a4', undefined],
+      ['a5', undefined],
+      ['a6', undefined],
+    ]);
+    expect(state.attention.map((x) => [x.kind, x.reason])).toEqual([
+      ['failure-paused', 'login_needed'],
+      ['failure-paused', undefined],
+      ['grant-raised', undefined],
+    ]);
+  });
+
   it('a needs_regrant skip survives coerceRun', () => {
     expect(coerceRun({
       id: 'r1', automationId: 'a1', revision: 2, effectiveMode: 'auto', scheduledFor: 1, state: 'skipped', reason: 'needs_regrant',
@@ -213,5 +248,25 @@ describe('browser identity on disk', () => {
     expect(disk.permission.grantedRevision).toBeUndefined();
     const [back] = loadAutomations(dir).automations;
     expect(back).toMatchObject({ enabled: true, permission: { mode: 'bypass', grantedRevision: 2 }, action: { browserIdentity: identity } });
+  });
+
+  it('an identity schedule the breaker paused stays off for an older daemon and keeps its streak', async () => {
+    const { saveAutomations: save } = await import('../store');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-store-disk-'));
+    const identity = { workspaceId: 'ws-1', paneId: 'pane-a', boundRevision: 2 };
+    const a = {
+      id: 'a1', name: 'N', enabled: false, revision: 2, createdAt: 1, updatedAt: 1, createdBy: 'desktop-ui' as const, nextRunAt: null,
+      trigger: { kind: 'schedule' as const, weekdays: [1], time: '08:30', graceMinutes: 60 },
+      action: { kind: 'launch' as const, cwd: '/w', agent: 'claude' as const, prompt: 'p', browserIdentity: identity },
+      permission: { mode: 'approval' as const, grantedRevision: 2 },
+      policy: { overlap: 'skip_if_active' as const },
+      failureStreak: { reason: 'timeout' as const, count: 3 },
+    };
+    await save(dir, { version: 1, automations: [a], attention: [] } as never);
+    const disk = JSON.parse(fs.readFileSync(path.join(dir, AUTOMATIONS_FILE), 'utf8')).automations[0];
+    expect(disk.enabled).toBe(false);
+    expect(disk.identityEnabled).toBe(false);
+    const [back] = loadAutomations(dir).automations;
+    expect(back).toMatchObject({ enabled: false, failureStreak: { reason: 'timeout', count: 3 } });
   });
 });
