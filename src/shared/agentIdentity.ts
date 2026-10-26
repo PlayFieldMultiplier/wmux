@@ -627,6 +627,7 @@ export const AGENT_IDENTITIES = [
     display: 'Kimi Code CLI',
     resume: { picker: '--session', idFormat: 'picker-only' },
     process: { packages: ['@moonshot-ai/kimi-code'] },
+    detect: 'screen',
     setup: {
       binary: 'kimi',
       // install.sh / install.ps1: KIMI_INSTALL_DIR defaults to ~/.kimi-code

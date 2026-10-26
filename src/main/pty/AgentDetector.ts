@@ -13,7 +13,7 @@ import { CodexUsageLimitLineScanner } from '../../shared/usageLimit';
 import type { AgentStatus } from '../../shared/types';
 import type { AgentSlug } from '../../shared/agentIdentity';
 import type { ApprovalScreenSnapshot } from '../../shared/approvalScreen';
-import { agyScreenApproval, claudeScreenApproval, codexScreenApproval, openCodeScreenApproval, piScreenApproval, type ScreenApproval } from './approvalScreen';
+import { agyScreenApproval, claudeScreenApproval, codexScreenApproval, kimiScreenApproval, openCodeScreenApproval, piScreenApproval, type ScreenApproval } from './approvalScreen';
 export type { AgentSlug };
 export { agentDisplayToSlug } from '../../shared/agentIdentity';
 
@@ -139,6 +139,13 @@ interface AgentPattern {
    * first on this agent's own screen.
    */
   takesOverFrom?: readonly AgentSlug[];
+  /**
+   * The agent writes OSC 133 prompt marks of its own around its transcript
+   * (Kimi Code CLI 2.3.2: A, B and C, never D). While it owns the pane they
+   * are its output, not a shell prompt or a launch; a D (command end), which
+   * the shell writes when the agent exits, still is.
+   */
+  emitsPromptMarks?: true;
   /** Strict live-grid recovery, used only after a fresh external identity. */
   approvalScreen?: (rows: readonly string[]) => ScreenApproval | null;
   /**
@@ -581,6 +588,35 @@ const AGENT_PATTERNS: AgentPattern[] = [
     patterns: [],
   },
 
+  // ── Kimi Code CLI ─────────────────────────────────────────────────────────
+  // Live capture 2026-10-26, @moonshot-ai/kimi-code 2.3.2 on macOS (120x40,
+  // loopback fake model; __tests__/fixtures/kimi-2.3.2-capture.json). Kimi
+  // draws inline, each row ended by CR/LF. Identity is its welcome banner row;
+  // its window title is the session's first prompt. Its folder trust question,
+  // `Trust this folder?`, uses Codex's words, so Codex's chrome can take the
+  // pane first: the banner that follows takes it back. That question comes
+  // before the banner, so it is read only from the grid once process identity
+  // has seeded the profile. A tool run asks first in the default permission
+  // mode (`manual`).
+  {
+    agent: 'Kimi Code CLI',
+    slug: 'kimi',
+    approvalScreen: kimiScreenApproval,
+    // The trust question, then its two choice rows (the selected one marked).
+    approvalReady: { question: /Trust\s*this\s*folder\?/, end: /Trust\s*and\s*continue\s*(?:❯\s*)?Exit/ },
+    gate: /Welcome\s*to\s*Kimi\s*Code!/,
+    chrome: isKimiChrome,
+    completeChromeRow: true,
+    emitsPromptMarks: true,
+    takesOverFrom: ['codex'],
+    patterns: [
+      // Only the word after the spinner, so its frames do not re-emit.
+      { regex: /(?<=^[⠀-⣿]\s*)Working…/,                                status: 'running',        message: 'Working' },
+      // The choice dialog's key row, its last: a tool-run question in the capture.
+      { regex: /^↑\/↓ select · (?:\d\/)+\d choose · ↵ confirm$/,       status: 'awaiting_input', message: 'Approval requested' },
+    ],
+  },
+
   // ── GitHub Copilot CLI ────────────────────────────────────────────────────
   {
     agent: 'GitHub Copilot CLI',
@@ -1015,6 +1051,17 @@ function isOpenCodeChrome(line: string): boolean {
  * bound. Both OSC title selectors and terminators are accepted; an unfinished
  * OSC or the same words as visible text are not evidence.
  */
+/**
+ * Kimi Code CLI's welcome banner row (2.3.2 live capture), `│ <logo>  Welcome
+ * to Kimi Code! │`: the row's whole visible text once its frame and logo
+ * glyphs are stripped. The same words inside a sentence or source are not it.
+ */
+function isKimiChrome(line: string): boolean {
+  const stripped = stripAnsi(line);
+  if (SOURCE_LINE_RE.test(stripped)) return false;
+  return /^(?:[\u2580-\u259f]\s*)*Welcome to Kimi Code!$/.test(visibleChrome(stripped));
+}
+
 function isPiChrome(line: string): boolean {
   // eslint-disable-next-line no-control-regex
   return /\x1b\][02];π - [^\x07\x1b\r\n]*(?:\x07|\x1b\\)/.test(line);
@@ -1411,12 +1458,15 @@ export class AgentDetector {
     let start = 0;
     for (let match = boundary.exec(text); match; match = boundary.exec(text)) {
       this.feedOutput(text.slice(start, match.index));
+      start = match.index + match[0].length;
       const kind = match[1];
+      // An owner that writes prompt marks of its own (emitsPromptMarks) is
+      // still in charge: only D (command end) is the shell's.
+      if (kind !== 'D' && this.ownerEmitsPromptMarks()) continue;
       if (kind !== 'C') this.noteShellReturn();
       // The foreground program changed hands here: a launch starts (C) or the
       // shell has the terminal back (D).
       if (this.launchBoundaries && kind !== 'A') this.clearTrustedIdentity();
-      start = match.index + match[0].length;
     }
     const rest = text.slice(start);
     const oscAt = rest.lastIndexOf('\u001b]');
@@ -1440,6 +1490,14 @@ export class AgentDetector {
     const requested = this.approvalRecheckRequested;
     this.approvalRecheckRequested = false;
     return requested;
+  }
+
+  private ownerEmitsPromptMarks(): boolean {
+    if (this.shellPromptSinceOwner) return false;
+    const owner = this.trustedAgent !== null
+      ? PROFILE_BY_SLUG.get(this.trustedAgent)
+      : AGENT_PATTERNS.find((ap) => ap.agent === this.lastAgent);
+    return owner?.emitsPromptMarks === true;
   }
 
   private noteShellReturn(): void {
@@ -1474,7 +1532,7 @@ export class AgentDetector {
     const previousLength = stripAnsi(this.approvalHintTail).length;
     const probe = this.approvalHintTail + data;
     const cleanProbe = stripAnsi(probe);
-    const hint = /Do\s*you\s*(?:want|trust)|Would\s*you\s*like|Allow\s*tool\s*use|Permission\s*required|Trust\s*project\s*folder/g;
+    const hint = /Do\s*you\s*(?:want|trust)|Would\s*you\s*like|Allow\s*tool\s*use|Permission\s*required|Trust\s*project\s*folder|Trust\s*this\s*folder/g;
     for (const match of cleanProbe.matchAll(hint)) {
       // Only newly drawn text refreshes freshness. Retaining an old question
       // in the tail across a title update must not make it recent again.

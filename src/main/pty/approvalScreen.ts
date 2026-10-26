@@ -97,6 +97,23 @@ export function piScreenApproval(rows: readonly string[]): ScreenApproval | null
   return text ? { text, message: 'Project trust prompt' } : null;
 }
 
+/**
+ * Kimi Code CLI 2.3.2 folder-trust question (live capture): its key row right
+ * under the question, then the two choices, one marked `❯`, last.
+ */
+export function kimiScreenApproval(rows: readonly string[]): ScreenApproval | null {
+  const tail = rowsAtBottom(rows).filter((row) => !/^─+$/.test(row));
+  const q = tail.lastIndexOf('Trust this folder?');
+  if (q < 0 || !/^↑↓ navigate · Enter select · Esc exit$/.test(tail[q + 1] ?? '')) return null;
+  const option = /^(?:❯\s+)?(?:Trust and continue|Exit)$/;
+  const first = tail.findIndex((row, i) => i > q + 1 && option.test(row));
+  if (first < 0) return null;
+  const choices = tail.slice(first);
+  if (!choices.every((row) => option.test(row)) || choices.filter((row) => row.startsWith('❯')).length !== 1) return null;
+  if (!choices.some((row) => row.endsWith('Trust and continue')) || !choices.some((row) => row.endsWith('Exit'))) return null;
+  return { text: 'Trust this folder?', message: 'Folder trust prompt' };
+}
+
 /** Codex 0.157.1 command/edit fixtures: numbered choices and a final key hint. */
 export function codexScreenApproval(rows: readonly string[]): ScreenApproval | null {
   const text = choiceDialog(rows, /^Would you like to (?:run the following command|make the following edits)\?$/,

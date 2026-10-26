@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { AgentDetector, CRITICAL_REPEAT_WINDOW_MS, CRITICAL_SEEN_MAX } from '../AgentDetector';
 import { hasElevatedRisk } from '../../../shared/criticalPatterns';
 import piCapture from './fixtures/pi-1.4.0-capture.json';
+import kimiCapture from './fixtures/kimi-2.3.2-capture.json';
 
 describe('AgentDetector', () => {
   // Helper: feed both banner AND prompt to open the Claude compound gate (#850).
@@ -702,6 +703,7 @@ describe('AgentDetector', () => {
       'Welcome to GitHub Copilot CLI! is the welcome message\n',
       'Do you trust the contents of this project?\n',
       'π - proj\n',
+      'Welcome to Kimi Code! is the first thing it prints\n',
     ];
 
     it.each(mentions)('does not start an agent from shell output, at any split: %j', (output) => {
@@ -740,6 +742,8 @@ describe('AgentDetector', () => {
       ['Pi', '\u001b]2;π - fix tests - proj\u001b\\'],
       // At `/` or a drive root the basename is empty.
       ['Pi', '\u001b]0;π - \u0007'],
+      // Kimi Code CLI 2.3.2 live capture: the banner row, logo glyphs before it.
+      ['Kimi Code CLI', ' │  ▐█▛█▛█▌  Welcome to Kimi Code!          │\r\n'],
       // A session name has no length bound.
       ['Pi', `\u001b]0;π - ${'a long session name '.repeat(15)}- proj\u0007`],
     ])('keeps %s provider chrome detection independent of chunk splits (%j)', (agent, output) => {
@@ -826,6 +830,43 @@ describe('AgentDetector', () => {
       det.feed(`? for shortcuts${FOOTER_TAIL}\n`);
       expect(det.getLastAgent()).toBe('Claude Code');
       expect(cb.mock.calls.map((c) => c[0].agent)).not.toContain('Antigravity CLI');
+    });
+  });
+
+  describe('Kimi Code CLI (2.3.2, live capture 2026-10-26)', () => {
+    const { trust, startup, working, replyEnd, approval, toolDone } = kimiCapture.chunks;
+    const kimiEvents = (cb: ReturnType<typeof vi.fn>) => cb.mock.calls.map((c) => c[0]).filter((e) => e.agent === 'Kimi Code CLI');
+
+    it.each([false, true])('reads a whole session, its own prompt marks included (launchBoundaries %s)', (launchBoundaries) => {
+      for (const size of [97, 512, 4096]) {
+        const det = new AgentDetector({ launchBoundaries });
+        const cb = vi.fn();
+        det.onEvent(cb);
+        for (const chunk of [trust, startup, working, replyEnd, approval, toolDone]) {
+          for (let i = 0; i < chunk.length; i += size) det.feed(chunk.slice(i, i + size));
+        }
+        // Codex's chrome takes the trust row (same words); Kimi's banner takes it back.
+        expect(det.getLastAgent()).toBe('Kimi Code CLI');
+        expect(kimiEvents(cb)).toEqual([
+          { agent: 'Kimi Code CLI', status: 'running', message: 'Agent started' },
+          { agent: 'Kimi Code CLI', status: 'running', message: 'Working' },
+          { agent: 'Kimi Code CLI', status: 'awaiting_input', message: 'Approval requested' },
+        ]);
+      }
+    });
+
+    it('honours the shell\'s command end after Kimi, not Kimi\'s own marks', () => {
+      const det = new AgentDetector({ launchBoundaries: true });
+      const cb = vi.fn();
+      det.onEvent(cb);
+      det.feed(startup);
+      det.feed('\u001b]133;A\u0007\u001b]133;B\u0007\u001b]133;C\u0007');
+      det.feed(working);
+      expect(kimiEvents(cb).map((e) => e.message)).toEqual(['Agent started', 'Working']);
+      // Kimi exits: the shell's D, then its prompt. Kimi's patterns stop.
+      det.feed('\u001b]133;D;0\u0007\u001b]133;A\u0007');
+      det.feed(approval);
+      expect(kimiEvents(cb).map((e) => e.message)).toEqual(['Agent started', 'Working']);
     });
   });
 

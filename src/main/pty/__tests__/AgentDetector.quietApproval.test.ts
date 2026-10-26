@@ -5,8 +5,9 @@ import codex from '../../../daemon/approvals/__tests__/fixtures/terminal-prompts
 import openCode from '../../../daemon/approvals/__tests__/fixtures/terminal-prompts/opencode-permission-bash-01.json';
 import claude from '../../../daemon/approvals/__tests__/fixtures/terminal-prompts/claude-write-01-create.json';
 import type { ApprovalScreenSnapshot } from '../../../shared/approvalScreen';
-import { codexScreenApproval, piScreenApproval } from '../approvalScreen';
+import { codexScreenApproval, kimiScreenApproval, piScreenApproval } from '../approvalScreen';
 import piCapture from './fixtures/pi-1.4.0-capture.json';
+import kimiCapture from './fixtures/kimi-2.3.2-capture.json';
 
 const TRUST = ['Do you trust the contents of this project?', '❯ Yes, I trust this folder', '  No, exit', '↑/↓ Navigate · enter Confirm'];
 const CODEX_EDIT = ['Would you like to make the following edits?', '› 1. Yes, proceed (y)',
@@ -288,6 +289,34 @@ describe('quiet approval recovery reads only the current interactive viewport', 
       expect(events.mock.calls.map(([event]) => event.status)).toEqual(['awaiting_input']);
     });
   });
+
+  it.each(['identity, then the question', 'the question, then identity'] as const)(
+    'reads Kimi\'s folder trust question from its grid: %s', async (order) => {
+      const det = new AgentDetector();
+      const events = vi.fn();
+      det.onEvent(events);
+      const read = vi.fn(async () => frame(kimiCapture.screens.trust));
+      if (order === 'identity, then the question') {
+        det.seedTrustedIdentity('kimi', det.getIdentityEpoch());
+        det.feed(kimiCapture.chunks.trust);
+        expect(det.takeApprovalRecheckRequest()).toBe(true);
+      } else {
+        // Codex's chrome reads the same words first; Kimi's process identity takes the pane.
+        det.feed(kimiCapture.chunks.trust);
+        det.seedTrustedIdentity('kimi', det.getIdentityEpoch());
+      }
+      expect(await det.revalidateApprovalScreen(read)).toBe(true);
+      expect(events.mock.calls.map(([event]) => event).filter((e) => e.agent === 'Kimi Code CLI')).toEqual([
+        { agent: 'Kimi Code CLI', status: 'awaiting_input', message: 'Folder trust prompt' },
+      ]);
+      const { idle, working, done, approval, toolDone, trust } = kimiCapture.screens;
+      // The question with no choice selected is not the live one.
+      const unselected = trust.map((row) => row.replace('❯', ' '));
+      for (const rows of [idle, working, done, approval, toolDone, unselected]) {
+        expect(kimiScreenApproval(rows)).toBeNull();
+      }
+    },
+  );
 
   it('recovers a live edit dialog whose body exceeds 24 nonblank viewport rows', async () => {
     const rows = [CODEX_EDIT[0], ...Array.from({ length: 32 }, (_, i) => `+ added line ${i}`), ...CODEX_EDIT.slice(1)];
