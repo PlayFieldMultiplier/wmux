@@ -41,7 +41,7 @@ const facts = (n: number, head = HEAD): PrLaneFacts => ({
 });
 
 /** The act outbox as far as a release request reads it: the main branch's
- *  head, green, nothing else (approvalsRelease.os.test.ts runs releases). */
+ *  head, green, nothing else (approvalsRelease.test.ts runs releases). */
 const releaseOnly: ApprovalActHost = {
   login: async () => 'owner',
   repo: async () => ({ fullName: 'o/r', nodeId: 'R_1', id: 1 }),
