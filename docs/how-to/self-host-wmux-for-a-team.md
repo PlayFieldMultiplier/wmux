@@ -65,14 +65,10 @@ The files are in [`deploy/docker/`](../../deploy/docker/):
    docker compose -f compose.example.yaml up -d --build
    ```
 
-   The OIDC client secret reaches oauth2-proxy as a compose secret file, not
-   as a command-line flag. To build another wmux release, or to pin the
-   tarball's hash, build first:
-
-   ```bash
-   docker compose -f compose.example.yaml build \
-     --build-arg WMUX_VERSION=<version> --build-arg WMUX_SHA256=<sha256>
-   ```
+   Both oauth2-proxy secrets reach it as compose secret files, not as flags
+   or container environment. To build another wmux release, or to pin the
+   tarball's hash, also export `WMUX_VERSION` and `WMUX_SHA256` before
+   `up`; the compose file passes them to the build.
 
 4. **Hand out each person's address.** On its first start, each container
    creates one terminal and logs the address to open:
@@ -88,7 +84,9 @@ The files are in [`deploy/docker/`](../../deploy/docker/):
    (`https://alice.wmux.example.com/`) and signs in with the company account.
    Then they open the token address from step 4 and land in their terminal.
    Signing in first matters: a token in the address during sign-in travels to
-   the identity provider inside the return address. To use Claude Code, they run
+   the identity provider inside the return address. Sign-ins expire (after a
+   week by default), so whenever the sign-in page appears, open the address
+   without the token first. To use Claude Code, they run
    `claude` and finish the sign-in once. The login is kept in their volume.
 
 ## Things to know

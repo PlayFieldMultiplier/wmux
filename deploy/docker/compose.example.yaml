@@ -20,7 +20,11 @@
 
 x-wmux-user: &wmux-user
   image: wmux-server
-  build: .
+  build:
+    context: .
+    args:
+      WMUX_VERSION: ${WMUX_VERSION:-4.11.0}
+      WMUX_SHA256: ${WMUX_SHA256:-}
   restart: unless-stopped
   cap_drop: [ALL]
   security_opt: [no-new-privileges:true]
@@ -54,15 +58,14 @@ services:
       - --oidc-issuer-url=${OIDC_ISSUER_URL}
       - --client-id=${OIDC_CLIENT_ID}
       - --client-secret-file=/run/secrets/oidc_client_secret
+      - --cookie-secret-file=/run/secrets/oauth2_cookie_secret
       - --email-domain=*
       - --reverse-proxy=true
       - --skip-provider-button=true
       - --upstream=static://202
       - --whitelist-domain=.${WMUX_DOMAIN}
       - --set-xauthrequest=true
-    environment:
-      OAUTH2_PROXY_COOKIE_SECRET: ${OAUTH2_PROXY_COOKIE_SECRET}
-    secrets: [oidc_client_secret]
+    secrets: [oidc_client_secret, oauth2_cookie_secret]
     networks: [auth]
     labels:
       - traefik.enable=true
@@ -115,6 +118,8 @@ services:
 secrets:
   oidc_client_secret:
     environment: OIDC_CLIENT_SECRET
+  oauth2_cookie_secret:
+    environment: OAUTH2_PROXY_COOKIE_SECRET
 
 networks:
   auth: {}

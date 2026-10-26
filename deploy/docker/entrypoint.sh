@@ -46,12 +46,12 @@ wmux "$@" >/dev/null
 # The web UI starts from existing terminals, so a fresh home gets one, and the
 # log names the address to open first (the token is the user's own secret).
 json() { /opt/wmux/node/bin/node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{const j=JSON.parse(s);process.stdout.write(String($1))}catch{}})"; }
-token=$(wmux web --status --json 2>/dev/null | json 'j.token' || true)
+token=$(wmux web --status --json 2>/dev/null | json "j.token ?? ''" || true)
 api() { curl -fsS -H "Authorization: Bearer $token" -H "Origin: http://127.0.0.1:$port" -H 'Content-Type: application/json' "$@"; }
 if [ -z "$token" ]; then
   echo "Could not read the wmux token; run 'wmux web --status' in the container." >&2
 else
-  count=$(api "http://127.0.0.1:$port/api/sessions" 2>/dev/null | json 'j.sessions.length' || true)
+  count=$(api "http://127.0.0.1:$port/api/sessions" 2>/dev/null | json "j.sessions?.length ?? ''" || true)
   if [ "$count" = "0" ]; then
     api -X POST -d '{"workspaceId":"ws-main","workspaceName":"main"}' "http://127.0.0.1:$port/api/sessions" >/dev/null 2>&1 \
       || echo "Could not create the first terminal." >&2
