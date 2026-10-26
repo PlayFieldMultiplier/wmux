@@ -1017,6 +1017,16 @@ describe('a kept release draft is told to the owner', () => {
     expect(r.gh.releases).toHaveLength(1);
   });
 
+  it('a draft the owner changed on GitHub is refused found-different and kept, and the refusal says so', async () => {
+    const { r, req } = await drafted();
+    (r.gh.releases[0] as FakeRelease).body = 'Edited by the owner.';
+    await r.sweep();
+    expect(r.svc.get(req.requestId)).toMatchObject({ state: 'refused', refusal: 'found-different, draft-kept-changed' });
+    expect(r.outcome(req.requestId)?.body).toBe('Its draft release was changed on GitHub, so it is kept there');
+    expect(r.gh.writes.map((w) => w.method)).toEqual(['POST', 'PATCH']);
+    expect(r.gh.releases).toMatchObject([{ draft: true, body: 'Edited by the owner.' }]);
+  });
+
   it('a delete that fails says so', async () => {
     const { r, req } = await drafted();
     r.gh.login = 'someone-else';
