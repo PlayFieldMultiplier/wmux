@@ -41,6 +41,21 @@ if [ -n "${WMUX_ALLOW_HOST:-}" ]; then
   for h in $WMUX_ALLOW_HOST; do set -- "$@" --allow-host "$h"; done
   IFS=$old_ifs
 fi
-wmux "$@"
+wmux "$@" >/dev/null
+
+# The web UI starts from existing terminals, so a fresh home gets one, and the
+# log names the address to open first (the token is the user's own secret).
+json() { /opt/wmux/node/bin/node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);process.stdout.write(String($1))})"; }
+token=$(wmux web --status --json | json 'j.token')
+api() { curl -fsS -H "Authorization: Bearer $token" -H "Origin: http://127.0.0.1:$port" -H 'Content-Type: application/json' "$@"; }
+if [ "$(api "http://127.0.0.1:$port/api/sessions" | json 'j.sessions.length')" = "0" ]; then
+  api -X POST -d '{"workspaceId":"ws-main","workspaceName":"main"}' "http://127.0.0.1:$port/api/sessions" >/dev/null \
+    || echo "Could not create the first terminal." >&2
+fi
+if [ -n "${WMUX_ALLOW_HOST:-}" ]; then
+  echo "wmux is ready. Open: https://${WMUX_ALLOW_HOST%%,*}/?token=$token"
+else
+  echo "wmux is ready on port $port. Token: $token"
+fi
 
 wait "$daemon"

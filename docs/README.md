@@ -28,6 +28,7 @@ Task recipes for when you already know what you want to do.
 - [Handle a daemon restart](./how-to/handle-daemon-restart.md) — detect `bootId` mismatch vs `resync`, and reconcile state from a fresh snapshot.
 - [Attach a remote machine's workspaces](./how-to/remote-workspaces.md) — the desktop app's remote attach flow, `--tailscale` setup, and its limitations.
 - [Install wmux-server by hand](./how-to/install-wmux-server-manually.md) — the headless Linux runtime behind "Add PC over SSH": download, verify, install layout, and its limits.
+- [Self-host wmux for a team](./how-to/self-host-wmux-for-a-team.md) — one isolated wmux per person behind Traefik and company sign-in, opened from a browser with nothing installed locally.
 - [Replay a browser flow](./how-to/replay-browser-flows.md) — record a working web flow and repeat it without reading a snapshot, what stops a replay, variables, and why a password step can never be stored.
 - [Connect panes across your LAN PCs](./a2a-remote.md) — cross-PC A2A (experimental): pair two PCs with an invite, choose which panes to show, link panes, firewall setup, and troubleshooting.
 
