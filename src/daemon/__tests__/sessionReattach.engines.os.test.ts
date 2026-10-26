@@ -110,23 +110,29 @@ async function attach(mgr: DaemonSessionManager, id: string, socketName: string)
     managed.ptyProcess.write(data);
     managed.bridge.noteInput(data.toString());
   });
-  await pipe.start();
-  const client = await connect(pipe.getPipeName());
-  await waitFor(() => replayOf(client.wire()) !== null, WAIT_MS, 'attach flush');
-  return {
-    pipe,
-    client,
-    detach: async () => {
-      client.socket.destroy();
-      managed.bridge.removeListener('data', onData);
-      await pipe.stop();
-      if (mgr.getSession(id)?.meta.state !== 'dead') mgr.detachSession(id);
-    },
+  let client: Client | undefined;
+  const detach = async () => {
+    client?.socket.destroy();
+    managed.bridge.removeListener('data', onData);
+    await pipe.stop();
+    if (mgr.getSession(id)?.meta.state !== 'dead') mgr.detachSession(id);
   };
+  try {
+    await pipe.start();
+    client = await connect(pipe.getPipeName());
+    const connected = client;
+    await waitFor(() => replayOf(connected.wire()) !== null, WAIT_MS, 'attach flush');
+    return { pipe, client, detach };
+  } catch (err) {
+    // A failed attach must not leave its pipe listening into the retry.
+    await detach().catch(() => undefined);
+    throw err;
+  }
 }
 
+/** The newest bytes only: the bulk test polls this on a ring of several hundred KB. */
 function ringText(mgr: DaemonSessionManager, id: string): string {
-  return mgr.getSession(id)!.ringBuffer.readAll().toString('utf8');
+  return mgr.getSession(id)!.ringBuffer.readAll().subarray(-4096).toString('utf8');
 }
 
 // `printf '%s-%s\n' rx NAME` prints `rx-NAME`; the echoed command line does not
@@ -268,7 +274,7 @@ describe.skipIf(!posix).each(ENGINES)('a real shell session on the %s engine', (
     await waitFor(() => liveOf(a.client.wire()).includes('rx-size 30 100'), WAIT_MS, 'the shell to see the new size');
 
     const died = new Promise<{ id: string; exitCode: number | null }>((resolve) => {
-      mgr.on('session:died', (e: { id: string; exitCode: number | null }) => { if (e.id === id) resolve(e); });
+      mgr.once('session:died', resolve);
     });
     a.client.socket.write('exit 3\n');
     expect((await died).exitCode).toBe(3);
