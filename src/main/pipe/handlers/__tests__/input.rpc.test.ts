@@ -7,7 +7,7 @@ import {
   registerInputRpc,
   decideTerminalOmittedTarget,
   isSessionTerminatingInput,
-  awaitSubmitReceipt,
+  awaitSubmitReceipt, EnterRetryRefused,
   composerCleared,
   needleInComposer,
   isTurnStart,
@@ -1264,7 +1264,7 @@ describe('input.send — submit receipt', () => {
     expect(receipt.retried).toBe(true);
   });
 
-  it('a retry that refuses asynchronously (a trust prompt drew) sends nothing and yields accepted:false', async () => {
+  it('a retry withheld for a trust prompt is not counted as retried, and says why', async () => {
     const { probe } = fakeProbe([COMPOSER], [fresh('idle')]);
     const receipt = await awaitSubmitReceipt(
       probe,
@@ -1272,12 +1272,13 @@ describe('input.send — submit receipt', () => {
       { screen: COMPOSER, agentStatus: 'idle' },
       async () => {
         await Promise.resolve();
-        throw new Error('input.send: pane "pty-1" is on a folder-trust prompt; answer it in the pane.');
+        throw new EnterRetryRefused('input.send: pane "pty-1" is on a folder-trust prompt; answer it in the pane.');
       },
       waitOpts({ windowMs: 100 }),
     );
     expect(receipt.accepted).toBe(false);
-    expect(receipt.retried).toBe(true);
+    expect(receipt.retried).toBe(false);
+    expect(receipt.retryRefused).toContain('folder-trust prompt');
   });
 
   it('stops at the total ceiling even when every window would allow more', async () => {

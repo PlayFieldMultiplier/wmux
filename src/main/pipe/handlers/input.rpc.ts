@@ -391,6 +391,8 @@ export interface SubmitReceipt {
     | 'unobservable';
   /** Present only when `accepted` is false. */
   screenTail?: string;
+  /** Why the retried Enter was withheld (`retried` stays false). */
+  retryRefused?: string;
 }
 
 /**
@@ -448,6 +450,7 @@ export async function awaitSubmitReceipt(
   let runningObserved = status === 'running';
   let screen = before.screen;
   let retried = false;
+  let retryRefused: string | undefined;
   const hardDeadline = enterAt + maxTotalMs;
 
   /** Read the status and decide; separated so it can run BEFORE the first
@@ -487,11 +490,15 @@ export async function awaitSubmitReceipt(
       retried = true;
       try {
         await resendEnter();
-      } catch {
+      } catch (err) {
         // The pane died between the first Enter and the retry, or a dialog no
         // retry may answer took the screen. That is an unaccepted submit, not
         // a failed RPC — the caller gets `false` and the screen tail, exactly
         // as it would for a pane that ignored us.
+        if (err instanceof EnterRetryRefused) {
+          retried = false;
+          retryRefused = err.message;
+        }
         break;
       }
     }
@@ -503,6 +510,7 @@ export async function awaitSubmitReceipt(
     retried,
     signal: runningObserved ? 'running_unconfirmed' : composerUsable ? 'none' : 'unobservable',
     ...(screen ? { screenTail: screenTail(screen) } : {}),
+    ...(retryRefused ? { retryRefused } : {}),
   };
 }
 
@@ -903,7 +911,7 @@ export interface ApprovalInputGate {
   /** The pane's workspace policy right now. */
   answerPolicy: (ptyId: string) => Promise<AnswerPolicy>;
   /** The pane's visible screen as text, or null when it cannot be read. */
-  readScreenText: (ptyId: string) => Promise<string | null>;
+  readScreenText: (ptyId: string, opts?: { timeoutMs?: number }) => Promise<string | null>;
 }
 
 /** The gate could not decide: a delivery found the screen unreadable (any policy). */
@@ -922,10 +930,14 @@ async function assertNotAtFolderTrust(
   ctx: RpcContext | undefined,
   ptyId: string,
   op: string,
+  read: { timeoutMs?: number } = {},
 ): Promise<void> {
   if (ctx?.operator) return;
-  refuseAtFolderTrust(await gate.readScreenText(ptyId), op, ptyId);
+  refuseAtFolderTrust(await gate.readScreenText(ptyId, read), op, ptyId);
 }
+
+/** A retried Enter withheld on purpose (a folder-trust prompt took the screen). */
+export class EnterRetryRefused extends Error {}
 
 async function assertNotTypingAtAnApproval(
   gate: ApprovalInputGate,
@@ -1152,7 +1164,7 @@ export interface InputRpcDeps {
   /** Injected in tests; defaults to the pane's workspace autonomy entry. */
   answerPolicy?: (ptyId: string) => Promise<AnswerPolicy>;
   /** Injected in tests; defaults to the renderer's screen read. */
-  readScreenText?: (ptyId: string) => Promise<string | null>;
+  readScreenText?: (ptyId: string, opts?: { timeoutMs?: number }) => Promise<string | null>;
   /** Injected in tests; the gated submit's wait between paste and Enter. */
   sleep?: (ms: number) => Promise<void>;
   /** Injected in tests; the hand-off guard's clock. */
@@ -1278,11 +1290,14 @@ export function registerInputRpc(
       }),
     readScreenText:
       deps.readScreenText ??
-      (async (ptyId) => {
+      (async (ptyId, opts) => {
         try {
-          const read = (await sendToRenderer(getWindow, 'input.readScreen', { ptyId })) as
-            | { text?: unknown }
-            | undefined;
+          const read = (await sendToRenderer(
+            getWindow,
+            'input.readScreen',
+            { ptyId },
+            opts?.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {},
+          )) as { text?: unknown } | undefined;
           return typeof read?.text === 'string' ? read.text : null;
         } catch {
           return null;
@@ -1637,6 +1652,23 @@ export function registerInputRpc(
       }
       const pasted = shouldPasteBody(bodyText, rawWrite, sendTarget);
       const payload = pasted ? bracketedPasteBody(bodyText) : bodyText;
+      // The guard ran before this send waited for the lock and the daemon; a
+      // folder-trust prompt drawn since (an agent still starting) gets none of
+      // the text nor its Enter. Refused like the guard, saying what is
+      // already on the line (#2398).
+      const refuseAtTrustNow = async (): Promise<void> => {
+        try {
+          await assertNotAtFolderTrust(approvalGate, ctx, ptyId, 'input.send');
+        } catch (err) {
+          if (!(err instanceof Error)) throw err;
+          const onLine = chunksWritten > 0
+            ? ' The text is already on its input line, not submitted; read the pane before sending it again.'
+            : ' Nothing of the text was written.';
+          const cleared = fresh?.freshContext === 'applied' ? " The pane's conversation was already cleared (fresh context)." : '';
+          throw new Error(`${err.message}${onLine}${cleared}`);
+        }
+      };
+      await refuseAtTrustNow();
       let receipt: SubmitReceipt | undefined;
       let pasteNote: string | undefined;
       if (submitRequested) {
@@ -1658,9 +1690,8 @@ export function registerInputRpc(
           agentStatus: beforeReading?.status ?? null,
           turnStartedAt: beforeReading?.turnStartedAt,
         };
-        // The guard ran before the text; a folder-trust prompt drawn since
-        // (an agent still starting) must not get this Enter, nor the retry.
-        await assertNotAtFolderTrust(approvalGate, ctx, ptyId, 'input.send');
+        // Again before the Enter, and before a retried Enter below.
+        await refuseAtTrustNow();
         writeChunk('\r');
         const enterAt = Date.now();
         // A collapsed paste shows a placeholder, not the text: watch that leave.
@@ -1670,7 +1701,11 @@ export function registerInputRpc(
           pasted ? composerMarker(before.screen, needle) : needle,
           before,
           async () => {
-            await assertNotAtFolderTrust(approvalGate, ctx, ptyId, 'input.send');
+            try {
+              await assertNotAtFolderTrust(approvalGate, ctx, ptyId, 'input.send');
+            } catch (err) {
+              throw new EnterRetryRefused(err instanceof Error ? err.message : String(err));
+            }
             writeChunk('\r');
           },
           { enterAt },
@@ -1703,6 +1738,7 @@ export function registerInputRpc(
               agentStatusAfter: receipt.agentStatusAfter,
               receiptSignal: receipt.signal,
               enterRetried: receipt.retried,
+              ...(receipt.retryRefused ? { enterRetryRefused: receipt.retryRefused } : {}),
             }
           : {}),
         ...(receipt?.screenTail ? { screenTail: receipt.screenTail, ...untrustedLabel(access) } : {}),
@@ -1790,7 +1826,8 @@ export function registerInputRpc(
     if (!APPROVAL_BLOCK_EXEMPT_KEYS.has(key)) {
       await assertNotTypingAtAnApproval(approvalGate, ctx, ptyId, 'input.sendKey');
     } else if (key === 'escape') {
-      await assertNotAtFolderTrust(approvalGate, ctx, ptyId, 'input.sendKey');
+      // The interrupt path: a short read, the receipt poll's budget, not 5s.
+      await assertNotAtFolderTrust(approvalGate, ctx, ptyId, 'input.sendKey', { timeoutMs: SUBMIT_RECEIPT_READ_TIMEOUT_MS });
     }
     // After every refusal: attach (promoting) a session with no pipe here.
     await startIfSuspended('input.sendKey', ptyId, clock, !stopKey);

@@ -65,7 +65,7 @@
 
 import { agentRow, type AgentDialogFamily } from '../../shared/agentIdentity';
 import { ESCAPE_WIN32 } from '../../shared/win32InputKeys';
-import { CODEX_TRUST_HEADLINE, TRUST_HEADLINE } from '../../shared/agentFirstRun';
+import { CODEX_TRUST_HEADLINE, TRUST_HEADLINE } from '../../shared/folderTrustWording';
 
 /** The two byte sequences for one agent. Single presses — never a CR chaser. */
 export interface ApprovalKeystrokes {
@@ -159,12 +159,13 @@ export function looksLikeApprovalPrompt(rows: readonly string[]): boolean {
   return rows.some((row) => CURSOR_OPTION_ROW.test(row));
 }
 
-/** The choice that grants trust, with or without cursor and digit. */
-const TRUST_GRANT_CHOICE =
-  /^(?:[❯›>»]\s*)?(?:\d{1,2}[.)]\s*)?(?:Yes, I trust this folder|Yes, proceed|Trust and continue|Yes, continue)$/i;
-/** Any choice a trust dialog offers: grant, decline, or leave. */
-const TRUST_CHOICE =
-  /^(?:[❯›>»]\s*)?(?:\d{1,2}[.)]\s*)?(?:Yes, I trust this folder|Yes, proceed|Trust and continue|Yes, continue|No, exit|No, quit|Quit|Back to [A-Za-z ]+)$/i;
+/** The choices that grant trust, and those that decline it or leave. */
+const TRUST_GRANTS = 'Yes, I trust this folder|Yes, proceed|Trust and continue|Yes, continue';
+const TRUST_DECLINES = 'No, exit|No, quit|Quit|Back to [A-Za-z ]+';
+/** A choice row: optional selection cursor and digit, then the label alone. */
+const choiceRow = (labels: string): RegExp => new RegExp(`^(?:[❯›>»]\\s*)?(?:\\d{1,2}[.)]\\s*)?(?:${labels})$`, 'i');
+const TRUST_GRANT_CHOICE = choiceRow(TRUST_GRANTS);
+const TRUST_CHOICE = choiceRow(`${TRUST_GRANTS}|${TRUST_DECLINES}`);
 /** The key hint under the choices ("Enter to confirm · Esc to cancel", "enter continue · esc back"). */
 const TRUST_FOOTER = /^(?:press\s+)?(?:↑\/↓|↑↓)?.{0,24}\benter\b.{0,30}\b(?:cancel|back|continue|confirm)$/i;
 const SELECTION_CURSOR = /^[❯›>»]\s*\S/;

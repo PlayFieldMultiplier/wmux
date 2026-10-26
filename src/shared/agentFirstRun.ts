@@ -54,6 +54,7 @@
 // which reports and waits: the safe direction.
 
 import { looksLikeApprovalPrompt } from '../daemon/approvals/approvalKeystrokes';
+import { CODEX_TRUST_HEADLINE, TRUST_HEADLINE } from './folderTrustWording';
 
 /**
  * Opt-out. `off` / `0` / `false` (case-insensitive) turns off BOTH the env
@@ -129,9 +130,6 @@ export interface FirstRunPrompt {
 
 /** ESC. The only byte this module ever writes into a worker pane. */
 export const FIRST_RUN_DISMISS_KEY = '\x1b';
-
-/** The trust dialog's opening question (Claude Code 2.1.x). */
-export const TRUST_HEADLINE = /is this a project you created or one you trust/i;
 
 /**
  * Known one-shot interstitials, by headline. Extending this list is the
@@ -236,10 +234,6 @@ export function detectFirstRunPrompt(screen: string): FirstRunPrompt | null {
   }
   return null;
 }
-
-/** Codex's folder-trust screen (wording differs across releases; agy asks about
- *  the contents of a project). Never answered. */
-export const CODEX_TRUST_HEADLINE = /do you trust the (?:contents of this (?:directory|project)|files in this folder)|trust this folder\?/i;
 
 /** Menu furniture that means "something is waiting for a keypress". */
 const MENU_FOOTER = /enter to (?:confirm|continue)|press enter to/i;

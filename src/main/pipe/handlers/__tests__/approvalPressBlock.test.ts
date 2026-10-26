@@ -44,7 +44,13 @@ const LEDGER = {
  * The live facts the raw-input guard reads: the pane's workspace policy and
  * what is on its screen. Tests mutate these between calls.
  */
-const live: { policy: AnswerPolicy; screen: string | null; betweenPasteAndEnter?: () => void; afterScreenRead?: () => void } = {
+const live: {
+  policy: AnswerPolicy;
+  screen: string | null;
+  betweenPasteAndEnter?: () => void;
+  afterScreenRead?: () => void;
+  lastReadOpts?: { timeoutMs?: number };
+} = {
   policy: { allowed: false, reason: 'autonomy-off' },
   screen: '',
 };
@@ -92,7 +98,8 @@ function wire(options: {
     undefined,
     {
       answerPolicy: async () => live.policy,
-      readScreenText: async () => {
+      readScreenText: async (_ptyId, opts) => {
+        live.lastReadOpts = opts;
         const screen = live.screen;
         live.afterScreenRead?.();
         return screen;
@@ -539,6 +546,8 @@ describe('a folder-trust dialog on screen', () => {
       const escape = await asBrain('input.sendKey', { ptyId: 'pty-w', key: 'escape' });
       expect(escape.ok).toBe(false);
       expect(escape.error).toContain('folder-trust prompt; answer it in the pane');
+      // The interrupt path reads the screen on a short budget.
+      expect(live.lastReadOpts).toEqual({ timeoutMs: 300 });
       expect(w.writes).toHaveLength(0);
       // ctrl+c still stops the agent, and the human is never refused.
       expect((await asBrain('input.sendKey', { ptyId: 'pty-w', key: 'ctrl+c' })).ok).toBe(true);
@@ -547,15 +556,33 @@ describe('a folder-trust dialog on screen', () => {
     },
   );
 
-  it('`send --submit`: a trust prompt drawn after the guard passed gets no Enter', async () => {
+  /** The screen turns into the trust prompt after the `n`th read. */
+  const trustAfterReads = (n: number) => {
+    let reads = 0;
+    live.afterScreenRead = () => { if (++reads === n) live.screen = TRUST_SCREENS.codex; };
+  };
+
+  it('`send --submit`: a trust prompt drawn after the guard passed gets none of the text', async () => {
     live.policy = DANGER;
     live.screen = '⏺ Done.\n\n──────────\n❯ ';
-    // The guard reads the clean screen; by the Enter the agent drew its prompt.
-    live.afterScreenRead = () => { live.screen = TRUST_SCREENS.codex; };
+    // The guard reads the clean screen; by the body write the agent drew its prompt.
+    trustAfterReads(1);
     const res = await asPaneAgent('input.send', { ptyId: 'pty-w', text: 'go on', submit: true });
     expect(res.ok).toBe(false);
     expect(res.error).toContain('folder-trust prompt; answer it in the pane');
-    expect(w.writes.map((x) => x.data)).not.toContain('\r');
+    expect(res.error).toContain('Nothing of the text was written');
+    expect(w.writes).toHaveLength(0);
+  });
+
+  it('`send --submit`: a trust prompt drawn after the text gets no Enter, and says the text is on the line', async () => {
+    live.policy = DANGER;
+    live.screen = '⏺ Done.\n\n──────────\n❯ ';
+    trustAfterReads(2);
+    const res = await asPaneAgent('input.send', { ptyId: 'pty-w', text: 'go on', submit: true });
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain('folder-trust prompt; answer it in the pane');
+    expect(res.error).toContain('already on its input line, not submitted');
+    expect(w.writes.map((x) => x.data)).toEqual(['go on']);
   });
 
   it('withholds the Enter when the dialog is drawn between the paste and the Enter', async () => {
