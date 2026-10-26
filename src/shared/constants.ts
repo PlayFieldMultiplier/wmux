@@ -161,6 +161,8 @@ export const IPC = {
   FANOUT_LINEAGE: 'fanout:lineage',
   FANOUT_PRESETS_GET: 'fanout:presets:get',
   FANOUT_PRESETS_SET: 'fanout:presets:set',
+  FANOUT_CUSTOM_AGENTS_GET: 'fanout:customAgents:get',
+  FANOUT_CUSTOM_AGENTS_SET: 'fanout:customAgents:set',
   // J3 태스크 수명주기 — renderer → main(파이프 미노출, channelLocal과 동일 trust).
   //  TASK_CLOSE: remove 성공→close 커밋 순서 오케스트레이션(TaskCloseService).
   //  TASK_CREATE_PR: gh 4중 게이트 1클릭 PR(TaskPrService).

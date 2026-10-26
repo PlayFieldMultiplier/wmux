@@ -35,36 +35,50 @@
  * XTVERSION requires the `>` prefix so DECSCUSR (`CSI Ps SP q`, cursor
  * style — display-relevant) is never matched.
  */
-const REPLAY_QUERY_SEQUENCES = new RegExp(
-  [
-    // DSR / DECDSR — CSI Ps n, CSI ? Ps n (incl. the CPR offender \x1b[?6n)
-    '\\x1b\\[\\??[0-9;]*n',
-    // DA1 / DA2 / DA3 — CSI c, CSI > c, CSI = c
-    '\\x1b\\[[>=]?[0-9;]*c',
-    // XTVERSION — CSI > Ps q
-    '\\x1b\\[>[0-9;]*q',
-    // Kitty keyboard flags query. A pane that negotiated the protocol answers
-    // it (`CSI ? flags u`), and a replayed one would type that into the app.
-    '\\x1b\\[\\?u',
-    // DECRQM — CSI Ps $ p, CSI ? Ps $ p (claude probes ?2026 sync output)
-    '\\x1b\\[\\??[0-9;]*\\$p',
-    // OSC color queries — OSC 4/5/10..19 whose last param is "?" (BEL or ST
-    // terminated). Titles (OSC 0/2) never match, even ones ending in "?".
-    '\\x1b\\](?:4|5|1[0-9])(?:;[0-9]*)*;\\?(?:\\x07|\\x1b\\\\)',
-    // DCS queries — DECRQSS (DCS $ q .. ST) and XTGETTCAP (DCS + q .. ST)
-    '\\x1bP[$+]q[^\\x1b]*\\x1b\\\\',
-    // XTWINOPS size reports — CSI 14/16/18 t (text area / cell / grid size).
-    // The inline-image addon (#1641) enables these. Only the query forms:
-    // 22/23 t are title push/pop and >= 24 t is DECSLPP, both display state.
-    '\\x1b\\[(?:14|16|18)(?:;[0-9]*)?t',
-    // XTSMGRAPHICS — CSI ? Pi ; Pa ; Pv S (sixel palette / geometry query,
-    // #1641). The `?` prefix keeps plain CSI Ps S (scroll up) untouched.
-    '\\x1b\\[\\?[0-9;]*S',
-    // ENQ — answerback query
-    '\\x05',
-  ].join('|'),
-  'g',
-);
+const TERMINAL_QUERY_SOURCE = [
+  // DSR / DECDSR — CSI Ps n, CSI ? Ps n (incl. the CPR offender \x1b[?6n)
+  '\\x1b\\[\\??[0-9;]*n',
+  // DA1 / DA2 / DA3 — CSI c, CSI > c, CSI = c
+  '\\x1b\\[[>=]?[0-9;]*c',
+  // XTVERSION — CSI > Ps q
+  '\\x1b\\[>[0-9;]*q',
+  // Kitty keyboard flags query. A pane that negotiated the protocol answers
+  // it (`CSI ? flags u`), and a replayed one would type that into the app.
+  '\\x1b\\[\\?u',
+  // DECRQM — CSI Ps $ p, CSI ? Ps $ p (claude probes ?2026 sync output)
+  '\\x1b\\[\\??[0-9;]*\\$p',
+  // OSC color queries — OSC 4/5/10..19 whose last param is "?" (BEL or ST
+  // terminated). Titles (OSC 0/2) never match, even ones ending in "?".
+  '\\x1b\\](?:4|5|1[0-9])(?:;[0-9]*)*;\\?(?:\\x07|\\x1b\\\\)',
+  // DCS queries — DECRQSS (DCS $ q .. ST) and XTGETTCAP (DCS + q .. ST)
+  '\\x1bP[$+]q[^\\x1b]*\\x1b\\\\',
+  // XTWINOPS size reports — CSI 14/16/18 t (text area / cell / grid size).
+  // The inline-image addon (#1641) enables these. Only the query forms:
+  // 22/23 t are title push/pop and >= 24 t is DECSLPP, both display state.
+  '\\x1b\\[(?:14|16|18)(?:;[0-9]*)?t',
+  // XTSMGRAPHICS — CSI ? Pi ; Pa ; Pv S (sixel palette / geometry query,
+  // #1641). The `?` prefix keeps plain CSI Ps S (scroll up) untouched.
+  '\\x1b\\[\\?[0-9;]*S',
+].join('|');
+
+// ENQ — answerback query. Stripped from replay, but not a flush trigger for
+// live output: a bare 0x05 byte also turns up in binary output.
+const REPLAY_QUERY_SEQUENCES = new RegExp(`${TERMINAL_QUERY_SOURCE}|\\x05`, 'g');
+// No flags: `test()` on a global regex advances `lastIndex`, so repeated calls
+// on different strings would alternate between hit and miss.
+const TERMINAL_QUERY = new RegExp(TERMINAL_QUERY_SOURCE);
+
+/**
+ * True when `data` holds at least one complete sequence the terminal answers
+ * (the families the replay strip removes, minus ENQ). Used by the renderer's
+ * hidden-pane retention to parse a retained backlog as soon as a live query
+ * arrives, so the pane's own xterm answers it while hidden.
+ */
+export function containsTerminalQuery(data: string): boolean {
+  // Every family starts with ESC.
+  if (!data.includes('\x1b')) return false;
+  return TERMINAL_QUERY.test(data);
+}
 
 /**
  * Strip auto-reply-triggering query sequences from a ring-replay payload.

@@ -60,7 +60,7 @@ import {
   producerCommand, producerSource, shellPrepCommand, summarizeRun, renderSummary, verifyEngine,
   CLAUDE_PROMPT, CLAUDE_README, claudeProjectSettings, claudeHookSource, claudeLaunchCommand,
   newClaudeState, applyClaudeEvents, nextClaudeAction, inTurnAt, gapInTurnMs, answerTrustPrompts, profileDiff,
-  daemonPidVerdict, leftoverPids, runTeardown,
+  daemonPidVerdict, leftoverPids, runTeardown, teardownFlags,
 } from './lib/twenty-pane-stability.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -538,6 +538,7 @@ async function checkEngine(inst, requested) {
   const dc = await waitFor('daemon pipe', () => daemonClient(inst).catch(() => null), 30000, 500);
   const ping = await dc.call('daemon.ping', { includeTerminalCore: true }, 5000);
   const runtime = verifyEngine(requested, ping);
+  if (Number.isInteger(ping?.pid)) inst.lastDaemonPid = ping.pid;
   return { runtime, daemonPid: ping?.pid ?? null, daemonVersion: ping?.version ?? null };
 }
 
@@ -572,6 +573,17 @@ async function listProcesses() {
   return rows;
 }
 
+/** Threads, handles and working set (Windows) or RSS and state (POSIX) of a live pid. */
+async function describeProcess(pid) {
+  if (PLATFORM === 'win32') {
+    const out = await runPowerShell(`$p = Get-Process -Id ${Number(pid)} -ErrorAction Stop; [pscustomobject]@{ threads = $p.Threads.Count; handles = $p.HandleCount; workingSetBytes = $p.WorkingSet64 } | ConvertTo-Json -Compress`, 10000);
+    return JSON.parse(out);
+  }
+  const out = (await runPs(['-p', String(pid), '-o', 'rss=,stat='])).trim();
+  const m = /^(\d+)\s+(\S+)/.exec(out);
+  return m ? { rssBytes: Number(m[1]) * 1024, state: m[2] } : null;
+}
+
 /** Kill `pid` only when one lookup proves it is this run's daemon; false on any doubt. */
 async function killDaemonIfOurs(pid) {
   if (!pid || !pidAlive(pid)) return false;
@@ -596,7 +608,9 @@ async function shutdownInstance(inst) {
   inst.main?.close();
   inst.daemon?.close();
   inst.daemon = null;
-  const daemonPid = readDaemonPid(inst);
+  // The pid the daemon last reported over its pipe and the pid file, read
+  // before shutdown removes it (a respawned daemon writes a new one).
+  const daemonPids = [inst.lastDaemonPid, readDaemonPid(inst)];
   let daemonPipe = defaultDaemonPipe(inst);
   try { daemonPipe = readDaemonPipeName(inst); } catch { /* keep the default */ }
   const report = await runTeardown({
@@ -617,8 +631,11 @@ async function shutdownInstance(inst) {
       c.close();
       return true;
     },
+    daemonPids,
     daemonPipeAlive: () => pipeAlive(daemonPipe),
-    killDaemonIfOurs: () => killDaemonIfOurs(daemonPid),
+    pidAlive: async (pid) => pidAlive(pid),
+    describeProcess,
+    killDaemonIfOurs: (pid) => killDaemonIfOurs(pid),
     findLeftovers: async () => {
       try {
         return leftoverPids(await listProcesses(), {
@@ -635,8 +652,8 @@ async function shutdownInstance(inst) {
     },
     sleep,
   });
-  if (!report.daemonPipeGone) {
-    console.error(`[teardown] the daemon of suffix ${inst.suffix} is still running; the sandbox was kept. See "Manual cleanup" in docs/performance/twenty-panes.md (run.json has the paths).`);
+  if (!report.removed) {
+    console.error(`[teardown] the daemon of suffix ${inst.suffix} (pid ${report.daemonLingering?.pid ?? (report.daemonPids.join('/') || 'unknown')}) was not confirmed gone; the sandbox was kept. See "Manual cleanup" in docs/performance/twenty-panes.md (run.json has the paths).`);
   }
   return report;
 }
@@ -939,7 +956,7 @@ async function probeAll(page, panes) {
 
 const MEM_TYPES = { Browser: 'mainBytes', Tab: 'rendererBytes', GPU: 'gpuBytes' };
 
-async function sampleMemory(inst, withTree) {
+async function sampleMemory(inst, withTree, t0) {
   const mem = {};
   try {
     const perf = await inst.main.call('perf.status', { includeMemory: true });
@@ -963,7 +980,13 @@ async function sampleMemory(inst, withTree) {
     if (pong && Number.isFinite(pong.eventLoopLagMs)) mem.daemonEventLoopLagMs = pong.eventLoopLagMs;
     const d = pong?.memory;
     if (d) {
-      if (Number.isInteger(d.pid)) { daemonPid = d.pid; daemonPidVerified = true; }
+      if (Number.isInteger(d.pid)) {
+        daemonPid = d.pid;
+        daemonPidVerified = true;
+        mem.daemonPid = d.pid;
+        mem.daemonPingSec = Math.round((Date.now() - t0) / 100) / 10;
+        inst.lastDaemonPid = d.pid;
+      }
       mem.daemonRssBytes = d.rssBytes;
       mem.daemonHeapUsedBytes = d.heapUsedBytes;
       const sum = (k) => d.sessions.reduce((a, s) => a + (s[k] || 0), 0);
@@ -1141,7 +1164,7 @@ async function runSample(inst, ctx, tick, t0) {
   sample.raf = { p50: raf.p50, p95: raf.p95, throttled: (raf.p50 ?? 999) > 50 };
 
   // 5. Memory.
-  sample.memory = await sampleMemory(inst, ARGS.treeEvery > 0 && tick % ARGS.treeEvery === 0);
+  sample.memory = await sampleMemory(inst, ARGS.treeEvery > 0 && tick % ARGS.treeEvery === 0, t0);
 
   // 6. Claude Code loop (after the probes, so no marker sits in an input box).
   if (ARGS.claude > 0) {
@@ -1187,18 +1210,24 @@ let runInfo = {};
 // What the daemon reported as its terminal engine, at start and at the end.
 const engine = { requested: ARGS.engine, start: null, end: null, daemonPidStart: null, daemonPidEnd: null, daemonVersion: null };
 
-function writeSummary(reason) {
+function writeSummary(reason, teardown = null) {
   if (!outDir) return null;
   const claude = (runCtx?.panes ?? []).filter((p) => p.cls === 'claude' && p.claude)
     .map((p) => ({ paneIndex: p.index, ptyId: p.ptyId, ...p.claude }));
-  const summary = { reason, engine, ...summarizeRun(samples, { stallMs: ARGS.stallMs, claude }) };
+  const summary = { reason, engine, ...summarizeRun(samples, { stallMs: ARGS.stallMs, claude, startDaemonPid: engine.daemonPidStart }) };
+  if (teardown) {
+    const { daemonLingering, ...rest } = teardown;
+    summary.teardown = rest;
+    summary.daemonLingering = daemonLingering;
+    summary.flags.push(...teardownFlags(teardown));
+  }
   if (engine.start && !engine.end) {
     summary.flags.unshift(`the daemon's terminal engine could not be read at the end${engine.endError ? ` (${engine.endError})` : ''}`);
   }
   if (engine.end && engine.start && engine.end.effective !== engine.start.effective) {
     summary.flags.unshift(`the daemon's terminal engine changed during the run (${engine.start.effective} -> ${engine.end.effective})`);
   }
-  if (engine.daemonPidEnd && engine.daemonPidStart && engine.daemonPidEnd !== engine.daemonPidStart) {
+  if (!summary.daemonRespawned && engine.daemonPidEnd && engine.daemonPidStart && engine.daemonPidEnd !== engine.daemonPidStart) {
     summary.flags.unshift('the daemon was replaced during the run (its pid changed)');
   }
   fs.writeFileSync(path.join(outDir, 'summary.json'), JSON.stringify(summary, null, 2));
@@ -1226,7 +1255,12 @@ async function finish(reason, code) {
     writeRunInfo();
     const teardown = await shutdownInstance(inst);
     writeRunInfo({ teardown });
-    if (teardown) console.log(`[teardown] ${JSON.stringify(teardown)}`);
+    if (teardown) {
+      console.log(`[teardown] ${JSON.stringify(teardown)}`);
+      // The summary written above predates the teardown; add its outcome.
+      writeSummary(reason, teardown);
+      for (const f of teardownFlags(teardown)) console.error(`[teardown] ${f}`);
+    }
   }
   if (claudeProfileBefore && outDir) {
     const diff = { ...profileDiff(claudeProfileBefore, snapshotClaudeProfile(), claudeRepoPaths, PLATFORM), wmuxPathsRemoved: removeRealHomeSuffixPaths() };
@@ -1236,7 +1270,15 @@ async function finish(reason, code) {
   process.exit(code);
 }
 
-process.on('SIGINT', () => { void finish('interrupted', 130); });
+process.on('SIGINT', () => {
+  // A second Ctrl+C during a slow teardown (a lingering daemon can take 30 s)
+  // exits at once; the sandbox may stay behind, run.json says where.
+  if (finished) {
+    console.error('[teardown] interrupted again: exiting now; see run.json and "Manual cleanup" in docs/performance/twenty-panes.md');
+    process.exit(130);
+  }
+  void finish('interrupted', 130);
+});
 
 async function main() {
   outDir = path.resolve(ARGS.out ?? path.join(REPO_ROOT, 'out', 'twenty-pane-stability', stamp()));
@@ -1271,11 +1313,18 @@ async function main() {
   console.log(`[run] ${ctx.panes.length} panes (${ctx.panes.filter((p) => p.cls === 'streaming').length} streaming, ${ctx.panes.filter((p) => p.cls === 'claude').length} Claude) for ${ARGS.minutes} min, a sample every ${ARGS.sampleSec} s`);
 
   const t0 = Date.now();
+  let lastSeenDaemonPid = engine.daemonPidStart;
   const endAt = t0 + ARGS.minutes * 60000;
   for (let tick = 0; Date.now() < endAt && !finished; tick++) {
     const started = Date.now();
     if (inst.proc.exitCode !== null) throw new Error(`the app exited (code ${inst.proc.exitCode}) during the run`);
     const sample = await runSample(inst, ctx, tick, t0);
+    if (Number.isInteger(sample.memory.daemonPid)) {
+      if (Number.isInteger(lastSeenDaemonPid) && sample.memory.daemonPid !== lastSeenDaemonPid) {
+        console.error(`[t+${Math.round(sample.tSec)}s] the daemon was respawned (pid ${lastSeenDaemonPid} -> ${sample.memory.daemonPid}); stall metrics stop at the last ping of the old one`);
+      }
+      lastSeenDaemonPid = sample.memory.daemonPid;
+    }
     samples.push(sample);
     fs.appendFileSync(samplesPath, JSON.stringify(sample) + '\n');
     const kb = sample.keyboard.filter((k) => k.echoMs !== null).map((k) => k.echoMs);

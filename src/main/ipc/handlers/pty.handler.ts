@@ -1156,8 +1156,9 @@ export function registerPTYHandlers(
       // Verdict-gate working feed (local mode's mirror of the daemon's
       // session:active → notePaneWorking): user keystrokes rebut a pending
       // completion window. Daemon mode needs no twin here — its own
-      // session:active broadcast covers the same input.
-      ptyBridge.noteUserInput(id);
+      // session:active broadcast covers the same input. The terminal's own
+      // replies and focus reports are not keystrokes.
+      if (stripPassiveInput(data).length > 0) ptyBridge.noteUserInput(id);
     };
     ipcMain.on(IPC.PTY_WRITE, onPtyWrite);
   }

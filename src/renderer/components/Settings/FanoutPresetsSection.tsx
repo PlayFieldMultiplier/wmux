@@ -22,6 +22,9 @@ import {
 import { ROLE_BINDING_MODEL_MAX } from '../../../shared/orchestratorRole';
 import { FANOUT_MAX_TASKS } from '../../../shared/workTask';
 import { useT } from '../../hooks/useT';
+import { useStore } from '../../stores';
+import { customAgentStem, type CustomAgent } from '../../../shared/customAgents';
+import { FANOUT_PRESETS_CHANGED_EVENT } from './CustomAgentsSection';
 import { IconX } from '../icons';
 import Button from '../ui/Button';
 import Field from '../ui/Field';
@@ -65,6 +68,7 @@ export function FanoutPresetsSection(): React.ReactElement {
   const [editing, setEditing] = useState<{ index: number | null; draft: FanoutPresetDraft } | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const customAgents = useStore((s) => s.customAgents);
 
   useEffect(() => {
     let cancelled = false;
@@ -92,6 +96,8 @@ export function FanoutPresetsSection(): React.ReactElement {
       }
       setPresets(out.presets);
       setDropped({ items: [], unreadable: false });
+      // Custom agents shows what each agent is used by.
+      window.dispatchEvent(new CustomEvent(FANOUT_PRESETS_CHANGED_EVENT));
       setError('');
       return true;
     } catch (err) {
@@ -109,7 +115,7 @@ export function FanoutPresetsSection(): React.ReactElement {
 
   const onSave = async () => {
     if (!editing || !presets) return;
-    const r = applyDraft(presets, editing.draft, editing.index);
+    const r = applyDraft(presets, editing.draft, editing.index, customAgents);
     if (!r.ok) {
       setError(t('settings.fanoutPresetsInvalid', { error: issueText(t, r.issue) }));
       return;
@@ -126,6 +132,7 @@ export function FanoutPresetsSection(): React.ReactElement {
     <PresetEditor
       t={t}
       draft={draft}
+      customAgents={customAgents}
       error={error}
       busy={busy}
       onChange={(next) => setEditing((cur) => (cur ? { ...cur, draft: next } : cur))}
@@ -172,6 +179,7 @@ export function FanoutPresetsSection(): React.ReactElement {
             key={preset.name}
             t={t}
             preset={preset}
+            customAgents={customAgents}
             disabled={busy || editing !== null}
             onEdit={() => startEdit(k, draftFromPreset(preset))}
             onDelete={() => void persist(presets.filter((_, i) => i !== k))}
@@ -216,12 +224,14 @@ export function FanoutPresetsSection(): React.ReactElement {
 function PresetRow({
   t,
   preset,
+  customAgents,
   disabled,
   onEdit,
   onDelete,
 }: {
   t: Translate;
   preset: FanoutPreset;
+  customAgents: readonly CustomAgent[];
   disabled: boolean;
   onEdit: () => void;
   onDelete: () => void;
@@ -235,7 +245,7 @@ function PresetRow({
         <p className="ui-row-title truncate">{preset.name}</p>
         {preset.description && <p className="ui-row-detail truncate">{preset.description}</p>}
         {/* The agent list is what gets launched: machine evidence, mono. */}
-        <p className="ui-row-detail truncate font-mono">{summarizeFanoutPresetAgents(preset)}</p>
+        <p className="ui-row-detail truncate font-mono">{summarizeFanoutPresetAgents(preset, customAgents)}</p>
         <p className="ui-row-detail truncate">{storage}</p>
       </div>
       <div className="flex shrink-0 gap-1">
@@ -253,6 +263,7 @@ function PresetRow({
 function PresetEditor({
   t,
   draft,
+  customAgents,
   error,
   busy,
   onChange,
@@ -261,6 +272,7 @@ function PresetEditor({
 }: {
   t: Translate;
   draft: FanoutPresetDraft;
+  customAgents: readonly CustomAgent[];
   error: string;
   busy: boolean;
   onChange: (next: FanoutPresetDraft) => void;
@@ -310,6 +322,7 @@ function PresetEditor({
               t={t}
               index={k}
               row={row}
+              customAgents={customAgents}
               canRemove={draft.items.length > 1}
               onChange={(next) => updateRow(k, next)}
               onRemove={() => onChange(removeDraftRow(draft, k))}
@@ -371,6 +384,7 @@ function AgentRow({
   t,
   index,
   row,
+  customAgents,
   canRemove,
   onChange,
   onRemove,
@@ -378,11 +392,12 @@ function AgentRow({
   t: Translate;
   index: number;
   row: FanoutPresetDraftRow;
+  customAgents: readonly CustomAgent[];
   canRemove: boolean;
   onChange: (next: FanoutPresetDraftRow) => void;
   onRemove: () => void;
 }) {
-  const spec = fanoutAgentSpec(row.agent);
+  const spec = fanoutAgentSpec(row.agent, customAgents);
   const modelOk = spec?.modelFlag === true;
   const hasUnattended = !!spec && spec.unattendedFlags.length > 0;
   const n = String(index + 1);
@@ -397,7 +412,7 @@ function AgentRow({
           aria-label={t('settings.fanoutPresetsAgentLabel', { index: n })}
           value={row.agent}
           data-testid="fanout-preset-agent"
-          onChange={(e) => onChange(setRowAgent(row, e.target.value))}
+          onChange={(e) => onChange(setRowAgent(row, e.target.value, customAgents))}
         >
           {FANOUT_AGENTS.map((a) => (
             <option key={a.stem} value={a.stem} disabled={!a.selectable}>
@@ -408,6 +423,9 @@ function AgentRow({
                     reason: t(`settings.fanoutPresetsDisabled.${a.disabledCode ?? 'unverified'}`),
                   })}
             </option>
+          ))}
+          {customAgents.map((a) => (
+            <option key={customAgentStem(a)} value={customAgentStem(a)}>{a.name}</option>
           ))}
         </Select>
         </div>

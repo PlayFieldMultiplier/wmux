@@ -49,22 +49,49 @@ export interface UserInputGate {
 
 const FOCUS_REPORTS: ReadonlySet<string> = new Set(['\x1b[I', '\x1b[O']);
 
+export interface UserInputMarker {
+  /**
+   * Whether the `onData` chunk being handled now was user input. Call it once
+   * per chunk, first thing in the `onData` listener: it consumes the signal.
+   * True for every chunk when the terminal exposes no user-input signal.
+   */
+  consume(): boolean;
+  /** False when the terminal exposes no user-input signal. */
+  readonly gated: boolean;
+  dispose(): void;
+}
+
 /**
- * An `onData` listener for `term` that calls `send` only for data the user
- * produced. Register it with `term.onData(gate)`; dispose it with the terminal.
+ * Tells, chunk by chunk, whether `onData` carries what the user produced or
+ * what the terminal answered on its own, for a listener that forwards both.
  */
-export function gateUserInput(term: UserInputTerminal, send: (data: string) => void): UserInputGate {
+export function markUserInput(term: UserInputTerminal): UserInputMarker {
   const onUserInput = term._core?.coreService?.onUserInput;
   let pending = false;
   const subscription = typeof onUserInput === 'function'
     ? onUserInput.call(term._core?.coreService, () => { pending = true; })
     : null;
+  return {
+    consume: () => {
+      const fromUser = pending;
+      pending = false;
+      return !subscription || fromUser;
+    },
+    gated: subscription !== null,
+    dispose: () => { subscription?.dispose(); },
+  };
+}
+
+/**
+ * An `onData` listener for `term` that calls `send` only for data the user
+ * produced. Register it with `term.onData(gate)`; dispose it with the terminal.
+ */
+export function gateUserInput(term: UserInputTerminal, send: (data: string) => void): UserInputGate {
+  const marker = markUserInput(term);
   const gate = ((data: string) => {
-    const fromUser = pending;
-    pending = false;
-    if (!subscription || fromUser || FOCUS_REPORTS.has(data)) send(data);
+    if (marker.consume() || FOCUS_REPORTS.has(data)) send(data);
   }) as UserInputGate;
-  Object.defineProperty(gate, 'gated', { value: subscription !== null });
-  gate.dispose = () => { subscription?.dispose(); };
+  Object.defineProperty(gate, 'gated', { value: marker.gated });
+  gate.dispose = marker.dispose;
   return gate;
 }

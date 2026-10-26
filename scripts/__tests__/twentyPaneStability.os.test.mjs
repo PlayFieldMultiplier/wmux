@@ -7,6 +7,7 @@ import {
   answerTrustPrompts, gapInTurnMs, inTurnAt, isRunEntry, trustPromptKeys,
   leftoverPids, linearSlope, markerFor, newClaudeState, nextClaudeAction, parseArgs, planLayout, producerCommand,
   producerSource, profileDiff, runTeardown, stripTerminalControls, summarizeRun, verifyEngine,
+  detectRespawns, teardownFlags,
 } from '../lib/twenty-pane-stability.mjs';
 
 const MiB = 1024 * 1024;
@@ -399,42 +400,136 @@ describe('twenty-pane stability process identity', () => {
 });
 
 describe('twenty-pane stability teardown order', () => {
-  function fakes({ pipeDiesAfterShutdown = true, daemonKillable = true } = {}) {
+  // pipeDiesAfterShutdown: the pipe closes on daemon.shutdown.
+  // processExitsWithPipe: the process exits with it (false = it lingers).
+  function fakes({ pipeDiesAfterShutdown = true, processExitsWithPipe = true, daemonKillable = true, pids = [4242], alivePid = 4242 } = {}) {
     const calls = [];
-    let daemonUp = true;
-    let shutdown = false;
+    let pipeUp = true;
+    let procUp = true;
+    let clock = 0;
     const io = {
+      daemonPids: pids,
+      now: () => clock,
       killApp: async () => { calls.push('killApp'); },
       waitAppExit: async () => { calls.push('waitAppExit'); return true; },
-      shutdownDaemon: async () => { calls.push('shutdownDaemon'); shutdown = true; if (pipeDiesAfterShutdown) daemonUp = false; return true; },
-      daemonPipeAlive: async () => daemonUp,
-      killDaemonIfOurs: async () => { calls.push('killDaemonIfOurs'); if (daemonKillable) daemonUp = false; return daemonKillable; },
+      shutdownDaemon: async () => {
+        calls.push('shutdownDaemon');
+        if (pipeDiesAfterShutdown) { pipeUp = false; if (processExitsWithPipe) procUp = false; }
+        return true;
+      },
+      daemonPipeAlive: async () => pipeUp,
+      pidAlive: async (pid) => procUp && pid === alivePid,
+      describeProcess: async (pid) => { calls.push(`describe:${pid}`); return { threads: 20, handles: 310, workingSetBytes: 1 }; },
+      killDaemonIfOurs: async (pid) => {
+        calls.push(`killDaemonIfOurs:${pid}`);
+        if (daemonKillable) { pipeUp = false; procUp = false; }
+        return daemonKillable;
+      },
       findLeftovers: async () => { calls.push('findLeftovers'); return [7, 8]; },
       killPid: async (pid) => { calls.push(`killPid:${pid}`); return true; },
-      removeSandbox: async () => { calls.push(`removeSandbox:${shutdown && !daemonUp}`); },
-      sleep: () => Promise.resolve(),
+      removeSandbox: async () => { calls.push(`removeSandbox:pipe=${pipeUp},proc=${procUp}`); },
+      sleep: async (ms) => { clock += ms; },
     };
     return { io, calls };
   }
+  const fast = { pipeWaitMs: 1000, pidExitWaitMs: 30000, pollMs: 500 };
 
   it('kills the app before the daemon, so no respawn can follow, and removes the sandbox last', async () => {
     const { io, calls } = fakes();
-    const report = await runTeardown(io, { pipeWaitMs: 1000, pollMs: 100 });
-    expect(calls).toEqual(['killApp', 'waitAppExit', 'shutdownDaemon', 'findLeftovers', 'killPid:7', 'killPid:8', 'removeSandbox:true']);
-    expect(report).toMatchObject({ appExited: true, daemonPipeGone: true, daemonKilled: false, leftoversKilled: 2, removed: true });
+    const report = await runTeardown(io, fast);
+    expect(calls).toEqual(['killApp', 'waitAppExit', 'shutdownDaemon', 'findLeftovers', 'killPid:7', 'killPid:8', 'removeSandbox:pipe=false,proc=false']);
+    expect(report).toMatchObject({ daemonPipeGone: true, daemonExited: true, daemonLingering: null, leftoversKilled: 2, removed: true, clean: true });
+    expect(teardownFlags(report)).toEqual([]);
+  });
+
+  it('never calls a teardown clean while the daemon process outlives its pipe', async () => {
+    const { io, calls } = fakes({ processExitsWithPipe: false });
+    const report = await runTeardown(io, fast);
+    // measured: the full 30 s wait elapsed on the fake clock
+    expect(report.daemonLingering).toEqual({ pid: 4242, seconds: 30, pipeGone: true, threads: 20, handles: 310, workingSetBytes: 1 });
+    // described, then killed through the identity check, and only then removed
+    expect(calls).toEqual(['killApp', 'waitAppExit', 'shutdownDaemon', 'describe:4242', 'killDaemonIfOurs:4242',
+      'findLeftovers', 'killPid:7', 'killPid:8', 'removeSandbox:pipe=false,proc=false']);
+    expect(report).toMatchObject({ daemonKilled: true, daemonExited: true, removed: true, clean: false });
+    expect(teardownFlags(report)[0]).toMatch(/pid 4242\) was still alive 30 s after its pipe closed; killed/);
+  });
+
+  it('watches the pid-file pid too, so a respawned daemon cannot hide behind a stale one', async () => {
+    // last ping named 100 (dead); the pid file names the live respawned 200
+    const { io, calls } = fakes({ processExitsWithPipe: false, pids: [100, 200], alivePid: 200 });
+    const report = await runTeardown(io, fast);
+    expect(report.daemonLingering.pid).toBe(200);
+    expect(calls).toContain('killDaemonIfOurs:200');
+    expect(calls).not.toContain('killDaemonIfOurs:100');
+  });
+
+  it('keeps the sandbox when a lingering daemon is not provably ours', async () => {
+    const { io, calls } = fakes({ processExitsWithPipe: false, daemonKillable: false });
+    const report = await runTeardown(io, fast);
+    expect(report).toMatchObject({ daemonPipeGone: true, daemonExited: false, removed: false, clean: false });
+    expect(calls.some((c) => c.startsWith('removeSandbox'))).toBe(false);
+    expect(teardownFlags(report).join('\n')).toMatch(/not killed[^]*sandbox was kept/);
+  });
+
+  it('never reports clean when no daemon pid is known', async () => {
+    const { io } = fakes({ pids: [] });
+    const report = await runTeardown(io, fast);
+    expect(report).toMatchObject({ daemonPipeGone: true, daemonExited: false, removed: false, clean: false });
+    expect(teardownFlags(report).join('\n')).toMatch(/pid was unknown/);
   });
 
   it('kills a daemon that ignored shutdown only through the identity check', async () => {
     const { io, calls } = fakes({ pipeDiesAfterShutdown: false });
-    const report = await runTeardown(io, { pipeWaitMs: 300, pollMs: 100 });
-    expect(calls.slice(0, 4)).toEqual(['killApp', 'waitAppExit', 'shutdownDaemon', 'killDaemonIfOurs']);
-    expect(report).toMatchObject({ daemonKilled: true, daemonPipeGone: true, removed: true });
+    const report = await runTeardown(io, fast);
+    expect(calls.slice(0, 5)).toEqual(['killApp', 'waitAppExit', 'shutdownDaemon', 'describe:4242', 'killDaemonIfOurs:4242']);
+    expect(report).toMatchObject({ daemonKilled: true, daemonPipeGone: true, daemonExited: true, removed: true, clean: false });
+    expect(report.daemonLingering.pipeGone).toBe(false);
+  });
+
+  it('flags an open pipe even when no known pid is alive', async () => {
+    const { io, calls } = fakes({ pipeDiesAfterShutdown: false, alivePid: -1 });
+    const report = await runTeardown(io, fast);
+    expect(report.daemonLingering).toMatchObject({ pid: null, pipeGone: false });
+    expect(calls.some((c) => c.startsWith('removeSandbox'))).toBe(false);
+    expect(teardownFlags(report)[0]).toMatch(/no known daemon pid was alive and its pipe never closed/);
   });
 
   it('keeps the sandbox (and the daemon token) when the daemon is still up', async () => {
     const { io, calls } = fakes({ pipeDiesAfterShutdown: false, daemonKillable: false });
-    const report = await runTeardown(io, { pipeWaitMs: 300, pollMs: 100 });
-    expect(report).toMatchObject({ daemonPipeGone: false, removed: false });
+    const report = await runTeardown(io, fast);
+    expect(report).toMatchObject({ daemonPipeGone: false, removed: false, clean: false });
     expect(calls.some((c) => c.startsWith('removeSandbox'))).toBe(false);
   });
 });
+
+describe('twenty-pane stability daemon respawn', () => {
+  const at = (tSec, daemonPid, stalls = [], silent = [], pingSec = tSec + 4) =>
+    sample(tSec, { memory: daemonPid === undefined ? {} : { daemonPid, daemonPingSec: pingSec }, stalls, silent });
+
+  it('detects a pid change mid-run with the pings around it', () => {
+    const samples = [at(0, 100), at(10, 100), at(20, undefined), at(30, 200), at(40, 200)];
+    expect(detectRespawns(samples, 100)).toEqual([{ atSec: 34, lastOldPingSec: 14, fromPid: 100, toPid: 200 }]);
+    expect(detectRespawns([at(0, 100), at(10, 100)], 100)).toEqual([]);
+    // a start pid from daemon.ping that the first sample no longer shows
+    expect(detectRespawns([at(0, 300)], 100)).toEqual([{ atSec: 4, lastOldPingSec: null, fromPid: 100, toPid: 300 }]);
+  });
+
+  it('counts stalls up to the old daemon\'s last ping, lists the ones around the respawn, and flags it', () => {
+    const gap = (atSec) => ({ ptyId: 'p', cls: 'streaming', gapMs: 9000, atSec });
+    const samples = [
+      at(0, 100, [gap(5)]),
+      at(10, 100, [gap(13)]), // ended after this sample started, before its ping at 14 s: counted
+      at(20, 200, [gap(18), gap(23)]), // 18 s: between the pings; 23 s: before the new ping at 24 s
+      at(30, 200, [gap(28)], [{ ptyId: 'p', cls: 'streaming', silentMs: 9000 }]),
+    ];
+    const s = summarizeRun(samples, { startDaemonPid: 100 });
+    expect(s.daemonRespawned).toHaveLength(1);
+    expect(s.stalls).toMatchObject({ episodes: 2, validUntilSec: 14, ignoredAfterRespawn: 1, silentAtEnd: [] });
+    expect(s.stalls.aroundRespawn.map((x) => x.atSec)).toEqual([18, 23]);
+    expect(s.flags.some((f) => /respawned between 14 s and 24 s \(pid 100 -> 200\).*first 14 s.*2 stall/.test(f))).toBe(true);
+    const steady = summarizeRun([at(0, 100, [gap(5)]), at(10, 100)], { startDaemonPid: 100 });
+    expect(steady).toMatchObject({ daemonRespawned: null, stalls: { episodes: 1, validUntilSec: null, ignoredAfterRespawn: 0 } });
+  });
+});
+
+

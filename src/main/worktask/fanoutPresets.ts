@@ -14,6 +14,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { getWmuxDir } from '../../daemon/config';
 import { atomicWriteJSON } from '../../daemon/util/atomicWrite';
+import { loadCustomAgents } from './customAgents';
+import { customAgentStem, findCustomAgent } from '../../shared/customAgents';
+import type { OrchestratorRoleBindings } from '../../shared/orchestratorRole';
 import {
   FANOUT_PRESETS_MAX,
   FANOUT_PRESET_TEMPLATES,
@@ -45,7 +48,7 @@ export function loadFanoutPresetsReport(
   }
   try {
     const raw = JSON.parse(fs.readFileSync(p, 'utf8')) as { presets?: unknown };
-    return normalizeFanoutPresetsReport(raw?.presets);
+    return normalizeFanoutPresetsReport(raw?.presets, loadCustomAgents(dir));
   } catch {
     return { presets: [], dropped: [], unreadable: true };
   }
@@ -77,8 +80,9 @@ export async function saveFanoutPresets(
   }
   const out: FanoutPreset[] = [];
   const seen = new Set<string>();
+  const customAgents = loadCustomAgents(dir);
   for (const raw of input) {
-    const r = normalizeFanoutPreset(raw);
+    const r = normalizeFanoutPreset(raw, customAgents);
     if (!r.ok) return { ok: false, code: r.code, params: r.params, error: r.error };
     const key = fanoutPresetKey(r.preset.name);
     if (seen.has(key)) {
@@ -100,4 +104,38 @@ export async function saveFanoutPresets(
   }
   await atomicWriteJSON(p, { presets: out });
   return { ok: true, presets: out };
+}
+
+/** What still launches one custom agent, and which of those pin a model. */
+export interface CustomAgentUse {
+  users: string[];
+  modelPins: string[];
+  /** Presets with a row that runs the agent with its unattended flags. */
+  unattendedPins: string[];
+}
+
+/**
+ * What launches each custom agent: the saved presets with a row on it and the
+ * roles bound to it (`roleBindings`, from the renderer's session file), keyed
+ * by stem. An agent in here cannot be deleted or renamed, and one with a
+ * pinned model keeps its model flag (saveCustomAgents).
+ */
+export function customAgentUsers(roleBindings: OrchestratorRoleBindings, dir?: string): Map<string, CustomAgentUse> {
+  const customAgents = loadCustomAgents(dir);
+  const uses = new Map<string, CustomAgentUse>();
+  const note = (agent: string | undefined, user: string, pinsModel: boolean, unattended: boolean): void => {
+    const custom = agent ? findCustomAgent(agent, customAgents) : undefined;
+    if (!custom) return;
+    const stem = customAgentStem(custom);
+    const use = uses.get(stem) ?? { users: [], modelPins: [], unattendedPins: [] };
+    if (!use.users.includes(user)) use.users.push(user);
+    if (pinsModel && !use.modelPins.includes(user)) use.modelPins.push(user);
+    if (unattended && !use.unattendedPins.includes(user)) use.unattendedPins.push(user);
+    uses.set(stem, use);
+  };
+  for (const [role, binding] of Object.entries(roleBindings)) note(binding.agent, `the ${role} role`, !!binding.model, false);
+  for (const preset of loadFanoutPresets(dir)) {
+    for (const item of preset.items) note(item.agent, `the ${preset.name} preset`, !!item.model, item.unattended === true);
+  }
+  return uses;
 }

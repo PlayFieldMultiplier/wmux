@@ -28,6 +28,7 @@ import {
   type GatedSubmitResult,
 } from '../../../shared/ptyMessageDelivery';
 import { applyRoleBinding, type InjectedLaunchOptions, type RoleBinding } from '../../../shared/orchestratorRole';
+import { loadCustomAgents } from '../../worktask/customAgents';
 import type { FreshContextReply } from '../../../shared/freshContext';
 import type { SessionStartReceipt } from '../../../shared/hooks/HookSignalRouter';
 import {
@@ -1471,7 +1472,9 @@ export function registerInputRpc(
     const binding = rewritable || newTask ? await bindingFor(ptyId) : undefined;
     if (rewritable && binding) {
       try {
-        const rewrite = applyRoleBinding(safeText, binding);
+        // A role bound to one of the operator's custom agents: its launch is
+        // an agent launch too, with the model flag the operator gave it.
+        const rewrite = applyRoleBinding(safeText, binding, { customAgents: loadCustomAgents() });
         if (rewrite.changed) {
           safeText = rewrite.command;
           // Report the model ONLY when the flag was actually injected —

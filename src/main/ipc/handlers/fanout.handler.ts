@@ -12,10 +12,12 @@
 // worktask/createFanOutService.ts — the §2 G1 idempotency LRU is an instance
 // field, so a second instance would accept one key twice and fan out twice.
 
-import { ipcMain } from 'electron';
+import fs from 'node:fs';
+import path from 'node:path';
+import { app, ipcMain } from 'electron';
 import { IPC } from '../../../shared/constants';
 import { wrapHandler } from '../wrapHandler';
-import { ORCH_ROLES, sanitizeOrchRole } from '../../../shared/orchestratorRole';
+import { ORCH_ROLES, normalizeRoleBindings, sanitizeOrchRole, type OrchestratorRoleBindings } from '../../../shared/orchestratorRole';
 
 /** A role name only if it is one wmux actually defines; '' otherwise. */
 function asOrchRole(raw: unknown): string {
@@ -32,7 +34,21 @@ import {
   setFanoutTrustAgyFolders,
   setFanoutWorkerPermissionMode,
 } from '../../worktask/fanoutWorkerPolicy';
-import { loadFanoutPresetsReport, saveFanoutPresets } from '../../worktask/fanoutPresets';
+import { customAgentUsers, loadFanoutPresetsReport, saveFanoutPresets } from '../../worktask/fanoutPresets';
+import { loadCustomAgentsReport, saveCustomAgents } from '../../worktask/customAgents';
+
+/** The role bindings the renderer last saved (session.json, the file `wmux role`
+ *  reads too). Unreadable = none: the Settings editor checks its live ones. */
+function savedRoleBindings(): OrchestratorRoleBindings {
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'session.json'), 'utf8')) as {
+      orchestratorRoleBindings?: unknown;
+    };
+    return normalizeRoleBindings(raw?.orchestratorRoleBindings);
+  } catch {
+    return {};
+  }
+}
 
 export function registerFanOutHandler(service: FanOutService): () => void {
   // The Fleet Approvals tab's "recent unattended fan-outs" list.
@@ -111,6 +127,21 @@ export function registerFanOutHandler(service: FanOutService): () => void {
     ),
   );
 
+  // Custom agents (Settings → Roles & fan-out). Main owns them, and only this
+  // Settings IPC writes them — see customAgents.ts.
+  ipcMain.removeHandler(IPC.FANOUT_CUSTOM_AGENTS_GET);
+  ipcMain.handle(
+    IPC.FANOUT_CUSTOM_AGENTS_GET,
+    wrapHandler(IPC.FANOUT_CUSTOM_AGENTS_GET, async () => loadCustomAgentsReport()),
+  );
+  ipcMain.removeHandler(IPC.FANOUT_CUSTOM_AGENTS_SET);
+  ipcMain.handle(
+    IPC.FANOUT_CUSTOM_AGENTS_SET,
+    wrapHandler(IPC.FANOUT_CUSTOM_AGENTS_SET, async (_event: Electron.IpcMainInvokeEvent, agents: unknown) =>
+      saveCustomAgents(agents, customAgentUsers(savedRoleBindings())),
+    ),
+  );
+
   ipcMain.removeHandler(IPC.FANOUT_START);
   ipcMain.handle(
     IPC.FANOUT_START,
@@ -133,6 +164,8 @@ export function registerFanOutHandler(service: FanOutService): () => void {
     ipcMain.removeHandler(IPC.FANOUT_TRUST_AGY_FOLDERS_SET);
     ipcMain.removeHandler(IPC.FANOUT_PRESETS_GET);
     ipcMain.removeHandler(IPC.FANOUT_PRESETS_SET);
+    ipcMain.removeHandler(IPC.FANOUT_CUSTOM_AGENTS_GET);
+    ipcMain.removeHandler(IPC.FANOUT_CUSTOM_AGENTS_SET);
   };
 }
 

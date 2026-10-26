@@ -1,5 +1,6 @@
 import { AGENT_ROWS, agentLauncherStem } from './agentIdentity';
 import { launcherStem, tokenize } from './agentResume';
+import { customAgentLaunchLine, customLaunchPrefixLength, findCustomAgent, isFlagToken, type CustomAgent } from './customAgents';
 import {
   EFFORT_TOKEN_RE, freshContextGrammarFor, hasPermissionChoice, isSkipPermissionsToken, launchGrammarFor,
   permissionChoiceIndexes,
@@ -131,6 +132,10 @@ export type OrchestratorRoleBindings = Record<string, RoleBinding>;
 interface ModelFlagGrammar {
   /** Render the model flag tokens inserted right after the launcher token. */
   flag: (model: string) => string;
+  /** A custom agent's own model flag: only that spelling (or `flag=`) on the
+   *  line means a model is already chosen. Absent = the registry's
+   *  `--model` / `-m` rule (hasExplicitModelFlag). */
+  customFlag?: string;
 }
 const MODEL_FLAG_BY_LAUNCHER: ReadonlyMap<string, ModelFlagGrammar> = new Map(
   AGENT_ROWS.flatMap((row): [string, ModelFlagGrammar][] => {
@@ -142,6 +147,14 @@ const MODEL_FLAG_BY_LAUNCHER: ReadonlyMap<string, ModelFlagGrammar> = new Map(
 /** Whether wmux knows how to inject a model flag for a launcher stem. */
 export function launcherSupportsModelFlag(stem: string): boolean {
   return MODEL_FLAG_BY_LAUNCHER.has(stem);
+}
+
+/** The model flag grammar for a launcher stem, the registry's first. */
+function modelFlagGrammar(stem: string, customAgents: readonly CustomAgent[] | undefined): ModelFlagGrammar | undefined {
+  const registry = MODEL_FLAG_BY_LAUNCHER.get(stem);
+  if (registry) return registry;
+  const flag = findCustomAgent(stem, customAgents)?.modelFlag;
+  return flag ? { flag: (m) => `${flag} ${m}`, customFlag: flag } : undefined;
 }
 
 /**
@@ -172,12 +185,13 @@ export function launcherSupportsModelFlag(stem: string): boolean {
 export function applyRoleAgent(
   command: string,
   binding: RoleBinding | undefined,
-  options?: Pick<ApplyRoleBindingOptions, 'extraAgents'>,
+  options?: Pick<ApplyRoleBindingOptions, 'extraAgents' | 'customAgents'>,
 ): { command: string; changed: boolean; note?: string } {
   const unchanged = { command, changed: false };
   const agent = binding?.agent?.trim();
   if (!agent) return unchanged;
-  const known = (stem: string): boolean => KNOWN_AGENT_STEMS.has(stem) || options?.extraAgents?.has(stem) === true;
+  const known = (stem: string): boolean =>
+    KNOWN_AGENT_STEMS.has(stem) || options?.extraAgents?.has(stem) === true || !!findCustomAgent(stem, options?.customAgents);
   if (!known(agent)) {
     return { ...unchanged, note: `Role is bound to "${agent}", which wmux does not recognise as an agent CLI; launched unchanged.` };
   }
@@ -200,9 +214,13 @@ export function applyRoleAgent(
   // a flag gets that flag right before the argument (agy: `-i "<prompt>"`);
   // later rewrites insert their flags after the launcher, so `-i` stays adjacent.
   const rest = command.slice(tokens[0].end);
-  const promptFlag = PROMPT_FLAG_BY_STEM.get(agent)?.flag;
-  if (promptFlag && tokens.length > 1) return { command: `${agent} ${promptFlag}${rest}`, changed: true };
-  return { command: agent + rest, changed: true };
+  // A custom agent launches as the operator typed it (command and arguments),
+  // with its own first-prompt flag when it has one.
+  const custom = KNOWN_AGENT_STEMS.has(agent) ? undefined : findCustomAgent(agent, options?.customAgents);
+  const launcher = custom ? customAgentLaunchLine(custom) : agent;
+  const promptFlag = custom ? custom.promptFlag : PROMPT_FLAG_BY_STEM.get(agent)?.flag;
+  if (promptFlag && tokens.length > 1) return { command: `${launcher} ${promptFlag}${rest}`, changed: true };
+  return { command: launcher + rest, changed: true };
 }
 
 /** Agent CLIs that refuse a positional first prompt, keyed by launcher stem: the
@@ -257,6 +275,14 @@ export function launchRefusesPositionalPrompt(command: string): boolean {
   return !hasPromptTakingFlag(stem, tokens.slice(1));
 }
 
+/** A custom agent's pin is placed only when it has a model flag and the
+ *  role's own args do not choose the model with that flag (applyRoleBinding). */
+function customModelPinApplies(binding: RoleBinding, customAgents: readonly CustomAgent[] | undefined): boolean {
+  const flag = binding.agent ? findCustomAgent(binding.agent, customAgents)?.modelFlag : undefined;
+  if (!flag) return false;
+  return !tokenize(binding.args?.trim() ?? '').some((t) => isFlagToken(t.value, flag));
+}
+
 /**
  * Will this binding actually cause a model flag to be spliced into a launch?
  *
@@ -270,9 +296,10 @@ export function launchRefusesPositionalPrompt(command: string): boolean {
  * operator ends up believing a pane is pinned to a cheap model while it launches
  * on the expensive default.
  */
-export function bindingEnforcesModel(binding: RoleBinding | undefined): boolean {
+export function bindingEnforcesModel(binding: RoleBinding | undefined, customAgents?: readonly CustomAgent[]): boolean {
   return (
-    !!binding?.model && !!binding.agent && launcherSupportsModelFlag(binding.agent)
+    !!binding?.model && !!binding.agent &&
+    (launcherSupportsModelFlag(binding.agent) || customModelPinApplies(binding, customAgents))
   );
 }
 
@@ -632,6 +659,13 @@ export interface ApplyRoleBindingOptions {
    */
   extraAgents?: ReadonlySet<string>;
   /**
+   * The operator's custom agents (src/shared/customAgents.ts). A launcher that
+   * is one of them is an agent launch here too, and its model flag is the one
+   * the operator gave it. They have no launch grammar, so no effort or
+   * skip-permissions flag is ever added for them.
+   */
+  customAgents?: readonly CustomAgent[];
+  /**
    * Do not inject the binding's skip-permissions flag on this launch. Set by the
    * resume chip and the recovery pill when the user explicitly turned their
    * "skip permissions" toggle OFF: that per-launch choice wins over the role
@@ -687,10 +721,17 @@ export function applyRoleBinding(
   const stem = launcherStem(tokens[0].value);
 
   // Gate 1 — only agent launches are ever rewritten (see the doc block).
-  if (!KNOWN_AGENT_STEMS.has(stem) && options?.extraAgents?.has(stem) !== true) return unchanged;
+  if (!KNOWN_AGENT_STEMS.has(stem) && options?.extraAgents?.has(stem) !== true &&
+    !findCustomAgent(stem, options?.customAgents)) return unchanged;
   // Gate 2 — and only when the line is an invocation, not prose. A spawned
   // process is one by construction (see ApplyRoleBindingOptions.spawnedProcess).
-  if (!options?.spawnedProcess && !looksLikeLaunchInvocation(tokens)) return unchanged;
+  // A custom agent's own Arguments (a subcommand such as `chat`) belong to
+  // its launcher: the prose gate reads the line after them, and the flags
+  // below go after them too, where such a CLI takes its options.
+  const customAgent = KNOWN_AGENT_STEMS.has(stem) ? undefined : findCustomAgent(stem, options?.customAgents);
+  const prefix = customAgent ? customLaunchPrefixLength(tokens.map((t) => (t.quoted ? null : t.value)), customAgent) : 0;
+  const gated = prefix > 0 ? [tokens[0], ...tokens.slice(1 + prefix)] : tokens;
+  if (!options?.spawnedProcess && !looksLikeLaunchInvocation(gated)) return unchanged;
 
   // A binding that names an agent only applies to that launcher. Launching a
   // DIFFERENT known agent than the role names is a silent policy deviation.
@@ -701,7 +742,7 @@ export function applyRoleBinding(
     };
   }
 
-  const grammar = MODEL_FLAG_BY_LAUNCHER.get(stem);
+  const grammar = modelFlagGrammar(stem, options?.customAgents);
   let note: string | undefined;
   let injectModel = false;
 
@@ -712,6 +753,13 @@ export function applyRoleBinding(
         `--model grammar applies; nothing was enforced. Set the role's agent in Settings.`;
     } else if (!grammar) {
       note = `Role bound to model "${model}", but launcher "${stem}" has no known --model flag; launched unchanged.`;
+    } else if (grammar.customFlag) {
+      // A custom agent: only its own flag chooses its model, on the line or in
+      // the role's args (appended after the pin, where they would win).
+      const customFlag = grammar.customFlag;
+      const chosen = [...tokens, ...(roleArgs ? tokenize(roleArgs) : [])].some((t) => isFlagToken(t.value, customFlag));
+      if (!chosen) injectModel = true;
+      else note = `The command or the role's args already choose the model with ${customFlag}; "${model}" was not added.`;
     } else if (!hasExplicitModelFlag(tokens)) {
       injectModel = true;
     }
@@ -786,7 +834,7 @@ export function applyRoleBinding(
   }
 
   let out = command;
-  const at = tokens[0].end;
+  const at = tokens[prefix].end;
   const inserted = [
     ...(injectModel && grammar ? [grammar.flag(model as string)] : []),
     ...optionTokens,

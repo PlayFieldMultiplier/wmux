@@ -214,6 +214,8 @@ export function EmptyLeafFunnel() {
               ),
               seedRoleBinding,
               seedRoleName,
+              undefined,
+              useStore.getState().customAgents,
             )
           )
         ),

@@ -58,6 +58,7 @@ import { useAgentActivityClock } from '../../hooks/useAgentActivityClock';
 import { useTerminalCopyShortcut } from '../../hooks/useTerminalCopyShortcut';
 import { useNotificationListener } from '../../hooks/useNotificationListener';
 import { useRpcBridge } from '../../hooks/useRpcBridge';
+import { useCustomAgentsHydration } from '../../hooks/useCustomAgentsHydration';
 import { useA2aLinkRequestToast, useA2aRemoteSnapshot } from '../../hooks/useA2aRemoteSnapshot';
 import { useA2aRemoteBridge } from '../../hooks/useA2aRemoteBridge';
 import { useConnectionDropNotice } from '../../hooks/useConnectionDropNotice';
@@ -932,6 +933,7 @@ export default function AppLayout() {
   useTerminalCopyShortcut();
   useNotificationListener();
   useRpcBridge();
+  useCustomAgentsHydration();
   // Cross-host A2A: the pane tree for exposure and gone-pane link breaks.
   useA2aRemoteSnapshot();
   useA2aLinkRequestToast(t);

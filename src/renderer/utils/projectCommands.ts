@@ -67,6 +67,8 @@ export async function runProjectCommand(
         ),
         roleBinding,
         paneRoleName,
+        undefined,
+        state.customAgents,
       ),
     ) as { id: string; shell?: string; cwd?: string };
     const fresh = useStore.getState();

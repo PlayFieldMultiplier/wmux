@@ -46,7 +46,7 @@ import { PTYBridge } from '../PTYBridge';
 import type { PTYManager, PTYInstance } from '../PTYManager';
 import { HookSignalRouter } from '../../hooks/HookSignalRouter';
 import { SignalLatencyMeter } from '../../../shared/hooks/SignalLatencyMeter';
-import { clearPty as clearSuppression, recentlyEscaped, SETTLE_REDRAW_GUARD_MS } from '../../notification/idleSuppression';
+import { clearPty as clearSuppression, lastUserInputAt, recentlyEscaped, SETTLE_REDRAW_GUARD_MS } from '../../notification/idleSuppression';
 import { ESCAPE_WIN32 } from '../../../shared/win32InputKeys';
 
 interface MockProcess {
@@ -123,6 +123,18 @@ describe('PTYBridge interrupt edge (Ctrl+C / ESC ESC settles a latched pane)', (
 
     expect(router.governsRunningState('p1')).toBe(true);
     expect(mocks.broadcastMetadataUpdate).not.toHaveBeenCalled();
+  });
+
+  it('a terminal reply the pane forwards is not user input; a key is', () => {
+    const { bridge } = makeBridge();
+    clearSuppression('p1');
+
+    // DA1, a cursor report, the kitty flags reply, a focus report.
+    for (const reply of ['\x1b[?1;2c', '\x1b[24;80R', '\x1b[?0u', '\x1b[I']) bridge.noteInterruptInput('p1', reply);
+    expect(lastUserInputAt('p1')).toBeUndefined();
+
+    bridge.noteInterruptInput('p1', 'a');
+    expect(lastUserInputAt('p1')).toBeDefined();
   });
 
   it('records a lone ESC for the agent\'s "Interrupted" row to confirm', () => {

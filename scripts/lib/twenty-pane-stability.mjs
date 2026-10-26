@@ -545,16 +545,25 @@ function outcome(events) {
  *   focus: { workspaceSwitch, focused } }.
  * Fields may be missing on a sample; the summary skips what it does not have.
  */
-export function summarizeRun(samples, { stallMs = DEFAULTS.stallMs, windowMin = 5, claude = [] } = {}) {
+export function summarizeRun(samples, { stallMs = DEFAULTS.stallMs, windowMin = 5, claude = [], startDaemonPid = null } = {}) {
   const keyboard = samples.flatMap((s) => s.keyboard ?? []);
   const probes = samples.flatMap((s) => (s.probes ?? []).map((p) => ({ ...p, tSec: s.tSec })));
-  const stalls = samples.flatMap((s) => s.stalls ?? []);
+  // A respawned daemon starts its sessions over: the producers died with the
+  // old daemon, so "streaming" panes are plain shells from then on and their
+  // silence is not a stall. Stall metrics stop at the first respawn.
+  // Stalls that ended between the last ping of the old daemon and the first
+  // of the new one cannot be attributed; they are listed apart, not counted.
+  const respawns = detectRespawns(samples, startDaemonPid);
+  const stallCutSec = respawns.length ? (respawns[0].lastOldPingSec ?? 0) : null;
+  const allStalls = samples.flatMap((s) => s.stalls ?? []);
+  const stalls = stallCutSec === null ? allStalls : allStalls.filter((st) => st.atSec <= stallCutSec);
+  const aroundRespawn = stallCutSec === null ? [] : allStalls.filter((st) => st.atSec > stallCutSec && st.atSec <= respawns[0].atSec);
   const late = samples.flatMap((s) => s.late ?? []);
   const lateOf = (kind) => {
     const ms = late.filter((l) => l.kind === kind).map((l) => l.lateMs);
     return { count: ms.length, maxMs: ms.length ? Math.max(...ms) : null };
   };
-  const lastSilent = samples.length ? samples[samples.length - 1].silent ?? [] : [];
+  const lastSilent = stallCutSec === null && samples.length ? samples[samples.length - 1].silent ?? [] : [];
 
   const perPane = new Map();
   for (const p of probes) {
@@ -616,7 +625,13 @@ export function summarizeRun(samples, { stallMs = DEFAULTS.stallMs, windowMin = 
       worstGapMs: stalls.length ? Math.max(...stalls.map((s) => s.gapMs)) : null,
       list: stalls,
       silentAtEnd: lastSilent,
+      // Set when the daemon was respawned: stall metrics cover only the run up
+      // to the last sample before it.
+      validUntilSec: stallCutSec,
+      aroundRespawn,
+      ignoredAfterRespawn: allStalls.length - stalls.length - aroundRespawn.length,
     },
+    daemonRespawned: respawns.length ? respawns : null,
     memory: {
       daemonRss: memoryTrend(series('daemonRssBytes')),
       electronTotal: memoryTrend(series('electronBytes')),
@@ -669,6 +684,10 @@ export function flagsFor(summary) {
   if (summary.keyboard.wrongPane > 0) flags.push(`${summary.keyboard.wrongPane} keystroke marker(s) echoed in a pane other than the focused one`);
   if (summary.probes.dropped > 0) flags.push(`${summary.probes.dropped} pane probe(s) not echoed within the timeout (${summary.probes.late.count} arrived later)`);
   if (summary.stalls.episodes > 0) flags.push(`${summary.stalls.episodes} output stall(s) over ${summary.stalls.thresholdMs} ms on ${summary.stalls.panes} pane(s)`);
+  if (summary.daemonRespawned) {
+    const r = summary.daemonRespawned[0];
+    flags.push(`the daemon was respawned between ${Math.round(r.lastOldPingSec ?? 0)} s and ${Math.round(r.atSec)} s (pid ${r.fromPid} -> ${r.toPid})${summary.daemonRespawned.length > 1 ? `, ${summary.daemonRespawned.length} times in all` : ''}; stall metrics cover only the first ${Math.round(summary.stalls.validUntilSec)} s, since the producers died with it${summary.stalls.aroundRespawn.length ? ` (${summary.stalls.aroundRespawn.length} stall(s) in between are listed in stalls.aroundRespawn)` : ''}`);
+  }
   if (summary.stalls.silentAtEnd.length > 0) flags.push(`${summary.stalls.silentAtEnd.length} streaming pane(s) silent at the last sample`);
   if (summary.frames.throttledSamples > 0) flags.push(`${summary.frames.throttledSamples} sample(s) with a throttled window (rAF p50 > 50 ms): frame numbers there are not trustworthy`);
   const cs = summary.claude?.stopped ?? {};
@@ -762,36 +781,109 @@ export function containsPath(text, path) {
  *   1. kill the app and wait for it to exit (its daemon respawn controller
  *      would otherwise restart a daemon whose socket closes);
  *   2. daemon.shutdown;
- *   3. wait until the daemon pipe is gone; if not, kill the daemon pid only
- *      when the identity check passes;
- *   4. one process pass over the sandbox paths, killing leftovers;
- *   5. remove the sandbox, but only once the daemon pipe is gone, so a daemon
- *      that survived keeps its token for manual cleanup.
+ *   3. wait until the daemon pipe is gone;
+ *   4. wait for the daemon PROCESS to exit (up to pidExitWaitMs): a daemon
+ *      can close its pipe, log its exit and still live on, holding files.
+ *      One that lingers is described (`describeProcess`) and recorded as
+ *      `daemonLingering`, then killed, only through the identity check;
+ *   5. one process pass over the sandbox paths, killing leftovers;
+ *   6. remove the sandbox, only when the pipe is gone and the daemon process
+ *      has exited, so a daemon that survived keeps its token and files for
+ *      manual cleanup. `clean` is true only then.
  * `io` supplies every side effect, so the order is unit-tested with fakes.
  */
-export async function runTeardown(io, { pipeWaitMs = 10000, pollMs = 200 } = {}) {
-  const report = { appExited: false, daemonShutdownSent: false, daemonPipeGone: false, daemonKilled: false, leftoversKilled: 0, removed: false };
+export async function runTeardown(io, { pipeWaitMs = 10000, pidExitWaitMs = 30000, pollMs = 200 } = {}) {
+  // Every pid that may be this run's daemon: the one it last reported over its
+  // pipe and the one in its pid file (a respawned daemon writes a new one).
+  const pids = [...new Set((io.daemonPids ?? []).filter((p) => Number.isInteger(p) && p > 0))];
+  const report = {
+    appExited: false, daemonShutdownSent: false, daemonPipeGone: false, daemonPids: pids,
+    daemonExited: false, daemonLingering: null, daemonKilled: false, leftoversKilled: 0, removed: false, clean: false,
+  };
   await io.killApp();
   report.appExited = await io.waitAppExit();
   try { report.daemonShutdownSent = await io.shutdownDaemon(); } catch { report.daemonShutdownSent = false; }
-  const pipeGone = async () => {
-    for (let waited = 0; waited <= pipeWaitMs; waited += pollMs) {
-      if (!(await io.daemonPipeAlive())) return true;
+  const now = io.now ?? Date.now;
+  const waitUntil = async (done, limitMs) => {
+    const start = now();
+    for (;;) {
+      if (await done()) return true;
+      if (now() - start >= limitMs) return false;
       await io.sleep(pollMs);
     }
-    return false;
   };
-  report.daemonPipeGone = await pipeGone();
-  if (!report.daemonPipeGone) {
-    report.daemonKilled = await io.killDaemonIfOurs();
-    if (report.daemonKilled) report.daemonPipeGone = await pipeGone();
+  const alivePids = async () => {
+    const alive = [];
+    for (const pid of pids) if (await io.pidAlive(pid)) alive.push(pid);
+    return alive;
+  };
+  const pipeStart = now();
+  report.daemonPipeGone = await waitUntil(async () => !(await io.daemonPipeAlive()), pipeWaitMs);
+  const pidStart = now();
+  // With the pipe still open there is nothing to wait for: go straight to the kill.
+  await waitUntil(async () => (await alivePids()).length === 0, report.daemonPipeGone ? pidExitWaitMs : 0);
+  const lingering = await alivePids();
+  if (lingering.length > 0 || !report.daemonPipeGone) {
+    report.daemonLingering = {
+      pid: lingering[0] ?? null,
+      ...(lingering.length > 1 ? { otherPids: lingering.slice(1) } : {}),
+      seconds: Math.round((now() - (report.daemonPipeGone ? pidStart : pipeStart)) / 1000),
+      pipeGone: report.daemonPipeGone,
+      ...(lingering.length ? (await io.describeProcess(lingering[0]).catch(() => null) ?? {}) : {}),
+    };
+    let killed = lingering.length > 0;
+    for (const pid of lingering) killed = (await io.killDaemonIfOurs(pid)) && killed;
+    report.daemonKilled = killed;
+    if (killed) {
+      await waitUntil(async () => (await alivePids()).length === 0, 5000);
+      report.daemonPipeGone = report.daemonPipeGone || await waitUntil(async () => !(await io.daemonPipeAlive()), 2000);
+    }
   }
+  // Exited only when every known pid is gone; with none known it is unknown.
+  report.daemonExited = pids.length > 0 && (await alivePids()).length === 0;
   for (const pid of await io.findLeftovers()) {
     if (await io.killPid(pid)) report.leftoversKilled++;
   }
-  if (report.daemonPipeGone) {
+  if (report.daemonPipeGone && report.daemonExited) {
     await io.removeSandbox();
     report.removed = true;
   }
+  report.clean = report.removed && report.daemonLingering === null;
   return report;
+}
+
+/** Summary flags for a teardown report: never "clean" while the daemon lives. */
+export function teardownFlags(report) {
+  if (!report) return [];
+  const flags = [];
+  const l = report.daemonLingering;
+  if (l) {
+    const who = l.pid === null ? 'no known daemon pid was alive' : `the daemon (pid ${l.pid}) was still alive`;
+    const how = l.pipeGone ? `${l.seconds} s after its pipe closed` : 'and its pipe never closed';
+    flags.push(`${who} ${how}${l.pid === null ? '' : report.daemonKilled ? '; killed after the identity check' : '; not provably ours, so not killed'}`);
+  }
+  if (report.daemonPids && report.daemonPids.length === 0) flags.push('the daemon pid was unknown, so its exit could not be confirmed');
+  if (!report.removed) flags.push('teardown was not clean: the sandbox was kept for manual cleanup (run.json)');
+  return flags;
+}
+
+/**
+ * Daemon replacements seen in the samples. `memory.daemonPid` and
+ * `memory.daemonPingSec` say which daemon answered daemon.ping and when.
+ * Each respawn names the last ping that still saw the old daemon
+ * (`lastOldPingSec`) and the first that saw the new one (`atSec`).
+ */
+export function detectRespawns(samples, startPid = null) {
+  const out = [];
+  let prev = startPid;
+  let prevPingSec = null;
+  for (const s of samples) {
+    const pid = s.memory?.daemonPid;
+    if (!Number.isInteger(pid)) continue;
+    const pingSec = s.memory?.daemonPingSec ?? s.tSec;
+    if (prev !== null && pid !== prev) out.push({ atSec: pingSec, lastOldPingSec: prevPingSec, fromPid: prev, toPid: pid });
+    prev = pid;
+    prevPingSec = pingSec;
+  }
+  return out;
 }

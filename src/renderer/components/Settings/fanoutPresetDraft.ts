@@ -14,6 +14,7 @@ import {
   type FanoutPreset,
 } from '../../../shared/fanoutPreset';
 import { FANOUT_MAX_TASKS } from '../../../shared/workTask';
+import { findCustomAgent, type CustomAgent } from '../../../shared/customAgents';
 
 export interface FanoutPresetDraftRow {
   agent: string;
@@ -53,12 +54,12 @@ export function draftFromPreset(preset: FanoutPreset): FanoutPresetDraft {
 /** Wire shape for setPresets. Omitted fields are omitted, never sent empty;
  *  a model typed on a CLI without a model flag is kept so validation refuses
  *  it instead of launching a different model than the row says. */
-export function draftToPayload(draft: FanoutPresetDraft): Record<string, unknown> {
+export function draftToPayload(draft: FanoutPresetDraft, customAgents?: readonly CustomAgent[]): Record<string, unknown> {
   const items = draft.items.map((row) => {
     const out: Record<string, unknown> = { agent: row.agent };
     const model = row.model.trim();
     if (model) out.model = model;
-    const spec = fanoutAgentSpec(row.agent);
+    const spec = fanoutAgentSpec(row.agent, customAgents);
     if (row.unattended && spec && spec.unattendedFlags.length > 0) out.unattended = true;
     return out;
   });
@@ -73,8 +74,12 @@ export function draftToPayload(draft: FanoutPresetDraft): Record<string, unknown
 /** Row edit: switching the agent drops what the new CLI cannot carry — a
  *  model when it has no verified model flag (the field shows it disabled and
  *  empty), and unattended when it has no unattended flags. */
-export function setRowAgent(row: FanoutPresetDraftRow, agent: string): FanoutPresetDraftRow {
-  const spec = fanoutAgentSpec(agent);
+export function setRowAgent(
+  row: FanoutPresetDraftRow,
+  agent: string,
+  customAgents?: readonly CustomAgent[],
+): FanoutPresetDraftRow {
+  const spec = fanoutAgentSpec(agent, customAgents);
   return {
     agent,
     model: spec?.modelFlag ? row.model : '',
@@ -100,8 +105,9 @@ export function applyDraft(
   presets: readonly FanoutPreset[],
   draft: FanoutPresetDraft,
   editIndex: number | null,
+  customAgents?: readonly CustomAgent[],
 ): { ok: true; next: FanoutPreset[] } | { ok: false; issue: FanoutIssue } {
-  const r = normalizeFanoutPreset(draftToPayload(draft));
+  const r = normalizeFanoutPreset(draftToPayload(draft, customAgents), customAgents);
   if (!r.ok) return { ok: false, issue: { code: r.code, params: r.params, error: r.error } };
   const key = fanoutPresetKey(r.preset.name);
   if (presets.some((p, k) => k !== editIndex && fanoutPresetKey(p.name) === key)) {
@@ -115,13 +121,15 @@ export function applyDraft(
 }
 
 /** One line per preset: "claude · codex --model gpt-5.5 · grok". */
-export function summarizeFanoutPresetAgents(preset: FanoutPreset): string {
+export function summarizeFanoutPresetAgents(preset: FanoutPreset, customAgents?: readonly CustomAgent[]): string {
   // The unattended flags are part of what runs, so the row says so rather than
   // hiding an approval-free CLI behind its bare name.
   return preset.items
     .map((it) => {
-      const flags = it.unattended ? fanoutAgentSpec(it.agent)?.unattendedFlags ?? '' : '';
-      return [it.agent, it.model ? `--model ${it.model}` : '', flags].filter((p) => p.length > 0).join(' ');
+      const flags = it.unattended ? fanoutAgentSpec(it.agent, customAgents)?.unattendedFlags ?? '' : '';
+      // A custom agent's model goes after the flag the operator gave it.
+      const modelFlag = findCustomAgent(it.agent, customAgents)?.modelFlag ?? '--model';
+      return [it.agent, it.model ? `${modelFlag} ${it.model}` : '', flags].filter((p) => p.length > 0).join(' ');
     })
     .join(' · ');
 }

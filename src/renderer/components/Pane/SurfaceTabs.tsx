@@ -36,6 +36,7 @@ import BrowserPolicyDialog from './BrowserPolicyDialog';
 import {
   bindingEnforcesModel, bindingEnforcesSkipPermissions, bindingSkipPermissionsFlag, type RoleBinding,
 } from '../../../shared/orchestratorRole';
+import type { CustomAgent } from '../../../shared/customAgents';
 import { paneHeaderTailGap } from './paneChrome';
 import { RENAME_ACTIVE_TAB_EVENT } from '../../utils/commandActions';
 import { isTerminalSurfaceType } from './surfaceKinds';
@@ -62,8 +63,10 @@ export { isTerminalSurfaceType };
 export function showsEnforcedModelBadge(opts: {
   binding: RoleBinding | undefined;
   surfaceType: string | undefined;
+  /** The operator's custom agents: a role bound to one pins its model too. */
+  customAgents?: readonly CustomAgent[];
 }): boolean {
-  return (bindingEnforcesModel(opts.binding) || bindingEnforcesSkipPermissions(opts.binding))
+  return (bindingEnforcesModel(opts.binding, opts.customAgents) || bindingEnforcesSkipPermissions(opts.binding))
     && isTerminalSurfaceType(opts.surfaceType);
 }
 
@@ -466,14 +469,15 @@ export default function SurfaceTabs({
     const ptyId = surfaces.find((sf) => sf.id === activeSurfaceId)?.ptyId;
     return ptyId ? s.supervisionByPtyId[ptyId] : undefined;
   });
+  const customAgents = useStore((s) => s.customAgents);
   const enforcedLaunch = useMemo(() => {
     const surfaceType = surfaces.find((s) => s.id === activeSurfaceId)?.surfaceType;
-    if (!showsEnforcedModelBadge({ binding: paneRoleBinding, surfaceType })) return undefined;
+    if (!showsEnforcedModelBadge({ binding: paneRoleBinding, surfaceType, customAgents })) return undefined;
     return {
-      model: bindingEnforcesModel(paneRoleBinding) ? paneRoleBinding?.model : undefined,
+      model: bindingEnforcesModel(paneRoleBinding, customAgents) ? paneRoleBinding?.model : undefined,
       skipFlag: bindingSkipPermissionsFlag(paneRoleBinding),
     };
-  }, [paneRoleBinding, surfaces, activeSurfaceId]);
+  }, [paneRoleBinding, surfaces, activeSurfaceId, customAgents]);
   // Both badges are labels, so each carries the SAME string as tooltip and as
   // accessible name — a screen reader gets what the pointer gets. (The old
   // absolute spans set `pointer-events: none`, which silently suppressed the

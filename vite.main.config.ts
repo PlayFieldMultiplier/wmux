@@ -2,6 +2,7 @@ import { defineConfig } from 'vite';
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { asciiOnlyBundle } from './scripts/lib/ascii-only-bundle.mjs';
 
 // The Windows computer-use helper's pin (src/main/computer/helperPin.ts). Read
 // from the staged exe, which release.yml stages only after signing, so the
@@ -19,6 +20,10 @@ export default defineConfig({
     __WMUX_WIN_HELPER_SHA256__: JSON.stringify(winHelperSha256),
     __WMUX_WIN_HELPER_RELEASE_SIGNED__: JSON.stringify(process.env.WMUX_WIN_HELPER_RELEASE_SIGNED === 'true'),
   },
+  // ASCII-only output: one character above one byte makes V8 keep the whole
+  // script source as UTF-16 (scripts/lib/ascii-only-bundle.mjs).
+  esbuild: { charset: 'ascii' },
+  plugins: [asciiOnlyBundle()],
   resolve: {
     browserField: false,
     conditions: ['node'],

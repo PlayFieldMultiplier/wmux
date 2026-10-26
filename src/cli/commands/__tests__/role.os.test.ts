@@ -67,6 +67,88 @@ describe('wmux role resolve', () => {
     }
   });
 
+  it('prints a custom agent role as its command and arguments, read from the custom agents file', async () => {
+    // "Tern" is a made-up CLI.
+    const files: Record<string, string> = {
+      '/fake/session.json': JSON.stringify({ orchestratorRoleBindings: { Builder: { agent: 'tern', model: 'm1' } } }),
+      '/fake/custom-agents.json': JSON.stringify({ agents: [{ name: 'Tern', command: '/opt/tern/bin/tern', args: '--fast', modelFlag: '-m' }] }),
+    };
+    const out: string[] = [];
+    await handleRole(['resolve', 'Builder'], false, {
+      sessionPath: '/fake/session.json',
+      customAgentsPath: '/fake/custom-agents.json',
+      readFile: (p) => files[p] ?? '',
+      log: (l) => out.push(l),
+      error: () => undefined,
+      exit: () => undefined,
+      platform: 'linux',
+    });
+    expect(out).toEqual(['/opt/tern/bin/tern --fast -m m1']);
+  });
+
+  it('refuses a role whose custom agent cannot launch, and says why', async () => {
+    const resolve = async (customFile: string | undefined, json = false, errno = 'ENOENT') => {
+      const files: Record<string, string> = {
+        '/fake/session.json': JSON.stringify({ orchestratorRoleBindings: { Builder: { agent: 'tern' } } }),
+      };
+      if (customFile !== undefined) files['/fake/custom-agents.json'] = customFile;
+      const out: string[] = [];
+      const err: string[] = [];
+      let code: number | undefined;
+      await handleRole(['resolve', 'Builder'], json, {
+        sessionPath: '/fake/session.json',
+        customAgentsPath: '/fake/custom-agents.json',
+        readFile: (p) => {
+          if (!(p in files)) throw Object.assign(new Error(errno), { code: errno });
+          return files[p];
+        },
+        log: (l) => out.push(l),
+        error: (l) => err.push(l),
+        exit: (c) => { code = c; },
+        platform: 'win32',
+      });
+      return { out, err, code };
+    };
+    // Refused on this platform: its own reason.
+    const refused = await resolve(JSON.stringify({ agents: [{ name: 'Tern', command: '/opt/tern/bin/tern' }] }));
+    expect(refused.out).toEqual([]);
+    expect(refused.code).toBe(1);
+    expect(refused.err).toEqual([expect.stringContaining('not a Windows path')]);
+    // No file at all is no custom agents: never a bare `tern` with bound:true.
+    const missing = await resolve(undefined, true);
+    expect(missing.code).toBe(1);
+    expect(JSON.parse(missing.out[0])).toEqual({ role: 'Builder', bound: true, unavailable: expect.stringContaining('no custom agent "tern"') });
+    // A file it cannot read says so.
+    expect((await resolve(undefined, false, 'EACCES')).err).toEqual([expect.stringContaining('cannot read')]);
+    // A file without it.
+    expect((await resolve(JSON.stringify({ agents: [] }))).err).toEqual([expect.stringContaining('no custom agent "tern"')]);
+  });
+
+  it('finds the refused entry by its place in the file, and says nothing for a known agent', async () => {
+    const resolve = async (agent: string, agents: unknown[]) => {
+      const files: Record<string, string> = {
+        '/fake/session.json': JSON.stringify({ orchestratorRoleBindings: { Builder: { agent } } }),
+        '/fake/custom-agents.json': JSON.stringify({ agents }),
+      };
+      const err: string[] = [];
+      await handleRole(['resolve', 'Builder'], false, {
+        sessionPath: '/fake/session.json',
+        customAgentsPath: '/fake/custom-agents.json',
+        readFile: (p) => files[p] ?? '',
+        log: () => undefined,
+        error: (l) => err.push(l),
+        exit: () => undefined,
+        platform: 'win32',
+      });
+      return err;
+    };
+    // An unnamed bad entry first, and a name with stray spaces: still its own reason.
+    const err = await resolve('tern', [null, { name: ' Tern ', command: '/opt/tern/bin/tern' }]);
+    expect(err).toHaveLength(1);
+    expect(err[0]).toContain('not a Windows path');
+    expect(await resolve('claude', [{ name: 'Mine', command: 'claude' }])).toEqual([]);
+  });
+
   it('drops an unsafe model through the app normalizer', async () => {
     const r = JSON.parse((await run(['resolve', 'Tester'])).out[0]);
     expect(r.model).toBeUndefined();

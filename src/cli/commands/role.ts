@@ -24,6 +24,8 @@ import {
   type RoleBinding, type WmuxTools,
 } from '../../shared/orchestratorRole';
 import { tokenize } from '../../shared/agentResume';
+import { customAgentLaunchLine, customAgentStem, findCustomAgent, normalizeCustomAgentsReport, type CustomAgent, type CustomAgentDropped } from '../../shared/customAgents';
+import { unresolvedCustomAgent } from '../../shared/fanoutPreset';
 import { agyEffortOf } from '../../shared/modelCatalog';
 
 /** Electron's `app.getPath('userData')` for productName "wmux", with the same
@@ -70,16 +72,28 @@ export function defaultMcpEntry(home: string = os.homedir()): string {
   return path.join(home, '.wmux', 'mcp', 'index.js');
 }
 
+/** The operator's custom agents (main's custom-agents.json, in the wmux data
+ *  folder next to the daemon's files). */
+export function defaultCustomAgentsPath(home: string = os.homedir()): string {
+  return path.join(home, `.wmux${dataSuffix()}`, 'custom-agents.json');
+}
+
 export function resolveRole(
   role: string,
   binding: RoleBinding,
   mcpEntry = defaultMcpEntry(),
   codexRegistered: () => boolean = () => codexHasWmuxServer(codexConfigPath(process.env)),
+  customAgents: readonly CustomAgent[] = [],
 ): ResolvedRole {
   const agent = binding.agent;
   const effort = agent === 'agy' ? (binding.model ? agyEffortOf(binding.model) : undefined) : binding.effort;
+  // A role bound to a custom agent launches its command and arguments as typed.
+  const custom = agent ? findCustomAgent(agent, customAgents) : undefined;
   const argv = agent
-    ? tokenize(applyRoleBinding(agent, binding, { spawnedProcess: true }).command).map((t) => t.value)
+    ? tokenize(applyRoleBinding(custom ? customAgentLaunchLine(custom) : agent, binding, {
+      spawnedProcess: true,
+      ...(custom ? { customAgents } : {}),
+    }).command).map((t) => t.value)
     : [];
   return {
     role,
@@ -122,6 +136,7 @@ function mcpFor(
 
 export interface RoleDeps {
   sessionPath: string;
+  customAgentsPath: string;
   readFile: (p: string) => string;
   /** The MCP bundle entry `mcp.argv` points at. */
   mcpEntry: string;
@@ -129,6 +144,8 @@ export interface RoleDeps {
   log: (line: string) => void;
   error: (line: string) => void;
   exit: (code: number) => void;
+  /** The platform the custom agents are validated for (main's rules). */
+  platform: NodeJS.Platform;
 }
 
 const USAGE = 'Usage: wmux role resolve <Role> [--json] [--session <path>]';
@@ -136,12 +153,14 @@ const USAGE = 'Usage: wmux role resolve <Role> [--json] [--session <path>]';
 export async function handleRole(args: string[], jsonMode: boolean, overrides: Partial<RoleDeps> = {}): Promise<void> {
   const deps: RoleDeps = {
     sessionPath: defaultSessionPath(),
+    customAgentsPath: defaultCustomAgentsPath(),
     readFile: (p) => fs.readFileSync(p, 'utf8'),
     mcpEntry: defaultMcpEntry(),
     exists: (p) => fs.existsSync(p),
     log: (l) => console.log(l),
     error: (l) => console.error(l),
     exit: (c) => process.exit(c),
+    platform: process.platform,
     ...overrides,
   };
   const [sub, role, ...rest] = args;
@@ -175,7 +194,40 @@ export async function handleRole(args: string[], jsonMode: boolean, overrides: P
     deps.exit(2);
     return;
   }
-  const resolved = resolveRole(role, binding, deps.mcpEntry);
+  let customAgents: CustomAgent[] = [];
+  let raw: unknown;
+  let unreadable: string | undefined;
+  let dropped: CustomAgentDropped[] = [];
+  try {
+    raw = (JSON.parse(deps.readFile(deps.customAgentsPath)) as { agents?: unknown })?.agents;
+    const report = normalizeCustomAgentsReport(raw, { platform: deps.platform });
+    customAgents = report.agents;
+    dropped = report.dropped;
+  } catch (err) {
+    // No file is no custom agents, not a read problem.
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') unreadable = (err as Error).message;
+  }
+  // A role bound to a custom agent main cannot find would not launch: say so,
+  // and why, rather than print a command line nothing will run.
+  const agent = binding.agent?.toLowerCase();
+  if (agent && unresolvedCustomAgent(agent, customAgents)) {
+    const drop = Array.isArray(raw)
+      ? dropped.find((d) => {
+        const entry = raw[d.index] as { command?: unknown } | null;
+        return typeof entry?.command === 'string' && customAgentStem({ command: entry.command }) === agent;
+      })
+      : undefined;
+    const why = drop
+      ? drop.issue.error
+      : unreadable !== undefined
+        ? `cannot read ${deps.customAgentsPath}: ${unreadable}`
+        : `no custom agent "${agent}" is defined in ${deps.customAgentsPath}`;
+    if (jsonMode) deps.log(JSON.stringify({ role, bound: true, unavailable: why }));
+    else deps.error(`wmux role: Role "${role}" runs "${agent}", which cannot launch: ${why}`);
+    deps.exit(1);
+    return;
+  }
+  const resolved = resolveRole(role, binding, deps.mcpEntry, undefined, customAgents);
   // Never print an argv that points at a bundle that is not there (a dev
   // checkout, or a packaged app that has not booted once to stabilize it).
   if (resolved.mcp && resolved.mcp.argv.length > 0 && !deps.exists(deps.mcpEntry)) {

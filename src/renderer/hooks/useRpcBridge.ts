@@ -20,12 +20,19 @@ import { isTaskEnded, isVerifiedTaskSender } from '../../shared/a2aReopen';
 import { applyTaskQueryView } from '../../shared/a2aTaskQueryView';
 import { getLeafPanes, getWorkspaceLeafPanes, getWorkspacePtyIds, getWorkspaceRemoteSessions } from '../../shared/paneUtils';
 import { findStashedEntry, paneStashedError, stashedPaneLiveness } from '../../shared/paneStash';
-import { applyRoleAgent, bindingEnforcesModel, launchRefusesPositionalPrompt, normalizeRoleBinding, sanitizeOrchRole } from '../../shared/orchestratorRole';
+import { applyRoleAgent, KNOWN_AGENT_STEMS, launchRefusesPositionalPrompt, normalizeRoleBinding, sanitizeOrchRole, type RoleBinding } from '../../shared/orchestratorRole';
+import type { CustomAgent } from '../../shared/customAgents';
 import {
   FANOUT_EXTRA_AGENT_STEMS,
   applyFanoutAgentFlags,
   commandLauncherStem,
+  approvedRoleBindings,
+  describeFanoutRole,
+  fanoutAgentSpec,
   fanoutChoiceBinding,
+  fanoutLaunchCustomAgents,
+  fanoutTaskRoleBinding,
+  unresolvedCustomAgent,
   validateFanoutAgentChoice,
   type FanoutAgentChoice,
 } from '../../shared/fanoutPreset';
@@ -136,23 +143,8 @@ import { reserveLeaf } from '../utils/reservedLeaves';
  * Returns [] when no task carries a role. The same lines go into the fan-out
  * audit record, so what was shown and what was logged cannot differ.
  */
-function fanOutRoleLines(raw: unknown): string[] {
-  if (!Array.isArray(raw)) return [];
-  const seen: string[] = [];
-  for (const entry of raw) {
-    const role = typeof entry === 'string' ? entry.trim() : '';
-    if (role && !seen.includes(role)) seen.push(role);
-  }
-  if (seen.length === 0) return [];
-  const bindings = useStore.getState().orchestratorRoleBindings;
-  return seen.map((role) => {
-    const b = bindings[role];
-    if (!b || (!b.agent && !b.model && !b.args)) return `${role} → the default agent (no binding)`;
-    const parts: string[] = [b.agent || 'the default agent'];
-    if (b.model) parts.push(bindingEnforcesModel(b) ? `--model ${b.model}` : `(model "${b.model}" is configured but will NOT be applied)`);
-    if (b.args) parts.push(b.args);
-    return `${role} → ${parts.join(' ')}`;
-  });
+function fanOutRoleLines(approved: Record<string, RoleBinding | null>, customAgents: readonly CustomAgent[]): string[] {
+  return Object.entries(approved).map(([role, b]) => describeFanoutRole(role, b ?? undefined, customAgents));
 }
 
 /** The role lines as the approval dialog shows them; '' when no task has a
@@ -1493,7 +1485,12 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
     // binding silently adds a different CLI, another model, or extra flags
     // would make the approved text and the executed command two different
     // things — the one property this gate exists to hold.
-    const roleCommands = fanOutRoleLines(params.roles);
+    // main's snapshot of the custom agents: the same definitions every task
+    // of this fan-out launches (fanoutLaunchCustomAgents).
+    // The bindings shown are the ones returned with the verdict, and main
+    // hands them back to every task: what was approved is what launches.
+    const roleBindings = approvedRoleBindings(Array.isArray(params.roles) ? params.roles : [], useStore.getState().orchestratorRoleBindings);
+    const roleCommands = fanOutRoleLines(roleBindings, fanoutLaunchCustomAgents(params.customAgents, useStore.getState().customAgents));
     const previewWithRoles = promptPreview + describeFanOutRoles(roleCommands);
     const verdict = await requestFanOutApproval({
       workspaceId: callerWsId,
@@ -1510,7 +1507,7 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
         level: 'info',
       });
     }
-    return { approved: verdict.approved, outcome: verdict.outcome, roleCommands };
+    return { approved: verdict.approved, outcome: verdict.outcome, roleCommands, roleBindings };
   }
 
   if (method === 'task.requestApproval') {
@@ -1565,8 +1562,32 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
     // unchanged path below. Invalid = the task fails; it is never launched on
     // the default agent instead of the one that was asked for.
     let agentChoice: FanoutAgentChoice | undefined;
+    // A choice or a role naming no registry agent may name a custom agent.
+    // main's approval snapshot is what runs; without one (another launcher),
+    // main's current list is read first, so a task spawned before the startup
+    // copy arrived still finds it.
+    const named = (params.agentChoice as { agent?: unknown } | undefined)?.agent;
+    // The role's binding as its approval showed it (fanoutTaskRoleBinding).
+    const taskRoleBinding = role ? fanoutTaskRoleBinding(params, useStore.getState().orchestratorRoleBindings[role]) : undefined;
+    const roleAgent = taskRoleBinding?.agent;
+    const wanted = typeof named === 'string' ? named : roleAgent;
+    if (!Array.isArray(params.customAgents) && wanted && !KNOWN_AGENT_STEMS.has(wanted) && !fanoutAgentSpec(wanted)) {
+      try {
+        const fresh = await window.electronAPI?.fanout?.getCustomAgents?.();
+        if (fresh && Array.isArray(fresh.agents)) useStore.getState().setCustomAgents(fresh.agents);
+      } catch {
+        // the copy in the store is still used; the checks below decide
+      }
+    }
+    const customAgents = fanoutLaunchCustomAgents(params.customAgents, useStore.getState().customAgents);
     if (params.agentChoice !== undefined) {
-      const checked = validateFanoutAgentChoice(params.agentChoice, { allowUnattended: true, allowEffort: true });
+      // Main already refused a caller's own `agents[k]` naming a custom agent;
+      // a preset row may name one, so the operator's list is passed here.
+      const checked = validateFanoutAgentChoice(params.agentChoice, {
+        allowUnattended: true,
+        allowEffort: true,
+        customAgents,
+      });
       const normalized = checked.ok ? normalizeRoleBinding(fanoutChoiceBinding(checked.choice)) : undefined;
       if (!checked.ok || !normalized || normalized.agent !== checked.choice.agent || normalized.model !== checked.choice.model ||
         normalized.effort !== checked.choice.effort) {
@@ -1576,10 +1597,14 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
     }
     const roleBinding = agentChoice
       ? fanoutChoiceBinding(agentChoice)
-      : role
-        ? useStore.getState().orchestratorRoleBindings[role]
-        : undefined;
+      : taskRoleBinding;
     const extraAgents = agentChoice ? FANOUT_EXTRA_AGENT_STEMS : undefined;
+    // An agent the swap cannot put in (a missing custom agent, or a fan-out-only
+    // CLI bound to a role) would launch the default agent's line: the task
+    // fails instead.
+    if (roleBinding?.agent && unresolvedCustomAgent(roleBinding.agent, customAgents, extraAgents)) {
+      return { error: `fanout.spawnWorkspace: "${roleBinding.agent}" is not an agent ${role ? `the ${role} role` : 'this task'} can launch, so the task was not launched` };
+    }
     // Two steps, and BOTH are needed. applyRoleBinding (inside withRoleBinding
     // below) refuses to touch a command whose launcher differs from the
     // binding's agent — right for a line a human typed, wrong here, where wmux
@@ -1596,7 +1621,10 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
     // cannot see the bindings — an unbound role, or one bound to an agent with no
     // model, injects nothing).
     const { marker, command: bareCommand } = splitModelEnvMarker(initialCommand);
-    const swap = applyRoleAgent(bareCommand, roleBinding, extraAgents ? { extraAgents } : undefined);
+    const swap = applyRoleAgent(bareCommand, roleBinding, {
+      ...(extraAgents ? { extraAgents } : {}),
+      ...(customAgents.length ? { customAgents } : {}),
+    });
     // A preset row / agents[k] is a promise about WHICH CLI runs. A refused
     // swap would launch the default claude line instead, so the task fails —
     // before any workspace exists — rather than run on an agent nobody chose.
@@ -1689,7 +1717,7 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
       },
       useStore.getState().defaultShell,
     );
-    const roleBoundRaw = withRoleBinding(seeded, roleBinding, role, extraAgents);
+    const roleBoundRaw = withRoleBinding(seeded, roleBinding, role, extraAgents, customAgents);
     // Per-CLI flags the role rewrite has no notion of: codex's one-session trust
     // of the task folder, and a preset row's unattended flags (non-claude).
     const roleBound =
@@ -1701,6 +1729,7 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
               agentChoice,
               cwd,
               window.electronAPI?.platform ?? 'darwin',
+              customAgents,
             ),
           }
         : roleBoundRaw;

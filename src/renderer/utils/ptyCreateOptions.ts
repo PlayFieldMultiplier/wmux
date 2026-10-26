@@ -2,6 +2,7 @@ import type { SpawnKind } from '../../shared/spawnKind';
 import type { DeadPaneRecovery } from '../../shared/ptyRecovery';
 import type { FanoutOrigin } from '../../shared/fanoutOrigin';
 import { applyRoleBinding, type RoleBinding, type WmuxTools } from '../../shared/orchestratorRole';
+import type { CustomAgent } from '../../shared/customAgents';
 import { commandLauncherStem } from '../../shared/fanoutPreset';
 
 export interface PtyCreateOptions {
@@ -146,6 +147,8 @@ export function withRoleBinding<T extends PtyCreateOptions>(
   role?: string,
   /** Fan-out only: extra launcher stems to treat as agents (applyRoleBinding). */
   extraAgents?: ReadonlySet<string>,
+  /** The operator's custom agents (applyRoleBinding). */
+  customAgents?: readonly CustomAgent[],
 ): T {
   if (!binding) return options;
   const next = { ...options };
@@ -161,6 +164,7 @@ export function withRoleBinding<T extends PtyCreateOptions>(
     const { command, changed } = applyRoleBinding(before, binding, {
       spawnedProcess: field === 'exec',
       ...(extraAgents ? { extraAgents } : {}),
+      ...(customAgents?.length ? { customAgents } : {}),
     });
     if (!changed) continue;
     next[field] = command;
