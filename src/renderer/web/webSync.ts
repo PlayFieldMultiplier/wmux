@@ -17,6 +17,27 @@ import {
 } from './webHydration';
 
 export const WEB_POLL_MS = 2500;
+
+/**
+ * Whether a desktop owns the workspace tree (`/api/workspaces` rows carry its
+ * `layout`). A pane the page starts there is one the desktop never places: it
+ * lands unplaced, as an orphan the desktop offers to adopt. So the page only
+ * starts panes on a headless daemon, where the tree is the daemon's own list.
+ */
+let desktopLayout = false;
+const layoutListeners = new Set<() => void>();
+export function desktopOwnsLayout(): boolean {
+  return desktopLayout;
+}
+export function subscribeDesktopLayout(listener: () => void): () => void {
+  layoutListeners.add(listener);
+  return () => { layoutListeners.delete(listener); };
+}
+function setDesktopLayout(next: boolean): void {
+  if (next === desktopLayout) return;
+  desktopLayout = next;
+  for (const l of [...layoutListeners]) l();
+}
 /** Upper bound on one request, body included. */
 export const WEB_POLL_TIMEOUT_MS = 10_000;
 
@@ -64,9 +85,11 @@ export function startWebSync(opts: WebSyncOptions): () => void {
       if (text === lastText) return;
       const sessionsReply = JSON.parse(sessText) as WebSessionsReply;
       if (Array.isArray(sessionsReply.sessions)) opts.onSessions?.(sessionsReply.sessions);
+      const workspacesReply = JSON.parse(wsText) as WebWorkspacesReply;
+      setDesktopLayout(Array.isArray(workspacesReply.workspaces) && workspacesReply.workspaces.some((w) => !!w.layout));
       const store = useStore.getState();
       const { state, server } = hydrateWebState({
-        workspacesReply: JSON.parse(wsText) as WebWorkspacesReply,
+        workspacesReply,
         sessionsReply,
         current: {
           workspaces: store.workspaces,

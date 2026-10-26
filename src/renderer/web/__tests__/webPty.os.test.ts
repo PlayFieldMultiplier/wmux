@@ -6,7 +6,7 @@
 // touching ?2004.
 import { describe, it, expect, vi } from 'vitest';
 import { Terminal } from '@xterm/headless';
-import { createWebPty, snapshotTail, STREAM_FAIL_LIMIT, WEB_LIVE_STREAM_CAP, type WebPtyDeps } from '../webPty';
+import { createWebPty, newTerminalTarget, snapshotTail, STREAM_FAIL_LIMIT, WEB_LIVE_STREAM_CAP, type WebPtyDeps } from '../webPty';
 import { installViewerParser } from '../viewerParser';
 import { deliberateSleep } from '../../../test-utils/waitFor';
 
@@ -388,5 +388,72 @@ describe('the caller\'s grant', () => {
     expect(ro.inputState()).toBe('read-only');
     await ro.pty.write('a', 'b');
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('createTerminal', () => {
+  const sessionsCall = (calls: ReturnType<typeof make>['calls']) => calls.filter((c) => c.url === '/api/sessions' && c.method === 'POST');
+
+  it('posts the target and answers the new pane id', async () => {
+    const { hub, calls } = make({ operator: true, reply: (url, init) => (url === '/api/sessions' && init?.method === 'POST'
+      ? new Response(JSON.stringify({ id: 'pty-9', cwd: '/root' }), { status: 201 }) : undefined) });
+    await expect(hub.createTerminal({ workspaceId: 'ws-a' })).resolves.toEqual({ ok: true, id: 'pty-9' });
+    const [call] = sessionsCall(calls);
+    expect(JSON.parse(String(call.body))).toEqual({ workspaceId: 'ws-a' });
+    expect(call.headers?.Authorization).toBe('Bearer secret');
+  });
+
+  it('only the daemon\'s read-only 403 turns the page read-only; other refusals keep their code and words', async () => {
+    const denied = make({ reply: (url) => (url === '/api/sessions'
+      ? new Response(JSON.stringify({ error: 'read-only: server started without --allow-input', detail: 'x' }), { status: 403 }) : undefined) });
+    denied.hub.setAllowInput(true);
+    await expect(denied.hub.createTerminal({ workspaceId: 'ws-a' })).resolves.toEqual({ ok: false, code: 'read-only' });
+    expect(denied.hub.inputState()).toBe('read-only');
+
+    const other = make({ reply: (url) => (url === '/api/sessions' ? new Response('{"ok":false,"error":"forbidden"}', { status: 403 }) : undefined) });
+    other.hub.setAllowInput(true);
+    await expect(other.hub.createTerminal({ workspaceId: 'ws-a' })).resolves.toEqual({ ok: false, code: 'forbidden' });
+    expect(other.hub.inputState()).toBe('allowed');
+
+    const capped = make({ reply: (url) => (url === '/api/sessions'
+      ? new Response(JSON.stringify({ error: 'create-failed', detail: 'Session limit reached' }), { status: 409 }) : undefined) });
+    await expect(capped.hub.createTerminal({ workspaceId: 'ws-a' })).resolves.toEqual({ ok: false, code: 'create-failed', detail: 'Session limit reached' });
+  });
+
+  it('a reply that stalls mid-body is aborted and reported as offline', async () => {
+    let cancelled = false;
+    const { hub } = make({
+      operator: true,
+      // Real fetch ties the body to the signal; the fake does the same.
+      reply: (url, init) => {
+        if (url !== '/api/sessions') return undefined;
+        const body = new ReadableStream<Uint8Array>({
+          start(c) {
+            c.enqueue(new TextEncoder().encode('{"id":'));
+            init?.signal?.addEventListener('abort', () => { cancelled = true; c.error(new DOMException('aborted', 'AbortError')); });
+          },
+        });
+        return new Response(body, { status: 201 });
+      },
+      deps: { setTimer: (fn, ms) => setTimeout(fn, Math.min(ms, 20)) },
+    });
+    await expect(hub.createTerminal({ workspaceId: 'ws-a' })).resolves.toEqual({ ok: false, code: 'offline' });
+    expect(cancelled).toBe(true);
+  });
+});
+
+describe('newTerminalTarget', () => {
+  it('uses the active workspace, or the first while the active id is stale', () => {
+    expect(newTerminalTarget('ws-a', ['ws-b', 'ws-a'], 'main')).toEqual({ workspaceId: 'ws-a' });
+    expect(newTerminalTarget('ws-gone', ['ws-b', 'ws-a'], 'main')).toEqual({ workspaceId: 'ws-b' });
+  });
+
+  it('starts a valid new workspace when there is none, and a retry reuses it', () => {
+    const fresh = newTerminalTarget('', [], 'main');
+    expect(fresh.workspaceName).toBe('main');
+    // The daemon's own rule for a workspace id it stamps into a pane.
+    expect(fresh.workspaceId).toMatch(/^[A-Za-z0-9_-]{1,64}$/);
+    expect(newTerminalTarget('', [], 'main').workspaceId).not.toBe(fresh.workspaceId);
+    expect(newTerminalTarget('', [], 'main', fresh)).toBe(fresh);
   });
 });
