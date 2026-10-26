@@ -73,6 +73,7 @@ export interface LeaveEnv {
   location: { reload(): void; replace(url: string): void };
   localStorage: Pick<Storage, 'removeItem'>;
   sessionStorage: Pick<Storage, 'getItem' | 'setItem'>;
+  fetch: typeof fetch;
   now?: () => number;
 }
 
@@ -80,8 +81,9 @@ export interface LeaveEnv {
  * The one way out once the daemon refuses this page; runs at most once.
  *  - proxy: reload, so the navigation goes through the sign-in again, unless
  *    the last such reload was moments ago (a reload loop).
- *  - a stored token: it may be stale while a sign-in proxy would admit the
- *    page, so drop it and boot again from `/` (once per tab).
+ *  - a stored token that a sign-in proxy would replace: drop it and boot again
+ *    from `/` (once per tab). Kept otherwise, so the classic page can still
+ *    say why it was refused (a revoked device, a new operator token).
  *  - otherwise: the classic page, which owns the token form and pairing.
  */
 export function createLeave(session: WebSession, env: LeaveEnv): () => void {
@@ -94,11 +96,13 @@ export function createLeave(session: WebSession, env: LeaveEnv): () => void {
       else env.location.replace(CLASSIC_PATH);
       return;
     }
-    if (session.storedToken && dropStaleToken(env)) {
-      env.location.replace('/');
+    if (!session.storedToken) {
+      env.location.replace(CLASSIC_PATH);
       return;
     }
-    env.location.replace(CLASSIC_PATH);
+    void probeProxySession(env.fetch).then((proxied) => {
+      env.location.replace(proxied && dropStaleToken(env) ? '/' : CLASSIC_PATH);
+    });
   };
 }
 
