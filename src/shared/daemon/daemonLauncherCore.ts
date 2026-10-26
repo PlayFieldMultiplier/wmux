@@ -824,6 +824,21 @@ function findNodePath(): string {
   return process.execPath;
 }
 
+/**
+ * V8 flags for the daemon process, ahead of its script. Bursts of short-lived
+ * strings (an output flood) grow V8's young generation to its default maximum
+ * and macOS keeps those pages in the process footprint long after the burst.
+ * Capping the semi-space keeps ~50 MB off a background daemon after a flood,
+ * with no drain-time loss. They go in argv, not NODE_OPTIONS, which every PTY
+ * child would inherit; v8.setFlagsFromString at runtime does not resize it.
+ */
+export const DAEMON_V8_FLAGS: readonly string[] = ['--max-semi-space-size=8'];
+
+/** The daemon's argv after the runtime binary: V8 flags, then the script. */
+export function daemonProcessArgs(daemonScript: string): string[] {
+  return [...DAEMON_V8_FLAGS, daemonScript];
+}
+
 function spawnDaemon(deps: DaemonLauncherDeps): Promise<number> {
   deps.markBoot?.('daemon-spawn-start');
   return new Promise((resolve, reject) => {
@@ -936,7 +951,7 @@ function spawnDaemon(deps: DaemonLauncherDeps): Promise<number> {
     };
 
     const spawnDirect = () => {
-      const child = spawn(nodePath, [daemonScript], {
+      const child = spawn(nodePath, daemonProcessArgs(daemonScript), {
         detached: true,
         stdio: 'ignore',
         windowsHide: true,
@@ -986,7 +1001,7 @@ function spawnDaemon(deps: DaemonLauncherDeps): Promise<number> {
         {
           baseLabel: launchdBaseLabel(dataSuffix()),
           plistDir: path.join(getWmuxDir(), 'launchd'),
-          programArguments: [nodePath, daemonScript],
+          programArguments: [nodePath, ...daemonProcessArgs(daemonScript)],
           env,
         },
         defaultLaunchdRuntime(log),
