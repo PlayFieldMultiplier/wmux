@@ -759,6 +759,11 @@ describe('execWithInput — a real child process', () => {
     expect(stdout).toBe('40000');
   });
 
+  it('an empty input still closes stdin, so a child reading to EOF finishes (an empty squash body)', async () => {
+    const { stdout } = await execWithInput(process.execPath, ['-e', COUNT], { ...opts, timeout: 10_000, input: '' });
+    expect(stdout).toBe('0');
+  });
+
   it('without input, leaves stdin to the child as before', async () => {
     const { stdout } = await execWithInput(process.execPath, ['-e', 'process.stdout.write("ok")'], opts);
     expect(stdout).toBe('ok');
