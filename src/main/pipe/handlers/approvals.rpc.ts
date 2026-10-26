@@ -43,7 +43,7 @@ import type { RpcContext } from '../../../shared/rpc';
 import type { DaemonClient } from '../../DaemonClient';
 import { getTaskLedger } from '../../deck/taskLedgerHost';
 import type { TaskLedger } from '../../../daemon/ledger/TaskLedger';
-import { looksLikeApprovalPrompt } from '../../../daemon/approvals/approvalKeystrokes';
+import { looksLikeApprovalPrompt, looksLikeFolderTrustDialog } from '../../../daemon/approvals/approvalKeystrokes';
 import { parseTerminalPrompt } from '../../../daemon/approvals/terminalPromptParse';
 import { loadWorkspaceMode, type AgentMode } from '../../deck/deckAutonomyStore';
 import { workspaceFactsSettled } from '../../workspace/workspaceFactsFeed';
@@ -248,6 +248,20 @@ export function approvalOnScreen(screenText: string): boolean {
   const rows = screenText.split('\n').slice(-60);
   if (rows.length === 0) return false;
   return looksLikeApprovalPrompt(rows) || parseTerminalPrompt(rows) !== null;
+}
+
+/**
+ * Is an agent's folder-trust dialog on this screen right now? Unlike an
+ * approval, no workspace policy lets an automated caller answer it: whether an
+ * agent may work in a folder is the person's decision. Same tail as above.
+ */
+export function folderTrustOnScreen(screenText: string): boolean {
+  return looksLikeFolderTrustDialog(screenText.split('\n').slice(-60));
+}
+
+/** The refusal raw input gets while a folder-trust dialog is on screen. */
+export function folderTrustGateMessage(op: string, ptyId: string): string {
+  return `${op}: pane "${ptyId}" is on a folder-trust prompt; answer it in the pane.`;
 }
 
 /** The refusal raw input gets when an approval is on screen and policy is off. */

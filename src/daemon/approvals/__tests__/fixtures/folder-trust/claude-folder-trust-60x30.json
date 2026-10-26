@@ -1,0 +1,31 @@
+{
+ "tui": "claude",
+ "version": "Claude Code 2.1.310",
+ "cols": 60,
+ "rows": 30,
+ "keysSent": "(dialog drawn at startup, nothing typed)",
+ "note": "Folder-trust dialog on first launch in a never-seen folder (sandbox HOME, onboarding already done). Unnumbered choices, highlighted default \"No, exit\". Viewport as the screen read shows it.",
+ "origin": "Claude Code 2.1.310 program output captured live 2026-10-26; Anthropic proprietary terms",
+ "screen": [
+  "",
+  "────────────────────────────────────────────────────────────",
+  " Accessing workspace:",
+  "",
+  " /private/tmp/wtrust3/c60",
+  "",
+  " Quick safety check: Is this a project you created or one",
+  " you trust? (Like your own code, a well-known open source",
+  " project, or work from your team). If not, take a moment to",
+  " review what's in this folder first.",
+  "",
+  " Claude Code'll be able to read, edit, and execute files",
+  " here.",
+  "",
+  " Security guide",
+  "",
+  " ❯ No, exit",
+  "   Yes, I trust this folder",
+  "",
+  " Enter to confirm · Esc to cancel"
+ ]
+}

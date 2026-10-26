@@ -131,7 +131,7 @@ export interface FirstRunPrompt {
 export const FIRST_RUN_DISMISS_KEY = '\x1b';
 
 /** The trust dialog's opening question (Claude Code 2.1.x). */
-const TRUST_HEADLINE = /is this a project you created or one you trust/i;
+export const TRUST_HEADLINE = /is this a project you created or one you trust/i;
 
 /**
  * Known one-shot interstitials, by headline. Extending this list is the
@@ -237,8 +237,9 @@ export function detectFirstRunPrompt(screen: string): FirstRunPrompt | null {
   return null;
 }
 
-/** Codex's folder-trust screen (wording differs across releases). Never answered. */
-const CODEX_TRUST_HEADLINE = /do you trust the (?:contents of this directory|files in this folder)|trust this folder\?/i;
+/** Codex's folder-trust screen (wording differs across releases; agy asks about
+ *  the contents of a project). Never answered. */
+export const CODEX_TRUST_HEADLINE = /do you trust the (?:contents of this (?:directory|project)|files in this folder)|trust this folder\?/i;
 
 /** Menu furniture that means "something is waiting for a keypress". */
 const MENU_FOOTER = /enter to (?:confirm|continue)|press enter to/i;

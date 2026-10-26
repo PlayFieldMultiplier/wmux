@@ -1264,6 +1264,22 @@ describe('input.send — submit receipt', () => {
     expect(receipt.retried).toBe(true);
   });
 
+  it('a retry that refuses asynchronously (a trust prompt drew) sends nothing and yields accepted:false', async () => {
+    const { probe } = fakeProbe([COMPOSER], [fresh('idle')]);
+    const receipt = await awaitSubmitReceipt(
+      probe,
+      NEEDLE,
+      { screen: COMPOSER, agentStatus: 'idle' },
+      async () => {
+        await Promise.resolve();
+        throw new Error('input.send: pane "pty-1" is on a folder-trust prompt; answer it in the pane.');
+      },
+      waitOpts({ windowMs: 100 }),
+    );
+    expect(receipt.accepted).toBe(false);
+    expect(receipt.retried).toBe(true);
+  });
+
   it('stops at the total ceiling even when every window would allow more', async () => {
     const { probe } = fakeProbe([COMPOSER], [fresh('idle')]);
     const clock = fakeClock(ENTER_AT);
