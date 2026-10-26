@@ -103,6 +103,8 @@ describe('derived lists match the literals they replaced', () => {
     // Copilot joins its id to the flag (`--resume=SESSION-ID`).
     expect(resumeGrammarFor('copilot')?.picker).toBe('--resume');
     expect(resumeGrammarFor('copilot')?.withId(UUID)).toBe(`--resume=${UUID}`);
+    // Droid's bare `--resume` reopened the newest session before v0.211.0.
+    expect(resumeGrammarFor('droid')).toBeUndefined();
     // The id is inserted literally, never read as a replacement pattern.
     expect(resumeGrammarFor('claude')?.withId('a$&b')).toBe('--resume a$&b');
     for (const agent of PROBES.filter((s) => s !== 'claude' && s !== 'codex' && s !== 'copilot')) {

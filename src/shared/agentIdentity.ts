@@ -710,16 +710,16 @@ export const AGENT_IDENTITIES = [
   {
     // Droid (Factory). https://docs.factory.com/droid-cli/cli-reference.md and
     // https://docs.factory.com/changelog/release-notes.md, checked 2026-10-26.
-    // v0.211.0: "Use --resume to choose a recent session, or add --last to
-    // reopen the latest session in the current folder" (the reference still
-    // describes the older bare `--resume`, "defaults to last modified", hence
-    // the update floor). `--resume <sessionId>` is documented but its id format
-    // is not, and no launch flag sets a new id, so wmux offers the picker only.
+    // No `resume`: a bare `--resume` opens a picker only since v0.211.0 ("Use
+    // --resume to choose a recent session"); before that, and as the reference
+    // still says, it "defaults to last modified", which would reopen the
+    // folder's newest conversation in every pane (#1946). Nothing here knows the
+    // installed version when a pane is restored. `--resume <sessionId>` documents
+    // no id format, and no launch flag sets a new id.
     // The native binary is named `droid`, which the tracker matches by the slug.
     slug: 'droid',
     display: 'Droid',
     roleBinding: false,
-    resume: { picker: '--resume', idFormat: 'picker-only' },
     setup: {
       binary: 'droid',
       // https://app.factory.ai/cli: DST="$HOME/.local/bin";
@@ -728,8 +728,8 @@ export const AGENT_IDENTITIES = [
       // Droid signs in through the browser on its first run (or FACTORY_API_KEY);
       // `/status` is a slash command, not a status subcommand.
       loginStatus: { read: 'none' },
-      // The picker form of `--resume` (above).
-      updateFloor: '0.211.0',
+      // Nothing version-dependent is relied on.
+      updateFloor: '0.0.0',
       install: {
         posix: { command: 'curl -fsSL https://app.factory.ai/cli | sh', requires: ['curl', 'sh'] },
         win32: { command: 'irm https://app.factory.ai/cli/windows | iex' },
