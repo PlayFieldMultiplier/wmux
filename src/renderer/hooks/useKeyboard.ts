@@ -34,11 +34,11 @@ import {
   toggleAgentToolbarPin,
 } from '../utils/commandActions';
 import { dictateIntoActivePane } from '../utils/paneDictation';
-import { addAt as addScrollbackBookmark } from '../components/Terminal/scrollbackBookmarks';
+import { addAt as addScrollbackBookmark, claimsBookmarkKey } from '../components/Terminal/scrollbackBookmarks';
 
 // Lightweight bookmark toast — reuses the same DOM element pattern as showCopyToast
 let bookmarkToastTimer: ReturnType<typeof setTimeout> | null = null;
-function showBookmarkToast(key: 'terminal.bookmarkAdded' | 'terminal.bookmarkAltScreen') {
+function showBookmarkToast() {
   let el = document.getElementById('wmux-bookmark-toast');
   if (!el) {
     el = document.createElement('div');
@@ -46,7 +46,7 @@ function showBookmarkToast(key: 'terminal.bookmarkAdded' | 'terminal.bookmarkAlt
     el.style.cssText = 'position:fixed;bottom:28px;left:50%;transform:translateX(-50%);background:var(--accent-yellow);color:var(--bg-base);font-family:monospace;font-size:11px;font-weight:600;padding:3px 12px;border-radius:4px;z-index:9999;pointer-events:none;opacity:0;transition:opacity 0.2s';
     document.body.appendChild(el);
   }
-  el.textContent = t(key);
+  el.textContent = t('terminal.bookmarkAdded');
   el.style.opacity = '1';
   if (bookmarkToastTimer) clearTimeout(bookmarkToastTimer);
   bookmarkToastTimer = setTimeout(() => { el!.style.opacity = '0'; }, 1200);
@@ -364,6 +364,14 @@ export function useKeyboard() {
       const state = store.getState();
       return state.workspaces.find((w) => w.id === state.activeWorkspaceId);
     };
+    // The active pane's terminal: what the scrollback bookmark acts on.
+    const activeTerminal = () => {
+      const ws = activeWorkspace();
+      const pane = ws ? findLeaf(ws.rootPane, ws.activePaneId) : null;
+      const ptyId = pane?.surfaces.find((s) => s.id === pane.activeSurfaceId)?.ptyId;
+      const term = ptyId ? terminalRegistry.get(ptyId) : undefined;
+      return ptyId && term ? { ptyId, term } : null;
+    };
     // Ctrl+N counts the list the operator sees, which leaves out Moa's HQ.
     const jumpToWorkspace = (idx: number) => {
       // The digits follow the sidebar's numbering: a filtered list's rows.
@@ -572,19 +580,10 @@ export function useKeyboard() {
       },
       // Scrollback bookmark at the current scroll position.
       addBookmark: () => {
-        const ws = activeWorkspace();
-        if (!ws) return;
-        const pane = findLeaf(ws.rootPane, ws.activePaneId);
-        if (!pane) return;
-        const surface = pane.surfaces.find((s) => s.id === pane.activeSurfaceId);
-        if (!surface?.ptyId) return;
-        const term = terminalRegistry.get(surface.ptyId);
-        if (!term) return;
-        // A full-screen app's alternate screen has no scrollback to mark; a
-        // line that already has a bookmark keeps its dot and says nothing.
-        const result = addScrollbackBookmark(term, surface.ptyId, store);
-        if (result === 'added') showBookmarkToast('terminal.bookmarkAdded');
-        else if (result === 'alternate') showBookmarkToast('terminal.bookmarkAltScreen');
+        const target = activeTerminal();
+        if (!target) return;
+        // A line that already has a bookmark keeps its dot and says nothing.
+        if (addScrollbackBookmark(target.term, target.ptyId, store) === 'added') showBookmarkToast();
       },
       toggleMessageFeed: () => { store.getState().toggleMessageFeed(); },
       toggleFileTree: () => { toggleFileTreePanel(store.getState()); },
@@ -853,7 +852,10 @@ export function useKeyboard() {
       // custom keybinding sits on it; otherwise it goes on (useTerminal lets
       // xterm encode it), as for a switched-off built-in.
       const pcUnclaimed = isPcRailAction(action) && !pcRailClaimsKey(store.getState(), e);
-      if (action && run && mentionClaim !== null && !pcUnclaimed) {
+      // On a full-screen app's alternate screen there is no scrollback to
+      // mark, and Ctrl+M is the app's Enter: useTerminal lets xterm send it.
+      const bookmarkUnclaimed = action === 'addBookmark' && !claimsBookmarkKey(activeTerminal()?.term);
+      if (action && run && mentionClaim !== null && !pcUnclaimed && !bookmarkUnclaimed) {
         e.preventDefault();
         if (STOP_PROPAGATION_ACTIONS.has(action)) e.stopImmediatePropagation();
         shortcutPressGuard.noteActed(e);

@@ -190,6 +190,23 @@ describe('Phase 3 PR-B — useTerminal snapshot-resync ladder (source-level)', (
     expect(paint).toMatch(/st\.resolvers\.splice\(0\)\.forEach/);
   });
 
+  it('both repaint paths carry the scrollback bookmarks across the reset', () => {
+    // The reset disposes every xterm marker; without the carry, revealing a
+    // hidden pane lost its bookmarks. Measure before the reset, put back once
+    // the replay has parsed.
+    for (const [name, fn] of [['dead-snapshot', 'const paintDeadSnapshot'], ['flush-complete', 'const completeResyncFromFlush']] as const) {
+      const body = blockAt(src, src.indexOf(fn));
+      const measure = body.indexOf('keepBookmarksAcrossRepaint(');
+      const reset = body.indexOf(name === 'dead-snapshot' ? 'term.reset()' : 'write(REPAINT_BEGIN');
+      const replay = body.indexOf(name === 'dead-snapshot' ? 'writeReplayed(term, bytes' : 'write(REPAINT_END');
+      const restore = body.search(name === 'dead-snapshot' ? /try \{ restore\(\); \}/ : /try \{ restoreBookmarks\?\.\(\); \}/);
+      expect(measure).toBeGreaterThan(0);
+      expect(reset).toBeGreaterThan(measure);
+      expect(replay).toBeGreaterThan(reset);
+      expect(restore).toBeGreaterThan(replay);
+    }
+  });
+
   it('#1256: a resync repaint preserves the scroll position across reset()', () => {
     // reset() snaps the viewport to the bottom; without preservation, showing
     // a hidden pane yanked a scrolled-up user to the bottom. Both repaint

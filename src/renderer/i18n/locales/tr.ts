@@ -116,7 +116,6 @@ export const tr = {
   'terminal.copied': 'Kopyalandı!',
   'terminal.copyFailed': 'Kopyalama başarısız — seçim korundu',
   'terminal.bookmarkAdded': 'Yer imi eklendi',
-  'terminal.bookmarkAltScreen': 'Yer imleri tam ekran uygulamalarda kullanılamaz',
 
   // Context menu
   'contextMenu.copy': 'Kopyala',

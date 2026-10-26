@@ -116,7 +116,6 @@ export const de = {
   'terminal.copied': 'Kopiert!',
   'terminal.copyFailed': 'Kopieren fehlgeschlagen — Auswahl bleibt',
   'terminal.bookmarkAdded': 'Lesezeichen hinzugefügt',
-  'terminal.bookmarkAltScreen': 'Lesezeichen sind in Vollbild-Apps nicht verfügbar',
 
   // Context menu
   'contextMenu.copy': 'Kopieren',

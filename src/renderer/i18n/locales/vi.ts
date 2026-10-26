@@ -116,7 +116,6 @@ export const vi = {
   'terminal.copied': 'Đã sao chép!',
   'terminal.copyFailed': 'Sao chép thất bại — giữ vùng chọn',
   'terminal.bookmarkAdded': 'Đã thêm dấu trang',
-  'terminal.bookmarkAltScreen': 'Không thể dùng dấu trang trong ứng dụng toàn màn hình',
 
   // Context menu
   'contextMenu.copy': 'Sao chép',

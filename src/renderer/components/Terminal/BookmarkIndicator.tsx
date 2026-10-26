@@ -30,17 +30,20 @@ export default function BookmarkIndicator({ terminal, bookmarks, containerRef }:
     forceUpdate((n) => n + 1);
   }, []);
 
+  const hasBookmarks = bookmarks.length > 0;
   useEffect(() => {
-    if (!terminal) return;
-    // A switch to or from the alternate screen and a resize move the rows
-    // without a scroll event.
+    if (!terminal || !hasBookmarks) return;
+    // A switch to or from the alternate screen, a resize and output that
+    // inserts or deletes lines (CSI L / M) move the rows without a scroll
+    // event.
     const disposables = [
       terminal.onScroll(() => scheduleUpdate()),
       terminal.buffer.onBufferChange(() => scheduleUpdate()),
       terminal.onResize(() => scheduleUpdate()),
+      terminal.onWriteParsed(() => scheduleUpdate()),
     ];
     return () => disposables.forEach((d) => d.dispose());
-  }, [terminal, scheduleUpdate]);
+  }, [terminal, hasBookmarks, scheduleUpdate]);
 
   // Also re-render when bookmarks array reference changes (handled by the
   // parent passing a new array reference via Zustand selector)

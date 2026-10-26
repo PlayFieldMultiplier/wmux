@@ -2553,8 +2553,7 @@ export const createUISlice: StateCreator<StoreState, [['zustand/immer', never]],
     if (!state.terminalBookmarks[ptyId]) {
       state.terminalBookmarks[ptyId] = [];
     }
-    const ids = state.terminalBookmarks[ptyId];
-    if (!ids.includes(markerId)) ids.push(markerId);
+    state.terminalBookmarks[ptyId].push(markerId);
   }),
 
   removeBookmark: (ptyId, markerId) => set((state) => {

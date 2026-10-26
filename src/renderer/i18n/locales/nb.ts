@@ -116,7 +116,6 @@ export const nb = {
   'terminal.copied': 'Kopiert!',
   'terminal.copyFailed': 'Kopiering mislyktes — valg bevart',
   'terminal.bookmarkAdded': 'Bokmerke lagt til',
-  'terminal.bookmarkAltScreen': 'Bokmerker er ikke tilgjengelige i fullskjermapper',
 
   // Context menu
   'contextMenu.copy': 'Kopier',

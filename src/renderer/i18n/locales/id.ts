@@ -116,7 +116,6 @@ export const id = {
   'terminal.copied': 'Tersalin!',
   'terminal.copyFailed': 'Gagal menyalin — pilihan dipertahankan',
   'terminal.bookmarkAdded': 'Markah ditambahkan',
-  'terminal.bookmarkAltScreen': 'Markah tidak tersedia di aplikasi layar penuh',
 
   // Context menu
   'contextMenu.copy': 'Salin',

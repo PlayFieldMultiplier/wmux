@@ -116,7 +116,6 @@ export const it = {
   'terminal.copied': 'Copiato!',
   'terminal.copyFailed': 'Copia fallita — selezione mantenuta',
   'terminal.bookmarkAdded': 'Segnalibro aggiunto',
-  'terminal.bookmarkAltScreen': 'I segnalibri non sono disponibili nelle app a schermo intero',
 
   // Context menu
   'contextMenu.copy': 'Copia',

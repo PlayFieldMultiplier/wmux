@@ -116,7 +116,6 @@ export const zhTW = {
   'terminal.copied': '已複製!',
   'terminal.copyFailed': '複製失敗 — 保留選取範圍',
   'terminal.bookmarkAdded': '已新增書籤',
-  'terminal.bookmarkAltScreen': '全螢幕應用程式中無法使用書籤',
 
   // Context menu
   'contextMenu.copy': '複製',

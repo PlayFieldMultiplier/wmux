@@ -14,7 +14,7 @@ import { isPcRailAction, pcRailClaimsKey } from '../components/PcRail/pcRailMode
 import { xtermWindowsBuildNumber } from '../../shared/conptyWindows';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { useStore } from '../stores';
-import { keepAcrossRepaint as keepBookmarksAcrossRepaint } from '../components/Terminal/scrollbackBookmarks';
+import { claimsBookmarkKey, keepAcrossRepaint as keepBookmarksAcrossRepaint } from '../components/Terminal/scrollbackBookmarks';
 import { t } from '../i18n';
 import { XTERM_THEMES, extractXtermColors, type ThemeId, type BuiltinThemeId } from '../themes';
 import { resolveMinimumContrastRatio } from '../tailwindPalette';
@@ -2429,6 +2429,9 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
       // No paired computer, or a custom keybinding on the chord: the PC rail
       // does not take it, so the pane gets Shift+Alt+Arrow / Home.
       if (isPcRailAction(shortcut) && !pcRailClaimsKey(useStore.getState(), e)) return true;
+      // On the alternate screen Ctrl+M is the full-screen app's Enter, not a
+      // scrollback bookmark (useKeyboard asks the same predicate).
+      if (shortcut === 'addBookmark' && !claimsBookmarkKey(terminal)) return true;
       // #1280 — the Rich Input chord bubbles from HERE, instead of merely
       // being preventDefault'd downstream: xterm's own encode path calls
       // stopPropagation (its `cancel()`), so otherwise the chord never reaches

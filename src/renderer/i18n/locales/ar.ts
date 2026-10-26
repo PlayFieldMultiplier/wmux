@@ -116,7 +116,6 @@ export const ar = {
   'terminal.copied': 'تم النسخ!',
   'terminal.copyFailed': 'فشل النسخ — تم الاحتفاظ بالتحديد',
   'terminal.bookmarkAdded': 'تمت إضافة الإشارة المرجعية',
-  'terminal.bookmarkAltScreen': 'الإشارات المرجعية غير متاحة في التطبيقات بملء الشاشة',
 
   // Context menu
   'contextMenu.copy': 'نسخ',

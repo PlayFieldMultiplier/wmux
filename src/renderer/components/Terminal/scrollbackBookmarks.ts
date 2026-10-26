@@ -86,6 +86,15 @@ function fingerprint(term: BookmarkTerminal, line: { start: number; end: number;
 }
 
 /**
+ * Whether Ctrl+M is the bookmark key for this terminal. On a full-screen app's
+ * alternate screen there is no scrollback to mark and the key is the app's
+ * Enter, so useKeyboard leaves it alone and useTerminal lets xterm send it.
+ */
+export function claimsBookmarkKey(term: Pick<BookmarkTerminal, 'buffer'> | undefined): boolean {
+  return term?.buffer.active.type !== 'alternate';
+}
+
+/**
  * Bookmark the top line of the viewport. 'alternate' when a full-screen app's
  * alternate screen is active (it has no scrollback to mark), 'exists' when the
  * line already has a bookmark.

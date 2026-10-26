@@ -1018,7 +1018,6 @@ export const ko = {
   'terminal.openPathBlocked': '실행 파일 차단됨 — 부모 폴더만 열림',
   'terminal.openPathFailed': '열 수 없음 — 폴더 위치 표시',
   'terminal.bookmarkAdded': '북마크 추가됨',
-  'terminal.bookmarkAltScreen': '전체 화면 앱에서는 북마크를 쓸 수 없습니다',
   'terminal.imeInputRecovered': '한글 입력기에 키 입력이 갇혀 있어 자동으로 복구했습니다',
 
   // Context menu

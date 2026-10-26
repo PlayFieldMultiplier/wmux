@@ -118,7 +118,6 @@ export const ja = {
   'terminal.openPathBlocked': '実行ファイルをブロック — 親フォルダを開きました',
   'terminal.openPathFailed': '開けません — フォルダを表示',
   'terminal.bookmarkAdded': 'ブックマークを追加',
-  'terminal.bookmarkAltScreen': '全画面アプリではブックマークを使えません',
 
   // Context menu
   'contextMenu.copy': 'コピー',
