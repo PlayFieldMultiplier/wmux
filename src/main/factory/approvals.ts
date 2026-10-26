@@ -134,6 +134,9 @@ export const APPROVALS_FILENAME = 'approvals.json';
 export const APPROVAL_LIMITS = {
   /** A pending request older than this expires. */
   PENDING_TTL_MS: 24 * 3600_000,
+  /** An approved act no try of which was started this long after its
+   *  decision is refused (`approval-stale`). */
+  APPROVED_TTL_MS: 24 * 3600_000,
   /** Settled requests older than this are dropped from the file. */
   RETAIN_MS: 30 * 24 * 3600_000,
   REQUESTS_MAX: 500,
@@ -2101,29 +2104,44 @@ export class ApprovalService {
   /** The act outbox's gate for a row, asked on every try and again right
    *  before the write: null when the request allows it now. Not approved
    *  (undone, denied, waiting again) or inside the Undo window means "not
-   *  now" (the row waits; actExecutor.ts ACT_NOT_NOW). */
-  authorizeAct(e: Pick<ActEffect, 'requestId' | 'action' | 'payloadHash' | 'repoKey'>): string | null {
+   *  now" (the row waits; actExecutor.ts ACT_NOT_NOW). A row no try of
+   *  which was started (actRowClaimed) whose approval is APPROVED_TTL_MS
+   *  old is refused `approval-stale`; a row that may have reached GitHub is
+   *  left to its read. */
+  authorizeAct(e: Pick<ActEffect, 'requestId' | 'action' | 'payloadHash' | 'repoKey' | 'status' | 'attempt' | 'draftId'>): string | null {
     const r = this.requests.get(e.requestId);
     if (!r) return 'approval-missing';
     if (!r.act || r.action !== e.action) return 'approval-mismatch';
     if (this.botGone(r)) return 'bot-removed';
     if (r.state !== 'approved') return 'approval-not-approved';
     if (r.decidedBy !== 'owner' || r.payloadHash !== e.payloadHash || normalizeRepoKey(e.repoKey) !== r.repoKey) return 'approval-mismatch';
-    // A directory that cannot be read now says nothing about the bot: not now.
+    // Counted from the decision on purpose, a long sleep before the first
+    // try included: a day on, things may have changed, so the bot asks
+    // again. No decision time (none is made without one) counts as stale; a
+    // clock that went back waits (the Undo window below), and only one
+    // that went back more than a day is stale too.
+    const at = this.now();
+    const ttl = APPROVAL_LIMITS.APPROVED_TTL_MS;
+    const stale = !actRowClaimed(e) && (r.decidedAt === undefined || at - r.decidedAt >= ttl || r.decidedAt - at > ttl);
+    // A directory that cannot be read now says nothing about the bot: not
+    // now, unless the approval is stale (a "not now" never outlives it).
     let profile: BotProfile | null;
     try {
       profile = this.ports.bots()?.get(r.botId) ?? null;
     } catch {
-      return 'bots-unreadable';
+      return stale ? 'approval-stale' : 'bots-unreadable';
     }
-    if (!profile) return 'bots-unreadable';
+    if (!profile) return stale ? 'approval-stale' : 'bots-unreadable';
     if (botRepo(profile)?.repoKey !== r.repoKey) return 'repo-changed';
     // A secret stored since the request would now be hidden on the card the
     // owner reads, and published by the post.
     const texts = r.act.kind === 'comment' ? [r.act.body] : r.act.kind === 'issue_create' ? [r.act.title, r.act.body]
       : r.act.kind === 'release' ? [r.act.title, r.act.notes] : [];
     if (texts.some((t) => redactStoredSecrets(t) !== t)) return 'secret-in-body';
-    if (r.executeAfter !== undefined && this.now() < r.executeAfter) return 'approval-undo-window';
+    // After the refusals that name a cause.
+    if (stale) return 'approval-stale';
+    // A clock behind the decision is inside the window too: not now.
+    if ((r.executeAfter !== undefined && at < r.executeAfter) || (r.decidedAt !== undefined && at < r.decidedAt)) return 'approval-undo-window';
     return null;
   }
 
