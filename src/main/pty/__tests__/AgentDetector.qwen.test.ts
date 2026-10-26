@@ -65,6 +65,35 @@ describe('Qwen Code screen profile (0.26.1 live capture)', () => {
     expect(seen).toEqual({ shellApprovalMidSession: [STARTED, ASKING], afterEsc: [IDLE] });
   });
 
+  it('takes the pane back from Gemini when Gemini\'s composer row came first', () => {
+    const det = new AgentDetector();
+    det.feed('>   Type your message or @path/to/file\r\n');
+    expect(det.getLastAgent()).toBe('Gemini CLI');
+    const cb = vi.fn();
+    det.onEvent(cb);
+    det.feed(narrow.frames.shellApprovalMidSession);
+    expect(det.getLastAgent()).toBe('Qwen Code');
+    expect(cb.mock.calls.map(([e]) => `${e.status}:${e.message}`)).toEqual([STARTED, ASKING]);
+  });
+
+  it('does not read the confirmation phrase as a dialog when the spinner keeps it after an answer', () => {
+    // The first running frame after an answer can keep the phrase (120x40
+    // afterApproval); a narrow pane puts its counters on the next row.
+    const { det } = replay(narrow.frames, ['start'], 65536);
+    const cb = vi.fn();
+    det.onEvent(cb);
+    det.resetEmissionState();
+    det.feed('\u001b[?2026h  ⠋ Waiting for user confirmation...\r\n  (0s · ↑ 15 tokens · esc to cancel)\r\n'
+      + '>   Type your message or @path/to/file\u001b[?2026l');
+    expect(cb.mock.calls.map(([e]) => `${e.status}:${e.message}`)).toEqual([WORKING]);
+  });
+
+  it('does not open on a title that only starts like Qwen\'s', () => {
+    const det = new AgentDetector();
+    det.feed('\u001b]2;Qwen - notes.md (~/x) - VIM\u0007\r\n');
+    expect(det.getLastAgent()).toBeNull();
+  });
+
   it('does not take a live Claude pane that quotes the banner, the dialog or the footer', () => {
     const det = new AgentDetector();
     const cb = vi.fn();
