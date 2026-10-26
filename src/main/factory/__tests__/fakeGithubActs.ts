@@ -55,7 +55,7 @@ const NOT_FOUND: GhActAnswer = { ok: false, kind: 'http', status: 404, message: 
 
 export class FakeGithub implements GhActPort {
   login = 'owner';
-  repo = { full_name: 'o/r', node_id: 'R_1', id: 4242, default_branch: 'main' };
+  repo: { full_name: string; node_id: string; id: number; default_branch?: string } = { full_name: 'o/r', node_id: 'R_1', id: 4242, default_branch: 'main' };
   /** The default branch's commits, oldest first: the last is its head. */
   history: string[] = [];
   /** Commits that are not on the default branch. */
