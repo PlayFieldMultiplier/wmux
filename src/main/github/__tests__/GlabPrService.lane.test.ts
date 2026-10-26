@@ -375,6 +375,27 @@ describe('mergedOfBranch / defaultBranch', () => {
   });
 });
 
+describe('createMergeRequest', () => {
+  it('sends the fields as one JSON object on stdin; a 40,000-character description never reaches argv', async () => {
+    const calls: Array<{ args: string[]; input?: string }> = [];
+    const exec = vi.fn(async (_cmd: string, args: string[], opts: { input?: string }) => {
+      calls.push({ args, input: opts.input });
+      return { stdout: JSON.stringify({ iid: 7, web_url: 'https://gitlab.example.com/group/sub/proj/-/merge_requests/7' }) };
+    });
+    const svc = new GlabPrService(() => 1000, exec as never);
+    const description = `-${'d'.repeat(39_999)}`;
+    const req = { source: 'wtask/x', target: 'main', title: '-a title', description };
+    expect(await svc.createMergeRequest('/wmux', KEY, req)).toEqual({ ok: true, iid: 7, url: 'https://gitlab.example.com/group/sub/proj/-/merge_requests/7' });
+    expect(calls).toHaveLength(1);
+    expect(calls[0].args).toEqual([
+      'api', '--hostname', 'gitlab.example.com',
+      '-X', 'POST', 'projects/group%2Fsub%2Fproj/merge_requests', '--input', '-', '-H', 'Content-Type: application/json',
+    ]);
+    expect(calls[0].args.join(' ').length).toBeLessThan(500);
+    expect(JSON.parse(calls[0].input ?? '')).toEqual({ source_branch: 'wtask/x', target_branch: 'main', title: '-a title', description });
+  });
+});
+
 describe('GlabPrService.watchGraphql (the factory repo watch read)', () => {
   const svcOf = (exec: (cmd: string, args: string[]) => Promise<{ stdout: string }>) => new GlabPrService(() => 1000, exec as never);
 
