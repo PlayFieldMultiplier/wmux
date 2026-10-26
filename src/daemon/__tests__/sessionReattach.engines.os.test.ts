@@ -221,8 +221,12 @@ describe.skipIf(!posix).each(ENGINES)('a real shell session on the %s engine', (
     const mgr = new DaemonSessionManager();
     const id = `re-${engine}-snapshot`;
     const managed = await create(mgr, id);
-    const lines = Math.ceil((ATTACH_SNAPSHOT_MIN_BYTES * 1.5) / 64);
-    managed.ptyProcess.write(`i=0; while [ $i -lt ${lines} ]; do printf 'row %06d %s\\n' $i ................................................; i=$((i+1)); done; ${say('BULK')}`);
+    // Redraw frames (clear, then repaint), like a progress bar or a TUI: the
+    // final screen is a few rows however much was written. Pure-append output
+    // keeps every line in the snapshot's scrollback, gains nothing, and is
+    // shipped raw (SessionPipe's no-gain fallback).
+    const frames = Math.ceil((ATTACH_SNAPSHOT_MIN_BYTES * 1.5) / 64);
+    managed.ptyProcess.write(`i=0; while [ $i -lt ${frames} ]; do printf '\\033[H\\033[2Jframe %06d %s\\n' $i ................................................; i=$((i+1)); done; ${say('BULK')}`);
     await waitFor(() => ringText(mgr, id).includes(out('BULK')), WAIT_MS, 'bulk output to finish');
     // Wait for the prompt after the last line, so the ring is still while it is compared.
     await waitFor(() => ringText(mgr, id).trimEnd().endsWith('$'), WAIT_MS, 'prompt after the bulk output');
