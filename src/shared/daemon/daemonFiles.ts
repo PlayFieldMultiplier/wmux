@@ -91,6 +91,7 @@ function renameIntoPlace(file: string, content: string): { step: 'temp file' | '
   try {
     fs.writeFileSync(tmp, content, { encoding: 'utf-8', mode: 0o600 });
     step = 'rename';
+    // Deliberately Windows-only, unlike renameWithRetry's by-code default.
     renameWithRetry(tmp, file, { attempts: process.platform === 'win32' ? undefined : 1 });
     return null;
   } catch (err) {
@@ -112,7 +113,7 @@ export function replaceFileAtomic(file: string, content: string, warn: Warn): bo
 /**
  * Replace `file` atomically (renameIntoPlace); on any failure, report it
  * through `warn` and fall back to the plain write this replaced. A file that
- * already holds exactly `content` is left as it is; otherwise it is written in
+ * already holds `content` (as the readers trim it) is left as it is; otherwise it is written in
  * place, which a reader can see empty. For the daemon's own files: stale or
  * missing content is worse than that window. Returns whether `file` now holds
  * `content`. Never throws.
@@ -122,7 +123,7 @@ export function replaceFileOrWrite(file: string, content: string, warn: Warn): b
   if (failed === null) return true;
   const why = `${failed.step} failed (${errorCode(failed.err)})`;
   try {
-    if (fs.readFileSync(file, 'utf-8') === content) {
+    if (fs.readFileSync(file, 'utf-8').trim() === content.trim()) {
       safeWarn(warn, `[daemon-files] ${file}: ${why}; it already holds this content`);
       return true;
     }

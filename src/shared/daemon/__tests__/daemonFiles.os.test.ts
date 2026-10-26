@@ -152,14 +152,29 @@ describe('daemonFiles', () => {
     const warn = vi.fn();
     expect(replaceFileOrWrite(file('daemon.pid'), '500', warn)).toBe(true);
     fsHooks.tempWriteError = null;
-    fsHooks.renameFailures = 1;
-    expect(replaceFileOrWrite(file('daemon.pid'), '500', warn)).toBe(true);
+    // Readers trim, so a trailing newline is the same pid.
+    fs.writeFileSync(file('daemon.pid'), '500\n');
+    fsHooks.writes = [];
+    asPlatform('linux', () => {
+      fsHooks.renameFailures = 1;
+      expect(replaceFileOrWrite(file('daemon.pid'), '500', warn)).toBe(true);
+    });
     expect(fsHooks.writes).not.toContain(file('daemon.pid'));
-    expect(read('daemon.pid')).toBe('500');
+    expect(read('daemon.pid')).toBe('500\n');
     expect(fs.readdirSync(dir)).toEqual(['daemon.pid']);
     expect(warn).toHaveBeenCalledTimes(2);
     expect(warn.mock.calls[0][0]).toContain('ENOSPC');
     expect(warn.mock.calls[1][0]).toContain('EPERM');
+  });
+
+  // The one false result: acquireLock throws on it.
+  it('replaceFileOrWrite returns false when the in-place write fails too', () => {
+    fsHooks.tempWriteError = 'EIO';
+    const warn = vi.fn();
+    expect(replaceFileOrWrite(path.join(dir, 'missing', 'daemon.pid'), '1', warn)).toBe(false);
+    expect(fs.readdirSync(dir)).toEqual([]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toMatch(/EIO.*ENOENT/);
   });
 
   it('createFileExclusive reports a hard-link error other than EEXIST and still creates the file', () => {
