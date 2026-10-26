@@ -108,8 +108,11 @@ let cancelPendingSelect: (() => void) | undefined;
  * the user moves to another workspace first: a late pane must not pull them
  * back. One wait at a time; a newer create replaces it.
  */
-function selectWhenListed(ptyId: string, workspaceId: string): void {
+function selectWhenListed(ptyId: string, workspaceId: string, startedOn: string): void {
   cancelPendingSelect?.();
+  // Moved while the create was in flight: leave them where they went.
+  const movedAway = (active: string) => active !== startedOn && active !== workspaceId;
+  if (movedAway(useStore.getState().activeWorkspaceId)) return;
   const trySelect = (): boolean => {
     const s = useStore.getState();
     for (const ws of s.workspaces) {
@@ -126,7 +129,6 @@ function selectWhenListed(ptyId: string, workspaceId: string): void {
     return false;
   };
   if (trySelect()) return;
-  const startedOn = useStore.getState().activeWorkspaceId;
   const done = () => {
     clearTimeout(timer);
     unsubscribe();
@@ -134,9 +136,7 @@ function selectWhenListed(ptyId: string, workspaceId: string): void {
   };
   const timer = setTimeout(done, NEW_TERMINAL_SELECT_MS);
   const unsubscribe = useStore.subscribe((state, prev) => {
-    const moved = state.activeWorkspaceId !== prev.activeWorkspaceId
-      && state.activeWorkspaceId !== startedOn && state.activeWorkspaceId !== workspaceId;
-    if (moved) return done();
+    if (state.activeWorkspaceId !== prev.activeWorkspaceId && movedAway(state.activeWorkspaceId)) return done();
     if (state.workspaces !== prev.workspaces && trySelect()) done();
   });
   cancelPendingSelect = done;
@@ -182,7 +182,7 @@ function NewTerminalButton({ variant }: { variant: 'primary' | 'icon' }) {
     if (target.workspaceName) pendingTarget = target;
     const result = await hub.createTerminal(target);
     setBusy(false);
-    if (result.ok) selectWhenListed(result.id, target.workspaceId);
+    if (result.ok) selectWhenListed(result.id, target.workspaceId, s.activeWorkspaceId);
     else setError(newTerminalError(t, result));
   };
 

@@ -419,6 +419,27 @@ describe('createTerminal', () => {
       ? new Response(JSON.stringify({ error: 'create-failed', detail: 'Session limit reached' }), { status: 409 }) : undefined) });
     await expect(capped.hub.createTerminal({ workspaceId: 'ws-a' })).resolves.toEqual({ ok: false, code: 'create-failed', detail: 'Session limit reached' });
   });
+
+  it('a reply that stalls mid-body is aborted and reported as offline', async () => {
+    let cancelled = false;
+    const { hub } = make({
+      operator: true,
+      // Real fetch ties the body to the signal; the fake does the same.
+      reply: (url, init) => {
+        if (url !== '/api/sessions') return undefined;
+        const body = new ReadableStream<Uint8Array>({
+          start(c) {
+            c.enqueue(new TextEncoder().encode('{"id":'));
+            init?.signal?.addEventListener('abort', () => { cancelled = true; c.error(new DOMException('aborted', 'AbortError')); });
+          },
+        });
+        return new Response(body, { status: 201 });
+      },
+      deps: { setTimer: (fn, ms) => setTimeout(fn, Math.min(ms, 20)) },
+    });
+    await expect(hub.createTerminal({ workspaceId: 'ws-a' })).resolves.toEqual({ ok: false, code: 'offline' });
+    expect(cancelled).toBe(true);
+  });
 });
 
 describe('newTerminalTarget', () => {

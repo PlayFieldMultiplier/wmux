@@ -618,25 +618,30 @@ export function createWebPty(deps: WebPtyDeps) {
      * have made a pane.
      */
     async createTerminal(target: NewTerminalTarget): Promise<NewTerminalResult> {
+      // Not request(): its timeout ends with the headers. One abort covers the
+      // body too, so a reply that stalls mid-body releases its connection (the
+      // page has few to spare), and an unread 201 is as unknown as no answer.
+      const ctl = new AbortController();
+      const timer = setTimer(() => ctl.abort(), REQUEST_TIMEOUT_MS);
       let res: Response;
+      let body: Record<string, unknown>;
       try {
-        res = await request('/api/sessions', {
+        res = await fetchImpl('/api/sessions', {
           method: 'POST',
           headers: { ...auth, 'Content-Type': 'application/json' },
           body: JSON.stringify(target),
+          signal: ctl.signal,
         });
+        const parsed: unknown = await res.json().catch((err: unknown) => {
+          if (ctl.signal.aborted) throw err;
+          return {}; // not JSON (a proxy's error page): the status still speaks
+        });
+        body = parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {};
       } catch {
         return { ok: false, code: 'offline' };
+      } finally {
+        clearTimer(timer);
       }
-      // request()'s timeout ends with the headers; a body that stalls after
-      // them gets the same bound, and an unread 201 is as unknown as no answer.
-      const stalled = Symbol('stalled');
-      const parsed = await Promise.race([
-        res.json().then((b: unknown) => (b && typeof b === 'object' ? b as Record<string, unknown> : {}), () => ({} as Record<string, unknown>)),
-        sleep(REQUEST_TIMEOUT_MS).then((): typeof stalled => stalled),
-      ]);
-      if (parsed === stalled) return { ok: false, code: 'offline' };
-      const body = parsed;
       const error = typeof body.error === 'string' ? body.error : '';
       const detail = typeof body.detail === 'string' && body.detail ? body.detail : undefined;
       if (res.status === 201 && typeof body.id === 'string') return { ok: true, id: body.id };
