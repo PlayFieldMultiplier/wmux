@@ -138,6 +138,10 @@ export interface ApprovalReleaseAct {
   notes: string;
   prerelease: boolean;
   workflows: string[];
+  /** A push to the default branch surely ran a workflow at `targetSha`, so
+   *  a commit with no check at all has not started its checks (read with the
+   *  request: the workflows at a commit do not change). */
+  checksExpected: boolean;
   draft: false;
 }
 /** An act's pins of the repository. */

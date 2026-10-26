@@ -30,14 +30,15 @@
 // endpoint; the tag and the SHA are already plain (RELEASE_TAG_RE, 40 hex).
 
 import { parse as parseYaml } from 'yaml';
-import { splitRepoKey } from '../github/GhIssueService';
-import type { GhActAnswer, GhActPort } from '../github/GhActService';
+import type { GhActPort } from '../github/GhActService';
 import type { ApprovalReleaseAct } from '../../shared/botApproval';
 import { normalizeActText } from './actPayload';
+import { failed, isFail, readRefusal, repoPath, unreadable, type Read, type ReadFail } from './actRead';
 
-type Fail = { error: string; status?: number };
-type Read<T> = T | Fail;
 type RepoPath = { host: string; base: string };
+
+/** Workflow files read from GitHub at once (each read is one gh process). */
+const BLOBS_AT_ONCE = 8;
 
 /** Pages of 100 a listing reads at most; a longer one cannot say. */
 const LIST_PAGES_MAX = 10;
@@ -228,24 +229,26 @@ export function runsOnBranch(push: PushFilter | null, branch: string): boolean {
   return push.tags === undefined && push.tagsIgnore === undefined;
 }
 
-/** A tag workflow for this tag: its push names tags, and they take this one. Pure. */
+/** A release workflow for this tag: its push lists the tags it runs on, and
+ *  the list takes this one. A workflow that only leaves some tags out
+ *  (`tags-ignore`) runs on this tag push too, but is no release workflow:
+ *  the card names it with the others that also run. Pure. */
 export function tagWorkflowFor(push: PushFilter | null, tag: string): boolean {
-  return !!push && (push.tags !== undefined || push.tagsIgnore !== undefined) && runsOnTag(push, tag);
+  return !!push?.tags && listMatches(push.tags, tag);
 }
 
 /** The mode of a release of this tag over these workflows: `workflow` with
- *  the tag workflows that run on it; the refusal when a workflow lists the
- *  tags it runs on and none runs on this one; else `release`. A workflow
- *  whose `tags-ignore` leaves this tag out (a CI that skips tags) does not
- *  count. Pure. */
+ *  the workflows whose `tags` list takes it; the refusal when a workflow
+ *  lists the tags it runs on and none takes this one; else `release`. Pure. */
 export function releaseMode(workflows: readonly WorkflowPush[], tag: string): { mode: 'workflow'; workflows: string[] } | { mode: 'release' } | { refusal: 'tag-not-matching-release-workflow' } {
   const run = workflows.filter((w) => tagWorkflowFor(w.push, tag)).map((w) => w.path).sort();
   if (run.length > 0) return { mode: 'workflow', workflows: run };
   return workflows.some((w) => w.push?.tags !== undefined) ? { refusal: 'tag-not-matching-release-workflow' } : { mode: 'release' };
 }
 
-/** The workflows with no push filter: they run on the tag push too, though
- *  they publish nothing (the card names them). Pure. */
+/** The other workflows that run on the tag push (no push filter, or a
+ *  `tags-ignore` that leaves this tag in): they run, though they are not
+ *  the release workflow (the card names them). Pure. */
 export function alsoOnTagPush(workflows: readonly WorkflowPush[], tag: string): string[] {
   return workflows.filter((w) => !tagWorkflowFor(w.push, tag) && runsOnTag(w.push, tag)).map((w) => w.path).sort();
 }
@@ -423,36 +426,23 @@ export function publishedWritten(value: unknown, act: ApprovalReleaseAct, login:
 
 // ── Reads ────────────────────────────────────────────────────────────────
 
-function failed(a: Exclude<GhActAnswer, { ok: true }>): Fail {
-  return { error: a.message.slice(0, 300), ...(a.kind === 'http' ? { status: a.status } : {}) };
-}
-
-export function isFail<T>(r: Read<T>): r is Fail {
-  return !!r && typeof r === 'object' && 'error' in r;
-}
-
 /** A name GitHub gave, as path segments (each percent-encoded). Pure. */
 export function pathOfName(name: string): string {
   return name.split('/').map((s) => encodeURIComponent(s).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)).join('/');
-}
-
-export function releaseRepoPath(repoKey: string): RepoPath | null {
-  const p = splitRepoKey(repoKey);
-  return p ? { host: p.host, base: `repos/${p.owner}/${p.repo}` } : null;
 }
 
 export async function readDefaultBranch(gh: GhActPort, p: RepoPath): Promise<Read<string>> {
   const a = await gh.read(p.host, p.base);
   if (!a.ok) return failed(a);
   const b = str(rec(a.value)?.default_branch);
-  return b ? b : { error: 'GitHub named no default branch', status: 200 };
+  return b ? b : unreadable('GitHub named no default branch');
 }
 
 export async function readBranchHead(gh: GhActPort, p: RepoPath, branch: string): Promise<Read<string>> {
   const a = await gh.read(p.host, `${p.base}/git/ref/heads/${pathOfName(branch)}`);
   if (!a.ok) return failed(a);
   const o = rec(rec(a.value)?.object);
-  return o?.type === 'commit' && FULL_SHA_RE.test(str(o.sha)) ? str(o.sha) : { error: 'the branch head could not be read', status: 200 };
+  return o?.type === 'commit' && FULL_SHA_RE.test(str(o.sha)) ? str(o.sha) : unreadable('the branch head could not be read');
 }
 
 /** Whether `sha` names a commit: true, false (GitHub's 404 or 422), or why not known. */
@@ -484,9 +474,9 @@ export async function readTagTarget(gh: GhActPort, p: RepoPath, tag: string): Pr
   } else {
     // An answer that is no ref proves nothing is there.
     ref = rec(a.value);
-    if (!ref) return { error: 'GitHub answered something that is not a ref', status: 200 };
+    if (!ref) return unreadable('GitHub answered something that is not a ref');
   }
-  if (ref.ref !== `refs/tags/${tag}`) return { error: 'GitHub answered another ref', status: 200 };
+  if (ref.ref !== `refs/tags/${tag}`) return unreadable('GitHub answered another ref');
   let o = rec(ref.object);
   for (let hops = 0; hops < 4 && o?.type === 'tag'; hops += 1) {
     if (!FULL_SHA_RE.test(str(o.sha))) break;
@@ -494,7 +484,9 @@ export async function readTagTarget(gh: GhActPort, p: RepoPath, tag: string): Pr
     if (!t.ok) return failed(t);
     o = rec(rec(t.value)?.object);
   }
-  return o?.type === 'commit' && FULL_SHA_RE.test(str(o.sha)) ? str(o.sha) : { error: 'the tag points at something other than a commit', status: 200 };
+  if (o?.type === 'commit' && FULL_SHA_RE.test(str(o.sha))) return str(o.sha);
+  // A tag on a tree or a blob is a tag that exists, at no commit of the act.
+  return o && str(o.sha) ? `${str(o.type) || 'object'}:${str(o.sha)}` : unreadable('the tag could not be read');
 }
 
 /** The published release of a tag, or null (GitHub's 404: drafts answer
@@ -502,7 +494,7 @@ export async function readTagTarget(gh: GhActPort, p: RepoPath, tag: string): Pr
 export async function readReleaseByTag(gh: GhActPort, p: RepoPath, tag: string): Promise<Read<GhRelease | null>> {
   const a = await gh.read(p.host, `${p.base}/releases/tags/${tag}`);
   if (!a.ok) return a.kind === 'http' && a.status === 404 ? null : failed(a);
-  return mapRelease(a.value) ?? { error: 'the release could not be read', status: 200 };
+  return mapRelease(a.value) ?? unreadable('the release could not be read');
 }
 
 /** Every item of a paged listing (`key`: the array inside an object answer,
@@ -543,14 +535,14 @@ type FolderEntry = { name: string; blob: string } | { name: string; other: strin
 async function readFolder(gh: GhActPort, p: RepoPath, dir: string, sha: string): Promise<Read<FolderEntry[] | null>> {
   const a = await gh.read(p.host, `${p.base}/contents${dir ? `/${pathOfName(dir)}` : ''}?ref=${sha}`);
   if (!a.ok) return a.kind === 'http' && a.status === 404 ? null : failed(a);
-  if (!Array.isArray(a.value)) return { error: `${dir || 'the root'} is not a folder`, status: 200 };
+  if (!Array.isArray(a.value)) return unreadable(`${dir || 'the root'} is not a folder`);
   const out: FolderEntry[] = [];
   for (const e of (a.value as unknown[]).map(rec)) {
     const name = str(e?.name);
-    if (!e || !name) return { error: `${dir || 'the root'} could not be listed`, status: 200 };
+    if (!e || !name) return unreadable(`${dir || 'the root'} could not be listed`);
     if (e.type !== 'file') out.push({ name, other: str(e.type) || 'unknown' });
     else if (e.download_url === null) out.push({ name, other: 'submodule' });
-    else if (!FULL_SHA_RE.test(str(e.sha))) return { error: `${dir || 'the root'} could not be listed`, status: 200 };
+    else if (!FULL_SHA_RE.test(str(e.sha))) return unreadable(`${dir || 'the root'} could not be listed`);
     else out.push({ name, blob: str(e.sha) });
   }
   return out;
@@ -563,8 +555,16 @@ async function readBlob(gh: GhActPort, p: RepoPath, blob: string, what: string):
   const b = await gh.read(p.host, `${p.base}/git/blobs/${blob}`);
   if (!b.ok) return failed(b);
   const v = rec(b.value);
-  if (v?.encoding !== 'base64') return { error: `${what} could not be read`, status: 200 };
+  if (v?.encoding !== 'base64') return unreadable(`${what} could not be read`);
   return Buffer.from(str(v.content), 'base64').toString('utf8');
+}
+
+/** A file of a folder listing: its text, null when it is not there; a
+ *  symlink, a submodule or a folder in its place is not read through. */
+async function readEntry(gh: GhActPort, p: RepoPath, folder: readonly FolderEntry[] | null, path: string): Promise<Read<string | null>> {
+  const entry = folder?.find((f) => f.name === path.slice(path.lastIndexOf('/') + 1));
+  if (!entry) return null;
+  return 'blob' in entry ? readBlob(gh, p, entry.blob, path) : unreadable(`${path} is a ${entry.other}, not a file`);
 }
 
 /** A file's text at a commit, null when it is not there; a symlink, a
@@ -572,10 +572,14 @@ async function readBlob(gh: GhActPort, p: RepoPath, blob: string, what: string):
 export async function readFileAt(gh: GhActPort, p: RepoPath, path: string, sha: string): Promise<Read<string | null>> {
   const cut = path.lastIndexOf('/');
   const folder = await readFolder(gh, p, cut < 0 ? '' : path.slice(0, cut), sha);
-  if (folder === null || isFail(folder)) return folder;
-  const entry = folder.find((f) => f.name === path.slice(cut + 1));
-  if (!entry) return null;
-  return 'blob' in entry ? readBlob(gh, p, entry.blob, path) : { error: `${path} is a ${entry.other}, not a file`, status: 200 };
+  return isFail(folder) ? folder : readEntry(gh, p, folder, path);
+}
+
+/** Read `items` BLOBS_AT_ONCE at a time, in order. */
+async function inBatches<T, R>(items: readonly T[], read: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = [];
+  for (let i = 0; i < items.length; i += BLOBS_AT_ONCE) out.push(...await Promise.all(items.slice(i, i + BLOBS_AT_ONCE).map(read)));
+  return out;
 }
 
 /** The `on.push` of every workflow at a commit, or why they cannot be read
@@ -588,11 +592,12 @@ export async function readWorkflows(gh: GhActPort, p: RepoPath, sha: string): Pr
   if (isFail(folder)) return folder;
   const files = folder.filter((f) => /\.ya?ml$/i.test(f.name));
   if (files.length > WORKFLOWS_MAX) return { refusal: `the repository has more than ${WORKFLOWS_MAX} workflows` };
+  for (const f of files) if (!('blob' in f)) return { refusal: `${dir}/${f.name} is a ${f.other}, not a file` };
+  const texts = await inBatches(files, (f) => ('blob' in f ? readBlob(gh, p, f.blob, `${dir}/${f.name}`) : Promise.resolve(unreadable(f.name))));
   const out: WorkflowPush[] = [];
-  for (const f of files) {
-    const path = `${dir}/${f.name}`;
-    if (!('blob' in f)) return { refusal: `${path} is a ${f.other}, not a file` };
-    const text = await readBlob(gh, p, f.blob, path);
+  for (let i = 0; i < files.length; i += 1) {
+    const path = `${dir}/${files[i].name}`;
+    const text = texts[i];
     if (isFail(text)) return text;
     try {
       out.push({ path, push: workflowPush(text) });
@@ -623,22 +628,32 @@ export async function readDisabledWorkflow(gh: GhActPort, p: RepoPath, workflows
   return null;
 }
 
-/** What the checks on a commit say now. */
-export async function readChecks(gh: GhActPort, p: RepoPath, sha: string, expected: boolean): Promise<Read<ReleaseChecks>> {
+/** What the checks on a commit say now, as the default branch ran them: a
+ *  tag pushed on the same commit (this release's, or a beta's) runs its own
+ *  workflows and check runs there, which say nothing about the commit on
+ *  the branch. */
+export async function readChecks(gh: GhActPort, p: RepoPath, sha: string, branch: string, expected: boolean): Promise<Read<ReleaseChecks>> {
   const run = (v: unknown): Run => {
     const r = rec(v);
     return { status: str(r?.status), conclusion: typeof r?.conclusion === 'string' ? r.conclusion : null };
   };
-  const runs = await readPaged(gh, p.host, `${p.base}/commits/${sha}/check-runs?filter=latest`, 'check_runs');
-  if (!runs) return { error: 'the check runs could not be read' };
+  // The check suites of another ref (a tag, another branch): their check
+  // runs are left out. A suite with no branch (made by an app) counts.
+  const suites = await readPaged(gh, p.host, `${p.base}/commits/${sha}/check-suites`, 'check_suites');
+  if (!suites) return { error: 'the check suites could not be read' };
+  const elsewhere = new Set(suites.map(rec).filter((v) => typeof v?.head_branch === 'string' && v.head_branch !== branch).map((v) => v?.id));
+  const all = await readPaged(gh, p.host, `${p.base}/commits/${sha}/check-runs?filter=latest`, 'check_runs');
+  if (!all) return { error: 'the check runs could not be read' };
+  const runs = all.filter((v) => !elsewhere.has(rec(rec(v)?.check_suite)?.id));
   const s = await gh.read(p.host, `${p.base}/commits/${sha}/status`);
   if (!s.ok) return failed(s);
   const sv = rec(s.value);
-  if (typeof sv?.total_count !== 'number') return { error: 'the combined status could not be read', status: 200 };
+  if (typeof sv?.total_count !== 'number') return unreadable('the combined status could not be read');
   // A push run queued behind a concurrency group has no check run yet: the
   // runs are read whatever the check runs say.
-  const pushRuns = await readPaged(gh, p.host, `${p.base}/actions/runs?head_sha=${sha}&event=push`, 'workflow_runs');
-  if (!pushRuns) return { error: 'the workflow runs could not be read' };
+  const pushed = await readPaged(gh, p.host, `${p.base}/actions/runs?head_sha=${sha}&event=push&branch=${pathOfName(branch)}`, 'workflow_runs');
+  if (!pushed) return { error: 'the workflow runs could not be read' };
+  const pushRuns = pushed.filter((v) => rec(v)?.head_branch === branch);
   const latest = latestPerWorkflow(pushRuns.map((v) => {
     const r = rec(v);
     return { ...run(v), workflowId: String(r?.workflow_id ?? r?.id ?? ''), id: typeof r?.id === 'number' ? r.id : 0, attempt: typeof r?.run_attempt === 'number' ? r.run_attempt : 1 };
@@ -646,13 +661,11 @@ export async function readChecks(gh: GhActPort, p: RepoPath, sha: string, expect
   return checksVerdict({ runs: runs.map(run), status: { state: str(sv.state), total: sv.total_count }, workflowRuns: latest, expected });
 }
 
-/** The Actions run a pushed tag started, best effort: its page, or ''. */
-export async function tagRunUrl(gh: GhActPort, p: RepoPath, act: ApprovalReleaseAct): Promise<string> {
-  const a = await gh.read(p.host, `${p.base}/actions/runs?event=push&branch=${act.tagName}&per_page=20`).catch(() => null);
-  if (!a?.ok) return '';
-  const runs = rec(a.value)?.workflow_runs;
-  const hit = Array.isArray(runs) ? (runs as unknown[]).map(rec).find((r) => r?.head_sha === act.targetSha && /^https:\/\//.test(str(r?.html_url))) : undefined;
-  return hit ? str(hit.html_url) : '';
+/** The Actions page of the runs the pushed tag starts: a link that needs no
+ *  read (GitHub makes the run a moment after the push). The tag is plain
+ *  characters (RELEASE_TAG_RE). Pure. */
+export function tagRunsUrl(p: RepoPath, act: ApprovalReleaseAct): string {
+  return `https://${p.host}/${p.base.replace(/^repos\//, '')}/actions?query=event%3Apush+branch%3A${act.tagName}`;
 }
 
 /** Delete a draft this act made, best effort: read first, and delete only
@@ -694,6 +707,8 @@ export interface ReleaseAsk {
   version: string | null;
   /** The tag's own shape where the bot named none. */
   prerelease: boolean;
+  /** A push to the default branch surely ran a workflow at the commit. */
+  checksExpected: boolean;
 }
 
 export interface ReleaseAskRefusal {
@@ -704,9 +719,9 @@ export interface ReleaseAskRefusal {
 /** Read GitHub for a release request; the request is refused (no card) when
  *  the repository cannot take this release as asked. */
 export async function readReleaseAsk(gh: GhActPort, repoKey: string, input: ReleaseAskInput): Promise<ReleaseAsk | ReleaseAskRefusal> {
-  const p = releaseRepoPath(repoKey);
+  const p = repoPath(repoKey);
   if (!p) return { refuse: 'invalid', message: 'not a GitHub repository' };
-  const unread = (what: string, e: Fail): ReleaseAskRefusal => ({ refuse: 'read_failed', message: `${what} could not be read: ${e.error}`.slice(0, 300) });
+  const unread = (what: string, e: ReadFail): ReleaseAskRefusal => ({ refuse: 'read_failed', message: `${what} could not be read: ${e.error}`.slice(0, 300) });
   const no = (code: string, message: string): ReleaseAskRefusal => ({ refuse: 'invalid', message: `${code}: ${message}`.slice(0, 300) });
   const tag = input.tagName;
   const defaultBranch = await readDefaultBranch(gh, p);
@@ -750,9 +765,12 @@ export async function readReleaseAsk(gh: GhActPort, repoKey: string, input: Rele
   }
   let version: string | null = null;
   if (tagVersion(tag)) {
-    const pkg = await readFileAt(gh, p, 'package.json', targetSha);
+    // One listing of the root for both files.
+    const root = await readFolder(gh, p, '', targetSha);
+    if (isFail(root)) return unread('the repository\'s files', root);
+    const pkg = await readEntry(gh, p, root, 'package.json');
     if (isFail(pkg)) return unread('package.json', pkg);
-    const lock = await readFileAt(gh, p, 'package-lock.json', targetSha);
+    const lock = await readEntry(gh, p, root, 'package-lock.json');
     if (isFail(lock)) return unread('package-lock.json', lock);
     let problem: string | null;
     try {
@@ -764,23 +782,17 @@ export async function readReleaseAsk(gh: GhActPort, repoKey: string, input: Rele
     const v = pkg === null ? null : (rec(JSON.parse(pkg) as unknown)?.version ?? null);
     version = typeof v === 'string' ? v : null;
   }
-  const checks = await readChecks(gh, p, targetSha, checksExpected(workflows, defaultBranch));
+  const expected = checksExpected(workflows, defaultBranch);
+  const checks = await readChecks(gh, p, targetSha, defaultBranch, expected);
   if (isFail(checks)) return unread('the checks', checks);
   return {
     mode: mode.mode, workflows: mode.mode === 'workflow' ? mode.workflows : [], alsoRuns: alsoOnTagPush(workflows, tag),
     targetSha, defaultBranch, behindBy: cmp.aheadBy, checks, version,
-    prerelease: input.prerelease ?? shape ?? false,
+    prerelease: input.prerelease ?? shape ?? false, checksExpected: expected,
   };
 }
 
 // ── When it runs ─────────────────────────────────────────────────────────
-
-/** A failed read as a run-time answer: no status gives the try back
- *  (`read-failed`); GitHub's 404 or 410 is `gone`; any other status refuses. */
-function refusalOf(e: Fail, gone: string): string {
-  if (e.status === undefined) return 'read-failed';
-  return e.status === 404 || e.status === 410 ? gone : `gh-${e.status}`;
-}
 
 /** Whether a tag that exists already is the one publishing this act's draft
  *  makes: at the commit, with that draft still a draft (a publish that
@@ -795,33 +807,32 @@ export function tagIsOurs(act: ApprovalReleaseAct, tag: string | null, draft: Gh
 export async function releasePrecondition(gh: GhActPort, p: RepoPath, act: ApprovalReleaseAct, login: string, draftId: number | undefined, wroteBefore: boolean): Promise<{ refusal: string | null; draft: GhRelease | null }> {
   const stop = (refusal: string, draft: GhRelease | null = null): { refusal: string; draft: GhRelease | null } => ({ refusal, draft });
   const branch = await readDefaultBranch(gh, p);
-  if (isFail(branch)) return stop(refusalOf(branch, 'repo-changed'));
+  if (isFail(branch)) return stop(readRefusal(branch, 'repo-changed'));
   if (branch !== act.defaultBranch) return stop('default-branch-changed');
   const cmp = await readCompare(gh, p, act.targetSha, act.defaultBranch);
-  if (isFail(cmp)) return stop(refusalOf(cmp, 'not-on-default-branch'));
+  if (isFail(cmp)) return stop(readRefusal(cmp, 'not-on-default-branch'));
   if (cmp.status !== 'identical' && cmp.status !== 'ahead') return stop('not-on-default-branch');
   const tag = await readTagTarget(gh, p, act.tagName);
-  if (isFail(tag)) return stop(refusalOf(tag, 'tag-taken'));
+  if (isFail(tag)) return stop(readRefusal(tag, 'tag-taken'));
   const all = await readReleases(gh, p);
   if (!all) return stop('read-failed');
   const same = all.filter((r) => r.tagName === act.tagName);
   const own = act.mode === 'release' ? same.find((r) => ownDraft(r, act, login, draftId, wroteBefore)) ?? null : null;
   if (tag !== null && !tagIsOurs(act, tag, own)) return stop('tag-taken', own);
   const published = await readReleaseByTag(gh, p, act.tagName);
-  if (isFail(published)) return stop(refusalOf(published, 'release-exists'), own);
+  if (isFail(published)) return stop(readRefusal(published, 'release-exists'), own);
   if (published || same.some((r) => r !== own)) return stop('release-exists', own);
   // The draft this act made was changed on GitHub since: not what was approved.
   if (own && !sameDraft(own, act)) return stop('found-different', own);
-  const workflows = await readWorkflows(gh, p, act.targetSha);
-  if ('refusal' in workflows) return stop('workflow-unreadable', own);
-  if (isFail(workflows)) return stop(refusalOf(workflows, 'workflow-unreadable'), own);
+  // The workflows at the commit do not change: what they expect of the
+  // checks was read with the request (checksExpected).
   if (act.mode === 'workflow') {
     const off = await readDisabledWorkflow(gh, p, act.workflows);
-    if (isFail(off)) return stop(refusalOf(off, 'workflow-disabled'));
+    if (isFail(off)) return stop(readRefusal(off, 'workflow-disabled'));
     if (off) return stop('workflow-disabled');
   }
-  const checks = await readChecks(gh, p, act.targetSha, checksExpected(workflows, act.defaultBranch));
-  if (isFail(checks)) return stop(refusalOf(checks, 'checks-failing'), own);
+  const checks = await readChecks(gh, p, act.targetSha, act.defaultBranch, act.checksExpected);
+  if (isFail(checks)) return stop(readRefusal(checks, 'checks-failing'), own);
   const why = checksRefusal(checks);
   return why ? stop(why, own) : { refusal: null, draft: own };
 }
@@ -842,7 +853,7 @@ export async function findRelease(gh: GhActPort, p: RepoPath, act: ApprovalRelea
     // else's push of that ref would differ from it).
     if (tag === null) return { status: 'none' };
     if (tag !== act.targetSha) return { status: 'refused', reason: 'tag-taken' };
-    return { status: 'done', result: { url: await tagRunUrl(gh, p, act) } };
+    return { status: 'done', result: { url: tagRunsUrl(p, act) } };
   }
   const all = await readReleases(gh, p);
   if (!all) return { status: 'unknown' };

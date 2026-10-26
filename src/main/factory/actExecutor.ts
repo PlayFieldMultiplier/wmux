@@ -36,20 +36,22 @@
 // draft whose id is journaled, the late gate, and publishing that draft with
 // the approved fields. A 4xx from publishing is uncertain, settled by a read
 // later (GitHub was measured making a tag on a 4xx from a call that
-// publishes). Once a row's draft is on GitHub, a try given back stays
-// counted, and any refusal or drop of the row deletes that draft while it is
-// still a draft.
+// publishes). Once a row's draft is on GitHub the row stays claimed (a
+// restart keeps its approval), and any refusal or drop of the row deletes
+// that draft while it is still a draft.
 
-import { splitRepoKey } from '../github/GhIssueService';
 import type { GhActAnswer, GhActPort } from '../github/GhActService';
 import type { ApprovalAct, ApprovalActRepo, ApprovalReleaseAct } from '../../shared/botApproval';
 import { actMarker, bodyWithMarker, normalizeActText } from './actPayload';
 import { actRowClaimed, runnableAct, type ActEffect, type ActEffectStore } from './actEffectStore';
 import type { StoredApproval } from './approvals';
+import { failed, isFail, readRefusal, repoPath, type Read } from './actRead';
 import {
-  deleteDraft, draftBody, draftWritten, findRelease, isFail, mapRelease, publishBody, publishedWritten, readTagTarget, releasePrecondition,
-  tagIsOurs, tagRefBody, tagRefWritten, tagRunUrl,
+  deleteDraft, draftBody, draftWritten, findRelease, mapRelease, publishBody, publishedWritten, readTagTarget, releasePrecondition,
+  tagIsOurs, tagRefBody, tagRefWritten, tagRunsUrl,
 } from './releaseAct';
+
+export { repoPath };
 
 /** The acts that take one write (a release has its own steps). */
 type OneWriteAct = Exclude<ApprovalAct, ApprovalReleaseAct>;
@@ -83,7 +85,6 @@ export interface ActExecutorPorts {
 
 // ── GitHub reads (also the request-time reads, approvals.ts) ───────────────
 
-type Read<T> = T | { error: string; status?: number };
 
 export interface IssueFacts {
   number: number;
@@ -120,16 +121,6 @@ function str(v: unknown): string {
 function loginOf(v: unknown): string | null {
   const l = rec(v)?.login;
   return typeof l === 'string' && l ? l.toLowerCase() : null;
-}
-
-function failed(a: Exclude<GhActAnswer, { ok: true }>): { error: string; status?: number } {
-  return { error: a.message.slice(0, 300), ...(a.kind === 'http' ? { status: a.status } : {}) };
-}
-
-/** `host` and `repos/<owner>/<repo>` of a GitHub repo key, or null. */
-export function repoPath(repoKey: string): { host: string; base: string } | null {
-  const p = splitRepoKey(repoKey);
-  return p ? { host: p.host, base: `repos/${p.owner}/${p.repo}` } : null;
 }
 
 /** The gh login, or why not. An answer without a status (a rate limit, a
@@ -194,19 +185,6 @@ export async function readPull(gh: GhActPort, repoKey: string, n: number): Promi
   return mapPull(a.value) ?? { error: 'the pull request could not be read' };
 }
 
-function isError<T>(r: Read<T>): r is { error: string; status?: number } {
-  return !!r && typeof r === 'object' && 'error' in r;
-}
-
-/** What a failed read means for the try: with no HTTP status (a rate limit,
- *  a gh that did not start) it is `read-failed` and the try is given back;
- *  GitHub's 404 or 410 is `gone`; any other status (a 403 from SSO, a 422)
- *  refuses as `gh-<status>`, so the row never goes round again for it. */
-function readRefusal(e: { status?: number }, gone: string): string {
-  if (e.status === undefined) return 'read-failed';
-  return e.status === 404 || e.status === 410 ? gone : `gh-${e.status}`;
-}
-
 /** Every item of a listing (`endpoint` holds a query), read 100 a page, or
  *  null when a page could not be read or there are more than LIST_PAGES_MAX:
  *  a listing that is not whole proves nothing is there. */
@@ -258,8 +236,7 @@ type Found =
   | { status: 'none'; draft?: number }
   | { status: 'unknown' };
 
-/** How one claimed try ends (runOnce's own moves). `back` keeps the try
- *  counted once the row's draft is on GitHub. */
+/** How one claimed try ends (runOnce's own moves). */
 interface TryEnds {
   gate: () => string | null;
   end: (status: 'done' | 'refused' | 'uncertain', reason?: string, result?: ActEffect['result']) => Promise<ActEffect | null>;
@@ -353,9 +330,10 @@ export class ActExecutor {
       if (out?.status === 'refused') await this.dropDraft(out);
       return out;
     };
-    // A row whose draft is on GitHub has written: the try stays counted.
+    // Nothing of this try reached GitHub: it is given back (a row whose
+    // draft is on GitHub stays claimed by its draftId, not its count).
     const back = (reason: string): ActEffect | null => {
-      const out = effects.release(id, reason, effects.get(id)?.draftId !== undefined);
+      const out = effects.release(id, reason);
       this.emit(out);
       return out;
     };
@@ -369,10 +347,10 @@ export class ActExecutor {
       const p = r ? repoPath(r.repoKey) : null;
       if (!r || !act || !p || !r.actRepo || !r.ghLogin) return end('refused', 'approval-mismatch');
       const login = await readIdentity(this.ports.gh, p.host);
-      if (isError(login)) return login.status === undefined ? back('read-failed') : end('refused', 'identity-unknown');
+      if (isFail(login)) return login.status === undefined ? back('read-failed') : end('refused', 'identity-unknown');
       if (login !== r.ghLogin) return end('refused', 'identity-changed');
       const repo = await readRepo(this.ports.gh, r.repoKey);
-      if (isError(repo)) {
+      if (isFail(repo)) {
         const why = readRefusal(repo, 'repo-changed');
         return why === 'read-failed' ? back(why) : end('refused', why);
       }
@@ -444,13 +422,13 @@ export class ActExecutor {
     if (tag !== null && !tagIsOurs(act, tag, draft)) return t.end('refused', 'tag-taken');
     if (act.mode === 'workflow') {
       const ans = await gh.write(p.host, 'POST', `${p.base}/git/refs`, tagRefBody(act));
-      if (ans.ok) return tagRefWritten(ans.value, act) ? t.end('done', undefined, { url: await tagRunUrl(gh, p, act) }) : t.end('uncertain', 'unexpected-response');
+      if (ans.ok) return tagRefWritten(ans.value, act) ? t.end('done', undefined, { url: tagRunsUrl(p, act) }) : t.end('uncertain', 'unexpected-response');
       if (ans.kind === 'http' && ans.status === 422 && /already exists/i.test(ans.message)) {
         // The tag exists: at the commit it is what this act makes (as a
         // read settles it); elsewhere it is someone else's.
         const at = await readTagTarget(gh, p, act.tagName);
         if (isFail(at) || at === null) return t.end('uncertain', 'gh-422');
-        return at === act.targetSha ? t.end('done', undefined, { url: await tagRunUrl(gh, p, act) }) : t.end('refused', 'tag-taken');
+        return at === act.targetSha ? t.end('done', undefined, { url: tagRunsUrl(p, act) }) : t.end('refused', 'tag-taken');
       }
       if (ans.kind === 'http') return t.end('refused', `gh-${ans.status}`);
       if (ans.kind === 'rate-limited' || ans.kind === 'unsent') return t.back(ans.kind);
@@ -490,14 +468,14 @@ export class ActExecutor {
     if (act.kind === 'issue_create') return null;
     if (act.kind === 'pr_close') {
       const pr = await readPull(gh, repoKey, act.number);
-      if (isError(pr)) return readRefusal(pr, 'target-gone');
+      if (isFail(pr)) return readRefusal(pr, 'target-gone');
       if (pr.nodeId !== act.targetNodeId) return 'target-changed';
       if (pr.merged) return 'merged';
       if (pr.state === 'closed') return 'already-closed';
       return pr.headSha === act.headSha ? null : 'head-moved';
     }
     const issue = await readIssue(gh, repoKey, act.number);
-    if (isError(issue)) return readRefusal(issue, 'target-gone');
+    if (isFail(issue)) return readRefusal(issue, 'target-gone');
     if (issue.nodeId !== act.targetNodeId) return 'target-changed';
     if (act.kind === 'issue_close') {
       if (issue.isPr) return 'target-changed';
@@ -507,7 +485,7 @@ export class ActExecutor {
     if (issue.locked) return 'locked';
     if (act.target === 'issue') return issue.state === 'closed' ? 'already-closed' : null;
     const pr = await readPull(gh, repoKey, act.number);
-    if (isError(pr)) return readRefusal(pr, 'target-gone');
+    if (isFail(pr)) return readRefusal(pr, 'target-gone');
     if (pr.merged) return 'merged';
     if (pr.state === 'closed') return 'already-closed';
     return pr.headSha === act.headSha ? null : 'head-moved';
@@ -534,10 +512,15 @@ export class ActExecutor {
     if (!r?.act || !r.ghLogin) return 'unknown';
     const found = await this.find(r, r.act, row).catch((): Found => ({ status: 'unknown' }));
     if (found.status === 'unknown') return 'unknown';
-    // A release's own draft found: journaled first, so the next try
-    // publishes it, and a refusal (attempts exhausted included) deletes it.
+    // A release's own draft found: journaled before the row is settled, so
+    // the next try publishes it and a refusal (attempts exhausted included)
+    // deletes it. Not journaled: nothing is settled, and the next sweep reads
+    // again.
     const draft = found.status === 'refused' || found.status === 'none' ? found.draft : undefined;
-    if (draft !== undefined && row.draftId !== draft) this.ports.effects.noteDraft(row.id, draft);
+    if (draft !== undefined && row.draftId !== draft && !this.ports.effects.noteDraft(row.id, draft)) {
+      this.ports.log?.(`[factory] act release ${row.requestId}: draft ${draft} not journaled; the row is settled on a later read`);
+      return 'unknown';
+    }
     let next: ActEffect | null;
     if (found.status === 'done') next = this.ports.effects.settle(row.id, 'done', undefined, found.result);
     else if (found.status === 'refused') next = this.ports.effects.settle(row.id, 'refused', found.reason, found.result);
@@ -578,14 +561,14 @@ export class ActExecutor {
     // after this request's first try started.
     if (act.kind === 'pr_close') {
       const pr = await readPull(gh, r.repoKey, act.number);
-      if (isError(pr)) return { status: 'unknown' };
+      if (isFail(pr)) return { status: 'unknown' };
       if (pr.nodeId !== act.targetNodeId) return { status: 'refused', reason: 'target-changed' };
       if (pr.merged) return { status: 'refused', reason: 'merged' };
       if (pr.state === 'open') return { status: 'none' };
       if (pr.headSha !== act.headSha) return { status: 'refused', reason: 'head-moved' };
     }
     const issue = await readIssue(gh, r.repoKey, act.number);
-    if (isError(issue)) return { status: 'unknown' };
+    if (isFail(issue)) return { status: 'unknown' };
     if (act.kind === 'issue_close' && (issue.nodeId !== act.targetNodeId || issue.isPr)) return { status: 'refused', reason: 'target-changed' };
     if (issue.state === 'open') return { status: 'none' };
     if (issue.closedBy !== null && issue.closedBy !== r.ghLogin) return { status: 'refused', reason: 'closed-by-other' };

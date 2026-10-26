@@ -78,9 +78,10 @@ export function runnableAct(e: Pick<ActEffect, 'action'>): boolean {
 }
 
 /** Whether a row was claimed at least once (a write may have reached
- *  GitHub): any row past pending, and a pending one an earlier try left. */
-export function actRowClaimed(e: Pick<ActEffect, 'status' | 'attempt'>): boolean {
-  return e.status !== 'pending' || e.attempt > 0;
+ *  GitHub): any row past pending, a pending one an earlier try left, and one
+ *  whose release draft is on GitHub (whatever its tries). */
+export function actRowClaimed(e: Pick<ActEffect, 'status' | 'attempt' | 'draftId'>): boolean {
+  return e.status !== 'pending' || e.attempt > 0 || e.draftId !== undefined;
 }
 
 export class ActEffectStore {
@@ -165,13 +166,12 @@ export class ActEffectStore {
 
   /** inFlight → pending: nothing was written (the approval was taken back,
    *  GitHub's rate limit refused it before it was sent); the try is given back.
-   *  `kept`: a write of this try is on GitHub (a release's draft), so the try
-   *  keeps its count and the row stays claimed (a read comes first next time,
-   *  and a restart keeps the approval). */
-  release(id: string, reason: string, kept = false): ActEffect | null {
+   *  A release's draft made by an earlier write keeps the row claimed
+   *  (actRowClaimed), not its count of tries. */
+  release(id: string, reason: string): ActEffect | null {
     const row = this.rows.get(id);
     if (!row || row.status !== 'inFlight') return null;
-    const next: ActEffect = { ...row, status: 'pending', attempt: kept ? row.attempt : Math.max(0, row.attempt - 1), reason, updatedAt: this.now() };
+    const next: ActEffect = { ...row, status: 'pending', attempt: Math.max(0, row.attempt - 1), reason, updatedAt: this.now() };
     return this.put(next) ? next : this.unjournaled(row);
   }
 

@@ -95,7 +95,7 @@ const SENTENCES: Readonly<Record<string, string>> = {
   'release-exists': 'A release with this tag is already on {host}, published or as a draft',
   'not-on-default-branch': 'The commit is no longer on the default branch',
   'default-branch-changed': 'The repository\'s default branch changed since the request',
-  'checks-failing': 'A check on the commit failed',
+  'checks-failing': 'A check on the commit did not pass',
   'checks-pending': 'A check on the commit is still running',
   'checks-not-started': 'The commit\'s checks have not started',
   'version-mismatch': 'The version in package.json or package-lock.json is not the tag\'s',
@@ -103,6 +103,7 @@ const SENTENCES: Readonly<Record<string, string>> = {
   'tag-not-matching-release-workflow': 'The repository\'s tag workflows do not run on this tag',
   'workflow-unreadable': 'A workflow file at the commit could not be read',
   'workflow-disabled': 'The release workflow is disabled, or GitHub Actions is off for the repository',
+  'unreadable-answer': '{host} answered something wmux cannot read',
   'release-by-other': 'Someone else published a release with this tag',
   'published-other-target': 'A release was published, but its tag points at another commit',
 };

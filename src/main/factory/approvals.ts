@@ -692,12 +692,15 @@ export function releaseCardTitle(act: ApprovalReleaseAct, fullName: string): str
     : `Publish release ${act.tagName} of ${fullName} at ${at} — publishes a release, cannot be undone`;
 }
 
+/** What the card says of the checks the bot's request read. An approval
+ *  while they have not passed is refused, not held: the bot asks again once
+ *  they pass (a held approval would keep an irreversible act waiting). */
 const CHECK_WORDS: Readonly<Record<ReleaseAsk['checks'], string>> = {
   passed: 'passed',
-  failed: 'one failed; wmux does not publish while a check fails',
-  running: 'still running; wmux does not publish until they pass',
+  failed: 'one did not pass; approving now is refused, and the bot asks again once they pass',
+  running: 'still running; approving now is refused, and the bot asks again once they pass',
   none: 'none',
-  'not-started': 'not started yet; wmux does not publish until they pass',
+  'not-started': 'not started yet; approving now is refused, and the bot asks again once they pass',
 };
 
 /** A release card's lines after the bot's: what Approve does and whether it
@@ -1059,7 +1062,7 @@ export class ApprovalService {
       actPin = {
         kind: 'release', mode: read.mode, tagName, targetSha: read.targetSha, defaultBranch: read.defaultBranch,
         title: read.mode === 'release' ? title || tagName : '', notes: read.mode === 'release' ? notes : '',
-        prerelease: read.prerelease, workflows: read.workflows, draft: false,
+        prerelease: read.prerelease, workflows: read.workflows, checksExpected: read.checksExpected, draft: false,
       };
     } else if (act === 'issue_create') {
       actPin = { kind: 'issue_create', title, body };
