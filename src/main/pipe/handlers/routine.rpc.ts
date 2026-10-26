@@ -37,7 +37,7 @@
 import path from 'node:path';
 import { BOT_EVENT, BOT_RPC, type BotBinding, type BotEventPayload } from '../../../shared/bot';
 import { ROUTINE_RPC, ROUTINE_LIMITS, type RoutineSetParams } from '../../../shared/botRoutine';
-import { GENERAL_THREAD, dmThreadId, parseThreadId } from '../../../shared/room';
+import { dmThreadId, parseThreadId } from '../../../shared/room';
 import type { RpcContext } from '../../../shared/rpc';
 import { registerFactoryRpcModule, type FactoryHostDeps, type FactoryRouter } from '../../factory/factoryHost';
 import { TAINTED_CONVERSATION_SAVES_NOTHING, conversationSignedIn, conversationTainted } from '../../factory/conversationMarks';
@@ -73,7 +73,7 @@ export const ROUTINE_PENDING = 'Waiting for the owner: this conversation has rea
 export const ROUTINE_CHANGE_REFUSED = 'this conversation has taken in outside text, so it changes no routine, even on the owner\'s words (it may only propose a new one for the owner to approve); ask the owner to start a new conversation with you (New conversation, on your profile in the Bots page) and to ask for it again there';
 
 /** Why a routine from such a conversation does not run in that thread. */
-export const ROUTINE_THREAD_REFUSED = 'a routine proposed from a conversation that has read outside text runs in your 1:1 or in the thread the owner asked in; leave thread_id out or name one of those';
+export const ROUTINE_THREAD_REFUSED = 'a routine proposed from a conversation that has read outside text runs in your 1:1 or in the thread the owner asked in; leave thread_id out (it runs where the owner asked) or name your 1:1';
 
 /** The running turn of a bot is on the owner's words: their message, or an
  *  answer to the bot's question (not one closed without an answer). Never
@@ -184,9 +184,11 @@ function proposeRoutine(bot: BotBinding, store: RoutineStore, p: Partial<Routine
     if (!proof) return refused;
     // Rewriting a routine the owner already trusts is not proposed.
     if (p.routineId !== undefined) return refuse('not_authorized', ROUTINE_CHANGE_REFUSED);
-    const thread = p.threadId === undefined ? GENERAL_THREAD : parseThreadId(p.threadId);
+    // Left out, it runs where the owner asked, written into the routine so
+    // the card and what is saved name the same thread.
+    const thread = p.threadId === undefined ? proof.threadId : parseThreadId(p.threadId);
     if (thread !== null && thread !== dmThreadId(bot.botId) && thread !== proof.threadId) return refuse('not_authorized', ROUTINE_THREAD_REFUSED);
-    const checked = store.check(bot, p as RoutineSetParams);
+    const checked = store.check(bot, { ...p, threadId: thread ?? p.threadId } as RoutineSetParams);
     if (!checked.ok) return checked;
     const service = (deps.approvals ?? getApprovalService)();
     if (!service) return refuse('not_started', 'approvals are not running yet, so this routine cannot be put to the owner; ask again later');

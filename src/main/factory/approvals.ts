@@ -1222,8 +1222,9 @@ export class ApprovalService {
   /** What the owner asked the bot for in a conversation that took in
    *  outside text (routine_set, memory_update): one card-only request, asked
    *  in the wake that runs on the owner's card (`proof`), whose card shows
-   *  that message and the whole change. One per action and wake: the same
-   *  change again is that request, another one is refused. The caller has
+   *  that message and the whole change. One per action and owner message:
+   *  the same change again while it waits is that request, another one, or
+   *  any once the owner answered, is refused. The caller has
    *  refused a guest's wake, a tainted wake and a signed-in conversation. */
   proposeOwnerAsked(bot: BotBinding, ask: OwnerAsk, proof: OwnerCardProof): { ok: true; request: ApprovalView; duplicate?: true } | Refusal {
     const tool = ask.action === 'routine' ? 'routine_set' : 'memory_update';
@@ -1242,15 +1243,19 @@ export class ApprovalService {
       const problem = ownerAskedTextProblem(t);
       if (problem) return refuse('invalid', `${tool}: this cannot go on the owner's card as it is: ${problem}`);
     }
+    // The owner's words on the card are held to the same: shown as stored.
+    if (ownerAskedTextProblem(proof.excerpt)) return refuse('invalid', `${tool}: the owner's message cannot be quoted on a card as it is; tell the owner what you would save`);
     const payload = ask.action === 'routine' ? ask.routine : ask.change;
     const contentKey = createHash('sha256').update(JSON.stringify([ask.action, payload])).digest('hex').slice(0, 32);
-    // One per action and wake, so outside text cannot fill the owner's inbox.
-    const clientRequestId = `${ask.action}:${wake.wakeId}`;
+    // One per action and owner message, whichever wake runs on it, so
+    // outside text cannot fill the owner's inbox.
+    const clientRequestId = `${ask.action}:${proof.cardId}`;
     const prior = [...this.requests.values()].find((r) => r.botId === bot.botId && r.clientRequestId === clientRequestId);
     if (prior) {
+      if (prior.state !== 'pending') return refuse('not_pending', `${tool}: the owner already answered this request (${prior.state}); do not ask again unless they say so`);
       return prior.contentKey === contentKey
         ? { ok: true, request: approvalView(prior), duplicate: true }
-        : refuse('too_many', `${tool}: one such request per owner message, and this turn has asked already; tell the owner what else you would save`);
+        : refuse('too_many', `${tool}: one such request per owner message, and one waits already; tell the owner what else you would save`);
     }
     const open = [...this.requests.values()].filter((r) => r.botId === bot.botId && r.state === 'pending').length;
     if (open >= APPROVAL_LIMITS.PENDING_PER_BOT) return refuse('too_many', `${open} requests already wait for the owner`);
@@ -1263,9 +1268,9 @@ export class ApprovalService {
         ? routineCardLines(ask.routine, { botId: bot.botId, botName: profile.name || 'the bot', now: this.now(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone })
         : ownerProfileCardLines(ask.change, ask.action === 'bot_memory' ? 'This bot reads its notes when its session starts.' : undefined)),
     ];
-    // Measured as the room stores it, and never cut: the owner reads all of
-    // what they approve.
-    if (redactStoredSecrets([askLine(profile, reason), ...lines].join('\n')).length > ROOM_LIMITS.CARD_BODY_MAX) {
+    // Measured as posted, and never cut: the owner reads all of what they
+    // approve.
+    if ([askLine(profile, reason), ...lines].join('\n').length > ROOM_LIMITS.CARD_BODY_MAX) {
       return refuse('invalid', `${tool}: this does not fit on the owner's card; make it shorter`);
     }
     const at = this.now();

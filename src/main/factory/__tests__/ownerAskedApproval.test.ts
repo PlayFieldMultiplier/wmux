@@ -44,7 +44,7 @@ afterEach(async () => {
 });
 
 function rig(opts: { signedIn?: boolean; wakeTainted?: boolean } = {}) {
-  const state = { now: NOW, enabled: true, proof: null as OwnerCardProof | null };
+  const state = { now: NOW, enabled: true, wakeId: 'w-1', proof: null as OwnerCardProof | null };
   const profile = (): BotProfile => ({
     version: 1, id: A, workspaceId: WS, role: 'lead', name: 'Dev', engine: { kind: 'claude-sdk' }, triggers: [],
     budget: { maxTurnsPerDay: 9, maxConcurrentWorkers: 1, maxWorkerHoursPerDay: 1, turnTimeoutMs: 1 } as BotProfile['budget'],
@@ -60,7 +60,7 @@ function rig(opts: { signedIn?: boolean; wakeTainted?: boolean } = {}) {
   const svc = new ApprovalService({
     file: path.join(dir, 'factory', 'approvals.json'),
     bots: () => ({ listEnabled: () => [profile()], get: (id) => (id === A ? profile() : null) }),
-    runningWake: () => ({ wakeId: 'w-1', attempt: 1, threadId: 'general' as never, tainted: true, guest: false, signedIn: false, ownerWords: true }),
+    runningWake: () => ({ wakeId: state.wakeId, attempt: 1, threadId: 'general' as never, tainted: true, guest: false, signedIn: false, ownerWords: true }),
     readPr: async () => { throw new Error('no PR'); },
     ghLogin: async () => null,
     rooms: () => writer,
@@ -87,16 +87,20 @@ function rig(opts: { signedIn?: boolean; wakeTainted?: boolean } = {}) {
     conversation: () => ({ tainted: true, signedIn: false }), signedIn: () => false, ownerCard: () => state.proof,
     proposeAsked: (bot, ask, proof) => svc.proposeOwnerAsked(bot, ask, proof),
   });
-  /** The owner writes to the bot; the wake runs on that card. */
-  const ownerSays = (text: string): RoomCard => {
-    const posted = writer.post({ workspaceId: WS, kind: 'human', actor: { kind: 'human' }, title: text, refs: { botId: A } });
-    if (!posted.ok) throw new Error('not posted');
-    const item = { id: 'w-1', workspaceId: WS, threadId: posted.card.threadId, reason: { kind: 'human', text, source: 'desktop', clientMessageId: posted.card.id } } as WakeItem;
+  /** A wake (state.wakeId) runs on the owner's card. */
+  const runsOn = (card: RoomCard): void => {
+    const item = { id: state.wakeId, workspaceId: WS, threadId: card.threadId, reason: { kind: 'human', text: card.title, source: 'desktop', clientMessageId: card.id } } as WakeItem;
     state.proof = ownerCardProof(item, writer);
+  };
+  /** The owner writes to the bot; the wake runs on that card. */
+  const ownerSays = (text: string, threadId?: string): RoomCard => {
+    const posted = writer.post({ workspaceId: WS, kind: 'human', actor: { kind: 'human' }, title: text, refs: { botId: A }, ...(threadId ? { threadId: threadId as never } : {}) });
+    if (!posted.ok) throw new Error('not posted');
+    runsOn(posted.card);
     return posted.card;
   };
   const approvalCards = () => writer.read(WS, {}).cards.filter((c) => c.kind === 'approval');
-  return { state, writer, store, svc, setRoutine, note, ownerSays, approvalCards };
+  return { state, writer, store, svc, setRoutine, note, ownerSays, runsOn, approvalCards };
 }
 
 const DAILY = { title: 'Morning summary', prompt: 'Summarize the open PRs and issues for the owner.', schedule: { kind: 'daily', hour: 9, minute: 0 } };
@@ -166,6 +170,55 @@ describe('a routine the owner asked for in a tainted conversation', () => {
     expect(await r.setRoutine({ ...DAILY, threadId: dmThreadId('bot-0000000b') })).toMatchObject({ ok: false, message: ROUTINE_THREAD_REFUSED });
     expect(await r.setRoutine({ ...DAILY, threadId: dmThreadId(A) })).toMatchObject({ ok: true, pending: true });
     expect(r.approvalCards()).toHaveLength(1);
+  });
+
+  it('left without a thread, runs where the owner asked, as the card says', async () => {
+    const r = rig();
+    r.ownerSays('every morning, summarize the PRs for me', dmThreadId(A));
+    const id = (await r.setRoutine(DAILY)).approvalId as string;
+    expect(r.approvalCards()[0].body).toContain('Runs in: your 1:1 with Dev');
+    expect(r.svc.get(id)?.routine?.threadId).toBe(dmThreadId(A));
+    r.svc.decide({ requestId: id, decision: 'approve' }, 'desktop');
+    expect(r.store.list(A)[0].threadId).toBe(dmThreadId(A));
+  });
+
+  it('is one request per owner message, whichever wake runs on it, and none once the owner answered', async () => {
+    const r = rig();
+    const card = r.ownerSays('make a daily summary routine');
+    const first = await r.setRoutine(DAILY);
+    // The same message run again in another wake (re-delivered, resumed).
+    r.state.wakeId = 'w-2';
+    r.runsOn(card);
+    expect(await r.setRoutine(DAILY)).toMatchObject({ ok: true, approvalId: first.approvalId });
+    expect(await r.setRoutine({ ...DAILY, title: 'Other' })).toMatchObject({ ok: false, code: 'too_many' });
+    r.svc.decide({ requestId: first.approvalId as string, decision: 'deny' }, 'desktop');
+    expect(await r.setRoutine(DAILY)).toMatchObject({ ok: false, message: expect.stringContaining('the owner already answered this request') });
+    expect(r.approvalCards()).toHaveLength(1);
+  });
+
+  it('is refused when the owner\'s message itself cannot be quoted as it is', async () => {
+    const r = rig();
+    r.ownerSays('make a routine\u202e and more');
+    expect(await r.setRoutine(DAILY)).toMatchObject({ ok: false, code: 'invalid_argument' });
+    expect(r.approvalCards()).toHaveLength(0);
+  });
+
+  it('saves the schedule the card showed: what set checks reads back the same, every kind', () => {
+    const r = rig();
+    const kinds = [
+      { schedule: { kind: 'interval', everyMs: 2 * 3_600_000 }, quietHours: { start: '22:00', end: '07:00' } },
+      { schedule: { kind: 'daily', hour: 9, minute: 30, weekdays: [5, 1, 1, 3] } },
+      { schedule: { kind: 'once', at: '2026-10-27T09:00+09:00' }, threadId: dmThreadId(A) },
+    ];
+    for (const k of kinds) {
+      const shown = r.store.check({ botId: A }, { ...DAILY, ...k } as never);
+      if (!shown.ok) throw new Error(shown.message);
+      // Approve sets the stored fields: they check to the same fields again.
+      expect(r.store.check({ botId: A }, shown.fields as never)).toEqual(shown);
+      const saved = r.store.set({ botId: A, workspaceId: WS }, { ...shown.fields, clientRoutineId: `approval:${k.schedule.kind}` });
+      expect(saved.ok && { title: saved.routine.title, prompt: saved.routine.prompt, schedule: saved.routine.schedule, quietHours: saved.routine.quietHours, threadId: saved.routine.threadId })
+        .toEqual({ quietHours: undefined, threadId: undefined, ...shown.fields });
+    }
   });
 
   it('is refused, not shown redacted, when it holds a stored secret, a key or a zero-width character', async () => {
