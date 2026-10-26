@@ -140,6 +140,12 @@ interface AgentPattern {
    */
   takesOverFrom?: readonly AgentSlug[];
   /**
+   * A row only this agent draws, unlike a question another agent shares
+   * (Codex's `Trust this folder?` is also Kimi Code CLI's). Once it is seen,
+   * a `takesOverFrom` agent no longer takes the pane from this one.
+   */
+  banner?: (line: string) => boolean;
+  /**
    * The agent writes OSC 133 prompt marks of its own around its transcript
    * (Kimi Code CLI 2.3.2: A, B and C, never D). While it owns the pane they
    * are its output, not a shell prompt or a launch; a D (command end), which
@@ -410,6 +416,7 @@ const AGENT_PATTERNS: AgentPattern[] = [
     // rest of the session. The PermissionRequest hook (#1107) is Codex's
     // primary approval signal anyway.
     gate: /OpenAI\s*Codex|Do you trust the contents of this directory|Trust\s*this\s*folder\?/,
+    banner: isCodexBanner,
     patterns: [
       { regex: /^codex>\s*$/,                    status: 'waiting',   message: 'Waiting for input' },
       // Approval prompts — clean-room transcribed from a live Codex CLI
@@ -654,6 +661,8 @@ const AGENT_PATTERNS: AgentPattern[] = [
 export const DETECTOR_PROFILE_SLUGS: readonly AgentSlug[] = AGENT_PATTERNS.map((ap) => ap.slug);
 /** The profile table by slug. */
 const PROFILE_BY_SLUG = new Map(AGENT_PATTERNS.map((ap) => [ap.slug, ap]));
+/** The profile table by display name (lastAgent). */
+const PROFILE_BY_AGENT = new Map(AGENT_PATTERNS.map((ap) => [ap.agent, ap]));
 /**
  * How far before the newly drawn text an approvalReady match may begin: a
  * footer a narrow pane wraps carries that row's padding.
@@ -938,6 +947,11 @@ function isClaudePromptChrome(line: string): boolean {
  * Codex draws before the banner. Both must START the row's visible text, so a shell
  * command, a log line or prose that quotes either phrase does not count.
  */
+function isCodexBanner(line: string): boolean {
+  const stripped = stripAnsi(line);
+  return !SOURCE_LINE_RE.test(stripped) && /^>_\s*OpenAI\s*Codex\b/.test(visibleChrome(stripped));
+}
+
 function isCodexChrome(line: string): boolean {
   const stripped = stripAnsi(line);
   if (SOURCE_LINE_RE.test(stripped)) return false;
@@ -1194,6 +1208,8 @@ export class AgentDetector {
   // the banner AND a Claude-specific prompt pattern before confirming identity.
   private claudeBannerSeen = false;
   private claudePromptSeen = false;
+  // The owner whose `banner` row was seen since it took the pane.
+  private bannerSeenFor: string | null = null;
   private claudePromptEvidence: { text: string; status: AgentEventStatus; message: string } | null = null;
   // An OSC 133 prompt/command mark arrived since lastAgent took the pane: the
   // shell is drawing its prompt again, so the owning agent has exited. Agent
@@ -1496,7 +1512,7 @@ export class AgentDetector {
     if (this.shellPromptSinceOwner) return false;
     const owner = this.trustedAgent !== null
       ? PROFILE_BY_SLUG.get(this.trustedAgent)
-      : AGENT_PATTERNS.find((ap) => ap.agent === this.lastAgent);
+      : this.lastAgent !== null ? PROFILE_BY_AGENT.get(this.lastAgent) : undefined;
     return owner?.emitsPromptMarks === true;
   }
 
@@ -1516,6 +1532,7 @@ export class AgentDetector {
     this.claudeBannerSeen = false;
     this.claudePromptSeen = false;
     this.claudePromptEvidence = null;
+    this.bannerSeenFor = null;
     this.kiroChromeSeen = false;
     this.kiroPromptSeen = false;
     this.kiroPromptEvidence = null;
@@ -1835,6 +1852,11 @@ export class AgentDetector {
       }
     }
 
+    const ownerBanner = this.lastAgent !== null && this.bannerSeenFor !== this.lastAgent && !this.shellPromptSinceOwner
+      ? PROFILE_BY_AGENT.get(this.lastAgent)?.banner
+      : undefined;
+    if (ownerBanner && candidateLines(clean).some(ownerBanner)) this.bannerSeenFor = this.lastAgent;
+
     for (const ap of AGENT_PATTERNS) {
       // Skip an already-seen gate within a launch, but reconsider it after
       // the shell returns: Claude -> Codex -> Claude must reclaim the pane.
@@ -1852,10 +1874,12 @@ export class AgentDetector {
       // pane's permission prompts. Codex is included — its banner row can be
       // reproduced by a Claude reply that wraps with `>_ OpenAI Codex` at the
       // start of a row (seen live when a Claude pane printed that line).
-      // A fork may take its parent's pane (`takesOverFrom`).
+      // A fork may take its parent's pane (`takesOverFrom`), until the
+      // parent's own banner shows the parent is really running.
       const blockedTakeover = this.lastAgent !== null && this.lastAgent !== ap.agent
         && !this.shellPromptSinceOwner
-        && !ap.takesOverFrom?.some((slug) => AGENT_PATTERNS.find((other) => other.slug === slug)?.agent === this.lastAgent);
+        && !(this.bannerSeenFor !== this.lastAgent
+          && ap.takesOverFrom?.some((slug) => PROFILE_BY_SLUG.get(slug)?.agent === this.lastAgent));
       const gateMatched = ap.slug === 'kiro'
         ? this.kiroChromeSeen && this.kiroPromptSeen
         : ap.slug === 'claude'
@@ -1879,6 +1903,7 @@ export class AgentDetector {
       this.activeAgents.add(ap.agent);
       this.lastAgent = ap.agent;
       this.lastScreenAgent = ap.agent;
+      this.bannerSeenFor = ap.banner && candidateLines(clean).some(ap.banner) ? ap.agent : null;
       this.shellPromptSinceOwner = false;
       // The profile was already active from fresh external identity. Chrome
       // adds screen provenance, not another launch or a replayed prompt.

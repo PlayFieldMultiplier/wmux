@@ -868,6 +868,20 @@ describe('AgentDetector', () => {
       det.feed(approval);
       expect(kimiEvents(cb).map((e) => e.message)).toEqual(['Agent started', 'Working']);
     });
+
+    it('takes the pane from a Codex trust row, not from a Codex that drew its banner', () => {
+      const banner = ' │  Welcome to Kimi Code!          │\r\n';
+      for (const [codex, owner] of [
+        [' Trust this folder?\r\n', 'Kimi Code CLI'],
+        [' Trust this folder?\r\n │ >_ OpenAI Codex (v0.157.0) │\r\n', 'Codex CLI'],
+      ] as const) {
+        const det = new AgentDetector();
+        det.feed(codex);
+        expect(det.getLastAgent()).toBe('Codex CLI');
+        det.feed(banner);
+        expect(det.getLastAgent()).toBe(owner);
+      }
+    });
   });
 
   describe('Pi (pi-coding-agent 1.4.0, live capture 2026-10-26)', () => {
