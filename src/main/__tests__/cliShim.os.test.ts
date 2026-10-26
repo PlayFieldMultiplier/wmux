@@ -70,13 +70,15 @@ describe('buildShimCmd', () => {
 });
 
 // The live blocks below run stand-in executables (copies or hard links of
-// node.exe) from their temp root. Something outside the test can keep such an
-// image open for seconds after its process has exited, and the delete then
-// fails with EPERM/EBUSY while no process of ours runs. On the GitHub Windows
-// runner that is provjobd.exe: handle64 showed it holding the just-run
-// wmux.exe or codex.exe, released 1-14 s later; on a desktop an antivirus scan
-// does the same. rmSync's own retries (EBUSY/EPERM, linear backoff) wait that
-// out, up to about 27 s; past that the error lists what is still there.
+// node.exe) from their temp root. A process outside the test's own process
+// tree can keep such an image open for seconds after it has exited, and the
+// delete then fails with EPERM/EBUSY although nothing of ours still runs. On
+// the GitHub Windows runner that is the runner's provjobd.exe: a handle
+// listing there showed it holding the just-run wmux.exe or codex.exe, let go
+// 1-14 s later (none of our processes alive). A desktop antivirus scan does the
+// same. We can neither wait on that process nor close its handle, so the
+// removal waits it out with rmSync's own retries (EBUSY/EPERM, linear
+// backoff), about 27 s at most; past that the error names the files still held.
 const RAN_ROOT_RETRIES = 16;
 const RAN_ROOT_RETRY_DELAY_MS = 200;
 /** The cleanup hook's own budget: the retries' 200 ms × (1 + … + 16) ≈ 27 s, plus the removal itself. */
@@ -85,9 +87,12 @@ const removeRanRoot = (root: string) => {
   try {
     nodeFs.rmSync(root, { recursive: true, force: true, maxRetries: RAN_ROOT_RETRIES, retryDelay: RAN_ROOT_RETRY_DELAY_MS });
   } catch (err) {
-    let left: string[] = [];
-    try { left = nodeFs.readdirSync(root, { recursive: true }).map(String); } catch { /* the root itself is what failed */ }
-    throw new Error(`${(err as Error).message}\nstill there: ${left.join(', ') || '(nothing listed)'}`);
+    let held: string[] = [];
+    try {
+      held = nodeFs.readdirSync(root, { recursive: true }).map(String)
+        .filter((rel) => nodeFs.lstatSync(nodePath.join(root, rel)).isFile());
+    } catch { /* the root itself is what failed */ }
+    throw new Error(`${(err as Error).message}\nstill held: ${held.join(', ') || '(no file left; the root itself)'}`);
   }
 };
 
