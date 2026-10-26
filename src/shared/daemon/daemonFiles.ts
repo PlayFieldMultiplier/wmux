@@ -42,8 +42,9 @@ function safeWarn(warn: Warn, msg: string): void {
  * sees the file empty. Where the temp file or the hard link fails for any
  * reason but EEXIST, it falls back to an O_EXCL write (still exclusive, but a
  * reader can then see the file empty for a moment) and reports both outcomes
- * through `warn` in one line. Returns false when the file already exists or
- * nothing could be written. Never throws.
+ * through `warn` in one line, unless that write finds the file already there.
+ * Returns false when the file already exists or nothing could be written.
+ * Never throws.
  */
 export function createFileExclusive(file: string, content: string, warn: Warn): boolean {
   let failure = '';
@@ -67,7 +68,11 @@ export function createFileExclusive(file: string, content: string, warn: Warn): 
     safeWarn(warn, `[daemon-files] ${file}: ${failure}; created it with a plain exclusive write, which a reader can see empty`);
     return true;
   } catch (err) {
-    safeWarn(warn, `[daemon-files] ${file}: ${failure}; the plain exclusive write failed too (${errorCode(err)})`);
+    // EEXIST: another starter or the daemon got there first, as in any
+    // concurrent start.
+    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') {
+      safeWarn(warn, `[daemon-files] ${file}: ${failure}; the plain exclusive write failed too (${errorCode(err)})`);
+    }
     return false;
   }
 }
@@ -105,27 +110,23 @@ export function replaceFileAtomic(file: string, content: string, warn: Warn): bo
 }
 
 /**
- * Replace `file` atomically (renameIntoPlace), else write it in place, which a
- * reader can see empty. When the temp file itself cannot be written (disk
- * full, I/O error) `file` is left untouched, since an in-place write would
- * likely fail the same way after truncating it; `inPlaceAfterTempFailure`
- * writes in place anyway, for a file whose old content is stale and worse
- * than an empty one. Every fallback or failure is reported through `warn`.
- * Returns whether `file` now holds `content`. Never throws.
+ * Replace `file` atomically (renameIntoPlace); on any failure, report it
+ * through `warn` and fall back to the plain write this replaced. A file that
+ * already holds exactly `content` is left as it is; otherwise it is written in
+ * place, which a reader can see empty. For the daemon's own files: stale or
+ * missing content is worse than that window. Returns whether `file` now holds
+ * `content`. Never throws.
  */
-export function replaceFileOrWrite(
-  file: string,
-  content: string,
-  warn: Warn,
-  opts: { inPlaceAfterTempFailure?: boolean } = {},
-): boolean {
+export function replaceFileOrWrite(file: string, content: string, warn: Warn): boolean {
   const failed = renameIntoPlace(file, content);
   if (failed === null) return true;
   const why = `${failed.step} failed (${errorCode(failed.err)})`;
-  if (failed.step === 'temp file' && !opts.inPlaceAfterTempFailure) {
-    safeWarn(warn, `[daemon-files] ${file}: ${why}; left it untouched`);
-    return false;
-  }
+  try {
+    if (fs.readFileSync(file, 'utf-8') === content) {
+      safeWarn(warn, `[daemon-files] ${file}: ${why}; it already holds this content`);
+      return true;
+    }
+  } catch { /* missing or unreadable: write it */ }
   try {
     fs.writeFileSync(file, content, { encoding: 'utf-8', mode: 0o600 });
     safeWarn(warn, `[daemon-files] ${file}: ${why}; wrote it in place, which a reader can see empty`);

@@ -131,30 +131,35 @@ describe('daemonFiles', () => {
     expect(warn.mock.calls[1][0]).toContain('ENOSPC');
   });
 
-  // daemon.pid and the daemon's marker: a disk that cannot take the temp file
-  // would fail the in-place write too, after truncating a valid file.
-  it('replaceFileOrWrite leaves the file untouched when the temp file cannot be written', () => {
-    fs.writeFileSync(file('daemon.pid'), '1');
-    fsHooks.tempWriteError = 'ENOSPC';
-    const warn = vi.fn();
-    expect(replaceFileOrWrite(file('daemon.pid'), '2', warn)).toBe(false);
-    expect(fsHooks.writes).not.toContain(file('daemon.pid'));
-    expect(read('daemon.pid')).toBe('1');
-    expect(fs.readdirSync(dir)).toEqual(['daemon.pid']);
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0][0]).toContain('ENOSPC');
-  });
-
-  // daemon-pipe: a stale name from an earlier daemon is worse than an empty file.
-  it('replaceFileOrWrite writes in place after a temp failure when asked to', () => {
+  // The daemon's own files: stale or missing content is worse than a moment
+  // of an empty file, so any failure falls back to the plain write.
+  it('replaceFileOrWrite writes in place after a temp-file failure', () => {
     fs.writeFileSync(file('daemon-pipe'), 'stale-pipe');
     fsHooks.tempWriteError = 'EMFILE';
     const warn = vi.fn();
-    expect(replaceFileOrWrite(file('daemon-pipe'), 'new-pipe', warn, { inPlaceAfterTempFailure: true })).toBe(true);
+    expect(replaceFileOrWrite(file('daemon-pipe'), 'new-pipe', warn)).toBe(true);
     expect(read('daemon-pipe')).toBe('new-pipe');
     expect(fs.readdirSync(dir)).toEqual(['daemon-pipe']);
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0][0]).toContain('EMFILE');
+  });
+
+  // The launcher already wrote the spawned daemon's pid: nothing to rewrite.
+  it('replaceFileOrWrite keeps a file that already holds the content', () => {
+    fs.writeFileSync(file('daemon.pid'), '500');
+    fsHooks.tempWriteError = 'ENOSPC';
+    fsHooks.writes = [];
+    const warn = vi.fn();
+    expect(replaceFileOrWrite(file('daemon.pid'), '500', warn)).toBe(true);
+    fsHooks.tempWriteError = null;
+    fsHooks.renameFailures = 1;
+    expect(replaceFileOrWrite(file('daemon.pid'), '500', warn)).toBe(true);
+    expect(fsHooks.writes).not.toContain(file('daemon.pid'));
+    expect(read('daemon.pid')).toBe('500');
+    expect(fs.readdirSync(dir)).toEqual(['daemon.pid']);
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn.mock.calls[0][0]).toContain('ENOSPC');
+    expect(warn.mock.calls[1][0]).toContain('EPERM');
   });
 
   it('createFileExclusive reports a hard-link error other than EEXIST and still creates the file', () => {
@@ -170,12 +175,17 @@ describe('daemonFiles', () => {
     expect(createFileExclusive(file('daemon.pid'), '66', warn)).toBe(false);
     expect(read('daemon.pid')).toBe('55');
     expect(warn).toHaveBeenCalledTimes(1);
-    // A fallback that finds the file already there says so with both codes.
+    // Without hard links the plain write meets EEXIST in any concurrent start:
+    // not worth a warning.
     fsHooks.linkError = 'EPERM';
     expect(createFileExclusive(file('daemon.pid'), '77', warn)).toBe(false);
     expect(read('daemon.pid')).toBe('55');
+    expect(warn).toHaveBeenCalledTimes(1);
+    // Any other failure of the plain write is reported with both codes.
+    fsHooks.tempWriteError = 'EIO';
+    expect(createFileExclusive(path.join(dir, 'missing', 'daemon.pid'), '88', warn)).toBe(false);
     expect(warn).toHaveBeenCalledTimes(2);
-    expect(warn.mock.calls[1][0]).toMatch(/EPERM.*EEXIST/);
+    expect(warn.mock.calls[1][0]).toMatch(/EIO.*ENOENT/);
   });
 
   it('a throwing warn sink changes nothing', () => {

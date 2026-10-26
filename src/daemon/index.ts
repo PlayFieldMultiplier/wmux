@@ -1896,8 +1896,8 @@ async function acquireLock(): Promise<boolean> {
   // Write PID file (separate from lock for backward compat). Renamed into place:
   // the launcher already wrote one (claimSpawnedDaemonFiles) that other
   // starters may be reading, and a truncating write would show them it empty.
-  // Fatal, as the plain write it replaced was: we hold the lock, but daemon.pid
-  // may still name another starter's child.
+  // Fatal, as the plain write it replaced was, once the in-place fallback
+  // fails too: we hold the lock, but daemon.pid may name another starter's child.
   if (!replaceFileOrWrite(PID_FILE, String(process.pid), (msg) => log('warn', msg))) {
     throw new Error(`Failed to write ${PID_FILE}`);
   }
@@ -10366,10 +10366,8 @@ async function main(): Promise<void> {
   const activePipeName = pipeServer.getActivePipeName();
   const pipeNameFile = path.join(wmuxDir, 'daemon-pipe');
   // Renamed into place: a client that reads it empty falls back to the
-  // default pipe name, which is not ours when we bound a fallback pipe. Still
-  // written in place when no temp file can be made: a stale name from an
-  // earlier daemon is worse than an empty file.
-  if (replaceFileOrWrite(pipeNameFile, activePipeName, (msg) => log('warn', msg), { inPlaceAfterTempFailure: true })) {
+  // default pipe name, which is not ours when we bound a fallback pipe.
+  if (replaceFileOrWrite(pipeNameFile, activePipeName, (msg) => log('warn', msg))) {
     writtenPipeName = activePipeName;
   }
   markDaemonBoot('pipe-file-written');

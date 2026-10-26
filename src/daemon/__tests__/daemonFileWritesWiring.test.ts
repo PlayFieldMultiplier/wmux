@@ -1,10 +1,11 @@
 // Wiring guard for how each daemon bookkeeping file is written.
 //
-// The policies themselves (atomic only, in place after a failed rename, in
-// place even after a failed temp write) are covered in daemonFiles.test.ts.
-// Which file gets which policy is decided at the call sites, in acquireLock and
-// main() (index.ts) and in the launcher, none of which can be constructed in a
-// unit test, so these are source-shape assertions like completionAlarmWiring.
+// The policies themselves (atomic only; atomic, else keep a file that already
+// holds the content, else write in place) are covered in
+// src/shared/daemon/__tests__/daemonFiles.os.test.ts. Which file gets which
+// policy is decided at the call sites, in acquireLock and main() (index.ts) and
+// in the launcher, none of which can be constructed in a unit test, so these
+// are source-shape assertions like completionAlarmWiring.
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -22,15 +23,11 @@ describe('daemon file write policies', () => {
     expect(daemon).toMatch(/if \(!replaceFileOrWrite\(PID_FILE, [^\n]*\)\) \{\n\s*throw new Error\(/);
   });
 
-  it('only daemon-pipe is written in place after a failed temp write', () => {
-    const pipe = callsOn(daemon, 'replaceFileOrWrite', 'pipeNameFile');
-    expect(pipe).toHaveLength(1);
-    expect(pipe[0]).toContain('inPlaceAfterTempFailure: true');
-    for (const target of ['PID_FILE', 'BOOT_MARKER_FILE']) {
-      const calls = callsOn(daemon, 'replaceFileOrWrite', target);
-      expect(calls).toHaveLength(1);
-      expect(calls[0]).not.toContain('inPlaceAfterTempFailure');
+  it('the daemon writes its pid, marker and pipe name with the in-place fallback', () => {
+    for (const target of ['PID_FILE', 'BOOT_MARKER_FILE', 'pipeNameFile']) {
+      expect(callsOn(daemon, 'replaceFileOrWrite', target)).toHaveLength(1);
     }
+    expect(daemon).not.toContain('replaceFileAtomic');
   });
 
   it('the launcher never writes the marker or a repaired daemon.pid in place', () => {
