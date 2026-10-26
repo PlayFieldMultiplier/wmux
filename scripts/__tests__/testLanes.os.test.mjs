@@ -127,6 +127,10 @@ describe('the rule', () => {
     // The word "import" in a comment or a name inside the braces is no statement start.
     expect(classify({ [T]: `import {\n  type A, // see import type docs\n  spawn,\n} from '${CP}';\n` }).lane).toBe('integration');
     expect(classify({ [T]: `import { type A, type importer } from '${CP}';\n` }).lane).toBe('unit');
+    // A re-export after a type import is its own statement, and a `//` in a string opens no comment.
+    expect(classify({ [T]: `import type { A } from './a';\nexport { spawn } from '${CP}';\n` }).lane).toBe('integration');
+    expect(classify({ [T]: `import type { A } from './a';\nconst u = 'http://h'; import { spawn } from '${CP}';\n` }).lane).toBe('integration');
+    expect(classify({ [T]: `import type { A } from './a'\nexport { spawn } from '${CP}'\n` }).lane).toBe('integration');
     expect(
       classify({ [T]: `vi.mock('${CP}', () => ({ spawn: vi.fn() }));\nimport { spawn } from '${CP}';\n` }).lane,
     ).toBe('unit');

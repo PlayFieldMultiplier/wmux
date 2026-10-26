@@ -152,10 +152,17 @@ export function listTestFiles(root = ROOT) {
  * nothing reaches the OS.
  */
 export function isTypeOnlyImport(source, index) {
-  // Comments go first, and the statement starts at the last `import` word:
-  // "import" in a comment or inside a name is no statement start.
-  const before = source.slice(Math.max(0, index - 2000), index).replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '');
-  const starts = [...before.matchAll(/\bimport\b/g)];
+  const window = source.slice(Math.max(0, index - 2000), index);
+  // Fast path: a type-only import names `type` after the statement before it.
+  if (!/\btype\b/.test(window.slice(window.lastIndexOf(';') + 1))) return false;
+  // Strings, then comments, go first (a `//` in a URL is no comment), and the
+  // statement starts at the last `import` or `export` word: that word in a
+  // comment or inside a name is no statement start, and `export ... from`
+  // is a statement of its own.
+  const before = window
+    .replace(/'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`/g, "''")
+    .replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '');
+  const starts = [...before.matchAll(/\b(?:import|export)\b/g)];
   if (starts.length === 0) return false;
   const stmt = before.slice(starts[starts.length - 1].index);
   if (/^import\s+type\b/.test(stmt)) return true;

@@ -43,6 +43,8 @@ describe('every vitest config', () => {
       const config = (await import(/* @vite-ignore */ pathToFileURL(path.join(ROOT, name)).href)).default;
       const plugins = (config.plugins ?? []).flat();
       expect(plugins.map((p) => p?.name), name).toContain(HASHBANG_LF_PLUGIN);
+      // A project inherits the root's plugins only with `extends: true`.
+      for (const project of config.test?.projects ?? []) expect(project.extends, `${name} project`).toBe(true);
     }
   });
 });

@@ -13,11 +13,13 @@ name: Windows full suite
 # - on every push to main, so a regression is pinned to a merge or a short
 #   range of merges. A newer push cancels the run in flight, so a burst of
 #   merges costs two Windows runners once;
-# - on a ready (non-draft) pull request that touches a script under scripts/,
-#   a vite or vitest config, or .gitattributes. Those load into every suite
-#   but their own tests sit in the unit lane, which a pull request runs on
-#   Linux only; a CRLF checkout broke them on Windows alone (#2769). Two
-#   Windows shards, about 10 minutes each, per matching push;
+# - on a ready (non-draft) pull request that touches scripts/, a vite or
+#   vitest config, the shared test setup (src/test-utils/), .gitattributes or
+#   this file. Those load into every suite, but their own tests sit in the
+#   unit lane, which a pull request runs on Linux only; a CRLF checkout broke
+#   them on Windows alone (#2769). Such a run takes only the unit lane (ci.yml
+#   already runs the integration lane on Windows) and skips the firewall
+#   round trip: two Windows shards, up to about 10 minutes each, per push;
 # - on demand: `gh workflow run windows.yml --ref <branch>` for a pull request
 #   that touches platform code without saying win32.
 #
@@ -34,12 +36,12 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
-      - 'scripts/**/*.mjs'
-      - 'scripts/**/*.js'
-      - 'scripts/**/*.cjs'
-      - 'vite*.config.ts'
-      - 'vitest*.config.ts'
+      - 'scripts/**'
+      - 'vite*.config.*'
+      - 'vitest*.config.*'
+      - 'src/test-utils/**'
       - '.gitattributes'
+      - '.github/workflows/windows.yml'
   workflow_dispatch:
 
 permissions:
@@ -98,7 +100,13 @@ jobs:
         run: npx install-electron
 
       - name: Test (both lanes, shard ${{ matrix.shard }}/2)
+        if: github.event_name != 'pull_request'
         run: npm run test:parallel -- --shard=${{ matrix.shard }}/2
+
+      # A pull request: the unit lane only, the one it does not run on Windows.
+      - name: Test (unit lane, shard ${{ matrix.shard }}/2)
+        if: github.event_name == 'pull_request'
+        run: npm run test:unit -- --shard=${{ matrix.shard }}/2
 
       # Remote pairing's firewall Fix, for real: creates, probes and removes
       # Windows Firewall rules in group wmux-ci, through the same
@@ -110,7 +118,7 @@ jobs:
       # step above failed (a known flake must not hide a firewall regression),
       # but not on a cancelled run.
       - name: Firewall round trip (group wmux-ci)
-        if: ${{ !cancelled() && matrix.shard == 1 }}
+        if: ${{ !cancelled() && matrix.shard == 1 && github.event_name != 'pull_request' }}
         env:
           WMUX_FIREWALL_ROUNDTRIP: '1'
         run: npx vitest run --project integration src/main/net/__tests__/firewallRoundtrip.os.test.ts
@@ -119,7 +127,7 @@ jobs:
       # happened to it (a failed assertion, a crashed or timed-out worker), so
       # the runner is left with no wmux-ci rule. Only that group, never wmux.
       - name: Firewall round trip cleanup (group wmux-ci)
-        if: always() && matrix.shard == 1
+        if: always() && matrix.shard == 1 && github.event_name != 'pull_request'
         shell: powershell
         run: Remove-NetFirewallRule -Group 'wmux-ci' -ErrorAction SilentlyContinue
 

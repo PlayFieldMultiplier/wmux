@@ -46,7 +46,10 @@ function fakeGh({
   const calls = [];
   const gh = (args, options = {}) => {
     calls.push({ args, options });
-    if (args[0] === 'run' && args[1] === 'list') return JSON.stringify(greenRuns.map((databaseId) => ({ databaseId })));
+    // A green run is an id (a push or nightly run) or { databaseId, event }.
+    if (args[0] === 'run' && args[1] === 'list') {
+      return JSON.stringify(greenRuns.map((run) => (typeof run === 'number' ? { databaseId: run, event: 'push' } : run)));
+    }
     if (args[0] === 'api') {
       expect(args.slice(0, 2)).toEqual(['api', '--paginate']);
       expect(args.slice(3)).toEqual(['--jq', '.[].message']);
@@ -270,8 +273,13 @@ describe('report --state auto (the report job)', () => {
     expect(fake.writes()).toEqual([]);
     expect(fake.calls.find((c) => c.args[1] === 'list' && c.args[0] === 'run').args).toEqual([
       'run', 'list', '-R', 'acme/app', '--workflow', 'Runtime suite', '--branch', 'main',
-      '--status', 'success', '--limit', '1', '--json', 'databaseId',
+      '--status', 'success', '--limit', '20', '--json', 'databaseId,event',
     ]);
+  });
+
+  it('a green pull request run from a branch named main does not make a red main run stale', () => {
+    const fake = fakeGh({ issues: [], jobs: [RED, REPORT], greenRuns: [{ databaseId: 57, event: 'pull_request' }, 40] });
+    expect(report({ env: ENV, gh: fake.gh })).toBe('created');
   });
 
   it('reports a red run newer than the last green one', () => {

@@ -32,7 +32,8 @@ const QUOTED_RELATIVE = /['"](\.{1,2}\/[^'"]+)['"]/g;
 function inComment(source, index) {
   const lineStart = source.lastIndexOf('\n', index - 1) + 1;
   // Strings out first: a `//` inside one (a URL) opens no comment.
-  const before = source.slice(lineStart, index).replace(/'[^']*'|"[^"]*"|`[^`]*`/g, '');
+  // A block comment closed earlier on the line (`/* x */ import ...`) is gone too.
+  const before = source.slice(lineStart, index).replace(/'[^']*'|"[^"]*"|`[^`]*`/g, '').replace(/\/\*.*?\*\//g, '');
   return before.includes('//') || /^\s*(?:\/\*|\*)/.test(before);
 }
 
@@ -102,8 +103,11 @@ describe('what the walk counts as a load', () => {
       "import { type T, e } from './e.mjs';",
       "const u = 'https://example.com'; import f from './f.mjs';",
       "import g from './g.mjs?v=1';",
+      "/* eslint-disable-next-line */ import { h } from './h.mjs';",
+      "import type { T2 } from './t2.mjs';",
+      "export { i } from './i.mjs';",
     ].join('\n');
-    expect(loadedSpecifiers(source)).toEqual(['./a.mjs', './b.mjs', './c.mjs', './d.mjs', './e.mjs', './f.mjs', './g.mjs']);
+    expect(loadedSpecifiers(source)).toEqual(['./a.mjs', './b.mjs', './c.mjs', './d.mjs', './e.mjs', './f.mjs', './g.mjs', './h.mjs', './i.mjs']);
   });
 
   it('not a type-only import: TypeScript erases it', () => {

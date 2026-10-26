@@ -158,14 +158,16 @@ function readJobs(gh, { repo, runId }) {
 /**
  * The newest green run of this workflow on this branch, or 0. A red run that
  * finishes after a newer run already came back green reports a state the
- * branch has left, so it files nothing.
+ * branch has left, so it files nothing. A pull request run is not one of the
+ * branch's: a fork's branch may be named `main` too.
  */
 export function newestGreenRun(gh, { repo, workflow, branch }) {
   if (!branch) return 0;
   const out = gh(['run', 'list', '-R', repo, '--workflow', workflow, '--branch', branch,
-    '--status', 'success', '--limit', '1', '--json', 'databaseId']);
+    '--status', 'success', '--limit', '20', '--json', 'databaseId,event']);
   const runs = parseJson(out || '[]', 'gh run list');
-  return runs.length > 0 ? Number(runs[0].databaseId) || 0 : 0;
+  const own = runs.find((run) => run.event !== 'pull_request' && run.event !== 'pull_request_target');
+  return own ? Number(own.databaseId) || 0 : 0;
 }
 
 const TIMED_OUT = /exceeded the maximum execution time/i;

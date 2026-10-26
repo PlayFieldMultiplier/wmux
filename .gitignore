@@ -152,3 +152,6 @@ EPIPE_ROOT_CAUSE.md
 
 # Vitest retry reports (scripts/vitest-retry-reporter.mjs, CI only)
 test-results/
+
+# The CRLF hashbang fixture of scripts/__tests__/hashbangLf.test.mjs, left by an interrupted run
+scripts/__tests__/.hashbang-lf-*/
