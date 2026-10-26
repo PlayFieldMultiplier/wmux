@@ -201,6 +201,12 @@ describe('derived lists match the literals they replaced', () => {
       .toEqual({ slug: 'cursor-agent', source: 'process' });
     // Its new primary command, `agent`, is too generic a name to claim.
     expect(selectAgentProcess(tree('/home/u/.local/bin/agent'), 1)?.slug).toBeUndefined();
+    // `amp` and `pi` are matched by the exact executable name, never a prefix.
+    for (const image of ['pip', '/usr/bin/ampy', '/usr/bin/pi-hole']) {
+      expect(selectAgentProcess(tree(image), 1)?.slug).toBeUndefined();
+    }
+    expect(selectAgentProcess(tree('/usr/bin/amp'), 1)?.slug).toBe('amp');
+    expect(resolveAgentSlug('node /u/tools/amp-something.js')).toBeUndefined();
   });
 
   it('account kinds behind the closed Vendor union', () => {
