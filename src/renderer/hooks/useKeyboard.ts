@@ -580,9 +580,11 @@ export function useKeyboard() {
         if (!surface?.ptyId) return;
         const term = terminalRegistry.get(surface.ptyId);
         if (!term) return;
-        // A full-screen app's alternate screen has no scrollback to mark.
-        const added = addScrollbackBookmark(term, surface.ptyId, store);
-        showBookmarkToast(added ? 'terminal.bookmarkAdded' : 'terminal.bookmarkAltScreen');
+        // A full-screen app's alternate screen has no scrollback to mark; a
+        // line that already has a bookmark keeps its dot and says nothing.
+        const result = addScrollbackBookmark(term, surface.ptyId, store);
+        if (result === 'added') showBookmarkToast('terminal.bookmarkAdded');
+        else if (result === 'alternate') showBookmarkToast('terminal.bookmarkAltScreen');
       },
       toggleMessageFeed: () => { store.getState().toggleMessageFeed(); },
       toggleFileTree: () => { toggleFileTreePanel(store.getState()); },

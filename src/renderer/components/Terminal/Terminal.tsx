@@ -591,7 +591,6 @@ export default function TerminalComponent({ chatView = false, ptyId: externalPty
           re-render (fresh creation, adoption). */}
       <BookmarkIndicator
         terminal={terminalInstance}
-        ptyId={ptyId}
         bookmarks={bookmarks}
         containerRef={containerRef}
       />

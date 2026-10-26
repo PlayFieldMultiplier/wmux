@@ -116,6 +116,7 @@ export const da = {
   'terminal.copied': 'Kopieret!',
   'terminal.copyFailed': 'Kopiering mislykkedes — valg bevaret',
   'terminal.bookmarkAdded': 'Bogmærke tilføjet',
+  'terminal.bookmarkAltScreen': 'Bogmærker er ikke tilgængelige i fuldskærmsapps',
 
   // Context menu
   'contextMenu.copy': 'Kopier',

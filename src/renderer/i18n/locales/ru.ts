@@ -116,6 +116,7 @@ export const ru = {
   'terminal.copied': 'Скопировано!',
   'terminal.copyFailed': 'Сбой копирования — выделение сохранено',
   'terminal.bookmarkAdded': 'Закладка добавлена',
+  'terminal.bookmarkAltScreen': 'Закладки недоступны в полноэкранных приложениях',
 
   // Context menu
   'contextMenu.copy': 'Копировать',

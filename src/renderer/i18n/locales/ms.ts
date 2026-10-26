@@ -116,6 +116,7 @@ export const ms = {
   'terminal.copied': 'Disalin!',
   'terminal.copyFailed': 'Gagal menyalin — pilihan dikekalkan',
   'terminal.bookmarkAdded': 'Penanda buku ditambah',
+  'terminal.bookmarkAltScreen': 'Penanda buku tidak tersedia dalam apl skrin penuh',
 
   // Context menu
   'contextMenu.copy': 'Salin',

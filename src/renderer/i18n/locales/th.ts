@@ -116,6 +116,7 @@ export const th = {
   'terminal.copied': 'คัดลอกแล้ว!',
   'terminal.copyFailed': 'การคัดลอกล้มเหลว — เก็บการเลือกไว้',
   'terminal.bookmarkAdded': 'เพิ่มบุ๊กมาร์กแล้ว',
+  'terminal.bookmarkAltScreen': 'ใช้บุ๊กมาร์กในแอปแบบเต็มหน้าจอไม่ได้',
 
   // Context menu
   'contextMenu.copy': 'คัดลอก',

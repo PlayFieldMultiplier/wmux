@@ -8,7 +8,7 @@ import { Terminal } from '@xterm/headless';
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import { createUISlice, type UISlice } from '../../../stores/slices/uiSlice';
-import { addAt, rowsInView } from '../scrollbackBookmarks';
+import { addAt, keepAcrossRepaint, rowsInView } from '../scrollbackBookmarks';
 
 function createTestStore() {
   return create<UISlice>()(
@@ -43,15 +43,16 @@ describe('scrollback bookmarks', () => {
     const text = textAt(term, viewportY);
     expect(text).toMatch(/^line-\d+$/);
 
-    expect(addAt(term, 'pty-a', store)).toBe(true);
+    expect(addAt(term, 'pty-a', store)).toBe('added');
+    expect(addAt(term, 'pty-a', store)).toBe('exists');
     const ids = store.getState().terminalBookmarks['pty-a'];
     expect(ids).toHaveLength(1);
-    expect(rowsInView(term, 'pty-a', ids)).toEqual([{ id: ids[0], row: 0 }]);
+    expect(rowsInView(term, ids)).toEqual([{ id: ids[0], row: 0 }]);
 
     await write(term, lines(100, 200));
 
     expect(term.buffer.active.viewportY).toBe(viewportY);
-    expect(rowsInView(term, 'pty-a', ids)).toEqual([{ id: ids[0], row: 0 }]);
+    expect(rowsInView(term, ids)).toEqual([{ id: ids[0], row: 0 }]);
     const marker = term.markers.find((m) => m.id === ids[0]);
     expect(marker && textAt(term, marker.line)).toBe(text);
     term.dispose();
@@ -61,7 +62,7 @@ describe('scrollback bookmarks', () => {
     const term = new Terminal({ cols: 40, rows: 10, scrollback: 50, allowProposedApi: true });
     const store = createTestStore();
     await write(term, lines(0, 30));
-    expect(addAt(term, 'pty-b', store)).toBe(true);
+    expect(addAt(term, 'pty-b', store)).toBe('added');
     const ids = store.getState().terminalBookmarks['pty-b'];
     expect(ids).toHaveLength(1);
 
@@ -69,7 +70,7 @@ describe('scrollback bookmarks', () => {
 
     expect(term.markers.some((m) => m.id === ids[0])).toBe(false);
     expect(store.getState().terminalBookmarks['pty-b']).toBeUndefined();
-    expect(rowsInView(term, 'pty-b', ids)).toEqual([]);
+    expect(rowsInView(term, ids)).toEqual([]);
     term.dispose();
   });
 
@@ -80,7 +81,7 @@ describe('scrollback bookmarks', () => {
     await write(term, '\x1b[?1049h');
     expect(term.buffer.active.type).toBe('alternate');
 
-    expect(addAt(term, 'pty-c', store)).toBe(false);
+    expect(addAt(term, 'pty-c', store)).toBe('alternate');
     expect(store.getState().terminalBookmarks['pty-c']).toBeUndefined();
     expect(term.markers).toHaveLength(0);
     term.dispose();
@@ -90,11 +91,45 @@ describe('scrollback bookmarks', () => {
     const term = new Terminal({ cols: 40, rows: 10, scrollback: 1000, allowProposedApi: true });
     const store = createTestStore();
     await write(term, lines(0, 30));
-    expect(addAt(term, 'pty-d', store)).toBe(true);
+    expect(addAt(term, 'pty-d', store)).toBe('added');
     expect(store.getState().terminalBookmarks['pty-d']).toHaveLength(1);
 
     term.dispose();
 
     expect(store.getState().terminalBookmarks['pty-d']).toBeUndefined();
+  });
+
+  it('disposes its marker when the store drops its id', async () => {
+    const term = new Terminal({ cols: 40, rows: 10, scrollback: 1000, allowProposedApi: true });
+    const store = createTestStore();
+    await write(term, lines(0, 30));
+    expect(addAt(term, 'pty-e', store)).toBe('added');
+    expect(term.markers).toHaveLength(1);
+
+    store.getState().clearBookmarks('pty-e');
+
+    expect(term.markers).toHaveLength(0);
+    term.dispose();
+  });
+
+  it('comes back on the same text after a reset and replay', async () => {
+    const term = new Terminal({ cols: 40, rows: 10, scrollback: 1000, allowProposedApi: true });
+    const store = createTestStore();
+    await write(term, lines(0, 100));
+    term.scrollLines(-30);
+    const text = textAt(term, term.buffer.active.viewportY);
+    expect(addAt(term, 'pty-f', store)).toBe('added');
+
+    const restore = keepAcrossRepaint(term, 'pty-f', store);
+    term.reset();
+    expect(store.getState().terminalBookmarks['pty-f']).toBeUndefined();
+    await write(term, lines(0, 100));
+    restore();
+
+    const ids = store.getState().terminalBookmarks['pty-f'];
+    expect(ids).toHaveLength(1);
+    const marker = term.markers.find((m) => m.id === ids[0]);
+    expect(marker && textAt(term, marker.line)).toBe(text);
+    term.dispose();
   });
 });

@@ -116,6 +116,7 @@ export const es = {
   'terminal.copied': '¡Copiado!',
   'terminal.copyFailed': 'Error al copiar — selección conservada',
   'terminal.bookmarkAdded': 'Marcador añadido',
+  'terminal.bookmarkAltScreen': 'Los marcadores no están disponibles en apps a pantalla completa',
 
   // Context menu
   'contextMenu.copy': 'Copiar',

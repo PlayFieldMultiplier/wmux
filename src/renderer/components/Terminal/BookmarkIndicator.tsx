@@ -4,7 +4,6 @@ import { rowsInView } from './scrollbackBookmarks';
 
 interface BookmarkIndicatorProps {
   terminal: Terminal | null;
-  ptyId: string | null;
   bookmarks: number[]; // ids of the xterm markers (scrollbackBookmarks.ts)
   containerRef: React.RefObject<HTMLDivElement | null>;
 }
@@ -23,7 +22,7 @@ interface BookmarkIndicatorProps {
  * off-screen). We re-compute on every scroll event so markers track correctly
  * as the user scrolls.
  */
-export default function BookmarkIndicator({ terminal, ptyId, bookmarks, containerRef }: BookmarkIndicatorProps) {
+export default function BookmarkIndicator({ terminal, bookmarks, containerRef }: BookmarkIndicatorProps) {
   // Re-render whenever the terminal scrolls or the bookmarks list changes
   const [, forceUpdate] = useState(0);
 
@@ -33,14 +32,20 @@ export default function BookmarkIndicator({ terminal, ptyId, bookmarks, containe
 
   useEffect(() => {
     if (!terminal) return;
-    const disposable = terminal.onScroll(() => scheduleUpdate());
-    return () => disposable.dispose();
+    // A switch to or from the alternate screen and a resize move the rows
+    // without a scroll event.
+    const disposables = [
+      terminal.onScroll(() => scheduleUpdate()),
+      terminal.buffer.onBufferChange(() => scheduleUpdate()),
+      terminal.onResize(() => scheduleUpdate()),
+    ];
+    return () => disposables.forEach((d) => d.dispose());
   }, [terminal, scheduleUpdate]);
 
   // Also re-render when bookmarks array reference changes (handled by the
   // parent passing a new array reference via Zustand selector)
 
-  if (!terminal || !ptyId || bookmarks.length === 0) return null;
+  if (!terminal || bookmarks.length === 0) return null;
 
   const container = containerRef.current;
   if (!container) return null;
@@ -57,7 +62,7 @@ export default function BookmarkIndicator({ terminal, ptyId, bookmarks, containe
   const lineHeight = screenEl ? screenEl.offsetHeight / rows : container.offsetHeight / rows;
   if (lineHeight <= 0) return null;
 
-  const markers = rowsInView(terminal, ptyId, bookmarks).map(({ id, row }) => ({
+  const markers = rowsInView(terminal, bookmarks).map(({ id, row }) => ({
     top: row * lineHeight + lineHeight / 2 - 4, // center the 8px dot vertically in the row
     id,
   }));

@@ -116,6 +116,7 @@ export const bs = {
   'terminal.copied': 'Kopirano!',
   'terminal.copyFailed': 'Kopiranje neuspjelo — selekcija sačuvana',
   'terminal.bookmarkAdded': 'Knjiška oznaka dodana',
+  'terminal.bookmarkAltScreen': 'Knjiške oznake nisu dostupne u aplikacijama preko cijelog ekrana',
 
   // Context menu
   'contextMenu.copy': 'Kopiraj',

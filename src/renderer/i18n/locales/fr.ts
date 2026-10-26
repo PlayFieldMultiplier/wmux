@@ -116,6 +116,7 @@ export const fr = {
   'terminal.copied': 'Copié !',
   'terminal.copyFailed': 'Échec de la copie — sélection conservée',
   'terminal.bookmarkAdded': 'Signet ajouté',
+  'terminal.bookmarkAltScreen': 'Les signets ne sont pas disponibles dans les apps en plein écran',
 
   // Context menu
   'contextMenu.copy': 'Copier',

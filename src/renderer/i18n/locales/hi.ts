@@ -116,6 +116,7 @@ export const hi = {
   'terminal.copied': 'कॉपी हो गया!',
   'terminal.copyFailed': 'कॉपी विफल — चयन बरकरार',
   'terminal.bookmarkAdded': 'बुकमार्क जोड़ा गया',
+  'terminal.bookmarkAltScreen': 'फ़ुल-स्क्रीन ऐप्स में बुकमार्क उपलब्ध नहीं हैं',
 
   // Context menu
   'contextMenu.copy': 'कॉपी',

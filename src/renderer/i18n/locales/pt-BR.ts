@@ -116,6 +116,7 @@ export const ptBR = {
   'terminal.copied': 'Copiado!',
   'terminal.copyFailed': 'Falha ao copiar — seleção mantida',
   'terminal.bookmarkAdded': 'Marcador adicionado',
+  'terminal.bookmarkAltScreen': 'Marcadores não estão disponíveis em apps de tela cheia',
 
   // Context menu
   'contextMenu.copy': 'Copiar',
