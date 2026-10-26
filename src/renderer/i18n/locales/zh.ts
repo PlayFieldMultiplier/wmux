@@ -2183,6 +2183,8 @@ export const zh = {
   'room.approval.action.skill': "技能",
   'room.approval.action.owner_profile': "你的资料",
   'room.approval.action.native_tool': "Hermes 工具",
+  'room.approval.action.routine': "例行任务",
+  'room.approval.action.bot_memory': "机器人笔记",
   'room.template.coordinator': "协调者",
   'room.template.developer': "开发",
   'room.template.reviewer': "审查",

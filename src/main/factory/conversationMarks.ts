@@ -12,10 +12,12 @@
 //                worker read with the owner's sign-in is in this
 //                conversation. Always tainted too.
 //
-// Readers: memory.update (nothing is saved from a tainted conversation), the
+// Readers: memory.update (nothing is saved from a tainted conversation but
+// on the owner's approval card, ownerAsked.ts), the
 // handoff marks (wakeTaint.ts markSent / markForward: what a bot sends from
 // one is tainted), the standing instructions (routine.set, job_set and
-// workflow.create are refused from a tainted one), the attended check of a
+// workflow.create are refused from a tainted one; a new routine the owner
+// asked for goes to their approval card), the attended check of a
 // bot's commands and file edits (wakeTaint.ts runningWakeAttended), and the
 // ways out of a signed-in one (signedInRefusal: fan-outs, worker messages
 // and resumes but to its signed-in tasks, handoffs, mentions, and posts

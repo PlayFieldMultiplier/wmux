@@ -2110,6 +2110,8 @@ export const pl = {
   'room.approval.action.skill': "Umiejętność",
   'room.approval.action.owner_profile': "Twój profil",
   'room.approval.action.native_tool': "Narzędzie Hermesa",
+  'room.approval.action.routine': "Rutyna",
+  'room.approval.action.bot_memory': "Notatki bota",
   'room.template.coordinator': "Koordynator",
   'room.template.developer': "Programista",
   'room.template.reviewer': "Recenzent",

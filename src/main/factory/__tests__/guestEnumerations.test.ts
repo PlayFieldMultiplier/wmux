@@ -122,6 +122,7 @@ const ROOM_READ_CALLERS: Record<string, Why> = {
   'src/main/factory/humanMessage.ts#linkedGroup': { kind: 'one-workspace', why: 'the owner message\'s own thread, in its own room' },
   'src/main/factory/humanMessage.ts#waitingOnOwner': { kind: 'one-workspace', why: 'the owner message\'s own thread: who asked the owner there' },
   'src/main/factory/morningReport.ts#buildMorningData': { kind: 'guest-skip', why: 'skips guest workspaces\' rooms' },
+  'src/main/factory/ownerAsked.ts#ownerCardProof': { kind: 'one-workspace', why: 'the owner card the wake names, in the wake\'s own room and thread' },
   'src/main/factory/roomWriter.ts#wakeReplyTo': { kind: 'one-workspace', why: 'a card of the poster\'s own room' },
   'src/main/ipc/handlers/guestBots.handler.ts#registerGuestBotHandlers': { kind: 'owner', why: 'the owner adding a guest reads the conversation\'s last seq' },
   'src/main/ipc/handlers/room.handler.ts#cardFile': { kind: 'owner', why: 'the owner\'s room view' },

@@ -739,19 +739,23 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop, eng
   const addWorkspaces = useMemo(() => withoutBotTasks(listedWorkspaces(names), botOwners), [names, botOwners]);
   const botPort = port ?? getFactoryBotPort();
   const canCreate = !!botPort.create;
-  // The workspace a new bot goes to by default: the selected conversation's,
-  // else (the first bot) the current workspace when it is one of the
-  // owner's, else the first of them.
+  // The workspace a new bot goes to by default: the current workspace when
+  // it is one of the owner's, else the selected conversation's, else the
+  // first of them. The page always has a conversation selected (it opens on
+  // one), so that conversation's workspace taken first sent every add to it,
+  // whichever workspace the owner was working in.
   const activeWorkspaceId = useStore((s) => s.activeWorkspaceId);
-  const currentWorkspace = addWorkspaces.find((w) => w.id === activeWorkspaceId) ?? addWorkspaces[0] ?? null;
+  const activeAddWorkspace = addWorkspaces.find((w) => w.id === activeWorkspaceId) ?? null;
+  const currentWorkspace = activeAddWorkspace ?? addWorkspaces[0] ?? null;
+  const addDefault = (): string | null => activeAddWorkspace?.id ?? selected?.c.workspaceId ?? null;
   const [addTo, setAddTo] = useState<string | null>(null);
   const openAdd = (workspaceId: string | null, mode: 'bot' | 'team' = 'bot') => {
     setAddTo(workspaceId);
     setAdding(mode);
   };
-  const startAdd = onAddBot ?? (canCreate ? () => openAdd(selected?.c.workspaceId ?? null) : openFactorySettings);
+  const startAdd = onAddBot ?? (canCreate ? () => openAdd(addDefault()) : openFactorySettings);
   // "+" › Add team: the same form with only the workspace and repository.
-  const startTeam = botPort.createTeam && !onAddBot ? () => openAdd(selected?.c.workspaceId ?? null, 'team') : null;
+  const startTeam = botPort.createTeam && !onAddBot ? () => openAdd(addDefault(), 'team') : null;
   // Stop all: the header menu, then an inline confirm under the header.
   const stopPort = useMemo(() => stop ?? botsStopPort(port), [stop, port]);
   const settingsPort = settings ?? getFactorySettingsPort();
