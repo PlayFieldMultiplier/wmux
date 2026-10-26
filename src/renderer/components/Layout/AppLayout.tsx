@@ -6,7 +6,8 @@ import type { AgentSlug } from '../../../shared/events';
 import type { ResumeBinding } from '../../../shared/agentResume';
 import { useStore } from '../../stores';
 import { useT } from '../../hooks/useT';
-import { t as translate } from '../../i18n';
+import { loadLocale, t as translate } from '../../i18n';
+import { sessionLocaleOf } from '../../stores/slices/workspaceSlice';
 import { deliverMirrorDrop, showRemoteSendNotice } from '../Remote/mirrorFileSend';
 import Sidebar from '../Sidebar/Sidebar';
 import MiniSidebar from '../Sidebar/MiniSidebar';
@@ -1581,7 +1582,13 @@ export default function AppLayout() {
         // daemonModeAtMount=false and never call pty.reconnect — reproducing
         // blank-terminal exactly as if reconcile never happened.
         const { saved, daemonConnected } = await loadSessionThenDaemonDecision({
-          load: () => window.electronAPI.session.load(),
+          load: async () => {
+            const saved = await window.electronAPI.session.load();
+            // loadSession switches to the session's language in the same tick,
+            // so its table loads first. index.tsx has normally loaded it already.
+            if (saved) await loadLocale(sessionLocaleOf(saved));
+            return saved;
+          },
           nothingSaved: () => {
             // Nothing to restore; let the boot site-guides auto-enable proceed.
             useStore.getState().markSessionSettingsLoaded();

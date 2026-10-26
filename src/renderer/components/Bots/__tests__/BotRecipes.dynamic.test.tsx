@@ -8,9 +8,9 @@
 // connection's state and links to Plugins › Connectors.
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useStore } from '../../../stores';
-import { getLocale, setLocale, t, type Locale } from '../../../i18n';
+import { getLocale, loadLocale, setLocale, t, type Locale } from '../../../i18n';
 import { en } from '../../../i18n/locales/en';
 import { ko } from '../../../i18n/locales/ko';
 import { pl } from '../../../i18n/locales/pl';
@@ -30,6 +30,9 @@ import { BotRecipeChecklist, recipeJob, signedInOf } from '../BotRecipes';
 
 const BOT = 'bot-0000000a';
 const LOCALES: Record<string, Record<string, string>> = { en, ko, pl, zh };
+
+// Tables other than English load on demand; the tests below read Korean, Polish and Chinese synchronously.
+beforeAll(() => Promise.all((['ko', 'pl', 'zh'] as const).map(loadLocale)));
 
 describe('the recipe catalog in every shipped language', () => {
   const was = getLocale();

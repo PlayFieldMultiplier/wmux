@@ -1,3 +1,5 @@
+// First: the window's language table loads while the app below evaluates.
+import { firstLocale, firstLocaleLoaded } from './i18n/firstLocale';
 import { createRoot } from 'react-dom/client';
 import App from './App';
 import { useStore } from './stores';
@@ -57,5 +59,11 @@ else {
   });
 }
 
-const root = createRoot(document.getElementById('root')!);
-root.render(<App />);
+// The first render is already in the window's language: only English ships in
+// the bundle, so it waits for that language's table. loadSession then finds it
+// in, and the language does not change under the user.
+void firstLocaleLoaded.then(() => {
+  useStore.getState().setLocale(firstLocale);
+  const root = createRoot(document.getElementById('root')!);
+  root.render(<App />);
+});

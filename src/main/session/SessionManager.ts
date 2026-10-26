@@ -341,6 +341,21 @@ export class SessionManager {
   }
 
   /**
+   * The UI locale the renderer last saved, read before the window exists so
+   * its first render is in that language (shared/startLocale.ts). Raw value;
+   * the caller whitelists it. Null when none could be read.
+   */
+  readLocale(): unknown {
+    try {
+      return atomicReadJSONSync<SessionData>(this.filePath, {
+        validate: SessionManager.isSessionData,
+      })?.locale ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * The persisted per-site memory toggle, as a targeted read.
    *
    * Same shape and same reasoning as readAutoUpdateEnabled: the browser RPC

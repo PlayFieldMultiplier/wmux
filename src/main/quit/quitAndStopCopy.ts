@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { TranslationKey } from '../../renderer/i18n/locales/en';
+import { LOCALE_LOADERS, type LocaleTable } from '../../renderer/i18n/localeLoaders';
 
 /**
  * Copy for the native "Quit and Stop Sessions" confirmation.
@@ -11,32 +12,9 @@ import type { TranslationKey } from '../../renderer/i18n/locales/en';
  * for a dozen strings.
  */
 
-type LocaleTable = Partial<Record<TranslationKey, string>>;
-
 const LOADERS: Readonly<Record<string, () => Promise<LocaleTable>>> = {
   en: async () => (await import('../../renderer/i18n/locales/en')).en,
-  ko: async () => (await import('../../renderer/i18n/locales/ko')).ko,
-  ja: async () => (await import('../../renderer/i18n/locales/ja')).ja,
-  zh: async () => (await import('../../renderer/i18n/locales/zh')).zh,
-  'zh-TW': async () => (await import('../../renderer/i18n/locales/zh-TW')).zhTW,
-  ar: async () => (await import('../../renderer/i18n/locales/ar')).ar,
-  bs: async () => (await import('../../renderer/i18n/locales/bs')).bs,
-  da: async () => (await import('../../renderer/i18n/locales/da')).da,
-  de: async () => (await import('../../renderer/i18n/locales/de')).de,
-  es: async () => (await import('../../renderer/i18n/locales/es')).es,
-  fr: async () => (await import('../../renderer/i18n/locales/fr')).fr,
-  hi: async () => (await import('../../renderer/i18n/locales/hi')).hi,
-  id: async () => (await import('../../renderer/i18n/locales/id')).id,
-  it: async () => (await import('../../renderer/i18n/locales/it')).it,
-  ms: async () => (await import('../../renderer/i18n/locales/ms')).ms,
-  nb: async () => (await import('../../renderer/i18n/locales/nb')).nb,
-  pl: async () => (await import('../../renderer/i18n/locales/pl')).pl,
-  'pt-BR': async () => (await import('../../renderer/i18n/locales/pt-BR')).ptBR,
-  ru: async () => (await import('../../renderer/i18n/locales/ru')).ru,
-  th: async () => (await import('../../renderer/i18n/locales/th')).th,
-  tr: async () => (await import('../../renderer/i18n/locales/tr')).tr,
-  uk: async () => (await import('../../renderer/i18n/locales/uk')).uk,
-  vi: async () => (await import('../../renderer/i18n/locales/vi')).vi,
+  ...LOCALE_LOADERS,
 };
 
 export interface SessionCounts {

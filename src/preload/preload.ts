@@ -16,6 +16,7 @@ import type { ChatBridgeApi } from '../shared/transcript/turnEvents';
 import { CHATV2_IPC, type ChatV2BridgeApi, type ChatV2EventsPush, type ChatV2ResyncPush } from '../shared/chatv2/ipc';
 import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron';
 import { START_POLARITY_STORAGE_KEY, resolveStartPolarity, startPaintCss } from '../shared/windowStartPaint';
+import { startLocaleFromArgv } from '../shared/startLocale';
 import { IPC } from '../shared/constants';
 import type { A2aSpawnAskResult, A2aSpawnOutgoingList, A2aSpawnPolicySetResult, A2aSpawnPolicyV1, A2aSpawnRequestSummary, A2aSpawnUiAsk } from '../shared/a2aSpawn';
 import type { SleepPreventionMode, SleepWindow } from '../shared/sleepPrevention';
@@ -296,6 +297,9 @@ const electronAPI = {
   // The saved theme's polarity main started the window in, or null: index.tsx
   // shows that polarity's default theme until the session's loads (#2512).
   startPolarity,
+  // The UI locale saved in session.json, or null: index.tsx loads its table
+  // before the first render (shared/startLocale.ts).
+  startLocale: startLocaleFromArgv(process.argv),
   // The Windows build number (eg. 19045), or null off Windows / when it cannot
   // be read. xterm needs this SYNCHRONOUSLY at Terminal construction to pick
   // its ConPTY behaviour, so it is a static value here rather than an IPC call.

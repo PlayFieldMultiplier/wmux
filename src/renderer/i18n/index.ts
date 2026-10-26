@@ -7,28 +7,7 @@
  */
 
 import { en, type TranslationKey } from './locales/en';
-import { ko } from './locales/ko';
-import { ja } from './locales/ja';
-import { zh } from './locales/zh';
-import { zhTW } from './locales/zh-TW';
-import { ar } from './locales/ar';
-import { bs } from './locales/bs';
-import { da } from './locales/da';
-import { de } from './locales/de';
-import { es } from './locales/es';
-import { fr } from './locales/fr';
-import { hi } from './locales/hi';
-import { id } from './locales/id';
-import { it } from './locales/it';
-import { ms } from './locales/ms';
-import { nb } from './locales/nb';
-import { pl } from './locales/pl';
-import { ptBR } from './locales/pt-BR';
-import { ru } from './locales/ru';
-import { th } from './locales/th';
-import { tr } from './locales/tr';
-import { uk } from './locales/uk';
-import { vi } from './locales/vi';
+import { LOCALE_LOADERS } from './localeLoaders';
 
 export type Locale =
   | 'en'
@@ -59,35 +38,17 @@ export type Locale =
 // Partial<> lets other locales fall back to `en` for missing keys.
 type TranslationMap = Record<TranslationKey, string>;
 
-const translations: Record<Locale, Partial<TranslationMap>> = {
-  en: en as TranslationMap,
-  ko: ko as Partial<TranslationMap>,
-  ja: ja as Partial<TranslationMap>,
-  zh: zh as Partial<TranslationMap>,
-  'zh-TW': zhTW as Partial<TranslationMap>,
-  ar: ar as Partial<TranslationMap>,
-  bs: bs as Partial<TranslationMap>,
-  da: da as Partial<TranslationMap>,
-  de: de as Partial<TranslationMap>,
-  es: es as Partial<TranslationMap>,
-  fr: fr as Partial<TranslationMap>,
-  hi: hi as Partial<TranslationMap>,
-  id: id as Partial<TranslationMap>,
-  it: it as Partial<TranslationMap>,
-  ms: ms as Partial<TranslationMap>,
-  nb: nb as Partial<TranslationMap>,
-  pl: pl as Partial<TranslationMap>,
-  'pt-BR': ptBR as Partial<TranslationMap>,
-  ru: ru as Partial<TranslationMap>,
-  th: th as Partial<TranslationMap>,
-  tr: tr as Partial<TranslationMap>,
-  uk: uk as Partial<TranslationMap>,
-  vi: vi as Partial<TranslationMap>,
-};
+// Only English, the fallback, ships in the bundle; every other table is its own
+// chunk, loaded when a window first needs it (localeLoaders.ts).
+const translations: Partial<Record<Locale, Partial<TranslationMap>>> = { en: en as TranslationMap };
 
 // ─── State ────────────────────────────────────────────────────────────────────
 
 let currentLocale: Locale = 'en';
+
+// Bumped by every switch and every request, so a request whose table lands
+// after a newer one, or after a direct switch, does not apply.
+let switchSeq = 0;
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
@@ -95,12 +56,66 @@ export function getLocale(): Locale {
   return currentLocale;
 }
 
+/** Whether `locale`'s table is in, so switching to it shows it at once. */
+export function isLocaleLoaded(locale: Locale): boolean {
+  return translations[locale] !== undefined;
+}
+
+/**
+ * Load `locale`'s table once. Never rejects: a table that fails to load, or
+ * a locale with none, leaves `t()` on the English fallback.
+ */
+export async function loadLocale(locale: Locale): Promise<void> {
+  if (isLocaleLoaded(locale)) return;
+  const loader = (LOCALE_LOADERS as Partial<Record<Locale, () => Promise<Partial<TranslationMap>>>>)[locale];
+  if (!loader) return;
+  try {
+    translations[locale] = await loader();
+  } catch (err) {
+    console.error(`[i18n] could not load the ${locale} table`, err);
+  }
+}
+
+/**
+ * Load `locale`'s table, then say whether to switch to it now: not when the
+ * table did not load, nor when another switch or request came after this one.
+ */
+export async function requestLocale(locale: Locale): Promise<boolean> {
+  const seq = ++switchSeq;
+  await loadLocale(locale);
+  return seq === switchSeq && isLocaleLoaded(locale);
+}
+
+/**
+ * Switch the language. A table not loaded yet reads as English until it is,
+ * so callers that can wait load it first (`loadLocale`, `requestLocale`).
+ */
 export function setLocale(locale: Locale): void {
+  switchSeq++;
   // The page's language follows the app's, so screen readers, hyphenation
   // and CJK glyph choice read the UI as written.
   if (typeof document !== 'undefined') document.documentElement.lang = locale;
+  // A reload starts in the language on screen now, not the one the window
+  // was built with (`resolveStartLocale`).
+  try {
+    window.sessionStorage.setItem(START_LOCALE_STORAGE_KEY, locale);
+  } catch {
+    // no window (node tests) or no storage: a reload starts in main's locale
+  }
   if (locale === currentLocale) return;
   currentLocale = locale;
+}
+
+/** The page's sessionStorage key for the language on screen; it outlives a reload, not the window. */
+export const START_LOCALE_STORAGE_KEY = 'wmux:start-locale';
+
+/**
+ * The language a window's first render is in: the one on screen before a
+ * reload, else the one main read from the session, else English, which is
+ * also what a first launch with nothing saved shows.
+ */
+export function resolveStartLocale(stored: string | null | undefined, fromMain: string | null | undefined): Locale {
+  return [stored, fromMain].find((l): l is Locale => SUPPORTED_LOCALES.includes(l as Locale)) ?? 'en';
 }
 
 /**
@@ -113,9 +128,8 @@ export function setLocale(locale: Locale): void {
 // `string & {}` keeps autocompletion for known keys while taking any string.
 // eslint-disable-next-line @typescript-eslint/ban-types
 export function t(key: TranslationKey | (string & {}), vars?: Record<string, string | number>): string {
-  const map = translations[currentLocale];
   const k = key as TranslationKey;
-  let str: string = (map[k] ?? translations.en[k] ?? key) as string;
+  let str: string = (translations[currentLocale]?.[k] ?? en[k] ?? key) as string;
 
   if (vars) {
     // One pass over the template, with a replacer FUNCTION, not a replacement

@@ -72,6 +72,26 @@ function leafCwd(leaf: PaneLeaf): string {
  * visible workspace's park state converges immediately instead of lingering
  * until the next sweep. Guarded for stores/tests without the cold-park maps.
  */
+/** The UI language a session restores to. */
+export function sessionLocaleOf(data: Pick<SessionData, 'locale'>): Locale {
+  if (data.locale) return data.locale as Locale;
+  // No locale in session.json: either a genuinely first-ever run, or a
+  // session.json written before this field existed. Either way the
+  // user has never made an explicit choice, so detect once from the
+  // OS locale (falling back to English) rather than silently sitting
+  // on the hardcoded 'en' default. A user who DOES pick a language in
+  // Settings gets `data.locale` populated from then on (setLocale
+  // writes it), so this branch never re-fires for them.
+  // `typeof window` guard, not a bare reference: loadSession also runs
+  // under node-environment suites (workspaceColor, workspaceProjections,
+  // paneOrdinal, remoteWorkspacesSlice) where `window` does not exist at
+  // all, so a bare read is a ReferenceError — the same reason the
+  // preload half of this feature guards `typeof navigator`.
+  return detectSupportedLocale(
+    (typeof window !== 'undefined' ? window.electronAPI?.systemLocale : undefined) ?? '',
+  );
+}
+
 export function clearColdParkEntry(
   state: { parkedWorkspaceIds?: Record<string, true>; lastVisibleAt?: Record<string, number> },
   id: string,
@@ -1411,28 +1431,11 @@ export const createWorkspaceSlice: StateCreator<StoreState, [['zustand/immer', n
           applyCustomCssVars(migratedCustomTheme);
         }
       }
-      if (data.locale) {
-        state.locale = data.locale as Locale;
-        i18nSetLocale(data.locale as Locale);
-      } else {
-        // No locale in session.json: either a genuinely first-ever run, or a
-        // session.json written before this field existed. Either way the
-        // user has never made an explicit choice, so detect once from the
-        // OS locale (falling back to English) rather than silently sitting
-        // on the hardcoded 'en' default. A user who DOES pick a language in
-        // Settings gets `data.locale` populated from then on (setLocale
-        // writes it), so this branch never re-fires for them.
-        // `typeof window` guard, not a bare reference: loadSession also runs
-        // under node-environment suites (workspaceColor, workspaceProjections,
-        // paneOrdinal, remoteWorkspacesSlice) where `window` does not exist at
-        // all, so a bare read is a ReferenceError — the same reason the
-        // preload half of this feature guards `typeof navigator`.
-        const detected = detectSupportedLocale(
-          (typeof window !== 'undefined' ? window.electronAPI?.systemLocale : undefined) ?? '',
-        );
-        state.locale = detected;
-        i18nSetLocale(detected);
-      }
+      // The caller has loaded this language's table (AppLayout), so the
+      // switch shows it at once.
+      const locale = sessionLocaleOf(data);
+      state.locale = locale;
+      i18nSetLocale(locale);
       if (data.terminalFontSize != null) state.terminalFontSize = data.terminalFontSize;
       // UI scale: clamp on load so a hand-edited session.json (e.g. uiScale: 5)
       // can't leave the store, the Settings readout (Math.round(x*100)%), and

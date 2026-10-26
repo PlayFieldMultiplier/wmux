@@ -8,7 +8,7 @@ import {
   recordStarPromptAgentSession,
   type StarPromptState,
 } from '../../../shared/starPrompt';
-import { setLocale as i18nSetLocale, t, type Locale } from '../../i18n';
+import { isLocaleLoaded, requestLocale, setLocale as i18nSetLocale, t, type Locale } from '../../i18n';
 import { collectLeafIds, findPane, getLeafPanes, getWorkspaceLeafPanes } from '../../../shared/paneUtils';
 import { canStashPaneSurfaces } from '../../../shared/paneStash';
 import { isDaemonModeActive } from '../../daemon/daemonMode';
@@ -1436,11 +1436,19 @@ export const createUISlice: StateCreator<StoreState, [['zustand/immer', never]],
   locale: 'en',
 
   setLocale: (locale) => {
-    // Sync i18n module state immediately (outside immer — pure function call)
-    i18nSetLocale(locale);
-    set((state) => {
-      state.locale = locale;
-    });
+    // A language whose table is not loaded yet switches once it is: the UI
+    // stays in the current language meanwhile, never English or keys. A
+    // newer pick wins over one still loading; a table that fails to load
+    // leaves the language as it was.
+    const apply = () => {
+      // Sync i18n module state immediately (outside immer — pure function call)
+      i18nSetLocale(locale);
+      set((state) => {
+        state.locale = locale;
+      });
+    };
+    if (isLocaleLoaded(locale)) apply();
+    else void requestLocale(locale).then((current) => { if (current) apply(); });
   },
 
   // ─── VI copy mode ─────────────────────────────────────────────────────────
