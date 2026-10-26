@@ -30,7 +30,8 @@ import { installVerifyGate, originDefaultRef, worktreeFromMissions } from '../ve
 import { Gardener, getGardener, setGardener } from '../gardener';
 import { routePlanAnswer, type MorningPorts } from '../morningReport';
 import { onRoomCardResolved } from '../../pipe/handlers/room.rpc';
-import { CI_ROLLUP_QUERY, createHostSetupGate, mapCiRollup, registerFactoryReadHandlers, type FactoryReadDeps } from '../../pipe/handlers/factoryRead.rpc';
+import { CI_ROLLUP_QUERY, LINKED_PRS_QUERY, createHostSetupGate, mapCiRollup, mapLinkedPrs, registerFactoryReadHandlers, type FactoryReadDeps } from '../../pipe/handlers/factoryRead.rpc';
+import { isOpenLedgerStatus } from '../../../daemon/ledger/TaskLedger';
 import { getTaskLedger } from '../../deck/taskLedgerHost';
 import { getSharedTaskGateRunner } from '../../worktask/TaskGateRunner';
 import { ghPrReviewService } from '../../github/GhPrReviewService';
@@ -114,6 +115,19 @@ export function factoryReadDeps(): FactoryReadDeps {
     rooms: getRoomWriter,
     postKey: (botId) => wakeOrdinals.next(runningWake(resolveRoomPorts(), botId), 'post'),
     hostReady: createHostSetupGate({ gate: (repoPath, host) => glabPrService.connection(repoPath, host), ask: askGitlabSetup }),
+    linkedPrs: async (repoPath, key, n) => {
+      if (isGitlabRepoKey(key)) return { error: 'not read on GitLab' };
+      const [owner, repo] = key.split('/').slice(-2);
+      const r = await ghPrReviewService.watchGraphql(repoPath, key, LINKED_PRS_QUERY, { owner, repo, number: n });
+      if (!r.ok) return { error: r.message };
+      return mapLinkedPrs(r.value) ?? { error: 'the linked pull requests could not be read' };
+    },
+    openTasks: (threadIds) => getTaskLedger().list({})
+      .filter((e) => isOpenLedgerStatus(e.status) && typeof e.dispatch?.threadId === 'string' && threadIds.includes(e.dispatch.threadId))
+      .map((e) => ({
+        taskId: e.id, title: e.title, status: e.status, ownerWorkspaceId: e.ownerWorkspaceId, threadId: e.dispatch?.threadId as string,
+        ...(e.dispatch?.origin?.kind === 'bot' && e.dispatch.origin.botId ? { botId: e.dispatch.origin.botId } : {}),
+      })),
   };
 }
 
