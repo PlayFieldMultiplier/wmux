@@ -35,6 +35,22 @@ export interface WebTlsConfig {
 }
 
 /**
+ * `wmux web --trust-proxy-header/--trust-proxy-user/--trust-proxy-from` as the
+ * CLI sends them to `daemon.web.start`. The daemon parses it again
+ * (daemon/web/trustedProxy.ts) and never persists it.
+ */
+export interface WebTrustedProxyWire {
+  header: string;
+  user: string;
+  from: string[];
+}
+
+/** The trusted proxy sign-in a running server reports, normalized, with refusals since start by reason. */
+export interface WebTrustedProxyInfo extends WebTrustedProxyWire {
+  refusals?: Record<string, number>;
+}
+
+/**
  * Status/start/stop result. Mirrors the daemon's WebInfo plus an optional
  * `error` the main-process handler synthesizes when the daemon control pipe is
  * unreachable (so the renderer can render a quiet failure instead of throwing).
@@ -153,6 +169,11 @@ export interface WebTerminalInfo {
    */
   inboundSeenAt?: number | null;
   inboundCount?: number;
+  /**
+   * Present only while the server runs with trusted proxy sign-in: a request
+   * from one of `from` carrying `user` in `header` is the operator.
+   */
+  trustedProxy?: WebTrustedProxyInfo;
   /**
    * The last start's bind failure, while the server is not running: the
    * error code (EADDRINUSE, EACCES…), the port and the address it tried.
