@@ -38,14 +38,17 @@
 // later (GitHub was measured making a tag on a 4xx from a call that
 // publishes). Once a row's draft is on GitHub the row stays claimed (a
 // restart keeps its approval), and any refusal or drop of the row deletes
-// that draft while it is still a draft.
+// that draft while it is still a draft, unless the act's tag is made at the
+// commit (or cannot be read): a publish that stopped after making the tag
+// keeps its draft for the owner (`tag-made-draft-kept` once the tries ran
+// out), since deleting it would leave the tag with no release.
 
 import type { GhActAnswer, GhActPort } from '../github/GhActService';
 import type { ApprovalAct, ApprovalActRepo, ApprovalReleaseAct } from '../../shared/botApproval';
 import { actMarker, bodyWithMarker, normalizeActText } from './actPayload';
-import { actRowClaimed, runnableAct, type ActEffect, type ActEffectStore } from './actEffectStore';
+import { ACT_MAX_ATTEMPTS, actRowClaimed, runnableAct, type ActEffect, type ActEffectStore } from './actEffectStore';
 import type { StoredApproval } from './approvals';
-import { failed, isFail, readRefusal, repoPath, type Read } from './actRead';
+import { failed, isFail, loginOf, readPaged, readRefusal, rec, repoPath, str, type Read } from './actRead';
 import {
   deleteDraft, draftBody, draftWritten, findRelease, mapRelease, publishBody, publishedWritten, readTagTarget, releasePrecondition,
   tagIsOurs, tagRefBody, tagRefWritten, tagRunsUrl,
@@ -58,9 +61,6 @@ type OneWriteAct = Exclude<ApprovalAct, ApprovalReleaseAct>;
 
 /** How long an uncertain try waits before a read settles it. */
 export const RECONCILE_AFTER_MS = 60_000;
-
-/** Pages of 100 a reconcile reads at most; a longer listing cannot say. */
-const LIST_PAGES_MAX = 10;
 
 /** Authorize answers that mean "not now", not "never": the row waits
  *  (the approval taken back or not due, the store or the bot directory not
@@ -110,19 +110,6 @@ export interface PullFacts {
   url: string;
 }
 
-function rec(v: unknown): Record<string, unknown> | null {
-  return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
-}
-
-function str(v: unknown): string {
-  return typeof v === 'string' ? v : '';
-}
-
-function loginOf(v: unknown): string | null {
-  const l = rec(v)?.login;
-  return typeof l === 'string' && l ? l.toLowerCase() : null;
-}
-
 /** The gh login, or why not. An answer without a status (a rate limit, a
  *  timeout, GitHub's 5xx, a gh not started) says nothing about who is
  *  signed in; one with a status is GitHub's own answer. */
@@ -137,7 +124,9 @@ export async function readLogin(gh: GhActPort, host: string): Promise<string | n
   return typeof a === 'string' ? a : null;
 }
 
-export async function readRepo(gh: GhActPort, repoKey: string): Promise<Read<ApprovalActRepo>> {
+/** The repository as a request pins it, and the default branch GitHub
+ *  names now (`''` when it names none), which is not pinned. */
+export async function readRepo(gh: GhActPort, repoKey: string): Promise<Read<ApprovalActRepo & { defaultBranch: string }>> {
   const p = repoPath(repoKey);
   if (!p) return { error: 'not a GitHub repository' };
   const a = await gh.read(p.host, p.base);
@@ -145,7 +134,8 @@ export async function readRepo(gh: GhActPort, repoKey: string): Promise<Read<App
   const v = rec(a.value);
   const fullName = str(v?.full_name);
   const nodeId = str(v?.node_id);
-  return fullName && nodeId && typeof v?.id === 'number' ? { fullName, nodeId, id: v.id } : { error: 'the repository could not be read' };
+  return fullName && nodeId && typeof v?.id === 'number'
+    ? { fullName, nodeId, id: v.id, defaultBranch: str(v.default_branch) } : { error: 'the repository could not be read' };
 }
 
 export function mapIssue(value: unknown): IssueFacts | null {
@@ -185,20 +175,6 @@ export async function readPull(gh: GhActPort, repoKey: string, n: number): Promi
   return mapPull(a.value) ?? { error: 'the pull request could not be read' };
 }
 
-/** Every item of a listing (`endpoint` holds a query), read 100 a page, or
- *  null when a page could not be read or there are more than LIST_PAGES_MAX:
- *  a listing that is not whole proves nothing is there. */
-async function readList(gh: GhActPort, host: string, endpoint: string): Promise<unknown[] | null> {
-  const out: unknown[] = [];
-  for (let page = 1; page <= LIST_PAGES_MAX; page += 1) {
-    const a = await gh.read(host, `${endpoint}&per_page=100&page=${page}`);
-    if (!a.ok || !Array.isArray(a.value)) return null;
-    out.push(...(a.value as unknown[]));
-    if (a.value.length < 100) return out;
-  }
-  return null;
-}
-
 // ── What a write's answer must be ─────────────────────────────────────────
 
 /** The result of a write whose answer is the act done as approved, or null
@@ -233,7 +209,7 @@ export function writeResult(r: Pick<StoredApproval, 'requestId' | 'ghLogin'>, ac
 type Found =
   | { status: 'done'; result: NonNullable<ActEffect['result']> }
   | { status: 'refused'; reason: string; result?: ActEffect['result']; draft?: number }
-  | { status: 'none'; draft?: number }
+  | { status: 'none'; draft?: number; tagMade?: true }
   | { status: 'unknown' };
 
 /** How one claimed try ends (runOnce's own moves). */
@@ -294,10 +270,21 @@ export class ActExecutor {
 
   /** A release row that ended refused, or was dropped, with a draft of its
    *  own on GitHub: the draft goes while it is still a draft (one published
-   *  since stays), best effort, and the log says what became of it. */
+   *  since stays), best effort, and the log says what became of it. It is
+   *  kept when the act's tag is made at the commit, or cannot be read: a
+   *  publish made the tag and stopped, and the draft is what releases it. A
+   *  row whose request is gone has no tag to read: its draft goes. */
   private async dropDraft(row: ActEffect | null): Promise<void> {
     if (!row || row.action !== 'release' || row.draftId === undefined) return;
     const p = repoPath(row.repoKey);
+    const act = this.ports.approval.request(row.requestId)?.act;
+    if (p && act?.kind === 'release') {
+      const tag = await readTagTarget(this.ports.gh, p, act.tagName).catch((err: unknown) => ({ error: String(err) }));
+      if (isFail(tag) || tag === act.targetSha) {
+        this.ports.log?.(`[factory] act release ${row.requestId}: its draft ${row.draftId} is kept (${isFail(tag) ? 'the tag could not be read' : 'its tag is made'})`);
+        return;
+      }
+    }
     const what = p ? await deleteDraft(this.ports.gh, p, row.draftId).catch(() => 'failed' as const) : 'failed';
     this.ports.log?.(`[factory] act release ${row.requestId}: its draft ${row.draftId} ${what === 'failed' ? 'could not be deleted' : what}`);
   }
@@ -311,7 +298,7 @@ export class ActExecutor {
     const { effects } = this.ports;
     let row = effects.get(id);
     if (!row || !runnableAct(row)) return row;
-    if (row.status === 'uncertain' || (row.status === 'pending' && row.attempt > 0)) {
+    if (row.status === 'uncertain' || (row.status === 'pending' && actRowClaimed(row))) {
       // A try that may have landed (or an earlier try that ended without
       // proof either way): read GitHub before anything is sent again.
       if (row.status === 'uncertain' && this.now() - (row.startedAt ?? row.updatedAt) < (this.ports.reconcileAfterMs ?? RECONCILE_AFTER_MS)) return row;
@@ -349,6 +336,7 @@ export class ActExecutor {
       const login = await readIdentity(this.ports.gh, p.host);
       if (isFail(login)) return login.status === undefined ? back('read-failed') : end('refused', 'identity-unknown');
       if (login !== r.ghLogin) return end('refused', 'identity-changed');
+      // Its default branch is the one a release reads (not pinned).
       const repo = await readRepo(this.ports.gh, r.repoKey);
       if (isFail(repo)) {
         const why = readRefusal(repo, 'repo-changed');
@@ -357,7 +345,7 @@ export class ActExecutor {
       // The name, node id and numeric id the request read (a rename or a
       // transfer changes the name; a repository made again changes the ids).
       if (repo.fullName.toLowerCase() !== r.actRepo.fullName.toLowerCase() || repo.nodeId !== r.actRepo.nodeId || repo.id !== r.actRepo.id) return end('refused', 'repo-changed');
-      if (act.kind === 'release') return await this.runRelease(id, claimed, r.ghLogin, act, p, { gate, end, back });
+      if (act.kind === 'release') return await this.runRelease(id, claimed, { login: r.ghLogin, branch: repo.defaultBranch }, act, p, { gate, end, back });
       const pre = await this.precondition(r.repoKey, act);
       if (pre === 'read-failed') return back(pre);
       if (pre) return end('refused', pre);
@@ -379,12 +367,14 @@ export class ActExecutor {
 
   /** A release's try from its preconditions on (releaseAct.ts): the tag
    *  alone (`workflow`), or a draft, then the late gate, then publishing it
-   *  (`release`). A refusal deletes the row's draft (`end`). */
-  private async runRelease(id: string, claimed: ActEffect, login: string, act: ApprovalReleaseAct, p: { host: string; base: string }, t: TryEnds): Promise<ActEffect | null> {
+   *  (`release`). A refusal deletes the row's draft (`end`), unless its
+   *  tag is made at the commit (dropDraft). */
+  private async runRelease(id: string, claimed: ActEffect, o: { login: string; branch: string }, act: ApprovalReleaseAct, p: { host: string; base: string }, t: TryEnds): Promise<ActEffect | null> {
     const gh = this.ports.gh;
     const { effects } = this.ports;
+    const { login } = o;
     // An earlier try of the row may have written (its count was kept).
-    const pre = await releasePrecondition(gh, p, act, login, claimed.draftId, claimed.attempt > 1);
+    const pre = await releasePrecondition(gh, p, act, { login, branch: o.branch, draftId: claimed.draftId, wroteBefore: claimed.attempt > 1 });
     // This act's draft, found by its content after a crash: journaled now,
     // so a refusal deletes it and the next try publishes it.
     let draft = pre.draft;
@@ -524,6 +514,9 @@ export class ActExecutor {
     let next: ActEffect | null;
     if (found.status === 'done') next = this.ports.effects.settle(row.id, 'done', undefined, found.result);
     else if (found.status === 'refused') next = this.ports.effects.settle(row.id, 'refused', found.reason, found.result);
+    // Its tag made with the release still a draft, and no try left: the
+    // draft is kept for the owner to publish or delete (dropDraft).
+    else if (found.tagMade && row.attempt >= ACT_MAX_ATTEMPTS) next = this.ports.effects.settle(row.id, 'refused', 'tag-made-draft-kept');
     else next = this.ports.effects.settle(row.id, 'pending', 'not-found');
     if (next?.status === 'refused') await this.dropDraft(next);
     if (next && (next.status !== row.status || next.reason !== row.reason)) this.emit(next);
@@ -542,8 +535,8 @@ export class ActExecutor {
       const endpoint = act.kind === 'comment'
         ? `${p.base}/issues/${act.number}/comments?since=${since}`
         : `${p.base}/issues?creator=${r.ghLogin}&state=all&since=${since}`;
-      const list = await readList(gh, p.host, endpoint);
-      if (!list) return { status: 'unknown' };
+      const list = await readPaged(gh, p.host, endpoint);
+      if (isFail(list)) return { status: 'unknown' };
       const mine = list.map(rec).filter((v): v is Record<string, unknown> => !!v
         && loginOf(v.user) === r.ghLogin && str(v.body).includes(marker) && (act.kind === 'comment' || rec(v.pull_request) === null));
       if (mine.length === 0) return { status: 'none' };

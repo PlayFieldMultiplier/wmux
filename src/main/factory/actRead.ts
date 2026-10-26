@@ -8,7 +8,7 @@
 // that will not change.
 
 import { splitRepoKey } from '../github/GhIssueService';
-import type { GhActAnswer } from '../github/GhActService';
+import type { GhActAnswer, GhActPort } from '../github/GhActService';
 
 export type ReadFail = { error: string; status?: number; unreadable?: true };
 export type Read<T> = T | ReadFail;
@@ -41,4 +41,40 @@ export function readRefusal(e: ReadFail, gone: string): string {
   if (e.unreadable) return 'unreadable-answer';
   if (e.status === undefined) return 'read-failed';
   return e.status === 404 || e.status === 410 ? gone : `gh-${e.status}`;
+}
+
+export function rec(v: unknown): Record<string, unknown> | null {
+  return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+}
+
+export function str(v: unknown): string {
+  return typeof v === 'string' ? v : '';
+}
+
+/** A user object's login, lowercased, or null. */
+export function loginOf(v: unknown): string | null {
+  const l = rec(v)?.login;
+  return typeof l === 'string' && l ? l.toLowerCase() : null;
+}
+
+/** Pages of 100 a listing reads at most; a longer one cannot say. */
+export const LIST_PAGES_MAX = 10;
+
+/** Every item of a paged listing (`key`: the array inside an object answer,
+ *  or none for an array answer), read 100 a page. A listing that is not
+ *  whole proves nothing is there: a page that failed is that page's failure
+ *  (its HTTP status kept), and an answer with no list, or more than
+ *  LIST_PAGES_MAX pages, is unreadable. */
+export async function readPaged(gh: GhActPort, host: string, endpoint: string, key?: string): Promise<Read<unknown[]>> {
+  const out: unknown[] = [];
+  const join = endpoint.includes('?') ? '&' : '?';
+  for (let page = 1; page <= LIST_PAGES_MAX; page += 1) {
+    const a = await gh.read(host, `${endpoint}${join}per_page=100&page=${page}`);
+    if (!a.ok) return failed(a);
+    const items = key === undefined ? a.value : rec(a.value)?.[key];
+    if (!Array.isArray(items)) return unreadable('GitHub answered a listing with no list');
+    out.push(...(items as unknown[]));
+    if (items.length < 100) return out;
+  }
+  return unreadable(`GitHub listed more than ${LIST_PAGES_MAX * 100} items`);
 }

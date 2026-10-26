@@ -5211,7 +5211,9 @@ still enabled (`refusal` `default-branch-changed`, `not-on-default-branch`,
 `checks-not-started`, `workflow-disabled`); a release published on a tag that
 was made elsewhere meanwhile ends `refused` with `published-other-target`, and
 one published with another name or notes than the card's with
-`found-different`.
+`found-different`. A release whose publish made its tag but whose tries ran
+out with the release still a draft ends `refused` with `tag-made-draft-kept`:
+the draft stays on GitHub for the owner to publish or delete.
 While it runs, or
 while it reads GitHub to learn whether an interrupted try went through, the
 request stays `approved`; it ends `executed` or `refused`.

@@ -127,7 +127,7 @@ import { nextSlot, scheduleLabel } from './routines';
 import type { OwnerCardProof } from './ownerAsked';
 import { actEffectId, actRowClaimed, type ActEffect, type ActEffectStatus } from './actEffectStore';
 import type { IssueFacts, PullFacts } from './actExecutor';
-import { releaseTagProblem, type ReleaseAsk, type ReleaseAskInput, type ReleaseAskRefusal } from './releaseAct';
+import { releaseTagProblem, type AlsoRunsOn, type ReleaseAsk, type ReleaseAskInput, type ReleaseAskRefusal } from './releaseAct';
 
 export const APPROVALS_FILENAME = 'approvals.json';
 
@@ -265,7 +265,8 @@ export interface ApprovalMergeHost {
  *  a request's pins (gh, from a folder main owns), and the outbox. */
 export interface ApprovalActHost {
   login(repoKey: string): Promise<string | null>;
-  repo(repoKey: string): Promise<ApprovalActRepo | { error: string; status?: number }>;
+  /** The repository's pins, and the default branch it names now (not pinned). */
+  repo(repoKey: string): Promise<(ApprovalActRepo & { defaultBranch?: string }) | { error: string; status?: number }>;
   issue(repoKey: string, n: number): Promise<IssueFacts | { error: string; status?: number }>;
   pull(repoKey: string, n: number): Promise<PullFacts | { error: string; status?: number }>;
   /** What a release request pins and its card states (releaseAct.ts), or
@@ -703,6 +704,18 @@ const CHECK_WORDS: Readonly<Record<ReleaseAsk['checks'], string>> = {
   'not-started': 'not started yet; approving now is refused, and the bot asks again once they pass',
 };
 
+/** What starts another workflow, as the card says it. */
+const ALSO_RUNS_WORDS: Readonly<Record<AlsoRunsOn, string>> = {
+  'tag-push': 'on this tag push',
+  'tag-create': 'when the tag is created',
+  'release-published': 'when the release is published',
+};
+
+/** `a`, `a and b`, `a, b and c`. Pure. */
+function joinWords(words: readonly string[]): string {
+  return words.length <= 1 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`;
+}
+
 /** A release card's lines after the bot's: what Approve does and whether it
  *  is marked Latest, the workflows the tag push also starts, what main read when the bot asked (the default branch,
  *  the checks, package.json's version), then each payload field in its own
@@ -724,9 +737,9 @@ export function releaseCardLines(act: ApprovalReleaseAct, fields: readonly strin
       'The workflow decides whether it is marked Latest.',
     );
   }
-  // Workflows with no push filter run on the tag push as well (they build
-  // nothing that is published, but they run).
-  for (const file of o.facts.alsoRuns) lines.push(`${file} also runs on this tag push.`);
+  // Other workflows the act starts (they build nothing that is published,
+  // but they run).
+  for (const w of o.facts.alsoRuns) lines.push(`${w.path} also runs ${joinWords(w.on.map((e) => ALSO_RUNS_WORDS[e]))}.`);
   const behind = o.facts.behindBy === 0 ? `${at} is its head` : `${at} is ${o.facts.behindBy} ${o.facts.behindBy === 1 ? 'commit' : 'commits'} behind its head`;
   lines.push('', `Default branch ${act.defaultBranch}: ${behind}.`, `Checks on ${at}: ${CHECK_WORDS[o.facts.checks]}.`);
   if (o.facts.version) lines.push(`package.json version: ${o.facts.version}.`);
@@ -1053,7 +1066,10 @@ export class ApprovalService {
     let headSha: string | undefined;
     let ask: ReleaseAsk | null = null;
     if (act === 'release') {
-      const read = await host.release(repoKey, { tagName, ...(targetSha ? { targetSha } : {}), ...(prerelease !== undefined ? { prerelease } : {}) })
+      const read = await host.release(repoKey, {
+        tagName, ...(targetSha ? { targetSha } : {}), ...(prerelease !== undefined ? { prerelease } : {}),
+        ...(repoPin.defaultBranch ? { defaultBranch: repoPin.defaultBranch } : {}),
+      })
         .catch((err: unknown): ReleaseAskRefusal => ({ refuse: 'read_failed', message: `the repository could not be read: ${String(err)}`.slice(0, 300) }));
       if ('refuse' in read) return refuse(read.refuse, read.message);
       ask = read;
@@ -1125,7 +1141,7 @@ export class ApprovalService {
       ...(headSha ? { headSha } : {}),
       ghLogin: login.toLowerCase(),
       act: actPin,
-      actRepo: repoPin,
+      actRepo: { fullName: repoPin.fullName, nodeId: repoPin.nodeId, id: repoPin.id },
       payloadHash: payloadHashOf(fields),
       contentKey,
       botId: bot.botId,

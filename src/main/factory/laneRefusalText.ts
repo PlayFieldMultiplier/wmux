@@ -98,6 +98,8 @@ const SENTENCES: Readonly<Record<string, string>> = {
   'checks-failing': 'A check on the commit did not pass',
   'checks-pending': 'A check on the commit is still running',
   'checks-not-started': 'The commit\'s checks have not started',
+  'checks-never-ran': 'The commit\'s checks never ran: it was pushed under a later commit',
+  'tag-made-draft-kept': 'The tag was made, but publishing the release failed: its draft is kept on {host} for you to publish or delete',
   'version-mismatch': 'The version in package.json or package-lock.json is not the tag\'s',
   'prerelease-mismatch': 'The tag reads as a prerelease and the request does not, or the other way round',
   'tag-not-matching-release-workflow': 'The repository\'s tag workflows do not run on this tag',
