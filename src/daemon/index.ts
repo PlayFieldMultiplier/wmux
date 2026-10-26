@@ -1908,6 +1908,10 @@ async function acquireLock(): Promise<boolean> {
   //        │                                                    ├── daemon-pipe
   //        └───────────── launcher must NOT kill in here ───────┘
   //
+  // The launcher already wrote daemon.pid and this marker with our PID right
+  // after spawn (claimSpawnedDaemonFiles), so the time before this line is
+  // covered too; both writes here store the same value.
+  //
   // Written once, never re-touched: the launcher trusts it on existence + PID
   // liveness, not freshness. A freshness gate would re-create the very bug —
   // recovery is a long await chain, so a busy event loop can delay a periodic

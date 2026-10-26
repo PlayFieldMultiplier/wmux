@@ -488,7 +488,8 @@ export async function tryEscalatedReping(
 
 /**
  * Issue #546 — parse the daemon's boot-progress marker (`daemon-booting`,
- * written by the daemon's acquireLock()). True only when it names EXACTLY the
+ * written by the launcher right after spawn and again by the daemon's
+ * acquireLock(); see claimSpawnedDaemonFiles). True only when it names EXACTLY the
  * PID we already verified as a live wmux daemon. Missing / unparseable / a
  * different PID all read false.
  *
@@ -870,6 +871,7 @@ function spawnDaemon(deps: DaemonLauncherDeps): Promise<number> {
       onExit(cb: (code: number | null) => void): void;
       dispose(): void;
     }) => {
+      claimSpawnedDaemonFiles(getWmuxDir(), proc.pid);
       deps.markBoot?.('daemon-spawned');
       (deps.log ?? console.log)(`[launcher] Daemon spawned with PID: ${proc.pid}`);
       // pid the ready ping came from (absent from a daemon older than Step ③).
@@ -1015,6 +1017,43 @@ function spawnDaemon(deps: DaemonLauncherDeps): Promise<number> {
       spawnDirect();
     }
   });
+}
+
+/**
+ * Record a just-spawned daemon in `daemon.pid` and `daemon-booting` before it
+ * can do so itself. The daemon writes both at acquireLock(), which runs only
+ * after its bundle has loaded (0.4-1.6 s measured on Windows). Until then a
+ * live, booting daemon had no pid file: a second starter judged "no daemon",
+ * cleaned the files and spawned another, and the full-shutdown backstop
+ * (killDaemonByPidFile) found nothing to kill.
+ *
+ * With both files naming the child, a second starter reaches the verified
+ * branch of ensureDaemon and waits the boot out (#546) instead of spawning or
+ * killing, and the backstop finds the pid. The daemon's own acquireLock()
+ * overwrites both with the same value; it never reads daemon.pid.
+ *
+ * `wx` on daemon.pid: a pid file that appeared after our stale cleanup was
+ * written by the daemon itself or by another starter's daemon, and is never
+ * replaced. The marker is written only when the pid file was ours, so it
+ * cannot name a daemon that has already finished booting and dropped it.
+ *
+ * PID reuse: a child that dies during boot leaves both files naming a dead
+ * pid, the same state a crashed daemon leaves. Every reader proves daemon
+ * identity from the command line before reuse, wait or kill, and the marker is
+ * only consulted after that proof (parseBootMarker).
+ *
+ * Best effort: returns whether the pid file was written, never throws.
+ */
+export function claimSpawnedDaemonFiles(wmuxDir: string, pid: number): boolean {
+  try {
+    fs.writeFileSync(path.join(wmuxDir, 'daemon.pid'), String(pid), { encoding: 'utf-8', mode: 0o600, flag: 'wx' });
+  } catch {
+    return false;
+  }
+  try {
+    fs.writeFileSync(path.join(wmuxDir, 'daemon-booting'), String(pid), { encoding: 'utf-8', mode: 0o600, flag: 'wx' });
+  } catch { /* the daemon writes it at acquireLock */ }
+  return true;
 }
 
 /** How a daemon this process spawned ended: Node's child 'exit' arguments. */
