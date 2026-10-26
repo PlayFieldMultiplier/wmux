@@ -1077,9 +1077,9 @@ export interface UISlice {
 
   // ─── Scrollback bookmarks ─────────────────────────────────────────
   /** ptyId → ids of the xterm markers that hold its scrollback bookmarks
-   *  (Ctrl+M). The markers themselves live in
-   *  components/Terminal/scrollbackBookmarks.ts, never here: immer freezes
-   *  what the store holds, and a frozen marker stops tracking its line. */
+   *  (Ctrl+M); see components/Terminal/scrollbackBookmarks.ts. The markers
+   *  themselves stay in their Terminal, never here: immer freezes what the
+   *  store holds, and a frozen marker stops tracking its line. */
   terminalBookmarks: Record<string, number[]>;
   addBookmark: (ptyId: string, markerId: number) => void;
   removeBookmark: (ptyId: string, markerId: number) => void;
