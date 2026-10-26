@@ -1057,6 +1057,31 @@ describe('a release refusal told before its draft was decided', () => {
     expect(r.svc.get(req.requestId)?.refusal).toBe('checks-failing, draft-kept-tag-made');
   });
 
+  it('an amendment that cannot be written posts no card, and the next one does', async () => {
+    const r = rig();
+    const req = await r.ask(DEV, { action: 'release', tagName: 'v1', reason: 'ship' });
+    const effect = (reason: string): Parameters<ApprovalService['onActEffect']>[0] => ({
+      id: `act:${req.requestId}`, requestId: req.requestId, action: 'release', repoKey: KEY, payloadHash: 'h', status: 'refused', attempt: 1, reason, draftId: 50, createdAt: 1, updatedAt: 1,
+    });
+    const outcomes = () => r.writer.read(WS, {}).cards.filter((c) => c.clientPostId?.startsWith(`approval-outcome:${req.requestId}`));
+    r.svc.onActEffect(effect('checks-failing'));
+    const folder = path.dirname(r.ports.file);
+    const realWrite = fsDefault.writeFileSync;
+    const spy = vi.spyOn(fsDefault, 'writeFileSync').mockImplementation(((file: fs.PathOrFileDescriptor, ...rest: unknown[]) => {
+      if (typeof file === 'string' && path.dirname(file) === folder) throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+      return (realWrite as (...a: unknown[]) => void)(file, ...rest);
+    }) as typeof fsDefault.writeFileSync);
+    try {
+      r.svc.onActEffect(effect('checks-failing, draft-kept-tag-made'));
+    } finally {
+      spy.mockRestore();
+    }
+    expect(outcomes()).toHaveLength(1);
+    expect(r.svc.get(req.requestId)?.refusal).toBe('checks-failing');
+    r.svc.onActEffect(effect('checks-failing, draft-kept-tag-made'));
+    expect(outcomes()).toHaveLength(2);
+  });
+
   it('a refusal stored cut at 300 characters is amended all the same, its draft code kept', async () => {
     const r = rig();
     const req = await r.ask(DEV, { action: 'release', tagName: 'v1', reason: 'ship' });
