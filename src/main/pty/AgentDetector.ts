@@ -1852,11 +1852,6 @@ export class AgentDetector {
       }
     }
 
-    const ownerBanner = this.lastAgent !== null && this.bannerSeenFor !== this.lastAgent && !this.shellPromptSinceOwner
-      ? PROFILE_BY_AGENT.get(this.lastAgent)?.banner
-      : undefined;
-    if (ownerBanner && candidateLines(clean).some(ownerBanner)) this.bannerSeenFor = this.lastAgent;
-
     for (const ap of AGENT_PATTERNS) {
       // Skip an already-seen gate within a launch, but reconsider it after
       // the shell returns: Claude -> Codex -> Claude must reclaim the pane.
@@ -1903,7 +1898,6 @@ export class AgentDetector {
       this.activeAgents.add(ap.agent);
       this.lastAgent = ap.agent;
       this.lastScreenAgent = ap.agent;
-      this.bannerSeenFor = ap.banner && candidateLines(clean).some(ap.banner) ? ap.agent : null;
       this.shellPromptSinceOwner = false;
       // The profile was already active from fresh external identity. Chrome
       // adds screen provenance, not another launch or a replayed prompt.
@@ -1937,6 +1931,11 @@ export class AgentDetector {
         }
       }
     }
+
+    const ownerBanner = this.lastAgent !== null && this.bannerSeenFor !== this.lastAgent && !this.shellPromptSinceOwner
+      ? PROFILE_BY_AGENT.get(this.lastAgent)?.banner
+      : undefined;
+    if (ownerBanner && candidateLines(clean).some(ownerBanner)) this.bannerSeenFor = this.lastAgent;
   }
 
   /** The frame ended: report a held frame-tail match if its agent still owns the pane. */
