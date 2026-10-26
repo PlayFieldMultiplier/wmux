@@ -70,10 +70,10 @@ export function replaceFileAtomic(file: string, content: string): boolean {
  * The daemon's teardown: remove daemon.pid, daemon.lock and daemon-booting
  * only while they name `pid`, and daemon-pipe only while it holds the pipe name
  * this daemon wrote (`writtenPipeName`, null when it never wrote one). A
- * daemon that yields (EDAEMON_ALREADY_RUNNING) exits while another daemon owns
- * the pipe and its daemon-pipe file, and when two starters raced the pid file
- * and marker can name the other daemon; deleting those hid a live daemon from
- * every starter.
+ * daemon that yields (EDAEMON_ALREADY_RUNNING) exits before writing
+ * daemon-pipe, while the live daemon owns the pipe and that file; deleting it
+ * hid the live daemon's pipe hint. Content is not full ownership: two daemons
+ * on the canonical pipe write the same name, so this cannot tell them apart.
  */
 export function releaseDaemonFiles(wmuxDir: string, pid: number, writtenPipeName: string | null): void {
   const own = String(pid);

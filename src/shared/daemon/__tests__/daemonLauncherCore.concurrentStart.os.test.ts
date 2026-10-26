@@ -317,19 +317,10 @@ describe('daemonLauncherCore — concurrent start', () => {
 
 describe('claimSpawnedDaemonFiles', () => {
   let dir: string;
-  const children: ChildProcess[] = [];
   beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'csdf-')); });
-  afterEach(() => {
-    for (const c of children.splice(0)) c.kill('SIGKILL');
-    fs.rmSync(dir, { recursive: true, force: true });
-  });
+  afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); });
   const read = (name: string): string | null => {
     try { return fs.readFileSync(path.join(dir, name), 'utf8'); } catch { return null; }
-  };
-  const liveProcess = (args: string[]): number => {
-    const c = spawn(process.execPath, args, { stdio: 'ignore' });
-    children.push(c);
-    return c.pid as number;
   };
 
   it('writes both files for a fresh spawn', () => {
@@ -338,31 +329,15 @@ describe('claimSpawnedDaemonFiles', () => {
     expect(read('daemon-booting')).toBe('4242');
   });
 
-  it('keeps a pid file naming a live daemon, and writes no marker then', async () => {
-    // The daemon-bundle/index.js entry shape identifies a daemon from any host.
-    const script = path.join(dir, 'daemon-bundle', 'index.js');
-    fs.mkdirSync(path.dirname(script));
-    const ready = path.join(dir, 'ready');
-    fs.writeFileSync(script, `require('fs').writeFileSync(${JSON.stringify(ready)}, '');\nsetTimeout(() => {}, 30000);\n`);
-    const daemon = liveProcess([script]);
-    // Running its script, so a process probe reads the daemon's command line.
-    await vi.waitFor(() => expect(fs.existsSync(ready)).toBe(true), { timeout: 10_000 });
-    fs.writeFileSync(path.join(dir, 'daemon.pid'), String(daemon));
-
-    expect(claimSpawnedDaemonFiles(dir, 5353)).toBe(false);
-    expect(read('daemon.pid')).toBe(String(daemon));
-    expect(read('daemon-booting')).toBeNull();
-  });
-
-  it('replaces a pid file the cleanup could not remove: a dead pid, or a live process that is not a daemon', () => {
-    fs.writeFileSync(path.join(dir, 'daemon.pid'), String(deadPid()));
-    expect(claimSpawnedDaemonFiles(dir, 5353)).toBe(true);
-    expect(read('daemon.pid')).toBe('5353');
-    expect(read('daemon-booting')).toBe('5353');
-
-    fs.writeFileSync(path.join(dir, 'daemon.pid'), String(liveProcess(['-e', 'setTimeout(() => {}, 30000)'])));
-    expect(claimSpawnedDaemonFiles(dir, 6464)).toBe(true);
-    expect(read('daemon.pid')).toBe('6464');
+  // After the stale cleanup, an existing pid file was written by a daemon or by
+  // another starter's child; replacing it could hide a live daemon.
+  it('never replaces a pid file naming another pid, and writes no marker then', () => {
+    for (const other of [String(deadPid()), String(process.pid)]) {
+      fs.writeFileSync(path.join(dir, 'daemon.pid'), other);
+      expect(claimSpawnedDaemonFiles(dir, 5353)).toBe(false);
+      expect(read('daemon.pid')).toBe(other);
+      expect(read('daemon-booting')).toBeNull();
+    }
   });
 
   it('accepts a pid file the daemon already wrote for itself, leaving its marker alone', () => {
@@ -381,7 +356,7 @@ describe('staleCleanupOwnerFilter', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it('on win32 keeps the files only for a live process proven to be a daemon; elsewhere for any live one', async () => {
+  it('on win32 a live process whose command line is not the daemon\'s does not keep the files; elsewhere any live one does', async () => {
     const script = path.join(dir, 'fake-daemon.js');
     const ready = path.join(dir, 'ready');
     fs.writeFileSync(script, `require('fs').writeFileSync(${JSON.stringify(ready)}, '');\nsetTimeout(() => {}, 30000);\n`);

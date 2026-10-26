@@ -1,7 +1,7 @@
 // Must stay the first import: turns off working-directory executable lookup (Windows) before any module runs.
 import '../shared/exeSearchGuard';
 import { isInternalForkPayload } from '../shared/hooks/internalFork';
-import { releaseDaemonFiles, unlinkIfContent } from '../shared/daemon/daemonFiles';
+import { releaseDaemonFiles, replaceFileAtomic, unlinkIfContent } from '../shared/daemon/daemonFiles';
 import { terminalCoreRuntime, terminalCoreSelection } from '../shared/terminalCoreSettings';
 import { collectDaemonMemoryDiagnostics } from './memoryDiagnostics';
 import { createStartupRecovery } from './startupRecovery';
@@ -1893,8 +1893,12 @@ async function acquireLock(): Promise<boolean> {
     }
   }
 
-  // Write PID file (separate from lock for backward compat)
-  fs.writeFileSync(PID_FILE, String(process.pid), { encoding: 'utf-8', mode: 0o600 });
+  // Write PID file (separate from lock for backward compat). Renamed into place:
+  // the launcher already wrote one (claimSpawnedDaemonFiles) that other
+  // starters may be reading, and a truncating write would show them it empty.
+  if (!replaceFileAtomic(PID_FILE, String(process.pid))) {
+    fs.writeFileSync(PID_FILE, String(process.pid), { encoding: 'utf-8', mode: 0o600 });
+  }
   // Issue #546 — boot-progress marker. The window between this line and
   // `daemon-pipe` being written is the whole problem: we are alive and own the
   // lock, but we cannot answer a ping (no pipe yet), and cold recovery of a
@@ -1921,7 +1925,11 @@ async function acquireLock(): Promise<boolean> {
   // the launcher side by DAEMON_READY_HARD_CEILING_MS instead. A marker
   // orphaned by a hard crash is self-invalidating: its PID is dead.
   try {
-    fs.writeFileSync(BOOT_MARKER_FILE, String(process.pid), { encoding: 'utf-8', mode: 0o600 });
+    // Renamed into place, like the pid file: a launcher waiting on the marker
+    // reads an empty one as "boot finished".
+    if (!replaceFileAtomic(BOOT_MARKER_FILE, String(process.pid))) {
+      fs.writeFileSync(BOOT_MARKER_FILE, String(process.pid), { encoding: 'utf-8', mode: 0o600 });
+    }
   } catch (err) {
     // Non-fatal: without the marker the launcher just falls back to the old
     // escalated-reping-then-kill behavior. Never block boot on it.
@@ -10686,9 +10694,10 @@ main().catch((err) => {
     // redundant second daemon the launcher spawned over a daemon it failed to
     // detect (split-brain Defect 3 / Step ③). Exit with a DISTINCT code so the
     // launcher reconnects to the existing daemon instead of treating this as a
-    // generic startup failure. releaseLock() clears the daemon.pid that
-    // acquireLock() wrote for us, and leaves the live daemon's files alone;
-    // the launcher reconnects via the canonical pipe name, not the pid file.
+    // generic startup failure. releaseLock() clears the daemon.pid and lock
+    // that acquireLock() wrote for us, and keeps the live daemon's daemon-pipe
+    // (we never wrote one); the launcher reconnects via the canonical pipe
+    // name and restores daemon.pid from the ping.
     log('warn', 'another live daemon owns the control pipe — exiting cleanly (EDAEMON_ALREADY_RUNNING)');
     noteExitReason('another live daemon owns the control pipe');
     releaseLock();
