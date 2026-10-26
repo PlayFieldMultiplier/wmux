@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll } from 'vitest';
+import { REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS, removeTempDir } from './removeTempDir';
 
 // Save the real home before overriding; do not overwrite if already set.
 if (!process.env.WMUX_TEST_REAL_HOME) {
@@ -35,15 +36,7 @@ process.env.WMUX_TEST_ISOLATED = '1';
 // Remove the temp HOME once this file's tests are done; a setup file's afterAll
 // runs after the file's own. The process 'exit' handler this replaces left one
 // of these dirs per test file in %TEMP% on Windows (tens of thousands), and it
-// swallowed every error, so nothing said why. Here a HOME that cannot be
-// removed fails the file and names what is still in it: a test left a handle
-// open (a child, a watcher, a stream) in its HOME.
-afterAll(() => {
-  try {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  } catch (err) {
-    let left: string[] = [];
-    try { left = fs.readdirSync(tempDir, { recursive: true }).map(String); } catch { /* the dir itself is what failed */ }
-    throw new Error(`could not remove the test HOME ${tempDir}: ${(err as Error).message}\nstill there: ${left.join(', ') || '(nothing listed)'}`);
-  }
-});
+// swallowed every error, so nothing said why. Here a HOME that is still held
+// past removeTempDir's bounded wait fails the file and names what is held:
+// usually a handle the file's tests left open (a child, a watcher, a stream).
+afterAll(() => removeTempDir(tempDir), REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS);

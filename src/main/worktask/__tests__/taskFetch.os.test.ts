@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fetchTaskRefs as fetchTask, parseLsRemoteHeads, taskFetchArgs, taskFetchConfigRefusal } from '../taskFetch';
 import { registerTaskPushRpc } from '../../pipe/handlers/taskPush.rpc';
+import { REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS, removeTempDirs } from '../../../test-utils/removeTempDir';
 
 vi.mock('electron', () => ({ app: { getPath: () => os.tmpdir() } }));
 
@@ -154,7 +155,7 @@ describe('task.fetch RPC', () => {
   type Rec = { taskId: string; botId: string; ownerWorkspaceId: string };
   // Every wmux dir a case's setup makes, removed after it.
   const dirs: string[] = [];
-  afterEach(() => { for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
+  afterEach(() => removeTempDirs(dirs), REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS);
   const setup = (over: { tasks?: unknown[]; caller?: string | null; botRepo?: string; row?: unknown; ended?: unknown; reclaimed?: (ws: string, pty: string) => Rec | null; exists?: boolean } = {}) => {
     const handlers = new Map<string, Handler>();
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-task-fetch-rpc-'));

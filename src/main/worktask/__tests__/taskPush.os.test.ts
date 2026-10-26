@@ -19,6 +19,7 @@ import { originPinMatches } from '../../../shared/originPin';
 import { fetchTaskRefs, readTaskRemoteHead } from '../taskFetch';
 import { clearForgeHostsCache } from '../../../shared/forgeHosts';
 import { resolveBotRepo } from '../../factory/botCreate';
+import { REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS, removeTempDirs } from '../../../test-utils/removeTempDir';
 
 vi.mock('electron', () => ({ app: { getPath: () => os.tmpdir() } }));
 
@@ -626,7 +627,7 @@ describe('task.push RPC', () => {
   type Handler = (params: Record<string, unknown>, ctx?: Record<string, unknown>) => Promise<unknown>;
   // Every wmux dir a case's setup makes, removed after it.
   const dirs: string[] = [];
-  afterEach(() => { for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
+  afterEach(() => removeTempDirs(dirs), REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS);
   const setup = (over: { row?: unknown; tasks?: unknown[]; caller?: string | null; repoDefault?: string | null; botRepo?: string; head?: string; fail?: boolean; ended?: unknown; reclaimed?: (ws: string, pty: string) => { taskId: string; botId: string; ownerWorkspaceId: string } | null } = {}) => {
     const handlers = new Map<string, Handler>();
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-task-push-rpc-'));

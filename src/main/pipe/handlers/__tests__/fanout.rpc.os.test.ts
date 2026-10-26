@@ -47,6 +47,7 @@ import type { LedgerEntry } from '../../../../shared/ledger';
 import type { FanoutPreset } from '../../../../shared/fanoutPreset';
 import type { DaemonClient } from '../../../DaemonClient';
 import { validateFanoutTaskGraph } from '../../../../shared/fanoutTaskGraph';
+import { REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS, removeTempDirs } from '../../../../test-utils/removeTempDir';
 
 // Every temp dir this file makes, removed once it ends. A fan-out run is
 // detached and its guards may still append to their audit file after a case
@@ -57,9 +58,7 @@ function tempDir(prefix: string): string {
   tempDirs.push(dir);
   return dir;
 }
-afterAll(() => {
-  for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
-});
+afterAll(() => removeTempDirs(tempDirs), REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS);
 
 const CALLER_WS = 'ws-caller';
 // Resolved to NATIVE form. The handler runs the caller's cwd through

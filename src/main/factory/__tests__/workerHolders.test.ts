@@ -16,6 +16,7 @@ import { openBotWorkers } from '../openBotWorkers';
 import { FanOutGuards, recordFanoutTaskPane, setFanOutGuardsForTests, stampFanoutTaskPane, taskOfWorkspace } from '../../worktask/fanoutGuards';
 import { WORKER_SLOTS_FILENAME, WorkerSlots, setReclaimedPaneSource, setWorkerSlotsForTests, taskOfPane } from '../workerSlots';
 import { STOPPED_BY_OWNER } from '../factoryStop';
+import { REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS, removeTempDirs } from '../../../test-utils/removeTempDir';
 
 const NOW = 10_000_000_000;
 const DAY = 24 * 3_600_000;
@@ -275,13 +276,13 @@ function rig(over: Partial<HolderSnapshot> = {}): Rig {
   return r;
 }
 
-afterEach(() => {
+afterEach(async () => {
   setReclaimedPaneSource(null);
   setHolderSource(null);
   setFanOutGuardsForTests(null);
   setWorkerSlotsForTests(null);
-  for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
-});
+  await removeTempDirs(tempDirs);
+}, REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS);
 
 describe('the four caps agree on the paths that used to split them (#2393)', () => {
   it('cold restart, daemon down: a task seen gone before frees every cap, one running at shutdown holds every cap', () => {

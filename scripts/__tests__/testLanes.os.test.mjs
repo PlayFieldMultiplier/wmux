@@ -25,6 +25,7 @@ import {
   listTestFiles,
   nameForLane,
 } from '../lib/test-lanes.mjs';
+import { REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS, removeTempDirs } from '../../src/test-utils/removeTempDir.ts';
 
 const CP = 'node:' + 'child_process';
 const NET = 'net';
@@ -89,9 +90,7 @@ describe('the named lanes', () => {
 
 // Every throwaway tree a case makes, removed after it.
 const trees = [];
-afterEach(() => {
-  for (const root of trees.splice(0)) fs.rmSync(root, { recursive: true, force: true });
-});
+afterEach(() => removeTempDirs(trees), REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS);
 
 /** A throwaway repo-shaped tree: { 'rel/path': source }. */
 function tree(files) {

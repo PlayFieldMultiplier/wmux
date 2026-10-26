@@ -12,6 +12,7 @@ import { noteBotWorkerSession } from '../../agents/botWorkerMergeGuard';
 import { MODEL_ENV_MARKER } from '../../../shared/workerLaunch';
 import { setTaskLedgerForTests } from '../../deck/taskLedgerHost';
 import { FanOutGuards, recordFanoutTaskPane, setFanOutGuardsForTests, stampFanoutTaskPane, taskOfWorkspace } from '../../worktask/fanoutGuards';
+import { REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS, removeTempDirs } from '../../../test-utils/removeTempDir';
 
 const BOT = 'bot-0000000a';
 // Every temp dir a case makes, removed after it.
@@ -33,12 +34,12 @@ const row = (id: string, over: Partial<LedgerEntry> = {}): LedgerEntry => ({
   updatedAt: 1_000, updatedBy: { kind: 'worker', workspaceId: `ws-${id}` }, dispatch: { origin: { kind: 'bot', botId: BOT } }, ...over,
 });
 
-afterEach(() => {
+afterEach(async () => {
   setWorkerSlotsForTests(null);
   setFanOutGuardsForTests(null);
   __resetWorkspaceMirrorForTest();
-  for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
-});
+  await removeTempDirs(tempDirs);
+}, REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS);
 
 describe('WorkerSlots', () => {
   it('a restart keeps each task\'s generation and each pane\'s task', () => {

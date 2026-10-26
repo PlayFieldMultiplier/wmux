@@ -10,6 +10,7 @@ import { computeHolders, holderCounts, setHolderSource, type HolderSnapshot } fr
 import { WORKER_SLOTS_FILENAME, WorkerSlots } from '../workerSlots';
 import type { ReclaimedWorker, WorkerSessionInfo } from '../workerReclaim';
 import { FanOutGuards, refreshDormantTaskWorkspaces, setDormantRefresh, setFanOutGuardsForTests } from '../../worktask/fanoutGuards';
+import { REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS, removeTempDirs } from '../../../test-utils/removeTempDir';
 
 const REFRESH_MS = 10_000;
 
@@ -110,13 +111,13 @@ function world(tasks: Record<string, Task>, opts: { dir?: string; closed?: Recor
 const exited = (pty: string): WorkerSessionInfo => ({ id: pty, agentProcessAlive: false });
 const running = (pty: string): WorkerSessionInfo => ({ id: pty, agentProcessAlive: true });
 
-afterEach(() => {
+afterEach(async () => {
   setHolderSource(null);
   setFanOutGuardsForTests(null);
   setDormantRefresh(null);
   vi.useRealTimers();
-  for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
-});
+  await removeTempDirs(tempDirs);
+}, REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS);
 
 describe('task workspace liveness (#2387)', () => {
   it('a read before the workspace list is pushed is not kept: the previous values stay and the next read is not held off', async () => {

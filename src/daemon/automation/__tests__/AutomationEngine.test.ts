@@ -6,6 +6,7 @@ import type { AutomationEvent, AutomationRun } from '../../../shared/automation'
 import type { SessionPromptScheduleResult } from '../../../shared/sessionPromptSchedule';
 import { AutomationEngine, screenShowsPrompt, type AutomationAgentView, type AutomationEnginePorts } from '../AutomationEngine';
 import { AUTOMATION_RUNS_FILE, AUTOMATIONS_FILE, snapshotPath } from '../store';
+import { REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS, removeTempDirs } from '../../../test-utils/removeTempDir';
 
 const MIN = 60_000;
 
@@ -19,10 +20,10 @@ function tempDir(prefix: string): string {
   tempDirs.push(dir);
   return dir;
 }
-afterAll(() => {
+afterAll(async () => {
   for (const engine of engines.splice(0)) engine.stop();
-  for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
-});
+  await removeTempDirs(tempDirs);
+}, REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS);
 
 const draft = (over: Record<string, unknown> = {}) => ({
   name: 'Nightly',

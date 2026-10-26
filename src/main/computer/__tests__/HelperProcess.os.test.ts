@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { ComputerError } from '../../../shared/computer/errors';
 import { HelperProcess } from '../HelperProcess';
 import { deliberateSleep } from '../../../test-utils/waitFor';
+import { REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS, removeTempDirs } from '../../../test-utils/removeTempDir';
 
 const TARGET = { pid: 1, windowId: 'w1' };
 const FAKE = path.join(__dirname, 'fixtures', 'fakeHelper.mjs');
@@ -70,8 +71,8 @@ afterEach(async () => {
   await Promise.all(children.splice(0).map((child) => (child.exitCode !== null || child.signalCode !== null
     ? undefined
     : new Promise<void>((resolve) => { child.once('exit', () => resolve()); }))));
-  for (const dir of logDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
-});
+  await removeTempDirs(logDirs);
+}, REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS);
 
 describe('HelperProcess', () => {
   it('starts on first request and answers it', async () => {

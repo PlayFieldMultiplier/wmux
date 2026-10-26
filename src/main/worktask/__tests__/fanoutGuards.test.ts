@@ -24,15 +24,16 @@ import {
   stampFanoutTaskPane,
   type FanOutAuditRecord,
 } from '../fanoutGuards';
+import { REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS, removeTempDirs } from '../../../test-utils/removeTempDir';
 
 // Every temp dir a case makes, removed after it.
 const tempDirs: string[] = [];
 
-afterEach(() => {
+afterEach(async () => {
   setHolderSource(null);
   setFanOutGuardsForTests(null);
-  for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
-});
+  await removeTempDirs(tempDirs);
+}, REMOVE_TEMP_DIR_HOOK_TIMEOUT_MS);
 
 /** What the worker lifecycle host installs: the holder set every live cap
  *  reads (factory/workerHolders.ts), over `g` (the hosted guards) and the
