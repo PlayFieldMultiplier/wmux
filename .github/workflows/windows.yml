@@ -13,6 +13,11 @@ name: Windows full suite
 # - on every push to main, so a regression is pinned to a merge or a short
 #   range of merges. A newer push cancels the run in flight, so a burst of
 #   merges costs two Windows runners once;
+# - on a ready (non-draft) pull request that touches a script under scripts/,
+#   a vite or vitest config, or .gitattributes. Those load into every suite
+#   but their own tests sit in the unit lane, which a pull request runs on
+#   Linux only; a CRLF checkout broke them on Windows alone (#2769). Two
+#   Windows shards, about 10 minutes each, per matching push;
 # - on demand: `gh workflow run windows.yml --ref <branch>` for a pull request
 #   that touches platform code without saying win32.
 #
@@ -26,20 +31,32 @@ on:
   push:
     branches:
       - main
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'scripts/**/*.mjs'
+      - 'scripts/**/*.js'
+      - 'scripts/**/*.cjs'
+      - 'vite*.config.ts'
+      - 'vitest*.config.ts'
+      - '.gitattributes'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  # Pushes to main share one group and supersede each other. The nightly and
-  # manual runs get their own groups, so a merge never cancels them.
+  # Pushes to main share one group and supersede each other. A pull request's
+  # runs share a group of their own (its ref) and supersede each other only.
+  # The nightly and manual runs get their own groups, so a merge or a pull
+  # request never cancels them.
   group: windows-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'push' }}
+  cancel-in-progress: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
 
 jobs:
   windows:
     name: windows (${{ matrix.shard }}/2)
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: windows-latest
     # Both lanes on one runner took ~8 min of tests per shard before the
     # lanes; the cap only stops a hang.
@@ -143,7 +160,7 @@ jobs:
   report:
     name: Report to issue
     needs: windows
-    if: always() && github.ref == 'refs/heads/main'
+    if: always() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     # Files and closes the issue (issues), reads the run's jobs and recent

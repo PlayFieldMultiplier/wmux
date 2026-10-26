@@ -108,7 +108,7 @@ const MODULE_NAMES = OS_MODULES.join('|');
 const OS_LITERAL = new RegExp(`['"](?:node:)?(${MODULE_NAMES})['"]`, 'g');
 const IMPORT_BEFORE = /(?:\bfrom|\bimport|\brequire\s*\(|\bimport\s*\()\s*$/;
 const MOCK_CALL = /\bvi\s*\.\s*(?:do)?[mM]ock\s*\(\s*['"]([^'"]+)['"]/g;
-const RELATIVE_IMPORT = /(?:\bfrom\s*|\bimport\s*\(\s*|^\s*import\s+)['"](\.{1,2}\/[^'"]+)['"]/gm;
+export const RELATIVE_IMPORT = /(?:\bfrom\s*|\bimport\s*\(\s*|^\s*import\s+)['"](\.{1,2}\/[^'"]+)['"]/gm;
 const PRAGMA = /^[ \t]*\/\/[ \t]*@wmux-lane[ \t]+(\S+)/m;
 const MKDTEMP = /\bmkdtemp(?:Sync)?\b/;
 // Rule 5. A substring, not a word: `win32` never appears in this codebase
@@ -151,9 +151,13 @@ export function listTestFiles(root = ROOT) {
  * (`import type ...` or `import { type A, type B }`): TypeScript erases it, so
  * nothing reaches the OS.
  */
-function isTypeOnlyImport(source, index) {
-  const before = source.slice(Math.max(0, index - 2000), index);
-  const stmt = before.slice(before.lastIndexOf('import'));
+export function isTypeOnlyImport(source, index) {
+  // Comments go first, and the statement starts at the last `import` word:
+  // "import" in a comment or inside a name is no statement start.
+  const before = source.slice(Math.max(0, index - 2000), index).replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '');
+  const starts = [...before.matchAll(/\bimport\b/g)];
+  if (starts.length === 0) return false;
+  const stmt = before.slice(starts[starts.length - 1].index);
   if (/^import\s+type\b/.test(stmt)) return true;
   const named = stmt.match(/^import\s*\{([^}]*)\}\s*from\s*$/);
   if (!named) return false;
@@ -199,7 +203,7 @@ export function pragmaOf(source, file = '<source>') {
 }
 
 /** Absolute path of a relative import, or null when it is not a file here. */
-function resolveRelative(fromAbs, spec) {
+export function resolveRelative(fromAbs, spec) {
   // TS sources import siblings as `./x.js`; the file on disk is x.ts.
   const bases = [path.resolve(path.dirname(fromAbs), spec)];
   if (/\.[cm]?js$/.test(spec)) bases.push(bases[0].replace(/\.[cm]?js$/, ''));

@@ -124,6 +124,9 @@ describe('the rule', () => {
     expect(classify({ [T]: `import type { ChildProcess } from '${CP}';\n` }).lane).toBe('unit');
     expect(classify({ [T]: `import { type Socket, type Server } from '${NET}';\n` }).lane).toBe('unit');
     expect(classify({ [T]: `import { type Socket, connect } from '${NET}';\n` }).lane).toBe('integration');
+    // The word "import" in a comment or a name inside the braces is no statement start.
+    expect(classify({ [T]: `import {\n  type A, // see import type docs\n  spawn,\n} from '${CP}';\n` }).lane).toBe('integration');
+    expect(classify({ [T]: `import { type A, type importer } from '${CP}';\n` }).lane).toBe('unit');
     expect(
       classify({ [T]: `vi.mock('${CP}', () => ({ spawn: vi.fn() }));\nimport { spawn } from '${CP}';\n` }).lane,
     ).toBe('unit');
