@@ -311,6 +311,11 @@ function apiArgs(args: string[]): string[] {
   return args[0] === 'api' && args[1] === '--hostname' ? args.slice(3) : [];
 }
 
+/** The merge request POST (a GraphQL read is a `-X POST` too). */
+function isMrPost(args: string[]): boolean {
+  return apiArgs(args)[0] === '-X' && !args.includes('graphql');
+}
+
 function glHappy(cmd: string, args: string[]): { stdout: string } | { throw: string } {
   const a = argStr(args);
   if (cmd === 'git' && a === 'remote get-url --push origin') return { stdout: `${GL_ORIGIN}\n` };
@@ -338,7 +343,7 @@ function makeGlService(behavior: (cmd: string, args: string[]) => { stdout: stri
   };
   const glab = new GlabPrService(Date.now, exec);
   const svc = new TaskPrService({ daemon, cache: { invalidate: vi.fn() }, exec, glab, scanGit: cleanScan });
-  const posts = () => calls.filter((c) => isGlab(c.cmd) && apiArgs(c.args)[0] === '-X' && !c.args.includes('graphql'));
+  const posts = () => calls.filter((c) => isGlab(c.cmd) && isMrPost(c.args));
   return { svc, calls, daemonCalls, posts };
 }
 
@@ -373,7 +378,7 @@ describe('task_pr on GitLab (glab)', () => {
   it('returns the open MR for the branch instead of opening a second one', async () => {
     const { svc, posts } = makeGlService((cmd, args) => {
       const api = apiArgs(args);
-      if (isGlab(cmd) && api[0] === '-X') return { throw: 'glab: Another open merge request already exists for this source branch: !7 (HTTP 409)' };
+      if (isGlab(cmd) && isMrPost(args)) return { throw: 'glab: Another open merge request already exists for this source branch: !7 (HTTP 409)' };
       if (isGlab(cmd) && api[0]?.startsWith(`${GL_PROJECT}/merge_requests?`)) {
         expect(api[0]).toContain('state=opened');
         expect(api[0]).toContain(`source_branch=${encodeURIComponent(INPUT.branch)}`);
@@ -433,7 +438,7 @@ describe('task_pr on GitLab (glab)', () => {
 
   it('a failed create with no open MR is pr-failed; one glab answered 401 is gh-unauth', async () => {
     const failing = (stderr: string) => makeGlService((cmd, args) =>
-      isGlab(cmd) && apiArgs(args)[0] === '-X' ? { throw: stderr } : glHappy(cmd, args),
+      isGlab(cmd) && isMrPost(args) ? { throw: stderr } : glHappy(cmd, args),
     );
     const blip = await failing('Post "https://gitlab.example.com/api/v4/projects/group%2Fsub%2Fproj/merge_requests": EOF').svc.createPr(INPUT);
     expect(blip.ok === false && blip.reason).toBe('pr-failed');
@@ -622,7 +627,7 @@ describe('task_pr on GitLab: the rest of the contract', () => {
   it('builds the MR URL when web_url is missing or is not that MR\'s page', async () => {
     for (const web_url of [undefined, 'https://gitlab.example.com/group/sub/proj/-/merge_requests/8', 'javascript:alert(1)']) {
       const { svc } = makeGlService((cmd, args) =>
-        isGlab(cmd) && apiArgs(args)[0] === '-X' ? { stdout: JSON.stringify({ iid: 7, web_url }) } : glHappy(cmd, args),
+        isGlab(cmd) && isMrPost(args) ? { stdout: JSON.stringify({ iid: 7, web_url }) } : glHappy(cmd, args),
       );
       expect(await svc.createPr(INPUT)).toEqual({ ok: true, prUrl: GL_MR, mrIid: 7 });
     }
@@ -631,7 +636,7 @@ describe('task_pr on GitLab: the rest of the contract', () => {
   it('reads only glab\'s stderr for a sign-out: a 401 in the command line is not one', async () => {
     const { svc } = makeGlService((cmd, args) => {
       if (cmd === 'git' && argStr(args) === 'remote get-url --push origin') return { stdout: 'git@gitlab.example.com:team-401/proj.git\n' };
-      if (isGlab(cmd) && apiArgs(args)[0] === '-X') return { throw: 'Post "https://gitlab.example.com/api/v4/projects/team-401%2Fproj/merge_requests": EOF' };
+      if (isGlab(cmd) && isMrPost(args)) return { throw: 'Post "https://gitlab.example.com/api/v4/projects/team-401%2Fproj/merge_requests": EOF' };
       return glHappy(cmd, args);
     });
     // The title puts "401 Unauthorized" in the command line, so in err.message.
