@@ -854,6 +854,14 @@ export interface ArchivedWorkspace {
 /** The Fleet page's layout: the attention list, or the same rows as a four-column board. */
 export type FleetLayout = 'list' | 'board';
 
+/** One app window's slice of the session. A workspace belongs to exactly one
+ *  window. Bounds live in window-state.json, not here. */
+export interface SessionWindow {
+  id: string;
+  workspaceIds: string[];
+  activeWorkspaceId?: string;
+}
+
 export interface SessionData {
   workspaces: Workspace[];
   activeWorkspaceId: string;
@@ -865,6 +873,14 @@ export interface SessionData {
    *  workspace numbers across restart). Optional for pre-P2 sessions. */
   nextWorkspaceOrdinal?: number;
   sidebarVisible: boolean;
+  /** Multiple windows (roadmap P2-1). Which window shows which workspaces;
+   *  windows[0] is the primary window. `workspaces` above stays the union of
+   *  every window's workspaces, so an older version that ignores this field
+   *  still restores every workspace (in its one window). Absent or unusable =
+   *  one window with every workspace. Read through resolveSessionWindows()
+   *  (sessionWindows.ts), never directly. Not written yet: the renderer still
+   *  saves a single-window session. */
+  windows?: SessionWindow[];
   /** Right-side channel dock visibility. Optional for backward-compat with
    *  pre-dock sessions (defaults to false on load). */
   channelDockVisible?: boolean;
