@@ -69,6 +69,28 @@ describe('buildShimCmd', () => {
   });
 });
 
+// The live blocks below run stand-in executables (copies or hard links of
+// node.exe) from their temp root. Something outside the test can keep such an
+// image open for seconds after its process has exited, and the delete then
+// fails with EPERM/EBUSY while no process of ours runs. On the GitHub Windows
+// runner that is provjobd.exe: handle64 showed it holding the just-run
+// wmux.exe or codex.exe, released 1-14 s later; on a desktop an antivirus scan
+// does the same. rmSync's own retries (EBUSY/EPERM, linear backoff) wait that
+// out, up to about 27 s; past that the error lists what is still there.
+const RAN_ROOT_RETRIES = 16;
+const RAN_ROOT_RETRY_DELAY_MS = 200;
+/** The cleanup hook's own budget: the retries' 200 ms × (1 + … + 16) ≈ 27 s, plus the removal itself. */
+const RAN_ROOT_CLEANUP_TIMEOUT_MS = 40_000;
+const removeRanRoot = (root: string) => {
+  try {
+    nodeFs.rmSync(root, { recursive: true, force: true, maxRetries: RAN_ROOT_RETRIES, retryDelay: RAN_ROOT_RETRY_DELAY_MS });
+  } catch (err) {
+    let left: string[] = [];
+    try { left = nodeFs.readdirSync(root, { recursive: true }).map(String); } catch { /* the root itself is what failed */ }
+    throw new Error(`${(err as Error).message}\nstill there: ${left.join(', ') || '(nothing listed)'}`);
+  }
+};
+
 // Runs the generated script under a root whose path holds a space, `&` and
 // parentheses, with Node standing in for wmux.exe and Codex. The handoff's
 // lines are the real CLI's (codexHandoffLines); the stand-in only puts the
@@ -144,7 +166,7 @@ describe.skipIf(process.platform !== 'win32')('wmux.cmd codex launch (live cmd.e
     ].join('\r\n'));
   });
 
-  afterAll(() => { if (root) nodeFs.rmSync(root, { recursive: true, force: true }); });
+  afterAll(() => { if (root) removeRanRoot(root); }, RAN_ROOT_CLEANUP_TIMEOUT_MS);
 
   const codexEvent = (argv: string[], cwd: string) => ({
     codex: ['--remote', 'ws://127.0.0.1:1', ...argv],
@@ -272,7 +294,7 @@ describe.skipIf(process.platform !== 'win32')('wmux.cmd codex handoff errors (li
     ].join('\n'));
   }, 60_000);
 
-  afterAll(() => { if (root) nodeFs.rmSync(root, { recursive: true, force: true }); });
+  afterAll(() => { if (root) removeRanRoot(root); }, RAN_ROOT_CLEANUP_TIMEOUT_MS);
 
   it('shows the real handoff\'s error and exits 1, leaving no file behind', async () => {
     const r = await run('codex resume');
@@ -449,17 +471,13 @@ describe.skipIf(process.platform !== 'win32')('PATH edit (live registry, sandbox
   const SEED = '%USERPROFILE%\\AppData\\Roaming\\npm;C:\\Program Files\\nodejs';
   const PS = `${process.env.SystemRoot || 'C:\\Windows'}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`;
 
-  // The first runs on a fresh machine pay one-time cold starts: powershell.exe
-  // itself, and the C# compile behind the edit script's Add-Type (the
-  // WM_SETTINGCHANGE broadcast), the first one on the machine. #576 measured
-  // 5.6s for the first case. The compile is the large one: on the Windows
-  // runner the first Add-Type took 0.7-1.1 s against 0.1-0.2 s for the next ones
-  // in new processes, and in the slow runs the first FullLanguage add took up
-  // to 19 s, or was killed at 20 s, while every later add took 1-2 s. They are
-  // absorbed once in a hook with a budget of its own rather than billed to
-  // whichever case happens to run first, which is how #576 flaked and what its
-  // 5s → 15s widening left unaddressed — a wider budget moves that threshold,
-  // it does not stop a one-time cost from landing inside a per-test one.
+  // The first powershell.exe in a process pays a one-time cold start — its own
+  // binaries and the .NET images are not in the OS file cache yet. #576
+  // measured 5.6s for it; a run on this branch exceeded 10s. It is absorbed
+  // once in a hook with a budget of its own rather than billed to whichever
+  // case happens to run first, which is how #576 flaked and what its 5s → 15s
+  // widening left unaddressed — a wider budget moves that threshold, it does
+  // not stop a one-time cost from landing inside a per-test one.
   const WARMUP_TIMEOUT_MS = 60_000;
 
   const ps = (script: string, timeoutMs: number = SPAWN_TIMEOUT_MS) => {
@@ -509,7 +527,7 @@ describe.skipIf(process.platform !== 'win32')('PATH edit (live registry, sandbox
     subs.map((s) => `if (Test-Path 'HKCU:\\${s}') { Remove-Item 'HKCU:\\${s}' -Recurse -Force }`).join('\n'),
   );
 
-  const seed = (timeoutMs?: number) => psOk('seed sandbox key',
+  const seed = () => psOk('seed sandbox key',
     `$ErrorActionPreference = 'Stop'\n` +
     `if (Test-Path 'HKCU:\\${SUB}') { Remove-Item 'HKCU:\\${SUB}' -Recurse -Force }\n` +
     `New-Item -Path 'HKCU:\\${SUB}' -Force | Out-Null\n` +
@@ -520,7 +538,6 @@ describe.skipIf(process.platform !== 'win32')('PATH edit (live registry, sandbox
     // that is the property these cases exist to protect.
     `$raw = (Get-Item 'HKCU:\\${SUB}').GetValue('Path', $null, 'DoNotExpandEnvironmentNames')\n` +
     `if ($raw -ne '${SEED}') { throw "seed left Path as '$raw'" }`,
-    timeoutMs,
   );
 
   /** Raw (unexpanded) current value of the sandbox Path, via reg.exe. */
@@ -547,18 +564,12 @@ describe.skipIf(process.platform !== 'win32')('PATH edit (live registry, sandbox
     return ps(prefix + buildPathEditScript(BIN, op, SUB, BAK));
   };
 
-  // Pay the cold starts here, where they have their own budget and their own
-  // name. Starting powershell.exe alone is not enough: the large one-time cost
-  // is the first Add-Type compile, which only the real FullLanguage edit script
-  // reaches (an add that changes the key). If PowerShell is genuinely unusable
-  // this reports that once, up front, instead of disguising it as the first
-  // case's failure.
+  // Pay the cold start here, where it has its own budget and its own name. If
+  // PowerShell is genuinely unusable this reports that once, up front, instead
+  // of disguising it as the first case's failure.
   beforeAll(() => {
     psOk('warm up powershell', 'exit 0', WARMUP_TIMEOUT_MS);
-    seed(WARMUP_TIMEOUT_MS);
-    psOk('warm up the PATH edit', buildPathEditScript(BIN, 'add', SUB, BAK), WARMUP_TIMEOUT_MS);
-    dropKeys('warm-up sandbox keys', SUB, BAK);
-  }, 3 * WARMUP_TIMEOUT_MS + SPAWN_TIMEOUT_MS + 5_000);
+  }, WARMUP_TIMEOUT_MS + 5_000);
 
   afterEach(() => {
     // Also checked: teardown that could not run leaves keys behind, and the
