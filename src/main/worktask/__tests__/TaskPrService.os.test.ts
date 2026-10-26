@@ -5,7 +5,8 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { TaskPrService, execWithInput, type PrExec, type CreatePrInput } from '../TaskPrService';
+import { TaskPrService, type PrExec, type CreatePrInput } from '../TaskPrService';
+import { execWithInput } from '../../github/execWithInput';
 import { spawnGitLines, type GitLines } from '../../git/secretScan';
 import { GlabPrService } from '../../github/GlabPrService';
 import type { ForgeHosts } from '../../../shared/forgeHosts';
@@ -34,10 +35,10 @@ const INPUT: CreatePrInput = {
 /** exec 스텁: (cmd,args) 시그니처별로 stdout 반환 또는 throw. 호출 로그 노출. */
 function makeExec(
   behavior: (cmd: string, args: string[]) => { stdout: string } | { throw: string },
-): { exec: PrExec; calls: Array<{ cmd: string; args: string[] }> } {
-  const calls: Array<{ cmd: string; args: string[] }> = [];
-  const exec: PrExec = async (cmd, args) => {
-    calls.push({ cmd, args });
+): { exec: PrExec; calls: Array<{ cmd: string; args: string[]; input?: string }> } {
+  const calls: Array<{ cmd: string; args: string[]; input?: string }> = [];
+  const exec: PrExec = async (cmd, args, opts) => {
+    calls.push({ cmd, args, input: opts.input });
     const r = behavior(cmd, args);
     if ('throw' in r) {
       // As execFile rejects: the message holds the command line, stderr is
@@ -352,10 +353,11 @@ describe('task_pr on GitLab (glab)', () => {
     expect(post).toHaveLength(1);
     expect(post[0].args.slice(0, 3)).toEqual(['api', '--hostname', 'gitlab.example.com']);
     expect(apiArgs(post[0].args)).toEqual([
-      '-X', 'POST', `${GL_PROJECT}/merge_requests`,
-      '-f', `source_branch=${INPUT.branch}`, '-f', 'target_branch=main',
-      '-f', `title=${INPUT.title}`, '-f', 'description=-starts with a dash',
+      '-X', 'POST', `${GL_PROJECT}/merge_requests`, '--input', '-', '-H', 'Content-Type: application/json',
     ]);
+    expect(JSON.parse(post[0].input ?? '')).toEqual({
+      source_branch: INPUT.branch, target_branch: 'main', title: INPUT.title, description: '-starts with a dash',
+    });
     expect(daemonCalls.find((c) => c.method === 'task.mission.update')?.params.prUrl).toBe(GL_MR);
   });
 

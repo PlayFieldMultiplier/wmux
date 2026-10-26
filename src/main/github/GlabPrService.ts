@@ -15,8 +15,6 @@
 //  - the factory's reads and merge (laneFacts, defaultBranchCi, merge,
 //    currentLogin) name the project and host on every call (`--hostname`,
 //    the remote key's path), as GlabIssueService does, never the cwd's repo.
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import {
   PR_COMMENT_BODY_CAP,
   cliPath,
@@ -31,8 +29,7 @@ import { mergeBlock, type MergeBlock, type PrCheck, type PrCheckBucket, type PrL
 import type { CiRollup } from '../pipe/handlers/factoryRead.rpc';
 import { WORKTASK_MR_URL_RE } from '../../shared/workTask';
 import { forgeHosts, glabEntryFor, type ForgeHosts } from '../../shared/forgeHosts';
-
-const execFileAsync = promisify(execFile);
+import { execWithInput, type ExecWithInputOptions } from './execWithInput';
 
 const LIST_TTL_MS = 30_000;
 const GLAB_TIMEOUT_MS = 10_000;
@@ -69,7 +66,7 @@ function cacheKey(repoPath: string): string {
 type Exec = (
   cmd: string,
   args: string[],
-  opts: { cwd: string; timeout: number; env: NodeJS.ProcessEnv; windowsHide: boolean; maxBuffer?: number },
+  opts: ExecWithInputOptions,
 ) => Promise<{ stdout: string }>;
 
 // ── GitLab REST 페이로드 매핑(순수, 테스트용 export) ─────────────────────────
@@ -588,7 +585,7 @@ export class GlabPrService implements PrProvider {
 
   constructor(
     private now: () => number = Date.now,
-    private exec: Exec = execFileAsync,
+    private exec: Exec = execWithInput,
   ) {}
 
   private glab(args: string[], cwd: string): Promise<{ stdout: string }> {
@@ -764,7 +761,7 @@ export class GlabPrService implements PrProvider {
 
   // ── The factory's reads and merge (named project, never cached) ──────────
 
-  private api(host: string, args: string[], cwd: string): Promise<{ stdout: string }> {
+  private api(host: string, args: string[], cwd: string, input?: string): Promise<{ stdout: string }> {
     const target = glabHostTarget(host);
     return this.exec(process.platform === 'win32' ? 'glab.exe' : 'glab', ['api', ...target.args, ...args], {
       cwd,
@@ -772,6 +769,7 @@ export class GlabPrService implements PrProvider {
       env: target.env,
       windowsHide: true,
       maxBuffer: FACTORY_MAX_BUFFER,
+      input,
     });
   }
 
@@ -926,12 +924,13 @@ export class GlabPrService implements PrProvider {
     try {
       const project = GlabPrService.project(key);
       for (const ref of [req.source, req.target]) if (!ref || ref.startsWith('-')) throw new Error(`not a branch name: ${ref}`);
+      // The fields go as one JSON object on stdin, never argv: a long
+      // description would pass Windows' command-line limit.
+      const fields = { source_branch: req.source, target_branch: req.target, title: req.title, description: req.description };
       const { stdout } = await this.api(project.host, [
         '-X', 'POST', `projects/${encodeURIComponent(project.path)}/merge_requests`,
-        // `=` forms: a title or description starting with "-" stays a value.
-        '-f', `source_branch=${req.source}`, '-f', `target_branch=${req.target}`,
-        '-f', `title=${req.title}`, '-f', `description=${req.description}`,
-      ], cwd);
+        '--input', '-', '-H', 'Content-Type: application/json',
+      ], cwd, JSON.stringify(fields));
       const mr = glabMrRef(JSON.parse(stdout), project);
       if (!mr) throw new Error('GitLab answered without a merge request');
       return { ok: true, ...mr };
