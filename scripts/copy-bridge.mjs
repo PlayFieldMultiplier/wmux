@@ -75,7 +75,7 @@ buildSync({
   outfile: join(destDir, 'wmux-wsl-codex-config.mjs'),
   bundle: true, platform: 'node', format: 'esm',
 });
-// Only this bundled file gets the ASCII-only step (scripts/ascii-only-files.mjs).
+// Only this bundled file gets the ASCII-only step (scripts/lib/ascii-only-files.mjs).
 // The bridges above stay byte-for-byte copies: the installers find a wmux-owned
 // copy by a marker in a source comment (src/shared/lifecycleIntegrations.ts),
 // and compare quota-sink.js byte for byte with its installed copy.

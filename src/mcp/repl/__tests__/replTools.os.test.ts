@@ -251,7 +251,7 @@ describe('repl_run browser binding', () => {
 
   it('keeps both child-program sources one-byte, since esbuild cannot escape a String.raw', () => {
     // Write such a character as \uXXXX inside the child's own string literals
-    // (build:mcp fails otherwise; scripts/ascii-only-files.mjs).
+    // (build:mcp fails otherwise; scripts/lib/ascii-only-files.mjs).
     expect(REPL_RUNNER_SOURCE).not.toMatch(/[\u0100-\uffff]/);
     expect(BROWSER_REPL_WORKER_SOURCE).not.toMatch(/[\u0100-\uffff]/);
   });
