@@ -13,7 +13,14 @@
 //                  one conversation across wakes, so nothing is saved from
 //                  one that ran a tainted or guest wake until a fresh one
 //                  starts; no live conversation is refused. Its own notes
-//                  are written at once. The owner's profile (`user`) is
+//                  are written at once. From a conversation that took in
+//                  outside text (but none holding a signed-in task's data),
+//                  a change the owner's own message asked for (their stored
+//                  card, factory/ownerAsked.ts) becomes an approval card
+//                  showing the owner's message and the change (`bot_memory`
+//                  for its notes, `owner_profile` for the profile:
+//                  approvals.ts proposeOwnerAsked), and the owner's Approve
+//                  applies it, checked again. The owner's profile (`user`) is
 //                  never written by a bot: the change is checked and raised
 //                  as an `owner_profile` approval card (factory/approvals.ts
 //                  proposeOwnerProfile), only in a wake on the owner's words
@@ -32,11 +39,12 @@ import type { RpcContext } from '../../../shared/rpc';
 import type { WakeReason } from '../../../shared/wake';
 import { registerFactoryRpcModule, type FactoryHostDeps, type FactoryModuleHandle, type FactoryRouter } from '../../factory/factoryHost';
 import { applyMemoryChange, clearMemory, forgetMemoryOfRemovedBots, planMemoryChange, readMemoryView, removeMemoryEntry, updateMemory } from '../../factory/botMemory';
-import { getApprovalService, type ApprovalOwnerProfileHost } from '../../factory/approvals';
+import { getApprovalService, ownerAskedTextProblem, type ApprovalOwnerProfileHost, type OwnerAsk } from '../../factory/approvals';
+import { runningOwnerCardProof, type OwnerCardProof } from '../../factory/ownerAsked';
 import { guestOfRunningWake, runningWakeTainted, type GuestProvenance } from '../../factory/wakeTaint';
 import { currentWakeItem } from '../../factory/wakeQueue';
 import { getBotRuntime, onBotRemoved } from '../../factory/BotRuntime';
-import { conversationMarks, type ConversationMarks } from '../../factory/conversationMarks';
+import { conversationMarks, conversationSignedIn, type ConversationMarks } from '../../factory/conversationMarks';
 import { summarizeHandoff } from '../../factory/handoffRouter';
 import { isMainWindowSender } from '../../ipc/mainWindowSender';
 
@@ -58,6 +66,7 @@ export const MEMORY_GUEST_REFUSAL = 'this turn comes from an external guest\'s m
 export const MEMORY_TAINT_REFUSAL = 'this turn started from outside text (a pull request, an issue, CI, or work that read them), or wmux cannot tell where it started, and such a turn saves no memory; save it in a turn the owner starts';
 export const MEMORY_CONVERSATION_REFUSAL = 'this conversation has run a turn started from outside text or by a guest (or wmux cannot tell), and such a conversation saves no memory until a fresh one starts; tell the owner what you would remember';
 export const MEMORY_USER_REFUSAL = 'a change to the owner\'s profile is proposed in a turn on the owner\'s words (their message, their button, or their answer to your question); propose it then, or keep it in your own notes (target memory)';
+export const BOT_MEMORY_PENDING = 'Waiting for the owner: this conversation has read outside text, so the change is on an approval card that shows it, and only their Approve writes it to your notes. The entries below are your notes as they stand now.';
 export const OWNER_PROFILE_PENDING = 'Waiting for the owner: their approval card shows this change, and their Approve applies it (every bot\'s next session starts with it). The entries below are the profile as it stands now.';
 
 /** The reason of the wake `botId` is running now, when the queue and the
@@ -101,6 +110,19 @@ export interface MemoryHandlerDeps {
   /** Raise the owner's approval card for a profile change. Default: the
    *  approval store's proposeOwnerProfile. */
   propose?: (bot: BotBinding, change: MemoryChange) => { ok: true; request: { requestId: string }; duplicate?: true } | { ok: false; code: string; message: string };
+  /** Whether the bot's live conversation holds a signed-in task's data
+   *  (none: yes). Default: conversationMarks.ts. */
+  signedIn?: (botId: string) => boolean;
+  /** The owner's card the running wake is on, or null. Default: ownerAsked.ts. */
+  ownerCard?: (botId: string) => OwnerCardProof | null;
+  /** Raise the owner's card for what they asked in a conversation that took
+   *  in outside text. Default: the approval store's proposeOwnerAsked. */
+  proposeAsked?: (bot: BotBinding, ask: OwnerAsk, proof: OwnerCardProof) => { ok: true; request: { requestId: string }; duplicate?: true } | { ok: false; code: string; message: string };
+}
+
+function proposeAskedToOwner(bot: BotBinding, ask: OwnerAsk, proof: OwnerCardProof): ReturnType<NonNullable<MemoryHandlerDeps['proposeAsked']>> {
+  const service = getApprovalService();
+  return service ? service.proposeOwnerAsked(bot, ask, proof) : { ok: false, code: 'not_started', message: 'approvals are not running yet' };
 }
 
 function proposeToOwner(bot: BotBinding, change: MemoryChange): ReturnType<NonNullable<MemoryHandlerDeps['propose']>> {
@@ -108,21 +130,30 @@ function proposeToOwner(bot: BotBinding, change: MemoryChange): ReturnType<NonNu
   return service ? service.proposeOwnerProfile(bot, change) : { ok: false, code: 'not_started', message: 'approvals are not running yet' };
 }
 
-/** Why the bot's running wake may not write `target`, or null. Fails
- *  closed: anything the gate cannot tell refuses. */
-export function memoryWriteRefusal(botId: string, target: MemoryTarget, deps: Pick<MemoryHandlerDeps, 'guestWake' | 'tainted' | 'wakeReason' | 'ownerAnswer' | 'conversation'>): Refusal | null {
+/** Why the bot's running wake may not write `target`, or how it may: at
+ *  once (`card` null), or on the owner's card the wake runs on, for a
+ *  conversation that took in outside text. Fails closed: anything the gate
+ *  cannot tell refuses. */
+export function memoryWriteGate(botId: string, target: MemoryTarget, deps: Pick<MemoryHandlerDeps, 'guestWake' | 'tainted' | 'wakeReason' | 'ownerAnswer' | 'conversation' | 'signedIn' | 'ownerCard'>): Refusal | { card: OwnerCardProof | null } {
   try {
     if ((deps.guestWake ?? guestOfRunningWake)(botId) !== false) return refuse('not_authorized', MEMORY_GUEST_REFUSAL);
     if ((deps.tainted ?? runningWakeTainted)(botId) !== false) return refuse('not_authorized', MEMORY_TAINT_REFUSAL);
     const marks = (deps.conversation ?? conversationMarks)(botId);
-    if (!marks || marks.tainted) return refuse('not_authorized', MEMORY_CONVERSATION_REFUSAL);
+    if (!marks) return refuse('not_authorized', MEMORY_CONVERSATION_REFUSAL);
+    if (marks.tainted) {
+      // Only the owner's own message, and never from a conversation holding
+      // what a signed-in task read (a note could carry it out).
+      if ((deps.signedIn ?? conversationSignedIn)(botId) !== false) return refuse('not_authorized', MEMORY_CONVERSATION_REFUSAL);
+      const card = (deps.ownerCard ?? runningOwnerCardProof)(botId);
+      return card ? { card } : refuse('not_authorized', MEMORY_CONVERSATION_REFUSAL);
+    }
     if (target === 'user') {
       const reason = (deps.wakeReason ?? runningWakeReason)(botId);
       const owners = reason?.kind === 'human' || reason?.kind === 'manual'
         || (reason?.kind === 'handoff' && (deps.ownerAnswer ?? ownerAnswered)(reason.handoffId));
       if (!owners) return refuse('not_authorized', MEMORY_USER_REFUSAL);
     }
-    return null;
+    return { card: null };
   } catch {
     return refuse('not_authorized', MEMORY_TAINT_REFUSAL);
   }
@@ -135,8 +166,9 @@ export function handleMemoryUpdate(raw: unknown, ctx: RpcContext | undefined, de
   const bot = ctx.bot;
   const p = obj(raw);
   if (!isTarget(p.target)) return refuse('invalid', 'target is memory (your notes) or user (the owner\'s profile)');
-  const gate = memoryWriteRefusal(bot.botId, p.target, deps);
-  if (gate) return gate;
+  const gate = memoryWriteGate(bot.botId, p.target, deps);
+  if ('ok' in gate) return gate;
+  if (gate.card) return proposeAsked(wmuxDir, bot, p.target, p, gate.card, deps);
   if (p.target === 'user') {
     // Checked now (the scanner, secrets, the limit, the entry match finds),
     // written only by the owner's Approve.
@@ -162,10 +194,31 @@ export function handleMemoryUpdate(raw: unknown, ctx: RpcContext | undefined, de
   return res;
 }
 
+/** A change the owner asked for in a conversation that took in outside
+ *  text: checked as memory_update checks it, then put on the owner's card,
+ *  which shows it as the bot sent it (nothing redacted away). */
+function proposeAsked(wmuxDir: string, bot: BotBinding, target: MemoryTarget, p: Record<string, unknown>, card: OwnerCardProof, deps: MemoryHandlerDeps): MemoryUpdateResult {
+  if (typeof p.text === 'string') {
+    const problem = ownerAskedTextProblem(p.text.replace(/\r\n?/g, '\n'));
+    if (problem) return refuse('invalid', `this cannot go on the owner's card as it is: ${problem}`);
+  }
+  const plan = planMemoryChange(wmuxDir, target, bot.botId, { action: p.action, text: p.text, match: p.match });
+  if (!plan.ok) return plan;
+  const now = readMemoryView(wmuxDir, target, bot.botId);
+  if (plan.unchanged) return { ok: true, action: plan.change.action, unchanged: true, message: plan.unchanged, ...now };
+  const asked = (deps.proposeAsked ?? proposeAskedToOwner)(bot, { action: target === 'user' ? 'owner_profile' : 'bot_memory', change: plan.change }, card);
+  if (!asked.ok) {
+    const code: Refusal['code'] = asked.code === 'invalid' || asked.code === 'write_failed' || asked.code === 'not_started' ? asked.code : 'not_authorized';
+    return refuse(code, asked.message);
+  }
+  return { ok: true, action: plan.change.action, pending: true, approvalId: asked.request.requestId, message: target === 'user' ? OWNER_PROFILE_PENDING : BOT_MEMORY_PENDING, ...now };
+}
+
 let profileHost: ApprovalOwnerProfileHost | null = null;
 
-/** What the approval store's `owner_profile` Approve does, once the module
- *  started: the change on the card, checked again and written. */
+/** What the approval store's `owner_profile` and `bot_memory` Approve do,
+ *  once the module started: the change on the card, checked again and
+ *  written. */
 export function getOwnerProfileApprovalHost(): ApprovalOwnerProfileHost | null {
   return profileHost;
 }
@@ -175,8 +228,9 @@ export function ownerProfileApprovalHost(wmuxDir: () => string | null, emit: (pa
     approve(r) {
       const dir = wmuxDir();
       if (!dir) return 'memory is not running';
-      if (!r.ownerProfile) return 'the request names no change';
-      const res = applyMemoryChange(dir, 'user', r.botId, r.ownerProfile);
+      const change = r.action === 'bot_memory' ? r.botMemory : r.ownerProfile;
+      if (!change) return 'the request names no change';
+      const res = applyMemoryChange(dir, r.action === 'bot_memory' ? 'memory' : 'user', r.botId, change);
       if (!res.ok) return res.message;
       try {
         emit({ type: 'memory-changed', botId: r.botId });

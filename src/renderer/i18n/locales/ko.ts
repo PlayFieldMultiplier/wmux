@@ -1665,6 +1665,8 @@ export const ko = {
   'room.approval.action.skill': "스킬",
   'room.approval.action.owner_profile': "내 프로필",
   'room.approval.action.native_tool': "Hermes 도구",
+  'room.approval.action.routine': "루틴",
+  'room.approval.action.bot_memory': "봇 메모",
   'room.template.coordinator': "대장",
   'room.template.developer': "개발",
   'room.template.reviewer': "리뷰",

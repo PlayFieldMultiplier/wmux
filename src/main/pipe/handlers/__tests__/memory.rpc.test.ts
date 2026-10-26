@@ -23,7 +23,7 @@ import {
   MEMORY_USER_REFUSAL,
   createMemoryModule,
   handleMemoryUpdate,
-  memoryWriteRefusal,
+  memoryWriteGate,
   registerMemoryHandlers,
   type MemoryHandlerDeps,
 } from '../memory.rpc';
@@ -123,7 +123,7 @@ describe('memory.update', () => {
     expect(update({ target: 'user', action: 'add', text: 'x' }, rig({ reason: dismissed, answers }))).toEqual({ ok: false, code: 'not_authorized', message: MEMORY_USER_REFUSAL });
     expect(update({ target: 'user', action: 'add', text: 'x' }, rig({ reason: answer, answers, tainted: true }))).toEqual({ ok: false, code: 'not_authorized', message: MEMORY_TAINT_REFUSAL });
     // The default lookup: no handoff router running, so no answer is known.
-    expect(memoryWriteRefusal(BOT, 'user', { guestWake: () => false, tainted: () => false, wakeReason: () => answer, conversation: () => CLEAN })).toMatchObject({ code: 'not_authorized', message: MEMORY_USER_REFUSAL });
+    expect(memoryWriteGate(BOT, 'user', { guestWake: () => false, tainted: () => false, wakeReason: () => answer, conversation: () => CLEAN })).toMatchObject({ code: 'not_authorized', message: MEMORY_USER_REFUSAL });
   });
 
   it('a conversation that ran a tainted or guest wake saves nothing, even in a clean wake; none at all is refused too', () => {
@@ -154,9 +154,9 @@ describe('memory.update', () => {
 
   it('fails closed: a gate that throws, or no taint tracker at all, refuses', () => {
     const throwing = { ...rig(), tainted: () => { throw new Error('boom'); } };
-    expect(memoryWriteRefusal(BOT, 'memory', throwing)).toMatchObject({ ok: false, code: 'not_authorized' });
+    expect(memoryWriteGate(BOT, 'memory', throwing)).toMatchObject({ ok: false, code: 'not_authorized' });
     // The real defaults with no tracker running: provenance unknown.
-    expect(memoryWriteRefusal(BOT, 'memory', {})).toMatchObject({ ok: false, code: 'not_authorized' });
+    expect(memoryWriteGate(BOT, 'memory', {})).toMatchObject({ ok: false, code: 'not_authorized' });
   });
 
   it('is registered under memory.update', async () => {

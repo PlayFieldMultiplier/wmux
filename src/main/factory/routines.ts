@@ -80,6 +80,9 @@ export function routinesPath(wmuxDir: string): string {
   return path.join(wmuxDir, 'factory', ROUTINES_FILENAME);
 }
 
+/** What a routine's set takes and keeps of its params. */
+export type RoutineFields = Pick<BotRoutine, 'title' | 'prompt' | 'schedule' | 'quietHours' | 'threadId'>;
+
 /** A routine as stored: the shared shape plus the key it was created with. */
 interface StoredRoutine extends BotRoutine {
   clientRoutineId?: string;
@@ -376,22 +379,38 @@ export class RoutineStore {
 
   // ── writes ──
 
-  /** A bot creates a routine, or changes one of its own (`routineId`). The
-   *  caller has checked that the bot runs a turn on the owner's words.
-   *  `clientRoutineId` makes a create idempotent. */
-  set(bot: { botId: string; workspaceId: string }, params: RoutineSetParams): RoutineResult {
+  /** set's checks of a new routine's fields as of now, without saving it:
+   *  the fields as set would store them, or why not (the bot's cap too). */
+  check(bot: { botId: string }, params: RoutineSetParams): { ok: true; fields: RoutineFields } | Extract<RoutineResult, { ok: false }> {
+    const f = this.fields(params);
+    if (!f.ok) return f;
+    return this.atCap(bot.botId) ? tooMany() : f;
+  }
+
+  private fields(params: RoutineSetParams): { ok: true; fields: RoutineFields } | Extract<RoutineResult, { ok: false }> {
     const p = (params ?? {}) as Partial<RoutineSetParams>;
     const title = oneLine(p.title, ROUTINE_LIMITS.TITLE_MAX);
     if (!title) return bad(`title is required (one line, at most ${ROUTINE_LIMITS.TITLE_MAX} characters)`);
     const prompt = textField(p.prompt, ROUTINE_LIMITS.PROMPT_MAX);
     if (!prompt) return bad(`prompt is required (at most ${ROUTINE_LIMITS.PROMPT_MAX} characters)`);
-    const now = this.now();
-    const schedule = parseSchedule(p.schedule, this.deps.minIntervalMs ?? ROUTINE_LIMITS.MIN_INTERVAL_MS, now);
+    const schedule = parseSchedule(p.schedule, this.deps.minIntervalMs ?? ROUTINE_LIMITS.MIN_INTERVAL_MS, this.now());
     if (typeof schedule === 'string') return bad(schedule);
     const quietHours = parseQuietHours(p.quietHours);
     if (typeof quietHours === 'string') return bad(quietHours);
     const threadId = p.threadId === undefined ? undefined : parseThreadId(p.threadId);
     if (threadId === null) return bad('threadId is not a thread id');
+    return { ok: true, fields: { title, prompt, schedule, ...(quietHours ? { quietHours } : {}), ...(threadId ? { threadId } : {}) } };
+  }
+
+  /** A bot creates a routine, or changes one of its own (`routineId`). The
+   *  caller has checked that the bot runs a turn on the owner's words.
+   *  `clientRoutineId` makes a create idempotent. */
+  set(bot: { botId: string; workspaceId: string }, params: RoutineSetParams): RoutineResult {
+    const p = (params ?? {}) as Partial<RoutineSetParams>;
+    const f = this.fields(params);
+    if (!f.ok) return f;
+    const { title, prompt, schedule, quietHours, threadId } = f.fields;
+    const now = this.now();
     if (p.clientRoutineId !== undefined && !isClientId(p.clientRoutineId)) return bad('clientRoutineId is not a valid key');
     if (p.routineId !== undefined) {
       const r = this.routines.find((x) => x.id === p.routineId);
@@ -685,7 +704,7 @@ export class RoutineStore {
   }
 }
 
-function bad(message: string): RoutineResult {
+function bad(message: string): Extract<RoutineResult, { ok: false }> {
   return { ok: false, code: 'invalid_argument', message };
 }
 
@@ -693,7 +712,7 @@ function expired(r: StoredRoutine, now: number): boolean {
   return r.done !== undefined && now - r.done.at > DONE_KEEP_MS;
 }
 
-function tooMany(): RoutineResult {
+function tooMany(): Extract<RoutineResult, { ok: false }> {
   return { ok: false, code: 'too_many', message: `a bot keeps at most ${ROUTINE_LIMITS.MAX_PER_BOT} routines; change or pause one instead` };
 }
 

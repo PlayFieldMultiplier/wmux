@@ -2133,6 +2133,8 @@ export const en = {
   'room.approval.action.skill': "Skill",
   'room.approval.action.owner_profile': "Your profile",
   'room.approval.action.native_tool': "Hermes tool",
+  'room.approval.action.routine': "Routine",
+  'room.approval.action.bot_memory': "Bot notes",
   'room.template.coordinator': "Coordinator",
   'room.template.developer': "Developer",
   'room.template.reviewer': "Reviewer",
