@@ -1,7 +1,7 @@
 name: Native terminal core
 on:
   pull_request:
-    paths: ['core/wmux-term/**', 'src/daemon/**', 'src/shared/**', 'src/main/pty/**', 'src/main/ipc/handlers/*terminalCore*', 'src/renderer/components/Settings/**', 'bench/native-core-verify.ts', 'bench/native-interpreter-verify.ts', 'bench/fixtures/**', 'scripts/*native*', 'scripts/*rust*', 'scripts/__tests__/generateRustUnicode11.os.test.mjs', 'scripts/__tests__/nativeTerminalPackage.os.test.mjs', '.github/workflows/release.yml', 'forge.config.ts', 'package.json', 'package-lock.json', '.github/workflows/native-terminal-core.yml']
+    paths: ['core/wmux-term/**', 'src/daemon/**', 'src/shared/**', 'src/main/pty/**', 'src/main/ipc/handlers/*terminalCore*', 'src/renderer/components/Settings/**', 'bench/native-core-verify.ts', 'bench/native-interpreter-verify.ts', 'bench/fixtures/**', 'scripts/*native*', 'scripts/*rust*', 'scripts/__tests__/generateRustUnicode11.os.test.mjs', 'scripts/__tests__/nativeTerminalPackage.os.test.mjs', '.github/workflows/release.yml', 'forge.config.ts', 'package.json', 'package-lock.json', '.github/workflows/native-terminal-core.yml', '.github/workflows/rust-engine-daemon.yml', 'vitest.rust-engine.config.ts', 'src/test-utils/requireRustEngine.ts']
   workflow_dispatch:
     inputs:
       soak:
@@ -56,7 +56,11 @@ jobs:
         if: runner.os == 'Linux'
         run: xvfb-run -a npx electron --no-sandbox core/wmux-term/spike/native-transport-electron.cjs
       - name: Backend, snapshot, input and lifecycle contracts
-        run: npx vitest run src/shared/__tests__/terminalPty.os.test.ts src/shared/__tests__/terminalCoreSettings.test.ts src/daemon/__tests__/RingBuffer.test.ts src/daemon/__tests__/TextSnapshotBackend.test.ts src/daemon/__tests__/AnsiSnapshotBackend.test.ts src/daemon/__tests__/RustSnapshot.test.ts src/daemon/__tests__/DaemonPTYBridge.nativeOutput.test.ts src/daemon/__tests__/SessionPipe.inputBackpressure.os.test.ts src/main/pty/__tests__/PTYManager.wsl.test.ts src/main/ipc/handlers/__tests__/terminalCore.handler.test.ts src/renderer/components/Settings/__tests__/TerminalEngineSetting.test.tsx
+        run: npx vitest run src/shared/__tests__/terminalPty.os.test.ts src/shared/__tests__/terminalCoreSettings.test.ts src/daemon/__tests__/RingBuffer.test.ts src/daemon/__tests__/TextSnapshotBackend.test.ts src/daemon/__tests__/AnsiSnapshotBackend.test.ts src/daemon/__tests__/RustSnapshot.test.ts src/daemon/__tests__/DaemonPTYBridge.nativeOutput.test.ts src/daemon/__tests__/SessionPipe.inputBackpressure.os.test.ts src/main/pty/__tests__/PTYManager.wsl.test.ts src/main/ipc/handlers/__tests__/terminalCore.handler.test.ts src/renderer/components/Settings/__tests__/TerminalEngineSetting.test.tsx src/daemon/__tests__/sessionReattach.engines.os.test.ts
+        env:
+          # The module is built above, so on macOS and Linux its rust cases
+          # must run, not skip. The suite is POSIX only: Windows skips it.
+          WMUX_REQUIRE_RUST_CORE: '1'
       - name: Output interpretation contracts
         run: npx vitest run src/daemon/__tests__/OutputInterpreter.test.ts src/daemon/util/__tests__/outputModeTracker.test.ts src/main/pty/__tests__/OscParser.test.ts
       - name: Retain native verification evidence
@@ -69,6 +73,11 @@ jobs:
             out/native-soak-mismatch-*.json
             out/native-input-progress.json
           if-no-files-found: ignore
+  # Daemon tests on the rust engine, on Linux. The job lives in its own
+  # workflow so its nightly runs (and their red-run issue) stay apart from
+  # these pull request runs.
+  linux-rust-daemon:
+    uses: ./.github/workflows/rust-engine-daemon.yml
   soak:
     if: github.event_name == 'workflow_dispatch' && inputs.soak
     strategy:

@@ -3,8 +3,9 @@
 //
 //   node scripts/ci-failure-issue.mjs [--state failure|success|auto] [--dry-run]
 //
-// Runs in the `report` job of runtime.yml and windows.yml, on main, after the
-// test jobs, with GH_TOKEN set and the GITHUB_* variables Actions provides.
+// Runs in the `report` job of runtime.yml, windows.yml and
+// rust-engine-nightly.yml, on main, after the test jobs, with GH_TOKEN set and
+// the GITHUB_* variables Actions provides.
 // By default (auto) the run's finished jobs decide:
 //
 //   a job failed or timed out   comment on the open `ci-nightly` issue for this
