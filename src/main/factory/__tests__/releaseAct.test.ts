@@ -536,7 +536,10 @@ describe('second code review round', () => {
     const draft = (gh: FakeGithub) => {
       gh.releases = [{ id: 50, tag_name: 'v1.2.3', draft: true, prerelease: false, name: 'x', body: '', target_commitish: C3, author: { login: 'owner' }, html_url: 'https://github.com/o/r/releases/tag/x' }];
     };
-    const want = { tagName: 'v1.2.3', targetSha: C3 };
+    // The act that made the draft: its fields are the draft's.
+    const want: ApprovalReleaseAct = {
+      kind: 'release', mode: 'release', tagName: 'v1.2.3', targetSha: C3, defaultBranch: 'main', title: 'x', notes: '', prerelease: false, workflows: [], pushWorkflows: [], draft: false,
+    };
     let gh = github();
     draft(gh);
     gh.tags.set('v1.2.3', { sha: C3 });
@@ -672,20 +675,39 @@ describe('Mac review round 2', () => {
     // The labeler ran on the push; CI did not.
     gh.workflowRuns.push({ ...pushRun, path: '.github/workflows/labeler.yml', workflow_id: 8, id: 2 });
     expect(await pre(gh, pinned)).toMatchObject({ refusal: 'checks-not-started' });
-    gh.workflowRuns.push(pushRun);
-    expect(await pre(gh, pinned)).toMatchObject({ refusal: null });
+    // CI disabled with no push run on the commit: it never will run.
     gh.workflowStates.set('.github/workflows/ci.yml', 'disabled_manually');
     expect(await pre(gh, pinned)).toMatchObject({ refusal: 'workflow-disabled' });
+    // CI ran on the push and passed: disabled since, it counts all the same.
+    gh.workflowRuns.push(pushRun);
+    expect(await pre(gh, pinned)).toMatchObject({ refusal: null });
+    gh.workflowStates.delete('.github/workflows/ci.yml');
+    expect(await pre(gh, pinned)).toMatchObject({ refusal: null });
     // Actions off: no push run is waited for when the bot asks.
     gh.workflowStates.clear();
     gh.actions = 'off';
     expect(await readReleaseAsk(gh, 'github.com/o/r', { tagName: 'v1.2.3' })).toMatchObject({ pushWorkflows: [], checksExpected: false });
   });
 
-  it('a draft whose tag was changed on GitHub is the owner\'s now: never deleted', async () => {
+  it('a draft changed on GitHub (its tag, notes, name, target or prerelease flag) is the owner\'s now: never deleted', async () => {
+    const made = { id: 50, tag_name: 'v1.2.3', draft: true, prerelease: false, name: 'wmux 1.2.3', body: 'Fixes.', target_commitish: C3, author: { login: 'owner' }, html_url: 'https://github.com/o/r/releases/tag/x' };
+    for (const edit of [{ tag_name: 'v9' }, { body: 'Edited.' }, { name: 'Other' }, { target_commitish: C2 }, { prerelease: true }]) {
+      const gh = github();
+      gh.releases = [{ ...made, ...edit }];
+      expect(await deleteDraft(gh, P, 50, act), JSON.stringify(edit)).toBe('kept-not-ours');
+      expect(gh.writes).toEqual([]);
+    }
+    // As the act made it, with no tag: deleted.
     const gh = github();
-    gh.releases = [{ id: 50, tag_name: 'v9', draft: true, prerelease: false, name: 'x', body: '', target_commitish: C3, author: { login: 'owner' }, html_url: 'https://github.com/o/r/releases/tag/x' }];
-    expect(await deleteDraft(gh, P, 50, { tagName: 'v1.2.3', targetSha: C3 })).toBe('kept-not-ours');
-    expect(gh.writes).toEqual([]);
+    gh.releases = [{ ...made }];
+    expect(await deleteDraft(gh, P, 50, act)).toBe('deleted');
+  });
+
+  it('a branch ref read that fails is not a branch: 410 and the like refuse as GitHub\'s answer', async () => {
+    const gh = github();
+    gh.answerRead = (e) => (e === 'repos/o/r/git/ref/heads/v1.2.3' ? { ok: false, kind: 'http', status: 410, message: 'gh: Gone (HTTP 410)' } : null);
+    expect(await pre(gh)).toMatchObject({ refusal: 'gh-410' });
+    gh.answerRead = (e) => (e === 'repos/o/r/git/ref/heads/v1.2.3' ? { ok: false, kind: 'http', status: 403, message: 'gh: Forbidden (HTTP 403)' } : null);
+    expect(await pre(gh)).toMatchObject({ refusal: 'gh-403' });
   });
 });
