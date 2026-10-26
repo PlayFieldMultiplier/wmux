@@ -8,8 +8,9 @@
 //
 // Every rule it makes is in group `wmux-ci` with IDs prefixed `wmux-ci-`
 // (never the real `wmux` group), and `afterAll` removes the whole group
-// whatever happened. Every rule outside that group is listed first and must
-// be exactly the same after each Fix, Remove and the cleanup: an empty
+// whatever happened. Every rule outside that group (but packaged apps'
+// capability rules, which Windows manages by itself) is listed first and
+// must be exactly the same after each Fix, Remove and the cleanup: an empty
 // pipeline must never reach Remove-NetFirewallRule without a filter.
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
@@ -68,10 +69,16 @@ async function verdict(port = PORT, tailnet = false): Promise<string> {
   return assessInbound(facts, { recorded: null, exe, ruleBase: ids.base, tailnet }).verdict;
 }
 
-/** Read-only: the sorted names of every local rule outside group wmux-ci. */
+/** Read-only: the sorted names of every local rule outside group wmux-ci
+ *  that has no Owner. A rule with an Owner is a packaged app's capability
+ *  rule (`<PackageFamilyName>-In-Allow-ServerCapability`, …), which Windows
+ *  adds and drops by itself whenever it registers an app: run 40249905941
+ *  saw Narrator's and Feedback Hub's appear mid-test. wmux never sets an
+ *  Owner, so its scripts cannot add or remove such a rule by mistake. An
+ *  unfiltered Remove would still show here, since the core rules have none. */
 async function rulesOutsideCi(): Promise<string> {
   const r = await ps(
-    `@(Get-NetFirewallRule -PolicyStore PersistentStore -ErrorAction SilentlyContinue | Where-Object { $_.Group -ne ${psQuote(FIREWALL_CI_GROUP)} } | Sort-Object Name | ForEach-Object { $_.Name }) -join ','`,
+    `@(Get-NetFirewallRule -PolicyStore PersistentStore -ErrorAction SilentlyContinue | Where-Object { $_.Group -ne ${psQuote(FIREWALL_CI_GROUP)} -and -not $_.Owner } | Sort-Object Name | ForEach-Object { $_.Name }) -join ','`,
   );
   expect(r.code, r.stderr).toBe(0);
   return r.stdout.trim();
@@ -186,7 +193,11 @@ describe.runIf(RUN)('firewall Fix round trip (CI runner only, group wmux-ci)', (
 
   it('stage 10 removes dead-path group rules and dead legacy rules, and keeps another live install\'s', async () => {
     const dead = path.join(root, 'gone', 'app-0.0.1', 'wmux.exe');
+    // Each rule is made afresh: a rule of that name an earlier try of this
+    // test left (CI retries a failed test once) is removed first, by its
+    // name, which only this test uses.
     const make = (name: string, display: string, program: string) =>
+      `Remove-NetFirewallRule -Name ${psQuote(name)} -ErrorAction SilentlyContinue; ` +
       `New-NetFirewallRule -Name ${psQuote(name)} -Group ${psQuote(FIREWALL_CI_GROUP)} -DisplayName ${psQuote(display)} -Direction Inbound -Action Allow -Protocol TCP -LocalPort 45690 -Program ${psQuote(program)} -Profile Private | Out-Null`;
     const setup = await ps([
       make('wmux-ci-dead-1', 'wmux-ci dead path', dead),
