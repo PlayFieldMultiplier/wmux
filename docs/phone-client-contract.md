@@ -5230,9 +5230,10 @@ commit, so the draft is kept for the owner to publish or delete),
 draft is kept), `draft-kept-changed` (the draft was changed on GitHub since
 wmux made it, so it is the owner's and is kept), or `draft-not-deleted`
 (deleting it failed: the owner deletes it on GitHub). A deleted draft adds
-nothing. When the desktop quit between the refusal and that decision, the
-request is first `refused` without the code; once the decision is made it
-gains it, with a new `updatedAt` (the room gets one more outcome card).
+nothing. When the desktop quit between the refusal and that decision, or
+GitHub did not answer it then, the request is first `refused` without the
+code; once a later sweep makes the decision it gains it, with a new
+`updatedAt` (the room gets one more outcome card).
 While it runs, or
 while it reads GitHub to learn whether an interrupted try went through, the
 request stays `approved`; it ends `executed` or `refused`.

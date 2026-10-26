@@ -655,12 +655,17 @@ export async function readWorkflows(gh: GhActPort, p: RepoPath, sha: string): Pr
  *  is off for the repository, so none runs), or why not known. Actions' own
  *  switch is read where the login may read it (a 403 or 404 there says
  *  nothing). */
-async function readDisabledWorkflows(gh: GhActPort, p: RepoPath, workflows: readonly string[]): Promise<Read<'Actions' | string[]>> {
+async function readDisabledWorkflows(gh: GhActPort, p: RepoPath, workflows: readonly string[], known?: ReadonlyMap<string, Record<string, unknown>>): Promise<Read<'Actions' | string[]>> {
   const perms = await gh.read(p.host, `${p.base}/actions/permissions`);
   if (perms.ok && rec(perms.value)?.enabled === false) return 'Actions';
   if (!perms.ok && !(perms.kind === 'http' && (perms.status === 403 || perms.status === 404))) return failed(perms);
   const off: string[] = [];
   for (const path of workflows) {
+    const record = known?.get(path);
+    if (record) {
+      if (record.state !== 'active') off.push(path);
+      continue;
+    }
     const file = path.slice(path.lastIndexOf('/') + 1);
     const a = await gh.read(p.host, `${p.base}/actions/workflows/${pathOfName(file)}`);
     if (!a.ok) {
@@ -672,10 +677,11 @@ async function readDisabledWorkflows(gh: GhActPort, p: RepoPath, workflows: read
 }
 
 /** The first of these workflows GitHub would not run now (`Actions`: Actions
- *  is off), null when all run, or why not known. */
-export async function readDisabledWorkflow(gh: GhActPort, p: RepoPath, workflows: readonly string[]): Promise<Read<string | null>> {
+ *  is off), null when all run, or why not known. `known`: workflow records
+ *  already read, not read again. */
+export async function readDisabledWorkflow(gh: GhActPort, p: RepoPath, workflows: readonly string[], known?: ReadonlyMap<string, Record<string, unknown>>): Promise<Read<string | null>> {
   if (workflows.length === 0) return null;
-  const off = await readDisabledWorkflows(gh, p, workflows);
+  const off = await readDisabledWorkflows(gh, p, workflows, known);
   return isFail(off) ? off : off === 'Actions' ? 'Actions' : off[0] ?? null;
 }
 
@@ -695,7 +701,7 @@ async function expectedPushRuns(gh: GhActPort, p: RepoPath, workflows: readonly 
  *  of the act's own tag (`ownTag`): pushing it runs its own workflows there,
  *  which are the release, not its checks. The combined status cannot be
  *  told apart by ref: all of it counts. */
-export async function readChecks(gh: GhActPort, p: RepoPath, sha: string, o: { ownTag: string; branch: string; expected: readonly string[] }): Promise<Read<{ checks: ReleaseChecks; missing: string[] }>> {
+export async function readChecks(gh: GhActPort, p: RepoPath, sha: string, o: { ownTag: string; branch: string; expected: readonly string[] }): Promise<Read<{ checks: ReleaseChecks; missing: string[]; records: Map<string, Record<string, unknown>> }>> {
   const { ownTag, branch, expected } = o;
   const run = (v: unknown): Run => {
     const r = rec(v);
@@ -753,6 +759,7 @@ export async function readChecks(gh: GhActPort, p: RepoPath, sha: string, o: { o
   // GitHub Enterprise Server may list a run without its workflow file's
   // path: such a run is matched on its workflow's id, read for each pinned
   // workflow no run names (only then).
+  const records = new Map<string, Record<string, unknown>>();
   if (latest.some((r) => !r.path)) {
     for (const want of missingPushRuns(latest, expected, branch)) {
       const a = await gh.read(p.host, `${p.base}/actions/workflows/${pathOfName(want.slice(want.lastIndexOf('/') + 1))}`);
@@ -760,14 +767,16 @@ export async function readChecks(gh: GhActPort, p: RepoPath, sha: string, o: { o
         if (a.kind === 'http' && a.status === 404) continue;
         return failed(a);
       }
-      const id = rec(a.value)?.id;
-      if (!Number.isSafeInteger(id)) return unreadable('a workflow could not be read');
-      for (const r of latest) if (!r.path && r.workflowNum === id) r.path = want;
+      const record = rec(a.value);
+      if (!record || !Number.isSafeInteger(record.id)) return unreadable('a workflow could not be read');
+      records.set(want, record);
+      for (const r of latest) if (!r.path && r.workflowNum === record.id) r.path = want;
     }
   }
   return {
     checks: checksVerdict({ runs: counted, status: { state: str(sv.state), total: sv.total_count }, workflowRuns: latest, expected, branch }),
     missing: missingPushRuns(latest, expected, branch),
+    records,
   };
 }
 
@@ -783,7 +792,7 @@ export function tagRunsUrl(p: RepoPath, act: ApprovalReleaseAct): string {
  *  because the tag is made at the commit (a publish made it and stopped:
  *  the draft is what releases it) or could not be checked; or not deleted
  *  (the delete failed). */
-export type DraftFate = 'deleted' | 'gone' | 'published' | 'kept-tag-made' | 'kept-unchecked' | 'kept-not-ours' | 'failed';
+export type DraftFate = 'deleted' | 'gone' | 'published' | 'kept-tag-made' | 'kept-unchecked' | 'kept-not-ours' | 'failed' | 'retry';
 
 /** Delete a draft a release row made, best effort: read it first, keep it
  *  while it is published, changed on GitHub since the act made it, or its
@@ -792,9 +801,13 @@ export type DraftFate = 'deleted' | 'gone' | 'published' | 'kept-tag-made' | 'ke
  *  could never be published. `want`: the act; absent (the request is gone),
  *  the draft's own tag and target. */
 export async function deleteDraft(gh: GhActPort, p: RepoPath, draftId: number, want?: ApprovalReleaseAct): Promise<DraftFate> {
+  // A read GitHub did not answer (no HTTP status) says nothing yet: `retry`,
+  // and the draft stays open for a later sweep. GitHub's own answer, or an
+  // answer this build cannot read, keeps it unchecked.
+  const unchecked = (e: ReadFail): DraftFate => (e.status === undefined && !e.unreadable ? 'retry' : 'kept-unchecked');
   const r = await gh.read(p.host, `${p.base}/releases/${draftId}`).catch(() => null);
-  if (!r) return 'kept-unchecked';
-  if (!r.ok) return r.kind === 'http' && r.status === 404 ? 'gone' : 'kept-unchecked';
+  if (!r) return 'retry';
+  if (!r.ok) return r.kind === 'http' && r.status === 404 ? 'gone' : unchecked(failed(r));
   const release = mapRelease(r.value);
   if (!release) return 'kept-unchecked';
   if (!release.draft) return 'published';
@@ -805,15 +818,17 @@ export async function deleteDraft(gh: GhActPort, p: RepoPath, draftId: number, w
   const targetSha = want?.targetSha ?? release.target;
   if (!RELEASE_TAG_RE.test(tagName)) return 'kept-unchecked';
   const tag = await readTagTarget(gh, p, tagName).catch((err: unknown): ReadFail => ({ error: String(err) }));
-  if (isFail(tag)) return 'kept-unchecked';
+  if (isFail(tag)) return unchecked(tag);
   if (tag !== null && tag === targetSha) {
     const all = await readReleases(gh, p).catch((err: unknown): ReadFail => ({ error: String(err) }));
-    if (isFail(all)) return 'kept-unchecked';
+    if (isFail(all)) return unchecked(all);
     if (!all.some((o) => o.tagName === tagName && o.id !== draftId)) return 'kept-tag-made';
   }
   const a = await gh.write(p.host, 'DELETE', `${p.base}/releases/${draftId}`, {}).catch(() => null);
-  if (!a) return 'failed';
-  return a.ok ? 'deleted' : a.kind === 'http' && a.status === 404 ? 'gone' : 'failed';
+  if (!a) return 'retry';
+  if (a.ok) return 'deleted';
+  if (a.kind !== 'http') return 'retry';
+  return a.status === 404 ? 'gone' : 'failed';
 }
 
 // ── When the bot asks ────────────────────────────────────────────────────
@@ -1018,7 +1033,7 @@ export async function releasePrecondition(gh: GhActPort, p: RepoPath, act: Appro
   // A push workflow waited for whose run is not there: disabled since, it
   // never will be. One that ran is counted whatever its state now.
   if (checks === 'not-started' && read.missing.length > 0) {
-    const off = await readDisabledWorkflow(gh, p, read.missing);
+    const off = await readDisabledWorkflow(gh, p, read.missing, read.records);
     if (isFail(off)) return stop(readRefusal(off, 'workflow-disabled'), own);
     if (off) return stop('workflow-disabled', own);
   }

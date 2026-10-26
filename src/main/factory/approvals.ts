@@ -2136,11 +2136,19 @@ export class ApprovalService {
       this.changed(r.workspaceId);
       return;
     }
-    if (r.state === 'refused' && e.status === 'refused' && r.act.kind === 'release' && r.refusal && e.reason?.startsWith(`${r.refusal}, `)) {
-      // A refusal told before its draft was decided (a quit came between):
-      // amended, and its draft told in one more outcome card.
-      const amended: StoredApproval = { ...r, refusal: e.reason.slice(0, 300), updatedAt: this.now() };
-      this.put(amended);
+    if (r.state === 'refused' && e.status === 'refused' && r.act.kind === 'release') {
+      // A refusal told before its draft was decided (a quit, or GitHub not
+      // answering, came between): its draft's code added, and told in one
+      // more outcome card. The codes are kept within 300 characters, the
+      // draft's last.
+      const isDraft = (c: string): boolean => c.startsWith('draft-');
+      const had = laneRefusalCodes(r.refusal ?? '');
+      const added = laneRefusalCodes(e.reason ?? '').filter((c) => isDraft(c) && !had.includes(c));
+      if (added.length === 0) return;
+      const codes = [...had, ...added];
+      while (codes.length > added.length && codes.join(', ').length > 300) codes.shift();
+      const amended: StoredApproval = { ...r, refusal: codes.join(', '), updatedAt: this.now() };
+      if (!this.put(amended)) return;
       this.outcomeCard(amended, 'draft');
       this.changed(amended.workspaceId);
       return;
@@ -2437,7 +2445,9 @@ export class ApprovalService {
     const codes = laneRefusalCodes(r.refusal ?? '');
     const isDraft = (c: string): boolean => r.act?.kind === 'release' && c.startsWith('draft-');
     const why = laneRefusalLine(codes.filter((c) => !isDraft(c)).join(', '), r.repoKey);
-    const title = r.act?.kind === 'release' && done
+    const title = amend
+      ? `Draft release still on GitHub: ${ACTION_TITLE[r.action]} ${subject(r)}`
+      : r.act?.kind === 'release' && done
       ? r.act.mode === 'workflow'
         ? `Tag pushed — the release workflow is building it (${r.act.tagName} on ${full}, approved by you)`
         : `${ACT_DONE_TITLE.release} release ${r.act.tagName} of ${full} (approved by you)`
