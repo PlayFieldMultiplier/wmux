@@ -2091,6 +2091,24 @@ export function registerBrowserRpc(
         );
       }
     }
+    // A dedicated Chrome profile holds only tabs wmux opened, each recorded
+    // against a workspace, so the same rule holds there: the tab must be one
+    // this workspace opened. An unattributed tab does not count. Live Chrome
+    // (the client with a writeScope) keeps the behaviour described above.
+    if (backend() === 'chrome' && surfaceId) {
+      const { client } = await resolveChromeClient('browser.help.request', ctx, workspaceId);
+      if (
+        !client.writeScope &&
+        !(await client.cdpInfoTargets(workspaceId)).some(
+          (t) => t.surfaceId === surfaceId && t.workspaceId === workspaceId,
+        )
+      ) {
+        throw new Error(
+          `browser.help.request: BROWSER_SURFACE_NOT_REGISTERED: surface "${surfaceId}" is not a ` +
+            'Chrome tab of this workspace. Pass one of your own surfaces, or omit surfaceId.',
+        );
+      }
+    }
     const rawRef = params['ref'];
     const refRequested = typeof rawRef === 'string' && rawRef.length > 0;
     const ref = isHelpRef(rawRef) ? rawRef : undefined;
