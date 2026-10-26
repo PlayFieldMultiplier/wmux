@@ -7,6 +7,8 @@ import claude from '../../../daemon/approvals/__tests__/fixtures/terminal-prompt
 import type { ApprovalScreenSnapshot } from '../../../shared/approvalScreen';
 import { codexScreenApproval, piScreenApproval } from '../approvalScreen';
 import piCapture from './fixtures/pi-1.4.0-capture.json';
+import claudeTrust from './fixtures/claude-code-2.1.310-trust-120x40.json';
+import codexTrust from './fixtures/codex-0.162.1-trust-120x40.json';
 
 const TRUST = ['Do you trust the contents of this project?', '❯ Yes, I trust this folder', '  No, exit', '↑/↓ Navigate · enter Confirm'];
 const CODEX_EDIT = ['Would you like to make the following edits?', '› 1. Yes, proceed (y)',
@@ -117,6 +119,47 @@ describe('quiet approval recovery reads only the current interactive viewport', 
       expect(det.takeApprovalRecheckRequest()).toBe(false);
     },
   );
+
+  // Each capture's whole output, rendered as the host's grid reader would.
+  it.each([
+    ['claude', claudeTrust.frames.trust, 'Claude Code', 'Project trust prompt', 'Enter'],
+    ['codex', codexTrust.frames.trust, 'Codex CLI', 'Directory trust prompt', 'enter'],
+  ] as const)('reads the captured %s folder-trust screen as awaiting_input, never running', async (slug, output, agent, message, footer) => {
+    const rendered = await generateTextSnapshot({ cols: 120, rows: 40, scrollback: 0, initial: Buffer.from(output) });
+    if (!rendered.ok) throw new Error('the capture did not render');
+    const rows = rendered.rows.map((row) => row.text);
+    for (const order of ['identity, then the screen', 'the screen, then identity', 'identity before the footer'] as const) {
+      const det = new AgentDetector();
+      const events = vi.fn();
+      det.onEvent(events);
+      const read = vi.fn(async () => frame(rows));
+      if (order === 'identity, then the screen') {
+        // The command-start probe seeds the agent before it draws anything.
+        det.seedTrustedIdentity(slug, det.getIdentityEpoch());
+        expect(await det.revalidateApprovalScreen(read)).toBe(false);
+        det.feed(output);
+        expect(det.takeApprovalRecheckRequest()).toBe(true);
+      } else if (order === 'identity before the footer') {
+        const split = output.lastIndexOf(footer);
+        det.feed(output.slice(0, split));
+        det.seedTrustedIdentity(slug, det.getIdentityEpoch());
+        // The question is drawn but unfinished: the seed-time recheck waits.
+        expect(await det.revalidateApprovalScreen(read)).toBe(false);
+        det.feed(output.slice(split));
+        expect(det.takeApprovalRecheckRequest()).toBe(true);
+      } else {
+        det.feed(output);
+        det.seedTrustedIdentity(slug, det.getIdentityEpoch());
+      }
+      expect(await det.revalidateApprovalScreen(read)).toBe(true);
+      expect(read).toHaveBeenCalledTimes(1);
+      const statuses = events.mock.calls.map(([event]) => event);
+      expect(statuses.at(-1)).toEqual({ agent, status: 'awaiting_input', message });
+      // Codex's loading banner opens its gate ("Agent started") when no identity came first.
+      expect(statuses.slice(0, -1)).toEqual(order !== 'identity, then the screen' && slug === 'codex'
+        ? [{ agent, status: 'running', message: 'Agent started' }] : []);
+    }
+  });
 
   it('asks for Pi\'s recheck only once the selector\'s last row is drawn, however the reads split', () => {
     const { trust, trustNarrow } = piCapture.chunks;

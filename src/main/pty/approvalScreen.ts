@@ -14,7 +14,9 @@ function rowsAtBottom(rows: readonly string[]): string[] {
 
 export function claudeScreenApproval(rows: readonly string[]): ScreenApproval | null {
   const prompt = parseTerminalPrompt(rows);
-  return prompt?.active ? { text: prompt.question.replace(/\s+/g, ''), message: 'Approval requested' } : null;
+  if (prompt?.active) return { text: prompt.question.replace(/\s+/g, ''), message: 'Approval requested' };
+  const text = choiceDialog(rows, /^Quick safety check: Is this a project\b/, /^Enter to confirm · Esc to cancel$/, CLAUDE_TRUST_CHOICES);
+  return text ? { text, message: 'Project trust prompt' } : null;
 }
 
 /** A dialog's choice rows: `option` is one choice, `selected` marks exactly
@@ -29,6 +31,20 @@ const YES_NO_CHOICES: ChoiceRows = {
   option: /^[❯›>]?\s*(?:\d+[.)]\s*)?(?:Yes|No)\b/i,
   selected: /^[❯›>]/,
   required: [/\bYes\b/i, /\bNo\b/i],
+};
+
+/** Claude Code 2.1.310 folder-trust choices (live capture): unnumbered, `No, exit` first. */
+const CLAUDE_TRUST_CHOICES: ChoiceRows = {
+  option: /^(?:❯\s*)?(?:No, exit|Yes, I trust this folder)$/,
+  selected: /^❯/,
+  required: [/No, exit$/, /Yes, I trust this folder$/],
+};
+
+/** Codex 0.162.1 folder-trust choices (live capture): numbered, the first is to trust. */
+const CODEX_TRUST_CHOICES: ChoiceRows = {
+  option: /^›?\s*\d+\.\s+\S/,
+  selected: /^›/,
+  required: [/^›?\s*\d+\.\s+Trust and continue$/],
 };
 
 function choiceDialog(rows: readonly string[], question: RegExp, footer: RegExp, choice: ChoiceRows = YES_NO_CHOICES): string | null {
@@ -97,11 +113,17 @@ export function piScreenApproval(rows: readonly string[]): ScreenApproval | null
   return text ? { text, message: 'Project trust prompt' } : null;
 }
 
-/** Codex 0.157.1 command/edit fixtures: numbered choices and a final key hint. */
+/**
+ * Codex 0.157.1 command/edit fixtures: numbered choices and a final key hint.
+ * The 0.162.1 folder-trust screen (live capture) has the same shape; its
+ * question row goes on with the explanation.
+ */
 export function codexScreenApproval(rows: readonly string[]): ScreenApproval | null {
   const text = choiceDialog(rows, /^Would you like to (?:run the following command|make the following edits)\?$/,
     /^Press enter to confirm or esc to cancel$/i);
-  return text ? { text, message: 'Approval requested' } : null;
+  if (text) return { text, message: 'Approval requested' };
+  const trust = choiceDialog(rows, /^Trust this folder\?(?:$| Codex\b)/, /^enter continue · esc back$/, CODEX_TRUST_CHOICES);
+  return trust ? { text: trust, message: 'Directory trust prompt' } : null;
 }
 
 /** OpenCode 1.18.30 permission fixture: horizontal choices with a key footer. */

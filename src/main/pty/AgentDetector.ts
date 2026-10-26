@@ -148,8 +148,12 @@ interface AgentPattern {
    * Ready after identity arrived, it asks the host for that identity's one
    * recheck (takeApprovalRecheckRequest); no recheck is spent before it is
    * ready, because a read then would see half a question.
+   *
+   * `shared`: the screen reader also reads dialogs that line patterns or the
+   * stream report (Claude, Codex). Their recheck waits only while this
+   * question is drawn and unfinished, not for a question that never came.
    */
-  approvalReady?: { question: RegExp; end: RegExp };
+  approvalReady?: { question: RegExp; end: RegExp; shared?: true };
   patterns: {
     regex: RegExp;
     status: AgentEvent['status'];
@@ -252,6 +256,12 @@ const AGENT_PATTERNS: AgentPattern[] = [
     agent: 'Claude Code',
     slug: 'claude',
     approvalScreen: claudeScreenApproval,
+    // The folder-trust screen (2.1.310 live capture, __tests__/fixtures/
+    // claude-code-2.1.310-trust-120x40.json) comes before any banner or
+    // footer, so the gate is closed and no line pattern reads it; its choices
+    // are unnumbered (`❯ No, exit`). Read from the grid once process identity
+    // has seeded the profile: the question, then the key footer, its last row.
+    approvalReady: { question: /Is\s*this\s*a\s*project\s*you\s*created\s*or\s*one\s*you\s*trust\?/, end: /Enter\s*to\s*confirm\s*·\s*Esc\s*to\s*cancel/, shared: true },
     // \s* — Claude Code TUI는 배너 "Claude Code"를 셀 단위 커서 이동으로 그려,
     // ANSI strip 후 "Claude"와 "Code" 사이 공백이 사라진 "ClaudeCode"가 된다.
     // 공백을 선택적으로 둬야 daemon mode에서도 gate가 매칭된다(핵심 race 원인).
@@ -389,6 +399,11 @@ const AGENT_PATTERNS: AgentPattern[] = [
     agent: 'Codex CLI',
     slug: 'codex',
     approvalScreen: codexScreenApproval,
+    // codex-cli 0.162.1 (live capture, __tests__/fixtures/
+    // codex-0.162.1-trust-120x40.json) draws the trust screen in the alternate
+    // screen with CUP only, no CR/LF, so no line pattern below sees it. Read
+    // from the grid once process identity has seeded the profile.
+    approvalReady: { question: /Trust\s*this\s*folder\?\s*Codex\s*can/, end: /enter\s*continue\s*·\s*esc\s*back/, shared: true },
     // The trust-prompt phrase is part of the gate because on a first boot in
     // an untrusted directory Codex shows it BEFORE the "OpenAI Codex" banner
     // — with the banner-only gate the trust pattern below could never fire.
@@ -430,8 +445,11 @@ const AGENT_PATTERNS: AgentPattern[] = [
       // higher risk..."), so only the start is anchored.
       { regex: /^\s*Do you trust the contents of this directory\?/,     status: 'awaiting_input', message: 'Directory trust prompt' },
       // codex-cli 0.157's wording ("Folder access" / "Trust this folder?" /
-      // "› 1. Trust and continue"): the question has its own row.
-      { regex: /^\s*Trust\s*this\s*folder\?\s*$/,                      status: 'awaiting_input', message: 'Directory trust prompt' },
+      // "› 1. Trust and continue"): the question has its own row. 0.162.1
+      // goes on with the explanation on the same row ("Trust this folder?
+      // Codex can read, …"). Only that sentence: Kimi Code CLI asks the bare
+      // question too, and this must claim no more of it than before.
+      { regex: /^\s*Trust\s*this\s*folder\?(?:\s*$|\s*Codex\s*can\b)/,     status: 'awaiting_input', message: 'Directory trust prompt' },
     ],
   },
 
@@ -908,7 +926,8 @@ function isCodexChrome(line: string): boolean {
   const v = visibleChrome(stripped);
   return /^>_\s*OpenAI\s*Codex\b/.test(v)
     || /^Do\s*you\s*trust\s*the\s*contents\s*of\s*this\s*directory\?/.test(v)
-    || /^Trust\s*this\s*folder\?$/.test(v);
+    // 0.162.1 explains on the same row; the bare question is also Kimi's.
+    || /^Trust\s*this\s*folder\?(?:$|\s*Codex\s*can\b)/.test(v);
 }
 
 /**
@@ -1274,13 +1293,23 @@ export class AgentDetector {
     }
     // Evidence an identity change kept: a grid-only question this owner drew
     // before its seed is still read once ready; any other profile drops it.
-    if (this.approvalEvidenceRetired && !profile.approvalReady) this.invalidateApprovalScreen();
+    if (this.approvalEvidenceRetired && !this.waitsForReadyQuestion(profile)) this.invalidateApprovalScreen();
     this.approvalEvidenceRetired = false;
     this.trustedAgent = slug;
     this.lastAgent = profile.agent;
     this.activeAgents.add(profile.agent);
     this.shellPromptSinceOwner = false;
     return true;
+  }
+
+  /**
+   * Whether this profile's recheck belongs to its approvalReady question: a
+   * profile whose grid reader reads only that question always; a `shared`
+   * one only once the question is drawn.
+   */
+  private waitsForReadyQuestion(profile: AgentPattern): boolean {
+    const ready = profile.approvalReady;
+    return ready !== undefined && (!ready.shared || this.approvalArmed.has(profile.slug));
   }
 
   /** Confirmed death/disposal: revoke all launch identity, without an event. */
@@ -1341,7 +1370,7 @@ export class AgentDetector {
       && Date.now() >= this.approvalHintAt && Date.now() - this.approvalHintAt <= 30_000;
     if (!owner || !profile?.approvalScreen || !fresh() || this.approvalRecheckEpoch === epoch) return false;
     // Not spent on half a question: the row that finishes it asks again.
-    if (profile.approvalReady && !this.approvalReadySlugs.has(profile.slug)) return false;
+    if (this.waitsForReadyQuestion(profile) && !this.approvalReadySlugs.has(profile.slug)) return false;
     this.approvalRecheckEpoch = epoch;
     const owns = (): boolean => this.trustedAgent === owner && this.identityEpoch === epoch
       && this.approvalScreenGeneration === generation && !this.shellPromptSinceOwner && fresh();
@@ -1474,7 +1503,7 @@ export class AgentDetector {
     const previousLength = stripAnsi(this.approvalHintTail).length;
     const probe = this.approvalHintTail + data;
     const cleanProbe = stripAnsi(probe);
-    const hint = /Do\s*you\s*(?:want|trust)|Would\s*you\s*like|Allow\s*tool\s*use|Permission\s*required|Trust\s*project\s*folder/g;
+    const hint = /Do\s*you\s*(?:want|trust)|Would\s*you\s*like|Allow\s*tool\s*use|Permission\s*required|Trust\s*project\s*folder|Trust\s*this\s*folder|Is\s*this\s*a\s*project\s*you\s*created/g;
     for (const match of cleanProbe.matchAll(hint)) {
       // Only newly drawn text refreshes freshness. Retaining an old question
       // in the tail across a title update must not make it recent again.
