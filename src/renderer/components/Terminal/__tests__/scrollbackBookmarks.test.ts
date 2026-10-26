@@ -8,7 +8,7 @@ import { Terminal } from '@xterm/headless';
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import { createUISlice, type UISlice } from '../../../stores/slices/uiSlice';
-import { addAt, keepAcrossRepaint, rowsInView } from '../scrollbackBookmarks';
+import { addAt, keepAcrossRepaint, rowsInView, watchScrollbackBookmarks } from '../scrollbackBookmarks';
 
 function createTestStore() {
   return create<UISlice>()(
@@ -27,6 +27,22 @@ function lines(from: number, count: number): string {
   let out = '';
   for (let i = from; i < from + count; i++) out += `line-${i}\r\n`;
   return out;
+}
+
+// 30 columns each: one row at 40 columns, two at 20.
+function longLines(from: number, count: number): string {
+  let out = '';
+  for (let i = from; i < from + count; i++) out += `entry-${String(i).padStart(4, '0')}-`.padEnd(30, 'x') + '\r\n';
+  return out;
+}
+
+function logicalTextAt(term: Terminal, line: number): string {
+  const buffer = term.buffer.active;
+  let start = line;
+  while (start > 0 && buffer.getLine(start)?.isWrapped) start--;
+  let text = textAt(term, start);
+  for (let row = start + 1; buffer.getLine(row)?.isWrapped; row++) text += textAt(term, row);
+  return text;
 }
 
 function textAt(term: Terminal, line: number): string {
@@ -105,31 +121,93 @@ describe('scrollback bookmarks', () => {
     await write(term, lines(0, 30));
     expect(addAt(term, 'pty-e', store)).toBe('added');
     expect(term.markers).toHaveLength(1);
+    const stop = watchScrollbackBookmarks(store, (ptyId) => (ptyId === 'pty-e' ? term : undefined));
 
     store.getState().clearBookmarks('pty-e');
 
     expect(term.markers).toHaveLength(0);
+    stop();
     term.dispose();
   });
 
-  it('comes back on the same text after a reset and replay', async () => {
-    const term = new Terminal({ cols: 40, rows: 10, scrollback: 1000, allowProposedApi: true });
-    const store = createTestStore();
-    await write(term, lines(0, 100));
-    term.scrollLines(-30);
-    const text = textAt(term, term.buffer.active.viewportY);
-    expect(addAt(term, 'pty-f', store)).toBe('added');
+  describe('across a repaint (reset, then the session replayed)', () => {
+    async function bookmarked(ptyId: string, cols = 40) {
+      const term = new Terminal({ cols, rows: 10, scrollback: 1000, allowProposedApi: true });
+      const store = createTestStore();
+      await write(term, longLines(0, 100));
+      term.scrollLines(-30);
+      const text = textAt(term, term.buffer.active.viewportY);
+      expect(addAt(term, ptyId, store)).toBe('added');
+      return { term, store, text };
+    }
 
-    const restore = keepAcrossRepaint(term, 'pty-f', store);
-    term.reset();
-    expect(store.getState().terminalBookmarks['pty-f']).toBeUndefined();
-    await write(term, lines(0, 100));
-    restore();
+    it('comes back on the same text when the replay is the same, in two store sets', async () => {
+      const { term, store, text } = await bookmarked('pty-f');
+      term.scrollLines(-5);
+      const text2 = textAt(term, term.buffer.active.viewportY);
+      expect(addAt(term, 'pty-f', store)).toBe('added');
+      let sets = 0;
+      const unsubscribe = store.subscribe(() => { sets++; });
 
-    const ids = store.getState().terminalBookmarks['pty-f'];
-    expect(ids).toHaveLength(1);
-    const marker = term.markers.find((m) => m.id === ids[0]);
-    expect(marker && textAt(term, marker.line)).toBe(text);
-    term.dispose();
+      const restore = keepAcrossRepaint(term, 'pty-f', store);
+      term.reset();
+      expect(store.getState().terminalBookmarks['pty-f']).toBeUndefined();
+      await write(term, longLines(0, 100));
+      restore();
+
+      unsubscribe();
+      expect(sets).toBe(2);
+      const ids = store.getState().terminalBookmarks['pty-f'];
+      expect(ids).toHaveLength(2);
+      const texts = ids.map((id) => {
+        const marker = term.markers.find((m) => m.id === id);
+        return marker && textAt(term, marker.line);
+      });
+      expect(texts.sort()).toEqual([text, text2].sort());
+      term.dispose();
+    });
+
+    it('is dropped, not moved, when output arrived while the pane was hidden', async () => {
+      const { term, store } = await bookmarked('pty-g');
+
+      const restore = keepAcrossRepaint(term, 'pty-g', store);
+      term.reset();
+      await write(term, longLines(0, 600));
+      restore();
+
+      expect(store.getState().terminalBookmarks['pty-g']).toBeUndefined();
+      expect(term.markers).toHaveLength(0);
+      term.dispose();
+    });
+
+    it('is dropped or kept on its own text when the replay reflows to another width', async () => {
+      const { term, store, text } = await bookmarked('pty-h');
+
+      const restore = keepAcrossRepaint(term, 'pty-h', store);
+      term.reset();
+      term.resize(20, 10);
+      await write(term, longLines(0, 100));
+      restore();
+
+      for (const id of store.getState().terminalBookmarks['pty-h'] ?? []) {
+        const marker = term.markers.find((m) => m.id === id);
+        expect(marker && logicalTextAt(term, marker.line)).toBe(text);
+      }
+      term.dispose();
+    });
+
+    it('drops every bookmark when the repaint starts on the alternate screen', async () => {
+      const { term, store } = await bookmarked('pty-i');
+      await write(term, '\x1b[?1049h');
+
+      const restore = keepAcrossRepaint(term, 'pty-i', store);
+
+      expect(store.getState().terminalBookmarks['pty-i']).toBeUndefined();
+      term.reset();
+      await write(term, longLines(0, 100));
+      restore();
+      expect(store.getState().terminalBookmarks['pty-i']).toBeUndefined();
+      term.dispose();
+    });
   });
 });

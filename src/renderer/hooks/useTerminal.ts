@@ -1121,9 +1121,10 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
         const fromBottom = Math.max(0, term.buffer.active.baseY - term.buffer.active.viewportY);
         // reset() disposes every marker; put the scrollback bookmarks back
         // once the snapshot has been parsed.
-        const restoreBookmarks = ptyIdRef.current
-          ? keepBookmarksAcrossRepaint(term, ptyIdRef.current, useStore)
-          : null;
+        let restoreBookmarks: (() => void) | null = null;
+        try {
+          if (ptyIdRef.current) restoreBookmarks = keepBookmarksAcrossRepaint(term, ptyIdRef.current, useStore);
+        } catch { /* a bookmark carry never stops the repaint */ }
         discardTerminalOutput(term);
         term.reset();
         shellPromptModeResetFor(term)?.reset();
@@ -1137,8 +1138,9 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
           writePtyDataImmediately(term, chunk, replayMuteRef.current);
         }
         if (restoreBookmarks) {
+          const restore = restoreBookmarks;
           term.write('', () => {
-            try { restoreBookmarks(); } catch { /* disposed mid-restore — teardown owns cleanup */ }
+            try { restore(); } catch { /* disposed mid-restore — teardown owns cleanup */ }
           });
         }
         markTerminalClean(term);
@@ -2974,7 +2976,9 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
       // The RIS disposes every marker. Measure the scrollback bookmarks once
       // the bytes ahead of it have parsed, and put them back after the replay.
       let restoreBookmarks: (() => void) | null = null;
-      const measureBookmarks = () => { restoreBookmarks = keepBookmarksAcrossRepaint(terminal, ptyId, useStore); };
+      const measureBookmarks = () => {
+        try { restoreBookmarks = keepBookmarksAcrossRepaint(terminal, ptyId, useStore); } catch { /* disposed mid-repaint — teardown owns cleanup */ }
+      };
       terminal.write('', measureBookmarks);
       terminal.write(REPAINT_BEGIN, () => { shellPromptModeResetFor(terminal)?.reset(); });
       // The scanner labels every held chunk at its source. Historical bytes

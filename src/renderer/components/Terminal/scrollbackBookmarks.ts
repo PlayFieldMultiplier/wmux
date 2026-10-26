@@ -14,8 +14,14 @@ import type { UISlice } from '../../stores/slices/uiSlice';
  *
  * The two stay in step both ways: a disposed marker (trimmed, or its Terminal
  * disposed or reset) takes its id out of the store, and an id taken out of the
- * store (clearBookmarks, clearAllPtyState) disposes its marker.
+ * store (clearBookmarks, clearAllPtyState) disposes its marker
+ * (watchScrollbackBookmarks).
  */
+
+interface BookmarkLine {
+  readonly isWrapped: boolean;
+  translateToString(trimRight?: boolean): string;
+}
 
 /** The part of an xterm Terminal a bookmark uses; @xterm/headless has it too. */
 export interface BookmarkTerminal {
@@ -29,33 +35,44 @@ export interface BookmarkTerminal {
       readonly viewportY: number;
       readonly cursorY: number;
       readonly length: number;
+      getLine(y: number): BookmarkLine | undefined;
     };
   };
   registerMarker(cursorYOffset?: number): IMarker;
 }
 
-type BookmarkState = Pick<UISlice, 'terminalBookmarks' | 'addBookmark' | 'removeBookmark'>;
+type BookmarkState = Pick<UISlice, 'terminalBookmarks' | 'addBookmark' | 'removeBookmark' | 'setBookmarks'>;
 
 export interface BookmarkStore {
   getState(): BookmarkState;
-  subscribe(listener: (state: BookmarkState) => void): () => void;
 }
 
-/** Bookmark the line `cursorOffset` lines from the cursor's line. */
-function track(term: BookmarkTerminal, ptyId: string, store: BookmarkStore, cursorOffset: number): void {
+/** A marker `cursorOffset` lines from the cursor's line, whose disposal takes
+ *  its id out of the store. The caller puts the id in. */
+function register(term: BookmarkTerminal, ptyId: string, store: BookmarkStore, cursorOffset: number): IMarker {
   const marker = term.registerMarker(cursorOffset);
-  store.getState().addBookmark(ptyId, marker.id);
-  const unsubscribe = store.subscribe((state) => {
-    if (!state.terminalBookmarks[ptyId]?.includes(marker.id)) marker.dispose();
-  });
-  marker.onDispose(() => {
-    unsubscribe();
-    store.getState().removeBookmark(ptyId, marker.id);
-  });
+  marker.onDispose(() => store.getState().removeBookmark(ptyId, marker.id));
+  return marker;
 }
 
 function bookmarkMarkers(term: BookmarkTerminal, ids: readonly number[] | undefined): IMarker[] {
   return ids ? term.markers.filter((m) => ids.includes(m.id)) : [];
+}
+
+/** The whole logical line `y` belongs to, wrapped rows joined. */
+function logicalText(term: BookmarkTerminal, y: number): string | undefined {
+  const buffer = term.buffer.active;
+  if (!buffer.getLine(y)) return undefined;
+  let start = y;
+  while (start > 0 && buffer.getLine(start)?.isWrapped) start--;
+  let text = '';
+  for (let row = start; row < buffer.length; row++) {
+    const line = buffer.getLine(row);
+    if (!line || (row > start && !line.isWrapped)) break;
+    const next = buffer.getLine(row + 1);
+    text += line.translateToString(!next?.isWrapped);
+  }
+  return text;
 }
 
 /**
@@ -70,7 +87,8 @@ export function addAt(term: BookmarkTerminal, ptyId: string, store: BookmarkStor
   if (bookmarkMarkers(term, ids).some((m) => m.line === buffer.viewportY)) return 'exists';
   // viewportY is already an absolute buffer line; registerMarker counts from
   // the cursor's absolute line (baseY + cursorY).
-  track(term, ptyId, store, buffer.viewportY - (buffer.baseY + buffer.cursorY));
+  const marker = register(term, ptyId, store, buffer.viewportY - (buffer.baseY + buffer.cursorY));
+  store.getState().addBookmark(ptyId, marker.id);
   return 'added';
 }
 
@@ -88,27 +106,63 @@ export function rowsInView(term: BookmarkTerminal, ids: readonly number[]): { id
 /**
  * Carry a pane's bookmarks across a repaint that resets the Terminal (RIS
  * disposes every marker) and replays the session. Call it right before the
- * reset; call what it returns once the replay has been parsed. Each bookmark
- * comes back the same number of lines above the cursor, which sits at the end
- * of the output both times; one the shorter replay no longer reaches is
- * dropped, as is every one when the replay ends on the alternate screen.
+ * reset; call what it returns once the replay has been parsed.
+ *
+ * A bookmark comes back only on a line it provably still is: the same number
+ * of lines above the cursor (which sits at the end of the output both times)
+ * and the same text. Otherwise it is dropped, never moved to another line:
+ * output that arrived while the pane was hidden or a reflow to another width
+ * changes what sits there. None survive a repaint that starts or ends on the
+ * alternate screen, whose markers the public API cannot reach.
+ *
+ * The store changes twice whatever the number of bookmarks: the ids go out
+ * here, and the restored ones come back in one set.
  */
 export function keepAcrossRepaint(term: BookmarkTerminal, ptyId: string, store: BookmarkStore): () => void {
   const before = term.buffer.active;
   const cursorLine = before.baseY + before.cursorY;
-  const aboveCursor = bookmarkMarkers(term, store.getState().terminalBookmarks[ptyId])
-    .map((m) => cursorLine - m.line);
+  const carried = before.type === 'alternate'
+    ? []
+    : bookmarkMarkers(term, store.getState().terminalBookmarks[ptyId])
+      .map((m) => ({ marker: m, aboveCursor: cursorLine - m.line, text: logicalText(term, m.line) }));
+  if (store.getState().terminalBookmarks[ptyId]) store.getState().setBookmarks(ptyId, []);
+  for (const { marker } of carried) marker.dispose();
   return () => {
     const after = term.buffer.active;
-    if (after.type === 'alternate') return;
+    if (carried.length === 0 || after.type === 'alternate') return;
     const cursorLineAfter = after.baseY + after.cursorY;
-    const ids = store.getState().terminalBookmarks[ptyId];
+    const ids = store.getState().terminalBookmarks[ptyId] ?? [];
     const taken = new Set(bookmarkMarkers(term, ids).map((m) => m.line));
-    for (const distance of aboveCursor) {
-      const line = cursorLineAfter - distance;
+    const restored: number[] = [];
+    for (const { aboveCursor, text } of carried) {
+      const line = cursorLineAfter - aboveCursor;
       if (line < 0 || line >= after.length || taken.has(line)) continue;
+      if (text === undefined || logicalText(term, line) !== text) continue;
       taken.add(line);
-      track(term, ptyId, store, -distance);
+      restored.push(register(term, ptyId, store, -aboveCursor).id);
     }
+    if (restored.length > 0) store.getState().setBookmarks(ptyId, [...ids, ...restored]);
   };
+}
+
+/**
+ * Dispose the marker of every id the store drops (clearBookmarks,
+ * clearAllPtyState), when its pane's Terminal is still reachable. One
+ * subscription for the app; returns the teardown.
+ */
+export function watchScrollbackBookmarks(
+  store: { subscribe(listener: (state: BookmarkState, prev: BookmarkState) => void): () => void },
+  terminalFor: (ptyId: string) => BookmarkTerminal | undefined,
+): () => void {
+  return store.subscribe((state, prev) => {
+    if (state.terminalBookmarks === prev.terminalBookmarks) return;
+    for (const [ptyId, before] of Object.entries(prev.terminalBookmarks)) {
+      const after = state.terminalBookmarks[ptyId];
+      if (after === before) continue;
+      const dropped = before.filter((id) => !after?.includes(id));
+      if (dropped.length === 0) continue;
+      const term = terminalFor(ptyId);
+      if (term) for (const marker of bookmarkMarkers(term, dropped)) marker.dispose();
+    }
+  });
 }

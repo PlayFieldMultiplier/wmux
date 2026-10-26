@@ -95,6 +95,7 @@ import type { SessionData, PaneLeaf, Pane, StashedPane, Surface, Workspace } fro
 import { FIRST_RUN_REOPEN_EVENT } from '../../../shared/firstRun';
 import { isFileDrag } from '../../../shared/dragDrop';
 import { terminalRegistry, watchColdFramePersistence } from '../../hooks/useTerminal';
+import { watchScrollbackBookmarks } from '../Terminal/scrollbackBookmarks';
 import { clearPersistedColdFrames, restoreColdFrames } from '../../terminal/coldFrame';
 import { installSleepPreventionBridge } from '../../utils/sleepPreventionBridge';
 import { heldSuspendedIds, holdsSuspendedSession, resolvePtyIdsToClear } from '../../hooks/reconcileWithReQuery';
@@ -2181,6 +2182,9 @@ export default function AppLayout() {
   // beforeunload (an installer update, a crash). Only while "Restore on
   // launch" is on; turning it off clears the stored frames.
   useEffect(() => watchColdFramePersistence(), []);
+
+  // A scrollback bookmark cleared from the store takes its xterm marker along.
+  useEffect(() => watchScrollbackBookmarks(useStore, (ptyId) => terminalRegistry.get(ptyId)), []);
 
   // Keep the computer awake while agents work: the mode and the working
   // verdict to main, main's sleep window back (utils/sleepPreventionBridge.ts).

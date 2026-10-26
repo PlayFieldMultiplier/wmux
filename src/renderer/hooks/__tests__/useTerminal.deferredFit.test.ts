@@ -157,10 +157,11 @@ describe('#1255 — every fit() apply site is floor-gated, every recovery re-ass
     // sendResize carries no lastSentCols dedup — these two points must push
     // the real size even when the renderer cache already "matches", or the
     // daemon stays pinned at its clamp after a transient tiny fit.
-    // Window covers the whole settle fn — #1258's scroll-preservation block,
-    // the scrollback-bookmark carry and the in-stream reset/END writes also
-    // live inside it, ahead of the re-assert.
-    const resync = src.slice(src.indexOf('const completeResyncFromFlush'), src.indexOf('const completeResyncFromFlush') + 4000);
+    // Window is the whole settle fn, up to the next declaration — #1258's
+    // scroll-preservation block, the scrollback-bookmark carry and the
+    // in-stream reset/END writes also live inside it, ahead of the re-assert.
+    const start = src.indexOf('const completeResyncFromFlush');
+    const resync = src.slice(start, src.indexOf('let firstDataFired', start));
     expect(resync).toMatch(/proposedSafeDimensions\(fitAddon, container\)/);
     expect(resync).toMatch(/sendResize\(ptyId, dims\.cols, dims\.rows\)/);
     // Anchor on the reattach log line itself — plain "daemon reattach" also
