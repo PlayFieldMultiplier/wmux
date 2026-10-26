@@ -45,17 +45,26 @@ wmux "$@" >/dev/null
 
 # The web UI starts from existing terminals, so a fresh home gets one, and the
 # log names the address to open first (the token is the user's own secret).
-json() { /opt/wmux/node/bin/node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);process.stdout.write(String($1))})"; }
-token=$(wmux web --status --json | json 'j.token')
+json() { /opt/wmux/node/bin/node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{const j=JSON.parse(s);process.stdout.write(String($1))}catch{}})"; }
+token=$(wmux web --status --json 2>/dev/null | json 'j.token' || true)
 api() { curl -fsS -H "Authorization: Bearer $token" -H "Origin: http://127.0.0.1:$port" -H 'Content-Type: application/json' "$@"; }
-if [ "$(api "http://127.0.0.1:$port/api/sessions" | json 'j.sessions.length')" = "0" ]; then
-  api -X POST -d '{"workspaceId":"ws-main","workspaceName":"main"}' "http://127.0.0.1:$port/api/sessions" >/dev/null \
-    || echo "Could not create the first terminal." >&2
-fi
-if [ -n "${WMUX_ALLOW_HOST:-}" ]; then
-  echo "wmux is ready. Open: https://${WMUX_ALLOW_HOST%%,*}/?token=$token"
+if [ -z "$token" ]; then
+  echo "Could not read the wmux token; run 'wmux web --status' in the container." >&2
 else
-  echo "wmux is ready on port $port. Token: $token"
+  count=$(api "http://127.0.0.1:$port/api/sessions" 2>/dev/null | json 'j.sessions.length' || true)
+  if [ "$count" = "0" ]; then
+    api -X POST -d '{"workspaceId":"ws-main","workspaceName":"main"}' "http://127.0.0.1:$port/api/sessions" >/dev/null 2>&1 \
+      || echo "Could not create the first terminal." >&2
+  elif [ -z "$count" ]; then
+    echo "Could not list terminals; skipped creating the first one." >&2
+  fi
+  # Sign in first, then open the token address: a token in the URL during
+  # sign-in would travel to the identity provider inside the return address.
+  if [ -n "${WMUX_ALLOW_HOST:-}" ]; then
+    echo "wmux is ready. After signing in, open: https://${WMUX_ALLOW_HOST%%,*}/?token=$token"
+  else
+    echo "wmux is ready on port $port. Token: $token"
+  fi
 fi
 
 wait "$daemon"

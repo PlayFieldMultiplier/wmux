@@ -8,7 +8,9 @@
 The files are in [`deploy/docker/`](../../deploy/docker/):
 
 - `Dockerfile`: one user's headless wmux (daemon and `wmux web`) on Debian 12,
-  built from a released `wmux-server` tarball whose sha256 is checked.
+  built from a released `wmux-server` tarball. The download is checked against
+  the release's `.sha256` file and, when you pass `WMUX_SHA256`, against a hash
+  you pinned yourself.
 - `compose.example.yaml`: Traefik, oauth2-proxy and one container per person.
 
 ## What you get
@@ -63,8 +65,14 @@ The files are in [`deploy/docker/`](../../deploy/docker/):
    docker compose -f compose.example.yaml up -d --build
    ```
 
-   To pin another wmux release, build with
-   `--build-arg WMUX_VERSION=<version>`.
+   The OIDC client secret reaches oauth2-proxy as a compose secret file, not
+   as a command-line flag. To build another wmux release, or to pin the
+   tarball's hash, build first:
+
+   ```bash
+   docker compose -f compose.example.yaml build \
+     --build-arg WMUX_VERSION=<version> --build-arg WMUX_SHA256=<sha256>
+   ```
 
 4. **Hand out each person's address.** On its first start, each container
    creates one terminal and logs the address to open:
@@ -76,8 +84,11 @@ The files are in [`deploy/docker/`](../../deploy/docker/):
    Send each person their own line privately. The token in it is that
    person's wmux secret.
 
-5. **First visit.** The person opens the address, signs in with the company
-   account, and lands in their terminal. To use Claude Code, they run
+5. **First visit.** The person first opens their address without the token
+   (`https://alice.wmux.example.com/`) and signs in with the company account.
+   Then they open the token address from step 4 and land in their terminal.
+   Signing in first matters: a token in the address during sign-in travels to
+   the identity provider inside the return address. To use Claude Code, they run
    `claude` and finish the sign-in once. The login is kept in their volume.
 
 ## Things to know
@@ -91,6 +102,10 @@ The files are in [`deploy/docker/`](../../deploy/docker/):
 - **The host administrator can see everything.** Anyone with root on the
   server can read every volume, including each `~/.claude` login. Tell users,
   and keep administrator access small.
+- **Cloud metadata.** User containers can reach the host's network,
+  including a cloud provider's metadata address (`169.254.169.254`). On a
+  cloud VM, block it for the user networks with a host firewall rule, or any
+  user can read the VM's cloud credentials.
 - **Restarts.** Restarting a container keeps the token, the terminal list and
   the Claude Code install. Processes that were running in its terminals end.
 - **Adding people.** Each new person means another service block, plus

@@ -2,6 +2,7 @@
 # server where each person gets their own instance behind a TLS reverse proxy.
 #
 #   docker build -t wmux-server --build-arg WMUX_VERSION=4.11.0 deploy/docker
+#     [--build-arg WMUX_SHA256=<sha256 of the tarball for your architecture>]
 #   docker run -d -v wmux-home:/home/wmux -p 7681:7681 \
 #     -e WMUX_ALLOW_HOST=wmux.example.com wmux-server
 #
@@ -11,6 +12,8 @@
 FROM debian:12-slim
 
 ARG WMUX_VERSION=4.11.0
+# Optional: the expected tarball sha256, so a swapped release asset is caught too.
+ARG WMUX_SHA256=
 ARG TARGETARCH
 
 RUN apt-get update \
@@ -27,6 +30,7 @@ RUN set -eu; \
     cd /tmp; \
     curl -fsSLO "$base/$name" -O "$base/$name.sha256"; \
     sha256sum -c "$name.sha256"; \
+    if [ -n "$WMUX_SHA256" ]; then echo "$WMUX_SHA256  $name" | sha256sum -c -; fi; \
     mkdir -p /opt/wmux; \
     tar -xzf "$name" -C /opt/wmux --strip-components=1; \
     rm -f "$name" "$name.sha256"
