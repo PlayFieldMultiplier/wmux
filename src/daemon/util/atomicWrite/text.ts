@@ -33,6 +33,7 @@ import {
   rotateBackupsSync,
 } from './rotation';
 import { quarantineFile, quarantineFileSync } from './quarantine';
+import { commitRename, commitRenameSync, type RenameRetryPolicy } from './core';
 
 // ── Public types ─────────────────────────────────────────────────────
 
@@ -53,6 +54,9 @@ export interface AtomicWriteTextOptions {
 
   /** Injectable clock for tests. Default: Date.now. */
   clock?: () => number;
+
+  /** Test seam for the win32 commit-rename retry. Mirrors `AtomicWriteOptions.renameRetry`. */
+  renameRetry?: RenameRetryPolicy;
 }
 
 export interface AtomicReadTextOptions {
@@ -177,7 +181,7 @@ export async function atomicWriteText(
       }
     }
 
-    await fsp.rename(tmp, targetPath);
+    await commitRename(tmp, targetPath, opts.renameRetry);
   } catch (err) {
     await unlinkIfExists(tmp);
     throw err;
@@ -279,7 +283,7 @@ export function atomicWriteTextSync(
       }
     }
 
-    fs.renameSync(tmp, targetPath);
+    commitRenameSync(tmp, targetPath, opts.renameRetry);
   } catch (err) {
     unlinkIfExistsSync(tmp);
     throw err;

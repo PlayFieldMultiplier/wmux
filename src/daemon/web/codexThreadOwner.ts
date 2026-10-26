@@ -4,6 +4,7 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import type { CodexRelayObservation } from './codexTuiSelection';
 import { threadIdentityEnv } from './codexRelayPolicy';
+import { commitRenameSync } from '../util/atomicWrite/core';
 
 type Pane = { id: string; env?: Record<string, string> };
 const snapshots = new WeakMap<Pane, string>();
@@ -14,7 +15,8 @@ function writeAtomic(file: string, value: unknown): void {
   const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;
   try {
     fs.writeFileSync(tmp, JSON.stringify(value), { mode: 0o600 });
-    fs.renameSync(tmp, file);
+    // Retries a transient win32 handle hold on the destination (antivirus, a hook reading it).
+    commitRenameSync(tmp, file, undefined);
   } finally {
     try { fs.unlinkSync(tmp); } catch { /* renamed or never created */ }
   }

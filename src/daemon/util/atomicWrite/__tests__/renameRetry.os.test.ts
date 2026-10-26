@@ -12,6 +12,7 @@ import path from 'node:path';
 import os from 'node:os';
 
 import { atomicWriteJSON, atomicWriteJSONSync } from '../core';
+import { atomicWriteText, atomicWriteTextSync } from '../text';
 
 let tmpDir: string;
 let targetPath: string;
@@ -269,6 +270,28 @@ describe('atomicWriteJSON commit-rename retry', () => {
 
       const commits = spy.mock.calls.filter((c) => c[1] === targetPath);
       expect(commits).toHaveLength(1);
+    });
+  });
+});
+
+describe('atomicWriteText commit-rename retry (shares the core policy)', () => {
+  it('sync: succeeds once the transient EPERM window closes', async () => {
+    await asPlatform('win32', () => {
+      const spy = failCommitRenameSync(2);
+      atomicWriteTextSync(targetPath, 'hello', { renameRetry: fastRetry });
+
+      expect(fs.readFileSync(targetPath, 'utf-8')).toBe('hello');
+      expect(spy.mock.calls.filter((c) => c[1] === targetPath)).toHaveLength(3);
+    });
+  });
+
+  it('async: succeeds once the transient EPERM window closes', async () => {
+    await asPlatform('win32', async () => {
+      const spy = failCommitRename(2);
+      await atomicWriteText(targetPath, 'hello', { renameRetry: fastRetry });
+
+      expect(fs.readFileSync(targetPath, 'utf-8')).toBe('hello');
+      expect(spy.mock.calls.filter((c) => c[1] === targetPath)).toHaveLength(3);
     });
   });
 });

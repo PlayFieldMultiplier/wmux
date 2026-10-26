@@ -258,7 +258,7 @@ function warnRenameRetriesExhausted(targetPath: string, attempts: number, err: u
  * On final failure the rename's own error is rethrown unchanged — callers
  * branch on `err.code`. A throwing injected sleeper cannot mask it.
  */
-function commitRenameSync(
+export function commitRenameSync(
   tmp: string,
   targetPath: string,
   policy: RenameRetryPolicy | undefined,
@@ -289,7 +289,7 @@ function commitRenameSync(
   }
 }
 
-async function commitRename(
+export async function commitRename(
   tmp: string,
   targetPath: string,
   policy: RenameRetryPolicy | undefined,
