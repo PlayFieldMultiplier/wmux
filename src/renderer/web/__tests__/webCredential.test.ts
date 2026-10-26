@@ -72,6 +72,21 @@ describe('leaving after the daemon refuses the page', () => {
     expect(e.location.replace).not.toHaveBeenCalled();
   });
 
+  it('a proxy session refused again right after its reload stops reloading', () => {
+    let t = 1_000_000;
+    const e = { ...env(), now: () => t };
+    const session: WebSession = { credential: { kind: 'proxy' }, storedToken: false };
+    createLeave(session, e)();
+    t += 5_000;
+    createLeave(session, e)();
+    expect(e.location.reload).toHaveBeenCalledTimes(1);
+    expect(e.location.replace.mock.calls).toEqual([[CLASSIC_PATH]]);
+    // A sign-in that ends hours later reloads again.
+    t += 3_600_000;
+    createLeave(session, e)();
+    expect(e.location.reload).toHaveBeenCalledTimes(2);
+  });
+
   it('a refused stored token is dropped and the page boots again from /, and never twice in a tab', () => {
     const e = env({ [WEB_TOKEN_KEY]: 'old' });
     const session: WebSession = { credential: { kind: 'operator', token: 'old' }, storedToken: true };

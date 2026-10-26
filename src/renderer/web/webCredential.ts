@@ -13,6 +13,9 @@ import { CLASSIC_PATH } from './webElectronApi';
 
 export const WEB_TOKEN_KEY = 'wmux-web-token';
 const STALE_TOKEN_RELOAD_KEY = 'wmux-web-stale-token-reload';
+const SIGN_IN_RELOAD_KEY = 'wmux-web-sign-in-reload-at';
+/** A second refusal this soon after a sign-in reload means reloading does not help. */
+const SIGN_IN_RELOAD_GAP_MS = 60_000;
 const PROBE_TIMEOUT_MS = 10_000;
 
 export type WebCredential =
@@ -70,11 +73,13 @@ export interface LeaveEnv {
   location: { reload(): void; replace(url: string): void };
   localStorage: Pick<Storage, 'removeItem'>;
   sessionStorage: Pick<Storage, 'getItem' | 'setItem'>;
+  now?: () => number;
 }
 
 /**
  * The one way out once the daemon refuses this page; runs at most once.
- *  - proxy: reload, so the navigation goes through the sign-in again.
+ *  - proxy: reload, so the navigation goes through the sign-in again, unless
+ *    the last such reload was moments ago (a reload loop).
  *  - a stored token: it may be stale while a sign-in proxy would admit the
  *    page, so drop it and boot again from `/` (once per tab).
  *  - otherwise: the classic page, which owns the token form and pairing.
@@ -85,7 +90,8 @@ export function createLeave(session: WebSession, env: LeaveEnv): () => void {
     if (left) return;
     left = true;
     if (session.credential.kind === 'proxy') {
-      env.location.reload();
+      if (mayReloadForSignIn(env)) env.location.reload();
+      else env.location.replace(CLASSIC_PATH);
       return;
     }
     if (session.storedToken && dropStaleToken(env)) {
@@ -94,6 +100,18 @@ export function createLeave(session: WebSession, env: LeaveEnv): () => void {
     }
     env.location.replace(CLASSIC_PATH);
   };
+}
+
+function mayReloadForSignIn(env: LeaveEnv): boolean {
+  const now = (env.now ?? Date.now)();
+  try {
+    const last = Number(env.sessionStorage.getItem(SIGN_IN_RELOAD_KEY));
+    if (last && now - last < SIGN_IN_RELOAD_GAP_MS) return false;
+    env.sessionStorage.setItem(SIGN_IN_RELOAD_KEY, String(now));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function dropStaleToken(env: LeaveEnv): boolean {
