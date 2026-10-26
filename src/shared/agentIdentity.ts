@@ -187,6 +187,9 @@ export interface AgentSetupSpec {
   /** The agent's own first-run screens have a guide card
    *  (src/shared/claudeFirstRun.ts `claudeSetupScreen`). */
   readonly firstRunScreens?: 'claude';
+  /** The "Agent ready" step shows this card only once the agent is found:
+   *  wmux knows the agent, but does not ask a new user to install it. */
+  readonly card?: 'when-installed';
 }
 
 /**
@@ -420,6 +423,7 @@ export const AGENT_IDENTITIES = [
     resume: { picker: '--resume', exact: '--resume={id}', idFormat: 'uuid' },
     setup: {
       binary: 'copilot',
+      card: 'when-installed',
       // https://github.com/github/copilot-cli/blob/main/install.sh:
       // PREFIX="${PREFIX:-$HOME/.local}", INSTALL_DIR="$PREFIX/bin". The WinGet
       // package is a portable zip whose command is `copilot`
@@ -682,6 +686,7 @@ export const AGENT_IDENTITIES = [
     roleBinding: false,
     setup: {
       binary: 'amp',
+      card: 'when-installed',
       // install.sh: "Installs Amp into ~/.amp/bin and links it onto your PATH";
       // install.ps1: "$HOME\.amp\bin (default)". Both honour AMP_HOME.
       native: { posix: ['.amp', 'bin', 'amp'], win32: { root: 'home', path: ['.amp', 'bin', 'amp.exe'] } },
@@ -722,6 +727,7 @@ export const AGENT_IDENTITIES = [
     roleBinding: false,
     setup: {
       binary: 'droid',
+      card: 'when-installed',
       // https://app.factory.ai/cli: DST="$HOME/.local/bin";
       // https://app.factory.ai/cli/windows: Join-Path $env:USERPROFILE "bin".
       native: { posix: ['.local', 'bin', 'droid'], win32: { root: 'home', path: ['bin', 'droid.exe'] } },
@@ -759,6 +765,7 @@ export const AGENT_IDENTITIES = [
     process: { packages: ['@earendil-works/pi-coding-agent', '@mariozechner/pi-coding-agent'] },
     setup: {
       binary: 'pi',
+      card: 'when-installed',
       // From https://pi.dev/install.sh and https://pi.dev/install.ps1 (read
       // 2026-10-26): the launcher is ~/.pi/agent/bin/pi, linked into a PATH
       // folder; on Windows %USERPROFILE%\.pi\agent\bin\pi.cmd.
@@ -801,6 +808,7 @@ export const AGENT_IDENTITIES = [
     resume: { picker: '--resume', idFormat: 'picker-only' },
     setup: {
       binary: 'cursor-agent',
+      card: 'when-installed',
       // https://cursor.com/install links ~/.local/bin/cursor-agent (and agent)
       // to the versioned executable; https://cursor.com/install?win32=true
       // copies cursor-agent.exe into %LOCALAPPDATA%\cursor-agent.
