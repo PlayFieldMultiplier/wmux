@@ -192,7 +192,9 @@ DIAGNOSTICS
 
 ROLES
   role resolve <Role>               Print what a role is bound to in Settings
-             [--json]               {agent, model, effort, argv, flags}; exit 2 if unbound
+             [--json]               {agent, model, effort, argv, flags}; exit 2 if unbound,
+                                    exit 1 with {role, bound:true, unavailable} when
+                                    its custom agent cannot launch
              [--session <path>]     Read another session.json (default: the app's)
 
 COMMAND DECK

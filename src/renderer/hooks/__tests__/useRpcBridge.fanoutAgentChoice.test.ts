@@ -110,7 +110,10 @@ describe('useRpcBridge — fanout.spawnWorkspace wiring for agent choices', () =
   };
 
   it('re-validates the choice against the closed table AND normalizeRoleBinding, failing the task if either disagrees', () => {
-    expect(block).toMatch(/validateFanoutAgentChoice\(params\.agentChoice, \{ allowUnattended: true, allowEffort: true \}\)/);
+    expect(block).toMatch(/validateFanoutAgentChoice\(params\.agentChoice, \{\s*allowUnattended: true,\s*allowEffort: true,\s*customAgents,\s*\}\)/);
+    // main's approval snapshot, else the current list; a role bound to a missing custom agent fails the task.
+    expect(block).toMatch(/const customAgents = fanoutLaunchCustomAgents\(params\.customAgents, useStore\.getState\(\)\.customAgents\)/);
+    expect(block).toMatch(/if \(roleBinding\?\.agent && unresolvedCustomAgent\(roleBinding\.agent, customAgents, extraAgents\)\) \{\s*return \{ error:/);
     expect(block).toMatch(/normalizeRoleBinding\(fanoutChoiceBinding\(checked\.choice\)\)/);
     expect(block).toMatch(/return \{ error: `fanout\.spawnWorkspace: invalid agent choice/);
   });
@@ -118,8 +121,8 @@ describe('useRpcBridge — fanout.spawnWorkspace wiring for agent choices', () =
   it('runs the chain in order: marker off → agent swap → model → CLI flags → permission flags → marker on', () => {
     const order = [
       /splitModelEnvMarker\(initialCommand\)/,
-      /applyRoleAgent\(bareCommand, roleBinding, extraAgents/,
-      /withRoleBinding\(seeded, roleBinding, role, extraAgents\)/,
+      /applyRoleAgent\(bareCommand, roleBinding, \{\s*\.\.\.\(extraAgents/,
+      /withRoleBinding\(seeded, roleBinding, role, extraAgents, customAgents\)/,
       /applyFanoutAgentFlags\(\s*roleBoundRaw\.initialCommand,\s*agentChoice,\s*cwd,/,
       /applyWorkerPermissionFlags\(roleBound\.initialCommand, workerMode\)/,
       /reattachModelEnvMarker\(marker, bound\.initialCommand, seeded\.shell\)/,

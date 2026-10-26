@@ -806,11 +806,13 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
   // Keyed on the terminal the strip shows, which is what draws the chip.
   const stripPtyId = pane.surfaces.find((s) => s.id === stripActiveSurfaceId)?.ptyId;
   const hasUsageLimit = useStore((s) => !!stripPtyId && !!s.usageLimits[stripPtyId]);
+  const customAgents = useStore((s) => s.customAgents);
   const headerExtraChrome = paneHeaderExtraChromeWidth({
     chatToggle: chatViewEnabled && isTerminalSurfaceType(activeSurfaceType),
     enforcedModelBadge: showsEnforcedModelBadge({
       binding: paneRoleBinding,
       surfaceType: activeSurfaceType,
+      customAgents,
     }),
     usageLimitChip: hasUsageLimit,
     remoteSpawnChip: !!readRemoteSpawnedBy(workspace),

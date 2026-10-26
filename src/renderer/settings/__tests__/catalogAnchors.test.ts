@@ -24,6 +24,7 @@ const SOURCES = [
   'ClaudeIntegrationSection.tsx',
   'IntegrationSetupSection.tsx',
   'FanoutPresetsSection.tsx',
+  'CustomAgentsSection.tsx',
   'McpStatusSection.tsx',
   'tabs/TokenUsageTab/ProfileSection.tsx',
   'tabs/TokenUsageTab.tsx',
