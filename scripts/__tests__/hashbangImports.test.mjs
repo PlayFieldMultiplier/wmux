@@ -15,7 +15,7 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { RELATIVE_IMPORT, ROOT, isTypeOnlyImport, listTestFiles, resolveRelative } from '../lib/test-lanes.mjs';
+import { RELATIVE_IMPORT, ROOT, isTypeOnlyImport, listTestFiles, resolveRelative, stripStrings } from '../lib/test-lanes.mjs';
 
 // A query that hands the importer the file's text or URL: the file is not run.
 const NOT_RUN_QUERY = /\?(?:raw|url|inline)\b/;
@@ -31,10 +31,14 @@ const QUOTED_RELATIVE = /['"](\.{1,2}\/[^'"]+)['"]/g;
  */
 function inComment(source, index) {
   const lineStart = source.lastIndexOf('\n', index - 1) + 1;
-  // Strings out first: a `//` inside one (a URL) opens no comment.
-  // A block comment closed earlier on the line (`/* x */ import ...`) is gone too.
-  const before = source.slice(lineStart, index).replace(/'[^']*'|"[^"]*"|`[^`]*`/g, '').replace(/\/\*.*?\*\//g, '');
-  return before.includes('//') || /^\s*(?:\/\*|\*)/.test(before);
+  // Strings out first (a `//` in a URL opens no comment), and a block comment
+  // opened and closed on this line (`/* x */ import ...`).
+  let before = stripStrings(source.slice(lineStart, index)).replace(/\/\*.*?\*\//g, '');
+  const close = before.lastIndexOf('*/');
+  // ` */ import ...`: a comment opened above ends here, and code follows.
+  if (close !== -1) before = before.slice(close + 2);
+  else if (/^\s*(?:\/\*|\*)/.test(before)) return true;
+  return before.includes('//') || before.includes('/*');
 }
 
 /**
@@ -106,8 +110,18 @@ describe('what the walk counts as a load', () => {
       "/* eslint-disable-next-line */ import { h } from './h.mjs';",
       "import type { T2 } from './t2.mjs';",
       "export { i } from './i.mjs';",
+      " */ import { k } from './k.mjs';",
     ].join('\n');
-    expect(loadedSpecifiers(source)).toEqual(['./a.mjs', './b.mjs', './c.mjs', './d.mjs', './e.mjs', './f.mjs', './g.mjs', './h.mjs', './i.mjs']);
+    expect(loadedSpecifiers(source)).toEqual(['./a.mjs', './b.mjs', './c.mjs', './d.mjs', './e.mjs', './f.mjs', './g.mjs', './h.mjs', './i.mjs', './k.mjs']);
+  });
+
+  it('a re-export after a type import, and an import after a URL string, with or without semicolons', () => {
+    expect(loadedSpecifiers("import type { T } from './t.mjs'\nexport { i } from './i.mjs'\n")).toEqual(['./i.mjs']);
+    expect(loadedSpecifiers("import type { T } from './t.mjs';\nconst u = 'http://h'; import { type A, j } from './j.mjs';\n")).toEqual(['./j.mjs']);
+  });
+
+  it('not a type-only re-export', () => {
+    expect(loadedSpecifiers("export type { X } from './x.mjs';\nexport { type Y } from './y.mjs';\n")).toEqual([]);
   });
 
   it('not a type-only import: TypeScript erases it', () => {

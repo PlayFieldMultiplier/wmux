@@ -51,8 +51,10 @@ concurrency:
   # Pushes to main share one group and supersede each other. A pull request's
   # runs share a group of their own (its ref) and supersede each other only.
   # The nightly and manual runs get their own groups, so a merge or a pull
-  # request never cancels them.
-  group: windows-${{ github.event_name }}-${{ github.ref }}
+  # request never cancels them. A draft's run (skipped by the job's draft
+  # check) gets its own group, as in ci.yml, so a late event from before
+  # `gh pr ready` cannot cancel the ready run.
+  group: windows-${{ github.event_name }}-${{ github.ref }}${{ github.event.pull_request.draft && '-draft' || '' }}
   cancel-in-progress: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
 
 jobs:

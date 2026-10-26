@@ -117,6 +117,11 @@ const WIN32 = /win32/;
 const RESOLVE_SUFFIXES = ['', '.ts', '.tsx', '.mts', '.mjs', '.js', '/index.ts', '/index.tsx', '/index.mjs', '/index.js'];
 
 const toPosix = (p) => p.split(path.sep).join('/');
+
+/** Source with each one-line string literal (and template) emptied to `''`. */
+export const stripStrings = (text) => text.replace(/'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`/g, "''");
+/** Source without its comments; run stripStrings first, or a `//` in a URL counts. */
+export const stripComments = (text) => text.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '');
 const IN_TESTS_DIR = /(?:^|\/)__tests__\//;
 const TEST_SOURCE = /\.test\.[^/]+$/;
 // A relative specifier that can reach a helper: src/test-utils, a __tests__
@@ -159,14 +164,12 @@ export function isTypeOnlyImport(source, index) {
   // statement starts at the last `import` or `export` word: that word in a
   // comment or inside a name is no statement start, and `export ... from`
   // is a statement of its own.
-  const before = window
-    .replace(/'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`/g, "''")
-    .replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '');
+  const before = stripComments(stripStrings(window));
   const starts = [...before.matchAll(/\b(?:import|export)\b/g)];
   if (starts.length === 0) return false;
   const stmt = before.slice(starts[starts.length - 1].index);
-  if (/^import\s+type\b/.test(stmt)) return true;
-  const named = stmt.match(/^import\s*\{([^}]*)\}\s*from\s*$/);
+  if (/^(?:import|export)\s+type\b/.test(stmt)) return true;
+  const named = stmt.match(/^(?:import|export)\s*\{([^}]*)\}\s*from\s*$/);
   if (!named) return false;
   const specifiers = named[1].split(',').map((x) => x.trim()).filter(Boolean);
   return specifiers.length > 0 && specifiers.every((x) => /^type\s/.test(x));

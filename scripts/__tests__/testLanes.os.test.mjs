@@ -131,6 +131,8 @@ describe('the rule', () => {
     expect(classify({ [T]: `import type { A } from './a';\nexport { spawn } from '${CP}';\n` }).lane).toBe('integration');
     expect(classify({ [T]: `import type { A } from './a';\nconst u = 'http://h'; import { spawn } from '${CP}';\n` }).lane).toBe('integration');
     expect(classify({ [T]: `import type { A } from './a'\nexport { spawn } from '${CP}'\n` }).lane).toBe('integration');
+    expect(classify({ [T]: `import type { A } from './a';\nconst u = 'http://h'; import { type B, spawn } from '${CP}';\n` }).lane).toBe('integration');
+    expect(classify({ [T]: `export type { ChildProcess } from '${CP}';\nexport { type Socket } from '${NET}';\n` }).lane).toBe('unit');
     expect(
       classify({ [T]: `vi.mock('${CP}', () => ({ spawn: vi.fn() }));\nimport { spawn } from '${CP}';\n` }).lane,
     ).toBe('unit');
