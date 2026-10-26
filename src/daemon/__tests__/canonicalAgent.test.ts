@@ -182,6 +182,24 @@ describe('detectorSuppressedBy (#919 detector veto)', () => {
 });
 
 describe('reportedAgentName (#1303 no-banner sessions)', () => {
+  it('names a pane by its custom agent only when no registry agent is seen there, the screen included', () => {
+    // "Devbox" is a made-up wrapper the operator defined (`ssh host claude`):
+    // only the screen can see the claude it runs, and the pane stays claude's.
+    const canonical = resolveCanonicalAgentIdentity({ screenSlug: 'claude' });
+    expect(canonical).toEqual({ slug: 'claude', source: 'screen' });
+    expect(detectorSuppressedBy(canonical, 'claude')).toBe(false);
+    expect(reportedAgentName({ rawName: 'Claude Code', screenSlug: 'claude', canonical, customName: 'Devbox' })).toBe('Claude Code');
+    expect(reportedAgentName({ rawName: undefined, screenSlug: undefined, customName: 'Devbox' })).toBe('Devbox');
+    // A hook or a live process names the registry agent itself.
+    expect(reportedAgentName({
+      rawName: undefined,
+      screenSlug: undefined,
+      canonical: resolveCanonicalAgentIdentity({ auth: auth('claude', 30_000) }),
+      customName: 'Devbox',
+    })).toBe('Claude Code');
+    expect(reportedAgentName({ canonical: resolveCanonicalAgentIdentity({ proc: { slug: 'codex', alive: true } }), customName: 'Devbox' })).toBe('Codex CLI');
+  });
+
   it('a fresh exact-routed hook names a pane the detector never named — the #1303 regression guard', () => {
     expect(
       reportedAgentName({

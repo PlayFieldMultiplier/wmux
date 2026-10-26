@@ -14,6 +14,8 @@ import {
   CUSTOM_AGENT_FLAG_MAX,
   CUSTOM_AGENT_NAME_MAX,
   customAgentLaunchLine,
+  customAgentLabelAllowed,
+  customAgentProcessNames,
   customAgentStem,
   type CustomAgent,
   type CustomAgentDropped,
@@ -32,6 +34,7 @@ import {
   draftFromCustomAgent,
   emptyCustomAgentDraft,
   isCustomAgentUsed,
+  PROCESS_NAMES_FIELD_MAX,
   type CustomAgentDraft,
   type CustomAgentUsers,
 } from './customAgentDraft';
@@ -245,6 +248,10 @@ function CustomAgentRow({
         {/* What gets launched: machine evidence, mono. */}
         <p className="ui-row-detail truncate font-mono">{customAgentLaunchLine(agent)}</p>
         <p className="ui-row-detail truncate" data-testid="custom-agent-unattended">
+          {customAgentLabelAllowed(agent.name)
+            ? t('settings.customAgentsKnownBy', { names: customAgentProcessNames(agent).join(', ') })
+            : t('settings.customAgentsNoLabel')}
+          {' · '}
           {agent.unattendedFlags
             ? t('settings.customAgentsUnattended', { flags: agent.unattendedFlags })
             : t('settings.customAgentsUnattendedNone')}
@@ -323,6 +330,11 @@ function CustomAgentEditor({
       {text('unattendedFlags', t('settings.customAgentsUnattendedFlags'), t('settings.customAgentsUnattendedFlagsDesc'), {
         max: CUSTOM_AGENT_ARGS_MAX,
         placeholder: none,
+      })}
+      {text('processNames', t('settings.customAgentsProcessNames'), t('settings.customAgentsProcessNamesDesc'), {
+        max: PROCESS_NAMES_FIELD_MAX,
+        // What an empty field means: the Command's own name.
+        placeholder: draft.command.trim() ? customAgentProcessNames({ command: draft.command })[0] : undefined,
       })}
       {error && <SettingNote tone="danger" role="alert" className="!p-0" data-testid="custom-agent-error">{error}</SettingNote>}
       <div className="flex justify-end gap-2">

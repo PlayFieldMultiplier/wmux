@@ -228,9 +228,15 @@ export function reportedAgentName(inputs: {
   rawName?: string | null;
   screenSlug?: AgentSlug;
   canonical?: CanonicalAgentIdentity;
+  /** The live custom agent the process tracker found (customAgentNameFor). */
+  customName?: string;
 }): string | null {
-  const { rawName, screenSlug, canonical } = inputs;
+  const { rawName, screenSlug, canonical, customName } = inputs;
   if (canonical) return agentSlugToDisplay(canonical.slug);
+  // A custom agent names only a pane no registry agent is seen on, the screen
+  // included: a wrapper (`ssh host claude`) is named as the agent it shows, so
+  // everything keyed by that agent's name keeps working.
+  if (customName) return customName;
   // #919 residue veto: a mappable screen slug with no canonical backing is
   // sticky detector residue, not a live agent.
   if (!rawName || screenSlug) return null;

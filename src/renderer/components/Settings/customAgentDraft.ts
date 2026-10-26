@@ -6,6 +6,8 @@
 // node env.
 
 import {
+  CUSTOM_AGENT_PROCESS_NAMES_MAX,
+  CUSTOM_AGENT_STEM_MAX,
   customAgentStem,
   validateCustomAgents,
   type CustomAgent,
@@ -21,10 +23,16 @@ export interface CustomAgentDraft {
   promptFlag: string;
   modelFlag: string;
   unattendedFlags: string;
+  /** Space- or comma-separated; empty = the Command's own name. */
+  processNames: string;
 }
 
+/** Room for the most process names validation allows, each at its longest,
+ *  with a `, ` between them. */
+export const PROCESS_NAMES_FIELD_MAX = CUSTOM_AGENT_PROCESS_NAMES_MAX * CUSTOM_AGENT_STEM_MAX + (CUSTOM_AGENT_PROCESS_NAMES_MAX - 1) * 2;
+
 export function emptyCustomAgentDraft(): CustomAgentDraft {
-  return { name: '', command: '', args: '', promptFlag: '', modelFlag: '', unattendedFlags: '' };
+  return { name: '', command: '', args: '', promptFlag: '', modelFlag: '', unattendedFlags: '', processNames: '' };
 }
 
 export function draftFromCustomAgent(agent: CustomAgent): CustomAgentDraft {
@@ -35,16 +43,19 @@ export function draftFromCustomAgent(agent: CustomAgent): CustomAgentDraft {
     promptFlag: agent.promptFlag ?? '',
     modelFlag: agent.modelFlag ?? '',
     unattendedFlags: agent.unattendedFlags ?? '',
+    processNames: (agent.processNames ?? []).join(' '),
   };
 }
 
 /** Wire shape for a save: an empty field is omitted, never sent empty. */
-export function customAgentDraftPayload(draft: CustomAgentDraft): Record<string, string> {
-  const out: Record<string, string> = { name: draft.name.trim(), command: draft.command.trim() };
+export function customAgentDraftPayload(draft: CustomAgentDraft): Record<string, string | string[]> {
+  const out: Record<string, string | string[]> = { name: draft.name.trim(), command: draft.command.trim() };
   for (const field of ['args', 'promptFlag', 'modelFlag', 'unattendedFlags'] as const) {
     const v = draft[field].trim();
     if (v) out[field] = v;
   }
+  const processNames = draft.processNames.split(/[\s,]+/).filter((n) => n.length > 0);
+  if (processNames.length > 0) out.processNames = processNames;
   return out;
 }
 

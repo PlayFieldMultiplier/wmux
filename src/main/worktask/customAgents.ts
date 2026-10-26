@@ -15,6 +15,7 @@ import { getWmuxDir } from '../../daemon/config';
 import { atomicWriteJSON } from '../../daemon/util/atomicWrite';
 import type { CustomAgentUse } from './fanoutPresets';
 import {
+  CUSTOM_AGENTS_FILE_MAX,
   customAgentStem,
   normalizeCustomAgentsReport,
   validateCustomAgents,
@@ -45,15 +46,45 @@ export function loadCustomAgentsReport(dir?: string): CustomAgentsReport {
   }
   const hit = cache.get(p);
   if (hit && hit.mtimeMs === stat.mtimeMs && hit.size === stat.size) return hit.report;
+  let read: ReturnType<typeof readCapped>;
+  try {
+    read = readCapped(p);
+  } catch {
+    cache.delete(p);
+    return { agents: [], dropped: [] };
+  }
   let report: CustomAgentsReport;
   try {
-    const raw = JSON.parse(fs.readFileSync(p, 'utf8')) as { agents?: unknown };
+    if (read.text === undefined) throw new Error('custom-agents.json is too large');
+    const raw = JSON.parse(read.text) as { agents?: unknown };
     report = normalizeCustomAgentsReport(raw?.agents, { platform: process.platform });
   } catch {
     report = { agents: [], dropped: [], unreadable: true };
   }
-  cache.set(p, { mtimeMs: stat.mtimeMs, size: stat.size, report });
+  // Keyed by what was read, not by the stat before it.
+  cache.set(p, { mtimeMs: read.mtimeMs, size: read.size, report });
   return report;
+}
+
+/** The file's text, read through one descriptor so the size checked is the
+ *  size read. The daemon reads this file too: an oversized one is unreadable. */
+function readCapped(p: string): { mtimeMs: number; size: number; text?: string } {
+  const fd = fs.openSync(p, 'r');
+  try {
+    const { mtimeMs, size } = fs.fstatSync(fd);
+    if (size > CUSTOM_AGENTS_FILE_MAX) return { mtimeMs, size };
+    const buf = Buffer.alloc(size);
+    // readSync may return fewer bytes than asked: read until the end.
+    let off = 0;
+    while (off < size) {
+      const n = fs.readSync(fd, buf, off, size - off, off);
+      if (n === 0) break;
+      off += n;
+    }
+    return { mtimeMs, size, text: buf.toString('utf8', 0, off) };
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 export function loadCustomAgents(dir?: string): CustomAgent[] {

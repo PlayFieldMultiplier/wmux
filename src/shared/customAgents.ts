@@ -13,12 +13,17 @@
 // registry agent and from the other custom agents, so a reference is never
 // ambiguous.
 //
+// The daemon's process tracker knows a running custom agent by its process
+// names (the Command's name unless the operator lists others) and labels the
+// pane with its name. That label is all it gets: the agent never becomes a
+// registry slug, so resume, hooks, transcripts and recovery never see it.
+//
 // What it is NOT given: no screen status, approval cards, hooks or resume, and
 // never an implicit unattended or permission flag. Its unattended flags are
 // exactly what the operator typed, added only when a preset row turns
 // Unattended on; an empty field means fan-out does not offer Unattended.
 
-import { AGENT_ROWS, agentLauncherStem } from './agentIdentity';
+import { AGENT_IDENTITIES, AGENT_ROWS, agentLauncherStem } from './agentIdentity';
 import { launcherStem } from './agentResume';
 
 export interface CustomAgent {
@@ -34,6 +39,9 @@ export interface CustomAgent {
   modelFlag?: string;
   /** Inserted only when a preset row turns Unattended on; absent = not offered. */
   unattendedFlags?: string;
+  /** Executable names the process tracker knows it by, normalised like the
+   *  stem; absent = the Command's own name ({@link customAgentProcessNames}). */
+  processNames?: string[];
 }
 
 export type CustomAgentIssueCode =
@@ -54,7 +62,12 @@ export type CustomAgentIssueCode =
   | 'args-flag'
   | 'command-posix-path'
   | 'model-in-use'
-  | 'unattended-in-use';
+  | 'unattended-in-use'
+  | 'process-invalid'
+  | 'process-count'
+  | 'process-known'
+  | 'process-generic'
+  | 'process-duplicate';
 
 export interface CustomAgentIssue {
   code: CustomAgentIssueCode;
@@ -76,6 +89,7 @@ export const CUSTOM_AGENT_FLAG_MAX = 64;
  *  characters (orchestratorRole ROLE_BINDING_AGENT_MAX): a longer program name
  *  could be saved but never referenced. */
 export const CUSTOM_AGENT_STEM_MAX = 48;
+export const CUSTOM_AGENT_PROCESS_NAMES_MAX = 8;
 
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9 ._-]*$/;
 /** A program name with no folder: what PATH lookup takes. */
@@ -131,6 +145,35 @@ const REGISTRY_NAMES: ReadonlySet<string> = new Set(
   ].map((n) => matchStem(n))),
 );
 
+/** Registry agents' display names and slugs, lower-cased. */
+const REGISTRY_DISPLAY_NAMES: ReadonlySet<string> = new Set(
+  AGENT_IDENTITIES.flatMap((a) => [a.display, a.slug]).map((n) => n.toLowerCase()),
+);
+
+/**
+ * Whether a custom agent's name may label its pane. A pane label goes out as
+ * the agent's name, and main maps a registry display name back to its slug
+ * (agentDisplayToSlug): a custom agent named "Claude Code" or "Amp" would
+ * become that agent. Such an agent still launches; it only gets no label.
+ */
+export function customAgentLabelAllowed(name: string): boolean {
+  return !REGISTRY_DISPLAY_NAMES.has(name.trim().toLowerCase());
+}
+
+/** The largest custom-agents.json either side reads: 16 agents fit in far less. */
+export const CUSTOM_AGENTS_FILE_MAX = 256 * 1024;
+
+/**
+ * A process name in the form the process tracker compares: basename,
+ * lower-cased, with a program or script extension dropped. The tracker reduces
+ * a running image (`tern.exe`) and a hosted script (`python3 /opt/tern.py`) the
+ * same way, so a stored name always can match.
+ */
+export function customProcessNameForm(name: string): string {
+  const base = name.split(/[\\/]/).pop() ?? '';
+  return base.toLowerCase().replace(/\.(exe|com|cmd|bat|ps1|js|mjs|cjs|py|pyw)$/, '');
+}
+
 /** The key a role binding or preset row uses for this agent. */
 export function customAgentStem(agent: Pick<CustomAgent, 'command'>): string {
   return matchStem(agent.command);
@@ -141,6 +184,19 @@ export function findCustomAgent(stem: string, list: readonly CustomAgent[] | und
   if (!list || !stem) return undefined;
   const key = stem.toLowerCase();
   return list.find((a) => customAgentStem(a) === key);
+}
+
+/** The executable names the process tracker matches for this agent. */
+export function customAgentProcessNames(agent: Pick<CustomAgent, 'command' | 'processNames'>): string[] {
+  return agent.processNames?.length ? agent.processNames : [customProcessNameForm(customAgentStem(agent))];
+}
+
+/** Every process name no other agent may claim: the tracked names plus the
+ *  Command's own, which a launch of this agent always runs. */
+function ownedProcessNames(agent: CustomAgent): string[] {
+  const own = customProcessNameForm(customAgentStem(agent));
+  const names = customAgentProcessNames(agent);
+  return names.includes(own) ? names : [...names, own];
 }
 
 /** What replaces the launcher token when a role or preset row picks it. */
@@ -187,7 +243,7 @@ function squash(raw: unknown): string {
   return typeof raw === 'string' ? raw.replace(/\s+/g, ' ').trim() : '';
 }
 
-const FIELDS = new Set(['name', 'command', 'args', 'promptFlag', 'modelFlag', 'unattendedFlags']);
+const FIELDS = new Set(['name', 'command', 'args', 'promptFlag', 'modelFlag', 'unattendedFlags', 'processNames']);
 
 /**
  * One custom agent from untrusted input (the Settings save, or a hand-edited
@@ -253,10 +309,13 @@ export function normalizeCustomAgent(
   if (!BARE_COMMAND_RE.test(stem) || stem.length > CUSTOM_AGENT_STEM_MAX) {
     return fail(issue('command-invalid', { name, command: shown }, `"${name}": command must be a program name or an absolute path`));
   }
-  if (REGISTRY_NAMES.has(stem)) {
+  // The process name it is tracked by by default must pass the same checks:
+  // `node.js` runs as `node`, and would claim every node process.
+  const tracked = customProcessNameForm(stem);
+  if (REGISTRY_NAMES.has(stem) || REGISTRY_NAMES.has(tracked)) {
     return fail(issue('command-known', { name, stem }, `"${name}": "${stem}" is an agent wmux already knows`));
   }
-  if (isGenericCommand(stem)) {
+  if (isGenericCommand(stem) || isGenericCommand(tracked)) {
     return fail(issue('command-generic', { name, stem }, `"${name}": "${stem}" runs other programs; use a wrapper on PATH that starts the agent`));
   }
 
@@ -289,6 +348,31 @@ export function normalizeCustomAgent(
     if (flag && args.split(' ').some((t) => isFlagToken(t, flag))) {
       return fail(issue('args-flag', { name, flag }, `"${name}": the arguments already carry ${flag}; wmux places it itself`));
     }
+  }
+  if (src.processNames !== undefined) {
+    const raw = src.processNames;
+    if (!Array.isArray(raw) || raw.length > CUSTOM_AGENT_PROCESS_NAMES_MAX || raw.some((n) => typeof n !== 'string')) {
+      return fail(issue('process-count', { name, max: String(CUSTOM_AGENT_PROCESS_NAMES_MAX) }, `"${name}": processNames must be a list of at most ${CUSTOM_AGENT_PROCESS_NAMES_MAX} names`));
+    }
+    const names: string[] = [];
+    for (const typed of raw as string[]) {
+      const trimmed = typed.trim();
+      if (!trimmed) continue;
+      // Stored in the form the tracker compares (customProcessNameForm).
+      const n = customProcessNameForm(trimmed.replace(/[. ]+$/, ''));
+      const process = trimmed.slice(0, 80);
+      if (/[\\/]/.test(trimmed) || !BARE_COMMAND_RE.test(n) || n.length > CUSTOM_AGENT_STEM_MAX) {
+        return fail(issue('process-invalid', { name, process, max: String(CUSTOM_AGENT_PROCESS_NAMES_MAX) }, `"${name}": process name "${process}" must be a program name, with no folder`));
+      }
+      if (REGISTRY_NAMES.has(n)) {
+        return fail(issue('process-known', { name, process: n }, `"${name}": process name "${n}" is an agent wmux already knows`));
+      }
+      if (isGenericCommand(n)) {
+        return fail(issue('process-generic', { name, process: n }, `"${name}": process name "${n}" would claim every program it runs`));
+      }
+      if (!names.includes(n)) names.push(n);
+    }
+    if (names.length > 0) agent.processNames = names;
   }
   return { ok: true, agent };
 }
@@ -323,6 +407,13 @@ function listClash(agent: CustomAgent, kept: readonly CustomAgent[]): CustomAgen
   const other = kept.find((a) => customAgentStem(a) === stem);
   if (other) {
     return issue('command-duplicate', { name: agent.name, other: other.name, stem }, `"${agent.name}" and "${other.name}" both run "${stem}"`);
+  }
+  // One process name names one agent, or the tracker could not tell them apart.
+  for (const process of ownedProcessNames(agent)) {
+    const owner = kept.find((a) => ownedProcessNames(a).includes(process));
+    if (owner) {
+      return issue('process-duplicate', { name: agent.name, other: owner.name, process }, `"${agent.name}" and "${owner.name}" are both known by the process "${process}"`);
+    }
   }
   return undefined;
 }

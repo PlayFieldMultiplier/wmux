@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -66,6 +66,18 @@ describe('custom agent store', () => {
     // A role alone keeps the agent from being removed.
     expect(await saveCustomAgents([], customAgentUsers({ Builder: { agent: 'tern' } }, dir), dir))
       .toMatchObject({ ok: false, code: 'agent-in-use', params: { by: 'the Builder role, the Birds preset' } });
+  });
+
+  it('reads the whole file when the system returns it in pieces', () => {
+    fs.writeFileSync(getCustomAgentsPath(dir), JSON.stringify({ agents: [tern, gull] }), 'utf8');
+    const real = fs.readSync;
+    const spy = vi.spyOn(fs, 'readSync').mockImplementation(((fd: number, buf: Buffer, off: number, len: number, pos: number) =>
+      real(fd, buf, off, Math.min(len, 7), pos)) as typeof fs.readSync);
+    try {
+      expect(loadCustomAgentsReport(dir).agents.map((a) => a.name)).toEqual(['Tern', 'Gull']);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('a corrupt file is no custom agents, and a preset row naming one is dropped, not launched', () => {

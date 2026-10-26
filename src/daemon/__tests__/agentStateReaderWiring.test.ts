@@ -43,7 +43,7 @@ describe('readDaemonAgentState wiring (#1303)', () => {
 
   it('reports the name through reportedAgentName with the canonical answer', () => {
     expect(readerBody()).toMatch(
-      /return \{\s*agentName: reportedAgentName\(\{ rawName, screenSlug, canonical \}\),\s*agentVerified,\s*\.\.\.state,?\s*\};/,
+      /return \{\s*agentName: reportedAgentName\(\{ rawName, screenSlug, canonical, customName: agentProcessTracker\.customAgentNameFor\(id\) \}\),\s*agentVerified,\s*\.\.\.state,?\s*\};/,
     );
   });
 
