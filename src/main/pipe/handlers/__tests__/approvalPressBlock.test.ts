@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { RpcRouter } from '../../RpcRouter';
+import { sendToRenderer } from '../_bridge';
 import { registerInputRpc } from '../input.rpc';
 import type { GatedSubmitResult } from '../../../../shared/ptyMessageDelivery';
 import { registerApprovalsRpc, PRESS_POLICY_REFUSALS, type AnswerPolicy } from '../approvals.rpc';
@@ -593,6 +594,27 @@ describe('a folder-trust dialog on screen', () => {
     expect(w.writes.map((x) => x.data)).toEqual(['\x1b']);
   });
 
+  it('`send --submit`: a trust prompt drawn after the first Enter gets no retried Enter', async () => {
+    live.policy = DANGER;
+    live.screen = '⏺ Done.\n\n──────────\n❯ ';
+    // The receipt probe sees the text still in the composer, which arms the
+    // retry; the guard's reads see the prompt from the retry's check on.
+    vi.mocked(sendToRenderer).mockImplementation(async (_win, method) =>
+      method === 'input.readScreen' ? { text: '──────────\n❯ go on' } : undefined);
+    trustAfterReads(3);
+    try {
+      const res = (await asPaneAgent('input.send', { ptyId: 'pty-w', text: 'go on', submit: true })) as Answer & {
+        result?: { enterRetried?: boolean; enterRetryRefused?: string };
+      };
+      expect(res.ok).toBe(true);
+      expect(w.writes.map((x) => x.data)).toEqual(['go on', '\r']);
+      expect(res.result?.enterRetried).toBe(false);
+      expect(res.result?.enterRetryRefused).toContain('folder-trust prompt; answer it in the pane');
+    } finally {
+      vi.mocked(sendToRenderer).mockReset();
+    }
+  });
+
   it('a typed multi-line body refused before its Enter says it may have been partly submitted', async () => {
     live.policy = DANGER;
     live.screen = '$ ';
@@ -610,7 +632,7 @@ describe('a folder-trust dialog on screen', () => {
     const res = await asPaneAgent('input.send', { ptyId: 'pty-w', text: 'go on', submit: true });
     expect(res.ok).toBe(false);
     expect(res.error).toContain('folder-trust prompt; answer it in the pane');
-    expect(res.error).toContain('already on its input line, not submitted');
+    expect(res.error).toContain('already written to the pane, not submitted');
     expect(w.writes.map((x) => x.data)).toEqual(['go on']);
   });
 

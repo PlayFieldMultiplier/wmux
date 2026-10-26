@@ -145,6 +145,8 @@ describe('looksLikeFolderTrustDialog', () => {
     const rows = screen('folder-trust', 'codex-folder-trust-120x40');
     const uncursored = rows.map((row) => row.replace('› 1.', '  1.'));
     expect(looksLikeFolderTrustDialog(uncursored)).toBe(false);
+    const twoCursors = rows.map((row) => row.replace('  2.', '› 2.'));
+    expect(looksLikeFolderTrustDialog(twoCursors)).toBe(false);
   });
 
   it('a dialog already answered, with agent output or a shell prompt under it, is not live', () => {

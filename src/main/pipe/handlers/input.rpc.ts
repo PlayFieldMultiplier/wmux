@@ -1658,7 +1658,7 @@ export function registerInputRpc(
         } catch (err) {
           if (!(err instanceof Error)) throw err;
           const onLine = chunksWritten > 0
-            ? ` The text is already on its input line, ${!pasted && wroteLineBreak ? 'and may have been partly submitted' : 'not submitted'}; read the pane before sending it again.`
+            ? ` The text was already written to the pane, ${!pasted && wroteLineBreak ? 'and may have been partly submitted' : 'not submitted'}; read the pane before sending it again.`
             : ' Nothing of the text was written.';
           const cleared = fresh?.freshContext === 'applied' ? " The pane's conversation was already cleared (fresh context)." : '';
           throw new Error(`${err.message}${onLine}${cleared}`);
