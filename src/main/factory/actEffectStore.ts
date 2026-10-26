@@ -8,6 +8,7 @@
 //   pending ──claim──▶ inFlight ──finish──▶ done | refused | uncertain
 //                         └──release (nothing was written)──▶ pending
 //   uncertain ──settle (a read of GitHub)──▶ done | refused | pending
+//   pending, never started ──settle (its approval aged out)──▶ refused
 //
 // A row is journaled inFlight, on disk, before its write is sent; a row found
 // inFlight on load is uncertain (the write may or may not have landed) and is
@@ -193,7 +194,8 @@ export class ActEffectStore {
 
   /** What a read of GitHub says about a row that may have run (uncertain, or
    *  pending after an earlier try): done, refused, or pending again (attempts
-   *  left) when nothing was found. */
+   *  left) when nothing was found. Also a pending row no try of which
+   *  started, refused as its approval aged out (`approval-stale`). */
   settle(id: string, status: 'done' | 'refused' | 'pending', reason?: string, result?: ActEffect['result']): ActEffect | null {
     const row = this.rows.get(id);
     if (!row || (row.status !== 'uncertain' && row.status !== 'pending')) return null;

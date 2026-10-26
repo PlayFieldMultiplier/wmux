@@ -13,7 +13,7 @@ import { CodexUsageLimitLineScanner } from '../../shared/usageLimit';
 import type { AgentStatus } from '../../shared/types';
 import type { AgentSlug } from '../../shared/agentIdentity';
 import type { ApprovalScreenSnapshot } from '../../shared/approvalScreen';
-import { agyScreenApproval, claudeScreenApproval, codexScreenApproval, openCodeScreenApproval, piScreenApproval, type ScreenApproval } from './approvalScreen';
+import { agyScreenApproval, claudeScreenApproval, codexScreenApproval, openCodeScreenApproval, piScreenApproval, qwenScreenApproval, type ScreenApproval } from './approvalScreen';
 export type { AgentSlug };
 export { agentDisplayToSlug } from '../../shared/agentIdentity';
 
@@ -142,12 +142,13 @@ interface AgentPattern {
   /** Strict live-grid recovery, used only after a fresh external identity. */
   approvalScreen?: (rows: readonly string[]) => ScreenApproval | null;
   /**
-   * A question no line pattern reads (the grid is its only reader): its
-   * question row, and the row that finishes it. The question row arms it and a
-   * later finishing row makes it ready, however far apart the two are drawn.
-   * Ready after identity arrived, it asks the host for that identity's one
-   * recheck (takeApprovalRecheckRequest); no recheck is spent before it is
-   * ready, because a read then would see half a question.
+   * A question the grid can read: its question row, and the row that
+   * finishes it. The question row arms it and a later finishing row makes it
+   * ready, however far apart the two are drawn. Ready after identity arrived,
+   * it asks the host for that identity's one recheck
+   * (takeApprovalRecheckRequest) unless a line pattern reported awaiting_input
+   * in the same read, since the grid could then add nothing; no recheck is
+   * spent before it is ready, because a read then would see half a question.
    *
    * `shared`: the screen reader also reads dialogs that line patterns or the
    * stream report (Claude, Codex). Their recheck is not held for this
@@ -484,6 +485,14 @@ const AGENT_PATTERNS: AgentPattern[] = [
   {
     agent: 'Qwen Code',
     slug: 'qwen',
+    // The dialog read off the grid once a process or hook identity arrives
+    // after it was drawn, when no line pattern was reading for Qwen yet.
+    approvalScreen: qwenScreenApproval,
+    // Its question (shell, or file write and edit), then the confirmation
+    // spinner row drawn below the choices, without the counters a running
+    // spinner adds beside it (or, when narrow, on the next row) just after
+    // an answer.
+    approvalReady: { question: /Allow\s*execution\s*of:|Apply\s*this\s*change\?/, end: /Waiting\s*for\s*user\s*confirmation\.\.\.(?!\s*\()/ },
     gate: /Qwen\s*Code\s*\(v\d|Qwen - /,
     chrome: isQwenChrome,
     completeChromeRow: true,
@@ -1383,7 +1392,8 @@ export class AgentDetector {
       const approval = profile.approvalScreen(snapshot.rows);
       if (!approval) return false;
       const key = `${profile.agent}:awaiting_input`;
-      if (this.lastEmittedFor.get(key) === approval.text) return false;
+      // Whitespace-insensitive, like emitDialog's stored value.
+      if (this.lastEmittedFor.get(key)?.replace(/\s+/g, '') === approval.text.replace(/\s+/g, '')) return false;
       this.lastEmittedFor.set(key, approval.text);
       for (const cb of this.callbacks) cb({ agent: profile.agent, status: 'awaiting_input', message: approval.message });
       return true;
@@ -1502,7 +1512,8 @@ export class AgentDetector {
     const previousLength = stripAnsi(this.approvalHintTail).length;
     const probe = this.approvalHintTail + data;
     const cleanProbe = stripAnsi(probe);
-    const hint = /Do\s*you\s*(?:want|trust)|Would\s*you\s*like|Allow\s*tool\s*use|Permission\s*required|Trust\s*project\s*folder|Trust\s*this\s*folder|Is\s*this\s*a\s*project\s*you\s*created/g;
+    // Keep in step with the approvalReady questions (READY_PROFILES).
+    const hint = /Do\s*you\s*(?:want|trust)|Would\s*you\s*like|Allow\s*tool\s*use|Permission\s*required|Trust\s*project\s*folder|Allow\s*execution\s*of:|Apply\s*this\s*change\?|Trust\s*this\s*folder|Is\s*this\s*a\s*project\s*you\s*created/g;
     for (const match of cleanProbe.matchAll(hint)) {
       // Only newly drawn text refreshes freshness. Retaining an old question
       // in the tail across a title update must not make it recent again.
@@ -1515,6 +1526,7 @@ export class AgentDetector {
     }
     // Readiness reads only the newly drawn text, with room for a match that
     // began just before it; positions below are relative to `recentAt`.
+    let readyForOwner = false;
     const recentAt = Math.max(0, previousLength - READY_MATCH_REACH);
     const recent = cleanProbe.slice(recentAt);
     const drawnAfter = previousLength - recentAt;
@@ -1531,7 +1543,7 @@ export class AgentDetector {
       for (const match of recent.matchAll(end)) {
         if (match.index < from || match.index + match[0].length <= drawnAfter) continue;
         this.approvalReadySlugs.add(slug);
-        if (slug === this.trustedAgent && this.approvalReadyRecheckEpoch !== this.identityEpoch) this.approvalRecheckRequested = true;
+        if (slug === this.trustedAgent && this.approvalReadyRecheckEpoch !== this.identityEpoch) readyForOwner = true;
       }
     }
     this.approvalHintTail = probe.slice(-4096);
@@ -1580,6 +1592,8 @@ export class AgentDetector {
     // its name inside the OSC window-title escape, which the strip removes.
     if (this.lineBuffer) this.checkGates(this.lineBuffer);
 
+    // Asked only when no line pattern reported the dialog in this read.
+    if (readyForOwner && !this.approvalEmittedInFeed) this.approvalRecheckRequested = true;
     this.scanDialog(data);
   }
 

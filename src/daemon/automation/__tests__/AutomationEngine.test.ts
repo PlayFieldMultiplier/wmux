@@ -1,13 +1,25 @@
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AutomationEvent, AutomationRun } from '../../../shared/automation';
 import type { SessionPromptScheduleResult } from '../../../shared/sessionPromptSchedule';
 import { AutomationEngine, screenShowsPrompt, type AutomationAgentView, type AutomationEnginePorts } from '../AutomationEngine';
 import { AUTOMATION_RUNS_FILE, AUTOMATIONS_FILE, snapshotPath } from '../store';
+import { trackedTempDir } from '../../../test-utils/trackedTempDir';
 
 const MIN = 60_000;
+
+// Every engine a case makes is stopped after it (a started one keeps timers
+// that write into its dir), and its queued saves are let finish: a save makes
+// the dir again if it is gone. Only then does trackedTempDir remove the dirs.
+const engines: AutomationEngine[] = [];
+afterEach(async () => {
+  for (const engine of engines.splice(0)) {
+    engine.stop();
+    await engine.whenSaved();
+  }
+});
+const tempDir = (prefix: string): string => trackedTempDir(prefix);
 
 const draft = (over: Record<string, unknown> = {}) => ({
   name: 'Nightly',
@@ -31,7 +43,7 @@ interface Harness {
 }
 
 function harness(opts: { dir?: string; ports?: Partial<AutomationEnginePorts> } = {}): Harness {
-  const dir = opts.dir ?? fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-engine-'));
+  const dir = opts.dir ?? tempDir('wmux-engine-');
   const clock = { t: new Date(2026, 8, 28, 9, 0).getTime() };
   let seq = 0;
   const h: Omit<Harness, 'engine'> = {
@@ -68,7 +80,9 @@ function harness(opts: { dir?: string; ports?: Partial<AutomationEnginePorts> } 
     killTree: async (pid) => { h.killed.push(pid); },
     ...opts.ports,
   };
-  return { ...h, engine: new AutomationEngine(ports) };
+  const engine = new AutomationEngine(ports);
+  engines.push(engine);
+  return { ...h, engine };
 }
 
 const settle = async (): Promise<void> => {
@@ -150,7 +164,7 @@ describe('AutomationEngine — revision & grants', () => {
   });
 
   it('boot: a schedule already holding a stale grant gets one needs-regrant notice', async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-engine-'));
+    const dir = tempDir('wmux-engine-');
     fs.writeFileSync(path.join(dir, AUTOMATIONS_FILE), JSON.stringify({
       version: 1,
       automations: [
@@ -292,7 +306,7 @@ describe('AutomationEngine — launch & readiness', () => {
   });
 
   it('a claim that cannot be persisted never spawns', async () => {
-    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-ro-')), 'not-a-dir');
+    const file = path.join(tempDir('wmux-ro-'), 'not-a-dir');
     fs.writeFileSync(file, 'x');
     const h = harness({ dir: file });
     const run = await startedRun(h);
@@ -311,7 +325,7 @@ describe('AutomationEngine — launch & readiness', () => {
   });
 
   it('boot: a run left launching/running is marked unknown and never relaunched', async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-boot-'));
+    const dir = tempDir('wmux-boot-');
     fs.writeFileSync(path.join(dir, AUTOMATIONS_FILE), JSON.stringify({
       version: 1,
       automations: [{ ...draft(), id: 'a1', enabled: false, revision: 1, createdAt: 1 }],
@@ -1010,5 +1024,36 @@ describe('AutomationEngine — browser identity', () => {
     expect(h.created[0].command).toBe('claude --permission-mode auto --disallowedTools mcp__wmux');
     expect(h.engine.listRuns()[0].browserIdentity).toBeUndefined();
     expect(h.engine.runIdentity(h.engine.listRuns()[0].ptyId).run).toBeNull();
+  });
+});
+
+describe('AutomationEngine — whenSaved', () => {
+  it('resolves only once the saves queued before it are on disk', async () => {
+    const h = harness();
+    await h.engine.start({ timers: false });
+    // Not awaited: create queues its save before its first await.
+    const created = h.engine.create(draft());
+    await h.engine.whenSaved();
+    const onDisk = JSON.parse(fs.readFileSync(path.join(h.dir, AUTOMATIONS_FILE), 'utf8')) as { automations: unknown[] };
+    expect(onDisk.automations).toHaveLength(1);
+    expect((await created).ok).toBe(true);
+  });
+
+  it('after stop, waits for a launch still under way, so nothing is written once it resolves', async () => {
+    const h = harness();
+    await h.engine.start({ timers: false });
+    const created = await h.engine.create(draft());
+    if (!created.ok) throw new Error(created.error);
+    const res = await h.engine.runNow(created.automation.id, 'manual');
+    if (!res.ok) throw new Error(res.error);
+    // runNow returns once the claim is on disk; the launch goes on detached.
+    expect(res.run.state).toBe('launching');
+    h.engine.stop();
+    await h.engine.whenSaved();
+    expect(h.engine.listRuns().some((r) => r.state === 'launching')).toBe(false);
+    const runsFile = path.join(h.dir, AUTOMATION_RUNS_FILE);
+    const written = fs.readFileSync(runsFile, 'utf8');
+    await settle();
+    expect(fs.readFileSync(runsFile, 'utf8')).toBe(written);
   });
 });

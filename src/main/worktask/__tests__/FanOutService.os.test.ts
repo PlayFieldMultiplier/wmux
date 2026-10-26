@@ -36,6 +36,7 @@ import { TaskLedger } from '../../../daemon/ledger/TaskLedger';
 import { setTaskLedgerForTests } from '../../deck/taskLedgerHost';
 import { FanOutGuards, setFanOutGuardsForTests } from '../fanoutGuards';
 import { WORKER_SLOTS_FILENAME, WorkerSlots } from '../../factory/workerSlots';
+import { workerSlotStores } from '../../../test-utils/workerSlotStores';
 
 let metaRoot: string;
 let lineage: FanOutGuards;
@@ -476,8 +477,12 @@ describe('T3 worktree base — one fetch per fan-out, OID pinned, warning surfac
 });
 
 describe('each task\'s launch generation (#2393)', () => {
+  const slotStores = workerSlotStores();
+  afterEach(() => slotStores.settle());
+
   function launches(dir: string): WorkerSlots {
     const s = new WorkerSlots(path.join(dir, 'factory', WORKER_SLOTS_FILENAME), () => [], () => undefined);
+    slotStores.track(s);
     s.load();
     return s;
   }

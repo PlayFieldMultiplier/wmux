@@ -109,6 +109,29 @@ export function piScreenApproval(rows: readonly string[]): ScreenApproval | null
   return text ? { text, message: 'Project trust prompt' } : null;
 }
 
+const QWEN_CHOICES: ChoiceRows = {
+  option: /^(?:›\s*)?\d+\.\s+\S/,
+  selected: /^›/,
+  required: [/^(?:›\s*)?1\.\s+Yes\b/, /\bNo\b/],
+};
+/** The spinner row that ends every Qwen permission dialog, without the counters a running turn adds. */
+const QWEN_DIALOG_END = /^[\u2800-\u28ff]\s*Waiting\s+for\s+user\s+confirmation\.\.\.$/;
+
+/**
+ * Qwen Code 0.26.1 permission dialogs (shell, file write and edit; 120 and 60
+ * columns): the question, numbered choices with `›` on the selected one, and
+ * the confirmation spinner row as the last row. A long shell question is cut
+ * with `…` rather than wrapped. Just after it is drawn a narrow pane can show
+ * a scrollbar thumb in its last column; that cell is dropped. The text is the
+ * spinner row's words, the value the line pattern reports, so a recheck after
+ * the stream has already reported the dialog does not report it twice.
+ */
+export function qwenScreenApproval(rows: readonly string[]): ScreenApproval | null {
+  const cleaned = rows.map((row) => row.replace(/\s*[\u2580-\u259f]$/, ''));
+  if (!choiceDialog(cleaned, /^(?:Allow execution of: .+[?…]|Apply this change\?)$/, QWEN_DIALOG_END, QWEN_CHOICES)) return null;
+  return { text: 'Waiting for user confirmation...', message: 'Approval requested' };
+}
+
 /**
  * Codex 0.157.1 command/edit fixtures: numbered choices and a final key hint.
  * The 0.162.1 folder-trust screen (live capture) has the same shape; its

@@ -19,7 +19,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
-import { parseBootMarker } from '../../shared/daemon/daemonLauncherCore';
+import { claimSpawnedDaemonFiles, parseBootMarker } from '../../shared/daemon/daemonLauncherCore';
 
 const SUFFIX = '-i546-test';
 const dir = path.join(os.homedir(), `.wmux${SUFFIX}`);
@@ -127,5 +127,30 @@ describe.skipIf(!hasBundle)('#546 boot marker lifecycle (real daemon)', () => {
       await sleep(100);
     }
     expect(fs.existsSync(markerFile), 'marker survived shutdown').toBe(false);
+  }, 60_000);
+
+  // The launcher records a spawned daemon in daemon.pid and the marker before
+  // the daemon's own acquireLock runs (claimSpawnedDaemonFiles). The daemon
+  // must take the lock over those files and own them.
+  it('boots over the pid file and marker the launcher wrote for it', async () => {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.mkdirSync(dir, { recursive: true });
+
+    child = spawn(process.execPath, [bundle], {
+      env: { ...process.env, WMUX_DATA_SUFFIX: SUFFIX },
+      stdio: ['ignore', 'ignore', 'ignore'],
+    });
+    const spawnedPid = child.pid as number;
+    expect(spawnedPid, 'spawn returned no pid').toBeDefined();
+    expect(claimSpawnedDaemonFiles(dir, spawnedPid)).toBe(true);
+
+    for (let i = 0; i < 600; i++) {
+      if (fs.existsSync(pipeFile)) break;
+      await sleep(50);
+    }
+    expect(fs.existsSync(pipeFile), 'daemon never became ready').toBe(true);
+    expect(fs.readFileSync(pidFile, 'utf-8').trim()).toBe(String(spawnedPid));
+    expect(fs.readFileSync(path.join(dir, 'daemon.lock'), 'utf-8').trim()).toBe(String(spawnedPid));
+    expect(fs.existsSync(markerFile), 'marker outlived boot').toBe(false);
   }, 60_000);
 });

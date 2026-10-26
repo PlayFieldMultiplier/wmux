@@ -47,6 +47,7 @@ import { TaskLedger } from '../../../daemon/ledger/TaskLedger';
 import { holdsUnsettledRunningClaim } from '../../notification/turnSettle';
 import { deliberateSleep } from '../../../test-utils/waitFor';
 import { HOUR_MS, costUsdDay, emptyUsage, recordCost, recordTurn, recordWorkerStart, recordWorkerStateChange, workerHoursDay } from '../budget';
+import { workerSlotStores } from '../../../test-utils/workerSlotStores';
 
 // The status funnel main keeps per pane (metadata.handler.ts), in memory: the
 // real module pulls in electron.
@@ -937,6 +938,8 @@ describe('worker lifecycle cards stay out of the conversation that started the t
 });
 
 describe('resumeWorker', () => {
+  const slotStores = workerSlotStores();
+  afterEach(() => slotStores.settle());
   async function reclaimed(): Promise<ReclaimedWorkers> {
     const store = ReclaimedWorkers.at(dir);
     await reclaimWorker(reclaimPorts(store, [session()]).ports, row('completed'), 'completed');
@@ -967,6 +970,7 @@ describe('resumeWorker', () => {
   it('a resume in the pane is the task\'s next launch generation, recorded before the line is typed (#2393)', async () => {
     const store = await reclaimed();
     const launches = new WorkerSlots(path.join(dir, 'factory', WORKER_SLOTS_FILENAME), () => [], () => undefined);
+    slotStores.track(launches);
     launches.load();
     launches.beginLaunch({ taskId: 'wtask-abc-12345678', origin: 'bot', botId: BOT, ownerWorkspaceId: 'ws-owner' });
     const { ports } = resumePorts(store, [session({ agentProcessAlive: false })], { launches });
