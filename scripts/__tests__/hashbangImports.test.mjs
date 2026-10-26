@@ -21,9 +21,9 @@ import { ROOT, listTestFiles } from '../lib/test-lanes.mjs';
 // and dynamic imports of a string literal: every form Vite transforms.
 const SPECIFIER = /\bfrom\s*['"](\.{1,2}\/[^'"]+)['"]|\bimport\s*['"](\.{1,2}\/[^'"]+)['"]|\bimport\(\s*['"](\.{1,2}\/[^'"]+)['"]\s*\)/g;
 const EXTENSIONS = ['.ts', '.tsx', '.mts', '.js', '.mjs', '.cjs'];
-// A vitest config names its setup files as strings; those load through the
-// same transform as an import.
-const SETUP_FILES = /\bsetupFiles\s*:\s*\[([^\]]*)\]/g;
+// A vitest config names its setup and global setup files as strings; those
+// load through the same transform as an import.
+const SETUP_FILES = /\b(?:setupFiles|globalSetup)\s*:\s*\[([^\]]*)\]/g;
 const QUOTED_RELATIVE = /['"](\.{1,2}\/[^'"]+)['"]/g;
 
 const isFile = (abs) => {
@@ -77,5 +77,8 @@ describe('hashbang files reached from tests', () => {
     // The walk reaches well past the test files; a handful would mean the
     // specifier pattern stopped matching.
     expect(via.size).toBeGreaterThan(listTestFiles().length + 500);
+    // A planted hashbang in a global setup file stops Vitest before this test
+    // runs, so check the walk reaches one instead.
+    expect(via.has(path.join(ROOT, 'scripts', 'vitest-electron-binary.mjs'))).toBe(true);
   });
 });
