@@ -18,6 +18,22 @@ function verifyIntegrity(directory, platform, arch) {
   }
 }
 
+/**
+ * Re-record the binary's digest after a packaging step that legitimately
+ * rewrites it: macOS code signing embeds a signature in the Mach-O. Without
+ * this the shipped manifest describes the unsigned build output, not the file
+ * it sits next to. Trusts the binary it finds, so run verifyIntegrity first.
+ */
+function recordShippedDigest(directory) {
+  const manifestPath = path.join(directory, 'manifest.json');
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  assert.match(manifest.binary, /^wmux-term\.[a-z0-9-]+\.node$/, 'Invalid native binary filename');
+  manifest.sha256 = crypto.createHash('sha256')
+    .update(fs.readFileSync(path.join(directory, manifest.binary))).digest('hex');
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+  return manifest.sha256;
+}
+
 async function smoke(resources) {
   assert(process.versions.electron, 'Run this smoke with the packaged Electron executable');
   const core = require(path.join(resources, 'wmux-native', 'index.cjs'));
@@ -92,7 +108,7 @@ async function smoke(resources) {
     arch: process.arch, electron: process.versions.electron, resources }));
 }
 
-module.exports = { verifyIntegrity };
+module.exports = { verifyIntegrity, recordShippedDigest };
 if (require.main === module) {
   smoke(path.resolve(process.argv[2])).catch(error => { console.error(error); process.exitCode = 1; });
 }
