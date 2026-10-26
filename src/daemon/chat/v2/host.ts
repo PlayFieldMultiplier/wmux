@@ -5,10 +5,13 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { applyHarnessEvent, blockChangeFrom } from '../../../shared/chatv2/apply';
 import type { HarnessEvent, StampedHarnessEvent } from '../../../shared/chatv2/harnessEvents';
 import {
+  CHATV2_AGENT_CAPS,
+  CHATV2_AGENTS,
   CHATV2_ATTACHMENT_DIR,
   CHATV2_MODEL,
   CHATV2_PROVIDER_SESSION_ID,
   chatV2Error,
+  type ChatV2Agent,
   type ChatV2Binding,
   type ChatV2Capabilities,
   type ChatV2Error,
@@ -70,7 +73,11 @@ export const CHATV2_SETTING_SOURCES_ENV = 'WMUX_CHATV2_SETTING_SOURCES';
 export function defaultChatV2Drivers(env: NodeJS.ProcessEnv = process.env): ChatV2DriverFactory {
   const requested = env[CHATV2_SETTING_SOURCES_ENV];
   const settingSources = requested && CLAUDE_SETTING_SOURCES_PATTERN.test(requested) ? requested : CLAUDE_SETTING_SOURCES;
-  return (agent) => (agent === 'claude' ? new ClaudeDriver({ settingSources }) : agent === 'codex' ? new CodexDriver() : null);
+  const make: Record<ChatV2Agent, () => ChatV2Driver> = {
+    claude: () => new ClaudeDriver({ settingSources }),
+    codex: () => new CodexDriver(),
+  };
+  return (agent) => ((CHATV2_AGENTS as readonly string[]).includes(agent) ? make[agent as ChatV2Agent]() : null);
 }
 
 type Result<M extends ChatV2Method> = ChatV2ResultByMethod[M];
@@ -391,8 +398,8 @@ class Host implements ChatV2Host {
 
   private capabilities(live: Live): ChatV2Capabilities {
     const active = live.record.state === 'active';
-    // Only a Claude conversation continues in the terminal (handoff.ts types `claude --resume`).
-    return { send: active, interrupt: active, approvals: active, questions: active, images: active, toTerminal: active && live.record.agent === 'claude' };
+    // Only an agent with a terminal handoff continues there (handoff.ts types `claude --resume`).
+    return { send: active, interrupt: active, approvals: active, questions: active, images: active, toTerminal: active && CHATV2_AGENT_CAPS[live.record.agent].terminalHandoff };
   }
 
   private binding(live: Live): ChatV2Binding {
@@ -481,8 +488,8 @@ class Host implements ChatV2Host {
     if (!cwd) return chatV2Error('pane-not-found', 'The pane has no known working directory.');
     // The RPC layer validated it; the argv rule is checked again where it is used.
     if (p.model !== undefined && !CHATV2_MODEL.test(p.model)) return chatV2Error('invalid-params', 'Invalid model.');
-    // A Codex chat always asks before a command or an edit (its driver runs on-request).
-    if (p.agent === 'codex' && p.mode === 'bypass') return chatV2Error('invalid-params', 'A Codex chat always asks before it runs a command or edits a file.');
+    // An agent with no bypass mode always asks before a command or an edit (Codex runs on-request).
+    if (p.mode === 'bypass' && !CHATV2_AGENT_CAPS[p.agent].bypass) return chatV2Error('invalid-params', 'This chat always asks before it runs a command or edits a file.');
     const chatSessionId = randomUUID();
     const providerSessionId = randomUUID();
     const model = p.model ?? '';
@@ -748,7 +755,7 @@ class Host implements ChatV2Host {
     if (!live) return chatV2Error('session-not-found', 'No chat for this pane.');
     const handedOff = handedOffRefusal(live.record);
     if (handedOff) return handedOff;
-    if (live.record.agent !== 'claude') return chatV2Error('handoff-refused', 'Only a Claude chat can continue in the terminal.');
+    if (!CHATV2_AGENT_CAPS[live.record.agent].terminalHandoff) return chatV2Error('handoff-refused', 'Only a Claude chat can continue in the terminal.');
     const { session } = live.record;
     if (session.busy || sessionNeedsInput(session) || live.sending || live.starting) {
       return chatV2Error('handoff-refused', 'The agent is still working. Stop the turn first.');
@@ -801,7 +808,7 @@ class Host implements ChatV2Host {
   private async fromTerminal(p: ChatV2ParamsByMethod['fromTerminal']): Promise<Result<'fromTerminal'>> {
     // The terminal side is Claude's only (fromTerminal.ts).
     const held = this.byPane.get(p.paneId);
-    if (held && held.record.agent !== 'claude') return chatV2Error('handoff-refused', 'Only a Claude conversation moves between the terminal and a chat.');
+    if (held && !CHATV2_AGENT_CAPS[held.record.agent].terminalHandoff) return chatV2Error('handoff-refused', 'Only a Claude conversation moves between the terminal and a chat.');
     const terminal = this.deps.terminal;
     if (!terminal) return chatV2Error('unavailable', 'Continuing in chat is unavailable.');
     const pane = this.deps.sessionManager.getSession(p.paneId);
@@ -1296,7 +1303,7 @@ class Host implements ChatV2Host {
 
   /** A Codex record's thread is held by a terminal Codex, which talks to the shared app-server (its argv names no thread). */
   private codexThreadHeld(record: ChatV2StoredRecord): boolean {
-    return record.agent === 'codex' && (this.deps.codexThreadOwners?.(record.providerSessionId) ?? []).length > 0;
+    return CHATV2_AGENT_CAPS[record.agent].sharedServerThreads && (this.deps.codexThreadOwners?.(record.providerSessionId) ?? []).length > 0;
   }
 
   /** Stop the driver and wait until it is reaped. False: it did not exit, and it is kept. */
