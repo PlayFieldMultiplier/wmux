@@ -7436,7 +7436,7 @@ function wireEvents(
       sessionManager.getSession(sessionId)?.promptLog.commandRunningIfKnown() === true,
     named: (sessionId) => {
       const tracked = agentProcessTracker.identityFor(sessionId);
-      return tracked?.alive === true && (tracked.slug !== undefined || tracked.custom !== undefined);
+      return tracked?.alive === true && tracked.slug !== undefined;
     },
     probe: armIfAgent,
   });

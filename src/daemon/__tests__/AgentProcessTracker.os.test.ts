@@ -519,6 +519,63 @@ describe('AgentProcessTracker', () => {
     expect(selectAgentProcess([entry(200, SHELL, 'tern')], SHELL)).toEqual({ pid: 200 });
   });
 
+  it('a custom wrapper gives the pane to the registry agent it execs or starts, with no death edge', async () => {
+    const watcher = makeWatcher();
+    const listener = vi.fn();
+    let table = [entry(200, SHELL, 'sh', 'sh /usr/local/bin/tern')];
+    const tracker = new AgentProcessTracker(watcher, async () => table);
+    tracker.setStateChangeListener(listener);
+    tracker.setCustomAgentNames(() => new Map([['tern', 'Tern']]));
+    tracker.armIfAgent('s1', SHELL);
+    await flush();
+    expect(tracker.identityFor('s1')).toEqual({ custom: 'tern', alive: true });
+
+    // A banner or hook arm with nothing new under the shell: the custom agent stays, no edge.
+    listener.mockClear();
+    tracker.arm('s1', SHELL);
+    await flush();
+    expect(tracker.identityFor('s1')).toEqual({ custom: 'tern', alive: true });
+    expect(listener).not.toHaveBeenCalled();
+
+    // `exec codex`: the same pid now runs codex. The banner's arm names it.
+    table = [entry(200, SHELL, 'codex')];
+    tracker.arm('s1', SHELL);
+    await flush();
+    expect(tracker.identityFor('s1')).toEqual({ slug: 'codex', alive: true });
+    expect(tracker.customAgentNameFor('s1')).toBeUndefined();
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith('s1', { slug: 'codex', alive: true, observedAt: expect.any(Number) });
+  });
+
+  it('the command-start retry finds the registry agent a custom wrapper starts late', async () => {
+    const watcher = makeWatcher();
+    let table = [entry(200, SHELL, 'tern')];
+    const tracker = new AgentProcessTracker(watcher, async () => table);
+    tracker.setCustomAgentNames(() => new Map([['tern', 'Tern']]));
+    tracker.armIfAgent('s1', SHELL);
+    await flush();
+    expect(tracker.identityFor('s1')).toEqual({ custom: 'tern', alive: true });
+    table = [entry(200, SHELL, 'tern'), entry(201, 200, 'claude')];
+    tracker.armIfAgent('s1', SHELL);
+    await flush();
+    expect(tracker.identityFor('s1')).toEqual({ slug: 'claude', alive: true });
+  });
+
+  it('selectAgentProcess finds a custom agent where an install puts it', () => {
+    const names = new Map([['tern', 'Tern']]);
+    for (const cmdline of [
+      'node C:\\Users\\x\\AppData\\Roaming\\npm\\node_modules\\tern\\bin\\cli.js',
+      'python3.12 /opt/tern/tern.py',
+      'node --max-old-space-size=4096 /usr/local/bin/tern',
+      'npx -y tern',
+    ]) {
+      const image = cmdline.split(' ')[0];
+      expect(selectAgentProcess([entry(200, SHELL, image, cmdline)], SHELL, names), cmdline).toEqual({ pid: 200, custom: 'tern' });
+    }
+    // A scoped package is never read by its basename.
+    expect(selectAgentProcess([entry(200, SHELL, 'npx', 'npx -y @acme/tern')], SHELL, names)).toEqual({ pid: 200 });
+  });
+
   it('armIfAgent leaves no trace for a non-agent command and backs off only itself', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     try {

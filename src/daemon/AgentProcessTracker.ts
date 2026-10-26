@@ -52,6 +52,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { AGENT_ROWS, AGENT_SLUG_SET, type AgentSlug } from '../shared/agentIdentity';
+import { customProcessNameForm } from '../shared/customAgents';
 import type { WslAgentLocation, WslReportedAgent, WslWatchedAgent } from './wslAgentProcess';
 
 const execFileAsync = promisify(execFile);
@@ -189,9 +190,34 @@ function lookupForm(token: string): string {
  * unit tests.
  */
 export function resolveAgentSlug(cmdline: string | undefined): AgentSlug | undefined {
-  if (!cmdline) return undefined;
+  for (const c of scriptCandidates(cmdline)) {
+    // Scoped-package spellings never basename-match: `@acme/claude` must not
+    // resolve claude (lookupForm unwraps the scope, so it cannot be trusted
+    // here). Only an exact alias entry may speak for a scoped name.
+    if (isScopedCandidate(c)) {
+      const alias = ALIAS_TO_SLUG.get(c.replace(/\\/g, '/').toLowerCase());
+      if (alias) return alias;
+      continue;
+    }
+    const form = lookupForm(c);
+    if (AGENT_SLUG_SET.has(form)) return form as AgentSlug;
+    const alias = ALIAS_TO_SLUG.get(form);
+    if (alias) return alias;
+  }
+  return undefined;
+}
+
+function isScopedCandidate(c: string): boolean {
+  return c.startsWith('@') || /[/\\]@[^/\\]+[\\/]/.test(c);
+}
+
+/** The tokens of a runtime-hosted command line that may name what it runs,
+ *  under the discipline documented on resolveAgentSlug. Bare script-slot
+ *  names are already dropped. */
+function scriptCandidates(cmdline: string | undefined): string[] {
+  if (!cmdline) return [];
   const argv = tokenizeCmdline(cmdline);
-  if (argv.length < 2) return undefined;
+  if (argv.length < 2) return [];
   const form0 = lookupForm(argv[0]);
   const form1 = lookupForm(argv[1]);
   // Package runners and `python -m`: the agent name rides the next non-flag
@@ -228,23 +254,7 @@ export function resolveAgentSlug(cmdline: string | undefined): AgentSlug | undef
       bare: false,
     });
   }
-  for (const { token: c, bare } of candidates) {
-    if (bare) continue;
-    // Scoped-package spellings never basename-match: `@acme/claude` must not
-    // resolve claude (lookupForm unwraps the scope, so it cannot be trusted
-    // here). Only an exact alias entry may speak for a scoped name.
-    const scoped = c.startsWith('@') || /[/\\]@[^/\\]+[\\/]/.test(c);
-    if (scoped) {
-      const alias = ALIAS_TO_SLUG.get(c.replace(/\\/g, '/').toLowerCase());
-      if (alias) return alias;
-      continue;
-    }
-    const form = lookupForm(c);
-    if (AGENT_SLUG_SET.has(form)) return form as AgentSlug;
-    const alias = ALIAS_TO_SLUG.get(form);
-    if (alias) return alias;
-  }
-  return undefined;
+  return candidates.filter((c) => !c.bare).map((c) => c.token);
 }
 
 /**
@@ -301,8 +311,15 @@ export interface AgentProcessPick {
   custom?: string;
 }
 
-/** Shells a custom agent's wrapper script may run under (`sh /usr/local/bin/tern`). */
-const SCRIPT_HOST_STEMS: ReadonlySet<string> = new Set(['sh', 'bash', 'zsh', 'dash', 'fish', ...RUNTIME_STEMS]);
+/** A tracked pick known only as a custom agent: a label, no slug. */
+function customOnly(state: { slug?: AgentSlug; custom?: string }): boolean {
+  return state.custom !== undefined && state.slug === undefined;
+}
+
+/** Shells, runtimes and package runners a custom agent may run under
+ *  (`sh /usr/local/bin/tern`, `python3.12 /opt/tern.py`, `npx -y tern`), with
+ *  any version suffix. */
+const SCRIPT_HOST_RE = /^(sh|bash|zsh|dash|fish|node|nodejs|bun|deno|python|pythonw|pypy|npx|npx-cli|bunx|yarn|uvx|pipx)[\d.]*$/;
 
 /**
  * The custom-agent process name `entry` runs as: its image name, or, for a
@@ -312,13 +329,18 @@ const SCRIPT_HOST_STEMS: ReadonlySet<string> = new Set(['sh', 'bash', 'zsh', 'da
  */
 function customNameOf(entry: ProcessTreeEntry, names: { has(name: string): boolean } | undefined): string | undefined {
   if (!names) return undefined;
-  const stem = imageStem(entry.name);
+  const stem = customProcessNameForm(entry.name);
   if (names.has(stem)) return stem;
-  if (!SCRIPT_HOST_STEMS.has(stem) || !entry.cmdline) return undefined;
-  const script = tokenizeCmdline(entry.cmdline).slice(1).find((t) => !t.startsWith('-'));
-  if (!script || !/[\\/]/.test(script)) return undefined;
-  const form = lookupForm(script);
-  return names.has(form) ? form : undefined;
+  if (!SCRIPT_HOST_RE.test(stem)) return undefined;
+  // The same candidates resolveAgentSlug reads: the script slot in PATH form,
+  // a runner's or `python -m`'s package, and a `node_modules/<pkg>` boundary
+  // (an npm-installed CLI runs as `node …/node_modules/tern/bin/cli.js`).
+  for (const c of scriptCandidates(entry.cmdline)) {
+    if (isScopedCandidate(c)) continue;
+    const form = customProcessNameForm(c);
+    if (names.has(form)) return form;
+  }
+  return undefined;
 }
 
 /**
@@ -880,7 +902,10 @@ export class AgentProcessTracker {
   arm(sessionId: string, shellPid: number): void {
     if (this.isWsl(sessionId)) return; // attributed by armWsl() instead
     this.shellPids.set(sessionId, shellPid);
-    if (this.states.get(sessionId)?.alive) return;
+    // A live custom agent does not block it: a hook or banner is evidence of a
+    // registry agent, which the custom wrapper may have started or exec'd.
+    const cur = this.states.get(sessionId);
+    if (cur?.alive && !customOnly(cur)) return;
     const failedAt = this.lastFailedAt.get(sessionId);
     if (failedAt !== undefined && Date.now() - failedAt < ARM_BACKOFF_MS) return;
     this.probe(sessionId, shellPid);
@@ -917,9 +942,11 @@ export class AgentProcessTracker {
    * hook (Codex) is otherwise named only by its banner, and a missed banner
    * left the pane anonymous until its first turn ended.
    *
-   * Commits ONLY a pick that resolves to an agent slug. A plain long-running
+   * Commits ONLY a pick that resolves to an agent slug or to one of the
+   * operator's custom agents (a label, never a slug). A plain long-running
    * command (`npm run dev`, `vim`) leaves no state behind, so it can mint
-   * neither an alive flag nor a later `agent.processExit` edge. A miss backs
+   * neither an alive flag nor a later `agent.processExit` edge. A tracked
+   * custom agent gives way to a registry agent found later in its place. A miss backs
    * off only this trigger (AGENT_MISS_BACKOFF_MS; an enumeration failure,
    * ARM_BACKOFF_MS): a guess that found no agent must not delay the arm() of
    * an agent launched seconds later.
@@ -965,6 +992,15 @@ export class AgentProcessTracker {
         if ((this.generation.get(sessionId) ?? 0) !== gen) return; // disarmed meanwhile
         const pick = selectAgentProcess(entries, shellPid, this.customNames?.());
         let replaced = false;
+        // A live custom agent gives way only to a registry agent: its wrapper
+        // started or exec'd one (`exec codex`, same pid). The custom pick
+        // carried no slug, so no agent ended; otherwise it stays as it was.
+        const tracked = this.states.get(sessionId);
+        if (tracked?.alive && customOnly(tracked) && entries.some((e) => e.pid === tracked.pid)) {
+          if (!pick?.slug) return;
+          this.watcher.unwatch(AgentProcessTracker.watchKey(sessionId));
+          tracked.alive = false;
+        }
         if (requireSlug) {
           const cur = this.states.get(sessionId);
           if (cur?.alive) {

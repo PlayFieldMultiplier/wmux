@@ -1,7 +1,7 @@
 // @wmux-lane unit
 // `win32` here is a platform name handed to a pure validator; nothing reaches the OS.
 import { describe, expect, it } from 'vitest';
-import { normalizeCustomAgent, validateCustomAgents, type CustomAgent } from '../customAgents';
+import { customAgentProcessNames, normalizeCustomAgent, validateCustomAgents, type CustomAgent } from '../customAgents';
 import {
   applyFanoutAgentFlags, describeFanoutAgentChoice, describeFanoutRole, fanoutLaunchCustomAgents, normalizeFanoutPreset,
   unresolvedCustomAgent, validateFanoutAgentChoice,
@@ -164,7 +164,7 @@ describe('process names', () => {
     expect(normalizeCustomAgent({ name: 'Tern', command: 'tern', processNames: ['Tern.EXE', 'tern-daemon', 'tern'] }))
       .toEqual({ ok: true, agent: { name: 'Tern', command: 'tern', processNames: ['tern', 'tern-daemon'] } });
     expect(code({ name: 'Tern', command: 'tern', processNames: ['bin/tern'] })).toBe('process-invalid');
-    expect(code({ name: 'Tern', command: 'tern', processNames: 'tern' })).toBe('process-invalid');
+    expect(code({ name: 'Tern', command: 'tern', processNames: 'tern' })).toBe('process-count');
     expect(code({ name: 'Tern', command: 'tern', processNames: ['kiro-cli'] })).toBe('process-known');
     expect(code({ name: 'Tern', command: 'tern', processNames: ['python3'] })).toBe('process-generic');
   });
@@ -178,6 +178,27 @@ describe('process names', () => {
     // The default process name (the command's) counts too.
     expect(validateCustomAgents([{ name: 'Tern', command: 'tern' }, { name: 'Gull', command: 'gull', processNames: ['tern'] }]))
       .toMatchObject({ ok: false, code: 'process-duplicate' });
+  });
+});
+
+describe('process names, review', () => {
+  it('stores names, the default included, in the form the tracker compares', () => {
+    expect(customAgentProcessNames({ command: '/opt/tern/tern.py' })).toEqual(['tern']);
+    expect(normalizeCustomAgent({ name: 'Tern', command: 'tern', processNames: ['tern.js', 'Tern-D.CMD'] }))
+      .toMatchObject({ ok: true, agent: { processNames: ['tern', 'tern-d'] } });
+    expect(code({ name: 'Tern', command: 'tern', processNames: Array.from({ length: 9 }, (_, i) => `t${i}`) })).toBe('process-count');
+  });
+
+  it('refuses a name a registry agent goes by, since a pane label maps back to its slug', () => {
+    for (const name of ['Claude Code', 'claude code', 'codex']) expect(code({ name, command: 'tern' })).toBe('name-known');
+  });
+
+  it('keeps an agent\'s own command name for it, even with other process names listed', () => {
+    const r = validateCustomAgents([
+      { name: 'Tern', command: 'tern', processNames: ['tern-d'] },
+      { name: 'Gull', command: 'gull', processNames: ['tern'] },
+    ]);
+    expect(r).toMatchObject({ ok: false, code: 'process-duplicate', params: { process: 'tern' } });
   });
 });
 

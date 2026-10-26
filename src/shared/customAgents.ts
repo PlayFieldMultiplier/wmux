@@ -23,7 +23,7 @@
 // exactly what the operator typed, added only when a preset row turns
 // Unattended on; an empty field means fan-out does not offer Unattended.
 
-import { AGENT_ROWS, agentLauncherStem } from './agentIdentity';
+import { AGENT_IDENTITIES, AGENT_ROWS, agentLauncherStem } from './agentIdentity';
 import { launcherStem } from './agentResume';
 
 export interface CustomAgent {
@@ -49,6 +49,7 @@ export type CustomAgentIssueCode =
   | 'unknown-field'
   | 'name-invalid'
   | 'name-duplicate'
+  | 'name-known'
   | 'command-invalid'
   | 'command-separator'
   | 'command-known'
@@ -64,6 +65,7 @@ export type CustomAgentIssueCode =
   | 'model-in-use'
   | 'unattended-in-use'
   | 'process-invalid'
+  | 'process-count'
   | 'process-known'
   | 'process-generic'
   | 'process-duplicate';
@@ -144,6 +146,25 @@ const REGISTRY_NAMES: ReadonlySet<string> = new Set(
   ].map((n) => matchStem(n))),
 );
 
+/** Registry agents' display names and slugs, lower-cased. A pane label goes
+ *  out as the agent's name, and main maps a registry display name back to its
+ *  slug (agentDisplayToSlug): a custom agent named "Claude Code" would become
+ *  that slug. */
+const REGISTRY_DISPLAY_NAMES: ReadonlySet<string> = new Set(
+  AGENT_IDENTITIES.flatMap((a) => [a.display, a.slug]).map((n) => n.toLowerCase()),
+);
+
+/**
+ * A process name in the form the process tracker compares: basename,
+ * lower-cased, with a program or script extension dropped. The tracker reduces
+ * a running image (`tern.exe`) and a hosted script (`python3 /opt/tern.py`) the
+ * same way, so a stored name always can match.
+ */
+export function customProcessNameForm(name: string): string {
+  const base = name.split(/[\\/]/).pop() ?? '';
+  return base.toLowerCase().replace(/\.(exe|com|cmd|bat|ps1|js|mjs|cjs|py|pyw)$/, '');
+}
+
 /** The key a role binding or preset row uses for this agent. */
 export function customAgentStem(agent: Pick<CustomAgent, 'command'>): string {
   return matchStem(agent.command);
@@ -158,7 +179,15 @@ export function findCustomAgent(stem: string, list: readonly CustomAgent[] | und
 
 /** The executable names the process tracker matches for this agent. */
 export function customAgentProcessNames(agent: Pick<CustomAgent, 'command' | 'processNames'>): string[] {
-  return agent.processNames?.length ? agent.processNames : [customAgentStem(agent)];
+  return agent.processNames?.length ? agent.processNames : [customProcessNameForm(customAgentStem(agent))];
+}
+
+/** Every process name no other agent may claim: the tracked names plus the
+ *  Command's own, which a launch of this agent always runs. */
+function ownedProcessNames(agent: CustomAgent): string[] {
+  const own = customProcessNameForm(customAgentStem(agent));
+  const names = customAgentProcessNames(agent);
+  return names.includes(own) ? names : [...names, own];
 }
 
 /** What replaces the launcher token when a role or preset row picks it. */
@@ -231,6 +260,9 @@ export function normalizeCustomAgent(
   const nameMax = String(CUSTOM_AGENT_NAME_MAX);
   if (!name || name.length > CUSTOM_AGENT_NAME_MAX || !NAME_RE.test(name)) {
     return fail(issue('name-invalid', { max: nameMax }, `name must be 1-${nameMax} characters: letters, digits, space . _ -`));
+  }
+  if (REGISTRY_DISPLAY_NAMES.has(name.toLowerCase())) {
+    return fail(issue('name-known', { name }, `"${name}" is the name of an agent wmux already knows`));
   }
 
   // A field of the wrong type is refused, never read as absent: the agent
@@ -311,15 +343,14 @@ export function normalizeCustomAgent(
   if (src.processNames !== undefined) {
     const raw = src.processNames;
     if (!Array.isArray(raw) || raw.length > CUSTOM_AGENT_PROCESS_NAMES_MAX || raw.some((n) => typeof n !== 'string')) {
-      return fail(issue('process-invalid', { name, process: '', max: String(CUSTOM_AGENT_PROCESS_NAMES_MAX) }, `"${name}": processNames must be at most ${CUSTOM_AGENT_PROCESS_NAMES_MAX} names`));
+      return fail(issue('process-count', { name, max: String(CUSTOM_AGENT_PROCESS_NAMES_MAX) }, `"${name}": processNames must be a list of at most ${CUSTOM_AGENT_PROCESS_NAMES_MAX} names`));
     }
     const names: string[] = [];
     for (const typed of raw as string[]) {
       const trimmed = typed.trim();
       if (!trimmed) continue;
-      // The tracker compares the image's basename, lower-cased, with a Windows
-      // executable extension dropped: a name is stored in that form.
-      const n = matchStem(trimmed);
+      // Stored in the form the tracker compares (customProcessNameForm).
+      const n = customProcessNameForm(trimmed.replace(/[. ]+$/, ''));
       const process = trimmed.slice(0, 80);
       if (/[\\/]/.test(trimmed) || !BARE_COMMAND_RE.test(n)) {
         return fail(issue('process-invalid', { name, process, max: String(CUSTOM_AGENT_PROCESS_NAMES_MAX) }, `"${name}": process name "${process}" must be a program name, with no folder`));
@@ -369,8 +400,8 @@ function listClash(agent: CustomAgent, kept: readonly CustomAgent[]): CustomAgen
     return issue('command-duplicate', { name: agent.name, other: other.name, stem }, `"${agent.name}" and "${other.name}" both run "${stem}"`);
   }
   // One process name names one agent, or the tracker could not tell them apart.
-  for (const process of customAgentProcessNames(agent)) {
-    const owner = kept.find((a) => customAgentProcessNames(a).includes(process));
+  for (const process of ownedProcessNames(agent)) {
+    const owner = kept.find((a) => ownedProcessNames(a).includes(process));
     if (owner) {
       return issue('process-duplicate', { name: agent.name, other: owner.name, process }, `"${agent.name}" and "${owner.name}" are both known by the process "${process}"`);
     }
