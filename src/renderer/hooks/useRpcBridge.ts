@@ -20,16 +20,18 @@ import { isTaskEnded, isVerifiedTaskSender } from '../../shared/a2aReopen';
 import { applyTaskQueryView } from '../../shared/a2aTaskQueryView';
 import { getLeafPanes, getWorkspaceLeafPanes, getWorkspacePtyIds, getWorkspaceRemoteSessions } from '../../shared/paneUtils';
 import { findStashedEntry, paneStashedError, stashedPaneLiveness } from '../../shared/paneStash';
-import { applyRoleAgent, KNOWN_AGENT_STEMS, launchRefusesPositionalPrompt, normalizeRoleBinding, sanitizeOrchRole } from '../../shared/orchestratorRole';
+import { applyRoleAgent, KNOWN_AGENT_STEMS, launchRefusesPositionalPrompt, normalizeRoleBinding, sanitizeOrchRole, type RoleBinding } from '../../shared/orchestratorRole';
 import type { CustomAgent } from '../../shared/customAgents';
 import {
   FANOUT_EXTRA_AGENT_STEMS,
   applyFanoutAgentFlags,
   commandLauncherStem,
+  approvedRoleBindings,
   describeFanoutRole,
   fanoutAgentSpec,
   fanoutChoiceBinding,
   fanoutLaunchCustomAgents,
+  fanoutTaskRoleBinding,
   unresolvedCustomAgent,
   validateFanoutAgentChoice,
   type FanoutAgentChoice,
@@ -141,16 +143,8 @@ import { reserveLeaf } from '../utils/reservedLeaves';
  * Returns [] when no task carries a role. The same lines go into the fan-out
  * audit record, so what was shown and what was logged cannot differ.
  */
-function fanOutRoleLines(raw: unknown, customAgents: readonly CustomAgent[]): string[] {
-  if (!Array.isArray(raw)) return [];
-  const seen: string[] = [];
-  for (const entry of raw) {
-    const role = typeof entry === 'string' ? entry.trim() : '';
-    if (role && !seen.includes(role)) seen.push(role);
-  }
-  if (seen.length === 0) return [];
-  const bindings = useStore.getState().orchestratorRoleBindings;
-  return seen.map((role) => describeFanoutRole(role, bindings[role], customAgents));
+function fanOutRoleLines(approved: Record<string, RoleBinding | null>, customAgents: readonly CustomAgent[]): string[] {
+  return Object.entries(approved).map(([role, b]) => describeFanoutRole(role, b ?? undefined, customAgents));
 }
 
 /** The role lines as the approval dialog shows them; '' when no task has a
@@ -1493,7 +1487,10 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
     // things — the one property this gate exists to hold.
     // main's snapshot of the custom agents: the same definitions every task
     // of this fan-out launches (fanoutLaunchCustomAgents).
-    const roleCommands = fanOutRoleLines(params.roles, fanoutLaunchCustomAgents(params.customAgents, useStore.getState().customAgents));
+    // The bindings shown are the ones returned with the verdict, and main
+    // hands them back to every task: what was approved is what launches.
+    const roleBindings = approvedRoleBindings(Array.isArray(params.roles) ? params.roles : [], useStore.getState().orchestratorRoleBindings);
+    const roleCommands = fanOutRoleLines(roleBindings, fanoutLaunchCustomAgents(params.customAgents, useStore.getState().customAgents));
     const previewWithRoles = promptPreview + describeFanOutRoles(roleCommands);
     const verdict = await requestFanOutApproval({
       workspaceId: callerWsId,
@@ -1510,7 +1507,7 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
         level: 'info',
       });
     }
-    return { approved: verdict.approved, outcome: verdict.outcome, roleCommands };
+    return { approved: verdict.approved, outcome: verdict.outcome, roleCommands, roleBindings };
   }
 
   if (method === 'task.requestApproval') {
@@ -1570,7 +1567,9 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
     // main's current list is read first, so a task spawned before the startup
     // copy arrived still finds it.
     const named = (params.agentChoice as { agent?: unknown } | undefined)?.agent;
-    const roleAgent = role ? useStore.getState().orchestratorRoleBindings[role]?.agent : undefined;
+    // The role's binding as its approval showed it (fanoutTaskRoleBinding).
+    const taskRoleBinding = role ? fanoutTaskRoleBinding(params, useStore.getState().orchestratorRoleBindings[role]) : undefined;
+    const roleAgent = taskRoleBinding?.agent;
     const wanted = typeof named === 'string' ? named : roleAgent;
     if (!Array.isArray(params.customAgents) && wanted && !KNOWN_AGENT_STEMS.has(wanted) && !fanoutAgentSpec(wanted)) {
       try {
@@ -1598,9 +1597,7 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
     }
     const roleBinding = agentChoice
       ? fanoutChoiceBinding(agentChoice)
-      : role
-        ? useStore.getState().orchestratorRoleBindings[role]
-        : undefined;
+      : taskRoleBinding;
     const extraAgents = agentChoice ? FANOUT_EXTRA_AGENT_STEMS : undefined;
     // An agent the swap cannot put in (a missing custom agent, or a fan-out-only
     // CLI bound to a role) would launch the default agent's line: the task

@@ -107,6 +107,7 @@ import { loadFanoutPresets } from '../../worktask/fanoutPresets';
 import { loadCustomAgents } from '../../worktask/customAgents';
 import { sanitizeFanoutOrigin, type FanoutOrigin } from '../../../shared/fanoutOrigin';
 import {
+  approvedRoleBindings,
   describeFanoutAgentChoice,
   fanoutEffortIgnored,
   fanoutPresetKey,
@@ -1919,7 +1920,7 @@ export function registerFanOutRpc(
       parsed.titles.map((title, index) => ({ index, title, started: false, reason, ...(detail ? { detail } : {}) }));
     void (async () => {
       try {
-        let verdict: { approved?: unknown; outcome?: unknown; roleCommands?: unknown } | null = null;
+        let verdict: { approved?: unknown; outcome?: unknown; roleCommands?: unknown; roleBindings?: unknown } | null = null;
         try {
           verdict = (await sendToRenderer(
             getWindow,
@@ -1953,7 +1954,7 @@ export function registerFanOutRpc(
               roles: parsed.roles,
             },
             { timeoutMs: APPROVAL_TIMEOUT_MS },
-          )) as { approved?: unknown; outcome?: unknown; roleCommands?: unknown } | null;
+          )) as { approved?: unknown; outcome?: unknown; roleCommands?: unknown; roleBindings?: unknown } | null;
         } catch {
           // Renderer unavailable / bridge timeout. Fail closed — an unattended
           // spawn is exactly what the gate exists to prevent — but record WHY.
@@ -2074,6 +2075,11 @@ export function registerFanOutRpc(
         try {
           const result = await service.start({
             ...req,
+            // The bindings the approval showed: a role rebound while a
+            // dependent task waits does not change what that task runs.
+            // A verdict without them freezes every role as unbound (fails
+            // closed) rather than letting tasks read the live bindings.
+            ...(parsed.roles.some((r) => r) ? { roleBindings: approvedRoleBindings(parsed.roles, verdict.roleBindings) } : {}),
             // A bot's worker is launched only while the bot may still spend:
             // asked again right before each pane spawns.
             ...(bot && botPort ? { mayLaunch: () => botPort.launchRefusal(bot.botId, botWakeId) } : {}),

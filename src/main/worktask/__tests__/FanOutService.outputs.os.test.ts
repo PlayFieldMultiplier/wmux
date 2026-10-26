@@ -74,6 +74,24 @@ function service(daemon: FanOutDaemonPort, renderer: FanOutRendererPort) {
 }
 
 describe('FanOutService — worktree:false', () => {
+  it('hands an output-folder task the binding its approval showed for its role', async () => {
+    const renderer = rendererFake();
+    const res = await service(daemonFake().port, renderer.port).start({
+      idempotencyKey: 'k-roles',
+      prompt: 'draw a cat',
+      titles: ['one', 'two'],
+      repoPath: '',
+      agentCmd: 'claude',
+      verifiedWorkspaceId: 'ws-owner',
+      roles: ['Builder', 'Reviewer'],
+      roleBindings: { Builder: { agent: 'codex', model: 'o3' }, Reviewer: null },
+      worktree: false,
+      outputFolder: 'image',
+    });
+    expect(res.ok).toBe(true);
+    expect(renderer.spawned.map((p) => p.roleBinding)).toEqual([{ agent: 'codex', model: 'o3' }, null]);
+  });
+
   it('hands every task the custom agents main approved, as main read them', async () => {
     // "Tern" is a made-up CLI the operator defined.
     const tern = { name: 'Tern', command: 'tern', args: '--fast' };

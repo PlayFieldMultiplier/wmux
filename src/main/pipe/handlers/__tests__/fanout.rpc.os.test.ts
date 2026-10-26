@@ -65,7 +65,7 @@ type Handler = (params: Record<string, unknown>, ctx?: RpcContext) => Promise<un
 const LOCAL: RpcContext = { origin: 'local' };
 
 /** Verdict the renderer's approval prompt returns, or a failure mode. */
-type ApprovalStub = { approved: boolean; outcome?: string } | 'hang' | 'throw';
+type ApprovalStub = { approved: boolean; outcome?: string; roleBindings?: unknown } | 'hang' | 'throw';
 
 interface Harness {
   call: (params: Record<string, unknown>, ctx?: RpcContext) => Promise<Record<string, unknown>>;
@@ -416,6 +416,29 @@ describe('roles choose the agent per task, without naming one', () => {
     await h.call(goodParams({ titles: ['a', 'b'], roles: ['Builder', 'Reviewer'] }));
     await h.flush();
     expect(h.request().roles).toEqual(['Builder', 'Reviewer']);
+  });
+
+  it('launches the bindings the approval showed, re-normalized, and only for the roles asked', async () => {
+    const h = setup({
+      approval: {
+        approved: true,
+        outcome: 'approved',
+        roleBindings: { Builder: { agent: 'codex', model: 'o3' }, Reviewer: null, Tester: { agent: 'claude' } },
+      },
+    });
+    await h.call(goodParams({ titles: ['a', 'b'], roles: ['Builder', 'Reviewer'] }));
+    await h.flush();
+    expect(h.request().roleBindings).toEqual({ Builder: { agent: 'codex', model: 'o3' }, Reviewer: null });
+    // A verdict that carries none freezes the roles as unbound, never the live bindings.
+    const bare = setup({ approval: { approved: true, outcome: 'approved' } });
+    await bare.call(goodParams({ titles: ['a', 'b'], roles: ['Builder', 'Reviewer'] }));
+    await bare.flush();
+    expect(bare.request().roleBindings).toEqual({ Builder: null, Reviewer: null });
+    // No roles: nothing to freeze.
+    const plain = setup({ approval: { approved: true, outcome: 'approved', roleBindings: {} } });
+    await plain.call(goodParams());
+    await plain.flush();
+    expect(plain.request().roleBindings).toBeUndefined();
   });
 
   it('keeps role pairing when an empty title is dropped', async () => {

@@ -140,12 +140,19 @@ describe('useRpcBridge — fan-out task roles', () => {
     // extra flags would make the approved text and the executed command differ.
     const m = src.match(/if \(method === 'fanout\.requestApproval'\)[\s\S]*?\n {2}\}\n/);
     // From main's approval snapshot of the custom agents, the one every task launches.
-    expect(m?.[0]).toMatch(/fanOutRoleLines\(params\.roles, fanoutLaunchCustomAgents\(params\.customAgents, /);
+    // The lines describe the very bindings the verdict returns, which main
+    // hands back to every task (approvedRoleBindings / fanoutTaskRoleBinding).
+    expect(m?.[0]).toMatch(/const roleBindings = approvedRoleBindings\(/);
+    expect(m?.[0]).toMatch(/fanOutRoleLines\(roleBindings, fanoutLaunchCustomAgents\(params\.customAgents, /);
+    expect(m?.[0]).toMatch(/return \{ approved: verdict\.approved, outcome: verdict\.outcome, roleCommands, roleBindings \}/);
+    const spawn = src.match(/if \(method === 'fanout\.spawnWorkspace'\)[\s\S]*?\n {2}\}\n/);
+    expect(spawn?.[0]).toMatch(/fanoutTaskRoleBinding\(params, useStore\.getState\(\)\.orchestratorRoleBindings\[role\]\)/);
+    expect(spawn?.[0]).not.toMatch(/\? useStore\.getState\(\)\.orchestratorRoleBindings\[role\]\n/);
     expect(m?.[0]).toMatch(/describeFanOutRoles\(roleCommands\)/);
     // Only claim a model that will actually be injected.
     const helper = src.match(/function fanOutRoleLines\([\s\S]*?\n\}/);
     // The line itself is shared/fanoutPreset describeFanoutRole (unit-tested there).
-    expect(helper?.[0]).toMatch(/describeFanoutRole\(role, bindings\[role\], customAgents\)/);
+    expect(helper?.[0]).toMatch(/describeFanoutRole\(role, b \?\? undefined, customAgents\)/);
   });
 
   it('hands the lineage owner to pty.create (main stamps it inside the create), with no await before it', () => {
