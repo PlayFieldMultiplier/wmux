@@ -26,6 +26,7 @@ import {
   AUTOMATION_CAPABILITY_BROWSER_IDENTITY,
   AUTOMATION_DEFAULTS,
   AUTOMATION_PTY_PREFIX,
+  isFailureReason,
   type Automation,
   type AutomationAgent,
   type AutomationBrowserIdentity,
@@ -33,6 +34,7 @@ import {
   type AutomationRunIdentityResult,
   type AutomationAttention,
   type AutomationEvent,
+  type AutomationFailureReason,
   type AutomationListResult,
   type AutomationMutationResult,
   type AutomationOkResult,
@@ -353,13 +355,19 @@ export class AutomationEngine {
     this.ports.emit({ type: 'automations-changed' });
   }
 
-  private queueAttention(automation: Automation, kind: AutomationAttention['kind'], announce = true): void {
+  private queueAttention(
+    automation: Automation,
+    kind: AutomationAttention['kind'],
+    announce = true,
+    reason?: AutomationFailureReason,
+  ): void {
     this.attention.push({
       id: this.newId(),
       automationId: automation.id,
       automationName: automation.name,
       kind,
       at: this.now(),
+      ...(reason && { reason }),
     });
     if (this.attention.length > ATTENTION_CAP) this.attention = this.attention.slice(-ATTENTION_CAP);
     if (announce) this.ports.emit({ type: 'attention', automationId: automation.id, automationName: automation.name, kind });
@@ -558,6 +566,9 @@ export class AutomationEngine {
     automation.enabled = enabled;
     // A human enabling a draft is what turns it into a schedule.
     if (enabled) delete automation.proposed;
+    // Any human toggle starts a fresh streak; turning it back on answers the breaker's notice.
+    delete automation.failureStreak;
+    if (enabled) this.attention = this.attention.filter((x) => !(x.automationId === automation.id && x.kind === 'failure-paused'));
     automation.nextRunAt = enabled ? nextOccurrenceAfter(automation.trigger, this.now()) : null;
     automation.updatedAt = this.now();
     await this.persistAutomations();
@@ -1301,6 +1312,40 @@ export class AutomationEngine {
     else delete run.reason;
     run.endedAt = this.now();
     this.emitRun(run);
+    this.noteOutcome(run);
+  }
+
+  /**
+   * The failure breaker: consecutive scheduled runs that failed with one
+   * reason turn the schedule off after AUTOMATION_DEFAULTS.failureBreakerRuns.
+   * Manual and test runs, cancelled, skipped and unknown ends neither count
+   * nor break the streak. finish() calls this once per run.
+   */
+  private noteOutcome(run: AutomationRun): void {
+    if (run.trigger !== 'scheduled') return;
+    const automation = this.find(run.automationId);
+    // Off already (by a person or by the breaker): a run still in flight changes nothing.
+    if (!automation || !automation.enabled) return;
+    if (run.state === 'completed') {
+      if (!automation.failureStreak) return;
+      delete automation.failureStreak;
+    } else if (run.state === 'failed' && isFailureReason(run.reason)) {
+      const prev = automation.failureStreak;
+      const count = prev?.reason === run.reason ? prev.count + 1 : 1;
+      automation.failureStreak = { reason: run.reason, count };
+      if (count >= AUTOMATION_DEFAULTS.failureBreakerRuns) {
+        automation.enabled = false;
+        automation.nextRunAt = null;
+        automation.updatedAt = this.now();
+        this.queueAttention(automation, 'failure-paused', true, run.reason);
+        this.ports.log('warn', `[automation] ${automation.id} paused after ${count} scheduled runs failed (${run.reason})`);
+      }
+    } else {
+      return;
+    }
+    // The streak, the pause and the notice go out in one automations.json write.
+    void this.persistAutomations();
+    this.emitAutomations();
   }
 
   /** A turn ended: record it, then keep the session for the linger window. */
