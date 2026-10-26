@@ -164,11 +164,14 @@ export class ActEffectStore {
   }
 
   /** inFlight → pending: nothing was written (the approval was taken back,
-   *  GitHub's rate limit refused it before it was sent); the try is given back. */
-  release(id: string, reason: string): ActEffect | null {
+   *  GitHub's rate limit refused it before it was sent); the try is given back.
+   *  `kept`: a write of this try is on GitHub (a release's draft), so the try
+   *  keeps its count and the row stays claimed (a read comes first next time,
+   *  and a restart keeps the approval). */
+  release(id: string, reason: string, kept = false): ActEffect | null {
     const row = this.rows.get(id);
     if (!row || row.status !== 'inFlight') return null;
-    const next: ActEffect = { ...row, status: 'pending', attempt: Math.max(0, row.attempt - 1), reason, updatedAt: this.now() };
+    const next: ActEffect = { ...row, status: 'pending', attempt: kept ? row.attempt : Math.max(0, row.attempt - 1), reason, updatedAt: this.now() };
     return this.put(next) ? next : this.unjournaled(row);
   }
 

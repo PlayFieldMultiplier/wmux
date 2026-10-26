@@ -470,39 +470,55 @@ export async function readReleases(gh: GhActPort, p: RepoPath): Promise<GhReleas
   return out;
 }
 
+/** The files of one folder at a commit (`''`: the root), with the blob
+ *  each one is, or null when there is no such folder. */
+async function readFolder(gh: GhActPort, p: RepoPath, dir: string, sha: string): Promise<Read<Array<{ name: string; blob: string }> | null>> {
+  const a = await gh.read(p.host, `${p.base}/contents${dir ? `/${pathOfName(dir)}` : ''}?ref=${sha}`);
+  if (!a.ok) return a.kind === 'http' && a.status === 404 ? null : failed(a);
+  if (!Array.isArray(a.value)) return { error: `${dir || 'the root'} is not a folder`, status: 200 };
+  const out: Array<{ name: string; blob: string }> = [];
+  for (const e of (a.value as unknown[]).map(rec)) {
+    if (e?.type !== 'file') continue;
+    if (!FULL_SHA_RE.test(str(e.sha)) || !str(e.name)) return { error: `${dir || 'the root'} could not be listed`, status: 200 };
+    out.push({ name: str(e.name), blob: str(e.sha) });
+  }
+  return out;
+}
+
+/** A blob's text. Read through the blob, whatever its size: `contents/`
+ *  answers a file over 1 MB with a 403 (`too_large`) in the JSON GitHub
+ *  gives gh by default. */
+async function readBlob(gh: GhActPort, p: RepoPath, blob: string, what: string): Promise<Read<string>> {
+  const b = await gh.read(p.host, `${p.base}/git/blobs/${blob}`);
+  if (!b.ok) return failed(b);
+  const v = rec(b.value);
+  if (v?.encoding !== 'base64') return { error: `${what} could not be read`, status: 200 };
+  return Buffer.from(str(v.content), 'base64').toString('utf8');
+}
+
 /** A file's text at a commit, null when it is not there. */
 export async function readFileAt(gh: GhActPort, p: RepoPath, path: string, sha: string): Promise<Read<string | null>> {
-  const a = await gh.read(p.host, `${p.base}/contents/${pathOfName(path)}?ref=${sha}`);
-  if (!a.ok) return a.kind === 'http' && a.status === 404 ? null : failed(a);
-  const v = rec(a.value);
-  if (v?.type !== 'file') return { error: `${path} is not a file`, status: 200 };
-  let content = str(v.content);
-  // A file over 1 MB answers no content here: its blob holds it.
-  if (v.encoding === 'none' || (!content && Number(v.size) > 0)) {
-    const b = await gh.read(p.host, `${p.base}/git/blobs/${str(v.sha)}`);
-    if (!b.ok) return failed(b);
-    const blob = rec(b.value);
-    if (blob?.encoding !== 'base64') return { error: `${path} could not be read`, status: 200 };
-    content = str(blob.content);
-  } else if (v.encoding !== 'base64') return { error: `${path} could not be read`, status: 200 };
-  return Buffer.from(content, 'base64').toString('utf8');
+  const cut = path.lastIndexOf('/');
+  const folder = await readFolder(gh, p, cut < 0 ? '' : path.slice(0, cut), sha);
+  if (folder === null || isFail(folder)) return folder;
+  const file = folder.find((f) => f.name === path.slice(cut + 1));
+  return file ? readBlob(gh, p, file.blob, path) : null;
 }
 
 /** The `on.push` of every workflow at a commit, or why they cannot be read
  *  (`refusal`: one that reads as no shape this module knows). */
 export async function readWorkflows(gh: GhActPort, p: RepoPath, sha: string): Promise<Read<WorkflowPush[]> | { refusal: string }> {
   const dir = '.github/workflows';
-  const a = await gh.read(p.host, `${p.base}/contents/${dir}?ref=${sha}`);
-  if (!a.ok) return a.kind === 'http' && a.status === 404 ? [] : failed(a);
-  if (!Array.isArray(a.value)) return { error: `${dir} is not a folder`, status: 200 };
-  const files = (a.value as unknown[]).map(rec).filter((e): e is Record<string, unknown> => !!e && e.type === 'file' && /\.ya?ml$/i.test(str(e.name)));
+  const folder = await readFolder(gh, p, dir, sha);
+  if (folder === null) return [];
+  if (isFail(folder)) return folder;
+  const files = folder.filter((f) => /\.ya?ml$/i.test(f.name));
   if (files.length > WORKFLOWS_MAX) return { refusal: `the repository has more than ${WORKFLOWS_MAX} workflows` };
   const out: WorkflowPush[] = [];
   for (const f of files) {
-    const path = `${dir}/${str(f.name)}`;
-    const text = await readFileAt(gh, p, path, sha);
+    const path = `${dir}/${f.name}`;
+    const text = await readBlob(gh, p, f.blob, path);
     if (isFail(text)) return text;
-    if (text === null) return { error: `${path} could not be read`, status: 200 };
     try {
       out.push({ path, push: workflowPush(text) });
     } catch (err) {

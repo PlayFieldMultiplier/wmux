@@ -541,6 +541,30 @@ describe('a try that may have run, settled by a read', () => {
     expect(r.svc.get(req.requestId)?.state).toBe('executed');
   });
 
+  it('a try given back once its draft exists stays counted: a restart keeps the approval, and the draft is published, never a second one', async () => {
+    const r = rig();
+    const req = await r.ask(NOTES);
+    let first = true;
+    r.gh.onWrite = (w) => {
+      if (w.method === 'PATCH' && first) {
+        first = false;
+        r.gh.nextWrite = { answer: { ok: false, kind: 'rate-limited', message: 'GitHub rate limit' }, landed: false };
+      }
+    };
+    await r.run(req);
+    const id = actEffectId(req.requestId);
+    const draft = r.gh.releases[0]?.id;
+    expect(r.effects.get(id)).toMatchObject({ status: 'pending', attempt: 1, reason: 'rate-limited', draftId: draft });
+    // A restart: the request is not handed back to the owner, its row stays.
+    const again = new ApprovalService(r.ports);
+    again.resume();
+    expect(again.get(req.requestId)?.state).toBe('approved');
+    expect(r.effects.get(id)).not.toBeNull();
+    await r.executor.reconcileAll();
+    expect(r.gh.writes.map((w) => `${w.method} ${w.endpoint}`)).toEqual(['POST repos/o/r/releases', `PATCH repos/o/r/releases/${draft}`, `PATCH repos/o/r/releases/${draft}`]);
+    expect(r.svc.get(req.requestId)?.state).toBe('executed');
+  });
+
   it('a crash between the draft\'s answer and its journal: a restart finds the draft by its tag, login and content, and publishes it', async () => {
     const r = rig();
     const req = await r.ask(NOTES);

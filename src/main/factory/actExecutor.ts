@@ -261,6 +261,8 @@ interface TryEnds {
   gate: () => string | null;
   end: (status: 'done' | 'refused' | 'uncertain', reason?: string, result?: ActEffect['result']) => ActEffect | null;
   back: (reason: string) => ActEffect | null;
+  /** Back to pending with the try counted: a write of it is on GitHub. */
+  hold: (reason: string) => ActEffect | null;
   stop: (denied: string) => ActEffect | null;
 }
 
@@ -339,8 +341,8 @@ export class ActExecutor {
       this.emit(out);
       return out;
     };
-    const back = (reason: string): ActEffect | null => {
-      const out = effects.release(id, reason);
+    const back = (reason: string, kept = false): ActEffect | null => {
+      const out = effects.release(id, reason, kept);
       this.emit(out);
       return out;
     };
@@ -364,7 +366,7 @@ export class ActExecutor {
       // The name, node id and numeric id the request read (a rename or a
       // transfer changes the name; a repository made again changes the ids).
       if (repo.fullName.toLowerCase() !== r.actRepo.fullName.toLowerCase() || repo.nodeId !== r.actRepo.nodeId || repo.id !== r.actRepo.id) return end('refused', 'repo-changed');
-      if (act.kind === 'release') return await this.runRelease(id, r.requestId, r.ghLogin, act, p, claimed.draftId, { gate, end, back, stop });
+      if (act.kind === 'release') return await this.runRelease(id, r.requestId, r.ghLogin, act, p, claimed.draftId, { gate, end, back, hold: (why) => back(why, true), stop });
       const pre = await this.precondition(r.repoKey, act);
       if (pre === 'read-failed') return back(pre);
       if (pre) return end('refused', pre);
@@ -392,8 +394,10 @@ export class ActExecutor {
     const drop = async (draft: number | undefined): Promise<void> => {
       if (draft !== undefined && !(await deleteDraft(gh, p, draft))) this.ports.log?.(`[factory] act release ${requestId}: its draft ${draft} could not be deleted`);
     };
+    // Once this act's draft is on GitHub, a try given back stays counted.
+    const giveBack = (why: string, draft: number | undefined): ActEffect | null => (draft === undefined ? t.back(why) : t.hold(why));
     const pre = await releasePrecondition(gh, p, act, login, draftId);
-    if (pre.refusal === 'read-failed') return t.back(pre.refusal);
+    if (pre.refusal === 'read-failed') return giveBack(pre.refusal, pre.draft?.id ?? draftId);
     if (pre.refusal) {
       await drop(pre.draft?.id);
       return t.end('refused', pre.refusal);
@@ -426,13 +430,14 @@ export class ActExecutor {
     // again, then the tag still free.
     const denied = t.gate();
     if (denied) {
-      if (!ACT_NOT_NOW.has(denied)) await drop(draft?.id);
-      return t.stop(denied);
+      if (ACT_NOT_NOW.has(denied)) return giveBack(denied, draft?.id);
+      await drop(draft?.id);
+      return t.end('refused', denied);
     }
     const tag = await readTagTarget(gh, p, act.tagName);
     if (isFail(tag) || tag !== null) {
       const why = isFail(tag) ? readRefusal(tag, 'tag-taken') : 'tag-taken';
-      if (why === 'read-failed') return t.back(why);
+      if (why === 'read-failed') return giveBack(why, draft?.id);
       await drop(draft?.id);
       return t.end('refused', why);
     }
@@ -446,6 +451,7 @@ export class ActExecutor {
     if (!draft) return t.end('uncertain', 'executor-error');
     // Write 2: publish the draft; this makes the tag.
     const ans = await gh.write(p.host, 'PATCH', `${p.base}/releases/${draft.id}`, publishBody(act));
+    if (!ans.ok && (ans.kind === 'rate-limited' || ans.kind === 'unsent')) return t.hold(ans.kind);
     if (ans.ok) {
       const shown = publishedWritten(ans.value, act, login, draft.id);
       const at = shown ? await readTagTarget(gh, p, act.tagName) : null;
@@ -454,7 +460,6 @@ export class ActExecutor {
       // made since the late read is reported as it is, published.
       return at === act.targetSha ? t.end('done', undefined, shown) : t.end('refused', 'published-other-target', shown);
     }
-    if (ans.kind === 'rate-limited' || ans.kind === 'unsent') return t.back(ans.kind);
     if (ans.kind === 'http') {
       const found = await findRelease(gh, p, act, login, draft.id).catch((): Found => ({ status: 'unknown' }));
       if (found.status === 'done') return t.end('done', undefined, found.result);

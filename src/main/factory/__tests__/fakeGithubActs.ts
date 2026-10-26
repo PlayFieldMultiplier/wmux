@@ -2,6 +2,7 @@
 // endpoints actExecutor.ts and releaseAct.ts read and write, shaped like
 // GitHub's REST.
 
+import { createHash } from 'node:crypto';
 import type { GhActAnswer, GhActMethod, GhActPort } from '../../github/GhActService';
 
 export interface FakeIssue {
@@ -53,6 +54,11 @@ export interface FakeWorkflowRun extends FakeRun {
 
 const NOT_FOUND: GhActAnswer = { ok: false, kind: 'http', status: 404, message: 'gh: Not Found (HTTP 404)' };
 
+/** A file's blob sha: a hash of its path (the fake's files do not change). */
+function blobOf(file: string): string {
+  return createHash('sha1').update(file).digest('hex');
+}
+
 export class FakeGithub implements GhActPort {
   login = 'owner';
   repo: { full_name: string; node_id: string; id: number; default_branch?: string } = { full_name: 'o/r', node_id: 'R_1', id: 4242, default_branch: 'main' };
@@ -66,7 +72,8 @@ export class FakeGithub implements GhActPort {
   checkRuns = new Map<string, FakeRun[]>();
   statuses = new Map<string, { state: string; total_count: number }>();
   workflowRuns: FakeWorkflowRun[] = [];
-  /** Files at every commit, by path; `bigFiles`: answered through their blob. */
+  /** Files at every commit, by path; `bigFiles`: over 1 MB, which `contents/`
+   *  refuses (only their blob answers). */
   files = new Map<string, string>();
   bigFiles = new Set<string>();
   /** Called before every write is applied (a test may change state there). */
@@ -172,10 +179,11 @@ export class FakeGithub implements GhActPort {
       const sha = this.tagObjects.get(m[1]);
       return sha ? { ok: true, value: { sha: m[1], object: { type: 'commit', sha } } } : NOT_FOUND;
     }
-    m = /^repos\/o\/r\/git\/blobs\/(.+)$/.exec(path);
+    m = /^repos\/o\/r\/git\/blobs\/([0-9a-f]{40})$/.exec(path);
     if (m) {
-      const text = this.files.get(decodeURIComponent(m[1]));
-      return text === undefined ? NOT_FOUND : { ok: true, value: { encoding: 'base64', content: Buffer.from(text, 'utf8').toString('base64') } };
+      const file = [...this.files.keys()].find((f) => blobOf(f) === m?.[1]);
+      const text = file === undefined ? undefined : this.files.get(file);
+      return text === undefined ? NOT_FOUND : { ok: true, value: { sha: m[1], encoding: 'base64', content: Buffer.from(text, 'utf8').toString('base64') } };
     }
     m = /^repos\/o\/r\/commits\/([0-9a-f]{40})$/.exec(path);
     if (m) return this.known(m[1]) ? { ok: true, value: { sha: m[1] } } : { ok: false, kind: 'http', status: 422, message: 'gh: No commit found for SHA (HTTP 422)' };
@@ -206,17 +214,18 @@ export class FakeGithub implements GhActPort {
         && (query.get('event') === null || r.event === query.get('event')) && (query.get('branch') === null || r.head_branch === query.get('branch')));
       return { ok: true, value: { total_count: runs.length, workflow_runs: page(runs) } };
     }
-    m = /^repos\/o\/r\/contents\/(.+)$/.exec(path);
+    m = /^repos\/o\/r\/contents(?:\/(.+))?$/.exec(path);
     if (m) {
-      const file = decodeURIComponent(m[1]);
+      const file = decodeURIComponent(m[1] ?? '');
       if (!this.known(query.get('ref') ?? '')) return NOT_FOUND;
-      const inDir = [...this.files.keys()].filter((f) => f.startsWith(`${file}/`) && !f.slice(file.length + 1).includes('/'));
-      if (inDir.length > 0) return { ok: true, value: inDir.map((f) => ({ type: 'file', name: f.slice(file.length + 1), path: f })) };
+      const prefix = file ? `${file}/` : '';
+      const inDir = [...this.files.keys()].filter((f) => f.startsWith(prefix) && !f.slice(prefix.length).includes('/'));
+      if (inDir.length > 0) return { ok: true, value: inDir.map((f) => ({ type: 'file', name: f.slice(prefix.length), path: f, sha: blobOf(f), size: (this.files.get(f) ?? '').length })) };
       const text = this.files.get(file);
       if (text === undefined) return NOT_FOUND;
-      return this.bigFiles.has(file)
-        ? { ok: true, value: { type: 'file', encoding: 'none', content: '', size: text.length, sha: encodeURIComponent(file) } }
-        : { ok: true, value: { type: 'file', encoding: 'base64', content: Buffer.from(text, 'utf8').toString('base64'), size: text.length, sha: encodeURIComponent(file) } };
+      // Over 1 MB, the JSON media type gh asks for is refused.
+      if (this.bigFiles.has(file)) return { ok: false, kind: 'http', status: 403, message: 'gh: This API returns blobs up to 1 MB in size. The requested blob is too large to fetch via the API, but you can use the Git Data API to request blobs up to 100 MB in size. (HTTP 403)' };
+      return { ok: true, value: { type: 'file', encoding: 'base64', content: Buffer.from(text, 'utf8').toString('base64'), size: text.length, sha: blobOf(file) } };
     }
     return null;
   }

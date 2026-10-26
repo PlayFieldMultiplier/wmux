@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
-  checksRefusal, checksVerdict, draftBody, publishBody, readReleaseAsk, readTagTarget, releaseMode, releaseTagProblem, runsOnBranch, runsOnTag,
+  checksRefusal, checksVerdict, draftBody, publishBody, readFileAt, readReleaseAsk, readTagTarget, releaseMode, releaseTagProblem, runsOnBranch, runsOnTag,
   tagPrereleaseShape, tagRefBody, tagVersion, versionProblem, workflowPush, type ReleaseChecks,
 } from '../releaseAct';
 import type { ApprovalReleaseAct } from '../../../shared/botApproval';
@@ -226,6 +226,19 @@ describe('what a release request reads', () => {
     const gh = github();
     gh.answerRead = (e) => (e.startsWith('repos/o/r/releases?') ? { ok: false, kind: 'error', message: 'gh: Server Error (HTTP 502)' } : null);
     expect(await readReleaseAsk(gh, 'github.com/o/r', { tagName: 'v1.2.3' })).toMatchObject({ refuse: 'read_failed' });
+  });
+
+  it('reads a file at a commit through its folder\'s listing and its blob, whatever its size', async () => {
+    const gh = github();
+    gh.files.set('package-lock.json', '{"version":"1.2.3"}');
+    gh.files.set('.github/workflows/release.yml', RELEASE_YML);
+    // Over 1 MB, contents/ refuses the JSON gh asks for (HTTP 403).
+    gh.bigFiles.add('package-lock.json');
+    expect(await readFileAt(gh, P, 'package-lock.json', C3)).toBe('{"version":"1.2.3"}');
+    expect(await readFileAt(gh, P, '.github/workflows/release.yml', C3)).toBe(RELEASE_YML);
+    expect(await readFileAt(gh, P, 'missing.json', C3)).toBeNull();
+    expect(await readFileAt(gh, P, 'no/such/folder.json', C3)).toBeNull();
+    expect(gh.reads.filter((e) => /\/contents\/package-lock\.json/.test(e))).toEqual([]);
   });
 
   it('reads an annotated tag through its tag object', async () => {
