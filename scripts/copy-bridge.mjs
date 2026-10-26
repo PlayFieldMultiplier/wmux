@@ -12,7 +12,7 @@ import { mkdirSync, copyFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildSync } from 'esbuild';
-import { asciiOnlyFiles } from './ascii-only-files.mjs';
+import { asciiOnlyFiles } from './lib/ascii-only-files.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const destDir = join(repoRoot, 'dist', 'cli-bundle');
