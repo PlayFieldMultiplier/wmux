@@ -559,6 +559,9 @@ describe('AgentProcessTracker', () => {
     expect(pick('cmd.exe', 'cmd.exe /d /s /c "C:\\Tools\\tern.cmd --fast"')).toEqual({ pid: 200, name: 'tern' });
     expect(pick('cmd.exe', 'cmd.exe /d /s /c ""C:\\Program Files\\Tern\\tern.cmd" --fast"')).toEqual({ pid: 200, name: 'tern' });
     expect(pick('cmd.exe', 'cmd.exe /k C:\\Tools\\tern.cmd')).toBeUndefined();
+    expect(pick('cmd.exe', 'cmd.exe /c ""C:\\Program Files\\Tern\\tern" --fast"')).toEqual({ pid: 200, name: 'tern' });
+    expect(pick('cmd.exe', 'cmd.exe /c "C:\\Program Files\\Tern\\tern"')).toEqual({ pid: 200, name: 'tern' });
+    expect(pick('cmd.exe', 'cmd.exe /c "tail -f /var/log/tern"')).toBeUndefined();
     expect(pick('pwsh.exe', 'pwsh.exe -NoProfile -File C:\\Tools\\tern.ps1')).toEqual({ pid: 200, name: 'tern' });
     for (const cmdline of [
       'node C:\\Users\\x\\AppData\\Roaming\\npm\\node_modules\\tern\\bin\\cli.js',

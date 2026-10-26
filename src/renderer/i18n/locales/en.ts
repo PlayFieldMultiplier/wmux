@@ -3378,7 +3378,7 @@ export const en = {
   'settings.customAgentsProcessNames': 'Process names',
   'settings.customAgentsProcessNamesDesc': 'What wmux looks for to tell the agent is running. Defaults to the command\'s name.',
   'settings.customAgentsIssue.process-invalid': '"{process}" is not a program name. Use a name without folders.',
-  'settings.customAgentsIssue.process-count': 'List at most {max} process names.',
+  'settings.customAgentsIssue.process-count': 'Process names must be a list of at most {max} program names.',
   'settings.customAgentsIssue.process-known': '"{process}" is an agent wmux already knows by that process.',
   'settings.customAgentsIssue.process-generic': '"{process}" runs other programs, so every one of them would read as this agent.',
   'settings.customAgentsIssue.process-duplicate': '"{name}" and "{other}" are both known by the process "{process}".',

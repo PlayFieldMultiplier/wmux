@@ -307,18 +307,23 @@ const SCRIPT_HOST_RE = /^(node|nodejs|bun|deno|python|pythonw|pypy|npx|npx-cli|b
 /** Shells that run a wrapper script (`sh /usr/local/bin/tern`). */
 const SHELL_HOST_RE = /^(sh|bash|zsh|dash|fish)$/;
 
-/** cmd's `/c` command: cmd drops one outer quote pair when the command starts
- *  with two quotes (`""C:\Program Files\Tern\tern.cmd" --fast"`). Its first
- *  word is the program; a quoted path keeps its spaces. */
-function cmdProgram(cmdline: string): string | undefined {
+/** cmd's `/c` program: cmd drops one outer quote pair when the command
+ *  starts with two quotes (`""C:\Program Files\Tern\tern" --fast"`). A quoted
+ *  first word may be a spaced path or a whole command line
+ *  (`/c "C:\Tools\tern.cmd --fast"`): both readings are candidates. */
+function cmdPrograms(cmdline: string): string[] {
   const m = /\s\/c\s+(.*)$/i.exec(cmdline);
-  if (!m) return undefined;
+  if (!m) return [];
   let rest = m[1].trim();
-  if (rest.startsWith('""') && rest.endsWith('"')) rest = rest.slice(1, -1);
+  const innerQuoted = rest.startsWith('""') && rest.endsWith('"');
+  if (innerQuoted) rest = rest.slice(1, -1);
   const first = tokenizeCmdline(rest)[0];
-  if (!first) return undefined;
-  // `/c "C:\Tools\tern.cmd --fast"` is one quoted token holding the arguments.
-  return /\s/.test(first) && !/\.(cmd|bat|exe|ps1)$/i.test(first) ? first.split(/\s+/)[0] : first;
+  if (!first) return [];
+  if (!/\s/.test(first)) return [first];
+  // Whole, only when it reads as a path: inner quotes, or no option in it
+  // (`/c "tail -f /var/log/tern"` is a command line, not a file named tern).
+  const whole = innerQuoted || !/\s[-/]/.test(first) ? [first] : [];
+  return [...whole, first.split(/\s+/)[0]];
 }
 
 /** The tokens a host image's command line may name a custom agent by:
@@ -328,10 +333,7 @@ function cmdProgram(cmdline: string): string | undefined {
  *  - a runtime's or runner's candidates, under resolveAgentSlug's discipline. */
 function hostedCandidates(stem: string, cmdline: string | undefined): string[] {
   if (!cmdline) return [];
-  if (stem === 'cmd') {
-    const program = cmdProgram(cmdline);
-    return program ? [program] : [];
-  }
+  if (stem === 'cmd') return cmdPrograms(cmdline);
   const argv = tokenizeCmdline(cmdline);
   if (stem === 'pwsh' || stem === 'powershell') {
     const at = argv.findIndex((t) => /^-f(ile)?$/i.test(t));

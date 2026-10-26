@@ -355,7 +355,7 @@ export function normalizeCustomAgent(
       // Stored in the form the tracker compares (customProcessNameForm).
       const n = customProcessNameForm(trimmed.replace(/[. ]+$/, ''));
       const process = trimmed.slice(0, 80);
-      if (/[\\/]/.test(trimmed) || !BARE_COMMAND_RE.test(n)) {
+      if (/[\\/]/.test(trimmed) || !BARE_COMMAND_RE.test(n) || n.length > CUSTOM_AGENT_STEM_MAX) {
         return fail(issue('process-invalid', { name, process, max: String(CUSTOM_AGENT_PROCESS_NAMES_MAX) }, `"${name}": process name "${process}" must be a program name, with no folder`));
       }
       if (REGISTRY_NAMES.has(n)) {

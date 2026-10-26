@@ -187,6 +187,7 @@ describe('process names, review', () => {
     expect(normalizeCustomAgent({ name: 'Tern', command: 'tern', processNames: ['tern.js', 'Tern-D.CMD'] }))
       .toMatchObject({ ok: true, agent: { processNames: ['tern', 'tern-d'] } });
     expect(code({ name: 'Tern', command: 'tern', processNames: Array.from({ length: 9 }, (_, i) => `t${i}`) })).toBe('process-count');
+    expect(code({ name: 'Tern', command: 'tern', processNames: ['t'.repeat(49)] })).toBe('process-invalid');
   });
 
   it('refuses a name a registry agent goes by, since a pane label maps back to its slug', () => {

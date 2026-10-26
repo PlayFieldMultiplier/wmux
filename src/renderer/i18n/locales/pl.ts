@@ -3352,7 +3352,7 @@ export const pl = {
   'settings.customAgentsProcessNames': 'Nazwy procesów',
   'settings.customAgentsProcessNamesDesc': 'Po tych nazwach wmux poznaje, że agent działa. Domyślnie nazwa polecenia.',
   'settings.customAgentsIssue.process-invalid': '"{process}" nie jest nazwą programu. Podaj nazwę bez folderów.',
-  'settings.customAgentsIssue.process-count': 'Podaj najwyżej {max} nazw procesów.',
+  'settings.customAgentsIssue.process-count': 'Nazwy procesów muszą być listą najwyżej {max} nazw programów.',
   'settings.customAgentsIssue.process-known': '"{process}" to proces agenta, którego wmux już zna.',
   'settings.customAgentsIssue.process-generic': '"{process}" uruchamia inne programy, więc każdy z nich wyglądałby jak ten agent.',
   'settings.customAgentsIssue.process-duplicate': '"{name}" i "{other}" są rozpoznawane po tym samym procesie "{process}".',

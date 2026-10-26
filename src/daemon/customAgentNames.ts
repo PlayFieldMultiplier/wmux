@@ -10,21 +10,32 @@
 import { loadCustomAgentsReport } from '../main/worktask/customAgents';
 import { customAgentProcessNames } from '../shared/customAgents';
 
-export class CustomAgentNames {
-  private built: { report: object; names: ReadonlyMap<string, string> } | undefined;
+/** How long one read of the file answers: a labelled pane asks on every
+ *  activity event, and a Settings save is seen within this. */
+const RECHECK_MS = 2_000;
 
-  constructor(private readonly dir: string) {}
+export class CustomAgentNames {
+  private built: { report: object; names: ReadonlyMap<string, string>; at: number } | undefined;
+
+  constructor(
+    private readonly dir: string,
+    private readonly now: () => number = Date.now,
+  ) {}
 
   /** Process name (customProcessNameForm) → display name. */
   names(): ReadonlyMap<string, string> {
+    if (this.built && this.now() - this.built.at < RECHECK_MS) return this.built.names;
     // The loader returns the same report object until the file changes.
     const report = loadCustomAgentsReport(this.dir);
-    if (this.built?.report === report) return this.built.names;
+    if (this.built?.report === report) {
+      this.built.at = this.now();
+      return this.built.names;
+    }
     const names = new Map<string, string>();
     for (const agent of report.agents) {
       for (const name of customAgentProcessNames(agent)) names.set(name, agent.name);
     }
-    this.built = { report, names };
+    this.built = { report, names, at: this.now() };
     return names;
   }
 }

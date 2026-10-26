@@ -2880,7 +2880,7 @@ export const ko = {
   'settings.customAgentsProcessNames': '프로세스 이름',
   'settings.customAgentsProcessNamesDesc': 'wmux가 에이전트 실행 여부를 판단할 때 찾는 이름입니다. 비우면 명령 이름을 씁니다.',
   'settings.customAgentsIssue.process-invalid': '"{process}"은(는) 프로그램 이름이 아닙니다. 폴더 없이 쓰세요.',
-  'settings.customAgentsIssue.process-count': '프로세스 이름은 최대 {max}개까지 쓸 수 있습니다.',
+  'settings.customAgentsIssue.process-count': '프로세스 이름은 프로그램 이름 목록으로, 최대 {max}개까지 쓸 수 있습니다.',
   'settings.customAgentsIssue.process-known': '"{process}"은(는) wmux가 이미 그 프로세스로 아는 에이전트입니다.',
   'settings.customAgentsIssue.process-generic': '"{process}"은(는) 다른 프로그램을 실행하므로, 그 프로그램이 모두 이 에이전트로 보이게 됩니다.',
   'settings.customAgentsIssue.process-duplicate': '"{name}"과(와) "{other}"이(가) 모두 "{process}" 프로세스로 식별됩니다.',

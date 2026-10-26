@@ -181,6 +181,16 @@ describe('detectorSuppressedBy (#919 detector veto)', () => {
   });
 });
 
+describe('detectorSuppressedBy on a custom agent pane', () => {
+  it('drops a registry banner the custom agent draws, unless a hook or process names that agent', () => {
+    expect(detectorSuppressedBy(undefined, 'claude', true)).toBe(true);
+    expect(detectorSuppressedBy(undefined, 'claude', false)).toBe(false);
+    expect(detectorSuppressedBy(undefined, undefined, true)).toBe(false);
+    // A live claude under the custom wrapper is claude.
+    expect(detectorSuppressedBy(resolveCanonicalAgentIdentity({ proc: { slug: 'claude', alive: true } }), 'claude', true)).toBe(false);
+  });
+});
+
 describe('reportedAgentName (#1303 no-banner sessions)', () => {
   it('names a live custom agent when no registry agent is canonical, over the screen', () => {
     // "Tern" is a made-up CLI the operator defined.

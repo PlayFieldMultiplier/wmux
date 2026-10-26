@@ -16,14 +16,21 @@ const write = (agents: unknown) => fs.writeFileSync(path.join(dir, 'custom-agent
 
 describe('CustomAgentNames', () => {
   it('maps each process name to its agent, re-reads a changed file, and keeps nothing it refuses', () => {
-    const names = new CustomAgentNames(dir);
+    let now = 0;
+    const names = new CustomAgentNames(dir, () => now);
+    const later = () => { now += 2_000; };
     expect(names.names().size).toBe(0);
     // Made-up CLIs. The second entry names a registry agent and is refused.
     write([{ name: 'Tern', command: '/opt/tern/bin/tern' }, { name: 'Mine', command: 'claude' }]);
+    // One read answers for a moment: a labelled pane asks on every event.
+    expect(names.names().size).toBe(0);
+    later();
     expect([...names.names()]).toEqual([['tern', 'Tern']]);
     write([{ name: 'Gull', command: 'gull', processNames: ['gull', 'Gull-Daemon.exe'] }]);
+    later();
     expect([...names.names()]).toEqual([['gull', 'Gull'], ['gull-daemon', 'Gull']]);
     fs.writeFileSync(path.join(dir, 'custom-agents.json'), '{ nope', 'utf8');
+    later();
     expect(names.names().size).toBe(0);
   });
 });

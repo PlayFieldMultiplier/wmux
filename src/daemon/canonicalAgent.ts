@@ -131,8 +131,13 @@ export function resolveCanonicalAgentIdentity(inputs: {
 export function detectorSuppressedBy(
   canonical: CanonicalAgentIdentity | undefined,
   screenSlug?: AgentSlug,
+  /** The pane runs one of the operator's custom agents: a registry banner it
+   *  draws or wraps is not that agent, and a custom agent gets no screen
+   *  status, unless a hook or a live process names the registry agent. */
+  customAgent?: boolean,
 ): boolean {
   if (screenSlug === undefined) return false;
+  if (customAgent && canonical === undefined) return true;
   return canonical !== undefined && canonical.source !== 'screen' && canonical.slug !== screenSlug;
 }
 
