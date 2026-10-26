@@ -125,9 +125,32 @@ interface AgentPattern {
   chrome?: (line: string) => boolean;
   /** This visible banner can be a prose prefix until its visual row ends. */
   completeChromeRow?: boolean;
+  /**
+   * The TUI draws each repaint as one synchronized-output frame (`ESC[?2026h`
+   * … `ESC[?2026l`), and a frame that fills the screen leaves its bottom row
+   * without a line break. While this agent owns the pane, the frame's end also
+   * ends a row; otherwise that row would wait for the next repaint, glued to
+   * the next frame's first row.
+   */
+  frameEndsRow?: true;
+  /**
+   * Agents whose gate this one's chrome may take a pane from mid-session: a
+   * fork that draws the other agent's chrome, so the other gate can open
+   * first on this agent's own screen.
+   */
+  takesOverFrom?: readonly AgentSlug[];
   /** Strict live-grid recovery, used only after a fresh external identity. */
   approvalScreen?: (rows: readonly string[]) => ScreenApproval | null;
-  patterns: { regex: RegExp; status: AgentEvent['status']; message: string }[];
+  patterns: {
+    regex: RegExp;
+    status: AgentEvent['status'];
+    message: string;
+    /**
+     * Counts only as the last row drawn in its frame (`frameEndsRow` agents):
+     * held until the frame ends, dropped if another non-blank row follows.
+     */
+    frameTail?: true;
+  }[];
 }
 
 /**
@@ -403,6 +426,52 @@ const AGENT_PATTERNS: AgentPattern[] = [
     ],
   },
 
+  // ── Qwen Code ─────────────────────────────────────────────────────────────
+  // Live capture 2026-10-26, @qwen-code/qwen-code 0.26.1 on macOS (120x40 and
+  // 60x30, `--approval-mode default`, a loopback model; the frames are in
+  // __tests__/fixtures/qwen-code-0.26.1-*.json). Qwen Code is a Gemini CLI fork
+  // and draws Gemini's composer row (`>   Type your message or
+  // @path/to/file`), which opens the Gemini gate. Qwen's own chrome usually
+  // comes first (the window title is the first thing it prints, and the
+  // banner row tops each frame until the transcript pushes it off). When the
+  // composer row wins, the next title Qwen sets takes the pane back.
+  // Each frame is a full repaint, one row per CRLF line (also at 60x30):
+  //   - footer `<mode> (shift + tab to cycle)` on a row of its own only while
+  //     idle. Mid-turn the same row reads `Enter to steer · Ctrl+Q to queue ·
+  //     ⏸ Ask permissions (…)` (cut with `…` in a narrow pane), and a prompt
+  //     typed but not yet sent adds ` ⏳ 1 queued` after it;
+  //   - spinner row `⠸ <phrase>... (1s · ↓ 8 tokens · esc to cancel)` while a
+  //     turn runs, its counters changing on every frame; a narrow pane wraps
+  //     the counters onto a row of their own;
+  //   - every permission dialog (shell `Allow execution of: 'touch'?`, file
+  //     write `Apply this change?`) ends its frame with the spinner row
+  //     `⠏ Waiting for user confirmation...`, with no counters. Just after an
+  //     answer the running spinner can keep that phrase, with its counters
+  //     beside it or, when narrow, on the next row; so the row counts only as
+  //     the frame's last. The question rows stay out: the transcript is
+  //     repainted on every frame, and a reply line quoting a question would
+  //     read as a live dialog.
+  // English UI only; on Windows the footer says `(tab to cycle)` (not
+  // captured, so not matched).
+  {
+    agent: 'Qwen Code',
+    slug: 'qwen',
+    gate: /Qwen\s*Code\s*\(v\d|Qwen - /,
+    chrome: isQwenChrome,
+    completeChromeRow: true,
+    // In the 60x30 capture the dialog's spinner row and the idle footer are
+    // both such bottom rows.
+    frameEndsRow: true,
+    takesOverFrom: ['gemini'],
+    patterns: [
+      { regex: /(?<=^[⠀-⣿]\s*)Waiting\s*for\s*user\s*confirmation\.\.\.$/,         status: 'awaiting_input', message: 'Approval requested', frameTail: true },
+      // Only the fixed tail, so the ticking counters do not re-emit each frame.
+      { regex: /(?<=\(\d+[smh]\b[^()]*)·\s*esc\s*to\s*cancel\)$/,                           status: 'running',        message: 'Working' },
+      // The five approval modes' labels, each captured live.
+      { regex: /^(?:⏸ Ask permissions|Auto mode|auto-accept edits|plan mode|YOLO mode) \(shift \+ tab to cycle\)$/, status: 'waiting', message: 'Ready for input' },
+    ],
+  },
+
   // ── Gemini CLI ────────────────────────────────────────────────────────────
   {
     agent: 'Gemini CLI',
@@ -524,6 +593,12 @@ CLAUDE_WAITING_PATTERNS = (AGENT_PATTERNS.find((ap) => ap.slug === 'claude')?.pa
   .map((p) => p.regex);
 
 const MAX_BUFFER = 16 * 1024;
+
+/** Where feedOutput ends a line; the second also ends one at a frame's end (`frameEndsRow`). */
+const ROW_END_G = /\r?\n|\r(?!\n)/g;
+// eslint-disable-next-line no-control-regex
+const ROW_OR_FRAME_END_G = /\r?\n|\r(?!\n)|\x1b\[\?2026l/g;
+const FRAME_END_ROW_AGENTS: ReadonlySet<string> = new Set(AGENT_PATTERNS.filter((ap) => ap.frameEndsRow).map((ap) => ap.agent));
 
 // ANSI escape strip regex. Covers:
 //   CSI    \x1b[ <params> <final>   where params may include digits/semicolons
@@ -787,6 +862,24 @@ function isCodexChrome(line: string): boolean {
 }
 
 /**
+ * Qwen Code's own chrome (0.26.1 live capture): its window title, `Qwen -
+ * <folder>`, set at launch and again with a status glyph (`◐︎ Qwen - proj`) as
+ * each turn starts and ends; or its banner row, `│ >_ Qwen Code (v0.26.1) │`,
+ * which, like the Codex banner, must be the row's whole visible text once the
+ * logo and frame are stripped. The banner leaves the screen once the
+ * transcript outgrows it; the title does not. Qwen pads the title with spaces
+ * to 80 columns, which a shell or editor title that merely starts `Qwen - `
+ * (`vim 'Qwen - notes.md'`) does not.
+ */
+function isQwenChrome(line: string): boolean {
+  // eslint-disable-next-line no-control-regex
+  if (/\x1b\][02];(?:\S{1,3} )?Qwen - [^\x07\x1b\r\n]{1,160}? {2,}(?:\x07|\x1b\\)/.test(line)) return true;
+  const stripped = stripAnsi(line);
+  if (SOURCE_LINE_RE.test(stripped)) return false;
+  return /^>_\s*Qwen\s*Code\s*\(v\d+\.\d+\.\d+[\w.+-]*\)$/.test(visibleChrome(stripped));
+}
+
+/**
  * The Gemini CLI's own chrome, as opposed to a row that merely names Gemini.
  * From the upstream TUI (packages/cli/src/ui/components, read 2026-10-18):
  *   - the empty composer's placeholder, `>   Type your message or
@@ -995,6 +1088,8 @@ export class AgentDetector {
   private dialogQuestion: DialogQuestion | null = null;
   // The whole-line pass already reported an approval in this feed() call.
   private approvalEmittedInFeed = false;
+  // A `frameTail` match waiting for its frame to end with nothing drawn after it.
+  private frameTail: AgentEvent & { value: string } | null = null;
 
   /**
    * Register a callback for agent status events.
@@ -1259,6 +1354,7 @@ export class AgentDetector {
     this.dialogRow = '';
     this.dialogQuestion = null;
     this.approvalEmittedInFeed = false;
+    this.frameTail = null;
     this.codexLimitScanner = new CodexUsageLimitLineScanner();
   }
 
@@ -1281,13 +1377,21 @@ export class AgentDetector {
     // Split on both LF and lone CR. TUI footers (Claude, Codex) redraw the
     // same line using CR without a following LF; without this split the
     // entire redraw collapses into one buffered string and patterns fail to
-    // match line-anchored regexes.
-    const lines = this.lineBuffer.split(/\r?\n|\r(?!\n)/);
-    this.lineBuffer = lines.pop() || '';
-
-    for (const line of lines) {
-      this.processLine(line);
+    // match line-anchored regexes. The owner is looked up per line: a gate
+    // opened by one line decides how the next one ends.
+    const buffer = this.lineBuffer;
+    let start = 0;
+    for (;;) {
+      const rowEnd = this.lastAgent !== null && !this.shellPromptSinceOwner && FRAME_END_ROW_AGENTS.has(this.lastAgent)
+        ? ROW_OR_FRAME_END_G : ROW_END_G;
+      rowEnd.lastIndex = start;
+      const m = rowEnd.exec(buffer);
+      if (!m) break;
+      this.processLine(buffer.slice(start, m.index));
+      start = m.index + m[0].length;
+      if (m[0].startsWith('\u001b')) this.flushFrameTail();
     }
+    this.lineBuffer = buffer.slice(start);
 
     // 미완성 라인(아직 개행이 안 온 redraw)의 gate도 미리 검사한다. claude처럼
     // 시작 배너를 개행 없이 커서 이동으로 그리는 TUI는 "Claude Code vX"가
@@ -1543,8 +1647,10 @@ export class AgentDetector {
       // pane's permission prompts. Codex is included — its banner row can be
       // reproduced by a Claude reply that wraps with `>_ OpenAI Codex` at the
       // start of a row (seen live when a Claude pane printed that line).
+      // A fork may take its parent's pane (`takesOverFrom`).
       const blockedTakeover = this.lastAgent !== null && this.lastAgent !== ap.agent
-        && !this.shellPromptSinceOwner;
+        && !this.shellPromptSinceOwner
+        && !ap.takesOverFrom?.some((slug) => AGENT_PATTERNS.find((other) => other.slug === slug)?.agent === this.lastAgent);
       const gateMatched = ap.slug === 'kiro'
         ? this.kiroChromeSeen && this.kiroPromptSeen
         : ap.slug === 'claude'
@@ -1603,6 +1709,18 @@ export class AgentDetector {
     }
   }
 
+  /** The frame ended: report a held frame-tail match if its agent still owns the pane. */
+  private flushFrameTail(): void {
+    const tail = this.frameTail;
+    this.frameTail = null;
+    if (!tail || tail.agent !== this.lastAgent || this.shellPromptSinceOwner) return;
+    const key = `${tail.agent}:${tail.status}`;
+    if (this.lastEmittedFor.get(key) === tail.value) return;
+    this.lastEmittedFor.set(key, tail.value);
+    if (tail.status === 'awaiting_input') this.approvalEmittedInFeed = true;
+    for (const cb of this.callbacks) cb({ agent: tail.agent, status: tail.status, message: tail.message });
+  }
+
   private processLine(line: string): void {
     // RAW-line gate check BEFORE the empty-clean bail. Live incident
     // 2026-07-17 (Fable-era Claude Code): the TUI renders no visible
@@ -1617,6 +1735,8 @@ export class AgentDetector {
 
     const clean = line.replace(ANSI_STRIP, '').trim();
     if (!clean) return;
+    // A held frame-tail row was not the frame's last: another row followed it.
+    this.frameTail = null;
 
     // Only on a pane Codex owns: another agent quoting the message (a review
     // of this very detector) must not hold its pane. The row regex is also
@@ -1686,6 +1806,10 @@ export class AgentDetector {
       for (const p of ap.patterns) {
         if (dialogScanned && p.status === 'awaiting_input' && p.message !== 'Tool approval requested') continue;
         const match = clean.match(p.regex);
+        if (match && p.frameTail) {
+          this.frameTail = { agent: ap.agent, status: p.status, message: match[1] || p.message, value: match[0] };
+          return;
+        }
         if (match) {
           const key = `${ap.agent}:${p.status}`;
           const value = match[0];
