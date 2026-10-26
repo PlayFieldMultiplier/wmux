@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { AUTOMATION_FAILURE_REASONS } from '../../../shared/automation';
 import { en } from '../locales/en';
 import { ko } from '../locales/ko';
 import { pl } from '../locales/pl';
@@ -13,7 +14,10 @@ describe('scheduled runs locale coverage', () => {
       ...['overlap', 'missed', 'daemon_down', 'first_run_blocked', 'launch_failed', 'account_missing', 'await_timeout',
         'timeout', 'agent_error', 'process_exit', 'interrupted', 'cancelled', 'needs_regrant'].map((r) => `schedules.reason.${r}`),
       ...['approval', 'scoped', 'auto', 'bypass'].flatMap((m) => [`schedules.mode.${m}`, `schedules.modeDesc.${m}`]),
-      ...['awaiting', 'failed', 'proposed', 'grantRaised', 'needsRegrant'].map((k) => `schedules.toast.${k}`),
+      ...['awaiting', 'failed', 'proposed', 'grantRaised', 'needsRegrant', 'failurePaused'].map((k) => `schedules.toast.${k}`),
+      ...AUTOMATION_FAILURE_REASONS.map((r) => `schedules.reason.${r}`),
+      'schedules.failurePausedTitle',
+      'schedules.failurePausedNote',
     ];
     for (const key of built) expect(scheduleKeys).toContain(key);
   });

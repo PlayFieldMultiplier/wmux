@@ -104,7 +104,11 @@ export const createSchedulesSlice: StateCreator<
       for (const item of push.items) {
         const word = item.kind === 'proposed' ? t('schedules.toast.proposed')
           : item.kind === 'needs-regrant' ? t('schedules.toast.needsRegrant')
-            : t('schedules.toast.grantRaised');
+            : item.kind === 'failure-paused'
+              ? (item.reason
+                ? t('schedules.toast.failurePaused', { reason: t(`schedules.reason.${item.reason}`) })
+                : t('schedules.failurePausedTitle'))
+              : t('schedules.toast.grantRaised');
         get().pushToast({ level: 'info', message: `${item.automationName || t('schedules.title')} · ${word}` });
       }
       void get().refreshSchedules();
