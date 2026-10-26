@@ -2117,10 +2117,12 @@ export class ApprovalService {
     if (r.decidedBy !== 'owner' || r.payloadHash !== e.payloadHash || normalizeRepoKey(e.repoKey) !== r.repoKey) return 'approval-mismatch';
     // Counted from the decision on purpose, a long sleep before the first
     // try included: a day on, things may have changed, so the bot asks
-    // again. No decision time (none is made without one), or one ahead of
-    // the clock (it went back), counts as stale.
+    // again. No decision time (none is made without one) counts as stale; a
+    // clock that went back waits (the Undo window below), and only one
+    // that went back more than a day is stale too.
     const at = this.now();
-    const stale = !actRowClaimed(e) && (r.decidedAt === undefined || at < r.decidedAt || at - r.decidedAt >= APPROVAL_LIMITS.APPROVED_TTL_MS);
+    const ttl = APPROVAL_LIMITS.APPROVED_TTL_MS;
+    const stale = !actRowClaimed(e) && (r.decidedAt === undefined || at - r.decidedAt >= ttl || r.decidedAt - at > ttl);
     // A directory that cannot be read now says nothing about the bot: not
     // now, unless the approval is stale (a "not now" never outlives it).
     let profile: BotProfile | null;
@@ -2138,7 +2140,8 @@ export class ApprovalService {
     if (texts.some((t) => redactStoredSecrets(t) !== t)) return 'secret-in-body';
     // After the refusals that name a cause.
     if (stale) return 'approval-stale';
-    if (r.executeAfter !== undefined && this.now() < r.executeAfter) return 'approval-undo-window';
+    // A clock behind the decision is inside the window too: not now.
+    if ((r.executeAfter !== undefined && at < r.executeAfter) || (r.decidedAt !== undefined && at < r.decidedAt)) return 'approval-undo-window';
     return null;
   }
 

@@ -178,16 +178,34 @@ describe('an approved act no try of which started', () => {
     expect(r.svc.authorizeAct({ ...row, status: 'inFlight', attempt: 1 })).toBeNull();
   });
 
-  it('a clock that went back past the decision ages it out too', async () => {
+  it('a clock that went back waits; only one that went back more than a day ages it out', async () => {
     const r = rig();
     const a = await r.approved(COMMENT, () => { r.gh.answerRead = () => READ_FAILS; });
     const row = r.effects.get(a.id);
     if (!row) throw new Error('no row');
     vi.setSystemTime(a.decidedAt);
     expect(r.svc.authorizeAct(row)).toBe('approval-undo-window');
+    // A small correction (NTP, the clock after a resume): not now, not stale.
     vi.setSystemTime(a.decidedAt - 1);
+    expect(r.svc.authorizeAct(row)).toBe('approval-undo-window');
+    vi.setSystemTime(a.decidedAt - DAY);
+    expect(r.svc.authorizeAct(row)).toBe('approval-undo-window');
+    // Back more than a day.
+    vi.setSystemTime(a.decidedAt - DAY - 1);
     expect(r.svc.authorizeAct(row)).toBe('approval-stale');
     expect(r.svc.authorizeAct({ ...row, attempt: 1 })).toBe('approval-undo-window');
+  });
+
+  it('a sweep with the clock just behind the decision leaves the row waiting, approved', async () => {
+    const r = rig();
+    const a = await r.approved(COMMENT, () => { r.gh.answerRead = () => READ_FAILS; });
+    await r.sweepAt(a.decidedAt - 1);
+    expect(r.effects.get(a.id)).toMatchObject({ status: 'pending', attempt: 0 });
+    expect(r.svc.get(a.requestId)?.state).toBe('approved');
+    expect(r.outcome(a.requestId)).toBeUndefined();
+    await r.sweepAt(a.decidedAt - DAY - 1);
+    expect(r.effects.get(a.id)).toMatchObject({ status: 'refused', reason: 'approval-stale' });
+    expect(r.gh.writes).toEqual([]);
   });
 
   it('a bot directory that stays unreadable ("not now") does not outlive the approval', async () => {
