@@ -856,6 +856,23 @@ describe('AgentDetector', () => {
       expect(cb.mock.calls.map((c) => c[0].message)).toEqual(['Agent started']);
     });
 
+    it.each([
+      ['buries it under more than 16 KB of CUP-only rows', 0],
+      ['is cut at 16 KB inside it', 5],
+    ] as const)('keeps Pi\'s title when one read %s', (_label, cutIntoTitle) => {
+      // Pi writes its title once; a resumed session at 300x90 drew 26 KB of
+      // frame right after it, with no line break.
+      const title = '\u001b]0;π - proj\u0007';
+      const rows = Array.from({ length: 200 }, (_, i) => `\u001b[${(i % 90) + 1};1H\u001b[2K ${'x'.repeat(200)}`).join('');
+      const before = cutIntoTitle ? rows.slice(0, 2000) : '';
+      // The line buffer keeps its last 16 KB: size the rest so the cut lands
+      // `cutIntoTitle` characters into the title (0: the whole title is cut).
+      const after = rows.slice(0, 16 * 1024 + (cutIntoTitle || 300) - (cutIntoTitle ? title.length : 0));
+      const det = new AgentDetector();
+      det.feed(before + title + after);
+      expect(det.getLastAgent()).toBe('Pi');
+    });
+
     it('never reads the project-trust question off the stream, even on a seeded pane', () => {
       const det = new AgentDetector();
       const cb = vi.fn();

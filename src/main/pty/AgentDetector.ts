@@ -641,6 +641,8 @@ CLAUDE_WAITING_PATTERNS = (AGENT_PATTERNS.find((ap) => ap.slug === 'claude')?.pa
   .map((p) => p.regex);
 
 const MAX_BUFFER = 16 * 1024;
+/** Longest OSC the line buffer's cut keeps whole (a title fits many times over). */
+const MAX_OSC_KEPT = 4096;
 
 /** Where feedOutput ends a line; the second also ends one at a frame's end (`frameEndsRow`). */
 const ROW_END_G = /\r?\n|\r(?!\n)/g;
@@ -1507,7 +1509,17 @@ export class AgentDetector {
     this.approvalHintTail = probe.slice(-4096);
     this.lineBuffer += data;
     if (this.lineBuffer.length > MAX_BUFFER) {
-      this.lineBuffer = this.lineBuffer.slice(-MAX_BUFFER);
+      // A CUP-only screen never shortens the buffer, so one read can bury a
+      // title written once (Pi, `--continue` at 300x90: 26 KB of frame right
+      // after it). The gates see the dropped part first, and the cut does not
+      // split an OSC: one begun shortly before it and unterminated there is
+      // kept whole (a longer one is no title and may be cut).
+      let cut = this.lineBuffer.length - MAX_BUFFER;
+      const osc = this.lineBuffer.lastIndexOf('\u001b]', cut - 1);
+      const split = osc < 0 ? '' : this.lineBuffer.slice(osc + 2, cut);
+      if (osc >= 0 && osc >= cut - MAX_OSC_KEPT && !split.includes('\u0007') && !split.includes('\u001b\\')) cut = osc;
+      if (cut > 0) this.checkGates(this.lineBuffer.slice(0, cut));
+      this.lineBuffer = this.lineBuffer.slice(cut);
     }
     // Split on both LF and lone CR. TUI footers (Claude, Codex) redraw the
     // same line using CR without a following LF; without this split the
