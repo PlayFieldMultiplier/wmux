@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { TaskPrService, type PrExec, type CreatePrInput } from '../TaskPrService';
+import { TaskPrService, execWithInput, type PrExec, type CreatePrInput } from '../TaskPrService';
 import { spawnGitLines, type GitLines } from '../../git/secretScan';
 import { GlabPrService } from '../../github/GlabPrService';
 import type { ForgeHosts } from '../../../shared/forgeHosts';
@@ -743,5 +743,26 @@ describe('the Git page\'s push check runs before the task PR push', () => {
     expect(res.ok).toBe(true);
     expect(git(repo, 'rev-parse', 'HEAD')).not.toBe(checked);
     expect(run.calls.find((c) => c.cmd === 'git' && c.args[0] === 'push')?.args).toEqual(['push', 'origin', '--', `${checked}:refs/heads/${INPUT.branch}`]);
+  });
+});
+
+describe('execWithInput — a real child process', () => {
+  // Reads stdin and prints how many characters arrived.
+  const COUNT = 'let n=0;process.stdin.setEncoding("utf8");process.stdin.on("data",(d)=>{n+=d.length});process.stdin.on("end",()=>process.stdout.write(String(n)))';
+  const opts = { cwd: os.tmpdir(), timeout: 30_000, env: process.env, windowsHide: true };
+  const text = 'x'.repeat(40_000);
+
+  it('hands 40,000 characters to the child on stdin', async () => {
+    const { stdout } = await execWithInput(process.execPath, ['-e', COUNT], { ...opts, input: text });
+    expect(stdout).toBe('40000');
+  });
+
+  it('without input, leaves stdin to the child as before', async () => {
+    const { stdout } = await execWithInput(process.execPath, ['-e', 'process.stdout.write("ok")'], opts);
+    expect(stdout).toBe('ok');
+  });
+
+  it.runIf(process.platform === 'win32')('the same 40,000 characters on argv fail to spawn on Windows', async () => {
+    await expect(execWithInput(process.execPath, ['-e', COUNT, text], opts)).rejects.toMatchObject({ code: 'ENAMETOOLONG' });
   });
 });
