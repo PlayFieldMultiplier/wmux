@@ -3060,6 +3060,7 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
         retainWhenHidden: retain,
         onWritten: (chars) => glyphRepaint.onData(chars),
         write: payload.replay ? writeReplayOutput : undefined,
+        ptyId,
       });
     };
     // Write what the cold-frame swap owes at a flush marker (or after held

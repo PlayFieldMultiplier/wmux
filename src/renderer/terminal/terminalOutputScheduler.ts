@@ -40,8 +40,18 @@
 // before a buffer read. This is safe precisely because daemon sessions retain
 // the authoritative bytes — which is why the option is only set for
 // daemon-backed panes (see useTerminal).
+//
+// Retention exception — terminal queries: xterm is the pane's only responder,
+// so a DA/DSR/CPR/kitty `CSI ? u`/OSC color query sitting in a never-parsed
+// backlog went unanswered while the pane stayed hidden (a TUI started in a
+// background workspace gave up on its probes, e.g. Claude Code never enabled
+// the kitty keyboard). A retained chunk that completes a query flushes the
+// whole backlog synchronously so xterm answers in order with its real state.
+// Dirty panes (overflowed backlog, bytes dropped) are not covered: their
+// queries are answered by nothing until the reveal resync, which strips them.
 
-import { splitIncompleteEscape } from '../../shared/incompleteEscape';
+import { IncompleteEscapeSplitter, splitIncompleteEscape } from '../../shared/incompleteEscape';
+import { containsTerminalQuery } from '../../shared/replayQuerySanitizer';
 
 /** Minimal surface the scheduler needs — keeps the module xterm-agnostic and
  *  unit-testable with plain fakes. */
@@ -68,6 +78,8 @@ interface WriteOptions {
    *  without retaining a stale closure. For replay-provenance bytes, this
    *  writer MUST apply replay-scoped control-sequence muting. */
   write?: (data: string) => void;
+  /** Diagnostic label for logs (the pane's pty id). */
+  ptyId?: string;
 }
 
 interface QueuedChunk {
@@ -191,6 +203,15 @@ let drainTimer: ReturnType<typeof setTimeout> | null = null;
 let drainDelayMs: number | null = null;
 /** One-shot diagnostic latch — see the retention branch in writeTerminalOutput. */
 let retentionEngagedLogged = false;
+/** Per-terminal escape state across RETAINED writes, so a query split across
+ *  two hidden chunks (`ESC[` | `c`) is still seen once it completes. Outlives
+ *  the queue entry: a query flush deletes the entry, while xterm's parser holds
+ *  the same unfinished tail the splitter does. */
+const retainedQuerySplitters = new Map<SchedulableTerminal, IncompleteEscapeSplitter>();
+/** Rate limit for the query-parse log: a TUI that sends CPR every frame
+ *  re-parses its hidden pane every frame — visible in the log, not flooding it. */
+const QUERY_PARSE_LOG_INTERVAL_MS = 10_000;
+const queryParseLog = new Map<SchedulableTerminal, { lastAt: number; suppressed: number }>();
 
 /** Monotonic-ish clock for the interactive window. Falls back to Date.now() in
  *  environments without `performance` (jsdom-less unit tests). */
@@ -450,6 +471,21 @@ function resolveSyncOpen(prevOpen: boolean, data: string): boolean {
   return lastBegin > lastEnd;
 }
 
+function logQueryParse(terminal: SchedulableTerminal, ptyId: string | undefined, chars: number): void {
+  const t = now();
+  const state = queryParseLog.get(terminal);
+  if (state && t - state.lastAt < QUERY_PARSE_LOG_INTERVAL_MS) {
+    state.suppressed += 1;
+    return;
+  }
+  const suppressed = state?.suppressed ?? 0;
+  queryParseLog.set(terminal, { lastAt: t, suppressed: 0 });
+  console.log(
+    `[wmux:hidden-retention] query-parse ptyId=${ptyId ?? '?'} chars=${chars}` +
+      (suppressed > 0 ? ` (+${suppressed} since last log)` : ''),
+  );
+}
+
 /** Tear down a terminal's sync-frame tracking (state + safety timer). */
 function clearSyncFrame(terminal: SchedulableTerminal): void {
   const state = syncFrames.get(terminal);
@@ -616,15 +652,36 @@ export function writeTerminalOutput(
         console.log('[wmux:hidden-retention] engaged — hidden pane output retained without parsing');
       }
     }
+    let splitter = retainedQuerySplitters.get(terminal);
+    if (!splitter) {
+      splitter = new IncompleteEscapeSplitter();
+      retainedQuerySplitters.set(terminal, splitter);
+    }
+    // Only completed sequences: a query is flushed once all of it is queued.
+    const completed = splitter.push(data);
     entry.chunks.push({ data, customWrite: options.write !== undefined });
     entry.queuedChars += data.length;
     if (entry.queuedChars > MAX_QUEUE_CHARS) {
       queue.delete(terminal);
       dirtyTerminals.add(terminal);
+      retainedQuerySplitters.delete(terminal);
       console.log(`[wmux:hidden-retention] backlog overflow (${entry.queuedChars} chars) — pane marked dirty, will resync from daemon on reveal`);
+      return;
+    }
+    if (containsTerminalQuery(completed)) {
+      // The app is waiting on an answer only xterm can give. Hand the whole
+      // backlog over now, in order, so xterm answers from its real state.
+      // A full flush (not a priority promote) deletes the entry: the next
+      // hidden chunk starts a fresh retained one, where a promoted entry
+      // would be re-retained by that chunk with the query still unparsed.
+      // Worst case is one synchronous parse of a backlog just under the cap.
+      logQueryParse(terminal, options.ptyId, entry.queuedChars);
+      flushTerminalOutput(terminal);
     }
     return;
   }
+  // Bytes now reach xterm on the normal path, which keeps its own parse state.
+  retainedQuerySplitters.delete(terminal);
 
   // DEC 2026 synchronized-output coalescing for VISIBLE panes. While a frame is
   // open, hold the pane's chunks out of xterm (no parse, no raster); release
@@ -764,6 +821,8 @@ export function discardTerminalOutput(terminal: SchedulableTerminal): void {
   dirtyTerminals.delete(terminal);
   lastInputAt.delete(terminal);
   escapeCarry.delete(terminal);
+  retainedQuerySplitters.delete(terminal);
+  queryParseLog.delete(terminal);
 }
 
 /** Phase 3: true when this terminal's retained backlog overflowed and was
@@ -797,6 +856,7 @@ export function markTerminalDirty(terminal: SchedulableTerminal): void {
   queue.delete(terminal);
   dirtyTerminals.add(terminal);
   escapeCarry.delete(terminal);
+  retainedQuerySplitters.delete(terminal);
 }
 
 /** Phase 3: the owner finished re-synchronizing this terminal's screen state
@@ -825,5 +885,7 @@ export function __resetTerminalOutputSchedulerForTests(): void {
   dirtyTerminals.clear();
   lastInputAt.clear();
   escapeCarry.clear();
+  retainedQuerySplitters.clear();
+  queryParseLog.clear();
   retentionEngagedLogged = false;
 }
