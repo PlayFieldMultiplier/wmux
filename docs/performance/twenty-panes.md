@@ -65,8 +65,8 @@ After launch the harness asks the daemon what it actually runs:
 `terminalCore.effective`. The run aborts before setup when any of these hold:
 
 - the daemon does not report an engine (an older build);
-- the build has no Rust module (`rustAvailable` is false), for either engine,
-  since such a build cannot be compared;
+- `--engine rust` on a build without the Rust module (`rustAvailable` is
+  false). A node run works on such a build;
 - `WMUX_TERMINAL_CORE` overrides the setting;
 - the requested engine differs from what the daemon started with;
 - the requested engine differs from what is effective, for example Rust when

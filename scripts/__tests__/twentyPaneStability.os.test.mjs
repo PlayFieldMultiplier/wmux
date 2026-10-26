@@ -155,9 +155,12 @@ describe('twenty-pane stability engine verification', () => {
     expect(() => verifyEngine('rust', ping({ ...rust, effective: 'node' }))).toThrow(/runs node/);
   });
 
-  it('aborts either engine when the build has no Rust module', () => {
+  it('aborts a rust run on a build without the Rust module', () => {
     expect(() => verifyEngine('rust', ping({ ...rust, effective: 'node', rustAvailable: false }))).toThrow(/Rust terminal module is unavailable/);
-    expect(() => verifyEngine('node', ping({ ...node, rustAvailable: false }))).toThrow(/unavailable/);
+  });
+
+  it('lets a node run proceed on a build without the Rust module', () => {
+    expect(verifyEngine('node', ping({ ...node, rustAvailable: false }))).toMatchObject({ effective: 'node', rustAvailable: false });
   });
 
   it('aborts when an environment override decides the engine', () => {

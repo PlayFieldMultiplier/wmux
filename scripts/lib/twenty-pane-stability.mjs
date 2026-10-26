@@ -132,8 +132,8 @@ export function verifyEngine(requested, ping) {
     rustAvailable: core.rustAvailable === true, environmentOverride: core.environmentOverride === true,
   };
   if (!requested) return runtime;
-  if (!runtime.rustAvailable) {
-    throw new Error('the Rust terminal module is unavailable in this build, so a node vs rust comparison cannot run on it');
+  if (requested === 'rust' && !runtime.rustAvailable) {
+    throw new Error('asked for the rust engine but the Rust terminal module is unavailable in this build');
   }
   if (runtime.environmentOverride) {
     throw new Error('WMUX_TERMINAL_CORE is set for the daemon and overrides the saved engine; unset it and rerun');
