@@ -124,6 +124,10 @@ describe('chat v2 host: a Codex chat', () => {
     r.fake().request(5, 'item/commandExecution/requestApproval', { itemId: 'call_1', command: 'touch a', availableDecisions: ['accept', 'decline'] });
     await until(() => r.pending().length === 1);
     expect(r.pending()[0].channel).toBe('none');
+    // The registry lists the card before the host has stamped it (notedAt is set
+    // once noteNativeDecision returns); the card block follows that stamp, so the
+    // clock moves only after it, as a person's click would.
+    await until(() => !!r.host.sessionForPane(PANE)?.blocks.some((b) => b.approval?.requestId === '5'));
     r.clock.now += 2_000;
     expect(await r.host.call('answer', { paneId: PANE, chatSessionId: b.chatSessionId, requestId: '5', decision: 'allow' }, 'main')).toEqual({ ok: true });
     await until(() => r.fake().replies(5).length === 1);
