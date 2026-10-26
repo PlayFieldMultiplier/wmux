@@ -5,8 +5,9 @@
 // sum of the page's own rows) and the Toggle Company View shortcut.
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useStore } from '../../../stores';
+import { loadLocale } from '../../../i18n';
 import { ALL_THREADS, timelineKey } from '../../../stores/slices/roomSlice';
 import { setRoomsApiForTests, type RoomsApi } from '../../../hooks/useRoomSync';
 import { setFactoryBotPort, type FactoryBotPort, type FactoryBotRow } from '../../Room/factoryPorts';
@@ -31,6 +32,9 @@ import { botHueIndex } from '../../Room/BotAvatar';
 vi.mock('../../Terminal/Terminal', () => ({ default: () => null }));
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+// Tables other than English load on demand; the tests below read Korean synchronously.
+beforeAll(() => loadLocale('ko'));
 
 const LEAD = 'bot-0000000a';
 const VERIFIER = 'bot-0000000b';

@@ -4,8 +4,8 @@
 // can't catch it — t()'s signature accepts any string. Keep this list in sync
 // with the usageLimit.* keys FleetRowActions uses.
 
-import { describe, it, expect, afterAll } from 'vitest';
-import { t, setLocale, type Locale } from '../index';
+import { describe, it, expect, afterAll, beforeAll } from 'vitest';
+import { loadLocale, t, setLocale, type Locale } from '../index';
 
 const KEYS = [
   'usageLimit.resumeAtReset',
@@ -15,6 +15,9 @@ const KEYS = [
 ] as const;
 
 const LOCALES: Locale[] = ['en', 'ko', 'pl'];
+
+// Tables other than English load on demand; the tests below read Korean and Polish synchronously.
+beforeAll(() => Promise.all(LOCALES.map(loadLocale)));
 
 describe('usageLimit Fleet row locale contract', () => {
   afterAll(() => setLocale('en'));

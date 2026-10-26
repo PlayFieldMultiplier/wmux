@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { QuickLaunchCheckout, QuickLaunchContext } from '../../shared/quickLaunch';
 import type { CustomThemeColors } from '../../shared/types';
-import { setLocale, t, type Locale } from '../i18n';
+import { loadLocale, setLocale, t, type Locale } from '../i18n';
 import { applyCustomCssVars, clearCustomCssVars } from '../themes';
 import Button from '../components/ui/Button';
 import Select from '../components/ui/Select';
@@ -72,7 +72,11 @@ export default function QuickLaunchComposer() {
     focusPrompt();
     const next = await api.context().catch(() => null);
     if (!next) return;
-    if (next.locale) setLocale(next.locale as Locale);
+    // The language's table loads before the render below shows it.
+    if (next.locale) {
+      await loadLocale(next.locale as Locale);
+      setLocale(next.locale as Locale);
+    }
     applyTheme(next);
     const remembered = loadChoice();
     setCtx(next);

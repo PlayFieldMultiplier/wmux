@@ -1,6 +1,6 @@
 // Fleet rows say what the agent is doing in words; raw output lives in the
 // detail area, never in a row.
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createElement } from 'react';
 import FleetCard, { agentDisplayName, FleetCardMissionLine, FleetCardEvidenceBadge } from '../FleetCard';
@@ -8,7 +8,10 @@ import { fleetRow, type FleetPane } from '../../../stores/selectors/fleet';
 import { fleetTitle } from '../fleetPresentation';
 import type { WorkTask } from '../../../../shared/workTask';
 import type { EvidenceItem, Task } from '../../../../shared/types';
-import { getLocale, setLocale } from '../../../i18n';
+import { getLocale, loadLocale, setLocale } from '../../../i18n';
+
+// Tables other than English load on demand; the tests below read Korean synchronously.
+beforeAll(() => loadLocale('ko'));
 
 const noop = () => undefined;
 

@@ -2203,7 +2203,7 @@ app.on('ready', async () => {
   registerHtmlPreview();
   markBoot('plugins-loaded');
 
-  mainWindow = createWindow({ deferLoad: true, windowGlass: sessionManager.readWindowGlass(), windowGlassEffective: sessionManager.readWindowGlassEffective(), windowAppearance: sessionManager.readWindowAppearance() });
+  mainWindow = createWindow({ deferLoad: true, windowGlass: sessionManager.readWindowGlass(), windowGlassEffective: sessionManager.readWindowGlassEffective(), windowAppearance: sessionManager.readWindowAppearance(), locale: sessionManager.readLocale() });
   // Global quick launch: needs `ready` for globalShortcut, and registers from
   // its own settings file so the chord works before the renderer has loaded.
   quickLaunch = initQuickLaunch({
@@ -3183,7 +3183,7 @@ async function abortInstallQuit(): Promise<void> {
   // its renderer, or the caller's error IPC lands before any listener exists.
   // deferLoad so the reload backoff and console wiring are attached before the
   // navigation starts — this window's whole job is to render the failure.
-  const win = createWindow({ deferLoad: true, windowGlass: sessionManager.readWindowGlass(), windowGlassEffective: sessionManager.readWindowGlassEffective(), windowAppearance: sessionManager.readWindowAppearance() });
+  const win = createWindow({ deferLoad: true, windowGlass: sessionManager.readWindowGlass(), windowGlassEffective: sessionManager.readWindowGlassEffective(), windowAppearance: sessionManager.readWindowAppearance(), locale: sessionManager.readLocale() });
   mainWindow = win;
   adoptMainWindow(win);
   loadMainRenderer(win);
@@ -3607,7 +3607,7 @@ app.on('activate', () => {
   // hidden window too, and must neither count as the app window nor be the
   // one a Dock click brings back.
   if (!mainWindow || mainWindow.isDestroyed()) {
-    mainWindow = createWindow({ windowGlass: sessionManager.readWindowGlass(), windowGlassEffective: sessionManager.readWindowGlassEffective(), windowAppearance: sessionManager.readWindowAppearance() });
+    mainWindow = createWindow({ windowGlass: sessionManager.readWindowGlass(), windowGlassEffective: sessionManager.readWindowGlassEffective(), windowAppearance: sessionManager.readWindowAppearance(), locale: sessionManager.readLocale() });
     adoptMainWindow(mainWindow);
     return;
   }

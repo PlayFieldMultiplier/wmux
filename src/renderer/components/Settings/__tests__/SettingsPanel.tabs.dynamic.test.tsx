@@ -17,6 +17,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import SettingsPanel from '../SettingsPanel';
 import { MCP_STATUS_CHANGED_EVENT } from '../IntegrationSetupSection';
 import { useStore } from '../../../stores';
+import { loadLocale } from '../../../i18n';
 import {
   SETTINGS_CATALOG,
   SETTINGS_NAV_GROUPS,
@@ -414,6 +415,8 @@ describe('settings persist across tabs', () => {
 
   it('keeps the language picked on General', async () => {
     const before = useStore.getState().locale;
+    // A table not loaded yet switches a moment later; loaded, the pick is instant.
+    await loadLocale('ko');
     const select = row('language')!.querySelector('select')!;
     await act(async () => {
       select.value = 'ko';

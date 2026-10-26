@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it } from 'vitest';
-import { LOCALE_OPTIONS, setLocale, t } from '../index';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { LOCALE_OPTIONS, loadLocale, setLocale, t } from '../index';
 
 // Settings › General › Startup is shown on Windows and macOS, and the toggle
 // registers a login item on both (src/main/autostart.ts). The copy used to say
@@ -9,6 +9,8 @@ import { LOCALE_OPTIONS, setLocale, t } from '../index';
 const KEYS = ['settings.startOnLogin', 'settings.startOnLoginDesc'] as const;
 
 describe('Startup toggle copy is platform-neutral', () => {
+  // Tables other than English load on demand; the tests below read them synchronously.
+  beforeAll(() => Promise.all(LOCALE_OPTIONS.map((o) => loadLocale(o.value))));
   afterEach(() => setLocale('en'));
 
   it.each(LOCALE_OPTIONS.map((o) => o.value))('%s does not name an operating system', (locale) => {

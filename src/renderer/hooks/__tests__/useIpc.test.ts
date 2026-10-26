@@ -5,9 +5,12 @@
  * hook wires up) so the tests can run in vitest's default `node`
  * environment without needing a React renderer.
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 import { createInvoke, type IpcErrorCode } from '../useIpc';
-import { getLocale, setLocale, type Locale } from '../../i18n';
+import { getLocale, loadLocale, setLocale, type Locale } from '../../i18n';
+
+// Tables other than English load on demand; the tests below read Korean, Chinese and Polish synchronously.
+beforeAll(() => Promise.all((['ko', 'zh', 'pl'] as const).map(loadLocale)));
 
 type ToastSink = (message: string, level: 'info' | 'warn' | 'error') => void;
 

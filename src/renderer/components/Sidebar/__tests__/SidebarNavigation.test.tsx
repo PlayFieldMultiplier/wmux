@@ -1,13 +1,16 @@
 // @vitest-environment jsdom
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { useStore } from '../../../stores';
 import SidebarNavigation from '../SidebarNavigation';
 import MiniSidebar from '../MiniSidebar';
 import { selectFleetBoard } from '../../../stores/selectors/fleet';
 import { seedFleetTriageStore } from '../../../utils/__tests__/fleetTriageFixture';
-import { setLocale } from '../../../i18n';
+import { loadLocale, setLocale } from '../../../i18n';
+
+// Tables other than English load on demand; the tests below read Korean synchronously.
+beforeAll(() => loadLocale('ko'));
 
 let container: HTMLDivElement;
 let root: Root;

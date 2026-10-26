@@ -1,9 +1,12 @@
 // What the owner reads of a card or a thread: names, never internal ids,
 // role tags or machine codes.
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { CardKind, RoomCard } from '../../../../shared/room';
-import { setLocale, t as i18nT } from '../../../i18n';
+import { loadLocale, setLocale, t as i18nT } from '../../../i18n';
 import { actorLabel, cardApplyTaskId, cardResumeTaskId, kindLabel, formatCardTime, formatNoticeTime, noticeText, onceText, ownerCardText, requestTitles, routineCardBody, threadLabel, withoutInternalIds, withoutReasonCodes, withoutRoleTags } from '../roomFormat';
+
+// Tables other than English load on demand; the tests below read Korean, Polish and Chinese synchronously.
+beforeAll(() => Promise.all((['ko', 'pl', 'zh'] as const).map(loadLocale)));
 
 const t = (key: string) => key;
 const system = { kind: 'system' as const };

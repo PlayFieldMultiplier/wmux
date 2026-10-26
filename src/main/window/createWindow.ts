@@ -12,6 +12,7 @@ import { windowDisplayedReporter } from './windowDisplayed';
 import { initialWindowsAppearance, initialWindowsGlass, markWindowGlass, windowsGlassSupported, winWindowOptions } from './windowGlass';
 import { revealWhenPainted } from './revealWhenPainted';
 import { WINDOW_START_COLORS, startPolarity, startPolarityArg } from '../../shared/windowStartPaint';
+import { startLocaleArgs } from '../../shared/startLocale';
 import {
   DEFAULT_WINDOW_SIZE,
   MIN_WINDOW_SIZE,
@@ -186,7 +187,7 @@ function attachWindowStatePersistence(win: BrowserWindow): void {
 }
 
 export function createWindow(
-  opts: { deferLoad?: boolean; windowGlass?: unknown; windowGlassEffective?: unknown; windowAppearance?: unknown } = {},
+  opts: { deferLoad?: boolean; windowGlass?: unknown; windowGlassEffective?: unknown; windowAppearance?: unknown; locale?: unknown } = {},
 ): BrowserWindow {
   // Windows window glass (windowGlass.ts): acrylic on Windows 11 22H2+ unless
   // the persisted level is Off or the window was last shown opaque for its
@@ -283,8 +284,9 @@ export function createWindow(
       contextIsolation: true,
       nodeIntegration: false,
       webviewTag: true,
-      // The preload paints the page in this polarity until the theme is set.
-      additionalArguments: [startPolarityArg(polarity)],
+      // The preload paints the page in this polarity until the theme is set,
+      // and the renderer loads the saved language's table before it renders.
+      additionalArguments: [startPolarityArg(polarity), ...startLocaleArgs(opts.locale)],
     },
   });
 

@@ -6,8 +6,8 @@
 // it — t()'s signature accepts any string. Every key below is referenced by
 // formatLimitNotice/formatResetCountdown; keep this list in sync with them.
 
-import { describe, it, expect, afterAll } from 'vitest';
-import { t, setLocale, type Locale } from '../index';
+import { describe, it, expect, afterAll, beforeAll } from 'vitest';
+import { loadLocale, t, setLocale, type Locale } from '../index';
 
 const KEYS = [
   'deck.limit.window',
@@ -24,6 +24,8 @@ const KEYS = [
 const LOCALES: Locale[] = ['en', 'ko'];
 
 describe('deck.limit locale contract', () => {
+  // Tables other than English load on demand; the tests below read them synchronously.
+  beforeAll(() => Promise.all(LOCALES.map(loadLocale)));
   afterAll(() => setLocale('en'));
 
   for (const locale of LOCALES) {

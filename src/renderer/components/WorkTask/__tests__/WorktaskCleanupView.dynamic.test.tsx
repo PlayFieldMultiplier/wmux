@@ -5,7 +5,7 @@
 // leaves focus on the terminal holding the prepared line, so the next Enter
 // runs it instead of reopening the list.
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 
@@ -15,7 +15,10 @@ vi.mock('../../../hooks/useTerminal', () => ({
 }));
 
 import { useStore } from '../../../stores';
-import { setLocale } from '../../../i18n';
+import { loadLocale, setLocale } from '../../../i18n';
+
+// Tables other than English load on demand; the tests below read German synchronously.
+beforeAll(() => loadLocale('de'));
 import { en } from '../../../i18n/locales/en';
 import WorktaskCleanupView from '../WorktaskCleanupView';
 
