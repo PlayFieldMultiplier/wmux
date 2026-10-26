@@ -1085,7 +1085,8 @@ describe('a release refusal told before its draft was decided', () => {
   it('a refusal stored cut at 300 characters is amended all the same, its draft code kept', async () => {
     const r = rig();
     const req = await r.ask(DEV, { action: 'release', tagName: 'v1', reason: 'ship' });
-    const long = Array.from({ length: 30 }, (_, i) => `gh-${400 + i}-reason`).join(', ');
+    // The refusal as told first: its primary code is never dropped.
+    const long = ['checks-failing', ...Array.from({ length: 30 }, (_, i) => `gh-${400 + i}-reason`)].join(', ');
     const effect = (reason: string): Parameters<ApprovalService['onActEffect']>[0] => ({
       id: `act:${req.requestId}`, requestId: req.requestId, action: 'release', repoKey: KEY, payloadHash: 'h', status: 'refused', attempt: 1, reason, draftId: 50, createdAt: 1, updatedAt: 1,
     });
@@ -1093,6 +1094,19 @@ describe('a release refusal told before its draft was decided', () => {
     r.svc.onActEffect(effect(`${long}, draft-kept-tag-made`));
     const refusal = r.svc.get(req.requestId)?.refusal ?? '';
     expect(refusal.length).toBeLessThanOrEqual(300);
+    expect(refusal.startsWith('checks-failing, ')).toBe(true);
     expect(refusal.endsWith(', draft-kept-tag-made')).toBe(true);
+  });
+
+  it('a draft that could not be checked is told as one that may still be there', async () => {
+    const r = rig();
+    const req = await r.ask(DEV, { action: 'release', tagName: 'v1', reason: 'ship' });
+    const effect = (reason: string): Parameters<ApprovalService['onActEffect']>[0] => ({
+      id: `act:${req.requestId}`, requestId: req.requestId, action: 'release', repoKey: KEY, payloadHash: 'h', status: 'refused', attempt: 1, reason, draftId: 50, createdAt: 1, updatedAt: 1,
+    });
+    r.svc.onActEffect(effect('checks-failing'));
+    r.svc.onActEffect(effect('checks-failing, draft-kept-unchecked'));
+    const card = r.writer.read(WS, {}).cards.find((c) => c.clientPostId === `approval-outcome:${req.requestId}:draft`);
+    expect(card?.title).toMatch(/^Draft release may still be on GitHub: /);
   });
 });

@@ -764,5 +764,9 @@ describe('a workflow run listed without its path (GitHub Enterprise Server)', ()
     expect(await pre(gh)).toMatchObject({ refusal: 'read-failed' });
     gh.answerRead = (e) => (e === 'repos/o/r/actions/workflows/ci.yml' ? { ok: true, value: { path: '.github/workflows/ci.yml' } } : null);
     expect(await pre(gh)).toMatchObject({ refusal: 'unreadable-answer' });
+    // GitHub's own refusal of the record (a 410): the workflow's state is not
+    // known, as without the fallback, never a failed check.
+    gh.answerRead = (e) => (e === 'repos/o/r/actions/workflows/ci.yml' ? { ok: false, kind: 'http', status: 410, message: 'gh: Gone (HTTP 410)' } : null);
+    expect(await pre(gh)).toMatchObject({ refusal: 'workflow-disabled' });
   });
 });

@@ -8,7 +8,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ApprovalReleaseAct } from '../../../shared/botApproval';
-import { ActEffectStore, actEffectId, draftUndecided, type ActEffect } from '../actEffectStore';
+import { ActEffectStore, DRAFT_OPEN_MAX_MS, actEffectId, draftUndecided, type ActEffect } from '../actEffectStore';
 import { ActExecutor } from '../actExecutor';
 import type { StoredApproval } from '../approvals';
 import { FakeGithub } from './fakeGithubActs';
@@ -50,7 +50,7 @@ function github(): FakeGithub {
 
 /** `approvals`: the request is there (refused), gone, or the approvals are
  *  not up yet (a start). */
-function executor(store: ActEffectStore, gh: FakeGithub, approvals: 'there' | 'gone' | 'not-running' = 'there') {
+function executor(store: ActEffectStore, gh: FakeGithub, approvals: 'there' | 'gone' | 'not-running' = 'there', now?: () => number) {
   const emitted: ActEffect[] = [];
   const lines: string[] = [];
   const request = { requestId: ID, repoKey: 'github.com/o/r', act, ghLogin: 'owner' } as unknown as StoredApproval;
@@ -62,6 +62,7 @@ function executor(store: ActEffectStore, gh: FakeGithub, approvals: 'there' | 'g
     },
     emit: (e) => emitted.push(e),
     log: (l) => lines.push(l),
+    ...(now ? { now } : {}),
   });
   return { ex, emitted, lines };
 }
@@ -169,5 +170,24 @@ describe('a refused release row\'s draft decision', () => {
     expect(gh.reads.filter((e) => e.startsWith('repos/o/r/releases/'))).toEqual([]);
     expect(gh.writes).toEqual([]);
     expect(emitted).toEqual([]);
+  });
+
+  it('a draft GitHub does not answer for stays open a day at most: then it is kept, not checked, and told', async () => {
+    const { store, id } = refusedUndecided();
+    const openedAt = store.get(id)?.draftOpenAt ?? 0;
+    expect(openedAt).toBeGreaterThan(0);
+    const gh = github();
+    gh.answerRead = (e) => (e === 'repos/o/r/releases/50' ? { ok: false, kind: 'error', message: 'gh: not logged in' } : null);
+    let now = openedAt + DRAFT_OPEN_MAX_MS - 1;
+    const { ex, emitted } = executor(store, gh, 'there', () => now);
+    await ex.reconcileAll();
+    expect(store.get(id)).toMatchObject({ draftOpen: true });
+    expect(emitted).toEqual([]);
+    now = openedAt + DRAFT_OPEN_MAX_MS;
+    await ex.reconcileAll();
+    expect(store.get(id)).toMatchObject({ reason: 'checks-failing, draft-kept-unchecked' });
+    expect(store.get(id)).not.toHaveProperty('draftOpen');
+    expect(emitted.at(-1)).toMatchObject({ reason: 'checks-failing, draft-kept-unchecked' });
+    expect(gh.releases).toHaveLength(1);
   });
 });
