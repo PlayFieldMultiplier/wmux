@@ -1896,7 +1896,11 @@ async function acquireLock(): Promise<boolean> {
   // Write PID file (separate from lock for backward compat). Renamed into place:
   // the launcher already wrote one (claimSpawnedDaemonFiles) that other
   // starters may be reading, and a truncating write would show them it empty.
-  replaceFileOrWrite(PID_FILE, String(process.pid), (msg) => log('warn', msg));
+  // Fatal, as the plain write it replaced was: we hold the lock, but daemon.pid
+  // may still name another starter's child.
+  if (!replaceFileOrWrite(PID_FILE, String(process.pid), (msg) => log('warn', msg))) {
+    throw new Error(`Failed to write ${PID_FILE}`);
+  }
   // Issue #546 — boot-progress marker. The window between this line and
   // `daemon-pipe` being written is the whole problem: we are alive and own the
   // lock, but we cannot answer a ping (no pipe yet), and cold recovery of a
@@ -1922,15 +1926,11 @@ async function acquireLock(): Promise<boolean> {
   // touch and a healthy daemon would read as stale. Elapsed time is bounded on
   // the launcher side by DAEMON_READY_HARD_CEILING_MS instead. A marker
   // orphaned by a hard crash is self-invalidating: its PID is dead.
-  try {
-    // Renamed into place, like the pid file: a launcher waiting on the marker
-    // reads an empty one as "boot finished".
-    replaceFileOrWrite(BOOT_MARKER_FILE, String(process.pid), (msg) => log('warn', msg));
-  } catch (err) {
-    // Non-fatal: without the marker the launcher just falls back to the old
-    // escalated-reping-then-kill behavior. Never block boot on it.
-    log('warn', 'Failed to write boot marker:', err);
-  }
+  // Renamed into place, like the pid file: a launcher waiting on the marker
+  // reads an empty one as "boot finished". Non-fatal (a failure is logged):
+  // without the marker the launcher just falls back to the old
+  // escalated-reping-then-kill behavior. Never block boot on it.
+  replaceFileOrWrite(BOOT_MARKER_FILE, String(process.pid), (msg) => log('warn', msg));
   return true;
 }
 
@@ -10366,8 +10366,10 @@ async function main(): Promise<void> {
   const activePipeName = pipeServer.getActivePipeName();
   const pipeNameFile = path.join(wmuxDir, 'daemon-pipe');
   // Renamed into place: a client that reads it empty falls back to the
-  // default pipe name, which is not ours when we bound a fallback pipe.
-  if (replaceFileOrWrite(pipeNameFile, activePipeName, (msg) => log('warn', msg))) {
+  // default pipe name, which is not ours when we bound a fallback pipe. Still
+  // written in place when no temp file can be made: a stale name from an
+  // earlier daemon is worse than an empty file.
+  if (replaceFileOrWrite(pipeNameFile, activePipeName, (msg) => log('warn', msg), { inPlaceAfterTempFailure: true })) {
     writtenPipeName = activePipeName;
   }
   markDaemonBoot('pipe-file-written');

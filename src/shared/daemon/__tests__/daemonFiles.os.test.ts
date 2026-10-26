@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { createFileExclusive, releaseDaemonFiles, replaceFileOrWrite, unlinkIfContent } from '../daemonFiles';
+import { createFileExclusive, releaseDaemonFiles, replaceFileAtomic, replaceFileOrWrite, unlinkIfContent } from '../daemonFiles';
 
 // daemonFiles reaches fs through a namespace import, which vi.spyOn cannot
 // patch: wrap the calls it makes instead. The test's own `fs` is the real one.
@@ -48,13 +48,19 @@ describe('daemonFiles', () => {
   const read = (name: string): string | null => {
     try { return fs.readFileSync(file(name), 'utf8'); } catch { return null; }
   };
+  /** Run `fn` as if on `platform`: the rename retry is Windows-only. */
+  const asPlatform = (platform: NodeJS.Platform, fn: () => void): void => {
+    const original = process.platform;
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+    try { fn(); } finally { Object.defineProperty(process, 'platform', { value: original, configurable: true }); }
+  };
 
   it('creates a file only once and leaves no temp file behind', () => {
     const warn = vi.fn();
     expect(createFileExclusive(file('daemon.pid'), '11', warn)).toBe(true);
     expect(createFileExclusive(file('daemon.pid'), '22', warn)).toBe(false);
     expect(read('daemon.pid')).toBe('11');
-    expect(replaceFileOrWrite(file('daemon.pid'), '33', warn)).toBe(true);
+    expect(replaceFileAtomic(file('daemon.pid'), '33', warn)).toBe(true);
     expect(read('daemon.pid')).toBe('33');
     expect(fs.readdirSync(dir)).toEqual(['daemon.pid']);
     expect(warn).not.toHaveBeenCalled();
@@ -75,16 +81,25 @@ describe('daemonFiles', () => {
 
   // On Windows an antivirus scan or a reader's handle refuses the rename for a
   // moment; that must not push the write onto the truncating path.
-  it('replaceFileOrWrite retries a rename refused while the file is held', () => {
+  it('retries a rename refused while the file is held, on Windows only', () => {
     fs.writeFileSync(file('daemon-pipe'), 'old-pipe');
-    fsHooks.renameFailures = 2;
     const warn = vi.fn();
-    expect(replaceFileOrWrite(file('daemon-pipe'), 'new-pipe', warn)).toBe(true);
+    asPlatform('win32', () => {
+      fsHooks.renameFailures = 2;
+      expect(replaceFileOrWrite(file('daemon-pipe'), 'new-pipe', warn)).toBe(true);
+    });
     expect(fsHooks.renameFailures).toBe(0);
     expect(fsHooks.writes).not.toContain(file('daemon-pipe'));
     expect(read('daemon-pipe')).toBe('new-pipe');
-    expect(fs.readdirSync(dir)).toEqual(['daemon-pipe']);
     expect(warn).not.toHaveBeenCalled();
+    // Elsewhere EPERM is permanent: one try, then the caller's policy.
+    asPlatform('linux', () => {
+      fsHooks.renameFailures = 2;
+      expect(replaceFileAtomic(file('daemon-pipe'), 'newer-pipe', warn)).toBe(false);
+    });
+    expect(fsHooks.renameFailures).toBe(1);
+    expect(read('daemon-pipe')).toBe('new-pipe');
+    expect(fs.readdirSync(dir)).toEqual(['daemon-pipe']);
   });
 
   it('replaceFileOrWrite reports a rename that keeps failing and writes in place', () => {
@@ -97,18 +112,49 @@ describe('daemonFiles', () => {
     expect(warn.mock.calls[0][0]).toContain('EPERM');
   });
 
-  // A disk that cannot take the temp file would fail the in-place write too,
-  // after truncating a valid file.
+  // The launcher's marker and its live-owner pid repair: never readable empty.
+  it('replaceFileAtomic never writes in place', () => {
+    fs.writeFileSync(file('daemon-booting'), '1');
+    const warn = vi.fn();
+    asPlatform('win32', () => {
+      fsHooks.renameFailures = Infinity;
+      expect(replaceFileAtomic(file('daemon-booting'), '2', warn)).toBe(false);
+    });
+    fsHooks.renameFailures = 0;
+    fsHooks.tempWriteError = 'ENOSPC';
+    expect(replaceFileAtomic(file('daemon-booting'), '3', warn)).toBe(false);
+    expect(fsHooks.writes).not.toContain(file('daemon-booting'));
+    expect(read('daemon-booting')).toBe('1');
+    expect(fs.readdirSync(dir)).toEqual(['daemon-booting']);
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn.mock.calls[0][0]).toContain('EPERM');
+    expect(warn.mock.calls[1][0]).toContain('ENOSPC');
+  });
+
+  // daemon.pid and the daemon's marker: a disk that cannot take the temp file
+  // would fail the in-place write too, after truncating a valid file.
   it('replaceFileOrWrite leaves the file untouched when the temp file cannot be written', () => {
-    fs.writeFileSync(file('daemon-pipe'), 'old-pipe');
+    fs.writeFileSync(file('daemon.pid'), '1');
     fsHooks.tempWriteError = 'ENOSPC';
     const warn = vi.fn();
-    expect(replaceFileOrWrite(file('daemon-pipe'), 'new-pipe', warn)).toBe(false);
-    expect(fsHooks.writes).not.toContain(file('daemon-pipe'));
-    expect(read('daemon-pipe')).toBe('old-pipe');
-    expect(fs.readdirSync(dir)).toEqual(['daemon-pipe']);
+    expect(replaceFileOrWrite(file('daemon.pid'), '2', warn)).toBe(false);
+    expect(fsHooks.writes).not.toContain(file('daemon.pid'));
+    expect(read('daemon.pid')).toBe('1');
+    expect(fs.readdirSync(dir)).toEqual(['daemon.pid']);
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0][0]).toContain('ENOSPC');
+  });
+
+  // daemon-pipe: a stale name from an earlier daemon is worse than an empty file.
+  it('replaceFileOrWrite writes in place after a temp failure when asked to', () => {
+    fs.writeFileSync(file('daemon-pipe'), 'stale-pipe');
+    fsHooks.tempWriteError = 'EMFILE';
+    const warn = vi.fn();
+    expect(replaceFileOrWrite(file('daemon-pipe'), 'new-pipe', warn, { inPlaceAfterTempFailure: true })).toBe(true);
+    expect(read('daemon-pipe')).toBe('new-pipe');
+    expect(fs.readdirSync(dir)).toEqual(['daemon-pipe']);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toContain('EMFILE');
   });
 
   it('createFileExclusive reports a hard-link error other than EEXIST and still creates the file', () => {

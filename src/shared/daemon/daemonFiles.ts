@@ -73,39 +73,65 @@ export function createFileExclusive(file: string, content: string, warn: Warn): 
 }
 
 /**
- * Replace `file` with `content` by renaming a temp file over it, so a reader
- * sees the old or the new content, never an empty file. A rename refused
- * because someone holds the file (an antivirus scan, a reader's handle on
- * Windows) is retried briefly (renameWithRetry). If it still fails, the file
- * is written in place, which a reader can see empty. If the temp file cannot
- * be written (disk full, I/O error), `file` is left untouched: an in-place
- * write would likely fail the same way after truncating it. Every fallback
- * or failure is reported through `warn`. Returns whether `file` now holds
- * `content`. Never throws.
+ * Rename a temp file holding `content` over `file`, so a reader sees the old
+ * or the new content, never an empty file. On Windows a rename refused because
+ * someone holds the file (an antivirus scan, a reader's handle) is retried
+ * briefly (renameWithRetry); elsewhere those codes are permanent and it tries
+ * once. Returns null once in place, else the step that failed and its error.
+ * Never throws.
  */
-export function replaceFileOrWrite(file: string, content: string, warn: Warn): boolean {
+function renameIntoPlace(file: string, content: string): { step: 'temp file' | 'rename'; err: unknown } | null {
   const tmp = tempNameFor(file);
+  let step: 'temp file' | 'rename' = 'temp file';
   try {
     fs.writeFileSync(tmp, content, { encoding: 'utf-8', mode: 0o600 });
+    step = 'rename';
+    renameWithRetry(tmp, file, { attempts: process.platform === 'win32' ? undefined : 1 });
+    return null;
   } catch (err) {
-    try { fs.unlinkSync(tmp); } catch { /* never created */ }
-    safeWarn(warn, `[daemon-files] ${file}: temp file failed (${errorCode(err)}); left it untouched`);
-    return false;
+    try { fs.unlinkSync(tmp); } catch { /* renamed or never created */ }
+    return { step, err };
   }
-  let renameErr: unknown;
-  try {
-    renameWithRetry(tmp, file);
-    return true;
-  } catch (err) {
-    renameErr = err;
-    try { fs.unlinkSync(tmp); } catch { /* already gone */ }
+}
+
+/** Replace `file` atomically (renameIntoPlace) or not at all: a failure is
+ *  reported through `warn` and leaves `file` untouched. Returns whether `file`
+ *  now holds `content`. Never throws. */
+export function replaceFileAtomic(file: string, content: string, warn: Warn): boolean {
+  const failed = renameIntoPlace(file, content);
+  if (failed === null) return true;
+  safeWarn(warn, `[daemon-files] ${file}: ${failed.step} failed (${errorCode(failed.err)}); left it untouched`);
+  return false;
+}
+
+/**
+ * Replace `file` atomically (renameIntoPlace), else write it in place, which a
+ * reader can see empty. When the temp file itself cannot be written (disk
+ * full, I/O error) `file` is left untouched, since an in-place write would
+ * likely fail the same way after truncating it; `inPlaceAfterTempFailure`
+ * writes in place anyway, for a file whose old content is stale and worse
+ * than an empty one. Every fallback or failure is reported through `warn`.
+ * Returns whether `file` now holds `content`. Never throws.
+ */
+export function replaceFileOrWrite(
+  file: string,
+  content: string,
+  warn: Warn,
+  opts: { inPlaceAfterTempFailure?: boolean } = {},
+): boolean {
+  const failed = renameIntoPlace(file, content);
+  if (failed === null) return true;
+  const why = `${failed.step} failed (${errorCode(failed.err)})`;
+  if (failed.step === 'temp file' && !opts.inPlaceAfterTempFailure) {
+    safeWarn(warn, `[daemon-files] ${file}: ${why}; left it untouched`);
+    return false;
   }
   try {
     fs.writeFileSync(file, content, { encoding: 'utf-8', mode: 0o600 });
-    safeWarn(warn, `[daemon-files] ${file}: atomic replace failed (${errorCode(renameErr)}); wrote it in place, which a reader can see empty`);
+    safeWarn(warn, `[daemon-files] ${file}: ${why}; wrote it in place, which a reader can see empty`);
     return true;
   } catch (err) {
-    safeWarn(warn, `[daemon-files] ${file}: atomic replace failed (${errorCode(renameErr)}); the in-place write failed too (${errorCode(err)})`);
+    safeWarn(warn, `[daemon-files] ${file}: ${why}; the in-place write failed too (${errorCode(err)})`);
     return false;
   }
 }
