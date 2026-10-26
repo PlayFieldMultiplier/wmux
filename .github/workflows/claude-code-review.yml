@@ -120,6 +120,7 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ github.token }}
+          show_full_output: true
           prompt: |
             You are reviewing pull request #${{ env.PR_NUMBER }} in ${{ github.repository }}.
             Base: ${{ steps.pr.outputs.base_sha }}. Head: ${{ steps.pr.outputs.head_sha }}.
