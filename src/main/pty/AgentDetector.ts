@@ -1508,7 +1508,8 @@ export class AgentDetector {
     return requested;
   }
 
-  private ownerEmitsPromptMarks(): boolean {
+  /** The pane's owner writes OSC 133 marks of its own (`emitsPromptMarks`) and no shell mark has released it. */
+  ownerEmitsPromptMarks(): boolean {
     if (this.shellPromptSinceOwner) return false;
     const owner = this.trustedAgent !== null
       ? PROFILE_BY_SLUG.get(this.trustedAgent)

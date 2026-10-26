@@ -339,6 +339,9 @@ export class DaemonPTYBridge extends EventEmitter {
   private shellCommandRunning = false;
   /** #2673 — the shell has drawn an OSC 133 prompt: `shellCommandRunning` then says whether a program, not the shell, owns the keys. */
   private shellPromptSeen = false;
+  // The detector's owner writes OSC 133 marks of its own (Kimi Code CLI), as
+  // of the start of this read: until the shell's D, they are not the shell's.
+  private ownerWritesPromptMarks = false;
   private shellSubmittedKeyRevision: number | undefined;
   private shellCommandKeyRevision = 0;
   /** The shell command that ended last, until the next one starts: the key
@@ -1883,6 +1886,10 @@ export class DaemonPTYBridge extends EventEmitter {
       if (event.code === 133 && promptLog) {
         const parsed = parseOsc133Payload(event.data, Date.now(), ringBuffer.totalBytesWritten);
         if (parsed) {
+          // The agent's own A/B/C are its transcript, not a prompt or a
+          // launch; the shell's D, when it exits, still is.
+          if (parsed.type === 'command_end') this.ownerWritesPromptMarks = false;
+          else if (this.ownerWritesPromptMarks) return;
           if (parsed.type === 'command_end') {
             // Input queued while a command runs can become history or a draft
             // at the next prompt. Completion must not erase that invalidation.
@@ -2048,6 +2055,9 @@ export class DaemonPTYBridge extends EventEmitter {
       // 에이전트 시작 배너("Claude Code vX" 등)가 출력되면 gate 정규식이 영구
       // 미활성화되어 이후 모든 status 감지가 죽는다(daemon mode agent detection
       // 갭). activity보다 뒤에서 처리해 같은 chunk의 명시 상태가 최종 승자가 된다.
+      // Read before the feed: a mark in this read is the owner's only if the
+      // owner held the pane when the read began (a launch's C precedes it).
+      this.ownerWritesPromptMarks = agentDetector.ownerEmitsPromptMarks();
       try {
         agentDetector.feed(data);
       } catch {
