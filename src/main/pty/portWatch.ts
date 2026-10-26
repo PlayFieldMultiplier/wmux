@@ -139,18 +139,19 @@ export async function defaultSnapshot(): Promise<PortSnapshot> {
   return process.platform === 'win32' ? snapshotWindowsNative() : snapshotUnix();
 }
 
-/**
- * Reject if `pending` has not settled within `ms`; the timer is cleared either
- * way. The caller's failure path then runs instead of waiting on a snapshot
- * whose child may never exit.
- */
-export function snapshotWithDeadline(pending: Promise<PortSnapshot>, ms: number): Promise<PortSnapshot> {
-  let deadline: NodeJS.Timeout | undefined;
-  const expired = new Promise<never>((_, reject) => {
-    deadline = setTimeout(() => reject(new Error('snapshot deadline exceeded')), ms);
-    deadline.unref?.();
+/** Resolve `p`, but never wait longer than `ms` — on timeout resolve `fallback`.
+ *  A rejection also resolves `fallback`. Keeps a snapshot whose child never
+ *  exits from blocking its caller: PortWatcher.tick() and a2a.resolve.identity
+ *  (which must answer before the client's RPC deadline). */
+export function withDeadline<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+  if (ms <= 0) return Promise.resolve(fallback);
+  return new Promise<T>((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => { if (!settled) { settled = true; resolve(fallback); } }, ms);
+    timer.unref?.();
+    const finish = (v: T) => { if (!settled) { settled = true; clearTimeout(timer); resolve(v); } };
+    p.then(finish, () => finish(fallback));
   });
-  return Promise.race([pending, expired]).finally(() => clearTimeout(deadline));
 }
 
 /**
@@ -312,17 +313,20 @@ export class PortWatcher extends EventEmitter {
   /**
    * Run one snapshot, but give up waiting at SNAPSHOT_DEADLINE_MS. A snapshot
    * that outlived its deadline stays outstanding until it settles, and no new
-   * one starts meanwhile, so at most one is ever in flight. Both cases reject,
-   * which tick() counts as a failure toward the backoff.
+   * one starts meanwhile, so at most one is ever in flight. Expiry, a pending
+   * earlier snapshot and a failed one all reject, which tick() counts as a
+   * failure toward the backoff.
    */
-  private boundedSnapshot(): Promise<PortSnapshot> {
-    if (this.outstanding) return Promise.reject(new Error('previous snapshot still pending'));
+  private async boundedSnapshot(): Promise<PortSnapshot> {
+    if (this.outstanding) throw new Error('previous snapshot still pending');
     const pending = this.snapshot();
     this.outstanding = pending;
     const clear = (): void => {
       if (this.outstanding === pending) this.outstanding = null;
     };
     pending.then(clear, clear);
-    return snapshotWithDeadline(pending, SNAPSHOT_DEADLINE_MS);
+    const snap = await withDeadline<PortSnapshot | null>(pending, SNAPSHOT_DEADLINE_MS, null);
+    if (!snap) throw new Error('snapshot failed or exceeded its deadline');
+    return snap;
   }
 }
