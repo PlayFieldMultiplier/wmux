@@ -484,7 +484,7 @@ describe('AgentProcessTracker', () => {
     // "Tern" is a made-up CLI the operator defined (Settings → Custom agents).
     const watcher = makeWatcher();
     const listener = vi.fn();
-    let table = [entry(200, SHELL, 'sh', 'sh /usr/local/bin/tern --fast')];
+    const table = [entry(200, SHELL, 'sh', 'sh /usr/local/bin/tern --fast')];
     const tracker = new AgentProcessTracker(watcher, async () => table);
     tracker.setStateChangeListener(listener);
     tracker.setCustomAgentNames(() => new Map([['tern', 'Tern']]));
