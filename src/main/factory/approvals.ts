@@ -769,7 +769,9 @@ export class ApprovalService {
     if (CARD_ONLY_ACTIONS.has(act)) {
       return refuse('invalid', act === 'skill' ? 'a skill is proposed with skill_propose'
         : act === 'native_tool' ? 'a command approval comes from the bot\'s own engine, not approval_request'
-          : 'a change to the owner\'s profile is proposed with memory_update');
+          : act === 'routine' ? 'a routine is proposed with routine_set'
+            : act === 'bot_memory' ? 'a change to your notes is proposed with memory_update target memory'
+              : 'a change to the owner\'s profile is proposed with memory_update');
     }
     if (!(BOT_REQUESTABLE_ACTIONS as readonly string[]).includes(act)) {
       return refuse('invalid', `${act} is not asked for with approval_request; it has no executor yet`);
@@ -1238,7 +1240,8 @@ export class ApprovalService {
       profile = null;
     }
     if (!profile || !profile.enabled || profile.workspaceId !== bot.workspaceId) return refuse('not_bot', 'this bot is not running in the factory');
-    const texts = ask.action === 'routine' ? [ask.routine.title, ask.routine.prompt] : [ask.change.text ?? ''];
+    // A replace or remove shows the entry it changes too.
+    const texts = ask.action === 'routine' ? [ask.routine.title, ask.routine.prompt] : [ask.change.text ?? '', ask.change.old ?? ''];
     for (const t of texts) {
       const problem = ownerAskedTextProblem(t);
       if (problem) return refuse('invalid', `${tool}: this cannot go on the owner's card as it is: ${problem}`);

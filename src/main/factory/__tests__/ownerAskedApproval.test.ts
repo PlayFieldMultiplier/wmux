@@ -271,6 +271,14 @@ describe('a routine the owner asked for in a tainted conversation', () => {
   });
 });
 
+describe('approval_request', () => {
+  it('names the tool that proposes a routine or a note', async () => {
+    const r = rig();
+    expect(await r.svc.request(binding, { action: 'routine', reason: 'x' })).toEqual({ ok: false, code: 'invalid', message: 'a routine is proposed with routine_set' });
+    expect(await r.svc.request(binding, { action: 'bot_memory', reason: 'x' })).toEqual({ ok: false, code: 'invalid', message: 'a change to your notes is proposed with memory_update target memory' });
+  });
+});
+
 describe('a note the owner asked for in a tainted conversation', () => {
   it('waits on a card; Approve writes it, and there is no Undo', () => {
     const r = rig();
@@ -307,6 +315,15 @@ describe('a note the owner asked for in a tainted conversation', () => {
     });
     expect(handleMemoryUpdate({ target: 'memory', action: 'add', text: 'A rule.' }, asBot, deps(true, r.state.proof))).toMatchObject({ ok: false, code: 'not_authorized' });
     expect(handleMemoryUpdate({ target: 'memory', action: 'add', text: 'A rule.' }, asBot, deps(false, null))).toMatchObject({ ok: false, code: 'not_authorized' });
+    expect(r.approvalCards()).toHaveLength(0);
+  });
+
+  it('is refused when the entry a replace or remove shows holds a stored secret', () => {
+    const r = rig();
+    updateMemory(dir, 'memory', A, { action: 'add', text: 'The deploy word is plainwordvalue42' });
+    setRedactedSecrets([{ name: 'WORD', value: 'plainwordvalue42' }]);
+    r.ownerSays('forget the deploy word');
+    expect(r.note({ action: 'remove', match: 'deploy word' })).toMatchObject({ ok: false, code: 'invalid' });
     expect(r.approvalCards()).toHaveLength(0);
   });
 
