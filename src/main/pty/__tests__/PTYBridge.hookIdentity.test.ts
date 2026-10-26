@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserWindow } from 'electron';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 const mocks = vi.hoisted(() => ({
   metadata: vi.fn(),
@@ -78,7 +80,7 @@ function rig(daemon?: DaemonClient) {
     instances.set('pty-1', instance);
     bridge.setupDataForwarding('pty-1');
   };
-  return { bridge, accepted, dispatch, signal, feed, output, hookRouter, recreate };
+  return { bridge, accepted, dispatch, signal, feed, output, hookRouter, recreate, win };
 }
 
 function detectorEvents() {
@@ -263,6 +265,26 @@ describe('local hook RPC → PTYBridge trusted screen identity', () => {
     expect(detectorEvents()).toHaveLength(1);
     expect(detectorEvents()[0]).toMatchObject({ agent: 'agy', kind: 'agent.awaiting_input' });
     await r.dispatch();
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads a grid-only question drawn after identity once the renderer has its output', async () => {
+    const r = rig();
+    // Pi 1.4.0 live capture: the trust selector and its rendered grid.
+    const pi = JSON.parse(readFileSync(join(__dirname, 'fixtures/pi-1.4.0-capture.json'), 'utf8')) as {
+      chunks: { trust: string }; screens: { trust: string[] };
+    };
+    const sent = () => vi.mocked(r.win.webContents.send).mock.calls.map((call) => String(call[2])).join('');
+    // The renderer's viewport holds only what was sent to it.
+    const read = vi.fn(async () => ({
+      rows: sent().includes('Trust project folder') ? pi.screens.trust : [],
+      isCurrent: () => true,
+    }));
+    r.bridge.setApprovalScreenReader(read);
+    expect((await r.dispatch({ agent: 'pi' })).ok).toBe(true);
+    expect(r.accepted.mock.results[0].value).toBe(true);
+    r.feed(pi.chunks.trust);
+    await vi.waitFor(() => expect(mocks.metadata).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ agentStatus: 'awaiting_input' })), { timeout: 5_000 });
     expect(read).toHaveBeenCalledTimes(1);
   });
 

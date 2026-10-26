@@ -393,6 +393,11 @@ export class PTYBridge {
         win.webContents.send(IPC.PTY_DATA, ptyId, joined);
       }
     }
+    // A grid-only question this output finished (AgentDetector approvalReady).
+    // Read only now: the renderer applies the chunk sent above before it
+    // answers the viewport read.
+    const detector = this.agentDetectors.get(ptyId);
+    if (detector?.takeApprovalRecheckRequest()) this.recheckQuietApproval(ptyId, detector);
   }
 
   setupDataForwarding(ptyId: string): void {
