@@ -111,16 +111,30 @@ jobs:
           find review/head \( -name CLAUDE.md -o -name CLAUDE.local.md \) -type f -delete
           find review/head -type d -name .claude -prune -exec rm -rf {} +
 
-      # Pinned to the v1.0.248 commit. Bump deliberately after reading the
-      # diff: this action sees a repo secret.
+      # Prints whether the token signs in, never the token: a malformed or
+      # rejected secret otherwise shows up only as an empty review.
+      - name: Check the Claude sign-in
+        if: env.HAS_TOKEN == 'true' && steps.pr.outputs.skip != 'true'
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          case "$CLAUDE_CODE_OAUTH_TOKEN" in sk-ant-oat01-*) shape=ok ;; *) shape=unexpected ;; esac
+          echo "token shape: ${shape}, length ${#CLAUDE_CODE_OAUTH_TOKEN}"
+          cd "$RUNNER_TEMP"
+          npx -y @anthropic-ai/claude-code@2.1.310 -p "Reply with the word ok." --max-turns 1 \
+            --output-format json > claude-auth.json 2>/dev/null || true
+          jq -r '"is_error=\(.is_error) api_error_status=\(.api_error_status // "none") result=\((.result // "") | .[0:120])"' \
+            claude-auth.json 2>/dev/null || echo "no result from the sign-in check"
+
+      # Pinned to the v1.0.262 commit (Claude Code 2.1.310). Bump deliberately
+      # after reading the diff: this action sees a repo secret.
       - name: Review
         id: review
         if: env.HAS_TOKEN == 'true' && steps.pr.outputs.skip != 'true'
-        uses: anthropics/claude-code-action@1d6de8cb0c237e7c15e9e1bdf973826ebae490cc # v1.0.248
+        uses: anthropics/claude-code-action@925afb53776cf1a2b738c6bdbed37b4d4000ef13 # v1.0.262
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ github.token }}
-          show_full_output: true
           prompt: |
             You are reviewing pull request #${{ env.PR_NUMBER }} in ${{ github.repository }}.
             Base: ${{ steps.pr.outputs.base_sha }}. Head: ${{ steps.pr.outputs.head_sha }}.
