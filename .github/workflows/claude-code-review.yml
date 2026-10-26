@@ -13,8 +13,9 @@
 # becomes exactly one `review:*` label (review:clean when nothing survives).
 #
 # The diff is untrusted. Git runs only in the workflow's own steps: they write
-# the diff, the commit list and the PR head's files (symlinks removed) under
-# review/, and Claude gets no shell at all, only reads scoped to review/ and
+# the diff, the commit list and the PR head's files (symlinks and CLAUDE.md
+# files removed) under review/. Claude gets no shell at all: only reads inside
+# the working directory (the trusted base plus review/, with .git denied) and
 # the inline-comment tool. Nothing from the pull request is built, installed
 # or run, and the summary is posted by the workflow, not by Claude. Never give
 # Claude Bash here: git's own flags (-O, --output) can run programs.
@@ -96,9 +97,19 @@ jobs:
           cp CLAUDE.md DESIGN.md review/rules/
           git -c core.quotePath=false diff --no-ext-diff --no-textconv "${BASE_SHA}...pr/head" > review/pr.diff
           git log --no-decorate --format='%h %s%n%b' "${BASE_SHA}..pr/head" > review/commits.txt
-          git archive pr/head | tar -x -C review/head
-          # A symlink in the PR could point Read at /proc or .git/config.
+          # read-tree + checkout-index, not git archive: archive obeys the PR's own
+          # .gitattributes (export-ignore, export-subst) and could hide or rewrite
+          # files from the review.
+          GIT_INDEX_FILE="$RUNNER_TEMP/pr-index" git read-tree pr/head
+          GIT_INDEX_FILE="$RUNNER_TEMP/pr-index" git -c core.symlinks=false \
+            -c filter.lfs.smudge= -c filter.lfs.process= -c filter.lfs.required=false \
+            checkout-index -a --prefix=review/head/
           find review/head -type l -delete
+          # Claude Code would load a CLAUDE.md beside any file it reads as trusted
+          # instructions, so a PR could tell its own review to pass. The diff still
+          # shows these files.
+          find review/head \( -name CLAUDE.md -o -name CLAUDE.local.md \) -type f -delete
+          find review/head -type d -name .claude -prune -exec rm -rf {} +
 
       # Pinned to the v1.0.248 commit. Bump deliberately after reading the
       # diff: this action sees a repo secret.
