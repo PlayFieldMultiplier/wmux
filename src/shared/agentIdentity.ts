@@ -764,6 +764,7 @@ export const AGENT_IDENTITIES = [
     roleBinding: false,
     resume: { picker: '--resume', exact: '--session {id}', idFormat: 'uuid' },
     process: { packages: ['@earendil-works/pi-coding-agent', '@mariozechner/pi-coding-agent'] },
+    detect: 'screen',
     setup: {
       binary: 'pi',
       card: 'when-installed',

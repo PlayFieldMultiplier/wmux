@@ -399,6 +399,20 @@ export class PTYBridge {
     }
   }
 
+  /**
+   * A grid-only question the flushed output finished (AgentDetector
+   * approvalReady), read only once the renderer has been sent that output: it
+   * applies the chunk before it answers the viewport read. Taken on the batch
+   * timer only: an input path's flush is followed by an invalidation, which
+   * drops the request, and with no window it waits for the next flush.
+   */
+  private recheckFinishedQuestion(ptyId: string): void {
+    const win = this.getWindow();
+    const detector = this.agentDetectors.get(ptyId);
+    if (!win || win.isDestroyed() || !detector?.takeApprovalRecheckRequest()) return;
+    this.recheckQuietApproval(ptyId, detector);
+  }
+
   setupDataForwarding(ptyId: string): void {
     const instance = this.ptyManager.get(ptyId);
     if (!instance) return;
@@ -963,6 +977,7 @@ export class PTYBridge {
           this.pendingTimers.delete(ptyId);
           try {
             this.flushPending(ptyId);
+            this.recheckFinishedQuestion(ptyId);
           } catch (err) {
             console.error('[PTYBridge] Error processing data:', err);
             // Best-effort: drain any remaining bytes raw to the renderer so

@@ -5,8 +5,15 @@ import { AgentProcessTracker, type PidWatcher, type ProcessTreeEntry } from '../
 import { RingBuffer } from '../RingBuffer';
 import { PromptEventLog } from '../PromptEventLog';
 import type { AgentSignal } from '../../shared/hooks/signal-types';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 const APPROVAL = 'Would you like to run the following command?\r\n';
+// Pi 1.4.0 live capture (src/main/pty/__tests__/fixtures): the raw trust selector and its rendered grid.
+const piCapture = JSON.parse(readFileSync(join(__dirname, '../../main/pty/__tests__/fixtures/pi-1.4.0-capture.json'), 'utf8')) as {
+  chunks: { trust: string };
+  screens: { trust: string[] };
+};
 const SHELL_RETURN = '\x1b]133;D;0\x07\x1b]133;A\x07';
 
 function fakePty() {
@@ -274,6 +281,31 @@ describe('fresh authoritative identity enables bannerless detector patterns', ()
     expect(read).toHaveBeenCalledTimes(1);
     expect(events).toHaveBeenCalledTimes(1);
   });
+
+  it.each(['identity first', 'selector first', 'selector first, after another agent'] as const)(
+    'recovers Pi\'s trust selector drawn before or after its process identity (%s)', async (order) => {
+      // The screen is read from the bridge's own ring, as the daemon's reader
+      // does: a read before the chunk is written there sees no selector.
+      bridge.cleanup();
+      const ring = new RingBuffer(65536);
+      pty = fakePty();
+      bridge.setupDataForwarding(pty.pty, ring, 'pane-a', new PromptEventLog());
+      bridge.on('agent', events);
+      vi.advanceTimersByTime(1);
+      const read = vi.fn(async () => ({
+        rows: ring.readAll().toString().includes('Trust project folder') ? piCapture.screens.trust : [],
+        isCurrent: () => true,
+      }));
+      bridge.setApprovalScreenReader(read);
+      if (order === 'identity first') bridge.noteAgentProcess({ slug: 'pi', alive: true, observedAt: Date.now() });
+      if (order === 'selector first, after another agent') bridge.noteAgentProcess({ slug: 'claude', alive: true, observedAt: Date.now() });
+      pty.feed(piCapture.chunks.trust);
+      if (order !== 'identity first') bridge.noteAgentProcess({ slug: 'pi', alive: true, observedAt: Date.now() });
+      await vi.waitFor(() => expect(events).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+      expect(events.mock.calls[0]?.[0]).toMatchObject({ sessionId: 'pane-a', event: { agent: 'Pi', status: 'awaiting_input' } });
+      expect(read).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it.each(['input', 'resize', 'shell', 'death', 'replacement', 'dispose', 'same-id-reuse'] as const)(
     'rejects a quiet screen render overtaken by %s', async (change) => {
