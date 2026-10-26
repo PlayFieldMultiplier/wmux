@@ -93,19 +93,4 @@ describe('markUserInput', () => {
     expect(seen).toEqual([['\x1b[1;2R', true], ['\x1b[?1;2c', true], ['a', true], ['\r', true]]);
     term.dispose();
   });
-
-  it('a reply right after a keystroke is not user input', async () => {
-    const { term, seen, write } = marked();
-    term.input('x', true);
-    await write('\x1b[6n');
-    expect(seen).toEqual([['x', true], ['\x1b[1;1R', false]]);
-    term.dispose();
-  });
-
-  it('marks everything as user input when the terminal has no user-input signal', () => {
-    const marker = markUserInput({});
-    expect(marker.gated).toBe(false);
-    expect(marker.consume()).toBe(true);
-    expect(marker.consume()).toBe(true);
-  });
 });

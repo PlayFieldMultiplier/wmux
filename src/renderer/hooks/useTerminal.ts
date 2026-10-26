@@ -2827,6 +2827,8 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
         data,
       ).catch((err) => console.error('[wmux:onData] chunk write failed:', err));
 
+      // A reply is not part of a command the user typed.
+      if (!fromUser) return;
       if (data === '\r' || data === '\n') {
         const cmd = inputBuffer.trim();
         if (cmd.length > 1) {
