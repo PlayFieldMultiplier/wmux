@@ -198,6 +198,10 @@ describe('X6 ② reboot-survival durability', () => {
     // noteUserKeystroke helper (so direct-write bytes get the same side
     // effects), but the contract is unchanged — only real input retracts.
     expect(body).toMatch(/noteUserKeystroke\(data\)/);
+    // Only data xterm marks as user input reaches the clear path: its answers
+    // to terminal queries (DA1, cursor reports, ...) arrive on onData too.
+    expect(body).toMatch(/const fromUser = userInput\.consume\(\);/);
+    expect(body).toMatch(/if \(fromUser && data !== /);
     // focus reports must be excluded from the clear path
     expect(body).toMatch(/\\x1b\[I/);
     expect(body).toMatch(/\\x1b\[O/);

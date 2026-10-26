@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { Terminal } from '@xterm/headless';
-import { gateUserInput } from '../userInputGate';
+import { gateUserInput, markUserInput } from '../userInputGate';
 
 function wired() {
   const term = new Terminal({ cols: 40, rows: 6, allowProposedApi: true });
@@ -57,5 +57,55 @@ describe('gateUserInput', () => {
     gate('a');
     gate('\x1b[1;1R');
     expect(sent).toEqual(['a', '\x1b[1;1R']);
+  });
+});
+
+describe('markUserInput', () => {
+  function marked() {
+    // kittyKeyboard on, as wmux turns it on where the host supports it, so the
+    // kitty flags query is answered.
+    const term = new Terminal({ cols: 40, rows: 6, allowProposedApi: true, vtExtensions: { kittyKeyboard: true } });
+    const marker = markUserInput(term as never);
+    const seen: Array<[string, boolean]> = [];
+    term.onData((d) => seen.push([d, marker.consume()]));
+    const write = (s: string) => new Promise<void>((resolve) => term.write(s, resolve));
+    return { term, marker, seen, write };
+  }
+
+  it('marks xterm\'s answers to queries as not user input', async () => {
+    const { term, marker, seen, write } = marked();
+    expect(marker.gated).toBe(true);
+    // DA1, DA2, CPR, the kitty keyboard flags query, OSC 11 colour.
+    await write('\x1b[c\x1b[>c\x1b[6n\x1b[?u\x1b]11;?\x07');
+    const replies = seen.map(([d]) => d);
+    expect(replies.some((d) => d.startsWith('\x1b[?') && d.endsWith('c'))).toBe(true);
+    // eslint-disable-next-line no-control-regex
+    expect(replies.some((d) => /^\x1b\[\d+;\d+R$/.test(d))).toBe(true);
+    // eslint-disable-next-line no-control-regex
+    expect(replies.some((d) => /^\x1b\[\?\d+u$/.test(d))).toBe(true);
+    expect(seen.every(([, fromUser]) => !fromUser)).toBe(true);
+    term.dispose();
+  });
+
+  it('marks typed input as user input, even when it reads like a reply', () => {
+    const { term, seen } = marked();
+    for (const key of ['\x1b[1;2R', '\x1b[?1;2c', 'a', '\r']) term.input(key, true);
+    expect(seen).toEqual([['\x1b[1;2R', true], ['\x1b[?1;2c', true], ['a', true], ['\r', true]]);
+    term.dispose();
+  });
+
+  it('a reply right after a keystroke is not user input', async () => {
+    const { term, seen, write } = marked();
+    term.input('x', true);
+    await write('\x1b[6n');
+    expect(seen).toEqual([['x', true], ['\x1b[1;1R', false]]);
+    term.dispose();
+  });
+
+  it('marks everything as user input when the terminal has no user-input signal', () => {
+    const marker = markUserInput({});
+    expect(marker.gated).toBe(false);
+    expect(marker.consume()).toBe(true);
+    expect(marker.consume()).toBe(true);
   });
 });
