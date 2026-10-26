@@ -116,6 +116,29 @@ const shipsComputerUseMac = process.platform === 'darwin' && fs.existsSync(COMPU
 const COMPUTER_USE_WIN_STAGE = path.join(__dirname, 'dist', 'computer-use-windows');
 const shipsComputerUseWin = process.platform === 'win32' && fs.existsSync(COMPUTER_USE_WIN_STAGE);
 
+// Resolve the signing identity by its SHA-1 fingerprint, not by name.
+// `find-identity` searches every keychain in the default list — in CI that is
+// the temporary build keychain AND login.keychain-db (release.yml) — so a
+// name match can pick up a stale or foreign-team certificate, and two
+// renewals sharing one common name make `codesign --sign <name>` ambiguous.
+// Require exactly one identity carrying this build's team suffix.
+function resolveDeveloperIdIdentity(hook: string): { sha1: string; name: string } {
+  const { APPLE_TEAM_ID } = process.env;
+  const identities: string = require('child_process').execFileSync('security', ['find-identity', '-v', '-p', 'codesigning'], {
+    encoding: 'utf8',
+  });
+  const matches = [...identities.matchAll(/\b([0-9A-F]{40})\s+"(Developer ID Application: [^"]+)"/gi)]
+    .filter(([, , name]) => name.includes(`(${APPLE_TEAM_ID})`));
+  const fingerprints = new Set(matches.map(([, sha1]) => sha1));
+  if (fingerprints.size !== 1) {
+    throw new Error(
+      `[${hook}] Expected exactly one "Developer ID Application" identity for team ${APPLE_TEAM_ID}, found ${fingerprints.size}.`,
+    );
+  }
+  const [sha1] = fingerprints;
+  return { sha1, name: matches[0][2] };
+}
+
 // macOS Developer ID signing + notarization은 packagerConfig가 아니라 아래
 // postPackage hook의 "맨 끝"에서 직접 수행한다(signMacAppIfConfigured).
 //
@@ -128,10 +151,10 @@ const shipsComputerUseWin = process.platform === 'win32' && fs.existsSync(COMPUT
 //
 // Apple 자격증명(APPLE_TEAM_ID/APPLE_ID/APPLE_APP_SPECIFIC_PASSWORD) 3개가
 // 모두 있을 때만 동작하고, 없으면 UNSIGNED 빌드를 그대로 만든다(로컬 dev나
-// secrets 미설정 CI). Developer ID Application identity는 keychain에서 자동
-// 탐색한다. entitlements는 hardened-runtime 예외(RunAsNode + node-pty)를
+// secrets 미설정 CI). The Developer ID Application identity is resolved by
+// team (resolveDeveloperIdIdentity). entitlements는 hardened-runtime 예외(RunAsNode + node-pty)를
 // 부여한다(build/entitlements.mac.plist).
-async function signMacAppIfConfigured(appPath: string): Promise<void> {
+async function signMacAppIfConfigured(appPath: string, terminalCoreDir?: string): Promise<void> {
   const { APPLE_TEAM_ID, APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD } = process.env;
   if (process.platform !== 'darwin') return;
   if (!APPLE_TEAM_ID || !APPLE_ID || !APPLE_APP_SPECIFIC_PASSWORD) {
@@ -142,17 +165,44 @@ async function signMacAppIfConfigured(appPath: string): Promise<void> {
   const { signAsync } = require('@electron/osx-sign');
   const { notarize } = require('@electron/notarize');
 
+  const identity = resolveDeveloperIdIdentity('postPackage');
+  const entitlements = path.join(__dirname, 'build', 'entitlements.mac.plist');
+
+  // Signing rewrites the terminal module's Mach-O, and its manifest.json is
+  // sealed with the app, so it cannot be corrected after signAsync. Sign the
+  // module first with the options signAsync would use, record that digest,
+  // and have signAsync skip the module: the shipped manifest then describes
+  // the shipped file.
+  let signedTerminalCore: string | undefined;
+  if (terminalCoreDir) {
+    const { binary } = JSON.parse(fs.readFileSync(path.join(terminalCoreDir, 'manifest.json'), 'utf8'));
+    signedTerminalCore = path.resolve(terminalCoreDir, binary);
+    require('child_process').execFileSync('codesign', [
+      '--sign', identity.sha1, '--force', '--timestamp', '--options', 'runtime',
+      '--entitlements', entitlements, signedTerminalCore,
+    ], { stdio: 'inherit' });
+    require('./scripts/verify-native-terminal-package.cjs').recordShippedDigest(terminalCoreDir);
+  }
+
   // 1) inside-out 서명: 모든 헬퍼 .app과 .node 네이티브 바이너리까지 서명한다.
+  //    Except the terminal module, signed above and skipped here.
   console.log('[postPackage] 코드 서명 (Developer ID, hardened runtime)...');
   await signAsync({
     app: appPath,
+    // The same identity that signed the terminal module above.
+    identity: identity.sha1,
     // The computer-use helper keeps the signature build.sh gave it.
-    ignore: (filePath: string) => filePath.includes(COMPUTER_USE_MAC_RESOURCE),
+    ignore: (filePath: string) => filePath.includes(COMPUTER_USE_MAC_RESOURCE) || path.resolve(filePath) === signedTerminalCore,
     optionsForFile: () => ({
       hardenedRuntime: true,
-      entitlements: path.join(__dirname, 'build', 'entitlements.mac.plist'),
+      entitlements,
     }),
   });
+  if (terminalCoreDir) {
+    // Fail before notarization if signAsync touched the module after all.
+    const { platform, arch } = JSON.parse(fs.readFileSync(path.join(terminalCoreDir, 'manifest.json'), 'utf8'));
+    require('./scripts/verify-native-terminal-package.cjs').verifyIntegrity(terminalCoreDir, platform, arch);
+  }
 
   // 2) 노타라이즈: notarytool로 제출 후 완료까지 대기(수 분 소요).
   console.log('[postPackage] 노타라이즈 (notarytool, 수 분 소요)...');
@@ -190,26 +240,7 @@ async function signMacDmgIfConfigured(dmgPath: string): Promise<void> {
 
   const { execFileSync } = require('child_process');
   const { notarize } = require('@electron/notarize');
-
-  // Resolve the signing identity by its SHA-1 fingerprint, not by name.
-  // `find-identity` searches every keychain in the default list — in CI that is
-  // the temporary build keychain AND login.keychain-db (release.yml) — so a
-  // name match can pick up a stale or foreign-team certificate, and two
-  // renewals sharing one common name make `codesign --sign <name>` ambiguous.
-  // Require exactly one identity carrying this build's team suffix.
-  const identities: string = execFileSync('security', ['find-identity', '-v', '-p', 'codesigning'], {
-    encoding: 'utf8',
-  });
-  const matches = [...identities.matchAll(/\b([0-9A-F]{40})\s+"(Developer ID Application: [^"]+)"/gi)]
-    .filter(([, , name]) => name.includes(`(${APPLE_TEAM_ID})`));
-  const fingerprints = new Set(matches.map(([, sha1]) => sha1));
-  if (fingerprints.size !== 1) {
-    throw new Error(
-      `[postMake] Expected exactly one "Developer ID Application" identity for team ${APPLE_TEAM_ID}, found ${fingerprints.size}.`,
-    );
-  }
-  const [sha1] = fingerprints;
-  const identityName = matches[0][2];
+  const { sha1, name: identityName } = resolveDeveloperIdIdentity('postMake');
 
   // 1) Sign the disk image. --timestamp is required for notarization; --force
   //    lets a re-run re-sign an image left behind by a previous attempt.
@@ -457,9 +488,16 @@ const config: ForgeConfig = {
       //    (asar 재패킹 + daemon-bundle node-pty 복사 + chmod)이 끝난 "뒤"에
       //    수행해야 서명이 깨지지 않는다. darwin이 아니거나 자격증명 없으면 no-op.
       if (appBundle) {
-        await signMacAppIfConfigured(path.join(outputPath, appBundle));
+        await signMacAppIfConfigured(
+          path.join(outputPath, appBundle),
+          shipsTerminalCore ? path.join(resourcesDir, 'wmux-native') : undefined,
+        );
       }
       if (shipsTerminalCore) {
+        // The shipped manifest must describe the shipped binary, after signing.
+        require('./scripts/verify-native-terminal-package.cjs').verifyIntegrity(
+          path.join(resourcesDir, 'wmux-native'), targetPlatform, targetArch,
+        );
         // Use the same Electron-as-Node runtime as the detached daemon, after
         // signing, and only the module/DLLs from this package. No running app or
         // user settings are touched. A broken native option must fail the build.

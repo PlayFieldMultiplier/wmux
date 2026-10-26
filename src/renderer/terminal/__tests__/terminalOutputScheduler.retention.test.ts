@@ -13,6 +13,9 @@ import {
   isTerminalRetained,
   markTerminalDirty,
   markTerminalClean,
+  noteTerminalDirectWrite,
+  promoteTerminalToPriorityDrain,
+  __setQueryFlushPosterForTests,
   __resetTerminalOutputSchedulerForTests,
   type SchedulableTerminal,
 } from '../terminalOutputScheduler';
@@ -173,5 +176,316 @@ describe('terminalOutputScheduler — hidden-pane retention', () => {
     noteTerminalInput(t); // interactive window → direct path (retention is hidden-only)
     writeTerminalOutput(t, 'echo', { foreground: true, retainWhenHidden: true });
     expect(t.writes).toEqual(['echo']);
+  });
+});
+
+// A retained pane still answers terminal queries: xterm is its only responder,
+// so a chunk that completes a query hands the whole backlog to xterm in the
+// next task (one coalesced flush for every query chunk that lands before it).
+describe('terminalOutputScheduler — hidden-pane retention answers queries', () => {
+  const DA1 = '\x1b[c';
+
+  /** Fake xterm that "answers" every query it parses, like onData → pty.write. */
+  function makeAnsweringTerminal(): SchedulableTerminal & { writes: string[]; answers: number } {
+    const t = {
+      writes: [] as string[],
+      answers: 0,
+      write(data: string) {
+        t.writes.push(data);
+        // Count queries only once they are complete in the parsed stream.
+        t.answers = t.writes.join('').split(DA1).length - 1;
+      },
+    };
+    return t;
+  }
+
+  /** Run the next posted flush task (routed through fake timers below). */
+  const settle = () => vi.advanceTimersByTime(1);
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    __resetTerminalOutputSchedulerForTests();
+    __setQueryFlushPosterForTests((run) => { setTimeout(run, 0); });
+  });
+
+  afterEach(() => {
+    __setQueryFlushPosterForTests(null);
+    __resetTerminalOutputSchedulerForTests();
+    vi.useRealTimers();
+  });
+
+  const hidden = { foreground: false, retainWhenHidden: true } as const;
+
+  it('a query chunk flushes the retained backlog in order, in the next task', () => {
+    const t = makeAnsweringTerminal();
+    writeTerminalOutput(t, 'one ', hidden);
+    writeTerminalOutput(t, 'two ', hidden);
+    writeTerminalOutput(t, `probe${DA1}`, hidden);
+    expect(t.writes).toEqual([]);
+    writeTerminalOutput(t, 'after', hidden); // joins the same backlog
+    settle();
+    expect(joined(t)).toBe(`one two probe${DA1}after`);
+    expect(t.answers).toBe(1);
+    expect(getQueuedCharCount(t)).toBe(0);
+  });
+
+  it('ten query chunks in one tick produce one flush, answered in order and once each', () => {
+    const t = makeAnsweringTerminal();
+    let expected = '';
+    for (let i = 0; i < 10; i++) {
+      const chunk = `q${i}${DA1}`;
+      expected += chunk;
+      writeTerminalOutput(t, chunk, hidden);
+    }
+    settle();
+    expect(t.writes).toEqual([expected]);
+    expect(t.answers).toBe(10);
+    vi.advanceTimersByTime(60_000);
+    expect(t.writes).toHaveLength(1);
+  });
+
+  it('a chunk without a query stays retained', () => {
+    const t = makeAnsweringTerminal();
+    writeTerminalOutput(t, '\x1b[2 q\x1b[3S\x1b[>5u frame\x05', hidden);
+    vi.advanceTimersByTime(60_000);
+    expect(t.writes).toEqual([]);
+    expect(isTerminalRetained(t)).toBe(true);
+  });
+
+  it('retention resumes after a query flush', () => {
+    const t = makeAnsweringTerminal();
+    writeTerminalOutput(t, DA1, hidden);
+    settle();
+    writeTerminalOutput(t, 'later', hidden);
+    vi.advanceTimersByTime(60_000);
+    expect(joined(t)).toBe(DA1);
+    expect(getQueuedCharCount(t)).toBe(5);
+    expect(isTerminalRetained(t)).toBe(true);
+  });
+
+  it('a query split across two chunks flushes once it completes', () => {
+    const t = makeAnsweringTerminal();
+    writeTerminalOutput(t, 'text\x1b[', hidden);
+    settle();
+    expect(t.writes).toEqual([]);
+    writeTerminalOutput(t, 'c', hidden);
+    settle();
+    expect(joined(t)).toBe(`text${DA1}`);
+    expect(t.answers).toBe(1);
+  });
+
+  it('a split query is seen even when a query flush ended mid-sequence', () => {
+    const t = makeAnsweringTerminal();
+    writeTerminalOutput(t, `${DA1}tail\x1b]11;`, hidden);
+    settle();
+    expect(joined(t)).toBe(`${DA1}tail\x1b]11;`);
+    writeTerminalOutput(t, '?\x07', hidden);
+    settle();
+    expect(joined(t)).toBe(`${DA1}tail\x1b]11;?\x07`);
+  });
+
+  it('a query split across a hide (visible start, hidden end) still flushes', () => {
+    const t = makeAnsweringTerminal();
+    noteTerminalInput(t);
+    writeTerminalOutput(t, 'shown\x1b[', { foreground: true, retainWhenHidden: true });
+    expect(joined(t)).toBe('shown\x1b[');
+    writeTerminalOutput(t, 'c', hidden);
+    settle();
+    expect(joined(t)).toBe(`shown${DA1}`);
+    expect(t.answers).toBe(1);
+  });
+
+  it('a query whose start went straight to xterm (resync repaint tail) is still seen', () => {
+    const t = makeAnsweringTerminal();
+    discardTerminalOutput(t); // the resync drops the splitter with the backlog
+    t.write('repaint\x1b['); // owner writes the held tail directly
+    noteTerminalDirectWrite(t, 'repaint\x1b[');
+    writeTerminalOutput(t, 'c', hidden);
+    settle();
+    expect(joined(t)).toBe(`repaint${DA1}`);
+    expect(t.answers).toBe(1);
+  });
+
+  it('a long unfinished payload does not hide a later query', () => {
+    const t = makeAnsweringTerminal();
+    writeTerminalOutput(t, `\x1b]52;c;${'A'.repeat(10_000)}`, hidden);
+    writeTerminalOutput(t, `${'B'.repeat(10_000)}\x07text`, hidden);
+    settle();
+    expect(t.writes).toEqual([]);
+    writeTerminalOutput(t, DA1, hidden);
+    settle();
+    expect(t.answers).toBe(1);
+    expect(getQueuedCharCount(t)).toBe(0);
+  });
+
+  it('live query bytes reach xterm unmuted even when the last writer was the replay writer', () => {
+    const t = makeAnsweringTerminal();
+    const replayed: string[] = [];
+    const replayWrite = (data: string) => replayed.push(data);
+    writeTerminalOutput(t, 'history', { ...hidden, write: replayWrite });
+    writeTerminalOutput(t, DA1, hidden);
+    settle();
+    expect(replayed).toEqual(['history']);
+    expect(t.writes).toEqual([DA1]);
+    expect(t.answers).toBe(1);
+  });
+
+  it('a dirty pane drops the query chunk like any other hidden bytes', () => {
+    const t = makeAnsweringTerminal();
+    markTerminalDirty(t);
+    writeTerminalOutput(t, DA1, hidden);
+    settle();
+    expect(t.writes).toEqual([]);
+    expect(getQueuedCharCount(t)).toBe(0);
+    expect(isTerminalDirty(t)).toBe(true);
+  });
+
+  it('bytes a dirty pane dropped do not leave a stale split behind', () => {
+    const t = makeAnsweringTerminal();
+    markTerminalDirty(t);
+    writeTerminalOutput(t, 'dropped\x1b[', hidden); // never reaches xterm
+    markTerminalClean(t);
+    writeTerminalOutput(t, 'c', hidden);
+    settle();
+    expect(t.writes).toEqual([]);
+    expect(isTerminalRetained(t)).toBe(true);
+  });
+
+  it('a query chunk that overflows the cap is parsed at once, not dropped with the backlog', () => {
+    const t = makeAnsweringTerminal();
+    writeTerminalOutput(t, 'x'.repeat(MAX_QUEUE_CHARS), hidden);
+    writeTerminalOutput(t, DA1, hidden);
+    expect(joined(t)).toBe('x'.repeat(MAX_QUEUE_CHARS) + DA1);
+    expect(t.answers).toBe(1);
+    expect(isTerminalDirty(t)).toBe(false);
+  });
+
+  it('a pending query is parsed at once when the backlog overflows before its flush runs', () => {
+    const t = makeAnsweringTerminal();
+    writeTerminalOutput(t, DA1, hidden);
+    writeTerminalOutput(t, 'x'.repeat(MAX_QUEUE_CHARS), hidden);
+    expect(t.answers).toBe(1);
+    expect(isTerminalDirty(t)).toBe(false);
+    settle(); // the posted flush finds nothing left to do
+    expect(t.writes.join('')).toBe(DA1 + 'x'.repeat(MAX_QUEUE_CHARS));
+  });
+
+  it('an overflow without a query still marks the pane dirty', () => {
+    const t = makeAnsweringTerminal();
+    writeTerminalOutput(t, 'x'.repeat(MAX_QUEUE_CHARS), hidden);
+    writeTerminalOutput(t, 'y', hidden);
+    settle();
+    expect(t.writes).toEqual([]);
+    expect(isTerminalDirty(t)).toBe(true);
+  });
+
+  it('a reveal flush clears the pending query, so a new hidden backlog stays retained', () => {
+    const t = makeAnsweringTerminal();
+    writeTerminalOutput(t, DA1, hidden);
+    flushTerminalOutput(t); // shown before the task ran
+    writeTerminalOutput(t, 'hidden again', hidden);
+    settle();
+    expect(joined(t)).toBe(DA1);
+    expect(isTerminalRetained(t)).toBe(true);
+  });
+
+  it('several panes querying at once are flushed in the same task', () => {
+    const a = makeAnsweringTerminal();
+    const b = makeAnsweringTerminal();
+    writeTerminalOutput(a, `a${DA1}`, hidden);
+    writeTerminalOutput(b, `b${DA1}`, hidden);
+    vi.advanceTimersToNextTimer();
+    expect([a.answers, b.answers]).toEqual([1, 1]);
+  });
+
+  it('a reveal via the priority drain clears the pending query, so a new hidden backlog stays retained', () => {
+    const t = makeAnsweringTerminal();
+    let postedFlush: (() => void) | null = null;
+    __setQueryFlushPosterForTests((run) => { postedFlush = run; });
+    writeTerminalOutput(t, DA1, hidden);
+    promoteTerminalToPriorityDrain(t); // shown before the flush task ran
+    vi.advanceTimersByTime(20); // the priority drain delivers the query
+    expect(t.answers).toBe(1);
+    writeTerminalOutput(t, 'hidden again', hidden);
+    (postedFlush as (() => void) | null)?.(); // the late task finds nothing to do
+    expect(joined(t)).toBe(DA1);
+    expect(isTerminalRetained(t)).toBe(true);
+  });
+
+  it('showing the pane before the flush runs leaves the backlog to the normal path, answered once', () => {
+    const t = makeAnsweringTerminal();
+    writeTerminalOutput(t, `boot${DA1}`, hidden);
+    // Reveal inside the window: the owner flushes the retained backlog.
+    flushTerminalOutput(t);
+    expect(t.answers).toBe(1);
+    settle();
+    noteTerminalInput(t);
+    writeTerminalOutput(t, 'shown', { foreground: true, retainWhenHidden: true });
+    vi.runAllTimers();
+    expect(joined(t)).toBe(`boot${DA1}shown`);
+    expect(t.answers).toBe(1);
+  });
+
+  it('a sync frame opened after the query (pane shown) keeps its hold; its release drains in order', () => {
+    const t = makeAnsweringTerminal();
+    writeTerminalOutput(t, `old${DA1}`, hidden);
+    // Pane shown inside the window; the TUI opens a DEC 2026 frame.
+    writeTerminalOutput(t, '\x1b[?2026hframe', { foreground: true, retainWhenHidden: true });
+    settle();
+    expect(t.writes).toEqual([]); // the query flush does not break the open frame
+    writeTerminalOutput(t, 'end\x1b[?2026l', { foreground: true, retainWhenHidden: true });
+    vi.runAllTimers();
+    expect(joined(t)).toBe(`old${DA1}\x1b[?2026hframeend\x1b[?2026l`);
+    expect(t.answers).toBe(1);
+  });
+
+  it('showing the pane afterwards does not answer the query a second time', () => {
+    const t = makeAnsweringTerminal();
+    writeTerminalOutput(t, `boot${DA1}`, hidden);
+    settle();
+    writeTerminalOutput(t, 'idle', hidden);
+    expect(t.answers).toBe(1);
+    // Reveal: the owner flushes the retained remainder, then live output flows.
+    flushTerminalOutput(t);
+    noteTerminalInput(t);
+    writeTerminalOutput(t, 'shown', { foreground: true, retainWhenHidden: true });
+    vi.runAllTimers();
+    expect(joined(t)).toBe(`boot${DA1}idleshown`);
+    expect(t.answers).toBe(1);
+  });
+
+  it('logs the query parse at a bounded rate', () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      const t = makeAnsweringTerminal();
+      for (let i = 0; i < 5; i++) {
+        writeTerminalOutput(t, DA1, { ...hidden, ptyId: 'daemon-1' });
+        settle();
+      }
+      const lines = log.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('query-parse'));
+      expect(lines).toEqual(['[wmux:hidden-retention] query-parse ptyId=daemon-1 chars=3']);
+    } finally {
+      log.mockRestore();
+    }
+  });
+});
+
+describe('terminalOutputScheduler — query flush task (default poster)', () => {
+  beforeEach(() => __resetTerminalOutputSchedulerForTests());
+  afterEach(() => {
+    __resetTerminalOutputSchedulerForTests();
+    vi.useRealTimers();
+  });
+
+  it('runs the flush in a posted task, not on a timer (timers throttle in a hidden window)', async () => {
+    // setTimeout is frozen: only a non-timer task can deliver the flush.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const t = makeTerminal();
+    writeTerminalOutput(t, 'x\x1b[c', { foreground: false, retainWhenHidden: true });
+    expect(t.writes).toEqual([]);
+    for (let i = 0; i < 50 && t.writes.length === 0; i++) {
+      await new Promise<void>((resolve) => { setImmediate(resolve); });
+    }
+    expect(joined(t)).toBe('x\x1b[c');
   });
 });

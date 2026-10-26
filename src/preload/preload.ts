@@ -802,6 +802,17 @@ const electronAPI = {
         | { ok: true; presets: import('../shared/fanoutPreset').FanoutPreset[] }
         | ({ ok: false } & import('../shared/fanoutPreset').FanoutIssue)
       >,
+    getCustomAgents: () =>
+      ipcRenderer.invoke(IPC.FANOUT_CUSTOM_AGENTS_GET) as Promise<{
+        agents: import('../shared/customAgents').CustomAgent[];
+        dropped: import('../shared/customAgents').CustomAgentDropped[];
+        unreadable?: true;
+      }>,
+    setCustomAgents: (agents: unknown[]) =>
+      ipcRenderer.invoke(IPC.FANOUT_CUSTOM_AGENTS_SET, agents) as Promise<
+        | { ok: true; agents: import('../shared/customAgents').CustomAgent[] }
+        | ({ ok: false } & import('../shared/customAgents').CustomAgentIssue)
+      >,
   },
   // Command Deck Phase 2 — the Commander brain. `send` runs one orchestrator
   // turn (resolves with the accept/reject verdict; the turn's content streams

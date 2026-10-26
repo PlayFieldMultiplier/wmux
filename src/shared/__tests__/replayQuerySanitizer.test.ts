@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { stripReplayQuerySequences } from '../replayQuerySanitizer';
+import { containsTerminalQuery, stripReplayQuerySequences } from '../replayQuerySanitizer';
 
 const strip = (s: string): string =>
   stripReplayQuerySequences(Buffer.from(s, 'latin1')).toString('latin1');
@@ -89,5 +89,51 @@ describe('stripReplayQuerySequences', () => {
       '\x1b[?2031h\x1b[?1049h\x1b[2J\x1b[H' +
         '\x1b[39B\x1b[K\x1b[42;1H\x1b[40;3H\x1b[?25h',
     );
+  });
+});
+
+describe('containsTerminalQuery', () => {
+  it('detects the probes a TUI sends at startup', () => {
+    for (const q of [
+      '\x1b[c', // DA1
+      '\x1b[>c', // DA2
+      '\x1b[6n', // CPR
+      '\x1b[?6n', // DECXCPR
+      '\x1b[?u', // kitty keyboard flags
+      '\x1b]11;?\x07', // OSC 11 background color (BEL)
+      '\x1b]10;?\x1b\\', // OSC 10 foreground color (ST)
+      '\x1b[?2026$p', // DECRQM
+      '\x1b[>0q', // XTVERSION
+      '\x1bP+q544e\x1b\\', // XTGETTCAP
+    ]) {
+      expect(containsTerminalQuery(`out\x1b[1mtext${q}more`), JSON.stringify(q)).toBe(true);
+    }
+  });
+
+  it('ignores look-alikes that only change display state', () => {
+    for (const s of [
+      '\x1b[2 q', // DECSCUSR cursor style
+      '\x1b[3S', // scroll up
+      '\x1b[S',
+      '\x1b[>5u', // kitty keyboard push
+      '\x1b[<u', // kitty keyboard pop
+      '\x1b[22;0t\x1b[23;0t\x1b[24t', // title push/pop, DECSLPP
+      '\x1b]11;#000000\x07', // OSC 11 set
+      '\x1b]0;done?\x07', // title ending in "?"
+      '\x1b[?2026h\x1b[?25l\x1b[12;6H\x1b[0m', // a TUI frame
+      'plain text, no escapes',
+      'binary\x05bytes', // ENQ: stripped from replay, never a flush trigger
+    ]) {
+      expect(containsTerminalQuery(s), JSON.stringify(s)).toBe(false);
+    }
+  });
+
+  it('does not match an incomplete query', () => {
+    expect(containsTerminalQuery('\x1b[')).toBe(false);
+    expect(containsTerminalQuery('\x1b]11;?')).toBe(false);
+  });
+
+  it('gives the same answer on repeated calls (no global lastIndex state)', () => {
+    for (let i = 0; i < 4; i++) expect(containsTerminalQuery('\x1b[c')).toBe(true);
   });
 });

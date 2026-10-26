@@ -21,8 +21,10 @@
 // reason it is not selectable, and is refused rather than launched on a guess.
 
 import type { AgentSlug } from './agentIdentity';
+import { customAgentLaunchLine, customAgentStem, customLaunchPrefixLength, findCustomAgent, normalizeCustomAgentsReport, type CustomAgent } from './customAgents';
+import { tokenize } from './agentResume';
 import { EFFORT_TOKEN_RE, launchGrammarFor } from './agentLaunchOptions';
-import { KNOWN_AGENT_STEMS, ROLE_BINDING_MODEL_MAX, type RoleBinding } from './orchestratorRole';
+import { bindingEnforcesModel, bindingEnforcesSkipPermissions, KNOWN_AGENT_STEMS, ROLE_BINDING_MODEL_MAX, type RoleBinding } from './orchestratorRole';
 import { FANOUT_MAX_TASKS } from './workTask';
 
 /** Why a CLI is listed but not selectable. */
@@ -192,8 +194,25 @@ export const FANOUT_EXTRA_AGENT_STEMS: ReadonlySet<string> = new Set(
   FANOUT_AGENTS.map((a) => a.stem).filter((s) => !KNOWN_AGENT_STEMS.has(s)),
 );
 
-export function fanoutAgentSpec(stem: string): FanoutAgentSpec | undefined {
-  return FANOUT_AGENTS.find((a) => a.stem === stem);
+/**
+ * The fan-out spec for a stem: a registry agent from the table above, or one of
+ * the operator's custom agents when the caller passes them (preset rows and
+ * the Settings editor do; a caller's own `agents[k]` does not). A custom agent
+ * is selectable: the operator defined it. Its model pin and Unattended exist
+ * only when the operator gave it a model flag and unattended flags.
+ */
+export function fanoutAgentSpec(stem: string, customAgents?: readonly CustomAgent[]): FanoutAgentSpec | undefined {
+  const registry = FANOUT_AGENTS.find((a) => a.stem === stem);
+  if (registry) return registry;
+  const custom = findCustomAgent(stem, customAgents);
+  if (!custom) return undefined;
+  return {
+    stem: customAgentStem(custom),
+    label: custom.name,
+    selectable: true,
+    modelFlag: !!custom.modelFlag,
+    unattendedFlags: custom.unattendedFlags ?? '',
+  };
 }
 
 /** The selectable stems, for error messages and the Settings dropdown. */
@@ -272,7 +291,7 @@ export function validateFanoutAgentChoice(
   input: unknown,
   /** allowEffort: a caller's `agents[k]` only. Preset rows refuse it — the
    *  Settings editor has no effort field and would drop it on save. */
-  opts: { allowUnattended?: boolean; allowEffort?: boolean } = {},
+  opts: { allowUnattended?: boolean; allowEffort?: boolean; customAgents?: readonly CustomAgent[] } = {},
 ): { ok: true; choice: FanoutAgentChoice } | ({ ok: false } & FanoutIssue) {
   const fail = (i: FanoutIssue): { ok: false } & FanoutIssue => ({ ok: false, ...i });
   if (input === null || typeof input !== 'object' || Array.isArray(input)) {
@@ -287,7 +306,7 @@ export function validateFanoutAgentChoice(
     }
   }
   const agent = typeof src.agent === 'string' ? src.agent.trim().slice(0, 48) : '';
-  const spec = fanoutAgentSpec(agent);
+  const spec = fanoutAgentSpec(agent, opts.customAgents);
   const choices = selectableFanoutAgents().join(', ');
   if (!spec) {
     return fail(issue('agent-unknown', { agent, choices }, `unknown agent "${agent}" — use one of ${choices}`));
@@ -301,7 +320,9 @@ export function validateFanoutAgentChoice(
       ),
     );
   }
-  const choice: FanoutAgentChoice = { agent };
+  // The stem as the table spells it: a hand-edited `"Tern"` row names the
+  // same custom agent as `"tern"`, and every later comparison is exact.
+  const choice: FanoutAgentChoice = { agent: spec.stem };
   if (src.model !== undefined && src.model !== null && src.model !== '') {
     const model = validateFanoutModel(src.model);
     if (!model.ok) return fail(model);
@@ -409,8 +430,9 @@ export function applyFanoutAgentFlags(
   cwd: string,
   /** The pane's platform (the renderer passes electronAPI.platform). */
   platform: string,
+  customAgents?: readonly CustomAgent[],
 ): string {
-  const spec = fanoutAgentSpec(choice.agent);
+  const spec = fanoutAgentSpec(choice.agent, customAgents);
   if (!spec) return command;
   const m = /^\s*(\S+)/.exec(command);
   if (!m) return command;
@@ -422,7 +444,11 @@ export function applyFanoutAgentFlags(
   }
   if (choice.unattended && spec.unattendedFlags) parts.push(spec.unattendedFlags);
   if (parts.length === 0) return command;
-  const at = m.index + m[0].length;
+  // A custom agent takes its flags after its own Arguments (a subcommand).
+  const custom = FANOUT_AGENTS.some((a) => a.stem === spec.stem) ? undefined : findCustomAgent(spec.stem, customAgents);
+  const tokens = custom ? tokenize(command) : [];
+  const prefix = custom ? customLaunchPrefixLength(tokens.map((t) => (t.quoted ? null : t.value)), custom) : 0;
+  const at = prefix > 0 ? tokens[prefix].end : m.index + m[0].length;
   return `${command.slice(0, at)} ${parts.join(' ')}${command.slice(at)}`;
 }
 
@@ -483,6 +509,8 @@ export function fanoutPresetOutputFolder(preset: FanoutPreset): string {
  */
 export function normalizeFanoutPreset(
   input: unknown,
+  /** The operator's custom agents, which a row may name. */
+  customAgents?: readonly CustomAgent[],
 ): { ok: true; preset: FanoutPreset } | ({ ok: false } & FanoutIssue) {
   const fail = (i: FanoutIssue): { ok: false } & FanoutIssue => ({ ok: false, ...i });
   if (input === null || typeof input !== 'object' || Array.isArray(input)) {
@@ -506,7 +534,7 @@ export function normalizeFanoutPreset(
   }
   const items: FanoutAgentChoice[] = [];
   for (const [k, raw] of rawItems.entries()) {
-    const v = validateFanoutAgentChoice(raw, { allowUnattended: true });
+    const v = validateFanoutAgentChoice(raw, { allowUnattended: true, customAgents });
     if (!v.ok) {
       return fail({ code: v.code, params: { ...v.params, name, row: String(k + 1) }, error: `preset "${name}" row ${k + 1}: ${v.error}` });
     }
@@ -547,7 +575,10 @@ export interface FanoutPresetDropped {
  * dropped is REPORTED, not just skipped — Settings saves the whole list, so a
  * silently dropped row would otherwise be deleted from disk on the next save.
  */
-export function normalizeFanoutPresetsReport(input: unknown): { presets: FanoutPreset[]; dropped: FanoutPresetDropped[] } {
+export function normalizeFanoutPresetsReport(
+  input: unknown,
+  customAgents?: readonly CustomAgent[],
+): { presets: FanoutPreset[]; dropped: FanoutPresetDropped[] } {
   const presets: FanoutPreset[] = [];
   const dropped: FanoutPresetDropped[] = [];
   if (!Array.isArray(input)) return { presets, dropped };
@@ -562,7 +593,7 @@ export function normalizeFanoutPresetsReport(input: unknown): { presets: FanoutP
       dropped.push({ ...withName(nameOf(raw)), issue: issue('presets-over-cap', { cap }, `more than ${cap} presets`) });
       continue;
     }
-    const r = normalizeFanoutPreset(raw);
+    const r = normalizeFanoutPreset(raw, customAgents);
     if (!r.ok) {
       dropped.push({ ...withName(nameOf(raw)), issue: { code: r.code, params: r.params, error: r.error } });
       continue;
@@ -586,8 +617,8 @@ function withName(name: string | undefined): { name?: string } {
 }
 
 /** {@link normalizeFanoutPresetsReport} without the report. */
-export function normalizeFanoutPresets(input: unknown): FanoutPreset[] {
-  return normalizeFanoutPresetsReport(input).presets;
+export function normalizeFanoutPresets(input: unknown, customAgents?: readonly CustomAgent[]): FanoutPreset[] {
+  return normalizeFanoutPresetsReport(input, customAgents).presets;
 }
 
 /**
@@ -595,17 +626,59 @@ export function normalizeFanoutPresets(input: unknown): FanoutPreset[] {
  * everything that changes what the CLI is allowed to do, including codex's
  * one-session trust of its task folder.
  */
-export function describeFanoutAgentChoice(c: FanoutAgentChoice): string {
-  const spec = fanoutAgentSpec(c.agent);
+export function describeFanoutAgentChoice(c: FanoutAgentChoice, customAgents?: readonly CustomAgent[]): string {
+  const spec = fanoutAgentSpec(c.agent, customAgents);
+  // A custom agent is shown as it launches: its command, its Arguments, then
+  // its own model and unattended flags, in the order the line carries them.
+  const custom = FANOUT_AGENTS.some((a) => a.stem === c.agent) ? undefined : findCustomAgent(c.agent, customAgents);
   return [
-    c.agent,
+    custom ? custom.command : c.agent,
     c.agent === 'codex' ? '-c projects.<task folder>.trust_level=trusted' : '',
-    c.model ? `--model ${c.model}` : '',
+    custom?.args ?? '',
+    c.model ? `${custom?.modelFlag ?? '--model'} ${c.model}` : '',
     c.effort ? `effort ${c.effort}` : '',
     c.unattended && spec?.unattendedFlags ? spec.unattendedFlags : '',
   ]
     .filter((p) => p.length > 0)
     .join(' ');
+}
+
+/** The custom agents a fan-out task launches from: main's snapshot of the
+ *  list its approval described, when main sent one, so an edit in Settings
+ *  after the approval cannot change what runs; otherwise `current`. */
+export function fanoutLaunchCustomAgents(snapshot: unknown, current: readonly CustomAgent[]): readonly CustomAgent[] {
+  return Array.isArray(snapshot) ? normalizeCustomAgentsReport(snapshot).agents : current;
+}
+
+/** A binding agent the launch cannot swap in: not a registry agent a role
+ *  runs, not one of `extraAgents` (a preset row's fan-out-only CLIs), and not
+ *  a custom agent in the list (gone, or not loaded). A task bound to it must
+ *  not launch, as the swap would leave the default agent's line in place. */
+export function unresolvedCustomAgent(
+  agent: string | undefined,
+  customAgents: readonly CustomAgent[],
+  extraAgents?: ReadonlySet<string>,
+): boolean {
+  return !!agent && !KNOWN_AGENT_STEMS.has(agent) && !extraAgents?.has(agent) && !findCustomAgent(agent, customAgents);
+}
+
+/** One "Roles resolve to" line of a fan-out approval: what the role launches,
+ *  a custom agent as its own command line. */
+export function describeFanoutRole(role: string, b: RoleBinding | undefined, customAgents: readonly CustomAgent[]): string {
+  if (!b || (!b.agent && !b.model && !b.args)) return `${role} → the default agent (no binding)`;
+  if (unresolvedCustomAgent(b.agent, customAgents)) return `${role} → ${b.agent} (not an agent a role can launch: the task will not launch)`;
+  const custom = b.agent ? findCustomAgent(b.agent, customAgents) : undefined;
+  const parts: string[] = [custom ? customAgentLaunchLine(custom) : b.agent || 'the default agent'];
+  // A custom agent's model goes after the flag the operator gave it.
+  const modelFlag = custom?.modelFlag ?? '--model';
+  if (b.model) {
+    parts.push(bindingEnforcesModel(b, customAgents) ? `${modelFlag} ${b.model}` : `(model "${b.model}" is configured but will NOT be applied)`);
+  }
+  if (b.args) parts.push(b.args);
+  // A custom agent gets neither: wmux knows no launch grammar for it.
+  if (b.effort && !custom) parts.push(`effort ${b.effort}`);
+  if (bindingEnforcesSkipPermissions(b)) parts.push('(permission prompts skipped)');
+  return `${role} → ${parts.join(' ')}`;
 }
 
 /** Shipped when no preset file exists yet: agents filled, models blank,

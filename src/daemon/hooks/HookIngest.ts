@@ -234,9 +234,10 @@ export interface HookIngestDeps {
    * Persist a resume binding for a pane. Main used to relay this as
    * `daemon.setResumeBinding` (and spool it to disk when the daemon was
    * unreachable); ingesting here makes it a plain local call with no RPC and
-   * no spool window — the daemon IS the destination.
+   * no spool window — the daemon IS the destination. `paneExact`: the
+   * signal's own ptyId named this pane (not a workspace or cwd route).
    */
-  applyResumeBinding: (ptyId: string, binding: ResumeBinding) => void;
+  applyResumeBinding: (ptyId: string, binding: ResumeBinding, paneExact: boolean) => void;
   /** #1823: slug of the agent process alive in the pane right now, if known. */
   liveAgentFor?: (ptyId: string) => string | undefined;
   /**
@@ -1380,7 +1381,7 @@ export class HookIngest {
             ...(permissionMode ? { permissionMode } : {}),
             ...(transcriptPath ? { transcriptPath } : {}),
             ts: signal.ts,
-          });
+          }, signal.ptyId === sessionId);
           // Refusals are logged above; a rebind is logged too, so a pane that
           // switched conversations shows which signal moved it.
           if (prevSessionId !== signal.agentSessionId) {

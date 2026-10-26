@@ -86,6 +86,11 @@ export class IncompleteEscapeSplitter {
   private state = ScanState.Ground;
   private held = '';
 
+  /** `maxHeld` bounds the held copy for a caller that only scans the output:
+   *  past it the held prefix is dropped (the scan state is kept), so a long
+   *  string payload is not copied. Such a caller never gets that prefix. */
+  constructor(private readonly maxHeld = Infinity) {}
+
   push(data: string): string {
     let state = this.state;
     let lastGround = -1;
@@ -96,10 +101,12 @@ export class IncompleteEscapeSplitter {
     this.state = state;
     if (lastGround === -1) {
       this.held += data;
+      if (this.held.length > this.maxHeld) this.held = '';
       return '';
     }
     const out = this.held + data.slice(0, lastGround + 1);
     this.held = data.slice(lastGround + 1);
+    if (this.held.length > this.maxHeld) this.held = '';
     return out;
   }
 

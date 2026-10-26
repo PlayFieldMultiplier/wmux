@@ -161,6 +161,12 @@ errors in one shot; `wmux doctor --performance` adds the retention state,
 hidden/retained/dirty pane counts, snapshot queue depth, the last switch's
 mechanism and timing, and 5-minute counters (overflows, resyncs, failures).
 
+## Stability benchmark: 20 panes for 30 minutes
+
+[20 terminals for 30 minutes](performance/twenty-panes.md) describes a
+re-runnable soak benchmark that measures input latency, lost input, output
+stalls and memory growth with 20 panes open.
+
 ## Filing a performance issue
 
 A report with evidence gets fixed much faster. Attach:

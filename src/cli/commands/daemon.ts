@@ -5,6 +5,7 @@ import { childStdio } from '../consoleStdio';
 import { sendDaemonStringRequest, isDefinitelyNotRunning } from '../client';
 import { printResult, ensureOk } from '../utils';
 import {
+  daemonProcessArgs,
   ensureDaemon,
   type DaemonLauncherDeps,
 } from '../../shared/daemon/daemonLauncherCore';
@@ -271,7 +272,7 @@ function runForeground(): void {
     process.exitCode = 1;
     return;
   }
-  const child = spawn(process.execPath, [script], {
+  const child = spawn(process.execPath, daemonProcessArgs(script), {
     // The daemon writes where this CLI does, including a console its fds 1 and 2 do not reach.
     stdio: childStdio(),
     env: {

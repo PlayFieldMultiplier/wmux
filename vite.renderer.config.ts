@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react';
 import fs from 'node:fs';
 import path from 'node:path';
 import pkg from './package.json';
+import { asciiOnlyBundle } from './scripts/lib/ascii-only-bundle.mjs';
 
 // The PDF preview (#2150) runs pdf.js with its worker, CMaps (CJK text),
 // standard fonts and WebAssembly decoders as plain same-origin files under
@@ -60,7 +61,10 @@ function dropOrtWasm(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [react(), pdfjsAssets(), dropOrtWasm()],
+  // ASCII-only output: one character above one byte makes V8 keep the whole
+  // script source as UTF-16 (scripts/lib/ascii-only-bundle.mjs).
+  esbuild: { charset: 'ascii' },
+  plugins: [react(), pdfjsAssets(), dropOrtWasm(), asciiOnlyBundle()],
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
   },
@@ -68,7 +72,7 @@ export default defineConfig({
   // is an ES module worker: onnxruntime-web is ESM.
   worker: {
     format: 'es',
-    plugins: () => [dropOrtWasm()],
+    plugins: () => [dropOrtWasm(), asciiOnlyBundle()],
   },
   build: {
     // The renderer only ever runs inside this app's own Chromium (Electron 41 →

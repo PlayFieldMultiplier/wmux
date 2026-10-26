@@ -180,6 +180,12 @@ export interface ChatV2StoredRecord {
   model: string;
   /** `active` or the `handed-off` tombstone. */
   state: 'active' | 'handed-off';
+  /**
+   * Set on a tombstone the chat became because a terminal agent in another
+   * pane took the conversation (`terminalHolds`), with that pane's id when the
+   * binding came from the pane itself.
+   */
+  continuedIn?: { paneId?: string };
   providerSessionId: string;
   /**
    * The conversation already exists in the agent (it came from the terminal),
@@ -281,6 +287,12 @@ export interface ChatV2HostDeps {
     isDirectory: (dir: string) => boolean;
     realpath: (p: string) => string;
   };
+  /**
+   * The conversations terminal agents hold right now, checked with
+   * `terminalHolds` once the records are loaded: a binding learned before
+   * then found no chat to yield.
+   */
+  terminalBindings?: () => Array<{ paneId: string; agent: string; sessionId: string; paneExact: boolean }>;
   /** Panes whose terminal Codex holds thread `threadId` on the shared app-server. */
   codexThreadOwners?: (threadId: string) => string[];
   /** fromTerminal's waits (transcript quiet, pane free). Tests shorten them. */
@@ -307,6 +319,16 @@ export interface ChatV2Host {
   ownsPane(paneId: string): boolean;
   /** The provider session ids of every active (not handed-off) record: a launch line naming one is refused. */
   activeSessionIds(): string[];
+  /**
+   * The terminal agent (`agent`) in pane `paneId` is bound to conversation
+   * `sessionId`. What a person runs in a terminal wins: every active chat in
+   * another pane on that conversation yields, its driver stopped and its
+   * record the `handed-off` tombstone, naming `paneId` only when `paneExact`
+   * (the binding came from that pane itself, not a hook routed to it by its
+   * folder). Never refuses and never throws; the chat's own pane (its
+   * driver's hooks carry it) is ignored.
+   */
+  terminalHolds(paneId: string, agent: string, sessionId: string, paneExact: boolean): void;
   /** In-process listener for every push (phone nudges). Returns an unsubscribe. */
   onPush(listener: (push: ChatV2EventsPush) => void): () => void;
   /** Load records, sweep orphan drivers (identity-matched only), expire their approvals. */

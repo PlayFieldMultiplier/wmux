@@ -10,6 +10,8 @@ import { useChatV2 } from './useChatV2';
 import { getChatV2Bridge } from './bridge';
 import { ChatKindBadge } from '../Chat/ChatKindBadge';
 import { ContinueInChat, usePaneMove } from './ContinueInChat';
+import { useStore } from '../../stores';
+import { focusPaneByPtyId } from '../../hooks/useNotificationListener';
 
 const NEAR_BOTTOM_PX = 48;
 
@@ -195,6 +197,9 @@ export default function ChatV2View({ paneId, active, onTerminal, cwd }: {
 
   const binding = view.binding;
   const handedOff = binding.status === 'handed-off';
+  // Handed off because a terminal agent in another pane took the conversation.
+  const continuedIn = handedOff ? binding.continuedIn : undefined;
+  const continuedInPane = continuedIn?.paneId;
   const running = !!view.session.busy || binding.status === 'running' || binding.status === 'needs-input';
   const canHandOff = binding.capabilities.toTerminal && !handedOff && !running && binding.status !== 'starting';
   const continueInTerminal = async () => {
@@ -228,8 +233,12 @@ export default function ChatV2View({ paneId, active, onTerminal, cwd }: {
         {error}
         {handedOff ? (
           <div className="wmux-chatv2-notice wmux-chatv2-handed-off">
-            <span>{S.handedOff}</span>
-            <button type="button" className="wmux-chatv2-link" onClick={onTerminal}>{t('chat.openTerminal')}</button>
+            <span>{continuedIn ? t(continuedInPane ? 'chat.continuedInPane' : 'chat.continuedInTerminal') : S.handedOff}</span>
+            {continuedInPane ? (
+              <button type="button" className="wmux-chatv2-link" onClick={() => focusPaneByPtyId(() => useStore.getState(), continuedInPane)}>{t('chat.showPane')}</button>
+            ) : !continuedIn && (
+              <button type="button" className="wmux-chatv2-link" onClick={onTerminal}>{t('chat.openTerminal')}</button>
+            )}
             {/* Shown only while no agent runs in the pane (viewState); the daemon checks again. */}
             <ContinueInChat paneId={paneId} tombstone className="wmux-chatv2-link" />
             <button type="button" className="wmux-chatv2-btn" title={S.startNewChatHint} onClick={() => void controller.close()}>{S.startNewChat}</button>

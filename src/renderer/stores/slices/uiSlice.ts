@@ -111,6 +111,7 @@ import {
   type OrchestratorRoleBindings,
   type RoleBinding,
 } from '../../../shared/orchestratorRole';
+import type { CustomAgent } from '../../../shared/customAgents';
 import {
   generateId,
   createLeafPane,
@@ -375,6 +376,12 @@ export interface UISlice {
   orchestratorRoleBindings: OrchestratorRoleBindings;
   /** Upsert one role's binding; an empty/undefined binding clears it. */
   setOrchestratorRoleBinding: (role: string, binding: RoleBinding | undefined) => void;
+
+  // The operator's custom agents, as main last returned them (main owns the
+  // list: Settings → Roles & fan-out). Read by the launch rewrites; never
+  // persisted in the session.
+  customAgents: CustomAgent[];
+  setCustomAgents: (agents: CustomAgent[]) => void;
 
   // Orchestrator full-power mode (BYOB approach A): load the user's Claude
   // Code ecosystem (skills, CLAUDE.md, hooks) into brain turns. Default OFF —
@@ -1535,6 +1542,12 @@ export const createUISlice: StateCreator<StoreState, [['zustand/immer', never]],
     } else {
       delete state.orchestratorRoleBindings[key];
     }
+  }),
+
+  customAgents: [],
+
+  setCustomAgents: (agents) => set((state) => {
+    state.customAgents = agents;
   }),
 
   deckBrainFullPower: false,

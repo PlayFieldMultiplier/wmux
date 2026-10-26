@@ -1,0 +1,47 @@
+name: Rust engine nightly
+
+# rust-engine-daemon.yml every night on main, so main keeps daemon coverage on
+# the rust engine between the pull requests that run it (native-terminal-core.yml
+# runs only on a path match). It does not run the four-hour soak.
+#
+# A red run opens (or comments on) the `Nightly red: <workflow>` issue
+# (scripts/ci-failure-issue.mjs), which the triage bot picks up; the next green
+# run closes it. This workflow has no pull request trigger, so only nightly
+# and manual runs on main count as its green runs.
+on:
+  schedule:
+    # 18:41 UTC = 03:41 KST. Off the hour: scheduled runs on :00 queue longest.
+    - cron: '41 18 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  daemon:
+    uses: ./.github/workflows/rust-engine-daemon.yml
+
+  # A job of its own after the tests, as in runtime.yml: a timed-out job never
+  # runs its own `if: failure()` step.
+  report:
+    name: Report to issue
+    needs: daemon
+    if: always() && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Files and closes the issue (issues), reads the run's jobs and recent
+    # runs (actions) and a cancelled job's annotations (checks: a timeout).
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+      checks: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '>=24.21.0 <25'
+      - name: Open, update or close the nightly issue
+        run: node scripts/ci-failure-issue.mjs
+        env:
+          GH_TOKEN: ${{ github.token }}
