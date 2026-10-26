@@ -1046,11 +1046,28 @@ describe('a release refusal told before its draft was decided', () => {
     r.svc.onActEffect(effect('checks-failing, draft-kept-tag-made'));
     expect(r.svc.get(req.requestId)).toMatchObject({ state: 'refused', refusal: 'checks-failing, draft-kept-tag-made', updatedAt: r.state.now });
     expect(outcomes()).toHaveLength(2);
-    expect(outcomes()[1]).toMatchObject({ clientPostId: `approval-outcome:${req.requestId}:draft`, body: 'The tag was already made: its draft release is kept on GitHub for you to publish or delete' });
-    // Told again (a second emit), or with another reason: nothing more.
+    expect(outcomes()[1]).toMatchObject({
+      clientPostId: `approval-outcome:${req.requestId}:draft`, title: expect.stringMatching(/^Draft release still on GitHub: /),
+      body: 'The tag was already made: its draft release is kept on GitHub for you to publish or delete',
+    });
+    // Told again (a second emit), or with no draft code: nothing more.
     r.svc.onActEffect(effect('checks-failing, draft-kept-tag-made'));
-    r.svc.onActEffect(effect('identity-changed, draft-not-deleted'));
+    r.svc.onActEffect(effect('identity-changed'));
     expect(outcomes()).toHaveLength(2);
     expect(r.svc.get(req.requestId)?.refusal).toBe('checks-failing, draft-kept-tag-made');
+  });
+
+  it('a refusal stored cut at 300 characters is amended all the same, its draft code kept', async () => {
+    const r = rig();
+    const req = await r.ask(DEV, { action: 'release', tagName: 'v1', reason: 'ship' });
+    const long = Array.from({ length: 30 }, (_, i) => `gh-${400 + i}-reason`).join(', ');
+    const effect = (reason: string): Parameters<ApprovalService['onActEffect']>[0] => ({
+      id: `act:${req.requestId}`, requestId: req.requestId, action: 'release', repoKey: KEY, payloadHash: 'h', status: 'refused', attempt: 1, reason, draftId: 50, createdAt: 1, updatedAt: 1,
+    });
+    r.svc.onActEffect(effect(long));
+    r.svc.onActEffect(effect(`${long}, draft-kept-tag-made`));
+    const refusal = r.svc.get(req.requestId)?.refusal ?? '';
+    expect(refusal.length).toBeLessThanOrEqual(300);
+    expect(refusal.endsWith(', draft-kept-tag-made')).toBe(true);
   });
 });
