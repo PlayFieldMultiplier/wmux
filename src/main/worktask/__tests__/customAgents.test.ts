@@ -27,7 +27,7 @@ describe('custom agent store', () => {
     );
     expect(loadFanoutPresetsReport(dir).presets.map((p) => p.name)).toEqual(['Birds']);
     const users = customAgentUsers({}, dir);
-    expect([...users]).toEqual([['tern', { users: ['the Birds preset'], modelPins: [] }]]);
+    expect([...users]).toEqual([['tern', { users: ['the Birds preset'], modelPins: [], unattendedPins: [] }]]);
 
     const refused = await saveCustomAgents([gull], users, dir);
     expect(refused).toMatchObject({ ok: false, code: 'agent-in-use', params: { stem: 'tern', by: 'the Birds preset' } });
@@ -45,12 +45,24 @@ describe('custom agent store', () => {
       'utf8',
     );
     const users = customAgentUsers({ Builder: { agent: 'tern' } }, dir);
-    expect([...users]).toEqual([['tern', { users: ['the Builder role', 'the Birds preset'], modelPins: ['the Birds preset'] }]]);
+    expect([...users]).toEqual([['tern', { users: ['the Builder role', 'the Birds preset'], modelPins: ['the Birds preset'], unattendedPins: [] }]]);
     expect(await saveCustomAgents([{ ...withFlag, modelFlag: '-M' }], users, dir))
       .toMatchObject({ ok: false, code: 'model-in-use', params: { stem: 'tern', by: 'the Birds preset' } });
     expect(await saveCustomAgents([tern], users, dir)).toMatchObject({ ok: false, code: 'model-in-use' });
+    // A preset running it unattended keeps its unattended flags.
+    const auto = { ...withFlag, unattendedFlags: '--auto' };
+    expect(await saveCustomAgents([auto], users, dir)).toMatchObject({ ok: true });
+    fs.writeFileSync(
+      getFanoutPresetsPath(dir),
+      JSON.stringify({ presets: [{ name: 'Birds', items: [{ agent: 'tern', model: 'm1', unattended: true }], worktree: true }] }),
+      'utf8',
+    );
+    const autoUsers = customAgentUsers({}, dir);
+    expect(autoUsers.get('tern')?.unattendedPins).toEqual(['the Birds preset']);
+    expect(await saveCustomAgents([withFlag], autoUsers, dir)).toMatchObject({ ok: false, code: 'unattended-in-use' });
+    expect(await saveCustomAgents([{ ...auto, unattendedFlags: '--yolo' }], autoUsers, dir)).toMatchObject({ ok: false, code: 'unattended-in-use' });
     // The same flag, other fields changed: fine.
-    expect(await saveCustomAgents([{ ...withFlag, args: '--fast' }], users, dir)).toMatchObject({ ok: true });
+    expect(await saveCustomAgents([{ ...auto, args: '--fast' }], autoUsers, dir)).toMatchObject({ ok: true });
     // A role alone keeps the agent from being removed.
     expect(await saveCustomAgents([], customAgentUsers({ Builder: { agent: 'tern' } }, dir), dir))
       .toMatchObject({ ok: false, code: 'agent-in-use', params: { by: 'the Builder role, the Birds preset' } });

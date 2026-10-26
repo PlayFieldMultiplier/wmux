@@ -1,6 +1,6 @@
 import { AGENT_ROWS, agentLauncherStem } from './agentIdentity';
 import { launcherStem, tokenize } from './agentResume';
-import { customAgentLaunchLine, findCustomAgent, isFlagToken, type CustomAgent } from './customAgents';
+import { customAgentLaunchLine, customLaunchPrefixLength, findCustomAgent, isFlagToken, type CustomAgent } from './customAgents';
 import {
   EFFORT_TOKEN_RE, freshContextGrammarFor, hasPermissionChoice, isSkipPermissionsToken, launchGrammarFor,
   permissionChoiceIndexes,
@@ -725,7 +725,13 @@ export function applyRoleBinding(
     !findCustomAgent(stem, options?.customAgents)) return unchanged;
   // Gate 2 — and only when the line is an invocation, not prose. A spawned
   // process is one by construction (see ApplyRoleBindingOptions.spawnedProcess).
-  if (!options?.spawnedProcess && !looksLikeLaunchInvocation(tokens)) return unchanged;
+  // A custom agent's own Arguments (a subcommand such as `chat`) belong to
+  // its launcher: the prose gate reads the line after them, and the flags
+  // below go after them too, where such a CLI takes its options.
+  const customAgent = KNOWN_AGENT_STEMS.has(stem) ? undefined : findCustomAgent(stem, options?.customAgents);
+  const prefix = customAgent ? customLaunchPrefixLength(tokens.map((t) => (t.quoted ? null : t.value)), customAgent) : 0;
+  const gated = prefix > 0 ? [tokens[0], ...tokens.slice(1 + prefix)] : tokens;
+  if (!options?.spawnedProcess && !looksLikeLaunchInvocation(gated)) return unchanged;
 
   // A binding that names an agent only applies to that launcher. Launching a
   // DIFFERENT known agent than the role names is a silent policy deviation.
@@ -828,7 +834,7 @@ export function applyRoleBinding(
   }
 
   let out = command;
-  const at = tokens[0].end;
+  const at = tokens[prefix].end;
   const inserted = [
     ...(injectModel && grammar ? [grammar.flag(model as string)] : []),
     ...optionTokens,

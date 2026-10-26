@@ -26,6 +26,7 @@ import {
   FANOUT_EXTRA_AGENT_STEMS,
   applyFanoutAgentFlags,
   commandLauncherStem,
+  fanoutAgentSpec,
   fanoutChoiceBinding,
   validateFanoutAgentChoice,
   type FanoutAgentChoice,
@@ -1570,6 +1571,18 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
     // unchanged path below. Invalid = the task fails; it is never launched on
     // the default agent instead of the one that was asked for.
     let agentChoice: FanoutAgentChoice | undefined;
+    // A choice naming no registry agent may name a custom agent: read main's
+    // current list first, so a task spawned before the startup copy arrived,
+    // or after the file changed, runs the definition main approved.
+    const named = (params.agentChoice as { agent?: unknown } | undefined)?.agent;
+    if (typeof named === 'string' && !fanoutAgentSpec(named)) {
+      try {
+        const fresh = await window.electronAPI?.fanout?.getCustomAgents?.();
+        if (fresh && Array.isArray(fresh.agents)) useStore.getState().setCustomAgents(fresh.agents);
+      } catch {
+        // the copy in the store is still used; validation below decides
+      }
+    }
     if (params.agentChoice !== undefined) {
       // Main already refused a caller's own `agents[k]` naming a custom agent;
       // a preset row may name one, so the operator's list is passed here.

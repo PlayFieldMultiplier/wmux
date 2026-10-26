@@ -3343,6 +3343,7 @@ export const pl = {
   'settings.customAgentsIssue.args-flag': 'Argumenty zawierają już {flag}. Usuń go stamtąd: wmux dodaje go sam.',
   'settings.customAgentsIssue.command-posix-path': '"{command}" nie jest ścieżką Windows. Wpisz pełną ścieżkę z literą dysku, np. C:\\Tools\\tern.exe.',
   'settings.customAgentsIssue.model-in-use': '{by} przypina model do "{stem}", więc jego flagi modelu nie można zmienić. Najpierw usuń te modele.',
+  'settings.customAgentsIssue.unattended-in-use': '{by} uruchamia "{stem}" bez nadzoru, więc jego flag trybu bez nadzoru nie można zmienić. Najpierw wyłącz tam ten tryb.',
   'settings.startupDirectory': 'Katalog startowy',
   'settings.startupDirectoryDesc': 'Nowe terminale zaczynają tutaj. Puste = Twój katalog domowy. Profile obszaru roboczego mogą nadpisać to per obszar.',
   'settings.startupDirectoryPlaceholder': 'np. C:\\Projekty',

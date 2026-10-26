@@ -55,6 +55,8 @@ export interface CustomAgentUsers {
   presets: string[];
   /** Those of them that pin a model, which goes after the agent's model flag. */
   modelPins: string[];
+  /** Presets with a row that runs it with its unattended flags. */
+  unattendedPins: string[];
 }
 
 export function customAgentUsers(
@@ -73,6 +75,7 @@ export function customAgentUsers(
       ...roles.filter((role) => !!bindings[role]?.model),
       ...usedBy.filter((p) => p.items.some((it) => names(it.agent) && !!it.model)).map((p) => p.name),
     ],
+    unattendedPins: usedBy.filter((p) => p.items.some((it) => names(it.agent) && it.unattended === true)).map((p) => p.name),
   };
 }
 
@@ -114,6 +117,10 @@ export function applyCustomAgentDraft(
     if (before && users.modelPins.length > 0 && (before.modelFlag ?? '') !== (v.agents[editIndex].modelFlag ?? '')) {
       const by = users.modelPins.join(', ');
       return { ok: false, issue: { code: 'model-in-use', params: { stem, by }, error: `"${stem}" has a model pinned by ${by}; its model flag cannot change` } };
+    }
+    if (before && users.unattendedPins.length > 0 && (before.unattendedFlags ?? '') !== (v.agents[editIndex].unattendedFlags ?? '')) {
+      const by = users.unattendedPins.join(', ');
+      return { ok: false, issue: { code: 'unattended-in-use', params: { stem, by }, error: `"${stem}" runs unattended in ${by}; its unattended flags cannot change` } };
     }
   }
   return { ok: true, next: v.agents };

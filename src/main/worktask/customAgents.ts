@@ -27,18 +27,33 @@ export function getCustomAgentsPath(dir: string = getWmuxDir()): string {
   return path.join(dir, 'custom-agents.json');
 }
 
+type CustomAgentsReport = { agents: CustomAgent[]; dropped: CustomAgentDropped[]; unreadable?: true };
+
+/** The last read per file, keyed by its mtime and size: input.send consults
+ *  the list on every line typed into a role-bound pane. */
+const cache = new Map<string, { mtimeMs: number; size: number; report: CustomAgentsReport }>();
+
 /** The custom agents in force plus what could not be kept (shown in Settings). */
-export function loadCustomAgentsReport(
-  dir?: string,
-): { agents: CustomAgent[]; dropped: CustomAgentDropped[]; unreadable?: true } {
+export function loadCustomAgentsReport(dir?: string): CustomAgentsReport {
   const p = getCustomAgentsPath(dir);
-  if (!fs.existsSync(p)) return { agents: [], dropped: [] };
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(p);
+  } catch {
+    cache.delete(p);
+    return { agents: [], dropped: [] };
+  }
+  const hit = cache.get(p);
+  if (hit && hit.mtimeMs === stat.mtimeMs && hit.size === stat.size) return hit.report;
+  let report: CustomAgentsReport;
   try {
     const raw = JSON.parse(fs.readFileSync(p, 'utf8')) as { agents?: unknown };
-    return normalizeCustomAgentsReport(raw?.agents, { platform: process.platform });
+    report = normalizeCustomAgentsReport(raw?.agents, { platform: process.platform });
   } catch {
-    return { agents: [], dropped: [], unreadable: true };
+    report = { agents: [], dropped: [], unreadable: true };
   }
+  cache.set(p, { mtimeMs: stat.mtimeMs, size: stat.size, report });
+  return report;
 }
 
 export function loadCustomAgents(dir?: string): CustomAgent[] {
@@ -72,6 +87,12 @@ export async function saveCustomAgents(
       const by = use.modelPins.join(', ');
       return { ok: false, code: 'model-in-use', params: { stem, by }, error: `"${stem}" has a model pinned by ${by}; its model flag cannot change` };
     }
+    // A preset row running it unattended runs exactly these flags: changing
+    // them changes what that preset does, and clearing them drops its switch.
+    if (use.unattendedPins.length > 0 && (old?.unattendedFlags ?? '') !== (next.unattendedFlags ?? '')) {
+      const by = use.unattendedPins.join(', ');
+      return { ok: false, code: 'unattended-in-use', params: { stem, by }, error: `"${stem}" runs unattended in ${by}; its unattended flags cannot change` };
+    }
   }
   const p = getCustomAgentsPath(dir);
   // One backup of what is being replaced: entries the loader dropped stay
@@ -84,5 +105,12 @@ export async function saveCustomAgents(
     }
   }
   await atomicWriteJSON(p, { agents: v.agents });
+  // What was just written is what is in force, whatever the clock's resolution.
+  try {
+    const stat = fs.statSync(p);
+    cache.set(p, { mtimeMs: stat.mtimeMs, size: stat.size, report: { agents: v.agents, dropped: [] } });
+  } catch {
+    cache.delete(p);
+  }
   return { ok: true, agents: v.agents };
 }

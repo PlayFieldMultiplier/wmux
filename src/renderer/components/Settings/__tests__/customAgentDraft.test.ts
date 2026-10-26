@@ -7,7 +7,7 @@ const agents: CustomAgent[] = [
   { name: 'Tern', command: 'tern' },
   { name: 'Gull', command: 'gull', unattendedFlags: '--auto' },
 ];
-const unused = () => ({ roles: [], presets: [], modelPins: [] });
+const unused = () => ({ roles: [], presets: [], modelPins: [], unattendedPins: [] });
 
 describe('applyCustomAgentDraft', () => {
   it('saves an edit in place, so the list keeps its order', () => {
@@ -19,7 +19,7 @@ describe('applyCustomAgentDraft', () => {
     const users = customAgentUsers('tern', { Builder: { agent: 'tern' }, Reviewer: { agent: 'codex' } }, [
       { name: 'Birds', items: [{ agent: 'tern' }], worktree: true },
     ]);
-    expect(users).toEqual({ roles: ['Builder'], presets: ['Birds'], modelPins: [] });
+    expect(users).toEqual({ roles: ['Builder'], presets: ['Birds'], modelPins: [], unattendedPins: [] });
     const r = applyCustomAgentDraft(agents, { ...draftFromCustomAgent(agents[0]), command: 'tern2' }, 0, () => users);
     expect(r).toMatchObject({ ok: false, issue: { code: 'agent-in-use', params: { stem: 'tern', by: 'Builder, Birds' } } });
   });
@@ -27,7 +27,7 @@ describe('applyCustomAgentDraft', () => {
   it('refuses a new model flag while a role or preset pins a model to the agent', () => {
     const llm: CustomAgent[] = [{ name: 'Tern', command: 'tern', modelFlag: '--llm' }];
     const users = customAgentUsers('tern', { Builder: { agent: 'Tern', model: 'm1' } }, []);
-    expect(users).toEqual({ roles: ['Builder'], presets: [], modelPins: ['Builder'] });
+    expect(users).toEqual({ roles: ['Builder'], presets: [], modelPins: ['Builder'], unattendedPins: [] });
     const r = applyCustomAgentDraft(llm, { ...draftFromCustomAgent(llm[0]), modelFlag: '' }, 0, () => users);
     expect(r).toMatchObject({ ok: false, issue: { code: 'model-in-use', params: { stem: 'tern', by: 'Builder' } } });
   });

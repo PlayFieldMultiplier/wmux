@@ -53,7 +53,8 @@ export type CustomAgentIssueCode =
   | 'agent-in-use'
   | 'args-flag'
   | 'command-posix-path'
-  | 'model-in-use';
+  | 'model-in-use'
+  | 'unattended-in-use';
 
 export interface CustomAgentIssue {
   code: CustomAgentIssueCode;
@@ -71,6 +72,10 @@ export const CUSTOM_AGENT_NAME_MAX = 40;
 export const CUSTOM_AGENT_COMMAND_MAX = 260;
 export const CUSTOM_AGENT_ARGS_MAX = 200;
 export const CUSTOM_AGENT_FLAG_MAX = 64;
+/** A role binding or preset row stores the stem in a field capped at 48
+ *  characters (orchestratorRole ROLE_BINDING_AGENT_MAX): a longer program name
+ *  could be saved but never referenced. */
+export const CUSTOM_AGENT_STEM_MAX = 48;
 
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9 ._-]*$/;
 /** A program name with no folder: what PATH lookup takes. */
@@ -95,11 +100,12 @@ const FLAG_RE = /^-{1,2}[A-Za-z0-9][A-Za-z0-9._:-]*$/;
  * agent. Such an agent goes through a wrapper on PATH instead.
  */
 const GENERIC_COMMANDS: ReadonlySet<string> = new Set([
-  'nodejs', 'npx', 'npm', 'pnpm', 'pnpx', 'yarn', 'bunx', 'py', 'pip', 'pipx', 'uv', 'uvx', 'java',
-  'fish', 'dash', 'ksh', 'csh', 'tcsh', 'busybox', 'env', 'sudo', 'git', 'wmux',
+  'nodejs', 'npx', 'npm', 'pnpm', 'pnpx', 'yarn', 'bunx', 'tsx', 'ts-node', 'py', 'pip', 'pipx', 'uv', 'uvx',
+  'poetry', 'conda', 'java', 'cargo', 'go', 'dotnet', 'fish', 'dash', 'ksh', 'csh', 'tcsh', 'busybox', 'env',
+  'sudo', 'nohup', 'xargs', 'timeout', 'ssh', 'docker', 'podman', 'wsl', 'git', 'wmux',
 ]);
-/** The interpreters and shells, with any version suffix (`python3.12`, `node22`). */
-const VERSIONED_GENERIC_RE = /^(python|node|perl|ruby|php|bash|sh|zsh|pwsh|powershell|cmd|deno|bun)[\d.]*$/;
+/** The interpreters and shells, with any version suffix (`python3.12`, `node22`, `pypy3`). */
+const VERSIONED_GENERIC_RE = /^(python|pythonw|pypy|node|perl|ruby|php|bash|sh|zsh|pwsh|powershell|cmd|deno|bun)[\d.]*$/;
 
 function isGenericCommand(stem: string): boolean {
   return GENERIC_COMMANDS.has(stem) || VERSIONED_GENERIC_RE.test(stem);
@@ -140,6 +146,19 @@ export function findCustomAgent(stem: string, list: readonly CustomAgent[] | und
 /** What replaces the launcher token when a role or preset row picks it. */
 export function customAgentLaunchLine(agent: CustomAgent): string {
   return agent.args ? `${agent.command} ${agent.args}` : agent.command;
+}
+
+/**
+ * How many of `agent`'s own Arguments follow the launcher on a line, as
+ * tokens (`values[0]` is the launcher; a quoted token is passed as null): all
+ * of them, in order, or 0. They are part of what launches the agent (a
+ * subcommand such as `chat`), so the role rewrite places its flags after them
+ * and never reads them as prose.
+ */
+export function customLaunchPrefixLength(values: readonly (string | null)[], agent: CustomAgent): number {
+  const args = agent.args ? agent.args.split(' ') : [];
+  if (args.length === 0 || values.length < 1 + args.length) return 0;
+  return args.every((a, i) => values[1 + i] === a) ? args.length : 0;
 }
 
 /** Lookup key for a custom agent's name. */
@@ -196,9 +215,19 @@ export function normalizeCustomAgent(
     return fail(issue('name-invalid', { max: nameMax }, `name must be 1-${nameMax} characters: letters, digits, space . _ -`));
   }
 
+  // A field of the wrong type is refused, never read as absent: the agent
+  // would load with part of its definition silently missing.
+  for (const field of ['command', 'args', 'promptFlag', 'modelFlag', 'unattendedFlags'] as const) {
+    if (src[field] !== undefined && typeof src[field] !== 'string') {
+      return fail(issue(field === 'args' ? 'args-invalid' : field === 'command' ? 'command-invalid' : 'flag-invalid',
+        { name, field, command: '', max: String(CUSTOM_AGENT_ARGS_MAX) }, `"${name}": ${field} must be text`));
+    }
+  }
   const command = typeof src.command === 'string' ? src.command.trim() : '';
   const shown = command.slice(0, 80);
-  if (!command || command.length > CUSTOM_AGENT_COMMAND_MAX) {
+  // A trailing dot or space is dropped by Windows when it runs the program,
+  // but stays in the line wmux matches the agent on; refuse it outright.
+  if (!command || command.length > CUSTOM_AGENT_COMMAND_MAX || /[. ]$/.test(command)) {
     return fail(issue('command-invalid', { name, command: shown }, `"${name}": command must be a program name or an absolute path`));
   }
   if (!BARE_COMMAND_RE.test(command)) {
@@ -221,7 +250,7 @@ export function normalizeCustomAgent(
     return fail(issue('command-posix-path', { name, command: shown }, `"${name}": "${shown}" is not a Windows path; type it with its drive (C:\\…)`));
   }
   const stem = matchStem(command);
-  if (!BARE_COMMAND_RE.test(stem)) {
+  if (!BARE_COMMAND_RE.test(stem) || stem.length > CUSTOM_AGENT_STEM_MAX) {
     return fail(issue('command-invalid', { name, command: shown }, `"${name}": command must be a program name or an absolute path`));
   }
   if (REGISTRY_NAMES.has(stem)) {

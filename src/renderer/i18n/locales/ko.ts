@@ -2871,6 +2871,7 @@ export const ko = {
   'settings.customAgentsIssue.args-flag': '인수에 이미 {flag}이(가) 있습니다. 그 플래그는 wmux가 직접 넣으니 인수에서 빼세요.',
   'settings.customAgentsIssue.command-posix-path': '"{command}"은(는) Windows 경로가 아닙니다. C:\\Tools\\tern.exe처럼 드라이브를 포함한 전체 경로를 입력하세요.',
   'settings.customAgentsIssue.model-in-use': '{by}에서 "{stem}"에 모델을 고정해 두어 모델 플래그를 바꿀 수 없습니다. 먼저 그 모델을 지우세요.',
+  'settings.customAgentsIssue.unattended-in-use': '{by}에서 "{stem}"을(를) 무인 실행하고 있어 무인 실행 플래그를 바꿀 수 없습니다. 먼저 그쪽에서 무인 실행을 끄세요.',
   'settings.startupDirectory': '시작 디렉토리',
   'settings.startupDirectoryDesc': '새 터미널이 시작되는 위치. 비우면 홈 디렉토리. 워크스페이스 프로필로 개별 재정의 가능.',
   'settings.startupDirectoryPlaceholder': '예: C:\\Projects',

@@ -3369,6 +3369,7 @@ export const en = {
   'settings.customAgentsIssue.args-flag': 'The arguments already carry {flag}. Remove it there: wmux places it itself.',
   'settings.customAgentsIssue.command-posix-path': '"{command}" is not a Windows path. Type the full path with its drive, such as C:\\Tools\\tern.exe.',
   'settings.customAgentsIssue.model-in-use': '{by} pin a model to "{stem}", so its model flag cannot change. Clear those models first.',
+  'settings.customAgentsIssue.unattended-in-use': '{by} run "{stem}" unattended, so its unattended flags cannot change. Turn Unattended off there first.',
   'settings.startupDirectory': 'Starting directory',
   'settings.startupDirectoryDesc': 'New terminals start here. Empty = your home directory. Workspace profiles can override per workspace.',
   'settings.startupDirectoryPlaceholder': 'e.g. C:\\Projects',

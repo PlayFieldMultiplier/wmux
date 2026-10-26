@@ -2,7 +2,7 @@
 // `win32` here is a platform name handed to a pure validator; nothing reaches the OS.
 import { describe, expect, it } from 'vitest';
 import { normalizeCustomAgent, validateCustomAgents, type CustomAgent } from '../customAgents';
-import { applyFanoutAgentFlags, normalizeFanoutPreset, validateFanoutAgentChoice } from '../fanoutPreset';
+import { applyFanoutAgentFlags, describeFanoutAgentChoice, normalizeFanoutPreset, validateFanoutAgentChoice } from '../fanoutPreset';
 import { applyRoleAgent, applyRoleBinding, bindingEnforcesModel } from '../orchestratorRole';
 
 // "Tern" is a made-up CLI: no real agent is named in these fixtures.
@@ -65,7 +65,9 @@ describe('review round 1', () => {
     for (const command of ['python3.12', 'node22', '/usr/bin/perl5.34', 'busybox']) {
       expect(code({ name: 'Tern', command })).toBe('command-generic');
     }
-    expect(code({ name: 'Tern', command: 'C:/x/codex.exe.' })).toBe('command-known');
+    // Windows runs `codex.exe.` as codex: refused (a trailing dot is never accepted).
+    expect(code({ name: 'Tern', command: 'C:/x/codex.exe.' })).toBe('command-invalid');
+    expect(code({ name: 'Tern', command: 'C:/x/codex.exe' })).toBe('command-known');
     expect(code({ name: 'Tern', command: 'python-tern' })).toBeUndefined();
   });
 
@@ -84,7 +86,7 @@ describe('review round 1', () => {
   it('detects a custom pin by its own model flag only, so another CLI meaning of -m does not hide it', () => {
     const llm: CustomAgent = { name: 'Tern', command: 'tern', args: '-m notes', modelFlag: '--llm' };
     const bound = applyRoleBinding('tern -m notes', { agent: 'tern', model: 'm1' }, { spawnedProcess: true, customAgents: [llm] });
-    expect(bound).toMatchObject({ command: 'tern --llm m1 -m notes', modelInjected: true });
+    expect(bound).toMatchObject({ command: 'tern -m notes --llm m1', modelInjected: true });
     // A line that already chooses with --llm keeps its own, and says so.
     const typed = applyRoleBinding('tern --llm big', { agent: 'tern', model: 'm1' }, { spawnedProcess: true, customAgents: [llm] });
     expect(typed).toMatchObject({ command: 'tern --llm big', modelInjected: false });
@@ -96,6 +98,33 @@ describe('review round 1', () => {
 
   it('stores a hand-edited preset row by the stem, whatever its case', () => {
     expect(normalizeFanoutPreset({ name: 'P', items: [{ agent: 'Tern' }] }, [tern])).toMatchObject({ ok: true, preset: { items: [{ agent: 'tern' }] } });
+  });
+});
+
+describe('code review', () => {
+  // "Gull" is a made-up CLI whose options follow its `chat` subcommand.
+  const gull: CustomAgent = { name: 'Gull', command: 'gull', args: 'chat --fast', modelFlag: '-m', unattendedFlags: '--yes' };
+
+  it('places its model and unattended flags after its own Arguments, and does not read a subcommand as prose', () => {
+    const swapped = applyRoleAgent('claude "$(cat p.md)"', { agent: 'gull' }, { customAgents: [gull] }).command;
+    expect(swapped).toBe('gull chat --fast "$(cat p.md)"');
+    // The fan-out seed path: a submitted line, not a spawned process.
+    const bound = applyRoleBinding(swapped, { agent: 'gull', model: 'm1' }, { customAgents: [gull] });
+    expect(bound).toMatchObject({ command: 'gull chat --fast -m m1 "$(cat p.md)"', modelInjected: true });
+    expect(applyFanoutAgentFlags(bound.command, { agent: 'gull', unattended: true }, '/w', 'darwin', [gull]))
+      .toBe('gull chat --fast --yes -m m1 "$(cat p.md)"');
+  });
+
+  it('shows the approval label as the agent launches', () => {
+    expect(describeFanoutAgentChoice({ agent: 'gull', model: 'm1', unattended: true }, [gull])).toBe('gull chat --fast -m m1 --yes');
+  });
+
+  it('refuses a stem too long to reference, a trailing dot, more wrappers, and fields of the wrong type', () => {
+    expect(code({ name: 'Tern', command: `t${'e'.repeat(48)}rn` })).toBe('command-invalid');
+    expect(code({ name: 'Tern', command: 'tern.' })).toBe('command-invalid');
+    for (const command of ['wsl', 'tsx', 'pypy3', 'ssh', 'docker']) expect(code({ name: 'Tern', command })).toBe('command-generic');
+    expect(code({ name: 'Tern', command: 'tern', args: ['--fast'] })).toBe('args-invalid');
+    expect(code({ name: 'Tern', command: 'tern', promptFlag: ['-p'] })).toBe('flag-invalid');
   });
 });
 
@@ -122,7 +151,7 @@ describe('a custom agent on the launch path', () => {
       spawnedProcess: true,
       customAgents: [tern],
     });
-    expect(bound.command).toBe('/opt/tern/bin/tern -m m1 --fast -i "$(cat p.md)"');
+    expect(bound.command).toBe('/opt/tern/bin/tern --fast -m m1 -i "$(cat p.md)"');
     expect(bound.optionsInjected).toBeUndefined();
   });
 
@@ -133,6 +162,6 @@ describe('a custom agent on the launch path', () => {
     const on = normalizeFanoutPreset({ name: 'P', items: [{ agent: 'tern', unattended: true }] }, [withFlags]);
     expect(on).toMatchObject({ ok: true, preset: { items: [{ agent: 'tern', unattended: true }] } });
     expect(applyFanoutAgentFlags('/opt/tern/bin/tern --fast -i "x"', { agent: 'tern', unattended: true }, '/w', 'darwin', [withFlags]))
-      .toBe('/opt/tern/bin/tern --auto-approve --fast -i "x"');
+      .toBe('/opt/tern/bin/tern --fast --auto-approve -i "x"');
   });
 });

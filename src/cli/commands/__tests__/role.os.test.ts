@@ -82,7 +82,7 @@ describe('wmux role resolve', () => {
       error: () => undefined,
       exit: () => undefined,
     });
-    expect(out).toEqual(['/opt/tern/bin/tern -m m1 --fast']);
+    expect(out).toEqual(['/opt/tern/bin/tern --fast -m m1']);
   });
 
   it('drops an unsafe model through the app normalizer', async () => {

@@ -21,7 +21,8 @@
 // reason it is not selectable, and is refused rather than launched on a guess.
 
 import type { AgentSlug } from './agentIdentity';
-import { customAgentStem, findCustomAgent, type CustomAgent } from './customAgents';
+import { customAgentStem, customLaunchPrefixLength, findCustomAgent, type CustomAgent } from './customAgents';
+import { tokenize } from './agentResume';
 import { EFFORT_TOKEN_RE, launchGrammarFor } from './agentLaunchOptions';
 import { KNOWN_AGENT_STEMS, ROLE_BINDING_MODEL_MAX, type RoleBinding } from './orchestratorRole';
 import { FANOUT_MAX_TASKS } from './workTask';
@@ -443,7 +444,11 @@ export function applyFanoutAgentFlags(
   }
   if (choice.unattended && spec.unattendedFlags) parts.push(spec.unattendedFlags);
   if (parts.length === 0) return command;
-  const at = m.index + m[0].length;
+  // A custom agent takes its flags after its own Arguments (a subcommand).
+  const custom = FANOUT_AGENTS.some((a) => a.stem === spec.stem) ? undefined : findCustomAgent(spec.stem, customAgents);
+  const tokens = custom ? tokenize(command) : [];
+  const prefix = custom ? customLaunchPrefixLength(tokens.map((t) => (t.quoted ? null : t.value)), custom) : 0;
+  const at = prefix > 0 ? tokens[prefix].end : m.index + m[0].length;
   return `${command.slice(0, at)} ${parts.join(' ')}${command.slice(at)}`;
 }
 
@@ -623,10 +628,14 @@ export function normalizeFanoutPresets(input: unknown, customAgents?: readonly C
  */
 export function describeFanoutAgentChoice(c: FanoutAgentChoice, customAgents?: readonly CustomAgent[]): string {
   const spec = fanoutAgentSpec(c.agent, customAgents);
+  // A custom agent is shown as it launches: its command, its Arguments, then
+  // its own model and unattended flags, in the order the line carries them.
+  const custom = FANOUT_AGENTS.some((a) => a.stem === c.agent) ? undefined : findCustomAgent(c.agent, customAgents);
   return [
-    c.agent,
+    custom ? custom.command : c.agent,
     c.agent === 'codex' ? '-c projects.<task folder>.trust_level=trusted' : '',
-    c.model ? `--model ${c.model}` : '',
+    custom?.args ?? '',
+    c.model ? `${custom?.modelFlag ?? '--model'} ${c.model}` : '',
     c.effort ? `effort ${c.effort}` : '',
     c.unattended && spec?.unattendedFlags ? spec.unattendedFlags : '',
   ]

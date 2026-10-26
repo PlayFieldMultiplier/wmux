@@ -110,6 +110,8 @@ export async function saveFanoutPresets(
 export interface CustomAgentUse {
   users: string[];
   modelPins: string[];
+  /** Presets with a row that runs the agent with its unattended flags. */
+  unattendedPins: string[];
 }
 
 /**
@@ -121,18 +123,19 @@ export interface CustomAgentUse {
 export function customAgentUsers(roleBindings: OrchestratorRoleBindings, dir?: string): Map<string, CustomAgentUse> {
   const customAgents = loadCustomAgents(dir);
   const uses = new Map<string, CustomAgentUse>();
-  const note = (agent: string | undefined, user: string, pinsModel: boolean): void => {
+  const note = (agent: string | undefined, user: string, pinsModel: boolean, unattended: boolean): void => {
     const custom = agent ? findCustomAgent(agent, customAgents) : undefined;
     if (!custom) return;
     const stem = customAgentStem(custom);
-    const use = uses.get(stem) ?? { users: [], modelPins: [] };
+    const use = uses.get(stem) ?? { users: [], modelPins: [], unattendedPins: [] };
     if (!use.users.includes(user)) use.users.push(user);
     if (pinsModel && !use.modelPins.includes(user)) use.modelPins.push(user);
+    if (unattended && !use.unattendedPins.includes(user)) use.unattendedPins.push(user);
     uses.set(stem, use);
   };
-  for (const [role, binding] of Object.entries(roleBindings)) note(binding.agent, `the ${role} role`, !!binding.model);
+  for (const [role, binding] of Object.entries(roleBindings)) note(binding.agent, `the ${role} role`, !!binding.model, false);
   for (const preset of loadFanoutPresets(dir)) {
-    for (const item of preset.items) note(item.agent, `the ${preset.name} preset`, !!item.model);
+    for (const item of preset.items) note(item.agent, `the ${preset.name} preset`, !!item.model, item.unattended === true);
   }
   return uses;
 }
