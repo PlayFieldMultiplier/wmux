@@ -185,6 +185,7 @@ async function signMacAppIfConfigured(appPath: string, terminalCoreDir?: string)
   }
 
   // 1) inside-out 서명: 모든 헬퍼 .app과 .node 네이티브 바이너리까지 서명한다.
+  //    Except the terminal module, signed above and skipped here.
   console.log('[postPackage] 코드 서명 (Developer ID, hardened runtime)...');
   await signAsync({
     app: appPath,
@@ -197,6 +198,11 @@ async function signMacAppIfConfigured(appPath: string, terminalCoreDir?: string)
       entitlements,
     }),
   });
+  if (terminalCoreDir) {
+    // Fail before notarization if signAsync touched the module after all.
+    const { platform, arch } = JSON.parse(fs.readFileSync(path.join(terminalCoreDir, 'manifest.json'), 'utf8'));
+    require('./scripts/verify-native-terminal-package.cjs').verifyIntegrity(terminalCoreDir, platform, arch);
+  }
 
   // 2) 노타라이즈: notarytool로 제출 후 완료까지 대기(수 분 소요).
   console.log('[postPackage] 노타라이즈 (notarytool, 수 분 소요)...');
