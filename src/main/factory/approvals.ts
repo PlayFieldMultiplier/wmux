@@ -2136,6 +2136,15 @@ export class ApprovalService {
       this.changed(r.workspaceId);
       return;
     }
+    if (r.state === 'refused' && e.status === 'refused' && r.act.kind === 'release' && r.refusal && e.reason?.startsWith(`${r.refusal}, `)) {
+      // A refusal told before its draft was decided (a quit came between):
+      // amended, and its draft told in one more outcome card.
+      const amended: StoredApproval = { ...r, refusal: e.reason.slice(0, 300), updatedAt: this.now() };
+      this.put(amended);
+      this.outcomeCard(amended, 'draft');
+      this.changed(amended.workspaceId);
+      return;
+    }
     if (r.state === 'executed' || r.state === 'refused') return;
     const done = e.status === 'done';
     const next: StoredApproval = {
@@ -2415,7 +2424,9 @@ export class ApprovalService {
     }
   }
 
-  private outcomeCard(r: StoredApproval): void {
+  /** `amend`: the card that tells a refusal amended after it was told (its
+   *  own clientPostId, so it is posted once). */
+  private outcomeCard(r: StoredApproval, amend?: 'draft'): void {
     const writer = this.ports.rooms();
     if (!writer) return;
     const by = r.decidedBy === 'rule' ? 'a rule you set' : 'you';
@@ -2448,7 +2459,7 @@ export class ApprovalService {
       title,
       ...(body ? { body } : {}),
       refs: { approvalId: r.requestId, ...(r.prNumber !== undefined ? { pr: r.prNumber } : {}), ...(r.issueNumber !== undefined ? { issue: r.issueNumber } : {}) },
-      clientPostId: `approval-outcome:${r.requestId}`,
+      clientPostId: `approval-outcome:${r.requestId}${amend ? `:${amend}` : ''}`,
     });
   }
 }

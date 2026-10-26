@@ -42,12 +42,15 @@
 // commit (or cannot be read): a publish that stopped after making the tag
 // keeps its draft for the owner, since deleting it would leave the tag with
 // no release. A kept draft, or one whose delete failed, adds a code to the
-// row's refusal (DRAFT_FATE_CODE), so the owner is told.
+// row's refusal (DRAFT_FATE_CODE), so the owner is told. The decision is
+// journaled (decideDraft); a row a quit left refused with its draft
+// undecided is decided by the next sweep, and its request's refusal is
+// amended then.
 
 import type { GhActAnswer, GhActPort } from '../github/GhActService';
 import type { ApprovalAct, ApprovalActRepo, ApprovalReleaseAct } from '../../shared/botApproval';
 import { actMarker, bodyWithMarker, normalizeActText } from './actPayload';
-import { ACT_MAX_ATTEMPTS, actRowClaimed, runnableAct, type ActEffect, type ActEffectStore } from './actEffectStore';
+import { ACT_MAX_ATTEMPTS, actRowClaimed, draftUndecided, runnableAct, type ActEffect, type ActEffectStore } from './actEffectStore';
 import type { StoredApproval } from './approvals';
 import { failed, isFail, loginOf, readPaged, readRefusal, rec, repoPath, str, type Read } from './actRead';
 import { laneRefusalLine } from './laneRefusalText';
@@ -258,9 +261,14 @@ export class ActExecutor {
   /** Startup and the sweep: settle the rows that may have run, run the
    *  pending rows whose request allows it now, and settle the pending rows
    *  whose request never will (the run refuses them); drop the rows whose
-   *  request is gone. */
+   *  request is gone; decide the drafts of refused rows a quit left
+   *  undecided. */
   async reconcileAll(): Promise<void> {
     for (const row of this.ports.effects.list()) {
+      if (draftUndecided(row)) {
+        await this.run(row.id);
+        continue;
+      }
       if (!runnableAct(row) || (row.status !== 'uncertain' && row.status !== 'pending')) continue;
       const denied = this.ports.approval.authorize(row);
       if (denied === 'approval-missing') await this.orphaned(row);
@@ -274,9 +282,11 @@ export class ActExecutor {
   private async orphaned(row: ActEffect): Promise<void> {
     const claimed = actRowClaimed(row);
     if (claimed && this.now() - (row.startedAt ?? row.updatedAt) < (this.ports.reconcileAfterMs ?? RECONCILE_AFTER_MS)) return;
+    // Its draft first: a quit before the row is dropped decides it again
+    // (a draft deleted then reads as gone).
+    await this.dropDraft(row);
     if (!this.ports.effects.drop(row.id)) return;
     this.ports.log?.(`[factory] act ${row.action} ${row.requestId} dropped: its request is gone (${row.status}, attempt ${row.attempt}${claimed ? '; whether it reached GitHub is not known' : ''})`);
-    await this.dropDraft(row);
   }
 
   /** A release row that ended refused, or was dropped, with a draft of its
@@ -296,15 +306,15 @@ export class ActExecutor {
     return code;
   }
 
-  /** A row that ended refused: its release draft settled (dropDraft), and
-   *  its reason told when the draft stays on GitHub. */
+  /** A row that ended refused: its release draft settled (dropDraft), the
+   *  decision journaled, and its reason told when the draft stays on
+   *  GitHub. A decision not journaled is told all the same; the row stays
+   *  undecided and the next sweep decides it again. */
   private async refusedDraft(out: ActEffect | null): Promise<ActEffect | null> {
-    if (out?.status !== 'refused') return out;
+    if (out?.status !== 'refused' || !draftUndecided(out)) return out;
     const code = await this.dropDraft(out);
-    if (!code) return out;
-    const reason = `${out.reason ?? 'refused'}, ${code}`;
-    // Not journaled: the owner is told all the same.
-    return this.ports.effects.amendRefusal(out.id, reason) ?? { ...out, reason };
+    const reason = code ? `${out.reason ?? 'refused'}, ${code}` : undefined;
+    return this.ports.effects.decideDraft(out.id, reason) ?? (reason ? { ...out, reason } : out);
   }
 
   private emit(e: ActEffect | null): void {
@@ -315,7 +325,16 @@ export class ActExecutor {
   private async runOnce(id: string): Promise<ActEffect | null> {
     const { effects } = this.ports;
     let row = effects.get(id);
-    if (!row || !runnableAct(row)) return row;
+    if (!row) return row;
+    if (draftUndecided(row)) {
+      // A refusal a quit cut off before its draft was decided.
+      const out = await this.refusedDraft(row);
+      this.emit(out);
+      // A request that is gone keeps no row once its draft is decided.
+      if (out?.draftDecided && !this.ports.approval.request(out.requestId)) effects.drop(out.id);
+      return out;
+    }
+    if (!runnableAct(row)) return row;
     if (row.status === 'uncertain' || (row.status === 'pending' && actRowClaimed(row))) {
       // A try that may have landed (or an earlier try that ended without
       // proof either way): read GitHub before anything is sent again.

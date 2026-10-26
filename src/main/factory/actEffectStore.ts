@@ -19,7 +19,10 @@
 // A release published through the API takes two writes: a draft (which makes
 // no tag), then publishing it. The draft's id is journaled on the row as soon
 // as GitHub names it (noteDraft), so a later try publishes that draft rather
-// than making a second one.
+// than making a second one. A refused row keeps its draftId until what
+// becomes of that draft is decided and journaled (decideDraft): a quit in
+// between leaves the row undecided (draftUndecided), and the next sweep
+// decides it.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -50,6 +53,8 @@ export interface ActEffect {
   result?: { url: string; id?: number; number?: number };
   /** A release's draft on GitHub, made by an earlier write of this row. */
   draftId?: number;
+  /** A refused row's draft was deleted or kept, and its reason says so. */
+  draftDecided?: true;
   createdAt: number;
   updatedAt: number;
 }
@@ -69,6 +74,7 @@ function wellFormed(v: unknown): v is ActEffect {
     && (e.reason === undefined || typeof e.reason === 'string')
     && (e.result === undefined || (typeof e.result === 'object' && e.result !== null && typeof e.result.url === 'string'))
     && (e.draftId === undefined || (Number.isSafeInteger(e.draftId) && e.draftId > 0))
+    && (e.draftDecided === undefined || e.draftDecided === true)
     && Number.isSafeInteger(e.createdAt) && Number.isSafeInteger(e.updatedAt);
 }
 
@@ -82,6 +88,16 @@ export function runnableAct(e: Pick<ActEffect, 'action'>): boolean {
  *  whose release draft is on GitHub (whatever its tries). */
 export function actRowClaimed(e: Pick<ActEffect, 'status' | 'attempt' | 'draftId'>): boolean {
   return e.status !== 'pending' || e.attempt > 0 || e.draftId !== undefined;
+}
+
+/** Whether a refused release row's draft is still to be deleted or kept: a
+ *  quit came between the refusal and that decision. A row an earlier build
+ *  refused without the flag counts as decided once its reason names the
+ *  draft (a `draft-*` code); one that does not is decided again (a draft
+ *  deleted then reads as gone). Pure. */
+export function draftUndecided(e: Pick<ActEffect, 'action' | 'status' | 'draftId' | 'draftDecided' | 'reason'>): boolean {
+  if (e.action !== 'release' || e.status !== 'refused' || e.draftId === undefined || e.draftDecided) return false;
+  return !(e.reason ?? '').split(/,\s*/).some((c) => c.startsWith('draft-'));
 }
 
 export class ActEffectStore {
@@ -182,12 +198,13 @@ export class ActEffectStore {
     return this.end(row, status, reason, result);
   }
 
-  /** A refused row's reason, told more (what became of its release draft).
-   *  Null when the row is not refused or the file was not written. */
-  amendRefusal(id: string, reason: string): ActEffect | null {
+  /** A refused row's draft decided: the flag, and the reason told more
+   *  when the draft stays on GitHub (`reason`). Null when the row is not
+   *  refused or the file was not written (the row stays undecided). */
+  decideDraft(id: string, reason?: string): ActEffect | null {
     const row = this.rows.get(id);
     if (!row || row.status !== 'refused') return null;
-    const next: ActEffect = { ...row, reason, updatedAt: this.now() };
+    const next: ActEffect = { ...row, draftDecided: true, ...(reason ? { reason } : {}), updatedAt: this.now() };
     return this.put(next) ? next : null;
   }
 
@@ -218,10 +235,11 @@ export class ActEffectStore {
   }
 
   /** Drop the row of a request that ended (it expired, or aged out). A row
-   *  that was claimed and has not ended stays until a read settles it. */
+   *  that was claimed and has not ended stays until a read settles it, and a
+   *  refused one whose draft is undecided until the sweep decides it. */
   remove(id: string): void {
     const row = this.rows.get(id);
-    if (!row || (actRowClaimed(row) && row.status !== 'done' && row.status !== 'refused')) return;
+    if (!row || (actRowClaimed(row) && row.status !== 'done' && row.status !== 'refused') || draftUndecided(row)) return;
     this.drop(id);
   }
 
