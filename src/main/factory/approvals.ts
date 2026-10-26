@@ -2115,25 +2115,29 @@ export class ApprovalService {
     if (this.botGone(r)) return 'bot-removed';
     if (r.state !== 'approved') return 'approval-not-approved';
     if (r.decidedBy !== 'owner' || r.payloadHash !== e.payloadHash || normalizeRepoKey(e.repoKey) !== r.repoKey) return 'approval-mismatch';
-    // A directory that cannot be read now says nothing about the bot: not now.
+    // Counted from the decision on purpose, a long sleep before the first
+    // try included: a day on, things may have changed, so the bot asks
+    // again. No decision time (none is made without one), or one ahead of
+    // the clock (it went back), counts as stale.
+    const at = this.now();
+    const stale = !actRowClaimed(e) && (r.decidedAt === undefined || at < r.decidedAt || at - r.decidedAt >= APPROVAL_LIMITS.APPROVED_TTL_MS);
+    // A directory that cannot be read now says nothing about the bot: not
+    // now, unless the approval is stale (a "not now" never outlives it).
     let profile: BotProfile | null;
     try {
       profile = this.ports.bots()?.get(r.botId) ?? null;
     } catch {
-      return 'bots-unreadable';
+      return stale ? 'approval-stale' : 'bots-unreadable';
     }
-    if (!profile) return 'bots-unreadable';
+    if (!profile) return stale ? 'approval-stale' : 'bots-unreadable';
     if (botRepo(profile)?.repoKey !== r.repoKey) return 'repo-changed';
     // A secret stored since the request would now be hidden on the card the
     // owner reads, and published by the post.
     const texts = r.act.kind === 'comment' ? [r.act.body] : r.act.kind === 'issue_create' ? [r.act.title, r.act.body]
       : r.act.kind === 'release' ? [r.act.title, r.act.notes] : [];
     if (texts.some((t) => redactStoredSecrets(t) !== t)) return 'secret-in-body';
-    // After the refusals that name a cause; an approval with no decision
-    // time (none is made without one) counts as stale. Counted from the
-    // decision on purpose, a long sleep before the first try included: a
-    // day on, things may have changed, so the bot asks again.
-    if (!actRowClaimed(e) && this.now() - (r.decidedAt ?? 0) >= APPROVAL_LIMITS.APPROVED_TTL_MS) return 'approval-stale';
+    // After the refusals that name a cause.
+    if (stale) return 'approval-stale';
     if (r.executeAfter !== undefined && this.now() < r.executeAfter) return 'approval-undo-window';
     return null;
   }

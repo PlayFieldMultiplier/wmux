@@ -82,9 +82,17 @@ function rig() {
     remove: (id) => effects.remove(id),
   };
   const notices: string[] = [];
+  /** The bot directory: `down` throws on every read; `profile` is the bot as it reads. */
+  const directory = { down: false, profile: DEV };
   const ports: ApprovalPorts = {
     file: path.join(dir, 'factory', 'approvals.json'),
-    bots: () => ({ listEnabled: () => [DEV], get: (id) => (id === DEV.id ? DEV : null) }),
+    bots: () => ({
+      listEnabled: () => [directory.profile],
+      get: (id) => {
+        if (directory.down) throw new Error('bots.json unreadable');
+        return id === DEV.id ? directory.profile : null;
+      },
+    }),
     runningWake: () => ({ wakeId: 'w-1', attempt: 1, threadId: null, tainted: false, guest: false, signedIn: false }),
     readPr: async () => { throw new Error('not used'); },
     ghLogin: async () => 'owner',
@@ -116,7 +124,7 @@ function rig() {
     await executor.reconcileAll();
   };
   const outcome = (requestId: string) => writer.read(WS, {}).cards.find((c) => c.clientPostId === `approval-outcome:${requestId}`);
-  return { svc: service, gh, effects, executor, notices, approved, sweepAt, outcome };
+  return { svc: service, gh, effects, executor, notices, directory, approved, sweepAt, outcome };
 }
 
 describe('an approved act no try of which started', () => {
@@ -168,6 +176,44 @@ describe('an approved act no try of which started', () => {
     expect(r.svc.authorizeAct({ ...row, draftId: 7 })).toBeNull();
     expect(r.svc.authorizeAct({ ...row, status: 'uncertain' })).toBeNull();
     expect(r.svc.authorizeAct({ ...row, status: 'inFlight', attempt: 1 })).toBeNull();
+  });
+
+  it('a clock that went back past the decision ages it out too', async () => {
+    const r = rig();
+    const a = await r.approved(COMMENT, () => { r.gh.answerRead = () => READ_FAILS; });
+    const row = r.effects.get(a.id);
+    if (!row) throw new Error('no row');
+    vi.setSystemTime(a.decidedAt);
+    expect(r.svc.authorizeAct(row)).toBe('approval-undo-window');
+    vi.setSystemTime(a.decidedAt - 1);
+    expect(r.svc.authorizeAct(row)).toBe('approval-stale');
+    expect(r.svc.authorizeAct({ ...row, attempt: 1 })).toBe('approval-undo-window');
+  });
+
+  it('a bot directory that stays unreadable ("not now") does not outlive the approval', async () => {
+    const r = rig();
+    const a = await r.approved(COMMENT, () => { r.directory.down = true; });
+    // The try was given back: the directory says nothing about the bot now.
+    expect(r.effects.get(a.id)).toMatchObject({ status: 'pending', attempt: 0, reason: 'bots-unreadable' });
+    await r.sweepAt(a.decidedAt + DAY - 1);
+    expect(r.effects.get(a.id)).toMatchObject({ status: 'pending', attempt: 0 });
+    expect(r.svc.get(a.requestId)?.state).toBe('approved');
+    await r.sweepAt(a.decidedAt + DAY);
+    expect(r.effects.get(a.id)).toMatchObject({ status: 'refused', attempt: 0, reason: 'approval-stale' });
+    expect(r.svc.get(a.requestId)).toMatchObject({ state: 'refused', refusal: 'approval-stale' });
+    expect(r.gh.writes).toEqual([]);
+  });
+
+  it('a refusal that names its cause still wins over approval-stale when the directory reads', async () => {
+    const r = rig();
+    const a = await r.approved(COMMENT, () => { r.gh.answerRead = () => READ_FAILS; });
+    const row = r.effects.get(a.id);
+    if (!row) throw new Error('no row');
+    vi.setSystemTime(a.decidedAt + DAY);
+    r.directory.profile = { ...DEV, repo: { repoKey: 'o/other', repoPath: '/other' } };
+    expect(r.svc.authorizeAct(row)).toBe('repo-changed');
+    r.directory.down = true;
+    expect(r.svc.authorizeAct(row)).toBe('approval-stale');
   });
 });
 
