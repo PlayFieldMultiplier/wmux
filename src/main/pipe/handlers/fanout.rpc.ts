@@ -104,6 +104,7 @@ import { FANOUT_LIVE_TASK_CAP, getFanOutGuards, launchedAuditTask, promptDigest,
 import { loadFanoutRequireApproval, loadFanoutWorkerPermissionMode } from '../../worktask/fanoutWorkerPolicy';
 import { workerLaunchFlags, type FanoutWorkerPermissionMode } from '../../../shared/workerLaunch';
 import { loadFanoutPresets } from '../../worktask/fanoutPresets';
+import { loadCustomAgents } from '../../worktask/customAgents';
 import { sanitizeFanoutOrigin, type FanoutOrigin } from '../../../shared/fanoutOrigin';
 import {
   describeFanoutAgentChoice,
@@ -1572,7 +1573,10 @@ export function registerFanOutRpc(
     // (main's record of the bot, never the bot's arguments): the bot names
     // only a preset. Applied before the labels, so the ledger names it.
     const agentChoices = selection.kind === 'none' ? [] : bot ? withBotWorkerAgent(selection.agents, botProfile?.workerAgent) : selection.agents;
-    const agentLabels = agentChoices.map(describeFanoutAgentChoice);
+    // A preset row may name one of the operator's custom agents: its label
+    // shows the unattended flags the operator gave it.
+    const customAgents = loadCustomAgents();
+    const agentLabels = agentChoices.map((c) => describeFanoutAgentChoice(c, customAgents));
     const worktree = !(selection.kind === 'preset' && selection.preset.worktree === false);
     // §13 rule 3: a bot fans out only with the bot presets (every bot holds
     // all of them), always into worktrees; a detached checkout is the verify

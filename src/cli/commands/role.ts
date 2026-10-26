@@ -24,6 +24,7 @@ import {
   type RoleBinding, type WmuxTools,
 } from '../../shared/orchestratorRole';
 import { tokenize } from '../../shared/agentResume';
+import { customAgentLaunchLine, findCustomAgent, normalizeCustomAgentsReport, type CustomAgent } from '../../shared/customAgents';
 import { agyEffortOf } from '../../shared/modelCatalog';
 
 /** Electron's `app.getPath('userData')` for productName "wmux", with the same
@@ -70,16 +71,28 @@ export function defaultMcpEntry(home: string = os.homedir()): string {
   return path.join(home, '.wmux', 'mcp', 'index.js');
 }
 
+/** The operator's custom agents (main's custom-agents.json, in the wmux data
+ *  folder next to the daemon's files). */
+export function defaultCustomAgentsPath(home: string = os.homedir()): string {
+  return path.join(home, `.wmux${dataSuffix()}`, 'custom-agents.json');
+}
+
 export function resolveRole(
   role: string,
   binding: RoleBinding,
   mcpEntry = defaultMcpEntry(),
   codexRegistered: () => boolean = () => codexHasWmuxServer(codexConfigPath(process.env)),
+  customAgents: readonly CustomAgent[] = [],
 ): ResolvedRole {
   const agent = binding.agent;
   const effort = agent === 'agy' ? (binding.model ? agyEffortOf(binding.model) : undefined) : binding.effort;
+  // A role bound to a custom agent launches its command and arguments as typed.
+  const custom = agent ? findCustomAgent(agent, customAgents) : undefined;
   const argv = agent
-    ? tokenize(applyRoleBinding(agent, binding, { spawnedProcess: true }).command).map((t) => t.value)
+    ? tokenize(applyRoleBinding(custom ? customAgentLaunchLine(custom) : agent, binding, {
+      spawnedProcess: true,
+      ...(custom ? { customAgents } : {}),
+    }).command).map((t) => t.value)
     : [];
   return {
     role,
@@ -122,6 +135,7 @@ function mcpFor(
 
 export interface RoleDeps {
   sessionPath: string;
+  customAgentsPath: string;
   readFile: (p: string) => string;
   /** The MCP bundle entry `mcp.argv` points at. */
   mcpEntry: string;
@@ -136,6 +150,7 @@ const USAGE = 'Usage: wmux role resolve <Role> [--json] [--session <path>]';
 export async function handleRole(args: string[], jsonMode: boolean, overrides: Partial<RoleDeps> = {}): Promise<void> {
   const deps: RoleDeps = {
     sessionPath: defaultSessionPath(),
+    customAgentsPath: defaultCustomAgentsPath(),
     readFile: (p) => fs.readFileSync(p, 'utf8'),
     mcpEntry: defaultMcpEntry(),
     exists: (p) => fs.existsSync(p),
@@ -175,7 +190,15 @@ export async function handleRole(args: string[], jsonMode: boolean, overrides: P
     deps.exit(2);
     return;
   }
-  const resolved = resolveRole(role, binding, deps.mcpEntry);
+  // No readable list is no custom agents: a role bound to one then prints its
+  // bare name, as main would refuse to launch it.
+  let customAgents: CustomAgent[] = [];
+  try {
+    customAgents = normalizeCustomAgentsReport((JSON.parse(deps.readFile(deps.customAgentsPath)) as { agents?: unknown })?.agents).agents;
+  } catch {
+    // missing or unreadable
+  }
+  const resolved = resolveRole(role, binding, deps.mcpEntry, undefined, customAgents);
   // Never print an argv that points at a bundle that is not there (a dev
   // checkout, or a packaged app that has not booted once to stabilize it).
   if (resolved.mcp && resolved.mcp.argv.length > 0 && !deps.exists(deps.mcpEntry)) {

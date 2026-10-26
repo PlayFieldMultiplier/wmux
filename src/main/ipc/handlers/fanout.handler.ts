@@ -32,7 +32,8 @@ import {
   setFanoutTrustAgyFolders,
   setFanoutWorkerPermissionMode,
 } from '../../worktask/fanoutWorkerPolicy';
-import { loadFanoutPresetsReport, saveFanoutPresets } from '../../worktask/fanoutPresets';
+import { customAgentPresetUsers, loadFanoutPresetsReport, saveFanoutPresets } from '../../worktask/fanoutPresets';
+import { loadCustomAgentsReport, saveCustomAgents } from '../../worktask/customAgents';
 
 export function registerFanOutHandler(service: FanOutService): () => void {
   // The Fleet Approvals tab's "recent unattended fan-outs" list.
@@ -111,6 +112,21 @@ export function registerFanOutHandler(service: FanOutService): () => void {
     ),
   );
 
+  // Custom agents (Settings → Roles & fan-out). Main owns them, and only this
+  // Settings IPC writes them — see customAgents.ts.
+  ipcMain.removeHandler(IPC.FANOUT_CUSTOM_AGENTS_GET);
+  ipcMain.handle(
+    IPC.FANOUT_CUSTOM_AGENTS_GET,
+    wrapHandler(IPC.FANOUT_CUSTOM_AGENTS_GET, async () => loadCustomAgentsReport()),
+  );
+  ipcMain.removeHandler(IPC.FANOUT_CUSTOM_AGENTS_SET);
+  ipcMain.handle(
+    IPC.FANOUT_CUSTOM_AGENTS_SET,
+    wrapHandler(IPC.FANOUT_CUSTOM_AGENTS_SET, async (_event: Electron.IpcMainInvokeEvent, agents: unknown) =>
+      saveCustomAgents(agents, customAgentPresetUsers()),
+    ),
+  );
+
   ipcMain.removeHandler(IPC.FANOUT_START);
   ipcMain.handle(
     IPC.FANOUT_START,
@@ -133,6 +149,8 @@ export function registerFanOutHandler(service: FanOutService): () => void {
     ipcMain.removeHandler(IPC.FANOUT_TRUST_AGY_FOLDERS_SET);
     ipcMain.removeHandler(IPC.FANOUT_PRESETS_GET);
     ipcMain.removeHandler(IPC.FANOUT_PRESETS_SET);
+    ipcMain.removeHandler(IPC.FANOUT_CUSTOM_AGENTS_GET);
+    ipcMain.removeHandler(IPC.FANOUT_CUSTOM_AGENTS_SET);
   };
 }
 

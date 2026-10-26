@@ -1566,7 +1566,13 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
     // the default agent instead of the one that was asked for.
     let agentChoice: FanoutAgentChoice | undefined;
     if (params.agentChoice !== undefined) {
-      const checked = validateFanoutAgentChoice(params.agentChoice, { allowUnattended: true, allowEffort: true });
+      // Main already refused a caller's own `agents[k]` naming a custom agent;
+      // a preset row may name one, so the operator's list is passed here.
+      const checked = validateFanoutAgentChoice(params.agentChoice, {
+        allowUnattended: true,
+        allowEffort: true,
+        customAgents: useStore.getState().customAgents,
+      });
       const normalized = checked.ok ? normalizeRoleBinding(fanoutChoiceBinding(checked.choice)) : undefined;
       if (!checked.ok || !normalized || normalized.agent !== checked.choice.agent || normalized.model !== checked.choice.model ||
         normalized.effort !== checked.choice.effort) {
@@ -1596,7 +1602,11 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
     // cannot see the bindings — an unbound role, or one bound to an agent with no
     // model, injects nothing).
     const { marker, command: bareCommand } = splitModelEnvMarker(initialCommand);
-    const swap = applyRoleAgent(bareCommand, roleBinding, extraAgents ? { extraAgents } : undefined);
+    const customAgents = useStore.getState().customAgents;
+    const swap = applyRoleAgent(bareCommand, roleBinding, {
+      ...(extraAgents ? { extraAgents } : {}),
+      ...(customAgents.length ? { customAgents } : {}),
+    });
     // A preset row / agents[k] is a promise about WHICH CLI runs. A refused
     // swap would launch the default claude line instead, so the task fails —
     // before any workspace exists — rather than run on an agent nobody chose.
@@ -1689,7 +1699,7 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
       },
       useStore.getState().defaultShell,
     );
-    const roleBoundRaw = withRoleBinding(seeded, roleBinding, role, extraAgents);
+    const roleBoundRaw = withRoleBinding(seeded, roleBinding, role, extraAgents, customAgents);
     // Per-CLI flags the role rewrite has no notion of: codex's one-session trust
     // of the task folder, and a preset row's unattended flags (non-claude).
     const roleBound =
@@ -1701,6 +1711,7 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
               agentChoice,
               cwd,
               window.electronAPI?.platform ?? 'darwin',
+              customAgents,
             ),
           }
         : roleBoundRaw;

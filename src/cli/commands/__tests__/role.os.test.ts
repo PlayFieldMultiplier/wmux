@@ -67,6 +67,24 @@ describe('wmux role resolve', () => {
     }
   });
 
+  it('prints a custom agent role as its command and arguments, read from the custom agents file', async () => {
+    // "Tern" is a made-up CLI.
+    const files: Record<string, string> = {
+      '/fake/session.json': JSON.stringify({ orchestratorRoleBindings: { Builder: { agent: 'tern', model: 'm1' } } }),
+      '/fake/custom-agents.json': JSON.stringify({ agents: [{ name: 'Tern', command: '/opt/tern/bin/tern', args: '--fast', modelFlag: '-m' }] }),
+    };
+    const out: string[] = [];
+    await handleRole(['resolve', 'Builder'], false, {
+      sessionPath: '/fake/session.json',
+      customAgentsPath: '/fake/custom-agents.json',
+      readFile: (p) => files[p] ?? '',
+      log: (l) => out.push(l),
+      error: () => undefined,
+      exit: () => undefined,
+    });
+    expect(out).toEqual(['/opt/tern/bin/tern -m m1 --fast']);
+  });
+
   it('drops an unsafe model through the app normalizer', async () => {
     const r = JSON.parse((await run(['resolve', 'Tester'])).out[0]);
     expect(r.model).toBeUndefined();

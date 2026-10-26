@@ -14,6 +14,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { getWmuxDir } from '../../daemon/config';
 import { atomicWriteJSON } from '../../daemon/util/atomicWrite';
+import { loadCustomAgents } from './customAgents';
+import { findCustomAgent } from '../../shared/customAgents';
 import {
   FANOUT_PRESETS_MAX,
   FANOUT_PRESET_TEMPLATES,
@@ -45,7 +47,7 @@ export function loadFanoutPresetsReport(
   }
   try {
     const raw = JSON.parse(fs.readFileSync(p, 'utf8')) as { presets?: unknown };
-    return normalizeFanoutPresetsReport(raw?.presets);
+    return normalizeFanoutPresetsReport(raw?.presets, loadCustomAgents(dir));
   } catch {
     return { presets: [], dropped: [], unreadable: true };
   }
@@ -77,8 +79,9 @@ export async function saveFanoutPresets(
   }
   const out: FanoutPreset[] = [];
   const seen = new Set<string>();
+  const customAgents = loadCustomAgents(dir);
   for (const raw of input) {
-    const r = normalizeFanoutPreset(raw);
+    const r = normalizeFanoutPreset(raw, customAgents);
     if (!r.ok) return { ok: false, code: r.code, params: r.params, error: r.error };
     const key = fanoutPresetKey(r.preset.name);
     if (seen.has(key)) {
@@ -100,4 +103,23 @@ export async function saveFanoutPresets(
   }
   await atomicWriteJSON(p, { presets: out });
   return { ok: true, presets: out };
+}
+
+/**
+ * The custom agents the saved presets launch: stem → the names of the presets
+ * with a row on it. A custom agent in here cannot be deleted or renamed
+ * (saveCustomAgents).
+ */
+export function customAgentPresetUsers(dir?: string): Map<string, string[]> {
+  const customAgents = loadCustomAgents(dir);
+  const users = new Map<string, string[]>();
+  for (const preset of loadFanoutPresets(dir)) {
+    for (const item of preset.items) {
+      if (!findCustomAgent(item.agent, customAgents)) continue;
+      const names = users.get(item.agent) ?? [];
+      if (!names.includes(preset.name)) names.push(preset.name);
+      users.set(item.agent, names);
+    }
+  }
+  return users;
 }

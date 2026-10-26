@@ -21,6 +21,7 @@
 // reason it is not selectable, and is refused rather than launched on a guess.
 
 import type { AgentSlug } from './agentIdentity';
+import { customAgentStem, findCustomAgent, type CustomAgent } from './customAgents';
 import { EFFORT_TOKEN_RE, launchGrammarFor } from './agentLaunchOptions';
 import { KNOWN_AGENT_STEMS, ROLE_BINDING_MODEL_MAX, type RoleBinding } from './orchestratorRole';
 import { FANOUT_MAX_TASKS } from './workTask';
@@ -192,8 +193,25 @@ export const FANOUT_EXTRA_AGENT_STEMS: ReadonlySet<string> = new Set(
   FANOUT_AGENTS.map((a) => a.stem).filter((s) => !KNOWN_AGENT_STEMS.has(s)),
 );
 
-export function fanoutAgentSpec(stem: string): FanoutAgentSpec | undefined {
-  return FANOUT_AGENTS.find((a) => a.stem === stem);
+/**
+ * The fan-out spec for a stem: a registry agent from the table above, or one of
+ * the operator's custom agents when the caller passes them (preset rows and
+ * the Settings editor do; a caller's own `agents[k]` does not). A custom agent
+ * is selectable: the operator defined it. Its model pin and Unattended exist
+ * only when the operator gave it a model flag and unattended flags.
+ */
+export function fanoutAgentSpec(stem: string, customAgents?: readonly CustomAgent[]): FanoutAgentSpec | undefined {
+  const registry = FANOUT_AGENTS.find((a) => a.stem === stem);
+  if (registry) return registry;
+  const custom = findCustomAgent(stem, customAgents);
+  if (!custom) return undefined;
+  return {
+    stem: customAgentStem(custom),
+    label: custom.name,
+    selectable: true,
+    modelFlag: !!custom.modelFlag,
+    unattendedFlags: custom.unattendedFlags ?? '',
+  };
 }
 
 /** The selectable stems, for error messages and the Settings dropdown. */
@@ -272,7 +290,7 @@ export function validateFanoutAgentChoice(
   input: unknown,
   /** allowEffort: a caller's `agents[k]` only. Preset rows refuse it — the
    *  Settings editor has no effort field and would drop it on save. */
-  opts: { allowUnattended?: boolean; allowEffort?: boolean } = {},
+  opts: { allowUnattended?: boolean; allowEffort?: boolean; customAgents?: readonly CustomAgent[] } = {},
 ): { ok: true; choice: FanoutAgentChoice } | ({ ok: false } & FanoutIssue) {
   const fail = (i: FanoutIssue): { ok: false } & FanoutIssue => ({ ok: false, ...i });
   if (input === null || typeof input !== 'object' || Array.isArray(input)) {
@@ -287,7 +305,7 @@ export function validateFanoutAgentChoice(
     }
   }
   const agent = typeof src.agent === 'string' ? src.agent.trim().slice(0, 48) : '';
-  const spec = fanoutAgentSpec(agent);
+  const spec = fanoutAgentSpec(agent, opts.customAgents);
   const choices = selectableFanoutAgents().join(', ');
   if (!spec) {
     return fail(issue('agent-unknown', { agent, choices }, `unknown agent "${agent}" — use one of ${choices}`));
@@ -409,8 +427,9 @@ export function applyFanoutAgentFlags(
   cwd: string,
   /** The pane's platform (the renderer passes electronAPI.platform). */
   platform: string,
+  customAgents?: readonly CustomAgent[],
 ): string {
-  const spec = fanoutAgentSpec(choice.agent);
+  const spec = fanoutAgentSpec(choice.agent, customAgents);
   if (!spec) return command;
   const m = /^\s*(\S+)/.exec(command);
   if (!m) return command;
@@ -483,6 +502,8 @@ export function fanoutPresetOutputFolder(preset: FanoutPreset): string {
  */
 export function normalizeFanoutPreset(
   input: unknown,
+  /** The operator's custom agents, which a row may name. */
+  customAgents?: readonly CustomAgent[],
 ): { ok: true; preset: FanoutPreset } | ({ ok: false } & FanoutIssue) {
   const fail = (i: FanoutIssue): { ok: false } & FanoutIssue => ({ ok: false, ...i });
   if (input === null || typeof input !== 'object' || Array.isArray(input)) {
@@ -506,7 +527,7 @@ export function normalizeFanoutPreset(
   }
   const items: FanoutAgentChoice[] = [];
   for (const [k, raw] of rawItems.entries()) {
-    const v = validateFanoutAgentChoice(raw, { allowUnattended: true });
+    const v = validateFanoutAgentChoice(raw, { allowUnattended: true, customAgents });
     if (!v.ok) {
       return fail({ code: v.code, params: { ...v.params, name, row: String(k + 1) }, error: `preset "${name}" row ${k + 1}: ${v.error}` });
     }
@@ -547,7 +568,10 @@ export interface FanoutPresetDropped {
  * dropped is REPORTED, not just skipped — Settings saves the whole list, so a
  * silently dropped row would otherwise be deleted from disk on the next save.
  */
-export function normalizeFanoutPresetsReport(input: unknown): { presets: FanoutPreset[]; dropped: FanoutPresetDropped[] } {
+export function normalizeFanoutPresetsReport(
+  input: unknown,
+  customAgents?: readonly CustomAgent[],
+): { presets: FanoutPreset[]; dropped: FanoutPresetDropped[] } {
   const presets: FanoutPreset[] = [];
   const dropped: FanoutPresetDropped[] = [];
   if (!Array.isArray(input)) return { presets, dropped };
@@ -562,7 +586,7 @@ export function normalizeFanoutPresetsReport(input: unknown): { presets: FanoutP
       dropped.push({ ...withName(nameOf(raw)), issue: issue('presets-over-cap', { cap }, `more than ${cap} presets`) });
       continue;
     }
-    const r = normalizeFanoutPreset(raw);
+    const r = normalizeFanoutPreset(raw, customAgents);
     if (!r.ok) {
       dropped.push({ ...withName(nameOf(raw)), issue: { code: r.code, params: r.params, error: r.error } });
       continue;
@@ -586,8 +610,8 @@ function withName(name: string | undefined): { name?: string } {
 }
 
 /** {@link normalizeFanoutPresetsReport} without the report. */
-export function normalizeFanoutPresets(input: unknown): FanoutPreset[] {
-  return normalizeFanoutPresetsReport(input).presets;
+export function normalizeFanoutPresets(input: unknown, customAgents?: readonly CustomAgent[]): FanoutPreset[] {
+  return normalizeFanoutPresetsReport(input, customAgents).presets;
 }
 
 /**
@@ -595,8 +619,8 @@ export function normalizeFanoutPresets(input: unknown): FanoutPreset[] {
  * everything that changes what the CLI is allowed to do, including codex's
  * one-session trust of its task folder.
  */
-export function describeFanoutAgentChoice(c: FanoutAgentChoice): string {
-  const spec = fanoutAgentSpec(c.agent);
+export function describeFanoutAgentChoice(c: FanoutAgentChoice, customAgents?: readonly CustomAgent[]): string {
+  const spec = fanoutAgentSpec(c.agent, customAgents);
   return [
     c.agent,
     c.agent === 'codex' ? '-c projects.<task folder>.trust_level=trusted' : '',

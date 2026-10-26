@@ -1,0 +1,294 @@
+// ─── Custom agents (Settings → Roles & fan-out → Custom agents) ──────────────
+//
+// An agent CLI wmux does not know, defined by the operator so a role binding or
+// a fan-out preset row can launch it. Operator data, kept main-side like the
+// fan-out presets (src/main/worktask/customAgents.ts): only the Settings IPC
+// writes it. No A2A, phone or remote-spawn path can define one, and a caller's
+// own `agents[k]` cannot name one either; it is reached through the operator's
+// presets and role bindings only.
+//
+// A custom agent is referenced by its launcher stem (the Command's basename,
+// lower-cased, `.exe`/`.cmd` dropped), the same key a registry agent's role
+// binding or preset row carries. The validator keeps that stem apart from every
+// registry agent and from the other custom agents, so a reference is never
+// ambiguous.
+//
+// What it is NOT given: no screen status, approval cards, hooks or resume, and
+// never an implicit unattended or permission flag. Its unattended flags are
+// exactly what the operator typed, added only when a preset row turns
+// Unattended on; an empty field means fan-out does not offer Unattended.
+
+import { AGENT_ROWS, agentLauncherStem } from './agentIdentity';
+import { launcherStem } from './agentResume';
+
+export interface CustomAgent {
+  /** Display name, unique (case-insensitive) among custom agents. */
+  name: string;
+  /** A program name on PATH, or an absolute path the operator typed. */
+  command: string;
+  /** Launch arguments, each a plain token. */
+  args?: string;
+  /** The flag the first prompt goes after; absent = the prompt is positional. */
+  promptFlag?: string;
+  /** `<modelFlag> <model>` pins a model; absent = no model pin. */
+  modelFlag?: string;
+  /** Inserted only when a preset row turns Unattended on; absent = not offered. */
+  unattendedFlags?: string;
+}
+
+export type CustomAgentIssueCode =
+  | 'not-object'
+  | 'unknown-field'
+  | 'name-invalid'
+  | 'name-duplicate'
+  | 'command-invalid'
+  | 'command-separator'
+  | 'command-known'
+  | 'command-generic'
+  | 'command-duplicate'
+  | 'args-invalid'
+  | 'flag-invalid'
+  | 'agents-not-array'
+  | 'agents-over-cap'
+  | 'agent-in-use';
+
+export interface CustomAgentIssue {
+  code: CustomAgentIssueCode;
+  params: Record<string, string>;
+  /** English, for the wire and logs. */
+  error: string;
+}
+
+function issue(code: CustomAgentIssueCode, params: Record<string, string>, error: string): CustomAgentIssue {
+  return { code, params, error };
+}
+
+export const CUSTOM_AGENTS_MAX = 16;
+export const CUSTOM_AGENT_NAME_MAX = 40;
+export const CUSTOM_AGENT_COMMAND_MAX = 260;
+export const CUSTOM_AGENT_ARGS_MAX = 200;
+export const CUSTOM_AGENT_FLAG_MAX = 64;
+
+const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9 ._-]*$/;
+/** A program name with no folder: what PATH lookup takes. */
+const BARE_COMMAND_RE = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/;
+/** An absolute path: `/…` or a drive-letter path. No spaces, quotes or shell
+ *  syntax, so the path is one shell word on every pane shell. */
+const POSIX_ABSOLUTE_RE = /^\/[A-Za-z0-9._+/-]+$/;
+const WIN_ABSOLUTE_RE = /^[A-Za-z]:[\\/][A-Za-z0-9._+\\/-]+$/;
+/** One argument or flag: no quotes, spaces, `$`, backticks, `;|&<>`, globs,
+ *  `~`, `\` or brackets, so it reaches the CLI as typed on every pane shell. */
+const TOKEN_RE = /^[A-Za-z0-9@%+=:,._/-]+$/;
+/** A flag name: a leading `-`, then the token alphabet. */
+const FLAG_RE = /^-{1,2}[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+
+/**
+ * Programs that run something else: a custom agent launched as `node x.js`
+ * would get its model and unattended flags right after `node`, before the
+ * script, and every `node` line typed in a bound pane would read as that
+ * agent. Such an agent goes through a wrapper on PATH instead.
+ */
+const GENERIC_COMMANDS: ReadonlySet<string> = new Set([
+  'node', 'nodejs', 'npx', 'npm', 'pnpm', 'pnpx', 'yarn', 'bun', 'bunx', 'deno',
+  'python', 'python3', 'py', 'pip', 'pipx', 'uv', 'uvx', 'ruby', 'perl', 'php', 'java',
+  'sh', 'bash', 'zsh', 'fish', 'dash', 'ksh', 'csh', 'tcsh', 'pwsh', 'powershell', 'cmd',
+  'env', 'sudo', 'git', 'wmux',
+]);
+
+/**
+ * Every name a registry agent is known by: its slug, its launcher stem, and the
+ * native executable names the process tracker matches. A custom stem equal to
+ * one would make a role binding or preset row ambiguous.
+ */
+const REGISTRY_NAMES: ReadonlySet<string> = new Set(
+  AGENT_ROWS.flatMap((row) => [
+    row.slug,
+    agentLauncherStem(row),
+    ...(row.process?.executables ?? []),
+  ].map((n) => launcherStem(n))),
+);
+
+/** The key a role binding or preset row uses for this agent. */
+export function customAgentStem(agent: Pick<CustomAgent, 'command'>): string {
+  return launcherStem(agent.command.trim());
+}
+
+/** The custom agent a stem names, if any. */
+export function findCustomAgent(stem: string, list: readonly CustomAgent[] | undefined): CustomAgent | undefined {
+  if (!list || !stem) return undefined;
+  const key = stem.toLowerCase();
+  return list.find((a) => customAgentStem(a) === key);
+}
+
+/** What replaces the launcher token when a role or preset row picks it. */
+export function customAgentLaunchLine(agent: CustomAgent): string {
+  return agent.args ? `${agent.command} ${agent.args}` : agent.command;
+}
+
+/** Lookup key for a custom agent's name. */
+export function customAgentNameKey(name: string): string {
+  return name.trim().toLowerCase();
+}
+
+function tokensOk(value: string): boolean {
+  return value.split(' ').every((t) => TOKEN_RE.test(t));
+}
+
+/** Collapse whitespace runs: fields are space-separated token lists. */
+function squash(raw: unknown): string {
+  return typeof raw === 'string' ? raw.replace(/\s+/g, ' ').trim() : '';
+}
+
+const FIELDS = new Set(['name', 'command', 'args', 'promptFlag', 'modelFlag', 'unattendedFlags']);
+
+/**
+ * One custom agent from untrusted input (the Settings save, or a hand-edited
+ * file), on its own. The list rules (unique name and stem, the cap) are
+ * {@link validateCustomAgents}'.
+ */
+export function normalizeCustomAgent(
+  input: unknown,
+): { ok: true; agent: CustomAgent } | ({ ok: false } & CustomAgentIssue) {
+  const fail = (i: CustomAgentIssue): { ok: false } & CustomAgentIssue => ({ ok: false, ...i });
+  if (input === null || typeof input !== 'object' || Array.isArray(input)) {
+    return fail(issue('not-object', {}, 'custom agent must be an object'));
+  }
+  const src = input as Record<string, unknown>;
+  for (const key of Object.keys(src)) {
+    if (!FIELDS.has(key)) {
+      const field = key.slice(0, 40);
+      return fail(issue('unknown-field', { field }, `unknown field "${field}"`));
+    }
+  }
+  const name = squash(src.name);
+  const nameMax = String(CUSTOM_AGENT_NAME_MAX);
+  if (!name || name.length > CUSTOM_AGENT_NAME_MAX || !NAME_RE.test(name)) {
+    return fail(issue('name-invalid', { max: nameMax }, `name must be 1-${nameMax} characters: letters, digits, space . _ -`));
+  }
+
+  const command = typeof src.command === 'string' ? src.command.trim() : '';
+  const shown = command.slice(0, 80);
+  if (!command || command.length > CUSTOM_AGENT_COMMAND_MAX) {
+    return fail(issue('command-invalid', { name, command: shown }, `"${name}": command must be a program name or an absolute path`));
+  }
+  if (!BARE_COMMAND_RE.test(command)) {
+    const absolute = POSIX_ABSOLUTE_RE.test(command) || WIN_ABSOLUTE_RE.test(command);
+    const hasDotSegment = command.split(/[\\/]/).some((seg) => seg === '..' || seg === '.');
+    if (!absolute || hasDotSegment) {
+      // A folder in a relative name is the case the separator rule is for; the
+      // rest is shell syntax, spaces or quotes.
+      const relativePath = /[\\/]/.test(command) && !/[\s'"`$;|&<>*?~(){}[\]!#]/.test(command);
+      return fail(
+        relativePath
+          ? issue('command-separator', { name, command: shown }, `"${name}": "${shown}" has a folder but is not an absolute path`)
+          : issue('command-invalid', { name, command: shown }, `"${name}": command must be a program name or an absolute path, with no spaces or shell syntax`),
+      );
+    }
+  }
+  const stem = launcherStem(command);
+  if (!BARE_COMMAND_RE.test(stem)) {
+    return fail(issue('command-invalid', { name, command: shown }, `"${name}": command must be a program name or an absolute path`));
+  }
+  if (REGISTRY_NAMES.has(stem)) {
+    return fail(issue('command-known', { name, stem }, `"${name}": "${stem}" is an agent wmux already knows`));
+  }
+  if (GENERIC_COMMANDS.has(stem)) {
+    return fail(issue('command-generic', { name, stem }, `"${name}": "${stem}" runs other programs; use a wrapper on PATH that starts the agent`));
+  }
+
+  const args = squash(src.args);
+  if (args.length > CUSTOM_AGENT_ARGS_MAX || (args && !tokensOk(args))) {
+    return fail(issue('args-invalid', { name, max: String(CUSTOM_AGENT_ARGS_MAX) }, `"${name}": arguments must be plain words (no quotes, spaces inside one, or shell syntax)`));
+  }
+
+  const agent: CustomAgent = { name, command };
+  if (args) agent.args = args;
+  for (const field of ['promptFlag', 'modelFlag'] as const) {
+    const flag = squash(src[field]);
+    if (!flag) continue;
+    if (flag.length > CUSTOM_AGENT_FLAG_MAX || !FLAG_RE.test(flag)) {
+      return fail(issue('flag-invalid', { name, field }, `"${name}": ${field} must be one flag, such as --model`));
+    }
+    agent[field] = flag;
+  }
+  const unattended = squash(src.unattendedFlags);
+  if (unattended) {
+    if (unattended.length > CUSTOM_AGENT_ARGS_MAX || !tokensOk(unattended) || !unattended.startsWith('-')) {
+      return fail(issue('flag-invalid', { name, field: 'unattendedFlags' }, `"${name}": unattendedFlags must be plain flags`));
+    }
+    agent.unattendedFlags = unattended;
+  }
+  return { ok: true, agent };
+}
+
+/** Strict, for a save: the first problem is reported and nothing is kept. */
+export function validateCustomAgents(
+  input: unknown,
+): { ok: true; agents: CustomAgent[] } | ({ ok: false } & CustomAgentIssue) {
+  if (!Array.isArray(input)) return { ok: false, ...issue('agents-not-array', {}, 'custom agents must be an array') };
+  if (input.length > CUSTOM_AGENTS_MAX) {
+    const cap = String(CUSTOM_AGENTS_MAX);
+    return { ok: false, ...issue('agents-over-cap', { cap }, `at most ${cap} custom agents`) };
+  }
+  const agents: CustomAgent[] = [];
+  for (const raw of input) {
+    const r = normalizeCustomAgent(raw);
+    if (!r.ok) return r;
+    const clash = listClash(r.agent, agents);
+    if (clash) return { ok: false, ...clash };
+    agents.push(r.agent);
+  }
+  return { ok: true, agents };
+}
+
+function listClash(agent: CustomAgent, kept: readonly CustomAgent[]): CustomAgentIssue | undefined {
+  const key = customAgentNameKey(agent.name);
+  if (kept.some((a) => customAgentNameKey(a.name) === key)) {
+    return issue('name-duplicate', { name: agent.name }, `two custom agents are named "${agent.name}"`);
+  }
+  const stem = customAgentStem(agent);
+  const other = kept.find((a) => customAgentStem(a) === stem);
+  if (other) {
+    return issue('command-duplicate', { name: agent.name, other: other.name, stem }, `"${agent.name}" and "${other.name}" both run "${stem}"`);
+  }
+  return undefined;
+}
+
+/** A custom agent the loader could not keep, and why (shown in Settings). */
+export interface CustomAgentDropped {
+  name?: string;
+  issue: CustomAgentIssue;
+}
+
+/**
+ * The list from untrusted input (the file): bad entries and clashes are
+ * dropped (first wins) and reported, the count is capped. Never throws. The
+ * Settings save replaces the whole list, so what was dropped is shown rather
+ * than lost in silence.
+ */
+export function normalizeCustomAgentsReport(input: unknown): { agents: CustomAgent[]; dropped: CustomAgentDropped[] } {
+  const agents: CustomAgent[] = [];
+  const dropped: CustomAgentDropped[] = [];
+  if (!Array.isArray(input)) return { agents, dropped };
+  for (const raw of input) {
+    const n = (raw as { name?: unknown } | null)?.name;
+    const name = typeof n === 'string' && n.trim() ? { name: n.trim().slice(0, CUSTOM_AGENT_NAME_MAX) } : {};
+    if (agents.length >= CUSTOM_AGENTS_MAX) {
+      const cap = String(CUSTOM_AGENTS_MAX);
+      dropped.push({ ...name, issue: issue('agents-over-cap', { cap }, `more than ${cap} custom agents`) });
+      continue;
+    }
+    const r = normalizeCustomAgent(raw);
+    if (!r.ok) {
+      dropped.push({ ...name, issue: { code: r.code, params: r.params, error: r.error } });
+      continue;
+    }
+    const clash = listClash(r.agent, agents);
+    if (clash) {
+      dropped.push({ name: r.agent.name, issue: clash });
+      continue;
+    }
+    agents.push(r.agent);
+  }
+  return { agents, dropped };
+}
