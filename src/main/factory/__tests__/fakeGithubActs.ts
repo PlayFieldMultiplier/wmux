@@ -1,7 +1,8 @@
 // A small in-memory GitHub for the act executor's tests: the answers of the
-// endpoints actExecutor.ts reads and writes, shaped like GitHub's REST.
+// endpoints actExecutor.ts and releaseAct.ts read and write, shaped like
+// GitHub's REST.
 
-import type { GhActAnswer, GhActPort } from '../../github/GhActService';
+import type { GhActAnswer, GhActMethod, GhActPort } from '../../github/GhActService';
 
 export interface FakeIssue {
   number: number;
@@ -26,13 +27,55 @@ export interface FakeComment {
   html_url: string;
 }
 
+export interface FakeRelease {
+  id: number;
+  tag_name: string;
+  draft: boolean;
+  prerelease: boolean;
+  name: string;
+  body: string;
+  target_commitish: string;
+  author: { login: string };
+  html_url: string;
+}
+
+export interface FakeRun {
+  status: string;
+  conclusion: string | null;
+}
+
+export interface FakeWorkflowRun extends FakeRun {
+  head_sha: string;
+  event: string;
+  head_branch: string;
+  html_url: string;
+}
+
+const NOT_FOUND: GhActAnswer = { ok: false, kind: 'http', status: 404, message: 'gh: Not Found (HTTP 404)' };
+
 export class FakeGithub implements GhActPort {
   login = 'owner';
-  repo = { full_name: 'o/r', node_id: 'R_1', id: 4242 };
+  repo = { full_name: 'o/r', node_id: 'R_1', id: 4242, default_branch: 'main' };
+  /** The default branch's commits, oldest first: the last is its head. */
+  history: string[] = [];
+  /** Commits that are not on the default branch. */
+  otherCommits = new Set<string>();
+  /** Tags: the commit each points at; `annotated`: through a tag object. */
+  tags = new Map<string, { sha: string; annotated?: boolean }>();
+  releases: FakeRelease[] = [];
+  checkRuns = new Map<string, FakeRun[]>();
+  statuses = new Map<string, { state: string; total_count: number }>();
+  workflowRuns: FakeWorkflowRun[] = [];
+  /** Files at every commit, by path; `bigFiles`: answered through their blob. */
+  files = new Map<string, string>();
+  bigFiles = new Set<string>();
+  /** Called before every write is applied (a test may change state there). */
+  onWrite: ((w: { method: string; endpoint: string; body: Record<string, unknown> }) => void) | null = null;
+  private tagObjects = new Map<string, string>();
   issues = new Map<number, FakeIssue>();
   pulls = new Map<number, { head: string; merged: boolean }>();
   comments: FakeComment[] = [];
-  writes: Array<{ method: string; endpoint: string; body: Record<string, unknown> }> = [];
+  writes: Array<{ method: GhActMethod; endpoint: string; body: Record<string, unknown> }> = [];
   reads: string[] = [];
   /** Replace the next write's answer (a timeout, a wrong shape, …);
    *  `landed`: GitHub took the write all the same. */
@@ -77,6 +120,8 @@ export class FakeGithub implements GhActPort {
     };
     if (path === 'user') return { ok: true, value: { login: this.login } };
     if (path === 'repos/o/r') return { ok: true, value: this.repo };
+    const release = this.readRelease(path, query, page);
+    if (release) return release;
     let m = /^repos\/o\/r\/issues\/(\d+)\/comments$/.exec(path);
     if (m) return { ok: true, value: page(this.comments.filter((c) => c.issue === Number(m?.[1]))) };
     m = /^repos\/o\/r\/issues\/(\d+)$/.exec(path);
@@ -96,12 +141,133 @@ export class FakeGithub implements GhActPort {
     return { ok: false, kind: 'http', status: 404, message: `gh: no such endpoint ${endpoint} (HTTP 404)` };
   }
 
-  async write(_host: string, method: 'POST' | 'PATCH', endpoint: string, body: Record<string, unknown>): Promise<GhActAnswer> {
+  /** A tag as `git/ref/tags/<tag>` answers it. */
+  private tagRef(tag: string): unknown {
+    const t = this.tags.get(tag);
+    if (!t) return null;
+    if (!t.annotated) return { ref: `refs/tags/${tag}`, object: { type: 'commit', sha: t.sha } };
+    const obj = (this.nextId++).toString(16).padStart(40, '0');
+    this.tagObjects.set(obj, t.sha);
+    return { ref: `refs/tags/${tag}`, object: { type: 'tag', sha: obj } };
+  }
+
+  private known(sha: string): boolean {
+    return this.history.includes(sha) || this.otherCommits.has(sha);
+  }
+
+  /** The release endpoints (releaseAct.ts), or null for any other. */
+  private readRelease(path: string, query: URLSearchParams, page: (all: unknown[]) => unknown[]): GhActAnswer | null {
+    let m = /^repos\/o\/r\/git\/ref\/heads\/(.+)$/.exec(path);
+    if (m) {
+      const head = this.history.at(-1);
+      return decodeURIComponent(m[1]) === this.repo.default_branch && head ? { ok: true, value: { ref: `refs/heads/${this.repo.default_branch}`, object: { type: 'commit', sha: head } } } : NOT_FOUND;
+    }
+    m = /^repos\/o\/r\/git\/ref\/tags\/(.+)$/.exec(path);
+    if (m) {
+      const ref = this.tagRef(m[1]);
+      return ref ? { ok: true, value: ref } : NOT_FOUND;
+    }
+    m = /^repos\/o\/r\/git\/tags\/([0-9a-f]{40})$/.exec(path);
+    if (m) {
+      const sha = this.tagObjects.get(m[1]);
+      return sha ? { ok: true, value: { sha: m[1], object: { type: 'commit', sha } } } : NOT_FOUND;
+    }
+    m = /^repos\/o\/r\/git\/blobs\/(.+)$/.exec(path);
+    if (m) {
+      const text = this.files.get(decodeURIComponent(m[1]));
+      return text === undefined ? NOT_FOUND : { ok: true, value: { encoding: 'base64', content: Buffer.from(text, 'utf8').toString('base64') } };
+    }
+    m = /^repos\/o\/r\/commits\/([0-9a-f]{40})$/.exec(path);
+    if (m) return this.known(m[1]) ? { ok: true, value: { sha: m[1] } } : { ok: false, kind: 'http', status: 422, message: 'gh: No commit found for SHA (HTTP 422)' };
+    m = /^repos\/o\/r\/commits\/([0-9a-f]{40})\/check-runs$/.exec(path);
+    if (m) {
+      const runs = this.checkRuns.get(m[1]) ?? [];
+      return { ok: true, value: { total_count: runs.length, check_runs: page(runs) } };
+    }
+    m = /^repos\/o\/r\/commits\/([0-9a-f]{40})\/status$/.exec(path);
+    if (m) return { ok: true, value: this.statuses.get(m[1]) ?? { state: 'pending', total_count: 0, statuses: [] } };
+    m = /^repos\/o\/r\/compare\/([0-9a-f]{40})\.\.\.heads\/(.+)$/.exec(path);
+    if (m) {
+      if (decodeURIComponent(m[2]) !== this.repo.default_branch || this.history.length === 0) return NOT_FOUND;
+      const at = this.history.indexOf(m[1]);
+      if (at < 0) return this.otherCommits.has(m[1]) ? { ok: true, value: { status: 'diverged', ahead_by: 1, behind_by: 1 } } : NOT_FOUND;
+      const ahead = this.history.length - 1 - at;
+      return { ok: true, value: { status: ahead === 0 ? 'identical' : 'ahead', ahead_by: ahead, behind_by: 0 } };
+    }
+    m = /^repos\/o\/r\/releases\/tags\/(.+)$/.exec(path);
+    if (m) {
+      const r = this.releases.find((x) => x.tag_name === m?.[1] && !x.draft);
+      return r ? { ok: true, value: r } : NOT_FOUND;
+    }
+    if (path === 'repos/o/r/releases') return { ok: true, value: page(this.releases) };
+    if (path === 'repos/o/r/actions/runs') {
+      const sha = query.get('head_sha');
+      const runs = this.workflowRuns.filter((r) => (sha === null || r.head_sha === sha)
+        && (query.get('event') === null || r.event === query.get('event')) && (query.get('branch') === null || r.head_branch === query.get('branch')));
+      return { ok: true, value: { total_count: runs.length, workflow_runs: page(runs) } };
+    }
+    m = /^repos\/o\/r\/contents\/(.+)$/.exec(path);
+    if (m) {
+      const file = decodeURIComponent(m[1]);
+      if (!this.known(query.get('ref') ?? '')) return NOT_FOUND;
+      const inDir = [...this.files.keys()].filter((f) => f.startsWith(`${file}/`) && !f.slice(file.length + 1).includes('/'));
+      if (inDir.length > 0) return { ok: true, value: inDir.map((f) => ({ type: 'file', name: f.slice(file.length + 1), path: f })) };
+      const text = this.files.get(file);
+      if (text === undefined) return NOT_FOUND;
+      return this.bigFiles.has(file)
+        ? { ok: true, value: { type: 'file', encoding: 'none', content: '', size: text.length, sha: encodeURIComponent(file) } }
+        : { ok: true, value: { type: 'file', encoding: 'base64', content: Buffer.from(text, 'utf8').toString('base64'), size: text.length, sha: encodeURIComponent(file) } };
+    }
+    return null;
+  }
+
+  /** The release writes, or null for any other. */
+  private writeRelease(method: GhActMethod, endpoint: string, body: Record<string, unknown>): GhActAnswer | null {
+    if (method === 'POST' && endpoint === 'repos/o/r/git/refs') {
+      const tag = String(body.ref).replace(/^refs\/tags\//, '');
+      if (this.tags.has(tag)) return { ok: false, kind: 'http', status: 422, message: 'gh: Reference already exists (HTTP 422)' };
+      this.tags.set(tag, { sha: String(body.sha) });
+      return { ok: true, value: { ref: body.ref, node_id: 'REF_1', object: { type: 'commit', sha: body.sha } } };
+    }
+    if (method === 'POST' && endpoint === 'repos/o/r/releases') {
+      const tag = String(body.tag_name);
+      const r: FakeRelease = {
+        id: this.nextId++, tag_name: tag, draft: body.draft === true, prerelease: body.prerelease === true, name: String(body.name ?? ''), body: String(body.body ?? ''),
+        target_commitish: String(body.target_commitish), author: { login: this.login }, html_url: `https://github.com/o/r/releases/tag/${tag}`,
+      };
+      // GitHub makes the tag with a release that is not a draft.
+      if (!r.draft && !this.tags.has(tag)) this.tags.set(tag, { sha: r.target_commitish });
+      this.releases.push(r);
+      return { ok: true, value: { ...r } };
+    }
+    const m = /^repos\/o\/r\/releases\/(\d+)$/.exec(endpoint);
+    if (m) {
+      const at = this.releases.findIndex((x) => x.id === Number(m[1]));
+      if (at < 0) return NOT_FOUND;
+      const r = this.releases[at];
+      if (method === 'DELETE') {
+        this.releases.splice(at, 1);
+        return { ok: true, value: null };
+      }
+      if (body.draft === false && r.draft) {
+        // Publishing makes the tag at the target, or takes the tag as it is.
+        if (!this.tags.has(r.tag_name)) this.tags.set(r.tag_name, { sha: r.target_commitish });
+        r.draft = false;
+      }
+      return { ok: true, value: { ...r } };
+    }
+    return null;
+  }
+
+  async write(_host: string, method: GhActMethod, endpoint: string, body: Record<string, unknown>): Promise<GhActAnswer> {
     const w = { method, endpoint, body };
     this.writes.push(w);
+    this.onWrite?.(w);
     const forced = this.nextWrite;
     this.nextWrite = null;
     const apply = (): GhActAnswer => {
+      const release = this.writeRelease(method, endpoint, body);
+      if (release) return release;
       let m = /^repos\/o\/r\/issues\/(\d+)\/comments$/.exec(endpoint);
       if (method === 'POST' && m) {
         const c: FakeComment = { id: this.nextId++, issue: Number(m[1]), body: String(body.body), user: { login: this.login }, html_url: `https://github.com/o/r/issues/${m[1]}#issuecomment-${this.nextId}` };

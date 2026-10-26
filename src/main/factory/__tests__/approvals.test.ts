@@ -15,7 +15,7 @@ import type { Fact, FactDraft } from '../../../shared/facts';
 import type { MergeEffect } from '../../../shared/moaDecision';
 import type { PrLaneFacts } from '../../../shared/prReview';
 import type { RpcContext } from '../../../shared/rpc';
-import { ApprovalService, GUEST_REASON_HIDDEN, registerApprovalRpc, ruleCovers, typedApprovalSourceAllowed, typedApprovalTargets, withoutOwnerQuotes, type ApprovalMergeHost, type ApprovalPorts, type ApprovalWake, type StoredApproval } from '../approvals';
+import { ApprovalService, GUEST_REASON_HIDDEN, registerApprovalRpc, ruleCovers, typedApprovalSourceAllowed, typedApprovalTargets, withoutOwnerQuotes, type ApprovalActHost, type ApprovalMergeHost, type ApprovalPorts, type ApprovalWake, type StoredApproval } from '../approvals';
 import type { BotNoticeInput } from '../botNotices';
 import { RoomWriter } from '../roomWriter';
 import { registeredFactoryModules } from '../factoryHost';
@@ -39,6 +39,20 @@ const facts = (n: number, head = HEAD): PrLaneFacts => ({
   author: 'owner', mergedAt: null, mergeCommitOid: null, labels: [], labelsTruncated: false, files: ['a.ts'], filesTruncated: false,
   checksHeadOid: head, checks: [], checksTruncated: false,
 });
+
+/** The act outbox as far as a release request reads it: the main branch's
+ *  head, green, nothing else (approvalsRelease.os.test.ts runs releases). */
+const releaseOnly: ApprovalActHost = {
+  login: async () => 'owner',
+  repo: async () => ({ fullName: 'o/r', nodeId: 'R_1', id: 1 }),
+  issue: async () => ({ error: 'not used' }),
+  pull: async () => ({ error: 'not used' }),
+  release: async (_k, input) => ({ mode: 'release', workflows: [], targetSha: HEAD, defaultBranch: 'main', behindBy: 0, checks: 'passed', version: null, prerelease: input.prerelease ?? false }),
+  enqueue: () => null,
+  run: async () => null,
+  effect: () => null,
+  remove: () => undefined,
+};
 
 let dir = '';
 beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-approvals-')); });
@@ -79,6 +93,7 @@ function rig(over: Partial<ApprovalPorts> = {}) {
     ghLogin: async () => state.login,
     rooms: () => writer,
     merge: () => host,
+    acts: () => releaseOnly,
     appendFact: (d) => {
       facts_.push(d);
       return null;
@@ -170,7 +185,7 @@ describe('approval requests (bot side)', () => {
     // An owner card in another thread is not answered across threads.
     const other = r.ownerSays('and the issue', 'task:t-2');
     r.state.wakes.set(DEV.id, { wakeId: 'w-2', attempt: 1, threadId: 'general' as never, tainted: false, ownerCardId: other.id });
-    const next = await r.ask(DEV, { action: 'release', reason: 'note' });
+    const next = await r.ask(DEV, { action: 'merge', prNumber: 2, reason: 'note' });
     const card = r.writer.get(WS, next.cardId as string);
     expect(card?.threadId).toBe('general');
     expect(card?.replyTo).toBeUndefined();
@@ -197,8 +212,8 @@ describe('approval requests (bot side)', () => {
     expect(r.writer.get(WS, req.cardId as string)?.body).not.toContain('머지');
     // Nothing of its own left: main names the act.
     r.state.wakes.set(DEV.id, { wakeId: 'w-2', attempt: 1, threadId: 'general' as never, tainted: false });
-    const bare = await r.ask(DEV, { action: 'release', reason: '"머지할거 머지해"' });
-    expect(bare).toMatchObject({ reason: 'Publish a release of github.com/o/r.' });
+    const bare = await r.ask(DEV, { action: 'release', tagName: 'v1', reason: '"머지할거 머지해"' });
+    expect(bare).toMatchObject({ reason: 'Publish a release of github.com/o/r (v1).' });
   });
 
   it('a request lands in the thread of the owner\'s latest words to the bot, else the owner wake\'s own thread', async () => {
@@ -268,12 +283,12 @@ describe('approval requests (bot side)', () => {
 
   it('a turn still running keeps its request count while many other turns ask', async () => {
     const r = rig();
-    const a = await r.ask(DEV, { action: 'release', reason: 'first' });
+    const a = await r.ask(DEV, { action: 'release', tagName: 'v1', reason: 'first' });
     for (let i = 0; i < 210; i += 1) {
       r.state.wakes.set(OTHER.id, { wakeId: `w-o${i}`, attempt: 1, threadId: null, tainted: false });
-      await r.svc.request(binding(OTHER), { action: 'release', reason: 'x' });
+      await r.svc.request(binding(OTHER), { action: 'release', tagName: `v-o${i}`, reason: 'x' });
     }
-    const b = await r.svc.request(binding(DEV), { action: 'release', reason: 'second' });
+    const b = await r.svc.request(binding(DEV), { action: 'release', tagName: 'v2', reason: 'second' });
     expect(b).toMatchObject({ ok: true });
     expect((b as { duplicate?: true }).duplicate).toBeUndefined();
     expect((b as { request: { requestId: string } }).request.requestId).not.toBe(a.requestId);
@@ -281,15 +296,15 @@ describe('approval requests (bot side)', () => {
 
   it('a retried turn (the next attempt) asks again under the same default keys', async () => {
     const r = rig();
-    const a = await r.ask(DEV, { action: 'release', reason: 'file it' });
+    const a = await r.ask(DEV, { action: 'merge', prNumber: 1, reason: 'file it' });
     r.state.wakes.set(DEV.id, { wakeId: 'w-1', attempt: 2, threadId: null, tainted: false });
-    expect(await r.svc.request(binding(DEV), { action: 'release', reason: 'file it' })).toMatchObject({ ok: true, duplicate: true, request: { requestId: a.requestId } });
+    expect(await r.svc.request(binding(DEV), { action: 'merge', prNumber: 2, reason: 'file it' })).toMatchObject({ ok: true, duplicate: true, request: { requestId: a.requestId } });
   });
 
   it('approval_list returns only the caller\'s requests', async () => {
     const r = rig();
     await r.ask(DEV, { action: 'merge', prNumber: 1, reason: 'x' });
-    await r.ask(OTHER, { action: 'release', reason: 'y' });
+    await r.ask(OTHER, { action: 'release', tagName: 'v1', reason: 'y' });
     const mine = r.svc.listFor(binding(DEV), {});
     expect(mine).toMatchObject({ ok: true, requests: [{ botId: DEV.id }] });
     expect((mine as { requests: unknown[] }).requests).toHaveLength(1);
@@ -385,12 +400,15 @@ describe('owner decisions', () => {
     expect(cards.at(-1)).toMatchObject({ kind: 'refusal', title: expect.stringContaining('needs a new approval') });
   });
 
-  it('a release is recorded, never executed', async () => {
+  it('a release is an act the outbox carries out: asked only while it runs, never a merge', async () => {
     vi.useFakeTimers();
+    const off = rig({ acts: () => null });
+    expect(await off.svc.request(binding(DEV), { action: 'release', tagName: 'v1', reason: 'ship it' })).toMatchObject({ ok: false, code: 'not_started' });
     const r = rig();
-    const req = await r.ask(DEV, { action: 'release', reason: 'ship it' });
-    expect(r.writer.get(WS, req.cardId as string)?.body).toContain('does not carry this act out yet');
-    expect(r.svc.decide({ requestId: req.requestId, decision: 'approve' }, 'desktop')).toMatchObject({ ok: true, request: { state: 'approved' } });
+    const req = await r.ask(DEV, { action: 'release', tagName: 'v1', reason: 'ship it' });
+    expect(req).toMatchObject({ act: { kind: 'release', tagName: 'v1', targetSha: HEAD }, payloadHash: expect.stringMatching(/^[0-9a-f]{64}$/) });
+    expect(r.writer.get(WS, req.cardId as string)?.body).not.toContain('does not carry this act out yet');
+    expect(r.svc.decide({ requestId: req.requestId, decision: 'approve', payloadHash: req.payloadHash }, 'desktop')).toMatchObject({ ok: true, request: { state: 'approved' } });
     await vi.advanceTimersByTimeAsync(APPROVAL_UNDO_MS * 2);
     expect(r.enqueued).toEqual([]);
   });
@@ -661,7 +679,7 @@ describe('always allow (remembered rules)', () => {
     }
     expect(r.svc.rulesList()).toEqual([]);
     expect(r.svc.get(a.requestId)?.state).toBe('pending');
-    const issue = await r.ask(DEV, { action: 'release', reason: 'y' });
+    const issue = await r.ask(DEV, { action: 'release', tagName: 'v1', reason: 'y' });
     expect(r.svc.decide({ requestId: issue.requestId, decision: 'always' }, 'desktop')).toMatchObject({ ok: false, code: 'not_ruleable' });
   });
 
@@ -743,7 +761,7 @@ describe('always allow (remembered rules)', () => {
     r.state.heads.set(5, HEAD);
     // The rule covers the bot that asks: another bot's request is told so.
     expect(await r.ask(OTHER, { action: 'merge', prNumber: 5, reason: 'x' })).toMatchObject({ state: 'pending', ruleSkipped: 'rule-other-asker' });
-    const rel = await r.ask(DEV, { action: 'release', reason: 'ship' });
+    const rel = await r.ask(DEV, { action: 'release', tagName: 'v1', reason: 'ship' });
     expect(r.svc.decide({ requestId: rel.requestId, decision: 'always' }, 'desktop')).toMatchObject({ ok: false, code: 'not_ruleable' });
     expect(ruleCovers({ ruleId: 'r', action: 'merge', repoKey: KEY, scope: { workspaceId: WS }, createdAt: 1 }, { action: 'release', repoKey: KEY, botId: DEV.id, workspaceId: WS })).toBe(false);
   });
