@@ -140,6 +140,8 @@ function makeRendererFake(opts?: {
     role?: string;
     /** main's approved custom agents (FanOutRequest.customAgents). */
     customAgents?: unknown[];
+    /** The approved binding for the task's role (FanOutRequest.roleBindings). */
+    roleBinding?: unknown;
     returnedPtyId?: string;
   }> = [];
   let seq = 0;
@@ -1578,6 +1580,23 @@ describe('per-task roles', () => {
     const svc = new FanOutService({ daemon: makeDaemonFake().port, renderer: renderer.port, worktrees: makeWorktreesFake() });
     await svc.start(baseReq({ roles: ['Builder', 'Builder'], customAgents: [tern] }));
     expect(renderer.spawned.map((s) => s.customAgents)).toEqual([[tern], [tern]]);
+  });
+
+  it('hands each roled task the binding its approval showed, and no binding field without one', async () => {
+    const renderer = makeRendererFake();
+    const svc = new FanOutService({ daemon: makeDaemonFake().port, renderer: renderer.port, worktrees: makeWorktreesFake() });
+    await svc.start(baseReq({
+      titles: ['Task A', 'Task B', 'Task C'],
+      roles: ['Builder', 'Reviewer', ''],
+      roleBindings: { Builder: { agent: 'codex', model: 'o3' }, Reviewer: null },
+    }));
+    expect(renderer.spawned.map((s) => s.roleBinding)).toEqual([{ agent: 'codex', model: 'o3' }, null, undefined]);
+    expect('roleBinding' in renderer.spawned[2]).toBe(false);
+    // A launch with no approved bindings sends none: the renderer reads the role's current one.
+    const plain = makeRendererFake();
+    await new FanOutService({ daemon: makeDaemonFake().port, renderer: plain.port, worktrees: makeWorktreesFake() })
+      .start(baseReq({ idempotencyKey: 'k-plain', roles: ['Builder', 'Builder'] }));
+    expect(plain.spawned.every((s) => !('roleBinding' in s))).toBe(true);
   });
 
   it('forwards no role for an unroled task', async () => {

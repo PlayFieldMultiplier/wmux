@@ -24,7 +24,7 @@ import type { AgentSlug } from './agentIdentity';
 import { customAgentLaunchLine, customAgentStem, customLaunchPrefixLength, findCustomAgent, normalizeCustomAgentsReport, type CustomAgent } from './customAgents';
 import { tokenize } from './agentResume';
 import { EFFORT_TOKEN_RE, launchGrammarFor } from './agentLaunchOptions';
-import { bindingEnforcesModel, bindingEnforcesSkipPermissions, KNOWN_AGENT_STEMS, ROLE_BINDING_MODEL_MAX, type RoleBinding } from './orchestratorRole';
+import { bindingEnforcesModel, bindingEnforcesSkipPermissions, KNOWN_AGENT_STEMS, normalizeRoleBinding, ROLE_BINDING_MODEL_MAX, type RoleBinding } from './orchestratorRole';
 import { FANOUT_MAX_TASKS } from './workTask';
 
 /** Why a CLI is listed but not selectable. */
@@ -660,6 +660,33 @@ export function unresolvedCustomAgent(
   extraAgents?: ReadonlySet<string>,
 ): boolean {
   return !!agent && !KNOWN_AGENT_STEMS.has(agent) && !extraAgents?.has(agent) && !findCustomAgent(agent, customAgents);
+}
+
+/**
+ * The role bindings a fan-out approval covers: each requested role's binding
+ * as the approval shows it, or null for a role shown as unbound. The tasks
+ * launch these, so a role rebound in Settings while a dependent task waits
+ * cannot change what it runs. Built by the renderer from its bindings and
+ * re-normalized by main from the renderer's verdict, with the same rules.
+ */
+export function approvedRoleBindings(roles: readonly unknown[], bindings: unknown): Record<string, RoleBinding | null> {
+  const src = bindings !== null && typeof bindings === 'object' && !Array.isArray(bindings) ? bindings as Record<string, unknown> : {};
+  const out: Record<string, RoleBinding | null> = {};
+  for (const r of roles) {
+    const role = typeof r === 'string' ? r.trim() : '';
+    if (!role || Object.prototype.hasOwnProperty.call(out, role)) continue;
+    const b = Object.prototype.hasOwnProperty.call(src, role) ? normalizeRoleBinding(src[role]) : undefined;
+    out[role] = b && (b.agent || b.model || b.args) ? b : null;
+  }
+  return out;
+}
+
+/** The binding a fan-out task's role launches: the one its approval showed,
+ *  which main sends as `roleBinding` (null = shown as unbound), else the
+ *  role's current binding (a launch with no approval behind it). */
+export function fanoutTaskRoleBinding(params: Record<string, unknown>, current: RoleBinding | undefined): RoleBinding | undefined {
+  if (!Object.prototype.hasOwnProperty.call(params, 'roleBinding')) return current;
+  return params.roleBinding === null ? undefined : normalizeRoleBinding(params.roleBinding);
 }
 
 /** One "Roles resolve to" line of a fan-out approval: what the role launches,

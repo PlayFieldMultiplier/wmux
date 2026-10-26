@@ -84,7 +84,7 @@ import { inheritTaskAutonomy } from './taskAutonomy';
 import { getFanOutGuards, type FanOutGuards } from './fanoutGuards';
 import { getWorkerSlots, type WorkerSlots } from '../factory/workerSlots';
 import { loadFanoutWorkerPermissionMode } from './fanoutWorkerPolicy';
-import { commandChoosesModel, promptFlagForLauncher } from '../../shared/orchestratorRole';
+import { commandChoosesModel, promptFlagForLauncher, type RoleBinding } from '../../shared/orchestratorRole';
 import {
   MODEL_ENV_MARKER,
   WORKER_GATEWAY_ENV,
@@ -204,6 +204,10 @@ export interface FanOutRendererPort {
      *  renderer rewrites the launch command through the same applyRoleBinding
      *  path a human-opened pane uses. Absent = launch the command as given. */
     role?: string;
+    /** The binding the fan-out's approval showed for `role` (null = shown as
+     *  unbound). Present only for an approved fan-out: the renderer launches
+     *  it instead of reading the role's current binding. */
+    roleBinding?: RoleBinding | null;
     /** Depth-1 lineage: the workspace that fanned this task out. The renderer
      *  hands it to pty.create, whose main-side handler stamps it BEFORE the
      *  PTY (and the agent) exists; a failed stamp fails the spawn. */
@@ -314,6 +318,9 @@ export interface FanOutRequest {
    * bindings the operator configured; it cannot invent a command.
    */
   roles?: string[];
+  /** The bindings the approval showed for `roles` (approvedRoleBindings), set
+   *  by main from the approval verdict, never by the caller. */
+  roleBindings?: Record<string, RoleBinding | null>;
   /**
    * Per-task agent choice, index-aligned with `titles` — from an operator
    * preset or a caller's `agents[]`, already validated against the closed
@@ -937,6 +944,7 @@ export class FanOutService {
       missionIdemKey: `${req.idempotencyKey}-${k}`,
       reservationKey: req.idempotencyKey,
       ...(entries[k].role ? { role: entries[k].role } : {}),
+      ...(entries[k].role && req.roleBindings && Object.hasOwn(req.roleBindings, entries[k].role) ? { roleBinding: req.roleBindings[entries[k].role] } : {}),
       ...(entries[k].agent ? { agentChoice: entries[k].agent } : {}),
       ...(req.customAgents ? { customAgents: req.customAgents } : {}),
       ...(req.branches?.[k] ? { branch: req.branches[k] } : {}),
@@ -1250,6 +1258,7 @@ export class FanOutService {
         reservationKey: req.idempotencyKey,
         output: { batchDir },
         ...(entries[k].role ? { role: entries[k].role } : {}),
+        ...(entries[k].role && req.roleBindings && Object.hasOwn(req.roleBindings, entries[k].role) ? { roleBinding: req.roleBindings[entries[k].role] } : {}),
         ...(entries[k].agent ? { agentChoice: entries[k].agent } : {}),
         ...(req.customAgents ? { customAgents: req.customAgents } : {}),
         // A bot's research task runs here: its preset, thread, handoff,
@@ -1399,6 +1408,8 @@ export class FanOutService {
     suggestCopy?: { cwd: string; count: number; root: string };
     /** Orchestrator role for this task's pane (absent = unroled). */
     role?: string;
+    /** FanOutRequest.roleBindings[role], when the request carries them. */
+    roleBinding?: RoleBinding | null;
     /** The task branch's name (absent = wtask/{slug}-{id}). */
     branch?: string;
     /** T3 — commit the task branch starts from (absent = HEAD). */
@@ -1911,6 +1922,7 @@ export class FanOutService {
         initialCommand,
         ...(Object.keys(paneEnv).length > 0 ? { env: paneEnv } : {}),
         ...(ctx.role ? { role: ctx.role } : {}),
+        ...(ctx.roleBinding !== undefined ? { roleBinding: ctx.roleBinding } : {}),
         ...(ctx.agentChoice ? { agentChoice: ctx.agentChoice } : {}),
         ...(ctx.customAgents ? { customAgents: ctx.customAgents } : {}),
         fanoutTaskOf: ctx.verifiedWorkspaceId,
