@@ -911,7 +911,7 @@ export interface ApprovalInputGate {
   /** The pane's workspace policy right now. */
   answerPolicy: (ptyId: string) => Promise<AnswerPolicy>;
   /** The pane's visible screen as text, or null when it cannot be read. */
-  readScreenText: (ptyId: string, opts?: { timeoutMs?: number }) => Promise<string | null>;
+  readScreenText: (ptyId: string) => Promise<string | null>;
 }
 
 /** The gate could not decide: a delivery found the screen unreadable (any policy). */
@@ -930,10 +930,9 @@ async function assertNotAtFolderTrust(
   ctx: RpcContext | undefined,
   ptyId: string,
   op: string,
-  read: { timeoutMs?: number } = {},
 ): Promise<void> {
   if (ctx?.operator) return;
-  refuseAtFolderTrust(await gate.readScreenText(ptyId, read), op, ptyId);
+  refuseAtFolderTrust(await gate.readScreenText(ptyId), op, ptyId);
 }
 
 /** A retried Enter withheld on purpose (a folder-trust prompt took the screen). */
@@ -1164,7 +1163,7 @@ export interface InputRpcDeps {
   /** Injected in tests; defaults to the pane's workspace autonomy entry. */
   answerPolicy?: (ptyId: string) => Promise<AnswerPolicy>;
   /** Injected in tests; defaults to the renderer's screen read. */
-  readScreenText?: (ptyId: string, opts?: { timeoutMs?: number }) => Promise<string | null>;
+  readScreenText?: (ptyId: string) => Promise<string | null>;
   /** Injected in tests; the gated submit's wait between paste and Enter. */
   sleep?: (ms: number) => Promise<void>;
   /** Injected in tests; the hand-off guard's clock. */
@@ -1290,14 +1289,11 @@ export function registerInputRpc(
       }),
     readScreenText:
       deps.readScreenText ??
-      (async (ptyId, opts) => {
+      (async (ptyId) => {
         try {
-          const read = (await sendToRenderer(
-            getWindow,
-            'input.readScreen',
-            { ptyId },
-            opts?.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {},
-          )) as { text?: unknown } | undefined;
+          const read = (await sendToRenderer(getWindow, 'input.readScreen', { ptyId })) as
+            | { text?: unknown }
+            | undefined;
           return typeof read?.text === 'string' ? read.text : null;
         } catch {
           return null;
@@ -1367,11 +1363,12 @@ export function registerInputRpc(
    * must be writable afterwards or nothing is written. Asked only after the
    * caller's access to the pty was checked.
    */
-  const startIfSuspended = async (method: string, ptyId: string, clock: StartClock, promote: boolean): Promise<void> => {
-    if (ptyManager.get(ptyId)) return;
+  /** Attach a session with no pipe here; true when it did (the pane just woke up). */
+  const startIfSuspended = async (method: string, ptyId: string, clock: StartClock, promote: boolean): Promise<boolean> => {
+    if (ptyManager.get(ptyId)) return false;
     const dc = getDaemonClient?.();
     // Only on a positive "no pipe": a client that cannot say leaves it as is.
-    if (!dc?.isConnected || dc.isSessionPipeWritable?.(ptyId) !== false) return;
+    if (!dc?.isConnected || dc.isSessionPipeWritable?.(ptyId) !== false) return false;
     // No pipe here says nothing about the session: a pane that never mounted
     // (a workspace outside the multiview grid) leaves its live session
     // detached after an app restart. A stop key (`promote: false`) attaches
@@ -1388,6 +1385,7 @@ export function registerInputRpc(
     if (!dc.isSessionPipeWritable(ptyId)) {
       throw new Error(`${method}: the pane's session "${ptyId}" could not be attached — nothing was written`);
     }
+    return true;
   };
 
   /** Whether the task pane a bot reaches through its task lane belongs to a
@@ -1832,7 +1830,10 @@ export function registerInputRpc(
       await assertNotAtFolderTrust(approvalGate, ctx, ptyId, 'input.sendKey');
     }
     // After every refusal: attach (promoting) a session with no pipe here.
-    await startIfSuspended('input.sendKey', ptyId, clock, !stopKey);
+    const attached = await startIfSuspended('input.sendKey', ptyId, clock, !stopKey);
+    // A detached session reads as a blank, deferred screen before the attach;
+    // the agent behind it may be on its trust prompt, so Escape checks again.
+    if (attached && key === 'escape') await assertNotAtFolderTrust(approvalGate, ctx, ptyId, 'input.sendKey');
 
     noteInterruptInput?.(ptyId, sequence);
     const instance = ptyManager.get(ptyId);
