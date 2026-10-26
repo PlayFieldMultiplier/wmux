@@ -181,32 +181,23 @@ describe('detectorSuppressedBy (#919 detector veto)', () => {
   });
 });
 
-describe('detectorSuppressedBy on a custom agent pane', () => {
-  it('drops a registry banner the custom agent draws, unless a hook or process names that agent', () => {
-    expect(detectorSuppressedBy(undefined, 'claude', true)).toBe(true);
-    expect(detectorSuppressedBy(undefined, 'claude', false)).toBe(false);
-    expect(detectorSuppressedBy(undefined, undefined, true)).toBe(false);
-    // A live claude under the custom wrapper is claude.
-    expect(detectorSuppressedBy(resolveCanonicalAgentIdentity({ proc: { slug: 'claude', alive: true } }), 'claude', true)).toBe(false);
-  });
-});
-
 describe('reportedAgentName (#1303 no-banner sessions)', () => {
-  it('names a live custom agent when no registry agent is canonical, over the screen', () => {
-    // "Tern" is a made-up CLI the operator defined.
-    // Through the real tier rule: a live custom process leaves no screen-tier
-    // identity, so neither the label nor the persisted slug is the banner's.
-    const canonical = resolveCanonicalAgentIdentity({ customAgent: true, screenSlug: 'claude' });
-    expect(canonical).toBeUndefined();
-    expect(reportedAgentName({ rawName: 'Claude Code', screenSlug: 'claude', canonical, customName: 'Tern' })).toBe('Tern');
-    expect(reportedAgentName({ rawName: undefined, screenSlug: undefined, customName: 'Tern' })).toBe('Tern');
-    // A canonical registry agent keeps its own name.
+  it('names a custom agent\'s pane over the screen, while the screen still decides status', () => {
+    // "Devbox" is a made-up wrapper the operator defined (`ssh host claude`):
+    // only the screen can see the claude it runs.
+    const canonical = resolveCanonicalAgentIdentity({ screenSlug: 'claude' });
+    expect(canonical).toEqual({ slug: 'claude', source: 'screen' });
+    expect(detectorSuppressedBy(canonical, 'claude')).toBe(false);
+    expect(reportedAgentName({ rawName: 'Claude Code', screenSlug: 'claude', canonical, customName: 'Devbox' })).toBe('Devbox');
+    expect(reportedAgentName({ rawName: undefined, screenSlug: undefined, customName: 'Devbox' })).toBe('Devbox');
+    // A hook or a live process names the registry agent itself.
     expect(reportedAgentName({
       rawName: undefined,
       screenSlug: undefined,
       canonical: resolveCanonicalAgentIdentity({ auth: auth('claude', 30_000) }),
-      customName: 'Tern',
+      customName: 'Devbox',
     })).toBe('Claude Code');
+    expect(reportedAgentName({ canonical: resolveCanonicalAgentIdentity({ proc: { slug: 'codex', alive: true } }), customName: 'Devbox' })).toBe('Codex CLI');
   });
 
   it('a fresh exact-routed hook names a pane the detector never named — the #1303 regression guard', () => {

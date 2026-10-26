@@ -49,7 +49,6 @@ export type CustomAgentIssueCode =
   | 'unknown-field'
   | 'name-invalid'
   | 'name-duplicate'
-  | 'name-known'
   | 'command-invalid'
   | 'command-separator'
   | 'command-known'
@@ -146,13 +145,23 @@ const REGISTRY_NAMES: ReadonlySet<string> = new Set(
   ].map((n) => matchStem(n))),
 );
 
-/** Registry agents' display names and slugs, lower-cased. A pane label goes
- *  out as the agent's name, and main maps a registry display name back to its
- *  slug (agentDisplayToSlug): a custom agent named "Claude Code" would become
- *  that slug. */
+/** Registry agents' display names and slugs, lower-cased. */
 const REGISTRY_DISPLAY_NAMES: ReadonlySet<string> = new Set(
   AGENT_IDENTITIES.flatMap((a) => [a.display, a.slug]).map((n) => n.toLowerCase()),
 );
+
+/**
+ * Whether a custom agent's name may label its pane. A pane label goes out as
+ * the agent's name, and main maps a registry display name back to its slug
+ * (agentDisplayToSlug): a custom agent named "Claude Code" or "Amp" would
+ * become that agent. Such an agent still launches; it only gets no label.
+ */
+export function customAgentLabelAllowed(name: string): boolean {
+  return !REGISTRY_DISPLAY_NAMES.has(name.trim().toLowerCase());
+}
+
+/** The largest custom-agents.json either side reads: 16 agents fit in far less. */
+export const CUSTOM_AGENTS_FILE_MAX = 256 * 1024;
 
 /**
  * A process name in the form the process tracker compares: basename,
@@ -260,9 +269,6 @@ export function normalizeCustomAgent(
   const nameMax = String(CUSTOM_AGENT_NAME_MAX);
   if (!name || name.length > CUSTOM_AGENT_NAME_MAX || !NAME_RE.test(name)) {
     return fail(issue('name-invalid', { max: nameMax }, `name must be 1-${nameMax} characters: letters, digits, space . _ -`));
-  }
-  if (REGISTRY_DISPLAY_NAMES.has(name.toLowerCase())) {
-    return fail(issue('name-known', { name }, `"${name}" is the name of an agent wmux already knows`));
   }
 
   // A field of the wrong type is refused, never read as absent: the agent

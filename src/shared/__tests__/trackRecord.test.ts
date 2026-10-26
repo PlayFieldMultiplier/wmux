@@ -209,6 +209,9 @@ describe('agentSlug', () => {
   it('reduces a display name to its first word', () => {
     expect(agentSlug('Claude Code')).toBe('claude');
     expect(agentSlug('Codex')).toBe('codex');
+    expect(agentSlug('Codex CLI')).toBe('codex');
+    // A custom agent's label that only starts like a registry agent is not it.
+    expect(agentSlug('Codex Mini')).toBe('-');
     expect(agentSlug(null)).toBe('-');
   });
 });

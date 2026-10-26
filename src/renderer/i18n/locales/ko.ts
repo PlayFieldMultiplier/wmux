@@ -2861,7 +2861,6 @@ export const ko = {
   'settings.customAgentsIssue.unknown-field': '알 수 없는 필드 "{field}".',
   'settings.customAgentsIssue.name-invalid': '이름은 1–{max}자의 영문, 숫자, 공백, . _ -여야 합니다.',
   'settings.customAgentsIssue.name-duplicate': '"{name}"이라는 사용자 에이전트가 이미 있습니다.',
-  'settings.customAgentsIssue.name-known': '"{name}"은(는) wmux가 이미 아는 에이전트의 이름입니다. 다른 이름을 쓰세요.',
   'settings.customAgentsIssue.command-invalid': '"{command}"은(는) 프로그램 이름이나 절대 경로가 아닙니다. 공백, 따옴표, 셸 문법은 쓸 수 없습니다.',
   'settings.customAgentsIssue.command-separator': '"{command}"에 폴더가 있지만 절대 경로가 아닙니다. 전체 경로를 입력하거나, PATH에 있다면 프로그램 이름만 입력하세요.',
   'settings.customAgentsIssue.command-known': '"{stem}"은(는) wmux가 이미 아는 에이전트입니다. 그 에이전트를 바로 고르세요.',

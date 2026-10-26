@@ -29,6 +29,14 @@ describe('CustomAgentNames', () => {
     write([{ name: 'Gull', command: 'gull', processNames: ['gull', 'Gull-Daemon.exe'] }]);
     later();
     expect([...names.names()]).toEqual([['gull', 'Gull'], ['gull-daemon', 'Gull']]);
+    // Named like a registry agent: kept by the loader, never a label.
+    write([{ name: 'Amp', command: 'amp-work' }, { name: 'Gull', command: 'gull' }]);
+    later();
+    expect([...names.names()]).toEqual([['gull', 'Gull']]);
+    // An oversized file is unreadable, not parsed.
+    fs.writeFileSync(path.join(dir, 'custom-agents.json'), JSON.stringify({ agents: [{ name: 'Gull', command: 'gull' }], pad: 'x'.repeat(300 * 1024) }), 'utf8');
+    later();
+    expect(names.names().size).toBe(0);
     fs.writeFileSync(path.join(dir, 'custom-agents.json'), '{ nope', 'utf8');
     later();
     expect(names.names().size).toBe(0);

@@ -3359,7 +3359,6 @@ export const en = {
   'settings.customAgentsIssue.unknown-field': 'Unknown field "{field}".',
   'settings.customAgentsIssue.name-invalid': 'The name must be 1–{max} characters: letters, digits, space, . _ -',
   'settings.customAgentsIssue.name-duplicate': 'Another custom agent is already named "{name}".',
-  'settings.customAgentsIssue.name-known': '"{name}" is the name of an agent wmux already knows. Choose another name.',
   'settings.customAgentsIssue.command-invalid': '"{command}" is not a program name or an absolute path. Spaces, quotes and shell syntax are not allowed.',
   'settings.customAgentsIssue.command-separator': '"{command}" has a folder but is not an absolute path. Type the full path, or just the program name if it is on PATH.',
   'settings.customAgentsIssue.command-known': '"{stem}" is an agent wmux already knows. Pick it directly instead.',

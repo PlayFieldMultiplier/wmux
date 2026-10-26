@@ -578,7 +578,6 @@ function canonicalIdentityFor(
     ...(proc ? { proc } : {}),
     ...(auth ? { auth } : {}),
     ...(screenSlug ? { screenSlug } : {}),
-    ...(agentProcessTracker.customAgentNameFor(sessionId) !== undefined ? { customAgent: true } : {}),
   });
 }
 
@@ -5257,11 +5256,7 @@ function registerRpcHandlers(
         const screenSlug = agentDisplayToSlug(data.agent);
         // `false` also tells HookIngest not to record a terminal_prompt for it.
         const screenName = sessionManager.getSession(sessionId)?.bridge.getLastAgent();
-        if (detectorSuppressedBy(
-          canonicalIdentityFor(agentProcessTracker, sessionId, screenName ? agentDisplayToSlug(screenName) : undefined),
-          screenSlug,
-          agentProcessTracker.customAgentNameFor(sessionId) !== undefined,
-        )) return false;
+        if (detectorSuppressedBy(canonicalIdentityFor(agentProcessTracker, sessionId, screenName ? agentDisplayToSlug(screenName) : undefined), screenSlug)) return false;
         sessionManager.getSession(sessionId)?.bridge.noteAgentStatus(data.status as AgentEventStatus);
         const event: DaemonEvent = { type: 'agent.event', sessionId, data };
         pipeServer.broadcast(event);
@@ -7941,7 +7936,7 @@ function wireEvents(
     // is a false detection: suppress the broadcast entirely (data.agent is
     // NEVER rewritten — main keys notification dedup off it and the
     // arbitration stamp describes the raw detection).
-    if (detectorSuppressedBy(canonical, slug, agentProcessTracker.customAgentNameFor(payload.sessionId) !== undefined)) return;
+    if (detectorSuppressedBy(canonical, slug)) return;
     const event: DaemonEvent = {
       type: 'agent.event',
       sessionId: payload.sessionId,

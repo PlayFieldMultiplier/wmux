@@ -11,6 +11,8 @@
 // Everything here is pure: main (src/main/deck/trackRecordFeed.ts) feeds it
 // events and a clock, and owns the file (trackRecordStore.ts).
 
+import { AGENT_SLUG_SET, agentDisplayToSlug } from './agentIdentity';
+
 /** Weeks kept, the current one included. Older weeks are dropped. */
 export const TRACK_RETENTION_WEEKS = 12;
 /** Time in needs-you after which the wait counts as a stall. Blocked counts at once. */
@@ -513,7 +515,13 @@ export function formatDuration(ms: number): string {
 
 /** An agent's display name as a slug (`Claude Code` → `claude`), or `-`. */
 export function agentSlug(name: string | null | undefined): string {
-  const first = (name ?? '').trim().toLowerCase().split(/\s+/)[0] ?? '';
+  const trimmed = (name ?? '').trim();
+  const known = agentDisplayToSlug(trimmed);
+  if (known) return known;
+  const first = trimmed.toLowerCase().split(/\s+/)[0] ?? '';
   const slug = first.replace(/[^a-z0-9-]/g, '').slice(0, 24);
+  // A name that only starts like a registry agent ("Codex Mini", a custom
+  // agent's label) is not that agent: its record is not that agent's.
+  if (AGENT_SLUG_SET.has(slug) && trimmed.toLowerCase() !== slug) return '-';
   return slug || '-';
 }

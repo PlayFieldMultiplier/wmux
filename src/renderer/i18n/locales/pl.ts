@@ -3333,7 +3333,6 @@ export const pl = {
   'settings.customAgentsIssue.unknown-field': 'Nieznane pole "{field}".',
   'settings.customAgentsIssue.name-invalid': 'Nazwa musi mieć 1–{max} znaków: litery, cyfry, spacja, . _ -',
   'settings.customAgentsIssue.name-duplicate': 'Inny własny agent ma już nazwę "{name}".',
-  'settings.customAgentsIssue.name-known': '"{name}" to nazwa agenta, którego wmux już zna. Wybierz inną nazwę.',
   'settings.customAgentsIssue.command-invalid': '"{command}" nie jest nazwą programu ani ścieżką bezwzględną. Spacje, cudzysłowy i składnia powłoki są niedozwolone.',
   'settings.customAgentsIssue.command-separator': '"{command}" zawiera folder, ale nie jest ścieżką bezwzględną. Wpisz pełną ścieżkę albo samą nazwę programu, jeśli jest w PATH.',
   'settings.customAgentsIssue.command-known': '"{stem}" to agent, którego wmux już zna. Wybierz go bezpośrednio.',

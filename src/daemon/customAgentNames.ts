@@ -8,7 +8,7 @@
 // canonical identity, resume, hooks, transcripts and recovery never see it.
 
 import { loadCustomAgentsReport } from '../main/worktask/customAgents';
-import { customAgentProcessNames } from '../shared/customAgents';
+import { customAgentLabelAllowed, customAgentProcessNames } from '../shared/customAgents';
 
 /** How long one read of the file answers: a labelled pane asks on every
  *  activity event, and a Settings save is seen within this. */
@@ -33,6 +33,8 @@ export class CustomAgentNames {
     }
     const names = new Map<string, string>();
     for (const agent of report.agents) {
+      // Named like a registry agent: it launches, but its name never labels a pane.
+      if (!customAgentLabelAllowed(agent.name)) continue;
       for (const name of customAgentProcessNames(agent)) names.set(name, agent.name);
     }
     this.built = { report, names, at: this.now() };

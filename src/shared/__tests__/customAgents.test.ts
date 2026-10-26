@@ -1,7 +1,7 @@
 // @wmux-lane unit
 // `win32` here is a platform name handed to a pure validator; nothing reaches the OS.
 import { describe, expect, it } from 'vitest';
-import { customAgentProcessNames, normalizeCustomAgent, validateCustomAgents, type CustomAgent } from '../customAgents';
+import { customAgentLabelAllowed, customAgentProcessNames, normalizeCustomAgent, validateCustomAgents, type CustomAgent } from '../customAgents';
 import {
   applyFanoutAgentFlags, describeFanoutAgentChoice, describeFanoutRole, fanoutLaunchCustomAgents, normalizeFanoutPreset,
   unresolvedCustomAgent, validateFanoutAgentChoice,
@@ -190,8 +190,11 @@ describe('process names, review', () => {
     expect(code({ name: 'Tern', command: 'tern', processNames: ['t'.repeat(49)] })).toBe('process-invalid');
   });
 
-  it('refuses a name a registry agent goes by, since a pane label maps back to its slug', () => {
-    for (const name of ['Claude Code', 'claude code', 'codex']) expect(code({ name, command: 'tern' })).toBe('name-known');
+  it('keeps an agent named like a registry agent, but never lets that name label a pane', () => {
+    // A pane label maps back to a registry slug in main (agentDisplayToSlug).
+    expect(normalizeCustomAgent({ name: 'Amp', command: 'amp-work' }).ok).toBe(true);
+    for (const name of ['Claude Code', 'claude code', 'codex', ' Amp ']) expect(customAgentLabelAllowed(name)).toBe(false);
+    expect(customAgentLabelAllowed('Tern')).toBe(true);
   });
 
   it('checks the process name a command is tracked by, not only its stem', () => {

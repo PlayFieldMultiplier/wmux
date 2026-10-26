@@ -15,6 +15,7 @@ import { getWmuxDir } from '../../daemon/config';
 import { atomicWriteJSON } from '../../daemon/util/atomicWrite';
 import type { CustomAgentUse } from './fanoutPresets';
 import {
+  CUSTOM_AGENTS_FILE_MAX,
   customAgentStem,
   normalizeCustomAgentsReport,
   validateCustomAgents,
@@ -47,6 +48,8 @@ export function loadCustomAgentsReport(dir?: string): CustomAgentsReport {
   if (hit && hit.mtimeMs === stat.mtimeMs && hit.size === stat.size) return hit.report;
   let report: CustomAgentsReport;
   try {
+    // The daemon reads this file too: an oversized one is unreadable, not parsed.
+    if (stat.size > CUSTOM_AGENTS_FILE_MAX) throw new Error('custom-agents.json is too large');
     const raw = JSON.parse(fs.readFileSync(p, 'utf8')) as { agents?: unknown };
     report = normalizeCustomAgentsReport(raw?.agents, { platform: process.platform });
   } catch {

@@ -79,17 +79,12 @@ export interface CanonicalAgentIdentity {
  *  4. Live process truth — an attributed, live process beats a stale hook
  *     and the screen. This row is the #916 fix: after claude exits and codex
  *     re-arms the tracker, claude's stale authority cannot win.
- *  5. Screen — the fallback for unattributable panes (remote/SSH). Not on a
- *     pane whose live process is one of the operator's custom agents: the
- *     screen there may be a registry banner the custom agent draws or wraps,
- *     and the custom agent, not that slug, is what runs.
+ *  5. Screen — the fallback for unattributable panes (remote/SSH).
  */
 export function resolveCanonicalAgentIdentity(inputs: {
   proc?: CanonicalProcessState;
   auth?: CanonicalHookAuthority;
   screenSlug?: AgentSlug;
-  /** The pane runs one of the operator's custom agents (a label, never a slug). */
-  customAgent?: boolean;
   identityTtlMs?: number;
 }): CanonicalAgentIdentity | undefined {
   const ttl = inputs.identityTtlMs ?? IDENTITY_TTL_MS;
@@ -108,7 +103,6 @@ export function resolveCanonicalAgentIdentity(inputs: {
     return { slug: auth.slug, source: 'hook', observedAgoMs: auth.ageMs };
   }
   if (proc?.slug && proc.alive) return { slug: proc.slug, source: 'process' };
-  if (inputs.customAgent) return undefined;
   if (screenSlug) return { slug: screenSlug, source: 'screen' };
   return undefined;
 }
@@ -131,13 +125,8 @@ export function resolveCanonicalAgentIdentity(inputs: {
 export function detectorSuppressedBy(
   canonical: CanonicalAgentIdentity | undefined,
   screenSlug?: AgentSlug,
-  /** The pane runs one of the operator's custom agents: a registry banner it
-   *  draws or wraps is not that agent, and a custom agent gets no screen
-   *  status, unless a hook or a live process names the registry agent. */
-  customAgent?: boolean,
 ): boolean {
   if (screenSlug === undefined) return false;
-  if (customAgent && canonical === undefined) return true;
   return canonical !== undefined && canonical.source !== 'screen' && canonical.slug !== screenSlug;
 }
 
@@ -243,10 +232,12 @@ export function reportedAgentName(inputs: {
   customName?: string;
 }): string | null {
   const { rawName, screenSlug, canonical, customName } = inputs;
-  if (canonical) return agentSlugToDisplay(canonical.slug);
-  // A custom agent's process outranks the screen: it is live process truth,
-  // and its own screen may carry another agent's banner it wraps.
+  if (canonical && canonical.source !== 'screen') return agentSlugToDisplay(canonical.slug);
+  // A custom agent's process outranks the screen for the NAME only: it may be
+  // a wrapper (`ssh host claude`) whose agent only the screen can see, so the
+  // screen still decides status and approvals.
   if (customName) return customName;
+  if (canonical) return agentSlugToDisplay(canonical.slug);
   // #919 residue veto: a mappable screen slug with no canonical backing is
   // sticky detector residue, not a live agent.
   if (!rawName || screenSlug) return null;
