@@ -720,3 +720,36 @@ describe('Mac review round 2', () => {
     expect(await pre(gh)).toMatchObject({ refusal: 'gh-403' });
   });
 });
+
+describe('a workflow run listed without its path (GitHub Enterprise Server)', () => {
+  const act: ApprovalReleaseAct = {
+    kind: 'release', mode: 'release', tagName: 'v1.2.3', targetSha: C3, defaultBranch: 'main', title: 'wmux 1.2.3', notes: 'Fixes.', prerelease: false, workflows: [], checksExpected: true, pushWorkflows: ['.github/workflows/ci.yml'], draft: false,
+  };
+  const pre = (gh: FakeGithub) => releasePrecondition(gh, P, act, { login: 'owner', branch: 'main', draftId: undefined, wroteBefore: false });
+  const run = { head_sha: C3, event: 'push', head_branch: 'main', status: 'completed', conclusion: 'success', html_url: 'https://ghe.example/o/r/actions/runs/1', id: 1 };
+
+  it('is matched on its workflow\'s id, read only then', async () => {
+    const gh = github();
+    gh.files.set('.github/workflows/ci.yml', 'on:\n  push:\n    branches: [main]\n');
+    gh.workflowRuns.push({ ...run, workflow_id: gh.workflowId('.github/workflows/ci.yml') });
+    expect(await pre(gh)).toMatchObject({ refusal: null });
+    // Another workflow's run without a path is not CI's.
+    gh.workflowRuns = [{ ...run, workflow_id: gh.workflowId('.github/workflows/lint.yml') }];
+    expect(await pre(gh)).toMatchObject({ refusal: 'checks-not-started' });
+    // Runs that name their path read no workflow record for this.
+    gh.workflowRuns = [{ ...run, workflow_id: 9, path: '.github/workflows/ci.yml' }];
+    const before = gh.reads.length;
+    expect(await pre(gh)).toMatchObject({ refusal: null });
+    expect(gh.reads.slice(before).filter((e) => e.startsWith('repos/o/r/actions/workflows/'))).toEqual([]);
+  });
+
+  it('a workflow record that cannot be read fails closed', async () => {
+    const gh = github();
+    gh.files.set('.github/workflows/ci.yml', 'on:\n  push:\n    branches: [main]\n');
+    gh.workflowRuns.push({ ...run, workflow_id: gh.workflowId('.github/workflows/ci.yml') });
+    gh.answerRead = (e) => (e === 'repos/o/r/actions/workflows/ci.yml' ? { ok: false, kind: 'error', message: 'timeout' } : null);
+    expect(await pre(gh)).toMatchObject({ refusal: 'read-failed' });
+    gh.answerRead = (e) => (e === 'repos/o/r/actions/workflows/ci.yml' ? { ok: true, value: { path: '.github/workflows/ci.yml' } } : null);
+    expect(await pre(gh)).toMatchObject({ refusal: 'unreadable-answer' });
+  });
+});

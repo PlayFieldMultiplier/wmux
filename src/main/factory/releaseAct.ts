@@ -743,12 +743,28 @@ export async function readChecks(gh: GhActPort, p: RepoPath, sha: string, o: { o
     event: str(r?.event),
     branch: str(r?.head_branch),
     path: str(r?.path),
+    workflowNum: typeof r?.workflow_id === 'number' ? r.workflow_id : null,
     // Each workflow's runs per event and ref: a later run of another event
     // does not hide a failed one.
     workflowId: `${String(r?.workflow_id ?? r?.id ?? '')}\u0000${str(r?.event)}\u0000${str(r?.head_branch)}`,
     id: typeof r?.id === 'number' ? r.id : 0,
     attempt: typeof r?.run_attempt === 'number' ? r.run_attempt : 1,
   })));
+  // GitHub Enterprise Server may list a run without its workflow file's
+  // path: such a run is matched on its workflow's id, read for each pinned
+  // workflow no run names (only then).
+  if (latest.some((r) => !r.path)) {
+    for (const want of missingPushRuns(latest, expected, branch)) {
+      const a = await gh.read(p.host, `${p.base}/actions/workflows/${pathOfName(want.slice(want.lastIndexOf('/') + 1))}`);
+      if (!a.ok) {
+        if (a.kind === 'http' && a.status === 404) continue;
+        return failed(a);
+      }
+      const id = rec(a.value)?.id;
+      if (!Number.isSafeInteger(id)) return unreadable('a workflow could not be read');
+      for (const r of latest) if (!r.path && r.workflowNum === id) r.path = want;
+    }
+  }
   return {
     checks: checksVerdict({ runs: counted, status: { state: str(sv.state), total: sv.total_count }, workflowRuns: latest, expected, branch }),
     missing: missingPushRuns(latest, expected, branch),
