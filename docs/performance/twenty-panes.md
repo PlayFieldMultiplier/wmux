@@ -36,15 +36,33 @@ A running wmux on the same machine is not touched. The harness also:
    respawn controller treats a closed daemon socket as a crash and starts a
    new daemon that restores every session.
 2. Send `daemon.shutdown` on the run's own daemon pipe.
-3. Wait until that pipe is gone. If it is not, kill the daemon pid only when
-   one process lookup proves it is this run's: started after the harness, and
-   its command line runs the launched app. On any doubt, no kill. The
-   installed app's daemon can never match. Windows often reports no command
-   line for the daemon; then step 2 alone has to stop it.
-4. One process pass (CIM on Windows, `ps` elsewhere) kills anything started
+3. Wait until that pipe is gone.
+4. Wait up to 30 s for the daemon **process** to exit. A daemon can log its
+   exit, close its pipe and still live on, holding files. The harness watches
+   both the pid the daemon last reported over its pipe and the pid in its pid
+   file (read before shutdown), so a daemon respawned after the last ping is
+   not missed. With no pid known, the exit cannot be confirmed and the
+   teardown is not clean.
+   - A daemon still alive (or one whose pipe never closed) is recorded as
+     `daemonLingering: { pid, seconds, pipeGone, … }` in `summary.json`, with
+     threads, handles and working set on Windows (`Get-Process`), or RSS and
+     state on macOS and Linux.
+   - Then it is killed only when one process lookup proves it is this run's:
+     started after the harness, and its command line runs the launched app.
+     On any doubt, no kill. The installed app's daemon can never match.
+     Windows often reports no command line for the daemon; such a daemon is
+     not killed.
+5. One process pass (CIM on Windows, `ps` elsewhere) kills anything started
    after the harness whose command line names the run's sandbox paths.
-5. Remove the sandbox, only once the daemon pipe is gone. If a daemon
-   survived, the sandbox and its token are kept for manual cleanup.
+6. Remove the sandbox, only once the daemon pipe is gone **and** its process
+   has exited. Otherwise the sandbox and its token are kept for manual
+   cleanup.
+
+`summary.json` gets the teardown report under `teardown`, and
+`daemonLingering` at the top level. `teardown.clean` is true only when the
+sandbox was removed and no daemon lingered; anything else is flagged. A
+second Ctrl+C during a slow teardown exits at once and leaves the cleanup to
+[Manual cleanup](#manual-cleanup).
 
 On macOS it passes `--use-mock-keychain`. Without a login keychain under the
 sandbox `HOME`, Chromium's Safe Storage request blocks startup behind a
@@ -286,7 +304,8 @@ The default is `claude`.
 | Probe echo, streaming / idle | `pty.write` → `pty.onData` | Round trip for every non-Claude pane, hidden ones included |
 | Dropped | marker not echoed within 3 s | Lost or badly delayed input. Echoes arriving after the timeout are counted as late |
 | Wrong pane | keyboard marker echoed by another pane | Focus went somewhere other than the pane `pane.focus` selected |
-| Stall episodes | output gap ≥ 5 s on a streaming pane, or a Claude pane during a turn | The pane stopped updating, at the renderer's IPC input |
+| Stall episodes | output gap ≥ 5 s on a streaming pane, or a Claude pane during a turn | The pane stopped updating, at the renderer's IPC input. Counted only up to a daemon respawn, see below |
+| Daemon respawned | `daemon.ping` pid differs from the previous sample | The daemon died and another took its place mid-run; `daemonRespawned` lists the time and pids |
 | Claude turns | hook start/end | Turns completed and their duration, with each loop's stop reason |
 | Terminal engine | `daemon.ping` `terminalCore` | Requested and effective engine at start and end, and the daemon pid |
 | Daemon RSS, Electron working sets, process tree | RPC and OS samples | First, last, max and growth per hour, from a least-squares fit. Growth is reported only for runs of 10 minutes or more |
@@ -295,6 +314,20 @@ The default is `claude`.
 | Throttled samples | rAF median > 50 ms | Frame numbers in those samples are not trustworthy |
 
 Caveats:
+
+- **A daemon respawn invalidates stall metrics after it.** The streaming
+  producers die with the old daemon's sessions, so from then on the
+  "streaming" panes are plain shells and their silence is not a stall. The
+  harness does not restart the producers: a respawn is itself the finding,
+  and a restarted workload would make the rest of the run a different
+  experiment. Stall episodes count up to the old daemon's last answered
+  `daemon.ping` (`stalls.validUntilSec`). Stalls that ended between that
+  ping and the first ping of the new daemon cannot be attributed; they are
+  listed in `stalls.aroundRespawn` but not counted, since the one leading
+  into a crash may be the most telling. Later ones only count in
+  `stalls.ignoredAfterRespawn`. The summary is flagged. Latency, probe and
+  memory samples are kept; after a respawn the streaming-class probes measure
+  shells.
 
 - RSS, working sets, heap, ring and queue counters overlap. Do not add them
   up. See [Memory diagnostics](../performance.md#memory-diagnostics).
