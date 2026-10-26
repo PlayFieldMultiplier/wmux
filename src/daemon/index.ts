@@ -10365,13 +10365,10 @@ async function main(): Promise<void> {
   // Write active pipe name so clients know which pipe to connect to
   const activePipeName = pipeServer.getActivePipeName();
   const pipeNameFile = path.join(wmuxDir, 'daemon-pipe');
-  try {
-    // Renamed into place: a client that reads it empty falls back to the
-    // default pipe name, which is not ours when we bound a fallback pipe.
-    replaceFileOrWrite(pipeNameFile, activePipeName, (msg) => log('warn', msg));
+  // Renamed into place: a client that reads it empty falls back to the
+  // default pipe name, which is not ours when we bound a fallback pipe.
+  if (replaceFileOrWrite(pipeNameFile, activePipeName, (msg) => log('warn', msg))) {
     writtenPipeName = activePipeName;
-  } catch (err) {
-    log('warn', 'Failed to write pipe name file:', err);
   }
   markDaemonBoot('pipe-file-written');
   // Issue #546 — we can answer pings from here on, so the "still booting" grace

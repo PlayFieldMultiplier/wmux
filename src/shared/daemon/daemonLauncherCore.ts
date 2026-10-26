@@ -15,7 +15,7 @@ import {
   withDaemonStartLock,
 } from './launchdDaemonJob';
 import { classifyTasklistOutput, classifyKillOutcome, type ProcessLiveness } from '../processLiveness';
-import { createFileExclusive, replaceFileAtomic, unlinkIfContent } from './daemonFiles';
+import { createFileExclusive, replaceFileOrWrite, unlinkIfContent } from './daemonFiles';
 
 export interface DaemonInfo {
   /**
@@ -873,8 +873,9 @@ function spawnDaemon(deps: DaemonLauncherDeps): Promise<number> {
       dispose(): void;
     }) => {
       const wmuxDir = getWmuxDir();
-      if (!claimSpawnedDaemonFiles(wmuxDir, proc.pid, deps.warn)) {
-        (deps.warn ?? console.warn)(
+      const warn = deps.warn ?? console.warn;
+      if (!claimSpawnedDaemonFiles(wmuxDir, proc.pid, warn)) {
+        warn(
           `[launcher] daemon.pid not written for PID ${proc.pid}: another pid file appeared after the stale cleanup, or the write failed`,
         );
       }
@@ -1068,7 +1069,7 @@ export function claimSpawnedDaemonFiles(wmuxDir: string, pid: number, warn: (msg
     // time the daemon may have written both files itself.
     try { return fs.readFileSync(pidFile, 'utf-8').trim() === value; } catch { return false; }
   }
-  replaceFileAtomic(path.join(wmuxDir, 'daemon-booting'), value);
+  replaceFileOrWrite(path.join(wmuxDir, 'daemon-booting'), value, warn);
   return true;
 }
 
@@ -1681,7 +1682,7 @@ async function ensureDaemonUnlocked(deps: DaemonLauncherDeps): Promise<DaemonInf
     // repeat for it (it becomes the judged pid).
     (deps.warn ?? console.warn)(`[launcher] daemon files name live PID ${liveOwner} — not cleaning them`);
     // The recursion judges whatever daemon.pid names, so it must name the owner.
-    if (!replaceFileAtomic(pidFile, String(liveOwner))) {
+    if (!replaceFileOrWrite(pidFile, String(liveOwner), deps.warn ?? console.warn)) {
       throw new Error(`[launcher] daemon files name live PID ${liveOwner}, but ${pidFile} could not be updated to it`);
     }
     return ensureDaemonUnlocked(deps);
