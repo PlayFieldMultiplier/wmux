@@ -941,23 +941,24 @@ function isClaudePromptChrome(line: string): boolean {
   return !SOURCE_LINE_RE.test(stripped);
 }
 
+/** The Codex banner row, `│ >_ OpenAI Codex (v0.149.1) │`: Codex's alone, unlike its trust prompt. */
+function isCodexBanner(line: string): boolean {
+  const stripped = stripAnsi(line);
+  return !SOURCE_LINE_RE.test(stripped) && /^>_\s*OpenAI\s*Codex\b/.test(visibleChrome(stripped));
+}
+
 /**
  * The Codex TUI's own chrome: the banner row (`│ >_ OpenAI Codex (v0.149.1) │`,
  * measured on 0.149.1) or the first-boot trust prompt (either wording), which
  * Codex draws before the banner. Both must START the row's visible text, so a shell
  * command, a log line or prose that quotes either phrase does not count.
  */
-function isCodexBanner(line: string): boolean {
-  const stripped = stripAnsi(line);
-  return !SOURCE_LINE_RE.test(stripped) && /^>_\s*OpenAI\s*Codex\b/.test(visibleChrome(stripped));
-}
-
 function isCodexChrome(line: string): boolean {
+  if (isCodexBanner(line)) return true;
   const stripped = stripAnsi(line);
   if (SOURCE_LINE_RE.test(stripped)) return false;
   const v = visibleChrome(stripped);
-  return /^>_\s*OpenAI\s*Codex\b/.test(v)
-    || /^Do\s*you\s*trust\s*the\s*contents\s*of\s*this\s*directory\?/.test(v)
+  return /^Do\s*you\s*trust\s*the\s*contents\s*of\s*this\s*directory\?/.test(v)
     || /^Trust\s*this\s*folder\?$/.test(v);
 }
 
@@ -1128,17 +1129,16 @@ function isGrokChrome(line: string): boolean {
   return false;
 }
 
-/** OSC 133 prompt start / command end: the shell has the terminal again. */
+/**
+ * An OSC 133 mark: prompt start (A) and command end (D) give the shell the
+ * terminal again; command start (C) hands it to a program (launchBoundaries);
+ * prompt end (B) changes nothing here but is reported with the others.
+ */
 // eslint-disable-next-line no-control-regex
-const SHELL_RETURN_RE = /\u001b\]133;([AD])(?:;[^\u0007\u001b]{0,256})?(?:\u0007|\u001b\\)/g;
-/** The same, and the command start (C) that hands the terminal to a program (launchBoundaries). */
+const PROMPT_MARK_RE = /\u001b\]133;([ABCD])(?:;[^\u0007\u001b]{0,256})?(?:\u0007|\u001b\\)/g;
+/** A read ending inside one of those marks: held until the next read completes it. */
 // eslint-disable-next-line no-control-regex
-const LAUNCH_BOUNDARY_RE = /\u001b\]133;([ACD])(?:;[^\u0007\u001b]{0,256})?(?:\u0007|\u001b\\)/g;
-/** A read ending inside one of those markers: held until the next read completes it. */
-// eslint-disable-next-line no-control-regex
-const PARTIAL_SHELL_RETURN_RE = /^\u001b\]133;(?:[AD](?:;[^\u0007\u001b]{0,256})?)?(?:\u001b)?$/;
-// eslint-disable-next-line no-control-regex
-const PARTIAL_LAUNCH_BOUNDARY_RE = /^\u001b\]133;(?:[ACD](?:;[^\u0007\u001b]{0,256})?)?(?:\u001b)?$/;
+const PARTIAL_PROMPT_MARK_RE = /^\u001b\]133;(?:[ABCD](?:;[^\u0007\u001b]{0,256})?)?(?:\u001b)?$/;
 
 export class AgentDetector {
   /**
@@ -1175,6 +1175,8 @@ export class AgentDetector {
   private lineBuffer = '';
   /** Incomplete OSC 133 boundary, bounded to a short shell payload. */
   private shellBoundaryBuffer = '';
+  /** Per OSC 133 mark the last feed() completed: whether the owner wrote it. */
+  private feedMarkOwners: boolean[] = [];
   // Per (agent:status) dedup: stores the last matched string for each key.
   // Same key + same match = skip emit. New active cycle calls
   // resetEmissionState() to clear, so turn N+1 can emit again even when the
@@ -1466,11 +1468,12 @@ export class AgentDetector {
     if (data) this.approvalOutputRevision++;
     const text = this.shellBoundaryBuffer + data;
     this.shellBoundaryBuffer = '';
+    this.feedMarkOwners = [];
     // Process each launch in wire order, even when a PTY read contains both
     // the old agent's last frame and the new agent's banner. OSC may itself
     // span reads; neither a chunk boundary nor an unterminated marker is a
     // shell return. Support both OSC terminators.
-    const boundary = new RegExp(this.launchBoundaries ? LAUNCH_BOUNDARY_RE : SHELL_RETURN_RE);
+    const boundary = new RegExp(PROMPT_MARK_RE);
     let start = 0;
     for (let match = boundary.exec(text); match; match = boundary.exec(text)) {
       this.feedOutput(text.slice(start, match.index));
@@ -1478,7 +1481,9 @@ export class AgentDetector {
       const kind = match[1];
       // An owner that writes prompt marks of its own (emitsPromptMarks) is
       // still in charge: only D (command end) is the shell's.
-      if (kind !== 'D' && this.ownerEmitsPromptMarks()) continue;
+      const owned = kind !== 'D' && this.ownerEmitsPromptMarks();
+      this.feedMarkOwners.push(owned);
+      if (owned || kind === 'B' || (kind === 'C' && !this.launchBoundaries)) continue;
       if (kind !== 'C') this.noteShellReturn();
       // The foreground program changed hands here: a launch starts (C) or the
       // shell has the terminal back (D).
@@ -1489,8 +1494,7 @@ export class AgentDetector {
     const candidate = oscAt < 0 ? '' : rest.slice(oscAt);
     // Only hold a prefix that can still become our marker. Other escapes
     // (including agent titles) remain available to the detector immediately.
-    const partialBoundary = this.launchBoundaries ? PARTIAL_LAUNCH_BOUNDARY_RE : PARTIAL_SHELL_RETURN_RE;
-    const holdAt = candidate && ('\u001b]133;'.startsWith(candidate) || partialBoundary.test(candidate))
+    const holdAt = candidate && ('\u001b]133;'.startsWith(candidate) || PARTIAL_PROMPT_MARK_RE.test(candidate))
       ? oscAt : rest.endsWith('\u001b') ? rest.length - 1 : rest.length;
     this.shellBoundaryBuffer = rest.slice(holdAt);
     this.feedOutput(rest.slice(0, holdAt));
@@ -1508,8 +1512,16 @@ export class AgentDetector {
     return requested;
   }
 
-  /** The pane's owner writes OSC 133 marks of its own (`emitsPromptMarks`) and no shell mark has released it. */
-  ownerEmitsPromptMarks(): boolean {
+  /**
+   * For each OSC 133 mark (A, B, C or D) the last feed() completed, in wire
+   * order: whether the pane's owner wrote it (emitsPromptMarks). A host that
+   * acts on the shell's marks skips the owned ones.
+   */
+  promptMarkOwners(): readonly boolean[] {
+    return this.feedMarkOwners;
+  }
+
+  private ownerEmitsPromptMarks(): boolean {
     if (this.shellPromptSinceOwner) return false;
     const owner = this.trustedAgent !== null
       ? PROFILE_BY_SLUG.get(this.trustedAgent)
@@ -1853,6 +1865,9 @@ export class AgentDetector {
       }
     }
 
+    // The rows of `clean`, split once for every gate below that reads them.
+    let rows: string[] | undefined;
+    const candidateRows = (): string[] => (rows ??= candidateLines(clean));
     for (const ap of AGENT_PATTERNS) {
       // Skip an already-seen gate within a launch, but reconsider it after
       // the shell returns: Claude -> Codex -> Claude must reclaim the pane.
@@ -1881,16 +1896,16 @@ export class AgentDetector {
         : ap.slug === 'claude'
           ? this.claudeBannerSeen && this.claudePromptSeen
           : ap.slug === 'grok'
-            ? candidateLines(clean).some(isGrokChrome)
+            ? candidateRows().some(isGrokChrome)
             : ap.slug === 'codex'
-              ? !blockedTakeover && ap.gate.test(clean) && candidateLines(clean).some(isCodexChrome)
+              ? !blockedTakeover && ap.gate.test(clean) && candidateRows().some(isCodexChrome)
               : !blockedTakeover && ap.gate.test(clean)
                 && (!ap.chrome || (
                   // A version/welcome prefix can still grow into prose.
                   // Only judge these rows after LF/CR/CUP, never a PTY-read
                   // boundary. Native OSC chrome has its own terminator.
                   completeRow || !ap.completeChromeRow
-                    ? candidateLines(clean)
+                    ? candidateRows()
                     : clean.split(new RegExp(ROW_BREAK_RE.source, 'g')).slice(0, -1)
                 ).some(ap.chrome));
       if (!gateMatched) continue;
@@ -1936,7 +1951,7 @@ export class AgentDetector {
     const ownerBanner = this.lastAgent !== null && this.bannerSeenFor !== this.lastAgent && !this.shellPromptSinceOwner
       ? PROFILE_BY_AGENT.get(this.lastAgent)?.banner
       : undefined;
-    if (ownerBanner && candidateLines(clean).some(ownerBanner)) this.bannerSeenFor = this.lastAgent;
+    if (ownerBanner && candidateRows().some(ownerBanner)) this.bannerSeenFor = this.lastAgent;
   }
 
   /** The frame ended: report a held frame-tail match if its agent still owns the pane. */

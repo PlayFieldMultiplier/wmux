@@ -59,4 +59,26 @@ describe('an agent\'s own OSC 133 marks', () => {
     expect(prompts.mock.calls.slice(promptEvents).map((c) => (c[0] as { event: { type: string } }).event.type))
       .toEqual(['command_end', 'prompt_start']);
   });
+
+  const promptTypes = () => prompts.mock.calls.map((c) => (c[0] as { event: { type: string } }).event.type);
+
+  it('are told apart mark by mark when Kimi\'s banner and its own marks share a read', () => {
+    const { startup, working } = kimiCapture.chunks;
+    pty.feed('\x1b]133;C\x07');
+    pty.feed(startup + working);
+    expect(bridge.getLastAgent()).toBe('Kimi Code CLI');
+    expect(bridge.getCommandStarts()).toBe(1);
+    expect(promptTypes()).toEqual(['command_start']);
+  });
+
+  it('are told apart in a muted pane\'s held output when it is replayed', () => {
+    const { startup, working } = kimiCapture.chunks;
+    bridge.setMuted(true);
+    pty.feed('\x1b]133;C\x07');
+    pty.feed(startup);
+    pty.feed(working);
+    bridge.setMuted(false, { replayHeld: true });
+    expect(bridge.getCommandStarts()).toBe(1);
+    expect(promptTypes()).toEqual(['command_start']);
+  });
 });

@@ -147,11 +147,13 @@ export class DaemonPTYBridge extends EventEmitter {
    * TUI's first frame, is printed first, so it is the part worth keeping.
    */
   private heldWhileMuted: string[] | null = null;
+  /** The detector's answer for each OSC 133 mark of the held chunks, in wire order. */
+  private heldMarkOwners: boolean[] = [];
   private heldBytes = 0;
   private heldFull = false;
   private static readonly MAX_HELD_BYTES = 256 * 1024;
   /** The unmuted capture path, set by setupDataForwarding; replays held chunks. */
-  private captureChunk: ((data: string, buf: Buffer) => void) | null = null;
+  private captureChunk: ((data: string, buf: Buffer, nativeChunk: undefined, markOwners: readonly boolean[]) => void) | null = null;
 
   /** See armStartupDa1Reply. Null once the startup window has closed. */
   private startupDa1: {
@@ -339,9 +341,6 @@ export class DaemonPTYBridge extends EventEmitter {
   private shellCommandRunning = false;
   /** #2673 — the shell has drawn an OSC 133 prompt: `shellCommandRunning` then says whether a program, not the shell, owns the keys. */
   private shellPromptSeen = false;
-  // The detector's owner writes OSC 133 marks of its own (Kimi Code CLI), as
-  // of the start of this read: until the shell's D, they are not the shell's.
-  private ownerWritesPromptMarks = false;
   private shellSubmittedKeyRevision: number | undefined;
   private shellCommandKeyRevision = 0;
   /** The shell command that ended last, until the next one starts: the key
@@ -1837,6 +1836,9 @@ export class DaemonPTYBridge extends EventEmitter {
     // desktop notifications (OSC 9/777/99)
     // #2264: Claude Code's title turning idle right after a lone Esc (see noteTitleTurnEnd).
     const titleTurnEdge = new ClaudeTitleTurnEdge();
+    // Whether the pane's owner wrote each OSC 133 mark of the read being
+    // captured, in wire order (AgentDetector.promptMarkOwners).
+    let markOwners: readonly boolean[] = [];
     interpreter.onOsc((event) => {
       if (event.code === 0 || event.code === 2) {
         // OSC 0/2 window title (e.g. Claude Code `/rename`). OSC 1 (icon-only)
@@ -1886,10 +1888,10 @@ export class DaemonPTYBridge extends EventEmitter {
       if (event.code === 133 && promptLog) {
         const parsed = parseOsc133Payload(event.data, Date.now(), ringBuffer.totalBytesWritten);
         if (parsed) {
-          // The agent's own A/B/C are its transcript, not a prompt or a
-          // launch; the shell's D, when it exits, still is.
-          if (parsed.type === 'command_end') this.ownerWritesPromptMarks = false;
-          else if (this.ownerWritesPromptMarks) return;
+          // The agent's own A/B/C are its transcript, not a prompt or a launch.
+          const owned = markOwners[0] === true;
+          markOwners = markOwners.slice(1);
+          if (owned) return;
           if (parsed.type === 'command_end') {
             // Input queued while a command runs can become history or a draft
             // at the next prompt. Completion must not erase that invalidation.
@@ -1965,7 +1967,7 @@ export class DaemonPTYBridge extends EventEmitter {
     // Prompt-based CWD detection state
     let promptBuffer = '';
 
-    const capture = (data: string, buf?: Buffer, nativeChunk?: NativeOutputChunk): void => {
+    const capture = (data: string, buf?: Buffer, nativeChunk?: NativeOutputChunk, owners: readonly boolean[] = []): void => {
       // Detached sessions need retention/analysis, but no JS byte copy. Snapshot
       // tees and live clients subscribe to data and materialize exactly once.
       let delivery = buf;
@@ -1983,6 +1985,7 @@ export class DaemonPTYBridge extends EventEmitter {
         // coordinate system, so it needs the counter this chunk already moved.
         // Before the titles in this chunk are read (see ClaudeTitleTurnEdge.noteOutput).
         titleTurnEdge.noteOutput(data);
+        markOwners = owners;
         interpreter.feed(data, ringBuffer.totalBytesWritten, nativeChunk);
         // After the mode tracker and OSC 133 have seen this chunk (see noteCodexOutput).
         this.noteCodexOutput(data);
@@ -2055,9 +2058,6 @@ export class DaemonPTYBridge extends EventEmitter {
       // 에이전트 시작 배너("Claude Code vX" 등)가 출력되면 gate 정규식이 영구
       // 미활성화되어 이후 모든 status 감지가 죽는다(daemon mode agent detection
       // 갭). activity보다 뒤에서 처리해 같은 chunk의 명시 상태가 최종 승자가 된다.
-      // Read before the feed: a mark in this read is the owner's only if the
-      // owner held the pane when the read began (a launch's C precedes it).
-      this.ownerWritesPromptMarks = agentDetector.ownerEmitsPromptMarks();
       try {
         agentDetector.feed(data);
       } catch {
@@ -2066,6 +2066,7 @@ export class DaemonPTYBridge extends EventEmitter {
       // A grid-only question this chunk finished (approvalReady): read the
       // screen once the chunk is in the ring, below. Muted, it is dropped.
       const approvalRecheck = agentDetector.takeApprovalRecheckRequest();
+      const owners = agentDetector.promptMarkOwners();
 
       // Muted: keep the chunk out of the ring before any side effect. Recovery
       // sessions run muted until their first resize so the geometry mismatch
@@ -2079,11 +2080,12 @@ export class DaemonPTYBridge extends EventEmitter {
           } else {
             this.heldBytes += byteLength;
             this.heldWhileMuted.push(data);
+            this.heldMarkOwners.push(...owners);
           }
         }
         return;
       }
-      capture(data, buf, nativeChunk);
+      capture(data, buf, nativeChunk, owners);
       if (approvalRecheck) this.recheckQuietApproval(agentDetector);
     };
     const nativePty = ptyProcess as TerminalPty;
@@ -2193,15 +2195,17 @@ export class DaemonPTYBridge extends EventEmitter {
     // empty and the storm would otherwise clear the threshold on its own.
     if (this.muted && !muted) this.lastResizeAtMs = Date.now();
     const held = this.heldWhileMuted;
+    const heldOwners = this.heldMarkOwners;
     if (muted !== this.muted) {
       this.heldWhileMuted = muted ? [] : null;
+      this.heldMarkOwners = [];
       this.heldBytes = 0;
       this.heldFull = false;
     }
     this.muted = muted;
     if (!muted && opts?.replayHeld && held && held.length > 0 && this.captureChunk) {
       const buf = stripReplayQuerySequences(Buffer.from(held.join('')));
-      if (buf.length > 0) this.captureChunk(buf.toString(), buf);
+      if (buf.length > 0) this.captureChunk(buf.toString(), buf, undefined, heldOwners);
     }
   }
 
@@ -2215,6 +2219,7 @@ export class DaemonPTYBridge extends EventEmitter {
   discardHeld(): void {
     if (!this.muted) return;
     this.heldWhileMuted = [];
+    this.heldMarkOwners = [];
     this.heldBytes = 0;
     this.heldFull = false;
   }
