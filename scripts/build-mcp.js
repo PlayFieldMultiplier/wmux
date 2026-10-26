@@ -108,6 +108,11 @@ async function main() {
   }
   fs.writeFileSync(chunkFile, code);
 
+  // 4. ASCII-only output: one character above U+00FF makes V8 keep a whole
+  //    script source as UTF-16 (scripts/ascii-only-files.mjs).
+  const { asciiOnlyFiles } = await import('./ascii-only-files.mjs');
+  asciiOnlyFiles([outfile, brokerFile, shimFile, chunkFile]);
+
   // Minimal package.json for playwright-core's version detection (same dir
   // as the chunk, __dirname-relative). Version mirrors the INSTALLED
   // library — the one actually bundled into the chunk.

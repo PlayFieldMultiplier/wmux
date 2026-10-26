@@ -82,7 +82,7 @@ globalThis.__wmuxRepl = { version: 1 };
 process.on('disconnect', () => process.exit(0));
 
 // A stray timer from an earlier eval throwing must not take the session down
-// with it — that would silently destroy state the caller believes it still has.
+// with it -- that would silently destroy state the caller believes it still has.
 // Report to stderr instead, where it surfaces in the next run's output.
 process.on('uncaughtException', (err) => {
   try { stderrWrite('[repl] uncaught exception in background code: ' + (err && err.stack || err) + '\n'); } catch (_) { /* stderr gone */ }
@@ -117,7 +117,7 @@ function describe(value) {
   }
   if (rendered.length > CHILD_RESULT_CAP) {
     return rendered.slice(0, CHILD_RESULT_CAP) +
-      '\n… value truncated in the REPL process (' + rendered.length + ' chars rendered) …';
+      '\n\u2026 value truncated in the REPL process (' + rendered.length + ' chars rendered) \u2026';
   }
   return rendered;
 }
@@ -132,7 +132,7 @@ function describe(value) {
 // expression they want back. Turn that line into a return, then COMPILE the
 // result and fall back to the plain wrapper if the rewrite did not produce
 // valid syntax. The
-// compile check is what makes the heuristic safe — a last line that was really
+// compile check is what makes the heuristic safe -- a last line that was really
 // the tail of a multi-line expression, or a declaration, simply does not
 // survive it, and the caller gets the un-rewritten behavior instead of a
 // mangled program.
@@ -322,7 +322,7 @@ function evaluate(msg) {
     }
   }
   // A returned promise is awaited so the caller sees the resolved value rather
-  // than "Promise { <pending> }" — the whole point of a top-level-await REPL.
+  // than "Promise { <pending> }" -- the whole point of a top-level-await REPL.
   if (value && typeof value.then === 'function') {
     Promise.resolve(value).then(
       (resolved) => send({ id: id, ok: true, result: describe(resolved) }),
