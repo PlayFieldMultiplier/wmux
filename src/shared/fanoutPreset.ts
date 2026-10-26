@@ -676,7 +676,7 @@ export function approvedRoleBindings(roles: readonly unknown[], bindings: unknow
     const role = typeof r === 'string' ? r.trim() : '';
     if (!role || Object.prototype.hasOwnProperty.call(out, role)) continue;
     const b = Object.prototype.hasOwnProperty.call(src, role) ? normalizeRoleBinding(src[role]) : undefined;
-    out[role] = b && (b.agent || b.model || b.args) ? b : null;
+    out[role] = b ?? null;
   }
   return out;
 }
