@@ -15,9 +15,11 @@ function rowsAtBottom(rows: readonly string[]): string[] {
 export function claudeScreenApproval(rows: readonly string[]): ScreenApproval | null {
   const prompt = parseTerminalPrompt(rows);
   if (prompt?.active) return { text: prompt.question.replace(/\s+/g, ''), message: 'Approval requested' };
-  // Unnumbered Yes/No choices, `No, exit` first. A narrow pane wraps the question.
-  const text = choiceDialog(rows, /^Quick safety check:/, /^Enter to confirm · Esc to cancel$/);
-  return text ? { text, message: 'Project trust prompt' } : null;
+  // Unnumbered Yes/No choices, `No, exit` first. A narrow pane wraps the
+  // question, so its fixed start is also the text: a resize is no new dialog.
+  const trust = 'Quick safety check:';
+  return choiceDialog(rows, /^Quick safety check:/, /^Enter to confirm · Esc to cancel$/)
+    ? { text: trust, message: 'Project trust prompt' } : null;
 }
 
 /** A dialog's choice rows: `option` is one choice, `selected` marks exactly
@@ -116,8 +118,10 @@ export function codexScreenApproval(rows: readonly string[]): ScreenApproval | n
   const text = choiceDialog(rows, /^Would you like to (?:run the following command|make the following edits)\?$/,
     /^Press enter to confirm or esc to cancel$/i);
   if (text) return { text, message: 'Approval requested' };
-  const trust = choiceDialog(rows, /^Trust this folder\?(?:$| Codex\b)/, /^enter continue · esc back$/, CODEX_TRUST_CHOICES);
-  return trust ? { text: trust, message: 'Directory trust prompt' } : null;
+  // The question row's fixed start is the text: its wrap changes with the width.
+  const trust = 'Trust this folder?';
+  return choiceDialog(rows, /^Trust this folder\?(?:$| Codex\b)/, /^enter continue · esc back$/, CODEX_TRUST_CHOICES)
+    ? { text: trust, message: 'Directory trust prompt' } : null;
 }
 
 /** OpenCode 1.18.30 permission fixture: horizontal choices with a key footer. */

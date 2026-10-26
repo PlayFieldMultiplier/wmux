@@ -180,6 +180,25 @@ describe('quiet approval recovery reads only the current interactive viewport', 
     const q = rows.findIndex((row) => /Quick safety check:|Trust this folder\?/.test(row));
     const wrapped = [...rows.slice(0, q), rows[q].slice(0, 32), ` ${rows[q].slice(32)}`, ...rows.slice(q + 1)];
     expect((slug === 'claude' ? claudeScreenApproval : codexScreenApproval)(wrapped)?.message).toBe(message);
+
+    // The same unanswered screen after a resize narrows the pane is not a new dialog.
+    const narrow = await generateTextSnapshot({ cols: 100, rows: 40, scrollback: 0, initial: Buffer.from(output) });
+    if (!narrow.ok) throw new Error('the capture did not render');
+    const narrowRows = narrow.rows.map((row) => row.text);
+    expect(narrowRows.find((row) => /Quick safety check:|Trust this folder\?/.test(row))).not.toBe(rows[q]);
+    const det = new AgentDetector();
+    const events = vi.fn();
+    det.onEvent(events);
+    det.seedTrustedIdentity(slug, det.getIdentityEpoch());
+    det.feed(output);
+    expect(det.takeApprovalRecheckRequest() && await det.revalidateApprovalScreen(async () => frame(rows))).toBe(true);
+    det.invalidateApprovalScreen();
+    det.feed(output);
+    expect(det.takeApprovalRecheckRequest()).toBe(true);
+    const narrowRead = vi.fn(async () => frame(narrowRows));
+    expect(await det.revalidateApprovalScreen(narrowRead)).toBe(false);
+    expect(narrowRead).toHaveBeenCalledTimes(1);
+    expect(events.mock.calls.map(([event]) => event.status)).toEqual(['awaiting_input']);
   });
 
   it('asks for Pi\'s recheck only once the selector\'s last row is drawn, however the reads split', () => {
