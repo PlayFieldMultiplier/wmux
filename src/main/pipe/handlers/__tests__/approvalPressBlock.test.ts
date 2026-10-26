@@ -76,14 +76,10 @@ const DIALOG_SCREEN = [
 function wire(options: {
   pending?: Array<{ id: string; sessionId: string; workspaceId?: string; toolName?: string; question?: string; kind?: string }>;
   reply?: unknown;
-  /** The session starts with no pipe here (detached); the first attach gives it one. */
-  detached?: boolean;
 } = {}): Wiring {
   const writes: Array<{ ptyId: string; data: string }> = [];
-  let pipeChecks = 0;
   const dc = {
     isConnected: true,
-    ...(options.detached ? { isSessionPipeWritable: () => pipeChecks++ > 0 } : {}),
     rpc: async (method: string) => {
       if (method === 'daemon.approvals.list') return { pending: options.pending ?? [] };
       return options.reply ?? { ok: true, durable: true };
@@ -584,17 +580,6 @@ describe('a folder-trust dialog on screen', () => {
   it('Escape waits out a slow screen read (a hidden pane) and is still refused', async () => {
     live.screen = TRUST_SCREENS.claude;
     live.readDelayMs = 400;
-    const escape = await asBrain('input.sendKey', { ptyId: 'pty-w', key: 'escape' });
-    expect(escape.ok).toBe(false);
-    expect(escape.error).toContain('folder-trust prompt; answer it in the pane');
-    expect(w.writes).toHaveLength(0);
-  });
-
-  it('Escape at a detached session checks again once the attach shows the trust prompt', async () => {
-    w = wire({ detached: true });
-    // Before the attach the read is the deferred blank; after it, the prompt.
-    live.screen = '';
-    trustAfterReads(1);
     const escape = await asBrain('input.sendKey', { ptyId: 'pty-w', key: 'escape' });
     expect(escape.ok).toBe(false);
     expect(escape.error).toContain('folder-trust prompt; answer it in the pane');

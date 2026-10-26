@@ -1363,12 +1363,11 @@ export function registerInputRpc(
    * must be writable afterwards or nothing is written. Asked only after the
    * caller's access to the pty was checked.
    */
-  /** Attach a session with no pipe here; true when it did (the pane just woke up). */
-  const startIfSuspended = async (method: string, ptyId: string, clock: StartClock, promote: boolean): Promise<boolean> => {
-    if (ptyManager.get(ptyId)) return false;
+  const startIfSuspended = async (method: string, ptyId: string, clock: StartClock, promote: boolean): Promise<void> => {
+    if (ptyManager.get(ptyId)) return;
     const dc = getDaemonClient?.();
     // Only on a positive "no pipe": a client that cannot say leaves it as is.
-    if (!dc?.isConnected || dc.isSessionPipeWritable?.(ptyId) !== false) return false;
+    if (!dc?.isConnected || dc.isSessionPipeWritable?.(ptyId) !== false) return;
     // No pipe here says nothing about the session: a pane that never mounted
     // (a workspace outside the multiview grid) leaves its live session
     // detached after an app restart. A stop key (`promote: false`) attaches
@@ -1385,7 +1384,6 @@ export function registerInputRpc(
     if (!dc.isSessionPipeWritable(ptyId)) {
       throw new Error(`${method}: the pane's session "${ptyId}" could not be attached — nothing was written`);
     }
-    return true;
   };
 
   /** Whether the task pane a bot reaches through its task lane belongs to a
@@ -1824,16 +1822,12 @@ export function registerInputRpc(
     if (!APPROVAL_BLOCK_EXEMPT_KEYS.has(key)) {
       await assertNotTypingAtAnApproval(approvalGate, ctx, ptyId, 'input.sendKey');
     } else if (key === 'escape') {
-      // The gate's full read budget: a hidden pane reads slowly, and a short
-      // read would wave Escape through exactly there. A read that still fails
-      // lets the stop key through.
+      // Escape is checked too: on a trust prompt it answers it. A read that
+      // fails lets the stop key through.
       await assertNotAtFolderTrust(approvalGate, ctx, ptyId, 'input.sendKey');
     }
     // After every refusal: attach (promoting) a session with no pipe here.
-    const attached = await startIfSuspended('input.sendKey', ptyId, clock, !stopKey);
-    // A detached session reads as a blank, deferred screen before the attach;
-    // the agent behind it may be on its trust prompt, so Escape checks again.
-    if (attached && key === 'escape') await assertNotAtFolderTrust(approvalGate, ctx, ptyId, 'input.sendKey');
+    await startIfSuspended('input.sendKey', ptyId, clock, !stopKey);
 
     noteInterruptInput?.(ptyId, sequence);
     const instance = ptyManager.get(ptyId);
