@@ -6,7 +6,7 @@
  *      브라우저 폴백 사유 반환(예외 없음).
  *   ② dirty 검사 — 미커밋 변경이 있으면 "PR에 포함 안 됨" 차단 + 커밋 안내(CX7).
  *   ③ `git push -u origin {branch}` — execFile argv(셸 조립 금지 계약 G6).
- *   ④ `gh pr create --head {branch} --title --body --base {base}` — --base 명시
+ *   ④ `gh pr create --head {branch} --title --body-file - --base {base}` (body on stdin) — --base 명시
  *      (CL4: base 추론 실패 방지. base = repo default via
  *      `gh repo view --json defaultBranchRef`).
  *
@@ -76,8 +76,28 @@ export interface PrCachePort {
 export type PrExec = (
   cmd: string,
   args: string[],
-  opts: { cwd: string; timeout: number; env: NodeJS.ProcessEnv; windowsHide: boolean },
+  /** `input`: written to the process's stdin and closed. */
+  opts: { cwd: string; timeout: number; env: NodeJS.ProcessEnv; windowsHide: boolean; input?: string },
 ) => Promise<{ stdout: string; stderr: string }>;
+
+/**
+ * The default exec. Text of any length (a PR body) goes as `input` on stdin:
+ * on argv it can pass Windows' 32,767-character command line, and the spawn
+ * then fails before the tool starts. Rejects as promisify(execFile) does,
+ * with `stdout` and `stderr` on the error.
+ */
+export const execWithInput: PrExec = (cmd, args, { input, ...rest }) => {
+  const opts = { ...rest, encoding: 'utf8' as const };
+  if (input === undefined) return execFileAsync(cmd, args, opts);
+  return new Promise((resolve, reject) => {
+    const child = execFile(cmd, args, opts, (error, stdout, stderr) => {
+      if (error) return reject(Object.assign(error, { stdout, stderr }));
+      resolve({ stdout, stderr });
+    });
+    child.stdin?.on('error', () => { /* the tool exited before reading its input; the exit says why */ });
+    child.stdin?.end(input);
+  });
+};
 
 export interface TaskPrServiceOptions {
   daemon: PrDaemonPort;
@@ -138,7 +158,7 @@ export class TaskPrService {
   constructor(opts: TaskPrServiceOptions) {
     this.daemon = opts.daemon;
     this.cache = opts.cache;
-    this.exec = opts.exec ?? (execFileAsync as unknown as PrExec);
+    this.exec = opts.exec ?? execWithInput;
     this.glab = opts.glab ?? glabPrService;
     this.scanGit = opts.scanGit ?? ((cwd) => spawnGitLines(cwd));
     this.secretGuard = opts.secretGuard ?? secretGuardEnabled;
@@ -184,12 +204,13 @@ export class TaskPrService {
     return null;
   }
 
-  private gh(args: string[], cwd: string): Promise<{ stdout: string; stderr: string }> {
+  private gh(args: string[], cwd: string, input?: string): Promise<{ stdout: string; stderr: string }> {
     return this.exec(process.platform === 'win32' ? 'gh.exe' : 'gh', args, {
       cwd,
       timeout: GH_TIMEOUT_MS,
       env: GH_ENV,
       windowsHide: true,
+      ...(input !== undefined ? { input } : {}),
     });
   }
 
@@ -363,12 +384,13 @@ export class TaskPrService {
       return { ok: false, reason: 'pr-failed', error: 'Could not determine the base branch (empty response) — origin has no defaultBranchRef.' };
     }
 
-    // ── ④ gh pr create --head --title --body --base ──
+    // ── ④ gh pr create --head --title --base, the body on stdin (--body-file -) ──
     let prUrl = '';
     try {
       const { stdout } = await this.gh(
-        ['pr', 'create', ...(ghRepo ? ['-R', ghRepo] : []), '--head', branch, '--base', base, '--title', title, '--body', body],
+        ['pr', 'create', ...(ghRepo ? ['-R', ghRepo] : []), '--head', branch, '--base', base, '--title', title, '--body-file', '-'],
         worktreePath,
+        body,
       );
       prUrl = extractPrUrl(stdout, forgeHosts().gh);
     } catch (createErr) {
