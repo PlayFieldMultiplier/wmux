@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -163,6 +165,12 @@ describe('ChatV2View', () => {
     await act(async () => { set(agent().querySelector('select') as HTMLSelectElement, 'codex'); });
     expect(mode().value).toBe('default');
     expect(mode().disabled).toBe(true);
+    // The always-asks chip wears the fixed-chip style: muted, no hover highlight.
+    const chip = mode().closest('.wmux-chatv2-chip') as HTMLElement;
+    const hoverable = fs.readFileSync(path.resolve('src/renderer/styles/ui.css'), 'utf8').match(/^(\.wmux-chatv2-chip:hover[^{]*)\{/m)?.[1].replace(':hover', '').trim();
+    expect(hoverable).toBeTruthy();
+    expect(chip.getAttribute('aria-disabled')).toBe('true');
+    expect(chip.matches(hoverable as string)).toBe(false);
     expect(host.querySelector('.wmux-chatv2-chips')?.textContent).toContain('Codex default');
     const box = host.querySelector('textarea') as HTMLTextAreaElement;
     expect(box.placeholder).toBe('What should Codex do?');
