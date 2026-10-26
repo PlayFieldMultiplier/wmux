@@ -40,8 +40,9 @@
 // restart keeps its approval), and any refusal or drop of the row deletes
 // that draft while it is still a draft, unless the act's tag is made at the
 // commit (or cannot be read): a publish that stopped after making the tag
-// keeps its draft for the owner (`tag-made-draft-kept` once the tries ran
-// out), since deleting it would leave the tag with no release.
+// keeps its draft for the owner, since deleting it would leave the tag with
+// no release. A kept draft, or one whose delete failed, adds a code to the
+// row's refusal (DRAFT_FATE_CODE), so the owner is told.
 
 import type { GhActAnswer, GhActPort } from '../github/GhActService';
 import type { ApprovalAct, ApprovalActRepo, ApprovalReleaseAct } from '../../shared/botApproval';
@@ -49,8 +50,9 @@ import { actMarker, bodyWithMarker, normalizeActText } from './actPayload';
 import { ACT_MAX_ATTEMPTS, actRowClaimed, runnableAct, type ActEffect, type ActEffectStore } from './actEffectStore';
 import type { StoredApproval } from './approvals';
 import { failed, isFail, loginOf, readPaged, readRefusal, rec, repoPath, str, type Read } from './actRead';
+import { laneRefusalLine } from './laneRefusalText';
 import {
-  deleteDraft, draftBody, draftWritten, findRelease, mapRelease, publishBody, publishedWritten, readTagTarget, releasePrecondition,
+  type DraftFate, deleteDraft, draftBody, draftWritten, findRelease, mapRelease, publishBody, publishedWritten, readTagTarget, releasePrecondition,
   tagIsOurs, tagRefBody, tagRefWritten, tagRunsUrl,
 } from './releaseAct';
 
@@ -61,6 +63,14 @@ type OneWriteAct = Exclude<ApprovalAct, ApprovalReleaseAct>;
 
 /** How long an uncertain try waits before a read settles it. */
 export const RECONCILE_AFTER_MS = 60_000;
+
+/** The refusal code a release draft adds to its row's reason when it stays
+ *  on GitHub: kept (its tag made, or not checked), or not deleted. */
+const DRAFT_FATE_CODE: Partial<Record<DraftFate, string>> = {
+  'kept-tag-made': 'draft-kept-tag-made',
+  'kept-unchecked': 'draft-kept-unchecked',
+  failed: 'draft-not-deleted',
+};
 
 /** Authorize answers that mean "not now", not "never": the row waits
  *  (the approval taken back or not due, the store or the bot directory not
@@ -269,24 +279,31 @@ export class ActExecutor {
   }
 
   /** A release row that ended refused, or was dropped, with a draft of its
-   *  own on GitHub: the draft goes while it is still a draft (one published
-   *  since stays), best effort, and the log says what became of it. It is
-   *  kept when the act's tag is made at the commit, or cannot be read: a
-   *  publish made the tag and stopped, and the draft is what releases it. A
-   *  row whose request is gone has no tag to read: its draft goes. */
-  private async dropDraft(row: ActEffect | null): Promise<void> {
-    if (!row || row.action !== 'release' || row.draftId === undefined) return;
+   *  own on GitHub: the draft goes while it is still a draft (deleteDraft
+   *  keeps one published since, or whose tag is made at the commit or cannot
+   *  be checked: the act's tag and commit, or the draft's own when the
+   *  request is gone), and the log says what became of it. The code the
+   *  row's refusal gains, or null. */
+  private async dropDraft(row: ActEffect | null): Promise<string | null> {
+    if (!row || row.action !== 'release' || row.draftId === undefined) return null;
     const p = repoPath(row.repoKey);
     const act = this.ports.approval.request(row.requestId)?.act;
-    if (p && act?.kind === 'release') {
-      const tag = await readTagTarget(this.ports.gh, p, act.tagName).catch((err: unknown) => ({ error: String(err) }));
-      if (isFail(tag) || tag === act.targetSha) {
-        this.ports.log?.(`[factory] act release ${row.requestId}: its draft ${row.draftId} is kept (${isFail(tag) ? 'the tag could not be read' : 'its tag is made'})`);
-        return;
-      }
-    }
-    const what = p ? await deleteDraft(this.ports.gh, p, row.draftId).catch(() => 'failed' as const) : 'failed';
-    this.ports.log?.(`[factory] act release ${row.requestId}: its draft ${row.draftId} ${what === 'failed' ? 'could not be deleted' : what}`);
+    const want = act?.kind === 'release' ? { tagName: act.tagName, targetSha: act.targetSha } : undefined;
+    const fate: DraftFate = p ? await deleteDraft(this.ports.gh, p, row.draftId, want).catch(() => 'kept-unchecked' as const) : 'kept-unchecked';
+    const code = DRAFT_FATE_CODE[fate] ?? null;
+    this.ports.log?.(`[factory] act release ${row.requestId}: its draft ${row.draftId}: ${fate}${code ? ` (${laneRefusalLine(code, row.repoKey)})` : ''}`);
+    return code;
+  }
+
+  /** A row that ended refused: its release draft settled (dropDraft), and
+   *  its reason told when the draft stays on GitHub. */
+  private async refusedDraft(out: ActEffect | null): Promise<ActEffect | null> {
+    if (out?.status !== 'refused') return out;
+    const code = await this.dropDraft(out);
+    if (!code) return out;
+    const reason = `${out.reason ?? 'refused'}, ${code}`;
+    // Not journaled: the owner is told all the same.
+    return this.ports.effects.amendRefusal(out.id, reason) ?? { ...out, reason };
   }
 
   private emit(e: ActEffect | null): void {
@@ -311,10 +328,9 @@ export class ActExecutor {
     if (!claimed) return effects.get(id);
     this.emit(claimed);
     const end = async (status: 'done' | 'refused' | 'uncertain', reason?: string, result?: ActEffect['result']): Promise<ActEffect | null> => {
-      const out = effects.finish(id, status, reason, result);
+      const out = await this.refusedDraft(effects.finish(id, status, reason, result));
       this.ports.log?.(`[factory] act ${claimed.action} ${claimed.requestId} ${out?.status ?? status}${out?.reason ? ` (${out.reason})` : ''}`);
       this.emit(out);
-      if (out?.status === 'refused') await this.dropDraft(out);
       return out;
     };
     // Nothing of this try reached GitHub: it is given back (a row whose
@@ -368,7 +384,7 @@ export class ActExecutor {
   /** A release's try from its preconditions on (releaseAct.ts): the tag
    *  alone (`workflow`), or a draft, then the late gate, then publishing it
    *  (`release`). A refusal deletes the row's draft (`end`), unless its
-   *  tag is made at the commit (dropDraft). */
+   *  tag is made at the commit (refusedDraft). */
   private async runRelease(id: string, claimed: ActEffect, o: { login: string; branch: string }, act: ApprovalReleaseAct, p: { host: string; base: string }, t: TryEnds): Promise<ActEffect | null> {
     const gh = this.ports.gh;
     const { effects } = this.ports;
@@ -515,10 +531,10 @@ export class ActExecutor {
     if (found.status === 'done') next = this.ports.effects.settle(row.id, 'done', undefined, found.result);
     else if (found.status === 'refused') next = this.ports.effects.settle(row.id, 'refused', found.reason, found.result);
     // Its tag made with the release still a draft, and no try left: the
-    // draft is kept for the owner to publish or delete (dropDraft).
-    else if (found.tagMade && row.attempt >= ACT_MAX_ATTEMPTS) next = this.ports.effects.settle(row.id, 'refused', 'tag-made-draft-kept');
+    // draft is kept for the owner to publish or delete (refusedDraft).
+    else if (found.tagMade && row.attempt >= ACT_MAX_ATTEMPTS) next = this.ports.effects.settle(row.id, 'refused', 'tag-made-not-published');
     else next = this.ports.effects.settle(row.id, 'pending', 'not-found');
-    if (next?.status === 'refused') await this.dropDraft(next);
+    next = await this.refusedDraft(next);
     if (next && (next.status !== row.status || next.reason !== row.reason)) this.emit(next);
     return next;
   }

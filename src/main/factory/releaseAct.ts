@@ -91,15 +91,19 @@ export interface WorkflowPush {
   path: string;
   /** Null: the workflow does not run on a push. */
   push: PushFilter | null;
-  /** It runs when a release is published (`on.release`). */
-  release?: boolean;
+  /** `on.release`: `true` with no `types` (every type), else its types. */
+  release?: true | string[];
   /** It runs when a tag is created (`on.create`, which takes no filter). */
   create?: boolean;
 }
 
-/** The `release` activity types that publishing a release can fire (an
- *  `on.release` with no `types` runs on all of them). */
-const RELEASE_PUBLISH_TYPES: ReadonlySet<string> = new Set(['published', 'released', 'prereleased', 'created']);
+/** Whether publishing a draft starts a workflow on `on.release`: with no
+ *  `types`, or with `published`, or `released` (a release) or `prereleased`
+ *  (a prerelease). `created` is not fired for a draft. Pure. */
+export function runsOnPublish(release: true | string[] | undefined, prerelease: boolean): boolean {
+  if (release === undefined) return false;
+  return release === true || release.includes('published') || release.includes(prerelease ? 'prereleased' : 'released');
+}
 
 /** One filter pattern as a regular expression, in GitHub's syntax: `*` any
  *  run without `/`, `**` any run, `?` and `+` zero-or-one and one-or-more of
@@ -170,28 +174,25 @@ function holdsMergeKey(v: unknown, depth = 0): boolean {
  *  (`on.release` with no `types`, or one publishing fires), and whether
  *  creating a tag does (`on.create`). Throws on a shape this reading does
  *  not know (fail closed). Pure. */
-export function workflowOn(text: string): { push: PushFilter | null; release: boolean; create: boolean } {
+export function workflowOn(text: string): { push: PushFilter | null; release?: true | string[]; create: boolean } {
   const doc = rec(parseYaml(text) as unknown);
   if (!doc || !('on' in doc)) throw new Error('it has no "on"');
   const on = doc.on;
   if (holdsMergeKey(on)) throw new Error('its "on" uses a YAML merge key ("<<")');
-  if (typeof on === 'string') return { push: on === 'push' ? {} : null, release: on === 'release', create: on === 'create' };
+  if (typeof on === 'string') return { push: on === 'push' ? {} : null, ...(on === 'release' ? { release: true as const } : {}), create: on === 'create' };
   if (Array.isArray(on)) {
     if (!on.every((e) => typeof e === 'string')) throw new Error('its "on" list holds something other than event names');
-    return { push: on.includes('push') ? {} : null, release: on.includes('release'), create: on.includes('create') };
+    return { push: on.includes('push') ? {} : null, ...(on.includes('release') ? { release: true as const } : {}), create: on.includes('create') };
   }
   const events = rec(on);
   if (!events) throw new Error('its "on" is not an event, a list or a map');
-  return { push: 'push' in events ? pushFilter(events.push) : null, release: 'release' in events && releaseRuns(events.release), create: 'create' in events };
+  return {
+    push: 'push' in events ? pushFilter(events.push) : null, ...('release' in events ? { release: releaseTypes(events.release) } : {}), create: 'create' in events,
+  };
 }
 
-/** A workflow's `on.push`, or null when it does not run on a push. Pure. */
-export function workflowPush(text: string): PushFilter | null {
-  return workflowOn(text).push;
-}
-
-/** Whether an `on.release` runs when a release is published. Pure. */
-function releaseRuns(v: unknown): boolean {
+/** An `on.release`: `true` with no `types`, else its types. Pure. */
+function releaseTypes(v: unknown): true | string[] {
   if (v === null) return true;
   const r = rec(v);
   if (!r) throw new Error('its "on.release" is not a map');
@@ -199,7 +200,7 @@ function releaseRuns(v: unknown): boolean {
   if (types === undefined) return true;
   const list = typeof types === 'string' ? [types] : types;
   if (!Array.isArray(list) || !list.every((t) => typeof t === 'string')) throw new Error('its "on.release.types" is not a list of types');
-  return list.some((t) => RELEASE_PUBLISH_TYPES.has(t as string));
+  return list as string[];
 }
 
 /** One `on.push` value as filters. Throws on a shape this reading does not know. Pure. */
@@ -282,14 +283,14 @@ export interface AlsoRuns {
  *  by what: the tag push (no push filter, or a `tags-ignore` that leaves
  *  this tag in), the tag's creation, publishing the release. They run,
  *  though they are not the release workflow (the card names them). Pure. */
-export function alsoRunsOn(workflows: readonly WorkflowPush[], tag: string, mode: 'workflow' | 'release'): AlsoRuns[] {
+export function alsoRunsOn(workflows: readonly WorkflowPush[], tag: string, mode: 'workflow' | 'release', prerelease: boolean): AlsoRuns[] {
   const out: AlsoRuns[] = [];
   for (const w of workflows) {
     if (tagWorkflowFor(w.push, tag)) continue;
     const on: AlsoRunsOn[] = [];
     if (runsOnTag(w.push, tag)) on.push('tag-push');
     if (w.create) on.push('tag-create');
-    if (mode === 'release' && w.release) on.push('release-published');
+    if (mode === 'release' && runsOnPublish(w.release, prerelease)) on.push('release-published');
     if (on.length > 0) out.push({ path: w.path, on });
   }
   return out.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
@@ -304,7 +305,7 @@ export function checksExpected(workflows: readonly WorkflowPush[], branch: strin
 
 // ── Checks ───────────────────────────────────────────────────────────────
 
-/** What the checks on a commit say: every check run, every latest push
+/** What the checks on a commit say: every check run, every latest
  *  workflow run done and passed (or neutral, skipped), and the combined
  *  status success or no statuses at all. */
 export type ReleaseChecks = 'passed' | 'failed' | 'running' | 'none' | 'not-started';
@@ -325,7 +326,7 @@ export function latestPerWorkflow<T extends { workflowId: string; id: number; at
 }
 
 /** The verdict over what GitHub listed: check runs, the combined status, and
- *  the latest push run of each workflow (a queued run has no check run yet).
+ *  the latest run of each workflow (a queued run has no check run yet).
  *  `expected`: a push to the default branch surely ran a workflow, so a
  *  commit with nothing at all has not started its checks. Pure. */
 export function checksVerdict(o: { runs: readonly Run[]; status: { state: string; total: number }; workflowRuns: readonly Run[]; expected: boolean }): ReleaseChecks {
@@ -591,14 +592,6 @@ async function readEntry(gh: GhActPort, p: RepoPath, folder: readonly FolderEntr
   return 'blob' in entry ? readBlob(gh, p, entry.blob, path) : unreadable(`${path} is a ${entry.other}, not a file`);
 }
 
-/** A file's text at a commit, null when it is not there; a symlink, a
- *  submodule or a folder in its place is not read through. */
-export async function readFileAt(gh: GhActPort, p: RepoPath, path: string, sha: string): Promise<Read<string | null>> {
-  const cut = path.lastIndexOf('/');
-  const folder = await readFolder(gh, p, cut < 0 ? '' : path.slice(0, cut), sha);
-  return isFail(folder) ? folder : readEntry(gh, p, folder, path);
-}
-
 /** Read `items` BLOBS_AT_ONCE at a time, in order. */
 async function inBatches<T, R>(items: readonly T[], read: (item: T) => Promise<R>): Promise<R[]> {
   const out: R[] = [];
@@ -616,11 +609,15 @@ export async function readWorkflows(gh: GhActPort, p: RepoPath, sha: string): Pr
   if (isFail(folder)) return folder;
   const files = folder.filter((f) => /\.ya?ml$/i.test(f.name));
   if (files.length > WORKFLOWS_MAX) return { refusal: `the repository has more than ${WORKFLOWS_MAX} workflows` };
-  for (const f of files) if (!('blob' in f)) return { refusal: `${dir}/${f.name} is a ${f.other}, not a file` };
-  const texts = await inBatches(files, (f) => ('blob' in f ? readBlob(gh, p, f.blob, `${dir}/${f.name}`) : Promise.resolve(unreadable(f.name))));
+  const blobs: Array<{ name: string; blob: string }> = [];
+  for (const f of files) {
+    if (!('blob' in f)) return { refusal: `${dir}/${f.name} is a ${f.other}, not a file` };
+    blobs.push(f);
+  }
+  const texts = await inBatches(blobs, (f) => readBlob(gh, p, f.blob, `${dir}/${f.name}`));
   const out: WorkflowPush[] = [];
-  for (let i = 0; i < files.length; i += 1) {
-    const path = `${dir}/${files[i].name}`;
+  for (let i = 0; i < blobs.length; i += 1) {
+    const path = `${dir}/${blobs[i].name}`;
     const text = texts[i];
     if (isFail(text)) return text;
     try {
@@ -652,43 +649,53 @@ export async function readDisabledWorkflow(gh: GhActPort, p: RepoPath, workflows
   return null;
 }
 
-/** What the checks on a commit say now, as the default branch ran them: a
- *  tag pushed on the same commit (this release's, or a beta's) runs its own
- *  workflows and check runs there, which say nothing about the commit on
- *  the branch. */
-export async function readChecks(gh: GhActPort, p: RepoPath, sha: string, branch: string, expected: boolean): Promise<Read<ReleaseChecks>> {
+/** What the checks on a commit say now. Every check run and push-or-other
+ *  workflow run on the commit counts, whatever ref it ran for, except those
+ *  of the act's own tag (`ownTag`): pushing it runs its own workflows there,
+ *  which are the release, not its checks. The combined status cannot be
+ *  told apart by ref: all of it counts. */
+export async function readChecks(gh: GhActPort, p: RepoPath, sha: string, ownTag: string, expected: boolean): Promise<Read<ReleaseChecks>> {
   const run = (v: unknown): Run => {
     const r = rec(v);
     return { status: str(r?.status), conclusion: typeof r?.conclusion === 'string' ? r.conclusion : null };
   };
-  // The check suites of the default branch, and those with no branch (made
-  // by an app); another ref's suites (a tag, another branch) are left out.
-  // Each kept suite's check runs are listed from the suite itself.
   const suites = await readPaged(gh, p.host, `${p.base}/commits/${sha}/check-suites`, 'check_suites');
   if (isFail(suites)) return suites;
-  const runs: Run[] = [];
+  const ownSuites = new Set<number>();
   for (const v of suites.map(rec)) {
-    if (!v || (v.head_branch !== null && typeof v.head_branch !== 'string')) return unreadable('a check suite could not be read');
-    if (v.head_branch !== null && v.head_branch !== branch) continue;
-    if (!Number.isSafeInteger(v.id)) return unreadable('a check suite could not be read');
-    const listed = await readPaged(gh, p.host, `${p.base}/check-suites/${v.id as number}/check-runs?filter=latest`, 'check_runs');
-    if (isFail(listed)) return listed;
-    runs.push(...listed.map(run));
+    if (!v || !Number.isSafeInteger(v.id)) return unreadable('a check suite could not be read');
+    if (v.head_branch === ownTag) ownSuites.add(v.id as number);
+  }
+  // Every run, re-runs included: the newest of each check in each suite.
+  const all = await readPaged(gh, p.host, `${p.base}/commits/${sha}/check-runs?filter=all`, 'check_runs');
+  if (isFail(all)) return all;
+  const newest = new Map<string, { id: number; run: Run }>();
+  for (const v of all.map(rec)) {
+    const suite = rec(v?.check_suite)?.id;
+    if (!v || !Number.isSafeInteger(v.id) || !Number.isSafeInteger(suite) || typeof v.name !== 'string') return unreadable('a check run could not be read');
+    if (ownSuites.has(suite as number)) continue;
+    const key = `${suite as number}\u0000${v.name}`;
+    const b = newest.get(key);
+    if (!b || (v.id as number) > b.id) newest.set(key, { id: v.id as number, run: run(v) });
   }
   const s = await gh.read(p.host, `${p.base}/commits/${sha}/status`);
   if (!s.ok) return failed(s);
   const sv = rec(s.value);
   if (typeof sv?.total_count !== 'number') return unreadable('the combined status could not be read');
-  // A push run queued behind a concurrency group has no check run yet: the
-  // runs are read whatever the check runs say.
-  const pushed = await readPaged(gh, p.host, `${p.base}/actions/runs?head_sha=${sha}&event=push&branch=${pathOfName(branch)}`, 'workflow_runs');
-  if (isFail(pushed)) return pushed;
-  const pushRuns = pushed.filter((v) => rec(v)?.head_branch === branch);
-  const latest = latestPerWorkflow(pushRuns.map((v) => {
-    const r = rec(v);
-    return { ...run(v), workflowId: String(r?.workflow_id ?? r?.id ?? ''), id: typeof r?.id === 'number' ? r.id : 0, attempt: typeof r?.run_attempt === 'number' ? r.run_attempt : 1 };
-  }));
-  return checksVerdict({ runs, status: { state: str(sv.state), total: sv.total_count }, workflowRuns: latest, expected });
+  // A run queued behind a concurrency group has no check run yet: the runs
+  // are read whatever the check runs say.
+  const listed = await readPaged(gh, p.host, `${p.base}/actions/runs?head_sha=${sha}`, 'workflow_runs');
+  if (isFail(listed)) return listed;
+  const runs = listed.map(rec).filter((r) => r?.head_branch !== ownTag);
+  const latest = latestPerWorkflow(runs.map((r) => ({
+    ...run(r),
+    // Each workflow's runs per event and ref: a later run of another event
+    // does not hide a failed one.
+    workflowId: `${String(r?.workflow_id ?? r?.id ?? '')}\u0000${str(r?.event)}\u0000${str(r?.head_branch)}`,
+    id: typeof r?.id === 'number' ? r.id : 0,
+    attempt: typeof r?.run_attempt === 'number' ? r.run_attempt : 1,
+  })));
+  return checksVerdict({ runs: [...newest.values()].map((n) => n.run), status: { state: str(sv.state), total: sv.total_count }, workflowRuns: latest, expected });
 }
 
 /** The Actions page of the runs the pushed tag starts: a link that needs no
@@ -698,15 +705,30 @@ export function tagRunsUrl(p: RepoPath, act: ApprovalReleaseAct): string {
   return `https://${p.host}/${p.base.replace(/^repos\//, '')}/actions?query=event%3Apush+branch%3A${act.tagName}`;
 }
 
-/** Delete a draft this act made, best effort: read first, and delete only
- *  while it is still a draft (one published since stays). */
-export async function deleteDraft(gh: GhActPort, p: RepoPath, draftId: number): Promise<'deleted' | 'gone' | 'published' | 'failed'> {
+/** What became of a draft a release row made, when the row ended refused
+ *  or was dropped: deleted (or already gone, or published since); kept,
+ *  because the tag is made at the commit (a publish made it and stopped:
+ *  the draft is what releases it) or could not be checked; or not deleted
+ *  (the delete failed). */
+export type DraftFate = 'deleted' | 'gone' | 'published' | 'kept-tag-made' | 'kept-unchecked' | 'failed';
+
+/** Delete a draft a release row made, best effort: read it first, keep it
+ *  while it is published or its tag is made at the commit (or that cannot be
+ *  read), and delete it only then. `want`: the act's tag and commit; absent
+ *  (the request is gone), the draft's own tag and target. */
+export async function deleteDraft(gh: GhActPort, p: RepoPath, draftId: number, want?: { tagName: string; targetSha: string }): Promise<DraftFate> {
   const r = await gh.read(p.host, `${p.base}/releases/${draftId}`).catch(() => null);
-  if (!r) return 'failed';
-  if (!r.ok) return r.kind === 'http' && r.status === 404 ? 'gone' : 'failed';
+  if (!r) return 'kept-unchecked';
+  if (!r.ok) return r.kind === 'http' && r.status === 404 ? 'gone' : 'kept-unchecked';
   const release = mapRelease(r.value);
-  if (!release) return 'failed';
+  if (!release) return 'kept-unchecked';
   if (!release.draft) return 'published';
+  const tagName = want?.tagName ?? release.tagName;
+  const targetSha = want?.targetSha ?? release.target;
+  if (!RELEASE_TAG_RE.test(tagName)) return 'kept-unchecked';
+  const tag = await readTagTarget(gh, p, tagName).catch((err: unknown) => ({ error: String(err) }));
+  if (isFail(tag)) return 'kept-unchecked';
+  if (tag !== null && tag === targetSha) return 'kept-tag-made';
   const a = await gh.write(p.host, 'DELETE', `${p.base}/releases/${draftId}`, {}).catch(() => null);
   if (!a) return 'failed';
   return a.ok ? 'deleted' : a.kind === 'http' && a.status === 404 ? 'gone' : 'failed';
@@ -817,18 +839,12 @@ export async function readReleaseAsk(gh: GhActPort, repoKey: string, input: Rele
     version = read.version;
   }
   const expected = checksExpected(workflows, defaultBranch);
-  const checks = await readChecks(gh, p, targetSha, defaultBranch, expected);
+  const checks = await readChecks(gh, p, targetSha, tag, expected);
   if (isFail(checks)) return unread('the checks', checks);
-  // A push to the branch runs its workflows on the pushed head only: a
-  // commit behind the head with none of the checks a push surely runs was
-  // pushed under a later one, and its checks never run.
-  if (checks === 'not-started' && cmp.aheadBy > 0) {
-    return no('checks-never-ran', `no push to ${defaultBranch} ran the workflows on ${targetSha.slice(0, 7)}, so its checks will never pass; ask for the head, or a commit whose checks ran`);
-  }
+  const prerelease = input.prerelease ?? shape ?? false;
   return {
-    mode: mode.mode, workflows: mode.mode === 'workflow' ? mode.workflows : [], alsoRuns: alsoRunsOn(workflows, tag, mode.mode),
-    targetSha, defaultBranch, behindBy: cmp.aheadBy, checks, version,
-    prerelease: input.prerelease ?? shape ?? false, checksExpected: expected,
+    mode: mode.mode, workflows: mode.mode === 'workflow' ? mode.workflows : [], alsoRuns: alsoRunsOn(workflows, tag, mode.mode, prerelease),
+    targetSha, defaultBranch, behindBy: cmp.aheadBy, checks, version, prerelease, checksExpected: expected,
   };
 }
 
@@ -867,14 +883,22 @@ export async function releasePrecondition(gh: GhActPort, p: RepoPath, act: Appro
   if (published) return stop('release-exists', own);
   // The draft this act made was changed on GitHub since: not what was approved.
   if (own && !sameDraft(own, act)) return stop('found-different', own);
-  // The workflows at the commit do not change: what they expect of the
-  // checks was read with the request (checksExpected).
   if (act.mode === 'workflow') {
     const off = await readDisabledWorkflow(gh, p, act.workflows);
     if (isFail(off)) return stop(readRefusal(off, 'workflow-disabled'));
     if (off) return stop('workflow-disabled');
   }
-  const checks = await readChecks(gh, p, act.targetSha, act.defaultBranch, act.checksExpected);
+  // The workflows at the commit do not change: what they expect of the
+  // checks was read with the request (checksExpected); a request an earlier
+  // build stored without it reads them now.
+  let expected = act.checksExpected;
+  if (expected === undefined) {
+    const workflows = await readWorkflows(gh, p, act.targetSha);
+    if ('refusal' in workflows) return stop('workflow-unreadable', own);
+    if (isFail(workflows)) return stop(readRefusal(workflows, 'workflow-unreadable'), own);
+    expected = checksExpected(workflows, act.defaultBranch);
+  }
+  const checks = await readChecks(gh, p, act.targetSha, act.tagName, expected);
   if (isFail(checks)) return stop(readRefusal(checks, 'checks-failing'), own);
   const why = checksRefusal(checks);
   return why ? stop(why, own) : { refusal: null, draft: own };

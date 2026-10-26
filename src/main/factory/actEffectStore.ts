@@ -182,6 +182,15 @@ export class ActEffectStore {
     return this.end(row, status, reason, result);
   }
 
+  /** A refused row's reason, told more (what became of its release draft).
+   *  Null when the row is not refused or the file was not written. */
+  amendRefusal(id: string, reason: string): ActEffect | null {
+    const row = this.rows.get(id);
+    if (!row || row.status !== 'refused') return null;
+    const next: ActEffect = { ...row, reason, updatedAt: this.now() };
+    return this.put(next) ? next : null;
+  }
+
   /** What a read of GitHub says about a row that may have run (uncertain, or
    *  pending after an earlier try): done, refused, or pending again (attempts
    *  left) when nothing was found. */

@@ -701,7 +701,7 @@ const CHECK_WORDS: Readonly<Record<ReleaseAsk['checks'], string>> = {
   failed: 'one did not pass; approving now is refused, and the bot asks again once they pass',
   running: 'still running; approving now is refused, and the bot asks again once they pass',
   none: 'none',
-  'not-started': 'not started yet; approving now is refused, and the bot asks again once they pass',
+  'not-started': 'not started yet (a commit behind the head may never run them); approving now is refused, and the bot asks again once they pass',
 };
 
 /** What starts another workflow, as the card says it. */
@@ -2428,13 +2428,18 @@ export class ApprovalService {
       : done
         ? `Merged ${subject(r)} (approved by ${by})`
         : moved ? `Not merged: ${subject(r)} has a new head since the request; it needs a new approval` : `Not merged: ${subject(r)} (${laneRefusalLine(r.refusal ?? '') || 'refused'})`;
+    // What became of a refused release's draft (its refusal's `draft-*`
+    // code), in the body too: a long title is cut.
+    const draft = r.act?.kind === 'release' && !done
+      ? laneRefusalLine(laneRefusalCodes(r.refusal ?? '').filter((c) => c.startsWith('draft-')).join(', '), r.repoKey) : '';
+    const body = [draft, r.act ? r.result?.url ?? '' : ''].filter(Boolean).join('\n\n');
     writer.post({
       workspaceId: r.workspaceId,
       threadId: r.threadId,
       kind: done ? 'status' : 'refusal',
       actor: { kind: 'system' },
       title,
-      ...(r.act && r.result?.url ? { body: r.result.url } : {}),
+      ...(body ? { body } : {}),
       refs: { approvalId: r.requestId, ...(r.prNumber !== undefined ? { pr: r.prNumber } : {}), ...(r.issueNumber !== undefined ? { issue: r.issueNumber } : {}) },
       clientPostId: `approval-outcome:${r.requestId}`,
     });

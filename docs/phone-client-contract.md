@@ -5208,12 +5208,22 @@ any release of it (a draft included) are still absent, and the commit's
 checks have passed or there are none, and a release workflow it relies on is
 still enabled (`refusal` `default-branch-changed`, `not-on-default-branch`,
 `tag-taken`, `release-exists`, `checks-failing`, `checks-pending`,
-`checks-not-started`, `workflow-disabled`); a release published on a tag that
-was made elsewhere meanwhile ends `refused` with `published-other-target`, and
-one published with another name or notes than the card's with
-`found-different`. A release whose publish made its tag but whose tries ran
-out with the release still a draft ends `refused` with `tag-made-draft-kept`:
-the draft stays on GitHub for the owner to publish or delete.
+`checks-not-started`, `workflow-disabled`, `workflow-unreadable`); a release
+published on a tag that was made elsewhere meanwhile ends `refused` with
+`published-other-target`, one published by another login with
+`release-by-other`, and one published with another name or notes than the
+card's with `found-different`. A release whose publish made its tag but
+whose tries ran out with the release still a draft ends `refused` with
+`tag-made-not-published`. Any act whose GitHub answer had a shape the desktop
+cannot read ends `refused` with `unreadable-answer`.
+
+`refusal` may be a list of codes joined by `, `; show one sentence per code.
+A refused `release` that made a draft adds one last code saying what became
+of it when it stays on GitHub: `draft-kept-tag-made` (its tag is made at the
+commit, so the draft is kept for the owner to publish or delete),
+`draft-kept-unchecked` (whether the tag was made could not be checked; the
+draft is kept), or `draft-not-deleted` (deleting it failed: the owner deletes
+it on GitHub). A deleted draft adds nothing.
 While it runs, or
 while it reads GitHub to learn whether an interrupted try went through, the
 request stays `approved`; it ends `executed` or `refused`.
