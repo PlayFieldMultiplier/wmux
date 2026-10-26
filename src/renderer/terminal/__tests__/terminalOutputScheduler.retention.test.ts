@@ -14,6 +14,7 @@ import {
   markTerminalDirty,
   markTerminalClean,
   noteTerminalDirectWrite,
+  promoteTerminalToPriorityDrain,
   __setQueryFlushPosterForTests,
   __resetTerminalOutputSchedulerForTests,
   type SchedulableTerminal,
@@ -388,15 +389,27 @@ describe('terminalOutputScheduler — hidden-pane retention answers queries', ()
     expect(isTerminalRetained(t)).toBe(true);
   });
 
-  it('several panes querying at once are flushed one per task', () => {
+  it('several panes querying at once are flushed in the same task', () => {
     const a = makeAnsweringTerminal();
     const b = makeAnsweringTerminal();
     writeTerminalOutput(a, `a${DA1}`, hidden);
     writeTerminalOutput(b, `b${DA1}`, hidden);
     vi.advanceTimersToNextTimer();
-    expect([a.answers, b.answers]).toEqual([1, 0]);
-    vi.advanceTimersToNextTimer();
     expect([a.answers, b.answers]).toEqual([1, 1]);
+  });
+
+  it('a reveal via the priority drain clears the pending query, so a new hidden backlog stays retained', () => {
+    const t = makeAnsweringTerminal();
+    let postedFlush: (() => void) | null = null;
+    __setQueryFlushPosterForTests((run) => { postedFlush = run; });
+    writeTerminalOutput(t, DA1, hidden);
+    promoteTerminalToPriorityDrain(t); // shown before the flush task ran
+    vi.advanceTimersByTime(20); // the priority drain delivers the query
+    expect(t.answers).toBe(1);
+    writeTerminalOutput(t, 'hidden again', hidden);
+    (postedFlush as (() => void) | null)?.(); // the late task finds nothing to do
+    expect(joined(t)).toBe(DA1);
+    expect(isTerminalRetained(t)).toBe(true);
   });
 
   it('showing the pane before the flush runs leaves the backlog to the normal path, answered once', () => {

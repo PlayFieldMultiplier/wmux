@@ -493,17 +493,15 @@ function resolveSyncOpen(prevOpen: boolean, data: string): boolean {
  *  was flushed, discarded or overflowed to dirty. */
 function runQueryFlushes(): void {
   queryFlushPosted = false;
-  // One terminal per task: several hidden panes querying at once must not
-  // parse all their backlogs in one task and block input for the visible pane.
-  const next = pendingQueryFlushes.entries().next();
-  if (next.done) return;
-  const [terminal, ptyId] = next.value;
-  pendingQueryFlushes.delete(terminal);
-  if (pendingQueryFlushes.size > 0) postQueryFlush();
-  const entry = queue.get(terminal);
-  if (!entry || !entry.retained || !hasQueuedChunks(entry)) return;
-  logQueryParse(terminal, ptyId, entry.queuedChars);
-  flushTerminalOutput(terminal);
+  // The hand-off is cheap: xterm buffers it and parses in its own time slices.
+  const due = [...pendingQueryFlushes];
+  pendingQueryFlushes.clear();
+  for (const [terminal, ptyId] of due) {
+    const entry = queue.get(terminal);
+    if (!entry || !entry.retained || !hasQueuedChunks(entry)) continue;
+    logQueryParse(terminal, ptyId, entry.queuedChars);
+    flushTerminalOutput(terminal);
+  }
 }
 
 function postQueryFlush(): void {
@@ -511,10 +509,6 @@ function postQueryFlush(): void {
   queryFlushPosted = true;
   if (queryFlushPosterForTests) {
     queryFlushPosterForTests(runQueryFlushes);
-    return;
-  }
-  if (typeof MessageChannel === 'undefined') {
-    setTimeout(runQueryFlushes, 0);
     return;
   }
   if (!queryFlushChannel) {
@@ -776,6 +770,10 @@ export function writeTerminalOutput(
     }
     return;
   }
+  // From here the backlog, any waiting query included, reaches xterm through
+  // the normal drain or a DEC 2026 frame release; a pending query flush for it
+  // is stale and would later parse an unrelated retained backlog.
+  pendingQueryFlushes.delete(terminal);
 
   // DEC 2026 synchronized-output coalescing for VISIBLE panes. While a frame is
   // open, hold the pane's chunks out of xterm (no parse, no raster); release
@@ -905,6 +903,7 @@ export function promoteTerminalToPriorityDrain(terminal: SchedulableTerminal): v
   const entry = queue.get(terminal);
   if (!entry || entry.heldForSync) return;
   if (!hasQueuedChunks(entry)) return;
+  pendingQueryFlushes.delete(terminal); // the priority drain delivers the query
   entry.retained = false;
   entry.priority = true;
   scheduleDrain(0);
@@ -988,5 +987,6 @@ export function __resetTerminalOutputSchedulerForTests(): void {
   queryParseLog.clear();
   pendingQueryFlushes.clear();
   queryFlushPosted = false;
+  queryFlushPosterForTests = null;
   retentionEngagedLogged = false;
 }
