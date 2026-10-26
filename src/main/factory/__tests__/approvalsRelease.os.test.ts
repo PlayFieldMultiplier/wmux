@@ -1013,7 +1013,7 @@ describe('a kept release draft is told to the owner', () => {
     };
     await r.sweep();
     expect(r.svc.get(req.requestId)).toMatchObject({ state: 'refused', refusal: 'identity-changed, draft-kept-unchecked' });
-    expect(r.outcome(req.requestId)?.body).toMatch(/^Whether the tag was made could not be checked: its draft release is kept on GitHub/);
+    expect(r.outcome(req.requestId)?.body).toMatch(/^Its draft release could not be checked: it may still be on GitHub/);
     expect(r.gh.releases).toHaveLength(1);
   });
 
@@ -1051,11 +1051,11 @@ describe('a kept release draft is told to the owner', () => {
     expect(r.gh.releases).toMatchObject([{ draft: true, body: 'Edited by the owner.' }]);
   });
 
-  it('a delete that fails says so', async () => {
+  it('a delete GitHub refuses says so', async () => {
     const { r, req } = await drafted();
     r.gh.login = 'someone-else';
     r.gh.onWrite = (w) => {
-      if (w.method === 'DELETE') r.gh.nextWrite = { answer: { ok: false, kind: 'http', status: 500, message: 'gh: Server Error (HTTP 500)' }, landed: false };
+      if (w.method === 'DELETE') r.gh.nextWrite = { answer: { ok: false, kind: 'http', status: 403, message: 'gh: Forbidden (HTTP 403)' }, landed: false };
     };
     await r.sweep();
     expect(r.svc.get(req.requestId)).toMatchObject({ state: 'refused', refusal: 'identity-changed, draft-not-deleted' });

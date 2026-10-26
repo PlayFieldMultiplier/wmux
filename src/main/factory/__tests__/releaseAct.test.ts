@@ -585,8 +585,12 @@ describe('second code review round', () => {
     gh = github();
     draft(gh);
     gh.tags.set('v1.2.3', { sha: C2 });
-    gh.nextWrite = { answer: { ok: false, kind: 'http', status: 500, message: 'gh: Server Error (HTTP 500)' }, landed: false };
+    // GitHub refused the delete (4xx): failed. A server error may have
+    // deleted it: retry, and the next read tells.
+    gh.nextWrite = { answer: { ok: false, kind: 'http', status: 403, message: 'gh: Forbidden (HTTP 403)' }, landed: false };
     expect(await deleteDraft(gh, P, 50, want)).toBe('failed');
+    gh.nextWrite = { answer: { ok: false, kind: 'http', status: 500, message: 'gh: Server Error (HTTP 500)' }, landed: false };
+    expect(await deleteDraft(gh, P, 50, want)).toBe('retry');
     gh.nextWrite = { answer: { ok: false, kind: 'error', message: 'timeout' }, landed: false };
     expect(await deleteDraft(gh, P, 50, want)).toBe('retry');
     expect(await deleteDraft(gh, P, 50, want)).toBe('deleted');

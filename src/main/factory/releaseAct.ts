@@ -826,7 +826,9 @@ export async function deleteDraft(gh: GhActPort, p: RepoPath, draftId: number, w
   const a = await gh.write(p.host, 'DELETE', `${p.base}/releases/${draftId}`, {}).catch(() => null);
   if (!a) return 'retry';
   if (a.ok) return 'deleted';
-  if (a.kind !== 'http') return 'retry';
+  // No answer, or a server error: the delete may have run; the next try's
+  // read tells (a deleted draft reads as gone).
+  if (a.kind !== 'http' || a.status >= 500) return 'retry';
   return a.status === 404 ? 'gone' : 'failed';
 }
 

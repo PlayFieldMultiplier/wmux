@@ -5226,11 +5226,11 @@ cannot read ends `refused` with `unreadable-answer`.
 A refused `release` that made a draft adds one last code saying what became
 of it when it stays on GitHub: `draft-kept-tag-made` (its tag is made at the
 commit, so the draft is kept for the owner to publish or delete),
-`draft-kept-unchecked` (whether the tag was made could not be checked; the
-draft is kept), `draft-kept-changed` (the draft was changed on GitHub since
+`draft-kept-unchecked` (the draft could not be checked, or GitHub did not
+answer about it for a day; it may still be there), `draft-kept-changed` (the draft was changed on GitHub since
 wmux made it, so it is the owner's and is kept), or `draft-not-deleted`
-(deleting it failed: the owner deletes it on GitHub). A deleted draft adds
-nothing. When the desktop quit between the refusal and that decision, or
+(GitHub refused the delete: the owner deletes it on GitHub). A deleted draft
+adds nothing. When the desktop quit between the refusal and that decision, or
 GitHub did not answer it then, the request is first `refused` without the
 code; once a later sweep makes the decision it gains it, with a new
 `updatedAt` (the room gets one more outcome card).

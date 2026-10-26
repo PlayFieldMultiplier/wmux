@@ -50,7 +50,7 @@
 import type { GhActAnswer, GhActPort } from '../github/GhActService';
 import type { ApprovalAct, ApprovalActRepo, ApprovalReleaseAct } from '../../shared/botApproval';
 import { actMarker, bodyWithMarker, normalizeActText } from './actPayload';
-import { ACT_MAX_ATTEMPTS, DRAFT_OPEN_MAX_MS, actRowClaimed, draftUndecided, runnableAct, type ActEffect, type ActEffectStore } from './actEffectStore';
+import { ACT_MAX_ATTEMPTS, actRowClaimed, draftUndecided, draftUnansweredTooLong, runnableAct, type ActEffect, type ActEffectStore } from './actEffectStore';
 import type { StoredApproval } from './approvals';
 import { failed, isFail, loginOf, readPaged, readRefusal, rec, repoPath, str, type Read } from './actRead';
 import { laneRefusalLine } from './laneRefusalText';
@@ -269,6 +269,12 @@ export class ActExecutor {
         await this.run(row.id);
         continue;
       }
+      if (row.status === 'done' || row.status === 'refused') {
+        // An ended row outlives its request only when its drop was not
+        // written: dropped again.
+        if (this.ports.approval.authorize(row) === 'approval-missing') this.ports.effects.drop(row.id);
+        continue;
+      }
       if (!runnableAct(row) || (row.status !== 'uncertain' && row.status !== 'pending')) continue;
       const denied = this.ports.approval.authorize(row);
       if (denied === 'approval-missing') await this.orphaned(row);
@@ -285,7 +291,7 @@ export class ActExecutor {
     // Its draft first: a quit before the row is dropped decides it again
     // (a draft deleted then reads as gone); GitHub not answering keeps the
     // row for a later sweep.
-    if ((await this.dropDraft(row, row.startedAt ?? row.updatedAt))?.fate === 'retry') return;
+    if ((await this.dropDraft(row))?.fate === 'retry') return;
     if (!this.ports.effects.drop(row.id)) return;
     this.ports.log?.(`[factory] act ${row.action} ${row.requestId} dropped: its request is gone (${row.status}, attempt ${row.attempt}${claimed ? '; whether it reached GitHub is not known' : ''})`);
   }
@@ -296,15 +302,19 @@ export class ActExecutor {
    *  or cannot be checked: the act's tag and commit, or the draft's own when
    *  the request is gone), and the log says what became of it. Its fate (null:
    *  no draft) and the code the row's refusal gains; `retry`: GitHub did not
-   *  answer, and the draft stays open, for DRAFT_OPEN_MAX_MS from `since` at
-   *  most: then it is kept, not checked, and told. */
-  private async dropDraft(row: ActEffect | null, since: number): Promise<{ fate: DraftFate; code: string | null } | null> {
+   *  answer, counted on the row, and the draft stays open until that has
+   *  lasted DRAFT_OPEN_MAX_MS over DRAFT_OPEN_MIN_TRIES reads at least: then
+   *  it is kept, not checked, and told. */
+  private async dropDraft(row: ActEffect | null): Promise<{ fate: DraftFate; code: string | null } | null> {
     if (!row || row.action !== 'release' || row.draftId === undefined) return null;
     const p = repoPath(row.repoKey);
     const act = this.ports.approval.request(row.requestId)?.act;
     const want = act?.kind === 'release' ? act : undefined;
     let fate: DraftFate = p ? await deleteDraft(this.ports.gh, p, row.draftId, want).catch(() => 'retry' as const) : 'kept-unchecked';
-    if (fate === 'retry' && this.now() - since >= DRAFT_OPEN_MAX_MS) fate = 'kept-unchecked';
+    if (fate === 'retry') {
+      const counted = this.ports.effects.noteDraftUnanswered(row.id, this.now()) ?? row;
+      if (draftUnansweredTooLong(counted, this.now())) fate = 'kept-unchecked';
+    }
     const code = DRAFT_FATE_CODE[fate] ?? null;
     this.ports.log?.(`[factory] act release ${row.requestId}: its draft ${row.draftId}: ${fate}${code ? ` (${laneRefusalLine(code, row.repoKey)})` : ''}`);
     return { fate, code };
@@ -317,7 +327,7 @@ export class ActExecutor {
    *  `retry` returns the row itself: nothing decided. */
   private async refusedDraft(out: ActEffect | null): Promise<ActEffect | null> {
     if (!out || !draftUndecided(out)) return out;
-    const decided = await this.dropDraft(out, out.draftOpenAt ?? out.updatedAt);
+    const decided = await this.dropDraft(out);
     // GitHub did not answer: the draft stays open for a later sweep.
     if (decided?.fate === 'retry') return out;
     const reason = decided?.code ? `${out.reason ?? 'refused'}, ${decided.code}` : undefined;

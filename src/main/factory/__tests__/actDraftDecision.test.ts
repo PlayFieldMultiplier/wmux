@@ -8,7 +8,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ApprovalReleaseAct } from '../../../shared/botApproval';
-import { ActEffectStore, DRAFT_OPEN_MAX_MS, actEffectId, draftUndecided, type ActEffect } from '../actEffectStore';
+import { ActEffectStore, DRAFT_OPEN_MAX_MS, DRAFT_OPEN_MIN_TRIES, actEffectId, draftUndecided, type ActEffect } from '../actEffectStore';
 import { ActExecutor } from '../actExecutor';
 import type { StoredApproval } from '../approvals';
 import { FakeGithub } from './fakeGithubActs';
@@ -39,6 +39,17 @@ function refusedUndecided(): { store: ActEffectStore; id: string } {
   store.noteDraft(id, 50);
   store.finish(id, 'refused', 'checks-failing');
   return { store: new ActEffectStore(file), id };
+}
+
+/** refusedUndecided() in a store of its own. */
+function refusedUndecidedAt(at: string): { store: ActEffectStore; id: string } {
+  const store = new ActEffectStore(at);
+  const id = actEffectId(ID);
+  store.enqueue({ requestId: ID, action: 'release', repoKey: 'github.com/o/r', payloadHash: 'h' });
+  store.claim(id);
+  store.noteDraft(id, 50);
+  store.finish(id, 'refused', 'checks-failing');
+  return { store: new ActEffectStore(at), id };
 }
 
 function github(): FakeGithub {
@@ -152,11 +163,61 @@ describe('a refused release row\'s draft decision', () => {
     await ex.reconcileAll();
     expect(store.get(id)).toMatchObject({ draftOpen: true });
     // GitHub refused the delete: decided, and told.
-    gh.nextWrite = { answer: { ok: false, kind: 'http', status: 500, message: 'gh: Server Error (HTTP 500)' }, landed: false };
+    gh.nextWrite = { answer: { ok: false, kind: 'http', status: 403, message: 'gh: Forbidden (HTTP 403)' }, landed: false };
     await ex.reconcileAll();
     expect(store.get(id)).toMatchObject({ reason: 'checks-failing, draft-not-deleted' });
     expect(store.get(id)).not.toHaveProperty('draftOpen');
     expect(emitted.at(-1)).toMatchObject({ reason: 'checks-failing, draft-not-deleted' });
+  });
+
+  it('a delete answered with a server error may have run: open still, and the next read finds the draft deleted', async () => {
+    const { store, id } = refusedUndecided();
+    const gh = github();
+    gh.nextWrite = { answer: { ok: false, kind: 'http', status: 502, message: 'gh: Bad Gateway (HTTP 502)' }, landed: true };
+    const { ex, emitted } = executor(store, gh);
+    await ex.reconcileAll();
+    expect(gh.releases).toEqual([]);
+    expect(store.get(id)).toMatchObject({ draftOpen: true, reason: 'checks-failing' });
+    expect(emitted).toEqual([]);
+    await ex.reconcileAll();
+    expect(store.get(id)).toMatchObject({ reason: 'checks-failing' });
+    expect(store.get(id)).not.toHaveProperty('draftOpen');
+    expect(emitted.at(-1)).toMatchObject({ status: 'refused', reason: 'checks-failing' });
+  });
+
+  it('a refusal that already says what became of the draft does not open it', () => {
+    for (const [reason, result] of [['found-different', { url: 'u', id: 50 }], ['published-other-target', { url: 'u', id: 50 }], ['draft-gone', undefined]] as const) {
+      const store = new ActEffectStore(path.join(dir, `${reason}.json`));
+      const id = actEffectId(ID);
+      store.enqueue({ requestId: ID, action: 'release', repoKey: 'github.com/o/r', payloadHash: 'h' });
+      store.claim(id);
+      store.noteDraft(id, 50);
+      const out = store.finish(id, 'refused', reason, result);
+      expect(out).toMatchObject({ status: 'refused', reason });
+      expect(out).not.toHaveProperty('draftOpen');
+    }
+    // Another release's id says nothing about this row's draft.
+    const store = new ActEffectStore(path.join(dir, 'other.json'));
+    const id = actEffectId(ID);
+    store.enqueue({ requestId: ID, action: 'release', repoKey: 'github.com/o/r', payloadHash: 'h' });
+    store.claim(id);
+    store.noteDraft(id, 50);
+    expect(store.finish(id, 'refused', 'published-other-target', { url: 'u', id: 51 })).toMatchObject({ draftOpen: true });
+  });
+
+  it('an ended row whose drop was not written is dropped by a later sweep', async () => {
+    const { store, id } = refusedUndecided();
+    const gh = github();
+    const { ex } = executor(store, gh, 'gone');
+    const realDrop = store.drop.bind(store);
+    let failDrop = true;
+    store.drop = (x: string) => (failDrop ? false : realDrop(x));
+    await ex.reconcileAll();
+    expect(store.get(id)).toMatchObject({ status: 'refused' });
+    expect(store.get(id)).not.toHaveProperty('draftOpen');
+    failDrop = false;
+    await ex.reconcileAll();
+    expect(store.get(id)).toBeNull();
   });
 
   it('a row an earlier build refused with a draft (no flag) is left as it was decided then', async () => {
@@ -172,18 +233,31 @@ describe('a refused release row\'s draft decision', () => {
     expect(emitted).toEqual([]);
   });
 
-  it('a draft GitHub does not answer for stays open a day at most: then it is kept, not checked, and told', async () => {
+  it('a draft GitHub does not answer for stays open a day from the first such read and over a number of reads: then it is kept, not checked, and told', async () => {
     const { store, id } = refusedUndecided();
-    const openedAt = store.get(id)?.draftOpenAt ?? 0;
-    expect(openedAt).toBeGreaterThan(0);
     const gh = github();
     gh.answerRead = (e) => (e === 'repos/o/r/releases/50' ? { ok: false, kind: 'error', message: 'gh: not logged in' } : null);
-    let now = openedAt + DRAFT_OPEN_MAX_MS - 1;
+    // The app was off for two days after the refusal: the first sweep's
+    // non-answer starts the day, it does not end it.
+    const first = (store.get(id)?.updatedAt ?? 0) + 2 * DRAFT_OPEN_MAX_MS;
+    let now = first;
     const { ex, emitted } = executor(store, gh, 'there', () => now);
     await ex.reconcileAll();
-    expect(store.get(id)).toMatchObject({ draftOpen: true });
+    expect(store.get(id)).toMatchObject({ draftOpen: true, draftUnansweredAt: first, draftUnansweredTries: 1 });
+    // The day is over, but too few reads went unanswered: open still.
+    now = first + DRAFT_OPEN_MAX_MS;
+    for (let i = 2; i < DRAFT_OPEN_MIN_TRIES; i++) await ex.reconcileAll();
+    expect(store.get(id)).toMatchObject({ draftOpen: true, draftUnansweredTries: DRAFT_OPEN_MIN_TRIES - 1 });
     expect(emitted).toEqual([]);
-    now = openedAt + DRAFT_OPEN_MAX_MS;
+    // Enough reads, but not a day since the first: open still.
+    const early = refusedUndecidedAt(path.join(dir, 'early.json'));
+    let earlyNow = (early.store.get(early.id)?.updatedAt ?? 0);
+    const earlyRun = executor(early.store, gh, 'there', () => earlyNow);
+    for (let i = 0; i < DRAFT_OPEN_MIN_TRIES; i++) await earlyRun.ex.reconcileAll();
+    earlyNow += DRAFT_OPEN_MAX_MS - 1;
+    await earlyRun.ex.reconcileAll();
+    expect(early.store.get(early.id)).toMatchObject({ draftOpen: true, draftUnansweredTries: DRAFT_OPEN_MIN_TRIES + 1 });
+    // Both: decided.
     await ex.reconcileAll();
     expect(store.get(id)).toMatchObject({ reason: 'checks-failing, draft-kept-unchecked' });
     expect(store.get(id)).not.toHaveProperty('draftOpen');
