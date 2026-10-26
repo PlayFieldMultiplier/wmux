@@ -763,10 +763,9 @@ export async function readChecks(gh: GhActPort, p: RepoPath, sha: string, o: { o
   if (latest.some((r) => !r.path)) {
     for (const want of missingPushRuns(latest, expected, branch)) {
       const a = await gh.read(p.host, `${p.base}/actions/workflows/${pathOfName(want.slice(want.lastIndexOf('/') + 1))}`);
-      if (!a.ok) {
-        if (a.kind === 'http' && a.status === 404) continue;
-        return failed(a);
-      }
+      // Not read: the workflow stays missing, and the disabled check reads
+      // its record again, whose answer refuses as it would without this.
+      if (!a.ok) continue;
       const record = rec(a.value);
       if (!record || !Number.isSafeInteger(record.id)) return unreadable('a workflow could not be read');
       records.set(want, record);

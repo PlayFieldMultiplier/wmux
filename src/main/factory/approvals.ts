@@ -704,6 +704,11 @@ const CHECK_WORDS: Readonly<Record<ReleaseAsk['checks'], string>> = {
   'not-started': 'its push CI has not run yet; approving now is refused, and the bot asks again once it passes',
 };
 
+/** A release refusal's code that says what became of its draft. */
+function isDraftCode(code: string): boolean {
+  return code.startsWith('draft-');
+}
+
 /** What starts another workflow, as the card says it. */
 const ALSO_RUNS_WORDS: Readonly<Record<AlsoRunsOn, string>> = {
   'tag-push': 'on this tag push',
@@ -2138,19 +2143,21 @@ export class ApprovalService {
     }
     if (r.state === 'refused' && e.status === 'refused' && r.act.kind === 'release') {
       // A refusal told before its draft was decided (a quit, or GitHub not
-      // answering, came between): its draft's code added, and told in one
-      // more outcome card. The codes are kept within 300 characters, the
-      // draft's last.
-      const isDraft = (c: string): boolean => c.startsWith('draft-');
+      // answering, came between): its draft's code added, told in one more
+      // outcome card and to the bot. Within 300 characters the refusal as
+      // told stays first (cut at its end), the draft's code last.
       const had = laneRefusalCodes(r.refusal ?? '');
-      const added = laneRefusalCodes(e.reason ?? '').filter((c) => isDraft(c) && !had.includes(c));
+      const added = laneRefusalCodes(e.reason ?? '').filter((c) => isDraftCode(c) && !had.includes(c));
       if (added.length === 0) return;
-      const codes = [...had, ...added];
-      while (codes.length > added.length && codes.join(', ').length > 300) codes.shift();
-      const amended: StoredApproval = { ...r, refusal: codes.join(', '), updatedAt: this.now() };
+      const tail = added.join(', ');
+      const base = r.refusal ?? 'refused';
+      const room = 300 - tail.length - 2;
+      const amended: StoredApproval = { ...r, refusal: `${base.length <= room ? base : base.slice(0, Math.max(0, room))}, ${tail}`, updatedAt: this.now() };
       if (!this.put(amended)) return;
       this.outcomeCard(amended, 'draft');
       this.changed(amended.workspaceId);
+      this.tellDecided(amended, `Not done: ${ACTION_TITLE[amended.action]} ${subject(amended)} (${laneRefusalLine(tail, amended.repoKey)}).`,
+        'Its draft release stays on GitHub until the owner publishes or deletes it: do not ask for this release again meanwhile.');
       return;
     }
     if (r.state === 'executed' || r.state === 'refused') return;
@@ -2443,10 +2450,10 @@ export class ApprovalService {
     const full = r.actRepo?.fullName ?? r.repoKey;
     // A release draft's fate (`draft-*` codes) is told in the body, not the title.
     const codes = laneRefusalCodes(r.refusal ?? '');
-    const isDraft = (c: string): boolean => r.act?.kind === 'release' && c.startsWith('draft-');
+    const isDraft = (c: string): boolean => r.act?.kind === 'release' && isDraftCode(c);
     const why = laneRefusalLine(codes.filter((c) => !isDraft(c)).join(', '), r.repoKey);
     const title = amend
-      ? `Draft release still on GitHub: ${ACTION_TITLE[r.action]} ${subject(r)}`
+      ? `${codes.includes('draft-kept-unchecked') ? 'Draft release may still be on GitHub' : 'Draft release still on GitHub'}: ${ACTION_TITLE[r.action]} ${subject(r)}`
       : r.act?.kind === 'release' && done
       ? r.act.mode === 'workflow'
         ? `Tag pushed — the release workflow is building it (${r.act.tagName} on ${full}, approved by you)`

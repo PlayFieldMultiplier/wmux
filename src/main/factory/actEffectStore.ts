@@ -55,8 +55,10 @@ export interface ActEffect {
   result?: { url: string; id?: number; number?: number };
   /** A release's draft on GitHub, made by an earlier write of this row. */
   draftId?: number;
-  /** A refused release row's draft is still to be deleted or kept. */
+  /** A refused release row's draft is still to be deleted or kept, since
+   *  `draftOpenAt` (DRAFT_OPEN_MAX_MS bounds it). */
   draftOpen?: true;
+  draftOpenAt?: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -77,6 +79,7 @@ function wellFormed(v: unknown): v is ActEffect {
     && (e.result === undefined || (typeof e.result === 'object' && e.result !== null && typeof e.result.url === 'string'))
     && (e.draftId === undefined || (Number.isSafeInteger(e.draftId) && e.draftId > 0))
     && (e.draftOpen === undefined || e.draftOpen === true)
+    && (e.draftOpenAt === undefined || Number.isSafeInteger(e.draftOpenAt))
     && Number.isSafeInteger(e.createdAt) && Number.isSafeInteger(e.updatedAt);
 }
 
@@ -91,6 +94,10 @@ export function runnableAct(e: Pick<ActEffect, 'action'>): boolean {
 export function actRowClaimed(e: Pick<ActEffect, 'status' | 'attempt' | 'draftId'>): boolean {
   return e.status !== 'pending' || e.attempt > 0 || e.draftId !== undefined;
 }
+
+/** How long a draft stays open while GitHub does not answer; past it, it is
+ *  decided as kept and not checked, and the owner is told. */
+export const DRAFT_OPEN_MAX_MS = 24 * 60 * 60_000;
 
 /** Whether a refused release row's draft is still to be deleted or kept. Pure. */
 export function draftUndecided(e: Pick<ActEffect, 'status' | 'draftOpen'>): boolean {
@@ -203,6 +210,7 @@ export class ActEffectStore {
     if (!row || !draftUndecided(row)) return null;
     const next: ActEffect = { ...row, ...(reason ? { reason } : {}), updatedAt: this.now() };
     delete next.draftOpen;
+    delete next.draftOpenAt;
     return this.put(next) ? next : null;
   }
 
@@ -222,7 +230,10 @@ export class ActEffectStore {
     if (reason) next.reason = reason;
     if (result) next.result = result;
     // A refused release row's draft is open in the same write as the refusal.
-    if (status === 'refused' && row.action === 'release' && row.draftId !== undefined) next.draftOpen = true;
+    if (status === 'refused' && row.action === 'release' && row.draftId !== undefined) {
+      next.draftOpen = true;
+      next.draftOpenAt = next.updatedAt;
+    }
     return this.put(next) ? next : this.unjournaled(row);
   }
 
