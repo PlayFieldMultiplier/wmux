@@ -20,9 +20,8 @@
 // and a denial must be reported instead of going quiet.
 
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as nodePath from 'node:path';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RpcContext } from '../../../../shared/rpc';
 import { FANOUT_MAX_TASKS, FANOUT_PROMPT_MAX_BYTES } from '../../../../shared/workTask';
 import { CHANNEL_TOPIC_MAX, HUMAN_WORKSPACE_ID } from '../../../../shared/channels';
@@ -47,6 +46,19 @@ import type { LedgerEntry } from '../../../../shared/ledger';
 import type { FanoutPreset } from '../../../../shared/fanoutPreset';
 import type { DaemonClient } from '../../../DaemonClient';
 import { validateFanoutTaskGraph } from '../../../../shared/fanoutTaskGraph';
+import { trackedTempDir } from '../../../../test-utils/trackedTempDir';
+
+// A fan-out run is detached: the handler appends to its guards' audit file
+// (making the dir again if it is gone) once the service's start settles, which
+// can be after the case returns. Each harness can release a run its case left
+// hanging and wait for every start it made; that runs after every case, and
+// the guard dirs (trackedTempDir) are removed only after it.
+const runSettlers: Array<() => Promise<void>> = [];
+afterEach(async () => {
+  for (const settle of runSettlers.splice(0)) await settle();
+});
+/** A guard store dir, removed once the file ends. */
+const tempDir = (prefix: string): string => trackedTempDir(prefix, { until: 'file' });
 
 const CALLER_WS = 'ws-caller';
 // Resolved to NATIVE form. The handler runs the caller's cwd through
@@ -162,6 +174,12 @@ function setup(opts?: {
     }
     return Promise.resolve(settle(opts?.startResult ?? { ok: true, tasks: [] }));
   });
+  runSettlers.push(async () => {
+    releaseRun?.({ ok: true, tasks: [] });
+    await Promise.allSettled(start.mock.results.map((r) => r.value as Promise<FanOutResult>));
+    // The handler's own continuation (refunds, the audit append) after start.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  });
 
   const statusOf = vi.fn((key: string): FanOutStatus => state.get(key) ?? { state: 'unknown' });
   // Only the fan-out 'k-wait' has tasks waiting on dependencies.
@@ -238,7 +256,7 @@ function setup(opts?: {
   const guards =
     opts?.guards ??
     new FanOutGuards({
-      dir: fs.mkdtempSync(nodePath.join(os.tmpdir(), 'wmux-fanout-rpc-')),
+      dir: tempDir('wmux-fanout-rpc-'),
       countLiveTasks: () => 0,
       ledgerTaskOwner: () => null,
     });
@@ -528,7 +546,7 @@ describe('files and dependsOn travel with the tasks', () => {
 
   it('charges a dependent task on the hour when it starts, refunds it once, and settles the fan-out after the last one', async () => {
     const guards = new FanOutGuards({
-      dir: fs.mkdtempSync(nodePath.join(os.tmpdir(), 'wmux-fanout-rpc-')),
+      dir: tempDir('wmux-fanout-rpc-'),
       countLiveTasks: () => 0,
       ledgerTaskOwner: () => null,
     });
@@ -707,7 +725,7 @@ describe('an evicted key can never restart a fan-out that already spawned', () =
     // past the 24-task hourly cap unless each unspawned task is refunded on
     // disk, and the forgotten key answers expired instead of running again.
     const guards = new FanOutGuards({
-      dir: fs.mkdtempSync(nodePath.join(os.tmpdir(), 'wmux-fanout-rpc-')),
+      dir: tempDir('wmux-fanout-rpc-'),
       countLiveTasks: () => 0,
       ledgerTaskOwner: () => null,
     });
@@ -1429,7 +1447,7 @@ function guardsIn(dir: string, opts: { ledger?: (ws: string) => string | null; l
 }
 
 function tmp(): string {
-  return fs.mkdtempSync(nodePath.join(os.tmpdir(), 'wmux-fanout-brakes-'));
+  return tempDir('wmux-fanout-brakes-');
 }
 
 describe('task.fanout.start — depth-1', () => {
@@ -1809,7 +1827,7 @@ describe('task.fanout.start — preset and agents', () => {
   });
 
   it('gives back the hourly quota for tasks that never got a workspace', async () => {
-    const dir = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'wmux-fanout-refund-'));
+    const dir = tempDir('wmux-fanout-refund-');
     const g = new FanOutGuards({ dir, countLiveTasks: () => 0, ledgerTaskOwner: () => null });
     const h = setup({ guards: g, presets: [IMAGE], requireApproval: false });
     // The harness service returns { ok: true, tasks: [] }: nothing spawned.
@@ -1907,7 +1925,7 @@ describe('task.fanout.start — preset and agents', () => {
   });
 
   it('worktree:false needs no repository: a non-repo caller is accepted', async () => {
-    const outside = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'wmux-fanout-norepo-'));
+    const outside = tempDir('wmux-fanout-norepo-');
     const h = setup({ presets: [IMAGE], cwd: outside });
     const res = await h.call(goodParams({ preset: 'Image' }));
     expect(res).toMatchObject({ ok: true, status: 'accepted', repoPath: fs.realpathSync(outside) });
@@ -1926,7 +1944,7 @@ describe('task.fanout.start — preset and agents', () => {
   it('the depth guard refuses fan-out from a worktree:false worker', async () => {
     // A codex worker in an output folder is still a stamped task workspace —
     // the lineage stamp is written by the same pty.create path.
-    const g = new FanOutGuards({ dir: fs.mkdtempSync(nodePath.join(os.tmpdir(), 'wmux-fanout-d1-')), countLiveTasks: () => 0, ledgerTaskOwner: () => null });
+    const g = new FanOutGuards({ dir: tempDir('wmux-fanout-d1-'), countLiveTasks: () => 0, ledgerTaskOwner: () => null });
     g.markTask(CALLER_WS, 'ws-brain');
     const h = setup({ guards: g, presets: [IMAGE] });
     const err = errorOf(await h.call(goodParams({ preset: 'Image' })));

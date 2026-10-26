@@ -39,3 +39,7 @@ src/main/ipc/__tests__/wrapHandler.rollout.test.ts
 
 # App-owned session/connector services must survive daemon handler swaps.
 src/main/ipc/__tests__/registerHandlers.race.test.ts
+
+# No test loads a JavaScript file that starts with a hashbang: on a CRLF
+# checkout Vite misreads it (#2769). It walks the import graph itself.
+scripts/__tests__/hashbangImports.test.mjs

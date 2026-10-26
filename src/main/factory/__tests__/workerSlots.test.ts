@@ -1,8 +1,7 @@
 // Each task's launch generation and its panes, on disk (#2393).
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LedgerEntry } from '../../../shared/ledger';
 import { WORKER_SLOTS_FILENAME, WORKER_SLOTS_MAX, WORKER_SLOTS_VERSION, WorkerSlots, beginPaneRelaunch, launchStillCurrent, resolvePaneOwner, setReclaimedPaneSource, setWorkerSlotsForTests, startsAgent, taskOfPane } from '../workerSlots';
 import { AGENT_GONE_FILENAME, AgentGoneFacts } from '../agentGoneFacts';
@@ -12,13 +11,18 @@ import { noteBotWorkerSession } from '../../agents/botWorkerMergeGuard';
 import { MODEL_ENV_MARKER } from '../../../shared/workerLaunch';
 import { setTaskLedgerForTests } from '../../deck/taskLedgerHost';
 import { FanOutGuards, recordFanoutTaskPane, setFanOutGuardsForTests, stampFanoutTaskPane, taskOfWorkspace } from '../../worktask/fanoutGuards';
+import { trackedTempDir } from '../../../test-utils/trackedTempDir';
+import { workerSlotStores } from '../../../test-utils/workerSlotStores';
 
 const BOT = 'bot-0000000a';
-const tmp = (): string => fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-worker-slots-'));
+const slotStores = workerSlotStores();
+
+const tmp = (): string => trackedTempDir('wmux-worker-slots-');
 
 function store(dir: string, opts: { rows?: LedgerEntry[]; now?: () => number; warn?: string[] } = {}): WorkerSlots {
   const s = new WorkerSlots(path.join(dir, 'factory', WORKER_SLOTS_FILENAME), () => opts.rows ?? [], (l) => opts.warn?.push(l), opts.now ?? Date.now);
   s.load();
+  slotStores.track(s);
   return s;
 }
 
@@ -31,9 +35,27 @@ afterEach(() => {
   setWorkerSlotsForTests(null);
   setFanOutGuardsForTests(null);
   __resetWorkspaceMirrorForTest();
+  slotStores.settle();
 });
 
 describe('WorkerSlots', () => {
+  it('settlePendingWriteForTests makes a pending coalesced write now, and its timer writes nothing later', () => {
+    vi.useFakeTimers();
+    try {
+      const dir = tmp();
+      const s = store(dir);
+      const { gen } = s.beginLaunch({ taskId: 't1', origin: 'owner', ownerWorkspaceId: 'ws-owner' });
+      s.launched('t1', gen, 'ws-t1', 'pty-1');
+      s.settlePendingWriteForTests();
+      expect(store(dir).paneOf('pty-1')).toEqual({ taskId: 't1', gen: 1, workspaceId: 'ws-t1' });
+      fs.rmSync(path.join(dir, 'factory'), { recursive: true, force: true });
+      vi.advanceTimersByTime(60_000);
+      expect(fs.existsSync(path.join(dir, 'factory'))).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('a restart keeps each task\'s generation and each pane\'s task', () => {
     const dir = tmp();
     const s = store(dir);
@@ -89,6 +111,7 @@ describe('WorkerSlots', () => {
     const dir = tmp();
     fs.writeFileSync(path.join(dir, 'factory'), 'not a folder');
     const s = new WorkerSlots(path.join(dir, 'factory', WORKER_SLOTS_FILENAME), () => [], () => undefined);
+    slotStores.track(s);
     s.load();
     expect(() => s.beginLaunch({ taskId: 't', origin: 'owner', ownerWorkspaceId: 'ws-owner' })).toThrow(/could not be recorded/);
     expect(s.launchOf('t')).toBeNull();

@@ -4,7 +4,6 @@
 // restarts the app must not get a fresh hour.
 
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { endedTaskAgentRuns, type WorkerSessionInfo } from '../../factory/workerReclaim';
@@ -24,6 +23,7 @@ import {
   stampFanoutTaskPane,
   type FanOutAuditRecord,
 } from '../fanoutGuards';
+import { trackedTempDir } from '../../../test-utils/trackedTempDir';
 
 afterEach(() => {
   setHolderSource(null);
@@ -51,8 +51,8 @@ const ledgerRow = (id: string, ws: string, status: LedgerEntry['status']): Ledge
   updatedBy: { kind: 'worker', workspaceId: ws }, dispatch: { origin: { kind: 'pane' } },
 });
 
-function tmpDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-fanout-guards-'));
+function tmpDir(prefix = 'wmux-fanout-guards-'): string {
+  return trackedTempDir(prefix);
 }
 
 function guards(dir: string, opts: {
@@ -442,7 +442,7 @@ describe('a bot worker is named even without its stamp (ledger dispatch fallback
 
 describe('FanOutGuards.refundStart', () => {
   it('gives back the hour for tasks that never got a workspace, on disk too', () => {
-    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-guards-refund-'));
+    const d = tmpDir('wmux-guards-refund-');
     const g = new FanOutGuards({ dir: d, countLiveTasks: () => 0, ledgerTaskOwner: () => null });
     expect(g.reserve('k', 3).ok).toBe(true);
     g.commitStart('k');

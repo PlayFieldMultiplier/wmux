@@ -5,8 +5,11 @@ import codex from '../../../daemon/approvals/__tests__/fixtures/terminal-prompts
 import openCode from '../../../daemon/approvals/__tests__/fixtures/terminal-prompts/opencode-permission-bash-01.json';
 import claude from '../../../daemon/approvals/__tests__/fixtures/terminal-prompts/claude-write-01-create.json';
 import type { ApprovalScreenSnapshot } from '../../../shared/approvalScreen';
-import { codexScreenApproval, piScreenApproval } from '../approvalScreen';
+import { codexScreenApproval, piScreenApproval, qwenScreenApproval } from '../approvalScreen';
 import piCapture from './fixtures/pi-1.4.0-capture.json';
+import qwenWide from './fixtures/qwen-code-0.26.1-120x40.json';
+import qwenNarrow from './fixtures/qwen-code-0.26.1-60x30.json';
+import qwenDialogs from './fixtures/qwen-code-0.26.1-60x30-dialogs.json';
 
 const TRUST = ['Do you trust the contents of this project?', '❯ Yes, I trust this folder', '  No, exit', '↑/↓ Navigate · enter Confirm'];
 const CODEX_EDIT = ['Would you like to make the following edits?', '› 1. Yes, proceed (y)',
@@ -418,5 +421,59 @@ describe('quiet approval recovery reads only the current interactive viewport', 
     const { det, events } = setup();
     expect(await det.revalidateApprovalScreen(async () => { if (outcome) throw outcome; return null; })).toBe(false);
     expect(events).not.toHaveBeenCalled();
+  });
+});
+
+describe('Qwen Code 0.26.1 permission dialogs (live capture)', () => {
+  const ASKED = { agent: 'Qwen Code', status: 'awaiting_input', message: 'Approval requested' };
+
+  it.each([
+    ['the 120x40 shell dialog', qwenWide.frames.approval, qwenWide.screens.approval],
+    ['the 60x30 file-write dialog', qwenNarrow.frames.writeApproval, qwenNarrow.screens.writeApproval],
+    ['the 60x30 shell dialog under a scrollbar thumb', qwenNarrow.frames.shellApprovalMidSession, qwenNarrow.screens.shellApprovalScrollbar],
+    ['the 60x30 shell dialog whose question is cut with an ellipsis', qwenDialogs.frames.shellCut, qwenDialogs.screens.shellCut],
+    ['the 60x30 edit dialog', qwenDialogs.frames.edit, qwenDialogs.screens.edit],
+  ])('recovers %s drawn before Qwen\'s identity arrived', async (_label, output, rows) => {
+    // Drawn while another agent's identity still held the pane, so no Qwen
+    // line pattern read it; Qwen's seed then reads the grid once.
+    const det = new AgentDetector();
+    const events = vi.fn();
+    det.onEvent(events);
+    det.seedTrustedIdentity('claude', det.getIdentityEpoch());
+    det.feed(output);
+    det.clearTrustedIdentity();
+    det.seedTrustedIdentity('qwen', det.getIdentityEpoch());
+    expect(await det.revalidateApprovalScreen(async () => frame(rows))).toBe(true);
+    expect(events.mock.calls.map(([event]) => event)).toEqual([ASKED]);
+  });
+
+  it.each([
+    ['as captured', qwenNarrow.frames.shellApprovalMidSession],
+    // The same frames with the confirmation row's spaces drawn as cursor moves.
+    ['drawn with cursor moves', qwenNarrow.frames.shellApprovalMidSession.replace(/Waiting for user/g, 'Waiting\u001b[1Cfor\u001b[1Cuser')],
+  ])('leaves a dialog the stream reported to the stream, and its recheck agrees (%s)', async (_label, output) => {
+    const det = new AgentDetector();
+    const events = vi.fn();
+    det.onEvent(events);
+    det.seedTrustedIdentity('qwen', det.getIdentityEpoch());
+    det.feed(output);
+    expect(events.mock.calls.map(([event]) => event)).toEqual([ASKED]);
+    // Reported in the same read: no grid read is asked for.
+    expect(det.takeApprovalRecheckRequest()).toBe(false);
+    // A recheck that runs anyway (the seed's own) finds the same dialog.
+    expect(await det.revalidateApprovalScreen(async () => frame(qwenNarrow.screens.shellApprovalScrollbar))).toBe(false);
+    expect(events).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads no dialog once it is answered or cancelled, and asks for no recheck', () => {
+    // After Enter the spinner keeps the confirmation phrase, beside its counters.
+    expect(qwenScreenApproval(qwenWide.screens.answered)).toBeNull();
+    expect(qwenScreenApproval(qwenNarrow.screens.afterEsc)).toBeNull();
+    const det = new AgentDetector();
+    det.seedTrustedIdentity('qwen', det.getIdentityEpoch());
+    det.feed(qwenWide.frames.approval);
+    det.takeApprovalRecheckRequest();
+    det.feed(qwenWide.frames.afterApproval);
+    expect(det.takeApprovalRecheckRequest()).toBe(false);
   });
 });

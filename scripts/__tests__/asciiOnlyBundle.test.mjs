@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { asciiOnlyBundle, escapeRegexLiteral, escapeRegexesAndComments } from '../lib/ascii-only-bundle.mjs';
-import { asciiOnlyFiles } from '../ascii-only-files.mjs';
+import { asciiOnlyFiles } from '../lib/ascii-only-files.mjs';
 
 const isOneByte = (text) => !/[\u0100-\uffff]/.test(text);
 const NBSP = String.fromCharCode(0xa0);
