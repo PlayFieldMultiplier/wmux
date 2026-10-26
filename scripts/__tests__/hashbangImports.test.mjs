@@ -1,5 +1,5 @@
-// No test loads a file that starts with a hashbang (`#!`), directly or through
-// the modules it imports.
+// No test, vitest config or setup file loads a JavaScript file that starts
+// with a hashbang (`#!`), directly or through the modules it imports.
 //
 // Vitest runs every repo module through Vite's SSR transform, which finds the
 // hashbang with /^#!.*\n/. On a CRLF checkout (core.autocrlf=true: Windows,
@@ -21,6 +21,10 @@ import { ROOT, listTestFiles } from '../lib/test-lanes.mjs';
 // and dynamic imports of a string literal: every form Vite transforms.
 const SPECIFIER = /\bfrom\s*['"](\.{1,2}\/[^'"]+)['"]|\bimport\s*['"](\.{1,2}\/[^'"]+)['"]|\bimport\(\s*['"](\.{1,2}\/[^'"]+)['"]\s*\)/g;
 const EXTENSIONS = ['.ts', '.tsx', '.mts', '.js', '.mjs', '.cjs'];
+// A vitest config names its setup files as strings; those load through the
+// same transform as an import.
+const SETUP_FILES = /\bsetupFiles\s*:\s*\[([^\]]*)\]/g;
+const QUOTED_RELATIVE = /['"](\.{1,2}\/[^'"]+)['"]/g;
 
 const isFile = (abs) => {
   try {
@@ -45,9 +49,10 @@ describe('hashbang files reached from tests', () => {
     // The import chain that first reached each file, for the message.
     const via = new Map();
     const queue = [];
-    for (const test of listTestFiles()) {
-      const abs = path.join(ROOT, test);
-      via.set(abs, [test]);
+    const configs = fs.readdirSync(ROOT).filter((name) => /^vitest\b.*\.[cm]?[jt]s$/.test(name));
+    for (const start of [...listTestFiles(), ...configs]) {
+      const abs = path.join(ROOT, start);
+      via.set(abs, [start]);
       queue.push(abs);
     }
     const hits = [];
@@ -59,8 +64,10 @@ describe('hashbang files reached from tests', () => {
         hits.push(`${via.get(abs).join(' -> ')} starts with a hashbang`);
         continue;
       }
-      for (const m of source.matchAll(SPECIFIER)) {
-        const target = resolve(abs, m[1] ?? m[2] ?? m[3]);
+      const specs = [...source.matchAll(SPECIFIER)].map((m) => m[1] ?? m[2] ?? m[3]);
+      for (const [, list] of source.matchAll(SETUP_FILES)) specs.push(...[...list.matchAll(QUOTED_RELATIVE)].map((m) => m[1]));
+      for (const spec of specs) {
+        const target = resolve(abs, spec);
         if (!target || via.has(target)) continue;
         via.set(target, [...via.get(abs), rel(target)]);
         queue.push(target);
