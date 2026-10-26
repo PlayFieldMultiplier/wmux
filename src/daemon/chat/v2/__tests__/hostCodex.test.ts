@@ -239,6 +239,11 @@ describe('chat v2 host: a Codex chat', () => {
     const other = rig({ commandLine: 'codex app-server --listen stdio://' });
     await other.host.start();
     expect(other.killed).toEqual([]);
+    // Every host this test started is stopped before the folder is removed:
+    // dispose() waits for the write-back of the records each one loaded. One
+    // at a time, since all three hold the same record.
+    await other.host.dispose();
+    await again.host.dispose();
     await first.host.dispose();
   });
 });
