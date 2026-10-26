@@ -130,7 +130,7 @@ export function CustomAgentsSection(): React.ReactElement {
 
   const onSave = async () => {
     if (!editing) return;
-    const r = applyCustomAgentDraft(agents, editing.draft, editing.index, usersOf);
+    const r = applyCustomAgentDraft(agents, editing.draft, editing.index, usersOf, window.electronAPI?.platform);
     if (!r.ok) {
       setError(t('settings.customAgentsInvalid', { error: issueText(t, r.issue) }));
       return;

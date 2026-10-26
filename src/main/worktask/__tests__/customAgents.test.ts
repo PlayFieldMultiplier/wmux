@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { getCustomAgentsPath, loadCustomAgentsReport, saveCustomAgents } from '../customAgents';
-import { customAgentPresetUsers, getFanoutPresetsPath, loadFanoutPresetsReport } from '../fanoutPresets';
+import { customAgentUsers, getFanoutPresetsPath, loadFanoutPresetsReport } from '../fanoutPresets';
 
 let dir: string;
 beforeEach(() => {
@@ -26,14 +26,34 @@ describe('custom agent store', () => {
       'utf8',
     );
     expect(loadFanoutPresetsReport(dir).presets.map((p) => p.name)).toEqual(['Birds']);
-    const users = customAgentPresetUsers(dir);
-    expect([...users]).toEqual([['tern', ['Birds']]]);
+    const users = customAgentUsers({}, dir);
+    expect([...users]).toEqual([['tern', { users: ['the Birds preset'], modelPins: [] }]]);
 
     const refused = await saveCustomAgents([gull], users, dir);
-    expect(refused).toMatchObject({ ok: false, code: 'agent-in-use', params: { stem: 'tern', by: 'Birds' } });
+    expect(refused).toMatchObject({ ok: false, code: 'agent-in-use', params: { stem: 'tern', by: 'the Birds preset' } });
     expect(loadCustomAgentsReport(dir).agents.map((a) => a.name)).toEqual(['Tern', 'Gull']);
     // An agent nothing uses can go.
     expect(await saveCustomAgents([tern], users, dir)).toMatchObject({ ok: true });
+  });
+
+  it('counts roles bound to an agent, and keeps the model flag while a role or preset pins a model', async () => {
+    const withFlag = { ...tern, modelFlag: '--llm' };
+    expect(await saveCustomAgents([withFlag], new Map(), dir)).toMatchObject({ ok: true });
+    fs.writeFileSync(
+      getFanoutPresetsPath(dir),
+      JSON.stringify({ presets: [{ name: 'Birds', items: [{ agent: 'Tern', model: 'm1' }], worktree: true }] }),
+      'utf8',
+    );
+    const users = customAgentUsers({ Builder: { agent: 'tern' } }, dir);
+    expect([...users]).toEqual([['tern', { users: ['the Builder role', 'the Birds preset'], modelPins: ['the Birds preset'] }]]);
+    expect(await saveCustomAgents([{ ...withFlag, modelFlag: '-M' }], users, dir))
+      .toMatchObject({ ok: false, code: 'model-in-use', params: { stem: 'tern', by: 'the Birds preset' } });
+    expect(await saveCustomAgents([tern], users, dir)).toMatchObject({ ok: false, code: 'model-in-use' });
+    // The same flag, other fields changed: fine.
+    expect(await saveCustomAgents([{ ...withFlag, args: '--fast' }], users, dir)).toMatchObject({ ok: true });
+    // A role alone keeps the agent from being removed.
+    expect(await saveCustomAgents([], customAgentUsers({ Builder: { agent: 'tern' } }, dir), dir))
+      .toMatchObject({ ok: false, code: 'agent-in-use', params: { by: 'the Builder role, the Birds preset' } });
   });
 
   it('a corrupt file is no custom agents, and a preset row naming one is dropped, not launched', () => {

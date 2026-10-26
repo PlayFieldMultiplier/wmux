@@ -1,7 +1,9 @@
+// @wmux-lane unit
+// `win32` here is a platform name handed to a pure validator; nothing reaches the OS.
 import { describe, expect, it } from 'vitest';
 import { normalizeCustomAgent, validateCustomAgents, type CustomAgent } from '../customAgents';
 import { applyFanoutAgentFlags, normalizeFanoutPreset, validateFanoutAgentChoice } from '../fanoutPreset';
-import { applyRoleAgent, applyRoleBinding } from '../orchestratorRole';
+import { applyRoleAgent, applyRoleBinding, bindingEnforcesModel } from '../orchestratorRole';
 
 // "Tern" is a made-up CLI: no real agent is named in these fixtures.
 const tern: CustomAgent = { name: 'Tern', command: '/opt/tern/bin/tern', args: '--fast', promptFlag: '-i', modelFlag: '-m' };
@@ -47,6 +49,53 @@ describe('normalizeCustomAgent', () => {
     const r = normalizeCustomAgent({ name: 'Tern', command: 'tern', args: '', unattendedFlags: '  ' });
     expect(r).toEqual({ ok: true, agent: { name: 'Tern', command: 'tern' } });
     expect(code({ name: 'Tern', command: 'tern', process: 'tern' })).toBe('unknown-field');
+  });
+});
+
+describe('review round 1', () => {
+  it('refuses tokens a pane shell would still read: %, a comma, a leading @ or =, and --%', () => {
+    for (const args of ['--%', '%PATH%', '--a,b', '@opts', '=tern', '--x=%HOME%']) {
+      expect(code({ name: 'Tern', command: 'tern', args })).toBe('args-invalid');
+    }
+    expect(code({ name: 'Tern', command: 'tern', args: '--key=value --dir=/tmp/x' })).toBeUndefined();
+    expect(code({ name: 'Tern', command: 'tern', unattendedFlags: '--yes,all' })).toBe('flag-invalid');
+  });
+
+  it('refuses versioned interpreters, busybox, and a known agent behind trailing dots', () => {
+    for (const command of ['python3.12', 'node22', '/usr/bin/perl5.34', 'busybox']) {
+      expect(code({ name: 'Tern', command })).toBe('command-generic');
+    }
+    expect(code({ name: 'Tern', command: 'C:/x/codex.exe.' })).toBe('command-known');
+    expect(code({ name: 'Tern', command: 'python-tern' })).toBeUndefined();
+  });
+
+  it('refuses a UNC-style path anywhere, and a POSIX path for a Windows pane', () => {
+    expect(code({ name: 'Tern', command: '//host/share/tern' })).toBe('command-separator');
+    expect(normalizeCustomAgent({ name: 'Tern', command: '/tools/tern' }, { platform: 'win32' })).toMatchObject({ ok: false, code: 'command-posix-path' });
+    expect(normalizeCustomAgent({ name: 'Tern', command: '/tools/tern' }, { platform: 'darwin' }).ok).toBe(true);
+  });
+
+  it('refuses arguments that carry its own model or prompt flag', () => {
+    expect(code({ name: 'Tern', command: 'tern', modelFlag: '--llm', args: '--llm foo' })).toBe('args-flag');
+    expect(code({ name: 'Tern', command: 'tern', modelFlag: '--llm', args: '--llm=foo' })).toBe('args-flag');
+    expect(code({ name: 'Tern', command: 'tern', promptFlag: '-i', args: '-i' })).toBe('args-flag');
+  });
+
+  it('detects a custom pin by its own model flag only, so another CLI meaning of -m does not hide it', () => {
+    const llm: CustomAgent = { name: 'Tern', command: 'tern', args: '-m notes', modelFlag: '--llm' };
+    const bound = applyRoleBinding('tern -m notes', { agent: 'tern', model: 'm1' }, { spawnedProcess: true, customAgents: [llm] });
+    expect(bound).toMatchObject({ command: 'tern --llm m1 -m notes', modelInjected: true });
+    // A line that already chooses with --llm keeps its own, and says so.
+    const typed = applyRoleBinding('tern --llm big', { agent: 'tern', model: 'm1' }, { spawnedProcess: true, customAgents: [llm] });
+    expect(typed).toMatchObject({ command: 'tern --llm big', modelInjected: false });
+    expect(typed.note).toContain('--llm');
+    // The role's own args choosing it: no pin claimed.
+    expect(bindingEnforcesModel({ agent: 'tern', model: 'm1', args: '--llm=x' }, [llm])).toBe(false);
+    expect(bindingEnforcesModel({ agent: 'tern', model: 'm1' }, [llm])).toBe(true);
+  });
+
+  it('stores a hand-edited preset row by the stem, whatever its case', () => {
+    expect(normalizeFanoutPreset({ name: 'P', items: [{ agent: 'Tern' }] }, [tern])).toMatchObject({ ok: true, preset: { items: [{ agent: 'tern' }] } });
   });
 });
 

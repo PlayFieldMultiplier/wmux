@@ -13,6 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { getWmuxDir } from '../../daemon/config';
 import { atomicWriteJSON } from '../../daemon/util/atomicWrite';
+import type { CustomAgentUse } from './fanoutPresets';
 import {
   customAgentStem,
   normalizeCustomAgentsReport,
@@ -34,7 +35,7 @@ export function loadCustomAgentsReport(
   if (!fs.existsSync(p)) return { agents: [], dropped: [] };
   try {
     const raw = JSON.parse(fs.readFileSync(p, 'utf8')) as { agents?: unknown };
-    return normalizeCustomAgentsReport(raw?.agents);
+    return normalizeCustomAgentsReport(raw?.agents, { platform: process.platform });
   } catch {
     return { agents: [], dropped: [], unreadable: true };
   }
@@ -52,16 +53,24 @@ export function loadCustomAgents(dir?: string): CustomAgent[] {
  */
 export async function saveCustomAgents(
   input: unknown,
-  inUse: ReadonlyMap<string, readonly string[]>,
+  inUse: ReadonlyMap<string, CustomAgentUse>,
   dir?: string,
 ): Promise<{ ok: true; agents: CustomAgent[] } | ({ ok: false } & CustomAgentIssue)> {
-  const v = validateCustomAgents(input);
+  const v = validateCustomAgents(input, { platform: process.platform });
   if (!v.ok) return v;
-  const kept = new Set(v.agents.map(customAgentStem));
-  for (const [stem, users] of inUse) {
-    if (!kept.has(stem)) {
-      const by = users.join(', ');
+  const before = loadCustomAgents(dir);
+  for (const [stem, use] of inUse) {
+    const next = v.agents.find((a) => customAgentStem(a) === stem);
+    if (!next) {
+      const by = use.users.join(', ');
       return { ok: false, code: 'agent-in-use', params: { stem, by }, error: `"${stem}" is still used by ${by}` };
+    }
+    // A pinned model goes after the model flag: a changed or removed flag would
+    // drop those rows on the next load, and their pins with them.
+    const old = before.find((a) => customAgentStem(a) === stem);
+    if (use.modelPins.length > 0 && (old?.modelFlag ?? '') !== (next.modelFlag ?? '')) {
+      const by = use.modelPins.join(', ');
+      return { ok: false, code: 'model-in-use', params: { stem, by }, error: `"${stem}" has a model pinned by ${by}; its model flag cannot change` };
     }
   }
   const p = getCustomAgentsPath(dir);

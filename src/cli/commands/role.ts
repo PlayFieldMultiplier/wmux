@@ -194,7 +194,7 @@ export async function handleRole(args: string[], jsonMode: boolean, overrides: P
   // bare name, as main would refuse to launch it.
   let customAgents: CustomAgent[] = [];
   try {
-    customAgents = normalizeCustomAgentsReport((JSON.parse(deps.readFile(deps.customAgentsPath)) as { agents?: unknown })?.agents).agents;
+    customAgents = normalizeCustomAgentsReport((JSON.parse(deps.readFile(deps.customAgentsPath)) as { agents?: unknown })?.agents, { platform: process.platform }).agents;
   } catch {
     // missing or unreadable
   }

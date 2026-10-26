@@ -319,7 +319,9 @@ export function validateFanoutAgentChoice(
       ),
     );
   }
-  const choice: FanoutAgentChoice = { agent };
+  // The stem as the table spells it: a hand-edited `"Tern"` row names the
+  // same custom agent as `"tern"`, and every later comparison is exact.
+  const choice: FanoutAgentChoice = { agent: spec.stem };
   if (src.model !== undefined && src.model !== null && src.model !== '') {
     const model = validateFanoutModel(src.model);
     if (!model.ok) return fail(model);

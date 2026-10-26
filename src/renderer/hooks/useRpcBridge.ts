@@ -21,6 +21,7 @@ import { applyTaskQueryView } from '../../shared/a2aTaskQueryView';
 import { getLeafPanes, getWorkspaceLeafPanes, getWorkspacePtyIds, getWorkspaceRemoteSessions } from '../../shared/paneUtils';
 import { findStashedEntry, paneStashedError, stashedPaneLiveness } from '../../shared/paneStash';
 import { applyRoleAgent, bindingEnforcesModel, launchRefusesPositionalPrompt, normalizeRoleBinding, sanitizeOrchRole } from '../../shared/orchestratorRole';
+import { findCustomAgent } from '../../shared/customAgents';
 import {
   FANOUT_EXTRA_AGENT_STEMS,
   applyFanoutAgentFlags,
@@ -144,12 +145,16 @@ function fanOutRoleLines(raw: unknown): string[] {
     if (role && !seen.includes(role)) seen.push(role);
   }
   if (seen.length === 0) return [];
-  const bindings = useStore.getState().orchestratorRoleBindings;
+  const { orchestratorRoleBindings: bindings, customAgents } = useStore.getState();
   return seen.map((role) => {
     const b = bindings[role];
     if (!b || (!b.agent && !b.model && !b.args)) return `${role} → the default agent (no binding)`;
     const parts: string[] = [b.agent || 'the default agent'];
-    if (b.model) parts.push(bindingEnforcesModel(b) ? `--model ${b.model}` : `(model "${b.model}" is configured but will NOT be applied)`);
+    // A custom agent's model goes after the flag the operator gave it.
+    const modelFlag = (b.agent ? findCustomAgent(b.agent, customAgents)?.modelFlag : undefined) ?? '--model';
+    if (b.model) {
+      parts.push(bindingEnforcesModel(b, customAgents) ? `${modelFlag} ${b.model}` : `(model "${b.model}" is configured but will NOT be applied)`);
+    }
     if (b.args) parts.push(b.args);
     return `${role} → ${parts.join(' ')}`;
   });

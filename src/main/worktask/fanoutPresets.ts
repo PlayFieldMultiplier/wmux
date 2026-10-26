@@ -15,7 +15,8 @@ import path from 'node:path';
 import { getWmuxDir } from '../../daemon/config';
 import { atomicWriteJSON } from '../../daemon/util/atomicWrite';
 import { loadCustomAgents } from './customAgents';
-import { findCustomAgent } from '../../shared/customAgents';
+import { customAgentStem, findCustomAgent } from '../../shared/customAgents';
+import type { OrchestratorRoleBindings } from '../../shared/orchestratorRole';
 import {
   FANOUT_PRESETS_MAX,
   FANOUT_PRESET_TEMPLATES,
@@ -105,21 +106,33 @@ export async function saveFanoutPresets(
   return { ok: true, presets: out };
 }
 
+/** What still launches one custom agent, and which of those pin a model. */
+export interface CustomAgentUse {
+  users: string[];
+  modelPins: string[];
+}
+
 /**
- * The custom agents the saved presets launch: stem → the names of the presets
- * with a row on it. A custom agent in here cannot be deleted or renamed
- * (saveCustomAgents).
+ * What launches each custom agent: the saved presets with a row on it and the
+ * roles bound to it (`roleBindings`, from the renderer's session file), keyed
+ * by stem. An agent in here cannot be deleted or renamed, and one with a
+ * pinned model keeps its model flag (saveCustomAgents).
  */
-export function customAgentPresetUsers(dir?: string): Map<string, string[]> {
+export function customAgentUsers(roleBindings: OrchestratorRoleBindings, dir?: string): Map<string, CustomAgentUse> {
   const customAgents = loadCustomAgents(dir);
-  const users = new Map<string, string[]>();
+  const uses = new Map<string, CustomAgentUse>();
+  const note = (agent: string | undefined, user: string, pinsModel: boolean): void => {
+    const custom = agent ? findCustomAgent(agent, customAgents) : undefined;
+    if (!custom) return;
+    const stem = customAgentStem(custom);
+    const use = uses.get(stem) ?? { users: [], modelPins: [] };
+    if (!use.users.includes(user)) use.users.push(user);
+    if (pinsModel && !use.modelPins.includes(user)) use.modelPins.push(user);
+    uses.set(stem, use);
+  };
+  for (const [role, binding] of Object.entries(roleBindings)) note(binding.agent, `the ${role} role`, !!binding.model);
   for (const preset of loadFanoutPresets(dir)) {
-    for (const item of preset.items) {
-      if (!findCustomAgent(item.agent, customAgents)) continue;
-      const names = users.get(item.agent) ?? [];
-      if (!names.includes(preset.name)) names.push(preset.name);
-      users.set(item.agent, names);
-    }
+    for (const item of preset.items) note(item.agent, `the ${preset.name} preset`, !!item.model);
   }
-  return users;
+  return uses;
 }

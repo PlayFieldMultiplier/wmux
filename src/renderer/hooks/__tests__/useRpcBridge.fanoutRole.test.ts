@@ -143,7 +143,7 @@ describe('useRpcBridge — fan-out task roles', () => {
     expect(m?.[0]).toMatch(/describeFanOutRoles\(roleCommands\)/);
     // Only claim a model that will actually be injected.
     const helper = src.match(/function fanOutRoleLines\([\s\S]*?\n\}/);
-    expect(helper?.[0]).toMatch(/bindingEnforcesModel\(b\)/);
+    expect(helper?.[0]).toMatch(/bindingEnforcesModel\(b, customAgents\)/);
     expect(helper?.[0]).toMatch(/no binding/);
   });
 

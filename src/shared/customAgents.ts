@@ -50,7 +50,10 @@ export type CustomAgentIssueCode =
   | 'flag-invalid'
   | 'agents-not-array'
   | 'agents-over-cap'
-  | 'agent-in-use';
+  | 'agent-in-use'
+  | 'args-flag'
+  | 'command-posix-path'
+  | 'model-in-use';
 
 export interface CustomAgentIssue {
   code: CustomAgentIssueCode;
@@ -77,8 +80,11 @@ const BARE_COMMAND_RE = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/;
 const POSIX_ABSOLUTE_RE = /^\/[A-Za-z0-9._+/-]+$/;
 const WIN_ABSOLUTE_RE = /^[A-Za-z]:[\\/][A-Za-z0-9._+\\/-]+$/;
 /** One argument or flag: no quotes, spaces, `$`, backticks, `;|&<>`, globs,
- *  `~`, `\` or brackets, so it reaches the CLI as typed on every pane shell. */
-const TOKEN_RE = /^[A-Za-z0-9@%+=:,._/-]+$/;
+ *  `~`, `\` or brackets, so it reaches the CLI as typed on every pane shell.
+ *  Nor what PowerShell or cmd still reads in a bare word: `%` (cmd's `%VAR%`,
+ *  PowerShell's stop-parsing `--%`) and `,` (a PowerShell array); and no
+ *  leading `@` (splatting) or `=` (zsh's path expansion). */
+const TOKEN_RE = /^[A-Za-z0-9+:._/-][A-Za-z0-9@+=:._/-]*$/;
 /** A flag name: a leading `-`, then the token alphabet. */
 const FLAG_RE = /^-{1,2}[A-Za-z0-9][A-Za-z0-9._:-]*$/;
 
@@ -89,11 +95,22 @@ const FLAG_RE = /^-{1,2}[A-Za-z0-9][A-Za-z0-9._:-]*$/;
  * agent. Such an agent goes through a wrapper on PATH instead.
  */
 const GENERIC_COMMANDS: ReadonlySet<string> = new Set([
-  'node', 'nodejs', 'npx', 'npm', 'pnpm', 'pnpx', 'yarn', 'bun', 'bunx', 'deno',
-  'python', 'python3', 'py', 'pip', 'pipx', 'uv', 'uvx', 'ruby', 'perl', 'php', 'java',
-  'sh', 'bash', 'zsh', 'fish', 'dash', 'ksh', 'csh', 'tcsh', 'pwsh', 'powershell', 'cmd',
-  'env', 'sudo', 'git', 'wmux',
+  'nodejs', 'npx', 'npm', 'pnpm', 'pnpx', 'yarn', 'bunx', 'py', 'pip', 'pipx', 'uv', 'uvx', 'java',
+  'fish', 'dash', 'ksh', 'csh', 'tcsh', 'busybox', 'env', 'sudo', 'git', 'wmux',
 ]);
+/** The interpreters and shells, with any version suffix (`python3.12`, `node22`). */
+const VERSIONED_GENERIC_RE = /^(python|node|perl|ruby|php|bash|sh|zsh|pwsh|powershell|cmd|deno|bun)[\d.]*$/;
+
+function isGenericCommand(stem: string): boolean {
+  return GENERIC_COMMANDS.has(stem) || VERSIONED_GENERIC_RE.test(stem);
+}
+
+/** A name as the matching rules compare it: basename, lower-cased, a Windows
+ *  executable extension dropped, and trailing dots and spaces dropped first,
+ *  since Windows ignores them (`codex.exe.` runs codex). */
+function matchStem(name: string): string {
+  return launcherStem(name.trim().replace(/[. ]+$/, ''));
+}
 
 /**
  * Every name a registry agent is known by: its slug, its launcher stem, and the
@@ -105,12 +122,12 @@ const REGISTRY_NAMES: ReadonlySet<string> = new Set(
     row.slug,
     agentLauncherStem(row),
     ...(row.process?.executables ?? []),
-  ].map((n) => launcherStem(n))),
+  ].map((n) => matchStem(n))),
 );
 
 /** The key a role binding or preset row uses for this agent. */
 export function customAgentStem(agent: Pick<CustomAgent, 'command'>): string {
-  return launcherStem(agent.command.trim());
+  return matchStem(agent.command);
 }
 
 /** The custom agent a stem names, if any. */
@@ -134,6 +151,18 @@ function tokensOk(value: string): boolean {
   return value.split(' ').every((t) => TOKEN_RE.test(t));
 }
 
+/** `flag` itself, or `flag=<value>`, on a token. */
+export function isFlagToken(token: string, flag: string): boolean {
+  return token === flag || token.startsWith(`${flag}=`);
+}
+
+/** Where a definition is used: the pane shell it will run in. */
+export interface CustomAgentPlatform {
+  /** `process.platform` of the machine the panes run on; unknown = no
+   *  platform-specific rule. */
+  platform?: string;
+}
+
 /** Collapse whitespace runs: fields are space-separated token lists. */
 function squash(raw: unknown): string {
   return typeof raw === 'string' ? raw.replace(/\s+/g, ' ').trim() : '';
@@ -148,6 +177,7 @@ const FIELDS = new Set(['name', 'command', 'args', 'promptFlag', 'modelFlag', 'u
  */
 export function normalizeCustomAgent(
   input: unknown,
+  opts: CustomAgentPlatform = {},
 ): { ok: true; agent: CustomAgent } | ({ ok: false } & CustomAgentIssue) {
   const fail = (i: CustomAgentIssue): { ok: false } & CustomAgentIssue => ({ ok: false, ...i });
   if (input === null || typeof input !== 'object' || Array.isArray(input)) {
@@ -172,7 +202,8 @@ export function normalizeCustomAgent(
     return fail(issue('command-invalid', { name, command: shown }, `"${name}": command must be a program name or an absolute path`));
   }
   if (!BARE_COMMAND_RE.test(command)) {
-    const absolute = POSIX_ABSOLUTE_RE.test(command) || WIN_ABSOLUTE_RE.test(command);
+    // `//host/share/x` is a UNC path on Windows: never a local program.
+    const absolute = (POSIX_ABSOLUTE_RE.test(command) && !command.startsWith('//')) || WIN_ABSOLUTE_RE.test(command);
     const hasDotSegment = command.split(/[\\/]/).some((seg) => seg === '..' || seg === '.');
     if (!absolute || hasDotSegment) {
       // A folder in a relative name is the case the separator rule is for; the
@@ -185,14 +216,18 @@ export function normalizeCustomAgent(
       );
     }
   }
-  const stem = launcherStem(command);
+  // On Windows `/tools/tern` resolves against whatever drive is current.
+  if (opts.platform === 'win32' && command.startsWith('/')) {
+    return fail(issue('command-posix-path', { name, command: shown }, `"${name}": "${shown}" is not a Windows path; type it with its drive (C:\\…)`));
+  }
+  const stem = matchStem(command);
   if (!BARE_COMMAND_RE.test(stem)) {
     return fail(issue('command-invalid', { name, command: shown }, `"${name}": command must be a program name or an absolute path`));
   }
   if (REGISTRY_NAMES.has(stem)) {
     return fail(issue('command-known', { name, stem }, `"${name}": "${stem}" is an agent wmux already knows`));
   }
-  if (GENERIC_COMMANDS.has(stem)) {
+  if (isGenericCommand(stem)) {
     return fail(issue('command-generic', { name, stem }, `"${name}": "${stem}" runs other programs; use a wrapper on PATH that starts the agent`));
   }
 
@@ -218,12 +253,21 @@ export function normalizeCustomAgent(
     }
     agent.unattendedFlags = unattended;
   }
+  // Its own model or prompt flag in the arguments would fight the one wmux
+  // places: the arguments' value wins on the line while wmux reports the pin,
+  // or the pin reads as already given and is never placed.
+  for (const flag of [agent.modelFlag, agent.promptFlag]) {
+    if (flag && args.split(' ').some((t) => isFlagToken(t, flag))) {
+      return fail(issue('args-flag', { name, flag }, `"${name}": the arguments already carry ${flag}; wmux places it itself`));
+    }
+  }
   return { ok: true, agent };
 }
 
 /** Strict, for a save: the first problem is reported and nothing is kept. */
 export function validateCustomAgents(
   input: unknown,
+  opts: CustomAgentPlatform = {},
 ): { ok: true; agents: CustomAgent[] } | ({ ok: false } & CustomAgentIssue) {
   if (!Array.isArray(input)) return { ok: false, ...issue('agents-not-array', {}, 'custom agents must be an array') };
   if (input.length > CUSTOM_AGENTS_MAX) {
@@ -232,7 +276,7 @@ export function validateCustomAgents(
   }
   const agents: CustomAgent[] = [];
   for (const raw of input) {
-    const r = normalizeCustomAgent(raw);
+    const r = normalizeCustomAgent(raw, opts);
     if (!r.ok) return r;
     const clash = listClash(r.agent, agents);
     if (clash) return { ok: false, ...clash };
@@ -266,7 +310,10 @@ export interface CustomAgentDropped {
  * Settings save replaces the whole list, so what was dropped is shown rather
  * than lost in silence.
  */
-export function normalizeCustomAgentsReport(input: unknown): { agents: CustomAgent[]; dropped: CustomAgentDropped[] } {
+export function normalizeCustomAgentsReport(
+  input: unknown,
+  opts: CustomAgentPlatform = {},
+): { agents: CustomAgent[]; dropped: CustomAgentDropped[] } {
   const agents: CustomAgent[] = [];
   const dropped: CustomAgentDropped[] = [];
   if (!Array.isArray(input)) return { agents, dropped };
@@ -278,7 +325,7 @@ export function normalizeCustomAgentsReport(input: unknown): { agents: CustomAge
       dropped.push({ ...name, issue: issue('agents-over-cap', { cap }, `more than ${cap} custom agents`) });
       continue;
     }
-    const r = normalizeCustomAgent(raw);
+    const r = normalizeCustomAgent(raw, opts);
     if (!r.ok) {
       dropped.push({ ...name, issue: { code: r.code, params: r.params, error: r.error } });
       continue;

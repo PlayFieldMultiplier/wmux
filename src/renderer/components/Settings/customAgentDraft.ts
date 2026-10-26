@@ -53,6 +53,8 @@ export function customAgentDraftPayload(draft: CustomAgentDraft): Record<string,
 export interface CustomAgentUsers {
   roles: string[];
   presets: string[];
+  /** Those of them that pin a model, which goes after the agent's model flag. */
+  modelPins: string[];
 }
 
 export function customAgentUsers(
@@ -60,9 +62,17 @@ export function customAgentUsers(
   bindings: OrchestratorRoleBindings,
   presets: readonly FanoutPreset[],
 ): CustomAgentUsers {
+  // Case-insensitive, as findCustomAgent matches a stem.
+  const names = (agent: string | undefined) => agent?.toLowerCase() === stem;
+  const roles = Object.keys(bindings).filter((role) => names(bindings[role]?.agent));
+  const usedBy = presets.filter((p) => p.items.some((it) => names(it.agent)));
   return {
-    roles: Object.keys(bindings).filter((role) => bindings[role]?.agent === stem),
-    presets: presets.filter((p) => p.items.some((it) => it.agent === stem)).map((p) => p.name),
+    roles,
+    presets: usedBy.map((p) => p.name),
+    modelPins: [
+      ...roles.filter((role) => !!bindings[role]?.model),
+      ...usedBy.filter((p) => p.items.some((it) => names(it.agent) && !!it.model)).map((p) => p.name),
+    ],
   };
 }
 
@@ -82,12 +92,14 @@ export function applyCustomAgentDraft(
   draft: CustomAgentDraft,
   editIndex: number | null,
   usersOf: (stem: string) => CustomAgentUsers,
+  /** The pane platform (electronAPI.platform), for the path rule. */
+  platform?: string,
 ): { ok: true; next: CustomAgent[] } | { ok: false; issue: CustomAgentIssue } {
   const payload = customAgentDraftPayload(draft);
   const raw: unknown[] = editIndex === null
     ? [...agents, payload]
     : agents.map((a, k) => (k === editIndex ? payload : a));
-  const v = validateCustomAgents(raw);
+  const v = validateCustomAgents(raw, { platform });
   if (!v.ok) return { ok: false, issue: { code: v.code, params: v.params, error: v.error } };
   if (editIndex !== null) {
     const before = agents[editIndex];
@@ -96,6 +108,12 @@ export function applyCustomAgentDraft(
     if (before && isCustomAgentUsed(users) && customAgentStem(v.agents[editIndex]) !== stem) {
       const by = [...users.roles, ...users.presets].join(', ');
       return { ok: false, issue: { code: 'agent-in-use', params: { stem, by }, error: `"${stem}" is still used by ${by}` } };
+    }
+    // A pinned model goes after the model flag: changing or removing it would
+    // leave those pins with nothing to follow.
+    if (before && users.modelPins.length > 0 && (before.modelFlag ?? '') !== (v.agents[editIndex].modelFlag ?? '')) {
+      const by = users.modelPins.join(', ');
+      return { ok: false, issue: { code: 'model-in-use', params: { stem, by }, error: `"${stem}" has a model pinned by ${by}; its model flag cannot change` } };
     }
   }
   return { ok: true, next: v.agents };
