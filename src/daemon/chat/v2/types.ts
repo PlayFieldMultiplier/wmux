@@ -180,6 +180,11 @@ export interface ChatV2StoredRecord {
   model: string;
   /** `active` or the `handed-off` tombstone. */
   state: 'active' | 'handed-off';
+  /**
+   * Set on a tombstone the chat became because a terminal agent in another
+   * pane took the conversation (`terminalHolds`): that pane's id.
+   */
+  continuedInPaneId?: string;
   providerSessionId: string;
   /**
    * The conversation already exists in the agent (it came from the terminal),
@@ -307,6 +312,14 @@ export interface ChatV2Host {
   ownsPane(paneId: string): boolean;
   /** The provider session ids of every active (not handed-off) record: a launch line naming one is refused. */
   activeSessionIds(): string[];
+  /**
+   * The terminal agent (`agent`) in pane `paneId` is bound to conversation
+   * `sessionId`. What a person runs in a terminal wins: every active chat in
+   * another pane on that conversation yields, its driver stopped and its
+   * record the `handed-off` tombstone naming `paneId`. Never refuses and never
+   * throws; the chat's own pane (its driver's hooks carry it) is ignored.
+   */
+  terminalHolds(paneId: string, agent: string, sessionId: string): void;
   /** In-process listener for every push (phone nudges). Returns an unsubscribe. */
   onPush(listener: (push: ChatV2EventsPush) => void): () => void;
   /** Load records, sweep orphan drivers (identity-matched only), expire their approvals. */

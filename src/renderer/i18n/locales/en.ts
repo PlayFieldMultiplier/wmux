@@ -253,6 +253,8 @@ export const en = {
   'chat.reason.unreadable': "The conversation file cannot be read. You can still use Terminal.",
   'chat.reason.unavailable': "The conversation service is unavailable. Open Terminal or try again shortly.",
   'chat.openTerminal': "Open Terminal",
+  'chat.continuedInPane': "This conversation continued in a terminal in another pane.",
+  'chat.showPane': "Show that pane",
   'chat.continueInChat': "Continue in chat",
   'chat.continueInChatHint': "Stops Claude in this terminal and continues the same conversation as a chat in this pane.",
   'chat.continueInChatChecking': "Checking…",

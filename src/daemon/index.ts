@@ -4252,6 +4252,11 @@ function registerRpcHandlers(
       // transitions once (absent → present), so no per-turn write amplification.
       || prev.transcriptPath !== next.transcriptPath;
     managed.meta.resumeBinding = next;
+    // #2730: the pane's running agent now holds this conversation (a resume
+    // typed by hand, the TUI's own /resume). The terminal wins: a chat in
+    // another pane on the same conversation gives way. Running only, as
+    // `otherOwners` counts a holder; the binding is stored either way.
+    if (agentProcessTracker.identityFor(id)?.alive === true) chatV2Host?.terminalHolds(id, next.agent, next.sessionId);
     // X6 ③ (Rung 1): a captured binding PROVES claude ran in this pane, so the
     // hook is a SECOND, independent writer of the pill gate (lastDetectedAgent) —
     // the live AgentDetector banner is once-per-session and is never re-armed from
@@ -10161,6 +10166,10 @@ async function main(): Promise<void> {
     if (shuttingDown || sessionManager.getSession(id) !== owner || !['attached','detached'].includes(owner.meta.state)) return;
     const before = JSON.stringify(owner.meta.codexRelayResume);
     const observed = codexPaneRelays.liveSelection(id,owner);
+    // #2730: the pane's terminal Codex selected this thread; a chat in another
+    // pane on it gives way (chat v2 host terminalHolds, never throws).
+    const selectedThread = observed.live ? observed.selection?.threadId : undefined;
+    if (selectedThread) chatV2Host?.terminalHolds(id, 'codex', selectedThread);
     const codeHome = codexPaneRelays.accountHome(id,owner);
     if (codeHome) persistCodexThreadOwner(owner.meta, observed, codeHome);
     captureCodexRelayResume(owner.meta, observed);

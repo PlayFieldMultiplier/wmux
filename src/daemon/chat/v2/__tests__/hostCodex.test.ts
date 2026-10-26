@@ -194,6 +194,27 @@ describe('chat v2 host: a Codex chat', () => {
     await r.host.dispose();
   });
 
+  it('gives way when a terminal Codex in another pane selects its thread (#2730)', async () => {
+    const r = rig();
+    await r.create();
+    await r.send();
+    r.fake().note('turn/completed', { turn: { id: 'turn-1', status: 'completed' } });
+    await until(() => r.host.statusForPane(PANE) === 'idle');
+    expect(r.binding().providerSessionId).toBe(THREAD_ID);
+    r.host.terminalHolds('pty-other', 'codex', '019a1b2c-3d4e-7f60-8a9b-ffffffffffff');
+    r.host.terminalHolds(PANE, 'codex', THREAD_ID);
+    await tick(20);
+    expect(r.host.statusForPane(PANE)).toBe('idle');
+    r.host.terminalHolds('pty-other', 'codex', THREAD_ID);
+    await until(() => r.host.statusForPane(PANE) === 'handed-off');
+    expect(r.binding()).toMatchObject({ continuedInPaneId: 'pty-other' });
+    await until(() => r.fakes[0].exited);
+    expect(r.host.activeSessionIds()).toEqual([]);
+    expect(await r.send('again', 'msg-00002')).toMatchObject({ ok: false, error: { code: 'handed-off' } });
+    expect(r.fakes).toHaveLength(1);
+    await r.host.dispose();
+  });
+
   it('a daemon that starts again stops the app-server the last one left, by the chat id in its argv', async () => {
     const first = rig();
     const b = await first.create();

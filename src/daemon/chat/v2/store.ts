@@ -81,6 +81,7 @@ function validRecord(value: unknown): value is ChatV2StoredRecord {
   if (r.mode !== 'default' && r.mode !== 'bypass') return false;
   if (typeof r.model !== 'string') return false;
   if (r.state !== 'active' && r.state !== 'handed-off') return false;
+  if (r.continuedInPaneId !== undefined && (typeof r.continuedInPaneId !== 'string' || !r.continuedInPaneId)) return false;
   if (typeof r.providerSessionId !== 'string' || !CHATV2_PROVIDER_SESSION_ID.test(r.providerSessionId)) return false;
   if (!Number.isSafeInteger(r.seq) || (r.seq as number) < 0) return false;
   const s = r.session;

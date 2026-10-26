@@ -621,6 +621,53 @@ describe('chat v2 host: handoff and interrupt guards', () => {
     await r.host.dispose();
   });
 
+  it('gives way when a terminal in another pane binds its conversation, and only then (#2730)', async () => {
+    const r = rig();
+    await r.host.call('subscribe', { paneId: PANE }, 'main');
+    await created(r);
+    await sent(r);
+    r.fake().result();
+    await until(() => r.host.statusForPane(PANE) === 'idle');
+    const b = r.host.bindingForPane(PANE)!;
+    const id = b.providerSessionId!;
+    // Another conversation, another agent, and the chat's own pane (its driver's hooks carry it) change nothing.
+    r.host.terminalHolds('pty-other', 'claude', '0d6f1c2e-9b8a-4c3d-8e7f-112233445566');
+    r.host.terminalHolds('pty-other', 'codex', id);
+    r.host.terminalHolds(PANE, 'claude', id);
+    await tick(20);
+    expect(r.host.statusForPane(PANE)).toBe('idle');
+    expect(r.host.activeSessionIds()).toEqual([id]);
+
+    // The terminal is never refused: the call returns nothing and throws nothing.
+    expect(r.host.terminalHolds('pty-other', 'claude', id)).toBeUndefined();
+    await until(() => r.host.statusForPane(PANE) === 'handed-off');
+    expect(r.host.bindingForPane(PANE)).toMatchObject({ status: 'handed-off', continuedInPaneId: 'pty-other', capabilities: { send: false } });
+    // No active chat names the id any more, so nothing typed in that terminal is refused for it.
+    expect(r.host.activeSessionIds()).toEqual([]);
+    await until(() => {
+      const file = path.join(dir, 'chat-sessions', 'v2', `${b.chatSessionId}.json`);
+      const stored = JSON.parse(fs.readFileSync(file, 'utf8'));
+      return stored.state === 'handed-off' && stored.continuedInPaneId === 'pty-other' && stored.process === undefined;
+    });
+    expect(await sent(r, 'again', 'msg-00002')).toMatchObject({ ok: false, error: { code: 'handed-off' } });
+    expect(r.fakes).toHaveLength(1);
+    expect(r.typed).toEqual([]);
+    await r.host.dispose();
+  });
+
+  it('gives way in the middle of a turn, closing the turn in the transcript (#2730)', async () => {
+    const r = rig();
+    await created(r);
+    await sent(r);
+    expect(r.host.statusForPane(PANE)).toBe('running');
+    r.host.terminalHolds('pty-other', 'claude', r.host.bindingForPane(PANE)!.providerSessionId!);
+    await until(() => r.host.statusForPane(PANE) === 'handed-off');
+    await until(() => r.host.sessionForPane(PANE)!.busy === false);
+    expect(await sent(r, 'again', 'msg-00002')).toMatchObject({ ok: false, error: { code: 'handed-off' } });
+    expect(r.fakes).toHaveLength(1);
+    await r.host.dispose();
+  });
+
   it('refuses a handoff while a turn runs, and when the driver cannot be proven gone', async () => {
     const r = rig();
     await created(r);

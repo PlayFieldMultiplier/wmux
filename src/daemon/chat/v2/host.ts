@@ -368,6 +368,37 @@ class Host implements ChatV2Host {
     return [...this.byPane.values()].filter((l) => !l.closed && l.record.state !== 'handed-off').map((l) => l.record.providerSessionId);
   }
 
+  terminalHolds(paneId: string, agent: string, sessionId: string): void {
+    if (this.disposed) return;
+    for (const live of this.byPane.values()) {
+      const { record } = live;
+      if (live.closed || record.state !== 'active' || record.paneId === paneId || record.agent !== agent || record.providerSessionId !== sessionId) continue;
+      void this.yieldToTerminal(live, paneId).catch((error) => {
+        this.deps.log('error', `[chatv2] ${record.paneId} could not give way to ${paneId}: ${String(error)}`);
+      });
+    }
+  }
+
+  /**
+   * The chat gives its conversation up to the terminal agent in `paneId`: the
+   * tombstone first, so no send or start (an in-flight one is superseded)
+   * reaches the driver again, then the driver stops. An open turn is closed in
+   * the transcript, as after a daemon restart.
+   */
+  private async yieldToTerminal(live: Live, paneId: string): Promise<void> {
+    const { record } = live;
+    this.deps.log('info', `[chatv2] the conversation of ${record.paneId} continued in a terminal in ${paneId}; stopping the chat`);
+    live.generation += 1;
+    record.state = 'handed-off';
+    record.continuedInPaneId = paneId;
+    if (!(await this.stopDriver(live))) this.deps.log('warn', `[chatv2] the driver of ${record.paneId} did not exit`);
+    if (live.closed) return;
+    if (record.session.busy || sessionNeedsInput(record.session)) this.stamp(live, { type: 'session.ended', code: null });
+    // A visible boundary, and the push that carries the `handed-off` binding.
+    this.stamp(live, { type: 'status', text: 'Continued in a terminal in another pane.' });
+    await this.persistNow(live);
+  }
+
   /** Other panes whose active chat-v2 record holds conversation `sessionId`. */
   private chatHolders(paneId: string, sessionId: string): string[] {
     return [...this.byPane.values()]
@@ -416,6 +447,7 @@ class Host implements ChatV2Host {
       seq: record.seq,
       capabilities: this.capabilities(live),
       ...(live.error ? { error: { ...live.error } } : {}),
+      ...(record.state === 'handed-off' && record.continuedInPaneId ? { continuedInPaneId: record.continuedInPaneId } : {}),
     };
   }
 
@@ -999,6 +1031,7 @@ class Host implements ChatV2Host {
   private revive(live: Live, binding: ResumeBinding): void {
     const mode = binding.permissionMode === 'bypassPermissions' ? 'bypass' : 'default';
     live.record.state = 'active';
+    delete live.record.continuedInPaneId;
     live.record.providerSessionId = binding.sessionId;
     live.record.resumeExisting = true;
     live.record.mode = mode;
