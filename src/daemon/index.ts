@@ -750,11 +750,11 @@ function createApprovalRegistry(sessionManager: DaemonSessionManager): ApprovalR
     answerNative: async (native, reply, sessionId) => {
       const adapters: Partial<Record<NativeDecisionRef['adapter'], (n: NativeDecisionRef, r: NativeDecisionReply) => Promise<NativeDecisionOutcome>>> = {
         codex: (n, r) => codexPaneRelays.answer(n, r.decision),
-        // Chat v2 driver requests are answered by the driver that holds them.
-        claude: (n, r) => chatV2Host?.answerNative(n, r, sessionId) ?? Promise.resolve('unavailable' as const),
         // OpenCode answers go back through the pane's own TUI plugin.
         ...(openCodeDecisions ? { opencode: (n: NativeDecisionRef, r: NativeDecisionReply) => openCodeDecisions!.answer(n, r, sessionId) } : {}),
       };
+      // A chat-v2 driver's request goes to the host whatever its agent (a Codex one is not the relay's).
+      if (native.via === 'chat-v2') return chatV2Host?.answerNative(native, reply, sessionId) ?? 'unavailable';
       return adapters[native.adapter]?.(native, reply) ?? 'unavailable';
     },
     readScreenTail: async (sessionId) => {
@@ -4665,6 +4665,9 @@ function registerRpcHandlers(
         return startTime && commandLine ? { startTime, commandLine } : null;
       },
       killTree: (pid) => killProcessTree(pid),
+      // A Codex chat resuming its thread: a terminal Codex on the shared app-server holding it.
+      codexThreadOwners: (paneId, threadId) => codexPaneRelays.liveIds()
+        .filter((id) => id !== paneId && codexPaneRelays.selection(id, sessionManager.getSession(id))?.threadId === threadId),
       // Terminal → chat (chat/v2/fromTerminal.ts): the pane's Claude TUI.
       terminal: {
         holdKeyboard: (id) => nativeChatBridge?.holdKeyboard(id) ?? null,

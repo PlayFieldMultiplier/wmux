@@ -78,8 +78,9 @@ export interface ChatV2DriverTurn {
 /**
  * A decision the agent is blocked on. The host records it with
  * `ApprovalRegistry.noteNativeDecision({ sessionId: paneId, agent,
- * native: { adapter: agent, requestId, threadId: chatSessionId, relayId:
- * epoch }, form, question, toolName, summary })` before it stamps the
+ * native: { adapter: agent, via: 'chat-v2', requestId: <driver tag>.<requestId>,
+ * threadId: chatSessionId, relayId: epoch, digest: revision }, form, question,
+ * toolName, summary })` before it stamps the
  * matching transcript event, using the same form shapes as the OpenCode
  * adapter:
  *   permission → `{ v: 1, kind: 'permission', actions: [{ id: 'approve',
@@ -280,6 +281,8 @@ export interface ChatV2HostDeps {
     isDirectory: (dir: string) => boolean;
     realpath: (p: string) => string;
   };
+  /** Other panes whose terminal Codex has thread `threadId` selected on the shared app-server. */
+  codexThreadOwners?: (paneId: string, threadId: string) => string[];
   /** fromTerminal's waits (transcript quiet, pane free). Tests shorten them. */
   moveTiming?: { quietMs?: number; freeWaitMs?: number };
 }
@@ -287,7 +290,7 @@ export interface ChatV2HostDeps {
 export interface ChatV2Host {
   /** Run one first-party RPC. Params are already validated by `parseChatV2Params`. */
   call<M extends ChatV2Method>(method: M, params: ChatV2ParamsByMethod[M], clientId: string): Promise<ChatV2ResultByMethod[M]>;
-  /** The ApprovalRegistry's `answerNative` entry for `adapter: 'claude'` (phone and desktop answers both land here). */
+  /** The ApprovalRegistry's `answerNative` entry for `via: 'chat-v2'` records (phone and desktop answers both land here). */
   answerNative(native: NativeDecisionRef, reply: NativeDecisionReply, paneId: string): Promise<NativeDecisionOutcome>;
   /** A pipe client went away: drop its subscriptions. */
   clientGone(clientId: string): void;

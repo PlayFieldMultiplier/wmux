@@ -210,8 +210,8 @@ export const CHATV2_BLOCK_ID = /^[0-9]{1,15}\.[0-9]{1,6}$/;
 // --- shared shapes ------------------------------------------------------
 
 /** Agents v1 creates. The fold model (`HarnessId`) is wider; creation is not. */
-export type ChatV2Agent = Extract<HarnessId, 'claude'>;
-export const CHATV2_AGENTS: readonly ChatV2Agent[] = ['claude'];
+export type ChatV2Agent = Extract<HarnessId, 'claude' | 'codex'>;
+export const CHATV2_AGENTS: readonly ChatV2Agent[] = ['claude', 'codex'];
 
 /** `default` adds no permission flags; `bypass` = the agent's skip-permissions mode. */
 export type ChatV2RunMode = 'default' | 'bypass';

@@ -4940,7 +4940,7 @@ export class WebTerminalServer {
   private chatV2Blocked(sessionId: string, binding: ChatV2Binding): ChatBlocked | undefined {
     if (this.isBrainApproval(sessionId)) return undefined;
     const pending = this.deps.approvals?.list().pending
-      .find((record) => record.sessionId === sessionId && record.native?.adapter === 'claude'
+      .find((record) => record.sessionId === sessionId && record.native?.via === 'chat-v2' && record.native.adapter === binding.agent
         && record.native.threadId === binding.chatSessionId && record.native.relayId === binding.epoch);
     return pending ? { by: 'approval', approvalId: pending.id } : undefined;
   }
