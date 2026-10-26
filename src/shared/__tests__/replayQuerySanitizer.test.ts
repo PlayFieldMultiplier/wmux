@@ -105,7 +105,6 @@ describe('containsTerminalQuery', () => {
       '\x1b[?2026$p', // DECRQM
       '\x1b[>0q', // XTVERSION
       '\x1bP+q544e\x1b\\', // XTGETTCAP
-      '\x05', // ENQ
     ]) {
       expect(containsTerminalQuery(`out\x1b[1mtext${q}more`), JSON.stringify(q)).toBe(true);
     }
@@ -123,6 +122,7 @@ describe('containsTerminalQuery', () => {
       '\x1b]0;done?\x07', // title ending in "?"
       '\x1b[?2026h\x1b[?25l\x1b[12;6H\x1b[0m', // a TUI frame
       'plain text, no escapes',
+      'binary\x05bytes', // ENQ: stripped from replay, never a flush trigger
     ]) {
       expect(containsTerminalQuery(s), JSON.stringify(s)).toBe(false);
     }

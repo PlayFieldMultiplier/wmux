@@ -83,6 +83,7 @@ import {
   getQueuedCharCount,
   promoteTerminalToPriorityDrain,
   rebindTerminalOutputWriter,
+  noteTerminalDirectWrite,
 } from '../terminal/terminalOutputScheduler';
 import { reconnectPtyWithRetry as reconnectPtyWithRetryImpl, type ReconnectSettleInfo } from './reconnectPtyWithRetry';
 import { resumesOnStart, type ResumeHint } from '../stores/selectors/surfaceShown';
@@ -2959,6 +2960,10 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
       }
       terminal.write(REPAINT_END);
       if (held.pending) writePtyDataImmediately(terminal, held.pending, replayMuteRef.current);
+      // The scheduler's query splitter was discarded above; give it the
+      // unfinished tail xterm now holds, so the live bytes that finish it are
+      // still recognised as a query.
+      if (held.pending) noteTerminalDirectWrite(terminal, held.pending.data);
       if (fromBottom > 0) {
         // Trailing empty write = parse barrier (callbacks fire in write
         // order); scrollToLine only after the recovered screen is parsed and

@@ -59,24 +59,24 @@ const TERMINAL_QUERY_SOURCE = [
   // XTSMGRAPHICS — CSI ? Pi ; Pa ; Pv S (sixel palette / geometry query,
   // #1641). The `?` prefix keeps plain CSI Ps S (scroll up) untouched.
   '\\x1b\\[\\?[0-9;]*S',
-  // ENQ — answerback query
-  '\\x05',
 ].join('|');
 
-const REPLAY_QUERY_SEQUENCES = new RegExp(TERMINAL_QUERY_SOURCE, 'g');
+// ENQ — answerback query. Stripped from replay, but not a flush trigger for
+// live output: a bare 0x05 byte also turns up in binary output.
+const REPLAY_QUERY_SEQUENCES = new RegExp(`${TERMINAL_QUERY_SOURCE}|\\x05`, 'g');
 // No flags: `test()` on a global regex advances `lastIndex`, so repeated calls
 // on different strings would alternate between hit and miss.
 const TERMINAL_QUERY = new RegExp(TERMINAL_QUERY_SOURCE);
 
 /**
  * True when `data` holds at least one complete sequence the terminal answers
- * (the same families the replay strip removes). Used by the renderer's
+ * (the families the replay strip removes, minus ENQ). Used by the renderer's
  * hidden-pane retention to parse a retained backlog as soon as a live query
  * arrives, so the pane's own xterm answers it while hidden.
  */
 export function containsTerminalQuery(data: string): boolean {
-  // Every family starts with ESC except ENQ; most output chunks have neither.
-  if (!data.includes('\x1b') && !data.includes('\x05')) return false;
+  // Every family starts with ESC.
+  if (!data.includes('\x1b')) return false;
   return TERMINAL_QUERY.test(data);
 }
 

@@ -46,7 +46,8 @@
 // backlog went unanswered while the pane stayed hidden (a TUI started in a
 // background workspace gave up on its probes, e.g. Claude Code never enabled
 // the kitty keyboard). A retained chunk that completes a query flushes the
-// whole backlog synchronously so xterm answers in order with its real state.
+// whole backlog (on a short coalescing timer, so a burst of query chunks
+// costs one parse) and xterm answers in order with its real state.
 // Dirty panes (overflowed backlog, bytes dropped) are not covered: their
 // queries are answered by nothing until the reveal resync, which strips them.
 
@@ -216,6 +217,14 @@ const QUERY_SPLITTER_MAX_HELD = 4096;
  *  re-parses its hidden pane every frame — visible in the log, not flooding it. */
 const QUERY_PARSE_LOG_INTERVAL_MS = 10_000;
 const queryParseLog = new Map<SchedulableTerminal, { lastAt: number; suppressed: number }>();
+/** Coalescing window for query flushes. Every query chunk that lands before
+ *  the timer fires joins one flush, so a TUI that queries in each of many
+ *  chunks pays one parse per window rather than one per chunk. Same cadence as
+ *  the priority drain: the answer stays in the low milliseconds. */
+const QUERY_FLUSH_DELAY_MS = 4;
+/** Terminals with a query waiting in their retained backlog → log label. */
+const pendingQueryFlushes = new Map<SchedulableTerminal, string | undefined>();
+let queryFlushTimer: ReturnType<typeof setTimeout> | null = null;
 
 /** Monotonic-ish clock for the interactive window. Falls back to Date.now() in
  *  environments without `performance` (jsdom-less unit tests). */
@@ -475,6 +484,44 @@ function resolveSyncOpen(prevOpen: boolean, data: string): boolean {
   return lastBegin > lastEnd;
 }
 
+/** Run the coalesced query flushes. Only a still-retained entry is flushed
+ *  here: if the pane was shown meanwhile, its foreground write cleared
+ *  `retained` and the priority drain (or an open DEC 2026 frame's release)
+ *  already owns the backlog, query included, in order. An entry that is gone
+ *  was flushed, discarded or overflowed to dirty. */
+function runQueryFlushes(): void {
+  queryFlushTimer = null;
+  const due = [...pendingQueryFlushes];
+  pendingQueryFlushes.clear();
+  for (const [terminal, ptyId] of due) {
+    const entry = queue.get(terminal);
+    if (!entry || !entry.retained || !hasQueuedChunks(entry)) continue;
+    logQueryParse(terminal, ptyId, entry.queuedChars);
+    flushTerminalOutput(terminal);
+  }
+}
+
+function feedQuerySplitter(terminal: SchedulableTerminal, data: string): string {
+  let splitter = querySplitters.get(terminal);
+  if (!splitter) {
+    splitter = new IncompleteEscapeSplitter(QUERY_SPLITTER_MAX_HELD);
+    querySplitters.set(terminal, splitter);
+  }
+  return splitter.push(data);
+}
+
+/** The owner wrote `data` straight into xterm, bypassing this scheduler (the
+ *  resync repaint). Keeps the query splitter in step with xterm's parser, so a
+ *  query whose start went in that way is still seen when its end arrives. */
+export function noteTerminalDirectWrite(terminal: SchedulableTerminal, data: string): void {
+  feedQuerySplitter(terminal, data);
+}
+
+function scheduleQueryFlush(terminal: SchedulableTerminal, ptyId: string | undefined): void {
+  pendingQueryFlushes.set(terminal, ptyId);
+  queryFlushTimer ??= setTimeout(runQueryFlushes, QUERY_FLUSH_DELAY_MS);
+}
+
 function logQueryParse(terminal: SchedulableTerminal, ptyId: string | undefined, chars: number): void {
   const t = now();
   const state = queryParseLog.get(terminal);
@@ -625,15 +672,13 @@ export function writeTerminalOutput(
   options: WriteOptions,
 ): void {
   // Fed before the carry is prepended: the carry is bytes it has already seen.
+  // Not fed with hidden bytes a dirty pane drops: xterm never sees those.
   let completed = '';
   if (options.retainWhenHidden) {
-    let splitter = querySplitters.get(terminal);
-    if (!splitter) {
-      splitter = new IncompleteEscapeSplitter(QUERY_SPLITTER_MAX_HELD);
-      querySplitters.set(terminal, splitter);
+    if (options.foreground || !dirtyTerminals.has(terminal)) {
+      // Only completed sequences: a query is flushed once all of it is queued.
+      completed = feedQuerySplitter(terminal, data);
     }
-    // Only completed sequences: a query is flushed once all of it is queued.
-    completed = splitter.push(data);
   } else {
     querySplitters.delete(terminal);
   }
@@ -675,18 +720,20 @@ export function writeTerminalOutput(
       queue.delete(terminal);
       dirtyTerminals.add(terminal);
       querySplitters.delete(terminal);
+      escapeCarry.delete(terminal);
+      pendingQueryFlushes.delete(terminal);
       console.log(`[wmux:hidden-retention] backlog overflow (${entry.queuedChars} chars) — pane marked dirty, will resync from daemon on reveal`);
       return;
     }
     if (containsTerminalQuery(completed)) {
       // The app is waiting on an answer only xterm can give. Hand the whole
-      // backlog over now, in order, so xterm answers from its real state.
-      // A full flush (not a priority promote) deletes the entry: the next
-      // hidden chunk starts a fresh retained one, where a promoted entry
+      // backlog over shortly, in order, so xterm answers from its real state.
+      // A full flush (not a priority promote): it deletes the entry, so the
+      // next hidden chunk starts a fresh retained one, where a promoted entry
       // would be re-retained by that chunk with the query still unparsed.
-      // Worst case is one synchronous parse of a backlog just under the cap.
-      logQueryParse(terminal, options.ptyId, entry.queuedChars);
-      flushTerminalOutput(terminal);
+      // Until the timer fires, later hidden chunks join the same backlog and
+      // the same flush. Worst case is one parse of a backlog just under the cap.
+      scheduleQueryFlush(terminal, options.ptyId);
     }
     return;
   }
@@ -831,6 +878,7 @@ export function discardTerminalOutput(terminal: SchedulableTerminal): void {
   escapeCarry.delete(terminal);
   querySplitters.delete(terminal);
   queryParseLog.delete(terminal);
+  pendingQueryFlushes.delete(terminal);
 }
 
 /** Phase 3: true when this terminal's retained backlog overflowed and was
@@ -865,12 +913,14 @@ export function markTerminalDirty(terminal: SchedulableTerminal): void {
   dirtyTerminals.add(terminal);
   escapeCarry.delete(terminal);
   querySplitters.delete(terminal);
+  pendingQueryFlushes.delete(terminal);
 }
 
 /** Phase 3: the owner finished re-synchronizing this terminal's screen state
  *  from the daemon — retained writes may accumulate again. */
 export function markTerminalClean(terminal: SchedulableTerminal): void {
   dirtyTerminals.delete(terminal);
+  querySplitters.delete(terminal);
 }
 
 /** Test/debug: chars currently queued for a terminal (0 when absent). */
@@ -895,5 +945,10 @@ export function __resetTerminalOutputSchedulerForTests(): void {
   escapeCarry.clear();
   querySplitters.clear();
   queryParseLog.clear();
+  pendingQueryFlushes.clear();
+  if (queryFlushTimer !== null) {
+    clearTimeout(queryFlushTimer);
+    queryFlushTimer = null;
+  }
   retentionEngagedLogged = false;
 }

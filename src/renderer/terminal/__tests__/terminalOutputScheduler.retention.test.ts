@@ -13,6 +13,7 @@ import {
   isTerminalRetained,
   markTerminalDirty,
   markTerminalClean,
+  noteTerminalDirectWrite,
   __resetTerminalOutputSchedulerForTests,
   type SchedulableTerminal,
 } from '../terminalOutputScheduler';
@@ -177,9 +178,11 @@ describe('terminalOutputScheduler — hidden-pane retention', () => {
 });
 
 // A retained pane still answers terminal queries: xterm is its only responder,
-// so a chunk that completes a query hands the whole backlog to xterm at once.
+// so a chunk that completes a query hands the whole backlog to xterm shortly
+// after (one coalesced flush per window).
 describe('terminalOutputScheduler — hidden-pane retention answers queries', () => {
   const DA1 = '\x1b[c';
+  const QUERY_FLUSH_DELAY_MS = 4; // scheduler constant (kept in sync manually)
 
   /** Fake xterm that "answers" every query it parses, like onData → pty.write. */
   function makeAnsweringTerminal(): SchedulableTerminal & { writes: string[]; answers: number } {
@@ -189,12 +192,13 @@ describe('terminalOutputScheduler — hidden-pane retention answers queries', ()
       write(data: string) {
         t.writes.push(data);
         // Count queries only once they are complete in the parsed stream.
-        const parsed = t.writes.join('');
-        t.answers = parsed.split(DA1).length - 1;
+        t.answers = t.writes.join('').split(DA1).length - 1;
       },
     };
     return t;
   }
+
+  const settle = () => vi.advanceTimersByTime(QUERY_FLUSH_DELAY_MS);
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -208,20 +212,37 @@ describe('terminalOutputScheduler — hidden-pane retention answers queries', ()
 
   const hidden = { foreground: false, retainWhenHidden: true } as const;
 
-  it('a query chunk flushes the retained backlog in order, synchronously', () => {
+  it('a query chunk flushes the retained backlog in order, within the coalescing window', () => {
     const t = makeAnsweringTerminal();
     writeTerminalOutput(t, 'one ', hidden);
     writeTerminalOutput(t, 'two ', hidden);
-    expect(t.writes).toEqual([]);
     writeTerminalOutput(t, `probe${DA1}`, hidden);
-    expect(joined(t)).toBe(`one two probe${DA1}`);
+    expect(t.writes).toEqual([]);
+    writeTerminalOutput(t, 'after', hidden); // joins the same backlog
+    settle();
+    expect(joined(t)).toBe(`one two probe${DA1}after`);
     expect(t.answers).toBe(1);
     expect(getQueuedCharCount(t)).toBe(0);
   });
 
+  it('ten query chunks in one window produce one flush, answered in order and once each', () => {
+    const t = makeAnsweringTerminal();
+    let expected = '';
+    for (let i = 0; i < 10; i++) {
+      const chunk = `q${i}${DA1}`;
+      expected += chunk;
+      writeTerminalOutput(t, chunk, hidden);
+    }
+    settle();
+    expect(t.writes).toEqual([expected]);
+    expect(t.answers).toBe(10);
+    vi.advanceTimersByTime(60_000);
+    expect(t.writes).toHaveLength(1);
+  });
+
   it('a chunk without a query stays retained', () => {
     const t = makeAnsweringTerminal();
-    writeTerminalOutput(t, '\x1b[2 q\x1b[3S\x1b[>5u frame', hidden);
+    writeTerminalOutput(t, '\x1b[2 q\x1b[3S\x1b[>5u frame\x05', hidden);
     vi.advanceTimersByTime(60_000);
     expect(t.writes).toEqual([]);
     expect(isTerminalRetained(t)).toBe(true);
@@ -230,6 +251,7 @@ describe('terminalOutputScheduler — hidden-pane retention answers queries', ()
   it('retention resumes after a query flush', () => {
     const t = makeAnsweringTerminal();
     writeTerminalOutput(t, DA1, hidden);
+    settle();
     writeTerminalOutput(t, 'later', hidden);
     vi.advanceTimersByTime(60_000);
     expect(joined(t)).toBe(DA1);
@@ -240,8 +262,10 @@ describe('terminalOutputScheduler — hidden-pane retention answers queries', ()
   it('a query split across two chunks flushes once it completes', () => {
     const t = makeAnsweringTerminal();
     writeTerminalOutput(t, 'text\x1b[', hidden);
+    settle();
     expect(t.writes).toEqual([]);
     writeTerminalOutput(t, 'c', hidden);
+    settle();
     expect(joined(t)).toBe(`text${DA1}`);
     expect(t.answers).toBe(1);
   });
@@ -249,8 +273,10 @@ describe('terminalOutputScheduler — hidden-pane retention answers queries', ()
   it('a split query is seen even when a query flush ended mid-sequence', () => {
     const t = makeAnsweringTerminal();
     writeTerminalOutput(t, `${DA1}tail\x1b]11;`, hidden);
+    settle();
     expect(joined(t)).toBe(`${DA1}tail\x1b]11;`);
     writeTerminalOutput(t, '?\x07', hidden);
+    settle();
     expect(joined(t)).toBe(`${DA1}tail\x1b]11;?\x07`);
   });
 
@@ -260,7 +286,19 @@ describe('terminalOutputScheduler — hidden-pane retention answers queries', ()
     writeTerminalOutput(t, 'shown\x1b[', { foreground: true, retainWhenHidden: true });
     expect(joined(t)).toBe('shown\x1b[');
     writeTerminalOutput(t, 'c', hidden);
+    settle();
     expect(joined(t)).toBe(`shown${DA1}`);
+    expect(t.answers).toBe(1);
+  });
+
+  it('a query whose start went straight to xterm (resync repaint tail) is still seen', () => {
+    const t = makeAnsweringTerminal();
+    discardTerminalOutput(t); // the resync drops the splitter with the backlog
+    t.write('repaint\x1b['); // owner writes the held tail directly
+    noteTerminalDirectWrite(t, 'repaint\x1b[');
+    writeTerminalOutput(t, 'c', hidden);
+    settle();
+    expect(joined(t)).toBe(`repaint${DA1}`);
     expect(t.answers).toBe(1);
   });
 
@@ -268,32 +306,96 @@ describe('terminalOutputScheduler — hidden-pane retention answers queries', ()
     const t = makeAnsweringTerminal();
     writeTerminalOutput(t, `\x1b]52;c;${'A'.repeat(10_000)}`, hidden);
     writeTerminalOutput(t, `${'B'.repeat(10_000)}\x07text`, hidden);
+    settle();
     expect(t.writes).toEqual([]);
     writeTerminalOutput(t, DA1, hidden);
+    settle();
     expect(t.answers).toBe(1);
     expect(getQueuedCharCount(t)).toBe(0);
+  });
+
+  it('live query bytes reach xterm unmuted even when the last writer was the replay writer', () => {
+    const t = makeAnsweringTerminal();
+    const replayed: string[] = [];
+    const replayWrite = (data: string) => replayed.push(data);
+    writeTerminalOutput(t, 'history', { ...hidden, write: replayWrite });
+    writeTerminalOutput(t, DA1, hidden);
+    settle();
+    expect(replayed).toEqual(['history']);
+    expect(t.writes).toEqual([DA1]);
+    expect(t.answers).toBe(1);
   });
 
   it('a dirty pane drops the query chunk like any other hidden bytes', () => {
     const t = makeAnsweringTerminal();
     markTerminalDirty(t);
     writeTerminalOutput(t, DA1, hidden);
+    settle();
     expect(t.writes).toEqual([]);
     expect(getQueuedCharCount(t)).toBe(0);
     expect(isTerminalDirty(t)).toBe(true);
+  });
+
+  it('bytes a dirty pane dropped do not leave a stale split behind', () => {
+    const t = makeAnsweringTerminal();
+    markTerminalDirty(t);
+    writeTerminalOutput(t, 'dropped\x1b[', hidden); // never reaches xterm
+    markTerminalClean(t);
+    writeTerminalOutput(t, 'c', hidden);
+    settle();
+    expect(t.writes).toEqual([]);
+    expect(isTerminalRetained(t)).toBe(true);
   });
 
   it('a query chunk that overflows the cap marks the pane dirty instead of parsing', () => {
     const t = makeAnsweringTerminal();
     writeTerminalOutput(t, 'x'.repeat(MAX_QUEUE_CHARS), hidden);
     writeTerminalOutput(t, DA1, hidden);
+    settle();
     expect(t.writes).toEqual([]);
     expect(isTerminalDirty(t)).toBe(true);
+  });
+
+  it('a pending query flush is dropped when the backlog overflows before it runs', () => {
+    const t = makeAnsweringTerminal();
+    writeTerminalOutput(t, DA1, hidden);
+    writeTerminalOutput(t, 'x'.repeat(MAX_QUEUE_CHARS), hidden);
+    settle();
+    expect(t.writes).toEqual([]);
+    expect(isTerminalDirty(t)).toBe(true);
+  });
+
+  it('showing the pane before the flush runs leaves the backlog to the normal path, answered once', () => {
+    const t = makeAnsweringTerminal();
+    writeTerminalOutput(t, `boot${DA1}`, hidden);
+    // Reveal inside the window: the owner flushes the retained backlog.
+    flushTerminalOutput(t);
+    expect(t.answers).toBe(1);
+    settle();
+    noteTerminalInput(t);
+    writeTerminalOutput(t, 'shown', { foreground: true, retainWhenHidden: true });
+    vi.runAllTimers();
+    expect(joined(t)).toBe(`boot${DA1}shown`);
+    expect(t.answers).toBe(1);
+  });
+
+  it('a sync frame opened after the query (pane shown) keeps its hold; its release drains in order', () => {
+    const t = makeAnsweringTerminal();
+    writeTerminalOutput(t, `old${DA1}`, hidden);
+    // Pane shown inside the window; the TUI opens a DEC 2026 frame.
+    writeTerminalOutput(t, '\x1b[?2026hframe', { foreground: true, retainWhenHidden: true });
+    settle();
+    expect(t.writes).toEqual([]); // the query flush does not break the open frame
+    writeTerminalOutput(t, 'end\x1b[?2026l', { foreground: true, retainWhenHidden: true });
+    vi.runAllTimers();
+    expect(joined(t)).toBe(`old${DA1}\x1b[?2026hframeend\x1b[?2026l`);
+    expect(t.answers).toBe(1);
   });
 
   it('showing the pane afterwards does not answer the query a second time', () => {
     const t = makeAnsweringTerminal();
     writeTerminalOutput(t, `boot${DA1}`, hidden);
+    settle();
     writeTerminalOutput(t, 'idle', hidden);
     expect(t.answers).toBe(1);
     // Reveal: the owner flushes the retained remainder, then live output flows.
@@ -309,7 +411,10 @@ describe('terminalOutputScheduler — hidden-pane retention answers queries', ()
     const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     try {
       const t = makeAnsweringTerminal();
-      for (let i = 0; i < 5; i++) writeTerminalOutput(t, DA1, { ...hidden, ptyId: 'daemon-1' });
+      for (let i = 0; i < 5; i++) {
+        writeTerminalOutput(t, DA1, { ...hidden, ptyId: 'daemon-1' });
+        settle();
+      }
       const lines = log.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('query-parse'));
       expect(lines).toEqual(['[wmux:hidden-retention] query-parse ptyId=daemon-1 chars=3']);
     } finally {
