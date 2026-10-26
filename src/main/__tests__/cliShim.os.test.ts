@@ -77,22 +77,42 @@ describe('buildShimCmd', () => {
 // listing there showed it holding the just-run wmux.exe or codex.exe, let go
 // 1-14 s later (none of our processes alive). A desktop antivirus scan does the
 // same. We can neither wait on that process nor close its handle, so the
-// removal waits it out with rmSync's own retries (EBUSY/EPERM, linear
-// backoff), about 27 s at most; past that the error names the files still held.
+// removal waits it out with rm's own retries (EBUSY/EPERM, linear backoff):
+// 200 ms × (1 + … + 16) = 27.2 s of waiting, about twice the longest hold seen
+// in CI. Past that the error names each entry that still cannot be removed.
 const RAN_ROOT_RETRIES = 16;
 const RAN_ROOT_RETRY_DELAY_MS = 200;
-/** The cleanup hook's own budget: the retries' 200 ms × (1 + … + 16) ≈ 27 s, plus the removal itself. */
-const RAN_ROOT_CLEANUP_TIMEOUT_MS = 40_000;
-const removeRanRoot = (root: string) => {
+/**
+ * The cleanup hook's own budget. A removal that exhausts its retries took
+ * about 31 s end to end (the waits plus one walk of the tree per try), so 60 s
+ * leaves it a real margin to fail with its own message rather than a bare
+ * hook timeout.
+ */
+const RAN_ROOT_CLEANUP_TIMEOUT_MS = 60_000;
+/** What still cannot be removed under `dir`, each entry tried on its own: `path (CODE)`. */
+const heldEntries = (dir: string): string[] => {
+  const code = (e: unknown) => (e as NodeJS.ErrnoException).code ?? String(e);
+  let names: string[];
+  try { names = nodeFs.readdirSync(dir); } catch (e) { return [`${dir} (${code(e)})`]; }
+  const held: string[] = [];
+  for (const name of names) {
+    const p = nodePath.join(dir, name);
+    let isDir: boolean;
+    try { isDir = nodeFs.lstatSync(p).isDirectory(); } catch (e) { held.push(`${p} (${code(e)})`); continue; }
+    if (isDir) {
+      held.push(...heldEntries(p));
+      continue;
+    }
+    try { nodeFs.unlinkSync(p); } catch (e) { held.push(`${p} (${code(e)})`); }
+  }
+  try { nodeFs.rmdirSync(dir); } catch (e) { if (held.length === 0) held.push(`${dir} (${code(e)})`); }
+  return held;
+};
+const removeRanRoot = async (root: string) => {
   try {
-    nodeFs.rmSync(root, { recursive: true, force: true, maxRetries: RAN_ROOT_RETRIES, retryDelay: RAN_ROOT_RETRY_DELAY_MS });
+    await nodeFs.promises.rm(root, { recursive: true, force: true, maxRetries: RAN_ROOT_RETRIES, retryDelay: RAN_ROOT_RETRY_DELAY_MS });
   } catch (err) {
-    let held: string[] = [];
-    try {
-      held = nodeFs.readdirSync(root, { recursive: true }).map(String)
-        .filter((rel) => nodeFs.lstatSync(nodePath.join(root, rel)).isFile());
-    } catch { /* the root itself is what failed */ }
-    throw new Error(`${(err as Error).message}\nstill held: ${held.join(', ') || '(no file left; the root itself)'}`);
+    throw new Error(`${(err as Error).message}\nstill held: ${heldEntries(root).join(', ') || '(nothing; removed on the last look)'}`, { cause: err });
   }
 };
 
@@ -171,7 +191,7 @@ describe.skipIf(process.platform !== 'win32')('wmux.cmd codex launch (live cmd.e
     ].join('\r\n'));
   });
 
-  afterAll(() => { if (root) removeRanRoot(root); }, RAN_ROOT_CLEANUP_TIMEOUT_MS);
+  afterAll(async () => { if (root) await removeRanRoot(root); }, RAN_ROOT_CLEANUP_TIMEOUT_MS);
 
   const codexEvent = (argv: string[], cwd: string) => ({
     codex: ['--remote', 'ws://127.0.0.1:1', ...argv],
@@ -299,7 +319,7 @@ describe.skipIf(process.platform !== 'win32')('wmux.cmd codex handoff errors (li
     ].join('\n'));
   }, 60_000);
 
-  afterAll(() => { if (root) removeRanRoot(root); }, RAN_ROOT_CLEANUP_TIMEOUT_MS);
+  afterAll(async () => { if (root) await removeRanRoot(root); }, RAN_ROOT_CLEANUP_TIMEOUT_MS);
 
   it('shows the real handoff\'s error and exits 1, leaving no file behind', async () => {
     const r = await run('codex resume');
