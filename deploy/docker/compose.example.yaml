@@ -1,10 +1,19 @@
-# One isolated wmux per person behind Traefik. Copy a user block to add one.
+# One isolated wmux per person behind Traefik, signed in with the company's
+# OIDC provider through oauth2-proxy. Copy a user block to add one.
+#
+#   WMUX_DOMAIN=wmux.example.com OIDC_ISSUER_URL=... OIDC_CLIENT_ID=... \
+#   OIDC_CLIENT_SECRET=... OAUTH2_PROXY_COOKIE_SECRET=$(openssl rand -hex 16) \
+#   docker compose -f compose.example.yaml up -d
 #
 # Isolation: each user has their own container, home volume and network.
 # Only Traefik joins every user network, so one user's container cannot
 # reach another's. Containers run unprivileged with no added capabilities,
 # never get the Docker socket, and have CPU, memory and process limits.
 # Whoever administers the host can still see every container.
+#
+# Access: every request first needs a company sign-in (oauth2-proxy), then
+# the per-user middleware admits only that user's address. Register the
+# OIDC client with redirect URIs https://<user>.${WMUX_DOMAIN}/oauth2/callback.
 #
 # TLS is Traefik's job (for a VPN-only host, a DNS-challenge certificate
 # keeps the name public and the address private). Fill in the resolver below.
@@ -34,39 +43,74 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - letsencrypt:/letsencrypt
-    networks: [wmux-alice, wmux-bob]
+    networks: [auth, wmux-alice, wmux-bob]
+
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.5
+    restart: unless-stopped
+    command:
+      - --http-address=0.0.0.0:4180
+      - --provider=oidc
+      - --oidc-issuer-url=${OIDC_ISSUER_URL}
+      - --client-id=${OIDC_CLIENT_ID}
+      - --client-secret=${OIDC_CLIENT_SECRET}
+      - --email-domain=*
+      - --reverse-proxy=true
+      - --skip-provider-button=true
+      - --upstream=static://202
+      - --whitelist-domain=.${WMUX_DOMAIN}
+      - --set-xauthrequest=true
+    environment:
+      OAUTH2_PROXY_COOKIE_SECRET: ${OAUTH2_PROXY_COOKIE_SECRET}
+    networks: [auth]
+    labels:
+      - traefik.enable=true
+      - traefik.http.services.oauth2-proxy.loadbalancer.server.port=4180
+      # Signs the browser in (302 to the provider) or lets a signed-in request through.
+      - traefik.http.middlewares.signin.forwardauth.address=http://oauth2-proxy:4180/
+      - traefik.http.middlewares.signin.forwardauth.trustForwardHeader=true
+      # The provider's callback and the sign-in start, on every user's host.
+      - traefik.http.routers.oauth2.rule=HostRegexp(`^[a-z0-9-]+\.${WMUX_DOMAIN}$`) && PathPrefix(`/oauth2/`)
+      - traefik.http.routers.oauth2.entrypoints=websecure
+      - traefik.http.routers.oauth2.tls=true
+      # - traefik.http.routers.oauth2.tls.certresolver=le
 
   alice:
     <<: *wmux-user
     hostname: alice
     environment:
-      WMUX_ALLOW_HOST: alice.wmux.example.com
+      WMUX_ALLOW_HOST: alice.${WMUX_DOMAIN}
     volumes: [alice-home:/home/wmux]
     networks: [wmux-alice]
     labels:
       - traefik.enable=true
-      - traefik.http.routers.alice.rule=Host(`alice.wmux.example.com`)
+      - traefik.http.middlewares.alice-only.forwardauth.address=http://oauth2-proxy:4180/oauth2/auth?allowed_emails=alice@example.com
+      - traefik.http.routers.alice.rule=Host(`alice.${WMUX_DOMAIN}`)
       - traefik.http.routers.alice.entrypoints=websecure
       - traefik.http.routers.alice.tls=true
       # - traefik.http.routers.alice.tls.certresolver=le
+      - traefik.http.routers.alice.middlewares=signin@docker,alice-only@docker
       - traefik.http.services.alice.loadbalancer.server.port=7681
 
   bob:
     <<: *wmux-user
     hostname: bob
     environment:
-      WMUX_ALLOW_HOST: bob.wmux.example.com
+      WMUX_ALLOW_HOST: bob.${WMUX_DOMAIN}
     volumes: [bob-home:/home/wmux]
     networks: [wmux-bob]
     labels:
       - traefik.enable=true
-      - traefik.http.routers.bob.rule=Host(`bob.wmux.example.com`)
+      - traefik.http.middlewares.bob-only.forwardauth.address=http://oauth2-proxy:4180/oauth2/auth?allowed_emails=bob@example.com
+      - traefik.http.routers.bob.rule=Host(`bob.${WMUX_DOMAIN}`)
       - traefik.http.routers.bob.entrypoints=websecure
       - traefik.http.routers.bob.tls=true
       # - traefik.http.routers.bob.tls.certresolver=le
+      - traefik.http.routers.bob.middlewares=signin@docker,bob-only@docker
       - traefik.http.services.bob.loadbalancer.server.port=7681
 
 networks:
+  auth: {}
   wmux-alice: {}
   wmux-bob: {}
 
