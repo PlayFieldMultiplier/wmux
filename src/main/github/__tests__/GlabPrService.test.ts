@@ -1,7 +1,7 @@
 // GlabPrService — GitLab REST 매핑·호스트 단위 게이트·TTL·updatedAt 캐시
 // (exec 목킹, GhPrService 테스트와 대칭).
 import { describe, it, expect, vi } from 'vitest';
-import { GlabPrService, glabProjectPath, mapGlabMrItem, mapGlabNotes, mapGlabPipelineStatus } from '../GlabPrService';
+import { GLAB_ENV, GlabPrService, glabHostTarget, glabProjectPath, mapGlabMrItem, mapGlabNotes, mapGlabPipelineStatus } from '../GlabPrService';
 import { PR_COMMENT_BODY_CAP } from '../../../shared/prSurface';
 
 type ExecCall = { cmd: string; args: string[] };
@@ -94,6 +94,23 @@ describe('GlabPrService — 게이트(호스트 단위)', () => {
     const auth = calls.find((c) => c.args[0] === 'auth');
     expect(auth!.args).toContain('--hostname');
     expect(auth!.args).toContain('gitlab.company.io');
+  });
+});
+
+describe('GlabPrService — glab environment', () => {
+  it('turns glab usage telemetry off in GLAB_ENV, in a host:port target, and in the env a glab call gets', async () => {
+    expect(GLAB_ENV.GLAB_SEND_TELEMETRY).toBe('0');
+    const hosts = { gh: new Set<string>(), glab: new Map() };
+    const portTarget = glabHostTarget('127.0.0.1:8443', hosts);
+    expect(portTarget.env.GITLAB_HOST).toBe('127.0.0.1:8443');
+    expect(portTarget.env.GLAB_SEND_TELEMETRY).toBe('0');
+    expect(glabHostTarget('gitlab.company.io', hosts).env.GLAB_SEND_TELEMETRY).toBe('0');
+    const exec = vi.fn(async () => ({ stdout: 'glab 1.x' }));
+    await new GlabPrService(() => 1000, exec as never).gate('D:/r', 'gitlab.company.io');
+    expect(exec.mock.calls.length).toBeGreaterThan(0);
+    for (const call of exec.mock.calls as unknown[][]) {
+      expect((call[2] as { env: NodeJS.ProcessEnv }).env.GLAB_SEND_TELEMETRY).toBe('0');
+    }
   });
 });
 
