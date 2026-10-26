@@ -226,9 +226,10 @@ describe('a release card', () => {
     expect(r.cardBody((await r.ask()).cardId)).toContain('Checks on 3333333: one did not pass; approving now is refused, and the bot asks again once they pass.');
     r.gh.checkRuns.set(C2, [{ status: 'in_progress', conclusion: null }]);
     expect(r.cardBody((await r.ask({ targetSha: C2, clientRequestId: 'k2' })).cardId)).toContain('Checks on 2222222: still running; approving now is refused, and the bot asks again once they pass.');
-    r.gh.checkRuns.delete(C1);
+    // Not started is the head's: a commit behind it whose checks never ran is refused (checks-never-ran).
+    r.gh.checkRuns.delete(C3);
     r.gh.files.set('.github/workflows/ci.yml', CI_YML);
-    expect(r.cardBody((await r.ask({ targetSha: C1, clientRequestId: 'k3' })).cardId)).toContain('Checks on 1111111: not started yet; approving now is refused, and the bot asks again once they pass.');
+    expect(r.cardBody((await r.ask({ targetSha: C3, clientRequestId: 'k3' })).cardId)).toContain('Checks on 3333333: not started yet; approving now is refused, and the bot asks again once they pass.');
   });
 });
 
@@ -882,5 +883,88 @@ describe('code review round', () => {
     const req = await r.ask(NOTES);
     expect(actOf(r, req.requestId)).toMatchObject({ mode: 'release', workflows: [] });
     expect(r.cardBody(req.cardId)).toContain('\n.github/workflows/ci.yml also runs on this tag push.\n');
+  });
+});
+
+describe('second code review round', () => {
+  it('the card names the workflows the tag\'s creation or the published release starts too (the release only where main publishes it)', async () => {
+    let r = rig();
+    r.gh.files.set('.github/workflows/notify.yml', 'on:\n  release:\n    types: [published]\n');
+    r.gh.files.set('.github/workflows/mirror.yml', 'on: [create, push]\n');
+    r.gh.files.set('.github/workflows/edits.yml', 'on:\n  release:\n    types: [edited]\n');
+    let body = r.cardBody((await r.ask(NOTES)).cardId);
+    expect(body).toContain('\n.github/workflows/mirror.yml also runs on this tag push and when the tag is created.\n');
+    expect(body).toContain('\n.github/workflows/notify.yml also runs when the release is published.\n');
+    expect(body).not.toContain('edits.yml');
+    r = rig({ workflow: true });
+    r.gh.files.set('.github/workflows/notify.yml', 'on: release\n');
+    r.gh.files.set('.github/workflows/mirror.yml', 'on: create\n');
+    body = r.cardBody((await r.ask()).cardId);
+    expect(body).toContain('\n.github/workflows/mirror.yml also runs when the tag is created.\n');
+    expect(body).not.toContain('notify.yml');
+  });
+
+  it('tries that run out after a publish made the tag keep the draft: deleting it would leave the tag with no release', async () => {
+    const r = rig();
+    const req = await r.ask(NOTES);
+    // Every publish answers 422; the first one made the tag at the commit.
+    r.gh.onWrite = (w) => {
+      if (w.method !== 'PATCH') return;
+      r.gh.tags.set(TAG, { sha: C3 });
+      r.gh.nextWrite = { answer: { ok: false, kind: 'http', status: 422, message: 'gh: Validation Failed (HTTP 422)' }, landed: false };
+    };
+    await r.run(req);
+    await r.sweep();
+    await r.sweep();
+    await r.sweep();
+    expect(r.svc.get(req.requestId)).toMatchObject({ state: 'refused', refusal: 'tag-made-draft-kept' });
+    expect(r.outcome(req.requestId)?.title).toMatch(/its draft is kept on GitHub for you to publish or delete/);
+    expect(r.gh.writes.map((w) => w.method)).toEqual(['POST', 'PATCH', 'PATCH', 'PATCH']);
+    expect(r.gh.releases).toMatchObject([{ draft: true, tag_name: TAG }]);
+  });
+
+  it('a refusal while the tag is made at the commit keeps the draft; with the tag not made, the draft goes', async () => {
+    for (const made of [true, false]) {
+      const r = rig();
+      const req = await r.ask(NOTES);
+      onFirstPatch(r, () => ({ answer: { ok: false, kind: 'http', status: 422, message: 'gh: Validation Failed (HTTP 422)' }, landed: false }), () => {
+        if (made) r.gh.tags.set(TAG, { sha: C3 });
+      });
+      await r.run(req);
+      r.gh.onWrite = null;
+      r.gh.checkRuns.set(C3, [{ status: 'completed', conclusion: 'failure' }]);
+      await r.sweep();
+      expect(r.svc.get(req.requestId), String(made)).toMatchObject({ state: 'refused', refusal: 'checks-failing' });
+      expect(r.gh.releases, String(made)).toHaveLength(made ? 1 : 0);
+    }
+  });
+
+  it('a pending row whose draft is journaled is read before a try: a draft the owner published by hand is done, not refused', async () => {
+    const r = rig();
+    const req = await r.ask(NOTES);
+    onFirstPatch(r, RATE_LIMITED);
+    await r.run(req);
+    r.gh.onWrite = null;
+    const id = actEffectId(req.requestId);
+    expect(r.effects.get(id)).toMatchObject({ status: 'pending', attempt: 0, draftId: r.gh.releases[0]?.id });
+    // The owner publishes the draft on GitHub as it stands.
+    Object.assign(r.gh.releases[0] as FakeRelease, { draft: false });
+    r.gh.tags.set(TAG, { sha: C3 });
+    await r.sweep();
+    expect(r.svc.get(req.requestId)).toMatchObject({ state: 'executed', result: { id: r.gh.releases[0]?.id } });
+    expect(r.gh.writes.map((w) => w.method)).toEqual(['POST', 'PATCH']);
+  });
+
+  it('the repository is read once a request and once a try', async () => {
+    const r = rig();
+    const before = r.gh.reads.length;
+    const req = await r.ask(NOTES);
+    expect(r.gh.reads.slice(before).filter((e) => e === 'repos/o/r')).toHaveLength(1);
+    const asked = r.gh.reads.length;
+    await r.run(req);
+    expect(r.gh.reads.slice(asked).filter((e) => e === 'repos/o/r')).toHaveLength(1);
+    expect(r.svc.get(req.requestId)?.state).toBe('executed');
+    // The default branch is not stored with the repository's pins.
+    expect(r.svc.get(req.requestId)?.actRepo).toEqual({ fullName: 'o/r', nodeId: 'R_1', id: 4242 });
   });
 });

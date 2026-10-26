@@ -61,9 +61,13 @@ export interface FakeWorkflowRun extends FakeRun {
 
 const NOT_FOUND: GhActAnswer = { ok: false, kind: 'http', status: 404, message: 'gh: Not Found (HTTP 404)' };
 
-/** A check suite's id: one suite per ref (null: an app's, with no branch). */
-function suiteId(branch: string | null): number {
-  return branch === null ? 1 : 1000 + [...branch].reduce((n, c) => (n * 31 + c.charCodeAt(0)) % 100_000, 7);
+/** A check suite's id: one suite per commit and ref (null: an app's, with no branch). */
+function suiteId(sha: string, branch: string | null): number {
+  return 1000 + [...`${sha}:${branch ?? ''}`].reduce((n, c) => (n * 31 + c.charCodeAt(0)) % 1_000_000, 7);
+}
+
+function suiteOf(r: FakeRun): string | null {
+  return r.suiteBranch === undefined ? 'main' : r.suiteBranch;
 }
 
 /** A file's blob sha: a hash of its path (the fake's files do not change). */
@@ -208,12 +212,15 @@ export class FakeGithub implements GhActPort {
     if (m) return this.known(m[1]) ? { ok: true, value: { sha: m[1] } } : { ok: false, kind: 'http', status: 422, message: 'gh: No commit found for SHA (HTTP 422)' };
     m = /^repos\/o\/r\/commits\/([0-9a-f]{40})\/check-suites$/.exec(path);
     if (m) {
-      const branches = [...new Set((this.checkRuns.get(m[1]) ?? []).map((r) => (r.suiteBranch === undefined ? 'main' : r.suiteBranch)))];
-      return { ok: true, value: { total_count: branches.length, check_suites: page(branches.map((b) => ({ id: suiteId(b), head_branch: b, head_sha: m?.[1] }))) } };
+      const sha = m[1];
+      const branches = [...new Set((this.checkRuns.get(sha) ?? []).map(suiteOf))];
+      return { ok: true, value: { total_count: branches.length, check_suites: page(branches.map((b) => ({ id: suiteId(sha, b), head_branch: b, head_sha: sha }))) } };
     }
-    m = /^repos\/o\/r\/commits\/([0-9a-f]{40})\/check-runs$/.exec(path);
+    m = /^repos\/o\/r\/check-suites\/(\d+)\/check-runs$/.exec(path);
     if (m) {
-      const runs = (this.checkRuns.get(m[1]) ?? []).map((r) => ({ status: r.status, conclusion: r.conclusion, check_suite: { id: suiteId(r.suiteBranch === undefined ? 'main' : r.suiteBranch) } }));
+      const id = Number(m[1]);
+      const runs = [...this.checkRuns].flatMap(([sha, rs]) => rs.filter((r) => suiteId(sha, suiteOf(r)) === id))
+        .map((r) => ({ status: r.status, conclusion: r.conclusion, check_suite: { id } }));
       return { ok: true, value: { total_count: runs.length, check_runs: page(runs) } };
     }
     m = /^repos\/o\/r\/commits\/([0-9a-f]{40})\/status$/.exec(path);
@@ -266,7 +273,7 @@ export class FakeGithub implements GhActPort {
       const text = this.files.get(file);
       if (text === undefined) return NOT_FOUND;
       // Over 1 MB, the JSON media type gh asks for is refused.
-      if (this.bigFiles.has(file)) return { ok: false, kind: 'http', status: 403, message: 'gh: This API returns blobs up to 1 MB in size. The requested blob is too large to fetch via the API, but you can use the Git Data API to request blobs up to 100 MB in size. (HTTP 403)' };
+      if (this.bigFiles.has(file)) return { ok: false, kind: 'http', status: 403, message: 'gh: the file is over 1 MB; read its blob instead (HTTP 403)' };
       return { ok: true, value: { type: 'file', encoding: 'base64', content: Buffer.from(text, 'utf8').toString('base64'), size: text.length, sha: blobOf(file) } };
     }
     return null;
