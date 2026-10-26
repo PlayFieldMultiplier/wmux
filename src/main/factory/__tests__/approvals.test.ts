@@ -1029,3 +1029,28 @@ describe('native tool requests (a Hermes bot asks mid-turn)', () => {
     expect(r.svc.listForOperator(WS).some((x) => x.action === 'native_tool' && x.state === 'pending')).toBe(false);
   });
 });
+
+describe('a release refusal told before its draft was decided', () => {
+  it('is amended once the draft is decided, with one more outcome card, never two', async () => {
+    const r = rig();
+    const req = await r.ask(DEV, { action: 'release', tagName: 'v1', reason: 'ship' });
+    const effect = (reason: string): Parameters<ApprovalService['onActEffect']>[0] => ({
+      id: `act:${req.requestId}`, requestId: req.requestId, action: 'release', repoKey: KEY, payloadHash: 'h', status: 'refused', attempt: 1, reason, draftId: 50, createdAt: 1, updatedAt: 1,
+    });
+    const outcomes = () => r.writer.read(WS, {}).cards.filter((c) => c.clientPostId?.startsWith(`approval-outcome:${req.requestId}`));
+    // A quit came between the refusal and the draft's decision: the refusal is told as it stood.
+    r.svc.onActEffect(effect('checks-failing'));
+    expect(r.svc.get(req.requestId)).toMatchObject({ state: 'refused', refusal: 'checks-failing' });
+    expect(outcomes()).toHaveLength(1);
+    r.state.now += 5;
+    r.svc.onActEffect(effect('checks-failing, draft-kept-tag-made'));
+    expect(r.svc.get(req.requestId)).toMatchObject({ state: 'refused', refusal: 'checks-failing, draft-kept-tag-made', updatedAt: r.state.now });
+    expect(outcomes()).toHaveLength(2);
+    expect(outcomes()[1]).toMatchObject({ clientPostId: `approval-outcome:${req.requestId}:draft`, body: 'The tag was already made: its draft release is kept on GitHub for you to publish or delete' });
+    // Told again (a second emit), or with another reason: nothing more.
+    r.svc.onActEffect(effect('checks-failing, draft-kept-tag-made'));
+    r.svc.onActEffect(effect('identity-changed, draft-not-deleted'));
+    expect(outcomes()).toHaveLength(2);
+    expect(r.svc.get(req.requestId)?.refusal).toBe('checks-failing, draft-kept-tag-made');
+  });
+});
