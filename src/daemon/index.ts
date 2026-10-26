@@ -1,6 +1,7 @@
 // Must stay the first import: turns off working-directory executable lookup (Windows) before any module runs.
 import '../shared/exeSearchGuard';
 import { isInternalForkPayload } from '../shared/hooks/internalFork';
+import { releaseDaemonFiles, unlinkIfContent } from '../shared/daemon/daemonFiles';
 import { terminalCoreRuntime, terminalCoreSelection } from '../shared/terminalCoreSettings';
 import { collectDaemonMemoryDiagnostics } from './memoryDiagnostics';
 import { createStartupRecovery } from './startupRecovery';
@@ -1930,34 +1931,17 @@ async function acquireLock(): Promise<boolean> {
 }
 
 /** Issue #546 — drop the boot-progress marker once we can answer pings, and on
- *  every teardown path. Idempotent; never throws. */
+ *  every teardown path. Only our own marker. Idempotent; never throws. */
 function clearBootMarker(): void {
-  try {
-    if (fs.existsSync(BOOT_MARKER_FILE)) fs.unlinkSync(BOOT_MARKER_FILE);
-  } catch {
-    // ignore
-  }
+  unlinkIfContent(BOOT_MARKER_FILE, String(process.pid));
 }
 
+/** The pipe name this daemon wrote to `daemon-pipe`, once it has. */
+let writtenPipeName: string | null = null;
+
+/** Remove the files this daemon wrote, and only those (releaseDaemonFiles). */
 function releaseLock(): void {
-  try {
-    if (fs.existsSync(PID_FILE)) fs.unlinkSync(PID_FILE);
-  } catch {
-    // ignore
-  }
-  try {
-    if (fs.existsSync(LOCK_FILE)) fs.unlinkSync(LOCK_FILE);
-  } catch {
-    // ignore
-  }
-  // Clean up pipe name file
-  try {
-    const pipeNameFile = path.join(wmuxDir, 'daemon-pipe');
-    if (fs.existsSync(pipeNameFile)) fs.unlinkSync(pipeNameFile);
-  } catch {
-    // ignore
-  }
-  clearBootMarker();
+  releaseDaemonFiles(wmuxDir, process.pid, writtenPipeName);
 }
 
 // === Session recovery ===
@@ -10379,6 +10363,7 @@ async function main(): Promise<void> {
   const pipeNameFile = path.join(wmuxDir, 'daemon-pipe');
   try {
     fs.writeFileSync(pipeNameFile, activePipeName, { encoding: 'utf-8', mode: 0o600 });
+    writtenPipeName = activePipeName;
   } catch (err) {
     log('warn', 'Failed to write pipe name file:', err);
   }
@@ -10702,8 +10687,8 @@ main().catch((err) => {
     // detect (split-brain Defect 3 / Step ③). Exit with a DISTINCT code so the
     // launcher reconnects to the existing daemon instead of treating this as a
     // generic startup failure. releaseLock() clears the daemon.pid that
-    // acquireLock() wrote for us; the launcher reconnects via the canonical
-    // pipe name, not the pid file.
+    // acquireLock() wrote for us, and leaves the live daemon's files alone;
+    // the launcher reconnects via the canonical pipe name, not the pid file.
     log('warn', 'another live daemon owns the control pipe — exiting cleanly (EDAEMON_ALREADY_RUNNING)');
     noteExitReason('another live daemon owns the control pipe');
     releaseLock();

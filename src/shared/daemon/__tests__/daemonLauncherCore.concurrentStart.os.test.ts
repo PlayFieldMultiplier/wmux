@@ -3,7 +3,7 @@ import fs from 'fs';
 import net from 'net';
 import os from 'os';
 import path from 'path';
-import { spawn, spawnSync } from 'child_process';
+import { spawn, spawnSync, type ChildProcess } from 'child_process';
 
 /**
  * POSIX concurrent-start races. Two starters (app ensureDaemon, respawn,
@@ -49,7 +49,7 @@ setTimeout(() => {
   }).listen(sock, () => {
     if (process.env.FAKE_WMUX_TOKEN) fs.writeFileSync(process.env.FAKE_WMUX_TOKEN, 'test-token');
     fs.writeFileSync(path.join(dir, 'daemon-pipe'), sock);
-    fs.unlinkSync(path.join(dir, 'daemon-booting'));
+    try { fs.unlinkSync(path.join(dir, 'daemon-booting')); } catch {}
   });
 }, Number(process.env.FAKE_WMUX_BOOT_MS || 150));
 `;
@@ -57,8 +57,10 @@ setTimeout(() => {
 import {
   claimSpawnedDaemonFiles,
   ensureDaemon,
+  ensureDaemonUnlockedForTest,
   killDaemonByPidFileOutcome,
   liveDaemonFileOwner,
+  staleCleanupOwnerFilter,
   type DaemonLauncherDeps,
 } from '../daemonLauncherCore';
 import { getDaemonAuthTokenPath, getDaemonSocketPath } from '../../constants';
@@ -68,8 +70,12 @@ const isAlive = (pid: number): boolean => {
   try { process.kill(pid, 0); return true; } catch { return false; }
 };
 const deadPid = (): number => spawnSync(process.execPath, ['-e', '0']).pid as number;
+const onWindows = process.platform === 'win32';
 
-describe.skipIf(process.platform === 'win32')('daemonLauncherCore — concurrent start (POSIX)', () => {
+// Runs on every OS. The two cases that depend on POSIX-only behaviour (the
+// launcher lock, the responder-pid check) skip on Windows; the unlocked-starter
+// cases call ensureDaemonUnlockedForTest, the path every Windows starter runs.
+describe('daemonLauncherCore — concurrent start', () => {
   let wmuxDir: string;
   let prevSuffix: string | undefined;
   let scriptPath: string;
@@ -119,7 +125,7 @@ describe.skipIf(process.platform === 'win32')('daemonLauncherCore — concurrent
 
   const livePidFile = (): number => parseInt(fs.readFileSync(path.join(wmuxDir, 'daemon.pid'), 'utf8'), 10);
 
-  it('two concurrent starters end with one daemon, and both report its pid', async () => {
+  it.skipIf(onWindows)('two concurrent starters end with one daemon, and both report its pid', async () => {
     const [a, b] = await Promise.all([ensureDaemon(deps()), ensureDaemon(deps())]);
     for (const r of [a, b]) if (r.pid) launched.push(r.pid);
     expect(a.pid).toBe(b.pid);
@@ -196,6 +202,42 @@ describe.skipIf(process.platform === 'win32')('daemonLauncherCore — concurrent
     expect(livePidFile()).toBe(owner.pid);
   }, 30_000);
 
+  it('two unlocked starters, the second inside the first daemon\'s boot window, end with one daemon', async () => {
+    process.env.FAKE_WMUX_BOOT_MS = '1500';
+    const first = ensureDaemonUnlockedForTest(deps());
+    let booting = 0;
+    await vi.waitFor(() => {
+      booting = livePidFile();
+      expect(booting).toBeGreaterThan(0);
+    }, { timeout: 5_000 });
+    launched.push(booting);
+    expect(fs.existsSync(path.join(wmuxDir, 'daemon.lock'))).toBe(false);
+
+    const second = await ensureDaemonUnlockedForTest(deps());
+    if (second.pid && second.pid !== booting) launched.push(second.pid);
+    const firstInfo = await first;
+    expect(firstInfo).toMatchObject({ pid: booting, spawned: true });
+    expect(second).toMatchObject({ pid: booting, spawned: false });
+    expect(fs.readFileSync(path.join(wmuxDir, 'daemon.lock'), 'utf8')).toBe(String(booting));
+  }, 30_000);
+
+  // A starter that judged the old pid dead, then reached its cleanup after
+  // another starter's daemon had taken the files (on Windows, tasklist alone
+  // can take seconds between the two).
+  it('an unlocked starter keeps files a live daemon took after it judged the old pid dead', async () => {
+    const owner = spawn(process.execPath, [scriptPath], {
+      detached: true, stdio: 'ignore', env: { ...process.env, FAKE_WMUX_BOOT_MS: '50' },
+    });
+    launched.push(owner.pid as number);
+    await vi.waitFor(() => expect(fs.existsSync(path.join(wmuxDir, 'daemon-pipe'))).toBe(true), { timeout: 5_000 });
+    fs.writeFileSync(path.join(wmuxDir, 'daemon.pid'), String(deadPid()));
+
+    const info = await ensureDaemonUnlockedForTest(deps());
+    if (info.pid && info.pid !== owner.pid) launched.push(info.pid);
+    expect(info).toMatchObject({ pid: owner.pid, spawned: false });
+    expect(fs.readFileSync(path.join(wmuxDir, 'daemon.lock'), 'utf8')).toBe(String(owner.pid));
+  }, 30_000);
+
   it('a first-run booting daemon (no auth token yet) is waited on, not killed', async () => {
     // readDaemonAuthToken also reads the unsuffixed legacy token; where one
     // exists this case passes without exercising the no-token path.
@@ -249,7 +291,7 @@ describe.skipIf(process.platform === 'win32')('daemonLauncherCore — concurrent
     expect(isAlive(unrelated.pid as number)).toBe(true);
   }, 30_000);
 
-  it('reports the daemon that answered readiness, not a spawned pid that lost', async () => {
+  it.skipIf(onWindows)('reports the daemon that answered readiness, not a spawned pid that lost', async () => {
     // Another live daemon (pid 999) owns the socket; the spawned process never
     // answers and only points the pipe hint at that socket.
     const server = net.createServer((s) => {
@@ -275,22 +317,85 @@ describe.skipIf(process.platform === 'win32')('daemonLauncherCore — concurrent
 
 describe('claimSpawnedDaemonFiles', () => {
   let dir: string;
+  const children: ChildProcess[] = [];
   beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'csdf-')); });
-  afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); });
+  afterEach(() => {
+    for (const c of children.splice(0)) c.kill('SIGKILL');
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  const read = (name: string): string | null => {
+    try { return fs.readFileSync(path.join(dir, name), 'utf8'); } catch { return null; }
+  };
+  const liveProcess = (args: string[]): number => {
+    const c = spawn(process.execPath, args, { stdio: 'ignore' });
+    children.push(c);
+    return c.pid as number;
+  };
 
-  it('writes both files for a fresh spawn, and never replaces a pid file written after the cleanup', () => {
+  it('writes both files for a fresh spawn', () => {
     expect(claimSpawnedDaemonFiles(dir, 4242)).toBe(true);
-    expect(fs.readFileSync(path.join(dir, 'daemon.pid'), 'utf8')).toBe('4242');
-    expect(fs.readFileSync(path.join(dir, 'daemon-booting'), 'utf8')).toBe('4242');
+    expect(read('daemon.pid')).toBe('4242');
+    expect(read('daemon-booting')).toBe('4242');
+  });
 
-    fs.unlinkSync(path.join(dir, 'daemon-booting'));
+  it('keeps a pid file naming a live daemon, and writes no marker then', async () => {
+    // The daemon-bundle/index.js entry shape identifies a daemon from any host.
+    const script = path.join(dir, 'daemon-bundle', 'index.js');
+    fs.mkdirSync(path.dirname(script));
+    const ready = path.join(dir, 'ready');
+    fs.writeFileSync(script, `require('fs').writeFileSync(${JSON.stringify(ready)}, '');\nsetTimeout(() => {}, 30000);\n`);
+    const daemon = liveProcess([script]);
+    // Running its script, so a process probe reads the daemon's command line.
+    await vi.waitFor(() => expect(fs.existsSync(ready)).toBe(true), { timeout: 10_000 });
+    fs.writeFileSync(path.join(dir, 'daemon.pid'), String(daemon));
+
     expect(claimSpawnedDaemonFiles(dir, 5353)).toBe(false);
-    expect(fs.readFileSync(path.join(dir, 'daemon.pid'), 'utf8')).toBe('4242');
-    // No marker for a daemon whose pid file was not ours: it may be past boot.
-    expect(fs.existsSync(path.join(dir, 'daemon-booting'))).toBe(false);
-    // The daemon got there first (a launchd job): its own files stand.
-    expect(claimSpawnedDaemonFiles(dir, 4242)).toBe(true);
-    expect(fs.existsSync(path.join(dir, 'daemon-booting'))).toBe(false);
+    expect(read('daemon.pid')).toBe(String(daemon));
+    expect(read('daemon-booting')).toBeNull();
+  });
+
+  it('replaces a pid file the cleanup could not remove: a dead pid, or a live process that is not a daemon', () => {
+    fs.writeFileSync(path.join(dir, 'daemon.pid'), String(deadPid()));
+    expect(claimSpawnedDaemonFiles(dir, 5353)).toBe(true);
+    expect(read('daemon.pid')).toBe('5353');
+    expect(read('daemon-booting')).toBe('5353');
+
+    fs.writeFileSync(path.join(dir, 'daemon.pid'), String(liveProcess(['-e', 'setTimeout(() => {}, 30000)'])));
+    expect(claimSpawnedDaemonFiles(dir, 6464)).toBe(true);
+    expect(read('daemon.pid')).toBe('6464');
+  });
+
+  it('accepts a pid file the daemon already wrote for itself, leaving its marker alone', () => {
+    fs.writeFileSync(path.join(dir, 'daemon.pid'), '7575');
+    expect(claimSpawnedDaemonFiles(dir, 7575)).toBe(true);
+    expect(read('daemon-booting')).toBeNull();
+  });
+});
+
+describe('staleCleanupOwnerFilter', () => {
+  let dir: string;
+  const children: ChildProcess[] = [];
+  beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'scof-')); });
+  afterEach(() => {
+    for (const c of children.splice(0)) c.kill('SIGKILL');
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('on win32 keeps the files only for a live process proven to be a daemon; elsewhere for any live one', async () => {
+    const script = path.join(dir, 'fake-daemon.js');
+    const ready = path.join(dir, 'ready');
+    fs.writeFileSync(script, `require('fs').writeFileSync(${JSON.stringify(ready)}, '');\nsetTimeout(() => {}, 30000);\n`);
+    const daemon = spawn(process.execPath, [script], { stdio: 'ignore' });
+    const other = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'ignore' });
+    children.push(daemon, other);
+    await vi.waitFor(() => expect(fs.existsSync(ready)).toBe(true), { timeout: 10_000 });
+
+    fs.writeFileSync(path.join(dir, 'daemon.lock'), String(daemon.pid));
+    expect(liveDaemonFileOwner(dir, null, staleCleanupOwnerFilter('win32', [script]))).toBe(daemon.pid);
+
+    fs.writeFileSync(path.join(dir, 'daemon.lock'), String(other.pid));
+    expect(liveDaemonFileOwner(dir, null, staleCleanupOwnerFilter('win32', [script]))).toBeNull();
+    expect(liveDaemonFileOwner(dir, null, staleCleanupOwnerFilter('darwin', [script]))).toBe(other.pid);
   });
 });
 

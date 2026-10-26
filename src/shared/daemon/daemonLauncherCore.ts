@@ -15,6 +15,7 @@ import {
   withDaemonStartLock,
 } from './launchdDaemonJob';
 import { classifyTasklistOutput, classifyKillOutcome, type ProcessLiveness } from '../processLiveness';
+import { createFileExclusive, replaceFileAtomic, unlinkIfContent } from './daemonFiles';
 
 export interface DaemonInfo {
   /**
@@ -872,9 +873,9 @@ function spawnDaemon(deps: DaemonLauncherDeps): Promise<number> {
       dispose(): void;
     }) => {
       const wmuxDir = getWmuxDir();
-      if (!claimSpawnedDaemonFiles(wmuxDir, proc.pid)) {
+      if (!claimSpawnedDaemonFiles(wmuxDir, proc.pid, candidates)) {
         (deps.warn ?? console.warn)(
-          `[launcher] daemon.pid not written for PID ${proc.pid}: another pid file appeared after the stale cleanup, or the write failed`,
+          `[launcher] daemon.pid not written for PID ${proc.pid}: it names another live daemon, or the write failed`,
         );
       }
       deps.markBoot?.('daemon-spawned');
@@ -1040,10 +1041,14 @@ function spawnDaemon(deps: DaemonLauncherDeps): Promise<number> {
  * killing, and the backstop finds the pid. The daemon's acquireLock() never
  * reads daemon.pid; holding the lock, it overwrites both with its own pid.
  *
- * `wx` on daemon.pid: a pid file that appeared after our stale cleanup was
- * written by the daemon itself or by another starter's daemon, and is never
- * replaced. The marker is written only when the pid file was ours, so it
- * cannot name a daemon that has already finished booting and dropped it.
+ * daemon.pid is created exclusively and atomically (no reader sees it empty).
+ * One that already exists is replaced only when it is provably stale: a dead
+ * pid, garbage, or a live process whose command line is not the daemon's (a
+ * file the stale cleanup could not remove). A live daemon's file, or another
+ * starter's booting child, is kept. The marker is written only after the pid
+ * file names our child, pid first, so a reader that finds the pid without the
+ * marker is at most microseconds early, and it reads the marker only after
+ * ~1 s of failed pings.
  *
  * PID reuse: a child that dies during boot has both files removed by its
  * exit handler (releaseSpawnedDaemonFiles); if this launcher is gone too, they
@@ -1053,34 +1058,46 @@ function spawnDaemon(deps: DaemonLauncherDeps): Promise<number> {
  *
  * Best effort: returns whether the pid file names `pid`, never throws.
  */
-export function claimSpawnedDaemonFiles(wmuxDir: string, pid: number): boolean {
+export function claimSpawnedDaemonFiles(wmuxDir: string, pid: number, scriptCandidates: string[] = []): boolean {
   const pidFile = path.join(wmuxDir, 'daemon.pid');
-  try {
-    fs.writeFileSync(pidFile, String(pid), { encoding: 'utf-8', mode: 0o600, flag: 'wx' });
-  } catch {
+  const value = String(pid);
+  if (!createFileExclusive(pidFile, value)) {
+    let current: string;
+    try { current = fs.readFileSync(pidFile, 'utf-8').trim(); } catch { return false; }
     // A launchd job's pid is known only after launchctl reports it, by which
     // time the daemon may have written both files itself.
-    try { return fs.readFileSync(pidFile, 'utf-8').trim() === String(pid); } catch { return false; }
+    if (current === value) return true;
+    if (!isStalePidFileContent(current, scriptCandidates)) return false;
+    if (!replaceFileAtomic(pidFile, value)) return false;
   }
-  try {
-    fs.writeFileSync(path.join(wmuxDir, 'daemon-booting'), String(pid), { encoding: 'utf-8', mode: 0o600, flag: 'wx' });
-  } catch { /* the daemon writes it at acquireLock */ }
+  replaceFileAtomic(path.join(wmuxDir, 'daemon-booting'), value);
   return true;
+}
+
+/** A pid file another process may not be relying on: garbage, a dead pid, or a
+ *  live process whose command line was read and is not the daemon's. Empty
+ *  content is a writer mid-write, not stale. */
+function isStalePidFileContent(content: string, scriptCandidates: string[]): boolean {
+  if (content.length === 0) return false;
+  if (!/^\d+$/.test(content)) return true;
+  const other = Number(content);
+  if (!Number.isSafeInteger(other) || other <= 0) return true;
+  if (checkProcessLiveness(other) === 'dead') return true;
+  const argv = getProcessArgv(other);
+  return argv !== null && !argvIdentifiesDaemonScript(argv, scriptCandidates);
 }
 
 /**
  * Drop the files claimSpawnedDaemonFiles wrote once their daemon has exited, so
  * a child that died during boot does not leave a pid that a later, unrelated
  * process can reuse, nor a marker a second starter would wait on. Only files
- * still naming `pid` are removed; a daemon that took them over keeps them.
+ * still naming `pid` are removed: a child that lost daemon.lock exits only
+ * after reading the winner's lock, and the winner writes daemon.pid and the
+ * marker in the same synchronous step as the lock, so by then they name it.
  */
 function releaseSpawnedDaemonFiles(wmuxDir: string, pid: number): void {
-  for (const name of ['daemon-booting', 'daemon.pid']) {
-    const file = path.join(wmuxDir, name);
-    try {
-      if (fs.readFileSync(file, 'utf-8').trim() === String(pid)) fs.unlinkSync(file);
-    } catch { /* absent */ }
-  }
+  unlinkIfContent(path.join(wmuxDir, 'daemon-booting'), String(pid));
+  unlinkIfContent(path.join(wmuxDir, 'daemon.pid'), String(pid));
 }
 
 /** How a daemon this process spawned ended: Node's child 'exit' arguments. */
@@ -1226,20 +1243,47 @@ function readBootMarker(wmuxDir: string): string | null {
 }
 
 /**
- * POSIX: the pid named by daemon.lock or daemon.pid when it is a live process
- * other than `judgedPid` (the one ensureDaemon already dealt with) and other
- * than ourselves, else null. Such files belong to a running daemon, not a
- * crashed one, and must not be cleaned as stale.
+ * The pid named by daemon.lock or daemon.pid when it is a live process other
+ * than `judgedPid` (the one ensureDaemon already dealt with) and other than
+ * ourselves, and `isOwner` (when given) accepts it, else null. Such files
+ * belong to a running or booting daemon, not a crashed one, and must not be
+ * cleaned as stale.
  */
-export function liveDaemonFileOwner(wmuxDir: string, judgedPid: number | null): number | null {
+export function liveDaemonFileOwner(
+  wmuxDir: string,
+  judgedPid: number | null,
+  isOwner?: (pid: number) => boolean,
+): number | null {
   for (const name of ['daemon.lock', 'daemon.pid']) {
     let pid: number;
     try {
       pid = parseInt(fs.readFileSync(path.join(wmuxDir, name), 'utf8').trim(), 10);
     } catch { continue; }
-    if (pid > 0 && pid !== judgedPid && pid !== process.pid && checkProcessLiveness(pid) !== 'dead') return pid;
+    if (pid > 0 && pid !== judgedPid && pid !== process.pid && checkProcessLiveness(pid) !== 'dead' && (!isOwner || isOwner(pid))) {
+      return pid;
+    }
   }
   return null;
+}
+
+/**
+ * Which live file owners keep the stale cleanup from running. POSIX: any live
+ * one (starters are serialized by the launcher lock, so this only meets a
+ * daemon whose pid file was lost). Windows has no launcher lock, so another
+ * starter's daemon can appear between this starter's judgment and its cleanup
+ * (tasklist alone can take seconds). There the owner must be proven a daemon
+ * from its command line: Windows reuses pids quickly, and an unproven live pid
+ * left by a crash must not block the cleanup or raise the recovery dialog.
+ */
+export function staleCleanupOwnerFilter(
+  platform: NodeJS.Platform,
+  scriptCandidates: string[],
+): ((pid: number) => boolean) | undefined {
+  if (platform !== 'win32') return undefined;
+  return (pid) => {
+    const argv = getProcessArgv(pid);
+    return argv !== null && argvIdentifiesDaemonScript(argv, scriptCandidates);
+  };
 }
 
 /** Longest a launcher holds its lock: it may wait out a recovering daemon,
@@ -1262,6 +1306,12 @@ export async function ensureDaemon(deps: DaemonLauncherDeps): Promise<DaemonInfo
     LAUNCHER_LOCK_HOLD_MS + 10_000,
     LAUNCHER_LOCK_HOLD_MS,
   );
+}
+
+/** Test seam: ensureDaemon without the POSIX launcher lock, i.e. the path every
+ *  Windows starter runs, so two unlocked starters can be raced on any OS. */
+export function ensureDaemonUnlockedForTest(deps: DaemonLauncherDeps): Promise<DaemonInfo> {
+  return ensureDaemonUnlocked(deps);
 }
 
 async function ensureDaemonUnlocked(deps: DaemonLauncherDeps): Promise<DaemonInfo> {
@@ -1511,10 +1561,12 @@ async function ensureDaemonUnlocked(deps: DaemonLauncherDeps): Promise<DaemonInf
             // A first-run daemon creates the auth token while it boots, so a
             // booting daemon (marker naming it) is waited on even without one,
             // reading the token again at each ping.
-            const currentToken = (): string => token || readDaemonAuthToken();
-            const pingCurrent = (timeoutMs: number): Promise<boolean> => {
-              const t = currentToken();
-              return t ? pingDaemon(pipeName, t, timeoutMs) : Promise.resolve(false);
+            let answeredToken = token;
+            const pingCurrent = async (timeoutMs: number): Promise<boolean> => {
+              const t = token || readDaemonAuthToken();
+              if (!t || !(await pingDaemon(pipeName, t, timeoutMs))) return false;
+              answeredToken = t;
+              return true;
             };
             if (token || parseBootMarker(readBootMarker(wmuxDir), existingPid)) {
               const recovered = await tryEscalatedReping(
@@ -1527,7 +1579,7 @@ async function ensureDaemonUnlocked(deps: DaemonLauncherDeps): Promise<DaemonInf
                 (deps.log ?? console.log)(
                   `[launcher] Daemon (PID ${existingPid}) recovered on escalated re-ping — reusing, no kill`,
                 );
-                return { pid: existingPid, authToken: currentToken(), pipeName, spawned: false };
+                return { pid: existingPid, authToken: answeredToken, pipeName, spawned: false };
               }
               // Issue #546 — the escalated re-ping (~1.9 s) is far too short for
               // a daemon that is cold-recovering a big session set (~19-23 s for
@@ -1554,7 +1606,7 @@ async function ensureDaemonUnlocked(deps: DaemonLauncherDeps): Promise<DaemonInf
                   (deps.log ?? console.log)(
                     `[launcher] Daemon (PID ${existingPid}) finished recovery and answered — reusing, no kill`,
                   );
-                  return { pid: existingPid, authToken: currentToken(), pipeName, spawned: false };
+                  return { pid: existingPid, authToken: answeredToken, pipeName, spawned: false };
                 }
                 if (outcome === 'gone') {
                   // The marker was dropped: either the daemon just became ready
@@ -1571,7 +1623,7 @@ async function ensureDaemonUnlocked(deps: DaemonLauncherDeps): Promise<DaemonInf
                     (deps.log ?? console.log)(
                       `[launcher] Daemon (PID ${existingPid}) became ready as its boot marker cleared — reusing, no kill`,
                     );
-                    return { pid: existingPid, authToken: currentToken(), pipeName, spawned: false };
+                    return { pid: existingPid, authToken: answeredToken, pipeName, spawned: false };
                   }
                 } else {
                   (deps.warn ?? console.warn)(
@@ -1625,10 +1677,16 @@ async function ensureDaemonUnlocked(deps: DaemonLauncherDeps): Promise<DaemonInf
   (deps.log ?? console.log)('[launcher] No running daemon found. Cleaning stale files...');
   // 'daemon-booting' (#546) joins the list: a marker left by a daemon that
   // crashed mid-recovery must not outlive it into the fresh spawn.
-  const liveOwner = process.platform === 'win32' ? null : liveDaemonFileOwner(wmuxDir, existingPid);
+  let cleanupCandidates: string[] = [];
+  try { cleanupCandidates = deps.resolveDaemonScriptCandidates(); } catch { /* shape-only */ }
+  const liveOwner = liveDaemonFileOwner(
+    wmuxDir,
+    existingPid,
+    staleCleanupOwnerFilter(process.platform, cleanupCandidates),
+  );
   if (liveOwner !== null) {
-    // A live process holds these files (the daemon's pid file was lost, or a
-    // starter outside the launcher lock ran it). Keep them, point daemon.pid
+    // A live process holds these files (the daemon's pid file was lost, or
+    // another starter's daemon appeared after our judgment). Keep them, point daemon.pid
     // at it, and run detection again: the reuse / boot-wait / verified-kill
     // path above then judges that pid like any other, and this branch cannot
     // repeat for it (it becomes the judged pid).
