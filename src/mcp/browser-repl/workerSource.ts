@@ -34,8 +34,8 @@ const vm = require('vm');
 const util = require('util');
 
 // Snippet code can reach this port (process.getBuiltinModule hands out the
-// same parentPort), so the messages the main thread acts on — a browser call,
-// a run result — must only ever come from this file. Both the instance and the
+// same parentPort), so the messages the main thread acts on -- a browser call,
+// a run result -- must only ever come from this file. Both the instance and the
 // prototype method refuse those types unless the post below is the caller.
 const post = (() => {
   const raw = MessagePort.prototype.postMessage;
@@ -69,14 +69,14 @@ function describe(value) {
     return '<value could not be inspected: ' + String(err && err.message || err) + '>';
   }
   if (rendered.length > RESULT_CAP) {
-    return rendered.slice(0, RESULT_CAP) + '\n… value truncated in the worker (' + rendered.length + ' chars rendered) …';
+    return rendered.slice(0, RESULT_CAP) + '\n\u2026 value truncated in the worker (' + rendered.length + ' chars rendered) \u2026';
   }
   return rendered;
 }
 
 // Same last-expression rewrite as the Node REPL runner: an async IIFE with a
 // block body has no completion value, so the trailing expression statement is
-// turned into a return when — and only when — the rewrite still compiles.
+// turned into a return when -- and only when -- the rewrite still compiles.
 function wrapAsync(code) {
   const trimmed = code.replace(/\s+$/, '').replace(/;+$/, '');
   const splits = [];
@@ -106,7 +106,7 @@ function trimStack(error) {
   return cut === -1 ? raw : lines.slice(0, cut).join('\n').replace(/\s+$/, '');
 }
 
-// ── browser.* bridge ──────────────────────────────────────────────────────
+// -- browser.* bridge ------------------------------------------------------
 let nextCallId = 1;
 const pending = new Map();
 
@@ -172,10 +172,10 @@ parentPort.on('message', (msg) => {
     const fail = (error) => {
       let rendered = trimStack(error);
       // Top-level let/const survive between runs, so re-running a snippet that
-      // declares one is a SyntaxError here — a surprise the agent would otherwise
+      // declares one is a SyntaxError here -- a surprise the agent would otherwise
       // read as a bug in its own code.
       if (error instanceof SyntaxError && /has already been declared/.test(String(error.message))) {
-        rendered += '\n(hint: this runtime keeps top-level declarations between browser_repl calls — reuse the name without let/const, pick another, or assign to globalThis)';
+        rendered += '\n(hint: this runtime keeps top-level declarations between browser_repl calls \u2014 reuse the name without let/const, pick another, or assign to globalThis)';
       }
       post({ type: 'result', id, ok: false, error: rendered });
     };

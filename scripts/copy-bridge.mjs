@@ -12,6 +12,7 @@ import { mkdirSync, copyFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildSync } from 'esbuild';
+import { asciiOnlyFiles } from './ascii-only-files.mjs';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const destDir = join(repoRoot, 'dist', 'cli-bundle');
@@ -74,3 +75,8 @@ buildSync({
   outfile: join(destDir, 'wmux-wsl-codex-config.mjs'),
   bundle: true, platform: 'node', format: 'esm',
 });
+// Only this bundled file gets the ASCII-only step (scripts/ascii-only-files.mjs).
+// The bridges above stay byte-for-byte copies: the installers find a wmux-owned
+// copy by a marker in a source comment (src/shared/lifecycleIntegrations.ts),
+// and compare quota-sink.js byte for byte with its installed copy.
+asciiOnlyFiles([join(destDir, 'wmux-wsl-codex-config.mjs')]);
