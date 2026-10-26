@@ -6,7 +6,7 @@
 // touching ?2004.
 import { describe, it, expect, vi } from 'vitest';
 import { Terminal } from '@xterm/headless';
-import { createWebPty, snapshotTail, STREAM_FAIL_LIMIT, WEB_LIVE_STREAM_CAP, type WebPtyDeps } from '../webPty';
+import { createWebPty, newTerminalTarget, snapshotTail, STREAM_FAIL_LIMIT, WEB_LIVE_STREAM_CAP, type WebPtyDeps } from '../webPty';
 import { installViewerParser } from '../viewerParser';
 import { deliberateSleep } from '../../../test-utils/waitFor';
 
@@ -388,5 +388,40 @@ describe('the caller\'s grant', () => {
     expect(ro.inputState()).toBe('read-only');
     await ro.pty.write('a', 'b');
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('createTerminal', () => {
+  const sessionsCall = (calls: ReturnType<typeof make>['calls']) => calls.filter((c) => c.url === '/api/sessions' && c.method === 'POST');
+
+  it('posts the target and answers the new pane id', async () => {
+    const { hub, calls } = make({ operator: true, reply: (url, init) => (url === '/api/sessions' && init?.method === 'POST'
+      ? new Response(JSON.stringify({ id: 'pty-9', cwd: '/root' }), { status: 201 }) : undefined) });
+    await expect(hub.createTerminal({ workspaceId: 'ws-a' })).resolves.toEqual({ ok: true, id: 'pty-9' });
+    const [call] = sessionsCall(calls);
+    expect(JSON.parse(String(call.body))).toEqual({ workspaceId: 'ws-a' });
+    expect(call.headers?.Authorization).toBe('Bearer secret');
+  });
+
+  it('a 403 turns the page read-only; a refusal carries the daemon\'s own words', async () => {
+    const denied = make({ reply: (url) => (url === '/api/sessions' ? new Response('{"error":"input-disabled"}', { status: 403 }) : undefined) });
+    denied.hub.setAllowInput(true);
+    await expect(denied.hub.createTerminal({ workspaceId: 'ws-a' })).resolves.toEqual({ ok: false, reason: 'read-only' });
+    expect(denied.hub.inputState()).toBe('read-only');
+
+    const capped = make({ reply: (url) => (url === '/api/sessions'
+      ? new Response(JSON.stringify({ error: 'create-failed', detail: 'Session limit reached' }), { status: 409 }) : undefined) });
+    await expect(capped.hub.createTerminal({ workspaceId: 'ws-a' })).resolves.toEqual({ ok: false, reason: 'Session limit reached' });
+  });
+});
+
+describe('newTerminalTarget', () => {
+  it('uses the active workspace, and starts a valid new one when there is none', () => {
+    expect(newTerminalTarget('ws-a', ['ws-a', 'ws-b'], 'main')).toEqual({ workspaceId: 'ws-a' });
+    const fresh = newTerminalTarget('', [], 'main');
+    expect(fresh.workspaceName).toBe('main');
+    // The daemon's own rule for a workspace id it stamps into a pane.
+    expect(fresh.workspaceId).toMatch(/^[A-Za-z0-9_-]{1,64}$/);
+    expect(newTerminalTarget('', [], 'main').workspaceId).not.toBe(fresh.workspaceId);
   });
 });

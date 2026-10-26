@@ -9,7 +9,7 @@
  * own pane zoom, and a pane picker switches which pane that is. The desktop's
  * split is kept in the store untouched; at 390 px it would be unreadable.
  */
-import { useEffect, useSyncExternalStore } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useStore } from '../stores';
 import Sidebar from '../components/Sidebar/Sidebar';
@@ -18,8 +18,10 @@ import { WorkspaceViewport } from '../components/Layout/WorkspaceViewport';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 import { getLeafPanes } from '../../shared/paneUtils';
 import { FOCUS_RING } from '../components/focusRing';
+import { IconPlus } from '../components/icons';
 import { useT } from '../hooks/useT';
-import { useWebInputState } from './WebTerminal';
+import { useWebInputState, webPtyHub } from './WebTerminal';
+import { newTerminalTarget } from './webPty';
 
 export const PHONE_QUERY = '(max-width: 640px)';
 
@@ -88,8 +90,105 @@ function InputStateChip() {
   );
 }
 
+/** How long the page waits for a new pane to show up in the poll before it stops trying to select it. */
+const NEW_TERMINAL_SELECT_MS = 15_000;
+/** The name of the workspace the first terminal starts (the self-host image uses the same). */
+const FIRST_WORKSPACE_NAME = 'main';
+
+/** Select the new pane's tab once the poll has brought it in. */
+function selectWhenListed(ptyId: string): void {
+  const trySelect = (): boolean => {
+    const s = useStore.getState();
+    for (const ws of s.workspaces) {
+      for (const leaf of getLeafPanes(ws.rootPane)) {
+        const surface = leaf.surfaces.find((x) => x.ptyId === ptyId);
+        if (!surface) continue;
+        if (s.activeWorkspaceId !== ws.id) s.setActiveWorkspace(ws.id);
+        s.setActiveSurface(leaf.id, surface.id, ws.id);
+        return true;
+      }
+    }
+    return false;
+  };
+  if (trySelect()) return;
+  const timer = setTimeout(() => unsubscribe(), NEW_TERMINAL_SELECT_MS);
+  const unsubscribe = useStore.subscribe((state, prev) => {
+    if (state.workspaces === prev.workspaces || !trySelect()) return;
+    clearTimeout(timer);
+    unsubscribe();
+  });
+}
+
+/**
+ * Starts a shell pane (`POST /api/sessions`). Shown only while this page may
+ * type: the daemon gates creating a shell on the same grant, and a button a
+ * read-only viewer cannot use would be a dead control.
+ */
+function NewTerminalButton({ variant }: { variant: 'primary' | 'icon' }) {
+  const t = useT();
+  const state = useWebInputState();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  if (state !== 'allowed') return null;
+
+  const create = async () => {
+    const hub = webPtyHub();
+    if (!hub || busy) return;
+    setBusy(true);
+    setError('');
+    const s = useStore.getState();
+    const result = await hub.createTerminal(newTerminalTarget(s.activeWorkspaceId, s.workspaces.map((w) => w.id), FIRST_WORKSPACE_NAME));
+    setBusy(false);
+    if (result.ok) selectWhenListed(result.id);
+    else setError(result.reason === 'offline' ? t('web.newTerminalOffline') : t('web.newTerminalFailed', { reason: result.reason }));
+  };
+
+  const errorLine = error && (
+    <div className="max-w-[34ch] text-xs" style={{ color: 'var(--text-sub)' }} role="alert" data-web-new-terminal-error>{error}</div>
+  );
+  if (variant === 'primary') {
+    return (
+      <div className="flex flex-col items-center gap-2">
+        <button type="button" className={`ui-btn ui-btn-primary ${FOCUS_RING}`} disabled={busy} onClick={() => { void create(); }} data-web-new-terminal>
+          <IconPlus size={14} />{t('web.newTerminal')}
+        </button>
+        {errorLine}
+      </div>
+    );
+  }
+  return (
+    <div className="absolute right-3 top-2 flex flex-col items-end gap-1" style={{ zIndex: 'var(--z-overlay)' as unknown as number }}>
+      <button
+        type="button"
+        className={`ui-icon-btn h-7 w-7 ${FOCUS_RING}`}
+        style={{ background: 'var(--bg-mantle)', border: '1px solid var(--border)' }}
+        disabled={busy}
+        onClick={() => { void create(); }}
+        title={t('web.newTerminal')}
+        aria-label={t('web.newTerminal')}
+        data-web-new-terminal
+      ><IconPlus size={15} /></button>
+      {errorLine}
+    </div>
+  );
+}
+
+/** No workspace yet (a fresh headless server): say so, and offer the first terminal. */
+function EmptyState() {
+  const t = useT();
+  return (
+    <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center" data-web-empty>
+      <div className="text-sm font-semibold" style={{ color: 'var(--text-main)' }}>{t('web.noTerminals')}</div>
+      <div className="max-w-[40ch] text-xs" style={{ color: 'var(--text-sub)' }}>{t('web.noTerminalsBody')}</div>
+      <NewTerminalButton variant="primary" />
+    </div>
+  );
+}
+
 export function WebApp() {
   const narrow = useNarrow();
+  const hasWorkspaces = useStore((s) => s.workspaces.length > 0);
+  const paneGateReady = useStore((s) => s.paneGate === 'ready');
   const sidebarVisible = useStore((s) => s.sidebarVisible);
   const activeWorkspaceId = useStore((s) => s.activeWorkspaceId);
   const activePaneId = useStore((s) => s.workspaces.find((w) => w.id === s.activeWorkspaceId)?.activePaneId ?? null);
@@ -132,6 +231,9 @@ export function WebApp() {
                 <div className="absolute inset-0 flex flex-col" data-pane-grid-wrapper>
                   <WorkspaceViewport />
                 </div>
+                {/* Until the first poll answers, "no workspaces" is not known yet. */}
+                {paneGateReady && !hasWorkspaces && <EmptyState />}
+                {hasWorkspaces && <NewTerminalButton variant="icon" />}
                 <InputStateChip />
               </div>
             </div>

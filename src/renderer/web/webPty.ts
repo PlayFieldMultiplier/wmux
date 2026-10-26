@@ -28,6 +28,8 @@
  *    inputs, capped at the alive-shell level: every pane this page streams has
  *    a live shell, and that shell owns bracketed paste (?2004).
  *  - create / dispose / promote / resize are NOT here — the shim denies them.
+ *    The page's own "New terminal" button calls `createTerminal` on the hub
+ *    directly (`POST /api/sessions`); no desktop component reaches it.
  *
  * Live streams are rationed: at most WEB_LIVE_STREAM_CAP panes hold a slot.
  * The browser allows six HTTP/1.1 connections per origin (and the daemon eight
@@ -73,6 +75,33 @@ export interface InputHalt {
   reason: string;
   /** Keystrokes (writes) that were not sent after the halt. */
   dropped: number;
+}
+
+/** Where `createTerminal` puts the new pane: an existing workspace, or a new one it names. */
+export interface NewTerminalTarget {
+  workspaceId: string;
+  workspaceName?: string;
+}
+
+/**
+ * `createTerminal`'s outcome. `id` is the new pane's session id. `reason` is
+ * the daemon's own wording when it gave one (session cap, unknown workspace),
+ * else a short code: read-only | unauthorized | offline | refused:<status>.
+ */
+export type NewTerminalResult = { ok: true; id: string } | { ok: false; reason: string };
+
+/**
+ * A new pane goes into the active workspace. With none (a fresh headless
+ * server), it starts one: the daemon lists only panes that carry a workspace
+ * id, so a pane created without one would never appear on this page.
+ * getRandomValues, not randomUUID: the page may be served over plain HTTP,
+ * where randomUUID does not exist.
+ */
+export function newTerminalTarget(activeWorkspaceId: string, workspaceIds: readonly string[], name: string): NewTerminalTarget {
+  if (activeWorkspaceId && workspaceIds.includes(activeWorkspaceId)) return { workspaceId: activeWorkspaceId };
+  const bytes = crypto.getRandomValues(new Uint8Array(12));
+  const id = `ws-${Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')}`;
+  return { workspaceId: id, workspaceName: name };
 }
 
 type DataListener = (ptyId: string, data: string, replay?: boolean) => void;
@@ -573,6 +602,29 @@ export function createWebPty(deps: WebPtyDeps) {
     /** The user acknowledged a halt: this pane's input goes out again. */
     resumeInput(ptyId: string): void {
       if (halts.delete(ptyId)) notify();
+    },
+    /**
+     * Start a shell pane (`POST /api/sessions`). The daemon gates it on the
+     * same grant as typing, so a 403 means this caller is read-only. Never
+     * retried: an unanswered create may still have made a pane.
+     */
+    async createTerminal(target: NewTerminalTarget): Promise<NewTerminalResult> {
+      let res: Response;
+      try {
+        res = await request('/api/sessions', {
+          method: 'POST',
+          headers: { ...auth, 'Content-Type': 'application/json' },
+          body: JSON.stringify(target),
+        });
+      } catch {
+        return { ok: false, reason: 'offline' };
+      }
+      const body = await res.json().then((b: unknown) => (b && typeof b === 'object' ? b as Record<string, unknown> : {}), () => ({} as Record<string, unknown>));
+      if (res.status === 201 && typeof body.id === 'string') return { ok: true, id: body.id };
+      if (res.status === 401) { deps.onUnauthorized?.(); return { ok: false, reason: 'unauthorized' }; }
+      if (res.status === 403) { setInputState('read-only'); return { ok: false, reason: 'read-only' }; }
+      if (typeof body.detail === 'string' && body.detail) return { ok: false, reason: body.detail };
+      return { ok: false, reason: `refused:${typeof body.error === 'string' && body.error ? body.error : res.status}` };
     },
     subscribe(listener: () => void): () => void {
       viewListeners.add(listener);

@@ -389,6 +389,11 @@ export const ko = {
   'web.inputPausedTooLarge': '붙여넣은 내용이 너무 커서 보낼 수 없습니다.',
   'web.inputDropped': '이후 입력 {count}건은 보내지 않았습니다.',
   'web.inputResume': '입력 재개',
+  'web.newTerminal': '새 터미널',
+  'web.newTerminalFailed': '터미널을 시작하지 못했습니다: {reason}',
+  'web.newTerminalOffline': '서버에 연결하지 못했습니다. 다시 시도하기 전에 터미널 목록을 확인하세요.',
+  'web.noTerminals': '아직 터미널이 없습니다',
+  'web.noTerminalsBody': '이 서버에서 시작한 터미널이 여기에 표시됩니다.',
 
   // Common
   'common.cancel': '취소',
