@@ -1,7 +1,7 @@
 // Must stay the first import: turns off working-directory executable lookup (Windows) before any module runs.
 import '../shared/exeSearchGuard';
 import { isInternalForkPayload } from '../shared/hooks/internalFork';
-import { releaseDaemonFiles, replaceFileAtomic, unlinkIfContent } from '../shared/daemon/daemonFiles';
+import { releaseDaemonFiles, replaceFileOrWrite, unlinkIfContent } from '../shared/daemon/daemonFiles';
 import { terminalCoreRuntime, terminalCoreSelection } from '../shared/terminalCoreSettings';
 import { collectDaemonMemoryDiagnostics } from './memoryDiagnostics';
 import { createStartupRecovery } from './startupRecovery';
@@ -1896,9 +1896,7 @@ async function acquireLock(): Promise<boolean> {
   // Write PID file (separate from lock for backward compat). Renamed into place:
   // the launcher already wrote one (claimSpawnedDaemonFiles) that other
   // starters may be reading, and a truncating write would show them it empty.
-  if (!replaceFileAtomic(PID_FILE, String(process.pid))) {
-    fs.writeFileSync(PID_FILE, String(process.pid), { encoding: 'utf-8', mode: 0o600 });
-  }
+  replaceFileOrWrite(PID_FILE, String(process.pid), (msg) => log('warn', msg));
   // Issue #546 — boot-progress marker. The window between this line and
   // `daemon-pipe` being written is the whole problem: we are alive and own the
   // lock, but we cannot answer a ping (no pipe yet), and cold recovery of a
@@ -1927,9 +1925,7 @@ async function acquireLock(): Promise<boolean> {
   try {
     // Renamed into place, like the pid file: a launcher waiting on the marker
     // reads an empty one as "boot finished".
-    if (!replaceFileAtomic(BOOT_MARKER_FILE, String(process.pid))) {
-      fs.writeFileSync(BOOT_MARKER_FILE, String(process.pid), { encoding: 'utf-8', mode: 0o600 });
-    }
+    replaceFileOrWrite(BOOT_MARKER_FILE, String(process.pid), (msg) => log('warn', msg));
   } catch (err) {
     // Non-fatal: without the marker the launcher just falls back to the old
     // escalated-reping-then-kill behavior. Never block boot on it.
@@ -10370,7 +10366,9 @@ async function main(): Promise<void> {
   const activePipeName = pipeServer.getActivePipeName();
   const pipeNameFile = path.join(wmuxDir, 'daemon-pipe');
   try {
-    fs.writeFileSync(pipeNameFile, activePipeName, { encoding: 'utf-8', mode: 0o600 });
+    // Renamed into place: a client that reads it empty falls back to the
+    // default pipe name, which is not ours when we bound a fallback pipe.
+    replaceFileOrWrite(pipeNameFile, activePipeName, (msg) => log('warn', msg));
     writtenPipeName = activePipeName;
   } catch (err) {
     log('warn', 'Failed to write pipe name file:', err);

@@ -873,7 +873,7 @@ function spawnDaemon(deps: DaemonLauncherDeps): Promise<number> {
       dispose(): void;
     }) => {
       const wmuxDir = getWmuxDir();
-      if (!claimSpawnedDaemonFiles(wmuxDir, proc.pid)) {
+      if (!claimSpawnedDaemonFiles(wmuxDir, proc.pid, deps.warn)) {
         (deps.warn ?? console.warn)(
           `[launcher] daemon.pid not written for PID ${proc.pid}: another pid file appeared after the stale cleanup, or the write failed`,
         );
@@ -1060,10 +1060,10 @@ function spawnDaemon(deps: DaemonLauncherDeps): Promise<number> {
  *
  * Best effort: returns whether the pid file names `pid`, never throws.
  */
-export function claimSpawnedDaemonFiles(wmuxDir: string, pid: number): boolean {
+export function claimSpawnedDaemonFiles(wmuxDir: string, pid: number, warn: (msg: string) => void = console.warn): boolean {
   const pidFile = path.join(wmuxDir, 'daemon.pid');
   const value = String(pid);
-  if (!createFileExclusive(pidFile, value)) {
+  if (!createFileExclusive(pidFile, value, warn)) {
     // A launchd job's pid is known only after launchctl reports it, by which
     // time the daemon may have written both files itself.
     try { return fs.readFileSync(pidFile, 'utf-8').trim() === value; } catch { return false; }

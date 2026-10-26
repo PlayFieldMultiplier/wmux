@@ -24,14 +24,24 @@ function tempNameFor(file: string): string {
   return `${file}.${process.pid}.${randomUUID()}.tmp`;
 }
 
+type Warn = (msg: string) => void;
+
+function errorCode(err: unknown): string {
+  return (err as NodeJS.ErrnoException | null)?.code ?? String(err);
+}
+
 /**
  * Create `file` holding `content` only if it does not exist. The content is
  * written to a temp file first and hard-linked into place, so no reader ever
- * sees the file empty. Where hard links are unavailable it falls back to an
- * O_EXCL write. Returns false when the file already exists or nothing could be
+ * sees the file empty. Where the temp file or the hard link fails for any
+ * reason but EEXIST, it reports that through `warn` and falls back to an O_EXCL
+ * write: still exclusive, but a reader can then see the file empty for a
+ * moment. Returns false when the file already exists or nothing could be
  * written. Never throws.
  */
-export function createFileExclusive(file: string, content: string): boolean {
+export function createFileExclusive(file: string, content: string, warn: Warn = console.warn): boolean {
+  const fallback = (what: string, err: unknown): void =>
+    warn(`[daemon-files] ${what} for ${file} failed (${errorCode(err)}); creating it with a plain exclusive write, which a reader can see empty`);
   const tmp = tempNameFor(file);
   try {
     fs.writeFileSync(tmp, content, { encoding: 'utf-8', mode: 0o600 });
@@ -40,8 +50,11 @@ export function createFileExclusive(file: string, content: string): boolean {
       return true;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'EEXIST') return false;
+      fallback('hard link', err);
     }
-  } catch { /* temp file not writable: try the direct write below */ } finally {
+  } catch (err) {
+    fallback('temp file', err);
+  } finally {
     try { fs.unlinkSync(tmp); } catch { /* never created */ }
   }
   try {
@@ -52,18 +65,34 @@ export function createFileExclusive(file: string, content: string): boolean {
   }
 }
 
-/** Replace `file` with `content` by renaming a temp file over it, so a reader
- *  sees the old or the new content, never an empty file. Never throws. */
-export function replaceFileAtomic(file: string, content: string): boolean {
+/** Rename a temp file holding `content` over `file`. Returns the error that
+ *  stopped it, or null once it is in place. Never throws. */
+function renameIntoPlace(file: string, content: string): unknown {
   const tmp = tempNameFor(file);
   try {
     fs.writeFileSync(tmp, content, { encoding: 'utf-8', mode: 0o600 });
     fs.renameSync(tmp, file);
-    return true;
-  } catch {
+    return null;
+  } catch (err) {
     try { fs.unlinkSync(tmp); } catch { /* renamed or never created */ }
-    return false;
+    return err;
   }
+}
+
+/** Replace `file` with `content` by renaming a temp file over it, so a reader
+ *  sees the old or the new content, never an empty file. Never throws. */
+export function replaceFileAtomic(file: string, content: string): boolean {
+  return renameIntoPlace(file, content) === null;
+}
+
+/** replaceFileAtomic, else a plain in-place write, reported through `warn`
+ *  because a reader can then see the file empty. Throws only when that write
+ *  fails too. */
+export function replaceFileOrWrite(file: string, content: string, warn: Warn): void {
+  const err = renameIntoPlace(file, content);
+  if (err === null) return;
+  warn(`[daemon-files] atomic replace of ${file} failed (${errorCode(err)}); writing it in place, which a reader can see empty`);
+  fs.writeFileSync(file, content, { encoding: 'utf-8', mode: 0o600 });
 }
 
 /**
