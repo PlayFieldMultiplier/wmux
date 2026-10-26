@@ -5,7 +5,6 @@
 // workspace is, and when its worker launched, come from a real launch record
 // (workerSlots.ts, #2411).
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { holderInputsRevision } from '../holderInputs';
@@ -16,6 +15,8 @@ import { openBotWorkers } from '../openBotWorkers';
 import { FanOutGuards, recordFanoutTaskPane, setFanOutGuardsForTests, stampFanoutTaskPane, taskOfWorkspace } from '../../worktask/fanoutGuards';
 import { WORKER_SLOTS_FILENAME, WorkerSlots, setReclaimedPaneSource, setWorkerSlotsForTests, taskOfPane } from '../workerSlots';
 import { STOPPED_BY_OWNER } from '../factoryStop';
+import { trackedTempDir } from '../../../test-utils/trackedTempDir';
+import { workerSlotStores } from '../../../test-utils/workerSlotStores';
 
 const NOW = 10_000_000_000;
 const DAY = 24 * 3_600_000;
@@ -201,8 +202,10 @@ interface Rig {
   build: () => HolderSnapshot;
 }
 
+const slotStores = workerSlotStores();
+
 function rig(over: Partial<HolderSnapshot> = {}): Rig {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-holders-'));
+  const dir = trackedTempDir('wmux-holders-');
   const guards = new FanOutGuards({ dir, now: () => NOW, openWorkspaceIds: () => [], ledgerTaskOwner: () => null, ledgerBotTask: () => null });
   setFanOutGuardsForTests(guards);
   const clock = { now: NOW };
@@ -210,6 +213,7 @@ function rig(over: Partial<HolderSnapshot> = {}): Rig {
   const open = (): WorkerSlots => {
     const s = new WorkerSlots(file, () => r.snap.rows ?? [], () => undefined, () => clock.now);
     s.load();
+    slotStores.track(s);
     setWorkerSlotsForTests(s);
     return s;
   };
@@ -276,6 +280,7 @@ afterEach(() => {
   setHolderSource(null);
   setFanOutGuardsForTests(null);
   setWorkerSlotsForTests(null);
+  slotStores.settle();
 });
 
 describe('the four caps agree on the paths that used to split them (#2393)', () => {

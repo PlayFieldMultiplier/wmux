@@ -8,20 +8,33 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { ComputerError } from '../../../shared/computer/errors';
 import { HelperProcess } from '../HelperProcess';
 import { deliberateSleep } from '../../../test-utils/waitFor';
+import { trackedTempDir } from '../../../test-utils/trackedTempDir';
 
 const TARGET = { pid: 1, windowId: 'w1' };
 const FAKE = path.join(__dirname, 'fixtures', 'fakeHelper.mjs');
 
 const helpers: HelperProcess[] = [];
+// The helpers' children. Each log dir (trackedTempDir) is removed after the
+// afterEach below has seen every child that may still append to it exit.
+const children: ChildProcessWithoutNullStreams[] = [];
+/** How long a child ended after its case gets to report its exit. */
+const CHILD_EXIT_WAIT_MS = 10_000;
 
 function makeHelper(mode: string, extra: Partial<ConstructorParameters<typeof HelperProcess>[0]> = {}) {
-  const logFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-helper-')), 'requests.log');
+  const logDir = trackedTempDir('wmux-helper-');
+  const logFile = path.join(logDir, 'requests.log');
+  const spawnChild = extra.spawn ?? ((cmd, args) => spawn(cmd, [...args], { stdio: 'pipe', windowsHide: true }));
   const helper = new HelperProcess({
     command: process.execPath,
     args: [FAKE, mode, logFile],
     helloTimeoutMs: 2_000,
     timeoutFor: () => 1_000,
     ...extra,
+    spawn: (cmd, args) => {
+      const child = spawnChild(cmd, args);
+      children.push(child);
+      return child;
+    },
   });
   helpers.push(helper);
   // The helper appends while these poll, so a read can land between the
@@ -53,8 +66,21 @@ async function waitFor(check: () => boolean, ms = 3_000): Promise<boolean> {
   return check();
 }
 
-afterEach(() => {
+afterEach(async () => {
   for (const h of helpers.splice(0)) h.dispose();
+  // dispose() ends a child only after a grace, and the case is done with them:
+  // end any still alive now, and wait (bounded) until each has exited.
+  const stuck: string[] = [];
+  await Promise.all(children.splice(0).map(async (child) => {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    const exit = new Promise<boolean>((resolve) => { child.once('exit', () => resolve(true)); });
+    child.kill();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const exited = await Promise.race([exit, new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), CHILD_EXIT_WAIT_MS); })]);
+    clearTimeout(timer);
+    if (!exited) stuck.push(`pid ${child.pid} (${child.spawnargs.join(' ')})`);
+  }));
+  if (stuck.length > 0) throw new Error(`helper children still running ${CHILD_EXIT_WAIT_MS} ms after their kill: ${stuck.join('; ')}`);
 });
 
 describe('HelperProcess', () => {
