@@ -240,6 +240,41 @@ describe('quiet approval recovery reads only the current interactive viewport', 
     }
   });
 
+  describe('a question drawn after an identity change is kept for the next owner', () => {
+    const dialogs = [
+      ['claude', claude.screen.join('\r\n'), claude.screen],
+      ['codex', 'Would you like to run the following command?\r\n', codex.screen],
+      ['agy', TRUST.join('\r\n'), TRUST],
+      ['opencode', openCode.screen.join('\r\n'), openCode.screen],
+    ] as const;
+
+    it.each(dialogs)('a launch (OSC 133 C), then a %s dialog, then its seed', async (slug, output, rows) => {
+      const det = new AgentDetector({ launchBoundaries: true });
+      const events = vi.fn();
+      det.onEvent(events);
+      det.feed('\u001b]133;C\u0007');
+      det.feed(output);
+      det.seedTrustedIdentity(slug, det.getIdentityEpoch());
+      expect(await det.revalidateApprovalScreen(async () => frame(rows))).toBe(true);
+      expect(events.mock.calls.map(([event]) => event.status)).toEqual(['awaiting_input']);
+    });
+
+    it.each([
+      ['agy after a cleared identity', 'codex', 'agy', TRUST.join('\r\n'), TRUST],
+      ['claude after codex died', 'codex', 'claude', claude.screen.join('\r\n'), claude.screen],
+    ] as const)('%s', async (_label, previous, slug, output, rows) => {
+      const det = new AgentDetector();
+      const events = vi.fn();
+      det.onEvent(events);
+      det.seedTrustedIdentity(previous, det.getIdentityEpoch());
+      det.clearTrustedIdentity();
+      det.feed(output);
+      det.seedTrustedIdentity(slug, det.getIdentityEpoch());
+      expect(await det.revalidateApprovalScreen(async () => frame(rows))).toBe(true);
+      expect(events.mock.calls.map(([event]) => event.status)).toEqual(['awaiting_input']);
+    });
+  });
+
   it('recovers a live edit dialog whose body exceeds 24 nonblank viewport rows', async () => {
     const rows = [CODEX_EDIT[0], ...Array.from({ length: 32 }, (_, i) => `+ added line ${i}`), ...CODEX_EDIT.slice(1)];
     const { det, events } = setup('codex', rows.join('\r\n'));

@@ -1105,7 +1105,8 @@ export class AgentDetector {
   // finishing row followed it, since the screen was last invalidated.
   private approvalArmed = new Set<AgentSlug>();
   private approvalReadySlugs = new Set<AgentSlug>();
-  // An identity change kept the approval evidence for the next seed to judge.
+  // An identity change kept the approval evidence, and no question has been
+  // drawn since: the next seed drops it unless its profile has approvalReady.
   private approvalEvidenceRetired = false;
   private codexLimitScanner = new CodexUsageLimitLineScanner();
   private lineBuffer = '';
@@ -1468,7 +1469,12 @@ export class AgentDetector {
     for (const match of cleanProbe.matchAll(hint)) {
       // Only newly drawn text refreshes freshness. Retaining an old question
       // in the tail across a title update must not make it recent again.
-      if (match.index + match[0].length > previousLength) this.approvalHintAt = Date.now();
+      if (match.index + match[0].length > previousLength) {
+        this.approvalHintAt = Date.now();
+        // A question drawn after an identity change belongs to whoever owns
+        // the pane next: the next seed keeps it, as before the change.
+        this.approvalEvidenceRetired = false;
+      }
     }
     // Readiness reads only the newly drawn text, with room for a match that
     // began just before it; positions below are relative to `recentAt`.
