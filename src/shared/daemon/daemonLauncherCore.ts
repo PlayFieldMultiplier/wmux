@@ -14,7 +14,14 @@ import {
   sweepLeftoverDaemonPlists,
   withDaemonStartLock,
 } from './launchdDaemonJob';
-import { classifyTasklistOutput, classifyKillOutcome, type ProcessLiveness } from '../processLiveness';
+import {
+  classifyTasklistOutput,
+  classifyKillOutcome,
+  livenessFromExitState,
+  type ProcessExitState,
+  type ProcessLiveness,
+} from '../processLiveness';
+import { tryProcessHandleApi, type ProcessHandleApi } from '../../main/pty/winSnapshotNative';
 
 export interface DaemonInfo {
   /**
@@ -126,6 +133,10 @@ export type { ProcessLiveness };
  */
 export function checkProcessLiveness(pid: number): ProcessLiveness {
   if (process.platform === 'win32') {
+    // A terminated process stays listed by tasklist until its last handle
+    // closes (#2774), so the process handle answers first.
+    const fromHandle = livenessFromExitState(processExitState(pid));
+    if (fromHandle !== 'unknown') return fromHandle;
     let stdout: string | null = null;
     try {
       const systemRoot = process.env.SystemRoot || 'C:\\Windows';
@@ -143,6 +154,27 @@ export function checkProcessLiveness(pid: number): ProcessLiveness {
     return classifyKillOutcome(undefined);
   } catch (err: unknown) {
     return classifyKillOutcome((err as NodeJS.ErrnoException | undefined)?.code);
+  }
+}
+
+/**
+ * Whether `pid` has exited, read through a process handle (Windows only; the
+ * API is null elsewhere, which reads `unknown`). Image and command-line
+ * lookups return null both when a probe is blocked and when the process is
+ * gone, so a caller asks this before treating a null lookup as "alive but
+ * unverifiable" (#2774). Never throws; the handle is always closed.
+ */
+export function processExitState(pid: number, api: ProcessHandleApi | null = tryProcessHandleApi()): ProcessExitState {
+  if (!api) return 'unknown';
+  const opened = api.open(pid);
+  if ('gone' in opened) return 'exited';
+  if ('failure' in opened) return 'unknown';
+  try {
+    const exited = api.hasExited(opened.handle);
+    if (exited === null) return 'unknown';
+    return exited ? 'exited' : 'running';
+  } finally {
+    api.close(opened.handle);
   }
 }
 
@@ -1303,6 +1335,18 @@ async function ensureDaemonUnlocked(deps: DaemonLauncherDeps): Promise<DaemonInf
     //       duplicate sessions. Throw so the respawn controller surfaces
     //       the failure via its budget + IPC, instead of silently
     //       corrupting state.
+    //
+    // A daemon that was terminated just before this start can still pass the
+    // liveness check and then vanish from the image / command-line lookups
+    // (#2774). Its process handle says it has exited: that is a dead daemon,
+    // not case (c), so the stale cleanup below runs. Asked again on every
+    // null lookup, since the process can finish exiting during one.
+    const recordedPid = existingPid;
+    const hasExited = (): boolean => {
+      if (processExitState(recordedPid) !== 'exited') return false;
+      (deps.log ?? console.log)(`[launcher] daemon.pid=${recordedPid} names a process that has exited — treating it as stale`);
+      return true;
+    };
     const expectedImage = path.basename(process.execPath);
     if (existingPid === process.pid) {
       // (b) PID file points back at ourselves — the real daemon must be
@@ -1310,9 +1354,13 @@ async function ensureDaemonUnlocked(deps: DaemonLauncherDeps): Promise<DaemonInf
       (deps.warn ?? console.warn)(
         `[launcher] daemon.pid=${existingPid} equals current process pid — stale, cleaning + spawning fresh`,
       );
+    } else if (hasExited()) {
+      // Exited after the liveness check; nothing to verify or kill.
     } else {
       const imageName = getProcessImageName(existingPid);
-      if (imageName === null) {
+      if (imageName === null && hasExited()) {
+        // Exited during the image lookup.
+      } else if (imageName === null) {
         // (c) Could not even read the image (AV blocked tasklist.exe / ps /
         // WMI). Before popping the recovery dialog, give the daemon the SAME
         // escalated re-ping the verified branch uses: a daemon that answers a
@@ -1364,7 +1412,9 @@ async function ensureDaemonUnlocked(deps: DaemonLauncherDeps): Promise<DaemonInf
           );
         }
         const argv = getProcessArgv(existingPid);
-        if (argv === null) {
+        if (argv === null && hasExited()) {
+          // Exited during the command-line lookup.
+        } else if (argv === null) {
           // (c) Lookup failed — same recovery dance as the image path, and the
           // same escalated re-ping FIRST. The image already matches wmux here,
           // so a daemon that answers a ping is almost certainly the real one:
@@ -1747,10 +1797,13 @@ export function killVerifiedDaemonPidOutcome(
     // is the host-independent gate. Only strict mode reads the image, and only
     // to refuse an indeterminate lookup; skipping it in relaxed mode saves
     // before-quit one tasklist/ps call (up to 3 s) whose result was unused.
-    if (opts.definitiveOnly && getProcessImageName(pid) === null) return 'unverifiable';
+    // A null lookup can also mean the process exited after the check above
+    // (#2774); its handle tells the two apart.
+    const exitedOrUnverifiable = (): DaemonKillOutcome => (processExitState(pid) === 'exited' ? 'dead' : 'unverifiable');
+    if (opts.definitiveOnly && getProcessImageName(pid) === null) return exitedOrUnverifiable();
     const argv = getProcessArgv(pid);
     // Missing or mismatched script identity refuses, regardless of image.
-    if (argv === null) return 'unverifiable';
+    if (argv === null) return exitedOrUnverifiable();
     if (!argvIdentifiesDaemonScript(argv, opts.scriptCandidates ?? [])) return 'not-daemon';
   } catch {
     return 'unverifiable';

@@ -14,6 +14,21 @@
 export type ProcessLiveness = 'alive' | 'dead' | 'unknown';
 
 /**
+ * What a Windows process handle says about a pid. `exited`: no process has the
+ * pid, or the one that has it has finished exiting. A terminated process can
+ * stay in `tasklist` while its last handles close, so only the handle tells
+ * "exiting" apart from "running". `unknown`: the handle could not be read.
+ */
+export type ProcessExitState = 'exited' | 'running' | 'unknown';
+
+/** Liveness from a {@link ProcessExitState}; `unknown` leaves the answer to tasklist. */
+export function livenessFromExitState(state: ProcessExitState): ProcessLiveness {
+  if (state === 'exited') return 'dead';
+  if (state === 'running') return 'alive';
+  return 'unknown';
+}
+
+/**
  * Classify a Windows `tasklist` probe result. `stdout === null` means the probe
  * itself failed (timeout under Defender realtime scan, CPU/WMI pressure, exec
  * error) — that is `unknown`, NOT `dead`. Only an authoritative listing (exec

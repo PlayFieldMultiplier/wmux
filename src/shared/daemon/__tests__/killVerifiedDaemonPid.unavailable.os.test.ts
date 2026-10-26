@@ -1,18 +1,42 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
 
-const probes = vi.hoisted(() => ({ image: '' as string | null, argv: null as string | null, imageReads: 0 }));
+const probes = vi.hoisted(() => ({
+  image: '' as string | null,
+  argv: null as string | null,
+  imageReads: 0,
+  /** The process finishes exiting during the next image / command-line lookup (#2774). */
+  exitDuring: null as 'image' | 'argv' | null,
+  exited: false,
+}));
 function readImage(): string {
   probes.imageReads++;
-  if (probes.image === null) throw new Error('Process image lookup unavailable');
+  if (probes.exitDuring === 'image') {
+    probes.exitDuring = null;
+    probes.exited = true;
+  }
+  if (probes.image === null || probes.exited) throw new Error('Process image lookup unavailable');
   return probes.image;
 }
+// The process handle (Windows) reads 424242 as running until a lookup sees it exit.
+vi.mock('../../../main/pty/winSnapshotNative', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../main/pty/winSnapshotNative')>()),
+  tryProcessHandleApi: () => ({
+    open: (pid: number) => (pid === 424242 ? { handle: {}, createdAt: 1n, canTerminate: true } : { gone: true }),
+    hasExited: () => probes.exited,
+    close: () => undefined,
+  }),
+}));
 vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('child_process')>();
   return { ...actual, execFileSync: vi.fn((command: string, args: string[]) => {
     if (command.endsWith('tasklist.exe')) return `"${readImage()}","424242","Console","1","1 K"`;
     if (args.includes('comm=')) return readImage();
-    if (probes.argv === null) throw new Error('Process command-line lookup unavailable');
+    if (probes.exitDuring === 'argv') {
+      probes.exitDuring = null;
+      probes.exited = true;
+    }
+    if (probes.argv === null || probes.exited) throw new Error('Process command-line lookup unavailable');
     return probes.argv;
   }) };
 });
@@ -21,7 +45,11 @@ vi.mock('fs', async (importOriginal) => {
   return { ...actual, readFileSync: vi.fn((file: string, ...args: unknown[]) => {
     if (file === '/proc/424242/comm') return readImage();
     if (file === '/proc/424242/cmdline') {
-      if (probes.argv === null) throw new Error('Process command-line lookup unavailable');
+      if (probes.exitDuring === 'argv') {
+        probes.exitDuring = null;
+        probes.exited = true;
+      }
+      if (probes.argv === null || probes.exited) throw new Error('Process command-line lookup unavailable');
       return probes.argv;
     }
     return Reflect.apply(actual.readFileSync, actual, [file, ...args]);
@@ -35,6 +63,8 @@ describe('killVerifiedDaemonPid — unavailable command line', () => {
     probes.image = path.basename(process.execPath);
     probes.argv = null;
     probes.imageReads = 0;
+    probes.exitDuring = null;
+    probes.exited = false;
     // No real PID is signalled by these failure-injection tests.
     vi.spyOn(process, 'kill').mockReturnValue(true);
   });
@@ -111,6 +141,22 @@ describe('killVerifiedDaemonPid — unavailable command line', () => {
     probes.argv = verifiedArgv();
     expect(killVerifiedDaemonPidOutcome(424242, { definitiveOnly: false })).toBe('killed');
     expect(process.kill).toHaveBeenCalledWith(424242, 'SIGKILL');
+  });
+
+  // #2774: a lookup that fails because the process just exited is a dead
+  // daemon, not an unverifiable live one.
+  it('reports a process that exits during the image lookup as dead', () => {
+    probes.argv = verifiedArgv();
+    probes.exitDuring = 'image';
+    expect(killVerifiedDaemonPidOutcome(424242, { definitiveOnly: true })).toBe('dead');
+    expect(process.kill).not.toHaveBeenCalledWith(424242, 'SIGKILL');
+  });
+
+  it.each([false, true])('reports a process that exits during the command-line lookup as dead (definitiveOnly=%s)', (definitiveOnly) => {
+    probes.argv = verifiedArgv();
+    probes.exitDuring = 'argv';
+    expect(killVerifiedDaemonPidOutcome(424242, { definitiveOnly })).toBe('dead');
+    expect(process.kill).not.toHaveBeenCalledWith(424242, 'SIGKILL');
   });
 
   it('reports a verified kill whose signal throws as failed', () => {
