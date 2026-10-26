@@ -181,7 +181,8 @@ reads as a second, differently tinted panel.
   range stops at 90% (`GLASS_MAX_COVERAGE`), above which the glass no longer
   reads as glass: a theme where any of the five tiers still misses its floor
   at 90% is opaque on Windows as if glass were Off (material none, a
-  solid caption strip), while the setting keeps the user's level. Glass
+  solid caption strip), while the setting keeps the user's level, stays
+  changeable and says in its description why the theme is opaque. Glass
   draws a theme's own text tiers and row fills on both platforms, exactly as
   macOS does: no platform rule restates a text colour, and Windows has no
   glass-only lift. Nothing is pinned per theme, so a token change moves a
