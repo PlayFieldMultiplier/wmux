@@ -65,6 +65,7 @@
 
 import { agentRow, type AgentDialogFamily } from '../../shared/agentIdentity';
 import { ESCAPE_WIN32 } from '../../shared/win32InputKeys';
+import { CODEX_TRUST_HEADLINE, TRUST_HEADLINE } from '../../shared/folderTrustWording';
 
 /** The two byte sequences for one agent. Single presses — never a CR chaser. */
 export interface ApprovalKeystrokes {
@@ -156,6 +157,71 @@ const CURSOR_OPTION_ROW =
  */
 export function looksLikeApprovalPrompt(rows: readonly string[]): boolean {
   return rows.some((row) => CURSOR_OPTION_ROW.test(row));
+}
+
+/** The choices that grant trust, and those that decline it or leave. */
+const TRUST_GRANTS = 'Yes, I trust this folder|Yes, proceed|Trust and continue|Yes, continue';
+const TRUST_DECLINES = 'No, exit|No, quit|Quit|Back to [A-Za-z ]+';
+/** A choice row: optional selection cursor and digit, then the label alone. */
+const choiceRow = (labels: string): RegExp => new RegExp(`^(?:[❯›>»]\\s*)?(?:\\d{1,2}[.)]\\s*)?(?:${labels})$`, 'i');
+const TRUST_GRANT_CHOICE = choiceRow(TRUST_GRANTS);
+const TRUST_CHOICE = choiceRow(`${TRUST_GRANTS}|${TRUST_DECLINES}`);
+/** The key hint under the choices ("Enter to confirm · Esc to cancel", "enter continue · esc back"). */
+const TRUST_FOOTER = /^(?:press\s+)?(?:↑\/↓|↑↓)?.{0,24}\benter\b.{0,30}\b(?:cancel|back|continue|confirm)$/i;
+const SELECTION_CURSOR = /^[❯›>»]\s*\S/;
+/** Where a choice starts even when a narrow pane wrapped its label: the cursor, or its digit. */
+const CHOICE_START = /^(?:[❯›>»]\s*\S|\d{1,2}[.)]\s)/;
+const isTrustDialogRow = (row: string): boolean => TRUST_CHOICE.test(row) || TRUST_FOOTER.test(row);
+/** Rows a wrapped question may span: one or two at 60 columns (measured), four at about 14; six leaves room. */
+const TRUST_QUESTION_ROWS = 6;
+
+/**
+ * Is an agent's folder-trust dialog the live dialog at the bottom of the
+ * screen? Answering it decides whether the agent may read, edit and run files
+ * in that folder, so it is left to the person in every policy.
+ *
+ * Recognised by its own shape rather than by a loosened option-row pattern,
+ * so an ordinary unnumbered menu (a theme picker, a warning with "❯ No, exit")
+ * stays answerable:
+ *   - a trust question, in the wordings the first-run screens share
+ *     (shared/agentFirstRun), joined over up to six rows for a pane narrow
+ *     enough to wrap it;
+ *   - below it, the choice that grants trust and exactly one row under the
+ *     selection cursor, numbered or not;
+ *   - after the first choice, only choices and the key hint, each rejoined
+ *     when a narrow pane wrapped it: a dialog with anything else under it
+ *     (agent output, a shell prompt) has already been answered.
+ */
+export function looksLikeFolderTrustDialog(rows: readonly string[]): boolean {
+  const tail = rows
+    .map((row) => row.replace(/^[\s│║┃]+|[\s│║┃]+$/g, '').replace(/\s+/g, ' '))
+    .filter(Boolean);
+  for (let q = tail.length - 1; q >= 0; q--) {
+    const question = tail.slice(q, q + TRUST_QUESTION_ROWS).join(' ');
+    if (!TRUST_HEADLINE.test(question) && !CODEX_TRUST_HEADLINE.test(question)) continue;
+    const below = tail.slice(q + 1);
+    const first = below.findIndex((row) => TRUST_CHOICE.test(row) || CHOICE_START.test(row));
+    if (first < 0) return false;
+    // Rejoin what a narrow pane wrapped: "Yes, I trust this" + "folder",
+    // "› 1. Trust and" + "continue", "Enter to confirm · Esc to" + "cancel".
+    const block: string[] = [];
+    for (const row of below.slice(first)) {
+      const last = block.at(-1);
+      if (last !== undefined && !isTrustDialogRow(row) && isTrustDialogRow(`${last} ${row}`)) {
+        block[block.length - 1] = `${last} ${row}`;
+      } else if (last !== undefined && !isTrustDialogRow(last)) {
+        // A row cut short keeps taking the rows under it until it reads whole.
+        block[block.length - 1] = `${last} ${row}`;
+      } else {
+        block.push(row);
+      }
+    }
+    const choices = block.filter((row) => TRUST_CHOICE.test(row));
+    return choices.some((row) => TRUST_GRANT_CHOICE.test(row))
+      && choices.filter((row) => SELECTION_CURSOR.test(row)).length === 1
+      && block.every(isTrustDialogRow);
+  }
+  return false;
 }
 
 /**
