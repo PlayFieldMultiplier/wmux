@@ -616,6 +616,13 @@ const AGENT_PATTERNS: AgentPattern[] = [
  *  (src/shared/agentIdentity.ts) must name exactly these; a test holds them
  *  together. */
 export const DETECTOR_PROFILE_SLUGS: readonly AgentSlug[] = AGENT_PATTERNS.map((ap) => ap.slug);
+/** The profile table by slug. */
+const PROFILE_BY_SLUG = new Map(AGENT_PATTERNS.map((ap) => [ap.slug, ap]));
+/**
+ * How far before the newly drawn text an approvalReady match may begin: a
+ * footer a narrow pane wraps carries that row's padding.
+ */
+const READY_MATCH_REACH = 512;
 /** The profiles with an approvalReady question, its patterns compiled global once. */
 const READY_PROFILES = AGENT_PATTERNS.flatMap((ap) => (ap.approvalReady
   ? [{ slug: ap.slug, question: globalRegExp(ap.approvalReady.question), end: globalRegExp(ap.approvalReady.end) }]
@@ -1098,8 +1105,8 @@ export class AgentDetector {
   // finishing row followed it, since the screen was last invalidated.
   private approvalArmed = new Set<AgentSlug>();
   private approvalReadySlugs = new Set<AgentSlug>();
-  // The approval evidence an identity change retired (retireApprovalScreen).
-  private retiredApprovalHint: { tail: string; at: number | null; armed: Set<AgentSlug>; ready: Set<AgentSlug> } | null = null;
+  // An identity change kept the approval evidence for the next seed to judge.
+  private approvalEvidenceRetired = false;
   private codexLimitScanner = new CodexUsageLimitLineScanner();
   private lineBuffer = '';
   /** Incomplete OSC 133 boundary, bounded to a short shell payload. */
@@ -1249,7 +1256,7 @@ export class AgentDetector {
    */
   seedTrustedIdentity(slug: AgentSlug, expectedEpoch: number): boolean {
     if (expectedEpoch !== this.identityEpoch) return false;
-    const profile = AGENT_PATTERNS.find((candidate) => candidate.slug === slug);
+    const profile = PROFILE_BY_SLUG.get(slug);
     if (!profile) return false;
     if (this.trustedAgent === slug && !this.shellPromptSinceOwner) return true;
 
@@ -1262,17 +1269,10 @@ export class AgentDetector {
       this.resetLaunchEvidence();
       this.lastScreenAgent = null;
     }
-    // A grid-only question this owner drew before its seed outlives the
-    // previous owner's retirement; revalidateApprovalScreen still reads it
-    // only once it is ready.
-    const retired = this.retiredApprovalHint;
-    this.retiredApprovalHint = null;
-    if (retired && profile.approvalReady) {
-      this.approvalHintTail = retired.tail;
-      this.approvalHintAt = retired.at;
-      this.approvalArmed = retired.armed;
-      this.approvalReadySlugs = retired.ready;
-    }
+    // Evidence an identity change kept: a grid-only question this owner drew
+    // before its seed is still read once ready; any other profile drops it.
+    if (this.approvalEvidenceRetired && !profile.approvalReady) this.invalidateApprovalScreen();
+    this.approvalEvidenceRetired = false;
     this.trustedAgent = slug;
     this.lastAgent = profile.agent;
     this.activeAgents.add(profile.agent);
@@ -1301,14 +1301,19 @@ export class AgentDetector {
     this.approvalRecheckRequested = false;
     this.approvalArmed = new Set();
     this.approvalReadySlugs = new Set();
-    this.retiredApprovalHint = null;
+    this.approvalEvidenceRetired = false;
   }
 
-  /** An identity change: invalidate, but keep the evidence for the next seed to judge. */
+  /**
+   * An identity change: no read in flight may land and the recheck is reset,
+   * but the evidence (and output drawn before the next seed) stays for that
+   * seed to judge.
+   */
   private retireApprovalScreen(): void {
-    const retired = { tail: this.approvalHintTail, at: this.approvalHintAt, armed: this.approvalArmed, ready: this.approvalReadySlugs };
-    this.invalidateApprovalScreen();
-    this.retiredApprovalHint = retired;
+    this.approvalScreenGeneration++;
+    this.approvalRecheckEpoch = null;
+    this.approvalRecheckRequested = false;
+    this.approvalEvidenceRetired = true;
   }
 
   /**
@@ -1320,7 +1325,7 @@ export class AgentDetector {
    */
   async revalidateApprovalScreen(read: () => Promise<ApprovalScreenSnapshot | null>): Promise<boolean> {
     const owner = this.trustedAgent;
-    const profile = AGENT_PATTERNS.find((candidate) => candidate.slug === owner);
+    const profile = owner === null ? undefined : PROFILE_BY_SLUG.get(owner);
     const epoch = this.identityEpoch;
     const generation = this.approvalScreenGeneration;
     const fresh = (): boolean => this.approvalHintAt !== null
@@ -1466,18 +1471,23 @@ export class AgentDetector {
       // in the tail across a title update must not make it recent again.
       if (match.index + match[0].length > previousLength) this.approvalHintAt = Date.now();
     }
+    // Readiness reads only the newly drawn text, with room for a match that
+    // began just before it; positions below are relative to `recentAt`.
+    const recentAt = Math.max(0, previousLength - READY_MATCH_REACH);
+    const recent = cleanProbe.slice(recentAt);
+    const drawnAfter = previousLength - recentAt;
     for (const { slug, question, end } of READY_PROFILES) {
       // An end counts only after a question: from 0 once one is armed.
       let from = this.approvalArmed.has(slug) ? 0 : -1;
-      for (const match of cleanProbe.matchAll(question)) {
-        if (match.index + match[0].length <= previousLength) continue;
+      for (const match of recent.matchAll(question)) {
+        if (match.index + match[0].length <= drawnAfter) continue;
         from = match.index + match[0].length;
         this.approvalArmed.add(slug);
         this.approvalReadySlugs.delete(slug);
       }
       if (from < 0) continue;
-      for (const match of cleanProbe.matchAll(end)) {
-        if (match.index < from || match.index + match[0].length <= previousLength) continue;
+      for (const match of recent.matchAll(end)) {
+        if (match.index < from || match.index + match[0].length <= drawnAfter) continue;
         this.approvalReadySlugs.add(slug);
         if (slug === this.trustedAgent && this.approvalRecheckEpoch !== this.identityEpoch) this.approvalRecheckRequested = true;
       }

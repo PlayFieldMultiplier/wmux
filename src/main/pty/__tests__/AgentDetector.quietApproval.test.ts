@@ -153,14 +153,24 @@ describe('quiet approval recovery reads only the current interactive viewport', 
     expect(det.takeApprovalRecheckRequest()).toBe(false);
   });
 
-  it.each(['the bridge ends it first', 'the seed replaces it'] as const)(
+  it.each(['the bridge ends it first', 'the seed replaces it', 'the bridge ends it before the footer'] as const)(
     'reads Pi\'s selector drawn while a previous agent still owned the pane (%s)', async (how) => {
       const det = new AgentDetector();
       const events = vi.fn();
       det.onEvent(events);
       det.seedTrustedIdentity('claude', det.getIdentityEpoch());
-      det.feed(piCapture.chunks.trust);
-      if (how === 'the bridge ends it first') det.clearTrustedIdentity();
+      const { trust } = piCapture.chunks;
+      const footer = trust.indexOf('escape/ctrl+c');
+      if (how === 'the bridge ends it before the footer') {
+        // The previous agent's late death edge lands mid-selector; the footer
+        // drawn before Pi's seed still counts.
+        det.feed(trust.slice(0, footer));
+        det.clearTrustedIdentity();
+        det.feed(trust.slice(footer));
+      } else {
+        det.feed(trust);
+        if (how === 'the bridge ends it first') det.clearTrustedIdentity();
+      }
       det.seedTrustedIdentity('pi', det.getIdentityEpoch());
       expect(await det.revalidateApprovalScreen(async () => frame(piCapture.screens.trust))).toBe(true);
       expect(events.mock.calls.map(([event]) => event)).toEqual([
