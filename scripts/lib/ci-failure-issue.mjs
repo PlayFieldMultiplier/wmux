@@ -165,14 +165,20 @@ function readJobs(gh, { repo, runId }) {
  */
 const OWN_RUN_EVENTS = ['push', 'schedule', 'workflow_dispatch'];
 
-export function newestGreenRun(gh, { repo, workflow, branch }) {
+export function newestGreenRun(gh, { repo, workflow, branch }, log = () => undefined) {
   if (!branch) return 0;
   let newest = 0;
   for (const event of OWN_RUN_EVENTS) {
-    const out = gh(['run', 'list', '-R', repo, '--workflow', workflow, '--branch', branch, '--event', event,
-      '--status', 'success', '--limit', '1', '--json', 'databaseId']);
-    const runs = parseJson(out || '[]', 'gh run list');
-    if (runs.length > 0) newest = Math.max(newest, Number(runs[0].databaseId) || 0);
+    // A query that fails (a 5xx, a rate limit) only means no newer green run
+    // from that event: it must not stop the red run being reported.
+    try {
+      const out = gh(['run', 'list', '-R', repo, '--workflow', workflow, '--branch', branch, '--event', event,
+        '--status', 'success', '--limit', '1', '--json', 'databaseId']);
+      const runs = parseJson(out || '[]', 'gh run list');
+      if (runs.length > 0) newest = Math.max(newest, Number(runs[0].databaseId) || 0);
+    } catch (err) {
+      log(`could not read the newest green ${event} run (${err instanceof Error ? err.message : String(err)}); counting none`);
+    }
   }
   return newest;
 }
@@ -241,7 +247,7 @@ export function report({ state = 'auto', env, gh, log = () => undefined }) {
     return 'closed';
   }
 
-  const newestGreen = newestGreenRun(gh, { repo, workflow: env.GITHUB_WORKFLOW, branch: env.GITHUB_REF_NAME });
+  const newestGreen = newestGreenRun(gh, { repo, workflow: env.GITHUB_WORKFLOW, branch: env.GITHUB_REF_NAME }, log);
   if (newestGreen > Number(env.GITHUB_RUN_ID)) {
     log(`run ${env.GITHUB_RUN_ID} is older than green run ${newestGreen}; not reporting a stale red`);
     return 'none';

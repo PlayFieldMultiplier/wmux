@@ -15,7 +15,7 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { RELATIVE_IMPORT, ROOT, isTypeOnlyImport, listTestFiles, resolveRelative, stripStrings } from '../lib/test-lanes.mjs';
+import { RELATIVE_IMPORT, ROOT, isTypeOnlyImport, listTestFiles, resolveRelative, stripStringsAndComments } from '../lib/test-lanes.mjs';
 
 // A query that hands the importer the file's text or URL: the file is not run.
 const NOT_RUN_QUERY = /\?(?:raw|url|inline)\b/;
@@ -31,9 +31,10 @@ const QUOTED_RELATIVE = /['"](\.{1,2}\/[^'"]+)['"]/g;
  */
 function inComment(source, index) {
   const lineStart = source.lastIndexOf('\n', index - 1) + 1;
-  // Strings out first (a `//` in a URL opens no comment), and a block comment
-  // opened and closed on this line (`/* x */ import ...`).
-  let before = stripStrings(source.slice(lineStart, index)).replace(/\/\*.*?\*\//g, '');
+  // Strings and comments that open and close on this line go in one pass, so
+  // a quote in a comment and a `//` in a URL both stay where they belong; a
+  // `//` comment is kept as a marker.
+  let before = stripStringsAndComments(source.slice(lineStart, index), '//');
   const close = before.lastIndexOf('*/');
   // ` */ import ...`: a comment opened above ends here, and code follows.
   if (close !== -1) before = before.slice(close + 2);
@@ -138,6 +139,8 @@ describe('what the walk counts as a load', () => {
       "const z = 1; // was: import z from './cli4.mjs'",
     ].join('\n');
     expect(loadedSpecifiers(source)).toEqual([]);
+    // A quote inside a closed comment opens no string that hides the next import.
+    expect(loadedSpecifiers("/* don't */ import a from './x.mjs'; import b from './y.mjs';\n")).toEqual(['./x.mjs', './y.mjs']);
   });
 
   it('not a ?raw or ?url import: the file comes back as text or a URL, never run', () => {

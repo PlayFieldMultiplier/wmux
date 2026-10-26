@@ -138,7 +138,8 @@ describe('the rule', () => {
     const bare = 'child' + '_process';
     expect(osImports(`import type { A } from './a'; // the \` key\nimport {\n  type ChildProcess, // \`spawn\` below\n  spawn,\n} from '${bare}';\n`)).toEqual([bare]);
     // A real template literal still spans its lines, so a `//` in it opens no comment.
-    expect(osImports(`import type { A } from './a';\nconst u = \`\nhttp://h\`; import { type B, spawn } from '${bare}';\n`)).toEqual([bare]);    expect(
+    expect(osImports(`import type { A } from './a';\nconst u = \`\nhttp://h\`; import { type B, spawn } from '${bare}';\n`)).toEqual([bare]);
+    expect(
       classify({ [T]: `vi.mock('${CP}', () => ({ spawn: vi.fn() }));\nimport { spawn } from '${CP}';\n` }).lane,
     ).toBe('unit');
     // A module named only in prose or a string that is not an import does not count.

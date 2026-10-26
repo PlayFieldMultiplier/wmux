@@ -118,16 +118,19 @@ const RESOLVE_SUFFIXES = ['', '.ts', '.tsx', '.mts', '.mjs', '.js', '/index.ts',
 
 const toPosix = (p) => p.split(path.sep).join('/');
 
-/** One line with each string literal (and template) emptied to `''`. */
-export const stripStrings = (line) => line.replace(/'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`/g, "''");
 // Strings and comments in one left-to-right pass: whichever opens first owns
 // the text up to its end. A `//` in a URL stays inside its string, and a
 // backtick in a comment stays inside the comment instead of opening a
 // template that runs on to the next backtick lines below. A real template
 // literal still spans its lines.
 const STRING_OR_COMMENT = /'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`|\/\*[\s\S]*?\*\/|\/\/[^\n]*/g;
-/** Source without its comments, and with each string literal emptied to `''`. */
-export const stripStringsAndComments = (text) => text.replace(STRING_OR_COMMENT, (m) => (m[0] === '/' ? '' : "''"));
+/**
+ * Source without its comments, and with each string literal emptied to `''`.
+ * `lineComment` replaces each `//` comment instead, for a caller that needs
+ * to see one was there.
+ */
+export const stripStringsAndComments = (text, lineComment = '') =>
+  text.replace(STRING_OR_COMMENT, (m) => (m.startsWith('//') ? lineComment : m[0] === '/' ? '' : "''"));
 const IN_TESTS_DIR = /(?:^|\/)__tests__\//;
 const TEST_SOURCE = /\.test\.[^/]+$/;
 // A relative specifier that can reach a helper: src/test-utils, a __tests__
