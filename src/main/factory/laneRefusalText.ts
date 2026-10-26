@@ -105,6 +105,7 @@ const SENTENCES: Readonly<Record<string, string>> = {
   'draft-kept-tag-made': 'The tag was already made: its draft release is kept on {host} for you to publish or delete',
   'draft-kept-unchecked': 'Whether the tag was made could not be checked: its draft release is kept on {host} for you to publish or delete',
   'draft-not-deleted': 'Its draft release could not be deleted: delete it on {host}',
+  'draft-kept-changed': 'Its draft release was changed on {host}, so it is kept there',
   'version-mismatch': 'The version in package.json or package-lock.json is not the tag\'s',
   'prerelease-mismatch': 'The tag reads as a prerelease and the request does not, or the other way round',
   'tag-not-matching-release-workflow': 'The repository\'s tag workflows do not run on this tag',

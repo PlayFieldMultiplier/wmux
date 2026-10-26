@@ -5227,8 +5227,10 @@ A refused `release` that made a draft adds one last code saying what became
 of it when it stays on GitHub: `draft-kept-tag-made` (its tag is made at the
 commit, so the draft is kept for the owner to publish or delete),
 `draft-kept-unchecked` (whether the tag was made could not be checked; the
-draft is kept), or `draft-not-deleted` (deleting it failed: the owner deletes
-it on GitHub). A deleted draft adds nothing.
+draft is kept), `draft-kept-changed` (the draft was changed on GitHub since
+wmux made it, so it is the owner's and is kept), or `draft-not-deleted`
+(deleting it failed: the owner deletes it on GitHub). A deleted draft adds
+nothing.
 While it runs, or
 while it reads GitHub to learn whether an interrupted try went through, the
 request stays `approved`; it ends `executed` or `refused`.

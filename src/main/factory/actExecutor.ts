@@ -69,6 +69,7 @@ export const RECONCILE_AFTER_MS = 60_000;
 const DRAFT_FATE_CODE: Partial<Record<DraftFate, string>> = {
   'kept-tag-made': 'draft-kept-tag-made',
   'kept-unchecked': 'draft-kept-unchecked',
+  'kept-not-ours': 'draft-kept-changed',
   failed: 'draft-not-deleted',
 };
 
@@ -288,7 +289,7 @@ export class ActExecutor {
     if (!row || row.action !== 'release' || row.draftId === undefined) return null;
     const p = repoPath(row.repoKey);
     const act = this.ports.approval.request(row.requestId)?.act;
-    const want = act?.kind === 'release' ? { tagName: act.tagName, targetSha: act.targetSha } : undefined;
+    const want = act?.kind === 'release' ? act : undefined;
     const fate: DraftFate = p ? await deleteDraft(this.ports.gh, p, row.draftId, want).catch(() => 'kept-unchecked' as const) : 'kept-unchecked';
     const code = DRAFT_FATE_CODE[fate] ?? null;
     this.ports.log?.(`[factory] act release ${row.requestId}: its draft ${row.draftId}: ${fate}${code ? ` (${laneRefusalLine(code, row.repoKey)})` : ''}`);
