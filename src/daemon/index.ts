@@ -283,6 +283,7 @@ import { continueOnAccount } from './continueOnAccount';
 import { paneFree } from './paneFree';
 import { createOrphanSweep } from './winProcessSweep';
 import { classifyShell } from './shell-integration';
+import { loadUsageReserveHolds, parseUsageReserveHolds, saveUsageReserveHolds, usageReserveHoldAt } from './usageReserveHolds';
 import { UsageLimitRegistry } from './usageLimit/UsageLimitRegistry';
 import type { SessionPromptScheduleResult } from '../shared/sessionPromptSchedule';
 import { claudeUsageLimitFromStopFailure, USAGE_LIMIT_CONTINUE_PROMPT, type PaneUsageLimitPatch } from '../shared/usageLimit';
@@ -391,7 +392,8 @@ let hookIngest: HookIngest | null = null;
 let detectionAgreementLog: DetectionAgreementLog | null = null;
 /** Panes held at a provider usage limit (shared/usageLimit). Built once delivery exists. */
 let usageLimits: UsageLimitRegistry | null = null;
-/** The usage reserve's holds pushed by main: account key → 5h reset (ms). */
+/** The usage reserve's holds pushed by main: account key → 5h reset (ms).
+ *  Read from disk at start, so a restart before main reconnects keeps them. */
 let usageReserveHolds = new Map<string, number>();
 /** Scheduled runs. Built in registerRpcHandlers once the session RPCs exist. */
 let automationEngine: AutomationEngine | null = null;
@@ -6011,21 +6013,19 @@ function registerRpcHandlers(
     log: (message) => log('info', message),
   });
   pipeServer.onRpc('daemon.usageLimit.list', async () => ({ limits: usageLimits?.list() ?? [] }));
+  usageReserveHolds = loadUsageReserveHolds(getWmuxDir());
   // The usage reserve's holds, from the app only (main reads the usage):
   // account key → when its 5h window resets. Replaced whole on every push.
   pipeServer.onRpc('daemon.usageReserve.set', async (params, ctx) => {
     if (!pipeServer.isFirstParty(ctx.clientId)) return { ok: false };
-    const raw = params['holds'];
-    if (!Array.isArray(raw) || raw.length > 256) return { ok: false };
-    const next = new Map<string, number>();
-    for (const h of raw) {
-      if (!h || typeof h !== 'object') return { ok: false };
-      const { account, untilMs } = h as Record<string, unknown>;
-      if (typeof account !== 'string' || !account || account.length > 128) return { ok: false };
-      if (typeof untilMs !== 'number' || !Number.isFinite(untilMs)) return { ok: false };
-      next.set(account, untilMs);
-    }
+    const next = parseUsageReserveHolds(params['holds']);
+    if (!next) return { ok: false };
     usageReserveHolds = next;
+    try {
+      await saveUsageReserveHolds(getWmuxDir(), next);
+    } catch (err) {
+      log('warn', `[usageReserve] holds kept in memory only: ${String(err)}`);
+    }
     return { ok: true };
   });
   // Edits come from the app only (main relays the renderer's verbs and the
@@ -6128,10 +6128,7 @@ function registerRpcHandlers(
       return signedIn === false;
     },
     authLost: (agent, env) => noteAuthLost?.('', agent, env, 'schedule'),
-    reserveHold: (account) => {
-      const until = usageReserveHolds.get(account);
-      return until !== undefined && until > Date.now() ? until : null;
-    },
+    reserveHold: (account) => usageReserveHoldAt(usageReserveHolds, account, Date.now()),
     createSession: async ({ id, cwd, env, command }) => {
       await createSessionRpc({ id, cwd, env, exec: { command } });
     },

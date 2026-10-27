@@ -20,6 +20,8 @@ export const RESERVE_PCT = 15;
 export const RESERVE_THRESHOLD_PCT = 100 - RESERVE_PCT;
 
 export const USAGE_RESERVE_FILENAME = 'usage-reserve.json';
+/** A push the daemon did not take is sent again after this. */
+export const PUSH_RETRY_MS = 30 * 1000;
 
 /** One account's hold: its usage key ('default' or an account id) and when its 5h window resets (ms). */
 export interface UsageReserveHold {
@@ -43,8 +45,9 @@ export interface UsageReserveDeps {
   snapshots: () => Array<[string, UsageSnapshot | null]>;
   /** The usage key a workspace's Claude launches run on. */
   accountOfWorkspace: (workspaceId: string) => string;
-  /** Hand the current holds to the daemon (its scheduled runs). */
-  push?: (holds: UsageReserveHold[]) => void;
+  /** Hand the current holds to the daemon (its scheduled runs). Resolves
+   *  false when they were not delivered: they are sent again. */
+  push?: (holds: UsageReserveHold[]) => Promise<boolean> | void;
   /** Tell the owner once per hold. */
   notify?: (account: string, untilMs: number) => void;
   /** The setting changed (on or off). */
@@ -62,6 +65,7 @@ export class UsageReserve {
   /** `account:untilMs` of holds the owner was told about. */
   private readonly told = new Set<string>();
   private writes: Promise<void> = Promise.resolve();
+  private retryTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly deps: UsageReserveDeps) {
     this.filePath = path.join(deps.wmuxDir, USAGE_RESERVE_FILENAME);
@@ -120,7 +124,25 @@ export class UsageReserve {
     const key = JSON.stringify(holds);
     if (key === this.lastPushed) return;
     this.lastPushed = key;
-    this.deps.push?.(holds);
+    void this.send(holds, key);
+  }
+
+  private async send(holds: UsageReserveHold[], key: string): Promise<void> {
+    let delivered = false;
+    try {
+      delivered = (await this.deps.push?.(holds)) !== false;
+    } catch {
+      delivered = false;
+    }
+    if (delivered || this.lastPushed !== key) return;
+    // Not taken (no daemon, or it refused): forget it so it is sent again.
+    this.lastPushed = '';
+    if (this.retryTimer) return;
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null;
+      this.refresh();
+    }, PUSH_RETRY_MS);
+    this.retryTimer.unref?.();
   }
 
   /** Push the holds whatever was pushed before (the daemon (re)connected). */

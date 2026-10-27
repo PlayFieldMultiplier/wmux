@@ -583,6 +583,8 @@ export class AutomationEngine {
     automation.action = nextAction;
     automation.policy = { overlap: 'skip_if_active', ...draft.value.policy };
     automation.updatedAt = this.now();
+    // The cursor moves on from any held occurrence: an edit drops it.
+    this.reserveHeld.delete(automation.id);
     automation.nextRunAt = automation.enabled ? nextOccurrenceAfter(automation.trigger, this.now()) : null;
     // Raised now, not at the first skipped occurrence: the editor grants again
     // in the same save (and the grant clears this), so only an update that
@@ -599,6 +601,7 @@ export class AutomationEngine {
     // Out of the schedule set BEFORE any await, so a tick in between cannot
     // start a run for a schedule that is being deleted.
     this.automations = this.automations.filter((a) => a.id !== automation.id);
+    this.reserveHeld.delete(automation.id);
     this.attention = this.attention.filter((x) => x.automationId !== automation.id);
     for (const run of this.runs.filter((r) => r.automationId === automation.id)) {
       if (this.live.has(run.id)) await this.terminate(run, 'failed', 'cancelled');
@@ -617,6 +620,7 @@ export class AutomationEngine {
     automation.enabled = enabled;
     // A human enabling a draft is what turns it into a schedule.
     if (enabled) delete automation.proposed;
+    this.reserveHeld.delete(automation.id);
     automation.nextRunAt = enabled ? nextOccurrenceAfter(automation.trigger, this.now()) : null;
     automation.updatedAt = this.now();
     await this.persistAutomations();

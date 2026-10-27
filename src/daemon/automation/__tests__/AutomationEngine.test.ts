@@ -1353,12 +1353,14 @@ describe('AutomationEngine — usage reserve', () => {
 
   it('a held occurrence meets a restart as one that came due while the daemon was down', async () => {
     const dir = tempDir('wmux-reserve-');
-    const first = harness({ dir, ports: { reserveHold: () => Date.now() + 10 * 60 * MIN } });
+    let until: number | null = null;
+    const first = harness({ dir, ports: { reserveHold: () => until } });
     await first.engine.start({ timers: false });
     const a = await first.engine.create(draft());
     if (!a.ok || a.automation.nextRunAt === null) throw new Error();
     const due = a.automation.nextRunAt;
     first.clock.t = due + 10 * MIN;
+    until = first.clock.t + 10 * 60 * MIN;
     first.engine.tick();
     first.engine.stop();
     await first.engine.whenSaved();
@@ -1371,9 +1373,28 @@ describe('AutomationEngine — usage reserve', () => {
   });
 
   it('never holds a run started by hand', async () => {
-    const h = harness({ ports: { reserveHold: () => Date.now() + 60 * MIN } });
+    const clock = { t: 0 };
+    const h = harness({ ports: { reserveHold: () => clock.t + 60 * MIN } });
+    clock.t = h.clock.t;
     const run = await startedRun(h);
     expect(run).toMatchObject({ trigger: 'manual', state: 'running' });
     expect(h.events.some((e) => e.type === 'reserve-held')).toBe(false);
+  });
+
+  it('an edit while held drops the held occurrence: the reset starts nothing old', async () => {
+    let until: number | null = null;
+    const h = harness({ ports: { reserveHold: () => until } });
+    await h.engine.start({ timers: false });
+    const a = await h.engine.create(draft());
+    if (!a.ok || a.automation.nextRunAt === null) throw new Error();
+    h.clock.t = a.automation.nextRunAt + 10 * MIN;
+    until = h.clock.t + 60 * MIN;
+    h.engine.tick();
+    await h.engine.setEnabled(a.automation.id, false);
+    await h.engine.setEnabled(a.automation.id, true);
+    h.clock.t = until + MIN;
+    h.engine.tick();
+    await settle();
+    expect(h.engine.listRuns()).toEqual([]);
   });
 });

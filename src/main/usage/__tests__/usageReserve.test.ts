@@ -26,7 +26,7 @@ function reserve(readings: Array<[string, UsageSnapshot | null]>) {
     wmuxDir: dir,
     snapshots: () => readings,
     accountOfWorkspace: (ws) => (ws === 'ws-bound' ? 'acct-1' : 'default'),
-    push: (holds) => pushed.push(holds),
+    push: (holds) => { pushed.push(holds); },
     notify: (account, untilMs) => told.push([account, untilMs]),
     now: () => NOW,
   });
@@ -68,6 +68,27 @@ describe('UsageReserve', () => {
     first.r.noteHeld('default', RESET_SEC * 1000);
     first.r.noteHeld('acct-1', RESET_SEC * 1000);
     expect(first.told).toEqual([['default', RESET_SEC * 1000], ['acct-1', RESET_SEC * 1000]]);
+  });
+
+  it('sends again a push the daemon did not take', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-usage-reserve-'));
+    dirs.push(dir);
+    const sent: UsageReserveHold[][] = [];
+    let take = false;
+    const r = new UsageReserve({
+      wmuxDir: dir,
+      snapshots: () => [['default', snap(90)]],
+      accountOfWorkspace: () => 'default',
+      push: async (holds) => { sent.push(holds); return take; },
+      now: () => NOW,
+    });
+    await r.setEnabled(true);
+    await new Promise((res) => setImmediate(res));
+    take = true;
+    r.refresh(); // not taken before, so not skipped as unchanged
+    await new Promise((res) => setImmediate(res));
+    r.refresh(); // taken now: unchanged
+    expect(sent).toHaveLength(2);
   });
 
   it('says why a fan-out did not start, and where the switch is', () => {

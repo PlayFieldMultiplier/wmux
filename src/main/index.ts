@@ -1630,7 +1630,7 @@ const usageReserve = new UsageReserve({
     ...accountUsageService.getAll().map((e): [string, typeof e.snapshot] => [e.accountId, e.snapshot]),
   ],
   accountOfWorkspace: (workspaceId) => getAccountStore().getBinding(workspaceId, 'claude') ?? 'default',
-  push: (holds) => { void daemonClient?.setUsageReserveHolds(holds); },
+  push: (holds) => daemonClient?.setUsageReserveHolds(holds) ?? Promise.resolve(false),
   notify: (account, untilMs) => {
     const locale = getAutomationUiLocale();
     const who = account === 'default' ? null : getAccountStore().getAccount(account)?.name ?? account;

@@ -117,6 +117,7 @@ import {
   type FanoutPreset,
 } from '../../../shared/fanoutPreset';
 import { validateFanoutTaskGraph, type FanoutTaskGraph } from '../../../shared/fanoutTaskGraph';
+import { agentRow } from '../../../shared/agentIdentity';
 import { noteUsageReserveHeld, usageReserveHoldForWorkspace, usageReserveRefusalText, type UsageReserveHold } from '../../usage/usageReserve';
 import { botTemplate, type BotBinding, type BotProfile } from '../../../shared/bot';
 import { SHARED_SURFACE } from '../../../shared/botSurface';
@@ -1675,24 +1676,20 @@ export function registerFanOutRpc(
     });
     if (gatewayRefusal) return deny('FAILED_PRECONDITION', gatewayRefusal);
 
-    // ── Usage reserve ─────────────────────────────────────────────────────
-    // Workers run unattended, so none start while the account they run on is
-    // in the 5h share its owner keeps (main/usage/usageReserve.ts). A bot's
-    // request is held and the bot woken with it once the reserve lifts; any
-    // other caller is refused with the reset time, to relay or retry.
-    const reserve = (deps.usageReserveHold ?? usageReserveHoldForWorkspace)(bot ? bot.workspaceId : callerWorkspaceId);
-    if (reserve) {
-      (deps.noteUsageReserveHeld ?? noteUsageReserveHeld)(reserve);
-      const held = !!bot && !workflow && botPort?.heldByUsageReserve?.(bot, {
-        args: heldFanoutArgs(params),
-        threadId: botNoticeThread,
-        tainted: gatewayConnectors.length > 0 ? gatewayWakeTainted : botWakeTainted,
-        guest: false,
-        ...(botWakeHandoff ? { handoffId: botWakeHandoff } : {}),
-        ...(gatewayConnectors.length > 0 && botWakeKind ? { wakeKind: botWakeKind } : {}),
-      }) === true;
-      return deny('RESOURCE_EXHAUSTED', usageReserveRefusalText(reserve.untilMs, Date.now(), held));
-    }
+    // A bot's request as a hold keeps it, for a worker slot or the usage
+    // reserve. A workflow's durable intent owns its dispatch: a plain held
+    // retry cannot carry that internal binding or its verified predecessor
+    // SHA. A signed-in request keeps the asking wake's own mark (its
+    // connections taint its tasks, not the wake): a held one forced tainted
+    // would be refused on its retry. It keeps the asking wake's kind with it.
+    const heldRequest: HeldFanoutRequest | undefined = bot && !workflow ? {
+      args: heldFanoutArgs(params),
+      threadId: botNoticeThread,
+      tainted: gatewayConnectors.length > 0 ? gatewayWakeTainted : botWakeTainted,
+      guest: false,
+      ...(botWakeHandoff ? { handoffId: botWakeHandoff } : {}),
+      ...(gatewayConnectors.length > 0 && botWakeKind ? { wakeKind: botWakeKind } : {}),
+    } : undefined;
 
     // ── Global caps (live + rolling hour), reserved in this same tick ────
     // Over a cap is a refusal, never a queued prompt: with approval off by
@@ -1735,25 +1732,28 @@ export function registerFanOutRpc(
         return deny('RESOURCE_EXHAUSTED', `this bot runs at most ${most} worker${most === 1 ? '' : 's'} at once: start at most ${most} task${most === 1 ? '' : 's'} per fan-out`);
       }
       if (full) {
-        // A workflow's durable intent owns its dispatch. A plain held retry
-        // cannot carry that internal binding or its verified predecessor SHA.
-        // A signed-in request keeps the asking wake's own mark (its
-        // connections taint its tasks, not the wake): a held one forced
-        // tainted would be refused on its retry. It keeps the asking wake's
-        // kind with it.
-        const held = botPort.workersFull(bot, full, workflow ? undefined : {
-          args: heldFanoutArgs(params),
-          threadId: botNoticeThread,
-          tainted: gatewayConnectors.length > 0 ? gatewayWakeTainted : botWakeTainted,
-          guest: false,
-          ...(botWakeHandoff ? { handoffId: botWakeHandoff } : {}),
-          ...(gatewayConnectors.length > 0 && botWakeKind ? { wakeKind: botWakeKind } : {}),
-        });
+        const held = botPort.workersFull(bot, full, heldRequest);
         const note = full.scope === 'bot'
           ? workersHeldNote(open.bot - bookedBot, bookedBot, getAgentSlots()?.waiting().filter((w) => w.botId === bot.botId).length ?? 0)
           : '';
         return deny('RESOURCE_EXHAUSTED', workersFullText(full, held, note));
       }
+    }
+
+    // ── Usage reserve ─────────────────────────────────────────────────────
+    // Workers run unattended, so none that spend usage wmux reads (Claude's:
+    // the default launch, or a choice whose agent row says so) start while
+    // the account they run on is in the 5h share its owner keeps
+    // (main/usage/usageReserve.ts). Checked after the bot's own limits, so a
+    // request those refuse is not held here. A bot's request is held and the
+    // bot woken with it once the reserve lifts; any other caller is refused
+    // with the reset time, to relay or retry.
+    const spendsReserve = agentChoices.length === 0 || agentChoices.some((c) => agentRow(c.agent)?.usageReserve === true);
+    const reserve = spendsReserve ? (deps.usageReserveHold ?? usageReserveHoldForWorkspace)(callerWorkspaceId) : null;
+    if (reserve) {
+      const held = !!bot && !!heldRequest && botPort?.heldByUsageReserve?.(bot, heldRequest) === true;
+      if (held) (deps.noteUsageReserveHeld ?? noteUsageReserveHeld)(reserve);
+      return deny('RESOURCE_EXHAUSTED', usageReserveRefusalText(reserve.untilMs, Date.now(), held));
     }
 
     const guards = guardsOf();
