@@ -127,8 +127,10 @@ export async function browserHelpRow(
     return { ...base, backend: 'live', previewable: false };
   }
   const origin = tab ? browserHelpOrigin(tab.url) : undefined;
-  // The phone's preview does not drive a Chrome tab yet.
-  return { ...base, backend: 'chrome', previewable: false, ...(origin ? { origin } : {}) };
+  // The phone's preview drives this tab when it is the workspace's own
+  // dedicated-profile tab under the id the request names (PhoneBrowserChrome).
+  const previewable = tab !== undefined && tab.surfaceId === surfaceId;
+  return { ...base, backend: 'chrome', previewable, ...(origin ? { origin } : {}) };
 }
 
 /**

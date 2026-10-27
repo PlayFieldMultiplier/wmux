@@ -39,6 +39,19 @@ describe('desktop phone request ownership', () => {
     expect(await Promise.all(requests)).toEqual(Array(16).fill('desktop-timeout'));
     expect(send).toHaveBeenCalledTimes(16);
   });
+  it('keeps the last slot from the browser preview, so a help decision still goes out', async () => {
+    vi.useFakeTimers();
+    const send = vi.fn(() => true);
+    const bridge = new DesktopPhoneBridge(send, 100);
+    bridge.register('main');
+    const captures = Array.from({ length: 15 }, () => bridge.request('browser.capture', {}).catch(e => e.message));
+    await expect(bridge.request('browser.capture', {})).rejects.toThrow('desktop-busy');
+    const decision = bridge.request('workspaces.browserHelpDecide', {}).catch(e => e.message);
+    await expect(bridge.request('workspaces.browserHelpDecide', {})).rejects.toThrow('desktop-busy');
+    await vi.advanceTimersByTimeAsync(100);
+    await Promise.all([...captures, decision]);
+    expect(send).toHaveBeenCalledTimes(16);
+  });
   it('fails closed without a desktop owner', async () => {
     await expect(new DesktopPhoneBridge(() => true).request('accounts.list', {})).rejects.toThrow('desktop-unavailable');
   });

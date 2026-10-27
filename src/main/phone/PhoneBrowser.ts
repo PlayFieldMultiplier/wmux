@@ -1,6 +1,23 @@
-import { PHONE_BROWSER_GEOMETRY, phoneBrowserGeometry, phoneBrowserPoint } from './PhoneBrowserGeometry';
+import { PHONE_BROWSER_GEOMETRY, phoneBrowserGeometry, phoneBrowserPoint, type PhoneBrowserGeometry } from './PhoneBrowserGeometry';
 import type { CdpTargetInfo } from '../browser-session/WebviewCdpManager';
 import type { RpcResponse } from '../../shared/rpc';
+import { browserHelpOrigin } from '../../shared/phoneBrowserHelp';
+import { PhoneBrowserError, type PhoneBrowserBackend } from '../../shared/phoneBrowserPreview';
+import type { PhoneChromeDeps } from './PhoneBrowserChrome';
+import { chromeDriver } from './PhoneBrowserChrome';
+
+// The phone's workspace browser preview: the checks every tab gets, over a
+// per-tab driver that talks to the browser.
+//
+// The checks, whichever browser: the tab is in the request's workspace by
+// strict equality (a tab with no workspace is nobody's), only http(s) pages,
+// input only on the page the phone last saw (`expectedURL`) at the viewport
+// it last saw (`geometry`), and captures inside the pipe's size limit. They
+// run again inside the input closure, after any wait for focus.
+//
+// The drivers: a builtin browser pane (webview, the dependencies below, as
+// before), and a tab of a dedicated wmux Chrome profile (PhoneBrowserChrome).
+// Live Chrome — the user's own browser — has no driver and is never listed.
 
 interface BrowserDeps {
   backend: () => string;
@@ -11,11 +28,43 @@ interface BrowserDeps {
   page: (webContentsId: number) => { title: string; url: string } | null;
   input: (webContentsId: number, operation: () => Promise<RpcResponse>) => Promise<RpcResponse>;
   invoke: (method: string, params: Record<string, unknown>) => Promise<RpcResponse>;
+  /** Make a builtin pane the active tab of its pane (renderer `browser.tabs` select). Absent: focus unsupported. */
+  focusBuiltin?: (surfaceId: string, workspaceId: string) => Promise<boolean>;
+  /** Dedicated-profile Chrome tabs. Absent: builtin panes only, as before. */
+  chrome?: PhoneChromeDeps;
 }
+
+/** One tab, whichever browser it is in. Every method re-reads the browser. */
+export interface PhoneBrowserDriver {
+  readonly backend: PhoneBrowserBackend;
+  readonly surfaceId: string;
+  /** The tab's current page, or null once it is gone. */
+  page(): Promise<{ title: string; url: string } | null>;
+  /** The tab is still this workspace's, by strict equality. */
+  owned(): Promise<boolean>;
+  /** The viewport, refused when it cannot take input where the phone sees it. */
+  geometry(): Promise<PhoneBrowserGeometry>;
+  shoot(quality: number, scale: number): Promise<{ data: string; mimeType: 'image/jpeg' }>;
+  /** A whole capture, inside the driver's own time budget. */
+  capture<T>(run: () => Promise<T>): Promise<T>;
+  /** One input operation, with the tab's input focus held around it. */
+  input(operation: () => Promise<void>): Promise<void>;
+  tap(point: { x: number; y: number }): Promise<void>;
+  scroll(event: { x: number; y: number; deltaX: number; deltaY: number }): Promise<void>;
+  type(text: string): Promise<void>;
+  key(key: string): Promise<void>;
+  navigate(url: string): Promise<void>;
+  viewport(mode: 'mobile' | 'desktop'): Promise<void>;
+  focus(): Promise<void>;
+}
+
 /** 700 KiB of base64, so the whole `daemon.phone.complete` envelope stays under
  * the daemon control pipe's 1 MiB per-line limit. */
 const CAPTURE_BASE64_LIMIT = 700 * 1024;
-function pageURL(raw: string): string | null {
+const PREVIEW_COMMANDS = ['browser.capture','browser.viewport','browser.navigate','browser.type','browser.key','browser.tap','browser.scroll','browser.focus'];
+const PREVIEW_KEYS = ['Tab','Shift+Tab','Enter','Backspace','Escape','PageUp','PageDown'];
+
+export function pageURL(raw: string): string | null {
   try {
     const url = new URL(raw);
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
@@ -24,17 +73,96 @@ function pageURL(raw: string): string | null {
   } catch { return null; }
 }
 
-/** Workspace-bound preview, with a closed set of browser operations. */
+/** The phone's URL for open/navigate: credential-free http(s), or a throw. */
+function phoneURL(raw: unknown): string {
+  if (typeof raw !== 'string' || raw.length > 4096) throw new Error('Invalid URL');
+  const url = new URL(raw);
+  if (!pageURL(raw) || url.username || url.password) throw new Error('Only HTTP URLs without embedded credentials are supported');
+  return url.href;
+}
+
+function webviewDriver(target: CdpTargetInfo, workspaceId: string, deps: BrowserDeps): PhoneBrowserDriver {
+  const scope = { surfaceId: target.surfaceId, workspaceId };
+  const ok = (result: RpcResponse) => { if (!result.ok) throw new Error('Browser operation failed'); };
+  return {
+    backend: 'builtin',
+    surfaceId: target.surfaceId,
+    page: async () => deps.page(target.webContentsId),
+    owned: async () => deps.targets().some(item => item.surfaceId === target.surfaceId && item.webContentsId === target.webContentsId && item.workspaceId === workspaceId),
+    geometry: async () => {
+      const page = phoneBrowserGeometry(await deps.invoke('browser.evaluate',{...scope,expression:PHONE_BROWSER_GEOMETRY}));
+      const native = await deps.nativeBounds(target.webContentsId);
+      if (page.width > native.width + 1 || page.height > native.height + 1) throw new Error('Browser viewport exceeds visible input bounds; reset viewport');
+      return page;
+    },
+    shoot: async (quality, scale) => {
+      const response = await deps.invoke('browser.screenshot', { ...scope, format: 'jpeg', quality, scale, fullPage: false });
+      if (!response.ok || !response.result || typeof response.result !== 'object') throw new Error('Browser capture unavailable');
+      const shot = response.result as {data?:unknown;mimeType?:unknown};
+      if (typeof shot.data !== 'string' || shot.mimeType !== 'image/jpeg') throw new Error('Browser capture exceeds preview limit');
+      return shot as {data:string;mimeType:'image/jpeg'};
+    },
+    capture: run => run(),
+    input: async operation => {
+      ok(await deps.input(target.webContentsId, async () => {
+        await operation();
+        return {id:'phone-input',ok:true,result:{applied:true}};
+      }));
+    },
+    tap: async point => ok(await deps.invoke('browser.click.cdp',{...scope,...point})),
+    scroll: event => deps.scroll(target.webContentsId,event),
+    type: async text => ok(await deps.invoke('browser.type.cdp',{...scope,text})),
+    key: async key => ok(await deps.invoke('browser.press.cdp',{...scope,key})),
+    navigate: async url => ok(await deps.invoke('browser.navigate',{...scope,url})),
+    viewport: async mode => {
+      let result = await deps.invoke('browser.emulate', {...scope,deviceReset:true});
+      if (!result.ok) throw new Error('Browser viewport reset failed');
+      // Discard the RPC's remembered pre-preset dimensions: the native widget
+      // may have been resized since that snapshot.
+      await deps.clearViewport(target.webContentsId);
+      if (mode === 'mobile') {
+        // A viewport taller than the Electron guest can capture pixels outside
+        // its input hit-test bounds. Fit the mobile viewport to the real guest.
+        const available = await deps.nativeBounds(target.webContentsId);
+        const width = Math.min(390,Math.floor(available.width));
+        const height = Math.min(844,Math.floor(available.height));
+        result = await deps.invoke('browser.emulate', {...scope,deviceMetrics:{
+          width,height,deviceScaleFactor:1,mobile:true,hasTouch:true,screenWidth:width,screenHeight:height,
+        }});
+        ok(result);
+      }
+    },
+    focus: async () => {
+      if (!deps.focusBuiltin) throw new PhoneBrowserError('browser-action-unsupported');
+      if (!(await deps.focusBuiltin(target.surfaceId, workspaceId))) throw new Error('Browser operation failed');
+    },
+  };
+}
+
+/** Workspace-bound preview, with a closed set of browser operations. Codes
+ *  main answers in words travel as `{error:<code>}`; anything else throws. */
 export async function handlePhoneBrowser(command: string, payload: Record<string, unknown>, deps: BrowserDeps): Promise<unknown> {
+  try {
+    return await phoneBrowser(command, payload, deps);
+  } catch (err) {
+    if (err instanceof PhoneBrowserError) return { error: err.code };
+    throw err;
+  }
+}
+
+async function phoneBrowser(command: string, payload: Record<string, unknown>, deps: BrowserDeps): Promise<unknown> {
   const workspaceId = payload.workspaceId;
   if (typeof workspaceId !== 'string' || !workspaceId) throw new Error('Missing workspace');
   const targets = deps.targets().filter(target => target.workspaceId === workspaceId);
   if (command === 'browser.open') {
-    if (deps.backend() !== 'builtin') throw new Error('Embedded browser backend required');
-    if (typeof payload.url !== 'string' || payload.url.length > 4096) throw new Error('Invalid URL');
-    const url = new URL(payload.url);
-    if (!pageURL(payload.url) || url.username || url.password) throw new Error('Only HTTP URLs without embedded credentials are supported');
-    const opened = await deps.invoke('browser.tabs',{workspaceId,action:'new',url:url.href});
+    const backend = payload.backend ?? 'builtin';
+    if (backend !== 'builtin' && backend !== 'chrome') throw new Error('Invalid browser backend');
+    if (backend === 'builtin' && deps.backend() !== 'builtin') throw new Error('Embedded browser backend required');
+    const url = phoneURL(payload.url);
+    // A dedicated profile only: on a workspace bound to Live Chrome this RPC
+    // would dial the user's own browser, which no phone action may do.
+    if (backend === 'chrome' && (!deps.chrome || deps.backend() !== 'chrome' || !deps.chrome.canOpen(workspaceId))) throw new PhoneBrowserError('browser-backend-unavailable');
+    const opened = await deps.invoke('browser.tabs',{workspaceId,action:'new',url});
     if (!opened.ok) throw new Error('Browser creation unconfirmed');
     const result = opened.result as {ok?:unknown;tab?:{surfaceId?:unknown}} | undefined;
     if (result?.ok !== true || typeof result.tab?.surfaceId !== 'string' || !result.tab.surfaceId) throw new Error('Browser creation unconfirmed');
@@ -42,109 +170,120 @@ export async function handlePhoneBrowser(command: string, payload: Record<string
   }
 
   if (command === 'browser.list') {
-    return { pages: targets.slice(0, 30).flatMap(target => {
+    // `chrome:true` only from a phone that asked (`?chrome=1`): its rows say
+    // which browser they are. Without it the reply is what it always was.
+    const withChrome = payload.chrome === true;
+    const pages: Array<{id:string;title:string;url:string;backend?:PhoneBrowserBackend}> = targets.slice(0, 30).flatMap(target => {
       const page = deps.page(target.webContentsId);
       const url = page && pageURL(page.url);
-      return page && url ? [{ id: target.surfaceId, title: page.title.slice(0, 200), url }] : [];
-    }) };
-  }
-  if (!['browser.capture','browser.viewport','browser.navigate','browser.type','browser.key','browser.tap','browser.scroll'].includes(command)) throw new Error('Unsupported browser operation');
-  if (typeof payload.surfaceId !== 'string') throw new Error('Missing surface');
-  const target = targets.find(target => target.surfaceId === payload.surfaceId);
-  if (!target) throw new Error('Browser does not belong to workspace');
-  const current = deps.page(target.webContentsId);
-  if (!current || !pageURL(current.url)) throw new Error('Only HTTP browser previews are supported');
-  const scope = { surfaceId: target.surfaceId, workspaceId };
-  let result: RpcResponse;
-  const geometry = async () => {
-    const page = phoneBrowserGeometry(await deps.invoke('browser.evaluate',{...scope,expression:PHONE_BROWSER_GEOMETRY}));
-    const native = await deps.nativeBounds(target.webContentsId);
-    if (page.width > native.width + 1 || page.height > native.height + 1) throw new Error('Browser viewport exceeds visible input bounds; reset viewport');
-    return page;
-  };
-  if (command === 'browser.capture') {
-    const before = await geometry().catch(() => null);
-    const shoot = async (quality: number, scale: number) => {
-      const response = await deps.invoke('browser.screenshot', { ...scope, format: 'jpeg', quality, scale, fullPage: false });
-      if (!response.ok || !response.result || typeof response.result !== 'object') throw new Error('Browser capture unavailable');
-      const shot = response.result as {data?:unknown;mimeType?:unknown};
-      if (typeof shot.data !== 'string' || shot.mimeType !== 'image/jpeg') throw new Error('Browser capture exceeds preview limit');
-      return shot as {data:string;mimeType:'image/jpeg'};
-    };
-    let capture = await shoot(65, 0.75);
-    // The reply travels as ONE line on the daemon control pipe, whose reader
-    // drops the connection past MAX_LINE_BUFFER (1 MiB, DaemonPipeServer.ts).
-    // A capture that fits an old 2 MiB check therefore cost the desktop its
-    // daemon connection rather than the phone a preview. Keep the base64 far
-    // enough under the line limit that the rest of the envelope still fits;
-    // if the first shot is over, retake once smaller, then give up in words.
-    if (capture.data.length > CAPTURE_BASE64_LIMIT) capture = await shoot(50, 0.5);
-    if (capture.data.length > CAPTURE_BASE64_LIMIT) throw new Error('Browser capture too large for preview');
-    const after = await geometry().catch(() => null);
-    let capturedGeometry;
-    if (before && after) {
-      try { phoneBrowserPoint(0,0,before,after); capturedGeometry = after; } catch { /* Preview remains readable, but cannot be tapped. */ }
+      return page && url ? [{ id: target.surfaceId, title: page.title.slice(0, 200), url, ...(withChrome ? { backend: 'builtin' as const } : {}) }] : [];
+    });
+    if (withChrome && deps.chrome && deps.backend() === 'chrome') {
+      for (const tab of await deps.chrome.tabs(workspaceId)) {
+        if (pages.length >= 30) break;
+        const url = pageURL(tab.url);
+        if (url) pages.push({ id: tab.surfaceId, title: tab.title.slice(0, 200), url, backend: 'chrome' });
+      }
     }
-    const page = deps.page(target.webContentsId);
-    if (!page || pageURL(page.url) !== pageURL(current.url)) throw new Error('Browser page changed during capture');
-    return { data: capture.data, mimeType: 'image/jpeg', capturedAt: Date.now(), geometry:capturedGeometry, pageURL:pageURL(page.url) };
+    return { pages };
+  }
+  if (!PREVIEW_COMMANDS.includes(command)) throw new Error('Unsupported browser operation');
+  const surfaceId = payload.surfaceId;
+  if (typeof surfaceId !== 'string') throw new Error('Missing surface');
+  const driver = await driverFor(surfaceId, workspaceId, targets, deps);
+  const current = await driver.page();
+  if (!current || !pageURL(current.url)) throw new Error('Only HTTP browser previews are supported');
+
+  if (command === 'browser.capture') {
+    return driver.capture(async () => {
+      // A geometry the viewport cannot take input at still allows a readable
+      // capture; only a code (the tab went away or stopped answering) ends it.
+      const optional = (err: unknown) => { if (err instanceof PhoneBrowserError) throw err; return null; };
+      const before = await driver.geometry().catch(optional);
+      let capture = await driver.shoot(65, 0.75);
+      // The reply travels as ONE line on the daemon control pipe, whose reader
+      // drops the connection past MAX_LINE_BUFFER (1 MiB, DaemonPipeServer.ts).
+      // A capture that fits an old 2 MiB check therefore cost the desktop its
+      // daemon connection rather than the phone a preview. Keep the base64 far
+      // enough under the line limit that the rest of the envelope still fits;
+      // if the first shot is over, retake once smaller, then give up in words.
+      if (capture.data.length > CAPTURE_BASE64_LIMIT) capture = await driver.shoot(50, 0.5);
+      if (capture.data.length > CAPTURE_BASE64_LIMIT) throw new Error('Browser capture too large for preview');
+      const after = await driver.geometry().catch(optional);
+      let capturedGeometry;
+      if (before && after) {
+        try { phoneBrowserPoint(0,0,before,after); capturedGeometry = after; } catch { /* Preview remains readable, but cannot be tapped. */ }
+      }
+      const page = await driver.page();
+      if (!page || pageURL(page.url) !== pageURL(current.url)) throw new Error('Browser page changed during capture');
+      return { data: capture.data, mimeType: 'image/jpeg', capturedAt: Date.now(), geometry:capturedGeometry, pageURL:pageURL(page.url) };
+    });
+  }
+  if (command === 'browser.focus') {
+    // Only on the phone's explicit tap: nothing else brings a tab forward.
+    await driver.focus();
+    return { applied: true };
   }
   if (command === 'browser.viewport') {
     if (payload.mode !== 'mobile' && payload.mode !== 'desktop') throw new Error('Invalid viewport');
-    result = await deps.invoke('browser.emulate', {...scope,deviceReset:true});
-    if (!result.ok) throw new Error('Browser viewport reset failed');
-    // Discard the RPC's remembered pre-preset dimensions: the native widget
-    // may have been resized since that snapshot.
-    await deps.clearViewport(target.webContentsId);
-    if (payload.mode === 'mobile') {
-      // A viewport taller than the Electron guest can capture pixels outside
-      // its input hit-test bounds. Fit the mobile viewport to the real guest.
-      const available = await deps.nativeBounds(target.webContentsId);
-      const width = Math.min(390,Math.floor(available.width));
-      const height = Math.min(844,Math.floor(available.height));
-      result = await deps.invoke('browser.emulate', {...scope,deviceMetrics:{
-        width,height,deviceScaleFactor:1,mobile:true,hasTouch:true,screenWidth:width,screenHeight:height,
-      }});
-    }
-  } else if (command === 'browser.type' || command === 'browser.key' || command === 'browser.tap' || command === 'browser.scroll') {
-    if (typeof payload.expectedURL !== 'string' || payload.expectedURL !== pageURL(current.url)) throw new Error('Browser page changed; refresh before input');
-    const input = (method: string, args: Record<string,unknown>) => deps.input(target.webContentsId, async () => {
-      const owned = deps.targets().some(item => item.surfaceId === target.surfaceId && item.webContentsId === target.webContentsId && item.workspaceId === workspaceId);
-      const page = deps.page(target.webContentsId);
-      if (!owned || !page || pageURL(page.url) !== payload.expectedURL) throw new Error('Browser page changed; refresh before input');
-      if (command === 'browser.tap' || command === 'browser.scroll') {
-        phoneBrowserPoint(payload.x,payload.y,payload.geometry,await geometry());
-        const latest = deps.page(target.webContentsId);
-        if (!latest || pageURL(latest.url) !== payload.expectedURL || !deps.targets().some(item => item.surfaceId === target.surfaceId && item.webContentsId === target.webContentsId && item.workspaceId === workspaceId)) throw new Error('Browser page changed; refresh before input');
-      }
-      if (method === 'phone.scroll') {
-        await deps.scroll(target.webContentsId,args as {x:number;y:number;deltaX:number;deltaY:number});
-        return {id:'phone-scroll',ok:true,result:{applied:true}};
-      }
-      return deps.invoke(method,{...scope,...args});
-    });
-    if (command === 'browser.tap' || command === 'browser.scroll') {
-      const point = phoneBrowserPoint(payload.x,payload.y,payload.geometry,await geometry());
-      if (command === 'browser.scroll') {
-        if (typeof payload.deltaX !== 'number' || !Number.isFinite(payload.deltaX) || Math.abs(payload.deltaX) > 1 ||
-            typeof payload.deltaY !== 'number' || !Number.isFinite(payload.deltaY) || Math.abs(payload.deltaY) > 1) throw new Error('Invalid browser scroll');
-        const size = payload.geometry as {width:number;height:number};
-        result = await input('phone.scroll',{...point,deltaX:payload.deltaX * size.width,deltaY:payload.deltaY * size.height});
-      } else result = await input('browser.click.cdp',point);
-    } else if (command === 'browser.type') {
-      // eslint-disable-next-line no-control-regex
-      if (typeof payload.text !== 'string' || !payload.text || payload.text.length > 4096 || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(payload.text)) throw new Error('Invalid browser text');
-      result = await input('browser.type.cdp', {text:payload.text});
-    } else {
-      if (!['Tab','Shift+Tab','Enter','Backspace','Escape','PageUp','PageDown'].includes(payload.key as string)) throw new Error('Unsupported browser key');
-      result = await input('browser.press.cdp', {key:payload.key});
-    }
-  } else {
-    if (typeof payload.url !== 'string' || payload.url.length > 4096) throw new Error('Invalid URL');
-    const url = new URL(payload.url);
-    if (!pageURL(payload.url) || url.username || url.password) throw new Error('Only HTTP URLs without embedded credentials are supported');
-    result = await deps.invoke('browser.navigate', { ...scope, url: url.href });
+    await driver.viewport(payload.mode);
+    return { applied: true };
   }
-  if (!result.ok) throw new Error('Browser operation failed');
+  if (command === 'browser.navigate') {
+    await driver.navigate(phoneURL(payload.url));
+    return { applied: true };
+  }
+  if (typeof payload.expectedURL !== 'string' || payload.expectedURL !== pageURL(current.url)) throw new Error('Browser page changed; refresh before input');
+  const expectedURL = payload.expectedURL;
+  // Help-card typing: the origin the daemon's help row showed, never the body's.
+  const helpOrigin = command === 'browser.type' && payload.helpOrigin !== undefined ? payload.helpOrigin : undefined;
+  if (helpOrigin !== undefined && typeof helpOrigin !== 'string') throw new PhoneBrowserError('browser-help-origin-changed');
+  const unchanged = async () => {
+    const page = await driver.page();
+    if (!(await driver.owned()) || !page || pageURL(page.url) !== expectedURL) throw new Error('Browser page changed; refresh before input');
+    return page;
+  };
+  const input = (operation: () => Promise<void>) => driver.input(async () => {
+    const page = await unchanged();
+    if (helpOrigin !== undefined && browserHelpOrigin(page.url) !== helpOrigin) throw new PhoneBrowserError('browser-help-origin-changed');
+    if (command === 'browser.tap' || command === 'browser.scroll') {
+      phoneBrowserPoint(payload.x,payload.y,payload.geometry,await driver.geometry());
+      await unchanged();
+    }
+    await operation();
+  });
+  if (command === 'browser.tap' || command === 'browser.scroll') {
+    const point = phoneBrowserPoint(payload.x,payload.y,payload.geometry,await driver.geometry());
+    if (command === 'browser.scroll') {
+      if (typeof payload.deltaX !== 'number' || !Number.isFinite(payload.deltaX) || Math.abs(payload.deltaX) > 1 ||
+          typeof payload.deltaY !== 'number' || !Number.isFinite(payload.deltaY) || Math.abs(payload.deltaY) > 1) throw new Error('Invalid browser scroll');
+      const size = payload.geometry as {width:number;height:number};
+      const event = {...point,deltaX:payload.deltaX * size.width,deltaY:payload.deltaY * size.height};
+      await input(() => driver.scroll(event));
+    } else await input(() => driver.tap(point));
+  } else if (command === 'browser.type') {
+    // eslint-disable-next-line no-control-regex
+    if (typeof payload.text !== 'string' || !payload.text || payload.text.length > 4096 || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(payload.text)) throw new Error('Invalid browser text');
+    const text = payload.text;
+    await input(() => driver.type(text));
+  } else {
+    if (!PREVIEW_KEYS.includes(payload.key as string)) throw new Error('Unsupported browser key');
+    const key = payload.key as string;
+    await input(() => driver.key(key));
+  }
   return { applied: true };
+}
+
+/** The tab's driver: a builtin pane of the workspace, else a dedicated Chrome tab of it. */
+async function driverFor(surfaceId: string, workspaceId: string, targets: CdpTargetInfo[], deps: BrowserDeps): Promise<PhoneBrowserDriver> {
+  const target = targets.find(target => target.surfaceId === surfaceId);
+  if (target) return webviewDriver(target, workspaceId, deps);
+  if (deps.chrome && deps.backend() === 'chrome') {
+    const tab = (await deps.chrome.tabs(workspaceId)).find(tab => tab.surfaceId === surfaceId);
+    if (tab) return chromeDriver(surfaceId, workspaceId, deps.chrome);
+  }
+  // A dedicated Chrome surface (`chrome-<uuid>`) that is not this workspace's
+  // now: closed, replaced, or never ours — the same answer for each.
+  if (deps.chrome && surfaceId.startsWith('chrome-')) throw new PhoneBrowserError('browser-tab-gone');
+  throw new Error('Browser does not belong to workspace');
 }

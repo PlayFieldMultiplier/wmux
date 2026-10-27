@@ -37,15 +37,19 @@ describe('browserHelpRow', () => {
     expect(await browserHelpRow(pending({ surfaceId: undefined }), deps)).not.toHaveProperty('surfaceId');
   });
 
-  it('a dedicated Chrome tab gets its origin only when this workspace recorded it', async () => {
+  it('a dedicated Chrome tab gets its origin, and is previewable, only when this workspace recorded it', async () => {
     const chromeTabs = vi.fn(async () => [
       { surfaceId: 'chrome-a', targetId: 't-a', workspaceId: 'ws-1', url: 'https://shop.example.com/cart' },
       { surfaceId: 'chrome-b', targetId: 't-b', url: 'https://bank.example.com/' },
     ]);
     const deps = tabs({ backend: () => 'chrome', chromeTabs });
-    expect(await browserHelpRow(pending({ surfaceId: 'chrome-a' }), deps)).toMatchObject({ backend: 'chrome', previewable: false, origin: 'https://shop.example.com' });
+    expect(await browserHelpRow(pending({ surfaceId: 'chrome-a' }), deps)).toMatchObject({ backend: 'chrome', previewable: true, origin: 'https://shop.example.com' });
+    // Named by its CDP target id: the preview addresses it by surfaceId only.
+    expect(await browserHelpRow(pending({ surfaceId: 't-a' }), deps)).toMatchObject({ backend: 'chrome', previewable: false });
     // A tab with no workspace on record is not this workspace's.
-    expect(await browserHelpRow(pending({ surfaceId: 'chrome-b' }), deps)).not.toHaveProperty('origin');
+    const unclaimed = await browserHelpRow(pending({ surfaceId: 'chrome-b' }), deps);
+    expect(unclaimed).not.toHaveProperty('origin');
+    expect(unclaimed).toMatchObject({ previewable: false });
     chromeTabs.mockRejectedValueOnce(new Error('gone'));
     expect(await browserHelpRow(pending({ surfaceId: 'chrome-a' }), deps)).not.toHaveProperty('origin');
   });

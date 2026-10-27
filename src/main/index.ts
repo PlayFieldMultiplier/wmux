@@ -9,6 +9,9 @@ import { randomUUID as phoneBrowserRequestId } from 'node:crypto';
 import { webContents as phoneWebContents } from 'electron';
 import { withPhoneBrowserInputFocus, dispatchPhoneBrowserScroll, phoneBrowserNativeBounds } from './phone/PhoneBrowserInput';
 import { handlePhoneBrowser } from './phone/PhoneBrowser';
+import { createPhoneChromeDeps, phoneChromeTabs } from './phone/PhoneBrowserChrome';
+import { validateResolvedNavigationUrl } from './security/navigationPolicy';
+import { navigationPolicyOptions } from '../shared/types';
 import { handlePhoneWorkspaces } from './phone/PhoneWorkspaces';
 import { handlePhoneQuickCommands } from './quickCommands/QuickCommandStore';
 import { installPhoneBridge } from './phone/installPhoneBridge';
@@ -1252,6 +1255,18 @@ registerBrowserHelpIpc(ipcMain, { getWindow: () => mainWindow, requests: browser
 // registered, on every daemon connect; a phone's Done / Cancel comes back as
 // `workspaces.browserHelpDecide`.
 setPhoneBrowserHelpStore(browserHelpRequests);
+// The phone preview's dedicated Chrome tabs (phone/PhoneBrowserChrome.ts):
+// strict workspace equality, never Live Chrome, never a launch. The help
+// table below reads the same list, so its rows are previewable exactly when
+// the preview can drive them.
+const phoneChromeDeps = createPhoneChromeDeps({
+  registry: chromeRegistry,
+  paneBindings: () => chromeProfileStore.getPaneBindings(),
+  validateNavigation: async (url) => {
+    const verdict = await validateResolvedNavigationUrl(url, navigationPolicyOptions(browserBackendStore.allowPrivateNetwork()));
+    if (!verdict.valid) throw new Error('Navigation refused');
+  },
+});
 const browserHelpFeed = createBrowserHelpFeed({
   pending: () => browserHelpRequests.listPending(),
   tabs: {
@@ -1267,13 +1282,8 @@ const browserHelpFeed = createBrowserHelpFeed({
     mayBeLiveChrome: (workspaceId, tabFound) =>
       chromeRegistry.profileFor(workspaceId) === LIVE_CHROME_PROFILE ||
       (!tabFound && chromeRegistry.hasPaneBindings(workspaceId) && chromeRegistry.peekLauncher(LIVE_CHROME_PROFILE) !== undefined),
-    chromeTabs: async (workspaceId) => {
-      const profile = chromeRegistry.profileFor(workspaceId);
-      // Live Chrome is never listed: that is every tab the user has open.
-      const launcher = profile === LIVE_CHROME_PROFILE ? undefined : chromeRegistry.peekLauncher(profile);
-      if (!launcher || launcher.writeScope) return [];
-      return launcher.listTargets(workspaceId);
-    },
+    // Live Chrome is never listed: that is every tab the user has open.
+    chromeTabs: async (workspaceId) => (await phoneChromeTabs(workspaceId, chromeRegistry, () => chromeProfileStore.getPaneBindings())).map(({ tab }) => tab),
   },
   push: async (rows) => {
     if (!daemonClient?.isConnected) throw new Error('Daemon not connected');
@@ -2420,6 +2430,11 @@ app.on('ready', async () => {
               await dispatchPhoneBrowserScroll(wc,event);
             },
             targets: () => webviewCdpManager.listTargets(),
+            focusBuiltin: async (surfaceId, workspaceId) => {
+              const reply = await sendToRenderer(() => mainWindow, 'browser.tabs', { action: 'select', workspaceId, surfaceId }) as { ok?: unknown } | undefined;
+              return reply?.ok === true;
+            },
+            chrome: phoneChromeDeps,
             input: (id, operation) => {
               const wc = phoneWebContents.fromId(id);
               if (!wc || wc.isDestroyed()) return Promise.reject(new Error('Browser unavailable'));
