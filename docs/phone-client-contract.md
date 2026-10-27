@@ -2826,21 +2826,23 @@ lists `browserHelpPush` is skipped):
 ```
 
 - `resolution` is `completed`, `continued` (Done), `cancelled` or
-  `timed_out`. A request that left the desktop's list without saying how (the
-  desktop app that held it went away and came back without it) reads
-  `timed_out` past its deadline and `cancelled` before it.
+  `timed_out`. A request that closed without the desktop saying how (the
+  desktop app that held it went away, or its list dropped it with no state)
+  reads `timed_out` past its deadline and `cancelled` before it.
 - `retractsApprovalId` is the request id, not a pane approval's: match it with
   `approvalKind`. Handle it as the other retractions: silent, no category,
   drop any local copy of the card. No retraction follows a push that never
   left (presence still held it, or the held push was dropped).
 
-Each request is judged once, when it first appears in the daemon's list: a
-request no device could answer then (no grant, no server, a device that
-registered later) is not pushed later. The desktop sending its list again,
-including after it reconnects, never pushes a request a second time. If the
-desktop app goes away, sent banners stay until a desktop lists its requests
-again without them. The daemon-restart limit and "a push is a nudge" of bot
-approvals apply the same way, with `browserHelpPush` for the capability.
+A request is pushed at most once. When no device could answer it as it
+opened (no grant yet, no server running), it is considered again each time
+the desktop next sends its list, and pushed then if a device qualifies. The
+desktop sending its list again, including after it reconnects, never pushes
+a request a second time. When the desktop app goes away its requests close
+(as the `browser.help` frames say) and their banners are retracted; one it
+still lists when it returns is not pushed again, so read the list. The
+daemon-restart limit and "a push is a nudge" of bot approvals apply the same
+way, with `browserHelpPush` for the capability.
 
 ---
 

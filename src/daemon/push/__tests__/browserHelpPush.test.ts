@@ -142,6 +142,27 @@ describe('BrowserHelpPushRouter', () => {
     expect(h.sent).toEqual([]);
   });
 
+  it('a request nobody could answer yet is pushed once a later table finds a device', () => {
+    const h = harness({ audience: [] });
+    h.table.set('main', { requests: [row()] });
+    h.state.audience = ['phone-1'];
+    h.table.set('main', { requests: [row(), row({ requestId: 'req-2' })] });
+    h.table.set('main', { requests: [row(), row({ requestId: 'req-2' })] });
+    expect(h.sent.map((s) => s.payload.browserHelpId)).toEqual(['req-1', 'req-2']);
+  });
+
+  it('a push routing failure never reaches the table\'s caller', () => {
+    const logs: string[] = [];
+    const table = new BrowserHelpTable({
+      firstParty: () => true, isOwner: () => true, emit: () => undefined,
+      onRows: () => { throw new Error('boom'); }, log: (_l, m) => logs.push(m), now: () => 2_000,
+    });
+    expect(table.set('main', { requests: [row()] })).toMatchObject({ ok: true });
+    expect(() => table.closeDecided('req-1', 'continued')).not.toThrow();
+    expect(table.list()).toEqual([]);
+    expect(logs).toHaveLength(2);
+  });
+
   it('★ a brain pane\'s request is never pushed', () => {
     const h = harness({ brain: (id) => id === 'brain-pty' });
     h.table.set('main', { requests: [row({ requesterPtyId: 'brain-pty' })] });
@@ -151,32 +172,35 @@ describe('BrowserHelpPushRouter', () => {
 
   it('★ a republish, a reconnect or a stale table never pushes again', () => {
     const h = harness();
-    h.table.set('main', { requests: [row()] });
-    h.table.set('main', { requests: [row()] });
-    // The desktop goes away and comes back with the same request open.
-    h.router.forgetParked();
+    h.table.set('main', { requests: [row(), row({ requestId: 'req-2' })] });
+    h.table.set('main', { requests: [row(), row({ requestId: 'req-2' })] });
+    expect(h.sent).toHaveLength(2);
+    // Closed, then a table computed before that lists it again.
+    h.table.set('main', { requests: [row()], closed: [{ requestId: 'req-2', state: 'timed_out' }] });
+    h.table.set('main', { requests: [row(), row({ requestId: 'req-2' })] });
+    expect(h.sent.map((s) => s.payload.kind ?? 'push')).toEqual(['push', 'push', 'approval_retraction']);
+    // The desktop goes away (its requests close) and comes back with req-1 still open.
+    h.router.publisherGone();
     h.table.onClientClose('main');
     h.state.owner = 'main-2';
-    h.table.set('main-2', { requests: [row()] });
-    expect(h.sent).toHaveLength(1);
-    // Closed, then a table computed before that lists it again.
-    h.table.set('main-2', { requests: [], closed: [{ requestId: 'req-1', state: 'timed_out' }] });
-    h.table.set('main-2', { requests: [row()] });
-    expect(h.sent.map((s) => s.payload.kind ?? 'push')).toEqual(['push', 'approval_retraction']);
+    h.table.set('main-2', { requests: [row(), row({ requestId: 'req-2' })] });
+    h.table.set('main-2', { requests: [row(), row({ requestId: 'req-2' })] });
+    expect(h.sent.map((s) => s.payload.kind ?? 'push')).toEqual(['push', 'push', 'approval_retraction', 'approval_retraction']);
   });
 
   it('★ a row that leaves with no state still retracts', () => {
     const h = harness();
     h.table.set('main', { requests: [row(), row({ requestId: 'req-2', deadlineAt: 3_000 })] });
-    h.table.onClientClose('main');
-    h.state.owner = 'main-2';
     h.clock.now = 4_000;
-    // The new desktop no longer has either: one before its deadline, one after.
-    h.table.set('main-2', { requests: [] });
+    // Main's next table no longer has req-2 and says nothing of how it ended.
+    h.table.set('main', { requests: [row()] });
+    // Then the desktop goes away with req-1 still open.
+    h.router.publisherGone();
     expect(h.sent.slice(2).map((s) => [s.payload.retractsApprovalId, s.payload.resolution])).toEqual([
-      ['req-1', 'cancelled'],
       ['req-2', 'timed_out'],
+      ['req-1', 'cancelled'],
     ]);
+    expect(h.sent[3].opts.deviceIds).toEqual(['phone-1']);
   });
 
   it('does not push a request already past its deadline', () => {
@@ -208,7 +232,7 @@ describe('BrowserHelpPushRouter', () => {
   it('a held push forgotten because its desktop left is pushed once when a desktop lists it again', () => {
     const h = harness({ present: true });
     h.table.set('main', { requests: [row()] });
-    h.router.forgetParked();
+    h.router.publisherGone();
     h.table.onClientClose('main');
     h.state.present = false;
     h.state.owner = 'main-2';

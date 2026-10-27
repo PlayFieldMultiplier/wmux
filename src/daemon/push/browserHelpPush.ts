@@ -111,9 +111,10 @@ interface Pushed {
 /**
  * The daemon's open browser help table, as pushes and retractions. Each
  * table is diffed against what was pushed, so a republish of the same rows
- * (a reconnect, main's next change) sends nothing. Each request is judged
- * once, when it first appears: pushed, or skipped for good (no device may
- * answer it, a brain pane's, already past its deadline).
+ * (a reconnect, main's next change) sends nothing. A request is pushed at
+ * most once: when it first appears, or at a later table if no device could
+ * answer it before. A brain pane's, or one past its deadline, is skipped for
+ * good.
  */
 export class BrowserHelpPushRouter {
   private readonly pushed = new Map<string, Pushed>();
@@ -127,28 +128,22 @@ export class BrowserHelpPushRouter {
     const now = (deps.now ?? Date.now)();
     const open = new Set(rows.map((row) => row.requestId));
     for (const [id, record] of [...this.pushed]) {
-      if (open.has(id)) continue;
-      this.pushed.delete(id);
-      if (record.state === 'parked') deps.forget(BROWSER_HELP_PARK_PREFIX + id);
-      if (record.state !== 'sent') continue;
-      // A row that left with no state (the desktop that held it is gone):
-      // past its deadline it timed out, before it nobody answered it.
-      const resolution = closed.get(id) ?? (now >= record.deadlineAt ? 'timed_out' : 'cancelled');
-      deps.log?.('info', `[push] retracting the push for browser help ${id}`);
-      deps.send(buildBrowserHelpRetractionPayload(id, record.workspaceId, resolution), {
-        collapseId: browserHelpPushCollapseId(id),
-        requires: BROWSER_HELP_PUSH_CAPABILITY,
-        deviceIds: record.deviceIds,
-      });
+      if (!open.has(id)) this.close(id, record, closed.get(id), now);
     }
+    let audience: string[] | undefined;
     for (const row of rows) {
       const id = row.requestId;
       if (this.pushed.has(id) || this.handled.has(id)) continue;
+      if (row.deadlineAt <= now || (row.requesterPtyId !== undefined && deps.isBrainPane(row.requesterPtyId))) {
+        this.remember(id);
+        continue;
+      }
+      // Nobody may answer it yet (no grant, no server): judged again at the
+      // next table rather than skipped for good.
+      audience ??= deps.audience();
+      if (audience.length === 0) continue;
       this.remember(id);
-      if (row.deadlineAt <= now) continue;
-      if (row.requesterPtyId !== undefined && deps.isBrainPane(row.requesterPtyId)) continue;
-      const deviceIds = deps.audience();
-      if (deviceIds.length === 0) continue;
+      const deviceIds = audience;
       const payload = buildBrowserHelpPushPayload(row);
       const collapseId = browserHelpPushCollapseId(id);
       const record: Pushed = { state: 'sent', workspaceId: row.workspaceId, deadlineAt: row.deadlineAt, deviceIds };
@@ -163,18 +158,39 @@ export class BrowserHelpPushRouter {
   }
 
   /**
-   * The desktop that published the table went away. Answering goes through
-   * it, so a push presence still holds is forgotten and judged again when a
-   * desktop lists the request once more (it was never delivered). Sent ones
-   * stay: they are retracted when a table no longer lists them.
+   * The desktop that published the table went away, and its requests closed
+   * with it (the `browser.help` close frames say the same). A push presence
+   * still holds is forgotten and judged again if a desktop lists the request
+   * once more (it was never delivered); a sent one is retracted, and never
+   * pushed again. Called before presence lets held pushes go.
    */
-  forgetParked(): void {
+  publisherGone(): void {
+    const now = (this.deps.now ?? Date.now)();
     for (const [id, record] of [...this.pushed]) {
-      if (record.state !== 'parked') continue;
-      this.deps.forget(BROWSER_HELP_PARK_PREFIX + id);
-      this.pushed.delete(id);
-      this.handled.delete(id);
+      if (record.state === 'parked') {
+        this.deps.forget(BROWSER_HELP_PARK_PREFIX + id);
+        this.pushed.delete(id);
+        this.handled.delete(id);
+      } else {
+        this.close(id, record, undefined, now);
+      }
     }
+  }
+
+  private close(id: string, record: Pushed, state: BrowserHelpResolution | undefined, now: number): void {
+    const { deps } = this;
+    this.pushed.delete(id);
+    if (record.state === 'parked') deps.forget(BROWSER_HELP_PARK_PREFIX + id);
+    if (record.state !== 'sent') return;
+    // A row that left with no state (the desktop that held it is gone):
+    // past its deadline it timed out, before it nobody answered it.
+    const resolution = state ?? (now >= record.deadlineAt ? 'timed_out' : 'cancelled');
+    deps.log?.('info', `[push] retracting the push for browser help ${id}`);
+    deps.send(buildBrowserHelpRetractionPayload(id, record.workspaceId, resolution), {
+      collapseId: browserHelpPushCollapseId(id),
+      requires: BROWSER_HELP_PUSH_CAPABILITY,
+      deviceIds: record.deviceIds,
+    });
   }
 
   /** Is this park-queue key one of ours? */

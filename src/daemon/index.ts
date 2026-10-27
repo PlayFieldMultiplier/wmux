@@ -9116,7 +9116,7 @@ async function main(): Promise<void> {
       botPromptsPublisher = null;
     }
     if (browserHelpPublisher !== null && browserHelpPublisher === clientId) {
-      browserHelpPushRouter.forgetParked();
+      browserHelpPushRouter.publisherGone();
       browserHelpPublisher = null;
     }
     desktopPresence.forget(clientId);
