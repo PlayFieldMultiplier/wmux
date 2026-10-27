@@ -25,6 +25,8 @@ const HOME = path.resolve('/home/me');
 const GIT = path.join(HOME, 'src', 'repo', '.git');
 const WT = path.join(HOME, '.wmux', 'worktrees', 'task-1');
 const TMP = path.join(HOME, '.wmux', 'worker-tmp', 'task-1');
+// Resolved like the builder resolves it, so the expectations hold on Windows too.
+const TESTS = path.resolve('/private/tmp/wmux-test-*');
 const HOOK = 'ELECTRON_RUN_AS_NODE=1 "/opt/wmux" "/home/me/.wmux/factory/worker-hooks/abc.cjs" "/w" "/t" || exit 2';
 
 function input(over: Partial<WorkerFenceInput> = {}): WorkerFenceInput {
@@ -38,7 +40,7 @@ function input(over: Partial<WorkerFenceInput> = {}): WorkerFenceInput {
     otherBranches: ['main', 'wmux/task-1', 'wmux/task-2', 'fix(x)'],
     otherWorktrees: ['task-1', 'task-2'],
     platformCapable: true,
-    repoTestWritePaths: ['/private/tmp/wmux-test-*'],
+    repoTestWritePaths: [TESTS],
     permissionMode: 'bypassPermissions',
     hookCommand: HOOK,
     credentialPaths: [path.join(HOME, '.ssh'), path.join(HOME, '.claude', '.credentials.json'), path.join(HOME, '.wmux'), path.join(HOME, '.wmux-auth-token')],
@@ -97,7 +99,7 @@ describe('the fence settings', () => {
     expect(weaker).toBe(false);
     const sb = sandboxOf(settings);
     expect(sb).toMatchObject({ enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false, enableWeakerNestedSandbox: false });
-    expect(sb.filesystem.allowWrite).toEqual([WT, TMP, GIT, '/private/tmp/wmux-test-*']);
+    expect(sb.filesystem.allowWrite).toEqual([WT, TMP, GIT, TESTS]);
     expect(sb.filesystem.denyWrite).toEqual([...workerFenceWorktreeDenies(WT, true), ...workerFenceGitDenies(input())]);
     for (const p of [['.claude', 'settings.json'], ['.claude', 'settings.local.json'], ['.mcp.json'], ['.git']]) expect(sb.filesystem.denyWrite).toContain(path.join(WT, ...p));
     // Instructions stay writable: repositories track them, and git rewrites them.
@@ -106,7 +108,7 @@ describe('the fence settings', () => {
     expect(sb.filesystem.denyRead).toContain(path.join(HOME, '.ssh'));
     // Every denied folder that holds one of the worker's folders re-opens it.
     for (const own of [WT, TMP, GIT]) expect(sb.filesystem.allowRead).toContain(own);
-    expect(sb.network).toMatchObject({ strictAllowlist: false, allowLocalBinding: true, allowUnixSockets: [TMP, '/private/tmp/wmux-test-*'] });
+    expect(sb.network).toMatchObject({ strictAllowlist: false, allowLocalBinding: true, allowUnixSockets: [TMP, TESTS] });
     expect(settings.env).toEqual({
       CLAUDE_CODE_TMPDIR: TMP,
       npm_config_cache: path.join(TMP, 'npm-cache'),
@@ -148,7 +150,9 @@ describe('the credential set', () => {
     }
     // ~/.wmux holds the worktree: a deny there would close it to the file tools.
     expect(deny.some((r) => r.includes('~/.wmux)') || r.includes('~/.wmux/**'))).toBe(false);
-    expect(workerFencePermissionDenies(['/etc/secret'], [WT], HOME)).toContain('Read(//etc/secret)');
+    const secret = path.resolve('/etc/secret');
+    const rule = `Read(//${secret.split(path.sep).join('/').replace(/^\/+/, '')})`;
+    expect(workerFencePermissionDenies([secret], [WT], HOME)).toContain(rule);
   });
 
   it('is the bot sandbox\'s list without home, without gh, with Claude folders narrowed to their sign-in file', () => {
