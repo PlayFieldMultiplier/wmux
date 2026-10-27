@@ -34,6 +34,8 @@ export interface BrowserHelpTableOptions {
   /** The frames one change produced, in order. */
   emit: (frames: PhoneBrowserHelpFrame[]) => void;
   log?: (level: 'info' | 'warn', message: string) => void;
+  /** Injectable clock. */
+  now?: () => number;
 }
 
 export type BrowserHelpLookup = { row: PhoneBrowserHelpRow } | { closed: true } | null;
@@ -85,14 +87,24 @@ export class BrowserHelpTable {
     return this.publisher !== null;
   }
 
+  /**
+   * The open rows. One past its deadline is left out even before main's
+   * next table says so (main's timer can be late, as after a sleep): main
+   * would only answer it as closed.
+   */
   list(): PhoneBrowserHelpRow[] {
-    return [...this.rows.values()];
+    const at = this.now();
+    return [...this.rows.values()].filter((row) => row.deadlineAt > at);
   }
 
   lookup(requestId: string): BrowserHelpLookup {
     const row = this.rows.get(requestId);
-    if (row) return { row };
+    if (row) return row.deadlineAt > this.now() ? { row } : { closed: true };
     return this.recentlyClosed.has(requestId) ? { closed: true } : null;
+  }
+
+  private now(): number {
+    return (this.opts.now ?? Date.now)();
   }
 
   private closeFrame(row: PhoneBrowserHelpRow, state: Settled | undefined): PhoneBrowserHelpFrame {

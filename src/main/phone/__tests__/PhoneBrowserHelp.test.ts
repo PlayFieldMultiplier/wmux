@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { browserHelpRow, createBrowserHelpFeed, handlePhoneBrowserHelpCommand, type BrowserHelpTabDeps } from '../PhoneBrowserHelp';
+import { browserHelpRow, browserHelpRows, createBrowserHelpFeed, handlePhoneBrowserHelpCommand, type BrowserHelpTabDeps } from '../PhoneBrowserHelp';
 import type { PendingHelpRequest, PhoneHelpResolution } from '../../browser-session/HelpRequests';
 import type { PhoneBrowserHelpRow } from '../../../shared/phoneBrowserHelp';
 
@@ -15,7 +15,7 @@ function tabs(over: Partial<BrowserHelpTabDeps> = {}): BrowserHelpTabDeps {
   return {
     backend: () => 'builtin',
     builtinUrl: () => null,
-    isLiveChrome: () => false,
+    mayBeLiveChrome: () => false,
     chromeTabs: async () => [],
     ...over,
   };
@@ -50,16 +50,49 @@ describe('browserHelpRow', () => {
     expect(await browserHelpRow(pending({ surfaceId: 'chrome-a' }), deps)).not.toHaveProperty('origin');
   });
 
-  it('Live Chrome is never read and never previewable', async () => {
-    const chromeTabs = vi.fn(async () => [{ surfaceId: 'surf-1', targetId: 'surf-1', workspaceId: 'ws-1', url: 'https://bank.example.com/' }]);
-    const row = await browserHelpRow(pending(), tabs({ backend: () => 'chrome', isLiveChrome: () => true, chromeTabs }));
+  it('Live Chrome is never previewable and carries no origin', async () => {
+    const row = await browserHelpRow(pending(), tabs({ backend: () => 'chrome', mayBeLiveChrome: () => true }));
     expect(row).toMatchObject({ backend: 'live', previewable: false });
     expect(row).not.toHaveProperty('origin');
-    expect(chromeTabs).not.toHaveBeenCalled();
+  });
+
+  it('a tab missing from the workspace Chrome is asked about as possibly Live, a found one is not', async () => {
+    const mayBeLiveChrome = vi.fn((_ws: string, found: boolean) => !found);
+    const deps = tabs({
+      backend: () => 'chrome', mayBeLiveChrome,
+      chromeTabs: async () => [{ surfaceId: 'chrome-a', targetId: 't-a', workspaceId: 'ws-1', url: 'https://shop.example.com/' }],
+    });
+    expect(await browserHelpRow(pending({ surfaceId: 'chrome-a' }), deps)).toMatchObject({ backend: 'chrome', origin: 'https://shop.example.com' });
+    expect(await browserHelpRow(pending({ surfaceId: 'TARGET1' }), deps)).toMatchObject({ backend: 'live', previewable: false });
+    expect(mayBeLiveChrome.mock.calls).toEqual([['ws-1', true], ['ws-1', false]]);
+  });
+
+  it('a lookup that throws costs only its own field, never the row', async () => {
+    const boom = () => { throw new Error('store unreadable'); };
+    expect(await browserHelpRow(pending(), tabs({ builtinUrl: boom, backend: () => 'chrome', mayBeLiveChrome: boom })))
+      .toMatchObject({ requestId: 'req-1', backend: 'live', previewable: false });
+    expect(await browserHelpRow(pending(), tabs({ backend: boom, mayBeLiveChrome: () => false })))
+      .toMatchObject({ requestId: 'req-1', backend: 'chrome', previewable: false });
   });
 
   it('drops a surface id the phone contract cannot carry', async () => {
     expect(await browserHelpRow(pending({ surfaceId: 'has space' }), tabs())).not.toHaveProperty('surfaceId');
+  });
+});
+
+describe('browserHelpRows', () => {
+  it('reads each workspace\'s Chrome tabs once per publication', async () => {
+    const chromeTabs = vi.fn(async () => []);
+    await browserHelpRows([pending(), pending({ requestId: 'req-2', surfaceId: 'surf-2' }), pending({ requestId: 'req-3', workspaceId: 'ws-2' })], tabs({ backend: () => 'chrome', chromeTabs }));
+    expect(chromeTabs.mock.calls).toEqual([['ws-1'], ['ws-2']]);
+  });
+
+  it('drops a row the daemon would refuse and keeps the oldest 128', async () => {
+    const many = Array.from({ length: 130 }, (_, i) => pending({ requestId: `req-${i}` }));
+    const rows = await browserHelpRows([pending({ requestId: 'req-x', workspaceId: 'ws with space' }), ...many], tabs());
+    expect(rows).toHaveLength(128);
+    expect(rows[0].requestId).toBe('req-0');
+    expect(rows.at(-1)?.requestId).toBe('req-127');
   });
 });
 
@@ -75,16 +108,17 @@ describe('handlePhoneBrowserHelpCommand', () => {
       .toEqual({ error: 'browser-help-closed' });
     expect(await handlePhoneBrowserHelpCommand('workspaces.browserHelpDecide', { requestId: 'req-1', workspaceId: 'ws-1', outcome: 'continued' }, () => store({ ok: false, reason: 'not-found' })))
       .toEqual({ error: 'browser-help-not-found' });
+    // Main's store is not up yet: unavailable, not disabled.
     expect(await handlePhoneBrowserHelpCommand('workspaces.browserHelpDecide', { requestId: 'req-1', workspaceId: 'ws-1', outcome: 'continued' }, () => null))
-      .toEqual({ error: 'browser-help-disabled' });
+      .toEqual({ unavailable: true });
   });
 
   it('refuses a malformed payload without touching the store, and ignores other commands', async () => {
     const s = store({ ok: true, state: 'continued' });
     expect(await handlePhoneBrowserHelpCommand('workspaces.browserHelpDecide', { requestId: 'req-1', workspaceId: 'ws-1', outcome: 'completed' }, () => s))
-      .toEqual({ error: 'browser-help-not-found' });
+      .toEqual({ invalid: true });
     expect(await handlePhoneBrowserHelpCommand('workspaces.browserHelpDecide', { requestId: 'req-1', outcome: 'continued' }, () => s))
-      .toEqual({ error: 'browser-help-not-found' });
+      .toEqual({ invalid: true });
     expect(s.resolveFromPhone).not.toHaveBeenCalled();
     expect(await handlePhoneBrowserHelpCommand('workspaces.list', {}, () => s)).toBeNull();
   });

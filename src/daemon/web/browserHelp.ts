@@ -140,6 +140,8 @@ export async function browserHelpDecisionResponse(
   }
   const reply = parseBrowserHelpDecideReply(raw);
   if (!reply) return { status: 502, body: { error: 'desktop-bad-reply' } };
+  if ('unavailable' in reply) return { status: 503, body: { error: 'desktop-unavailable' } };
+  if ('invalid' in reply) return { status: 400, body: { error: 'invalid-decision' } };
   if ('error' in reply) return { status: ERROR_STATUS[reply.error], body: { error: reply.error } };
   return { status: 200, body: { requestId, state: reply.state } };
 }

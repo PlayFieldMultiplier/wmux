@@ -326,7 +326,7 @@ describe('HelpRequests on the phone', () => {
     expect((await h.store.status(info.requestId, 'ws-1'))?.state).toBe('pending');
     expect(await h.store.resolveFromPhone('ws-1', info.requestId, 'continued')).toEqual({ ok: true, state: 'continued' });
     expect((await h.store.status(info.requestId, 'ws-1'))?.state).toBe('continued');
-    expect(h.closed).toEqual([info.requestId]);
+    await vi.waitFor(() => expect(h.closed).toEqual([info.requestId]), { timeout: 5_000 });
   });
 
   it('resolveFromPhone answers closed for an expired request, and settles it timed_out first', async () => {
@@ -356,6 +356,14 @@ describe('HelpRequests on the phone', () => {
       { requestId: a.requestId, state: 'cancelled' },
       { requestId: b.requestId, state: 'continued' },
     ]);
+  });
+
+  it('resolveFromPhone answers without waiting for a slow page', async () => {
+    const h = harness();
+    const info = h.store.create(base);
+    h.probe.mockImplementation(() => new Promise(() => undefined));
+    expect(await h.store.resolveFromPhone('ws-1', info.requestId, 'cancelled')).toEqual({ ok: true, state: 'cancelled' });
+    expect((await h.store.status(info.requestId, 'ws-1'))?.state).toBe('cancelled');
   });
 
   it('onChange fires on open and on settle, after the change is visible', async () => {

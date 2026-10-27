@@ -56,11 +56,19 @@ export interface PhoneBrowserHelpFrame {
 export const BROWSER_HELP_ERROR_CODES = ['browser-help-not-found', 'browser-help-closed', 'browser-help-disabled'] as const;
 export type BrowserHelpErrorCode = (typeof BROWSER_HELP_ERROR_CODES)[number];
 
-/** Main's reply to the decision command (inside an ok:true bridge reply). */
-export type PhoneBrowserHelpDecideReply = { state: BrowserHelpOutcome } | { error: BrowserHelpErrorCode };
+/** Main's reply to the decision command (inside an ok:true bridge reply).
+ *  `unavailable`: main's store is not up yet; `invalid`: the daemon sent a
+ *  payload main does not take. */
+export type PhoneBrowserHelpDecideReply =
+  | { state: BrowserHelpOutcome }
+  | { error: BrowserHelpErrorCode }
+  | { unavailable: true }
+  | { invalid: true };
 
-/** Rows one table may carry. HelpRequests caps pending requests at 8 per workspace. */
-export const BROWSER_HELP_MAX_ROWS = 64;
+/** Rows one table may carry: 16 workspaces at HelpRequests' 8 pending each,
+ *  about 100 KiB at the longest prompts, well inside the pipe's line limit.
+ *  Main sends the oldest this many. */
+export const BROWSER_HELP_MAX_ROWS = 128;
 
 const ID_RE = /^[A-Za-z0-9_.:-]{1,128}$/;
 const ORIGIN_RE = /^https?:\/\/[^/?#\s@]{1,253}$/;
@@ -87,7 +95,7 @@ function epochMs(value: unknown): value is number {
 }
 
 /** One row, or null when any field is out of shape. Unlisted keys are dropped. */
-function parseRow(raw: unknown): PhoneBrowserHelpRow | null {
+export function parseBrowserHelpRow(raw: unknown): PhoneBrowserHelpRow | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const r = raw as Record<string, unknown>;
   if (!isBrowserHelpId(r.requestId) || !isBrowserHelpId(r.workspaceId)) return null;
@@ -120,12 +128,24 @@ export function parseBrowserHelpRows(raw: unknown): PhoneBrowserHelpRow[] | null
   const rows: PhoneBrowserHelpRow[] = [];
   const seen = new Set<string>();
   for (const item of raw) {
-    const row = parseRow(item);
+    const row = parseBrowserHelpRow(item);
     if (!row || seen.has(row.requestId)) return null;
     seen.add(row.requestId);
     rows.push(row);
   }
   return rows;
+}
+
+/** The `browser.help` SSE data for one frame, from an allowlist: never a prompt. */
+export function browserHelpFrameJson(frame: PhoneBrowserHelpFrame): string {
+  return JSON.stringify({
+    phase: frame.phase,
+    requestId: frame.requestId,
+    workspaceId: frame.workspaceId,
+    ...(frame.surfaceId !== undefined ? { surfaceId: frame.surfaceId } : {}),
+    deadlineAt: frame.deadlineAt,
+    ...(frame.phase === 'close' && frame.state !== undefined ? { state: frame.state } : {}),
+  });
 }
 
 const SETTLED_STATES: readonly string[] = ['completed', 'continued', 'cancelled', 'timed_out'];
@@ -160,6 +180,8 @@ export function parseBrowserHelpDecideBody(raw: unknown): { outcome: BrowserHelp
 export function parseBrowserHelpDecideReply(raw: unknown): PhoneBrowserHelpDecideReply | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const r = raw as Record<string, unknown>;
+  if (r.unavailable === true) return { unavailable: true };
+  if (r.invalid === true) return { invalid: true };
   if (typeof r.error === 'string') {
     return (BROWSER_HELP_ERROR_CODES as readonly string[]).includes(r.error) ? { error: r.error as BrowserHelpErrorCode } : null;
   }

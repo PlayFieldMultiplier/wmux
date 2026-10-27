@@ -12,8 +12,9 @@ const row = (over: Partial<PhoneBrowserHelpRow> = {}): PhoneBrowserHelpRow => ({
 
 function table(owner: string | null = 'main', firstParty = (id: string) => id === 'main' || id === 'other-main') {
   const frames: PhoneBrowserHelpFrame[] = [];
-  const t = new BrowserHelpTable({ firstParty, isOwner: (id) => owner !== null && id === owner, emit: (f) => frames.push(...f) });
-  return { t, frames };
+  const clock = { now: 2_000 };
+  const t = new BrowserHelpTable({ firstParty, isOwner: (id) => owner !== null && id === owner, emit: (f) => frames.push(...f), now: () => clock.now });
+  return { t, frames, clock };
 }
 
 describe('BrowserHelpTable', () => {
@@ -59,6 +60,14 @@ describe('BrowserHelpTable', () => {
     expect(t.lookup('req-1')).toEqual({ closed: true });
     expect(t.lookup('req-2')).toEqual({ row: row({ requestId: 'req-2', surfaceId: undefined }) });
     expect(t.lookup('req-9')).toBeNull();
+  });
+
+  it('stops listing a row past its deadline before main says so, and answers it as closed', () => {
+    const { t, clock } = table();
+    t.set('main', { requests: [row()] });
+    clock.now = 61_000;
+    expect(t.list()).toEqual([]);
+    expect(t.lookup('req-1')).toEqual({ closed: true });
   });
 
   it('closes and drops every row when its publisher disconnects, and only then', () => {

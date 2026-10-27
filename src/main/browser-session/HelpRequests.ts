@@ -399,8 +399,9 @@ export class HelpRequests {
    * for this id (never one the phone sent), with the same "not found" answer
    * for another workspace's id as `status`. A request past its deadline is
    * settled as `timed_out` first and reported closed; so is one somebody
-   * already answered — the first answer wins and is never rewritten. The
-   * caller must not retry: a lost reply is read back from the table.
+   * already answered — the first answer wins and is never rewritten. Answers
+   * once the record is terminal, without waiting for the settle's page work.
+   * The caller must not retry: a lost reply is read back from the table.
    */
   async resolveFromPhone(
     workspaceId: string,
@@ -411,7 +412,10 @@ export class HelpRequests {
     if (!record) return { ok: false, reason: 'not-found' };
     await this.settleIfExpired(requestId);
     if (record.state !== 'pending') return { ok: false, reason: 'closed' };
-    await this.settle(record, outcome);
+    // The answer is in once `settle` marked the record terminal, which it does
+    // before its first await; its page work (the final URL, the outline) can
+    // be slow on a page mid-navigation and must not hold the phone's reply.
+    void this.settle(record, outcome);
     return { ok: true, state: outcome };
   }
 

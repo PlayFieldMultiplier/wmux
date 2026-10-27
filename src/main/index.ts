@@ -1262,10 +1262,15 @@ const browserHelpFeed = createBrowserHelpFeed({
       const wc = phoneWebContents.fromId(target.webContentsId);
       return wc && !wc.isDestroyed() ? wc.getURL() : null;
     },
-    isLiveChrome: (workspaceId) => chromeRegistry.profileFor(workspaceId) === LIVE_CHROME_PROFILE,
+    // A pane may be bound to Live Chrome (its own profile) while its workspace
+    // is not: a tab not found in the workspace's Chrome may then be the user's.
+    mayBeLiveChrome: (workspaceId, tabFound) =>
+      chromeRegistry.profileFor(workspaceId) === LIVE_CHROME_PROFILE ||
+      (!tabFound && chromeRegistry.hasPaneBindings(workspaceId) && chromeRegistry.peekLauncher(LIVE_CHROME_PROFILE) !== undefined),
     chromeTabs: async (workspaceId) => {
-      const launcher = chromeRegistry.peekLauncher(chromeRegistry.profileFor(workspaceId));
-      // Live Chrome is answered above and never listed here.
+      const profile = chromeRegistry.profileFor(workspaceId);
+      // Live Chrome is never listed: that is every tab the user has open.
+      const launcher = profile === LIVE_CHROME_PROFILE ? undefined : chromeRegistry.peekLauncher(profile);
       if (!launcher || launcher.writeScope) return [];
       return launcher.listTargets(workspaceId);
     },

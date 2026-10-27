@@ -18,7 +18,7 @@ const PROMPT = 'Sign in to the shop, then press Done.';
 const tabs: BrowserHelpTabDeps = {
   backend: () => 'builtin',
   builtinUrl: (surfaceId) => (surfaceId === 'surf-1' ? 'https://login.example.com/session' : null),
-  isLiveChrome: () => false,
+  mayBeLiveChrome: () => false,
   chromeTabs: async () => [],
 };
 

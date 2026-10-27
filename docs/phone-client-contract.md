@@ -5310,7 +5310,8 @@ the phone and answer them.
   or a link, and do not put it on the lock screen.
 - `surfaceId`: the tab the request is about; absent when the agent named none.
 - `backend`: `builtin` (a wmux browser pane), `chrome` (a wmux Chrome
-  profile) or `live` (the user's own Chrome).
+  profile) or `live` (the user's own Chrome, or a tab the desktop cannot
+  tell apart from it).
 - `previewable`: the workspace browser preview (*Workspace browser preview*)
   can show this tab now. Today only a `builtin` pane of the request's own
   workspace is; never `live`.
@@ -5318,7 +5319,9 @@ the phone and answer them.
   last sent the list (a request opened or closed, or the desktop
   reconnected). Absent when it could not read one: no tab, not an http(s)
   page, a Chrome that is not running, or `live`.
-- `deadlineAt`: the desktop closes the request as `timed_out` then.
+- `deadlineAt`: the desktop closes the request as `timed_out` then. A
+  request past it is left out of the list (and answered `409`) even before
+  the desktop's next update says so.
 
 **`POST /api/browser-help/:requestId/decision`** — body
 `{"outcome": "continued" | "cancelled"}` (`continued` is Done). Any other

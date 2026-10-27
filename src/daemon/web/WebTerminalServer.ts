@@ -201,7 +201,7 @@ import { GuestRateLimiter, guestRouteResponse, readGuestBody, type GuestBotResol
 import { isGuestRoute, looksLikeGuestCredential, type GuestBotGates } from '../../shared/guestBots';
 import { BOT_APPROVALS_ROUTE, botApprovalDecisionRefusal, botApprovalsResponse, botApprovalsSupported, type BotApprovalsCaller } from './botApprovals';
 import { BROWSER_HELP_DECISION_ROUTE, BROWSER_HELP_LIST_ROUTE, browserHelpDecisionRefusal, browserHelpDecisionResponse, browserHelpListResponse, browserHelpSupported, type BrowserHelpTableView } from './browserHelp';
-import type { PhoneBrowserHelpFrame } from '../../shared/phoneBrowserHelp';
+import { browserHelpFrameJson, type PhoneBrowserHelpFrame } from '../../shared/phoneBrowserHelp';
 import { WORKER_RESUME_ROUTE, workerResumeRefusal, workerResumeResponse, workerResumeSupported } from './workerResume';
 import type { ChatV2Binding } from '../../shared/chatv2/ipc';
 import { buildWebCsp, WEB_APP_FONT_FILE } from './webCsp';
@@ -6068,20 +6068,13 @@ export class WebTerminalServer {
    * only, like `moa`: never recorded in the attention log, so it can never
    * push a pending approval out of the backlog, and a reconnecting phone
    * reads `GET /api/browser-help` instead of a replay. Sent only under the
-   * transcript consent, which the list needs too. The frame is rebuilt from
-   * an allowlist here, so no prompt can ride along.
+   * transcript consent, which the list needs too. The frame is serialized
+   * from an allowlist, so no prompt can ride along.
    */
   emitBrowserHelp(frames: readonly PhoneBrowserHelpFrame[]): void {
     if (this.opts?.allowTranscript !== true || this.eventClients.size === 0) return;
     for (const frame of frames) {
-      const body = JSON.stringify({
-        phase: frame.phase,
-        requestId: frame.requestId,
-        workspaceId: frame.workspaceId,
-        ...(frame.surfaceId !== undefined ? { surfaceId: frame.surfaceId } : {}),
-        deadlineAt: frame.deadlineAt,
-        ...(frame.phase === 'close' && frame.state !== undefined ? { state: frame.state } : {}),
-      });
+      const body = browserHelpFrameJson(frame);
       for (const client of this.eventClients) {
         try {
           writeSse(client.res, 'browser.help', body);
