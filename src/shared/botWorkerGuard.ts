@@ -572,7 +572,7 @@ export function readBotWorkerSessions(dir: string): { sessions: Map<string, BotW
  *  then auto; else the last mode named. Undefined: none named. */
 export function linePermissionMode(line: string): PermissionMode | undefined {
   const words = tokenize(splitModelEnvMarker(line).command).flatMap((t) => t.value.split(/\s+/)).filter(Boolean);
-  if (words.some((v) => v === '--dangerously-skip-permissions' || v === '--allow-dangerously-skip-permissions')) return 'bypassPermissions';
+  if (words.includes('--dangerously-skip-permissions')) return 'bypassPermissions';
   const named: PermissionMode[] = [];
   for (let i = 0; i < words.length; i++) {
     const v = words[i];

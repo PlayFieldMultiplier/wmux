@@ -174,8 +174,8 @@ export async function workerFenceSupport(deps: WorkerFenceSupportDeps = {}): Pro
     // Not capable: the platform has no sandbox, or claude is too old for it.
     // Anything else on a platform that has one is not a reason to weaken.
     const capableHere = (deps.platformRefusal ?? botExecPlatformRefusal)({ platform }) === null;
-    const tooOld = / is older than /.test(reason);
-    lastSupport = capableHere && !tooOld ? { capable: false, reason, transient: true } : { capable: false, reason };
+    const unanswered = /^claude --version failed/.test(reason);
+    lastSupport = capableHere && unanswered ? { capable: false, reason, transient: true } : { capable: false, reason };
     return lastSupport;
   }
   const key = `${platform}\0${exe}\0${support.version}`;
