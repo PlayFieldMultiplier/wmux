@@ -1,8 +1,10 @@
 // Persistence for UsageTrail: one JSON file in wmux's data dir, written
-// atomically and at most once per SAVE_DEBOUNCE_MS, plus a synchronous flush
-// for quit. A missing, corrupt or unknown-version file starts an empty trail.
+// atomically and at most once per SAVE_DEBOUNCE_MS, plus a flush for quit.
+// Every write is synchronous, so a quit flush can never race an older async
+// commit. A missing, corrupt or unknown-version file starts an empty trail;
+// the read moves a file it rejects aside rather than letting a save overwrite it.
 
-import { atomicReadJSONSync, atomicWriteJSON, atomicWriteJSONSync } from '../../daemon/util/atomicWrite';
+import { atomicReadJSONSync, atomicWriteJSONSync } from '../../daemon/util/atomicWrite';
 import type { UsageSnapshot } from '../claude/UsageApi';
 import { UsageTrail, isUsageTrailFile, type UsageTrailSample } from './usageTrail';
 
@@ -30,10 +32,7 @@ export class UsageTrailStore {
     if (!this.trail.record(key, snapshot, this.now())) return;
     this.dirty = true;
     if (this.timer) return;
-    this.timer = setTimeout(() => {
-      this.timer = null;
-      void this.save();
-    }, SAVE_DEBOUNCE_MS);
+    this.timer = setTimeout(() => this.flushSync(), SAVE_DEBOUNCE_MS);
     this.timer.unref?.();
   }
 
@@ -41,28 +40,18 @@ export class UsageTrailStore {
     return this.trail.read(key, sinceMs, untilMs);
   }
 
-  /** Write any pending change now, synchronously (quit path). */
+  /** Write any pending change now (the debounce timer and the quit paths). */
   flushSync(): void {
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
     }
     if (!this.dirty) return;
-    this.dirty = false;
     try {
-      atomicWriteJSONSync(this.filePath, this.trail.toFile());
+      atomicWriteJSONSync(this.filePath, this.trail.toFile(this.now()));
+      this.dirty = false;
     } catch (err) {
-      this.log(`[usageTrail] flush failed: ${String(err)}`);
-    }
-  }
-
-  private async save(): Promise<void> {
-    if (!this.dirty) return;
-    this.dirty = false;
-    try {
-      await atomicWriteJSON(this.filePath, this.trail.toFile());
-    } catch (err) {
-      this.dirty = true; // the next change or the quit flush retries
+      // Stays dirty: the next change or the quit flush retries.
       this.log(`[usageTrail] save failed: ${String(err)}`);
     }
   }

@@ -38,6 +38,19 @@ describe('UsageTrail.record', () => {
     expect(trail.read('a').map((s) => s.s5)).toEqual([90, 0, 2, 1, 3]);
   });
 
+  it('treats resets within the merge slack as one window, and survives a clock step back', () => {
+    const trail = new UsageTrail();
+    trail.record('a', snap(10), T0);
+    // HTTP parses the ISO reset a second off the statusline's integer: same window.
+    expect(trail.record('a', snap(10, 10, R5 - 1, R7 + 1), T0 + MIN)).toBe(false);
+    trail.record('a', snap(11, 10, R5 - 1), T0 + 2 * MIN);
+    expect(trail.read('a').map((s) => s.s5)).toEqual([11]);
+    // The clock steps back an hour: the next reading opens a slot, never before the tail.
+    trail.record('a', snap(12), T0 - 60 * MIN);
+    trail.record('a', snap(13), T0 - 59 * MIN);
+    expect(trail.read('a').map((s) => [s.s5, s.t >= T0 + 2 * MIN])).toEqual([[11, true], [13, true]]);
+  });
+
   it('keeps retention and the caps', () => {
     const trail = new UsageTrail();
     trail.record('old', snap(5), T0);
@@ -48,14 +61,14 @@ describe('UsageTrail.record', () => {
     expect(trail.read('old')).toEqual([]);
     expect(trail.read('a')).toEqual([]);
     trail.record('k0', snap(2), T0 + RETENTION_MS + 3001 * MIN);
-    expect(trail.read('k1')).toEqual([]);
+    expect(Object.keys(trail.toFile(T0 + RETENTION_MS + 3001 * MIN).trails)).toEqual(['k0']);
     expect(trail.read('k0')).toHaveLength(1);
   });
 
   it('round-trips through its file, dropping malformed samples', () => {
     const trail = new UsageTrail();
     trail.record('a', snap(10), T0);
-    const file = trail.toFile();
+    const file = trail.toFile(T0);
     (file.trails.a as unknown[]).push({ t: 'x' }, { t: T0 + 1, s5: 101, r5: 0, s7: 0, r7: 0 });
     const back = UsageTrail.fromFile(file, T0 + MIN);
     expect(back.read('a')).toEqual([{ t: T0, s5: 10, r5: R5, s7: 10, r7: R7 }]);

@@ -6,8 +6,9 @@
 // here so the usage view shows live numbers and the HTTP poll can stand down.
 //
 // Trust: same bar as `hooks.signal` (`wmux.internal`, main-pipe auth token).
-// The method writes display state only — no spawn, no fs write — so the worst
-// a forged call from a token-holding local process can do is show a wrong %.
+// The method writes display state and the usage trail only — no spawn, no other
+// fs write — so the worst a forged call from a token-holding local process can
+// do is show a wrong % and record it in that account's usage history.
 // It is validated strictly anyway, and the account is resolved HERE from the
 // config dir, never taken from the caller.
 

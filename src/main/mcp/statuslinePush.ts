@@ -28,10 +28,11 @@
 // Recognition is by self-asserted `clientName` once local external-wire
 // provenance is established, so the name is in NON_IDENTIFYING_CLIENT_NAMES:
 // anyone may send it. What it grants is bounded at one method whose handler
-// (usage.rpc.ts) writes display state only — no spawn, no fs write — and
-// validates strictly, resolving the account main-side from the config dir.
-// The worst a token-holding local process can do through it is show a wrong
-// percentage, which it could already do before the close.
+// (usage.rpc.ts) writes display state and the usage trail only — no spawn, no
+// other fs write — and validates strictly, resolving the account main-side
+// from the config dir. The worst a token-holding local process can do through
+// it is show a wrong percentage, which it could already do before the close,
+// and record it in the usage history.
 
 import type { RpcMethod } from '../../shared/rpc';
 import { WMUX_STATUSLINE_CLIENT_NAME } from '../../shared/rpc';

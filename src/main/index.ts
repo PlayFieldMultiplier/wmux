@@ -1623,7 +1623,11 @@ ipcMain.on(IPC.LANLINK_RESYNC, () => {
 const usageTrail = new UsageTrailStore(path.join(getWmuxDir(), 'usage-trail.json'));
 usagePoller.onStateChange((state) => usageTrail.record('default', state.snapshot));
 accountUsageService.onChange((entry) => usageTrail.record(entry.accountId, entry.snapshot));
-registerUsageTrailRpc(rpcRouter, (account, sinceMs, untilMs) => usageTrail.read(account, sinceMs, untilMs));
+// A removed account's history is not served; it ages out of the file.
+registerUsageTrailRpc(rpcRouter, (account, sinceMs, untilMs) => (
+  account === 'default' || getAccountStore().getAccount(account)
+    ? usageTrail.read(account, sinceMs, untilMs)
+    : []));
 
 // Live `rate_limits` pushed by the wmux statusline script. The account is the
 // one the pane actually runs on (its CLAUDE_CONFIG_DIR), not the workspace's
@@ -3204,6 +3208,7 @@ async function prepareInstallQuit(): Promise<void> {
   try {
     chromeSurfaceStore.flushSync();
     getActionCacheStore().flushSync();
+    usageTrail.flushSync();
   } catch (err) {
     console.error('[Main] install-quit store flush failed:', err);
   }
@@ -3545,6 +3550,8 @@ app.on('before-quit', async (e) => {
   // window would drop the save the agent just made — the one it is most likely
   // to want on the next launch.
   safeStep('actionCacheStore.flushSync', () => getActionCacheStore().flushSync());
+  // Again here: a usage push can land while the teardown above runs.
+  safeStep('usageTrail.flushSync', () => usageTrail.flushSync());
   safeStep('pipeServer.stop', () => pipeServer.stop());
   safeStep('mcpRegistrar.unregister', () => mcpRegistrar.unregister());
   safeStep('autoUpdater.stop', () => autoUpdater.stop());
@@ -3628,6 +3635,7 @@ async function onWindowsSessionEnd(event?: Electron.WindowSessionEndEvent): Prom
     // in the bundle and threw MODULE_NOT_FOUND at runtime (same bundling bug
     // as #463), silently failing this flush on every shutdown.
     sessionManager.flushSync();
+    usageTrail.flushSync();
   } catch (err) {
     console.error('[Main] session-end flushSync failed:', err);
   }
