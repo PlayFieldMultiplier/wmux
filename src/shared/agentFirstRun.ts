@@ -244,12 +244,14 @@ export type LaunchScreen =
   /** Some other menu. Nothing may be typed or pasted into it. */
   | { kind: 'blocking'; headline: string };
 
-/** The agent a folder-trust screen names in its own text (Gemini CLI and Qwen
- *  Code say who will be trusted; Codex names itself), for the headline. */
+/** The agent a folder-trust screen names, for the headline: Gemini CLI and
+ *  Qwen Code say who will be trusted; Codex names itself, or is known by its
+ *  own choice labels when it does not. Read with box borders dropped and rows
+ *  joined, so a name a narrow box wrapped still reads whole. */
 const TRUST_SCREEN_AGENTS: readonly (readonly [RegExp, string])[] = [
-  [/\bGemini\s+CLI\b/, 'gemini'],
-  [/\bQwen\s+Code\b/, 'qwen'],
-  [/\bCodex\b/, 'codex'],
+  [/\bGemini CLI\b/, 'gemini'],
+  [/\bQwen Code\b/, 'qwen'],
+  [/\bCodex\b|Trust and continue|Yes, continue|No, quit/, 'codex'],
 ];
 
 /**
@@ -263,8 +265,9 @@ export function classifyLaunchScreen(screen: string): LaunchScreen | null {
   if (!screen) return null;
   const known = detectFirstRunPrompt(screen);
   if (known) return { kind: 'first-run', prompt: known };
-  if (CODEX_TRUST_HEADLINE.test(screen)) {
-    const agent = TRUST_SCREEN_AGENTS.find(([re]) => re.test(screen))?.[1];
+  const text = screen.split('\n').map((row) => row.replace(/[│║┃╭╮╰╯─]/g, ' ')).join(' ').replace(/\s+/g, ' ');
+  if (CODEX_TRUST_HEADLINE.test(text)) {
+    const agent = TRUST_SCREEN_AGENTS.find(([re]) => re.test(text))?.[1];
     return { kind: 'first-run', prompt: { kind: 'trust', headline: agent ? `${agent} folder trust dialog` : 'folder trust dialog' } };
   }
   if (looksLikeApprovalPrompt(screen.split('\n')) || MENU_FOOTER.test(screen)) {

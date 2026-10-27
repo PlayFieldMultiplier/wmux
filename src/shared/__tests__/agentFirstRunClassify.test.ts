@@ -41,7 +41,22 @@ describe('classifyLaunchScreen', () => {
     expect(classifyLaunchScreen(gemini)).toEqual({ kind: 'first-run', prompt: { kind: 'trust', headline: 'gemini folder trust dialog' } });
     const qwen = '   │ Do you trust this folder?\n   │ Trusting a folder allows Qwen Code to execute\n   │ › 1. Trust folder (proj)';
     expect(classifyLaunchScreen(qwen)).toEqual({ kind: 'first-run', prompt: { kind: 'trust', headline: 'qwen folder trust dialog' } });
-    expect(classifyLaunchScreen('Trust this folder?\n› 1. Trust and continue\n  2. Quit')).toEqual({ kind: 'first-run', prompt: { kind: 'trust', headline: 'folder trust dialog' } });
+    // Codex 0.157 does not name itself, but its choices do.
+    expect(classifyLaunchScreen('Trust this folder?\n› 1. Trust and continue\n  2. Quit')).toEqual({ kind: 'first-run', prompt: { kind: 'trust', headline: 'codex folder trust dialog' } });
+    expect(classifyLaunchScreen('Do you trust this folder?\n› 1. Allow\n  2. Deny')).toEqual({ kind: 'first-run', prompt: { kind: 'trust', headline: 'folder trust dialog' } });
+  });
+
+  it('finds the name a narrow box wrapped across its borders', () => {
+    const gemini = [
+      ' │ Do you trust the │',
+      ' │ files in this    │',
+      ' │ folder?          │',
+      ' │ folder allows    │',
+      ' │ Gemini           │',
+      ' │ CLI to load its  │',
+      ' │ ● 1. Trust fold… │',
+    ].join('\n');
+    expect(classifyLaunchScreen(gemini)).toEqual({ kind: 'first-run', prompt: { kind: 'trust', headline: 'gemini folder trust dialog' } });
   });
 
   it('treats the codex-cli 0.157 "Trust this folder?" screen as trust (never answered)', () => {

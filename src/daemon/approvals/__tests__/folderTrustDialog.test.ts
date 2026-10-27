@@ -4,7 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { looksLikeApprovalPrompt, looksLikeFolderTrustDialog, looksLikeUnreadableFolderTrustChoices } from '../approvalKeystrokes';
+import { looksLikeApprovalPrompt, looksLikeFolderTrustDialog, readFolderTrustScreen } from '../approvalKeystrokes';
 
 const screen = (dir: string, name: string): string[] =>
   (JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', dir, `${name}.json`), 'utf8')) as {
@@ -179,16 +179,34 @@ describe('looksLikeFolderTrustDialog', () => {
   });
 
   it('at 18 columns the choices are too short to read: not a dialog, but not clear either', () => {
-    for (const name of ['gemini-folder-trust-18x60', 'qwen-folder-trust-18x60']) {
+    for (const name of ['gemini-folder-trust-18x60', 'qwen-folder-trust-18x60', 'gemini-folder-trust-ctrlc-18x60']) {
       const rows = screen('folder-trust', name);
       expect(looksLikeFolderTrustDialog(rows)).toBe(false);
-      expect(looksLikeUnreadableFolderTrustChoices(rows)).toBe(true);
+      expect(readFolderTrustScreen(rows)).toBe('unreadable');
     }
     // One short row, rows with no trust question, or rows that name no label are not that shape.
-    expect(looksLikeUnreadableFolderTrustChoices(['Do you trust this folder?', '› 1. Trus…'])).toBe(false);
-    expect(looksLikeUnreadableFolderTrustChoices(['Pick one', '› 1. Trus…', '  2. Trus…'])).toBe(false);
-    expect(looksLikeUnreadableFolderTrustChoices(['Do you trust this folder?', '› 1. Run…', '  2. Skip…'])).toBe(false);
-    for (const name of TRUST_FIXTURES) expect(looksLikeUnreadableFolderTrustChoices(screen('folder-trust', name))).toBe(false);
+    expect(readFolderTrustScreen(['Do you trust this folder?', '› 1. Trus…'])).toBeNull();
+    expect(readFolderTrustScreen(['Pick one', '› 1. Trus…', '  2. Trus…'])).toBeNull();
+    expect(readFolderTrustScreen(['Do you trust this folder?', '› 1. Run…', '  2. Skip…'])).toBeNull();
+    for (const name of TRUST_FIXTURES) expect(readFolderTrustScreen(screen('folder-trust', name))).toBe('trust');
+  });
+
+  it('a folder name is any bracketed text to the end of the row', () => {
+    expect(looksLikeFolderTrustDialog([
+      'Do you trust this folder?',
+      '› 1. Trust folder (a (b (c)))',
+      '  2. Trust parent folder (work)',
+      "  3. Don't trust (esc)",
+    ])).toBe(true);
+  });
+
+  it('a whole choice takes only a row indented under its label', () => {
+    // Codex 0.162.1 at 22 columns: "Back to Agent" goes on under its label.
+    expect(looksLikeFolderTrustDialog(screen('folder-trust', 'codex-folder-trust-22x30'))).toBe(true);
+    // Answered: a shell prompt under the last choice is no part of it.
+    const choices = ['  Trust this folder? Codex can read,', '› 1. Trust and continue', '  2. Back to Agent Command Center'];
+    expect(looksLikeFolderTrustDialog(choices)).toBe(true);
+    expect(looksLikeFolderTrustDialog([...choices, 'user host'])).toBe(false);
   });
 
   it('a lone choice cut with an ellipsis is not a dialog', () => {
@@ -217,13 +235,19 @@ describe('looksLikeFolderTrustDialog', () => {
     expect(looksLikeFolderTrustDialog([...rows, 'Press Ctrl+C again to exit.', '> '])).toBe(false);
   });
 
-  it('needs exactly one dot cursor on a Gemini CLI dialog', () => {
-    const rows = screen('folder-trust', 'gemini-folder-trust-120x40');
-    expect(looksLikeFolderTrustDialog(rows.map((row) => row.replace('  2. Trust parent', '● 2. Trust parent')))).toBe(false);
-    expect(looksLikeFolderTrustDialog(rows.map((row) => row.replace('● 1.', '  1.')))).toBe(false);
+  it('reads the dot cursor moved to any choice of a Gemini CLI dialog, and needs exactly one', () => {
+    for (const name of ['gemini-folder-trust-120x40', 'gemini-folder-trust-22x30']) {
+      const rows = screen('folder-trust', name);
+      const unselected = rows.map((row) => row.replace('● 1.', '  1.'));
+      expect(looksLikeFolderTrustDialog(unselected)).toBe(false);
+      for (const digit of ['2', '3']) {
+        expect(looksLikeFolderTrustDialog(unselected.map((row) => row.replace(`  ${digit}. `, `● ${digit}. `)))).toBe(true);
+        expect(looksLikeFolderTrustDialog(rows.map((row) => row.replace(`  ${digit}. `, `● ${digit}. `)))).toBe(false);
+      }
+    }
   });
 
-  it('a dot is a cursor only on the first choice inside a box round the question', () => {
+  it('a dot is a cursor only inside a box round the question and its choices', () => {
     // A reply quoting the question, its dot bullets the last rows on screen.
     expect(looksLikeFolderTrustDialog([
       '✦ When Gemini asks "Do you trust the files in this folder?" pick one of:',

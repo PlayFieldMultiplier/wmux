@@ -119,36 +119,37 @@ describe('folderTrustState', () => {
     expect(await folderTrustState(deps(session(frame(qwen), 18, 60)), 'pty-1')).toBe('unknown');
   });
 
-  it("is 'unknown' when only the question of Gemini CLI's 22-column dialog left the ring", async () => {
-    // The box and the notice a first Ctrl+C prints under it, in two rows:
-    // the question is 32 rows from the last row with content.
-    // Each row written out to the pane's width, so its own cells are all known.
-    const rows = fixtureRows('gemini-folder-trust-ctrlc-22x60').map((row) => row.padEnd(22));
-    const question = rows.findIndex((row) => row.includes('Do you trust the'));
-    expect(rows.length - question).toBe(32);
+  it("is 'unknown' when only the question of Gemini CLI's 18-column dialog left the ring", async () => {
+    // The box and the notice a first Ctrl+C prints under it, in two rows: the
+    // question is 40 rows from the last row with content. Each row is written
+    // out to the pane's width, so its own cells are all known.
+    const rows = fixtureRows('gemini-folder-trust-ctrlc-18x60').map((row) => row.padEnd(18));
+    const question = rows.findIndex((row) => row.includes('Do you trust'));
+    expect(rows.length - question).toBe(40);
     const ring = new RingBuffer(4096);
     // Exactly as tall as the screen drawn, so no row under it was never written.
-    ring.noteGeometry(22, rows.length);
+    ring.noteGeometry(18, rows.length);
     ring.write(frame(rows));
     // Every row under the question is redrawn after the dialog's own draw left the ring.
     for (let n = 0; n < 20; n++) {
       ring.write(Buffer.from(rows.slice(question + 1).map((row, i) => `\x1b[${question + 2 + i};1H${row}`).join('')));
     }
-    const s = { ...session(Buffer.alloc(0), 22, rows.length), ringBuffer: ring };
+    const s = { ...session(Buffer.alloc(0), 18, rows.length), ringBuffer: ring };
     expect(await folderTrustState(deps(s), 'pty-1')).toBe('unknown');
   });
 
   it("is 'clear' for a rolled ring whose only unseen cell is a header far above the prompt", async () => {
     const ring = new RingBuffer(16 * 1024);
-    ring.noteGeometry(80, 40);
+    // Taller than the tallest dialog (44 rows): the header is 59 rows above the prompt.
+    ring.noteGeometry(80, 60);
     ring.write(Buffer.from('\x1b[2J\x1b[1;1HHEADER'));
     // A full-screen TUI redraws every row but its header, until the header's draw leaves the ring.
     for (let n = 0; n < 60; n++) {
-      for (let row = 2; row <= 39; row++) ring.write(Buffer.from(`\x1b[${row};1H\x1b[2Kline ${n}.${row}`));
-      ring.write(Buffer.from('\x1b[40;1H\x1b[2K% '));
+      for (let row = 2; row <= 59; row++) ring.write(Buffer.from(`\x1b[${row};1H\x1b[2Kline ${n}.${row}`));
+      ring.write(Buffer.from('\x1b[60;1H\x1b[2K% '));
     }
     expect(ring.totalBytesWritten).toBeGreaterThan(ring.size);
-    const s = { ...session(Buffer.alloc(0), 80, 40), ringBuffer: ring };
+    const s = { ...session(Buffer.alloc(0), 80, 60), ringBuffer: ring };
     expect(await folderTrustState(deps(s), 'pty-1')).toBe('clear');
   });
 

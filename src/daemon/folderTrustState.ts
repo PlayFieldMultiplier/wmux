@@ -1,4 +1,4 @@
-import { looksLikeFolderTrustDialog, looksLikeUnreadableFolderTrustChoices } from './approvals/approvalKeystrokes';
+import { readFolderTrustScreen } from './approvals/approvalKeystrokes';
 import { AWAITING_RENDER_WINDOW_BYTES, renderPaneScreen, type RenderablePane } from './AwaitingScreenVerifier';
 import { generateTextSnapshotUnqueued, runSmallSnapshotJob } from './HeadlessSnapshot';
 import { UNKNOWN_CELL } from './sessionTextReplay';
@@ -22,9 +22,10 @@ export const FOLDER_TRUST_READ_TIMEOUT_MS = 250;
 const TAIL_SLACK_BYTES = 64 * 1024;
 
 /** Rows from a dialog's question to the last row with content: the tallest
- *  measured at 22 columns is 32 (Gemini CLI: 28 to its box's bottom edge, and
- *  4 more to the end of the notice a first Ctrl+C prints under it). */
-const DIALOG_SPAN_ROWS = 36;
+ *  measured is 40 (Gemini CLI at 18 columns: 36 to its box's bottom edge, and
+ *  4 more to the end of the notice a first Ctrl+C prints under it). A
+ *  constant, since the question itself may be among the cells the ring lost. */
+const DIALOG_SPAN_ROWS = 44;
 
 /** What the verdict needs of a session (a ManagedSession). */
 export type FolderTrustSession = RenderablePane & {
@@ -100,9 +101,9 @@ export async function folderTrustState(deps: FolderTrustDeps, id: string): Promi
     const frame = await Promise.race([renderPaneScreen(() => (deps.getSession(id) === session ? pane : undefined), snapshot).catch(() => null), timedOut]);
     if (!frame) return 'unknown';
     const lines = joinWrappedRows(frame.rows.map((text, i) => ({ text, wrapped: frame.wrapped?.[i] === true })), frame.cols);
-    const tail = lines.slice(-60);
-    if (looksLikeFolderTrustDialog(tail)) return 'trust';
-    if (looksLikeUnreadableFolderTrustChoices(tail)) return 'unknown';
+    const onScreen = readFolderTrustScreen(lines.slice(-60));
+    if (onScreen === 'trust') return 'trust';
+    if (onScreen === 'unreadable') return 'unknown';
     return frame.unknown && unknownWhereADialogWouldBe(frame.unknown) ? 'unknown' : 'clear';
   } finally {
     clearTimeout(timer);

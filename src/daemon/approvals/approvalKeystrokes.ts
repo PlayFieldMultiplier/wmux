@@ -180,16 +180,11 @@ const TRUST_LABELS: readonly { label: string; grants: boolean; suffix?: TrustSuf
   { label: 'Back to', grants: false, suffix: 'place' },
   { label: "Don't trust", grants: false, suffix: 'esc' },
 ];
-/** A suffix whole (optional unless it is the place), and a suffix cut part way.
- *  A folder name may hold one level of brackets, never a closed name and more
- *  (a choice with the next row joined on). */
-const SUFFIX_WHOLE: Record<TrustSuffix, string> = {
-  name: '(?: \\((?:[^()]|\\([^()]*\\))+\\))?',
-  esc: '(?: \\(esc\\))?',
-  place: ' [A-Za-z ]+',
-};
+/** A suffix whole (optional unless it is the place; a folder name is any
+ *  bracketed text to the end of the row), and a suffix cut part way. */
+const SUFFIX_WHOLE: Record<TrustSuffix, string> = { name: '(?: \\(.*\\))?', esc: '(?: \\(esc\\))?', place: ' [A-Za-z ]+' };
 const SUFFIX_CUT: Record<TrustSuffix, (rest: string) => boolean> = {
-  name: (rest) => /^ \((?:[^()]|\([^()]*\))*(?:\([^()]*)?$/.test(rest),
+  name: (rest) => rest.startsWith(' ('),
   esc: (rest) => ' (esc)'.startsWith(rest),
   place: (rest) => /^ [a-z ]*$/.test(rest),
 };
@@ -209,7 +204,8 @@ const CHOICE_PARTS = /^(?:([❯›>»])\s*)?(?:(\d{1,2})[.)]\s*)?(.*)$/;
 const TRUST_FOOTER = /^(?:press\s+)?(?:↑\/↓|↑↓)?.{0,24}\benter\b.{0,30}\b(?:cancel|back|continue|confirm)$/i;
 /** Where a choice starts even when a narrow pane wrapped its label: the cursor, or its digit. */
 const CHOICE_START = /^(?:[❯›>»]\s*\S|\d{1,2}[.)]\s)/;
-/** Gemini CLI's selection cursor; it counts only on the first choice of a boxed dialog (a reply's bullets look the same). */
+/** Gemini CLI's selection cursor. It counts only inside a box drawn round the
+ *  question and the choices: elsewhere a dot is a reply's bullet. */
 const DOT_CURSOR = /^●\s*(?=\S)/;
 /** The bottom edge of the box Gemini CLI and Qwen Code draw the dialog in. */
 const FRAME_BOTTOM = /^╰─+╯?$/;
@@ -222,7 +218,8 @@ const TRUST_QUESTION_ROWS = 6;
 /**
  * One row under the trust question, read once:
  *   - grant / decline: a choice, whole or cut with "…" part way into a label
- *     or its suffix (`cut`);
+ *     or its suffix (`cut`); `open` when its label is whole but may go on
+ *     (it has a suffix), so a row indented under the label may continue it;
  *   - short: a numbered choice cut too early to say which label it is;
  *   - footer: the key hint; other: anything else.
  */
@@ -231,6 +228,10 @@ interface TrustRow {
   kind: 'grant' | 'decline' | 'short' | 'footer' | 'other';
   cursor: boolean;
   cut: boolean;
+  open: boolean;
+  /** Screen column of the row's text, and of its label after any cursor and digit. */
+  indent: number;
+  labelAt: number;
 }
 
 function cutLabelKind(text: string): TrustRow['kind'] {
@@ -255,16 +256,20 @@ function cutLabelKind(text: string): TrustRow['kind'] {
   return !grant && short ? 'short' : 'other';
 }
 
-function readTrustRow(text: string): TrustRow {
-  const [, cursor, digit, label] = CHOICE_PARTS.exec(text) ?? [];
-  const row = { text, cursor: cursor !== undefined, cut: false };
-  if (label?.endsWith('…')) {
+function readTrustRow(text: string, indent: number): TrustRow {
+  const [, cursor, digit, label = ''] = CHOICE_PARTS.exec(text) ?? [];
+  const row = { text, cursor: cursor !== undefined, cut: false, open: false, indent, labelAt: indent + text.length - label.length };
+  if (label.endsWith('…')) {
     const kind = cutLabelKind(label.slice(0, -1).trimEnd());
     if (kind === 'short' && digit === undefined) return { ...row, kind: 'other' };
     return { ...row, kind, cut: kind !== 'other' };
   }
-  if (label !== undefined && TRUST_GRANT_LABEL.test(label)) return { ...row, kind: 'grant' };
-  if (label !== undefined && TRUST_DECLINE_LABEL.test(label)) return { ...row, kind: 'decline' };
+  const kind = TRUST_GRANT_LABEL.test(label) ? 'grant' : TRUST_DECLINE_LABEL.test(label) ? 'decline' : null;
+  if (kind) {
+    const lower = label.toLowerCase();
+    const open = TRUST_LABELS.some((entry) => entry.suffix !== undefined && lower.startsWith(entry.label.toLowerCase()));
+    return { ...row, kind, open };
+  }
   return { ...row, kind: TRUST_FOOTER.test(text) ? 'footer' : 'other' };
 }
 
@@ -282,39 +287,42 @@ function trustDialogBlock(rows: readonly string[]): TrustRow[] | null {
     .map((row) => ({
       text: row.replace(/^[\s│║┃]+|[\s│║┃]+$/g, '').replace(/\s+/g, ' '),
       framed: /^\s*│/.test(row),
+      indent: /^[\s│║┃]*/.exec(row)?.[0].length ?? 0,
     }))
     .filter((row) => row.text);
   for (let q = tail.length - 1; q >= 0; q--) {
     const question = tail.slice(q, q + TRUST_QUESTION_ROWS).map((row) => row.text).join(' ');
     if (!TRUST_HEADLINE.test(question) && !CODEX_TRUST_HEADLINE.test(question)) continue;
     const below = tail.slice(q + 1);
-    // Inside a box drawn round the question, Gemini CLI's dot may start the first choice.
-    const dotCursor = (row: { text: string; framed: boolean }): boolean =>
-      tail[q].framed && row.framed && DOT_CURSOR.test(row.text);
-    const first = below.findIndex((row) => dotCursor(row) || CHOICE_START.test(row.text) || isChoice(readTrustRow(row.text)));
+    const first = below.findIndex((row) =>
+      CHOICE_START.test(row.text) || (row.framed && DOT_CURSOR.test(row.text)) || isChoice(readTrustRow(row.text, row.indent)));
     if (first < 0) return null;
-    const rest = below.slice(first).map((row, i) => (i === 0 && dotCursor(row) ? row.text.replace(DOT_CURSOR, '› ') : row.text));
+    const rest = below.slice(first);
     let edge = rest.length - 1;
-    while (edge >= 0 && !FRAME_BOTTOM.test(rest[edge])) edge--;
-    const trailer = rest.slice(edge + 1).join(' ');
+    while (edge >= 0 && !FRAME_BOTTOM.test(rest[edge].text)) edge--;
+    const trailer = rest.slice(edge + 1).map((row) => row.text).join(' ');
     if (edge > 0 && (trailer === '' || FRAME_TRAILER.test(trailer))) rest.length = edge;
+    // Inside a box round the question and every choice, Gemini CLI's dot is the cursor.
+    const boxed = tail[q].framed && rest.every((row) => row.framed);
     // Rejoin what a narrow pane wrapped: "Yes, I trust this" + "folder",
-    // "› 1. Trust and" + "continue", "Enter to confirm · Esc to" + "cancel".
-    // A row cut with "…" is whole as it stands.
+    // "› 1. Trust and" + "continue", "Enter to confirm · Esc to" + "cancel":
+    // a row that does not read whole yet takes the rows under it, and a whole
+    // label that may go on ("Back to Agent") takes a row indented under its
+    // label ("Command Center"). A row cut with "…" is whole as it stands.
     const block: TrustRow[] = [];
-    for (const text of rest) {
-      const row = readTrustRow(text);
+    for (const { text: raw, indent } of rest) {
+      const text = boxed ? raw.replace(DOT_CURSOR, '› ') : raw;
+      const row = readTrustRow(text, indent);
       const last = block.at(-1);
-      if (last !== undefined && !isDialogRow(row)) {
-        const joined = readTrustRow(`${last.text} ${text}`);
-        // A row cut short keeps taking the rows under it until it reads whole.
-        if (isDialogRow(joined) || (!isDialogRow(last) && !last.text.endsWith('…'))) {
-          block[block.length - 1] = joined;
-          continue;
+      if (last !== undefined) {
+        const incomplete = !isDialogRow(last) && !last.text.endsWith('…');
+        if (incomplete || (last.open && !isDialogRow(row) && indent >= last.labelAt)) {
+          const joined = readTrustRow(`${last.text} ${text}`, last.indent);
+          if (incomplete || isDialogRow(joined)) {
+            block[block.length - 1] = joined;
+            continue;
+          }
         }
-      } else if (last !== undefined && !isDialogRow(last) && !last.text.endsWith('…')) {
-        block[block.length - 1] = readTrustRow(`${last.text} ${text}`);
-        continue;
       }
       block.push(row);
     }
@@ -328,42 +336,45 @@ function trustDialogBlock(rows: readonly string[]): TrustRow[] | null {
  * screen? Answering it decides whether the agent may read, edit and run files
  * in that folder, so it is left to the person in every policy.
  *
- * Recognised by its own shape rather than by a loosened option-row pattern,
- * so an ordinary unnumbered menu (a theme picker, a warning with "❯ No, exit")
- * stays answerable:
- *   - a trust question, in the wordings the first-run screens share
- *     (shared/agentFirstRun), joined over up to six rows for a pane narrow
- *     enough to wrap it;
- *   - below it, the choice that grants trust and exactly one row under the
- *     selection cursor, numbered or not;
- *   - after the first choice, only choices and the key hint, each rejoined
- *     when a narrow pane wrapped it, and for a boxed dialog its bottom edge
- *     and the notices measured under it: a dialog with anything else under it
- *     (agent output, a shell prompt) has already been answered;
- *   - a choice a narrow pane cut with "…" counts only as the start of a known
- *     label or of its suffix, and only beside at least one other choice.
+ *   trust       the dialog, recognised by its own shape rather than by a
+ *               loosened option-row pattern, so an ordinary unnumbered menu
+ *               (a theme picker, a warning with "❯ No, exit") stays answerable:
+ *               - a trust question, in the wordings the first-run screens
+ *                 share (shared/agentFirstRun), joined over up to six rows for
+ *                 a pane narrow enough to wrap it;
+ *               - below it, the choice that grants trust and exactly one row
+ *                 under the selection cursor, numbered or not;
+ *               - after the first choice, only choices and the key hint, each
+ *                 rejoined when a narrow pane wrapped it, and for a boxed
+ *                 dialog its bottom edge and the notices measured under it: a
+ *                 dialog with anything else under it (agent output, a shell
+ *                 prompt) has already been answered;
+ *               - a choice a narrow pane cut with "…" counts only as the start
+ *                 of a known label or of its suffix, and only beside at least
+ *                 one other choice.
+ *   unreadable  a trust question over numbered choices all cut with "…", at
+ *               least one too early to say which label it is (Gemini CLI and
+ *               Qwen Code at 18 columns: "› 1. Trus…"). Not a recognisable
+ *               dialog, but not proof of its absence either.
+ *   null        neither.
  */
-export function looksLikeFolderTrustDialog(rows: readonly string[]): boolean {
+export function readFolderTrustScreen(rows: readonly string[]): 'trust' | 'unreadable' | null {
   const block = trustDialogBlock(rows);
-  if (!block) return false;
+  if (!block) return null;
   const choices = block.filter(isChoice);
-  if (choices.length < 2 && choices.some((row) => row.cut)) return false;
-  return choices.some((row) => row.kind === 'grant')
+  if (choices.some((row) => row.kind === 'grant')
     && choices.filter((row) => row.cursor).length === 1
-    && block.every(isDialogRow);
+    && block.every(isDialogRow)
+    && (choices.length >= 2 || !choices.some((row) => row.cut))) return 'trust';
+  if (block.length >= 2
+    && block.every((row) => row.cut || row.kind === 'short')
+    && block.some((row) => row.kind === 'short')) return 'unreadable';
+  return null;
 }
 
-/**
- * A trust question over numbered choices all cut with "…", at least one too
- * early to say which label it is (Gemini CLI and Qwen Code at 18 columns:
- * "› 1. Trus…"). Not a recognisable dialog, but not proof of its absence:
- * the caller answers 'unknown' rather than 'clear'.
- */
-export function looksLikeUnreadableFolderTrustChoices(rows: readonly string[]): boolean {
-  const block = trustDialogBlock(rows);
-  return block !== null && block.length >= 2
-    && block.every((row) => row.cut || row.kind === 'short')
-    && block.some((row) => row.kind === 'short');
+/** Is an agent's folder-trust dialog the live dialog on screen (readFolderTrustScreen)? */
+export function looksLikeFolderTrustDialog(rows: readonly string[]): boolean {
+  return readFolderTrustScreen(rows) === 'trust';
 }
 
 /**

@@ -1304,7 +1304,7 @@ const STOPPED_BY_OWNER_SUMMARY = 'stopped by owner';
  *  it wrote (FanOutService), so the room can word it in the reader's
  *  language; null for a worker's own words. Pure. */
 export function inputRequiredWhy(summary: string): 'trustDialog' | 'firstRun' | 'launchFailed' | null {
-  if (/^worker is waiting on Claude Code's (?:workspace|(?:[a-z]+ )?folder) trust dialog;/.test(summary)) return 'trustDialog';
+  if (/^worker is waiting on Claude Code's (?:workspace|codex folder) trust dialog;/.test(summary)) return 'trustDialog';
   if (/^worker is waiting on Claude Code's [^;]+; it needs a keypress in the pane$/.test(summary)) return 'firstRun';
   if (/^launch failed: no agent started in pane \S+ within \d+s/.test(summary)) return 'launchFailed';
   return null;
