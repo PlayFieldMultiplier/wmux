@@ -453,6 +453,9 @@ describe('facts → system cards', () => {
     expect(stopped).not.toHaveProperty('body');
     expect(one('d', 'task.failed', { status: 'cancelled', by: 'bot', summary: 'not needed' })).toMatchObject({ title: 'Task cancelled: fix login', body: 'not needed', notice: { code: 'task.cancelled' } });
     expect(one('e', 'task.input_required', {})).toMatchObject({ title: 'Task needs input: fix login', notice: { code: 'task.inputRequired' } });
+    // A trust dialog names the agent that shows it; the words carry that name.
+    expect(one('e2', 'task.input_required', { summary: "worker is waiting on Gemini CLI's folder trust dialog; it needs a keypress in the pane" }))
+      .toMatchObject({ notice: { code: 'task.inputRequired', args: { title: 'fix login', why: 'trustDialog', agent: 'Gemini CLI' } } });
   });
 
   it('a budget card says which limit and when the bot picks up again, in words and as a notice; an unknown limit keeps no notice', () => {
@@ -623,9 +626,23 @@ describe('inputRequiredWhy (#2231)', () => {
     const { inputRequiredWhy } = await import('../roomWriter');
     expect(inputRequiredWhy("worker is waiting on Claude Code's workspace trust dialog; it needs a keypress in the pane")).toBe('trustDialog');
     expect(inputRequiredWhy("worker is waiting on Claude Code's codex folder trust dialog; it needs a keypress in the pane")).toBe('trustDialog');
+    expect(inputRequiredWhy("worker is waiting on Gemini CLI's folder trust dialog; it needs a keypress in the pane")).toBe('trustDialog');
+    expect(inputRequiredWhy("worker is waiting on Qwen Code's folder trust dialog; it needs a keypress in the pane")).toBe('trustDialog');
+    // Only Claude Code has the other first-run screens.
+    expect(inputRequiredWhy("worker is waiting on Gemini CLI's auto-mode onboarding; it needs a keypress in the pane")).toBeNull();
     expect(inputRequiredWhy("worker is waiting on Claude Code's auto-mode onboarding; it needs a keypress in the pane")).toBe('firstRun');
     expect(inputRequiredWhy("launch failed: no agent started in pane daemon-70a64bc2 within 45s, so the pane sits at its shell prompt; re-run the task's launch line in that pane (the fan-out result carries it)")).toBe('launchFailed');
     expect(inputRequiredWhy('I need the staging API key')).toBeNull();
+  });
+
+  it('reads a trust dialog for every agent whose row has a first-run watch, from the registry', async () => {
+    const { trustDialogSummaryPattern } = await import('../roomWriter');
+    const { AGENT_ROWS } = await import('../../../shared/agentIdentity');
+    const summary = "worker is waiting on Codex CLI's folder trust dialog; it needs a keypress in the pane";
+    expect(trustDialogSummaryPattern().test(summary)).toBe(false);
+    // A row given a watch: its name parses with no list to edit here.
+    const rows = AGENT_ROWS.map((row) => (row.slug === 'codex' ? { ...row, firstRunWatch: 'trust' as const } : row));
+    expect(trustDialogSummaryPattern(rows).exec(summary)?.[1]).toBe('Codex CLI');
   });
 });
 

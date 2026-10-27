@@ -1817,7 +1817,7 @@ export const ko = {
   'room.notice.task.keptFolderCleaned.body': "{days}일 동안 바뀐 게 없었어요. 브랜치는 남아 있어요.",
   'room.notice.task.keptFolderCleaned.body.research': "{days}일 동안 바뀐 게 없었어요.",
   'room.notice.task.inputRequired': "작업 입력 필요: {title}",
-  'room.notice.task.inputRequired.why.trustDialog': '워커가 이 폴더를 신뢰하는지 묻는 Claude Code 질문에서 기다리고 있어요. 워커 창에서 답해 주세요.',
+  'room.notice.task.inputRequired.why.trustDialog': '워커가 이 폴더를 신뢰하는지 묻는 {agent} 질문에서 기다리고 있어요. 워커 창에서 답해 주세요.',
   'room.notice.task.inputRequired.why.firstRun': '워커가 Claude Code 첫 실행 화면에서 기다리고 있어요. 워커 창에서 키를 눌러 주세요.',
   'room.notice.task.inputRequired.why.launchFailed': '워커의 에이전트가 시작되지 않아 창이 셸 프롬프트에 머물러 있어요. 그 창에서 작업 실행 줄을 다시 실행해 주세요.',
   'room.notice.budget.exhausted.turns_hour': "{bot}: 이번 시간의 턴을 모두 썼습니다",

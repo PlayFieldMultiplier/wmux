@@ -2262,7 +2262,7 @@ export const pl = {
   'room.notice.task.keptFolderCleaned.body': "Przez {days} dni nic się w nim nie zmieniło. Gałąź zostaje.",
   'room.notice.task.keptFolderCleaned.body.research': "Przez {days} dni nic się w nim nie zmieniło.",
   'room.notice.task.inputRequired': "Zadanie czeka na odpowiedź: {title}",
-  'room.notice.task.inputRequired.why.trustDialog': "Worker czeka na pytanie Claude Code, czy ufasz temu folderowi. Odpowiedz w panelu workera.",
+  'room.notice.task.inputRequired.why.trustDialog': "Worker czeka na Twoją odpowiedź na pytanie {agent}, czy ufasz temu folderowi. Odpowiedz w panelu workera.",
   'room.notice.task.inputRequired.why.firstRun': "Worker czeka na jednym z ekranów pierwszego uruchomienia Claude Code. Naciśnij klawisz w panelu workera.",
   'room.notice.task.inputRequired.why.launchFailed': "Agent workera nie wystartował, więc jego panel stoi na znaku zachęty powłoki. Uruchom tam ponownie linię startową zadania.",
   'room.notice.budget.exhausted.turns_hour': "{bot}: wyczerpane tury na tę godzinę",
