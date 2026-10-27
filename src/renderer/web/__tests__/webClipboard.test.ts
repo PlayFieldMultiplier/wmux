@@ -170,6 +170,10 @@ describe('webClipboardApi in a document', () => {
     const pill = document.getElementById('wmux-pending-copy-toast') as HTMLButtonElement;
     expect(pill.tagName).toBe('BUTTON');
     expect(pill.textContent).toBe('Click to finish copying');
+    await flush();
+    const status = document.getElementById('wmux-pending-copy-status') as HTMLElement;
+    expect(status.getAttribute('role')).toBe('status');
+    expect(status.textContent).toBe('Click to finish copying');
     const below = vi.fn();
     document.body.addEventListener('click', below);
     writeText.mockResolvedValueOnce(undefined);
@@ -178,6 +182,7 @@ describe('webClipboardApi in a document', () => {
     expect(below).not.toHaveBeenCalled();
     expect(await result).toBe('resolved');
     expect(pill.disabled).toBe(true);
+    expect(status.textContent).toBe('');
     document.body.removeEventListener('click', below);
   });
 });
