@@ -152,6 +152,8 @@ export interface ChromeBackendClient {
   /** Dedicated instances only: a CDP session on one wmux-opened tab's page.
    *  Never launches Chrome. Absent on Live Chrome. */
   pageSession?(surfaceId: string): Promise<ChromePageSession>;
+  /** False when pageSession cannot work here: the tab watcher is off or failed. */
+  canPageSession?(): boolean;
   /** Live attach only: the agent-window write policy. Absent = dedicated. */
   readonly writeScope?: LiveWriteScopeApi;
   dispose(): void | Promise<void>;
@@ -528,6 +530,11 @@ export class ChromeLauncher implements ChromeBackendClient {
       return true;
     }
     return false;
+  }
+
+  /** Whether pageSession can attach at all: the watcher socket is enabled and has not failed. */
+  canPageSession(): boolean {
+    return this.watcherEnabled() && !this.watcherFailed;
   }
 
   /**

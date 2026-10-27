@@ -126,11 +126,42 @@ export function chromeDriver(surfaceId: string, workspaceId: string, deps: Phone
    * instead of piling up on Chrome's socket, or landing after the phone was
    * told it failed.
    */
+  /** Sent past the budget too, best effort: only to undo what this request already did. */
+  const always = (method: string, params: Record<string, unknown>) =>
+    session?.then((open) => open.send(method, params)).then(() => undefined, () => undefined);
+  // The release that matches a press already sent, until it goes out.
+  let release: { method: string; params: Record<string, unknown> } | null = null;
+  const releaseNow = () => {
+    const pending = release;
+    release = null;
+    return pending ? always(pending.method, pending.params) : undefined;
+  };
+  /**
+   * A press and its release. Once the press is out, the release always
+   * follows — at the budget if the press is still unanswered then, or as soon
+   * as it fails — so a timed-out tap or key never leaves a button or a key held.
+   */
+  const pressThenRelease = async (method: string, press: Record<string, unknown>, up: Record<string, unknown>) => {
+    // Past the budget no new press goes out, so there is nothing to release.
+    if (expired) throw new PhoneBrowserError('browser-tab-hidden');
+    release = { method, params: up };
+    try {
+      await write(method, press);
+    } catch (err) {
+      await releaseNow();
+      throw err;
+    }
+    // Already sent at the budget: nothing more goes out for this request.
+    if (!release) return;
+    release = null;
+    await write(method, up);
+  };
   const bounded = async <T>(run: () => Promise<T>): Promise<T> => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const hidden = new Promise<never>((_resolve, reject) => {
       timer = setTimeout(() => {
         expired = true;
+        void releaseNow();
         reject(new PhoneBrowserError('browser-tab-hidden'));
       }, deps.captureMs ?? PHONE_CHROME_CAPTURE_MS);
       (timer as { unref?: () => void }).unref?.();
@@ -193,8 +224,9 @@ export function chromeDriver(surfaceId: string, workspaceId: string, deps: Phone
     },
     tap: async ({ x, y }) => {
       await write('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none', buttons: 0 });
-      await write('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 1 });
-      await write('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', buttons: 0, clickCount: 1 });
+      await pressThenRelease('Input.dispatchMouseEvent',
+        { type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 1 },
+        { type: 'mouseReleased', x, y, button: 'left', buttons: 0, clickCount: 1 });
     },
     scroll: async event => {
       // Move first, so Chromium hit-tests the wheel where the phone pointed.
@@ -204,8 +236,7 @@ export function chromeDriver(surfaceId: string, workspaceId: string, deps: Phone
     type: text => withFocus(() => write('Input.insertText', { text })),
     key: key => withFocus(async () => {
       const { keyDown, keyUp } = parseKeyPress(key);
-      await write('Input.dispatchKeyEvent', keyDown);
-      await write('Input.dispatchKeyEvent', keyUp);
+      await pressThenRelease('Input.dispatchKeyEvent', keyDown, keyUp);
     }),
     navigate: async url => {
       await deps.validateNavigation(url);
@@ -249,7 +280,9 @@ function clientFor(workspaceId: string, registry: PhoneChromeRegistry): ChromeBa
   const profile = registry.profileFor(workspaceId);
   if (isLive(profile) || registry.isPaneBound(profile)) return undefined;
   const client = registry.peekLauncher(profile);
-  return client && !client.writeScope && client.pageSession ? client : undefined;
+  // A launcher whose tab watcher is off or failed cannot attach a page: its
+  // tabs are not the preview's (and help rows say not previewable).
+  return client && !client.writeScope && client.pageSession && client.canPageSession?.() !== false ? client : undefined;
 }
 
 /**

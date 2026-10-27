@@ -3629,7 +3629,9 @@ exactly as above.
   desktop recorded under exactly this workspace; a tab with no workspace on
   record is nobody's. A profile bound to one pane only (a protected pane's,
   say) is not listed: its policy applies to that pane's calls. Listing never
-  starts Chrome: while it is not running there are no `chrome` rows.
+  starts Chrome: while it is not running there are no `chrome` rows, nor while
+  the desktop cannot attach to its pages (its tab watcher is off or failed);
+  help rows for those tabs are then `previewable: false`.
 - **The same actions** take a `chrome` row's `id` as `surfaceId`: capture,
   `navigate`, `type`, `key`, `tap`, `scroll`, with the same checks
   (`expectedURL`, `geometry`, http(s) only). A Chrome capture has the builtin
@@ -3657,7 +3659,7 @@ exactly as above.
 | Response | Meaning |
 | --- | --- |
 | `404 {error:"browser-tab-gone"}` | The Chrome tab closed, was replaced by Chrome, or is not this workspace's. Refresh the list. |
-| `409 {error:"browser-tab-hidden"}` | The Chrome tab did not answer in time, usually because it is in the background. An input that timed out may still have partly applied: refresh before retrying. |
+| `409 {error:"browser-tab-hidden"}` | The Chrome tab did not answer in time, usually because it is in the background. An input that timed out may still have partly applied (a press is always released): refresh before retrying. |
 | `503 {error:"browser-backend-unavailable"}` | No browser to drive: the setting is not Chrome, the workspace uses Live Chrome, or Chrome's connection is not up. |
 | `501 {error:"browser-action-unsupported"}` | The action does not exist for this tab (`viewport` on Chrome, `focus` on a desktop that cannot). |
 | `409 {error:"browser-help-origin-changed"}` | Help-card typing: the tab is no longer at the request's origin, or the request has none. Nothing was typed. |

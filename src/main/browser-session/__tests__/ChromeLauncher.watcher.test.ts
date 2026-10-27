@@ -485,8 +485,10 @@ describe('ChromeLauncher page sessions (the phone preview)', () => {
     await expect(idle.pageSession('chrome-x')).rejects.toMatchObject({ reason: 'unavailable' });
     expect(spawnMock).not.toHaveBeenCalled();
 
+    expect(idle.canPageSession()).toBe(true);
     process.env.WMUX_CHROME_TARGET_WATCHER = '0';
     const { launcher, surfaceId } = await running('/tmp/page-4');
+    expect(launcher.canPageSession()).toBe(false);
     await expect(launcher.pageSession(surfaceId)).rejects.toMatchObject({ reason: 'unavailable' });
     await expect(launcher.pageSession('chrome-unknown')).rejects.toMatchObject({ reason: 'gone' });
   });

@@ -124,6 +124,30 @@ describe('phone preview on dedicated-profile Chrome', () => {
     expect(sent.filter((c) => c.method === 'Input.dispatchMouseEvent')).toHaveLength(1);
   });
 
+  it('a press that times out is still released, once, and nothing new goes out', async () => {
+    for (const [action, extra, pressed, released] of [
+      ['browser.tap', { geometry, x: 0.5, y: 0.5 }, 'mousePressed', 'mouseReleased'],
+      ['browser.key', { key: 'Enter' }, 'keyDown', 'keyUp'],
+    ] as const) {
+      const { deps, answer, sent } = fakeChrome({ captureMs: 20 });
+      let ack: (value: unknown) => void = () => undefined;
+      answer.mockImplementation(async (method: string) => {
+        if (method === 'Page.getLayoutMetrics') return METRICS;
+        const last = sent.at(-1);
+        if (last?.params?.type === pressed) return new Promise((resolve) => { ack = resolve; });
+        return {};
+      });
+      expect(await handlePhoneBrowser(action, { ...scope, expectedURL: 'https://shop.example.com/cart', ...extra }, fixture(deps))).toEqual({ error: 'browser-tab-hidden' });
+      for (let i = 0; i < 5; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+      const types = () => sent.map((c) => c.params?.type).filter((t) => t === pressed || t === released);
+      expect(types()).toEqual([pressed, released]);
+      // The late ack of the press does not send a second release.
+      ack({});
+      for (let i = 0; i < 5; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(types()).toEqual([pressed, released]);
+    }
+  });
+
   it('browser zoom keeps the capture readable but not tappable, and clips in device pixels', async () => {
     const { deps, sent, answer } = fakeChrome();
     answer.mockImplementation(async (method: string) => method === 'Page.getLayoutMetrics'
@@ -295,6 +319,13 @@ describe('which Chrome tabs a workspace has (phoneChromeTabs)', () => {
     const bank = client([tab('chrome-bank', 'ws-1')]);
     expect(await phoneChromeTabs('ws-1', { profileFor: () => 'bank', isPaneBound: (p) => p === 'bank', peekLauncher: () => bank })).toEqual([]);
     expect(bank.listTargets).not.toHaveBeenCalled();
+  });
+
+  it('with Chrome\'s tab watcher off or failed, no tab is the preview\'s and help rows are not previewable', async () => {
+    const work = client([tab('chrome-mine', 'ws-1')], { canPageSession: () => false });
+    const registry: PhoneChromeRegistry = { profileFor: () => 'work', isPaneBound: () => false, peekLauncher: () => work };
+    expect(await phoneChromeTabs('ws-1', registry)).toEqual([]);
+    expect(await phoneChromeHelpTabs('ws-1', registry)).toMatchObject([{ surfaceId: 'chrome-mine', previewable: false }]);
   });
 
   it('help rows still read a pane-bound workspace profile, marked not previewable', async () => {
