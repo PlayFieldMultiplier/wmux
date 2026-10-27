@@ -27,6 +27,15 @@
 // outside the fence's writable folders. It passes only when the command ran
 // and the file was not written. A claude that fails it starts its workers
 // with no tools (every call refused), and the pane's status line says why.
+// On macOS a second run tries the worktree patterns
+// (workerFenceWorktreeComplement) at their most, in a linked worktree's
+// layout: its command writes the git common dir (proving claude opened it),
+// its own worktree's git folder (which must work), and another worktree's of
+// each kind of pattern and a new one (which must not). Launches add the
+// patterns only after that held; if it did not, they keep to the snapshot
+// of other worktrees, and the workers keep their tools. Refs and objects stay
+// as before: a branch made after launch, and the objects every worktree
+// shares, are open to the worker's commands.
 // No model and no sign-in are used: the stand-in answers on 127.0.0.1, and
 // claude runs with a home and config folder of its own.
 
@@ -54,6 +63,8 @@ import {
   isWithin,
   workerFenceGitWrites,
   workerFencePermissionDenies,
+  workerFenceWorktreeComplement,
+  WORKER_FENCE_DENY_WRITE_MAX_BYTES,
   WORKER_FENCE_REFUSED_WMUX_TOOLS,
 } from './workerFence';
 
@@ -105,7 +116,12 @@ function accountConfigDirsDefault(): string[] {
 /** `transient`: the self-test did not finish (it timed out or could not
  *  start), which says nothing about the sandbox: the launch is refused, not
  *  started without tools. */
-export type WorkerFenceSelfTest = { ok: true } | { ok: false; reason: string; transient?: true };
+export type WorkerFenceSelfTest =
+  /** `worktreePatterns`: the fence also held with the worktree patterns
+   *  (macOS), so a launch may add them. `patternsRetry`: their run did not
+   *  finish, so it is tried again after WORKER_FENCE_SELF_TEST_RETRY_MS. */
+  | { ok: true; worktreePatterns?: true; patternsRetry?: true }
+  | { ok: false; reason: string; transient?: true };
 
 export type WorkerFenceSupport =
   /** `transient`: the platform has the sandbox, but this launch cannot use
@@ -119,7 +135,7 @@ export interface WorkerFenceSupportDeps {
   exe?: () => string | null;
   probe?: typeof probeBotExecSupport;
   platformRefusal?: typeof botExecPlatformRefusal;
-  selfTest?: (exe: string) => Promise<WorkerFenceSelfTest>;
+  selfTest?: (exe: string, opts?: { patternsOnly?: boolean }) => Promise<WorkerFenceSelfTest>;
   platform?: NodeJS.Platform;
 }
 
@@ -163,12 +179,15 @@ export async function workerFenceSupport(deps: WorkerFenceSupportDeps = {}): Pro
   const key = `${platform}\0${exe}\0${support.version}`;
   const known = answers.get(key);
   let selfTest: WorkerFenceSelfTest;
-  if (known && (known.result.ok || Date.now() - known.at < WORKER_FENCE_SELF_TEST_RETRY_MS)) {
+  if (known && ((known.result.ok && !known.result.patternsRetry) || Date.now() - known.at < WORKER_FENCE_SELF_TEST_RETRY_MS)) {
     selfTest = known.result;
   } else {
     let run = running.get(key);
     if (!run) {
-      const once = (): Promise<WorkerFenceSelfTest> => (deps.selfTest ?? ((e: string) => runWorkerFenceSelfTest(e)))(exe)
+      // A pass whose pattern run did not finish tries that run alone: the
+      // plain run passed, and a flake in it now must not refuse launches.
+      const patternsOnly = known?.result.ok === true && known.result.patternsRetry === true;
+      const once = (): Promise<WorkerFenceSelfTest> => (deps.selfTest ?? ((e: string, o?: { patternsOnly?: boolean }) => runWorkerFenceSelfTest(e, o)))(exe, { patternsOnly })
         .catch((err) => ({ ok: false as const, reason: `the self-test could not run: ${String(err)}`, transient: true as const }));
       // A run that did not finish is tried once more right away; a second
       // one is not kept (the next launch tries again).
@@ -218,6 +237,9 @@ export function __resetWorkerFenceSupportForTesting(): void {
 
 /** How long the self-test's claude may take, start to end. */
 export const WORKER_FENCE_SELF_TEST_TIMEOUT_MS = 45_000;
+
+/** The self-test's stand-in for the Messages API, for a live test that drives claude the same way. */
+export const __startScriptedApiForTesting = (command: string): Promise<{ url: string; close: () => void }> => startScriptedApi(command);
 
 /** A local stand-in for the Messages API: the first request that offers the
  *  Bash tool gets one Bash call running `command`; every other request gets
@@ -287,14 +309,48 @@ export interface WorkerFenceSelfTestOptions {
   /** The hook's runtime (default: this process's). */
   runtime?: string;
   timeoutMs?: number;
+  platform?: NodeJS.Platform;
+  log?: (line: string) => void;
+  /** Only the macOS pattern run: the plain run already passed. */
+  patternsOnly?: boolean;
+}
+
+/** The self-test's own worktree on macOS: as long as a name the patterns
+ *  take (WORKER_FENCE_COMPLEMENT_MAX of them), so a launch never adds more
+ *  patterns than the self-test applied. */
+export const WORKER_FENCE_SELF_TEST_WORKTREE = 'wmux-fence.self_test-0123456789abcdefghi';
+
+/** The other worktrees the macOS run writes into, one per kind of pattern:
+ *  names that differ at the first character and further in (by a letter, a
+ *  digit, `.`, `_` or `-`), shorter ones ending in a letter, `-`, `.` or `_`
+ *  (one in another case), and a longer one. */
+function selfTestSiblings(own: string): string[] {
+  return [
+    'sibling', '.x', `${own.slice(0, 7)}Q`, `${own.slice(0, 22)}7`, `${own.slice(0, 4)}.x`, `${own.slice(0, 4)}_x`, `${own.slice(0, 10)}-x`,
+    own.slice(0, 3), own.slice(0, 4).toUpperCase(), own.slice(0, 5), own.slice(0, 11), own.slice(0, 16), `${own}2`,
+  ];
 }
 
 /**
  * The self-test (see the file header). Resolves with why it failed, never
- * rejects. Its files go under `<dir>/factory/fence-self-test/` and are removed
- * once it ends.
+ * rejects. On macOS a second run tries the worktree patterns; one that does
+ * not hold only leaves them out (`worktreePatterns` unset, logged), so the
+ * snapshot denies stand alone. Its files go under
+ * `<dir>/factory/fence-self-test/` and are removed once it ends.
  */
 export async function runWorkerFenceSelfTest(exe: string, opts: WorkerFenceSelfTestOptions = {}): Promise<WorkerFenceSelfTest> {
+  // Side by side: each run has a folder of its own.
+  const [plain, withPatterns] = await Promise.all([
+    opts.patternsOnly ? { ok: true as const } : runFenceProbe(exe, opts, false),
+    (opts.platform ?? process.platform) === 'darwin' ? runFenceProbe(exe, opts, true) : null,
+  ]);
+  if (!plain.ok || !withPatterns) return plain;
+  if (withPatterns.ok) return { ok: true, worktreePatterns: true };
+  (opts.log ?? ((l: string) => console.warn(l)))(`[worker fence] other worktrees are closed as of launch only: ${withPatterns.reason}`);
+  return withPatterns.transient ? { ok: true, patternsRetry: true } : { ok: true };
+}
+
+async function runFenceProbe(exe: string, opts: WorkerFenceSelfTestOptions, linked: boolean): Promise<WorkerFenceSelfTest> {
   const dir = opts.dir ?? getWmuxDir();
   const base = path.join(dir, 'factory', 'fence-self-test');
   fs.mkdirSync(base, { recursive: true, mode: 0o700 });
@@ -306,24 +362,65 @@ export async function runWorkerFenceSelfTest(exe: string, opts: WorkerFenceSelfT
   };
   const wt = sub('wt');
   const tmp = sub('tmp');
-  const git = sub('git');
   const home = sub('home');
   const config = sub('config');
   const ran = path.join(wt, 'ran');
   const canary = path.join(root, 'canary');
+  // The macOS run: a linked worktree's files (claude then opens the whole
+  // common dir to commands, which `control` shows), the patterns, and a
+  // write into each other worktree and a new one, none of which may land.
+  const git = linked ? path.join(root, 'repo', '.git') : sub('git');
+  const own = WORKER_FENCE_SELF_TEST_WORKTREE;
+  const worktrees = path.join(git, 'worktrees');
+  const control = path.join(wt, 'control');
+  const ownWrote = path.join(wt, 'own');
+  const others = selfTestSiblings(own).map((n) => path.join(worktrees, n, 'probe'));
+  const added = path.join(worktrees, 'added');
   let api: { url: string; close: () => void } | null = null;
   try {
     const script = writeWorkerFenceHookScript(dir);
     const hookCommand = workerFenceHookCommand(opts.runtime ?? process.execPath, script, [wt, tmp]);
     if (!hookCommand) return { ok: false, reason: 'the fence hook\'s command cannot be written for this runtime' };
-    const fence = buildWorkerFence({
-      worktree: wt, workerTempDir: tmp, gitCommonDir: git, isLinkedWorktree: false, ownWorktreeName: null, ownBranch: null,
+    let patterns: string[] | null = null;
+    if (linked) {
+      patterns = workerFenceWorktreeComplement(git, own);
+      if (!patterns) return { ok: false, reason: 'the self-test\'s folder cannot be named in a pattern' };
+      const ownGit = path.join(worktrees, own);
+      for (const d of [path.join(git, 'objects'), path.join(git, 'refs', 'heads'), ownGit, ...others.map((p) => path.dirname(p))]) fs.mkdirSync(d, { recursive: true, mode: 0o700 });
+      fs.writeFileSync(path.join(git, 'HEAD'), 'ref: refs/heads/main\n');
+      fs.writeFileSync(path.join(ownGit, 'HEAD'), `${'0'.repeat(40)}\n`);
+      fs.writeFileSync(path.join(ownGit, 'commondir'), '../..\n');
+      fs.writeFileSync(path.join(ownGit, 'gitdir'), `${path.join(wt, '.git')}\n`);
+      fs.writeFileSync(path.join(wt, '.git'), `gitdir: ${ownGit}\n`);
+    }
+    const build = (extra: readonly string[]) => buildWorkerFence({
+      worktree: wt, workerTempDir: tmp, gitCommonDir: git, isLinkedWorktree: linked, ownWorktreeName: linked ? own : null, ownBranch: null,
       otherBranches: [], otherWorktrees: [], platformCapable: true, repoTestWritePaths: [], permissionMode: 'bypassPermissions',
-      hookCommand, credentialPaths: [], home,
+      hookCommand, credentialPaths: [], home, extraDenyWrite: extra,
     });
+    let fence = build(patterns ?? []);
+    if (patterns) {
+      // As many denied paths as a launch may carry with the patterns, so a
+      // launch's profile is never larger than one that applied here.
+      const pad: string[] = [];
+      const one = (i: number) => path.join(root, 'pad', `${i}-${'x'.repeat(96)}`);
+      for (let bytes = denyWriteBytes(fence.settings); bytes + Buffer.byteLength(JSON.stringify(one(pad.length))) + 1 <= WORKER_FENCE_DENY_WRITE_MAX_BYTES;) {
+        bytes += Buffer.byteLength(JSON.stringify(one(pad.length))) + 1;
+        pad.push(one(pad.length));
+      }
+      fence = build([...patterns, ...pad]);
+    }
     const settingsFile = path.join(root, 'settings.json');
     fs.writeFileSync(settingsFile, JSON.stringify(fence.settings), { mode: 0o600 });
-    api = await startScriptedApi(`touch ${shellQuote(ran)}; touch ${shellQuote(canary)}`);
+    const tries = linked
+      ? [
+        `touch ${shellQuote(path.join(git, 'control'))} && touch ${shellQuote(control)}`,
+        `touch ${shellQuote(path.join(worktrees, own, 'probe'))} && touch ${shellQuote(ownWrote)}`,
+        ...others.map((p) => `touch ${shellQuote(p)}`),
+        `mkdir ${shellQuote(added)}`,
+      ].map((c) => `; ${c}`).join('')
+      : '';
+    api = await startScriptedApi(`touch ${shellQuote(ran)}; touch ${shellQuote(canary)}${tries}`);
     // The login shell's PATH, as a pane has: a claude installed by npm needs
     // its node.
     const loginEnv = await (opts.paneEnv ?? (() => agentExecEnv(process.env)))();
@@ -377,6 +474,12 @@ export async function runWorkerFenceSelfTest(exe: string, opts: WorkerFenceSelfT
       const why = exit.stderr.trim().split('\n').pop()?.slice(0, 200) || `exit ${exit.code}`;
       return { ok: false, reason: `claude did not run a command inside the fence (${why})`, ...(exit.timedOut ? { transient: true as const } : {}) };
     }
+    if (!linked) return { ok: true };
+    if (exit.timedOut) return { ok: false, reason: 'the run with the patterns did not finish', transient: true };
+    // Without it, the denies below would hold with no pattern at all.
+    if (!fs.existsSync(control)) return { ok: false, reason: 'claude did not open the linked worktree\'s git folder, so the patterns were not tried' };
+    if (others.some((p) => fs.existsSync(p)) || fs.existsSync(added)) return { ok: false, reason: 'a command wrote another worktree\'s git folder, so the patterns are not holding' };
+    if (!fs.existsSync(ownWrote)) return { ok: false, reason: 'a command could not write its own worktree\'s git folder under the patterns' };
     return { ok: true };
   } catch (err) {
     return { ok: false, reason: `the self-test could not run: ${String(err)}`, transient: true };
@@ -653,6 +756,37 @@ export function claudeTempDenies(worktree: string, platform: NodeJS.Platform, ro
   return roots.flatMap((r) => listDir(r).filter((n) => n.startsWith('-') && n !== own).map((n) => path.join(r, n)));
 }
 
+const complementFallbacks = new Set<string>();
+
+/**
+ * macOS, a linked worktree: every other folder under the common dir's
+ * `worktrees/` closed by pattern (workerFenceWorktreeComplement), one made
+ * after launch included. Where it gives none, the snapshot denies stand
+ * alone, and that is logged once per name.
+ */
+export function worktreeComplementDenies(git: Pick<WorktreeGitFacts, 'gitCommonDir' | 'isLinkedWorktree' | 'ownWorktreeName'>, platform: NodeJS.Platform, log: (line: string) => void = (l) => console.warn(l)): string[] {
+  if (platform !== 'darwin' || !git.isLinkedWorktree || git.ownWorktreeName === null) return [];
+  const denies = workerFenceWorktreeComplement(git.gitCommonDir, git.ownWorktreeName);
+  if (denies) return denies;
+  logComplementFallbackOnce(git, 'its name or the repository path cannot be a pattern', log);
+  return [];
+}
+
+function logComplementFallbackOnce(git: Pick<WorktreeGitFacts, 'gitCommonDir' | 'ownWorktreeName'>, why: string, log: (line: string) => void = (l) => console.warn(l)): void {
+  const key = `${git.gitCommonDir}\0${git.ownWorktreeName}\0${why}`;
+  if (complementFallbacks.has(key)) return;
+  // Once per name and reason, in a set that never grows past a few hundred.
+  if (complementFallbacks.size >= 256) complementFallbacks.clear();
+  complementFallbacks.add(key);
+  log(`[worker fence] worktree ${JSON.stringify(git.ownWorktreeName)}: other worktrees are closed as of launch only (${why})`);
+}
+
+/** A settings document's denied write paths, as JSON, in bytes. */
+function denyWriteBytes(settings: Record<string, unknown>): number {
+  const sandbox = settings.sandbox as { filesystem?: { denyWrite?: string[] } } | undefined;
+  return Buffer.byteLength(JSON.stringify(sandbox?.filesystem?.denyWrite ?? []), 'utf8');
+}
+
 function listDirSafe(dir: string): string[] {
   try {
     return fs.readdirSync(dir);
@@ -799,12 +933,22 @@ export function attachWorkerFence(input: WorkerFenceAttachInput): WorkerFenceAtt
   const script = writeWorkerFenceHookScript(input.dir);
   const hookCommand = workerFenceHookCommand(input.runtime ?? process.execPath, script, [worktree, temp.real], input.platform);
   if (!hookCommand) throw fenceError('the fence hook\'s command cannot be written for these paths');
-  const fence = buildWorkerFence({
+  const build = (patterns: readonly string[]) => buildWorkerFence({
     worktree, workerTempDir: temp.real, ...git, platformCapable: support.capable, repoTestWritePaths: [],
     permissionMode: mode ?? 'bypassPermissions', hookCommand, credentialPaths: credentials, home,
-    extraDenyWrite: claudeTempDenies(worktree, platform, input.claudeTempRoots),
+    extraDenyWrite: [...claudeTempDenies(worktree, platform, input.claudeTempRoots), ...patterns],
     ...(platform === 'linux' ? { keepGitDeny: (p: string) => fs.existsSync(p) } : {}),
   });
+  // The worktree patterns only where the self-test applied them, and only
+  // while the denies stay as small as the profile the self-test applied.
+  const patterns = support.capable && support.selfTest.ok && support.selfTest.worktreePatterns ? worktreeComplementDenies(git, platform) : [];
+  const fence = build(patterns);
+  if (patterns.length > 0 && denyWriteBytes(fence.settings) > WORKER_FENCE_DENY_WRITE_MAX_BYTES) {
+    const filesystem = (fence.settings.sandbox as { filesystem: { denyWrite: string[] } }).filesystem;
+    const drop = new Set(patterns);
+    filesystem.denyWrite = filesystem.denyWrite.filter((p) => !drop.has(p));
+    logComplementFallbackOnce(git, 'the denies would make the profile too large');
+  }
   // How the worker reaches its model, from the owner's user settings it
   // no longer loads; the fence's own values win.
   const carried = carriedUserSettings(userConfigDir, fence.settings.env as Record<string, string>);
