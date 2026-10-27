@@ -206,6 +206,13 @@ describe('the side-by-side preview picker', () => {
     expect(askPickerUntouched(parseAskPicker(ONE.initial), qs, unknown)).toBe(true);
   });
 
+  it('finds the box after a label that holds a ┌ itself', () => {
+    const boxed = ONE.initial.map((row) => row.replace('1. 달력 그리드  ', '1. 달력 ┌ 그리드'));
+    expect(boxed).not.toEqual(ONE.initial);
+    const options = ONE_Q.options.map((o, j) => (j === 0 ? { ...o, label: '달력 ┌ 그리드' } : o));
+    expect(askPickerUntouched(parseAskPicker(boxed), questionsOf(payload([{ ...ONE_Q, options }])))).toBe(true);
+  });
+
   it('follows the cursor onto an option without a preview', () => {
     const qs = questionsOf(payload(TWO_QS));
     expect(askScreenMeets(parseAskPicker(TWO.noPreview), { view: 'question', q: 0, cursor: '3', checked: [], other: null }, qs, [{ keys: ['3'] }, { keys: ['1'] }])).toBe(true);

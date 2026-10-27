@@ -242,7 +242,7 @@ function columnsOf(text: string): number {
  * between it and the label.
  */
 function previewColumn(row: string): number | null {
-  const at = row.indexOf('┌');
+  const at = row.lastIndexOf('┌');
   if (at <= 0 || row[at - 1] !== ' ' || !PREVIEW_TOP.test(row.slice(at))) return null;
   return columnsOf(row.slice(0, at));
 }

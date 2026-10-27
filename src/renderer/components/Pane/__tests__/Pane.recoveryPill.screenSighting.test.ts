@@ -212,6 +212,26 @@ describe('recovery pill: a screen-tier sighting hides it and never consumes the 
     expect(screenShowsLiveAgent(['me@devbox:~/repo$ codex'], 'codex')).toBe(false);
   });
 
+  it('rejoins key hints wrapped before their last two words (`… · Esc` / `to cancel`)', () => {
+    const picker = [
+      '────────────────────────────────────────',
+      ' ☐ Color',
+      '',
+      'Which color?',
+      '',
+      '❯ 1. Red',
+      '  2. Blue',
+      '  3. Type something.',
+      '────────────────────────────────────────',
+      '  4. Chat about this',
+      '',
+    ];
+    expect(screenShowsLiveAgent([...picker, 'Enter to select · ↑/↓ to navigate · n to add notes · Esc', 'to cancel'], 'claude')).toBe(true);
+    // Only a hint's own words rejoin: a row under it that merely starts with `to` does not.
+    expect(screenShowsLiveAgent([...picker, 'Enter to select · ↑/↓ to navigate · n to add notes · Esc', 'to cancel now'], 'claude')).toBe(false);
+    expect(screenShowsLiveAgent([...picker, 'Enter to select · ↑/↓ to navigate · n to add notes', 'to cancel'], 'claude')).toBe(false);
+  });
+
   it('reads the captured Claude and Codex dialogs as live, and not once a shell row is under them', () => {
     const dir = resolve(__dirname, '../../../../daemon/approvals/__tests__/fixtures/terminal-prompts');
     const dialogs = (readdirSync(dir, { recursive: true }) as string[])

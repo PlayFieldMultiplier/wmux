@@ -118,9 +118,14 @@ function dialogAtBottom(rows: readonly string[]): boolean {
   while (last >= 0 && rows[last].trim().length === 0) last--;
   if (last < 0) return false;
   // A narrow pane wraps the key hints and leaves their last word alone on the
-  // bottom row (`… · Esc to` / `cancel`, captured at 44 and 80 columns).
-  const wrapped = last > 0 && /^\S+$/.test(rows[last]) && /\b(?:esc|enter) to$/i.test(rows[last - 1].trimEnd());
-  const grid = wrapped ? [...rows.slice(0, last - 1), `${rows[last - 1].trimEnd()} ${rows[last]}`] : rows.slice(0, last + 1);
+  // bottom row (`… · Esc to` / `cancel`, captured at 44 and 80 columns), or
+  // their last two (`… · Esc` / `to cancel`: the preview picker's longer
+  // hint at 57 columns, captured on Claude Code 2.1.311).
+  const above = last > 0 ? rows[last - 1].trimEnd() : '';
+  const wrapped = last > 0 && (
+    (/^\S+$/.test(rows[last]) && /\b(?:esc|enter) to$/i.test(above))
+    || (/^to \S+$/i.test(rows[last]) && /\b(?:esc|enter)$/i.test(above)));
+  const grid = wrapped ? [...rows.slice(0, last - 1), `${above} ${rows[last]}`] : rows.slice(0, last + 1);
   if (!AGENT_BOTTOM_ROW.test(grid[grid.length - 1])) return false;
   return screenShowsActiveDialog(grid) || screenShowsAgentDialog(grid);
 }
