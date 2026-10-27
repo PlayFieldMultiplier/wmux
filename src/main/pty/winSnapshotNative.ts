@@ -507,6 +507,36 @@ export function tryProcessIdentity(pid: number): ProcessIdentityRow | ProcessIde
 }
 
 /**
+ * Whether a process has exited (#2774): `exited` when no process has the pid
+ * or its handle is signaled, `running`, or `unknown` when it cannot be read
+ * (not Windows, native reads unavailable, access denied). A terminated process
+ * can stay listed by tasklist while its last handles close; its handle is
+ * signaled once it has exited. Opened to wait and query only, never to
+ * terminate. Never throws.
+ */
+export function readProcessExitState(pid: number): 'exited' | 'running' | 'unknown' {
+  if (!Number.isInteger(pid) || pid <= 0) return 'unknown';
+  const b = loadFailed ? null : loadBindings();
+  if (!b) {
+    loadFailed = true;
+    return 'unknown';
+  }
+  try {
+    const raw = b.OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+    const handle = typeof raw === 'bigint' ? raw : BigInt(raw);
+    if (handle === 0n) return b.GetLastError() === ERROR_INVALID_PARAMETER ? 'exited' : 'unknown';
+    try {
+      const r = b.WaitForSingleObject(raw, 0);
+      return r === WAIT_OBJECT_0 ? 'exited' : r === WAIT_TIMEOUT ? 'running' : 'unknown';
+    } finally {
+      b.CloseHandle(raw);
+    }
+  } catch {
+    return 'unknown';
+  }
+}
+
+/**
  * Cumulative CPU time (kernel + user, in 100 ns units) of every process in the
  * trees rooted at `rootPids`, roots included. Used to turn two samples into a
  * CPU percentage for wmux and everything it started. See

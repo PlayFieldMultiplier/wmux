@@ -15,6 +15,7 @@ import {
   withDaemonStartLock,
 } from './launchdDaemonJob';
 import { classifyTasklistOutput, classifyKillOutcome, type ProcessLiveness } from '../processLiveness';
+import { handleLiveness } from '../processHandleLiveness';
 import { createFileExclusive, replaceFileAtomic, unlinkIfContent } from './daemonFiles';
 
 export interface DaemonInfo {
@@ -127,6 +128,10 @@ export type { ProcessLiveness };
  */
 export function checkProcessLiveness(pid: number): ProcessLiveness {
   if (process.platform === 'win32') {
+    // A terminated process stays listed by tasklist until its last handle
+    // closes (#2774), so the process handle answers first.
+    const fromHandle = handleLiveness(pid);
+    if (fromHandle !== 'unknown') return fromHandle;
     let stdout: string | null = null;
     try {
       const systemRoot = process.env.SystemRoot || 'C:\\Windows';
@@ -597,19 +602,25 @@ export async function waitOutRecoveringDaemon(
  *   'recover' — re-ping failed (or no token) AND the user approved cleanup.
  *   'refuse'  — re-ping failed (or no token) AND the user declined (or the
  *               dialog was suppressed); the caller re-throws the legacy error.
+ *   'gone'    — the process exited meanwhile (`exited`, asked before the
+ *               dialog and after a decline, #2774): a dead daemon, cleaned
+ *               up like any stale one.
  */
 export async function recoverFromBlockedProbe(deps: {
   token: string;
   reping: (timeoutMs: number) => Promise<boolean>;
   sleep: (ms: number) => Promise<void>;
   askUser: () => Promise<boolean>;
-}): Promise<'reuse' | 'recover' | 'refuse'> {
+  exited?: () => boolean;
+}): Promise<'reuse' | 'recover' | 'refuse' | 'gone'> {
   if (deps.token) {
     // Same [500, 1000] budget / 200 ms backoff the verified branch uses.
     const alive = await tryEscalatedReping(deps.reping, [500, 1000], 200, deps.sleep);
     if (alive) return 'reuse';
   }
-  return (await deps.askUser()) ? 'recover' : 'refuse';
+  if (deps.exited?.()) return 'gone';
+  if (await deps.askUser()) return 'recover';
+  return deps.exited?.() ? 'gone' : 'refuse';
 }
 
 /**
@@ -1409,6 +1420,18 @@ async function ensureDaemonUnlocked(deps: DaemonLauncherDeps): Promise<DaemonInf
     //       duplicate sessions. Throw so the respawn controller surfaces
     //       the failure via its budget + IPC, instead of silently
     //       corrupting state.
+    //
+    // A daemon that was terminated just before this start can still pass the
+    // liveness check and then vanish from the image / command-line lookups
+    // (#2774). Dead now, it is not case (c): the stale cleanup below runs.
+    // Asked again on every null lookup and before any dialog or refusal,
+    // since the process can finish exiting during a lookup or the re-ping.
+    const recordedPid = existingPid;
+    const hasExited = (): boolean => {
+      if (checkProcessLiveness(recordedPid) !== 'dead') return false;
+      (deps.log ?? console.log)(`[launcher] daemon.pid=${recordedPid} names a process that has exited — treating it as stale`);
+      return true;
+    };
     const expectedImage = path.basename(process.execPath);
     if (existingPid === process.pid) {
       // (b) PID file points back at ourselves — the real daemon must be
@@ -1416,9 +1439,13 @@ async function ensureDaemonUnlocked(deps: DaemonLauncherDeps): Promise<DaemonInf
       (deps.warn ?? console.warn)(
         `[launcher] daemon.pid=${existingPid} equals current process pid — stale, cleaning + spawning fresh`,
       );
+    } else if (hasExited()) {
+      // Exited after the liveness check; nothing to verify or kill.
     } else {
       const imageName = getProcessImageName(existingPid);
-      if (imageName === null) {
+      if (imageName === null && hasExited()) {
+        // Exited during the image lookup.
+      } else if (imageName === null) {
         // (c) Could not even read the image (AV blocked tasklist.exe / ps /
         // WMI). Before popping the recovery dialog, give the daemon the SAME
         // escalated re-ping the verified branch uses: a daemon that answers a
@@ -1430,6 +1457,7 @@ async function ensureDaemonUnlocked(deps: DaemonLauncherDeps): Promise<DaemonInf
           token,
           reping: (timeoutMs) => pingDaemon(pipeName, token, timeoutMs),
           sleep: (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+          exited: hasExited,
           askUser: () =>
             deps.askUserToRecoverFromStalePid({
               reason: `image lookup for PID ${existingPid} failed (anti-virus may be blocking tasklist.exe / ps / WMI)`,
@@ -1448,9 +1476,11 @@ async function ensureDaemonUnlocked(deps: DaemonLauncherDeps): Promise<DaemonInf
             `[launcher] daemon.pid=${existingPid} alive but image lookup failed; refusing to spawn over an unverified live process. Manually delete ${pidFile} if you have verified the daemon is gone (or in elevated PowerShell: taskkill /F /PID ${existingPid}).`,
           );
         }
-        (deps.warn ?? console.warn)(
-          `[launcher] user approved cleanup of unverified PID ${existingPid} (image lookup failed)`,
-        );
+        if (outcome === 'recover') {
+          (deps.warn ?? console.warn)(
+            `[launcher] user approved cleanup of unverified PID ${existingPid} (image lookup failed)`,
+          );
+        }
       } else {
         // Do NOT let an image-name mismatch alone decide "stale, someone
         // else's program": a genuine wmux daemon's image is whichever host
@@ -1470,7 +1500,9 @@ async function ensureDaemonUnlocked(deps: DaemonLauncherDeps): Promise<DaemonInf
           );
         }
         const argv = getProcessArgv(existingPid);
-        if (argv === null) {
+        if (argv === null && hasExited()) {
+          // Exited during the command-line lookup.
+        } else if (argv === null) {
           // (c) Lookup failed — same recovery dance as the image path, and the
           // same escalated re-ping FIRST. The image already matches wmux here,
           // so a daemon that answers a ping is almost certainly the real one:
@@ -1481,6 +1513,7 @@ async function ensureDaemonUnlocked(deps: DaemonLauncherDeps): Promise<DaemonInf
             token,
             reping: (timeoutMs) => pingDaemon(pipeName, token, timeoutMs),
             sleep: (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+            exited: hasExited,
             askUser: () =>
               deps.askUserToRecoverFromStalePid({
                 reason: `command-line lookup for PID ${existingPid} (image "${imageName}") failed (anti-virus may be blocking PowerShell / Get-CimInstance)`,
@@ -1499,9 +1532,11 @@ async function ensureDaemonUnlocked(deps: DaemonLauncherDeps): Promise<DaemonInf
               `[launcher] daemon.pid=${existingPid} alive (image "${imageName}" matches wmux) but command-line lookup failed; refusing to spawn over an unverified live process. Manually delete ${pidFile} if you have verified the daemon is gone (or in elevated PowerShell: taskkill /F /PID ${existingPid}).`,
             );
           }
-          (deps.warn ?? console.warn)(
-            `[launcher] user approved cleanup of unverified PID ${existingPid} (cmdline lookup failed)`,
-          );
+          if (outcome === 'recover') {
+            (deps.warn ?? console.warn)(
+              `[launcher] user approved cleanup of unverified PID ${existingPid} (cmdline lookup failed)`,
+            );
+          }
         } else {
           // #1028: a resolver throw must degrade to "no candidates" (the
           // exact-shape fallback alone), never crash the launcher — #1027
@@ -1525,6 +1560,7 @@ async function ensureDaemonUnlocked(deps: DaemonLauncherDeps): Promise<DaemonInf
               token,
               reping: (timeoutMs) => pingDaemon(pipeName, token, timeoutMs),
               sleep: (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+              exited: hasExited,
               askUser: () =>
                 deps.askUserToRecoverFromStalePid({
                   reason: `PID ${existingPid} (image "${imageName}") is alive but its command line does not identify the wmux daemon script — an unrelated process on a recycled PID, or a wmux daemon whose script path could not be proven`,
@@ -1543,9 +1579,11 @@ async function ensureDaemonUnlocked(deps: DaemonLauncherDeps): Promise<DaemonInf
                 `[launcher] daemon.pid=${existingPid} alive but its command line does not identify the wmux daemon script; refusing to spawn over a possibly-live daemon. Manually delete ${pidFile} if you have verified the daemon is gone (or in elevated PowerShell: taskkill /F /PID ${existingPid}).`,
               );
             }
-            (deps.warn ?? console.warn)(
-              `[launcher] user approved cleanup of unproven PID ${existingPid} (cmdline mismatch)`,
-            );
+            if (outcome === 'recover') {
+              (deps.warn ?? console.warn)(
+                `[launcher] user approved cleanup of unproven PID ${existingPid} (cmdline mismatch)`,
+              );
+            }
           } else {
             // (a) Verified wmux daemon (image+cmdline match) that missed the
             //     two-shot (250+250 ms) ping. Before the DESTRUCTIVE SIGKILL —
@@ -1873,10 +1911,13 @@ export function killVerifiedDaemonPidOutcome(
     // is the host-independent gate. Only strict mode reads the image, and only
     // to refuse an indeterminate lookup; skipping it in relaxed mode saves
     // before-quit one tasklist/ps call (up to 3 s) whose result was unused.
-    if (opts.definitiveOnly && getProcessImageName(pid) === null) return 'unverifiable';
+    // A null lookup can also mean the process exited after the check above
+    // (#2774); its handle tells the two apart.
+    const exitedOrUnverifiable = (): DaemonKillOutcome => (checkProcessLiveness(pid) === 'dead' ? 'dead' : 'unverifiable');
+    if (opts.definitiveOnly && getProcessImageName(pid) === null) return exitedOrUnverifiable();
     const argv = getProcessArgv(pid);
     // Missing or mismatched script identity refuses, regardless of image.
-    if (argv === null) return 'unverifiable';
+    if (argv === null) return exitedOrUnverifiable();
     if (!argvIdentifiesDaemonScript(argv, opts.scriptCandidates ?? [])) return 'not-daemon';
   } catch {
     return 'unverifiable';
