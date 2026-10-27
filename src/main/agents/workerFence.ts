@@ -35,9 +35,10 @@ import { WORKER_GATE_TIMEOUT_S } from './workerToolGate';
  * The paths no fenced worker reads: the bot sandbox's named list
  * (botSandboxDenyRead), without the whole home folder (a worker works in it),
  * without GitHub's CLI config (a worker reads GitHub through `gh`), and with
- * each Claude config folder narrowed to its sign-in file (`.credentials.json`;
- * the rest, its shell snapshots included, is what the worker's own commands
- * read).
+ * each Claude config folder narrowed to its sign-in files (`.credentials.json`,
+ * and `.claude.json` in a folder other than `~/.claude`, as `~/.claude.json`
+ * is for it; the rest, its shell snapshots included, is what the worker's own
+ * commands read).
  */
 export function workerFenceCredentialPaths(input: BotSandboxInput): string[] {
   const home = path.resolve(input.home ?? os.homedir());
@@ -52,7 +53,12 @@ export function workerFenceCredentialPaths(input: BotSandboxInput): string[] {
     const p = path.resolve(raw);
     if (p === home || p === gh) continue;
     if (path.basename(p) === 'shell-snapshots' && claudeDirs.has(path.dirname(p))) continue;
-    out.add(claudeDirs.has(p) ? path.join(p, '.credentials.json') : p);
+    if (!claudeDirs.has(p)) {
+      out.add(p);
+      continue;
+    }
+    out.add(path.join(p, '.credentials.json'));
+    if (p !== path.join(home, '.claude')) out.add(path.join(p, '.claude.json'));
   }
   return [...out];
 }
@@ -141,7 +147,8 @@ function isWithin(child: string, parent: string): boolean {
  * a commit on its own branch writes (loose objects, its own ref, its own
  * index and HEAD, the logs) stays open; packs, every other ref, replace refs
  * and notes, the main checkout's HEAD, hooks, config, `info/` (grafts,
- * attributes), `objects/info/` (alternates), submodules' git dirs and every
+ * attributes), `shallow`, `objects/info/` (alternates), submodules' git dirs,
+ * the reftable store (a reftable repository's refs are not files) and every
  * other worktree's metadata do not, nor a linked worktree's own pointers back
  * to the repository (`commondir`, `gitdir`).
  * A linked worktree also keeps off the main checkout's index; a main-checkout
@@ -168,6 +175,8 @@ export function workerFenceGitDenies(input: Pick<WorkerFenceInput, 'gitCommonDir
     path.join(git, 'info'),
     path.join(git, 'objects', 'info'),
     path.join(git, 'modules'),
+    path.join(git, 'shallow'),
+    path.join(git, 'reftable'),
     path.join(ownGitDir, 'config.worktree'),
   ]);
   if (input.isLinkedWorktree) {
@@ -256,8 +265,11 @@ export function buildWorkerFence(input: WorkerFenceInput): WorkerFence {
   const hooks = {
     PreToolUse: [{ matcher: '.*', hooks: [{ type: 'command', command: input.hookCommand, timeout: WORKER_GATE_TIMEOUT_S }] }],
   };
+  // The temp folder is the hook's second root: claude's temp files go there
+  // with or without the sandbox.
+  const env = workerFenceEnv(tmp);
   if (!input.platformCapable) {
-    return { settings: { permissions: { deny }, disableAllHooks: false, hooks }, weaker: true };
+    return { settings: { env, permissions: { deny }, disableAllHooks: false, hooks }, weaker: true };
   }
   const tests = input.repoTestWritePaths.map((p) => requireAbsolute('a test write path', p));
   const sandbox = {
@@ -289,14 +301,14 @@ export function buildWorkerFence(input: WorkerFenceInput): WorkerFence {
     },
   };
   return {
-    settings: { env: workerFenceEnv(tmp), permissions: { deny }, sandbox, disableAllHooks: false, hooks },
+    settings: { env, permissions: { deny }, sandbox, disableAllHooks: false, hooks },
     weaker: false,
   };
 }
 
 // ── The launch: one settings file on one plain claude line ──────────────────
 
-export type WorkerFenceRefusal = 'not-claude' | 'wrapper' | 'settings-flag' | 'unspliceable' | 'conflict';
+export type WorkerFenceRefusal = 'not-claude' | 'wrapper' | 'settings-flag' | 'add-dir' | 'unspliceable' | 'conflict';
 
 export type WorkerFenceLaunch =
   | { ok: true; line: string; settings: Record<string, unknown> }
@@ -309,6 +321,9 @@ const WRAPPER_STEMS: ReadonlySet<string> = new Set([
   'exec', 'command', 'builtin', 'eval', 'source', '.', 'nohup', 'nice', 'sudo', 'doas', 'su', 'time', 'timeout',
   'stdbuf', 'xargs', 'script', 'caffeinate', 'npx', 'bunx', 'pnpx', 'cmd', 'powershell', 'pwsh', 'wsl',
 ]);
+
+/** An allow rule for a file tool: claude widens the sandbox's writes by it. */
+const FILE_ALLOW_RULE = /^\s*(Read|Edit|Write|MultiEdit|NotebookEdit)\s*(\(|$)/;
 
 const UNSAFE_KEYS: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype']);
 
@@ -353,14 +368,18 @@ function mergeInto(dst: Record<string, unknown>, src: Record<string, unknown>, a
  * The fence merged with what the launch also needs (a WSL pane's hooks,
  * wslClaudeHooks; the bot worker's deny rules; wmux's status hooks). The
  * fence's own hook stays the first PreToolUse group. An extra may add, never
- * change: a `sandbox` of its own, or any value that differs from the
- * fence's (`disableAllHooks: true`, another CLAUDE_CODE_TMPDIR), is a
- * conflict. Pure.
+ * change: a `sandbox` of its own, a value that differs from the fence's
+ * (`disableAllHooks: true`, another CLAUDE_CODE_TMPDIR), or what claude
+ * also grants the sandbox's writes from (`permissions.additionalDirectories`,
+ * an allow rule for a file tool) is a conflict. Pure.
  */
 export function mergeWorkerFenceSettings(fence: Record<string, unknown>, extras: readonly Record<string, unknown>[]): { ok: true; settings: Record<string, unknown> } | { ok: false; key: string } {
   const out = structuredClone(fence);
   for (const extra of extras) {
     if (Object.prototype.hasOwnProperty.call(extra, 'sandbox')) return { ok: false, key: 'sandbox' };
+    const perms = isPlainObject(extra.permissions) ? extra.permissions : {};
+    if (Object.prototype.hasOwnProperty.call(perms, 'additionalDirectories')) return { ok: false, key: 'permissions.additionalDirectories' };
+    if (Array.isArray(perms.allow) && perms.allow.some((r) => typeof r !== 'string' || FILE_ALLOW_RULE.test(r))) return { ok: false, key: 'permissions.allow' };
     const clash = mergeInto(out, extra, '');
     if (clash) return { ok: false, key: clash };
   }
@@ -377,7 +396,7 @@ function refuse(refusal: WorkerFenceRefusal, reason: string): WorkerFenceLaunch 
  * reason, when the fence cannot be attached to the line: it does not start
  * claude itself, it starts it through a wrapper (`env …`, `sh -c …`, a
  * variable assignment), it already carries a `--settings` (of two, the last
- * one wins), it is not one plain command spliceSettingsFlag can carry, or an
+ * one wins), it opens another folder (`--add-dir`), it is not one plain command spliceSettingsFlag can carry, or an
  * extra conflicts with the fence. Pure.
  */
 export function workerFenceLaunch(input: {
@@ -400,6 +419,9 @@ export function workerFenceLaunch(input: {
   if (tokens.slice(1).some((t) => /^--settings(=|$)/.test(t.value)) && spliced !== input.line) {
     return refuse('settings-flag', 'the line already carries its own --settings, which would replace the fence');
   }
+  if (tokens.slice(1).some((t) => /^--add-dir(=|$)/.test(t.value))) {
+    return refuse('add-dir', 'the line opens another folder with --add-dir, which widens the fence');
+  }
   if (spliced === null) return refuse('unspliceable', 'the line is not one plain claude command the fence can be attached to');
   const merged = mergeWorkerFenceSettings(input.fence, input.extras ?? []);
   if (!merged.ok) return refuse('conflict', `the launch's other settings change the fence's ${merged.key}`);
@@ -416,8 +438,13 @@ export const WORKER_FENCE_WRITE_TOOLS: readonly string[] = ['Write', 'Edit', 'Mu
 export const WORKER_FENCE_PASS_TOOLS: readonly string[] = ['Read', 'Glob', 'Grep', 'LS', 'NotebookRead', 'Bash', 'PowerShell'];
 
 /** Built-in tools that change files from claude's own process with no path
- *  the hook can check: they create or remove a git worktree. */
+ *  the hook can check: they create or remove a git worktree. A subagent
+ *  asked to run in a worktree of its own (`isolation: "worktree"`) is
+ *  refused for the same reason. */
 export const WORKER_FENCE_REFUSED_TOOLS: readonly string[] = ['EnterWorktree', 'ExitWorktree'];
+
+/** The tools that start a subagent. */
+export const WORKER_FENCE_AGENT_TOOLS: readonly string[] = ['Agent', 'Task'];
 
 /** The tool-input fields that name a file. */
 export const WORKER_FENCE_PATH_FIELDS: readonly string[] = ['file_path', 'notebook_path', 'path'];
@@ -435,7 +462,8 @@ export const WORKER_FENCE_INPUT_TIMEOUT_MS = 10_000;
  *
  * For each call:
  *   - an MCP tool, or a built-in in WORKER_FENCE_PASS_TOOLS, passes;
- *   - a built-in in WORKER_FENCE_REFUSED_TOOLS is refused;
+ *   - a built-in in WORKER_FENCE_REFUSED_TOOLS is refused, and so is a
+ *     subagent (WORKER_FENCE_AGENT_TOOLS) asked for an isolation of its own;
  *   - a write tool (WORKER_FENCE_WRITE_TOOLS) passes only when every path it
  *     names passes the check below;
  *   - any other tool passes when it names no path, and is refused when it
@@ -452,6 +480,7 @@ export function workerFenceHookScript(): string {
     write: WORKER_FENCE_WRITE_TOOLS,
     pass: WORKER_FENCE_PASS_TOOLS,
     refused: WORKER_FENCE_REFUSED_TOOLS,
+    agents: WORKER_FENCE_AGENT_TOOLS,
     fields: WORKER_FENCE_PATH_FIELDS,
     configNames: ['.git', ...WORKER_FOLDER_CONFIG_NAMES].map((n) => n.toLowerCase()),
     timeoutMs: WORKER_FENCE_INPUT_TIMEOUT_MS,
@@ -522,6 +551,9 @@ try {
     if (tool.startsWith('mcp__') || P.pass.includes(tool)) process.exit(0);
     if (P.refused.includes(tool)) refuse(tool + ' is not available inside the worker fence');
     const input = ev.tool_input;
+    if (P.agents.includes(tool) && input && typeof input === 'object' && input.isolation !== undefined && input.isolation !== null) {
+      refuse(tool + ' with isolation ' + JSON.stringify(input.isolation) + ' is not available inside the worker fence; start it without isolation');
+    }
     const named = input && typeof input === 'object' ? P.fields.filter((f) => input[f] !== undefined) : [];
     if (!P.write.includes(tool)) {
       if (named.length === 0) process.exit(0);

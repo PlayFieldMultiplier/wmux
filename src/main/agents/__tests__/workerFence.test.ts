@@ -52,7 +52,7 @@ describe('the git denies', () => {
     const d = workerFenceGitDenies(input());
     for (const p of [
       g('objects', 'pack'), g('packed-refs'), g('refs', 'remotes'), g('refs', 'tags'), g('refs', 'replace'), g('refs', 'notes'), g('HEAD'), g('index'),
-      g('hooks'), g('config'), g('info'), g('objects', 'info'), g('modules'),
+      g('hooks'), g('config'), g('info'), g('objects', 'info'), g('modules'), g('shallow'), g('reftable'),
       g('worktrees', 'task-1', 'config.worktree'), g('worktrees', 'task-1', 'commondir'), g('worktrees', 'task-1', 'gitdir'), g('worktrees', 'task-2'),
     ]) {
       expect(d, p).toContain(p);
@@ -117,10 +117,11 @@ describe('the fence settings', () => {
     expect(sandboxOf(buildWorkerFence(input({ permissionMode: 'auto' })).settings).autoAllowBashIfSandboxed).toBe(false);
   });
 
-  it('a platform without the sandbox: the hook and the permission denies only, marked weaker', () => {
+  it('a platform without the sandbox: the hook, the permission denies and the temp folder only, marked weaker', () => {
     const { settings, weaker } = buildWorkerFence(input({ platformCapable: false }));
     expect(weaker).toBe(true);
-    expect(Object.keys(settings).sort()).toEqual(['disableAllHooks', 'hooks', 'permissions']);
+    expect(Object.keys(settings).sort()).toEqual(['disableAllHooks', 'env', 'hooks', 'permissions']);
+    expect((settings.env as Record<string, string>).CLAUDE_CODE_TMPDIR).toBe(TMP);
     expect((settings.permissions as { deny: string[] }).deny).toContain('Read(~/.ssh/**)');
   });
 
@@ -152,7 +153,8 @@ describe('the credential set', () => {
     expect(paths).not.toContain(path.join(HOME, '.config', 'gh'));
     expect(paths).not.toContain(path.join(HOME, '.claude'));
     expect(paths.some((p) => p.endsWith('shell-snapshots'))).toBe(false);
-    for (const p of [path.join(HOME, '.ssh'), path.join(HOME, '.aws'), path.join(HOME, '.claude', '.credentials.json'), path.join(cfg, '.credentials.json')]) {
+    expect(paths).not.toContain(path.join(HOME, '.claude', '.claude.json'));
+    for (const p of [path.join(HOME, '.ssh'), path.join(HOME, '.aws'), path.join(HOME, '.claude.json'), path.join(HOME, '.claude', '.credentials.json'), path.join(cfg, '.credentials.json'), path.join(cfg, '.claude.json')]) {
       expect(paths, p).toContain(p);
     }
   });
@@ -201,6 +203,8 @@ describe('the fenced launch', () => {
       ['claude -p x | tee log', 'unspliceable'],
       ['claude $FLAGS', 'unspliceable'],
       ['claude -- x', 'unspliceable'],
+      ['claude --add-dir /', 'add-dir'],
+      ['claude --add-dir=/Users', 'add-dir'],
     ];
     for (const [line, refusal] of cases) expect(launch(line), line).toMatchObject({ ok: false, refusal });
   });
@@ -223,6 +227,12 @@ describe('the fenced launch', () => {
     expect(launch('claude', [{ disableAllHooks: true }])).toMatchObject({ ok: false, refusal: 'conflict', reason: expect.stringMatching(/disableAllHooks/) });
     expect(launch('claude', [{ env: { CLAUDE_CODE_TMPDIR: '/tmp' } }])).toMatchObject({ ok: false, refusal: 'conflict', reason: expect.stringMatching(/env\.CLAUDE_CODE_TMPDIR/) });
     expect(mergeWorkerFenceSettings(fence, [JSON.parse('{"__proto__":{"x":1}}') as Record<string, unknown>])).toEqual({ ok: false, key: '__proto__' });
+    // What claude widens the sandbox's writes by.
+    expect(mergeWorkerFenceSettings(fence, [{ permissions: { additionalDirectories: ['/Users'] } }])).toEqual({ ok: false, key: 'permissions.additionalDirectories' });
+    for (const rule of ['Edit(//Users/**)', 'Write', 'Read(~/x)', 'MultiEdit(/a)']) {
+      expect(mergeWorkerFenceSettings(fence, [{ permissions: { allow: [rule] } }]), rule).toEqual({ ok: false, key: 'permissions.allow' });
+    }
+    expect(mergeWorkerFenceSettings(fence, [{ permissions: { allow: ['Bash(npm test)', 'mcp__notion'] } }]).ok).toBe(true);
     // The fence itself is never changed by a merge.
     const before = JSON.stringify(fence);
     mergeWorkerFenceSettings(fence, [{ hooks: wslClaudeHooks() }, { env: { EXTRA: '1' } }]);

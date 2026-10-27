@@ -156,6 +156,9 @@ describe.skipIf(WIN)('the worker fence hook', () => {
     expect(run({ tool_name: 'Frobnicate', tool_input: { path: path.join(wt, 'a.txt') } }).code).toBe(2);
     expect(run({ tool_name: 'EnterWorktree', tool_input: { name: 'x' } }).code).toBe(2);
     expect(run({ tool_name: 'ExitWorktree', tool_input: {} }).code).toBe(2);
+    expect(run({ tool_name: 'Agent', tool_input: { prompt: 'x', isolation: 'worktree' } }).code).toBe(2);
+    expect(run({ tool_name: 'Task', tool_input: { prompt: 'x', isolation: 'worktree' } }).code).toBe(2);
+    expect(run({ tool_name: 'Agent', tool_input: { prompt: 'x', subagent_type: 'Explore' } }).code).toBe(0);
   });
 });
 
