@@ -153,6 +153,43 @@ describe('DaemonPTYBridge — #1463 pre-turn silence', () => {
     expect(bootSilence()).toEqual([{ sessionId: 'sess-1', preTurn: true }]);
   });
 
+  it('a /clear typed at the idle prompt ends the episode its Enter opened', () => {
+    const turns: Array<{ runningSince: number | null }> = [];
+    bridge.on('agentTurn', (e: { runningSince: number | null }) => turns.push(e));
+    bridge.noteAgentStatus('running', true); // UserPromptSubmit
+    vi.advanceTimersByTime(5_000);
+    bridge.noteAgentStatus('waiting', true); // Stop
+    vi.advanceTimersByTime(5_000);
+    bridge.noteInput('/clear\r');
+    vi.advanceTimersByTime(300);
+    expect(bridge.isAgentMidTurn()).toBe(true);
+    sessionStart('clear');
+    expect(bridge.isPreTurn()).toBe(true);
+    expect(bridge.isAgentMidTurn()).toBe(false);
+    expect(turns.at(-1)?.runningSince).toBeNull();
+  });
+
+  it('a /clear with no output after it does not leave the pane reading running', () => {
+    bridge.noteAgentStatus('running', true);
+    vi.advanceTimersByTime(5_000);
+    bridge.noteAgentStatus('waiting', true);
+    vi.advanceTimersByTime(5_000);
+    bridge.noteInput('/clear\r');
+    vi.advanceTimersByTime(300);
+    sessionStart('clear');
+    expect(bridge.getAgentStatus()).not.toBe('running');
+  });
+
+  it('a startup SessionStart inside the first turn leaves that turn running', () => {
+    bridge.noteAgentStatus('running', true);
+    vi.advanceTimersByTime(5_000);
+    bridge.noteAgentStatus('waiting', true);
+    bridge.noteInput('fix the tests\r');
+    vi.advanceTimersByTime(300);
+    sessionStart('startup');
+    expect(bridge.isAgentMidTurn()).toBe(true);
+  });
+
   it('a hook arriving in the same millisecond after SessionStart still ends pre-turn', () => {
     sessionStart();
     bridge.noteAgentStatus('running', true); // UserPromptSubmit, same ms
