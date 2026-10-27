@@ -907,9 +907,11 @@ function assertNotKillingAGateHeldPane(
  */
 const APPROVAL_BLOCK_EXEMPT_KEYS: ReadonlySet<string> = STOP_KEYS;
 
-/** A screen read: the pane's text, `{ deferred: true }` when its session has
- *  not started here (#2398, no screen yet), or null when it cannot be read. */
-type ScreenRead = string | { deferred: true } | null;
+/** A screen read: the pane's text; `{ parked }` when the renderer had no live
+ *  terminal and read the daemon's ring (which leaves out output a muted
+ *  session holds); `{ deferred: true }` when its session has not started here
+ *  (#2398, no screen yet); or null when it cannot be read. */
+type ScreenRead = string | { parked: string } | { deferred: true } | null;
 
 /** The live facts the raw-input guard reads. Injected in tests. */
 export interface ApprovalInputGate {
@@ -936,7 +938,10 @@ class ApprovalGateUnavailable extends Error {}
  */
 async function folderTrustVerdict(gate: ApprovalInputGate, ptyId: string, screen: ScreenRead): Promise<FolderTrustState | null> {
   if (typeof screen === 'string') return folderTrustOnScreen(screen) ? 'trust' : 'clear';
-  return (await gate.daemonFolderTrust?.(ptyId)) ?? null;
+  const verdict = (await gate.daemonFolderTrust?.(ptyId)) ?? null;
+  // No daemon verdict for a parked read: its ring text decides, as before.
+  if (verdict === null && screen !== null && 'parked' in screen) return folderTrustOnScreen(screen.parked) ? 'trust' : 'clear';
+  return verdict;
 }
 
 /**
@@ -1011,9 +1016,13 @@ async function assertNotTypingAtAnApproval(
   // With no screen from the renderer, the daemon's ring decides the
   // folder-trust part; its 'unknown' refuses.
   const [policy, read] = await Promise.all([gate.answerPolicy(ptyId), gate.readScreenText(ptyId)]);
-  refuseAtFolderTrust(await folderTrustVerdict(gate, ptyId, read), op, ptyId, true, opts.stage ?? NOTHING_SENT);
-  // A session that has not started here shows nothing yet, so no dialog.
-  const screen = typeof read === 'string' || read === null ? read : '';
+  // A delivery refuses an unreadable screen whatever the daemon would say.
+  if (!(read === null && opts.refuseUnreadable)) {
+    refuseAtFolderTrust(await folderTrustVerdict(gate, ptyId, read), op, ptyId, true, opts.stage ?? NOTHING_SENT);
+  }
+  // A parked read's ring text stands for the screen; a session that has not
+  // started here shows nothing yet, so no dialog.
+  const screen = read === null || typeof read === 'string' ? read : 'parked' in read ? read.parked : '';
   // An unreadable screen is not evidence of a dialog. Refusing on it would stop
   // every ordinary send whenever the renderer is slow to answer — except for a
   // delivery that presses Enter on the caller's behalf (`refuseUnreadable`),
@@ -1347,10 +1356,11 @@ export function registerInputRpc(
       deps.readScreenText ??
       (async (ptyId) => {
         try {
-          const read = (await sendToRenderer(getWindow, 'input.readScreen', { ptyId })) as
-            | { text?: unknown; deferred?: unknown }
+          const read = (await sendToRenderer(getWindow, 'input.readScreen', { ptyId, markParked: true })) as
+            | { text?: unknown; deferred?: unknown; parked?: unknown }
             | undefined;
           if (read?.deferred === true) return { deferred: true };
+          if (read?.parked === true) return { parked: typeof read.text === 'string' ? read.text : '' };
           return typeof read?.text === 'string' ? read.text : null;
         } catch {
           return null;
@@ -1361,12 +1371,7 @@ export function registerInputRpc(
       (async (ptyId) => {
         // A pty main runs itself (local, pre-adoption) has no daemon ring.
         if (ptyManager.get(ptyId)) return null;
-        let answer: Awaited<ReturnType<DaemonClient['folderTrustState']>> | undefined;
-        try {
-          answer = await getDaemonClient?.()?.folderTrustState(ptyId, FOLDER_TRUST_CLIENT_TIMEOUT_MS);
-        } catch (err) {
-          answer = { unavailable: err instanceof Error ? err.message : String(err) };
-        }
+        const answer = await getDaemonClient?.()?.folderTrustState(ptyId, FOLDER_TRUST_CLIENT_TIMEOUT_MS);
         if (answer && 'state' in answer) {
           unavailableLogged.delete(ptyId);
           return answer.state;

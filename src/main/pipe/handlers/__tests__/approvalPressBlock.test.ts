@@ -49,7 +49,7 @@ const LEDGER = {
  */
 const live: {
   policy: AnswerPolicy;
-  screen: string | { deferred: true } | null;
+  screen: string | { parked: string } | { deferred: true } | null;
   /** The daemon's verdict from the session's ring (null: none to have), and how often it was asked. */
   daemonVerdict: FolderTrustState | null;
   daemonAsks: number;
@@ -709,7 +709,8 @@ describe('a folder-trust verdict for a pane with no screen', () => {
       expect(res.ok).toBe(false);
       expect(res.error).toContain('folder-trust prompt; answer it in the pane');
     }
-    expect(await w.gatedSubmit('pty-w', 'hello')).toMatchObject({ ok: false, reason: 'approval_pending' });
+    // A delivery refuses an unreadable screen before asking the daemon.
+    expect(await w.gatedSubmit('pty-w', 'hello')).toMatchObject({ ok: false, reason: screen === null ? 'gate_unavailable' : 'approval_pending' });
     expect(ensurePtyCalls()).toBe(0);
     expect(w.writes).toHaveLength(0);
     // ctrl+c still stops the agent.
@@ -754,15 +755,39 @@ describe('a folder-trust verdict for a pane with no screen', () => {
     expect(send.error).toContain('Nothing was sent.');
     const key = await asBrain('input.sendKey', { ptyId: 'pty-w', key: 'enter' });
     expect(key.error).toContain('Nothing was sent.');
-    expect(await w.gatedSubmit('pty-w', 'hello')).toMatchObject({ detail: expect.stringContaining('Nothing was sent.') });
-    // A pane not started here: the verdict turns between the paste and the Enter.
+    // A pane not started here: the delivery asks the daemon.
     live.screen = { deferred: true };
+    expect(await w.gatedSubmit('pty-w', 'hello')).toMatchObject({ detail: expect.stringContaining('Nothing was sent.') });
+    // The verdict turns between the paste and the Enter.
     live.daemonVerdict = 'clear';
     live.betweenPasteAndEnter = () => { live.daemonVerdict = 'unknown'; };
     const atEnter = await w.gatedSubmit('pty-w', 'hello');
     expect(atEnter).toMatchObject({ ok: false, reason: 'gate_unavailable', pasted: true });
     expect(atEnter.ok === false && atEnter.detail).toContain('The text was pasted but not submitted.');
     expect(atEnter.ok === false && atEnter.detail).not.toContain('Nothing was sent');
+  });
+
+  it('a delivery to an unreadable screen is refused without asking the daemon', async () => {
+    live.screen = null;
+    live.daemonVerdict = 'clear';
+    expect(await w.gatedSubmit('pty-w', 'hello')).toMatchObject({ ok: false, reason: 'gate_unavailable' });
+    expect(live.daemonAsks).toBe(0);
+  });
+
+  it("a parked read (the renderer read the daemon ring) asks the daemon, whose verdict counts the held output", async () => {
+    live.policy = { allowed: true };
+    // The ring shows a shell; the muted session's held output draws the dialog.
+    live.screen = { parked: '% ' };
+    live.daemonVerdict = 'trust';
+    expect((await asBrain('input.send', { ptyId: 'pty-w', text: 'hello', submit: true })).error).toContain('folder-trust prompt; answer it in the pane');
+    expect((await asBrain('input.sendKey', { ptyId: 'pty-w', key: 'escape' })).ok).toBe(false);
+    expect(await w.gatedSubmit('pty-w', 'hello')).toMatchObject({ ok: false, reason: 'approval_pending' });
+    expect(w.writes).toHaveLength(0);
+    // With no daemon verdict to have, the parked text decides, as before.
+    live.daemonVerdict = null;
+    expect((await asBrain('input.send', { ptyId: 'pty-w', text: 'hello' })).ok).toBe(true);
+    live.screen = { parked: (JSON.parse(fs.readFileSync(path.join(TRUST_FIXTURES, 'codex-folder-trust-60x30.json'), 'utf8')) as { screen: string[] }).screen.join('\n') };
+    expect((await asBrain('input.sendKey', { ptyId: 'pty-w', key: 'enter' })).ok).toBe(false);
   });
 
   it("the human operator is never asked about, whatever the verdict", async () => {
@@ -867,6 +892,18 @@ describe('the default screen read and daemon verdict', () => {
     } finally {
       warn.mockRestore();
     }
+  });
+
+  it("a parked read (from the daemon ring) asks the daemon, which counts a muted session's held output", async () => {
+    vi.mocked(sendToRenderer).mockImplementation(async (_win, method, params) =>
+      method === 'input.readScreen' && (params as { markParked?: boolean }).markParked === true
+        ? { ptyId: 'pty-p', text: '% ', parked: true }
+        : undefined);
+    const { asked, writes, send } = wireDefault();
+    const res = await send('input.send', { ptyId: 'pty-p', text: 'hello', submit: true });
+    expect(res.error).toContain('folder-trust prompt; answer it in the pane');
+    expect(asked).toEqual([{ id: 'pty-p', timeoutMs: 400 }]);
+    expect(writes).toEqual([]);
   });
 
   it('a pty main runs itself is never asked about: the old behaviour stands', async () => {

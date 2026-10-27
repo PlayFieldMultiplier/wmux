@@ -221,3 +221,24 @@ it('an approval probe of a deferred pane answers null without hydrating it', asy
     useStore.setState({ paneGate: previousGate, ptyDeferredById: {} });
   }
 });
+
+it("tags a read of the daemon ring as parked only for main's folder-trust check", async () => {
+  const ptyId = 'pty-read-parked';
+  const previousAPI = window.electronAPI;
+  const previousGate = useStore.getState().paneGate;
+  useStore.setState({ paneGate: 'ready' });
+  const readText = vi.fn();
+  (window as unknown as { electronAPI: unknown }).electronAPI = { pty: { readText } };
+  try {
+    terminalRegistry.delete(ptyId);
+    readText.mockResolvedValue({ success: true, rows: [{ text: '% ', wrapped: false }], bufferType: 'normal' });
+    expect(await handleRpcMethod('input.readScreen', { ptyId })).toEqual({ ptyId, text: '% ' });
+    expect(await handleRpcMethod('input.readScreen', { ptyId, markParked: true })).toEqual({ ptyId, text: '% ', parked: true });
+    // A ring read that failed is still a parked read, not a live screen.
+    readText.mockResolvedValue({ success: false });
+    expect(await handleRpcMethod('input.readScreen', { ptyId, markParked: true })).toEqual({ ptyId, text: '', parked: true });
+  } finally {
+    window.electronAPI = previousAPI;
+    useStore.setState({ paneGate: previousGate });
+  }
+});

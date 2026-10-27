@@ -112,13 +112,36 @@ describe('folderTrustState', () => {
     expect(await folderTrustState(deps(s), 'pty-1')).toBe('unknown');
   });
 
-  it("is 'clear' when the cells it could not see belong to an ordinary screen", async () => {
-    const ring = new RingBuffer(2048);
-    ring.noteGeometry(80, 24);
-    ring.write(Buffer.from('\x1b[2J\x1b[1;1Hwritten long ago'));
-    for (let n = 0; n < 200; n++) ring.write(Buffer.from(`\x1b[24;1H% tick ${n}`));
-    const s = { ...session(Buffer.alloc(0), 80, 24), ringBuffer: ring };
+  it("is 'clear' for a rolled ring whose only unseen cell is a header far above the prompt", async () => {
+    const ring = new RingBuffer(16 * 1024);
+    ring.noteGeometry(80, 40);
+    ring.write(Buffer.from('\x1b[2J\x1b[1;1HHEADER'));
+    // A full-screen TUI redraws every row but its header, until the header's draw leaves the ring.
+    for (let n = 0; n < 60; n++) {
+      for (let row = 2; row <= 39; row++) ring.write(Buffer.from(`\x1b[${row};1H\x1b[2Kline ${n}.${row}`));
+      ring.write(Buffer.from('\x1b[40;1H\x1b[2K% '));
+    }
+    expect(ring.totalBytesWritten).toBeGreaterThan(ring.size);
+    const s = { ...session(Buffer.alloc(0), 80, 40), ringBuffer: ring };
     expect(await folderTrustState(deps(s), 'pty-1')).toBe('clear');
+  });
+
+  it('reads a dialog line replayed at 40 columns across 3 rows, with a wrap on a blank', async () => {
+    // A 120-column question row whose second 40-column row ends in the blank after "created".
+    const head = ' Is this a project you created';
+    const line = `${' Accessing /private/tmp/'.padEnd(79 - head.length, 'x')}${head} or one you trust? (Like your own code)`;
+    expect(line[79]).toBe(' ');
+    const q = CLAUDE.findIndex((row) => row.includes('Quick safety check'));
+    const rows = [
+      ...CLAUDE.slice(0, q).map((text) => ({ text, wrapped: false })),
+      { text: line.slice(0, 40), wrapped: false },
+      // The read trims the row's trailing blank.
+      { text: line.slice(40, 79), wrapped: true },
+      { text: line.slice(80), wrapped: true },
+      ...CLAUDE.slice(q + 1).map((text) => ({ text, wrapped: false })),
+    ];
+    const snapshot = async () => ({ ok: true as const, rows });
+    expect(await folderTrustState(deps(session(Buffer.from('x'), 40, 40), { snapshot }), 'pty-1')).toBe('trust');
   });
 
   it('reads a ring larger than the tail window from its tail, within the budget', async () => {
@@ -136,19 +159,6 @@ describe('folderTrustState', () => {
     const started = Date.now();
     expect(await folderTrustState(deps(s, { snapshot }), 'pty-1')).toBe('trust');
     expect(Date.now() - started).toBeLessThan(250);
-  });
-
-  it('joins a wrapped row whose cut fell on a blank with one space', async () => {
-    // The read trims the blank the row ended in: "…you created" + "or one you trust?".
-    const q = CLAUDE.findIndex((row) => row.includes('Quick safety check'));
-    const rows = [
-      ...CLAUDE.slice(0, q).map((text) => ({ text, wrapped: false })),
-      { text: ' Quick safety check: Is this a project you created', wrapped: false },
-      { text: 'or one you trust?', wrapped: true },
-      ...CLAUDE.slice(q + 1).map((text) => ({ text, wrapped: false })),
-    ];
-    const snapshot = async () => ({ ok: true as const, rows });
-    expect(await folderTrustState(deps(session(Buffer.from('x'), 120, 40), { snapshot }), 'pty-1')).toBe('trust');
   });
 
   it("is 'clear' without a read when nothing runs in the session", async () => {
