@@ -27,18 +27,16 @@ describe('usage reserve holds (daemon)', () => {
     dirs.push(dir);
     let applied: Map<string, number> | null = null;
     const logged: string[] = [];
-    fs.chmodSync(dir, 0o500); // the write fails
-    let got: { ok: boolean };
-    try {
-      got = await takeUsageReserveHolds(dir, [{ account: 'default', untilMs: 2_000 }], (h) => { applied = h; }, (l) => logged.push(l));
-    } finally {
-      fs.chmodSync(dir, 0o700);
-    }
+    // A file where the data folder goes: the write fails on every platform (a chmod does nothing on Windows).
+    const dataDir = path.join(dir, 'data');
+    fs.writeFileSync(dataDir, '');
+    const got = await takeUsageReserveHolds(dataDir, [{ account: 'default', untilMs: 2_000 }], (h) => { applied = h; }, (l) => logged.push(l));
+    fs.rmSync(dataDir);
     expect(got).toEqual({ ok: false });
     expect(applied).toEqual(new Map([['default', 2_000]]));
     expect(logged).toHaveLength(1);
-    expect(await takeUsageReserveHolds(dir, [{ account: 'default', untilMs: 2_000 }], () => undefined, () => undefined)).toEqual({ ok: true });
-    expect(usageReserveHoldAt(loadUsageReserveHolds(dir), 'default', 1_000)).toBe(2_000);
+    expect(await takeUsageReserveHolds(dataDir, [{ account: 'default', untilMs: 2_000 }], () => undefined, () => undefined)).toEqual({ ok: true });
+    expect(usageReserveHoldAt(loadUsageReserveHolds(dataDir), 'default', 1_000)).toBe(2_000);
   });
 
   it('refuses a malformed push whole', () => {
