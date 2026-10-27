@@ -28,7 +28,7 @@ import { applyPaneAccount, assertPaneAccountUsable } from './phone/paneAccount';
 import type { PaneAccountVendor, StoredHandoffFrom } from '../shared/phonePaneAccount';
 import { DesktopPhoneBridge, keepAwakeRpc } from './phone/DesktopPhoneBridge';
 import { BrowserHelpTable } from './phone/BrowserHelpTable';
-import { BROWSER_HELP_SET_METHOD, type BrowserHelpTableRow } from '../shared/phoneBrowserHelp';
+import { BROWSER_HELP_SET_METHOD, PHONE_BROWSER_HELP_DECIDE_COMMAND, type BrowserHelpTableRow } from '../shared/phoneBrowserHelp';
 import { RunHistoryStore } from './history/RunHistoryStore';
 import { AutomationEngine } from './automation/AutomationEngine';
 import { assertExternalSessionId, registerAutomationRpc } from './automation/rpc';
@@ -99,7 +99,7 @@ import { isPaneMoving } from './chat/v2/paneClaims';
 import { ApprovalPushRouter } from './push/approvalPushRouter';
 import { BotApprovalPushRouter } from './push/botApprovalPush';
 import { BotPromptPushRouter } from './push/botPromptPush';
-import { BrowserHelpPushRouter, browserHelpPushAudience, type BrowserHelpResolution } from './push/browserHelpPush';
+import { BROWSER_HELP_PUSH_CAPABILITY, BrowserHelpPushRouter, browserHelpPushAudience, type BrowserHelpResolution } from './push/browserHelpPush';
 import type { PushTableRouterDeps } from './push/pushTableRouter';
 import { parseBotApprovalPushRows, type BotApprovalPushRow } from '../shared/botApprovalPush';
 import { parseBotPromptPushRows, type BotPromptPushRow } from '../shared/botPromptPush';
@@ -8872,7 +8872,10 @@ async function main(): Promise<void> {
   // nobody there to report anything. Same collapseId, so the phone replaces
   // the pane's banner rather than stacking a second one.
   const deferredPush = new DeferredPushQueue({
-    send: (payload, opts) => pushSender.notify(payload, opts),
+    // A held browser help push goes only to the devices that may still answer it.
+    send: (payload, opts) => pushSender.notify(payload, opts.requires === BROWSER_HELP_PUSH_CAPABILITY && opts.deviceIds
+      ? { ...opts, deviceIds: browserHelpPushRouter.narrowRelease(opts.deviceIds) }
+      : opts),
     // Whether a held push went out or was evicted unsent decides whether its
     // record may later retract it. Only called on a release or an eviction,
     // both of which happen after the router below exists.
@@ -9032,6 +9035,7 @@ async function main(): Promise<void> {
       const store = getDeviceStore();
       return browserHelpPushAudience({
         server: webTerminalServer?.currentStartState,
+        desktopDecides: desktopPhoneBridge?.supports(PHONE_BROWSER_HELP_DECIDE_COMMAND) === true,
         targets: store.pushTargets(),
         hasExplicitInputGrant: (deviceId) => store.hasExplicitInputGrant(deviceId),
       });

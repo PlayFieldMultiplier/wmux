@@ -71,14 +71,15 @@ export function buildBrowserHelpRetractionPayload(
 /**
  * The devices a browser help push goes to: the decision route's rule. The
  * server-wide flags are those of the running web server (none running: no
- * phone can answer, so nobody).
+ * phone can answer, so nobody), and the desktop must take a phone's decision.
  */
 export function browserHelpPushAudience(input: {
   server: { allowInput: boolean; allowTranscript: boolean } | undefined;
+  desktopDecides: boolean;
   targets: readonly PushTarget[];
   hasExplicitInputGrant: (deviceId: string) => boolean;
 }): string[] {
-  if (input.server?.allowTranscript !== true || input.server.allowInput !== true) return [];
+  if (input.server?.allowTranscript !== true || input.server.allowInput !== true || !input.desktopDecides) return [];
   return input.targets
     .filter((t) => t.push.capabilities?.includes(BROWSER_HELP_PUSH_CAPABILITY) === true)
     .filter((t) => input.hasExplicitInputGrant(t.deviceId))
@@ -97,6 +98,8 @@ export interface BrowserHelpPushRouterDeps {
   forget: (key: string) => void;
   log?: (level: 'info' | 'warn', message: string) => void;
   now?: () => number;
+  setTimer?: (fn: () => void, ms: number) => unknown;
+  clearTimer?: (handle: unknown) => void;
 }
 
 interface Pushed {
@@ -106,6 +109,8 @@ interface Pushed {
   deadlineAt: number;
   /** The devices it went (or will go) to; its retraction goes to the same. */
   deviceIds: readonly string[];
+  /** Set while no desktop lists it: retracts it at its deadline. */
+  orphanTimer?: unknown;
 }
 
 /**
@@ -129,6 +134,7 @@ export class BrowserHelpPushRouter {
     const open = new Set(rows.map((row) => row.requestId));
     for (const [id, record] of [...this.pushed]) {
       if (!open.has(id)) this.close(id, record, closed.get(id), now);
+      else this.adopt(record);
     }
     let audience: string[] | undefined;
     for (const row of rows) {
@@ -158,31 +164,47 @@ export class BrowserHelpPushRouter {
   }
 
   /**
-   * The desktop that published the table went away, and its requests closed
-   * with it (the `browser.help` close frames say the same). A push presence
-   * still holds is forgotten and judged again if a desktop lists the request
-   * once more (it was never delivered); a sent one is retracted, and never
-   * pushed again. Called before presence lets held pushes go.
+   * The desktop that published the table went away. Answering goes through
+   * it, so a push never delivered (presence still holds it, or the park queue
+   * dropped it) is forgotten and judged again if a desktop lists the request
+   * once more. A sent one stays on the phone: a desktop that comes back and
+   * lists it keeps it, one that comes back without it retracts it, and with
+   * no desktop at all it is retracted as `timed_out` at its deadline. Called
+   * before presence lets held pushes go.
    */
   publisherGone(): void {
-    const now = (this.deps.now ?? Date.now)();
+    const { deps } = this;
+    const now = (deps.now ?? Date.now)();
+    const setTimer = deps.setTimer ?? ((fn, ms) => setTimeout(fn, ms).unref());
     for (const [id, record] of [...this.pushed]) {
-      if (record.state === 'parked') {
-        this.deps.forget(BROWSER_HELP_PARK_PREFIX + id);
+      if (record.state !== 'sent') {
+        if (record.state === 'parked') deps.forget(BROWSER_HELP_PARK_PREFIX + id);
         this.pushed.delete(id);
         this.handled.delete(id);
-      } else {
-        this.close(id, record, undefined, now);
+        continue;
       }
+      if (record.orphanTimer !== undefined) continue;
+      record.orphanTimer = setTimer(() => {
+        record.orphanTimer = undefined;
+        if (this.pushed.get(id) === record) this.close(id, record, 'timed_out', (deps.now ?? Date.now)());
+      }, Math.max(0, record.deadlineAt - now));
     }
+  }
+
+  /** A desktop lists it again: no longer retracted at its deadline. */
+  private adopt(record: Pushed): void {
+    if (record.orphanTimer === undefined) return;
+    (this.deps.clearTimer ?? ((h) => clearTimeout(h as NodeJS.Timeout)))(record.orphanTimer);
+    record.orphanTimer = undefined;
   }
 
   private close(id: string, record: Pushed, state: BrowserHelpResolution | undefined, now: number): void {
     const { deps } = this;
+    this.adopt(record);
     this.pushed.delete(id);
     if (record.state === 'parked') deps.forget(BROWSER_HELP_PARK_PREFIX + id);
     if (record.state !== 'sent') return;
-    // A row that left with no state (the desktop that held it is gone):
+    // A row that left with no state (a desktop that came back without it):
     // past its deadline it timed out, before it nobody answered it.
     const resolution = state ?? (now >= record.deadlineAt ? 'timed_out' : 'cancelled');
     deps.log?.('info', `[push] retracting the push for browser help ${id}`);
@@ -196,6 +218,15 @@ export class BrowserHelpPushRouter {
   /** Is this park-queue key one of ours? */
   owns(key: string): boolean {
     return key.startsWith(BROWSER_HELP_PARK_PREFIX);
+  }
+
+  /**
+   * The devices a held push may still go to as presence releases it: those
+   * it was parked for that the decision route still allows.
+   */
+  narrowRelease(deviceIds: readonly string[]): string[] {
+    const now = new Set(this.deps.audience());
+    return deviceIds.filter((id) => now.has(id));
   }
 
   /** The park queue released or evicted one of ours. */

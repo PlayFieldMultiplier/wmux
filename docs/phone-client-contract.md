@@ -2774,14 +2774,18 @@ apply the same way, with `botPromptPush` for the capability.
 
 A browser help request (*Browser help requests*, `/api/browser-help`) is
 pushed when it opens, **only to a device that can answer it from the app**.
-That is the rule of the decision route, all four at once:
+That is the rule of the decision route, all at once:
 
 1. the server runs with `--allow-transcript` (the request exists because of
    an agent's prompt, and the list that shows it needs that consent);
 2. the server runs with `--allow-input`;
-3. the device's registration listed `capabilities: ["browserHelpPush"]`;
-4. the device's input grant is on **and was set explicitly** (a read-only
+3. the attached desktop takes a phone's decision;
+4. the device's registration listed `capabilities: ["browserHelpPush"]`;
+5. the device's input grant is on **and was set explicitly** (a read-only
    device, or one paired before grants existed, gets nothing).
+
+A push presence held is released only to the devices that still pass this
+rule then.
 
 A request from a brain pane is never pushed: the phone may not answer it, so
 a banner could only dead-end. Sealed plaintext:
@@ -2826,9 +2830,8 @@ lists `browserHelpPush` is skipped):
 ```
 
 - `resolution` is `completed`, `continued` (Done), `cancelled` or
-  `timed_out`. A request that closed without the desktop saying how (the
-  desktop app that held it went away, or its list dropped it with no state)
-  reads `timed_out` past its deadline and `cancelled` before it.
+  `timed_out`. A request the desktop's list dropped without saying how reads
+  `timed_out` past its deadline and `cancelled` before it.
 - `retractsApprovalId` is the request id, not a pane approval's: match it with
   `approvalKind`. Handle it as the other retractions: silent, no category,
   drop any local copy of the card. No retraction follows a push that never
@@ -2838,9 +2841,11 @@ A request is pushed at most once. When no device could answer it as it
 opened (no grant yet, no server running), it is considered again each time
 the desktop next sends its list, and pushed then if a device qualifies. The
 desktop sending its list again, including after it reconnects, never pushes
-a request a second time. When the desktop app goes away its requests close
-(as the `browser.help` frames say) and their banners are retracted; one it
-still lists when it returns is not pushed again, so read the list. The
+a request a second time. When the desktop app goes away, a banner already
+sent stays: a desktop that returns still listing the request keeps it, one
+that returns without it retracts it, and with no desktop at all it is
+retracted as `timed_out` at the request's deadline. (The `browser.help`
+frames close those requests at once; the list is the record.) The
 daemon-restart limit and "a push is a nudge" of bot approvals apply the same
 way, with `browserHelpPush` for the capability.
 
