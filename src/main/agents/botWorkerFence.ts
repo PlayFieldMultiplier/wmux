@@ -39,7 +39,7 @@ import path from 'node:path';
 import { tokenize, type PermissionMode } from '../../shared/agentResume';
 import { splitModelEnvMarker } from '../../shared/workerLaunch';
 import { contentFileName } from '../../shared/botWorkerMcp';
-import { PERMISSION_MODES, WORKER_TEMP_NAME, isClaudeLauncher, isFencedMode, linePermissionMode, namesClaude, workerFenceFolderRefusal, workerTempRoot } from '../../shared/botWorkerGuard';
+import { WORKER_TEMP_NAME, isClaudeLauncher, isFencedMode, linePermissionMode, namesClaude, readJsonObject, settingsDefaultMode, workerFenceFolderRefusal, workerTempRoot } from '../../shared/botWorkerGuard';
 import { agentExecEnv } from '../../shared/execEnv';
 import { shellQuote } from '../../shared/resumeShell';
 import { getWmuxDir } from '../../daemon/config';
@@ -57,35 +57,7 @@ import {
 // ── Which launches ───────────────────────────────────────────────────────────
 
 // The pure parts are shared (the daemon's phone launch reads them too).
-export { isFencedMode, linePermissionMode, workerFenceFolderRefusal };
-
-function readJson(p: string): Record<string, unknown> | null {
-  try {
-    const v = JSON.parse(fs.readFileSync(p, 'utf8')) as unknown;
-    return v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : null;
-  } catch {
-    return null;
-  }
-}
-
-/** The `permissions.defaultMode` claude would start a line with no mode flag
- *  in, from the folder's local and project settings and every user settings
- *  folder the pane may run with (`configDirs`): an unattended mode named in
- *  any of them wins, else the first mode named. Undefined: none. */
-export function settingsDefaultMode(cwd: string | undefined, configDirs: readonly string[]): PermissionMode | undefined {
-  const files = [
-    ...(cwd ? [path.join(cwd, '.claude', 'settings.local.json'), path.join(cwd, '.claude', 'settings.json')] : []),
-    ...configDirs.map((d) => path.join(d, 'settings.json')),
-  ];
-  const named: PermissionMode[] = [];
-  for (const f of files) {
-    const perms = readJson(f)?.permissions;
-    const mode = perms && typeof perms === 'object' && !Array.isArray(perms) ? (perms as Record<string, unknown>).defaultMode : undefined;
-    const known = PERMISSION_MODES.find((m) => m === mode);
-    if (known) named.push(known);
-  }
-  return named.find(isFencedMode) ?? named[0];
-}
+export { isFencedMode, linePermissionMode, settingsDefaultMode, workerFenceFolderRefusal };
 
 /** The user settings a fenced worker still needs although it loads none
  *  (`--setting-sources project`): how it reaches its model (`env`, `model`,
@@ -95,7 +67,7 @@ export function settingsDefaultMode(cwd: string | undefined, configDirs: readonl
 export const WORKER_FENCE_CARRIED_USER_KEYS: readonly string[] = ['env', 'model', 'apiKeyHelper', 'awsAuthRefresh', 'awsCredentialExport'];
 
 export function carriedUserSettings(configDir: string, fenceEnv: Readonly<Record<string, string>>): Record<string, unknown> {
-  const user = readJson(path.join(configDir, 'settings.json'));
+  const user = readJsonObject(path.join(configDir, 'settings.json'));
   if (!user) return {};
   const out: Record<string, unknown> = {};
   for (const k of WORKER_FENCE_CARRIED_USER_KEYS) {
@@ -127,7 +99,10 @@ function accountConfigDirsDefault(): string[] {
 
 // ── Platform support and the self-test ──────────────────────────────────────
 
-export type WorkerFenceSelfTest = { ok: true } | { ok: false; reason: string };
+/** `transient`: the self-test did not finish (it timed out or could not
+ *  start), which says nothing about the sandbox: the launch is refused, not
+ *  started without tools. */
+export type WorkerFenceSelfTest = { ok: true } | { ok: false; reason: string; transient?: true };
 
 export type WorkerFenceSupport =
   /** `transient`: the platform has the sandbox, but the check could not
@@ -186,10 +161,14 @@ export async function workerFenceSupport(deps: WorkerFenceSupportDeps = {}): Pro
   } else {
     let run = running.get(key);
     if (!run) {
-      run = (deps.selfTest ?? ((e: string) => runWorkerFenceSelfTest(e)))(exe)
-        .catch((err) => ({ ok: false as const, reason: `the self-test could not run: ${String(err)}` }))
+      const once = (): Promise<WorkerFenceSelfTest> => (deps.selfTest ?? ((e: string) => runWorkerFenceSelfTest(e)))(exe)
+        .catch((err) => ({ ok: false as const, reason: `the self-test could not run: ${String(err)}`, transient: true as const }));
+      // A run that did not finish is tried once more right away; a second
+      // one is not kept (the next launch tries again).
+      run = once()
+        .then((first) => (!first.ok && first.transient ? once() : first))
         .then((result) => {
-          answers.set(key, { result, at: Date.now() });
+          if (result.ok || !result.transient) answers.set(key, { result, at: Date.now() });
           running.delete(key);
           return result;
         });
@@ -201,11 +180,21 @@ export async function workerFenceSupport(deps: WorkerFenceSupportDeps = {}): Pro
   return lastSupport;
 }
 
-/** The fence support a launch of `line` in a bot's worker pane needs: every
- *  line that starts claude asks (the guard decides whether it is fenced);
- *  any other line does not. One rule for every caller of the guard. */
-export async function workerFenceSupportFor(line: string, deps: WorkerFenceSupportDeps = {}): Promise<WorkerFenceSupport | undefined> {
-  return namesClaude(line) ? workerFenceSupport(deps) : undefined;
+/** The fence support a launch of `line` in a bot's worker pane needs: a
+ *  claude line that runs unattended (its flags, else its settings in `cwd`
+ *  and the user's) asks; any other line does not. One rule for every caller
+ *  of the guard, the same one attachWorkerFence applies. */
+export async function workerFenceSupportFor(line: string, cwd?: string, deps: WorkerFenceSupportDeps = {}): Promise<WorkerFenceSupport | undefined> {
+  if (!namesClaude(line)) return undefined;
+  const home = os.homedir();
+  const mode = linePermissionMode(line) ?? settingsDefaultMode(cwd, userConfigDirs(home, process.env, accountConfigDirsDefault()));
+  return isFencedMode(mode) ? workerFenceSupport(deps) : undefined;
+}
+
+/** Every user settings folder a pane may run claude with. */
+function userConfigDirs(home: string, env: Readonly<Record<string, string | undefined>>, accountDirs: readonly string[]): string[] {
+  const configDir = env.CLAUDE_CONFIG_DIR && path.isAbsolute(env.CLAUDE_CONFIG_DIR) ? env.CLAUDE_CONFIG_DIR : path.join(home, '.claude');
+  return [...new Set([configDir, path.join(home, '.claude'), ...accountDirs])];
 }
 
 /** The last answer of workerFenceSupport (null before the first). */
@@ -344,16 +333,19 @@ export async function runWorkerFenceSelfTest(exe: string, opts: WorkerFenceSelfT
     };
     const args = ['-p', 'wmux fence self-test', '--dangerously-skip-permissions', '--setting-sources', 'project', '--settings', settingsFile,
       '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--max-turns', '2', '--output-format', 'json'];
-    const exit = await new Promise<{ code: number | null; stderr: string }>((resolve) => {
+    const exit = await new Promise<{ code: number | null; stderr: string; timedOut?: boolean }>((resolve) => {
       let stderr = '';
       let settled = false;
+      let exitCode: number | null = null;
       const done = (code: number | null, extra = '') => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        clearTimeout(drain);
         child.stderr?.destroy();
-        resolve({ code, stderr: stderr + extra });
+        resolve({ code, stderr: stderr + extra, timedOut: extra === 'timed out' });
       };
+      let drain: ReturnType<typeof setTimeout> | undefined;
       const child = spawn(exe, args, { cwd: wt, env, stdio: ['ignore', 'ignore', 'pipe'] });
       // Ends at its exit, or at the deadline whatever still holds its pipes.
       const timer = setTimeout(() => {
@@ -365,16 +357,22 @@ export async function runWorkerFenceSelfTest(exe: string, opts: WorkerFenceSelfT
         if (stderr.length < 4096) stderr += d;
       });
       child.on('error', (err) => done(null, String(err)));
-      child.on('exit', (code) => done(code));
+      // Its last words are read to the end ('close'); a pipe something else
+      // still holds ends the wait shortly after the exit.
+      child.on('exit', (code) => {
+        exitCode = code;
+        drain = setTimeout(() => done(exitCode), 2_000);
+      });
+      child.on('close', () => done(exitCode));
     });
     if (fs.existsSync(canary)) return { ok: false, reason: 'a command wrote outside the fence\'s folders, so the OS sandbox is not holding' };
     if (!fs.existsSync(ran)) {
       const why = exit.stderr.trim().split('\n').pop()?.slice(0, 200) || `exit ${exit.code}`;
-      return { ok: false, reason: `claude did not run a command inside the fence (${why})` };
+      return { ok: false, reason: `claude did not run a command inside the fence (${why})`, ...(exit.timedOut ? { transient: true as const } : {}) };
     }
     return { ok: true };
   } catch (err) {
-    return { ok: false, reason: `the self-test could not run: ${String(err)}` };
+    return { ok: false, reason: `the self-test could not run: ${String(err)}`, transient: true };
   } finally {
     api?.close();
     try {
@@ -567,6 +565,71 @@ export function readWorktreeGitFacts(worktree: string, expected: { gitCommonDir?
   };
 }
 
+// ── What else the fence closes ───────────────────────────────────────────────
+
+/** Claude's own temp folder for this user (`/tmp/claude-<uid>`, with macOS's
+ *  `/private` spelling): its sandbox lets every command write there whatever
+ *  the settings say (measured on claude 2.1.311, CLAUDE_CODE_TMPDIR or not),
+ *  and every claude session of the user keeps its project folder there. */
+export function claudeTempRoots(platform: NodeJS.Platform = process.platform): string[] {
+  const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+  if (uid === null || platform === 'win32') return [];
+  const root = `/tmp/claude-${uid}`;
+  return platform === 'darwin' ? [root, `/private${root}`] : [root];
+}
+
+/** Claude's name for a session's project folder: its folder with every
+ *  character but a letter or digit written `-`. */
+function claudeProjectFolderName(cwd: string): string {
+  return cwd.replace(/[^A-Za-z0-9]/g, '-');
+}
+
+/**
+ * The other sessions' project folders in claude's temp folder, closed to the
+ * worker's commands: on macOS every `-*` folder by one pattern (the
+ * sandbox takes it, and the worker's commands still run, background ones
+ * included: their output is written by claude itself); elsewhere each such
+ * folder there at launch but the worker's own (bubblewrap takes no pattern).
+ */
+export function claudeTempDenies(worktree: string, platform: NodeJS.Platform, roots: readonly string[] = claudeTempRoots(platform), listDir: (dir: string) => string[] = listDirSafe): string[] {
+  if (platform === 'darwin') return roots.map((r) => path.join(r, '-*'));
+  const own = claudeProjectFolderName(worktree);
+  return roots.flatMap((r) => listDir(r).filter((n) => n.startsWith('-') && n !== own).map((n) => path.join(r, n)));
+}
+
+function listDirSafe(dir: string): string[] {
+  try {
+    return fs.readdirSync(dir);
+  } catch {
+    return [];
+  }
+}
+
+/** What in wmux's data folder holds a secret, relative to it: the daemon's
+ *  and the relay's tokens, the track-record signing key, the paired phones,
+ *  the principals, the secret hook, the account folders, the cross-PC (A2A)
+ *  keys and peers, the LAN link keys, the remote hosts, the bots' secret
+ *  store, Claude API key and fan-out keys, the task push relay, and every
+ *  worker's launch settings (they carry the owner's user env). */
+export const WORKER_FENCE_DATA_DIR_SECRETS: readonly string[] = [
+  'daemon-auth-token', 'relay-shared-secret.txt', 'track-record.key', 'devices.json', 'principals.json', 'secret-hook.json',
+  'accounts', 'a2a', 'lanlink', 'remote-hosts.json',
+  'factory/secrets.json', 'factory/claude-api-key.json', 'factory/bot-fanout-keys.json', 'factory/git-relay', 'factory/worker-settings',
+];
+
+/** The data folder's secret paths (WORKER_FENCE_DATA_DIR_SECRETS), each
+ *  with the backups beside it (`<name>.bak`, `<name>.bak.<n>`). Absolute. */
+export function workerFenceDataDirSecrets(dir: string, listDir: (dir: string) => string[] = listDirSafe): string[] {
+  const out: string[] = [];
+  for (const rel of WORKER_FENCE_DATA_DIR_SECRETS) {
+    const p = path.join(dir, ...rel.split('/'));
+    out.push(p);
+    const base = path.basename(p);
+    for (const n of listDir(path.dirname(p))) if (n.startsWith(`${base}.bak`)) out.push(path.join(path.dirname(p), n));
+  }
+  return out;
+}
+
 // ── The fence for one launch ─────────────────────────────────────────────────
 
 /** How a launch is fenced, recorded with its session (a later launch of it
@@ -616,6 +679,8 @@ export interface WorkerFenceAttachInput {
   env?: Readonly<Record<string, string | undefined>>;
   accountConfigDirs?: readonly string[];
   platform?: NodeJS.Platform;
+  /** Claude's own temp folders (default: claudeTempRoots()). */
+  claudeTempRoots?: readonly string[];
 }
 
 /**
@@ -631,11 +696,14 @@ export function attachWorkerFence(input: WorkerFenceAttachInput): WorkerFenceAtt
   const accountDirs = input.accountConfigDirs ?? accountConfigDirsDefault();
   const userConfigDir = env.CLAUDE_CONFIG_DIR && path.isAbsolute(env.CLAUDE_CONFIG_DIR) ? env.CLAUDE_CONFIG_DIR : path.join(home, '.claude');
   // A line with no mode flag starts in the mode its settings name.
-  const mode = linePermissionMode(input.line) ?? settingsDefaultMode(input.cwd, [userConfigDir, path.join(home, '.claude'), ...accountDirs]);
+  const mode = linePermissionMode(input.line) ?? settingsDefaultMode(input.cwd, userConfigDirs(home, env, accountDirs));
   if (!isFencedMode(mode)) return { kind: 'none' };
   const wanted = !input.switchedOff || (input.recorded !== undefined && input.recorded.strength !== 'off');
   if (!wanted) return { kind: 'fence', strength: 'off', settings: statusLine('the worker fence is off for this workspace') };
-  const credentials = workerFenceCredentialPaths({ botDir: input.cwd ?? input.dir, wmuxDir: input.dir, env, home, accountConfigDirs: accountDirs, ...(input.platform ? { platform: input.platform } : {}) });
+  const credentials = [
+    ...workerFenceCredentialPaths({ botDir: input.cwd ?? input.dir, wmuxDir: input.dir, env, home, accountConfigDirs: accountDirs, ...(input.platform ? { platform: input.platform } : {}) }),
+    ...workerFenceDataDirSecrets(input.dir),
+  ];
   if (input.wsl) {
     // The distro's claude: the permission denies (rules by `~/`, its own
     // home) and the marker. The hook's runtime does not run there.
@@ -660,6 +728,7 @@ export function attachWorkerFence(input: WorkerFenceAttachInput): WorkerFenceAtt
   const fence = buildWorkerFence({
     worktree, workerTempDir: temp.real, ...git, platformCapable: support.capable, repoTestWritePaths: [],
     permissionMode: mode ?? 'bypassPermissions', hookCommand, credentialPaths: credentials, home,
+    extraDenyWrite: claudeTempDenies(worktree, input.platform ?? process.platform, input.claudeTempRoots),
   });
   // How the worker reaches its model, from the owner's user settings it
   // no longer loads; the fence's own values win.
@@ -668,6 +737,7 @@ export function attachWorkerFence(input: WorkerFenceAttachInput): WorkerFenceAtt
   if (!support.capable) {
     return { kind: 'fence', strength: 'weaker', tempDir, settings: { ...fence.settings, ...statusLine(`weaker worker fence: no OS sandbox here (${support.reason})`) } };
   }
+  if (!support.selfTest.ok && support.selfTest.transient) throw fenceError(`the fence's self-test did not finish (${support.selfTest.reason}); try again`);
   if (!support.selfTest.ok) {
     // The sandbox did not hold in the self-test: no tool runs.
     const why = `the fence failed its self-test, so this worker has no tools (${support.selfTest.reason})`;

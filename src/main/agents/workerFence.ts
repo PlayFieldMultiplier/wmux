@@ -94,6 +94,10 @@ export interface WorkerFenceInput {
   credentialPaths: readonly string[];
   /** The owner's home folder (permission rules name paths in it by `~/`). */
   home: string;
+  /** More paths the sandbox's commands may not write (absolute; a glob
+   *  where the platform's sandbox takes one): other sessions' folders in
+   *  claude's own temp folder, which the sandbox always lets commands write. */
+  extraDenyWrite?: readonly string[];
 }
 
 export interface WorkerFence {
@@ -291,7 +295,7 @@ export function buildWorkerFence(input: WorkerFenceInput): WorkerFence {
       // The git common dir too: a linked worktree commits into it (narrowed
       // by the denies below, which win over it).
       allowWrite: [...new Set([worktree, tmp, git, ...tests])],
-      denyWrite: [...workerFenceWorktreeDenies(worktree, input.isLinkedWorktree), ...workerFenceGitDenies(input)],
+      denyWrite: [...workerFenceWorktreeDenies(worktree, input.isLinkedWorktree), ...workerFenceGitDenies(input), ...(input.extraDenyWrite ?? []).map((p) => requireAbsolute('a denied write path', p))],
       denyRead: credentials,
       // Re-opened should a denied folder hold them (wmux keeps worktrees in
       // its home folder).

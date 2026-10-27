@@ -19,15 +19,18 @@
 // session (recorded without its files, or a record that cannot be read) gets
 // nothing typed.
 //
-// The worker fence (main/agents/botWorkerFence.ts): a session main started
-// inside it gets its recorded fenced file again only while the worktree's
-// own Claude files still pass the fence's check; a line that runs
-// unattended in a session main did not fence types nothing (the daemon
-// cannot build the fence: start it from wmux).
+// The worker fence (main/agents/botWorkerFence.ts): the daemon cannot build
+// it (the self-tested claude, the folder and git checks), so a claude line
+// that would run unattended types nothing: one whose flags, or (with no
+// flag) whose settings, name bypassPermissions or auto, or any launch of a
+// session main started inside the fence. Such a worker starts again only
+// from wmux on the computer.
 
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { getWmuxDir } from '../config';
-import { isFencedMode, linePermissionMode, namesClaude, readBotWorkerSessions, workerFenceFolderRefusal, workerProjectSettingsRefusal } from '../../shared/botWorkerGuard';
+import { isFencedMode, linePermissionMode, namesClaude, readBotWorkerSessions, settingsDefaultMode, workerProjectSettingsRefusal } from '../../shared/botWorkerGuard';
 import { spliceWorkerLaunch } from '../../shared/botWorkerMcp';
 import { namesCodex } from '../../shared/codexWorkerGuard';
 import { toWslPath } from '../../shared/imagePaste';
@@ -60,10 +63,11 @@ export function guardBotWorkerLaunch(
   const tail = line.slice(head.length);
   if (tail && !QUOTED_FIRST_MESSAGE.test(tail)) return null;
   const rec = 'sessions' in read ? read.sessions.get(sessionId) : undefined;
-  const fenced = rec?.launch?.fence !== undefined && rec.launch.fence.strength !== 'off';
-  if (!fenced && isFencedMode(linePermissionMode(head))) return null;
+  if (runsUnattended(head, rec, dir)) {
+    console.warn(`[botWorkerLaunchGuard] ${sessionId}: a bot worker that runs unattended starts again only from wmux on the computer (worker fence)`);
+    return null;
+  }
   if (rec?.launch && !rec.wsl) {
-    if (fenced && (!rec.cwd || [rec.cwd, ...folders].some((f) => workerFenceFolderRefusal(f) !== null))) return null;
     if (!rec.cwd || [rec.cwd, ...folders].some((f) => workerProjectSettingsRefusal(f) !== null)) return null;
     if (!fs.existsSync(rec.launch.settingsFile) || !fs.existsSync(rec.launch.mcpConfigFile)) return null;
     // The daemon cannot tell whether a recorded connection is still the
@@ -83,6 +87,25 @@ export function guardBotWorkerLaunch(
   const inWsl = (p: string): string => toWslPath(p) ?? p;
   const guarded = spliceWorkerLaunch(head, inWsl(rec.launch.settingsFile), inWsl(rec.launch.mcpConfigFile));
   return guarded === null ? null : guarded + tail;
+}
+
+/** Would this launch run unattended, or was the session started inside the
+ *  fence? The mode comes from the line's flags, else from the folder's and
+ *  every user settings folder the pane may use (the default one, the
+ *  daemon's CLAUDE_CONFIG_DIR, each account's under `<dir>/accounts`). */
+function runsUnattended(head: string, rec: { cwd?: string; launch?: { fence?: { strength: string } } } | undefined, dir: string): boolean {
+  if (rec?.launch?.fence && rec.launch.fence.strength !== 'off') return true;
+  const home = os.homedir();
+  const accounts = (() => {
+    try {
+      return fs.readdirSync(path.join(dir, 'accounts')).map((n) => path.join(dir, 'accounts', n));
+    } catch {
+      return [];
+    }
+  })();
+  const env = process.env.CLAUDE_CONFIG_DIR;
+  const configDirs = [path.join(home, '.claude'), ...(env && path.isAbsolute(env) ? [env] : []), ...accounts];
+  return isFencedMode(linePermissionMode(head) ?? settingsDefaultMode(rec?.cwd, configDirs));
 }
 
 /** Does a recorded MCP config name any server but wmux (or not parse)? */

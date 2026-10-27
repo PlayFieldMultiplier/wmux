@@ -255,7 +255,7 @@ export async function guardBotWorkerSessionText(
   }
   // The guard decides whether the line is fenced; the fence support (and
   // its self-test) is settled before it runs.
-  const fenceSupport = isBotWorkerSession(sessionId, deps.dir) ? await workerFenceSupportFor(text) : undefined;
+  const fenceSupport = isBotWorkerSession(sessionId, deps.dir) ? await workerFenceSupportFor(text, botWorkerSessionRecord(sessionId, deps.dir)?.cwd) : undefined;
   const guardDeps = { ...(deps.dir ? { dir: deps.dir } : {}), ...(deps.folders ? { folders: deps.folders } : {}), ...(fenceSupport ? { fenceSupport } : {}) };
   return kind === 'refire' ? guardRefireLine(sessionId, text, guardDeps) : guardSessionLaunch(sessionId, text, guardDeps);
 }

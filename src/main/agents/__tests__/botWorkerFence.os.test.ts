@@ -12,6 +12,7 @@ import {
   guardSessionLaunch,
   guardedLaunchOf,
   noteBotWorkerSession,
+  noteGuardedLaunchTyped,
   reloadBotWorkerSessionsForTests,
   withBotWorkerMergeGuard,
   type BotWorkerGuardDeps,
@@ -19,6 +20,9 @@ import {
 import {
   __resetWorkerFenceSupportForTesting,
   WORKER_FENCE_SELF_TEST_RETRY_MS,
+  claudeTempDenies,
+  workerFenceDataDirSecrets,
+  workerFenceSupportFor,
   fenceLauncher,
   linePermissionMode,
   readWorktreeGitFacts,
@@ -296,6 +300,13 @@ describe.skipIf(isWin)('a resume and a re-fire keep the fence', () => {
     await setWorkerFenceOff('ws-bot', false, dir);
     const fenced = guardSessionLaunch('pty-1', RESUME, deps());
     expect(settingsOf(fenced)).toHaveProperty('sandbox');
+    // Recorded only once the line is typed (and only that line).
+    const recFence = () => JSON.parse(fs.readFileSync(path.join(dir, 'factory', 'bot-worker-sessions.json'), 'utf8')).sessions['pty-1'].launch?.fence;
+    expect(recFence()).toEqual({ strength: 'off' });
+    noteGuardedLaunchTyped('pty-1', 'claude --resume other');
+    expect(recFence()).toEqual({ strength: 'off' });
+    noteGuardedLaunchTyped('pty-1', fenced);
+    expect(recFence().strength).toBe('full');
     // Recorded: off again, a later resume keeps the fence and its temp folder.
     await setWorkerFenceOff('ws-bot', true, dir);
     reloadBotWorkerSessionsForTests();
@@ -366,6 +377,25 @@ describe.skipIf(isWin)('the self-test', () => {
     expect(JSON.stringify(s.statusLine)).toContain('the fence failed its self-test, so this worker has no tools');
   });
 
+  it('a self-test that did not finish is run once more at once; still unfinished, the launch is refused and nothing is kept', async () => {
+    let runs = 0;
+    const d = { exe: () => EXE, platform: 'darwin' as const, probe: async () => ({ ok: true as const, version: '2.1.311' }), selfTest: async () => { runs += 1; return { ok: false as const, reason: 'claude did not run a command inside the fence (timed out)', transient: true as const }; } };
+    const support = await workerFenceSupport(d);
+    expect(runs).toBe(2);
+    expect(refusalOf(() => create(LINE, deps({ fenceSupport: support })))).toMatch(/worker fence: the fence's self-test did not finish \(claude did not run a command inside the fence \(timed out\)\); try again/);
+    await workerFenceSupport(d);
+    expect(runs).toBe(4);
+    // A second run that finishes is what counts.
+    let n = 0;
+    const flaky = await workerFenceSupport({ ...d, exe: () => '/opt/other/claude', selfTest: async () => (++n === 1 ? { ok: false as const, reason: 'x', transient: true as const } : { ok: true as const }) });
+    expect(flaky.capable && flaky.selfTest.ok).toBe(true);
+  });
+
+  it('an attended line asks for no fence support at all', async () => {
+    expect(await workerFenceSupportFor('claude -p hi', wt, { probe: async () => { throw new Error('probed'); } })).toBeUndefined();
+    expect(await workerFenceSupportFor('ls -la', wt)).toBeUndefined();
+  });
+
   it('a pass is kept for the session; a failure stands a few minutes, then is tried again', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     let runs = 0;
@@ -404,7 +434,32 @@ describe.skipIf(isWin)('the self-test', () => {
     const fake = path.join(root, 'slow-claude');
     fs.writeFileSync(fake, '#!/bin/sh\nsleep 30 &\nwait\n', { mode: 0o755 });
     const r = await runWorkerFenceSelfTest(fake, { dir, runtime: RUNTIME, timeoutMs: 500, paneEnv: async () => ({ PATH: '/usr/bin:/bin' }) });
-    expect(r).toEqual({ ok: false, reason: 'claude did not run a command inside the fence (timed out)' });
+    expect(r).toEqual({ ok: false, reason: 'claude did not run a command inside the fence (timed out)', transient: true });
+  });
+});
+
+describe.skipIf(isWin)('what else the fence closes', () => {
+  it('other sessions\' folders in claude\'s temp folder: one pattern on macOS, each but its own elsewhere', () => {
+    expect(claudeTempDenies('/w/t', 'darwin', ['/tmp/claude-501', '/private/tmp/claude-501'])).toEqual(['/tmp/claude-501/-*', '/private/tmp/claude-501/-*']);
+    expect(claudeTempDenies('/w/t', 'linux', ['/tmp/claude-1000'], () => ['-w-t', '-other-session', 'tasks'])).toEqual(['/tmp/claude-1000/-other-session']);
+    const s = settingsOf(create(LINE, deps({ fence: { runtime: RUNTIME, home, env: {}, platform: 'darwin', claudeTempRoots: ['/tmp/claude-501', '/private/tmp/claude-501'] } }))!.initialCommand!);
+    expect((s.sandbox as { filesystem: { denyWrite: string[] } }).filesystem.denyWrite).toEqual(expect.arrayContaining(['/tmp/claude-501/-*', '/private/tmp/claude-501/-*']));
+  });
+
+  it('the data folder\'s secrets: denied to the file tools and to commands; the worktree stays readable', () => {
+    fs.mkdirSync(path.join(dir, 'factory'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'factory', 'secrets.json.bak'), '{}');
+    const secrets = workerFenceDataDirSecrets(dir);
+    for (const rel of ['daemon-auth-token', 'accounts', 'a2a', 'lanlink', 'factory/secrets.json', 'factory/secrets.json.bak', 'factory/claude-api-key.json', 'factory/worker-settings']) {
+      expect(secrets, rel).toContain(path.join(dir, ...rel.split('/')));
+    }
+    const s = settingsOf(create(LINE)!.initialCommand!);
+    const fsRules = (s.sandbox as { filesystem: { denyRead: string[]; allowRead: string[] } }).filesystem;
+    expect(fsRules.denyRead).toEqual(expect.arrayContaining([path.join(dir, 'factory', 'secrets.json'), path.join(dir, 'factory', 'worker-settings')]));
+    expect(fsRules.allowRead).toContain(fs.realpathSync(wt));
+    const deny = (s.permissions as { deny: string[] }).deny;
+    const rule = (p: string) => (p.startsWith(home) ? `~/${path.relative(home, p)}` : `/${p}`);
+    expect(deny).toEqual(expect.arrayContaining([`Read(${rule(path.join(dir, 'factory', 'secrets.json'))})`, `Read(${rule(path.join(dir, 'daemon-auth-token'))})`]));
   });
 });
 

@@ -559,9 +559,9 @@ describe('launch', () => {
       expect(f.typed).toEqual([]);
     });
 
-    it('a phone resume of its exact session carries them too (unattended only when main fenced the session)', async () => {
+    it('a phone resume of its exact session carries them too', async () => {
       const f = fixture();
-      const files = botWorker(f.dir, { strength: 'weaker' });
+      const files = botWorker(f.dir);
       f.state.projector = FILE;
       f.state.pane!.meta.resumeBinding = { agent: 'claude', sessionId: SID, cwd: '/proj', transcriptPath: '/t.jsonl', ts: 1 };
       f.state.pane!.meta.cmd = '/bin/zsh';
@@ -569,21 +569,38 @@ describe('launch', () => {
       const go = (extra: Record<string, unknown>) => createChatBridge(f.deps).launch({ id: 'pane', agent: 'claude', resume: true, refuseConversation: true, ...extra });
       expect(await go({ prompt: 'next' })).toEqual({ ok: true, effect: 'submitted' });
       f.shell.empty = true;
-      expect(await go({ mode: 'bypass' })).toMatchObject({ ok: true });
+      expect(await go({ mode: 'default' })).toMatchObject({ ok: true });
       expect(f.typed).toEqual([
         `cd -- '/proj' && claude ${files.flags} --resume ${SID} -- 'next'\r`,
-        `cd -- '/proj' && claude ${files.flags} --resume ${SID} --dangerously-skip-permissions\r`,
+        `cd -- '/proj' && claude ${files.flags} --resume ${SID}\r`,
       ]);
     });
 
-    it('an unattended phone launch of a session main did not fence types nothing', async () => {
-      for (const fence of [undefined, { strength: 'off' as const }]) {
+    it('a launch that would run unattended types nothing: the worker fence starts only from wmux', async () => {
+      // Unattended by its flag, whatever the session's record says.
+      for (const fence of [undefined, { strength: 'off' as const }, { strength: 'weaker' as const }, { strength: 'full' as const }]) {
         const f = fixture();
         botWorker(f.dir, fence);
         f.state.pane!.meta.cmd = '/bin/zsh';
         expect(await f.bridge.launch({ id: 'pane', agent: 'claude', mode: 'bypass' })).toEqual({ ok: false, error: 'launch-unsupported', effect: 'none' });
         expect(f.typed).toEqual([]);
       }
+      // A session main started inside the fence, in any mode.
+      const fenced = fixture();
+      botWorker(fenced.dir, { strength: 'full' });
+      expect(await fenced.bridge.launch({ id: 'pane', agent: 'claude', prompt: 'go' })).toEqual({ ok: false, error: 'launch-unsupported', effect: 'none' });
+      // A line with no flag whose user settings start claude unattended.
+      const byDefault = fixture();
+      botWorker(byDefault.dir);
+      fs.mkdirSync(path.join(os.homedir(), '.claude'), { recursive: true });
+      const settings = path.join(os.homedir(), '.claude', 'settings.json');
+      fs.writeFileSync(settings, JSON.stringify({ permissions: { defaultMode: 'bypassPermissions' } }));
+      try {
+        expect(await byDefault.bridge.launch({ id: 'pane', agent: 'claude', prompt: 'go' })).toEqual({ ok: false, error: 'launch-unsupported', effect: 'none' });
+      } finally {
+        fs.unlinkSync(settings);
+      }
+      expect([...fenced.typed, ...byDefault.typed]).toEqual([]);
     });
 
     it('an unreadable record, or one without launch files outside WSL, types nothing', async () => {

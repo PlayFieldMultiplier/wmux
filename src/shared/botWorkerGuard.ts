@@ -587,6 +587,35 @@ export function linePermissionMode(line: string): PermissionMode | undefined {
 
 export const PERMISSION_MODES: readonly PermissionMode[] = ['bypassPermissions', 'acceptEdits', 'plan', 'auto', 'default'];
 
+/** A JSON object file, or null. */
+export function readJsonObject(p: string): Record<string, unknown> | null {
+  try {
+    const v = JSON.parse(fs.readFileSync(p, 'utf8')) as unknown;
+    return v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The `permissions.defaultMode` claude would start a line with no mode flag
+ *  in, from the folder's local and project settings and every user settings
+ *  folder the pane may run with (`configDirs`): an unattended mode named in
+ *  any of them wins, else the first mode named. Undefined: none. */
+export function settingsDefaultMode(cwd: string | undefined, configDirs: readonly string[]): PermissionMode | undefined {
+  const files = [
+    ...(cwd ? [path.join(cwd, '.claude', 'settings.local.json'), path.join(cwd, '.claude', 'settings.json')] : []),
+    ...configDirs.map((d) => path.join(d, 'settings.json')),
+  ];
+  const named: PermissionMode[] = [];
+  for (const f of files) {
+    const perms = readJsonObject(f)?.permissions;
+    const mode = perms && typeof perms === 'object' && !Array.isArray(perms) ? (perms as Record<string, unknown>).defaultMode : undefined;
+    const known = PERMISSION_MODES.find((m) => m === mode);
+    if (known) named.push(known);
+  }
+  return named.find(isFencedMode) ?? named[0];
+}
+
 /** The modes an unattended worker runs in: the fence is for them. */
 export function isFencedMode(mode: PermissionMode | undefined): boolean {
   return mode === 'bypassPermissions' || mode === 'auto';

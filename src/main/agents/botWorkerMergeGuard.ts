@@ -122,7 +122,7 @@ export interface BotWorkerGuardDeps {
    *  its worktree (default: its task ledger row). */
   taskFacts?: (taskWorkspaceId: string) => { ownerWorkspaceId?: string; gitCommonDir?: string; gitWorktreeDir?: string } | null;
   /** The fence's own inputs, for tests (its hook runtime, home, env). */
-  fence?: Pick<WorkerFenceAttachInput, 'runtime' | 'home' | 'env' | 'accountConfigDirs' | 'platform'>;
+  fence?: Pick<WorkerFenceAttachInput, 'runtime' | 'home' | 'env' | 'accountConfigDirs' | 'platform' | 'claudeTempRoots'>;
 }
 
 /** pty.handler points the guard at the app's MCP bundle and the owner's
@@ -813,16 +813,37 @@ export function guardRefireLine(sessionId: string, line: string, deps: BotWorker
   if (!isBotWorkerSession(sessionId, deps.dir ?? getWmuxDir())) return line;
   if (namesCodex(line)) throw guardError('worktask:refire', 'codex is not re-fired in a bot\'s worker pane');
   const guarded = guardLaunchLine('worktask:refire', line, deps, recordedPlan('worktask:refire', sessionId, deps));
-  recordLaterFence('worktask:refire', sessionId, guarded.files, deps.dir ?? getWmuxDir());
+  holdLaterFence(sessionId, guarded, deps.dir ?? getWmuxDir());
   return guarded.line;
 }
 
+/** A guarded resume or re-fire line not typed yet, with what it carried. */
+const pendingLaunches = new Map<string, { line: string; files: BotWorkerLaunchFiles; dir: string }>();
+
+function holdLaterFence(sessionId: string, guarded: { line: string; files?: BotWorkerLaunchFiles }, dir: string): void {
+  if (guarded.files?.fence) pendingLaunches.set(sessionId, { line: guarded.line, files: guarded.files, dir });
+  else pendingLaunches.delete(sessionId);
+}
+
 /**
- * A resume or re-fire that put the session inside a fence its first launch
- * did not have (or a stronger one): the record keeps it, so a later launch
- * is not fenced less and the startup prune keeps its temp folder. Throws
- * (nothing is typed) when the record cannot be written.
+ * The guarded `line` (as the guard returned it) was typed into
+ * `sessionId`: a fence it put the session inside that its first launch did
+ * not have (or a stronger one) is recorded now, so a later launch is not
+ * fenced less and the startup prune keeps its temp folder. A line the guard
+ * did not return for that session, or one never typed, records nothing.
+ * Best effort: a record that cannot be written is logged.
  */
+export function noteGuardedLaunchTyped(sessionId: string, line: string): void {
+  const pending = pendingLaunches.get(sessionId);
+  if (!pending || pending.line !== line) return;
+  pendingLaunches.delete(sessionId);
+  try {
+    recordLaterFence('pty:write-launch', sessionId, pending.files, pending.dir);
+  } catch (err) {
+    console.warn(`[factory] ${String((err as Error).message)}`);
+  }
+}
+
 function recordLaterFence(where: string, sessionId: string, files: BotWorkerLaunchFiles | undefined, dir: string): void {
   const fence = files?.fence;
   if (!files || !fence || fence.strength === 'off') return;
@@ -906,7 +927,7 @@ export function guardSessionLaunch(sessionId: string, text: string, deps: BotWor
   if (namesCodex(text)) throw guardError('pty:write-launch', 'codex is not started again in a bot\'s worker pane');
   if (!namesClaude(text)) return text;
   const guarded = guardLaunchLine('pty:write-launch', text, deps, recordedPlan('pty:write-launch', sessionId, deps));
-  recordLaterFence('pty:write-launch', sessionId, guarded.files, deps.dir ?? getWmuxDir());
+  holdLaterFence(sessionId, guarded, deps.dir ?? getWmuxDir());
   return guarded.line;
 }
 
