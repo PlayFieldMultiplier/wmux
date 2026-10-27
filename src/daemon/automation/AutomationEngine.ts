@@ -1624,6 +1624,8 @@ export class AutomationEngine {
     const automation = this.find(run.automationId);
     // Off already (by a person or by the breaker): a run still in flight changes nothing.
     if (!automation || !automation.enabled) return;
+    // A run launched before an edit changed what runs says nothing about the schedule as it is now.
+    if (run.revision !== automation.revision) return;
     if (run.state === 'completed') {
       if (!automation.failureStreak) return;
       delete automation.failureStreak;

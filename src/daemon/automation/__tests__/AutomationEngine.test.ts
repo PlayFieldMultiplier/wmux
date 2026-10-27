@@ -1343,6 +1343,17 @@ describe('AutomationEngine — failure breaker', () => {
     expect(schedule(b).enabled).toBe(false);
   });
 
+  it('a run that started before an edit to what runs neither counts nor breaks the new streak', async () => {
+    const b = await breaker();
+    await failures(b, 2);
+    const run = await live(b);
+    const fixed = draft({ action: { kind: 'launch', cwd: '/work/other', agent: 'claude', prompt: 'do the thing' } });
+    expect((await b.h.engine.update(b.id, fixed)).ok).toBe(true);
+    await exit(b, run, 3);
+    expect(runById(b, run.id)).toMatchObject({ state: 'failed', reason: 'process_exit' });
+    expect(schedule(b).failureStreak).toBeUndefined();
+  });
+
   it('a person turning a paused schedule off answers its notice', async () => {
     const b = await breaker();
     await failures(b, 3);
