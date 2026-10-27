@@ -1,8 +1,10 @@
 import { useStore } from '../stores';
+import { t } from '../i18n';
 import {
   nativeImagePasteSequence,
   quoteImagePathForPty,
   resolveImagePasteStrategy,
+  shouldCheckRemoteShell,
 } from '../../shared/imagePaste';
 
 /**
@@ -34,6 +36,21 @@ export async function pasteClipboardImage(opts: {
   const { ptyId, write, bracketedPasteMode } = opts;
 
   const state = useStore.getState();
+
+  // A pane whose foreground is `ssh` is a session on another machine: a local
+  // temp PNG path is dead there, and the native key makes a remote agent read
+  // the REMOTE clipboard. Say so instead of pasting either. Unknown (Windows,
+  // web client, no pid) keeps the routes below unchanged.
+  if (shouldCheckRemoteShell({ mode: state.imagePasteMode, agentProcessAlive: state.agentAliveByPtyId[ptyId] })) {
+    const remote = await window.clipboardAPI.paneRemoteShell?.(ptyId).catch(() => null);
+    if (remote) {
+      if (await window.clipboardAPI.hasImage?.()) {
+        state.pushToast({ level: 'warn', message: t('terminal.imagePasteRemote', { program: remote }) });
+      }
+      return false;
+    }
+  }
+
   const strategy = resolveImagePasteStrategy({
     mode: state.imagePasteMode,
     agentSlug: state.surfaceAgent[ptyId]?.slug,

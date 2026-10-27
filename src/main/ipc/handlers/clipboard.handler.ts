@@ -4,7 +4,7 @@ import * as path from 'path';
 import { execFile } from 'node:child_process';
 import { IPC } from '../../../shared/constants';
 import { wrapHandler } from '../wrapHandler';
-import { imagePathForPane } from '../../../shared/imagePaste';
+import { foregroundRemoteShellClient, imagePathForPane } from '../../../shared/imagePaste';
 import { getPtyShell } from '../../pty/ptyShellRegistry';
 import { EphemeralClipboard } from '../../clipboard/ephemeralClipboard';
 import { ELEMENT_SHOT_PREFIX } from '../../../shared/browserElementHandoff';
@@ -160,7 +160,32 @@ function resolveFinderFilePath(): Promise<string | null> {
   });
 }
 
-export function registerClipboardHandlers(): void {
+/**
+ * The remote-session client in a pane's foreground (see
+ * foregroundRemoteShellClient), or null when unknown.
+ *
+ * POSIX only: ConPTY has no foreground process group, so on Windows the
+ * answer is always null and the paste keeps its historical behavior. The
+ * shell pid comes from whoever owns the PTY (daemon or local PTYManager).
+ */
+async function paneRemoteShell(
+  ptyId: unknown,
+  shellPidFor: ((ptyId: string) => Promise<number | undefined>) | undefined,
+): Promise<string | null> {
+  if (process.platform === 'win32' || !shellPidFor || typeof ptyId !== 'string' || !ptyId) return null;
+  const pid = await shellPidFor(ptyId).catch(() => undefined);
+  if (typeof pid !== 'number' || pid <= 0) return null;
+  const stdout = await new Promise<string | null>((resolve) => {
+    execFile('/bin/ps', ['-A', '-o', 'pid=,pgid=,tpgid=,comm='], { timeout: 2000, maxBuffer: 8 * 1024 * 1024 }, (error, out) => {
+      resolve(error ? null : String(out));
+    });
+  });
+  return stdout === null ? null : foregroundRemoteShellClient(stdout, pid);
+}
+
+export function registerClipboardHandlers(
+  opts: { shellPidFor?: (ptyId: string) => Promise<number | undefined> } = {},
+): void {
   cleanupStalePasteFiles();
 
   // Remove any previously registered handlers before re-registering.
@@ -170,6 +195,7 @@ export function registerClipboardHandlers(): void {
   ipcMain.removeHandler(IPC.CLIPBOARD_READ);
   ipcMain.removeHandler(IPC.CLIPBOARD_READ_IMAGE);
   ipcMain.removeHandler(IPC.CLIPBOARD_HAS_IMAGE);
+  ipcMain.removeHandler(IPC.CLIPBOARD_PANE_REMOTE_SHELL);
 
   ipcMain.handle(IPC.CLIPBOARD_WRITE, wrapHandler(IPC.CLIPBOARD_WRITE, (_event: Electron.IpcMainInvokeEvent, text: string) => {
     // Surface validation failures so renderer can react instead of silently
@@ -290,6 +316,10 @@ export function registerClipboardHandlers(): void {
       // pane", which just means no rewrite.
       shellPath: getPtyShell(typeof ptyId === 'string' && ptyId ? ptyId : undefined),
     });
+  }));
+
+  ipcMain.handle(IPC.CLIPBOARD_PANE_REMOTE_SHELL, wrapHandler(IPC.CLIPBOARD_PANE_REMOTE_SHELL, (_event: Electron.IpcMainInvokeEvent, ptyId?: unknown) => {
+    return paneRemoteShell(ptyId, opts.shellPidFor);
   }));
 
   ipcMain.handle(IPC.CLIPBOARD_HAS_IMAGE, wrapHandler(IPC.CLIPBOARD_HAS_IMAGE, (_event: Electron.IpcMainInvokeEvent) => {

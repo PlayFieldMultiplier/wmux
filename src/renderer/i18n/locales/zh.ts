@@ -530,6 +530,7 @@ export const zh = {
   'remote.clipboardCopiedFrom': '已从 {host} 复制',
   'remote.clipboardCopiedFromRemote': '已从远程主机复制',
   'terminal.copyFailed': '复制失败 — 已保留选区',
+  'terminal.imagePasteRemote': '未粘贴图片：此窗格是远程 {program} 会话，而图片在这台电脑上',
   'terminal.copyPendingGesture': '点击完成复制',
   'terminal.altWheelSelectionHint': '此应用自行滚动其对话记录，因此滚动清除了选区 — 按住 Shift 拖动可选择屏幕上的内容',
   'terminal.altWheelSelectionHintMac': '此应用自行滚动其对话记录，因此滚动清除了选区 — 按住 Option 拖动可选择屏幕上的内容',

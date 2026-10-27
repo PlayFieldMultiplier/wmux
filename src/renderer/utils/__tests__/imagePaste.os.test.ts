@@ -9,11 +9,12 @@ import { useStore } from '../../stores';
 
 const PTY = 'pty-1';
 
-function stubClipboard(opts: { hasImage: boolean; imagePath?: string | null }) {
+function stubClipboard(opts: { hasImage: boolean; imagePath?: string | null; remoteShell?: string | null }) {
   const readImage = vi.fn(async () => opts.imagePath ?? null);
   (window as unknown as { clipboardAPI: unknown }).clipboardAPI = {
     hasImage: vi.fn(async () => opts.hasImage),
     readImage,
+    paneRemoteShell: vi.fn(async () => opts.remoteShell ?? null),
   };
   return readImage;
 }
@@ -132,6 +133,36 @@ describe('pasteClipboardImage', () => {
       pasteClipboardImage({ ptyId: PTY, write, bracketedPasteMode: false }),
     ).resolves.toBe(false);
     expect(write).not.toHaveBeenCalled();
+  });
+
+  it('ssh pane: pastes neither a dead local path nor the native key, and says why', async () => {
+    const readImage = stubClipboard({ hasImage: true, imagePath: '/tmp/x.png', remoteShell: 'ssh' });
+    // A remote Claude may still be detected by its output; its native key
+    // would read the remote clipboard, so it is refused the same way.
+    useStore.getState().setSurfaceAgent(PTY, 'Claude Code', 'running', 'claude');
+    const before = useStore.getState().toasts.length;
+    const write = vi.fn();
+
+    await expect(
+      pasteClipboardImage({ ptyId: PTY, write, bracketedPasteMode: true }),
+    ).resolves.toBe(false);
+
+    expect(readImage).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
+    const toasts = useStore.getState().toasts;
+    expect(toasts.length).toBe(before + 1);
+    expect(toasts[toasts.length - 1]).toMatchObject({ level: 'warn' });
+    expect(toasts[toasts.length - 1].message).toContain('ssh');
+  });
+
+  it('a pane main does not report as remote keeps the path route', async () => {
+    const readImage = stubClipboard({ hasImage: true, imagePath: '/tmp/x.png', remoteShell: null });
+    const write = vi.fn();
+
+    await pasteClipboardImage({ ptyId: PTY, write, bracketedPasteMode: false });
+
+    expect(readImage).toHaveBeenCalledWith(PTY);
+    expect(write).toHaveBeenCalledWith('/tmp/x.png');
   });
 
   it('path route still pastes when hasImage disagrees with readImage', async () => {

@@ -216,7 +216,18 @@ export function registerAllHandlers(
     // event-driven updates (cleanup rides session:died via the context router).
     localPtyOwnership: !daemonClient,
   });
-  registerClipboardHandlers();
+  registerClipboardHandlers({
+    // The pane's shell pid, from whoever owns the PTY: a local PTYManager
+    // instance, else the daemon's session list (same source as PANE_RESOURCES).
+    shellPidFor: async (ptyId) => {
+      const local = ptyManager.get(ptyId)?.process.pid;
+      if (local) return local;
+      if (!daemonClient) return undefined;
+      const sessions = (await daemonClient.rpc('daemon.listSessions', {})) as Array<{ id: string; pid?: number; state?: string }>;
+      const s = sessions.find((x) => x.id === ptyId);
+      return s && s.state !== 'dead' && s.state !== 'suspended' ? s.pid : undefined;
+    },
+  });
   registerAgentModelsHandlers();
   registerHooksBridgeHandlers();
   registerStatuslineBridgeHandlers();

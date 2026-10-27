@@ -1227,6 +1227,7 @@ export const en = {
   'remote.clipboardCopiedFrom': 'Copied from {host}',
   'remote.clipboardCopiedFromRemote': 'Copied from the remote host',
   'terminal.copyFailed': 'Copy failed — selection kept',
+  'terminal.imagePasteRemote': 'Image not pasted: this pane is a remote {program} session, and the image is on this computer',
   'terminal.copyPendingGesture': 'Click to finish copying',
   'terminal.mouseOwnedSelectHint': 'This app is using the mouse — hold Shift to select text',
   'terminal.mouseOwnedSelectHintMac': 'This app is using the mouse — hold Option to select text',

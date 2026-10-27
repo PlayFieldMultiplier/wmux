@@ -297,6 +297,8 @@ export const IPC = {
   CLIPBOARD_READ: 'clipboard:read',
   CLIPBOARD_READ_IMAGE: 'clipboard:read-image',
   CLIPBOARD_HAS_IMAGE: 'clipboard:has-image',
+  /** The remote-session client (`ssh`) in a pane's foreground, or null. */
+  CLIPBOARD_PANE_REMOTE_SHELL: 'clipboard:pane-remote-shell',
   /** Write text that main takes back off the clipboard at its expiry or on quit. */
   CLIPBOARD_WRITE_EPHEMERAL: 'clipboard:write-ephemeral',
   /** Clear the ephemeral text unless it equals the still-valid value passed. */

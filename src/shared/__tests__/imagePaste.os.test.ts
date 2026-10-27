@@ -1,11 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import {
+  foregroundRemoteShellClient,
   imagePathForPane,
   isWslShell,
   nativeImagePasteSequence,
   quoteImagePathForPty,
   resolveImagePasteStrategy,
   sanitizeImagePasteMode,
+  shouldCheckRemoteShell,
   toWslPath,
 } from '../imagePaste';
 
@@ -110,5 +112,36 @@ describe('quoteImagePathForPty', () => {
   it('keeps the quote-on-space rule for Windows paths (cmd has no POSIX quoting)', () => {
     expect(quoteImagePathForPty('C:\\Temp\\x.png')).toBe('C:\\Temp\\x.png');
     expect(quoteImagePathForPty('C:\\My Temp\\x.png')).toBe('"C:\\My Temp\\x.png"');
+  });
+});
+
+describe('foregroundRemoteShellClient (ssh pane image paste)', () => {
+  // `ps -A -o pid=,pgid=,tpgid=,comm=` rows: the pane shell is 100.
+  const ps = (...rows: string[]) => rows.join('\n') + '\n';
+
+  it('finds ssh when it leads the terminal foreground group', () => {
+    expect(foregroundRemoteShellClient(ps('  100   100   200 -zsh', '  200   200   200 /usr/bin/ssh'), 100)).toBe('ssh');
+    expect(foregroundRemoteShellClient(ps('100 100 200 bash', '200 200 200 mosh-client'), 100)).toBe('mosh-client');
+  });
+
+  it('is null for a shell at its prompt, a local agent running ssh, or ssh tooling', () => {
+    // Shell owns the foreground (at the prompt, or `ssh &` in the background).
+    expect(foregroundRemoteShellClient(ps('100 100 100 zsh', '300 300 100 ssh'), 100)).toBeNull();
+    // A local agent leads the foreground; its tool-call ssh is in its group.
+    expect(foregroundRemoteShellClient(ps('100 100 200 zsh', '200 200 200 claude', '201 200 200 ssh'), 100)).toBeNull();
+    // Exact stems only.
+    expect(foregroundRemoteShellClient(ps('100 100 200 zsh', '200 200 200 ssh-agent'), 100)).toBeNull();
+    // No controlling terminal, unknown shell pid, or garbage.
+    expect(foregroundRemoteShellClient(ps('100 100 0 zsh'), 100)).toBeNull();
+    expect(foregroundRemoteShellClient(ps('200 200 200 ssh'), 100)).toBeNull();
+    expect(foregroundRemoteShellClient('', 100)).toBeNull();
+  });
+
+  it('is only consulted when the paste could otherwise emit a dead path or key', () => {
+    expect(shouldCheckRemoteShell({ mode: 'auto' })).toBe(true);
+    expect(shouldCheckRemoteShell({ mode: 'path' })).toBe(true);
+    // Explicit native is the user's call; a live local agent owns the foreground.
+    expect(shouldCheckRemoteShell({ mode: 'native' })).toBe(false);
+    expect(shouldCheckRemoteShell({ mode: 'auto', agentProcessAlive: true })).toBe(false);
   });
 });
