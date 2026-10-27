@@ -224,6 +224,50 @@ describe('selectAgentProcess', () => {
     const table = [entry(200, SHELL, 'kiro-cli')];
     expect(selectAgentProcess(table, SHELL)).toEqual({ pid: 200, slug: 'kiro' });
   });
+
+  it('names a version binary run by its path in the agent\'s install directory under the home', () => {
+    const HOME = '/Users/dev';
+    const slug = (name: string, cmdline = name, home = HOME) => selectAgentProcess([entry(200, SHELL, name, cmdline)], SHELL, home)?.slug;
+    const claude = `${HOME}/.local/share/claude/versions/2.1.311`;
+    expect(slug(claude)).toBe('claude');
+    expect(slug(`${HOME}/.grok/downloads/grok-1.0.52-macos-aarch64`)).toBe('grok');
+    // Another home, a versions directory elsewhere, a node script, a name that is no version.
+    expect(slug(claude, claude, '/Users/other')).toBeUndefined();
+    expect(slug('/work/claude/versions/1.2.3')).toBeUndefined();
+    expect(slug('node', 'node /work/claude/x.js')).toBeUndefined();
+    expect(slug(`${HOME}/.local/share/claude/versions/latest`)).toBeUndefined();
+    expect(slug('.local/share/claude/versions/2.1.311')).toBeUndefined();
+    // Look-alike directories and homes, and grok's name outside its directory.
+    expect(slug(`${HOME}/.local/share/claude-versions/2.1.311`)).toBeUndefined();
+    expect(slug(`${HOME}/.local/share/claude/versions-old/2.1.311`)).toBeUndefined();
+    expect(slug(`${HOME}x/.local/share/claude/versions/2.1.311`)).toBeUndefined();
+    expect(slug(`${HOME}/.local/share/claude/versions/2.1.311`.toUpperCase())).toBeUndefined();
+    expect(slug('/tmp/.grok/downloads/grok-1.0.52-macos-aarch64')).toBeUndefined();
+    // Only a bare version name: not a temporary, backup or wrapper file beside it.
+    expect(slug(`${HOME}/.local/share/claude/versions/2.1.312.tmp`)).toBeUndefined();
+    expect(slug(`${HOME}/.local/share/claude/versions/2.1.311.old`)).toBeUndefined();
+    expect(slug(`${HOME}/.local/share/claude/versions/2.1.311-wrapper`)).toBeUndefined();
+    // The path is compared normalized.
+    expect(slug(`${HOME}//.local/share/claude/./versions/2.1.311`)).toBe('claude');
+    expect(slug(`${HOME}/.local/share/claude/versions/../versions/2.1.311`)).toBe('claude');
+  });
+
+  it('a claude that re-execs into a new version binary keeps its name', () => {
+    const HOME = '/Users/dev';
+    const next = `${HOME}/.local/share/claude/versions/2.1.312`;
+    // The same pid, now argv0 is the new version's path, with the old arguments.
+    expect(selectAgentProcess([entry(200, SHELL, next, `${next} --resume abc`)], SHELL, HOME)).toEqual({ pid: 200, slug: 'claude' });
+    // An exec-rooted pane: the PTY root itself is the version binary.
+    expect(selectAgentProcess([entry(SHELL, 1, next, `${next} -c`), entry(300, SHELL, 'node', 'node /tmp/mcp.js')], SHELL, HOME))
+      .toEqual({ pid: SHELL, slug: 'claude' });
+  });
+
+  it('on Windows a version binary is not named: its path is only in the self-reported command line', () => {
+    const HOME = 'C:\\Users\\Dev';
+    const claims = '"C:\\Users\\Dev\\.local\\share\\claude\\versions\\2.1.311.exe" --resume abc';
+    expect(selectAgentProcess([entry(200, SHELL, '2.1.311.exe', claims)], SHELL, HOME)).toEqual({ pid: 200 });
+    expect(selectAgentProcess([entry(200, SHELL, 'foo.exe', claims)], SHELL, HOME)).toEqual({ pid: 200 });
+  });
 });
 
 // ── tracker lifecycle ────────────────────────────────────────────────────────
@@ -1056,6 +1100,8 @@ describe.skipIf(process.platform === 'win32')('the real executable backs the age
     fs.symlinkSync(real, path.join(root, 'home-link'));
     const image = path.join(real, '.local/share/claude/versions/2.1.307');
     expect(isAgentImage(entry(200, 100, 'claude'), 'claude', image, path.join(root, 'home-link'))).toBe(true);
+    // Run by its resolved path, it is named the same way.
+    expect(selectAgentProcess([entry(200, 100, image, image)], 100, path.join(root, 'home-link'))).toEqual({ pid: 200, slug: 'claude' });
   });
 
   it('a runtime-hosted agent runs a script inside that agent\'s installed package', () => {
@@ -1104,6 +1150,27 @@ describe.skipIf(process.platform === 'win32')('the real executable backs the age
     expect(await live.verifyLive('s1', 'claude')).toBe(true);
     expect(await live.isAgentRunning('s1', 'claude', async () => true)).toBe(true);
     expect(real).toHaveBeenCalledTimes(1);
+  });
+
+  it('a version binary run by its full path is named, and verified by its home-anchored image', async () => {
+    const bin = `${HOME}/.local/share/claude/versions/2.1.311`;
+    const table = [entry(100, 1, 'zsh'), entry(200, 100, bin, `${bin} --model opus`)];
+    const live = imageTracker(table, async () => bin, 'darwin');
+    live.arm('s1', 100);
+    await flush();
+    expect(live.identityFor('s1')).toEqual({ slug: 'claude', alive: true });
+    expect(await live.verifyLive('s1', 'claude')).toBe(true);
+    expect(await live.isAgentRunning('s1', 'claude', async () => true)).toBe(true);
+    // The argv names claude, but the running binary is something else.
+    const renamed = imageTracker(table, async () => '/bin/sleep', 'darwin');
+    renamed.arm('s1', 100);
+    await flush();
+    expect(await renamed.verifyLive('s1', 'claude')).toBe(false);
+    // Under another home the path names no agent at all.
+    const other = new AgentProcessTracker(makeWatcher(), async () => table, async () => bin, '/Users/other', {}, 'darwin');
+    other.arm('s1', 100);
+    await flush();
+    expect(await other.verifyLive('s1', 'claude')).toBe(false);
   });
 
   it('a failed image read is not cached: the next check reads again', async () => {
