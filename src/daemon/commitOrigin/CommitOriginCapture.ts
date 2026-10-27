@@ -14,6 +14,10 @@
 // seconds: one pane showing it over the whole window, and in that worktree,
 // is the attribution. Otherwise the worktree's panes are kept as candidates
 // only. The task is the worktree's, whichever pane committed.
+//
+// Known limit (v1): an attribution can be wrong only when the committing
+// process's output reaches no live pane and another pane in that worktree
+// prints git's summary line for it within the window (tailing a log).
 
 import { watch as fsWatch, type FSWatcher } from 'node:fs';
 import path from 'node:path';
