@@ -60,7 +60,6 @@ export function hibernationBlocker(
   const idleHours = deps.idleHours();
   if (!(idleHours > 0)) return 'off';
   if (meta.state !== 'attached' && meta.state !== 'detached') return 'not-live';
-  if (ringBuffer.backend !== 'node') return 'rust-ring';
   if (ringBuffer.isHibernated) return 'hibernated';
   if (ringBuffer.size <= (deps.minBytes ?? HIBERNATE_MIN_BYTES)) return 'small';
   const lastOutput = Date.parse(meta.lastActivity);
