@@ -1,6 +1,6 @@
 import type { DaemonClient } from './DaemonClient';
 import type { FolderTrustState } from '../daemon/folderTrustState';
-import { FOLDER_TRUST_LAUNCH_REFUSAL } from '../shared/folderTrustWording';
+import { FOLDER_TRUST_LAUNCH_REFUSAL, FOLDER_TRUST_UNREADABLE_REFUSAL } from '../shared/folderTrustWording';
 
 /** How long main waits for the daemon's verdict: above the daemon's own
  *  250 ms read budget (FOLDER_TRUST_READ_TIMEOUT_MS), so the daemon's
@@ -90,5 +90,5 @@ export async function folderTrustLaunchHold(
   if (!folderTrustStops(verdict, writer, ptyId, opts.refuseUnknown, { once: opts.once })) return null;
   return verdict === 'trust'
     ? { retry: false, reason: FOLDER_TRUST_LAUNCH_REFUSAL }
-    : { retry: true, reason: 'the pane has no readable screen, so a folder-trust prompt cannot be ruled out' };
+    : { retry: true, reason: FOLDER_TRUST_UNREADABLE_REFUSAL };
 }

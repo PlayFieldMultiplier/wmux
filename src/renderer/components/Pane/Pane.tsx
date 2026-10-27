@@ -50,6 +50,7 @@ import { isRemoteMirrorVisible } from '../../stores/slices/remoteWorkspacesSlice
 import { selectHostPickName } from '../../stores/shadowWorkspace';
 import { isShadowWorkspaceId } from '../../../shared/pcRail';
 import { toastFolderTrustLaunchRefusal } from '../../utils/folderTrustLaunchToast';
+import { FOLDER_TRUST_UNREADABLE_REFUSAL } from '../../../shared/folderTrustWording';
 
 interface PaneProps {
   pane: PaneLeaf;
@@ -324,6 +325,22 @@ export function markResumePillUsed(ptyId: string): void {
  *  a screen that could not rule one out), so a later pass may try again. */
 export function releaseAutoResume(ptyId: string): void {
   if (!pillUsedPtys.has(ptyId)) autoResumedPtys.delete(ptyId);
+}
+
+/** Spacing and count of the extra tries an automatic resume gets when main
+ *  could not read the pane's screen to rule out a folder-trust prompt. */
+export const AUTO_RESUME_UNREADABLE_RETRY_MS = 3_000;
+export const AUTO_RESUME_UNREADABLE_RETRIES = 3;
+
+/**
+ * After a refused automatic resume line: the wait before trying again, or
+ * null. Only a screen main could not read is tried again (it may become
+ * readable by itself), a few times at most; a folder-trust prompt on screen
+ * waits for the person, and any other refusal keeps the pill.
+ */
+export function autoResumeRetryDelay(err: unknown, triesSoFar: number): number | null {
+  if (!String(err).includes(FOLDER_TRUST_UNREADABLE_REFUSAL)) return null;
+  return triesSoFar < AUTO_RESUME_UNREADABLE_RETRIES ? AUTO_RESUME_UNREADABLE_RETRY_MS : null;
 }
 
 /** Take the one automatic resume `ptyId` gets; false if it ran or the pill was used. */
@@ -926,7 +943,8 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
     if (!planned) return;
     // A beat after the first output, so the prompt is up and reading input.
     let cancelled = false;
-    const timer = setTimeout(() => {
+    let retries = 0;
+    const attempt = () => {
       if (!useStore.getState().claudeResumeOnStart) return; // turned off meanwhile
       if (useStore.getState().resumeHintByPtyId[ptyId] !== resumeHint) return; // typed into / dismissed meanwhile
       // Re-checked here, not only when planning: the liveness snapshot lands
@@ -967,10 +985,19 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
           (err: unknown) => {
             releaseAutoResume(ptyId);
             console.warn('[wmux:resume] the resume line was not typed', String(err));
+            // A screen main could not read may become readable: try again a
+            // few times while this pane and binding stand (the cleanup below
+            // cancels it). Every check above runs again on each try.
+            const wait = cancelled ? null : autoResumeRetryDelay(err, retries);
+            if (wait !== null) {
+              retries++;
+              timer = setTimeout(attempt, wait);
+            }
           },
         );
       }, () => undefined);
-    }, 400);
+    };
+    let timer = setTimeout(attempt, 400);
     return () => {
       cancelled = true;
       clearTimeout(timer);

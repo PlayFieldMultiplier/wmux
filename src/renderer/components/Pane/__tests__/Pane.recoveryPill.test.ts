@@ -16,8 +16,9 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { AUTO_RESUME_CONTINUE_PROMPT, claimAutoResume, markResumePillUsed, releaseAutoResume, planAutoResume, planRecoveryPillType, recoveryPillTarget, resolveRecoveryPillPermissions } from '../Pane';
+import { AUTO_RESUME_CONTINUE_PROMPT, AUTO_RESUME_UNREADABLE_RETRIES, AUTO_RESUME_UNREADABLE_RETRY_MS, autoResumeRetryDelay, claimAutoResume, markResumePillUsed, releaseAutoResume, planAutoResume, planRecoveryPillType, recoveryPillTarget, resolveRecoveryPillPermissions } from '../Pane';
 import type { RoleBinding } from '../../../../shared/orchestratorRole';
+import { FOLDER_TRUST_LAUNCH_REFUSAL, FOLDER_TRUST_UNREADABLE_REFUSAL } from '../../../../shared/folderTrustWording';
 
 const SID = 'a1b2c3d4-0000-0000-0000-9f8e7d6c5b4a';
 // A Reviewer role bound to claude/haiku — the fleet guarantee under test.
@@ -699,5 +700,26 @@ describe('recovery pill without an exact session opens the picker (#1946)', () =
     expect(src).toMatch(/sessionId\s*\?\s*`▶ \$\{t\('resume\.label', \{ agent: agentName \}\)\}`\s*:\s*`▶ \$\{t\('resume\.pickLabel', \{ agent: agentName \}\)\}`/);
     expect(src).toContain("!sessionId ? t('resume.pickerNote') : ''");
     expect(src).toContain("sessionId ? t('resume.tooltip') : t('resume.pickTooltip')");
+  });
+});
+
+describe('automatic resume refused because the screen could not be read', () => {
+  const unreadable = new Error(`Error invoking remote method 'pty:writeLaunch': Error: PTY_WRITE_LAUNCH: ${FOLDER_TRUST_UNREADABLE_REFUSAL}`);
+
+  it('tries again a few times, spaced out, and then stops', () => {
+    const waits: Array<number | null> = [];
+    for (let tries = 0; tries <= AUTO_RESUME_UNREADABLE_RETRIES; tries++) waits.push(autoResumeRetryDelay(unreadable, tries));
+    expect(waits).toEqual([...Array(AUTO_RESUME_UNREADABLE_RETRIES).fill(AUTO_RESUME_UNREADABLE_RETRY_MS), null]);
+  });
+
+  it('never tries again at a folder-trust prompt on screen, or after any other refusal', () => {
+    expect(autoResumeRetryDelay(new Error(`PTY_WRITE_LAUNCH: ${FOLDER_TRUST_LAUNCH_REFUSAL}`), 0)).toBeNull();
+    expect(autoResumeRetryDelay(new Error('PTY_WRITE_LAUNCH: the session is not live'), 0)).toBeNull();
+  });
+
+  it('the pane schedules the retry on the same timer its cleanup clears, and only while not cancelled', () => {
+    const source = readFileSync(resolve(__dirname, '../Pane.tsx'), 'utf8');
+    expect(source).toMatch(/releaseAutoResume\(ptyId\);[\s\S]{0,400}?const wait = cancelled \? null : autoResumeRetryDelay\(err, retries\);\s*if \(wait !== null\) \{\s*retries\+\+;\s*timer = setTimeout\(attempt, wait\);/);
+    expect(source).toMatch(/let timer = setTimeout\(attempt, 400\);\s*return \(\) => \{\s*cancelled = true;\s*clearTimeout\(timer\);/);
   });
 });

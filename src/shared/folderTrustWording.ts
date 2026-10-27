@@ -13,3 +13,7 @@ export const CODEX_TRUST_HEADLINE = /do you trust the (?:contents of this (?:dir
 /** The reason a launch line was not typed: main puts it in the refusal, the
  *  renderer recognises it there to tell the person why. */
 export const FOLDER_TRUST_LAUNCH_REFUSAL = 'the pane is on a folder-trust prompt; answer it in the pane';
+
+/** The reason an automated launch line was not typed because the screen could
+ *  not be read: unlike the prompt itself, this may pass by itself. */
+export const FOLDER_TRUST_UNREADABLE_REFUSAL = 'the pane has no readable screen, so a folder-trust prompt cannot be ruled out';
