@@ -1360,10 +1360,48 @@ describe('GitContextWatcher offLoop (the daemon)', () => {
     }
   }
 
+  it('answers a bounded tail read, in this process and in the reader process alike', async () => {
+    const file = path.join(tmp(), 'HEAD');
+    fs.writeFileSync(file, 'abcdef');
+    const decode = (a: unknown) => {
+      const t = JSON.parse(String(a)) as { size: number; ino: number; bytes: string };
+      return { size: t.size, text: Buffer.from(t.bytes, 'base64').toString() };
+    };
+    const local = new GitContextWatcher(fake.factory);
+    watchers.push(local);
+    expect(decode(await local.readThroughReader({ op: 'tail', path: file, from: 2 }))).toEqual({ size: 6, text: 'cdef' });
+    const child = new ChildProbeReader(5_000);
+    try {
+      expect(decode(await child.read({ op: 'tail', path: file, from: Number.MAX_SAFE_INTEGER }))).toEqual({ size: 6, text: '' });
+      expect(await child.read({ op: 'tail', path: path.join(file, 'none'), from: 0 })).toBeNull();
+    } finally {
+      child.close();
+    }
+  });
+
+  it('localRepos lists a repository armed with fs.watch, never one only polled', async () => {
+    const root = tmp();
+    initFakeRepo(root, 'main');
+    const w = makeWatcher(() => new InProcessProbeReader(asyncIo));
+    w.update('s1', root);
+    await waitFor(() => events.length > 0);
+    expect(w.localRepos().map((r) => ({ ...r, gitDir: fs.realpathSync(r.gitDir) })))
+      .toEqual([{ sessionId: 's1', gitDir: fs.realpathSync(path.join(root, '.git')) }]);
+    w.remove('s1');
+    expect(w.localRepos()).toEqual([]);
+    const polled = new GitContextWatcher(fake.factory, { readers: () => new InProcessProbeReader(asyncIo), isRemote: () => true, offLoop: true });
+    watchers.push(polled);
+    const seen: unknown[] = [];
+    polled.on('git', (e) => seen.push(e));
+    polled.update('s2', root);
+    await waitFor(() => seen.length > 0);
+    expect(polled.localRepos()).toEqual([]);
+  });
+
   it('a reader that never answers does not block the loop: a timer fires, and the cwd reads unknown', async () => {
     // A reader process stuck in open() (macOS waiting on its privacy check
     // for a folder under ~/Desktop) is what froze the daemon's loop.
-    const stuck = SHARE_READER_SOURCE.replace('answer(req.op, req.path).then(', 'continue;\n    answer(req.op, req.path).then(');
+    const stuck = SHARE_READER_SOURCE.replace('answer(req.op, req.path, req.from).then(', 'continue;\n    answer(req.op, req.path, req.from).then(');
     const reader = new ChildProbeReader(300, stuck);
     const root = tmp();
     initFakeRepo(root, 'main');

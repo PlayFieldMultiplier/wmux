@@ -11,8 +11,8 @@ import { defaultReaders } from '../gitContextWatch';
 
 /** Answers like the real reader, except that a path named `hang` never answers. */
 const HANGING_SOURCE = SHARE_READER_SOURCE.replace(
-  'answer(req.op, req.path).then(',
-  "if (req.path.endsWith('hang')) continue;\n    answer(req.op, req.path).then(",
+  'answer(req.op, req.path, req.from).then(',
+  "if (req.path.endsWith('hang')) continue;\n    answer(req.op, req.path, req.from).then(",
 );
 
 const readers: ChildProbeReader[] = [];
