@@ -165,7 +165,7 @@ describe.skipIf(WIN)('the worker fence hook', () => {
   });
 
   it('refuses the wmux tools that act outside the sandbox, saying why', () => {
-    for (const t of ['repl_run', 'browser_repl', 'terminal_send', 'terminal_send_key', 'surface_new', 'pane_split', 'remote_spawn', 'computer', 'browser_file_upload', 'browser_download', 'browser_wait_for_download', 'browser_pdf', 'browser_trace']) {
+    for (const t of ['repl_run', 'browser_repl', 'terminal_send', 'terminal_send_key', 'surface_new', 'pane_split', 'remote_spawn', 'computer', 'fanout_start', 'browser_file_upload', 'browser_download', 'browser_wait_for_download', 'browser_pdf', 'browser_trace']) {
       const r = run({ tool_name: `mcp__wmux__${t}`, tool_input: {} });
       expect(r.code, t).toBe(2);
       expect(r.err).toContain(`mcp__wmux__${t} is not available inside the worker fence`);

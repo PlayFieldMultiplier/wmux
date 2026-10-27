@@ -569,10 +569,12 @@ export class RpcRouter {
     }
 
     // A fenced bot worker's pane does not get the pipe methods behind the
-    // wmux tools its fence refuses (shared/botWorkerGuard.ts). Every pane the
-    // call names counts: its walked claim, its envelope and its sender.
+    // wmux tools its fence refuses (shared/botWorkerGuard.ts), and handlers
+    // see it on the context (`fencedWorker`). Every pane the call names
+    // counts: its walked claim, its envelope and its sender. A check that
+    // throws counts as fenced.
     const fencedWorkerPty = this.fencedWorkerPty;
-    if (!firstParty && fencedWorkerPty && WORKER_FENCE_REFUSED_RPC.has(request.method)) {
+    if (!firstParty && fencedWorkerPty) {
       const sender = effectiveParams.senderPtyId;
       const ptys = [
         ctx.workspaceClaim?.kind === 'bound' ? ctx.workspaceClaim.ptyId : undefined,
@@ -586,7 +588,10 @@ export class RpcRouter {
         fenced = true;
       }
       if (fenced) {
-        return { id: request.id, ok: false, error: `${request.method}: not available inside the worker fence` };
+        if (WORKER_FENCE_REFUSED_RPC.has(request.method)) {
+          return { id: request.id, ok: false, error: `${request.method}: not available inside the worker fence` };
+        }
+        ctx.fencedWorker = true;
       }
     }
 

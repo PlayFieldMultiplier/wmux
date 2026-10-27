@@ -57,6 +57,49 @@ function captureTaskSend(worker: ClaudeWorker): TaskSendHandler {
   return handler;
 }
 
+describe('a2a.rpc — a fenced bot worker', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // The router marks the call (RpcRouter.ts) from the pane hints it carries.
+  const fencedRouter = (worker: ClaudeWorker) => {
+    const router = setupRouter(worker);
+    router.setFencedWorkerPty((pty) => pty === 'pty-fenced');
+    return router;
+  };
+  const send = (router: RpcRouter, params: Record<string, unknown>, callerPtyId = 'pty-fenced') =>
+    router.dispatch({ id: 'rpc-f', method: 'a2a.task.send', params, clientName: 'claude-code', callerPtyId }, { externalWire: true });
+
+  it('refuses a new task with execute, before it is sent or spawned', async () => {
+    const worker = makeWorker();
+    const res = await send(fencedRouter(worker), { workspaceId: 'ws-from', to: 'ws-to', message: 'run this', execute: true });
+    expect(res).toMatchObject({ ok: true, result: { error: expect.stringContaining('execute is not available inside the worker fence') } });
+    expect(sendToRendererMock).not.toHaveBeenCalled();
+    expect(worker.execute).not.toHaveBeenCalled();
+    // By its sender hint too, and a failing check counts as fenced.
+    const bySender = await send(fencedRouter(worker), { workspaceId: 'ws-from', to: 'ws-to', message: 'x', execute: true, senderPtyId: 'pty-fenced' }, 'pty-other');
+    expect(JSON.stringify(bySender)).toContain('not available inside the worker fence');
+    const throwing = setupRouter(worker);
+    throwing.setFencedWorkerPty(() => {
+      throw new Error('unreadable');
+    });
+    expect(JSON.stringify(await send(throwing, { workspaceId: 'ws-from', to: 'ws-to', message: 'x', execute: true }))).toContain('not available inside the worker fence');
+    expect(sendToRendererMock).not.toHaveBeenCalled();
+  });
+
+  it('sends a plain message, and lets another pane execute', async () => {
+    sendToRendererMock.mockResolvedValue({ ok: true, taskId: 'task-9', toWorkspaceId: 'ws-to', executeApproved: true });
+    const worker = makeWorker();
+    const router = fencedRouter(worker);
+    const plain = await send(router, { workspaceId: 'ws-from', to: 'ws-to', message: 'hi' });
+    expect(JSON.stringify(plain)).not.toContain('worker fence');
+    expect(sendToRendererMock).toHaveBeenCalledTimes(1);
+    await send(router, { workspaceId: 'ws-from', to: 'ws-to', message: 'run this', execute: true }, 'pty-other');
+    expect(worker.execute).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('a2a.rpc — execute confirmation gate', () => {
   beforeEach(() => {
     vi.clearAllMocks();

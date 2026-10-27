@@ -36,6 +36,25 @@ describe('the worker fence gate', () => {
     expect(reached).toEqual([]);
   });
 
+  it('refuses fan-out to a fenced pane', async () => {
+    expect(WORKER_FENCE_REFUSED_RPC.has('task.fanout.start')).toBe(true);
+    const res = await call('task.fanout.start', { callerPtyId: FENCED });
+    expect((res as { error: string }).error).toBe('task.fanout.start: not available inside the worker fence');
+    expect(reached).toEqual([]);
+  });
+
+  it('marks a fenced pane\'s other calls for their handlers, and no other pane\'s', async () => {
+    let seen: unknown = 'unset';
+    router.register('a2a.task.query' as never, async (_p, ctx) => {
+      seen = ctx?.fencedWorker;
+      return {};
+    });
+    await call('a2a.task.query', { callerPtyId: FENCED });
+    expect(seen).toBe(true);
+    await call('a2a.task.query', { callerPtyId: 'pty-other' });
+    expect(seen).toBeUndefined();
+  });
+
   it('lets a fenced pane read and message, and every other pane send', async () => {
     expect((await call('input.readScreen', { callerPtyId: FENCED })).ok).toBe(true);
     expect((await call('a2a.task.send', { callerPtyId: FENCED })).ok).toBe(true);
