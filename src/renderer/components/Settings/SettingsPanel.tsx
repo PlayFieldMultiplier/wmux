@@ -2093,6 +2093,9 @@ function FanoutWorkersSection() {
   const [requireApproval, setRequireApprovalState] = useState(false);
   // Main-side as well: main refuses the agy trust write while this is off.
   const [trustAgyFolders, setTrustAgyFoldersState] = useState(false);
+  // Main-side, per workspace: the worker fence of this workspace's bots.
+  const activeWorkspaceId = useStore((s) => s.activeWorkspaceId);
+  const [fenceOff, setFenceOffState] = useState(false);
   const [mode, setMode] = useState<FanoutWorkerPermissionMode>(DEFAULT_FANOUT_WORKER_PERMISSION_MODE);
   // Shown as its own line under the row, not in the (one-line) description,
   // so a failure's text is never cut off behind Learn more.
@@ -2120,6 +2123,29 @@ function FanoutWorkersSection() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    setFenceOffState(false);
+    if (activeWorkspaceId) {
+      window.electronAPI?.fanout?.getWorkerFenceOff?.(activeWorkspaceId)
+        .then((v) => {
+          if (!cancelled && typeof v === 'boolean') setFenceOffState(v);
+        })
+        .catch(() => undefined);
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [activeWorkspaceId]);
+
+  const onFenceChange = (on: boolean) => {
+    if (!activeWorkspaceId) return;
+    window.electronAPI.fanout
+      .setWorkerFenceOff(activeWorkspaceId, !on)
+      .then((stored) => setFenceOffState(stored))
+      .catch(() => undefined);
+  };
 
   const onModeChange = (next: string) => {
     if (!isFanoutWorkerPermissionMode(next)) return;
@@ -2181,6 +2207,24 @@ function FanoutWorkersSection() {
           label={t('settings.fanoutTrustAgyFolders')}
         />
       </SettingRow>
+      {activeWorkspaceId && (
+        <SettingRow
+          id="workerfence"
+          label={t('settings.workerFence')}
+          description={t('settings.workerFenceDesc')}
+        >
+          <Toggle
+            checked={!fenceOff}
+            onChange={onFenceChange}
+            label={t('settings.workerFence')}
+          />
+        </SettingRow>
+      )}
+      {activeWorkspaceId && fenceOff && (
+        <SettingNote tone="warning">
+          {t('settings.workerFenceOffWarning')}
+        </SettingNote>
+      )}
       <SettingRow
         id="fanoutworkers"
         label={t('settings.fanoutWorkerPermissionMode')}

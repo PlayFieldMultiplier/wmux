@@ -91,7 +91,13 @@ export interface ReplayGeometry {
 const MAX_GEOMETRY_MARKS = 256;
 
 export class RingBuffer {
+  // A rust ring holds its bytes here, except while hibernated: then this is
+  // undefined and the node fields below describe the ring (see hibernate()).
   private native?: NativeRingStorage;
+  private NativeRing?: new (capacity: number) => NativeRingStorage; // re-creates it on wake
+  // Lifetime offset of the native ring's first byte: a ring re-created on wake
+  // counts from 0, so this keeps totalBytesWritten monotonic across wakes.
+  private nativeBase = 0;
   private disposed = false;
   readonly backend: 'node' | 'rust';
   private buffer: Buffer;
@@ -101,7 +107,7 @@ export class RingBuffer {
   private length: number;     // bytes currently stored (<= physical)
   private totalWritten: number; // monotonic lifetime count (used as byte offset for PromptEventLog)
   private geometry: GeometryMark[] = []; // size changes, oldest first (see ReplayGeometry)
-  // Idle hibernation (node backend only, see BufferHibernation.ts): while
+  // Idle hibernation (see BufferHibernation.ts): while
   // `hibernatedPath` is set, `buffer` is released and the stored bytes live
   // only in that `.buf`. `length`, `totalWritten` and `geometry` stay in
   // memory, so every offset consumer is unaffected; the bytes come back
@@ -128,7 +134,10 @@ export class RingBuffer {
     }
     this.capacity = capacityBytes;
     if (backend === 'rust') {
-      try { this.native = new (loadNativeTerminalCore('ring-v1').NativeRing)(capacityBytes); }
+      try {
+        this.NativeRing = loadNativeTerminalCore('ring-v1').NativeRing;
+        this.native = new this.NativeRing(capacityBytes);
+      }
       catch { reportNativeFallback('ring'); }
     }
     this.backend = this.native ? 'rust' : 'node';
@@ -174,11 +183,11 @@ export class RingBuffer {
    */
   write(data: Buffer): void {
     if (this.disposed) throw new Error('Ring disposed');
-    if (this.native) { this.native.write(data); return; }
     const dataLen = data.length;
     if (dataLen === 0) return;
     if (!this.wake(false)) { this.writeWhileAsleep(data); return; }
     this.mutations++;
+    if (this.native) { this.native.write(data); return; }
 
     this.totalWritten += dataLen;
 
@@ -214,7 +223,9 @@ export class RingBuffer {
   /** Retain a transport-owned chunk without sending its bytes back through JS. */
   writeNativeChunk(chunk: NativeOutputChunk): void {
     if (this.disposed) throw new Error('Ring disposed');
-    if (this.native?.writeChunk) this.native.writeChunk(chunk);
+    // Hibernated (no native ring): write() wakes it, or holds the bytes.
+    if (chunk.byteLength === 0) return;
+    if (this.native?.writeChunk) { this.mutations++; this.native.writeChunk(chunk); }
     else this.write(chunk.readBytes());
   }
 
@@ -223,12 +234,19 @@ export class RingBuffer {
    * Used by PromptEventLog as a stable offset even after the ring wraps.
    */
   get totalBytesWritten(): number {
-    if (this.native) return this.native.totalBytesWritten;
+    if (this.native) return this.nativeBase + this.native.totalBytesWritten;
     return this.totalWritten;
   }
 
   /** Capture inside the shared snapshot slot; callers own the frozen copy. */
-  freezeNative() { return this.native?.freeze(); }
+  freezeNative() {
+    if (this.backend === 'rust') this.wake();
+    const frozen = this.native?.freeze();
+    // Lifetime offset, like readAllWithGeometry(). An own property shadows the
+    // native getter, so the object stays the native instance feedFrozen needs.
+    if (frozen && this.nativeBase > 0) Object.defineProperty(frozen, 'writtenAt', { value: this.nativeBase + frozen.writtenAt });
+    return frozen;
+  }
 
   /** Release native storage on explicit session removal, independently of GC. */
   dispose(): void {
@@ -270,9 +288,11 @@ export class RingBuffer {
    * ever recorded.
    */
   readAllWithGeometry(): { data: Buffer; geometry: ReplayGeometry | undefined; writtenAt: number } {
+    // Still hibernated: serve the newest bytes, as readAll() does.
+    if (this.backend === 'rust' && !this.wake()) return { data: Buffer.concat(this.pending), geometry: undefined, writtenAt: this.totalWritten };
     if (this.native) {
       const snapshot = this.native.readAllWithGeometry();
-      return { ...snapshot, geometry: snapshot.geometry ?? undefined };
+      return { ...snapshot, writtenAt: this.nativeBase + snapshot.writtenAt, geometry: snapshot.geometry ?? undefined };
     }
     const data = this.readAll();
     const writtenAt = this.totalWritten;
@@ -311,9 +331,9 @@ export class RingBuffer {
    * Returns a new Buffer copy; the internal buffer is not modified.
    */
   readAll(): Buffer {
-    if (this.native) return this.native.readAll();
     // The `.buf` is unreadable right now: serve the newest bytes, keep the file.
     if (!this.wake()) return Buffer.concat(this.pending);
+    if (this.native) return this.native.readAll();
     if (this.length === 0) {
       return Buffer.alloc(0);
     }
@@ -334,9 +354,9 @@ export class RingBuffer {
   /** Clear the buffer, resetting all pointers and zeroing sensitive data. */
   clear(): void {
     if (this.disposed) throw new Error('Ring disposed');
-    if (this.native) { this.native.clear(); return; }
     if (this.hibernatedPath !== null) this.restore(Buffer.alloc(0)); // nothing to read back
     this.mutations++;
+    if (this.native) { this.native.clear(); return; }
     this.buffer.fill(0);
     this.writePos = 0;
     this.length = 0;
@@ -495,21 +515,22 @@ export class RingBuffer {
    * byte was written or cleared meanwhile and `stillIdle()` (re-checked at
    * that instant) holds. A reader during the write reads memory; a reader
    * after it wakes the ring from the file. A failed dump throws and releases
-   * nothing. The rust backend is never hibernated.
+   * nothing. A rust ring hands its bytes, offsets and sizes to the node
+   * fields and disposes its native storage; restore() re-creates it.
    */
   async hibernate(filePath: string, stillIdle: () => boolean): Promise<number> {
-    if (this.native || this.disposed || this.hibernatedPath !== null || this.length === 0) return 0;
+    if (this.disposed || this.hibernatedPath !== null || this.size === 0) return 0;
     const mark = this.mutations;
     // Skip the write when this ring's last dump to the same file is still
     // current (a periodic snapshot, or the dump of an earlier hibernation that
     // a read woke from) and the file still holds every byte.
-    if (!(this.lastDump?.path === filePath && this.lastDump.mutations === mark && RingBuffer.fileSize(filePath) === this.length)) {
+    if (!(this.lastDump?.path === filePath && this.lastDump.mutations === mark && RingBuffer.fileSize(filePath) === this.size)) {
       await this.dumpToFile(filePath);
     }
-    if (this.disposed || this.hibernatedPath !== null || this.mutations !== mark || this.length === 0) return 0;
+    if (this.disposed || this.hibernatedPath !== null || this.mutations !== mark || this.size === 0) return 0;
     if (this.lastDump?.path !== filePath || this.lastDump.mutations !== mark) return 0;
     if (!stillIdle()) return 0;
-    const released = this.physical;
+    const released = this.native ? this.releaseNative(this.native) : this.physical;
     this.hibernatedPath = filePath;
     this.hibernatedFileBytes = this.length;
     this.releasedBytes = released;
@@ -579,17 +600,61 @@ export class RingBuffer {
     return this.wokeAt;
   }
 
+  /**
+   * Move a rust ring's state into the node fields that describe a hibernated
+   * ring (`length`, `totalWritten`, lifetime geometry marks) and dispose its
+   * native storage. Returns the bytes released.
+   */
+  private releaseNative(native: NativeRingStorage): number {
+    const { data, geometry, writtenAt } = native.readAllWithGeometry();
+    const released = native.allocatedBytes;
+    this.totalWritten = this.nativeBase + writtenAt;
+    this.length = data.length;
+    const windowStart = this.totalWritten - this.length;
+    this.geometry = geometry
+      ? [{ at: windowStart, ...geometry.start }, ...geometry.changes.map((c) => ({ at: windowStart + c.offset, cols: c.cols, rows: c.rows }))]
+      : [];
+    native.dispose();
+    this.native = undefined;
+    this.physical = 0;
+    return released;
+  }
+
+  /**
+   * Re-create a woken rust ring holding `data`, which ends at `totalWritten`.
+   * The geometry marks are replayed between the writes, so each lands at the
+   * same byte it was recorded at.
+   */
+  private restoreNative(data: Buffer): void {
+    const NativeRing = this.NativeRing;
+    if (!NativeRing) throw new Error('rust ring without its native class');
+    const native = new NativeRing(this.capacity);
+    const windowStart = this.totalWritten - data.length;
+    let written = 0;
+    for (const mark of this.geometry) {
+      const at = Math.max(0, mark.at - windowStart);
+      if (at > written) { native.write(data.subarray(written, at)); written = at; }
+      native.noteGeometry(mark.cols, mark.rows);
+    }
+    if (written < data.length) native.write(data.subarray(written));
+    this.native = native;
+    this.nativeBase = windowStart;
+    this.geometry = [];
+  }
+
   /** Leave hibernation holding exactly `data` (its newest `capacity` bytes). */
   private restore(data: Buffer): void {
     if (data.length > this.capacity) data = data.subarray(data.length - this.capacity);
-    let physical = Math.min(INITIAL_PHYSICAL_BYTES, this.capacity);
-    while (physical < data.length && physical < this.capacity) physical *= 2;
-    physical = Math.min(physical, this.capacity);
+    if (this.backend === 'rust') this.restoreNative(data); // before the state below is dropped
     this.hibernatedPath = null;
     this.releasedBytes = 0;
     this.pending = [];
     this.pendingBytes = 0;
     this.appendedBytes = 0;
+    if (this.backend === 'rust') return;
+    let physical = Math.min(INITIAL_PHYSICAL_BYTES, this.capacity);
+    while (physical < data.length && physical < this.capacity) physical *= 2;
+    physical = Math.min(physical, this.capacity);
     this.buffer = Buffer.alloc(physical);
     data.copy(this.buffer, 0);
     this.physical = physical;

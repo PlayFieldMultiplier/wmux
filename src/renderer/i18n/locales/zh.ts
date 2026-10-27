@@ -3193,6 +3193,9 @@ export const zh = {
   'settings.fanoutRequireApproval': '代理 fan-out 前询问',
   'settings.fanoutRequireApprovalDesc': '默认关闭：代理发起的 fan-out 无需提示即运行——仅一层、最多 8 个同时运行且每小时 24 个，并记录日志。开启后，每个管道/MCP fan-out 都会等待你的批准。',
   'settings.fanoutTrustAgyFolders': '自动信任 agy fan-out 任务文件夹',
+  'settings.workerFence': '为此工作区的机器人工作者设置围栏',
+  'settings.workerFenceDesc': '默认开启。无人值守的机器人工作者（Bypass 或 Auto 模式）只能写入其任务文件夹和自己的临时文件夹，不能读取指定的凭据文件，并在本机有操作系统沙箱时于沙箱内运行命令。关闭后：此工作区之后启动的工作者不受围栏限制，其窗格会注明。已在围栏内启动的工作者仍留在围栏内。',
+  'settings.workerFenceOffWarning': '此工作区的工作者围栏已关闭：此处新启动的机器人工作者可以写入你的账户能写入的任何位置。',
   'settings.fanoutTrustAgyFoldersDesc': '默认关闭。开启后，在 agy fan-out 任务启动前，wmux 会把该任务文件夹加入 agy 自己的信任列表（~/.gemini/antigravity-cli/settings.json），任务不会停在 agy 的信任界面。关闭时，wmux 不会写入该文件，agy 会在每个新任务文件夹中询问。',
   'fanout.autoRunToast': '未经批准接受 fan-out：{repo} 中 {count} 个任务',
   'fanout.autoRunToastOne': "未经批准接受 fan-out：{repo} 中 1 个任务",
@@ -5008,4 +5011,16 @@ export const zh = {
   'remoteSpawn.code.declined': "{pc} 已拒绝",
   'remoteSpawn.code.app-not-ready': "{pc} 上的 wmux 尚未就绪",
   'remoteSpawn.code.failed': "无法在 {pc} 上启动代理",
+
+  // Scheduled runs: one retry after a temporary provider error
+  'claudeIntegration.scheduledRetry': "临时错误后重试计划运行",
+  'claudeIntegration.scheduledRetryDesc': "如果计划运行的回合因网络或提供商服务器错误而失败，等待 5 分钟后发送一条继续消息。默认开启；每个计划可单独关闭。",
+  'claudeIntegration.scheduledRetryUnknown': "尚不清楚：正在等待 wmux 后台服务。",
+  'schedules.retryTransient': "临时错误后重试一次",
+  'schedules.retryTransientHint': "遇到网络或提供商服务器错误时，等待 5 分钟后发送一条继续消息。不会重新发送提示词。",
+  'schedules.retryTransientGlobalHint': "仅在“设置 → Claude 集成”中开启“临时错误后重试计划运行”时生效。",
+  'schedules.state.retryWaiting': "等待中：临时提供商错误后重试（{minutes} 分钟后）",
+  'schedules.reason.agent_error_retried_once': "重试一次后再次出现代理错误",
+  'schedules.reason.agent_error_retry_blocked': "代理错误；无法发送重试",
+  'schedules.reason.agent_error_retry_interrupted': "代理错误；wmux 已重启，未重试",
 } as const;

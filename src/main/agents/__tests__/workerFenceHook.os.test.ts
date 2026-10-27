@@ -156,9 +156,20 @@ describe.skipIf(WIN)('the worker fence hook', () => {
     expect(run({ tool_name: 'Read', tool_input: { file_path: path.join(outside, 'f.txt') } }).code).toBe(0);
     expect(run({ tool_name: 'Glob', tool_input: { pattern: '*', path: outside } }).code).toBe(0);
     expect(run({ tool_name: 'Grep', tool_input: { pattern: 'x', path: outside } }).code).toBe(0);
-    expect(run({ tool_name: 'mcp__wmux__browser_download', tool_input: { path: outside } }).code).toBe(0);
+    expect(run({ tool_name: 'mcp__wmux__terminal_read', tool_input: { path: outside } }).code).toBe(0);
+    expect(run({ tool_name: 'mcp__wmux__task_push', tool_input: {} }).code).toBe(0);
+    expect(run({ tool_name: 'mcp__wmux__send_message', tool_input: { message: 'x' } }).code).toBe(0);
+    expect(run({ tool_name: 'mcp__other__download', tool_input: { path: outside } }).code).toBe(0);
     expect(run({ tool_name: 'TodoWrite', tool_input: { todos: [] } }).code).toBe(0);
     expect(run({ tool_name: 'ToolSearch', tool_input: { query: 'x' } }).code).toBe(0);
+  });
+
+  it('refuses the wmux tools that act outside the sandbox, saying why', () => {
+    for (const t of ['repl_run', 'browser_repl', 'terminal_send', 'terminal_send_key', 'surface_new', 'pane_split', 'remote_spawn', 'computer', 'fanout_start', 'browser_file_upload', 'browser_download', 'browser_wait_for_download', 'browser_pdf', 'browser_trace']) {
+      const r = run({ tool_name: `mcp__wmux__${t}`, tool_input: {} });
+      expect(r.code, t).toBe(2);
+      expect(r.err).toContain(`mcp__wmux__${t} is not available inside the worker fence`);
+    }
   });
 
   it('refuses a tool that names a path it does not know, and the worktree tools', () => {

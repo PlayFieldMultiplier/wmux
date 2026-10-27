@@ -939,10 +939,10 @@ class ApprovalGateUnavailable extends Error {}
  * fallback.
  */
 async function folderTrustVerdict(gate: ApprovalInputGate, ptyId: string, screen: ScreenRead): Promise<FolderTrustState | null> {
-  if (typeof screen === 'string' && screen.trim() !== '') return folderTrustOnScreen(screen) ? 'trust' : 'clear';
+  if (typeof screen === 'string' && screen.trim() !== '') return folderTrustOnScreen(screen);
   const verdict = (await gate.daemonFolderTrust?.(ptyId)) ?? null;
   // No daemon verdict for a parked read: its ring text decides, as before.
-  if (verdict === null && typeof screen === 'object' && screen !== null && 'parked' in screen) return folderTrustOnScreen(screen.parked) ? 'trust' : 'clear';
+  if (verdict === null && typeof screen === 'object' && screen !== null && 'parked' in screen) return folderTrustOnScreen(screen.parked);
   return verdict;
 }
 

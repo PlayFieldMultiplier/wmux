@@ -45,7 +45,7 @@ import { isPlainCmdLaunchLine } from '../../../shared/botWorkerGuard';
 import { isWslShell } from '../../../shared/wslTarget';
 import { getPtyShell } from '../../pty/ptyShellRegistry';
 import { guardBotWorkerSessionText } from '../../agents/codexWorkerGuard';
-import { isBotWorkerSession, paneLaunchFolders } from '../../agents/botWorkerMergeGuard';
+import { isBotWorkerSession, noteGuardedLaunchTyped, paneLaunchFolders } from '../../agents/botWorkerMergeGuard';
 import { folderTrustLaunchRefusal } from '../../folderTrustCheck';
 
 const execFileAsync = promisify(execFile);
@@ -366,6 +366,7 @@ export function registerWorktaskHandlers(
       // 정상 경로(scheduleInitialCommand.write)와 동일: sanitize + CR.
       const typed = dc.writeToSession(ptyId, sanitizePtyText(line) + '\r') !== false;
       settleRelaunch?.(typed);
+      if (typed) noteGuardedLaunchTyped(ptyId, line);
       return { ok: true as const };
     }),
   );

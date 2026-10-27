@@ -677,4 +677,16 @@ export const hi = {
   'worktask.cleanup.detail.orphanMeta': 'केवल कार्य रिकॉर्ड बचा है, worktree नहीं (हटाना बीच में रुक गया) — जाँचें, फिर हटाएँ।',
   'worktask.cleanup.detail.diskMissing': 'worktree डिस्क पर नहीं है (wmux के बाहर हटाया गया, या क्रैश) — साफ़ करने के लिए कार्य बंद करें।',
   'botsPage.guest.readNotice': "अब से एक बाहरी बॉट इस बातचीत के संदेश पढ़ सकता है और इसमें लिख सकता है। जोड़े जाने से पहले कही गई बातें वह कभी नहीं देखता।",
+
+  // Scheduled runs: one retry after a temporary provider error
+  'claudeIntegration.scheduledRetry': "अस्थायी त्रुटि के बाद शेड्यूल किए गए रन फिर से आज़माएँ",
+  'claudeIntegration.scheduledRetryDesc': "अगर किसी शेड्यूल किए गए रन का टर्न नेटवर्क या प्रदाता सर्वर त्रुटि से विफल होता है, तो 5 मिनट रुककर एक बार जारी रखने का संदेश भेजें। डिफ़ॉल्ट रूप से चालू; हर शेड्यूल इसे बंद कर सकता है।",
+  'claudeIntegration.scheduledRetryUnknown': "अभी पता नहीं: wmux बैकग्राउंड सेवा की प्रतीक्षा है।",
+  'schedules.retryTransient': "अस्थायी त्रुटि के बाद एक बार फिर आज़माएँ",
+  'schedules.retryTransientHint': "नेटवर्क या प्रदाता सर्वर त्रुटि पर 5 मिनट रुककर एक बार जारी रखने का संदेश भेजें। प्रॉम्प्ट दोबारा नहीं भेजा जाता।",
+  'schedules.retryTransientGlobalHint': "यह तभी लागू होता है जब सेटिंग्स → Claude इंटीग्रेशन में “अस्थायी त्रुटि के बाद शेड्यूल किए गए रन फिर से आज़माएँ” चालू हो।",
+  'schedules.state.retryWaiting': "प्रतीक्षा: अस्थायी प्रदाता त्रुटि के बाद फिर से प्रयास ({minutes} मिनट में)",
+  'schedules.reason.agent_error_retried_once': "एक बार फिर प्रयास के बाद फिर से एजेंट त्रुटि",
+  'schedules.reason.agent_error_retry_blocked': "एजेंट त्रुटि; फिर से प्रयास नहीं भेजा जा सका",
+  'schedules.reason.agent_error_retry_interrupted': "एजेंट त्रुटि; फिर प्रयास नहीं हुआ, wmux फिर से शुरू हुआ",
 } as const;

@@ -43,7 +43,8 @@ import type { RpcContext } from '../../../shared/rpc';
 import type { DaemonClient } from '../../DaemonClient';
 import { getTaskLedger } from '../../deck/taskLedgerHost';
 import type { TaskLedger } from '../../../daemon/ledger/TaskLedger';
-import { looksLikeApprovalPrompt, looksLikeFolderTrustDialog } from '../../../daemon/approvals/approvalKeystrokes';
+import { looksLikeApprovalPrompt, readFolderTrustScreen } from '../../../daemon/approvals/approvalKeystrokes';
+import type { FolderTrustState } from '../../../daemon/folderTrustState';
 import { parseTerminalPrompt } from '../../../daemon/approvals/terminalPromptParse';
 import { loadWorkspaceMode, type AgentMode } from '../../deck/deckAutonomyStore';
 import { workspaceFactsSettled } from '../../workspace/workspaceFactsFeed';
@@ -253,10 +254,13 @@ export function approvalOnScreen(screenText: string): boolean {
 /**
  * Is an agent's folder-trust dialog on this screen right now? Unlike an
  * approval, no workspace policy lets an automated caller answer it: whether an
- * agent may work in a folder is the person's decision. Same tail as above.
+ * agent may work in a folder is the person's decision. Same tail as above,
+ * and the same verdicts as the daemon's (folderTrustState): a trust question
+ * over choices cut too short to read is 'unknown', not 'clear'.
  */
-export function folderTrustOnScreen(screenText: string): boolean {
-  return looksLikeFolderTrustDialog(screenText.split('\n').slice(-60));
+export function folderTrustOnScreen(screenText: string): FolderTrustState {
+  const onScreen = readFolderTrustScreen(screenText.split('\n').slice(-60));
+  return onScreen === 'trust' ? 'trust' : onScreen === 'unreadable' ? 'unknown' : 'clear';
 }
 
 /** The refusal raw input gets while a folder-trust dialog is on screen. */
@@ -264,9 +268,10 @@ export function folderTrustGateMessage(op: string, ptyId: string): string {
   return `${op}: pane "${ptyId}" is on a folder-trust prompt; answer it in the pane.`;
 }
 
-/** The refusal when neither the renderer nor the daemon could say whether a folder-trust prompt is up. */
+/** The refusal when neither the renderer nor the daemon could say whether a folder-trust prompt is up,
+ *  or the screen shows a trust question over choices too narrow to read. */
 export function folderTrustUnknownMessage(op: string, ptyId: string): string {
-  return `${op}: pane "${ptyId}" has no readable screen, so a folder-trust prompt cannot be ruled out; retry once the pane is shown.`;
+  return `${op}: pane "${ptyId}" has no screen that reads whole (none was read, or a trust question's choices are cut too short), so a folder-trust prompt cannot be ruled out; retry once the pane is shown wide enough.`;
 }
 
 /** The refusal raw input gets when an approval is on screen and policy is off. */

@@ -790,6 +790,9 @@ const electronAPI = {
     getTrustAgyFolders: () => ipcRenderer.invoke(IPC.FANOUT_TRUST_AGY_FOLDERS_GET) as Promise<boolean>,
     setTrustAgyFolders: (value: boolean) =>
       ipcRenderer.invoke(IPC.FANOUT_TRUST_AGY_FOLDERS_SET, value) as Promise<boolean>,
+    getWorkerFenceOff: (workspaceId: string) => ipcRenderer.invoke(IPC.WORKER_FENCE_OFF_GET, workspaceId) as Promise<boolean>,
+    setWorkerFenceOff: (workspaceId: string, off: boolean) =>
+      ipcRenderer.invoke(IPC.WORKER_FENCE_OFF_SET, workspaceId, off) as Promise<boolean>,
     getWorkerPermissionMode: () =>
       ipcRenderer.invoke(IPC.FANOUT_WORKER_MODE_GET) as Promise<
         import('../shared/workerLaunch').FanoutWorkerPermissionMode
@@ -970,6 +973,11 @@ const electronAPI = {
       ipcRenderer.invoke(IPC.AUTOMATION_RUN_NOW, id, kind, ...(endSessionOf === undefined ? [] : [endSessionOf])) as Promise<import('../shared/automation').AutomationRunNowResult>,
     cancelRun: (runId: string) =>
       ipcRenderer.invoke(IPC.AUTOMATION_CANCEL_RUN, runId) as Promise<import('../shared/automation').AutomationOkResult>,
+    /** Null when the daemon is not reachable or too old to have them. */
+    settings: () =>
+      ipcRenderer.invoke(IPC.AUTOMATION_SETTINGS) as Promise<import('../shared/automation').AutomationSettings | null>,
+    setSettings: (settings: import('../shared/automation').AutomationSettings) =>
+      ipcRenderer.invoke(IPC.AUTOMATION_SET_SETTINGS, settings) as Promise<import('../shared/automation').AutomationSettingsResult>,
     // The UI locale id only; main owns the toast words.
     setUiLocale: (locale: string) => ipcRenderer.send(IPC.AUTOMATION_TOAST_LABELS, locale),
     onPush: (callback: (push: import('../main/automation/AutomationBridge').AutomationPush) => void) => {

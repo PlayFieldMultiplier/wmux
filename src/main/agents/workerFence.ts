@@ -23,7 +23,7 @@
 import os from 'node:os';
 import path from 'node:path';
 import { launcherStem, tokenize, type PermissionMode } from '../../shared/agentResume';
-import { isClaudeLauncher, namesClaude, spliceSettingsFlag } from '../../shared/botWorkerGuard';
+import { WORKER_FENCE_FILE_ALLOW_RULE, WORKER_FENCE_REFUSED_PERMISSION_KEYS, WORKER_FENCE_REFUSED_SETTINGS_KEYS, WORKER_FENCE_REFUSED_WMUX_TOOLS, isClaudeLauncher, namesClaude, spliceSettingsFlag } from '../../shared/botWorkerGuard';
 import { splitModelEnvMarker } from '../../shared/workerLaunch';
 import { botSandboxDenyRead, type BotSandboxInput } from '../factory/botExecSandbox';
 import { WORKER_GATE_TIMEOUT_S } from './workerToolGate';
@@ -94,6 +94,13 @@ export interface WorkerFenceInput {
   credentialPaths: readonly string[];
   /** The owner's home folder (permission rules name paths in it by `~/`). */
   home: string;
+  /** More paths the sandbox's commands may not write (absolute; a glob
+   *  where the platform's sandbox takes one): other sessions' folders in
+   *  claude's own temp folder, which the sandbox always lets commands write. */
+  extraDenyWrite?: readonly string[];
+  /** Which of the git denies to keep (default: all). On Linux main keeps
+   *  only the paths that exist, as bubblewrap binds each one. */
+  keepGitDeny?: (p: string) => boolean;
 }
 
 export interface WorkerFence {
@@ -136,15 +143,38 @@ function requireBranchPath(name: string): string[] {
   return parts;
 }
 
-function isWithin(child: string, parent: string): boolean {
+/** `child` is `parent` or inside it (both absolute, resolved). Pure. */
+export function isWithin(child: string, parent: string): boolean {
   if (child === parent) return true;
   return child.startsWith(parent.endsWith(path.sep) ? parent : parent + path.sep);
 }
 
 /**
+ * The paths in the git common dir the worker's commands may write. A linked
+ * worktree: the loose objects, its own folder under `worktrees/`, and the
+ * folder its branch's ref and reflog sit in (`refs/heads/` and
+ * `logs/refs/heads/` themselves for a branch with no `/`); nothing for the
+ * refs of a detached one. The main checkout's git dir is the common dir, so
+ * it is the whole of it. The denies (workerFenceGitDenies) narrow both.
+ * Pure.
+ */
+export function workerFenceGitWrites(input: Pick<WorkerFenceInput, 'gitCommonDir' | 'isLinkedWorktree' | 'ownWorktreeName' | 'ownBranch'>): string[] {
+  const git = requireAbsolute('the git common dir', input.gitCommonDir);
+  if (!input.isLinkedWorktree) return [git];
+  if (input.ownWorktreeName === null) throw new Error('worker fence: a linked worktree needs its folder name under worktrees/');
+  const out = [path.join(git, 'objects'), path.join(git, 'worktrees', requireFolderName('worktree', input.ownWorktreeName))];
+  if (input.ownBranch !== null) {
+    const parent = requireBranchPath(input.ownBranch).slice(0, -1);
+    out.push(path.join(git, 'refs', 'heads', ...parent), path.join(git, 'logs', 'refs', 'heads', ...parent));
+  }
+  return out;
+}
+
+/**
  * The paths in the git common dir the worker's commands may not write. What
  * a commit on its own branch writes (loose objects, its own ref, its own
- * index and HEAD, the logs) stays open; packs, every other ref, replace refs
+ * index, the logs) stays open; its own HEAD (a commit on a branch moves the
+ * ref, not HEAD) does not while it is on a branch; packs, every other ref, replace refs
  * and notes, the main checkout's HEAD, hooks, config, `info/` (grafts,
  * attributes), `shallow`, `objects/info/` (alternates), submodules' git dirs,
  * the reftable store (a reftable repository's refs are not files) and every
@@ -176,12 +206,20 @@ export function workerFenceGitDenies(input: Pick<WorkerFenceInput, 'gitCommonDir
     path.join(git, 'modules'),
     path.join(git, 'shallow'),
     path.join(git, 'reftable'),
+    // Remotes git still reads from files of their own.
+    path.join(git, 'remotes'),
+    path.join(git, 'branches'),
     path.join(ownGitDir, 'config.worktree'),
   ]);
   if (input.isLinkedWorktree) {
     out.add(path.join(git, 'index'));
     out.add(path.join(ownGitDir, 'commondir'));
     out.add(path.join(ownGitDir, 'gitdir'));
+    if (input.ownBranch !== null) out.add(path.join(ownGitDir, 'HEAD'));
+  } else {
+    // The main checkout's git dir is the common dir, all of it writable but
+    // for these: no linked worktree's metadata, made before launch or after.
+    out.add(path.join(git, 'worktrees'));
   }
   for (const name of input.otherWorktrees) {
     if (name === input.ownWorktreeName) continue;
@@ -265,7 +303,7 @@ export function buildWorkerFence(input: WorkerFenceInput): WorkerFence {
   const git = requireAbsolute('the git common dir', input.gitCommonDir);
   if (typeof input.hookCommand !== 'string' || input.hookCommand.trim() === '') throw new Error('worker fence: no hook command');
   const credentials = input.credentialPaths.map((p) => requireAbsolute('a credential path', p));
-  const deny = workerFencePermissionDenies(credentials, [worktree, tmp, git], input.home);
+  const deny = [...workerFencePermissionDenies(credentials, [worktree, tmp, git], input.home), ...WORKER_FENCE_REFUSED_WMUX_TOOLS];
   const hooks = {
     PreToolUse: [{ matcher: '.*', hooks: [{ type: 'command', command: input.hookCommand, timeout: WORKER_GATE_TIMEOUT_S }] }],
   };
@@ -287,10 +325,14 @@ export function buildWorkerFence(input: WorkerFenceInput): WorkerFence {
     // `gh` reaches GitHub only with it (measured on macOS).
     enableWeakerNetworkIsolation: true,
     filesystem: {
-      // The git common dir too: a linked worktree commits into it (narrowed
-      // by the denies below, which win over it).
-      allowWrite: [...new Set([worktree, tmp, git, ...tests])],
-      denyWrite: [...workerFenceWorktreeDenies(worktree, input.isLinkedWorktree), ...workerFenceGitDenies(input)],
+      // What a commit on the worker's own branch writes in the git common
+      // dir (narrowed by the denies below, which win over it).
+      allowWrite: [...new Set([worktree, tmp, ...workerFenceGitWrites(input), ...tests])],
+      denyWrite: [
+        ...workerFenceWorktreeDenies(worktree, input.isLinkedWorktree),
+        ...workerFenceGitDenies(input).filter((p) => !input.keepGitDeny || input.keepGitDeny(p)),
+        ...(input.extraDenyWrite ?? []).map((p) => requireAbsolute('a denied write path', p)),
+      ],
       denyRead: credentials,
       // Re-opened should a denied folder hold them (wmux keeps worktrees in
       // its home folder).
@@ -331,14 +373,9 @@ const WRAPPER_STEMS: ReadonlySet<string> = new Set([
 // them in the worker folder's project settings; mergeWorkerFenceSettings
 // refuses them in the launch's own extras.
 
-/** Top-level settings keys: a sandbox of their own, or hooks turned off. */
-export const WORKER_FENCE_REFUSED_SETTINGS_KEYS: readonly string[] = ['sandbox', 'disableAllHooks'];
-
-/** `permissions` keys claude also opens the sandbox's writes by. */
-export const WORKER_FENCE_REFUSED_PERMISSION_KEYS: readonly string[] = ['additionalDirectories'];
-
-/** An allow rule for a file tool: claude widens the sandbox's writes by it. */
-export const WORKER_FENCE_FILE_ALLOW_RULE = /^\s*(Read|Edit|Write|MultiEdit|NotebookEdit)\s*(\(|$)/;
+// The keys and rules themselves live in shared/botWorkerGuard.ts (the
+// daemon's phone launch checks a worktree with them too).
+export { WORKER_FENCE_FILE_ALLOW_RULE, WORKER_FENCE_REFUSED_PERMISSION_KEYS, WORKER_FENCE_REFUSED_SETTINGS_KEYS, WORKER_FENCE_REFUSED_WMUX_TOOLS };
 
 const UNSAFE_KEYS: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype']);
 
@@ -477,7 +514,8 @@ export const WORKER_FENCE_INPUT_TIMEOUT_MS = 10_000;
  * root or late input exits 2.
  *
  * For each call:
- *   - an MCP tool, or a built-in in WORKER_FENCE_PASS_TOOLS, passes;
+ *   - a wmux tool in WORKER_FENCE_REFUSED_WMUX_TOOLS is refused; any other
+ *     MCP tool, or a built-in in WORKER_FENCE_PASS_TOOLS, passes;
  *   - a built-in in WORKER_FENCE_REFUSED_TOOLS is refused, and so is a
  *     subagent (WORKER_FENCE_AGENT_TOOLS) asked for an isolation of its own;
  *   - a write tool (WORKER_FENCE_WRITE_TOOLS) passes only when every path it
@@ -496,6 +534,7 @@ export function workerFenceHookScript(): string {
     write: WORKER_FENCE_WRITE_TOOLS,
     pass: WORKER_FENCE_PASS_TOOLS,
     refused: WORKER_FENCE_REFUSED_TOOLS,
+    refusedMcp: WORKER_FENCE_REFUSED_WMUX_TOOLS,
     agents: WORKER_FENCE_AGENT_TOOLS,
     fields: WORKER_FENCE_PATH_FIELDS,
     configFiles: WORKER_FENCE_CONFIG_FILES.map((f) => f.toLowerCase()),
@@ -564,6 +603,7 @@ try {
     if (!ev || typeof ev !== 'object' || Array.isArray(ev)) refuse('the call is not an object; call refused');
     const tool = ev.tool_name;
     if (typeof tool !== 'string' || tool.length === 0) refuse('the call names no tool; call refused');
+    if (P.refusedMcp.includes(tool)) refuse(tool + ' is not available inside the worker fence');
     if (tool.startsWith('mcp__') || P.pass.includes(tool)) process.exit(0);
     if (P.refused.includes(tool)) refuse(tool + ' is not available inside the worker fence');
     const input = ev.tool_input;
@@ -602,9 +642,27 @@ try {
  *  node, the script, then the roots (the worktree first, then the worker's
  *  temp folder), each in double quotes. Null when there is no root or a path
  *  is not absolute or holds what a POSIX shell reads inside double quotes
- *  (`"`, `$`, a backtick, a backslash) or a line break. Pure. */
-export function workerFenceHookCommand(runtime: string, script: string, roots: readonly string[]): string | null {
-  const plain = (p: string) => /^\/[^"$`\\\0\r\n]*$/.test(p);
-  if (roots.length === 0 || ![runtime, script, ...roots].every(plain)) return null;
-  return `ELECTRON_RUN_AS_NODE=1 "${runtime}" "${script}" ${roots.map((r) => `"${r}"`).join(' ')} || exit 2`;
+ *  (`"`, `$`, a backtick, a backslash) or a line break.
+ *
+ *  On Windows claude runs a hook in Git Bash, so the line keeps its POSIX
+ *  form and each drive path is written with forward slashes (`C:/…`), which
+ *  bash leaves alone and Windows reads as the same path. Without Git Bash,
+ *  claude counts only exit 0 or 2 from such a hook and blocks on anything
+ *  else, so a line that shell cannot run refuses the call. A UNC path, a
+ *  path that is not a drive path, or one holding `%` or `!` (which cmd
+ *  reads) gives null. Pure. */
+export function workerFenceHookCommand(runtime: string, script: string, roots: readonly string[], platform: NodeJS.Platform = process.platform): string | null {
+  if (roots.length === 0) return null;
+  const paths = [runtime, script, ...roots];
+  let quoted: string[];
+  if (platform === 'win32') {
+    const drive = (p: string) => /^[A-Za-z]:[\\/][^"$`%!\0\r\n]*$/.test(p) && !/[\\/]{2}/.test(p.slice(2));
+    if (!paths.every(drive)) return null;
+    quoted = paths.map((p) => `"${p.replace(/\\/g, '/')}"`);
+  } else {
+    const plain = (p: string) => /^\/[^"$`\\\0\r\n]*$/.test(p);
+    if (!paths.every(plain)) return null;
+    quoted = paths.map((p) => `"${p}"`);
+  }
+  return `ELECTRON_RUN_AS_NODE=1 ${quoted.join(' ')} || exit 2`;
 }
