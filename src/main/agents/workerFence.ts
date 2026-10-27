@@ -233,6 +233,65 @@ export function workerFenceGitDenies(input: Pick<WorkerFenceInput, 'gitCommonDir
   return [...out];
 }
 
+/** The most patterns workerFenceWorktreeComplement gives. Measured with
+ *  Claude Code 2.1.311 on macOS: 199 and 799 applied, 1599 did not
+ *  ("profile too large", and then no command runs). wmux names a task's
+ *  folder in at most 33 characters, about 170 patterns. */
+export const WORKER_FENCE_COMPLEMENT_MAX = 200;
+
+const COMPLEMENT_NAME = /^[0-9A-Za-z._-]+$/;
+/** What Claude Code's glob syntax could read in the literal part of a path. */
+const GLOB_CHARS = /[*?[\]{}\\]/;
+
+/** `lo-hi` without `c`, as a class's ranges. */
+function rangeWithout(lo: string, hi: string, c: string): string {
+  if (c < lo || c > hi) return `${lo}-${hi}`;
+  const out: string[] = [];
+  const before = String.fromCharCode(c.charCodeAt(0) - 1);
+  const after = String.fromCharCode(c.charCodeAt(0) + 1);
+  if (c > lo) out.push(before === lo ? lo : `${lo}-${before}`);
+  if (c < hi) out.push(after === hi ? hi : `${after}-${hi}`);
+  return out.join('');
+}
+
+/** Every letter and digit but `c`, in either case: the sandbox matches
+ *  paths without regard to case, so `[A-Z]` would match `w` too. */
+function classWithout(c: string): string {
+  return `[${rangeWithout('0', '9', c)}${rangeWithout('A', 'Z', c.toUpperCase())}${rangeWithout('a', 'z', c.toLowerCase())}]`;
+}
+
+/**
+ * macOS: claude keeps a linked worktree's whole git common dir writable,
+ * so the snapshot of other worktrees (workerFenceGitDenies) misses one made
+ * after launch. These globs deny every folder under `worktrees/` but the
+ * worker's own: a name that differs from it at some position (a letter,
+ * digit, `.`, `_` or `-` other than its own there), a shorter name it
+ * starts with, and a longer one that starts with it. Classes take ranges
+ * only: a negated class is not one, and a long list of characters breaks
+ * the profile. Null (keep to the snapshot) when the name has another
+ * character, the common dir's path has one a glob would read, or the
+ * patterns would pass WORKER_FENCE_COMPLEMENT_MAX. What it leaves: a name
+ * with another character where it differs, or one that differs from the
+ * worker's only in case. Pure.
+ */
+export function workerFenceWorktreeComplement(gitCommonDir: string, ownName: string): string[] | null {
+  const git = requireAbsolute('the git common dir', gitCommonDir);
+  if (!COMPLEMENT_NAME.test(ownName) || ownName === '.' || ownName === '..' || GLOB_CHARS.test(git)) return null;
+  const root = path.join(git, 'worktrees');
+  const out: string[] = [];
+  for (let i = 0; i < ownName.length; i++) {
+    const head = ownName.slice(0, i);
+    const c = ownName[i];
+    out.push(`${head}${classWithout(c)}*`);
+    if (c !== '.') out.push(`${head}[.]*`);
+    if (c !== '_') out.push(`${head}_*`);
+    if (c !== '-') out.push(`${head}-*`);
+  }
+  for (let i = 1; i < ownName.length; i++) out.push(ownName.slice(0, i));
+  out.push(`${ownName}?*`);
+  return out.length > WORKER_FENCE_COMPLEMENT_MAX ? null : out.map((p) => `${root}/${p}`);
+}
+
 /** The files at the worktree's root through which claude runs a program
  *  outside the fence when its next session starts there: project settings
  *  (hooks) and MCP servers. Paths relative to the worktree, `/`-separated.

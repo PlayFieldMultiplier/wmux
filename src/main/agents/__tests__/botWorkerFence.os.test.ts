@@ -30,6 +30,8 @@ import {
   runWorkerFenceSelfTest,
   workerFenceFolderRefusal,
   workerFenceSupport,
+  worktreeComplementDenies,
+  WORKER_FENCE_SELF_TEST_WORKTREE,
   type WorkerFenceSupport,
 } from '../botWorkerFence';
 import { getWorkerFencePolicyPath, isWorkerFenceOff, setWorkerFenceOff } from '../workerFencePolicy';
@@ -535,6 +537,52 @@ describe.skipIf(isWin)('the self-test', () => {
     fs.writeFileSync(fake, '#!/bin/sh\nsleep 30 &\nwait\n', { mode: 0o755 });
     const r = await runWorkerFenceSelfTest(fake, { dir, runtime: RUNTIME, timeoutMs: 500, paneEnv: async () => ({ PATH: '/usr/bin:/bin' }) });
     expect(r).toEqual({ ok: false, reason: 'claude did not run a command inside the fence (timed out)', transient: true });
+  });
+});
+
+describe.skipIf(isWin)('the worktree patterns on macOS', () => {
+  const darwin = { runtime: RUNTIME, home, env: {}, platform: 'darwin' as const, claudeTempRoots: [] };
+  const denyOf = (support: WorkerFenceSupport, platform: NodeJS.Platform = 'darwin') =>
+    (settingsOf(create(LINE, deps({ fenceSupport: support, fence: { ...darwin, home, platform } }))?.initialCommand ?? '').sandbox as { filesystem: { denyWrite: string[] } }).filesystem.denyWrite;
+  const common = () => fs.realpathSync(path.join(repo, '.git'));
+
+  it('a launch adds them where the self-test applied them, beside the snapshot of other worktrees', () => {
+    const d = denyOf({ ...FULL, selfTest: { ok: true, worktreePatterns: true } });
+    expect(d).toEqual(expect.arrayContaining([`${common()}/worktrees/[0-9A-SU-Za-su-z]*`, `${common()}/worktrees/task-1?*`, path.join(common(), 'worktrees', 'task-2')]));
+    expect(d).not.toContain(`${common()}/worktrees/task-1`);
+    // A self-test that did not apply them, or another platform: the snapshot alone.
+    for (const other of [denyOf(FULL), denyOf({ ...FULL, selfTest: { ok: true, worktreePatterns: true } }, 'linux')]) {
+      expect(other.filter((p) => p.includes('*') && p.includes(`${path.sep}worktrees${path.sep}`))).toEqual([]);
+      expect(other).toContain(path.join(common(), 'worktrees', 'task-2'));
+    }
+  });
+
+  it('a name they cannot take keeps to the snapshot, logged once', () => {
+    const logs: string[] = [];
+    const facts = { gitCommonDir: common(), isLinkedWorktree: true, ownWorktreeName: 'task 1' };
+    expect(worktreeComplementDenies(facts, 'darwin', (l) => logs.push(l))).toEqual([]);
+    expect(worktreeComplementDenies(facts, 'darwin', (l) => logs.push(l))).toEqual([]);
+    expect(logs).toHaveLength(1);
+    expect(worktreeComplementDenies({ ...facts, isLinkedWorktree: false, ownWorktreeName: null }, 'darwin', (l) => logs.push(l))).toEqual([]);
+    expect(worktreeComplementDenies({ ...facts, ownWorktreeName: 'task-1' }, 'linux', (l) => logs.push(l))).toEqual([]);
+    expect(logs).toHaveLength(1);
+  });
+
+  it('the self-test passes with them only when the own git folder takes a write and a sibling\'s does not', async () => {
+    const run = async (body: string) => {
+      const fake = path.join(root, `fake-${Math.random().toString(36).slice(2)}`);
+      fs.writeFileSync(fake, `#!/bin/sh\ntouch ran\n${body}\n`, { mode: 0o755 });
+      return runWorkerFenceSelfTest(fake, { dir, runtime: RUNTIME, timeoutMs: 10_000, platform: 'darwin', paneEnv: async () => ({ PATH: '/usr/bin:/bin' }) });
+    };
+    const own = `../git/worktrees/${WORKER_FENCE_SELF_TEST_WORKTREE}/probe`;
+    expect(await run(`touch ${own} && touch own`)).toEqual({ ok: true, worktreePatterns: true });
+    expect(await run(`touch ${own} && touch own; touch ../git/worktrees/sibling/probe`)).toEqual({ ok: false, reason: 'a command wrote another worktree\'s git folder, so the worktree patterns are not holding' });
+    expect(await run(`touch ${own} && touch own; mkdir ../git/worktrees/added`)).toMatchObject({ ok: false });
+    expect(await run('')).toEqual({ ok: false, reason: 'a command could not write its own worktree\'s git folder under the worktree patterns' });
+    // Elsewhere the self-test is the plain one.
+    const fake = path.join(root, 'fake-plain');
+    fs.writeFileSync(fake, '#!/bin/sh\ntouch ran\n', { mode: 0o755 });
+    expect(await runWorkerFenceSelfTest(fake, { dir, runtime: RUNTIME, timeoutMs: 10_000, platform: 'linux', paneEnv: async () => ({ PATH: '/usr/bin:/bin' }) })).toEqual({ ok: true });
   });
 });
 

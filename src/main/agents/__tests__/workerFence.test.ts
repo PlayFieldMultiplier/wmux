@@ -12,7 +12,9 @@ import {
   workerFenceHookCommand,
   workerFenceLaunch,
   workerFencePermissionDenies,
+  workerFenceWorktreeComplement,
   workerFenceWorktreeDenies,
+  WORKER_FENCE_COMPLEMENT_MAX,
   WORKER_FENCE_FILE_ALLOW_RULE,
   WORKER_FENCE_REFUSED_PERMISSION_KEYS,
   WORKER_FENCE_REFUSED_SETTINGS_KEYS,
@@ -82,6 +84,62 @@ describe('the git denies', () => {
 
   it('a detached linked worktree keeps its own HEAD writable', () => {
     expect(workerFenceGitDenies(input({ ownBranch: null }))).not.toContain(g('worktrees', 'task-1', 'HEAD'));
+  });
+});
+
+/** Whether a folder name under `worktrees/` falls under one of the patterns,
+ *  read the way the macOS sandbox was measured to read them: a pattern with
+ *  `*`, `?` or `[` is a glob of one path segment, matched without regard to
+ *  case; any other is the folder and what it holds. */
+function deniedName(patterns: readonly string[], root: string, name: string): boolean {
+  return patterns.some((full) => {
+    const p = full.slice(root.length + 1);
+    if (!/[*?[]/.test(p)) return p.toLowerCase() === name.toLowerCase();
+    const re = p.replace(/\[[^\]]*\]|\*|\?|[^[*?]+/g, (t) => (t === '*' ? '[^/]*' : t === '?' ? '[^/]' : t.startsWith('[') ? t : t.replace(/[.\\^$+(){}|-]/g, '\\$&')));
+    return new RegExp(`^${re}$`, 'i').test(name);
+  });
+}
+
+describe.skipIf(process.platform === 'win32')('the worktree patterns (macOS)', () => {
+  const root = g('worktrees');
+  const complement = (name: string): string[] => {
+    const p = workerFenceWorktreeComplement(GIT, name);
+    if (!p) throw new Error(`no patterns for ${name}`);
+    return p;
+  };
+
+  it('close every other name, a longer, a shorter and a new one, and never the worker\'s own', () => {
+    const own = 'fix-a.b_9-x1y2z3w4';
+    const pats = complement(own);
+    expect(deniedName(pats, root, own)).toBe(false);
+    for (const other of ['fix-a.b_9-x1y2z3w5', 'fix-a.b_9-x1y2z3w4-2', 'fix-a.b_9-x1y2z3w41', 'fix-a', 'f', 'fix_a', 'fix.a', 'gix-a.b_9-x1y2z3w4', 'task-2', '0', 'zz', '-x', '.x', '_x']) {
+      expect(deniedName(pats, root, other), other).toBe(true);
+    }
+  });
+
+  it('drop the own character in both cases, and spell `.` as a class', () => {
+    const pats = complement('w.');
+    expect(pats).toEqual([
+      `${root}/[0-9A-VX-Za-vx-z]*`, `${root}/[.]*`, `${root}/_*`, `${root}/-*`,
+      `${root}/w[0-9A-Za-z]*`, `${root}/w_*`, `${root}/w-*`,
+      `${root}/w`,
+      `${root}/w.?*`,
+    ]);
+    // A digit and the class's ends: a, z, 0, 9.
+    expect(complement('a')[0]).toBe(`${root}/[0-9B-Zb-z]*`);
+    expect(complement('z')[0]).toBe(`${root}/[0-9A-Ya-y]*`);
+    expect(complement('0')[0]).toBe(`${root}/[1-9A-Za-z]*`);
+    expect(complement('8')[0]).toBe(`${root}/[0-79A-Za-z]*`);
+  });
+
+  it('none past the cap, for another character in the name, or a repository path a glob would read', () => {
+    expect(workerFenceWorktreeComplement(GIT, 'a'.repeat(WORKER_FENCE_COMPLEMENT_MAX / 5))).toHaveLength(WORKER_FENCE_COMPLEMENT_MAX);
+    expect(workerFenceWorktreeComplement(GIT, 'a'.repeat(WORKER_FENCE_COMPLEMENT_MAX / 5 + 1))).toBeNull();
+    for (const name of ['task 1', 'tâche', 'a+b', 'a/b', '.', '..', '']) expect(workerFenceWorktreeComplement(GIT, name), name).toBeNull();
+    expect(workerFenceWorktreeComplement(path.resolve('/Users/me/my [repo] (copy)/.git'), 'task-1')).toBeNull();
+    expect(workerFenceWorktreeComplement(path.resolve('/Users/me/a*b/.git'), 'task-1')).toBeNull();
+    expect(workerFenceWorktreeComplement(path.resolve('/Users/me/my repo (copy)/.git'), 'task-1')).not.toBeNull();
+    expect(() => workerFenceWorktreeComplement('rel/.git', 'task-1')).toThrow();
   });
 });
 
