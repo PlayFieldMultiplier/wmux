@@ -796,21 +796,6 @@ function showMouseOwnedHintToast(keys: { mac: string; other: string } = MOUSE_OW
   mouseOwnedToastTimer = setTimeout(() => { node.style.opacity = '0'; }, visibleMs);
 }
 
-/** The web client's hint while a refused copy waits for the user's next tap
- *  or key (webClipboardApi). No timer: the pending copy decides when it goes. */
-export function setPendingCopyHint(visible: boolean) {
-  let el = document.getElementById('wmux-pending-copy-toast');
-  if (!el) {
-    if (!visible) return;
-    el = document.createElement('div');
-    el.id = 'wmux-pending-copy-toast';
-    el.style.cssText = 'position:fixed;bottom:28px;left:50%;transform:translateX(-50%);background:var(--accent-yellow);color:var(--bg-base);font-family:monospace;font-size:11px;font-weight:600;padding:3px 12px;border-radius:4px;z-index:9999;pointer-events:none;opacity:0;transition:opacity 0.2s';
-    document.body.appendChild(el);
-  }
-  el.textContent = t('terminal.copyPendingGesture');
-  el.style.opacity = visible ? '1' : '0';
-}
-
 /**
  * Centralized async copy helper. main may now `throw` on validation/size/lock
  * failures (clipboard.handler), so renderer must await + catch to surface the
@@ -2116,7 +2101,9 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
     // UI noise. Errors are also silent: the explicit Ctrl+C path still
     // surfaces them on retry.
     const autoCopy = createAutoSelectionCopy({
-      write: (text) => window.clipboardAPI.writeText(text),
+      // Silent on the web too: a refused auto-copy is not kept for the next
+      // key, which could be the ⌘V meant to paste what the clipboard holds.
+      write: (text) => window.clipboardAPI.writeText(text, { keepIfRefused: false }),
     });
     const selectionDisposable = terminal.onSelectionChange(() => {
       autoCopy.onSelection(terminal.getSelection());
