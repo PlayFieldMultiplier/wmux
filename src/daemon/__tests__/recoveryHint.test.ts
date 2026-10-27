@@ -82,4 +82,10 @@ describe('markCwdMissing', () => {
     const at = src.indexOf("pipeServer.onRpc('daemon.listSessions'");
     expect(src.slice(at, at + 12000)).toMatch(/resumeBinding: markCwdMissing\(surfacedBinding, s, bindingTranscriptLives, fs\.existsSync\)/);
   });
+
+  it('is what /api/workspaces resumes from, so a remote pane never matches a gone folder', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'index.ts'), 'utf-8');
+    const at = src.indexOf('readResumeStateForWeb = (id) =>');
+    expect(src.slice(at, at + 1500)).toMatch(/markCwdMissing\(durable, managed\.meta, bindingTranscriptLives, fs\.existsSync\)/);
+  });
 });

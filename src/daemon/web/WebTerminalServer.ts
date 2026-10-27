@@ -11111,7 +11111,9 @@ function resumeInfoOf(binding: ResumeBinding, paneCwd: string | undefined): Remo
   return {
     agent: binding.agent,
     sessionId: binding.sessionId,
-    cwdMatches:
+    // A folder the daemon reports gone never matches, even when the pane's
+    // recorded cwd still names it: the desktop would type `--resume` there.
+    cwdMatches: binding.cwdMissing !== true &&
       !!paneCwd && !!binding.cwd && normalizeResumeCwd(binding.cwd) === normalizeResumeCwd(paneCwd),
     ...(binding.permissionMode ? { permissionMode: binding.permissionMode } : {}),
   };

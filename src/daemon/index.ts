@@ -5689,7 +5689,11 @@ function registerRpcHandlers(
     const managed = sessionManager.getSession(id);
     if (!managed) return undefined;
     const durable = managed.meta.resumeBinding;
-    const binding = durable && bindingTranscriptLives(durable) ? durable : undefined;
+    // A gone folder is marked as for pty.list, so the host never calls a stale
+    // pane cwd that still names it a match (resumeInfoOf).
+    const binding = durable && bindingTranscriptLives(durable)
+      ? markCwdMissing(durable, managed.meta, bindingTranscriptLives, fs.existsSync)
+      : undefined;
     const commandRunning = managed.promptLog.commandRunningIfKnown();
     // Same three-state derivation as pty.list: an exec unit IS its agent
     // process, a tracked pane answers from the tracker, and anything else stays
