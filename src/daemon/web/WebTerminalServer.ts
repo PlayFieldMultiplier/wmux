@@ -4342,9 +4342,11 @@ export class WebTerminalServer {
           // Help-card typing: only into the tab the open request is about, at
           // the origin its row showed. The origin is the daemon's, never the body's.
           if (!isBrowserHelpId(value.helpRequestId)) return this.json(res,400,{error:'invalid-browser-request'});
+          // Another workspace's request, or another tab's, reads as unknown, closed or not.
           const found = this.deps.browserHelp?.()?.lookup(value.helpRequestId) ?? null;
-          if (found && 'closed' in found) return this.json(res,409,{error:'browser-help-closed'});
-          if (!found || found.row.workspaceId !== workspaceId || found.row.surfaceId !== value.surfaceId) return this.json(res,404,{error:'browser-help-not-found'});
+          const about = found && ('closed' in found ? found : found.row);
+          if (!found || !about || about.workspaceId !== workspaceId || about.surfaceId !== value.surfaceId) return this.json(res,404,{error:'browser-help-not-found'});
+          if ('closed' in found) return this.json(res,409,{error:'browser-help-closed'});
           if (found.row.origin === undefined) return this.json(res,409,{error:'browser-help-origin-changed'});
           return send('browser.type',{...scope,text:value.text,helpOrigin:found.row.origin});
         }

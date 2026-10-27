@@ -165,6 +165,24 @@ describe('phone preview on dedicated-profile Chrome', () => {
     expect(deps.tabs).not.toHaveBeenCalled();
   });
 
+  it('typing follows the last ownership and URL check directly, with focus already emulated', async () => {
+    const { deps, sent } = fakeChrome();
+    const events: string[] = [];
+    const tabs = deps.tabs;
+    deps.tabs = vi.fn(async (ws: string) => { events.push('check'); return tabs(ws); });
+    deps.session = vi.fn(async () => ({ send: async (method: string) => { events.push(method); sent.push({ method }); return {}; } }));
+    await handlePhoneBrowser('browser.type', { ...scope, expectedURL: 'https://shop.example.com/cart', text: 'x' }, fixture(deps));
+    expect(events.slice(-4)).toEqual(['Emulation.setFocusEmulationEnabled', 'check', 'Input.insertText', 'Emulation.setFocusEmulationEnabled']);
+  });
+
+  it('never asks Chrome for an oversized frame', async () => {
+    const { deps, sent, answer } = fakeChrome();
+    answer.mockImplementation(async (method: string) => method === 'Page.getLayoutMetrics'
+      ? { cssVisualViewport: { clientWidth: 4096, clientHeight: 3000, pageX: 0, pageY: 0, scale: 1 } } : { data: 'aGVsbG8=' });
+    await handlePhoneBrowser('browser.capture', scope, fixture(deps));
+    expect(sent.find((c) => c.method === 'Page.captureScreenshot')?.params?.clip).toMatchObject({ width: 4096, height: 3000, scale: 0.5 });
+  });
+
   it('one page session per request', async () => {
     const { deps } = fakeChrome();
     await handlePhoneBrowser('browser.tap', { ...scope, expectedURL: 'https://shop.example.com/cart', geometry, x: 0.5, y: 0.5 }, fixture(deps));
@@ -221,7 +239,8 @@ describe('phone preview on dedicated-profile Chrome', () => {
     let reads = 0;
     racing.deps.tabs = vi.fn(async () => [{ surfaceId: 'chrome-own', url: reads++ < 2 ? 'https://shop.example.com/cart' : 'https://evil.example.com/', title: 'Cart' }]);
     await expect(handlePhoneBrowser('browser.type', { ...scope, expectedURL: 'https://shop.example.com/cart', text: 'x' }, fixture(racing.deps))).rejects.toThrow('page changed');
-    expect(racing.sent).toHaveLength(0);
+    expect(racing.sent.some((c) => c.method === 'Input.insertText')).toBe(false);
+    expect(racing.sent.at(-1)).toEqual({ method: 'Emulation.setFocusEmulationEnabled', params: { enabled: false } });
   });
 
   it('keys go through parseKeyPress; scroll moves the pointer first', async () => {
@@ -293,6 +312,10 @@ describe('which Chrome tabs a workspace has (phoneChromeTabs)', () => {
       listTargets: vi.fn(async () => tabs), closeSurface: async () => false, hasSurface: () => true, dispose: () => undefined,
       selectSurface: vi.fn(async () => true),
       pageSession: vi.fn(async () => ({ send: async () => ({}) })),
+      recordFor: (surfaceId: string) => {
+        const found = tabs.find((t) => t.surfaceId === surfaceId);
+        return found ? { surfaceId, targetId: found.targetId, url: found.url, createdAt: 0, lastSeenAt: 0, ...(found.workspaceId ? { workspaceId: found.workspaceId } : {}) } : undefined;
+      },
       ...extra,
     };
   }
@@ -350,6 +373,12 @@ describe('which Chrome tabs a workspace has (phoneChromeTabs)', () => {
     expect(live.selectSurface).not.toHaveBeenCalled();
     await expect(deps.session('user-tab', 'ws-live')).rejects.toMatchObject({ reason: 'gone' });
     expect(live.pageSession).not.toHaveBeenCalled();
+    // A session goes only to a surface whose own record names this workspace.
+    await deps.session('chrome-mine', 'ws-1');
+    expect(work.pageSession).toHaveBeenCalledWith('chrome-mine');
+    await expect(deps.session('chrome-mine', 'ws-2')).rejects.toMatchObject({ reason: 'gone' });
+    await expect(deps.session('chrome-unknown', 'ws-1')).rejects.toMatchObject({ reason: 'gone' });
+    expect(work.pageSession).toHaveBeenCalledTimes(1);
     expect(deps.canOpen('ws-live')).toBe(false);
     expect(deps.canOpen('ws-1')).toBe(true);
     const paneBound = createPhoneChromeDeps({
@@ -357,6 +386,23 @@ describe('which Chrome tabs a workspace has (phoneChromeTabs)', () => {
       validateNavigation: async () => undefined,
     });
     expect(paneBound.canOpen('ws-1')).toBe(false);
+    // No page sessions possible (tab watcher off or failed): nothing is opened.
+    const noWatcher = createPhoneChromeDeps({
+      registry: { profileFor: () => 'work', isPaneBound: () => false, peekLauncher: () => client([], { canPageSession: () => false }) },
+      validateNavigation: async () => undefined,
+    });
+    expect(noWatcher.canOpen('ws-1')).toBe(false);
+    const notYet = createPhoneChromeDeps({
+      registry: { profileFor: () => 'work', isPaneBound: () => false, peekLauncher: () => undefined },
+      validateNavigation: async () => undefined,
+    });
+    expect(notYet.canOpen('ws-1')).toBe(true);
+    process.env.WMUX_CHROME_TARGET_WATCHER = '0';
+    try {
+      expect(notYet.canOpen('ws-1')).toBe(false);
+    } finally {
+      delete process.env.WMUX_CHROME_TARGET_WATCHER;
+    }
     expect(await deps.tabs('ws-live')).toEqual([]);
   });
 });

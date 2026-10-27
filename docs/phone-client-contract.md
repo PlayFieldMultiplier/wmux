@@ -3653,8 +3653,14 @@ exactly as above.
   window too). Send it only on the user's tap.
 - **Help-card typing**: `{action:"type",…,helpRequestId}` types only into the
   tab that open help request is about (*Browser help requests*), and only while
-  the tab is still at the `origin` its row showed. The daemon takes that origin
-  from its own copy of the request, never from the body.
+  that tab is still at the `origin` its row shows. That origin is the one the
+  tab had when the agent asked, and it never changes afterwards. The daemon
+  takes it from its own copy of the request, never from the body. A request
+  made with no known origin is never typed into this way. A tab that navigated
+  since the phone's last capture usually fails first on `expectedURL`
+  (`503 browser-preview-unavailable`). `409 browser-help-origin-changed`
+  covers the case where `expectedURL` matches but that page's origin is not
+  the request's: the tab left the site after the agent asked.
 
 | Response | Meaning |
 | --- | --- |
@@ -3663,7 +3669,7 @@ exactly as above.
 | `503 {error:"browser-backend-unavailable"}` | No browser to drive: the setting is not Chrome, the workspace uses Live Chrome, or Chrome's connection is not up. |
 | `501 {error:"browser-action-unsupported"}` | The action does not exist for this tab (`viewport` on Chrome, `focus` on a desktop that cannot). |
 | `409 {error:"browser-help-origin-changed"}` | Help-card typing: the tab is no longer at the request's origin, or the request has none. Nothing was typed. |
-| `404 {error:"browser-help-not-found"}` / `409 {error:"browser-help-closed"}` | Help-card typing: no open request with that id for this tab, or it already ended. |
+| `404 {error:"browser-help-not-found"}` / `409 {error:"browser-help-closed"}` | Help-card typing: no request with that id for this workspace and tab (open or closed), or this tab's request already ended. |
 | `503 {error:"browser-preview-unavailable"}` | Any other failure, as before. Never retry input automatically. |
 
 ### New agent pane launch options
@@ -5458,10 +5464,10 @@ the phone and answer them.
   a `chrome` tab that workspace opened; never `live`. A `chrome` row's tab is
   in the preview list only with `?chrome=1`, so a client that does not send
   it treats a `chrome` row as not previewable.
-- `origin`: `scheme://host[:port]` of the tab, read by the desktop when it
-  last sent the list (a request opened or closed, or the desktop
-  reconnected). Absent when it could not read one: no tab, not an http(s)
-  page, a Chrome that is not running, or `live`.
+- `origin`: `scheme://host[:port]` of the tab when the agent made the
+  request, pinned for the request's whole life (a later navigation does not
+  change it). Absent when it was not known then: no tab, not an http(s) page,
+  a Chrome that did not answer, or `live`. Absent stays absent.
 - `deadlineAt`: the desktop closes the request as `timed_out` then. A
   request past it is left out of the list (and answered `409`) even before
   the desktop's next update says so.

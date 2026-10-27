@@ -22,16 +22,17 @@ function tabs(over: Partial<BrowserHelpTabDeps> = {}): BrowserHelpTabDeps {
 }
 
 describe('browserHelpRow', () => {
-  it('an embedded pane this workspace owns is previewable, with its origin only', async () => {
-    const deps = tabs({ builtinUrl: (s, ws) => (s === 'surf-1' && ws === 'ws-1' ? 'https://user:pw@login.example.com:8443/a?b=c#d' : null) });
-    expect(await browserHelpRow(pending(), deps)).toEqual({
+  it('an embedded pane this workspace owns is previewable, with the origin pinned when the request was made', async () => {
+    // The pane has since moved on: the row still carries the origin the request was made at.
+    const deps = tabs({ builtinUrl: (s, ws) => (s === 'surf-1' && ws === 'ws-1' ? 'https://evil.example.com/' : null) });
+    expect(await browserHelpRow(pending({ origin: 'https://login.example.com:8443' }), deps)).toEqual({
       requestId: 'req-1', workspaceId: 'ws-1', surfaceId: 'surf-1', prompt: 'Sign in, then press Done.',
       createdAt: 1_000, deadlineAt: 61_000, backend: 'builtin', previewable: true, origin: 'https://login.example.com:8443',
     });
-    // Not an http(s) page: no origin.
-    const blank = await browserHelpRow(pending(), tabs({ builtinUrl: () => 'about:blank' }));
-    expect(blank).toMatchObject({ previewable: true });
-    expect(blank).not.toHaveProperty('origin');
+    // Unknown when the request was made: never read later, so never an origin.
+    const unknown = await browserHelpRow(pending(), tabs({ builtinUrl: () => 'https://login.example.com/' }));
+    expect(unknown).toMatchObject({ previewable: true });
+    expect(unknown).not.toHaveProperty('origin');
     // Another workspace's pane, or none: not previewable, nothing read.
     expect(await browserHelpRow(pending({ workspaceId: 'ws-2' }), deps)).toMatchObject({ backend: 'builtin', previewable: false });
     expect(await browserHelpRow(pending({ surfaceId: undefined }), deps)).not.toHaveProperty('surfaceId');
@@ -43,7 +44,8 @@ describe('browserHelpRow', () => {
       { surfaceId: 'chrome-b', targetId: 't-b', url: 'https://bank.example.com/' },
     ]);
     const deps = tabs({ backend: () => 'chrome', chromeTabs });
-    expect(await browserHelpRow(pending({ surfaceId: 'chrome-a' }), deps)).toMatchObject({ backend: 'chrome', previewable: true, origin: 'https://shop.example.com' });
+    const shop = { surfaceId: 'chrome-a', origin: 'https://shop.example.com' };
+    expect(await browserHelpRow(pending(shop), deps)).toMatchObject({ backend: 'chrome', previewable: true, origin: 'https://shop.example.com' });
     // Named by its CDP target id: the preview addresses it by surfaceId only.
     expect(await browserHelpRow(pending({ surfaceId: 't-a' }), deps)).toMatchObject({ backend: 'chrome', previewable: false });
     // A tab with no workspace on record is not this workspace's.
@@ -52,13 +54,14 @@ describe('browserHelpRow', () => {
     expect(unclaimed).toMatchObject({ previewable: false });
     // A tab the preview may not drive (a pane's exclusive profile): its origin, not previewable.
     chromeTabs.mockResolvedValueOnce([{ surfaceId: 'chrome-a', targetId: 't-a', workspaceId: 'ws-1', url: 'https://shop.example.com/cart', previewable: false }] as never);
-    expect(await browserHelpRow(pending({ surfaceId: 'chrome-a' }), deps)).toMatchObject({ backend: 'chrome', previewable: false, origin: 'https://shop.example.com' });
+    expect(await browserHelpRow(pending(shop), deps)).toMatchObject({ backend: 'chrome', previewable: false, origin: 'https://shop.example.com' });
+    // A list that cannot be read: not previewable, the pinned origin unchanged.
     chromeTabs.mockRejectedValueOnce(new Error('gone'));
-    expect(await browserHelpRow(pending({ surfaceId: 'chrome-a' }), deps)).not.toHaveProperty('origin');
+    expect(await browserHelpRow(pending(shop), deps)).toMatchObject({ previewable: false, origin: 'https://shop.example.com' });
   });
 
   it('Live Chrome is never previewable and carries no origin', async () => {
-    const row = await browserHelpRow(pending(), tabs({ backend: () => 'chrome', mayBeLiveChrome: () => true }));
+    const row = await browserHelpRow(pending({ origin: 'https://bank.example.com' }), tabs({ backend: () => 'chrome', mayBeLiveChrome: () => true }));
     expect(row).toMatchObject({ backend: 'live', previewable: false });
     expect(row).not.toHaveProperty('origin');
   });
@@ -69,8 +72,8 @@ describe('browserHelpRow', () => {
       backend: () => 'chrome', mayBeLiveChrome,
       chromeTabs: async () => [{ surfaceId: 'chrome-a', targetId: 't-a', workspaceId: 'ws-1', url: 'https://shop.example.com/' }],
     });
-    expect(await browserHelpRow(pending({ surfaceId: 'chrome-a' }), deps)).toMatchObject({ backend: 'chrome', origin: 'https://shop.example.com' });
-    expect(await browserHelpRow(pending({ surfaceId: 'TARGET1' }), deps)).toMatchObject({ backend: 'live', previewable: false });
+    expect(await browserHelpRow(pending({ surfaceId: 'chrome-a', origin: 'https://shop.example.com' }), deps)).toMatchObject({ backend: 'chrome', origin: 'https://shop.example.com' });
+    expect(await browserHelpRow(pending({ surfaceId: 'TARGET1', origin: 'https://shop.example.com' }), deps)).toMatchObject({ backend: 'live', previewable: false });
     expect(mayBeLiveChrome.mock.calls).toEqual([['ws-1', true], ['ws-1', false]]);
   });
 
@@ -94,12 +97,11 @@ describe('browserHelpRows', () => {
     expect(chromeTabs.mock.calls).toEqual([['ws-1'], ['ws-2']]);
   });
 
-  it('a Chrome that never answers costs only the origin, never the table', async () => {
+  it('a Chrome that never answers costs only the preview, never the table', async () => {
     const hung = () => new Promise<never>(() => undefined);
-    const rows = await browserHelpRows([pending({ surfaceId: 'chrome-a' })], tabs({ backend: () => 'chrome', chromeTabs: hung }), createTabListReader(hung, { budgetMs: 10 }));
+    const rows = await browserHelpRows([pending({ surfaceId: 'chrome-a', origin: 'https://shop.example.com' })], tabs({ backend: () => 'chrome', chromeTabs: hung }), createTabListReader(hung, { budgetMs: 10 }));
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ backend: 'chrome', previewable: false });
-    expect(rows[0]).not.toHaveProperty('origin');
+    expect(rows[0]).toMatchObject({ backend: 'chrome', previewable: false, origin: 'https://shop.example.com' });
   });
 
   it('labels a request under the OS browser setting live', async () => {

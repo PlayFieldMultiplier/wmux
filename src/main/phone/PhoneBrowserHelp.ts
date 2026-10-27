@@ -103,10 +103,13 @@ export async function browserHelpRow(
     createdAt: request.createdAt,
     deadlineAt: request.deadlineAt,
   };
+  // The origin the tab had when the request was made, pinned on the request
+  // (browser.help.request): never read again, so a tab that navigates since
+  // does not move the origin help-card typing is held to.
+  const origin = browserHelpOrigin(request.origin);
   // An embedded pane this workspace owns: the phone's preview can show it.
   const builtin = surfaceId !== undefined ? guarded(() => deps.builtinUrl(surfaceId, request.workspaceId), null) : null;
   if (builtin !== null) {
-    const origin = browserHelpOrigin(builtin);
     return { ...base, backend: 'builtin', previewable: true, ...(origin ? { origin } : {}) };
   }
   const backend = guarded(() => deps.backend(), 'chrome');
@@ -127,7 +130,6 @@ export async function browserHelpRow(
   if (guarded(() => deps.mayBeLiveChrome(request.workspaceId, tab !== undefined), true)) {
     return { ...base, backend: 'live', previewable: false };
   }
-  const origin = tab ? browserHelpOrigin(tab.url) : undefined;
   // The phone's preview drives this tab when it is the workspace's own
   // dedicated-profile tab under the id the request names (PhoneBrowserChrome).
   const previewable = tab !== undefined && tab.surfaceId === surfaceId && tab.previewable !== false;

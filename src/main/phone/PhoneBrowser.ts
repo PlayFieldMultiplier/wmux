@@ -45,8 +45,8 @@ export interface PhoneBrowserDriver {
   shoot(quality: number, scale: number): Promise<{ data: string; mimeType: 'image/jpeg' }>;
   /** A whole capture, inside the driver's own time budget. */
   capture<T>(run: () => Promise<T>): Promise<T>;
-  /** One input operation, with the tab's input focus held around it. */
-  input(operation: () => Promise<void>): Promise<void>;
+  /** One input operation; `focus` holds the tab's input focus around it (typing and keys). */
+  input(operation: () => Promise<void>, focus: boolean): Promise<void>;
   tap(point: { x: number; y: number }): Promise<void>;
   scroll(event: { x: number; y: number; deltaX: number; deltaY: number }): Promise<void>;
   type(text: string): Promise<void>;
@@ -244,6 +244,7 @@ async function phoneBrowser(command: string, payload: Record<string, unknown>, d
     return page;
   };
   const input = (operation: () => Promise<void>) => driver.input(async () => {
+    // The last checks before the input, after any wait for the lock and focus.
     const page = await unchanged();
     if (helpOrigin !== undefined && browserHelpOrigin(page.url) !== helpOrigin) throw new PhoneBrowserError('browser-help-origin-changed');
     if (command === 'browser.tap' || command === 'browser.scroll') {
@@ -251,7 +252,7 @@ async function phoneBrowser(command: string, payload: Record<string, unknown>, d
       await unchanged();
     }
     await operation();
-  });
+  }, command === 'browser.type' || command === 'browser.key');
   if (command === 'browser.tap' || command === 'browser.scroll') {
     const point = phoneBrowserPoint(payload.x,payload.y,payload.geometry,await driver.geometry());
     if (command === 'browser.scroll') {

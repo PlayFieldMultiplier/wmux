@@ -17,7 +17,7 @@
 // Typed text is sent once, to Chrome, and is never echoed or put in an error.
 
 import type { PhoneBrowserDriver } from './PhoneBrowser';
-import { ChromePageSessionError, type ChromeBackendClient, type ChromePageSession, type ChromeTargetInfo } from '../browser-session/ChromeLauncher';
+import { ChromePageSessionError, chromeTargetWatcherEnabled, type ChromeBackendClient, type ChromePageSession, type ChromeTargetInfo } from '../browser-session/ChromeLauncher';
 import { LIVE_CHROME_PROFILE } from '../browser-session/ChromeProfileStore';
 import { parseKeyPress } from '../pipe/handlers/cdpKeys';
 import { PhoneBrowserError } from '../../shared/phoneBrowserPreview';
@@ -59,8 +59,13 @@ function coded(err: unknown): unknown {
 
 interface Viewport { width: number; height: number; scrollX: number; scrollY: number; scale: number; zoom: number }
 
+/** The largest viewport side the preview takes, as for a builtin pane (PhoneBrowserGeometry). */
+const MAX_VIEWPORT = 32768;
+/** The longest side, in device-independent pixels, a Chrome capture is asked for. */
+const MAX_CAPTURE_SIDE = 2048;
+
 function dimension(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= 32768;
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= MAX_VIEWPORT;
 }
 
 function offset(value: unknown): value is number {
@@ -106,17 +111,6 @@ export function chromeDriver(surfaceId: string, workspaceId: string, deps: Phone
     } catch (err) {
       if (err instanceof PhoneBrowserError) throw err;
       throw new Error('Browser operation failed');
-    }
-  };
-  const withFocus = async (operation: () => Promise<void>) => {
-    // A background Chrome window has no focused element to type into; emulate
-    // focus for this one operation instead of raising the tab.
-    await write('Emulation.setFocusEmulationEnabled', { enabled: true });
-    try {
-      await operation();
-    } finally {
-      // Undone even past the budget: the session outlives this request.
-      await session?.then((open) => open.send('Emulation.setFocusEmulationEnabled', { enabled: false })).catch(() => undefined);
     }
   };
   /**
@@ -191,32 +185,48 @@ export function chromeDriver(surfaceId: string, workspaceId: string, deps: Phone
       return { width: vp.width, height: vp.height, scrollX: vp.scrollX, scrollY: vp.scrollY };
     },
     shoot: async (quality, scale) => {
-      let shot: unknown;
-      try {
-        const vp = await viewport();
-        // The clip is in device-independent pixels; the metrics are CSS pixels.
-        const z = Number.isFinite(vp.zoom) ? vp.zoom : 1;
-        shot = await call('Page.captureScreenshot', {
-          format: 'jpeg', quality,
-          // Document coordinates of what is on screen, so the image is the
-          // viewport the geometry describes.
-          clip: { x: vp.scrollX * z, y: vp.scrollY * z, width: vp.width * z, height: vp.height * z, scale },
-        });
-      } catch (err) {
+      const hidden = (err: unknown) => {
         if (err instanceof PhoneBrowserError) throw err;
         // A listed tab with no usable viewport, or that cannot produce a
         // frame, is one Chrome is not painting (minimized, in the background).
         throw new PhoneBrowserError('browser-tab-hidden');
-      }
+      };
+      const vp = await viewport().catch(hidden);
+      // The clip is in device-independent pixels; the metrics are CSS pixels.
+      const z = Number.isFinite(vp.zoom) ? vp.zoom : 1;
+      const width = vp.width * z;
+      const height = vp.height * z;
+      // Never ask Chrome to build a frame past the preview's viewport limit,
+      // and shrink a large one before it is encoded rather than after.
+      if (width > MAX_VIEWPORT || height > MAX_VIEWPORT) throw new Error('Unsupported browser geometry');
+      const fitted = Math.min(scale, MAX_CAPTURE_SIDE / Math.max(width, height));
+      const shot = await call('Page.captureScreenshot', {
+        format: 'jpeg', quality,
+        // Document coordinates of what is on screen, so the image is the
+        // viewport the geometry describes.
+        clip: { x: vp.scrollX * z, y: vp.scrollY * z, width, height, scale: fitted },
+      }).catch(hidden);
       const data = (shot as { data?: unknown } | null)?.data;
       if (typeof data !== 'string' || !data) throw new Error('Browser capture unavailable');
       return { data, mimeType: 'image/jpeg' as const };
     },
     capture: run => bounded(run),
-    input: async operation => {
+    input: async (operation, focus) => {
       if (active.has(surfaceId)) throw new Error('Browser input unavailable');
       active.add(surfaceId);
-      const running = operation();
+      const running = (async () => {
+        // A background Chrome window has no focused element to type into:
+        // emulate focus instead of raising the tab. Set up (attaching the page
+        // with it) before the operation's last ownership and URL checks, so
+        // the input follows those checks directly.
+        if (focus) await write('Emulation.setFocusEmulationEnabled', { enabled: true });
+        try {
+          await operation();
+        } finally {
+          // Undone even past the budget: the session outlives this request.
+          if (focus) await always('Emulation.setFocusEmulationEnabled', { enabled: false });
+        }
+      })();
       // Held until the operation itself settles, not until its budget: a send
       // still in flight must not interleave with the next input.
       void running.then(() => active.delete(surfaceId), () => active.delete(surfaceId));
@@ -233,11 +243,11 @@ export function chromeDriver(surfaceId: string, workspaceId: string, deps: Phone
       await write('Input.dispatchMouseEvent', { type: 'mouseMoved', x: event.x, y: event.y, button: 'none', buttons: 0 });
       await write('Input.dispatchMouseEvent', { type: 'mouseWheel', ...event });
     },
-    type: text => withFocus(() => write('Input.insertText', { text })),
-    key: key => withFocus(async () => {
+    type: text => write('Input.insertText', { text }),
+    key: async key => {
       const { keyDown, keyUp } = parseKeyPress(key);
       await pressThenRelease('Input.dispatchKeyEvent', keyDown, keyUp);
-    }),
+    },
     navigate: async url => {
       await deps.validateNavigation(url);
       let result: unknown;
@@ -340,7 +350,10 @@ export function createPhoneChromeDeps(opts: {
     // the session is attached on that same client, with no second list read.
     session: async (surfaceId, workspaceId) => {
       const client = clientFor(workspaceId, opts.registry);
-      if (!client?.pageSession || !client.hasSurface(surfaceId)) throw new ChromePageSessionError('gone', 'not a tab of this workspace');
+      // The record's own workspace, not only the order of calls before this one.
+      if (!client?.pageSession || client.recordFor?.(surfaceId)?.workspaceId !== workspaceId) {
+        throw new ChromePageSessionError('gone', 'not a tab of this workspace');
+      }
       return client.pageSession(surfaceId);
     },
     focus: async (surfaceId, workspaceId) => {
@@ -350,9 +363,14 @@ export function createPhoneChromeDeps(opts: {
       await found.client.restoreWindow?.(surfaceId);
       return true;
     },
+    // A tab the preview could then neither list nor drive is not opened at all:
+    // the watcher must be able to attach pages (a launcher not made yet has
+    // only the setting to go by).
     canOpen: (workspaceId) => {
       const profile = opts.registry.profileFor(workspaceId);
-      return !isLive(profile) && !opts.registry.isPaneBound(profile);
+      if (isLive(profile) || opts.registry.isPaneBound(profile)) return false;
+      const client = opts.registry.peekLauncher(profile);
+      return client ? !client.writeScope && client.canPageSession?.() !== false : chromeTargetWatcherEnabled();
     },
     validateNavigation: opts.validateNavigation,
   };

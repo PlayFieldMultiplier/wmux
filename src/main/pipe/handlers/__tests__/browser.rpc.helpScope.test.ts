@@ -68,7 +68,7 @@ function register(options: { live?: boolean } = {}) {
     ownerOfSurface: vi.fn(() => null),
     disposeAll: vi.fn(),
   };
-  registerBrowserRpc(
+  const help = registerBrowserRpc(
     router,
     () => null as unknown as BrowserWindow,
     cdp as never,
@@ -77,7 +77,7 @@ function register(options: { live?: boolean } = {}) {
     undefined,
     registry as never,
   );
-  return { router, registry };
+  return { router, registry, help };
 }
 
 async function request({ router }: { router: RpcRouter }, surfaceId: string) {
@@ -104,6 +104,24 @@ describe('browser.help.request on a dedicated Chrome profile', () => {
     const response = await request({ router }, 'mine');
     expect(response.ok).toBe(true);
     expect(registry.forProfile).toHaveBeenCalledTimes(1);
+    const requestId = (response as { result?: { requestId?: string } }).result?.requestId;
+    await router.dispatch({ id: '2', method: 'browser.help.cancel', params: { workspaceId: 'ws-1', requestId } } as never);
+  });
+
+  it('pins the tab\'s origin on the request when it is made', async () => {
+    const { router, help } = register();
+    const response = await request({ router }, 'mine');
+    expect(response.ok).toBe(true);
+    expect(help.listPending().map((r) => r.origin)).toEqual(['https://a.test']);
+    const requestId = (response as { result?: { requestId?: string } }).result?.requestId;
+    await router.dispatch({ id: '2', method: 'browser.help.cancel', params: { workspaceId: 'ws-1', requestId } } as never);
+  });
+
+  it('on Live Chrome, the origin is unknown', async () => {
+    const { router, help } = register({ live: true });
+    const response = await request({ router }, 'user-tab');
+    expect(response.ok).toBe(true);
+    expect(help.listPending().map((r) => r.origin)).toEqual([undefined]);
     const requestId = (response as { result?: { requestId?: string } }).result?.requestId;
     await router.dispatch({ id: '2', method: 'browser.help.cancel', params: { workspaceId: 'ws-1', requestId } } as never);
   });

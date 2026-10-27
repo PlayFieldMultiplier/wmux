@@ -63,6 +63,11 @@ type ProbeOutcome = 'routed' | 'navigation-failed' | 'tab-gone' | 'no-tab' | 'no
 // console.warn and the pre-watcher behavior.
 const TARGET_WATCHER_ENV = 'WMUX_CHROME_TARGET_WATCHER';
 
+/** Whether dedicated launchers may run their tab-target watcher (and so attach page sessions). */
+export function chromeTargetWatcherEnabled(): boolean {
+  return process.env[TARGET_WATCHER_ENV] !== '0';
+}
+
 export interface ChromeTargetInfo {
   /** Stable wmux identity handed to agents (`chrome-<uuid>` for dedicated
    *  instances). Live attach keeps surfaceId ≡ targetId — see LiveChromeClient. */
@@ -154,6 +159,8 @@ export interface ChromeBackendClient {
   pageSession?(surfaceId: string): Promise<ChromePageSession>;
   /** False when pageSession cannot work here: the tab watcher is off or failed. */
   canPageSession?(): boolean;
+  /** Dedicated instances: the record behind a wmux-opened surface (its workspace). */
+  recordFor?(surfaceId: string): ChromeSurfaceRecord | undefined;
   /** Live attach only: the agent-window write policy. Absent = dedicated. */
   readonly writeScope?: LiveWriteScopeApi;
   dispose(): void | Promise<void>;
@@ -484,7 +491,7 @@ export class ChromeLauncher implements ChromeBackendClient {
 
   /** Kill switch: WMUX_CHROME_TARGET_WATCHER=0 never opens the socket. */
   private watcherEnabled(): boolean {
-    return process.env[TARGET_WATCHER_ENV] !== '0';
+    return chromeTargetWatcherEnabled();
   }
 
   /** Give up on the watcher, loudly but once. Everything the launcher does
