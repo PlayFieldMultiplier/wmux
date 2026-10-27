@@ -401,11 +401,10 @@ export function namesClaude(line: string): boolean {
 // the worker's environment, the way a codex worker launches only without a
 // project `.codex/config.toml`.
 
-/** Project settings keys that run a program, set the environment, or change
- *  the worker's sandbox or turn its hooks off (main/agents/workerFence.ts). */
+/** Project settings keys that run a program or set the environment. */
 export const WORKER_PROJECT_SETTINGS_REFUSED: readonly string[] = [
   'hooks', 'env', 'apiKeyHelper', 'awsAuthRefresh', 'awsCredentialExport', 'otelHeadersHelper',
-  'statusLine', 'fileSuggestion', 'enabledPlugins', 'extraKnownMarketplaces', 'sandbox', 'disableAllHooks',
+  'statusLine', 'fileSuggestion', 'enabledPlugins', 'extraKnownMarketplaces',
 ];
 
 /** Why a claude worker cannot launch in `cwd` because of its project

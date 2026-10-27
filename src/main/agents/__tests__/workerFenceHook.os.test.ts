@@ -7,7 +7,6 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { workerFenceHookCommand, workerFenceHookScript } from '../workerFence';
-import { workerProjectSettingsRefusal } from '../../../shared/botWorkerGuard';
 
 // The hook command is a POSIX shell line; Windows workers are wired in a later step.
 const WIN = process.platform === 'win32';
@@ -89,21 +88,32 @@ describe.skipIf(WIN)('the worker fence hook', () => {
     expect(write(path.join(wt, 'hard.txt'), 'Edit')).toBe(2);
   });
 
-  it('refuses claude\'s own configuration and git\'s in the worktree, at any depth', () => {
+  it('refuses the worktree\'s files that run a program at the next session, and git\'s at any depth', () => {
     fs.writeFileSync(path.join(wt, '.git'), `gitdir: ${path.join(base, 'repo', '.git', 'worktrees', 'wt')}\n`);
     for (const p of [
       path.join(wt, '.claude', 'settings.json'),
-      path.join(wt, 'sub', '.claude', 'skills', 'x.md'),
+      path.join(wt, '.claude', 'settings.local.json'),
+      path.join(wt, '.Claude', 'Settings.JSON'),
       path.join(wt, '.mcp.json'),
-      path.join(wt, 'CLAUDE.md'),
-      path.join(wt, 'CLAUDE.local.md'),
-      path.join(wt, 'docs', 'claude.md'),
       path.join(wt, '.git'),
       path.join(wt, 'vendor', '.git', 'config'),
     ]) {
       expect(write(p), p).toBe(2);
     }
-    expect(write(path.join(wt, '.github', 'workflows', 'ci.yml'))).toBe(0);
+  });
+
+  it('lets the worker edit claude\'s instructions: CLAUDE.md, skills, agents, nested copies', () => {
+    for (const p of [
+      path.join(wt, 'CLAUDE.md'),
+      path.join(wt, 'CLAUDE.local.md'),
+      path.join(wt, '.claude', 'skills', 'x', 'SKILL.md'),
+      path.join(wt, '.claude', 'agents', 'a.md'),
+      path.join(wt, 'sub', '.claude', 'settings.json'),
+      path.join(wt, 'sub', '.mcp.json'),
+      path.join(wt, '.github', 'workflows', 'ci.yml'),
+    ]) {
+      expect(write(p), p).toBe(0);
+    }
   });
 
   it('reads a root with spaces and non-ASCII characters as itself', () => {
@@ -162,20 +172,3 @@ describe.skipIf(WIN)('the worker fence hook', () => {
   });
 });
 
-describe.skipIf(WIN)('the worker folder\'s own project settings', () => {
-  it('refuse a sandbox or disableAllHooks of their own', () => {
-    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-fence-proj-'));
-    try {
-      fs.mkdirSync(path.join(repo, '.claude'));
-      const file = path.join(repo, '.claude', 'settings.json');
-      fs.writeFileSync(file, JSON.stringify({ permissions: { allow: ['Bash(npm test)'] } }));
-      expect(workerProjectSettingsRefusal(repo)).toBeNull();
-      fs.writeFileSync(file, JSON.stringify({ sandbox: { enabled: false } }));
-      expect(workerProjectSettingsRefusal(repo)).toMatch(/sets sandbox/);
-      fs.writeFileSync(file, JSON.stringify({ disableAllHooks: true }));
-      expect(workerProjectSettingsRefusal(repo)).toMatch(/sets disableAllHooks/);
-    } finally {
-      fs.rmSync(repo, { recursive: true, force: true });
-    }
-  });
-});

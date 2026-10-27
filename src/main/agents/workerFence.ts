@@ -25,7 +25,6 @@ import path from 'node:path';
 import { launcherStem, tokenize, type PermissionMode } from '../../shared/agentResume';
 import { namesClaude, spliceSettingsFlag } from '../../shared/botWorkerGuard';
 import { splitModelEnvMarker } from '../../shared/workerLaunch';
-import { WORKER_FOLDER_CONFIG_NAMES } from '../connectors/workerGateway';
 import { botSandboxDenyRead, type BotSandboxInput } from '../factory/botExecSandbox';
 import { WORKER_GATE_TIMEOUT_S } from './workerToolGate';
 
@@ -196,13 +195,18 @@ export function workerFenceGitDenies(input: Pick<WorkerFenceInput, 'gitCommonDir
   return [...out];
 }
 
-/** The paths in the worktree the worker's commands may not write: claude's
- *  own configuration there (WORKER_FOLDER_CONFIG_NAMES, as for a worker with
- *  a signed-in connection) and a linked worktree's `.git` file, which names
+/** The files at the worktree's root through which claude runs a program
+ *  outside the fence when its next session starts there: project settings
+ *  (hooks) and MCP servers. Paths relative to the worktree, `/`-separated.
+ *  Instructions (CLAUDE.md, the rest of `.claude/`) are not among them. */
+export const WORKER_FENCE_CONFIG_FILES: readonly string[] = ['.claude/settings.json', '.claude/settings.local.json', '.mcp.json'];
+
+/** The paths in the worktree the worker's commands may not write: the
+ *  WORKER_FENCE_CONFIG_FILES and a linked worktree's `.git` file, which names
  *  the repository git works in. Pure. */
 export function workerFenceWorktreeDenies(worktree: string, isLinkedWorktree: boolean): string[] {
   const wt = requireAbsolute('the worktree', worktree);
-  return [...WORKER_FOLDER_CONFIG_NAMES.map((n) => path.join(wt, n)), ...(isLinkedWorktree ? [path.join(wt, '.git')] : [])];
+  return [...WORKER_FENCE_CONFIG_FILES.map((f) => path.join(wt, ...f.split('/'))), ...(isLinkedWorktree ? [path.join(wt, '.git')] : [])];
 }
 
 /** A permission rule's path: `~/…` inside home, `//…` (from the root) else. */
@@ -322,8 +326,19 @@ const WRAPPER_STEMS: ReadonlySet<string> = new Set([
   'stdbuf', 'xargs', 'script', 'caffeinate', 'npx', 'bunx', 'pnpx', 'cmd', 'powershell', 'pwsh', 'wsl',
 ]);
 
+// What a fenced worker's other settings may not set, because each would
+// loosen the fence. The launch that attaches the fence refuses or overrides
+// them in the worker folder's project settings; mergeWorkerFenceSettings
+// refuses them in the launch's own extras.
+
+/** Top-level settings keys: a sandbox of their own, or hooks turned off. */
+export const WORKER_FENCE_REFUSED_SETTINGS_KEYS: readonly string[] = ['sandbox', 'disableAllHooks'];
+
+/** `permissions` keys claude also opens the sandbox's writes by. */
+export const WORKER_FENCE_REFUSED_PERMISSION_KEYS: readonly string[] = ['additionalDirectories'];
+
 /** An allow rule for a file tool: claude widens the sandbox's writes by it. */
-const FILE_ALLOW_RULE = /^\s*(Read|Edit|Write|MultiEdit|NotebookEdit)\s*(\(|$)/;
+export const WORKER_FENCE_FILE_ALLOW_RULE = /^\s*(Read|Edit|Write|MultiEdit|NotebookEdit)\s*(\(|$)/;
 
 const UNSAFE_KEYS: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype']);
 
@@ -378,8 +393,9 @@ export function mergeWorkerFenceSettings(fence: Record<string, unknown>, extras:
   for (const extra of extras) {
     if (Object.prototype.hasOwnProperty.call(extra, 'sandbox')) return { ok: false, key: 'sandbox' };
     const perms = isPlainObject(extra.permissions) ? extra.permissions : {};
-    if (Object.prototype.hasOwnProperty.call(perms, 'additionalDirectories')) return { ok: false, key: 'permissions.additionalDirectories' };
-    if (Array.isArray(perms.allow) && perms.allow.some((r) => typeof r !== 'string' || FILE_ALLOW_RULE.test(r))) return { ok: false, key: 'permissions.allow' };
+    const widening = WORKER_FENCE_REFUSED_PERMISSION_KEYS.find((k) => Object.prototype.hasOwnProperty.call(perms, k));
+    if (widening) return { ok: false, key: `permissions.${widening}` };
+    if (Array.isArray(perms.allow) && perms.allow.some((r) => typeof r !== 'string' || WORKER_FENCE_FILE_ALLOW_RULE.test(r))) return { ok: false, key: 'permissions.allow' };
     const clash = mergeInto(out, extra, '');
     if (clash) return { ok: false, key: clash };
   }
@@ -472,8 +488,8 @@ export const WORKER_FENCE_INPUT_TIMEOUT_MS = 10_000;
  * (that of its nearest existing parent, for a new file) is inside one of the
  * roots, it is not this script, it is not a file with more than one hard
  * link, and, inside the worktree (the first root), no part of it is `.git`
- * or `.claude` and its name is not `.mcp.json` or `CLAUDE*.md` (claude's own
- * configuration in the worker's folder). Pure.
+ * and it is not one of the WORKER_FENCE_CONFIG_FILES (compared without case:
+ * macOS and Windows folders ignore it). Pure.
  */
 export function workerFenceHookScript(): string {
   const data = {
@@ -482,7 +498,7 @@ export function workerFenceHookScript(): string {
     refused: WORKER_FENCE_REFUSED_TOOLS,
     agents: WORKER_FENCE_AGENT_TOOLS,
     fields: WORKER_FENCE_PATH_FIELDS,
-    configNames: ['.git', ...WORKER_FOLDER_CONFIG_NAMES].map((n) => n.toLowerCase()),
+    configFiles: WORKER_FENCE_CONFIG_FILES.map((f) => f.toLowerCase()),
     timeoutMs: WORKER_FENCE_INPUT_TIMEOUT_MS,
     maxInput: 64 * 1024 * 1024,
   };
@@ -539,7 +555,7 @@ try {
     if (!root) refuse(tool + ' to ' + real + ' is outside the worktree; write inside it instead');
     if (within(real, roots[0])) {
       const parts = path.relative(roots[0], real).split(path.sep).filter(Boolean).map((s) => s.toLowerCase());
-      if (parts.some((s) => P.configNames.includes(s) || /^claude.*\\.md$/.test(s))) {
+      if (parts.includes('.git') || P.configFiles.includes(parts.join('/'))) {
         refuse(tool + ' to ' + real + ' changes git or Claude configuration in the worktree; call refused');
       }
     }

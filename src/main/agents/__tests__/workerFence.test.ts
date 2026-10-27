@@ -11,10 +11,13 @@ import {
   workerFenceLaunch,
   workerFencePermissionDenies,
   workerFenceWorktreeDenies,
+  WORKER_FENCE_FILE_ALLOW_RULE,
+  WORKER_FENCE_REFUSED_PERMISSION_KEYS,
+  WORKER_FENCE_REFUSED_SETTINGS_KEYS,
   type WorkerFenceInput,
 } from '../workerFence';
 import { WORKER_GATE_TIMEOUT_S } from '../workerToolGate';
-import { BOT_WORKER_DENY, WORKER_PROJECT_SETTINGS_REFUSED } from '../../../shared/botWorkerGuard';
+import { BOT_WORKER_DENY } from '../../../shared/botWorkerGuard';
 import { wslClaudeHooks } from '../../../shared/wslIntegration';
 import { MODEL_ENV_MARKER } from '../../../shared/workerLaunch';
 
@@ -96,7 +99,9 @@ describe('the fence settings', () => {
     expect(sb).toMatchObject({ enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false, enableWeakerNestedSandbox: false });
     expect(sb.filesystem.allowWrite).toEqual([WT, TMP, GIT, '/private/tmp/wmux-test-*']);
     expect(sb.filesystem.denyWrite).toEqual([...workerFenceWorktreeDenies(WT, true), ...workerFenceGitDenies(input())]);
-    for (const n of ['.claude', '.mcp.json', 'CLAUDE.md', 'CLAUDE.local.md', '.git']) expect(sb.filesystem.denyWrite).toContain(path.join(WT, n));
+    for (const p of [['.claude', 'settings.json'], ['.claude', 'settings.local.json'], ['.mcp.json'], ['.git']]) expect(sb.filesystem.denyWrite).toContain(path.join(WT, ...p));
+    // Instructions stay writable: repositories track them, and git rewrites them.
+    for (const p of [['CLAUDE.md'], ['CLAUDE.local.md'], ['.claude']]) expect(sb.filesystem.denyWrite).not.toContain(path.join(WT, ...p));
     expect(workerFenceWorktreeDenies(WT, false)).not.toContain(path.join(WT, '.git'));
     expect(sb.filesystem.denyRead).toContain(path.join(HOME, '.ssh'));
     // Every denied folder that holds one of the worker's folders re-opens it.
@@ -240,8 +245,11 @@ describe('the fenced launch', () => {
   });
 });
 
-describe('the worker folder\'s own project settings', () => {
-  it('refuse a sandbox or disableAllHooks of their own: either would loosen the fence', () => {
-    expect(WORKER_PROJECT_SETTINGS_REFUSED).toEqual(expect.arrayContaining(['sandbox', 'disableAllHooks']));
+describe('what a fenced worker\'s other settings may not set', () => {
+  it('names the keys and rules that would loosen the fence', () => {
+    expect(WORKER_FENCE_REFUSED_SETTINGS_KEYS).toEqual(['sandbox', 'disableAllHooks']);
+    expect(WORKER_FENCE_REFUSED_PERMISSION_KEYS).toEqual(['additionalDirectories']);
+    for (const r of ['Edit(//x/**)', 'Write', 'Read(~/a)', 'NotebookEdit(/n)']) expect(WORKER_FENCE_FILE_ALLOW_RULE.test(r), r).toBe(true);
+    for (const r of ['Bash(npm test)', 'mcp__notion', 'WebFetch', 'Readme']) expect(WORKER_FENCE_FILE_ALLOW_RULE.test(r), r).toBe(false);
   });
 });
