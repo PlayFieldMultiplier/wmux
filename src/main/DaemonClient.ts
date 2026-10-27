@@ -58,6 +58,7 @@ import { connectWithRetry, type ConnectAttemptResult } from './daemonConnectRetr
 import type { AgentStatus } from '../shared/types';
 import type { AgentSlug } from '../shared/agentIdentity';
 import { isSessionPromptScheduleResult, type SessionPromptScheduleResult } from '../shared/sessionPromptSchedule';
+import { parseToolRefusal } from '../shared/toolRefusal';
 
 // RCA A2 — single source of truth in shared/timeouts.ts so the renderer's
 // RECONCILE_TIMEOUT_MS can be derived from (and stay greater than) this value.
@@ -1459,6 +1460,16 @@ export class DaemonClient extends EventEmitter {
           const data = event.data as { count?: unknown } | null;
           if (typeof data?.count === 'number' && Number.isFinite(data.count) && data.count >= 0) {
             this.emit('session:subagents', { sessionId: event.sessionId, count: Math.floor(data.count) });
+          }
+          break;
+        }
+        case 'agent.refusal': {
+          // The pane's last refused tool call (null clears), checked here.
+          const data = event.data as { refusal?: unknown } | null;
+          if (data?.refusal === null) this.emit('session:refusal', { sessionId: event.sessionId, refusal: null });
+          else {
+            const refusal = parseToolRefusal(data?.refusal);
+            if (refusal) this.emit('session:refusal', { sessionId: event.sessionId, refusal });
           }
           break;
         }

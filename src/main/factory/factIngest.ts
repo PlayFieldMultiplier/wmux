@@ -5,7 +5,9 @@
 // reaches a singleton unless `defaultFactIngestPorts()` is used.
 //
 //   EventBus agent.lifecycle awaiting_input (emitted) on a bot's fan-out
-//   task pane                                → pane.needs_input (owner workspace)
+//   task pane                                → pane.needs_input (owner workspace;
+//                                              `stoppedAfter` when a fenced worker's
+//                                              turn stopped on a refused tool call)
 //   task ledger transitions                  → task.done | task.failed | task.input_required
 //                                              (ref.botId = the bot that started the task)
 //   PrVerdictStore record                    → verdict.recorded
@@ -56,20 +58,25 @@ function originThread(e: LedgerEntry): { threadId?: string } {
  *  its task workspace (the ledger). Only a task a bot started counts (its
  *  ledger row's dispatch origin, written by main): a human's own fan-out
  *  workers are watched by the human. */
-export function factFromBusEvent(ev: WmuxEvent, findTask: (taskWorkspaceId: string) => LedgerEntry | null): FactDraft | null {
+export function factFromBusEvent(
+  ev: WmuxEvent,
+  findTask: (taskWorkspaceId: string) => LedgerEntry | null,
+  stoppedOn: (ptyId: string) => string | null = () => null,
+): FactDraft | null {
   if (ev.type === 'agent.lifecycle') {
     if (ev.kind !== 'agent.awaiting_input' || ev.decision !== 'emit' || !ev.ptyId) return null;
     const task = findTask(ev.workspaceId);
     if (!task || !OPEN_TASK.has(task.status)) return null;
     const botId = botOrigin(task);
     if (!botId) return null;
+    const stoppedAfter = stoppedOn(ev.ptyId);
     return {
       kind: 'pane.needs_input',
       at: ev.ts,
       workspaceId: task.ownerWorkspaceId,
       ref: { ptyId: ev.ptyId, taskId: task.id, botId },
       actor: { kind: 'system' },
-      payload: { taskWorkspaceId: ev.workspaceId, agent: ev.agent, source: ev.source, ...originThread(task) },
+      payload: { taskWorkspaceId: ev.workspaceId, agent: ev.agent, source: ev.source, ...originThread(task), ...(stoppedAfter ? { stoppedAfter: cap(stoppedAfter, TEXT_CAP) } : {}) },
     };
   }
   return null;
@@ -226,6 +233,8 @@ export const FACT_INGEST_RETRY_MS = 5_000;
 export interface FactIngestPorts {
   subscribeBus?: Subscribe<WmuxEvent>;
   findTaskByWorkspace?: (taskWorkspaceId: string) => LedgerEntry | null;
+  /** A fenced worker's pane whose turn stopped on a refused tool call: one line saying so, else null. */
+  stoppedOn?: (ptyId: string) => string | null;
   onLedgerTransition?: Subscribe<LedgerTransition>;
   onVerdictRecorded?: Subscribe<PrVerdictRecord>;
   onMergeEffect?: Subscribe<MergeEffect>;
@@ -323,7 +332,8 @@ export function startFactIngest(sink: { append(draft: FactDraft): Fact | null; a
     }
   };
   const findTask = ports.findTaskByWorkspace ?? (() => null);
-  attach('event', ports.subscribeBus, (ev) => factFromBusEvent(ev, findTask));
+  const stoppedOn = ports.stoppedOn ?? (() => null);
+  attach('event', ports.subscribeBus, (ev) => factFromBusEvent(ev, findTask, stoppedOn));
   attach('ledger', ports.onLedgerTransition, factFromLedgerTransition);
   attach('verdict', ports.onVerdictRecorded, factFromVerdict);
   attach('merge', ports.onMergeEffect, factFromMergeEffect);

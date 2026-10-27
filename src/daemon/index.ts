@@ -230,6 +230,7 @@ import { agentSlugToDisplay, isAgentSignal, type AgentSignal } from '../shared/h
 import { checkNativeTranscriptPath } from './transcript/providers';
 import { TranscriptProjector } from './transcript/TranscriptProjector';
 import { TranscriptActivityWatcher } from './transcript/TranscriptActivityWatcher';
+import { ToolRefusalTracker } from './transcript/toolRefusals';
 import { ShellPromptWatcher } from './shellPrompt/ShellPromptWatcher';
 import { foregroundTtyWait } from './shellPrompt/foregroundTtyWait';
 import { lastLineOfOutput } from './shellPrompt/shellPromptShape';
@@ -406,6 +407,8 @@ let transcriptProjector: TranscriptProjector | null = null;
 // Fleet's now-doing line for panes with no per-tool hook (setup-hooks installs,
 // Codex): tails the agent's own transcript. Guarded like the projector.
 let transcriptActivity: TranscriptActivityWatcher | null = null;
+/** The last refused tool call per pane, read from its Claude transcript. Set where the watcher is. */
+let toolRefusals: ToolRefusalTracker | null = null;
 let stallWatch: StallWatch | null = null;
 let shellPrompts: ShellPromptWatcher | null = null;
 let apiErrorTurnEnds: ApiErrorTurnEnds | null = null;
@@ -4434,6 +4437,20 @@ function registerRpcHandlers(
     });
   }
   const turnEnds = apiErrorTurnEnds;
+  // A pane's last refused tool call (shared/toolRefusal.ts), from the same
+  // tail; to the app only (not part of any phone payload).
+  if (!toolRefusals) {
+    const tracker = new ToolRefusalTracker({
+      emit: (sessionId, refusal) => {
+        const event: DaemonEvent = { type: 'agent.refusal', sessionId, data: { refusal } };
+        pipeServer.broadcast(event);
+      },
+      log: (line) => log('warn', line),
+    });
+    toolRefusals = tracker;
+    sessionManager.on('session:destroyed', (payload: { id: string }) => tracker.drop(payload.id));
+  }
+  const refusals = toolRefusals;
   // A Claude lead turn an Agent Teams teammate's message woke (#2494): no
   // prompt hook fires for it, so its start is read from the same tail, and the
   // pane's turn opens the way a running hook opens it. Its Stop (or a
@@ -4493,6 +4510,7 @@ function registerRpcHandlers(
       },
       onClaudeLine: (sessionId, path, line) => {
         turnEnds.noteLine(sessionId, path, line);
+        refusals.noteLine(sessionId, path, line);
         wakes.noteLine(sessionId, path, line);
       },
       onClaudeGap: (sessionId) => turnEnds.noteGap(sessionId),
@@ -4855,6 +4873,8 @@ function registerRpcHandlers(
     // port sets so an already-listening dev server shows up without waiting
     // for it to change.
     if (ok) { try { resyncContextWatchers?.(); } catch { /* best effort */ } }
+    // Its pane refusals too: it holds none yet.
+    if (ok) { try { toolRefusals?.resync(); } catch { /* best effort */ } }
     return { ok };
   });
 
