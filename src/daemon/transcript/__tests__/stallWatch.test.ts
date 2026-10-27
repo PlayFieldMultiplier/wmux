@@ -281,6 +281,49 @@ describe('StallWatch: a turn that keeps compacting without editing', () => {
     expect(h.spinning()).toBe(3);
   });
 
+  it('starts a turn Claude opens by itself, with no prompt, from zero', async () => {
+    const h = harness();
+    await h.run(10_000);
+    await write(h, ...compactions(1, 2));
+    // A background task's notice opens the next turn.
+    h.state.turn = 't2:a.1';
+    await write(h, prompt('<task-notification>done</task-notification>'), compaction(3));
+    expect(h.events).toEqual([]);
+    await write(h, ...compactions(4, 2));
+    expect(h.spinning()).toBe(3);
+  });
+
+  it('keeps the turn\'s reading across a one-tick gap, after its prompt has left the tail', async () => {
+    const h = harness();
+    const turn = h.state.turn;
+    await h.run(10_000);
+    for (let i = 0; i < 300; i++) append(h.file, JSON.stringify({ type: 'assistant', uuid: `b-${i}`, timestamp: ts, message: { role: 'assistant', content: [{ type: 'text', text: 'x'.repeat(1024) }] } }));
+    await write(h, ...compactions(1, 2));
+    h.state.turn = null;
+    await h.run(0);
+    h.state.turn = turn;
+    await write(h, compaction(3));
+    expect(h.spinning()).toBe(3);
+  });
+
+  it('holds a standing alert through an unreadable screen; asking the human holds it until the next compaction', async () => {
+    const h = harness();
+    await h.run(10_000);
+    await write(h, ...compactions(1, 3));
+    h.state.rows = null;
+    await h.run(10_000);
+    expect(h.spinning()).toBe(3);
+    h.state.rows = spinner('1.2k');
+    h.state.awaiting = true;
+    await h.run(10_000);
+    expect(h.stalled()).toBe(false);
+    h.state.awaiting = false;
+    await h.run(20_000);
+    expect(h.stalled()).toBe(false);
+    await write(h, compaction(4));
+    expect(h.spinning()).toBe(4);
+  });
+
   it('Keep waiting doubles the count for this turn, and a new prompt resets it', async () => {
     const h = harness();
     await h.run(10_000);
