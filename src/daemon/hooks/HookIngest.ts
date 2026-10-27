@@ -474,6 +474,15 @@ export function signalAgentPid(signal: AgentSignal): number | undefined {
 }
 
 /**
+ * The hook's pid as one the tracker's pane pid can be compared with: none for
+ * a WSL hook, whose parent is the hook.sh shell while the tracked pid is a
+ * Windows-side view.
+ */
+function comparableAgentPid(signal: AgentSignal): number | undefined {
+  return signal.wslAgentProcess === undefined ? signalAgentPid(signal) : undefined;
+}
+
+/**
  * The pid HookIngest may compare a hook's process against: only one the
  * process tracker positively named as an agent (it carries a slug) and still
  * reads alive. A slugless pick — a wrapper, a shell, a helper like gitstatusd —
@@ -512,12 +521,7 @@ function mostRecent(sessions: HookIngestSession[]): HookIngestSession | null {
 }
 
 /** What the daemon knows about each pane's own agent process. */
-export interface RouteProof {
-  /** The pane's identified, live top-level agent pid (AgentProcessTracker). */
-  agentPidFor?: (ptyId: string) => number | undefined;
-  /** Slug of the agent process alive in the pane right now. */
-  liveAgentFor?: (ptyId: string) => string | undefined;
-}
+export type RouteProof = Pick<HookIngestDeps, 'agentPidFor' | 'liveAgentFor'>;
 
 /** Why a guessed route did not take a candidate pane. */
 export type RouteDropReason = 'bound-to-another-session' | 'cwd-not-exact';
@@ -613,8 +617,7 @@ function verifyGuessedRoute(
   byCwd: { sessions: HookIngestSession[]; exact: boolean },
   proof: RouteProof,
 ): RouteResult {
-  // A WSL hook's parent is the hook.sh shell, not the agent (see foreignProcessReason).
-  const hookPid = signal.wslAgentProcess === undefined ? signalAgentPid(signal) : undefined;
+  const hookPid = comparableAgentPid(signal);
   const byPid = hookPid === undefined ? [] : pool.filter((s) => proof.agentPidFor?.(s.id) === hookPid);
   const byConversation = pool.filter((s) => s.resumeBinding?.sessionId && sameConversation(signal, s.resumeBinding));
   const proven = mostRecent(byPid) ?? mostRecent(byConversation);
@@ -971,8 +974,7 @@ export class HookIngest {
     const entrypointClass = classifyEntrypoint(entrypoint);
     if (entrypointClass === 'headless') return `entrypoint ${entrypoint} is not interactive`;
     if (entrypointClass !== 'absent') return null;
-    if (signal.wslAgentProcess !== undefined) return null;
-    const hookPid = signalAgentPid(signal);
+    const hookPid = comparableAgentPid(signal);
     if (hookPid === undefined) return null;
     const trackedPid = this.deps.agentPidFor?.(sessionId);
     if (trackedPid === undefined || trackedPid === hookPid) return null;
@@ -1118,7 +1120,7 @@ export class HookIngest {
     let route: RouteResult;
     try {
       sessions = this.deps.listLiveSessions();
-      route = routeSignal(signal, sessions, this.routeProof());
+      route = routeSignal(signal, sessions, this.deps);
     } catch {
       this.floodMeter.record({ degraded: true, fetchMs: this.now() - startedAt });
       this.meter.recordWorkspaceMatch(false);
@@ -1288,7 +1290,7 @@ export class HookIngest {
     let sessions: HookIngestSession[] = [];
     try {
       sessions = this.deps.listLiveSessions();
-      const route = routeSignal(signal, sessions, this.routeProof());
+      const route = routeSignal(signal, sessions, this.deps);
       sessionId = route.sessionId;
       this.noteRouteDrops(signal, route.drops);
     } catch (err) {
@@ -1840,16 +1842,12 @@ export class HookIngest {
     this.deps.log?.('info', `[hooks] refused ${signal.agent} ${signal.kind} for ${ptyId}: claimed-pane-not-live`);
   }
 
-  private routeProof(): RouteProof {
-    return { agentPidFor: this.deps.agentPidFor, liveAgentFor: this.deps.liveAgentFor };
-  }
-
   private noteRouteDrops(signal: AgentSignal, drops: RouteResult['drops']): void {
     for (const { sessionId, reason } of drops) {
       const key = `${sessionId}|${reason}`;
       if (this.routeDropsLogged.has(key)) continue;
-      if (this.routeDropsLogged.size >= 1024) this.routeDropsLogged.clear();
       this.routeDropsLogged.add(key);
+      if (this.routeDropsLogged.size > 1024) this.routeDropsLogged.delete(this.routeDropsLogged.values().next().value as string);
       this.deps.log?.('info', `[hooks] ignored ${signal.agent} signals routed to ${sessionId} by workspace or folder: ${reason}`);
     }
   }

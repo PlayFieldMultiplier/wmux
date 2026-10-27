@@ -622,10 +622,20 @@ export function registerHooksRpc(
       return relayed;
     }
 
+    // No folder tier here: main holds neither the panes' resume bindings nor
+    // their agent pids, so it cannot tell a pane's own session from one started
+    // in another terminal in the same folder (the daemon verifies that; see
+    // HookIngest verifyGuessedRoute). This path only runs while the daemon is
+    // unreachable, so such a signal is dropped instead of guessed, before it
+    // costs a renderer round-trip.
+    if (!signal.ptyId && !signal.workspaceId) {
+      meter.recordWorkspaceMatch(false);
+      return { ok: false, reason: 'no-workspace-match' };
+    }
+
     // 3. Resolve signal → ptyId. Env-first (workspaceId/surfaceId from
-    //    WMUX_* env vars that wmux PTYManager injects into the shell)
-    //    with cwd matching as the fallback for sessions started outside
-    //    a wmux pane. The workspace list comes from a short-TTL coalescing
+    //    WMUX_* env vars that wmux PTYManager injects into the shell).
+    //    The workspace list comes from a short-TTL coalescing
     //    cache (NOT a fresh round-trip per hook — that flooded the bridge
     //    with 2s timeouts under load; see the cache note above).
     // Env-routed fast path (Fix B) lives in resolveWorkspacesForSignal: an
@@ -642,11 +652,7 @@ export function registerHooksRpc(
       return { ok: false, reason: 'internal-error' };
     }
 
-    // No folder tier here: main holds neither the panes' resume bindings nor
-    // their agent pids, so it cannot tell a pane's own session from one started
-    // in another terminal in the same folder (the daemon verifies that; see
-    // HookIngest verifyGuessedRoute). This path only runs while the daemon is
-    // unreachable, so such a signal is dropped instead of guessed.
+    // Still no folder tier for a workspace id that places nothing (see above).
     const ptyId = resolvePtyIdForSignal(signal, workspaces, { byFolder: false });
     meter.recordWorkspaceMatch(ptyId != null);
     if (!ptyId) {
@@ -1467,7 +1473,7 @@ export function resolvePtyIdForSignal(
       // workspaceId matched a known workspace but the workspace has no
       // ptyId. Fall through to cwd matching as a defensive recovery —
       // a freshly-created workspace with the env set but no surfaces
-      // yet would land here.
+      // yet would land here. With `byFolder: false` it resolves nothing.
     }
   }
   return byFolder ? resolvePtyIdForCwd(signal.cwd, workspaces) : null;
