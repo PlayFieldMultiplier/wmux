@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { RingBuffer } from '../RingBuffer';
+import { loadNativeTerminalCore } from '../../shared/nativeTerminalCore';
 import { StateWriter } from '../StateWriter';
 import { createBufferHibernation, hibernationBlocker, type BufferHibernationDeps } from '../BufferHibernation';
 import { collectDaemonMemoryDiagnostics } from '../memoryDiagnostics';
@@ -11,6 +12,15 @@ import type { ManagedSession } from '../DaemonSessionManager';
 const MB = 1024 * 1024;
 const HOUR = 3_600_000;
 const NOW = Date.now();
+
+// The rust ring needs the native module (npm run build:terminal-core). Without
+// it the rust cases skip, unless WMUX_REQUIRE_RUST_CORE=1 (the CI jobs that
+// build it), where a missing module fails them instead of testing node twice.
+const RUST_PROMISED = process.env.WMUX_REQUIRE_RUST_CORE === '1';
+const rustRingAvailable = (() => {
+  try { loadNativeTerminalCore('ring-v1'); return true; } catch { return false; }
+})();
+const ENGINES = ['node', 'rust'] as const;
 
 interface FakeSession {
   meta: { id: string; state: string; lastActivity: string; exec?: unknown };
@@ -76,9 +86,18 @@ afterEach(() => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-describe('buffer hibernation', () => {
-  it('releases an idle ring and serves identical scrollback, geometry and offsets after wake', async () => {
-    const ring = new RingBuffer(8 * MB, 'node');
+describe.each(ENGINES)('buffer hibernation (%s ring)', (engine) => {
+  const skip = engine === 'rust' && !rustRingAvailable && !RUST_PROMISED;
+  // Locked out of reading its .buf (chmod), which root and Windows ignore.
+  const skipUnreadable = skip || process.platform === 'win32' || process.getuid?.() === 0;
+  const makeRing = (capacity: number): RingBuffer => {
+    const ring = new RingBuffer(capacity, engine);
+    expect(ring.backend).toBe(engine);
+    return ring;
+  };
+
+  it.skipIf(skip)('releases an idle ring and serves identical scrollback, geometry and offsets after wake', async () => {
+    const ring = makeRing(8 * MB);
     fillRing(ring);
     const before = ring.readAllWithGeometry();
     const sizeBefore = ring.size;
@@ -110,8 +129,8 @@ describe('buffer hibernation', () => {
     expect(after.writtenAt).toBe(before.writtenAt);
   });
 
-  it('appends output that arrives while hibernated after the restored history', async () => {
-    const ring = new RingBuffer(8 * MB, 'node');
+  it.skipIf(skip)('appends output that arrives while hibernated after the restored history', async () => {
+    const ring = makeRing(8 * MB);
     fillRing(ring);
     const history = ring.readAll();
     const total = ring.totalBytesWritten;
@@ -126,8 +145,8 @@ describe('buffer hibernation', () => {
     expect(ring.totalBytesWritten).toBe(total + 12);
   });
 
-  it('keeps the newest bytes when a full, wrapped ring hibernates and wakes', async () => {
-    const ring = new RingBuffer(1.5 * MB, 'node');
+  it.skipIf(skip)('keeps the newest bytes when a full, wrapped ring hibernates and wakes', async () => {
+    const ring = makeRing(1.5 * MB);
     fillRing(ring); // ~2 MB into 1.5 MB: wraps
     const before = ring.readAll();
     expect(before.length).toBe(1.5 * MB);
@@ -140,8 +159,8 @@ describe('buffer hibernation', () => {
     expect(after.equals(Buffer.concat([before.subarray(4), Buffer.from('tail')]))).toBe(true);
   });
 
-  it('does not release a ring that a viewer attached to, or that got output, while the dump was in flight', async () => {
-    const attached = new RingBuffer(8 * MB, 'node');
+  it.skipIf(skip)('does not release a ring that a viewer attached to, or that got output, while the dump was in flight', async () => {
+    const attached = makeRing(8 * MB);
     fillRing(attached);
     const attachedBytes = attached.readAll();
     sessions = [fakeSession('a', attached)];
@@ -154,7 +173,7 @@ describe('buffer hibernation', () => {
     expect(attached.isHibernated).toBe(false);
     expect(attached.readAll().equals(attachedBytes)).toBe(true);
 
-    const written = new RingBuffer(8 * MB, 'node');
+    const written = makeRing(8 * MB);
     fillRing(written);
     sessions = [fakeSession('w', written)];
     sweep = createBufferHibernation(deps()).sweep();
@@ -168,8 +187,8 @@ describe('buffer hibernation', () => {
     expect(fs.readFileSync(path.join(dir, 'buffers', 'w.buf')).subarray(-4).toString()).toBe('late');
   });
 
-  it('keeps the ring in memory when the dump fails, and retries later', async () => {
-    const ring = new RingBuffer(8 * MB, 'node');
+  it.skipIf(skip)('keeps the ring in memory when the dump fails, and retries later', async () => {
+    const ring = makeRing(8 * MB);
     fillRing(ring);
     const before = ring.readAll();
     sessions.push(fakeSession('p1', ring));
@@ -193,8 +212,8 @@ describe('buffer hibernation', () => {
     expect((await failing.sweep()).failed).toBe(1);
   });
 
-  it('never hibernates a pane with an agent, a running command, a viewer, recent output or a small ring', () => {
-    const ring = new RingBuffer(8 * MB, 'node');
+  it.skipIf(skip)('never hibernates a pane with an agent, a running command, a viewer, recent output or a small ring', () => {
+    const ring = makeRing(8 * MB);
     fillRing(ring);
     const d = deps();
     const check = (mutate: (s: FakeSession) => void): string | null => {
@@ -218,13 +237,13 @@ describe('buffer hibernation', () => {
     expect(check((s) => { s.meta.lastActivity = new Date(NOW - HOUR).toISOString(); })).toBe('recent-output');
     expect(check((s) => { s.meta.state = 'dead'; })).toBe('not-live');
     expect(hibernationBlocker(fakeSession('p', ring) as unknown as ManagedSession, deps({ idleHours: () => 0 }), NOW)).toBe('off');
-    const small = new RingBuffer(8 * MB, 'node');
+    const small = makeRing(8 * MB);
     small.write(Buffer.alloc(512 * 1024, 0x61));
     expect(hibernationBlocker(fakeSession('s', small) as unknown as ManagedSession, d, NOW)).toBe('small');
   });
 
-  it('is not woken by periodic snapshot dumps, and a dead pane gets its bytes back before the .buf is deleted', async () => {
-    const ring = new RingBuffer(8 * MB, 'node');
+  it.skipIf(skip)('is not woken by periodic snapshot dumps, and a dead pane gets its bytes back before the .buf is deleted', async () => {
+    const ring = makeRing(8 * MB);
     fillRing(ring);
     const before = ring.readAll();
     sessions.push(fakeSession('p1', ring));
@@ -242,8 +261,8 @@ describe('buffer hibernation', () => {
     expect(ring.readAll().equals(before)).toBe(true);
   });
 
-  it('a read-only wake holds the ring for an idle window, then it re-hibernates without rewriting the .buf', async () => {
-    const ring = new RingBuffer(8 * MB, 'node');
+  it.skipIf(skip)('a read-only wake holds the ring for an idle window, then it re-hibernates without rewriting the .buf', async () => {
+    const ring = makeRing(8 * MB);
     fillRing(ring);
     sessions.push(fakeSession('p1', ring));
     let now = NOW;
@@ -263,10 +282,10 @@ describe('buffer hibernation', () => {
     expect(fs.statSync(bufPath).mtimeMs).toBe(marker.getTime());
   });
 
-  it('a restart recovers a hibernated pane from its .buf, which the orphan sweep keeps', async () => {
+  it.skipIf(skip)('a restart recovers a hibernated pane from its .buf, which the orphan sweep keeps', async () => {
     const writer = new StateWriter(dir);
     writer.ensureBufferDir();
-    const ring = new RingBuffer(8 * MB, 'node');
+    const ring = makeRing(8 * MB);
     fillRing(ring);
     const before = ring.readAll();
     sessions.push(fakeSession('live', ring));
@@ -284,10 +303,10 @@ describe('buffer hibernation', () => {
     expect(recovered.readAll().equals(before)).toBe(true);
   });
 
-  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+  it.skipIf(skipUnreadable)(
     'keeps the .buf and the hibernation when the file cannot be read back yet',
     async () => {
-      const ring = new RingBuffer(8 * MB, 'node');
+      const ring = makeRing(8 * MB);
       fillRing(ring);
       const before = ring.readAll();
       sessions.push(fakeSession('p1', ring));
@@ -323,10 +342,10 @@ describe('buffer hibernation', () => {
     },
   );
 
-  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+  it.skipIf(skipUnreadable)(
     'a dump retried after a partial write overwrites it instead of repeating it',
     async () => {
-      const ring = new RingBuffer(8 * MB, 'node');
+      const ring = makeRing(8 * MB);
       fillRing(ring);
       const before = ring.readAll();
       sessions.push(fakeSession('p1', ring));
@@ -349,11 +368,11 @@ describe('buffer hibernation', () => {
     },
   );
 
-  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+  it.skipIf(skipUnreadable)(
     'an unreadable .buf stays bounded while output keeps arriving, and the wake keeps only what fits',
     async () => {
       const capacity = 2 * MB;
-      const ring = new RingBuffer(capacity, 'node');
+      const ring = makeRing(capacity);
       fillRing(ring);
       let stream = ring.readAll();
       sessions.push(fakeSession('p1', ring));
@@ -380,11 +399,73 @@ describe('buffer hibernation', () => {
     },
   );
 
-  it('skips rust rings', () => {
+  it.skipIf(skip)('a resize while hibernated does not wake the ring and applies from the right byte', async () => {
+    const ring = makeRing(8 * MB);
+    fillRing(ring);
+    const before = ring.readAllWithGeometry();
+    sessions.push(fakeSession('p1', ring));
+    await createBufferHibernation(deps()).sweep();
+
+    ring.noteGeometry(100, 20);
+    expect(ring.isHibernated).toBe(true);
+    ring.write(Buffer.from('after'));
+
+    const after = ring.readAllWithGeometry();
+    expect(after.data.equals(Buffer.concat([before.data, Buffer.from('after')]))).toBe(true);
+    expect(after.geometry).toEqual({
+      start: before.geometry?.start,
+      changes: [...(before.geometry?.changes ?? []), { offset: before.data.length, cols: 100, rows: 20 }],
+    });
+    expect(after.writtenAt).toBe(before.writtenAt + 5);
+  });
+
+  it.skipIf(skip)('dispose while hibernated releases the ring and leaves the .buf alone', async () => {
+    const ring = makeRing(8 * MB);
+    fillRing(ring);
+    const before = ring.readAll();
+    sessions.push(fakeSession('p1', ring));
+    await createBufferHibernation(deps()).sweep();
+    expect(ring.isHibernated).toBe(true);
+    const bufPath = path.join(dir, 'buffers', 'p1.buf');
+
+    ring.dispose();
+
+    expect(ring.isHibernated).toBe(false);
+    expect(ring.allocatedBytes).toBe(0);
+    expect(() => ring.write(Buffer.from('late'))).toThrow('disposed');
+    await ring.dumpToFile(bufPath);
+    ring.dumpToFileSyncAtomic(bufPath);
+    expect(fs.readFileSync(bufPath).equals(before)).toBe(true);
+  });
+});
+
+describe('buffer hibernation candidates', () => {
+  it('treats a rust ring like a node ring', () => {
     const ring = new RingBuffer(8 * MB, 'node');
     fillRing(ring);
     const s = fakeSession('r', ring);
     Object.defineProperty(ring, 'backend', { value: 'rust' });
-    expect(hibernationBlocker(s as unknown as ManagedSession, deps(), NOW)).toBe('rust-ring');
+    expect(hibernationBlocker(s as unknown as ManagedSession, deps(), NOW)).toBeNull();
+  });
+});
+
+describe.skipIf(!rustRingAvailable && !RUST_PROMISED)('a hibernated rust ring', () => {
+  it('wakes for a native snapshot freeze, with lifetime offsets', async () => {
+    const ring = new RingBuffer(1.5 * MB, 'rust');
+    fillRing(ring); // wraps, so the woken ring starts mid-stream
+    const before = ring.readAll();
+    const total = ring.totalBytesWritten;
+    sessions.push(fakeSession('p1', ring));
+    await createBufferHibernation(deps({ minBytes: MB })).sweep();
+    expect(ring.isHibernated).toBe(true);
+
+    const frozen = ring.freezeNative();
+    try {
+      expect(ring.isHibernated).toBe(false);
+      expect(frozen?.readAll().equals(before)).toBe(true);
+      expect(ring.totalBytesWritten).toBe(total);
+    } finally {
+      frozen?.dispose();
+    }
   });
 });

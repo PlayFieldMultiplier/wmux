@@ -13,7 +13,9 @@ export async function snapshotRingTextUnqueued(ring: RingBuffer, modes: Pick<Out
     return generateTextSnapshotUnqueued({ ...options, initial, geometry });
   }
   try {
-    const initial = Buffer.from(modes?.preamble(source.writtenAt - source.size) ?? '', 'utf8');
+    // The ring's lifetime offset: a ring re-created after hibernation counts
+    // its native `writtenAt` from the wake, not from the session start.
+    const initial = Buffer.from(modes?.preamble(ring.totalBytesWritten - source.size) ?? '', 'utf8');
     // Preserve each caller's existing replay contract. readSessionText uses
     // one current size; callers already replaying geometry can request it.
     return await generateTextSnapshotUnqueued({ ...options, initial, nativeSource: source, geometry: options.replayGeometry ? source.geometry ?? undefined : undefined });
