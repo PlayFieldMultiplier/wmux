@@ -1173,14 +1173,12 @@ export class DaemonClient extends EventEmitter {
       const response = await this.rpc('daemon.deliverScheduledPromptV2', args) as {
         result?: unknown;
       };
-      if (
-        response.result === 'sent' ||
-        response.result === 'busy' ||
-        response.result === 'unavailable' ||
-        response.result === 'session_changed' ||
-        response.result === 'folder_trust' ||
-        response.result === 'error'
-      ) return response.result;
+      // Every result a daemon may answer; a new one fails typecheck here.
+      const known: Record<SessionPromptScheduleResult, true> = {
+        sent: true, busy: true, unavailable: true, session_changed: true, folder_trust: true, error: true,
+      };
+      const result = response.result;
+      if (typeof result === 'string' && Object.hasOwn(known, result)) return result as SessionPromptScheduleResult;
       return 'error';
     } catch (error) {
       if (

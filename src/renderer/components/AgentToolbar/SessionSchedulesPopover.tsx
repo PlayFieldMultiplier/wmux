@@ -50,15 +50,23 @@ function formatWhen(ms: number): string {
 }
 
 function statusKey(schedule: SessionPromptSchedule): string {
-  if (schedule.enabled && schedule.lastResult === 'busy') return 'sessionSchedule.statusBusy';
-  if (schedule.enabled && schedule.lastResult === 'unavailable') {
-    return 'sessionSchedule.statusUnavailable';
+  const idle = schedule.enabled ? 'sessionSchedule.statusWaiting' : 'sessionSchedule.statusPaused';
+  const result = schedule.lastResult;
+  switch (result) {
+    case undefined: return idle;
+    case 'busy': return schedule.enabled ? 'sessionSchedule.statusBusy' : idle;
+    case 'unavailable': return schedule.enabled ? 'sessionSchedule.statusUnavailable' : idle;
+    case 'folder_trust': return schedule.enabled ? 'sessionSchedule.statusFolderTrust' : idle;
+    case 'session_changed': return 'sessionSchedule.statusSessionChanged';
+    case 'sent': return 'sessionSchedule.statusSent';
+    case 'error': return 'sessionSchedule.statusError';
+    default: {
+      // Every result has its status; a new one fails typecheck here.
+      const unmapped: never = result;
+      void unmapped;
+      return idle;
+    }
   }
-  if (schedule.enabled && schedule.lastResult === 'folder_trust') return 'sessionSchedule.statusFolderTrust';
-  if (schedule.lastResult === 'session_changed') return 'sessionSchedule.statusSessionChanged';
-  if (schedule.lastResult === 'sent') return 'sessionSchedule.statusSent';
-  if (schedule.lastResult === 'error') return 'sessionSchedule.statusError';
-  return schedule.enabled ? 'sessionSchedule.statusWaiting' : 'sessionSchedule.statusPaused';
 }
 
 export default function SessionSchedulesPopover({

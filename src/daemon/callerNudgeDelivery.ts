@@ -67,7 +67,13 @@ export async function deliverCallerNudge(prompt: string, deps: CallerNudgeDeps):
       return { result: 'approval_pending', pasted: false };
     case 'unavailable':
       return { result: 'unavailable', pasted };
-    default:
+    case 'error':
       return { result: !pasted && !quiet() ? 'held' : 'error', pasted };
+    default: {
+      // Every delivery result is mapped above; a new one fails typecheck here.
+      const unmapped: never = result;
+      void unmapped;
+      return { result: 'error', pasted };
+    }
   }
 }

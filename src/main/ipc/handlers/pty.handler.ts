@@ -853,6 +853,9 @@ export function registerPTYHandlers(
       const verifyTaskLine = !!botWorker || !!options?.fanoutTaskOf;
       let verifying = false;
       const initialCmd = scheduleInitialCommand(botWorker && !isWslShell(shell) ? clearedLaunchLine(typedLine, shell) : typedLine, {
+        // A shell rc that starts an agent can put its folder-trust prompt
+        // where the startup line would land.
+        beforeWrite: async () => !(await folderTrustLaunchRefusal(daemonClient, sessionId, 'startup line', { refuseUnknown: true })),
         write: (cmd) => {
           const delivered = writeLaunchLine(cmd);
           if (delivered && verifyTaskLine && !verifying) {
@@ -1169,7 +1172,7 @@ export function registerPTYHandlers(
   // guard or nothing is typed (botWorkerMergeGuard.ts); everywhere else it is
   // written as given.
   ipcMain.removeHandler(IPC.PTY_WRITE_LAUNCH);
-  ipcMain.handle(IPC.PTY_WRITE_LAUNCH, wrapHandler(IPC.PTY_WRITE_LAUNCH, async (_event: Electron.IpcMainInvokeEvent, id: unknown, text: unknown, submit: unknown) => {
+  ipcMain.handle(IPC.PTY_WRITE_LAUNCH, wrapHandler(IPC.PTY_WRITE_LAUNCH, async (_event: Electron.IpcMainInvokeEvent, id: unknown, text: unknown, submit: unknown, origin: unknown) => {
     if (typeof id !== 'string' || typeof text !== 'string' || text.length > PTY_WRITE_BACKSTOP) {
       throw new Error('PTY_WRITE_LAUNCH: an id and a line are required');
     }
@@ -1192,9 +1195,10 @@ export function registerPTYHandlers(
       throw new Error('PTY_WRITE_LAUNCH: a chat owns this pane, so nothing was typed');
     }
     // A line a person clicked to type stops only at a folder-trust prompt on
-    // screen; the auto-resume (it submits) also when the screen cannot rule
-    // one out.
-    const trustRefusal = await folderTrustLaunchRefusal(dc, id, submit === true ? 'auto-resume line' : 'launch line', { refuseUnknown: submit === true });
+    // screen; one wmux types on its own (any caller that does not say
+    // otherwise) also when the screen cannot rule one out.
+    const human = origin === 'human';
+    const trustRefusal = await folderTrustLaunchRefusal(dc, id, human ? 'launch line' : 'automated launch line', { refuseUnknown: !human });
     if (trustRefusal) throw new Error(`PTY_WRITE_LAUNCH: ${trustRefusal}`);
     // A task's pane: a new launch of the task, on disk before the line is
     // typed (factory/workerSlots.ts); not recorded, not typed.

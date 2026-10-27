@@ -23,6 +23,18 @@ describe('scheduleInitialCommand', () => {
     expect(write).toHaveBeenCalledWith('claude');
   });
 
+  it('asks beforeWrite once before the first write, and types nothing on a no or a failed check', async () => {
+    for (const [answer, writes] of [[true, 1], [false, 0], ['throw', 0]] as const) {
+      const write = vi.fn();
+      const beforeWrite = vi.fn(async () => { if (answer === 'throw') throw new Error('no daemon'); return answer; });
+      const s = scheduleInitialCommand('claude', { write, beforeWrite, settleMs: 100 });
+      s.onFirstData();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(beforeWrite).toHaveBeenCalledTimes(1);
+      expect(write).toHaveBeenCalledTimes(writes);
+    }
+  });
+
   it('does not double-fire when first data and the fallback both occur', () => {
     const write = vi.fn();
     const s = scheduleInitialCommand('claude', { write, settleMs: 10, fallbackMs: 50 });

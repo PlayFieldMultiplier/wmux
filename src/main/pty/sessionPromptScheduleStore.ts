@@ -345,6 +345,10 @@ export function advanceSessionPromptSchedule(
     next.enabled = false;
     return next;
   }
+  // Only 'sent' and 'error' are left to consume the occurrence: a new result
+  // fails typecheck here until it is decided above.
+  const consumes: 'sent' | 'error' = result;
+  void consumes;
 
   next.lastRunAt = now;
   if (schedule.intervalMinutes && schedule.intervalMinutes > 0) {

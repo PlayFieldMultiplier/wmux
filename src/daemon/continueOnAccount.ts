@@ -32,6 +32,7 @@ import type { AgentStopResult } from './agentStop';
 
 export type ContinueOnAccountCode =
   | 'no_session'
+  | 'folder_trust'
   | 'unsupported'
   | 'not_claude'
   | 'unknown_session'
@@ -246,7 +247,7 @@ async function run(deps: ContinueOnAccountDeps, id: string, configDir: string): 
   if (revision === null) return { ok: false, code: 'shell_busy' };
   if (!stillOwn()) return { ok: false, code: 'unknown_session' };
   // A folder-trust prompt on screen would take the line (and its Enter).
-  if (await deps.atFolderTrust?.(id)) return { ok: false, code: 'shell_busy' };
+  if (await deps.atFolderTrust?.(id)) return { ok: false, code: 'folder_trust' };
 
   // Bound before the line is typed: the new process's first hook is checked
   // against the pane's account folder. A rebind that could not be persisted

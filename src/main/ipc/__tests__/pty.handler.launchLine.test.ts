@@ -22,6 +22,12 @@ describe('pty:create launch-line check', () => {
     expect(body).toMatch(/daemonClient\.rpc\('daemon\.readPromptEvents', \{ sessionId, limit: 32 \}, \{ timeoutMs: 2_000 \}\)/);
   });
 
+  it('asks about a folder-trust prompt before the startup line, an unreadable screen stopping it too', () => {
+    const at = src.indexOf('const verifyTaskLine');
+    const body = src.slice(at, src.indexOf('write: (cmd) => {', at));
+    expect(body).toContain("beforeWrite: async () => !(await folderTrustLaunchRefusal(daemonClient, sessionId, 'startup line', { refuseUnknown: true })),");
+  });
+
   it('re-sends only on the daemon\'s process-checked word that nothing runs in the pane', () => {
     const at = src.indexOf('const verifyTaskLine');
     const body = src.slice(at, src.indexOf('onExhausted', at));

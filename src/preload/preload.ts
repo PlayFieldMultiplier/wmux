@@ -335,9 +335,11 @@ const electronAPI = {
       ipcRenderer.send(IPC.PTY_WRITE, id, data);
     },
     /** Type a launch line (a resume) into the pane, Enter too when `submit`.
-     *  Rejects when main refuses the line (a bot worker's line it cannot guard). */
-    writeLaunch: (id: string, text: string, submit: boolean) =>
-      ipcRenderer.invoke(IPC.PTY_WRITE_LAUNCH, id, text, submit) as Promise<void>,
+     *  Rejects when main refuses the line (a bot worker's line it cannot guard).
+     *  `origin: 'human'`: a person clicked for it; without it the line counts
+     *  as typed by wmux on its own. */
+    writeLaunch: (id: string, text: string, submit: boolean, origin?: 'human') =>
+      ipcRenderer.invoke(IPC.PTY_WRITE_LAUNCH, id, text, submit, origin) as Promise<void>,
     schedules: {
       list: (ptyId: string) =>
         ipcRenderer.invoke(IPC.SESSION_PROMPT_SCHEDULES_LIST, { ptyId }) as Promise<{

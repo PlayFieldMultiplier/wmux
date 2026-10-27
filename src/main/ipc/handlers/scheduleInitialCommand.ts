@@ -31,6 +31,8 @@ export const INITIAL_COMMAND_RETRY_DELAY_MS = 80;
 export interface ScheduleInitialCommandOptions {
   /** Perform the write. Return `false` to signal "not delivered, please retry". */
   write: (cmd: string) => boolean | void;
+  /** Asked once, right before the first write: false types nothing. */
+  beforeWrite?: () => Promise<boolean>;
   /** Called once if the retry budget is exhausted with the write still undelivered. */
   onExhausted?: () => void;
   settleMs?: number;
@@ -79,7 +81,12 @@ export function scheduleInitialCommand(
         }
       }
     };
-    setTimeout(attempt, settleMs).unref?.();
+    const first = (): void => {
+      if (!opts.beforeWrite) return attempt();
+      // A failed check types nothing, as a refusal does.
+      void opts.beforeWrite().then((ok) => { if (ok) attempt(); }, () => undefined);
+    };
+    setTimeout(first, settleMs).unref?.();
   };
 
   // Fallback so a silent shell still gets its command.

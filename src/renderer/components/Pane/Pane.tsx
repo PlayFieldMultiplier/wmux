@@ -1306,7 +1306,7 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
         // is re-granted only by an explicit keystroke, never automatically (D6).
         // Resolves false when main refused the line: the pill then stays as it was.
         const type = (text: string): Promise<boolean> =>
-          window.electronAPI.pty.writeLaunch(ptyId, text, false).then(
+          window.electronAPI.pty.writeLaunch(ptyId, text, false, 'human').then(
             () => true,
             (err: unknown) => {
               console.warn('[wmux:resume] the resume line was not typed', String(err));

@@ -4964,6 +4964,8 @@ function registerRpcHandlers(
         ? Object.assign(outcome.rows.map((r) => r.text), { undimmed: outcome.rows.map((r) => r.undimmed ?? r.text) })
         : null;
     },
+    atFolderTrust: async (id, writer) =>
+      (await folderTrustRefusal(sessionManager, id, writer, { refuseUnknown: false, log: (message) => log('warn', message) })) !== null,
     agentProcessAlive: async (id, slug) => {
       if (!isAgentSlug(slug)) return false;
       return agentProcessTracker.isAgentRunning(id, slug, (pid) => ProcessMonitor.isRunning(pid));

@@ -294,6 +294,9 @@ export class UsageLimitRegistry {
     // cap; an error, or the cap, disarms so a pane is not retyped into forever.
     // A folder-trust prompt in the way waits the same way.
     if ((result === 'busy' || result === 'folder_trust') && ++meta.busyRetries < USAGE_LIMIT_MAX_BUSY_RETRIES) return;
+    // Only these disarm: a new result fails typecheck here until it is decided.
+    const disarms: 'busy' | 'folder_trust' | 'error' = result;
+    void disarms;
     const limit = this.limits.get(sessionId);
     if (limit && limit.autoResume !== false) {
       const next = { ...limit, autoResume: false };

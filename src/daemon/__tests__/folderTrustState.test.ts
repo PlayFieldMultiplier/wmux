@@ -263,3 +263,23 @@ describe('folderTrustRefusal', () => {
     ]);
   });
 });
+
+describe("the daemon's writers and their folder-trust policy", () => {
+  // Automated writers stop on 'trust' and 'unknown'; a person's (a chat send,
+  // Stop or Rewind, Continue on another account) only on 'trust'.
+  const src = fs.readFileSync(path.join(__dirname, '..', 'index.ts'), 'utf8');
+  const policy = (writer: string): boolean[] =>
+    [...src.matchAll(/folderTrustRefusal\(sessionManager, \w+, ([^,]+), \{ refuseUnknown: (true|false)/g)]
+      .filter((m) => m[1] === writer).map((m) => m[2] === 'true');
+
+  it.each([
+    ['writer', true], ["'automation key'", true], ["'launch line'", true], ["'wake nudge'", true],
+  ])('%s refuses an unreadable screen too', (writer, refuseUnknown) => {
+    expect(policy(writer as string)).toContain(refuseUnknown);
+  });
+
+  it("a person's writers refuse only a prompt seen", () => {
+    expect(src).toMatch(/atFolderTrust: async \(id, writer\) =>\s+\(await folderTrustRefusal\(sessionManager, id, writer, \{ refuseUnknown: false/);
+    expect(policy("'continue on account'")).toEqual([false]);
+  });
+});

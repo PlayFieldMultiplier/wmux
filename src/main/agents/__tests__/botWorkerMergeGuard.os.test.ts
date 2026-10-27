@@ -478,9 +478,9 @@ describe('pty:create applies the guard (source-level lock)', () => {
     const read = (p: string) => fs.readFileSync(path.resolve(process.cwd(), p), 'utf8');
     const pane = read('src/renderer/components/Pane/Pane.tsx');
     expect(pane).toContain('window.electronAPI.pty.writeLaunch(ptyId, line, true)');
-    expect(pane).toContain('window.electronAPI.pty.writeLaunch(ptyId, text, false)');
+    expect(pane).toContain("window.electronAPI.pty.writeLaunch(ptyId, text, false, 'human')");
     expect(pane).not.toMatch(/pty\.write\(ptyId, `\$\{line\}\\r`\)/);
-    expect(read('src/renderer/components/Pane/ResumeInfoChip.tsx')).toContain('window.electronAPI.pty.writeLaunch(ptyId, command, false)');
+    expect(read('src/renderer/components/Pane/ResumeInfoChip.tsx')).toContain("window.electronAPI.pty.writeLaunch(ptyId, command, false, 'human')");
     const fanout = read('src/main/worktask/FanOutService.ts');
     expect(fanout).toMatch(/ctx\.requester\?\.kind === 'bot'\s*\?\s*beginBotWorkerSpawn\(ctx\.verifiedWorkspaceId, cwd,/);
     expect(fanout).toMatch(/releaseAgyTrust\(\);\s*releaseBotSpawn\(\);/);

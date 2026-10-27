@@ -224,7 +224,7 @@ export default function ResumeInfoChip(props: {
     // only by an explicit keystroke, never automatically).
     if (onSend) onSend(command);
     else {
-      window.electronAPI.pty.writeLaunch(ptyId, command, false).catch((err: unknown) => {
+      window.electronAPI.pty.writeLaunch(ptyId, command, false, 'human').catch((err: unknown) => {
         console.warn('[wmux:resume] the resume line was not typed', String(err));
         toastFolderTrustLaunchRefusal(err);
       });
