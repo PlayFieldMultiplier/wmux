@@ -50,6 +50,16 @@ mod native_output;
 #[cfg(any(test, feature = "native-core"))]
 mod output_interpreter;
 
+#[cfg(any(
+    test,
+    all(
+        feature = "native-core",
+        feature = "bindings",
+        not(target_arch = "wasm32")
+    )
+))]
+mod wake_gate;
+
 #[cfg(all(
     feature = "native-core",
     feature = "bindings",
