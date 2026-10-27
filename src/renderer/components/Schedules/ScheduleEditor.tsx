@@ -501,7 +501,10 @@ export default function ScheduleEditor({ original, review, accounts, initial, pi
               <Input inputMode="numeric" value={form.awaitTimeoutMinutes} onChange={(e) => set('awaitTimeoutMinutes', e.target.value)} data-schedule-await />
             </Field>
           </div>
-          <Field label={t('schedules.retryTransient')} description={t('schedules.retryTransientHint')}>
+          <Field
+            label={t('schedules.retryTransient')}
+            description={`${t('schedules.retryTransientHint')} ${t('schedules.retryTransientGlobalHint')}`}
+          >
             <Switch
               checked={form.retryTransientErrors}
               onCheckedChange={(on) => set('retryTransientErrors', on)}

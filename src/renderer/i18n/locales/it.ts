@@ -685,8 +685,10 @@ export const it = {
   // Scheduled runs: one retry after a temporary provider error
   'claudeIntegration.scheduledRetry': "Riprova le esecuzioni pianificate dopo un errore temporaneo",
   'claudeIntegration.scheduledRetryDesc': "Se il turno di un'esecuzione pianificata fallisce per un errore di rete o del server del provider, attendi 5 minuti e invia un messaggio per continuare. Attivo per impostazione predefinita; ogni pianificazione può disattivarlo.",
+  'claudeIntegration.scheduledRetryUnknown': "Non ancora noto: in attesa del servizio in background di wmux.",
   'schedules.retryTransient': "Riprova una volta dopo un errore temporaneo",
   'schedules.retryTransientHint': "In caso di errore di rete o del server del provider, attendi 5 minuti e invia un messaggio per continuare. Il prompt non viene reinviato.",
+  'schedules.retryTransientGlobalHint': "Vale solo se «Riprova le esecuzioni pianificate dopo un errore temporaneo» è attivo in Impostazioni → Integrazione Claude.",
   'schedules.state.retryWaiting': "In attesa: nuovo tentativo dopo un errore temporaneo del provider (tra {minutes} min)",
   'schedules.reason.agent_error_retried_once': "errore dell'agente di nuovo dopo un tentativo",
   'schedules.reason.agent_error_retry_blocked': "errore dell'agente; impossibile inviare il nuovo tentativo",

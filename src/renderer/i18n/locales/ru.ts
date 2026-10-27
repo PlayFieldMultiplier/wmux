@@ -686,8 +686,10 @@ export const ru = {
   // Scheduled runs: one retry after a temporary provider error
   'claudeIntegration.scheduledRetry': "Повторять запланированные запуски после временной ошибки",
   'claudeIntegration.scheduledRetryDesc': "Если ход запланированного запуска завершился ошибкой сети или сервера провайдера, подождать 5 минут и отправить одно сообщение о продолжении. Включено по умолчанию; для каждого расписания можно отключить.",
+  'claudeIntegration.scheduledRetryUnknown': "Пока неизвестно: ожидание фоновой службы wmux.",
   'schedules.retryTransient': "Повторить один раз после временной ошибки",
   'schedules.retryTransientHint': "При ошибке сети или сервера провайдера подождать 5 минут и отправить одно сообщение о продолжении. Промпт повторно не отправляется.",
+  'schedules.retryTransientGlobalHint': "Действует, только если в Настройки → Интеграция с Claude включено «Повторять запланированные запуски после временной ошибки».",
   'schedules.state.retryWaiting': "Ожидание: повтор после временной ошибки провайдера (через {minutes} мин)",
   'schedules.reason.agent_error_retried_once': "снова ошибка агента после одного повтора",
   'schedules.reason.agent_error_retry_blocked': "ошибка агента; не удалось отправить повтор",

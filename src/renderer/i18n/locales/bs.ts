@@ -685,8 +685,10 @@ export const bs = {
   // Scheduled runs: one retry after a temporary provider error
   'claudeIntegration.scheduledRetry': "Ponovi zakazana pokretanja nakon privremene greške",
   'claudeIntegration.scheduledRetryDesc': "Ako potez zakazanog pokretanja ne uspije zbog greške mreže ili servera pružatelja, sačekaj 5 minuta i pošalji jednu poruku za nastavak. Uključeno po zadanom; svaki raspored to može isključiti.",
+  'claudeIntegration.scheduledRetryUnknown': "Još nepoznato: čeka se pozadinska usluga wmux.",
   'schedules.retryTransient': "Ponovi jednom nakon privremene greške",
   'schedules.retryTransientHint': "Kod greške mreže ili servera pružatelja, sačekaj 5 minuta i pošalji jednu poruku za nastavak. Upit se ne šalje ponovo.",
+  'schedules.retryTransientGlobalHint': "Važi samo dok je uključeno „Ponovi zakazana pokretanja nakon privremene greške” u Postavke → Integracija s Claudeom.",
   'schedules.state.retryWaiting': "Čeka: ponovni pokušaj nakon privremene greške pružatelja (za {minutes} min)",
   'schedules.reason.agent_error_retried_once': "ponovo greška agenta nakon jednog ponovnog pokušaja",
   'schedules.reason.agent_error_retry_blocked': "greška agenta; ponovni pokušaj nije bilo moguće poslati",

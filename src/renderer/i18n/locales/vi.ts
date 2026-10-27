@@ -680,8 +680,10 @@ export const vi = {
   // Scheduled runs: one retry after a temporary provider error
   'claudeIntegration.scheduledRetry': "Thử lại lần chạy theo lịch sau lỗi tạm thời",
   'claudeIntegration.scheduledRetryDesc': "Nếu lượt của một lần chạy theo lịch thất bại do lỗi mạng hoặc lỗi máy chủ của nhà cung cấp, chờ 5 phút rồi gửi một tin nhắn tiếp tục. Bật theo mặc định; mỗi lịch có thể tắt.",
+  'claudeIntegration.scheduledRetryUnknown': "Chưa rõ: đang chờ dịch vụ nền của wmux.",
   'schedules.retryTransient': "Thử lại một lần sau lỗi tạm thời",
   'schedules.retryTransientHint': "Khi có lỗi mạng hoặc lỗi máy chủ của nhà cung cấp, chờ 5 phút rồi gửi một tin nhắn tiếp tục. Lời nhắc không được gửi lại.",
+  'schedules.retryTransientGlobalHint': "Chỉ áp dụng khi “Thử lại lần chạy theo lịch sau lỗi tạm thời” đang bật trong Cài đặt → Tích hợp Claude.",
   'schedules.state.retryWaiting': "Đang chờ: thử lại sau lỗi tạm thời của nhà cung cấp (sau {minutes} phút)",
   'schedules.reason.agent_error_retried_once': "lại lỗi tác tử sau một lần thử lại",
   'schedules.reason.agent_error_retry_blocked': "lỗi tác tử; không thể gửi lần thử lại",

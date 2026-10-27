@@ -734,8 +734,10 @@ export const ja = {
   // Scheduled runs: one retry after a temporary provider error
   'claudeIntegration.scheduledRetry': "一時的なエラーの後、スケジュール実行を再試行",
   'claudeIntegration.scheduledRetryDesc': "スケジュール実行のターンがネットワークまたはプロバイダーのサーバーエラーで失敗した場合、5分待って続行メッセージを1回送信します。既定でオン。スケジュールごとにオフにできます。",
+  'claudeIntegration.scheduledRetryUnknown': "まだ不明です: wmux のバックグラウンドサービスの応答を待っています。",
   'schedules.retryTransient': "一時的なエラーの後に1回再試行",
   'schedules.retryTransientHint': "ネットワークまたはプロバイダーのサーバーエラーの場合、5分待って続行メッセージを1回送信します。プロンプトは再送されません。",
+  'schedules.retryTransientGlobalHint': "設定 → Claude 連携の「一時的なエラーの後、スケジュール実行を再試行」がオンのときだけ有効です。",
   'schedules.state.retryWaiting': "待機中: 一時的なプロバイダーエラーの後に再試行 ({minutes}分後)",
   'schedules.reason.agent_error_retried_once': "1回再試行した後も再びエージェントエラー",
   'schedules.reason.agent_error_retry_blocked': "エージェントエラー。再試行を送信できませんでした",

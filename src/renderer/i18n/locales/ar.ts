@@ -682,8 +682,10 @@ export const ar = {
   // Scheduled runs: one retry after a temporary provider error
   'claudeIntegration.scheduledRetry': "إعادة محاولة التشغيلات المجدولة بعد خطأ مؤقت",
   'claudeIntegration.scheduledRetryDesc': "إذا فشل دور تشغيل مجدول بسبب خطأ في الشبكة أو في خادم المزوّد، انتظر 5 دقائق ثم أرسل رسالة متابعة واحدة. مفعّل افتراضيًا؛ ويمكن إيقافه لكل جدول.",
+  'claudeIntegration.scheduledRetryUnknown': "غير معروف بعد: في انتظار خدمة wmux في الخلفية.",
   'schedules.retryTransient': "إعادة المحاولة مرة واحدة بعد خطأ مؤقت",
   'schedules.retryTransientHint': "عند حدوث خطأ في الشبكة أو في خادم المزوّد، انتظر 5 دقائق ثم أرسل رسالة متابعة واحدة. لا يُعاد إرسال الموجّه.",
+  'schedules.retryTransientGlobalHint': "يسري فقط عند تفعيل «إعادة محاولة التشغيلات المجدولة بعد خطأ مؤقت» في الإعدادات ← تكامل Claude.",
   'schedules.state.retryWaiting': "في الانتظار: إعادة المحاولة بعد خطأ مؤقت لدى المزوّد (بعد {minutes} د)",
   'schedules.reason.agent_error_retried_once': "خطأ في الوكيل مجددًا بعد إعادة محاولة واحدة",
   'schedules.reason.agent_error_retry_blocked': "خطأ في الوكيل؛ تعذّر إرسال إعادة المحاولة",

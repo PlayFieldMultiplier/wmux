@@ -685,8 +685,10 @@ export const nb = {
   // Scheduled runs: one retry after a temporary provider error
   'claudeIntegration.scheduledRetry': "Prøv planlagte kjøringer på nytt etter en midlertidig feil",
   'claudeIntegration.scheduledRetryDesc': "Hvis turen i en planlagt kjøring feiler på en nettverks- eller serverfeil hos leverandøren, vent 5 minutter og send én fortsett-melding. På som standard; hver plan kan slå det av.",
+  'claudeIntegration.scheduledRetryUnknown': "Ikke kjent ennå: venter på bakgrunnstjenesten til wmux.",
   'schedules.retryTransient': "Prøv på nytt én gang etter en midlertidig feil",
   'schedules.retryTransientHint': "Ved en nettverks- eller serverfeil hos leverandøren, vent 5 minutter og send én fortsett-melding. Ledeteksten sendes ikke på nytt.",
+  'schedules.retryTransientGlobalHint': "Gjelder bare mens «Prøv planlagte kjøringer på nytt etter en midlertidig feil» er på under Innstillinger → Claude-integrasjon.",
   'schedules.state.retryWaiting': "Venter: prøver på nytt etter en midlertidig leverandørfeil (om {minutes} min)",
   'schedules.reason.agent_error_retried_once': "agentfeil igjen etter ett nytt forsøk",
   'schedules.reason.agent_error_retry_blocked': "agentfeil; det nye forsøket kunne ikke sendes",

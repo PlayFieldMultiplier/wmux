@@ -29,6 +29,7 @@
 // and the user resolves the ambiguity by trying the install command.
 
 import { useEffect, useRef, useState } from 'react';
+import { scheduledRetrySync, type ScheduledRetrySync } from './scheduledRetrySetting';
 import { useStore } from '../../stores';
 import { useT } from '../../hooks/useT';
 import { IconCheck, IconWarning } from '../icons';
@@ -229,38 +230,41 @@ function UsageCard({
 /**
  * Scheduled runs: hold a turn that failed on a temporary provider error and
  * continue it once. The daemon keeps this (runs happen with no window open),
- * so the row reads and writes it there; the switch is disabled until it answers.
+ * so the row reads and writes it there. Until the daemon answers, or after a
+ * change whose outcome is unclear, the value is unknown: the switch is
+ * disabled and says so, and it is read again when the daemon (re)connects.
  */
-function ScheduledRetryRow({ t }: { t: (key: string, vars?: Record<string, string | number>) => string }) {
+export function ScheduledRetryRow({ t }: { t: (key: string, vars?: Record<string, string | number>) => string }) {
   const [on, setOn] = useState<boolean | null>(null);
-  // Only the newest change's answer is shown: an older reply landing late must not flip the switch back.
-  const latest = useRef(0);
+  const sync = useRef<ScheduledRetrySync | null>(null);
   useEffect(() => {
-    let live = true;
-    void window.electronAPI?.automation?.settings?.()
-      .then((s) => { if (live && s) setOn(s.retryTransientErrors); })
-      .catch(() => undefined);
-    return () => { live = false; };
+    const api = window.electronAPI;
+    const current = scheduledRetrySync({
+      read: () => api?.automation?.settings?.() ?? Promise.resolve(null),
+      write: (value) => api.automation.setSettings({ retryTransientErrors: value }),
+    }, setOn);
+    sync.current = current;
+    current.read();
+    const offs = [api?.daemon?.onConnected?.(current.read), api?.daemon?.onReconnected?.(current.read)];
+    return () => {
+      current.dispose();
+      for (const off of offs) off?.();
+    };
   }, []);
-  const change = (next: boolean): void => {
-    setOn(next);
-    const seq = ++latest.current;
-    const settle = (value: boolean): void => { if (seq === latest.current) setOn(value); };
-    void window.electronAPI.automation.setSettings({ retryTransientErrors: next })
-      .then((r) => settle(r.ok ? r.settings.retryTransientErrors : !next))
-      .catch(() => settle(!next));
-  };
   return (
     <SettingRow
       id="scheduledretry"
       label={t('claudeIntegration.scheduledRetry')}
-      description={t('claudeIntegration.scheduledRetryDesc')}
+      description={on === null
+        ? `${t('claudeIntegration.scheduledRetryDesc')} ${t('claudeIntegration.scheduledRetryUnknown')}`
+        : t('claudeIntegration.scheduledRetryDesc')}
     >
       <Switch
-        checked={on ?? true}
+        checked={on === true}
         disabled={on === null}
-        onCheckedChange={change}
+        onCheckedChange={(next) => sync.current?.change(next)}
         aria-label={t('claudeIntegration.scheduledRetry')}
+        data-scheduled-retry={on === null ? 'unknown' : on ? 'on' : 'off'}
       />
     </SettingRow>
   );

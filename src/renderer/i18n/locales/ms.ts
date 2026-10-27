@@ -686,8 +686,10 @@ export const ms = {
   // Scheduled runs: one retry after a temporary provider error
   'claudeIntegration.scheduledRetry': "Cuba semula larian berjadual selepas ralat sementara",
   'claudeIntegration.scheduledRetryDesc': "Jika giliran larian berjadual gagal kerana ralat rangkaian atau pelayan pembekal, tunggu 5 minit dan hantar satu mesej teruskan. Hidup secara lalai; setiap jadual boleh mematikannya.",
+  'claudeIntegration.scheduledRetryUnknown': "Belum diketahui: menunggu perkhidmatan latar wmux.",
   'schedules.retryTransient': "Cuba semula sekali selepas ralat sementara",
   'schedules.retryTransientHint': "Apabila berlaku ralat rangkaian atau pelayan pembekal, tunggu 5 minit dan hantar satu mesej teruskan. Gesaan tidak dihantar semula.",
+  'schedules.retryTransientGlobalHint': "Hanya terpakai apabila “Cuba semula larian berjadual selepas ralat sementara” dihidupkan dalam Tetapan → Integrasi Claude.",
   'schedules.state.retryWaiting': "Menunggu: mencuba semula selepas ralat sementara pembekal (dalam {minutes} min)",
   'schedules.reason.agent_error_retried_once': "ralat ejen lagi selepas satu cubaan semula",
   'schedules.reason.agent_error_retry_blocked': "ralat ejen; cubaan semula tidak dapat dihantar",

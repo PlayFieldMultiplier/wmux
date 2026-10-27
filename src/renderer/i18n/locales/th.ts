@@ -680,8 +680,10 @@ export const th = {
   // Scheduled runs: one retry after a temporary provider error
   'claudeIntegration.scheduledRetry': "ลองรันตามกำหนดเวลาใหม่หลังข้อผิดพลาดชั่วคราว",
   'claudeIntegration.scheduledRetryDesc': "หากเทิร์นของการรันตามกำหนดเวลาล้มเหลวเพราะข้อผิดพลาดของเครือข่ายหรือเซิร์ฟเวอร์ผู้ให้บริการ ให้รอ 5 นาทีแล้วส่งข้อความให้ทำต่อหนึ่งครั้ง เปิดไว้เป็นค่าเริ่มต้น และปิดได้ในแต่ละกำหนดเวลา",
+  'claudeIntegration.scheduledRetryUnknown': "ยังไม่ทราบ: กำลังรอบริการเบื้องหลังของ wmux",
   'schedules.retryTransient': "ลองใหม่หนึ่งครั้งหลังข้อผิดพลาดชั่วคราว",
   'schedules.retryTransientHint': "เมื่อเกิดข้อผิดพลาดของเครือข่ายหรือเซิร์ฟเวอร์ผู้ให้บริการ ให้รอ 5 นาทีแล้วส่งข้อความให้ทำต่อหนึ่งครั้ง จะไม่ส่งพรอมต์ซ้ำ",
+  'schedules.retryTransientGlobalHint': "มีผลเฉพาะเมื่อเปิด “ลองรันตามกำหนดเวลาใหม่หลังข้อผิดพลาดชั่วคราว” ในการตั้งค่า → การเชื่อมต่อ Claude",
   'schedules.state.retryWaiting': "กำลังรอ: ลองใหม่หลังข้อผิดพลาดชั่วคราวของผู้ให้บริการ (อีก {minutes} นาที)",
   'schedules.reason.agent_error_retried_once': "เอเจนต์ผิดพลาดอีกครั้งหลังลองใหม่หนึ่งครั้ง",
   'schedules.reason.agent_error_retry_blocked': "เอเจนต์ผิดพลาด; ส่งการลองใหม่ไม่ได้",

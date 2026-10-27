@@ -686,8 +686,10 @@ export const ptBR = {
   // Scheduled runs: one retry after a temporary provider error
   'claudeIntegration.scheduledRetry': "Repetir execuções agendadas após um erro temporário",
   'claudeIntegration.scheduledRetryDesc': "Se o turno de uma execução agendada falhar por erro de rede ou do servidor do provedor, aguardar 5 minutos e enviar uma mensagem para continuar. Ativado por padrão; cada agendamento pode desativar.",
+  'claudeIntegration.scheduledRetryUnknown': "Ainda desconhecido: aguardando o serviço em segundo plano do wmux.",
   'schedules.retryTransient': "Repetir uma vez após um erro temporário",
   'schedules.retryTransientHint': "Em caso de erro de rede ou do servidor do provedor, aguardar 5 minutos e enviar uma mensagem para continuar. O prompt não é reenviado.",
+  'schedules.retryTransientGlobalHint': "Só vale enquanto “Repetir execuções agendadas após um erro temporário” estiver ativado em Configurações → Integração com o Claude.",
   'schedules.state.retryWaiting': "Aguardando: nova tentativa após um erro temporário do provedor (em {minutes} min)",
   'schedules.reason.agent_error_retried_once': "erro do agente novamente após uma nova tentativa",
   'schedules.reason.agent_error_retry_blocked': "erro do agente; não foi possível enviar a nova tentativa",

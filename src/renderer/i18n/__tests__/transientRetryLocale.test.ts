@@ -26,8 +26,10 @@ import { zh } from '../locales/zh';
 const KEYS = [
   'claudeIntegration.scheduledRetry',
   'claudeIntegration.scheduledRetryDesc',
+  'claudeIntegration.scheduledRetryUnknown',
   'schedules.retryTransient',
   'schedules.retryTransientHint',
+  'schedules.retryTransientGlobalHint',
   'schedules.state.retryWaiting',
   'schedules.reason.agent_error_retried_once',
   'schedules.reason.agent_error_retry_blocked',

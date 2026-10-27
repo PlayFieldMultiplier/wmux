@@ -721,8 +721,10 @@ export const zhTW = {
   // Scheduled runs: one retry after a temporary provider error
   'claudeIntegration.scheduledRetry': "暫時性錯誤後重試排程執行",
   'claudeIntegration.scheduledRetryDesc': "若排程執行的回合因網路或供應商伺服器錯誤而失敗，等待 5 分鐘後傳送一則繼續訊息。預設開啟；每個排程可個別關閉。",
+  'claudeIntegration.scheduledRetryUnknown': "尚不清楚：正在等待 wmux 背景服務。",
   'schedules.retryTransient': "暫時性錯誤後重試一次",
   'schedules.retryTransientHint': "遇到網路或供應商伺服器錯誤時，等待 5 分鐘後傳送一則繼續訊息。不會重新傳送提示詞。",
+  'schedules.retryTransientGlobalHint': "僅在「設定 → Claude 整合」中開啟「暫時性錯誤後重試排程執行」時生效。",
   'schedules.state.retryWaiting': "等待中：暫時性供應商錯誤後重試（{minutes} 分鐘後）",
   'schedules.reason.agent_error_retried_once': "重試一次後再次發生代理錯誤",
   'schedules.reason.agent_error_retry_blocked': "代理錯誤；無法傳送重試",
