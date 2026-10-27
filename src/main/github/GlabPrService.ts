@@ -119,11 +119,13 @@ export function glabProjectPath(item: GlabMrItem): string | null {
   return /^[\w.-]+(?:\/[\w.-]+)+$/.test(path) ? path : null;
 }
 
-/** The GraphQL query for the head pipelines of these MRs (iids are numbers). */
-export function glabPipelinesQuery(iids: readonly number[]): string {
-  const list = iids.map((n) => JSON.stringify(String(n))).join(',');
-  return `query($fullPath: ID!) { project(fullPath: $fullPath) { mergeRequests(iids: [${list}]) { nodes { iid headPipeline { status } } } } }`;
-}
+/** The GraphQL query for the head pipelines of some MRs; the project and the
+ *  iids go as variables, never into the query text. */
+export const GLAB_PIPELINES_QUERY =
+  'query($fullPath: ID!, $iids: [String!]) { project(fullPath: $fullPath) { mergeRequests(iids: $iids) { nodes { iid headPipeline { status } } } } }';
+
+/** `glab api` reading a request's JSON body from stdin: values stay off argv. */
+const JSON_STDIN = ['--input', '-', '-H', 'Content-Type: application/json'];
 
 /** iid → head-pipeline rollup from the GraphQL reply; an MR with no pipeline is absent. */
 export function mapGlabPipelines(reply: unknown): Map<number, NonNullable<PrSummary['checks']>> {
@@ -588,12 +590,13 @@ export class GlabPrService implements PrProvider {
     private exec: Exec = execWithInput,
   ) {}
 
-  private glab(args: string[], cwd: string): Promise<{ stdout: string }> {
+  private glab(args: string[], cwd: string, input?: string): Promise<{ stdout: string }> {
     return this.exec(process.platform === 'win32' ? 'glab.exe' : 'glab', args, {
       cwd,
       timeout: GLAB_TIMEOUT_MS,
       env: GLAB_ENV,
       windowsHide: true,
+      ...(input === undefined ? {} : { input }),
     });
   }
 
@@ -724,9 +727,11 @@ export class GlabPrService implements PrProvider {
     const fullPath = items.map(glabProjectPath).find((p): p is string => p !== null);
     if (!fullPath || prs.length === 0) return new Map();
     try {
+      // As api()'s GraphQL: a constant query, its values as JSON on stdin.
       const { stdout } = await this.glab(
-        ['api', 'graphql', '-f', `query=${glabPipelinesQuery(prs.map((p) => p.number))}`, '-f', `fullPath=${fullPath}`],
+        ['api', '-X', 'POST', 'graphql', ...JSON_STDIN],
         repoPath,
+        JSON.stringify({ query: GLAB_PIPELINES_QUERY, variables: { fullPath, iids: prs.map((p) => String(p.number)) } }),
       );
       return mapGlabPipelines(JSON.parse(stdout));
     } catch {
@@ -771,7 +776,7 @@ export class GlabPrService implements PrProvider {
     write?: { method: 'POST' | 'PUT'; fields: Record<string, unknown> },
   ): Promise<{ stdout: string }> {
     const target = glabHostTarget(host);
-    const args = write ? ['-X', write.method, path, '--input', '-', '-H', 'Content-Type: application/json'] : [path];
+    const args = write ? ['-X', write.method, path, ...JSON_STDIN] : [path];
     return this.exec(process.platform === 'win32' ? 'glab.exe' : 'glab', ['api', ...target.args, ...args], {
       cwd,
       timeout: FACTORY_TIMEOUT_MS,
