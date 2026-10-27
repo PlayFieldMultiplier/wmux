@@ -782,6 +782,21 @@ describe('§5 task.mission.update (J1 물질화)', () => {
     expect(svc.getTask(taskId)?.worktreePath).toBe('/wt/x');
   });
 
+  it('openTaskAt finds the open task whose worktree holds a folder, the innermost one', async () => {
+    const { port } = makeFakeChannelPort();
+    const svc = newWorkTaskService(newLog(), port);
+    await svc.boot();
+    const outer = await svc.startMission({ title: 'Outer', verifiedWorkspaceId: 'ws-o', memberId: 'l' });
+    const inner = await svc.startMission({ title: 'Inner', verifiedWorkspaceId: 'ws-o', memberId: 'l' });
+    if (!outer.ok || !inner.ok) throw new Error('start');
+    await svc.updateMission({ taskId: outer.taskId, verifiedWorkspaceId: 'ws-o', worktreePath: '/wt/outer' });
+    await svc.updateMission({ taskId: inner.taskId, verifiedWorkspaceId: 'ws-o', worktreePath: '/wt/outer/nested' });
+    expect(svc.openTaskAt('/wt/outer/src')?.id).toBe(outer.taskId);
+    expect(svc.openTaskAt('/wt/outer/nested/src/')?.id).toBe(inner.taskId);
+    expect(svc.openTaskAt('/wt/outer-two')).toBeUndefined();
+    expect(svc.openTaskAt('')).toBeUndefined();
+  });
+
   it('배타 불변식: 같은 canonical worktreePath를 다른 open 태스크가 못 점유', async () => {
     const { port } = makeFakeChannelPort();
     const svc = newWorkTaskService(newLog(), port);

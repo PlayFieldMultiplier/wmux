@@ -1360,6 +1360,25 @@ describe('GitContextWatcher offLoop (the daemon)', () => {
     }
   }
 
+  it('localRepos lists a repository armed with fs.watch, never one only polled', async () => {
+    const root = tmp();
+    initFakeRepo(root, 'main');
+    const w = makeWatcher(() => new InProcessProbeReader(asyncIo));
+    w.update('s1', root);
+    await waitFor(() => events.length > 0);
+    expect(w.localRepos().map((r) => ({ ...r, gitDir: fs.realpathSync(r.gitDir) })))
+      .toEqual([{ sessionId: 's1', gitDir: fs.realpathSync(path.join(root, '.git')) }]);
+    w.remove('s1');
+    expect(w.localRepos()).toEqual([]);
+    const polled = new GitContextWatcher(fake.factory, { readers: () => new InProcessProbeReader(asyncIo), isRemote: () => true, offLoop: true });
+    watchers.push(polled);
+    const seen: unknown[] = [];
+    polled.on('git', (e) => seen.push(e));
+    polled.update('s2', root);
+    await waitFor(() => seen.length > 0);
+    expect(polled.localRepos()).toEqual([]);
+  });
+
   it('a reader that never answers does not block the loop: a timer fires, and the cwd reads unknown', async () => {
     // A reader process stuck in open() (macOS waiting on its privacy check
     // for a folder under ~/Desktop) is what froze the daemon's loop.

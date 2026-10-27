@@ -359,6 +359,8 @@ interface SessionWatch {
    */
   rewalk?: boolean;
   watcher: GitWatchHandle | null;
+  /** `watcher` is an fs.watch (arm), not a poll. */
+  fsWatched?: boolean;
   debounce: NodeJS.Timeout | null;
   /** Last emitted value, JSON-encoded, to suppress no-op re-emits. */
   lastEmitted: string | null;
@@ -701,6 +703,20 @@ export class GitContextWatcher extends EventEmitter {
     this.removeAllListeners();
   }
 
+  /**
+   * The sessions in a repository this process watches with fs.watch (its
+   * gitDir opened by a reader in time, when offLoop), with that gitDir. A
+   * polled one (a WSL share, or a target the reader could not open in time)
+   * is left out: nothing more may be read there on this thread.
+   */
+  localRepos(): Array<{ sessionId: string; gitDir: string }> {
+    const out: Array<{ sessionId: string; gitDir: string }> = [];
+    for (const [sessionId, watch] of this.sessions) {
+      if (watch.repo && watch.watcher && watch.fsWatched) out.push({ sessionId, gitDir: watch.repo.gitDir });
+    }
+    return out;
+  }
+
   /** Current session count — observability/testing only. */
   get size(): number {
     return this.sessions.size;
@@ -727,6 +743,7 @@ export class GitContextWatcher extends EventEmitter {
     if (watch.debounce) { clearTimeout(watch.debounce); watch.debounce = null; }
     try { watch.watcher?.close(); } catch { /* already closed */ }
     watch.watcher = null;
+    watch.fsWatched = false;
   }
 
   /**
@@ -763,6 +780,7 @@ export class GitContextWatcher extends EventEmitter {
         }, REREAD_DEBOUNCE_MS);
         watch.debounce.unref?.();
       });
+      watch.fsWatched = true;
       watch.watcher.on('error', () => {
         // Directory vanished (worktree pruned, repo deleted) — drop the
         // watcher; the next cwd update re-arms.

@@ -105,6 +105,7 @@ import type { ComputerService } from './computer/ComputerService';
 import { revealStatsAggregator } from './perf/revealStatsAggregator';
 import { registerHooksRpc } from './pipe/handlers/hooks.rpc';
 import { registerUsageRpc, registerUsageTrailRpc } from './pipe/handlers/usage.rpc';
+import { registerCommitOriginRpc } from './pipe/handlers/commitOrigin.rpc';
 import { UsageTrailStore } from './usage/usageTrailStore';
 import { CompletionAlarm } from '../shared/hooks/CompletionAlarm';
 import { UsagePoller } from './claude/UsagePoller';
@@ -1633,6 +1634,9 @@ registerUsageTrailRpc(rpcRouter, (account, sinceMs, untilMs) => (
   account === 'default' || getAccountStore().getAccount(account)
     ? usageTrail.read(account, sinceMs, untilMs)
     : []));
+
+// Where a commit made in a pane came from, as the daemon recorded it.
+registerCommitOriginRpc(rpcRouter, (sha) => daemonClient?.lookupCommitOrigin(sha) ?? Promise.resolve('unavailable'));
 
 // Live `rate_limits` pushed by the wmux statusline script. The account is the
 // one the pane actually runs on (its CLAUDE_CONFIG_DIR), not the workspace's
