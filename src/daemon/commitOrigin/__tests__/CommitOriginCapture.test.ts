@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Probe } from '../../../main/pty/gitContextWatch';
 import type { CommitOrigin, CommitOriginPane } from '../../../shared/commitOrigin';
@@ -154,7 +155,7 @@ describe('CommitOriginCapture: the reflog', () => {
     const r = rig({}, ['p1']);
     append(r, reflogLine('1'.repeat(40)));
     const watch = await started(r);
-    expect(watch.dir).toBe('/r/.git/logs');
+    expect(watch.dir).toBe(path.join('/r/.git', 'logs'));
     // A Latin-1 name: one byte that is not UTF-8.
     append(r, Buffer.concat([Buffer.from(`${OLD} ${'2'.repeat(40)} Jos`), Buffer.from([0xe9]), Buffer.from(' <d@example.com> 1793116920 +0900\tcommit: x\n')]));
     append(r, reflogLine('3'.repeat(40), 'commit (amend): y'));
@@ -198,6 +199,6 @@ describe('CommitOriginCapture: the reflog', () => {
     watch.onError();
     await vi.advanceTimersByTimeAsync(1_500);
     expect(r.watches).toHaveLength(2);
-    expect(r.watches[1].dir).toBe('/r/.git/logs');
+    expect(r.watches[1].dir).toBe(path.join('/r/.git', 'logs'));
   });
 });
