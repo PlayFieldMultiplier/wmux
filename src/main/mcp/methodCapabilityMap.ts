@@ -747,6 +747,8 @@ export const METHOD_CAPABILITY: Record<RpcMethod, RequiredCapability> = {
   // Agent environments of the paired PCs, read with their stored credentials.
   // First-party readers only.
   'pc.envDiff': { capability: 'wmux.internal' },
+  // Where a commit came from (pane, agent session, task). First-party readers only.
+  'commit.origin': { capability: 'wmux.internal' },
 };
 
 /**

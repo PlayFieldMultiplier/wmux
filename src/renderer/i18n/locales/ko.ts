@@ -3540,6 +3540,8 @@ export const ko = {
   'claudeIntegration.scheduledRetry': "일시적 오류 후 예약 실행 재시도",
   'claudeIntegration.scheduledRetryDesc': "예약 실행의 턴이 네트워크나 제공자 서버 오류로 실패하면 5분 기다린 뒤 이어가기 메시지를 한 번 보냅니다. 기본으로 켜져 있으며, 예약마다 끌 수 있습니다.",
   'claudeIntegration.scheduledRetryUnknown': "아직 알 수 없음: wmux 백그라운드 서비스의 응답을 기다리는 중입니다.",
+  'claudeIntegration.usageReserve': "사용량 예비분 남기기",
+  'claudeIntegration.usageReserveDesc': "Claude 계정의 5시간 사용량이 85% 이상이면 그 사용량을 쓰는 무인 작업을 새로 시작하지 않아 마지막 15%를 직접 쓸 수 있게 남깁니다. 예약 실행은 초기화를 기다렸다가 유예 시간 안이면 실행하고, 지나면 놓친 것으로 기록합니다. 봇의 팬아웃도 기다리고, 내 패인의 에이전트가 요청한 팬아웃은 초기화 시각과 함께 거절합니다. Codex와 다른 에이전트는 막지 않으며, 직접 입력하는 것도 막지 않습니다. 기본으로 꺼져 있습니다.",
   'claudeIntegration.resumeOnStart': '시작 시 Claude Code·Codex 판 자동으로 이어가기',
   'claudeIntegration.resumeOnStartDesc': '재시작 후 Claude Code나 Codex를 실행하던 판에 Resume 버튼을 누르지 않아도 이어가기 명령을 입력합니다. 기본값은 꺼짐입니다.',
   'usageLimit.waiting': '대기 중',

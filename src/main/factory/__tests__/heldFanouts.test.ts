@@ -88,6 +88,22 @@ describe('HeldFanouts', () => {
     expect(r.queue.list({ botId: BOT_A })).toHaveLength(1);
   });
 
+  it('a request held while the usage reserve holds its workspace waits for the reserve, with a slot free', async () => {
+    const r = rig(dir);
+    let reserved = true;
+    r.ports.reserveHeld = (h) => reserved && h.workspaceId === 'ws-1';
+    expect(r.held.hold(request(BOT_A, 'verify #7'))).not.toBeNull();
+    releaseHeldFanouts();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(r.queue.list({ botId: BOT_A })).toEqual([]);
+    expect(r.held.list(BOT_A)).toHaveLength(1);
+    // The window resets: the recheck timer sees it with nothing else moving.
+    reserved = false;
+    await vi.advanceTimersByTimeAsync(61_000);
+    expect(r.queue.list({ botId: BOT_A })).toHaveLength(1);
+    expect(r.held.list()).toEqual([]);
+  });
+
   it('a request held at the wmux-wide live cap (the owner\'s fan-outs fill it) is woken only once a live slot frees', async () => {
     const r = rig(dir);
     let live = 8;
@@ -265,6 +281,16 @@ describe('HeldFanouts', () => {
     expect(again.list(BOT_A).map((h) => h.titles[0])).toEqual(['t1', 't2', 't0']);
     expect(again.list(BOT_A)[0].args?.checkout).toEqual({ sha: SHA, fetch_ref: 'pull/7/head' });
     again.dispose();
+  });
+
+  it('keeps a GitLab merge request\'s checkout; a hold that needs its arguments is refused without them', () => {
+    const r = rig(dir);
+    const gitlab = { ...request(BOT_A, 'verify !7'), args: { ...request(BOT_A, 'verify !7').args, checkout: { sha: SHA, fetch_ref: 'merge-requests/7/head' } } };
+    expect(r.held.hold({ ...gitlab, requireArgs: true })?.args?.checkout).toEqual({ sha: SHA, fetch_ref: 'merge-requests/7/head' });
+    const bad = { ...request(BOT_A, 'verify x'), args: { ...request(BOT_A, 'verify x').args, checkout: { sha: SHA, fetch_ref: 'refs/heads/main' } } };
+    expect(r.held.hold({ ...bad, requireArgs: true })).toBeNull();
+    expect(r.held.list(BOT_A).map((h) => h.titles[0])).toEqual(['verify !7']);
+    r.held.dispose();
   });
 
   it('keeps a request whose wake could not be queued, for the next free slot', async () => {

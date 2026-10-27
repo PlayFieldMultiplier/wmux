@@ -422,10 +422,26 @@ The capability column below summarises the table. Three sentinels:
 | `usage.rateLimits` | `wmux.internal` | — | — |
 | `usage.trail` | `wmux.internal` | — | — |
 | `pc.envDiff` | `wmux.internal` | — | — |
+| `commit.origin` | `wmux.internal` | — | — |
 
 Methods marked **bold** are surfaced in the approval dialog with stronger user-facing language (spec §3.6 — terminal-content / terminal-input risk classes).
 
 The full machine-readable map (with path extractors and `multiPathMode` flags) lives at `src/main/mcp/methodCapabilityMap.ts`. `tsc --noEmit` enforces totality via `Record<RpcMethod, ...>` so a new RPC method without a map entry fails the build.
+
+### Commit origins (internal, first-party desktop only)
+
+`commit.origin { sha }` (a full SHA-1 or SHA-256) answers where a commit made in
+a wmux pane came from, as the daemon recorded it when the commit landed:
+`{ ok: true, origin: null | { sha, at, op, branch, evidence, attributed?, candidates? } }`,
+or `{ ok: false, reason: "invalid" | "unavailable" }`. `op` is `commit`,
+`amend` or `initial`. `evidence` is `screen` when the short SHA showed in one
+pane's own output; only then is `attributed` set (`ptyId`, `workspaceId`,
+`agent`, `agentSessionId`, `taskId`). Otherwise `candidates` lists the panes
+that were in that worktree (`only-pane` for one, `none` for several or none);
+a candidate is not an attribution. Nothing is written into the repository, and
+the commit message is never stored. The main pipe relays it to the daemon's
+first-party `daemon.commitOrigin.lookup`. Not an MCP tool and not part of the
+phone client contract.
 
 ### Terminal launch and managed chat (internal, first-party desktop only)
 

@@ -251,6 +251,10 @@ export interface AgentIdentityRow {
    *  exact resume under that account's CLAUDE_CONFIG_DIR picks the copy up
    *  (src/daemon/continueOnAccount.ts). */
   readonly continueOnAccount?: true;
+  /** wmux reads this agent's per-account 5h usage (the statusline push and
+   *  the usage API), so the usage reserve can hold its unattended starts
+   *  (src/main/usage/usageReserve.ts). */
+  readonly usageReserve?: true;
   /** A double ESC at rest, with an empty composer, opens the agent's own
    *  Rewind picker (src/daemon/transcript/openClaudeRewind.ts). */
   readonly rewindPicker?: true;
@@ -314,6 +318,7 @@ export const AGENT_IDENTITIES = [
     terminalChat: { send: true, cancel: true, images: true, queue: true },
     accounts: 'account-store',
     continueOnAccount: true,
+    usageReserve: true,
     rewindPicker: true,
     continueInChat: true,
     tokenUsage: true,

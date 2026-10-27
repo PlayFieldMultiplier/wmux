@@ -52,7 +52,7 @@ import { MOA_PROMPTS_FILE, parseNotedPrompts, type NotedPrompt } from '../shared
 import { coercePhoneDecisions } from './approvals/decisionConfig';
 import { createOpenCodeDecisions } from './approvals/openCodeDecisions';
 import { isNativeDecision } from './approvals/types';
-import { SCROLLBACK_ROWS } from './web/hostSearch';
+import { SCROLLBACK_ROWS, joinWrappedRows } from './web/hostSearch';
 import { recoveryCwd, isWslShell, isWslCwdMissingError } from '../shared/wsl';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -196,7 +196,10 @@ import {
 import { createSnapshotRunner } from './snapshotRunner';
 import { createBufferHibernation } from './BufferHibernation';
 import { RingBuffer } from './RingBuffer';
-import { GitContextWatcher } from '../main/pty/gitContextWatch';
+import { GitContextWatcher, type Probe, type ProbeAnswer } from '../main/pty/gitContextWatch';
+import { CommitOriginCapture } from './commitOrigin/CommitOriginCapture';
+import { CommitOriginStore } from './commitOrigin/CommitOriginStore';
+import { SHA_RE } from '../shared/commitOrigin';
 import { PortWatcher } from '../main/pty/portWatch';
 import { initDaemonLogSink, isBrokenPipeError, stdioErrorsConsumed } from './util/logSink';
 import { installExitEvidence, noteExitReason } from './exitEvidence';
@@ -283,6 +286,7 @@ import { continueOnAccount } from './continueOnAccount';
 import { paneFree } from './paneFree';
 import { createOrphanSweep } from './winProcessSweep';
 import { classifyShell } from './shell-integration';
+import { loadUsageReserveHolds, takeUsageReserveHolds, usageReserveHoldAt } from './usageReserveHolds';
 import { UsageLimitRegistry } from './usageLimit/UsageLimitRegistry';
 import type { SessionPromptScheduleResult } from '../shared/sessionPromptSchedule';
 import { claudeUsageLimitFromStopFailure, USAGE_LIMIT_CONTINUE_PROMPT, type PaneUsageLimitPatch } from '../shared/usageLimit';
@@ -391,6 +395,9 @@ let hookIngest: HookIngest | null = null;
 let detectionAgreementLog: DetectionAgreementLog | null = null;
 /** Panes held at a provider usage limit (shared/usageLimit). Built once delivery exists. */
 let usageLimits: UsageLimitRegistry | null = null;
+/** The usage reserve's holds pushed by main: account key → 5h reset (ms).
+ *  Read from disk at start, so a restart before main reconnects keeps them. */
+let usageReserveHolds = new Map<string, number>();
 /** Scheduled runs. Built in registerRpcHandlers once the session RPCs exist. */
 let automationEngine: AutomationEngine | null = null;
 // Outbound webhook/ntfy notifications. Module-scoped for the same reason
@@ -6030,6 +6037,13 @@ function registerRpcHandlers(
     log: (message) => log('info', message),
   });
   pipeServer.onRpc('daemon.usageLimit.list', async () => ({ limits: usageLimits?.list() ?? [] }));
+  usageReserveHolds = loadUsageReserveHolds(getWmuxDir());
+  // The usage reserve's holds, from the app only (main reads the usage):
+  // account key → when its 5h window resets. Replaced whole on every push.
+  pipeServer.onRpc('daemon.usageReserve.set', async (params, ctx) => {
+    if (!pipeServer.isFirstParty(ctx.clientId)) return { ok: false };
+    return takeUsageReserveHolds(getWmuxDir(), params['holds'], (next) => { usageReserveHolds = next; }, (line) => log('warn', line));
+  });
   // Edits come from the app only (main relays the renderer's verbs and the
   // reset fill): an agent holding the daemon token for its hooks must not be
   // able to dismiss or re-time a hold.
@@ -6132,6 +6146,7 @@ function registerRpcHandlers(
       return signedIn === false;
     },
     authLost: (agent, env) => noteAuthLost?.('', agent, env, 'schedule'),
+    reserveHold: (account) => usageReserveHoldAt(usageReserveHolds, account, Date.now()),
     createSession: async ({ id, cwd, env, command }) => {
       await createSessionRpc({ id, cwd, env, exec: { command } });
     },
@@ -8308,17 +8323,37 @@ function wireEvents(
 function wireContextWatchers(
   sessionManager: DaemonSessionManager,
   pipeServer: DaemonPipeServer,
+  makeCommitOrigins?: (read: (probe: Probe) => Promise<ProbeAnswer>) => CommitOriginCapture,
 ): () => void {
   // offLoop: a pane's cwd is read and watched only after a reader process
   // opened it. On macOS the daemon is its own responsible process for the
   // privacy check, and an open() under ~/Desktop it has no grant for blocked
   // this loop until main force-respawned the daemon (health pings failing).
   const gitWatcher = new GitContextWatcher(undefined, { offLoop: true });
+  // Reads the reflogs through the git watcher's own reader (never this thread).
+  const commitOrigins = makeCommitOrigins?.((probe) => gitWatcher.readThroughReader(probe));
   const portWatcher = new PortWatcher(() =>
     sessionManager.listLiveSessions().map((s) => ({ sessionId: s.id, pid: s.pid })),
   );
 
+  // Commit origins: the panes in a locally watched worktree, with their
+  // branch as last emitted. Synced on every answer and every pane gone, and
+  // on a slow timer for a move the watcher answers with no new value.
+  const branches = new Map<string, string | null>();
+  const syncCommitOrigins = (): void => {
+    if (!commitOrigins) return;
+    try {
+      commitOrigins.sync(gitWatcher.localRepos().map((r) => ({ ...r, branch: branches.get(r.sessionId) ?? null })));
+    } catch (err) {
+      log('warn', '[commitOrigin] sync failed:', err);
+    }
+  };
+  const commitOriginTimer = commitOrigins ? setInterval(syncCommitOrigins, COMMIT_ORIGIN_SYNC_MS) : null;
+  commitOriginTimer?.unref?.();
+
   gitWatcher.on('git', (payload: { sessionId: string; branch: string | null; isWorktree: boolean; absent?: true }) => {
+    branches.set(payload.sessionId, payload.branch);
+    syncCommitOrigins();
     try {
       const event: DaemonEvent = {
         type: 'context.git',
@@ -8363,6 +8398,8 @@ function wireContextWatchers(
   };
   const onGone = (payload: { id: string }) => {
     gitWatcher.remove(payload.id);
+    branches.delete(payload.id);
+    syncCommitOrigins();
   };
   sessionManager.on('session:created', onCreated);
   sessionManager.on('session:cwd', onCwd);
@@ -8389,8 +8426,61 @@ function wireContextWatchers(
     sessionManager.off('session:destroyed', onGone);
     portWatcher.stop();
     gitWatcher.dispose();
+    if (commitOriginTimer) clearInterval(commitOriginTimer);
+    commitOrigins?.dispose();
     resyncContextWatchers = null;
   };
+}
+
+/** How often the commit-origin capture re-reads the watched worktrees (ms). */
+const COMMIT_ORIGIN_SYNC_MS = 15_000;
+/** Rows of a pane's recent output searched for a new commit's short SHA. */
+const COMMIT_ORIGIN_SCROLLBACK = 200;
+
+/**
+ * Where each commit made in a pane came from (daemon/commitOrigin). Each pane
+ * is read the moment its worktree's reflog line lands: its workspace, the
+ * agent it runs and that agent's own session (its bound Claude transcript).
+ */
+function createCommitOriginCapture(
+  sessionManager: DaemonSessionManager,
+  store: CommitOriginStore,
+  taskAt: (cwd: string) => string | null,
+  read: (probe: Probe) => Promise<ProbeAnswer>,
+): CommitOriginCapture {
+  return new CommitOriginCapture({
+    store,
+    read,
+    livePanes: () => sessionManager.listLiveSessions().map((s) => s.id),
+    // Soft-wrapped rows joined back, so a long summary line still matches.
+    paneText: async (id) => {
+      const outcome = await queuedTextSnapshot(sessionManager, id, COMMIT_ORIGIN_SCROLLBACK);
+      return outcome?.ok ? joinWrappedRows(outcome.rows).join('\n') : null;
+    },
+    outputBytes: (id) => sessionManager.getSession(id)?.ringBuffer.totalBytesWritten ?? null,
+    pane: (id) => {
+      const meta = sessionManager.getSession(id)?.meta;
+      const ws = meta?.env?.[ENV_KEYS.WORKSPACE_ID];
+      // registerRpcHandlers' agent-state reader (readDaemonAgentState).
+      const agentName = readAgentStateForWeb?.(id).agentName;
+      const agent = agentName ? agentDisplayToSlug(agentName) ?? null : null;
+      // The agent's own session, only while its binding names the agent the
+      // pane runs now: none while a /clear or a new agent has not bound yet
+      // (the binding still names the previous conversation), none for a shell.
+      const binding = agent ? transcriptProjector?.sentFileBinding(id) ?? null : null;
+      return {
+        ptyId: id,
+        workspaceId: typeof ws === 'string' && ws.trim() ? ws.trim() : null,
+        agent,
+        agentSessionId: binding && binding.agent === agent ? binding.agentSessionId : null,
+      };
+    },
+    taskOf: (id) => {
+      const cwd = sessionManager.getSession(id)?.meta.cwd;
+      return cwd ? taskAt(cwd) : null;
+    },
+    log: (line) => log('warn', line),
+  });
 }
 
 /**
@@ -8403,6 +8493,8 @@ let resyncContextWatchers: (() => void) | null = null;
 
 /** Set in main(); consumed by shutdown(). */
 let disposeContextWatchers: (() => void) | null = null;
+/** Set in main(); flushed by shutdown(). */
+let commitOriginStore: CommitOriginStore | null = null;
 
 /** X8: set in main(); shutdown() cancels pending supervised restarts through it. */
 let paneSupervisorRef: PaneSupervisor | null = null;
@@ -8663,6 +8755,7 @@ async function shutdown(
   // Stop X1 context watchers (port poll timer + git fs.watch handles)
   try { disposeContextWatchers?.(); } catch { /* best effort */ }
   disposeContextWatchers = null;
+  try { commitOriginStore?.flushSync(); } catch { /* best effort */ }
 
   // Stop process monitor
   processMonitor.unwatchAll();
@@ -10545,7 +10638,19 @@ async function main(): Promise<void> {
   });
 
   // 6b. X1 workspace-context watchers (git HEAD fs.watch + PID-tree ports)
-  disposeContextWatchers = wireContextWatchers(sessionManager, pipeServer);
+  commitOriginStore = new CommitOriginStore(getWmuxDir(), Date.now, (line) => log('warn', line));
+  const commitOriginsStore = commitOriginStore;
+  pipeServer.onRpc('daemon.commitOrigin.lookup', async (params, ctx) => {
+    if (!pipeServer.isFirstParty(ctx.clientId)) return { ok: false };
+    const sha = typeof params['sha'] === 'string' ? params['sha'].toLowerCase() : '';
+    if (!SHA_RE.test(sha)) return { ok: false };
+    return { ok: true, origin: commitOriginsStore.get(sha) };
+  });
+  disposeContextWatchers = wireContextWatchers(
+    sessionManager,
+    pipeServer,
+    (read) => createCommitOriginCapture(sessionManager, commitOriginsStore, (cwd) => workTaskService?.openTaskAt(cwd)?.id ?? null, read),
+  );
 
   // 7a. #596 — bring `wmux web` back if the operator had it on. Kicked off
   // BEFORE the control pipe starts listening, so `webRestore` is already

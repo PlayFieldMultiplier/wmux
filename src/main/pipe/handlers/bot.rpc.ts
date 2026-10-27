@@ -66,6 +66,8 @@ import { ROOMS_DIRNAME, getRoomWriter, resolveRoomPorts, runningWake, runningWak
 import { getFactoryStopPorts, stopFactoryWork, type FactoryStopPorts, type FactoryStopResult } from '../../factory/factoryStop';
 import { UNKNOWN_ROOT_REFUSAL } from '../../../shared/rpc';
 import { noteBotSetChanged } from '../../phone/BotPromptPushFeed';
+import { usageReserveHoldForWorkspace } from '../../usage/usageReserve';
+import { agentRow } from '../../../shared/agentIdentity';
 
 type Refusal = FactoryRefusal<'not_authorized' | 'not_started' | 'invalid_argument' | 'not_found' | 'not_running' | 'too_many_bots' | 'dropped' | 'not_owner_words' | 'not_a_repo' | 'repo_untrusted' | 'no_remote' | 'repo_mismatch' | 'stop_failed'>;
 
@@ -642,6 +644,9 @@ export function botRuntimeModule(router: FactoryRouter, deps: FactoryHostDeps, o
         wakes: () => queue,
         liveWakes: () => queue.list({ states: ['queued', 'running'] }),
         liveLimit: () => FANOUT_LIVE_TASK_CAP,
+        // Only a bot whose workers spend usage the reserve covers waits for it.
+        reserveHeld: ({ botId, workspaceId }) => agentRow(store.get(botId)?.workerAgent?.agent ?? 'claude')?.usageReserve === true
+          && usageReserveHoldForWorkspace(workspaceId) !== null,
       };
       let held: HeldFanouts;
       try {

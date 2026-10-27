@@ -686,6 +686,8 @@ export const fr = {
   'claudeIntegration.scheduledRetry': "Relancer les exécutions planifiées après une erreur temporaire",
   'claudeIntegration.scheduledRetryDesc': "Si le tour d'une exécution planifiée échoue sur une erreur réseau ou serveur du fournisseur, attendre 5 minutes et envoyer un message de reprise. Activé par défaut ; chaque planification peut le désactiver.",
   'claudeIntegration.scheduledRetryUnknown': "Pas encore connu : en attente du service d'arrière-plan de wmux.",
+  'claudeIntegration.usageReserve': "Garder une réserve d'utilisation",
+  'claudeIntegration.usageReserveDesc': "Le travail sans surveillance qui consommerait l'utilisation sur 5 heures d'un compte Claude ne démarre pas tant que cette utilisation atteint 85 % ou plus, afin de vous laisser les 15 % restants. Une exécution planifiée attend la réinitialisation et s'exécute alors si elle est encore dans son délai de grâce, sinon elle est manquée ; le fan-out d'un bot attend aussi ; un fan-out demandé par un agent de votre volet est refusé, avec l'heure de réinitialisation. Codex et les autres agents ne sont pas retenus, et ce que vous tapez n'est jamais mis en attente. Désactivé par défaut.",
   'schedules.retryTransient': "Réessayer une fois après une erreur temporaire",
   'schedules.retryTransientHint': "En cas d'erreur réseau ou serveur du fournisseur, attendre 5 minutes et envoyer un message de reprise. Le prompt n'est pas renvoyé.",
   'schedules.retryTransientGlobalHint': "S'applique seulement si « Relancer les exécutions planifiées après une erreur temporaire » est activé dans Réglages → Intégration Claude.",

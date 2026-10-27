@@ -701,6 +701,25 @@ export class WorkTaskService {
   }
 
   /**
+   * The open task whose worktree holds `dir` (the worktree itself or a folder
+   * in it), the innermost one when worktrees nest. Compared as written
+   * (normalized, never resolved: no fs access on this thread).
+   */
+  openTaskAt(dir: string): WorkTask | undefined {
+    const target = normalizeWorktreePath(dir);
+    if (!target) return undefined;
+    let best: { task: WorkTask; len: number } | undefined;
+    for (const task of this.tasks.values()) {
+      if (task.status !== 'open' || !task.worktreePath) continue;
+      const root = normalizeWorktreePath(task.worktreePath);
+      if (!root) continue;
+      const inside = target === root || target.startsWith(root.endsWith('/') ? root : `${root}/`);
+      if (inside && (!best || root.length > best.len)) best = { task, len: root.length };
+    }
+    return best?.task;
+  }
+
+  /**
    * Channel retention anchor: is there an **open** task pointing at this channel
    * as its mission channel? This stops the channel retention sweep
    * (ChannelService.sweepRetention) from destroying the channel of a live mission

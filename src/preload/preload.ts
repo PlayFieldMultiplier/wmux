@@ -2041,6 +2041,11 @@ const electronAPI = {
     setEnabled: (enabled: boolean) => ipcRenderer.send(IPC.USAGE_TOGGLE, enabled),
     /** Manual refresh. UI is responsible for the 5-minute cooldown. */
     refresh: () => ipcRenderer.send(IPC.USAGE_REFRESH),
+    /** The usage reserve setting (main persists and enforces it). */
+    reserve: {
+      get: () => ipcRenderer.invoke(IPC.USAGE_RESERVE_GET) as Promise<{ enabled: boolean }>,
+      set: (enabled: boolean) => ipcRenderer.invoke(IPC.USAGE_RESERVE_SET, enabled) as Promise<{ ok: boolean }>,
+    },
   },
   // N4 — agents whose sign-in was lost (shared/agentAuthLost), one entry per
   // agent and account; `loginState` asks the agent's own status for an entry

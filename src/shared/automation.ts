@@ -421,4 +421,6 @@ export type AutomationEvent =
   | { type: 'automations-changed' }
   | { type: 'run-changed'; run: AutomationRun; automationName: string }
   /** A draft arrived, a grant was raised, or a grant went stale — surface to the human. */
-  | { type: 'attention'; automationId: string; automationName: string; kind: AutomationAttentionKind };
+  | { type: 'attention'; automationId: string; automationName: string; kind: AutomationAttentionKind }
+  /** A due run was held by the usage reserve: it starts once `untilMs` passes. Main tells the owner once per hold. */
+  | { type: 'reserve-held'; automationId: string; automationName: string; account: string; untilMs: number };

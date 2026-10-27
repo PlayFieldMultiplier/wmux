@@ -681,6 +681,8 @@ export const vi = {
   'claudeIntegration.scheduledRetry': "Thử lại lần chạy theo lịch sau lỗi tạm thời",
   'claudeIntegration.scheduledRetryDesc': "Nếu lượt của một lần chạy theo lịch thất bại do lỗi mạng hoặc lỗi máy chủ của nhà cung cấp, chờ 5 phút rồi gửi một tin nhắn tiếp tục. Bật theo mặc định; mỗi lịch có thể tắt.",
   'claudeIntegration.scheduledRetryUnknown': "Chưa rõ: đang chờ dịch vụ nền của wmux.",
+  'claudeIntegration.usageReserve': "Giữ phần dự trữ mức dùng",
+  'claudeIntegration.usageReserveDesc': "Công việc không giám sát sẽ dùng mức dùng 5 giờ của tài khoản Claude không bắt đầu khi mức dùng đó ở 85% trở lên, để 15% cuối dành cho bạn. Một lượt chạy theo lịch chờ đến khi đặt lại và chạy lúc đó nếu vẫn còn trong thời gian ân hạn, nếu không thì bị bỏ lỡ; fan-out của bot cũng chờ; fan-out do một agent trong ô của bạn yêu cầu sẽ bị từ chối, kèm thời điểm đặt lại. Codex và các agent khác không bị giữ lại, và những gì bạn gõ không bao giờ bị giữ lại. Tắt theo mặc định.",
   'schedules.retryTransient': "Thử lại một lần sau lỗi tạm thời",
   'schedules.retryTransientHint': "Khi có lỗi mạng hoặc lỗi máy chủ của nhà cung cấp, chờ 5 phút rồi gửi một tin nhắn tiếp tục. Lời nhắc không được gửi lại.",
   'schedules.retryTransientGlobalHint': "Chỉ áp dụng khi “Thử lại lần chạy theo lịch sau lỗi tạm thời” đang bật trong Cài đặt → Tích hợp Claude.",

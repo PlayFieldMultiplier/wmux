@@ -58,6 +58,7 @@ import { connectWithRetry, type ConnectAttemptResult } from './daemonConnectRetr
 import type { AgentStatus } from '../shared/types';
 import type { AgentSlug } from '../shared/agentIdentity';
 import { isSessionPromptScheduleResult, type SessionPromptScheduleResult } from '../shared/sessionPromptSchedule';
+import { parseCommitOrigin, type CommitOrigin } from '../shared/commitOrigin';
 
 // RCA A2 — single source of truth in shared/timeouts.ts so the renderer's
 // RECONCILE_TIMEOUT_MS can be derived from (and stay greater than) this value.
@@ -1122,6 +1123,19 @@ export class DaemonClient extends EventEmitter {
     }
   }
 
+  /** Where a commit came from (daemon/commitOrigin): null when not recorded;
+   *  'unavailable' when the daemon is unreachable or predates the record. */
+  async lookupCommitOrigin(sha: string): Promise<CommitOrigin | null | 'unavailable'> {
+    if (!this.isConnected) return 'unavailable';
+    try {
+      const response = await this.rpc('daemon.commitOrigin.lookup', { sha }) as { ok?: unknown; origin?: unknown };
+      if (response.ok !== true) return 'unavailable';
+      return response.origin == null ? null : parseCommitOrigin(response.origin) ?? 'unavailable';
+    } catch {
+      return 'unavailable';
+    }
+  }
+
   /** The daemon's pane usage-limit holds; empty when it is unreachable or predates them. */
   async listUsageLimits(): Promise<PaneUsageLimit[]> {
     if (!this.isConnected) return [];
@@ -1144,6 +1158,17 @@ export class DaemonClient extends EventEmitter {
       return parseShellPromptList(await this.rpc('daemon.shellPrompt.list', {}));
     } catch {
       return null;
+    }
+  }
+
+  /** Hand the usage reserve's holds to the daemon (its scheduled runs). False when not delivered. */
+  async setUsageReserveHolds(holds: ReadonlyArray<{ account: string; untilMs: number }>): Promise<boolean> {
+    if (!this.isConnected) return false;
+    try {
+      const response = await this.rpc('daemon.usageReserve.set', { holds }) as { ok?: unknown };
+      return response.ok === true;
+    } catch {
+      return false; // an older daemon has no reserve
     }
   }
 
