@@ -95,19 +95,19 @@ describe('UsageReserve', () => {
     dirs.push(dir);
     const readings: Array<[string, UsageSnapshot | null]> = [];
     const logged: string[] = [];
-    const r = new UsageReserve({ wmuxDir: dir, snapshots: () => readings, accountOfWorkspace: () => 'default', now: () => NOW, log: (l) => logged.push(l) });
+    const dataDir = path.join(dir, 'data');
+    const r = new UsageReserve({ wmuxDir: dataDir, snapshots: () => readings, accountOfWorkspace: () => 'default', now: () => NOW, log: (l) => logged.push(l) });
     await r.setEnabled(true);
-    fs.chmodSync(dir, 0o500); // the write fails
-    try {
-      readings.push(['default', snap(90)]);
-      r.refresh();
-      await vi.waitFor(() => expect(logged.some((l) => l.includes('holds not saved'))).toBe(true), { timeout: 5_000 });
-    } finally {
-      fs.chmodSync(dir, 0o700);
-    }
+    // A file where the data folder was: the write fails on every platform (a chmod does nothing on Windows).
+    fs.rmSync(dataDir, { recursive: true });
+    fs.writeFileSync(dataDir, '');
+    readings.push(['default', snap(90)]);
+    r.refresh();
+    await vi.waitFor(() => expect(logged.some((l) => l.includes('holds not saved'))).toBe(true), { timeout: 5_000 });
+    fs.rmSync(dataDir);
     r.refresh(); // the same holds: written this time
     await vi.waitFor(() => {
-      expect(JSON.parse(fs.readFileSync(path.join(dir, 'usage-reserve.json'), 'utf8')).holds).toHaveLength(1);
+      expect(JSON.parse(fs.readFileSync(path.join(dataDir, 'usage-reserve.json'), 'utf8')).holds).toHaveLength(1);
     }, { timeout: 5_000 });
   });
 
