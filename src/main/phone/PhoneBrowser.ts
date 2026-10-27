@@ -139,6 +139,23 @@ function webviewDriver(target: CdpTargetInfo, workspaceId: string, deps: Browser
   };
 }
 
+/**
+ * The phone's explicit focus on a builtin pane: make its workspace the active
+ * one, then make the pane the active tab of its pane group. Selecting the tab
+ * alone leaves a background workspace's pane off-screen (and not painting).
+ * True only once both took. Only ever on the phone's `focus` action.
+ */
+export async function focusBuiltinTab(
+  send: (method: string, params: Record<string, unknown>) => Promise<unknown>,
+  surfaceId: string,
+  workspaceId: string,
+): Promise<boolean> {
+  const workspace = await send('workspace.focus', { id: workspaceId }) as { ok?: unknown } | undefined;
+  if (workspace?.ok !== true) return false;
+  const tab = await send('browser.tabs', { action: 'select', workspaceId, surfaceId }) as { ok?: unknown } | undefined;
+  return tab?.ok === true;
+}
+
 /** Workspace-bound preview, with a closed set of browser operations. Codes
  *  main answers in words travel as `{error:<code>}`; anything else throws. */
 export async function handlePhoneBrowser(command: string, payload: Record<string, unknown>, deps: BrowserDeps): Promise<unknown> {

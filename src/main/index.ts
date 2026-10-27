@@ -8,7 +8,7 @@ import { terminalCoreSelection } from '../shared/terminalCoreSettings';
 import { randomUUID as phoneBrowserRequestId } from 'node:crypto';
 import { webContents as phoneWebContents } from 'electron';
 import { withPhoneBrowserInputFocus, dispatchPhoneBrowserScroll, phoneBrowserNativeBounds } from './phone/PhoneBrowserInput';
-import { handlePhoneBrowser } from './phone/PhoneBrowser';
+import { focusBuiltinTab, handlePhoneBrowser } from './phone/PhoneBrowser';
 import { createPhoneChromeDeps, phoneChromeHelpTabs } from './phone/PhoneBrowserChrome';
 import { validateResolvedNavigationUrl } from './security/navigationPolicy';
 import { navigationPolicyOptions } from '../shared/types';
@@ -2430,10 +2430,8 @@ app.on('ready', async () => {
               await dispatchPhoneBrowserScroll(wc,event);
             },
             targets: () => webviewCdpManager.listTargets(),
-            focusBuiltin: async (surfaceId, workspaceId) => {
-              const reply = await sendToRenderer(() => mainWindow, 'browser.tabs', { action: 'select', workspaceId, surfaceId }) as { ok?: unknown } | undefined;
-              return reply?.ok === true;
-            },
+            focusBuiltin: (surfaceId, workspaceId) =>
+              focusBuiltinTab((method, params) => sendToRenderer(() => mainWindow, method, params), surfaceId, workspaceId),
             chrome: phoneChromeDeps,
             input: (id, operation) => {
               const wc = phoneWebContents.fromId(id);

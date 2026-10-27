@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { handlePhoneBrowser } from '../PhoneBrowser';
+import { focusBuiltinTab, handlePhoneBrowser } from '../PhoneBrowser';
 import { createPhoneChromeDeps, phoneChromeHelpTabs, phoneChromeTabs, type PhoneChromeDeps, type PhoneChromeRegistry } from '../PhoneBrowserChrome';
 import { ChromePageSessionError, type ChromeBackendClient, type ChromeTargetInfo } from '../../browser-session/ChromeLauncher';
 import type { RpcResponse } from '../../../shared/rpc';
@@ -289,6 +289,23 @@ describe('phone preview on dedicated-profile Chrome', () => {
     expect(await handlePhoneBrowser('browser.focus', { workspaceId: 'ws-1', surfaceId: 'pane' }, { ...pane, focusBuiltin })).toEqual({ applied: true });
     expect(focusBuiltin).toHaveBeenCalledWith('pane', 'ws-1');
     expect(await handlePhoneBrowser('browser.focus', { workspaceId: 'ws-1', surfaceId: 'pane' }, pane)).toEqual({ error: 'browser-action-unsupported' });
+  });
+
+  it('focusing a builtin pane activates its workspace first, and succeeds only when both took', async () => {
+    const calls: Array<[string, Record<string, unknown>]> = [];
+    const send = (answers: Record<string, unknown>) => async (method: string, params: Record<string, unknown>) => {
+      calls.push([method, params]);
+      return answers[method];
+    };
+    expect(await focusBuiltinTab(send({ 'workspace.focus': { ok: true }, 'browser.tabs': { ok: true } }), 'pane', 'ws-2')).toBe(true);
+    expect(calls).toEqual([
+      ['workspace.focus', { id: 'ws-2' }],
+      ['browser.tabs', { action: 'select', workspaceId: 'ws-2', surfaceId: 'pane' }],
+    ]);
+    calls.length = 0;
+    expect(await focusBuiltinTab(send({ 'workspace.focus': { ok: false } }), 'pane', 'ws-2')).toBe(false);
+    expect(calls.map(([method]) => method)).toEqual(['workspace.focus']);
+    expect(await focusBuiltinTab(send({ 'workspace.focus': { ok: true }, 'browser.tabs': { ok: false } }), 'pane', 'ws-2')).toBe(false);
   });
 
   it('opens a Chrome tab only in a dedicated profile', async () => {
