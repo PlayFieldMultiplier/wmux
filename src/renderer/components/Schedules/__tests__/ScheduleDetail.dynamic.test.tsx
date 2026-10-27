@@ -64,6 +64,18 @@ describe('ScheduleDetail output snapshot', () => {
       .toBe('The previous run finished, but its session stays open for up to 10 minutes in case it asked something, so this run was skipped. It closes by itself; run again after that.');
   });
 
+  it('a run held after a temporary provider error reads as waiting, and its final failure says it was retried', async () => {
+    useStore.setState({ automationRuns: [
+      run({ id: 'rw', state: 'running', ptyId: 'auto-rw', retryAt: Date.now() + 4 * 60_000 + 30_000 }),
+      run({ id: 'rf', state: 'failed', reason: 'agent_error', detail: 'retried_once' }),
+    ] });
+    await act(async () => root.render(<ScheduleDetail automation={automation()} accounts={[]} onEdit={vi.fn()} />));
+    const held = container.querySelector('[data-run-row="rw"]')?.textContent;
+    expect(held).toContain('Waiting: retrying after a temporary provider error (in 5m)');
+    expect(held).not.toContain('Failed');
+    expect(container.querySelector('[data-run-row="rf"]')?.textContent).toContain('agent error again after one retry');
+  });
+
   it('a plain overlap keeps its words and no session note', async () => {
     useStore.setState({ automationRuns: [run({ id: 'r4', state: 'skipped', reason: 'overlap' })] });
     await act(async () => root.render(<ScheduleDetail automation={automation()} accounts={[]} onEdit={vi.fn()} />));

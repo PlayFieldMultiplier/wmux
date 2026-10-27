@@ -676,4 +676,14 @@ export const vi = {
   'worktask.cleanup.detail.orphanMeta': 'Chỉ còn bản ghi tác vụ, không có worktree (việc xóa bị gián đoạn) — kiểm tra, rồi xóa.',
   'worktask.cleanup.detail.diskMissing': 'Worktree không có trên đĩa (bị xóa bên ngoài wmux, hoặc do sự cố) — đóng tác vụ để dọn dẹp.',
   'botsPage.guest.readNotice': "Từ giờ, một bot bên ngoài có thể đọc tin nhắn trong cuộc trò chuyện này và đăng vào đó. Nó không bao giờ thấy những gì đã nói trước khi được thêm vào.",
+
+  // Scheduled runs: one retry after a temporary provider error
+  'claudeIntegration.scheduledRetry': "Thử lại lần chạy theo lịch sau lỗi tạm thời",
+  'claudeIntegration.scheduledRetryDesc': "Nếu lượt của một lần chạy theo lịch thất bại do lỗi mạng hoặc lỗi máy chủ của nhà cung cấp, chờ 5 phút rồi gửi một tin nhắn tiếp tục. Bật theo mặc định; mỗi lịch có thể tắt.",
+  'schedules.retryTransient': "Thử lại một lần sau lỗi tạm thời",
+  'schedules.retryTransientHint': "Khi có lỗi mạng hoặc lỗi máy chủ của nhà cung cấp, chờ 5 phút rồi gửi một tin nhắn tiếp tục. Lời nhắc không được gửi lại.",
+  'schedules.state.retryWaiting': "Đang chờ: thử lại sau lỗi tạm thời của nhà cung cấp (sau {minutes} phút)",
+  'schedules.reason.agent_error_retried_once': "lại lỗi tác tử sau một lần thử lại",
+  'schedules.reason.agent_error_retry_blocked': "lỗi tác tử; không thử lại, phiên đang bận hoặc đã thay đổi",
+  'schedules.reason.agent_error_retry_interrupted': "lỗi tác tử; không thử lại, wmux đã khởi động lại",
 } as const;

@@ -678,4 +678,14 @@ export const de = {
   'worktask.cleanup.detail.orphanMeta': 'Nur der Aufgabeneintrag ist übrig, nicht der Worktree (Entfernen wurde unterbrochen) — prüfen und dann löschen.',
   'worktask.cleanup.detail.diskMissing': 'Der Worktree fehlt auf der Festplatte (außerhalb von wmux gelöscht oder Absturz) — schließen Sie die Aufgabe, um das zu bereinigen.',
   'botsPage.guest.readNotice': "Ab jetzt kann ein externer Bot Nachrichten in dieser Unterhaltung lesen und darin schreiben. Was vor dem Hinzufügen gesagt wurde, sieht er nie.",
+
+  // Scheduled runs: one retry after a temporary provider error
+  'claudeIntegration.scheduledRetry': "Geplante Läufe nach einem vorübergehenden Fehler wiederholen",
+  'claudeIntegration.scheduledRetryDesc': "Scheitert der Turn eines geplanten Laufs an einem Netzwerk- oder Serverfehler des Anbieters, 5 Minuten warten und eine Fortsetzen-Nachricht senden. Standardmäßig an; jeder Zeitplan kann es abschalten.",
+  'schedules.retryTransient': "Nach einem vorübergehenden Fehler einmal wiederholen",
+  'schedules.retryTransientHint': "Bei einem Netzwerk- oder Serverfehler des Anbieters 5 Minuten warten und eine Fortsetzen-Nachricht senden. Der Prompt wird nicht erneut gesendet.",
+  'schedules.state.retryWaiting': "Wartet: Wiederholung nach einem vorübergehenden Anbieterfehler (in {minutes} Min.)",
+  'schedules.reason.agent_error_retried_once': "erneuter Agentenfehler nach einer Wiederholung",
+  'schedules.reason.agent_error_retry_blocked': "Agentenfehler; nicht wiederholt, die Sitzung war belegt oder geändert",
+  'schedules.reason.agent_error_retry_interrupted': "Agentenfehler; nicht wiederholt, wmux wurde neu gestartet",
 } as const;

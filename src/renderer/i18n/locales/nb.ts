@@ -681,4 +681,14 @@ export const nb = {
   'worktask.cleanup.detail.orphanMeta': 'Bare oppgaveposten er igjen, ikke worktreet (en fjerning ble avbrutt) — sjekk det, og slett det.',
   'worktask.cleanup.detail.diskMissing': 'Worktreet mangler på disken (slettet utenfor wmux, eller et krasj) — lukk oppgaven for å rydde opp.',
   'botsPage.guest.readNotice': "Fra nå av kan en ekstern bot lese meldinger i denne samtalen og skrive i den. Den ser aldri det som ble sagt før den ble lagt til.",
+
+  // Scheduled runs: one retry after a temporary provider error
+  'claudeIntegration.scheduledRetry': "Prøv planlagte kjøringer på nytt etter en midlertidig feil",
+  'claudeIntegration.scheduledRetryDesc': "Hvis turen i en planlagt kjøring feiler på en nettverks- eller serverfeil hos leverandøren, vent 5 minutter og send én fortsett-melding. På som standard; hver plan kan slå det av.",
+  'schedules.retryTransient': "Prøv på nytt én gang etter en midlertidig feil",
+  'schedules.retryTransientHint': "Ved en nettverks- eller serverfeil hos leverandøren, vent 5 minutter og send én fortsett-melding. Ledeteksten sendes ikke på nytt.",
+  'schedules.state.retryWaiting': "Venter: prøver på nytt etter en midlertidig leverandørfeil (om {minutes} min)",
+  'schedules.reason.agent_error_retried_once': "agentfeil igjen etter ett nytt forsøk",
+  'schedules.reason.agent_error_retry_blocked': "agentfeil; ikke prøvd på nytt, økten var opptatt eller endret",
+  'schedules.reason.agent_error_retry_interrupted': "agentfeil; ikke prøvd på nytt, wmux startet på nytt",
 } as const;

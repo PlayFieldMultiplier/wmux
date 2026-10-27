@@ -730,4 +730,14 @@ export const ja = {
   'worktask.cleanup.detail.orphanMeta': 'タスク記録だけが残り、worktree はありません（削除が中断されました）— 確認してから削除してください。',
   'worktask.cleanup.detail.diskMissing': 'worktree がディスク上にありません（wmux の外で削除されたか、クラッシュ）— タスクを閉じて整理してください。',
   'botsPage.guest.readNotice': "今後、外部ボットがこの会話のメッセージを読み、投稿できるようになります。追加される前の内容は見えません。",
+
+  // Scheduled runs: one retry after a temporary provider error
+  'claudeIntegration.scheduledRetry': "一時的なエラーの後、スケジュール実行を再試行",
+  'claudeIntegration.scheduledRetryDesc': "スケジュール実行のターンがネットワークまたはプロバイダーのサーバーエラーで失敗した場合、5分待って続行メッセージを1回送信します。既定でオン。スケジュールごとにオフにできます。",
+  'schedules.retryTransient': "一時的なエラーの後に1回再試行",
+  'schedules.retryTransientHint': "ネットワークまたはプロバイダーのサーバーエラーの場合、5分待って続行メッセージを1回送信します。プロンプトは再送されません。",
+  'schedules.state.retryWaiting': "待機中: 一時的なプロバイダーエラーの後に再試行 ({minutes}分後)",
+  'schedules.reason.agent_error_retried_once': "1回再試行した後も再びエージェントエラー",
+  'schedules.reason.agent_error_retry_blocked': "エージェントエラー。セッションが使用中か変更されたため再試行せず",
+  'schedules.reason.agent_error_retry_interrupted': "エージェントエラー。wmuxが再起動したため再試行せず",
 } as const;

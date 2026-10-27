@@ -32,6 +32,7 @@ import { BROWSER_HELP_SET_METHOD, PHONE_BROWSER_HELP_DECIDE_COMMAND, type Browse
 import { RunHistoryStore } from './history/RunHistoryStore';
 import { AutomationEngine } from './automation/AutomationEngine';
 import { assertExternalSessionId, registerAutomationRpc } from './automation/rpc';
+import { isTransientTurnFailure, shouldPushTurnFailure } from './automation/transientFailure';
 import { killProcessTree } from './automation/treeKill';
 import { captureProcessTree, matchesRecordedStart, recordedStartOf, treeKillRefusal, type CapturedTree } from './automation/verifiedTreeKill';
 import { pendingRemovalRefusalAt } from '../main/worktask/pendingWorktreeRemovals';
@@ -89,7 +90,7 @@ import { normalizeLivePaneIds } from '../shared/a2aOrphanedTask';
 import { WEB_DEFAULT_PORT, webHostIsLoopback, type WebTlsConfig } from '../shared/web';
 import { generateSnapshotUnqueued, enqueueSnapshotJob, generateTextSnapshot, generateTextSnapshotUnqueued, runSmallSnapshotJob, capTextRowsToFrameBudget, MAX_SCROLLBACK } from './HeadlessSnapshot';
 import { queuedScreenText, queuedTextSnapshot } from './queuedSessionText';
-import { registerFolderTrustRpc } from './folderTrustState';
+import { folderTrustState, registerFolderTrustRpc } from './folderTrustState';
 import type { TerminalPty } from '../shared/terminalPty';
 import { serializeSession } from './sessionSerialize';
 import { AwaitingScreenVerifier, AWAITING_NARROW_DIALOG_COLS, questionInFlight, renderPaneScreen, renderPaneTail } from './AwaitingScreenVerifier';
@@ -284,7 +285,7 @@ import { createOrphanSweep } from './winProcessSweep';
 import { classifyShell } from './shell-integration';
 import { UsageLimitRegistry } from './usageLimit/UsageLimitRegistry';
 import type { SessionPromptScheduleResult } from '../shared/sessionPromptSchedule';
-import { USAGE_LIMIT_CONTINUE_PROMPT, type PaneUsageLimitPatch } from '../shared/usageLimit';
+import { claudeUsageLimitFromStopFailure, USAGE_LIMIT_CONTINUE_PROMPT, type PaneUsageLimitPatch } from '../shared/usageLimit';
 import { chatAgentStatus, confirmedStopAt, transcriptTurnEnd } from './transcript/chatAgentStatus';
 import { DaemonPTYBridge } from './DaemonPTYBridge';
 import { createCodexSharedRuntime, runCodexDaemon } from './transcript/codexSharedRuntime';
@@ -5118,6 +5119,12 @@ function registerRpcHandlers(
       emitAgentEvent: (sessionId, data) => {
         const historySession = sessionManager.getSession(sessionId);
         const now = Date.now();
+        // A scheduled run's turn that failed on a temporary provider error is
+        // held for one continue (automation/transientFailure.ts); a usage-limit
+        // notice stays with the usage-limit registry.
+        const transientFailure = data.signal.kind === 'agent.stop_failure' && automationEngine?.ownsPane(sessionId) === true
+          && isTransientTurnFailure(classifyClaudeStopFailure(data.signal.payload ?? {}, now),
+            claudeUsageLimitFromStopFailure(data.signal.payload, now) !== null);
         // Contract v-next item 1: a Claude StopFailure is a typed turn failure.
         // Computed once, here, and handed unchanged to history, the liveness
         // frame and the push, so `turnId`/`at` match on every surface. The
@@ -5131,6 +5138,8 @@ function registerRpcHandlers(
             ts: Number.isFinite(data.signal.ts) ? data.signal.ts : now,
             ...(data.signal.agentSessionId ? { agentSessionId: data.signal.agentSessionId } : {}),
             push: (f) => {
+              // A held scheduled run is not final yet: only its final failure notifies.
+              if (!shouldPushTurnFailure(transientFailure, () => automationEngine?.armTransientRetry(sessionId, data.decision) === true)) return;
               pushTurnFailed?.(sessionId, f);
               if (f.reason === 'auth') noteAuthLost?.(sessionId, 'claude', historySession.meta.env, 'turn', f.providerCode);
             },
@@ -5154,6 +5163,7 @@ function registerRpcHandlers(
             ...(data.signal.agentSessionId ? { agentSessionId: data.signal.agentSessionId } : {}),
             ...(data.signal.kind === 'agent.stop_failure' && classifyClaudeStopFailure(data.signal.payload ?? {}, now).reason === 'auth'
               ? { authFailure: true } : {}),
+            ...(transientFailure ? { transientFailure: true } : {}),
           }).catch((err) => log('warn', `[automation] agent event handling failed for ${sessionId}:`, err));
         }
         // Hook Stop/awaiting-input is authoritative inside the same daemon that
@@ -5967,6 +5977,24 @@ function registerRpcHandlers(
     });
   });
 
+  // The one fixed continue message, shared by the usage-limit resume and a
+  // scheduled run's retry after a temporary provider error.
+  const deliverContinueMessage = async (
+    id: string, slug: AgentSlug, incarnationId: string, stillWanted: () => boolean,
+  ): Promise<SessionPromptScheduleResult> => {
+    // A human draft in the composer is a wait, not a failure: answering
+    // 'busy' keeps the pane armed and retries once the draft is sent or cleared.
+    if (sessionManager.getSession(id)?.bridge.hasDraft() === true) return 'busy';
+    return deliverPromptToSessionNow(id, slug, incarnationId, USAGE_LIMIT_CONTINUE_PROMPT, {
+      // A turn that died on the limit (or on a provider error) leaves the pane at `error`.
+      acceptError: true,
+      // Asked before the paste and before the Enter: the hold must still be
+      // this one and still armed, and no human draft may sit in the
+      // composer (the input-revision proof covers the gap after the paste).
+      authorized: async (stage) => stillWanted()
+        && (stage === 'submit' || sessionManager.getSession(id)?.bridge.hasDraft() !== true),
+    });
+  };
   usageLimits = new UsageLimitRegistry({
     broadcast: (event) => pipeServer.broadcast(event),
     // The agent verified on the pane when the limit was seen. The continue
@@ -5977,20 +6005,7 @@ function registerRpcHandlers(
       const slug = state.agentName ? agentDisplayToSlug(state.agentName) : undefined;
       return slug && state.agentVerified && state.incarnationId ? { slug, incarnationId: state.incarnationId } : null;
     },
-    deliverContinue: async (id, expected, stillWanted) => {
-      // A human draft in the composer is a wait, not a failure: answering
-      // 'busy' keeps the pane armed and retries once the draft is sent or cleared.
-      if (sessionManager.getSession(id)?.bridge.hasDraft() === true) return 'busy';
-      return deliverPromptToSessionNow(id, expected.slug, expected.incarnationId, USAGE_LIMIT_CONTINUE_PROMPT, {
-        // A turn that died on the limit leaves the pane at `error`.
-        acceptError: true,
-        // Asked before the paste and before the Enter: the hold must still be
-        // this one and still armed, and no human draft may sit in the
-        // composer (the input-revision proof covers the gap after the paste).
-        authorized: async (stage) => stillWanted()
-          && (stage === 'submit' || sessionManager.getSession(id)?.bridge.hasDraft() !== true),
-      });
-    },
+    deliverContinue: (id, expected, stillWanted) => deliverContinueMessage(id, expected.slug, expected.incarnationId, stillWanted),
     log: (message) => log('info', message),
   });
   pipeServer.onRpc('daemon.usageLimit.list', async () => ({ limits: usageLimits?.list() ?? [] }));
@@ -6129,6 +6144,11 @@ function registerRpcHandlers(
     deliverPrompt: async (id, slug, incarnationId, prompt, onWrite) => (usageLimits?.holds(id)
       ? 'busy'
       : deliverPromptToSessionNow(id, slug, incarnationId, prompt, onWrite ? { onWrite } : {})),
+    // A pane held at a usage limit is that registry's to resume.
+    deliverContinue: async (id, slug, incarnationId, stillWanted) => (usageLimits?.holds(id)
+      ? 'busy'
+      : deliverContinueMessage(id, slug, incarnationId, stillWanted)),
+    folderTrustState: (id) => folderTrustState({ getSession: (sid) => sessionManager.getSession(sid) }, id),
     hasPendingApproval: (id) => approvalRegistry?.list().pending.some((r) => r.sessionId === id) ?? false,
     transcriptTurnEndAt: (id) => transcriptTurnEnd(projector.snapshot(id)?.events, 0)?.at,
     transcriptLastEventAt: (id) => projector.snapshot(id)?.events.at(-1)?.ts,
@@ -10311,7 +10331,11 @@ async function main(): Promise<void> {
     if (!classified) return;
     // The thread id is the conversation id `/turns` resolves for a Codex pane,
     // so a pane that moved to another thread does not show this failure.
+    const transient = automationEngine?.ownsPane(id) === true && isTransientTurnFailure(classified, false);
     const served = serveTurnFailure(session.bridge, classified, { ts: now, agentSessionId: threadId, push: (f) => {
+      // A scheduled run held for its one continue is not final yet: the
+      // relay is the proof the turn ended, so the hold is armed here.
+      if (!shouldPushTurnFailure(transient, () => automationEngine?.armTransientRetry(id) === true)) return;
       pushTurnFailed?.(id, f);
       if (f.reason !== 'auth') return;
       noteAuthLost?.(id, 'codex', session.meta.env, 'turn', f.providerCode);

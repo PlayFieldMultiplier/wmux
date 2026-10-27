@@ -717,4 +717,14 @@ export const zhTW = {
   'worktask.cleanup.detail.orphanMeta': '只剩下任務記錄，工作樹已不存在（移除被中斷）— 檢查後刪除。',
   'worktask.cleanup.detail.diskMissing': '工作樹在磁碟上遺失（在 wmux 外被刪除或發生當機）— 關閉任務以清理。',
   'botsPage.guest.readNotice': "從現在起，外部機器人可以讀取此對話中的訊息並在其中發言。它看不到加入之前的內容。",
+
+  // Scheduled runs: one retry after a temporary provider error
+  'claudeIntegration.scheduledRetry': "暫時性錯誤後重試排程執行",
+  'claudeIntegration.scheduledRetryDesc': "若排程執行的回合因網路或供應商伺服器錯誤而失敗，等待 5 分鐘後傳送一則繼續訊息。預設開啟；每個排程可個別關閉。",
+  'schedules.retryTransient': "暫時性錯誤後重試一次",
+  'schedules.retryTransientHint': "遇到網路或供應商伺服器錯誤時，等待 5 分鐘後傳送一則繼續訊息。不會重新傳送提示詞。",
+  'schedules.state.retryWaiting': "等待中：暫時性供應商錯誤後重試（{minutes} 分鐘後）",
+  'schedules.reason.agent_error_retried_once': "重試一次後再次發生代理錯誤",
+  'schedules.reason.agent_error_retry_blocked': "代理錯誤；工作階段忙碌或已變更，未重試",
+  'schedules.reason.agent_error_retry_interrupted': "代理錯誤；wmux 已重新啟動，未重試",
 } as const;

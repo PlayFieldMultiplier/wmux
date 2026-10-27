@@ -682,4 +682,14 @@ export const ms = {
   'worktask.cleanup.detail.orphanMeta': 'Hanya rekod tugasan yang tinggal, tanpa worktree (pengalihan keluar terganggu) — semak, kemudian padam.',
   'worktask.cleanup.detail.diskMissing': 'Worktree tiada pada cakera (dipadam di luar wmux, atau ranap) — tutup tugasan untuk membersihkannya.',
   'botsPage.guest.readNotice': "Mulai sekarang, bot luaran boleh membaca mesej dalam perbualan ini dan menulis di dalamnya. Ia tidak pernah melihat apa yang dikatakan sebelum ia ditambah.",
+
+  // Scheduled runs: one retry after a temporary provider error
+  'claudeIntegration.scheduledRetry': "Cuba semula larian berjadual selepas ralat sementara",
+  'claudeIntegration.scheduledRetryDesc': "Jika giliran larian berjadual gagal kerana ralat rangkaian atau pelayan pembekal, tunggu 5 minit dan hantar satu mesej teruskan. Hidup secara lalai; setiap jadual boleh mematikannya.",
+  'schedules.retryTransient': "Cuba semula sekali selepas ralat sementara",
+  'schedules.retryTransientHint': "Apabila berlaku ralat rangkaian atau pelayan pembekal, tunggu 5 minit dan hantar satu mesej teruskan. Gesaan tidak dihantar semula.",
+  'schedules.state.retryWaiting': "Menunggu: mencuba semula selepas ralat sementara pembekal (dalam {minutes} min)",
+  'schedules.reason.agent_error_retried_once': "ralat ejen lagi selepas satu cubaan semula",
+  'schedules.reason.agent_error_retry_blocked': "ralat ejen; tidak dicuba semula, sesi sibuk atau berubah",
+  'schedules.reason.agent_error_retry_interrupted': "ralat ejen; tidak dicuba semula, wmux dimulakan semula",
 } as const;

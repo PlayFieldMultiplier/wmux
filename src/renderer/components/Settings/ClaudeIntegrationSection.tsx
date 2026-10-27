@@ -210,6 +210,7 @@ function UsageCard({
           aria-label={t('claudeIntegration.usageLimit.autoResume')}
         />
       </SettingRow>
+      <ScheduledRetryRow t={t} />
       <SettingRow
         id="clauderesumeonstart"
         label={t('claudeIntegration.resumeOnStart')}
@@ -222,6 +223,38 @@ function UsageCard({
         />
       </SettingRow>
     </SettingsSection>
+  );
+}
+
+/**
+ * Scheduled runs: hold a turn that failed on a temporary provider error and
+ * continue it once. The daemon keeps this (runs happen with no window open),
+ * so the row reads and writes it there; it is hidden without an answer.
+ */
+function ScheduledRetryRow({ t }: { t: (key: string, vars?: Record<string, string | number>) => string }) {
+  const [on, setOn] = useState<boolean | null>(null);
+  useEffect(() => {
+    let live = true;
+    void window.electronAPI?.automation?.settings?.()
+      .then((s) => { if (live && s) setOn(s.retryTransientErrors); })
+      .catch(() => undefined);
+    return () => { live = false; };
+  }, []);
+  if (on === null) return null;
+  const change = (next: boolean): void => {
+    setOn(next);
+    void window.electronAPI.automation.setSettings({ retryTransientErrors: next })
+      .then((r) => setOn(r.ok ? r.settings.retryTransientErrors : !next))
+      .catch(() => setOn(!next));
+  };
+  return (
+    <SettingRow
+      id="scheduledretry"
+      label={t('claudeIntegration.scheduledRetry')}
+      description={t('claudeIntegration.scheduledRetryDesc')}
+    >
+      <Switch checked={on} onCheckedChange={change} aria-label={t('claudeIntegration.scheduledRetry')} />
+    </SettingRow>
   );
 }
 

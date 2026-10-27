@@ -682,4 +682,14 @@ export const es = {
   'worktask.cleanup.detail.orphanMeta': 'Solo queda el registro de la tarea, no el worktree (se interrumpió una eliminación) — revísalo y luego elimínalo.',
   'worktask.cleanup.detail.diskMissing': 'El worktree no está en el disco (eliminado fuera de wmux o por un fallo) — cierra la tarea para limpiarlo.',
   'botsPage.guest.readNotice': "A partir de ahora, un bot externo puede leer los mensajes de esta conversación y publicar en ella. Nunca ve lo que se dijo antes de que se añadiera.",
+
+  // Scheduled runs: one retry after a temporary provider error
+  'claudeIntegration.scheduledRetry': "Reintentar ejecuciones programadas tras un error temporal",
+  'claudeIntegration.scheduledRetryDesc': "Si el turno de una ejecución programada falla por un error de red o del servidor del proveedor, esperar 5 minutos y enviar un mensaje para continuar. Activado por defecto; cada programación puede desactivarlo.",
+  'schedules.retryTransient': "Reintentar una vez tras un error temporal",
+  'schedules.retryTransientHint': "Ante un error de red o del servidor del proveedor, esperar 5 minutos y enviar un mensaje para continuar. El prompt no se vuelve a enviar.",
+  'schedules.state.retryWaiting': "En espera: reintento tras un error temporal del proveedor (en {minutes} min)",
+  'schedules.reason.agent_error_retried_once': "error del agente de nuevo tras un reintento",
+  'schedules.reason.agent_error_retry_blocked': "error del agente; sin reintento, la sesión estaba ocupada o cambió",
+  'schedules.reason.agent_error_retry_interrupted': "error del agente; sin reintento, wmux se reinició",
 } as const;
