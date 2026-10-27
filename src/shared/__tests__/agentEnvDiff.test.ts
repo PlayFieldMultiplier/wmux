@@ -68,8 +68,13 @@ describe('diffAgentEnvs', () => {
     });
     expect(diffAgentEnvs([host('local', summary()), host('h1', off)]).rows)
       .toEqual([{ kind: 'skill', agent: 'claude', name: 'review', source: 'user', values: { local: 'on', h1: 'off' } }]);
-    const unread = { ...summary({ skills: [] }), incomplete: ['claude'] };
+    // Unread: no claude agent row and no claude skills, only the incomplete mark.
+    const read = summary({ skills: [] });
+    const unread = { ...read, agents: read.agents.filter((a) => a.agent !== 'claude'), incomplete: ['claude'] };
     expect(diffAgentEnvs([host('local', summary()), host('h1', unread)]).rows).toEqual([]);
+    // Another build that checks one more file: not "missing" on this PC.
+    const newer = { ...summary(), instructions: [...summary().instructions, { file: '~/.cursor/rules.md', sha256: LF }] };
+    expect(diffAgentEnvs([host('local', summary()), host('h1', newer)]).rows).toEqual([]);
   });
 });
 
@@ -82,7 +87,8 @@ describe('agent env summary bounds', () => {
       instructions: [],
     });
     expect(s.skills.some((i) => /[\u200b\u202e]/.test(i.name))).toBe(false);
-    expect(s.truncated).toBe(true);
+    expect(s.truncated).toEqual(['skills']);
+    expect(parseAgentEnvSummary({ ...s, skills: [{ agent: 'claude', name: 're\u00adview', source: 'user' }, { agent: 'claude', name: 'review\u2028', source: 'user' }] })?.skills).toEqual([]);
     expect(new TextEncoder().encode(JSON.stringify(s)).length).toBeLessThanOrEqual(96 * 1024);
   });
 });

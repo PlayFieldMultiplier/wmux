@@ -9,6 +9,7 @@
 // CACHE_MS: the inventory has no change signal.
 
 import { createHash } from 'node:crypto';
+import { constants as fsConstants } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -46,7 +47,8 @@ export interface AgentEnvDeps {
   resolveCommand?: (command: string) => string | null;
   readFile?: (p: string) => Promise<Buffer>;
   realpath?: (p: string) => Promise<string>;
-  stat?: (p: string) => Promise<{ isFile(): boolean; size: number }>;
+  /** An instruction file's bytes, 'absent' or 'unreadable'. */
+  readInstruction?: (p: string) => Promise<Buffer | 'absent' | 'unreadable'>;
 }
 
 async function packageVersion(executable: string, pkg: string, deps: Required<Pick<AgentEnvDeps, 'readFile' | 'realpath'>>): Promise<string | null> {
@@ -62,10 +64,11 @@ async function packageVersion(executable: string, pkg: string, deps: Required<Pi
   // the global node_modules (Windows, or a copied bin).
   const binDir = path.dirname(executable);
   const candidates = [path.join(binDir, 'node_modules', pkg), path.join(binDir, '..', 'lib', 'node_modules', pkg)];
+  const nearest: string[] = [];
   try {
     let dir = path.dirname(await deps.realpath(executable));
     for (let i = 0; i < 6; i++) {
-      candidates.unshift(dir);
+      nearest.push(dir);
       const parent = path.dirname(dir);
       if (parent === dir) break;
       dir = parent;
@@ -73,24 +76,43 @@ async function packageVersion(executable: string, pkg: string, deps: Required<Pi
   } catch {
     /* not resolvable: the shim layouts only */
   }
-  for (const dir of candidates) {
+  // Nearest to the real binary first, then the shim layouts.
+  for (const dir of [...nearest, ...candidates]) {
     const version = await read(dir);
     if (version) return version;
   }
   return null;
 }
 
-/** SHA-256 of a file's bytes exactly as stored; null when there is no such
- *  regular file, it is too large, or it cannot be read. Checked before the
- *  read, so a link to a FIFO or a device never blocks it. */
-async function hashFile(p: string, io: { readFile: (p: string) => Promise<Buffer>; stat: (p: string) => Promise<{ isFile(): boolean; size: number }> }): Promise<string | null> {
+/**
+ * An instruction file's bytes, read through ONE handle: opened non-blocking
+ * (a link to a FIFO cannot hang the open), checked to be a regular file under
+ * the cap, then read from that same handle, so nothing can swap it between
+ * the check and the read.
+ */
+async function readInstructionFile(p: string): Promise<Buffer | 'absent' | 'unreadable'> {
+  let fh: fs.FileHandle;
   try {
-    const st = await io.stat(p);
-    if (!st.isFile() || st.size > INSTRUCTION_MAX_BYTES) return null;
-    return createHash('sha256').update(await io.readFile(p)).digest('hex');
-  } catch {
-    return null;
+    fh = await fs.open(p, fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0));
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    return code === 'ENOENT' || code === 'ENOTDIR' ? 'absent' : 'unreadable';
   }
+  try {
+    const st = await fh.stat();
+    if (!st.isFile() || st.size > INSTRUCTION_MAX_BYTES) return 'unreadable';
+    const bytes = await fh.readFile();
+    return bytes.length > INSTRUCTION_MAX_BYTES ? 'unreadable' : bytes;
+  } catch {
+    return 'unreadable';
+  } finally {
+    await fh.close().catch(() => undefined);
+  }
+}
+
+/** Inventory warnings that mean part of the configuration was not read (helpers.ts safeRead*). */
+function readFailed(inv: ProviderInventory): boolean {
+  return inv.warnings.some((w) => w.startsWith('Failed to read ') || w.startsWith('Failed to parse '));
 }
 
 export async function collectAgentEnvSummary(deps: AgentEnvDeps): Promise<AgentEnvSummary> {
@@ -99,23 +121,29 @@ export async function collectAgentEnvSummary(deps: AgentEnvDeps): Promise<AgentE
   const io = {
     readFile: deps.readFile ?? ((p: string) => fs.readFile(p)),
     realpath: deps.realpath ?? ((p: string) => fs.realpath(p)),
-    stat: deps.stat ?? ((p: string) => fs.stat(p)),
   };
+  const readInstruction = deps.readInstruction ?? readInstructionFile;
   // The PATH the inventory's own probes run with (Homebrew and npm prefixes
   // included), not a Finder-launched app's bare one.
   const resolve = deps.resolveCommand ?? ((command: string) => resolveOnPath(command, getExecEnv()));
   const read = await Promise.all(INVENTORY_PROVIDERS.map((p) => readInv(p).then((inv) => ({ p, inv }), () => ({ p, inv: null }))));
   const inventories = read.map((r) => r.inv).filter((inv): inv is ProviderInventory => inv !== null);
-  // A provider that could not be read is reported as such, never as having nothing.
-  const unread = read.filter((r) => r.inv === null).map((r) => r.p);
+  // A provider that could not be read, in whole or in part, is reported as
+  // such, never as having nothing.
+  const unread = read.filter((r) => r.inv === null || readFailed(r.inv)).map((r) => r.p);
   const versions: AgentEnvAgent[] = await Promise.all(PACKAGE_AGENTS.map(async ({ agent, command, pkg }) => {
     const executable = resolve(command);
-    return { agent, version: executable ? await packageVersion(executable, pkg, io) : null };
+    if (!executable) return { agent, version: null };
+    // Installed, but in a layout whose package is not found: say so, not "absent".
+    return { agent, version: (await packageVersion(executable, pkg, io)) ?? 'unknown' };
   }));
-  const instructions: AgentEnvInstruction[] = await Promise.all(INSTRUCTION_FILES.map(async (rel) => ({
-    file: `~/${rel}`,
-    sha256: await hashFile(path.join(home, ...rel.split('/')), io),
-  })));
+  const instructions: AgentEnvInstruction[] = await Promise.all(INSTRUCTION_FILES.map(async (rel): Promise<AgentEnvInstruction> => {
+    const file = `~/${rel}`;
+    const got = await readInstruction(path.join(home, ...rel.split('/')));
+    if (got === 'absent') return { file, sha256: null };
+    if (got === 'unreadable') return { file, sha256: null, unreadable: true };
+    return { file, sha256: createHash('sha256').update(got).digest('hex') };
+  }));
   return buildAgentEnvSummary({ wmuxVersion: deps.wmuxVersion, inventories, unread, versions, instructions });
 }
 

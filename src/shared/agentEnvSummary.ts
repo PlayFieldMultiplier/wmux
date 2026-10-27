@@ -31,7 +31,8 @@ export const AGENT_ENV_LIMITS = Object.freeze({
 
 export interface AgentEnvAgent {
   agent: string;
-  /** `x.y.z` as the agent reports it; null when not installed or not known. */
+  /** `x.y.z` as the agent reports it; 'unknown' when it is installed but its
+   *  version could not be read; null when it is not installed. */
   version: string | null;
 }
 
@@ -52,6 +53,8 @@ export interface AgentEnvInstruction {
   file: string;
   /** SHA-256 of the file's bytes as stored (no normalising); null when there is no such file. */
   sha256: string | null;
+  /** Present when the file is there but could not be read (too large, not a regular file, no access). */
+  unreadable?: true;
 }
 
 export interface AgentEnvSummary {
@@ -63,8 +66,8 @@ export interface AgentEnvSummary {
   instructions: AgentEnvInstruction[];
   /** Agents whose configuration could not be read: their items are not known, not absent. */
   incomplete?: string[];
-  /** Present when a list was cut to the limits: what is missing is not known. */
-  truncated?: true;
+  /** The lists cut to the limits: what is missing from them is not known. */
+  truncated?: Array<'skills' | 'mcpServers'>;
 }
 
 const SHA256_RE = /^[0-9a-f]{64}$/;
@@ -72,8 +75,8 @@ const SOURCES = new Set(['user', 'project', 'plugin', 'wmux', 'builtin', 'manage
 // A name or version: on one line, with no control characters (C0, DEL, C1)
 // and none of the invisible or direction-changing ones (zero-width, bidi
 // embeddings and isolates) that would make two different names read alike.
-// eslint-disable-next-line no-control-regex -- matching control characters is the point
-const PRINTABLE_RE = /^[^\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]+$/;
+// eslint-disable-next-line no-control-regex, no-misleading-character-class -- matching control and combining characters is the point
+const PRINTABLE_RE = /^[^\u0000-\u001f\u007f-\u009f\u00ad\u034f\u061c\u180e\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufe00-\ufe0f\ufeff\u{e0000}-\u{e007f}]+$/u;
 // A home-relative instruction file name: `~/` then plain path segments,
 // none of them `.` or `..`.
 const INSTRUCTION_FILE_RE = /^~(\/(?!\.\.?(?:\/|$))[A-Za-z0-9._-]+)+$/;
@@ -82,10 +85,15 @@ function text(v: unknown, max: number): string | null {
   return typeof v === 'string' && v.length > 0 && v.length <= max && PRINTABLE_RE.test(v) ? v : null;
 }
 
+/** By code unit, never by locale: two PCs must sort (and so cap) the same way. */
+function compareCodeUnits(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 function byKey<T>(rows: T[], key: (row: T) => string): T[] {
   const seen = new Map<string, T>();
   for (const row of rows) if (!seen.has(key(row))) seen.set(key(row), row);
-  return [...seen.values()].sort((a, b) => key(a).localeCompare(key(b)));
+  return [...seen.values()].sort((a, b) => compareCodeUnits(key(a), key(b)));
 }
 
 /** The identity of a skill or server: the same name from another source or parent is another one. */
@@ -112,9 +120,9 @@ function items(raw: unknown): { rows: AgentEnvItem[]; cut: boolean } {
   return { rows: rows.slice(0, AGENT_ENV_LIMITS.items), cut };
 }
 
-/** The summary's JSON size, in bytes. */
-function bytes(s: AgentEnvSummary): number {
-  return new TextEncoder().encode(JSON.stringify(s)).length;
+/** A value's JSON size, in bytes. */
+function bytes(v: unknown): number {
+  return new TextEncoder().encode(JSON.stringify(v)).length;
 }
 
 /**
@@ -140,29 +148,35 @@ export function parseAgentEnvSummary(raw: unknown): AgentEnvSummary | null {
     const row = i as Record<string, unknown> | null;
     const file = typeof row?.file === 'string' && row.file.length <= AGENT_ENV_LIMITS.nameChars && INSTRUCTION_FILE_RE.test(row.file) ? row.file : null;
     if (!file) continue;
-    instructions.push({ file, sha256: typeof row?.sha256 === 'string' && SHA256_RE.test(row.sha256) ? row.sha256 : null });
+    const sha256 = typeof row?.sha256 === 'string' && SHA256_RE.test(row.sha256) ? row.sha256 : null;
+    instructions.push({ file, sha256, ...(sha256 === null && row?.unreadable === true ? { unreadable: true as const } : {}) });
   }
   const incomplete = Array.isArray(r.incomplete)
     ? byKey(r.incomplete.slice(0, AGENT_ENV_LIMITS.agents).map((a) => text(a, AGENT_ENV_LIMITS.nameChars)).filter((a): a is string => a !== null), (a) => a)
     : [];
-  const skills = items(r.skills);
-  const mcpServers = items(r.mcpServers);
+  const lists = { skills: items(r.skills), mcpServers: items(r.mcpServers) };
+  const sentCut = Array.isArray(r.truncated) ? r.truncated : [];
+  const cut = new Set<'skills' | 'mcpServers'>((['skills', 'mcpServers'] as const).filter((k) => lists[k].cut || sentCut.includes(k)));
   const summary: AgentEnvSummary = {
     schema: AGENT_ENV_SCHEMA,
     wmuxVersion,
     agents: byKey(agents, (a) => a.agent),
-    skills: skills.rows,
-    mcpServers: mcpServers.rows,
+    skills: lists.skills.rows,
+    mcpServers: lists.mcpServers.rows,
     instructions: byKey(instructions, (i) => i.file),
     ...(incomplete.length > 0 ? { incomplete } : {}),
-    ...(r.truncated === true || skills.cut || mcpServers.cut ? { truncated: true as const } : {}),
   };
-  // Over the byte budget (long or multi-byte names): drop from the end of the
-  // longer list until it fits, and say so.
-  while (bytes(summary) > AGENT_ENV_LIMITS.summaryBytes && (summary.skills.length > 0 || summary.mcpServers.length > 0)) {
-    (summary.skills.length >= summary.mcpServers.length ? summary.skills : summary.mcpServers).pop();
-    summary.truncated = true;
+  // Over the byte budget (long or multi-byte names): drop rows from the end of
+  // the longer list until it fits, sizing each row once, and say which.
+  let total = bytes(summary) + bytes(['skills', 'mcpServers']);
+  const sizes = { skills: summary.skills.map((x) => bytes(x) + 1), mcpServers: summary.mcpServers.map((x) => bytes(x) + 1) };
+  while (total > AGENT_ENV_LIMITS.summaryBytes && (summary.skills.length > 0 || summary.mcpServers.length > 0)) {
+    const k = summary.skills.length >= summary.mcpServers.length ? 'skills' : 'mcpServers';
+    summary[k].pop();
+    total -= sizes[k].pop() ?? 0;
+    cut.add(k);
   }
+  if (cut.size > 0) summary.truncated = [...cut].sort();
   return summary;
 }
 

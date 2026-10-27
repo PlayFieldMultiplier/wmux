@@ -10,17 +10,17 @@ function deps(files: Record<string, string | Buffer>, over: Partial<AgentEnvDeps
     wmuxVersion: '4.4.0',
     homeDir: HOME,
     readInventory: async (provider) => ({ provider, cliVersion: provider === 'claude' ? '2.1.0' : null, versionSupported: true, writable: false, items: [], warnings: [], scannedAtMs: 0 }) as ProviderInventory,
-    resolveCommand: (command) => (command === 'gemini' ? '/opt/npm/bin/gemini' : null),
+    resolveCommand: (command) => (command === 'gemini' ? '/opt/npm/bin/gemini' : command === 'qwen' ? '/opt/pnpm/qwen' : null),
     realpath: async (p) => (p === '/opt/npm/bin/gemini' ? '/opt/npm/lib/node_modules/@google/gemini-cli/dist/index.js' : p),
     readFile: async (p) => {
       const f = files[p.split(path.sep).join('/')];
       if (f === undefined) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
       return Buffer.isBuffer(f) ? f : Buffer.from(f);
     },
-    stat: async (p) => {
+    readInstruction: async (p) => {
       const f = files[p.split(path.sep).join('/')];
-      if (f === undefined) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
-      return { isFile: () => true, size: Buffer.byteLength(f) };
+      if (f === undefined) return 'absent';
+      return Buffer.isBuffer(f) ? f : Buffer.from(f);
     },
     ...over,
   };
@@ -43,19 +43,23 @@ describe('collectAgentEnvSummary', () => {
     expect(s.agents).toEqual(expect.arrayContaining([
       { agent: 'claude', version: '2.1.0' },
       { agent: 'gemini', version: '0.9.1' },
-      { agent: 'qwen', version: null },
+      { agent: 'qwen', version: 'unknown' }, // installed, package not found beside it
     ]));
     expect(JSON.stringify(s)).not.toContain(HOME);
   });
 
-  it('reports an inventory it could not read as incomplete, not as empty', async () => {
+  it('reports an inventory it could not read, in whole or in part, as incomplete, not as empty', async () => {
     const s = await collectAgentEnvSummary(deps({}, {
       readInventory: async (provider) => {
         if (provider === 'claude') throw new Error('parse error');
-        return { provider, cliVersion: null, versionSupported: false, writable: false, items: [], warnings: [], scannedAtMs: 0 } as ProviderInventory;
+        const warnings = provider === 'codex' ? ['Failed to parse TOML at /home/someone/.codex/config.toml: bad'] : [];
+        return { provider, cliVersion: null, versionSupported: false, writable: false, items: [], warnings, scannedAtMs: 0 } as ProviderInventory;
       },
+      readInstruction: async () => 'unreadable',
     }));
-    expect(s.incomplete).toEqual(['claude']);
+    expect(s.incomplete).toEqual(['claude', 'codex']);
+    expect(s.instructions[0]).toEqual({ file: '~/.claude/CLAUDE.md', sha256: null, unreadable: true });
+    expect(JSON.stringify(s)).not.toContain('/home/someone');
   });
 
   it('reads the local summary at most once per minute', async () => {

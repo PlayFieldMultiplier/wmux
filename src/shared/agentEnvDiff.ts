@@ -58,14 +58,21 @@ function rowsOf(s: AgentEnvSummary): Array<Key & { key: string; value: string | 
     ...s.agents.map((a) => ({ kind: 'agent' as const, name: a.agent, key: `agent\u0000${a.agent}`, value: a.version })),
     ...s.skills.map((i) => itemRow('skill', i)),
     ...s.mcpServers.map((i) => itemRow('mcpServer', i)),
-    ...s.instructions.map((i) => ({ kind: 'instruction' as const, name: i.file, key: `instruction\u0000${i.file}`, value: i.sha256 })),
+    ...s.instructions.map((i) => ({ kind: 'instruction' as const, name: i.file, key: `instruction\u0000${i.file}`, value: i.unreadable ? 'unreadable' : i.sha256 })),
   ];
 }
 
-/** Whether a PC's absence of this row means it has none, or is just not known. */
+/**
+ * Whether a PC's silence on this row means it has none, or that it was not
+ * checked. Every agent and instruction file a PC checks has a row (null when
+ * absent), so no row there means not checked: another wmux build's list, or an
+ * inventory that could not be read. Skills and servers are absent only when
+ * that agent's list was read in full.
+ */
 function knownAbsent(row: Key, s: AgentEnvSummary): boolean {
-  if (row.kind !== 'skill' && row.kind !== 'mcpServer') return true;
-  return s.truncated !== true && !(row.agent !== undefined && s.incomplete?.includes(row.agent));
+  if (row.kind !== 'skill' && row.kind !== 'mcpServer') return false;
+  const list = row.kind === 'skill' ? 'skills' : 'mcpServers';
+  return !s.truncated?.includes(list) && !(row.agent !== undefined && s.incomplete?.includes(row.agent));
 }
 
 export function diffAgentEnvs(hosts: readonly AgentEnvHost[]): AgentEnvDiff {
