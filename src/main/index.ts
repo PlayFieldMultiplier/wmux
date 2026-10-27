@@ -175,6 +175,7 @@ import { DangerousActionConsent } from './browser-session/dangerousActionConsent
 import { registerBrowserConsentRpc } from './pipe/handlers/browserConsent.rpc';
 import { registerBrowserConsentGrantsIpc } from './ipc/handlers/browserConsentGrants.handler';
 import { registerBrowserAgentControlIpc } from './ipc/handlers/browserAgentControl.handler';
+import { registerBrowserHelpIpc } from './ipc/handlers/browserHelp.handler';
 import { BrowserAgentControl } from './browser-session/BrowserAgentControl';
 import { BROWSER_AGENT_CONTROL_IPC } from '../shared/browserAgentControl';
 import type { BorrowApprovalRequester } from '../shared/liveWriteScope';
@@ -1242,29 +1243,8 @@ const browserHelpRequests = registerBrowserRpc(
   },
   browserAgentControl,
 );
-// browser_request_help — the renderer's Done / Cancel. Mirrors
-// PERMISSION_PROMPT_RESOLVE: a shape-validated invoke, and the AUTHORITATIVE
-// removal is the BROWSER_HELP_CLOSED push HelpRequests emits from inside its own
-// settle, so an optimistic local removal racing this is harmless. A stale or
-// already-settled id resolves `{ ok: false }` rather than throwing — the row may
-// have timed out under the operator's click.
-ipcMain.handle(
-  IPC.BROWSER_HELP_RESOLVE,
-  async (_event, payload: { requestId?: unknown; outcome?: unknown }) => {
-    if (
-      !payload ||
-      typeof payload.requestId !== 'string' ||
-      (payload.outcome !== 'continued' && payload.outcome !== 'cancelled')
-    ) {
-      return { ok: false, error: 'invalid browser help payload' };
-    }
-    const settled = await browserHelpRequests.resolveFromRenderer(
-      payload.requestId,
-      payload.outcome,
-    );
-    return { ok: settled };
-  },
-);
+// browser_request_help — the renderer's Done / Cancel (see browserHelp.handler).
+registerBrowserHelpIpc(ipcMain, { getWindow: () => mainWindow, requests: browserHelpRequests });
 
 /** Set once the ApprovalQueue exists (below). Read lazily by browser.rpc. */
 let liveBorrowRequester: BorrowApprovalRequester | null = null;
