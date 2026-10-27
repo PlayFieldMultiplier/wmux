@@ -3251,9 +3251,13 @@ export class WebTerminalServer {
     // Browser help requests: listed from the daemon's table, answered by the
     // operator or a device with an explicit input grant (browserHelp.ts).
     if (req.method === 'GET' && p === BROWSER_HELP_LIST_ROUTE) {
+      // The panes /api/sessions lists (live, not a brain's), read once for the whole list.
+      let listed: Set<string> | null = null;
       const r = browserHelpListResponse({
         allowTranscript: this.opts?.allowTranscript === true, desktop: this.availableDesktop(), table: this.deps.browserHelp?.() ?? null,
         isBrainPane: (ptyId) => this.isBrainApproval(ptyId),
+        listedSession: (ptyId) => (listed ??= new Set(this.deps.sessionManager.listLiveSessions()
+          .filter((s) => !isBrainPty({ id: s.id, env: s.env })).map((s) => s.id))).has(ptyId),
       });
       return this.json(res, r.status, r.body, { 'Cache-Control': 'no-store' });
     }

@@ -26,7 +26,7 @@ describe('browser help routes', () => {
   let server: WebTerminalServer | undefined;
   afterEach(async () => { if (server?.isRunning) await server.stop(); server = undefined; });
 
-  async function start(opts: { allowTranscript?: boolean; allowInput?: boolean; announce?: string[]; publish?: boolean } = {}) {
+  async function start(opts: { allowTranscript?: boolean; allowInput?: boolean; announce?: string[]; publish?: boolean; live?: Array<{ id: string; env?: Record<string, string> }> } = {}) {
     const store = new HelpRequests({ open: () => undefined, close: () => undefined });
     const commands: string[] = [];
     const bridge = new DesktopPhoneBridge((clientId, event) => {
@@ -69,9 +69,13 @@ describe('browser help routes', () => {
       list: () => [{ deviceId: 'd1', name: 'd1', createdAt: 0, lastSeenAt: 0, allowInput: true }],
       hasExplicitInputGrant: (deviceId) => roster[deviceId]?.explicit === true,
     };
+    const live = opts.live ?? [];
     const sessionManager = Object.assign(new EventEmitter(), {
-      getSession: () => undefined,
-      listLiveSessions: () => [],
+      getSession: (id: string) => {
+        const found = live.find((s) => s.id === id);
+        return found ? { meta: { env: found.env } } : undefined;
+      },
+      listLiveSessions: () => live,
     }) as unknown as DaemonSessionManager;
     server = new WebTerminalServer({
       sessionManager, devices, desktop: () => bridge, log: () => undefined, assetsDir: os.tmpdir(),
@@ -123,6 +127,21 @@ describe('browser help routes', () => {
       }
       expect(r.commands).toEqual([]);
       expect((await r.get('/api/browser-help', 'Bearer d4.s4')).status).toBe(401);
+    });
+
+    it('names the requesting pane as /api/sessions does, only when that list has it', async () => {
+      const r = await start({ live: [{ id: 'pty-1' }, { id: 'brain-hq-1' }, { id: 'pty-brain', env: { WMUX_BRAIN_PTY: '1' } }] });
+      const pane = r.open('surf-1', 'pty-1');
+      const none = r.open('surf-2');
+      const gone = r.open('surf-3', 'pty-gone');
+      const brain = r.open('surf-4', 'brain-hq-1');
+      const marked = r.open('surf-5', 'pty-brain');
+      await r.publish();
+      for (const auth of [r.operator, 'Bearer d1.s1']) {
+        const rows = new Map(((await r.get('/api/browser-help', auth)).body.requests as Array<Record<string, unknown>>).map((row) => [row.requestId, row]));
+        expect(rows.get(pane.requestId)).toMatchObject({ sessionId: 'pty-1' });
+        for (const id of [none.requestId, gone.requestId, brain.requestId, marked.requestId]) expect(rows.get(id)).not.toHaveProperty('sessionId');
+      }
     });
 
     it('is 403 without the transcript consent and 503 before a desktop published a table', async () => {

@@ -62,6 +62,16 @@ function harness(opts: { audience?: string[]; present?: boolean; brain?: (id: st
   return { router, table, sent, parked, forgotten, clock, state, timers, fireTimers };
 }
 
+describe('browser help push bodies', () => {
+  it('never carry the requesting pane or a session id', () => {
+    const withPane = { ...row({ requesterPtyId: 'pty-1' }), sessionId: 'pty-1' } as BrowserHelpTableRow;
+    for (const payload of [buildBrowserHelpPushPayload(withPane), buildBrowserHelpRetractionPayload(withPane.requestId, withPane.workspaceId, 'continued')]) {
+      expect(JSON.stringify(payload)).not.toContain('pty-1');
+      expect(JSON.stringify(payload)).not.toContain('sessionId');
+    }
+  });
+});
+
 describe('browser help push payloads', () => {
   it('★ the sealed body is fixed text: no prompt, no approvalId', () => {
     const payload = buildBrowserHelpPushPayload(row());
