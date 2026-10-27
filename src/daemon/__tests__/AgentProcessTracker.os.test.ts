@@ -243,6 +243,9 @@ describe('selectAgentProcess', () => {
     expect(slug(`${HOME}x/.local/share/claude/versions/2.1.311`)).toBeUndefined();
     expect(slug(`${HOME}/.local/share/claude/versions/2.1.311`.toUpperCase())).toBeUndefined();
     expect(slug('/tmp/.grok/downloads/grok-1.0.52-macos-aarch64')).toBeUndefined();
+    // The path is compared normalized.
+    expect(slug(`${HOME}//.local/share/claude/./versions/2.1.311`)).toBe('claude');
+    expect(slug(`${HOME}/.local/share/claude/versions/../versions/2.1.311`)).toBe('claude');
   });
 
   it('a claude that re-execs into a new version binary keeps its name', () => {
@@ -255,7 +258,7 @@ describe('selectAgentProcess', () => {
       .toEqual({ pid: SHELL, slug: 'claude' });
   });
 
-  it('on Windows the path comes from the command line, compared without case or .exe', () => {
+  it('on Windows the path comes from the command line, which must name the image, compared without case', () => {
     const HOME = 'C:\\Users\\Dev';
     const slug = (cmdline: string, home = HOME) => selectAgentProcess([entry(200, SHELL, '2.1.311.exe', cmdline)], SHELL, home)?.slug;
     expect(slug('"C:\\Users\\Dev\\.local\\share\\claude\\versions\\2.1.311.exe" --resume abc')).toBe('claude');
@@ -263,6 +266,9 @@ describe('selectAgentProcess', () => {
     expect(slug('C:\\Users\\Other\\.local\\share\\claude\\versions\\2.1.311.exe')).toBeUndefined();
     expect(slug('C:\\work\\claude\\versions\\2.1.311.exe')).toBeUndefined();
     expect(slug('2.1.311.exe')).toBeUndefined();
+    // The command line is self-reported: it must name the image the process runs.
+    const claims = 'C:\\Users\\Dev\\.local\\share\\claude\\versions\\2.1.311.exe';
+    expect(selectAgentProcess([entry(200, SHELL, 'foo.exe', `"${claims}"`)], SHELL, HOME)).toEqual({ pid: 200 });
   });
 });
 
@@ -1096,6 +1102,8 @@ describe.skipIf(process.platform === 'win32')('the real executable backs the age
     fs.symlinkSync(real, path.join(root, 'home-link'));
     const image = path.join(real, '.local/share/claude/versions/2.1.307');
     expect(isAgentImage(entry(200, 100, 'claude'), 'claude', image, path.join(root, 'home-link'))).toBe(true);
+    // Run by its resolved path, it is named the same way.
+    expect(selectAgentProcess([entry(200, 100, image, image)], 100, path.join(root, 'home-link'))).toEqual({ pid: 200, slug: 'claude' });
   });
 
   it('a runtime-hosted agent runs a script inside that agent\'s installed package', () => {

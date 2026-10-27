@@ -439,7 +439,8 @@ export interface AgentProcessPick {
  * An exact-depth tie between two DIFFERENT slugs is ambiguous (two agents at
  * equal depth) → the pick keeps the pid for the death edge but drops the slug
  * rather than guessing. BFS with a visited set: Windows PPIDs can be
- * stale/reused and form cycles. Pure — exported for unit tests.
+ * stale/reused and form cycles. Reads only `userHome`'s real path, and only
+ * for a process run by its path — exported for unit tests.
  */
 export function selectAgentProcess(
   entries: ReadonlyArray<ProcessTreeEntry>,
@@ -452,12 +453,14 @@ export function selectAgentProcess(
     if (list) list.push(e);
     else byParent.set(e.ppid, [e]);
   }
+  let installDirs: NativeInstallDir[] | undefined;
+  const dirs = () => (installDirs ??= nativeInstallDirs(homeForms(userHome)));
   const slugOf = (entry: ProcessTreeEntry): AgentSlug | undefined => {
     const stem = imageStem(entry.name);
     return AGENT_SLUG_SET.has(stem)
       ? (stem as AgentSlug)
       : NATIVE_STEM_TO_SLUG.get(stem) ??
-        (RUNTIME_STEMS.has(stem) ? resolveAgentSlug(entry.cmdline) : nativeInstallSlug(entry, userHome));
+        (RUNTIME_STEMS.has(stem) ? resolveAgentSlug(entry.cmdline) : nativeInstallSlug(entry, dirs));
   };
   const root = entries.find((e) => e.pid === shellPid);
   const rootSlug = root ? slugOf(root) : undefined;
@@ -632,24 +635,56 @@ const NATIVE_INSTALL_DIRS: ReadonlyMap<AgentSlug, { dir: string; name: RegExp }>
   ['grok', { dir: '.grok/downloads', name: /^grok-\d+\.\d+\.\d+-(?:macos|linux)-(?:aarch64|arm64|x86_64|x64)$/ }],
 ]);
 
-/**
- * The agent whose install directory under `userHome` holds the version binary
- * a process was started by its full path (`~/.local/share/claude/versions/2.1.311`):
- * the file name is a version, not the agent's name. Windows reports a bare
- * image name, so the path comes from the command line there, compared without
- * case or `.exe`. This only names the agent; isAgentImage still checks the
- * running binary against the same home-anchored directory.
- */
-function nativeInstallSlug(entry: ProcessTreeEntry, userHome: string): AgentSlug | undefined {
-  const raw = /[\\/]/.test(entry.name) ? entry.name : tokenizeCmdline(entry.cmdline ?? '')[0] ?? '';
-  const windows = /^[a-z]:[\\/]/i.test(raw);
-  const fold = (file: string) => (windows ? file.replace(/\\/g, '/').toLowerCase() : file);
-  const exe = fold(raw);
-  const name = windows ? path.posix.basename(exe).replace(/\.exe$/, '') : path.posix.basename(exe);
-  for (const [slug, install] of NATIVE_INSTALL_DIRS) {
-    if (install.name.test(name) && path.posix.dirname(exe) === path.posix.join(fold(userHome), install.dir)) return slug;
+/** `C:\Users\Dev` → `c:/users/dev`: a Windows path compares without case or
+ *  separator style; a POSIX path is left as it is. */
+function foldPath(file: string): string {
+  return /^[a-z]:[\\/]/i.test(file) ? file.replace(/\\/g, '/').toLowerCase() : file;
+}
+
+/** A home as given and its resolved form: a path under it may use either. */
+function homeForms(userHome: string, realpath: (file: string) => string = fs.realpathSync): string[] {
+  const homes = [userHome];
+  try {
+    homes.push(realpath(userHome));
+  } catch {
+    // Home unreadable: the plain path only.
   }
-  return undefined;
+  return homes;
+}
+
+interface NativeInstallDir { slug: AgentSlug; dir: string; name: RegExp }
+
+/** Every NATIVE_INSTALL_DIRS directory under each of `homes`, folded. */
+function nativeInstallDirs(homes: readonly string[]): NativeInstallDir[] {
+  return [...NATIVE_INSTALL_DIRS].flatMap(([slug, install]) =>
+    homes.map((home) => ({ slug, dir: path.posix.join(foldPath(home), install.dir), name: install.name })));
+}
+
+/** The agent whose native install directory holds `file` under a version
+ *  name. Both naming (nativeInstallSlug) and verification (isAgentImage)
+ *  use this one comparison. */
+function inNativeInstallDir(file: string, dirs: readonly NativeInstallDir[]): AgentSlug | undefined {
+  const exe = path.posix.normalize(foldPath(file));
+  const dir = path.posix.dirname(exe);
+  const name = path.posix.basename(exe);
+  return dirs.find((install) => install.dir === dir && install.name.test(name))?.slug;
+}
+
+/**
+ * The agent a process started by the full path of a version binary in its
+ * install directory (`~/.local/share/claude/versions/2.1.311`) is: the file
+ * name is a version, not the agent's name. Windows reports a bare image name,
+ * so the path comes from the command line there, which the process sets
+ * itself; its file name must be the image's. This only names the agent;
+ * isAgentImage still checks the running binary against the same directories.
+ */
+function nativeInstallSlug(entry: ProcessTreeEntry, dirs: () => readonly NativeInstallDir[]): AgentSlug | undefined {
+  let file = entry.name;
+  if (!/[\\/]/.test(file)) {
+    file = tokenizeCmdline(entry.cmdline ?? '')[0] ?? '';
+    if (!/[\\/]/.test(file) || imageStem(file) !== imageStem(entry.name)) return undefined;
+  }
+  return inNativeInstallDir(file, dirs());
 }
 
 /** A release binary named for its target (`codex-aarch64-apple-darwin`). */
@@ -705,16 +740,8 @@ export function isAgentImage(
   if (!RUNTIME_STEMS.has(imageStem(entry.name))) {
     const stem = imageStem(image).replace(NATIVE_TARGET_SUFFIX, '');
     if ((AGENT_SLUG_SET.has(stem) ? stem : NATIVE_STEM_TO_SLUG.get(stem)) === slug) return true;
-    const install = NATIVE_INSTALL_DIRS.get(slug);
-    if (!install || !install.name.test(path.posix.basename(image))) return false;
     // The image path is resolved, so compare against the resolved home too.
-    const homes = [userHome];
-    try {
-      homes.push(realpath(userHome));
-    } catch {
-      // Home unreadable: the plain path only.
-    }
-    return homes.some((home) => path.posix.dirname(image) === path.posix.join(home, install.dir));
+    return inNativeInstallDir(image, nativeInstallDirs(homeForms(userHome, realpath))) === slug;
   }
   const runtime = imageStem(image).replace(/^nodejs$/, 'node').replace(/^(python3)\.\d+$/, '$1');
   if (!RUNTIME_STEMS.has(runtime)) return false;
