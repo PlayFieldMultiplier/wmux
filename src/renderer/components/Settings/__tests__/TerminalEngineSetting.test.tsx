@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+// @wmux-lane unit
+// 'win32' here is only the platform value given to the mocked electronAPI; nothing reaches the OS.
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
