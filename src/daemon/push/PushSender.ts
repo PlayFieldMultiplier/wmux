@@ -137,8 +137,11 @@ export class PushSender {
    * `deviceIds` limits it further to those devices (an empty list reaches
    * nobody): a push only some devices may act on, and its retraction to the
    * devices that got it.
+   *
+   * `yields` marks a push that must never cost another one its place in the
+   * queue (RELAY_YIELDING_CAP).
    */
-  notify(payload: PushPayload, opts: { collapseId?: string; requires?: string; deviceIds?: readonly string[] } = {}): void {
+  notify(payload: PushPayload, opts: { collapseId?: string; requires?: string; deviceIds?: readonly string[]; yields?: boolean } = {}): void {
     if (!this.enabled) return;
     const item: QueuedPush = {
       payload,
@@ -146,7 +149,7 @@ export class PushSender {
       ...(opts.requires ? { requires: opts.requires } : {}),
       ...(opts.deviceIds ? { deviceIds: opts.deviceIds } : {}),
     };
-    this.transport.enqueue(() => this.send(item).then(() => undefined));
+    this.transport.enqueue(() => this.send(item).then(() => undefined), { yields: opts.yields === true });
   }
 
   /** Test seam: wait for the queue to empty. */

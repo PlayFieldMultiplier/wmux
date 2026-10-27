@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 
 import {
   DEFERRED_PUSH_CAP,
+  DEFERRED_YIELDING_CAP,
   DESKTOP_PRESENCE_STALE_AFTER_MS,
   DESKTOP_PRESENCE_STALE_CAP_MS,
   DeferredPushQueue,
@@ -328,5 +329,37 @@ describe('DeferredPushQueue', () => {
     h.queue.dispose();
     expect(h.queue.size).toBe(0);
     expect(h.send).not.toHaveBeenCalled();
+  });
+});
+
+describe('DeferredPushQueue — yielding pushes', () => {
+  it('★ a browser help push never evicts an approval, and holds at most its own cap', () => {
+    const onOutcome = vi.fn();
+    const queue = new DeferredPushQueue({
+      send: vi.fn(),
+      onOutcome,
+      yields: (id) => id.startsWith('browserhelp:'),
+      isPresent: () => true,
+      staleAfterMs: () => DESKTOP_PRESENCE_STALE_AFTER_MS,
+      setTimer: () => 1,
+      clearTimer: () => undefined,
+    });
+    const p = (id: string): PushPayload => ({ title: 't', body: 'b', approvalId: id });
+    for (let i = 0; i < DEFERRED_YIELDING_CAP + 2; i++) queue.park(`browserhelp:h-${i}`, p(`h-${i}`));
+    // Its own cap: the oldest help pushes went.
+    expect(queue.size).toBe(DEFERRED_YIELDING_CAP);
+    expect(onOutcome.mock.calls.map((c) => c[0])).toEqual(['browserhelp:h-0', 'browserhelp:h-1']);
+    onOutcome.mockClear();
+    // Approvals fill the queue: help pushes give way, approvals stay.
+    for (let i = 0; i < DEFERRED_PUSH_CAP; i++) queue.park(`ap-${i}`, p(`ap-${i}`));
+    expect(onOutcome.mock.calls.every((c) => String(c[0]).startsWith('browserhelp:'))).toBe(true);
+    expect(queue.size).toBe(DEFERRED_PUSH_CAP);
+    for (let i = 0; i < DEFERRED_PUSH_CAP; i++) expect(queue.has(`ap-${i}`)).toBe(true);
+    // A full queue of approvals refuses a new help push instead of evicting one.
+    onOutcome.mockClear();
+    queue.park('browserhelp:late', p('late'));
+    expect(onOutcome.mock.calls).toEqual([['browserhelp:late', 'dropped', undefined]]);
+    expect(queue.has('browserhelp:late')).toBe(false);
+    for (let i = 0; i < DEFERRED_PUSH_CAP; i++) expect(queue.has(`ap-${i}`)).toBe(true);
   });
 });

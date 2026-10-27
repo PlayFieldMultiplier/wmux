@@ -8872,10 +8872,13 @@ async function main(): Promise<void> {
   // nobody there to report anything. Same collapseId, so the phone replaces
   // the pane's banner rather than stacking a second one.
   const deferredPush = new DeferredPushQueue({
-    // A held browser help push goes only to the devices that may still answer it.
-    send: (payload, opts) => pushSender.notify(payload, opts.requires === BROWSER_HELP_PUSH_CAPABILITY && opts.deviceIds
-      ? { ...opts, deviceIds: browserHelpPushRouter.narrowRelease(opts.deviceIds) }
-      : opts),
+    // A held browser help push goes only to the devices that may still answer
+    // it, and never costs an approval its place in the relay queue.
+    send: (payload, opts) => {
+      if (opts.requires !== BROWSER_HELP_PUSH_CAPABILITY || !opts.deviceIds) return pushSender.notify(payload, opts);
+      const deviceIds = browserHelpPushRouter.narrowRelease(String(payload.browserHelpId), opts.deviceIds);
+      if (deviceIds.length > 0) pushSender.notify(payload, { ...opts, deviceIds, yields: true });
+    },
     // Whether a held push went out or was evicted unsent decides whether its
     // record may later retract it. Only called on a release or an eviction,
     // both of which happen after the router below exists.
@@ -8885,6 +8888,7 @@ async function main(): Promise<void> {
       else if (browserHelpPushRouter.owns(id)) browserHelpPushRouter.onParkedOutcome(id, outcome);
       else approvalPushRouter.onParkedOutcome(id, outcome, collapseId);
     },
+    yields: (key) => browserHelpPushRouter.owns(key),
     isPresent: desktopIsPresent,
     staleAfterMs: () => presenceConfig().staleAfterMs,
     log: (level, msg) => log(level, msg),

@@ -237,6 +237,12 @@ export function createPresenceRpcHandler(
  * anyway. Drop-oldest keeps the ones still worth delivering.
  */
 export const DEFERRED_PUSH_CAP = 32;
+/**
+ * Held pushes the `yields` predicate names (a browser help push) kept at
+ * most. They never push another held push out: when the queue is full one of
+ * their own is dropped, or the new one is.
+ */
+export const DEFERRED_YIELDING_CAP = 8;
 
 /**
  * Slack added to the stale horizon before the queue re-checks presence.
@@ -266,6 +272,8 @@ export interface DeferredPushQueueDeps {
    * (`dropped`). A `forget` is the caller's own decision and is not reported.
    */
   onOutcome?: (approvalId: string, outcome: 'delivered' | 'dropped', collapseId: string | undefined) => void;
+  /** Keys of pushes that give way to every other kind (DEFERRED_YIELDING_CAP). */
+  yields?: (approvalId: string) => boolean;
   /** Ask the predicate whether the desktop is present RIGHT NOW. */
   isPresent: () => boolean;
   /** The freshness window in force, for sizing the re-check timer. */
@@ -315,12 +323,24 @@ export class DeferredPushQueue {
 
   /** Hold a push that presence suppressed, and arm the expiry re-check. */
   park(approvalId: string, payload: PushPayload, collapseId?: string, requires?: string, deviceIds?: readonly string[]): void {
-    if (!this.parked.has(approvalId) && this.parked.size >= DEFERRED_PUSH_CAP) {
-      const oldest = this.parked.entries().next();
-      if (!oldest.done) {
-        const [droppedId, dropped] = oldest.value;
+    const yields = this.deps.yields ?? (() => false);
+    const incomingYields = yields(approvalId);
+    const yielding = [...this.parked.keys()].filter((id) => yields(id));
+    if (
+      !this.parked.has(approvalId) &&
+      ((incomingYields && yielding.length >= DEFERRED_YIELDING_CAP) || this.parked.size >= DEFERRED_PUSH_CAP)
+    ) {
+      // A yielding push goes first; a yielding newcomer never pushes out
+      // anything else, so it is the one dropped.
+      const droppedId = yielding[0] ?? (incomingYields ? approvalId : this.parked.keys().next().value);
+      if (droppedId === approvalId) {
+        this.deps.onOutcome?.(approvalId, 'dropped', collapseId);
+        return;
+      }
+      if (droppedId !== undefined) {
+        const dropped = this.parked.get(droppedId);
         this.parked.delete(droppedId);
-        this.deps.onOutcome?.(droppedId, 'dropped', dropped.collapseId);
+        this.deps.onOutcome?.(droppedId, 'dropped', dropped?.collapseId);
       }
     }
     this.parked.set(approvalId, {

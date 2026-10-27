@@ -2785,7 +2785,8 @@ That is the rule of the decision route, all at once:
    device, or one paired before grants existed, gets nothing).
 
 A push presence held is released only to the devices that still pass this
-rule then.
+rule then, and not at all once the request's deadline has passed. With no such
+device it is not sent, and it is considered again at the desktop's next list.
 
 A request from a brain pane is never pushed: the phone may not answer it, so
 a banner could only dead-end. Sealed plaintext:
@@ -2811,6 +2812,9 @@ a banner could only dead-end. Sealed plaintext:
   `requiresInAppChoice` is always true.
 - `surfaceId` is absent when the agent named no tab.
 - No `risk`: presence holds these like a `normal` approval.
+- They never cost an approval its place: when the daemon's push queues are
+  full, a browser help push (or its retraction) is the one dropped, and at
+  most 8 are queued or held at a time.
 - APNs collapse id: `bh-<browserHelpId>`.
 
 When the request closes, however it ended, a retraction follows under the

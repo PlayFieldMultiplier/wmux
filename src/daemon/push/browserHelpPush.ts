@@ -93,7 +93,8 @@ export interface BrowserHelpPushRouterDeps {
   isBrainPane: (ptyId: string) => boolean;
   /** Is presence holding this payload back? */
   suppress: (payload: PushPayload) => boolean;
-  send: (payload: PushPayload, opts: { collapseId: string; requires: string; deviceIds: readonly string[] }) => void;
+  /** `yields`: a help push never costs an approval its place in a queue. */
+  send: (payload: PushPayload, opts: { collapseId: string; requires: string; deviceIds: readonly string[]; yields: true }) => void;
   park: (key: string, payload: PushPayload, collapseId: string, requires: string, deviceIds: readonly string[]) => void;
   forget: (key: string) => void;
   log?: (level: 'info' | 'warn', message: string) => void;
@@ -108,7 +109,7 @@ interface Pushed {
   workspaceId: string;
   deadlineAt: number;
   /** The devices it went (or will go) to; its retraction goes to the same. */
-  deviceIds: readonly string[];
+  deviceIds: string[];
   /** Set while no desktop lists it: retracts it at its deadline. */
   orphanTimer?: unknown;
 }
@@ -153,13 +154,14 @@ export class BrowserHelpPushRouter {
       const payload = buildBrowserHelpPushPayload(row);
       const collapseId = browserHelpPushCollapseId(id);
       const record: Pushed = { state: 'sent', workspaceId: row.workspaceId, deadlineAt: row.deadlineAt, deviceIds };
-      if (deps.suppress(payload)) {
-        deps.park(BROWSER_HELP_PARK_PREFIX + id, payload, collapseId, BROWSER_HELP_PUSH_CAPABILITY, deviceIds);
-        record.state = 'parked';
-      } else {
-        deps.send(payload, { collapseId, requires: BROWSER_HELP_PUSH_CAPABILITY, deviceIds });
-      }
+      // Recorded before parking: a full park queue may drop it at once.
       this.pushed.set(id, record);
+      if (deps.suppress(payload)) {
+        record.state = 'parked';
+        deps.park(BROWSER_HELP_PARK_PREFIX + id, payload, collapseId, BROWSER_HELP_PUSH_CAPABILITY, deviceIds);
+      } else {
+        deps.send(payload, { collapseId, requires: BROWSER_HELP_PUSH_CAPABILITY, deviceIds, yields: true });
+      }
     }
   }
 
@@ -212,6 +214,7 @@ export class BrowserHelpPushRouter {
       collapseId: browserHelpPushCollapseId(id),
       requires: BROWSER_HELP_PUSH_CAPABILITY,
       deviceIds: record.deviceIds,
+      yields: true,
     });
   }
 
@@ -222,11 +225,22 @@ export class BrowserHelpPushRouter {
 
   /**
    * The devices a held push may still go to as presence releases it: those
-   * it was parked for that the decision route still allows.
+   * it was parked for that the decision route still allows, and none once
+   * its deadline passed. They become the devices its retraction goes to.
+   * With none it is not sent, and the next table judges it again.
    */
-  narrowRelease(deviceIds: readonly string[]): string[] {
-    const now = new Set(this.deps.audience());
-    return deviceIds.filter((id) => now.has(id));
+  narrowRelease(requestId: string, deviceIds: readonly string[]): string[] {
+    const record = this.pushed.get(requestId);
+    if (record?.state !== 'parked') return [];
+    const allowed = new Set(this.deps.audience());
+    const narrowed = (this.deps.now ?? Date.now)() < record.deadlineAt ? deviceIds.filter((id) => allowed.has(id)) : [];
+    if (narrowed.length === 0) {
+      this.pushed.delete(requestId);
+      this.handled.delete(requestId);
+      return [];
+    }
+    record.deviceIds = narrowed;
+    return narrowed;
   }
 
   /** The park queue released or evicted one of ours. */

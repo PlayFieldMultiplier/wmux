@@ -134,12 +134,12 @@ describe('BrowserHelpPushRouter', () => {
     const h = harness({ audience: ['phone-1', 'phone-2'] });
     h.table.set('main', { requests: [row()] });
     expect(h.sent).toHaveLength(1);
-    expect(h.sent[0].opts).toEqual({ collapseId: 'bh-req-1', requires: 'browserHelpPush', deviceIds: ['phone-1', 'phone-2'] });
+    expect(h.sent[0].opts).toEqual({ collapseId: 'bh-req-1', requires: 'browserHelpPush', deviceIds: ['phone-1', 'phone-2'], yields: true });
     // The audience moved since: the retraction still goes where the push went.
     h.state.audience = ['phone-3'];
     h.table.set('main', { requests: [], closed: [{ requestId: 'req-1', state: 'completed' }] });
     expect(h.sent).toHaveLength(2);
-    expect(h.sent[1].opts).toEqual({ collapseId: 'bh-req-1', requires: 'browserHelpPush', deviceIds: ['phone-1', 'phone-2'] });
+    expect(h.sent[1].opts).toEqual({ collapseId: 'bh-req-1', requires: 'browserHelpPush', deviceIds: ['phone-1', 'phone-2'], yields: true });
     expect(h.sent[1].payload).toMatchObject({ kind: 'approval_retraction', retractsApprovalId: 'req-1', workspaceId: 'ws-1', resolution: 'completed' });
   });
 
@@ -257,11 +257,48 @@ describe('BrowserHelpPushRouter', () => {
     expect(h.sent[0].opts.deviceIds).toEqual(['phone-1']);
   });
 
-  it('a held push is released only to the devices that may still answer', () => {
+  it('★ a held push is released only to the devices that may still answer, and retracted only there', () => {
     const h = harness({ audience: ['phone-1', 'phone-2'], present: true });
     h.table.set('main', { requests: [row()] });
     h.state.audience = ['phone-2', 'phone-3'];
-    expect(h.router.narrowRelease(h.parked[0].deviceIds)).toEqual(['phone-2']);
+    expect(h.router.narrowRelease('req-1', h.parked[0].deviceIds)).toEqual(['phone-2']);
+    h.router.onParkedOutcome(`${BROWSER_HELP_PARK_PREFIX}req-1`, 'delivered');
+    h.table.set('main', { requests: [], closed: [{ requestId: 'req-1', state: 'completed' }] });
+    expect(h.sent.map((s) => s.opts.deviceIds)).toEqual([['phone-2']]);
+  });
+
+  it('★ a held push nobody may receive any more is not sent, and the next table judges it again', () => {
+    const h = harness({ present: true });
+    h.table.set('main', { requests: [row()] });
+    h.state.audience = [];
+    expect(h.router.narrowRelease('req-1', h.parked[0].deviceIds)).toEqual([]);
+    h.router.onParkedOutcome(`${BROWSER_HELP_PARK_PREFIX}req-1`, 'delivered');
+    // Still open at the next table, with a device that may answer: pushed then, once.
+    h.state.present = false;
+    h.state.audience = ['phone-1'];
+    h.table.set('main', { requests: [row()] });
+    h.table.set('main', { requests: [row()] });
+    expect(h.sent.map((s) => s.payload.browserHelpId)).toEqual(['req-1']);
+  });
+
+  it('a held push that was never sent is not retracted', () => {
+    const h = harness({ present: true });
+    h.table.set('main', { requests: [row()] });
+    h.state.audience = [];
+    h.router.narrowRelease('req-1', h.parked[0].deviceIds);
+    h.router.onParkedOutcome(`${BROWSER_HELP_PARK_PREFIX}req-1`, 'delivered');
+    h.table.set('main', { requests: [] });
+    expect(h.sent).toEqual([]);
+  });
+
+  it('★ a held push released after its deadline is not sent', () => {
+    const h = harness({ present: true });
+    h.table.set('main', { requests: [row()] });
+    // The machine slept past the deadline; presence releases on wake.
+    h.clock.now = 61_000;
+    expect(h.router.narrowRelease('req-1', h.parked[0].deviceIds)).toEqual([]);
+    h.table.set('main', { requests: [row()] });
+    expect(h.sent).toEqual([]);
   });
 
   it('a push the park queue dropped is pushed once when a desktop lists it again', () => {
