@@ -587,9 +587,10 @@ function claudeProjectFolderName(cwd: string): string {
 /**
  * The other sessions' project folders in claude's temp folder, closed to the
  * worker's commands: on macOS every `-*` folder by one pattern (the
- * sandbox takes it, and the worker's commands still run, background ones
- * included: their output is written by claude itself); elsewhere each such
- * folder there at launch but the worker's own (bubblewrap takes no pattern).
+ * sandbox takes it; the worker's own session keeps its task output under
+ * CLAUDE_CODE_TMPDIR, so its background commands still run, measured on
+ * claude 2.1.311); elsewhere each such folder there at launch but the
+ * worker's own (bubblewrap takes no pattern).
  */
 export function claudeTempDenies(worktree: string, platform: NodeJS.Platform, roots: readonly string[] = claudeTempRoots(platform), listDir: (dir: string) => string[] = listDirSafe): string[] {
   if (platform === 'darwin') return roots.map((r) => path.join(r, '-*'));
