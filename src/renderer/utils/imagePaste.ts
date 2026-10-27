@@ -41,7 +41,7 @@ export async function pasteClipboardImage(opts: {
   // temp PNG path is dead there, and the native key makes a remote agent read
   // the REMOTE clipboard. Say so instead of pasting either. Unknown (Windows,
   // web client, no pid) keeps the routes below unchanged.
-  if (shouldCheckRemoteShell({ mode: state.imagePasteMode, agentProcessAlive: state.agentAliveByPtyId[ptyId] })) {
+  if (shouldCheckRemoteShell({ mode: state.imagePasteMode })) {
     const remote = await window.clipboardAPI.paneRemoteShell?.(ptyId).catch(() => null);
     if (remote) {
       if (await window.clipboardAPI.hasImage?.()) {

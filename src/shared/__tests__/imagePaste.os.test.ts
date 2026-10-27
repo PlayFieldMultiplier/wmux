@@ -140,8 +140,7 @@ describe('foregroundRemoteShellClient (ssh pane image paste)', () => {
   it('is only consulted when the paste could otherwise emit a dead path or key', () => {
     expect(shouldCheckRemoteShell({ mode: 'auto' })).toBe(true);
     expect(shouldCheckRemoteShell({ mode: 'path' })).toBe(true);
-    // Explicit native is the user's call; a live local agent owns the foreground.
+    // Explicit native is the user's call.
     expect(shouldCheckRemoteShell({ mode: 'native' })).toBe(false);
-    expect(shouldCheckRemoteShell({ mode: 'auto', agentProcessAlive: true })).toBe(false);
   });
 });

@@ -141,11 +141,12 @@ export function foregroundRemoteShellClient(psOutput: string, shellPid: number):
 
 /**
  * Whether a paste should first ask main if the pane is a remote session.
- * An explicit `native` setting is the user's call and is never second-guessed;
- * a live LOCAL agent (process truth) owns the foreground, so it is not ssh.
+ * An explicit `native` setting is the user's call and is never second-guessed.
+ * The store's agent liveness is not a shortcut here: it comes from a 15 s poll
+ * and can predate an `ssh` typed after the agent exited.
  */
-export function shouldCheckRemoteShell(input: Pick<ImagePasteStrategyInput, 'mode' | 'agentProcessAlive'>): boolean {
-  return input.mode !== 'native' && input.agentProcessAlive !== true;
+export function shouldCheckRemoteShell(input: Pick<ImagePasteStrategyInput, 'mode'>): boolean {
+  return input.mode !== 'native';
 }
 
 /** Windows-side WSL tooling that is not a shell — a /mnt path there is wrong. */
