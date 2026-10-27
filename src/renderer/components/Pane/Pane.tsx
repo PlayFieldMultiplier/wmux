@@ -49,6 +49,8 @@ import PaneDecorations from '../../plugins/PaneDecorations';
 import { isRemoteMirrorVisible } from '../../stores/slices/remoteWorkspacesSlice';
 import { selectHostPickName } from '../../stores/shadowWorkspace';
 import { isShadowWorkspaceId } from '../../../shared/pcRail';
+import { toastFolderTrustLaunchRefusal } from '../../utils/folderTrustLaunchToast';
+import { FOLDER_TRUST_UNREADABLE_REFUSAL } from '../../../shared/folderTrustWording';
 
 interface PaneProps {
   pane: PaneLeaf;
@@ -310,10 +312,35 @@ export function resolveRecoveryPillPermissions(args: {
  * leaves the hint up while it waits for the second).
  */
 const autoResumedPtys = new Set<string>();
+/** Of those, the ptys the Resume pill typed into: never handed back. */
+const pillUsedPtys = new Set<string>();
 
 /** Record that the Resume pill typed into `ptyId`; automatic resume then stays out. */
 export function markResumePillUsed(ptyId: string): void {
   autoResumedPtys.add(ptyId);
+  pillUsedPtys.add(ptyId);
+}
+
+/** Hand back an automatic resume main refused to type (a folder-trust prompt,
+ *  a screen that could not rule one out), so a later pass may try again. */
+export function releaseAutoResume(ptyId: string): void {
+  if (!pillUsedPtys.has(ptyId)) autoResumedPtys.delete(ptyId);
+}
+
+/** Spacing and count of the extra tries an automatic resume gets when main
+ *  could not read the pane's screen to rule out a folder-trust prompt. */
+export const AUTO_RESUME_UNREADABLE_RETRY_MS = 3_000;
+export const AUTO_RESUME_UNREADABLE_RETRIES = 3;
+
+/**
+ * After a refused automatic resume line: the wait before trying again, or
+ * null. Only a screen main could not read is tried again (it may become
+ * readable by itself), a few times at most; a folder-trust prompt on screen
+ * waits for the person, and any other refusal keeps the pill.
+ */
+export function autoResumeRetryDelay(err: unknown, triesSoFar: number): number | null {
+  if (!String(err).includes(FOLDER_TRUST_UNREADABLE_REFUSAL)) return null;
+  return triesSoFar < AUTO_RESUME_UNREADABLE_RETRIES ? AUTO_RESUME_UNREADABLE_RETRY_MS : null;
 }
 
 /** Take the one automatic resume `ptyId` gets; false if it ran or the pill was used. */
@@ -916,7 +943,8 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
     if (!planned) return;
     // A beat after the first output, so the prompt is up and reading input.
     let cancelled = false;
-    const timer = setTimeout(() => {
+    let retries = 0;
+    const attempt = () => {
       if (!useStore.getState().claudeResumeOnStart) return; // turned off meanwhile
       if (useStore.getState().resumeHintByPtyId[ptyId] !== resumeHint) return; // typed into / dismissed meanwhile
       // Re-checked here, not only when planning: the liveness snapshot lands
@@ -949,13 +977,27 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
         const line = now.resumeWasRunning === true ? planLine(true) ?? planned : planned;
         if (!claimAutoResume(ptyId)) return; // resumed already, or the pill was clicked meanwhile
         // Through main, which guards a bot worker's resume (botWorkerMergeGuard).
-        // A refused line keeps the pill, so the pane can still be resumed by hand.
+        // A refused line keeps the pill, so the pane can still be resumed by
+        // hand, and gives the claim back for the next pass (the pane shown, a
+        // new hint).
         window.electronAPI.pty.writeLaunch(ptyId, line, true).then(
           () => useStore.getState().clearResumeHint(ptyId),
-          (err: unknown) => console.warn('[wmux:resume] the resume line was not typed', String(err)),
+          (err: unknown) => {
+            releaseAutoResume(ptyId);
+            console.warn('[wmux:resume] the resume line was not typed', String(err));
+            // A screen main could not read may become readable: try again a
+            // few times while this pane and binding stand (the cleanup below
+            // cancels it). Every check above runs again on each try.
+            const wait = cancelled ? null : autoResumeRetryDelay(err, retries);
+            if (wait !== null) {
+              retries++;
+              timer = setTimeout(attempt, wait);
+            }
+          },
         );
       }, () => undefined);
-    }, 400);
+    };
+    let timer = setTimeout(attempt, 400);
     return () => {
       cancelled = true;
       clearTimeout(timer);
@@ -1305,10 +1347,11 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
         // is re-granted only by an explicit keystroke, never automatically (D6).
         // Resolves false when main refused the line: the pill then stays as it was.
         const type = (text: string): Promise<boolean> =>
-          window.electronAPI.pty.writeLaunch(ptyId, text, false).then(
+          window.electronAPI.pty.writeLaunch(ptyId, text, false, 'human').then(
             () => true,
             (err: unknown) => {
               console.warn('[wmux:resume] the resume line was not typed', String(err));
+              toastFolderTrustLaunchRefusal(err);
               return false;
             },
           );

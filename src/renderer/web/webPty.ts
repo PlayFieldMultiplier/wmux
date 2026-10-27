@@ -45,6 +45,7 @@ import {
   staleReplayResetLevel,
 } from '../../shared/terminal/staleReplayModeReset';
 import { isFocusReport } from './viewerParser';
+import { FOLDER_TRUST_LAUNCH_REFUSAL } from '../../shared/folderTrustWording';
 import { isRefused, requestInitFor, type WebCredential } from './webCredential';
 
 export const WEB_LIVE_STREAM_CAP = 4;
@@ -467,23 +468,31 @@ export function createWebPty(deps: WebPtyDeps) {
     notify();
   };
 
-  const send = async (ptyId: string, data: string): Promise<void> => {
+  /** Posts `data`; a launch line (`launch`) the daemon refused at a
+   *  folder-trust prompt answers its verdict and halts nothing. */
+  const send = async (ptyId: string, data: string, launch?: 'human' | 'auto'): Promise<'trust' | 'unknown' | void> => {
     let status = 0;
     let code = '';
+    let verdict: unknown;
     let refused = false;
     try {
       const res = await request(
-        `/api/input?session=${encodeURIComponent(ptyId)}`,
+        `/api/input?session=${encodeURIComponent(ptyId)}${launch ? `&launch=${launch}` : ''}`,
         { method: 'POST', body: data, keepalive: true },
         { 'Content-Type': 'application/octet-stream' },
       );
       status = res.status;
       refused = isRefused(res);
-      if (!res.ok) code = await res.json().then((b: { error?: unknown }) => (typeof b?.error === 'string' ? b.error : ''), () => '');
+      if (!res.ok) {
+        const body = await res.json().catch(() => null) as { error?: unknown; verdict?: unknown } | null;
+        code = typeof body?.error === 'string' ? body.error : '';
+        verdict = body?.verdict;
+      }
     } catch {
       status = 0; // network error or timeout: the outcome is unknown
     }
     if (status >= 200 && status < 300) return;
+    if (launch && status === 409 && code === 'folder-trust') return verdict === 'trust' ? 'trust' : 'unknown';
     if (refused) { halt(ptyId, 'unauthorized'); deps.onUnauthorized?.(); return; }
     if (status === 403) { setInputState('read-only'); halt(ptyId, 'read-only'); return; }
     if (status === 413) { halt(ptyId, 'too-large'); return; }
@@ -528,6 +537,27 @@ export function createWebPty(deps: WebPtyDeps) {
         await send(ptyId, data);
       });
       inputChain.set(ptyId, next);
+      return next;
+    },
+    /**
+     * A launch line (the desktop's `pty.writeLaunch`): the daemon applies the
+     * folder-trust policy, a person's line (`origin: 'human'`) stopping only
+     * at a prompt seen. Rejects when it was refused there; nothing is halted.
+     */
+    writeLaunch(ptyId: string, data: string, origin?: unknown): Promise<void> {
+      if (!ptyId || typeof data !== 'string' || data.length === 0) return Promise.resolve();
+      if (inputState === 'read-only') return Promise.resolve();
+      const prev = inputChain.get(ptyId) ?? Promise.resolve();
+      const next = prev.then(async () => {
+        await waitUntil(() => inputState !== 'checking' && !deps.isReplaying?.(ptyId));
+        if (halts.has(ptyId)) { countDropped(ptyId); return; }
+        if (inputState !== 'allowed') return;
+        const refused = await send(ptyId, data, origin === 'human' ? 'human' : 'auto');
+        if (refused === 'trust') throw new Error(`PTY_WRITE_LAUNCH: ${FOLDER_TRUST_LAUNCH_REFUSAL}`);
+        if (refused) throw new Error('PTY_WRITE_LAUNCH: the pane has no readable screen, so a folder-trust prompt cannot be ruled out');
+      });
+      // A refused line does not hold up the keys typed after it.
+      inputChain.set(ptyId, next.catch(() => undefined));
       return next;
     },
     async list(): Promise<Array<{ id: string; commandRunning?: boolean }>> {

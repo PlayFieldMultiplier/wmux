@@ -57,7 +57,7 @@ import {
 import { connectWithRetry, type ConnectAttemptResult } from './daemonConnectRetry';
 import type { AgentStatus } from '../shared/types';
 import type { AgentSlug } from '../shared/agentIdentity';
-import type { SessionPromptScheduleResult } from '../shared/sessionPromptSchedule';
+import { isSessionPromptScheduleResult, type SessionPromptScheduleResult } from '../shared/sessionPromptSchedule';
 
 // RCA A2 — single source of truth in shared/timeouts.ts so the renderer's
 // RECONCILE_TIMEOUT_MS can be derived from (and stay greater than) this value.
@@ -1173,14 +1173,7 @@ export class DaemonClient extends EventEmitter {
       const response = await this.rpc('daemon.deliverScheduledPromptV2', args) as {
         result?: unknown;
       };
-      if (
-        response.result === 'sent' ||
-        response.result === 'busy' ||
-        response.result === 'unavailable' ||
-        response.result === 'session_changed' ||
-        response.result === 'error'
-      ) return response.result;
-      return 'error';
+      return isSessionPromptScheduleResult(response.result) ? response.result : 'error';
     } catch (error) {
       if (
         error instanceof Error &&
@@ -1204,13 +1197,13 @@ export class DaemonClient extends EventEmitter {
     agentSlug: AgentSlug;
     incarnationId: string;
     prompt: string;
-  }): Promise<{ result: 'sent' | 'held' | 'session_changed' | 'unavailable' | 'error'; pasted: boolean }> {
+  }): Promise<{ result: 'sent' | 'held' | 'approval_pending' | 'session_changed' | 'unavailable' | 'error'; pasted: boolean }> {
     if (!this.isConnected) return { result: 'unavailable', pasted: false };
     try {
       const response = await this.rpc('daemon.deliverCallerNudgeV1', args) as { result?: unknown; pasted?: unknown };
       const pasted = response.pasted === true;
       const r = response.result;
-      if (r === 'sent' || r === 'held' || r === 'session_changed' || r === 'unavailable' || r === 'error') {
+      if (r === 'sent' || r === 'held' || r === 'approval_pending' || r === 'session_changed' || r === 'unavailable' || r === 'error') {
         return { result: r, pasted };
       }
       return { result: 'error', pasted: true };

@@ -210,7 +210,7 @@ describe('DiffPanel — workspace review delivery', () => {
     writeLaunch.mockRejectedValueOnce(new Error('PTY_WRITE_LAUNCH: the session is not live'));
     click(c.querySelector('[data-testid="diff-review-send"]')!);
     await flush();
-    expect(writeLaunch).toHaveBeenCalledWith('pty-1', expect.stringContaining('a.txt:2 at "added": rename'), false);
+    expect(writeLaunch).toHaveBeenCalledWith('pty-1', expect.stringContaining('a.txt:2 at "added": rename'), false, 'human');
     expect(c.querySelectorAll('[data-diff-comment]')).toHaveLength(1);
 
     click(c.querySelector('[data-testid="diff-review-send"]')!);

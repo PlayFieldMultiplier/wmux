@@ -5,6 +5,8 @@ import {
   deliveryInputFence,
   type ScheduledPromptAgentState,
 } from '../sessionPromptDelivery';
+import { folderTrustRefusal } from '../folderTrustState';
+import { folderTrustSessions } from '../../test-utils/folderTrustSessions';
 
 function state(overrides: Partial<ScheduledPromptAgentState> = {}): ScheduledPromptAgentState {
   return {
@@ -334,5 +336,88 @@ describe('deliverScheduledPrompt — a viewer attaching mid-delivery', () => {
     expect(attached.result).toBe('sent');
     expect(attached.written).toEqual(['\x1b[200~나에게 인사해\x1b[201~', '\r']);
     expect((await deliverWithAttach(deliveryInputFence, ['x'])).result).toBe('error');
+  });
+});
+
+describe('deliverScheduledPrompt at a folder-trust prompt', () => {
+  it("writes nothing on 'trust' (folder_trust) or 'unknown' (busy, tried again later), and sends to a clear pane", async () => {
+    const sessions = folderTrustSessions();
+    const lines: string[] = [];
+    for (const [pane, expected] of [['pane-trust', 'folder_trust'], ['pane-unknown', 'busy'], ['pane-shell', 'sent']] as const) {
+      let current = state();
+      const writes: string[] = [];
+      const result = await deliverScheduledPrompt('codex', 'incarnation-1', 'continue', {
+        getAgentState: () => current,
+        isAgentProcessAlive: alwaysAlive,
+        write: (data) => {
+          writes.push(data);
+          current = { ...current, inputRevision: current.inputRevision + 1 };
+          return true;
+        },
+        delay: async () => undefined,
+        folderTrustBlocks: () => folderTrustRefusal(sessions, pane, 'scheduled prompt', { refuseUnknown: true, log: (m) => lines.push(m) }),
+      });
+      expect(result).toBe(expected);
+      expect(writes.length > 0).toBe(expected === 'sent');
+    }
+    expect(lines).toEqual([
+      '[folder-trust] refused scheduled prompt on pane pane-trust: folder-trust trust',
+      '[folder-trust] refused scheduled prompt on pane pane-unknown: folder-trust unknown',
+    ]);
+  });
+});
+
+describe('deliverScheduledPrompt re-checks folder trust before each write', () => {
+  /** Verdicts in call order; past the end, the pane reads clear. */
+  function run(verdicts: Array<'trust' | 'unknown' | null | 'throw'>, leadingPastes?: string[]) {
+    let current = state();
+    const writes: string[] = [];
+    let calls = 0;
+    const result = deliverScheduledPrompt('codex', 'incarnation-1', 'continue', {
+      getAgentState: () => current,
+      isAgentProcessAlive: alwaysAlive,
+      write: (data) => {
+        writes.push(data);
+        current = { ...current, inputRevision: current.inputRevision + 1 };
+        return true;
+      },
+      delay: async () => undefined,
+      ...(leadingPastes ? { leadingPastes } : {}),
+      folderTrustBlocks: async () => {
+        const verdict = verdicts[calls++] ?? null;
+        if (verdict === 'throw') throw new Error('screen unreadable');
+        return verdict;
+      },
+    });
+    return { result, writes, calls: () => calls };
+  }
+
+  it('a trust prompt that opens right before the paste writes nothing and can be tried again', async () => {
+    for (const [verdict, expected] of [['trust', 'folder_trust'], ['unknown', 'busy'], ['throw', 'busy']] as const) {
+      const r = run([null, verdict]);
+      expect(await r.result).toBe(expected);
+      expect(r.writes).toEqual([]);
+    }
+  });
+
+  it('a trust prompt or an unreadable screen right before Enter ends with error and never presses Enter', async () => {
+    for (const verdict of ['trust', 'unknown', 'throw'] as const) {
+      const r = run([null, null, verdict]);
+      expect(await r.result).toBe('error');
+      expect(r.writes).toEqual(['\x1b[200~continue\x1b[201~']);
+      expect(r.calls()).toBe(3);
+    }
+  });
+
+  it('after a leading paste, a block before the prompt paste is final', async () => {
+    const r = run([null, null, 'unknown'], ['/tmp/a.png']);
+    expect(await r.result).toBe('error');
+    expect(r.writes).toEqual(['\x1b[200~/tmp/a.png\x1b[201~']);
+  });
+
+  it('a pane that stays clear is asked before the first write, before the paste and before Enter, and is sent', async () => {
+    const r = run([]);
+    expect(await r.result).toBe('sent');
+    expect(r.calls()).toBe(3);
   });
 });

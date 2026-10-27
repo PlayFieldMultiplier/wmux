@@ -102,6 +102,8 @@ function buildDaemonSource(dc: DaemonClient, ptyId: string): PtyDataSource {
           res = await dc.rpc('daemon.writeIfUnchanged', {
             sessionId: ptyId,
             data: line,
+            // The person running the first-run wizard asked for this line.
+            origin: 'human',
             expect: {
               ...(typeof read.keyInputRevision === 'number' ? { keyInputRevision: read.keyInputRevision } : {}),
               ...(typeof read.incarnationId === 'string' && read.incarnationId ? { incarnationId: read.incarnationId } : {}),

@@ -24,6 +24,10 @@ describe('paneFree', () => {
     expect(shellIdle).not.toHaveBeenCalled();
   });
 
+  it('an agent at its folder-trust prompt, not tracked yet, is a child of the shell: not free (chat v2 and Continue type nothing)', async () => {
+    expect(await paneFree(deps({ trackedAgentPid: () => undefined, shellIdle: async () => false }))).toBe(false);
+  });
+
   it('a liveness probe that fails counts as running', async () => {
     expect(await paneFree(deps({ isDefinitelyDead: async () => { throw new Error('tasklist timed out'); } }))).toBe(false);
   });

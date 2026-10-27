@@ -16,6 +16,7 @@ import { toWslPath } from '../../../shared/imagePaste';
 import type { TerminalChatAbortOutcome } from '../../transcript/TerminalChatService';
 import { cancelResponse } from '../../web/chatWire';
 import { agentAliveVerdict } from '../../canonicalAgent';
+import { trustFixtureRows } from '../../../test-utils/folderTrustSessions';
 import { OPENCODE_MAX_SEND_BYTES, fileHistoryEpoch, projectChatBlocked, tuiHistoryEpoch, type ChatQueueEvent } from '../chatBridge';
 
 const dirs: string[] = [];
@@ -440,6 +441,15 @@ describe('send', () => {
     expect(await full.desktopSend({ id: 'pane', agentSessionId: 'conv', text: 'b', requestId: msgId() }))
       .toEqual({ result: 'sent', effect: 'submitted', replayed: false });
     expect(f.written).toEqual(['\x1b[200~a\x1b[201~', '\r', '\x1b[200~b\x1b[201~', '\r']);
+  });
+
+  it('desktop and phone: a send to a pane on a folder-trust prompt is blocked as a terminal prompt, nothing written', async () => {
+    const f = fixture(); f.liveClaude();
+    f.state.screen = trustFixtureRows('claude-folder-trust-120x40');
+    expect(await f.bridge.desktopSend({ id: 'pane', agentSessionId: 'conv', text: 'hi', requestId: msgId() }))
+      .toEqual({ result: 'blocked', effect: 'none', replayed: false });
+    expect(await f.bridge.send(phoneSend())).toMatchObject({ result: 'blocked', error: 'chat-blocked', blockedBy: 'terminal', effect: 'none' });
+    expect(f.written).toEqual([]);
   });
 
   it('desktop: mints an id for a legacy request id and keeps the desktop result enum', async () => {
@@ -1164,6 +1174,20 @@ describe('cancel', () => {
     expect(await f.bridge.desktopInterrupt('pane', 'conv', 't1:n.2')).toBe('not_running');
     expect(f.written).toEqual([]);
     expect(await f.bridge.desktopInterrupt('pane', 'conv', 't1:n.3')).toBe('sent');
+    expect(f.written).toEqual(['\x1b']);
+  });
+
+  it('a folder-trust prompt the daemon sees refuses a Stop and a Rewind before any ESC, naming the writer', async () => {
+    const f = running();
+    const asked: string[] = [];
+    let atTrust = true;
+    const bridge = createChatBridge({ ...f.deps, atFolderTrust: async (_id, writer) => { asked.push(writer); return atTrust; } });
+    expect(await bridge.desktopInterrupt('pane', 'conv')).toBe('blocked');
+    expect(await bridge.desktopRewind('pane')).toBe('blocked');
+    expect(f.written).toEqual([]);
+    expect(asked).toEqual(['chat stop', 'chat rewind']);
+    atTrust = false;
+    expect(await bridge.desktopInterrupt('pane', 'conv')).toBe('sent');
     expect(f.written).toEqual(['\x1b']);
   });
 

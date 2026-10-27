@@ -89,6 +89,24 @@ describe('bot.resumeWorker', () => {
     expect(full.p.typeLine).not.toHaveBeenCalled();
   });
 
+  it('types nothing into a worker pane at a folder-trust prompt, and says why', async () => {
+    const { call, p, slots } = rig(1);
+    const asked: string[] = [];
+    p.folderTrustRefusal = async (sessionId) => { asked.push(sessionId); return 'the pane is on a folder-trust prompt; answer it in the pane'; };
+    expect(await call({ taskId: TASK }, botCtx(BOT))).toEqual({ ok: false, code: 'not_typed', message: 'the resume was not typed: the pane is on a folder-trust prompt; answer it in the pane' });
+    expect(asked).toEqual(['daemon-1']);
+    expect(p.typeLine).not.toHaveBeenCalled();
+    expect(slots.inUse()).toBe(1);
+    // Asked before the task moves and before the last stop checks.
+    const reclaim = fs.readFileSync(path.resolve(process.cwd(), 'src/main/factory/workerReclaim.ts'), 'utf8');
+    const ask = reclaim.indexOf('await ports.folderTrustRefusal?.(pane.sessionId)');
+    expect(ask).toBeLessThan(reclaim.indexOf('await rebindTaskTo(ports, rec.taskId, workerWorkspaceOf(rec))'));
+    expect(ask).toBeLessThan(reclaim.lastIndexOf("if (stopped()) return refuse('not_now', 'the bot\\'s work was stopped while this resume was under way');"));
+    // main's resume asks the daemon, an unreadable screen stopping it too (a bot types it).
+    expect(fs.readFileSync(path.resolve(process.cwd(), 'src/main/factory/workerLifecycleHost.ts'), 'utf8'))
+      .toContain("folderTrustRefusal: (sessionId) => folderTrustLaunchRefusal(daemon(), sessionId, 'bot worker resume line', { refuseUnknown: true })");
+  });
+
   it('is judged again, by the wake it was asked in, right before the line is typed: a wake no longer known clean types nothing', async () => {
     const handlers = new Map<string, (p: Record<string, unknown>, ctx?: RpcContext) => Promise<unknown>>();
     let refusal: string | null = null;

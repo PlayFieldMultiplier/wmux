@@ -4095,6 +4095,7 @@ export const zh = {
   'sessionSchedule.statusBusy': '等待可输入',
   'sessionSchedule.statusUnavailable': '等待会话',
   'sessionSchedule.statusSessionChanged': '会话已更换，请重新创建',
+  'sessionSchedule.statusFolderTrust': '等待中：窗格停在文件夹信任提示',
   'sessionSchedule.statusSent': '已发送',
   'sessionSchedule.statusError': '投递错误',
   'sessionSchedule.statusPaused': '已暂停',

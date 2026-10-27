@@ -132,6 +132,14 @@ describe('continueOnAccount', () => {
     expect(rebound.calls).toEqual(['stop']);
   });
 
+  it('stops, copies and types nothing at a folder-trust prompt', async () => {
+    const atTrust = deps({ atFolderTrust: async () => true });
+    expect(await continueOnAccount(atTrust, 'p1', accountB)).toEqual({ ok: false, code: 'folder_trust' });
+    expect(atTrust.calls).toEqual([]);
+    const clear = deps({ atFolderTrust: async () => false });
+    expect((await continueOnAccount(clear, 'p1', accountB)).ok).toBe(true);
+  });
+
   it('waits for the prompt for its time, however long each look at the pane takes (#2507)', async () => {
     // A pane at its prompt with a child still running, where reading the
     // process table takes a second (Windows): the wait ends after its 5 s,

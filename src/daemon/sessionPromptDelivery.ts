@@ -47,6 +47,13 @@ export interface ScheduledPromptDeliveryDeps {
    *  "nothing reached the PTY" from "the paste may be visible". `queued` is
    *  true on `submit` when the prompt was accepted while the turn ran. */
   onWrite?: (stage: 'paste' | 'submit', queued?: boolean) => void;
+  /** The folder-trust verdict that stops a write, or null. Asked first,
+   *  again right before the paste, and again right before Enter. Before
+   *  anything is written, 'trust' answers `folder_trust` and 'unknown' (a
+   *  screen that cannot rule one out) answers `busy`, so the caller tries
+   *  again as it would at a busy pane. Once a paste may be visible, either
+   *  answers `error`: a retry would paste again. */
+  folderTrustBlocks?: () => Promise<'trust' | 'unknown' | null>;
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -91,6 +98,21 @@ export async function deliverScheduledPrompt(
   prompt: string,
   deps: ScheduledPromptDeliveryDeps,
 ): Promise<SessionPromptScheduleResult> {
+  // A read that fails cannot rule a trust prompt out.
+  const trustBlock = async (): Promise<'trust' | 'unknown' | null> => {
+    try {
+      return (await deps.folderTrustBlocks?.()) ?? null;
+    } catch {
+      return 'unknown';
+    }
+  };
+  /** Nothing written yet: refuse cleanly, so the caller can come back. */
+  const refusedBeforeWrite = (verdict: 'trust' | 'unknown'): SessionPromptScheduleResult =>
+    (verdict === 'trust' ? 'folder_trust' : 'busy');
+  // Asked before the agent state is read, so the readiness, quiet-input and
+  // revision checks below stay as close to the first paste as before.
+  const first = await trustBlock();
+  if (first) return refusedBeforeWrite(first);
   const before = deps.getAgentState();
   if (!before || before.slug !== expectedSlug) return 'unavailable';
   if (before.incarnationId !== expectedIncarnationId) return 'session_changed';
@@ -114,6 +136,11 @@ export async function deliverScheduledPrompt(
     return !!now && now.slug === expectedSlug && now.incarnationId === expectedIncarnationId &&
       now.inputRevision === before.inputRevision + writes;
   };
+  // Again right before the first write (the liveness read took time, and a
+  // trust prompt may have opened in it). The caller's authorization stays
+  // the last await before that write.
+  const beforePaste = await trustBlock();
+  if (beforePaste) return refusedBeforeWrite(beforePaste);
   try {
     if (deps.authorized && !(await deps.authorized('first-write'))) return 'error';
   } catch {
@@ -129,6 +156,9 @@ export async function deliverScheduledPrompt(
       if (!deps.write(formatBracketedPastePayload(paste))) return index === 0 ? 'unavailable' : 'error';
       await (deps.delay ?? sleep)(SESSION_PROMPT_ATTACHMENT_DELAY_MS);
     }
+    // Leading pastes are already in the composer: the prompt paste is a
+    // later write, so it is checked again, and a block now is final.
+    if (leading.length && (await trustBlock())) return 'error';
     if (leading.length && !untouched(leading.length)) return 'error';
     deps.onWrite?.('paste');
     if (!deps.write(formatBracketedPastePayload(leading.length ? ` ${prompt}` : prompt))) return leading.length ? 'error' : 'unavailable';
@@ -145,6 +175,11 @@ export async function deliverScheduledPrompt(
   } catch {
     return 'error';
   }
+
+  // A trust prompt that opened inside the submit delay must not get the
+  // Enter (it would answer the prompt). The paste may be visible, so this is
+  // final: a retry would paste again.
+  if (await trustBlock()) return 'error';
 
   // A grant withdrawn inside the submit delay must not be pressed through.
   // The last await before Enter: only synchronous state checks follow it.

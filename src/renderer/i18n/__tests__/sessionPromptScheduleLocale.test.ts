@@ -25,6 +25,7 @@ const KEYS = [
   'sessionSchedule.statusBusy',
   'sessionSchedule.statusUnavailable',
   'sessionSchedule.statusSessionChanged',
+  'sessionSchedule.statusFolderTrust',
   'sessionSchedule.statusSent',
   'sessionSchedule.statusError',
   'sessionSchedule.statusPaused',

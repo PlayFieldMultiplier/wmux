@@ -133,14 +133,19 @@ describe('sessionPromptScheduleStore', () => {
     expect(dueSessionPromptSchedules(rows, 1_000).map((s) => s.id)).toEqual(['first', 'later']);
   });
 
-  it('keeps busy/unavailable schedules due for retry', () => {
-    for (const result of ['busy', 'unavailable'] as const) {
+  it('keeps busy/unavailable/folder-trust schedules due for retry', () => {
+    for (const result of ['busy', 'unavailable', 'folder_trust'] as const) {
       const advanced = advanceSessionPromptSchedule(schedule(), result, 5_000);
       expect(advanced.enabled).toBe(true);
       expect(advanced.nextRunAt).toBe(1_000);
       expect(advanced.lastAttemptAt).toBe(5_000);
       expect(advanced.lastRunAt).toBeUndefined();
     }
+  });
+
+  it('keeps a folder-trust result across a save and a load (the popover reads it back)', async () => {
+    await saveSessionPromptSchedules([advanceSessionPromptSchedule(schedule(), 'folder_trust', 5_000)], dir);
+    expect(loadSessionPromptSchedules(dir)[0].lastResult).toBe('folder_trust');
   });
 
   it('consumes one-shots and advances repeats past a sleep gap', () => {

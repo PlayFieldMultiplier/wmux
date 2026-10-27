@@ -72,6 +72,7 @@ function makeHarness(
   approvals: {
     approvalBlocked?: (sessionId: string) => boolean;
     screenShowsApproval?: (sessionId: string) => Promise<boolean | null>;
+    folderTrustVerdict?: (sessionId: string) => Promise<'trust' | 'unknown' | 'clear'>;
   } = {},
 ): Harness {
   let entries: WakeUnreadEntry[] = [];
@@ -931,6 +932,57 @@ describe('ChannelWakeWorker — approval in front of the pane', () => {
     await vi.advanceTimersByTimeAsync(5);
     expect(h.writes.map((w) => w.data)).toHaveLength(2);
     expect(h.writes.at(-1)?.data).toBe('\r');
+  });
+
+  it('holds at a folder-trust prompt, or a screen that cannot rule one out, logging once per pane while each holds', async () => {
+    let verdict: 'trust' | 'unknown' | 'clear' = 'trust';
+    const h = makeHarness(undefined, { folderTrustVerdict: async () => verdict });
+    h.setEntries([mention()]);
+    h.setSessions([session({})]);
+    for (const held of ['trust', 'trust', 'unknown', 'unknown'] as const) {
+      verdict = held;
+      h.worker.tickOnce();
+      await vi.advanceTimersByTimeAsync(5);
+      expect(h.writes).toEqual([]);
+    }
+    expect(h.logs.filter((l) => l.includes('folder-trust'))).toEqual([
+      expect.stringMatching(/^\[folder-trust\] refused wake nudge on pane .*: folder-trust trust$/),
+      expect.stringMatching(/^\[folder-trust\] refused wake nudge on pane .*: folder-trust unknown$/),
+    ]);
+    verdict = 'clear';
+    h.worker.tickOnce();
+    await vi.advanceTimersByTimeAsync(5);
+    expect(h.writes.map((w) => w.data)).toHaveLength(2);
+    expect(h.writes.at(-1)?.data).toBe('\r');
+  });
+
+  it('forgets a pane whose session ended: the next hold there is logged again', async () => {
+    const h = makeHarness(undefined, { folderTrustVerdict: async () => 'trust' });
+    h.setEntries([mention()]);
+    h.setSessions([session({})]);
+    h.worker.tickOnce();
+    await vi.advanceTimersByTimeAsync(5);
+    h.worker.tickOnce();
+    await vi.advanceTimersByTimeAsync(5);
+    expect(h.logs.filter((l) => l.includes('folder-trust'))).toHaveLength(1);
+    h.worker.forgetSession(session({}).id);
+    h.worker.tickOnce();
+    await vi.advanceTimersByTimeAsync(5);
+    expect(h.logs.filter((l) => l.includes('folder-trust'))).toHaveLength(2);
+  });
+
+  it('withholds the Enter when a folder-trust prompt appears between the text and the Enter', async () => {
+    let refused: 'trust' | 'clear' = 'clear';
+    const h = makeHarness(undefined, { folderTrustVerdict: async () => refused });
+    h.setEntries([mention()]);
+    h.setSessions([session({})]);
+    h.worker.tickOnce();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.writes).toHaveLength(1);
+    refused = 'trust';
+    await vi.advanceTimersByTimeAsync(5);
+    expect(h.writes.map((w) => w.data)).not.toContain('\r');
+    expect(h.outcomes.at(-1)?.ok).toBe(false);
   });
 
   it('withholds the Enter when a dialog appears between the text and the Enter', async () => {

@@ -335,9 +335,11 @@ const electronAPI = {
       ipcRenderer.send(IPC.PTY_WRITE, id, data);
     },
     /** Type a launch line (a resume) into the pane, Enter too when `submit`.
-     *  Rejects when main refuses the line (a bot worker's line it cannot guard). */
-    writeLaunch: (id: string, text: string, submit: boolean) =>
-      ipcRenderer.invoke(IPC.PTY_WRITE_LAUNCH, id, text, submit) as Promise<void>,
+     *  Rejects when main refuses the line (a bot worker's line it cannot guard).
+     *  `origin: 'human'`: a person clicked for it; without it the line counts
+     *  as typed by wmux on its own. */
+    writeLaunch: (id: string, text: string, submit: boolean, origin?: 'human') =>
+      ipcRenderer.invoke(IPC.PTY_WRITE_LAUNCH, id, text, submit, origin) as Promise<void>,
     schedules: {
       list: (ptyId: string) =>
         ipcRenderer.invoke(IPC.SESSION_PROMPT_SCHEDULES_LIST, { ptyId }) as Promise<{
@@ -655,8 +657,9 @@ const electronAPI = {
     // live listener, not just a live (but reloading/unmounted) window.
     listenerReady: () => ipcRenderer.send(IPC.NOTIFICATION_LISTENER_READY),
     // J3 §3: initialCommand 재시도 소진(프롬프트 미발사) 통지 — fan-out 토스트 소비.
-    onInitialCmdExhausted: (callback: (ptyId: string) => void) => {
-      const listener = (_event: Electron.IpcRendererEvent, ptyId: string) => callback(ptyId);
+    onInitialCmdExhausted: (callback: (ptyId: string, reason?: string) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, ptyId: string, reason?: unknown) =>
+        callback(ptyId, typeof reason === 'string' ? reason : undefined);
       ipcRenderer.on(IPC.PTY_INITIAL_CMD_EXHAUSTED, listener);
       return () => { ipcRenderer.removeListener(IPC.PTY_INITIAL_CMD_EXHAUSTED, listener); };
     },
