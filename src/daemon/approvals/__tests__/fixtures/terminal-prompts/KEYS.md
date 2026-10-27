@@ -53,6 +53,27 @@ draw none either. The review screen draws ` │ ` before each row of a wrapped
 `● question` entry; the answered block draws no gutter. Keys are unchanged.
 The screens are in `claude-2.1.292/` (main buffer).
 
+Measured on Claude Code 2.1.311 (captured 2026-10-27 in a 57- and a 40-column
+pane, main buffer): a single-select question with a `preview` on any option
+is drawn side by side. The left column holds the option labels only (a long
+label wraps onto a 4-space indent; no description, no `Type something` row).
+The right column, from a fixed column (32 at 57 columns, 23 at 40), holds a
+box with the focused option's preview (`No preview available` for an option
+without one, a `├─── ✂ ─── N lines hidden ┤` row when it is cut), its `┌───┐`
+on option 1's row, then `Notes: press n to add notes`. Under the bottom rule
+the chat row has no digit (`  Chat about this`) and the hint gains
+`· n to add notes ·` (`· Tab to switch questions ·` with several questions).
+A multi-select question with previews is drawn as usual.
+
+| Screen | Key | Effect |
+|---|---|---|
+| preview question | a digit | Moves the cursor to that option and shows its preview; selects nothing |
+| preview question | `Enter` | Selects the option under the cursor: the next tab, the review, or (alone) the answer |
+
+The screens are in `claude-2.1.311/`, beside one synthetic screen (marked so
+in its `note`) of the shape a 57-column phone-sized pane logged with the box
+from column 31.
+
 ## Claude Code — ExitPlanMode ("Would you like to proceed?")
 
 Options measured (default start): `1. Yes, and use auto mode`,
