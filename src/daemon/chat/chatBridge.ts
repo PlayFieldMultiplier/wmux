@@ -28,6 +28,11 @@ export type ChatLaunchReason =
   | 'ok' | 'shell-busy' | 'shell-not-empty' | 'unsupported-shell' | 'shell-has-children'
   | 'approval-pending' | 'launch-pending' | 'not-integrated' | 'agent-running';
 
+/** A refused launch's reason: a preview reason, or `worker-fence` (the pane
+ *  is a fenced unattended worker; it can be restarted only from the desktop
+ *  app). Never a preview reason: the preview does not read the fence. */
+export type ChatLaunchRefusalReason = ChatLaunchReason | 'worker-fence';
+
 export interface ChatLaunchPreview {
   ready: boolean;
   reason: ChatLaunchReason;
@@ -269,7 +274,7 @@ export type ChatLaunchTag =
 
 export type ChatLaunchOutcome =
   | { ok: true; effect: 'submitted' }
-  | { ok: false; error: ChatLaunchTag; reason?: ChatLaunchReason; effect: ChatEffect };
+  | { ok: false; error: ChatLaunchTag; reason?: ChatLaunchRefusalReason; effect: ChatEffect };
 
 /** What a cancel did to the pane: nothing, one ESC written, or maybe one. */
 export type ChatCancelEffect = 'none' | 'interrupt-requested' | 'uncertain';

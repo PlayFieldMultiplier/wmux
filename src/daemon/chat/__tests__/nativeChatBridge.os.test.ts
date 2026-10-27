@@ -592,13 +592,13 @@ describe('launch', () => {
         const f = fixture();
         botWorker(f.dir, fence);
         f.state.pane!.meta.cmd = '/bin/zsh';
-        expect(await f.bridge.launch({ id: 'pane', agent: 'claude', mode: 'bypass' })).toEqual({ ok: false, error: 'launch-unsupported', effect: 'none' });
+        expect(await f.bridge.launch({ id: 'pane', agent: 'claude', mode: 'bypass' })).toEqual({ ok: false, error: 'launch-unsupported', reason: 'worker-fence', effect: 'none' });
         expect(f.typed).toEqual([]);
       }
       // A session main started inside the fence, in any mode.
       const fenced = fixture();
       botWorker(fenced.dir, { strength: 'full' });
-      expect(await fenced.bridge.launch({ id: 'pane', agent: 'claude', prompt: 'go' })).toEqual({ ok: false, error: 'launch-unsupported', effect: 'none' });
+      expect(await fenced.bridge.launch({ id: 'pane', agent: 'claude', prompt: 'go' })).toEqual({ ok: false, error: 'launch-unsupported', reason: 'worker-fence', effect: 'none' });
       // A line with no flag whose user settings start claude unattended.
       const byDefault = fixture();
       botWorker(byDefault.dir);
@@ -606,17 +606,32 @@ describe('launch', () => {
       const settings = path.join(os.homedir(), '.claude', 'settings.json');
       fs.writeFileSync(settings, JSON.stringify({ permissions: { defaultMode: 'bypassPermissions' } }));
       try {
-        expect(await byDefault.bridge.launch({ id: 'pane', agent: 'claude', prompt: 'go' })).toEqual({ ok: false, error: 'launch-unsupported', effect: 'none' });
+        expect(await byDefault.bridge.launch({ id: 'pane', agent: 'claude', prompt: 'go' })).toEqual({ ok: false, error: 'launch-unsupported', reason: 'worker-fence', effect: 'none' });
       } finally {
         fs.unlinkSync(settings);
       }
       expect([...fenced.typed, ...byDefault.typed]).toEqual([]);
     });
 
+    it('a fenced worker pane whose shell cannot launch keeps the shell reason', async () => {
+      for (const reason of ['unsupported-shell', 'shell-has-children'] as const) {
+        const f = fixture();
+        botWorker(f.dir, { strength: 'full' });
+        f.state.pane!.meta.cmd = '/bin/zsh';
+        f.state.idle = { ok: false, reason };
+        expect(await f.bridge.launch({ id: 'pane', agent: 'claude', mode: 'bypass' }))
+          .toEqual({ ok: false, error: 'launch-unsupported', reason, effect: 'none' });
+        expect(f.typed).toEqual([]);
+      }
+    });
+
     it('an unreadable record, or one without launch files outside WSL, types nothing', async () => {
       const f = fixture();
       record(f.dir, '{not json');
       expect(await f.bridge.launch({ id: 'pane', agent: 'claude' })).toEqual({ ok: false, error: 'launch-unsupported', effect: 'none' });
+      // Unattended, but the record cannot say this pane is a fenced worker: refused without that reason.
+      f.state.pane!.meta.cmd = '/bin/zsh';
+      expect(await f.bridge.launch({ id: 'pane', agent: 'claude', mode: 'bypass' })).toEqual({ ok: false, error: 'launch-unsupported', effect: 'none' });
       record(f.dir, { version: 1, sessions: { pane: { workspaceId: 'ws-task', at: 1 } } });
       expect(await f.bridge.launch({ id: 'pane', agent: 'claude' })).toEqual({ ok: false, error: 'launch-unsupported', effect: 'none' });
       expect(f.typed).toEqual([]);

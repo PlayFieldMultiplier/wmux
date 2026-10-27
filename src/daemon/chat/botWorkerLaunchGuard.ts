@@ -39,10 +39,17 @@ import { toWslPath } from '../../shared/imagePaste';
  *  each `'` written `'\''`. */
 const QUOTED_FIRST_MESSAGE = /^ -- '(?:[^']|'\\'')*'$/;
 
+/** The launch was refused because the worker would run unattended (by its
+ *  flags or settings) or was started inside the worker fence: it starts again
+ *  only from wmux on the computer. Nothing is typed, as with null. */
+export const WORKER_FENCE_REFUSED = Object.freeze({ refused: 'worker-fence' as const });
+export type WorkerFenceRefused = typeof WORKER_FENCE_REFUSED;
+
 /**
  * The line to type into pane `sessionId`: `line` itself for a pane that is
  * not a bot's worker; for one that is, the line with the worker settings
- * right after the launcher, or null (type nothing). `head` is `line` up to
+ * right after the launcher, or null (type nothing), or WORKER_FENCE_REFUSED
+ * (type nothing, because of the worker fence). `head` is `line` up to
  * the first message: the launcher and its flags, which the guard reads; the
  * rest must be exactly the quoted first message, and is kept as it is.
  */
@@ -53,7 +60,7 @@ export function guardBotWorkerLaunch(
   dir: string = getWmuxDir(),
   /** The folders the line may start claude in (the pane's, a resume's). */
   folders: readonly string[] = [],
-): string | null {
+): string | null | WorkerFenceRefused {
   const read = readBotWorkerSessions(dir);
   if ('sessions' in read && !read.sessions.has(sessionId)) return line;
   // A codex worker starts only as main's fan-out launch (codexWorkerGuard).
@@ -64,8 +71,11 @@ export function guardBotWorkerLaunch(
   if (tail && !QUOTED_FIRST_MESSAGE.test(tail)) return null;
   const rec = 'sessions' in read ? read.sessions.get(sessionId) : undefined;
   if (runsUnattended(head, rec, dir)) {
+    // Only a readable record establishes that this pane is a fenced worker;
+    // without one the launch is still refused, but without that reason.
+    if (!rec) return null;
     console.warn(`[botWorkerLaunchGuard] ${sessionId}: a bot worker that runs unattended starts again only from wmux on the computer (worker fence)`);
-    return null;
+    return WORKER_FENCE_REFUSED;
   }
   if (rec?.launch && !rec.wsl) {
     if (!rec.cwd || [rec.cwd, ...folders].some((f) => workerProjectSettingsRefusal(f) !== null)) return null;
