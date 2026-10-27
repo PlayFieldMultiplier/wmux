@@ -49,6 +49,7 @@ import PaneDecorations from '../../plugins/PaneDecorations';
 import { isRemoteMirrorVisible } from '../../stores/slices/remoteWorkspacesSlice';
 import { selectHostPickName } from '../../stores/shadowWorkspace';
 import { isShadowWorkspaceId } from '../../../shared/pcRail';
+import { toastFolderTrustLaunchRefusal } from '../../utils/folderTrustLaunchToast';
 
 interface PaneProps {
   pane: PaneLeaf;
@@ -1309,6 +1310,7 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
             () => true,
             (err: unknown) => {
               console.warn('[wmux:resume] the resume line was not typed', String(err));
+              toastFolderTrustLaunchRefusal(err);
               return false;
             },
           );

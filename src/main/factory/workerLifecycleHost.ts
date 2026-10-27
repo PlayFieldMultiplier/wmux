@@ -93,6 +93,7 @@ import { isFanoutWorkerPermissionMode } from '../../shared/workerLaunch';
 import { createWorkerLaunchRecovery } from './workerLaunchRecovery';
 import { LAUNCH_PROBE_CONFIRM_TIMEOUT_MS, LAUNCH_PROBE_TIMEOUT_MS } from '../worktask/fanoutLaunchProbe';
 import type { PermissionMode } from '../../shared/agentResume';
+import { folderTrustLaunchRefusal } from '../folderTrustLaunch';
 
 /** A resumed worker is checked for an exited agent this often. */
 const RESUMED_SWEEP_MS = 60_000;
@@ -622,6 +623,7 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
         if (!c) return false;
         return c.writeToSession(sessionId, sanitizePtyText(guardSessionLaunch(sessionId, line)) + '\r');
       },
+      folderTrustRefusal: (sessionId) => folderTrustLaunchRefusal(daemon(), sessionId, 'bot worker resume line', { refuseUnknown: true }),
       agentAlive: async (sessionId) => (await listSessions()).find((s) => s.id === sessionId)?.agentProcessAlive === true,
       submit: submitToWorkerPane,
       stopAgent: async (sessionId) => (await rpc('session.stopAgent', { sessionId })) as { ok?: boolean; stopped?: boolean; code?: string },

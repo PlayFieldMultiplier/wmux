@@ -1118,6 +1118,7 @@ export const ko = {
   'pane.showInChrome': "Chrome에서 보기",
   'pane.showInChromeFailed': "이 페인을 Chrome에서 보여주지 못했습니다.",
   'pane.continueOnAccount': "다른 계정에서 이어가기",
+  'pane.launchAtFolderTrust': "입력하지 않음: 패인이 폴더 신뢰 확인 화면에 있습니다. 먼저 패인에서 응답하세요.",
   'pane.rewind': "되돌리기…",
   'pane.rewindHint': "Claude의 되돌리기를 열어 코드나 대화를 이전 턴으로 복원합니다",
   'pane.rewindBusy': "Claude가 작업 중입니다 — 턴이 끝난 뒤 되돌리세요",

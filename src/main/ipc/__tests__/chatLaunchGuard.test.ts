@@ -31,4 +31,14 @@ describe('pty:write-launch', () => {
     expect(guard).toBeGreaterThan(0);
     expect(guard).toBeLessThan(handler.indexOf('daemonClient.writeToSession(id, line)'));
   });
+
+  it('asks about a folder-trust prompt before the launch is recorded or typed, an unreadable screen stopping only the auto-resume', () => {
+    const body = fs.readFileSync(path.join(__dirname, '..', 'handlers', 'pty.handler.ts'), 'utf-8');
+    const handler = body.slice(body.indexOf('ipcMain.handle(IPC.PTY_WRITE_LAUNCH'));
+    const ask = handler.indexOf("folderTrustLaunchRefusal(dc, id, submit === true ? 'auto-resume line' : 'launch line', { refuseUnknown: submit === true })");
+    expect(ask).toBeGreaterThan(0);
+    expect(handler.slice(ask)).toMatch(/^[^\n]*\n\s*if \(trustRefusal\) throw new Error\(`PTY_WRITE_LAUNCH: \$\{trustRefusal\}`\);/);
+    expect(ask).toBeLessThan(handler.indexOf('beginPaneRelaunch(id)'));
+    expect(ask).toBeLessThan(handler.indexOf('daemonClient.writeToSession(id, line)'));
+  });
 });

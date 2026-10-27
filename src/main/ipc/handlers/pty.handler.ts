@@ -87,6 +87,7 @@ import { createSessionPromptScheduleHandlers } from '../../pty/sessionPromptSche
 import { localReconnectAnswer } from './localPtyReconnect';
 import { pendingRemovalRefusal } from '../../worktask/pendingWorktreeRemovals';
 import { launchAllowedByChat } from './chatLaunchGuard';
+import { folderTrustLaunchRefusal } from '../../folderTrustLaunch';
 
 /**
  * Allowed shell basenames (compared case-insensitively).
@@ -1190,6 +1191,11 @@ export function registerPTYHandlers(
     if (dc && startsAgent(text) && !(await launchAllowedByChat(dc, id, text))) {
       throw new Error('PTY_WRITE_LAUNCH: a chat owns this pane, so nothing was typed');
     }
+    // A line a person clicked to type stops only at a folder-trust prompt on
+    // screen; the auto-resume (it submits) also when the screen cannot rule
+    // one out.
+    const trustRefusal = await folderTrustLaunchRefusal(dc, id, submit === true ? 'auto-resume line' : 'launch line', { refuseUnknown: submit === true });
+    if (trustRefusal) throw new Error(`PTY_WRITE_LAUNCH: ${trustRefusal}`);
     // A task's pane: a new launch of the task, on disk before the line is
     // typed (factory/workerSlots.ts); not recorded, not typed.
     let settleRelaunch: ((typed: boolean) => void) | null;

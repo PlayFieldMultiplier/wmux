@@ -9,3 +9,7 @@ export const TRUST_HEADLINE = /is this a project you created or one you trust/i;
 /** Codex's folder-trust screen (wording differs across releases; agy asks about
  *  the contents of a project). Never answered. */
 export const CODEX_TRUST_HEADLINE = /do you trust the (?:contents of this (?:directory|project)|files in this folder)|trust this folder\?/i;
+
+/** The reason a launch line was not typed: main puts it in the refusal, the
+ *  renderer recognises it there to tell the person why. */
+export const FOLDER_TRUST_LAUNCH_REFUSAL = 'the pane is on a folder-trust prompt; answer it in the pane';

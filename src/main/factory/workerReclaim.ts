@@ -1613,6 +1613,9 @@ export interface WorkerResumePorts {
   /** Type the launch line + Enter into the pane through the bot worker
    *  launch guard; false when nothing was typed. */
   typeLine: (sessionId: string, line: string) => boolean;
+  /** Why the pane must not be typed into now (an agent's folder-trust
+   *  prompt, or a screen that cannot rule one out), or null. Absent: not asked. */
+  folderTrustRefusal?: (sessionId: string) => Promise<string | null>;
   /** Each task's launch generation on disk (workerSlots.ts): a resume typed
    *  into the worker's pane is a new launch, recorded before the line is
    *  typed. Absent: not recorded. */
@@ -1911,6 +1914,8 @@ async function resumeOnce(
   if (stopped()) return refuse('not_now', 'the bot\'s work was stopped while this resume was under way');
   const late = stillOk?.() ?? null;
   if (late) return refuse('not_now', late);
+  const atTrust = await ports.folderTrustRefusal?.(pane.sessionId);
+  if (atTrust) return refuse('not_typed', `the resume was not typed: ${atTrust}`);
   // A new launch of the task, on disk before the line is typed.
   let gen: number | null = null;
   try {

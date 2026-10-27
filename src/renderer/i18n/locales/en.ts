@@ -1335,6 +1335,7 @@ export const en = {
   'pane.showInChrome': "Show in Chrome",
   'pane.showInChromeFailed': "Could not show this pane in Chrome.",
   'pane.continueOnAccount': "Continue on another account",
+  'pane.launchAtFolderTrust': "Not typed: the pane is on a folder-trust prompt. Answer it in the pane first.",
   'pane.rewind': "Rewind…",
   'pane.rewindHint': "Open Claude's Rewind to restore the code or conversation to an earlier turn",
   'pane.rewindBusy': "Claude is working — rewind once the turn ends",

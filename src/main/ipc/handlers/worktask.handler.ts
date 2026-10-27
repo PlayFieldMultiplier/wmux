@@ -46,6 +46,7 @@ import { isWslShell } from '../../../shared/wslTarget';
 import { getPtyShell } from '../../pty/ptyShellRegistry';
 import { guardBotWorkerSessionText } from '../../agents/codexWorkerGuard';
 import { isBotWorkerSession, paneLaunchFolders } from '../../agents/botWorkerMergeGuard';
+import { folderTrustLaunchRefusal } from '../../folderTrustLaunch';
 
 const execFileAsync = promisify(execFile);
 
@@ -357,6 +358,12 @@ export function registerWorktaskHandlers(
         settleRelaunch = startsAgent(line) ? beginPaneRelaunch(ptyId) : null;
       } catch (err) {
         return { ok: false as const, error: err instanceof Error ? err.message : String(err) };
+      }
+      // A re-fire a person asked for: only a folder-trust prompt on screen stops it.
+      const trustRefusal = await folderTrustLaunchRefusal(dc, ptyId, 'task re-fire line', { refuseUnknown: false });
+      if (trustRefusal) {
+        settleRelaunch?.(false);
+        return { ok: false as const, error: `worktask:refire: ${trustRefusal}` };
       }
       // 정상 경로(scheduleInitialCommand.write)와 동일: sanitize + CR.
       const typed = dc.writeToSession(ptyId, sanitizePtyText(line) + '\r') !== false;
