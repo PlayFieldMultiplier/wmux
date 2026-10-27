@@ -17,6 +17,11 @@ function deps(files: Record<string, string | Buffer>, over: Partial<AgentEnvDeps
       if (f === undefined) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
       return Buffer.isBuffer(f) ? f : Buffer.from(f);
     },
+    stat: async (p) => {
+      const f = files[p.split(path.sep).join('/')];
+      if (f === undefined) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      return { isFile: () => true, size: Buffer.byteLength(f) };
+    },
     ...over,
   };
 }
@@ -43,6 +48,16 @@ describe('collectAgentEnvSummary', () => {
     expect(JSON.stringify(s)).not.toContain(HOME);
   });
 
+  it('reports an inventory it could not read as incomplete, not as empty', async () => {
+    const s = await collectAgentEnvSummary(deps({}, {
+      readInventory: async (provider) => {
+        if (provider === 'claude') throw new Error('parse error');
+        return { provider, cliVersion: null, versionSupported: false, writable: false, items: [], warnings: [], scannedAtMs: 0 } as ProviderInventory;
+      },
+    }));
+    expect(s.incomplete).toEqual(['claude']);
+  });
+
   it('reads the local summary at most once per minute', async () => {
     let reads = 0;
     const d = deps({}, { readInventory: async (provider) => { reads++; return { provider, cliVersion: null, versionSupported: false, writable: false, items: [], warnings: [], scannedAtMs: 0 } as ProviderInventory; } });
@@ -63,7 +78,7 @@ describe('fetchRemoteAgentEnv', () => {
     expect((await fetchRemoteAgentEnv(host, answer(401))).status).toBe('auth-rejected');
     expect((await fetchRemoteAgentEnv(host, answer(503))).status).toBe('unavailable');
     expect((await fetchRemoteAgentEnv(host, async () => { throw new Error('ECONNREFUSED'); })).status).toBe('unreachable');
-    expect((await fetchRemoteAgentEnv({ ...host, origin: 'http://office.example:9600' }, answer(200))).status).toBe('unavailable');
+    expect((await fetchRemoteAgentEnv({ ...host, origin: 'http://office.example:9600' }, answer(200))).status).toBe('insecure-transport');
     const ok = await fetchRemoteAgentEnv(host, answer(200, { schema: 1, wmuxVersion: '4.4.0', agents: [], skills: [], mcpServers: [], instructions: [] }));
     expect(ok).toMatchObject({ status: 'ok', summary: { wmuxVersion: '4.4.0' } });
   });

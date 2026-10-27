@@ -1637,12 +1637,13 @@ registerUsageTrailRpc(rpcRouter, (account, sinceMs, untilMs) => (
     ? usageTrail.read(account, sinceMs, untilMs)
     : []));
 
+// Agent environments compared across paired PCs (read-only).
+registerPcEnvRpc(rpcRouter, { wmuxVersion: app.getVersion() });
+
 // Live `rate_limits` pushed by the wmux statusline script. The account is the
 // one the pane actually runs on (its CLAUDE_CONFIG_DIR), not the workspace's
 // current binding, so this path is not subject to the routing limitation noted
 // at onClaudeTurnEnd above.
-// Agent environments compared across paired PCs (read-only).
-registerPcEnvRpc(rpcRouter, { wmuxVersion: app.getVersion() });
 registerUsageRpc(rpcRouter, {
   listClaudeAccounts: () => getAccountStore().listAccounts()
     .filter((a) => a.vendor === 'claude')

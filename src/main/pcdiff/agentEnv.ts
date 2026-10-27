@@ -13,16 +13,17 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { RemoteHost } from '../../shared/remoteHosts';
-import { isCredentialSafeOriginString } from '../../shared/remotePairInput';
+import { getExecEnv } from '../../shared/execEnv';
 import type { ProviderInventory, SurfaceProviderId } from '../../shared/tokenUsage/surfaceTypes';
 import { AGENT_ENV_LIMITS, AGENT_ENV_ROUTE, buildAgentEnvSummary, parseAgentEnvSummary, type AgentEnvAgent, type AgentEnvInstruction, type AgentEnvSummary } from '../../shared/agentEnvSummary';
 import { diffAgentEnvs, type AgentEnvDiff, type AgentEnvHost } from '../../shared/agentEnvDiff';
 import { resolveOnPath } from '../factory/botEngines';
-import { readBoundedJson } from '../remote/readBoundedJson';
+import { getJson } from '../remote/pcRailFeed';
 import { readInventory } from '../surfaces/inventory';
 
 export const AGENT_ENV_CACHE_MS = 60_000;
-const REMOTE_TIMEOUT_MS = 8_000;
+/** An instruction file larger than this is not read (they are a few KB). */
+const INSTRUCTION_MAX_BYTES = 4 * 1024 * 1024;
 const INVENTORY_PROVIDERS: readonly SurfaceProviderId[] = ['claude', 'codex', 'agy'];
 /** Agents outside the inventory, by command and the npm package that installs it. */
 const PACKAGE_AGENTS: ReadonlyArray<{ agent: string; command: string; pkg: string }> = [
@@ -45,6 +46,7 @@ export interface AgentEnvDeps {
   resolveCommand?: (command: string) => string | null;
   readFile?: (p: string) => Promise<Buffer>;
   realpath?: (p: string) => Promise<string>;
+  stat?: (p: string) => Promise<{ isFile(): boolean; size: number }>;
 }
 
 async function packageVersion(executable: string, pkg: string, deps: Required<Pick<AgentEnvDeps, 'readFile' | 'realpath'>>): Promise<string | null> {
@@ -78,10 +80,14 @@ async function packageVersion(executable: string, pkg: string, deps: Required<Pi
   return null;
 }
 
-/** SHA-256 of a file's bytes exactly as stored; null when it does not exist or cannot be read. */
-async function hashFile(p: string, readFile: (p: string) => Promise<Buffer>): Promise<string | null> {
+/** SHA-256 of a file's bytes exactly as stored; null when there is no such
+ *  regular file, it is too large, or it cannot be read. Checked before the
+ *  read, so a link to a FIFO or a device never blocks it. */
+async function hashFile(p: string, io: { readFile: (p: string) => Promise<Buffer>; stat: (p: string) => Promise<{ isFile(): boolean; size: number }> }): Promise<string | null> {
   try {
-    return createHash('sha256').update(await readFile(p)).digest('hex');
+    const st = await io.stat(p);
+    if (!st.isFile() || st.size > INSTRUCTION_MAX_BYTES) return null;
+    return createHash('sha256').update(await io.readFile(p)).digest('hex');
   } catch {
     return null;
   }
@@ -90,19 +96,27 @@ async function hashFile(p: string, readFile: (p: string) => Promise<Buffer>): Pr
 export async function collectAgentEnvSummary(deps: AgentEnvDeps): Promise<AgentEnvSummary> {
   const home = deps.homeDir ?? os.homedir();
   const readInv = deps.readInventory ?? ((provider: SurfaceProviderId) => readInventory(provider));
-  const io = { readFile: deps.readFile ?? ((p: string) => fs.readFile(p)), realpath: deps.realpath ?? ((p: string) => fs.realpath(p)) };
-  const resolve = deps.resolveCommand ?? ((command: string) => resolveOnPath(command));
-  const inventories = (await Promise.all(INVENTORY_PROVIDERS.map((p) => readInv(p).catch(() => null))))
-    .filter((inv): inv is ProviderInventory => inv !== null);
+  const io = {
+    readFile: deps.readFile ?? ((p: string) => fs.readFile(p)),
+    realpath: deps.realpath ?? ((p: string) => fs.realpath(p)),
+    stat: deps.stat ?? ((p: string) => fs.stat(p)),
+  };
+  // The PATH the inventory's own probes run with (Homebrew and npm prefixes
+  // included), not a Finder-launched app's bare one.
+  const resolve = deps.resolveCommand ?? ((command: string) => resolveOnPath(command, getExecEnv()));
+  const read = await Promise.all(INVENTORY_PROVIDERS.map((p) => readInv(p).then((inv) => ({ p, inv }), () => ({ p, inv: null }))));
+  const inventories = read.map((r) => r.inv).filter((inv): inv is ProviderInventory => inv !== null);
+  // A provider that could not be read is reported as such, never as having nothing.
+  const unread = read.filter((r) => r.inv === null).map((r) => r.p);
   const versions: AgentEnvAgent[] = await Promise.all(PACKAGE_AGENTS.map(async ({ agent, command, pkg }) => {
     const executable = resolve(command);
     return { agent, version: executable ? await packageVersion(executable, pkg, io) : null };
   }));
   const instructions: AgentEnvInstruction[] = await Promise.all(INSTRUCTION_FILES.map(async (rel) => ({
     file: `~/${rel}`,
-    sha256: await hashFile(path.join(home, ...rel.split('/')), io.readFile),
+    sha256: await hashFile(path.join(home, ...rel.split('/')), io),
   })));
-  return buildAgentEnvSummary({ wmuxVersion: deps.wmuxVersion, inventories, versions, instructions });
+  return buildAgentEnvSummary({ wmuxVersion: deps.wmuxVersion, inventories, unread, versions, instructions });
 }
 
 let cached: { at: number; value: Promise<AgentEnvSummary> } | null = null;
@@ -123,34 +137,17 @@ export function resetAgentEnvCacheForTest(): void {
   cached = null;
 }
 
-/** One paired PC's summary, read over its web API with its own credential. */
+/** One paired PC's summary, read over its web API with its own credential
+ *  (the PC rail's request: the same origin, redirect and timeout rules). */
 export async function fetchRemoteAgentEnv(host: Pick<RemoteHost, 'origin' | 'token'>, fetchImpl: typeof fetch): Promise<Pick<AgentEnvHost, 'status' | 'summary'>> {
-  // Never send the token to another machine over plain http.
-  if (!isCredentialSafeOriginString(host.origin)) return { status: 'unavailable', summary: null };
-  let res: Response;
-  try {
-    res = await fetchImpl(`${host.origin}${AGENT_ENV_ROUTE}`, {
-      headers: { Authorization: `Bearer ${host.token}` },
-      redirect: 'error',
-      signal: AbortSignal.timeout(REMOTE_TIMEOUT_MS),
-    });
-  } catch {
-    return { status: 'unreachable', summary: null };
+  const got = await getJson(host, AGENT_ENV_ROUTE, AGENT_ENV_LIMITS.bodyBytes, fetchImpl);
+  if (!got.ok) {
+    // A wmux from before the route: its /api answers 404.
+    if (got.reason === 'unavailable' && got.status === 404) return { status: 'unsupported', summary: null };
+    return { status: got.reason, summary: null };
   }
-  const settle = (status: AgentEnvHost['status']) => {
-    void res.body?.cancel().catch(() => undefined);
-    return { status, summary: null };
-  };
-  if (res.status === 401 || res.status === 403) return settle('auth-rejected');
-  // A wmux from before the route: its /api answers 404.
-  if (res.status === 404) return settle('unsupported');
-  if (!res.ok) return settle('unavailable');
-  try {
-    const summary = parseAgentEnvSummary(await readBoundedJson(res, AGENT_ENV_LIMITS.bodyBytes));
-    return summary ? { status: 'ok', summary } : { status: 'unavailable', summary: null };
-  } catch {
-    return { status: 'unavailable', summary: null };
-  }
+  const summary = parseAgentEnvSummary(got.body);
+  return summary ? { status: 'ok', summary } : { status: 'unavailable', summary: null };
 }
 
 export interface PcEnvDiffDeps {

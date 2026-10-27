@@ -55,7 +55,34 @@ describe('diffAgentEnvs', () => {
     expect(diff.rows).toEqual([
       { kind: 'agent', name: 'claude', values: { local: '2.1.0', h1: '2.0.9' } },
       { kind: 'instruction', name: '~/.claude/CLAUDE.md', values: { local: LF, h1: CRLF } },
-      { kind: 'skill', agent: 'claude', name: 'ship', values: { local: null, h1: 'user' } },
+      { kind: 'skill', agent: 'claude', name: 'ship', source: 'user', values: { local: null, h1: 'on' } },
     ]);
+  });
+
+  it('a skill turned off differs from one turned on; an unread agent\'s items are unknown, not missing', () => {
+    const off = buildAgentEnvSummary({
+      wmuxVersion: '4.4.0',
+      inventories: [inventory([skill('review', { enabled: false })])],
+      versions: [{ agent: 'gemini', version: null }],
+      instructions: [{ file: '~/.claude/CLAUDE.md', sha256: LF }],
+    });
+    expect(diffAgentEnvs([host('local', summary()), host('h1', off)]).rows)
+      .toEqual([{ kind: 'skill', agent: 'claude', name: 'review', source: 'user', values: { local: 'on', h1: 'off' } }]);
+    const unread = { ...summary({ skills: [] }), incomplete: ['claude'] };
+    expect(diffAgentEnvs([host('local', summary()), host('h1', unread)]).rows).toEqual([]);
+  });
+});
+
+describe('agent env summary bounds', () => {
+  it('drops names with invisible or direction-changing characters, and stays inside its byte budget', () => {
+    const s = buildAgentEnvSummary({
+      wmuxVersion: '4.4.0',
+      inventories: [inventory([skill('review\u200b'), skill('re\u202eview'), ...Array.from({ length: 300 }, (_, i) => skill(`스킬-${i}-${'가'.repeat(100)}`))])],
+      versions: [],
+      instructions: [],
+    });
+    expect(s.skills.some((i) => /[\u200b\u202e]/.test(i.name))).toBe(false);
+    expect(s.truncated).toBe(true);
+    expect(new TextEncoder().encode(JSON.stringify(s)).length).toBeLessThanOrEqual(96 * 1024);
   });
 });

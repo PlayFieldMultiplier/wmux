@@ -3929,13 +3929,7 @@ export class WebTerminalServer {
     });
   }
 
-  /**
-   * The desktop sidebar snapshot for the two polled list routes, or null.
-   * Stale-while-revalidate (see DESKTOP_SIDEBAR_TTL_MS): answers from the
-   * current snapshot at once and refreshes it in the background; only a poll
-   * with no snapshot at all may wait, and only until the shared first-paint
-   * deadline. Never rejects: a list route must not fail because the desktop did.
-   */
+  /** GET /api/agent-env: this PC's agent environment summary, from the desktop, in the reader's bounds. */
   private async handleAgentEnv(res: http.ServerResponse): Promise<void> {
     const desktop = this.availableDesktop();
     if (!desktop || !desktop.supports(AGENT_ENV_COMMAND)) return this.json(res, 503, { error: 'desktop-unavailable' });
@@ -3950,6 +3944,13 @@ export class WebTerminalServer {
     return summary ? this.json(res, 200, summary) : this.json(res, 503, { error: 'desktop-unavailable' });
   }
 
+  /**
+   * The desktop sidebar snapshot for the two polled list routes, or null.
+   * Stale-while-revalidate (see DESKTOP_SIDEBAR_TTL_MS): answers from the
+   * current snapshot at once and refreshes it in the background; only a poll
+   * with no snapshot at all may wait, and only until the shared first-paint
+   * deadline. Never rejects: a list route must not fail because the desktop did.
+   */
   private async desktopSidebar(): Promise<PhoneSidebarSnapshot | null> {
     const desktop = this.availableDesktop();
     if (!desktop) {
