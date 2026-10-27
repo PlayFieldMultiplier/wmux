@@ -2323,7 +2323,7 @@ export const zh = {
   'room.notice.task.keptFolderCleaned.body': "它已 {days} 天没有变化。分支保留。",
   'room.notice.task.keptFolderCleaned.body.research': "它已 {days} 天没有变化。",
   'room.notice.task.inputRequired': "任务需要输入：{title}",
-  'room.notice.task.inputRequired.why.trustDialog': "工作者正在等待 {agent} 询问你是否信任此文件夹。请在工作者窗格中回答。",
+  'room.notice.task.inputRequired.why.trustDialog': "工作者正在等待你回答 {agent} 的问题：是否信任此文件夹。请在工作者窗格中回答。",
   'room.notice.task.inputRequired.why.firstRun': "工作者停在 Claude Code 的首次运行界面。请在工作者窗格中按一个键。",
   'room.notice.task.inputRequired.why.launchFailed': "工作者的代理没有启动，窗格停在 shell 提示符。请在那里重新运行任务的启动命令。",
   'room.notice.budget.exhausted.turns_hour': "{bot} 本小时的回合已用完",
