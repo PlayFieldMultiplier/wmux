@@ -48,7 +48,7 @@ const ALL_SCRIPTS = (): Array<[string, string]> => {
     out.push([`remove ${listener}`, buildRemoveScript({ listener, exe: EXE, reportedExe: EXE, scope: SCOPE, facts })]);
     out.push([
       `probe ${listener}`,
-      buildProbeScript({ exe: EXE, port: 45660, ips: ['192.168.1.10', '100.79.244.107'], ruleIds: firewallRuleIds(listener, EXE, SCOPE), legacyScan: listener === 'lanlink' }),
+      buildProbeScript({ exe: EXE, port: 45660, ips: ['192.168.1.10', '100.88.120.107'], ruleIds: firewallRuleIds(listener, EXE, SCOPE), legacyScan: listener === 'lanlink' }),
     ]);
   }
   return out;

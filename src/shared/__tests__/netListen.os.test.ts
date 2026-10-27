@@ -87,8 +87,8 @@ describe('parseNetstatListeners', () => {
     '  프로토콜  로컬 주소              외부 주소              상태            PID',
     '  TCP    0.0.0.0:135            0.0.0.0:0              LISTENING       1728',
     '  TCP    127.0.0.1:7681         0.0.0.0:0              LISTENING       4242',
-    '  TCP    192.168.45.28:45651    0.0.0.0:0              ABHÖREN         5150',
-    '  TCP    192.168.45.28:50123    20.1.2.3:443           ESTABLISHED     777',
+    '  TCP    192.168.10.28:45651    0.0.0.0:0              ABHÖREN         5150',
+    '  TCP    192.168.10.28:50123    20.1.2.3:443           ESTABLISHED     777',
     '  TCP    [::]:45660             [::]:0                 LISTENING       9001',
     '  TCP    [::1]:7681             [::]:0                 LISTENING       4242',
     '  UDP    0.0.0.0:5353           *:*                                    1234',
@@ -98,7 +98,7 @@ describe('parseNetstatListeners', () => {
     expect(parseNetstatListeners(NETSTAT)).toEqual([
       { address: '0.0.0.0', port: 135, pid: 1728 },
       { address: '127.0.0.1', port: 7681, pid: 4242 },
-      { address: '192.168.45.28', port: 45651, pid: 5150 },
+      { address: '192.168.10.28', port: 45651, pid: 5150 },
       { address: '::', port: 45660, pid: 9001 },
       { address: '::1', port: 7681, pid: 4242 },
     ]);
