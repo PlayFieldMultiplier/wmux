@@ -681,4 +681,16 @@ export const fr = {
   'worktask.cleanup.detail.orphanMeta': 'Seul l’enregistrement de la tâche reste, pas le worktree (une suppression a été interrompue) — vérifiez, puis supprimez.',
   'worktask.cleanup.detail.diskMissing': 'Le worktree est absent du disque (supprimé hors de wmux ou après un plantage) — fermez la tâche pour le nettoyer.',
   'botsPage.guest.readNotice': "À partir de maintenant, un bot externe peut lire les messages de cette conversation et y écrire. Il ne voit jamais ce qui a été dit avant son ajout.",
+
+  // Scheduled runs: one retry after a temporary provider error
+  'claudeIntegration.scheduledRetry': "Relancer les exécutions planifiées après une erreur temporaire",
+  'claudeIntegration.scheduledRetryDesc': "Si le tour d'une exécution planifiée échoue sur une erreur réseau ou serveur du fournisseur, attendre 5 minutes et envoyer un message de reprise. Activé par défaut ; chaque planification peut le désactiver.",
+  'claudeIntegration.scheduledRetryUnknown': "Pas encore connu : en attente du service d'arrière-plan de wmux.",
+  'schedules.retryTransient': "Réessayer une fois après une erreur temporaire",
+  'schedules.retryTransientHint': "En cas d'erreur réseau ou serveur du fournisseur, attendre 5 minutes et envoyer un message de reprise. Le prompt n'est pas renvoyé.",
+  'schedules.retryTransientGlobalHint': "S'applique seulement si « Relancer les exécutions planifiées après une erreur temporaire » est activé dans Réglages → Intégration Claude.",
+  'schedules.state.retryWaiting': "En attente : nouvel essai après une erreur temporaire du fournisseur (dans {minutes} min)",
+  'schedules.reason.agent_error_retried_once': "nouvelle erreur de l'agent après un nouvel essai",
+  'schedules.reason.agent_error_retry_blocked': "erreur de l'agent ; le nouvel essai n'a pas pu être envoyé",
+  'schedules.reason.agent_error_retry_interrupted': "erreur de l'agent ; pas de nouvel essai, wmux a redémarré",
 } as const;
