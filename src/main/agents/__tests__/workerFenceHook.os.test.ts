@@ -106,6 +106,14 @@ describe.skipIf(WIN)('the worker fence hook', () => {
     expect(write(path.join(wt, '.github', 'workflows', 'ci.yml'))).toBe(0);
   });
 
+  it('reads a root with spaces and non-ASCII characters as itself', () => {
+    const odd = path.join(base, '작업 폴더 (1)+@');
+    fs.mkdirSync(odd);
+    const cmd = hookCommand(process.execPath, script, [odd, tmp]);
+    expect(runWith(cmd, { tool_name: 'Write', tool_input: { file_path: path.join(odd, 'a.txt') } }).code).toBe(0);
+    expect(runWith(cmd, { tool_name: 'Write', tool_input: { file_path: path.join(wt, 'a.txt') } }).code).toBe(2);
+  });
+
   it('refuses a write to the hook script itself', () => {
     const inside = path.join(wt, 'tools', 'fence.cjs');
     fs.mkdirSync(path.dirname(inside));

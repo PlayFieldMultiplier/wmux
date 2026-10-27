@@ -10,6 +10,7 @@ import {
   workerFenceHookCommand,
   workerFenceLaunch,
   workerFencePermissionDenies,
+  workerFenceWorktreeDenies,
   type WorkerFenceInput,
 } from '../workerFence';
 import { WORKER_GATE_TIMEOUT_S } from '../workerToolGate';
@@ -49,7 +50,11 @@ const g = (...p: string[]) => path.join(GIT, ...p);
 describe('the git denies', () => {
   it('a linked worktree: packs, other refs, HEAD, hooks, config, the main index, its own config.worktree, other worktrees', () => {
     const d = workerFenceGitDenies(input());
-    for (const p of [g('objects', 'pack'), g('packed-refs'), g('refs', 'remotes'), g('refs', 'tags'), g('HEAD'), g('index'), g('hooks'), g('config'), g('worktrees', 'task-1', 'config.worktree'), g('worktrees', 'task-2')]) {
+    for (const p of [
+      g('objects', 'pack'), g('packed-refs'), g('refs', 'remotes'), g('refs', 'tags'), g('refs', 'replace'), g('refs', 'notes'), g('HEAD'), g('index'),
+      g('hooks'), g('config'), g('info'), g('objects', 'info'), g('modules'),
+      g('worktrees', 'task-1', 'config.worktree'), g('worktrees', 'task-1', 'commondir'), g('worktrees', 'task-1', 'gitdir'), g('worktrees', 'task-2'),
+    ]) {
       expect(d, p).toContain(p);
     }
     expect(d).not.toContain(g('worktrees', 'task-1'));
@@ -59,6 +64,7 @@ describe('the git denies', () => {
   it('a main-checkout worker keeps its own index and config.worktree is the common dir\'s', () => {
     const d = workerFenceGitDenies(input({ isLinkedWorktree: false, ownWorktreeName: null, otherWorktrees: ['task-2'] }));
     expect(d).not.toContain(g('index'));
+    expect(d).not.toContain(g('commondir'));
     expect(d).toContain(g('HEAD'));
     expect(d).toContain(g('config.worktree'));
     expect(d).toContain(g('worktrees', 'task-2'));
@@ -88,8 +94,10 @@ describe('the fence settings', () => {
     expect(weaker).toBe(false);
     const sb = sandboxOf(settings);
     expect(sb).toMatchObject({ enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false, enableWeakerNestedSandbox: false });
-    expect(sb.filesystem.allowWrite).toEqual([WT, TMP, '/private/tmp/wmux-test-*']);
-    expect(sb.filesystem.denyWrite).toEqual(workerFenceGitDenies(input()));
+    expect(sb.filesystem.allowWrite).toEqual([WT, TMP, GIT, '/private/tmp/wmux-test-*']);
+    expect(sb.filesystem.denyWrite).toEqual([...workerFenceWorktreeDenies(WT, true), ...workerFenceGitDenies(input())]);
+    for (const n of ['.claude', '.mcp.json', 'CLAUDE.md', 'CLAUDE.local.md', '.git']) expect(sb.filesystem.denyWrite).toContain(path.join(WT, n));
+    expect(workerFenceWorktreeDenies(WT, false)).not.toContain(path.join(WT, '.git'));
     expect(sb.filesystem.denyRead).toContain(path.join(HOME, '.ssh'));
     // Every denied folder that holds one of the worker's folders re-opens it.
     for (const own of [WT, TMP, GIT]) expect(sb.filesystem.allowRead).toContain(own);
@@ -157,6 +165,11 @@ describe('the hook command', () => {
     expect(workerFenceHookCommand('node', '/d/hook.cjs', ['/w'])).toBeNull();
     expect(workerFenceHookCommand('/opt/wmux', '/d/hook.cjs', ['/w/$(x)'])).toBeNull();
     expect(workerFenceHookCommand('/opt/wmux', '/d/hook.cjs', ['/w/"x'])).toBeNull();
+    expect(workerFenceHookCommand('/opt/wmux', '/d/hook.cjs', ['/w/a\\b'])).toBeNull();
+    expect(workerFenceHookCommand('/opt/wmux', '/d/hook.cjs', ['/w/a`b'])).toBeNull();
+    expect(workerFenceHookCommand('/opt/wmux', '/d/hook.cjs', ['/w/a\nb'])).toBeNull();
+    // Any other character reads as itself inside double quotes.
+    expect(workerFenceHookCommand('/opt/wmux', '/d/hook.cjs', ['/Users/me/코딩/a+b@c (1)'])).toBe('ELECTRON_RUN_AS_NODE=1 "/opt/wmux" "/d/hook.cjs" "/Users/me/코딩/a+b@c (1)" || exit 2');
   });
 });
 

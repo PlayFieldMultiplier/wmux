@@ -139,8 +139,11 @@ function isWithin(child: string, parent: string): boolean {
 /**
  * The paths in the git common dir the worker's commands may not write. What
  * a commit on its own branch writes (loose objects, its own ref, its own
- * index and HEAD, the logs) stays open; packs, every other ref, the main
- * checkout's HEAD, hooks, config and every other worktree's metadata do not.
+ * index and HEAD, the logs) stays open; packs, every other ref, replace refs
+ * and notes, the main checkout's HEAD, hooks, config, `info/` (grafts,
+ * attributes), `objects/info/` (alternates), submodules' git dirs and every
+ * other worktree's metadata do not, nor a linked worktree's own pointers back
+ * to the repository (`commondir`, `gitdir`).
  * A linked worktree also keeps off the main checkout's index; a main-checkout
  * worker needs its own. Each other branch is denied by its own ref file: a
  * deny on `refs/heads` would win over the worker's own ref inside it. Pure.
@@ -157,12 +160,21 @@ export function workerFenceGitDenies(input: Pick<WorkerFenceInput, 'gitCommonDir
     path.join(git, 'packed-refs'),
     path.join(git, 'refs', 'remotes'),
     path.join(git, 'refs', 'tags'),
+    path.join(git, 'refs', 'replace'),
+    path.join(git, 'refs', 'notes'),
     path.join(git, 'HEAD'),
     path.join(git, 'hooks'),
     path.join(git, 'config'),
+    path.join(git, 'info'),
+    path.join(git, 'objects', 'info'),
+    path.join(git, 'modules'),
     path.join(ownGitDir, 'config.worktree'),
   ]);
-  if (input.isLinkedWorktree) out.add(path.join(git, 'index'));
+  if (input.isLinkedWorktree) {
+    out.add(path.join(git, 'index'));
+    out.add(path.join(ownGitDir, 'commondir'));
+    out.add(path.join(ownGitDir, 'gitdir'));
+  }
   for (const name of input.otherWorktrees) {
     if (name === input.ownWorktreeName) continue;
     out.add(path.join(git, 'worktrees', requireFolderName('worktree', name)));
@@ -173,6 +185,15 @@ export function workerFenceGitDenies(input: Pick<WorkerFenceInput, 'gitCommonDir
     out.add(path.join(git, 'refs', 'heads', ...parts));
   }
   return [...out];
+}
+
+/** The paths in the worktree the worker's commands may not write: claude's
+ *  own configuration there (WORKER_FOLDER_CONFIG_NAMES, as for a worker with
+ *  a signed-in connection) and a linked worktree's `.git` file, which names
+ *  the repository git works in. Pure. */
+export function workerFenceWorktreeDenies(worktree: string, isLinkedWorktree: boolean): string[] {
+  const wt = requireAbsolute('the worktree', worktree);
+  return [...WORKER_FOLDER_CONFIG_NAMES.map((n) => path.join(wt, n)), ...(isLinkedWorktree ? [path.join(wt, '.git')] : [])];
 }
 
 /** A permission rule's path: `~/…` inside home, `//…` (from the root) else. */
@@ -250,8 +271,10 @@ export function buildWorkerFence(input: WorkerFenceInput): WorkerFence {
     // `gh` reaches GitHub only with it (measured on macOS).
     enableWeakerNetworkIsolation: true,
     filesystem: {
-      allowWrite: [...new Set([worktree, tmp, ...tests])],
-      denyWrite: workerFenceGitDenies(input),
+      // The git common dir too: a linked worktree commits into it (narrowed
+      // by the denies below, which win over it).
+      allowWrite: [...new Set([worktree, tmp, git, ...tests])],
+      denyWrite: [...workerFenceWorktreeDenies(worktree, input.isLinkedWorktree), ...workerFenceGitDenies(input)],
       denyRead: credentials,
       // Re-opened should a denied folder hold them (wmux keeps worktrees in
       // its home folder).
@@ -529,10 +552,11 @@ try {
 
 /** The hook's command: this process's runtime by its absolute path, as
  *  node, the script, then the roots (the worktree first, then the worker's
- *  temp folder). Null when any path cannot be quoted safely
- *  (workerToolGateCommand's rule) or there is no root. Pure. */
+ *  temp folder), each in double quotes. Null when there is no root or a path
+ *  is not absolute or holds what a POSIX shell reads inside double quotes
+ *  (`"`, `$`, a backtick, a backslash) or a line break. Pure. */
 export function workerFenceHookCommand(runtime: string, script: string, roots: readonly string[]): string | null {
-  const plain = (p: string) => /^\/[A-Za-z0-9._/ -]+$/.test(p);
+  const plain = (p: string) => /^\/[^"$`\\\0\r\n]*$/.test(p);
   if (roots.length === 0 || ![runtime, script, ...roots].every(plain)) return null;
   return `ELECTRON_RUN_AS_NODE=1 "${runtime}" "${script}" ${roots.map((r) => `"${r}"`).join(' ')} || exit 2`;
 }
