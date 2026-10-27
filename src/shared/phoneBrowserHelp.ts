@@ -27,7 +27,7 @@ export const BROWSER_HELP_SET_METHOD = 'daemon.browserHelp.set';
 /** Which browser the request is about. */
 export type PhoneBrowserHelpBackend = 'builtin' | 'chrome' | 'live';
 
-/** One open request as the phone sees it. */
+/** One open request: the fields main's table and the phone's list share. */
 export interface PhoneBrowserHelpRow {
   requestId: string;
   workspaceId: string;
@@ -42,6 +42,14 @@ export interface PhoneBrowserHelpRow {
   /** `scheme://host[:port]` of the tab when the desktop listed it; absent when unknown. */
   origin?: string;
 }
+
+/**
+ * One row as `GET /api/browser-help` serves it. `sessionId` is the requesting
+ * pane's `id` in `/api/sessions`, added by the daemon on that route only (when
+ * that list has the pane, and never for a brain pane); never in main's table,
+ * an SSE frame or a push.
+ */
+export type PhoneBrowserHelpServedRow = PhoneBrowserHelpRow & { sessionId?: string };
 
 /**
  * One row as main sends it to the daemon: the phone row plus the pane whose

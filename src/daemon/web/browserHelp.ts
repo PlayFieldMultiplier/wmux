@@ -26,7 +26,7 @@ import {
   parseBrowserHelpDecideReply,
   type BrowserHelpErrorCode,
   type BrowserHelpTableRow,
-  type PhoneBrowserHelpRow,
+  type PhoneBrowserHelpServedRow,
 } from '../../shared/phoneBrowserHelp';
 import type { BrowserHelpOutcome } from '../../shared/browserHelp';
 import { DesktopPhoneError } from '../phone/DesktopPhoneBridge';
@@ -57,26 +57,20 @@ export function browserHelpSupported(desktop: BotApprovalsDesktop | null, allowT
 /** Whether a row came from a brain pane's agent (`isBrainPty` over the live session). */
 export type BrainPaneCheck = (ptyId: string) => boolean;
 
-/**
- * The requesting pane's `id` in `/api/sessions` when that list has it now
- * and it runs in the request's workspace; undefined otherwise.
- */
-export type RequesterSessionLookup = (ptyId: string, workspaceId: string) => string | undefined;
-
-/** A row as `GET /api/browser-help` serves it; `sessionId` exists only here, never in main's table. */
-export type PhoneBrowserHelpServedRow = PhoneBrowserHelpRow & { sessionId?: string };
+/** The requesting pane's `id` in `/api/sessions` when that list has it now; undefined otherwise. Never asked about a brain pane. */
+export type RequesterSessionLookup = (ptyId: string) => string | undefined;
 
 /**
  * The row a phone is served: never the raw requesting pane; a brain pane's
- * never previewable. `sessionId` names the requesting pane only as
- * `/api/sessions` does, and only when that list has it in the request's
- * workspace: a brain pane, a pane gone since, or no requester leaves it out.
+ * never previewable and never named. `sessionId` names the requesting pane
+ * as `/api/sessions` does, and only when that list has it: a brain pane, a
+ * pane gone since, or no requester leaves it out.
  */
 function phoneRow(row: BrowserHelpTableRow, isBrainPane: BrainPaneCheck, requesterSession: RequesterSessionLookup): PhoneBrowserHelpServedRow {
   const { requesterPtyId, ...served } = row;
   if (requesterPtyId === undefined) return served;
   if (isBrainPane(requesterPtyId)) return { ...served, previewable: false };
-  const sessionId = requesterSession(requesterPtyId, row.workspaceId);
+  const sessionId = requesterSession(requesterPtyId);
   return sessionId !== undefined ? { ...served, sessionId } : served;
 }
 
