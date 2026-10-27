@@ -162,6 +162,8 @@ describe.skipIf(isWin)('a fenced launch', () => {
     expect(linePermissionMode('claude --permission-mode auto')).toBe('auto');
     // The skip flag wins over a later mode, as it does for claude.
     expect(linePermissionMode('claude --dangerously-skip-permissions --permission-mode default')).toBe('bypassPermissions');
+    // Words inside a quoted argument never turn an unattended mode off.
+    expect(linePermissionMode('claude --permission-mode bypassPermissions --append-system-prompt "never use --permission-mode default"')).toBe('bypassPermissions');
     expect(linePermissionMode('claude --permission-mode=bypassPermissions')).toBe('bypassPermissions');
     expect(settingsOf(create('claude --permission-mode auto -p hi')!.initialCommand!)).toHaveProperty('sandbox');
   });
@@ -174,6 +176,18 @@ describe.skipIf(isWin)('a fenced launch', () => {
     fs.mkdirSync(path.join(home, '.claude'));
     fs.writeFileSync(path.join(home, '.claude', 'settings.json'), JSON.stringify({ permissions: { defaultMode: 'auto' } }));
     expect(settingsOf(create('claude -p hi')!.initialCommand!)).toHaveProperty('sandbox');
+  });
+
+  it('carries how the worker reaches its model from the user settings it no longer loads', () => {
+    fs.mkdirSync(path.join(home, '.claude'));
+    fs.writeFileSync(path.join(home, '.claude', 'settings.json'), JSON.stringify({ model: 'opus', env: { CLAUDE_CODE_USE_BEDROCK: '1', CLAUDE_CODE_TMPDIR: '/tmp/x', SANDBOX_X: '1' }, hooks: { Stop: [] }, permissions: { allow: ['Write(//**)'] } }));
+    const s = settingsOf(create(LINE)!.initialCommand!);
+    expect(s.model).toBe('opus');
+    const env = s.env as Record<string, string>;
+    expect(env.CLAUDE_CODE_USE_BEDROCK).toBe('1');
+    expect(env.CLAUDE_CODE_TMPDIR).toMatch(/worker-tmp\/[0-9a-f]{32}$/);
+    expect(env).not.toHaveProperty('SANDBOX_X');
+    expect((s.permissions as { allow?: string[] }).allow ?? []).not.toContain('Write(//**)');
   });
 
   it('a claude whose path a shell would split runs through a plain link to it', () => {
@@ -287,6 +301,10 @@ describe.skipIf(isWin)('a resume and a re-fire keep the fence', () => {
     reloadBotWorkerSessionsForTests();
     const again = guardRefireLine('pty-1', LINE, deps());
     expect(settingsOf(again)).toHaveProperty('sandbox');
+    // The record names the fenced files the running claude reads.
+    const rec = JSON.parse(fs.readFileSync(path.join(dir, 'factory', 'bot-worker-sessions.json'), 'utf8')).sessions['pty-1'];
+    expect(rec.launch.fence.strength).toBe('full');
+    expect(fenced).toContain(`--settings="${rec.launch.settingsFile}"`);
     const temp = (line: string) => /"([^"]+worker-tmp\/[0-9a-f]{32})"/.exec(hooksOf(settingsOf(line)).PreToolUse[0].hooks[0].command)?.[1];
     expect(temp(again)).toBe(temp(fenced));
   });
@@ -321,6 +339,10 @@ describe.skipIf(isWin)('the off switch', () => {
     expect(isWorkerFenceOff('ws-bot', dir)).toBe(false);
     fs.writeFileSync(getWorkerFencePolicyPath(dir), '{not json');
     expect(isWorkerFenceOff('ws-bot', dir)).toBe(false);
+    // Quick toggles land in order: the last one wins.
+    await Promise.all([setWorkerFenceOff('ws-bot', true, dir), setWorkerFenceOff('ws-bot', false, dir), setWorkerFenceOff('ws-2', true, dir)]);
+    expect(isWorkerFenceOff('ws-bot', dir)).toBe(false);
+    expect(isWorkerFenceOff('ws-2', dir)).toBe(true);
   });
 
   it('a worker launched while it is off is unfenced and says so in its pane', async () => {
@@ -361,7 +383,13 @@ describe.skipIf(isWin)('the self-test', () => {
     } finally {
       vi.useRealTimers();
     }
-    expect(await workerFenceSupport({ ...d, probe: async () => ({ ok: false as const, reason: 'no bwrap' }) })).toEqual({ capable: false, reason: 'no bwrap' });
+    // No sandbox on the platform, or a claude too old for it: the weaker fence.
+    expect(await workerFenceSupport({ ...d, probe: async () => ({ ok: false as const, reason: 'no bwrap' }), platformRefusal: () => 'no bwrap' })).toEqual({ capable: false, reason: 'no bwrap' });
+    expect(await workerFenceSupport({ ...d, probe: async () => ({ ok: false as const, reason: 'Claude Code 2.1.100 is older than 2.1.246' }), platformRefusal: () => null })).toEqual({ capable: false, reason: 'Claude Code 2.1.100 is older than 2.1.246' });
+    // A platform that has the sandbox whose check did not finish: no launch at all.
+    const flaky = await workerFenceSupport({ ...d, probe: async () => ({ ok: false as const, reason: 'claude --version failed: timed out' }), platformRefusal: () => null });
+    expect(flaky).toEqual({ capable: false, reason: 'claude --version failed: timed out', transient: true });
+    expect(refusalOf(() => create(LINE, deps({ fenceSupport: flaky })))).toMatch(/worker fence: this computer's fence support could not be checked \(claude --version failed: timed out\); try again/);
   });
 
   it('a claude that runs no command fails it, and its files are removed', async () => {

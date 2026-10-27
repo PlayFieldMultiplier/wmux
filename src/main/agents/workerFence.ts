@@ -23,7 +23,7 @@
 import os from 'node:os';
 import path from 'node:path';
 import { launcherStem, tokenize, type PermissionMode } from '../../shared/agentResume';
-import { isClaudeLauncher, namesClaude, spliceSettingsFlag } from '../../shared/botWorkerGuard';
+import { WORKER_FENCE_FILE_ALLOW_RULE, WORKER_FENCE_REFUSED_PERMISSION_KEYS, WORKER_FENCE_REFUSED_SETTINGS_KEYS, isClaudeLauncher, namesClaude, spliceSettingsFlag } from '../../shared/botWorkerGuard';
 import { splitModelEnvMarker } from '../../shared/workerLaunch';
 import { botSandboxDenyRead, type BotSandboxInput } from '../factory/botExecSandbox';
 import { WORKER_GATE_TIMEOUT_S } from './workerToolGate';
@@ -332,14 +332,9 @@ const WRAPPER_STEMS: ReadonlySet<string> = new Set([
 // them in the worker folder's project settings; mergeWorkerFenceSettings
 // refuses them in the launch's own extras.
 
-/** Top-level settings keys: a sandbox of their own, or hooks turned off. */
-export const WORKER_FENCE_REFUSED_SETTINGS_KEYS: readonly string[] = ['sandbox', 'disableAllHooks'];
-
-/** `permissions` keys claude also opens the sandbox's writes by. */
-export const WORKER_FENCE_REFUSED_PERMISSION_KEYS: readonly string[] = ['additionalDirectories'];
-
-/** An allow rule for a file tool: claude widens the sandbox's writes by it. */
-export const WORKER_FENCE_FILE_ALLOW_RULE = /^\s*(Read|Edit|Write|MultiEdit|NotebookEdit)\s*(\(|$)/;
+// The keys and rules themselves live in shared/botWorkerGuard.ts (the
+// daemon's phone launch checks a worktree with them too).
+export { WORKER_FENCE_FILE_ALLOW_RULE, WORKER_FENCE_REFUSED_PERMISSION_KEYS, WORKER_FENCE_REFUSED_SETTINGS_KEYS };
 
 const UNSAFE_KEYS: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype']);
 

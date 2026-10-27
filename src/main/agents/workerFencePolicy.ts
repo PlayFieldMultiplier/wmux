@@ -42,17 +42,23 @@ export function isWorkerFenceOff(workspaceId: string | null | undefined, dir?: s
   return Object.prototype.hasOwnProperty.call(readOff(dir), workspaceId);
 }
 
+let writes: Promise<unknown> = Promise.resolve();
+
 /** Turn the fence off (`off: true`) or back on for a workspace. Only a
  *  literal boolean and a plausible id write; returns the state now in force. */
 export async function setWorkerFenceOff(workspaceId: unknown, off: unknown, dir?: string): Promise<boolean> {
   if (typeof workspaceId !== 'string' || workspaceId.length === 0 || workspaceId.length > 128 || typeof off !== 'boolean') {
     return typeof workspaceId === 'string' ? isWorkerFenceOff(workspaceId, dir) : false;
   }
-  const next = readOff(dir);
-  if (off) next[workspaceId] = true;
-  else delete next[workspaceId];
-  const ids = Object.keys(next);
-  if (ids.length > WORKER_FENCE_POLICY_MAX) throw new Error(`the fence can be off for at most ${WORKER_FENCE_POLICY_MAX} workspaces`);
-  await atomicWriteJSON(getWorkerFencePolicyPath(dir), { off: next });
-  return off;
+  // One change at a time: each reads what the last one wrote.
+  const run = writes.then(async () => {
+    const next = readOff(dir);
+    if (off) next[workspaceId] = true;
+    else delete next[workspaceId];
+    if (Object.keys(next).length > WORKER_FENCE_POLICY_MAX) throw new Error(`the fence can be off for at most ${WORKER_FENCE_POLICY_MAX} workspaces`);
+    await atomicWriteJSON(getWorkerFencePolicyPath(dir), { off: next });
+    return off;
+  });
+  writes = run.catch(() => undefined);
+  return run;
 }

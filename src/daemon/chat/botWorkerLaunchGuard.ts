@@ -18,10 +18,16 @@
 // WSL session gets the worker settings file alone, as before. Any other
 // session (recorded without its files, or a record that cannot be read) gets
 // nothing typed.
+//
+// The worker fence (main/agents/botWorkerFence.ts): a session main started
+// inside it gets its recorded fenced file again only while the worktree's
+// own Claude files still pass the fence's check; a line that runs
+// unattended in a session main did not fence types nothing (the daemon
+// cannot build the fence: start it from wmux).
 
 import fs from 'node:fs';
 import { getWmuxDir } from '../config';
-import { namesClaude, readBotWorkerSessions, workerProjectSettingsRefusal } from '../../shared/botWorkerGuard';
+import { isFencedMode, linePermissionMode, namesClaude, readBotWorkerSessions, workerFenceFolderRefusal, workerProjectSettingsRefusal } from '../../shared/botWorkerGuard';
 import { spliceWorkerLaunch } from '../../shared/botWorkerMcp';
 import { namesCodex } from '../../shared/codexWorkerGuard';
 import { toWslPath } from '../../shared/imagePaste';
@@ -54,7 +60,10 @@ export function guardBotWorkerLaunch(
   const tail = line.slice(head.length);
   if (tail && !QUOTED_FIRST_MESSAGE.test(tail)) return null;
   const rec = 'sessions' in read ? read.sessions.get(sessionId) : undefined;
+  const fenced = rec?.launch?.fence !== undefined && rec.launch.fence.strength !== 'off';
+  if (!fenced && isFencedMode(linePermissionMode(head))) return null;
   if (rec?.launch && !rec.wsl) {
+    if (fenced && (!rec.cwd || [rec.cwd, ...folders].some((f) => workerFenceFolderRefusal(f) !== null))) return null;
     if (!rec.cwd || [rec.cwd, ...folders].some((f) => workerProjectSettingsRefusal(f) !== null)) return null;
     if (!fs.existsSync(rec.launch.settingsFile) || !fs.existsSync(rec.launch.mcpConfigFile)) return null;
     // The daemon cannot tell whether a recorded connection is still the

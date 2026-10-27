@@ -618,12 +618,15 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
       } : {}),
       // The same stage a resume typed from the pane takes (pty:write-launch):
       // a bot worker's line carries its settings file, or this throws.
-      typeLine: async (sessionId, line) => {
+      typeLine: (sessionId, line) => {
         const c = daemon();
         if (!c) return false;
-        // The guard decides whether the line is fenced; its support first.
-        const fenceSupport = await workerFenceSupportFor(line);
-        return c.writeToSession(sessionId, sanitizePtyText(guardSessionLaunch(sessionId, line, fenceSupport ? { fenceSupport } : {})) + '\r');
+        return c.writeToSession(sessionId, sanitizePtyText(guardSessionLaunch(sessionId, line)) + '\r');
+      },
+      // The guard decides whether the line is fenced, with the fence support
+      // settled here (workerFenceSupport keeps it for the guard).
+      prepareLine: async (line) => {
+        await workerFenceSupportFor(line);
       },
       agentAlive: async (sessionId) => (await listSessions()).find((s) => s.id === sessionId)?.agentProcessAlive === true,
       submit: submitToWorkerPane,

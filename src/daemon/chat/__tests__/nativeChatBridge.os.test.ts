@@ -532,14 +532,14 @@ describe('launch', () => {
     // A WSL pane's record names the files main wrote for it: the worker
     // settings and this build's wmux server (botWorkerConnectors.os.test.ts
     // covers a native record's).
-    const botWorker = (dir: string) => {
+    const botWorker = (dir: string, fence?: { strength: 'full' | 'weaker' | 'off' }) => {
       const settings = path.join(dir, 'factory', 'worker-settings', '0123456789ab.json');
       const mcp = path.join(dir, 'factory', 'worker-mcp', '0123456789ab.json');
       fs.mkdirSync(path.dirname(settings), { recursive: true });
       fs.mkdirSync(path.dirname(mcp), { recursive: true });
       fs.writeFileSync(settings, JSON.stringify(buildBotWorkerSettings()));
       fs.writeFileSync(mcp, JSON.stringify({ mcpServers: { wmux: { type: 'stdio', command: '/bin/sh', args: ['-c', 'exec x'] } } }));
-      record(dir, { version: 1, sessions: { pane: { workspaceId: 'ws-task', at: 1, wsl: true, launch: { settingsFile: settings, mcpConfigFile: mcp, level: 'full' } } } });
+      record(dir, { version: 1, sessions: { pane: { workspaceId: 'ws-task', at: 1, wsl: true, launch: { settingsFile: settings, mcpConfigFile: mcp, level: 'full', ...(fence ? { fence } : {}) } } } });
       // Linux claude opens them through its /mnt mount (a Windows runner's path).
       return { settings, mcp, flags: `--settings="${toWslPath(settings) ?? settings}" --mcp-config="${toWslPath(mcp) ?? mcp}" --strict-mcp-config` };
     };
@@ -559,9 +559,9 @@ describe('launch', () => {
       expect(f.typed).toEqual([]);
     });
 
-    it('a phone resume of its exact session carries them too', async () => {
+    it('a phone resume of its exact session carries them too (unattended only when main fenced the session)', async () => {
       const f = fixture();
-      const files = botWorker(f.dir);
+      const files = botWorker(f.dir, { strength: 'weaker' });
       f.state.projector = FILE;
       f.state.pane!.meta.resumeBinding = { agent: 'claude', sessionId: SID, cwd: '/proj', transcriptPath: '/t.jsonl', ts: 1 };
       f.state.pane!.meta.cmd = '/bin/zsh';
@@ -574,6 +574,16 @@ describe('launch', () => {
         `cd -- '/proj' && claude ${files.flags} --resume ${SID} -- 'next'\r`,
         `cd -- '/proj' && claude ${files.flags} --resume ${SID} --dangerously-skip-permissions\r`,
       ]);
+    });
+
+    it('an unattended phone launch of a session main did not fence types nothing', async () => {
+      for (const fence of [undefined, { strength: 'off' as const }]) {
+        const f = fixture();
+        botWorker(f.dir, fence);
+        f.state.pane!.meta.cmd = '/bin/zsh';
+        expect(await f.bridge.launch({ id: 'pane', agent: 'claude', mode: 'bypass' })).toEqual({ ok: false, error: 'launch-unsupported', effect: 'none' });
+        expect(f.typed).toEqual([]);
+      }
     });
 
     it('an unreadable record, or one without launch files outside WSL, types nothing', async () => {

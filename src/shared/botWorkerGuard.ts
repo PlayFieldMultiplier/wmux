@@ -560,3 +560,110 @@ export function readBotWorkerSessions(dir: string): { sessions: Map<string, BotW
   }
   return { sessions: out };
 }
+
+// ── The worker fence (main/agents/workerFence.ts, botWorkerFence.ts) ────────
+// Its pure parts the daemon's phone launch checks too.
+
+/** The permission mode a launch line starts claude in, from its flags,
+ *  wherever they are: quoted words and the words inside them count too (a
+ *  wrapper's `sh -c "claude …"`), so a line that may run unattended is
+ *  never taken for one that does not. An unattended mode named anywhere
+ *  wins: the skip flag first (claude's own order), then bypassPermissions,
+ *  then auto; else the last mode named. Undefined: none named. */
+export function linePermissionMode(line: string): PermissionMode | undefined {
+  const words = tokenize(splitModelEnvMarker(line).command).flatMap((t) => t.value.split(/\s+/)).filter(Boolean);
+  if (words.some((v) => v === '--dangerously-skip-permissions' || v === '--allow-dangerously-skip-permissions')) return 'bypassPermissions';
+  const named: PermissionMode[] = [];
+  for (let i = 0; i < words.length; i++) {
+    const v = words[i];
+    const m = v === '--permission-mode' ? words[i + 1] : v.startsWith('--permission-mode=') ? v.slice('--permission-mode='.length) : undefined;
+    const known = PERMISSION_MODES.find((k) => k === m);
+    if (known) named.push(known);
+  }
+  if (named.includes('bypassPermissions')) return 'bypassPermissions';
+  if (named.includes('auto')) return 'auto';
+  return named[named.length - 1];
+}
+
+export const PERMISSION_MODES: readonly PermissionMode[] = ['bypassPermissions', 'acceptEdits', 'plan', 'auto', 'default'];
+
+/** The modes an unattended worker runs in: the fence is for them. */
+export function isFencedMode(mode: PermissionMode | undefined): boolean {
+  return mode === 'bypassPermissions' || mode === 'auto';
+}
+
+
+/** Top-level settings keys: a sandbox of their own, or hooks turned off. */
+export const WORKER_FENCE_REFUSED_SETTINGS_KEYS: readonly string[] = ['sandbox', 'disableAllHooks'];
+
+/** `permissions` keys claude also opens the sandbox's writes by. */
+export const WORKER_FENCE_REFUSED_PERMISSION_KEYS: readonly string[] = ['additionalDirectories'];
+
+/** An allow rule for a file tool: claude widens the sandbox's writes by it. */
+export const WORKER_FENCE_FILE_ALLOW_RULE = /^\s*(Read|Edit|Write|MultiEdit|NotebookEdit)\s*(\(|$)/;
+
+function isInside(child: string, parent: string): boolean {
+  return child === parent || child.startsWith(parent.endsWith(path.sep) ? parent : parent + path.sep);
+}
+
+
+/**
+ * Why the fence cannot start in `worktree` because of its own Claude files,
+ * or null: `.claude`, `.claude/settings.json`, `.claude/settings.local.json`
+ * or `.mcp.json` is a link that leads out of the worktree (or nowhere): a
+ * command inside the fence could have pointed it at settings of its own; or
+ * the project settings turn on a sandbox of their own, turn hooks off, open
+ * more folders (`permissions.additionalDirectories`) or allow a file tool,
+ * each of which claude would apply on top of the fence. Checked at every
+ * launch, resume and re-fire.
+ */
+export function workerFenceFolderRefusal(worktree: string): string | null {
+  let wt: string;
+  try {
+    wt = fs.realpathSync(worktree);
+  } catch {
+    return 'the worker\'s folder could not be read';
+  }
+  for (const rel of ['.claude', '.mcp.json', path.join('.claude', 'settings.json'), path.join('.claude', 'settings.local.json')]) {
+    const p = path.join(wt, rel);
+    let st: fs.Stats;
+    try {
+      st = fs.lstatSync(p);
+    } catch {
+      continue;
+    }
+    if (!st.isSymbolicLink()) continue;
+    let real: string;
+    try {
+      real = fs.realpathSync(p);
+    } catch {
+      return `${rel} is a link that leads nowhere`;
+    }
+    if (!isInside(real, wt)) return `${rel} is a link out of the worktree`;
+  }
+  for (const name of ['settings.json', 'settings.local.json']) {
+    let text: string;
+    try {
+      text = fs.readFileSync(path.join(wt, '.claude', name), 'utf8');
+    } catch {
+      continue;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return `.claude/${name} is not valid JSON`;
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return `.claude/${name} is not a settings object`;
+    const s = parsed as Record<string, unknown>;
+    const keys = WORKER_FENCE_REFUSED_SETTINGS_KEYS.filter((k) => k in s);
+    if (keys.length > 0) return `.claude/${name} sets ${keys.join(', ')}`;
+    const perms = s.permissions && typeof s.permissions === 'object' && !Array.isArray(s.permissions) ? s.permissions as Record<string, unknown> : {};
+    const wide = WORKER_FENCE_REFUSED_PERMISSION_KEYS.filter((k) => k in perms);
+    if (wide.length > 0) return `.claude/${name} sets permissions.${wide.join(', permissions.')}`;
+    if (Array.isArray(perms.allow) && perms.allow.some((r) => typeof r !== 'string' || WORKER_FENCE_FILE_ALLOW_RULE.test(r))) {
+      return `.claude/${name} allows a file tool, which widens the fence`;
+    }
+  }
+  return null;
+}

@@ -39,18 +39,15 @@ import path from 'node:path';
 import { tokenize, type PermissionMode } from '../../shared/agentResume';
 import { splitModelEnvMarker } from '../../shared/workerLaunch';
 import { contentFileName } from '../../shared/botWorkerMcp';
-import { WORKER_TEMP_NAME, namesClaude, workerTempRoot } from '../../shared/botWorkerGuard';
+import { PERMISSION_MODES, WORKER_TEMP_NAME, isClaudeLauncher, isFencedMode, linePermissionMode, namesClaude, workerFenceFolderRefusal, workerTempRoot } from '../../shared/botWorkerGuard';
 import { agentExecEnv } from '../../shared/execEnv';
 import { shellQuote } from '../../shared/resumeShell';
 import { getWmuxDir } from '../../daemon/config';
+import { getAccountStore } from '../account/accountStore';
 import { resolveClaudeExecutable } from '../claude/resolveClaudeExecutable';
-import { probeBotExecSupport } from '../factory/botExecSandbox';
+import { botExecPlatformRefusal, probeBotExecSupport } from '../factory/botExecSandbox';
 import {
-  WORKER_FENCE_FILE_ALLOW_RULE,
-  WORKER_FENCE_REFUSED_PERMISSION_KEYS,
-  WORKER_FENCE_REFUSED_SETTINGS_KEYS,
   buildWorkerFence,
-  isWithin,
   workerFenceCredentialPaths,
   workerFenceHookCommand,
   workerFenceHookScript,
@@ -59,24 +56,8 @@ import {
 
 // ── Which launches ───────────────────────────────────────────────────────────
 
-/** The permission mode a launch line starts claude in, from its flags,
- *  wherever they are: quoted words and the words inside them count too (a
- *  wrapper's `sh -c "claude …"`), so a line that may run unattended is
- *  never taken for one that does not. The skip flag wins over any
- *  `--permission-mode`, as it does for claude. Undefined: none named. */
-export function linePermissionMode(line: string): PermissionMode | undefined {
-  const words = tokenize(splitModelEnvMarker(line).command).flatMap((t) => t.value.split(/\s+/)).filter(Boolean);
-  if (words.some((v) => v === '--dangerously-skip-permissions' || v === '--allow-dangerously-skip-permissions')) return 'bypassPermissions';
-  let mode: PermissionMode | undefined;
-  for (let i = 0; i < words.length; i++) {
-    const v = words[i];
-    const named = v === '--permission-mode' ? words[i + 1] : v.startsWith('--permission-mode=') ? v.slice('--permission-mode='.length) : undefined;
-    if (named !== undefined) mode = PERMISSION_MODES.find((m) => m === named) ?? mode;
-  }
-  return mode;
-}
-
-const PERMISSION_MODES: readonly PermissionMode[] = ['bypassPermissions', 'acceptEdits', 'plan', 'auto', 'default'];
+// The pure parts are shared (the daemon's phone launch reads them too).
+export { isFencedMode, linePermissionMode, workerFenceFolderRefusal };
 
 function readJson(p: string): Record<string, unknown> | null {
   try {
@@ -88,26 +69,60 @@ function readJson(p: string): Record<string, unknown> | null {
 }
 
 /** The `permissions.defaultMode` claude would start a line with no mode flag
- *  in: the folder's local, then project, then the user's settings. Undefined
- *  when none sets a known one. */
-export function settingsDefaultMode(cwd: string | undefined, home: string, env: Readonly<Record<string, string | undefined>>): PermissionMode | undefined {
-  const configDir = env.CLAUDE_CONFIG_DIR && path.isAbsolute(env.CLAUDE_CONFIG_DIR) ? env.CLAUDE_CONFIG_DIR : path.join(home, '.claude');
+ *  in, from the folder's local and project settings and every user settings
+ *  folder the pane may run with (`configDirs`): an unattended mode named in
+ *  any of them wins, else the first mode named. Undefined: none. */
+export function settingsDefaultMode(cwd: string | undefined, configDirs: readonly string[]): PermissionMode | undefined {
   const files = [
     ...(cwd ? [path.join(cwd, '.claude', 'settings.local.json'), path.join(cwd, '.claude', 'settings.json')] : []),
-    path.join(configDir, 'settings.json'),
+    ...configDirs.map((d) => path.join(d, 'settings.json')),
   ];
+  const named: PermissionMode[] = [];
   for (const f of files) {
     const perms = readJson(f)?.permissions;
     const mode = perms && typeof perms === 'object' && !Array.isArray(perms) ? (perms as Record<string, unknown>).defaultMode : undefined;
     const known = PERMISSION_MODES.find((m) => m === mode);
-    if (known) return known;
+    if (known) named.push(known);
   }
-  return undefined;
+  return named.find(isFencedMode) ?? named[0];
 }
 
-/** The modes an unattended worker runs in: the fence is for them. */
-export function isFencedMode(mode: PermissionMode | undefined): boolean {
-  return mode === 'bypassPermissions' || mode === 'auto';
+/** The user settings a fenced worker still needs although it loads none
+ *  (`--setting-sources project`): how it reaches its model (`env`, `model`,
+ *  `apiKeyHelper`, the AWS helpers), from the owner's own file, which no
+ *  worker can write. Variables that would move the fence's temp folder or
+ *  touch the sandbox are left out. */
+export const WORKER_FENCE_CARRIED_USER_KEYS: readonly string[] = ['env', 'model', 'apiKeyHelper', 'awsAuthRefresh', 'awsCredentialExport'];
+
+export function carriedUserSettings(configDir: string, fenceEnv: Readonly<Record<string, string>>): Record<string, unknown> {
+  const user = readJson(path.join(configDir, 'settings.json'));
+  if (!user) return {};
+  const out: Record<string, unknown> = {};
+  for (const k of WORKER_FENCE_CARRIED_USER_KEYS) {
+    const v = user[k];
+    if (v === undefined) continue;
+    if (k === 'env') {
+      if (!v || typeof v !== 'object' || Array.isArray(v)) continue;
+      const env: Record<string, string> = {};
+      for (const [name, value] of Object.entries(v as Record<string, unknown>)) {
+        if (typeof value !== 'string' || name in fenceEnv || /SANDBOX|TMPDIR/i.test(name)) continue;
+        env[name] = value;
+      }
+      if (Object.keys(env).length > 0) out.env = env;
+    } else if (typeof v === 'string') {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
+/** Every account's Claude config folder (accountStore), [] when unknown. */
+function accountConfigDirsDefault(): string[] {
+  try {
+    return getAccountStore().listAccounts().map((a) => a.configDir).filter((d): d is string => typeof d === 'string' && path.isAbsolute(d));
+  } catch {
+    return [];
+  }
 }
 
 // ── Platform support and the self-test ──────────────────────────────────────
@@ -115,13 +130,16 @@ export function isFencedMode(mode: PermissionMode | undefined): boolean {
 export type WorkerFenceSelfTest = { ok: true } | { ok: false; reason: string };
 
 export type WorkerFenceSupport =
-  | { capable: false; reason: string }
+  /** `transient`: the platform has the sandbox, but the check could not
+   *  finish (claude did not answer `--version`): no launch, not a weaker one. */
+  | { capable: false; reason: string; transient?: true }
   | { capable: true; exe: string; version: string; selfTest: WorkerFenceSelfTest };
 
 export interface WorkerFenceSupportDeps {
   /** The claude binary workers run (default: resolveClaudeExecutable). */
   exe?: () => string | null;
   probe?: typeof probeBotExecSupport;
+  platformRefusal?: typeof botExecPlatformRefusal;
   selfTest?: (exe: string) => Promise<WorkerFenceSelfTest>;
   platform?: NodeJS.Platform;
 }
@@ -152,7 +170,12 @@ export async function workerFenceSupport(deps: WorkerFenceSupportDeps = {}): Pro
   }
   const support = await (deps.probe ?? probeBotExecSupport)(exe, { platform });
   if (!support.ok || !exe) {
-    lastSupport = { capable: false, reason: support.ok ? 'no claude executable' : support.reason };
+    const reason = support.ok ? 'no claude executable' : support.reason;
+    // Not capable: the platform has no sandbox, or claude is too old for it.
+    // Anything else on a platform that has one is not a reason to weaken.
+    const capableHere = (deps.platformRefusal ?? botExecPlatformRefusal)({ platform }) === null;
+    const tooOld = / is older than /.test(reason);
+    lastSupport = capableHere && !tooOld ? { capable: false, reason, transient: true } : { capable: false, reason };
     return lastSupport;
   }
   const key = `${platform}\0${exe}\0${support.version}`;
@@ -401,7 +424,7 @@ export function writeWorkerFenceHookScript(dir: string): string {
  * when neither can be named plainly.
  */
 export function fenceLauncher(dir: string, exe: string): string | null {
-  const plain = (p: string) => /^\/[A-Za-z0-9._/-]+$/.test(p) && path.basename(p).replace(/\.exe$/i, '') === 'claude';
+  const plain = (p: string) => /^\/[A-Za-z0-9._/-]+$/.test(p) && isClaudeLauncher(p);
   if (plain(exe)) return exe;
   const link = path.join(dir, 'factory', 'claude-bin', contentFileName(exe).replace(/\.json$/, ''), 'claude');
   if (!plain(link)) return null;
@@ -544,65 +567,6 @@ export function readWorktreeGitFacts(worktree: string, expected: { gitCommonDir?
   };
 }
 
-// ── The worktree's own Claude files ──────────────────────────────────────────
-
-/**
- * Why the fence cannot start in `worktree` because of its own Claude files,
- * or null: `.claude`, `.claude/settings.json`, `.claude/settings.local.json`
- * or `.mcp.json` is a link that leads out of the worktree (or nowhere): a
- * command inside the fence could have pointed it at settings of its own; or
- * the project settings turn on a sandbox of their own, turn hooks off, open
- * more folders (`permissions.additionalDirectories`) or allow a file tool,
- * each of which claude would apply on top of the fence. Checked at every
- * launch, resume and re-fire.
- */
-export function workerFenceFolderRefusal(worktree: string): string | null {
-  let wt: string;
-  try {
-    wt = fs.realpathSync(worktree);
-  } catch {
-    return 'the worker\'s folder could not be read';
-  }
-  for (const rel of ['.claude', '.mcp.json', path.join('.claude', 'settings.json'), path.join('.claude', 'settings.local.json')]) {
-    const p = path.join(wt, rel);
-    let st: fs.Stats;
-    try {
-      st = fs.lstatSync(p);
-    } catch {
-      continue;
-    }
-    if (!st.isSymbolicLink()) continue;
-    let real: string;
-    try {
-      real = fs.realpathSync(p);
-    } catch {
-      return `${rel} is a link that leads nowhere`;
-    }
-    if (!isWithin(real, wt)) return `${rel} is a link out of the worktree`;
-  }
-  for (const name of ['settings.json', 'settings.local.json']) {
-    const text = readText(path.join(wt, '.claude', name));
-    if (text === null) continue;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      return `.claude/${name} is not valid JSON`;
-    }
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return `.claude/${name} is not a settings object`;
-    const s = parsed as Record<string, unknown>;
-    const keys = WORKER_FENCE_REFUSED_SETTINGS_KEYS.filter((k) => k in s);
-    if (keys.length > 0) return `.claude/${name} sets ${keys.join(', ')}`;
-    const perms = s.permissions && typeof s.permissions === 'object' && !Array.isArray(s.permissions) ? s.permissions as Record<string, unknown> : {};
-    const wide = WORKER_FENCE_REFUSED_PERMISSION_KEYS.filter((k) => k in perms);
-    if (wide.length > 0) return `.claude/${name} sets permissions.${wide.join(', permissions.')}`;
-    if (Array.isArray(perms.allow) && perms.allow.some((r) => typeof r !== 'string' || WORKER_FENCE_FILE_ALLOW_RULE.test(r))) {
-      return `.claude/${name} allows a file tool, which widens the fence`;
-    }
-  }
-  return null;
-}
-
 // ── The fence for one launch ─────────────────────────────────────────────────
 
 /** How a launch is fenced, recorded with its session (a later launch of it
@@ -664,12 +628,14 @@ export interface WorkerFenceAttachInput {
 export function attachWorkerFence(input: WorkerFenceAttachInput): WorkerFenceAttach {
   const home = input.home ?? os.homedir();
   const env = input.env ?? process.env;
+  const accountDirs = input.accountConfigDirs ?? accountConfigDirsDefault();
+  const userConfigDir = env.CLAUDE_CONFIG_DIR && path.isAbsolute(env.CLAUDE_CONFIG_DIR) ? env.CLAUDE_CONFIG_DIR : path.join(home, '.claude');
   // A line with no mode flag starts in the mode its settings name.
-  const mode = linePermissionMode(input.line) ?? settingsDefaultMode(input.cwd, home, env);
+  const mode = linePermissionMode(input.line) ?? settingsDefaultMode(input.cwd, [userConfigDir, path.join(home, '.claude'), ...accountDirs]);
   if (!isFencedMode(mode)) return { kind: 'none' };
   const wanted = !input.switchedOff || (input.recorded !== undefined && input.recorded.strength !== 'off');
   if (!wanted) return { kind: 'fence', strength: 'off', settings: statusLine('the worker fence is off for this workspace') };
-  const credentials = workerFenceCredentialPaths({ botDir: input.cwd ?? input.dir, wmuxDir: input.dir, env, home, ...(input.accountConfigDirs ? { accountConfigDirs: input.accountConfigDirs } : {}), ...(input.platform ? { platform: input.platform } : {}) });
+  const credentials = workerFenceCredentialPaths({ botDir: input.cwd ?? input.dir, wmuxDir: input.dir, env, home, accountConfigDirs: accountDirs, ...(input.platform ? { platform: input.platform } : {}) });
   if (input.wsl) {
     // The distro's claude: the permission denies (rules by `~/`, its own
     // home) and the marker. The hook's runtime does not run there.
@@ -680,6 +646,7 @@ export function attachWorkerFence(input: WorkerFenceAttachInput): WorkerFenceAtt
   if (!input.cwd) throw fenceError('the worker has no folder to fence');
   const support = input.support;
   if (!support) throw fenceError('this computer\'s fence support was not checked yet; try again');
+  if (!support.capable && support.transient) throw fenceError(`this computer's fence support could not be checked (${support.reason}); try again`);
   if (!support.capable && input.recorded?.strength === 'full') throw fenceError(`this worker started inside the full fence, which cannot run now (${support.reason})`);
   const refusal = workerFenceFolderRefusal(input.cwd);
   if (refusal) throw fenceError(refusal);
@@ -694,6 +661,10 @@ export function attachWorkerFence(input: WorkerFenceAttachInput): WorkerFenceAtt
     worktree, workerTempDir: temp.real, ...git, platformCapable: support.capable, repoTestWritePaths: [],
     permissionMode: mode ?? 'bypassPermissions', hookCommand, credentialPaths: credentials, home,
   });
+  // How the worker reaches its model, from the owner's user settings it
+  // no longer loads; the fence's own values win.
+  const carried = carriedUserSettings(userConfigDir, fence.settings.env as Record<string, string>);
+  fence.settings = { ...carried, ...fence.settings, env: { ...(carried.env as Record<string, string> | undefined), ...(fence.settings.env as Record<string, string>) } };
   if (!support.capable) {
     return { kind: 'fence', strength: 'weaker', tempDir, settings: { ...fence.settings, ...statusLine(`weaker worker fence: no OS sandbox here (${support.reason})`) } };
   }

@@ -833,7 +833,8 @@ function recordLaterFence(where: string, sessionId: string, files: BotWorkerLaun
   const was = rec.launch?.fence;
   if (was && rank[was.strength] >= rank[fence.strength] && was.tempDir === fence.tempDir) return;
   const next = new Map(map);
-  next.set(sessionId, { ...rec, launch: { ...(rec.launch ?? files), fence: { strength: was && rank[was.strength] > rank[fence.strength] ? was.strength : fence.strength, ...(fence.tempDir ? { tempDir: fence.tempDir } : {}) } } });
+  // This launch's files: the fenced ones the running claude reads.
+  next.set(sessionId, { ...rec, launch: { ...files, fence: { strength: was && rank[was.strength] > rank[fence.strength] ? was.strength : fence.strength, ...(fence.tempDir ? { tempDir: fence.tempDir } : {}) } } });
   try {
     saveSessions(dir, next);
   } catch (err) {

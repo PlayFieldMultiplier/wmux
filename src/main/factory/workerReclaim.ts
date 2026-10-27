@@ -1612,7 +1612,10 @@ export interface WorkerResumePorts {
   listSessions: () => Promise<WorkerSessionInfo[]>;
   /** Type the launch line + Enter into the pane through the bot worker
    *  launch guard; false when nothing was typed. */
-  typeLine: (sessionId: string, line: string) => boolean | Promise<boolean>;
+  typeLine: (sessionId: string, line: string) => boolean;
+  /** Settle what typing `line` needs that takes time (the worker fence's
+   *  support check), before the last checks that the resume still stands. */
+  prepareLine?: (line: string) => Promise<void>;
   /** Each task's launch generation on disk (workerSlots.ts): a resume typed
    *  into the worker's pane is a new launch, recorded before the line is
    *  typed. Absent: not recorded. */
@@ -1908,6 +1911,7 @@ async function resumeOnce(
   if (!(await rebindTaskTo(ports, rec.taskId, workerWorkspaceOf(rec)))) {
     return refuse('not_reopened', 'the task could not be moved to the worker\'s pane; try again');
   }
+  await ports.prepareLine?.(line);
   if (stopped()) return refuse('not_now', 'the bot\'s work was stopped while this resume was under way');
   const late = stillOk?.() ?? null;
   if (late) return refuse('not_now', late);
@@ -1923,7 +1927,7 @@ async function resumeOnce(
   }
   let typed = false;
   try {
-    typed = await ports.typeLine(pane.sessionId, line);
+    typed = ports.typeLine(pane.sessionId, line);
   } catch {
     typed = false;
   }
