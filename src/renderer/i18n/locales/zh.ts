@@ -5012,6 +5012,8 @@ export const zh = {
   'claudeIntegration.scheduledRetry': "临时错误后重试计划运行",
   'claudeIntegration.scheduledRetryDesc': "如果计划运行的回合因网络或提供商服务器错误而失败，等待 5 分钟后发送一条继续消息。默认开启；每个计划可单独关闭。",
   'claudeIntegration.scheduledRetryUnknown': "尚不清楚：正在等待 wmux 后台服务。",
+  'claudeIntegration.usageReserve': "保留使用量余量",
+  'claudeIntegration.usageReserveDesc': "当 Claude 账号的 5 小时用量达到 85% 或以上时，不再启动计划运行、扇出工作者和机器人工作者，把最后 15% 留给你。它们会等到窗口重置后再开始；你输入的内容从不受影响。默认关闭。",
   'schedules.retryTransient': "临时错误后重试一次",
   'schedules.retryTransientHint': "遇到网络或提供商服务器错误时，等待 5 分钟后发送一条继续消息。不会重新发送提示词。",
   'schedules.retryTransientGlobalHint': "仅在“设置 → Claude 集成”中开启“临时错误后重试计划运行”时生效。",

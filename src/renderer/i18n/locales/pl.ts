@@ -4103,6 +4103,8 @@ export const pl = {
   'claudeIntegration.scheduledRetry': "Ponawiaj zaplanowane uruchomienia po chwilowym błędzie",
   'claudeIntegration.scheduledRetryDesc': "Gdy tura zaplanowanego uruchomienia nie powiedzie się z powodu błędu sieci lub serwera dostawcy, odczekaj 5 minut i wyślij jedną wiadomość z prośbą o kontynuację. Domyślnie włączone; każdy harmonogram może to wyłączyć.",
   'claudeIntegration.scheduledRetryUnknown': "Jeszcze nieznane: oczekiwanie na usługę w tle wmux.",
+  'claudeIntegration.usageReserve': "Zachowaj rezerwę użycia",
+  'claudeIntegration.usageReserveDesc': "Zaplanowane uruchomienia, workery fan-out i workery botów nie startują, dopóki 5-godzinne użycie konta Claude wynosi 85% lub więcej, aby ostatnie 15% zostało dla Ciebie. Czekają na reset okna; to, co wpisujesz, nigdy nie jest wstrzymywane. Domyślnie wyłączone.",
   'claudeIntegration.resumeOnStart': 'Automatycznie wznawiaj panele Claude Code i Codex przy starcie',
   'claudeIntegration.resumeOnStartDesc': 'Po restarcie wpisz polecenie wznowienia w panelach, w których działał Claude Code lub Codex, zamiast czekać na przycisk Wznów. Domyślnie wyłączone.',
   'usageLimit.waiting': 'Oczekiwanie',

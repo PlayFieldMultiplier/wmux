@@ -604,6 +604,10 @@ export const IPC = {
   // "지금 새로고침" button). Triggers an immediate poll regardless of
   // interval timing. Caller enforces a UI-side cooldown (5 min).
   USAGE_REFRESH: 'usage:refresh',
+  // Usage reserve (main/usage/usageReserve.ts): renderer ↔ main read and
+  // write of the setting, which main persists and enforces.
+  USAGE_RESERVE_GET: 'usage:reserve:get',
+  USAGE_RESERVE_SET: 'usage:reserve:set',
   // Pane usage-limit pause (shared/usageLimit). Main → renderer push of one
   // pane's limit (`{ ptyId, limit: PaneUsageLimit | null }`, null = cleared),
   // renderer → main list on boot, and renderer → main edits (auto-resume,

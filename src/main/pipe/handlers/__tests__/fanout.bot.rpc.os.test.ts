@@ -90,6 +90,8 @@ interface Rig {
 }
 
 function rig(role: BotRole, over: Partial<BotProfile> = {}, opts: {
+  /** The usage reserve's hold for a workspace. Omitted = no reserve. */
+  reserve?: (workspaceId: string) => { account: string; untilMs: number } | null;
   builtinPresets?: boolean; connectors?: () => ConnectorStore | null; platform?: NodeJS.Platform; presets?: FanoutPreset[];
   /** Signed-in connections: the OAuth service, the sandbox probe, the conversation's mark and the service's tool list. */
   gateway?: {
@@ -190,6 +192,7 @@ function rig(role: BotRole, over: Partial<BotProfile> = {}, opts: {
     ...(opts.gateway ? { gatewayOAuth: opts.gateway.oauth, gatewaySandbox: opts.gateway.sandbox, conversationTainted: opts.gateway.conversationTainted } : {}),
     ...(opts.gateway?.listTools ? { gatewayListTools: opts.gateway.listTools } : {}),
     bot: () => port,
+    ...(opts.reserve ? { usageReserveHold: opts.reserve, noteUsageReserveHeld: () => undefined } : {}),
     wmuxDir: () => WMUX_DIR,
     botDefaultBranch: async (root) => {
       defaultBranchReads.push({ root, startedBefore: start.mock.calls.length });
@@ -596,6 +599,21 @@ describe('task.fanout.start — bot origin', () => {
     expect(await getWorkflowFanout()!({ idempotencyKey: 'wake:w-1:1', titles: ['step'], preset: 'default' }, botCtx('maintainer'), binding)).toMatchObject({ ok: true });
     r.port.refusal = 'the owner stopped this bot'; r.approve(); await r.flush();
     expect(r.start).not.toHaveBeenCalled(); expect(failed).toHaveBeenCalledWith('the owner stopped this bot');
+  });
+
+  it('the usage reserve holds a bot\'s fan-out for after the reset and starts nothing', async () => {
+    const r = rig('lead', {}, { reserve: () => ({ account: 'default', untilMs: Date.now() + 60_000 }) });
+    const held: HeldFanoutRequest[] = [];
+    r.port.heldByUsageReserve = (_b, request) => {
+      held.push(request);
+      return true;
+    };
+    const err = errorOf(await r.call({ idempotencyKey: 'wake:w-1:1', titles: ['fix it'], prompt: 'fix', preset: 'repro' }, botCtx('lead')));
+    expect(err.code).toBe('RESOURCE_EXHAUSTED');
+    expect(err.message).toMatch(/the request is held and this bot is woken with it/);
+    expect(held.map((h) => h.args.titles)).toEqual([['fix it']]);
+    expect(r.start).not.toHaveBeenCalled();
+    expect(r.port.seen.size).toBe(0);
   });
 
   it('refuses a workflow at capacity without holding an unbound retry', async () => {

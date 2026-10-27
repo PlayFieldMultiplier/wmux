@@ -106,6 +106,9 @@ export interface HeldFanoutPorts {
   /** The wmux-wide live fan-out cap (FANOUT_LIVE_TASK_CAP). Absent: not
    *  checked here (the bot's retry is refused and held again). */
   liveLimit?: () => number;
+  /** Whether the usage reserve holds the account a workspace's workers run
+   *  on: a held request waits for it to lift (the recheck timer sees it). */
+  reserveHeld?: (workspaceId: string) => boolean;
   now?: () => number;
   newId?: () => string;
   log?: (line: string) => void;
@@ -369,6 +372,7 @@ export class HeldFanouts {
           if (this.wake(h)) woken.push(h);
           continue;
         }
+        if (this.ports.reserveHeld?.(h.workspaceId)) continue;
         const taken = botTaken.get(h.botId) ?? 0;
         // A bot slot handed out in this pass is a live wmux task too.
         const wmux = liveLimit !== undefined && open.live !== undefined ? { live: open.live + factoryTaken, limit: liveLimit } : undefined;

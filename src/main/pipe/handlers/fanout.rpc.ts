@@ -117,6 +117,7 @@ import {
   type FanoutPreset,
 } from '../../../shared/fanoutPreset';
 import { validateFanoutTaskGraph, type FanoutTaskGraph } from '../../../shared/fanoutTaskGraph';
+import { noteUsageReserveHeld, usageReserveHoldForWorkspace, usageReserveRefusalText, type UsageReserveHold } from '../../usage/usageReserve';
 import { botTemplate, type BotBinding, type BotProfile } from '../../../shared/bot';
 import { SHARED_SURFACE } from '../../../shared/botSurface';
 import { WAKE_LIMITS, botFanoutIdempotencyKey, type HeldFanoutArgs, type HeldWakeKind, type WakeItem } from '../../../shared/wake';
@@ -708,6 +709,11 @@ export interface FanOutRpcDeps {
   connectors?: () => ConnectorStore | null;
   /** The platform workers run on (default: this process's). */
   workerPlatform?: NodeJS.Platform;
+  /** The usage reserve's hold on the account a workspace's workers run on
+   *  (default: main/usage/usageReserve.ts). */
+  usageReserveHold?: (workspaceId: string) => UsageReserveHold | null;
+  /** A launch was held by the reserve: the owner is told once per hold. */
+  noteUsageReserveHeld?: (hold: UsageReserveHold) => void;
   /** The connections' OAuth service, for signed-in connections (default:
    *  main/connectors/workerGateway.ts workerGatewayOAuth). */
   gatewayOAuth?: () => GatewayOAuth | null;
@@ -776,6 +782,10 @@ export interface FanOutBotPort {
    *  report it, and hold `request` so the bot is woken with it when a slot
    *  frees (factory/heldFanouts.ts). Returns whether it was held. */
   workersFull(bot: BotBinding, full: WorkerSlotsFull, request?: HeldFanoutRequest): boolean;
+  /** The usage reserve holds the account its workers run on: hold `request`
+   *  so the bot is woken with it once the reserve lifts (heldFanouts.ts).
+   *  Returns whether it was held. */
+  heldByUsageReserve?(bot: BotBinding, request: HeldFanoutRequest): boolean;
   /** Whether this fan-out key was accepted before (durable across restarts). */
   fanoutKeySeen(key: string): boolean;
   recordFanoutKey(key: string): void;
@@ -934,6 +944,14 @@ function defaultBotPort(): FanOutBotPort | null {
     },
     budgetExhausted: (bot, reason) => {
       emitBotHook({ type: 'bot.budget_exhausted', botId: bot.botId, workspaceId: bot.workspaceId, reason, at: Date.now() });
+    },
+    heldByUsageReserve: (bot, request) => {
+      try {
+        return getHeldFanouts()?.hold({ botId: bot.botId, workspaceId: bot.workspaceId, ...request }) != null;
+      } catch (err) {
+        console.warn(`[factory] a fan-out of bot ${bot.botId} could not be held for the usage reserve: ${String(err)}`);
+        return false;
+      }
     },
     workersFull: (bot, full, request) => {
       let held = false;
@@ -1656,6 +1674,25 @@ export function registerFanOutRpc(
         && (deps.conversationTainted ?? ((id: string) => conversationMarks(id)?.tainted !== false))(bot.botId),
     });
     if (gatewayRefusal) return deny('FAILED_PRECONDITION', gatewayRefusal);
+
+    // ── Usage reserve ─────────────────────────────────────────────────────
+    // Workers run unattended, so none start while the account they run on is
+    // in the 5h share its owner keeps (main/usage/usageReserve.ts). A bot's
+    // request is held and the bot woken with it once the reserve lifts; any
+    // other caller is refused with the reset time, to relay or retry.
+    const reserve = (deps.usageReserveHold ?? usageReserveHoldForWorkspace)(bot ? bot.workspaceId : callerWorkspaceId);
+    if (reserve) {
+      (deps.noteUsageReserveHeld ?? noteUsageReserveHeld)(reserve);
+      const held = !!bot && !workflow && botPort?.heldByUsageReserve?.(bot, {
+        args: heldFanoutArgs(params),
+        threadId: botNoticeThread,
+        tainted: gatewayConnectors.length > 0 ? gatewayWakeTainted : botWakeTainted,
+        guest: false,
+        ...(botWakeHandoff ? { handoffId: botWakeHandoff } : {}),
+        ...(gatewayConnectors.length > 0 && botWakeKind ? { wakeKind: botWakeKind } : {}),
+      }) === true;
+      return deny('RESOURCE_EXHAUSTED', usageReserveRefusalText(reserve.untilMs, Date.now(), held));
+    }
 
     // ── Global caps (live + rolling hour), reserved in this same tick ────
     // Over a cap is a refusal, never a queued prompt: with approval off by

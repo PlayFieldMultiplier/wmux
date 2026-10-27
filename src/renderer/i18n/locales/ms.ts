@@ -687,6 +687,8 @@ export const ms = {
   'claudeIntegration.scheduledRetry': "Cuba semula larian berjadual selepas ralat sementara",
   'claudeIntegration.scheduledRetryDesc': "Jika giliran larian berjadual gagal kerana ralat rangkaian atau pelayan pembekal, tunggu 5 minit dan hantar satu mesej teruskan. Hidup secara lalai; setiap jadual boleh mematikannya.",
   'claudeIntegration.scheduledRetryUnknown': "Belum diketahui: menunggu perkhidmatan latar wmux.",
+  'claudeIntegration.usageReserve': "Simpan rizab penggunaan",
+  'claudeIntegration.usageReserveDesc': "Larian berjadual, pekerja fan-out dan pekerja bot tidak bermula selagi penggunaan 5 jam akaun Claude berada pada 85% atau lebih, supaya 15% terakhir kekal untuk anda. Ia menunggu sehingga tetingkap ditetapkan semula; apa yang anda taip tidak pernah ditahan. Dimatikan secara lalai.",
   'schedules.retryTransient': "Cuba semula sekali selepas ralat sementara",
   'schedules.retryTransientHint': "Apabila berlaku ralat rangkaian atau pelayan pembekal, tunggu 5 minit dan hantar satu mesej teruskan. Gesaan tidak dihantar semula.",
   'schedules.retryTransientGlobalHint': "Hanya terpakai apabila “Cuba semula larian berjadual selepas ralat sementara” dihidupkan dalam Tetapan → Integrasi Claude.",

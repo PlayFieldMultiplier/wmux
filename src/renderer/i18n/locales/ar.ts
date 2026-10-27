@@ -683,6 +683,8 @@ export const ar = {
   'claudeIntegration.scheduledRetry': "إعادة محاولة التشغيلات المجدولة بعد خطأ مؤقت",
   'claudeIntegration.scheduledRetryDesc': "إذا فشل دور تشغيل مجدول بسبب خطأ في الشبكة أو في خادم المزوّد، انتظر 5 دقائق ثم أرسل رسالة متابعة واحدة. مفعّل افتراضيًا؛ ويمكن إيقافه لكل جدول.",
   'claudeIntegration.scheduledRetryUnknown': "غير معروف بعد: في انتظار خدمة wmux في الخلفية.",
+  'claudeIntegration.usageReserve': "الاحتفاظ باحتياطي استخدام",
+  'claudeIntegration.usageReserveDesc': "لا تبدأ التشغيلات المجدولة وعمّال التوزيع وعمّال البوتات ما دام استخدام حساب Claude خلال 5 ساعات عند 85% أو أكثر، لتبقى آخر 15% لك. تنتظر حتى تُعاد تهيئة النافذة؛ وما تكتبه لا يُوقف أبدًا. معطّل افتراضيًا.",
   'schedules.retryTransient': "إعادة المحاولة مرة واحدة بعد خطأ مؤقت",
   'schedules.retryTransientHint': "عند حدوث خطأ في الشبكة أو في خادم المزوّد، انتظر 5 دقائق ثم أرسل رسالة متابعة واحدة. لا يُعاد إرسال الموجّه.",
   'schedules.retryTransientGlobalHint': "يسري فقط عند تفعيل «إعادة محاولة التشغيلات المجدولة بعد خطأ مؤقت» في الإعدادات ← تكامل Claude.",

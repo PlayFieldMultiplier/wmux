@@ -25,7 +25,7 @@
 
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
-import type { AgentSlug } from '../../shared/agentIdentity';
+import { agentRow, type AgentSlug } from '../../shared/agentIdentity';
 import {
   AUTOMATION_AGENT_CAPS,
   AUTOMATION_CAPABILITY_BROWSER_IDENTITY,
@@ -175,6 +175,12 @@ export interface AutomationEnginePorts {
   ) => Promise<SessionPromptScheduleResult>;
   /** Whether the session's own screen shows a folder-trust dialog (#2802). Absent = not known. */
   folderTrustState?: (id: string) => Promise<'trust' | 'clear' | 'unknown'>;
+  /**
+   * The usage reserve's hold on a Claude account ('default' or an account
+   * id): when its 5h window resets (ms), or null when unattended starts may
+   * go ahead. Absent = no reserve.
+   */
+  reserveHold?: (account: string) => number | null;
 }
 
 /** `held`: waiting out a temporary provider error; `retrying`: its one continue is being sent. */
@@ -213,6 +219,11 @@ const CONFIRMED_DECISIONS: ReadonlySet<string> = new Set(['emit', 'dedup']);
 
 const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** The usage key a run's account goes by: its account id, or 'default' for the default login. */
+function reserveAccount(automation: Automation): string {
+  return automation.action.accountId ?? 'default';
+}
+
 export class AutomationEngine {
   private automations: Automation[] = [];
   private attention: AutomationAttention[] = [];
@@ -227,6 +238,13 @@ export class AutomationEngine {
    * the first skipped occurrence, or at boot.
    */
   private readonly announced = new Set<string>();
+  /**
+   * Scheduled occurrences the usage reserve holds, automation id → its
+   * scheduledFor. Memory only: the automation's cursor stays on the held
+   * occurrence, so after a restart it is met like any occurrence that came
+   * due while the daemon was down.
+   */
+  private readonly reserveHeld = new Map<string, number>();
   private booting = true;
   private lastTickAt: number | null = null;
   private tickTimer: NodeJS.Timeout | null = null;
@@ -764,10 +782,20 @@ export class AutomationEngine {
     let runsDirty = false;
     for (const automation of this.automations) {
       if (!automation.enabled) {
+        this.reserveHeld.delete(automation.id);
         if (automation.nextRunAt !== null) {
           automation.nextRunAt = null;
           automationsDirty = true;
         }
+        continue;
+      }
+      const heldFor = this.reserveHeld.get(automation.id);
+      if (heldFor !== undefined) {
+        if (this.reserveUntil(automation, now) !== null) continue;
+        this.reserveHeld.delete(automation.id);
+        this.ports.log('info', `[automation] ${automation.id}: usage reserve lifted, starting the held run`);
+        this.detach(this.startRun(automation, heldFor, 'scheduled')
+          .catch((err) => this.ports.log('error', `[automation] start failed: ${String(err)}`)));
         continue;
       }
       const plan = planDue({
@@ -786,7 +814,22 @@ export class AutomationEngine {
         automation.nextRunAt = plan.nextRunAt;
         automationsDirty = true;
       }
-      if (plan.fire !== null) {
+      const reserveUntil = plan.fire === null ? null : this.reserveUntil(automation, now);
+      if (plan.fire !== null && reserveUntil !== null) {
+        // Held, not failed: it starts on the first tick after the reset. The
+        // cursor stays on it, so a restart meanwhile treats it as missed.
+        this.reserveHeld.set(automation.id, plan.fire);
+        automation.nextRunAt = plan.fire;
+        automationsDirty = true;
+        this.ports.log('info', `[automation] ${automation.id}: held by the usage reserve until ${new Date(reserveUntil).toISOString()}`);
+        this.ports.emit({
+          type: 'reserve-held',
+          automationId: automation.id,
+          automationName: automation.name,
+          account: reserveAccount(automation),
+          untilMs: reserveUntil,
+        });
+      } else if (plan.fire !== null) {
         this.detach(this.startRun(automation, plan.fire, 'scheduled')
           .catch((err) => this.ports.log('error', `[automation] start failed: ${String(err)}`)));
       }
@@ -799,6 +842,13 @@ export class AutomationEngine {
       void this.persistAutomations();
       this.emitAutomations();
     }
+  }
+
+  /** The usage reserve's hold on this automation's account, or null: only for an agent whose usage wmux reads. */
+  private reserveUntil(automation: Automation, now: number): number | null {
+    if (agentRow(automation.action.agent)?.usageReserve !== true || !this.ports.reserveHold) return null;
+    const until = this.ports.reserveHold(reserveAccount(automation));
+    return until !== null && until > now ? until : null;
   }
 
   private lastScheduledFor(automationId: string): number | null {

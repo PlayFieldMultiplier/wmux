@@ -211,6 +211,7 @@ function UsageCard({
           aria-label={t('claudeIntegration.usageLimit.autoResume')}
         />
       </SettingRow>
+      <UsageReserveRow t={t} />
       <ScheduledRetryRow t={t} />
       <SettingRow
         id="clauderesumeonstart"
@@ -265,6 +266,44 @@ export function ScheduledRetryRow({ t }: { t: (key: string, vars?: Record<string
         onCheckedChange={(next) => sync.current?.change(next)}
         aria-label={t('claudeIntegration.scheduledRetry')}
         data-scheduled-retry={on === null ? 'unknown' : on ? 'on' : 'off'}
+      />
+    </SettingRow>
+  );
+}
+
+/**
+ * Usage reserve: unattended starts wait while a Claude account's 5h usage is
+ * in its last 15%. Main keeps and enforces it; the switch stays disabled
+ * until main has answered, and goes back to the value main reports after a
+ * write.
+ */
+export function UsageReserveRow({ t }: { t: (key: string, vars?: Record<string, string | number>) => string }) {
+  const [on, setOn] = useState<boolean | null>(null);
+  useEffect(() => {
+    let live = true;
+    void window.electronAPI?.usage?.reserve?.get().then((r) => { if (live) setOn(r.enabled); }).catch(() => undefined);
+    return () => { live = false; };
+  }, []);
+  const change = (next: boolean) => {
+    setOn(null);
+    void window.electronAPI.usage.reserve.set(next)
+      .catch(() => undefined)
+      .then(() => window.electronAPI.usage.reserve.get())
+      .then((r) => setOn(r.enabled))
+      .catch(() => setOn(null));
+  };
+  return (
+    <SettingRow
+      id="usagereserve"
+      label={t('claudeIntegration.usageReserve')}
+      description={t('claudeIntegration.usageReserveDesc')}
+    >
+      <Switch
+        checked={on === true}
+        disabled={on === null}
+        onCheckedChange={change}
+        aria-label={t('claudeIntegration.usageReserve')}
+        data-usage-reserve={on === null ? 'unknown' : on ? 'on' : 'off'}
       />
     </SettingRow>
   );

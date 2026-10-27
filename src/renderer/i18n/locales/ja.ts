@@ -735,6 +735,8 @@ export const ja = {
   'claudeIntegration.scheduledRetry': "一時的なエラーの後、スケジュール実行を再試行",
   'claudeIntegration.scheduledRetryDesc': "スケジュール実行のターンがネットワークまたはプロバイダーのサーバーエラーで失敗した場合、5分待って続行メッセージを1回送信します。既定でオン。スケジュールごとにオフにできます。",
   'claudeIntegration.scheduledRetryUnknown': "まだ不明です: wmux のバックグラウンドサービスの応答を待っています。",
+  'claudeIntegration.usageReserve': "使用量の予備を残す",
+  'claudeIntegration.usageReserveDesc': "Claude アカウントの5時間の使用量が85%以上になると、予約実行、ファンアウトのワーカー、ボットのワーカーを新しく開始せず、残り15%をあなたのために残します。枠がリセットされると開始し、あなたが入力する操作は止めません。既定ではオフです。",
   'schedules.retryTransient': "一時的なエラーの後に1回再試行",
   'schedules.retryTransientHint': "ネットワークまたはプロバイダーのサーバーエラーの場合、5分待って続行メッセージを1回送信します。プロンプトは再送されません。",
   'schedules.retryTransientGlobalHint': "設定 → Claude 連携の「一時的なエラーの後、スケジュール実行を再試行」がオンのときだけ有効です。",

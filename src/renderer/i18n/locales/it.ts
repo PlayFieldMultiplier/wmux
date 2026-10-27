@@ -686,6 +686,8 @@ export const it = {
   'claudeIntegration.scheduledRetry': "Riprova le esecuzioni pianificate dopo un errore temporaneo",
   'claudeIntegration.scheduledRetryDesc': "Se il turno di un'esecuzione pianificata fallisce per un errore di rete o del server del provider, attendi 5 minuti e invia un messaggio per continuare. Attivo per impostazione predefinita; ogni pianificazione può disattivarlo.",
   'claudeIntegration.scheduledRetryUnknown': "Non ancora noto: in attesa del servizio in background di wmux.",
+  'claudeIntegration.usageReserve': "Mantieni una riserva di utilizzo",
+  'claudeIntegration.usageReserveDesc': "Le esecuzioni pianificate, i worker di fan-out e i worker dei bot non partono finché l'utilizzo di 5 ore di un account Claude è all'85% o oltre, così l'ultimo 15% resta a te. Attendono il ripristino della finestra; ciò che digiti non viene mai trattenuto. Disattivato per impostazione predefinita.",
   'schedules.retryTransient': "Riprova una volta dopo un errore temporaneo",
   'schedules.retryTransientHint': "In caso di errore di rete o del server del provider, attendi 5 minuti e invia un messaggio per continuare. Il prompt non viene reinviato.",
   'schedules.retryTransientGlobalHint': "Vale solo se «Riprova le esecuzioni pianificate dopo un errore temporaneo» è attivo in Impostazioni → Integrazione Claude.",

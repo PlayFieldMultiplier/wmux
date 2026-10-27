@@ -683,6 +683,8 @@ export const de = {
   'claudeIntegration.scheduledRetry': "Geplante Läufe nach einem vorübergehenden Fehler wiederholen",
   'claudeIntegration.scheduledRetryDesc': "Scheitert der Turn eines geplanten Laufs an einem Netzwerk- oder Serverfehler des Anbieters, 5 Minuten warten und eine Fortsetzen-Nachricht senden. Standardmäßig an; jeder Zeitplan kann es abschalten.",
   'claudeIntegration.scheduledRetryUnknown': "Noch unbekannt: Warten auf den wmux-Hintergrunddienst.",
+  'claudeIntegration.usageReserve': "Nutzungsreserve behalten",
+  'claudeIntegration.usageReserveDesc': "Geplante Läufe, Fan-out-Worker und Bot-Worker starten nicht, solange die 5-Stunden-Nutzung eines Claude-Kontos bei 85 % oder mehr liegt, damit die letzten 15 % für dich bleiben. Sie warten, bis das Fenster zurückgesetzt wird; was du eingibst, wird nie angehalten. Standardmäßig aus.",
   'schedules.retryTransient': "Nach einem vorübergehenden Fehler einmal wiederholen",
   'schedules.retryTransientHint': "Bei einem Netzwerk- oder Serverfehler des Anbieters 5 Minuten warten und eine Fortsetzen-Nachricht senden. Der Prompt wird nicht erneut gesendet.",
   'schedules.retryTransientGlobalHint': "Gilt nur, solange „Geplante Läufe nach einem vorübergehenden Fehler wiederholen“ unter Einstellungen → Claude-Integration an ist.",

@@ -88,6 +88,22 @@ describe('HeldFanouts', () => {
     expect(r.queue.list({ botId: BOT_A })).toHaveLength(1);
   });
 
+  it('a request held while the usage reserve holds its workspace waits for the reserve, with a slot free', async () => {
+    const r = rig(dir);
+    let reserved = true;
+    r.ports.reserveHeld = (workspaceId) => reserved && workspaceId === 'ws-1';
+    expect(r.held.hold(request(BOT_A, 'verify #7'))).not.toBeNull();
+    releaseHeldFanouts();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(r.queue.list({ botId: BOT_A })).toEqual([]);
+    expect(r.held.list(BOT_A)).toHaveLength(1);
+    // The window resets: the recheck timer sees it with nothing else moving.
+    reserved = false;
+    await vi.advanceTimersByTimeAsync(61_000);
+    expect(r.queue.list({ botId: BOT_A })).toHaveLength(1);
+    expect(r.held.list()).toEqual([]);
+  });
+
   it('a request held at the wmux-wide live cap (the owner\'s fan-outs fill it) is woken only once a live slot frees', async () => {
     const r = rig(dir);
     let live = 8;
