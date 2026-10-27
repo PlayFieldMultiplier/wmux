@@ -215,7 +215,7 @@ import { gitDirMapperFor, gitWatchCwdFor } from './gitWatchCwd';
 import { randomUUID } from 'node:crypto';
 import { monitorEventLoopDelay, performance as nodePerformance } from 'node:perf_hooks';
 import { DAEMON_EXIT_ALREADY_RUNNING, ENV_KEYS, dataSuffix, isBrainPty } from '../shared/constants';
-import { toResumeCommand, resumeGrammarFor, resumeOfferForRecovered, mergeResumeBinding, isProvisionalCapture, transcriptRelocated, normalizeResumeCwd, isUsableResumeBinding, isPlausibleResumeSessionId } from '../shared/agentResume';
+import { toResumeCommand, resumeGrammarFor, resumeOfferForRecovered, mergeResumeBinding, isProvisionalCapture, hasAuthoritativeTranscript, transcriptRelocated, normalizeResumeCwd, isUsableResumeBinding, isPlausibleResumeSessionId } from '../shared/agentResume';
 import type { ResumeBinding } from '../shared/agentResume';
 import { agentDisplayToSlug, agentRow, AGENT_SLUG_SET, isAgentSlug } from '../shared/agentIdentity';
 import type { AgentEventStatus } from '../main/pty/AgentDetector';
@@ -1641,7 +1641,7 @@ function ingestResumeSpool(
     // transcript-derived binding for a different session (codex P2, mirrors the
     // live setResumeBinding guard).
     if (prev && (prev.sessionId === binding.sessionId || prev.ts >= binding.ts
-        || (prev.transcriptPath && !binding.transcriptPath))) { drop(); continue; }
+        || (hasAuthoritativeTranscript(prev) && !hasAuthoritativeTranscript(binding)))) { drop(); continue; }
 
     // D5: a purged origin transcript makes `--resume` a silent "No conversation
     // found." — drop the record (the pill can still degrade to --continue).
@@ -4202,10 +4202,6 @@ function registerRpcHandlers(
     // A binding without its folder can never be resumed (`--resume` is
     // cwd-scoped) and must not be stored: refuse it like an empty one.
     if (!managed || !isUsableResumeBinding(resumeBinding)) return false;
-    // A capture without a path may start a transcript search, whose find
-    // re-enters below: it keeps this capture's exactness (#2730).
-    if (resumeBinding.transcriptPath) discoveryPaneExact.delete(id);
-    else discoveryPaneExact.set(id, paneExact);
     // #1823: the RPC and main's hooks.signal fallback reach here without
     // HookIngest's checks; an id the agent cannot resume is never stored.
     if (!isPlausibleResumeSessionId(resumeBinding.agent, resumeBinding.sessionId)) {
@@ -4234,6 +4230,11 @@ function registerRpcHandlers(
     const ownWsl = keepOwnWslTranscriptPath(vetted, managed.meta.wslTarget);
     if (ownWsl.dropped) log('warn', `[resume] refused WSL transcript path for ${id}`);
     vetted = ownWsl.binding;
+    // A capture left without a path (none sent, or one refused above) may
+    // start a transcript search, whose find re-enters below: it keeps this
+    // capture's exactness (#2730).
+    if (hasAuthoritativeTranscript(vetted)) discoveryPaneExact.delete(id);
+    else discoveryPaneExact.set(id, paneExact);
     const p = { id, resumeBinding: vetted };
     // Resume-chip edge trigger: a hook reaching this RPC proves claude is
     // running in the pane RIGHT NOW — attach the process watch (no-op while a
@@ -4269,9 +4270,10 @@ function registerRpcHandlers(
       const decision = admitCodexCapture(id, prev, p.resumeBinding, managed.meta.env, transcriptDiscovery);
       if (!decision.apply) return true;
       p.resumeBinding = decision.binding;
-    } else if (p.resumeBinding.transcriptPath) {
+    } else if (hasAuthoritativeTranscript(p.resumeBinding)) {
       // The hook is authoritative. Once it has delivered a real path there is
-      // nothing left to discover.
+      // nothing left to discover (a WSL pane's is inside its distro, where the
+      // search could never find it).
       transcriptDiscovery?.cancel(id);
     } else if (p.resumeBinding.agent === 'claude') {
       transcriptDiscovery?.start(id, p.resumeBinding.sessionId, p.resumeBinding.cwd, p.resumeBinding.agent);
@@ -4390,6 +4392,11 @@ function registerRpcHandlers(
       getSessionEnv: (id) => sessionManager.getSession(id)?.meta.env,
       // A WSL pane's transcript is read through this distro's share.
       getWslTarget: (id) => sessionManager.getSession(id)?.meta.wslTarget,
+      // A dead pane's distro share is never touched (it would boot the distro).
+      isPaneAlive: (id) => {
+        const state = sessionManager.getSession(id)?.meta.state;
+        return state === 'attached' || state === 'detached';
+      },
       // A6 — unicast. An append carries the pane's conversation content, so it
       // goes only to the sockets that subscribed; broadcast would hand every
       // authenticated pipe client the whole transcript AND put an oversized
@@ -5161,6 +5168,7 @@ function registerRpcHandlers(
     const srcOffset = typeof params['srcOffset'] === 'number' ? params['srcOffset'] : -1;
     const n = typeof params['n'] === 'number' ? params['n'] : -1;
     const eventId = typeof params['eventId'] === 'string' ? params['eventId'] : undefined;
+    if (id) await projector.ready(id);
     if (!id || !readDaemonAgentState(id).agentName && !projector.status(id).available && chatSessions?.has(id)) return null;
     return projector.codeBlock(id, { srcOffset, n, ...(eventId ? { eventId } : {}) });
   });

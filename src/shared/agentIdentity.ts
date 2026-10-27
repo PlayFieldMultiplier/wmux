@@ -232,7 +232,7 @@ export interface AgentIdentityRow {
   readonly teammateTranscripts?: true;
   /** In a WSL pane its transcript is `~/.claude/projects/<project>/<id>.jsonl`
    *  inside the distro, read through the distro share
-   *  (daemon/hooks/transcriptPathGuard, resolveWslTranscriptPath). */
+   *  (daemon/hooks/transcriptPathGuard, proveWslTranscriptPath). */
   readonly wslTranscript?: true;
   /** MCP registration target (src/shared/mcpTargets.ts). */
   readonly mcp?: AgentMcpTargetSpec;

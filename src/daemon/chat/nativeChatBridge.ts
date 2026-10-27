@@ -98,7 +98,12 @@ export interface NativeChatBridgeDeps<P extends ChatPane> {
   agentState(id: string): ChatAgentState;
   /** Chat-refined agent state (reads the transcript tail for Claude/Codex). */
   chatAgentState(id: string): ChatAgentState;
-  projector: { status(id: string): TranscriptStatus; snapshot(id: string, opts?: { before: number }): TranscriptPage | null };
+  projector: {
+    status(id: string): TranscriptStatus;
+    snapshot(id: string, opts?: { before: number }): TranscriptPage | null;
+    /** Bring a WSL pane's transcript proof up to date before a read (TranscriptProjector.ready). */
+    ready?(id: string): Promise<void>;
+  };
   terminalChat(): Pick<TerminalChatService, 'read' | 'send' | 'subscribe' | 'unsubscribe'> & Partial<Pick<TerminalChatService, 'inspect' | 'abort'>> | null;
   managed(): Pick<ChatSessionService, 'has' | 'status' | 'snapshot' | 'send' | 'conversationEpoch'> | null;
   /**
@@ -472,6 +477,8 @@ export function createChatBridge<P extends ChatPane>(deps: NativeChatBridgeDeps<
     const inspected = service?.inspect ? await service.inspect(id) : { read: await service?.read(id) ?? null };
     const read = 'read' in inspected ? inspected.read : null;
     if (read) return { kind: 'native', read };
+    // Every file-backed read below goes through this route first.
+    await deps.projector.ready?.(id);
     const live = deps.agentState(id);
     if (slugOf(live) === 'opencode') return { kind: 'opencode', ...('failure' in inspected ? { failure: inspected.failure } : {}) };
     if (!live.agentName && !deps.projector.status(id).available && deps.managed()?.has(id)) return { kind: 'managed' };

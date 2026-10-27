@@ -4216,6 +4216,7 @@ export class WebTerminalServer {
     }
     const projector = this.deps.projector?.() ?? null;
     if (!projector) return { kind: 'skip', reason: 'unavailable' };
+    await projector.ready?.(sessionId);
     // The first page is read here so an unresolvable pane is skipped with the
     // resolver's own reason, not a generic one.
     const first = projector.searchPage(sessionId);
