@@ -33,6 +33,13 @@ export interface BrowserHelpTableOptions {
   isOwner: (clientId: string) => boolean;
   /** The frames one change produced, in order. */
   emit: (frames: PhoneBrowserHelpFrame[]) => void;
+  /**
+   * The open rows after each accepted table and each decision taken here,
+   * with how the rows that left ended when known: the phone push
+   * (push/browserHelpPush.ts). Not called when the publisher disconnects.
+   * A throw is logged, never passed to the table's caller.
+   */
+  onRows?: (rows: readonly BrowserHelpTableRow[], closed: ReadonlyMap<string, Settled>) => void;
   log?: (level: 'info' | 'warn', message: string) => void;
   /** Injectable clock. */
   now?: () => number;
@@ -72,6 +79,7 @@ export class BrowserHelpTable {
     this.rows = next;
     this.publisher = clientId;
     if (frames.length) this.opts.emit(frames);
+    this.notifyRows([...next.values()], states);
     return { ok: true, accepted: rows.length };
   }
 
@@ -117,6 +125,15 @@ export class BrowserHelpTable {
     while (this.decided.size > RECENTLY_CLOSED_MAX) this.decided.delete(this.decided.values().next().value as string);
     this.rows.delete(requestId);
     this.opts.emit([this.closeFrame(row, state)]);
+    this.notifyRows([...this.rows.values()], new Map([[requestId, state]]));
+  }
+
+  private notifyRows(rows: BrowserHelpTableRow[], closed: ReadonlyMap<string, Settled>): void {
+    try {
+      this.opts.onRows?.(rows, closed);
+    } catch (error) {
+      this.opts.log?.('warn', `[browser-help] push routing failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   private closeFrame(row: BrowserHelpTableRow, state: Settled | undefined): PhoneBrowserHelpFrame {

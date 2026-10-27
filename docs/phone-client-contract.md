@@ -2770,6 +2770,89 @@ Handle it as the other retractions: silent, no category, drop any local copy
 of the card. The limits of bot approvals (daemon restart, a push is a nudge)
 apply the same way, with `botPromptPush` for the capability.
 
+### Browser help — an agent handing a browser step back to you
+
+A browser help request (*Browser help requests*, `/api/browser-help`) is
+pushed when it opens, **only to a device that can answer it from the app**.
+That is the rule of the decision route, all at once:
+
+1. the server runs with `--allow-transcript` (the request exists because of
+   an agent's prompt, and the list that shows it needs that consent);
+2. the server runs with `--allow-input`;
+3. the attached desktop takes a phone's decision;
+4. the device's registration listed `capabilities: ["browserHelpPush"]`;
+5. the device's input grant is on **and was set explicitly** (a read-only
+   device, or one paired before grants existed, gets nothing).
+
+A push presence held is released only to the devices that still pass this
+rule then, and not at all once the request's deadline has passed. With no such
+device it is not sent, and it is considered again at the desktop's next list.
+
+A request from a brain pane is never pushed: the phone may not answer it, so
+a banner could only dead-end. Sealed plaintext:
+
+```json
+{
+  "title": "Browser help needed",
+  "body": "An agent is waiting for you to finish a step in the browser.",
+  "approvalKind": "browser_help",
+  "browserHelpId": "5d0e9b82-…",
+  "workspaceId": "<workspace id>",
+  "surfaceId": "surf-…",
+  "requiresInAppChoice": true
+}
+```
+
+- `title` and `body` are always this fixed text (English, as every push
+  body; an app may show its own localized words for `approvalKind`
+  `browser_help`). Never the prompt, which is the agent's to write and stays
+  off the lock screen, and never the workspace name.
+- **Never an `approvalId`.** Open the request's card in the app: read it with
+  `GET /api/browser-help` and answer with `POST …/decision`.
+  `requiresInAppChoice` is always true.
+- `surfaceId` is absent when the agent named no tab.
+- No `risk`: presence holds these like a `normal` approval.
+- They never cost an approval its place: when the daemon's push queues are
+  full, a browser help push (or its retraction) is the one dropped, and at
+  most 8 are queued or held at a time.
+- APNs collapse id: `bh-<browserHelpId>`.
+
+When the request closes, however it ended, a retraction follows under the
+same collapse id, **to the devices the push went to** (a device that no longer
+lists `browserHelpPush` is skipped):
+
+```json
+{
+  "title": "Browser help closed",
+  "body": "No longer waiting — nothing to do.",
+  "kind": "approval_retraction",
+  "approvalKind": "browser_help",
+  "retractsApprovalId": "5d0e9b82-…",
+  "workspaceId": "<workspace id>",
+  "resolution": "completed"
+}
+```
+
+- `resolution` is `completed`, `continued` (Done), `cancelled` or
+  `timed_out`. A request the desktop's list dropped without saying how reads
+  `timed_out` past its deadline and `cancelled` before it.
+- `retractsApprovalId` is the request id, not a pane approval's: match it with
+  `approvalKind`. Handle it as the other retractions: silent, no category,
+  drop any local copy of the card. No retraction follows a push that never
+  left (presence still held it, or the held push was dropped).
+
+A request is pushed at most once. When no device could answer it as it
+opened (no grant yet, no server running), it is considered again each time
+the desktop next sends its list, and pushed then if a device qualifies. The
+desktop sending its list again, including after it reconnects, never pushes
+a request a second time. When the desktop app goes away, a banner already
+sent stays: a desktop that returns still listing the request keeps it, one
+that returns without it retracts it, and with no desktop at all it is
+retracted as `timed_out` at the request's deadline. (The `browser.help`
+frames close those requests at once; the list is the record.) The
+daemon-restart limit and "a push is a nudge" of bot approvals apply the same
+way, with `browserHelpPush` for the capability.
+
 ---
 
 ### Registering
@@ -2809,7 +2892,8 @@ it. That is deliberate — the token now on file belongs to the build that just
 called, not to the one before it.
 
 `capabilities` lists the push kinds this build can open: `"botApprovalPush"`
-(Bot approvals, above) and `"botPromptPush"` (Bot prompts, above). A push that needs a capability goes only to devices
+(Bot approvals, above), `"botPromptPush"` (Bot prompts, above) and
+`"browserHelpPush"` (Browser help, above). A push that needs a capability goes only to devices
 that listed it. Like the rest of the registration it is replaced wholesale, so
 send the full list every time; leaving it out clears it. Entries that are not
 names (`^[A-Za-z][A-Za-z0-9_]{0,63}$`) are dropped rather than refused, and
@@ -5341,6 +5425,10 @@ how it ended. No prompt and no origin: fetch the list for those. Live only
 on every reconnect. Sent only under `--allow-transcript`. When the desktop
 disconnects, its requests close with no `state`; they open again if it
 returns with them still open.
+
+**Push**: a device that registered `browserHelpPush` and may answer gets a
+push when a request opens and a retraction when it closes (§7, *Browser
+help*).
 
 | Response | Meaning |
 | --- | --- |

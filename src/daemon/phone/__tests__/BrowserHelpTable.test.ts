@@ -97,4 +97,24 @@ describe('BrowserHelpTable', () => {
     t.set('main', { requests: [row()] });
     expect(t.lookup('req-1')).toEqual({ row: row() });
   });
+
+  it('hands the push its open rows after a table or a decision, never a decided row, with how rows ended', () => {
+    const seen: Array<{ ids: string[]; closed: Array<[string, string]> }> = [];
+    const t = new BrowserHelpTable({
+      firstParty: () => true, isOwner: () => true, emit: () => undefined, now: () => 2_000,
+      onRows: (rows, closed) => seen.push({ ids: rows.map((r) => r.requestId), closed: [...closed] }),
+    });
+    t.set('main', { requests: [row(), row({ requestId: 'req-2' })] });
+    t.closeDecided('req-1', 'continued');
+    // Main's next table, computed before the decision, still lists req-1.
+    t.set('main', { requests: [row(), row({ requestId: 'req-2' })], closed: [{ requestId: 'req-3', state: 'timed_out' }] });
+    expect(seen).toEqual([
+      { ids: ['req-1', 'req-2'], closed: [] },
+      { ids: ['req-2'], closed: [['req-1', 'continued']] },
+      { ids: ['req-2'], closed: [['req-3', 'timed_out']] },
+    ]);
+    // A disconnect is not a table: the push hears of it from the daemon.
+    t.onClientClose('main');
+    expect(seen).toHaveLength(3);
+  });
 });
