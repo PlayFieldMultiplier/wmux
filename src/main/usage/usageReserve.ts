@@ -13,6 +13,7 @@ import path from 'node:path';
 import { atomicReadJSONSync, atomicWriteJSON } from '../../daemon/util/atomicWrite';
 import type { UsageSnapshot } from '../claude/UsageApi';
 import { formatResetDuration } from '../../shared/usageLimit';
+import { SAME_WINDOW_SLACK_SEC } from '../claude/usageMerge';
 
 /** Share of the 5h window kept for the person. Fixed in v1. */
 export const RESERVE_PCT = 15;
@@ -20,8 +21,11 @@ export const RESERVE_PCT = 15;
 export const RESERVE_THRESHOLD_PCT = 100 - RESERVE_PCT;
 
 export const USAGE_RESERVE_FILENAME = 'usage-reserve.json';
-/** A push the daemon did not take is sent again after this. */
+/** A push the daemon did not take is sent again after this, at most PUSH_RETRY_MAX times in a row. */
 export const PUSH_RETRY_MS = 30 * 1000;
+export const PUSH_RETRY_MAX = 10;
+/** Two resets this close are one window (the usage sources round differently). */
+const SAME_RESET_MS = SAME_WINDOW_SLACK_SEC * 1000;
 
 /** One account's hold: its usage key ('default' or an account id) and when its 5h window resets (ms). */
 export interface UsageReserveHold {
@@ -60,12 +64,20 @@ export class UsageReserve {
   private readonly filePath: string;
   private readonly now: () => number;
   private on: boolean | null = null;
+  /**
+   * The last hold seen per account, kept on disk. An account with no reading
+   * yet (main just started; readings live in memory) keeps it until its
+   * reset, so a relaunch never clears a hold the daemon holds.
+   */
+  private readonly known = new Map<string, number>();
+  private savedKnown = '[]';
   /** The holds last pushed, as JSON: none until a connect pushes them. */
   private lastPushed = '[]';
-  /** `account:untilMs` of holds the owner was told about. */
-  private readonly told = new Set<string>();
+  /** The reset each account's owner was last told about. */
+  private readonly told = new Map<string, number>();
   private writes: Promise<void> = Promise.resolve();
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
+  private failedPushes = 0;
 
   constructor(private readonly deps: UsageReserveDeps) {
     this.filePath = path.join(deps.wmuxDir, USAGE_RESERVE_FILENAME);
@@ -74,18 +86,26 @@ export class UsageReserve {
 
   enabled(): boolean {
     if (this.on === null) {
+      this.on = false;
       try {
-        this.on = atomicReadJSONSync<{ enabled?: unknown }>(this.filePath)?.enabled === true;
+        const file = atomicReadJSONSync<{ enabled?: unknown; holds?: unknown }>(this.filePath);
+        this.on = file?.enabled === true;
+        for (const h of Array.isArray(file?.holds) ? file.holds : []) {
+          const { account, untilMs } = (h ?? {}) as Record<string, unknown>;
+          if (typeof account === 'string' && account && typeof untilMs === 'number' && Number.isFinite(untilMs)) this.known.set(account, untilMs);
+        }
+        this.savedKnown = this.knownJson();
       } catch {
-        this.on = false;
+        /* off, nothing known */
       }
     }
     return this.on;
   }
 
   setEnabled(on: boolean): Promise<void> {
+    this.enabled();
     const write = this.writes.then(async () => {
-      await atomicWriteJSON(this.filePath, { enabled: on });
+      await atomicWriteJSON(this.filePath, { enabled: on, holds: this.knownList() });
       this.on = on;
       this.deps.onSettingChange?.(on);
       this.refresh();
@@ -97,9 +117,24 @@ export class UsageReserve {
   /** The hold on one usage key, or null. */
   holdFor(account: string): UsageReserveHold | null {
     if (!this.enabled()) return null;
-    const entry = this.deps.snapshots().find(([key]) => key === account);
-    const untilMs = reserveUntilMs(entry?.[1] ?? null, this.now());
+    const now = this.now();
+    const snapshot = this.deps.snapshots().find(([key]) => key === account)?.[1] ?? null;
+    const untilMs = snapshot ? reserveUntilMs(snapshot, now) : this.carried(account, now);
     return untilMs === null ? null : { account, untilMs };
+  }
+
+  /** A hold seen before for an account with no reading now, while its reset is ahead. */
+  private carried(account: string, now: number): number | null {
+    const until = this.known.get(account);
+    return until !== undefined && until > now ? until : null;
+  }
+
+  private knownList(): UsageReserveHold[] {
+    return [...this.known].map(([account, untilMs]) => ({ account, untilMs })).sort((a, b) => a.account.localeCompare(b.account));
+  }
+
+  private knownJson(): string {
+    return JSON.stringify(this.knownList());
   }
 
   /** The hold on the account a workspace's launches run on, or null. */
@@ -111,9 +146,21 @@ export class UsageReserve {
     if (!this.enabled()) return [];
     const now = this.now();
     const out: UsageReserveHold[] = [];
+    const read = new Set<string>();
     for (const [account, snapshot] of this.deps.snapshots()) {
+      if (!snapshot) continue;
+      read.add(account);
       const untilMs = reserveUntilMs(snapshot, now);
-      if (untilMs !== null) out.push({ account, untilMs });
+      if (untilMs !== null) {
+        out.push({ account, untilMs });
+        this.known.set(account, untilMs);
+      } else {
+        this.known.delete(account);
+      }
+    }
+    for (const [account, untilMs] of this.known) {
+      if (untilMs <= now) this.known.delete(account);
+      else if (!read.has(account)) out.push({ account, untilMs });
     }
     return out.sort((a, b) => a.account.localeCompare(b.account));
   }
@@ -121,6 +168,7 @@ export class UsageReserve {
   /** Re-read the holds after a usage or setting change; push them when they changed. */
   refresh(): void {
     const holds = this.holds();
+    this.saveKnown();
     const key = JSON.stringify(holds);
     if (key === this.lastPushed) return;
     this.lastPushed = key;
@@ -134,9 +182,15 @@ export class UsageReserve {
     } catch {
       delivered = false;
     }
+    if (delivered) this.failedPushes = 0;
     if (delivered || this.lastPushed !== key) return;
-    // Not taken (no daemon, or it refused): forget it so it is sent again.
+    // Not taken (no daemon, or it refused): forget it so it is sent again,
+    // a bounded number of times (an older daemon never takes it).
     this.lastPushed = '';
+    if (++this.failedPushes >= PUSH_RETRY_MAX) {
+      if (this.failedPushes === PUSH_RETRY_MAX) this.deps.log?.('[usageReserve] the daemon is not taking the holds; trying again on the next change or connect');
+      return;
+    }
     if (this.retryTimer) return;
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null;
@@ -148,18 +202,26 @@ export class UsageReserve {
   /** Push the holds whatever was pushed before (the daemon (re)connected). */
   pushNow(): void {
     this.lastPushed = '';
+    this.failedPushes = 0;
     this.refresh();
+  }
+
+  /** Keep the last holds on disk when they changed (rare: a hold starts or ends). */
+  private saveKnown(): void {
+    const json = this.knownJson();
+    if (json === this.savedKnown) return;
+    this.savedKnown = json;
+    const holds = this.knownList();
+    const write = this.writes.then(() => atomicWriteJSON(this.filePath, { enabled: this.on === true, holds }));
+    this.writes = write.catch((err) => this.deps.log?.(`[usageReserve] holds not saved: ${String(err)}`));
   }
 
   /** Something unattended was held: tell the owner, once per hold. */
   noteHeld(account: string, untilMs: number): void {
-    const now = this.now();
-    for (const key of this.told) {
-      if (Number(key.slice(key.lastIndexOf(':') + 1)) <= now) this.told.delete(key);
-    }
-    const key = `${account}:${untilMs}`;
-    if (this.told.has(key)) return;
-    this.told.add(key);
+    const told = this.told.get(account);
+    // The same window, as another source rounds its reset: already told.
+    if (told !== undefined && Math.abs(told - untilMs) <= SAME_RESET_MS) return;
+    this.told.set(account, untilMs);
     try {
       this.deps.notify?.(account, untilMs);
     } catch (err) {

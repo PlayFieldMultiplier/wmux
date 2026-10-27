@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { UsageSnapshot } from '../../claude/UsageApi';
 import { RESERVE_THRESHOLD_PCT, UsageReserve, reserveUntilMs, usageReserveRefusalText, type UsageReserveHold } from '../usageReserve';
 
@@ -68,6 +68,26 @@ describe('UsageReserve', () => {
     first.r.noteHeld('default', RESET_SEC * 1000);
     first.r.noteHeld('acct-1', RESET_SEC * 1000);
     expect(first.told).toEqual([['default', RESET_SEC * 1000], ['acct-1', RESET_SEC * 1000]]);
+  });
+
+  it('a relaunch with no readings yet keeps the last hold until its reset, instead of clearing it', async () => {
+    const first = reserve([['default', snap(90)]]);
+    await first.r.setEnabled(true);
+    first.r.refresh();
+    await vi.waitFor(() => {
+      expect(JSON.parse(fs.readFileSync(path.join(first.dir, 'usage-reserve.json'), 'utf8')).holds).toHaveLength(1);
+    }, { timeout: 5_000 });
+    const pushed: UsageReserveHold[][] = [];
+    const relaunched = new UsageReserve({
+      wmuxDir: first.dir,
+      snapshots: () => [['default', null]],
+      accountOfWorkspace: () => 'default',
+      push: (holds) => { pushed.push(holds); },
+      now: () => NOW,
+    });
+    relaunched.pushNow();
+    expect(pushed).toEqual([[{ account: 'default', untilMs: RESET_SEC * 1000 }]]);
+    expect(relaunched.holdForWorkspace('ws-any')).toEqual({ account: 'default', untilMs: RESET_SEC * 1000 });
   });
 
   it('sends again a push the daemon did not take', async () => {

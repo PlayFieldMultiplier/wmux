@@ -91,7 +91,7 @@ describe('HeldFanouts', () => {
   it('a request held while the usage reserve holds its workspace waits for the reserve, with a slot free', async () => {
     const r = rig(dir);
     let reserved = true;
-    r.ports.reserveHeld = (workspaceId) => reserved && workspaceId === 'ws-1';
+    r.ports.reserveHeld = (h) => reserved && h.workspaceId === 'ws-1';
     expect(r.held.hold(request(BOT_A, 'verify #7'))).not.toBeNull();
     releaseHeldFanouts();
     await vi.advanceTimersByTimeAsync(1_000);

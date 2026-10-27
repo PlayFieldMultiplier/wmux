@@ -1346,9 +1346,30 @@ describe('AutomationEngine — usage reserve', () => {
     ]);
     // Past the reset: started for the occurrence it was held at, beyond its grace.
     h.clock.t = until + MIN;
+    until = null;
     h.engine.tick();
     await settleLaunch(h);
     expect(h.engine.listRuns()).toMatchObject([{ trigger: 'scheduled', scheduledFor: due, state: 'running' }]);
+  });
+
+  it('when a newer occurrence came due while held, that one runs and the held one is recorded missed', async () => {
+    let until: number | null = null;
+    const h = harness({ ports: { reserveHold: () => until } });
+    await h.engine.start({ timers: false });
+    const a = await h.engine.create(draft());
+    if (!a.ok || a.automation.nextRunAt === null) throw new Error();
+    const due = a.automation.nextRunAt;
+    h.clock.t = due + 10 * MIN;
+    until = h.clock.t + 25 * 60 * MIN;
+    h.engine.tick();
+    const nextDue = due + 24 * 60 * MIN;
+    h.clock.t = nextDue + 10 * MIN;
+    until = null;
+    h.engine.tick();
+    await settleLaunch(h);
+    const runs = h.engine.listRuns();
+    expect(runs.find((r) => r.state !== 'skipped')).toMatchObject({ scheduledFor: nextDue, state: 'running' });
+    expect(runs.find((r) => r.state === 'skipped')).toMatchObject({ scheduledFor: due, reason: 'missed' });
   });
 
   it('a held occurrence meets a restart as one that came due while the daemon was down', async () => {

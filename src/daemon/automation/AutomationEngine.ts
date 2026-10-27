@@ -794,14 +794,7 @@ export class AutomationEngine {
         continue;
       }
       const heldFor = this.reserveHeld.get(automation.id);
-      if (heldFor !== undefined) {
-        if (this.reserveUntil(automation, now) !== null) continue;
-        this.reserveHeld.delete(automation.id);
-        this.ports.log('info', `[automation] ${automation.id}: usage reserve lifted, starting the held run`);
-        this.detach(this.startRun(automation, heldFor, 'scheduled')
-          .catch((err) => this.ports.log('error', `[automation] start failed: ${String(err)}`)));
-        continue;
-      }
+      if (heldFor !== undefined && this.reserveUntil(automation) !== null) continue;
       const plan = planDue({
         trigger: automation.trigger,
         nextRunAt: automation.nextRunAt,
@@ -810,7 +803,16 @@ export class AutomationEngine {
         booting,
         limit: AUTOMATION_DEFAULTS.runHistoryPerAutomation,
       });
+      // A held run whose reserve lifted: the newest occurrence still in its
+      // grace runs if one came due meanwhile, else the held one does; those
+      // in between are recorded as missed.
+      const fire = heldFor !== undefined ? plan.fire ?? heldFor : plan.fire;
+      if (heldFor !== undefined) {
+        this.reserveHeld.delete(automation.id);
+        this.ports.log('info', `[automation] ${automation.id}: usage reserve lifted, starting the held run`);
+      }
       for (const skip of plan.skipped) {
+        if (skip.at === fire) continue;
         this.recordSkipped(automation, skip.at, skip.reason);
         runsDirty = true;
       }
@@ -818,12 +820,12 @@ export class AutomationEngine {
         automation.nextRunAt = plan.nextRunAt;
         automationsDirty = true;
       }
-      const reserveUntil = plan.fire === null ? null : this.reserveUntil(automation, now);
-      if (plan.fire !== null && reserveUntil !== null) {
+      const reserveUntil = fire === null || heldFor !== undefined ? null : this.reserveUntil(automation);
+      if (fire !== null && reserveUntil !== null) {
         // Held, not failed: it starts on the first tick after the reset. The
         // cursor stays on it, so a restart meanwhile treats it as missed.
-        this.reserveHeld.set(automation.id, plan.fire);
-        automation.nextRunAt = plan.fire;
+        this.reserveHeld.set(automation.id, fire);
+        automation.nextRunAt = fire;
         automationsDirty = true;
         this.ports.log('info', `[automation] ${automation.id}: held by the usage reserve until ${new Date(reserveUntil).toISOString()}`);
         this.ports.emit({
@@ -833,8 +835,8 @@ export class AutomationEngine {
           account: reserveAccount(automation),
           untilMs: reserveUntil,
         });
-      } else if (plan.fire !== null) {
-        this.detach(this.startRun(automation, plan.fire, 'scheduled')
+      } else if (fire !== null) {
+        this.detach(this.startRun(automation, fire, 'scheduled')
           .catch((err) => this.ports.log('error', `[automation] start failed: ${String(err)}`)));
       }
     }
@@ -849,10 +851,9 @@ export class AutomationEngine {
   }
 
   /** The usage reserve's hold on this automation's account, or null: only for an agent whose usage wmux reads. */
-  private reserveUntil(automation: Automation, now: number): number | null {
+  private reserveUntil(automation: Automation): number | null {
     if (agentRow(automation.action.agent)?.usageReserve !== true || !this.ports.reserveHold) return null;
-    const until = this.ports.reserveHold(reserveAccount(automation));
-    return until !== null && until > now ? until : null;
+    return this.ports.reserveHold(reserveAccount(automation));
   }
 
   private lastScheduledFor(automationId: string): number | null {
