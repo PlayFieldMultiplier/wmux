@@ -24,6 +24,7 @@ import {
 import type { HostedScopeAuditInput } from '../audit/shadowRejectionLog';
 import { lookupWorkspaceClaim } from '../workspace/workspaceClaimTrust';
 import { isIdentityRunPty } from '../automation/runIdentity';
+import { WORKER_FENCE_REFUSED_RPC } from '../../shared/botWorkerGuard';
 import { redactStoredSecrets, redactStoredSecretsDeep } from '../factory/secretRedaction';
 
 // Handlers receive a per-request context as an optional second argument.
@@ -156,6 +157,7 @@ export class RpcRouter {
   private shadowSink: ShadowRejectionSink | undefined;
   private hostedScopeSink: HostedScopeSink | undefined;
   private readonly botRefusalListeners = new Set<BotRefusalListener>();
+  private fencedWorkerPty: ((ptyId: string) => boolean) | undefined;
   /**
    * Phase 2.2 pre-commit 6: enforcement mode. Default is `shadow` so a
    * router that was never explicitly set up (unit tests, transitional
@@ -240,6 +242,14 @@ export class RpcRouter {
    */
   setHostedScopeSink(sink: HostedScopeSink | undefined): void {
     this.hostedScopeSink = sink;
+  }
+
+  /**
+   * Whether a pane runs a fenced bot worker (botWorkerMergeGuard.ts). Wired by
+   * main/index.ts; unset, no call is refused for it.
+   */
+  setFencedWorkerPty(check: ((ptyId: string) => boolean) | undefined): void {
+    this.fencedWorkerPty = check;
   }
 
   /**
@@ -556,6 +566,33 @@ export class RpcRouter {
         ok: false,
         error: `${request.method}: a scheduled run with a browser identity may use the browser tools only`,
       };
+    }
+
+    // A fenced bot worker's pane does not get the pipe methods behind the
+    // wmux tools its fence refuses (shared/botWorkerGuard.ts), and handlers
+    // see it on the context (`fencedWorker`). Every pane the call names
+    // counts: its walked claim, its envelope and its sender. A check that
+    // throws counts as fenced.
+    const fencedWorkerPty = this.fencedWorkerPty;
+    if (!firstParty && fencedWorkerPty) {
+      const sender = effectiveParams.senderPtyId;
+      const ptys = [
+        ctx.workspaceClaim?.kind === 'bound' ? ctx.workspaceClaim.ptyId : undefined,
+        ctx.callerPtyId,
+        typeof sender === 'string' ? sender.trim() : undefined,
+      ].filter((p): p is string => typeof p === 'string' && p.length > 0);
+      let fenced = false;
+      try {
+        fenced = ptys.some((p) => fencedWorkerPty(p));
+      } catch {
+        fenced = true;
+      }
+      if (fenced) {
+        if (WORKER_FENCE_REFUSED_RPC.has(request.method)) {
+          return { id: request.id, ok: false, error: `${request.method}: not available inside the worker fence` };
+        }
+        ctx.fencedWorker = true;
+      }
     }
 
     // Spec §2.2: external-wire requests without `clientName` are recorded as

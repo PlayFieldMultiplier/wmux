@@ -532,14 +532,14 @@ describe('launch', () => {
     // A WSL pane's record names the files main wrote for it: the worker
     // settings and this build's wmux server (botWorkerConnectors.os.test.ts
     // covers a native record's).
-    const botWorker = (dir: string) => {
+    const botWorker = (dir: string, fence?: { strength: 'full' | 'weaker' | 'off' }) => {
       const settings = path.join(dir, 'factory', 'worker-settings', '0123456789ab.json');
       const mcp = path.join(dir, 'factory', 'worker-mcp', '0123456789ab.json');
       fs.mkdirSync(path.dirname(settings), { recursive: true });
       fs.mkdirSync(path.dirname(mcp), { recursive: true });
       fs.writeFileSync(settings, JSON.stringify(buildBotWorkerSettings()));
       fs.writeFileSync(mcp, JSON.stringify({ mcpServers: { wmux: { type: 'stdio', command: '/bin/sh', args: ['-c', 'exec x'] } } }));
-      record(dir, { version: 1, sessions: { pane: { workspaceId: 'ws-task', at: 1, wsl: true, launch: { settingsFile: settings, mcpConfigFile: mcp, level: 'full' } } } });
+      record(dir, { version: 1, sessions: { pane: { workspaceId: 'ws-task', at: 1, wsl: true, launch: { settingsFile: settings, mcpConfigFile: mcp, level: 'full', ...(fence ? { fence } : {}) } } } });
       // Linux claude opens them through its /mnt mount (a Windows runner's path).
       return { settings, mcp, flags: `--settings="${toWslPath(settings) ?? settings}" --mcp-config="${toWslPath(mcp) ?? mcp}" --strict-mcp-config` };
     };
@@ -569,11 +569,38 @@ describe('launch', () => {
       const go = (extra: Record<string, unknown>) => createChatBridge(f.deps).launch({ id: 'pane', agent: 'claude', resume: true, refuseConversation: true, ...extra });
       expect(await go({ prompt: 'next' })).toEqual({ ok: true, effect: 'submitted' });
       f.shell.empty = true;
-      expect(await go({ mode: 'bypass' })).toMatchObject({ ok: true });
+      expect(await go({ mode: 'default' })).toMatchObject({ ok: true });
       expect(f.typed).toEqual([
         `cd -- '/proj' && claude ${files.flags} --resume ${SID} -- 'next'\r`,
-        `cd -- '/proj' && claude ${files.flags} --resume ${SID} --dangerously-skip-permissions\r`,
+        `cd -- '/proj' && claude ${files.flags} --resume ${SID}\r`,
       ]);
+    });
+
+    it('a launch that would run unattended types nothing: the worker fence starts only from wmux', async () => {
+      // Unattended by its flag, whatever the session's record says.
+      for (const fence of [undefined, { strength: 'off' as const }, { strength: 'weaker' as const }, { strength: 'full' as const }]) {
+        const f = fixture();
+        botWorker(f.dir, fence);
+        f.state.pane!.meta.cmd = '/bin/zsh';
+        expect(await f.bridge.launch({ id: 'pane', agent: 'claude', mode: 'bypass' })).toEqual({ ok: false, error: 'launch-unsupported', effect: 'none' });
+        expect(f.typed).toEqual([]);
+      }
+      // A session main started inside the fence, in any mode.
+      const fenced = fixture();
+      botWorker(fenced.dir, { strength: 'full' });
+      expect(await fenced.bridge.launch({ id: 'pane', agent: 'claude', prompt: 'go' })).toEqual({ ok: false, error: 'launch-unsupported', effect: 'none' });
+      // A line with no flag whose user settings start claude unattended.
+      const byDefault = fixture();
+      botWorker(byDefault.dir);
+      fs.mkdirSync(path.join(os.homedir(), '.claude'), { recursive: true });
+      const settings = path.join(os.homedir(), '.claude', 'settings.json');
+      fs.writeFileSync(settings, JSON.stringify({ permissions: { defaultMode: 'bypassPermissions' } }));
+      try {
+        expect(await byDefault.bridge.launch({ id: 'pane', agent: 'claude', prompt: 'go' })).toEqual({ ok: false, error: 'launch-unsupported', effect: 'none' });
+      } finally {
+        fs.unlinkSync(settings);
+      }
+      expect([...fenced.typed, ...byDefault.typed]).toEqual([]);
     });
 
     it('an unreadable record, or one without launch files outside WSL, types nothing', async () => {

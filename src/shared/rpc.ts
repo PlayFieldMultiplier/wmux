@@ -335,6 +335,12 @@ export interface RpcContext {
    * dropped). Advisory — see `RpcRequest.callerPtyId`.
    */
   callerPtyId?: string;
+  /**
+   * Set by RpcRouter when a pane the call names runs a fenced bot worker
+   * (main/agents/botWorkerMergeGuard.ts isFencedBotWorkerSession). Handlers
+   * refuse it what would start a process outside its fence.
+   */
+  fencedWorker?: true;
 }
 
 /**
