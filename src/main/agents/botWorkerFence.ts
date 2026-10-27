@@ -135,7 +135,7 @@ export interface WorkerFenceSupportDeps {
   exe?: () => string | null;
   probe?: typeof probeBotExecSupport;
   platformRefusal?: typeof botExecPlatformRefusal;
-  selfTest?: (exe: string) => Promise<WorkerFenceSelfTest>;
+  selfTest?: (exe: string, opts?: { patternsOnly?: boolean }) => Promise<WorkerFenceSelfTest>;
   platform?: NodeJS.Platform;
 }
 
@@ -184,7 +184,10 @@ export async function workerFenceSupport(deps: WorkerFenceSupportDeps = {}): Pro
   } else {
     let run = running.get(key);
     if (!run) {
-      const once = (): Promise<WorkerFenceSelfTest> => (deps.selfTest ?? ((e: string) => runWorkerFenceSelfTest(e)))(exe)
+      // A pass whose pattern run did not finish tries that run alone: the
+      // plain run passed, and a flake in it now must not refuse launches.
+      const patternsOnly = known?.result.ok === true && known.result.patternsRetry === true;
+      const once = (): Promise<WorkerFenceSelfTest> => (deps.selfTest ?? ((e: string, o?: { patternsOnly?: boolean }) => runWorkerFenceSelfTest(e, o)))(exe, { patternsOnly })
         .catch((err) => ({ ok: false as const, reason: `the self-test could not run: ${String(err)}`, transient: true as const }));
       // A run that did not finish is tried once more right away; a second
       // one is not kept (the next launch tries again).
@@ -308,6 +311,8 @@ export interface WorkerFenceSelfTestOptions {
   timeoutMs?: number;
   platform?: NodeJS.Platform;
   log?: (line: string) => void;
+  /** Only the macOS pattern run: the plain run already passed. */
+  patternsOnly?: boolean;
 }
 
 /** The self-test's own worktree on macOS: as long as a name the patterns
@@ -316,13 +321,13 @@ export interface WorkerFenceSelfTestOptions {
 export const WORKER_FENCE_SELF_TEST_WORKTREE = 'wmux-fence.self_test-0123456789abcdefghi';
 
 /** The other worktrees the macOS run writes into, one per kind of pattern:
- *  names that differ at the first character and further in (by a letter,
- *  `.`, `_` or `-`), shorter ones ending in a letter, `-` or `.` (one in
- *  another case), and a longer one. */
+ *  names that differ at the first character and further in (by a letter, a
+ *  digit, `.`, `_` or `-`), shorter ones ending in a letter, `-`, `.` or `_`
+ *  (one in another case), and a longer one. */
 function selfTestSiblings(own: string): string[] {
   return [
-    'sibling', '.x', `${own.slice(0, 7)}Q`, `${own.slice(0, 4)}.x`, `${own.slice(0, 4)}_x`, `${own.slice(0, 10)}-x`,
-    own.slice(0, 3), own.slice(0, 4).toUpperCase(), own.slice(0, 5), own.slice(0, 11), `${own}2`,
+    'sibling', '.x', `${own.slice(0, 7)}Q`, `${own.slice(0, 22)}7`, `${own.slice(0, 4)}.x`, `${own.slice(0, 4)}_x`, `${own.slice(0, 10)}-x`,
+    own.slice(0, 3), own.slice(0, 4).toUpperCase(), own.slice(0, 5), own.slice(0, 11), own.slice(0, 16), `${own}2`,
   ];
 }
 
@@ -336,7 +341,7 @@ function selfTestSiblings(own: string): string[] {
 export async function runWorkerFenceSelfTest(exe: string, opts: WorkerFenceSelfTestOptions = {}): Promise<WorkerFenceSelfTest> {
   // Side by side: each run has a folder of its own.
   const [plain, withPatterns] = await Promise.all([
-    runFenceProbe(exe, opts, false),
+    opts.patternsOnly ? { ok: true as const } : runFenceProbe(exe, opts, false),
     (opts.platform ?? process.platform) === 'darwin' ? runFenceProbe(exe, opts, true) : null,
   ]);
   if (!plain.ok || !withPatterns) return plain;

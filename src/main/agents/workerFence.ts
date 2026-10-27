@@ -233,14 +233,16 @@ export function workerFenceGitDenies(input: Pick<WorkerFenceInput, 'gitCommonDir
   return [...out];
 }
 
-/** The most patterns workerFenceWorktreeComplement gives. Measured with
- *  Claude Code 2.1.311 on macOS: 199 and 799 applied, 1599 did not
- *  ("profile too large", and then no command runs). wmux names a task's
- *  folder in at most 33 characters, about 170 patterns. */
+/** The most patterns workerFenceWorktreeComplement gives: a second guard
+ *  under WORKER_FENCE_DENY_WRITE_MAX_BYTES, which is the bound the
+ *  self-test proves. Measured with Claude Code 2.1.311 on macOS: 199 and 799
+ *  applied, 1599 did not ("profile too large", and then no command runs).
+ *  wmux names a task's folder in at most 33 characters, about 170 patterns. */
 export const WORKER_FENCE_COMPLEMENT_MAX = 200;
-/** The most a launch's denied write paths may take, as JSON, with the
- *  patterns: the profile's limit is its size. 799 patterns, 131 KB of them,
- *  applied in the measurement above. */
+/** The most a launch's denied write paths may take, as JSON in UTF-8 bytes,
+ *  with the patterns: the profile's limit is its size, and the macOS
+ *  self-test applies a profile this large before any launch adds them. 799
+ *  patterns, 131 KB of them, applied in the measurement above. */
 export const WORKER_FENCE_DENY_WRITE_MAX_BYTES = 64 * 1024;
 
 const COMPLEMENT_NAME = /^[0-9A-Za-z._-]+$/;

@@ -490,7 +490,15 @@ describe.skipIf(isWin)('the self-test', () => {
   it('a pass whose pattern run did not finish is kept a few minutes, then tried again', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     let runs = 0;
-    const d = { exe: () => EXE, platform: 'darwin' as const, probe: async () => ({ ok: true as const, version: '2.1.311' }), selfTest: async () => { runs += 1; return runs === 1 ? { ok: true as const, patternsRetry: true as const } : { ok: true as const, worktreePatterns: true as const }; } };
+    const asked: Array<boolean | undefined> = [];
+    const d = {
+      exe: () => EXE, platform: 'darwin' as const, probe: async () => ({ ok: true as const, version: '2.1.311' }),
+      selfTest: async (_exe: string, o?: { patternsOnly?: boolean }) => {
+        runs += 1;
+        asked.push(o?.patternsOnly);
+        return runs === 1 ? { ok: true as const, patternsRetry: true as const } : { ok: true as const, worktreePatterns: true as const };
+      },
+    };
     try {
       await workerFenceSupport(d);
       await workerFenceSupport(d);
@@ -501,9 +509,17 @@ describe.skipIf(isWin)('the self-test', () => {
       expect(after.capable && after.selfTest).toEqual({ ok: true, worktreePatterns: true });
       await workerFenceSupport(d);
       expect(runs).toBe(2);
+      // The retry is the pattern run alone: the plain run passed already.
+      expect(asked).toEqual([false, true]);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('a pattern run alone never fails the self-test, whatever it finds', async () => {
+    const fake = path.join(root, 'fake-none');
+    fs.writeFileSync(fake, '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+    expect(await runWorkerFenceSelfTest(fake, { dir, runtime: RUNTIME, timeoutMs: 10_000, platform: 'darwin', patternsOnly: true, log: () => undefined, paneEnv: async () => ({ PATH: '/usr/bin:/bin' }) })).toEqual({ ok: true });
   });
 
   it('an attended line asks for no fence support at all', async () => {
