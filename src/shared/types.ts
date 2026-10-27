@@ -615,6 +615,8 @@ export interface MetadataUpdatePayload {
   daemonTurnOpen?: boolean;
   /** The daemon reads the pane's Claude turn as stuck: no progress since this time. Null clears it. */
   stalledSince?: number | null;
+  /** With `stalledSince`: the turn keeps compacting without editing, this many times. */
+  stallCompactions?: number;
 }
 
 /**

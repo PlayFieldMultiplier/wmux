@@ -750,7 +750,7 @@ export function useNotificationListener() {
       // workspace metadata — pull it OUT here, alongside ptyId, so it can never
       // flow into `...rest` and get written into updateWorkspaceMetadata by
       // applyToWorkspace's spread.
-      const { ptyId, workspaceId: payloadWsId, activity, teammatesWorking, subagents, shellPrompt, pendingQuestion, lastMessage, lastActivity, paneId, paneLabel, paneRole, agentSlug, hookKind, settled, daemonTurnOpen, stalledSince, ...rest } = payload;
+      const { ptyId, workspaceId: payloadWsId, activity, teammatesWorking, subagents, shellPrompt, pendingQuestion, lastMessage, lastActivity, paneId, paneLabel, paneRole, agentSlug, hookKind, settled, daemonTurnOpen, stalledSince, stallCompactions, ...rest } = payload;
 
       // The orchestrator's own brain pty (the `claude-pty` vendor's embedded
       // Claude Code TUI) is not a fleet agent. The daemon has no idea it is
@@ -859,8 +859,14 @@ export function useNotificationListener() {
           state.setSurfaceStalled(ptyId, null);
         } else if (typeof stalledSince === 'number') {
           const fresh = state.surfaceStalledAt[ptyId] === undefined;
-          state.setSurfaceStalled(ptyId, stalledSince);
-          if (fresh) handleNotification(ptyId, { type: 'warning', title: t('agentStall.notifyTitle'), body: t('agentStall.notifyBody'), category: 'system' });
+          // A count means a busy turn compacting without editing, not a silent one.
+          const compactions = typeof stallCompactions === 'number' ? stallCompactions : undefined;
+          state.setSurfaceStalled(ptyId, stalledSince, compactions);
+          if (fresh) {
+            handleNotification(ptyId, compactions === undefined
+              ? { type: 'warning', title: t('agentStall.notifyTitle'), body: t('agentStall.notifyBody'), category: 'system' }
+              : { type: 'warning', title: t('agentStall.spinNotifyTitle'), body: t('agentStall.spinNotifyBody', { count: compactions }), category: 'system' });
+          }
         }
         // The surface's own branch (Moa's view pointer): the workspace record
         // above only follows the active pane, and only at the time it arrives.

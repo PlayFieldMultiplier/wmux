@@ -1618,8 +1618,11 @@ export class DaemonNotificationRouter {
     };
 
     // StallWatch's verdict for the pane's Claude turn, relayed as it is.
-    const onAgentStall = (payload: { sessionId: string; stalledSince: number | null }) => {
-      broadcastMetadataUpdate(this.getWindow(), { ptyId: payload.sessionId, stalledSince: payload.stalledSince });
+    const onAgentStall = (payload: { sessionId: string; stalledSince: number | null; compactions?: number }) => {
+      broadcastMetadataUpdate(this.getWindow(), {
+        ptyId: payload.sessionId, stalledSince: payload.stalledSince,
+        ...(payload.compactions !== undefined ? { stallCompactions: payload.compactions } : {}),
+      });
     };
 
     this.daemonClient.on('session:agentTurn', onAgentTurn);

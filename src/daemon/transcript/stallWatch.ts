@@ -24,6 +24,17 @@
 //   - Waiting on the human (a dialog, an approval) is not silence.
 //   - Keep waiting doubles the threshold for that turn only; a new prompt or a
 //     new turn resets it. Never stops anything on its own.
+//
+// A busy turn can also go nowhere: auto-compaction, re-reading the same files,
+// compaction again, each round writing to the transcript and so never silent,
+// while it spends the account's usage limit. So a second rule, spinning: within
+// one turn, SPIN_COMPACTIONS compaction summaries with no edit-type tool call
+// since the first of them (Edit, Write, MultiEdit, NotebookEdit, or a shell
+// call that runs `git commit`). The turn is followed from its prompt through
+// the projector's own incremental reader, since a spinning turn runs to
+// megabytes; one whose prompt is not in the first read counts as unknown. It
+// raises the same alert with the count, under the same running and
+// waiting-on-the-human rules. Keep waiting doubles the count for that turn.
 import fs from 'node:fs';
 import type { ResumeBinding } from '../../shared/agentResume';
 import type { AgentSlug } from '../../shared/agentIdentity';
@@ -33,6 +44,9 @@ import { formatBracketedPastePayload } from '../../shared/ptyMessageDelivery';
 import { screenShowsRunningTurn } from './chatScreenGate';
 import { claudeComposerEmpty, claudeComposerVisible, type ChatScreenRows } from './deliverChatPrompt';
 import { contentBlocks, isObject, PENDING_TOOL_USE_TAIL_BYTES } from './pendingToolUse';
+import { COMPACTED_LABEL } from './parseEntry';
+import { readTranscriptDelta, readTranscriptPage } from './readTail';
+import type { TurnEvent } from '../../shared/transcript/turnEvents';
 
 /** The one agent whose turns are watched: the rules below read Claude's own
  *  spinner row, composer and transcript. Codex waits until it is measured. */
@@ -43,6 +57,10 @@ export const STALL_COUNTER_MS = 180_000;
 /** Silence when the token count cannot be read for the whole window. */
 export const STALL_FALLBACK_MS = 600_000;
 export const STALL_TICK_MS = 10_000;
+/** Compactions in one turn, with no edit since the first, that read as spinning. */
+export const SPIN_COMPACTIONS = 3;
+/** Delta reads per tick, each bounded by the reader: a fast writer is caught up over a few ticks. */
+const SPIN_READS_PER_TICK = 8;
 
 export interface StallWatchDeps {
   listSessionIds: () => string[];
@@ -54,7 +72,8 @@ export interface StallWatchDeps {
   readScreen: (id: string) => Promise<readonly string[] | null>;
   /** The agent's window title shows its running spinner, freshly set. */
   titleRunning?: (id: string) => boolean;
-  emit: (id: string, stalledSince: number | null) => void;
+  /** `compactions` is set when the turn is spinning (compacting without editing), not silent. */
+  emit: (id: string, stalledSince: number | null, compactions?: number) => void;
   stat?: (path: string) => { size: number; mtimeMs: number } | null;
   /** True/false; null when the tail cannot tell. */
   toolInFlight?: (path: string) => boolean | null;
@@ -74,6 +93,66 @@ interface Watch {
   readableFrom?: number;
   toolStartedAt: number;
   stalledSince?: number;
+  spin: Spin;
+  /** The spinning alert: since the first compaction it counts, and that count. */
+  spinningSince?: number;
+  spinningCount?: number;
+}
+
+/** The turn's compactions, folded from its transcript as the file grows. */
+interface Spin {
+  /** Next byte to read, a line boundary; null once the file cannot be followed. */
+  offset: number | null;
+  /** The turn's start was read: false means unknown, never an alert. */
+  known: boolean;
+  /** Compactions since the turn's prompt or its last edit. */
+  compactions: number;
+  firstAt?: number;
+}
+
+const EDIT_TOOLS: ReadonlySet<string> = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
+const SHELL_TOOLS: ReadonlySet<string> = new Set(['Bash', 'PowerShell']);
+/** `git commit`, also with global options before it (`git -C dir commit`). */
+const GIT_COMMIT = /\bgit(?:\s+-\S+(?:\s+[^\s-]\S*)?)*\s+commit\b/;
+
+function isEditCall(ev: TurnEvent): boolean {
+  if (ev.kind !== 'tool_use') return false;
+  if (EDIT_TOOLS.has(ev.name)) return true;
+  // The input's head (4 KB inline), else the one-line summary.
+  return SHELL_TOOLS.has(ev.name) && GIT_COMMIT.test(ev.input?.inline ?? ev.argSummary);
+}
+
+/** A turn starts at a typed prompt or a slash command. */
+function startsTurn(ev: TurnEvent): boolean {
+  return ev.kind === 'user_text' || (ev.kind === 'meta' && ev.subtype === 'slash_command');
+}
+
+/** Fold events into the count; true when a new prompt was among them. */
+function foldSpin(spin: Spin, events: readonly TurnEvent[], now: number): boolean {
+  let prompted = false;
+  for (const ev of events) {
+    if (startsTurn(ev)) {
+      prompted = true;
+      spin.known = true;
+      spin.compactions = 0;
+      spin.firstAt = undefined;
+    } else if (ev.kind === 'meta' && ev.subtype === 'caveat' && ev.label === COMPACTED_LABEL) {
+      if (spin.compactions++ === 0) spin.firstAt = ev.ts ?? now;
+    } else if (isEditCall(ev)) {
+      spin.compactions = 0;
+      spin.firstAt = undefined;
+    }
+  }
+  return prompted;
+}
+
+/** The turn so far, from the tail: unknown when the tail starts mid-file with no prompt in it. */
+function seedSpin(path: string, now: number): Spin {
+  const page = readTranscriptPage(path);
+  if (!page) return { offset: null, known: false, compactions: 0 };
+  const spin: Spin = { offset: page.cursor.tailOffset, known: !page.truncatedHead, compactions: 0 };
+  foldSpin(spin, page.events, now);
+  return spin;
 }
 
 /** Claude's thinking phrases on the spinner row ("still thinking", "deep in
@@ -103,6 +182,8 @@ const INTERRUPT_MARK = /^\[Request interrupted by user/;
 /** A user row with text (not a tool result, not meta, not a subagent's): its text, else null. */
 function userText(entry: Entry): string | null {
   if (entry['type'] !== 'user' || entry['isMeta'] === true || entry['isSidechain'] === true) return null;
+  // Claude's summary after a compaction: a user row nobody typed.
+  if (entry['isCompactSummary'] === true) return null;
   const message = entry['message'];
   if (isObject(message) && typeof message['content'] === 'string') return message['content'];
   const blocks = contentBlocks(entry);
@@ -203,6 +284,8 @@ export class StallWatch {
   private readonly watches = new Map<string, Watch>();
   /** Keep waiting's factor per pane, kept with its turn so a one-tick gap does not reset it. */
   private readonly factors = new Map<string, { turn: string; factor: number }>();
+  /** Keep waiting on a spinning turn: the compaction count that alerts next, kept the same way. */
+  private readonly spinAt = new Map<string, { turn: string; at: number }>();
   private timer: NodeJS.Timeout | null = null;
   private ticking = false;
 
@@ -221,16 +304,23 @@ export class StallWatch {
     this.timer = null;
     this.watches.clear();
     this.factors.clear();
+    this.spinAt.clear();
   }
 
   /** The pane's stall (its last progress) when it reads as stuck now, for a client that attaches later. */
   stalledSince(id: string): number | null {
-    return this.watches.get(id)?.stalledSince ?? null;
+    const w = this.watches.get(id);
+    return w?.stalledSince ?? w?.spinningSince ?? null;
+  }
+
+  /** The compaction count when the pane's alert is the spinning one, else undefined. */
+  stallCompactions(id: string): number | undefined {
+    return this.watches.get(id)?.spinningCount;
   }
 
   /** A resolved hook signal for the pane. */
   noteHookSignal(id: string, kind: string): void {
-    if (kind === 'agent.user_prompt_submit') this.factors.delete(id);
+    if (kind === 'agent.user_prompt_submit') { this.factors.delete(id); this.spinAt.delete(id); }
     const w = this.watches.get(id);
     if (!w) return;
     if (kind === 'agent.tool_started' || kind === 'agent.awaiting_permission' || kind === 'agent.user_prompt_submit') {
@@ -244,12 +334,17 @@ export class StallWatch {
   /** The turn a recorded stall belongs to, or undefined when none is recorded. */
   stalledTurn(id: string): string | undefined {
     const w = this.watches.get(id);
-    return w?.stalledSince !== undefined ? w.turn : undefined;
+    return w?.stalledSince !== undefined || w?.spinningCount !== undefined ? w.turn : undefined;
   }
 
   /** Keep waiting: double the threshold for this turn. False when not stalled. */
   keepWaiting(id: string): boolean {
     const w = this.watches.get(id);
+    if (w?.spinningCount !== undefined) {
+      this.spinAt.set(id, { turn: w.turn, at: w.spinningCount * 2 });
+      this.clearSpin(id, w);
+      return true;
+    }
     if (!w || w.stalledSince === undefined) return false;
     const saved = this.factors.get(id);
     this.factors.set(id, { turn: w.turn, factor: (saved?.turn === w.turn ? saved.factor : 1) * 2 });
@@ -261,6 +356,7 @@ export class StallWatch {
   dropSession(id: string): void {
     this.forget(id);
     this.factors.delete(id);
+    this.spinAt.delete(id);
   }
 
   async tick(): Promise<void> {
@@ -280,7 +376,7 @@ export class StallWatch {
 
   private forget(id: string): void {
     const w = this.watches.get(id);
-    if (w) this.clear(id, w);
+    if (w) { this.clear(id, w); this.clearSpin(id, w); }
     this.watches.delete(id);
   }
 
@@ -288,6 +384,48 @@ export class StallWatch {
     if (w.stalledSince === undefined) return;
     w.stalledSince = undefined;
     this.deps.emit(id, null);
+  }
+
+  private clearSpin(id: string, w: Watch): void {
+    if (w.spinningCount === undefined) return;
+    w.spinningSince = undefined;
+    w.spinningCount = undefined;
+    this.deps.emit(id, null);
+  }
+
+  /** Read what the turn appended since the last read; a file that cannot be followed is unknown. */
+  private followSpin(id: string, w: Watch, now: number): void {
+    const spin = w.spin;
+    for (let i = 0; i < SPIN_READS_PER_TICK && spin.offset !== null && spin.offset < w.size; i++) {
+      const delta = readTranscriptDelta(w.path, spin.offset);
+      if (!delta || delta.reset) {
+        spin.offset = null;
+        spin.known = false;
+        return;
+      }
+      // A half-written last line, or an entry still being written: next tick.
+      if (delta.stalled || delta.cursor.tailOffset <= spin.offset) return;
+      spin.offset = delta.cursor.tailOffset;
+      // A new prompt ends this turn's Keep waiting, as the hook does.
+      if (foldSpin(spin, delta.events, now)) this.spinAt.delete(id);
+    }
+  }
+
+  /** The spinning rule; true while its alert stands, which then holds the stall rule off. */
+  private checkSpin(id: string, w: Watch, running: boolean): boolean {
+    const spin = w.spin;
+    const saved = this.spinAt.get(id);
+    const at = saved?.turn === w.turn ? saved.at : SPIN_COMPACTIONS;
+    if (!running || !spin.known || spin.compactions < at) {
+      this.clearSpin(id, w);
+      return false;
+    }
+    if (w.spinningCount !== spin.compactions) {
+      w.spinningSince = spin.firstAt ?? this.now();
+      w.spinningCount = spin.compactions;
+      this.deps.emit(id, w.spinningSince, w.spinningCount);
+    }
+    return true;
   }
 
   private factorFor(id: string, turn: string): number {
@@ -304,8 +442,8 @@ export class StallWatch {
     const now = this.now();
     let w = this.watches.get(id);
     if (!w || w.turn !== turn || w.path !== path) {
-      if (w) this.clear(id, w);
-      w = { turn, path, size: st.size, mtimeMs: st.mtimeMs, progressAt: now, toolStartedAt: 0 };
+      if (w) { this.clear(id, w); this.clearSpin(id, w); }
+      w = { turn, path, size: st.size, mtimeMs: st.mtimeMs, progressAt: now, toolStartedAt: 0, spin: seedSpin(path, now) };
       this.watches.set(id, w);
     } else if (st.size !== w.size || st.mtimeMs !== w.mtimeMs) {
       w.size = st.size;
@@ -313,9 +451,11 @@ export class StallWatch {
       w.progressAt = now;
       this.clear(id, w);
     }
+    this.followSpin(id, w, now);
     if (this.deps.awaitingHuman(id)) {
       w.progressAt = now;
       this.clear(id, w);
+      this.clearSpin(id, w);
       return;
     }
     let rows: readonly string[] | null = null;
@@ -337,6 +477,7 @@ export class StallWatch {
     const counted = w.readableFrom !== undefined && w.readableFrom <= w.progressAt + STALL_TICK_MS;
     const threshold = (counted ? STALL_COUNTER_MS : STALL_FALLBACK_MS) * this.factorFor(id, turn);
     const running = screenShowsRunningTurn(rows, STALL_AGENT) || this.deps.titleRunning?.(id) === true;
+    if (this.checkSpin(id, w, running)) return;
     if (now - w.progressAt < threshold || w.toolStartedAt >= w.progressAt || !running) {
       this.clear(id, w);
       return;

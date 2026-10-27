@@ -20,7 +20,7 @@ beforeEach(() => {
   document.body.appendChild(container);
   root = createRoot(container);
   vi.stubGlobal('electronAPI', { agentStall: { keepWaiting, stopAndPrefill } });
-  useStore.setState({ surfaceStalledAt: {} } as never);
+  useStore.setState({ surfaceStalledAt: {}, surfaceStallCompactions: {} } as never);
 });
 afterEach(() => {
   act(() => root.unmount());
@@ -46,6 +46,18 @@ describe('AgentStallChip', () => {
     expect(document.body.querySelector('[data-agent-stall-card]')).toBeNull();
     act(() => useStore.setState({ surfaceStalledAt: {} } as never));
     expect(chip()).toBeNull();
+  });
+
+  it('says a turn keeps compacting without editing, in the same chip and card', () => {
+    act(() => root.render(<AgentStallChip ptyId="pty-1" />));
+    act(() => useStore.getState().setSurfaceStalled('pty-1', Date.now() - 4 * 60_000, 3));
+    expect(chip()?.textContent).toBe('Seems stuck');
+    expect(chip()?.title).toBe('Compacted 3 times this turn without editing anything');
+    act(() => chip()!.click());
+    expect(document.body.querySelector('[data-agent-stall-card]')?.textContent).toContain('compacted its context 3 times this turn');
+    // A later silent stall on the same pane reads as one again.
+    act(() => useStore.getState().setSurfaceStalled('pty-1', Date.now() - 4 * 60_000));
+    expect(chip()?.title).toContain('No transcript progress');
   });
 
   it('goes at once with the daemon\'s turn end, ahead of its next stall tick', () => {

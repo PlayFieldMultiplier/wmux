@@ -42,6 +42,8 @@ import type {
 const NUL = '\u0000';
 export const CODE_MARKER_PREFIX = `${NUL}code:`;
 export const CODE_MARKER_SUFFIX = NUL;
+/** The quiet row a compaction summary reads as (StallWatch counts these). */
+export const COMPACTED_LABEL = 'Conversation compacted';
 
 /** Hard cap on the prose we keep per text event. A single 2MB paste must not
  *  become a 2MB wire payload (A3's byte budget is enforced upstream, but the
@@ -141,7 +143,7 @@ export function parseTranscriptLineDetailed(
   // bubble and opened a new turn. It is a quiet row instead, and its body (a
   // summary of everything before) does not cross the wire.
   if (isUser && entry['isCompactSummary'] === true) {
-    return single(metaEvent(baseId, ts, 'caveat', 'Conversation compacted'), empty);
+    return single(metaEvent(baseId, ts, 'caveat', COMPACTED_LABEL), empty);
   }
 
   const content = message?.['content'];

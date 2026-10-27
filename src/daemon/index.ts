@@ -3165,7 +3165,13 @@ function registerRpcHandlers(
         type: 'agent.turn', sessionId: p.id,
         data: { running: managed.bridge.isAgentMidTurn() && managed.bridge.getAgentStatus() !== 'awaiting_input' },
       });
-      if (stallWatch) pipeServer.broadcast({ type: 'agent.stall', sessionId: p.id, data: { stalledSince: stallWatch.stalledSince(p.id) } });
+      if (stallWatch) {
+        const compactions = stallWatch.stallCompactions(p.id);
+        pipeServer.broadcast({
+          type: 'agent.stall', sessionId: p.id,
+          data: { stalledSince: stallWatch.stalledSince(p.id), ...(compactions !== undefined ? { compactions } : {}) },
+        });
+      }
     }
 
     return { ok: true };
@@ -4550,8 +4556,8 @@ function registerRpcHandlers(
         return outcome?.ok ? outcome.rows.map((r) => r.text) : null;
       },
       titleRunning: (id) => titleShowsRunningTurn(sessionManager.getSession(id)?.bridge.getTitle(), STALL_AGENT, Date.now()),
-      emit: (sessionId, stalledSince) => {
-        const event: DaemonEvent = { type: 'agent.stall', sessionId, data: { stalledSince } };
+      emit: (sessionId, stalledSince, compactions) => {
+        const event: DaemonEvent = { type: 'agent.stall', sessionId, data: { stalledSince, ...(compactions !== undefined ? { compactions } : {}) } };
         pipeServer.broadcast(event);
       },
     });
