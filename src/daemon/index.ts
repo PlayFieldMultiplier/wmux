@@ -10331,20 +10331,25 @@ async function main(): Promise<void> {
     if (!classified) return;
     // The thread id is the conversation id `/turns` resolves for a Codex pane,
     // so a pane that moved to another thread does not show this failure.
-    const transient = automationEngine?.ownsPane(id) === true && isTransientTurnFailure(classified, false);
-    const served = serveTurnFailure(session.bridge, classified, { ts: now, agentSessionId: threadId, push: (f) => {
-      // A scheduled run held for its one continue is not final yet: the
-      // relay is the proof the turn ended, so the hold is armed here.
-      if (!shouldPushTurnFailure(transient, () => automationEngine?.armTransientRetry(id) === true)) return;
-      pushTurnFailed?.(id, f);
-      if (f.reason !== 'auth') {
-        // The turn its one continue started failed too: that run ends now.
-        if (automationEngine?.continuedRunPane(id)) {
-          automationEngine.onAgentEvent(id, { kind: 'agent.stop_failure', status: 'error' })
-            .catch((err) => log('warn', `[automation] agent event handling failed for ${id}:`, err));
-        }
-        return;
+    // A scheduled run's turn: the relay is the proof it ended, so the engine
+    // hears of it here, whether or not the phone push below goes out. A
+    // transient failure arms the run's one continue (and then is not final,
+    // so nothing is pushed); any failure of the turn that continue started
+    // ends the run. A pane the usage-limit registry holds is that registry's.
+    const automationPane = automationEngine?.ownsPane(id) === true;
+    const transient = automationPane && isTransientTurnFailure(classified, usageLimits?.holds(id) === true);
+    let armed = false;
+    if (automationPane && classified.reason !== 'auth') {
+      armed = !shouldPushTurnFailure(transient, () => automationEngine?.armTransientRetry(id) === true);
+      if (!armed && automationEngine?.continuedRunPane(id)) {
+        automationEngine.onAgentEvent(id, { kind: 'agent.stop_failure', status: 'error' })
+          .catch((err) => log('warn', `[automation] agent event handling failed for ${id}:`, err));
       }
+    }
+    const served = serveTurnFailure(session.bridge, classified, { ts: now, agentSessionId: threadId, push: (f) => {
+      if (armed) return;
+      pushTurnFailed?.(id, f);
+      if (f.reason !== 'auth') return;
       noteAuthLost?.(id, 'codex', session.meta.env, 'turn', f.providerCode);
       // A scheduled run's Codex turn failed on sign-in: the relay is the proof
       // the turn ended, so the run ends now, as login_needed (Claude's comes

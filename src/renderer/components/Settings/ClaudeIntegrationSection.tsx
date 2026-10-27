@@ -28,7 +28,7 @@
 // follow-up — until then the install hint is shown in the Unknown state
 // and the user resolves the ambiguity by trying the install command.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useStore } from '../../stores';
 import { useT } from '../../hooks/useT';
 import { IconCheck, IconWarning } from '../icons';
@@ -233,6 +233,8 @@ function UsageCard({
  */
 function ScheduledRetryRow({ t }: { t: (key: string, vars?: Record<string, string | number>) => string }) {
   const [on, setOn] = useState<boolean | null>(null);
+  // Only the newest change's answer is shown: an older reply landing late must not flip the switch back.
+  const latest = useRef(0);
   useEffect(() => {
     let live = true;
     void window.electronAPI?.automation?.settings?.()
@@ -243,9 +245,11 @@ function ScheduledRetryRow({ t }: { t: (key: string, vars?: Record<string, strin
   if (on === null) return null;
   const change = (next: boolean): void => {
     setOn(next);
+    const seq = ++latest.current;
+    const settle = (value: boolean): void => { if (seq === latest.current) setOn(value); };
     void window.electronAPI.automation.setSettings({ retryTransientErrors: next })
-      .then((r) => setOn(r.ok ? r.settings.retryTransientErrors : !next))
-      .catch(() => setOn(!next));
+      .then((r) => settle(r.ok ? r.settings.retryTransientErrors : !next))
+      .catch(() => settle(!next));
   };
   return (
     <SettingRow

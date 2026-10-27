@@ -193,6 +193,8 @@ interface LiveRun {
   processExitAt?: number;
   /** The agent the prompt was delivered to: a continue may reach only this process. */
   incarnationId?: string;
+  /** First pass that found the held run's continue due: the not-ready grace runs from here. */
+  retryCheckSince?: number;
 }
 
 export interface AgentEventSignal {
@@ -682,8 +684,13 @@ export class AutomationEngine {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, error: 'Invalid settings' };
     const retry = (raw as Record<string, unknown>)['retryTransientErrors'];
     if (retry !== undefined && typeof retry !== 'boolean') return { ok: false, error: 'Invalid settings' };
+    const previous = this.settings;
     if (typeof retry === 'boolean') this.settings = { ...this.settings, retryTransientErrors: retry };
-    if (!(await this.persistAutomations())) return { ok: false, error: 'Could not save the settings' };
+    if (!(await this.persistAutomations())) {
+      // Not saved: keep running on what is on disk, which is what the caller is told.
+      if (this.settings.retryTransientErrors === retry) this.settings = previous;
+      return { ok: false, error: 'Could not save the settings' };
+    }
     this.emitAutomations();
     return { ok: true, settings: { ...this.settings } };
   }
@@ -1372,15 +1379,18 @@ export class AutomationEngine {
    * The one continue of a held run. Written only into the run's own pane,
    * with the same agent process it delivered to, idle and quiet, no approval
    * or dialog on screen and no folder-trust prompt. A pane that is only
-   * momentarily not ready is asked again on the next pass, up to
-   * TRANSIENT_RETRY_READY_GRACE_MS past the due time; a pane that is no
+   * momentarily not ready is asked again on later passes, for
+   * TRANSIENT_RETRY_READY_GRACE_MS from the first one; a pane that is no
    * longer the run's (or its agent's) ends the run failed at once. Nothing is
    * written in either case.
    */
   private async retryTransient(run: AutomationRun, live: LiveRun, now: number): Promise<void> {
     live.phase = 'retrying';
     const dueAt = run.retryAt ?? now;
-    const inGrace = now - dueAt < TRANSIENT_RETRY_READY_GRACE_MS;
+    // From the first pass that found it due, not from the due time: a pass
+    // delayed by sleep must still get its grace.
+    live.retryCheckSince ??= now;
+    const inGrace = now - live.retryCheckSince < TRANSIENT_RETRY_READY_GRACE_MS;
     const automation = this.automations.find((a) => a.id === run.automationId);
     const deliverContinue = this.ports.deliverContinue;
     const stillWanted = (): boolean => !isFinalRunState(run.state) && live.phase === 'retrying' &&
@@ -1448,9 +1458,13 @@ export class AutomationEngine {
     if (this.panes.get(live.ptyId) !== run.id || run.ptyId !== live.ptyId) return { reason: 'pane is not the run\'s own', final: true };
     if (this.ports.sessionPid(live.ptyId) === null) return { reason: 'session gone', final: true };
     const view = this.ports.readAgent(live.ptyId);
-    if (!view.verified || view.slug !== agent || !live.incarnationId || view.incarnationId !== live.incarnationId) {
+    // Another agent, or another process of it, is proof the pane moved on.
+    // A verification blip on the same process is not.
+    if (!live.incarnationId || (view.slug !== null && view.slug !== agent)
+      || (view.incarnationId !== null && view.incarnationId !== live.incarnationId)) {
       return { reason: 'agent changed', final: true };
     }
+    if (!view.verified || view.slug === null || view.incarnationId === null) return { reason: 'agent not verified', final: false };
     if (!view.inputQuiet || !['idle', 'waiting', 'complete', 'error'].includes(view.status)) {
       return { reason: `agent ${view.status}${view.inputQuiet ? '' : ', input not quiet'}`, final: false };
     }
@@ -1488,10 +1502,12 @@ export class AutomationEngine {
       this.unregister(runId);
       return;
     }
-    const delivered = this.live.get(runId)?.deliveredAt !== undefined;
-    if (!isFinalRunState(run.state) && run.retryAt !== undefined) {
-      // Held after a temporary provider error: whatever the exit code, that
-      // turn failed and nothing is left to continue.
+    const live = this.live.get(runId);
+    const delivered = live?.deliveredAt !== undefined;
+    if (!isFinalRunState(run.state) && (live?.phase === 'held' || live?.phase === 'retrying')) {
+      // Held after a temporary provider error, or its continue still being
+      // delivered: whatever the exit code, that turn failed and no continued
+      // turn was seen.
       run.detail = 'retry_blocked';
       this.finish(run, 'failed', 'agent_error');
     } else if (!isFinalRunState(run.state)) {
