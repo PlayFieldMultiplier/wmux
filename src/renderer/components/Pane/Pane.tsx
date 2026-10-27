@@ -311,10 +311,19 @@ export function resolveRecoveryPillPermissions(args: {
  * leaves the hint up while it waits for the second).
  */
 const autoResumedPtys = new Set<string>();
+/** Of those, the ptys the Resume pill typed into: never handed back. */
+const pillUsedPtys = new Set<string>();
 
 /** Record that the Resume pill typed into `ptyId`; automatic resume then stays out. */
 export function markResumePillUsed(ptyId: string): void {
   autoResumedPtys.add(ptyId);
+  pillUsedPtys.add(ptyId);
+}
+
+/** Hand back an automatic resume main refused to type (a folder-trust prompt,
+ *  a screen that could not rule one out), so a later pass may try again. */
+export function releaseAutoResume(ptyId: string): void {
+  if (!pillUsedPtys.has(ptyId)) autoResumedPtys.delete(ptyId);
 }
 
 /** Take the one automatic resume `ptyId` gets; false if it ran or the pill was used. */
@@ -950,10 +959,15 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
         const line = now.resumeWasRunning === true ? planLine(true) ?? planned : planned;
         if (!claimAutoResume(ptyId)) return; // resumed already, or the pill was clicked meanwhile
         // Through main, which guards a bot worker's resume (botWorkerMergeGuard).
-        // A refused line keeps the pill, so the pane can still be resumed by hand.
+        // A refused line keeps the pill, so the pane can still be resumed by
+        // hand, and gives the claim back for the next pass (the pane shown, a
+        // new hint).
         window.electronAPI.pty.writeLaunch(ptyId, line, true).then(
           () => useStore.getState().clearResumeHint(ptyId),
-          (err: unknown) => console.warn('[wmux:resume] the resume line was not typed', String(err)),
+          (err: unknown) => {
+            releaseAutoResume(ptyId);
+            console.warn('[wmux:resume] the resume line was not typed', String(err));
+          },
         );
       }, () => undefined);
     }, 400);

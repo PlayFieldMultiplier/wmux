@@ -51,6 +51,7 @@ import type {
 } from '../../approvals/types';
 import { DECISION_V2_WEB_ANSWER, TERMINAL_PROMPT_WEB_ANSWER, TERMINAL_PROMPT_WEB_DECLINE, type DecisionFormKind, type TerminalPromptDetail } from '../../approvals/types';
 import type { DaemonSessionManager } from '../../DaemonSessionManager';
+import { folderTrustSessions } from '../../../test-utils/folderTrustSessions';
 
 // A minimal fake of exactly what WebTerminalServer touches: getSession() (for
 // stream/input) and listLiveSessions() (for the picker). No real daemon/pty.
@@ -5373,6 +5374,41 @@ describe('WebTerminalServer', () => {
         // client (no question on the wire) sees the same rows.
         const legacy = await (await fetch(`${base()}/api/approvals`, { headers: bearer(info.token as string) })).json();
         expect(legacy.recentlyResolved.map((r: { id: string }) => r.id)).toEqual(expected);
+      });
+    });
+
+    describe('a launch line from the browser client', () => {
+      const launchInto = (token: string, body: string, launch: string | null) =>
+        fetch(`${base()}/api/input?session=s1${launch === null ? '' : `&launch=${launch}`}`, { method: 'POST', headers: bearer(token), body });
+      /** The fake pane takes the daemon session of a fixture pane: its screen, size and mute. */
+      const become = (paneId: string) => {
+        const fixture = folderTrustSessions().getSession(paneId);
+        if (!fixture) throw new Error(paneId);
+        Object.assign(managed, { meta: { ...managed.meta, ...fixture.meta }, ringBuffer: fixture.ringBuffer });
+        Object.assign((managed as unknown as { ptyProcess: object }).ptyProcess, fixture.ptyProcess);
+        Object.assign(bridge, fixture.bridge);
+      };
+
+      it('an auto-resume at a folder-trust prompt is refused, nothing written; typed keys still go through', async () => {
+        const info = await startRW();
+        become('pane-trust');
+        for (const launch of ['auto', 'human', 'anything']) {
+          const res = await launchInto(info.token as string, 'claude --resume x\r', launch);
+          expect(res.status).toBe(409);
+          expect(await res.json()).toEqual({ error: 'folder-trust', verdict: 'trust', effect: 'none' });
+        }
+        expect(write).not.toHaveBeenCalled();
+        // A person's own keys are not a launch line (they answer the prompt).
+        expect((await launchInto(info.token as string, '\r', null)).status).toBe(204);
+        expect(write).toHaveBeenCalledWith('\r');
+      });
+
+      it('a screen that cannot rule the prompt out stops only an automated line', async () => {
+        const info = await startRW();
+        become('pane-unknown');
+        expect((await launchInto(info.token as string, 'claude --resume x\r', 'auto')).status).toBe(409);
+        expect((await launchInto(info.token as string, 'claude --resume x', 'human')).status).toBe(204);
+        expect(write.mock.calls).toEqual([['claude --resume x']]);
       });
     });
 

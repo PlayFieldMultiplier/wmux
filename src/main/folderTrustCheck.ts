@@ -9,6 +9,14 @@ const FOLDER_TRUST_CLIENT_TIMEOUT_MS = 400;
 
 /** The last reason each pane's check was unavailable, so it is logged once. */
 const unavailableLogged = new Map<string, string>();
+/** The last refusal logged per pane for a writer that retries (`once`). */
+const refusalLogged = new Map<string, string>();
+
+/** Drop a pane's log memory: its session died or was disposed. */
+export function forgetFolderTrustPane(ptyId: string): void {
+  unavailableLogged.delete(ptyId);
+  refusalLogged.delete(ptyId);
+}
 
 /**
  * The daemon's folder-trust verdict for `ptyId`, or null when there is none to
@@ -35,16 +43,23 @@ export async function daemonFolderTrustVerdict(
 /**
  * Whether a verdict stops `writer`: 'trust' always, 'unknown' only when
  * `refuseUnknown` (an automated writer). One log line per refusal, naming the
- * writer and the verdict, and no screen text.
+ * writer and the verdict, and no screen text; with `once` (a writer that
+ * retries), one per pane while the same refusal holds.
  */
 export function folderTrustStops(
   verdict: FolderTrustState | null,
   writer: string,
   ptyId: string,
   refuseUnknown: boolean,
+  opts: { once?: boolean } = {},
 ): verdict is 'trust' | 'unknown' {
-  if (verdict === null || verdict === 'clear' || (verdict === 'unknown' && !refuseUnknown)) return false;
-  console.warn(`[folder-trust] refused ${writer} on pane ${ptyId}: folder-trust ${verdict}`);
+  if (verdict === null || verdict === 'clear' || (verdict === 'unknown' && !refuseUnknown)) {
+    if (opts.once) refusalLogged.delete(ptyId);
+    return false;
+  }
+  const line = `[folder-trust] refused ${writer} on pane ${ptyId}: folder-trust ${verdict}`;
+  if (!opts.once || refusalLogged.get(ptyId) !== line) console.warn(line);
+  if (opts.once) refusalLogged.set(ptyId, line);
   return true;
 }
 
@@ -57,12 +72,23 @@ export async function folderTrustLaunchRefusal(
   dc: Pick<DaemonClient, 'folderTrustState'> | null | undefined,
   ptyId: string,
   writer: string,
-  opts: { refuseUnknown: boolean },
+  opts: { refuseUnknown: boolean; once?: boolean },
 ): Promise<string | null> {
+  return (await folderTrustLaunchHold(dc, ptyId, writer, opts))?.reason ?? null;
+}
+
+/** As folderTrustLaunchRefusal, saying also whether the hold may pass by
+ *  itself (`retry`: a screen that could not be read) or waits for a person. */
+export async function folderTrustLaunchHold(
+  dc: Pick<DaemonClient, 'folderTrustState'> | null | undefined,
+  ptyId: string,
+  writer: string,
+  opts: { refuseUnknown: boolean; once?: boolean },
+): Promise<{ retry: boolean; reason: string } | null> {
   if (!dc) return null;
   const verdict = await daemonFolderTrustVerdict(dc, ptyId);
-  if (!folderTrustStops(verdict, writer, ptyId, opts.refuseUnknown)) return null;
+  if (!folderTrustStops(verdict, writer, ptyId, opts.refuseUnknown, { once: opts.once })) return null;
   return verdict === 'trust'
-    ? FOLDER_TRUST_LAUNCH_REFUSAL
-    : 'the pane has no readable screen, so a folder-trust prompt cannot be ruled out';
+    ? { retry: false, reason: FOLDER_TRUST_LAUNCH_REFUSAL }
+    : { retry: true, reason: 'the pane has no readable screen, so a folder-trust prompt cannot be ruled out' };
 }

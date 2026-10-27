@@ -52,10 +52,11 @@ export function lateBoundPty(get: () => Bridge | undefined): Record<string, (...
     };
   }
   // The desktop types a resume line through main (pty.writeLaunch); the
-  // browser has no main, so the line goes out as typed input.
-  out.writeLaunch = (id, text, submit) => {
+  // browser has no main, so the line goes to the daemon as a launch line,
+  // which applies the same folder-trust policy (a missing origin is automated).
+  out.writeLaunch = (id, text, submit, origin) => {
     const bridge = get();
-    return bridge ? bridge.write(id, submit === true ? `${String(text)}\r` : text) : notReady();
+    return bridge ? bridge.writeLaunch(id, submit === true ? `${String(text)}\r` : text, origin) : notReady();
   };
   return out;
 }

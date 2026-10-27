@@ -31,10 +31,13 @@ export const INITIAL_COMMAND_RETRY_DELAY_MS = 80;
 export interface ScheduleInitialCommandOptions {
   /** Perform the write. Return `false` to signal "not delivered, please retry". */
   write: (cmd: string) => boolean | void;
-  /** Asked once, right before the first write: false types nothing. */
-  beforeWrite?: () => Promise<boolean>;
-  /** Called once if the retry budget is exhausted with the write still undelivered. */
-  onExhausted?: () => void;
+  /** Asked before each write attempt: null writes. A hold with `retry` waits
+   *  for the next attempt, within the same budget; any other hold, or a budget
+   *  spent holding, types nothing and calls onExhausted with its reason. */
+  beforeWrite?: () => Promise<{ retry: boolean; reason: string } | null>;
+  /** Called once if the retry budget is exhausted with the write still
+   *  undelivered, or a beforeWrite hold stopped it (`reason`). */
+  onExhausted?: (reason?: string) => void;
   settleMs?: number;
   fallbackMs?: number;
   retryAttempts?: number;
@@ -66,27 +69,33 @@ export function scheduleInitialCommand(
     if (fired) return;
     fired = true;
     let attempts = 0;
-    const attempt = () => {
+    const retryOrGiveUp = (reason?: string): void => {
+      if (++attempts < retryAttempts) {
+        setTimeout(attempt, retryDelayMs).unref?.();
+      } else {
+        opts.onExhausted?.(reason);
+      }
+    };
+    const write = () => {
       let delivered: boolean | void;
       try {
         delivered = opts.write(cmd);
       } catch {
         return; // pane closed mid-write — best-effort, give up
       }
-      if (delivered === false) {
-        if (++attempts < retryAttempts) {
-          setTimeout(attempt, retryDelayMs).unref?.();
-        } else {
-          opts.onExhausted?.();
-        }
-      }
+      if (delivered === false) retryOrGiveUp();
     };
-    const first = (): void => {
-      if (!opts.beforeWrite) return attempt();
-      // A failed check types nothing, as a refusal does.
-      void opts.beforeWrite().then((ok) => { if (ok) attempt(); }, () => undefined);
-    };
-    setTimeout(first, settleMs).unref?.();
+    function attempt(): void {
+      if (!opts.beforeWrite) return write();
+      // A check that fails is tried again, like an undelivered write.
+      const failed = { retry: true, reason: 'the check before the write failed' };
+      void opts.beforeWrite().catch(() => failed).then((hold) => {
+        if (!hold) write();
+        else if (hold.retry) retryOrGiveUp(hold.reason);
+        else opts.onExhausted?.(hold.reason);
+      });
+    }
+    setTimeout(attempt, settleMs).unref?.();
   };
 
   // Fallback so a silent shell still gets its command.

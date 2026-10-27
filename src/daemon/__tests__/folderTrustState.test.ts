@@ -265,27 +265,24 @@ describe('folderTrustRefusal', () => {
 });
 
 describe("the daemon's writers and their folder-trust policy", () => {
-  // Automated writers stop on 'trust' and 'unknown'; a person's (a chat send,
-  // Stop or Rewind, Continue on another account) and any Escape only on 'trust'.
+  // Automated writers stop on 'trust' and 'unknown'; a person's (a chat Stop
+  // or Rewind, Continue on another account, a manual usage-limit Continue, the
+  // first-run sample command) and any Escape only on 'trust'.
   const src = fs.readFileSync(path.join(__dirname, '..', 'index.ts'), 'utf8');
-  const policy = (writer: string): string[] =>
-    [...src.matchAll(/trustRefusal\(sessionManager, \w+, ([^,]+), ([^)]+)\)/g)].filter((m) => m[1] === writer).map((m) => m[2]);
 
-  it("the launch line refuses an unreadable screen too, and the wake worker gets the raw verdict", () => {
-    expect(policy("'launch line'")).toEqual(['true']);
-    expect(src).toContain('folderTrustVerdict: (id) => folderTrustState({ getSession: (sid) => sessionManager.getSession(sid) }, id),');
-  });
-
-  it('a prompt delivery (schedule, run, nudge, usage-limit continue) refuses an unreadable screen too', () => {
-    expect(src).toContain('folderTrustBlocks: () => trustRefusal(sessionManager, id, writer, true),');
-  });
-
-  it("an automation key: Escape only at a prompt seen, Enter at an unreadable screen too", () => {
-    expect(policy("'automation key'")).toEqual(["sequence !== '\\x1b'"]);
-  });
-
-  it("a person's writers refuse only a prompt seen", () => {
-    expect(src).toContain('atFolderTrust: async (id, writer) => (await trustRefusal(sessionManager, id, writer, false)) !== null,');
-    expect(policy("'continue on account'")).toEqual(['false']);
+  it.each([
+    ['a prompt delivery (schedule, run, nudge) by default', "trustRefusal(sessionManager, id, writer, trust.refuseUnknown ?? true, { once: true })"],
+    ['the usage-limit continue: only the armed one', "}, 'usage-limit continue', { refuseUnknown: armed, onRefused: () => { refused = true; } });"],
+    ['writeIfUnchanged: all but a line a person asked for', "trustRefusal(sessionManager, sessionId, human ? 'sample command' : 'launch line', !human, { once: true })"],
+    ['an automation key: Escape only at a prompt seen', "trustRefusal(sessionManager, id, 'automation key', sequence !== '\\x1b', { once: true })"],
+    ["a chat Stop or Rewind: only at a prompt seen", 'atFolderTrust: async (id, writer) => (await trustRefusal(sessionManager, id, writer, false)) !== null,'],
+    ['Continue on another account: only at a prompt seen', "(await trustRefusal(sessionManager, sid, 'continue on account', false)) !== null,"],
+    ['the wake worker: the raw verdict', 'folderTrustVerdict: (id) => folderTrustState({ getSession: (sid) => sessionManager.getSession(sid) }, id),'],
+    ['the wake worker forgets a dead pane', "sessionManager.on('session:died', (payload: { id: string }) => channelWakeWorkerRef?.forgetSession(payload.id));"],
+    ['the wake worker forgets a destroyed pane', "sessionManager.on('session:destroyed', (payload: { id: string }) => channelWakeWorkerRef?.forgetSession(payload.id));"],
+    ['the refusal log forgets a dead pane', "sessionManager.on('session:died', (payload: { id: string }) => trustRefusalLogged.delete(payload.id));"],
+    ['the refusal log forgets a destroyed pane', "sessionManager.on('session:destroyed', (payload: { id: string }) => trustRefusalLogged.delete(payload.id));"],
+  ])('%s', (_name, wiring) => {
+    expect(src).toContain(wiring);
   });
 });

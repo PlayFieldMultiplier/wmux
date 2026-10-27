@@ -23,15 +23,29 @@ describe('scheduleInitialCommand', () => {
     expect(write).toHaveBeenCalledWith('claude');
   });
 
-  it('asks beforeWrite once before the first write, and types nothing on a no or a failed check', async () => {
-    for (const [answer, writes] of [[true, 1], [false, 0], ['throw', 0]] as const) {
+  it('a hold that may pass is retried within the budget, and the line is typed once it clears', async () => {
+    const write = vi.fn();
+    const onExhausted = vi.fn();
+    let holds = 2;
+    const beforeWrite = vi.fn(async () => (holds-- > 0 ? { retry: true, reason: 'screen unreadable' } : null));
+    const s = scheduleInitialCommand('claude', { write, beforeWrite, onExhausted, settleMs: 100, retryDelayMs: 10, retryAttempts: 5 });
+    s.onFirstData();
+    await vi.advanceTimersByTimeAsync(100 + 10 * 3);
+    expect(beforeWrite).toHaveBeenCalledTimes(3);
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(onExhausted).not.toHaveBeenCalled();
+  });
+
+  it('a hold for a person, or one that outlasts the budget, types nothing and reports the reason', async () => {
+    for (const hold of [{ retry: false, reason: 'at a folder-trust prompt' }, { retry: true, reason: 'screen unreadable' }]) {
       const write = vi.fn();
-      const beforeWrite = vi.fn(async () => { if (answer === 'throw') throw new Error('no daemon'); return answer; });
-      const s = scheduleInitialCommand('claude', { write, beforeWrite, settleMs: 100 });
+      const onExhausted = vi.fn();
+      const s = scheduleInitialCommand('claude', { write, beforeWrite: async () => hold, onExhausted, settleMs: 100, retryDelayMs: 10, retryAttempts: 3 });
       s.onFirstData();
-      await vi.advanceTimersByTimeAsync(100);
-      expect(beforeWrite).toHaveBeenCalledTimes(1);
-      expect(write).toHaveBeenCalledTimes(writes);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(write).not.toHaveBeenCalled();
+      expect(onExhausted).toHaveBeenCalledTimes(1);
+      expect(onExhausted).toHaveBeenCalledWith(hold.reason);
     }
   });
 

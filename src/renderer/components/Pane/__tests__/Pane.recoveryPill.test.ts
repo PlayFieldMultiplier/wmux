@@ -16,7 +16,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { AUTO_RESUME_CONTINUE_PROMPT, claimAutoResume, markResumePillUsed, planAutoResume, planRecoveryPillType, recoveryPillTarget, resolveRecoveryPillPermissions } from '../Pane';
+import { AUTO_RESUME_CONTINUE_PROMPT, claimAutoResume, markResumePillUsed, releaseAutoResume, planAutoResume, planRecoveryPillType, recoveryPillTarget, resolveRecoveryPillPermissions } from '../Pane';
 import type { RoleBinding } from '../../../../shared/orchestratorRole';
 
 const SID = 'a1b2c3d4-0000-0000-0000-9f8e7d6c5b4a';
@@ -482,6 +482,18 @@ describe('automatic resume vs the Resume pill', () => {
   it('each pty is resumed automatically at most once', () => {
     expect(claimAutoResume('pty-auto-once')).toBe(true);
     expect(claimAutoResume('pty-auto-once')).toBe(false);
+  });
+
+  it('a resume main refused hands the claim back, unless the pill was used meanwhile', () => {
+    expect(claimAutoResume('pty-refused')).toBe(true);
+    releaseAutoResume('pty-refused');
+    expect(claimAutoResume('pty-refused')).toBe(true);
+    markResumePillUsed('pty-refused');
+    releaseAutoResume('pty-refused');
+    expect(claimAutoResume('pty-refused')).toBe(false);
+    // The refusal path gives the claim back before it logs.
+    const source = readFileSync(resolve(__dirname, '../Pane.tsx'), 'utf8');
+    expect(source).toMatch(/writeLaunch\(ptyId, line, true\)\.then\([\s\S]{0,120}\(err: unknown\) => \{\s*releaseAutoResume\(ptyId\);\s*console\.warn\('\[wmux:resume\] the resume line was not typed'/);
   });
 
   it('the pill marks the pty before typing, and the timer claims it before writing', () => {

@@ -477,6 +477,8 @@ describe('FirstRunOrchestrator', () => {
     expect(dc.rpc.mock.calls[1]).toEqual(['daemon.writeIfUnchanged', {
       sessionId: 'session-A',
       data: 'cmd\r',
+      // The person running the wizard asked for it: only a folder-trust prompt seen stops it.
+      origin: 'human',
       expect: { keyInputRevision: 0, incarnationId: 'inc-1', requireEmptyShellPrompt: true, outputBytes: 9, markerCount: 2, lastPromptMarker: { type: 'prompt_end', byteOffset: 9 } },
     }]);
 

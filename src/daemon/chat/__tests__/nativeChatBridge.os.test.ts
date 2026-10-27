@@ -16,6 +16,7 @@ import { toWslPath } from '../../../shared/imagePaste';
 import type { TerminalChatAbortOutcome } from '../../transcript/TerminalChatService';
 import { cancelResponse } from '../../web/chatWire';
 import { agentAliveVerdict } from '../../canonicalAgent';
+import { trustFixtureRows } from '../../../test-utils/folderTrustSessions';
 import { OPENCODE_MAX_SEND_BYTES, fileHistoryEpoch, projectChatBlocked, tuiHistoryEpoch, type ChatQueueEvent } from '../chatBridge';
 
 const dirs: string[] = [];
@@ -444,15 +445,11 @@ describe('send', () => {
 
   it('desktop and phone: a send to a pane on a folder-trust prompt is blocked as a terminal prompt, nothing written', async () => {
     const f = fixture(); f.liveClaude();
-    let atTrust = true;
-    const bridge = createChatBridge({ ...f.deps, atFolderTrust: async (_id, writer) => writer === 'chat send' && atTrust });
-    expect(await bridge.desktopSend({ id: 'pane', agentSessionId: 'conv', text: 'hi', requestId: msgId() }))
+    f.state.screen = trustFixtureRows('claude-folder-trust-120x40');
+    expect(await f.bridge.desktopSend({ id: 'pane', agentSessionId: 'conv', text: 'hi', requestId: msgId() }))
       .toEqual({ result: 'blocked', effect: 'none', replayed: false });
-    expect(await bridge.send(phoneSend())).toMatchObject({ result: 'blocked', error: 'chat-blocked', blockedBy: 'terminal', effect: 'none' });
+    expect(await f.bridge.send(phoneSend())).toMatchObject({ result: 'blocked', error: 'chat-blocked', blockedBy: 'terminal', effect: 'none' });
     expect(f.written).toEqual([]);
-    atTrust = false;
-    expect(await bridge.desktopSend({ id: 'pane', agentSessionId: 'conv', text: 'hi', requestId: msgId() }))
-      .toEqual({ result: 'sent', effect: 'submitted', replayed: false });
   });
 
   it('desktop: mints an id for a legacy request id and keeps the desktop result enum', async () => {

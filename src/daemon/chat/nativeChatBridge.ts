@@ -108,8 +108,9 @@ export interface NativeChatBridgeDeps<P extends ChatPane> {
   approvals(): { pendingFor(id: string): { id: string; kind: string; answerable?: boolean } | undefined } | null;
   readScreen(id: string): Promise<ChatScreenRows | null>;
   /** True when the session's own output shows an agent's folder-trust prompt
-   *  (held output included). A chat write is a person's, so a screen the
-   *  daemon cannot read does not count. Absent: not asked. */
+   *  (held output included), asked before a Stop's or a Rewind's ESC. A chat
+   *  write is a person's, so a screen the daemon cannot read does not count.
+   *  (A send's own screen read already blocks the dialog.) Absent: not asked. */
   atFolderTrust?(id: string, writer: string): Promise<boolean>;
   agentProcessAlive(id: string, slug: string): Promise<boolean>;
   /** Writes to the pane PTY and notes the input; false when the pane is gone. */
@@ -754,7 +755,6 @@ export function createChatBridge<P extends ChatPane>(deps: NativeChatBridgeDeps<
           try { return !!slug && await deps.agentProcessAlive(id, slug); } catch { return false; }
         },
         write: (data) => deps.write(id, data),
-        folderTrustBlocks: async () => ((await deps.atFolderTrust?.(id, 'chat send')) ? 'trust' : null),
         ...(deps.delay ? { delay: deps.delay } : {}),
         ...(opts.idleOnly ? { idleOnly: true } : {}),
         ...(opts.onScreenHold ? { onScreenHold: opts.onScreenHold } : {}),

@@ -956,6 +956,21 @@ describe('ChannelWakeWorker — approval in front of the pane', () => {
     expect(h.writes.at(-1)?.data).toBe('\r');
   });
 
+  it('forgets a pane whose session ended: the next hold there is logged again', async () => {
+    const h = makeHarness(undefined, { folderTrustVerdict: async () => 'trust' });
+    h.setEntries([mention()]);
+    h.setSessions([session({})]);
+    h.worker.tickOnce();
+    await vi.advanceTimersByTimeAsync(5);
+    h.worker.tickOnce();
+    await vi.advanceTimersByTimeAsync(5);
+    expect(h.logs.filter((l) => l.includes('folder-trust'))).toHaveLength(1);
+    h.worker.forgetSession(session({}).id);
+    h.worker.tickOnce();
+    await vi.advanceTimersByTimeAsync(5);
+    expect(h.logs.filter((l) => l.includes('folder-trust'))).toHaveLength(2);
+  });
+
   it('withholds the Enter when a folder-trust prompt appears between the text and the Enter', async () => {
     let refused: 'trust' | 'clear' = 'clear';
     const h = makeHarness(undefined, { folderTrustVerdict: async () => refused });

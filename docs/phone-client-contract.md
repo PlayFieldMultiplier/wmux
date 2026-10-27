@@ -502,6 +502,13 @@ ExitPlanMode record), except for a
 lone Esc or a lone Ctrl-C — see
 [`terminal_prompt`](#terminal_prompt--the-agents-own-permission-dialog).
 
+`POST /api/input?session=<id>&launch=<origin>` types a launch line (a resume
+command), not keys. The daemon refuses it with **409
+`{"error":"folder-trust","verdict":"trust"|"unknown","effect":"none"}`** when
+the pane is on an agent's folder-trust prompt, and also when its screen cannot
+rule one out, unless `launch=human` (a person clicked for this line). Any other
+value counts as automated. Plain keys (no `launch`) are not affected.
+
 Phone scrolling has two ownership modes. A terminal's normal buffer is local
 scrollback and must remain local (ordinary shells and Kiro use this path).
 Alternate-screen TUIs have no terminal scrollback. With `--allow-input`, a

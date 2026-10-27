@@ -45,12 +45,16 @@ export interface UsageLimitRegistryDeps {
   /**
    * Paste and submit the continue message through the scheduled-prompt proof,
    * expecting the agent recorded when the limit was seen. `stillWanted` is
-   * asked again right before the paste and right before the Enter.
+   * asked again right before the paste and right before the Enter. `armed`:
+   * the automatic resume (a person's Continue is not). 'folder_trust': a
+   * folder-trust prompt is in the way, or (armed) a screen that cannot rule
+   * one out.
    */
   deliverContinue: (
     sessionId: string,
     expected: UsageLimitAgentIdentity,
     stillWanted: () => boolean,
+    armed: boolean,
   ) => Promise<SessionPromptScheduleResult>;
   now?: () => number;
   log?: (message: string) => void;
@@ -274,7 +278,7 @@ export class UsageLimitRegistry {
     } else {
       this.resuming.add(sessionId);
       try {
-        result = await this.deps.deliverContinue(sessionId, meta.identity, stillWanted);
+        result = await this.deps.deliverContinue(sessionId, meta.identity, stillWanted, armed);
       } catch {
         result = 'error';
       } finally {
@@ -290,12 +294,14 @@ export class UsageLimitRegistry {
       this.clear(sessionId, false);
       return;
     }
+    // A folder-trust prompt in the way waits for a person on the normal tick:
+    // it spends no busy retry and never disarms.
+    if (result === 'folder_trust') return;
     // 'busy' (a turn or a draft in the way) retries on the next tick, up to a
     // cap; an error, or the cap, disarms so a pane is not retyped into forever.
-    // A folder-trust prompt in the way waits the same way.
-    if ((result === 'busy' || result === 'folder_trust') && ++meta.busyRetries < USAGE_LIMIT_MAX_BUSY_RETRIES) return;
+    if (result === 'busy' && ++meta.busyRetries < USAGE_LIMIT_MAX_BUSY_RETRIES) return;
     // Only these disarm: a new result fails typecheck here until it is decided.
-    const disarms: 'busy' | 'folder_trust' | 'error' = result;
+    const disarms: 'busy' | 'error' = result;
     void disarms;
     const limit = this.limits.get(sessionId);
     if (limit && limit.autoResume !== false) {

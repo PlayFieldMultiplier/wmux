@@ -178,7 +178,7 @@ export interface ContinueOnAccountDeps {
   /** A chat-v2 record owns the pane, or a move into chat holds it. */
   chatOwnsPane?: (id: string) => boolean;
   /** The pane is on an agent's folder-trust prompt: a person's move, so
-   *  only a prompt seen on screen stops it. Asked right before the line. */
+   *  only a prompt seen on screen stops it. Asked before the stop. */
   atFolderTrust?: (id: string) => Promise<boolean>;
 }
 
@@ -214,6 +214,9 @@ async function run(deps: ContinueOnAccountDeps, id: string, configDir: string): 
     return { ok: false, code: 'invalid_account' };
   }
   if (!deps.turnClosed(id)) return { ok: false, code: 'turn_open' };
+  // A folder-trust prompt in the pane is the person's to answer: refused
+  // before anything is stopped or copied.
+  if (await deps.atFolderTrust?.(id)) return { ok: false, code: 'folder_trust' };
 
   // Stop first: Claude may still write to the transcript as it exits. The
   // turn is checked again right before the first signal.
@@ -246,8 +249,6 @@ async function run(deps: ContinueOnAccountDeps, id: string, configDir: string): 
   }
   if (revision === null) return { ok: false, code: 'shell_busy' };
   if (!stillOwn()) return { ok: false, code: 'unknown_session' };
-  // A folder-trust prompt on screen would take the line (and its Enter).
-  if (await deps.atFolderTrust?.(id)) return { ok: false, code: 'folder_trust' };
 
   // Bound before the line is typed: the new process's first hook is checked
   // against the pane's account folder. A rebind that could not be persisted

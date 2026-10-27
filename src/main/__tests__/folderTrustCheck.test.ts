@@ -2,7 +2,7 @@
 // prompt on screen always stops them, a screen that cannot rule one out stops
 // only an automated line, and no verdict to have types as before.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { folderTrustLaunchRefusal } from '../folderTrustCheck';
+import { daemonFolderTrustVerdict, folderTrustLaunchRefusal, forgetFolderTrustPane } from '../folderTrustCheck';
 import { FOLDER_TRUST_LAUNCH_REFUSAL } from '../../shared/folderTrustWording';
 import type { DaemonClient } from '../DaemonClient';
 
@@ -36,5 +36,22 @@ describe('folderTrustLaunchRefusal', () => {
       '[folder-trust] refused auto-resume line on pane pty-1: folder-trust unknown',
       '[folder-trust] check unavailable on pane pty-1: timeout',
     ]);
+  });
+});
+
+describe('the per-pane log memory', () => {
+  it('a retrying writer logs a refusal once while it holds, and a pane that ended is forgotten', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const trust = daemon({ state: 'trust' });
+    for (let i = 0; i < 3; i++) await folderTrustLaunchRefusal(trust, 'pty-9', 'startup line', { refuseUnknown: true, once: true });
+    const gone = daemon({ unavailable: 'daemon not connected' });
+    await daemonFolderTrustVerdict(gone, 'pty-9');
+    await daemonFolderTrustVerdict(gone, 'pty-9');
+    expect(warn).toHaveBeenCalledTimes(2);
+    // The session died: the next refusal and the next unavailable check are logged again.
+    forgetFolderTrustPane('pty-9');
+    await folderTrustLaunchRefusal(trust, 'pty-9', 'startup line', { refuseUnknown: true, once: true });
+    await daemonFolderTrustVerdict(gone, 'pty-9');
+    expect(warn).toHaveBeenCalledTimes(4);
   });
 });

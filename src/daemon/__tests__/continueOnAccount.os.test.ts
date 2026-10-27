@@ -132,10 +132,10 @@ describe('continueOnAccount', () => {
     expect(rebound.calls).toEqual(['stop']);
   });
 
-  it('types nothing at a folder-trust prompt', async () => {
+  it('stops, copies and types nothing at a folder-trust prompt', async () => {
     const atTrust = deps({ atFolderTrust: async () => true });
     expect(await continueOnAccount(atTrust, 'p1', accountB)).toEqual({ ok: false, code: 'folder_trust' });
-    expect(atTrust.calls.some((c) => c.startsWith('write') || c.startsWith('rebind'))).toBe(false);
+    expect(atTrust.calls).toEqual([]);
     const clear = deps({ atFolderTrust: async () => false });
     expect((await continueOnAccount(clear, 'p1', accountB)).ok).toBe(true);
   });

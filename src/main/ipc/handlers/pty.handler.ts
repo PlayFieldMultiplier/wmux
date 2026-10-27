@@ -87,7 +87,7 @@ import { createSessionPromptScheduleHandlers } from '../../pty/sessionPromptSche
 import { localReconnectAnswer } from './localPtyReconnect';
 import { pendingRemovalRefusal } from '../../worktask/pendingWorktreeRemovals';
 import { launchAllowedByChat } from './chatLaunchGuard';
-import { folderTrustLaunchRefusal } from '../../folderTrustCheck';
+import { folderTrustLaunchHold, folderTrustLaunchRefusal, forgetFolderTrustPane } from '../../folderTrustCheck';
 
 /**
  * Allowed shell basenames (compared case-insensitively).
@@ -855,7 +855,7 @@ export function registerPTYHandlers(
       const initialCmd = scheduleInitialCommand(botWorker && !isWslShell(shell) ? clearedLaunchLine(typedLine, shell) : typedLine, {
         // A shell rc that starts an agent can put its folder-trust prompt
         // where the startup line would land.
-        beforeWrite: async () => !(await folderTrustLaunchRefusal(daemonClient, sessionId, 'startup line', { refuseUnknown: true })),
+        beforeWrite: () => folderTrustLaunchHold(daemonClient, sessionId, 'startup line', { refuseUnknown: true, once: true }),
         write: (cmd) => {
           const delivered = writeLaunchLine(cmd);
           if (delivered && verifyTaskLine && !verifying) {
@@ -889,16 +889,18 @@ export function registerPTYHandlers(
           }
           return delivered;
         },
-        onExhausted: () => {
+        onExhausted: (reason) => {
           console.warn(
-            `[pty:create] startup command for ${sessionId} not delivered after ` +
-            `retries — session pipe never became writable (pane may be empty).`,
+            reason
+              ? `[pty:create] startup command for ${sessionId} not typed: ${reason}`
+              : `[pty:create] startup command for ${sessionId} not delivered after ` +
+                `retries — session pipe never became writable (pane may be empty).`,
           );
           // J3 §3: 프롬프트 미발사를 렌더러에 통지(fan-out 토스트·재발사 소비 —
           // 사후 이벤트가 정본, 동기 리포트엔 싣지 못한다. 상태 영속 없음).
           const win = getWindow?.();
           if (win && !win.isDestroyed()) {
-            win.webContents.send(IPC.PTY_INITIAL_CMD_EXHAUSTED, sessionId);
+            win.webContents.send(IPC.PTY_INITIAL_CMD_EXHAUSTED, sessionId, reason);
           }
         },
       });
@@ -1398,6 +1400,7 @@ export function registerPTYHandlers(
       await daemonClient.disconnectSessionPipe(id);
       sessionDecoders.delete(id);
       forgetPtyShell(id);
+      forgetFolderTrustPane(id);
       forgetBotWorkerSession(id);
       // Drop the data forwarding listener for this session so a future
       // create or reconnect doesn't pile new listeners on top of dead ones.
@@ -1961,6 +1964,7 @@ export function registerPTYHandlers(
       // explicit close would otherwise leave its entry behind for the life of
       // the process (and a recycled id would inherit the dead pane's shell).
       forgetPtyShell(payload.sessionId);
+      forgetFolderTrustPane(payload.sessionId);
     };
     daemonClient.on('session:died', onDaemonSessionDied);
   }

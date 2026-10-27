@@ -332,6 +332,11 @@ export class ChannelWakeWorker {
     this.pendingEnter.clear();
   }
 
+  /** Drop what the worker keeps for a pane whose session died or was destroyed. */
+  forgetSession(sessionId: string): void {
+    this.trustHeld.delete(sessionId);
+  }
+
   /**
    * Fast path: a channel event just fired (post) — check soon instead of
    * waiting for the next 15 s tick. Debounced so a burst of posts costs one

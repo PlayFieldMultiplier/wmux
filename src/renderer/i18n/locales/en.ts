@@ -4256,7 +4256,7 @@ export const en = {
   'sessionSchedule.statusBusy': 'waiting for ready input',
   'sessionSchedule.statusUnavailable': 'waiting for session',
   'sessionSchedule.statusSessionChanged': 'session changed — recreate',
-  'sessionSchedule.statusFolderTrust': 'skipped: pane at folder-trust prompt',
+  'sessionSchedule.statusFolderTrust': 'waiting: pane at folder-trust prompt',
   'sessionSchedule.statusSent': 'sent',
   'sessionSchedule.statusError': 'delivery error',
   'sessionSchedule.statusPaused': 'paused',
