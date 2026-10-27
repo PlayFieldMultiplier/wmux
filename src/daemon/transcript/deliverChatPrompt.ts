@@ -70,7 +70,7 @@ export async function deliverChatPrompt(
     if (titleShowsRunningTurn(title, initial.slug, Date.now())) return 'busy';
   }
   let keyboardOwned = true;
-  return deliverScheduledPrompt(initial.slug, initial.incarnationId, text, {
+  const result = await deliverScheduledPrompt(initial.slug, initial.incarnationId, text, {
     ...deps,
     // Codex submits bracketed multiline paste with one Enter. Claude's existing
     // double-Enter behavior is retained by the scheduler's default.
@@ -94,6 +94,8 @@ export async function deliverChatPrompt(
       return deps.write(data);
     },
   });
+  // The screen gate above already holds a folder-trust dialog as a dialog.
+  return result === 'folder_trust' ? 'blocked' : result;
 }
 
 /** The rule under Claude's prompt row (and over it, unlabeled). */

@@ -47,6 +47,10 @@ export interface ScheduledPromptDeliveryDeps {
    *  "nothing reached the PTY" from "the paste may be visible". `queued` is
    *  true on `submit` when the prompt was accepted while the turn ran. */
   onWrite?: (stage: 'paste' | 'submit', queued?: boolean) => void;
+  /** Whether the pane is on an agent's folder-trust prompt, or its screen
+   *  cannot rule one out: checked before the first write, which it stops
+   *  with `folder_trust`. */
+  folderTrustBlocks?: () => Promise<boolean>;
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -114,6 +118,11 @@ export async function deliverScheduledPrompt(
     return !!now && now.slug === expectedSlug && now.incarnationId === expectedIncarnationId &&
       now.inputRevision === before.inputRevision + writes;
   };
+  try {
+    if (deps.folderTrustBlocks && (await deps.folderTrustBlocks())) return 'folder_trust';
+  } catch {
+    return 'folder_trust';
+  }
   try {
     if (deps.authorized && !(await deps.authorized('first-write'))) return 'error';
   } catch {

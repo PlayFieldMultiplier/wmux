@@ -4206,6 +4206,7 @@ export const pl = {
   'sessionSchedule.statusBusy': 'oczekuje na gotowość',
   'sessionSchedule.statusUnavailable': 'oczekuje na sesję',
   'sessionSchedule.statusSessionChanged': 'sesja zastąpiona — utwórz ponownie',
+  'sessionSchedule.statusFolderTrust': 'pominięto: panel czeka na potwierdzenie zaufania do folderu',
   'sessionSchedule.statusSent': 'wysłano',
   'sessionSchedule.statusError': 'błąd dostarczenia',
   'sessionSchedule.statusPaused': 'wstrzymano',

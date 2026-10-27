@@ -89,7 +89,7 @@ import { normalizeLivePaneIds } from '../shared/a2aOrphanedTask';
 import { WEB_DEFAULT_PORT, webHostIsLoopback, type WebTlsConfig } from '../shared/web';
 import { generateSnapshotUnqueued, enqueueSnapshotJob, generateTextSnapshot, generateTextSnapshotUnqueued, runSmallSnapshotJob, capTextRowsToFrameBudget, MAX_SCROLLBACK } from './HeadlessSnapshot';
 import { queuedScreenText, queuedTextSnapshot } from './queuedSessionText';
-import { registerFolderTrustRpc } from './folderTrustState';
+import { FolderTrustRefusedError, folderTrustRefusal, registerFolderTrustRpc } from './folderTrustState';
 import type { TerminalPty } from '../shared/terminalPty';
 import { serializeSession } from './sessionSerialize';
 import { AwaitingScreenVerifier, AWAITING_NARROW_DIALOG_COLS, questionInFlight, renderPaneScreen, renderPaneTail } from './AwaitingScreenVerifier';
@@ -5884,14 +5884,20 @@ function registerRpcHandlers(
     id: string, agentSlug: AgentSlug, incarnationId: string, prompt: string, bypassUsageHold = false,
   ): Promise<SessionPromptScheduleResult> => {
     if (!bypassUsageHold && usageLimits?.holds(id)) return 'busy';
-    return deliverPromptToSessionNow(id, agentSlug, incarnationId, prompt, {});
+    return deliverPromptToSessionNow(id, agentSlug, incarnationId, prompt, {}, 'scheduled prompt');
   };
+  // Every caller is automated input (a schedule, a run, a nudge, a usage-limit
+  // continue), so a screen that cannot rule out a folder-trust prompt stops it
+  // too. `writer` names the caller in the refusal's log line.
   const deliverPromptToSessionNow = (
     id: string, agentSlug: AgentSlug, incarnationId: string, prompt: string,
     opts: Pick<ScheduledPromptDeliveryDeps, 'acceptError' | 'authorized' | 'onWrite'>,
+    writer: string,
   ) =>
     deliverScheduledPrompt(agentSlug, incarnationId, prompt, {
       ...opts,
+      folderTrustBlocks: async () =>
+        (await folderTrustRefusal(sessionManager, id, writer, { refuseUnknown: true, log: (message) => log('warn', message) })) !== null,
       getAgentState: () => {
         const current = readDaemonAgentState(id);
         const slug = current.agentName ? agentDisplayToSlug(current.agentName) : undefined;
@@ -5953,7 +5959,7 @@ function registerRpcHandlers(
     return deliverCallerNudge(prompt, {
       usageHeld: () => usageLimits?.holds(id) === true,
       input: () => sessionManager.getSession(id)?.bridge,
-      deliver: (opts) => deliverPromptToSessionNow(id, agentSlug, incarnationId, prompt, opts),
+      deliver: (opts) => deliverPromptToSessionNow(id, agentSlug, incarnationId, prompt, opts, 'caller nudge'),
     });
   });
 
@@ -5979,7 +5985,7 @@ function registerRpcHandlers(
         // composer (the input-revision proof covers the gap after the paste).
         authorized: async (stage) => stillWanted()
           && (stage === 'submit' || sessionManager.getSession(id)?.bridge.hasDraft() !== true),
-      });
+      }, 'usage-limit continue');
     },
     log: (message) => log('info', message),
   });
@@ -6095,6 +6101,9 @@ function registerRpcHandlers(
       return outcome?.ok ? outcome.rows.map((r) => r.text).join('\n') : '';
     },
     sendKey: async (id, sequence) => {
+      if (!liveManaged(id)) throw new Error('session gone');
+      const refused = await folderTrustRefusal(sessionManager, id, 'automation key', { refuseUnknown: true, log: (message) => log('warn', message) });
+      if (refused) throw new FolderTrustRefusedError(`folder-trust ${refused}`);
       const managed = liveManaged(id);
       if (!managed) throw new Error('session gone');
       managed.ptyProcess.write(sequence);
@@ -6118,7 +6127,7 @@ function registerRpcHandlers(
     // engine needs to tell "nothing written" from "pasted, not submitted".
     deliverPrompt: async (id, slug, incarnationId, prompt, onWrite) => (usageLimits?.holds(id)
       ? 'busy'
-      : deliverPromptToSessionNow(id, slug, incarnationId, prompt, onWrite ? { onWrite } : {})),
+      : deliverPromptToSessionNow(id, slug, incarnationId, prompt, onWrite ? { onWrite } : {}, 'automation run')),
     hasPendingApproval: (id) => approvalRegistry?.list().pending.some((r) => r.sessionId === id) ?? false,
     transcriptTurnEndAt: (id) => transcriptTurnEnd(projector.snapshot(id)?.events, 0)?.at,
     transcriptLastEventAt: (id) => projector.snapshot(id)?.events.at(-1)?.ts,
@@ -6226,6 +6235,12 @@ function registerRpcHandlers(
     const expect = parseWriteExpectation(params['expect']);
     if (!sessionId || !data || data.length > 64 * 1024 || !expect) {
       throw new Error('daemon.writeIfUnchanged: sessionId, data (at most 64 KiB) and expect are required');
+    }
+    if (!sessionManager.getSession(sessionId)) return { written: false };
+    // An automated launch line: a folder-trust prompt, or a screen that cannot
+    // rule one out, gets nothing.
+    if (await folderTrustRefusal(sessionManager, sessionId, 'launch line', { refuseUnknown: true, log: (message) => log('warn', message) })) {
+      return { written: false, reason: 'folder_trust' };
     }
     const managed = sessionManager.getSession(sessionId);
     if (!managed) return { written: false };
@@ -9580,6 +9595,7 @@ async function main(): Promise<void> {
     approvalBlocked: (id) =>
       sessionManager.getSession(id)?.bridge.isAwaitingHuman() === true
       || approvalRegistry?.list().pending.some((request) => request.sessionId === id) === true,
+    folderTrustRefusal: (id) => folderTrustRefusal(sessionManager, id, 'wake nudge', { refuseUnknown: true, log: (message) => log('warn', message) }),
     screenShowsApproval: async (id) => {
       const frame = await renderPaneScreen(() => sessionManager.getSession(id), generateTextSnapshot);
       if (!frame || frame.rows.every((row) => !row.trim())) return null;
@@ -9694,6 +9710,8 @@ async function main(): Promise<void> {
           kill: (pid, signal) => process.kill(pid, signal),
           stillIdle,
         }),
+        atFolderTrust: async (sid) =>
+          (await folderTrustRefusal(sessionManager, sid, 'continue on account', { refuseUnknown: false, log: (message) => log('warn', message) })) !== null,
         paneFree: (sid) => sessionPaneFree(sessionManager, agentProcessTracker, sid),
         chatOwnsPane: (sid) => chatV2Host?.ownsPane(sid) === true,
         promptRevision: (sid) => {

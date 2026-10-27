@@ -54,6 +54,7 @@ function statusKey(schedule: SessionPromptSchedule): string {
   if (schedule.enabled && schedule.lastResult === 'unavailable') {
     return 'sessionSchedule.statusUnavailable';
   }
+  if (schedule.enabled && schedule.lastResult === 'folder_trust') return 'sessionSchedule.statusFolderTrust';
   if (schedule.lastResult === 'session_changed') return 'sessionSchedule.statusSessionChanged';
   if (schedule.lastResult === 'sent') return 'sessionSchedule.statusSent';
   if (schedule.lastResult === 'error') return 'sessionSchedule.statusError';
@@ -272,7 +273,7 @@ export default function SessionSchedulesPopover({
                     backgroundColor: schedule.lastResult === 'session_changed'
                       ? 'var(--accent-red)'
                       : schedule.enabled
-                      ? schedule.lastResult === 'busy' || schedule.lastResult === 'unavailable'
+                      ? schedule.lastResult === 'busy' || schedule.lastResult === 'unavailable' || schedule.lastResult === 'folder_trust'
                         ? 'var(--accent-yellow)'
                         : 'var(--accent-green)'
                       : 'var(--text-muted)',

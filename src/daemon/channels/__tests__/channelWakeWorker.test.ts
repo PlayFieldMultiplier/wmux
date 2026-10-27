@@ -72,6 +72,7 @@ function makeHarness(
   approvals: {
     approvalBlocked?: (sessionId: string) => boolean;
     screenShowsApproval?: (sessionId: string) => Promise<boolean | null>;
+    folderTrustRefusal?: (sessionId: string) => Promise<'trust' | 'unknown' | null>;
   } = {},
 ): Harness {
   let entries: WakeUnreadEntry[] = [];
@@ -931,6 +932,42 @@ describe('ChannelWakeWorker — approval in front of the pane', () => {
     await vi.advanceTimersByTimeAsync(5);
     expect(h.writes.map((w) => w.data)).toHaveLength(2);
     expect(h.writes.at(-1)?.data).toBe('\r');
+  });
+
+  it('holds at a folder-trust prompt, or a screen that cannot rule one out, with the reason logged', async () => {
+    let verdict: 'trust' | 'unknown' | null = 'trust';
+    const h = makeHarness(undefined, { folderTrustRefusal: async () => verdict });
+    h.setEntries([mention()]);
+    h.setSessions([session({})]);
+    for (const refused of ['trust', 'unknown'] as const) {
+      verdict = refused;
+      h.worker.tickOnce();
+      await vi.advanceTimersByTimeAsync(5);
+      expect(h.writes).toEqual([]);
+    }
+    expect(h.logs.filter((l) => l.includes('folder-trust prompt'))).toEqual([
+      expect.stringContaining('pane at folder-trust prompt (trust)'),
+      expect.stringContaining('pane at folder-trust prompt (unknown)'),
+    ]);
+    verdict = null;
+    h.worker.tickOnce();
+    await vi.advanceTimersByTimeAsync(5);
+    expect(h.writes.map((w) => w.data)).toHaveLength(2);
+    expect(h.writes.at(-1)?.data).toBe('\r');
+  });
+
+  it('withholds the Enter when a folder-trust prompt appears between the text and the Enter', async () => {
+    let refused: 'trust' | null = null;
+    const h = makeHarness(undefined, { folderTrustRefusal: async () => refused });
+    h.setEntries([mention()]);
+    h.setSessions([session({})]);
+    h.worker.tickOnce();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.writes).toHaveLength(1);
+    refused = 'trust';
+    await vi.advanceTimersByTimeAsync(5);
+    expect(h.writes.map((w) => w.data)).not.toContain('\r');
+    expect(h.outcomes.at(-1)?.ok).toBe(false);
   });
 
   it('withholds the Enter when a dialog appears between the text and the Enter', async () => {

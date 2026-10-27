@@ -133,8 +133,8 @@ describe('sessionPromptScheduleStore', () => {
     expect(dueSessionPromptSchedules(rows, 1_000).map((s) => s.id)).toEqual(['first', 'later']);
   });
 
-  it('keeps busy/unavailable schedules due for retry', () => {
-    for (const result of ['busy', 'unavailable'] as const) {
+  it('keeps busy/unavailable/folder-trust schedules due for retry', () => {
+    for (const result of ['busy', 'unavailable', 'folder_trust'] as const) {
       const advanced = advanceSessionPromptSchedule(schedule(), result, 5_000);
       expect(advanced.enabled).toBe(true);
       expect(advanced.nextRunAt).toBe(1_000);

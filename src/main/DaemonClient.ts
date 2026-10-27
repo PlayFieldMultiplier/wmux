@@ -1178,6 +1178,7 @@ export class DaemonClient extends EventEmitter {
         response.result === 'busy' ||
         response.result === 'unavailable' ||
         response.result === 'session_changed' ||
+        response.result === 'folder_trust' ||
         response.result === 'error'
       ) return response.result;
       return 'error';
@@ -1204,13 +1205,13 @@ export class DaemonClient extends EventEmitter {
     agentSlug: AgentSlug;
     incarnationId: string;
     prompt: string;
-  }): Promise<{ result: 'sent' | 'held' | 'session_changed' | 'unavailable' | 'error'; pasted: boolean }> {
+  }): Promise<{ result: 'sent' | 'held' | 'approval_pending' | 'session_changed' | 'unavailable' | 'error'; pasted: boolean }> {
     if (!this.isConnected) return { result: 'unavailable', pasted: false };
     try {
       const response = await this.rpc('daemon.deliverCallerNudgeV1', args) as { result?: unknown; pasted?: unknown };
       const pasted = response.pasted === true;
       const r = response.result;
-      if (r === 'sent' || r === 'held' || r === 'session_changed' || r === 'unavailable' || r === 'error') {
+      if (r === 'sent' || r === 'held' || r === 'approval_pending' || r === 'session_changed' || r === 'unavailable' || r === 'error') {
         return { result: r, pasted };
       }
       return { result: 'error', pasted: true };

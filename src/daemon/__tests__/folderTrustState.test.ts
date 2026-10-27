@@ -4,7 +4,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { folderTrustState, type FolderTrustDeps, type FolderTrustSession } from '../folderTrustState';
+import { folderTrustRefusal, folderTrustState, type FolderTrustDeps, type FolderTrustSession } from '../folderTrustState';
 import { looksLikeFolderTrustDialog } from '../approvals/approvalKeystrokes';
 import { enqueueSnapshotJob, generateTextSnapshot } from '../HeadlessSnapshot';
 import { RingBuffer } from '../RingBuffer';
@@ -242,5 +242,24 @@ describe('folderTrustState', () => {
       unblock?.();
       await busy;
     }
+  });
+});
+
+describe('folderTrustRefusal', () => {
+  it("refuses on 'trust' with one log line, and on 'unknown' only for an automated writer", async () => {
+    const lines: string[] = [];
+    const log = (message: string): void => { lines.push(message); };
+    const held = (s: FolderTrustSession) => ({ getSession: () => s });
+    const trust = held(session(frame(CLAUDE), 120, 40));
+    expect(await folderTrustRefusal(trust, 'pty-1', 'scheduled prompt', { refuseUnknown: false, log })).toBe('trust');
+    const muted = held(session(Buffer.from('% '), 120, 40, { bridge: { isMuted: true, outputModes: null, heldOutput: () => null } }));
+    expect(await folderTrustRefusal(muted, 'pty-2', 'chat send', { refuseUnknown: false, log })).toBeNull();
+    expect(await folderTrustRefusal(muted, 'pty-2', 'wake nudge', { refuseUnknown: true, log })).toBe('unknown');
+    const shell = held(session(Buffer.from('% '), 120, 40));
+    expect(await folderTrustRefusal(shell, 'pty-3', 'wake nudge', { refuseUnknown: true, log })).toBeNull();
+    expect(lines).toEqual([
+      '[folder-trust] refused scheduled prompt on pane pty-1: folder-trust trust',
+      '[folder-trust] refused wake nudge on pane pty-2: folder-trust unknown',
+    ]);
   });
 });

@@ -58,6 +58,7 @@ import {
   validateDraft,
 } from './draft';
 import { buildAutomationCommand, buildAutomationEnv, resolveAccountEnv } from './launch';
+import { FolderTrustRefusedError } from '../folderTrustState';
 import {
   ATTENTION_CAP,
   deleteSnapshot,
@@ -169,6 +170,8 @@ interface LiveRun {
   lastRunningAt?: number;
   lingerUntil?: number;
   processExitAt?: number;
+  /** An Enter of the submit retry was refused at a folder-trust prompt. */
+  folderTrustRefused?: boolean;
 }
 
 export interface AgentEventSignal {
@@ -967,7 +970,8 @@ export class AutomationEngine {
     }
     if (result !== 'sent') {
       this.ports.log('warn', `[automation] run ${run.id} prompt delivery ${result}${run.detail ? ` (${run.detail})` : ''}`);
-      await this.terminate(run, 'failed', 'launch_failed');
+      // A folder-trust prompt blocks the run the way it does at launch.
+      await this.terminate(run, 'failed', result === 'folder_trust' || live.folderTrustRefused ? 'first_run_blocked' : 'launch_failed');
       return;
     }
     live.deliveredAt = this.now();
@@ -1105,7 +1109,8 @@ export class AutomationEngine {
       if (enters < SUBMIT_RETRY_MAX && this.now() - lastEnterAt >= SUBMIT_RETRY_GAP_MS) {
         try {
           await this.ports.sendKey(live.ptyId, '\r');
-        } catch {
+        } catch (err) {
+          if (err instanceof FolderTrustRefusedError) live.folderTrustRefused = true;
           return 'submit_unconfirmed';
         }
         enters++;

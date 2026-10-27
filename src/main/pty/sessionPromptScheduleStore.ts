@@ -336,7 +336,8 @@ export function advanceSessionPromptSchedule(
     lastAttemptAt: now,
     lastResult: result,
   };
-  if (result === 'busy' || result === 'unavailable') return next;
+  // A folder-trust prompt waits for a person; the occurrence stays due.
+  if (result === 'busy' || result === 'unavailable' || result === 'folder_trust') return next;
 
   // An incarnation mismatch is permanent. In particular, repeating schedules
   // must not advance and later target the replacement session.

@@ -176,6 +176,9 @@ export interface ContinueOnAccountDeps {
   promptWaitMs?: number;
   /** A chat-v2 record owns the pane, or a move into chat holds it. */
   chatOwnsPane?: (id: string) => boolean;
+  /** The pane is on an agent's folder-trust prompt: a person's move, so
+   *  only a prompt seen on screen stops it. Asked right before the line. */
+  atFolderTrust?: (id: string) => Promise<boolean>;
 }
 
 export async function continueOnAccount(deps: ContinueOnAccountDeps, id: string, configDir: string): Promise<ContinueOnAccountResult> {
@@ -242,6 +245,8 @@ async function run(deps: ContinueOnAccountDeps, id: string, configDir: string): 
   }
   if (revision === null) return { ok: false, code: 'shell_busy' };
   if (!stillOwn()) return { ok: false, code: 'unknown_session' };
+  // A folder-trust prompt on screen would take the line (and its Enter).
+  if (await deps.atFolderTrust?.(id)) return { ok: false, code: 'shell_busy' };
 
   // Bound before the line is typed: the new process's first hook is checked
   // against the pane's account folder. A rebind that could not be persisted

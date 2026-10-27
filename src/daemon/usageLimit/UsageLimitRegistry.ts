@@ -292,7 +292,8 @@ export class UsageLimitRegistry {
     }
     // 'busy' (a turn or a draft in the way) retries on the next tick, up to a
     // cap; an error, or the cap, disarms so a pane is not retyped into forever.
-    if (result === 'busy' && ++meta.busyRetries < USAGE_LIMIT_MAX_BUSY_RETRIES) return;
+    // A folder-trust prompt in the way waits the same way.
+    if ((result === 'busy' || result === 'folder_trust') && ++meta.busyRetries < USAGE_LIMIT_MAX_BUSY_RETRIES) return;
     const limit = this.limits.get(sessionId);
     if (limit && limit.autoResume !== false) {
       const next = { ...limit, autoResume: false };

@@ -104,6 +104,18 @@ describe('UsageLimitRegistry', () => {
     expect(registry.get('p1')).toBeUndefined();
   });
 
+  it('waits at a folder-trust prompt like a busy pane: retried, then disarmed at the cap', async () => {
+    const { registry, deliverContinue, advance } = setup('folder_trust');
+    registry.noteHookSignal('p1', limitHit);
+    await registry.update('p1', { autoResume: true });
+    advance(PAST_RESET);
+    for (let i = 0; i < USAGE_LIMIT_MAX_BUSY_RETRIES - 1; i++) await registry.tick();
+    expect(registry.get('p1')?.autoResume).toBe(true);
+    expect(deliverContinue).toHaveBeenCalledTimes(USAGE_LIMIT_MAX_BUSY_RETRIES - 1);
+    await registry.tick();
+    expect(registry.get('p1')?.autoResume).toBe(false);
+  });
+
   it('does not move a known reset when the same screen row is redrawn, nor re-hold a dismissed one', async () => {
     const { registry, advance } = setup('sent', { slug: 'codex', incarnationId: 'inc-1' });
     const row = "■ You've hit your usage limit. Try again in 2 hours.";

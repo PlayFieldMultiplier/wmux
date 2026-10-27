@@ -167,6 +167,13 @@ export interface ChannelWakeWorkerDeps {
    * Checked before the text write and again before the Enter. Optional.
    */
   screenShowsApproval?(sessionId: string): Promise<boolean | null>;
+  /**
+   * Whether the pane is on an agent's folder-trust prompt ('trust') or its
+   * screen cannot rule one out ('unknown'); null when it may be written.
+   * Checked with the screen, before the text write and again before the
+   * Enter. Optional.
+   */
+  folderTrustRefusal?(sessionId: string): Promise<'trust' | 'unknown' | null>;
 }
 
 // Conservative defaults (Step 3b tunes with field data).
@@ -455,7 +462,7 @@ export class ChannelWakeWorker {
         // An approval in front of the pane: the nudge's Enter would answer it.
         // Hold without spending budget; the next tick looks again.
         if (this.approvalHold(target.id, key)) continue;
-        if (this.deps.screenShowsApproval) {
+        if (this.deps.screenShowsApproval || this.deps.folderTrustRefusal) {
           if (this.screenChecks.has(key)) continue;
           this.screenChecks.add(key);
           void this.injectAfterScreenCheck(key, ws, entry, target, wantMention, state)
@@ -492,6 +499,18 @@ export class ChannelWakeWorker {
 
   /** Whether the screen is free of a dialog; false (and logged) when it shows one or cannot be read. */
   private async screenIsFree(sessionId: string, key: string): Promise<boolean> {
+    if (this.deps.folderTrustRefusal) {
+      let refused: 'trust' | 'unknown' | null;
+      try {
+        refused = await this.deps.folderTrustRefusal(sessionId);
+      } catch {
+        refused = 'unknown';
+      }
+      if (refused) {
+        this.deps.log('info', `[wake] holding nudge for ${key}: pane at folder-trust prompt (${refused}) in ${sessionId}`);
+        return false;
+      }
+    }
     if (!this.deps.screenShowsApproval) return true;
     let shown: boolean | null;
     try {
@@ -590,7 +609,7 @@ export class ChannelWakeWorker {
         report(false);
         return;
       }
-      if (!this.deps.screenShowsApproval) {
+      if (!this.deps.screenShowsApproval && !this.deps.folderTrustRefusal) {
         commit();
         return;
       }

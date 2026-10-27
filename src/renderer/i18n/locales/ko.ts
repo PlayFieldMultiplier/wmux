@@ -4324,6 +4324,7 @@ export const ko = {
   'sessionSchedule.statusBusy': '입력 가능 상태 대기 중',
   'sessionSchedule.statusUnavailable': '세션 대기 중',
   'sessionSchedule.statusSessionChanged': '세션이 교체됨 — 다시 생성 필요',
+  'sessionSchedule.statusFolderTrust': '건너뜀: 패인이 폴더 신뢰 확인 화면에 있음',
   'sessionSchedule.statusSent': '전송됨',
   'sessionSchedule.statusError': '전송 오류',
   'sessionSchedule.statusPaused': '일시정지됨',

@@ -5,6 +5,9 @@ export type SessionPromptScheduleResult =
   | 'busy'
   | 'unavailable'
   | 'session_changed'
+  /** Nothing written: the pane is on an agent's folder-trust prompt, or its
+   *  screen cannot rule one out. Stays due, like 'busy'. */
+  | 'folder_trust'
   | 'error';
 
 export interface SessionPromptDeliveryClaim {

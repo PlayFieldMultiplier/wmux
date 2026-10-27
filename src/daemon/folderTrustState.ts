@@ -152,3 +152,30 @@ export function registerFolderTrustRpc(pipeServer: Pick<DaemonPipeServer, 'onRpc
     };
   });
 }
+
+/** What a writer that stood aside says, by verdict. */
+export const FOLDER_TRUST_REFUSAL_REASON = {
+  trust: 'pane at folder-trust prompt',
+  unknown: 'pane screen unreadable, folder-trust prompt not ruled out',
+} as const;
+
+/**
+ * The verdict that keeps a daemon writer from typing into `id` now, or null
+ * when it may write: 'trust' always; 'unknown' only for an automated writer
+ * (`refuseUnknown`), never for a person's own input. One log line per
+ * refusal, naming the writer and the verdict.
+ */
+export async function folderTrustRefusal(
+  sessions: FolderTrustSessions,
+  id: string,
+  writer: string,
+  opts: { refuseUnknown: boolean; log: (message: string) => void },
+): Promise<'trust' | 'unknown' | null> {
+  const verdict = await folderTrustState({ getSession: (sid) => sessions.getSession(sid) }, id);
+  if (verdict === 'clear' || (verdict === 'unknown' && !opts.refuseUnknown)) return null;
+  opts.log(`[folder-trust] refused ${writer} on pane ${id}: folder-trust ${verdict}`);
+  return verdict;
+}
+
+/** A key a daemon writer did not send: the pane is on a folder-trust prompt, or cannot rule one out. */
+export class FolderTrustRefusedError extends Error {}

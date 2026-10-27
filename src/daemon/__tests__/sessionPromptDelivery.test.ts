@@ -5,6 +5,8 @@ import {
   deliveryInputFence,
   type ScheduledPromptAgentState,
 } from '../sessionPromptDelivery';
+import { folderTrustRefusal } from '../folderTrustState';
+import { folderTrustSessions } from '../../test-utils/folderTrustSessions';
 
 function state(overrides: Partial<ScheduledPromptAgentState> = {}): ScheduledPromptAgentState {
   return {
@@ -334,5 +336,34 @@ describe('deliverScheduledPrompt — a viewer attaching mid-delivery', () => {
     expect(attached.result).toBe('sent');
     expect(attached.written).toEqual(['\x1b[200~나에게 인사해\x1b[201~', '\r']);
     expect((await deliverWithAttach(deliveryInputFence, ['x'])).result).toBe('error');
+  });
+});
+
+describe('deliverScheduledPrompt at a folder-trust prompt', () => {
+  it("writes nothing and answers 'folder_trust' on 'trust' or 'unknown', and sends to a clear pane", async () => {
+    const sessions = folderTrustSessions();
+    const lines: string[] = [];
+    for (const [pane, expected] of [['pane-trust', 'folder_trust'], ['pane-unknown', 'folder_trust'], ['pane-shell', 'sent']] as const) {
+      let current = state();
+      const writes: string[] = [];
+      const result = await deliverScheduledPrompt('codex', 'incarnation-1', 'continue', {
+        getAgentState: () => current,
+        isAgentProcessAlive: alwaysAlive,
+        write: (data) => {
+          writes.push(data);
+          current = { ...current, inputRevision: current.inputRevision + 1 };
+          return true;
+        },
+        delay: async () => undefined,
+        folderTrustBlocks: async () =>
+          (await folderTrustRefusal(sessions, pane, 'scheduled prompt', { refuseUnknown: true, log: (m) => lines.push(m) })) !== null,
+      });
+      expect(result).toBe(expected);
+      expect(writes.length > 0).toBe(expected === 'sent');
+    }
+    expect(lines).toEqual([
+      '[folder-trust] refused scheduled prompt on pane pane-trust: folder-trust trust',
+      '[folder-trust] refused scheduled prompt on pane pane-unknown: folder-trust unknown',
+    ]);
   });
 });
