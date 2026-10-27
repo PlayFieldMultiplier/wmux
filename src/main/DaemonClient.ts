@@ -1107,16 +1107,18 @@ export class DaemonClient extends EventEmitter {
 
   /**
    * Whether a session's ring shows an agent's folder-trust dialog
-   * (daemon/folderTrustState). 'unknown' on any failure, including a
-   * timeout and a daemon that predates the method.
+   * (daemon/folderTrustState): the daemon's verdict, or why there is none
+   * (not connected, a daemon that predates the method, no answer in time).
    */
-  async folderTrustState(sessionId: string, timeoutMs: number): Promise<FolderTrustState> {
+  async folderTrustState(sessionId: string, timeoutMs: number): Promise<{ state: FolderTrustState } | { unavailable: string }> {
+    if (!this.isConnected) return { unavailable: 'daemon not connected' };
     try {
       const r = (await this.rpc('daemon.folderTrustState', { id: sessionId }, { timeoutMs })) as { state?: unknown } | null;
       const state = r?.state;
-      return state === 'trust' || state === 'clear' ? state : 'unknown';
-    } catch {
-      return 'unknown';
+      return state === 'trust' || state === 'clear' || state === 'unknown' ? { state } : { unavailable: 'malformed answer' };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { unavailable: /Unknown method/.test(message) ? 'daemon predates daemon.folderTrustState' : message };
     }
   }
 

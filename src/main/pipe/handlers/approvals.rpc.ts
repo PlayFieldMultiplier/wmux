@@ -266,7 +266,7 @@ export function folderTrustGateMessage(op: string, ptyId: string): string {
 
 /** The refusal when neither the renderer nor the daemon could say whether a folder-trust prompt is up. */
 export function folderTrustUnknownMessage(op: string, ptyId: string): string {
-  return `${op}: pane "${ptyId}" has no readable screen, so a folder-trust prompt cannot be ruled out; nothing was sent. Retry once the pane is shown.`;
+  return `${op}: pane "${ptyId}" has no readable screen, so a folder-trust prompt cannot be ruled out; retry once the pane is shown.`;
 }
 
 /** The refusal raw input gets when an approval is on screen and policy is off. */

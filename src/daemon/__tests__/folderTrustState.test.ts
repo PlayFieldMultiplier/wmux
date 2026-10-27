@@ -5,104 +5,136 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { folderTrustState, type FolderTrustDeps, type FolderTrustSession } from '../folderTrustState';
-import type { TextSnapshotOutcome } from '../HeadlessSnapshot';
+import { looksLikeFolderTrustDialog } from '../approvals/approvalKeystrokes';
+import { enqueueSnapshotJob, generateTextSnapshot } from '../HeadlessSnapshot';
+import { RingBuffer } from '../RingBuffer';
 
 const fixtureRows = (name: string): string[] =>
   (JSON.parse(fs.readFileSync(path.join(__dirname, '../approvals/__tests__/fixtures/folder-trust', `${name}.json`), 'utf8')) as {
     screen: string[];
   }).screen;
 
-const parsed = (rows: string[]): TextSnapshotOutcome => ({
-  ok: true,
-  rows: rows.map((text) => ({ text, wrapped: false })),
-  bufferType: 'normal',
-  rowsBelowCursor: 0,
-  bytesIn: 0,
-  durationMs: 1,
-});
+/** A full-screen TUI's frame: each row placed by cursor position, as Claude Code draws. */
+const frame = (rows: string[]): Buffer =>
+  Buffer.from(`\x1b[2J${rows.map((row, i) => `\x1b[${i + 1};1H${row}`).join('')}`);
 
-const live = (over: Partial<FolderTrustSession> = {}): FolderTrustSession => ({
-  meta: { state: 'attached' },
-  deferred: false,
-  bridge: { isMuted: false },
+/** A live session whose ring holds `bytes`, written at `cols`×`rows`. */
+function session(bytes: Buffer, cols: number, rows: number, over: Partial<FolderTrustSession> = {}): FolderTrustSession & { ringBuffer: RingBuffer } {
+  const ring = new RingBuffer(1024 * 1024);
+  ring.noteGeometry(cols, rows);
+  ring.write(bytes);
+  return {
+    meta: { state: 'attached', cols, rows },
+    ptyProcess: { cols, rows },
+    ringBuffer: ring,
+    bridge: { isMuted: false, outputModes: null },
+    deferred: false,
+    ...over,
+  } as FolderTrustSession & { ringBuffer: RingBuffer };
+}
+
+const deps = (s: FolderTrustSession | undefined, over: Partial<FolderTrustDeps> = {}): FolderTrustDeps => ({
+  getSession: () => s,
+  getPendingRecovery: () => undefined,
   ...over,
 });
 
-function deps(session: FolderTrustSession | undefined, read: FolderTrustDeps['readScreen'], pending = false): FolderTrustDeps & { reads: number } {
-  const d = {
-    reads: 0,
-    getSession: () => session,
-    isPendingRecovery: () => pending,
-    readScreen: (id: string) => {
-      d.reads++;
-      return read(id);
-    },
-  };
-  return d;
-}
+const CLAUDE = fixtureRows('claude-folder-trust-120x40');
 
 afterEach(() => {
   vi.useRealTimers();
 });
 
 describe('folderTrustState', () => {
-  it.each(['claude-folder-trust-120x40', 'codex-folder-trust-60x30'])("is 'trust' when the ring's screen is the dialog (%s)", async (name) => {
-    expect(await folderTrustState(deps(live(), async () => parsed(fixtureRows(name))), 'pty-1')).toBe('trust');
+  it("is 'trust' when the ring's screen is the dialog", async () => {
+    expect(await folderTrustState(deps(session(frame(CLAUDE), 120, 40)), 'pty-1')).toBe('trust');
+    const codex = fixtureRows('codex-folder-trust-60x30');
+    expect(await folderTrustState(deps(session(frame(codex), 60, 30)), 'pty-1')).toBe('trust');
   });
 
-  it("is 'clear' for an ordinary screen, and for a dialog an answer has already scrolled past", async () => {
-    expect(await folderTrustState(deps(live(), async () => parsed(['⏺ Done.', '', '❯ '])), 'pty-1')).toBe('clear');
+  it("is 'clear' for an ordinary screen, and for a dialog already answered", async () => {
+    expect(await folderTrustState(deps(session(Buffer.from('⏺ Done.\r\n\r\n❯ '), 120, 40)), 'pty-1')).toBe('clear');
     // Measured after a daemon restart: the old dialog above a fresh shell prompt.
-    const answered = [...fixtureRows('claude-folder-trust-60x30'), '% '];
-    expect(await folderTrustState(deps(live({ meta: { state: 'detached' } }), async () => parsed(answered)), 'pty-1')).toBe('clear');
+    const answered = Buffer.concat([frame(CLAUDE), Buffer.from(`\x1b[${CLAUDE.length + 1};1H% `)]);
+    expect(await folderTrustState(deps(session(answered, 120, 40)), 'pty-1')).toBe('clear');
+  });
+
+  it('a dialog drawn at the spawn width, then a resize, is not read as clear', async () => {
+    const s = session(frame(CLAUDE), 120, 40);
+    s.ringBuffer.noteGeometry(60, 30);
+    s.meta.cols = 60; s.meta.rows = 30;
+    s.ptyProcess.cols = 60; s.ptyProcess.rows = 30;
+    // Parsed whole at the new size, the cursor-placed rows overwrite each other.
+    const naive = await generateTextSnapshot({ cols: 60, rows: 30, scrollback: 0, initial: s.ringBuffer.readAll() });
+    expect(naive.ok && looksLikeFolderTrustDialog(naive.rows.map((r) => r.text))).toBe(false);
+    expect(await folderTrustState(deps(s), 'pty-1')).not.toBe('clear');
+  });
+
+  it("is 'unknown' when cells the ring dropped could be the dialog's", async () => {
+    const ring = new RingBuffer(2048);
+    ring.noteGeometry(80, 24);
+    ring.write(Buffer.from('\x1b[2J\x1b[1;1Hwritten long ago'));
+    for (let n = 0; n < 200; n++) ring.write(Buffer.from(`\x1b[24;1H% tick ${n}`));
+    const s = { ...session(Buffer.alloc(0), 80, 24), ringBuffer: ring };
+    expect(await folderTrustState(deps(s), 'pty-1')).toBe('unknown');
   });
 
   it("is 'clear' without a read when nothing runs in the session", async () => {
+    const snapshot = vi.fn();
     for (const state of ['suspended', 'dead'] as const) {
-      const d = deps(live({ meta: { state } }), async () => parsed(fixtureRows('claude-folder-trust-60x30')));
-      expect(await folderTrustState(d, 'pty-1')).toBe('clear');
-      expect(d.reads).toBe(0);
+      const s = session(frame(CLAUDE), 120, 40, { meta: { state, cols: 120, rows: 40 } });
+      expect(await folderTrustState(deps(s, { snapshot }), 'pty-1')).toBe('clear');
     }
-    expect(await folderTrustState(deps(undefined, async () => null, true), 'pty-1')).toBe('clear');
+    expect(await folderTrustState(deps(undefined, { getPendingRecovery: () => ({ id: 'pty-1' }) }), 'pty-1')).toBe('clear');
+    expect(snapshot).not.toHaveBeenCalled();
   });
 
   it("is 'unknown' for a session it does not know", async () => {
-    expect(await folderTrustState(deps(undefined, async () => null), 'pty-gone')).toBe('unknown');
+    expect(await folderTrustState(deps(undefined), 'pty-gone')).toBe('unknown');
   });
 
   it("is 'unknown' while recovered output is muted: the ring has not seen it", async () => {
-    for (const session of [live({ deferred: true }), live({ bridge: { isMuted: true } })]) {
-      const d = deps(session, async () => parsed(['% ']));
-      expect(await folderTrustState(d, 'pty-1')).toBe('unknown');
-      expect(d.reads).toBe(0);
+    for (const over of [{ deferred: true }, { bridge: { isMuted: true, outputModes: null } }]) {
+      expect(await folderTrustState(deps(session(Buffer.from('% '), 120, 40, over)), 'pty-1')).toBe('unknown');
     }
   });
 
-  it("is 'unknown' when the parse fails, throws or finds the session gone", async () => {
-    expect(await folderTrustState(deps(live(), async () => ({ ok: false, reason: 'budget' }) as TextSnapshotOutcome), 'pty-1')).toBe('unknown');
-    expect(await folderTrustState(deps(live(), async () => { throw new Error('boom'); }), 'pty-1')).toBe('unknown');
-    expect(await folderTrustState(deps(live(), async () => null), 'pty-1')).toBe('unknown');
+  it("is 'unknown' when the parse fails or the pane is resized during it", async () => {
+    const s = session(frame(CLAUDE), 120, 40);
+    expect(await folderTrustState(deps(s, { snapshot: async () => ({ ok: false }) }), 'pty-1')).toBe('unknown');
+    const resized = async (req: Parameters<NonNullable<FolderTrustDeps['snapshot']>>[0]) => {
+      s.ptyProcess.cols = 100;
+      return generateTextSnapshot(req);
+    };
+    expect(await folderTrustState(deps(s, { snapshot: resized }), 'pty-1')).toBe('unknown');
   });
 
-  it("is 'unknown' once a read outlasts 250 ms", async () => {
+  it("is 'unknown' once a read outlasts 250 ms, and its result is dropped", async () => {
     vi.useFakeTimers();
-    const verdict = folderTrustState(deps(live(), () => new Promise<TextSnapshotOutcome | null>(() => undefined)), 'pty-1');
+    let release: (() => void) | undefined;
+    const snapshot = vi.fn(() => new Promise<{ ok: false }>((resolve) => { release = () => resolve({ ok: false }); }));
+    const verdict = folderTrustState(deps(session(frame(CLAUDE), 120, 40), { snapshot }), 'pty-1');
     let settled: string | undefined;
     void verdict.then((v) => { settled = v; });
     await vi.advanceTimersByTimeAsync(249);
     expect(settled).toBeUndefined();
     await vi.advanceTimersByTimeAsync(1);
     expect(settled).toBe('unknown');
+    release?.();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(snapshot).toHaveBeenCalledTimes(1);
   });
-});
 
-describe('daemon.folderTrustState wiring', () => {
-  it('answers from folderTrustState over the pane screen parse', () => {
-    const src = fs.readFileSync(path.join(__dirname, '..', 'index.ts'), 'utf-8');
-    const start = src.indexOf("pipeServer.onRpc('daemon.folderTrustState'");
-    expect(start).toBeGreaterThan(-1);
-    const body = src.slice(start, src.indexOf('  });', start));
-    expect(body).toContain('state: await folderTrustState({');
-    expect(body).toContain('readScreen: (sid) => queuedScreenText(sessionManager, sid)');
+  it('answers within its budget while the shared snapshot queue is busy', async () => {
+    let unblock: (() => void) | undefined;
+    const busy = enqueueSnapshotJob(() => new Promise<void>((resolve) => { unblock = resolve; }));
+    try {
+      const started = Date.now();
+      expect(await folderTrustState(deps(session(frame(CLAUDE), 120, 40)), 'pty-1')).toBe('trust');
+      expect(Date.now() - started).toBeLessThan(250);
+    } finally {
+      unblock?.();
+      await busy;
+    }
   });
 });

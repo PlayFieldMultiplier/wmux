@@ -16,16 +16,11 @@ import {
   pasteSubmitDelayMs,
   type SubmitProbe,
   type RoleBindingResolver,
-  type InputRpcDeps,
 } from '../input.rpc';
 import { noteGateVerdict, resetGateVerdicts } from '../../../deck/stopGateState';
 import type { PTYManager } from '../../../pty/PTYManager';
 import type { DaemonClient } from '../../../DaemonClient';
 import type { RoleBinding } from '../../../../shared/orchestratorRole';
-
-/** These tests are not about the folder-trust gate: with no renderer screen,
- *  the daemon finds no trust prompt on the pane. */
-const NO_TRUST_PROMPT: InputRpcDeps = { daemonFolderTrust: async () => 'clear' };
 
 // Mock the renderer bridge so we can drive input.findOwnerWorkspace (the
 // ownership oracle assertWorkspaceOwnsPty consults) and input.readScreen (the
@@ -38,7 +33,7 @@ const fakePty = {} as PTYManager;
 
 function setup(): RpcRouter {
   const router = new RpcRouter();
-  registerInputRpc(router, fakePty, () => fakeWindow, undefined, undefined, undefined, NO_TRUST_PROMPT);
+  registerInputRpc(router, fakePty, () => fakeWindow);
   return router;
 }
 
@@ -174,7 +169,7 @@ describe('terminal IO — a hosted plugin cannot skip the ownership check (#922 
       write: (ptyId: string, text: string) => writes.push({ ptyId, text }),
     } as unknown as PTYManager;
     const router = new RpcRouter();
-    registerInputRpc(router, spyPty, () => fakeWindow, undefined, undefined, undefined, NO_TRUST_PROMPT);
+    registerInputRpc(router, spyPty, () => fakeWindow);
     return router;
   }
 
@@ -354,7 +349,7 @@ describe('input.send / input.sendKey — omitted-target self-loop guard (P0)', (
     const writeMock = vi.fn();
     const pty = { get: vi.fn(() => ({ id: 'x' })), write: writeMock } as unknown as PTYManager;
     const router = new RpcRouter();
-    registerInputRpc(router, pty, () => fakeWindow, undefined, undefined, undefined, NO_TRUST_PROMPT);
+    registerInputRpc(router, pty, () => fakeWindow);
     return { router, writeMock };
   }
 
@@ -460,7 +455,7 @@ describe('input.send — submit sends text and Enter as two separate writes', ()
     const writeMock = vi.fn();
     const pty = { get: vi.fn(() => ({ id: 'x' })), write: writeMock } as unknown as PTYManager;
     const router = new RpcRouter();
-    registerInputRpc(router, pty, () => fakeWindow, undefined, undefined, undefined, NO_TRUST_PROMPT);
+    registerInputRpc(router, pty, () => fakeWindow);
     sendToRendererMock.mockImplementation((_w: unknown, method: string) => {
       if (method === 'input.findOwnerWorkspace') return Promise.resolve({ workspaceId: 'ws-self' });
       return Promise.resolve(null);
@@ -544,7 +539,7 @@ describe('input.send — multi-line text to an agent is pasted, not typed (#1594
       getSendTarget: vi.fn(() => Promise.resolve(target)),
     } as unknown as DaemonClient;
     const router = new RpcRouter();
-    registerInputRpc(router, pty, () => fakeWindow, () => dc, undefined, undefined, NO_TRUST_PROMPT);
+    registerInputRpc(router, pty, () => fakeWindow, () => dc);
     let read = 0;
     sendToRendererMock.mockImplementation((_w: unknown, method: string, params?: { tail_lines?: number }) => {
       if (method === 'input.findOwnerWorkspace') return Promise.resolve({ workspaceId: 'ws-self' });
@@ -661,7 +656,7 @@ describe('input.send — role→model enforcement (D2)', () => {
     const writeMock = vi.fn();
     const pty = { get: vi.fn(() => ({ id: 'x' })), write: writeMock } as unknown as PTYManager;
     const router = new RpcRouter();
-    registerInputRpc(router, pty, () => fakeWindow, undefined, resolver, undefined, NO_TRUST_PROMPT);
+    registerInputRpc(router, pty, () => fakeWindow, undefined, resolver);
     sendToRendererMock.mockImplementation((_w: unknown, method: string) => {
       if (method === 'input.findOwnerWorkspace') return Promise.resolve({ workspaceId: 'ws-self' });
       return Promise.resolve(null);
@@ -915,7 +910,7 @@ describe('input.send refuses to end a gate-held pane (#733)', () => {
     const writeMock = vi.fn();
     const pty = { get: vi.fn(() => ({ id: 'x' })), write: writeMock } as unknown as PTYManager;
     const router = new RpcRouter();
-    registerInputRpc(router, pty, () => fakeWindow, undefined, undefined, undefined, NO_TRUST_PROMPT);
+    registerInputRpc(router, pty, () => fakeWindow);
     return { router, writeMock };
   }
 
@@ -1377,7 +1372,7 @@ describe('input.send — submit receipt', () => {
       const writeMock = vi.fn();
       const pty = { get: vi.fn(() => ({ id: 'x' })), write: writeMock } as unknown as PTYManager;
       const router = new RpcRouter();
-      registerInputRpc(router, pty, () => fakeWindow, undefined, undefined, undefined, NO_TRUST_PROMPT);
+      registerInputRpc(router, pty, () => fakeWindow);
       sendToRendererMock.mockImplementation((_w: unknown, method: string) => {
         if (method === 'input.findOwnerWorkspace') return Promise.resolve({ workspaceId: 'ws-self' });
         return Promise.resolve(null);

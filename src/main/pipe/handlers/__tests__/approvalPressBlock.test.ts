@@ -50,8 +50,8 @@ const LEDGER = {
 const live: {
   policy: AnswerPolicy;
   screen: string | { deferred: true } | null;
-  /** The daemon's verdict from the session's ring, and how often it was asked. */
-  daemonVerdict: FolderTrustState;
+  /** The daemon's verdict from the session's ring (null: none to have), and how often it was asked. */
+  daemonVerdict: FolderTrustState | null;
   daemonAsks: number;
   /** Whether main holds a writable pipe to the session (false: a write attaches it first). */
   pipeWritable?: boolean;
@@ -626,6 +626,7 @@ describe('a folder-trust dialog on screen', () => {
       expect(w.writes.map((x) => x.data)).toEqual(['go on', '\r']);
       expect(res.result?.enterRetried).toBe(false);
       expect(res.result?.enterRetryRefused).toContain('folder-trust prompt; answer it in the pane');
+      expect(res.result?.enterRetryRefused).toContain('The text and its first Enter were sent; this retried Enter was not.');
     } finally {
       vi.mocked(sendToRenderer).mockReset();
     }
@@ -649,6 +650,7 @@ describe('a folder-trust dialog on screen', () => {
     expect(res.ok).toBe(false);
     expect(res.error).toContain('folder-trust prompt; answer it in the pane');
     expect(res.error).toContain('already written to the pane, not submitted');
+    expect(res.error).not.toContain('Nothing was sent');
     expect(w.writes.map((x) => x.data)).toEqual(['go on']);
   });
 
@@ -735,6 +737,34 @@ describe('a folder-trust verdict for a pane with no screen', () => {
     expect(w.writes.map((x) => x.data)).toEqual(['\x1b', '\x03']);
   });
 
+  it.each(NO_SCREENS)('%s: with no daemon verdict to have, input passes as it did before', async (_name, screen) => {
+    live.policy = { allowed: true };
+    live.screen = screen;
+    live.daemonVerdict = null;
+    expect((await asBrain('input.send', { ptyId: 'pty-w', text: 'hello' })).ok).toBe(true);
+    expect((await asBrain('input.sendKey', { ptyId: 'pty-w', key: 'escape' })).ok).toBe(true);
+    expect(w.writes.map((x) => x.data)).toEqual(['hello', '\x1b']);
+  });
+
+  it('each refusal says what of the input already reached the pane', async () => {
+    live.policy = { allowed: true };
+    live.screen = null;
+    live.daemonVerdict = 'unknown';
+    const send = await asBrain('input.send', { ptyId: 'pty-w', text: 'hello', submit: true });
+    expect(send.error).toContain('Nothing was sent.');
+    const key = await asBrain('input.sendKey', { ptyId: 'pty-w', key: 'enter' });
+    expect(key.error).toContain('Nothing was sent.');
+    expect(await w.gatedSubmit('pty-w', 'hello')).toMatchObject({ detail: expect.stringContaining('Nothing was sent.') });
+    // A pane not started here: the verdict turns between the paste and the Enter.
+    live.screen = { deferred: true };
+    live.daemonVerdict = 'clear';
+    live.betweenPasteAndEnter = () => { live.daemonVerdict = 'unknown'; };
+    const atEnter = await w.gatedSubmit('pty-w', 'hello');
+    expect(atEnter).toMatchObject({ ok: false, reason: 'gate_unavailable', pasted: true });
+    expect(atEnter.ok === false && atEnter.detail).toContain('The text was pasted but not submitted.');
+    expect(atEnter.ok === false && atEnter.detail).not.toContain('Nothing was sent');
+  });
+
   it("the human operator is never asked about, whatever the verdict", async () => {
     live.screen = null;
     live.daemonVerdict = 'unknown';
@@ -780,32 +810,68 @@ describe('a folder-trust verdict for a pane with no screen', () => {
   });
 });
 
-// Main's own wiring: the renderer's `deferred: true` read and the daemon's verdict.
+// Main's own wiring: the renderer's `deferred: true` read, the daemon's verdict,
+// and when there is none to have.
 describe('the default screen read and daemon verdict', () => {
   afterEach(() => {
     vi.mocked(sendToRenderer).mockReset();
   });
 
-  it("a deferred read asks the daemon's folderTrustState, within the 250 ms budget", async () => {
+  function wireDefault(options: { localPty?: boolean; answer?: unknown } = {}) {
     const asked: Array<{ id: string; timeoutMs: number }> = [];
+    const writes: string[] = [];
     const dc = {
       isConnected: true,
       rpc: async () => ({ pending: [] }),
-      writeToSession: () => true,
+      writeToSession: (_id: string, data: string) => { writes.push(data); return true; },
       folderTrustState: async (id: string, timeoutMs: number) => {
         asked.push({ id, timeoutMs });
-        return 'trust' as const;
+        return options.answer ?? { state: 'trust' };
       },
     };
-    vi.mocked(sendToRenderer).mockImplementation(async (_win, method) =>
-      method === 'input.readScreen' ? { ptyId: 'pty-d', text: '', deferred: true } : undefined);
+    const pty = options.localPty
+      ? ({ get: () => ({}), write: (_id: string, data: string) => { writes.push(data); } } as unknown as PTYManager)
+      : ({ get: () => undefined } as unknown as PTYManager);
     const router = new RpcRouter();
-    registerInputRpc(router, { get: () => undefined } as unknown as PTYManager, () => fakeWindow, () => dc as never, undefined, undefined, {
+    registerInputRpc(router, pty, () => fakeWindow, () => dc as never, undefined, undefined, {
       answerPolicy: async () => ({ allowed: true }),
     });
-    const res = (await router.dispatch({ id: '1', method: 'input.sendKey', params: { ptyId: 'pty-d', key: 'escape' } } as never, { externalWire: true })) as Answer;
+    const send = (method: string, params: Record<string, unknown>): Promise<Answer> =>
+      router.dispatch({ id: '1', method, params } as never, { externalWire: true }) as Promise<Answer>;
+    return { asked, writes, send };
+  }
+
+  it("a deferred read asks the daemon, with a client wait above the daemon's 250 ms budget", async () => {
+    vi.mocked(sendToRenderer).mockImplementation(async (_win, method) =>
+      method === 'input.readScreen' ? { ptyId: 'pty-d', text: '', deferred: true } : undefined);
+    const { asked, send } = wireDefault();
+    const res = await send('input.sendKey', { ptyId: 'pty-d', key: 'escape' });
     expect(res.ok).toBe(false);
     expect(res.error).toContain('folder-trust prompt; answer it in the pane');
-    expect(asked).toEqual([{ id: 'pty-d', timeoutMs: 250 }]);
+    expect(asked).toEqual([{ id: 'pty-d', timeoutMs: 400 }]);
+  });
+
+  it.each([
+    ['an older daemon', { unavailable: 'daemon predates daemon.folderTrustState' }],
+    ['a daemon that does not answer in time', { unavailable: 'RPC timeout: daemon.folderTrustState (400ms)' }],
+  ])('%s gives no verdict: the send passes as before, with a log line per check', async (_name, answer) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const { writes, send } = wireDefault({ answer });
+      expect((await send('input.send', { ptyId: 'pty-d', text: 'hello' })).ok).toBe(true);
+      expect(writes).toEqual(['hello']);
+      const lines = warn.mock.calls.map((args) => args.join(' '));
+      expect(lines.length).toBeGreaterThan(0);
+      expect(new Set(lines)).toEqual(new Set([`[approval-gate] folder-trust check unavailable on pane pty-d: ${answer.unavailable}`]));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('a pty main runs itself is never asked about: the old behaviour stands', async () => {
+    const { asked, writes, send } = wireDefault({ localPty: true });
+    expect((await send('input.send', { ptyId: 'pty-local', text: 'hello' })).ok).toBe(true);
+    expect(writes).toEqual(['hello']);
+    expect(asked).toEqual([]);
   });
 });
