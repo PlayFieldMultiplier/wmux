@@ -8,6 +8,9 @@ import { folderTrustState, type FolderTrustDeps, type FolderTrustSession } from 
 import { looksLikeFolderTrustDialog } from '../approvals/approvalKeystrokes';
 import { enqueueSnapshotJob, generateTextSnapshot } from '../HeadlessSnapshot';
 import { RingBuffer } from '../RingBuffer';
+import { DaemonPTYBridge } from '../DaemonPTYBridge';
+import type { TerminalPty } from '../../shared/terminalPty';
+import type { NativeOutputChunk } from '../../shared/nativeTerminalCore';
 
 const fixtureRows = (name: string): string[] =>
   (JSON.parse(fs.readFileSync(path.join(__dirname, '../approvals/__tests__/fixtures/folder-trust', `${name}.json`), 'utf8')) as {
@@ -27,8 +30,7 @@ function session(bytes: Buffer, cols: number, rows: number, over: Partial<Folder
     meta: { state: 'attached', cols, rows },
     ptyProcess: { cols, rows },
     ringBuffer: ring,
-    bridge: { isMuted: false, outputModes: null },
-    deferred: false,
+    bridge: { isMuted: false, outputModes: null, heldOutput: () => null },
     ...over,
   } as FolderTrustSession & { ringBuffer: RingBuffer };
 }
@@ -41,8 +43,37 @@ const deps = (s: FolderTrustSession | undefined, over: Partial<FolderTrustDeps> 
 
 const CLAUDE = fixtureRows('claude-folder-trust-120x40');
 
+/** A recovered session at 120x40 whose real bridge is muted, its ring holding the restored screen. */
+function mutedSession(restored: string) {
+  let handler: ((chunk: NativeOutputChunk) => void) | undefined;
+  const pty = {
+    onData: vi.fn(),
+    onNativeData: (cb: typeof handler) => { handler = cb; return { dispose: () => { handler = undefined; } }; },
+    onExit: () => ({ dispose() { /* no process in this fixture */ } }),
+    write: vi.fn(),
+  } as unknown as TerminalPty;
+  const ring = new RingBuffer(1024 * 1024, 'node');
+  vi.spyOn(ring, 'writeNativeChunk').mockImplementation((chunk) => ring.write(Buffer.from(chunk.text)));
+  ring.noteGeometry(120, 40);
+  ring.write(Buffer.from(restored));
+  const bridge = new DaemonPTYBridge();
+  bridge.setupDataForwarding(pty, ring, 'muted-session');
+  bridge.setMuted(true);
+  cleanups.push(() => { bridge.cleanup(); ring.dispose(); });
+  const s: FolderTrustSession & { resizedWhileMuted?: boolean } = {
+    meta: { state: 'detached', cols: 120, rows: 40 },
+    ptyProcess: { cols: 120, rows: 40 },
+    ringBuffer: ring,
+    bridge,
+  };
+  const feed = (text: string): void => handler?.({ text, byteLength: Buffer.byteLength(text), readBytes: () => Buffer.from(text), dispose: () => undefined } as unknown as NativeOutputChunk);
+  return { session: s, bridge, ring, feed };
+}
+
+const cleanups: Array<() => void> = [];
 afterEach(() => {
   vi.useRealTimers();
+  for (const cleanup of cleanups.splice(0)) cleanup();
 });
 
 describe('folderTrustState', () => {
@@ -93,10 +124,37 @@ describe('folderTrustState', () => {
     expect(await folderTrustState(deps(undefined), 'pty-gone')).toBe('unknown');
   });
 
-  it("is 'unknown' while recovered output is muted: the ring has not seen it", async () => {
-    for (const over of [{ deferred: true }, { bridge: { isMuted: true, outputModes: null } }]) {
-      expect(await folderTrustState(deps(session(Buffer.from('% '), 120, 40, over)), 'pty-1')).toBe('unknown');
-    }
+  describe('a muted (recovered, not yet shown) session: ring and held output read together', () => {
+    it("is 'trust' when the held output draws the dialog, and the unmute still releases it", async () => {
+      const m = mutedSession('% old prompt\r\n');
+      m.feed(frame(CLAUDE).toString());
+      expect(m.ring.readAll().toString()).toBe('% old prompt\r\n');
+      expect(await folderTrustState(deps(m.session), 'pty-1')).toBe('trust');
+      m.bridge.setMuted(false, { replayHeld: true });
+      expect(m.ring.readAll().toString()).toContain('Yes, I trust this folder');
+    });
+
+    it("is 'clear' for a fresh shell, even over a restored dialog", async () => {
+      const m = mutedSession(frame(CLAUDE).toString());
+      m.feed(`\x1b[${CLAUDE.length + 1};1H% `);
+      expect(await folderTrustState(deps(m.session), 'pty-1')).toBe('clear');
+    });
+
+    it("is 'unknown' once the hold overflowed: its newest output, the screen, is missing", async () => {
+      const m = mutedSession('');
+      m.feed(frame(CLAUDE).toString());
+      m.feed('x'.repeat(300 * 1024));
+      expect(m.bridge.heldOutput()?.full).toBe(true);
+      expect(await folderTrustState(deps(m.session), 'pty-1')).toBe('unknown');
+    });
+
+    it("is 'unknown' after a resize while muted dropped the held output", async () => {
+      const m = mutedSession('');
+      m.feed(frame(CLAUDE).toString());
+      m.bridge.discardHeld();
+      m.session.resizedWhileMuted = true;
+      expect(await folderTrustState(deps(m.session), 'pty-1')).toBe('unknown');
+    });
   });
 
   it("is 'unknown' when the parse fails or the pane is resized during it", async () => {

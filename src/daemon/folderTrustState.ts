@@ -18,8 +18,9 @@ export const FOLDER_TRUST_READ_TIMEOUT_MS = 250;
 /** What the verdict needs of a session (a ManagedSession). */
 export type FolderTrustSession = RenderablePane & {
   meta: { state: DaemonSessionState };
-  /** Recovered and not yet activated: its output is muted. */
-  deferred: boolean;
+  bridge: { heldOutput(): { data: string; full: boolean } | null };
+  /** Resized while muted: the held output was dropped, or mixes sizes. */
+  resizedWhileMuted?: boolean;
 };
 
 type Snapshot = Parameters<typeof renderPaneScreen>[1];
@@ -37,8 +38,11 @@ export interface FolderTrustDeps {
  * The verdict for one session, read from the daemon's ring rather than a
  * renderer's screen, so it holds for a pane that is hidden, parked or not
  * attached yet. A session with no process ('suspended', 'dead', or a
- * recovery placeholder) shows no live dialog. A muted one holds its newest
- * output outside the ring, so the ring cannot rule a dialog out.
+ * recovery placeholder) shows no live dialog. A muted one (recovered, not
+ * shown yet) holds its newest output outside the ring, so the ring and that
+ * held output are read together; once the hold overflowed (it keeps the
+ * head, so the current screen is missing) or a resize dropped it, the verdict
+ * is 'unknown'.
  *
  * The screen is rebuilt like the awaiting verifier's (renderPaneScreen): each
  * stretch of the ring at the size it was written at, a resize during the read
@@ -50,7 +54,12 @@ export async function folderTrustState(deps: FolderTrustDeps, id: string): Promi
   const session = deps.getSession(id);
   if (!session) return deps.getPendingRecovery(id) !== undefined ? 'clear' : 'unknown';
   if (session.meta.state === 'suspended' || session.meta.state === 'dead') return 'clear';
-  if (session.deferred || session.bridge.isMuted) return 'unknown';
+  let pane: RenderablePane = session;
+  if (session.bridge.isMuted) {
+    const held = session.bridge.heldOutput();
+    if (!held || held.full || session.resizedWhileMuted) return 'unknown';
+    pane = withHeldOutput(session, Buffer.from(held.data));
+  }
   const timeoutMs = deps.timeoutMs ?? FOLDER_TRUST_READ_TIMEOUT_MS;
   const deadline = Date.now() + timeoutMs;
   let dropped = false;
@@ -73,7 +82,7 @@ export async function folderTrustState(deps: FolderTrustDeps, id: string): Promi
     timer.unref?.();
   });
   try {
-    const frame = await Promise.race([renderPaneScreen(() => deps.getSession(id), snapshot).catch(() => null), timedOut]);
+    const frame = await Promise.race([renderPaneScreen(() => (deps.getSession(id) === session ? pane : undefined), snapshot).catch(() => null), timedOut]);
     if (!frame) return 'unknown';
     if (looksLikeFolderTrustDialog(unwrapRows(frame.rows, wrapped, frame.cols).slice(-60))) return 'trust';
     // Cells the ring no longer covers could be the dialog's.
@@ -81,6 +90,25 @@ export async function folderTrustState(deps: FolderTrustDeps, id: string): Promi
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * A muted session as the parse sees it: its ring followed by the output held
+ * outside it, at the size the ring last recorded (no resize while muted), and
+ * no longer muted, since nothing of its output is missing.
+ */
+function withHeldOutput(session: FolderTrustSession, held: Buffer): RenderablePane {
+  return {
+    meta: session.meta,
+    ptyProcess: session.ptyProcess,
+    ringBuffer: {
+      readAllWithGeometry: () => {
+        const ring = session.ringBuffer.readAllWithGeometry();
+        return { ...ring, data: Buffer.concat([ring.data, held]), writtenAt: ring.writtenAt + held.length };
+      },
+    },
+    bridge: { isMuted: false, outputModes: session.bridge.outputModes },
+  };
 }
 
 /**

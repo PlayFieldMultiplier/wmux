@@ -110,7 +110,7 @@ describe('daemon.folderTrustState end to end', () => {
       const ring = new RingBuffer(64 * 1024);
       ring.noteGeometry(60, 30);
       ring.write(Buffer.from(bytes));
-      return { meta: { state: 'attached' as const, cols: 60, rows: 30 }, ptyProcess: { cols: 60, rows: 30 }, ringBuffer: ring, bridge: { isMuted: false, outputModes: null }, deferred: false };
+      return { meta: { state: 'attached' as const, cols: 60, rows: 30 }, ptyProcess: { cols: 60, rows: 30 }, ringBuffer: ring, bridge: { isMuted: false, outputModes: null, heldOutput: () => null } };
     };
     const sessions = new Map([
       ['pane-trust', sessionAt(`\x1b[2J${rows.map((row, i) => `\x1b[${i + 1};1H${row}`).join('')}`)],
