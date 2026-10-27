@@ -201,6 +201,21 @@ describe('PushSender — capability gate', () => {
     await h.sender.flush();
     expect(h.calls).toHaveLength(4);
   });
+
+  it('★ a device list narrows it to those devices, and an empty one reaches nobody', async () => {
+    const a = device('a');
+    const b = device('b');
+    a.target.push.capabilities = ['browserHelpPush'];
+    b.target.push.capabilities = ['browserHelpPush'];
+    const h = makeSender([200], [a.target, b.target]);
+    h.sender.notify({ title: 't', body: 'b' }, { requires: 'browserHelpPush', deviceIds: ['b', 'gone'] });
+    await h.sender.flush();
+    const sent = h.calls.map((c) => decodePushEnvelopeFromRelay((JSON.parse(String(c.init.body)) as { ciphertext: string }).ciphertext)?.deviceId);
+    expect(sent).toEqual(['b']);
+    h.sender.notify({ title: 't', body: 'b' }, { requires: 'browserHelpPush', deviceIds: [] });
+    await h.sender.flush();
+    expect(h.calls).toHaveLength(1);
+  });
 });
 
 describe('PushSender — failure handling', () => {

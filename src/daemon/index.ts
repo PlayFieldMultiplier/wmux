@@ -28,7 +28,7 @@ import { applyPaneAccount, assertPaneAccountUsable } from './phone/paneAccount';
 import type { PaneAccountVendor, StoredHandoffFrom } from '../shared/phonePaneAccount';
 import { DesktopPhoneBridge, keepAwakeRpc } from './phone/DesktopPhoneBridge';
 import { BrowserHelpTable } from './phone/BrowserHelpTable';
-import { BROWSER_HELP_SET_METHOD } from '../shared/phoneBrowserHelp';
+import { BROWSER_HELP_SET_METHOD, PHONE_BROWSER_HELP_DECIDE_COMMAND, type BrowserHelpTableRow } from '../shared/phoneBrowserHelp';
 import { RunHistoryStore } from './history/RunHistoryStore';
 import { AutomationEngine } from './automation/AutomationEngine';
 import { assertExternalSessionId, registerAutomationRpc } from './automation/rpc';
@@ -100,6 +100,7 @@ import { isPaneMoving } from './chat/v2/paneClaims';
 import { ApprovalPushRouter } from './push/approvalPushRouter';
 import { BotApprovalPushRouter } from './push/botApprovalPush';
 import { BotPromptPushRouter } from './push/botPromptPush';
+import { BROWSER_HELP_PUSH_CAPABILITY, BrowserHelpPushRouter, browserHelpPushAudience, type BrowserHelpResolution } from './push/browserHelpPush';
 import type { PushTableRouterDeps } from './push/pushTableRouter';
 import { parseBotApprovalPushRows, type BotApprovalPushRow } from '../shared/botApprovalPush';
 import { parseBotPromptPushRows, type BotPromptPushRow } from '../shared/botPromptPush';
@@ -482,6 +483,10 @@ let botApprovalsPublisher: string | null = null;
 let botPromptsPublisher: string | null = null;
 /** Main's open browser help requests (`daemon.browserHelp.set`), built once the pipe server exists. */
 let browserHelpTable: BrowserHelpTable | null = null;
+/** The browser help table, as phone pushes; set at boot once the push sender exists. */
+let pushBrowserHelp: ((rows: readonly BrowserHelpTableRow[], closed: ReadonlyMap<string, BrowserHelpResolution>) => void) | undefined;
+/** The pipe client that last published the browser help table (main). */
+let browserHelpPublisher: string | null = null;
 /** N4 — an agent's sign-in was lost (shared/agentAuthLost); set at boot once the pipe server exists. */
 let noteAuthLost: ((sessionId: string, agent: AuthLostAgent, env: Record<string, string> | undefined, origin: AuthLostOrigin, providerCode?: string) => void) | undefined;
 /** N4 — an agent and account was seen to work (a confirmed turn end, or its status said signed in). */
@@ -5533,10 +5538,15 @@ function registerRpcHandlers(
     firstParty: (clientId) => firstPartyOnly(clientId, BROWSER_HELP_SET_METHOD),
     isOwner: (clientId) => desktopPhoneBridge?.isOwner(clientId) === true,
     emit: (frames) => webTerminalServer?.emitBrowserHelp(frames),
+    onRows: (rows, closed) => pushBrowserHelp?.(rows, closed),
     log: (level, message) => log(level, message),
   });
   const helpTable = browserHelpTable;
-  pipeServer.onRpc(BROWSER_HELP_SET_METHOD, async (params, ctx) => helpTable.set(ctx.clientId, params));
+  pipeServer.onRpc(BROWSER_HELP_SET_METHOD, async (params, ctx) => {
+    const result = helpTable.set(ctx.clientId, params);
+    if (result.ok) browserHelpPublisher = ctx.clientId;
+    return result;
+  });
   pipeServer.onClientClose((clientId) => helpTable.onClientClose(clientId));
 
   pipeServer.onRpc('daemon.workspaceFacts.set', async (params, ctx) => {
@@ -8899,15 +8909,23 @@ async function main(): Promise<void> {
   // nobody there to report anything. Same collapseId, so the phone replaces
   // the pane's banner rather than stacking a second one.
   const deferredPush = new DeferredPushQueue({
-    send: (payload, opts) => pushSender.notify(payload, opts),
+    // A held browser help push goes only to the devices that may still answer
+    // it, and never costs an approval its place in the relay queue.
+    send: (payload, opts) => {
+      if (opts.requires !== BROWSER_HELP_PUSH_CAPABILITY || !opts.deviceIds) return pushSender.notify(payload, opts);
+      const deviceIds = browserHelpPushRouter.narrowRelease(String(payload.browserHelpId), opts.deviceIds);
+      if (deviceIds.length > 0) pushSender.notify(payload, { ...opts, deviceIds, yields: true });
+    },
     // Whether a held push went out or was evicted unsent decides whether its
     // record may later retract it. Only called on a release or an eviction,
     // both of which happen after the router below exists.
     onOutcome: (id, outcome, collapseId) => {
       if (botApprovalPushRouter.owns(id)) botApprovalPushRouter.onParkedOutcome(id, outcome);
       else if (botPromptPushRouter.owns(id)) botPromptPushRouter.onParkedOutcome(id, outcome);
+      else if (browserHelpPushRouter.owns(id)) browserHelpPushRouter.onParkedOutcome(id, outcome);
       else approvalPushRouter.onParkedOutcome(id, outcome, collapseId);
     },
+    yields: (key) => browserHelpPushRouter.owns(key),
     isPresent: desktopIsPresent,
     staleAfterMs: () => presenceConfig().staleAfterMs,
     log: (level, msg) => log(level, msg),
@@ -9050,6 +9068,27 @@ async function main(): Promise<void> {
   const botPromptPushRouter = new BotPromptPushRouter(botPushTableDeps);
   pushBotApprovals = (rows) => botApprovalPushRouter.set(rows);
   pushBotPrompts = (rows) => botPromptPushRouter.set(rows);
+  // A browser help request (phone/BrowserHelpTable.ts), pushed only to the
+  // devices that may answer it (push/browserHelpPush.ts). Same presence rules
+  // and park queue; the retraction goes to the devices the push went to.
+  const browserHelpPushRouter = new BrowserHelpPushRouter({
+    audience: () => {
+      const store = getDeviceStore();
+      return browserHelpPushAudience({
+        server: webTerminalServer?.currentStartState,
+        desktopDecides: desktopPhoneBridge?.supports(PHONE_BROWSER_HELP_DECIDE_COMMAND) === true,
+        targets: store.pushTargets(),
+        hasExplicitInputGrant: (deviceId) => store.hasExplicitInputGrant(deviceId),
+      });
+    },
+    isBrainPane: (ptyId) => isBrainPty({ id: ptyId, env: sessionManager.getSession(ptyId)?.meta.env }),
+    suppress: botPushTableDeps.suppress,
+    send: (payload, opts) => pushSender.notify(payload, opts),
+    park: (key, payload, collapseId, requires, deviceIds) => deferredPush.park(key, payload, collapseId, requires, deviceIds),
+    forget: (key) => deferredPush.forget(key),
+    log: (level, msg) => log(level, msg),
+  });
+  pushBrowserHelp = (rows, closed) => browserHelpPushRouter.set(rows, closed);
   // Contract §7 `turn_failed`: one push per failed turn (serveTurnFailure only
   // calls this for a failure it had not held). Presence is consulted like an
   // approval's, but a suppressed one is DROPPED, not parked: someone at the
@@ -9120,6 +9159,10 @@ async function main(): Promise<void> {
     if (botPromptsPublisher !== null && botPromptsPublisher === clientId) {
       botPromptPushRouter.forgetParked();
       botPromptsPublisher = null;
+    }
+    if (browserHelpPublisher !== null && browserHelpPublisher === clientId) {
+      browserHelpPushRouter.publisherGone();
+      browserHelpPublisher = null;
     }
     desktopPresence.forget(clientId);
     deferredPush.onPresenceChanged();
