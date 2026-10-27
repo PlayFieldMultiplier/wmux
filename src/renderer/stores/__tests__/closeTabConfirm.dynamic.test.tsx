@@ -102,6 +102,19 @@ describe('a close-tab confirm whose tab goes away', () => {
     });
     expect(useStore.getState().closeTabConfirm).toEqual({ workspaceId: ws.id, paneId: paneB.id, surfaceId: 'a2' });
   });
+
+  it('follows its tab to another workspace', () => {
+    const { ws, other, paneA } = seed();
+    act(() => useStore.getState().requestCloseTab({ workspaceId: ws.id, paneId: paneA.id, surfaceId: 'a2' }));
+    act(() => {
+      useStore.setState((state) => {
+        const [a] = getLeafPanes(state.workspaces[0].rootPane);
+        const moved = a.surfaces.splice(a.surfaces.findIndex((s) => s.id === 'a2'), 1)[0];
+        (state.workspaces[1].rootPane as PaneLeaf).surfaces.push(moved);
+      });
+    });
+    expect(useStore.getState().closeTabConfirm).toEqual({ workspaceId: other.id, paneId: other.rootPane.id, surfaceId: 'a2' });
+  });
 });
 
 describe('requestCloseTab', () => {
@@ -164,6 +177,30 @@ describe('the confirm dialog', () => {
         await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)));
       });
       expect(term.focus).toHaveBeenCalled();
+    } finally {
+      terminalRegistry.delete('pty-a1');
+    }
+  });
+
+  it('hands the keyboard back once after Cancel', async () => {
+    const { ws, paneA } = seed();
+    act(() => {
+      useStore.setState((state) => {
+        state.workspaces[0].activePaneId = paneA.id;
+      });
+    });
+    const term = { focus: vi.fn() };
+    terminalRegistry.set('pty-a1', term as never);
+    try {
+      act(() => root.render(React.createElement(CloseTabConfirm)));
+      act(() => useStore.getState().requestCloseTab({ workspaceId: ws.id, paneId: paneA.id, surfaceId: 'a2' }));
+      const cancel = document.querySelector<HTMLButtonElement>('[data-close-tab-cancel]');
+      if (!cancel) throw new Error('missing cancel');
+      act(() => cancel.click());
+      await act(async () => {
+        await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)));
+      });
+      expect(term.focus).toHaveBeenCalledTimes(1);
     } finally {
       terminalRegistry.delete('pty-a1');
     }

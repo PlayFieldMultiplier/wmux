@@ -55,30 +55,21 @@ export default function CloseTabConfirm() {
   });
   const tabTitle = useStore((s) => (target ? resolveCloseTabTarget(s, target)?.surface.title : undefined));
   const dismiss = useStore((s) => s.dismissCloseTab);
-  // Closed from outside (its tab went away, and the store dismissed it): the
-  // keyboard goes back to the active terminal, as after Cancel, not to <body>.
+  // However the dialog closes (Cancel, Close, or the store dismissing it
+  // because its tab went away), the keyboard goes back to the active
+  // terminal once, not to <body>.
   const shown = useRef(false);
-  const closedHere = useRef(false);
   useEffect(() => {
-    if (target) {
-      shown.current = true;
-      return;
-    }
-    if (shown.current && !closedHere.current) refocusActiveTerminal();
-    shown.current = false;
-    closedHere.current = false;
+    if (!target && shown.current) refocusActiveTerminal();
+    shown.current = !!target;
   }, [target]);
   if (!target) return null;
   const cancel = () => {
-    closedHere.current = true;
     dismiss();
-    refocusActiveTerminal();
   };
   const confirm = () => {
-    closedHere.current = true;
     dismiss();
     closeTabNow(target);
-    refocusActiveTerminal();
   };
   return (
     <Dialog onClose={cancel} width={360} closeOnBackdrop data-testid="close-tab-confirm">
