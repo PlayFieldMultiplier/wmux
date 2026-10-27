@@ -1256,12 +1256,12 @@ registerBrowserHelpIpc(ipcMain, { getWindow: () => mainWindow, requests: browser
 // `workspaces.browserHelpDecide`.
 setPhoneBrowserHelpStore(browserHelpRequests);
 // The phone preview's dedicated Chrome tabs (phone/PhoneBrowserChrome.ts):
-// strict workspace equality, never Live Chrome, never a launch. The help
+// the workspace's own profile, strict workspace equality, never Live Chrome,
+// never a pane's exclusive profile, never a launch. The help
 // table below reads the same list, so its rows are previewable exactly when
 // the preview can drive them.
 const phoneChromeDeps = createPhoneChromeDeps({
   registry: chromeRegistry,
-  paneBindings: () => chromeProfileStore.getPaneBindings(),
   validateNavigation: async (url) => {
     const verdict = await validateResolvedNavigationUrl(url, navigationPolicyOptions(browserBackendStore.allowPrivateNetwork()));
     if (!verdict.valid) throw new Error('Navigation refused');
@@ -1283,7 +1283,7 @@ const browserHelpFeed = createBrowserHelpFeed({
       chromeRegistry.profileFor(workspaceId) === LIVE_CHROME_PROFILE ||
       (!tabFound && chromeRegistry.hasPaneBindings(workspaceId) && chromeRegistry.peekLauncher(LIVE_CHROME_PROFILE) !== undefined),
     // Live Chrome is never listed: that is every tab the user has open.
-    chromeTabs: async (workspaceId) => (await phoneChromeTabs(workspaceId, chromeRegistry, () => chromeProfileStore.getPaneBindings())).map(({ tab }) => tab),
+    chromeTabs: async (workspaceId) => (await phoneChromeTabs(workspaceId, chromeRegistry)).map(({ tab }) => tab),
   },
   push: async (rows) => {
     if (!daemonClient?.isConnected) throw new Error('Daemon not connected');

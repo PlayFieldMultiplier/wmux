@@ -7,19 +7,17 @@
 // What differs from a builtin pane:
 //  - geometry comes from Page.getLayoutMetrics, and the capture is clipped to
 //    that visual viewport, so a normalized point means the same pixel;
-//  - a whole capture has its own budget (HIDDEN_MS): Chrome may stop painting
-//    a background tab, and a capture that does not finish says so
-//    (`browser-tab-hidden`) instead of running into the bridge's timeout;
+//  - a whole capture has its own budget (PHONE_CHROME_CAPTURE_MS): Chrome may
+//    stop painting a background tab, and a capture that does not finish says
+//    so (`browser-tab-hidden`) instead of running into the bridge's timeout;
 //  - nothing brings the tab forward except the phone's explicit `focus`;
 //    typing uses focus emulation instead;
 //  - viewport emulation does not exist here (`browser-action-unsupported`).
 // Typed text is sent once, to Chrome, and is never echoed or put in an error.
 
-import { phoneBrowserGeometry } from './PhoneBrowserGeometry';
 import type { PhoneBrowserDriver } from './PhoneBrowser';
 import { ChromePageSessionError, type ChromeBackendClient, type ChromePageSession, type ChromeTargetInfo } from '../browser-session/ChromeLauncher';
 import { LIVE_CHROME_PROFILE } from '../browser-session/ChromeProfileStore';
-import type { ChromePaneBindings } from '../../shared/chromePaneBinding';
 import { parseKeyPress } from '../pipe/handlers/cdpKeys';
 import { PhoneBrowserError } from '../../shared/phoneBrowserPreview';
 
@@ -31,9 +29,9 @@ export interface PhoneChromeTab { surfaceId: string; url: string; title: string 
 /** Main's dedicated Chrome profiles, as the phone preview may see them. */
 export interface PhoneChromeDeps {
   /**
-   * The tabs wmux opened whose recorded workspace is exactly `workspaceId`,
-   * across the profiles that workspace and its panes use. Never Live Chrome,
-   * never launches Chrome: [] while no Chrome is running.
+   * The tabs wmux opened in the workspace's own dedicated profile whose
+   * recorded workspace is exactly `workspaceId`. Never Live Chrome, never a
+   * pane's exclusive profile, never a launch: [] while no Chrome is running.
    */
   tabs(workspaceId: string): Promise<PhoneChromeTab[]>;
   /** A page session on one of those tabs; throws ChromePageSessionError. */
@@ -58,23 +56,39 @@ function coded(err: unknown): unknown {
   return err;
 }
 
-interface Viewport { clientWidth: number; clientHeight: number; pageX: number; pageY: number; scale: number }
+interface Viewport { width: number; height: number; scrollX: number; scrollY: number; scale: number }
 
+function dimension(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= 32768;
+}
+
+function offset(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+/** The visual viewport from Page.getLayoutMetrics, in CSS pixels; throws when unusable. */
 function viewportOf(metrics: unknown): Viewport {
-  const m = metrics as { cssVisualViewport?: Partial<Viewport>; visualViewport?: Partial<Viewport> } | null;
+  const m = metrics as { cssVisualViewport?: Record<string, unknown>; visualViewport?: Record<string, unknown> } | null;
   const vp = m?.cssVisualViewport ?? m?.visualViewport;
-  const value = phoneBrowserGeometry({ id: 'phone-chrome', ok: true, result: { value: {
-    width: vp?.clientWidth, height: vp?.clientHeight, scrollX: vp?.pageX, scrollY: vp?.pageY, scale: 1,
-  } } });
-  return { clientWidth: value.width, clientHeight: value.height, pageX: value.scrollX, pageY: value.scrollY, scale: typeof vp?.scale === 'number' ? vp.scale : NaN };
+  if (!vp || !dimension(vp.clientWidth) || !dimension(vp.clientHeight) || !offset(vp.pageX) || !offset(vp.pageY)) {
+    throw new Error('Unsupported browser geometry');
+  }
+  return { width: vp.clientWidth, height: vp.clientHeight, scrollX: vp.pageX, scrollY: vp.pageY, scale: typeof vp.scale === 'number' ? vp.scale : NaN };
 }
 
 export function chromeDriver(surfaceId: string, workspaceId: string, deps: PhoneChromeDeps): PhoneBrowserDriver {
+  // The tab as the workspace's strict list has it now: null once it is not.
   const tab = async () => (await deps.tabs(workspaceId)).find(t => t.surfaceId === surfaceId) ?? null;
+  // One session per request; a dead one answers `gone` rather than being re-found.
+  let session: Promise<ChromePageSession> | null = null;
+  // Set when a capture ran out of budget: whatever that capture still had
+  // queued stops at its next call instead of piling up on Chrome's socket.
+  let expired = false;
   const call = async (method: string, params?: Record<string, unknown>) => {
+    if (expired) throw new PhoneBrowserError('browser-tab-hidden');
     try {
-      const session = await deps.session(surfaceId, workspaceId);
-      return await session.send(method, params);
+      session ??= deps.session(surfaceId, workspaceId);
+      return await (await session).send(method, params);
     } catch (err) {
       throw coded(err);
     }
@@ -106,26 +120,26 @@ export function chromeDriver(surfaceId: string, workspaceId: string, deps: Phone
       const found = await tab();
       return found ? { title: found.title, url: found.url } : null;
     },
-    owned: async () => (await tab()) !== null,
     geometry: async () => {
       const vp = await viewport();
       // Pinch zoom moves the visual viewport off the layout one: readable, not tappable.
       if (vp.scale !== 1) throw new Error('Unsupported browser geometry');
-      return { width: vp.clientWidth, height: vp.clientHeight, scrollX: vp.pageX, scrollY: vp.pageY };
+      return { width: vp.width, height: vp.height, scrollX: vp.scrollX, scrollY: vp.scrollY };
     },
     shoot: async (quality, scale) => {
-      const vp = await viewport();
       let shot: unknown;
       try {
+        const vp = await viewport();
         shot = await call('Page.captureScreenshot', {
           format: 'jpeg', quality,
           // Document coordinates of what is on screen, so the image is the
           // viewport the geometry describes.
-          clip: { x: vp.pageX, y: vp.pageY, width: vp.clientWidth, height: vp.clientHeight, scale },
+          clip: { x: vp.scrollX, y: vp.scrollY, width: vp.width, height: vp.height, scale },
         });
       } catch (err) {
         if (err instanceof PhoneBrowserError) throw err;
-        // A listed tab that cannot produce a frame is one Chrome is not painting.
+        // A listed tab with no usable viewport, or that cannot produce a
+        // frame, is one Chrome is not painting (minimized, in the background).
         throw new PhoneBrowserError('browser-tab-hidden');
       }
       const data = (shot as { data?: unknown } | null)?.data;
@@ -135,7 +149,10 @@ export function chromeDriver(surfaceId: string, workspaceId: string, deps: Phone
     capture: async run => {
       let timer: ReturnType<typeof setTimeout> | undefined;
       const hidden = new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new PhoneBrowserError('browser-tab-hidden')), deps.captureMs ?? PHONE_CHROME_CAPTURE_MS);
+        timer = setTimeout(() => {
+          expired = true;
+          reject(new PhoneBrowserError('browser-tab-hidden'));
+        }, deps.captureMs ?? PHONE_CHROME_CAPTURE_MS);
         (timer as { unref?: () => void }).unref?.();
       });
       const running = run();
@@ -193,6 +210,7 @@ export function chromeDriver(surfaceId: string, workspaceId: string, deps: Phone
 /** What main's wiring hands phoneChromeTabs: the registry, read-only. */
 export interface PhoneChromeRegistry {
   profileFor(workspaceId: string | undefined): string;
+  isPaneBound(profile: string): boolean;
   peekLauncher(profile: string): ChromeBackendClient | undefined;
 }
 
@@ -201,23 +219,19 @@ function isLive(profile: string): boolean {
 }
 
 /**
- * The dedicated Chrome clients a workspace's tabs may be in: its own profile
- * and every profile one of its panes is bound to. Never Live Chrome, never a
- * client with a write scope (that is Live), and never one that does not exist
- * yet: reading a tab must not start a browser.
+ * The dedicated Chrome client the workspace's own tabs are in: the profile
+ * the workspace (not one of its panes) is bound to, exactly what an operator
+ * call with no pane resolves to. Not Live Chrome, not a client with a write
+ * scope (that is Live), and not a pane's exclusive profile — a protected
+ * pane's browser policy is enforced on its pane's calls, and the phone
+ * speaks CDP past it. Never one that does not exist yet: reading a tab must
+ * not start a browser.
  */
-function clientsFor(workspaceId: string, registry: PhoneChromeRegistry, paneBindings: () => ChromePaneBindings): ChromeBackendClient[] {
-  const profiles = new Set<string>([registry.profileFor(workspaceId)]);
-  for (const binding of Object.values(paneBindings())) {
-    if (binding.workspaceId === workspaceId) profiles.add(binding.profile);
-  }
-  const clients: ChromeBackendClient[] = [];
-  for (const profile of profiles) {
-    if (isLive(profile)) continue;
-    const client = registry.peekLauncher(profile);
-    if (client && !client.writeScope && client.pageSession && !clients.includes(client)) clients.push(client);
-  }
-  return clients;
+function clientFor(workspaceId: string, registry: PhoneChromeRegistry): ChromeBackendClient | undefined {
+  const profile = registry.profileFor(workspaceId);
+  if (isLive(profile) || registry.isPaneBound(profile)) return undefined;
+  const client = registry.peekLauncher(profile);
+  return client && !client.writeScope && client.pageSession ? client : undefined;
 }
 
 /**
@@ -229,31 +243,27 @@ function clientsFor(workspaceId: string, registry: PhoneChromeRegistry, paneBind
 export async function phoneChromeTabs(
   workspaceId: string,
   registry: PhoneChromeRegistry,
-  paneBindings: () => ChromePaneBindings,
 ): Promise<Array<{ tab: ChromeTargetInfo; client: ChromeBackendClient }>> {
-  const out: Array<{ tab: ChromeTargetInfo; client: ChromeBackendClient }> = [];
-  for (const client of clientsFor(workspaceId, registry, paneBindings)) {
-    let tabs: ChromeTargetInfo[];
-    try {
-      tabs = await client.listTargets(workspaceId);
-    } catch {
-      continue;
-    }
-    for (const tab of tabs) if (tab.workspaceId === workspaceId) out.push({ tab, client });
+  const client = clientFor(workspaceId, registry);
+  if (!client) return [];
+  let tabs: ChromeTargetInfo[];
+  try {
+    tabs = await client.listTargets(workspaceId);
+  } catch {
+    return [];
   }
-  return out;
+  return tabs.filter((tab) => tab.workspaceId === workspaceId).map((tab) => ({ tab, client }));
 }
 
 /** main's PhoneChromeDeps over the Chrome registry. */
 export function createPhoneChromeDeps(opts: {
   registry: PhoneChromeRegistry;
-  paneBindings: () => ChromePaneBindings;
   validateNavigation: (url: string) => Promise<void>;
 }): PhoneChromeDeps {
   const holder = async (surfaceId: string, workspaceId: string) =>
-    (await phoneChromeTabs(workspaceId, opts.registry, opts.paneBindings)).find(({ tab }) => tab.surfaceId === surfaceId);
+    (await phoneChromeTabs(workspaceId, opts.registry)).find(({ tab }) => tab.surfaceId === surfaceId);
   return {
-    tabs: async (workspaceId) => (await phoneChromeTabs(workspaceId, opts.registry, opts.paneBindings))
+    tabs: async (workspaceId) => (await phoneChromeTabs(workspaceId, opts.registry))
       .map(({ tab }) => ({ surfaceId: tab.surfaceId, url: tab.url, title: tab.title })),
     session: async (surfaceId, workspaceId) => {
       const found = await holder(surfaceId, workspaceId);

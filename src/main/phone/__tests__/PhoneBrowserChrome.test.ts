@@ -18,7 +18,6 @@ function fakeChrome(over: Partial<PhoneChromeDeps> = {}) {
   const deps: PhoneChromeDeps & { setURL(next: string): void } = {
     tabs: vi.fn(async (ws: string) => ws === 'ws-1' ? [{ surfaceId: 'chrome-own', url, title: 'Cart' }] : [{ surfaceId: 'chrome-other', url: 'https://bank.example.com/', title: 'Bank' }]),
     session: vi.fn(async () => ({
-      isValid: () => true,
       send: async (method: string, params?: Record<string, unknown>) => {
         sent.push({ method, ...(params ? { params } : {}) });
         return answer(method);
@@ -89,10 +88,28 @@ describe('phone preview on dedicated-profile Chrome', () => {
     expect(sent.filter((c) => c.method === 'Page.captureScreenshot').map((c) => c.params?.quality)).toEqual([65, 50]);
   });
 
-  it('a capture that does not finish in its budget is a hidden tab', async () => {
-    const { deps, answer } = fakeChrome({ captureMs: 20 });
-    answer.mockImplementation(async (method: string) => method === 'Page.getLayoutMetrics' ? METRICS : new Promise(() => undefined));
+  it('a capture that does not finish in its budget is a hidden tab, and stops there', async () => {
+    const { deps, answer, sent } = fakeChrome({ captureMs: 20 });
+    let release: (value: unknown) => void = () => undefined;
+    answer.mockImplementation(async (method: string) => method === 'Page.getLayoutMetrics' ? METRICS : new Promise((resolve) => { release = resolve; }));
     expect(await handlePhoneBrowser('browser.capture', scope, fixture(deps))).toEqual({ error: 'browser-tab-hidden' });
+    const before = sent.length;
+    // The late frame lands: the abandoned capture sends nothing more.
+    release({ data: 'aGVsbG8=' });
+    for (let i = 0; i < 5; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(sent).toHaveLength(before);
+  });
+
+  it('a viewport Chrome cannot report (a minimized window) reads as hidden', async () => {
+    const { deps, answer } = fakeChrome();
+    answer.mockImplementation(async (method: string) => method === 'Page.getLayoutMetrics' ? { cssVisualViewport: { clientWidth: 0, clientHeight: 0, pageX: 0, pageY: 0, scale: 1 } } : { data: 'aGVsbG8=' });
+    expect(await handlePhoneBrowser('browser.capture', scope, fixture(deps))).toEqual({ error: 'browser-tab-hidden' });
+  });
+
+  it('one page session per request', async () => {
+    const { deps } = fakeChrome();
+    await handlePhoneBrowser('browser.tap', { ...scope, expectedURL: 'https://shop.example.com/cart', geometry, x: 0.5, y: 0.5 }, fixture(deps));
+    expect(deps.session).toHaveBeenCalledTimes(1);
   });
 
   it('a tab that went away is gone, and so is a Chrome surface this workspace does not have', async () => {
@@ -216,33 +233,40 @@ describe('which Chrome tabs a workspace has (phoneChromeTabs)', () => {
       endpoint: async () => ({}), cdpInfoTargets: async () => [], openTab: async () => { throw new Error('no'); },
       listTargets: vi.fn(async () => tabs), closeSurface: async () => false, hasSurface: () => true, dispose: () => undefined,
       selectSurface: vi.fn(async () => true),
-      pageSession: vi.fn(async () => ({ isValid: () => true, send: async () => ({}) })),
+      pageSession: vi.fn(async () => ({ send: async () => ({}) })),
       ...extra,
     };
   }
   const tab = (surfaceId: string, workspaceId?: string): ChromeTargetInfo => ({ surfaceId, targetId: `t-${surfaceId}`, url: 'https://a.example.com/', title: surfaceId, ...(workspaceId ? { workspaceId } : {}) });
 
-  it('strict workspace equality, pane profiles included, never Live, never a launch', async () => {
+  it('the workspace\'s own profile only, strict workspace equality, never a launch', async () => {
     const work = client([tab('chrome-mine', 'ws-1'), tab('chrome-nobody'), tab('chrome-theirs', 'ws-2')]);
-    const pane = client([tab('chrome-pane', 'ws-1')]);
+    const peek = vi.fn((profile: string) => (profile === 'work' ? work : undefined));
+    const registry: PhoneChromeRegistry = { profileFor: () => 'work', isPaneBound: () => false, peekLauncher: peek };
+    expect((await phoneChromeTabs('ws-1', registry)).map(({ tab }) => tab.surfaceId)).toEqual(['chrome-mine']);
+    expect(peek.mock.calls).toEqual([['work']]);
+    // A profile no launcher exists for yet lists nothing; it is not created.
+    expect(await phoneChromeTabs('ws-1', { ...registry, peekLauncher: () => undefined })).toEqual([]);
+  });
+
+  it('never Live Chrome, a client with a write scope, or a pane\'s exclusive profile', async () => {
     const live = client([tab('user-bank', 'ws-1')], { writeScope: {} as ChromeBackendClient['writeScope'] });
-    const peek = vi.fn((profile: string) => ({ work, pane, live, lent: live } as Record<string, ChromeBackendClient>)[profile]);
-    const registry: PhoneChromeRegistry = { profileFor: () => 'work', peekLauncher: peek };
-    const bindings = () => ({ p1: { workspaceId: 'ws-1', profile: 'pane' }, p2: { workspaceId: 'ws-1', profile: 'live' }, p3: { workspaceId: 'ws-1', profile: 'lent' }, p4: { workspaceId: 'ws-2', profile: 'other' } });
-    const found = await phoneChromeTabs('ws-1', registry, bindings);
-    expect(found.map(({ tab }) => tab.surfaceId)).toEqual(['chrome-mine', 'chrome-pane']);
-    // The Live profile is never even looked up; a client with a write scope is never asked.
-    expect(peek).not.toHaveBeenCalledWith('live');
+    const peek = vi.fn(() => live);
+    expect(await phoneChromeTabs('ws-1', { profileFor: () => 'live', isPaneBound: () => false, peekLauncher: peek })).toEqual([]);
+    expect(peek).not.toHaveBeenCalled();
+    expect(await phoneChromeTabs('ws-1', { profileFor: () => 'lent', isPaneBound: () => false, peekLauncher: peek })).toEqual([]);
     expect(live.listTargets).not.toHaveBeenCalled();
-    expect(peek).not.toHaveBeenCalledWith('other');
+    // A protected pane's profile: its host policy rides on that pane's calls, which the phone would skip.
+    const bank = client([tab('chrome-bank', 'ws-1')]);
+    expect(await phoneChromeTabs('ws-1', { profileFor: () => 'bank', isPaneBound: (p) => p === 'bank', peekLauncher: () => bank })).toEqual([]);
+    expect(bank.listTargets).not.toHaveBeenCalled();
   });
 
   it('focus and sessions reach only a listed tab, never a Live one', async () => {
     const work = client([tab('chrome-mine', 'ws-1')]);
     const live = client([tab('user-tab', 'ws-1')], { writeScope: {} as ChromeBackendClient['writeScope'] });
     const deps = createPhoneChromeDeps({
-      registry: { profileFor: (ws) => (ws === 'ws-live' ? 'live' : 'work'), peekLauncher: (p) => (p === 'work' ? work : p === 'live' ? live : undefined) },
-      paneBindings: () => ({}),
+      registry: { profileFor: (ws) => (ws === 'ws-live' ? 'live' : 'work'), isPaneBound: () => false, peekLauncher: (p) => (p === 'work' ? work : p === 'live' ? live : undefined) },
       validateNavigation: async () => undefined,
     });
     expect(await deps.focus('chrome-mine', 'ws-1')).toBe(true);

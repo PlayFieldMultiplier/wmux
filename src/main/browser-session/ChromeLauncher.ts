@@ -126,7 +126,6 @@ export interface LiveWriteScopeApi {
  */
 export interface ChromePageSession {
   send(method: string, params?: Record<string, unknown>): Promise<unknown>;
-  isValid(): boolean;
 }
 
 /** Why a page session could not be had: the tab is not there, or no socket is. */
@@ -509,6 +508,15 @@ export class ChromeLauncher implements ChromeBackendClient {
     this.pageSessions.clear();
   }
 
+  /** The watcher's connection went away (CdpSocket re-dials in place): every page session on it is dead. */
+  private dropPageSessionsOf(socket: CdpSocket): void {
+    for (const [surfaceId, entry] of this.pageSessions) {
+      if (entry.socket !== socket) continue;
+      entry.valid = false;
+      this.pageSessions.delete(surfaceId);
+    }
+  }
+
   /** Chrome detached `sessionId`: a page session on it is dead. True when it was one. */
   private dropPageSession(sessionId: string): boolean {
     for (const [surfaceId, entry] of this.pageSessions) {
@@ -548,7 +556,6 @@ export class ChromeLauncher implements ChromeBackendClient {
       entry = await this.attachPage(surfaceId, record.targetId, socket);
     }
     return {
-      isValid: () => entry.valid && this.watcher === entry.socket,
       send: async (method, params = {}) => {
         if (!entry.valid || this.watcher !== entry.socket) throw new ChromePageSessionError('gone', 'ChromeLauncher: page session ended');
         try {
@@ -625,13 +632,14 @@ export class ChromeLauncher implements ChromeBackendClient {
     this.closeWatcher();
     if (this.disposed) return;
     const generation = ++this.watcherGeneration;
-    const socket = new CdpSocket(
+    const socket: CdpSocket = new CdpSocket(
       () => {
         const url = this.browserWsEndpoint;
         if (!url) throw new Error('ChromeLauncher: no browser CDP endpoint');
         return url;
       },
-      { label: 'ChromeLauncher watcher' },
+      // A page session id belongs to one connection; a re-dial must not reuse it.
+      { label: 'ChromeLauncher watcher', onDisconnect: () => this.dropPageSessionsOf(socket) },
     );
     /** True once a newer start (or a close) superseded this one. */
     const stale = (): boolean => {

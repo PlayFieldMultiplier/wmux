@@ -466,12 +466,18 @@ describe('ChromeLauncher page sessions (the phone preview)', () => {
     const { launcher, surfaceId, ws } = await running('/tmp/page-2');
     const session = await launcher.pageSession(surfaceId);
     ws.event('Target.detachedFromTarget', { sessionId: 'sess-page-1' });
-    expect(session.isValid()).toBe(false);
     const err = await session.send('Runtime.evaluate').catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ChromePageSessionError);
     expect((err as ChromePageSessionError).reason).toBe('gone');
     await launcher.pageSession(surfaceId);
     expect(ws.sent.filter((f) => f.method === 'Target.attachToTarget' && f.params?.targetId === 'page-1')).toHaveLength(2);
+  });
+
+  it('a dropped watcher connection ends its page sessions, even when the socket re-dials in place', async () => {
+    const { launcher, surfaceId } = await running('/tmp/page-5');
+    const session = await launcher.pageSession(surfaceId);
+    FakeBrowserWs.instances[0].close();
+    await expect(session.send('Runtime.evaluate')).rejects.toMatchObject({ reason: 'gone' });
   });
 
   it('never launches Chrome, and needs the watcher socket', async () => {

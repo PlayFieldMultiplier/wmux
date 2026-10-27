@@ -3625,9 +3625,10 @@ exactly as above.
   same as before, with no `backend` field. Live Chrome (the user's own
   browser) is never listed and never driven, and no phone action opens a
   connection to it.
-- **Which tabs**: a tab is this workspace's only when the desktop recorded it
-  under exactly this workspace; a tab with no workspace on record is nobody's.
-  Tabs of profiles bound to one of the workspace's panes count. Listing never
+- **Which tabs**: tabs of the workspace's own wmux Chrome profile that the
+  desktop recorded under exactly this workspace; a tab with no workspace on
+  record is nobody's. A profile bound to one pane only (a protected pane's,
+  say) is not listed: its policy applies to that pane's calls. Listing never
   starts Chrome: while it is not running there are no `chrome` rows.
 - **The same actions** take a `chrome` row's `id` as `surfaceId`: capture,
   `navigate`, `type`, `key`, `tap`, `scroll`, with the same checks
@@ -5451,8 +5452,9 @@ the phone and answer them.
   tell apart from it).
 - `previewable`: the workspace browser preview (*Workspace browser preview*)
   can show this tab now: a `builtin` pane of the request's own workspace, or
-  a `chrome` tab that workspace opened (preview it with `?chrome=1`); never
-  `live`.
+  a `chrome` tab that workspace opened; never `live`. A `chrome` row's tab is
+  in the preview list only with `?chrome=1`, so a client that does not send
+  it treats a `chrome` row as not previewable.
 - `origin`: `scheme://host[:port]` of the tab, read by the desktop when it
   last sent the list (a request opened or closed, or the desktop
   reconnected). Absent when it could not read one: no tab, not an http(s)

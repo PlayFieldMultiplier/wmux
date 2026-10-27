@@ -16,11 +16,12 @@ interface Pending {
 /** Requests one desktop may have outstanding at once. */
 export const DESKTOP_PHONE_MAX_PENDING = 16;
 /**
- * The browser preview's commands may hold all but one: a phone polling Chrome
- * captures (each may wait out its whole capture budget) must not leave a
- * browser help Done or Cancel, or any other request, answered `desktop-busy`.
+ * The last slot is a browser help decision's alone: a phone polling Chrome
+ * captures (each may wait out its whole capture budget, plus the workspace
+ * lookup ahead of each) must never leave the person's Done or Cancel
+ * answered `desktop-busy`.
  */
-const BROWSER_PREVIEW_MAX_PENDING = DESKTOP_PHONE_MAX_PENDING - 1;
+const RESERVED_FOR_DECISION = 'workspaces.browserHelpDecide';
 
 /** How long a request waits for the desktop's reply by default. */
 export const DESKTOP_PHONE_TIMEOUT_MS = 15000;
@@ -86,7 +87,7 @@ export class DesktopPhoneBridge {
   request(command: DesktopPhoneCommand, payload: Record<string,unknown>): Promise<unknown> {
     const owner = this.owner;
     if (!owner) return Promise.reject(new DesktopPhoneError('desktop-unavailable'));
-    if (this.pending.size >= (command.startsWith('browser.') ? BROWSER_PREVIEW_MAX_PENDING : DESKTOP_PHONE_MAX_PENDING)) return Promise.reject(new DesktopPhoneError('desktop-busy'));
+    if (this.pending.size >= (command === RESERVED_FOR_DECISION ? DESKTOP_PHONE_MAX_PENDING : DESKTOP_PHONE_MAX_PENDING - 1)) return Promise.reject(new DesktopPhoneError('desktop-busy'));
     const requestId = randomUUID();
     return new Promise((resolve,reject) => {
       const timer = setTimeout(() => {

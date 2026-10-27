@@ -38,10 +38,8 @@ interface BrowserDeps {
 export interface PhoneBrowserDriver {
   readonly backend: PhoneBrowserBackend;
   readonly surfaceId: string;
-  /** The tab's current page, or null once it is gone. */
+  /** The tab's current page while it is still this workspace's (strict equality), else null. */
   page(): Promise<{ title: string; url: string } | null>;
-  /** The tab is still this workspace's, by strict equality. */
-  owned(): Promise<boolean>;
   /** The viewport, refused when it cannot take input where the phone sees it. */
   geometry(): Promise<PhoneBrowserGeometry>;
   shoot(quality: number, scale: number): Promise<{ data: string; mimeType: 'image/jpeg' }>;
@@ -87,8 +85,10 @@ function webviewDriver(target: CdpTargetInfo, workspaceId: string, deps: Browser
   return {
     backend: 'builtin',
     surfaceId: target.surfaceId,
-    page: async () => deps.page(target.webContentsId),
-    owned: async () => deps.targets().some(item => item.surfaceId === target.surfaceId && item.webContentsId === target.webContentsId && item.workspaceId === workspaceId),
+    page: async () => {
+      const owned = deps.targets().some(item => item.surfaceId === target.surfaceId && item.webContentsId === target.webContentsId && item.workspaceId === workspaceId);
+      return owned ? deps.page(target.webContentsId) : null;
+    },
     geometry: async () => {
       const page = phoneBrowserGeometry(await deps.invoke('browser.evaluate',{...scope,expression:PHONE_BROWSER_GEOMETRY}));
       const native = await deps.nativeBounds(target.webContentsId);
@@ -240,7 +240,7 @@ async function phoneBrowser(command: string, payload: Record<string, unknown>, d
   if (helpOrigin !== undefined && typeof helpOrigin !== 'string') throw new PhoneBrowserError('browser-help-origin-changed');
   const unchanged = async () => {
     const page = await driver.page();
-    if (!(await driver.owned()) || !page || pageURL(page.url) !== expectedURL) throw new Error('Browser page changed; refresh before input');
+    if (!page || pageURL(page.url) !== expectedURL) throw new Error('Browser page changed; refresh before input');
     return page;
   };
   const input = (operation: () => Promise<void>) => driver.input(async () => {
