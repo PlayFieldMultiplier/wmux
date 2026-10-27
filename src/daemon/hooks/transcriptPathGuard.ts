@@ -28,6 +28,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { WslTarget } from '../../shared/wslTarget';
+import { isValidWslDistroName } from '../../shared/wslDistro';
+import { win32AliasedName, wslPathToHost } from '../../mcp/wslPaths';
+import { agentRow } from '../../shared/agentIdentity';
 
 /** Separator-agnostic last segment. Windows paths relayed to a POSIX daemon (or
  *  replayed from a state file written elsewhere) must not come back whole. */
@@ -249,10 +252,10 @@ export function checkTranscriptPath(
  * `~/.claude/projects/<project>/<session id>.jsonl` of the pane's distro user
  * (`/home/<user>/…`, or `/root/…` for root)?
  *
- * Recognized, never persisted: this process cannot open a distro path (on
- * Windows `/home/u/…` names `C:\home\u\…`, a different file), so the caller
- * stores the binding without a transcript path, as it does for a refused one,
- * and only skips the refusal warning. Purely lexical, case-sensitive like the
+ * Never stored as `transcriptPath`: this process cannot open a distro path as
+ * given (on Windows `/home/u/…` names `C:\home\u\…`, a different file). The
+ * caller keeps it as the binding's `wslTranscriptPath`, which only
+ * proveWslTranscriptPath below turns into a file to read. Purely lexical, case-sensitive like the
  * Linux filesystem it names, and nothing outside that one directory matches:
  * no `.`/`..`/empty segment, no control or backslash character.
  */
@@ -270,4 +273,140 @@ export function isWslOwnTranscriptPath(
   const rest = transcriptPath.slice(root.length).split('/');
   if (rest.some((segment) => !segment || segment === '.' || segment === '..')) return false;
   return rest.length === 2 && rest[1] === `${agentSessionId}.jsonl`;
+}
+
+/**
+ * The writer half for `wslTranscriptPath`: kept only when it is the pane's own
+ * Claude transcript (`target` is the pane's recorded WSL target, absent for any
+ * other pane); otherwise the binding goes without it. `dropped` says so.
+ */
+export function keepOwnWslTranscriptPath<B extends { agent: string; sessionId: string; wslTranscriptPath?: string }>(
+  binding: B,
+  target: Partial<WslTarget> | undefined,
+): { binding: B; dropped: boolean } {
+  if (binding.wslTranscriptPath === undefined) return { binding, dropped: false };
+  if (agentRow(binding.agent)?.wslTranscript && isWslOwnTranscriptPath(binding.wslTranscriptPath, binding.sessionId, target)) {
+    return { binding, dropped: false };
+  }
+  const rest = { ...binding };
+  delete rest.wslTranscriptPath;
+  return { binding: rest, dropped: true };
+}
+
+export type WslSharePath = { ok: true; file: string; share: string } | { ok: false; reason: string };
+
+/**
+ * Where a WSL pane's `wslTranscriptPath` is on its distro share
+ * (`\\wsl$\<distro>\home\<user>\…`), worked out without touching the disk.
+ *
+ * The distro and user come from `target`, the pane's own record of where it
+ * runs; the path must be that user's transcript for `agentSessionId`
+ * (isWslOwnTranscriptPath), and wslPathToHost must be able to name it on
+ * Windows. `share` is the share prefix the file sits under.
+ *
+ * `shareRoot` exists for tests, which stand a temporary folder in for the share.
+ */
+export function wslTranscriptSharePath(
+  wslPath: string,
+  agentSessionId: string,
+  target: Partial<WslTarget> | undefined,
+  opts: { platform?: NodeJS.Platform; shareRoot?: (distro: string) => string } = {},
+): WslSharePath {
+  if ((opts.platform ?? process.platform) !== 'win32') return { ok: false, reason: 'not a Windows host' };
+  const distro = target?.distribution;
+  // A trailing dot or space would name another share once Windows trims it.
+  if (!isValidWslDistroName(distro) || win32AliasedName(distro) !== undefined) return { ok: false, reason: 'no valid distro' };
+  if (!isWslOwnTranscriptPath(wslPath, agentSessionId, target)) return { ok: false, reason: 'not this pane\'s transcript' };
+  const host = wslPathToHost(wslPath, distro);
+  if ('error' in host) return { ok: false, reason: 'a name Windows reads differently' };
+  // A path inside the distro comes back as its share prefix plus the Linux path.
+  const suffix = wslPath.split('/').join('\\');
+  if (!host.path.endsWith(suffix) || host.path.length === suffix.length) return { ok: false, reason: 'not on the distro share' };
+  if (!opts.shareRoot) return { ok: true, file: host.path, share: host.path.slice(0, -suffix.length) };
+  const share = opts.shareRoot(distro);
+  return { ok: true, file: path.join(share, ...wslPath.split('/').filter(Boolean)), share };
+}
+
+/**
+ * A refused proof is `transient` when the share failed to answer (EBUSY, EIO,
+ * a timeout): it says nothing about the path, so a caller may retry it. Any
+ * other refusal is about the path itself.
+ */
+export type WslTranscriptResolution =
+  | { ok: true; hostPath: string; pending?: boolean }
+  | { ok: false; reason: string; transient?: boolean };
+
+/** The calls the proof makes, so a test can count or fake them. */
+export interface WslShareFs {
+  realpath(p: string): Promise<string>;
+  lstat(p: string): Promise<fs.Stats>;
+  stat(p: string): Promise<fs.Stats>;
+}
+
+/** Why a share path cannot be followed: a Linux link there fails (EISDIR, or
+ *  ENOENT through it), as does a missing folder. */
+const UNREACHABLE = 'not reachable on the share (a link, or missing)';
+
+/**
+ * Prove that `at.file` is the transcript it claims to be, asynchronously, so a
+ * slow or sleeping share never blocks the caller. The file must be a regular
+ * file that resolves to exactly its own path: a link anywhere on it resolves
+ * elsewhere or not at all, so nothing outside the user's projects folder is
+ * reachable. A file Claude has not written yet is `pending` (an empty
+ * conversation), only when its project folder resolves to itself the same way.
+ * Anything that cannot be proven is refused.
+ *
+ * The transcript projector runs this when a pane subscribes, on each hook
+ * nudge and on each rebind, and reads the proven path until the next one.
+ * `fs.promises.realpath` is the native realpath: it spells a name as the
+ * filesystem does, so a case variant does not pass as the path itself.
+ */
+export async function proveWslTranscriptPath(
+  at: { file: string; share: string },
+  fsp: WslShareFs = fs.promises,
+): Promise<WslTranscriptResolution> {
+  const failed = (error: unknown): WslTranscriptResolution => {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === 'ENOENT' || code === 'EISDIR' || code === 'ENOTDIR'
+      ? { ok: false, reason: UNREACHABLE }
+      : { ok: false, reason: 'unreadable', transient: true };
+  };
+  let entry: fs.Stats | undefined;
+  try {
+    entry = await fsp.lstat(at.file);
+  } catch (error) {
+    // Only a missing entry is a file Claude has yet to write.
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return failed(error);
+  }
+  if (entry) {
+    if (!entry.isFile()) return { ok: false, reason: 'not a regular file' };
+    try {
+      // An entry lstat found that realpath cannot follow is refused, never pending.
+      if (!sameSharePath(await fsp.realpath(at.file), at.file, at.share)) return { ok: false, reason: 'outside the Claude projects root' };
+    } catch (error) {
+      return failed(error);
+    }
+    return { ok: true, hostPath: at.file };
+  }
+  const projectDir = path.dirname(at.file);
+  try {
+    if (!sameSharePath(await fsp.realpath(projectDir), projectDir, at.share) || !(await fsp.stat(projectDir)).isDirectory()) {
+      return { ok: false, reason: 'outside the Claude projects root' };
+    }
+  } catch (error) {
+    return failed(error);
+  }
+  return { ok: true, hostPath: at.file, pending: true };
+}
+
+/**
+ * Is `resolved` (a realpath of `lexical`) that very path? realpath hands the
+ * share prefix back as it was given (`\\wsl$\`, `\\wsl.localhost\`, in the
+ * caller's case), and Windows matches the share name without case, so only
+ * that prefix is compared without case. Below it are Linux names, which are
+ * case-sensitive: the rest must match exactly. `lexical` starts with `share`.
+ */
+export function sameSharePath(resolved: string, lexical: string, share: string): boolean {
+  return resolved.slice(0, share.length).toLowerCase() === share.toLowerCase()
+    && resolved.slice(share.length) === lexical.slice(share.length);
 }

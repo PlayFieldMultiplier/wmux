@@ -927,8 +927,9 @@ describe('HookIngest', () => {
     });
 
     // #2270: a WSL pane's Claude reports its transcript as a Linux path inside
-    // the distro, which this process cannot open. Its own projects file is not
-    // stored and not warned about; any other path keeps the refusal.
+    // the distro, which this process cannot open as given. Its own projects
+    // file is kept as the Linux path only (wslTranscriptPath), never as
+    // transcriptPath, and not warned about; any other path keeps the refusal.
     describe('a WSL pane\'s transcript path', () => {
       const SID = '0a1b2c3d-0000-4000-8000-000000000001';
       const own = `/home/dev/.claude/projects/-home-dev-repo/${SID}.jsonl`;
@@ -944,12 +945,12 @@ describe('HookIngest', () => {
         return { f, stop, warned };
       }
 
-      it('binds without the path and without a refusal for the distro user\'s own file', () => {
+      it('keeps the distro user\'s own file as its Linux path only, without a refusal', () => {
         const w = wslIngest({ distribution: 'Ubuntu', user: 'dev' });
         expect(w.stop(own)).toEqual({ ok: true });
         expect(w.warned()).toBe(false);
         expect(w.f.bindings).toHaveLength(1);
-        expect(w.f.bindings[0].binding).toMatchObject({ sessionId: SID, permissionMode: 'bypassPermissions' });
+        expect(w.f.bindings[0].binding).toMatchObject({ sessionId: SID, permissionMode: 'bypassPermissions', wslTranscriptPath: own });
         expect(w.f.bindings[0].binding.transcriptPath).toBeUndefined();
       });
 
@@ -979,6 +980,7 @@ describe('HookIngest', () => {
           w.stop(p);
           expect(w.warned()).toBe(true);
           expect(w.f.bindings[0].binding.transcriptPath).toBeUndefined();
+          expect(w.f.bindings[0].binding.wslTranscriptPath).toBeUndefined();
         }
       });
     });

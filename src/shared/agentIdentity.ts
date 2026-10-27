@@ -230,6 +230,10 @@ export interface AgentIdentityRow {
   /** Agent Teams teammates write their own transcripts in the session's
    *  `subagents/` folder (daemon/transcript/teammateActivity). */
   readonly teammateTranscripts?: true;
+  /** In a WSL pane its transcript is `~/.claude/projects/<project>/<id>.jsonl`
+   *  inside the distro, read through the distro share
+   *  (daemon/hooks/transcriptPathGuard, proveWslTranscriptPath). */
+  readonly wslTranscript?: true;
   /** MCP registration target (src/shared/mcpTargets.ts). */
   readonly mcp?: AgentMcpTargetSpec;
   /** Per-session local connector launch syntax (shared/connectorTerminal). */
@@ -311,6 +315,7 @@ export const AGENT_IDENTITIES = [
     hooks: 'claude',
     apiErrorTurnEnd: true,
     teammateTranscripts: true,
+    wslTranscript: true,
     mcp: { format: 'json', configPath: ['.claude.json'], createIfMissing: true, verified: true, autoRegister: true },
     tuiComposer: true,
     dialogs: 'claude',

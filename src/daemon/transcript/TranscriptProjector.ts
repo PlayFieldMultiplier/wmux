@@ -32,6 +32,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileTranscriptProvider, checkNativeTranscriptPath } from './providers';
+import { proveWslTranscriptPath, wslTranscriptSharePath, type WslTranscriptResolution } from '../hooks/transcriptPathGuard';
+import { agentRow } from '../../shared/agentIdentity';
+import type { ResumeBinding } from '../../shared/agentResume';
 import type { ParsedTranscriptLine } from './parseEntry';
 import {
   TAIL_BYTES,
@@ -75,6 +78,12 @@ const EMPTY_PAGE = (): TranscriptPage => ({
 
 const DEFAULT_DEBOUNCE_MS = 150;
 const DEFAULT_POLL_MS = 3000;
+/**
+ * A WSL share cannot be watched (fs.watch fails to arm there), so its poll is
+ * a live turn's only trigger. One tick is one stat, about 1 ms on the share;
+ * at 500 ms an append shows up in about 0.35 s (0.47 s at p95).
+ */
+const DEFAULT_SHARE_POLL_MS = 500;
 
 /**
  * D3 — delay between the budgeted reads that drain a burst. Long enough to hand
@@ -106,6 +115,8 @@ interface WatchState {
   /** Subscribers, keyed by pipe clientId. Empty ⇒ tear the watch down. */
   clients: Set<string>;
   transcriptPath: string;
+  /** The path is on a WSL distro share, which sends no change events: poll it. */
+  share: boolean;
   parse: (line: string, offset: number) => ParsedTranscriptLine;
   watcher: fs.FSWatcher | null;
   poller: ReturnType<typeof setInterval> | null;
@@ -142,10 +153,34 @@ function cursorStale(transcriptPath: string, size: number, offset: number, curso
   return offset > 0 && !isLineBoundary(transcriptPath, offset);
 }
 
+/** A WSL pane's last proof (proveWsl). `transient`: the share did not answer. */
+type WslProof =
+  | { key: string; ok: true; hostPath: string; pending: boolean }
+  | { key: string; ok: false; transient: boolean };
+
+/** A share path proven while the file did not exist: only its folder was checked. */
+function unprovenShareFile(resolved: { pending?: boolean; share?: boolean }): boolean {
+  return resolved.share === true && resolved.pending === true;
+}
+
 export class TranscriptProjector {
   private readonly deps: TranscriptProjectorDeps;
   private readonly debounceMs: number;
   private readonly pollMs: number;
+  private readonly sharePollMs: number;
+  private readonly wslShare: NonNullable<TranscriptProjectorDeps['wslShare']>;
+  /** Per WSL pane, the last proof of its transcript on the share (proveWsl). */
+  private readonly wslProofs = new Map<string, WslProof>();
+  /** Per WSL pane, the proof running now; dropPty forgets it so it lands nowhere. */
+  private readonly wslProving = new Map<string, { promise: Promise<void> }>();
+  /** Panes whose refresh arrived while a proof was running: prove again after it. */
+  private readonly wslProveAgain = new Set<string>();
+  /**
+   * Panes whose proof is due again on their next read, with the earliest time
+   * it may run: a nudge or rebind of a pane nobody watches (0), or a proof the
+   * share failed to answer (one poll interval later).
+   */
+  private readonly wslDue = new Map<string, number>();
   private readonly watches = new Map<string, WatchState>();
   /**
    * Per pane, the binding a `session_start` superseded, kept whether or not a
@@ -164,6 +199,8 @@ export class TranscriptProjector {
     this.deps = deps;
     this.debounceMs = deps.debounceMs ?? DEFAULT_DEBOUNCE_MS;
     this.pollMs = deps.pollMs ?? DEFAULT_POLL_MS;
+    this.sharePollMs = deps.sharePollMs ?? DEFAULT_SHARE_POLL_MS;
+    this.wslShare = deps.wslShare ?? {};
   }
 
   /**
@@ -209,7 +246,7 @@ export class TranscriptProjector {
    */
   transcriptPath(sessionId: string): string | null {
     const resolved = this.resolvePath(sessionId);
-    return resolved.ok ? resolved.transcriptPath : null;
+    return resolved.ok && !unprovenShareFile(resolved) ? resolved.transcriptPath : null;
   }
 
   /**
@@ -223,7 +260,7 @@ export class TranscriptProjector {
    */
   sentFileBinding(sessionId: string): { transcriptPath: string; agentSessionId: string; agent: string; generation: number } | null {
     const resolved = this.resolvePath(sessionId);
-    if (!resolved.ok) return null;
+    if (!resolved.ok || unprovenShareFile(resolved)) return null;
     const hold = this.sessionHolds.get(sessionId);
     if (hold) {
       if (hold.untilStop || resolved.agentSessionId === hold.staleId) return null;
@@ -244,7 +281,7 @@ export class TranscriptProjector {
   snapshot(sessionId: string, opts?: { before?: number }): TranscriptPage | null {
     const resolved = this.resolvePath(sessionId);
     if (!resolved.ok) return null;
-    if (this.notWrittenYet(resolved)) return EMPTY_PAGE();
+    if (this.notWrittenYet(sessionId, resolved)) return EMPTY_PAGE();
 
     let maxBytes = TAIL_BYTES;
     let page = readTranscriptPage(resolved.transcriptPath, { ...opts, maxBytes, parseLine: (line, offset) => resolved.parse(line, offset).events });
@@ -315,7 +352,7 @@ export class TranscriptProjector {
   ): { ok: true; page: TranscriptPage; lineEnds: number[] } | { ok: false; reason: string } {
     const resolved = this.resolvePath(sessionId);
     if (!resolved.ok) return { ok: false, reason: resolved.reason };
-    if (this.notWrittenYet(resolved)) return { ok: true, page: EMPTY_PAGE(), lineEnds: [] };
+    if (this.notWrittenYet(sessionId, resolved)) return { ok: true, page: EMPTY_PAGE(), lineEnds: [] };
     const starts: number[] = [];
     const counts: number[] = [];
     const page = readTranscriptPage(resolved.transcriptPath, {
@@ -365,7 +402,7 @@ export class TranscriptProjector {
   staleCursor(sessionId: string, offset: number, cursorFileSize?: number): boolean {
     const resolved = this.resolvePath(sessionId);
     if (!resolved.ok) return true;
-    if (this.notWrittenYet(resolved)) return offset > 0;
+    if (this.notWrittenYet(sessionId, resolved)) return offset > 0;
     const stat = statTranscript(resolved.transcriptPath);
     return !stat || cursorStale(resolved.transcriptPath, stat.size, offset, cursorFileSize);
   }
@@ -377,7 +414,7 @@ export class TranscriptProjector {
   ): { events: TurnEvent[]; cursor: TranscriptPage['cursor']; reset: boolean; budgetDropped?: boolean } | null {
     const resolved = this.resolvePath(sessionId);
     if (!resolved.ok) return null;
-    if (this.notWrittenYet(resolved)) return { events: [], cursor: EMPTY_PAGE().cursor, reset: fromOffset > 0 };
+    if (this.notWrittenYet(sessionId, resolved)) return { events: [], cursor: EMPTY_PAGE().cursor, reset: fromOffset > 0 };
     const stat = statTranscript(resolved.transcriptPath);
     if (!stat) return null;
 
@@ -417,6 +454,7 @@ export class TranscriptProjector {
    * arm one watcher.
    */
   subscribe(clientId: string, sessionId: string): TranscriptStatus {
+    this.proveWsl(sessionId, true);
     const status = this.status(sessionId);
     if (this.disposed) return status;
 
@@ -430,6 +468,7 @@ export class TranscriptProjector {
       state = {
         clients: new Set(),
         transcriptPath: resolved.ok ? resolved.transcriptPath : '',
+        share: resolved.ok && resolved.share === true,
         parse: resolved.ok ? resolved.parse : () => ({ events: [], bodies: new Map() }),
         watcher: null,
         poller: null,
@@ -512,6 +551,9 @@ export class TranscriptProjector {
    */
   nudge(sessionId: string, kind: AgentSignalKind, agentSessionId?: string): void {
     if (!this.disposed) this.noteSessionHold(sessionId, kind, agentSessionId);
+    // A WSL pane's transcript is proven again on every hook, subscribed or not
+    // once it was read; any other pane stays a no-op here.
+    this.reproveWsl(sessionId);
     const state = this.watches.get(sessionId);
     if (!state || this.disposed) return;
     if (kind === 'agent.session_start') {
@@ -533,8 +575,7 @@ export class TranscriptProjector {
       // binding is still the right one, and the signal's own agentSessionId is
       // what distinguishes it. A caller that supplies no id gets the old
       // behaviour — it has told us nothing to hold ON.
-      const current = this.resolvePath(sessionId);
-      const currentId = current.ok ? current.agentSessionId : '';
+      const currentId = this.heldSessionId(sessionId);
       state.staleAgentSessionId = agentSessionId && currentId && currentId !== agentSessionId
         ? currentId
         : null;
@@ -559,6 +600,7 @@ export class TranscriptProjector {
    * `status()`, which re-reads the binding on every call.
    */
   rebind(sessionId: string): void {
+    this.reproveWsl(sessionId);
     const state = this.watches.get(sessionId);
     if (!state || this.disposed) return;
     this.refreshPath(sessionId, state);
@@ -572,7 +614,7 @@ export class TranscriptProjector {
    */
   codeBlock(sessionId: string, req: CodeBlockRequest): { body: string } | null {
     const resolved = this.resolvePath(sessionId);
-    if (!resolved.ok) return null;
+    if (!resolved.ok || unprovenShareFile(resolved)) return null;
     if (!Number.isFinite(req.srcOffset) || req.srcOffset < 0) return null;
     if (!Number.isFinite(req.n) || req.n < 1) return null;
 
@@ -610,8 +652,7 @@ export class TranscriptProjector {
   private noteSessionHold(sessionId: string, kind: AgentSignalKind, agentSessionId?: string): void {
     if (kind === 'agent.session_start') {
       this.sessionGenerations.set(sessionId, (this.sessionGenerations.get(sessionId) ?? 0) + 1);
-      const current = this.resolvePath(sessionId);
-      const currentId = current.ok ? current.agentSessionId : '';
+      const currentId = this.heldSessionId(sessionId);
       if (!currentId || currentId === agentSessionId) {
         this.sessionHolds.delete(sessionId);
       } else {
@@ -626,6 +667,11 @@ export class TranscriptProjector {
   dropPty(sessionId: string): void {
     this.sessionHolds.delete(sessionId);
     this.sessionGenerations.delete(sessionId);
+    // A proof still running for this pane lands nowhere (see proveWsl).
+    this.wslProofs.delete(sessionId);
+    this.wslProving.delete(sessionId);
+    this.wslProveAgain.delete(sessionId);
+    this.wslDue.delete(sessionId);
     const state = this.watches.get(sessionId);
     if (!state) return;
     this.teardown(state);
@@ -647,10 +693,165 @@ export class TranscriptProjector {
   // internals
   // -------------------------------------------------------------------------
 
+  /**
+   * A nudge or rebind: a watched WSL pane is proven again now; one only read
+   * (not watched) is proven again on its next read. Any other pane: nothing.
+   */
+  private reproveWsl(sessionId: string): void {
+    if (this.watches.has(sessionId)) this.proveWsl(sessionId, true);
+    else if (this.wslProofs.has(sessionId)) this.wslDue.set(sessionId, 0);
+  }
+
+  private paneAlive(sessionId: string): boolean {
+    return this.deps.isPaneAlive?.(sessionId) ?? true;
+  }
+
+  private now(): number {
+    return this.deps.now?.() ?? Date.now();
+  }
+
+  /** The pane's binding when it names a WSL transcript this projector reads, else undefined. */
+  private wslBinding(sessionId: string): ResumeBinding | undefined {
+    let binding: ResumeBinding | undefined;
+    try {
+      binding = this.deps.getResumeBinding(sessionId);
+    } catch {
+      return undefined;
+    }
+    return binding?.wslTranscriptPath && !binding.transcriptPath && agentRow(binding.agent)?.wslTranscript ? binding : undefined;
+  }
+
+  /** What a WSL proof was made for: the binding's path and session, and where the pane runs. */
+  private wslKey(sessionId: string, binding: { sessionId: string; wslTranscriptPath?: string }): string {
+    const target = this.deps.getWslTarget?.(sessionId);
+    return JSON.stringify([binding.sessionId, binding.wslTranscriptPath ?? '', target?.distribution ?? '', target?.user ?? '']);
+  }
+
+  /** The proof is due again (see wslDue) and its time has come. */
+  private wslProofDue(sessionId: string): boolean {
+    const at = this.wslDue.get(sessionId);
+    return at !== undefined && this.now() >= at;
+  }
+
+  /**
+   * The session a `session_start` hold compares against: the binding's own
+   * session for a WSL pane (whether or not its path is proven yet), else the
+   * session a read would serve.
+   */
+  private heldSessionId(sessionId: string): string {
+    const wsl = this.wslBinding(sessionId);
+    if (wsl) return wsl.sessionId;
+    const current = this.resolvePath(sessionId);
+    return current.ok ? current.agentSessionId : '';
+  }
+
+  /**
+   * For the async readers (the transcript RPCs and the phone's turn view):
+   * bring a live WSL pane's proof up to date before they read, waiting for it
+   * (a few ms on a running distro). A proof is started when there is none for
+   * the binding, when one is due again, or when a pending transcript has been
+   * written since. Any other pane returns at once. The in-daemon hot paths
+   * (transcriptPath, the session summary) never wait: they read what is proven.
+   */
+  async ready(sessionId: string): Promise<void> {
+    if (this.disposed || !this.paneAlive(sessionId)) return;
+    const binding = this.wslBinding(sessionId);
+    if (!binding) return;
+    const proof = this.wslProofs.get(sessionId);
+    let due = !proof || proof.key !== this.wslKey(sessionId, binding) || this.wslProofDue(sessionId);
+    if (!due && proof?.ok && proof.pending) {
+      due = await (this.wslShare.fs ?? fs.promises).lstat(proof.hostPath).then(() => true, () => false);
+    }
+    if (due) this.proveWsl(sessionId, true);
+    await this.wslProving.get(sessionId)?.promise;
+  }
+
+  /**
+   * Prove a WSL pane's transcript path on its distro share, off the event loop
+   * (proveWslTranscriptPath), and keep the result for reads until the next
+   * proof. Started at subscribe, on each nudge and rebind of a watched pane,
+   * and by a read that finds the proof missing or due. A refusal about the path
+   * replaces the last proof at once, so the next read refuses. A share that did
+   * not answer (transient) keeps the last good proof and is tried again on a
+   * read one poll interval later. Never for a dead pane.
+   */
+  private proveWsl(sessionId: string, refresh: boolean): void {
+    if (this.disposed || !this.paneAlive(sessionId)) return;
+    const binding = this.wslBinding(sessionId);
+    if (!binding?.wslTranscriptPath) {
+      this.wslProofs.delete(sessionId);
+      this.wslDue.delete(sessionId);
+      return;
+    }
+    if (this.wslProving.has(sessionId)) {
+      // One proof per pane at a time; a refresh asked meanwhile runs after it.
+      // A read that only found no proof yet waits for the running one.
+      if (refresh) this.wslProveAgain.add(sessionId);
+      return;
+    }
+    const key = this.wslKey(sessionId, binding);
+    const wslPath = binding.wslTranscriptPath;
+    const at = wslTranscriptSharePath(wslPath, binding.sessionId, this.deps.getWslTarget?.(sessionId), this.wslShare);
+    if (!at.ok) {
+      // Decided without the disk: the caller reads it next, no refresh needed.
+      this.settleWsl(sessionId, key, wslPath, at, false);
+      return;
+    }
+    const entry: { promise: Promise<void> } = { promise: Promise.resolve() };
+    this.wslProving.set(sessionId, entry);
+    entry.promise = proveWslTranscriptPath(at, this.wslShare.fs)
+      .catch((): WslTranscriptResolution => ({ ok: false, reason: 'unreadable', transient: true }))
+      .then((proof) => {
+        // Dropped (the pane closed) or disposed meanwhile: the proof lands nowhere.
+        if (this.wslProving.get(sessionId) !== entry) return;
+        this.wslProving.delete(sessionId);
+        if (this.disposed || !this.paneAlive(sessionId)) return;
+        this.settleWsl(sessionId, key, wslPath, proof, true);
+        if (this.wslProveAgain.delete(sessionId)) this.proveWsl(sessionId, true);
+      });
+  }
+
+  private settleWsl(sessionId: string, key: string, wslPath: string, proof: WslTranscriptResolution, refresh: boolean): void {
+    const last = this.wslProofs.get(sessionId);
+    if (proof.ok) {
+      this.wslProofs.set(sessionId, { key, ok: true, hostPath: proof.hostPath, pending: proof.pending === true });
+      this.wslDue.delete(sessionId);
+    } else if (proof.transient) {
+      // Says nothing about the path: keep a good proof of the same binding, and
+      // try again on a read one poll interval from now.
+      if (!last?.ok || last.key !== key) this.wslProofs.set(sessionId, { key, ok: false, transient: true });
+      this.wslDue.set(sessionId, this.now() + this.sharePollMs);
+      this.warnOnce(`${sessionId}\u0000${wslPath}\u0000transient`, `[transcript] the WSL share did not answer for ${sessionId}; trying again`);
+    } else {
+      this.wslProofs.set(sessionId, { key, ok: false, transient: false });
+      this.wslDue.delete(sessionId);
+      this.warnOnce(`${sessionId}\u0000${wslPath}\u0000${proof.reason}`, `[transcript] refused WSL transcript path for ${sessionId}: ${proof.reason}`);
+    }
+    const state = refresh ? this.watches.get(sessionId) : undefined;
+    if (state) {
+      this.refreshPath(sessionId, state);
+      this.schedule(sessionId, state);
+    }
+  }
+
+  /**
+   * A watched share path may be read now: the pane lives and the file is the
+   * one last proven. A proof made while the file did not exist yet covers its
+   * folder only, so once the file is there it is proven before the first read.
+   */
+  private shareReadable(sessionId: string, state: WatchState): boolean {
+    if (!this.paneAlive(sessionId)) return false;
+    const proof = this.wslProofs.get(sessionId);
+    if (!proof?.ok || proof.hostPath !== state.transcriptPath) return false;
+    if (!proof.pending) return true;
+    if (statTranscript(proof.hostPath)) this.proveWsl(sessionId, true);
+    return false;
+  }
+
   private resolvePath(
     sessionId: string,
   ):
-    | { ok: true; agent: string; transcriptPath: string; agentSessionId: string; parse: (line: string, offset: number) => ParsedTranscriptLine; pending?: boolean }
+    | { ok: true; agent: string; transcriptPath: string; agentSessionId: string; parse: (line: string, offset: number) => ParsedTranscriptLine; pending?: boolean; share?: boolean }
     | { ok: false; reason: string } {
     let binding;
     try {
@@ -661,6 +862,32 @@ export class TranscriptProjector {
     if (!binding) return { ok: false, reason: this.absentBindingReason(sessionId) };
     const provider = fileTranscriptProvider(binding.agent);
     if (!provider) return { ok: false, reason: 'unsupported-agent' };
+    if (!binding.transcriptPath && binding.wslTranscriptPath && agentRow(binding.agent)?.wslTranscript) {
+      // A WSL pane's Claude transcript, read through the pane's distro share at
+      // the path last proven for this binding (proveWsl). Nothing here touches
+      // the share, and a dead pane's never is: the distro may have stopped,
+      // and an access would boot it.
+      if (!this.paneAlive(sessionId)) return { ok: false, reason: 'unreadable' };
+      const key = this.wslKey(sessionId, binding);
+      let proof = this.wslProofs.get(sessionId);
+      if (!proof || proof.key !== key || this.wslProofDue(sessionId)) {
+        // Start a proof and answer from what is proven: this never waits.
+        this.proveWsl(sessionId, false);
+        // A refusal decided without the disk is already here.
+        proof = this.wslProofs.get(sessionId);
+      }
+      if (!proof || proof.key !== key) return { ok: false, reason: 'no-transcript-path' };
+      if (!proof.ok) return { ok: false, reason: proof.transient ? 'unreadable' : 'unsafe-transcript-path' };
+      return {
+        ok: true,
+        transcriptPath: proof.hostPath,
+        agentSessionId: binding.sessionId,
+        parse: provider.parse,
+        agent: binding.agent,
+        share: true,
+        ...(proof.pending ? { pending: true } : {}),
+      };
+    }
     if (!binding.transcriptPath) return { ok: false, reason: 'no-transcript-path' };
     // The containment guard belongs HERE, at the single point every read goes
     // through, not only on the hook path that happens to be validated today.
@@ -698,7 +925,13 @@ export class TranscriptProjector {
    * Codex thread: the session file appears on the first turn), and still
    * missing now. Readers answer it as an empty conversation.
    */
-  private notWrittenYet(resolved: { transcriptPath: string; pending?: boolean }): boolean {
+  private notWrittenYet(sessionId: string, resolved: { transcriptPath: string; pending?: boolean; share?: boolean }): boolean {
+    if (unprovenShareFile(resolved)) {
+      // Only its folder was proven. A file that appeared since is proven before
+      // anything reads it; until then it reads as not written yet.
+      if (statTranscript(resolved.transcriptPath)) this.proveWsl(sessionId, true);
+      return true;
+    }
     return resolved.pending === true && !statTranscript(resolved.transcriptPath);
   }
 
@@ -748,6 +981,13 @@ export class TranscriptProjector {
     if (resolved.ok) state.parse = resolved.parse;
     if (next === state.transcriptPath) return;
     state.transcriptPath = next;
+    const share = resolved.ok && resolved.share === true;
+    if (share !== state.share && state.poller) {
+      // A share is polled at its own rate and a local file is watched: re-arm.
+      clearInterval(state.poller);
+      state.poller = null;
+    }
+    state.share = share;
     state.tailOffset = -1;
     state.forceReset = true;
     state.lastSize = -1;
@@ -772,6 +1012,13 @@ export class TranscriptProjector {
     if (this.disposed || state.clients.size === 0) return;
     if (!state.transcriptPath) return;
     if (state.watcher || state.poller) return;
+    if (state.share) {
+      // A WSL distro share serves no change notifications (gitContextWatch's
+      // WSL_SHARE); fs.watch on it fails to arm. Hook nudges
+      // still mark each turn's edges; the poll carries a turn in progress.
+      this.startPolling(sessionId, state);
+      return;
+    }
 
     const dir = path.dirname(state.transcriptPath);
     const basename = transcriptBasename(state.transcriptPath);
@@ -799,10 +1046,20 @@ export class TranscriptProjector {
     }
   }
 
-  /** ~3s size/mtime poll. Only ever runs while a client is subscribed. */
+  /**
+   * ~3s size/mtime poll (a WSL share: `sharePollMs`). Only ever runs while a
+   * client is subscribed; unsubscribe, dropPty and dispose clear it.
+   */
   private startPolling(sessionId: string, state: WatchState): void {
     if (this.disposed || state.poller || state.clients.size === 0) return;
+    const everyMs = state.share ? this.sharePollMs : this.pollMs;
     const poller = setInterval(() => {
+      if (state.share && !this.paneAlive(sessionId)) {
+        // The pane exited: its share is not touched again.
+        clearInterval(poller);
+        state.poller = null;
+        return;
+      }
       if (!state.transcriptPath) return;
       const stat = statTranscript(state.transcriptPath);
       if (!stat) return;
@@ -810,10 +1067,12 @@ export class TranscriptProjector {
       state.lastSize = stat.size;
       state.lastMtimeMs = stat.mtimeMs;
       this.schedule(sessionId, state);
-    }, this.pollMs);
+    }, everyMs);
     poller.unref?.();
     state.poller = poller;
-    this.deps.log?.('info', `[transcript] fs.watch unavailable for ${sessionId}; polling every ${this.pollMs}ms`);
+    this.deps.log?.('info', state.share
+      ? `[transcript] ${sessionId} reads a WSL share; polling every ${everyMs}ms`
+      : `[transcript] fs.watch unavailable for ${sessionId}; polling every ${everyMs}ms`);
   }
 
   /** Trailing debounce: an append is many small writes, and we want one read. */
@@ -839,6 +1098,8 @@ export class TranscriptProjector {
       this.refreshPath(sessionId, state);
       if (!state.transcriptPath) return;
     }
+    // A share is read only for a live pane, and only at a proven file.
+    if (state.share && !this.shareReadable(sessionId, state)) return;
 
     // A replaced file at the same path (an atomic rotation, or `/clear` landing
     // on the same slug) can be LARGER than the old cursor, in which case the

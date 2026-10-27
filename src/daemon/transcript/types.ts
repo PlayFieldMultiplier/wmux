@@ -5,6 +5,8 @@
 
 import type { AgentSignalKind } from '../../shared/hooks/signal-types';
 import type { ResumeBinding } from '../../shared/agentResume';
+import type { WslTarget } from '../../shared/wslTarget';
+import type { WslShareFs } from '../hooks/transcriptPathGuard';
 import type { TranscriptAppendData } from '../../shared/transcript/turnEvents';
 
 export interface TranscriptProjectorDeps {
@@ -32,6 +34,18 @@ export interface TranscriptProjectorDeps {
    */
   getSessionEnv?: (sessionId: string) => Record<string, string> | undefined;
   /**
+   * Where a WSL pane runs (distro and user), as the pane itself recorded it at
+   * spawn. A binding's `wslTranscriptPath` is read through that distro's share
+   * and must be that user's transcript. Absent ⇒ such a binding is unavailable.
+   */
+  getWslTarget?: (sessionId: string) => Partial<WslTarget> | undefined;
+  /**
+   * Whether the pane's process still runs. A dead pane's WSL share is never
+   * touched: the distro may have stopped, and any access would boot it.
+   * Absent ⇒ every pane counts as alive.
+   */
+  isPaneAlive?: (sessionId: string) => boolean;
+  /**
    * Deliver an append to the listed clients ONLY (A6 — unicast, not
    * broadcast). A transcript append carries the pane's full conversation
    * content, so it must never reach a client that did not subscribe, and
@@ -48,6 +62,10 @@ export interface TranscriptProjectorDeps {
   debounceMs?: number;
   /** Polling-fallback interval used when fs.watch cannot arm; default 3000ms. */
   pollMs?: number;
+  /** Poll interval for a transcript on a WSL share; default 500ms. */
+  sharePollMs?: number;
+  /** Tests only: stand a folder in for the WSL share, and count or fake its calls. */
+  wslShare?: { platform?: NodeJS.Platform; shareRoot?: (distro: string) => string; fs?: WslShareFs };
 }
 
 /** Arguments of the on-expand code-body fetch. */

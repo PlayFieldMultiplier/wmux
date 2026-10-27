@@ -212,6 +212,14 @@ export interface ResumeBinding {
    * mapping is version-drift-prone; capture deliberately avoided depending on it).
    */
   transcriptPath?: string;
+  /**
+   * A WSL pane's own transcript, as the Linux path its Claude reported
+   * (`/home/<user>/.claude/projects/<project>/<id>.jsonl`). Kept apart from
+   * `transcriptPath` because this process cannot open it as given: only the
+   * transcript projector reads it, through the pane's distro share
+   * (proveWslTranscriptPath), and never stores what it opened.
+   */
+  wslTranscriptPath?: string;
   /** Capture time (ms). Staleness is decided by existence-probe, not a TTL. */
   ts: number;
   /**
@@ -354,9 +362,24 @@ export function isProvisionalCapture(prev: ResumeBinding | undefined, next: Resu
   return !!prev
     && (next.agent === 'claude' || next.agent === 'codex')
     && prev.agent === next.agent
-    && !!prev.transcriptPath
-    && !next.transcriptPath
+    && hasAuthoritativeTranscript(prev)
+    && !hasAuthoritativeTranscript(next)
     && prev.sessionId !== next.sessionId;
+}
+
+/**
+ * Whether the binding names its session's transcript: a host path
+ * (`transcriptPath`) or, for a WSL pane, the Linux path inside its distro
+ * (`wslTranscriptPath`). Either one is what a capture without a path must not
+ * displace, and what makes a transcript search for the session pointless.
+ */
+export function hasAuthoritativeTranscript(binding: Pick<ResumeBinding, 'transcriptPath' | 'wslTranscriptPath'> | undefined): boolean {
+  return !!binding?.transcriptPath || !!binding?.wslTranscriptPath;
+}
+
+/** The transcript path a binding names, host or WSL (see hasAuthoritativeTranscript). */
+function namedTranscript(binding: ResumeBinding): string | undefined {
+  return binding.transcriptPath || binding.wslTranscriptPath;
 }
 
 /**
@@ -368,10 +391,12 @@ export function isProvisionalCapture(prev: ResumeBinding | undefined, next: Resu
  * the original folder. Only a relocation may move the pane's cwd.
  */
 export function transcriptRelocated(prev: ResumeBinding | undefined, next: ResumeBinding): boolean {
-  if (!prev?.transcriptPath || !next.transcriptPath) return false;
+  const before = prev && namedTranscript(prev);
+  const after = namedTranscript(next);
+  if (!prev || !before || !after) return false;
   if (prev.agent !== next.agent || prev.sessionId !== next.sessionId) return false;
   const folder = (p: string) => p.replace(/[\\/][^\\/]*$/, '');
-  return folder(prev.transcriptPath) !== folder(next.transcriptPath);
+  return folder(before) !== folder(after);
 }
 
 /**
@@ -399,6 +424,7 @@ export function mergeResumeBinding(
     prev?.cwd === next.cwd;
   if (sameConversation && !merged.permissionMode && prev?.permissionMode) merged.permissionMode = prev.permissionMode;
   if (sameConversation && !merged.transcriptPath && prev?.transcriptPath) merged.transcriptPath = prev.transcriptPath;
+  if (sameConversation && !merged.wslTranscriptPath && prev?.wslTranscriptPath) merged.wslTranscriptPath = prev.wslTranscriptPath;
   return merged;
 }
 

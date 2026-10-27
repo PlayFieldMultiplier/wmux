@@ -75,6 +75,28 @@ describe('StateWriter', () => {
     }
   });
 
+  it('loads a binding from before wslTranscriptPath unchanged, and keeps one that has it', () => {
+    const older = { agent: 'claude', sessionId: '0a1b2c3d-0000-4000-8000-000000000003', cwd: '/tmp', transcriptPath: '/tmp/x.jsonl', permissionMode: 'default', ts: 7 };
+    const wsl = { agent: 'claude', sessionId: '0a1b2c3d-0000-4000-8000-000000000004', cwd: '/home/dev/repo',
+      wslTranscriptPath: '/home/dev/.claude/projects/-home-dev-repo/0a1b2c3d-0000-4000-8000-000000000004.jsonl', ts: 8 };
+    writer.saveImmediate(makeState([
+      makeSession({ id: 'older', resumeBinding: older as DaemonSession['resumeBinding'] }),
+      makeSession({ id: 'wsl', resumeBinding: wsl, wslTarget: { distribution: 'Ubuntu', user: 'dev' } }),
+    ]));
+    const filePath = path.join(tmpDir, 'sessions.json');
+    const before = fs.readFileSync(filePath, 'utf-8');
+    const main = new StateWriter(tmpDir, undefined, undefined, true, () => undefined);
+    try {
+      const loaded = main.load();
+      expect(loaded.sessions[0].resumeBinding).toEqual(older);
+      expect(loaded.sessions[1].resumeBinding).toEqual(wsl);
+      // Nothing to heal: the main writer leaves the file as it was.
+      expect(fs.readFileSync(filePath, 'utf-8')).toBe(before);
+    } finally {
+      main.dispose();
+    }
+  });
+
   it('the main writer persists the skipped binding and reports it through its own log, once', () => {
     const missingFolder = { agent: 'codex', sessionId: 'bad-id', ts: 1 } as unknown as DaemonSession['resumeBinding'];
     writer.saveImmediate(makeState([makeSession({ id: 'broken', resumeBinding: missingFolder })]));

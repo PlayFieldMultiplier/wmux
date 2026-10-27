@@ -966,3 +966,225 @@ describe('snapshot — a huge non-conversation line before the answer (after /cl
     expect(page.events.some((e) => e.kind === 'assistant_text' && e.text === 'ok')).toBe(true);
   });
 });
+
+describe('TranscriptProjector — a WSL pane\'s transcript on its distro share', () => {
+  const SID = '920b9112-1111-4222-8333-444455557777';
+  const LINUX = `/home/dev/.claude/projects/-home-dev-repo/${SID}.jsonl`;
+  let shareBase: string;
+  let share: string;
+  let file: string;
+  let alive: boolean;
+  let target: { distribution: string; user: string } | undefined;
+  let boundId: string;
+  let projector: TranscriptProjector;
+  /** Every share access the proof makes, and every share-root lookup. */
+  let proofCalls: string[];
+  /** When set, every share call of the proof fails with this code. */
+  let shareError: string | null;
+  const appends: { data: TranscriptAppendData }[] = [];
+
+  beforeEach(() => {
+    // The harness folder stands in for `\\wsl$\Ubuntu`, laid out as the distro's filesystem.
+    shareBase = fs.realpathSync.native(harness.dir);
+    share = path.join(shareBase, 'Ubuntu');
+    file = path.join(share, 'home', 'dev', '.claude', 'projects', '-home-dev-repo', `${SID}.jsonl`);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.copyFileSync(path.join(FIXTURES, 'claude-basic.jsonl'), file);
+    alive = true;
+    target = { distribution: 'Ubuntu', user: 'dev' };
+    boundId = SID;
+    proofCalls = [];
+    shareError = null;
+    appends.length = 0;
+    const counted = <R>(name: string, fn: (p: string) => Promise<R>) => (p: string): Promise<R> => {
+      proofCalls.push(`${name} ${p}`);
+      return shareError ? Promise.reject(Object.assign(new Error(shareError), { code: shareError })) : fn(p);
+    };
+    projector = new TranscriptProjector({
+      getResumeBinding: () => binding({ sessionId: boundId, wslTranscriptPath: LINUX.replace(SID, boundId) }),
+      getWslTarget: () => target,
+      isPaneAlive: () => alive,
+      emitAppend: (_sessionId, data) => appends.push({ data }),
+      debounceMs: 1,
+      sharePollMs: 20,
+      wslShare: {
+        platform: 'win32',
+        shareRoot: (distro) => { proofCalls.push(`shareRoot ${distro}`); return path.join(shareBase, distro); },
+        fs: {
+          realpath: counted('realpath', (p) => fs.promises.realpath(p)),
+          lstat: counted('lstat', (p) => fs.promises.lstat(p)),
+          stat: counted('stat', (p) => fs.promises.stat(p)),
+        },
+      },
+    });
+  });
+
+  afterEach(() => {
+    projector.dispose();
+    vi.restoreAllMocks();
+  });
+
+  const available = () => vi.waitFor(() => expect(projector.status('pty-1').available).toBe(true), { timeout: 10_000 });
+
+  it('serves the file once proven, with no proof per read; an async reader waits for the proof', async () => {
+    // A synchronous read finds no proof yet: it starts one and does not wait.
+    expect(projector.status('pty-1')).toEqual({ available: false, reason: 'no-transcript-path' });
+    // An async reader waits for that proof and then reads.
+    await projector.ready('pty-1');
+    expect(projector.status('pty-1')).toMatchObject({ available: true, transcriptBasename: `${SID}.jsonl` });
+    const proven = proofCalls.length;
+    expect(projector.transcriptPath('pty-1')).toBe(file);
+    expect(projector.snapshot('pty-1')?.events.map((e) => e.kind)).toContain('assistant_text');
+    expect(proofCalls).toHaveLength(proven);
+    // A nudge of a pane nobody watches only marks it due; its next read proves it again.
+    projector.nudge('pty-1', 'agent.stop');
+    expect(proofCalls).toHaveLength(proven);
+    expect(projector.transcriptPath('pty-1')).toBe(file);
+    await vi.waitFor(() => expect(proofCalls.length).toBeGreaterThan(proven), { timeout: 10_000 });
+  });
+
+  it('refuses at once when the pane\'s own target does not own the path', () => {
+    target = { distribution: 'Ubuntu', user: 'other' };
+    // Decided without the disk, so even the first read has the answer.
+    expect(projector.status('pty-1')).toEqual({ available: false, reason: 'unsafe-transcript-path' });
+    expect(projector.snapshot('pty-1')).toBeNull();
+    expect(proofCalls.filter((c) => !c.startsWith('shareRoot'))).toEqual([]);
+  });
+
+  it('makes no share access at all for a pane whose process is gone, watched or not', async () => {
+    projector.subscribe('c1', 'pty-1');
+    await vi.waitFor(() => expect(appends.length).toBeGreaterThan(0), { timeout: 10_000 });
+    alive = false;
+    proofCalls = [];
+    const synced: string[] = [];
+    const underShare = (p: unknown) => typeof p === 'string' && p.toLowerCase().startsWith(shareBase.toLowerCase());
+    for (const name of ['statSync', 'lstatSync', 'openSync', 'readFileSync', 'existsSync'] as const) {
+      const original = fs[name] as (...args: unknown[]) => unknown;
+      vi.spyOn(fs, name).mockImplementation(((...args: unknown[]) => {
+        if (underShare(args[0])) synced.push(`${name} ${String(args[0])}`);
+        return original.apply(fs, args);
+      }) as never);
+    }
+    // A second subscriber on the existing watch schedules a read at the cached
+    // path; the poll keeps ticking; both must leave the share alone.
+    projector.subscribe('c2', 'pty-1');
+    await deliberateSleep(80, 'negative: a pending read and the poll stay off the share');
+    // status, the summary's path lookup, a page, a delta, a nudge and a rebind.
+    expect(projector.status('pty-1')).toEqual({ available: false, reason: 'unreadable' });
+    expect(projector.transcriptPath('pty-1')).toBeNull();
+    expect(projector.snapshot('pty-1')).toBeNull();
+    expect(projector.delta('pty-1', 0)).toBeNull();
+    projector.nudge('pty-1', 'agent.stop');
+    projector.rebind('pty-1');
+    await projector.ready('pty-1');
+    await deliberateSleep(60, 'negative: no proof starts for a dead pane');
+    expect(proofCalls).toEqual([]);
+    expect(synced).toEqual([]);
+  });
+
+  it('drops the proven path at once when a refresh fails to prove it', async () => {
+    projector.subscribe('c1', 'pty-1');
+    await available();
+    // The project folder becomes a junction to a folder outside the projects root.
+    const outside = path.join(share, 'elsewhere');
+    fs.renameSync(path.dirname(file), outside);
+    fs.symlinkSync(outside, path.dirname(file), 'junction');
+    projector.rebind('pty-1');
+    await vi.waitFor(() => expect(projector.status('pty-1')).toEqual({ available: false, reason: 'unsafe-transcript-path' }), { timeout: 10_000 });
+    expect(projector.transcriptPath('pty-1')).toBeNull();
+    expect(projector.snapshot('pty-1')).toBeNull();
+  });
+
+  it('answers a share that does not answer as unreadable, never unsafe, and tries again later', async () => {
+    shareError = 'EBUSY';
+    await projector.ready('pty-1');
+    expect(projector.status('pty-1')).toEqual({ available: false, reason: 'unreadable' });
+    // The share answers again: the next read past one poll interval proves it.
+    shareError = null;
+    await vi.waitFor(async () => {
+      await projector.ready('pty-1');
+      expect(projector.status('pty-1').available).toBe(true);
+    }, { timeout: 10_000 });
+  });
+
+  it('keeps the last good proof through a share that does not answer', async () => {
+    projector.subscribe('c1', 'pty-1');
+    await available();
+    const proven = proofCalls.length;
+    shareError = 'EIO';
+    projector.rebind('pty-1');
+    await vi.waitFor(() => expect(proofCalls.length).toBeGreaterThan(proven), { timeout: 10_000 });
+    await deliberateSleep(10, 'the failed proof settles');
+    expect(projector.transcriptPath('pty-1')).toBe(file);
+    expect(projector.status('pty-1').reason).not.toBe('unsafe-transcript-path');
+  });
+
+  it('proves a transcript written after a pending proof before reading any of it', async () => {
+    fs.rmSync(file);
+    await projector.ready('pty-1');
+    // Only the folder is proven: the path is not handed out, and reads are empty.
+    expect(projector.status('pty-1').available).toBe(true);
+    expect(projector.transcriptPath('pty-1')).toBeNull();
+    expect(projector.snapshot('pty-1')?.events).toEqual([]);
+    fs.copyFileSync(path.join(FIXTURES, 'claude-basic.jsonl'), file);
+    const before = proofCalls.length;
+    // The first read after the file appears reads nothing and proves it.
+    expect(projector.snapshot('pty-1')?.events).toEqual([]);
+    expect(proofCalls.length).toBeGreaterThan(before);
+    await vi.waitFor(() => expect(projector.transcriptPath('pty-1')).toBe(file), { timeout: 10_000 });
+    expect(projector.snapshot('pty-1')?.events.map((e) => e.kind)).toContain('assistant_text');
+  });
+
+  it('holds a /clear on a WSL pane that was never read', async () => {
+    // No read yet, so no proof: the hold must come from the binding itself.
+    projector.nudge('pty-1', 'agent.session_start', '920b9112-1111-4222-8333-444455558888');
+    // The binding on file still names the previous conversation; once proven,
+    // it must not be handed out as the new session's.
+    await projector.ready('pty-1');
+    expect(projector.transcriptPath('pty-1')).toBe(file);
+    expect(projector.sentFileBinding('pty-1')).toBeNull();
+    // Its own session start (a resume of the same one) holds nothing.
+    projector.nudge('pty-1', 'agent.session_start', SID);
+    expect(projector.sentFileBinding('pty-1')).toMatchObject({ agentSessionId: SID });
+  });
+
+  it('polls the share instead of watching it, and carries a live append', async () => {
+    const watch = vi.spyOn(fs, 'watch');
+    projector.subscribe('c1', 'pty-1');
+    await vi.waitFor(() => expect(appends.length).toBeGreaterThan(0), { timeout: 10_000 });
+    expect(watch).not.toHaveBeenCalled();
+    const before = appends.length;
+    fs.appendFileSync(file, JSON.stringify({
+      type: 'assistant',
+      uuid: 'wsl-live-1',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'from the share' }] },
+    }) + '\n');
+    await vi.waitFor(() => {
+      const rows = appends.slice(before).flatMap((a) => (a.data as { events: Array<{ kind: string; text?: string }> }).events);
+      expect(rows.some((e) => e.kind === 'assistant_text' && e.text === 'from the share')).toBe(true);
+    }, { timeout: 10_000 });
+  });
+
+  it('stops polling when the last subscriber leaves, the pane goes, or its process exits', async () => {
+    const started = vi.spyOn(globalThis, 'setInterval');
+    const cleared = vi.spyOn(globalThis, 'clearInterval');
+    const armed = async (session: string) => {
+      const count = started.mock.calls.length;
+      projector.subscribe('c1', session);
+      await vi.waitFor(() => expect(started.mock.calls.length).toBe(count + 1), { timeout: 10_000 });
+      expect(started.mock.calls[count][1]).toBe(20);
+      return started.mock.results[count].value;
+    };
+    const first = await armed('pty-1');
+    projector.unsubscribe('c1', 'pty-1');
+    expect(cleared).toHaveBeenCalledWith(first);
+
+    const second = await armed('pty-2');
+    projector.dropPty('pty-2');
+    expect(cleared).toHaveBeenCalledWith(second);
+
+    const third = await armed('pty-3');
+    alive = false;
+    await vi.waitFor(() => expect(cleared).toHaveBeenCalledWith(third), { timeout: 10_000 });
+  });
+});

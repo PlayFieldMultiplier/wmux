@@ -7,6 +7,7 @@ import {
   permissionFlagFor,
   mergeResumeBinding,
   isProvisionalCapture,
+  hasAuthoritativeTranscript,
   transcriptRelocated,
   normalizeResumeCwd,
   isUsableResumeBinding,
@@ -378,6 +379,13 @@ describe('toResumeCommand (X6)', () => {
       expect(mergeResumeBinding(prev, next).transcriptPath).toBe('C:\\t\\abc.jsonl');
     });
 
+    it('keeps a WSL pane\'s Linux transcript path the same way, and never for another conversation', () => {
+      const linux = '/home/dev/.claude/projects/-repo/abc.jsonl';
+      const prev = binding({ wslTranscriptPath: linux });
+      expect(mergeResumeBinding(prev, binding({ ts: 2 })).wslTranscriptPath).toBe(linux);
+      expect(mergeResumeBinding(prev, binding({ sessionId: 'new', ts: 2 })).wslTranscriptPath).toBeUndefined();
+    });
+
     it('takes the latest sessionId/cwd/ts (stable fields are not sticky)', () => {
       const prev = binding({ sessionId: 'old', cwd: 'C:\\a', ts: 1 });
       const next = binding({ sessionId: 'new', cwd: 'C:\\b', ts: 9 });
@@ -596,6 +604,24 @@ describe('isProvisionalCapture (#1624 — Codex first-turn title thread)', () =>
     const prev = binding({ transcriptPath: '/p/abc-123.jsonl' });
     expect(isProvisionalCapture(prev, binding({ sessionId: 'new-456' }))).toBe(true);
   });
+
+  it('holds a WSL pane\'s bound transcript the same way on /clear', () => {
+    // A WSL pane's binding names its transcript by the Linux path only.
+    const prev = binding({ wslTranscriptPath: '/home/dev/.claude/projects/-repo/abc-123.jsonl' });
+    expect(isProvisionalCapture(prev, binding({ sessionId: 'new-456', ts: 2 }))).toBe(true);
+    // Its next capture with a path rebinds as usual.
+    const next = binding({ sessionId: 'new-456', wslTranscriptPath: '/home/dev/.claude/projects/-repo/new-456.jsonl', ts: 2 });
+    expect(isProvisionalCapture(prev, next)).toBe(false);
+  });
+});
+
+describe('hasAuthoritativeTranscript', () => {
+  it('is true for a host path or a WSL pane\'s Linux path, and false for neither', () => {
+    expect(hasAuthoritativeTranscript(binding({ transcriptPath: 'C:\\t\\a.jsonl' }))).toBe(true);
+    expect(hasAuthoritativeTranscript(binding({ wslTranscriptPath: '/home/dev/.claude/projects/-r/a.jsonl' }))).toBe(true);
+    expect(hasAuthoritativeTranscript(binding())).toBe(false);
+    expect(hasAuthoritativeTranscript(undefined)).toBe(false);
+  });
 });
 
 describe('transcriptRelocated (#2228)', () => {
@@ -623,6 +649,12 @@ describe('transcriptRelocated (#2228)', () => {
       { ...at(home, '/x'), transcriptPath: `/h/.claude/projects/-x/${id}.jsonl` },
       { ...at(wt, '/x/w'), transcriptPath: `/h/.claude/projects/-x-w/${id}.jsonl` },
     )).toBe(true);
+  });
+
+  it('follows a WSL pane\'s Linux transcript path the same way', () => {
+    const wsl = (folder: string, cwd: string) => ({ agent: 'claude', sessionId: id, cwd, wslTranscriptPath: `/home/dev/.claude/projects/${folder}/${id}.jsonl`, ts: 1 });
+    expect(transcriptRelocated(wsl('-home-dev-x', '/home/dev/x'), wsl('-home-dev-x--claude-worktrees-w', '/home/dev/x/.claude/worktrees/w'))).toBe(true);
+    expect(transcriptRelocated(wsl('-home-dev-x', '/home/dev/x'), wsl('-home-dev-x', '/home/dev/x/sub'))).toBe(false);
   });
 });
 
