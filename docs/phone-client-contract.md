@@ -1884,8 +1884,14 @@ gets the whole prompt as a form:
 ```
 
 Option keys are the digits Claude draws. An option carries `description` when
-Claude draws one under its label (omitted otherwise). `allowOther` is always
-true: Claude adds its "Type something" row to every question. `otherMaxCells`
+Claude draws one under its label (omitted otherwise). `allowOther` is true
+wherever Claude adds its "Type something" row: on every question except a
+single-select one whose options carry a `preview`. That question carries
+`"preview": true` and `"allowOther": false`: Claude draws its option labels
+beside a box holding the focused option's preview, with no "Type something"
+row, so offer no free-text field for it (an `other` there is 400
+`invalid-choice` with nothing typed). Its options keep their `description`,
+which Claude does not draw in that layout. `otherMaxCells`
 is the widest `other` the pane can take now (`cols - 12` cells, a wide
 character counting two); the pane can be resized, so the answer checks the
 width again (`invalid-text` / `too-wide`). A prompt the daemon could not
@@ -1898,7 +1904,10 @@ card above.
 The daemon reads the picker as Claude draws it: each option by its whole
 label then its whole description (a long label wraps onto the next row), the
 "Type something" row last, and under the picker's bottom rule only Claude's
-`Chat about this` row and its key hint. A picker drawn any other way (a label
+`Chat about this` row and its key hint. A `preview: true` question is read
+from the left column only (every row from option 1 to the bottom rule cut at
+the preview box's column, a wide character counting two): each option by its
+whole label, no free-text row. A picker drawn any other way (a label
 cut short, another menu or an input prompt under it) is not the question the
 form describes: the answer is 409 `prompt-changed` with nothing typed.
 
@@ -1909,7 +1918,9 @@ form describes: the answer is 409 `prompt-changed` with nothing typed.
   as checked live on 2.1.288: a single-select option's digit; a
   multi-select's option digits (each toggles its box), then `↓` onto the
   in-question Submit row (labelled `Next` when another question follows) and
-  Enter; typed text as
+  Enter; on a `preview: true` question (measured on 2.1.311, where a digit
+  only moves the cursor) the option's digit, then Enter, or Enter alone for
+  option 1; typed text as
   the "Type something" row's digit, `↓` onto it where needed, one bracketed
   paste and Enter / `↓`. Several questions end on Claude's review screen,
   where the daemon checks that every question lists exactly the answer given

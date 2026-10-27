@@ -45,6 +45,16 @@
 // option list itself (`↓ 2.` marks rows below, the free-text row is not
 // drawn). The first two still read as the picker; a scrolled list never does.
 //
+// A single-select question whose options carry a `preview` is drawn side by
+// side on Claude Code 2.1.311 (measured at 40 and 57 columns, KEYS.md): the
+// option labels alone on the left (a long label wraps onto a 4-space indent;
+// no description, no free-text row), a box holding the focused option's
+// preview on the right, its top `┌───┐` on option 1's row, and `Notes: press
+// n to add notes` under it. The chat row under the bottom rule has no digit.
+// Only the left column is read: every row from option 1 to the bottom rule is
+// cut at the box's column, so nothing of the preview reaches a label. There a
+// digit only moves the cursor; Enter selects.
+//
 // Measured key effects (KEYS.md): on a single-select question a digit selects
 // and moves to the next tab (or, alone, submits); on a multi-select question a
 // digit only toggles its row and the cursor stays put; the free-text row of a
@@ -55,6 +65,7 @@
 
 import type { DecisionForm } from './types';
 import { UNKNOWN_CELL } from '../sessionTextReplay';
+import { terminalCharWidth } from '../../shared/terminalUnicode';
 
 export type AskFormQuestion = NonNullable<DecisionForm['questions']>[number];
 
@@ -97,6 +108,11 @@ export interface AskPickerQuestionView extends AskPickerTabs {
    * Code 2.1.288 labels it `Next` on a question that is not the last one.
    */
   submitRow?: { cursor: boolean; next: boolean };
+  /**
+   * The side-by-side preview layout: `options` are the labels of the left
+   * column only (no free-text row), each `more` its wrapped label rows.
+   */
+  preview?: true;
 }
 
 export interface AskPickerReviewView extends AskPickerTabs {
@@ -142,6 +158,10 @@ const FREE_TEXT_PLACEHOLDER = /^Type something\.?$/;
 const ANSWERED_HEADER = "User answered Claude's questions:";
 const ANSWERED_ENTRY = /^(?:⎿\s+)?·\s+(.*)$/;
 const CHAT_ROW_LABEL = 'Chat about this';
+/** The preview box's top edge, from its `┌` (drawn on option 1's row). */
+const PREVIEW_TOP = /^┌─+┐$/;
+/** The preview layout draws its chat row with no digit. */
+const PREVIEW_CHAT_ROW = /^ {2}Chat about this$/;
 /** The key hint under a question view (its rows joined with one space). */
 const HINT = /^Enter to select · .+ · Esc to cancel$/;
 /**
@@ -149,6 +169,8 @@ const HINT = /^Enter to select · .+ · Esc to cancel$/;
  * and `Tab/Arrow keys to navigate` for several (measured in the 2.1.296 binary).
  */
 const ONE_QUESTION_HINT = /· ↑\/↓ to navigate ·/;
+/** A preview picker for several questions keeps `↑/↓ to navigate` and adds this. */
+const SEVERAL_QUESTIONS_HINT = /· Tab to switch questions ·/;
 /** Rows the hint may take once a narrow pane wraps it. */
 const HINT_MAX_ROWS = 4;
 /** The review screen's own rows: a picker is up even with no hint drawn. */
@@ -207,13 +229,53 @@ export function sameQuestionText(screen: string, form: string): boolean {
   return text.length > 0 && text === compact(form);
 }
 
+/** Columns `text` takes on the grid, a wide character counting two. */
+function columnsOf(text: string): number {
+  let width = 0;
+  for (const ch of text) width += terminalCharWidth(ch.codePointAt(0) ?? 0);
+  return width;
+}
+
+/**
+ * The column of the preview box on an option row (`❯ 1. Label   ┌────┐`), or
+ * null when the row draws none: a `┌───┐` that ends the row, with a blank
+ * between it and the label.
+ */
+function previewColumn(row: string): number | null {
+  const at = row.indexOf('┌');
+  if (at <= 0 || row[at - 1] !== ' ' || !PREVIEW_TOP.test(row.slice(at))) return null;
+  return columnsOf(row.slice(0, at));
+}
+
+/**
+ * The row's text left of column `col`, right-trimmed, or null when the row
+ * does not split there: a wide character across the column, or text on both
+ * sides of it with no blank between (not two columns at all). An unknown cell
+ * (a read with unknown cells) may be the blank.
+ */
+function leftOfColumn(row: string, col: number): string | null {
+  let width = 0;
+  let at = 0;
+  for (const ch of row) {
+    if (width >= col) break;
+    width += terminalCharWidth(ch.codePointAt(0) ?? 0);
+    at += ch.length;
+  }
+  if (width > col) return null;
+  const left = row.slice(0, at);
+  const blank = (ch: string | undefined): boolean => ch === ' ' || ch === UNKNOWN_CELL;
+  if (at < row.length && !blank(row[at]) && left.length > 0 && !blank(left[left.length - 1])) return null;
+  return left.replace(/\s+$/, '');
+}
+
 /**
  * Where a question view was read on the grid, for a read with unknown cells
  * (see drawnMatches): the label's row and column of each option and the rows
- * of its `more`, the question's rows, the tab bar's row. Kept beside the
- * views, not in them.
+ * of its `more` (and, in the preview layout, the column those rows are cut
+ * at), the question's rows, the tab bar's row. Kept beside the views, not in
+ * them.
  */
-const optionAt = new WeakMap<AskPickerRow, { row: number; col: number; more: number[] }>();
+const optionAt = new WeakMap<AskPickerRow, { row: number; col: number; more: number[]; cut?: number }>();
 const questionAt = new WeakMap<AskPickerQuestionView, { rows: number[]; gutter: boolean }>();
 const barAt = new WeakMap<AskPickerQuestionView, number>();
 
@@ -264,17 +326,22 @@ function parseQuestionView(
   const gutter = text.length > 1 && text.every((row) => QUESTION_GUTTER.test(row));
   const question = gutter ? text.map((row) => row.replace(QUESTION_GUTTER, '')).filter((row) => row.trim()) : text;
   if (question.length === 0) return null;
+  // The preview layout: from option 1's row to the bottom rule, only what is
+  // left of the box's column is the picker's.
+  const cut = i < rows.length ? previewColumn(rows[i]!) : null;
   const options: AskPickerRow[] = [];
   let multiSelect: boolean | undefined;
   let submitRow: { cursor: boolean; next: boolean } | undefined;
   let lastOption = -1;
   for (; i < rows.length; i++) {
-    const row = rows[i]!;
-    if (RULE.test(row.trim())) break;
+    if (RULE.test(rows[i]!.trim())) break;
+    const row = cut === null ? rows[i]! : leftOfColumn(rows[i]!, cut);
+    if (row === null) return null;
     const m = OPTION_ROW.exec(row);
     if (m) {
       if (submitRow) return null;
       const box = CHECKBOX.exec(m[3]!);
+      if (box && cut !== null) return null;
       if (multiSelect === undefined) multiSelect = !!box;
       else if (multiSelect !== !!box) return null;
       options.push({
@@ -283,7 +350,12 @@ function parseQuestionView(
         cursor: m[1] === '❯ ',
         ...(box ? { checked: box[1] === '✔' } : {}),
       });
-      optionAt.set(options[options.length - 1]!, { row: i, col: row.length - (box ? box[2]! : m[3]!).length, more: [] });
+      optionAt.set(options[options.length - 1]!, {
+        row: i,
+        col: row.length - (box ? box[2]! : m[3]!).length,
+        more: [],
+        ...(cut !== null ? { cut } : {}),
+      });
       lastOption = i;
       continue;
     }
@@ -305,7 +377,7 @@ function parseQuestionView(
   }
   // No bottom rule: not a whole picker.
   if (i >= rows.length || options.length === 0) return null;
-  const hint = hintBelow(rows, i + 1, String(options.length + 1));
+  const hint = hintBelow(rows, i + 1, cut === null ? String(options.length + 1) : null);
   if (hint === null) return null;
   seen.hint = hint;
   if (options.filter((o) => o.cursor).length + (submitRow?.cursor ? 1 : 0) > 1) return null;
@@ -316,6 +388,7 @@ function parseQuestionView(
     options,
     multiSelect: multiSelect === true,
     ...(submitRow ? { submitRow } : {}),
+    ...(cut !== null ? { preview: true as const } : {}),
   };
   questionAt.set(view, { rows: textAt, gutter });
   return view;
@@ -325,15 +398,19 @@ function parseQuestionView(
  * Under a question view's bottom rule Claude draws its `N. Chat about this`
  * row and the key hint, nothing else. Any other row (another menu, an input
  * prompt) means this is not the question that is up. The hint, or null.
+ * `chatKey` null: the preview layout's chat row, which has no digit.
  */
-function hintBelow(rows: readonly string[], from: number, chatKey: string): string | null {
+function hintBelow(rows: readonly string[], from: number, chatKey: string | null): string | null {
   const hint: string[] = [];
   let chat = false;
   for (let i = from; i < rows.length; i++) {
     const text = rows[i]!.trim();
     if (!text) continue;
     const m = OPTION_ROW.exec(rows[i]!);
-    if (m && !chat && hint.length === 0 && m[2] === chatKey && normalize(m[3]!) === CHAT_ROW_LABEL) {
+    const isChat = chatKey === null
+      ? PREVIEW_CHAT_ROW.test(rows[i]!)
+      : !!m && m[2] === chatKey && normalize(m[3]!) === CHAT_ROW_LABEL;
+    if (isChat && !chat && hint.length === 0) {
       chat = true;
       continue;
     }
@@ -448,7 +525,7 @@ export function parseAskPicker(rawRows: readonly string[]): AskPickerScreen | nu
   const seen: { hint?: string } = {};
   const view = parseQuestionView(rows, first, { tabs: [], submitTab: false, topCut: true }, seen);
   // Without the bar, only the hint says how many questions the picker holds.
-  return view && ONE_QUESTION_HINT.test(seen.hint ?? '') ? view : null;
+  return view && ONE_QUESTION_HINT.test(seen.hint ?? '') && !SEVERAL_QUESTIONS_HINT.test(seen.hint ?? '') ? view : null;
 }
 
 /**
@@ -655,10 +732,17 @@ function drawnMatches(drawn: string, form: string): boolean {
   return from(0, 0);
 }
 
-/** An option's rows as `unknown` draws them (its label from its column, then `more`), or null. */
+/**
+ * An option's rows as `unknown` draws them (its label from its column, then
+ * `more`; in the preview layout each cut at the box's column), or null. No
+ * rows (which match no option) when an unknown row does not split there.
+ */
 function drawnOptionRows(row: AskPickerRow, unknown: readonly string[]): string[] | null {
   const at = optionAt.get(row);
-  return at ? [(unknown[at.row] ?? '').slice(at.col), ...at.more.map((r) => unknown[r] ?? '')] : null;
+  if (!at) return null;
+  const rows = [at.row, ...at.more].map((r) => (at.cut === undefined ? unknown[r] ?? '' : leftOfColumn(unknown[r] ?? '', at.cut)));
+  if (rows.some((r) => r === null)) return [];
+  return [rows[0]!.slice(at.col), ...(rows.slice(1) as string[])];
 }
 
 /** How many of `rows` are the option's label when they read as `option`; 0 when they do not. */
@@ -712,8 +796,10 @@ function tabsMatch(screen: AskPickerScreen, questions: readonly AskFormQuestion[
  * after it not (the current tab's own mark is not checked: when it turns is
  * not measured for every shape), the cursor where `expect` puts it, exactly
  * the expected boxes ticked, and the free-text row showing its placeholder or
- * exactly the typed text. A review view must list every question with the
- * answer given, and offer `1. Submit answers` / `2. Cancel`.
+ * exactly the typed text. A `preview` question must be drawn side by side
+ * (and only it): its options by key and label alone, no free-text row. A
+ * review view must list every question with the answer given, and offer
+ * `1. Submit answers` / `2. Cancel`.
  *
  * `unknown` (a read's rows with UNKNOWN_CELL for each cell it could not see):
  * a question view's texts (its header, question, options and free-text row)
@@ -773,11 +859,16 @@ function askScreenRead(
   // The row reads `Next` where another question follows and `Submit` on the
   // last one (measured on 2.1.288).
   if (screen.submitRow && screen.submitRow.next !== expect.q < questions.length - 1) return no;
+  // The preview layout (the form says which questions Claude draws it for)
+  // shows labels only, and no free-text row.
+  const preview = screen.preview === true;
+  if (preview !== (question.preview === true)) return no;
   const otherKey = String(question.options.length + 1);
-  if (screen.options.length !== question.options.length + 1) return no;
+  if (screen.options.length !== question.options.length + (preview ? 0 : 1)) return no;
   // With unknown cells, the rows of each option's label as drawn.
   const labelRows = new Map<string, string[]>();
-  const rowsMatch = question.options.every((o, j) => {
+  const rowsMatch = question.options.every((option, j) => {
+    const o = preview ? { key: option.key, label: option.label } : option;
     const row = screen.options[j]!;
     if (row.key !== o.key) return false;
     const drawn = unknown ? drawnOptionRows(row, unknown) : null;
@@ -787,6 +878,12 @@ function askScreenRead(
     return k > 0;
   });
   if (!rowsMatch) return no;
+  const chosen = answers[expect.q]?.keys ?? [];
+  if (preview) {
+    if (expect.other !== null || expect.checked.length > 0) return no;
+    if (screen.options.find((o) => o.cursor)?.key !== expect.cursor) return no;
+    return chosen.some((key) => labelRows.get(key)?.some((row) => row.includes(UNKNOWN_CELL))) ? 'unknown' : 'meets';
+  }
   const free = screen.options[screen.options.length - 1]!;
   if (free.key !== otherKey || (free.more ?? []).length > 0) return no;
   const drawnFree = unknown ? drawnOptionRows(free, unknown)?.[0] : undefined;
@@ -806,7 +903,6 @@ function askScreenRead(
     ? screen.submitRow?.cursor === true
     : screen.options.find((o) => o.cursor)?.key === expect.cursor;
   if (!cursorOk) return no;
-  const chosen = answers[expect.q]?.keys ?? [];
   return chosen.some((key) => labelRows.get(key)?.some((row) => row.includes(UNKNOWN_CELL))) ? 'unknown' : 'meets';
 }
 
@@ -915,6 +1011,11 @@ export function askAnswerSteps(questions: readonly AskFormQuestion[], answers: r
       }
       if (answer.other !== undefined) steps.push({ key: paste(answer.other), expect: at(otherKey, checked, answer.other) });
       steps.push({ key: ASK_KEY_DOWN, expect: at('submit', checked, answer.other ?? null) });
+      steps.push({ key: ASK_KEY_ENTER, expect: next(i) });
+    } else if (question.preview) {
+      // The preview layout (measured on 2.1.311): a digit only moves the
+      // cursor, Enter selects. The cursor starts on option 1.
+      if (keys[0] !== '1') steps.push({ key: keys[0]!, expect: at(keys[0]!, [], null) });
       steps.push({ key: ASK_KEY_ENTER, expect: next(i) });
     } else if (answer.other !== undefined) {
       steps.push({ key: otherKey, expect: at(otherKey, [], null) });

@@ -357,6 +357,12 @@ export interface DecisionForm {
     multiSelect: boolean;
     allowOther: boolean;
     /**
+     * Claude AskUserQuestion only: the options carry a `preview`, and Claude
+     * draws them beside it (labels only, no free-text row, so `allowOther` is
+     * false). Single-select questions only.
+     */
+    preview?: true;
+    /**
      * `description`: Claude AskUserQuestion only — the option's description,
      * drawn under its label.
      */

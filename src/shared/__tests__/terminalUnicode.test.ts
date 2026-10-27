@@ -13,7 +13,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { Terminal } from '@xterm/headless';
-import { applyUnicodeWidthModel, TERMINAL_UNICODE_VERSION } from '../terminalUnicode';
+import { applyUnicodeWidthModel, terminalCharWidth, TERMINAL_UNICODE_VERSION } from '../terminalUnicode';
 
 /** Cursor column after writing `text` at home — i.e. the measured width. */
 async function measureWidth(text: string): Promise<number> {
@@ -120,5 +120,14 @@ describe('applyUnicodeWidthModel — the known cost of measuring per codepoint',
     expect(await measureWidth('\u{1F44D}\u{1F3FD}')).toBe(4);
     // A regional-indicator flag already measures correctly.
     expect(await measureWidth('\u{1F1F0}\u{1F1F7}')).toBe(2);
+  });
+});
+
+describe('terminalCharWidth', () => {
+  it('gives each code point the columns the grid measures for it', async () => {
+    // Hangul, CJK, box drawing, the picker's marks, an emoji, a combining mark.
+    for (const ch of ['한', '漢', 'a', '─', '┌', '│', '❯', '·', '…', '✔', '\u{1F600}', '\u0301']) {
+      expect(terminalCharWidth(ch.codePointAt(0)!), ch).toBe(await measureWidth(ch === '\u0301' ? `e${ch}` : ch) - (ch === '\u0301' ? 1 : 0));
+    }
   });
 });
