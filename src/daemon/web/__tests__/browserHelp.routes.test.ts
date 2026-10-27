@@ -89,7 +89,8 @@ describe('browser help routes', () => {
       });
       return { status: res.status, body: await res.json() as Record<string, unknown>, cache: res.headers.get('cache-control') };
     };
-    const open = (surfaceId = 'surf-1', requesterPtyId?: string) => store.create({ workspaceId: 'ws-1', surfaceId, prompt: PROMPT, timeoutMs: 60_000, ...(requesterPtyId ? { requesterPtyId } : {}) });
+    // The origin the tab had when the agent asked, as browser.help.request pins it.
+    const open = (surfaceId = 'surf-1', requesterPtyId?: string) => store.create({ workspaceId: 'ws-1', surfaceId, prompt: PROMPT, timeoutMs: 60_000, origin: 'https://login.example.com', ...(requesterPtyId ? { requesterPtyId } : {}) });
     return { base, get, decide, open, store, table, commands, publish, operator: `Bearer ${info.token as string}` };
   }
 
@@ -141,7 +142,7 @@ describe('browser help routes', () => {
       expect(await r.decide(info.requestId, { outcome: 'continued' })).toMatchObject({ status: 200, cache: 'no-store', body: { requestId: info.requestId, state: 'continued' } });
       expect((await r.store.status(info.requestId, 'ws-1'))?.state).toBe('continued');
       // Main republished on the settle: the id is closed on the daemon now.
-      await vi.waitFor(() => expect(r.table.lookup(info.requestId)).toEqual({ closed: true }), { timeout: 5_000 });
+      await vi.waitFor(() => expect(r.table.lookup(info.requestId)).toMatchObject({ closed: true, workspaceId: 'ws-1' }), { timeout: 5_000 });
       expect(await r.decide(info.requestId, { outcome: 'cancelled' })).toMatchObject({ status: 409, body: { error: 'browser-help-closed' } });
       expect((await r.store.status(info.requestId, 'ws-1'))?.state).toBe('continued');
     });

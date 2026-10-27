@@ -45,12 +45,18 @@ export interface BrowserHelpTableOptions {
   now?: () => number;
 }
 
-export type BrowserHelpLookup = { row: BrowserHelpTableRow } | { closed: true } | null;
+/** A closed request names its workspace and tab, so a caller can answer one it does not own as unknown. */
+type ClosedHelp = { closed: true; workspaceId: string; surfaceId?: string };
+export type BrowserHelpLookup = { row: BrowserHelpTableRow } | ClosedHelp | null;
+
+function closedOf(row: BrowserHelpTableRow): ClosedHelp {
+  return { closed: true, workspaceId: row.workspaceId, ...(row.surfaceId !== undefined ? { surfaceId: row.surfaceId } : {}) };
+}
 
 export class BrowserHelpTable {
   private rows = new Map<string, BrowserHelpTableRow>();
   private publisher: string | null = null;
-  private readonly recentlyClosed = new Map<string, true>();
+  private readonly recentlyClosed = new Map<string, ClosedHelp>();
   /** Ids a decision through this daemon settled: never listed again, even by a table main computed before it. */
   private readonly decided = new Set<string>();
 
@@ -109,8 +115,8 @@ export class BrowserHelpTable {
 
   lookup(requestId: string): BrowserHelpLookup {
     const row = this.rows.get(requestId);
-    if (row) return row.deadlineAt > this.now() ? { row } : { closed: true };
-    return this.recentlyClosed.has(requestId) ? { closed: true } : null;
+    if (row) return row.deadlineAt > this.now() ? { row } : closedOf(row);
+    return this.recentlyClosed.get(requestId) ?? null;
   }
 
   private now(): number {
@@ -137,7 +143,7 @@ export class BrowserHelpTable {
   }
 
   private closeFrame(row: BrowserHelpTableRow, state: Settled | undefined): PhoneBrowserHelpFrame {
-    this.recentlyClosed.set(row.requestId, true);
+    this.recentlyClosed.set(row.requestId, closedOf(row));
     while (this.recentlyClosed.size > RECENTLY_CLOSED_MAX) {
       this.recentlyClosed.delete(this.recentlyClosed.keys().next().value as string);
     }

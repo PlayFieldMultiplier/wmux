@@ -200,8 +200,9 @@ import { BOTS_ROUTE, botsResponse, botsSupported } from './bots';
 import { GuestRateLimiter, guestRouteResponse, readGuestBody, type GuestBotResolver } from './guestBotRoutes';
 import { isGuestRoute, looksLikeGuestCredential, type GuestBotGates } from '../../shared/guestBots';
 import { BOT_APPROVALS_ROUTE, botApprovalDecisionRefusal, botApprovalsResponse, botApprovalsSupported, type BotApprovalsCaller } from './botApprovals';
+import { BROWSER_CHROME_PREVIEW_CAPABILITY, PHONE_BROWSER_ERROR_STATUS, isPhoneBrowserErrorCode } from '../../shared/phoneBrowserPreview';
 import { BROWSER_HELP_DECISION_ROUTE, BROWSER_HELP_LIST_ROUTE, browserHelpDecisionRefusal, browserHelpDecisionResponse, browserHelpListResponse, browserHelpSupported, type BrowserHelpTableView } from './browserHelp';
-import { browserHelpFrameJson, type PhoneBrowserHelpFrame } from '../../shared/phoneBrowserHelp';
+import { browserHelpFrameJson, isBrowserHelpId, type PhoneBrowserHelpFrame } from '../../shared/phoneBrowserHelp';
 import { WORKER_RESUME_ROUTE, workerResumeRefusal, workerResumeResponse, workerResumeSupported } from './workerResume';
 import type { ChatV2Binding } from '../../shared/chatv2/ipc';
 import { buildWebCsp, WEB_APP_FONT_FILE } from './webCsp';
@@ -2856,6 +2857,10 @@ export class WebTerminalServer {
         browserCreation: this.mayInput(principal) && this.opts?.allowTranscript === true && desktopAvailable,
         browserKeyboard: this.mayInput(principal) && this.opts?.allowTranscript === true && desktopAvailable,
         browserPreview: this.opts?.allowTranscript === true && desktopAvailable,
+        // `GET …/browser?chrome=1` also lists and drives dedicated-profile
+        // Chrome tabs: the transcript consent and a desktop that announced it.
+        // OMITTED otherwise (an older desktop announces nothing).
+        ...(this.opts?.allowTranscript === true && this.availableDesktop()?.supports(BROWSER_CHROME_PREVIEW_CAPABILITY) === true ? { browserPreviewChrome: true } : {}),
         workspaceCreation: this.mayInput(principal) && desktopAvailable,
         quickCommands: this.opts?.allowTranscript === true && desktopAvailable,
         desktopAccounts: this.opts?.allowTranscript === true && desktopAvailable,
@@ -4290,14 +4295,25 @@ export class WebTerminalServer {
     if (!workspaceId) return this.json(res,409,{error:'workspace-required'});
     const desktop = this.availableDesktop();
     if (!desktop) return this.json(res,503,{error:'desktop-unavailable'});
-    const send = (command: 'browser.list' | 'browser.capture' | 'browser.viewport' | 'browser.navigate' | 'browser.type' | 'browser.key' | 'browser.tap' | 'browser.open' | 'browser.scroll', payload: Record<string,unknown>) => {
-      void desktop.request(command,{...payload,workspaceId}).then(result => this.json(res,200,result,{'Cache-Control':'no-store'}))
-        .catch(() => this.json(res,503,{error:'browser-preview-unavailable'}));
+    const send = (command: 'browser.list' | 'browser.capture' | 'browser.viewport' | 'browser.navigate' | 'browser.type' | 'browser.key' | 'browser.tap' | 'browser.open' | 'browser.scroll' | 'browser.focus', payload: Record<string,unknown>) => {
+      void desktop.request(command,{...payload,workspaceId}).then(result => {
+        // Main's words for a failure ride inside a successful reply
+        // (shared/phoneBrowserPreview.ts); an unknown code is just a failure.
+        if (result && typeof result === 'object' && 'error' in result) {
+          const code = (result as {error?:unknown}).error;
+          return isPhoneBrowserErrorCode(code) ? this.json(res,PHONE_BROWSER_ERROR_STATUS[code],{error:code},{'Cache-Control':'no-store'})
+            : this.json(res,503,{error:'browser-preview-unavailable'});
+        }
+        return this.json(res,200,result,{'Cache-Control':'no-store'});
+      }).catch(() => this.json(res,503,{error:'browser-preview-unavailable'}));
     };
     if (req.method === 'GET') {
       const surfaceId = url.searchParams.get('surfaceId');
       if (surfaceId !== null && (!surfaceId || surfaceId.length > 128)) return this.json(res,400,{error:'invalid-browser-surface'});
-      return surfaceId ? send('browser.capture',{surfaceId}) : send('browser.list',{});
+      // `?chrome=1`: this phone also takes dedicated-profile Chrome tabs. Asked
+      // of a desktop that announced it only; any other ask lists as before.
+      const chrome = url.searchParams.get('chrome') === '1' && desktop.supports(BROWSER_CHROME_PREVIEW_CAPABILITY);
+      return surfaceId ? send('browser.capture',{surfaceId}) : send('browser.list',chrome ? {chrome:true} : {});
     }
     this.readJsonBody(req,res,async body => {
       const fresh = await this.authenticate(req,url,false).catch(() => ({ok:false as const}));
@@ -4306,8 +4322,13 @@ export class WebTerminalServer {
       if (session && (this.attachableSession(fresh.principal,id!) !== session || session.meta.env?.[ENV_KEYS.WORKSPACE_ID] !== workspaceId)) return this.json(res,404,{error:'session not found'});
       if (!body || typeof body !== 'object' || Array.isArray(body)) return this.json(res,400,{error:'invalid-browser-request'});
       const value = body as Record<string,unknown>;
-      if (value.action === 'open' && typeof value.url === 'string' && value.url.length <= 4096) return send('browser.open',{url:value.url});
+      if (value.action === 'open' && typeof value.url === 'string' && value.url.length <= 4096) {
+        if (value.backend !== undefined && value.backend !== 'builtin' && value.backend !== 'chrome') return this.json(res,400,{error:'invalid-browser-request'});
+        return send('browser.open',{url:value.url,...(value.backend !== undefined ? {backend:value.backend} : {})});
+      }
       if (typeof value.surfaceId !== 'string' || !value.surfaceId || value.surfaceId.length > 128) return this.json(res,400,{error:'invalid-browser-surface'});
+      // Bring the tab forward on the desktop: only ever on this explicit ask.
+      if (value.action === 'focus') return send('browser.focus',{surfaceId:value.surfaceId});
       if (value.action === 'viewport' && (value.mode === 'mobile' || value.mode === 'desktop')) return send('browser.viewport',{surfaceId:value.surfaceId,mode:value.mode});
       if (value.action === 'navigate' && typeof value.url === 'string' && value.url.length <= 4096) return send('browser.navigate',{surfaceId:value.surfaceId,url:value.url});
       if ((value.action === 'type' || value.action === 'key' || value.action === 'tap' || value.action === 'scroll') && typeof value.expectedURL === 'string' && value.expectedURL.length <= 4096) {
@@ -4316,7 +4337,19 @@ export class WebTerminalServer {
           if (value.action === 'tap') return send('browser.tap',{...scope,x:value.x,y:value.y,geometry:value.geometry});
           if (typeof value.deltaX === 'number' && Math.abs(value.deltaX) <= 1 && typeof value.deltaY === 'number' && Math.abs(value.deltaY) <= 1) return send('browser.scroll',{...scope,x:value.x,y:value.y,geometry:value.geometry,deltaX:value.deltaX,deltaY:value.deltaY});
         }
-        if (value.action === 'type' && typeof value.text === 'string' && value.text.length > 0 && value.text.length <= 4096) return send('browser.type',{...scope,text:value.text});
+        if (value.action === 'type' && typeof value.text === 'string' && value.text.length > 0 && value.text.length <= 4096) {
+          if (value.helpRequestId === undefined) return send('browser.type',{...scope,text:value.text});
+          // Help-card typing: only into the tab the open request is about, at
+          // the origin its row showed. The origin is the daemon's, never the body's.
+          if (!isBrowserHelpId(value.helpRequestId)) return this.json(res,400,{error:'invalid-browser-request'});
+          // Another workspace's request, or another tab's, reads as unknown, closed or not.
+          const found = this.deps.browserHelp?.()?.lookup(value.helpRequestId) ?? null;
+          const about = found && ('closed' in found ? found : found.row);
+          if (!found || !about || about.workspaceId !== workspaceId || about.surfaceId !== value.surfaceId) return this.json(res,404,{error:'browser-help-not-found'});
+          if ('closed' in found) return this.json(res,409,{error:'browser-help-closed'});
+          if (found.row.origin === undefined) return this.json(res,409,{error:'browser-help-origin-changed'});
+          return send('browser.type',{...scope,text:value.text,helpOrigin:found.row.origin});
+        }
         if (value.action === 'key' && ['Tab','Shift+Tab','Enter','Backspace','Escape','PageUp','PageDown'].includes(value.key as string)) return send('browser.key',{...scope,key:value.key});
       }
       return this.json(res,400,{error:'invalid-browser-request'});
