@@ -11,9 +11,10 @@ import { randomUUID } from 'node:crypto';
 import { getWmuxDir } from '../../daemon/config';
 import { atomicReadJSONSync, atomicWriteJSON } from '../../daemon/util/atomicWrite';
 import { isAgentSlug, type AgentSlug } from '../../shared/agentIdentity';
-import type {
-  SessionPromptSchedule,
-  SessionPromptScheduleResult,
+import {
+  isSessionPromptScheduleResult,
+  type SessionPromptSchedule,
+  type SessionPromptScheduleResult,
 } from '../../shared/sessionPromptSchedule';
 
 export type {
@@ -100,13 +101,7 @@ function sanitize(raw: unknown): SessionPromptSchedule | null {
   if (typeof o.lastRunAt === 'number' && Number.isFinite(o.lastRunAt)) {
     schedule.lastRunAt = o.lastRunAt;
   }
-  if (
-    o.lastResult === 'sent' ||
-    o.lastResult === 'busy' ||
-    o.lastResult === 'unavailable' ||
-    o.lastResult === 'session_changed' ||
-    o.lastResult === 'error'
-  ) {
+  if (isSessionPromptScheduleResult(o.lastResult)) {
     schedule.lastResult = o.lastResult;
   }
   if (o.deliveryClaim && typeof o.deliveryClaim === 'object' && !Array.isArray(o.deliveryClaim)) {

@@ -57,7 +57,7 @@ import {
 import { connectWithRetry, type ConnectAttemptResult } from './daemonConnectRetry';
 import type { AgentStatus } from '../shared/types';
 import type { AgentSlug } from '../shared/agentIdentity';
-import type { SessionPromptScheduleResult } from '../shared/sessionPromptSchedule';
+import { isSessionPromptScheduleResult, type SessionPromptScheduleResult } from '../shared/sessionPromptSchedule';
 
 // RCA A2 — single source of truth in shared/timeouts.ts so the renderer's
 // RECONCILE_TIMEOUT_MS can be derived from (and stay greater than) this value.
@@ -1173,13 +1173,7 @@ export class DaemonClient extends EventEmitter {
       const response = await this.rpc('daemon.deliverScheduledPromptV2', args) as {
         result?: unknown;
       };
-      // Every result a daemon may answer; a new one fails typecheck here.
-      const known: Record<SessionPromptScheduleResult, true> = {
-        sent: true, busy: true, unavailable: true, session_changed: true, folder_trust: true, error: true,
-      };
-      const result = response.result;
-      if (typeof result === 'string' && Object.hasOwn(known, result)) return result as SessionPromptScheduleResult;
-      return 'error';
+      return isSessionPromptScheduleResult(response.result) ? response.result : 'error';
     } catch (error) {
       if (
         error instanceof Error &&

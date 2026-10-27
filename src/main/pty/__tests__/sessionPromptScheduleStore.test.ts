@@ -143,6 +143,11 @@ describe('sessionPromptScheduleStore', () => {
     }
   });
 
+  it('keeps a folder-trust result across a save and a load (the popover reads it back)', async () => {
+    await saveSessionPromptSchedules([advanceSessionPromptSchedule(schedule(), 'folder_trust', 5_000)], dir);
+    expect(loadSessionPromptSchedules(dir)[0].lastResult).toBe('folder_trust');
+  });
+
   it('consumes one-shots and advances repeats past a sleep gap', () => {
     const oneShot = advanceSessionPromptSchedule(schedule(), 'sent', 5_000);
     expect(oneShot.enabled).toBe(false);

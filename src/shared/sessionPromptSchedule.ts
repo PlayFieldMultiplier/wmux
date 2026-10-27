@@ -10,6 +10,16 @@ export type SessionPromptScheduleResult =
   | 'folder_trust'
   | 'error';
 
+/** Every result, so a stored or answered value is checked against the
+ *  type: a new result fails typecheck here until it is listed. */
+const SESSION_PROMPT_SCHEDULE_RESULTS: Record<SessionPromptScheduleResult, true> = {
+  sent: true, busy: true, unavailable: true, session_changed: true, folder_trust: true, error: true,
+};
+
+export function isSessionPromptScheduleResult(value: unknown): value is SessionPromptScheduleResult {
+  return typeof value === 'string' && Object.hasOwn(SESSION_PROMPT_SCHEDULE_RESULTS, value);
+}
+
 export interface SessionPromptDeliveryClaim {
   /** Unique attempt token used to reject stale finalizers. */
   token: string;
