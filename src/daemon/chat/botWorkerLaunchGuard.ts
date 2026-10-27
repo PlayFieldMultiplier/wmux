@@ -71,6 +71,9 @@ export function guardBotWorkerLaunch(
   if (tail && !QUOTED_FIRST_MESSAGE.test(tail)) return null;
   const rec = 'sessions' in read ? read.sessions.get(sessionId) : undefined;
   if (runsUnattended(head, rec, dir)) {
+    // Only a readable record establishes that this pane is a fenced worker;
+    // without one the launch is still refused, but without that reason.
+    if (!rec) return null;
     console.warn(`[botWorkerLaunchGuard] ${sessionId}: a bot worker that runs unattended starts again only from wmux on the computer (worker fence)`);
     return WORKER_FENCE_REFUSED;
   }

@@ -629,6 +629,9 @@ describe('launch', () => {
       const f = fixture();
       record(f.dir, '{not json');
       expect(await f.bridge.launch({ id: 'pane', agent: 'claude' })).toEqual({ ok: false, error: 'launch-unsupported', effect: 'none' });
+      // Unattended, but the record cannot say this pane is a fenced worker: refused without that reason.
+      f.state.pane!.meta.cmd = '/bin/zsh';
+      expect(await f.bridge.launch({ id: 'pane', agent: 'claude', mode: 'bypass' })).toEqual({ ok: false, error: 'launch-unsupported', effect: 'none' });
       record(f.dir, { version: 1, sessions: { pane: { workspaceId: 'ws-task', at: 1 } } });
       expect(await f.bridge.launch({ id: 'pane', agent: 'claude' })).toEqual({ ok: false, error: 'launch-unsupported', effect: 'none' });
       expect(f.typed).toEqual([]);
