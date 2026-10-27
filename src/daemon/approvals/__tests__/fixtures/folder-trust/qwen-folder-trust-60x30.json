@@ -1,0 +1,24 @@
+{
+ "tui": "qwen",
+ "version": "@qwen-code/qwen-code 0.26.1",
+ "cols": 60,
+ "rows": 30,
+ "keysSent": "(dialog drawn at startup, nothing typed)",
+ "note": "Folder-trust dialog on first launch in a never-seen folder (sandbox HOME, dummy OpenAI-compatible key, security.folderTrust.enabled set (off by default); a non-git folder shows it too). Numbered choices, highlighted default \"1. Trust folder (<folder>)\"; Enter on it trusts the folder. Cropped to the dialog; viewport as the headless-xterm screen read shows it.",
+ "origin": "Qwen Code 0.26.1 program output captured live 2026-10-27; Apache-2.0",
+ "screen": [
+  "   ╭──────────────────────────────────────────────────────",
+  "   │",
+  "   │ Do you trust this folder?",
+  "   │ Trusting a folder allows Qwen Code to execute",
+  "   │ commands it suggests. This is a security feature to",
+  "   │ prevent accidental execution in untrusted",
+  "   │ directories.",
+  "   │",
+  "   │ › 1. Trust folder (qw-60)",
+  "   │   2. Trust parent folder (work)",
+  "   │   3. Don't trust (esc)",
+  "   │",
+  "   ╰──────────────────────────────────────────────────────"
+ ]
+}

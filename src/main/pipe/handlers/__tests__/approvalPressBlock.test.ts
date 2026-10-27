@@ -685,6 +685,32 @@ describe('a folder-trust dialog on screen', () => {
 // A pane the renderer shows no screen for: a session not started here
 // (deferred), or a read that failed. The daemon's verdict from the session's
 // own ring decides, before anything attaches the session.
+describe('a renderer screen with a trust question over choices too narrow to read', () => {
+  // Gemini CLI 0.65.0 at 18 columns: "● 1. Trust …", "2. Trust …", "3. Don't …".
+  const NARROW = (JSON.parse(fs.readFileSync(path.join(TRUST_FIXTURES, 'gemini-folder-trust-18x60.json'), 'utf8')) as { screen: string[] }).screen.join('\n');
+
+  it("is 'unknown': automated text and Enter are refused, Escape, ctrl+c and the human pass", async () => {
+    live.policy = { allowed: true };
+    live.screen = NARROW;
+    live.daemonVerdict = null;
+    for (const call of [
+      () => asPaneAgent('input.send', { ptyId: 'pty-w', text: 'go on', submit: true }),
+      () => asBrain('input.send', { ptyId: 'pty-w', text: 'hello' }),
+      () => asBrain('input.sendKey', { ptyId: 'pty-w', key: 'enter' }),
+    ]) {
+      const res = await call();
+      expect(res.ok).toBe(false);
+      expect(res.error).toContain('a folder-trust prompt cannot be ruled out');
+    }
+    expect(await w.gatedSubmit('pty-w', 'hello')).toMatchObject({ ok: false });
+    expect(w.writes).toHaveLength(0);
+    expect((await asBrain('input.sendKey', { ptyId: 'pty-w', key: 'escape' })).ok).toBe(true);
+    expect((await asBrain('input.sendKey', { ptyId: 'pty-w', key: 'ctrl+c' })).ok).toBe(true);
+    expect((await asHuman('input.send', { ptyId: 'pty-w', text: '\r' })).ok).toBe(true);
+    expect(w.writes.map((x) => x.data)).toEqual(['\x1b', '\x03', '\r']);
+  });
+});
+
 describe('a folder-trust verdict for a pane with no screen', () => {
   const NO_SCREENS: Array<[string, { deferred: true } | null]> = [['deferred', { deferred: true }], ['unreadable', null]];
   const ensurePtyCalls = (): number =>
