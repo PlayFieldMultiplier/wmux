@@ -1214,6 +1214,7 @@ export const pl = {
   'remote.clipboardCopiedFrom': 'Skopiowano z {host}',
   'remote.clipboardCopiedFromRemote': 'Skopiowano ze zdalnego hosta',
   'terminal.copyFailed': 'Kopiowanie nie powiodło się — zaznaczenie zachowane',
+  'terminal.copyPendingGesture': 'Kliknij, aby dokończyć kopiowanie',
   'terminal.mouseOwnedSelectHint': 'Ta aplikacja używa myszy — przytrzymaj Shift, aby zaznaczyć tekst',
   'terminal.mouseOwnedSelectHintMac': 'Ta aplikacja używa myszy — przytrzymaj Option, aby zaznaczyć tekst',
   'terminal.altWheelSelectionHint': 'Ta aplikacja sama przewija swoją historię, więc przewinięcie usunęło zaznaczenie — Shift+przeciągnięcie zaznacza to, co jest na ekranie',

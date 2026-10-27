@@ -2114,7 +2114,9 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
     // UI noise. Errors are also silent: the explicit Ctrl+C path still
     // surfaces them on retry.
     const autoCopy = createAutoSelectionCopy({
-      write: (text) => window.clipboardAPI.writeText(text),
+      // Silent on the web too: a refused auto-copy is not kept for the next
+      // key, which could be the ⌘V meant to paste what the clipboard holds.
+      write: (text) => window.clipboardAPI.writeText(text, { keepIfRefused: false }),
     });
     const selectionDisposable = terminal.onSelectionChange(() => {
       autoCopy.onSelection(terminal.getSelection());

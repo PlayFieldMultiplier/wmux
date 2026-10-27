@@ -89,20 +89,40 @@ export function webElectronApiImpl(
   };
 }
 
+/** The desktop clipboard IPC's cap (clipboard.handler.ts); a longer copy is not kept. */
+const MAX_PENDING_COPY_CHARS = 1_000_000;
+/** A refused copy waits this long for the user's next click, tap or key, then is dropped. */
+export const PENDING_COPY_TTL_MS = 60_000;
+
+/** `waiting`: a copy needs the user's next click, tap or key. `copied` / `dropped`: it no longer does. */
+export type PendingCopyState = 'waiting' | 'copied' | 'dropped';
+
+/** `keepIfRefused: false`: a refused write fails at once instead of waiting for a gesture. */
+export interface WebWriteOptions { keepIfRefused?: boolean }
+
 /**
  * `window.clipboardAPI` (the desktop preload's clipboard bridge) on the
  * browser's own clipboard. Reads and writes need a secure context and, for
  * reads, the browser's permission; anything unavailable answers empty.
+ *
+ * A write the browser refuses outside a user gesture (an OSC 52 copy arrives
+ * over the network, after the click that caused it) is kept as one pending
+ * copy and retried inside the user's next click, tap or key press, or by
+ * `finishPendingCopy` from the hint's own click. Its promise settles with that
+ * outcome; a newer copy or the TTL drops it.
  */
 export function webClipboardApi(
   nav: Pick<Navigator, 'clipboard'>,
-  doc: Pick<Document, 'createElement' | 'execCommand' | 'body'> | null = typeof document === 'undefined' ? null : document,
+  doc: Pick<Document, 'createElement' | 'execCommand' | 'body' | 'activeElement' | 'addEventListener' | 'removeEventListener'> | null = typeof document === 'undefined' ? null : document,
 ): Record<string, unknown> {
   const clip = nav.clipboard as Clipboard | undefined;
   // Outside a secure context there is no async clipboard; the legacy copy
   // command still works inside the key press that asked for it.
   const legacyCopy = (text: string): boolean => {
     if (!doc?.body) return false;
+    // Selecting the textarea takes focus; hand it back so the key or tap in
+    // progress still reaches the terminal.
+    const prev = doc.activeElement as HTMLElement | null;
     const area = doc.createElement('textarea');
     area.value = text;
     area.setAttribute('readonly', '');
@@ -113,13 +133,116 @@ export function webClipboardApi(
     let ok = false;
     try { ok = doc.execCommand('copy'); } catch { ok = false; }
     area.remove();
+    prev?.focus?.({ preventScroll: true });
     return ok;
   };
-  const writeText = (text: string): Promise<void> => {
+  const writeNow = (text: string): Promise<void> => {
     if (clip?.writeText) return clip.writeText(text).catch(() => (legacyCopy(text) ? undefined : Promise.reject(new Error('copy refused'))));
     return legacyCopy(text) ? Promise.resolve() : Promise.reject(new Error('clipboard unavailable in this browser context'));
   };
+  // A retry has the async clipboard or the legacy command, never both: the
+  // legacy fallback, run after the async refusal has left the gesture, would
+  // only take focus (and break a composition) for nothing.
+  const retryWrite = (text: string): Promise<void> => {
+    if (clip?.writeText) return clip.writeText(text);
+    return legacyCopy(text) ? Promise.resolve() : Promise.reject(new Error('copy refused'));
+  };
+
+  let listener: ((state: PendingCopyState) => void) | null = null;
+  let pending: { text: string; resolve: () => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout>; retrying: boolean; expired: boolean; seq: number } | null = null;
+  // Each writeText call's number, so a late answer to an older write cannot
+  // override a newer one; `inFlight` holds the ones not answered yet.
+  let writeSeq = 0;
+  const inFlight = new Set<number>();
+  const gestureEvents = ['keydown', 'pointerdown', 'pointerup'] as const;
+  const clearPending = (outcome: 'copied' | Error): void => {
+    const p = pending;
+    if (!p) return;
+    pending = null;
+    clearTimeout(p.timer);
+    for (const type of gestureEvents) doc?.removeEventListener(type, onGesture, true);
+    if (outcome === 'copied') p.resolve();
+    else p.reject(outcome);
+    listener?.(outcome === 'copied' ? 'copied' : 'dropped');
+  };
+  const expired = () => new Error('copy expired before a gesture');
+  // Must run synchronously inside the gesture that calls it.
+  const retryPending = (): void => {
+    const p = pending;
+    if (!p || p.retrying) return;
+    // A newer write is still out: its answer decides what the clipboard holds.
+    for (const seq of inFlight) if (seq > p.seq) return;
+    p.retrying = true;
+    retryWrite(p.text).then(
+      () => { p.retrying = false; if (pending === p) clearPending('copied'); },
+      // Still refused: keep it for the next gesture, unless the TTL passed meanwhile.
+      () => { p.retrying = false; if (pending === p && p.expired) clearPending(expired()); },
+    );
+  };
+  // Only the events that grant user activation: a touch press grants it on
+  // release, a mouse press on press. The event itself is left untouched.
+  function onGesture(e: Event): void {
+    const pointerType = (e as PointerEvent).pointerType;
+    if (e.type === 'pointerdown' && pointerType !== 'mouse') return;
+    if (e.type === 'pointerup' && pointerType === 'mouse') return;
+    retryPending();
+  }
+  // True only while an activation-granting event is being dispatched. Not
+  // `userActivation.isActive`: that stays true for seconds after the event, so
+  // an OSC 52 write arriving moments later would count as inside it. Cleared on
+  // the next task, not a microtask: microtasks run between an event's listeners.
+  let inGestureTask = false;
+  const markGesture = (e: Event): void => {
+    const pointerType = (e as PointerEvent).pointerType;
+    if (e.type === 'pointerdown' && pointerType !== 'mouse') return;
+    if (e.type === 'pointerup' && pointerType === 'mouse') return;
+    if (inGestureTask) return;
+    inGestureTask = true;
+    setTimeout(() => { inGestureTask = false; }, 0);
+  };
+  for (const type of [...gestureEvents, 'click'] as const) doc?.addEventListener(type, markGesture, true);
+  const keepPending = (text: string, err: unknown, seq: number): Promise<void> => {
+    if (!doc || text.length > MAX_PENDING_COPY_CHARS || seq !== writeSeq) return Promise.reject(err);
+    clearPending(new Error('copy replaced by a newer one'));
+    return new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const p = pending;
+        if (!p || p.seq !== seq) return;
+        // A retry in flight settles it; dropping it now could lose a copy that lands.
+        if (p.retrying) { p.expired = true; return; }
+        clearPending(expired());
+      }, PENDING_COPY_TTL_MS);
+      pending = { text, resolve, reject, timer, retrying: false, expired: false, seq };
+      for (const type of gestureEvents) doc.addEventListener(type, onGesture, true);
+      listener?.('waiting');
+    });
+  };
+  // A newer copy that lands drops the pending one, and a refusal is kept only
+  // while no newer write has started, so a later tap cannot put older text back.
+  // A refusal inside a gesture is final (a gesture is what a retry would add).
+  const writeText = (text: string, opts?: WebWriteOptions): Promise<void> => {
+    const seq = ++writeSeq;
+    const inGesture = inGestureTask;
+    inFlight.add(seq);
+    return writeNow(text).then(
+      () => {
+        inFlight.delete(seq);
+        if (pending && pending.seq < seq) clearPending(new Error('copy replaced by a newer one'));
+      },
+      (err: unknown) => {
+        inFlight.delete(seq);
+        return inGesture || opts?.keepIfRefused === false ? Promise.reject(err) : keepPending(text, err, seq);
+      },
+    );
+  };
   return {
+    /** Web only: the pending-copy hint follows this. One listener; returns its unsubscribe. */
+    onPendingCopy: (fn: (state: PendingCopyState) => void) => {
+      listener = fn;
+      return () => { if (listener === fn) listener = null; };
+    },
+    /** Web only: the hint's click. Completes the pending copy inside that click. */
+    finishPendingCopy: retryPending,
     // useTerminal leaves ⌘V / Ctrl+V / Ctrl+Shift+V to the browser's paste
     // event (xterm brackets it) instead of reading the clipboard itself.
     nativePaste: true,

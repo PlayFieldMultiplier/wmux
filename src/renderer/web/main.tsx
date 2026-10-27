@@ -6,14 +6,16 @@
  */
 import { createRoot } from 'react-dom/client';
 import { useStore } from '../stores';
-import { onTerminalRegistered, terminalRegistry } from '../hooks/useTerminal';
+import { onTerminalRegistered, showCopyToastText, terminalRegistry } from '../hooks/useTerminal';
+import { t } from '../i18n';
 import { getTerminalReplayMute, isReplayMuted } from '../terminal/replayMute';
 import { WebApp, PHONE_QUERY } from './WebApp';
 import { startWebSync } from './webSync';
 import { createWebPty } from './webPty';
 import { setWebPtyHub } from './WebTerminal';
 import { installViewerParser } from './viewerParser';
-import { WEB_PTY_BRIDGE_KEY } from './webElectronApi';
+import { setPendingCopyHint } from './pendingCopyHint';
+import { WEB_PTY_BRIDGE_KEY, type PendingCopyState } from './webElectronApi';
 import { createLeave, type WebSession } from './webCredential';
 import '../styles/globals.css';
 import '../styles/ui.css';
@@ -51,6 +53,13 @@ function start(session: WebSession): void {
   });
   setWebPtyHub(hub);
   w[WEB_PTY_BRIDGE_KEY] = hub.pty;
+  // A copy the browser refused outside a gesture waits (webClipboardApi);
+  // the pill finishes it on a click, until it lands or is dropped.
+  const webClip = window.clipboardAPI as { onPendingCopy?: (fn: (state: PendingCopyState) => void) => () => void; finishPendingCopy?: () => void };
+  webClip.onPendingCopy?.((state) => {
+    setPendingCopyHint(state === 'waiting', () => webClip.finishPendingCopy?.());
+    if (state === 'copied') showCopyToastText(t('terminal.copied'));
+  });
   // Every terminal this page mounts is a viewer: it never answers terminal
   // queries and never arms mouse reporting it could not send (viewerParser.ts).
   // A terminal registers in its mount effect, before its stream opens.
