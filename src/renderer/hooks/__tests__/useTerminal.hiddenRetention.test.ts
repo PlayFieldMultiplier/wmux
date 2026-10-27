@@ -166,9 +166,12 @@ describe('Phase 3 PR-B — useTerminal snapshot-resync ladder (source-level)', (
   it('dead-snapshot paint mirrors the flush-complete contract', () => {
     const idx = src.indexOf('const paintDeadSnapshot');
     expect(idx).toBeGreaterThan(0);
-    // Window widened for #1256's scroll-preservation block; the ordering
-    // contract below is unchanged.
-    const paint = src.slice(idx, idx + 3000);
+    // Window is the whole paint fn, up to the next declaration (#1256's
+    // scroll-preservation block and the scrollback-bookmark carry live in it);
+    // the ordering contract below is unchanged.
+    const end = src.indexOf('const startResync', idx);
+    expect(end).toBeGreaterThan(idx);
+    const paint = src.slice(idx, end);
     // discard stale backlog → reset → write payload → write held bytes → clean.
     // The payload write is writeReplayed() since #998 (clipboard bridge muted
     // while stored bytes are parsed); the order is what this locks.
@@ -185,6 +188,23 @@ describe('Phase 3 PR-B — useTerminal snapshot-resync ladder (source-level)', (
     expect(paint).toMatch(/STALE_REPLAY_INPUT_MODE_RESETS/);
     // No flush marker is coming: it settles the resync state itself.
     expect(paint).toMatch(/st\.resolvers\.splice\(0\)\.forEach/);
+  });
+
+  it('both repaint paths carry the scrollback bookmarks across the reset', () => {
+    // The reset disposes every xterm marker; without the carry, revealing a
+    // hidden pane lost its bookmarks. Measure before the reset, put back once
+    // the replay has parsed.
+    for (const [name, fn] of [['dead-snapshot', 'const paintDeadSnapshot'], ['flush-complete', 'const completeResyncFromFlush']] as const) {
+      const body = blockAt(src, src.indexOf(fn));
+      const measure = body.indexOf('keepBookmarksAcrossRepaint(');
+      const reset = body.indexOf(name === 'dead-snapshot' ? 'term.reset()' : 'write(REPAINT_BEGIN');
+      const replay = body.indexOf(name === 'dead-snapshot' ? 'writeReplayed(term, bytes' : 'write(REPAINT_END');
+      const restore = body.search(name === 'dead-snapshot' ? /try \{ restore\(\); \}/ : /try \{ restoreBookmarks\?\.\(\); \}/);
+      expect(measure).toBeGreaterThan(0);
+      expect(reset).toBeGreaterThan(measure);
+      expect(replay).toBeGreaterThan(reset);
+      expect(restore).toBeGreaterThan(replay);
+    }
   });
 
   it('#1256: a resync repaint preserves the scroll position across reset()', () => {
