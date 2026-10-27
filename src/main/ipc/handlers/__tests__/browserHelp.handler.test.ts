@@ -16,14 +16,17 @@ function setup() {
   });
   const trusted = { sender: webContents, senderFrame: mainFrame };
   const guest = { sender: { mainFrame: { id: 'g' } }, senderFrame: { id: 'g' } };
+  const subFrame = { sender: webContents, senderFrame: { id: 'sub-frame' } };
   const call = (event: unknown, payload?: unknown) => handlers.get(IPC.BROWSER_HELP_RESOLVE)?.(event, payload);
-  return { call, trusted, guest, requests };
+  return { call, trusted, guest, subFrame, requests };
 }
 
 describe('browser help resolve IPC', () => {
   it('settles a request from the main window and ignores any other sender', async () => {
-    const { call, trusted, guest, requests } = setup();
+    const { call, trusted, guest, subFrame, requests } = setup();
     await expect(call(guest, { requestId: 'req-1', outcome: 'continued' }))
+      .resolves.toEqual({ ok: false, error: UNTRUSTED_SENDER_ERROR });
+    await expect(call(subFrame, { requestId: 'req-1', outcome: 'continued' }))
       .resolves.toEqual({ ok: false, error: UNTRUSTED_SENDER_ERROR });
     expect(requests.resolveFromRenderer).not.toHaveBeenCalled();
 

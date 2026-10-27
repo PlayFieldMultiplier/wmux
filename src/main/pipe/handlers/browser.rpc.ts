@@ -1988,7 +1988,7 @@ export function registerBrowserRpc(
     workspaceId: string,
     surfaceId: string | undefined,
     prompt: string,
-    ctx: RpcContext | undefined,
+    chromeCaller: () => Promise<ChromeCaller>,
   ): Promise<void> => {
     // The surfaceId is caller-supplied and the request store never resolves it,
     // so it is checked here against what the workspace can be PROVEN to hold
@@ -2017,7 +2017,7 @@ export function registerBrowserRpc(
         // The caller's own Chrome: a pane with its own profile raises its own
         // tab. Resolution failing (no registry, unidentified pane) lands in the
         // catch below and skips the raise; the notification still goes out.
-        const launcher = (await resolveChromeClient('browser.help.request', ctx, workspaceId)).client;
+        const launcher = (await chromeCaller()).client;
         const reachable = launcher
           ? (await launcher.cdpInfoTargets(workspaceId)).some(
               (t) => t.surfaceId === surfaceId || t.targetId === surfaceId,
@@ -2095,8 +2095,10 @@ export function registerBrowserRpc(
     // against a workspace, so the same rule holds there: the tab must be one
     // this workspace opened. An unattributed tab does not count. Live Chrome
     // (the client with a writeScope) keeps the behaviour described above.
+    // Resolved once and shared with the reveal below.
+    const chromeCaller = chromeCallerOf('browser.help.request', ctx, workspaceId);
     if (backend() === 'chrome' && surfaceId) {
-      const { client } = await resolveChromeClient('browser.help.request', ctx, workspaceId);
+      const { client } = await chromeCaller();
       if (
         !client.writeScope &&
         !(await client.cdpInfoTargets(workspaceId)).some(
@@ -2104,8 +2106,9 @@ export function registerBrowserRpc(
         )
       ) {
         throw new Error(
-          `browser.help.request: BROWSER_SURFACE_NOT_REGISTERED: surface "${surfaceId}" is not a ` +
-            'Chrome tab of this workspace. Pass one of your own surfaces, or omit surfaceId.',
+          `browser.help.request: BROWSER_SURFACE_NOT_REGISTERED: surface "${surfaceId}" was not found ` +
+            "among this workspace's open tabs in its Chrome (that Chrome may not be running). Pass the " +
+            'surfaceId of a tab this workspace opened, or open one with browser_open first.',
         );
       }
     }
@@ -2149,7 +2152,7 @@ export function registerBrowserRpc(
       throw err;
     }
 
-    await revealHelpSurface(workspaceId, surfaceId, info.prompt, ctx);
+    await revealHelpSurface(workspaceId, surfaceId, info.prompt, chromeCaller);
     return { requestId: info.requestId, deadlineAt: info.deadlineAt, highlighted };
   });
 
