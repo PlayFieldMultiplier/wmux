@@ -7,5 +7,6 @@
 export const TRUST_HEADLINE = /is this a project you created or one you trust/i;
 
 /** Codex's folder-trust screen (wording differs across releases; agy asks about
- *  the contents of a project). Never answered. */
+ *  the contents of a project). Gemini CLI 0.35.3/0.65.0 and Qwen Code 0.26.1
+ *  ask the same "files in this folder" / "this folder?" (measured). Never answered. */
 export const CODEX_TRUST_HEADLINE = /do you trust the (?:contents of this (?:directory|project)|files in this folder)|trust this folder\?/i;

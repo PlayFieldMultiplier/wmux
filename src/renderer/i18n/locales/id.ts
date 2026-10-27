@@ -681,4 +681,16 @@ export const id = {
   'worktask.cleanup.detail.orphanMeta': 'Hanya catatan tugas yang tersisa, tanpa worktree (penghapusan terputus) — periksa, lalu hapus.',
   'worktask.cleanup.detail.diskMissing': 'Worktree tidak ada di disk (dihapus di luar wmux, atau crash) — tutup tugas untuk merapikannya.',
   'botsPage.guest.readNotice': "Mulai sekarang, bot eksternal dapat membaca pesan dalam percakapan ini dan menulis di dalamnya. Bot itu tidak pernah melihat apa yang dikatakan sebelum ditambahkan.",
+
+  // Scheduled runs: one retry after a temporary provider error
+  'claudeIntegration.scheduledRetry': "Coba ulang eksekusi terjadwal setelah galat sementara",
+  'claudeIntegration.scheduledRetryDesc': "Jika giliran sebuah eksekusi terjadwal gagal karena galat jaringan atau server penyedia, tunggu 5 menit lalu kirim satu pesan lanjutkan. Aktif secara bawaan; setiap jadwal dapat mematikannya.",
+  'claudeIntegration.scheduledRetryUnknown': "Belum diketahui: menunggu layanan latar wmux.",
+  'schedules.retryTransient': "Coba ulang sekali setelah galat sementara",
+  'schedules.retryTransientHint': "Saat terjadi galat jaringan atau server penyedia, tunggu 5 menit lalu kirim satu pesan lanjutkan. Prompt tidak dikirim ulang.",
+  'schedules.retryTransientGlobalHint': "Hanya berlaku saat “Coba ulang eksekusi terjadwal setelah galat sementara” aktif di Pengaturan → Integrasi Claude.",
+  'schedules.state.retryWaiting': "Menunggu: mencoba ulang setelah galat sementara penyedia (dalam {minutes} mnt)",
+  'schedules.reason.agent_error_retried_once': "galat agen lagi setelah satu kali coba ulang",
+  'schedules.reason.agent_error_retry_blocked': "galat agen; coba ulang tidak dapat dikirim",
+  'schedules.reason.agent_error_retry_interrupted': "galat agen; tidak dicoba ulang, wmux dimulai ulang",
 } as const;

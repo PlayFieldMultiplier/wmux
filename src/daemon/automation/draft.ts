@@ -99,6 +99,8 @@ export function validateDraft(raw: unknown): Checked<AutomationDraft> {
   const maxRunMinutes = optionalMinutes(p['maxRunMinutes']);
   if (awaitTimeoutMinutes === null) return fail('Await timeout must be 1-1440 minutes');
   if (maxRunMinutes === null) return fail('Run limit must be 1-1440 minutes');
+  const retryTransientErrors = p['retryTransientErrors'];
+  if (retryTransientErrors !== undefined && typeof retryTransientErrors !== 'boolean') return fail('Invalid retry setting');
 
   return {
     ok: true,
@@ -117,6 +119,7 @@ export function validateDraft(raw: unknown): Checked<AutomationDraft> {
       policy: {
         ...(awaitTimeoutMinutes !== undefined ? { awaitTimeoutMinutes } : {}),
         ...(maxRunMinutes !== undefined ? { maxRunMinutes } : {}),
+        ...(retryTransientErrors === false ? { retryTransientErrors: false as const } : {}),
       },
     },
   };

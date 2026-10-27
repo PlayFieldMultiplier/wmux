@@ -682,4 +682,16 @@ export const ru = {
   'worktask.cleanup.detail.orphanMeta': 'Осталась только запись задачи, без worktree (удаление было прервано) — проверьте, затем удалите.',
   'worktask.cleanup.detail.diskMissing': 'Worktree отсутствует на диске (удалён вне wmux или после сбоя) — закройте задачу, чтобы навести порядок.',
   'botsPage.guest.readNotice': "С этого момента внешний бот может читать сообщения в этом разговоре и писать в него. Того, что было сказано до его добавления, он не видит.",
+
+  // Scheduled runs: one retry after a temporary provider error
+  'claudeIntegration.scheduledRetry': "Повторять запланированные запуски после временной ошибки",
+  'claudeIntegration.scheduledRetryDesc': "Если ход запланированного запуска завершился ошибкой сети или сервера провайдера, подождать 5 минут и отправить одно сообщение о продолжении. Включено по умолчанию; для каждого расписания можно отключить.",
+  'claudeIntegration.scheduledRetryUnknown': "Пока неизвестно: ожидание фоновой службы wmux.",
+  'schedules.retryTransient': "Повторить один раз после временной ошибки",
+  'schedules.retryTransientHint': "При ошибке сети или сервера провайдера подождать 5 минут и отправить одно сообщение о продолжении. Промпт повторно не отправляется.",
+  'schedules.retryTransientGlobalHint': "Действует, только если в Настройки → Интеграция с Claude включено «Повторять запланированные запуски после временной ошибки».",
+  'schedules.state.retryWaiting': "Ожидание: повтор после временной ошибки провайдера (через {minutes} мин)",
+  'schedules.reason.agent_error_retried_once': "снова ошибка агента после одного повтора",
+  'schedules.reason.agent_error_retry_blocked': "ошибка агента; не удалось отправить повтор",
+  'schedules.reason.agent_error_retry_interrupted': "ошибка агента; без повтора, wmux перезапустился",
 } as const;
