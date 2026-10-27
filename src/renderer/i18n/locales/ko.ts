@@ -4602,7 +4602,7 @@ export const ko = {
   'schedules.reason.cancelled': "취소됨",
   'schedules.reason.needs_regrant': "권한 재부여 필요",
   'schedules.reason.agent_error_retried_once': "한 번 재시도한 뒤에도 에이전트 오류",
-  'schedules.reason.agent_error_retry_blocked': "에이전트 오류; 세션이 사용 중이거나 바뀌어 재시도하지 않음",
+  'schedules.reason.agent_error_retry_blocked': "에이전트 오류; 재시도를 보내지 못함",
   'schedules.reason.agent_error_retry_interrupted': "에이전트 오류; wmux가 다시 시작되어 재시도하지 않음",
   'schedules.snapshotTitle': "출력",
   'schedules.snapshotEmpty': "이 실행의 출력은 저장되지 않았습니다.",

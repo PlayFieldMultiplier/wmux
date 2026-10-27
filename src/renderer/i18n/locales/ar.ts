@@ -686,6 +686,6 @@ export const ar = {
   'schedules.retryTransientHint': "عند حدوث خطأ في الشبكة أو في خادم المزوّد، انتظر 5 دقائق ثم أرسل رسالة متابعة واحدة. لا يُعاد إرسال الموجّه.",
   'schedules.state.retryWaiting': "في الانتظار: إعادة المحاولة بعد خطأ مؤقت لدى المزوّد (بعد {minutes} د)",
   'schedules.reason.agent_error_retried_once': "خطأ في الوكيل مجددًا بعد إعادة محاولة واحدة",
-  'schedules.reason.agent_error_retry_blocked': "خطأ في الوكيل؛ لم تتم إعادة المحاولة، كانت الجلسة مشغولة أو تغيّرت",
+  'schedules.reason.agent_error_retry_blocked': "خطأ في الوكيل؛ تعذّر إرسال إعادة المحاولة",
   'schedules.reason.agent_error_retry_interrupted': "خطأ في الوكيل؛ لم تتم إعادة المحاولة، أُعيد تشغيل wmux",
 } as const;

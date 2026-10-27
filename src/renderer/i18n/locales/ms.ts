@@ -690,6 +690,6 @@ export const ms = {
   'schedules.retryTransientHint': "Apabila berlaku ralat rangkaian atau pelayan pembekal, tunggu 5 minit dan hantar satu mesej teruskan. Gesaan tidak dihantar semula.",
   'schedules.state.retryWaiting': "Menunggu: mencuba semula selepas ralat sementara pembekal (dalam {minutes} min)",
   'schedules.reason.agent_error_retried_once': "ralat ejen lagi selepas satu cubaan semula",
-  'schedules.reason.agent_error_retry_blocked': "ralat ejen; tidak dicuba semula, sesi sibuk atau berubah",
+  'schedules.reason.agent_error_retry_blocked': "ralat ejen; cubaan semula tidak dapat dihantar",
   'schedules.reason.agent_error_retry_interrupted': "ralat ejen; tidak dicuba semula, wmux dimulakan semula",
 } as const;

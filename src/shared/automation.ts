@@ -222,7 +222,7 @@ export interface AutomationRun {
    * continue message is due, ms epoch. The run stays `running` meanwhile.
    */
   retryAt?: number;
-  /** The one continue message after a temporary provider error was sent. */
+  /** The one continue message after a temporary provider error was attempted (at most one per run). */
   retried?: true;
 }
 

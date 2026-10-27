@@ -5015,6 +5015,6 @@ export const zh = {
   'schedules.retryTransientHint': "遇到网络或提供商服务器错误时，等待 5 分钟后发送一条继续消息。不会重新发送提示词。",
   'schedules.state.retryWaiting': "等待中：临时提供商错误后重试（{minutes} 分钟后）",
   'schedules.reason.agent_error_retried_once': "重试一次后再次出现代理错误",
-  'schedules.reason.agent_error_retry_blocked': "代理错误；会话忙碌或已变化，未重试",
+  'schedules.reason.agent_error_retry_blocked': "代理错误；无法发送重试",
   'schedules.reason.agent_error_retry_interrupted': "代理错误；wmux 已重启，未重试",
 } as const;

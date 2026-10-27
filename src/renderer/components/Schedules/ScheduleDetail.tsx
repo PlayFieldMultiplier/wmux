@@ -309,6 +309,7 @@ function useMinutesUntil(at: number | undefined): number | null {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (at === undefined) return undefined;
+    setNow(Date.now());
     const timer = setInterval(() => setNow(Date.now()), 15_000);
     return () => clearInterval(timer);
   }, [at]);

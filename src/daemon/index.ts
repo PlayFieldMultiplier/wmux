@@ -5122,19 +5122,21 @@ function registerRpcHandlers(
         // A scheduled run's turn that failed on a temporary provider error is
         // held for one continue (automation/transientFailure.ts); a usage-limit
         // notice stays with the usage-limit registry.
-        const transientFailure = data.signal.kind === 'agent.stop_failure' && automationEngine?.ownsPane(sessionId) === true
-          && isTransientTurnFailure(classifyClaudeStopFailure(data.signal.payload ?? {}, now),
-            claudeUsageLimitFromStopFailure(data.signal.payload, now) !== null);
+        const automationPane = automationEngine?.ownsPane(sessionId) === true;
+        const classifiedStop = data.signal.kind === 'agent.stop_failure'
+          ? classifyClaudeStopFailure(data.signal.payload ?? {}, now) : undefined;
+        const transientFailure = automationPane && classifiedStop !== undefined
+          && isTransientTurnFailure(classifiedStop, claudeUsageLimitFromStopFailure(data.signal.payload, now) !== null);
         // Contract v-next item 1: a Claude StopFailure is a typed turn failure.
         // Computed once, here, and handed unchanged to history, the liveness
         // frame and the push, so `turnId`/`at` match on every surface. The
         // same filters history applies: a vetoed or held delivery is not one.
         // A late delivery (the next turn already opened) is stamped with the
         // turn it ended, kept for history only, and never shown as live.
-        const served = data.signal.kind === 'agent.stop_failure' && data.status === 'error' && historySession
+        const served = classifiedStop && data.status === 'error' && historySession
           && !['internal', 'veto', 'pending'].includes(data.decision ?? '')
           && !isBrainPty({ id: sessionId, env: historySession.meta.env })
-          ? serveTurnFailure(historySession.bridge, classifyClaudeStopFailure(data.signal.payload ?? {}, now), {
+          ? serveTurnFailure(historySession.bridge, classifiedStop, {
             ts: Number.isFinite(data.signal.ts) ? data.signal.ts : now,
             ...(data.signal.agentSessionId ? { agentSessionId: data.signal.agentSessionId } : {}),
             push: (f) => {
@@ -5153,7 +5155,6 @@ function registerRpcHandlers(
         const failure = served?.failure;
         const liveFailure = served?.current ? served.failure : undefined;
         // Scheduled runs keep their own history; they are not phone runs.
-        const automationPane = automationEngine?.ownsPane(sessionId) === true;
         if (historySession && !automationPane) recordHistory(store => store.ingest(sessionId, historySession.meta.env, data, historySession.meta.handoffFrom, failure));
         if (automationPane) {
           automationEngine?.onAgentEvent(sessionId, {
@@ -5161,8 +5162,7 @@ function registerRpcHandlers(
             status: data.status,
             ...(data.decision ? { decision: data.decision } : {}),
             ...(data.signal.agentSessionId ? { agentSessionId: data.signal.agentSessionId } : {}),
-            ...(data.signal.kind === 'agent.stop_failure' && classifyClaudeStopFailure(data.signal.payload ?? {}, now).reason === 'auth'
-              ? { authFailure: true } : {}),
+            ...(classifiedStop?.reason === 'auth' ? { authFailure: true } : {}),
             ...(transientFailure ? { transientFailure: true } : {}),
           }).catch((err) => log('warn', `[automation] agent event handling failed for ${sessionId}:`, err));
         }
@@ -10337,7 +10337,14 @@ async function main(): Promise<void> {
       // relay is the proof the turn ended, so the hold is armed here.
       if (!shouldPushTurnFailure(transient, () => automationEngine?.armTransientRetry(id) === true)) return;
       pushTurnFailed?.(id, f);
-      if (f.reason !== 'auth') return;
+      if (f.reason !== 'auth') {
+        // The turn its one continue started failed too: that run ends now.
+        if (automationEngine?.continuedRunPane(id)) {
+          automationEngine.onAgentEvent(id, { kind: 'agent.stop_failure', status: 'error' })
+            .catch((err) => log('warn', `[automation] agent event handling failed for ${id}:`, err));
+        }
+        return;
+      }
       noteAuthLost?.(id, 'codex', session.meta.env, 'turn', f.providerCode);
       // A scheduled run's Codex turn failed on sign-in: the relay is the proof
       // the turn ended, so the run ends now, as login_needed (Claude's comes

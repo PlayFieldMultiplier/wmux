@@ -1181,13 +1181,10 @@ describe('AutomationEngine — one retry after a temporary provider error', () =
     expect(h.engine.listRuns()[0].state).toBe('running');
   });
 
-  it('a pane that is busy, changed or not clear of a trust prompt at retry time gets no write and ends failed', async () => {
+  it('a pane no longer the run\'s, or showing a trust prompt, at retry time gets no write and ends failed at once', async () => {
     const cases: Array<(h: ReturnType<typeof retryHarness>) => void> = [
-      (h) => { h.state.agent = { ...h.state.agent, status: 'running' }; },
-      (h) => { h.state.agent = { ...h.state.agent, inputQuiet: false }; },
       (h) => { h.state.agent = { ...h.state.agent, incarnationId: 'inc-2' }; },
-      (h) => { h.state.pendingApproval = true; },
-      (h) => { h.trust.state = 'unknown'; },
+      (h) => { h.state.agent = { ...h.state.agent, slug: 'codex' }; },
       (h) => { h.trust.state = 'trust'; },
     ];
     for (const change of cases) {
@@ -1203,13 +1200,54 @@ describe('AutomationEngine — one retry after a temporary provider error', () =
     }
   });
 
-  it('a continue the delivery refuses ends the run failed, and the session going away while held does too', async () => {
+  it('a pane that stays busy or unclear past the short grace gets no write and ends failed', async () => {
+    const cases: Array<(h: ReturnType<typeof retryHarness>) => void> = [
+      (h) => { h.state.agent = { ...h.state.agent, status: 'running' }; },
+      (h) => { h.state.agent = { ...h.state.agent, inputQuiet: false }; },
+      (h) => { h.state.pendingApproval = true; },
+      (h) => { h.trust.state = 'unknown'; },
+    ];
+    for (const change of cases) {
+      const h = retryHarness();
+      const run = await startedRun(h);
+      await fail(h, run, { transientFailure: true });
+      change(h);
+      h.clock.t += 5 * MIN;
+      await h.engine.monitorOnce(h.clock.t);
+      // Asked again on the next passes, still held, nothing written.
+      expect(h.engine.listRuns()[0]).toMatchObject({ state: 'running', retryAt: h.clock.t });
+      await h.engine.monitorOnce(h.clock.t + 61_000);
+      expect(h.continues).toEqual([]);
+      expect(h.engine.listRuns()[0]).toMatchObject({ state: 'failed', reason: 'agent_error', detail: 'retry_blocked' });
+      expect(h.delivered).toEqual(['do the thing']);
+    }
+  });
+
+  it('a pane only momentarily not ready gets its continue on a later pass', async () => {
+    const h = retryHarness();
+    const run = await startedRun(h);
+    await fail(h, run, { transientFailure: true });
+    h.state.agent = { ...h.state.agent, inputQuiet: false };
+    h.clock.t += 5 * MIN;
+    await h.engine.monitorOnce(h.clock.t);
+    expect(h.continues).toEqual([]);
+    h.state.agent = { ...h.state.agent, inputQuiet: true };
+    h.clock.t += 5_000;
+    await h.engine.monitorOnce(h.clock.t);
+    expect(h.continues).toHaveLength(1);
+    expect(h.engine.listRuns()[0]).toMatchObject({ state: 'running', retried: true });
+  });
+
+  it('a continue the delivery keeps refusing ends the run failed, and the session going away while held does too', async () => {
     const refused = retryHarness();
     refused.engine['ports'].deliverContinue = async () => 'busy';
     const run = await startedRun(refused);
     await fail(refused, run, { transientFailure: true });
     refused.clock.t += 5 * MIN;
     await refused.engine.monitorOnce(refused.clock.t);
+    expect(refused.engine.listRuns()[0]).toMatchObject({ state: 'running', retryAt: refused.clock.t });
+    expect(refused.engine.listRuns()[0].retried).toBeUndefined();
+    await refused.engine.monitorOnce(refused.clock.t + 61_000);
     expect(refused.engine.listRuns()[0]).toMatchObject({ state: 'failed', reason: 'agent_error', detail: 'retry_blocked' });
 
     const died = retryHarness();
@@ -1218,6 +1256,25 @@ describe('AutomationEngine — one retry after a temporary provider error', () =
     await died.engine.onSessionDied(`auto-${diedRun.id}`, 0);
     expect(died.engine.listRuns()[0]).toMatchObject({ state: 'failed', reason: 'agent_error', detail: 'retry_blocked' });
     expect(died.continues).toEqual([]);
+  });
+
+  it('the continued turn failing before its delivery returns still ends the run as retried once', async () => {
+    const h = retryHarness();
+    const run = await startedRun(h);
+    const pane = `auto-${run.id}`;
+    h.engine['ports'].deliverContinue = async () => {
+      expect(h.engine.continuedRunPane(pane)).toBe(true);
+      // The provider is still down: the hook lands while the submit is being confirmed.
+      expect(h.engine.armTransientRetry(pane)).toBe(false);
+      await h.engine.onAgentEvent(pane, { kind: 'agent.stop_failure', status: 'error', transientFailure: true });
+      return 'sent';
+    };
+    await fail(h, run, { transientFailure: true });
+    expect(h.engine.continuedRunPane(pane)).toBe(false);
+    h.clock.t += 5 * MIN;
+    await h.engine.monitorOnce(h.clock.t);
+    expect(h.engine.listRuns()[0]).toMatchObject({ state: 'failed', reason: 'agent_error', detail: 'retried_once', retried: true });
+    expect(h.engine.continuedRunPane(pane)).toBe(false);
   });
 
   it('a daemon restart while held closes the run failed with a clear reason, and nothing is sent', async () => {

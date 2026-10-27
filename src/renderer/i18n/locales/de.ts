@@ -686,6 +686,6 @@ export const de = {
   'schedules.retryTransientHint': "Bei einem Netzwerk- oder Serverfehler des Anbieters 5 Minuten warten und eine Fortsetzen-Nachricht senden. Der Prompt wird nicht erneut gesendet.",
   'schedules.state.retryWaiting': "Wartet: Wiederholung nach einem vorübergehenden Anbieterfehler (in {minutes} Min.)",
   'schedules.reason.agent_error_retried_once': "erneuter Agentenfehler nach einer Wiederholung",
-  'schedules.reason.agent_error_retry_blocked': "Agentenfehler; nicht wiederholt, die Sitzung war belegt oder geändert",
+  'schedules.reason.agent_error_retry_blocked': "Agentenfehler; die Wiederholung konnte nicht gesendet werden",
   'schedules.reason.agent_error_retry_interrupted': "Agentenfehler; nicht wiederholt, wmux wurde neu gestartet",
 } as const;

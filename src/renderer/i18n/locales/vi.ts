@@ -684,6 +684,6 @@ export const vi = {
   'schedules.retryTransientHint': "Khi có lỗi mạng hoặc lỗi máy chủ của nhà cung cấp, chờ 5 phút rồi gửi một tin nhắn tiếp tục. Lời nhắc không được gửi lại.",
   'schedules.state.retryWaiting': "Đang chờ: thử lại sau lỗi tạm thời của nhà cung cấp (sau {minutes} phút)",
   'schedules.reason.agent_error_retried_once': "lại lỗi tác tử sau một lần thử lại",
-  'schedules.reason.agent_error_retry_blocked': "lỗi tác tử; không thử lại, phiên đang bận hoặc đã thay đổi",
+  'schedules.reason.agent_error_retry_blocked': "lỗi tác tử; không thể gửi lần thử lại",
   'schedules.reason.agent_error_retry_interrupted': "lỗi tác tử; không thử lại, wmux đã khởi động lại",
 } as const;

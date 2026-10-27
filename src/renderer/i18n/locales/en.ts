@@ -5191,7 +5191,7 @@ export const en = {
   'schedules.reason.cancelled': "cancelled",
   'schedules.reason.needs_regrant': "permission needs granting again",
   'schedules.reason.agent_error_retried_once': "agent error again after one retry",
-  'schedules.reason.agent_error_retry_blocked': "agent error; not retried, the session was busy or changed",
+  'schedules.reason.agent_error_retry_blocked': "agent error; the retry could not be sent",
   'schedules.reason.agent_error_retry_interrupted': "agent error; not retried, wmux restarted",
   'schedules.snapshotTitle': "Output",
   'schedules.snapshotEmpty': "No output was saved for this run.",

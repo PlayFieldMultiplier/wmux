@@ -689,6 +689,6 @@ export const id = {
   'schedules.retryTransientHint': "Saat terjadi galat jaringan atau server penyedia, tunggu 5 menit lalu kirim satu pesan lanjutkan. Prompt tidak dikirim ulang.",
   'schedules.state.retryWaiting': "Menunggu: mencoba ulang setelah galat sementara penyedia (dalam {minutes} mnt)",
   'schedules.reason.agent_error_retried_once': "galat agen lagi setelah satu kali coba ulang",
-  'schedules.reason.agent_error_retry_blocked': "galat agen; tidak dicoba ulang, sesi sedang sibuk atau berubah",
+  'schedules.reason.agent_error_retry_blocked': "galat agen; coba ulang tidak dapat dikirim",
   'schedules.reason.agent_error_retry_interrupted': "galat agen; tidak dicoba ulang, wmux dimulai ulang",
 } as const;

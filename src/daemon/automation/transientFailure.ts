@@ -10,6 +10,12 @@ import type { TurnFailure } from '../../shared/phoneTurnFailure';
 
 /** Wait before the one continue message. */
 export const TRANSIENT_RETRY_DELAY_MS = 5 * 60_000;
+/**
+ * A pane only momentarily not ready for the continue (a repaint, a slow
+ * screen read, a draft) is asked again on later passes for this long past
+ * the due time; then the run ends failed.
+ */
+export const TRANSIENT_RETRY_READY_GRACE_MS = 60_000;
 
 /** Claude StopFailure codes for a provider overload or server error. */
 const CLAUDE_TRANSIENT_CODES: ReadonlySet<string> = new Set(['overloaded', 'server_error']);

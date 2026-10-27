@@ -689,6 +689,6 @@ export const it = {
   'schedules.retryTransientHint': "In caso di errore di rete o del server del provider, attendi 5 minuti e invia un messaggio per continuare. Il prompt non viene reinviato.",
   'schedules.state.retryWaiting': "In attesa: nuovo tentativo dopo un errore temporaneo del provider (tra {minutes} min)",
   'schedules.reason.agent_error_retried_once': "errore dell'agente di nuovo dopo un tentativo",
-  'schedules.reason.agent_error_retry_blocked': "errore dell'agente; nessun nuovo tentativo, la sessione era occupata o cambiata",
+  'schedules.reason.agent_error_retry_blocked': "errore dell'agente; impossibile inviare il nuovo tentativo",
   'schedules.reason.agent_error_retry_interrupted': "errore dell'agente; nessun nuovo tentativo, wmux è stato riavviato",
 } as const;

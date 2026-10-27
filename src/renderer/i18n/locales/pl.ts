@@ -5149,7 +5149,7 @@ export const pl = {
   'schedules.reason.cancelled': "anulowano",
   'schedules.reason.needs_regrant': "wymaga ponownego przyznania uprawnień",
   'schedules.reason.agent_error_retried_once': "błąd agenta ponownie po jednej próbie ponowienia",
-  'schedules.reason.agent_error_retry_blocked': "błąd agenta; nie ponowiono, sesja była zajęta lub zmieniona",
+  'schedules.reason.agent_error_retry_blocked': "błąd agenta; nie udało się wysłać ponowienia",
   'schedules.reason.agent_error_retry_interrupted': "błąd agenta; nie ponowiono, wmux uruchomił się ponownie",
   'schedules.snapshotTitle': "Wynik",
   'schedules.snapshotEmpty': "Dla tego uruchomienia nie zapisano wyniku.",

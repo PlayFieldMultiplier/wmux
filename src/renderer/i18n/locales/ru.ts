@@ -690,6 +690,6 @@ export const ru = {
   'schedules.retryTransientHint': "При ошибке сети или сервера провайдера подождать 5 минут и отправить одно сообщение о продолжении. Промпт повторно не отправляется.",
   'schedules.state.retryWaiting': "Ожидание: повтор после временной ошибки провайдера (через {minutes} мин)",
   'schedules.reason.agent_error_retried_once': "снова ошибка агента после одного повтора",
-  'schedules.reason.agent_error_retry_blocked': "ошибка агента; без повтора, сеанс был занят или изменился",
+  'schedules.reason.agent_error_retry_blocked': "ошибка агента; не удалось отправить повтор",
   'schedules.reason.agent_error_retry_interrupted': "ошибка агента; без повтора, wmux перезапустился",
 } as const;

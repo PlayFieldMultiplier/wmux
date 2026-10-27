@@ -690,6 +690,6 @@ export const es = {
   'schedules.retryTransientHint': "Ante un error de red o del servidor del proveedor, esperar 5 minutos y enviar un mensaje para continuar. El prompt no se vuelve a enviar.",
   'schedules.state.retryWaiting': "En espera: reintento tras un error temporal del proveedor (en {minutes} min)",
   'schedules.reason.agent_error_retried_once': "error del agente de nuevo tras un reintento",
-  'schedules.reason.agent_error_retry_blocked': "error del agente; sin reintento, la sesión estaba ocupada o cambió",
+  'schedules.reason.agent_error_retry_blocked': "error del agente; no se pudo enviar el reintento",
   'schedules.reason.agent_error_retry_interrupted': "error del agente; sin reintento, wmux se reinició",
 } as const;

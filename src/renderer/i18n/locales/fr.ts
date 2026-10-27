@@ -689,6 +689,6 @@ export const fr = {
   'schedules.retryTransientHint': "En cas d'erreur réseau ou serveur du fournisseur, attendre 5 minutes et envoyer un message de reprise. Le prompt n'est pas renvoyé.",
   'schedules.state.retryWaiting': "En attente : nouvel essai après une erreur temporaire du fournisseur (dans {minutes} min)",
   'schedules.reason.agent_error_retried_once': "nouvelle erreur de l'agent après un nouvel essai",
-  'schedules.reason.agent_error_retry_blocked': "erreur de l'agent ; pas de nouvel essai, la session était occupée ou a changé",
+  'schedules.reason.agent_error_retry_blocked': "erreur de l'agent ; le nouvel essai n'a pas pu être envoyé",
   'schedules.reason.agent_error_retry_interrupted': "erreur de l'agent ; pas de nouvel essai, wmux a redémarré",
 } as const;

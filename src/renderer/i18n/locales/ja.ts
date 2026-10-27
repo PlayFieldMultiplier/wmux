@@ -738,6 +738,6 @@ export const ja = {
   'schedules.retryTransientHint': "ネットワークまたはプロバイダーのサーバーエラーの場合、5分待って続行メッセージを1回送信します。プロンプトは再送されません。",
   'schedules.state.retryWaiting': "待機中: 一時的なプロバイダーエラーの後に再試行 ({minutes}分後)",
   'schedules.reason.agent_error_retried_once': "1回再試行した後も再びエージェントエラー",
-  'schedules.reason.agent_error_retry_blocked': "エージェントエラー。セッションが使用中か変更されたため再試行せず",
+  'schedules.reason.agent_error_retry_blocked': "エージェントエラー。再試行を送信できませんでした",
   'schedules.reason.agent_error_retry_interrupted': "エージェントエラー。wmuxが再起動したため再試行せず",
 } as const;

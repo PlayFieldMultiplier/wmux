@@ -688,6 +688,6 @@ export const da = {
   'schedules.retryTransientHint': "Ved en netværks- eller serverfejl hos udbyderen, vent 5 minutter og send én fortsæt-besked. Prompten sendes ikke igen.",
   'schedules.state.retryWaiting': "Venter: prøver igen efter en midlertidig udbyderfejl (om {minutes} min)",
   'schedules.reason.agent_error_retried_once': "agentfejl igen efter ét nyt forsøg",
-  'schedules.reason.agent_error_retry_blocked': "agentfejl; ikke prøvet igen, sessionen var optaget eller ændret",
+  'schedules.reason.agent_error_retry_blocked': "agentfejl; det nye forsøg kunne ikke sendes",
   'schedules.reason.agent_error_retry_interrupted': "agentfejl; ikke prøvet igen, wmux genstartede",
 } as const;

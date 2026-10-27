@@ -690,6 +690,6 @@ export const tr = {
   'schedules.retryTransientHint': "Ağ veya sağlayıcı sunucu hatasında 5 dakika bekle ve bir devam mesajı gönder. İstem yeniden gönderilmez.",
   'schedules.state.retryWaiting': "Bekliyor: geçici bir sağlayıcı hatasından sonra yeniden denenecek ({minutes} dk sonra)",
   'schedules.reason.agent_error_retried_once': "bir yeniden denemeden sonra yine ajan hatası",
-  'schedules.reason.agent_error_retry_blocked': "ajan hatası; yeniden denenmedi, oturum meşguldü veya değişti",
+  'schedules.reason.agent_error_retry_blocked': "ajan hatası; yeniden deneme gönderilemedi",
   'schedules.reason.agent_error_retry_interrupted': "ajan hatası; yeniden denenmedi, wmux yeniden başladı",
 } as const;

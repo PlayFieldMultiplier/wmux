@@ -690,6 +690,6 @@ export const ptBR = {
   'schedules.retryTransientHint': "Em caso de erro de rede ou do servidor do provedor, aguardar 5 minutos e enviar uma mensagem para continuar. O prompt não é reenviado.",
   'schedules.state.retryWaiting': "Aguardando: nova tentativa após um erro temporário do provedor (em {minutes} min)",
   'schedules.reason.agent_error_retried_once': "erro do agente novamente após uma nova tentativa",
-  'schedules.reason.agent_error_retry_blocked': "erro do agente; sem nova tentativa, a sessão estava ocupada ou mudou",
+  'schedules.reason.agent_error_retry_blocked': "erro do agente; não foi possível enviar a nova tentativa",
   'schedules.reason.agent_error_retry_interrupted': "erro do agente; sem nova tentativa, o wmux reiniciou",
 } as const;

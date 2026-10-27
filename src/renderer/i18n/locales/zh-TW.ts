@@ -725,6 +725,6 @@ export const zhTW = {
   'schedules.retryTransientHint': "遇到網路或供應商伺服器錯誤時，等待 5 分鐘後傳送一則繼續訊息。不會重新傳送提示詞。",
   'schedules.state.retryWaiting': "等待中：暫時性供應商錯誤後重試（{minutes} 分鐘後）",
   'schedules.reason.agent_error_retried_once': "重試一次後再次發生代理錯誤",
-  'schedules.reason.agent_error_retry_blocked': "代理錯誤；工作階段忙碌或已變更，未重試",
+  'schedules.reason.agent_error_retry_blocked': "代理錯誤；無法傳送重試",
   'schedules.reason.agent_error_retry_interrupted': "代理錯誤；wmux 已重新啟動，未重試",
 } as const;

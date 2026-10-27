@@ -689,6 +689,6 @@ export const nb = {
   'schedules.retryTransientHint': "Ved en nettverks- eller serverfeil hos leverandøren, vent 5 minutter og send én fortsett-melding. Ledeteksten sendes ikke på nytt.",
   'schedules.state.retryWaiting': "Venter: prøver på nytt etter en midlertidig leverandørfeil (om {minutes} min)",
   'schedules.reason.agent_error_retried_once': "agentfeil igjen etter ett nytt forsøk",
-  'schedules.reason.agent_error_retry_blocked': "agentfeil; ikke prøvd på nytt, økten var opptatt eller endret",
+  'schedules.reason.agent_error_retry_blocked': "agentfeil; det nye forsøket kunne ikke sendes",
   'schedules.reason.agent_error_retry_interrupted': "agentfeil; ikke prøvd på nytt, wmux startet på nytt",
 } as const;

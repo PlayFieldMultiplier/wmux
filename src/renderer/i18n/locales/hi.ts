@@ -685,6 +685,6 @@ export const hi = {
   'schedules.retryTransientHint': "नेटवर्क या प्रदाता सर्वर त्रुटि पर 5 मिनट रुककर एक बार जारी रखने का संदेश भेजें। प्रॉम्प्ट दोबारा नहीं भेजा जाता।",
   'schedules.state.retryWaiting': "प्रतीक्षा: अस्थायी प्रदाता त्रुटि के बाद फिर से प्रयास ({minutes} मिनट में)",
   'schedules.reason.agent_error_retried_once': "एक बार फिर प्रयास के बाद फिर से एजेंट त्रुटि",
-  'schedules.reason.agent_error_retry_blocked': "एजेंट त्रुटि; फिर प्रयास नहीं हुआ, सत्र व्यस्त था या बदल गया",
+  'schedules.reason.agent_error_retry_blocked': "एजेंट त्रुटि; फिर से प्रयास नहीं भेजा जा सका",
   'schedules.reason.agent_error_retry_interrupted': "एजेंट त्रुटि; फिर प्रयास नहीं हुआ, wmux फिर से शुरू हुआ",
 } as const;
