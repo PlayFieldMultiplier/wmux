@@ -18,6 +18,7 @@ import { clearRemoteSelection } from './workspaceSlice';
 import { publishPaneStashed, publishPaneFocused } from '../../events/publisher';
 import { saveSessionNow } from '../../utils/sessionSaveBridge';
 import { markRetentionMigrationDone } from '../retentionMigration';
+import type { CloseTabTarget } from '../closeTabConfirm';
 import { DEFAULT_BROWSER_BACKEND, isBrowserBackend, type BrowserBackend } from '../../../shared/browserBackend';
 import { CHROME_PRESET_VALUES } from '../../../shared/chromePresets';
 import { sanitizeShortcutOverrides, type ShortcutActionId, type ShortcutOverrides } from '../../../shared/keymap';
@@ -476,8 +477,8 @@ export interface UISlice {
   setCloseTabOnShellExit: (enabled: boolean) => void;
 
   // #1839: the tab waiting on the close-tab confirm (tab × or the shortcut).
-  closeTabConfirm: { workspaceId: string; paneId: string; surfaceId: string } | null;
-  requestCloseTab: (target: { workspaceId: string; paneId: string; surfaceId: string }) => void;
+  closeTabConfirm: CloseTabTarget | null;
+  requestCloseTab: (target: CloseTabTarget) => void;
   dismissCloseTab: () => void;
 
   // Idle-clearing of xterm's hidden IME textarea (issue #167, AutoGLM-style

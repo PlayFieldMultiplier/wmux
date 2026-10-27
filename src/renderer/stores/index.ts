@@ -29,6 +29,7 @@ import { createA2aRemoteSlice, type A2aRemoteSlice } from './slices/a2aRemoteSli
 import { createPcRailSlice, type PcRailSlice } from './slices/pcRailSlice';
 import { createRoomSlice, type RoomSlice } from './slices/roomSlice';
 import { createPtyLifecycleSlice, type PtyLifecycleSlice } from './slices/ptyLifecycleSlice';
+import { registerCloseTabConfirmInvariant } from './closeTabConfirm';
 
 export type StoreState = WorkspaceSlice & PaneSlice & SurfaceSlice & UISlice & NotificationSlice & A2aSlice & ApprovalInboxSlice & BrowserHelpSlice & CompanySlice & ToastSlice & SearchSlice & ProjectConfigSlice & SupervisionSlice & ResumeSlice & AgentToolbarSlice & ChromePresetSlice & RemoteInboxSlice & ChannelsSlice & WorkTaskSlice & RemoteWorkspacesSlice & OrphanSessionsSlice & SchedulesSlice & UsageLimitSlice & AgentAuthSlice & WorkspaceSettleSlice & A2aRemoteSlice & PcRailSlice & RoomSlice & PtyLifecycleSlice;
 
@@ -65,3 +66,5 @@ export const useStore = create<StoreState>()(
     ...createPtyLifecycleSlice(...args),
   }))
 );
+
+registerCloseTabConfirmInvariant(useStore);
