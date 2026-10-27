@@ -118,8 +118,9 @@ function accountConfigDirsDefault(): string[] {
  *  started without tools. */
 export type WorkerFenceSelfTest =
   /** `worktreePatterns`: the fence also held with the worktree patterns
-   *  (macOS), so a launch may add them. */
-  | { ok: true; worktreePatterns?: true }
+   *  (macOS), so a launch may add them. `patternsRetry`: their run did not
+   *  finish, so it is tried again after WORKER_FENCE_SELF_TEST_RETRY_MS. */
+  | { ok: true; worktreePatterns?: true; patternsRetry?: true }
   | { ok: false; reason: string; transient?: true };
 
 export type WorkerFenceSupport =
@@ -178,7 +179,7 @@ export async function workerFenceSupport(deps: WorkerFenceSupportDeps = {}): Pro
   const key = `${platform}\0${exe}\0${support.version}`;
   const known = answers.get(key);
   let selfTest: WorkerFenceSelfTest;
-  if (known && (known.result.ok || Date.now() - known.at < WORKER_FENCE_SELF_TEST_RETRY_MS)) {
+  if (known && ((known.result.ok && !known.result.patternsRetry) || Date.now() - known.at < WORKER_FENCE_SELF_TEST_RETRY_MS)) {
     selfTest = known.result;
   } else {
     let run = running.get(key);
@@ -312,13 +313,17 @@ export interface WorkerFenceSelfTestOptions {
 /** The self-test's own worktree on macOS: as long as a name the patterns
  *  take (WORKER_FENCE_COMPLEMENT_MAX of them), so a launch never adds more
  *  patterns than the self-test applied. */
-export const WORKER_FENCE_SELF_TEST_WORKTREE = 'wmuxfenceselftest0123456789abcdefghijklm';
+export const WORKER_FENCE_SELF_TEST_WORKTREE = 'wmux-fence.self_test-0123456789abcdefghi';
 
 /** The other worktrees the macOS run writes into, one per kind of pattern:
- *  a name that differs at its first character, a shorter one (in another
- *  case too), a longer one, and ones that differ by `.`, `_` or `-`. */
+ *  names that differ at the first character and further in (by a letter,
+ *  `.`, `_` or `-`), shorter ones ending in a letter, `-` or `.` (one in
+ *  another case), and a longer one. */
 function selfTestSiblings(own: string): string[] {
-  return ['sibling', own.slice(0, 3), own.slice(0, 4).toUpperCase(), `${own}2`, '.x', `${own.slice(0, 2)}_x`, `${own.slice(0, 2)}-x`];
+  return [
+    'sibling', '.x', `${own.slice(0, 7)}Q`, `${own.slice(0, 4)}.x`, `${own.slice(0, 4)}_x`, `${own.slice(0, 10)}-x`,
+    own.slice(0, 3), own.slice(0, 4).toUpperCase(), own.slice(0, 5), own.slice(0, 11), `${own}2`,
+  ];
 }
 
 /**
@@ -329,12 +334,15 @@ function selfTestSiblings(own: string): string[] {
  * `<dir>/factory/fence-self-test/` and are removed once it ends.
  */
 export async function runWorkerFenceSelfTest(exe: string, opts: WorkerFenceSelfTestOptions = {}): Promise<WorkerFenceSelfTest> {
-  const plain = await runFenceProbe(exe, opts, false);
-  if (!plain.ok || (opts.platform ?? process.platform) !== 'darwin') return plain;
-  const withPatterns = await runFenceProbe(exe, opts, true);
+  // Side by side: each run has a folder of its own.
+  const [plain, withPatterns] = await Promise.all([
+    runFenceProbe(exe, opts, false),
+    (opts.platform ?? process.platform) === 'darwin' ? runFenceProbe(exe, opts, true) : null,
+  ]);
+  if (!plain.ok || !withPatterns) return plain;
   if (withPatterns.ok) return { ok: true, worktreePatterns: true };
   (opts.log ?? ((l: string) => console.warn(l)))(`[worker fence] other worktrees are closed as of launch only: ${withPatterns.reason}`);
-  return { ok: true };
+  return withPatterns.transient ? { ok: true, patternsRetry: true } : { ok: true };
 }
 
 async function runFenceProbe(exe: string, opts: WorkerFenceSelfTestOptions, linked: boolean): Promise<WorkerFenceSelfTest> {
@@ -380,11 +388,23 @@ async function runFenceProbe(exe: string, opts: WorkerFenceSelfTestOptions, link
       fs.writeFileSync(path.join(ownGit, 'gitdir'), `${path.join(wt, '.git')}\n`);
       fs.writeFileSync(path.join(wt, '.git'), `gitdir: ${ownGit}\n`);
     }
-    const fence = buildWorkerFence({
+    const build = (extra: readonly string[]) => buildWorkerFence({
       worktree: wt, workerTempDir: tmp, gitCommonDir: git, isLinkedWorktree: linked, ownWorktreeName: linked ? own : null, ownBranch: null,
       otherBranches: [], otherWorktrees: [], platformCapable: true, repoTestWritePaths: [], permissionMode: 'bypassPermissions',
-      hookCommand, credentialPaths: [], home, ...(patterns ? { extraDenyWrite: patterns } : {}),
+      hookCommand, credentialPaths: [], home, extraDenyWrite: extra,
     });
+    let fence = build(patterns ?? []);
+    if (patterns) {
+      // As many denied paths as a launch may carry with the patterns, so a
+      // launch's profile is never larger than one that applied here.
+      const pad: string[] = [];
+      const one = (i: number) => path.join(root, 'pad', `${i}-${'x'.repeat(96)}`);
+      for (let bytes = denyWriteBytes(fence.settings); bytes + Buffer.byteLength(JSON.stringify(one(pad.length))) + 1 <= WORKER_FENCE_DENY_WRITE_MAX_BYTES;) {
+        bytes += Buffer.byteLength(JSON.stringify(one(pad.length))) + 1;
+        pad.push(one(pad.length));
+      }
+      fence = build([...patterns, ...pad]);
+    }
     const settingsFile = path.join(root, 'settings.json');
     fs.writeFileSync(settingsFile, JSON.stringify(fence.settings), { mode: 0o600 });
     const tries = linked
@@ -450,6 +470,7 @@ async function runFenceProbe(exe: string, opts: WorkerFenceSelfTestOptions, link
       return { ok: false, reason: `claude did not run a command inside the fence (${why})`, ...(exit.timedOut ? { transient: true as const } : {}) };
     }
     if (!linked) return { ok: true };
+    if (exit.timedOut) return { ok: false, reason: 'the run with the patterns did not finish', transient: true };
     // Without it, the denies below would hold with no pattern at all.
     if (!fs.existsSync(control)) return { ok: false, reason: 'claude did not open the linked worktree\'s git folder, so the patterns were not tried' };
     if (others.some((p) => fs.existsSync(p)) || fs.existsSync(added)) return { ok: false, reason: 'a command wrote another worktree\'s git folder, so the patterns are not holding' };
@@ -742,14 +763,23 @@ export function worktreeComplementDenies(git: Pick<WorktreeGitFacts, 'gitCommonD
   if (platform !== 'darwin' || !git.isLinkedWorktree || git.ownWorktreeName === null) return [];
   const denies = workerFenceWorktreeComplement(git.gitCommonDir, git.ownWorktreeName);
   if (denies) return denies;
-  const key = `${git.gitCommonDir}\0${git.ownWorktreeName}`;
-  if (!complementFallbacks.has(key)) {
-    // Once per name, in a set that never grows past a few hundred.
-    if (complementFallbacks.size >= 256) complementFallbacks.clear();
-    complementFallbacks.add(key);
-    log(`[worker fence] worktree ${JSON.stringify(git.ownWorktreeName)}: other worktrees are closed as of launch only (its name or the repository path cannot be a pattern)`);
-  }
+  logComplementFallbackOnce(git, 'its name or the repository path cannot be a pattern', log);
   return [];
+}
+
+function logComplementFallbackOnce(git: Pick<WorktreeGitFacts, 'gitCommonDir' | 'ownWorktreeName'>, why: string, log: (line: string) => void = (l) => console.warn(l)): void {
+  const key = `${git.gitCommonDir}\0${git.ownWorktreeName}\0${why}`;
+  if (complementFallbacks.has(key)) return;
+  // Once per name and reason, in a set that never grows past a few hundred.
+  if (complementFallbacks.size >= 256) complementFallbacks.clear();
+  complementFallbacks.add(key);
+  log(`[worker fence] worktree ${JSON.stringify(git.ownWorktreeName)}: other worktrees are closed as of launch only (${why})`);
+}
+
+/** A settings document's denied write paths, as JSON, in bytes. */
+function denyWriteBytes(settings: Record<string, unknown>): number {
+  const sandbox = settings.sandbox as { filesystem?: { denyWrite?: string[] } } | undefined;
+  return Buffer.byteLength(JSON.stringify(sandbox?.filesystem?.denyWrite ?? []), 'utf8');
 }
 
 function listDirSafe(dir: string): string[] {
@@ -905,12 +935,14 @@ export function attachWorkerFence(input: WorkerFenceAttachInput): WorkerFenceAtt
     ...(platform === 'linux' ? { keepGitDeny: (p: string) => fs.existsSync(p) } : {}),
   });
   // The worktree patterns only where the self-test applied them, and only
-  // while the denies stay well inside what a profile can hold.
+  // while the denies stay as small as the profile the self-test applied.
   const patterns = support.capable && support.selfTest.ok && support.selfTest.worktreePatterns ? worktreeComplementDenies(git, platform) : [];
-  let fence = build(patterns);
-  if (patterns.length > 0 && JSON.stringify((fence.settings.sandbox as { filesystem: { denyWrite: string[] } }).filesystem.denyWrite).length > WORKER_FENCE_DENY_WRITE_MAX_BYTES) {
-    console.warn(`[worker fence] worktree ${JSON.stringify(git.ownWorktreeName)}: other worktrees are closed as of launch only (the denies would make the profile too large)`);
-    fence = build([]);
+  const fence = build(patterns);
+  if (patterns.length > 0 && denyWriteBytes(fence.settings) > WORKER_FENCE_DENY_WRITE_MAX_BYTES) {
+    const filesystem = (fence.settings.sandbox as { filesystem: { denyWrite: string[] } }).filesystem;
+    const drop = new Set(patterns);
+    filesystem.denyWrite = filesystem.denyWrite.filter((p) => !drop.has(p));
+    logComplementFallbackOnce(git, 'the denies would make the profile too large');
   }
   // How the worker reaches its model, from the owner's user settings it
   // no longer loads; the fence's own values win.

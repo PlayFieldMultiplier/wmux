@@ -244,8 +244,9 @@ export const WORKER_FENCE_COMPLEMENT_MAX = 200;
 export const WORKER_FENCE_DENY_WRITE_MAX_BYTES = 64 * 1024;
 
 const COMPLEMENT_NAME = /^[0-9A-Za-z._-]+$/;
-/** What Claude Code's glob syntax could read in the literal part of a path. */
-const GLOB_CHARS = /[*?[\]{}\\]/;
+/** A common dir's path the patterns may start with: only characters a glob
+ *  and the profile's regex read as themselves (measured: space too). */
+const PLAIN_PATH = /^[A-Za-z0-9._/ -]+$/;
 
 /** `lo-hi` without `c`, as a class's ranges. */
 function rangeWithout(lo: string, hi: string, c: string): string {
@@ -275,14 +276,15 @@ function classWithout(c: string): string {
  * regard to case, the folder and what it holds. Classes take ranges only: a
  * negated class is not one, and a long list of characters breaks the
  * profile. Null (keep to the snapshot) when the name has another
- * character, the common dir's path has one a glob would read, or the
+ * character, the common dir's path has one other than a letter, digit,
+ * space, `.`, `_`, `-` or `/`, or the
  * patterns would pass WORKER_FENCE_COMPLEMENT_MAX. What it leaves: a name
  * with another character where it differs, or one that differs from the
  * worker's only in case. Pure.
  */
 export function workerFenceWorktreeComplement(gitCommonDir: string, ownName: string): string[] | null {
   const git = requireAbsolute('the git common dir', gitCommonDir);
-  if (!COMPLEMENT_NAME.test(ownName) || ownName === '.' || ownName === '..' || GLOB_CHARS.test(git)) return null;
+  if (!COMPLEMENT_NAME.test(ownName) || ownName === '.' || ownName === '..' || !PLAIN_PATH.test(git)) return null;
   const root = path.join(git, 'worktrees');
   const out: string[] = [];
   for (let i = 0; i < ownName.length; i++) {

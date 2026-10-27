@@ -155,3 +155,5 @@ test-results/
 
 # The CRLF hashbang fixture of scripts/__tests__/hashbangLf.test.mjs, left by an interrupted run
 scripts/__tests__/.hashbang-lf-*/
+# The fence live test's folders (src/main/agents/__tests__/workerFenceWorktrees.os.test.ts)
+.wmux-fence-live-*/

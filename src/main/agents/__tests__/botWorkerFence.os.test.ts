@@ -487,6 +487,25 @@ describe.skipIf(isWin)('the self-test', () => {
     expect(flaky.capable && flaky.selfTest.ok).toBe(true);
   });
 
+  it('a pass whose pattern run did not finish is kept a few minutes, then tried again', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    let runs = 0;
+    const d = { exe: () => EXE, platform: 'darwin' as const, probe: async () => ({ ok: true as const, version: '2.1.311' }), selfTest: async () => { runs += 1; return runs === 1 ? { ok: true as const, patternsRetry: true as const } : { ok: true as const, worktreePatterns: true as const }; } };
+    try {
+      await workerFenceSupport(d);
+      await workerFenceSupport(d);
+      expect(runs).toBe(1);
+      vi.setSystemTime(Date.now() + WORKER_FENCE_SELF_TEST_RETRY_MS + 1);
+      const after = await workerFenceSupport(d);
+      expect(runs).toBe(2);
+      expect(after.capable && after.selfTest).toEqual({ ok: true, worktreePatterns: true });
+      await workerFenceSupport(d);
+      expect(runs).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('an attended line asks for no fence support at all', async () => {
     expect(await workerFenceSupportFor('claude -p hi', wt, { probe: async () => { throw new Error('probed'); } })).toBeUndefined();
     expect(await workerFenceSupportFor('ls -la', wt)).toBeUndefined();
@@ -593,6 +612,10 @@ describe.skipIf(isWin)('the worktree patterns on macOS', () => {
       expect(await run(body)).toEqual({ ok: true });
       expect(logs).toEqual([expect.stringMatching(why)]);
     }
+    // A pattern run that did not finish is tried again later.
+    const slow = path.join(root, 'fake-slow');
+    fs.writeFileSync(slow, '#!/bin/sh\ntouch ran\nif [ -f .git ]; then exec sleep 30; fi\n', { mode: 0o755 });
+    expect(await runWorkerFenceSelfTest(slow, { dir, runtime: RUNTIME, timeoutMs: 1_500, platform: 'darwin', log: () => undefined, paneEnv: async () => ({ PATH: '/usr/bin:/bin' }) })).toEqual({ ok: true, patternsRetry: true });
     // The plain run failing fails the self-test, as before; elsewhere there is no second run.
     const none = path.join(root, 'fake-none');
     fs.writeFileSync(none, '#!/bin/sh\nexit 1\n', { mode: 0o755 });

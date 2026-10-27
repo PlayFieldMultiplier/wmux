@@ -1,8 +1,8 @@
 // The worktree patterns against a real claude on macOS: a fenced worker in a
 // linked worktree commits on its own branch, and cannot write a sibling
 // worktree's git folder or make a new one. Runs only where WMUX_TEST_CLAUDE
-// names a claude (2.1.307 or later); it uses a home and config folder of its
-// own and a local stand-in for the Messages API, no sign-in.
+// names a claude (measured on 2.1.311); it uses a home and config folder of
+// its own and a local stand-in for the Messages API, no sign-in.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync, spawn } from 'node:child_process';
 import * as fs from 'node:fs';

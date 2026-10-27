@@ -136,7 +136,10 @@ describe.skipIf(process.platform === 'win32')('the worktree patterns (macOS)', (
     for (const name of ['task 1', 'tâche', 'a+b', 'a/b', '.', '..', '']) expect(workerFenceWorktreeComplement(GIT, name), name).toBeNull();
     expect(workerFenceWorktreeComplement(path.resolve('/Users/me/my [repo] (copy)/.git'), 'task-1')).toBeNull();
     expect(workerFenceWorktreeComplement(path.resolve('/Users/me/a*b/.git'), 'task-1')).toBeNull();
-    expect(workerFenceWorktreeComplement(path.resolve('/Users/me/my repo (copy)/.git'), 'task-1')).not.toBeNull();
+    expect(workerFenceWorktreeComplement(path.resolve('/Users/me/my repo (copy)/.git'), 'task-1')).toBeNull();
+    expect(workerFenceWorktreeComplement(path.resolve('/Users/me/c++/.git'), 'task-1')).toBeNull();
+    expect(workerFenceWorktreeComplement(path.resolve('/Users/me/코딩/.git'), 'task-1')).toBeNull();
+    expect(workerFenceWorktreeComplement(path.resolve('/Users/me/my repo_2.0/.git'), 'task-1')).not.toBeNull();
     expect(() => workerFenceWorktreeComplement('rel/.git', 'task-1')).toThrow();
   });
 });
