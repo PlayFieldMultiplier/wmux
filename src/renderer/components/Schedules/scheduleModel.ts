@@ -24,6 +24,8 @@ export interface ScheduleForm {
   /** Not editable in v1, but carried through an edit: the daemon replaces the
    *  whole policy on update, so dropping it would reset it to the default. */
   maxRunMinutes: string;
+  /** Retry once after a temporary provider error (the global setting allowing). */
+  retryTransientErrors: boolean;
   mode: AutomationPermissionMode;
   toolsText: string;
   /**
@@ -68,6 +70,7 @@ export function emptyForm(): ScheduleForm {
     name: '', prompt: '', cwd: '', agent: 'claude', accountId: '',
     weekdays: WEEKDAYS.slice(), time: '09:00', model: '', effort: '',
     graceMinutes: String(AUTOMATION_DEFAULTS.graceMinutes), awaitTimeoutMinutes: '', maxRunMinutes: '',
+    retryTransientErrors: true,
     mode: defaultModeFor('claude'), toolsText: '',
     browserWorkspaceId: '', browserPaneId: '',
   };
@@ -87,6 +90,7 @@ export function formFromAutomation(a: Automation): ScheduleForm {
     graceMinutes: String(a.trigger.graceMinutes),
     awaitTimeoutMinutes: a.policy.awaitTimeoutMinutes !== undefined ? String(a.policy.awaitTimeoutMinutes) : '',
     maxRunMinutes: a.policy.maxRunMinutes !== undefined ? String(a.policy.maxRunMinutes) : '',
+    retryTransientErrors: a.policy.retryTransientErrors !== false,
     mode: a.permission.mode,
     toolsText: (a.permission.allowedTools ?? []).join(', '),
     browserWorkspaceId: a.action.browserIdentity?.workspaceId ?? '',
@@ -164,10 +168,11 @@ export function draftFromForm(form: ScheduleForm): AutomationDraft {
       ...(effort ? { effort } : {}),
       prompt: form.prompt,
     },
-    ...(form.awaitTimeoutMinutes || form.maxRunMinutes ? {
+    ...(form.awaitTimeoutMinutes || form.maxRunMinutes || !form.retryTransientErrors ? {
       policy: {
         ...(form.awaitTimeoutMinutes ? { awaitTimeoutMinutes: Number(form.awaitTimeoutMinutes) } : {}),
         ...(form.maxRunMinutes ? { maxRunMinutes: Number(form.maxRunMinutes) } : {}),
+        ...(!form.retryTransientErrors ? { retryTransientErrors: false as const } : {}),
       },
     } : {}),
   };

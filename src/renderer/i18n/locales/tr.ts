@@ -682,4 +682,16 @@ export const tr = {
   'worktask.cleanup.detail.orphanMeta': 'Yalnızca görev kaydı kaldı, worktree yok (bir kaldırma işlemi yarıda kesildi) — kontrol edin, sonra silin.',
   'worktask.cleanup.detail.diskMissing': 'Worktree diskte yok (wmux dışında silindi veya çökme) — temizlemek için görevi kapatın.',
   'botsPage.guest.readNotice': "Bundan sonra harici bir bot bu konuşmadaki mesajları okuyabilir ve buraya yazabilir. Eklenmeden önce söylenenleri asla görmez.",
+
+  // Scheduled runs: one retry after a temporary provider error
+  'claudeIntegration.scheduledRetry': "Geçici bir hatadan sonra zamanlanmış çalıştırmaları yeniden dene",
+  'claudeIntegration.scheduledRetryDesc': "Zamanlanmış bir çalıştırmanın turu ağ veya sağlayıcı sunucu hatasıyla başarısız olursa 5 dakika bekle ve bir devam mesajı gönder. Varsayılan olarak açık; her zamanlama kapatabilir.",
+  'claudeIntegration.scheduledRetryUnknown': "Henüz bilinmiyor: wmux arka plan hizmeti bekleniyor.",
+  'schedules.retryTransient': "Geçici bir hatadan sonra bir kez yeniden dene",
+  'schedules.retryTransientHint': "Ağ veya sağlayıcı sunucu hatasında 5 dakika bekle ve bir devam mesajı gönder. İstem yeniden gönderilmez.",
+  'schedules.retryTransientGlobalHint': "Yalnızca Ayarlar → Claude entegrasyonu altında “Geçici bir hatadan sonra zamanlanmış çalıştırmaları yeniden dene” açıkken geçerlidir.",
+  'schedules.state.retryWaiting': "Bekliyor: geçici bir sağlayıcı hatasından sonra yeniden denenecek ({minutes} dk sonra)",
+  'schedules.reason.agent_error_retried_once': "bir yeniden denemeden sonra yine ajan hatası",
+  'schedules.reason.agent_error_retry_blocked': "ajan hatası; yeniden deneme gönderilemedi",
+  'schedules.reason.agent_error_retry_interrupted': "ajan hatası; yeniden denenmedi, wmux yeniden başladı",
 } as const;

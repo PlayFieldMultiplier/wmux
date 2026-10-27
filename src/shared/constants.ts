@@ -813,6 +813,8 @@ export const IPC = {
   AUTOMATION_GRANT: 'automation:grant',
   AUTOMATION_RUN_NOW: 'automation:runNow',
   AUTOMATION_CANCEL_RUN: 'automation:cancelRun',
+  AUTOMATION_SETTINGS: 'automation:settings',
+  AUTOMATION_SET_SETTINGS: 'automation:setSettings',
   AUTOMATION_PUSH: 'automation:push',
   AUTOMATION_OPEN_RUN: 'automation:openRun',
   AUTOMATION_TOAST_LABELS: 'automation:toastLabels',

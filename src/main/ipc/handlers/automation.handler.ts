@@ -13,6 +13,8 @@ import {
   type AutomationPermissionMode,
   type AutomationRunNowResult,
   type AutomationRun,
+  type AutomationSettings,
+  type AutomationSettingsResult,
 } from '../../../shared/automation';
 import {
   browserIdentitySources,
@@ -432,6 +434,24 @@ export function registerAutomationHandlers(
     return a.cancelRun({ runId });
   });
 
+  handle(IPC.AUTOMATION_SETTINGS, async (): Promise<AutomationSettings | null> => {
+    const a = api();
+    if (!a) return null;
+    try {
+      return await a.settings();
+    } catch {
+      return null;
+    }
+  });
+
+  handle(IPC.AUTOMATION_SET_SETTINGS, async (settings: unknown): Promise<AutomationSettingsResult> => {
+    const a = api();
+    if (!a) return refuse();
+    const s = settings as Record<string, unknown> | null;
+    if (!s || typeof s !== 'object' || typeof s['retryTransientErrors'] !== 'boolean') return refuse('invalid request');
+    return a.setSettings({ retryTransientErrors: s['retryTransientErrors'] });
+  });
+
   const onLabels = (_event: Electron.IpcMainEvent, input: unknown): void => {
     setAutomationUiLocale(input);
   };
@@ -442,7 +462,7 @@ export function registerAutomationHandlers(
     for (const channel of [
       IPC.AUTOMATION_LIST, IPC.AUTOMATION_RUNS, IPC.AUTOMATION_SNAPSHOT, IPC.AUTOMATION_CREATE,
       IPC.AUTOMATION_UPDATE, IPC.AUTOMATION_REMOVE, IPC.AUTOMATION_SET_ENABLED, IPC.AUTOMATION_GRANT,
-      IPC.AUTOMATION_RUN_NOW, IPC.AUTOMATION_CANCEL_RUN,
+      IPC.AUTOMATION_RUN_NOW, IPC.AUTOMATION_CANCEL_RUN, IPC.AUTOMATION_SETTINGS, IPC.AUTOMATION_SET_SETTINGS,
     ]) {
       ipcMain.removeHandler(channel);
     }

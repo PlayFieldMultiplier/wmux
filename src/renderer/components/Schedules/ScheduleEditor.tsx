@@ -12,6 +12,7 @@ import Field from '../ui/Field';
 import Input from '../ui/Input';
 import Select from '../ui/Select';
 import SegmentedControl from '../ui/SegmentedControl';
+import Switch from '../ui/Switch';
 import Popover from '../ui/Popover';
 import { Icon, IconChevron, IconClock } from '../icons';
 import { FOCUS_RING } from '../focusRing';
@@ -500,6 +501,17 @@ export default function ScheduleEditor({ original, review, accounts, initial, pi
               <Input inputMode="numeric" value={form.awaitTimeoutMinutes} onChange={(e) => set('awaitTimeoutMinutes', e.target.value)} data-schedule-await />
             </Field>
           </div>
+          <Field
+            label={t('schedules.retryTransient')}
+            description={`${t('schedules.retryTransientHint')} ${t('schedules.retryTransientGlobalHint')}`}
+          >
+            <Switch
+              checked={form.retryTransientErrors}
+              onCheckedChange={(on) => set('retryTransientErrors', on)}
+              aria-label={t('schedules.retryTransient')}
+              data-schedule-retry-transient
+            />
+          </Field>
           {moreProblem && <p className="ui-row-error" role="alert" data-schedule-problem="more">{moreProblem}</p>}
         </div>
       )}

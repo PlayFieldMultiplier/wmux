@@ -17,6 +17,7 @@ import path from 'node:path';
 import { atomicReadJSONSync, atomicWriteJSON } from '../util/atomicWrite';
 import {
   AUTOMATION_AGENT_CAPS,
+  AUTOMATION_DEFAULT_SETTINGS,
   AUTOMATION_DEFAULTS,
   AUTOMATION_FINAL_RUN_STATES,
   type Automation,
@@ -26,6 +27,7 @@ import {
   type AutomationRunDetail,
   type AutomationRunReason,
   type AutomationRunState,
+  type AutomationSettings,
 } from '../../shared/automation';
 import { isPermissionMode, validateAllowedTools, validateBrowserIdentity, validateDraft } from './draft';
 
@@ -38,6 +40,7 @@ export interface AutomationsFileState {
   version: 1;
   automations: Automation[];
   attention: AutomationAttention[];
+  settings: AutomationSettings;
 }
 
 export interface AutomationRunsFileState {
@@ -61,6 +64,9 @@ const RUN_DETAILS: ReadonlySet<string> = new Set<AutomationRunDetail>([
   'browser_policy_denied',
   'browser_consent_unattended',
   'previous_session_open',
+  'retried_once',
+  'retry_blocked',
+  'retry_interrupted',
 ]);
 const ATTENTION_KINDS: ReadonlySet<string> = new Set<AutomationAttentionKind>(['proposed', 'grant-raised', 'needs-regrant']);
 
@@ -144,6 +150,7 @@ export function coerceRun(raw: unknown): AutomationRun | null {
   const agentSessionId = typeof o['agentSessionId'] === 'string' && o['agentSessionId'].length <= 256 ? o['agentSessionId'] : undefined;
   const startedAt = num(o['startedAt']);
   const endedAt = num(o['endedAt']);
+  const retryAt = num(o['retryAt']);
   const runIdentity = o['browserIdentity'] === undefined ? null : validateBrowserIdentity(o['browserIdentity']);
   return {
     id,
@@ -160,6 +167,8 @@ export function coerceRun(raw: unknown): AutomationRun | null {
     ...(startedAt !== undefined ? { startedAt } : {}),
     ...(endedAt !== undefined ? { endedAt } : {}),
     ...(o['hasSnapshot'] === true ? { hasSnapshot: true } : {}),
+    ...(retryAt !== undefined ? { retryAt } : {}),
+    ...(o['retried'] === true ? { retried: true } : {}),
     ...(runIdentity?.ok ? { browserIdentity: runIdentity.value } : {}),
   };
 }
@@ -202,7 +211,12 @@ export function loadAutomations(wmuxDir: string): AutomationsFileState {
     .map(coerceAttention)
     .filter((x): x is AutomationAttention => x !== null)
     .slice(-ATTENTION_CAP);
-  return { version: 1, automations, attention };
+  const rawSettings = raw?.['settings'] && typeof raw['settings'] === 'object' ? raw['settings'] as Record<string, unknown> : {};
+  const settings: AutomationSettings = {
+    retryTransientErrors: typeof rawSettings['retryTransientErrors'] === 'boolean'
+      ? rawSettings['retryTransientErrors'] : AUTOMATION_DEFAULT_SETTINGS.retryTransientErrors,
+  };
+  return { version: 1, automations, attention, settings };
 }
 
 export function loadRuns(wmuxDir: string): AutomationRunsFileState {
