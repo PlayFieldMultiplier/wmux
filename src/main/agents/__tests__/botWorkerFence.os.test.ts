@@ -568,21 +568,57 @@ describe.skipIf(isWin)('the worktree patterns on macOS', () => {
     expect(logs).toHaveLength(1);
   });
 
-  it('the self-test passes with them only when the own git folder takes a write and a sibling\'s does not', async () => {
-    const run = async (body: string) => {
+  it('the self-test applies them only when claude opened the common dir, its own git folder took a write and no other did', async () => {
+    const logs: string[] = [];
+    const run = async (linked: string) => {
       const fake = path.join(root, `fake-${Math.random().toString(36).slice(2)}`);
-      fs.writeFileSync(fake, `#!/bin/sh\ntouch ran\n${body}\n`, { mode: 0o755 });
-      return runWorkerFenceSelfTest(fake, { dir, runtime: RUNTIME, timeoutMs: 10_000, platform: 'darwin', paneEnv: async () => ({ PATH: '/usr/bin:/bin' }) });
+      // The plain run has no `.git` in its worktree; the macOS run does.
+      fs.writeFileSync(fake, `#!/bin/sh\ntouch ran\nif [ -f .git ]; then\n${linked || ':'}\nfi\n`, { mode: 0o755 });
+      return runWorkerFenceSelfTest(fake, { dir, runtime: RUNTIME, timeoutMs: 10_000, platform: 'darwin', log: (l) => logs.push(l), paneEnv: async () => ({ PATH: '/usr/bin:/bin' }) });
     };
-    const own = `../git/worktrees/${WORKER_FENCE_SELF_TEST_WORKTREE}/probe`;
-    expect(await run(`touch ${own} && touch own`)).toEqual({ ok: true, worktreePatterns: true });
-    expect(await run(`touch ${own} && touch own; touch ../git/worktrees/sibling/probe`)).toEqual({ ok: false, reason: 'a command wrote another worktree\'s git folder, so the worktree patterns are not holding' });
-    expect(await run(`touch ${own} && touch own; mkdir ../git/worktrees/added`)).toMatchObject({ ok: false });
-    expect(await run('')).toEqual({ ok: false, reason: 'a command could not write its own worktree\'s git folder under the worktree patterns' });
-    // Elsewhere the self-test is the plain one.
-    const fake = path.join(root, 'fake-plain');
-    fs.writeFileSync(fake, '#!/bin/sh\ntouch ran\n', { mode: 0o755 });
-    expect(await runWorkerFenceSelfTest(fake, { dir, runtime: RUNTIME, timeoutMs: 10_000, platform: 'linux', paneEnv: async () => ({ PATH: '/usr/bin:/bin' }) })).toEqual({ ok: true });
+    const git = '../repo/.git';
+    const control = `touch ${git}/control && touch control`;
+    const own = `touch ${git}/worktrees/${WORKER_FENCE_SELF_TEST_WORKTREE}/probe && touch own`;
+    expect(await run(`${control}; ${own}`)).toEqual({ ok: true, worktreePatterns: true });
+    expect(logs).toEqual([]);
+    // One that does not hold leaves them out, and the workers keep their tools.
+    for (const [body, why] of [
+      [`${control}; ${own}; touch ${git}/worktrees/sibling/probe`, /wrote another worktree's git folder/],
+      [`${control}; ${own}; touch ${git}/worktrees/WMUX/probe`, /wrote another worktree's git folder/],
+      [`${control}; ${own}; mkdir ${git}/worktrees/added`, /wrote another worktree's git folder/],
+      [own, /did not open the linked worktree's git folder/],
+      [control, /could not write its own worktree's git folder/],
+    ] as const) {
+      logs.length = 0;
+      expect(await run(body)).toEqual({ ok: true });
+      expect(logs).toEqual([expect.stringMatching(why)]);
+    }
+    // The plain run failing fails the self-test, as before; elsewhere there is no second run.
+    const none = path.join(root, 'fake-none');
+    fs.writeFileSync(none, '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+    expect(await runWorkerFenceSelfTest(none, { dir, runtime: RUNTIME, timeoutMs: 10_000, platform: 'darwin', paneEnv: async () => ({ PATH: '/usr/bin:/bin' }) })).toMatchObject({ ok: false });
+    const plain = path.join(root, 'fake-plain');
+    fs.writeFileSync(plain, '#!/bin/sh\ntouch ran\n', { mode: 0o755 });
+    expect(await runWorkerFenceSelfTest(plain, { dir, runtime: RUNTIME, timeoutMs: 10_000, platform: 'linux', paneEnv: async () => ({ PATH: '/usr/bin:/bin' }) })).toEqual({ ok: true });
+    expect(fs.readdirSync(path.join(dir, 'factory', 'fence-self-test'))).toEqual([]);
+  });
+
+  it('a launch whose denies would grow too large keeps to the snapshot', () => {
+    // Hundreds of branches: one deny each, beside the patterns.
+    const head = git(repo, 'rev-parse', 'HEAD').trim();
+    const packed = Array.from({ length: 700 }, (_, i) => `${head} refs/heads/wmux/a-rather-long-branch-name-to-fill-the-profile-${i}`).join('\n');
+    fs.appendFileSync(path.join(repo, '.git', 'packed-refs'), `${packed}\n`);
+    const logged: string[] = [];
+    const warn = console.warn;
+    console.warn = (l: string) => { logged.push(l); };
+    try {
+      const d = denyOf({ ...FULL, selfTest: { ok: true, worktreePatterns: true } });
+      expect(d.filter((p) => p.includes('*') && p.includes(`${path.sep}worktrees${path.sep}`))).toEqual([]);
+      expect(d).toContain(path.join(common(), 'worktrees', 'task-2'));
+    } finally {
+      console.warn = warn;
+    }
+    expect(logged).toEqual([expect.stringMatching(/too large/)]);
   });
 });
 

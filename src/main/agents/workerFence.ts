@@ -238,6 +238,10 @@ export function workerFenceGitDenies(input: Pick<WorkerFenceInput, 'gitCommonDir
  *  ("profile too large", and then no command runs). wmux names a task's
  *  folder in at most 33 characters, about 170 patterns. */
 export const WORKER_FENCE_COMPLEMENT_MAX = 200;
+/** The most a launch's denied write paths may take, as JSON, with the
+ *  patterns: the profile's limit is its size. 799 patterns, 131 KB of them,
+ *  applied in the measurement above. */
+export const WORKER_FENCE_DENY_WRITE_MAX_BYTES = 64 * 1024;
 
 const COMPLEMENT_NAME = /^[0-9A-Za-z._-]+$/;
 /** What Claude Code's glob syntax could read in the literal part of a path. */
@@ -266,9 +270,11 @@ function classWithout(c: string): string {
  * after launch. These globs deny every folder under `worktrees/` but the
  * worker's own: a name that differs from it at some position (a letter,
  * digit, `.`, `_` or `-` other than its own there), a shorter name it
- * starts with, and a longer one that starts with it. Classes take ranges
- * only: a negated class is not one, and a long list of characters breaks
- * the profile. Null (keep to the snapshot) when the name has another
+ * starts with, and a longer one that starts with it. Every one is a glob
+ * (a shorter name's last character in a class), read the same way: without
+ * regard to case, the folder and what it holds. Classes take ranges only: a
+ * negated class is not one, and a long list of characters breaks the
+ * profile. Null (keep to the snapshot) when the name has another
  * character, the common dir's path has one a glob would read, or the
  * patterns would pass WORKER_FENCE_COMPLEMENT_MAX. What it leaves: a name
  * with another character where it differs, or one that differs from the
@@ -287,7 +293,7 @@ export function workerFenceWorktreeComplement(gitCommonDir: string, ownName: str
     if (c !== '_') out.push(`${head}_*`);
     if (c !== '-') out.push(`${head}-*`);
   }
-  for (let i = 1; i < ownName.length; i++) out.push(ownName.slice(0, i));
+  for (let i = 1; i < ownName.length; i++) out.push(`${ownName.slice(0, i - 1)}[${ownName[i - 1]}]`);
   out.push(`${ownName}?*`);
   return out.length > WORKER_FENCE_COMPLEMENT_MAX ? null : out.map((p) => `${root}/${p}`);
 }

@@ -66,9 +66,16 @@ describe.skipIf(!live)('the worktree patterns, live', () => {
       fs.writeFileSync(settings, JSON.stringify(fence.settings));
       const worktrees = path.join(facts.gitCommonDir, 'worktrees');
       const committed = path.join(wt, 'committed');
+      const control = path.join(wt, 'control');
+      // Made after launch, so no snapshot names them: one per kind of pattern.
+      const later = ['task', 'TASK-', 'task-12', 'task_1', '.x', 'zz', 'Task-9'];
+      for (const n of later) fs.mkdirSync(path.join(worktrees, n));
       api = await __startScriptedApiForTesting([
         `git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m work && touch ${shellQuote(committed)}`,
+        // The common dir is open to commands (claude's own rule for a linked worktree).
+        `touch ${shellQuote(path.join(facts.gitCommonDir, 'control'))} && touch ${shellQuote(control)}`,
         `touch ${shellQuote(path.join(worktrees, 'task-2', 'probe'))}`,
+        ...later.map((n) => `touch ${shellQuote(path.join(worktrees, n, 'probe'))}`),
         `mkdir ${shellQuote(path.join(worktrees, 'added'))}`,
       ].join('; '));
       const env = {
@@ -82,7 +89,9 @@ describe.skipIf(!live)('the worktree patterns, live', () => {
       });
       expect(fs.existsSync(committed)).toBe(true);
       expect(git(wt, 'log', '-1', '--format=%s').trim()).toBe('work');
+      expect(fs.existsSync(control)).toBe(true);
       expect(fs.existsSync(path.join(worktrees, 'task-2', 'probe'))).toBe(false);
+      for (const n of later) expect(fs.existsSync(path.join(worktrees, n, 'probe')), n).toBe(false);
       expect(fs.existsSync(path.join(worktrees, 'added'))).toBe(false);
     } finally {
       api?.close();

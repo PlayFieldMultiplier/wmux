@@ -88,13 +88,11 @@ describe('the git denies', () => {
 });
 
 /** Whether a folder name under `worktrees/` falls under one of the patterns,
- *  read the way the macOS sandbox was measured to read them: a pattern with
- *  `*`, `?` or `[` is a glob of one path segment, matched without regard to
- *  case; any other is the folder and what it holds. */
+ *  read the way the macOS sandbox was measured to read them: a glob of one
+ *  path segment, matched without regard to case. */
 function deniedName(patterns: readonly string[], root: string, name: string): boolean {
   return patterns.some((full) => {
     const p = full.slice(root.length + 1);
-    if (!/[*?[]/.test(p)) return p.toLowerCase() === name.toLowerCase();
     const re = p.replace(/\[[^\]]*\]|\*|\?|[^[*?]+/g, (t) => (t === '*' ? '[^/]*' : t === '?' ? '[^/]' : t.startsWith('[') ? t : t.replace(/[.\\^$+(){}|-]/g, '\\$&')));
     return new RegExp(`^${re}$`, 'i').test(name);
   });
@@ -122,7 +120,7 @@ describe.skipIf(process.platform === 'win32')('the worktree patterns (macOS)', (
     expect(pats).toEqual([
       `${root}/[0-9A-VX-Za-vx-z]*`, `${root}/[.]*`, `${root}/_*`, `${root}/-*`,
       `${root}/w[0-9A-Za-z]*`, `${root}/w_*`, `${root}/w-*`,
-      `${root}/w`,
+      `${root}/[w]`,
       `${root}/w.?*`,
     ]);
     // A digit and the class's ends: a, z, 0, 9.
