@@ -66,6 +66,7 @@ import {
   validateDraft,
 } from './draft';
 import { buildAutomationCommand, buildAutomationEnv, resolveAccountEnv } from './launch';
+import { FolderTrustRefusedError } from '../folderTrustState';
 import { TRANSIENT_RETRY_DELAY_MS, TRANSIENT_RETRY_READY_GRACE_MS } from './transientFailure';
 import {
   ATTENTION_CAP,
@@ -191,6 +192,8 @@ interface LiveRun {
   lastRunningAt?: number;
   lingerUntil?: number;
   processExitAt?: number;
+  /** An Enter of the submit retry was refused at a folder-trust prompt. */
+  folderTrustRefused?: boolean;
   /** The agent the prompt was delivered to: a continue may reach only this process. */
   incarnationId?: string;
   /** First pass that found the held run's continue due: the not-ready grace runs from here. */
@@ -1023,7 +1026,8 @@ export class AutomationEngine {
     }
     if (result !== 'sent') {
       this.ports.log('warn', `[automation] run ${run.id} prompt delivery ${result}${run.detail ? ` (${run.detail})` : ''}`);
-      await this.terminate(run, 'failed', 'launch_failed');
+      // A folder-trust prompt blocks the run the way it does at launch.
+      await this.terminate(run, 'failed', result === 'folder_trust' || live.folderTrustRefused ? 'first_run_blocked' : 'launch_failed');
       return;
     }
     live.deliveredAt = this.now();
@@ -1162,7 +1166,14 @@ export class AutomationEngine {
       if (enters < SUBMIT_RETRY_MAX && this.now() - lastEnterAt >= SUBMIT_RETRY_GAP_MS) {
         try {
           await this.ports.sendKey(live.ptyId, '\r');
-        } catch {
+        } catch (err) {
+          // A screen that cannot rule out a folder-trust prompt is waited out
+          // like a busy one, within the deadline; the prompt itself ends it.
+          if (err instanceof FolderTrustRefusedError && err.verdict === 'unknown') {
+            await this.sleep(READY_POLL_MS);
+            continue;
+          }
+          if (err instanceof FolderTrustRefusedError) live.folderTrustRefused = true;
           return 'submit_unconfirmed';
         }
         enters++;

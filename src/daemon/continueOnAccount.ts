@@ -32,6 +32,7 @@ import type { AgentStopResult } from './agentStop';
 
 export type ContinueOnAccountCode =
   | 'no_session'
+  | 'folder_trust'
   | 'unsupported'
   | 'not_claude'
   | 'unknown_session'
@@ -176,6 +177,9 @@ export interface ContinueOnAccountDeps {
   promptWaitMs?: number;
   /** A chat-v2 record owns the pane, or a move into chat holds it. */
   chatOwnsPane?: (id: string) => boolean;
+  /** The pane is on an agent's folder-trust prompt: a person's move, so
+   *  only a prompt seen on screen stops it. Asked before the stop. */
+  atFolderTrust?: (id: string) => Promise<boolean>;
 }
 
 export async function continueOnAccount(deps: ContinueOnAccountDeps, id: string, configDir: string): Promise<ContinueOnAccountResult> {
@@ -210,6 +214,9 @@ async function run(deps: ContinueOnAccountDeps, id: string, configDir: string): 
     return { ok: false, code: 'invalid_account' };
   }
   if (!deps.turnClosed(id)) return { ok: false, code: 'turn_open' };
+  // A folder-trust prompt in the pane is the person's to answer: refused
+  // before anything is stopped or copied.
+  if (await deps.atFolderTrust?.(id)) return { ok: false, code: 'folder_trust' };
 
   // Stop first: Claude may still write to the transcript as it exits. The
   // turn is checked again right before the first signal.

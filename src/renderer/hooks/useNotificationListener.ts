@@ -1066,7 +1066,7 @@ export function useNotificationListener() {
     // taskPtyRegistry에 등록해 둔 ptyId→태스크로 토스트 + [재발사]. 재발사는 main이
     // prompt.md 실존을 검사(파일 소실 시 사유), 실제 inject는 pty.write. 상태 영속
     // 없음(§3 G8 — 리부트로 토스트 소실 수용).
-    const unsubExhausted = window.electronAPI.notification.onInitialCmdExhausted((ptyId) => {
+    const unsubExhausted = window.electronAPI.notification.onInitialCmdExhausted((ptyId, reason) => {
       if (!ptyId) return;
       const st = useStore.getState();
       const entry = st.taskPtyRegistry[ptyId];
@@ -1078,7 +1078,7 @@ export function useNotificationListener() {
       const canRefire = Boolean(worktreePath && initialCommand);
       st.pushToast({
         level: 'warn',
-        message: `태스크 "${entry.title}": 프롬프트가 발사되지 않았습니다(에이전트 페인이 비어 있을 수 있음).`,
+        message: `태스크 "${entry.title}": 프롬프트가 발사되지 않았습니다${reason ? `: ${reason}` : '(에이전트 페인이 비어 있을 수 있음)'}.`,
         ...(canRefire
           ? {
               action: {

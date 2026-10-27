@@ -24,6 +24,7 @@ import { WSL_RPC_TIMEOUT_MS } from '../../shared/wsl';
 import { FanOutService } from './FanOutService';
 import { createDaemonLaunchProbe } from './fanoutLaunchProbe';
 import { createWorkerTempDir, getWorkerTempDirSweeper, removeWorkerTempDir } from './fanoutTempDir';
+import { folderTrustLaunchRefusal } from '../folderTrustCheck';
 
 type GetWindow = () => BrowserWindow | null;
 
@@ -94,6 +95,20 @@ const FIRST_RUN_READ_LINES = 40;
 /** A viewport we cannot get quickly is a poll we skip, not a spawn we stall. */
 const FIRST_RUN_READ_TIMEOUT_MS = 1_000;
 
+/** The first-run watch's keystroke, through the daemon that owns the session.
+ *  The dismiss key is Escape, which (as for any key) stops only at a
+ *  folder-trust prompt the daemon sees, not at a screen it cannot read. */
+export async function sendFirstRunKey(
+  dc: Pick<DaemonClient, 'isConnected' | 'folderTrustState' | 'writeToSession'> | null,
+  ptyId: string,
+  sequence: string,
+): Promise<void> {
+  if (!dc?.isConnected) throw new Error('daemon not connected');
+  const trustRefusal = await folderTrustLaunchRefusal(dc, ptyId, 'first-run key', { refuseUnknown: false });
+  if (trustRefusal) throw new Error(trustRefusal);
+  dc.writeToSession(ptyId, sequence);
+}
+
 export function createFanOutService(
   getDaemonClient: () => DaemonClient | null,
   getWindow: GetWindow,
@@ -154,11 +169,7 @@ export function createFanOutService(
         const text = res && typeof res === 'object' ? res.text : undefined;
         return typeof text === 'string' ? text : '';
       },
-      sendKey: async (ptyId: string, sequence: string): Promise<void> => {
-        const dc = getDaemonClient();
-        if (!dc?.isConnected) throw new Error('daemon not connected');
-        dc.writeToSession(ptyId, sequence);
-      },
+      sendKey: (ptyId: string, sequence: string): Promise<void> => sendFirstRunKey(getDaemonClient(), ptyId, sequence),
     },
     // #1919 — did the worker's agent actually start? `false` only on the
     // daemon's positive evidence of absence (see fanoutLaunchProbe.ts).

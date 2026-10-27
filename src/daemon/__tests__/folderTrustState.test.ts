@@ -4,7 +4,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { folderTrustState, type FolderTrustDeps, type FolderTrustSession } from '../folderTrustState';
+import { folderTrustRefusal, folderTrustState, type FolderTrustDeps, type FolderTrustSession } from '../folderTrustState';
 import { looksLikeFolderTrustDialog } from '../approvals/approvalKeystrokes';
 import { enqueueSnapshotJob, generateTextSnapshot } from '../HeadlessSnapshot';
 import { RingBuffer } from '../RingBuffer';
@@ -269,5 +269,49 @@ describe('folderTrustState', () => {
       unblock?.();
       await busy;
     }
+  });
+});
+
+describe('folderTrustRefusal', () => {
+  it("refuses on 'trust' with one log line, and on 'unknown' only for an automated writer", async () => {
+    const lines: string[] = [];
+    const log = (message: string): void => { lines.push(message); };
+    const held = (s: FolderTrustSession) => ({ getSession: () => s });
+    const trust = held(session(frame(CLAUDE), 120, 40));
+    expect(await folderTrustRefusal(trust, 'pty-1', 'scheduled prompt', { refuseUnknown: false, log })).toBe('trust');
+    const muted = held(session(Buffer.from('% '), 120, 40, { bridge: { isMuted: true, outputModes: null, heldOutput: () => null } }));
+    expect(await folderTrustRefusal(muted, 'pty-2', 'chat send', { refuseUnknown: false, log })).toBeNull();
+    expect(await folderTrustRefusal(muted, 'pty-2', 'wake nudge', { refuseUnknown: true, log })).toBe('unknown');
+    const shell = held(session(Buffer.from('% '), 120, 40));
+    expect(await folderTrustRefusal(shell, 'pty-3', 'wake nudge', { refuseUnknown: true, log })).toBeNull();
+    expect(lines).toEqual([
+      '[folder-trust] refused scheduled prompt on pane pty-1: folder-trust trust',
+      '[folder-trust] refused wake nudge on pane pty-2: folder-trust unknown',
+    ]);
+  });
+});
+
+describe("the daemon's writers and their folder-trust policy", () => {
+  // Automated writers stop on 'trust' and 'unknown'; a person's (a chat Stop
+  // or Rewind, Continue on another account, a manual usage-limit Continue, the
+  // first-run sample command) and any Escape only on 'trust'.
+  const src = fs.readFileSync(path.join(__dirname, '..', 'index.ts'), 'utf8');
+
+  it.each([
+    ['a prompt delivery (schedule, run, nudge) by default', "trustRefusal(sessionManager, id, writer, trust.refuseUnknown ?? true, { once: true })"],
+    ['the usage-limit continue: only the armed one', "'usage-limit continue', { refuseUnknown: armed, onRefused: () => { refused = true; } });"],
+    ['the scheduled-run retry continue: unknown too', "'automation retry', { refuseUnknown: true })"],
+    ['both continues through the shared trust-checked delivery', "}, writer, trust);"],
+    ['writeIfUnchanged: all but a line a person asked for', "trustRefusal(sessionManager, sessionId, human ? 'sample command' : 'launch line', !human, { once: true })"],
+    ['an automation key: Escape only at a prompt seen', "trustRefusal(sessionManager, id, 'automation key', sequence !== '\\x1b', { once: true })"],
+    ["a chat Stop or Rewind: only at a prompt seen", 'atFolderTrust: async (id, writer) => (await trustRefusal(sessionManager, id, writer, false)) !== null,'],
+    ['Continue on another account: only at a prompt seen', "(await trustRefusal(sessionManager, sid, 'continue on account', false)) !== null,"],
+    ['the wake worker: the raw verdict', 'folderTrustVerdict: (id) => folderTrustState({ getSession: (sid) => sessionManager.getSession(sid) }, id),'],
+    ['the wake worker forgets a dead pane', "sessionManager.on('session:died', (payload: { id: string }) => channelWakeWorkerRef?.forgetSession(payload.id));"],
+    ['the wake worker forgets a destroyed pane', "sessionManager.on('session:destroyed', (payload: { id: string }) => channelWakeWorkerRef?.forgetSession(payload.id));"],
+    ['the refusal log forgets a dead pane', "sessionManager.on('session:died', (payload: { id: string }) => trustRefusalLogged.delete(payload.id));"],
+    ['the refusal log forgets a destroyed pane', "sessionManager.on('session:destroyed', (payload: { id: string }) => trustRefusalLogged.delete(payload.id));"],
+  ])('%s', (_name, wiring) => {
+    expect(src).toContain(wiring);
   });
 });

@@ -33,6 +33,7 @@ const REFUSAL_KEYS: Record<string, string> = {
   unavailable: 'pane.continueOnAccountUnsupported',
   invalid_account: 'pane.continueOnAccountInvalidAccount',
   shell_busy: 'pane.continueOnAccountShellBusy',
+  folder_trust: 'pane.launchAtFolderTrust',
 };
 
 export function usePaneContinueOnAccount(opts: {

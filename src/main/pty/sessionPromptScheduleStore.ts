@@ -11,9 +11,10 @@ import { randomUUID } from 'node:crypto';
 import { getWmuxDir } from '../../daemon/config';
 import { atomicReadJSONSync, atomicWriteJSON } from '../../daemon/util/atomicWrite';
 import { isAgentSlug, type AgentSlug } from '../../shared/agentIdentity';
-import type {
-  SessionPromptSchedule,
-  SessionPromptScheduleResult,
+import {
+  isSessionPromptScheduleResult,
+  type SessionPromptSchedule,
+  type SessionPromptScheduleResult,
 } from '../../shared/sessionPromptSchedule';
 
 export type {
@@ -100,13 +101,7 @@ function sanitize(raw: unknown): SessionPromptSchedule | null {
   if (typeof o.lastRunAt === 'number' && Number.isFinite(o.lastRunAt)) {
     schedule.lastRunAt = o.lastRunAt;
   }
-  if (
-    o.lastResult === 'sent' ||
-    o.lastResult === 'busy' ||
-    o.lastResult === 'unavailable' ||
-    o.lastResult === 'session_changed' ||
-    o.lastResult === 'error'
-  ) {
+  if (isSessionPromptScheduleResult(o.lastResult)) {
     schedule.lastResult = o.lastResult;
   }
   if (o.deliveryClaim && typeof o.deliveryClaim === 'object' && !Array.isArray(o.deliveryClaim)) {
@@ -336,7 +331,8 @@ export function advanceSessionPromptSchedule(
     lastAttemptAt: now,
     lastResult: result,
   };
-  if (result === 'busy' || result === 'unavailable') return next;
+  // A folder-trust prompt waits for a person; the occurrence stays due.
+  if (result === 'busy' || result === 'unavailable' || result === 'folder_trust') return next;
 
   // An incarnation mismatch is permanent. In particular, repeating schedules
   // must not advance and later target the replacement session.
@@ -344,6 +340,10 @@ export function advanceSessionPromptSchedule(
     next.enabled = false;
     return next;
   }
+  // Only 'sent' and 'error' are left to consume the occurrence: a new result
+  // fails typecheck here until it is decided above.
+  const consumes: 'sent' | 'error' = result;
+  void consumes;
 
   next.lastRunAt = now;
   if (schedule.intervalMinutes && schedule.intervalMinutes > 0) {

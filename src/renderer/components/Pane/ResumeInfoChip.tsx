@@ -12,6 +12,7 @@ import {
 import { applyRoleBinding, type RoleBinding } from '../../../shared/orchestratorRole';
 import { CHATV2_PROVIDER_SESSION_ID } from '../../../shared/chatv2/ipc';
 import { inResumeCwd, resumeCwdUsable, type ResumeShell } from '../../../shared/resumeShell';
+import { toastFolderTrustLaunchRefusal } from '../../utils/folderTrustLaunchToast';
 
 /**
  * Assemble the resume command for a pane from its binding + LIVE cwd
@@ -223,8 +224,9 @@ export default function ResumeInfoChip(props: {
     // only by an explicit keystroke, never automatically).
     if (onSend) onSend(command);
     else {
-      window.electronAPI.pty.writeLaunch(ptyId, command, false).catch((err: unknown) => {
+      window.electronAPI.pty.writeLaunch(ptyId, command, false, 'human').catch((err: unknown) => {
         console.warn('[wmux:resume] the resume line was not typed', String(err));
+        toastFolderTrustLaunchRefusal(err);
       });
     }
     setOpen(false);

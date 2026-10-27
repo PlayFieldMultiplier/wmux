@@ -93,6 +93,7 @@ import { isFanoutWorkerPermissionMode } from '../../shared/workerLaunch';
 import { createWorkerLaunchRecovery } from './workerLaunchRecovery';
 import { LAUNCH_PROBE_CONFIRM_TIMEOUT_MS, LAUNCH_PROBE_TIMEOUT_MS } from '../worktask/fanoutLaunchProbe';
 import type { PermissionMode } from '../../shared/agentResume';
+import { folderTrustLaunchRefusal } from '../folderTrustCheck';
 import { workerFenceSupportFor, type WorkerFenceSupport } from '../agents/botWorkerFence';
 
 /** A resumed worker is checked for an exited agent this often. */
@@ -627,6 +628,7 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
         if (typed) noteGuardedLaunchTyped(sessionId, guarded);
         return typed;
       },
+      folderTrustRefusal: (sessionId) => folderTrustLaunchRefusal(daemon(), sessionId, 'bot worker resume line', { refuseUnknown: true }),
       // The guard decides whether the line is fenced, with the fence support
       // settled here and handed to typeLine.
       prepareLine: (sessionId, line) => workerFenceSupportFor(line, botWorkerSessionRecord(sessionId)?.cwd),

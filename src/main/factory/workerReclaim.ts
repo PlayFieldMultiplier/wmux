@@ -1618,6 +1618,9 @@ export interface WorkerResumePorts {
    *  worker fence's support check), before the last checks that the resume
    *  still stands; its answer goes to typeLine. */
   prepareLine?: (sessionId: string, line: string) => Promise<unknown>;
+  /** Why the pane must not be typed into now (an agent's folder-trust
+   *  prompt, or a screen that cannot rule one out), or null. Absent: not asked. */
+  folderTrustRefusal?: (sessionId: string) => Promise<string | null>;
   /** Each task's launch generation on disk (workerSlots.ts): a resume typed
    *  into the worker's pane is a new launch, recorded before the line is
    *  typed. Absent: not recorded. */
@@ -1909,6 +1912,9 @@ async function resumeOnce(
   if (live.agentProcessAlive !== false && live.recoveredAgentUnconfirmed !== true && live.commandRunning !== false) {
     return refuse('unknown_state', 'what runs in the worker\'s pane cannot be told; open it and resume from there');
   }
+  // Asked before anything moves, and before the last stop checks below.
+  const atTrust = await ports.folderTrustRefusal?.(pane.sessionId);
+  if (atTrust) return refuse('not_typed', `the resume was not typed: ${atTrust}`);
   // A pane a resume opened earlier whose task was not moved to it then.
   if (!(await rebindTaskTo(ports, rec.taskId, workerWorkspaceOf(rec)))) {
     return refuse('not_reopened', 'the task could not be moved to the worker\'s pane; try again');

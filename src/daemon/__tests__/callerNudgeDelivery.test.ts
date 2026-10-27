@@ -59,6 +59,11 @@ describe('deliverCallerNudge', () => {
     vi.useRealTimers();
   });
 
+  it('answers approval_pending with nothing pasted when the pane is at a folder-trust prompt', async () => {
+    const reply = await deliverCallerNudge(LINE, { usageHeld: () => false, input: () => bridge, deliver: async () => 'folder_trust' });
+    expect(reply).toEqual({ result: 'approval_pending', pasted: false });
+  });
+
   it('writes the line and the Enter into a quiet pane', async () => {
     vi.advanceTimersByTime(CALLER_NUDGE_QUIET_MS);
     expect(await run()).toEqual({ result: 'sent', pasted: true });

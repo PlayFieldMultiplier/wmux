@@ -46,6 +46,7 @@ import { isWslShell } from '../../../shared/wslTarget';
 import { getPtyShell } from '../../pty/ptyShellRegistry';
 import { guardBotWorkerSessionText } from '../../agents/codexWorkerGuard';
 import { isBotWorkerSession, noteGuardedLaunchTyped, paneLaunchFolders } from '../../agents/botWorkerMergeGuard';
+import { folderTrustLaunchRefusal } from '../../folderTrustCheck';
 
 const execFileAsync = promisify(execFile);
 
@@ -350,6 +351,10 @@ export function registerWorktaskHandlers(
       } catch (err) {
         return { ok: false as const, error: err instanceof Error ? err.message : String(err) };
       }
+      // A re-fire a person asked for: only a folder-trust prompt on screen
+      // stops it, before a launch is recorded.
+      const trustRefusal = await folderTrustLaunchRefusal(dc, ptyId, 'task re-fire line', { refuseUnknown: false });
+      if (trustRefusal) return { ok: false as const, error: `worktask:refire: ${trustRefusal}` };
       // A task's pane: a new launch of the task, on disk before the line is
       // typed (factory/workerSlots.ts); not recorded, not typed.
       let settleRelaunch: ((typed: boolean) => void) | null;

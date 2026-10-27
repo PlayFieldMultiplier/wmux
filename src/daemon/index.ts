@@ -90,7 +90,7 @@ import { normalizeLivePaneIds } from '../shared/a2aOrphanedTask';
 import { WEB_DEFAULT_PORT, webHostIsLoopback, type WebTlsConfig } from '../shared/web';
 import { generateSnapshotUnqueued, enqueueSnapshotJob, generateTextSnapshot, generateTextSnapshotUnqueued, runSmallSnapshotJob, capTextRowsToFrameBudget, MAX_SCROLLBACK } from './HeadlessSnapshot';
 import { queuedScreenText, queuedTextSnapshot } from './queuedSessionText';
-import { folderTrustState, registerFolderTrustRpc } from './folderTrustState';
+import { FolderTrustRefusedError, folderTrustRefusal, folderTrustState, registerFolderTrustRpc } from './folderTrustState';
 import type { TerminalPty } from '../shared/terminalPty';
 import { serializeSession } from './sessionSerialize';
 import { AwaitingScreenVerifier, AWAITING_NARROW_DIALOG_COLS, questionInFlight, renderPaneScreen, renderPaneTail } from './AwaitingScreenVerifier';
@@ -4970,6 +4970,7 @@ function registerRpcHandlers(
         ? Object.assign(outcome.rows.map((r) => r.text), { undimmed: outcome.rows.map((r) => r.undimmed ?? r.text) })
         : null;
     },
+    atFolderTrust: async (id, writer) => (await trustRefusal(sessionManager, id, writer, false)) !== null,
     agentProcessAlive: async (id, slug) => {
       if (!isAgentSlug(slug)) return false;
       return agentProcessTracker.isAgentRunning(id, slug, (pid) => ProcessMonitor.isRunning(pid));
@@ -5904,14 +5905,25 @@ function registerRpcHandlers(
     id: string, agentSlug: AgentSlug, incarnationId: string, prompt: string, bypassUsageHold = false,
   ): Promise<SessionPromptScheduleResult> => {
     if (!bypassUsageHold && usageLimits?.holds(id)) return 'busy';
-    return deliverPromptToSessionNow(id, agentSlug, incarnationId, prompt, {});
+    return deliverPromptToSessionNow(id, agentSlug, incarnationId, prompt, {}, 'scheduled prompt');
   };
+  // Every caller is automated input (a schedule, a run, a nudge, a usage-limit
+  // continue), so a screen that cannot rule out a folder-trust prompt stops it
+  // too. `writer` names the caller in the refusal's log line.
   const deliverPromptToSessionNow = (
     id: string, agentSlug: AgentSlug, incarnationId: string, prompt: string,
     opts: Pick<ScheduledPromptDeliveryDeps, 'acceptError' | 'authorized' | 'onWrite'>,
+    writer: string,
+    trust: { refuseUnknown?: boolean; onRefused?: (verdict: 'trust' | 'unknown') => void } = {},
   ) =>
     deliverScheduledPrompt(agentSlug, incarnationId, prompt, {
       ...opts,
+      // Each of these is tried again later: one log line per pane while the refusal holds.
+      folderTrustBlocks: async () => {
+        const refused = await trustRefusal(sessionManager, id, writer, trust.refuseUnknown ?? true, { once: true });
+        if (refused) trust.onRefused?.(refused);
+        return refused;
+      },
       getAgentState: () => {
         const current = readDaemonAgentState(id);
         const slug = current.agentName ? agentDisplayToSlug(current.agentName) : undefined;
@@ -5973,14 +5985,16 @@ function registerRpcHandlers(
     return deliverCallerNudge(prompt, {
       usageHeld: () => usageLimits?.holds(id) === true,
       input: () => sessionManager.getSession(id)?.bridge,
-      deliver: (opts) => deliverPromptToSessionNow(id, agentSlug, incarnationId, prompt, opts),
+      deliver: (opts) => deliverPromptToSessionNow(id, agentSlug, incarnationId, prompt, opts, 'caller nudge'),
     });
   });
 
   // The one fixed continue message, shared by the usage-limit resume and a
   // scheduled run's retry after a temporary provider error.
+  // Both pass the same folder-trust checks as any automated writer.
   const deliverContinueMessage = async (
     id: string, slug: AgentSlug, incarnationId: string, stillWanted: () => boolean,
+    writer: string, trust: { refuseUnknown?: boolean; onRefused?: (verdict: 'trust' | 'unknown') => void },
   ): Promise<SessionPromptScheduleResult> => {
     // A human draft in the composer is a wait, not a failure: answering
     // 'busy' keeps the pane armed and retries once the draft is sent or cleared.
@@ -5993,7 +6007,7 @@ function registerRpcHandlers(
       // composer (the input-revision proof covers the gap after the paste).
       authorized: async (stage) => stillWanted()
         && (stage === 'submit' || sessionManager.getSession(id)?.bridge.hasDraft() !== true),
-    });
+    }, writer, trust);
   };
   usageLimits = new UsageLimitRegistry({
     broadcast: (event) => pipeServer.broadcast(event),
@@ -6005,7 +6019,14 @@ function registerRpcHandlers(
       const slug = state.agentName ? agentDisplayToSlug(state.agentName) : undefined;
       return slug && state.agentVerified && state.incarnationId ? { slug, incarnationId: state.incarnationId } : null;
     },
-    deliverContinue: (id, expected, stillWanted) => deliverContinueMessage(id, expected.slug, expected.incarnationId, stillWanted),
+    deliverContinue: async (id, expected, stillWanted, armed) => {
+      // A person's Continue stops only at a prompt seen. Any refusal answers
+      // 'folder_trust', which waits without spending the busy retries.
+      let refused = false;
+      const result = await deliverContinueMessage(id, expected.slug, expected.incarnationId, stillWanted,
+        'usage-limit continue', { refuseUnknown: armed, onRefused: () => { refused = true; } });
+      return refused ? 'folder_trust' : result;
+    },
     log: (message) => log('info', message),
   });
   pipeServer.onRpc('daemon.usageLimit.list', async () => ({ limits: usageLimits?.list() ?? [] }));
@@ -6040,6 +6061,8 @@ function registerRpcHandlers(
     (error)=>log('warn','[codex] pane ownership cleanup failed:',error));
   sessionManager.on('session:died', (payload: { id: string }) => usageLimits?.drop(payload.id));
   sessionManager.on('session:destroyed', (payload: { id: string }) => usageLimits?.drop(payload.id));
+  sessionManager.on('session:died', (payload: { id: string }) => trustRefusalLogged.delete(payload.id));
+  sessionManager.on('session:destroyed', (payload: { id: string }) => trustRefusalLogged.delete(payload.id));
 
   // A pane with no agent whose command waits on stdin (y/N, Enter, a
   // password): reported to main as the pane's Needs you. Informational only.
@@ -6120,6 +6143,11 @@ function registerRpcHandlers(
       return outcome?.ok ? outcome.rows.map((r) => r.text).join('\n') : '';
     },
     sendKey: async (id, sequence) => {
+      if (!liveManaged(id)) throw new Error('session gone');
+      // Escape (the first-run dismiss key) stops only at a prompt seen, as any
+      // Escape does; Enter also at a screen that cannot rule one out.
+      const refused = await trustRefusal(sessionManager, id, 'automation key', sequence !== '\x1b', { once: true });
+      if (refused) throw new FolderTrustRefusedError(refused);
       const managed = liveManaged(id);
       if (!managed) throw new Error('session gone');
       managed.ptyProcess.write(sequence);
@@ -6143,11 +6171,15 @@ function registerRpcHandlers(
     // engine needs to tell "nothing written" from "pasted, not submitted".
     deliverPrompt: async (id, slug, incarnationId, prompt, onWrite) => (usageLimits?.holds(id)
       ? 'busy'
-      : deliverPromptToSessionNow(id, slug, incarnationId, prompt, onWrite ? { onWrite } : {})),
-    // A pane held at a usage limit is that registry's to resume.
+      : deliverPromptToSessionNow(id, slug, incarnationId, prompt, onWrite ? { onWrite } : {}, 'automation run')),
+    // A pane held at a usage limit is that registry's to resume. The trust
+    // checks run before the paste and before Enter: 'unknown' before any
+    // write answers 'busy' (the engine asks again within its grace), a
+    // prompt on screen 'folder_trust' (final), and either after the paste
+    // 'error' (final: the continue is never pasted twice).
     deliverContinue: async (id, slug, incarnationId, stillWanted) => (usageLimits?.holds(id)
       ? 'busy'
-      : deliverContinueMessage(id, slug, incarnationId, stillWanted)),
+      : deliverContinueMessage(id, slug, incarnationId, stillWanted, 'automation retry', { refuseUnknown: true })),
     folderTrustState: (id) => folderTrustState({ getSession: (sid) => sessionManager.getSession(sid) }, id),
     hasPendingApproval: (id) => approvalRegistry?.list().pending.some((r) => r.sessionId === id) ?? false,
     transcriptTurnEndAt: (id) => transcriptTurnEnd(projector.snapshot(id)?.events, 0)?.at,
@@ -6256,6 +6288,14 @@ function registerRpcHandlers(
     const expect = parseWriteExpectation(params['expect']);
     if (!sessionId || !data || data.length > 64 * 1024 || !expect) {
       throw new Error('daemon.writeIfUnchanged: sessionId, data (at most 64 KiB) and expect are required');
+    }
+    if (!sessionManager.getSession(sessionId)) return { written: false };
+    // A folder-trust prompt gets nothing; a screen that cannot rule one out
+    // stops all but a line a person asked for (`origin: 'human'`, the
+    // first-run sample command). Callers try again: one log line per pane.
+    const human = params['origin'] === 'human';
+    if (await trustRefusal(sessionManager, sessionId, human ? 'sample command' : 'launch line', !human, { once: true })) {
+      return { written: false, reason: 'folder_trust' };
     }
     const managed = sessionManager.getSession(sessionId);
     if (!managed) return { written: false };
@@ -8398,6 +8438,28 @@ let cachedBootId: string | undefined;
 let diskOnlySessions: DaemonSession[] = [];
 
 /** What every save writes: the managed sessions, then the disk-only records they have not taken. */
+/** Why a daemon writer must not type into `id` now (folderTrustState.ts):
+ *  'trust' always, 'unknown' when `refuseUnknown` (an automated writer). */
+function trustRefusal(
+  sessionManager: DaemonSessionManager, id: string, writer: string, refuseUnknown: boolean, opts: { once?: boolean } = {},
+): Promise<'trust' | 'unknown' | null> {
+  return folderTrustRefusal(sessionManager, id, writer, {
+    refuseUnknown,
+    log: (message) => {
+      // A writer that tries again (`once`) logs a refusal once per pane while it holds.
+      if (opts.once && trustRefusalLogged.get(id) === message) return;
+      if (opts.once) trustRefusalLogged.set(id, message);
+      log('warn', message);
+    },
+  }).then((refused) => {
+    if (!refused && opts.once) trustRefusalLogged.delete(id);
+    return refused;
+  });
+}
+
+/** The last refusal logged per pane for a writer that retries; dropped with the session. */
+const trustRefusalLogged = new Map<string, string>();
+
 /** A pane runs nothing, so a writer may type into it (chat v2's launch, the
  *  Continue on another account resume line). See paneFree.ts. */
 async function sessionPaneFree(sessionManager: DaemonSessionManager, agentProcessTracker: AgentProcessTracker, id: string): Promise<boolean> {
@@ -9643,6 +9705,8 @@ async function main(): Promise<void> {
     approvalBlocked: (id) =>
       sessionManager.getSession(id)?.bridge.isAwaitingHuman() === true
       || approvalRegistry?.list().pending.some((request) => request.sessionId === id) === true,
+    // The worker logs a held nudge once per pane while the verdict holds.
+    folderTrustVerdict: (id) => folderTrustState({ getSession: (sid) => sessionManager.getSession(sid) }, id),
     screenShowsApproval: async (id) => {
       const frame = await renderPaneScreen(() => sessionManager.getSession(id), generateTextSnapshot);
       if (!frame || frame.rows.every((row) => !row.trim())) return null;
@@ -9757,6 +9821,8 @@ async function main(): Promise<void> {
           kill: (pid, signal) => process.kill(pid, signal),
           stillIdle,
         }),
+        atFolderTrust: async (sid) =>
+          (await trustRefusal(sessionManager, sid, 'continue on account', false)) !== null,
         paneFree: (sid) => sessionPaneFree(sessionManager, agentProcessTracker, sid),
         chatOwnsPane: (sid) => chatV2Host?.ownsPane(sid) === true,
         promptRevision: (sid) => {
@@ -10596,6 +10662,8 @@ async function main(): Promise<void> {
 
   // Channels v2 — start the wake worker sweep (15 s tick + post fast-path).
   channelWakeWorkerRef?.start();
+  sessionManager.on('session:died', (payload: { id: string }) => channelWakeWorkerRef?.forgetSession(payload.id));
+  sessionManager.on('session:destroyed', (payload: { id: string }) => channelWakeWorkerRef?.forgetSession(payload.id));
 
   // 8b. Reap dead sessions that exceeded their TTL (hourly)
   const reapInterval = setInterval(() => {

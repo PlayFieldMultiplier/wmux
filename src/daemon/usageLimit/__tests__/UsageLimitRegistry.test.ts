@@ -13,7 +13,7 @@ function setup(result: SessionPromptScheduleResult = 'sent', agent: UsageLimitAg
   let now = NOW;
   let identity = agent;
   const events: DaemonEvent[] = [];
-  const deliverContinue = vi.fn(async (_id: string, _expected: UsageLimitAgentIdentity, _stillWanted: () => boolean) => result);
+  const deliverContinue = vi.fn(async (_id: string, _expected: UsageLimitAgentIdentity, _stillWanted: () => boolean, _armed: boolean) => result);
   const registry = new UsageLimitRegistry({
     broadcast: (e) => events.push(e),
     identify: () => identity,
@@ -102,6 +102,24 @@ describe('UsageLimitRegistry', () => {
 
     registry.noteSubmitted('p1');
     expect(registry.get('p1')).toBeUndefined();
+  });
+
+  it('waits at a folder-trust prompt on the normal tick, spending no busy retry and never disarming', async () => {
+    const { registry, deliverContinue, advance } = setup('folder_trust');
+    registry.noteHookSignal('p1', limitHit);
+    await registry.update('p1', { autoResume: true });
+    advance(PAST_RESET);
+    for (let i = 0; i < USAGE_LIMIT_MAX_BUSY_RETRIES * 2; i++) await registry.tick();
+    expect(registry.get('p1')?.autoResume).toBe(true);
+    expect(deliverContinue).toHaveBeenCalledTimes(USAGE_LIMIT_MAX_BUSY_RETRIES * 2);
+    // The automatic continue is automated; a person's Continue is not.
+    expect(deliverContinue.mock.calls[0][3]).toBe(true);
+    await registry.update('p1', { resumeNow: true });
+    expect(deliverContinue.mock.calls.at(-1)?.[3]).toBe(false);
+    // The cap is still there for a pane that is genuinely busy.
+    deliverContinue.mockResolvedValue('busy');
+    for (let i = 0; i < USAGE_LIMIT_MAX_BUSY_RETRIES; i++) await registry.tick();
+    expect(registry.get('p1')?.autoResume).toBe(false);
   });
 
   it('does not move a known reset when the same screen row is redrawn, nor re-hold a dismissed one', async () => {

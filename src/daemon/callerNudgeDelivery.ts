@@ -18,7 +18,8 @@ import type { ScheduledPromptDeliveryDeps } from './sessionPromptDelivery';
 
 export const CALLER_NUDGE_QUIET_MS = 10_000;
 
-export type CallerNudgeResult = 'sent' | 'held' | 'session_changed' | 'unavailable' | 'error';
+/** `approval_pending`: nothing written, the pane is on a folder-trust prompt (or cannot rule one out). */
+export type CallerNudgeResult = 'sent' | 'held' | 'approval_pending' | 'session_changed' | 'unavailable' | 'error';
 
 export interface CallerNudgeReply {
   result: CallerNudgeResult;
@@ -62,9 +63,17 @@ export async function deliverCallerNudge(prompt: string, deps: CallerNudgeDeps):
       return { result: 'held', pasted };
     case 'session_changed':
       return { result: 'session_changed', pasted };
+    case 'folder_trust':
+      return { result: 'approval_pending', pasted: false };
     case 'unavailable':
       return { result: 'unavailable', pasted };
-    default:
+    case 'error':
       return { result: !pasted && !quiet() ? 'held' : 'error', pasted };
+    default: {
+      // Every delivery result is mapped above; a new one fails typecheck here.
+      const unmapped: never = result;
+      void unmapped;
+      return { result: 'error', pasted };
+    }
   }
 }

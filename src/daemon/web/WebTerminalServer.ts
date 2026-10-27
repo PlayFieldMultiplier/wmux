@@ -207,6 +207,7 @@ import { browserHelpFrameJson, isBrowserHelpId, type PhoneBrowserHelpFrame } fro
 import { WORKER_RESUME_ROUTE, workerResumeRefusal, workerResumeResponse, workerResumeSupported } from './workerResume';
 import type { ChatV2Binding } from '../../shared/chatv2/ipc';
 import { buildWebCsp, WEB_APP_FONT_FILE } from './webCsp';
+import { folderTrustRefusal } from '../folderTrustState';
 // Type only — the channel service implementation stays out of this module.
 // The web server is a STATELESS consumer of its phone projection (§9): it
 // lists, pages, acks, joins and republishes mention notifications. The
@@ -7907,6 +7908,9 @@ export class WebTerminalServer {
       return this.json(res, 404, { error: 'session not found' });
     }
     const incarnation = managed.meta.incarnationId;
+    // A launch line the browser client types (its auto-resume, a Resume pill):
+    // `launch=human` for one a person clicked for, any other value automated.
+    const launch = url.searchParams.get('launch');
     const requestID = req.headers['x-wmux-input-request-id'];
     const afterInput = req.headers['x-wmux-input-after'];
     if (afterInput !== undefined && (typeof afterInput !== 'string' || afterInput.length > 160 || requestID === undefined)) {
@@ -7942,6 +7946,18 @@ export class WebTerminalServer {
         if (!this.mayInput(fresh.principal)) return this.refuseInput(res,fresh.principal,'Input permission changed');
         if (this.inputSession(fresh.principal,sessionId) !== managed || managed.meta.incarnationId !== incarnation) {
           return this.json(res,409,{error:'pane-incarnation-changed'});
+        }
+        // As main's launch lines: a folder-trust prompt stops every one, a
+        // screen that cannot rule one out all but a person's.
+        if (launch !== null) {
+          const human = launch === 'human';
+          const refused = await folderTrustRefusal(this.deps.sessionManager, sessionId, human ? 'web launch line' : 'web automated launch line', {
+            refuseUnknown: !human, log: (message) => this.deps.log('warn', message),
+          });
+          if (refused) return this.json(res,409,{error:'folder-trust',verdict:refused,effect:'none'});
+          if (this.inputSession(fresh.principal,sessionId) !== managed || managed.meta.incarnationId !== incarnation) {
+            return this.json(res,409,{error:'pane-incarnation-changed'});
+          }
         }
         // Decided with the check above, before the write, so the audit line
         // cannot be lost to a withdrawal between the write and the log.

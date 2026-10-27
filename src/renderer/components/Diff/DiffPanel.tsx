@@ -922,7 +922,7 @@ export default function DiffPanel({ source, isActive, focused = isActive, surfac
       // session and rejects otherwise (pty.write is a fire-and-forget send,
       // so a dropped write would read as success and lose the draft). The
       // note is one sanitized line, so it is typed as-is, without Enter.
-      await window.electronAPI.pty.writeLaunch(ptyId, formatDiffReviewNote(repoPath, sent, false), false);
+      await window.electronAPI.pty.writeLaunch(ptyId, formatDiffReviewNote(repoPath, sent, false), false, 'human');
     } catch (e) {
       // Main refused or the session is gone: keep the draft so it can be sent again or copied.
       setApplyMsg(t('diff.reviewSendFailed', { error: e instanceof Error ? e.message : String(e) }));

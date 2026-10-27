@@ -409,6 +409,22 @@ describe('input', () => {
     expect(hub.inputHaltOf('a')?.reason).toBe('offline');
   });
 
+  it('a launch line asks the daemon\'s folder-trust policy; a refusal rejects it and halts nothing', async () => {
+    let verdict: string | null = 'trust';
+    const { hub, inputs } = make({ reply: (url) => (url.includes('&launch=') && verdict
+      ? new Response(JSON.stringify({ error: 'folder-trust', verdict, effect: 'none' }), { status: 409 }) : undefined) });
+    hub.setAllowInput(true);
+    // A missing origin is automated; a person's line says so.
+    await expect(hub.pty.writeLaunch('a', 'claude --resume x\r')).rejects.toThrow(/folder-trust prompt; answer it in the pane/);
+    verdict = 'unknown';
+    await expect(hub.pty.writeLaunch('a', 'claude --resume x', 'human')).rejects.toThrow(/cannot be ruled out/);
+    expect(inputs().map((c) => c.url)).toEqual(['/api/input?session=a&launch=auto', '/api/input?session=a&launch=human']);
+    expect(hub.inputHaltOf('a')).toBeUndefined();
+    verdict = null;
+    await hub.pty.write('a', 'x');
+    expect(inputs().at(-1)).toMatchObject({ url: '/api/input?session=a', body: 'x' });
+  });
+
   it('keeps input in order per pane', async () => {
     const { hub, inputs } = make();
     hub.setAllowInput(true);
