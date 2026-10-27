@@ -2884,8 +2884,11 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
       // `capP` rows, not the whole configured scrollback — avoids the big daemon
       // payload for the common case. full_scrollback opts into the full depth.
       const depth = wantsFull ? store.scrollbackLines : capP;
+      // Internal: main's folder-trust check asks which reads came from the
+      // daemon ring rather than a live terminal (not an MCP parameter).
+      const parkedTag = raw.markParked === true ? { parked: true } : {};
       const read = await fetchParkedPaneRows(ptyId, depth);
-      if (!read) return { ptyId, text: '' }; // legacy daemon / local / gone
+      if (!read) return { ptyId, text: '', ...parkedTag }; // legacy daemon / local / gone
       let texts = read.rows.map((r) => r.text);
       // A legacy daemon sends no count; then nothing is dropped or reported.
       let parkedBelow = read.rowsBelowCursor ?? 0;
@@ -2899,12 +2902,12 @@ export async function handleRpcMethod(method: string, params: RpcParams): Promis
         // oldest rows to fit the RPC frame, surface truncated so the caller
         // doesn't read partial history as complete (callRpc serializes the whole
         // result object, so the field reaches the agent).
-        return { ptyId, text: texts.join('\n'), ...below(Math.min(parkedBelow, texts.length)), ...terminalReadCoverage(read.bufferType), ...(read.truncated && { truncated: true }) };
+        return { ptyId, text: texts.join('\n'), ...below(Math.min(parkedBelow, texts.length)), ...terminalReadCoverage(read.bufferType), ...(read.truncated && { truncated: true }), ...parkedTag };
       }
       // Bounded tail read: only the last capP rows were requested, so older
       // history missing is by design, not a truncation to report.
       const tail = texts.slice(-capP);
-      return { ptyId, text: tail.join('\n'), ...below(Math.min(parkedBelow, tail.length)), ...terminalReadCoverage(read.bufferType) };
+      return { ptyId, text: tail.join('\n'), ...below(Math.min(parkedBelow, tail.length)), ...terminalReadCoverage(read.bufferType), ...parkedTag };
     }
 
     // Phase 3 hydrate-before-read — see pane.search above. Agents reading a

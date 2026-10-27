@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import type { TurnEvent } from '../../shared/transcript/turnEvents';
+import { terminalCharWidth } from '../../shared/terminalUnicode';
 
 /**
  * `GET /api/search` — the phone's search across this host's panes (turns,
@@ -190,14 +191,32 @@ export function composeTitle(parts: { workspace?: string; agent?: string; cwdLea
   return title || fallback;
 }
 
-/** Headless-terminal rows → logical lines, so a match across a soft wrap is still one match. */
-export function joinWrappedRows(rows: ReadonlyArray<{ text: string; wrapped: boolean }>): string[] {
+/**
+ * Headless-terminal rows → logical lines, so a match across a soft wrap is still one match.
+ * `padTo` (the grid's width): a row another wraps from filled it, but its
+ * trailing blanks were trimmed on read; they are put back, counted in cells,
+ * so a wrap that fell on a blank still separates its words.
+ */
+export function joinWrappedRows(rows: ReadonlyArray<{ text: string; wrapped: boolean }>, padTo?: number): string[] {
   const lines: string[] = [];
+  let previousCells = 0;
   for (const row of rows) {
-    if (row.wrapped && lines.length > 0) lines[lines.length - 1] += row.text;
-    else lines.push(row.text);
+    if (row.wrapped && lines.length > 0) {
+      const pad = padTo === undefined ? 0 : Math.max(0, padTo - previousCells);
+      lines[lines.length - 1] += ' '.repeat(pad) + row.text;
+    } else {
+      lines.push(row.text);
+    }
+    if (padTo !== undefined) previousCells = cellWidth(row.text);
   }
   return lines;
+}
+
+/** Columns a row's text takes on the grid. */
+function cellWidth(text: string): number {
+  let cells = 0;
+  for (const ch of text) cells += terminalCharWidth(ch.codePointAt(0) ?? 0);
+  return cells;
 }
 
 /** Extracted scrollback text per pane, valid while its key (incarnation, bytes written, geometry) holds. */
