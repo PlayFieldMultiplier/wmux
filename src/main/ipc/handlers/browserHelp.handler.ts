@@ -2,6 +2,7 @@ import type { BrowserWindow, IpcMain, IpcMainInvokeEvent } from 'electron';
 import { IPC } from '../../../shared/constants';
 import type { HelpRequests } from '../../browser-session/HelpRequests';
 import { isTrustedMainFrameSender, UNTRUSTED_SENDER_ERROR } from './browserPolicy.handler';
+import { wrapHandler } from '../wrapHandler';
 
 export interface BrowserHelpIpcDeps {
   getWindow: () => BrowserWindow | null;
@@ -19,7 +20,7 @@ export interface BrowserHelpIpcDeps {
 export function registerBrowserHelpIpc(ipcMain: Pick<IpcMain, 'handle'>, deps: BrowserHelpIpcDeps): void {
   ipcMain.handle(
     IPC.BROWSER_HELP_RESOLVE,
-    async (event: IpcMainInvokeEvent, payload: { requestId?: unknown; outcome?: unknown }) => {
+    wrapHandler(IPC.BROWSER_HELP_RESOLVE, async (event: IpcMainInvokeEvent, payload: { requestId?: unknown; outcome?: unknown }) => {
       if (!isTrustedMainFrameSender(event, deps.getWindow)) return { ok: false, error: UNTRUSTED_SENDER_ERROR };
       if (
         !payload ||
@@ -30,6 +31,6 @@ export function registerBrowserHelpIpc(ipcMain: Pick<IpcMain, 'handle'>, deps: B
       }
       const settled = await deps.requests.resolveFromRenderer(payload.requestId, payload.outcome);
       return { ok: settled };
-    },
+    }),
   );
 }
