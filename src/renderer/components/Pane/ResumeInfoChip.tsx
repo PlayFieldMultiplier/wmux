@@ -108,11 +108,15 @@ export function buildPaneResumeCommand(
 
 /**
  * The grammar a copied lost-folder resume line is written in, or null when the
- * pane's shell reads neither (cmd.exe), so no line that would fail there is
- * offered. Mirrors the daemon's bound-resume shell check.
+ * pane's shell reads neither (cmd.exe, nushell, fish), so no line that would
+ * fail there is offered. Mirrors the daemon's bound-resume shell check. An
+ * empty shell is the platform default, a POSIX shell off Windows.
  */
 export function lostFolderShell(platform: string | undefined, shell: string | undefined): ResumeShell | null {
-  if (platform !== 'win32') return 'posix';
+  if (platform !== 'win32') {
+    const leaf = (shell ?? '').split(/[\\/]/).pop() ?? '';
+    return !leaf || /^-?(?:zsh|bash|sh)$/.test(leaf) ? 'posix' : null;
+  }
   return /pwsh|powershell/i.test(shell ?? '') ? 'pwsh' : null;
 }
 
@@ -121,13 +125,25 @@ export function lostFolderShell(platform: string | undefined, shell: string | un
  * that folder, then resume exactly that id. It is copied, never typed, and
  * runs once the folder is back. Null when the id, the folder or the shell
  * fails its check: the notice then names the folder and the UUID only.
+ *
+ * The pane's role binding applies as on an exact resume with the skip toggle
+ * off (the copied line has no toggle), and to the agent invocation before the
+ * folder change is prefixed, so its agent-stem gate reads the launch itself.
  */
-export function lostFolderResumeCommand(binding: ResumeBinding, shell: ResumeShell | null): string | null {
+export function lostFolderResumeCommand(
+  binding: ResumeBinding,
+  shell: ResumeShell | null,
+  roleBinding?: RoleBinding,
+): string | null {
   const grammar = resumeGrammarFor(binding.agent);
   if (!grammar || !shell || !CHATV2_PROVIDER_SESSION_ID.test(binding.sessionId)) return null;
   const exact = grammar.withId(binding.sessionId);
   if (exact === grammar.picker || !resumeCwdUsable(binding.cwd, shell)) return null;
-  return inResumeCwd(binding.cwd, `${binding.agent} ${exact}`, shell);
+  const line = applyRoleBinding(`${binding.agent} ${exact}`, roleBinding, {
+    suppressSkipPermissions: agentSupportsPermissionFlag(binding.agent),
+    suppressPermissionChoices: false,
+  }).command;
+  return inResumeCwd(binding.cwd, line, shell);
 }
 
 /**
@@ -189,7 +205,7 @@ export default function ResumeInfoChip(props: {
   // copy instead. A remote pane's folder is the host's to judge, so not there.
   const lostFolder = !built.exact && binding.cwdMissing === true && exactOverride === undefined;
   const lostCommand = lostFolder
-    ? lostFolderResumeCommand(binding, lostFolderShell(window.electronAPI.platform, shell))
+    ? lostFolderResumeCommand(binding, lostFolderShell(window.electronAPI.platform, shell), roleBinding)
     : null;
 
   const onRecover = (e: React.MouseEvent) => {

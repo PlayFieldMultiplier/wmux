@@ -1,9 +1,11 @@
+// @wmux-lane unit
+// `win32` here is only a platform string passed to a pure function; nothing reaches the OS.
 import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createElement } from 'react';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import ResumeInfoChip, { buildPaneResumeCommand, lostFolderResumeCommand } from '../ResumeInfoChip';
+import ResumeInfoChip, { buildPaneResumeCommand, lostFolderResumeCommand, lostFolderShell } from '../ResumeInfoChip';
 import type { ResumeBinding } from '../../../../shared/agentResume';
 import { createDeadPaneRecovery } from '../../../../shared/ptyRecovery';
 
@@ -330,9 +332,36 @@ describe('lostFolderResumeCommand', () => {
     expect(lostFolderResumeCommand(claude({ cwd: '/repo/wt' }), null)).toBeNull(); // e.g. cmd.exe
   });
 
+  it("applies the pane's role binding to the agent invocation, before the folder change", () => {
+    expect(lostFolderResumeCommand(claude({ cwd: '/repo/wt-gone' }), 'posix', { agent: 'claude', model: 'haiku' }))
+      .toBe(`cd -- '/repo/wt-gone' && claude --model haiku --resume ${id}`);
+    // No skip toggle on a copied line: the role's skip flag is withheld, as with the toggle off.
+    expect(lostFolderResumeCommand(claude({ cwd: '/repo/wt-gone' }), 'posix', { agent: 'claude', model: 'haiku', skipPermissions: true }))
+      .toBe(`cd -- '/repo/wt-gone' && claude --model haiku --resume ${id}`);
+    // A role bound to a different agent leaves the line as it is.
+    expect(lostFolderResumeCommand(claude({ cwd: '/repo/wt-gone' }), 'posix', { agent: 'codex', model: 'gpt-5.5' }))
+      .toBe(`cd -- '/repo/wt-gone' && claude --resume ${id}`);
+  });
+
   it('doubles plain and typographic single quotes in a pwsh folder', () => {
     expect(lostFolderResumeCommand(claude({ cwd: "C:\\it's\\wt\u2019s" }), 'pwsh'))
       .toBe(`if (Set-Location -LiteralPath 'C:\\it''s\\wt\u2019\u2019s' -PassThru -ErrorAction SilentlyContinue) { claude --resume ${id} }`);
+  });
+});
+
+describe('lostFolderShell', () => {
+  it('writes POSIX grammar only for a POSIX shell or the platform default off Windows', () => {
+    for (const shell of [undefined, '', '/bin/zsh', '-zsh', '/bin/bash', 'sh']) {
+      expect(lostFolderShell('darwin', shell)).toBe('posix');
+    }
+    for (const shell of ['/opt/homebrew/bin/nu', 'nu', '/usr/bin/fish']) {
+      expect(lostFolderShell('linux', shell)).toBeNull();
+    }
+  });
+
+  it('writes PowerShell grammar on Windows and none for cmd.exe', () => {
+    expect(lostFolderShell('win32', 'C:\\Program Files\\PowerShell\\7\\pwsh.exe')).toBe('pwsh');
+    expect(lostFolderShell('win32', 'C:\\Windows\\System32\\cmd.exe')).toBeNull();
   });
 });
 

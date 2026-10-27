@@ -1274,7 +1274,7 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
           ? lostFolderResumeCommand(resumeBinding, lostFolderShell(
             window.electronAPI.platform,
             pane.surfaces.find((s) => s.id === pane.activeSurfaceId)?.shell,
-          ))
+          ), paneRoleBinding)
           : null;
         const lostNotice = lostFolder && resumeBinding
           ? (id: string) => t('resume.folderGone', { agent: agentName, id, cwd: resumeBinding.cwd })
