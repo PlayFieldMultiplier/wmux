@@ -93,7 +93,7 @@ describe('browser.help.request on a dedicated Chrome profile', () => {
     vi.restoreAllMocks();
   });
 
-  it.each(['theirs', 'orphan'])('refuses a tab this workspace did not open (%s)', async (surfaceId) => {
+  it.each(['theirs', 'orphan', 't-theirs'])('refuses a tab this workspace did not open (%s)', async (surfaceId) => {
     const response = await request(register(), surfaceId);
     expect(response.ok).toBe(false);
     expect(String((response as { error?: unknown }).error)).toContain('BROWSER_SURFACE_NOT_REGISTERED');
@@ -104,6 +104,14 @@ describe('browser.help.request on a dedicated Chrome profile', () => {
     const response = await request({ router }, 'mine');
     expect(response.ok).toBe(true);
     expect(registry.forProfile).toHaveBeenCalledTimes(1);
+    const requestId = (response as { result?: { requestId?: string } }).result?.requestId;
+    await router.dispatch({ id: '2', method: 'browser.help.cancel', params: { workspaceId: 'ws-1', requestId } } as never);
+  });
+
+  it('accepts its own tab named by the raw CDP targetId', async () => {
+    const { router } = register();
+    const response = await request({ router }, 't-mine');
+    expect(response.ok).toBe(true);
     const requestId = (response as { result?: { requestId?: string } }).result?.requestId;
     await router.dispatch({ id: '2', method: 'browser.help.cancel', params: { workspaceId: 'ws-1', requestId } } as never);
   });

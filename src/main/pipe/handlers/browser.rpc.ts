@@ -2102,7 +2102,8 @@ export function registerBrowserRpc(
       if (
         !client.writeScope &&
         !(await client.cdpInfoTargets(workspaceId)).some(
-          (t) => t.surfaceId === surfaceId && t.workspaceId === workspaceId,
+          // A raw CDP targetId still names a tab here, as in browser.tabs and close.
+          (t) => (t.surfaceId === surfaceId || t.targetId === surfaceId) && t.workspaceId === workspaceId,
         )
       ) {
         throw new Error(
