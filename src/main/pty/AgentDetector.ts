@@ -13,7 +13,7 @@ import { CodexUsageLimitLineScanner } from '../../shared/usageLimit';
 import type { AgentStatus } from '../../shared/types';
 import type { AgentSlug } from '../../shared/agentIdentity';
 import type { ApprovalScreenSnapshot } from '../../shared/approvalScreen';
-import { agyScreenApproval, claudeScreenApproval, codexScreenApproval, openCodeScreenApproval, piScreenApproval, qwenScreenApproval, type ScreenApproval } from './approvalScreen';
+import { agyScreenApproval, claudeScreenApproval, codexScreenApproval, folderTrustScreenApproval, openCodeScreenApproval, piScreenApproval, qwenScreenApproval, type ScreenApproval } from './approvalScreen';
 export type { AgentSlug };
 export { agentDisplayToSlug } from '../../shared/agentIdentity';
 
@@ -154,7 +154,14 @@ interface AgentPattern {
    * stream report (Claude, Codex). Their recheck is not held for this
    * question, and spending it does not spend the one this question asks for.
    */
-  approvalReady?: { question: RegExp; end: RegExp; shared?: true };
+  approvalReady?: {
+    question: RegExp;
+    end: RegExp;
+    shared?: true;
+    /** More questions, each with the row that finishes it: an end is matched
+     *  only after its own question. */
+    also?: readonly { question: RegExp; end: RegExp }[];
+  };
   patterns: {
     regex: RegExp;
     status: AgentEvent['status'];
@@ -486,13 +493,19 @@ const AGENT_PATTERNS: AgentPattern[] = [
     agent: 'Qwen Code',
     slug: 'qwen',
     // The dialog read off the grid once a process or hook identity arrives
-    // after it was drawn, when no line pattern was reading for Qwen yet.
-    approvalScreen: qwenScreenApproval,
+    // after it was drawn, when no line pattern was reading for Qwen yet; the
+    // folder-trust dialog (security.folderTrust.enabled) is read the same way.
+    approvalScreen: (rows) => qwenScreenApproval(rows) ?? folderTrustScreenApproval(rows),
     // Its question (shell, or file write and edit), then the confirmation
     // spinner row drawn below the choices, without the counters a running
     // spinner adds beside it (or, when narrow, on the next row) just after
-    // an answer.
-    approvalReady: { question: /Allow\s*execution\s*of:|Apply\s*this\s*change\?/, end: /Waiting\s*for\s*user\s*confirmation\.\.\.(?!\s*\()/ },
+    // an answer. Or the folder-trust question, then its last choice
+    // ("3. Don't trust (esc)", cut with "…" in a narrow pane).
+    approvalReady: {
+      question: /Allow\s*execution\s*of:|Apply\s*this\s*change\?/,
+      end: /Waiting\s*for\s*user\s*confirmation\.\.\.(?!\s*\()/,
+      also: [{ question: /Do[\s│]*you[\s│]*trust[\s│]*this[\s│]*folder\?/, end: /3\.[\s│]*Don/ }],
+    },
     gate: /Qwen\s*Code\s*\(v\d|Qwen - /,
     chrome: isQwenChrome,
     completeChromeRow: true,
@@ -527,6 +540,16 @@ const AGENT_PATTERNS: AgentPattern[] = [
     // candidateLines on each chunk.
     gate: /Type\s*your\s*message\s*or|gemini-\d|Gemini CLI update/,
     chrome: (line) => isGeminiChrome(line),
+    // Its folder-trust dialog (live capture, 0.35.3 and 0.65.0), drawn at
+    // startup in a boxed frame before the composer: read off the grid once a
+    // process identity arrives. Ready once the last choice ("3. Don't trust",
+    // cut with "…" in a narrow pane) is drawn under the question; a narrow
+    // box puts its border between the question's words.
+    approvalScreen: folderTrustScreenApproval,
+    approvalReady: {
+      question: /Do[\s│]*you[\s│]*trust[\s│]*the[\s│]*files[\s│]*in[\s│]*this[\s│]*folder\?/,
+      end: /3\.[\s│]*Don/,
+    },
     patterns: [
       { regex: /^gemini>\s*$/,                   status: 'waiting',   message: 'Waiting for input' },
     ],
@@ -651,9 +674,15 @@ const PROFILE_BY_SLUG = new Map(AGENT_PATTERNS.map((ap) => [ap.slug, ap]));
  * footer a narrow pane wraps carries that row's padding.
  */
 const READY_MATCH_REACH = 512;
+/** A CSI, OSC or charset escape at the very end of a read, not yet finished. */
+// eslint-disable-next-line no-control-regex
+const UNFINISHED_ESCAPE = /\x1b(?:\[[\x30-\x3f]*[\x20-\x2f]*|\][^\x07\x1b]*|\()?$/;
 /** The profiles with an approvalReady question, its patterns compiled global once. */
 const READY_PROFILES = AGENT_PATTERNS.flatMap((ap) => (ap.approvalReady
-  ? [{ slug: ap.slug, question: globalRegExp(ap.approvalReady.question), end: globalRegExp(ap.approvalReady.end) }]
+  ? [ap.approvalReady, ...(ap.approvalReady.also ?? [])].map(({ question, end }, i) => ({
+    // What arms: the profile's slug for its first question, then one key per further question.
+    key: i === 0 ? ap.slug : `${ap.slug}:${i}`, slug: ap.slug, question: globalRegExp(question), end: globalRegExp(end),
+  }))
   : []));
 
 function globalRegExp(re: RegExp): RegExp {
@@ -679,9 +708,11 @@ const ROW_OR_FRAME_END_G = /\r?\n|\r(?!\n)|\x1b\[\?2026l/g;
 const FRAME_END_ROW_AGENTS: ReadonlySet<string> = new Set(AGENT_PATTERNS.filter((ap) => ap.frameEndsRow).map((ap) => ap.agent));
 
 // ANSI escape strip regex. Covers:
-//   CSI    \x1b[ <params> <final>   where params may include digits/semicolons
-//                                   AND private-mode prefixes ? < = >
-//                                   final is a letter A-Z/a-z or '@'
+//   CSI    \x1b[ <params> <intermediates> <final>   params are 0x30-0x3F
+//                                   (digits, `;`, `:` subparameters, and the
+//                                   private-mode prefixes ? < = >),
+//                                   intermediates 0x20-0x2F, and the final
+//                                   is a letter A-Z/a-z or '@'
 //   OSC    \x1b] <data> \x07
 //   Charset designation \x1b(X
 //
@@ -689,7 +720,7 @@ const FRAME_END_ROW_AGENTS: ReadonlySet<string> = new Set(AGENT_PATTERNS.filter(
 // Claude/Codex TUIs emit frequently, leaving stray fragments in `clean` and
 // occasionally breaking pattern matching.
 // eslint-disable-next-line no-control-regex
-const ANSI_STRIP = /\x1b(?:\[[0-9;?<=>]*[a-zA-Z@]|\][^\x07]*\x07|\([A-Z])/g;
+const ANSI_STRIP = /\x1b(?:\[[\x30-\x3f]*[\x20-\x2f]*[a-zA-Z@]|\][^\x07]*\x07|\([A-Z])/g;
 
 /**
  * Row boundaries as a full-screen TUI actually draws them.
@@ -1134,7 +1165,7 @@ export class AgentDetector {
   private approvalRecheckRequested = false;
   // approvalReady questions whose question row was drawn, and those whose
   // finishing row followed it, since the screen was last invalidated.
-  private approvalArmed = new Set<AgentSlug>();
+  private approvalArmed = new Set<string>();
   private approvalReadySlugs = new Set<AgentSlug>();
   // An identity change kept the approval evidence, and no question has been
   // drawn since: the next seed drops it unless its profile has approvalReady.
@@ -1354,7 +1385,7 @@ export class AgentDetector {
     // launch must not inherit it half-drawn or ready.
     const ending = this.trustedAgent ?? AGENT_PATTERNS.find((ap) => ap.agent === this.lastAgent)?.slug;
     if (ending) {
-      this.approvalArmed.delete(ending);
+      for (const key of this.approvalArmed) if (key === ending || key.startsWith(`${ending}:`)) this.approvalArmed.delete(key);
       this.approvalReadySlugs.delete(ending);
     }
   }
@@ -1509,11 +1540,13 @@ export class AgentDetector {
 
   private feedOutput(data: string): void {
     if (!data) return;
-    const previousLength = stripAnsi(this.approvalHintTail).length;
+    // An escape the last read cut short is not text yet: measured as text it
+    // would push the boundary of newly drawn text past the row that finishes it.
+    const previousLength = stripAnsi(this.approvalHintTail.replace(UNFINISHED_ESCAPE, '')).length;
     const probe = this.approvalHintTail + data;
     const cleanProbe = stripAnsi(probe);
     // Keep in step with the approvalReady questions (READY_PROFILES).
-    const hint = /Do\s*you\s*(?:want|trust)|Would\s*you\s*like|Allow\s*tool\s*use|Permission\s*required|Trust\s*project\s*folder|Allow\s*execution\s*of:|Apply\s*this\s*change\?|Trust\s*this\s*folder|Is\s*this\s*a\s*project\s*you\s*created/g;
+    const hint = /Do[\s│]*you[\s│]*(?:want|trust)|Would\s*you\s*like|Allow\s*tool\s*use|Permission\s*required|Trust\s*project\s*folder|Allow\s*execution\s*of:|Apply\s*this\s*change\?|Trust\s*this\s*folder|Is\s*this\s*a\s*project\s*you\s*created/g;
     for (const match of cleanProbe.matchAll(hint)) {
       // Only newly drawn text refreshes freshness. Retaining an old question
       // in the tail across a title update must not make it recent again.
@@ -1530,13 +1563,13 @@ export class AgentDetector {
     const recentAt = Math.max(0, previousLength - READY_MATCH_REACH);
     const recent = cleanProbe.slice(recentAt);
     const drawnAfter = previousLength - recentAt;
-    for (const { slug, question, end } of READY_PROFILES) {
-      // An end counts only after a question: from 0 once one is armed.
-      let from = this.approvalArmed.has(slug) ? 0 : -1;
+    for (const { key, slug, question, end } of READY_PROFILES) {
+      // An end counts only after its question: from 0 once that one is armed.
+      let from = this.approvalArmed.has(key) ? 0 : -1;
       for (const match of recent.matchAll(question)) {
         if (match.index + match[0].length <= drawnAfter) continue;
         from = match.index + match[0].length;
-        this.approvalArmed.add(slug);
+        this.approvalArmed.add(key);
         this.approvalReadySlugs.delete(slug);
       }
       if (from < 0) continue;

@@ -2,6 +2,7 @@
 // requires interactive choices at the bottom; a quoted question alone is not
 // evidence that the agent is currently asking for permission.
 import { parseTerminalPrompt } from '../../daemon/approvals/terminalPromptParse';
+import { readFolderTrustScreen } from '../../daemon/approvals/approvalKeystrokes';
 
 export interface ScreenApproval {
   text: string;
@@ -145,6 +146,17 @@ export function codexScreenApproval(rows: readonly string[]): ScreenApproval | n
   const trust = 'Trust this folder?';
   return choiceDialog(rows, /^Trust this folder\?(?:$| Codex\b)/, /^enter continue · esc back$/, CODEX_TRUST_CHOICES)
     ? { text: trust, message: 'Directory trust prompt' } : null;
+}
+
+/**
+ * Gemini CLI and Qwen Code folder-trust dialogs (live captures, the
+ * folder-trust fixtures): read with the input guard's own reader, so the
+ * notice and the refusal to type into the dialog see the same screen. A pane
+ * too narrow to read the choices still shows the dialog. The text is fixed:
+ * the question wraps differently at every width, and a resize is no new dialog.
+ */
+export function folderTrustScreenApproval(rows: readonly string[]): ScreenApproval | null {
+  return readFolderTrustScreen(rows) === null ? null : { text: 'Do you trust this folder?', message: 'Folder trust prompt' };
 }
 
 /** OpenCode 1.18.30 permission fixture: horizontal choices with a key footer. */

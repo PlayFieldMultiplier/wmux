@@ -104,13 +104,14 @@ import { createComputerConsentRequester } from './computer/computerConsent';
 import type { ComputerService } from './computer/ComputerService';
 import { revealStatsAggregator } from './perf/revealStatsAggregator';
 import { registerHooksRpc } from './pipe/handlers/hooks.rpc';
-import { registerUsageRpc } from './pipe/handlers/usage.rpc';
+import { registerUsageRpc, registerUsageTrailRpc } from './pipe/handlers/usage.rpc';
+import { UsageTrailStore } from './usage/usageTrailStore';
 import { UsageReserve, setUsageReserve } from './usage/usageReserve';
 import { usageReserveToastText } from './automation/toastText';
 import { formatResetClock } from '../shared/usageLimit';
 import { CompletionAlarm } from '../shared/hooks/CompletionAlarm';
 import { UsagePoller } from './claude/UsagePoller';
-import { setUsageClientVersion } from './claude/UsageApi';
+import { setUsageClientVersion, type UsageSnapshot } from './claude/UsageApi';
 import { AccountUsageService } from './account/AccountUsageService';
 import { getAccountRotationService } from './account/AccountRotationService';
 import { getAccountStore } from './account/accountStore';
@@ -1411,7 +1412,7 @@ const factoryHost = registerFactoryRpc(rpcRouter, {
   claudeUsage: () => ({
     read: (accountId) => (accountId === null
       ? usagePoller.getState().snapshot
-      : accountUsageService.getAll().find((e) => e.accountId === accountId)?.snapshot ?? null),
+      : claudeAccountSnapshot(accountId)),
     onChange: (cb) => {
       const offAccounts = accountUsageService.onChange(() => cb());
       const offDefault = usagePoller.onStateChange(() => cb());
@@ -1621,6 +1622,22 @@ ipcMain.on(IPC.LANLINK_RESYNC, () => {
   remoteInboxBridge?.resync();
 });
 
+function claudeAccountSnapshot(accountId: string): UsageSnapshot | null {
+  return accountUsageService.getAll().find((e) => e.accountId === accountId)?.snapshot ?? null;
+}
+
+// Usage history per account, from the live pushes below and the services' own
+// results; never a request of its own. A live push is recorded at ingest
+// because the default meter stores it silently while it is off.
+const usageTrail = new UsageTrailStore(path.join(getWmuxDir(), 'usage-trail.json'));
+usagePoller.onStateChange((state) => usageTrail.record('default', state.snapshot));
+accountUsageService.onChange((entry) => usageTrail.record(entry.accountId, entry.snapshot));
+// A removed account's history is not served; it ages out of the file.
+registerUsageTrailRpc(rpcRouter, (account, sinceMs, untilMs) => (
+  account === 'default' || getAccountStore().getAccount(account)
+    ? usageTrail.read(account, sinceMs, untilMs)
+    : []));
+
 // Usage reserve: unattended starts wait while an account's 5h usage is in the
 // last 15%. Reads the usage held above; the daemon gets the holds for its
 // scheduled runs, and fan-outs ask it directly (fanout.rpc.ts).
@@ -1663,16 +1680,22 @@ registerUsageRpc(rpcRouter, {
     .filter((a) => a.vendor === 'claude')
     .map((a) => ({ id: a.id, configDir: a.configDir })),
   defaultConfigDir: () => path.join(os.homedir(), '.claude'),
-  // A live push is read by the reserve at ingest: with the meter off the
-  // poller stores it without telling its listeners.
+  // A live push is recorded and read by the reserve at ingest: with the
+  // meter off the poller stores it without telling its listeners.
   ingestDefault: (update) => {
     const accepted = usagePoller.ingestLive(update);
-    if (accepted) usageReserve.refresh();
+    if (accepted) {
+      usageTrail.record('default', usagePoller.getState().snapshot);
+      usageReserve.refresh();
+    }
     return accepted;
   },
   ingestAccount: (accountId, update) => {
     const accepted = accountUsageService.ingestLive(accountId, update);
-    if (accepted) usageReserve.refresh();
+    if (accepted) {
+      usageTrail.record(accountId, claudeAccountSnapshot(accountId));
+      usageReserve.refresh();
+    }
     return accepted;
   },
   log: (line) => console.warn(line),
@@ -3239,6 +3262,11 @@ async function prepareInstallQuit(): Promise<void> {
     console.error('[Main] install-quit store flush failed:', err);
   }
   try {
+    usageTrail.flushSync();
+  } catch (err) {
+    console.error('[Main] install-quit usage trail flush failed:', err);
+  }
+  try {
     sessionManager.flushSync();
   } catch (err) {
     console.error('[Main] install-quit flushSync failed:', err);
@@ -3356,6 +3384,9 @@ app.on('before-quit', async (e) => {
   const chromeStopped = chromeRegistry.disposeAll().catch((err) => {
     console.error('[Main] before-quit step "chromeRegistry.disposeAll" threw — continuing:', err);
   });
+
+  // Pending usage-history samples, before anything below can stall.
+  usageTrail.flushSync();
 
   // macOS 로그아웃/재시작/종료 대응(P4): win32의 'session-end' flushSync와 동등한
   // 동기 세션 flush. macOS는 WM_ENDSESSION 대신 Apple Event로 quit을 보내고
@@ -3573,6 +3604,8 @@ app.on('before-quit', async (e) => {
   // window would drop the save the agent just made — the one it is most likely
   // to want on the next launch.
   safeStep('actionCacheStore.flushSync', () => getActionCacheStore().flushSync());
+  // Again here: a usage push can land while the teardown above runs.
+  safeStep('usageTrail.flushSync', () => usageTrail.flushSync());
   safeStep('pipeServer.stop', () => pipeServer.stop());
   safeStep('mcpRegistrar.unregister', () => mcpRegistrar.unregister());
   safeStep('autoUpdater.stop', () => autoUpdater.stop());
@@ -3658,6 +3691,11 @@ async function onWindowsSessionEnd(event?: Electron.WindowSessionEndEvent): Prom
     sessionManager.flushSync();
   } catch (err) {
     console.error('[Main] session-end flushSync failed:', err);
+  }
+  try {
+    usageTrail.flushSync();
+  } catch (err) {
+    console.error('[Main] session-end usage trail flush failed:', err);
   }
 
   if (daemonClient?.isConnected) {
