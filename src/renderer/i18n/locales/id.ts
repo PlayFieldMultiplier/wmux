@@ -686,6 +686,8 @@ export const id = {
   'claudeIntegration.scheduledRetry': "Coba ulang eksekusi terjadwal setelah galat sementara",
   'claudeIntegration.scheduledRetryDesc': "Jika giliran sebuah eksekusi terjadwal gagal karena galat jaringan atau server penyedia, tunggu 5 menit lalu kirim satu pesan lanjutkan. Aktif secara bawaan; setiap jadwal dapat mematikannya.",
   'claudeIntegration.scheduledRetryUnknown': "Belum diketahui: menunggu layanan latar wmux.",
+  'claudeIntegration.usageReserve': "Simpan cadangan penggunaan",
+  'claudeIntegration.usageReserveDesc': "Pekerjaan tanpa pengawasan yang akan memakai penggunaan 5 jam akun Claude tidak dimulai selama penggunaan itu berada di 85% atau lebih, agar 15% terakhir tetap untukmu. Run terjadwal menunggu reset lalu berjalan jika masih dalam masa tenggangnya, jika tidak maka terlewat; fan-out bot juga menunggu; fan-out yang diminta agen di panelmu ditolak, beserta waktu reset. Codex dan agen lain tidak ditahan, dan apa yang kamu ketik tidak pernah ditahan. Nonaktif secara default.",
   'schedules.retryTransient': "Coba ulang sekali setelah galat sementara",
   'schedules.retryTransientHint': "Saat terjadi galat jaringan atau server penyedia, tunggu 5 menit lalu kirim satu pesan lanjutkan. Prompt tidak dikirim ulang.",
   'schedules.retryTransientGlobalHint': "Hanya berlaku saat “Coba ulang eksekusi terjadwal setelah galat sementara” aktif di Pengaturan → Integrasi Claude.",
