@@ -82,7 +82,9 @@ describe('hashbang files reached from tests', () => {
     // A planted hashbang in a global setup file stops Vitest before this test
     // runs, so check the walk reaches one instead.
     expect(via.has(path.join(ROOT, 'scripts', 'vitest-electron-binary.mjs'))).toBe(true);
-  });
+    // It reads the whole import graph, several thousand files: about 4.5 s on
+    // a busy Windows box already, so vitest's 5 s default is no margin.
+  }, 30_000);
 });
 
 describe('what the walk counts as a load', () => {
