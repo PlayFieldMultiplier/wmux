@@ -2,9 +2,10 @@
 // atomically and at most once per SAVE_DEBOUNCE_MS, plus a flush for quit.
 // Every write is synchronous, so a quit flush can never race an older async
 // commit. A missing, corrupt or unknown-version file starts an empty trail;
-// the read moves a file it rejects aside rather than letting a save overwrite it.
+// a file that is there but unusable is moved aside before a save can overwrite it.
 
 import { atomicReadJSONSync, atomicWriteJSONSync } from '../../daemon/util/atomicWrite';
+import { quarantineFileSync } from '../../daemon/util/atomicWrite/quarantine';
 import type { UsageSnapshot } from '../claude/UsageApi';
 import { UsageTrail, isUsageTrailFile, type UsageTrailSample } from './usageTrail';
 
@@ -60,6 +61,8 @@ export class UsageTrailStore {
     try {
       const file = atomicReadJSONSync(this.filePath, { validate: isUsageTrailFile });
       if (file) return UsageTrail.fromFile(file, this.now());
+      // The read moves aside a file it rejected; one it could not parse stays.
+      quarantineFileSync(this.filePath, 'unparseable usage trail');
     } catch (err) {
       this.log(`[usageTrail] load failed, starting empty: ${String(err)}`);
     }

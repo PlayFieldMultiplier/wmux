@@ -108,7 +108,7 @@ import { registerUsageRpc, registerUsageTrailRpc } from './pipe/handlers/usage.r
 import { UsageTrailStore } from './usage/usageTrailStore';
 import { CompletionAlarm } from '../shared/hooks/CompletionAlarm';
 import { UsagePoller } from './claude/UsagePoller';
-import { setUsageClientVersion } from './claude/UsageApi';
+import { setUsageClientVersion, type UsageSnapshot } from './claude/UsageApi';
 import { AccountUsageService } from './account/AccountUsageService';
 import { getAccountRotationService } from './account/AccountRotationService';
 import { getAccountStore } from './account/accountStore';
@@ -1407,7 +1407,7 @@ const factoryHost = registerFactoryRpc(rpcRouter, {
   claudeUsage: () => ({
     read: (accountId) => (accountId === null
       ? usagePoller.getState().snapshot
-      : accountUsageService.getAll().find((e) => e.accountId === accountId)?.snapshot ?? null),
+      : claudeAccountSnapshot(accountId)),
     onChange: (cb) => {
       const offAccounts = accountUsageService.onChange(() => cb());
       const offDefault = usagePoller.onStateChange(() => cb());
@@ -1617,6 +1617,10 @@ ipcMain.on(IPC.LANLINK_RESYNC, () => {
   remoteInboxBridge?.resync();
 });
 
+function claudeAccountSnapshot(accountId: string): UsageSnapshot | null {
+  return accountUsageService.getAll().find((e) => e.accountId === accountId)?.snapshot ?? null;
+}
+
 // Usage history per account, from the live pushes below and the services' own
 // results; never a request of its own. A live push is recorded at ingest
 // because the default meter stores it silently while it is off.
@@ -1645,9 +1649,7 @@ registerUsageRpc(rpcRouter, {
   },
   ingestAccount: (accountId, update) => {
     const accepted = accountUsageService.ingestLive(accountId, update);
-    if (accepted) {
-      usageTrail.record(accountId, accountUsageService.getAll().find((e) => e.accountId === accountId)?.snapshot ?? null);
-    }
+    if (accepted) usageTrail.record(accountId, claudeAccountSnapshot(accountId));
     return accepted;
   },
   log: (line) => console.warn(line),
@@ -3208,9 +3210,13 @@ async function prepareInstallQuit(): Promise<void> {
   try {
     chromeSurfaceStore.flushSync();
     getActionCacheStore().flushSync();
-    usageTrail.flushSync();
   } catch (err) {
     console.error('[Main] install-quit store flush failed:', err);
+  }
+  try {
+    usageTrail.flushSync();
+  } catch (err) {
+    console.error('[Main] install-quit usage trail flush failed:', err);
   }
   try {
     sessionManager.flushSync();
@@ -3635,9 +3641,13 @@ async function onWindowsSessionEnd(event?: Electron.WindowSessionEndEvent): Prom
     // in the bundle and threw MODULE_NOT_FOUND at runtime (same bundling bug
     // as #463), silently failing this flush on every shutdown.
     sessionManager.flushSync();
-    usageTrail.flushSync();
   } catch (err) {
     console.error('[Main] session-end flushSync failed:', err);
+  }
+  try {
+    usageTrail.flushSync();
+  } catch (err) {
+    console.error('[Main] session-end usage trail flush failed:', err);
   }
 
   if (daemonClient?.isConnected) {

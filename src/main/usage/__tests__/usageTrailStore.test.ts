@@ -36,6 +36,7 @@ describe('UsageTrailStore', () => {
     const file = tmpFile();
     fs.writeFileSync(file, '{ not json');
     expect(new UsageTrailStore(file, { now: () => T0, log: quiet }).read('default')).toEqual([]);
+    expect(fs.existsSync(file)).toBe(false); // moved aside, not left for a save to overwrite
     fs.writeFileSync(file, JSON.stringify({ v: 2, trails: {} }));
     expect(new UsageTrailStore(file, { now: () => T0, log: quiet }).read('default')).toEqual([]);
   });

@@ -45,10 +45,10 @@ describe('UsageTrail.record', () => {
     expect(trail.record('a', snap(10, 10, R5 - 1, R7 + 1), T0 + MIN)).toBe(false);
     trail.record('a', snap(11, 10, R5 - 1), T0 + 2 * MIN);
     expect(trail.read('a').map((s) => s.s5)).toEqual([11]);
-    // The clock steps back an hour: the next reading opens a slot, never before the tail.
+    // The clock was ahead and is corrected back: samples stamped later than now go.
     trail.record('a', snap(12), T0 - 60 * MIN);
     trail.record('a', snap(13), T0 - 59 * MIN);
-    expect(trail.read('a').map((s) => [s.s5, s.t >= T0 + 2 * MIN])).toEqual([[11, true], [13, true]]);
+    expect(trail.read('a').map((s) => [s.t - T0, s.s5])).toEqual([[-59 * MIN, 13]]);
   });
 
   it('keeps retention and the caps', () => {
@@ -70,6 +70,7 @@ describe('UsageTrail.record', () => {
     trail.record('a', snap(10), T0);
     const file = trail.toFile(T0);
     (file.trails.a as unknown[]).push({ t: 'x' }, { t: T0 + 1, s5: 101, r5: 0, s7: 0, r7: 0 });
+    (file.trails.a as unknown[]).push({ t: T0 + 10 * MIN, s5: 1, r5: 0, s7: 0, r7: 0 }); // stamped in the future
     const back = UsageTrail.fromFile(file, T0 + MIN);
     expect(back.read('a')).toEqual([{ t: T0, s5: 10, r5: R5, s7: 10, r7: R7 }]);
     // A loaded tail is never replaced: the next change appends.

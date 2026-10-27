@@ -69,13 +69,13 @@ export class UsageTrail {
    *  change appends (after an edge, and for every key loaded from disk). */
   private readonly slotAt = new Map<string, number>();
 
-  /** Rebuild from a stored file, dropping malformed samples and anything past
-   *  retention or the caps. */
+  /** Rebuild from a stored file, dropping malformed or future samples and
+   *  anything past retention or the caps. */
   static fromFile(file: UsageTrailFile, nowMs: number): UsageTrail {
     const trail = new UsageTrail();
     for (const [key, list] of Object.entries(file.trails)) {
       if (!key || !Array.isArray(list)) continue;
-      const samples = list.filter(isUsageTrailSample).sort((a, b) => a.t - b.t);
+      const samples = list.filter((s) => isUsageTrailSample(s) && s.t <= nowMs).sort((a, b) => a.t - b.t);
       if (samples.length > 0) trail.trails.set(key, samples);
     }
     trail.prune(nowMs);
@@ -87,10 +87,16 @@ export class UsageTrail {
   record(key: string, snapshot: UsageSnapshot | null, nowMs: number): boolean {
     if (!snapshot) return false;
     let list = this.trails.get(key);
+    // Samples later than now were stamped by a clock that ran ahead and has
+    // since been corrected; drop them so the trail stays in time order.
+    const dropped = !!list && list.length > 0 && list[list.length - 1].t > nowMs;
+    if (list && dropped) {
+      while (list.length > 0 && list[list.length - 1].t > nowMs) list.pop();
+      this.slotAt.delete(key);
+    }
     const last = list?.[list.length - 1];
     const next: UsageTrailSample = {
-      // A clock that stepped back never puts a sample before the tail.
-      t: Math.max(nowMs, last?.t ?? 0),
+      t: nowMs,
       s5: snapshot.sessionPct,
       r5: snapshot.sessionResetEpochSec,
       s7: snapshot.weeklyPct,
@@ -98,7 +104,10 @@ export class UsageTrail {
     };
     if (!isUsageTrailSample(next)) return false;
     const sameWindows = !!last && sameReset(next.r5, last.r5) && sameReset(next.r7, last.r7);
-    if (last && sameWindows && last.s5 === next.s5 && last.s7 === next.s7) return false;
+    if (last && sameWindows && last.s5 === next.s5 && last.s7 === next.s7) {
+      if (dropped) this.pruneKey(key, list as UsageTrailSample[], nowMs);
+      return dropped;
+    }
     const edge = !!last && (!sameWindows || next.s5 < last.s5 || next.s7 < last.s7);
     if (!list) {
       list = [];
