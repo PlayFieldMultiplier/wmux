@@ -39,6 +39,28 @@ export function saveUsageReserveHolds(wmuxDir: string, holds: ReadonlyMap<string
   return atomicWriteJSON(path.join(wmuxDir, USAGE_RESERVE_HOLDS_FILE), { holds: list });
 }
 
+/**
+ * A push from main: applied at once (`apply`), then saved. Taken only when it
+ * is on disk too, so main sends it again until a restarted daemon would load it.
+ */
+export async function takeUsageReserveHolds(
+  wmuxDir: string,
+  raw: unknown,
+  apply: (holds: Map<string, number>) => void,
+  log: (line: string) => void,
+): Promise<{ ok: boolean }> {
+  const next = parseUsageReserveHolds(raw);
+  if (!next) return { ok: false };
+  apply(next);
+  try {
+    await saveUsageReserveHolds(wmuxDir, next);
+  } catch (err) {
+    log(`[usageReserve] holds kept in memory only: ${String(err)}`);
+    return { ok: false };
+  }
+  return { ok: true };
+}
+
 /** The hold on one account at `nowMs`: its reset, or null. */
 export function usageReserveHoldAt(holds: ReadonlyMap<string, number>, account: string, nowMs: number): number | null {
   const until = holds.get(account);

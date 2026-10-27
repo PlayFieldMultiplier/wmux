@@ -688,7 +688,7 @@ export const es = {
   'claudeIntegration.scheduledRetryDesc': "Si el turno de una ejecución programada falla por un error de red o del servidor del proveedor, esperar 5 minutos y enviar un mensaje para continuar. Activado por defecto; cada programación puede desactivarlo.",
   'claudeIntegration.scheduledRetryUnknown': "Aún desconocido: esperando al servicio en segundo plano de wmux.",
   'claudeIntegration.usageReserve': "Mantener una reserva de uso",
-  'claudeIntegration.usageReserveDesc': "Las ejecuciones programadas, los workers de fan-out y los workers de bots no se inician mientras el uso de 5 horas de una cuenta de Claude esté en el 85 % o más, para dejarte el último 15 %. Esperan a que se reinicie la ventana; lo que escribes nunca se retiene. Desactivado por defecto.",
+  'claudeIntegration.usageReserveDesc': "El trabajo desatendido que gastaría el uso de 5 horas de una cuenta de Claude no se inicia mientras ese uso esté en el 85 % o más, para dejarte el último 15 %. Una ejecución programada espera al reinicio y se ejecuta entonces si sigue dentro de su margen; si no, se pierde. El fan-out de un bot también espera, y un fan-out pedido por un agente de tu panel se rechaza, con la hora del reinicio. Codex y otros agentes no quedan en espera, y lo que escribas nunca queda en espera. Desactivado por defecto.",
   'schedules.retryTransient': "Reintentar una vez tras un error temporal",
   'schedules.retryTransientHint': "Ante un error de red o del servidor del proveedor, esperar 5 minutos y enviar un mensaje para continuar. El prompt no se vuelve a enviar.",
   'schedules.retryTransientGlobalHint': "Solo se aplica si «Reintentar ejecuciones programadas tras un error temporal» está activado en Ajustes → Integración con Claude.",

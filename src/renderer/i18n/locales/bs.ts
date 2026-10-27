@@ -687,7 +687,7 @@ export const bs = {
   'claudeIntegration.scheduledRetryDesc': "Ako potez zakazanog pokretanja ne uspije zbog greške mreže ili servera pružatelja, sačekaj 5 minuta i pošalji jednu poruku za nastavak. Uključeno po zadanom; svaki raspored to može isključiti.",
   'claudeIntegration.scheduledRetryUnknown': "Još nepoznato: čeka se pozadinska usluga wmux.",
   'claudeIntegration.usageReserve': "Zadrži rezervu korištenja",
-  'claudeIntegration.usageReserveDesc': "Zakazana pokretanja, fan-out radnici i radnici botova ne počinju dok je 5-satno korištenje Claude računa na 85% ili više, kako bi posljednjih 15% ostalo vama. Čekaju dok se prozor ne resetuje; ono što kucate nikad se ne zadržava. Isključeno po zadanom.",
+  'claudeIntegration.usageReserveDesc': "Rad bez nadzora koji bi trošio 5-satno korištenje Claude računa ne počinje dok je to korištenje na 85% ili više, kako bi posljednjih 15% ostalo vama. Zakazano pokretanje čeka resetovanje i tada se izvršava ako je još unutar dozvoljenog kašnjenja, inače je propušteno; fan-out bota također čeka; fan-out koji zatraži agent u vašem panelu odbija se uz vrijeme resetovanja. Codex i drugi agenti se ne zadržavaju, a ono što kucate nikad se ne zadržava. Isključeno po zadanom.",
   'schedules.retryTransient': "Ponovi jednom nakon privremene greške",
   'schedules.retryTransientHint': "Kod greške mreže ili servera pružatelja, sačekaj 5 minuta i pošalji jednu poruku za nastavak. Upit se ne šalje ponovo.",
   'schedules.retryTransientGlobalHint': "Važi samo dok je uključeno „Ponovi zakazana pokretanja nakon privremene greške” u Postavke → Integracija s Claudeom.",

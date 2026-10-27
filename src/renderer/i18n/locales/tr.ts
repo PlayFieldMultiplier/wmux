@@ -688,7 +688,7 @@ export const tr = {
   'claudeIntegration.scheduledRetryDesc': "Zamanlanmış bir çalıştırmanın turu ağ veya sağlayıcı sunucu hatasıyla başarısız olursa 5 dakika bekle ve bir devam mesajı gönder. Varsayılan olarak açık; her zamanlama kapatabilir.",
   'claudeIntegration.scheduledRetryUnknown': "Henüz bilinmiyor: wmux arka plan hizmeti bekleniyor.",
   'claudeIntegration.usageReserve': "Kullanım rezervi bırak",
-  'claudeIntegration.usageReserveDesc': "Bir Claude hesabının 5 saatlik kullanımı %85 veya üzerindeyken zamanlanmış çalıştırmalar, fan-out çalışanları ve bot çalışanları başlamaz; böylece son %15 sana kalır. Pencere sıfırlanana kadar beklerler; yazdıkların asla bekletilmez. Varsayılan olarak kapalı.",
+  'claudeIntegration.usageReserveDesc': "Bir Claude hesabının 5 saatlik kullanımını harcayacak gözetimsiz işler, bu kullanım %85 veya üzerindeyken başlamaz; böylece son %15 sana kalır. Zamanlanmış bir çalıştırma sıfırlanmayı bekler ve hâlâ tolerans süresi içindeyse o zaman çalışır, değilse kaçırılmış sayılır; bir botun fan-out'u da bekler; bölmendeki bir ajanın istediği fan-out ise sıfırlanma saatiyle birlikte reddedilir. Codex ve diğer ajanlar bekletilmez, yazdıkların da asla bekletilmez. Varsayılan olarak kapalı.",
   'schedules.retryTransient': "Geçici bir hatadan sonra bir kez yeniden dene",
   'schedules.retryTransientHint': "Ağ veya sağlayıcı sunucu hatasında 5 dakika bekle ve bir devam mesajı gönder. İstem yeniden gönderilmez.",
   'schedules.retryTransientGlobalHint': "Yalnızca Ayarlar → Claude entegrasyonu altında “Geçici bir hatadan sonra zamanlanmış çalıştırmaları yeniden dene” açıkken geçerlidir.",

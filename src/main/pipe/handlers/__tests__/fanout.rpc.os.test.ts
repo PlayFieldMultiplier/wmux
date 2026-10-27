@@ -1505,6 +1505,48 @@ describe('task.fanout.start — usage reserve', () => {
     expect(h.approvalCount()).toBe(0);
     expect(h.start).not.toHaveBeenCalled();
   });
+
+  it('decides a roles-only fan-out by the bindings it was approved with', async () => {
+    const untilMs = Date.now() + 90 * 60_000;
+    const reserve = () => ({ account: 'default', untilMs });
+    // Every role bound to Codex: nothing it launches spends the covered usage.
+    const codex = setup({ reserve, approval: { approved: true, outcome: 'approved', roleBindings: { Builder: { agent: 'codex' }, Reviewer: { agent: 'codex' } } } });
+    expect((await codex.call(goodParams({ titles: ['a', 'b'], roles: ['Builder', 'Reviewer'] }))).status).toBe('accepted');
+    await codex.flush();
+    expect(codex.start).toHaveBeenCalledTimes(1);
+    // One role unbound (the default launch): refused at the launch, as before the prompt.
+    const mixed = setup({ reserve, approval: { approved: true, outcome: 'approved', roleBindings: { Builder: { agent: 'codex' }, Reviewer: null } } });
+    expect((await mixed.call(goodParams({ titles: ['a', 'b'], roles: ['Builder', 'Reviewer'] }))).status).toBe('accepted');
+    await mixed.flush();
+    expect(mixed.start).not.toHaveBeenCalled();
+    const polled = await mixed.call(goodParams({ titles: ['a', 'b'], roles: ['Builder', 'Reviewer'] }));
+    expect(polled).toMatchObject({ status: 'denied', reason: 'usage-reserve' });
+    expect(errorOf(polled).code).toBe('RESOURCE_EXHAUSTED');
+    expect(errorOf(polled).message).toContain(new Date(untilMs).toISOString());
+  });
+
+  it('a hold that begins while the approval is up stops the launch; one after it stops each task at its launch', async () => {
+    let hold: { account: string; untilMs: number } | null = null;
+    const h = setup({ reserve: () => hold, approval: 'hang' });
+    expect((await h.call(goodParams())).status).toBe('accepted');
+    hold = { account: 'default', untilMs: Date.now() + 60_000 };
+    h.approveHungPrompt();
+    await h.flush();
+    await h.flush();
+    expect(h.start).not.toHaveBeenCalled();
+    expect(errorOf(await h.call(goodParams())).code).toBe('RESOURCE_EXHAUSTED');
+
+    hold = null;
+    const later = setup({ reserve: () => hold, approval: { approved: true, outcome: 'approved', roleBindings: { Builder: { agent: 'codex' } } } });
+    await later.call(goodParams({ titles: ['a', 'b'], roles: ['Builder', ''] }));
+    await later.flush();
+    const req = later.request();
+    expect(req.mayLaunch?.({ index: 1 })).toBeNull();
+    hold = { account: 'default', untilMs: Date.now() + 60_000 };
+    // A slot or dependency wait ends in the same check, right before the spawn.
+    expect(req.mayLaunch?.({ index: 1 })).toMatch(/^usage reserve: .*run unattended/);
+    expect(req.mayLaunch?.({ index: 0 })).toBeNull(); // the Codex task
+  });
 });
 
 describe('task.fanout.start — global caps', () => {

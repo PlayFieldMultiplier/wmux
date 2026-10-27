@@ -616,6 +616,41 @@ describe('task.fanout.start — bot origin', () => {
     expect(r.port.seen.size).toBe(0);
   });
 
+  it('a reserve hold that begins after the call holds the bot\'s request again at its launch, once', async () => {
+    let hold: { account: string; untilMs: number } | null = null;
+    const r = rig('lead', {}, { builtinPresets: true, reserve: () => hold });
+    const held: HeldFanoutRequest[] = [];
+    r.port.heldByUsageReserve = (_b, request) => {
+      held.push(request);
+      return true;
+    };
+    expect((await r.call({ idempotencyKey: 'wake:w-1:1', titles: ['a', 'b'], prompt: 'fix', preset: 'default' }, botCtx('lead'))).status).toBe('accepted');
+    await r.flush();
+    const req = r.start.mock.calls[0][0] as FanOutRequest;
+    // Both tasks wait (a slot); the hold begins meanwhile.
+    hold = { account: 'default', untilMs: Date.now() + 60_000 };
+    expect(req.mayLaunch?.({ index: 0 })).toMatch(/the request is held and this bot is woken with it/);
+    expect(req.mayLaunch?.({ index: 1 })).toMatch(/the request is held/);
+    expect(held.map((h) => h.args.titles)).toEqual([['a', 'b']]);
+  });
+
+  it('a request part of which launched is not held again whole; the rest is refused', async () => {
+    let hold: { account: string; untilMs: number } | null = null;
+    const r = rig('lead', {}, { builtinPresets: true, reserve: () => hold });
+    const held: HeldFanoutRequest[] = [];
+    r.port.heldByUsageReserve = (_b, request) => {
+      held.push(request);
+      return true;
+    };
+    await r.call({ idempotencyKey: 'wake:w-1:1', titles: ['a', 'b'], prompt: 'fix', preset: 'default' }, botCtx('lead'));
+    await r.flush();
+    const req = r.start.mock.calls[0][0] as FanOutRequest;
+    expect(req.mayLaunch?.({ index: 0 })).toBeNull();
+    hold = { account: 'default', untilMs: Date.now() + 60_000 };
+    expect(req.mayLaunch?.({ index: 1 })).toMatch(/start them after the window resets/);
+    expect(held).toEqual([]);
+  });
+
   it('refuses a workflow at capacity without holding an unbound retry', async () => {
     const r = rig('maintainer', { budget: { ...DEFAULT_BOT_BUDGETS.maintainer, maxConcurrentWorkers: 1 } }, { builtinPresets: true });
     r.setOpen({ bot: 1, factory: 1 });

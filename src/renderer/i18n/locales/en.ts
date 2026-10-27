@@ -4134,7 +4134,7 @@ export const en = {
   'claudeIntegration.scheduledRetryDesc': "When a scheduled run's turn fails on a network or provider server error, wait 5 minutes and send one continue message. On by default; each schedule can turn it off.",
   'claudeIntegration.scheduledRetryUnknown': "Not known yet: waiting for the wmux background service.",
   'claudeIntegration.usageReserve': "Keep a usage reserve",
-  'claudeIntegration.usageReserveDesc': "Scheduled runs, fan-out workers and bot workers don't start while a Claude account's 5-hour usage is at 85% or more, so the last 15% stays for you. They wait until the window resets; what you type is never held. Off by default.",
+  'claudeIntegration.usageReserveDesc': "Unattended work that would spend a Claude account's 5-hour usage doesn't start while that usage is at 85% or more, so the last 15% stays for you. A scheduled run waits for the reset and runs then if it is still within its grace, otherwise it is missed; a bot's fan-out waits too; a fan-out asked by an agent in your pane is refused, with the reset time. Codex and other agents are not held, and what you type is never held. Off by default.",
   'claudeIntegration.resumeOnStart': 'Resume Claude Code and Codex panes automatically on start',
   'claudeIntegration.resumeOnStartDesc': 'After a restart, type the resume line into panes that were running Claude Code or Codex instead of waiting for the Resume pill. Off by default.',
   'usageLimit.waiting': 'Waiting',

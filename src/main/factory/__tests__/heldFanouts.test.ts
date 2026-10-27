@@ -283,6 +283,16 @@ describe('HeldFanouts', () => {
     again.dispose();
   });
 
+  it('keeps a GitLab merge request\'s checkout; a hold that needs its arguments is refused without them', () => {
+    const r = rig(dir);
+    const gitlab = { ...request(BOT_A, 'verify !7'), args: { ...request(BOT_A, 'verify !7').args, checkout: { sha: SHA, fetch_ref: 'merge-requests/7/head' } } };
+    expect(r.held.hold({ ...gitlab, requireArgs: true })?.args?.checkout).toEqual({ sha: SHA, fetch_ref: 'merge-requests/7/head' });
+    const bad = { ...request(BOT_A, 'verify x'), args: { ...request(BOT_A, 'verify x').args, checkout: { sha: SHA, fetch_ref: 'refs/heads/main' } } };
+    expect(r.held.hold({ ...bad, requireArgs: true })).toBeNull();
+    expect(r.held.list(BOT_A).map((h) => h.titles[0])).toEqual(['verify !7']);
+    r.held.dispose();
+  });
+
   it('keeps a request whose wake could not be queued, for the next free slot', async () => {
     const r = rig(dir);
     let refuse = true;

@@ -283,7 +283,7 @@ import { continueOnAccount } from './continueOnAccount';
 import { paneFree } from './paneFree';
 import { createOrphanSweep } from './winProcessSweep';
 import { classifyShell } from './shell-integration';
-import { loadUsageReserveHolds, parseUsageReserveHolds, saveUsageReserveHolds, usageReserveHoldAt } from './usageReserveHolds';
+import { loadUsageReserveHolds, takeUsageReserveHolds, usageReserveHoldAt } from './usageReserveHolds';
 import { UsageLimitRegistry } from './usageLimit/UsageLimitRegistry';
 import type { SessionPromptScheduleResult } from '../shared/sessionPromptSchedule';
 import { claudeUsageLimitFromStopFailure, USAGE_LIMIT_CONTINUE_PROMPT, type PaneUsageLimitPatch } from '../shared/usageLimit';
@@ -6018,15 +6018,7 @@ function registerRpcHandlers(
   // account key → when its 5h window resets. Replaced whole on every push.
   pipeServer.onRpc('daemon.usageReserve.set', async (params, ctx) => {
     if (!pipeServer.isFirstParty(ctx.clientId)) return { ok: false };
-    const next = parseUsageReserveHolds(params['holds']);
-    if (!next) return { ok: false };
-    usageReserveHolds = next;
-    try {
-      await saveUsageReserveHolds(getWmuxDir(), next);
-    } catch (err) {
-      log('warn', `[usageReserve] holds kept in memory only: ${String(err)}`);
-    }
-    return { ok: true };
+    return takeUsageReserveHolds(getWmuxDir(), params['holds'], (next) => { usageReserveHolds = next; }, (line) => log('warn', line));
   });
   // Edits come from the app only (main relays the renderer's verbs and the
   // reset fill): an agent holding the daemon token for its hooks must not be

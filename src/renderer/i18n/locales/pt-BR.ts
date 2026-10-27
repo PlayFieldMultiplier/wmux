@@ -688,7 +688,7 @@ export const ptBR = {
   'claudeIntegration.scheduledRetryDesc': "Se o turno de uma execução agendada falhar por erro de rede ou do servidor do provedor, aguardar 5 minutos e enviar uma mensagem para continuar. Ativado por padrão; cada agendamento pode desativar.",
   'claudeIntegration.scheduledRetryUnknown': "Ainda desconhecido: aguardando o serviço em segundo plano do wmux.",
   'claudeIntegration.usageReserve': "Manter uma reserva de uso",
-  'claudeIntegration.usageReserveDesc': "Execuções agendadas, workers de fan-out e workers de bots não iniciam enquanto o uso de 5 horas de uma conta Claude estiver em 85% ou mais, para deixar os últimos 15% para você. Eles esperam a janela ser redefinida; o que você digita nunca é retido. Desativado por padrão.",
+  'claudeIntegration.usageReserveDesc': "Trabalho sem supervisão que gastaria o uso de 5 horas de uma conta Claude não inicia enquanto esse uso estiver em 85% ou mais, para deixar os últimos 15% para você. Uma execução agendada espera a redefinição e roda então se ainda estiver dentro da tolerância; caso contrário, é perdida. O fan-out de um bot também espera, e um fan-out pedido por um agente no seu painel é recusado, com o horário da redefinição. Codex e outros agentes não ficam em espera, e o que você digita nunca fica em espera. Desativado por padrão.",
   'schedules.retryTransient': "Repetir uma vez após um erro temporário",
   'schedules.retryTransientHint': "Em caso de erro de rede ou do servidor do provedor, aguardar 5 minutos e enviar uma mensagem para continuar. O prompt não é reenviado.",
   'schedules.retryTransientGlobalHint': "Só vale enquanto “Repetir execuções agendadas após um erro temporário” estiver ativado em Configurações → Integração com o Claude.",

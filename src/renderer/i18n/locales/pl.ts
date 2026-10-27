@@ -4107,7 +4107,7 @@ export const pl = {
   'claudeIntegration.scheduledRetryDesc': "Gdy tura zaplanowanego uruchomienia nie powiedzie się z powodu błędu sieci lub serwera dostawcy, odczekaj 5 minut i wyślij jedną wiadomość z prośbą o kontynuację. Domyślnie włączone; każdy harmonogram może to wyłączyć.",
   'claudeIntegration.scheduledRetryUnknown': "Jeszcze nieznane: oczekiwanie na usługę w tle wmux.",
   'claudeIntegration.usageReserve': "Zachowaj rezerwę użycia",
-  'claudeIntegration.usageReserveDesc': "Zaplanowane uruchomienia, workery fan-out i workery botów nie startują, dopóki 5-godzinne użycie konta Claude wynosi 85% lub więcej, aby ostatnie 15% zostało dla Ciebie. Czekają na reset okna; to, co wpisujesz, nigdy nie jest wstrzymywane. Domyślnie wyłączone.",
+  'claudeIntegration.usageReserveDesc': "Praca bez nadzoru, która zużyłaby 5-godzinne użycie konta Claude, nie startuje, dopóki to użycie wynosi 85% lub więcej, aby ostatnie 15% zostało dla Ciebie. Zaplanowane uruchomienie czeka na reset i rusza wtedy, jeśli mieści się jeszcze w swoim marginesie, w przeciwnym razie jest pominięte; fan-out bota też czeka; fan-out zlecony przez agenta w Twoim panelu jest odrzucany z godziną resetu. Codex i inne agenty nie są wstrzymywane, a to, co wpisujesz, nigdy nie jest wstrzymywane. Domyślnie wyłączone.",
   'claudeIntegration.resumeOnStart': 'Automatycznie wznawiaj panele Claude Code i Codex przy starcie',
   'claudeIntegration.resumeOnStartDesc': 'Po restarcie wpisz polecenie wznowienia w panelach, w których działał Claude Code lub Codex, zamiast czekać na przycisk Wznów. Domyślnie wyłączone.',
   'usageLimit.waiting': 'Oczekiwanie',

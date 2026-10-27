@@ -90,6 +90,27 @@ describe('UsageReserve', () => {
     expect(relaunched.holdForWorkspace('ws-any')).toEqual({ account: 'default', untilMs: RESET_SEC * 1000 });
   });
 
+  it('writes the holds again after a failed write, so a relaunch still has them', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-usage-reserve-'));
+    dirs.push(dir);
+    const readings: Array<[string, UsageSnapshot | null]> = [];
+    const logged: string[] = [];
+    const r = new UsageReserve({ wmuxDir: dir, snapshots: () => readings, accountOfWorkspace: () => 'default', now: () => NOW, log: (l) => logged.push(l) });
+    await r.setEnabled(true);
+    fs.chmodSync(dir, 0o500); // the write fails
+    try {
+      readings.push(['default', snap(90)]);
+      r.refresh();
+      await vi.waitFor(() => expect(logged.some((l) => l.includes('holds not saved'))).toBe(true), { timeout: 5_000 });
+    } finally {
+      fs.chmodSync(dir, 0o700);
+    }
+    r.refresh(); // the same holds: written this time
+    await vi.waitFor(() => {
+      expect(JSON.parse(fs.readFileSync(path.join(dir, 'usage-reserve.json'), 'utf8')).holds).toHaveLength(1);
+    }, { timeout: 5_000 });
+  });
+
   it('sends again a push the daemon did not take', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-usage-reserve-'));
     dirs.push(dir);

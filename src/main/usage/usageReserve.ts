@@ -213,7 +213,11 @@ export class UsageReserve {
     this.savedKnown = json;
     const holds = this.knownList();
     const write = this.writes.then(() => atomicWriteJSON(this.filePath, { enabled: this.on === true, holds }));
-    this.writes = write.catch((err) => this.deps.log?.(`[usageReserve] holds not saved: ${String(err)}`));
+    this.writes = write.catch((err) => {
+      // Not on disk: the next refresh writes it again (unless a newer one is queued).
+      if (this.savedKnown === json) this.savedKnown = '';
+      this.deps.log?.(`[usageReserve] holds not saved: ${String(err)}`);
+    });
   }
 
   /** Something unattended was held: tell the owner, once per hold. */

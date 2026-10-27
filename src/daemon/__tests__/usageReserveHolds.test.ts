@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { loadUsageReserveHolds, parseUsageReserveHolds, saveUsageReserveHolds, usageReserveHoldAt } from '../usageReserveHolds';
+import { loadUsageReserveHolds, parseUsageReserveHolds, saveUsageReserveHolds, takeUsageReserveHolds, usageReserveHoldAt } from '../usageReserveHolds';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -20,6 +20,25 @@ describe('usage reserve holds (daemon)', () => {
     expect(usageReserveHoldAt(back, 'default', 1_000)).toBe(2_000);
     expect(usageReserveHoldAt(back, 'acct-1', 1_000)).toBeNull();
     expect(usageReserveHoldAt(back, 'other', 1_000)).toBeNull();
+  });
+
+  it('applies a push it cannot save, but does not take it, so main sends it again', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-reserve-holds-'));
+    dirs.push(dir);
+    let applied: Map<string, number> | null = null;
+    const logged: string[] = [];
+    fs.chmodSync(dir, 0o500); // the write fails
+    let got: { ok: boolean };
+    try {
+      got = await takeUsageReserveHolds(dir, [{ account: 'default', untilMs: 2_000 }], (h) => { applied = h; }, (l) => logged.push(l));
+    } finally {
+      fs.chmodSync(dir, 0o700);
+    }
+    expect(got).toEqual({ ok: false });
+    expect(applied).toEqual(new Map([['default', 2_000]]));
+    expect(logged).toHaveLength(1);
+    expect(await takeUsageReserveHolds(dir, [{ account: 'default', untilMs: 2_000 }], () => undefined, () => undefined)).toEqual({ ok: true });
+    expect(usageReserveHoldAt(loadUsageReserveHolds(dir), 'default', 1_000)).toBe(2_000);
   });
 
   it('refuses a malformed push whole', () => {

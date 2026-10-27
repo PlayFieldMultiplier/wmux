@@ -687,7 +687,7 @@ export const nb = {
   'claudeIntegration.scheduledRetryDesc': "Hvis turen i en planlagt kjøring feiler på en nettverks- eller serverfeil hos leverandøren, vent 5 minutter og send én fortsett-melding. På som standard; hver plan kan slå det av.",
   'claudeIntegration.scheduledRetryUnknown': "Ikke kjent ennå: venter på bakgrunnstjenesten til wmux.",
   'claudeIntegration.usageReserve': "Behold en bruksreserve",
-  'claudeIntegration.usageReserveDesc': "Planlagte kjøringer, fan-out-arbeidere og bot-arbeidere starter ikke mens en Claude-kontos 5-timersbruk er på 85 % eller mer, slik at de siste 15 % blir igjen til deg. De venter til vinduet nullstilles; det du skriver, holdes aldri tilbake. Av som standard.",
+  'claudeIntegration.usageReserveDesc': "Arbeid uten tilsyn som ville bruke en Claude-kontos 5-timersbruk, starter ikke mens bruken er på 85 % eller mer, slik at de siste 15 % blir igjen til deg. En planlagt kjøring venter på nullstillingen og kjører da hvis den fortsatt er innenfor fristen, ellers er den gått glipp av; en bots fan-out venter også; en fan-out som en agent i ruten din ber om, avvises med tidspunktet for nullstillingen. Codex og andre agenter holdes ikke tilbake, og det du skriver, holdes aldri tilbake. Av som standard.",
   'schedules.retryTransient': "Prøv på nytt én gang etter en midlertidig feil",
   'schedules.retryTransientHint': "Ved en nettverks- eller serverfeil hos leverandøren, vent 5 minutter og send én fortsett-melding. Ledeteksten sendes ikke på nytt.",
   'schedules.retryTransientGlobalHint': "Gjelder bare mens «Prøv planlagte kjøringer på nytt etter en midlertidig feil» er på under Innstillinger → Claude-integrasjon.",
