@@ -294,6 +294,30 @@ describe('watchFolderTrust', () => {
     expect(calm.keys).toEqual([]);
   });
 
+  it('reads for two minutes, slower after the first 30 s: a dialog drawn at 35 s is reported', async () => {
+    const clock = clocked();
+    const reads: number[] = [];
+    const port: FirstRunPort = {
+      readScreen: async () => {
+        reads.push(clock.now());
+        return clock.now() >= 35_000 ? folderTrust('qwen-folder-trust-60x30') : 'starting…';
+      },
+      sendKey: async () => undefined,
+    };
+    expect(await watchFolderTrust('pty-1', port, clock)).toMatchObject({ status: 'stuck', reason: 'trust' });
+    expect(reads.filter((t) => t < 30_000)).toHaveLength(60);
+    expect(reads.at(-1)).toBeLessThanOrEqual(36_000);
+    // With nothing drawn at all, the watch gives up at its own deadline.
+    const quiet = clocked();
+    expect(await watchFolderTrust('pty-1', scriptedPort(['starting…']), quiet)).toEqual({ status: 'clear' });
+    expect(quiet.now()).toBeGreaterThanOrEqual(120_000);
+  });
+
+  it('finds the composer inside a narrow box', async () => {
+    const boxed = ['│ >   Type your message    │', '│ or @path/to/file         │', '╰──────────────────────────╯'].join('\n');
+    expect(await watchFolderTrust('pty-1', scriptedPort(['starting…', boxed]), clocked())).toEqual({ status: 'clear' });
+  });
+
   it('a model error on the same screen does not hide the dialog', async () => {
     // Both within the model error's six-row tail: the error is read first.
     const both = [

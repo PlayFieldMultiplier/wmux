@@ -694,7 +694,7 @@ export class FanOutService {
   /** F15 — delay before the single late model re-read. */
   private readonly firstRunRecheckMs: number;
   /** F15 — deferred re-checks still in flight (tests await them). */
-  private pendingRechecks: Promise<void>[] = [];
+  private readonly pendingRechecks = new Set<Promise<void>>();
   /** Depth-1 lineage + live-cap store (absent = the hosted one). */
   private readonly lineage?: Pick<FanOutGuards, 'markTask' | 'taskSettled'> & Partial<Pick<FanOutGuards, 'bindTask'>>;
   private readonly launches?: Pick<WorkerSlots, 'beginLaunch' | 'launched' | 'released'>;
@@ -2310,13 +2310,13 @@ export class FanOutService {
       // paint, send the first turn and be refused. Look once more, later — and
       // do it off the critical path, because spawnOne is serial and the fan-out
       // must not pay that wait N times over.
-      this.scheduleModelRecheck(base, ownerWorkspaceId, ptyId, port, neutralisedModelEnv);
+      this.scheduleModelRecheck(base, ownerWorkspaceId, ptyId, port, neutralisedModelEnv, agent.slug);
       return;
     }
     base.firstRunPrompt = outcome.headline;
     if (outcome.status !== 'stuck') return;
     base.firstRunStuck = true;
-    await this.markFirstRunStuck(base.taskId, ownerWorkspaceId, outcome, neutralisedModelEnv);
+    await this.markFirstRunStuck(base.taskId, ownerWorkspaceId, outcome, neutralisedModelEnv, agent.slug);
   }
 
   /**
@@ -2334,12 +2334,19 @@ export class FanOutService {
     port: FirstRunPort,
     agent: AgentSlug,
   ): void {
+    const { taskId } = base;
     const run = async (): Promise<void> => {
       const outcome = await watchFolderTrust(ptyId, port, this.firstRunOptions ?? {});
       if (outcome.status !== 'stuck') return;
-      await this.markFirstRunStuck(base.taskId, ownerWorkspaceId, outcome, false, agent);
+      await this.markFirstRunStuck(taskId, ownerWorkspaceId, outcome, false, agent);
     };
-    this.pendingRechecks.push(run().catch(() => { /* best-effort, as the model recheck */ }));
+    this.trackRecheck(run().catch(() => { /* best-effort, as the model recheck */ }));
+  }
+
+  /** Keep a late first-run check until it settles, for settleFirstRunRechecks. */
+  private trackRecheck(check: Promise<void>): void {
+    this.pendingRechecks.add(check);
+    void check.finally(() => this.pendingRechecks.delete(check));
   }
 
   /**
@@ -2356,9 +2363,11 @@ export class FanOutService {
     ptyId: string,
     port: FirstRunPort,
     neutralisedModelEnv: boolean,
+    agent: AgentSlug,
   ): void {
     const delay = this.firstRunRecheckMs;
     if (delay < 0) return;
+    const { taskId } = base;
     const run = async (): Promise<void> => {
       if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
       let screen = '';
@@ -2370,13 +2379,14 @@ export class FanOutService {
       const prompt = detectFirstRunPrompt(screen);
       if (prompt?.kind !== 'model-error') return;
       await this.markFirstRunStuck(
-        base.taskId,
+        taskId,
         ownerWorkspaceId,
         { headline: prompt.headline, reason: 'model', ...(prompt.model ? { model: prompt.model } : {}) },
         neutralisedModelEnv,
+        agent,
       );
     };
-    this.pendingRechecks.push(run().catch(() => { /* best-effort — see above */ }));
+    this.trackRecheck(run().catch(() => { /* best-effort — see above */ }));
   }
 
   /**
@@ -2472,9 +2482,7 @@ export class FanOutService {
 
   /** Tests only: settle the deferred model re-checks this run scheduled. */
   async settleFirstRunRechecks(): Promise<void> {
-    const pending = this.pendingRechecks;
-    this.pendingRechecks = [];
-    await Promise.all(pending);
+    await Promise.all([...this.pendingRechecks]);
   }
 
   /** Move a task's ledger row to `input_required` with the reason. Best-effort:
@@ -2484,7 +2492,7 @@ export class FanOutService {
     ownerWorkspaceId: string,
     outcome: { headline: string; reason: 'trust' | 'unanswered' | 'send-failed' | 'model'; model?: string },
     neutralisedModelEnv: boolean,
-    agent: AgentSlug = 'claude',
+    agent: AgentSlug,
   ): Promise<void> {
     if (!taskId) return;
     try {

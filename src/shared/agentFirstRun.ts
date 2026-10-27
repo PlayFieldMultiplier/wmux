@@ -70,8 +70,9 @@ export const AGENT_FIRST_RUN_ENV = 'WMUX_AGENT_FIRST_RUN';
 /** The env Claude Code reads to skip its workspace-trust dialog. */
 export const CLAUDE_SANDBOXED_ENV = 'CLAUDE_CODE_SANDBOXED';
 
-/** Launcher stems this module acts on. Every other agent is left ALONE — a
- *  codex/gemini/opencode pane has neither these screens nor this env. */
+/** Launcher stems that get this module's launch env. Which workers the
+ *  first-run watch reads is the agent row's firstRunWatch: a gemini or qwen
+ *  worker is watched for its trust dialog only, and no other agent at all. */
 export const SUPPORTED_STEMS: ReadonlySet<string> = new Set(['claude']);
 
 /** Is the first-run handling enabled at all? */
@@ -223,11 +224,6 @@ function boxlessText(screen: string): string {
   return screen.split('\n').map((row) => row.replace(/[│║┃╭╮╰╯─]/g, ' ')).join(' ').replace(/\s+/g, ' ');
 }
 
-/** A trust question anywhere in the text: the cheap test before the rows are read. */
-function hasTrustQuestion(text: string): boolean {
-  return TRUST_HEADLINE.test(text) || CODEX_TRUST_HEADLINE.test(text);
-}
-
 /** "gemini folder trust dialog", or "folder trust dialog" when no agent is named. */
 function trustHeadline(text: string): string {
   const agent = TRUST_SCREEN_AGENTS.find(([re]) => re.test(text))?.[1];
@@ -256,8 +252,7 @@ export function detectFirstRunPrompt(screen: string): FirstRunPrompt | null {
   // Other agents' trust dialogs (Gemini CLI and Qwen Code draw no confirm
   // footer), read as the input guard reads them; one too narrow to read its
   // choices is still the dialog.
-  const text = boxlessText(screen);
-  if (hasTrustQuestion(text) && readFolderTrustScreen(rows) !== null) return { kind: 'trust', headline: trustHeadline(text) };
+  if (readFolderTrustScreen(rows) !== null) return { kind: 'trust', headline: trustHeadline(boxlessText(screen)) };
   if (!hasFooter) return null;
   if (!looksLikeApprovalPrompt(rows)) return null;
   for (const { re, label } of INTERSTITIAL_HEADLINES) {
@@ -459,14 +454,21 @@ export async function clearFirstRunPrompts(
 }
 
 /** The composer Gemini CLI and Qwen Code draw once they take a prompt (live
- *  captures; a narrow pane wraps it). */
+ *  captures; a narrow pane wraps it, inside a box's borders). */
 const TRUST_WATCH_READY = /Type\s+your\s+message\s+or\s+@path/;
+
+/** How long the trust-only watch reads: its dialog can be drawn well after
+ *  launch (a slow install or auth step first). */
+export const TRUST_WATCH_DEADLINE_MS = 120_000;
+/** It reads at the first-run poll for this long, then every TRUST_WATCH_SLOW_POLL_MS. */
+const TRUST_WATCH_FAST_MS = 30_000;
+const TRUST_WATCH_SLOW_POLL_MS = 2_000;
 
 /**
  * Watch a freshly launched worker whose agent has only a folder-trust dialog
  * to stop at (an agent row's firstRunWatch 'trust'). Reads until the dialog
- * shows (stuck), the agent's composer shows (clear), or the deadline passes
- * (clear); unlike {@link clearFirstRunPrompts} it does not stop after a few
+ * shows (stuck), the agent's composer shows (clear), or its own deadline
+ * (TRUST_WATCH_DEADLINE_MS) passes (clear), slower after the first 30 s; unlike {@link clearFirstRunPrompts} it does not stop after a few
  * calm reads, since the dialog can be drawn well after launch. Nothing is
  * ever pressed. The dialog is read with the input guard's own reader, so no
  * other text on the screen (a model error) can hide it.
@@ -474,16 +476,14 @@ const TRUST_WATCH_READY = /Type\s+your\s+message\s+or\s+@path/;
 export async function watchFolderTrust(
   ptyId: string,
   port: FirstRunPort,
-  options: FirstRunWatchOptions = {},
+  options: Pick<FirstRunWatchOptions, 'sleep' | 'now' | 'log'> = {},
 ): Promise<FirstRunOutcome> {
-  const deadlineMs = options.deadlineMs ?? FIRST_RUN_DEADLINE_MS;
-  const pollMs = options.pollMs ?? FIRST_RUN_POLL_MS;
   const sleep = options.sleep ?? defaultSleep;
   const now = options.now ?? Date.now;
   const log = options.log ?? ((m: string): void => console.warn(`[fanout:first-run] ${m}`));
 
   const started = now();
-  while (now() - started < deadlineMs) {
+  while (now() - started < TRUST_WATCH_DEADLINE_MS) {
     let screen = '';
     try {
       screen = await port.readScreen(ptyId);
@@ -491,12 +491,12 @@ export async function watchFolderTrust(
       // A viewport we cannot read is no evidence — keep watching.
       screen = '';
     }
-    if (hasTrustQuestion(boxlessText(screen)) && readFolderTrustScreen(screen.split('\n')) !== null) {
+    if (readFolderTrustScreen(screen.split('\n')) !== null) {
       log(`pane ${ptyId} is on its folder trust dialog; wmux does not answer it. Accept the folder once by hand.`);
       return { status: 'stuck', headline: 'folder trust dialog', reason: 'trust' };
     }
-    if (TRUST_WATCH_READY.test(screen)) return { status: 'clear' };
-    await sleep(pollMs);
+    if (TRUST_WATCH_READY.test(boxlessText(screen))) return { status: 'clear' };
+    await sleep(now() - started < TRUST_WATCH_FAST_MS ? FIRST_RUN_POLL_MS : TRUST_WATCH_SLOW_POLL_MS);
   }
   return { status: 'clear' };
 }

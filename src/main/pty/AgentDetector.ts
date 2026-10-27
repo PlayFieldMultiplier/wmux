@@ -676,7 +676,7 @@ const PROFILE_BY_SLUG = new Map(AGENT_PATTERNS.map((ap) => [ap.slug, ap]));
 const READY_MATCH_REACH = 512;
 /** A CSI, OSC or charset escape at the very end of a read, not yet finished. */
 // eslint-disable-next-line no-control-regex
-const UNFINISHED_ESCAPE = /\x1b(?:\[[0-9;?<=>]*|\][^\x07\x1b]*|\()?$/;
+const UNFINISHED_ESCAPE = /\x1b(?:\[[\x30-\x3f]*[\x20-\x2f]*|\][^\x07\x1b]*|\()?$/;
 /** The profiles with an approvalReady question, its patterns compiled global once. */
 const READY_PROFILES = AGENT_PATTERNS.flatMap((ap) => (ap.approvalReady
   ? [ap.approvalReady, ...(ap.approvalReady.also ?? [])].map(({ question, end }, i) => ({
@@ -708,9 +708,11 @@ const ROW_OR_FRAME_END_G = /\r?\n|\r(?!\n)|\x1b\[\?2026l/g;
 const FRAME_END_ROW_AGENTS: ReadonlySet<string> = new Set(AGENT_PATTERNS.filter((ap) => ap.frameEndsRow).map((ap) => ap.agent));
 
 // ANSI escape strip regex. Covers:
-//   CSI    \x1b[ <params> <final>   where params may include digits/semicolons
-//                                   AND private-mode prefixes ? < = >
-//                                   final is a letter A-Z/a-z or '@'
+//   CSI    \x1b[ <params> <intermediates> <final>   params are 0x30-0x3F
+//                                   (digits, `;`, `:` subparameters, and the
+//                                   private-mode prefixes ? < = >),
+//                                   intermediates 0x20-0x2F, and the final
+//                                   is a letter A-Z/a-z or '@'
 //   OSC    \x1b] <data> \x07
 //   Charset designation \x1b(X
 //
@@ -718,7 +720,7 @@ const FRAME_END_ROW_AGENTS: ReadonlySet<string> = new Set(AGENT_PATTERNS.filter(
 // Claude/Codex TUIs emit frequently, leaving stray fragments in `clean` and
 // occasionally breaking pattern matching.
 // eslint-disable-next-line no-control-regex
-const ANSI_STRIP = /\x1b(?:\[[0-9;?<=>]*[a-zA-Z@]|\][^\x07]*\x07|\([A-Z])/g;
+const ANSI_STRIP = /\x1b(?:\[[\x30-\x3f]*[\x20-\x2f]*[a-zA-Z@]|\][^\x07]*\x07|\([A-Z])/g;
 
 /**
  * Row boundaries as a full-screen TUI actually draws them.

@@ -1787,6 +1787,8 @@ describe('fan-out worker first run (A-1)', () => {
       release();
       await svc.settleFirstRunRechecks();
       for (const task of res.tasks) expect(ledger.list({ id: task.taskId as string })[0].status).toBe('input_required');
+      // Each settled watch let go of itself.
+      expect((svc as unknown as { pendingRechecks: Set<unknown> }).pendingRechecks.size).toBe(0);
     });
 
     it('leaves a codex worker unwatched', async () => {

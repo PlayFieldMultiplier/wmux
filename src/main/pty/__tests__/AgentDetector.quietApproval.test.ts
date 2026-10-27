@@ -614,6 +614,18 @@ describe('Gemini CLI and Qwen Code folder-trust dialogs (live captures)', () => 
     }
   });
 
+  it('a read cut inside a colon-parameter colour still sees the last choice', () => {
+    // The colour between the number and the label, as Gemini CLI colours them apart.
+    const output = fixture('gemini-folder-trust-60x30').join('\r\n').replace('3. Don', '3.\u001b[38:2:255:255:255m Don');
+    const cut = output.indexOf('\u001b[38:2:255:') + '\u001b[38:2:255:'.length;
+    const det = new AgentDetector();
+    det.seedTrustedIdentity('gemini', det.getIdentityEpoch());
+    det.feed(output.slice(0, cut));
+    expect(det.takeApprovalRecheckRequest()).toBe(false);
+    det.feed(output.slice(cut));
+    expect(det.takeApprovalRecheckRequest()).toBe(true);
+  });
+
   it("ties Qwen's last-choice end to its trust question only", () => {
     // A write dialog whose diff has a numbered "3. Don…" line: not finished until its own spinner row.
     const write = ['Apply this change?', '  1 + 1. Lint the code', "  2 + 3. Don't commit secrets", '› 1. Yes, allow once', '  2. No, suggest changes (esc)'];
