@@ -159,19 +159,47 @@ export function looksLikeApprovalPrompt(rows: readonly string[]): boolean {
   return rows.some((row) => CURSOR_OPTION_ROW.test(row));
 }
 
-/** The choices that grant trust, and those that decline it or leave. */
-const TRUST_GRANTS = 'Yes, I trust this folder|Yes, proceed|Trust and continue|Yes, continue';
-const TRUST_DECLINES = 'No, exit|No, quit|Quit|Back to [A-Za-z ]+';
+/** The choices that grant trust, and those that decline it or leave. Gemini CLI
+ *  and Qwen Code name the folder after "Trust folder" / "Trust parent folder". */
+const TRUST_GRANTS = 'Yes, I trust this folder|Yes, proceed|Trust and continue|Yes, continue|Trust (?:parent )?folder(?: \\(.+\\))?';
+const TRUST_DECLINES = "No, exit|No, quit|Quit|Back to [A-Za-z ]+|Don't trust(?: \\(esc\\))?";
+/** The same labels as plain text, for a choice a narrow pane cut with "…". */
+const TRUST_GRANT_STEMS = ['Yes, I trust this folder', 'Yes, proceed', 'Trust and continue', 'Yes, continue', 'Trust folder', 'Trust parent folder'];
+const TRUST_DECLINE_STEMS = ['No, exit', 'No, quit', 'Quit', 'Back to ', "Don't trust"];
+/** The selection cursor: Gemini CLI draws it as a dot. */
+const CURSOR = '[❯›>»●]';
 /** A choice row: optional selection cursor and digit, then the label alone. */
-const choiceRow = (labels: string): RegExp => new RegExp(`^(?:[❯›>»]\\s*)?(?:\\d{1,2}[.)]\\s*)?(?:${labels})$`, 'i');
+const choiceRow = (labels: string): RegExp => new RegExp(`^(?:${CURSOR}\\s*)?(?:\\d{1,2}[.)]\\s*)?(?:${labels})$`, 'i');
 const TRUST_GRANT_CHOICE = choiceRow(TRUST_GRANTS);
 const TRUST_CHOICE = choiceRow(`${TRUST_GRANTS}|${TRUST_DECLINES}`);
+/** A choice cut with "…" (Gemini CLI and Qwen Code at 22 columns): its visible text. */
+const CUT_CHOICE = new RegExp(`^(?:${CURSOR}\\s*)?(?:\\d{1,2}[.)]\\s*)?(.+?)\\s*…$`);
+/** A grant cut inside the folder name it ends with. */
+const CUT_FOLDER_GRANT = /^Trust (?:parent )?folder \([^)]*$/i;
+/** Shortest visible text of a cut choice that still names one ("Trust f", "Don't t"). */
+const MIN_CUT_TEXT = 7;
+/** Whether a "…"-cut row is the start of a granting or a declining label, or neither. */
+function cutChoiceKind(row: string): 'grant' | 'decline' | null {
+  const text = CUT_CHOICE.exec(row)?.[1];
+  if (text === undefined) return null;
+  if (CUT_FOLDER_GRANT.test(text)) return 'grant';
+  if (text.length < MIN_CUT_TEXT) return null;
+  const startOf = (stems: readonly string[]): boolean =>
+    stems.some((stem) => stem.toLowerCase().startsWith(text.toLowerCase()));
+  const grant = startOf(TRUST_GRANT_STEMS);
+  const decline = startOf(TRUST_DECLINE_STEMS);
+  if (grant === decline) return null;
+  return grant ? 'grant' : 'decline';
+}
+const isTrustChoice = (row: string): boolean => TRUST_CHOICE.test(row) || cutChoiceKind(row) !== null;
 /** The key hint under the choices ("Enter to confirm · Esc to cancel", "enter continue · esc back"). */
 const TRUST_FOOTER = /^(?:press\s+)?(?:↑\/↓|↑↓)?.{0,24}\benter\b.{0,30}\b(?:cancel|back|continue|confirm)$/i;
-const SELECTION_CURSOR = /^[❯›>»]\s*\S/;
+const SELECTION_CURSOR = new RegExp(`^${CURSOR}\\s*\\S`);
 /** Where a choice starts even when a narrow pane wrapped its label: the cursor, or its digit. */
-const CHOICE_START = /^(?:[❯›>»]\s*\S|\d{1,2}[.)]\s)/;
-const isTrustDialogRow = (row: string): boolean => TRUST_CHOICE.test(row) || TRUST_FOOTER.test(row);
+const CHOICE_START = new RegExp(`^(?:${CURSOR}\\s*\\S|\\d{1,2}[.)]\\s)`);
+/** The bottom edge of the box Gemini CLI and Qwen Code draw the dialog in. */
+const FRAME_BOTTOM = /^╰─+╯?$/;
+const isTrustDialogRow = (row: string): boolean => isTrustChoice(row) || TRUST_FOOTER.test(row);
 /** Rows a wrapped question may span: one or two at 60 columns (measured), four at about 14; six leaves room. */
 const TRUST_QUESTION_ROWS = 6;
 
@@ -189,8 +217,11 @@ const TRUST_QUESTION_ROWS = 6;
  *   - below it, the choice that grants trust and exactly one row under the
  *     selection cursor, numbered or not;
  *   - after the first choice, only choices and the key hint, each rejoined
- *     when a narrow pane wrapped it: a dialog with anything else under it
- *     (agent output, a shell prompt) has already been answered.
+ *     when a narrow pane wrapped it, and at most the bottom edge of the box
+ *     drawn round the dialog: a dialog with anything else under it (agent
+ *     output, a shell prompt) has already been answered;
+ *   - a choice a narrow pane cut with "…" counts only as the start of a known
+ *     label, and only beside at least one other choice.
  */
 export function looksLikeFolderTrustDialog(rows: readonly string[]): boolean {
   const tail = rows
@@ -200,12 +231,14 @@ export function looksLikeFolderTrustDialog(rows: readonly string[]): boolean {
     const question = tail.slice(q, q + TRUST_QUESTION_ROWS).join(' ');
     if (!TRUST_HEADLINE.test(question) && !CODEX_TRUST_HEADLINE.test(question)) continue;
     const below = tail.slice(q + 1);
-    const first = below.findIndex((row) => TRUST_CHOICE.test(row) || CHOICE_START.test(row));
+    const first = below.findIndex((row) => isTrustChoice(row) || CHOICE_START.test(row));
     if (first < 0) return false;
+    const rest = below.slice(first);
+    if (rest.length > 1 && FRAME_BOTTOM.test(rest[rest.length - 1])) rest.pop();
     // Rejoin what a narrow pane wrapped: "Yes, I trust this" + "folder",
     // "› 1. Trust and" + "continue", "Enter to confirm · Esc to" + "cancel".
     const block: string[] = [];
-    for (const row of below.slice(first)) {
+    for (const row of rest) {
       const last = block.at(-1);
       if (last !== undefined && !isTrustDialogRow(row) && isTrustDialogRow(`${last} ${row}`)) {
         block[block.length - 1] = `${last} ${row}`;
@@ -216,8 +249,9 @@ export function looksLikeFolderTrustDialog(rows: readonly string[]): boolean {
         block.push(row);
       }
     }
-    const choices = block.filter((row) => TRUST_CHOICE.test(row));
-    return choices.some((row) => TRUST_GRANT_CHOICE.test(row))
+    const choices = block.filter(isTrustChoice);
+    if (choices.length < 2 && choices.some((row) => cutChoiceKind(row) !== null)) return false;
+    return choices.some((row) => TRUST_GRANT_CHOICE.test(row) || cutChoiceKind(row) === 'grant')
       && choices.filter((row) => SELECTION_CURSOR.test(row)).length === 1
       && block.every(isTrustDialogRow);
   }
