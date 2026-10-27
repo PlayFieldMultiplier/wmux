@@ -95,4 +95,18 @@ describe('webClipboardApi pending copy', () => {
     expect(await settled(api.writeText('x'.repeat(1_000_001)))).toBe('rejected: copy refused');
     expect(states).toEqual(['waiting', 'dropped']);
   });
+
+  it('does not keep an older refusal that answers after a newer write', async () => {
+    const { writeText, api, states, gesture } = setup();
+    let refuseOlder: (err: Error) => void = () => undefined;
+    writeText.mockImplementationOnce(() => new Promise<void>((_, reject) => { refuseOlder = reject; }));
+    const older = settled(api.writeText('older'));
+    writeText.mockResolvedValueOnce(undefined);
+    await api.writeText('newer');
+    refuseOlder(new Error('NotAllowedError'));
+    expect(await older).toBe('rejected: copy refused');
+    expect(states).toEqual([]);
+    gesture('keydown');
+    expect(writeText).toHaveBeenCalledTimes(2);
+  });
 });

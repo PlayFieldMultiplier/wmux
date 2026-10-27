@@ -1227,7 +1227,7 @@ export const en = {
   'remote.clipboardCopiedFrom': 'Copied from {host}',
   'remote.clipboardCopiedFromRemote': 'Copied from the remote host',
   'terminal.copyFailed': 'Copy failed — selection kept',
-  'terminal.copyPendingGesture': 'Tap or press any key to finish copying',
+  'terminal.copyPendingGesture': 'Tap, click or press any key to finish copying',
   'terminal.mouseOwnedSelectHint': 'This app is using the mouse — hold Shift to select text',
   'terminal.mouseOwnedSelectHintMac': 'This app is using the mouse — hold Option to select text',
   'terminal.altWheelSelectionHint': 'This app scrolls its own transcript, so scrolling cleared the selection — Shift+drag selects what is on screen',

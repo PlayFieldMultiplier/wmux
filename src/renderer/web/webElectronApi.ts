@@ -138,7 +138,10 @@ export function webClipboardApi(
   };
 
   let listener: ((state: PendingCopyState) => void) | null = null;
-  let pending: { text: string; resolve: () => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout>; retrying: boolean } | null = null;
+  let pending: { text: string; resolve: () => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout>; retrying: boolean; seq: number } | null = null;
+  // Each writeText call's number, so a late answer to an older write cannot
+  // override a newer one.
+  let writeSeq = 0;
   const gestureEvents = ['keydown', 'pointerdown', 'pointerup'] as const;
   const clearPending = (outcome: 'copied' | Error): void => {
     const p = pending;
@@ -166,21 +169,25 @@ export function webClipboardApi(
       () => { p.retrying = false; },
     );
   }
-  const keepPending = (text: string, err: unknown): Promise<void> => {
-    if (!doc || text.length > MAX_PENDING_COPY_CHARS) return Promise.reject(err);
+  const keepPending = (text: string, err: unknown, seq: number): Promise<void> => {
+    if (!doc || text.length > MAX_PENDING_COPY_CHARS || seq !== writeSeq) return Promise.reject(err);
     clearPending(new Error('copy replaced by a newer one'));
     return new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => clearPending(new Error('copy expired before a gesture')), PENDING_COPY_TTL_MS);
-      pending = { text, resolve, reject, timer, retrying: false };
+      pending = { text, resolve, reject, timer, retrying: false, seq };
       for (const type of gestureEvents) doc.addEventListener(type, onGesture, true);
       listener?.('waiting');
     });
   };
-  // A newer copy that lands drops the pending one, so a later tap cannot put the older text back.
-  const writeText = (text: string): Promise<void> => writeNow(text).then(
-    () => clearPending(new Error('copy replaced by a newer one')),
-    (err: unknown) => keepPending(text, err),
-  );
+  // A newer copy that lands drops the pending one, and a refusal is kept only
+  // while no newer write has started, so a later tap cannot put older text back.
+  const writeText = (text: string): Promise<void> => {
+    const seq = ++writeSeq;
+    return writeNow(text).then(
+      () => { if (pending && pending.seq < seq) clearPending(new Error('copy replaced by a newer one')); },
+      (err: unknown) => keepPending(text, err, seq),
+    );
+  };
   return {
     /** Web only: the pending-copy hint follows this. One listener; returns its unsubscribe. */
     onPendingCopy: (fn: (state: PendingCopyState) => void) => {

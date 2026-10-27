@@ -1017,7 +1017,7 @@ export const ko = {
   'remote.hubRepairOriginMismatch': '이 링크는 “{name}”이 아니라 {origin}용입니다. 다시 페어링해도 컴퓨터를 다른 주소로 옮기지 않습니다.',
   'remote.hubPairedWith': '{origin}와(과) 페어링됨',
   'terminal.copyFailed': '복사 실패 — 선택 영역 유지됨',
-  'terminal.copyPendingGesture': '탭하거나 아무 키나 눌러 복사를 마치세요',
+  'terminal.copyPendingGesture': '탭하거나 클릭하거나 아무 키나 눌러 복사를 마치세요',
   'terminal.mouseOwnedSelectHint': '이 앱이 마우스를 사용 중 — Shift를 누른 채 드래그하면 선택됩니다',
   'terminal.mouseOwnedSelectHintMac': '이 앱이 마우스를 사용 중 — Option을 누른 채 드래그하면 선택됩니다',
   'terminal.altWheelSelectionHint': '이 앱은 대화 기록을 직접 스크롤해서 스크롤하면 선택이 해제됩니다 — Shift+드래그로 화면에 보이는 내용을 선택할 수 있습니다',
