@@ -4,12 +4,15 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CommitOrigin } from '../../../shared/commitOrigin';
+import { ChildProbeReader } from '../../../main/pty/shareReader';
 import { CommitOriginCapture } from '../CommitOriginCapture';
 
 const dirs: string[] = [];
 const captures: CommitOriginCapture[] = [];
+const readers: ChildProbeReader[] = [];
 afterEach(() => {
   for (const c of captures.splice(0)) c.dispose();
+  for (const r of readers.splice(0)) r.close();
   for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true });
 });
 
@@ -29,8 +32,13 @@ describe('CommitOriginCapture (a real repository)', () => {
     const added: CommitOrigin[] = [];
     const armed: string[] = [];
     let text = '';
+    // The daemon's reader process, tail included.
+    const reader = new ChildProbeReader(5_000);
+    readers.push(reader);
     const capture = new CommitOriginCapture({
       store: { add: (o) => { added.push(o); } },
+      read: (probe) => reader.read(probe),
+      livePanes: () => ['p1'],
       paneText: async () => text,
       pane: (id) => ({ ptyId: id, workspaceId: 'ws-1', agent: null, agentSessionId: null }),
       taskOf: () => null,
@@ -38,6 +46,7 @@ describe('CommitOriginCapture (a real repository)', () => {
       watch: (dir, onChange) => {
         try {
           const w = fs.watch(dir, { persistent: false }, (_e, f) => onChange(f === null ? null : String(f)));
+          w.on('error', () => w.close());
           armed.push(dir);
           return w;
         } catch {

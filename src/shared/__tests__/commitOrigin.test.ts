@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseCommitOrigin, parseReflogCommit, textShowsSha } from '../commitOrigin';
+import { COMMIT_ORIGIN_MAX_CANDIDATES, parseCommitOrigin, parseReflogCommit, textShowsCommitSummary } from '../commitOrigin';
 
 const OLD = 'a'.repeat(40);
 const NEW = '0123456789abcdef0123456789abcdef01234567';
@@ -24,13 +24,16 @@ describe('parseReflogCommit', () => {
   });
 });
 
-describe('textShowsSha', () => {
-  it('matches the abbreviation git prints, as a word, and nothing shorter or different', () => {
-    expect(textShowsSha('[main 0123456] fix the thing', NEW)).toBe(true);
-    expect(textShowsSha('  ⎿ [feat/x 0123456789ab] fix', NEW)).toBe(true);
-    expect(textShowsSha('[main 012345] fix', NEW)).toBe(false); // under 7
-    expect(textShowsSha('[main 0123457] fix', NEW)).toBe(false);
-    expect(textShowsSha('x00123456789 y', NEW)).toBe(false); // inside a longer hex word
+describe('textShowsCommitSummary', () => {
+  it('matches the summary line git commit prints, and not a bare hash', () => {
+    expect(textShowsCommitSummary('[main 0123456] fix the thing', NEW)).toBe(true);
+    expect(textShowsCommitSummary('  ⎿ [feat/x 0123456789ab] fix', NEW)).toBe(true);
+    expect(textShowsCommitSummary('[main (root-commit) 0123456] first', NEW)).toBe(true);
+    expect(textShowsCommitSummary('[detached HEAD 0123456] x', NEW)).toBe(true);
+    expect(textShowsCommitSummary('[main 012345] fix', NEW)).toBe(false); // under 7
+    expect(textShowsCommitSummary('[main 0123457] fix', NEW)).toBe(false);
+    expect(textShowsCommitSummary('commit 0123456789abcdef0123456789abcdef01234567', NEW)).toBe(false); // git log
+    expect(textShowsCommitSummary('~/repo @0123456 ❯', NEW)).toBe(false); // a prompt
   });
 });
 
@@ -42,7 +45,7 @@ describe('parseCommitOrigin', () => {
       .toEqual({ ptyId: 'p1', workspaceId: null, agent: null, agentSessionId: null, taskId: 't1' });
     const many = Array.from({ length: 40 }, (_, k) => ({ ptyId: `p${k}` }));
     const none = parseCommitOrigin({ ...base, evidence: 'none', candidates: many, attributed: { ptyId: 'p1' } });
-    expect(none?.candidates).toHaveLength(32);
+    expect(none?.candidates).toHaveLength(COMMIT_ORIGIN_MAX_CANDIDATES);
     expect(none?.attributed).toBeUndefined();
     expect(parseCommitOrigin({ ...base, sha: 'zz', evidence: 'none' })).toBeNull();
   });

@@ -2,8 +2,8 @@
 // (daemon/commitOrigin) so a later view can open the conversation that made
 // it. Nothing is written into the repository.
 //
-// A link is made only on evidence: the commit's short SHA in that pane's own
-// output (git prints `[branch abc1234] …`). A wrong link would send someone
+// A link is made only on evidence: git's own summary line for the commit
+// (`[branch abc1234] …`) in that pane's output. A wrong link would send someone
 // to the wrong conversation, so a pane that was merely the only one in the
 // worktree is a candidate, never the attribution.
 
@@ -14,7 +14,7 @@ export type CommitOriginOp = 'commit' | 'amend' | 'initial';
 
 /** How sure the record is. */
 export type CommitOriginEvidence =
-  /** The short SHA showed in the attributed pane's output. */
+  /** git's summary line for it showed in the attributed pane's output, and in no other pane's. */
   | 'screen'
   /** No pane showed it; it was the only pane in that worktree. A candidate, not an attribution. */
   | 'only-pane'
@@ -49,6 +49,8 @@ export interface CommitOrigin {
 export const SHA_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 /** git never abbreviates below this. */
 export const MIN_ABBREV = 7;
+/** At most this many candidate panes are kept with a record. */
+export const COMMIT_ORIGIN_MAX_CANDIDATES = 8;
 
 export interface ReflogCommit {
   sha: string;
@@ -78,12 +80,16 @@ export function parseReflogCommit(line: string): ReflogCommit | null {
   return { sha: m[2], at: Number(m[3]) * 1000, op };
 }
 
-/** Whether some text shows `sha` abbreviated (at least MIN_ABBREV hex digits, as one word). */
-export function textShowsSha(text: string, sha: string): boolean {
-  const re = /(?<![0-9a-f])[0-9a-f]{7,64}(?![0-9a-f])/gi;
+/**
+ * Whether some text shows git's summary line for the commit `sha`, the one
+ * `git commit` prints: `[main abc1234] …`, `[main (root-commit) abc1234] …`
+ * or `[detached HEAD abc1234] …`. A bare hash (a prompt, `git log`) is not it.
+ */
+export function textShowsCommitSummary(text: string, sha: string): boolean {
+  const re = /\[(?:detached HEAD|[^\s[\]]+(?: \(root-commit\))?) ([0-9a-f]{7,64})\]/g;
   for (const m of text.matchAll(re)) {
-    const word = m[0].toLowerCase();
-    if (word.length >= MIN_ABBREV && sha.startsWith(word)) return true;
+    const abbrev = m[1];
+    if (abbrev.length >= MIN_ABBREV && sha.startsWith(abbrev)) return true;
   }
   return false;
 }
@@ -112,7 +118,7 @@ export function parseCommitOrigin(raw: unknown): CommitOrigin | null {
     const taskId = (r.attributed as Record<string, unknown>).taskId;
     out.attributed = { ...a, taskId: typeof taskId === 'string' && taskId.length > 0 && taskId.length <= 200 ? taskId : null };
   } else {
-    out.candidates = (Array.isArray(r.candidates) ? r.candidates : []).slice(0, 32).map(pane).filter((p): p is CommitOriginPane => p !== null);
+    out.candidates = (Array.isArray(r.candidates) ? r.candidates : []).slice(0, COMMIT_ORIGIN_MAX_CANDIDATES).map(pane).filter((p): p is CommitOriginPane => p !== null);
   }
   return out;
 }

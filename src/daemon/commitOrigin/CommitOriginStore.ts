@@ -77,11 +77,14 @@ export class CommitOriginStore {
     return { version: COMMIT_ORIGIN_SCHEMA, origins: [...this.origins.values()] };
   }
 
+  /** Records are kept in the order they were made (the map's insertion order,
+   *  which the file keeps), so the oldest are the first. */
   private prune(): void {
     const cutoff = this.now() - COMMIT_ORIGIN_RETENTION_MS;
     for (const [sha, o] of this.origins) if (o.at < cutoff) this.origins.delete(sha);
-    if (this.origins.size <= COMMIT_ORIGIN_MAX) return;
-    const oldest = [...this.origins.values()].sort((a, b) => a.at - b.at).slice(0, this.origins.size - COMMIT_ORIGIN_MAX);
-    for (const o of oldest) this.origins.delete(o.sha);
+    for (const sha of this.origins.keys()) {
+      if (this.origins.size <= COMMIT_ORIGIN_MAX) break;
+      this.origins.delete(sha);
+    }
   }
 }

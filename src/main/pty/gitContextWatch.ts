@@ -134,7 +134,11 @@ type RepoState = { repo: ResolvedRepo | null; conclusive: boolean };
  *   open     → 'opened' once the directory could be opened (what fs.watch
  *              does to its target), or null. Never asked by the walk.
  */
-export interface Probe { op: 'stat' | 'read' | 'realpath' | 'open'; path: string }
+/**
+ * `tail` reads at most TAIL_MAX_BYTES of a file from byte `from` and answers
+ * `{"size","ino","bytes"}` (bytes as base64), or null when it cannot be read.
+ */
+export interface Probe { op: 'stat' | 'read' | 'realpath' | 'open' | 'tail'; path: string; from?: number }
 export type ProbeAnswer = 'dir' | 'file' | 'other' | 'missing' | 'error' | string | null;
 export type ProbeIo = (probe: Probe) => Promise<ProbeAnswer>;
 type Walk = Generator<Probe, RepoState, ProbeAnswer>;
@@ -715,6 +719,15 @@ export class GitContextWatcher extends EventEmitter {
       if (watch.repo && watch.watcher && watch.fsWatched) out.push({ sessionId, gitDir: watch.repo.gitDir });
     }
     return out;
+  }
+
+  /** One read through this process's reader for host paths (see the class
+   *  doc): never on this thread, and given up past the reader's deadline. */
+  readThroughReader(probe: Probe): Promise<ProbeAnswer> {
+    const p = this.probe(probe);
+    // A reader made only for this read is closed once no session needs it.
+    void p.finally(() => this.pruneReaders()).catch(() => undefined);
+    return p;
   }
 
   /** Current session count — observability/testing only. */

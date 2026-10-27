@@ -196,7 +196,7 @@ import {
 import { createSnapshotRunner } from './snapshotRunner';
 import { createBufferHibernation } from './BufferHibernation';
 import { RingBuffer } from './RingBuffer';
-import { GitContextWatcher } from '../main/pty/gitContextWatch';
+import { GitContextWatcher, type Probe, type ProbeAnswer } from '../main/pty/gitContextWatch';
 import { CommitOriginCapture } from './commitOrigin/CommitOriginCapture';
 import { CommitOriginStore } from './commitOrigin/CommitOriginStore';
 import { SHA_RE } from '../shared/commitOrigin';
@@ -8311,13 +8311,15 @@ function wireEvents(
 function wireContextWatchers(
   sessionManager: DaemonSessionManager,
   pipeServer: DaemonPipeServer,
-  commitOrigins?: CommitOriginCapture,
+  makeCommitOrigins?: (read: (probe: Probe) => Promise<ProbeAnswer>) => CommitOriginCapture,
 ): () => void {
   // offLoop: a pane's cwd is read and watched only after a reader process
   // opened it. On macOS the daemon is its own responsible process for the
   // privacy check, and an open() under ~/Desktop it has no grant for blocked
   // this loop until main force-respawned the daemon (health pings failing).
   const gitWatcher = new GitContextWatcher(undefined, { offLoop: true });
+  // Reads the reflogs through the git watcher's own reader (never this thread).
+  const commitOrigins = makeCommitOrigins?.((probe) => gitWatcher.readThroughReader(probe));
   const portWatcher = new PortWatcher(() =>
     sessionManager.listLiveSessions().map((s) => ({ sessionId: s.id, pid: s.pid })),
   );
@@ -8432,9 +8434,12 @@ function createCommitOriginCapture(
   sessionManager: DaemonSessionManager,
   store: CommitOriginStore,
   taskAt: (cwd: string) => string | null,
+  read: (probe: Probe) => Promise<ProbeAnswer>,
 ): CommitOriginCapture {
   return new CommitOriginCapture({
     store,
+    read,
+    livePanes: () => sessionManager.listLiveSessions().map((s) => s.id),
     paneText: async (id) => {
       const outcome = await queuedTextSnapshot(sessionManager, id, COMMIT_ORIGIN_SCROLLBACK);
       return outcome?.ok ? outcome.rows.map((r) => r.text).join('\n') : null;
@@ -8445,14 +8450,15 @@ function createCommitOriginCapture(
       // registerRpcHandlers' agent-state reader (readDaemonAgentState).
       const agentName = readAgentStateForWeb?.(id).agentName;
       const agent = agentName ? agentDisplayToSlug(agentName) ?? null : null;
-      // A plain shell has no agent session, whatever transcript was bound before.
-      const transcriptPath = agent ? transcriptProjector?.transcriptPath(id) ?? null : null;
-      const base = transcriptPath ? path.basename(transcriptPath) : '';
+      // The agent's own session, only while its binding names the agent the
+      // pane runs now: none while a /clear or a new agent has not bound yet
+      // (the binding still names the previous conversation), none for a shell.
+      const binding = agent ? transcriptProjector?.sentFileBinding(id) ?? null : null;
       return {
         ptyId: id,
         workspaceId: typeof ws === 'string' && ws.trim() ? ws.trim() : null,
         agent,
-        agentSessionId: base.endsWith('.jsonl') ? base.slice(0, -'.jsonl'.length) : null,
+        agentSessionId: binding && binding.agent === agent ? binding.agentSessionId : null,
       };
     },
     taskOf: (id) => {
@@ -10629,7 +10635,7 @@ async function main(): Promise<void> {
   disposeContextWatchers = wireContextWatchers(
     sessionManager,
     pipeServer,
-    createCommitOriginCapture(sessionManager, commitOriginsStore, (cwd) => workTaskService?.openTaskAt(cwd)?.id ?? null),
+    (read) => createCommitOriginCapture(sessionManager, commitOriginsStore, (cwd) => workTaskService?.openTaskAt(cwd)?.id ?? null, read),
   );
 
   // 7a. #596 — bring `wmux web` back if the operator had it on. Kicked off
