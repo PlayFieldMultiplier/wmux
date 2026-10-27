@@ -119,11 +119,13 @@ export function glabProjectPath(item: GlabMrItem): string | null {
   return /^[\w.-]+(?:\/[\w.-]+)+$/.test(path) ? path : null;
 }
 
-/** The GraphQL query for the head pipelines of these MRs (iids are numbers). */
-export function glabPipelinesQuery(iids: readonly number[]): string {
-  const list = iids.map((n) => JSON.stringify(String(n))).join(',');
-  return `query($fullPath: ID!) { project(fullPath: $fullPath) { mergeRequests(iids: [${list}]) { nodes { iid headPipeline { status } } } } }`;
-}
+/** The GraphQL query for the head pipelines of some MRs; the project and the
+ *  iids go as variables, never into the query text. */
+export const GLAB_PIPELINES_QUERY =
+  'query($fullPath: ID!, $iids: [String!]) { project(fullPath: $fullPath) { mergeRequests(iids: $iids) { nodes { iid headPipeline { status } } } } }';
+
+/** `glab api` reading a request's JSON body from stdin: values stay off argv. */
+const JSON_STDIN = ['--input', '-', '-H', 'Content-Type: application/json'];
 
 /** iid → head-pipeline rollup from the GraphQL reply; an MR with no pipeline is absent. */
 export function mapGlabPipelines(reply: unknown): Map<number, NonNullable<PrSummary['checks']>> {
@@ -588,12 +590,13 @@ export class GlabPrService implements PrProvider {
     private exec: Exec = execWithInput,
   ) {}
 
-  private glab(args: string[], cwd: string): Promise<{ stdout: string }> {
+  private glab(args: string[], cwd: string, input?: string): Promise<{ stdout: string }> {
     return this.exec(process.platform === 'win32' ? 'glab.exe' : 'glab', args, {
       cwd,
       timeout: GLAB_TIMEOUT_MS,
       env: GLAB_ENV,
       windowsHide: true,
+      ...(input === undefined ? {} : { input }),
     });
   }
 
@@ -724,9 +727,11 @@ export class GlabPrService implements PrProvider {
     const fullPath = items.map(glabProjectPath).find((p): p is string => p !== null);
     if (!fullPath || prs.length === 0) return new Map();
     try {
+      // As api()'s GraphQL: a constant query, its values as JSON on stdin.
       const { stdout } = await this.glab(
-        ['api', 'graphql', '-f', `query=${glabPipelinesQuery(prs.map((p) => p.number))}`, '-f', `fullPath=${fullPath}`],
+        ['api', '-X', 'POST', 'graphql', ...JSON_STDIN],
         repoPath,
+        JSON.stringify({ query: GLAB_PIPELINES_QUERY, variables: { fullPath, iids: prs.map((p) => String(p.number)) } }),
       );
       return mapGlabPipelines(JSON.parse(stdout));
     } catch {
@@ -761,21 +766,29 @@ export class GlabPrService implements PrProvider {
 
   // ── The factory's reads and merge (named project, never cached) ──────────
 
-  private api(host: string, args: string[], cwd: string, input?: string): Promise<{ stdout: string }> {
+  /** `glab api <path>`: a GET with no body, or a write whose fields go as
+   *  one JSON body on stdin, never argv (a long value would pass Windows'
+   *  command-line limit, and JSON keeps a value starting with "-" a value). */
+  private api(
+    host: string,
+    path: string,
+    cwd: string,
+    write?: { method: 'POST' | 'PUT'; fields: Record<string, unknown> },
+  ): Promise<{ stdout: string }> {
     const target = glabHostTarget(host);
+    const args = write ? ['-X', write.method, path, ...JSON_STDIN] : [path];
     return this.exec(process.platform === 'win32' ? 'glab.exe' : 'glab', ['api', ...target.args, ...args], {
       cwd,
       timeout: FACTORY_TIMEOUT_MS,
       env: target.env,
       windowsHide: true,
       maxBuffer: FACTORY_MAX_BUFFER,
-      input,
+      ...(write ? { input: JSON.stringify(write.fields) } : {}),
     });
   }
 
   private async graphql(host: string, query: string, vars: Record<string, string>, cwd: string): Promise<unknown> {
-    const fields = Object.entries(vars).flatMap(([k, v]) => ['-f', `${k}=${v}`]);
-    const { stdout } = await this.api(host, ['graphql', '-f', `query=${query}`, ...fields], cwd);
+    const { stdout } = await this.api(host, 'graphql', cwd, { method: 'POST', fields: { query, variables: vars } });
     return JSON.parse(stdout) as unknown;
   }
 
@@ -855,7 +868,7 @@ export class GlabPrService implements PrProvider {
   private async branchTip(project: GlabProject, name: string, cwd: string): Promise<string | null> {
     if (!name) return null;
     try {
-      const { stdout } = await this.api(project.host, [`projects/${encodeURIComponent(project.path)}/repository/branches/${encodeURIComponent(name)}`], cwd);
+      const { stdout } = await this.api(project.host, `projects/${encodeURIComponent(project.path)}/repository/branches/${encodeURIComponent(name)}`, cwd);
       const id = rec(rec(JSON.parse(stdout))?.commit)?.id;
       // SHA-1 or SHA-256 object ids, as verify.rpc checks a base commit.
       return typeof id === 'string' && /^[0-9a-f]{40}([0-9a-f]{24})?$/.test(id) ? id : null;
@@ -867,7 +880,7 @@ export class GlabPrService implements PrProvider {
   private async commitParents(project: GlabProject, sha: string, cwd: string): Promise<string[]> {
     if (!/^[0-9a-f]{40}$/.test(sha)) return [];
     try {
-      const { stdout } = await this.api(project.host, [`projects/${encodeURIComponent(project.path)}/repository/commits/${sha}`], cwd);
+      const { stdout } = await this.api(project.host, `projects/${encodeURIComponent(project.path)}/repository/commits/${sha}`, cwd);
       const parents = rec(JSON.parse(stdout))?.parent_ids;
       return Array.isArray(parents) ? parents.filter((p): p is string => typeof p === 'string') : [];
     } catch {
@@ -896,7 +909,7 @@ export class GlabPrService implements PrProvider {
       const project = GlabPrService.project(key);
       for (const ref of [branch, base]) if (!ref || ref.startsWith('-')) throw new Error(`not a branch name: ${ref}`);
       const q = new URLSearchParams({ state: 'merged', source_branch: branch, target_branch: base, per_page: String(limit) });
-      const { stdout } = await this.api(project.host, [`projects/${encodeURIComponent(project.path)}/merge_requests?${q.toString()}`], cwd);
+      const { stdout } = await this.api(project.host, `projects/${encodeURIComponent(project.path)}/merge_requests?${q.toString()}`, cwd);
       const raw = JSON.parse(stdout) as unknown;
       if (!Array.isArray(raw)) return { ok: true, value: [] };
       return {
@@ -924,13 +937,10 @@ export class GlabPrService implements PrProvider {
     try {
       const project = GlabPrService.project(key);
       for (const ref of [req.source, req.target]) if (!ref || ref.startsWith('-')) throw new Error(`not a branch name: ${ref}`);
-      // The fields go as one JSON object on stdin, never argv: a long
-      // description would pass Windows' command-line limit.
-      const fields = { source_branch: req.source, target_branch: req.target, title: req.title, description: req.description };
-      const { stdout } = await this.api(project.host, [
-        '-X', 'POST', `projects/${encodeURIComponent(project.path)}/merge_requests`,
-        '--input', '-', '-H', 'Content-Type: application/json',
-      ], cwd, JSON.stringify(fields));
+      const { stdout } = await this.api(project.host, `projects/${encodeURIComponent(project.path)}/merge_requests`, cwd, {
+        method: 'POST',
+        fields: { source_branch: req.source, target_branch: req.target, title: req.title, description: req.description },
+      });
       const mr = glabMrRef(JSON.parse(stdout), project);
       if (!mr) throw new Error('GitLab answered without a merge request');
       return { ok: true, ...mr };
@@ -947,7 +957,7 @@ export class GlabPrService implements PrProvider {
       const project = GlabPrService.project(key);
       for (const ref of [source, target]) if (!ref || ref.startsWith('-')) return null;
       const q = new URLSearchParams({ state: 'opened', source_branch: source, target_branch: target, per_page: '20' });
-      const { stdout } = await this.api(project.host, [`projects/${encodeURIComponent(project.path)}/merge_requests?${q.toString()}`], cwd);
+      const { stdout } = await this.api(project.host, `projects/${encodeURIComponent(project.path)}/merge_requests?${q.toString()}`, cwd);
       const raw = JSON.parse(stdout) as unknown;
       if (!Array.isArray(raw)) return null;
       for (const r of raw) {
@@ -992,7 +1002,7 @@ export class GlabPrService implements PrProvider {
   /** The login glab signs in as on `host` now, lowercased, or null. */
   async loginOnHost(host: string, cwd: string): Promise<string | null> {
     try {
-      const { stdout } = await this.api(host, ['user'], cwd);
+      const { stdout } = await this.api(host, 'user', cwd);
       return text(rec(JSON.parse(stdout))?.username).toLowerCase() || null;
     } catch {
       return null;
@@ -1003,7 +1013,7 @@ export class GlabPrService implements PrProvider {
    *  any other failure (null: a timeout, a network error, a missing glab). */
   async loginOrSignOut(host: string, cwd: string): Promise<{ login: string } | { signedOut: true } | null> {
     try {
-      const { stdout } = await this.api(host, ['user'], cwd);
+      const { stdout } = await this.api(host, 'user', cwd);
       const login = text(rec(JSON.parse(stdout))?.username).toLowerCase();
       return login ? { login } : null;
     } catch (err) {
@@ -1016,7 +1026,9 @@ export class GlabPrService implements PrProvider {
    * merge does: a fresh read right before it refuses another head (`moved`)
    * or an MR that cannot merge now (glabMergeBlock), `authorize` is asked
    * last, and the PUT sends `sha` so GitLab itself refuses a head that moved
-   * in between (409). An empty subject takes the title and `!iid`.
+   * in between (409). An empty subject takes the title and `!iid`. The
+   * squash commit message is the subject, then the body after a blank line
+   * when there is one (GitLab has one message field where gh has two).
    */
   async merge(repoPath: string, key: string, iid: number, req: PrMergeRequest, authorize?: () => string | null): Promise<PrWriteResult> {
     let project: GlabProject;
@@ -1039,13 +1051,13 @@ export class GlabPrService implements PrProvider {
     const denied = authorize?.() ?? null;
     if (denied) return { ok: false, code: 'invalid', message: `the merge is not authorized now (${denied})` };
     const subject = req.subject.trim() || glabSquashSubject(f.title ?? '', iid);
+    const message = req.body ? `${subject}\n\n${req.body}` : subject;
     let answer: string;
     try {
-      ({ stdout: answer } = await this.api(project.host, [
-        '-X', 'PUT', `projects/${encodeURIComponent(project.path)}/merge_requests/${iid}/merge`,
-        // `=` forms: a subject starting with "-" stays a value.
-        '-f', `sha=${req.expectHead}`, '-F', 'squash=true', '-f', `squash_commit_message=${subject}`,
-      ], repoPath));
+      ({ stdout: answer } = await this.api(project.host, `projects/${encodeURIComponent(project.path)}/merge_requests/${iid}/merge`, repoPath, {
+        method: 'PUT',
+        fields: { sha: req.expectHead, squash: true, squash_commit_message: message },
+      }));
     } catch (err) {
       return glabMergeFailure(err);
     }
