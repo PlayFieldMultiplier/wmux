@@ -106,7 +106,10 @@ export async function browserHelpRow(
     const origin = browserHelpOrigin(builtin);
     return { ...base, backend: 'builtin', previewable: true, ...(origin ? { origin } : {}) };
   }
-  if (guarded(() => deps.backend(), 'chrome') !== 'chrome') return { ...base, backend: 'builtin', previewable: false };
+  const backend = guarded(() => deps.backend(), 'chrome');
+  if (backend === 'builtin') return { ...base, backend: 'builtin', previewable: false };
+  // The OS browser (or a setting not known here) is the user's own: say live.
+  if (backend !== 'chrome') return { ...base, backend: 'live', previewable: false };
   let tab: ChromeTab | undefined;
   if (surfaceId !== undefined) {
     try {
@@ -126,13 +129,33 @@ export async function browserHelpRow(
   return { ...base, backend: 'chrome', previewable: false, ...(origin ? { origin } : {}) };
 }
 
+/**
+ * How long one publication waits for a Chrome's tab list. A Chrome that
+ * stopped answering (suspended, wedged) must not hold the table: past this
+ * its tabs read as unknown (no origin) and the table goes out.
+ */
+export const BROWSER_HELP_TAB_READ_MS = 2_000;
+
+function withinTabReadBudget(read: Promise<ChromeTab[]>, ms: number): Promise<ChromeTab[]> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const giveUp = new Promise<ChromeTab[]>((resolve) => {
+    timer = setTimeout(() => resolve([]), ms);
+    (timer as { unref?: () => void }).unref?.();
+  });
+  return Promise.race([read.catch(() => [] as ChromeTab[]), giveUp]).finally(() => clearTimeout(timer));
+}
+
 /** Every request's row, the workspace tab lists read once each, oldest first, capped and checked. */
-export async function browserHelpRows(pending: readonly PendingHelpRequest[], deps: BrowserHelpTabDeps): Promise<PhoneBrowserHelpRow[]> {
+export async function browserHelpRows(
+  pending: readonly PendingHelpRequest[],
+  deps: BrowserHelpTabDeps,
+  tabReadMs = BROWSER_HELP_TAB_READ_MS,
+): Promise<PhoneBrowserHelpRow[]> {
   const lists = new Map<string, Promise<ChromeTab[]>>();
   const tabsOf = (ws: string) => {
     let list = lists.get(ws);
     if (!list) {
-      list = deps.chromeTabs(ws);
+      list = withinTabReadBudget(deps.chromeTabs(ws), tabReadMs);
       lists.set(ws, list);
     }
     return list;
@@ -143,9 +166,9 @@ export async function browserHelpRows(pending: readonly PendingHelpRequest[], de
 }
 
 /**
- * The table feed: coalesced on change, at once on `publishNow`, and again at
- * the earliest deadline so an expired request leaves the phone's list even
- * when its timer is late. The tab reads are async, so only the newest
+ * The table feed: coalesced on change and at once on `publishNow`. A request
+ * leaves the table when the store settles it (its own deadline timer
+ * included); the daemon drops a row past its deadline on its own. The tab reads are async, so only the newest
  * publication is sent: an older one that finishes its reads later is dropped
  * rather than overwriting the newer table.
  */
@@ -157,7 +180,6 @@ export function createBrowserHelpFeed(deps: {
   let latest = 0;
   return createPushTableFeed<PendingHelpRequest>({
     rows: deps.pending,
-    refreshAt: (rows) => (rows.length ? Math.min(...rows.map((r) => r.deadlineAt)) : undefined),
     push: async (pending) => {
       const mine = ++latest;
       const rows = await browserHelpRows(pending, deps.tabs);

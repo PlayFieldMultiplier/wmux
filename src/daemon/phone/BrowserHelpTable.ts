@@ -44,6 +44,8 @@ export class BrowserHelpTable {
   private rows = new Map<string, PhoneBrowserHelpRow>();
   private publisher: string | null = null;
   private readonly recentlyClosed = new Map<string, true>();
+  /** Ids a decision through this daemon settled: never listed again, even by a table main computed before it. */
+  private readonly decided = new Set<string>();
 
   constructor(private readonly opts: BrowserHelpTableOptions) {}
 
@@ -57,7 +59,7 @@ export class BrowserHelpTable {
     const rows = parseBrowserHelpRows(p?.requests);
     if (!rows) return { ok: false, error: 'daemon.browserHelp.set requires a valid requests array' };
     const states = parseBrowserHelpClosed(p?.closed);
-    const next = new Map(rows.map((row) => [row.requestId, row]));
+    const next = new Map(rows.filter((row) => !this.decided.has(row.requestId)).map((row) => [row.requestId, row]));
     const frames: PhoneBrowserHelpFrame[] = [];
     for (const [id, row] of this.rows) {
       if (!next.has(id)) frames.push(this.closeFrame(row, states.get(id)));
@@ -105,6 +107,16 @@ export class BrowserHelpTable {
 
   private now(): number {
     return (this.opts.now ?? Date.now)();
+  }
+
+  /** A decision through this daemon settled the request: close its row now. */
+  closeDecided(requestId: string, state: Settled): void {
+    const row = this.rows.get(requestId);
+    if (!row) return;
+    this.decided.add(requestId);
+    while (this.decided.size > RECENTLY_CLOSED_MAX) this.decided.delete(this.decided.values().next().value as string);
+    this.rows.delete(requestId);
+    this.opts.emit([this.closeFrame(row, state)]);
   }
 
   private closeFrame(row: PhoneBrowserHelpRow, state: Settled | undefined): PhoneBrowserHelpFrame {

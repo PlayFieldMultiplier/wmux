@@ -15,7 +15,8 @@
 // again on the credential presented once the body is in. The workspace is the
 // one the table holds for the id, never one the phone sent. Main settles it
 // (`workspaces.browserHelpDecide`, first answer wins) and its error codes come
-// back inside a successful reply. Nothing here retries a decision.
+// back inside a successful reply. Nothing here retries a decision. A decision
+// main took closes the row here at once, ahead of main's next table.
 
 import {
   BROWSER_HELP_CAPABILITY,
@@ -26,6 +27,7 @@ import {
   type BrowserHelpErrorCode,
   type PhoneBrowserHelpRow,
 } from '../../shared/phoneBrowserHelp';
+import type { BrowserHelpOutcome } from '../../shared/browserHelp';
 import { DesktopPhoneError } from '../phone/DesktopPhoneBridge';
 import { GRANT_HINT, type BotApprovalsCaller, type BotApprovalsDesktop, type BotApprovalsResponse } from './botApprovals';
 import type { BrowserHelpLookup } from '../phone/BrowserHelpTable';
@@ -38,12 +40,12 @@ export interface BrowserHelpTableView {
   readonly published: boolean;
   list(): PhoneBrowserHelpRow[];
   lookup(requestId: string): BrowserHelpLookup;
+  closeDecided(requestId: string, state: BrowserHelpOutcome): void;
 }
 
 const ERROR_STATUS: Record<BrowserHelpErrorCode, number> = {
   'browser-help-not-found': 404,
   'browser-help-closed': 409,
-  'browser-help-disabled': 403,
 };
 
 /** `/api/config` `browserHelp`: the transcript consent, and a desktop that announced the table. */
@@ -143,6 +145,8 @@ export async function browserHelpDecisionResponse(
   if ('unavailable' in reply) return { status: 503, body: { error: 'desktop-unavailable' } };
   if ('invalid' in reply) return { status: 400, body: { error: 'invalid-decision' } };
   if ('error' in reply) return { status: ERROR_STATUS[reply.error], body: { error: reply.error } };
+  // Closed here at once, so the list read right after this reply agrees.
+  opts.table.closeDecided(requestId, reply.state);
   return { status: 200, body: { requestId, state: reply.state } };
 }
 

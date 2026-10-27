@@ -62,6 +62,20 @@ describe('BrowserHelpTable', () => {
     expect(t.lookup('req-9')).toBeNull();
   });
 
+  it('closes a row a decision settled at once, and a table computed before it does not reopen it', () => {
+    const { t, frames } = table();
+    t.set('main', { requests: [row()] });
+    t.closeDecided('req-1', 'continued');
+    expect(t.list()).toEqual([]);
+    expect(t.lookup('req-1')).toEqual({ closed: true });
+    t.set('main', { requests: [row()] });
+    expect(t.list()).toEqual([]);
+    expect(frames).toEqual([
+      { phase: 'open', requestId: 'req-1', workspaceId: 'ws-1', surfaceId: 'surf-1', deadlineAt: 61_000 },
+      { phase: 'close', requestId: 'req-1', workspaceId: 'ws-1', surfaceId: 'surf-1', deadlineAt: 61_000, state: 'continued' },
+    ]);
+  });
+
   it('stops listing a row past its deadline before main says so, and answers it as closed', () => {
     const { t, clock } = table();
     t.set('main', { requests: [row()] });

@@ -53,7 +53,8 @@ export interface PhoneBrowserHelpFrame {
   state?: Exclude<BrowserHelpState, 'pending'>;
 }
 
-export const BROWSER_HELP_ERROR_CODES = ['browser-help-not-found', 'browser-help-closed', 'browser-help-disabled'] as const;
+/** The codes main answers a decision with. (`browser-help-disabled` is the daemon's own 403.) */
+export const BROWSER_HELP_ERROR_CODES = ['browser-help-not-found', 'browser-help-closed'] as const;
 export type BrowserHelpErrorCode = (typeof BROWSER_HELP_ERROR_CODES)[number];
 
 /** Main's reply to the decision command (inside an ok:true bridge reply).

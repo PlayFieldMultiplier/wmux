@@ -87,6 +87,17 @@ describe('browserHelpRows', () => {
     expect(chromeTabs.mock.calls).toEqual([['ws-1'], ['ws-2']]);
   });
 
+  it('a Chrome that never answers costs only the origin, never the table', async () => {
+    const rows = await browserHelpRows([pending({ surfaceId: 'chrome-a' })], tabs({ backend: () => 'chrome', chromeTabs: () => new Promise(() => undefined) }), 10);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ backend: 'chrome', previewable: false });
+    expect(rows[0]).not.toHaveProperty('origin');
+  });
+
+  it('labels a request under the OS browser setting live', async () => {
+    expect(await browserHelpRow(pending(), tabs({ backend: () => 'external' }))).toMatchObject({ backend: 'live', previewable: false });
+  });
+
   it('drops a row the daemon would refuse and keeps the oldest 128', async () => {
     const many = Array.from({ length: 130 }, (_, i) => pending({ requestId: `req-${i}` }));
     const rows = await browserHelpRows([pending({ requestId: 'req-x', workspaceId: 'ws with space' }), ...many], tabs());
