@@ -40,6 +40,7 @@ import type {
 import { stripReplayQuerySequences } from '../shared/replayQuerySanitizer';
 import { A2A_SPAWN_RPC, type A2aSpawnAskInput, type A2aSpawnAskResult, type A2aSpawnOutgoingList, type A2aSpawnPolicySetResult, type A2aSpawnPolicyV1, type A2aSpawnRequestSummary } from '../shared/a2aSpawn';
 import { createSessionPipeMarkers } from '../daemon/sessionPipeMarkers';
+import type { FolderTrustState } from '../daemon/folderTrustState';
 import { SessionPipeStreamScanner } from './daemon/sessionPipeStreamScanner';
 import { DAEMON_RPC_TIMEOUT_MS } from '../shared/timeouts';
 import { AGENT_STATE_BATCH_MAX } from '../shared/agentStateBatch';
@@ -1101,6 +1102,21 @@ export class DaemonClient extends EventEmitter {
       };
     } catch {
       return null;
+    }
+  }
+
+  /**
+   * Whether a session's ring shows an agent's folder-trust dialog
+   * (daemon/folderTrustState). 'unknown' on any failure, including a
+   * timeout and a daemon that predates the method.
+   */
+  async folderTrustState(sessionId: string, timeoutMs: number): Promise<FolderTrustState> {
+    try {
+      const r = (await this.rpc('daemon.folderTrustState', { id: sessionId }, { timeoutMs })) as { state?: unknown } | null;
+      const state = r?.state;
+      return state === 'trust' || state === 'clear' ? state : 'unknown';
+    } catch {
+      return 'unknown';
     }
   }
 

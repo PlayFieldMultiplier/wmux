@@ -89,6 +89,7 @@ import { normalizeLivePaneIds } from '../shared/a2aOrphanedTask';
 import { WEB_DEFAULT_PORT, webHostIsLoopback, type WebTlsConfig } from '../shared/web';
 import { generateSnapshotUnqueued, enqueueSnapshotJob, generateTextSnapshot, generateTextSnapshotUnqueued, runSmallSnapshotJob, capTextRowsToFrameBudget, MAX_SCROLLBACK } from './HeadlessSnapshot';
 import { queuedScreenText, queuedTextSnapshot } from './queuedSessionText';
+import { folderTrustState } from './folderTrustState';
 import type { TerminalPty } from '../shared/terminalPty';
 import { serializeSession } from './sessionSerialize';
 import { AwaitingScreenVerifier, AWAITING_NARROW_DIALOG_COLS, questionInFlight, renderPaneScreen, renderPaneTail } from './AwaitingScreenVerifier';
@@ -5822,6 +5823,19 @@ function registerRpcHandlers(
     const id = typeof params['id'] === 'string' ? params['id'] : '';
     const bracketedPaste = sessionManager.getSession(id)?.bridge.outputModes?.isSet(2004) ?? null;
     return { agentName: readDaemonAgentState(id).agentName, bracketedPaste };
+  });
+  // Whether the session's ring shows an agent's folder-trust dialog. Main asks
+  // when the renderer has no screen for the pane (hidden, parked, unattached).
+  pipeServer.onRpc('daemon.folderTrustState', async (params) => {
+    const id = typeof params['id'] === 'string' ? params['id'] : '';
+    return {
+      state: await folderTrustState({
+        getSession: (sid) => sessionManager.getSession(sid),
+        // Not managed yet listed: a recovery placeholder with no process.
+        isPendingRecovery: (sid) => sessionManager.listSessions().some((s) => s.id === sid),
+        readScreen: (sid) => queuedScreenText(sessionManager, sid),
+      }, id),
+    };
   });
   const readChatAgentState = (id: string) => {
     const keyed = sessionManager.getSession(id)?.bridge;
