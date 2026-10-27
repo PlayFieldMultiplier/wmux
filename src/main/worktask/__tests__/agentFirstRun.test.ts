@@ -1,4 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
 import {
   AGENT_FIRST_RUN_ENV,
   CLAUDE_SANDBOXED_ENV,
@@ -42,6 +44,12 @@ const ASK_USER_QUESTION_SCREEN = [
   '│   2. The orders table',
   '│ Enter to confirm · Esc to cancel',
 ].join('\n');
+
+/** Gemini CLI and Qwen Code folder-trust dialogs (live captures). */
+const folderTrust = (name: string): string =>
+  (JSON.parse(fs.readFileSync(path.join(__dirname, '../../../daemon/approvals/__tests__/fixtures/folder-trust', `${name}.json`), 'utf8')) as {
+    screen: string[];
+  }).screen.join('\n');
 
 const READY_SCREEN = ['❯ Try "write a test for <filepath>"', '⏵⏵ auto mode on · ← for agents'].join('\n');
 
@@ -177,6 +185,29 @@ const fastOptions = {
   })(),
 };
 
+describe('detectFirstRunPrompt: other agents\' folder-trust dialogs', () => {
+  it.each([
+    ['gemini-folder-trust-120x40', 'gemini folder trust dialog'],
+    ['gemini-folder-trust-22x30', 'gemini folder trust dialog'],
+    // Choices too narrow to read: still the dialog, still never answered.
+    ['gemini-folder-trust-18x60', 'gemini folder trust dialog'],
+    ['qwen-folder-trust-60x30', 'qwen folder trust dialog'],
+    ['qwen-folder-trust-18x60', 'qwen folder trust dialog'],
+  ])('recognises %s without a confirm footer', (name, headline) => {
+    expect(detectFirstRunPrompt(folderTrust(name))).toEqual({ kind: 'trust', headline });
+  });
+
+  it('leaves a dialog already answered, and a reply quoting the question, alone', () => {
+    expect(detectFirstRunPrompt(folderTrust('gemini-folder-trust-answered-120x40'))).toBeNull();
+    expect(detectFirstRunPrompt([
+      '✦ When Gemini asks "Do you trust the files in this folder?" pick one of:',
+      '● 1. Trust folder (proj)',
+      '  2. Trust parent folder (work)',
+      "  3. Don't trust",
+    ].join('\n'))).toBeNull();
+  });
+});
+
 describe('clearFirstRunPrompts', () => {
   it('dismisses a known interstitial with ESC and reports it answered', async () => {
     const port = scriptedPort([UPSELL_SCREEN, READY_SCREEN, READY_SCREEN]);
@@ -222,6 +253,22 @@ describe('clearFirstRunPrompts', () => {
     };
     const outcome = await clearFirstRunPrompts('pty-1', port, { ...fastOptions, now: undefined });
     expect(outcome).toMatchObject({ status: 'stuck', reason: 'send-failed' });
+  });
+
+  it('trust-only: reports a folder-trust dialog stuck without pressing anything', async () => {
+    const port = scriptedPort([folderTrust('gemini-folder-trust-60x30')]);
+    const outcome = await clearFirstRunPrompts('pty-1', port, { ...fastOptions, now: undefined, trustOnly: true });
+    expect(outcome).toEqual({ status: 'stuck', headline: 'gemini folder trust dialog', reason: 'trust' });
+    expect(port.keys).toEqual([]);
+  });
+
+  it('trust-only: presses nothing on any other first-run screen', async () => {
+    for (const screens of [[UPSELL_SCREEN, READY_SCREEN, READY_SCREEN], [MODEL_ERROR_SCREEN]]) {
+      const port = scriptedPort(screens);
+      const outcome = await clearFirstRunPrompts('pty-1', port, { ...fastOptions, now: undefined, trustOnly: true });
+      expect(outcome.status).toBe('clear');
+      expect(port.keys).toEqual([]);
+    }
   });
 
   it('keeps watching through unreadable viewports', async () => {

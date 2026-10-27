@@ -273,6 +273,11 @@ export interface AgentIdentityRow {
   readonly titleTurns?: true;
   /** First-run "Agent ready" card; see {@link AgentSetupSpec}. */
   readonly setup?: AgentSetupSpec;
+  /** What the fan-out first-run watch looks for on a freshly launched worker
+   *  (shared/agentFirstRun): `all` its first-run screens, dismissing the
+   *  one-shot interstitials; `trust` only its folder-trust dialog, which is
+   *  reported and never answered. Absent: not watched. */
+  readonly firstRunWatch?: 'all' | 'trust';
 }
 
 /**
@@ -292,6 +297,7 @@ export const AGENT_IDENTITIES = [
   {
     slug: 'claude',
     display: 'Claude Code',
+    firstRunWatch: 'all',
     connectorLaunch: 'mcp-json',
     modelFlag: '--model',
     resume: { picker: '--resume', exact: '--resume {id}', pin: '--session-id', idFormat: 'uuid' },
@@ -394,6 +400,7 @@ export const AGENT_IDENTITIES = [
   {
     slug: 'gemini',
     display: 'Gemini CLI',
+    firstRunWatch: 'trust',
     process: { packages: ['gemini-cli', '@google/gemini-cli'] },
     detect: 'screen',
     hooks: 'gemini',
@@ -559,6 +566,7 @@ export const AGENT_IDENTITIES = [
     // (src/daemon/transcript/qwenTranscript.ts).
     slug: 'qwen',
     display: 'Qwen Code',
+    firstRunWatch: 'trust',
     resume: { picker: '--resume', exact: '--resume {id}', pin: '--session-id', idFormat: 'uuid' },
     process: { packages: ['@qwen-code/qwen-code'] },
     detect: 'screen',

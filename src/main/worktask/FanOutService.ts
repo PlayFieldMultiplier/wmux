@@ -96,7 +96,7 @@ import {
 import { launchLineForShell, promptFileArgument } from '../../shared/promptFileArgument';
 import { getPtyShell } from '../pty/ptyShellRegistry';
 import type { Connector } from '../../shared/botConnector';
-import { AGENT_SLUG_SET } from '../../shared/agentIdentity';
+import { AGENT_ROWS, AGENT_SLUG_SET, agentLauncherStem, agentSlugToDisplay, type AgentSlug } from '../../shared/agentIdentity';
 import { getSharedTaskGateRunner } from './TaskGateRunner';
 import {
   clearFirstRunPrompts,
@@ -2282,21 +2282,27 @@ export class FanOutService {
     const ptyId = base.ptyId;
     if (!port || !ptyId) return;
     // The command the renderer ACTUALLY launched (a role binding may have
-    // swapped the agent). Only claude has these screens. The marker is split
-    // off with the SAME shared constant that attaches it, so the two cannot
-    // drift into a stem this check does not recognise.
+    // swapped the agent); its registry row says what to watch for
+    // (firstRunWatch). The marker is split off with the SAME shared constant
+    // that attaches it, so the two cannot drift into a stem this check does
+    // not recognise.
     const { marker, command: launched } = splitModelEnvMarker(base.initialCommand ?? '');
-    if (launcherStem(launched) !== 'claude') return;
+    const stem = launcherStem(launched);
+    const agent = AGENT_ROWS.find((row) => agentLauncherStem(row) === stem);
+    if (!agent?.firstRunWatch) return;
+    const trustOnly = agent.firstRunWatch === 'trust';
     const neutralisedModelEnv = marker.length > 0;
 
     let outcome: Awaited<ReturnType<typeof clearFirstRunPrompts>>;
     try {
-      outcome = await clearFirstRunPrompts(ptyId, port, this.firstRunOptions ?? {});
+      outcome = await clearFirstRunPrompts(ptyId, port, { ...(this.firstRunOptions ?? {}), ...(trustOnly ? { trustOnly } : {}) });
     } catch (err) {
       console.warn(`[fanout:first-run] watch failed for pane ${ptyId}: ${String(err)}`);
       return;
     }
     if (outcome.status === 'clear') {
+      // A trust-only watch has no model error to look for again.
+      if (trustOnly) return;
       // The model error is the one screen that arrives AFTER the composer, so
       // the clean-read exit above routinely runs before it: claude has to boot,
       // paint, send the first turn and be refused. Look once more, later — and
@@ -2308,7 +2314,7 @@ export class FanOutService {
     base.firstRunPrompt = outcome.headline;
     if (outcome.status !== 'stuck') return;
     base.firstRunStuck = true;
-    await this.markFirstRunStuck(base.taskId, ownerWorkspaceId, outcome, neutralisedModelEnv);
+    await this.markFirstRunStuck(base.taskId, ownerWorkspaceId, outcome, neutralisedModelEnv, agent.slug);
   }
 
   /**
@@ -2453,6 +2459,7 @@ export class FanOutService {
     ownerWorkspaceId: string,
     outcome: { headline: string; reason: 'trust' | 'unanswered' | 'send-failed' | 'model'; model?: string },
     neutralisedModelEnv: boolean,
+    agent: AgentSlug = 'claude',
   ): Promise<void> {
     if (!taskId) return;
     try {
@@ -2464,7 +2471,7 @@ export class FanOutService {
         status: 'input_required',
         actor: { kind: 'system', workspaceId: ownerWorkspaceId },
         expectedRev: entry.rev,
-        summary: firstRunStuckSummary(outcome, { neutralisedModelEnv }),
+        summary: firstRunStuckSummary(outcome, { neutralisedModelEnv, agent }),
       });
     } catch {
       // best-effort — the result already carries firstRunStuck.
@@ -2784,7 +2791,7 @@ export function firstRunStuckSummary(
     reason: 'trust' | 'unanswered' | 'send-failed' | 'model';
     model?: string;
   },
-  opts: { neutralisedModelEnv?: boolean } = {},
+  opts: { neutralisedModelEnv?: boolean; agent?: AgentSlug } = {},
 ): string {
   if (outcome.reason === 'model') {
     const fix = opts.neutralisedModelEnv
@@ -2795,5 +2802,8 @@ export function firstRunStuckSummary(
       `run /model <model> in the pane — ${fix}`
     );
   }
-  return `worker is waiting on Claude Code's ${outcome.headline}; it needs a keypress in the pane`;
+  // Named once: "Gemini CLI's folder trust dialog", not "… gemini folder trust dialog".
+  const agent = opts.agent ?? 'claude';
+  const screen = outcome.headline.startsWith(`${agent} `) ? outcome.headline.slice(agent.length + 1) : outcome.headline;
+  return `worker is waiting on ${agentSlugToDisplay(agent)}'s ${screen}; it needs a keypress in the pane`;
 }

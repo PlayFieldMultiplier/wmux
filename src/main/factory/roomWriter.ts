@@ -1300,11 +1300,14 @@ interface SystemCard { workspaces: string[]; threadId: ThreadId; kind: CardKind;
 const STOPPED_BY_OWNER_SUMMARY = 'stopped by owner';
 
 /** A task card's label in the English the card keeps, by its notice code. */
+/** The trust-dialog summary FanOutService writes, naming the agent that shows it. */
+const TRUST_DIALOG_SUMMARY = /^worker is waiting on (Claude Code|Gemini CLI|Qwen Code)'s (?:workspace|(?:[a-z]+ )?folder) trust dialog;/;
+
 /** #2231 — why wmux itself moved a task to input_required, from the summary
  *  it wrote (FanOutService), so the room can word it in the reader's
  *  language; null for a worker's own words. Pure. */
 export function inputRequiredWhy(summary: string): 'trustDialog' | 'firstRun' | 'launchFailed' | null {
-  if (/^worker is waiting on Claude Code's (?:workspace|codex folder) trust dialog;/.test(summary)) return 'trustDialog';
+  if (TRUST_DIALOG_SUMMARY.test(summary)) return 'trustDialog';
   if (/^worker is waiting on Claude Code's [^;]+; it needs a keypress in the pane$/.test(summary)) return 'firstRun';
   if (/^launch failed: no agent started in pane \S+ within \d+s/.test(summary)) return 'launchFailed';
   return null;
@@ -1398,10 +1401,12 @@ export function systemCardForFact(fact: Fact, bots?: BotDirectoryApi): SystemCar
       const threadId = taskThread(fact);
       const title = str(p.title) || fact.ref?.taskId || 'task';
       const why = code === 'task.inputRequired' ? inputRequiredWhy(str(p.summary)) : null;
+      // The agent whose trust dialog it is, for the words (Claude Code before it was named).
+      const trustAgent = why === 'trustDialog' ? TRUST_DIALOG_SUMMARY.exec(str(p.summary))?.[1] : undefined;
       return {
         workspaces: factRooms(fact, bots), threadId, kind: 'fact',
         title: `${TASK_CARD_LABEL[code]}: ${title}`,
-        notice: { code, args: { title, ...(why ? { why } : {}) } },
+        notice: { code, args: { title, ...(why ? { why } : {}), ...(trustAgent ? { agent: trustAgent } : {}) } },
         ...(body ? { body } : {}), refs: baseRefs,
         // A task's end closes only its own thread: in the issue, PR or other
         // thread it was started from, the subject is still open.

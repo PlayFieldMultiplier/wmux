@@ -5,13 +5,15 @@ import codex from '../../../daemon/approvals/__tests__/fixtures/terminal-prompts
 import openCode from '../../../daemon/approvals/__tests__/fixtures/terminal-prompts/opencode-permission-bash-01.json';
 import claude from '../../../daemon/approvals/__tests__/fixtures/terminal-prompts/claude-write-01-create.json';
 import type { ApprovalScreenSnapshot } from '../../../shared/approvalScreen';
-import { claudeScreenApproval, codexScreenApproval, piScreenApproval, qwenScreenApproval } from '../approvalScreen';
+import { claudeScreenApproval, codexScreenApproval, folderTrustScreenApproval, piScreenApproval, qwenScreenApproval } from '../approvalScreen';
 import piCapture from './fixtures/pi-1.4.0-capture.json';
 import qwenWide from './fixtures/qwen-code-0.26.1-120x40.json';
 import qwenNarrow from './fixtures/qwen-code-0.26.1-60x30.json';
 import qwenDialogs from './fixtures/qwen-code-0.26.1-60x30-dialogs.json';
 import claudeTrust from './fixtures/claude-code-2.1.310-trust-120x40.json';
 import codexTrust from './fixtures/codex-0.162.1-trust-120x40.json';
+import fs from 'node:fs';
+import path from 'node:path';
 
 const TRUST = ['Do you trust the contents of this project?', '❯ Yes, I trust this folder', '  No, exit', '↑/↓ Navigate · enter Confirm'];
 const CODEX_EDIT = ['Would you like to make the following edits?', '› 1. Yes, proceed (y)',
@@ -560,5 +562,106 @@ describe('Qwen Code 0.26.1 permission dialogs (live capture)', () => {
     det.takeApprovalRecheckRequest();
     det.feed(qwenWide.frames.afterApproval);
     expect(det.takeApprovalRecheckRequest()).toBe(false);
+  });
+});
+
+describe('Gemini CLI and Qwen Code folder-trust dialogs (live captures)', () => {
+  const FOLDER_TRUST = path.join(__dirname, '../../../daemon/approvals/__tests__/fixtures/folder-trust');
+  const fixture = (name: string): string[] =>
+    (JSON.parse(fs.readFileSync(path.join(FOLDER_TRUST, `${name}.json`), 'utf8')) as { screen: string[] }).screen;
+  /** The rows as the agents write them: CRLF rows, the last choice's number and label in SGR runs of their own. */
+  const drawn = (rows: readonly string[]): string =>
+    rows.join('\r\n').replace(/3\. Don/g, '3.\u001b[39m \u001b[38;2;255;255;255mDon');
+  const ASKED = (agent: string) => ({ agent, status: 'awaiting_input', message: 'Folder trust prompt' });
+
+  it.each([
+    ['gemini', 'Gemini CLI', 'gemini-folder-trust-120x40'],
+    ['gemini', 'Gemini CLI', 'gemini-folder-trust-full-120x40'],
+    ['gemini', 'Gemini CLI', 'gemini-folder-trust-22x30'],
+    ['gemini', 'Gemini CLI', 'gemini-folder-trust-ctrlc-22x60'],
+    // Every choice cut too short to read: still the dialog.
+    ['gemini', 'Gemini CLI', 'gemini-folder-trust-18x60'],
+    ['qwen', 'Qwen Code', 'qwen-folder-trust-120x40'],
+    ['qwen', 'Qwen Code', 'qwen-folder-trust-28x50'],
+    ['qwen', 'Qwen Code', 'qwen-folder-trust-22x30'],
+    ['qwen', 'Qwen Code', 'qwen-folder-trust-18x60'],
+  ] as const)('%s: reads the %s dialog %s once its last choice is drawn', async (slug, agent, name) => {
+    const rows = fixture(name);
+    const det = new AgentDetector();
+    const events = vi.fn();
+    det.onEvent(events);
+    det.seedTrustedIdentity(slug, det.getIdentityEpoch());
+    det.feed(drawn(rows));
+    expect(det.takeApprovalRecheckRequest()).toBe(true);
+    expect(await det.revalidateApprovalScreen(async () => frame(rows))).toBe(true);
+    expect(events.mock.calls.map(([event]) => event)).toEqual([ASKED(agent)]);
+  });
+
+  it('asks for the recheck once the last choice is drawn, however the reads split (inside an escape too)', () => {
+    for (const [slug, name] of [['gemini', 'gemini-folder-trust-60x30'], ['qwen', 'qwen-folder-trust-60x30']] as const) {
+      const output = drawn(fixture(name));
+      const endAt = output.indexOf('Don') + 'Don'.length;
+      for (const size of [1, 7, 64, 500]) {
+        const det = new AgentDetector();
+        det.seedTrustedIdentity(slug, det.getIdentityEpoch());
+        let after = -1;
+        for (let at = 0; at < output.length && after < 0; at += size) {
+          det.feed(output.slice(at, at + size));
+          if (det.takeApprovalRecheckRequest()) after = at + size;
+        }
+        expect(after).toBeGreaterThanOrEqual(endAt);
+      }
+    }
+  });
+
+  it("leaves Qwen's permission dialogs to its own reader", () => {
+    expect(folderTrustScreenApproval(qwenWide.screens.approval)).toBeNull();
+    expect(qwenScreenApproval(qwenWide.screens.approval)).not.toBeNull();
+  });
+
+  it.each([
+    // Gemini CLI 0.65.0's /auth menu (live capture): the same dot cursor, no trust question.
+    ['the /auth menu', [
+      '│ ? Get started                                                  │',
+      '│   How would you like to authenticate for this project?         │',
+      '│     1. Sign in with Google                                     │',
+      '│   ● 2. Use Gemini API Key                                      │',
+      '│     3. Vertex AI                                               │',
+      '│   (Use Enter to select)                                        │',
+      '╰────────────────────────────────────────────────────────────────╯',
+    ]],
+    ['a reply quoting the question over dot bullets', [
+      '✦ When Gemini asks "Do you trust the files in this folder?" pick one of:',
+      '● 1. Trust folder (proj)',
+      '  2. Trust parent folder (work)',
+      "  3. Don't trust",
+    ]],
+    ['the dialog already answered', fixture('gemini-folder-trust-answered-120x40')],
+  ])('reads no folder-trust dialog in %s', async (_label, rows) => {
+    expect(folderTrustScreenApproval(rows)).toBeNull();
+    const det = new AgentDetector();
+    const events = vi.fn();
+    det.onEvent(events);
+    det.seedTrustedIdentity('gemini', det.getIdentityEpoch());
+    det.feed(drawn(rows));
+    expect(await det.revalidateApprovalScreen(async () => frame(rows))).toBe(false);
+    expect(events).not.toHaveBeenCalled();
+  });
+
+  it('reads nothing before an identity, or for a question drawn over 30 s ago', async () => {
+    const rows = fixture('gemini-folder-trust-120x40');
+    const unowned = new AgentDetector();
+    unowned.feed(drawn(rows));
+    expect(await unowned.revalidateApprovalScreen(async () => frame(rows))).toBe(false);
+    vi.useFakeTimers();
+    try {
+      const det = new AgentDetector();
+      det.seedTrustedIdentity('gemini', det.getIdentityEpoch());
+      det.feed(drawn(rows));
+      vi.advanceTimersByTime(31_000);
+      expect(await det.revalidateApprovalScreen(async () => frame(rows))).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

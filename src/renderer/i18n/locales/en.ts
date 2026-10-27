@@ -2287,7 +2287,7 @@ export const en = {
   'room.notice.task.keptFolderCleaned.body': "It sat {days} days with no changes. Its branch stays.",
   'room.notice.task.keptFolderCleaned.body.research': "It sat {days} days with no changes.",
   'room.notice.task.inputRequired': "Task needs input: {title}",
-  'room.notice.task.inputRequired.why.trustDialog': "The worker is waiting on Claude Code's question whether you trust this folder. Answer it in the worker's pane.",
+  'room.notice.task.inputRequired.why.trustDialog': "The worker is waiting on {agent}'s question whether you trust this folder. Answer it in the worker's pane.",
   'room.notice.task.inputRequired.why.firstRun': "The worker is waiting on one of Claude Code's first-run screens. Press a key in the worker's pane.",
   'room.notice.task.inputRequired.why.launchFailed': "The worker's agent did not start, so its pane sits at the shell prompt. Run the task's launch line there again.",
   'room.notice.budget.exhausted.turns_hour': "{bot} is out of turns for this hour",

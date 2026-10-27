@@ -13,7 +13,7 @@ import { CodexUsageLimitLineScanner } from '../../shared/usageLimit';
 import type { AgentStatus } from '../../shared/types';
 import type { AgentSlug } from '../../shared/agentIdentity';
 import type { ApprovalScreenSnapshot } from '../../shared/approvalScreen';
-import { agyScreenApproval, claudeScreenApproval, codexScreenApproval, openCodeScreenApproval, piScreenApproval, qwenScreenApproval, type ScreenApproval } from './approvalScreen';
+import { agyScreenApproval, claudeScreenApproval, codexScreenApproval, folderTrustScreenApproval, openCodeScreenApproval, piScreenApproval, qwenScreenApproval, type ScreenApproval } from './approvalScreen';
 export type { AgentSlug };
 export { agentDisplayToSlug } from '../../shared/agentIdentity';
 
@@ -486,13 +486,18 @@ const AGENT_PATTERNS: AgentPattern[] = [
     agent: 'Qwen Code',
     slug: 'qwen',
     // The dialog read off the grid once a process or hook identity arrives
-    // after it was drawn, when no line pattern was reading for Qwen yet.
-    approvalScreen: qwenScreenApproval,
+    // after it was drawn, when no line pattern was reading for Qwen yet; the
+    // folder-trust dialog (security.folderTrust.enabled) is read the same way.
+    approvalScreen: (rows) => qwenScreenApproval(rows) ?? folderTrustScreenApproval(rows),
     // Its question (shell, or file write and edit), then the confirmation
     // spinner row drawn below the choices, without the counters a running
     // spinner adds beside it (or, when narrow, on the next row) just after
-    // an answer.
-    approvalReady: { question: /Allow\s*execution\s*of:|Apply\s*this\s*change\?/, end: /Waiting\s*for\s*user\s*confirmation\.\.\.(?!\s*\()/ },
+    // an answer. Or the folder-trust question, then its last choice
+    // ("3. Don't trust (esc)", cut with "…" in a narrow pane).
+    approvalReady: {
+      question: /Allow\s*execution\s*of:|Apply\s*this\s*change\?|Do[\s│]*you[\s│]*trust[\s│]*this[\s│]*folder\?/,
+      end: /Waiting\s*for\s*user\s*confirmation\.\.\.(?!\s*\()|3\.[\s│]*Don/,
+    },
     gate: /Qwen\s*Code\s*\(v\d|Qwen - /,
     chrome: isQwenChrome,
     completeChromeRow: true,
@@ -527,6 +532,16 @@ const AGENT_PATTERNS: AgentPattern[] = [
     // candidateLines on each chunk.
     gate: /Type\s*your\s*message\s*or|gemini-\d|Gemini CLI update/,
     chrome: (line) => isGeminiChrome(line),
+    // Its folder-trust dialog (live capture, 0.35.3 and 0.65.0), drawn at
+    // startup in a boxed frame before the composer: read off the grid once a
+    // process identity arrives. Ready once the last choice ("3. Don't trust",
+    // cut with "…" in a narrow pane) is drawn under the question; a narrow
+    // box puts its border between the question's words.
+    approvalScreen: folderTrustScreenApproval,
+    approvalReady: {
+      question: /Do[\s│]*you[\s│]*trust[\s│]*the[\s│]*files[\s│]*in[\s│]*this[\s│]*folder\?/,
+      end: /3\.[\s│]*Don/,
+    },
     patterns: [
       { regex: /^gemini>\s*$/,                   status: 'waiting',   message: 'Waiting for input' },
     ],
@@ -651,6 +666,9 @@ const PROFILE_BY_SLUG = new Map(AGENT_PATTERNS.map((ap) => [ap.slug, ap]));
  * footer a narrow pane wraps carries that row's padding.
  */
 const READY_MATCH_REACH = 512;
+/** A CSI, OSC or charset escape at the very end of a read, not yet finished. */
+// eslint-disable-next-line no-control-regex
+const UNFINISHED_ESCAPE = /\x1b(?:\[[0-9;?<=>]*|\][^\x07]*|\()?$/;
 /** The profiles with an approvalReady question, its patterns compiled global once. */
 const READY_PROFILES = AGENT_PATTERNS.flatMap((ap) => (ap.approvalReady
   ? [{ slug: ap.slug, question: globalRegExp(ap.approvalReady.question), end: globalRegExp(ap.approvalReady.end) }]
@@ -1509,11 +1527,13 @@ export class AgentDetector {
 
   private feedOutput(data: string): void {
     if (!data) return;
-    const previousLength = stripAnsi(this.approvalHintTail).length;
+    // An escape the last read cut short is not text yet: measured as text it
+    // would push the boundary of newly drawn text past the row that finishes it.
+    const previousLength = stripAnsi(this.approvalHintTail.replace(UNFINISHED_ESCAPE, '')).length;
     const probe = this.approvalHintTail + data;
     const cleanProbe = stripAnsi(probe);
     // Keep in step with the approvalReady questions (READY_PROFILES).
-    const hint = /Do\s*you\s*(?:want|trust)|Would\s*you\s*like|Allow\s*tool\s*use|Permission\s*required|Trust\s*project\s*folder|Allow\s*execution\s*of:|Apply\s*this\s*change\?|Trust\s*this\s*folder|Is\s*this\s*a\s*project\s*you\s*created/g;
+    const hint = /Do[\s│]*you[\s│]*(?:want|trust)|Would\s*you\s*like|Allow\s*tool\s*use|Permission\s*required|Trust\s*project\s*folder|Allow\s*execution\s*of:|Apply\s*this\s*change\?|Trust\s*this\s*folder|Is\s*this\s*a\s*project\s*you\s*created/g;
     for (const match of cleanProbe.matchAll(hint)) {
       // Only newly drawn text refreshes freshness. Retaining an old question
       // in the tail across a title update must not make it recent again.

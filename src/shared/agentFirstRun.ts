@@ -53,7 +53,7 @@
 // release that invents a new interstitial therefore falls through to "stuck",
 // which reports and waits: the safe direction.
 
-import { looksLikeApprovalPrompt } from '../daemon/approvals/approvalKeystrokes';
+import { looksLikeApprovalPrompt, readFolderTrustScreen } from '../daemon/approvals/approvalKeystrokes';
 import { CODEX_TRUST_HEADLINE, TRUST_HEADLINE } from './folderTrustWording';
 
 /**
@@ -208,6 +208,27 @@ function detectModelError(screen: string): FirstRunPrompt | null {
   return null;
 }
 
+/** The agent a folder-trust screen names, for the headline: Gemini CLI and
+ *  Qwen Code say who will be trusted; Codex names itself, or is known by its
+ *  own choice labels when it does not. */
+const TRUST_SCREEN_AGENTS: readonly (readonly [RegExp, string])[] = [
+  [/\bGemini CLI\b/, 'gemini'],
+  [/\bQwen Code\b/, 'qwen'],
+  [/\bCodex\b|Trust and continue|Yes, continue|No, quit/, 'codex'],
+];
+
+/** A screen's text with box borders dropped and rows joined, so a name or a
+ *  question a narrow box wrapped still reads whole. */
+function boxlessText(screen: string): string {
+  return screen.split('\n').map((row) => row.replace(/[│║┃╭╮╰╯─]/g, ' ')).join(' ').replace(/\s+/g, ' ');
+}
+
+/** "gemini folder trust dialog", or "folder trust dialog" when no agent is named. */
+function trustHeadline(text: string): string {
+  const agent = TRUST_SCREEN_AGENTS.find(([re]) => re.test(text))?.[1];
+  return agent ? `${agent} folder trust dialog` : 'folder trust dialog';
+}
+
 /**
  * Is `screen` showing a first-run prompt?
  *
@@ -226,8 +247,12 @@ export function detectFirstRunPrompt(screen: string): FirstRunPrompt | null {
   if (modelError) return modelError;
   const rows = screen.split('\n');
   const hasFooter = CONFIRM_FOOTER.test(screen);
+  if (hasFooter && TRUST_HEADLINE.test(screen)) return { kind: 'trust', headline: 'workspace trust dialog' };
+  // Other agents' trust dialogs (Gemini CLI and Qwen Code draw no confirm
+  // footer), read as the input guard reads them; one too narrow to read its
+  // choices is still the dialog.
+  if (readFolderTrustScreen(rows) !== null) return { kind: 'trust', headline: trustHeadline(boxlessText(screen)) };
   if (!hasFooter) return null;
-  if (TRUST_HEADLINE.test(screen)) return { kind: 'trust', headline: 'workspace trust dialog' };
   if (!looksLikeApprovalPrompt(rows)) return null;
   for (const { re, label } of INTERSTITIAL_HEADLINES) {
     if (re.test(screen)) return { kind: 'interstitial', headline: label };
@@ -244,16 +269,6 @@ export type LaunchScreen =
   /** Some other menu. Nothing may be typed or pasted into it. */
   | { kind: 'blocking'; headline: string };
 
-/** The agent a folder-trust screen names, for the headline: Gemini CLI and
- *  Qwen Code say who will be trusted; Codex names itself, or is known by its
- *  own choice labels when it does not. Read with box borders dropped and rows
- *  joined, so a name a narrow box wrapped still reads whole. */
-const TRUST_SCREEN_AGENTS: readonly (readonly [RegExp, string])[] = [
-  [/\bGemini CLI\b/, 'gemini'],
-  [/\bQwen Code\b/, 'qwen'],
-  [/\bCodex\b|Trust and continue|Yes, continue|No, quit/, 'codex'],
-];
-
 /**
  * Scheduled runs: what stands between a freshly launched agent and the prompt
  * paste. Known first-run screens (including codex's trust dialog) are named;
@@ -265,11 +280,8 @@ export function classifyLaunchScreen(screen: string): LaunchScreen | null {
   if (!screen) return null;
   const known = detectFirstRunPrompt(screen);
   if (known) return { kind: 'first-run', prompt: known };
-  const text = screen.split('\n').map((row) => row.replace(/[│║┃╭╮╰╯─]/g, ' ')).join(' ').replace(/\s+/g, ' ');
-  if (CODEX_TRUST_HEADLINE.test(text)) {
-    const agent = TRUST_SCREEN_AGENTS.find(([re]) => re.test(text))?.[1];
-    return { kind: 'first-run', prompt: { kind: 'trust', headline: agent ? `${agent} folder trust dialog` : 'folder trust dialog' } };
-  }
+  const text = boxlessText(screen);
+  if (CODEX_TRUST_HEADLINE.test(text)) return { kind: 'first-run', prompt: { kind: 'trust', headline: trustHeadline(text) } };
   if (looksLikeApprovalPrompt(screen.split('\n')) || MENU_FOOTER.test(screen)) {
     return { kind: 'blocking', headline: 'unrecognised menu' };
   }
@@ -336,6 +348,9 @@ export interface FirstRunWatchOptions {
   now?: () => number;
   /** Log sink; defaults to console.warn with the [fanout:first-run] tag. */
   log?: (message: string) => void;
+  /** Watch for the folder-trust dialog only, and press nothing: an agent
+   *  other than Claude Code has none of its interstitials or model error. */
+  trustOnly?: boolean;
 }
 
 const defaultSleep = (ms: number): Promise<void> =>
@@ -376,14 +391,17 @@ export async function clearFirstRunPrompts(
       // A viewport we cannot read is no evidence — keep watching.
       screen = '';
     }
-    const prompt = detectFirstRunPrompt(screen);
+    const seen = detectFirstRunPrompt(screen);
+    const prompt = options.trustOnly && seen?.kind !== 'trust' ? null : seen;
     lastPrompt = prompt;
 
     if (prompt?.kind === 'trust') {
       log(
-        `pane ${ptyId} is on the workspace trust dialog; wmux does not answer it. ` +
-          `Set ${AGENT_FIRST_RUN_ENV}=on (the default) so the worker launches with ` +
-          `${CLAUDE_SANDBOXED_ENV}, or accept the folder once by hand.`,
+        options.trustOnly
+          ? `pane ${ptyId} is on the ${prompt.headline}; wmux does not answer it. Accept the folder once by hand.`
+          : `pane ${ptyId} is on the workspace trust dialog; wmux does not answer it. ` +
+            `Set ${AGENT_FIRST_RUN_ENV}=on (the default) so the worker launches with ` +
+            `${CLAUDE_SANDBOXED_ENV}, or accept the folder once by hand.`,
       );
       return { status: 'stuck', headline: prompt.headline, reason: 'trust' };
     }

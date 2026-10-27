@@ -402,6 +402,18 @@ describe('firstRunStuckSummary (F15)', () => {
     expect(s).not.toContain('shell profile');
   });
 
+  it('names the agent whose trust dialog it is, once', () => {
+    expect(firstRunStuckSummary({ headline: 'workspace trust dialog', reason: 'trust' })).toBe(
+      "worker is waiting on Claude Code's workspace trust dialog; it needs a keypress in the pane",
+    );
+    expect(firstRunStuckSummary({ headline: 'gemini folder trust dialog', reason: 'trust' }, { agent: 'gemini' })).toBe(
+      "worker is waiting on Gemini CLI's folder trust dialog; it needs a keypress in the pane",
+    );
+    expect(firstRunStuckSummary({ headline: 'folder trust dialog', reason: 'trust' }, { agent: 'qwen' })).toBe(
+      "worker is waiting on Qwen Code's folder trust dialog; it needs a keypress in the pane",
+    );
+  });
+
   it('still asks for a keypress on a menu the watch could not clear', () => {
     expect(firstRunStuckSummary({ headline: 'fullscreen renderer upsell', reason: 'unanswered' })).toContain(
       'keypress',
@@ -1706,6 +1718,39 @@ describe('fan-out worker first run (A-1)', () => {
     expect(res.tasks[0].firstRunPrompt).toBe('fullscreen renderer upsell');
     // It DID try the dismissal the screen advertises before giving up.
     expect(keys).toEqual(['\x1b', '\x1b', '\x1b']);
+  });
+
+  it('reports a gemini or qwen worker on its folder-trust dialog, presses nothing, and leaves codex unwatched', async () => {
+    const trustScreen = (name: string): string =>
+      (JSON.parse(fs.readFileSync(path.join(__dirname, '../../../daemon/approvals/__tests__/fixtures/folder-trust', `${name}.json`), 'utf8')) as {
+        screen: string[];
+      }).screen.join('\n');
+    for (const [agentCmd, screen, headline] of [
+      ['gemini', trustScreen('gemini-folder-trust-60x30'), 'gemini folder trust dialog'],
+      ['qwen', trustScreen('qwen-folder-trust-22x30'), 'qwen folder trust dialog'],
+    ] as const) {
+      const keys: string[] = [];
+      const svc = new FanOutService({
+        daemon: makeDaemonFake().port,
+        renderer: makeRendererFake().port,
+        worktrees: makeWorktreesFake(),
+        firstRun: { readScreen: async () => screen, sendKey: async (_ptyId, sequence) => { keys.push(sequence); } },
+      });
+      const res = await svc.start(baseReq({ idempotencyKey: `fo-key-trust-${agentCmd}`, agentCmd, titles: ['Task A'] }));
+      expect(res.tasks[0].firstRunStuck).toBe(true);
+      expect(res.tasks[0].firstRunPrompt).toBe(headline);
+      expect(keys).toEqual([]);
+    }
+    const reads = vi.fn(async () => trustScreen('codex-folder-trust-60x30'));
+    const svc = new FanOutService({
+      daemon: makeDaemonFake().port,
+      renderer: makeRendererFake().port,
+      worktrees: makeWorktreesFake(),
+      firstRun: { readScreen: reads, sendKey: async () => undefined },
+    });
+    const res = await svc.start(baseReq({ idempotencyKey: 'fo-key-trust-codex', agentCmd: 'codex', titles: ['Task A'] }));
+    expect(res.tasks[0].firstRunStuck).toBeUndefined();
+    expect(reads).not.toHaveBeenCalled();
   });
 
   // ── F15 ────────────────────────────────────────────────────────────────────

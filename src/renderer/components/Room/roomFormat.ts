@@ -324,6 +324,8 @@ export function noticeText(card: Pick<RoomCard, 'actor' | 'body' | 'notice'>, t:
   }
   // Why wmux moved a task to input_required, worded (roomWriter inputRequiredWhy).
   if (notice.code === 'task.inputRequired' && typeof args.why === 'string' && INPUT_REQUIRED_WHY.has(args.why)) {
+    // A card written before the trust dialog named its agent was Claude Code's.
+    if (args.why === 'trustDialog' && vars.agent === undefined) vars.agent = 'Claude Code';
     return { title: t(`room.notice.${notice.code}`, vars), body: t(`room.notice.task.inputRequired.why.${args.why}`, vars) };
   }
   if (args.verdict !== undefined) vars.verdict = t(`room.notice.verdict.${args.verdict}`);
