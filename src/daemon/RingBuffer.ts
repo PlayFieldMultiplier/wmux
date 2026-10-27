@@ -224,6 +224,7 @@ export class RingBuffer {
   writeNativeChunk(chunk: NativeOutputChunk): void {
     if (this.disposed) throw new Error('Ring disposed');
     // Hibernated (no native ring): write() wakes it, or holds the bytes.
+    if (chunk.byteLength === 0) return;
     if (this.native?.writeChunk) { this.mutations++; this.native.writeChunk(chunk); }
     else this.write(chunk.readBytes());
   }
