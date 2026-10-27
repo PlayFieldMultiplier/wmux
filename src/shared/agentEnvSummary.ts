@@ -112,11 +112,18 @@ function item(raw: unknown): AgentEnvItem | null {
   return { agent, name, source, ...(parent ? { parent } : {}), ...(r.enabled === false ? { enabled: false as const } : {}) };
 }
 
-/** De-duplicated and sorted BEFORE the cap, so two PCs keep the same rows whatever order they listed them in. */
+/**
+ * De-duplicated and sorted BEFORE the cap, so two PCs keep the same rows
+ * whatever order they listed them in. A list not fully read is `cut`: one
+ * missing or not a list, one with a row dropped as malformed, or one over the
+ * cap. Its missing items are then not known, never absent.
+ */
 function items(raw: unknown): { rows: AgentEnvItem[]; cut: boolean } {
-  if (!Array.isArray(raw)) return { rows: [], cut: false };
-  const rows = byKey(raw.slice(0, AGENT_ENV_LIMITS.items * 4).map(item).filter((x): x is AgentEnvItem => x !== null), agentEnvItemKey);
-  const cut = raw.length > AGENT_ENV_LIMITS.items * 4 || rows.length > AGENT_ENV_LIMITS.items;
+  if (!Array.isArray(raw)) return { rows: [], cut: true };
+  const read = raw.slice(0, AGENT_ENV_LIMITS.items * 4).map(item);
+  const kept = read.filter((x): x is AgentEnvItem => x !== null);
+  const rows = byKey(kept, agentEnvItemKey);
+  const cut = raw.length > AGENT_ENV_LIMITS.items * 4 || kept.length < read.length || rows.length > AGENT_ENV_LIMITS.items;
   return { rows: rows.slice(0, AGENT_ENV_LIMITS.items), cut };
 }
 
@@ -141,7 +148,9 @@ export function parseAgentEnvSummary(raw: unknown): AgentEnvSummary | null {
     const row = a as Record<string, unknown> | null;
     const agent = text(row?.agent, AGENT_ENV_LIMITS.nameChars);
     if (!agent) continue;
-    agents.push({ agent, version: text(row?.version, AGENT_ENV_LIMITS.versionChars) });
+    // Absent is "not installed"; present but not a version is "unknown".
+    const version = row?.version === undefined || row?.version === null ? null : text(row.version, AGENT_ENV_LIMITS.versionChars) ?? 'unknown';
+    agents.push({ agent, version });
   }
   const instructions: AgentEnvInstruction[] = [];
   for (const i of r.instructions.slice(0, AGENT_ENV_LIMITS.instructions)) {

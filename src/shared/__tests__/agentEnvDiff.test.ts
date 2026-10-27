@@ -78,6 +78,29 @@ describe('diffAgentEnvs', () => {
   });
 });
 
+describe('a summary from another PC', () => {
+  const base = { schema: 1, wmuxVersion: '4.4.0', instructions: [], mcpServers: [] };
+
+  it('reads a present but invalid version as unknown, and only an absent one as not installed', () => {
+    const s = parseAgentEnvSummary({ ...base, skills: [], agents: [{ agent: 'claude', version: 'v\u200b2' }, { agent: 'codex', version: 7 }, { agent: 'gemini', version: null }, { agent: 'qwen' }] });
+    expect(s?.agents).toEqual([
+      { agent: 'claude', version: 'unknown' }, { agent: 'codex', version: 'unknown' },
+      { agent: 'gemini', version: null }, { agent: 'qwen', version: null },
+    ]);
+  });
+
+  it('a list with a dropped row, or no list, is not fully read: what it lacks is not reported missing', () => {
+    const dropped = parseAgentEnvSummary({ ...base, agents: [], skills: [{ agent: 'claude', name: 'review', source: 'user' }, { agent: 'claude', name: 'x', source: 'nowhere' }] });
+    expect(dropped?.skills.map((i) => i.name)).toEqual(['review']);
+    expect(dropped?.truncated).toEqual(['skills']);
+    const missing = parseAgentEnvSummary({ ...base, agents: [], skills: 'not a list' });
+    expect(missing?.truncated).toEqual(['skills']);
+    const full = summary({ skills: ['review', 'deploy'] });
+    const diff = diffAgentEnvs([host('a', full), host('b', dropped)]);
+    expect(diff.rows.find((r) => r.kind === 'skill' && r.name === 'deploy')).toBeUndefined();
+  });
+});
+
 describe('agent env summary bounds', () => {
   it('drops names with invisible or direction-changing characters, and stays inside its byte budget', () => {
     const s = buildAgentEnvSummary({
