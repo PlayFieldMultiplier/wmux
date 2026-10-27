@@ -94,6 +94,7 @@ function signal(overrides: Partial<AgentSignal>): AgentSignal {
     kind: 'agent.stop',
     agent: 'claude',
     cwd: '/repo',
+    ptyId: 'pty-1',
     payload: {},
     ts: 1_700_000_000_000,
     ...overrides,
@@ -318,6 +319,24 @@ describe('hooks.signal — agent.lifecycle event tee', () => {
     expect(pollLifecycle()).toHaveLength(0);
   });
 
+  it('does not place a session started outside any pane on the pane in its folder', async () => {
+    // The daemon is unreachable, so main decides alone. It cannot see the
+    // pane's binding or agent pid, so a folder match proves nothing.
+    const stub = stubHookRouter();
+    const router = new RpcRouter();
+    registerHooksRpc(router, () => fakeWindow(), stub.router);
+
+    const res = await router.dispatch({
+      id: 'outside',
+      method: 'hooks.signal',
+      params: signal({ kind: 'agent.stop', cwd: '/repo', ptyId: undefined, agentSessionId: 'outside-conv' }) as unknown as Record<string, unknown>,
+    });
+
+    expect(res).toMatchObject({ ok: true, result: { ok: false, reason: 'no-workspace-match' } });
+    expect(pollLifecycle()).toHaveLength(0);
+    expect(stub.recordHookCalls).toHaveLength(0);
+  });
+
   it('does NOT emit when workspace match fails (signal from outside any wmux dir)', async () => {
     const stub = stubHookRouter();
     sendToRendererMock.mockResolvedValueOnce([
@@ -329,7 +348,7 @@ describe('hooks.signal — agent.lifecycle event tee', () => {
     const res = await router.dispatch({
       id: '6',
       method: 'hooks.signal',
-      params: signal({ kind: 'agent.stop', cwd: '/repo' }) as unknown as Record<string, unknown>,
+      params: signal({ kind: 'agent.stop', cwd: '/repo', ptyId: undefined }) as unknown as Record<string, unknown>,
     });
 
     expect(res.ok).toBe(true);
@@ -398,6 +417,7 @@ describe('hooks.signal — agent.lifecycle event tee', () => {
       params: signal({
         kind: 'agent.activity',
         cwd: '/elsewhere',
+        ptyId: undefined,
         payload: { tool_name: 'Bash', tool_input: { command: 'ls' } },
       }) as unknown as Record<string, unknown>,
     });
@@ -473,13 +493,13 @@ describe('hooks.signal — agent.lifecycle event tee', () => {
       await router.dispatch({
         id: 'p-a',
         method: 'hooks.signal',
-        params: signal({ kind: 'agent.activity', cwd: '/repo-a', payload: { tool_name: 'Read', tool_input: { file_path: '/repo-a/x.ts' } } }) as unknown as Record<string, unknown>,
+        params: signal({ kind: 'agent.activity', cwd: '/repo-a', ptyId: 'pty-a', payload: { tool_name: 'Read', tool_input: { file_path: '/repo-a/x.ts' } } }) as unknown as Record<string, unknown>,
       });
       // Same instant, different pane — the other pane's lastSent is still 0.
       await router.dispatch({
         id: 'p-b',
         method: 'hooks.signal',
-        params: signal({ kind: 'agent.activity', cwd: '/repo-b', payload: { tool_name: 'Read', tool_input: { file_path: '/repo-b/y.ts' } } }) as unknown as Record<string, unknown>,
+        params: signal({ kind: 'agent.activity', cwd: '/repo-b', ptyId: 'pty-b', payload: { tool_name: 'Read', tool_input: { file_path: '/repo-b/y.ts' } } }) as unknown as Record<string, unknown>,
       });
 
       expect(broadcastMetadataUpdateMock).toHaveBeenCalledTimes(2);

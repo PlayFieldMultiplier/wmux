@@ -108,6 +108,10 @@ import { AGENT_SLUG_SET, type AgentSlug } from '../agentIdentity';
  *   3. `cwd` — fallback for sessions started outside a wmux pane, OR
  *      for older bridges that don't fill the env fields. Resolved via
  *      exact + longest-prefix match against `workspace.metadata.cwd`.
+ *      Main skips this tier when it handles a signal itself (the daemon is
+ *      unreachable), because it cannot verify the guess. The daemon verifies
+ *      every tier 2/3 pick against the pane's binding and agent pid
+ *      (HookIngest `verifyGuessedRoute`).
  *
  * `surfaceId` is carried for forensic continuity but is NOT a routing key:
  * the renderer mints a surface only AFTER pty.create returns, so WMUX_SURFACE_ID
