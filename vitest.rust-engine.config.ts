@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { configDefaults, defineConfig } from 'vitest/config';
+import { hashbangLf } from './scripts/lib/vitest-hashbang-lf.mjs';
 
 // The daemon's tests on the rust terminal engine (WMUX_TERMINAL_CORE=rust).
 // Run by .github/workflows/rust-engine-daemon.yml after `npm run build:terminal-core`:
@@ -40,6 +41,8 @@ for (const file of nodeOnly) {
 }
 
 export default defineConfig({
+  // A CRLF hashbang line loads (scripts/lib/vitest-hashbang-lf.mjs).
+  plugins: [hashbangLf()],
   test: {
     include: ['src/daemon/**/__tests__/**/*.test.ts'],
     exclude: [...configDefaults.exclude, '**/*.runtime.test.ts', ...nodeOnly],

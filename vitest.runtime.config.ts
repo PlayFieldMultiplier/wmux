@@ -1,6 +1,9 @@
 import { defineConfig } from 'vitest/config';
+import { hashbangLf } from './scripts/lib/vitest-hashbang-lf.mjs';
 
 export default defineConfig({
+  // A CRLF hashbang line loads (scripts/lib/vitest-hashbang-lf.mjs).
+  plugins: [hashbangLf()],
   test: {
     include: [
       'src/**/__tests__/**/*.runtime.test.{ts,tsx}',

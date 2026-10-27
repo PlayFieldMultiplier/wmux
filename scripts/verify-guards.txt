@@ -43,3 +43,7 @@ src/main/ipc/__tests__/registerHandlers.race.test.ts
 # No test loads a JavaScript file that starts with a hashbang: on a CRLF
 # checkout Vite misreads it (#2769). It walks the import graph itself.
 scripts/__tests__/hashbangImports.test.mjs
+
+# Every vitest config registers the plugin that loads a CRLF hashbang file;
+# it reads the config files at the repository root.
+scripts/__tests__/hashbangLf.test.mjs

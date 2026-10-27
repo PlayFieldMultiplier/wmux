@@ -108,7 +108,7 @@ const MODULE_NAMES = OS_MODULES.join('|');
 const OS_LITERAL = new RegExp(`['"](?:node:)?(${MODULE_NAMES})['"]`, 'g');
 const IMPORT_BEFORE = /(?:\bfrom|\bimport|\brequire\s*\(|\bimport\s*\()\s*$/;
 const MOCK_CALL = /\bvi\s*\.\s*(?:do)?[mM]ock\s*\(\s*['"]([^'"]+)['"]/g;
-const RELATIVE_IMPORT = /(?:\bfrom\s*|\bimport\s*\(\s*|^\s*import\s+)['"](\.{1,2}\/[^'"]+)['"]/gm;
+export const RELATIVE_IMPORT = /(?:\bfrom\s*|\bimport\s*\(\s*|^\s*import\s+)['"](\.{1,2}\/[^'"]+)['"]/gm;
 const PRAGMA = /^[ \t]*\/\/[ \t]*@wmux-lane[ \t]+(\S+)/m;
 const MKDTEMP = /\bmkdtemp(?:Sync)?\b/;
 // Rule 5. A substring, not a word: `win32` never appears in this codebase
@@ -117,6 +117,21 @@ const WIN32 = /win32/;
 const RESOLVE_SUFFIXES = ['', '.ts', '.tsx', '.mts', '.mjs', '.js', '/index.ts', '/index.tsx', '/index.mjs', '/index.js'];
 
 const toPosix = (p) => p.split(path.sep).join('/');
+
+// Strings and comments in one left-to-right pass: whichever opens first owns
+// the text up to its end. A `//` in a URL stays inside its string, and a
+// backtick in a comment stays inside the comment instead of opening a
+// template that runs on to the next backtick lines below. A real template
+// literal still spans its lines.
+const STRING_OR_COMMENT = /'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`|\/\*[\s\S]*?\*\/|\/\/[^\n]*/g;
+/** Source without its comments, and with each string literal emptied to `''`. */
+export const stripStringsAndComments = (text) => text.replace(STRING_OR_COMMENT, (m) => (m[0] === '/' ? '' : "''"));
+/** [start, end) of each comment in the source, read in that same one pass. */
+export function commentSpans(text) {
+  const spans = [];
+  for (const m of text.matchAll(STRING_OR_COMMENT)) if (m[0][0] === '/') spans.push([m.index, m.index + m[0].length]);
+  return spans;
+}
 const IN_TESTS_DIR = /(?:^|\/)__tests__\//;
 const TEST_SOURCE = /\.test\.[^/]+$/;
 // A relative specifier that can reach a helper: src/test-utils, a __tests__
@@ -151,11 +166,20 @@ export function listTestFiles(root = ROOT) {
  * (`import type ...` or `import { type A, type B }`): TypeScript erases it, so
  * nothing reaches the OS.
  */
-function isTypeOnlyImport(source, index) {
-  const before = source.slice(Math.max(0, index - 2000), index);
-  const stmt = before.slice(before.lastIndexOf('import'));
-  if (/^import\s+type\b/.test(stmt)) return true;
-  const named = stmt.match(/^import\s*\{([^}]*)\}\s*from\s*$/);
+export function isTypeOnlyImport(source, index) {
+  const window = source.slice(Math.max(0, index - 2000), index);
+  // Fast path: a type-only import names `type` after the statement before it.
+  if (!/\btype\b/.test(window.slice(window.lastIndexOf(';') + 1))) return false;
+  // Strings and comments go first (stripStringsAndComments), and the
+  // statement starts at the last `import` or `export` word: that word in a
+  // comment or inside a name is no statement start, and `export ... from`
+  // is a statement of its own.
+  const before = stripStringsAndComments(window);
+  const starts = [...before.matchAll(/\b(?:import|export)\b/g)];
+  if (starts.length === 0) return false;
+  const stmt = before.slice(starts[starts.length - 1].index);
+  if (/^(?:import|export)\s+type\b/.test(stmt)) return true;
+  const named = stmt.match(/^(?:import|export)\s*\{([^}]*)\}\s*from\s*$/);
   if (!named) return false;
   const specifiers = named[1].split(',').map((x) => x.trim()).filter(Boolean);
   return specifiers.length > 0 && specifiers.every((x) => /^type\s/.test(x));
@@ -199,7 +223,7 @@ export function pragmaOf(source, file = '<source>') {
 }
 
 /** Absolute path of a relative import, or null when it is not a file here. */
-function resolveRelative(fromAbs, spec) {
+export function resolveRelative(fromAbs, spec) {
   // TS sources import siblings as `./x.js`; the file on disk is x.ts.
   const bases = [path.resolve(path.dirname(fromAbs), spec)];
   if (/\.[cm]?js$/.test(spec)) bases.push(bases[0].replace(/\.[cm]?js$/, ''));

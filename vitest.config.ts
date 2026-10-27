@@ -1,5 +1,6 @@
 import { configDefaults, defineConfig } from 'vitest/config';
 import { DurationSequencer } from './scripts/lib/duration-sequencer.mjs';
+import { hashbangLf } from './scripts/lib/vitest-hashbang-lf.mjs';
 
 const include = [
   'src/**/__tests__/**/*.test.{ts,tsx}',
@@ -31,6 +32,8 @@ const osTests = '**/*.os.test.*';
 const osInclude = include.map((glob) => glob.replace('*.test.', '*.os.test.'));
 
 export default defineConfig({
+  // A CRLF hashbang line loads (scripts/lib/vitest-hashbang-lf.mjs).
+  plugins: [hashbangLf()],
   test: {
     setupFiles: ['./src/test-utils/isolateDataDir.ts', './src/test-utils/jsdomEnv.ts'],
     // Installs the Electron binary once before any worker starts, so no test
