@@ -7,19 +7,22 @@
 // armed only on a directory that reader has just opened.
 //
 // When a commit line lands, every live pane is read AT ONCE (agent, its
-// session id, workspace, task), so a pane that moves to another session later
-// does not relink. Then each pane's output is searched for git's summary line
-// for that commit (`[branch abc1234] …`) for a few seconds: one pane showing it,
-// over the whole window, is the attribution. Otherwise the panes in that
-// worktree are kept as candidates only.
+// session id, workspace), so a pane that moves to another session later does
+// not relink; a line read late (a slow reader, a watch armed again) reads
+// no session and attributes nothing. Then every pane's output is searched for
+// git's summary line for that commit (`[branch abc1234] …`) for a few
+// seconds: one pane showing it over the whole window, and in that worktree,
+// is the attribution. Otherwise the worktree's panes are kept as candidates
+// only. The task is the worktree's, whichever pane committed.
 
 import { watch as fsWatch, type FSWatcher } from 'node:fs';
 import path from 'node:path';
 import type { Probe, ProbeAnswer } from '../../main/pty/gitContextWatch';
+import { TAIL_MAX_BYTES } from '../../main/pty/shareReader';
 import {
   COMMIT_ORIGIN_MAX_CANDIDATES,
+  commitSummaryIn,
   parseReflogCommit,
-  textShowsCommitSummary,
   type CommitOrigin,
   type CommitOriginPane,
   type ReflogCommit,
@@ -28,9 +31,9 @@ import type { CommitOriginStore } from './CommitOriginStore';
 
 /** When the panes' output is searched for the summary line, after the line lands (ms). */
 export const SCREEN_CHECK_DELAYS_MS: readonly number[] = [0, 500, 1500, 4000];
-/** The reader's `tail` answers at most this much (shareReader.ts). */
-const TAIL_MAX_BYTES = 64 * 1024;
 const DEBOUNCE_MS = 100;
+/** A commit line read later than this after it landed reads no pane's session (ms; reflog times are whole seconds). */
+const LATE_MS = 5000;
 /** A watch that failed is armed again after this long (ms). */
 const REARM_MS = 1000;
 /** SHAs already handled, so a reflog read again after a rewrite records nothing twice. */
@@ -46,6 +49,8 @@ export interface CommitOriginCaptureDeps {
   livePanes: () => string[];
   /** The pane's rendered text (scrollback and screen), or null. */
   paneText: (ptyId: string) => Promise<string | null>;
+  /** Bytes the pane has output so far: a pane with none since its last read is not read again. */
+  outputBytes?: (ptyId: string) => number | null;
   pane: (ptyId: string) => CommitOriginPane;
   /** The open task whose worktree holds the pane's cwd, or null. */
   taskOf: (ptyId: string) => string | null;
@@ -140,12 +145,15 @@ export class CommitOriginCapture {
     return (this.deps.now ?? Date.now)();
   }
 
-  private async tail(w: Watched, from: number): Promise<Tail | null> {
+  /** The reflog from `from`; null when it is not there; 'failed' when the read failed (a missed deadline). */
+  private async tail(w: Watched, from: number): Promise<Tail | null | 'failed'> {
+    let answer: ProbeAnswer;
     try {
-      return parseTail(await this.deps.read({ op: 'tail', path: path.join(w.gitDir, 'logs', 'HEAD'), from }));
+      answer = await this.deps.read({ op: 'tail', path: path.join(w.gitDir, 'logs', 'HEAD'), from });
     } catch {
-      return null; // missed the reader's deadline: the next change reads again
+      return 'failed';
     }
+    return answer === null ? null : parseTail(answer) ?? 'failed';
   }
 
   private async start(gitDir: string): Promise<void> {
@@ -154,7 +162,9 @@ export class CommitOriginCapture {
     // Only what is appended from now on.
     const t = await this.tail(w, Number.MAX_SAFE_INTEGER);
     if (w.closed) return;
-    if (t) {
+    // Not read (none yet, or failed): ino stays 0, so the first read keeps
+    // only lines from since this watch began.
+    if (t && t !== 'failed') {
       w.offset = t.size;
       w.ino = t.ino;
     }
@@ -182,6 +192,9 @@ export class CommitOriginCapture {
         this.schedule(w); // a line appended before the watch went live
         return;
       }
+      // logs/ is there and could not be watched: try again later.
+      if (!w.closed) this.rearmLater(w);
+      return;
     }
     if (w.closed || !(await opened(w.gitDir)) || w.closed) {
       if (!w.closed) this.rearmLater(w);
@@ -217,18 +230,22 @@ export class CommitOriginCapture {
     if (w.closed) return;
     const t = await this.tail(w, w.offset);
     if (w.closed) return;
-    if (!t) {
-      // Gone (a removed logs/): read it whole when it is back.
-      w.offset = 0;
-      w.ino = 0;
+    if (t === 'failed') {
+      // Read again a moment later; the place read up to stays.
+      const retry = setTimeout(() => { if (!w.closed) this.schedule(w); }, REARM_MS);
+      retry.unref?.();
       return;
     }
-    const rewritten = (w.ino !== 0 && t.ino !== w.ino) || t.size < w.offset;
+    // Not there (a removed logs/): when it is back it is another file, read
+    // from its end for new lines only.
+    if (!t) return;
+    // Never read before, rewritten (`reflog expire`), or grown past one read.
+    const rewritten = w.ino === 0 || t.ino !== w.ino || t.size < w.offset;
     if (rewritten || t.size - w.offset > TAIL_MAX_BYTES) {
       // Rewritten (`reflog expire`), or far more than any commit writes: read
       // the end of it again and keep only lines from since this watch began.
       const end = await this.tail(w, Math.max(0, t.size - TAIL_MAX_BYTES));
-      if (w.closed || !end) return;
+      if (w.closed || !end || end === 'failed') return;
       w.offset = end.size;
       w.ino = end.ino;
       this.lines(w, end.bytes, end.size > end.bytes.length, true);
@@ -264,37 +281,60 @@ export class CommitOriginCapture {
     if (inWorktree.length === 0) return;
     const label = this.panes.get(inWorktree[0])?.branch ?? null;
     const branch = label && !DETACHED_LABEL_RE.test(label) ? label : null;
-    // Every live pane: the one that ran `git commit` may sit in another
-    // directory (`cd ../wt && git commit`).
+    // Read now: a pane's session later may be one that did not exist then.
+    const late = this.now() - commit.at > LATE_MS;
+    const read = (id: string): CommitOriginPane => {
+      const p = this.deps.pane(id);
+      return late ? { ...p, agentSessionId: null } : p;
+    };
+    // Every live pane is searched: one outside the worktree showing the line
+    // too (an observer) leaves no single pane, so nothing is attributed.
     const ids = [...new Set([...inWorktree, ...this.deps.livePanes()])];
-    const panes = new Map(ids.map((id) => [id, { pane: this.deps.pane(id), taskId: this.deps.taskOf(id) }]));
-    const candidates = inWorktree.slice(0, COMMIT_ORIGIN_MAX_CANDIDATES).map((id) => panes.get(id)?.pane as CommitOriginPane);
-    void this.findEvidence(commit, branch, panes, candidates);
+    const panes = new Map(ids.map((id) => [id, read(id)]));
+    const candidates = inWorktree.slice(0, COMMIT_ORIGIN_MAX_CANDIDATES).map((id) => panes.get(id) as CommitOriginPane);
+    // The worktree's task, whichever pane committed in it.
+    const taskId = inWorktree.map((id) => this.deps.taskOf(id)).find((t) => t !== null) ?? null;
+    void this.findEvidence(commit, { branch, panes, inWorktree: new Set(inWorktree), candidates, taskId, late });
   }
 
   private async findEvidence(
     commit: ReflogCommit,
-    branch: string | null,
-    panes: Map<string, { pane: CommitOriginPane; taskId: string | null }>,
-    candidates: CommitOriginPane[],
+    at: {
+      /** The git watcher's label for the worktree's branch, when no summary line names it. */
+      branch: string | null;
+      panes: Map<string, CommitOriginPane>;
+      inWorktree: Set<string>;
+      candidates: CommitOriginPane[];
+      taskId: string | null;
+      /** Read late: no attribution. */
+      late: boolean;
+    },
   ): Promise<void> {
-    const shown = new Set<string>();
+    const shown = new Map<string, { branch: string | null }>();
     let settled = false;
     // Attributed only when one pane, and no other, showed it over the whole
-    // window; cut short (dispose) or ambiguous, the worktree's panes are candidates.
+    // window, and that pane is in the worktree; cut short (dispose), late or
+    // ambiguous, the worktree's panes are candidates.
     const settle = (complete: boolean): void => {
       if (settled) return;
       settled = true;
       this.pending.delete(onDispose);
-      const only = complete && shown.size === 1 ? panes.get([...shown][0]) : undefined;
-      const origin: CommitOrigin = only
-        ? { ...commit, branch, evidence: 'screen', attributed: { ...only.pane, taskId: only.taskId } }
-        : { ...commit, branch, evidence: candidates.length === 1 ? 'only-pane' : 'none', candidates };
+      const [onlyId, summary] = shown.size === 1 ? [...shown][0] : [];
+      const only = complete && !at.late && onlyId !== undefined && at.inWorktree.has(onlyId) ? at.panes.get(onlyId) : undefined;
+      const origin: CommitOrigin = only && summary
+        ? { ...commit, branch: summary.branch, evidence: 'screen', attributed: { ...only, taskId: at.taskId } }
+        : { ...commit, branch: at.branch, evidence: at.candidates.length === 1 ? 'only-pane' : 'none', candidates: at.candidates };
       this.deps.store.add(origin);
     };
     const onDispose = () => settle(false);
     this.pending.add(onDispose);
+    if (at.late) {
+      settle(true);
+      return;
+    }
     const setTimer = this.deps.setTimer ?? ((fn: () => void, ms: number) => setTimeout(fn, ms).unref?.());
+    // A pane with no output since its last read is not read again.
+    const readAt = new Map<string, number | null>();
     let waited = 0;
     for (const delay of SCREEN_CHECK_DELAYS_MS) {
       if (delay > waited) {
@@ -302,10 +342,14 @@ export class CommitOriginCapture {
         waited = delay;
       }
       if (settled) return;
-      for (const id of panes.keys()) {
+      for (const id of at.panes.keys()) {
         if (shown.has(id)) continue;
+        const bytes = this.deps.outputBytes?.(id) ?? null;
+        if (readAt.has(id) && bytes !== null && readAt.get(id) === bytes) continue;
+        readAt.set(id, bytes);
         const text = await this.deps.paneText(id).catch(() => null);
-        if (text && textShowsCommitSummary(text, commit.sha)) shown.add(id);
+        const summary = text ? commitSummaryIn(text, commit.sha) : undefined;
+        if (summary) shown.set(id, summary);
       }
       if (settled) return;
       // Two panes showing it is no evidence of which made it.

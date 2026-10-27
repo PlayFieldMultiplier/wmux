@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { COMMIT_ORIGIN_MAX_CANDIDATES, parseCommitOrigin, parseReflogCommit, textShowsCommitSummary } from '../commitOrigin';
+import { COMMIT_ORIGIN_MAX_CANDIDATES, commitSummaryIn, parseCommitOrigin, parseReflogCommit } from '../commitOrigin';
 
 const OLD = 'a'.repeat(40);
 const NEW = '0123456789abcdef0123456789abcdef01234567';
@@ -24,16 +24,16 @@ describe('parseReflogCommit', () => {
   });
 });
 
-describe('textShowsCommitSummary', () => {
-  it('matches the summary line git commit prints, and not a bare hash', () => {
-    expect(textShowsCommitSummary('[main 0123456] fix the thing', NEW)).toBe(true);
-    expect(textShowsCommitSummary('  ⎿ [feat/x 0123456789ab] fix', NEW)).toBe(true);
-    expect(textShowsCommitSummary('[main (root-commit) 0123456] first', NEW)).toBe(true);
-    expect(textShowsCommitSummary('[detached HEAD 0123456] x', NEW)).toBe(true);
-    expect(textShowsCommitSummary('[main 012345] fix', NEW)).toBe(false); // under 7
-    expect(textShowsCommitSummary('[main 0123457] fix', NEW)).toBe(false);
-    expect(textShowsCommitSummary('commit 0123456789abcdef0123456789abcdef01234567', NEW)).toBe(false); // git log
-    expect(textShowsCommitSummary('~/repo @0123456 ❯', NEW)).toBe(false); // a prompt
+describe('commitSummaryIn', () => {
+  it('finds the summary line git commit prints, with its branch, and not a bare hash', () => {
+    expect(commitSummaryIn('[main 0123456] fix the thing', NEW)).toEqual({ branch: 'main' });
+    expect(commitSummaryIn('  ⎿ [feat/x 0123456789ab] fix', NEW)).toEqual({ branch: 'feat/x' });
+    expect(commitSummaryIn('[main (root-commit) 0123456] first', NEW)).toEqual({ branch: 'main' });
+    expect(commitSummaryIn('[detached HEAD 0123456] x', NEW)).toEqual({ branch: null });
+    expect(commitSummaryIn('[main 012345] fix', NEW)).toBeUndefined(); // under 7
+    expect(commitSummaryIn('[main 0123457] fix', NEW)).toBeUndefined();
+    expect(commitSummaryIn('commit 0123456789abcdef0123456789abcdef01234567', NEW)).toBeUndefined(); // git log
+    expect(commitSummaryIn('~/repo @0123456 ❯', NEW)).toBeUndefined(); // a prompt
   });
 });
 

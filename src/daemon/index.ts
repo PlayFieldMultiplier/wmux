@@ -52,7 +52,7 @@ import { MOA_PROMPTS_FILE, parseNotedPrompts, type NotedPrompt } from '../shared
 import { coercePhoneDecisions } from './approvals/decisionConfig';
 import { createOpenCodeDecisions } from './approvals/openCodeDecisions';
 import { isNativeDecision } from './approvals/types';
-import { SCROLLBACK_ROWS } from './web/hostSearch';
+import { SCROLLBACK_ROWS, joinWrappedRows } from './web/hostSearch';
 import { recoveryCwd, isWslShell, isWslCwdMissingError } from '../shared/wsl';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -8440,10 +8440,12 @@ function createCommitOriginCapture(
     store,
     read,
     livePanes: () => sessionManager.listLiveSessions().map((s) => s.id),
+    // Soft-wrapped rows joined back, so a long summary line still matches.
     paneText: async (id) => {
       const outcome = await queuedTextSnapshot(sessionManager, id, COMMIT_ORIGIN_SCROLLBACK);
-      return outcome?.ok ? outcome.rows.map((r) => r.text).join('\n') : null;
+      return outcome?.ok ? joinWrappedRows(outcome.rows).join('\n') : null;
     },
+    outputBytes: (id) => sessionManager.getSession(id)?.ringBuffer.totalBytesWritten ?? null,
     pane: (id) => {
       const meta = sessionManager.getSession(id)?.meta;
       const ws = meta?.env?.[ENV_KEYS.WORKSPACE_ID];

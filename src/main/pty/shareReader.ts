@@ -160,11 +160,14 @@ abstract class QueuedProbeReader implements ProbeReader {
  * the script. Answers follow the watcher's ProbeAnswer contract. It exits
  * when its stdin closes, so a parent that dies leaves no reader behind.
  */
+/** A `tail` probe answers at most this many bytes. */
+export const TAIL_MAX_BYTES = 64 * 1024;
+
 export const SHARE_READER_SOURCE = `
 'use strict';
 const fs = require('fs');
 const kind = (st) => (st.isDirectory() ? 'dir' : st.isFile() ? 'file' : 'other');
-const TAIL_MAX_BYTES = 65536;
+const TAIL_MAX_BYTES = ${TAIL_MAX_BYTES};
 async function tail(p, from) {
   const fh = await fs.promises.open(p, 'r');
   try {
@@ -177,11 +180,9 @@ async function tail(p, from) {
     await fh.close();
   }
 }
-// The \`from\` of the read being answered: the parent sends one read at a time.
-let tailFrom;
-async function answer(op, p) {
+async function answer(op, p, from) {
   try {
-    if (op === 'tail') return await tail(p, tailFrom);
+    if (op === 'tail') return await tail(p, from);
     if (op === 'read') return await fs.promises.readFile(p, 'utf8');
     if (op === 'realpath') return await fs.promises.realpath(p);
     if (op === 'open') { await (await fs.promises.opendir(p)).close(); return 'opened'; }
@@ -201,8 +202,7 @@ process.stdin.on('data', (chunk) => {
     let req;
     try { req = JSON.parse(line); } catch { continue; }
     if (!req || typeof req.path !== 'string') continue;
-    tailFrom = req.from;
-    answer(req.op, req.path).then((a) => process.stdout.write(JSON.stringify({ id: req.id, answer: a }) + '\\n'));
+    answer(req.op, req.path, req.from).then((a) => process.stdout.write(JSON.stringify({ id: req.id, answer: a }) + '\\n'));
   }
 });
 process.stdin.on('end', () => process.exit(0));

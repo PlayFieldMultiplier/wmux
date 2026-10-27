@@ -81,17 +81,18 @@ export function parseReflogCommit(line: string): ReflogCommit | null {
 }
 
 /**
- * Whether some text shows git's summary line for the commit `sha`, the one
- * `git commit` prints: `[main abc1234] …`, `[main (root-commit) abc1234] …`
- * or `[detached HEAD abc1234] …`. A bare hash (a prompt, `git log`) is not it.
+ * git's summary line for the commit `sha` in some text, the one `git commit`
+ * prints: `[main abc1234] …`, `[main (root-commit) abc1234] …` or
+ * `[detached HEAD abc1234] …`. Its branch (null when detached), or undefined
+ * when the text does not show it. A bare hash (a prompt, `git log`) is not it.
  */
-export function textShowsCommitSummary(text: string, sha: string): boolean {
-  const re = /\[(?:detached HEAD|[^\s[\]]+(?: \(root-commit\))?) ([0-9a-f]{7,64})\]/g;
+export function commitSummaryIn(text: string, sha: string): { branch: string | null } | undefined {
+  const re = /\[(detached HEAD|[^\s[\]]+)(?: \(root-commit\))? ([0-9a-f]{7,64})\]/g;
   for (const m of text.matchAll(re)) {
-    const abbrev = m[1];
-    if (abbrev.length >= MIN_ABBREV && sha.startsWith(abbrev)) return true;
+    const abbrev = m[2];
+    if (abbrev.length >= MIN_ABBREV && sha.startsWith(abbrev)) return { branch: m[1] === 'detached HEAD' ? null : m[1] };
   }
-  return false;
+  return undefined;
 }
 
 function pane(raw: unknown): CommitOriginPane | null {

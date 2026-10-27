@@ -4,7 +4,7 @@ import type { CommitOrigin, CommitOriginPane } from '../../../shared/commitOrigi
 import { CommitOriginCapture, SCREEN_CHECK_DELAYS_MS } from '../CommitOriginCapture';
 
 const SHA = '0123456789abcdef0123456789abcdef01234567';
-const COMMIT = { sha: SHA, at: 1_000, op: 'commit' as const };
+const COMMIT = { sha: SHA, at: Date.now(), op: 'commit' as const };
 const SHOWN = '  ⎿  [main 0123456] fix the thing';
 const OLD = 'a'.repeat(40);
 const reflogLine = (sha: string, what = 'commit: x', name = 'Dev') => `${OLD} ${sha} ${name} <d@example.com> 1793116920 +0900\t${what}\n`;
@@ -14,11 +14,15 @@ function rig(texts: Record<string, () => string | null>, live: string[] = ['p1',
   const sessions: Record<string, string> = { p1: 's-1', p2: 's-2', p3: 's-3' };
   let rounds = 0;
   // logs/HEAD, as the reader would answer for it.
-  const file = { bytes: Buffer.alloc(0), ino: 1, present: true };
+  const file = { bytes: Buffer.alloc(0), ino: 1, present: true, failures: 0 };
   const watches: Array<{ dir: string; onChange: (f: string | null) => void; onError: () => void }> = [];
   const read = async (probe: Probe) => {
     if (probe.op === 'open') return 'opened';
     if (probe.op !== 'tail' || !file.present) return null;
+    if (file.failures > 0) {
+      file.failures--;
+      throw new Error('missed the deadline');
+    }
     const from = Math.min(probe.from ?? 0, file.bytes.length);
     return JSON.stringify({ size: file.bytes.length, ino: file.ino, bytes: file.bytes.subarray(from, from + 65536).toString('base64') });
   };
@@ -28,7 +32,7 @@ function rig(texts: Record<string, () => string | null>, live: string[] = ['p1',
     livePanes: () => live,
     paneText: async (id) => texts[id]?.() ?? null,
     pane: (id): CommitOriginPane => ({ ptyId: id, workspaceId: `ws-${id}`, agent: 'claude', agentSessionId: sessions[id] ?? null }),
-    taskOf: (id) => (id === 'p1' ? 'task-1' : null),
+    taskOf: (id) => (id === 'p2' ? 'task-1' : null),
     watch: (dir, onChange, onError) => {
       watches.push({ dir, onChange, onError });
       return { close: () => undefined };
@@ -54,12 +58,33 @@ describe('CommitOriginCapture: evidence', () => {
     }]);
   });
 
-  it('finds the pane that committed from another directory', async () => {
-    const r = rig({ p1: () => 'idle', p3: () => '[detached HEAD 0123456] x' }, ['p1', 'p3']);
-    r.capture.sync([{ sessionId: 'p1', gitDir: '/r/.git', branch: 'main' }]);
+  it('takes the branch from git\'s line, and the task from the worktree, whichever pane committed', async () => {
+    const r = rig({ p1: () => '[feat 0123456] x', p2: () => 'idle' });
+    r.capture.sync([{ sessionId: 'p1', gitDir: '/r/.git', branch: 'main' }, { sessionId: 'p2', gitDir: '/r/.git', branch: 'main' }]);
     r.capture.onCommit('/r/.git', COMMIT);
     await r.settle();
-    expect(r.added[0]).toMatchObject({ evidence: 'screen', attributed: { ptyId: 'p3' } });
+    expect(r.added[0]).toMatchObject({ branch: 'feat', evidence: 'screen', attributed: { ptyId: 'p1', taskId: 'task-1' } });
+  });
+
+  it('a pane outside the worktree showing the line is no attribution, and an observer there leaves none', async () => {
+    const outside = rig({ p1: () => 'idle', p3: () => '[detached HEAD 0123456] x' }, ['p1', 'p3']);
+    outside.capture.sync([{ sessionId: 'p1', gitDir: '/r/.git', branch: 'main' }]);
+    outside.capture.onCommit('/r/.git', COMMIT);
+    await outside.settle();
+    expect(outside.added[0]).toMatchObject({ evidence: 'only-pane', candidates: [{ ptyId: 'p1' }] });
+    const observed = rig({ p1: () => SHOWN, p3: () => SHOWN }, ['p1', 'p3']);
+    observed.capture.sync([{ sessionId: 'p1', gitDir: '/r/.git', branch: 'main' }]);
+    observed.capture.onCommit('/r/.git', COMMIT);
+    await observed.settle();
+    expect(observed.added[0].attributed).toBeUndefined();
+  });
+
+  it('a line read late reads no session and attributes nothing', async () => {
+    const r = rig({ p1: () => SHOWN }, ['p1']);
+    r.capture.sync([{ sessionId: 'p1', gitDir: '/r/.git', branch: 'main' }]);
+    r.capture.onCommit('/r/.git', { ...COMMIT, at: Date.now() - 60_000 });
+    await r.settle();
+    expect(r.added).toEqual([{ ...COMMIT, at: expect.any(Number), branch: 'main', evidence: 'only-pane', candidates: [{ ptyId: 'p1', workspaceId: 'ws-p1', agent: 'claude', agentSessionId: null }] }]);
   });
 
   it('a lone pane that never shows it is a candidate, not an attribution', async () => {
@@ -154,6 +179,17 @@ describe('CommitOriginCapture: the reflog', () => {
     watch.onChange('HEAD');
     await vi.advanceTimersByTimeAsync(200);
     expect(r.added.map((o) => o.sha[0])).toEqual(['2', '5']);
+  });
+
+  it('a read that misses its deadline is tried again from the same place, replaying nothing', async () => {
+    const r = rig({}, ['p1']);
+    append(r, reflogLine('1'.repeat(40)));
+    const watch = await started(r);
+    append(r, reflogLine('2'.repeat(40)));
+    r.file.failures = 1;
+    watch.onChange('HEAD');
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(r.added.map((o) => o.sha[0])).toEqual(['2']);
   });
 
   it('a watch that errors is armed again', async () => {

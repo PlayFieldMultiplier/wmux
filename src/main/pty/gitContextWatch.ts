@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { watchTarget } from '../../shared/watchTarget';
 import { wslPathToHost } from '../../mcp/wslPaths';
-import { ChildProbeReader, InProcessProbeReader, type ProbeReader, type ProbeReaderFactory } from './shareReader';
+import { ChildProbeReader, InProcessProbeReader, TAIL_MAX_BYTES, type ProbeReader, type ProbeReaderFactory } from './shareReader';
 
 /**
  * X1 workspace-context sidebar — git branch tracking via fs.watch.
@@ -206,8 +206,44 @@ function* walkUp(startDir: string, mapGitDir?: GitDirMapper): Walk {
   return { repo: null, conclusive: false };
 }
 
+/** A `tail` probe's answer (see Probe), from an open file's size, inode and bytes. */
+function tailAnswer(size: number, ino: number, bytes: Buffer): string {
+  return JSON.stringify({ size, ino, bytes: bytes.toString('base64') });
+}
+
+function tailStart(from: number | undefined, size: number): number {
+  return Math.max(0, Math.min(from !== undefined && Number.isSafeInteger(from) ? from : size, size));
+}
+
+function tailSync(p: string, from: number | undefined): string {
+  const fd = fs.openSync(p, 'r');
+  try {
+    const st = fs.fstatSync(fd);
+    const start = tailStart(from, st.size);
+    const buf = Buffer.alloc(Math.min(TAIL_MAX_BYTES, st.size - start));
+    const n = buf.length > 0 ? fs.readSync(fd, buf, 0, buf.length, start) : 0;
+    return tailAnswer(st.size, st.ino, buf.subarray(0, n));
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+async function tailAsync(p: string, from: number | undefined): Promise<string> {
+  const fh = await fs.promises.open(p, 'r');
+  try {
+    const st = await fh.stat();
+    const start = tailStart(from, st.size);
+    const buf = Buffer.alloc(Math.min(TAIL_MAX_BYTES, st.size - start));
+    const { bytesRead } = buf.length > 0 ? await fh.read(buf, 0, buf.length, start) : { bytesRead: 0 };
+    return tailAnswer(st.size, st.ino, buf.subarray(0, bytesRead));
+  } finally {
+    await fh.close();
+  }
+}
+
 function answerSync(probe: Probe): ProbeAnswer {
   try {
+    if (probe.op === 'tail') return tailSync(probe.path, probe.from);
     if (probe.op === 'read') return fs.readFileSync(probe.path, 'utf8');
     if (probe.op === 'realpath') return fs.realpathSync.native(probe.path);
     if (probe.op === 'open') { fs.opendirSync(probe.path).closeSync(); return 'opened'; }
@@ -219,6 +255,7 @@ function answerSync(probe: Probe): ProbeAnswer {
 
 async function answerAsync(probe: Probe): Promise<ProbeAnswer> {
   try {
+    if (probe.op === 'tail') return await tailAsync(probe.path, probe.from);
     if (probe.op === 'read') return await fs.promises.readFile(probe.path, 'utf8');
     if (probe.op === 'realpath') return await fs.promises.realpath(probe.path);
     if (probe.op === 'open') { await (await fs.promises.opendir(probe.path)).close(); return 'opened'; }
