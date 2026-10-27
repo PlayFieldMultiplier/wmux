@@ -537,12 +537,15 @@ function mostRecent(sessions: HookIngestSession[]): HookIngestSession | null {
  *      different conversation is not a candidate: a session in the same folder
  *      whose id is not the pane's binding is someone else's, and its
  *      SessionStart would otherwise rebind the pane and its turn would light
- *      it. An unbound pane, a pane that switched to this agent, or a signal
- *      with no session id still matches.
+ *      it. An unbound pane, a pane that switched to this agent, a pane whose
+ *      tracked agent process sent the hook (its own new session, from a
+ *      launch that scrubbed the pane env), or a signal with no session id
+ *      still matches.
  */
 export function resolveSessionIdForSignal(
   signal: AgentSignal,
   sessions: HookIngestSession[],
+  agentPidFor?: (ptyId: string) => number | undefined,
 ): string | null {
   if (signal.ptyId) {
     const exact = sessions.find((s) => s.id === signal.ptyId);
@@ -566,10 +569,13 @@ export function resolveSessionIdForSignal(
   }
 
   const agentSessionId = signal.agentSessionId;
+  const hookPid = signalAgentPid(signal);
   const candidates = agentSessionId
     ? sessions.filter((s) => {
       const bound = s.resumeBinding;
       if (!bound?.sessionId || bound.sessionId === agentSessionId) return true;
+      // The pane's own agent process started a new session (/clear, a relaunch).
+      if (hookPid !== undefined && agentPidFor?.(s.id) === hookPid) return true;
       // The pane switched agents: its binding is the previous agent's, and the
       // detector already sees this one running there (the binding site's rule).
       return bound.agent !== signal.agent && s.lastDetectedAgent === signal.agent;
@@ -1031,7 +1037,7 @@ export class HookIngest {
     let sessionId: string | null = null;
     try {
       sessions = this.deps.listLiveSessions();
-      sessionId = resolveSessionIdForSignal(signal, sessions);
+      sessionId = resolveSessionIdForSignal(signal, sessions, this.deps.agentPidFor);
     } catch {
       this.floodMeter.record({ degraded: true, fetchMs: this.now() - startedAt });
       this.meter.recordWorkspaceMatch(false);
@@ -1193,7 +1199,7 @@ export class HookIngest {
     let sessions: HookIngestSession[] = [];
     try {
       sessions = this.deps.listLiveSessions();
-      sessionId = resolveSessionIdForSignal(signal, sessions);
+      sessionId = resolveSessionIdForSignal(signal, sessions, this.deps.agentPidFor);
     } catch (err) {
       this.deps.log?.('warn', `[hooks] session resolution failed: ${String(err)}`);
       this.floodMeter.record({ degraded: true, fetchMs: this.now() - startedAt });

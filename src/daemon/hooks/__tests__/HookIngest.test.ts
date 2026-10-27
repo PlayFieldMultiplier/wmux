@@ -1623,6 +1623,27 @@ describe('HookIngest — a session outside any pane in a bound pane\'s folder', 
     expect(fixture.emitted).toHaveLength(0);
     expect(fixture.nudges).toHaveLength(0);
   });
+
+  it('still rebinds when the pane\'s own agent process starts a new session without the pane env', () => {
+    // A claude launched in the pane with a scrubbed env (no WMUX_PTY_ID) that
+    // runs /clear: a new session id, but the hook comes from the pane's tracked agent.
+    const fixture = makeDeps([session({
+      id: 'pty-a',
+      cwd: '/repo',
+      env: {},
+      resumeBinding: { agent: 'claude', sessionId: '11111111-1111-4111-8111-111111111111' },
+    })]);
+    const ingest = new HookIngest({ ...fixture.deps, agentPidFor: () => 4242 });
+    const fromPid = (agentPid: number) => ({
+      ...makeSignal({ kind: 'agent.session_start', cwd: '/repo', agentSessionId: '33333333-3333-4333-8333-333333333333' }),
+      agentPid,
+    });
+    expect(ingest.handle(fromPid(5151))).toEqual({ ok: false, reason: 'no-workspace-match' });
+    expect(ingest.handle(fromPid(4242)).ok).toBe(true);
+    expect(fixture.bindings).toEqual([
+      expect.objectContaining({ ptyId: 'pty-a', binding: expect.objectContaining({ sessionId: '33333333-3333-4333-8333-333333333333' }) }),
+    ]);
+  });
 });
 
 describe('HookIngest — a signal whose claimed pane is gone is refused (#1523)', () => {
