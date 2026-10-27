@@ -931,16 +931,17 @@ class ApprovalGateUnavailable extends Error {}
 
 /**
  * The folder-trust verdict for a pane: from the screen the renderer read, or,
- * when it read none (a hidden, parked or unattached pane, or a failed read),
- * from the daemon's ring. A read that returned text costs nothing more. With
- * no daemon verdict to have, null: the check stands aside, as before it had a
+ * when it read none (a hidden, parked or unattached pane, a failed read, or
+ * a blank one: an empty buffer or a terminal that failed to hydrate), from
+ * the daemon's ring. A read that returned text costs nothing more. With no
+ * daemon verdict to have, null: the check stands aside, as before it had a
  * fallback.
  */
 async function folderTrustVerdict(gate: ApprovalInputGate, ptyId: string, screen: ScreenRead): Promise<FolderTrustState | null> {
-  if (typeof screen === 'string') return folderTrustOnScreen(screen) ? 'trust' : 'clear';
+  if (typeof screen === 'string' && screen.trim() !== '') return folderTrustOnScreen(screen) ? 'trust' : 'clear';
   const verdict = (await gate.daemonFolderTrust?.(ptyId)) ?? null;
   // No daemon verdict for a parked read: its ring text decides, as before.
-  if (verdict === null && screen !== null && 'parked' in screen) return folderTrustOnScreen(screen.parked) ? 'trust' : 'clear';
+  if (verdict === null && typeof screen === 'object' && screen !== null && 'parked' in screen) return folderTrustOnScreen(screen.parked) ? 'trust' : 'clear';
   return verdict;
 }
 
@@ -1031,7 +1032,7 @@ async function assertNotTypingAtAnApproval(
   if (screen === null) {
     if (opts.refuseUnreadable) {
       throw new ApprovalGateUnavailable(
-        `${op}: the screen of pane "${ptyId}" could not be read — not submitting blind.`,
+        `${op}: the screen of pane "${ptyId}" could not be read — not submitting blind.${opts.stage ?? NOTHING_SENT}`,
       );
     }
     return;
