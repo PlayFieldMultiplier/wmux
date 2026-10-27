@@ -221,7 +221,7 @@ export class TranscriptProjector {
    * `generation` changes on every `session_start`, so a caller that awaited
    * between two reads can tell the session moved under it.
    */
-  sentFileBinding(sessionId: string): { transcriptPath: string; agentSessionId: string; generation: number } | null {
+  sentFileBinding(sessionId: string): { transcriptPath: string; agentSessionId: string; agent: string; generation: number } | null {
     const resolved = this.resolvePath(sessionId);
     if (!resolved.ok) return null;
     const hold = this.sessionHolds.get(sessionId);
@@ -232,6 +232,7 @@ export class TranscriptProjector {
     return {
       transcriptPath: resolved.transcriptPath,
       agentSessionId: resolved.agentSessionId,
+      agent: resolved.agent,
       generation: this.sessionGenerations.get(sessionId) ?? 0,
     };
   }

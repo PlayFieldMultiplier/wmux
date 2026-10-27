@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { watchTarget } from '../../shared/watchTarget';
 import { wslPathToHost } from '../../mcp/wslPaths';
-import { ChildProbeReader, InProcessProbeReader, type ProbeReader, type ProbeReaderFactory } from './shareReader';
+import { ChildProbeReader, InProcessProbeReader, TAIL_MAX_BYTES, type ProbeReader, type ProbeReaderFactory } from './shareReader';
 
 /**
  * X1 workspace-context sidebar — git branch tracking via fs.watch.
@@ -134,7 +134,11 @@ type RepoState = { repo: ResolvedRepo | null; conclusive: boolean };
  *   open     → 'opened' once the directory could be opened (what fs.watch
  *              does to its target), or null. Never asked by the walk.
  */
-export interface Probe { op: 'stat' | 'read' | 'realpath' | 'open'; path: string }
+/**
+ * `tail` reads at most TAIL_MAX_BYTES of a file from byte `from` and answers
+ * `{"size","ino","bytes"}` (bytes as base64), or null when it cannot be read.
+ */
+export interface Probe { op: 'stat' | 'read' | 'realpath' | 'open' | 'tail'; path: string; from?: number }
 export type ProbeAnswer = 'dir' | 'file' | 'other' | 'missing' | 'error' | string | null;
 export type ProbeIo = (probe: Probe) => Promise<ProbeAnswer>;
 type Walk = Generator<Probe, RepoState, ProbeAnswer>;
@@ -202,8 +206,44 @@ function* walkUp(startDir: string, mapGitDir?: GitDirMapper): Walk {
   return { repo: null, conclusive: false };
 }
 
+/** A `tail` probe's answer (see Probe), from an open file's size, inode and bytes. */
+function tailAnswer(size: number, ino: number, bytes: Buffer): string {
+  return JSON.stringify({ size, ino, bytes: bytes.toString('base64') });
+}
+
+function tailStart(from: number | undefined, size: number): number {
+  return Math.max(0, Math.min(from !== undefined && Number.isSafeInteger(from) ? from : size, size));
+}
+
+function tailSync(p: string, from: number | undefined): string {
+  const fd = fs.openSync(p, 'r');
+  try {
+    const st = fs.fstatSync(fd);
+    const start = tailStart(from, st.size);
+    const buf = Buffer.alloc(Math.min(TAIL_MAX_BYTES, st.size - start));
+    const n = buf.length > 0 ? fs.readSync(fd, buf, 0, buf.length, start) : 0;
+    return tailAnswer(st.size, st.ino, buf.subarray(0, n));
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+async function tailAsync(p: string, from: number | undefined): Promise<string> {
+  const fh = await fs.promises.open(p, 'r');
+  try {
+    const st = await fh.stat();
+    const start = tailStart(from, st.size);
+    const buf = Buffer.alloc(Math.min(TAIL_MAX_BYTES, st.size - start));
+    const { bytesRead } = buf.length > 0 ? await fh.read(buf, 0, buf.length, start) : { bytesRead: 0 };
+    return tailAnswer(st.size, st.ino, buf.subarray(0, bytesRead));
+  } finally {
+    await fh.close();
+  }
+}
+
 function answerSync(probe: Probe): ProbeAnswer {
   try {
+    if (probe.op === 'tail') return tailSync(probe.path, probe.from);
     if (probe.op === 'read') return fs.readFileSync(probe.path, 'utf8');
     if (probe.op === 'realpath') return fs.realpathSync.native(probe.path);
     if (probe.op === 'open') { fs.opendirSync(probe.path).closeSync(); return 'opened'; }
@@ -215,6 +255,7 @@ function answerSync(probe: Probe): ProbeAnswer {
 
 async function answerAsync(probe: Probe): Promise<ProbeAnswer> {
   try {
+    if (probe.op === 'tail') return await tailAsync(probe.path, probe.from);
     if (probe.op === 'read') return await fs.promises.readFile(probe.path, 'utf8');
     if (probe.op === 'realpath') return await fs.promises.realpath(probe.path);
     if (probe.op === 'open') { await (await fs.promises.opendir(probe.path)).close(); return 'opened'; }
@@ -359,6 +400,8 @@ interface SessionWatch {
    */
   rewalk?: boolean;
   watcher: GitWatchHandle | null;
+  /** `watcher` is an fs.watch (arm), not a poll. */
+  fsWatched?: boolean;
   debounce: NodeJS.Timeout | null;
   /** Last emitted value, JSON-encoded, to suppress no-op re-emits. */
   lastEmitted: string | null;
@@ -701,6 +744,29 @@ export class GitContextWatcher extends EventEmitter {
     this.removeAllListeners();
   }
 
+  /**
+   * The sessions in a repository this process watches with fs.watch (its
+   * gitDir opened by a reader in time, when offLoop), with that gitDir. A
+   * polled one (a WSL share, or a target the reader could not open in time)
+   * is left out: nothing more may be read there on this thread.
+   */
+  localRepos(): Array<{ sessionId: string; gitDir: string }> {
+    const out: Array<{ sessionId: string; gitDir: string }> = [];
+    for (const [sessionId, watch] of this.sessions) {
+      if (watch.repo && watch.watcher && watch.fsWatched) out.push({ sessionId, gitDir: watch.repo.gitDir });
+    }
+    return out;
+  }
+
+  /** One read through this process's reader for host paths (see the class
+   *  doc): never on this thread, and given up past the reader's deadline. */
+  readThroughReader(probe: Probe): Promise<ProbeAnswer> {
+    const p = this.probe(probe);
+    // A reader made only for this read is closed once no session needs it.
+    void p.finally(() => this.pruneReaders()).catch(() => undefined);
+    return p;
+  }
+
   /** Current session count — observability/testing only. */
   get size(): number {
     return this.sessions.size;
@@ -727,6 +793,7 @@ export class GitContextWatcher extends EventEmitter {
     if (watch.debounce) { clearTimeout(watch.debounce); watch.debounce = null; }
     try { watch.watcher?.close(); } catch { /* already closed */ }
     watch.watcher = null;
+    watch.fsWatched = false;
   }
 
   /**
@@ -763,6 +830,7 @@ export class GitContextWatcher extends EventEmitter {
         }, REREAD_DEBOUNCE_MS);
         watch.debounce.unref?.();
       });
+      watch.fsWatched = true;
       watch.watcher.on('error', () => {
         // Directory vanished (worktree pruned, repo deleted) — drop the
         // watcher; the next cwd update re-arms.

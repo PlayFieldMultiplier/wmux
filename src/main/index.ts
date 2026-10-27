@@ -106,6 +106,7 @@ import { revealStatsAggregator } from './perf/revealStatsAggregator';
 import { registerHooksRpc } from './pipe/handlers/hooks.rpc';
 import { registerUsageRpc, registerUsageTrailRpc } from './pipe/handlers/usage.rpc';
 import { setToolRefusalSource } from './agents/toolRefusals';
+import { registerCommitOriginRpc } from './pipe/handlers/commitOrigin.rpc';
 import { UsageTrailStore } from './usage/usageTrailStore';
 import { UsageReserve, setUsageReserve } from './usage/usageReserve';
 import { usageReserveToastText } from './automation/toastText';
@@ -1671,6 +1672,9 @@ ipcMain.handle(IPC.USAGE_RESERVE_SET, async (_event, enabled: unknown) => {
     return { ok: false };
   }
 });
+
+// Where a commit made in a pane came from, as the daemon recorded it.
+registerCommitOriginRpc(rpcRouter, (sha) => daemonClient?.lookupCommitOrigin(sha) ?? Promise.resolve('unavailable'));
 
 // Live `rate_limits` pushed by the wmux statusline script. The account is the
 // one the pane actually runs on (its CLAUDE_CONFIG_DIR), not the workspace's

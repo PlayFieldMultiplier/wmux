@@ -744,6 +744,8 @@ export const METHOD_CAPABILITY: Record<RpcMethod, RequiredCapability> = {
   'usage.rateLimits': { capability: 'wmux.internal' },
   // Recorded usage history per account. First-party readers only for now.
   'usage.trail': { capability: 'wmux.internal' },
+  // Where a commit came from (pane, agent session, task). First-party readers only.
+  'commit.origin': { capability: 'wmux.internal' },
 };
 
 /**

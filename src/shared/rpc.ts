@@ -679,6 +679,7 @@ export type RpcMethod =
   | 'hooks.signal'
   | 'usage.rateLimits'
   | 'usage.trail'
+  | 'commit.origin'
   | 'a2a.channel.list'
   | 'a2a.channel.get'
   | 'a2a.channel.getMessages'
@@ -1037,6 +1038,7 @@ export const ALL_RPC_METHODS = [
   'hooks.signal',
   'usage.rateLimits',
   'usage.trail',
+  'commit.origin',
   'a2a.channel.list',
   'a2a.channel.get',
   'a2a.channel.getMessages',
