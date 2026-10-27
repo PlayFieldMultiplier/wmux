@@ -1,0 +1,68 @@
+import type { DaemonClient } from './DaemonClient';
+import type { FolderTrustState } from '../daemon/folderTrustState';
+import { FOLDER_TRUST_LAUNCH_REFUSAL } from '../shared/folderTrustWording';
+
+/** How long main waits for the daemon's verdict: above the daemon's own
+ *  250 ms read budget (FOLDER_TRUST_READ_TIMEOUT_MS), so the daemon's
+ *  'unknown' arrives before main gives up on it. */
+const FOLDER_TRUST_CLIENT_TIMEOUT_MS = 400;
+
+/** The last reason each pane's check was unavailable, so it is logged once. */
+const unavailableLogged = new Map<string, string>();
+
+/**
+ * The daemon's folder-trust verdict for `ptyId`, or null when there is none to
+ * have (no daemon, an older one, no answer in time): the check then stands
+ * aside, with one log line per pane while the reason holds.
+ */
+export async function daemonFolderTrustVerdict(
+  dc: Pick<DaemonClient, 'folderTrustState'> | null | undefined,
+  ptyId: string,
+): Promise<FolderTrustState | null> {
+  const answer = dc ? await dc.folderTrustState(ptyId, FOLDER_TRUST_CLIENT_TIMEOUT_MS) : undefined;
+  if (answer && 'state' in answer) {
+    unavailableLogged.delete(ptyId);
+    return answer.state;
+  }
+  const reason = answer?.unavailable ?? 'no daemon client';
+  if (unavailableLogged.get(ptyId) !== reason) {
+    unavailableLogged.set(ptyId, reason);
+    console.warn(`[folder-trust] check unavailable on pane ${ptyId}: ${reason}`);
+  }
+  return null;
+}
+
+/**
+ * Whether a verdict stops `writer`: 'trust' always, 'unknown' only when
+ * `refuseUnknown` (an automated writer). One log line per refusal, naming the
+ * writer and the verdict, and no screen text.
+ */
+export function folderTrustStops(
+  verdict: FolderTrustState | null,
+  writer: string,
+  ptyId: string,
+  refuseUnknown: boolean,
+): verdict is 'trust' | 'unknown' {
+  if (verdict === null || verdict === 'clear' || (verdict === 'unknown' && !refuseUnknown)) return false;
+  console.warn(`[folder-trust] refused ${writer} on pane ${ptyId}: folder-trust ${verdict}`);
+  return true;
+}
+
+/**
+ * Why main must not type a launch line or key into `ptyId` now, or null:
+ * asked once, right before the write. With no daemon verdict to have, the
+ * line is typed as before.
+ */
+export async function folderTrustLaunchRefusal(
+  dc: Pick<DaemonClient, 'folderTrustState'> | null | undefined,
+  ptyId: string,
+  writer: string,
+  opts: { refuseUnknown: boolean },
+): Promise<string | null> {
+  if (!dc) return null;
+  const verdict = await daemonFolderTrustVerdict(dc, ptyId);
+  if (!folderTrustStops(verdict, writer, ptyId, opts.refuseUnknown)) return null;
+  return verdict === 'trust'
+    ? FOLDER_TRUST_LAUNCH_REFUSAL
+    : 'the pane has no readable screen, so a folder-trust prompt cannot be ruled out';
+}

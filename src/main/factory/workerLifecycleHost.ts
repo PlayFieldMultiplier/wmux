@@ -93,7 +93,7 @@ import { isFanoutWorkerPermissionMode } from '../../shared/workerLaunch';
 import { createWorkerLaunchRecovery } from './workerLaunchRecovery';
 import { LAUNCH_PROBE_CONFIRM_TIMEOUT_MS, LAUNCH_PROBE_TIMEOUT_MS } from '../worktask/fanoutLaunchProbe';
 import type { PermissionMode } from '../../shared/agentResume';
-import { folderTrustLaunchRefusal } from '../folderTrustLaunch';
+import { folderTrustLaunchRefusal } from '../folderTrustCheck';
 
 /** A resumed worker is checked for an exited agent this often. */
 const RESUMED_SWEEP_MS = 60_000;

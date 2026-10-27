@@ -70,6 +70,7 @@ import { taskSignedIn } from '../../factory/wakeTaint';
 import { hasRedactedSecrets, redactStoredSecrets } from '../../factory/secretRedaction';
 import type { TaskLedger } from '../../../daemon/ledger/TaskLedger';
 import { STOP_KEYS, nothingToStopMessage } from '../../../shared/stopKeys';
+import { daemonFolderTrustVerdict, folderTrustStops } from '../../folderTrustCheck';
 
 type GetWindow = () => BrowserWindow | null;
 
@@ -958,16 +959,10 @@ function refuseAtFolderTrust(
   refuseUnknown: boolean,
   stage = '',
 ): void {
-  if (verdict === null || verdict === 'clear' || (verdict === 'unknown' && !refuseUnknown)) return;
-  console.warn(`[approval-gate] refused ${op} on pane ${ptyId}: folder-trust ${verdict}`);
+  if (!folderTrustStops(verdict, op, ptyId, refuseUnknown)) return;
   if (verdict === 'trust') throw new Error(`${folderTrustGateMessage(op, ptyId)}${stage}`);
   throw new ApprovalGateUnavailable(`${folderTrustUnknownMessage(op, ptyId)}${stage}`);
 }
-
-/** How long main waits for the daemon's verdict: above the daemon's own
- *  250 ms read budget (FOLDER_TRUST_READ_TIMEOUT_MS), so the daemon's
- *  'unknown' arrives before main gives up on it. */
-const FOLDER_TRUST_CLIENT_TIMEOUT_MS = 400;
 
 /** What a refusal before any write says. */
 const NOTHING_SENT = ' Nothing was sent.';
@@ -1338,8 +1333,6 @@ export function registerInputRpc(
       return undefined;
     }
   };
-  /** The last "folder-trust check unavailable" reason logged per pane. */
-  const unavailableLogged = new Map<string, string>();
   const approvalGate: ApprovalInputGate = {
     getDaemonClient,
     answerPolicy:
@@ -1372,18 +1365,7 @@ export function registerInputRpc(
       (async (ptyId) => {
         // A pty main runs itself (local, pre-adoption) has no daemon ring.
         if (ptyManager.get(ptyId)) return null;
-        const answer = await getDaemonClient?.()?.folderTrustState(ptyId, FOLDER_TRUST_CLIENT_TIMEOUT_MS);
-        if (answer && 'state' in answer) {
-          unavailableLogged.delete(ptyId);
-          return answer.state;
-        }
-        // One line per pane while the reason holds, not one per check.
-        const reason = answer?.unavailable ?? 'no daemon client';
-        if (unavailableLogged.get(ptyId) !== reason) {
-          unavailableLogged.set(ptyId, reason);
-          console.warn(`[approval-gate] folder-trust check unavailable on pane ${ptyId}: ${reason}`);
-        }
-        return null;
+        return daemonFolderTrustVerdict(getDaemonClient?.(), ptyId);
       }),
   };
 

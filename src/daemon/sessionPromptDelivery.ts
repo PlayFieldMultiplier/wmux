@@ -47,10 +47,10 @@ export interface ScheduledPromptDeliveryDeps {
    *  "nothing reached the PTY" from "the paste may be visible". `queued` is
    *  true on `submit` when the prompt was accepted while the turn ran. */
   onWrite?: (stage: 'paste' | 'submit', queued?: boolean) => void;
-  /** Whether the pane is on an agent's folder-trust prompt, or its screen
-   *  cannot rule one out: checked before the first write, which it stops
-   *  with `folder_trust`. */
-  folderTrustBlocks?: () => Promise<boolean>;
+  /** The folder-trust verdict that stops the first write, or null: 'trust'
+   *  answers `folder_trust`; 'unknown' (a screen that cannot rule one out)
+   *  answers `busy`, so the caller tries again as it would at a busy pane. */
+  folderTrustBlocks?: () => Promise<'trust' | 'unknown' | null>;
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -95,6 +95,15 @@ export async function deliverScheduledPrompt(
   prompt: string,
   deps: ScheduledPromptDeliveryDeps,
 ): Promise<SessionPromptScheduleResult> {
+  // Asked before the agent state is read, so the readiness, quiet-input and
+  // revision checks below stay as close to the first paste as before.
+  try {
+    const verdict = await deps.folderTrustBlocks?.();
+    if (verdict === 'trust') return 'folder_trust';
+    if (verdict === 'unknown') return 'busy';
+  } catch {
+    return 'busy';
+  }
   const before = deps.getAgentState();
   if (!before || before.slug !== expectedSlug) return 'unavailable';
   if (before.incarnationId !== expectedIncarnationId) return 'session_changed';
@@ -118,11 +127,6 @@ export async function deliverScheduledPrompt(
     return !!now && now.slug === expectedSlug && now.incarnationId === expectedIncarnationId &&
       now.inputRevision === before.inputRevision + writes;
   };
-  try {
-    if (deps.folderTrustBlocks && (await deps.folderTrustBlocks())) return 'folder_trust';
-  } catch {
-    return 'folder_trust';
-  }
   try {
     if (deps.authorized && !(await deps.authorized('first-write'))) return 'error';
   } catch {

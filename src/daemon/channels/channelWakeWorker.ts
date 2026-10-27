@@ -168,12 +168,12 @@ export interface ChannelWakeWorkerDeps {
    */
   screenShowsApproval?(sessionId: string): Promise<boolean | null>;
   /**
-   * Whether the pane is on an agent's folder-trust prompt ('trust') or its
-   * screen cannot rule one out ('unknown'); null when it may be written.
-   * Checked with the screen, before the text write and again before the
-   * Enter. Optional.
+   * The daemon's folder-trust verdict for the pane (folderTrustState.ts). A
+   * nudge is automated input: 'trust' and 'unknown' (a screen that cannot
+   * rule the prompt out) both hold it. Checked with the screen, before the
+   * text write and again before the Enter. Optional.
    */
-  folderTrustRefusal?(sessionId: string): Promise<'trust' | 'unknown' | null>;
+  folderTrustVerdict?(sessionId: string): Promise<'trust' | 'unknown' | 'clear'>;
 }
 
 // Conservative defaults (Step 3b tunes with field data).
@@ -306,6 +306,8 @@ export class ChannelWakeWorker {
   private readonly pendingEnter = new Set<ReturnType<typeof setTimeout>>();
   /** Keys whose screen check is in flight: one pending nudge per key. */
   private readonly screenChecks = new Set<string>();
+  /** The folder-trust verdict holding each pane's nudges, logged once while it holds. */
+  private readonly trustHeld = new Map<string, 'trust' | 'unknown'>();
 
   constructor(deps: ChannelWakeWorkerDeps) {
     this.deps = deps;
@@ -462,7 +464,7 @@ export class ChannelWakeWorker {
         // An approval in front of the pane: the nudge's Enter would answer it.
         // Hold without spending budget; the next tick looks again.
         if (this.approvalHold(target.id, key)) continue;
-        if (this.deps.screenShowsApproval || this.deps.folderTrustRefusal) {
+        if (this.deps.screenShowsApproval || this.deps.folderTrustVerdict) {
           if (this.screenChecks.has(key)) continue;
           this.screenChecks.add(key);
           void this.injectAfterScreenCheck(key, ws, entry, target, wantMention, state)
@@ -499,17 +501,23 @@ export class ChannelWakeWorker {
 
   /** Whether the screen is free of a dialog; false (and logged) when it shows one or cannot be read. */
   private async screenIsFree(sessionId: string, key: string): Promise<boolean> {
-    if (this.deps.folderTrustRefusal) {
-      let refused: 'trust' | 'unknown' | null;
+    if (this.deps.folderTrustVerdict) {
+      let verdict: 'trust' | 'unknown' | 'clear';
       try {
-        refused = await this.deps.folderTrustRefusal(sessionId);
+        verdict = await this.deps.folderTrustVerdict(sessionId);
       } catch {
-        refused = 'unknown';
+        verdict = 'unknown';
       }
-      if (refused) {
-        this.deps.log('info', `[wake] holding nudge for ${key}: pane at folder-trust prompt (${refused}) in ${sessionId}`);
+      if (verdict !== 'clear') {
+        // One line per pane while the verdict holds, not one per channel,
+        // tick or Enter re-check.
+        if (this.trustHeld.get(sessionId) !== verdict) {
+          this.trustHeld.set(sessionId, verdict);
+          this.deps.log('warn', `[folder-trust] refused wake nudge on pane ${sessionId}: folder-trust ${verdict}`);
+        }
         return false;
       }
+      this.trustHeld.delete(sessionId);
     }
     if (!this.deps.screenShowsApproval) return true;
     let shown: boolean | null;
@@ -609,7 +617,7 @@ export class ChannelWakeWorker {
         report(false);
         return;
       }
-      if (!this.deps.screenShowsApproval && !this.deps.folderTrustRefusal) {
+      if (!this.deps.screenShowsApproval && !this.deps.folderTrustVerdict) {
         commit();
         return;
       }

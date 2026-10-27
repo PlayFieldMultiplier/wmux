@@ -97,6 +97,11 @@ describe('bot.resumeWorker', () => {
     expect(asked).toEqual(['daemon-1']);
     expect(p.typeLine).not.toHaveBeenCalled();
     expect(slots.inUse()).toBe(1);
+    // Asked before the task moves and before the last stop checks.
+    const reclaim = fs.readFileSync(path.resolve(process.cwd(), 'src/main/factory/workerReclaim.ts'), 'utf8');
+    const ask = reclaim.indexOf('await ports.folderTrustRefusal?.(pane.sessionId)');
+    expect(ask).toBeLessThan(reclaim.indexOf('await rebindTaskTo(ports, rec.taskId, workerWorkspaceOf(rec))'));
+    expect(ask).toBeLessThan(reclaim.lastIndexOf("if (stopped()) return refuse('not_now', 'the bot\\'s work was stopped while this resume was under way');"));
     // main's resume asks the daemon, an unreadable screen stopping it too (a bot types it).
     expect(fs.readFileSync(path.resolve(process.cwd(), 'src/main/factory/workerLifecycleHost.ts'), 'utf8'))
       .toContain("folderTrustRefusal: (sessionId) => folderTrustLaunchRefusal(daemon(), sessionId, 'bot worker resume line', { refuseUnknown: true })");

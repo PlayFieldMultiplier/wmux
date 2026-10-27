@@ -24,7 +24,7 @@ import { WSL_RPC_TIMEOUT_MS } from '../../shared/wsl';
 import { FanOutService } from './FanOutService';
 import { createDaemonLaunchProbe } from './fanoutLaunchProbe';
 import { createWorkerTempDir, getWorkerTempDirSweeper, removeWorkerTempDir } from './fanoutTempDir';
-import { folderTrustLaunchRefusal } from '../folderTrustLaunch';
+import { folderTrustLaunchRefusal } from '../folderTrustCheck';
 
 type GetWindow = () => BrowserWindow | null;
 

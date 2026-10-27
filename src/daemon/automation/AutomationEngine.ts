@@ -1110,6 +1110,12 @@ export class AutomationEngine {
         try {
           await this.ports.sendKey(live.ptyId, '\r');
         } catch (err) {
+          // A screen that cannot rule out a folder-trust prompt is waited out
+          // like a busy one, within the deadline; the prompt itself ends it.
+          if (err instanceof FolderTrustRefusedError && err.verdict === 'unknown') {
+            await this.sleep(READY_POLL_MS);
+            continue;
+          }
           if (err instanceof FolderTrustRefusedError) live.folderTrustRefused = true;
           return 'submit_unconfirmed';
         }

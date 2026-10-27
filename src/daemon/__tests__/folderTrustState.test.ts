@@ -266,20 +266,26 @@ describe('folderTrustRefusal', () => {
 
 describe("the daemon's writers and their folder-trust policy", () => {
   // Automated writers stop on 'trust' and 'unknown'; a person's (a chat send,
-  // Stop or Rewind, Continue on another account) only on 'trust'.
+  // Stop or Rewind, Continue on another account) and any Escape only on 'trust'.
   const src = fs.readFileSync(path.join(__dirname, '..', 'index.ts'), 'utf8');
-  const policy = (writer: string): boolean[] =>
-    [...src.matchAll(/folderTrustRefusal\(sessionManager, \w+, ([^,]+), \{ refuseUnknown: (true|false)/g)]
-      .filter((m) => m[1] === writer).map((m) => m[2] === 'true');
+  const policy = (writer: string): string[] =>
+    [...src.matchAll(/trustRefusal\(sessionManager, \w+, ([^,]+), ([^)]+)\)/g)].filter((m) => m[1] === writer).map((m) => m[2]);
 
-  it.each([
-    ['writer', true], ["'automation key'", true], ["'launch line'", true], ["'wake nudge'", true],
-  ])('%s refuses an unreadable screen too', (writer, refuseUnknown) => {
-    expect(policy(writer as string)).toContain(refuseUnknown);
+  it("the launch line refuses an unreadable screen too, and the wake worker gets the raw verdict", () => {
+    expect(policy("'launch line'")).toEqual(['true']);
+    expect(src).toContain('folderTrustVerdict: (id) => folderTrustState({ getSession: (sid) => sessionManager.getSession(sid) }, id),');
+  });
+
+  it('a prompt delivery (schedule, run, nudge, usage-limit continue) refuses an unreadable screen too', () => {
+    expect(src).toContain('folderTrustBlocks: () => trustRefusal(sessionManager, id, writer, true),');
+  });
+
+  it("an automation key: Escape only at a prompt seen, Enter at an unreadable screen too", () => {
+    expect(policy("'automation key'")).toEqual(["sequence !== '\\x1b'"]);
   });
 
   it("a person's writers refuse only a prompt seen", () => {
-    expect(src).toMatch(/atFolderTrust: async \(id, writer\) =>\s+\(await folderTrustRefusal\(sessionManager, id, writer, \{ refuseUnknown: false/);
-    expect(policy("'continue on account'")).toEqual([false]);
+    expect(src).toContain('atFolderTrust: async (id, writer) => (await trustRefusal(sessionManager, id, writer, false)) !== null,');
+    expect(policy("'continue on account'")).toEqual(['false']);
   });
 });

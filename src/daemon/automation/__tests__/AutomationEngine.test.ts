@@ -751,10 +751,24 @@ describe('AutomationEngine — review regressions', () => {
     it('an Enter refused at a folder-trust prompt fails the run as first_run_blocked', async () => {
       const h = harness();
       h.engine['ports'].deliverPrompt = pastedThenError(h);
-      h.engine['ports'].sendKey = async () => { throw new FolderTrustRefusedError('folder-trust trust'); };
+      h.engine['ports'].sendKey = async () => { throw new FolderTrustRefusedError('trust'); };
       const run = await startedRun(h);
       expect(h.keys).toEqual([]);
       expect(run).toMatchObject({ state: 'failed', reason: 'first_run_blocked', detail: 'submit_unconfirmed' });
+    });
+
+    it('an Enter refused at a screen that cannot rule the prompt out is tried again within the deadline', async () => {
+      const h = harness();
+      h.engine['ports'].deliverPrompt = pastedThenError(h);
+      let refusals = 1;
+      h.engine['ports'].sendKey = async (_id, key) => {
+        if (refusals-- > 0) throw new FolderTrustRefusedError('unknown');
+        h.keys.push(key);
+        h.state.agent = { ...h.state.agent, status: 'running' };
+      };
+      const run = await startedRun(h);
+      expect(h.keys).toEqual(['\r']);
+      expect(run).toMatchObject({ state: 'running', detail: 'submit_retried' });
     });
 
     it('never presses Enter when the prompt is nowhere on screen (prompt_not_in_composer)', async () => {

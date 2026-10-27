@@ -87,7 +87,7 @@ import { createSessionPromptScheduleHandlers } from '../../pty/sessionPromptSche
 import { localReconnectAnswer } from './localPtyReconnect';
 import { pendingRemovalRefusal } from '../../worktask/pendingWorktreeRemovals';
 import { launchAllowedByChat } from './chatLaunchGuard';
-import { folderTrustLaunchRefusal } from '../../folderTrustLaunch';
+import { folderTrustLaunchRefusal } from '../../folderTrustCheck';
 
 /**
  * Allowed shell basenames (compared case-insensitively).
@@ -1189,17 +1189,17 @@ export function registerPTYHandlers(
       throw new Error('PTY_WRITE_LAUNCH: a bot worker\'s line for a Command Prompt pane holds characters cmd would read as more than one command');
     }
     const line = sanitizePtyText(guardedText) + (submit === true ? '\r' : '');
-    // Chat v2 owns the pane, or a move into chat holds it: a resume typed now
-    // would put a second process on the conversation. The daemon decides.
-    if (dc && startsAgent(text) && !(await launchAllowedByChat(dc, id, text))) {
-      throw new Error('PTY_WRITE_LAUNCH: a chat owns this pane, so nothing was typed');
-    }
     // A line a person clicked to type stops only at a folder-trust prompt on
     // screen; one wmux types on its own (any caller that does not say
     // otherwise) also when the screen cannot rule one out.
     const human = origin === 'human';
     const trustRefusal = await folderTrustLaunchRefusal(dc, id, human ? 'launch line' : 'automated launch line', { refuseUnknown: !human });
     if (trustRefusal) throw new Error(`PTY_WRITE_LAUNCH: ${trustRefusal}`);
+    // Chat v2 owns the pane, or a move into chat holds it: a resume typed now
+    // would put a second process on the conversation. The daemon decides.
+    if (dc && startsAgent(text) && !(await launchAllowedByChat(dc, id, text))) {
+      throw new Error('PTY_WRITE_LAUNCH: a chat owns this pane, so nothing was typed');
+    }
     // A task's pane: a new launch of the task, on disk before the line is
     // typed (factory/workerSlots.ts); not recorded, not typed.
     let settleRelaunch: ((typed: boolean) => void) | null;

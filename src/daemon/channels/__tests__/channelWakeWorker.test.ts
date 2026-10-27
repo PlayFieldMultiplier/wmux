@@ -72,7 +72,7 @@ function makeHarness(
   approvals: {
     approvalBlocked?: (sessionId: string) => boolean;
     screenShowsApproval?: (sessionId: string) => Promise<boolean | null>;
-    folderTrustRefusal?: (sessionId: string) => Promise<'trust' | 'unknown' | null>;
+    folderTrustVerdict?: (sessionId: string) => Promise<'trust' | 'unknown' | 'clear'>;
   } = {},
 ): Harness {
   let entries: WakeUnreadEntry[] = [];
@@ -934,22 +934,22 @@ describe('ChannelWakeWorker — approval in front of the pane', () => {
     expect(h.writes.at(-1)?.data).toBe('\r');
   });
 
-  it('holds at a folder-trust prompt, or a screen that cannot rule one out, with the reason logged', async () => {
-    let verdict: 'trust' | 'unknown' | null = 'trust';
-    const h = makeHarness(undefined, { folderTrustRefusal: async () => verdict });
+  it('holds at a folder-trust prompt, or a screen that cannot rule one out, logging once per pane while each holds', async () => {
+    let verdict: 'trust' | 'unknown' | 'clear' = 'trust';
+    const h = makeHarness(undefined, { folderTrustVerdict: async () => verdict });
     h.setEntries([mention()]);
     h.setSessions([session({})]);
-    for (const refused of ['trust', 'unknown'] as const) {
-      verdict = refused;
+    for (const held of ['trust', 'trust', 'unknown', 'unknown'] as const) {
+      verdict = held;
       h.worker.tickOnce();
       await vi.advanceTimersByTimeAsync(5);
       expect(h.writes).toEqual([]);
     }
-    expect(h.logs.filter((l) => l.includes('folder-trust prompt'))).toEqual([
-      expect.stringContaining('pane at folder-trust prompt (trust)'),
-      expect.stringContaining('pane at folder-trust prompt (unknown)'),
+    expect(h.logs.filter((l) => l.includes('folder-trust'))).toEqual([
+      expect.stringMatching(/^\[folder-trust\] refused wake nudge on pane .*: folder-trust trust$/),
+      expect.stringMatching(/^\[folder-trust\] refused wake nudge on pane .*: folder-trust unknown$/),
     ]);
-    verdict = null;
+    verdict = 'clear';
     h.worker.tickOnce();
     await vi.advanceTimersByTimeAsync(5);
     expect(h.writes.map((w) => w.data)).toHaveLength(2);
@@ -957,8 +957,8 @@ describe('ChannelWakeWorker — approval in front of the pane', () => {
   });
 
   it('withholds the Enter when a folder-trust prompt appears between the text and the Enter', async () => {
-    let refused: 'trust' | null = null;
-    const h = makeHarness(undefined, { folderTrustRefusal: async () => refused });
+    let refused: 'trust' | 'clear' = 'clear';
+    const h = makeHarness(undefined, { folderTrustVerdict: async () => refused });
     h.setEntries([mention()]);
     h.setSessions([session({})]);
     h.worker.tickOnce();

@@ -340,10 +340,10 @@ describe('deliverScheduledPrompt — a viewer attaching mid-delivery', () => {
 });
 
 describe('deliverScheduledPrompt at a folder-trust prompt', () => {
-  it("writes nothing and answers 'folder_trust' on 'trust' or 'unknown', and sends to a clear pane", async () => {
+  it("writes nothing on 'trust' (folder_trust) or 'unknown' (busy, tried again later), and sends to a clear pane", async () => {
     const sessions = folderTrustSessions();
     const lines: string[] = [];
-    for (const [pane, expected] of [['pane-trust', 'folder_trust'], ['pane-unknown', 'folder_trust'], ['pane-shell', 'sent']] as const) {
+    for (const [pane, expected] of [['pane-trust', 'folder_trust'], ['pane-unknown', 'busy'], ['pane-shell', 'sent']] as const) {
       let current = state();
       const writes: string[] = [];
       const result = await deliverScheduledPrompt('codex', 'incarnation-1', 'continue', {
@@ -355,8 +355,7 @@ describe('deliverScheduledPrompt at a folder-trust prompt', () => {
           return true;
         },
         delay: async () => undefined,
-        folderTrustBlocks: async () =>
-          (await folderTrustRefusal(sessions, pane, 'scheduled prompt', { refuseUnknown: true, log: (m) => lines.push(m) })) !== null,
+        folderTrustBlocks: () => folderTrustRefusal(sessions, pane, 'scheduled prompt', { refuseUnknown: true, log: (m) => lines.push(m) }),
       });
       expect(result).toBe(expected);
       expect(writes.length > 0).toBe(expected === 'sent');

@@ -754,7 +754,7 @@ export function createChatBridge<P extends ChatPane>(deps: NativeChatBridgeDeps<
           try { return !!slug && await deps.agentProcessAlive(id, slug); } catch { return false; }
         },
         write: (data) => deps.write(id, data),
-        folderTrustBlocks: async () => (await deps.atFolderTrust?.(id, 'chat send')) === true,
+        folderTrustBlocks: async () => ((await deps.atFolderTrust?.(id, 'chat send')) ? 'trust' : null),
         ...(deps.delay ? { delay: deps.delay } : {}),
         ...(opts.idleOnly ? { idleOnly: true } : {}),
         ...(opts.onScreenHold ? { onScreenHold: opts.onScreenHold } : {}),

@@ -851,8 +851,8 @@ describe('a folder-trust verdict for a pane with no screen', () => {
       await asBrain('input.sendKey', { ptyId: 'pty-w', key: 'enter' });
       const lines = warn.mock.calls.map((args) => args.join(' '));
       expect(lines).toEqual([
-        '[approval-gate] refused input.sendKey on pane pty-w: folder-trust trust',
-        '[approval-gate] refused input.sendKey on pane pty-w: folder-trust unknown',
+        '[folder-trust] refused input.sendKey on pane pty-w: folder-trust trust',
+        '[folder-trust] refused input.sendKey on pane pty-w: folder-trust unknown',
       ]);
     } finally {
       warn.mockRestore();
@@ -912,7 +912,7 @@ describe('the default screen read and daemon verdict', () => {
       expect((await send('input.send', { ptyId: 'pty-d', text: 'again' })).ok).toBe(true);
       expect(writes).toEqual(['hello', '\r', 'again']);
       expect(warn.mock.calls.map((args) => args.join(' '))).toEqual([
-        `[approval-gate] folder-trust check unavailable on pane pty-d: ${answer.unavailable}`,
+        `[folder-trust] check unavailable on pane pty-d: ${answer.unavailable}`,
       ]);
     } finally {
       warn.mockRestore();

@@ -89,7 +89,7 @@ import { normalizeLivePaneIds } from '../shared/a2aOrphanedTask';
 import { WEB_DEFAULT_PORT, webHostIsLoopback, type WebTlsConfig } from '../shared/web';
 import { generateSnapshotUnqueued, enqueueSnapshotJob, generateTextSnapshot, generateTextSnapshotUnqueued, runSmallSnapshotJob, capTextRowsToFrameBudget, MAX_SCROLLBACK } from './HeadlessSnapshot';
 import { queuedScreenText, queuedTextSnapshot } from './queuedSessionText';
-import { FolderTrustRefusedError, folderTrustRefusal, registerFolderTrustRpc } from './folderTrustState';
+import { FolderTrustRefusedError, folderTrustRefusal, folderTrustState, registerFolderTrustRpc } from './folderTrustState';
 import type { TerminalPty } from '../shared/terminalPty';
 import { serializeSession } from './sessionSerialize';
 import { AwaitingScreenVerifier, AWAITING_NARROW_DIALOG_COLS, questionInFlight, renderPaneScreen, renderPaneTail } from './AwaitingScreenVerifier';
@@ -4964,8 +4964,7 @@ function registerRpcHandlers(
         ? Object.assign(outcome.rows.map((r) => r.text), { undimmed: outcome.rows.map((r) => r.undimmed ?? r.text) })
         : null;
     },
-    atFolderTrust: async (id, writer) =>
-      (await folderTrustRefusal(sessionManager, id, writer, { refuseUnknown: false, log: (message) => log('warn', message) })) !== null,
+    atFolderTrust: async (id, writer) => (await trustRefusal(sessionManager, id, writer, false)) !== null,
     agentProcessAlive: async (id, slug) => {
       if (!isAgentSlug(slug)) return false;
       return agentProcessTracker.isAgentRunning(id, slug, (pid) => ProcessMonitor.isRunning(pid));
@@ -5898,8 +5897,7 @@ function registerRpcHandlers(
   ) =>
     deliverScheduledPrompt(agentSlug, incarnationId, prompt, {
       ...opts,
-      folderTrustBlocks: async () =>
-        (await folderTrustRefusal(sessionManager, id, writer, { refuseUnknown: true, log: (message) => log('warn', message) })) !== null,
+      folderTrustBlocks: () => trustRefusal(sessionManager, id, writer, true),
       getAgentState: () => {
         const current = readDaemonAgentState(id);
         const slug = current.agentName ? agentDisplayToSlug(current.agentName) : undefined;
@@ -6104,8 +6102,10 @@ function registerRpcHandlers(
     },
     sendKey: async (id, sequence) => {
       if (!liveManaged(id)) throw new Error('session gone');
-      const refused = await folderTrustRefusal(sessionManager, id, 'automation key', { refuseUnknown: true, log: (message) => log('warn', message) });
-      if (refused) throw new FolderTrustRefusedError(`folder-trust ${refused}`);
+      // Escape (the first-run dismiss key) stops only at a prompt seen, as any
+      // Escape does; Enter also at a screen that cannot rule one out.
+      const refused = await trustRefusal(sessionManager, id, 'automation key', sequence !== '\x1b');
+      if (refused) throw new FolderTrustRefusedError(refused);
       const managed = liveManaged(id);
       if (!managed) throw new Error('session gone');
       managed.ptyProcess.write(sequence);
@@ -6241,7 +6241,7 @@ function registerRpcHandlers(
     if (!sessionManager.getSession(sessionId)) return { written: false };
     // An automated launch line: a folder-trust prompt, or a screen that cannot
     // rule one out, gets nothing.
-    if (await folderTrustRefusal(sessionManager, sessionId, 'launch line', { refuseUnknown: true, log: (message) => log('warn', message) })) {
+    if (await trustRefusal(sessionManager, sessionId, 'launch line', true)) {
       return { written: false, reason: 'folder_trust' };
     }
     const managed = sessionManager.getSession(sessionId);
@@ -8385,6 +8385,12 @@ let cachedBootId: string | undefined;
 let diskOnlySessions: DaemonSession[] = [];
 
 /** What every save writes: the managed sessions, then the disk-only records they have not taken. */
+/** Why a daemon writer must not type into `id` now (folderTrustState.ts):
+ *  'trust' always, 'unknown' when `refuseUnknown` (an automated writer). */
+function trustRefusal(sessionManager: DaemonSessionManager, id: string, writer: string, refuseUnknown: boolean): Promise<'trust' | 'unknown' | null> {
+  return folderTrustRefusal(sessionManager, id, writer, { refuseUnknown, log: (message) => log('warn', message) });
+}
+
 /** A pane runs nothing, so a writer may type into it (chat v2's launch, the
  *  Continue on another account resume line). See paneFree.ts. */
 async function sessionPaneFree(sessionManager: DaemonSessionManager, agentProcessTracker: AgentProcessTracker, id: string): Promise<boolean> {
@@ -9597,7 +9603,8 @@ async function main(): Promise<void> {
     approvalBlocked: (id) =>
       sessionManager.getSession(id)?.bridge.isAwaitingHuman() === true
       || approvalRegistry?.list().pending.some((request) => request.sessionId === id) === true,
-    folderTrustRefusal: (id) => folderTrustRefusal(sessionManager, id, 'wake nudge', { refuseUnknown: true, log: (message) => log('warn', message) }),
+    // The worker logs a held nudge once per pane while the verdict holds.
+    folderTrustVerdict: (id) => folderTrustState({ getSession: (sid) => sessionManager.getSession(sid) }, id),
     screenShowsApproval: async (id) => {
       const frame = await renderPaneScreen(() => sessionManager.getSession(id), generateTextSnapshot);
       if (!frame || frame.rows.every((row) => !row.trim())) return null;
@@ -9713,7 +9720,7 @@ async function main(): Promise<void> {
           stillIdle,
         }),
         atFolderTrust: async (sid) =>
-          (await folderTrustRefusal(sessionManager, sid, 'continue on account', { refuseUnknown: false, log: (message) => log('warn', message) })) !== null,
+          (await trustRefusal(sessionManager, sid, 'continue on account', false)) !== null,
         paneFree: (sid) => sessionPaneFree(sessionManager, agentProcessTracker, sid),
         chatOwnsPane: (sid) => chatV2Host?.ownsPane(sid) === true,
         promptRevision: (sid) => {

@@ -2,7 +2,7 @@
 // prompt on screen always stops them, a screen that cannot rule one out stops
 // only an automated line, and no verdict to have types as before.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { folderTrustLaunchRefusal } from '../folderTrustLaunch';
+import { folderTrustLaunchRefusal } from '../folderTrustCheck';
 import { FOLDER_TRUST_LAUNCH_REFUSAL } from '../../shared/folderTrustWording';
 import type { DaemonClient } from '../DaemonClient';
 
@@ -32,6 +32,9 @@ describe('folderTrustLaunchRefusal', () => {
     expect(await folderTrustLaunchRefusal(daemon({ state: 'clear' }), 'pty-1', 'auto-resume line', { refuseUnknown: true })).toBeNull();
     expect(await folderTrustLaunchRefusal(daemon({ unavailable: 'timeout' }), 'pty-1', 'auto-resume line', { refuseUnknown: true })).toBeNull();
     expect(await folderTrustLaunchRefusal(null, 'pty-1', 'auto-resume line', { refuseUnknown: true })).toBeNull();
-    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls.map((c) => c[0])).toEqual([
+      '[folder-trust] refused auto-resume line on pane pty-1: folder-trust unknown',
+      '[folder-trust] check unavailable on pane pty-1: timeout',
+    ]);
   });
 });

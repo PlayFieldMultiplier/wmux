@@ -5,8 +5,8 @@ export type SessionPromptScheduleResult =
   | 'busy'
   | 'unavailable'
   | 'session_changed'
-  /** Nothing written: the pane is on an agent's folder-trust prompt, or its
-   *  screen cannot rule one out. Stays due, like 'busy'. */
+  /** Nothing written: the pane is on an agent's folder-trust prompt. Stays
+   *  due, like 'busy' (a screen that cannot rule one out answers 'busy'). */
   | 'folder_trust'
   | 'error';
 
