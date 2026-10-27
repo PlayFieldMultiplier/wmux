@@ -58,6 +58,7 @@ import { connectWithRetry, type ConnectAttemptResult } from './daemonConnectRetr
 import type { AgentStatus } from '../shared/types';
 import type { AgentSlug } from '../shared/agentIdentity';
 import { isSessionPromptScheduleResult, type SessionPromptScheduleResult } from '../shared/sessionPromptSchedule';
+import { parseToolRefusal, type ToolRefusal } from '../shared/toolRefusal';
 import { parseCommitOrigin, type CommitOrigin } from '../shared/commitOrigin';
 
 // RCA A2 — single source of truth in shared/timeouts.ts so the renderer's
@@ -103,6 +104,8 @@ export class DaemonClient extends EventEmitter {
   private connected: boolean = false;
   private requestId: number = 0;
   private pendingRequests: Map<string, PendingRequest> = new Map();
+  /** Each pane's last refused tool call, as the daemon reported it (`agent.refusal`). */
+  private readonly toolRefusals = new Map<string, ToolRefusal>();
   private controlBuffer: string = '';
 
   constructor(
@@ -1147,6 +1150,11 @@ export class DaemonClient extends EventEmitter {
     }
   }
 
+  /** The pane's last refused tool call, or null. */
+  toolRefusalOf(sessionId: string): ToolRefusal | null {
+    return this.toolRefusals.get(sessionId) ?? null;
+  }
+
   /**
    * The shell prompts the daemon shows now (daemon/shellPrompt), each checked
    * like an event. Null when it is unreachable or predates them: the caller
@@ -1285,6 +1293,7 @@ export class DaemonClient extends EventEmitter {
       this.connected = false;
       this.controlPipe = null;
       this.controlBuffer = '';
+      this.toolRefusals.clear();
       this.emit('disconnected');
     });
   }
@@ -1474,6 +1483,17 @@ export class DaemonClient extends EventEmitter {
           if (typeof data?.count === 'number' && Number.isFinite(data.count) && data.count >= 0) {
             this.emit('session:subagents', { sessionId: event.sessionId, count: Math.floor(data.count) });
           }
+          break;
+        }
+        case 'agent.refusal': {
+          // The pane's last refused tool call (null clears), checked here.
+          // Kept by the client itself: the daemon sends what it holds again
+          // on subscribe, before main has a listener on a new client.
+          const data = event.data as { refusal?: unknown } | null;
+          // One it cannot read clears too: what stood before is no longer the last.
+          const refusal = parseToolRefusal(data?.refusal);
+          if (refusal) this.toolRefusals.set(event.sessionId, refusal);
+          else this.toolRefusals.delete(event.sessionId);
           break;
         }
         case 'shell.prompt': {

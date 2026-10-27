@@ -105,6 +105,7 @@ import type { ComputerService } from './computer/ComputerService';
 import { revealStatsAggregator } from './perf/revealStatsAggregator';
 import { registerHooksRpc } from './pipe/handlers/hooks.rpc';
 import { registerUsageRpc, registerUsageTrailRpc } from './pipe/handlers/usage.rpc';
+import { setToolRefusalSource } from './agents/toolRefusals';
 import { registerCommitOriginRpc } from './pipe/handlers/commitOrigin.rpc';
 import { UsageTrailStore } from './usage/usageTrailStore';
 import { UsageReserve, setUsageReserve } from './usage/usageReserve';
@@ -2463,6 +2464,8 @@ app.on('ready', async () => {
     onInstall: async (client) => {
       daemonClient = client;
       console.log('[Main] Connected to wmux-daemon (auth verified)');
+      // Each pane's last refused tool call (agents/toolRefusals.ts), as this client holds it.
+      setToolRefusalSource((ptyId) => client.toolRefusalOf(ptyId));
       // DaemonClient has already sent subscribe -> identify, followed by a
       // post-identify subscribe when the daemon enforces the gate. Repeat the
       // idempotent identity RPC here so the presence report

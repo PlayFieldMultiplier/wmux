@@ -286,6 +286,12 @@ const INJECTED_USER_TAGS: ReadonlyArray<{
   { tag: 'bash-stderr', subtype: 'bash_output', label: 'Shell output' },
 ];
 
+/** Whether a `user` entry's text is one Claude Code wrote itself (a tag opens it), not the person's. */
+export function isInjectedUserText(text: string): boolean {
+  const head = text.trimStart();
+  return INJECTED_USER_TAGS.some((known) => head.startsWith(`<${known.tag}>`));
+}
+
 /** Contents of the first `<tag>…</tag>`, or '' — used only for meta labels. */
 function innerTag(text: string, tag: string): string {
   const match = new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`).exec(text);

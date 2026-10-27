@@ -1570,6 +1570,22 @@ describe('pane.rpc — metadata', () => {
   });
 });
 
+describe('pane.rpc — pane.list lastRefusal', () => {
+  it('adds the newest refused tool call among a pane\'s surfaces, and nothing when there is none', async () => {
+    sendToRendererMock.mockResolvedValueOnce([
+      { id: 'pane-1', surfaceCount: 2, active: true, surfacePtyIds: ['pty-a', 'pty-b'] },
+      { id: 'pane-2', surfaceCount: 1, active: false, surfacePtyIds: ['pty-c'] },
+    ]);
+    const refusal = { toolUseId: 'toolu_1', kind: 'hook' as const, source: 'hook', reasonCode: 'hook:PreToolUse', at: 5 };
+    const router = new RpcRouter();
+    registerPaneRpc(router, () => ({} as BrowserWindow), { lastRefusal: (ids) => (ids.includes('pty-b') ? refusal : null) });
+    const res = await router.dispatch({ id: 'l', method: 'pane.list', params: {} });
+    const panes = (res as { result: { panes: Array<Record<string, unknown>> } }).result.panes;
+    expect(panes[0].lastRefusal).toEqual(refusal);
+    expect(panes[1]).not.toHaveProperty('lastRefusal');
+  });
+});
+
 // === X8: pane.list supervision join ===
 describe('pane.rpc — pane.list supervision join (X8)', () => {
   beforeEach(() => {
