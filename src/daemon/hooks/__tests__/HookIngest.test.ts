@@ -3,8 +3,7 @@ import {
   HookIngest,
   PERMISSION_NOTIFY_GRACE_MS,
   gateInputIsCritical,
-  resolveSessionIdForCwd,
-  resolveSessionIdForSignal,
+  routeSignal,
   sameConversation,
   type DetectorHeldEventData,
   type HookAgentEventData,
@@ -1510,7 +1509,9 @@ describe('HookIngest', () => {
   });
 });
 
-describe('resolveSessionIdForSignal', () => {
+const resolveRoute = (...args: Parameters<typeof routeSignal>) => routeSignal(...args).sessionId;
+
+describe('routeSignal', () => {
   const sessions: HookIngestSession[] = [
     session({ id: 'pty-a', cwd: '/repo', env: { WMUX_WORKSPACE_ID: 'ws-1' } }),
     session({ id: 'pty-b', cwd: '/repo/sub', env: { WMUX_WORKSPACE_ID: 'ws-1' } }),
@@ -1518,7 +1519,7 @@ describe('resolveSessionIdForSignal', () => {
   ];
 
   it('prefers the exact ptyId — the pane the hook actually fired from', () => {
-    expect(resolveSessionIdForSignal(
+    expect(resolveRoute(
       makeSignal({ ptyId: 'pty-b', cwd: '/repo', workspaceId: 'ws-1' }),
       sessions,
     )).toBe('pty-b');
@@ -1528,18 +1529,18 @@ describe('resolveSessionIdForSignal', () => {
     // Pane env is writable from inside the pane, so an authenticated hook must
     // not be able to target a sibling pane by id. Refused outright: guessing a
     // pane by cwd/workspace for a signal that named another one misroutes it.
-    expect(resolveSessionIdForSignal(
+    expect(resolveRoute(
       makeSignal({ ptyId: 'pty-c', cwd: '/repo', workspaceId: 'ws-1' }),
       sessions,
     )).toBeNull();
   });
 
   it('refuses a ptyId that names no live session — no cwd/workspace fallback', () => {
-    expect(resolveSessionIdForSignal(
+    expect(resolveRoute(
       makeSignal({ ptyId: 'pty-gone', cwd: '/other' }),
       sessions,
     )).toBeNull();
-    expect(resolveSessionIdForSignal(
+    expect(resolveRoute(
       makeSignal({ ptyId: 'pty-gone', cwd: '/other', workspaceId: 'ws-2' }),
       sessions,
     )).toBeNull();
@@ -1547,41 +1548,43 @@ describe('resolveSessionIdForSignal', () => {
 
   it('resolves a lone pane in the claimed workspace when cwd cannot place it, only with proof', () => {
     const lone = [session({ id: 'pty-c', cwd: '/other', env: { WMUX_WORKSPACE_ID: 'ws-2' }, resumeBinding: { agent: 'claude', sessionId: 'conv-c' } })];
-    expect(resolveSessionIdForSignal(
+    expect(resolveRoute(
       makeSignal({ cwd: '/tmp/unrelated', workspaceId: 'ws-2', agentSessionId: 'conv-c' }),
       lone,
     )).toBe('pty-c');
-    expect(resolveSessionIdForSignal(
+    expect(resolveRoute(
       makeSignal({ cwd: '/tmp/unrelated', workspaceId: 'ws-2' }),
       sessions,
     )).toBeNull();
   });
 
   it('falls through rather than guessing between sibling panes', () => {
-    expect(resolveSessionIdForSignal(
+    expect(resolveRoute(
       makeSignal({ cwd: '/tmp/unrelated', workspaceId: 'ws-1' }),
       sessions,
     )).toBeNull();
   });
 
   it('matches cwd exactly before falling back to the longest prefix', () => {
-    expect(resolveSessionIdForCwd('/repo/sub', sessions)).toBe('pty-b');
-    expect(resolveSessionIdForCwd('/repo/sub/deep', sessions)).toBe('pty-b');
-    expect(resolveSessionIdForCwd('/repo/other', sessions)).toBe('pty-a');
+    const picked = (cwd: string) => routeSignal(makeSignal({ cwd, agentSessionId: 'conv-x' }), sessions).drops.map((d) => d.sessionId);
+    expect(resolveRoute(makeSignal({ cwd: '/repo/sub' }), sessions)).toBe('pty-b');
+    expect(picked('/repo/sub/deep')).toEqual(['pty-b']);
+    expect(picked('/repo/other')).toEqual(['pty-a']);
   });
 
   it('requires a proper directory prefix', () => {
-    expect(resolveSessionIdForSignal(makeSignal({ cwd: '/repository' }), sessions)).toBeNull();
+    expect(resolveRoute(makeSignal({ cwd: '/repository' }), sessions)).toBeNull();
   });
 
   it('collapses `..` so a payload cannot walk past the prefix check', () => {
     // Without normalization this reads as a subdirectory of /repo.
-    expect(resolveSessionIdForSignal(makeSignal({ cwd: '/repo/../elsewhere' }), sessions)).toBeNull();
+    expect(resolveRoute(makeSignal({ cwd: '/repo/../elsewhere' }), sessions)).toBeNull();
   });
 
   it('normalizes Windows paths to the same key', () => {
     const win = [session({ id: 'pty-w', cwd: 'D:\\wmux', env: {} })];
-    expect(resolveSessionIdForCwd('d:/wmux/src', win)).toBe('pty-w');
+    expect(resolveRoute(makeSignal({ cwd: 'd:/wmux' }), win)).toBe('pty-w');
+    expect(routeSignal(makeSignal({ cwd: 'd:/wmux/src' }), win).drops).toEqual([{ sessionId: 'pty-w', reason: 'cwd-not-exact' }]);
   });
 
   it('breaks a cwd tie toward the most recently active pane', () => {
@@ -1589,13 +1592,13 @@ describe('resolveSessionIdForSignal', () => {
       session({ id: 'pty-old', cwd: '/repo', env: {}, lastActivity: '2026-01-01T00:00:00.000Z' }),
       session({ id: 'pty-new', cwd: '/repo', env: {}, lastActivity: '2026-02-01T00:00:00.000Z' }),
     ];
-    expect(resolveSessionIdForSignal(makeSignal({ cwd: '/repo' }), tied)).toBe('pty-new');
+    expect(resolveRoute(makeSignal({ cwd: '/repo' }), tied)).toBe('pty-new');
   });
 
   it('takes an unbound pane on an exact cwd match only, never by prefix', () => {
     const unbound = [session({ id: 'pty-a', cwd: '/repo', env: {} })];
-    expect(resolveSessionIdForSignal(makeSignal({ cwd: '/repo', agentSessionId: 'conv-1' }), unbound)).toBe('pty-a');
-    expect(resolveSessionIdForSignal(makeSignal({ cwd: '/repo/sub', agentSessionId: 'conv-1' }), unbound)).toBeNull();
+    expect(resolveRoute(makeSignal({ cwd: '/repo', agentSessionId: 'conv-1' }), unbound)).toBe('pty-a');
+    expect(resolveRoute(makeSignal({ cwd: '/repo/sub', agentSessionId: 'conv-1' }), unbound)).toBeNull();
   });
 
   it('takes a bound pane for its own conversation, without a pid, even by prefix', () => {
@@ -1604,31 +1607,41 @@ describe('resolveSessionIdForSignal', () => {
       session({ id: 'pty-b', cwd: '/repo', env: {}, lastActivity: '2026-01-01T00:00:00.000Z', resumeBinding: { agent: 'claude', sessionId: 'conv-2' } }),
     ];
     // The pane bound to this conversation wins even though the other is more recent.
-    expect(resolveSessionIdForSignal(makeSignal({ cwd: '/repo', agentSessionId: 'conv-2' }), bound)).toBe('pty-b');
-    expect(resolveSessionIdForSignal(makeSignal({ cwd: '/repo/sub', agentSessionId: 'conv-2' }), bound)).toBe('pty-b');
+    expect(resolveRoute(makeSignal({ cwd: '/repo', agentSessionId: 'conv-2' }), bound)).toBe('pty-b');
+    expect(resolveRoute(makeSignal({ cwd: '/repo/sub', agentSessionId: 'conv-2' }), bound)).toBe('pty-b');
     // Same agent, another conversation, no pid: neither pane.
-    expect(resolveSessionIdForSignal(makeSignal({ cwd: '/repo', agentSessionId: 'conv-3' }), bound)).toBeNull();
-    expect(resolveSessionIdForSignal(makeSignal({ cwd: '/repo' }), bound)).toBeNull();
+    expect(resolveRoute(makeSignal({ cwd: '/repo', agentSessionId: 'conv-3' }), bound)).toBeNull();
+    expect(resolveRoute(makeSignal({ cwd: '/repo' }), bound)).toBeNull();
   });
 
-  it('never retries a weaker prefix once the exact match is refused', () => {
+  it('reaches an ancestor-folder pane only with id or pid proof', () => {
     const panes = [
       session({ id: 'pty-home', cwd: '/home/me', env: {}, resumeBinding: { agent: 'claude', sessionId: 'conv-9' } }),
       session({ id: 'pty-proj', cwd: '/home/me/proj', env: {}, resumeBinding: { agent: 'claude', sessionId: 'conv-1' } }),
     ];
-    // The ancestor pane would verify on its own, but it is a weaker match than
-    // the refused exact one.
-    expect(resolveSessionIdForSignal(makeSignal({ cwd: '/home/me/proj', agentSessionId: 'conv-9' }), panes)).toBeNull();
-    expect(resolveSessionIdForSignal(makeSignal({ cwd: '/home/me/other', agentSessionId: 'conv-9' }), panes)).toBe('pty-home');
+    // The exact pane refuses another conversation; the ancestor pane is bound to this one.
+    expect(resolveRoute(makeSignal({ cwd: '/home/me/proj', agentSessionId: 'conv-9' }), panes)).toBe('pty-home');
+    // Its tracked agent process sent the hook.
+    const fromPid = { ...makeSignal({ cwd: '/home/me/proj', agentSessionId: 'conv-new' }), agentPid: 4242 };
+    expect(resolveRoute(fromPid, panes, { agentPidFor: (id) => (id === 'pty-home' ? 4242 : undefined) })).toBe('pty-home');
+    // No proof: neither the refused exact pane nor the unbound ancestor.
+    const unboundHome = [{ ...panes[0], resumeBinding: undefined }, panes[1]];
+    expect(resolveRoute(makeSignal({ cwd: '/home/me/proj', agentSessionId: 'conv-new' }), unboundHome)).toBeNull();
+  });
+
+  it('does not take a WSL hook\'s parent as the agent pid', () => {
+    const pane = [session({ id: 'pty-a', cwd: '/repo', env: {}, resumeBinding: { agent: 'claude', sessionId: 'conv-1' } })];
+    const wsl = { ...makeSignal({ cwd: '/repo', agentSessionId: 'conv-2', wslAgentProcess: '7 1' }), agentPid: 4242 };
+    expect(resolveRoute(wsl, pane, { agentPidFor: () => 4242 })).toBeNull();
   });
 
   it('follows an agent switch only when the switched-to agent is live in the pane', () => {
     const pane = [session({ id: 'pty-a', cwd: '/repo', env: {}, resumeBinding: { agent: 'claude', sessionId: 'conv-1' } })];
     const codex = makeSignal({ agent: 'codex', cwd: '/repo', agentSessionId: '0a1b2c3d-0000-7000-8000-00000000c0de' });
-    expect(resolveSessionIdForSignal(codex, pane, { liveAgentFor: () => 'codex' })).toBe('pty-a');
-    expect(resolveSessionIdForSignal(codex, pane, { liveAgentFor: () => 'claude' })).toBeNull();
+    expect(resolveRoute(codex, pane, { liveAgentFor: () => 'codex' })).toBe('pty-a');
+    expect(resolveRoute(codex, pane, { liveAgentFor: () => 'claude' })).toBeNull();
     // A stale detector marker is not a live process.
-    expect(resolveSessionIdForSignal(codex, [{ ...pane[0], lastDetectedAgent: 'codex' }])).toBeNull();
+    expect(resolveRoute(codex, [{ ...pane[0], lastDetectedAgent: 'codex' }])).toBeNull();
   });
 });
 
@@ -1828,12 +1841,11 @@ describe('HookIngest — a signal whose claimed pane is gone is refused (#1523)'
     expect(fixture.bindings).toHaveLength(0);
   });
 
-  it('a guessed route may rebind when the detector already sees the new agent in the pane', () => {
+  it('a guessed route may rebind when the tracker sees the new agent live in the pane', () => {
     // The pane went claude → codex and the sender carries no ptyId: the old
     // binding is the stale one, so the new session must be captured.
-    const switched = { ...claudePane, lastDetectedAgent: 'codex' };
-    const fixture = makeDeps([switched]);
-    const ingest = new HookIngest(fixture.deps);
+    const fixture = makeDeps([claudePane]);
+    const ingest = new HookIngest({ ...fixture.deps, liveAgentFor: () => 'codex' });
     expect(ingest.handle(codexStop({ workspaceId: 'ws-1' })).ok).toBe(true);
     expect(fixture.bindings).toEqual([
       expect.objectContaining({ ptyId: 'pty-claude', binding: expect.objectContaining({ agent: 'codex' }) }),

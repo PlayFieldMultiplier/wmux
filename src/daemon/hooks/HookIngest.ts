@@ -511,9 +511,26 @@ function mostRecent(sessions: HookIngestSession[]): HookIngestSession | null {
   return best;
 }
 
+/** What the daemon knows about each pane's own agent process. */
+export interface RouteProof {
+  /** The pane's identified, live top-level agent pid (AgentProcessTracker). */
+  agentPidFor?: (ptyId: string) => number | undefined;
+  /** Slug of the agent process alive in the pane right now. */
+  liveAgentFor?: (ptyId: string) => string | undefined;
+}
+
+/** Why a guessed route did not take a candidate pane. */
+export type RouteDropReason = 'bound-to-another-session' | 'cwd-not-exact';
+
+export interface RouteResult {
+  sessionId: string | null;
+  /** Candidates a guessed route refused; empty for an exact or unmatched route. */
+  drops: Array<{ sessionId: string; reason: RouteDropReason }>;
+}
+
 /**
  * Resolve a signal to a live daemon session id, cheapest and strongest key
- * first. Exported for tests.
+ * first, and list the candidates a guessed route refused. Exported for tests.
  *
  *   1. `ptyId` — WMUX_PTY_ID, stamped into every pane env by the daemon at
  *      spawn, so it is the EXACT pane the hook fired from. Trusted only when
@@ -536,35 +553,8 @@ function mostRecent(sessions: HookIngestSession[]): HookIngestSession | null {
  *
  * Tiers 2 and 3 are guesses: a Claude started in another terminal in a pane's
  * folder fires the same hooks with no pane env. So each candidate they pick is
- * verified (`verifyGuessedRoute`), and a refused one is never retried against
- * a weaker match.
+ * verified (`verifyGuessedRoute`).
  */
-export function resolveSessionIdForSignal(
-  signal: AgentSignal,
-  sessions: HookIngestSession[],
-  proof: RouteProof = {},
-): string | null {
-  return routeSignal(signal, sessions, proof).sessionId;
-}
-
-/** What the daemon knows about each pane's own agent process. */
-export interface RouteProof {
-  /** The pane's identified, live top-level agent pid (AgentProcessTracker). */
-  agentPidFor?: (ptyId: string) => number | undefined;
-  /** Slug of the agent process alive in the pane right now. */
-  liveAgentFor?: (ptyId: string) => string | undefined;
-}
-
-/** Why a guessed route did not take a candidate pane. */
-export type RouteDropReason = 'bound-to-another-session' | 'cwd-not-exact';
-
-export interface RouteResult {
-  sessionId: string | null;
-  /** Candidates a guessed route refused; empty for an exact or unmatched route. */
-  drops: Array<{ sessionId: string; reason: RouteDropReason }>;
-}
-
-/** {@link resolveSessionIdForSignal}, plus the candidates it refused. */
 export function routeSignal(
   signal: AgentSignal,
   sessions: HookIngestSession[],
@@ -583,58 +573,67 @@ export function routeSignal(
     );
     if (inWorkspace.length > 0) {
       const byCwd = cwdCandidates(signal.cwd, inWorkspace);
-      if (byCwd.sessions.length > 0) return verifyGuessedRoute(signal, byCwd, proof);
+      if (byCwd.sessions.length > 0) return verifyGuessedRoute(signal, inWorkspace, byCwd, proof);
       // A single pane owns the workspace → no ambiguity to resolve.
-      if (inWorkspace.length === 1) return verifyGuessedRoute(signal, { sessions: inWorkspace, exact: false }, proof);
+      if (inWorkspace.length === 1) return verifyGuessedRoute(signal, inWorkspace, { sessions: inWorkspace, exact: false }, proof);
       // Otherwise fall through: cwd across ALL sessions may still place it,
       // and guessing between sibling panes would misroute hook authority.
     }
   }
 
-  const byCwd = cwdCandidates(signal.cwd, sessions);
-  return byCwd.sessions.length > 0 ? verifyGuessedRoute(signal, byCwd, proof) : { sessionId: null, drops: [] };
+  return verifyGuessedRoute(signal, sessions, cwdCandidates(signal.cwd, sessions), proof);
 }
 
 /**
- * Take a pane a guessed route picked only with proof the signal is its own:
+ * Place a guessed route only with proof the signal is the pane's own. Proof,
+ * on any pane of the tier (`pool`), whatever its cwd:
  *   a. the hook's process is the pane's tracked agent (a launch that scrubbed
  *      the pane env, then /clear or a relaunch: a new session id, same process);
- *   b. the signal continues the pane's bound conversation;
+ *   b. the signal continues the pane's bound conversation.
+ * Without proof, only the cwd-picked panes (`byCwd`: the exact-cwd panes, else
+ * the longest-prefix ones) can take it:
  *   c. the agent switched: the pane is bound to another agent, and the one
  *      running there now is the signal's;
  *   d. a first bind: the pane has no binding and its cwd matches exactly.
  * Anything else is refused, so a session outside the pane can neither rebind
- * nor light it, and a pane in an ancestor folder is reached only by a or b.
+ * nor light it, and an ancestor-folder pane is reached only by a or b.
  *
- * Accepted losses, each without process truth: a claude in a tmux server
- * started outside wmux, over ssh to this machine, or from a bridge older than
- * the env fields keeps its first exact-cwd bind but not a /clear rebind; on
- * Windows and Linux the bridge sends no pid, so a scrubbed-env /clear there is
- * refused too. Passing WMUX_PTY_ID and WMUX_WORKSPACE_ID through (tmux
+ * Accepted losses: without a pid, every signal of a NEW conversation in a pane
+ * that was bound once is refused, not only its first SessionStart. That is the
+ * case for a claude in a tmux server started outside wmux, over ssh to this
+ * machine, or from a bridge older than the env fields (each keeps its first
+ * exact-cwd bind), and for a scrubbed-env /clear on Windows and Linux, whose
+ * bridge sends no pid. Passing WMUX_PTY_ID and WMUX_WORKSPACE_ID through (tmux
  * `update-environment`, ssh `SendEnv`) makes those hooks exact. A tracker
  * still holding a just-exited agent's pid heals on the next prompt.
  */
 function verifyGuessedRoute(
   signal: AgentSignal,
-  candidates: { sessions: HookIngestSession[]; exact: boolean },
+  pool: HookIngestSession[],
+  byCwd: { sessions: HookIngestSession[]; exact: boolean },
   proof: RouteProof,
 ): RouteResult {
-  const hookPid = signalAgentPid(signal);
-  const byPid: HookIngestSession[] = [];
-  const byConversation: HookIngestSession[] = [];
-  const bySwitch: HookIngestSession[] = [];
-  const firstBind: HookIngestSession[] = [];
-  const drops: RouteResult['drops'] = [];
-  for (const s of candidates.sessions) {
+  // A WSL hook's parent is the hook.sh shell, not the agent (see foreignProcessReason).
+  const hookPid = signal.wslAgentProcess === undefined ? signalAgentPid(signal) : undefined;
+  const byPid = hookPid === undefined ? [] : pool.filter((s) => proof.agentPidFor?.(s.id) === hookPid);
+  const byConversation = pool.filter((s) => s.resumeBinding?.sessionId && sameConversation(signal, s.resumeBinding));
+  const proven = mostRecent(byPid) ?? mostRecent(byConversation);
+  if (proven) return { sessionId: proven.id, drops: [] };
+
+  const bySwitch = byCwd.sessions.filter((s) => {
     const bound = s.resumeBinding;
-    if (hookPid !== undefined && proof.agentPidFor?.(s.id) === hookPid) byPid.push(s);
-    else if (bound?.sessionId && sameConversation(signal, bound)) byConversation.push(s);
-    else if (bound?.sessionId && bound.agent !== signal.agent && proof.liveAgentFor?.(s.id) === signal.agent) bySwitch.push(s);
-    else if (!bound?.sessionId && candidates.exact) firstBind.push(s);
-    else drops.push({ sessionId: s.id, reason: bound?.sessionId ? 'bound-to-another-session' : 'cwd-not-exact' });
-  }
-  const picked = mostRecent(byPid) ?? mostRecent(byConversation) ?? mostRecent(bySwitch) ?? mostRecent(firstBind);
-  return { sessionId: picked?.id ?? null, drops: picked ? [] : drops };
+    return !!bound?.sessionId && bound.agent !== signal.agent && proof.liveAgentFor?.(s.id) === signal.agent;
+  });
+  const firstBind = byCwd.exact ? byCwd.sessions.filter((s) => !s.resumeBinding?.sessionId) : [];
+  const picked = mostRecent(bySwitch) ?? mostRecent(firstBind);
+  if (picked) return { sessionId: picked.id, drops: [] };
+  return {
+    sessionId: null,
+    drops: byCwd.sessions.map((s) => ({
+      sessionId: s.id,
+      reason: s.resumeBinding?.sessionId ? 'bound-to-another-session' as const : 'cwd-not-exact' as const,
+    })),
+  };
 }
 
 /** A transcript path or a bare session id, reduced to the conversation id. */
@@ -694,18 +693,6 @@ function cwdCandidates(
   }
 
   return exact.length > 0 ? { sessions: exact, exact: true } : { sessions: bestPrefix, exact: false };
-}
-
-/**
- * cwd matching: the best {@link cwdCandidates} set, ties broken to the most
- * recently active pane — the daemon's closest analogue of main's "the
- * workspace's active surface". Exported for tests.
- */
-export function resolveSessionIdForCwd(
-  signalCwd: string,
-  sessions: HookIngestSession[],
-): string | null {
-  return mostRecent(cwdCandidates(signalCwd, sessions).sessions)?.id ?? null;
 }
 
 /**
@@ -1474,9 +1461,9 @@ export class HookIngest {
       // binding: only a signal whose ptyId named this pane may rebind it. A
       // claimed-ptyId signal is exact-or-refused above, so this only ever
       // holds back senders that carry no ptyId at all.
-      // The pane switching agents is not a clobber: when the detector/process
-      // tracker already sees `signal.agent` running there, the old binding is
-      // the stale one and the new session must be captured.
+      // The pane switching agents is not a clobber: when the process tracker
+      // sees `signal.agent` live there (the rule routing used to accept it),
+      // the old binding is the stale one and the new session must be captured.
       const prevAgent = routed?.resumeBinding?.agent;
       // #1823: the binding is only as good as the pane's agent. A different
       // agent's process alive in the pane, or an id the agent's resume grammar
@@ -1492,7 +1479,7 @@ export class HookIngest {
       } else if (!isPlausibleResumeSessionId(signal.agent, signal.agentSessionId)) {
         this.noteMismatch(sessionId, `[hooks] refused ${signal.agent} resume binding on ${sessionId}: session id is not ${signal.agent}-shaped`);
       } else if (signal.ptyId !== sessionId && prevAgent && prevAgent !== signal.agent
-          && routed?.lastDetectedAgent !== signal.agent) {
+          && liveAgent !== signal.agent) {
         this.deps.log?.(
           'info',
           `[hooks] kept ${prevAgent} resume binding on ${sessionId}: ${signal.agent} signal was not pane-exact`,
@@ -1853,7 +1840,6 @@ export class HookIngest {
     this.deps.log?.('info', `[hooks] refused ${signal.agent} ${signal.kind} for ${ptyId}: claimed-pane-not-live`);
   }
 
-  /** Count a gate allowed because its claimed pane was refused; log once per ptyId with the tool. */
   private routeProof(): RouteProof {
     return { agentPidFor: this.deps.agentPidFor, liveAgentFor: this.deps.liveAgentFor };
   }
@@ -1868,6 +1854,7 @@ export class HookIngest {
     }
   }
 
+  /** Count a gate allowed because its claimed pane was refused; log once per ptyId with the tool. */
   private noteRefusedGate(signal: AgentSignal): void {
     const ptyId = signal.ptyId;
     if (!ptyId) return;
