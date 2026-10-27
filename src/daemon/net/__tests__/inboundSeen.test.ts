@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { InboundCounter, OWN_ADDRESSES_TTL_MS, isLoopbackHost, normalizeRemote } from '../inboundSeen';
 
 describe('InboundCounter', () => {
-  const own = () => new Set(['192.168.1.10', '100.79.244.107', 'fe80::1']);
+  const own = () => new Set(['192.168.1.10', '100.88.120.107', 'fe80::1']);
 
   it('counts a connection from another machine, with its time', () => {
     let t = 1_000;
@@ -29,11 +29,11 @@ describe('InboundCounter', () => {
     expect(reads).toBe(1);
     expect(c.snapshot().inboundCount).toBe(50);
     // An address that came up later (Tailscale connecting) is this machine once the read is stale.
-    mine = new Set(['192.168.1.10', '100.79.244.107']);
-    c.note('100.79.244.107');
+    mine = new Set(['192.168.1.10', '100.88.120.107']);
+    c.note('100.88.120.107');
     expect(c.snapshot().inboundCount).toBe(51);
     t = OWN_ADDRESSES_TTL_MS;
-    c.note('100.79.244.107');
+    c.note('100.88.120.107');
     expect(reads).toBe(2);
     expect(c.snapshot().inboundCount).toBe(51);
     // A known address never reads again.

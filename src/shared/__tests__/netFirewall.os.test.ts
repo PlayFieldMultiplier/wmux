@@ -58,7 +58,7 @@ const PROMPT_ALLOW_ANY: RawRule = { act: 'Allow', prof: 'Private, Public', anyPo
 describe('parseProbeLine', () => {
   it('reads a probe line from this box', () => {
     const f = parseProbeLine(
-      '{"v":1,"addr":[{"ip":"100.79.244.107","cat":1},{"ip":"192.168.45.28","cat":0},{"ip":"172.17.48.1","cat":-1}],"rules":[{"hit":1,"ours":0,"tn":0,"prof":"Private, Public","legacy":0,"anyPort":1,"act":"Allow","src":"Local","proto":"TCP"},{"hit":1,"ours":0,"tn":0,"prof":"Private, Public","legacy":0,"anyPort":1,"act":"Allow","src":"Local","proto":"UDP"}],"tp":0,"prof":{"Private":{"inb":1,"en":1,"loc":1},"Domain":{"inb":1,"en":1,"loc":1},"Public":{"inb":1,"en":1,"loc":1}},"tpName":null,"legacy":0}\r\n',
+      '{"v":1,"addr":[{"ip":"100.88.120.107","cat":1},{"ip":"192.168.10.28","cat":0},{"ip":"172.17.48.1","cat":-1}],"rules":[{"hit":1,"ours":0,"tn":0,"prof":"Private, Public","legacy":0,"anyPort":1,"act":"Allow","src":"Local","proto":"TCP"},{"hit":1,"ours":0,"tn":0,"prof":"Private, Public","legacy":0,"anyPort":1,"act":"Allow","src":"Local","proto":"UDP"}],"tp":0,"prof":{"Private":{"inb":1,"en":1,"loc":1},"Domain":{"inb":1,"en":1,"loc":1},"Public":{"inb":1,"en":1,"loc":1}},"tpName":null,"legacy":0}\r\n',
     );
     expect(f?.addresses.map((a) => a.category)).toEqual(['Private', 'Public', 'None']);
     expect(f?.rules.map((r) => r.tcp)).toEqual([true, false]);
@@ -80,14 +80,14 @@ describe('parseProbeLine', () => {
   });
 
   it('a Public address carries its adapter medium; anything else is no page of its own', () => {
-    const f = facts({ addr: [{ ip: '192.168.45.28', cat: 0, med: 1 }, { ip: '10.0.0.5', cat: 0, med: 2 }, { ip: '10.0.0.6', cat: -1, med: 0 }, { ip: '10.0.0.7', cat: 0, med: 7 }, { ip: '10.0.0.8', cat: 1 }] });
+    const f = facts({ addr: [{ ip: '192.168.10.28', cat: 0, med: 1 }, { ip: '10.0.0.5', cat: 0, med: 2 }, { ip: '10.0.0.6', cat: -1, med: 0 }, { ip: '10.0.0.7', cat: 0, med: 7 }, { ip: '10.0.0.8', cat: 1 }] });
     expect(f.addresses.map((a) => a.medium)).toEqual(['wifi', 'ethernet', null, null, null]);
     expect(parseProbeLine(line({ addr: [{ ip: '10.0.0.5', cat: 0, med: 'wifi' }] }))).toBeNull();
     const medium = (addr: unknown[]) => assessInbound(facts({ addr }), ctx()).publicMedium;
-    expect(medium([{ ip: '192.168.45.28', cat: 0, med: 1 }, { ip: '10.0.0.8', cat: 1 }])).toBe('wifi');
-    expect(medium([{ ip: '192.168.45.28', cat: 0, med: 2 }, { ip: '10.0.0.9', cat: -1, med: 2 }])).toBe('ethernet');
-    expect(medium([{ ip: '192.168.45.28', cat: 0, med: 1 }, { ip: '10.0.0.9', cat: 0, med: 2 }])).toBeNull();
-    expect(medium([{ ip: '192.168.45.28', cat: 0, med: 1 }, { ip: '10.0.0.9', cat: 0 }])).toBeNull();
+    expect(medium([{ ip: '192.168.10.28', cat: 0, med: 1 }, { ip: '10.0.0.8', cat: 1 }])).toBe('wifi');
+    expect(medium([{ ip: '192.168.10.28', cat: 0, med: 2 }, { ip: '10.0.0.9', cat: -1, med: 2 }])).toBe('ethernet');
+    expect(medium([{ ip: '192.168.10.28', cat: 0, med: 1 }, { ip: '10.0.0.9', cat: 0, med: 2 }])).toBeNull();
+    expect(medium([{ ip: '192.168.10.28', cat: 0, med: 1 }, { ip: '10.0.0.9', cat: 0 }])).toBeNull();
     expect(medium([{ ip: '10.0.0.8', cat: 1 }])).toBeNull();
   });
 
@@ -137,7 +137,7 @@ describe('assessInbound — one verdict per case', () => {
   });
 
   it('tailnet: our Allow made before a tailnet address existed (LocalSubnet only) no longer covers', () => {
-    const tailnetAddr = { addr: [{ ip: '192.168.1.10', cat: 1 }, { ip: '100.79.244.107', cat: 1 }] };
+    const tailnetAddr = { addr: [{ ip: '192.168.1.10', cat: 1 }, { ip: '100.88.120.107', cat: 1 }] };
     expect(verdict(facts({ ...tailnetAddr, rules: [OURS_ALLOW, OURS_BLOCK] }), null, { tailnet: true })).toBe('not-covered');
     expect(verdict(facts({ ...tailnetAddr, rules: [{ ...OURS_ALLOW, tn: 1 }, OURS_BLOCK] }), null, { tailnet: true })).toBe('covered');
     // Updated since: the Fix it offers is the update's.
@@ -155,20 +155,20 @@ describe('assessInbound — one verdict per case', () => {
   });
 
   it('public-network: every real address is Public (or has no profile); vEthernet is ignored', () => {
-    expect(verdict(facts({ addr: [{ ip: '192.168.45.28', cat: 0 }] }))).toBe('public-network');
-    expect(verdict(facts({ addr: [{ ip: '192.168.45.28', cat: -1 }] }))).toBe('public-network');
+    expect(verdict(facts({ addr: [{ ip: '192.168.10.28', cat: 0 }] }))).toBe('public-network');
+    expect(verdict(facts({ addr: [{ ip: '192.168.10.28', cat: -1 }] }))).toBe('public-network');
     const withHyperV = markVirtual(
-      facts({ addr: [{ ip: '192.168.45.28', cat: 0 }, { ip: '172.17.48.1', cat: 1 }] }),
+      facts({ addr: [{ ip: '192.168.10.28', cat: 0 }, { ip: '172.17.48.1', cat: 1 }] }),
       (ip) => (ip === '172.17.48.1' ? 'vEthernet (WSL (Hyper-V firewall))' : 'Wi-Fi'),
     );
     expect(verdict(withHyperV)).toBe('public-network');
   });
 
   it('mixed Private (Tailscale) and Public (Wi-Fi): judged on the Private one, both lists returned', () => {
-    const a = assessInbound(facts({ addr: [{ ip: '100.79.244.107', cat: 1 }, { ip: '192.168.45.28', cat: 0 }], rules: [OURS_ALLOW] }), ctx());
+    const a = assessInbound(facts({ addr: [{ ip: '100.88.120.107', cat: 1 }, { ip: '192.168.10.28', cat: 0 }], rules: [OURS_ALLOW] }), ctx());
     expect(a.verdict).toBe('covered');
-    expect(a.okIps).toEqual(['100.79.244.107']);
-    expect(a.publicIps).toEqual(['192.168.45.28']);
+    expect(a.okIps).toEqual(['100.88.120.107']);
+    expect(a.publicIps).toEqual(['192.168.10.28']);
   });
 
   it('mixed Private + Public: a Public-only Block or profile switch does not hide the Private verdict', () => {
@@ -219,7 +219,7 @@ describe('assessInbound — one verdict per case', () => {
   it('precedence: policy-managed > inbound-blocked-all > firewall-off > blocked-by-rule > public-network', () => {
     expect(verdict(facts({ prof: { Domain: on, Private: { en: 0, inb: 0, loc: 0 }, Public: on } }))).toBe('policy-managed');
     expect(verdict(facts({ prof: { Domain: on, Private: { en: 0, inb: 0, loc: 1 }, Public: on } }))).toBe('inbound-blocked-all');
-    expect(verdict(facts({ addr: [{ ip: '192.168.45.28', cat: 0 }], rules: [{ act: 'Block', prof: 'Public' }] }))).toBe('blocked-by-rule');
+    expect(verdict(facts({ addr: [{ ip: '192.168.10.28', cat: 0 }], rules: [{ act: 'Block', prof: 'Public' }] }))).toBe('blocked-by-rule');
   });
 
   it('exposedPublic: a local prompt Allow on Public (any port or this one); not ours, not GPO', () => {

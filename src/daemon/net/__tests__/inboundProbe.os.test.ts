@@ -9,12 +9,12 @@ const SCOPE: RuleScope = { dataSuffix: '', user: 'DESK\\me', group: 'wmux' };
 const on = { en: 1, inb: 1, loc: 1 };
 
 const IFACES = {
-  Tailscale: [{ address: '100.79.244.107', family: 'IPv4' }],
-  'Wi-Fi': [{ address: '192.168.45.28', family: 'IPv4' }],
+  Tailscale: [{ address: '100.88.120.107', family: 'IPv4' }],
+  'Wi-Fi': [{ address: '192.168.10.28', family: 'IPv4' }],
   'vEthernet (WSL (Hyper-V firewall))': [{ address: '172.17.48.1', family: 'IPv4' }],
 } as unknown as NodeJS.Dict<os.NetworkInterfaceInfo[]>;
 
-function line(rules: object[] = [], addr: object[] = [{ ip: '100.79.244.107', cat: 1 }, { ip: '192.168.45.28', cat: 0 }, { ip: '172.17.48.1', cat: -1 }]): string {
+function line(rules: object[] = [], addr: object[] = [{ ip: '100.88.120.107', cat: 1 }, { ip: '192.168.10.28', cat: 0 }, { ip: '172.17.48.1', cat: -1 }]): string {
   return `${JSON.stringify({ v: 1, prof: { Domain: on, Private: on, Public: on }, addr, rules, legacy: 0, tp: 0, tpName: null })}\r\n`;
 }
 
@@ -22,7 +22,7 @@ const target = (over: Partial<ProbeTarget> = {}): ProbeTarget => ({
   listener: 'a2a',
   applicable: true,
   port: 45660,
-  ips: ['100.79.244.107', '192.168.45.28', '172.17.48.1'],
+  ips: ['100.88.120.107', '192.168.10.28', '172.17.48.1'],
   tailnet: false,
   inboundSeenAt: 42,
   ...over,
@@ -92,7 +92,7 @@ describe('probeInbound on Windows', () => {
     let script = '';
     const wifi = await run(async (_f, args) => {
       script = args[3];
-      return line([], [{ ip: '100.79.244.107', cat: 1 }, { ip: '192.168.45.28', cat: 0, med: 1 }, { ip: '172.17.48.1', cat: -1 }]);
+      return line([], [{ ip: '100.88.120.107', cat: 1 }, { ip: '192.168.10.28', cat: 0, med: 1 }, { ip: '172.17.48.1', cat: -1 }]);
     });
     expect(wifi.publicMedium).toBe('wifi');
     expect(script).toContain('if ($c -le 0) { try { $na=@(Get-NetAdapter -InterfaceIndex');
@@ -100,7 +100,7 @@ describe('probeInbound on Windows', () => {
     // Not read (another medium, an older line): no page of its own.
     expect((await run(async () => line())).publicMedium).toBeNull();
     // Two Public adapters of different kinds: Network status.
-    const both = await run(async () => line([], [{ ip: '192.168.45.28', cat: 0, med: 1 }, { ip: '100.79.244.107', cat: 0, med: 2 }]));
+    const both = await run(async () => line([], [{ ip: '192.168.10.28', cat: 0, med: 1 }, { ip: '100.88.120.107', cat: 0, med: 2 }]));
     expect(both.publicNetworks).toEqual(['Wi-Fi', 'Tailscale']);
     expect(both.publicMedium).toBeNull();
   });
