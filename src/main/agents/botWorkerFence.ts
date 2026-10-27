@@ -51,7 +51,9 @@ import {
   workerFenceCredentialPaths,
   workerFenceHookCommand,
   workerFenceHookScript,
+  workerFenceGitWrites,
   workerFencePermissionDenies,
+  WORKER_FENCE_REFUSED_WMUX_TOOLS,
 } from './workerFence';
 
 // ── Which launches ───────────────────────────────────────────────────────────
@@ -651,7 +653,7 @@ export type WorkerFenceAttach =
   /** Not fenced: the launch is as before. */
   | { kind: 'none' }
   /** Fenced: merge `settings` into the worker's settings file. */
-  | { kind: 'fence'; strength: WorkerFenceStrength; settings: Record<string, unknown>; tempDir?: string; launcher?: string };
+  | { kind: 'fence'; strength: WorkerFenceStrength; settings: Record<string, unknown>; tempDir?: string; launcher?: string; branch?: string | null };
 
 /** The full fence's launcher (fenceLauncher), or the refusal. */
 function fullLauncher(dir: string, exe: string): string {
@@ -670,7 +672,7 @@ export interface WorkerFenceAttachInput {
   /** The owner turned the fence off for the bot's workspace. */
   switchedOff: boolean;
   /** What the session's first launch recorded (a resume, a re-fire). */
-  recorded?: { strength: WorkerFenceStrength; tempDir?: string };
+  recorded?: { strength: WorkerFenceStrength; tempDir?: string; branch?: string | null };
   support: WorkerFenceSupport | null;
   /** The task ledger's git dirs for the worktree. */
   expectedGit?: { gitCommonDir?: string; gitWorktreeDir?: string };
@@ -709,7 +711,7 @@ export function attachWorkerFence(input: WorkerFenceAttachInput): WorkerFenceAtt
     // The distro's claude: the permission denies (rules by `~/`, its own
     // home) and the marker. The hook's runtime does not run there.
     if (input.recorded?.strength === 'full') throw fenceError('this worker started inside the full fence, which a WSL pane cannot run');
-    const deny = workerFencePermissionDenies(credentials, [], home);
+    const deny = [...workerFencePermissionDenies(credentials, [], home), ...WORKER_FENCE_REFUSED_WMUX_TOOLS];
     return { kind: 'fence', strength: 'weaker', settings: { permissions: { deny }, ...statusLine('weaker worker fence: a WSL pane has no file hook and no OS sandbox') } };
   }
   if (!input.cwd) throw fenceError('the worker has no folder to fence');
@@ -723,20 +725,37 @@ export function attachWorkerFence(input: WorkerFenceAttachInput): WorkerFenceAtt
   const temp = workerTempDir(input.dir, input.recorded?.tempDir);
   const tempDir = temp.path;
   const git = readWorktreeGitFacts(worktree, input.expectedGit);
+  // The worker's branch is the one its first fenced launch ran on, never
+  // what HEAD names at a later one.
+  const recorded = input.recorded && input.recorded.strength !== 'off' ? input.recorded : null;
+  if (recorded && recorded.branch === undefined) throw fenceError('the worker\'s branch was not recorded at its first launch; start the task again');
+  if (recorded && recorded.branch !== git.ownBranch) {
+    const was = recorded.branch === null ? 'a detached HEAD' : `branch ${recorded.branch}`;
+    const now = git.ownBranch === null ? 'a detached HEAD' : `branch ${git.ownBranch}`;
+    throw fenceError(`the worktree is on ${now}, not on ${was} it started on`);
+  }
+  const platform = input.platform ?? process.platform;
+  if (git.isLinkedWorktree && git.ownBranch !== null) {
+    // The folders the fence opens for the branch's ref and reflog, made
+    // here: a branch kept only in packed-refs has neither yet, and the
+    // worker's commands cannot make them.
+    for (const p of workerFenceGitWrites(git).slice(2)) fs.mkdirSync(p, { recursive: true });
+  }
   const script = writeWorkerFenceHookScript(input.dir);
   const hookCommand = workerFenceHookCommand(input.runtime ?? process.execPath, script, [worktree, temp.real], input.platform);
   if (!hookCommand) throw fenceError('the fence hook\'s command cannot be written for these paths');
   const fence = buildWorkerFence({
     worktree, workerTempDir: temp.real, ...git, platformCapable: support.capable, repoTestWritePaths: [],
     permissionMode: mode ?? 'bypassPermissions', hookCommand, credentialPaths: credentials, home,
-    extraDenyWrite: claudeTempDenies(worktree, input.platform ?? process.platform, input.claudeTempRoots),
+    extraDenyWrite: claudeTempDenies(worktree, platform, input.claudeTempRoots),
+    ...(platform === 'linux' ? { keepGitDeny: (p: string) => fs.existsSync(p) } : {}),
   });
   // How the worker reaches its model, from the owner's user settings it
   // no longer loads; the fence's own values win.
   const carried = carriedUserSettings(userConfigDir, fence.settings.env as Record<string, string>);
   fence.settings = { ...carried, ...fence.settings, env: { ...(carried.env as Record<string, string> | undefined), ...(fence.settings.env as Record<string, string>) } };
   if (!support.capable) {
-    return { kind: 'fence', strength: 'weaker', tempDir, settings: { ...fence.settings, ...statusLine(`weaker worker fence: no OS sandbox here (${support.reason})`) } };
+    return { kind: 'fence', strength: 'weaker', tempDir, branch: git.ownBranch, settings: { ...fence.settings, ...statusLine(`weaker worker fence: no OS sandbox here (${support.reason})`) } };
   }
   if (!support.selfTest.ok && support.selfTest.transient) throw fenceError(`the fence's self-test did not finish (${support.selfTest.reason}); try again`);
   if (!support.selfTest.ok) {
@@ -745,9 +764,9 @@ export function attachWorkerFence(input: WorkerFenceAttachInput): WorkerFenceAtt
     const merged = { ...fence.settings, ...statusLine(why) };
     const hooks = (merged.hooks as { PreToolUse: unknown[] }).PreToolUse;
     (merged.hooks as { PreToolUse: unknown[] }).PreToolUse = [...(refuseAllHook(why).hooks as { PreToolUse: unknown[] }).PreToolUse, ...hooks];
-    return { kind: 'fence', strength: 'full', tempDir, settings: merged, launcher: fullLauncher(input.dir, support.exe) };
+    return { kind: 'fence', strength: 'full', tempDir, branch: git.ownBranch, settings: merged, launcher: fullLauncher(input.dir, support.exe) };
   }
-  return { kind: 'fence', strength: 'full', tempDir, settings: fence.settings, launcher: fullLauncher(input.dir, support.exe) };
+  return { kind: 'fence', strength: 'full', tempDir, branch: git.ownBranch, settings: fence.settings, launcher: fullLauncher(input.dir, support.exe) };
 }
 
 /** Startup: remove worker temp folders no session record names and that

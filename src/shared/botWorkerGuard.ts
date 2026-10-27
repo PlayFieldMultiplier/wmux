@@ -454,9 +454,10 @@ export interface BotWorkerLaunchFiles {
   settingSources?: 'project' | 'none';
   /** The worker fence the launch ran in (main/agents/botWorkerFence.ts):
    *  `full`, `weaker` (no OS sandbox), or `off` (turned off for its
-   *  workspace), and the worker's own temp folder. A later launch of the
-   *  session is never fenced less. */
-  fence?: { strength: 'full' | 'weaker' | 'off'; tempDir?: string };
+   *  workspace), the worker's own temp folder, and the branch its first
+   *  fenced launch ran on (null: detached), which a later launch must still
+   *  be on. A later launch of the session is never fenced less. */
+  fence?: { strength: 'full' | 'weaker' | 'off'; tempDir?: string; branch?: string | null };
 }
 
 /** One bot worker session. `workspaceId` and `at` are the version-1 record
@@ -511,12 +512,14 @@ export function workerTempRoot(dir: string): string {
   return path.join(dir, 'factory', 'worker-tmp');
 }
 
-/** A recorded fence: a known strength, and a temp folder (when any) directly
- *  under workerTempRoot. Pure. */
+/** A recorded fence: a known strength, the branch it started on (null:
+ *  detached) when recorded, and a temp folder (when any) directly under
+ *  workerTempRoot. Pure. */
 function isLaunchFence(raw: unknown, dir: string): raw is NonNullable<BotWorkerLaunchFiles['fence']> {
   if (!raw || typeof raw !== 'object') return false;
   const f = raw as Record<string, unknown>;
   if (f.strength !== 'full' && f.strength !== 'weaker' && f.strength !== 'off') return false;
+  if (f.branch !== undefined && f.branch !== null && (typeof f.branch !== 'string' || f.branch.length === 0)) return false;
   return f.tempDir === undefined
     || (typeof f.tempDir === 'string' && path.dirname(f.tempDir) === workerTempRoot(dir) && WORKER_TEMP_NAME.test(path.basename(f.tempDir)));
 }
@@ -538,7 +541,7 @@ export function readBotWorkerSessions(dir: string): { sessions: Map<string, BotW
       // Launch files that are not main's own are not used (the launch is then
       // guarded as a record without them).
       const launch = isWorkerLaunchFiles(r.launch, dir)
-        ? { settingsFile: r.launch.settingsFile, mcpConfigFile: r.launch.mcpConfigFile, level: r.launch.level, ...(r.launch.connectionKeys?.length ? { connectionKeys: [...r.launch.connectionKeys] } : {}), ...(r.launch.settingSources ? { settingSources: r.launch.settingSources } : {}), ...(r.launch.fence ? { fence: { strength: r.launch.fence.strength, ...(r.launch.fence.tempDir ? { tempDir: r.launch.fence.tempDir } : {}) } } : {}) }
+        ? { settingsFile: r.launch.settingsFile, mcpConfigFile: r.launch.mcpConfigFile, level: r.launch.level, ...(r.launch.connectionKeys?.length ? { connectionKeys: [...r.launch.connectionKeys] } : {}), ...(r.launch.settingSources ? { settingSources: r.launch.settingSources } : {}), ...(r.launch.fence ? { fence: { strength: r.launch.fence.strength, ...(r.launch.fence.tempDir ? { tempDir: r.launch.fence.tempDir } : {}), ...(r.launch.fence.branch !== undefined ? { branch: r.launch.fence.branch } : {}) } } : {}) }
         : undefined;
       out.set(id, {
         workspaceId: r.workspaceId,
@@ -621,6 +624,24 @@ export function isFencedMode(mode: PermissionMode | undefined): boolean {
   return mode === 'bypassPermissions' || mode === 'auto';
 }
 
+
+/** The wmux MCP tools a fenced worker does not get, as claude names them
+ *  (`mcp__wmux__<tool>`): they run code, type into a pane, open a pane or a
+ *  remote worker, drive the desktop, or move a file in or out of the
+ *  browser, all from wmux's own processes, which the OS sandbox does not
+ *  cover. The reads, task_push and send_message stay. */
+export const WORKER_FENCE_REFUSED_WMUX_TOOLS: readonly string[] = [
+  'repl_run', 'browser_repl', 'terminal_send', 'terminal_send_key', 'surface_new', 'pane_split', 'remote_spawn', 'computer',
+  'browser_file_upload', 'browser_download', 'browser_wait_for_download', 'browser_pdf', 'browser_trace',
+].map((t) => `mcp__wmux__${t}`);
+
+/** The pipe methods behind those of WORKER_FENCE_REFUSED_WMUX_TOOLS that
+ *  main runs, which main refuses to a fenced worker's pane as well. The
+ *  others (the REPLs and the browser's file tools) run in the MCP server
+ *  itself and are refused by the fence's settings and hook only. */
+export const WORKER_FENCE_REFUSED_RPC: ReadonlySet<string> = new Set([
+  'input.send', 'input.sendKey', 'surface.new', 'pane.split', 'a2a.remote.spawn', 'computer.act',
+]);
 
 /** Top-level settings keys: a sandbox of their own, or hooks turned off. */
 export const WORKER_FENCE_REFUSED_SETTINGS_KEYS: readonly string[] = ['sandbox', 'disableAllHooks'];

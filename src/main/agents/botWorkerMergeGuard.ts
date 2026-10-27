@@ -476,7 +476,7 @@ interface FencePlan {
   ownerWorkspaceId: string | null;
   /** The task ledger's row for the task workspace (null: none). */
   facts: TaskFacts | null;
-  recorded?: { strength: WorkerFenceStrength; tempDir?: string };
+  recorded?: { strength: WorkerFenceStrength; tempDir?: string; branch?: string | null };
 }
 
 type TaskFacts = { ownerWorkspaceId?: string; gitCommonDir?: string; gitWorktreeDir?: string };
@@ -540,7 +540,7 @@ function checkFencedLine(where: string, line: string, settingsPath: string, fenc
 
 /** The launch files' record of the fence. */
 function fenceRecord(fence: WorkerFenceAttach): BotWorkerLaunchFiles['fence'] | undefined {
-  return fence.kind === 'fence' ? { strength: fence.strength, ...(fence.tempDir ? { tempDir: fence.tempDir } : {}) } : undefined;
+  return fence.kind === 'fence' ? { strength: fence.strength, ...(fence.tempDir ? { tempDir: fence.tempDir } : {}), ...(fence.branch !== undefined ? { branch: fence.branch } : {}) } : undefined;
 }
 
 function guardLaunchLine(where: string, line: string, deps: BotWorkerGuardDeps, plan: LaunchPlan): { line: string; files?: BotWorkerLaunchFiles } {
@@ -783,6 +783,14 @@ export function botWorkerSessionRecord(sessionId: string, dir: string = getWmuxD
   return r ? { ...r } : null;
 }
 
+/** A bot worker's session that runs inside the fence (full or weaker), by
+ *  its record. A record that cannot be read answers no for every session:
+ *  the fence's own settings still refuse the same tools. */
+export function isFencedBotWorkerSession(sessionId: string, dir: string = getWmuxDir()): boolean {
+  const strength = botWorkerSessionRecord(sessionId, dir)?.launch?.fence?.strength;
+  return strength === 'full' || strength === 'weaker';
+}
+
 /** A bot worker's session — every session while the record is unreadable. */
 export function isBotWorkerSession(sessionId: string, dir: string = getWmuxDir()): boolean {
   const map = loadSessions(dir);
@@ -855,7 +863,9 @@ function recordLaterFence(where: string, sessionId: string, files: BotWorkerLaun
   if (was && rank[was.strength] >= rank[fence.strength] && was.tempDir === fence.tempDir) return;
   const next = new Map(map);
   // This launch's files: the fenced ones the running claude reads.
-  next.set(sessionId, { ...rec, launch: { ...files, fence: { strength: was && rank[was.strength] > rank[fence.strength] ? was.strength : fence.strength, ...(fence.tempDir ? { tempDir: fence.tempDir } : {}) } } });
+  // The branch is the one the first fenced launch recorded.
+  const branch = was && was.strength !== 'off' && was.branch !== undefined ? was.branch : fence.branch;
+  next.set(sessionId, { ...rec, launch: { ...files, fence: { strength: was && rank[was.strength] > rank[fence.strength] ? was.strength : fence.strength, ...(fence.tempDir ? { tempDir: fence.tempDir } : {}), ...(branch !== undefined ? { branch } : {}) } } });
   try {
     saveSessions(dir, next);
   } catch (err) {

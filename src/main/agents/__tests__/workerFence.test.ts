@@ -8,6 +8,7 @@ import {
   mergeWorkerFenceSettings,
   workerFenceCredentialPaths,
   workerFenceGitDenies,
+  workerFenceGitWrites,
   workerFenceHookCommand,
   workerFenceLaunch,
   workerFencePermissionDenies,
@@ -15,6 +16,7 @@ import {
   WORKER_FENCE_FILE_ALLOW_RULE,
   WORKER_FENCE_REFUSED_PERMISSION_KEYS,
   WORKER_FENCE_REFUSED_SETTINGS_KEYS,
+  WORKER_FENCE_REFUSED_WMUX_TOOLS,
   type WorkerFenceInput,
 } from '../workerFence';
 import { WORKER_GATE_TIMEOUT_S } from '../workerToolGate';
@@ -56,8 +58,8 @@ describe('the git denies', () => {
     const d = workerFenceGitDenies(input());
     for (const p of [
       g('objects', 'pack'), g('packed-refs'), g('refs', 'remotes'), g('refs', 'tags'), g('refs', 'replace'), g('refs', 'notes'), g('HEAD'), g('index'),
-      g('hooks'), g('config'), g('info'), g('objects', 'info'), g('modules'), g('shallow'), g('reftable'),
-      g('worktrees', 'task-1', 'config.worktree'), g('worktrees', 'task-1', 'commondir'), g('worktrees', 'task-1', 'gitdir'), g('worktrees', 'task-2'),
+      g('hooks'), g('config'), g('info'), g('objects', 'info'), g('modules'), g('shallow'), g('reftable'), g('remotes'), g('branches'),
+      g('worktrees', 'task-1', 'config.worktree'), g('worktrees', 'task-1', 'commondir'), g('worktrees', 'task-1', 'gitdir'), g('worktrees', 'task-1', 'HEAD'), g('worktrees', 'task-2'),
     ]) {
       expect(d, p).toContain(p);
     }
@@ -72,6 +74,27 @@ describe('the git denies', () => {
     expect(d).toContain(g('HEAD'));
     expect(d).toContain(g('config.worktree'));
     expect(d).toContain(g('worktrees', 'task-2'));
+    // Linked worktrees made after launch too.
+    expect(d).toContain(g('worktrees'));
+  });
+
+  it('a detached linked worktree keeps its own HEAD writable', () => {
+    expect(workerFenceGitDenies(input({ ownBranch: null }))).not.toContain(g('worktrees', 'task-1', 'HEAD'));
+  });
+});
+
+describe('the git writes', () => {
+  it('a linked worktree: the objects, its own folder, and its branch\'s ref and reflog folder', () => {
+    expect(workerFenceGitWrites(input())).toEqual([g('objects'), g('worktrees', 'task-1'), g('refs', 'heads', 'wmux'), g('logs', 'refs', 'heads', 'wmux')]);
+    expect(workerFenceGitWrites(input({ ownBranch: 'a/b/c' })).slice(2)).toEqual([g('refs', 'heads', 'a', 'b'), g('logs', 'refs', 'heads', 'a', 'b')]);
+    // A branch with no `/`: refs/heads itself (the other branches' ref files stay denied).
+    expect(workerFenceGitWrites(input({ ownBranch: 'task' })).slice(2)).toEqual([g('refs', 'heads'), g('logs', 'refs', 'heads')]);
+    expect(workerFenceGitWrites(input({ ownBranch: null }))).toEqual([g('objects'), g('worktrees', 'task-1')]);
+    expect(() => workerFenceGitWrites(input({ ownBranch: '../x' }))).toThrow(/refs\/heads/);
+  });
+
+  it('the main checkout: its git dir, which is the common dir', () => {
+    expect(workerFenceGitWrites(input({ isLinkedWorktree: false, ownWorktreeName: null }))).toEqual([GIT]);
   });
 
   it('denies every other branch by its own ref file and leaves the worker\'s own open', () => {
@@ -98,7 +121,8 @@ describe('the fence settings', () => {
     expect(weaker).toBe(false);
     const sb = sandboxOf(settings);
     expect(sb).toMatchObject({ enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false, enableWeakerNestedSandbox: false });
-    expect(sb.filesystem.allowWrite).toEqual([WT, TMP, GIT, '/private/tmp/wmux-test-*']);
+    expect(sb.filesystem.allowWrite).toEqual([WT, TMP, ...workerFenceGitWrites(input()), '/private/tmp/wmux-test-*']);
+    expect(sb.filesystem.allowWrite).not.toContain(GIT);
     expect(sb.filesystem.denyWrite).toEqual([...workerFenceWorktreeDenies(WT, true), ...workerFenceGitDenies(input())]);
     for (const p of [['.claude', 'settings.json'], ['.claude', 'settings.local.json'], ['.mcp.json'], ['.git']]) expect(sb.filesystem.denyWrite).toContain(path.join(WT, ...p));
     // Instructions stay writable: repositories track them, and git rewrites them.
@@ -116,6 +140,28 @@ describe('the fence settings', () => {
     });
     expect(settings.disableAllHooks).toBe(false);
     expect(settings.hooks).toEqual({ PreToolUse: [{ matcher: '.*', hooks: [{ type: 'command', command: HOOK, timeout: WORKER_GATE_TIMEOUT_S }] }] });
+  });
+
+  it('denies the wmux tools that act outside the sandbox, with or without it', () => {
+    for (const capable of [true, false]) {
+      const deny = (buildWorkerFence(input({ platformCapable: capable })).settings.permissions as { deny: string[] }).deny;
+      for (const t of ['repl_run', 'browser_repl', 'terminal_send', 'terminal_send_key', 'surface_new', 'pane_split', 'remote_spawn', 'computer', 'browser_file_upload', 'browser_download', 'browser_pdf']) {
+        expect(deny).toContain(`mcp__wmux__${t}`);
+      }
+      for (const t of ['task_push', 'send_message', 'terminal_read', 'browser_snapshot']) expect(deny).not.toContain(`mcp__wmux__${t}`);
+    }
+    expect(WORKER_FENCE_REFUSED_WMUX_TOOLS.every((t) => t.startsWith('mcp__wmux__'))).toBe(true);
+  });
+
+  it('keeps only the git denies keepGitDeny keeps (Linux: the paths that exist)', () => {
+    const kept = new Set([g('config'), g('refs', 'heads', 'main')]);
+    const deny = sandboxOf(buildWorkerFence(input({ keepGitDeny: (p) => kept.has(p) })).settings).filesystem.denyWrite;
+    expect(deny).toContain(g('config'));
+    expect(deny).toContain(g('refs', 'heads', 'main'));
+    expect(deny).not.toContain(g('refs', 'heads', 'wmux', 'task-2'));
+    expect(deny).not.toContain(g('packed-refs'));
+    // The worktree's own denies are not git's.
+    expect(deny).toContain(path.join(WT, '.mcp.json'));
   });
 
   it('sandboxed commands run without asking only in bypass mode', () => {

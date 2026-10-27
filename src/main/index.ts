@@ -272,6 +272,7 @@ import { broadcastMetadataUpdate, currentPrOfPty, getCwd, resetPollCacheOnRender
 import { broadcastSettledIdle } from './notification/turnSettle';
 import { readOrchRole } from '../shared/orchestratorRole';
 import { initLogSink, isBrokenPipeError, logLine, stdioErrorsConsumed } from './util/logSink';
+import { isFencedBotWorkerSession } from './agents/botWorkerMergeGuard';
 
 markBoot('imports-done');
 
@@ -1686,6 +1687,7 @@ const legacyTrafficCounter = new LegacyTrafficCounter({
   },
 });
 rpcRouter.setLegacyTrafficCounter(legacyTrafficCounter);
+rpcRouter.setFencedWorkerPty((ptyId) => isFencedBotWorkerSession(ptyId));
 
 // Phase 2.2 pre-commit 6: enforcement mode + approval queue.
 // (`isDevEnvironment` / `enforcementMode` are resolved above, before the RPC

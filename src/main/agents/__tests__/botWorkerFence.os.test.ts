@@ -11,6 +11,7 @@ import {
   guardRefireLine,
   guardSessionLaunch,
   guardedLaunchOf,
+  isFencedBotWorkerSession,
   noteBotWorkerSession,
   noteGuardedLaunchTyped,
   reloadBotWorkerSessionsForTests,
@@ -282,6 +283,64 @@ describe.skipIf(isWin)('a resume and a re-fire keep the fence', () => {
       expect(hooksOf(s).PreToolUse[0].hooks[0].command).toContain(`"${files.fence!.tempDir}"`);
       expect(line.startsWith(`${EXE} `)).toBe(true);
     }
+  });
+
+  it('the branch is the one the first launch recorded: a HEAD on another branch refuses the resume and the re-fire', () => {
+    const first = create(LINE);
+    expect(guardedLaunchOf(first).launch!.fence!.branch).toBe('wmux/task-1');
+    noteBotWorkerSession('pty-1', 'ws-task', dir, guardedLaunchOf(first));
+    reloadBotWorkerSessionsForTests();
+    // The pipe refuses this pane what its fence refuses (RpcRouter.ts).
+    expect(isFencedBotWorkerSession('pty-1', dir)).toBe(true);
+    expect(isFencedBotWorkerSession('pty-2', dir)).toBe(false);
+    git(wt, 'checkout', '-q', 'other');
+    expect(refusalOf(() => guardSessionLaunch('pty-1', RESUME, deps()))).toMatch(/worker fence: the worktree is on branch other, not on branch wmux\/task-1 it started on/);
+    expect(refusalOf(() => guardRefireLine('pty-1', LINE, deps()))).toMatch(/worker fence: the worktree is on branch other/);
+    git(wt, 'checkout', '-q', '--detach');
+    expect(refusalOf(() => guardSessionLaunch('pty-1', RESUME, deps()))).toMatch(/worker fence: the worktree is on a detached HEAD, not on branch wmux\/task-1/);
+    git(wt, 'checkout', '-q', 'wmux/task-1');
+    const s = settingsOf(guardSessionLaunch('pty-1', RESUME, deps()));
+    const fsx = (s.sandbox as { filesystem: { allowWrite: string[]; denyWrite: string[] } }).filesystem;
+    const common = fs.realpathSync(path.join(repo, '.git'));
+    expect(fsx.allowWrite).toContain(path.join(common, 'refs', 'heads', 'wmux'));
+    expect(fsx.allowWrite).not.toContain(common);
+    expect(fsx.denyWrite).toContain(path.join(common, 'worktrees', 'task-1', 'HEAD'));
+    expect(fsx.denyWrite).toContain(path.join(common, 'refs', 'heads', 'other'));
+  });
+
+  it('a fenced record with no branch refuses the resume', () => {
+    const first = create(LINE);
+    const launch = guardedLaunchOf(first);
+    noteBotWorkerSession('pty-1', 'ws-task', dir, { ...launch, launch: { ...launch.launch!, fence: { strength: 'full', tempDir: launch.launch!.fence!.tempDir } } });
+    reloadBotWorkerSessionsForTests();
+    expect(refusalOf(() => guardSessionLaunch('pty-1', RESUME, deps()))).toMatch(/worker fence: the worker's branch was not recorded at its first launch/);
+  });
+
+  it('a branch kept only in packed-refs: its ref and reflog folders are made before launch', () => {
+    git(repo, 'pack-refs', '--all');
+    const common = fs.realpathSync(path.join(repo, '.git'));
+    fs.rmSync(path.join(common, 'logs', 'refs', 'heads', 'wmux'), { recursive: true, force: true });
+    expect(fs.existsSync(path.join(common, 'refs', 'heads', 'wmux', 'task-1'))).toBe(false);
+    create(LINE);
+    expect(fs.statSync(path.join(common, 'refs', 'heads', 'wmux')).isDirectory()).toBe(true);
+    expect(fs.statSync(path.join(common, 'logs', 'refs', 'heads', 'wmux')).isDirectory()).toBe(true);
+  });
+
+  it('on Linux the git denies name only paths that exist; elsewhere all of them', () => {
+    git(repo, 'pack-refs', '--all');
+    const common = fs.realpathSync(path.join(repo, '.git'));
+    const denyOf = (platform: NodeJS.Platform) => {
+      const s = settingsOf(create(LINE, deps({ fence: { runtime: RUNTIME, home, env: {}, platform, claudeTempRoots: [] } }))!.initialCommand!);
+      return (s.sandbox as { filesystem: { denyWrite: string[] } }).filesystem.denyWrite;
+    };
+    const packedOnly = path.join(common, 'refs', 'heads', 'other');
+    expect(denyOf('darwin')).toContain(packedOnly);
+    expect(denyOf('darwin')).toContain(path.join(common, 'shallow'));
+    const linux = denyOf('linux');
+    expect(linux).not.toContain(packedOnly);
+    expect(linux).not.toContain(path.join(common, 'shallow'));
+    expect(linux).toContain(path.join(common, 'config'));
+    expect(linux).toContain(path.join(common, 'packed-refs'));
   });
 
   it('never weaker than its first launch: the switch turned off later, or the platform no longer capable', async () => {
