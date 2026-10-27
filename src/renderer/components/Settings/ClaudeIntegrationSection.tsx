@@ -229,7 +229,7 @@ function UsageCard({
 /**
  * Scheduled runs: hold a turn that failed on a temporary provider error and
  * continue it once. The daemon keeps this (runs happen with no window open),
- * so the row reads and writes it there; it is hidden without an answer.
+ * so the row reads and writes it there; the switch is disabled until it answers.
  */
 function ScheduledRetryRow({ t }: { t: (key: string, vars?: Record<string, string | number>) => string }) {
   const [on, setOn] = useState<boolean | null>(null);
@@ -242,7 +242,6 @@ function ScheduledRetryRow({ t }: { t: (key: string, vars?: Record<string, strin
       .catch(() => undefined);
     return () => { live = false; };
   }, []);
-  if (on === null) return null;
   const change = (next: boolean): void => {
     setOn(next);
     const seq = ++latest.current;
@@ -257,7 +256,12 @@ function ScheduledRetryRow({ t }: { t: (key: string, vars?: Record<string, strin
       label={t('claudeIntegration.scheduledRetry')}
       description={t('claudeIntegration.scheduledRetryDesc')}
     >
-      <Switch checked={on} onCheckedChange={change} aria-label={t('claudeIntegration.scheduledRetry')} />
+      <Switch
+        checked={on ?? true}
+        disabled={on === null}
+        onCheckedChange={change}
+        aria-label={t('claudeIntegration.scheduledRetry')}
+      />
     </SettingRow>
   );
 }
