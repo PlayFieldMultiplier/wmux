@@ -170,10 +170,13 @@ function bakPathFor(targetPath: string): string {
  * caller with no primary file at all, which is how a half-written
  * pairing survives a restart (#658).
  *
- * Only the final commit rename is retried, and only on win32 — POSIX
- * rename does not fail this way, so behaviour off Windows is
- * byte-identical to before. Total added stall is capped at 310ms,
- * which the sync path (daemon event loop) can absorb.
+ * The commit rename and the primary → `.bak` rotation before it are
+ * retried, and only on win32 — POSIX rename does not fail this way, so
+ * behaviour off Windows is byte-identical to before. Each rename can add
+ * up to 310ms, so one sync write can block its thread for up to ~620ms.
+ * The sync callers are the daemon's JSON stores and, through `text.ts`,
+ * Electron main (scrollback save, bot room log, handoff queue); the
+ * per-process budget below caps their combined stall.
  */
 const RENAME_RETRY_DELAYS_MS: readonly number[] = [10, 20, 40, 80, 160];
 
@@ -200,9 +203,10 @@ function clampRetryDelays(delays: readonly number[]): readonly number[] {
 }
 
 // Process-wide sliding budget for the SYNC retry sleeps. The per-call cap
-// bounds one write, but the daemon has many sync stores (peers, inbox, state
-// writers) and AV contention hits them together — without a shared budget a
-// batch flush could stack per-call stalls into seconds of blocked event loop.
+// bounds one rename (a write does two), but the daemon has many sync stores
+// (peers, inbox, state writers) and Electron main has the sync text writers,
+// and AV contention hits them together — without a shared budget a batch
+// flush could stack per-call stalls into seconds of blocked event loop.
 // When the budget is spent, writes fail immediately with the original error,
 // exactly as before this retry existed.
 const SYNC_RETRY_BUDGET_MS = 1_000;
@@ -238,7 +242,12 @@ function sleepDefault(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function warnRenameRetriesExhausted(targetPath: string, attempts: number, err: unknown): void {
+function warnRenameRetriesExhausted(
+  targetPath: string,
+  attempts: number,
+  err: unknown,
+  step: 'commit' | 'backup',
+): void {
   const code = (err as NodeJS.ErrnoException | undefined)?.code ?? 'unknown';
   // Only claim AV when the final error is still in the transient family — a
   // failure that CHANGED code mid-retry (say EPERM → ENOSPC) is a different
@@ -246,10 +255,14 @@ function warnRenameRetriesExhausted(targetPath: string, attempts: number, err: u
   const hint = isTransientRenameError(err)
     ? ' (antivirus may be holding the file)'
     : '';
+  // A backup failure does not lose the write: the caller warns and commits
+  // anyway, so say so rather than read like the data never landed.
+  const what = step === 'backup' ? 'Backup rename' : 'Commit rename';
+  const outcome = step === 'backup' ? ' The write continues without a fresh backup.' : '';
   // eslint-disable-next-line no-console
   console.warn(
-    `[atomicWrite] Commit rename to "${targetPath}" still failing after ` +
-      `${attempts} attempts, last code ${code}${hint}.`,
+    `[atomicWrite] ${what} to "${targetPath}" still failing after ` +
+      `${attempts} attempts, last code ${code}${hint}.${outcome}`,
   );
 }
 
@@ -258,10 +271,11 @@ function warnRenameRetriesExhausted(targetPath: string, attempts: number, err: u
  * On final failure the rename's own error is rethrown unchanged — callers
  * branch on `err.code`. A throwing injected sleeper cannot mask it.
  */
-function commitRenameSync(
+export function commitRenameSync(
   tmp: string,
   targetPath: string,
   policy: RenameRetryPolicy | undefined,
+  step: 'commit' | 'backup' = 'commit',
 ): void {
   const delays = clampRetryDelays(policy?.delaysMs ?? RENAME_RETRY_DELAYS_MS);
   const sleep = policy?.sleepSync ?? sleepSyncDefault;
@@ -277,7 +291,7 @@ function commitRenameSync(
         isTransientRenameError(err) &&
         takeSyncRetryBudget(delays[i]);
       if (!retryable) {
-        if (i > 0) warnRenameRetriesExhausted(targetPath, i + 1, err);
+        if (i > 0) warnRenameRetriesExhausted(targetPath, i + 1, err, step);
         throw err;
       }
       try {
@@ -289,10 +303,11 @@ function commitRenameSync(
   }
 }
 
-async function commitRename(
+export async function commitRename(
   tmp: string,
   targetPath: string,
   policy: RenameRetryPolicy | undefined,
+  step: 'commit' | 'backup' = 'commit',
 ): Promise<void> {
   const delays = clampRetryDelays(policy?.delaysMs ?? RENAME_RETRY_DELAYS_MS);
   const sleep = policy?.sleep ?? sleepDefault;
@@ -307,7 +322,7 @@ async function commitRename(
         i < delays.length &&
         isTransientRenameError(err);
       if (!retryable) {
-        if (i > 0) warnRenameRetriesExhausted(targetPath, i + 1, err);
+        if (i > 0) warnRenameRetriesExhausted(targetPath, i + 1, err, step);
         throw err;
       }
       try {
@@ -328,7 +343,7 @@ async function commitRename(
  * primary still being absent: if a concurrent writer recreated it during the
  * retry window, their newer data must not be clobbered with our old backup.
  */
-function rollbackBakSync(bak: string, targetPath: string): void {
+export function rollbackBakSync(bak: string, targetPath: string): void {
   try {
     if (fs.existsSync(targetPath) || !fs.existsSync(bak)) return;
     fs.renameSync(bak, targetPath);
@@ -341,7 +356,7 @@ function rollbackBakSync(bak: string, targetPath: string): void {
   }
 }
 
-async function rollbackBak(bak: string, targetPath: string): Promise<void> {
+export async function rollbackBak(bak: string, targetPath: string): Promise<void> {
   try {
     await fsp.access(targetPath);
     return; // primary exists again — leave it alone
@@ -370,7 +385,7 @@ async function rollbackBak(bak: string, targetPath: string): Promise<void> {
 // the sync variant blocks the loop so it cannot interleave with itself).
 const asyncWriteChains = new Map<string, Promise<void>>();
 
-function chainAsyncWrite(targetPath: string, run: () => Promise<void>): Promise<void> {
+export function chainAsyncWrite(targetPath: string, run: () => Promise<void>): Promise<void> {
   const prev = asyncWriteChains.get(targetPath) ?? Promise.resolve();
   const next = prev.catch(() => undefined).then(run);
   asyncWriteChains.set(targetPath, next);
@@ -565,7 +580,7 @@ export async function atomicWriteJSON(
       //    with the same policy; if it still fails we keep the historical
       //    warn-and-continue (availability over the backup guarantee).
       try {
-        await commitRename(targetPath, bak, opts.renameRetry);
+        await commitRename(targetPath, bak, opts.renameRetry, 'backup');
         movedToBak = true;
       } catch (err) {
         const code = (err as NodeJS.ErrnoException).code;
@@ -754,7 +769,7 @@ export function atomicWriteJSONSync(
     let movedToBak = false;
     if (fs.existsSync(targetPath)) {
       try {
-        commitRenameSync(targetPath, bak, opts.renameRetry);
+        commitRenameSync(targetPath, bak, opts.renameRetry, 'backup');
         movedToBak = true;
       } catch (bakErr) {
         // eslint-disable-next-line no-console
