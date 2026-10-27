@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+// @wmux-lane unit
+// 'win32' here is only the platform value given to the mocked electronAPI; nothing reaches the OS.
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -56,6 +58,16 @@ describe('terminal engine setting', () => {
     expect(container.textContent).toContain('settings.terminalEngineRestartDaemon');
     set.mockResolvedValue(initial); await choose('node');
     expect(container.textContent).not.toContain('settings.terminalEngineRestartDaemon');
+  });
+  it('names Rust as the default on Windows and as experimental elsewhere', async () => {
+    await render();
+    const rust = () => select().querySelector('option[value="rust"]')?.textContent;
+    expect(rust()).toBe('settings.terminalEngineRust');
+    act(() => root.unmount());
+    root = createRoot(container);
+    (window.electronAPI as unknown as { platform: string }).platform = 'win32';
+    await render();
+    expect(rust()).toBe('settings.terminalEngineRustDefault');
   });
   it('disables unavailable Rust, while keeping Node selectable', async () => {
     get.mockResolvedValue({ ...initial, selected: 'rust', rustAvailable: false });

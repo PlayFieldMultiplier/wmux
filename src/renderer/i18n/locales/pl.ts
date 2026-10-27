@@ -188,6 +188,7 @@ export const pl = {
   'settings.terminalEngine': "Silnik terminala",
   'settings.terminalEngineDesc': "PTY i bufor wyjścia dla sesji zwykłych i zespołowych. Zmiany obowiązują po ponownym uruchomieniu procesu obsługującego terminal.",
   'settings.terminalEngineRust': "Rust (eksperymentalny)",
+  'settings.terminalEngineRustDefault': "Rust (domyślny)",
   'settings.terminalEngineCurrent': "Bieżący silnik:",
   'settings.terminalEngineUnknown': "Nieznany",
   'settings.terminalEngineOverride': "Zmienna WMUX_TERMINAL_CORE nadpisuje to ustawienie. Usuń zmienną środowiskową i uruchom ponownie aplikację oraz usługę terminala, aby użyć zapisanego wyboru.",

@@ -55,7 +55,9 @@ export function TerminalEngineSetting() {
       <Select value={settings?.selected ?? 'node'} disabled={!settings || busy || settings.environmentOverride}
         onChange={(event) => void save(event.target.value as TerminalEngine)}>
         <option value="node">Node</option>
-        <option value="rust" disabled={!settings?.rustAvailable}>{t('settings.terminalEngineRust')}</option>
+        <option value="rust" disabled={!settings?.rustAvailable}>
+          {t(window.electronAPI?.platform === 'win32' ? 'settings.terminalEngineRustDefault' : 'settings.terminalEngineRust')}
+        </option>
       </Select>
     </SettingRow>
     <SettingNote role="status" aria-live="polite">

@@ -5,8 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../nativeTerminalCore', () => ({ loadNativeTerminalCore: vi.fn() }));
 let dir: string;
-beforeEach(() => {
+beforeEach(async () => {
   vi.resetModules();
+  // No Rust module unless a test says so, so the default is Node on every host.
+  const native = await import('../nativeTerminalCore');
+  vi.mocked(native.loadNativeTerminalCore).mockImplementation(() => { throw new Error('missing'); });
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-engine-'));
   vi.spyOn(os, 'homedir').mockReturnValue(dir);
   vi.stubEnv('WMUX_TERMINAL_CORE', undefined);
@@ -14,13 +17,33 @@ beforeEach(() => {
 });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); fs.rmSync(dir, { recursive: true, force: true }); });
 
+describe('default terminal engine', () => {
+  it('is Rust on Windows when the Rust module loads, Node otherwise', async () => {
+    const settings = await import('../terminalCoreSettings');
+    expect(settings.defaultTerminalEngine('win32', () => true)).toBe('rust');
+    expect(settings.defaultTerminalEngine('win32', () => false)).toBe('node');
+    expect(settings.defaultTerminalEngine('darwin', () => true)).toBe('node');
+    expect(settings.defaultTerminalEngine('linux', () => true)).toBe('node');
+  });
+  it('applies only when no valid choice is saved; a saved Node stays Node', async () => {
+    const settings = await import('../terminalCoreSettings');
+    const file = path.join(dir, 'engine.json');
+    expect(settings.readTerminalEngine(file, () => 'rust')).toBe('rust');
+    fs.writeFileSync(file, '{"engine":"node"}');
+    expect(settings.readTerminalEngine(file, () => 'rust')).toBe('node');
+    fs.writeFileSync(file, '{"engine":"other"}');
+    expect(settings.readTerminalEngine(file, () => 'rust')).toBe('rust');
+  });
+});
+
 describe('persisted terminal engine', () => {
-  it('keeps Node as the default when the packaged Rust module is available', async () => {
+  it('defaults to Rust on Windows and Node elsewhere when the packaged Rust module is available', async () => {
     const native = await import('../nativeTerminalCore');
     vi.mocked(native.loadNativeTerminalCore).mockReturnValue({} as never);
     const settings = await import('../terminalCoreSettings');
+    const engine = process.platform === 'win32' ? 'rust' : 'node';
     expect(settings.terminalCoreRuntime()).toEqual({
-      requested: 'node', effective: 'node', rustAvailable: true, environmentOverride: false,
+      requested: engine, effective: engine, rustAvailable: true, environmentOverride: false,
     });
   });
   it('keeps the live host unchanged until the next boot, in both directions', async () => {

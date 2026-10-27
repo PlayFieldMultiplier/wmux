@@ -27,12 +27,27 @@ export function terminalCoreSettingsPath(): string {
   return path.join(os.homedir(), `.wmux${dataSuffix()}`, 'terminal-core.json');
 }
 
-export function readTerminalEngine(file = terminalCoreSettingsPath()): TerminalEngine {
+/** The engine when no valid choice is saved: Rust on Windows when this build
+ * ships a loadable Rust module (it measured flatter memory and no worse latency
+ * than Node there), Node everywhere else. */
+export function defaultTerminalEngine(
+  platform: NodeJS.Platform = process.platform,
+  rustAvailable: () => boolean = rustTerminalCoreAvailable,
+): TerminalEngine {
+  return platform === 'win32' && rustAvailable() ? 'rust' : 'node';
+}
+
+export function readTerminalEngine(
+  file = terminalCoreSettingsPath(),
+  fallback: () => TerminalEngine = defaultTerminalEngine,
+): TerminalEngine {
+  let engine: unknown;
   try {
-    return JSON.parse(fs.readFileSync(file, 'utf8'))?.engine === 'rust' ? 'rust' : 'node';
+    engine = JSON.parse(fs.readFileSync(file, 'utf8'))?.engine;
   } catch {
-    return 'node';
+    return fallback();
   }
+  return engine === 'rust' || engine === 'node' ? engine : fallback();
 }
 
 export function writeTerminalEngine(engine: unknown, file = terminalCoreSettingsPath()): void {

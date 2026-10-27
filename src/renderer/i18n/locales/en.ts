@@ -188,6 +188,7 @@ export const en = {
   'settings.terminalEngine': "Terminal engine",
   'settings.terminalEngineDesc': "PTY and output buffer for ordinary and team sessions. Changes apply after the terminal host restarts.",
   'settings.terminalEngineRust': "Rust (experimental)",
+  'settings.terminalEngineRustDefault': "Rust (default)",
   'settings.terminalEngineCurrent': "Current engine:",
   'settings.terminalEngineUnknown': "Unknown",
   'settings.terminalEngineOverride': "WMUX_TERMINAL_CORE overrides this setting. Remove the environment variable and restart the app and terminal service to use the saved choice.",
