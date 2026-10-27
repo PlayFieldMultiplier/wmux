@@ -33,8 +33,14 @@ export interface ToolRefusalTrackerDeps {
 export class ToolRefusalTracker {
   private readonly current = new Map<string, { path: string; refusal: ToolRefusal | null }>();
   private warned = false;
+  private trusted: (sessionId: string, path: string) => boolean = () => true;
 
   constructor(private readonly deps: ToolRefusalTrackerDeps) {}
+
+  /** Whether `path` is the pane's own transcript; asked of a refusal only. */
+  setTrusted(fn: (sessionId: string, path: string) => boolean): void {
+    this.trusted = fn;
+  }
 
   noteLine(sessionId: string, path: string, line: string): void {
     let state = this.current.get(sessionId);
@@ -57,6 +63,7 @@ export class ToolRefusalTracker {
         this.deps.log?.(`[toolRefusal] Claude Code ${outcome.version} wrote a tool result without its permission decision; refusals are not read from it`);
       }
     }
+    if (outcome.type === 'refused' && !this.trusted(sessionId, path)) return;
     // Any later tool result moves past a refusal, one it cannot read included.
     this.set(sessionId, outcome.type === 'refused' ? outcome.refusal : null);
   }

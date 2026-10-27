@@ -61,7 +61,16 @@ describe('ToolRefusalTracker', () => {
     expect(sent).toEqual([['p1', 'toolu_1'], ['p1', null]]);
   });
 
-  it('forgets a refusal once the watcher stops reading the pane (its agent exited)', () => {
+  it('takes a refusal only from a transcript it trusts as the pane\'s own', () => {
+    const { t, sent } = rig();
+    t.setTrusted((_id, p) => p === '/t/own.jsonl');
+    t.noteLine('p1', '/t/other.jsonl', reject('toolu_1'));
+    expect(t.get('p1')).toBeNull();
+    t.noteLine('p1', '/t/own.jsonl', reject('toolu_2'));
+    expect(sent).toEqual([['p1', 'toolu_2']]);
+  });
+
+  it('reads the lines at once on a Stop, and forgets a refusal once the watcher stops reading the pane (its agent exited)', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tx-refusal-'));
     try {
       const file = path.join(dir, 's.jsonl');
@@ -81,7 +90,7 @@ describe('ToolRefusalTracker', () => {
       });
       watcher.tick();
       fs.appendFileSync(file, `${reject('toolu_1')}\n`);
-      watcher.tick();
+      watcher.readLinesNow('pty-1');
       expect(t.get('pty-1')?.toolUseId).toBe('toolu_1');
       alive = false;
       watcher.tick();

@@ -14,14 +14,15 @@ import { DaemonClient } from '../DaemonClient';
 const REFUSAL = { toolUseId: 'toolu_1', kind: 'hook', source: 'hook', reasonCode: 'hook:PreToolUse', at: 5 };
 
 describe('DaemonClient tool refusals', () => {
-  it('keeps what agent.refusal reports with no listener; null and a malformed refusal clear or change nothing', () => {
+  it('keeps what agent.refusal reports with no listener; null or a refusal it cannot read clears it', () => {
     const client = new DaemonClient('unused', 'token');
     const deliver = (data: unknown) => (client as unknown as { handleControlMessage(line: string): void })
       .handleControlMessage(JSON.stringify({ type: 'agent.refusal', sessionId: 'pty-1', data }));
     deliver({ refusal: REFUSAL });
     expect(client.toolRefusalOf('pty-1')).toEqual(REFUSAL);
     deliver({ refusal: { ...REFUSAL, kind: 'nope' } });
-    expect(client.toolRefusalOf('pty-1')).toEqual(REFUSAL);
+    expect(client.toolRefusalOf('pty-1')).toBeNull();
+    deliver({ refusal: REFUSAL });
     deliver({ refusal: null });
     expect(client.toolRefusalOf('pty-1')).toBeNull();
   });

@@ -65,13 +65,15 @@ export function factFromBusEvent(
 ): FactDraft | null {
   if (ev.type === 'agent.lifecycle') {
     if (ev.decision !== 'emit' || !ev.ptyId) return null;
-    // A turn end says something only when its last tool result was a refusal.
-    const stoppedAfter = ev.kind === 'agent.stop' && ev.source === 'hook' ? stoppedOn(ev.ptyId) : null;
-    if (ev.kind !== 'agent.awaiting_input' && !stoppedAfter) return null;
+    const turnEnd = ev.kind === 'agent.stop' && ev.source === 'hook';
+    if (ev.kind !== 'agent.awaiting_input' && !turnEnd) return null;
     const task = findTask(ev.workspaceId);
     if (!task || !OPEN_TASK.has(task.status)) return null;
     const botId = botOrigin(task);
     if (!botId) return null;
+    // A turn end says something only when its last tool result was a refusal.
+    const stoppedAfter = turnEnd ? stoppedOn(ev.ptyId) : null;
+    if (turnEnd && !stoppedAfter) return null;
     return {
       kind: stoppedAfter ? 'pane.idle' : 'pane.needs_input',
       at: ev.ts,

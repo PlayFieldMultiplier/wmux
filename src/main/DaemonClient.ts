@@ -1476,11 +1476,10 @@ export class DaemonClient extends EventEmitter {
           // Kept by the client itself: the daemon sends what it holds again
           // on subscribe, before main has a listener on a new client.
           const data = event.data as { refusal?: unknown } | null;
-          if (data?.refusal === null) this.toolRefusals.delete(event.sessionId);
-          else {
-            const refusal = parseToolRefusal(data?.refusal);
-            if (refusal) this.toolRefusals.set(event.sessionId, refusal);
-          }
+          // One it cannot read clears too: what stood before is no longer the last.
+          const refusal = parseToolRefusal(data?.refusal);
+          if (refusal) this.toolRefusals.set(event.sessionId, refusal);
+          else this.toolRefusals.delete(event.sessionId);
           break;
         }
         case 'shell.prompt': {

@@ -13,6 +13,8 @@
 // prompt still waiting for its answer (that is the pane's awaiting-input
 // state, not a refusal).
 
+import { isInjectedUserText } from '../daemon/transcript/parseEntry';
+
 /** What refused the call. */
 export type ToolRefusalKind =
   /** A permission deny rule (settings, a managed policy). */
@@ -55,6 +57,12 @@ const KINDS: ReadonlySet<string> = new Set<ToolRefusalKind>(['rule', 'hook', 'au
 const WORD_RE = /^[\x21-\x7e]{1,128}$/;
 const INTERRUPTED_PREFIX = '[Request interrupted by user';
 
+/** Text the person wrote: not Claude Code's own note after a refusal at the
+ *  prompt, nor a line it injects (a task notification, a slash command, …). */
+function isPersonText(text: string): boolean {
+  return !text.startsWith(INTERRUPTED_PREFIX) && !isInjectedUserText(text);
+}
+
 function word(v: unknown, max = 128): string | null {
   return typeof v === 'string' && v.length <= max && WORD_RE.test(v) ? v : null;
 }
@@ -88,13 +96,15 @@ export function toolOutcomeOfLine(line: string, now: number = Date.now()): Trans
   const message = isRecord(j.message) ? j.message : null;
   if (!message) return null;
   const content = message.content;
-  if (typeof content === 'string') return { type: 'prompt' };
+  if (typeof content === 'string') return isPersonText(content) ? { type: 'prompt' } : null;
   if (!Array.isArray(content)) return null;
   const results = content.filter((c): c is Record<string, unknown> => isRecord(c) && c.type === 'tool_result');
   if (results.length === 0) {
-    // Claude Code's own note after the person refused at the prompt is no prompt.
-    const texts = content.filter((c): c is Record<string, unknown> => isRecord(c) && c.type === 'text');
-    return texts.length > 0 && !texts.every((t) => typeof t.text === 'string' && t.text.startsWith(INTERRUPTED_PREFIX)) ? { type: 'prompt' } : null;
+    // An image or a file alone is a prompt too; text Claude Code wrote itself is not.
+    const parts = content.filter(isRecord);
+    const texts = parts.filter((c) => c.type === 'text');
+    const other = parts.some((c) => c.type === 'image' || c.type === 'document');
+    return other || texts.some((t) => typeof t.text === 'string' && isPersonText(t.text)) ? { type: 'prompt' } : null;
   }
   // One decision per line: with several results it belongs to none of them.
   if (results.length > 1) return { type: 'unknown', version: null };

@@ -39,6 +39,11 @@ describe('toolOutcomeOfLine', () => {
   it('Claude Code\'s note after a refusal at the prompt is no prompt; a line of several results is unknown', () => {
     const note = JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: '[Request interrupted by user for tool use]' }] } });
     expect(toolOutcomeOfLine(note)).toBeNull();
+    // Lines Claude Code writes itself are no prompt either; an image alone is one.
+    const user = (content: unknown) => JSON.stringify({ type: 'user', message: { role: 'user', content } });
+    expect(toolOutcomeOfLine(user('<task-notification>\n<task-id>a1</task-id></task-notification>'))).toBeNull();
+    expect(toolOutcomeOfLine(user([{ type: 'text', text: '<command-name>/clear</command-name>' }]))).toBeNull();
+    expect(toolOutcomeOfLine(user([{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AA==' } }]))).toEqual({ type: 'prompt' });
     const two = JSON.stringify({
       type: 'user', version: '2.1.311',
       message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_01' }, { type: 'tool_result', tool_use_id: 'toolu_02' }] },

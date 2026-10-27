@@ -320,6 +320,18 @@ export class TranscriptActivityWatcher {
     }
   }
 
+  /** Read the pane's Claude lines now, not at the next tick (its Stop hook
+   *  arrived: what the turn wrote last is handed over before the Stop is). */
+  readLinesNow(sessionId: string): void {
+    const watch = this.watches.get(sessionId);
+    if (!watch?.lines) return;
+    try {
+      this.read(sessionId, watch);
+    } catch {
+      this.dropWatch(sessionId);
+    }
+  }
+
   /** This pane's watch reads `path` and hands its lines to `onClaudeLine`. */
   readsLines(sessionId: string, path: string): boolean {
     const watch = this.watches.get(sessionId);

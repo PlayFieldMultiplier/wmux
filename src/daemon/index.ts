@@ -4451,6 +4451,16 @@ function registerRpcHandlers(
     sessionManager.on('session:destroyed', (payload: { id: string }) => tracker.drop(payload.id));
   }
   const refusals = toolRefusals;
+  // A refusal counts only from the pane's own session, read from the file its
+  // binding names, as the API-error turn end above.
+  refusals.setTrusted((id, path) => {
+    const session = sessionManager.getSession(id);
+    const binding = resolveTranscriptBinding(id);
+    if (!session || isBrainPty({ id, env: session.meta.env })) return false;
+    const agent = agentRow(binding?.agent);
+    if (!binding || !agent?.apiErrorTurnEnd || binding.transcriptPath !== path) return false;
+    return checkNativeTranscriptPath(agent.slug, path, binding.sessionId, session.meta.env).ok;
+  });
   // A Claude lead turn an Agent Teams teammate's message woke (#2494): no
   // prompt hook fires for it, so its start is read from the same tail, and the
   // pane's turn opens the way a running hook opens it. Its Stop (or a
@@ -5299,6 +5309,8 @@ function registerRpcHandlers(
       // no Chat surface open.
       onTranscriptNudge: (sessionId, kind, agentSessionId, ts, promptId) => {
         projector.nudge(sessionId, kind, agentSessionId);
+        // The turn's last lines (a refused tool call) reach the app before its Stop does.
+        if (kind === 'agent.stop') transcriptActivity?.readLinesNow(sessionId);
         // A hook-fed session's own activity line wins over the transcript.
         transcriptActivity?.noteHookSignal(sessionId, kind);
         stallWatch?.noteHookSignal(sessionId, kind);
