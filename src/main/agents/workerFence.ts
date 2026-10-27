@@ -136,7 +136,8 @@ function requireBranchPath(name: string): string[] {
   return parts;
 }
 
-function isWithin(child: string, parent: string): boolean {
+/** `child` is `parent` or inside it (both absolute, resolved). Pure. */
+export function isWithin(child: string, parent: string): boolean {
   if (child === parent) return true;
   return child.startsWith(parent.endsWith(path.sep) ? parent : parent + path.sep);
 }

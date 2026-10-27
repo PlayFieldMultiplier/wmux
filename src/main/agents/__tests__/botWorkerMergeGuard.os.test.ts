@@ -201,7 +201,8 @@ describe('which creates are a bot\'s workers: main\'s records, never the rendere
     try {
       const opts = { initialCommand: LINE, fanoutTaskOf: 'ws-owner', fanoutOrigin: { kind: 'pane', paneId: 'p1' }, cwd: '/w/task/', workspaceId: 'ws-task' };
       const worker = botWorkerForCreate(opts, NOT_BOT);
-      expect(worker).toEqual({ workspaceId: 'ws-task', strict: true });
+      // The owner workspace is main's in-flight record's (the worker fence's off switch).
+      expect(worker).toEqual({ workspaceId: 'ws-task', strict: true, ownerWorkspaceId: 'ws-owner' });
       const guarded = withBotWorkerMergeGuard(opts, worker, { dir, ...mcp() })!.initialCommand!;
       const files = strictFiles(guarded);
       expect(guarded).toBe(`claude --settings="${files.settings}" --mcp-config="${files.mcp}" --strict-mcp-config --dangerously-skip-permissions "$(cat '/w/.wtask/prompt.md')"`);

@@ -2,7 +2,7 @@
 // merge-lane guard's own stages (botWorkerMergeGuard.ts): the settings file
 // it writes, what refuses a launch, a resume and a re-fire, the platform's
 // strength, the off switch and the self-test.
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -18,6 +18,8 @@ import {
 } from '../botWorkerMergeGuard';
 import {
   __resetWorkerFenceSupportForTesting,
+  WORKER_FENCE_SELF_TEST_RETRY_MS,
+  fenceLauncher,
   linePermissionMode,
   readWorktreeGitFacts,
   runWorkerFenceSelfTest,
@@ -158,8 +160,31 @@ describe.skipIf(isWin)('a fenced launch', () => {
       expect(guardedLaunchOf(create(line)).launch?.fence, line).toBeUndefined();
     }
     expect(linePermissionMode('claude --permission-mode auto')).toBe('auto');
+    // The skip flag wins over a later mode, as it does for claude.
+    expect(linePermissionMode('claude --dangerously-skip-permissions --permission-mode default')).toBe('bypassPermissions');
     expect(linePermissionMode('claude --permission-mode=bypassPermissions')).toBe('bypassPermissions');
     expect(settingsOf(create('claude --permission-mode auto -p hi')!.initialCommand!)).toHaveProperty('sandbox');
+  });
+
+  it('a line with no mode flag is fenced when its settings start it unattended', () => {
+    fs.mkdirSync(path.join(wt, '.claude'));
+    fs.writeFileSync(path.join(wt, '.claude', 'settings.local.json'), JSON.stringify({ permissions: { defaultMode: 'bypassPermissions' } }));
+    expect(settingsOf(create('claude -p hi')!.initialCommand!)).toHaveProperty('sandbox');
+    fs.unlinkSync(path.join(wt, '.claude', 'settings.local.json'));
+    fs.mkdirSync(path.join(home, '.claude'));
+    fs.writeFileSync(path.join(home, '.claude', 'settings.json'), JSON.stringify({ permissions: { defaultMode: 'auto' } }));
+    expect(settingsOf(create('claude -p hi')!.initialCommand!)).toHaveProperty('sandbox');
+  });
+
+  it('a claude whose path a shell would split runs through a plain link to it', () => {
+    const spaced = path.join(root, 'Application Support', 'bin', 'claude');
+    const link = fenceLauncher(dir, spaced)!;
+    expect(link).toMatch(/\/factory\/claude-bin\/[0-9a-f]{12}\/claude$/);
+    expect(fs.readlinkSync(link)).toBe(spaced);
+    expect(fenceLauncher(dir, spaced)).toBe(link);
+    expect(fenceLauncher(dir, EXE)).toBe(EXE);
+    const line = create(LINE, deps({ fenceSupport: { ...FULL, exe: spaced } }))!.initialCommand!;
+    expect(line.startsWith(`${link} --settings="`)).toBe(true);
   });
 });
 
@@ -249,13 +274,21 @@ describe.skipIf(isWin)('a resume and a re-fire keep the fence', () => {
     expect(refusalOf(() => guardSessionLaunch('pty-1', RESUME, deps({ fenceSupport: WEAK })))).toMatch(/worker fence: this worker started inside the full fence, which cannot run now/);
   });
 
-  it('a session that started with the fence off is fenced again once it is back on', async () => {
+  it('a session that started with the fence off is fenced again once it is back on, and stays fenced', async () => {
     await setWorkerFenceOff('ws-bot', true, dir);
     const first = create(LINE);
     expect(guardedLaunchOf(first).launch?.fence).toEqual({ strength: 'off' });
     noteBotWorkerSession('pty-1', 'ws-task', dir, guardedLaunchOf(first));
     await setWorkerFenceOff('ws-bot', false, dir);
-    expect(settingsOf(guardSessionLaunch('pty-1', RESUME, deps()))).toHaveProperty('sandbox');
+    const fenced = guardSessionLaunch('pty-1', RESUME, deps());
+    expect(settingsOf(fenced)).toHaveProperty('sandbox');
+    // Recorded: off again, a later resume keeps the fence and its temp folder.
+    await setWorkerFenceOff('ws-bot', true, dir);
+    reloadBotWorkerSessionsForTests();
+    const again = guardRefireLine('pty-1', LINE, deps());
+    expect(settingsOf(again)).toHaveProperty('sandbox');
+    const temp = (line: string) => /"([^"]+worker-tmp\/[0-9a-f]{32})"/.exec(hooksOf(settingsOf(line)).PreToolUse[0].hooks[0].command)?.[1];
+    expect(temp(again)).toBe(temp(fenced));
   });
 });
 
@@ -296,7 +329,7 @@ describe.skipIf(isWin)('the off switch', () => {
     expect(s).not.toHaveProperty('sandbox');
     expect(JSON.stringify(s.statusLine)).toContain('the worker fence is off for this workspace');
     // The fan-out's own owner workspace is the one asked.
-    const other = withBotWorkerMergeGuard({ initialCommand: LINE, cwd: wt, fanoutTaskOf: 'ws-elsewhere' }, { workspaceId: 'ws-task', strict: true }, deps());
+    const other = withBotWorkerMergeGuard({ initialCommand: LINE, cwd: wt }, { workspaceId: 'ws-task', strict: true, ownerWorkspaceId: 'ws-elsewhere' }, deps());
     expect(settingsOf(other!.initialCommand!)).toHaveProperty('sandbox');
   });
 });
@@ -311,26 +344,39 @@ describe.skipIf(isWin)('the self-test', () => {
     expect(JSON.stringify(s.statusLine)).toContain('the fence failed its self-test, so this worker has no tools');
   });
 
-  it('a pass is kept for the session; a failure is tried again', async () => {
+  it('a pass is kept for the session; a failure stands a few minutes, then is tried again', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
     let runs = 0;
     let result: { ok: true } | { ok: false; reason: string } = { ok: false, reason: 'x' };
     const d = { exe: () => EXE, platform: 'darwin' as const, probe: async () => ({ ok: true as const, version: '2.1.311' }), selfTest: async () => { runs += 1; return result; } };
-    expect((await workerFenceSupport(d)).capable).toBe(true);
-    await workerFenceSupport(d);
-    expect(runs).toBe(2);
-    result = { ok: true };
-    await workerFenceSupport(d);
-    await workerFenceSupport(d);
-    expect(runs).toBe(3);
+    try {
+      expect((await workerFenceSupport(d)).capable).toBe(true);
+      await workerFenceSupport(d);
+      expect(runs).toBe(1);
+      result = { ok: true };
+      vi.setSystemTime(Date.now() + WORKER_FENCE_SELF_TEST_RETRY_MS + 1);
+      await workerFenceSupport(d);
+      await workerFenceSupport(d);
+      expect(runs).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
     expect(await workerFenceSupport({ ...d, probe: async () => ({ ok: false as const, reason: 'no bwrap' }) })).toEqual({ capable: false, reason: 'no bwrap' });
   });
 
   it('a claude that runs no command fails it, and its files are removed', async () => {
     const fake = path.join(root, 'fake-claude');
     fs.writeFileSync(fake, '#!/bin/sh\necho "sandbox unavailable" >&2\nexit 1\n', { mode: 0o755 });
-    const r = await runWorkerFenceSelfTest(fake, { dir, runtime: RUNTIME, timeoutMs: 10_000 });
+    const r = await runWorkerFenceSelfTest(fake, { dir, runtime: RUNTIME, timeoutMs: 10_000, paneEnv: async () => ({ PATH: '/usr/bin:/bin' }) });
     expect(r).toEqual({ ok: false, reason: 'claude did not run a command inside the fence (sandbox unavailable)' });
     expect(fs.readdirSync(path.join(dir, 'factory', 'fence-self-test'))).toEqual([]);
+  });
+
+  it('a claude that does not end is stopped at the deadline', async () => {
+    const fake = path.join(root, 'slow-claude');
+    fs.writeFileSync(fake, '#!/bin/sh\nsleep 30 &\nwait\n', { mode: 0o755 });
+    const r = await runWorkerFenceSelfTest(fake, { dir, runtime: RUNTIME, timeoutMs: 500, paneEnv: async () => ({ PATH: '/usr/bin:/bin' }) });
+    expect(r).toEqual({ ok: false, reason: 'claude did not run a command inside the fence (timed out)' });
   });
 });
 

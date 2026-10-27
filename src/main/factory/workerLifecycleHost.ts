@@ -93,7 +93,7 @@ import { isFanoutWorkerPermissionMode } from '../../shared/workerLaunch';
 import { createWorkerLaunchRecovery } from './workerLaunchRecovery';
 import { LAUNCH_PROBE_CONFIRM_TIMEOUT_MS, LAUNCH_PROBE_TIMEOUT_MS } from '../worktask/fanoutLaunchProbe';
 import type { PermissionMode } from '../../shared/agentResume';
-import { isFencedMode, linePermissionMode, workerFenceSupport } from '../agents/botWorkerFence';
+import { workerFenceSupportFor } from '../agents/botWorkerFence';
 
 /** A resumed worker is checked for an exited agent this often. */
 const RESUMED_SWEEP_MS = 60_000;
@@ -621,8 +621,8 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
       typeLine: async (sessionId, line) => {
         const c = daemon();
         if (!c) return false;
-        // An unattended line is fenced: the fence support is settled first.
-        const fenceSupport = isFencedMode(linePermissionMode(line)) ? await workerFenceSupport() : undefined;
+        // The guard decides whether the line is fenced; its support first.
+        const fenceSupport = await workerFenceSupportFor(line);
         return c.writeToSession(sessionId, sanitizePtyText(guardSessionLaunch(sessionId, line, fenceSupport ? { fenceSupport } : {})) + '\r');
       },
       agentAlive: async (sessionId) => (await listSessions()).find((s) => s.id === sessionId)?.agentProcessAlive === true,

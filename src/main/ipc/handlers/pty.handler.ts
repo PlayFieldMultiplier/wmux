@@ -31,7 +31,7 @@ import { noteSessionAgentLaunched, noteSessionInput, noteTaskWorkerLaunched } fr
 import { beginPaneRelaunch, launchStillCurrent, startsAgent } from '../../factory/workerSlots';
 import { withLaunchSessionPin } from '../../agents/launchSessionPin';
 import { guardBotWorkerSessionText, guardCodexBotWorker } from '../../agents/codexWorkerGuard';
-import { isFencedMode, linePermissionMode, workerFenceSupport } from '../../agents/botWorkerFence';
+import { workerFenceSupportFor } from '../../agents/botWorkerFence';
 import { resolveEnvPolicy, type SpawnKind } from '../../../shared/spawnKind';
 import { withheldCredentialNames } from '../../../shared/envFilter';
 import { getShellUtf8Locale } from '../../pty/shellLocale';
@@ -250,9 +250,9 @@ async function stageCreate(options: PtyCreateOptions | undefined, botWorker: Bot
   } else {
     staged = withWmuxTools(staged);
   }
-  // A claude line that runs unattended is fenced (botWorkerFence.ts): the
-  // fence support (and its self-test) is settled before the guard runs.
-  const fenceSupport = botWorker && line && namesClaude(line) && isFencedMode(linePermissionMode(line)) ? await workerFenceSupport() : undefined;
+  // The guard decides whether the line is fenced (botWorkerFence.ts); the
+  // fence support (and its self-test) is settled before it runs.
+  const fenceSupport = botWorker && line ? await workerFenceSupportFor(line) : undefined;
   const guarded = withBotWorkerMergeGuard(await guardCodexBotWorker(staged, botWorker), botWorker, fenceSupport ? { fenceSupport } : {}, { wsl, ...(level ? { level } : {}), ...(gateway ? { gateway } : {}) });
   // A bot worker's line in a cmd.exe pane is read by cmd's own rules.
   if (botWorker && process.platform === 'win32' && isCmdShellPath(shellPath) && guarded?.initialCommand && !isPlainCmdLaunchLine(guarded.initialCommand)) {

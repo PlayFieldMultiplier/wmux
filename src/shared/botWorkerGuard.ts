@@ -503,14 +503,22 @@ export function isWorkerLaunchFiles(raw: unknown, dir: string): raw is BotWorker
     && (r.fence === undefined || isLaunchFence(r.fence, dir));
 }
 
+/** A worker temp folder's name (main/agents/botWorkerFence.ts). */
+export const WORKER_TEMP_NAME = /^[0-9a-f]{32}$/;
+
+/** Where workers' own temp folders are made. */
+export function workerTempRoot(dir: string): string {
+  return path.join(dir, 'factory', 'worker-tmp');
+}
+
 /** A recorded fence: a known strength, and a temp folder (when any) directly
- *  under `<dir>/factory/worker-tmp/`. Pure. */
+ *  under workerTempRoot. Pure. */
 function isLaunchFence(raw: unknown, dir: string): raw is NonNullable<BotWorkerLaunchFiles['fence']> {
   if (!raw || typeof raw !== 'object') return false;
   const f = raw as Record<string, unknown>;
   if (f.strength !== 'full' && f.strength !== 'weaker' && f.strength !== 'off') return false;
   return f.tempDir === undefined
-    || (typeof f.tempDir === 'string' && path.dirname(f.tempDir) === path.join(dir, 'factory', 'worker-tmp') && /^[0-9a-f]{32}$/.test(path.basename(f.tempDir)));
+    || (typeof f.tempDir === 'string' && path.dirname(f.tempDir) === workerTempRoot(dir) && WORKER_TEMP_NAME.test(path.basename(f.tempDir)));
 }
 
 export function botWorkerSessionsPath(dir: string): string {

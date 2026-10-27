@@ -46,7 +46,6 @@ import {
   buildWorkerMcpConfig,
   buildWorkerSettings,
   buildWslWorkerMcpConfig,
-  contentFileName,
   spliceWorkerLaunch,
   workerWmuxLevel,
   type WorkerGatewayRoute,
@@ -64,7 +63,7 @@ import { toWslPath } from '../../shared/imagePaste';
 import { dataDirNoShellRefusal } from '../../shared/promptFileArgument';
 import { dataSuffix } from '../../shared/constants';
 import { bridgeHookGroups, findBridgeSourceFrom } from '../../cli/commands/setupHooks';
-import { attachWorkerFence, lastWorkerFenceSupport, pruneWorkerTempDirs, type WorkerFenceAttach, type WorkerFenceAttachInput, type WorkerFenceStrength, type WorkerFenceSupport } from './botWorkerFence';
+import { attachWorkerFence, lastWorkerFenceSupport, pruneWorkerTempDirs, writeContentFile, type WorkerFenceAttach, type WorkerFenceAttachInput, type WorkerFenceStrength, type WorkerFenceSupport } from './botWorkerFence';
 import { isWorkerFenceOff } from './workerFencePolicy';
 import { mergeWorkerFenceSettings, workerFenceLaunch } from './workerFence';
 
@@ -280,6 +279,9 @@ export interface BotWorkerCreate {
   /** The fan-out launch only: who the in-flight spawns of this owner and
    *  folder are for (main's record, never the renderer's). */
   spawns?: BotSpawnIdentity[];
+  /** The fan-out launch only: the owner workspace main's in-flight spawn
+   *  record matched (never the create's own word). */
+  ownerWorkspaceId?: string;
 }
 
 export function botWorkerForCreate(
@@ -291,7 +293,7 @@ export function botWorkerForCreate(
   const owner = typeof options.fanoutTaskOf === 'string' ? options.fanoutTaskOf : '';
   if (owner && typeof options.cwd === 'string' && options.cwd && inflightBotSpawns.has(spawnKey(owner, options.cwd))) {
     const spawns = inflightSpawnIdentities.get(spawnKey(owner, options.cwd));
-    return { workspaceId, strict: true, ...(spawns ? { spawns: spawns.map((s) => ({ ...s, ...(s.connectors ? { connectors: s.connectors } : {}) })) } : {}) };
+    return { workspaceId, strict: true, ownerWorkspaceId: owner, ...(spawns ? { spawns: spawns.map((s) => ({ ...s, ...(s.connectors ? { connectors: s.connectors } : {}) })) } : {}) };
   }
   if (!workspaceId) return null;
   let bot = false;
@@ -312,7 +314,7 @@ export function botWorkerForCreate(
  * workspace gets a claude launch line guarded the same way, and anything else
  * (a plain shell, no line) unchanged.
  */
-export function withBotWorkerMergeGuard<T extends { initialCommand?: string; exec?: unknown; cwd?: unknown; fanoutTaskOf?: unknown }>(
+export function withBotWorkerMergeGuard<T extends { initialCommand?: string; exec?: unknown; cwd?: unknown }>(
   options: T | undefined,
   worker: BotWorkerCreate | null,
   deps: BotWorkerGuardDeps = {},
@@ -358,11 +360,10 @@ export function withBotWorkerMergeGuard<T extends { initialCommand?: string; exe
   }
   // A worker with a signed-in connection gets the narrow wmux surface.
   const level = launch.gateway ? 'core' : workerWmuxLevel(launch.level, (deps.registeredLevel ?? defaultRegisteredLevel)());
-  // The fence's owner workspace: the fan-out's own, else the task's.
-  const owner = worker.strict && typeof options.fanoutTaskOf === 'string' && options.fanoutTaskOf
-    ? options.fanoutTaskOf
-    : taskFactsOf(worker.workspaceId, deps)?.ownerWorkspaceId ?? null;
-  const fence: FencePlan = { taskWorkspaceId: worker.workspaceId, ownerWorkspaceId: owner };
+  // The fence's owner workspace: the one main's in-flight spawn record
+  // matched, else the task ledger's.
+  const facts = taskFactsOf(worker.workspaceId, deps);
+  const fence: FencePlan = { ownerWorkspaceId: worker.ownerWorkspaceId ?? facts?.ownerWorkspaceId ?? null, facts };
   const plan: LaunchPlan = launch.wsl
     ? { kind: 'legacy', level, fence }
     : { kind: 'strict', connectors, level, cwd, fence, ...(launch.gateway ? { gateway: launch.gateway } : {}) };
@@ -472,12 +473,15 @@ type LaunchPlan =
 /** What decides a launch's worker fence (botWorkerFence.ts): the bot's
  *  workspace (its off switch) and what the session's first launch ran in. */
 interface FencePlan {
-  taskWorkspaceId: string;
   ownerWorkspaceId: string | null;
+  /** The task ledger's row for the task workspace (null: none). */
+  facts: TaskFacts | null;
   recorded?: { strength: WorkerFenceStrength; tempDir?: string };
 }
 
-function taskFactsOf(taskWorkspaceId: string, deps: BotWorkerGuardDeps): { ownerWorkspaceId?: string; gitCommonDir?: string; gitWorktreeDir?: string } | null {
+type TaskFacts = { ownerWorkspaceId?: string; gitCommonDir?: string; gitWorktreeDir?: string };
+
+function taskFactsOf(taskWorkspaceId: string, deps: BotWorkerGuardDeps): TaskFacts | null {
   try {
     return (deps.taskFacts ?? ledgerTaskFacts)(taskWorkspaceId);
   } catch {
@@ -485,7 +489,7 @@ function taskFactsOf(taskWorkspaceId: string, deps: BotWorkerGuardDeps): { owner
   }
 }
 
-function ledgerTaskFacts(taskWorkspaceId: string): { ownerWorkspaceId?: string; gitCommonDir?: string; gitWorktreeDir?: string } | null {
+function ledgerTaskFacts(taskWorkspaceId: string): TaskFacts | null {
   const row = getTaskLedger().findByTaskWorkspace(taskWorkspaceId);
   if (!row) return null;
   return {
@@ -499,7 +503,7 @@ function ledgerTaskFacts(taskWorkspaceId: string): { ownerWorkspaceId?: string; 
  *  own sandbox and tool gate are narrower). Throws the fence's refusal. */
 function fenceFor(where: string, line: string, dir: string, deps: BotWorkerGuardDeps, plan: LaunchPlan): WorkerFenceAttach {
   if (plan.kind === 'strict' && plan.gateway) return { kind: 'none' };
-  const facts = taskFactsOf(plan.fence.taskWorkspaceId, deps);
+  const facts = plan.fence.facts;
   let switchedOff = false;
   if (plan.fence.ownerWorkspaceId) {
     try {
@@ -613,8 +617,8 @@ function guardLaunchLine(where: string, line: string, deps: BotWorkerGuardDeps, 
   checkFencedLine(where, line, files.settingsFile, fence);
   // The full fence runs exactly the claude its self-test ran.
   let launchLine = line;
-  if (fence.kind === 'fence' && fence.exe) {
-    const pinned = pinClaudeLauncher(line, fence.exe);
+  if (fence.kind === 'fence' && fence.launcher) {
+    const pinned = pinClaudeLauncher(line, fence.launcher);
     if (pinned === null) throw new Error(`${where}: worker fence: the launch line cannot run the claude the fence was checked on`);
     launchLine = pinned;
   }
@@ -688,29 +692,6 @@ export function prepareConnectorRunDirs(dir: string, connectors: readonly Connec
     if (!fs.existsSync(npmrc(c))) fs.writeFileSync(npmrc(c), '', { mode: 0o600 });
   }
   return { runDir, npmrc };
-}
-
-function writeContentFile(folder: string, content: string, ext = '.json'): string {
-  fs.mkdirSync(folder, { recursive: true, mode: 0o700 });
-  const file = path.join(folder, contentFileName(content).replace(/\.json$/, ext));
-  try {
-    if (fs.readFileSync(file, 'utf8') === content) {
-      // In use again: the startup prune keeps it.
-      try { fs.utimesSync(file, new Date(), new Date()); } catch { /* best effort */ }
-      return file;
-    }
-  } catch {
-    /* missing: write it */
-  }
-  const tmp = `${file}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
-  try {
-    fs.writeFileSync(tmp, content, { encoding: 'utf8', mode: 0o600 });
-    fs.renameSync(tmp, file);
-  } catch (err) {
-    try { fs.unlinkSync(tmp); } catch { /* never written */ }
-    throw err;
-  }
-  return file;
 }
 
 // ── factory/bot-worker-sessions.json ─────────────────────────────────────────
@@ -831,7 +812,34 @@ export function reloadBotWorkerSessionsForTests(): void {
 export function guardRefireLine(sessionId: string, line: string, deps: BotWorkerGuardDeps = {}): string {
   if (!isBotWorkerSession(sessionId, deps.dir ?? getWmuxDir())) return line;
   if (namesCodex(line)) throw guardError('worktask:refire', 'codex is not re-fired in a bot\'s worker pane');
-  return guardLaunchLine('worktask:refire', line, deps, recordedPlan('worktask:refire', sessionId, deps)).line;
+  const guarded = guardLaunchLine('worktask:refire', line, deps, recordedPlan('worktask:refire', sessionId, deps));
+  recordLaterFence('worktask:refire', sessionId, guarded.files, deps.dir ?? getWmuxDir());
+  return guarded.line;
+}
+
+/**
+ * A resume or re-fire that put the session inside a fence its first launch
+ * did not have (or a stronger one): the record keeps it, so a later launch
+ * is not fenced less and the startup prune keeps its temp folder. Throws
+ * (nothing is typed) when the record cannot be written.
+ */
+function recordLaterFence(where: string, sessionId: string, files: BotWorkerLaunchFiles | undefined, dir: string): void {
+  const fence = files?.fence;
+  if (!files || !fence || fence.strength === 'off') return;
+  const map = loadSessions(dir);
+  const rec = map.get(sessionId);
+  if (!rec) return;
+  const rank = { off: 0, weaker: 1, full: 2 } as const;
+  const was = rec.launch?.fence;
+  if (was && rank[was.strength] >= rank[fence.strength] && was.tempDir === fence.tempDir) return;
+  const next = new Map(map);
+  next.set(sessionId, { ...rec, launch: { ...(rec.launch ?? files), fence: { strength: was && rank[was.strength] > rank[fence.strength] ? was.strength : fence.strength, ...(fence.tempDir ? { tempDir: fence.tempDir } : {}) } } });
+  try {
+    saveSessions(dir, next);
+  } catch (err) {
+    throw guardError(where, `the worker's fence could not be recorded: ${String(err)}`);
+  }
+  map.set(sessionId, next.get(sessionId)!);
 }
 
 /** A recorded session's launch: in a WSL shell the worker settings and this
@@ -842,8 +850,9 @@ export function guardRefireLine(sessionId: string, line: string, deps: BotWorker
  *  folder on record (or a record that cannot be read) is refused. */
 function recordedPlan(where: string, sessionId: string, deps: BotWorkerGuardDeps): LaunchPlan {
   const rec = loadSessions(deps.dir ?? getWmuxDir()).get(sessionId);
+  const facts = rec ? taskFactsOf(rec.workspaceId, deps) : null;
   const fence: FencePlan | null = rec
-    ? { taskWorkspaceId: rec.workspaceId, ownerWorkspaceId: taskFactsOf(rec.workspaceId, deps)?.ownerWorkspaceId ?? null, ...(rec.launch?.fence ? { recorded: rec.launch.fence } : {}) }
+    ? { ownerWorkspaceId: facts?.ownerWorkspaceId ?? null, facts, ...(rec.launch?.fence ? { recorded: rec.launch.fence } : {}) }
     : null;
   if (rec?.wsl && fence) return { kind: 'legacy', level: rec.launch?.level ?? workerWmuxLevel((deps.registeredLevel ?? defaultRegisteredLevel)()), fence };
   if (!rec?.cwd || !fence) throw guardError(where, 'the session has no folder on record to check the worker\'s settings in');
@@ -895,7 +904,9 @@ export function guardSessionLaunch(sessionId: string, text: string, deps: BotWor
   if (!isBotWorkerSession(sessionId, deps.dir ?? getWmuxDir())) return text;
   if (namesCodex(text)) throw guardError('pty:write-launch', 'codex is not started again in a bot\'s worker pane');
   if (!namesClaude(text)) return text;
-  return guardLaunchLine('pty:write-launch', text, deps, recordedPlan('pty:write-launch', sessionId, deps)).line;
+  const guarded = guardLaunchLine('pty:write-launch', text, deps, recordedPlan('pty:write-launch', sessionId, deps));
+  recordLaterFence('pty:write-launch', sessionId, guarded.files, deps.dir ?? getWmuxDir());
+  return guarded.line;
 }
 
 /** Startup: remove per-launch files no session record names and older than
