@@ -16,11 +16,13 @@ afterEach(() => {
   for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true });
 });
 
-function git(cwd: string, ...args: string[]): string {
-  return execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', ...args], {
+/** git with no user or system config: an empty global config file (Windows
+ *  git cannot open the null device as one). */
+function gitIn(globalConfig: string) {
+  return (cwd: string, ...args: string[]): string => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', ...args], {
     cwd,
     encoding: 'utf8',
-    env: { ...process.env, GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_NOSYSTEM: '1' },
+    env: { ...process.env, GIT_CONFIG_GLOBAL: globalConfig, GIT_CONFIG_NOSYSTEM: '1' },
   });
 }
 
@@ -28,6 +30,11 @@ describe('CommitOriginCapture (a real repository)', () => {
   it('picks up a commit from the worktree reflog, from the first commit on, and nothing before', async () => {
     const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-commit-origin-'));
     dirs.push(repo);
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-commit-origin-config-'));
+    dirs.push(configDir);
+    const globalConfig = path.join(configDir, 'gitconfig');
+    fs.writeFileSync(globalConfig, '');
+    const git = gitIn(globalConfig);
     git(repo, 'init', '-q');
     const added: CommitOrigin[] = [];
     const armed: string[] = [];
