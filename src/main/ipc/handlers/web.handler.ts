@@ -475,6 +475,9 @@ export function registerWebHandlers(
         allowedHosts: info.allowedHosts ?? [],
         tailscale: info.tailscale === true,
         allowInput: info.allowInput === true,
+        // The daemon never inherits proxy sign-in; an in-place restart that
+        // left it out would sign every proxied browser out with no warning.
+        ...(info.trustedProxy ? { trustedProxy: { header: info.trustedProxy.header, user: info.trustedProxy.user, from: info.trustedProxy.from } } : {}),
         ...grants,
         inheritUnsetGrants: true,
         // Atomic on the daemon side: a stop that lands after the status read

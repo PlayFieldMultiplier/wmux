@@ -402,6 +402,12 @@ export const pl = {
   'web.inputPausedTooLarge': 'Wklejany tekst jest zbyt duży.',
   'web.inputDropped': 'Nie wysłano kolejnych naciśnięć klawiszy: {count}.',
   'web.inputResume': 'Wznów wprowadzanie',
+  'web.newTerminal': 'Nowy terminal',
+  'web.newTerminalFailed': 'Nie udało się uruchomić terminala: {reason}',
+  'web.newTerminalOffline': 'Nie udało się połączyć z serwerem. Sprawdź listę terminali, zanim spróbujesz ponownie.',
+  'web.newTerminalNoWorkspaceGrant': 'To urządzenie może dodawać terminale do działającego obszaru roboczego, ale nie może go uruchomić. Aby uruchomić pierwszy terminal, otwórz tę stronę z tokenem dostępu serwera.',
+  'web.noTerminals': 'Nie ma jeszcze terminali',
+  'web.noTerminalsBody': 'Terminale uruchomione na tym serwerze pojawią się tutaj.',
 
   // Common
   'common.cancel': 'Anuluj',

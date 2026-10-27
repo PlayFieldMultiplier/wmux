@@ -5,8 +5,13 @@ import codex from '../../../daemon/approvals/__tests__/fixtures/terminal-prompts
 import openCode from '../../../daemon/approvals/__tests__/fixtures/terminal-prompts/opencode-permission-bash-01.json';
 import claude from '../../../daemon/approvals/__tests__/fixtures/terminal-prompts/claude-write-01-create.json';
 import type { ApprovalScreenSnapshot } from '../../../shared/approvalScreen';
-import { codexScreenApproval, piScreenApproval } from '../approvalScreen';
+import { claudeScreenApproval, codexScreenApproval, piScreenApproval, qwenScreenApproval } from '../approvalScreen';
 import piCapture from './fixtures/pi-1.4.0-capture.json';
+import qwenWide from './fixtures/qwen-code-0.26.1-120x40.json';
+import qwenNarrow from './fixtures/qwen-code-0.26.1-60x30.json';
+import qwenDialogs from './fixtures/qwen-code-0.26.1-60x30-dialogs.json';
+import claudeTrust from './fixtures/claude-code-2.1.310-trust-120x40.json';
+import codexTrust from './fixtures/codex-0.162.1-trust-120x40.json';
 
 const TRUST = ['Do you trust the contents of this project?', '❯ Yes, I trust this folder', '  No, exit', '↑/↓ Navigate · enter Confirm'];
 const CODEX_EDIT = ['Would you like to make the following edits?', '› 1. Yes, proceed (y)',
@@ -118,6 +123,87 @@ describe('quiet approval recovery reads only the current interactive viewport', 
     },
   );
 
+  // Each capture's whole output, rendered as the host's grid reader would.
+  it.each([
+    ['claude', claudeTrust.frames.trust, 'Claude Code', 'Project trust prompt', 'Enter'],
+    ['codex', codexTrust.frames.trust, 'Codex CLI', 'Directory trust prompt', 'enter'],
+  ] as const)('reads the captured %s folder-trust screen as awaiting_input, and ends on it', async (slug, output, agent, message, footer) => {
+    const rendered = await generateTextSnapshot({ cols: 120, rows: 40, scrollback: 0, initial: Buffer.from(output) });
+    if (!rendered.ok) throw new Error('the capture did not render');
+    const rows = rendered.rows.map((row) => row.text);
+    const orders = ['identity, then the screen', 'the screen, then identity', 'identity before the footer', 'identity after another question',
+      'the screen while the previous agent still owned the pane'] as const;
+    for (const order of orders) {
+      const det = new AgentDetector();
+      const events = vi.fn();
+      det.onEvent(events);
+      const read = vi.fn(async () => frame(rows));
+      if (order === 'identity, then the screen') {
+        // The command-start probe seeds the agent before it draws anything.
+        det.seedTrustedIdentity(slug, det.getIdentityEpoch());
+        expect(await det.revalidateApprovalScreen(read)).toBe(false);
+        det.feed(output);
+        expect(det.takeApprovalRecheckRequest()).toBe(true);
+      } else if (order === 'the screen while the previous agent still owned the pane') {
+        // Its late death edge lands after the screen is drawn.
+        det.seedTrustedIdentity('agy', det.getIdentityEpoch());
+        det.feed(output);
+        det.clearTrustedIdentity();
+        det.seedTrustedIdentity(slug, det.getIdentityEpoch());
+      } else if (order === 'identity after another question') {
+        // A question shortly before the launch: the seed-time recheck reads
+        // (and spends) the general recheck, not the trust screen's.
+        det.feed('Would you like me to run the tests?\r\n');
+        det.seedTrustedIdentity(slug, det.getIdentityEpoch());
+        expect(await det.revalidateApprovalScreen(async () => frame([]))).toBe(false);
+        det.feed(output);
+        expect(det.takeApprovalRecheckRequest()).toBe(true);
+      } else if (order === 'identity before the footer') {
+        const split = output.lastIndexOf(footer);
+        det.feed(output.slice(0, split));
+        det.seedTrustedIdentity(slug, det.getIdentityEpoch());
+        // The seed-time recheck sees the screen unfinished; the footer asks again.
+        const half = await generateTextSnapshot({ cols: 120, rows: 40, scrollback: 0, initial: Buffer.from(output.slice(0, split)) });
+        expect(await det.revalidateApprovalScreen(async () => frame(half.ok ? half.rows.map((row) => row.text) : []))).toBe(false);
+        det.feed(output.slice(split));
+        expect(det.takeApprovalRecheckRequest()).toBe(true);
+      } else {
+        det.feed(output);
+        det.seedTrustedIdentity(slug, det.getIdentityEpoch());
+      }
+      expect(await det.revalidateApprovalScreen(read)).toBe(true);
+      expect(read).toHaveBeenCalledTimes(1);
+      const statuses = events.mock.calls.map(([event]) => event);
+      expect(statuses.at(-1)).toEqual({ agent, status: 'awaiting_input', message });
+      // Codex's loading banner opens its gate ("Agent started") when no identity came first.
+      expect(statuses.slice(0, -1)).toEqual((order === 'the screen, then identity' || order === 'identity before the footer') && slug === 'codex'
+        ? [{ agent, status: 'running', message: 'Agent started' }] : []);
+    }
+    // A narrow pane wraps the question row; the reader keys on its start.
+    const q = rows.findIndex((row) => /Quick safety check:|Trust this folder\?/.test(row));
+    const wrapped = [...rows.slice(0, q), rows[q].slice(0, 32), ` ${rows[q].slice(32)}`, ...rows.slice(q + 1)];
+    expect((slug === 'claude' ? claudeScreenApproval : codexScreenApproval)(wrapped)?.message).toBe(message);
+
+    // The same unanswered screen after a resize narrows the pane is not a new dialog.
+    const narrow = await generateTextSnapshot({ cols: 100, rows: 40, scrollback: 0, initial: Buffer.from(output) });
+    if (!narrow.ok) throw new Error('the capture did not render');
+    const narrowRows = narrow.rows.map((row) => row.text);
+    expect(narrowRows.find((row) => /Quick safety check:|Trust this folder\?/.test(row))).not.toBe(rows[q]);
+    const det = new AgentDetector();
+    const events = vi.fn();
+    det.onEvent(events);
+    det.seedTrustedIdentity(slug, det.getIdentityEpoch());
+    det.feed(output);
+    expect(det.takeApprovalRecheckRequest() && await det.revalidateApprovalScreen(async () => frame(rows))).toBe(true);
+    det.invalidateApprovalScreen();
+    det.feed(output);
+    expect(det.takeApprovalRecheckRequest()).toBe(true);
+    const narrowRead = vi.fn(async () => frame(narrowRows));
+    expect(await det.revalidateApprovalScreen(narrowRead)).toBe(false);
+    expect(narrowRead).toHaveBeenCalledTimes(1);
+    expect(events.mock.calls.map(([event]) => event.status)).toEqual(['awaiting_input']);
+  });
+
   it('asks for Pi\'s recheck only once the selector\'s last row is drawn, however the reads split', () => {
     const { trust, trustNarrow } = piCapture.chunks;
     for (const output of [trust, trustNarrow]) {
@@ -181,6 +267,8 @@ describe('quiet approval recovery reads only the current interactive viewport', 
 
   it.each([
     ['Pi, from another agent\'s question', 'pi', TRUST.join('\r\n'), false],
+    // Claude keeps a retired hint only for its own trust question.
+    ['Claude, from another agent\'s question', 'claude', TRUST.join('\r\n'), false],
     ['Pi, from its selector answered before the seed', 'pi', piCapture.chunks.trust, true],
     // A profile with line patterns keeps the old rule: an identity change drops the hint.
     ['agy, from its own question drawn under the previous owner', 'agy', TRUST.join('\r\n'), false],
@@ -418,5 +506,59 @@ describe('quiet approval recovery reads only the current interactive viewport', 
     const { det, events } = setup();
     expect(await det.revalidateApprovalScreen(async () => { if (outcome) throw outcome; return null; })).toBe(false);
     expect(events).not.toHaveBeenCalled();
+  });
+});
+
+describe('Qwen Code 0.26.1 permission dialogs (live capture)', () => {
+  const ASKED = { agent: 'Qwen Code', status: 'awaiting_input', message: 'Approval requested' };
+
+  it.each([
+    ['the 120x40 shell dialog', qwenWide.frames.approval, qwenWide.screens.approval],
+    ['the 60x30 file-write dialog', qwenNarrow.frames.writeApproval, qwenNarrow.screens.writeApproval],
+    ['the 60x30 shell dialog under a scrollbar thumb', qwenNarrow.frames.shellApprovalMidSession, qwenNarrow.screens.shellApprovalScrollbar],
+    ['the 60x30 shell dialog whose question is cut with an ellipsis', qwenDialogs.frames.shellCut, qwenDialogs.screens.shellCut],
+    ['the 60x30 edit dialog', qwenDialogs.frames.edit, qwenDialogs.screens.edit],
+  ])('recovers %s drawn before Qwen\'s identity arrived', async (_label, output, rows) => {
+    // Drawn while another agent's identity still held the pane, so no Qwen
+    // line pattern read it; Qwen's seed then reads the grid once.
+    const det = new AgentDetector();
+    const events = vi.fn();
+    det.onEvent(events);
+    det.seedTrustedIdentity('claude', det.getIdentityEpoch());
+    det.feed(output);
+    det.clearTrustedIdentity();
+    det.seedTrustedIdentity('qwen', det.getIdentityEpoch());
+    expect(await det.revalidateApprovalScreen(async () => frame(rows))).toBe(true);
+    expect(events.mock.calls.map(([event]) => event)).toEqual([ASKED]);
+  });
+
+  it.each([
+    ['as captured', qwenNarrow.frames.shellApprovalMidSession],
+    // The same frames with the confirmation row's spaces drawn as cursor moves.
+    ['drawn with cursor moves', qwenNarrow.frames.shellApprovalMidSession.replace(/Waiting for user/g, 'Waiting\u001b[1Cfor\u001b[1Cuser')],
+  ])('leaves a dialog the stream reported to the stream, and its recheck agrees (%s)', async (_label, output) => {
+    const det = new AgentDetector();
+    const events = vi.fn();
+    det.onEvent(events);
+    det.seedTrustedIdentity('qwen', det.getIdentityEpoch());
+    det.feed(output);
+    expect(events.mock.calls.map(([event]) => event)).toEqual([ASKED]);
+    // Reported in the same read: no grid read is asked for.
+    expect(det.takeApprovalRecheckRequest()).toBe(false);
+    // A recheck that runs anyway (the seed's own) finds the same dialog.
+    expect(await det.revalidateApprovalScreen(async () => frame(qwenNarrow.screens.shellApprovalScrollbar))).toBe(false);
+    expect(events).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads no dialog once it is answered or cancelled, and asks for no recheck', () => {
+    // After Enter the spinner keeps the confirmation phrase, beside its counters.
+    expect(qwenScreenApproval(qwenWide.screens.answered)).toBeNull();
+    expect(qwenScreenApproval(qwenNarrow.screens.afterEsc)).toBeNull();
+    const det = new AgentDetector();
+    det.seedTrustedIdentity('qwen', det.getIdentityEpoch());
+    det.feed(qwenWide.frames.approval);
+    det.takeApprovalRecheckRequest();
+    det.feed(qwenWide.frames.afterApproval);
+    expect(det.takeApprovalRecheckRequest()).toBe(false);
   });
 });

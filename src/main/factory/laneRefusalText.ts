@@ -90,6 +90,7 @@ const SENTENCES: Readonly<Record<string, string>> = {
   'closed-differently': 'It was closed on {host}, but not as approved',
   'secret-in-body': 'Its text holds a secret stored since the request',
   'attempts-exhausted': 'wmux tried three times and could not tell whether it went through',
+  'approval-stale': 'The approval is more than a day old and nothing was done: the bot asks again if it is still wanted',
   // A release (releaseAct.ts).
   'tag-taken': 'The tag already exists on {host}',
   'release-exists': 'A release with this tag is already on {host}, published or as a draft',
@@ -103,7 +104,7 @@ const SENTENCES: Readonly<Record<string, string>> = {
   'tag-name-is-branch': 'A branch on {host} has the same name as the tag',
   // What became of a release's draft, after the reason it was refused.
   'draft-kept-tag-made': 'The tag was already made: its draft release is kept on {host} for you to publish or delete',
-  'draft-kept-unchecked': 'Whether the tag was made could not be checked: its draft release is kept on {host} for you to publish or delete',
+  'draft-kept-unchecked': 'Its draft release could not be checked: it may still be on {host}, for you to publish or delete',
   'draft-not-deleted': 'Its draft release could not be deleted: delete it on {host}',
   'draft-kept-changed': 'Its draft release was changed on {host}, so it is kept there',
   'version-mismatch': 'The version in package.json or package-lock.json is not the tag\'s',

@@ -8,12 +8,13 @@ import {
   type TailnetServe,
 } from '../tailscale';
 import type { RpcResponse } from '../../shared/rpc';
-import type { WebTlsConfig } from '../../shared/web';
+import type { WebTlsConfig, WebTrustedProxyInfo, WebTrustedProxyWire } from '../../shared/web';
 import { GITHUB_LOGIN } from '../../shared/phoneGitWrite';
 import { isPermissionGateInstalled } from './setupHooks';
 import { planWebStart, type PreviousWebShape } from '../webStartPlan';
 import { getWmuxDir } from '../../daemon/config';
 import { loadWebState } from '../../daemon/web/webStateStore';
+import { parseTrustedProxyConfig } from '../../daemon/web/trustedProxy';
 import type { WebPairCliResult } from '../../shared/sshPcContract';
 
 const DEFAULT_PORT = 7681;
@@ -50,6 +51,8 @@ interface WebInfo {
   deviceCredentials?: boolean;
   /** Accepted Host names: reverse-proxy fronts or a native certificate name. */
   allowedHosts?: string[];
+  /** Present only while trusted proxy sign-in is on. */
+  trustedProxy?: WebTrustedProxyInfo;
 }
 
 /**
@@ -80,6 +83,23 @@ export function resolveWebTlsConfig(
     certPath: path.resolve(cwd, certPath),
     keyPath: path.resolve(cwd, keyPath),
   };
+}
+
+const TRUST_PROXY_FLAGS = ['--trust-proxy-header', '--trust-proxy-user', '--trust-proxy-from'] as const;
+
+/**
+ * `--trust-proxy-header/--trust-proxy-user/--trust-proxy-from`, checked with
+ * the daemon's own parser so a mistake fails before the running server is
+ * restarted. Sent normalized; the daemon parses it again.
+ */
+export function resolveTrustedProxy(args: string[]): WebTrustedProxyWire | undefined {
+  if (!TRUST_PROXY_FLAGS.some((flag) => hasFlag(args, flag))) return undefined;
+  const config = parseTrustedProxyConfig({
+    header: parseFlag(args, '--trust-proxy-header'),
+    user: parseFlag(args, '--trust-proxy-user'),
+    from: parseFlag(args, '--trust-proxy-from')?.split(','),
+  });
+  return config && { header: config.header, user: config.user, from: [...config.from] };
 }
 
 /**
@@ -244,6 +264,14 @@ export async function handleWeb(args: string[], jsonMode: boolean): Promise<void
     process.exit(1);
     return;
   }
+  let trustedProxy: WebTrustedProxyWire | undefined;
+  try {
+    trustedProxy = resolveTrustedProxy(args);
+  } catch (error) {
+    console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+    return;
+  }
   if (!Number.isInteger(port) || port <= 0 || port >= 65536) {
     console.error('Error: --port must be an integer between 1 and 65535');
     process.exit(1);
@@ -302,6 +330,7 @@ export async function handleWeb(args: string[], jsonMode: boolean): Promise<void
         ...grantParams,
         ...(imagesOn || imagesOff ? { inlineImages: imagesOn } : {}),
         ...gitWrite,
+        ...(trustedProxy ? { trustedProxy } : {}),
         allowedHosts: hosts,
         newToken,
         // Explicit false distinguishes "the operator chose HTTP" from a re-run
@@ -534,6 +563,11 @@ function report(
   console.log('');
   console.log(`  wmux web ${mode === 'start' ? 'started' : 'running'} — ${info.allowInput ? 'INPUT ENABLED' : 'read-only'}${info.allowUpload ? (info.allowInput ? '  ·  uploads ENABLED' : '  ·  uploads need input') : ''}${info.allowTranscript ? '  ·  transcript ENABLED' : ''}${info.allowDangerousLaunch ? '  ·  DANGEROUS LAUNCH ENABLED' : ''}${info.allowGitWrite ? '  ·  GIT WRITE ENABLED' : ''}${info.inlineImages === false ? '  ·  inline images off' : ''}`);
   console.log(`  bind ${info.host}:${info.port}${typeof info.clients === 'number' ? `  ·  ${info.clients} viewer(s)` : ''}`);
+  if (info.trustedProxy) {
+    const proxy = info.trustedProxy;
+    console.log(`  trusted proxy sign-in: ${proxy.user} in ${proxy.header} from ${proxy.from.join(', ')}`);
+    console.log('    Not kept across a daemon restart or a re-run without --trust-proxy-*.');
+  }
   console.log('');
 
   // Severity-ordered warning: even read-only exposes the ENTIRE scrollback.

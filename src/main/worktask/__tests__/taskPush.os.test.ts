@@ -19,6 +19,7 @@ import { originPinMatches } from '../../../shared/originPin';
 import { fetchTaskRefs, readTaskRemoteHead } from '../taskFetch';
 import { clearForgeHostsCache } from '../../../shared/forgeHosts';
 import { resolveBotRepo } from '../../factory/botCreate';
+import { trackedTempDir } from '../../../test-utils/trackedTempDir';
 
 vi.mock('electron', () => ({ app: { getPath: () => os.tmpdir() } }));
 
@@ -37,7 +38,7 @@ describe('pushTaskBranch', () => {
   let wtGitDir: string;
   let origin: string;
   beforeEach(() => {
-    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-task-push-')));
+    root = fs.realpathSync(trackedTempDir('wmux-task-push-'));
     origin = path.join(root, 'origin.git');
     repo = path.join(root, 'repo');
     work = path.join(root, 'work');
@@ -56,7 +57,6 @@ describe('pushTaskBranch', () => {
     repoCommon = fs.realpathSync.native(path.join(repo, '.git'));
     wtGitDir = fs.realpathSync.native(git(work, 'rev-parse', '--path-format=absolute', '--git-dir'));
   });
-  afterEach(() => { fs.rmSync(root, { recursive: true, force: true }); });
 
   const input = (branch = 'wtask/one') => ({
     worktreePath: work, branch, defaultBranches: [], noHooksDir: path.join(root, 'no-hooks'),
@@ -238,7 +238,7 @@ describe.skipIf(process.platform === 'win32')('task.push and task.fetch: the rec
   let wtGitDir: string;
   let bare: string;
   beforeEach(() => {
-    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-origin-pin-')));
+    root = fs.realpathSync(trackedTempDir('wmux-origin-pin-'));
     bare = path.join(root, 'srv', 'acme', 'app.git');
     repo = path.join(root, 'repo');
     work = path.join(root, 'work');
@@ -257,7 +257,6 @@ describe.skipIf(process.platform === 'win32')('task.push and task.fetch: the rec
     wtGitDir = fs.realpathSync.native(git(work, 'rev-parse', '--path-format=absolute', '--git-dir'));
   });
   afterEach(() => {
-    fs.rmSync(root, { recursive: true, force: true });
     fs.rmSync(path.join(os.homedir(), '.gitconfig'), { force: true });
   });
   const input = () => ({
@@ -557,25 +556,21 @@ describe('task.push: GitLab remotes', () => {
     };
     // GitHub knows nothing of a GitLab project.
     const repoDefaultBranch = vi.fn(async () => null);
-    const tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-task-push-gl-')));
+    const tmp = fs.realpathSync.native(trackedTempDir('wmux-task-push-gl-'));
     fs.mkdirSync(path.join(tmp, 'worktrees', 'one'), { recursive: true });
     fs.writeFileSync(path.join(tmp, 'worktrees', 'one', 'HEAD'), `${'a'.repeat(40)}\n`);
     const base = { worktreePath: '/w', defaultBranches: [], noHooksDir: '/tmp/nh', gitCommonDir: tmp, gitWorktreeDir: path.join(tmp, 'worktrees', 'one'), relayRoot: path.join(tmp, 'relay'), taskId: 'wtask-1', repoDefaultBranch };
-    try {
-      // The secret check's streamed git, faked too: no commits to read.
-      expect(await pushTask({ ...base, branch: 'wtask/one', expectedRepoKey: key }, fake, { lines: async () => true })).toMatchObject({ ok: true });
-      // The remote's own HEAD is read whatever GitHub and origin/HEAD say, and
-      // refused; so is origin/HEAD's branch.
-      expect(calls.some((a) => a.includes('ls-remote'))).toBe(true);
-      expect(await pushTask({ ...base, branch: 'develop', expectedRepoKey: key }, fake)).toMatchObject({ ok: false, reason: 'branch-refused' });
-      expect(await pushTask({ ...base, branch: 'elsewhere', expectedRepoKey: key }, fake)).toMatchObject({ ok: false, reason: 'branch-refused' });
-      expect(await pushTask({ ...base, branch: 'develop', expectedRepoKey: key, repoDefaultBranch: async () => 'main' }, fake)).toMatchObject({ ok: false, reason: 'branch-refused' });
-      expect(await readRepoDefaultBranchByKey(key, { run: async () => { throw new Error('gh asked'); } })).toBeNull();
-      expect(await pushTask({ ...base, branch: 'wtask/one', expectedRepoKey: 'gitlab.corp.example/group/other' }, fake)).toMatchObject({ ok: false, reason: 'remote-refused' });
-      expect(await pushTask({ ...base, branch: 'wtask/one', expectedRepoKey: 'gitlab.corp.example/group/proj' }, fake)).toMatchObject({ ok: false, reason: 'remote-refused' });
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
+    // The secret check's streamed git, faked too: no commits to read.
+    expect(await pushTask({ ...base, branch: 'wtask/one', expectedRepoKey: key }, fake, { lines: async () => true })).toMatchObject({ ok: true });
+    // The remote's own HEAD is read whatever GitHub and origin/HEAD say, and
+    // refused; so is origin/HEAD's branch.
+    expect(calls.some((a) => a.includes('ls-remote'))).toBe(true);
+    expect(await pushTask({ ...base, branch: 'develop', expectedRepoKey: key }, fake)).toMatchObject({ ok: false, reason: 'branch-refused' });
+    expect(await pushTask({ ...base, branch: 'elsewhere', expectedRepoKey: key }, fake)).toMatchObject({ ok: false, reason: 'branch-refused' });
+    expect(await pushTask({ ...base, branch: 'develop', expectedRepoKey: key, repoDefaultBranch: async () => 'main' }, fake)).toMatchObject({ ok: false, reason: 'branch-refused' });
+    expect(await readRepoDefaultBranchByKey(key, { run: async () => { throw new Error('gh asked'); } })).toBeNull();
+    expect(await pushTask({ ...base, branch: 'wtask/one', expectedRepoKey: 'gitlab.corp.example/group/other' }, fake)).toMatchObject({ ok: false, reason: 'remote-refused' });
+    expect(await pushTask({ ...base, branch: 'wtask/one', expectedRepoKey: 'gitlab.corp.example/group/proj' }, fake)).toMatchObject({ ok: false, reason: 'remote-refused' });
     expect(parseLsRemoteHead('ref: refs/heads/main\tHEAD\r\n0123\tHEAD\n')).toBe('main');
     expect(parseLsRemoteHead('0123\tHEAD\n')).toBeNull();
   });
@@ -624,9 +619,11 @@ describe('task.push: a repository inside WSL', () => {
 
 describe('task.push RPC', () => {
   type Handler = (params: Record<string, unknown>, ctx?: Record<string, unknown>) => Promise<unknown>;
+  // A fresh wmux dir, removed after the case.
+  const rpcDir = (): string => trackedTempDir('wmux-task-push-rpc-');
   const setup = (over: { row?: unknown; tasks?: unknown[]; caller?: string | null; repoDefault?: string | null; botRepo?: string; head?: string; fail?: boolean; ended?: unknown; reclaimed?: (ws: string, pty: string) => { taskId: string; botId: string; ownerWorkspaceId: string } | null } = {}) => {
     const handlers = new Map<string, Handler>();
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-task-push-rpc-'));
+    const dir = rpcDir();
     const push = vi.fn(async (i: { branch: string }) => (over.fail
       ? { ok: false as const, reason: 'rejected' as const, error: 'non-fast-forward' }
       : { ok: true as const, branch: i.branch, remote: 'origin' as const, head: over.head ?? 'abc', output: '' }));
@@ -681,7 +678,7 @@ describe('task.push RPC', () => {
         resolveCallerWorkspace: async () => 'ws-resumed',
         reclaimedWorkerOfPane: () => ({ taskId: 'wtask-1', botId: 'bot-1', ownerWorkspaceId: 'ws-owner' }),
         exists: () => true,
-        wmuxDir: () => fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-task-push-rpc-')),
+        wmuxDir: rpcDir,
         push: push as never,
         repoDefaultBranch: async () => 'main',
       });
@@ -695,9 +692,9 @@ describe('task.push RPC', () => {
   });
 
   it('a skip a later report superseded holds nothing back: sent back, reported again, completed by its merged PR, the resumed worker pushes', async () => {
-    const ledgerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-task-push-ledger-'));
+    const ledgerDir = trackedTempDir('wmux-task-push-ledger-');
+    const ledger = new TaskLedger({ dir: ledgerDir });
     try {
-      const ledger = new TaskLedger({ dir: ledgerDir });
       const id = 'wtask-1';
       await ledger.register({ id, taskWorkspaceId: 'ws-task', ownerWorkspaceId: 'ws-owner', title: 't', dispatch: { origin: { kind: 'bot', botId: 'bot-1' }, preset: 'default', repoKey: 'github.com/acme/app', gitCommonDir: '/r/.git' } });
       const step = async (status: string, actor: { kind: 'worker' | 'brain'; workspaceId: string }): Promise<void> => {
@@ -721,21 +718,22 @@ describe('task.push RPC', () => {
         resolveCallerWorkspace: async () => 'ws-resumed',
         reclaimedWorkerOfPane: () => ({ taskId: id, botId: 'bot-1', ownerWorkspaceId: 'ws-owner' }),
         exists: () => true,
-        wmuxDir: () => fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-task-push-rpc-')),
+        wmuxDir: rpcDir,
         push: push as never,
         repoDefaultBranch: async () => 'main',
       });
       expect(await (handlers.get('task.push') as Handler)({ senderPtyId: 'pty-9' }, local)).toMatchObject({ ok: true });
       expect(push).toHaveBeenCalledTimes(1);
     } finally {
-      fs.rmSync(ledgerDir, { recursive: true, force: true });
+      // Its pending writes land before its dir is removed, whatever failed.
+      await ledger.flush();
     }
   });
 
   it('holds the push to the pin on the dispatch, else the bot\'s profile\'s; a row with neither is pinned on the ledger at its first use', async () => {
-    const ledgerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-task-push-ledger-'));
+    const ledgerDir = trackedTempDir('wmux-task-push-ledger-');
+    const ledger = new TaskLedger({ dir: ledgerDir });
     try {
-      const ledger = new TaskLedger({ dir: ledgerDir });
       const dispatch = { origin: { kind: 'bot', botId: 'bot-1' }, repoKey: 'github.com/acme/app', gitCommonDir: '/r/.git' };
       const pushWith = async (row: Record<string, unknown>, profilePin?: string) => {
         const handlers = new Map<string, Handler>();
@@ -751,7 +749,7 @@ describe('task.push RPC', () => {
           getLedger: () => ({ findOpenByTaskWorkspace: () => ledger.get(row.id as string), get: (id: string) => ledger.get(id), recordOriginPin: (id: string, p: string) => ledger.recordOriginPin(id, p) }) as never,
           resolveCallerWorkspace: async () => 'ws-task',
           exists: () => true,
-          wmuxDir: () => fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-task-push-rpc-')),
+          wmuxDir: rpcDir,
           push: push as never,
           repoDefaultBranch: async () => 'main',
           botOriginPin: () => profilePin,
@@ -770,7 +768,8 @@ describe('task.push RPC', () => {
       await ledger.flush();
       expect(new TaskLedger({ dir: ledgerDir }).get('wtask-c')?.dispatch?.originPin).toBe('git@github.com:acme/app');
     } finally {
-      fs.rmSync(ledgerDir, { recursive: true, force: true });
+      // Its pending writes land before its dir is removed, whatever failed.
+      await ledger.flush();
     }
   });
 
@@ -822,31 +821,27 @@ describe('task.push RPC', () => {
     expect(await none.call({ senderPtyId: 'pty-1' }, local)).toMatchObject({ ok: false, error: { code: 'FAILED_PRECONDITION', message: expect.stringMatching(/recorded no repository folder/) } });
     expect(none.push).not.toHaveBeenCalled();
     // A bot's row from before the record: the bot's own repository folder.
-    const repo = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-task-push-botrepo-')));
-    try {
-      execFileSync('git', ['init', '-q', repo]);
-      const handlers = new Map<string, Handler>();
-      const push = vi.fn(async (i: { branch: string }) => ({ ok: true as const, branch: i.branch, remote: 'origin' as const, head: 'abc', output: '' }));
-      const row = { id: 'wtask-1', ownerWorkspaceId: 'ws-owner', taskWorkspaceId: 'ws-task', dispatch: { origin: { kind: 'bot', botId: 'bot-1' }, repoKey: 'github.com/acme/app' } };
-      registerTaskPushRpc({ register: (m: string, h: Handler) => handlers.set(m, h) } as never, {
-        getWindow: () => null,
-        daemon: { rpc: vi.fn(async () => ({ ok: true, tasks: [{ id: 'wtask-1', status: 'open', branch: 'wtask/one', worktreePath: '/w/one' }] })) },
-        getLedger: () => ({ findOpenByTaskWorkspace: () => row, get: () => row }) as never,
-        resolveCallerWorkspace: async () => 'ws-task',
-        wmuxDir: () => r.dir,
-        push: push as never,
-        repoDefaultBranch: async () => 'main',
-        botRepoPath: (id) => (id === 'bot-1' ? repo : undefined),
-      });
-      expect(await (handlers.get('task.push') as Handler)({ senderPtyId: 'pty-1' }, local)).toMatchObject({ ok: true });
-      expect(push).toHaveBeenCalledWith(expect.objectContaining({ gitCommonDir: path.join(repo, '.git') }));
-    } finally {
-      fs.rmSync(repo, { recursive: true, force: true });
-    }
+    const repo = fs.realpathSync.native(trackedTempDir('wmux-task-push-botrepo-'));
+    execFileSync('git', ['init', '-q', repo]);
+    const handlers = new Map<string, Handler>();
+    const push = vi.fn(async (i: { branch: string }) => ({ ok: true as const, branch: i.branch, remote: 'origin' as const, head: 'abc', output: '' }));
+    const row = { id: 'wtask-1', ownerWorkspaceId: 'ws-owner', taskWorkspaceId: 'ws-task', dispatch: { origin: { kind: 'bot', botId: 'bot-1' }, repoKey: 'github.com/acme/app' } };
+    registerTaskPushRpc({ register: (m: string, h: Handler) => handlers.set(m, h) } as never, {
+      getWindow: () => null,
+      daemon: { rpc: vi.fn(async () => ({ ok: true, tasks: [{ id: 'wtask-1', status: 'open', branch: 'wtask/one', worktreePath: '/w/one' }] })) },
+      getLedger: () => ({ findOpenByTaskWorkspace: () => row, get: () => row }) as never,
+      resolveCallerWorkspace: async () => 'ws-task',
+      wmuxDir: () => r.dir,
+      push: push as never,
+      repoDefaultBranch: async () => 'main',
+      botRepoPath: (id) => (id === 'bot-1' ? repo : undefined),
+    });
+    expect(await (handlers.get('task.push') as Handler)({ senderPtyId: 'pty-1' }, local)).toMatchObject({ ok: true });
+    expect(push).toHaveBeenCalledWith(expect.objectContaining({ gitCommonDir: path.join(repo, '.git') }));
   });
 
   it('sweeps relays whose task is no longer open, when it registers', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-task-push-sweep-'));
+    const dir = trackedTempDir('wmux-task-push-sweep-');
     const relayRoot = path.join(dir, 'factory', 'git-relay');
     fs.mkdirSync(path.join(relayRoot, 'wtask-open'), { recursive: true });
     fs.mkdirSync(path.join(relayRoot, 'wtask-gone'), { recursive: true });
@@ -857,7 +852,6 @@ describe('task.push RPC', () => {
       getLedger: () => ({ get: (id: string) => (id === 'wtask-open' ? { status: 'working' } : undefined) }) as never,
     });
     expect(fs.readdirSync(relayRoot).sort()).toEqual(['wtask-open']);
-    fs.rmSync(dir, { recursive: true, force: true });
   });
 
   it('hands the push a reader of the repository\'s own default branch, for any task', async () => {

@@ -1,6 +1,7 @@
 // Must stay the first import: turns off working-directory executable lookup (Windows) before any module runs.
 import '../shared/exeSearchGuard';
 import { isInternalForkPayload } from '../shared/hooks/internalFork';
+import { releaseDaemonFiles, replaceFileOrWrite, unlinkIfContent } from '../shared/daemon/daemonFiles';
 import { terminalCoreRuntime, terminalCoreSelection } from '../shared/terminalCoreSettings';
 import { collectDaemonMemoryDiagnostics } from './memoryDiagnostics';
 import { createStartupRecovery } from './startupRecovery';
@@ -35,6 +36,7 @@ import { pendingRemovalRefusalAt } from '../main/worktask/pendingWorktreeRemoval
 import { recordedRunPtyIds } from './automation/store';
 import { AUTOMATION_EVENT } from '../shared/automation';
 import { InputReceiptStore } from './web/InputReceiptStore';
+import { parseTrustedProxyConfig } from './web/trustedProxy';
 import { PhoneWorktreeService } from './web/phoneWorktree';
 import { ProjectConfigStore } from '../main/project/ProjectConfigStore';
 import { phonePrepSummary, prepareNewWorktree } from '../main/worktask/workspacePrep';
@@ -82,7 +84,7 @@ import { loadWebPrefs, saveWebPrefs } from './web/webPrefsStore';
 import { scheduleTokenFileReHarden } from '../shared/security';
 import { applyTaskQueryView } from '../shared/a2aTaskQueryView';
 import { normalizeLivePaneIds } from '../shared/a2aOrphanedTask';
-import { WEB_DEFAULT_PORT, type WebTlsConfig } from '../shared/web';
+import { WEB_DEFAULT_PORT, webHostIsLoopback, type WebTlsConfig } from '../shared/web';
 import { generateSnapshotUnqueued, enqueueSnapshotJob, generateTextSnapshot, generateTextSnapshotUnqueued, runSmallSnapshotJob, capTextRowsToFrameBudget, MAX_SCROLLBACK } from './HeadlessSnapshot';
 import { queuedScreenText, queuedTextSnapshot } from './queuedSessionText';
 import type { TerminalPty } from '../shared/terminalPty';
@@ -1893,8 +1895,14 @@ async function acquireLock(): Promise<boolean> {
     }
   }
 
-  // Write PID file (separate from lock for backward compat)
-  fs.writeFileSync(PID_FILE, String(process.pid), { encoding: 'utf-8', mode: 0o600 });
+  // Write PID file (separate from lock for backward compat). Renamed into place:
+  // the launcher already wrote one (claimSpawnedDaemonFiles) that other
+  // starters may be reading, and a truncating write would show them it empty.
+  // Fatal, as the plain write it replaced was, once the in-place fallback
+  // fails too: we hold the lock, but daemon.pid may name another starter's child.
+  if (!replaceFileOrWrite(PID_FILE, String(process.pid), (msg) => log('warn', msg))) {
+    throw new Error(`Failed to write ${PID_FILE}`);
+  }
   // Issue #546 — boot-progress marker. The window between this line and
   // `daemon-pipe` being written is the whole problem: we are alive and own the
   // lock, but we cannot answer a ping (no pipe yet), and cold recovery of a
@@ -1909,51 +1917,37 @@ async function acquireLock(): Promise<boolean> {
   //        │                                                    ├── daemon-pipe
   //        └───────────── launcher must NOT kill in here ───────┘
   //
+  // The launcher normally wrote daemon.pid and this marker with our PID right
+  // after spawn (claimSpawnedDaemonFiles), so the time before this line is
+  // covered too. Holding the lock, we overwrite both: when two starters raced,
+  // the files may name the other starter's child, which lost the lock.
+  //
   // Written once, never re-touched: the launcher trusts it on existence + PID
   // liveness, not freshness. A freshness gate would re-create the very bug —
   // recovery is a long await chain, so a busy event loop can delay a periodic
   // touch and a healthy daemon would read as stale. Elapsed time is bounded on
   // the launcher side by DAEMON_READY_HARD_CEILING_MS instead. A marker
   // orphaned by a hard crash is self-invalidating: its PID is dead.
-  try {
-    fs.writeFileSync(BOOT_MARKER_FILE, String(process.pid), { encoding: 'utf-8', mode: 0o600 });
-  } catch (err) {
-    // Non-fatal: without the marker the launcher just falls back to the old
-    // escalated-reping-then-kill behavior. Never block boot on it.
-    log('warn', 'Failed to write boot marker:', err);
-  }
+  // Renamed into place, like the pid file: a launcher waiting on the marker
+  // reads an empty one as "boot finished". Non-fatal (a failure is logged):
+  // without the marker the launcher just falls back to the old
+  // escalated-reping-then-kill behavior. Never block boot on it.
+  replaceFileOrWrite(BOOT_MARKER_FILE, String(process.pid), (msg) => log('warn', msg));
   return true;
 }
 
 /** Issue #546 — drop the boot-progress marker once we can answer pings, and on
- *  every teardown path. Idempotent; never throws. */
+ *  every teardown path. Only our own marker. Idempotent; never throws. */
 function clearBootMarker(): void {
-  try {
-    if (fs.existsSync(BOOT_MARKER_FILE)) fs.unlinkSync(BOOT_MARKER_FILE);
-  } catch {
-    // ignore
-  }
+  unlinkIfContent(BOOT_MARKER_FILE, String(process.pid));
 }
 
+/** The pipe name this daemon wrote to `daemon-pipe`, once it has. */
+let writtenPipeName: string | null = null;
+
+/** Remove the files this daemon wrote, and only those (releaseDaemonFiles). */
 function releaseLock(): void {
-  try {
-    if (fs.existsSync(PID_FILE)) fs.unlinkSync(PID_FILE);
-  } catch {
-    // ignore
-  }
-  try {
-    if (fs.existsSync(LOCK_FILE)) fs.unlinkSync(LOCK_FILE);
-  } catch {
-    // ignore
-  }
-  // Clean up pipe name file
-  try {
-    const pipeNameFile = path.join(wmuxDir, 'daemon-pipe');
-    if (fs.existsSync(pipeNameFile)) fs.unlinkSync(pipeNameFile);
-  } catch {
-    // ignore
-  }
-  clearBootMarker();
+  releaseDaemonFiles(wmuxDir, process.pid, writtenPipeName);
 }
 
 // === Session recovery ===
@@ -3794,6 +3788,7 @@ function registerRpcHandlers(
       newToken?: boolean;
       tailscale?: boolean;
       tls?: unknown;
+      trustedProxy?: unknown;
       rememberPort?: boolean;
     };
     const port =
@@ -3807,6 +3802,13 @@ function registerRpcHandlers(
       ? p.allowedHosts.filter((h): h is string => typeof h === 'string')
       : [];
     const requestedTls = parseWebTlsConfig(p.tls);
+    // Never persisted and never inherited: a start that does not send it runs without it.
+    const trustedProxy = parseTrustedProxyConfig(p.trustedProxy);
+    if (trustedProxy && webHostIsLoopback(host)) {
+      throw new Error(
+        `--trust-proxy-* needs a non-loopback bind: a proxy at ${[...trustedProxy.from].join(', ')} cannot reach ${host}. Add --expose or --host <address>`,
+      );
+    }
     const tailscale = p.tailscale === true;
     // The desktop's in-place grant change restarts a RUNNING server. A stop
     // that landed after it read status wins: nothing is started, and the
@@ -3860,6 +3862,7 @@ function registerRpcHandlers(
         allowedHosts,
         tailscale,
         ...(tls ? { tls } : {}),
+        ...(trustedProxy ? { trustedProxy } : {}),
         token,
       });
     } catch (err) {
@@ -10379,10 +10382,10 @@ async function main(): Promise<void> {
   // Write active pipe name so clients know which pipe to connect to
   const activePipeName = pipeServer.getActivePipeName();
   const pipeNameFile = path.join(wmuxDir, 'daemon-pipe');
-  try {
-    fs.writeFileSync(pipeNameFile, activePipeName, { encoding: 'utf-8', mode: 0o600 });
-  } catch (err) {
-    log('warn', 'Failed to write pipe name file:', err);
+  // Renamed into place: a client that reads it empty falls back to the
+  // default pipe name, which is not ours when we bound a fallback pipe.
+  if (replaceFileOrWrite(pipeNameFile, activePipeName, (msg) => log('warn', msg))) {
+    writtenPipeName = activePipeName;
   }
   markDaemonBoot('pipe-file-written');
   // Issue #546 — we can answer pings from here on, so the "still booting" grace
@@ -10703,9 +10706,10 @@ main().catch((err) => {
     // redundant second daemon the launcher spawned over a daemon it failed to
     // detect (split-brain Defect 3 / Step ③). Exit with a DISTINCT code so the
     // launcher reconnects to the existing daemon instead of treating this as a
-    // generic startup failure. releaseLock() clears the daemon.pid that
-    // acquireLock() wrote for us; the launcher reconnects via the canonical
-    // pipe name, not the pid file.
+    // generic startup failure. releaseLock() clears the daemon.pid and lock
+    // that acquireLock() wrote for us, and keeps the live daemon's daemon-pipe
+    // (we never wrote one); the launcher reconnects via the canonical pipe
+    // name and restores daemon.pid from the ping.
     log('warn', 'another live daemon owns the control pipe — exiting cleanly (EDAEMON_ALREADY_RUNNING)');
     noteExitReason('another live daemon owns the control pipe');
     releaseLock();

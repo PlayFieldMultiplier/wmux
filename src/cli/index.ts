@@ -138,6 +138,22 @@ WEB ACCESS (browser / PWA)
                                     for a reverse proxy or native TLS DNS name
         [--new-token]               Mint a fresh access token, revoking every
                                     device already paired
+        [--trust-proxy-header <name>]
+                                    Sign in through a reverse proxy such as
+                                    oauth2-proxy: a request with no token,
+                                    from --trust-proxy-from, carrying
+                                    --trust-proxy-user in this header (e.g.
+                                    X-Auth-Request-Email), is you. All three
+                                    together; needs a non-loopback bind; not
+                                    kept on a re-run or daemon restart
+        [--trust-proxy-user <email>]
+                                    The signed-in email the proxy forwards
+        [--trust-proxy-from <ip1,ip2>]
+                                    The proxy's own addresses (single
+                                    addresses, never this machine). Every
+                                    connection from them must have passed
+                                    the sign-in, and the proxy must drop a
+                                    client's own copy of the header
         [--status]                  Show whether the web server is running
         [--stop]                    Stop the web server and revoke all web
                                     credentials

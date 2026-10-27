@@ -5220,17 +5220,27 @@ whose tries ran out with the release still a draft ends `refused` with
 it was published ends `refused` with `draft-gone` (nothing is published, and
 no new draft is made), and one whose tag name is also a branch's with
 `tag-name-is-branch`. Any act whose GitHub answer had a shape the desktop
-cannot read ends `refused` with `unreadable-answer`.
+cannot read ends `refused` with `unreadable-answer`. An act no try of which
+may have reached GitHub (it was never tried, or every try stopped before
+anything was sent: its reads kept failing, say) ends `refused` with
+`approval-stale` on its first try or sweep 24 hours or more after
+`decidedAt`, or once the clock reads more than 24 hours earlier than
+`decidedAt` (a clock less far behind waits, as in the Undo window); nothing was
+sent, and the bot asks again with a new request if it is still wanted. An act a try of which may
+have reached GitHub is not aged out: a read of GitHub settles it.
 
 `refusal` may be a list of codes joined by `, `; show one sentence per code.
 A refused `release` that made a draft adds one last code saying what became
 of it when it stays on GitHub: `draft-kept-tag-made` (its tag is made at the
 commit, so the draft is kept for the owner to publish or delete),
-`draft-kept-unchecked` (whether the tag was made could not be checked; the
-draft is kept), `draft-kept-changed` (the draft was changed on GitHub since
+`draft-kept-unchecked` (the draft could not be checked, or GitHub did not
+answer about it for a day; it may still be there), `draft-kept-changed` (the draft was changed on GitHub since
 wmux made it, so it is the owner's and is kept), or `draft-not-deleted`
-(deleting it failed: the owner deletes it on GitHub). A deleted draft adds
-nothing.
+(GitHub refused the delete: the owner deletes it on GitHub). A deleted draft
+adds nothing. When the desktop quit between the refusal and that decision, or
+GitHub did not answer it then, the request is first `refused` without the
+code; once a later sweep makes the decision it gains it, with a new
+`updatedAt` (the room gets one more outcome card).
 While it runs, or
 while it reads GitHub to learn whether an interrupted try went through, the
 request stays `approved`; it ends `executed` or `refused`.
@@ -5437,13 +5447,22 @@ whose app page was not built serves the classic page at `/`.
   rejected promise and is never wired to the daemon. It also installs a
   `window.clipboardAPI` on the browser clipboard (secure contexts only) and
   registers `/sw.js` in a secure context, as the classic page does.
-- No stored credential, a 401, or a browser that cannot run the es2022 bundle
-  (iOS before 16.4) → the page goes to `/classic`. After pairing, the classic
-  page lands on `/` again (and an old browser falls straight back).
+- No stored credential → the page asks `GET /api/config` with no credential.
+  A 200 means a trusted sign-in proxy vouches for it (`wmux web
+  --trust-proxy-*`): the page runs with no token, sends no `Authorization`
+  header, opens streams with no `?token=` or ticket, and uses
+  `redirect: 'manual'`, so an ended sign-in (a redirect to the identity
+  provider) reloads the page through the sign-in. Anything else → `/classic`.
+- A 401 for a stored token goes to `/classic`, unless that same probe now
+  answers 200: then the token is dropped and the page boots again from `/`.
+  A browser that cannot run the es2022 bundle (iOS before 16.4) → `/classic`.
+  After pairing, the classic page lands on `/` again (and an old browser falls
+  straight back).
 - Terminals are the desktop's own `Terminal` component over the web routes:
   - A pane's stream (`GET /api/stream`, with a stream ticket for a device
-    credential — `<deviceId>.<secret>` — and `?token=` for the operator token,
-    which never asks for a ticket) is open only while the pane is shown and its
+    credential — `<deviceId>.<secret>` — `?token=` for the operator token,
+    which never asks for a ticket, and nothing for a proxy session, whose
+    cookies reach the sign-in proxy) is open only while the pane is shown and its
     terminal reports itself visible; it closes on hide. A device credential
     never goes into the URL: no ticket, no stream.
   - Inline images (sixel / iTerm2) are off in the browser: the image decoder

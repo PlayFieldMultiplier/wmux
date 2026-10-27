@@ -428,6 +428,31 @@ describe('AgentDetector', () => {
       expect(proseCb).not.toHaveBeenCalled();
     });
 
+    it('codex-cli 0.162.1 "Trust this folder? Codex can …" row reads as awaiting_input; other words after it do not', () => {
+      // The captured screen's rows, drawn as lines with no banner first.
+      const det = new AgentDetector();
+      const cb = vi.fn();
+      det.onEvent(cb);
+      det.feed('  Folder access\r\n\r\n  Trust this folder? Codex can read, edit, and run files here, subject to your permission settings. Folder settings\r\n'
+        + '› 1. Trust and continue\r\n  2. Back to Agent Command Center\r\n\r\n  enter continue · esc back\r\n');
+      expect(cb.mock.calls.map((c) => c[0])).toEqual([
+        { agent: 'Codex CLI', status: 'running', message: 'Agent started' },
+        { agent: 'Codex CLI', status: 'awaiting_input', message: 'Directory trust prompt' },
+      ]);
+      // A narrow pane wraps right after `Codex`.
+      const narrow = new AgentDetector();
+      const narrowCb = vi.fn();
+      narrow.onEvent(narrowCb);
+      narrow.feed('  Trust this folder? Codex\r\n  can read, edit, and run files here,\r\n');
+      expect(narrowCb.mock.calls.map((c) => c[0].status)).toEqual(['running', 'awaiting_input']);
+      // The bare question is also Kimi Code CLI's: no other sentence after it makes it Codex's.
+      const other = new AgentDetector();
+      const otherCb = vi.fn();
+      other.onEvent(otherCb);
+      other.feed('  Trust this folder? Tool approvals follow your permission settings.\r\n');
+      expect(otherCb).not.toHaveBeenCalled();
+    });
+
     it('does NOT match conversational mentions (end-anchored whole line)', () => {
       const { det, cb } = gated();
       det.feed('  If Codex prints "Would you like to run the following command?" then pick no.\n');

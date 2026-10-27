@@ -28,7 +28,10 @@
 // GitHub's 4xx is a refusal (nothing was written); a rate limit or a gh that
 // did not start gives the try back; anything else is uncertain and settled
 // by a read no sooner than RECONCILE_AFTER_MS later. A refusal is final for
-// its request: the bot asks again with a new request.
+// its request: the bot asks again with a new request. A row no try of which
+// started (actRowClaimed) a day after its approval is refused
+// `approval-stale` before it is claimed (approvals.ts authorizeAct): a try
+// whose reads keep failing gives itself back, so its count never runs out.
 //
 // A release (releaseAct.ts) runs its own steps after the pins: the default
 // branch, the commit on it, the tag and the release still free, the checks
@@ -42,12 +45,15 @@
 // commit (or cannot be read): a publish that stopped after making the tag
 // keeps its draft for the owner, since deleting it would leave the tag with
 // no release. A kept draft, or one whose delete failed, adds a code to the
-// row's refusal (DRAFT_FATE_CODE), so the owner is told.
+// row's refusal (DRAFT_FATE_CODE), so the owner is told. The decision is
+// journaled (decideDraft); a draft a quit, or a read GitHub did not answer,
+// left open is decided by a later sweep, and its request's refusal is
+// amended then.
 
 import type { GhActAnswer, GhActPort } from '../github/GhActService';
 import type { ApprovalAct, ApprovalActRepo, ApprovalReleaseAct } from '../../shared/botApproval';
 import { actMarker, bodyWithMarker, normalizeActText } from './actPayload';
-import { ACT_MAX_ATTEMPTS, actRowClaimed, runnableAct, type ActEffect, type ActEffectStore } from './actEffectStore';
+import { ACT_MAX_ATTEMPTS, actRowClaimed, draftUndecided, draftUnansweredTooLong, runnableAct, type ActEffect, type ActEffectStore } from './actEffectStore';
 import type { StoredApproval } from './approvals';
 import { failed, isFail, loginOf, readPaged, readRefusal, rec, repoPath, str, type Read } from './actRead';
 import { laneRefusalLine } from './laneRefusalText';
@@ -258,9 +264,20 @@ export class ActExecutor {
   /** Startup and the sweep: settle the rows that may have run, run the
    *  pending rows whose request allows it now, and settle the pending rows
    *  whose request never will (the run refuses them); drop the rows whose
-   *  request is gone. */
+   *  request is gone; decide the drafts of refused rows a quit left
+   *  undecided. */
   async reconcileAll(): Promise<void> {
     for (const row of this.ports.effects.list()) {
+      if (draftUndecided(row)) {
+        await this.run(row.id);
+        continue;
+      }
+      if (row.status === 'done' || row.status === 'refused') {
+        // An ended row outlives its request only when its drop was not
+        // written: dropped again.
+        if (this.ports.approval.authorize(row) === 'approval-missing') this.ports.effects.drop(row.id);
+        continue;
+      }
       if (!runnableAct(row) || (row.status !== 'uncertain' && row.status !== 'pending')) continue;
       const denied = this.ports.approval.authorize(row);
       if (denied === 'approval-missing') await this.orphaned(row);
@@ -274,37 +291,50 @@ export class ActExecutor {
   private async orphaned(row: ActEffect): Promise<void> {
     const claimed = actRowClaimed(row);
     if (claimed && this.now() - (row.startedAt ?? row.updatedAt) < (this.ports.reconcileAfterMs ?? RECONCILE_AFTER_MS)) return;
+    // Its draft first: a quit before the row is dropped decides it again
+    // (a draft deleted then reads as gone); GitHub not answering keeps the
+    // row for a later sweep.
+    if ((await this.dropDraft(row))?.fate === 'retry') return;
     if (!this.ports.effects.drop(row.id)) return;
     this.ports.log?.(`[factory] act ${row.action} ${row.requestId} dropped: its request is gone (${row.status}, attempt ${row.attempt}${claimed ? '; whether it reached GitHub is not known' : ''})`);
-    await this.dropDraft(row);
   }
 
   /** A release row that ended refused, or was dropped, with a draft of its
    *  own on GitHub: the draft goes while it is still a draft (deleteDraft
-   *  keeps one published since, or whose tag is made at the commit or cannot
-   *  be checked: the act's tag and commit, or the draft's own when the
-   *  request is gone), and the log says what became of it. The code the
-   *  row's refusal gains, or null. */
-  private async dropDraft(row: ActEffect | null): Promise<string | null> {
+   *  keeps one published since, changed, or whose tag is made at the commit
+   *  or cannot be checked: the act's tag and commit, or the draft's own when
+   *  the request is gone), and the log says what became of it. Its fate (null:
+   *  no draft) and the code the row's refusal gains; `retry`: GitHub did not
+   *  answer, counted on the row, and the draft stays open until that has
+   *  lasted DRAFT_OPEN_MAX_MS over DRAFT_OPEN_MIN_TRIES reads at least: then
+   *  it is kept, not checked, and told. */
+  private async dropDraft(row: ActEffect | null): Promise<{ fate: DraftFate; code: string | null } | null> {
     if (!row || row.action !== 'release' || row.draftId === undefined) return null;
     const p = repoPath(row.repoKey);
     const act = this.ports.approval.request(row.requestId)?.act;
     const want = act?.kind === 'release' ? act : undefined;
-    const fate: DraftFate = p ? await deleteDraft(this.ports.gh, p, row.draftId, want).catch(() => 'kept-unchecked' as const) : 'kept-unchecked';
+    let fate: DraftFate = p ? await deleteDraft(this.ports.gh, p, row.draftId, want).catch(() => 'retry' as const) : 'kept-unchecked';
+    if (fate === 'retry') {
+      const counted = this.ports.effects.noteDraftUnanswered(row.id, this.now()) ?? row;
+      if (draftUnansweredTooLong(counted, this.now())) fate = 'kept-unchecked';
+    }
     const code = DRAFT_FATE_CODE[fate] ?? null;
     this.ports.log?.(`[factory] act release ${row.requestId}: its draft ${row.draftId}: ${fate}${code ? ` (${laneRefusalLine(code, row.repoKey)})` : ''}`);
-    return code;
+    return { fate, code };
   }
 
-  /** A row that ended refused: its release draft settled (dropDraft), and
-   *  its reason told when the draft stays on GitHub. */
+  /** A row that ended refused: its release draft settled (dropDraft), the
+   *  decision journaled, and its reason told when the draft stays on
+   *  GitHub. A decision not journaled is told all the same (a new row
+   *  object); the row stays undecided and the next sweep decides it again.
+   *  `retry` returns the row itself: nothing decided. */
   private async refusedDraft(out: ActEffect | null): Promise<ActEffect | null> {
-    if (out?.status !== 'refused') return out;
-    const code = await this.dropDraft(out);
-    if (!code) return out;
-    const reason = `${out.reason ?? 'refused'}, ${code}`;
-    // Not journaled: the owner is told all the same.
-    return this.ports.effects.amendRefusal(out.id, reason) ?? { ...out, reason };
+    if (!out || !draftUndecided(out)) return out;
+    const decided = await this.dropDraft(out);
+    // GitHub did not answer: the draft stays open for a later sweep.
+    if (decided?.fate === 'retry') return out;
+    const reason = decided?.code ? `${out.reason ?? 'refused'}, ${decided.code}` : undefined;
+    return this.ports.effects.decideDraft(out.id, reason) ?? { ...out, ...(reason ? { reason } : {}) };
   }
 
   private emit(e: ActEffect | null): void {
@@ -315,7 +345,21 @@ export class ActExecutor {
   private async runOnce(id: string): Promise<ActEffect | null> {
     const { effects } = this.ports;
     let row = effects.get(id);
-    if (!row || !runnableAct(row)) return row;
+    if (!row) return row;
+    if (draftUndecided(row)) {
+      // A refusal whose draft a quit, or a read GitHub did not answer, left
+      // open. Its request gone is the approvals' own answer: while they are
+      // not up (a start), nothing is decided.
+      const gone = this.ports.approval.authorize(row) === 'approval-missing';
+      if (!gone && !this.ports.approval.request(row.requestId)) return row;
+      const out = await this.refusedDraft(row);
+      if (!out || out === row) return out;
+      this.emit(out);
+      // A request that is gone keeps no row once its draft is decided.
+      if (gone && !draftUndecided(out)) effects.drop(out.id);
+      return out;
+    }
+    if (!runnableAct(row)) return row;
     if (row.status === 'uncertain' || (row.status === 'pending' && actRowClaimed(row))) {
       // A try that may have landed (or an earlier try that ended without
       // proof either way): read GitHub before anything is sent again.
@@ -325,6 +369,14 @@ export class ActExecutor {
       row = settled;
     }
     if (!row || row.status !== 'pending') return row;
+    // An approval no try of which started in a day (its reads kept failing,
+    // say) ends here, before a try is claimed: nothing was sent for it.
+    if (!actRowClaimed(row) && this.ports.approval.authorize(row) === 'approval-stale') {
+      const out = effects.settle(id, 'refused', 'approval-stale');
+      this.ports.log?.(`[factory] act ${row.action} ${row.requestId} ${out?.status ?? 'refused'} (approval-stale)`);
+      this.emit(out);
+      return out;
+    }
     const claimed = effects.claim(id);
     if (!claimed) return effects.get(id);
     this.emit(claimed);

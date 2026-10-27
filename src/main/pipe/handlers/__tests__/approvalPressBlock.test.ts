@@ -6,11 +6,15 @@
 // that get blocked.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
 import { RpcRouter } from '../../RpcRouter';
+import { sendToRenderer } from '../_bridge';
 import { registerInputRpc } from '../input.rpc';
 import type { GatedSubmitResult } from '../../../../shared/ptyMessageDelivery';
 import { registerApprovalsRpc, PRESS_POLICY_REFUSALS, type AnswerPolicy } from '../approvals.rpc';
 import { mintCommanderToken, revokeCommanderToken } from '../../../deck/commanderTrust';
+import { deliberateSleep } from '../../../../test-utils/waitFor';
 import type { BrowserWindow } from 'electron';
 import type { PTYManager } from '../../../pty/PTYManager';
 import type { TaskLedger } from '../../../../daemon/ledger/TaskLedger';
@@ -18,6 +22,9 @@ import type { TaskLedger } from '../../../../daemon/ledger/TaskLedger';
 vi.mock('../_bridge', () => ({ sendToRenderer: vi.fn() }));
 
 const fakeWindow = {} as BrowserWindow;
+
+/** Measured folder-trust screens (Claude Code 2.1.310, Codex 0.162.1). */
+const TRUST_FIXTURES = path.join(__dirname, '../../../../daemon/approvals/__tests__/fixtures/folder-trust');
 
 interface Wiring {
   router: RpcRouter;
@@ -39,7 +46,14 @@ const LEDGER = {
  * The live facts the raw-input guard reads: the pane's workspace policy and
  * what is on its screen. Tests mutate these between calls.
  */
-const live: { policy: AnswerPolicy; screen: string | null; betweenPasteAndEnter?: () => void } = {
+const live: {
+  policy: AnswerPolicy;
+  screen: string | null;
+  betweenPasteAndEnter?: () => void;
+  afterScreenRead?: () => void;
+  /** Latency of each screen read, like a hidden pane's. */
+  readDelayMs?: number;
+} = {
   policy: { allowed: false, reason: 'autonomy-off' },
   screen: '',
 };
@@ -87,7 +101,14 @@ function wire(options: {
     undefined,
     {
       answerPolicy: async () => live.policy,
-      readScreenText: async () => live.screen,
+      readScreenText: async () => {
+        if (live.readDelayMs !== undefined) {
+          await deliberateSleep(live.readDelayMs, 'latency of a slow screen read, inside the stub');
+        }
+        const screen = live.screen;
+        live.afterScreenRead?.();
+        return screen;
+      },
       // The gap between paste and Enter: tests may redraw the screen in it.
       sleep: async () => { live.betweenPasteAndEnter?.(); },
     },
@@ -113,6 +134,8 @@ beforeEach(() => {
   live.policy = { allowed: false, reason: 'autonomy-off' };
   live.screen = '';
   live.betweenPasteAndEnter = undefined;
+  live.afterScreenRead = undefined;
+  live.readDelayMs = undefined;
   w = wire();
 });
 afterEach(() => {
@@ -477,9 +500,166 @@ describe('the gated submit for non-operator deliveries', () => {
     expect((await asBrain('input.send', { ptyId: 'pty-w', text: 'hello' })).ok).toBe(true);
   });
 
-  it('when policy lets automation answer, an unreadable screen does not block it', async () => {
+  it('an unreadable screen is gate_unavailable in every policy: it may hide a trust prompt', async () => {
     live.policy = { allowed: true };
     live.screen = null;
+    expect(await w.gatedSubmit('pty-w', 'hello')).toMatchObject({ ok: false, reason: 'gate_unavailable' });
+    expect(w.writes).toHaveLength(0);
+    // input.send keeps its old rule: an unreadable screen is not a dialog.
+    expect((await asBrain('input.send', { ptyId: 'pty-w', text: 'hello' })).ok).toBe(true);
+  });
+});
+
+// A folder-trust dialog fires no hook, so it never has a record, and trust
+// prompts are never answered by forwarded input: not even under a danger-mode
+// policy that lets automation answer approvals.
+describe('a folder-trust dialog on screen', () => {
+  const trustScreen = (name: string): string =>
+    (JSON.parse(fs.readFileSync(path.join(TRUST_FIXTURES, `${name}.json`), 'utf8')) as { screen: string[] }).screen.join('\n');
+  /** Claude Code 2.1.310: unnumbered "❯ No, exit". Codex 0.162.1: "› 1. Trust and continue". */
+  const TRUST_SCREENS = {
+    claude: trustScreen('claude-folder-trust-120x40'),
+    codex: trustScreen('codex-folder-trust-60x30'),
+  };
+  const DANGER: AnswerPolicy = { allowed: true };
+
+  it.each([
+    ['claude', DANGER],
+    ['codex', DANGER],
+    ['claude', { allowed: false, reason: 'autonomy-off' }],
+    ['codex', { allowed: false, reason: 'autonomy-off' }],
+  ] as Array<[keyof typeof TRUST_SCREENS, AnswerPolicy]>)(
+    '%s: send_message, `send --submit` and `send-key Enter` all refuse (policy %o)',
+    async (agent, policy) => {
+      live.policy = policy;
+      live.screen = TRUST_SCREENS[agent];
+      // send_message / A2A delivery: main's gated paste + submit.
+      expect(await w.gatedSubmit('pty-w', 'hello')).toMatchObject({
+        ok: false,
+        reason: 'approval_pending',
+        detail: expect.stringContaining('folder-trust prompt; answer it in the pane'),
+      });
+      for (const call of [
+        () => asPaneAgent('input.send', { ptyId: 'pty-w', text: 'go on', submit: true }),
+        () => asPaneAgent('input.sendKey', { ptyId: 'pty-w', key: 'enter' }),
+        () => asBrain('input.sendKey', { ptyId: 'pty-w', key: 'enter' }),
+      ]) {
+        const res = await call();
+        expect(res.ok).toBe(false);
+        expect(res.error).toContain('folder-trust prompt; answer it in the pane');
+      }
+      // Escape answers a trust prompt too (Claude exits, Codex goes back).
+      const escape = await asBrain('input.sendKey', { ptyId: 'pty-w', key: 'escape' });
+      expect(escape.ok).toBe(false);
+      expect(escape.error).toContain('folder-trust prompt; answer it in the pane');
+      expect(w.writes).toHaveLength(0);
+      // ctrl+c still stops the agent, and the human is never refused.
+      expect((await asBrain('input.sendKey', { ptyId: 'pty-w', key: 'ctrl+c' })).ok).toBe(true);
+      expect((await asHuman('input.sendKey', { ptyId: 'pty-w', key: 'escape' })).ok).toBe(true);
+      expect((await asHuman('input.send', { ptyId: 'pty-w', text: '\r' })).ok).toBe(true);
+    },
+  );
+
+  /** The screen turns into the trust prompt after the `n`th read. */
+  const trustAfterReads = (n: number) => {
+    let reads = 0;
+    live.afterScreenRead = () => { if (++reads === n) live.screen = TRUST_SCREENS.codex; };
+  };
+
+  it('`send --submit`: a trust prompt drawn after the guard passed gets none of the text', async () => {
+    live.policy = DANGER;
+    live.screen = '⏺ Done.\n\n──────────\n❯ ';
+    // The guard reads the clean screen; by the body write the agent drew its prompt.
+    trustAfterReads(1);
+    const res = await asPaneAgent('input.send', { ptyId: 'pty-w', text: 'go on', submit: true });
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain('folder-trust prompt; answer it in the pane');
+    expect(res.error).toContain('Nothing of the text was written');
+    expect(w.writes).toHaveLength(0);
+  });
+
+  it('Escape waits out a slow screen read (a hidden pane) and is still refused', async () => {
+    live.screen = TRUST_SCREENS.claude;
+    live.readDelayMs = 400;
+    const escape = await asBrain('input.sendKey', { ptyId: 'pty-w', key: 'escape' });
+    expect(escape.ok).toBe(false);
+    expect(escape.error).toContain('folder-trust prompt; answer it in the pane');
+    expect(w.writes).toHaveLength(0);
+  });
+
+  it('an unreadable screen never refuses Escape', async () => {
+    live.screen = null;
+    const escape = await asBrain('input.sendKey', { ptyId: 'pty-w', key: 'escape' });
+    expect(escape.ok).toBe(true);
+    expect(w.writes.map((x) => x.data)).toEqual(['\x1b']);
+  });
+
+  it('`send --submit`: a trust prompt drawn after the first Enter gets no retried Enter', async () => {
+    live.policy = DANGER;
+    live.screen = '⏺ Done.\n\n──────────\n❯ ';
+    // The receipt probe sees the text still in the composer, which arms the
+    // retry; the guard's reads see the prompt from the retry's check on.
+    vi.mocked(sendToRenderer).mockImplementation(async (_win, method) =>
+      method === 'input.readScreen' ? { text: '──────────\n❯ go on' } : undefined);
+    trustAfterReads(3);
+    try {
+      const res = (await asPaneAgent('input.send', { ptyId: 'pty-w', text: 'go on', submit: true })) as Answer & {
+        result?: { enterRetried?: boolean; enterRetryRefused?: string };
+      };
+      expect(res.ok).toBe(true);
+      expect(w.writes.map((x) => x.data)).toEqual(['go on', '\r']);
+      expect(res.result?.enterRetried).toBe(false);
+      expect(res.result?.enterRetryRefused).toContain('folder-trust prompt; answer it in the pane');
+    } finally {
+      vi.mocked(sendToRenderer).mockReset();
+    }
+  });
+
+  it('a typed multi-line body refused before its Enter says it may have been partly submitted', async () => {
+    live.policy = DANGER;
+    live.screen = '$ ';
+    trustAfterReads(2);
+    const res = await asPaneAgent('input.send', { ptyId: 'pty-w', text: 'echo one\necho two', submit: true });
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain('may have been partly submitted');
+    expect(w.writes.map((x) => x.data).join('')).not.toMatch(/\r$/);
+  });
+
+  it('`send --submit`: a trust prompt drawn after the text gets no Enter, and says the text is on the line', async () => {
+    live.policy = DANGER;
+    live.screen = '⏺ Done.\n\n──────────\n❯ ';
+    trustAfterReads(2);
+    const res = await asPaneAgent('input.send', { ptyId: 'pty-w', text: 'go on', submit: true });
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain('folder-trust prompt; answer it in the pane');
+    expect(res.error).toContain('already written to the pane, not submitted');
+    expect(w.writes.map((x) => x.data)).toEqual(['go on']);
+  });
+
+  it('withholds the Enter when the dialog is drawn between the paste and the Enter', async () => {
+    live.policy = DANGER;
+    live.screen = '⏺ Done.\n\n──────────\n❯ ';
+    live.betweenPasteAndEnter = () => { live.screen = TRUST_SCREENS.claude; };
+    expect(await w.gatedSubmit('pty-w', 'hello')).toMatchObject({ ok: false, reason: 'approval_pending', pasted: true });
+    expect(w.writes.map((x) => x.data)).not.toContain('\r');
+  });
+
+  it('an ordinary approval dialog keeps its danger-mode behaviour', async () => {
+    live.policy = DANGER;
+    live.screen = DIALOG_SCREEN;
+    expect(await w.gatedSubmit('pty-w', 'hello')).toEqual({ ok: true });
+    expect((await asPaneAgent('input.send', { ptyId: 'pty-w', text: 'go on', submit: true })).ok).toBe(true);
+    expect((await asBrain('input.sendKey', { ptyId: 'pty-w', key: 'enter' })).ok).toBe(true);
+  });
+
+  it('an ordinary unnumbered menu is not blocked', async () => {
+    live.screen = [
+      ' Choose the text style that looks best with your terminal',
+      '     Auto (match terminal)',
+      ' ❯ ✔ Dark mode',
+      '     Light mode',
+    ].join('\n');
+    expect((await asBrain('input.sendKey', { ptyId: 'pty-w', key: 'enter' })).ok).toBe(true);
     expect(await w.gatedSubmit('pty-w', 'hello')).toEqual({ ok: true });
   });
 });

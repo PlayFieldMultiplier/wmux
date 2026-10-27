@@ -389,6 +389,12 @@ export const en = {
   'web.inputPausedTooLarge': 'That paste is too large to send.',
   'web.inputDropped': '{count} more keystrokes were not sent.',
   'web.inputResume': 'Resume input',
+  'web.newTerminal': 'New terminal',
+  'web.newTerminalFailed': 'Could not start a terminal: {reason}',
+  'web.newTerminalOffline': 'Could not reach the server. Check the terminal list before trying again.',
+  'web.newTerminalNoWorkspaceGrant': 'This device can add terminals to a running workspace, but not start one. Open this page with the server\'s access token to start the first terminal.',
+  'web.noTerminals': 'No terminals yet',
+  'web.noTerminalsBody': 'Terminals started on this server appear here.',
 
   // Common
   'common.cancel': 'Cancel',
