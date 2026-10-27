@@ -188,6 +188,7 @@ export const ko = {
   'settings.terminalEngine': "터미널 엔진",
   'settings.terminalEngineDesc': "일반·팀 세션의 PTY와 출력 버퍼 엔진입니다. 터미널 호스트를 재시작하면 적용됩니다.",
   'settings.terminalEngineRust': "Rust (실험적)",
+  'settings.terminalEngineRustDefault': "Rust (기본)",
   'settings.terminalEngineCurrent': "현재 엔진:",
   'settings.terminalEngineUnknown': "확인 불가",
   'settings.terminalEngineOverride': "WMUX_TERMINAL_CORE 환경변수가 우선 적용됩니다. 환경변수를 제거하고 앱과 터미널 서비스를 재시작하면 저장한 설정을 사용할 수 있습니다.",

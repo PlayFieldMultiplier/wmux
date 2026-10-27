@@ -57,6 +57,16 @@ describe('terminal engine setting', () => {
     set.mockResolvedValue(initial); await choose('node');
     expect(container.textContent).not.toContain('settings.terminalEngineRestartDaemon');
   });
+  it('names Rust as the default on Windows and as experimental elsewhere', async () => {
+    await render();
+    const rust = () => select().querySelector('option[value="rust"]')?.textContent;
+    expect(rust()).toBe('settings.terminalEngineRust');
+    act(() => root.unmount());
+    root = createRoot(container);
+    (window.electronAPI as unknown as { platform: string }).platform = 'win32';
+    await render();
+    expect(rust()).toBe('settings.terminalEngineRustDefault');
+  });
   it('disables unavailable Rust, while keeping Node selectable', async () => {
     get.mockResolvedValue({ ...initial, selected: 'rust', rustAvailable: false });
     await render();
