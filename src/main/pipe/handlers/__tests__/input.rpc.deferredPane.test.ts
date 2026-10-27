@@ -131,7 +131,9 @@ describe('a raw write by ptyId to a session with no pipe (#2398)', () => {
   function setupDaemon(opts: { pipeOpen: boolean; attachOpensPipe?: boolean; writeReturns?: boolean }) {
     let pipeOpen = opts.pipeOpen;
     const writeToSession = vi.fn(() => opts.writeReturns ?? pipeOpen);
-    const dc = { isConnected: true, isSessionPipeWritable: vi.fn(() => pipeOpen), writeToSession };
+    // The renderer reads a blank screen, so the guard asks the daemon: no dialog.
+    const folderTrustState = vi.fn(async () => ({ state: 'clear' as const }));
+    const dc = { isConnected: true, isSessionPipeWritable: vi.fn(() => pipeOpen), writeToSession, folderTrustState };
     const pty = { get: vi.fn(() => undefined), write: vi.fn() } as unknown as PTYManager;
     const router = new RpcRouter();
     registerInputRpc(router, pty, () => fakeWindow, () => dc as never);

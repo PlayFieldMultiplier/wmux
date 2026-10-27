@@ -767,6 +767,31 @@ describe('a folder-trust verdict for a pane with no screen', () => {
     expect(atEnter.ok === false && atEnter.detail).not.toContain('Nothing was sent');
   });
 
+  it.each([['empty', ''], ['blank rows', '\n   \n\n']])("a %s read (an empty buffer, a failed hydrate) is no screen: the daemon's 'trust' refuses", async (_name, blank) => {
+    live.policy = { allowed: true };
+    live.screen = blank;
+    live.daemonVerdict = 'trust';
+    expect((await asBrain('input.send', { ptyId: 'pty-w', text: 'hello', submit: true })).error).toContain('folder-trust prompt; answer it in the pane');
+    expect((await asBrain('input.sendKey', { ptyId: 'pty-w', key: 'escape' })).ok).toBe(false);
+    expect(await w.gatedSubmit('pty-w', 'hello')).toMatchObject({ ok: false, reason: 'approval_pending' });
+    expect(w.writes).toHaveLength(0);
+    // A fresh blank shell the daemon sees clear still takes automated input.
+    live.daemonVerdict = 'clear';
+    expect((await asBrain('input.send', { ptyId: 'pty-w', text: 'hello' })).ok).toBe(true);
+    expect(await w.gatedSubmit('pty-w', 'hi')).toEqual({ ok: true });
+    expect(w.writes.map((x) => x.data)).toEqual(['hello', '\x1b[200~hi\x1b[201~', '\r']);
+  });
+
+  it('a screen that turns unreadable between the paste and the Enter says the text was pasted', async () => {
+    live.policy = { allowed: true };
+    live.screen = '$ ';
+    live.betweenPasteAndEnter = () => { live.screen = null; };
+    const atEnter = await w.gatedSubmit('pty-w', 'hello');
+    expect(atEnter).toMatchObject({ ok: false, reason: 'gate_unavailable', pasted: true });
+    expect(atEnter.ok === false && atEnter.detail).toContain('could not be read — not submitting blind. The text was pasted but not submitted.');
+    expect(w.writes.map((x) => x.data)).toEqual(['\x1b[200~hello\x1b[201~']);
+  });
+
   it('a delivery to an unreadable screen is refused without asking the daemon', async () => {
     live.screen = null;
     live.daemonVerdict = 'clear';
