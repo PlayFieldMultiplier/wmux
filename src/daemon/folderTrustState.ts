@@ -1,4 +1,4 @@
-import { looksLikeFolderTrustDialog } from './approvals/approvalKeystrokes';
+import { looksLikeFolderTrustDialog, looksLikeUnreadableFolderTrustChoices } from './approvals/approvalKeystrokes';
 import { AWAITING_RENDER_WINDOW_BYTES, renderPaneScreen, type RenderablePane } from './AwaitingScreenVerifier';
 import { generateTextSnapshotUnqueued, runSmallSnapshotJob } from './HeadlessSnapshot';
 import { UNKNOWN_CELL } from './sessionTextReplay';
@@ -10,7 +10,8 @@ import type { DaemonSessionState } from './types';
  * Whether a session's own output shows an agent's folder-trust dialog:
  *   - 'trust': the dialog is the live screen;
  *   - 'clear': it is not, or nothing runs in the session;
- *   - 'unknown': the screen could not be read in time or whole.
+ *   - 'unknown': the screen could not be read in time or whole, or it shows a
+ *     trust question over choices a narrow pane cut too short to read.
  */
 export type FolderTrustState = 'trust' | 'clear' | 'unknown';
 
@@ -20,9 +21,10 @@ export const FOLDER_TRUST_READ_TIMEOUT_MS = 250;
 /** Room above the tail window for the mode preamble and the unknown-cell fill. */
 const TAIL_SLACK_BYTES = 64 * 1024;
 
-/** Rows a dialog may take, up to the last row with content: the tallest
- *  measured one is 26 (Codex at 22 columns). */
-const DIALOG_SPAN_ROWS = 30;
+/** Rows from a dialog's question to the last row with content: the tallest
+ *  measured at 22 columns is 32 (Gemini CLI: 28 to its box's bottom edge, and
+ *  4 more to the end of the notice a first Ctrl+C prints under it). */
+const DIALOG_SPAN_ROWS = 36;
 
 /** What the verdict needs of a session (a ManagedSession). */
 export type FolderTrustSession = RenderablePane & {
@@ -98,7 +100,9 @@ export async function folderTrustState(deps: FolderTrustDeps, id: string): Promi
     const frame = await Promise.race([renderPaneScreen(() => (deps.getSession(id) === session ? pane : undefined), snapshot).catch(() => null), timedOut]);
     if (!frame) return 'unknown';
     const lines = joinWrappedRows(frame.rows.map((text, i) => ({ text, wrapped: frame.wrapped?.[i] === true })), frame.cols);
-    if (looksLikeFolderTrustDialog(lines.slice(-60))) return 'trust';
+    const tail = lines.slice(-60);
+    if (looksLikeFolderTrustDialog(tail)) return 'trust';
+    if (looksLikeUnreadableFolderTrustChoices(tail)) return 'unknown';
     return frame.unknown && unknownWhereADialogWouldBe(frame.unknown) ? 'unknown' : 'clear';
   } finally {
     clearTimeout(timer);

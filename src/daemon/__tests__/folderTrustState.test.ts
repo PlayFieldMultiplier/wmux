@@ -112,6 +112,32 @@ describe('folderTrustState', () => {
     expect(await folderTrustState(deps(s), 'pty-1')).toBe('unknown');
   });
 
+  it("is 'unknown' for a trust question over choices cut too short to read (18 columns)", async () => {
+    const gemini = fixtureRows('gemini-folder-trust-18x60');
+    expect(await folderTrustState(deps(session(frame(gemini), 18, 60)), 'pty-1')).toBe('unknown');
+    const qwen = fixtureRows('qwen-folder-trust-18x60');
+    expect(await folderTrustState(deps(session(frame(qwen), 18, 60)), 'pty-1')).toBe('unknown');
+  });
+
+  it("is 'unknown' when only the question of Gemini CLI's 22-column dialog left the ring", async () => {
+    // The box and the notice a first Ctrl+C prints under it, in two rows:
+    // the question is 32 rows from the last row with content.
+    // Each row written out to the pane's width, so its own cells are all known.
+    const rows = fixtureRows('gemini-folder-trust-ctrlc-22x60').map((row) => row.padEnd(22));
+    const question = rows.findIndex((row) => row.includes('Do you trust the'));
+    expect(rows.length - question).toBe(32);
+    const ring = new RingBuffer(4096);
+    // Exactly as tall as the screen drawn, so no row under it was never written.
+    ring.noteGeometry(22, rows.length);
+    ring.write(frame(rows));
+    // Every row under the question is redrawn after the dialog's own draw left the ring.
+    for (let n = 0; n < 20; n++) {
+      ring.write(Buffer.from(rows.slice(question + 1).map((row, i) => `\x1b[${question + 2 + i};1H${row}`).join('')));
+    }
+    const s = { ...session(Buffer.alloc(0), 22, rows.length), ringBuffer: ring };
+    expect(await folderTrustState(deps(s), 'pty-1')).toBe('unknown');
+  });
+
   it("is 'clear' for a rolled ring whose only unseen cell is a header far above the prompt", async () => {
     const ring = new RingBuffer(16 * 1024);
     ring.noteGeometry(80, 40);

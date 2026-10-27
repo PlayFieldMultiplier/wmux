@@ -244,6 +244,14 @@ export type LaunchScreen =
   /** Some other menu. Nothing may be typed or pasted into it. */
   | { kind: 'blocking'; headline: string };
 
+/** The agent a folder-trust screen names in its own text (Gemini CLI and Qwen
+ *  Code say who will be trusted; Codex names itself), for the headline. */
+const TRUST_SCREEN_AGENTS: readonly (readonly [RegExp, string])[] = [
+  [/\bGemini\s+CLI\b/, 'gemini'],
+  [/\bQwen\s+Code\b/, 'qwen'],
+  [/\bCodex\b/, 'codex'],
+];
+
 /**
  * Scheduled runs: what stands between a freshly launched agent and the prompt
  * paste. Known first-run screens (including codex's trust dialog) are named;
@@ -256,7 +264,8 @@ export function classifyLaunchScreen(screen: string): LaunchScreen | null {
   const known = detectFirstRunPrompt(screen);
   if (known) return { kind: 'first-run', prompt: known };
   if (CODEX_TRUST_HEADLINE.test(screen)) {
-    return { kind: 'first-run', prompt: { kind: 'trust', headline: 'codex folder trust dialog' } };
+    const agent = TRUST_SCREEN_AGENTS.find(([re]) => re.test(screen))?.[1];
+    return { kind: 'first-run', prompt: { kind: 'trust', headline: agent ? `${agent} folder trust dialog` : 'folder trust dialog' } };
   }
   if (looksLikeApprovalPrompt(screen.split('\n')) || MENU_FOOTER.test(screen)) {
     return { kind: 'blocking', headline: 'unrecognised menu' };

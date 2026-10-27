@@ -159,49 +159,169 @@ export function looksLikeApprovalPrompt(rows: readonly string[]): boolean {
   return rows.some((row) => CURSOR_OPTION_ROW.test(row));
 }
 
-/** The choices that grant trust, and those that decline it or leave. Gemini CLI
- *  and Qwen Code name the folder after "Trust folder" / "Trust parent folder". */
-const TRUST_GRANTS = 'Yes, I trust this folder|Yes, proceed|Trust and continue|Yes, continue|Trust (?:parent )?folder(?: \\(.+\\))?';
-const TRUST_DECLINES = "No, exit|No, quit|Quit|Back to [A-Za-z ]+|Don't trust(?: \\(esc\\))?";
-/** The same labels as plain text, for a choice a narrow pane cut with "…". */
-const TRUST_GRANT_STEMS = ['Yes, I trust this folder', 'Yes, proceed', 'Trust and continue', 'Yes, continue', 'Trust folder', 'Trust parent folder'];
-const TRUST_DECLINE_STEMS = ['No, exit', 'No, quit', 'Quit', 'Back to ', "Don't trust"];
-/** The selection cursor: Gemini CLI draws it as a dot. */
-const CURSOR = '[❯›>»●]';
-/** A choice row: optional selection cursor and digit, then the label alone. */
-const choiceRow = (labels: string): RegExp => new RegExp(`^(?:${CURSOR}\\s*)?(?:\\d{1,2}[.)]\\s*)?(?:${labels})$`, 'i');
-const TRUST_GRANT_CHOICE = choiceRow(TRUST_GRANTS);
-const TRUST_CHOICE = choiceRow(`${TRUST_GRANTS}|${TRUST_DECLINES}`);
-/** A choice cut with "…" (Gemini CLI and Qwen Code at 22 columns): its visible text. */
-const CUT_CHOICE = new RegExp(`^(?:${CURSOR}\\s*)?(?:\\d{1,2}[.)]\\s*)?(.+?)\\s*…$`);
-/** A grant cut inside the folder name it ends with. */
-const CUT_FOLDER_GRANT = /^Trust (?:parent )?folder \([^)]*$/i;
-/** Shortest visible text of a cut choice that still names one ("Trust f", "Don't t"). */
+/** How a label may go on: a folder name in brackets, Qwen Code's "(esc)", or the place "Back to" returns to. */
+type TrustSuffix = 'name' | 'esc' | 'place';
+/**
+ * The trust dialogs' choices, granting or declining, in one table: the whole-
+ * row patterns and the reading of a choice a narrow pane cut with "…" both
+ * come from it.
+ */
+const TRUST_LABELS: readonly { label: string; grants: boolean; suffix?: TrustSuffix }[] = [
+  { label: 'Yes, I trust this folder', grants: true },
+  { label: 'Yes, proceed', grants: true },
+  { label: 'Trust and continue', grants: true },
+  { label: 'Yes, continue', grants: true },
+  // Gemini CLI and Qwen Code name the folder: "Trust folder (<dir>)".
+  { label: 'Trust folder', grants: true, suffix: 'name' },
+  { label: 'Trust parent folder', grants: true, suffix: 'name' },
+  { label: 'No, exit', grants: false },
+  { label: 'No, quit', grants: false },
+  { label: 'Quit', grants: false },
+  { label: 'Back to', grants: false, suffix: 'place' },
+  { label: "Don't trust", grants: false, suffix: 'esc' },
+];
+/** A suffix whole (optional unless it is the place), and a suffix cut part way.
+ *  A folder name may hold one level of brackets, never a closed name and more
+ *  (a choice with the next row joined on). */
+const SUFFIX_WHOLE: Record<TrustSuffix, string> = {
+  name: '(?: \\((?:[^()]|\\([^()]*\\))+\\))?',
+  esc: '(?: \\(esc\\))?',
+  place: ' [A-Za-z ]+',
+};
+const SUFFIX_CUT: Record<TrustSuffix, (rest: string) => boolean> = {
+  name: (rest) => /^ \((?:[^()]|\([^()]*\))*(?:\([^()]*)?$/.test(rest),
+  esc: (rest) => ' (esc)'.startsWith(rest),
+  place: (rest) => /^ [a-z ]*$/.test(rest),
+};
+const escapeLabel = (label: string): string => label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const labelsPattern = (grants: boolean): RegExp => new RegExp(`^(?:${TRUST_LABELS
+  .filter((entry) => entry.grants === grants)
+  .map(({ label, suffix }) => escapeLabel(label) + (suffix ? SUFFIX_WHOLE[suffix] : ''))
+  .join('|')})$`, 'i');
+const TRUST_GRANT_LABEL = labelsPattern(true);
+const TRUST_DECLINE_LABEL = labelsPattern(false);
+/** Shortest visible text of a cut label that still names one ("Trust f", "Don't t"). */
 const MIN_CUT_TEXT = 7;
-/** Whether a "…"-cut row is the start of a granting or a declining label, or neither. */
-function cutChoiceKind(row: string): 'grant' | 'decline' | null {
-  const text = CUT_CHOICE.exec(row)?.[1];
-  if (text === undefined) return null;
-  if (CUT_FOLDER_GRANT.test(text)) return 'grant';
-  if (text.length < MIN_CUT_TEXT) return null;
-  const startOf = (stems: readonly string[]): boolean =>
-    stems.some((stem) => stem.toLowerCase().startsWith(text.toLowerCase()));
-  const grant = startOf(TRUST_GRANT_STEMS);
-  const decline = startOf(TRUST_DECLINE_STEMS);
-  if (grant === decline) return null;
-  return grant ? 'grant' : 'decline';
-}
-const isTrustChoice = (row: string): boolean => TRUST_CHOICE.test(row) || cutChoiceKind(row) !== null;
+
+/** A choice row split: the selection cursor, its digit, then the label. */
+const CHOICE_PARTS = /^(?:([❯›>»])\s*)?(?:(\d{1,2})[.)]\s*)?(.*)$/;
 /** The key hint under the choices ("Enter to confirm · Esc to cancel", "enter continue · esc back"). */
 const TRUST_FOOTER = /^(?:press\s+)?(?:↑\/↓|↑↓)?.{0,24}\benter\b.{0,30}\b(?:cancel|back|continue|confirm)$/i;
-const SELECTION_CURSOR = new RegExp(`^${CURSOR}\\s*\\S`);
 /** Where a choice starts even when a narrow pane wrapped its label: the cursor, or its digit. */
-const CHOICE_START = new RegExp(`^(?:${CURSOR}\\s*\\S|\\d{1,2}[.)]\\s)`);
+const CHOICE_START = /^(?:[❯›>»]\s*\S|\d{1,2}[.)]\s)/;
+/** Gemini CLI's selection cursor; it counts only on the first choice of a boxed dialog (a reply's bullets look the same). */
+const DOT_CURSOR = /^●\s*(?=\S)/;
 /** The bottom edge of the box Gemini CLI and Qwen Code draw the dialog in. */
 const FRAME_BOTTOM = /^╰─+╯?$/;
-const isTrustDialogRow = (row: string): boolean => isTrustChoice(row) || TRUST_FOOTER.test(row);
+/** What a live boxed dialog may have under its bottom edge, its rows joined:
+ *  Gemini CLI's notice after a first Ctrl+C (measured; two rows at 22 columns). */
+const FRAME_TRAILER = /^Press Ctrl\+C again to exit\.$/;
 /** Rows a wrapped question may span: one or two at 60 columns (measured), four at about 14; six leaves room. */
 const TRUST_QUESTION_ROWS = 6;
+
+/**
+ * One row under the trust question, read once:
+ *   - grant / decline: a choice, whole or cut with "…" part way into a label
+ *     or its suffix (`cut`);
+ *   - short: a numbered choice cut too early to say which label it is;
+ *   - footer: the key hint; other: anything else.
+ */
+interface TrustRow {
+  text: string;
+  kind: 'grant' | 'decline' | 'short' | 'footer' | 'other';
+  cursor: boolean;
+  cut: boolean;
+}
+
+function cutLabelKind(text: string): TrustRow['kind'] {
+  const lower = text.toLowerCase();
+  if (!lower) return 'other';
+  let grant = false;
+  let decline = false;
+  let short = false;
+  for (const { label, grants, suffix } of TRUST_LABELS) {
+    const whole = label.toLowerCase();
+    let fits = false;
+    if (whole.startsWith(lower)) {
+      if (lower.length >= MIN_CUT_TEXT) fits = true;
+      else short = true;
+    } else if (suffix && lower.startsWith(whole)) {
+      fits = SUFFIX_CUT[suffix](lower.slice(whole.length));
+    }
+    if (fits && grants) grant = true;
+    if (fits && !grants) decline = true;
+  }
+  if (grant !== decline) return grant ? 'grant' : 'decline';
+  return !grant && short ? 'short' : 'other';
+}
+
+function readTrustRow(text: string): TrustRow {
+  const [, cursor, digit, label] = CHOICE_PARTS.exec(text) ?? [];
+  const row = { text, cursor: cursor !== undefined, cut: false };
+  if (label?.endsWith('…')) {
+    const kind = cutLabelKind(label.slice(0, -1).trimEnd());
+    if (kind === 'short' && digit === undefined) return { ...row, kind: 'other' };
+    return { ...row, kind, cut: kind !== 'other' };
+  }
+  if (label !== undefined && TRUST_GRANT_LABEL.test(label)) return { ...row, kind: 'grant' };
+  if (label !== undefined && TRUST_DECLINE_LABEL.test(label)) return { ...row, kind: 'decline' };
+  return { ...row, kind: TRUST_FOOTER.test(text) ? 'footer' : 'other' };
+}
+
+const isChoice = (row: TrustRow): boolean => row.kind === 'grant' || row.kind === 'decline';
+const isDialogRow = (row: TrustRow): boolean => isChoice(row) || row.kind === 'footer';
+
+/**
+ * The rows from the first choice under the newest trust question, each read
+ * once and rejoined where a narrow pane wrapped it, with a boxed dialog's
+ * bottom edge (and the notices measured under it) dropped. Null when no trust
+ * question with a choice under it is on screen.
+ */
+function trustDialogBlock(rows: readonly string[]): TrustRow[] | null {
+  const tail = rows
+    .map((row) => ({
+      text: row.replace(/^[\s│║┃]+|[\s│║┃]+$/g, '').replace(/\s+/g, ' '),
+      framed: /^\s*│/.test(row),
+    }))
+    .filter((row) => row.text);
+  for (let q = tail.length - 1; q >= 0; q--) {
+    const question = tail.slice(q, q + TRUST_QUESTION_ROWS).map((row) => row.text).join(' ');
+    if (!TRUST_HEADLINE.test(question) && !CODEX_TRUST_HEADLINE.test(question)) continue;
+    const below = tail.slice(q + 1);
+    // Inside a box drawn round the question, Gemini CLI's dot may start the first choice.
+    const dotCursor = (row: { text: string; framed: boolean }): boolean =>
+      tail[q].framed && row.framed && DOT_CURSOR.test(row.text);
+    const first = below.findIndex((row) => dotCursor(row) || CHOICE_START.test(row.text) || isChoice(readTrustRow(row.text)));
+    if (first < 0) return null;
+    const rest = below.slice(first).map((row, i) => (i === 0 && dotCursor(row) ? row.text.replace(DOT_CURSOR, '› ') : row.text));
+    let edge = rest.length - 1;
+    while (edge >= 0 && !FRAME_BOTTOM.test(rest[edge])) edge--;
+    const trailer = rest.slice(edge + 1).join(' ');
+    if (edge > 0 && (trailer === '' || FRAME_TRAILER.test(trailer))) rest.length = edge;
+    // Rejoin what a narrow pane wrapped: "Yes, I trust this" + "folder",
+    // "› 1. Trust and" + "continue", "Enter to confirm · Esc to" + "cancel".
+    // A row cut with "…" is whole as it stands.
+    const block: TrustRow[] = [];
+    for (const text of rest) {
+      const row = readTrustRow(text);
+      const last = block.at(-1);
+      if (last !== undefined && !isDialogRow(row)) {
+        const joined = readTrustRow(`${last.text} ${text}`);
+        // A row cut short keeps taking the rows under it until it reads whole.
+        if (isDialogRow(joined) || (!isDialogRow(last) && !last.text.endsWith('…'))) {
+          block[block.length - 1] = joined;
+          continue;
+        }
+      } else if (last !== undefined && !isDialogRow(last) && !last.text.endsWith('…')) {
+        block[block.length - 1] = readTrustRow(`${last.text} ${text}`);
+        continue;
+      }
+      block.push(row);
+    }
+    return block;
+  }
+  return null;
+}
 
 /**
  * Is an agent's folder-trust dialog the live dialog at the bottom of the
@@ -217,45 +337,33 @@ const TRUST_QUESTION_ROWS = 6;
  *   - below it, the choice that grants trust and exactly one row under the
  *     selection cursor, numbered or not;
  *   - after the first choice, only choices and the key hint, each rejoined
- *     when a narrow pane wrapped it, and at most the bottom edge of the box
- *     drawn round the dialog: a dialog with anything else under it (agent
- *     output, a shell prompt) has already been answered;
+ *     when a narrow pane wrapped it, and for a boxed dialog its bottom edge
+ *     and the notices measured under it: a dialog with anything else under it
+ *     (agent output, a shell prompt) has already been answered;
  *   - a choice a narrow pane cut with "…" counts only as the start of a known
- *     label, and only beside at least one other choice.
+ *     label or of its suffix, and only beside at least one other choice.
  */
 export function looksLikeFolderTrustDialog(rows: readonly string[]): boolean {
-  const tail = rows
-    .map((row) => row.replace(/^[\s│║┃]+|[\s│║┃]+$/g, '').replace(/\s+/g, ' '))
-    .filter(Boolean);
-  for (let q = tail.length - 1; q >= 0; q--) {
-    const question = tail.slice(q, q + TRUST_QUESTION_ROWS).join(' ');
-    if (!TRUST_HEADLINE.test(question) && !CODEX_TRUST_HEADLINE.test(question)) continue;
-    const below = tail.slice(q + 1);
-    const first = below.findIndex((row) => isTrustChoice(row) || CHOICE_START.test(row));
-    if (first < 0) return false;
-    const rest = below.slice(first);
-    if (rest.length > 1 && FRAME_BOTTOM.test(rest[rest.length - 1])) rest.pop();
-    // Rejoin what a narrow pane wrapped: "Yes, I trust this" + "folder",
-    // "› 1. Trust and" + "continue", "Enter to confirm · Esc to" + "cancel".
-    const block: string[] = [];
-    for (const row of rest) {
-      const last = block.at(-1);
-      if (last !== undefined && !isTrustDialogRow(row) && isTrustDialogRow(`${last} ${row}`)) {
-        block[block.length - 1] = `${last} ${row}`;
-      } else if (last !== undefined && !isTrustDialogRow(last)) {
-        // A row cut short keeps taking the rows under it until it reads whole.
-        block[block.length - 1] = `${last} ${row}`;
-      } else {
-        block.push(row);
-      }
-    }
-    const choices = block.filter(isTrustChoice);
-    if (choices.length < 2 && choices.some((row) => cutChoiceKind(row) !== null)) return false;
-    return choices.some((row) => TRUST_GRANT_CHOICE.test(row) || cutChoiceKind(row) === 'grant')
-      && choices.filter((row) => SELECTION_CURSOR.test(row)).length === 1
-      && block.every(isTrustDialogRow);
-  }
-  return false;
+  const block = trustDialogBlock(rows);
+  if (!block) return false;
+  const choices = block.filter(isChoice);
+  if (choices.length < 2 && choices.some((row) => row.cut)) return false;
+  return choices.some((row) => row.kind === 'grant')
+    && choices.filter((row) => row.cursor).length === 1
+    && block.every(isDialogRow);
+}
+
+/**
+ * A trust question over numbered choices all cut with "…", at least one too
+ * early to say which label it is (Gemini CLI and Qwen Code at 18 columns:
+ * "› 1. Trus…"). Not a recognisable dialog, but not proof of its absence:
+ * the caller answers 'unknown' rather than 'clear'.
+ */
+export function looksLikeUnreadableFolderTrustChoices(rows: readonly string[]): boolean {
+  const block = trustDialogBlock(rows);
+  return block !== null && block.length >= 2
+    && block.every((row) => row.cut || row.kind === 'short')
+    && block.some((row) => row.kind === 'short');
 }
 
 /**

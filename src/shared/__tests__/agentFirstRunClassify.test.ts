@@ -32,6 +32,18 @@ describe('classifyLaunchScreen', () => {
     expect(out?.kind === 'first-run' && out.prompt.kind).toBe('trust');
   });
 
+  it('names the agent a folder-trust screen names, and no agent otherwise', () => {
+    const gemini = [
+      ' │ Do you trust the files in this folder?                     │',
+      ' │ Trusting a folder allows Gemini CLI to load its local      │',
+      ' │ ● 1. Trust folder (proj)                                   │',
+    ].join('\n');
+    expect(classifyLaunchScreen(gemini)).toEqual({ kind: 'first-run', prompt: { kind: 'trust', headline: 'gemini folder trust dialog' } });
+    const qwen = '   │ Do you trust this folder?\n   │ Trusting a folder allows Qwen Code to execute\n   │ › 1. Trust folder (proj)';
+    expect(classifyLaunchScreen(qwen)).toEqual({ kind: 'first-run', prompt: { kind: 'trust', headline: 'qwen folder trust dialog' } });
+    expect(classifyLaunchScreen('Trust this folder?\n› 1. Trust and continue\n  2. Quit')).toEqual({ kind: 'first-run', prompt: { kind: 'trust', headline: 'folder trust dialog' } });
+  });
+
   it('treats the codex-cli 0.157 "Trust this folder?" screen as trust (never answered)', () => {
     const screen = [
       'Folder access',
