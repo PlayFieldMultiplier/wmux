@@ -17,6 +17,7 @@ import { handleGuestPost } from '../factory/guestMessage';
 import { handleGuestCards, handlePhoneBotsCommand, handlePhoneRoomCommand, withPhoneFactory } from './PhoneFactory';
 import { handlePhoneBotApprovalCommand } from './PhoneBotApprovals';
 import { handlePhoneWorkerResumeCommand } from './PhoneWorkerResume';
+import { handlePhoneBrowserHelpCommand } from './PhoneBrowserHelp';
 
 /** How long the list waits for the optional sidebar projection. */
 const PHONE_SIDEBAR_RENDERER_TIMEOUT_MS = 1500;
@@ -102,6 +103,9 @@ export async function handlePhoneWorkspaces(command: string, payload: Record<str
   // A stopped worker's Resume by the phone's operator.
   const resumed = await handlePhoneWorkerResumeCommand(command, payload);
   if (resumed) return resumed;
+  // A browser help request answered on the phone.
+  const helped = await handlePhoneBrowserHelpCommand(command, payload);
+  if (helped) return helped;
   if (command === 'workspaces.list') {
     // The sidebar projection rides along, fetched in parallel and optional: a
     // failure or a slow renderer omits it and the list answers as before.

@@ -27,6 +27,8 @@ import { workspaceAccountEnv } from './phone/workspaceAccountEnv';
 import { applyPaneAccount, assertPaneAccountUsable } from './phone/paneAccount';
 import type { PaneAccountVendor, StoredHandoffFrom } from '../shared/phonePaneAccount';
 import { DesktopPhoneBridge, keepAwakeRpc } from './phone/DesktopPhoneBridge';
+import { BrowserHelpTable } from './phone/BrowserHelpTable';
+import { BROWSER_HELP_SET_METHOD } from '../shared/phoneBrowserHelp';
 import { RunHistoryStore } from './history/RunHistoryStore';
 import { AutomationEngine } from './automation/AutomationEngine';
 import { assertExternalSessionId, registerAutomationRpc } from './automation/rpc';
@@ -476,6 +478,8 @@ let pushBotPrompts: ((rows: BotPromptPushRow[]) => void) | undefined;
 /** The pipe clients that last published the bot approval and prompt tables (main). */
 let botApprovalsPublisher: string | null = null;
 let botPromptsPublisher: string | null = null;
+/** Main's open browser help requests (`daemon.browserHelp.set`), built once the pipe server exists. */
+let browserHelpTable: BrowserHelpTable | null = null;
 /** N4 — an agent's sign-in was lost (shared/agentAuthLost); set at boot once the pipe server exists. */
 let noteAuthLost: ((sessionId: string, agent: AuthLostAgent, env: Record<string, string> | undefined, origin: AuthLostOrigin, providerCode?: string) => void) | undefined;
 /** N4 — an agent and account was seen to work (a confirmed turn end, or its status said signed in). */
@@ -1002,6 +1006,8 @@ async function restoreWebServer(sessionManager: DaemonSessionManager): Promise<v
         // The Moa (HQ brain) pane main last vouched for, read per request so a
         // withdrawal closes the next check. See web/moaPane.ts.
         moaPane: currentMoaPane,
+        // Main's open browser help requests (phone/BrowserHelpTable.ts).
+        browserHelp: () => browserHelpTable,
         moaPrompts: readMoaPrompts,
         moaWake: getMoaWake,
         auditMoaSend: (entry) => getDeviceStore().recordMoaSend(entry),
@@ -3726,6 +3732,7 @@ function registerRpcHandlers(
       auditSentFile: (entry) => getDeviceStore().recordSentFile(entry),
       // See the restore path.
       moaPane: currentMoaPane,
+      browserHelp: () => browserHelpTable,
       moaPrompts: readMoaPrompts,
       moaWake: getMoaWake,
       auditMoaSend: (entry) => getDeviceStore().recordMoaSend(entry),
@@ -5505,6 +5512,18 @@ function registerRpcHandlers(
     botPromptsPublisher = ctx.clientId;
     return { ok: true, accepted: rows.length };
   });
+  // Main's open browser help requests (shared/phoneBrowserHelp.ts): the whole
+  // table, from the registered desktop only. The phone lists it and gets a
+  // live `browser.help` frame for each one that opens or closes.
+  browserHelpTable ??= new BrowserHelpTable({
+    firstParty: (clientId) => firstPartyOnly(clientId, BROWSER_HELP_SET_METHOD),
+    isOwner: (clientId) => desktopPhoneBridge?.isOwner(clientId) === true,
+    emit: (frames) => webTerminalServer?.emitBrowserHelp(frames),
+    log: (level, message) => log(level, message),
+  });
+  const helpTable = browserHelpTable;
+  pipeServer.onRpc(BROWSER_HELP_SET_METHOD, async (params, ctx) => helpTable.set(ctx.clientId, params));
+  pipeServer.onClientClose((clientId) => helpTable.onClientClose(clientId));
 
   pipeServer.onRpc('daemon.workspaceFacts.set', async (params, ctx) => {
     // FIRST-PARTY ONLY, and this one is load-bearing rather than hygienic: a

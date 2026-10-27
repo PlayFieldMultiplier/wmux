@@ -1,0 +1,124 @@
+import { describe, expect, it, vi } from 'vitest';
+import { browserHelpRow, createBrowserHelpFeed, handlePhoneBrowserHelpCommand, type BrowserHelpTabDeps } from '../PhoneBrowserHelp';
+import type { PendingHelpRequest, PhoneHelpResolution } from '../../browser-session/HelpRequests';
+import type { PhoneBrowserHelpRow } from '../../../shared/phoneBrowserHelp';
+
+// Main's half of browser help on the phone: the row it publishes for each open
+// request (read now, never starting a browser) and the decision command.
+
+const pending = (over: Partial<PendingHelpRequest> = {}): PendingHelpRequest => ({
+  requestId: 'req-1', workspaceId: 'ws-1', surfaceId: 'surf-1', prompt: 'Sign in, then press Done.',
+  createdAt: 1_000, deadlineAt: 61_000, ...over,
+});
+
+function tabs(over: Partial<BrowserHelpTabDeps> = {}): BrowserHelpTabDeps {
+  return {
+    backend: () => 'builtin',
+    builtinUrl: () => null,
+    isLiveChrome: () => false,
+    chromeTabs: async () => [],
+    ...over,
+  };
+}
+
+describe('browserHelpRow', () => {
+  it('an embedded pane this workspace owns is previewable, with its origin only', async () => {
+    const deps = tabs({ builtinUrl: (s, ws) => (s === 'surf-1' && ws === 'ws-1' ? 'https://user:pw@login.example.com:8443/a?b=c#d' : null) });
+    expect(await browserHelpRow(pending(), deps)).toEqual({
+      requestId: 'req-1', workspaceId: 'ws-1', surfaceId: 'surf-1', prompt: 'Sign in, then press Done.',
+      createdAt: 1_000, deadlineAt: 61_000, backend: 'builtin', previewable: true, origin: 'https://login.example.com:8443',
+    });
+    // Not an http(s) page: no origin.
+    const blank = await browserHelpRow(pending(), tabs({ builtinUrl: () => 'about:blank' }));
+    expect(blank).toMatchObject({ previewable: true });
+    expect(blank).not.toHaveProperty('origin');
+    // Another workspace's pane, or none: not previewable, nothing read.
+    expect(await browserHelpRow(pending({ workspaceId: 'ws-2' }), deps)).toMatchObject({ backend: 'builtin', previewable: false });
+    expect(await browserHelpRow(pending({ surfaceId: undefined }), deps)).not.toHaveProperty('surfaceId');
+  });
+
+  it('a dedicated Chrome tab gets its origin only when this workspace recorded it', async () => {
+    const chromeTabs = vi.fn(async () => [
+      { surfaceId: 'chrome-a', targetId: 't-a', workspaceId: 'ws-1', url: 'https://shop.example.com/cart' },
+      { surfaceId: 'chrome-b', targetId: 't-b', url: 'https://bank.example.com/' },
+    ]);
+    const deps = tabs({ backend: () => 'chrome', chromeTabs });
+    expect(await browserHelpRow(pending({ surfaceId: 'chrome-a' }), deps)).toMatchObject({ backend: 'chrome', previewable: false, origin: 'https://shop.example.com' });
+    // A tab with no workspace on record is not this workspace's.
+    expect(await browserHelpRow(pending({ surfaceId: 'chrome-b' }), deps)).not.toHaveProperty('origin');
+    chromeTabs.mockRejectedValueOnce(new Error('gone'));
+    expect(await browserHelpRow(pending({ surfaceId: 'chrome-a' }), deps)).not.toHaveProperty('origin');
+  });
+
+  it('Live Chrome is never read and never previewable', async () => {
+    const chromeTabs = vi.fn(async () => [{ surfaceId: 'surf-1', targetId: 'surf-1', workspaceId: 'ws-1', url: 'https://bank.example.com/' }]);
+    const row = await browserHelpRow(pending(), tabs({ backend: () => 'chrome', isLiveChrome: () => true, chromeTabs }));
+    expect(row).toMatchObject({ backend: 'live', previewable: false });
+    expect(row).not.toHaveProperty('origin');
+    expect(chromeTabs).not.toHaveBeenCalled();
+  });
+
+  it('drops a surface id the phone contract cannot carry', async () => {
+    expect(await browserHelpRow(pending({ surfaceId: 'has space' }), tabs())).not.toHaveProperty('surfaceId');
+  });
+});
+
+describe('handlePhoneBrowserHelpCommand', () => {
+  const store = (result: PhoneHelpResolution) => ({ resolveFromPhone: vi.fn(async () => result) });
+
+  it('settles through resolveFromPhone in the workspace the daemon sent and maps its answer', async () => {
+    const ok = store({ ok: true, state: 'cancelled' });
+    expect(await handlePhoneBrowserHelpCommand('workspaces.browserHelpDecide', { requestId: 'req-1', workspaceId: 'ws-1', outcome: 'cancelled' }, () => ok))
+      .toEqual({ state: 'cancelled' });
+    expect(ok.resolveFromPhone).toHaveBeenCalledWith('ws-1', 'req-1', 'cancelled');
+    expect(await handlePhoneBrowserHelpCommand('workspaces.browserHelpDecide', { requestId: 'req-1', workspaceId: 'ws-1', outcome: 'continued' }, () => store({ ok: false, reason: 'closed' })))
+      .toEqual({ error: 'browser-help-closed' });
+    expect(await handlePhoneBrowserHelpCommand('workspaces.browserHelpDecide', { requestId: 'req-1', workspaceId: 'ws-1', outcome: 'continued' }, () => store({ ok: false, reason: 'not-found' })))
+      .toEqual({ error: 'browser-help-not-found' });
+    expect(await handlePhoneBrowserHelpCommand('workspaces.browserHelpDecide', { requestId: 'req-1', workspaceId: 'ws-1', outcome: 'continued' }, () => null))
+      .toEqual({ error: 'browser-help-disabled' });
+  });
+
+  it('refuses a malformed payload without touching the store, and ignores other commands', async () => {
+    const s = store({ ok: true, state: 'continued' });
+    expect(await handlePhoneBrowserHelpCommand('workspaces.browserHelpDecide', { requestId: 'req-1', workspaceId: 'ws-1', outcome: 'completed' }, () => s))
+      .toEqual({ error: 'browser-help-not-found' });
+    expect(await handlePhoneBrowserHelpCommand('workspaces.browserHelpDecide', { requestId: 'req-1', outcome: 'continued' }, () => s))
+      .toEqual({ error: 'browser-help-not-found' });
+    expect(s.resolveFromPhone).not.toHaveBeenCalled();
+    expect(await handlePhoneBrowserHelpCommand('workspaces.list', {}, () => s)).toBeNull();
+  });
+});
+
+describe('createBrowserHelpFeed', () => {
+  it('sends only the newest table when an older one finishes its tab reads later', async () => {
+    vi.useFakeTimers();
+    try {
+      let release: (() => void) | null = null;
+      let current = [pending()];
+      const sent: PhoneBrowserHelpRow[][] = [];
+      const feed = createBrowserHelpFeed({
+        pending: () => current,
+        tabs: tabs({
+          builtinUrl: () => null,
+          backend: () => 'chrome',
+          // The first publication's tab read is slow.
+          chromeTabs: () => (release === null
+            ? new Promise((resolve) => { release = () => resolve([]); })
+            : Promise.resolve([])),
+        }),
+        push: async (rows) => { sent.push(rows); },
+      });
+      feed.publishNow();
+      current = [];
+      feed.publishNow();
+      await vi.advanceTimersByTimeAsync(0);
+      (release as unknown as () => void)();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(sent).toEqual([[]]);
+      feed.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

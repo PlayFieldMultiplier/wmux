@@ -200,6 +200,8 @@ import { BOTS_ROUTE, botsResponse, botsSupported } from './bots';
 import { GuestRateLimiter, guestRouteResponse, readGuestBody, type GuestBotResolver } from './guestBotRoutes';
 import { isGuestRoute, looksLikeGuestCredential, type GuestBotGates } from '../../shared/guestBots';
 import { BOT_APPROVALS_ROUTE, botApprovalDecisionRefusal, botApprovalsResponse, botApprovalsSupported, type BotApprovalsCaller } from './botApprovals';
+import { BROWSER_HELP_DECISION_ROUTE, BROWSER_HELP_LIST_ROUTE, browserHelpDecisionRefusal, browserHelpDecisionResponse, browserHelpListResponse, browserHelpSupported, type BrowserHelpTableView } from './browserHelp';
+import type { PhoneBrowserHelpFrame } from '../../shared/phoneBrowserHelp';
 import { WORKER_RESUME_ROUTE, workerResumeRefusal, workerResumeResponse, workerResumeSupported } from './workerResume';
 import type { ChatV2Binding } from '../../shared/chatv2/ipc';
 import { buildWebCsp, WEB_APP_FONT_FILE } from './webCsp';
@@ -859,6 +861,12 @@ interface WebTerminalServerDeps {
    * check; `moaSession` re-validates it against the live session.
    */
   moaPane?: () => MoaPaneFact | null;
+  /**
+   * Main's open browser help requests (`daemon.browserHelp.set`), held by the
+   * daemon. `GET /api/browser-help` is served from it; absent or unpublished,
+   * that route answers 503.
+   */
+  browserHelp?: () => BrowserHelpTableView | null;
   /** The prompts main sent to the HQ brain (`moa-prompts.json`), read per Moa `/turns` request. Absent: none. */
   moaPrompts?: () => NotedPrompt[];
   /** Records one phone send to the Moa pane (the device audit log). */
@@ -2956,6 +2964,11 @@ export class WebTerminalServer {
         // `/api/bot-approvals/*` answer here: a desktop that announced both
         // commands. OMITTED otherwise. A decision still needs the grant.
         ...(botApprovalsSupported(this.availableDesktop()) ? { botApprovals: true } : {}),
+        // `/api/browser-help` answers here and `browser.help` frames arrive on
+        // `/api/events`: the transcript consent (the list carries the agent's
+        // prompt) and a desktop that announced `browser.help`. OMITTED
+        // otherwise. A decision still needs the grant.
+        ...(browserHelpSupported(this.availableDesktop(), this.opts?.allowTranscript === true) ? { browserHelp: true } : {}),
         // `POST /api/bot-tasks/:taskId/resume` answers here: a desktop that
         // announced the command. OMITTED otherwise. A resume still needs the grant.
         ...(workerResumeSupported(this.availableDesktop()) ? { workerResume: true } : {}),
@@ -3228,6 +3241,28 @@ export class WebTerminalServer {
       const refused = botApprovalDecisionRefusal(caller, readOnly);
       if (refused) this.json(res,refused.status,refused.body,{'Cache-Control':'no-store'});
       else this.readJsonBody(req,res,answer);
+      return;
+    }
+    // Browser help requests: listed from the daemon's table, answered by the
+    // operator or a device with an explicit input grant (browserHelp.ts).
+    if (req.method === 'GET' && p === BROWSER_HELP_LIST_ROUTE) {
+      const r = browserHelpListResponse({ allowTranscript: this.opts?.allowTranscript === true, desktop: this.availableDesktop(), table: this.deps.browserHelp?.() ?? null });
+      return this.json(res, r.status, r.body, { 'Cache-Control': 'no-store' });
+    }
+    const browserHelpRoute = req.method === 'POST' ? BROWSER_HELP_DECISION_ROUTE.exec(p) : null;
+    if (browserHelpRoute) {
+      const caller = this.botApprovalsCaller(principal);
+      const gates = { readOnly: this.opts?.allowInput !== true, allowTranscript: this.opts?.allowTranscript === true };
+      const reauthorize = async () => {
+        const fresh = await this.authenticate(req,url,false).catch(() => ({ok:false as const}));
+        return fresh.ok && sameCaller(principal, fresh.principal) ? this.botApprovalsCaller(fresh.principal) : null;
+      };
+      // Refused before the body is read; checked again once it is in.
+      const refused = browserHelpDecisionRefusal(caller, gates);
+      if (refused) this.json(res,refused.status,refused.body,{'Cache-Control':'no-store'});
+      else this.readJsonBody(req,res,(body: unknown) => void browserHelpDecisionResponse(browserHelpRoute[1], body, {
+        caller, desktop: this.availableDesktop(), table: this.deps.browserHelp?.() ?? null, ...gates, reauthorize,
+      }).then(r => this.json(res,r.status,r.body,{'Cache-Control':'no-store'})));
       return;
     }
     // A stopped bot worker's Resume: the operator, or a device with an
@@ -6023,6 +6058,36 @@ export class WebTerminalServer {
         writeSse(client.res, 'moa', body);
       } catch {
         /* client stream broken — its own 'close' handler cleans up */
+      }
+    }
+  }
+
+  /**
+   * The global `browser.help` event: one frame per browser help request that
+   * opened or closed in main's table (see phone/BrowserHelpTable.ts). Live
+   * only, like `moa`: never recorded in the attention log, so it can never
+   * push a pending approval out of the backlog, and a reconnecting phone
+   * reads `GET /api/browser-help` instead of a replay. Sent only under the
+   * transcript consent, which the list needs too. The frame is rebuilt from
+   * an allowlist here, so no prompt can ride along.
+   */
+  emitBrowserHelp(frames: readonly PhoneBrowserHelpFrame[]): void {
+    if (this.opts?.allowTranscript !== true || this.eventClients.size === 0) return;
+    for (const frame of frames) {
+      const body = JSON.stringify({
+        phase: frame.phase,
+        requestId: frame.requestId,
+        workspaceId: frame.workspaceId,
+        ...(frame.surfaceId !== undefined ? { surfaceId: frame.surfaceId } : {}),
+        deadlineAt: frame.deadlineAt,
+        ...(frame.phase === 'close' && frame.state !== undefined ? { state: frame.state } : {}),
+      });
+      for (const client of this.eventClients) {
+        try {
+          writeSse(client.res, 'browser.help', body);
+        } catch {
+          /* client stream broken — its own 'close' handler cleans up */
+        }
       }
     }
   }
