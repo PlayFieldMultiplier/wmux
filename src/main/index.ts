@@ -104,7 +104,8 @@ import { createComputerConsentRequester } from './computer/computerConsent';
 import type { ComputerService } from './computer/ComputerService';
 import { revealStatsAggregator } from './perf/revealStatsAggregator';
 import { registerHooksRpc } from './pipe/handlers/hooks.rpc';
-import { registerUsageRpc } from './pipe/handlers/usage.rpc';
+import { registerUsageRpc, registerUsageTrailRpc } from './pipe/handlers/usage.rpc';
+import { UsageTrailStore } from './usage/usageTrailStore';
 import { CompletionAlarm } from '../shared/hooks/CompletionAlarm';
 import { UsagePoller } from './claude/UsagePoller';
 import { setUsageClientVersion } from './claude/UsageApi';
@@ -1616,6 +1617,14 @@ ipcMain.on(IPC.LANLINK_RESYNC, () => {
   remoteInboxBridge?.resync();
 });
 
+// Usage history per account, from the live pushes below and the services' own
+// results; never a request of its own. A live push is recorded at ingest
+// because the default meter stores it silently while it is off.
+const usageTrail = new UsageTrailStore(path.join(getWmuxDir(), 'usage-trail.json'));
+usagePoller.onStateChange((state) => usageTrail.record('default', state.snapshot));
+accountUsageService.onChange((entry) => usageTrail.record(entry.accountId, entry.snapshot));
+registerUsageTrailRpc(rpcRouter, (account, sinceMs, untilMs) => usageTrail.read(account, sinceMs, untilMs));
+
 // Live `rate_limits` pushed by the wmux statusline script. The account is the
 // one the pane actually runs on (its CLAUDE_CONFIG_DIR), not the workspace's
 // current binding, so this path is not subject to the routing limitation noted
@@ -1625,8 +1634,18 @@ registerUsageRpc(rpcRouter, {
     .filter((a) => a.vendor === 'claude')
     .map((a) => ({ id: a.id, configDir: a.configDir })),
   defaultConfigDir: () => path.join(os.homedir(), '.claude'),
-  ingestDefault: (update) => usagePoller.ingestLive(update),
-  ingestAccount: (accountId, update) => accountUsageService.ingestLive(accountId, update),
+  ingestDefault: (update) => {
+    const accepted = usagePoller.ingestLive(update);
+    if (accepted) usageTrail.record('default', usagePoller.getState().snapshot);
+    return accepted;
+  },
+  ingestAccount: (accountId, update) => {
+    const accepted = accountUsageService.ingestLive(accountId, update);
+    if (accepted) {
+      usageTrail.record(accountId, accountUsageService.getAll().find((e) => e.accountId === accountId)?.snapshot ?? null);
+    }
+    return accepted;
+  },
   log: (line) => console.warn(line),
 });
 
@@ -3306,6 +3325,9 @@ app.on('before-quit', async (e) => {
   const chromeStopped = chromeRegistry.disposeAll().catch((err) => {
     console.error('[Main] before-quit step "chromeRegistry.disposeAll" threw — continuing:', err);
   });
+
+  // Pending usage-history samples, before anything below can stall.
+  usageTrail.flushSync();
 
   // macOS 로그아웃/재시작/종료 대응(P4): win32의 'session-end' flushSync와 동등한
   // 동기 세션 flush. macOS는 WM_ENDSESSION 대신 Apple Event로 quit을 보내고

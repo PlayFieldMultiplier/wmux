@@ -16,6 +16,7 @@ import path from 'node:path';
 import type { RpcRouter } from '../RpcRouter';
 import type { UsageUpdate, UsageWindow } from '../../claude/usageMerge';
 import { notePaneUsageSample } from '../../usageLimit/paneUsageLimits';
+import type { UsageTrailSample } from '../../usage/usageTrail';
 
 export interface UsageRpcDeps {
   /** Registered claude accounts (id + canonical config dir). */
@@ -152,5 +153,41 @@ export function registerUsageRpc(router: RpcRouter, deps: UsageRpcDeps): void {
     for (const id of target.accountIds) applied = deps.ingestAccount(id, parsed.update) || applied;
     // e.g. a single window with no earlier reading to merge it onto
     return applied ? { ok: true, applied: true } : { ok: false, reason: 'not-applied' };
+  });
+}
+
+const MAX_TRAIL_KEY_LEN = 128;
+
+export interface UsageTrailParams {
+  account: string;
+  sinceMs?: number;
+  untilMs?: number;
+}
+
+function isEpochMs(v: unknown): v is number {
+  return typeof v === 'number' && Number.isFinite(v) && v >= 0;
+}
+
+/** Strict shape check for `usage.trail`. Returns null on anything unexpected. */
+export function validateUsageTrailParams(params: Record<string, unknown>): UsageTrailParams | null {
+  const { account, sinceMs, untilMs } = params;
+  if (typeof account !== 'string' || account.length === 0 || account.length > MAX_TRAIL_KEY_LEN) return null;
+  if (sinceMs !== undefined && !isEpochMs(sinceMs)) return null;
+  if (untilMs !== undefined && !isEpochMs(untilMs)) return null;
+  if (sinceMs !== undefined && untilMs !== undefined && untilMs < sinceMs) return null;
+  return { account, sinceMs, untilMs };
+}
+
+/** `usage.trail`: the recorded usage samples for one key ('default' or an
+ *  account id) within an optional window. The reply carries the samples and
+ *  the key the caller passed, nothing about the account itself. */
+export function registerUsageTrailRpc(
+  router: RpcRouter,
+  read: (account: string, sinceMs?: number, untilMs?: number) => UsageTrailSample[],
+): void {
+  router.register('usage.trail', async (params) => {
+    const parsed = validateUsageTrailParams(params);
+    if (!parsed) return { ok: false, reason: 'invalid' };
+    return { ok: true, account: parsed.account, samples: read(parsed.account, parsed.sinceMs, parsed.untilMs) };
   });
 }
