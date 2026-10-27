@@ -26,7 +26,7 @@ describe('browser help routes', () => {
   let server: WebTerminalServer | undefined;
   afterEach(async () => { if (server?.isRunning) await server.stop(); server = undefined; });
 
-  async function start(opts: { allowTranscript?: boolean; allowInput?: boolean; announce?: string[]; publish?: boolean; live?: Array<{ id: string; env?: Record<string, string> }> } = {}) {
+  async function start(opts: { allowTranscript?: boolean; allowInput?: boolean; announce?: string[]; publish?: boolean; live?: Array<{ id: string; env?: Record<string, string>; state?: string }> } = {}) {
     const store = new HelpRequests({ open: () => undefined, close: () => undefined });
     const commands: string[] = [];
     const bridge = new DesktopPhoneBridge((clientId, event) => {
@@ -73,7 +73,7 @@ describe('browser help routes', () => {
     const sessionManager = Object.assign(new EventEmitter(), {
       getSession: (id: string) => {
         const found = live.find((s) => s.id === id);
-        return found ? { meta: { env: found.env } } : undefined;
+        return found ? { meta: { env: found.env, state: found.state ?? 'attached' } } : undefined;
       },
       listLiveSessions: () => live,
     }) as unknown as DaemonSessionManager;
@@ -130,17 +130,28 @@ describe('browser help routes', () => {
     });
 
     it('names the requesting pane as /api/sessions does, only when that list has it', async () => {
-      const r = await start({ live: [{ id: 'pty-1' }, { id: 'brain-hq-1' }, { id: 'pty-brain', env: { WMUX_BRAIN_PTY: '1' } }] });
+      const ws1 = { WMUX_WORKSPACE_ID: 'ws-1' };
+      const r = await start({ live: [
+        { id: 'pty-1', env: ws1 },
+        { id: 'brain-hq-1', env: ws1 },
+        { id: 'pty-brain', env: { ...ws1, WMUX_BRAIN_PTY: '1' } },
+        { id: 'pty-elsewhere', env: { WMUX_WORKSPACE_ID: 'ws-2' } },
+        { id: 'pty-dead', env: ws1, state: 'dead' },
+      ] });
       const pane = r.open('surf-1', 'pty-1');
-      const none = r.open('surf-2');
-      const gone = r.open('surf-3', 'pty-gone');
-      const brain = r.open('surf-4', 'brain-hq-1');
-      const marked = r.open('surf-5', 'pty-brain');
+      const others = [
+        r.open('surf-2'),                       // no requester
+        r.open('surf-3', 'pty-gone'),           // not in /api/sessions
+        r.open('surf-4', 'brain-hq-1'),         // a brain pane, by id
+        r.open('surf-5', 'pty-brain'),          // a brain pane, by its env marker
+        r.open('surf-6', 'pty-elsewhere'),      // a pane of another workspace
+        r.open('surf-7', 'pty-dead'),           // a pane that has exited
+      ];
       await r.publish();
       for (const auth of [r.operator, 'Bearer d1.s1']) {
         const rows = new Map(((await r.get('/api/browser-help', auth)).body.requests as Array<Record<string, unknown>>).map((row) => [row.requestId, row]));
         expect(rows.get(pane.requestId)).toMatchObject({ sessionId: 'pty-1' });
-        for (const id of [none.requestId, gone.requestId, brain.requestId, marked.requestId]) expect(rows.get(id)).not.toHaveProperty('sessionId');
+        for (const other of others) expect(rows.get(other.requestId)).not.toHaveProperty('sessionId');
       }
     });
 

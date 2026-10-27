@@ -57,20 +57,27 @@ export function browserHelpSupported(desktop: BotApprovalsDesktop | null, allowT
 /** Whether a row came from a brain pane's agent (`isBrainPty` over the live session). */
 export type BrainPaneCheck = (ptyId: string) => boolean;
 
-/** Whether `/api/sessions` lists this pane (a live pane that is not a brain's). */
-export type ListedSessionCheck = (ptyId: string) => boolean;
+/**
+ * The requesting pane's `id` in `/api/sessions` when that list has it now
+ * and it runs in the request's workspace; undefined otherwise.
+ */
+export type RequesterSessionLookup = (ptyId: string, workspaceId: string) => string | undefined;
+
+/** A row as `GET /api/browser-help` serves it; `sessionId` exists only here, never in main's table. */
+export type PhoneBrowserHelpServedRow = PhoneBrowserHelpRow & { sessionId?: string };
 
 /**
  * The row a phone is served: never the raw requesting pane; a brain pane's
  * never previewable. `sessionId` names the requesting pane only as
- * `/api/sessions` does, and only when that list has it: a brain pane, a pane
- * gone since, or no requester at all leaves it out.
+ * `/api/sessions` does, and only when that list has it in the request's
+ * workspace: a brain pane, a pane gone since, or no requester leaves it out.
  */
-function phoneRow(row: BrowserHelpTableRow, isBrainPane: BrainPaneCheck, listed: ListedSessionCheck): PhoneBrowserHelpRow {
+function phoneRow(row: BrowserHelpTableRow, isBrainPane: BrainPaneCheck, requesterSession: RequesterSessionLookup): PhoneBrowserHelpServedRow {
   const { requesterPtyId, ...served } = row;
   if (requesterPtyId === undefined) return served;
   if (isBrainPane(requesterPtyId)) return { ...served, previewable: false };
-  return listed(requesterPtyId) ? { ...served, sessionId: requesterPtyId } : served;
+  const sessionId = requesterSession(requesterPtyId, row.workspaceId);
+  return sessionId !== undefined ? { ...served, sessionId } : served;
 }
 
 /** `GET /api/browser-help`. */
@@ -79,16 +86,14 @@ export function browserHelpListResponse(opts: {
   desktop: BotApprovalsDesktop | null;
   table: BrowserHelpTableView | null;
   isBrainPane: BrainPaneCheck;
-  /** Absent: no row carries `sessionId`. */
-  listedSession?: ListedSessionCheck;
+  requesterSession: RequesterSessionLookup;
 }): BotApprovalsResponse {
   if (!opts.allowTranscript) return { status: 403, body: { error: 'browser-help-disabled' } };
   // No table yet is not an empty table: say the desktop is not there.
   if (!browserHelpSupported(opts.desktop, true) || !opts.table?.published) {
     return { status: 503, body: { error: 'desktop-unavailable' } };
   }
-  const listed = opts.listedSession ?? (() => false);
-  return { status: 200, body: { requests: opts.table.list().map((row) => phoneRow(row, opts.isBrainPane, listed)) } };
+  return { status: 200, body: { requests: opts.table.list().map((row) => phoneRow(row, opts.isBrainPane, opts.requesterSession)) } };
 }
 
 /** Why this caller may not decide, or null when it may. */

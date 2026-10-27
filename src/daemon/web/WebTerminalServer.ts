@@ -3251,13 +3251,17 @@ export class WebTerminalServer {
     // Browser help requests: listed from the daemon's table, answered by the
     // operator or a device with an explicit input grant (browserHelp.ts).
     if (req.method === 'GET' && p === BROWSER_HELP_LIST_ROUTE) {
-      // The panes /api/sessions lists (live, not a brain's), read once for the whole list.
-      let listed: Set<string> | null = null;
       const r = browserHelpListResponse({
         allowTranscript: this.opts?.allowTranscript === true, desktop: this.availableDesktop(), table: this.deps.browserHelp?.() ?? null,
         isBrainPane: (ptyId) => this.isBrainApproval(ptyId),
-        listedSession: (ptyId) => (listed ??= new Set(this.deps.sessionManager.listLiveSessions()
-          .filter((s) => !isBrainPty({ id: s.id, env: s.env })).map((s) => s.id))).has(ptyId),
+        // A pane /api/sessions lists (live, not a brain's; the listSessions
+        // filter), in the request's own workspace.
+        requesterSession: (ptyId, workspaceId) => {
+          const managed = this.deps.sessionManager.getSession(ptyId);
+          if (!managed || (managed.meta.state !== 'attached' && managed.meta.state !== 'detached')) return undefined;
+          if (isBrainPty({ id: ptyId, env: managed.meta.env })) return undefined;
+          return workspaceIdOf(managed.meta.env).workspaceId === workspaceId ? ptyId : undefined;
+        },
       });
       return this.json(res, r.status, r.body, { 'Cache-Control': 'no-store' });
     }

@@ -5470,8 +5470,9 @@ the phone and answer them.
   a Chrome that did not answer, or `live`. Absent stays absent.
 - `sessionId`: the `id` in `/api/sessions` of the pane whose agent asked,
   so a client can link the card to that pane. Present only when that pane is
-  one `/api/sessions` lists for this caller now: absent when the agent's pane
-  is not known, is an orchestrator brain pane, or has closed. Absent on
+  one `/api/sessions` lists for this caller now, in the request's workspace:
+  absent when the agent's pane is not known, is an orchestrator brain pane,
+  runs in another workspace, or has closed. Absent on
   older desktops and daemons. Only in this list: never in a `browser.help`
   frame or a push.
 - `deadlineAt`: the desktop closes the request as `timed_out` then. A

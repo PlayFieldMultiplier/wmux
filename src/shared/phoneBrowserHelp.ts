@@ -41,12 +41,6 @@ export interface PhoneBrowserHelpRow {
   previewable: boolean;
   /** `scheme://host[:port]` of the tab when the desktop listed it; absent when unknown. */
   origin?: string;
-  /**
-   * The requesting pane's `id` in `/api/sessions`. The daemon adds it on
-   * `GET /api/browser-help` only; never in an SSE frame or a push, never
-   * taken from main's table.
-   */
-  sessionId?: string;
 }
 
 /**

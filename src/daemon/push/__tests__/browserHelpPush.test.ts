@@ -62,13 +62,13 @@ function harness(opts: { audience?: string[]; present?: boolean; brain?: (id: st
   return { router, table, sent, parked, forgotten, clock, state, timers, fireTimers };
 }
 
-describe('browser help push bodies', () => {
-  it('never carry the requesting pane or a session id', () => {
+describe('browser help push body', () => {
+  it('never carries the requesting pane or a session id', () => {
+    // Even a row that somehow carried one: the body is built from an allowlist.
     const withPane = { ...row({ requesterPtyId: 'pty-1' }), sessionId: 'pty-1' } as BrowserHelpTableRow;
-    for (const payload of [buildBrowserHelpPushPayload(withPane), buildBrowserHelpRetractionPayload(withPane.requestId, withPane.workspaceId, 'continued')]) {
-      expect(JSON.stringify(payload)).not.toContain('pty-1');
-      expect(JSON.stringify(payload)).not.toContain('sessionId');
-    }
+    const payload = JSON.stringify(buildBrowserHelpPushPayload(withPane));
+    expect(payload).not.toContain('pty-1');
+    expect(payload).not.toContain('sessionId');
   });
 });
 
