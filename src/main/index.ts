@@ -105,8 +105,7 @@ import type { ComputerService } from './computer/ComputerService';
 import { revealStatsAggregator } from './perf/revealStatsAggregator';
 import { registerHooksRpc } from './pipe/handlers/hooks.rpc';
 import { registerUsageRpc, registerUsageTrailRpc } from './pipe/handlers/usage.rpc';
-import { clearToolRefusals, setToolRefusal } from './agents/toolRefusals';
-import type { ToolRefusal } from '../shared/toolRefusal';
+import { setToolRefusalSource } from './agents/toolRefusals';
 import { UsageTrailStore } from './usage/usageTrailStore';
 import { UsageReserve, setUsageReserve } from './usage/usageReserve';
 import { usageReserveToastText } from './automation/toastText';
@@ -2461,12 +2460,8 @@ app.on('ready', async () => {
     onInstall: async (client) => {
       daemonClient = client;
       console.log('[Main] Connected to wmux-daemon (auth verified)');
-      // Each pane's last refused tool call (agents/toolRefusals.ts); the
-      // daemon sends what it holds again once this client subscribes.
-      clearToolRefusals();
-      client.on('session:refusal', (p: { sessionId: string; refusal: ToolRefusal | null }) => setToolRefusal(p.sessionId, p.refusal));
-      client.on('session:destroyed', (p: { sessionId: string }) => setToolRefusal(p.sessionId, null));
-      client.on('disconnected', () => clearToolRefusals());
+      // Each pane's last refused tool call (agents/toolRefusals.ts), as this client holds it.
+      setToolRefusalSource((ptyId) => client.toolRefusalOf(ptyId));
       // DaemonClient has already sent subscribe -> identify, followed by a
       // post-identify subscribe when the daemon enforces the gate. Repeat the
       // idempotent identity RPC here so the presence report

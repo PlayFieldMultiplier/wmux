@@ -4513,7 +4513,11 @@ function registerRpcHandlers(
         refusals.noteLine(sessionId, path, line);
         wakes.noteLine(sessionId, path, line);
       },
-      onClaudeGap: (sessionId) => turnEnds.noteGap(sessionId),
+      onClaudeGap: (sessionId) => {
+        turnEnds.noteGap(sessionId);
+        refusals.drop(sessionId);
+      },
+      onClaudeWatchEnd: (sessionId) => refusals.drop(sessionId),
       afterTick: () => turnEnds.settle(),
     });
     transcriptActivity.start();

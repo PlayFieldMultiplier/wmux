@@ -1,32 +1,28 @@
 // The last refused tool call of each pane's agent, as the daemon reads it from
-// the agent's transcript (daemon/transcript/toolRefusals, `agent.refusal`).
-// Data only: pane.list reports it, and a fenced bot worker's needs-input fact
-// says its turn stopped on one. Desktop-only: no phone payload carries it.
+// the agent's transcript (daemon/transcript/toolRefusals, `agent.refusal`),
+// held by the connected DaemonClient. Data only: pane.list reports it, and a
+// fenced bot worker's turn end that stopped on one becomes a pane.idle fact.
+// Desktop-only: no phone payload carries it.
 
 import type { ToolRefusal } from '../../shared/toolRefusal';
 
-const byPty = new Map<string, ToolRefusal>();
+let source: ((ptyId: string) => ToolRefusal | null) | null = null;
 
-export function setToolRefusal(ptyId: string, refusal: ToolRefusal | null): void {
-  if (refusal) byPty.set(ptyId, refusal);
-  else byPty.delete(ptyId);
+/** The connected daemon client's refusals (main/index.ts sets it on each install). */
+export function setToolRefusalSource(fn: ((ptyId: string) => ToolRefusal | null) | null): void {
+  source = fn;
 }
 
 export function toolRefusalOf(ptyId: string): ToolRefusal | null {
-  return byPty.get(ptyId) ?? null;
+  return source?.(ptyId) ?? null;
 }
 
 /** The newest refusal among a pane's surfaces, or null. */
 export function lastToolRefusal(ptyIds: readonly string[]): ToolRefusal | null {
   let last: ToolRefusal | null = null;
   for (const id of ptyIds) {
-    const r = byPty.get(id);
+    const r = toolRefusalOf(id);
     if (r && (!last || r.at > last.at)) last = r;
   }
   return last;
-}
-
-/** The daemon went away: what it said is no longer known. */
-export function clearToolRefusals(): void {
-  byPty.clear();
 }

@@ -43,15 +43,17 @@ export interface ToolRefusal {
 /** What one transcript line says about the turn's tool calls. */
 export type TranscriptToolOutcome =
   | { type: 'refused'; refusal: ToolRefusal }
-  /** A tool ran with nothing refused. */
+  /** A tool result with nothing refused. */
   | { type: 'accepted' }
   /** The person's next prompt. */
   | { type: 'prompt' }
-  /** A tool result without the decision fields: the format may have changed. */
+  /** A tool result it cannot read a decision from: the format may have
+   *  changed (`version` names the writer), or the line holds several results. */
   | { type: 'unknown'; version: string | null };
 
 const KINDS: ReadonlySet<string> = new Set<ToolRefusalKind>(['rule', 'hook', 'auto-mode', 'mode', 'user', 'sandbox-network', 'other']);
 const WORD_RE = /^[\x21-\x7e]{1,128}$/;
+const INTERRUPTED_PREFIX = '[Request interrupted by user';
 
 function word(v: unknown, max = 128): string | null {
   return typeof v === 'string' && v.length <= max && WORD_RE.test(v) ? v : null;
@@ -88,10 +90,15 @@ export function toolOutcomeOfLine(line: string, now: number = Date.now()): Trans
   const content = message.content;
   if (typeof content === 'string') return { type: 'prompt' };
   if (!Array.isArray(content)) return null;
-  const result = content.find((c): c is Record<string, unknown> => isRecord(c) && c.type === 'tool_result');
-  if (!result) {
-    return content.some((c) => isRecord(c) && c.type === 'text') ? { type: 'prompt' } : null;
+  const results = content.filter((c): c is Record<string, unknown> => isRecord(c) && c.type === 'tool_result');
+  if (results.length === 0) {
+    // Claude Code's own note after the person refused at the prompt is no prompt.
+    const texts = content.filter((c): c is Record<string, unknown> => isRecord(c) && c.type === 'text');
+    return texts.length > 0 && !texts.every((t) => typeof t.text === 'string' && t.text.startsWith(INTERRUPTED_PREFIX)) ? { type: 'prompt' } : null;
   }
+  // One decision per line: with several results it belongs to none of them.
+  if (results.length > 1) return { type: 'unknown', version: null };
+  const result = results[0];
   const decision = j.permissionDecision;
   const toolUseId = word(result.tool_use_id);
   if (!isRecord(decision) || typeof decision.decision !== 'string' || !toolUseId) {
@@ -106,7 +113,7 @@ export function toolOutcomeOfLine(line: string, now: number = Date.now()): Trans
   if (decision.decision === 'accept' && violations.some((v) => isRecord(v) && v.kind === 'network')) {
     return { type: 'refused', refusal: { toolUseId, kind: 'sandbox-network', source: 'sandbox', reasonCode: null, at } };
   }
-  return decision.decision === 'accept' ? { type: 'accepted' } : null;
+  return { type: 'accepted' };
 }
 
 /** A refusal as it crosses a process boundary, or null when it is not one. Pure. */

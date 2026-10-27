@@ -58,10 +58,17 @@ describe('factFromBusEvent', () => {
     expect(keyOf(d)).toBe(`pane.needs_input:pty-1:${Math.floor(7_000 / 60_000)}`);
   });
 
-  it('pane.needs_input says when a fenced worker\'s turn stopped on a refused tool call', () => {
+  it('a hook turn end whose last tool result was a refusal → pane.idle saying so; any other turn end → nothing', () => {
     const stopped = (ptyId: string) => (ptyId === 'pty-1' ? 'stopped after a refused tool call (a hook)' : null);
-    expect(factFromBusEvent(lifecycle(), task(), stopped)?.payload.stoppedAfter).toBe('stopped after a refused tool call (a hook)');
-    expect(factFromBusEvent(lifecycle(), task())?.payload).not.toHaveProperty('stoppedAfter');
+    const d = factFromBusEvent(lifecycle({ kind: 'agent.stop', source: 'hook' }), task(), stopped);
+    expect(d).toMatchObject({ kind: 'pane.idle', workspaceId: 'ws-owner', ref: { ptyId: 'pty-1', taskId: 'wtask-1', botId: 'bot-lead1' } });
+    expect(d?.payload.stoppedAfter).toBe('stopped after a refused tool call (a hook)');
+    expect(factFromBusEvent(lifecycle({ kind: 'agent.stop', source: 'hook' }), task())).toBeNull();
+    expect(factFromBusEvent(lifecycle({ kind: 'agent.stop', source: 'detector' }), task(), stopped)).toBeNull();
+    expect(factFromBusEvent(lifecycle({ kind: 'agent.stop', source: 'hook', decision: 'dedup' }), task(), stopped)).toBeNull();
+    expect(factFromBusEvent(lifecycle({ kind: 'agent.stop', source: 'hook' }), task('working', {}), stopped)).toBeNull();
+    // A permission prompt is not a turn that stopped on a refusal.
+    expect(factFromBusEvent(lifecycle(), task(), stopped)?.payload).not.toHaveProperty('stoppedAfter');
   });
 
   it('pane.needs_input carries the thread the task was started from', () => {

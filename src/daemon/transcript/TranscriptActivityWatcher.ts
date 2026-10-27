@@ -165,6 +165,9 @@ export interface TranscriptActivityDeps {
   /** Lines of this session's Claude transcript were skipped unread (more was
    *  appended in one tick than READ_CAP_BYTES): what they said is unknown. */
   onClaudeGap?: (sessionId: string) => void;
+  /** This session's Claude transcript is no longer read (its agent exited, the
+   *  file went away or another one replaces it). */
+  onClaudeWatchEnd?: (sessionId: string) => void;
   /** Runs at the end of every tick. */
   afterTick?: () => void;
   now?: () => number;
@@ -402,6 +405,7 @@ export class TranscriptActivityWatcher {
     if (!watch) return;
     this.watches.delete(id);
     if (watch.subagentsSent > 0) this.deps.emitSubagents?.(id, 0);
+    if (watch.lines) this.deps.onClaudeWatchEnd?.(id);
   }
 
   private flushSubagents(id: string, watch: Watch): void {

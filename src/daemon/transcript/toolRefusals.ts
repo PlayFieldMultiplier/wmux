@@ -2,10 +2,11 @@
 // (shared/toolRefusal.ts): fed every line the transcript activity watcher
 // reads (TranscriptActivityWatcher.onClaudeLine), in file order.
 //
-// A refusal stands until the agent moves past it: a later tool call that ran,
-// or the person's next prompt. It outlives the turn's end, so a turn that
-// stopped on it can say so. Another transcript (a new session in the pane)
-// starts afresh, and so does a pane that is gone.
+// A refusal stands until the agent moves past it: any later tool result, or
+// the person's next prompt. So it is the turn's last tool result while it
+// stands, and it outlives the turn's end, so a turn that stopped on it can say
+// so. Another transcript (a new session in the pane) starts afresh, and so do
+// unread lines, an agent that exited and a pane that is gone.
 
 import { toolOutcomeOfLine, type ToolRefusal } from '../../shared/toolRefusal';
 
@@ -55,8 +56,8 @@ export class ToolRefusalTracker {
         this.warned = true;
         this.deps.log?.(`[toolRefusal] Claude Code ${outcome.version} wrote a tool result without its permission decision; refusals are not read from it`);
       }
-      return;
     }
+    // Any later tool result moves past a refusal, one it cannot read included.
     this.set(sessionId, outcome.type === 'refused' ? outcome.refusal : null);
   }
 
@@ -64,7 +65,8 @@ export class ToolRefusalTracker {
     return this.current.get(sessionId)?.refusal ?? null;
   }
 
-  /** The pane is gone. */
+  /** Its last tool call is no longer known: the pane is gone, its agent
+   *  exited, or lines went unread. */
   drop(sessionId: string): void {
     this.set(sessionId, null);
     this.current.delete(sessionId);

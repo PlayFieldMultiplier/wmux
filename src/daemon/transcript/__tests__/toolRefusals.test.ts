@@ -1,6 +1,11 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import type { ResumeBinding } from '../../../shared/agentResume';
 import type { ToolRefusal } from '../../../shared/toolRefusal';
 import { ToolRefusalTracker } from '../toolRefusals';
+import { TranscriptActivityWatcher } from '../TranscriptActivityWatcher';
 
 const reject = (id: string, version = '2.1.311') => JSON.stringify({
   type: 'user', version, timestamp: '2026-10-27T16:57:19.676Z',
@@ -44,15 +49,46 @@ describe('ToolRefusalTracker', () => {
     expect(sent).toEqual([['p1', 'toolu_1'], ['p1', null], ['p2', 'toolu_9'], ['p2', 'toolu_9'], ['p2', null]]);
   });
 
-  it('a result without the decision fields says nothing, and from a version that writes them, logs once', () => {
+  it('a later result without the decision fields moves past a refusal, and from a version that writes them, logs once', () => {
     const { t, sent, logs } = rig();
     t.noteLine('p1', '/t/a.jsonl', reject('toolu_1'));
     t.noteLine('p1', '/t/a.jsonl', bare('2.1.200'));
     expect(logs).toEqual([]);
+    expect(t.get('p1')).toBeNull();
     t.noteLine('p1', '/t/a.jsonl', bare('2.1.400'));
     t.noteLine('p1', '/t/a.jsonl', bare('2.2.0'));
     expect(logs).toHaveLength(1);
-    expect(t.get('p1')?.toolUseId).toBe('toolu_1');
-    expect(sent).toEqual([['p1', 'toolu_1']]);
+    expect(sent).toEqual([['p1', 'toolu_1'], ['p1', null]]);
+  });
+
+  it('forgets a refusal once the watcher stops reading the pane (its agent exited)', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tx-refusal-'));
+    try {
+      const file = path.join(dir, 's.jsonl');
+      fs.writeFileSync(file, '');
+      const binding: ResumeBinding = { agent: 'claude', sessionId: 's', cwd: dir, transcriptPath: file, ts: 0 };
+      const { t, sent } = rig();
+      let alive = true;
+      const watcher = new TranscriptActivityWatcher({
+        listSessionIds: () => ['pty-1'],
+        getBinding: () => binding,
+        isAgentAlive: () => alive,
+        emit: () => undefined,
+        onClaudeLine: (id, p, line) => t.noteLine(id, p, line),
+        onClaudeGap: (id) => t.drop(id),
+        onClaudeWatchEnd: (id) => t.drop(id),
+        minGapMs: 0,
+      });
+      watcher.tick();
+      fs.appendFileSync(file, `${reject('toolu_1')}\n`);
+      watcher.tick();
+      expect(t.get('pty-1')?.toolUseId).toBe('toolu_1');
+      alive = false;
+      watcher.tick();
+      expect(t.get('pty-1')).toBeNull();
+      expect(sent).toEqual([['pty-1', 'toolu_1'], ['pty-1', null]]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

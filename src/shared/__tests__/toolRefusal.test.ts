@@ -33,7 +33,18 @@ describe('toolOutcomeOfLine', () => {
     expect(toolOutcomeOfLine('{"type":"user", not json')).toBeNull();
     expect(toolOutcomeOfLine(result({ permissionDecision: { decision: 7 } }))).toEqual({ type: 'unknown', version: '2.1.311' });
     expect(toolOutcomeOfLine(result({}))).toEqual({ type: 'unknown', version: '2.1.311' });
-    expect(toolOutcomeOfLine(result({ permissionDecision: { decision: 'ask', source: 'config' } }))).toBeNull();
+    expect(toolOutcomeOfLine(result({ permissionDecision: { decision: 'ask', source: 'config' } }))).toEqual({ type: 'accepted' });
+  });
+
+  it('Claude Code\'s note after a refusal at the prompt is no prompt; a line of several results is unknown', () => {
+    const note = JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: '[Request interrupted by user for tool use]' }] } });
+    expect(toolOutcomeOfLine(note)).toBeNull();
+    const two = JSON.stringify({
+      type: 'user', version: '2.1.311',
+      message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_01' }, { type: 'tool_result', tool_use_id: 'toolu_02' }] },
+      permissionDecision: { decision: 'reject', source: 'hook' },
+    });
+    expect(toolOutcomeOfLine(two)).toEqual({ type: 'unknown', version: null });
   });
 });
 
