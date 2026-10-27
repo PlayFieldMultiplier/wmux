@@ -107,6 +107,7 @@ import {
   SUPPORTED_STEMS,
   type FirstRunPort,
   type FirstRunWatchOptions,
+  watchFolderTrust,
 } from './agentFirstRun';
 
 /**
@@ -2290,19 +2291,20 @@ export class FanOutService {
     const stem = launcherStem(launched);
     const agent = AGENT_ROWS.find((row) => agentLauncherStem(row) === stem);
     if (!agent?.firstRunWatch) return;
-    const trustOnly = agent.firstRunWatch === 'trust';
+    if (agent.firstRunWatch === 'trust') {
+      this.scheduleTrustWatch(base, ownerWorkspaceId, ptyId, port, agent.slug);
+      return;
+    }
     const neutralisedModelEnv = marker.length > 0;
 
     let outcome: Awaited<ReturnType<typeof clearFirstRunPrompts>>;
     try {
-      outcome = await clearFirstRunPrompts(ptyId, port, { ...(this.firstRunOptions ?? {}), ...(trustOnly ? { trustOnly } : {}) });
+      outcome = await clearFirstRunPrompts(ptyId, port, this.firstRunOptions ?? {});
     } catch (err) {
       console.warn(`[fanout:first-run] watch failed for pane ${ptyId}: ${String(err)}`);
       return;
     }
     if (outcome.status === 'clear') {
-      // A trust-only watch has no model error to look for again.
-      if (trustOnly) return;
       // The model error is the one screen that arrives AFTER the composer, so
       // the clean-read exit above routinely runs before it: claude has to boot,
       // paint, send the first turn and be refused. Look once more, later — and
@@ -2314,7 +2316,30 @@ export class FanOutService {
     base.firstRunPrompt = outcome.headline;
     if (outcome.status !== 'stuck') return;
     base.firstRunStuck = true;
-    await this.markFirstRunStuck(base.taskId, ownerWorkspaceId, outcome, neutralisedModelEnv, agent.slug);
+    await this.markFirstRunStuck(base.taskId, ownerWorkspaceId, outcome, neutralisedModelEnv);
+  }
+
+  /**
+   * The watch for an agent with only a folder-trust dialog to stop at
+   * (firstRunWatch 'trust'), off the critical path like the model recheck:
+   * the dialog can be drawn well after launch, and spawnOne is serial, so a
+   * fan-out must not wait for it per worker. Found, the task's ledger row
+   * says so; the result is already on its way back. Tests await it through
+   * {@link settleFirstRunRechecks}.
+   */
+  private scheduleTrustWatch(
+    base: FanOutTaskResult,
+    ownerWorkspaceId: string,
+    ptyId: string,
+    port: FirstRunPort,
+    agent: AgentSlug,
+  ): void {
+    const run = async (): Promise<void> => {
+      const outcome = await watchFolderTrust(ptyId, port, this.firstRunOptions ?? {});
+      if (outcome.status !== 'stuck') return;
+      await this.markFirstRunStuck(base.taskId, ownerWorkspaceId, outcome, false, agent);
+    };
+    this.pendingRechecks.push(run().catch(() => { /* best-effort, as the model recheck */ }));
   }
 
   /**
@@ -2802,8 +2827,6 @@ export function firstRunStuckSummary(
       `run /model <model> in the pane — ${fix}`
     );
   }
-  // Named once: "Gemini CLI's folder trust dialog", not "… gemini folder trust dialog".
-  const agent = opts.agent ?? 'claude';
-  const screen = outcome.headline.startsWith(`${agent} `) ? outcome.headline.slice(agent.length + 1) : outcome.headline;
-  return `worker is waiting on ${agentSlugToDisplay(agent)}'s ${screen}; it needs a keypress in the pane`;
+  // The agent fan-out launched, not one read back off the screen.
+  return `worker is waiting on ${agentSlugToDisplay(opts.agent ?? 'claude')}'s ${outcome.headline}; it needs a keypress in the pane`;
 }

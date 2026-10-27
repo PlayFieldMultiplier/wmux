@@ -406,7 +406,7 @@ describe('firstRunStuckSummary (F15)', () => {
     expect(firstRunStuckSummary({ headline: 'workspace trust dialog', reason: 'trust' })).toBe(
       "worker is waiting on Claude Code's workspace trust dialog; it needs a keypress in the pane",
     );
-    expect(firstRunStuckSummary({ headline: 'gemini folder trust dialog', reason: 'trust' }, { agent: 'gemini' })).toBe(
+    expect(firstRunStuckSummary({ headline: 'folder trust dialog', reason: 'trust' }, { agent: 'gemini' })).toBe(
       "worker is waiting on Gemini CLI's folder trust dialog; it needs a keypress in the pane",
     );
     expect(firstRunStuckSummary({ headline: 'folder trust dialog', reason: 'trust' }, { agent: 'qwen' })).toBe(
@@ -1720,37 +1720,87 @@ describe('fan-out worker first run (A-1)', () => {
     expect(keys).toEqual(['\x1b', '\x1b', '\x1b']);
   });
 
-  it('reports a gemini or qwen worker on its folder-trust dialog, presses nothing, and leaves codex unwatched', async () => {
+  describe('a gemini or qwen worker on its folder-trust dialog', () => {
     const trustScreen = (name: string): string =>
       (JSON.parse(fs.readFileSync(path.join(__dirname, '../../../daemon/approvals/__tests__/fixtures/folder-trust', `${name}.json`), 'utf8')) as {
         screen: string[];
       }).screen.join('\n');
-    for (const [agentCmd, screen, headline] of [
-      ['gemini', trustScreen('gemini-folder-trust-60x30'), 'gemini folder trust dialog'],
-      ['qwen', trustScreen('qwen-folder-trust-22x30'), 'qwen folder trust dialog'],
-    ] as const) {
+    /** A clock that moves only when the watch sleeps. */
+    const clocked = () => {
+      let t = 0;
+      return { now: () => t, sleep: async (ms: number) => { t += ms; } };
+    };
+    let dir = '';
+    let ledger: TaskLedger;
+    beforeEach(() => {
+      dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-trust-watch-'));
+      ledger = new TaskLedger({ dir });
+      setTaskLedgerForTests(ledger);
+    });
+    afterEach(() => {
+      setTaskLedgerForTests(null);
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    it.each([
+      ['gemini', 'Gemini CLI', 'gemini-folder-trust-60x30'],
+      ['qwen', 'Qwen Code', 'qwen-folder-trust-22x30'],
+    ] as const)('%s: a dialog drawn ~9 s after launch marks the task, naming %s, and nothing is pressed', async (agentCmd, display, fixture) => {
+      // Another agent's name elsewhere on screen does not name the dialog: fan-out knows what it launched.
+      const screen = `  Codex was here earlier\n${trustScreen(fixture)}`;
+      let reads = 0;
       const keys: string[] = [];
       const svc = new FanOutService({
         daemon: makeDaemonFake().port,
         renderer: makeRendererFake().port,
         worktrees: makeWorktreesFake(),
-        firstRun: { readScreen: async () => screen, sendKey: async (_ptyId, sequence) => { keys.push(sequence); } },
+        firstRun: {
+          readScreen: async () => (++reads > 18 ? screen : 'starting…'),
+          sendKey: async (_ptyId, sequence) => { keys.push(sequence); },
+        },
+        firstRunOptions: clocked(),
       });
       const res = await svc.start(baseReq({ idempotencyKey: `fo-key-trust-${agentCmd}`, agentCmd, titles: ['Task A'] }));
-      expect(res.tasks[0].firstRunStuck).toBe(true);
-      expect(res.tasks[0].firstRunPrompt).toBe(headline);
+      await svc.settleFirstRunRechecks();
+      const row = ledger.list({ id: res.tasks[0].taskId as string })[0];
+      expect(row.status).toBe('input_required');
+      expect(row.summary).toBe(`worker is waiting on ${display}'s folder trust dialog; it needs a keypress in the pane`);
       expect(keys).toEqual([]);
-    }
-    const reads = vi.fn(async () => trustScreen('codex-folder-trust-60x30'));
-    const svc = new FanOutService({
-      daemon: makeDaemonFake().port,
-      renderer: makeRendererFake().port,
-      worktrees: makeWorktreesFake(),
-      firstRun: { readScreen: reads, sendKey: async () => undefined },
     });
-    const res = await svc.start(baseReq({ idempotencyKey: 'fo-key-trust-codex', agentCmd: 'codex', titles: ['Task A'] }));
-    expect(res.tasks[0].firstRunStuck).toBeUndefined();
-    expect(reads).not.toHaveBeenCalled();
+
+    it('a fan-out of several gemini workers does not wait for their watches', async () => {
+      let release: () => void = () => undefined;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const svc = new FanOutService({
+        daemon: makeDaemonFake().port,
+        renderer: makeRendererFake().port,
+        worktrees: makeWorktreesFake(),
+        firstRun: {
+          readScreen: async () => { await gate; return trustScreen('gemini-folder-trust-120x40'); },
+          sendKey: async () => undefined,
+        },
+        firstRunOptions: clocked(),
+      });
+      // Every read is held: start returns only because no watch is on its path.
+      const res = await svc.start(baseReq({ idempotencyKey: 'fo-key-trust-many', agentCmd: 'gemini', titles: ['A', 'B', 'C'] }));
+      expect(res.tasks).toHaveLength(3);
+      release();
+      await svc.settleFirstRunRechecks();
+      for (const task of res.tasks) expect(ledger.list({ id: task.taskId as string })[0].status).toBe('input_required');
+    });
+
+    it('leaves a codex worker unwatched', async () => {
+      const reads = vi.fn(async () => trustScreen('codex-folder-trust-60x30'));
+      const svc = new FanOutService({
+        daemon: makeDaemonFake().port,
+        renderer: makeRendererFake().port,
+        worktrees: makeWorktreesFake(),
+        firstRun: { readScreen: reads, sendKey: async () => undefined },
+      });
+      await svc.start(baseReq({ idempotencyKey: 'fo-key-trust-codex', agentCmd: 'codex', titles: ['Task A'] }));
+      await svc.settleFirstRunRechecks();
+      expect(reads).not.toHaveBeenCalled();
+    });
   });
 
   // ── F15 ────────────────────────────────────────────────────────────────────

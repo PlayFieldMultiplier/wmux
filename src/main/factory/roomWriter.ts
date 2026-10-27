@@ -62,6 +62,7 @@ import { parseRoomAttachments } from '../../shared/roomAttachments';
 import { parseRoomFiles } from './roomFiles';
 import { guestSide } from './guestWorkspaces';
 import { REACTIONS_PER_CARD_MAX, isReactionEmoji, sanitizeReactions, type CardReaction } from '../../shared/botGroupProtocol';
+import { AGENT_ROWS, agentSlugToDisplay, type AgentIdentityRow, type AgentSlug } from '../../shared/agentIdentity';
 
 export const ROOMS_DIRNAME = 'rooms';
 
@@ -1299,9 +1300,13 @@ interface SystemCard { workspaces: string[]; threadId: ThreadId; kind: CardKind;
  *  cancelled (not imported: the stop pulls in the fan-out notifier). */
 const STOPPED_BY_OWNER_SUMMARY = 'stopped by owner';
 
-/** A task card's label in the English the card keeps, by its notice code. */
-/** The trust-dialog summary FanOutService writes, naming the agent that shows it. */
-const TRUST_DIALOG_SUMMARY = /^worker is waiting on (Claude Code|Gemini CLI|Qwen Code)'s (?:workspace|(?:[a-z]+ )?folder) trust dialog;/;
+/** The trust-dialog summary FanOutService writes (firstRunStuckSummary): it
+ *  names an agent whose first-run watch can report one (firstRunWatch). */
+export function trustDialogSummaryPattern(rows: readonly (AgentIdentityRow & { readonly slug: AgentSlug })[] = AGENT_ROWS): RegExp {
+  const names = rows.filter((row) => row.firstRunWatch).map((row) => agentSlugToDisplay(row.slug).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  return new RegExp(`^worker is waiting on (${names.join('|')})'s (?:workspace|(?:[a-z]+ )?folder) trust dialog;`);
+}
+const TRUST_DIALOG_SUMMARY = trustDialogSummaryPattern();
 
 /** #2231 — why wmux itself moved a task to input_required, from the summary
  *  it wrote (FanOutService), so the room can word it in the reader's
@@ -1313,6 +1318,7 @@ export function inputRequiredWhy(summary: string): 'trustDialog' | 'firstRun' | 
   return null;
 }
 
+/** A task card's label in the English the card keeps, by its notice code. */
 const TASK_CARD_LABEL: Readonly<Record<string, string>> = {
   'task.done': 'Task done',
   'task.reported': 'Task reported · in review',

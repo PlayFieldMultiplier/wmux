@@ -36,6 +36,17 @@ describe('PHONE_ROOM_NOTICE_CODES', () => {
     expect(unlisted).toEqual([]);
   });
 
+  it('lists an arg for every placeholder its templates use', () => {
+    // Worded by the desktop from other args (roomFormat.ts noticeText), not sent as their own.
+    // `names` and `count` are the holders' own words (slotHoldersText).
+    const derived = new Set(['status', 'pane', 'who', 'place', 'time', 'reason', 'holders', 'verdict', 'cause', 'names', 'count']);
+    for (const [code, spec] of codes) {
+      const used = [...spec.titles, ...(spec.more ?? [])].flatMap((key) => [...(EN[key] ?? '').matchAll(/\{(\w+)\}/g)].map((m) => m[1]));
+      const missing = [...new Set(used)].filter((name) => !(name in spec.args) && !derived.has(name));
+      expect(missing, code).toEqual([]);
+    }
+  });
+
   it('lists only codes the desktop words', () => {
     for (const [code, spec] of codes) {
       const args = Object.fromEntries(Object.entries(spec.args).map(([name, type]) => [name, type === 'number' ? 1 : WORD_VALUES[name] ?? 'x']));

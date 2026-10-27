@@ -634,6 +634,16 @@ describe('inputRequiredWhy (#2231)', () => {
     expect(inputRequiredWhy("launch failed: no agent started in pane daemon-70a64bc2 within 45s, so the pane sits at its shell prompt; re-run the task's launch line in that pane (the fan-out result carries it)")).toBe('launchFailed');
     expect(inputRequiredWhy('I need the staging API key')).toBeNull();
   });
+
+  it('reads a trust dialog for every agent whose row has a first-run watch, from the registry', async () => {
+    const { trustDialogSummaryPattern } = await import('../roomWriter');
+    const { AGENT_ROWS } = await import('../../../shared/agentIdentity');
+    const summary = "worker is waiting on Codex CLI's folder trust dialog; it needs a keypress in the pane";
+    expect(trustDialogSummaryPattern().test(summary)).toBe(false);
+    // A row given a watch: its name parses with no list to edit here.
+    const rows = AGENT_ROWS.map((row) => (row.slug === 'codex' ? { ...row, firstRunWatch: 'trust' as const } : row));
+    expect(trustDialogSummaryPattern(rows).exec(summary)?.[1]).toBe('Codex CLI');
+  });
 });
 
 

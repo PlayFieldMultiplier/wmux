@@ -8,6 +8,7 @@ import {
   clearFirstRunPrompts,
   detectFirstRunPrompt,
   firstRunEnvForAgent,
+  watchFolderTrust,
   launcherStem,
   type FirstRunPort,
 } from '../agentFirstRun';
@@ -255,22 +256,6 @@ describe('clearFirstRunPrompts', () => {
     expect(outcome).toMatchObject({ status: 'stuck', reason: 'send-failed' });
   });
 
-  it('trust-only: reports a folder-trust dialog stuck without pressing anything', async () => {
-    const port = scriptedPort([folderTrust('gemini-folder-trust-60x30')]);
-    const outcome = await clearFirstRunPrompts('pty-1', port, { ...fastOptions, now: undefined, trustOnly: true });
-    expect(outcome).toEqual({ status: 'stuck', headline: 'gemini folder trust dialog', reason: 'trust' });
-    expect(port.keys).toEqual([]);
-  });
-
-  it('trust-only: presses nothing on any other first-run screen', async () => {
-    for (const screens of [[UPSELL_SCREEN, READY_SCREEN, READY_SCREEN], [MODEL_ERROR_SCREEN]]) {
-      const port = scriptedPort(screens);
-      const outcome = await clearFirstRunPrompts('pty-1', port, { ...fastOptions, now: undefined, trustOnly: true });
-      expect(outcome.status).toBe('clear');
-      expect(port.keys).toEqual([]);
-    }
-  });
-
   it('keeps watching through unreadable viewports', async () => {
     const readScreen = vi
       .fn(async (): Promise<string> => READY_SCREEN)
@@ -282,5 +267,44 @@ describe('clearFirstRunPrompts', () => {
     const outcome = await clearFirstRunPrompts('pty-1', port, { ...fastOptions, now: undefined });
     expect(outcome.status).toBe('clear');
     expect(readScreen.mock.calls.length).toBeGreaterThan(1);
+  });
+});
+
+describe('watchFolderTrust', () => {
+  /** The composer Gemini CLI draws once it takes a prompt. */
+  const COMPOSER = [' >   Type your message or @path/to/file', ' workspace (/directory)'].join('\n');
+  /** A clock that moves only when the watch sleeps. */
+  const clocked = () => {
+    let t = 0;
+    return { now: () => t, sleep: async (ms: number) => { t += ms; }, log: () => undefined };
+  };
+
+  it('keeps reading past calm screens and reports a dialog drawn late, pressing nothing', async () => {
+    // Blank for about 9 s at the 500 ms poll, then the dialog.
+    const port = scriptedPort([...Array<string>(18).fill('starting…'), folderTrust('gemini-folder-trust-60x30')]);
+    const outcome = await watchFolderTrust('pty-1', port, clocked());
+    expect(outcome).toEqual({ status: 'stuck', headline: 'folder trust dialog', reason: 'trust' });
+    expect(port.keys).toEqual([]);
+  });
+
+  it('ends clear once the composer shows, or at the deadline', async () => {
+    expect(await watchFolderTrust('pty-1', scriptedPort(['starting…', COMPOSER]), clocked())).toEqual({ status: 'clear' });
+    const calm = scriptedPort(['starting…']);
+    expect(await watchFolderTrust('pty-1', calm, clocked())).toEqual({ status: 'clear' });
+    expect(calm.keys).toEqual([]);
+  });
+
+  it('a model error on the same screen does not hide the dialog', async () => {
+    // Both within the model error's six-row tail: the error is read first.
+    const both = [
+      "There's an issue with the selected model (glm-5.3)",
+      '   │ Do you trust this folder?',
+      '   │ › 1. Trust folder (proj)',
+      '   │   2. Trust parent folder (work)',
+      "   │   3. Don't trust (esc)",
+      '   ╰──────────────────────────',
+    ].join('\n');
+    expect(detectFirstRunPrompt(both)?.kind).toBe('model-error');
+    expect(await watchFolderTrust('pty-1', scriptedPort([both]), clocked())).toMatchObject({ status: 'stuck', reason: 'trust' });
   });
 });

@@ -128,7 +128,8 @@ export const PHONE_ROOM_NOTICE_CODES: Readonly<Record<string, PhoneNoticeCode>> 
   'task.stoppedByOwner': titled('task.stoppedByOwner', { title: 'string' }),
   // A folder a stop kept, removed after 7 days with no changes (taskFolderCleanup.ts).
   'task.keptFolderCleaned': bodied('task.keptFolderCleaned', { title: 'string', days: 'number', kind: 'string' }, [`${k('task.keptFolderCleaned')}.body.research`]),
-  'task.inputRequired': titled('task.inputRequired', { title: 'string', why: 'string' }, ['trustDialog', 'firstRun', 'launchFailed'].map((w) => `room.notice.task.inputRequired.why.${w}`)),
+  // `agent`: with why `trustDialog`, the agent showing the dialog (absent on cards written before: Claude Code).
+  'task.inputRequired': titled('task.inputRequired', { title: 'string', why: 'string', agent: 'string' }, ['trustDialog', 'firstRun', 'launchFailed'].map((w) => `room.notice.task.inputRequired.why.${w}`)),
   // Pull requests and verdicts (roomWriter.ts).
   'pr.merged': { args: { pr: 'number', title: 'string' }, titles: [k('pr.merged'), k('pr.merged.untitled')] },
   'pr.closed': { args: { pr: 'number', title: 'string' }, titles: [k('pr.closed'), k('pr.closed.untitled')] },

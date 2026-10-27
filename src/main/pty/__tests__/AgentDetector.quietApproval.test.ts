@@ -614,6 +614,30 @@ describe('Gemini CLI and Qwen Code folder-trust dialogs (live captures)', () => 
     }
   });
 
+  it("ties Qwen's last-choice end to its trust question only", () => {
+    // A write dialog whose diff has a numbered "3. Don…" line: not finished until its own spinner row.
+    const write = ['Apply this change?', '  1 + 1. Lint the code', "  2 + 3. Don't commit secrets", '› 1. Yes, allow once', '  2. No, suggest changes (esc)'];
+    const det = new AgentDetector();
+    det.seedTrustedIdentity('qwen', det.getIdentityEpoch());
+    det.feed(write.join('\r\n'));
+    expect(det.takeApprovalRecheckRequest()).toBe(false);
+    det.feed('\r\n⠏ Waiting for user confirmation...');
+    expect(det.takeApprovalRecheckRequest()).toBe(true);
+  });
+
+  it('an ST-terminated hyperlink before an old question does not make it new again', async () => {
+    vi.useFakeTimers();
+    try {
+      const { det } = setup('agy', `\u001b]8;;https://example.com\u001b\\${TRUST.join('\r\n')}`);
+      vi.advanceTimersByTime(31_000);
+      // Later output that draws no question leaves the old one stale.
+      det.feed('x');
+      expect(await det.revalidateApprovalScreen(async () => frame())).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("leaves Qwen's permission dialogs to its own reader", () => {
     expect(folderTrustScreenApproval(qwenWide.screens.approval)).toBeNull();
     expect(qwenScreenApproval(qwenWide.screens.approval)).not.toBeNull();

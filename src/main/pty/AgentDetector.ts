@@ -154,7 +154,14 @@ interface AgentPattern {
    * stream report (Claude, Codex). Their recheck is not held for this
    * question, and spending it does not spend the one this question asks for.
    */
-  approvalReady?: { question: RegExp; end: RegExp; shared?: true };
+  approvalReady?: {
+    question: RegExp;
+    end: RegExp;
+    shared?: true;
+    /** More questions, each with the row that finishes it: an end is matched
+     *  only after its own question. */
+    also?: readonly { question: RegExp; end: RegExp }[];
+  };
   patterns: {
     regex: RegExp;
     status: AgentEvent['status'];
@@ -495,8 +502,9 @@ const AGENT_PATTERNS: AgentPattern[] = [
     // an answer. Or the folder-trust question, then its last choice
     // ("3. Don't trust (esc)", cut with "…" in a narrow pane).
     approvalReady: {
-      question: /Allow\s*execution\s*of:|Apply\s*this\s*change\?|Do[\s│]*you[\s│]*trust[\s│]*this[\s│]*folder\?/,
-      end: /Waiting\s*for\s*user\s*confirmation\.\.\.(?!\s*\()|3\.[\s│]*Don/,
+      question: /Allow\s*execution\s*of:|Apply\s*this\s*change\?/,
+      end: /Waiting\s*for\s*user\s*confirmation\.\.\.(?!\s*\()/,
+      also: [{ question: /Do[\s│]*you[\s│]*trust[\s│]*this[\s│]*folder\?/, end: /3\.[\s│]*Don/ }],
     },
     gate: /Qwen\s*Code\s*\(v\d|Qwen - /,
     chrome: isQwenChrome,
@@ -668,10 +676,13 @@ const PROFILE_BY_SLUG = new Map(AGENT_PATTERNS.map((ap) => [ap.slug, ap]));
 const READY_MATCH_REACH = 512;
 /** A CSI, OSC or charset escape at the very end of a read, not yet finished. */
 // eslint-disable-next-line no-control-regex
-const UNFINISHED_ESCAPE = /\x1b(?:\[[0-9;?<=>]*|\][^\x07]*|\()?$/;
+const UNFINISHED_ESCAPE = /\x1b(?:\[[0-9;?<=>]*|\][^\x07\x1b]*|\()?$/;
 /** The profiles with an approvalReady question, its patterns compiled global once. */
 const READY_PROFILES = AGENT_PATTERNS.flatMap((ap) => (ap.approvalReady
-  ? [{ slug: ap.slug, question: globalRegExp(ap.approvalReady.question), end: globalRegExp(ap.approvalReady.end) }]
+  ? [ap.approvalReady, ...(ap.approvalReady.also ?? [])].map(({ question, end }, i) => ({
+    // What arms: the profile's slug for its first question, then one key per further question.
+    key: i === 0 ? ap.slug : `${ap.slug}:${i}`, slug: ap.slug, question: globalRegExp(question), end: globalRegExp(end),
+  }))
   : []));
 
 function globalRegExp(re: RegExp): RegExp {
@@ -1152,7 +1163,7 @@ export class AgentDetector {
   private approvalRecheckRequested = false;
   // approvalReady questions whose question row was drawn, and those whose
   // finishing row followed it, since the screen was last invalidated.
-  private approvalArmed = new Set<AgentSlug>();
+  private approvalArmed = new Set<string>();
   private approvalReadySlugs = new Set<AgentSlug>();
   // An identity change kept the approval evidence, and no question has been
   // drawn since: the next seed drops it unless its profile has approvalReady.
@@ -1372,7 +1383,7 @@ export class AgentDetector {
     // launch must not inherit it half-drawn or ready.
     const ending = this.trustedAgent ?? AGENT_PATTERNS.find((ap) => ap.agent === this.lastAgent)?.slug;
     if (ending) {
-      this.approvalArmed.delete(ending);
+      for (const key of this.approvalArmed) if (key === ending || key.startsWith(`${ending}:`)) this.approvalArmed.delete(key);
       this.approvalReadySlugs.delete(ending);
     }
   }
@@ -1550,13 +1561,13 @@ export class AgentDetector {
     const recentAt = Math.max(0, previousLength - READY_MATCH_REACH);
     const recent = cleanProbe.slice(recentAt);
     const drawnAfter = previousLength - recentAt;
-    for (const { slug, question, end } of READY_PROFILES) {
-      // An end counts only after a question: from 0 once one is armed.
-      let from = this.approvalArmed.has(slug) ? 0 : -1;
+    for (const { key, slug, question, end } of READY_PROFILES) {
+      // An end counts only after its question: from 0 once that one is armed.
+      let from = this.approvalArmed.has(key) ? 0 : -1;
       for (const match of recent.matchAll(question)) {
         if (match.index + match[0].length <= drawnAfter) continue;
         from = match.index + match[0].length;
-        this.approvalArmed.add(slug);
+        this.approvalArmed.add(key);
         this.approvalReadySlugs.delete(slug);
       }
       if (from < 0) continue;
