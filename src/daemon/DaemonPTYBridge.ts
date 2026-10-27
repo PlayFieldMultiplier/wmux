@@ -2232,6 +2232,15 @@ export class DaemonPTYBridge extends EventEmitter {
     return this.muted;
   }
 
+  /**
+   * The output held while muted (see heldWhileMuted), oldest first, and
+   * whether later output was dropped once the cap was reached; null when not
+   * muted. Read-only: the unmute still releases it.
+   */
+  heldOutput(): { data: string; full: boolean } | null {
+    return this.heldWhileMuted ? { data: this.heldWhileMuted.join(''), full: this.heldFull } : null;
+  }
+
   cleanup(): void {
     if (this.titleCycleTimer) clearTimeout(this.titleCycleTimer);
     this.titleCycleTimer = null;

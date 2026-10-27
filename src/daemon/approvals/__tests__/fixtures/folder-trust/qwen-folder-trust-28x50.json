@@ -1,0 +1,30 @@
+{
+ "tui": "qwen",
+ "version": "@qwen-code/qwen-code 0.26.1",
+ "cols": 28,
+ "rows": 50,
+ "keysSent": "(dialog drawn at startup, nothing typed)",
+ "note": "Folder-trust dialog on first launch in a never-seen folder (sandbox HOME, dummy OpenAI-compatible key, security.folderTrust.enabled set). At 28 columns the declining choice is cut inside its \"(esc)\" suffix and the folder name is cut too. Cropped to the dialog.",
+ "origin": "Qwen Code 0.26.1 program output captured live 2026-10-27; Apache-2.0",
+ "screen": [
+  "   ╭──────────────────────",
+  "   │",
+  "   │ Do you trust this ",
+  "   │ folder?",
+  "   │ Trusting a folder",
+  "   │ allows Qwen Code to",
+  "   │ execute commands it",
+  "   │ suggests. This is a",
+  "   │ security feature to",
+  "   │ prevent accidental",
+  "   │ execution in",
+  "   │ untrusted",
+  "   │ directories.",
+  "   │",
+  "   │ › 1. Trust folder (…",
+  "   │   2. Trust parent f…",
+  "   │   3. Don't trust (e…",
+  "   │",
+  "   ╰──────────────────────"
+ ]
+}

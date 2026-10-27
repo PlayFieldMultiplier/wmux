@@ -89,6 +89,7 @@ import { normalizeLivePaneIds } from '../shared/a2aOrphanedTask';
 import { WEB_DEFAULT_PORT, webHostIsLoopback, type WebTlsConfig } from '../shared/web';
 import { generateSnapshotUnqueued, enqueueSnapshotJob, generateTextSnapshot, generateTextSnapshotUnqueued, runSmallSnapshotJob, capTextRowsToFrameBudget, MAX_SCROLLBACK } from './HeadlessSnapshot';
 import { queuedScreenText, queuedTextSnapshot } from './queuedSessionText';
+import { registerFolderTrustRpc } from './folderTrustState';
 import type { TerminalPty } from '../shared/terminalPty';
 import { serializeSession } from './sessionSerialize';
 import { AwaitingScreenVerifier, AWAITING_NARROW_DIALOG_COLS, questionInFlight, renderPaneScreen, renderPaneTail } from './AwaitingScreenVerifier';
@@ -5833,6 +5834,8 @@ function registerRpcHandlers(
     const bracketedPaste = sessionManager.getSession(id)?.bridge.outputModes?.isSet(2004) ?? null;
     return { agentName: readDaemonAgentState(id).agentName, bracketedPaste };
   });
+  // Main's folder-trust check for a pane its renderer has no screen for.
+  registerFolderTrustRpc(pipeServer, sessionManager);
   const readChatAgentState = (id: string) => {
     const keyed = sessionManager.getSession(id)?.bridge;
     // A chat send fences on keys only: a pointer drifting over a mouse-tracking

@@ -63,6 +63,11 @@ type ProbeOutcome = 'routed' | 'navigation-failed' | 'tab-gone' | 'no-tab' | 'no
 // console.warn and the pre-watcher behavior.
 const TARGET_WATCHER_ENV = 'WMUX_CHROME_TARGET_WATCHER';
 
+/** Whether dedicated launchers may run their tab-target watcher (and so attach page sessions). */
+export function chromeTargetWatcherEnabled(): boolean {
+  return process.env[TARGET_WATCHER_ENV] !== '0';
+}
+
 export interface ChromeTargetInfo {
   /** Stable wmux identity handed to agents (`chrome-<uuid>` for dedicated
    *  instances). Live attach keeps surfaceId ≡ targetId — see LiveChromeClient. */
@@ -117,6 +122,24 @@ export interface LiveWriteScopeApi {
   agentWindowFor(workspaceId: string | undefined): number | undefined;
 }
 
+/**
+ * A flattened CDP session on the page behind one wmux-opened tab, over the
+ * client's own browser socket (no second connection). Dead for good once
+ * Chrome detaches it, the socket goes away, or Chrome swaps the page behind
+ * the tab: `send` then rejects with a `ChromePageSessionError('gone')`, and
+ * the next `pageSession()` attaches afresh.
+ */
+export interface ChromePageSession {
+  send(method: string, params?: Record<string, unknown>): Promise<unknown>;
+}
+
+/** Why a page session could not be had: the tab is not there, or no socket is. */
+export class ChromePageSessionError extends Error {
+  constructor(public readonly reason: 'gone' | 'unavailable', message: string) {
+    super(message);
+  }
+}
+
 export interface ChromeBackendClient {
   endpoint(): Promise<ChromeBackendEndpoint>;
   /** Targets reported through browser.cdp.info (page-selection seed). Live
@@ -128,7 +151,16 @@ export interface ChromeBackendClient {
   closeSurface(surfaceId: string): Promise<boolean>;
   /** Real tab focus where the backend supports it (live attach). */
   selectSurface?(surfaceId: string): Promise<boolean>;
+  /** Un-minimize the window holding a surface (dedicated instances; a person's explicit ask only). */
+  restoreWindow?(surfaceId: string): Promise<void>;
   hasSurface(surfaceId: string): boolean;
+  /** Dedicated instances only: a CDP session on one wmux-opened tab's page.
+   *  Never launches Chrome. Absent on Live Chrome. */
+  pageSession?(surfaceId: string): Promise<ChromePageSession>;
+  /** False when pageSession cannot work here: the tab watcher is off or failed. */
+  canPageSession?(): boolean;
+  /** Dedicated instances: the record behind a wmux-opened surface (its workspace). */
+  recordFor?(surfaceId: string): ChromeSurfaceRecord | undefined;
   /** Live attach only: the agent-window write policy. Absent = dedicated. */
   readonly writeScope?: LiveWriteScopeApi;
   dispose(): void | Promise<void>;
@@ -302,6 +334,13 @@ interface WatchedTargetInfo {
   title?: string;
 }
 
+interface PageSessionEntry {
+  socket: CdpSocket;
+  sessionId: string;
+  targetId: string;
+  valid: boolean;
+}
+
 function watchedTargetInfo(params: Record<string, unknown>): WatchedTargetInfo | undefined {
   const info = params.targetInfo;
   return info && typeof info === 'object' ? (info as WatchedTargetInfo) : undefined;
@@ -342,6 +381,10 @@ export class ChromeLauncher implements ChromeBackendClient {
    *  when the attach event beat the HTTP response. */
   private readonly tabToPage = new Map<string, string>();
   private readonly pageToTab = new Map<string, string>();
+  /** surfaceId → the page session pageSession() attached for it, on the watcher socket. */
+  private readonly pageSessions = new Map<string, PageSessionEntry>();
+  /** pageSession() attaches in flight, so concurrent callers share one. */
+  private readonly attachingPages = new Map<string, Promise<PageSessionEntry>>();
 
   private readonly profileLabel: string | undefined;
   private readonly profileName: string;
@@ -448,7 +491,7 @@ export class ChromeLauncher implements ChromeBackendClient {
 
   /** Kill switch: WMUX_CHROME_TARGET_WATCHER=0 never opens the socket. */
   private watcherEnabled(): boolean {
-    return process.env[TARGET_WATCHER_ENV] !== '0';
+    return chromeTargetWatcherEnabled();
   }
 
   /** Give up on the watcher, loudly but once. Everything the launcher does
@@ -472,6 +515,98 @@ export class ChromeLauncher implements ChromeBackendClient {
     this.sessionTabs.clear();
     this.tabToPage.clear();
     this.pageToTab.clear();
+    for (const entry of this.pageSessions.values()) entry.valid = false;
+    this.pageSessions.clear();
+  }
+
+  /** The watcher's connection went away (CdpSocket re-dials in place): every page session on it is dead. */
+  private dropPageSessionsOf(socket: CdpSocket): void {
+    for (const [surfaceId, entry] of this.pageSessions) {
+      if (entry.socket !== socket) continue;
+      entry.valid = false;
+      this.pageSessions.delete(surfaceId);
+    }
+  }
+
+  /** Chrome detached `sessionId`: a page session on it is dead. True when it was one. */
+  private dropPageSession(sessionId: string): boolean {
+    for (const [surfaceId, entry] of this.pageSessions) {
+      if (entry.sessionId !== sessionId) continue;
+      entry.valid = false;
+      this.pageSessions.delete(surfaceId);
+      return true;
+    }
+    return false;
+  }
+
+  /** Whether pageSession can attach at all: the watcher socket is enabled and has not failed. */
+  canPageSession(): boolean {
+    return this.watcherEnabled() && !this.watcherFailed;
+  }
+
+  /**
+   * A CDP session on the page behind a wmux-opened tab, attached over the
+   * watcher's browser socket (Target.attachToTarget, flatten). Never launches
+   * Chrome: a launcher that is not running, or has no watcher socket (turned
+   * off, or it failed), answers `unavailable`; a surface with no live page
+   * answers `gone`. Ownership is the caller's check — this only knows the tab.
+   */
+  async pageSession(surfaceId: string): Promise<ChromePageSession> {
+    const record = this.surfaces.get(surfaceId);
+    if (!this.isRunning()) throw new ChromePageSessionError('unavailable', 'ChromeLauncher: Chrome is not running');
+    if (!record?.targetId) throw new ChromePageSessionError('gone', 'ChromeLauncher: no page for this surface');
+    await this.ensureTargetWatcher();
+    const socket = this.watcher;
+    if (!socket?.isOpen()) throw new ChromePageSessionError('unavailable', 'ChromeLauncher: no browser CDP socket');
+    const cached = this.pageSessions.get(surfaceId);
+    let entry: PageSessionEntry;
+    if (cached && cached.valid && cached.socket === socket && cached.targetId === record.targetId) {
+      entry = cached;
+    } else {
+      if (cached) {
+        // Chrome swapped the page behind the tab: the old session drives a page nobody sees.
+        cached.valid = false;
+        this.pageSessions.delete(surfaceId);
+        if (cached.socket === socket) void socket.send('Target.detachFromTarget', { sessionId: cached.sessionId }).catch(() => undefined);
+      }
+      entry = await this.attachPage(surfaceId, record.targetId, socket);
+    }
+    return {
+      send: async (method, params = {}) => {
+        if (!entry.valid || this.watcher !== entry.socket) throw new ChromePageSessionError('gone', 'ChromeLauncher: page session ended');
+        try {
+          return await entry.socket.send(method, params, entry.sessionId);
+        } catch (err) {
+          if (!entry.valid || this.watcher !== entry.socket) throw new ChromePageSessionError('gone', 'ChromeLauncher: page session ended');
+          throw err;
+        }
+      },
+    };
+  }
+
+  private attachPage(surfaceId: string, targetId: string, socket: CdpSocket): Promise<PageSessionEntry> {
+    const key = `${surfaceId}\n${targetId}`;
+    const inFlight = this.attachingPages.get(key);
+    if (inFlight) return inFlight;
+    const attach = (async () => {
+      let sessionId: string | undefined;
+      try {
+        const res = (await socket.send('Target.attachToTarget', { targetId, flatten: true })) as { sessionId?: unknown };
+        sessionId = typeof res?.sessionId === 'string' ? res.sessionId : undefined;
+      } catch {
+        sessionId = undefined;
+      }
+      if (!sessionId) throw new ChromePageSessionError('gone', 'ChromeLauncher: the page could not be attached');
+      if (this.watcher !== socket || this.surfaces.get(surfaceId)?.targetId !== targetId) {
+        void socket.send('Target.detachFromTarget', { sessionId }).catch(() => undefined);
+        throw new ChromePageSessionError('gone', 'ChromeLauncher: the page changed while attaching');
+      }
+      const entry: PageSessionEntry = { socket, sessionId, targetId, valid: true };
+      this.pageSessions.set(surfaceId, entry);
+      return entry;
+    })().finally(() => this.attachingPages.delete(key));
+    this.attachingPages.set(key, attach);
+    return attach;
   }
 
   /**
@@ -513,13 +648,14 @@ export class ChromeLauncher implements ChromeBackendClient {
     this.closeWatcher();
     if (this.disposed) return;
     const generation = ++this.watcherGeneration;
-    const socket = new CdpSocket(
+    const socket: CdpSocket = new CdpSocket(
       () => {
         const url = this.browserWsEndpoint;
         if (!url) throw new Error('ChromeLauncher: no browser CDP endpoint');
         return url;
       },
-      { label: 'ChromeLauncher watcher' },
+      // A page session id belongs to one connection; a re-dial must not reuse it.
+      { label: 'ChromeLauncher watcher', onDisconnect: () => this.dropPageSessionsOf(socket) },
     );
     /** True once a newer start (or a close) superseded this one. */
     const stale = (): boolean => {
@@ -566,6 +702,7 @@ export class ChromeLauncher implements ChromeBackendClient {
     socket.on('Target.detachedFromTarget', (params, parentSessionId) => {
       const gone = typeof params.sessionId === 'string' ? params.sessionId : undefined;
       if (!gone) return;
+      if (this.dropPageSession(gone)) return;
       const detachedTab = this.sessionTabs.get(gone);
       if (detachedTab) {
         // The tab session itself went away; syncTabAnchors re-attaches later.

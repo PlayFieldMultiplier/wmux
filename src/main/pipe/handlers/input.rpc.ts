@@ -50,8 +50,10 @@ import {
   approvalOnScreen,
   folderTrustGateMessage,
   folderTrustOnScreen,
+  folderTrustUnknownMessage,
   type AnswerPolicy,
 } from './approvals.rpc';
+import type { FolderTrustState } from '../../../daemon/folderTrustState';
 import { readWorkspaceAutonomyEntry } from '../../workspace/workspaceFactsFeed';
 import {
   assertCallerMayAccessPty,
@@ -905,24 +907,72 @@ function assertNotKillingAGateHeldPane(
  */
 const APPROVAL_BLOCK_EXEMPT_KEYS: ReadonlySet<string> = STOP_KEYS;
 
+/** A screen read: the pane's text; `{ parked }` when the renderer had no live
+ *  terminal and read the daemon's ring (which leaves out output a muted
+ *  session holds); `{ deferred: true }` when its session has not started here
+ *  (#2398, no screen yet); or null when it cannot be read. */
+type ScreenRead = string | { parked: string } | { deferred: true } | null;
+
 /** The live facts the raw-input guard reads. Injected in tests. */
 export interface ApprovalInputGate {
   getDaemonClient?: () => DaemonClient | null;
   /** The pane's workspace policy right now. */
   answerPolicy: (ptyId: string) => Promise<AnswerPolicy>;
-  /** The pane's visible screen as text, or null when it cannot be read. */
-  readScreenText: (ptyId: string) => Promise<string | null>;
+  /** The pane's visible screen (see ScreenRead). */
+  readScreenText: (ptyId: string) => Promise<ScreenRead>;
+  /** The daemon's folder-trust verdict from the session's own output, asked
+   *  only when the renderer gave no screen; null when there is none to have
+   *  (no daemon, an older one, a pane main runs itself). */
+  daemonFolderTrust?: (ptyId: string) => Promise<FolderTrustState | null>;
 }
 
 /** The gate could not decide: a delivery found the screen unreadable (any policy). */
 class ApprovalGateUnavailable extends Error {}
 
-/** Refuse a non-operator's input while a folder-trust prompt is on `screen`. */
-function refuseAtFolderTrust(screen: string | null, op: string, ptyId: string): void {
-  if (screen === null || !folderTrustOnScreen(screen)) return;
-  console.warn(`[approval-gate] refused ${op} on pane ${ptyId}: folder-trust dialog on screen`);
-  throw new Error(folderTrustGateMessage(op, ptyId));
+/**
+ * The folder-trust verdict for a pane: from the screen the renderer read, or,
+ * when it read none (a hidden, parked or unattached pane, a failed read, or
+ * a blank one: an empty buffer or a terminal that failed to hydrate), from
+ * the daemon's ring. A read that returned text costs nothing more. With no
+ * daemon verdict to have, null: the check stands aside, as before it had a
+ * fallback.
+ */
+async function folderTrustVerdict(gate: ApprovalInputGate, ptyId: string, screen: ScreenRead): Promise<FolderTrustState | null> {
+  if (typeof screen === 'string' && screen.trim() !== '') return folderTrustOnScreen(screen);
+  const verdict = (await gate.daemonFolderTrust?.(ptyId)) ?? null;
+  // No daemon verdict for a parked read: its ring text decides, as before.
+  if (verdict === null && typeof screen === 'object' && screen !== null && 'parked' in screen) return folderTrustOnScreen(screen.parked);
+  return verdict;
 }
+
+/**
+ * Refuse a non-operator's input on a folder-trust verdict: always on 'trust',
+ * and on 'unknown' only when `refuseUnknown` (text, Enter and selecting keys;
+ * Escape passes, since it also stops an agent). `stage` says what of this
+ * input already reached the pane.
+ */
+function refuseAtFolderTrust(
+  verdict: FolderTrustState | null,
+  op: string,
+  ptyId: string,
+  refuseUnknown: boolean,
+  stage = '',
+): void {
+  if (verdict === null || verdict === 'clear' || (verdict === 'unknown' && !refuseUnknown)) return;
+  console.warn(`[approval-gate] refused ${op} on pane ${ptyId}: folder-trust ${verdict}`);
+  if (verdict === 'trust') throw new Error(`${folderTrustGateMessage(op, ptyId)}${stage}`);
+  throw new ApprovalGateUnavailable(`${folderTrustUnknownMessage(op, ptyId)}${stage}`);
+}
+
+/** How long main waits for the daemon's verdict: above the daemon's own
+ *  250 ms read budget (FOLDER_TRUST_READ_TIMEOUT_MS), so the daemon's
+ *  'unknown' arrives before main gives up on it. */
+const FOLDER_TRUST_CLIENT_TIMEOUT_MS = 400;
+
+/** What a refusal before any write says. */
+const NOTHING_SENT = ' Nothing was sent.';
+/** What a refusal after a new task's fresh-context step, before its text, says. */
+const TEXT_NOT_SENT = ' The text was not sent.';
 
 /** The folder-trust half of the guard alone, read live (see below). */
 async function assertNotAtFolderTrust(
@@ -930,9 +980,11 @@ async function assertNotAtFolderTrust(
   ctx: RpcContext | undefined,
   ptyId: string,
   op: string,
+  opts: { refuseUnknown?: boolean; stage?: string } = {},
 ): Promise<void> {
   if (ctx?.operator) return;
-  refuseAtFolderTrust(await gate.readScreenText(ptyId), op, ptyId);
+  const screen = await gate.readScreenText(ptyId);
+  refuseAtFolderTrust(await folderTrustVerdict(gate, ptyId, screen), op, ptyId, opts.refuseUnknown ?? true, opts.stage ?? NOTHING_SENT);
 }
 
 /** A retried Enter withheld on purpose (a folder-trust prompt took the screen). */
@@ -943,7 +995,7 @@ async function assertNotTypingAtAnApproval(
   ctx: RpcContext | undefined,
   ptyId: string,
   op: string,
-  opts: { refuseUnreadable?: boolean } = {},
+  opts: { refuseUnreadable?: boolean; stage?: string } = {},
 ): Promise<void> {
   if (ctx?.operator) return;
   const record = await pendingApprovalOnPane(gate.getDaemonClient, ptyId);
@@ -962,8 +1014,16 @@ async function assertNotTypingAtAnApproval(
   // hook reports it, and no autonomy setting lets automation answer it. Past
   // that, when policy lets an automated caller answer approvals, keep the
   // record-only behaviour; otherwise look at what is on screen right now.
-  const [policy, screen] = await Promise.all([gate.answerPolicy(ptyId), gate.readScreenText(ptyId)]);
-  refuseAtFolderTrust(screen, op, ptyId);
+  // With no screen from the renderer, the daemon's ring decides the
+  // folder-trust part; its 'unknown' refuses.
+  const [policy, read] = await Promise.all([gate.answerPolicy(ptyId), gate.readScreenText(ptyId)]);
+  // A delivery refuses an unreadable screen whatever the daemon would say.
+  if (!(read === null && opts.refuseUnreadable)) {
+    refuseAtFolderTrust(await folderTrustVerdict(gate, ptyId, read), op, ptyId, true, opts.stage ?? NOTHING_SENT);
+  }
+  // A parked read's ring text stands for the screen; a session that has not
+  // started here shows nothing yet, so no dialog.
+  const screen = read === null || typeof read === 'string' ? read : 'parked' in read ? read.parked : '';
   // An unreadable screen is not evidence of a dialog. Refusing on it would stop
   // every ordinary send whenever the renderer is slow to answer — except for a
   // delivery that presses Enter on the caller's behalf (`refuseUnreadable`),
@@ -972,7 +1032,7 @@ async function assertNotTypingAtAnApproval(
   if (screen === null) {
     if (opts.refuseUnreadable) {
       throw new ApprovalGateUnavailable(
-        `${op}: the screen of pane "${ptyId}" could not be read — not submitting blind.`,
+        `${op}: the screen of pane "${ptyId}" could not be read — not submitting blind.${opts.stage ?? NOTHING_SENT}`,
       );
     }
     return;
@@ -1000,13 +1060,15 @@ async function assertNotTypingAtAnApproval(
 export async function deliveryGateCheck(
   gate: ApprovalInputGate,
   ptyId: string,
+  /** What of the delivery already reached the pane, for a folder-trust refusal. */
+  stage: string = NOTHING_SENT,
 ): Promise<GatedSubmitRefusal | null> {
   // A pane held at a usage limit cannot take the turn this delivery would
   // start; the sender keeps the message and retries after the reset.
   const held = usageLimitHoldDetail(ptyId);
   if (held) return { ok: false, reason: 'usage_limited', detail: held };
   try {
-    await assertNotTypingAtAnApproval(gate, undefined, ptyId, 'delivery', { refuseUnreadable: true });
+    await assertNotTypingAtAnApproval(gate, undefined, ptyId, 'delivery', { refuseUnreadable: true, stage });
     return null;
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
@@ -1088,7 +1150,7 @@ export async function gatedPasteSubmit(
       // The step's own writes failed (the pane went away): nothing was pasted.
       return { ok: false, reason: 'write_failed', detail };
     }
-    const afterStep = await deliveryGateCheck(gate, ptyId);
+    const afterStep = await deliveryGateCheck(gate, ptyId, TEXT_NOT_SENT);
     if (afterStep) {
       return fresh.freshContext === 'applied'
         ? { ...afterStep, detail: `${afterStep.detail} The pane's conversation was already cleared (fresh context).` }
@@ -1103,7 +1165,7 @@ export async function gatedPasteSubmit(
     return { ok: false, reason: 'write_failed', detail: err instanceof Error ? err.message : String(err) };
   }
   await sleep(submitProfileForAgent(agent).submitDelayMs);
-  const atEnter = await deliveryGateCheck(gate, ptyId);
+  const atEnter = await deliveryGateCheck(gate, ptyId, ' The text was pasted but not submitted.');
   if (atEnter) return { ...atEnter, pasted: true };
   const guardAtEnter = guard ? await guard.beforeEnter() : null;
   if (guardAtEnter) {
@@ -1163,7 +1225,9 @@ export interface InputRpcDeps {
   /** Injected in tests; defaults to the pane's workspace autonomy entry. */
   answerPolicy?: (ptyId: string) => Promise<AnswerPolicy>;
   /** Injected in tests; defaults to the renderer's screen read. */
-  readScreenText?: (ptyId: string) => Promise<string | null>;
+  readScreenText?: ApprovalInputGate['readScreenText'];
+  /** Injected in tests; defaults to the daemon's `daemon.folderTrustState`. */
+  daemonFolderTrust?: ApprovalInputGate['daemonFolderTrust'];
   /** Injected in tests; the gated submit's wait between paste and Enter. */
   sleep?: (ms: number) => Promise<void>;
   /** Injected in tests; the hand-off guard's clock. */
@@ -1274,6 +1338,8 @@ export function registerInputRpc(
       return undefined;
     }
   };
+  /** The last "folder-trust check unavailable" reason logged per pane. */
+  const unavailableLogged = new Map<string, string>();
   const approvalGate: ApprovalInputGate = {
     getDaemonClient,
     answerPolicy:
@@ -1291,13 +1357,33 @@ export function registerInputRpc(
       deps.readScreenText ??
       (async (ptyId) => {
         try {
-          const read = (await sendToRenderer(getWindow, 'input.readScreen', { ptyId })) as
-            | { text?: unknown }
+          const read = (await sendToRenderer(getWindow, 'input.readScreen', { ptyId, markParked: true })) as
+            | { text?: unknown; deferred?: unknown; parked?: unknown }
             | undefined;
+          if (read?.deferred === true) return { deferred: true };
+          if (read?.parked === true) return { parked: typeof read.text === 'string' ? read.text : '' };
           return typeof read?.text === 'string' ? read.text : null;
         } catch {
           return null;
         }
+      }),
+    daemonFolderTrust:
+      deps.daemonFolderTrust ??
+      (async (ptyId) => {
+        // A pty main runs itself (local, pre-adoption) has no daemon ring.
+        if (ptyManager.get(ptyId)) return null;
+        const answer = await getDaemonClient?.()?.folderTrustState(ptyId, FOLDER_TRUST_CLIENT_TIMEOUT_MS);
+        if (answer && 'state' in answer) {
+          unavailableLogged.delete(ptyId);
+          return answer.state;
+        }
+        // One line per pane while the reason holds, not one per check.
+        const reason = answer?.unavailable ?? 'no daemon client';
+        if (unavailableLogged.get(ptyId) !== reason) {
+          unavailableLogged.set(ptyId, reason);
+          console.warn(`[approval-gate] folder-trust check unavailable on pane ${ptyId}: ${reason}`);
+        }
+        return null;
       }),
   };
 
@@ -1623,7 +1709,7 @@ export function registerInputRpc(
         // And again before the text: the step takes seconds, and a dialog can
         // open meanwhile (an applied clear also redrew the pane).
         try {
-          await assertNotTypingAtAnApproval(approvalGate, ctx, ptyId, 'input.send');
+          await assertNotTypingAtAnApproval(approvalGate, ctx, ptyId, 'input.send', { stage: TEXT_NOT_SENT });
         } catch (err) {
           if (fresh.freshContext !== 'applied' || !(err instanceof Error)) throw err;
           throw new Error(`${err.message} The pane's conversation was already cleared (fresh context).`);
@@ -1654,7 +1740,8 @@ export function registerInputRpc(
       // already on the line (#2398).
       const refuseAtTrustNow = async (): Promise<void> => {
         try {
-          await assertNotAtFolderTrust(approvalGate, ctx, ptyId, 'input.send');
+          // What is already on the line is said below, from what was written.
+          await assertNotAtFolderTrust(approvalGate, ctx, ptyId, 'input.send', { stage: '' });
         } catch (err) {
           if (!(err instanceof Error)) throw err;
           const onLine = chunksWritten > 0
@@ -1698,7 +1785,9 @@ export function registerInputRpc(
           before,
           async () => {
             try {
-              await assertNotAtFolderTrust(approvalGate, ctx, ptyId, 'input.send');
+              await assertNotAtFolderTrust(approvalGate, ctx, ptyId, 'input.send', {
+                stage: ' The text and its first Enter were sent; this retried Enter was not.',
+              });
             } catch (err) {
               throw new EnterRetryRefused(err instanceof Error ? err.message : String(err));
             }
@@ -1822,9 +1911,9 @@ export function registerInputRpc(
     if (!APPROVAL_BLOCK_EXEMPT_KEYS.has(key)) {
       await assertNotTypingAtAnApproval(approvalGate, ctx, ptyId, 'input.sendKey');
     } else if (key === 'escape') {
-      // Escape is checked too: on a trust prompt it answers it. A read that
-      // fails lets the stop key through.
-      await assertNotAtFolderTrust(approvalGate, ctx, ptyId, 'input.sendKey');
+      // Escape is checked too: on a trust prompt it answers it. A verdict
+      // that cannot be had lets the stop key through.
+      await assertNotAtFolderTrust(approvalGate, ctx, ptyId, 'input.sendKey', { refuseUnknown: false });
     }
     // After every refusal: attach (promoting) a session with no pipe here.
     await startIfSuspended('input.sendKey', ptyId, clock, !stopKey);

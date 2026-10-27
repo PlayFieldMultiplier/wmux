@@ -3605,9 +3605,72 @@ keyboard input after an unconfirmed response; refresh and inspect the page first
 Workspace identity never comes from the HTTP body. Main checks the current CDP
 owner, then calls only existing scoped screenshot/emulation/navigation/input operations.
 No arbitrary JavaScript, headers, cookies, CDP commands or RPC names are accepted.
-The capture envelope permits at most 2 MiB base64 image data; only capture requests
-receive the larger bridge response allowance. A hidden Mac workspace may not
-produce frames; clients show this failure and ask the user to bring it forward.
+The capture's base64 image data is at most 700 KiB (the whole reply is one line on
+the daemon's control pipe, which closes past 1 MiB); a larger first shot is retaken
+once smaller, then refused. Only capture requests receive the larger bridge
+response allowance. A hidden Mac workspace may not produce frames; clients show
+this failure and ask the user to bring it forward.
+
+#### Dedicated-profile Chrome tabs (`browserPreviewChrome`)
+
+`/api/config` carries `browserPreviewChrome: true` when the server runs with
+`--allow-transcript` and the attached desktop announced `browser.chromePreview`.
+OMITTED otherwise (an older desktop announces nothing); the preview then works
+exactly as above.
+
+- **Opt in**: `GET …/browser?chrome=1` (either route). Rows then gain
+  `backend: "builtin" | "chrome"`, and the tabs of a wmux Chrome profile that
+  this workspace opened (`chrome`) follow the builtin panes, 30 rows in all.
+  Without `?chrome=1`, or from a desktop without the flag, the list is the
+  same as before, with no `backend` field. Live Chrome (the user's own
+  browser) is never listed and never driven, and no phone action opens a
+  connection to it.
+- **Which tabs**: tabs of the workspace's own wmux Chrome profile that the
+  desktop recorded under exactly this workspace; a tab with no workspace on
+  record is nobody's. A profile bound to one pane only (a protected pane's,
+  say) is not listed: its policy applies to that pane's calls. Listing never
+  starts Chrome: while it is not running there are no `chrome` rows, nor while
+  the desktop cannot attach to its pages (its tab watcher is off or failed);
+  help rows for those tabs are then `previewable: false`.
+- **The same actions** take a `chrome` row's `id` as `surfaceId`: capture,
+  `navigate`, `type`, `key`, `tap`, `scroll`, with the same checks
+  (`expectedURL`, `geometry`, http(s) only). A Chrome capture has the builtin
+  shape and limit (`data`, `mimeType: "image/jpeg"`, `capturedAt`, `geometry`
+  from Chrome's layout metrics, `pageURL`). `viewport` is `501
+  browser-action-unsupported` on a Chrome tab.
+- **Background tabs**: the desktop never brings a Chrome tab forward on its
+  own. Chrome may stop painting a background tab; a capture, or an input,
+  that does not finish within about 5 s is `409 browser-tab-hidden`. Offer
+  `focus`. Typing uses focus emulation rather than raising the tab. At browser
+  zoom other than 100 % a capture is readable but carries no `geometry`.
+- **`open`** takes an optional `backend: "builtin" | "chrome"` (default
+  `builtin`, the rule above). `chrome` needs the desktop's browser setting to
+  be Chrome and the workspace's profile to be a wmux profile, not Live
+  Chrome (`503 browser-backend-unavailable` otherwise); it may start that
+  profile's Chrome. Any other value is `400`.
+- **`{action:"focus",surfaceId}`** (input permission): brings a builtin pane
+  or a Chrome tab of this workspace forward on the desktop (a Chrome tab's
+  window too). Send it only on the user's tap.
+- **Help-card typing**: `{action:"type",…,helpRequestId}` types only into the
+  tab that open help request is about (*Browser help requests*), and only while
+  that tab is still at the `origin` its row shows. That origin is the one the
+  tab had when the agent asked, and it never changes afterwards. The daemon
+  takes it from its own copy of the request, never from the body. A request
+  made with no known origin is never typed into this way. A tab that navigated
+  since the phone's last capture usually fails first on `expectedURL`
+  (`503 browser-preview-unavailable`). `409 browser-help-origin-changed`
+  covers the case where `expectedURL` matches but that page's origin is not
+  the request's: the tab left the site after the agent asked.
+
+| Response | Meaning |
+| --- | --- |
+| `404 {error:"browser-tab-gone"}` | The Chrome tab closed, was replaced by Chrome, or is not this workspace's. Refresh the list. |
+| `409 {error:"browser-tab-hidden"}` | The Chrome tab did not answer in time, usually because it is in the background. An input that timed out may still have partly applied (a press is always released): refresh before retrying. |
+| `503 {error:"browser-backend-unavailable"}` | No browser to drive: the setting is not Chrome, the workspace uses Live Chrome, or Chrome's connection is not up. |
+| `501 {error:"browser-action-unsupported"}` | The action does not exist for this tab (`viewport` on Chrome, `focus` on a desktop that cannot). |
+| `409 {error:"browser-help-origin-changed"}` | Help-card typing: the tab is no longer at the request's origin, or the request has none. Nothing was typed. |
+| `404 {error:"browser-help-not-found"}` / `409 {error:"browser-help-closed"}` | Help-card typing: no request with that id for this workspace and tab (open or closed), or this tab's request already ended. |
+| `503 {error:"browser-preview-unavailable"}` | Any other failure, as before. Never retry input automatically. |
 
 ### New agent pane launch options
 
@@ -5387,7 +5450,7 @@ the phone and answer them.
                   "prompt": "Sign in to the shop, then press Done.",
                   "createdAt": 1759600000000, "deadlineAt": 1759600300000,
                   "backend": "builtin", "previewable": true,
-                  "origin": "https://login.example.com" } ] }
+                  "origin": "https://login.example.com", "sessionId": "pty-…" } ] }
 ```
 
 - `prompt`: written by the agent. Render it as plain text, never as markup
@@ -5397,12 +5460,21 @@ the phone and answer them.
   profile) or `live` (the user's own Chrome, or a tab the desktop cannot
   tell apart from it).
 - `previewable`: the workspace browser preview (*Workspace browser preview*)
-  can show this tab now. Today only a `builtin` pane of the request's own
-  workspace is; never `live`.
-- `origin`: `scheme://host[:port]` of the tab, read by the desktop when it
-  last sent the list (a request opened or closed, or the desktop
-  reconnected). Absent when it could not read one: no tab, not an http(s)
-  page, a Chrome that is not running, or `live`.
+  can show this tab now: a `builtin` pane of the request's own workspace, or
+  a `chrome` tab that workspace opened; never `live`. A `chrome` row's tab is
+  in the preview list only with `?chrome=1`, so a client that does not send
+  it treats a `chrome` row as not previewable.
+- `origin`: `scheme://host[:port]` of the tab when the agent made the
+  request, pinned for the request's whole life (a later navigation does not
+  change it). Absent when it was not known then: no tab, not an http(s) page,
+  a Chrome that did not answer, or `live`. Absent stays absent.
+- `sessionId`: the `id` in `/api/sessions` of the pane whose agent asked,
+  so a client can link the card to that pane. Present only when
+  `/api/sessions` lists that pane when this list is read: absent when the
+  agent's pane is not known, is an orchestrator brain pane, or has closed.
+  The pane may close between the two reads, so a `sessionId` your sessions
+  list lacks just means no link. Absent on older desktops and daemons. Only
+  in this list: never in a `browser.help` frame or a push.
 - `deadlineAt`: the desktop closes the request as `timed_out` then. A
   request past it is left out of the list (and answered `409`) even before
   the desktop's next update says so.

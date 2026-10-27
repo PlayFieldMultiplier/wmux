@@ -26,7 +26,7 @@ import {
   parseBrowserHelpDecideReply,
   type BrowserHelpErrorCode,
   type BrowserHelpTableRow,
-  type PhoneBrowserHelpRow,
+  type PhoneBrowserHelpServedRow,
 } from '../../shared/phoneBrowserHelp';
 import type { BrowserHelpOutcome } from '../../shared/browserHelp';
 import { DesktopPhoneError } from '../phone/DesktopPhoneBridge';
@@ -57,10 +57,21 @@ export function browserHelpSupported(desktop: BotApprovalsDesktop | null, allowT
 /** Whether a row came from a brain pane's agent (`isBrainPty` over the live session). */
 export type BrainPaneCheck = (ptyId: string) => boolean;
 
-/** The row a phone is served: no requesting pane, and a brain pane's never previewable. */
-function phoneRow(row: BrowserHelpTableRow, isBrainPane: BrainPaneCheck): PhoneBrowserHelpRow {
+/** The requesting pane's `id` in `/api/sessions` when that list has it now; undefined otherwise. Never asked about a brain pane. */
+export type RequesterSessionLookup = (ptyId: string) => string | undefined;
+
+/**
+ * The row a phone is served: never the raw requesting pane; a brain pane's
+ * never previewable and never named. `sessionId` names the requesting pane
+ * as `/api/sessions` does, and only when that list has it: a brain pane, a
+ * pane gone since, or no requester leaves it out.
+ */
+function phoneRow(row: BrowserHelpTableRow, isBrainPane: BrainPaneCheck, requesterSession: RequesterSessionLookup): PhoneBrowserHelpServedRow {
   const { requesterPtyId, ...served } = row;
-  return requesterPtyId !== undefined && isBrainPane(requesterPtyId) ? { ...served, previewable: false } : served;
+  if (requesterPtyId === undefined) return served;
+  if (isBrainPane(requesterPtyId)) return { ...served, previewable: false };
+  const sessionId = requesterSession(requesterPtyId);
+  return sessionId !== undefined ? { ...served, sessionId } : served;
 }
 
 /** `GET /api/browser-help`. */
@@ -69,13 +80,14 @@ export function browserHelpListResponse(opts: {
   desktop: BotApprovalsDesktop | null;
   table: BrowserHelpTableView | null;
   isBrainPane: BrainPaneCheck;
+  requesterSession: RequesterSessionLookup;
 }): BotApprovalsResponse {
   if (!opts.allowTranscript) return { status: 403, body: { error: 'browser-help-disabled' } };
   // No table yet is not an empty table: say the desktop is not there.
   if (!browserHelpSupported(opts.desktop, true) || !opts.table?.published) {
     return { status: 503, body: { error: 'desktop-unavailable' } };
   }
-  return { status: 200, body: { requests: opts.table.list().map((row) => phoneRow(row, opts.isBrainPane)) } };
+  return { status: 200, body: { requests: opts.table.list().map((row) => phoneRow(row, opts.isBrainPane, opts.requesterSession)) } };
 }
 
 /** Why this caller may not decide, or null when it may. */

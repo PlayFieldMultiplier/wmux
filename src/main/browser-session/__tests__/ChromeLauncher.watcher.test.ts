@@ -34,7 +34,7 @@ vi.mock('node:fs', async (orig) => {
   };
 });
 
-import { ChromeLauncher } from '../ChromeLauncher';
+import { ChromeLauncher, ChromePageSessionError } from '../ChromeLauncher';
 import type { ChromeSurfaceRecord, ChromeSurfaceStore } from '../ChromeSurfaceStore';
 
 const WS_URL = 'ws://127.0.0.1:22001/devtools/browser/watcher-uuid';
@@ -434,5 +434,62 @@ describe('ChromeLauncher tab-target watcher', () => {
     ]);
     // No anchor and a dead targetId: still never revived by URL match.
     expect(launcher.recordFor('chrome-unanchored')?.targetId).toBeNull();
+  });
+});
+
+describe('ChromeLauncher page sessions (the phone preview)', () => {
+  async function running(dir: string) {
+    spawnWritesPortFile(makeChild(), 22001);
+    serveChrome();
+    tabs.set('tab-1', 'page-1');
+    listedPages = ['page-1'];
+    const launcher = new ChromeLauncher(dir, { profileName: 'p1', surfaceStore: asStore(makeFakeStore()) });
+    const opened = await launcher.openTab('https://a.test/', 'ws-1');
+    return { launcher, surfaceId: opened.surfaceId, ws: FakeBrowserWs.instances[0] };
+  }
+
+  it('attaches the page over the watcher socket and sends on that session', async () => {
+    const { launcher, surfaceId, ws } = await running('/tmp/page-1');
+    const session = await launcher.pageSession(surfaceId);
+    await session.send('Page.getLayoutMetrics');
+    // One socket: the watcher's, no second connection.
+    expect(FakeBrowserWs.instances).toHaveLength(1);
+    expect(ws.sent.find((f) => f.method === 'Target.attachToTarget' && f.params?.targetId === 'page-1'))
+      .toMatchObject({ params: { targetId: 'page-1', flatten: true } });
+    expect(ws.sent.at(-1)).toMatchObject({ method: 'Page.getLayoutMetrics', sessionId: 'sess-page-1' });
+    // Reused while it lives.
+    await launcher.pageSession(surfaceId);
+    expect(ws.sent.filter((f) => f.method === 'Target.attachToTarget' && f.params?.targetId === 'page-1')).toHaveLength(1);
+  });
+
+  it('a session Chrome detached is gone, and the next one attaches afresh', async () => {
+    const { launcher, surfaceId, ws } = await running('/tmp/page-2');
+    const session = await launcher.pageSession(surfaceId);
+    ws.event('Target.detachedFromTarget', { sessionId: 'sess-page-1' });
+    const err = await session.send('Runtime.evaluate').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ChromePageSessionError);
+    expect((err as ChromePageSessionError).reason).toBe('gone');
+    await launcher.pageSession(surfaceId);
+    expect(ws.sent.filter((f) => f.method === 'Target.attachToTarget' && f.params?.targetId === 'page-1')).toHaveLength(2);
+  });
+
+  it('a dropped watcher connection ends its page sessions, even when the socket re-dials in place', async () => {
+    const { launcher, surfaceId } = await running('/tmp/page-5');
+    const session = await launcher.pageSession(surfaceId);
+    FakeBrowserWs.instances[0].close();
+    await expect(session.send('Runtime.evaluate')).rejects.toMatchObject({ reason: 'gone' });
+  });
+
+  it('never launches Chrome, and needs the watcher socket', async () => {
+    const idle = new ChromeLauncher('/tmp/page-3', { profileName: 'p1' });
+    await expect(idle.pageSession('chrome-x')).rejects.toMatchObject({ reason: 'unavailable' });
+    expect(spawnMock).not.toHaveBeenCalled();
+
+    expect(idle.canPageSession()).toBe(true);
+    process.env.WMUX_CHROME_TARGET_WATCHER = '0';
+    const { launcher, surfaceId } = await running('/tmp/page-4');
+    expect(launcher.canPageSession()).toBe(false);
+    await expect(launcher.pageSession(surfaceId)).rejects.toMatchObject({ reason: 'unavailable' });
+    await expect(launcher.pageSession('chrome-unknown')).rejects.toMatchObject({ reason: 'gone' });
   });
 });

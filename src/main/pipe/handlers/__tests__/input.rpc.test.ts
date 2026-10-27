@@ -537,6 +537,7 @@ describe('input.send — multi-line text to an agent is pasted, not typed (#1594
       isConnected: true,
       writeToSession: (id: string, data: string) => writeMock(id, data),
       getSendTarget: vi.fn(() => Promise.resolve(target)),
+      folderTrustState: vi.fn(() => Promise.resolve({ state: 'clear' })),
     } as unknown as DaemonClient;
     const router = new RpcRouter();
     registerInputRpc(router, pty, () => fakeWindow, () => dc);
