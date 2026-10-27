@@ -679,6 +679,7 @@ export type RpcMethod =
   | 'hooks.signal'
   | 'usage.rateLimits'
   | 'usage.trail'
+  | 'pc.envDiff'
   | 'commit.origin'
   | 'a2a.channel.list'
   | 'a2a.channel.get'
@@ -1038,6 +1039,7 @@ export const ALL_RPC_METHODS = [
   'hooks.signal',
   'usage.rateLimits',
   'usage.trail',
+  'pc.envDiff',
   'commit.origin',
   'a2a.channel.list',
   'a2a.channel.get',
@@ -1227,6 +1229,11 @@ export interface DaemonEvent {
     // ends, so a stale count never sticks.
     //   agent.subagents → { count: number }
     | 'agent.subagents'
+    // The pane's last refused tool call, read from its Claude transcript
+    // (daemon/transcript/toolRefusals): sent on change; null when it clears
+    // (a tool that ran after it, the next prompt, another session, the pane gone).
+    //   agent.refusal → { refusal: ToolRefusal | null }
+    | 'agent.refusal'
     // A pane with no agent whose command waits on stdin (daemon/shellPrompt):
     // the prompt when it appears or changes, null when it clears. A `secret`
     // carries no question. `seq` orders it against daemon.shellPrompt.list.

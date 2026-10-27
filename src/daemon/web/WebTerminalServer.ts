@@ -4,6 +4,7 @@ import { buildAgentLaunch, type AgentLaunchChoice, type AgentLaunchOptions } fro
 import { AgentSignedOutError } from './agentSignedOut';
 import type { TerminalLaunchAgent, TerminalLaunchMode } from '../../shared/transcript/terminalChat';
 import { DesktopPhoneError, type DesktopPhoneBridge } from '../phone/DesktopPhoneBridge';
+import { AGENT_ENV_COMMAND, AGENT_ENV_ROUTE, parseAgentEnvSummary } from '../../shared/agentEnvSummary';
 import type { RunHistoryStore } from '../history/RunHistoryStore';
 import { agentAliveVerdict } from '../canonicalAgent';
 import { applyPaneAccount, handoffRowOf, paneAccountFailure, resolvePaneAccount, verifyHandoff, type ResolvedPaneAccount } from '../phone/paneAccount';
@@ -2769,6 +2770,10 @@ export class WebTerminalServer {
     // gate and before the route table so no route can forget it, and so a
     // failed credential never counts as someone using the daemon.
     this.lastApiActivityAt = this.now();
+    // Desktop-internal: a paired PC compares agent environments with it
+    // (shared/agentEnvSummary.ts). Names, versions and hashes only, read by
+    // the desktop; not part of the phone contract.
+    if (req.method === 'GET' && p === AGENT_ENV_ROUTE) return this.handleAgentEnv(res);
     if (req.method === 'GET' && p === '/api/config') {
       // The handshake rides HERE rather than on a route of its own: this is
       // already the first call a client makes after pairing, so a dedicated
@@ -3922,6 +3927,21 @@ export class WebTerminalServer {
         };
       }),
     });
+  }
+
+  /** GET /api/agent-env: this PC's agent environment summary, from the desktop, in the reader's bounds. */
+  private async handleAgentEnv(res: http.ServerResponse): Promise<void> {
+    const desktop = this.availableDesktop();
+    if (!desktop || !desktop.supports(AGENT_ENV_COMMAND)) return this.json(res, 503, { error: 'desktop-unavailable' });
+    let reply: unknown;
+    try {
+      reply = await desktop.request(AGENT_ENV_COMMAND, {});
+    } catch (err) {
+      return this.json(res, 503, { error: err instanceof DesktopPhoneError ? err.tag : 'desktop-unavailable' });
+    }
+    // Main's answer goes out only in the shape and bounds a reader enforces.
+    const summary = parseAgentEnvSummary(reply);
+    return summary ? this.json(res, 200, summary) : this.json(res, 503, { error: 'desktop-unavailable' });
   }
 
   /**

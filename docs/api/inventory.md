@@ -72,7 +72,7 @@ new MCP tool or declarable capability is exposed. Main forwards to first-party-o
 
 | Method | Params | Tier | Notes |
 |---|---|---|---|
-| `pane.list` | `{ workspaceId?, includeStashed? }` | stable | Returns `{ asOfSeq, bootId, panes }` envelope. `includeStashed: true` (#977) also returns stashed panes — off-layout but still owned and still running. Every row carries an explicit `stashed` boolean; stashed rows add `stashedLiveness: 'alive' \| 'exited'`. NOTE: `stashed` is not the only reason a pane may be unmounted — a cold-parked workspace's panes are `stashed: false` and equally off-screen. `asOfSeq` is the EventBus seq at snapshot time; clients reconciling after `resync: true` drain events with `seq > asOfSeq`. `bootId` mismatch ⇒ drop all caches. |
+| `pane.list` | `{ workspaceId?, includeStashed? }` | stable | Returns `{ asOfSeq, bootId, panes }` envelope. `includeStashed: true` (#977) also returns stashed panes — off-layout but still owned and still running. Every row carries an explicit `stashed` boolean; stashed rows add `stashedLiveness: 'alive' \| 'exited'`. NOTE: `stashed` is not the only reason a pane may be unmounted — a cold-parked workspace's panes are `stashed: false` and equally off-screen. `asOfSeq` is the EventBus seq at snapshot time; clients reconciling after `resync: true` drain events with `seq > asOfSeq`. `bootId` mismatch ⇒ drop all caches. A row whose agent's last tool call was refused carries `lastRefusal: { toolUseId, kind, source, reasonCode, at }` (`kind`: `rule`, `hook`, `auto-mode`, `mode`, `user`, `sandbox-network`, `other`), read from the agent's Claude transcript and kept until a later tool call runs or the next prompt; absent otherwise. A macOS sandbox refusal of a file write is not seen. Desktop-only: not in any phone payload. |
 | `pane.focus` | `{ id }` | stable | Focuses a leaf pane. |
 | `pane.split` | `{ direction: 'horizontal' \| 'vertical', workspaceId? }` | stable | Splits a leaf pane. External MCP callers SHOULD pass `workspaceId` to target their own workspace (#236 family); omitted ⇒ active workspace. Fails closed on an explicit unknown id. |
 | `pane.stash` | `{ id }` | stable (#977) | Takes a leaf pane out of the layout WITHOUT killing it — the daemon keeps the session and replays it on return. Refused when the pane is the only visible one, when it is empty (no session to keep and nothing to bring back), when there is no daemon connection, or when it holds an editor, preview or diff tab whose state cannot be replayed. A validated commander caller is confined to its own workspace. |
@@ -336,6 +336,14 @@ The EventBus (`src/main/events/EventBus.ts`) is an in-memory ring buffer of `RIN
 
 ---
 
+### PC environment comparison (internal)
+
+| Method | Params | Tier | Notes |
+|---|---|---|---|
+| `pc.envDiff` | `{}` | internal | This PC's agent environment summary beside each paired PC's (read over that PC's web API with its stored credential), and the rows where they differ. Names, versions and content hashes only. |
+
+The summary each PC serves is `GET /api/agent-env` on its web server, device-authenticated like `/api/config`. It is **desktop-internal**: read by another wmux desktop, not part of the phone client contract (`docs/phone-client-contract.md`), and may change without notice. A wmux from before it answers 404, which `pc.envDiff` reports as `unsupported`. Instruction files are hashed byte for byte as stored, so a line-ending difference is a real mismatch.
+
 ## What's intentionally not in this inventory
 
 - **Daemon internals.** `src/main/pty/*`, `src/main/session/SessionManager.ts` — these are reachable through the public surfaces above but their internal contracts are not part of the substrate.
@@ -413,6 +421,7 @@ The capability column below summarises the table. Three sentinels:
 | `hooks.signal` | `wmux.internal` | — | — |
 | `usage.rateLimits` | `wmux.internal` | — | — |
 | `usage.trail` | `wmux.internal` | — | — |
+| `pc.envDiff` | `wmux.internal` | — | — |
 | `commit.origin` | `wmux.internal` | — | — |
 
 Methods marked **bold** are surfaced in the approval dialog with stronger user-facing language (spec §3.6 — terminal-content / terminal-input risk classes).

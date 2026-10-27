@@ -16,6 +16,8 @@ import {
   hostedConfinement,
   hostedUnboundPaneMessage,
 } from '../hostedWorkspaceBinding';
+import { lastToolRefusal } from '../../agents/toolRefusals';
+import type { ToolRefusal } from '../../../shared/toolRefusal';
 
 type GetWindow = () => BrowserWindow | null;
 
@@ -103,6 +105,8 @@ export interface PaneRpcOptions {
   store?: MetadataStore;
   /** Stop / Take over on browser tabs: a pane holding a held tab is not closed. */
   agentControl?: AgentControlHolds;
+  /** The newest refused tool call among a pane's surfaces (default: agents/toolRefusals.ts). */
+  lastRefusal?: (ptyIds: readonly string[]) => ToolRefusal | null;
 }
 
 export function registerPaneRpc(
@@ -116,6 +120,7 @@ export function registerPaneRpc(
   getDaemonClient?: () => DaemonClient | null,
 ): void {
   const store = opts.store ?? metadataStore;
+  const lastRefusal = opts.lastRefusal ?? lastToolRefusal;
   /**
    * pane.list — returns all panes (leaf nodes) of the current workspace,
    * wrapped in a snapshot envelope. `asOfSeq` is the EventBus seq at the
@@ -239,11 +244,15 @@ export function registerPaneRpc(
         const match = supervisionByPtyId.get(ptyId);
         if (match) { supervision = match; break; }
       }
+      // The agent's last refused tool call, until it moves past it
+      // (shared/toolRefusal.ts). Additive, like `supervision`.
+      const refusal = lastRefusal(surfacePtyIds);
       return {
         ...pane,
         metadata: found?.metadata ?? rendererMetadata ?? {},
         version: found?.version ?? 0,
         ...(supervision ? { supervision } : {}),
+        ...(refusal ? { lastRefusal: refusal } : {}),
       };
     });
 
