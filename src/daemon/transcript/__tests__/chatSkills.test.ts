@@ -4,9 +4,18 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { claudeSkills, codexSkills, skillMetadata } from '../chatSkills';
 const dirs: string[] = [];
-afterEach(async () => { await Promise.all(dirs.splice(0).map(dir => rm(dir, { recursive: true, force: true }))); });
+const homeVar = process.platform === 'win32' ? 'USERPROFILE' : 'HOME';
+const realHome = process.env[homeVar];
+afterEach(async () => {
+  process.env[homeVar] = realHome;
+  await Promise.all(dirs.splice(0).map(dir => rm(dir, { recursive: true, force: true })));
+});
+// The fixture is the home folder the project walk stops at: a temp folder
+// under some other home (setup points HOME elsewhere) would let the walk climb
+// past it and read that home's skills as project skills.
 async function fixture() {
   const dir = await mkdtemp(path.join(tmpdir(), 'wmux-skill-test-')); dirs.push(dir);
+  process.env[homeVar] = dir;
   const put = async (file: string, text: string) => { await mkdir(path.dirname(path.join(dir, file)), {recursive:true}); await writeFile(path.join(dir, file), text); };
   return { dir, put };
 }
