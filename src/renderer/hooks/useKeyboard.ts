@@ -364,6 +364,14 @@ export function useKeyboard() {
       const state = store.getState();
       return state.workspaces.find((w) => w.id === state.activeWorkspaceId);
     };
+    // The terminal whose DOM holds the key event's target, if any.
+    const terminalOwning = (target: EventTarget | null) => {
+      if (!(target instanceof Node)) return undefined;
+      for (const term of terminalRegistry.values()) {
+        if (term.element?.contains(target)) return term;
+      }
+      return undefined;
+    };
     // The active pane's terminal: what the scrollback bookmark acts on.
     const activeTerminal = () => {
       const ws = activeWorkspace();
@@ -854,7 +862,11 @@ export function useKeyboard() {
       const pcUnclaimed = isPcRailAction(action) && !pcRailClaimsKey(store.getState(), e);
       // On a full-screen app's alternate screen there is no scrollback to
       // mark, and Ctrl+M is the app's Enter: useTerminal lets xterm send it.
-      const bookmarkUnclaimed = action === 'addBookmark' && !claimsBookmarkKey(activeTerminal()?.term);
+      // Judged on the terminal the key came from (a floating pane's, say),
+      // which is the one useTerminal's handler asks; a key from outside any
+      // terminal is judged on the active pane's.
+      const bookmarkUnclaimed = action === 'addBookmark'
+        && !claimsBookmarkKey(terminalOwning(e.target) ?? activeTerminal()?.term);
       if (action && run && mentionClaim !== null && !pcUnclaimed && !bookmarkUnclaimed) {
         e.preventDefault();
         if (STOP_PROPAGATION_ACTIONS.has(action)) e.stopImmediatePropagation();

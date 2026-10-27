@@ -26,10 +26,10 @@ function write(data: string): Promise<void> {
   return new Promise((resolve) => term.write(data, resolve));
 }
 
-/** Ctrl+M; true when the shortcut took the key (preventDefault). */
-function pressCtrlM(): boolean {
+/** Ctrl+M on `target`; true when the shortcut took the key (preventDefault). */
+function pressCtrlM(target: EventTarget = window): boolean {
   const event = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ctrlKey: true, key: 'm', code: 'KeyM' });
-  act(() => { window.dispatchEvent(event); });
+  act(() => { target.dispatchEvent(event); });
   return event.defaultPrevented;
 }
 
@@ -75,6 +75,25 @@ describe('Ctrl+M scrollback bookmark key', () => {
     await write('\x1b[?1049h');
     expect(pressCtrlM()).toBe(false);
     expect(useStore.getState().terminalBookmarks[PTY]).toBeUndefined();
+  });
+
+  it('is judged on the terminal the key came from, not the active pane', () => {
+    // A floating pane runs a full-screen app while the active pane is a shell
+    // on the normal screen: the key is the app's Enter, and the pane gets no
+    // bookmark (useTerminal's handler asks the floating pane's terminal too).
+    const element = document.createElement('div');
+    const keyTarget = document.createElement('div');
+    element.appendChild(keyTarget);
+    document.body.appendChild(element);
+    const floating = { element, buffer: { active: { type: 'alternate' } } };
+    terminalRegistry.set('pty-floating', floating as unknown as Terminal);
+    try {
+      expect(pressCtrlM(keyTarget)).toBe(false);
+      expect(useStore.getState().terminalBookmarks[PTY]).toBeUndefined();
+    } finally {
+      terminalRegistry.delete('pty-floating');
+      element.remove();
+    }
   });
 
   it('is handed to xterm by the terminal on the alternate screen', () => {

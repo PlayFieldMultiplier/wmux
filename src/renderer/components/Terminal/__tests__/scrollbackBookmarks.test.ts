@@ -223,6 +223,28 @@ describe('scrollback bookmarks', () => {
       term.dispose();
     });
 
+    it('comes back on its own text when a full scrollback moved it while hidden', async () => {
+      // Once the scrollback is full the cursor line stays put, so how far the
+      // line moved can't be read from it; the line is still in the buffer.
+      const term = new Terminal({ cols: 40, rows: 10, scrollback: 50, allowProposedApi: true });
+      const store = createTestStore();
+      await write(term, longLines(0, 100));
+      term.scrollLines(-5);
+      const text = textAt(term, term.buffer.active.viewportY);
+      expect(addAt(term, 'pty-m', store)).toBe('added');
+
+      const restore = keepAcrossRepaint(term, 'pty-m', store);
+      term.reset();
+      await write(term, longLines(0, 120));
+      restore();
+
+      const ids = store.getState().terminalBookmarks['pty-m'];
+      expect(ids).toHaveLength(1);
+      const marker = term.markers.find((m) => m.id === ids[0]);
+      expect(marker && textAt(term, marker.line)).toBe(text);
+      term.dispose();
+    });
+
     it('comes back on its own text when the replay reflows to another width', async () => {
       const { term, store, text } = await bookmarked('pty-h');
 

@@ -122,63 +122,64 @@ export function rowsInView(term: BookmarkTerminal, ids: readonly number[]): { id
   return out;
 }
 
-/** Lines past the output's growth that a restore searches upwards for a
- *  bookmark's line. */
-const RESTORE_SLACK = 3;
-
 /**
  * Carry a pane's bookmarks across a repaint that resets the Terminal (RIS
  * disposes every marker) and replays the session. Call it right before the
  * reset; call what it returns once the replay has been parsed.
  *
  * A bookmark comes back only on a line it provably still is: the one logical
- * line with the same text and the same lines just above and below, searched
- * upwards from the same distance above the cursor (which sits at the end of
- * the output both times) by as many lines as the output grew, plus a few.
- * Otherwise it is dropped, never moved to another line, and so is one on a
- * blank line, which nothing can tell apart. None survive a repaint that starts
- * or ends on the alternate screen, whose markers the public API cannot reach.
+ * line in the whole buffer with the same text and the same lines just above
+ * and below. The whole buffer, because how far a line moved is unknown: output
+ * that arrived while the pane was hidden pushes it up, and once the scrollback
+ * is full the cursor line no longer shows by how much. With no such line, or
+ * more than one, the bookmark is dropped, never moved to another line, and so
+ * is one on a blank line, which nothing can tell apart. None survive a repaint
+ * that starts or ends on the alternate screen, whose markers the public API
+ * cannot reach.
  *
  * The store changes twice whatever the number of bookmarks: the ids go out
  * here, and the restored ones come back in one set.
  */
 export function keepAcrossRepaint(term: BookmarkTerminal, ptyId: string, store: BookmarkStore): () => void {
-  const before = term.buffer.active;
-  const cursorLine = before.baseY + before.cursorY;
-  const markers = before.type === 'alternate'
+  const markers = term.buffer.active.type === 'alternate'
     ? []
     : bookmarkMarkers(term, store.getState().terminalBookmarks[ptyId]);
   const carried = markers.flatMap((m) => {
     const line = logicalLine(term, m.line);
     if (!line || line.text.trim() === '') return [];
-    return [{ aboveCursor: cursorLine - m.line, rowInLine: m.line - line.start, print: fingerprint(term, line) }];
+    return [{ rowInLine: m.line - line.start, print: fingerprint(term, line) }];
   });
   if (store.getState().terminalBookmarks[ptyId]) store.getState().setBookmarks(ptyId, []);
   for (const marker of markers) marker.dispose();
   return () => {
     const after = term.buffer.active;
     if (carried.length === 0 || after.type === 'alternate') return;
-    const cursorLineAfter = after.baseY + after.cursorY;
-    const reach = Math.max(0, cursorLineAfter - cursorLine) + RESTORE_SLACK;
+    // One pass over the buffer: a line's neighbours are read only when its
+    // own text is one a bookmark had.
+    const wanted = new Set(carried.map((c) => c.print[1]));
+    const found: { start: number; end: number }[][] = carried.map(() => []);
+    for (let y = after.length - 1; y >= 0;) {
+      const line = logicalLine(term, y);
+      if (!line) break;
+      if (wanted.has(line.text)) {
+        const print = fingerprint(term, line);
+        carried.forEach((c, i) => {
+          if (print.every((text, k) => text === c.print[k])) found[i].push(line);
+        });
+      }
+      y = line.start - 1;
+    }
+    const cursorLine = after.baseY + after.cursorY;
     const ids = store.getState().terminalBookmarks[ptyId] ?? [];
     const taken = new Set(bookmarkMarkers(term, ids).map((m) => m.line));
     const restored: number[] = [];
-    for (const { aboveCursor, rowInLine, print } of carried) {
-      const expected = Math.min(cursorLineAfter - aboveCursor, after.length - 1);
-      const lowest = Math.max(0, cursorLineAfter - aboveCursor - reach);
-      const found: { start: number; end: number }[] = [];
-      for (let y = expected; y >= lowest;) {
-        const line = logicalLine(term, y);
-        if (!line) break;
-        if (fingerprint(term, line).every((text, i) => text === print[i])) found.push(line);
-        y = line.start - 1;
-      }
-      if (found.length !== 1) continue;
-      const target = Math.min(found[0].start + rowInLine, found[0].end);
-      if (taken.has(target)) continue;
+    carried.forEach(({ rowInLine }, i) => {
+      if (found[i].length !== 1) return;
+      const target = Math.min(found[i][0].start + rowInLine, found[i][0].end);
+      if (taken.has(target)) return;
       taken.add(target);
-      restored.push(register(term, ptyId, store, target - cursorLineAfter).id);
-    }
+      restored.push(register(term, ptyId, store, target - cursorLine).id);
+    });
     if (restored.length > 0) store.getState().setBookmarks(ptyId, [...ids, ...restored]);
   };
 }
