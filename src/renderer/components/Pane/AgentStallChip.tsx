@@ -1,7 +1,9 @@
 // Pane-header chip for a Claude turn the daemon reads as stuck (StallWatch).
 // Lives in the tab strip's flow beside the usage-limit chip, and shows only
 // while the stall lasts: the word "Seems stuck" in the caution colour, nothing
-// else coloured. It opens a small card with Stop and prefill (interrupt, then
+// else coloured. A turn that keeps compacting without editing (StallWatch's
+// spinning rule) shows the same chip and card, saying so in their text instead
+// of the minutes. It opens a small card with Stop and prefill (interrupt, then
 // put the last prompt back into the input, unsent) and Keep waiting (ask again
 // only after twice as long, for this turn). Nothing is ever stopped by itself.
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
@@ -28,9 +30,11 @@ export function stallMinutes(since: number, now: number): number {
  *  refused the stop) keeps it open with a line. */
 const DONE: ReadonlySet<StallPrefillResult> = new Set(['filled', 'kept', 'stopped']);
 
-export function AgentStallCard({ ptyId, minutes, anchor, triggerRef, onClose }: {
+export function AgentStallCard({ ptyId, minutes, compactions, anchor, triggerRef, onClose }: {
   ptyId: string;
   minutes: number;
+  /** Set when the turn keeps compacting without editing. */
+  compactions?: number;
   anchor: Anchor;
   triggerRef?: RefObject<HTMLElement | null>;
   onClose: () => void;
@@ -93,7 +97,7 @@ export function AgentStallCard({ ptyId, minutes, anchor, triggerRef, onClose }: 
       onClick={(e) => e.stopPropagation()}
     >
       <PopoverSection title={t('agentStall.cardTitle')}>
-        <p className="text-[12px] text-[var(--text-sub)]">{t('agentStall.cardBody', { minutes })}</p>
+        <p className="text-[12px] text-[var(--text-sub)]">{compactions === undefined ? t('agentStall.cardBody', { minutes }) : t('agentStall.spinCardBody', { count: compactions })}</p>
         {failed && <p className="mt-1 text-[12px] text-[var(--text-sub)]" role="status" data-agent-stall-failed>{t('agentStall.failed')}</p>}
         <div className="mt-2 flex flex-col gap-1">
           <Button
@@ -130,6 +134,7 @@ export default function AgentStallChip({ ptyId, readOnly = false }: {
 }) {
   const t = useT();
   const since = useStore((s) => (ptyId ? s.surfaceStalledAt[ptyId] : undefined));
+  const compactions = useStore((s) => (ptyId ? s.surfaceStallCompactions[ptyId] : undefined));
   const now = useUsageLimitNow(since !== undefined);
   const btnRef = useRef<HTMLButtonElement>(null);
   const [anchor, setAnchor] = useState<Anchor | null>(null);
@@ -137,7 +142,7 @@ export default function AgentStallChip({ ptyId, readOnly = false }: {
   useEffect(() => { if (since === undefined) setAnchor(null); }, [since]);
   if (since === undefined || !ptyId) return null;
   const minutes = stallMinutes(since, now);
-  const title = t('agentStall.chipTitle', { minutes });
+  const title = compactions === undefined ? t('agentStall.chipTitle', { minutes }) : t('agentStall.spinChipTitle', { count: compactions });
   const word = <span className="truncate text-[var(--accent-yellow)]" aria-hidden="true">{t('agentStall.label')}</span>;
   return (
     <span
@@ -166,7 +171,7 @@ export default function AgentStallChip({ ptyId, readOnly = false }: {
         </button>
       )}
       {anchor && !readOnly && (
-        <AgentStallCard ptyId={ptyId} minutes={minutes} anchor={anchor} triggerRef={btnRef} onClose={() => setAnchor(null)} />
+        <AgentStallCard ptyId={ptyId} minutes={minutes} compactions={compactions} anchor={anchor} triggerRef={btnRef} onClose={() => setAnchor(null)} />
       )}
     </span>
   );

@@ -1193,7 +1193,8 @@ export interface DaemonEvent {
     // Daemon-owned agent turn, excluding boot paints and bare shell submits.
     | 'agent.turn'
     // The pane's Claude turn seems stuck (StallWatch). `data` is
-    // `{ stalledSince: number | null }`; null clears it.
+    // `{ stalledSince: number | null, compactions?: number }`; null clears it.
+    // `compactions` is set when the turn keeps compacting without editing.
     | 'agent.stall'
     | 'agent.critical'
     // The agent printed its own "turn interrupted" row (Claude Code fires no

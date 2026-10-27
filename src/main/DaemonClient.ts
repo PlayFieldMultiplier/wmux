@@ -1435,10 +1435,15 @@ export class DaemonClient extends EventEmitter {
           break;
         }
         case 'agent.stall': {
-          const data = event.data as { stalledSince?: unknown } | null;
+          const data = event.data as { stalledSince?: unknown; compactions?: unknown } | null;
           const stalledSince = data?.stalledSince;
+          const compactions = data?.compactions;
           if (stalledSince === null || (typeof stalledSince === 'number' && Number.isFinite(stalledSince))) {
-            this.emit('session:agentStall', { sessionId: event.sessionId, stalledSince });
+            this.emit('session:agentStall', {
+              sessionId: event.sessionId, stalledSince,
+              ...(typeof stalledSince === 'number' && Number.isSafeInteger(compactions) && (compactions as number) > 0
+                ? { compactions: compactions as number } : {}),
+            });
           }
           break;
         }

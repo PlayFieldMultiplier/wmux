@@ -381,7 +381,10 @@ export interface PaneSlice {
   // progress, turn end or pane close; a turn end here drops it too.
   // Transient, never persisted.
   surfaceStalledAt: Record<string, number>;
-  setSurfaceStalled: (ptyId: string, since: number | null) => void;
+  // With surfaceStalledAt: the turn keeps compacting without editing, this
+  // many times (StallWatch's spinning rule). Absent for a silent stall.
+  surfaceStallCompactions: Record<string, number>;
+  setSurfaceStalled: (ptyId: string, since: number | null, compactions?: number) => void;
   // Issue #173: transient map of pane id → cwd inherited from the pane that
   // was split. Written by splitPane, consumed (and cleared) by the AppLayout
   // empty-leaf PTY funnel. Deliberately NOT persisted — buildSessionData's
@@ -733,6 +736,7 @@ export const createPaneSlice: StateCreator<StoreState, [['zustand/immer', never]
       delete state.surfaceTurnOpenAt[ptyId];
       if (state.surfaceTurnOpenByDaemon) delete state.surfaceTurnOpenByDaemon[ptyId];
       if (state.surfaceStalledAt) delete state.surfaceStalledAt[ptyId];
+      if (state.surfaceStallCompactions) delete state.surfaceStallCompactions[ptyId];
     }
   }),
 
@@ -1001,6 +1005,7 @@ export const createPaneSlice: StateCreator<StoreState, [['zustand/immer', never]
     if (!ptyId) return;
     // The daemon's "no turn" ends a stall now, ahead of StallWatch's next tick.
     delete state.surfaceStalledAt[ptyId];
+    delete state.surfaceStallCompactions[ptyId];
     if (!state.surfaceTurnOpenByDaemon?.[ptyId]) return;
     delete state.surfaceTurnOpenByDaemon[ptyId];
     delete state.surfaceTurnOpenAt[ptyId];
@@ -1015,6 +1020,7 @@ export const createPaneSlice: StateCreator<StoreState, [['zustand/immer', never]
     if (state.surfaceTurnOpenByDaemon) delete state.surfaceTurnOpenByDaemon[ptyId];
     delete state.surfaceActivityAt[ptyId];
     delete state.surfaceStalledAt[ptyId];
+    delete state.surfaceStallCompactions[ptyId];
   }),
 
   surfaceOutputAt: {},
@@ -1025,11 +1031,14 @@ export const createPaneSlice: StateCreator<StoreState, [['zustand/immer', never]
   }),
 
   surfaceStalledAt: {},
+  surfaceStallCompactions: {},
 
-  setSurfaceStalled: (ptyId, since) => set((state: StoreState) => {
+  setSurfaceStalled: (ptyId, since, compactions) => set((state: StoreState) => {
     if (!ptyId) return;
     if (since === null) delete state.surfaceStalledAt[ptyId];
     else state.surfaceStalledAt[ptyId] = since;
+    if (since === null || compactions === undefined) delete state.surfaceStallCompactions[ptyId];
+    else state.surfaceStallCompactions[ptyId] = compactions;
   }),
 
   splitCwdSeed: {},
@@ -1261,6 +1270,7 @@ export const createPaneSlice: StateCreator<StoreState, [['zustand/immer', never]
             delete state.surfaceTurnEndAt[s.ptyId];
             delete state.surfaceOutputAt[s.ptyId];
             delete state.surfaceStalledAt[s.ptyId];
+            delete state.surfaceStallCompactions[s.ptyId];
             delete state.surfacePorts[s.ptyId];
             delete state.surfaceAgentStatus[s.ptyId];
             clearNudgesFor(s.ptyId); // A5: don't let a reused ptyId inherit this pane's nudge cap
