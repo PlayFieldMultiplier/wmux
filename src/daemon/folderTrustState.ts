@@ -1,5 +1,5 @@
 import { looksLikeFolderTrustDialog } from './approvals/approvalKeystrokes';
-import { renderPaneScreen, type RenderablePane } from './AwaitingScreenVerifier';
+import { AWAITING_RENDER_WINDOW_BYTES, renderPaneScreen, type RenderablePane } from './AwaitingScreenVerifier';
 import { generateTextSnapshotUnqueued, runSmallSnapshotJob } from './HeadlessSnapshot';
 import type { DaemonPipeServer } from './DaemonPipeServer';
 import type { DaemonSessionState } from './types';
@@ -15,6 +15,9 @@ export type FolderTrustState = 'trust' | 'clear' | 'unknown';
 /** How long the verdict waits for the screen parse. */
 export const FOLDER_TRUST_READ_TIMEOUT_MS = 250;
 
+/** Room above the tail window for the mode preamble and the unknown-cell fill. */
+const TAIL_SLACK_BYTES = 64 * 1024;
+
 /** What the verdict needs of a session (a ManagedSession). */
 export type FolderTrustSession = RenderablePane & {
   meta: { state: DaemonSessionState };
@@ -27,8 +30,6 @@ type Snapshot = Parameters<typeof renderPaneScreen>[1];
 
 export interface FolderTrustDeps {
   getSession: (id: string) => FolderTrustSession | undefined;
-  /** A recovery placeholder the daemon has not started (no process yet). */
-  getPendingRecovery: (id: string) => unknown;
   timeoutMs?: number;
   /** Injected in tests; defaults to a parse outside the shared snapshot queue. */
   snapshot?: Snapshot;
@@ -46,13 +47,15 @@ export interface FolderTrustDeps {
  *
  * The screen is rebuilt like the awaiting verifier's (renderPaneScreen): each
  * stretch of the ring at the size it was written at, a resize during the read
- * rejected, and cells the ring no longer covers marked. The parse runs beside
- * the shared snapshot queue, not behind it, and is dropped once the budget is
- * spent.
+ * rejected, and cells the ring no longer covers marked; a ring larger than
+ * the tail window is read from its tail. The parse runs beside the shared
+ * snapshot queue, not behind it, and is dropped once the budget is spent.
  */
 export async function folderTrustState(deps: FolderTrustDeps, id: string): Promise<FolderTrustState> {
   const session = deps.getSession(id);
-  if (!session) return deps.getPendingRecovery(id) !== undefined ? 'clear' : 'unknown';
+  // No process runs under an id the daemon holds no live session for: a
+  // recovery placeholder, a record kept only on disk, a closed pane.
+  if (!session) return 'clear';
   if (session.meta.state === 'suspended' || session.meta.state === 'dead') return 'clear';
   let pane: RenderablePane = session;
   if (session.bridge.isMuted) {
@@ -67,8 +70,15 @@ export async function folderTrustState(deps: FolderTrustDeps, id: string): Promi
     generateTextSnapshotUnqueued({ ...req, budgetMs: Math.max(1, deadline - Date.now()) })));
   // Past the deadline no further parse starts, and the one under way stops at its budget.
   let wrapped: boolean[] | null = null;
+  let firstRead = true;
   const snapshot: Snapshot = async (req) => {
     if (dropped) return { ok: false };
+    // A whole ring larger than the tail window does not parse within the
+    // budget: answer 'budget' at once, so renderPaneScreen reads its tail.
+    // A live dialog is the pane's newest output, so the tail holds its draw.
+    const skipWhole = firstRead && req.initial.length > AWAITING_RENDER_WINDOW_BYTES + TAIL_SLACK_BYTES;
+    firstRead = false;
+    if (skipWhole) return { ok: false, reason: 'budget' };
     const outcome = await parse(req);
     wrapped = outcome.ok ? outcome.rows.map((row) => (row as { wrapped?: boolean }).wrapped === true) : null;
     return outcome;
@@ -85,8 +95,10 @@ export async function folderTrustState(deps: FolderTrustDeps, id: string): Promi
     const frame = await Promise.race([renderPaneScreen(() => (deps.getSession(id) === session ? pane : undefined), snapshot).catch(() => null), timedOut]);
     if (!frame) return 'unknown';
     if (looksLikeFolderTrustDialog(unwrapRows(frame.rows, wrapped, frame.cols).slice(-60))) return 'trust';
-    // Cells the ring no longer covers could be the dialog's.
-    return frame.unknown ? 'unknown' : 'clear';
+    // Cells the read could not see could complete a dialog that is partly on
+    // screen. Elsewhere they are a full-screen TUI's old cells, not a dialog
+    // (whose draw the read holds, above).
+    return frame.unknown && frame.rows.some((row) => /trust/i.test(row)) ? 'unknown' : 'clear';
   } finally {
     clearTimeout(timer);
   }
@@ -115,13 +127,16 @@ function withHeldOutput(session: FolderTrustSession, held: Buffer): RenderablePa
  * The grid's rows with each soft-wrapped continuation joined back onto the
  * row it continues. A dialog drawn wider than the pane is now reflows its
  * lines mid-word ("…one yo" / "u trust?"), and the detector reads whole
- * lines. A wrapped row filled the width, so it is padded back to it first.
+ * lines. A wrapped row filled the width; read back shorter, its trailing
+ * blanks were trimmed, and one space stands for them (the detector collapses
+ * runs of whitespace).
  */
 function unwrapRows(rows: readonly string[], wrapped: readonly boolean[] | null, cols = 0): string[] {
   if (!wrapped || wrapped.length !== rows.length) return [...rows];
   const lines: string[] = [];
   rows.forEach((row, i) => {
-    if (wrapped[i] && lines.length > 0) lines[lines.length - 1] = lines[lines.length - 1].padEnd(cols) + row;
+    const last = lines.length - 1;
+    if (wrapped[i] && last >= 0) lines[last] = `${lines[last]}${lines[last].length < cols ? ' ' : ''}${row}`;
     else lines.push(row);
   });
   return lines;
@@ -130,7 +145,6 @@ function unwrapRows(rows: readonly string[], wrapped: readonly boolean[] | null,
 /** What `daemon.folderTrustState` reads of the session manager. */
 export interface FolderTrustSessions {
   getSession(id: string): FolderTrustSession | undefined;
-  getPendingRecovery(id: string): unknown;
 }
 
 /**
@@ -141,10 +155,7 @@ export function registerFolderTrustRpc(pipeServer: Pick<DaemonPipeServer, 'onRpc
   pipeServer.onRpc('daemon.folderTrustState', async (params) => {
     const id = typeof params['id'] === 'string' ? params['id'] : '';
     return {
-      state: await folderTrustState({
-        getSession: (sid) => sessions.getSession(sid),
-        getPendingRecovery: (sid) => sessions.getPendingRecovery(sid),
-      }, id),
+      state: await folderTrustState({ getSession: (sid) => sessions.getSession(sid) }, id),
     };
   });
 }

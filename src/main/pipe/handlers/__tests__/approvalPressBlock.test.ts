@@ -854,15 +854,16 @@ describe('the default screen read and daemon verdict', () => {
   it.each([
     ['an older daemon', { unavailable: 'daemon predates daemon.folderTrustState' }],
     ['a daemon that does not answer in time', { unavailable: 'RPC timeout: daemon.folderTrustState (400ms)' }],
-  ])('%s gives no verdict: the send passes as before, with a log line per check', async (_name, answer) => {
+  ])('%s gives no verdict: sends pass as before, with one log line', async (_name, answer) => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     try {
       const { writes, send } = wireDefault({ answer });
-      expect((await send('input.send', { ptyId: 'pty-d', text: 'hello' })).ok).toBe(true);
-      expect(writes).toEqual(['hello']);
-      const lines = warn.mock.calls.map((args) => args.join(' '));
-      expect(lines.length).toBeGreaterThan(0);
-      expect(new Set(lines)).toEqual(new Set([`[approval-gate] folder-trust check unavailable on pane pty-d: ${answer.unavailable}`]));
+      expect((await send('input.send', { ptyId: 'pty-d', text: 'hello', submit: true })).ok).toBe(true);
+      expect((await send('input.send', { ptyId: 'pty-d', text: 'again' })).ok).toBe(true);
+      expect(writes).toEqual(['hello', '\r', 'again']);
+      expect(warn.mock.calls.map((args) => args.join(' '))).toEqual([
+        `[approval-gate] folder-trust check unavailable on pane pty-d: ${answer.unavailable}`,
+      ]);
     } finally {
       warn.mockRestore();
     }

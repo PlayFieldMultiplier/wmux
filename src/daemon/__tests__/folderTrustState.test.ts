@@ -8,6 +8,7 @@ import { folderTrustState, type FolderTrustDeps, type FolderTrustSession } from 
 import { looksLikeFolderTrustDialog } from '../approvals/approvalKeystrokes';
 import { enqueueSnapshotJob, generateTextSnapshot } from '../HeadlessSnapshot';
 import { RingBuffer } from '../RingBuffer';
+import { deliberateSleep } from '../../test-utils/waitFor';
 import { DaemonPTYBridge } from '../DaemonPTYBridge';
 import type { TerminalPty } from '../../shared/terminalPty';
 import type { NativeOutputChunk } from '../../shared/nativeTerminalCore';
@@ -37,7 +38,6 @@ function session(bytes: Buffer, cols: number, rows: number, over: Partial<Folder
 
 const deps = (s: FolderTrustSession | undefined, over: Partial<FolderTrustDeps> = {}): FolderTrustDeps => ({
   getSession: () => s,
-  getPendingRecovery: () => undefined,
   ...over,
 });
 
@@ -101,13 +101,54 @@ describe('folderTrustState', () => {
     expect(await folderTrustState(deps(s), 'pty-1')).not.toBe('clear');
   });
 
-  it("is 'unknown' when cells the ring dropped could be the dialog's", async () => {
+  it("is 'unknown' when cells the ring dropped could complete a dialog partly on screen", async () => {
+    const ring = new RingBuffer(2048);
+    ring.noteGeometry(120, 40);
+    ring.write(frame(CLAUDE));
+    // Only the grant choice is redrawn after the dialog's own draw left the ring.
+    const yes = CLAUDE.findIndex((row) => row.includes('Yes, I trust this folder')) + 1;
+    for (let n = 0; n < 80; n++) ring.write(Buffer.from(`\x1b[${yes};1H   Yes, I trust this folder`));
+    const s = { ...session(Buffer.alloc(0), 120, 40), ringBuffer: ring };
+    expect(await folderTrustState(deps(s), 'pty-1')).toBe('unknown');
+  });
+
+  it("is 'clear' when the cells it could not see belong to an ordinary screen", async () => {
     const ring = new RingBuffer(2048);
     ring.noteGeometry(80, 24);
     ring.write(Buffer.from('\x1b[2J\x1b[1;1Hwritten long ago'));
     for (let n = 0; n < 200; n++) ring.write(Buffer.from(`\x1b[24;1H% tick ${n}`));
     const s = { ...session(Buffer.alloc(0), 80, 24), ringBuffer: ring };
-    expect(await folderTrustState(deps(s), 'pty-1')).toBe('unknown');
+    expect(await folderTrustState(deps(s), 'pty-1')).toBe('clear');
+  });
+
+  it('reads a ring larger than the tail window from its tail, within the budget', async () => {
+    const ring = new RingBuffer(8 * 1024 * 1024);
+    ring.noteGeometry(120, 40);
+    for (let n = 0; n < 60_000; n++) ring.write(Buffer.from(`\x1b[${(n % 38) + 1};1H${'y'.repeat(100)}`));
+    ring.write(frame(CLAUDE));
+    expect(ring.size).toBeGreaterThan(3 * 1024 * 1024);
+    const s = { ...session(Buffer.alloc(0), 120, 40), ringBuffer: ring };
+    // A slower machine: a whole-ring parse outlasts the budget, a tail parse does not.
+    const snapshot: NonNullable<FolderTrustDeps['snapshot']> = async (req) => {
+      if (req.initial.length > 1024 * 1024) await deliberateSleep(400, 'a whole-ring parse on a slow machine, inside the stub');
+      return generateTextSnapshot(req);
+    };
+    const started = Date.now();
+    expect(await folderTrustState(deps(s, { snapshot }), 'pty-1')).toBe('trust');
+    expect(Date.now() - started).toBeLessThan(250);
+  });
+
+  it('joins a wrapped row whose cut fell on a blank with one space', async () => {
+    // The read trims the blank the row ended in: "…you created" + "or one you trust?".
+    const q = CLAUDE.findIndex((row) => row.includes('Quick safety check'));
+    const rows = [
+      ...CLAUDE.slice(0, q).map((text) => ({ text, wrapped: false })),
+      { text: ' Quick safety check: Is this a project you created', wrapped: false },
+      { text: 'or one you trust?', wrapped: true },
+      ...CLAUDE.slice(q + 1).map((text) => ({ text, wrapped: false })),
+    ];
+    const snapshot = async () => ({ ok: true as const, rows });
+    expect(await folderTrustState(deps(session(Buffer.from('x'), 120, 40), { snapshot }), 'pty-1')).toBe('trust');
   });
 
   it("is 'clear' without a read when nothing runs in the session", async () => {
@@ -116,12 +157,9 @@ describe('folderTrustState', () => {
       const s = session(frame(CLAUDE), 120, 40, { meta: { state, cols: 120, rows: 40 } });
       expect(await folderTrustState(deps(s, { snapshot }), 'pty-1')).toBe('clear');
     }
-    expect(await folderTrustState(deps(undefined, { getPendingRecovery: () => ({ id: 'pty-1' }) }), 'pty-1')).toBe('clear');
+    // Not held at all: a recovery placeholder, a record kept only on disk, a closed pane.
+    expect(await folderTrustState(deps(undefined, { snapshot }), 'pty-gone')).toBe('clear');
     expect(snapshot).not.toHaveBeenCalled();
-  });
-
-  it("is 'unknown' for a session it does not know", async () => {
-    expect(await folderTrustState(deps(undefined), 'pty-gone')).toBe('unknown');
   });
 
   describe('a muted (recovered, not yet shown) session: ring and held output read together', () => {

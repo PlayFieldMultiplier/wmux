@@ -1328,6 +1328,8 @@ export function registerInputRpc(
       return undefined;
     }
   };
+  /** The last "folder-trust check unavailable" reason logged per pane. */
+  const unavailableLogged = new Map<string, string>();
   const approvalGate: ApprovalInputGate = {
     getDaemonClient,
     answerPolicy:
@@ -1365,8 +1367,16 @@ export function registerInputRpc(
         } catch (err) {
           answer = { unavailable: err instanceof Error ? err.message : String(err) };
         }
-        if (answer && 'state' in answer) return answer.state;
-        console.warn(`[approval-gate] folder-trust check unavailable on pane ${ptyId}: ${answer?.unavailable ?? 'no daemon client'}`);
+        if (answer && 'state' in answer) {
+          unavailableLogged.delete(ptyId);
+          return answer.state;
+        }
+        // One line per pane while the reason holds, not one per check.
+        const reason = answer?.unavailable ?? 'no daemon client';
+        if (unavailableLogged.get(ptyId) !== reason) {
+          unavailableLogged.set(ptyId, reason);
+          console.warn(`[approval-gate] folder-trust check unavailable on pane ${ptyId}: ${reason}`);
+        }
         return null;
       }),
   };

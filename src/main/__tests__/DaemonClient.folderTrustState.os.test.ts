@@ -98,7 +98,8 @@ describe('DaemonClient.folderTrustState', () => {
 });
 
 // The daemon's own handler (registerFolderTrustRpc) over the wire: a session
-// whose ring holds a measured dialog reads 'trust', one at a shell 'clear'.
+// whose ring holds a measured dialog reads 'trust'; one at a shell, or one it
+// does not hold, 'clear'.
 describe('daemon.folderTrustState end to end', () => {
   it('answers from the session ring', async () => {
     const name = pipeName();
@@ -116,14 +117,14 @@ describe('daemon.folderTrustState end to end', () => {
       ['pane-trust', sessionAt(`\x1b[2J${rows.map((row, i) => `\x1b[${i + 1};1H${row}`).join('')}`)],
       ['pane-shell', sessionAt('$ ls\r\nREADME.md\r\n$ ')],
     ]);
-    registerFolderTrustRpc(server, { getSession: (id) => sessions.get(id), getPendingRecovery: () => undefined });
+    registerFolderTrustRpc(server, { getSession: (id) => sessions.get(id) });
     await server.start();
     const c = new DaemonClient(name, TOKEN);
     try {
       expect(await c.connect()).toBe(true);
       expect(await c.folderTrustState('pane-trust', 400)).toEqual({ state: 'trust' });
       expect(await c.folderTrustState('pane-shell', 400)).toEqual({ state: 'clear' });
-      expect(await c.folderTrustState('pane-gone', 400)).toEqual({ state: 'unknown' });
+      expect(await c.folderTrustState('pane-gone', 400)).toEqual({ state: 'clear' });
     } finally {
       await c.disconnect();
       await server.stop();
