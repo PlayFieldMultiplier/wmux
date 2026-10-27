@@ -46,6 +46,16 @@ describe('BrowserHelpTable', () => {
     expect(t.list()).toEqual([row({ backend: 'live', previewable: false })]);
   });
 
+  it('never takes a session id from main, and its frames never carry one or the requesting pane', () => {
+    const { t, frames } = table();
+    t.set('main', { requests: [{ ...row(), requesterPtyId: 'pty-1', sessionId: 'pty-1' }] });
+    expect(t.list()[0]).not.toHaveProperty('sessionId');
+    t.set('main', { requests: [] });
+    expect(frames).toHaveLength(2);
+    expect(JSON.stringify(frames)).not.toContain('pty-1');
+    expect(JSON.stringify(frames)).not.toContain('sessionId');
+  });
+
   it('turns each change into open and close frames that carry no prompt', () => {
     const { t, frames } = table();
     t.set('main', { requests: [row()] });
@@ -57,7 +67,7 @@ describe('BrowserHelpTable', () => {
       { phase: 'close', requestId: 'req-1', workspaceId: 'ws-1', surfaceId: 'surf-1', deadlineAt: 61_000, state: 'continued' },
     ]);
     expect(JSON.stringify(frames)).not.toContain('Sign in');
-    expect(t.lookup('req-1')).toEqual({ closed: true });
+    expect(t.lookup('req-1')).toMatchObject({ closed: true, workspaceId: 'ws-1' });
     expect(t.lookup('req-2')).toEqual({ row: row({ requestId: 'req-2', surfaceId: undefined }) });
     expect(t.lookup('req-9')).toBeNull();
   });
@@ -67,7 +77,7 @@ describe('BrowserHelpTable', () => {
     t.set('main', { requests: [row()] });
     t.closeDecided('req-1', 'continued');
     expect(t.list()).toEqual([]);
-    expect(t.lookup('req-1')).toEqual({ closed: true });
+    expect(t.lookup('req-1')).toMatchObject({ closed: true, workspaceId: 'ws-1' });
     t.set('main', { requests: [row()] });
     expect(t.list()).toEqual([]);
     expect(frames).toEqual([
@@ -81,7 +91,7 @@ describe('BrowserHelpTable', () => {
     t.set('main', { requests: [row()] });
     clock.now = 61_000;
     expect(t.list()).toEqual([]);
-    expect(t.lookup('req-1')).toEqual({ closed: true });
+    expect(t.lookup('req-1')).toMatchObject({ closed: true, workspaceId: 'ws-1' });
   });
 
   it('closes and drops every row when its publisher disconnects, and only then', () => {

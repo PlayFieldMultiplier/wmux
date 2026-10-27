@@ -310,6 +310,13 @@ describe('HelpRequests on the phone', () => {
     ]);
   });
 
+  it('carries the origin the request was made at, unchanged for its whole life', () => {
+    const h = harness(5_000);
+    h.store.create({ ...base, timeoutMs: 60_000, origin: 'https://login.example.com' });
+    h.store.create({ ...base, surfaceId: 'surf-2', timeoutMs: 60_000 });
+    expect(h.store.listPending().map((r) => r.origin)).toEqual(['https://login.example.com', undefined]);
+  });
+
   it('listPending settles and leaves out a request whose deadline passed', async () => {
     const h = harness(1_000);
     const info = h.store.create({ ...base, timeoutMs: 10_000 });

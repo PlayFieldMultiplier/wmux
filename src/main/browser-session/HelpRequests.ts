@@ -62,6 +62,8 @@ interface HelpRecord {
   state: BrowserHelpState;
   /** Last URL the probe reported, if it ever answered. */
   url: string | undefined;
+  /** The tab's origin when the request was made; pinned for its whole life. */
+  origin: string | undefined;
   /** When the completion condition first held in the current unbroken run. */
   matchedSince: number | undefined;
   /**
@@ -118,6 +120,11 @@ export interface CreateHelpRequestArgs {
   ref?: string;
   timeoutMs?: number;
   completion?: BrowserHelpCompletion;
+  /**
+   * `scheme://host[:port]` of the tab when the request was made, read once by
+   * the caller and never again. Absent: unknown, and it stays unknown.
+   */
+  origin?: string;
 }
 
 export interface HelpStatus {
@@ -135,6 +142,8 @@ export interface PendingHelpRequest {
   readonly prompt: string;
   readonly createdAt: number;
   readonly deadlineAt: number;
+  /** The tab's origin when the request was made, pinned; absent when it was not known then. */
+  readonly origin?: string;
 }
 
 /** How a phone's answer went: settled by it, unknown here, or already over. */
@@ -257,6 +266,7 @@ export class HelpRequests {
       deadlineAt: createdAt + clampHelpTimeoutMs(args.timeoutMs),
       state: 'pending',
       url: undefined,
+      origin: args.origin,
       matchedSince: undefined,
       probing: false,
       timer: undefined,
@@ -332,6 +342,7 @@ export class HelpRequests {
         prompt: record.prompt,
         createdAt: record.createdAt,
         deadlineAt: record.deadlineAt,
+        ...(record.origin !== undefined && { origin: record.origin }),
       });
     }
     return rows;

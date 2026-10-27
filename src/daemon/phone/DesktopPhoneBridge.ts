@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { isKeepAwakeState, type KeepAwakeState } from '../../shared/sleepPrevention';
+import { PHONE_BROWSER_HELP_DECIDE_COMMAND } from '../../shared/phoneBrowserHelp';
 
-export type DesktopPhoneCommand = 'accounts.list' | 'accounts.bind' | 'accounts.usage' | 'accounts.env' | 'accounts.envForAccount' | 'prompts.list' | 'prompts.replace' | 'workspaces.list' | 'workspaces.create' | 'workspaces.fleetTicket' | 'browser.list' | 'browser.capture' | 'browser.viewport' | 'browser.navigate' | 'browser.type' | 'browser.key' | 'browser.tap' | 'browser.open' | 'browser.scroll' | 'moa.wake' | 'workspaces.roomThreads' | 'workspaces.roomCards' | 'workspaces.roomAttachment' | 'workspaces.roomFile' | 'workspaces.botApproval' | 'workspaces.botApprovalDecide' | 'workspaces.workerResume' | 'workspaces.guestPost' | 'workspaces.browserHelpDecide';
+export type DesktopPhoneCommand = 'accounts.list' | 'accounts.bind' | 'accounts.usage' | 'accounts.env' | 'accounts.envForAccount' | 'prompts.list' | 'prompts.replace' | 'workspaces.list' | 'workspaces.create' | 'workspaces.fleetTicket' | 'browser.list' | 'browser.capture' | 'browser.viewport' | 'browser.navigate' | 'browser.type' | 'browser.key' | 'browser.tap' | 'browser.open' | 'browser.scroll' | 'browser.focus' | 'moa.wake' | 'workspaces.roomThreads' | 'workspaces.roomCards' | 'workspaces.roomAttachment' | 'workspaces.roomFile' | 'workspaces.botApproval' | 'workspaces.botApprovalDecide' | 'workspaces.workerResume' | 'workspaces.guestPost' | 'workspaces.browserHelpDecide';
 export class DesktopPhoneError extends Error {
   constructor(public readonly tag: string) { super(tag); }
 }
@@ -12,6 +13,16 @@ interface Pending {
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
 }
+
+/** Requests one desktop may have outstanding at once. */
+export const DESKTOP_PHONE_MAX_PENDING = 16;
+/**
+ * The last slot is a browser help decision's alone
+ * (PHONE_BROWSER_HELP_DECIDE_COMMAND): a phone polling Chrome
+ * captures (each may wait out its whole capture budget, plus the workspace
+ * lookup ahead of each) must never leave the person's Done or Cancel
+ * answered `desktop-busy`.
+ */
 
 /** How long a request waits for the desktop's reply by default. */
 export const DESKTOP_PHONE_TIMEOUT_MS = 15000;
@@ -77,7 +88,7 @@ export class DesktopPhoneBridge {
   request(command: DesktopPhoneCommand, payload: Record<string,unknown>): Promise<unknown> {
     const owner = this.owner;
     if (!owner) return Promise.reject(new DesktopPhoneError('desktop-unavailable'));
-    if (this.pending.size >= 16) return Promise.reject(new DesktopPhoneError('desktop-busy'));
+    if (this.pending.size >= (command === PHONE_BROWSER_HELP_DECIDE_COMMAND ? DESKTOP_PHONE_MAX_PENDING : DESKTOP_PHONE_MAX_PENDING - 1)) return Promise.reject(new DesktopPhoneError('desktop-busy'));
     const requestId = randomUUID();
     return new Promise((resolve,reject) => {
       const timer = setTimeout(() => {
