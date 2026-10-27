@@ -343,6 +343,41 @@ describe.skipIf(isWin)('a resume and a re-fire keep the fence', () => {
     expect(linux).toContain(path.join(common, 'packed-refs'));
   });
 
+  it('on Linux, a packed-only branch in the worker\'s ref folder is written loose before launch and keeps its deny', () => {
+    git(repo, 'pack-refs', '--all');
+    const common = fs.realpathSync(path.join(repo, '.git'));
+    const sibling = path.join(common, 'refs', 'heads', 'wmux', 'task-2');
+    const sha = git(repo, 'rev-parse', 'wmux/task-2').trim();
+    expect(fs.existsSync(sibling)).toBe(false);
+    const linux = deps({ fence: { runtime: RUNTIME, home, env: {}, platform: 'linux', claudeTempRoots: [] } });
+    // Git holds the ref's lock: refused, the lock left alone.
+    fs.mkdirSync(path.dirname(sibling), { recursive: true });
+    fs.writeFileSync(`${sibling}.lock`, '');
+    expect(refusalOf(() => create(LINE, linux))).toMatch(/worker fence: branch wmux\/task-2, kept only in packed-refs, could not be written as its own ref file before launch/);
+    expect(fs.existsSync(`${sibling}.lock`)).toBe(true);
+    fs.unlinkSync(`${sibling}.lock`);
+    const s = settingsOf(create(LINE, linux)!.initialCommand!);
+    expect(fs.readFileSync(sibling, 'utf8')).toBe(`${sha}\n`);
+    expect(git(repo, 'rev-parse', 'wmux/task-2').trim()).toBe(sha);
+    const deny = (s.sandbox as { filesystem: { denyWrite: string[] } }).filesystem.denyWrite;
+    expect(deny).toContain(sibling);
+    // Outside the worker's ref folder: left packed (nothing there is writable).
+    expect(fs.existsSync(path.join(common, 'refs', 'heads', 'other'))).toBe(false);
+    expect(git(repo, 'status', '--short')).toBe('');
+  });
+
+  it('a session main fenced stays fenced for the pipe while the record is unreadable; an unknown pane does not', () => {
+    const first = create(LINE);
+    noteBotWorkerSession('pty-1', 'ws-task', dir, guardedLaunchOf(first));
+    fs.writeFileSync(path.join(dir, 'factory', 'bot-worker-sessions.json'), '{ not json');
+    reloadBotWorkerSessionsForTests({ keepFenced: true });
+    expect(isFencedBotWorkerSession('pty-1', dir)).toBe(true);
+    expect(isFencedBotWorkerSession('pty-9', dir)).toBe(false);
+    // A restart reads the record again: an unreadable one adds no pane.
+    reloadBotWorkerSessionsForTests();
+    expect(isFencedBotWorkerSession('pty-1', dir)).toBe(false);
+  });
+
   it('never weaker than its first launch: the switch turned off later, or the platform no longer capable', async () => {
     const first = create(LINE);
     noteBotWorkerSession('pty-1', 'ws-task', dir, guardedLaunchOf(first));
@@ -478,7 +513,13 @@ describe.skipIf(isWin)('the self-test', () => {
     // A platform that has the sandbox whose check did not finish: no launch at all.
     const flaky = await workerFenceSupport({ ...d, probe: async () => ({ ok: false as const, reason: 'claude --version failed: timed out' }), platformRefusal: () => null });
     expect(flaky).toEqual({ capable: false, reason: 'claude --version failed: timed out', transient: true });
-    expect(refusalOf(() => create(LINE, deps({ fenceSupport: flaky })))).toMatch(/worker fence: this computer's fence support could not be checked \(claude --version failed: timed out\); try again/);
+    expect(refusalOf(() => create(LINE, deps({ fenceSupport: flaky })))).toMatch(/worker fence: this computer has the OS sandbox, but the fence cannot start now \(claude --version failed: timed out\); try again/);
+    // No claude found on such a platform: refused, not weakened, and checked again next time.
+    const none = await workerFenceSupport({ ...d, exe: () => null, probe: async () => ({ ok: false as const, reason: 'no claude executable' }), platformRefusal: () => null });
+    expect(none).toEqual({ capable: false, reason: 'no claude executable', transient: true });
+    expect(refusalOf(() => create(LINE, deps({ fenceSupport: none })))).toMatch(/worker fence: this computer has the OS sandbox, but the fence cannot start now \(no claude executable\); try again/);
+    expect(await workerFenceSupport({ ...d, exe: () => null, probe: async () => ({ ok: true as const, version: '2.1.311' }), platformRefusal: () => null })).toMatchObject({ capable: false, transient: true });
+    expect((await workerFenceSupport(d)).capable).toBe(true);
   });
 
   it('a claude that runs no command fails it, and its files are removed', async () => {

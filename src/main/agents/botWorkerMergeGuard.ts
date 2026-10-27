@@ -704,6 +704,16 @@ type SessionRecord = BotWorkerSessionRecord;
 let sessions: Map<string, SessionRecord> | null = null;
 let sessionsDir: string | null = null;
 let unreadable: string | null = null;
+/** The sessions main put inside the fence (full or weaker), kept in memory:
+ *  added when the fence is recorded, removed when the session ends, and
+ *  rebuilt from the record when it is read. isFencedBotWorkerSession counts
+ *  them whatever the record says later. */
+const fencedSessions = new Set<string>();
+
+function isFencedRecord(rec: SessionRecord | undefined): boolean {
+  const strength = rec?.launch?.fence?.strength;
+  return strength === 'full' || strength === 'weaker';
+}
 
 function loadSessions(dir: string): Map<string, SessionRecord> {
   if (sessions && sessionsDir === dir) return sessions;
@@ -712,6 +722,7 @@ function loadSessions(dir: string): Map<string, SessionRecord> {
   if (unreadable) console.warn(`[factory] ${botWorkerSessionsPath(dir)} is unreadable; every pane's launch line is guarded until it is fixed: ${unreadable}`);
   sessions = 'sessions' in read ? read.sessions : new Map();
   sessionsDir = dir;
+  for (const [id, rec] of sessions) if (isFencedRecord(rec)) fencedSessions.add(id);
   return sessions;
 }
 
@@ -759,10 +770,12 @@ export function noteBotWorkerSession(
     throw guardError('PTY_CREATE', `the worker session could not be recorded: ${String(err)}`);
   }
   map.set(sessionId, next.get(sessionId)!);
+  if (isFencedRecord(next.get(sessionId))) fencedSessions.add(sessionId);
 }
 
 /** The pane is gone. Best-effort: a record left behind only keeps guarding. */
 export function forgetBotWorkerSession(sessionId: string, dir: string = getWmuxDir()): void {
+  fencedSessions.delete(sessionId);
   const map = loadSessions(dir);
   if (unreadable || !map.has(sessionId)) return;
   const next = new Map(map);
@@ -783,12 +796,14 @@ export function botWorkerSessionRecord(sessionId: string, dir: string = getWmuxD
   return r ? { ...r } : null;
 }
 
-/** A bot worker's session that runs inside the fence (full or weaker), by
- *  its record. A record that cannot be read answers no for every session:
- *  the fence's own settings still refuse the same tools. */
+/** A bot worker's session that runs inside the fence (full or weaker): one
+ *  main fenced in this app session or read so from the record, else the
+ *  record's answer. A record that cannot be read adds no session (answering
+ *  yes for every pane would refuse the human ones too). */
 export function isFencedBotWorkerSession(sessionId: string, dir: string = getWmuxDir()): boolean {
-  const strength = botWorkerSessionRecord(sessionId, dir)?.launch?.fence?.strength;
-  return strength === 'full' || strength === 'weaker';
+  if (fencedSessions.has(sessionId)) return true;
+  const rec = botWorkerSessionRecord(sessionId, dir);
+  return rec !== null && isFencedRecord(rec);
 }
 
 /** A bot worker's session — every session while the record is unreadable. */
@@ -806,10 +821,13 @@ export function isBotWorkerWorkspace(workspaceId: string, dir: string = getWmuxD
 }
 
 /** Tests: drop the in-memory copy, as an app restart does. */
-export function reloadBotWorkerSessionsForTests(): void {
+export function reloadBotWorkerSessionsForTests(opts: { keepFenced?: boolean } = {}): void {
   sessions = null;
   sessionsDir = null;
   unreadable = null;
+  // A restart forgets them; `keepFenced` is the record going bad under a
+  // running app.
+  if (!opts.keepFenced) fencedSessions.clear();
 }
 
 /**
@@ -872,6 +890,7 @@ function recordLaterFence(where: string, sessionId: string, files: BotWorkerLaun
     throw guardError(where, `the worker's fence could not be recorded: ${String(err)}`);
   }
   map.set(sessionId, next.get(sessionId)!);
+  if (isFencedRecord(next.get(sessionId))) fencedSessions.add(sessionId);
 }
 
 /** A recorded session's launch: in a WSL shell the worker settings and this

@@ -51,6 +51,7 @@ import {
   workerFenceCredentialPaths,
   workerFenceHookCommand,
   workerFenceHookScript,
+  isWithin,
   workerFenceGitWrites,
   workerFencePermissionDenies,
   WORKER_FENCE_REFUSED_WMUX_TOOLS,
@@ -107,8 +108,9 @@ function accountConfigDirsDefault(): string[] {
 export type WorkerFenceSelfTest = { ok: true } | { ok: false; reason: string; transient?: true };
 
 export type WorkerFenceSupport =
-  /** `transient`: the platform has the sandbox, but the check could not
-   *  finish (claude did not answer `--version`): no launch, not a weaker one. */
+  /** `transient`: the platform has the sandbox, but this launch cannot use
+   *  it now (no claude found, or it did not answer `--version`): no launch,
+   *  not a weaker one, and the next launch checks again. */
   | { capable: false; reason: string; transient?: true }
   | { capable: true; exe: string; version: string; selfTest: WorkerFenceSelfTest };
 
@@ -149,10 +151,13 @@ export async function workerFenceSupport(deps: WorkerFenceSupportDeps = {}): Pro
   if (!support.ok || !exe) {
     const reason = support.ok ? 'no claude executable' : support.reason;
     // Not capable: the platform has no sandbox, or claude is too old for it.
-    // Anything else on a platform that has one is not a reason to weaken.
+    // Anything else on a platform that has one (no claude found, claude did
+    // not answer) is not a reason to weaken: the launch is refused, and the
+    // next one checks again.
     const capableHere = (deps.platformRefusal ?? botExecPlatformRefusal)({ platform }) === null;
-    const unanswered = /^claude --version failed/.test(reason);
-    lastSupport = capableHere && unanswered ? { capable: false, reason, transient: true } : { capable: false, reason };
+    // botExecVersionRefusal's sentence for a claude below the minimum.
+    const tooOld = !support.ok && /^Claude Code \S+ is older than /.test(support.reason);
+    lastSupport = capableHere && !tooOld ? { capable: false, reason, transient: true } : { capable: false, reason };
     return lastSupport;
   }
   const key = `${platform}\0${exe}\0${support.version}`;
@@ -567,6 +572,54 @@ export function readWorktreeGitFacts(worktree: string, expected: { gitCommonDir?
   };
 }
 
+/**
+ * Linux: each other branch in the ref folder the fence opens to the worker
+ * (its branch's folder; all of `refs/heads` for the main checkout) that is
+ * kept only in packed-refs gets a loose ref file of the same value, so the
+ * sandbox has a file to keep its deny on (bubblewrap binds only paths that
+ * exist). Written as git writes a ref: `<ref>.lock` made exclusively, the
+ * value, then renamed over the ref. `git update-ref` and `git branch -f` skip
+ * a write that changes nothing (measured, git 2.50), and a write that moves
+ * the ref and back would leave two reflog entries. Throws when one cannot be
+ * written, or git holds its lock. Returns the branches written.
+ */
+export function loosenPackedBranches(facts: Pick<WorktreeGitFacts, 'gitCommonDir' | 'isLinkedWorktree' | 'ownWorktreeName' | 'ownBranch'>): string[] {
+  const heads = path.join(facts.gitCommonDir, 'refs', 'heads');
+  let open: string;
+  if (!facts.isLinkedWorktree) open = heads;
+  else if (facts.ownBranch === null) return [];
+  else open = workerFenceGitWrites(facts)[2];
+  const written: string[] = [];
+  for (const line of (readText(path.join(facts.gitCommonDir, 'packed-refs')) ?? '').split('\n')) {
+    const m = /^([0-9a-f]{40}|[0-9a-f]{64}) refs\/heads\/(.+)$/.exec(line.trim());
+    if (!m || m[2] === facts.ownBranch) continue;
+    const [, oid, branch] = m;
+    const parts = branch.split('/');
+    if (parts.some((x) => x === '' || x === '.' || x === '..')) continue;
+    const ref = path.join(heads, ...parts);
+    if (!isWithin(ref, open) || ref === open || fs.existsSync(ref)) continue;
+    const lock = `${ref}.lock`;
+    try {
+      fs.mkdirSync(path.dirname(ref), { recursive: true });
+      const fd = fs.openSync(lock, 'wx', 0o644);
+      try {
+        fs.writeSync(fd, `${oid}\n`);
+        fs.fsyncSync(fd);
+      } finally {
+        fs.closeSync(fd);
+      }
+      fs.renameSync(lock, ref);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') {
+        try { fs.unlinkSync(lock); } catch { /* not made */ }
+      }
+      throw fenceError(`branch ${branch}, kept only in packed-refs, could not be written as its own ref file before launch (${(err as Error).message})`);
+    }
+    written.push(branch);
+  }
+  return written;
+}
+
 // ── What else the fence closes ───────────────────────────────────────────────
 
 /** Claude's own temp folder for this user (`/tmp/claude-<uid>`, with macOS's
@@ -717,7 +770,7 @@ export function attachWorkerFence(input: WorkerFenceAttachInput): WorkerFenceAtt
   if (!input.cwd) throw fenceError('the worker has no folder to fence');
   const support = input.support;
   if (!support) throw fenceError('this computer\'s fence support was not checked yet; try again');
-  if (!support.capable && support.transient) throw fenceError(`this computer's fence support could not be checked (${support.reason}); try again`);
+  if (!support.capable && support.transient) throw fenceError(`this computer has the OS sandbox, but the fence cannot start now (${support.reason}); try again`);
   if (!support.capable && input.recorded?.strength === 'full') throw fenceError(`this worker started inside the full fence, which cannot run now (${support.reason})`);
   const refusal = workerFenceFolderRefusal(input.cwd);
   if (refusal) throw fenceError(refusal);
@@ -741,6 +794,8 @@ export function attachWorkerFence(input: WorkerFenceAttachInput): WorkerFenceAtt
     // worker's commands cannot make them.
     for (const p of workerFenceGitWrites(git).slice(2)) fs.mkdirSync(p, { recursive: true });
   }
+  // Before the denies are listed: on Linux they name only files that exist.
+  if (platform === 'linux' && support.capable) loosenPackedBranches(git);
   const script = writeWorkerFenceHookScript(input.dir);
   const hookCommand = workerFenceHookCommand(input.runtime ?? process.execPath, script, [worktree, temp.real], input.platform);
   if (!hookCommand) throw fenceError('the fence hook\'s command cannot be written for these paths');
