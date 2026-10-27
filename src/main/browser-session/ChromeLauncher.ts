@@ -146,6 +146,8 @@ export interface ChromeBackendClient {
   closeSurface(surfaceId: string): Promise<boolean>;
   /** Real tab focus where the backend supports it (live attach). */
   selectSurface?(surfaceId: string): Promise<boolean>;
+  /** Un-minimize the window holding a surface (dedicated instances; a person's explicit ask only). */
+  restoreWindow?(surfaceId: string): Promise<void>;
   hasSurface(surfaceId: string): boolean;
   /** Dedicated instances only: a CDP session on one wmux-opened tab's page.
    *  Never launches Chrome. Absent on Live Chrome. */

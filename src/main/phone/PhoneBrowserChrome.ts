@@ -7,9 +7,10 @@
 // What differs from a builtin pane:
 //  - geometry comes from Page.getLayoutMetrics, and the capture is clipped to
 //    that visual viewport, so a normalized point means the same pixel;
-//  - a whole capture has its own budget (PHONE_CHROME_CAPTURE_MS): Chrome may
-//    stop painting a background tab, and a capture that does not finish says
-//    so (`browser-tab-hidden`) instead of running into the bridge's timeout;
+//  - a whole capture, and each input, has its own budget
+//    (PHONE_CHROME_CAPTURE_MS): Chrome may stop painting a background tab, and
+//    an action that does not finish says so (`browser-tab-hidden`) instead of
+//    running into the bridge's timeout;
 //  - nothing brings the tab forward except the phone's explicit `focus`;
 //    typing uses focus emulation instead;
 //  - viewport emulation does not exist here (`browser-action-unsupported`).
@@ -21,7 +22,7 @@ import { LIVE_CHROME_PROFILE } from '../browser-session/ChromeProfileStore';
 import { parseKeyPress } from '../pipe/handlers/cdpKeys';
 import { PhoneBrowserError } from '../../shared/phoneBrowserPreview';
 
-/** How long a whole Chrome capture may take before the tab reads as hidden. */
+/** How long a whole Chrome capture, or one input, may take before the tab reads as hidden. */
 export const PHONE_CHROME_CAPTURE_MS = 5_000;
 
 export interface PhoneChromeTab { surfaceId: string; url: string; title: string }
@@ -56,7 +57,7 @@ function coded(err: unknown): unknown {
   return err;
 }
 
-interface Viewport { width: number; height: number; scrollX: number; scrollY: number; scale: number }
+interface Viewport { width: number; height: number; scrollX: number; scrollY: number; scale: number; zoom: number }
 
 function dimension(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= 32768;
@@ -73,7 +74,12 @@ function viewportOf(metrics: unknown): Viewport {
   if (!vp || !dimension(vp.clientWidth) || !dimension(vp.clientHeight) || !offset(vp.pageX) || !offset(vp.pageY)) {
     throw new Error('Unsupported browser geometry');
   }
-  return { width: vp.clientWidth, height: vp.clientHeight, scrollX: vp.pageX, scrollY: vp.pageY, scale: typeof vp.scale === 'number' ? vp.scale : NaN };
+  return {
+    width: vp.clientWidth, height: vp.clientHeight, scrollX: vp.pageX, scrollY: vp.pageY,
+    scale: typeof vp.scale === 'number' ? vp.scale : NaN,
+    // Browser zoom (Ctrl+): CSS pixels per device-independent pixel. Absent on older Chrome.
+    zoom: vp.zoom === undefined ? 1 : typeof vp.zoom === 'number' && vp.zoom > 0 ? vp.zoom : NaN,
+  };
 }
 
 export function chromeDriver(surfaceId: string, workspaceId: string, deps: PhoneChromeDeps): PhoneBrowserDriver {
@@ -109,7 +115,33 @@ export function chromeDriver(surfaceId: string, workspaceId: string, deps: Phone
     try {
       await operation();
     } finally {
-      await write('Emulation.setFocusEmulationEnabled', { enabled: false }).catch(() => undefined);
+      // Undone even past the budget: the session outlives this request.
+      await session?.then((open) => open.send('Emulation.setFocusEmulationEnabled', { enabled: false })).catch(() => undefined);
+    }
+  };
+  /**
+   * One capture or input inside PHONE_CHROME_CAPTURE_MS. Past it the phone
+   * hears `browser-tab-hidden` (Chrome is not painting the tab, or not acking
+   * its input) and whatever the run still had queued stops at its next call
+   * instead of piling up on Chrome's socket, or landing after the phone was
+   * told it failed.
+   */
+  const bounded = async <T>(run: () => Promise<T>): Promise<T> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const hidden = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        expired = true;
+        reject(new PhoneBrowserError('browser-tab-hidden'));
+      }, deps.captureMs ?? PHONE_CHROME_CAPTURE_MS);
+      (timer as { unref?: () => void }).unref?.();
+    });
+    const running = run();
+    // The losing side of the race must never surface as an unhandled rejection.
+    running.catch(() => undefined);
+    try {
+      return await Promise.race([running, hidden]);
+    } finally {
+      clearTimeout(timer);
     }
   };
   const viewport = async () => viewportOf(await call('Page.getLayoutMetrics'));
@@ -122,19 +154,22 @@ export function chromeDriver(surfaceId: string, workspaceId: string, deps: Phone
     },
     geometry: async () => {
       const vp = await viewport();
-      // Pinch zoom moves the visual viewport off the layout one: readable, not tappable.
-      if (vp.scale !== 1) throw new Error('Unsupported browser geometry');
+      // Pinch zoom moves the visual viewport off the layout one, and browser
+      // zoom puts the image and the input in different pixels: readable, not tappable.
+      if (vp.scale !== 1 || vp.zoom !== 1) throw new Error('Unsupported browser geometry');
       return { width: vp.width, height: vp.height, scrollX: vp.scrollX, scrollY: vp.scrollY };
     },
     shoot: async (quality, scale) => {
       let shot: unknown;
       try {
         const vp = await viewport();
+        // The clip is in device-independent pixels; the metrics are CSS pixels.
+        const z = Number.isFinite(vp.zoom) ? vp.zoom : 1;
         shot = await call('Page.captureScreenshot', {
           format: 'jpeg', quality,
           // Document coordinates of what is on screen, so the image is the
           // viewport the geometry describes.
-          clip: { x: vp.scrollX, y: vp.scrollY, width: vp.width, height: vp.height, scale },
+          clip: { x: vp.scrollX * z, y: vp.scrollY * z, width: vp.width * z, height: vp.height * z, scale },
         });
       } catch (err) {
         if (err instanceof PhoneBrowserError) throw err;
@@ -146,32 +181,15 @@ export function chromeDriver(surfaceId: string, workspaceId: string, deps: Phone
       if (typeof data !== 'string' || !data) throw new Error('Browser capture unavailable');
       return { data, mimeType: 'image/jpeg' as const };
     },
-    capture: async run => {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const hidden = new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => {
-          expired = true;
-          reject(new PhoneBrowserError('browser-tab-hidden'));
-        }, deps.captureMs ?? PHONE_CHROME_CAPTURE_MS);
-        (timer as { unref?: () => void }).unref?.();
-      });
-      const running = run();
-      // The losing side of the race must never surface as an unhandled rejection.
-      running.catch(() => undefined);
-      try {
-        return await Promise.race([running, hidden]);
-      } finally {
-        clearTimeout(timer);
-      }
-    },
+    capture: run => bounded(run),
     input: async operation => {
       if (active.has(surfaceId)) throw new Error('Browser input unavailable');
       active.add(surfaceId);
-      try {
-        await operation();
-      } finally {
-        active.delete(surfaceId);
-      }
+      const running = operation();
+      // Held until the operation itself settles, not until its budget: a send
+      // still in flight must not interleave with the next input.
+      void running.then(() => active.delete(surfaceId), () => active.delete(surfaceId));
+      await bounded(() => running);
     },
     tap: async ({ x, y }) => {
       await write('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none', buttons: 0 });
@@ -245,7 +263,10 @@ export async function phoneChromeTabs(
   registry: PhoneChromeRegistry,
 ): Promise<Array<{ tab: ChromeTargetInfo; client: ChromeBackendClient }>> {
   const client = clientFor(workspaceId, registry);
-  if (!client) return [];
+  return client ? strictTabs(client, workspaceId) : [];
+}
+
+async function strictTabs(client: ChromeBackendClient, workspaceId: string): Promise<Array<{ tab: ChromeTargetInfo; client: ChromeBackendClient }>> {
   let tabs: ChromeTargetInfo[];
   try {
     tabs = await client.listTargets(workspaceId);
@@ -253,6 +274,23 @@ export async function phoneChromeTabs(
     return [];
   }
   return tabs.filter((tab) => tab.workspaceId === workspaceId).map((tab) => ({ tab, client }));
+}
+
+/**
+ * The help table's read of the same tabs: the workspace's own dedicated
+ * profile even when a pane is bound to it too (the row still shows where the
+ * tab is), each marked with whether the preview may drive it.
+ */
+export async function phoneChromeHelpTabs(
+  workspaceId: string,
+  registry: PhoneChromeRegistry,
+): Promise<Array<ChromeTargetInfo & { previewable: boolean }>> {
+  const profile = registry.profileFor(workspaceId);
+  if (isLive(profile)) return [];
+  const client = registry.peekLauncher(profile);
+  if (!client || client.writeScope) return [];
+  const previewable = clientFor(workspaceId, registry) === client;
+  return (await strictTabs(client, workspaceId)).map(({ tab }) => ({ ...tab, previewable }));
 }
 
 /** main's PhoneChromeDeps over the Chrome registry. */
@@ -265,20 +303,24 @@ export function createPhoneChromeDeps(opts: {
   return {
     tabs: async (workspaceId) => (await phoneChromeTabs(workspaceId, opts.registry))
       .map(({ tab }) => ({ surfaceId: tab.surfaceId, url: tab.url, title: tab.title })),
+    // The preview found the tab in this workspace's strict list just before;
+    // the session is attached on that same client, with no second list read.
     session: async (surfaceId, workspaceId) => {
-      const found = await holder(surfaceId, workspaceId);
-      if (!found?.client.pageSession) throw new ChromePageSessionError('gone', 'not a tab of this workspace');
-      return found.client.pageSession(surfaceId);
+      const client = clientFor(workspaceId, opts.registry);
+      if (!client?.pageSession || !client.hasSurface(surfaceId)) throw new ChromePageSessionError('gone', 'not a tab of this workspace');
+      return client.pageSession(surfaceId);
     },
     focus: async (surfaceId, workspaceId) => {
       const found = await holder(surfaceId, workspaceId);
       if (!found?.client.selectSurface || !(await found.client.selectSurface(surfaceId))) return false;
       // The phone's tap is a person's explicit "show me": un-minimize too.
-      const restore = (found.client as { restoreWindow?: (id: string) => Promise<void> }).restoreWindow;
-      if (restore) await restore.call(found.client, surfaceId);
+      await found.client.restoreWindow?.(surfaceId);
       return true;
     },
-    canOpen: (workspaceId) => !isLive(opts.registry.profileFor(workspaceId)),
+    canOpen: (workspaceId) => {
+      const profile = opts.registry.profileFor(workspaceId);
+      return !isLive(profile) && !opts.registry.isPaneBound(profile);
+    },
     validateNavigation: opts.validateNavigation,
   };
 }

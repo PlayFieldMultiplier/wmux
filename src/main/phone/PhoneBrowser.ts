@@ -284,6 +284,6 @@ async function driverFor(surfaceId: string, workspaceId: string, targets: CdpTar
   }
   // A dedicated Chrome surface (`chrome-<uuid>`) that is not this workspace's
   // now: closed, replaced, or never ours — the same answer for each.
-  if (deps.chrome && surfaceId.startsWith('chrome-')) throw new PhoneBrowserError('browser-tab-gone');
+  if (deps.chrome && surfaceId.startsWith('chrome-')) throw new PhoneBrowserError(deps.backend() === 'chrome' ? 'browser-tab-gone' : 'browser-backend-unavailable');
   throw new Error('Browser does not belong to workspace');
 }

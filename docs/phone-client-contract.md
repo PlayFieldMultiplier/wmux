@@ -3637,9 +3637,10 @@ exactly as above.
   from Chrome's layout metrics, `pageURL`). `viewport` is `501
   browser-action-unsupported` on a Chrome tab.
 - **Background tabs**: the desktop never brings a Chrome tab forward on its
-  own. Chrome may stop painting a background tab; a capture that does not
-  finish within about 5 s is `409 browser-tab-hidden`. Offer `focus`. Typing
-  uses focus emulation rather than raising the tab.
+  own. Chrome may stop painting a background tab; a capture, or an input,
+  that does not finish within about 5 s is `409 browser-tab-hidden`. Offer
+  `focus`. Typing uses focus emulation rather than raising the tab. At browser
+  zoom other than 100 % a capture is readable but carries no `geometry`.
 - **`open`** takes an optional `backend: "builtin" | "chrome"` (default
   `builtin`, the rule above). `chrome` needs the desktop's browser setting to
   be Chrome and the workspace's profile to be a wmux profile, not Live
@@ -3656,7 +3657,7 @@ exactly as above.
 | Response | Meaning |
 | --- | --- |
 | `404 {error:"browser-tab-gone"}` | The Chrome tab closed, was replaced by Chrome, or is not this workspace's. Refresh the list. |
-| `409 {error:"browser-tab-hidden"}` | The Chrome tab did not answer in time, usually because it is in the background. |
+| `409 {error:"browser-tab-hidden"}` | The Chrome tab did not answer in time, usually because it is in the background. An input that timed out may still have partly applied: refresh before retrying. |
 | `503 {error:"browser-backend-unavailable"}` | No browser to drive: the setting is not Chrome, the workspace uses Live Chrome, or Chrome's connection is not up. |
 | `501 {error:"browser-action-unsupported"}` | The action does not exist for this tab (`viewport` on Chrome, `focus` on a desktop that cannot). |
 | `409 {error:"browser-help-origin-changed"}` | Help-card typing: the tab is no longer at the request's origin, or the request has none. Nothing was typed. |

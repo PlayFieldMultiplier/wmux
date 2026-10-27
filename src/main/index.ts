@@ -9,7 +9,7 @@ import { randomUUID as phoneBrowserRequestId } from 'node:crypto';
 import { webContents as phoneWebContents } from 'electron';
 import { withPhoneBrowserInputFocus, dispatchPhoneBrowserScroll, phoneBrowserNativeBounds } from './phone/PhoneBrowserInput';
 import { handlePhoneBrowser } from './phone/PhoneBrowser';
-import { createPhoneChromeDeps, phoneChromeTabs } from './phone/PhoneBrowserChrome';
+import { createPhoneChromeDeps, phoneChromeHelpTabs } from './phone/PhoneBrowserChrome';
 import { validateResolvedNavigationUrl } from './security/navigationPolicy';
 import { navigationPolicyOptions } from '../shared/types';
 import { handlePhoneWorkspaces } from './phone/PhoneWorkspaces';
@@ -1283,7 +1283,7 @@ const browserHelpFeed = createBrowserHelpFeed({
       chromeRegistry.profileFor(workspaceId) === LIVE_CHROME_PROFILE ||
       (!tabFound && chromeRegistry.hasPaneBindings(workspaceId) && chromeRegistry.peekLauncher(LIVE_CHROME_PROFILE) !== undefined),
     // Live Chrome is never listed: that is every tab the user has open.
-    chromeTabs: async (workspaceId) => (await phoneChromeTabs(workspaceId, chromeRegistry)).map(({ tab }) => tab),
+    chromeTabs: (workspaceId) => phoneChromeHelpTabs(workspaceId, chromeRegistry),
   },
   push: async (rows) => {
     if (!daemonClient?.isConnected) throw new Error('Daemon not connected');

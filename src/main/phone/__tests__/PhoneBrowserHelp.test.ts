@@ -50,6 +50,9 @@ describe('browserHelpRow', () => {
     const unclaimed = await browserHelpRow(pending({ surfaceId: 'chrome-b' }), deps);
     expect(unclaimed).not.toHaveProperty('origin');
     expect(unclaimed).toMatchObject({ previewable: false });
+    // A tab the preview may not drive (a pane's exclusive profile): its origin, not previewable.
+    chromeTabs.mockResolvedValueOnce([{ surfaceId: 'chrome-a', targetId: 't-a', workspaceId: 'ws-1', url: 'https://shop.example.com/cart', previewable: false }] as never);
+    expect(await browserHelpRow(pending({ surfaceId: 'chrome-a' }), deps)).toMatchObject({ backend: 'chrome', previewable: false, origin: 'https://shop.example.com' });
     chromeTabs.mockRejectedValueOnce(new Error('gone'));
     expect(await browserHelpRow(pending({ surfaceId: 'chrome-a' }), deps)).not.toHaveProperty('origin');
   });

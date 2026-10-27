@@ -53,7 +53,8 @@ export async function handlePhoneBrowserHelpCommand(
   return { error: result.reason === 'closed' ? 'browser-help-closed' : 'browser-help-not-found' };
 }
 
-type ChromeTab = { surfaceId: string; targetId: string; workspaceId?: string; url: string };
+/** `previewable: false`: the preview may not drive it (a pane's exclusive profile). */
+type ChromeTab = { surfaceId: string; targetId: string; workspaceId?: string; url: string; previewable?: boolean };
 
 /** What main can read about one request's tab, without starting a browser. */
 export interface BrowserHelpTabDeps {
@@ -129,7 +130,7 @@ export async function browserHelpRow(
   const origin = tab ? browserHelpOrigin(tab.url) : undefined;
   // The phone's preview drives this tab when it is the workspace's own
   // dedicated-profile tab under the id the request names (PhoneBrowserChrome).
-  const previewable = tab !== undefined && tab.surfaceId === surfaceId;
+  const previewable = tab !== undefined && tab.surfaceId === surfaceId && tab.previewable !== false;
   return { ...base, backend: 'chrome', previewable, ...(origin ? { origin } : {}) };
 }
 

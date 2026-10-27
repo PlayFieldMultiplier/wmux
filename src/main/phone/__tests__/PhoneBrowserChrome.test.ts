@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { handlePhoneBrowser } from '../PhoneBrowser';
-import { createPhoneChromeDeps, phoneChromeTabs, type PhoneChromeDeps, type PhoneChromeRegistry } from '../PhoneBrowserChrome';
+import { createPhoneChromeDeps, phoneChromeHelpTabs, phoneChromeTabs, type PhoneChromeDeps, type PhoneChromeRegistry } from '../PhoneBrowserChrome';
 import { ChromePageSessionError, type ChromeBackendClient, type ChromeTargetInfo } from '../../browser-session/ChromeLauncher';
 import type { RpcResponse } from '../../../shared/rpc';
 
@@ -104,6 +104,41 @@ describe('phone preview on dedicated-profile Chrome', () => {
     const { deps, answer } = fakeChrome();
     answer.mockImplementation(async (method: string) => method === 'Page.getLayoutMetrics' ? { cssVisualViewport: { clientWidth: 0, clientHeight: 0, pageX: 0, pageY: 0, scale: 1 } } : { data: 'aGVsbG8=' });
     expect(await handlePhoneBrowser('browser.capture', scope, fixture(deps))).toEqual({ error: 'browser-tab-hidden' });
+  });
+
+  it('an input Chrome does not ack in its budget is a hidden tab, and sends nothing after', async () => {
+    const { deps, answer, sent } = fakeChrome({ captureMs: 20 });
+    let ack: (value: unknown) => void = () => undefined;
+    answer.mockImplementation(async (method: string) => {
+      if (method === 'Page.getLayoutMetrics') return METRICS;
+      if (method === 'Input.dispatchMouseEvent') return new Promise((resolve) => { ack = resolve; });
+      return {};
+    });
+    const tap = { ...scope, expectedURL: 'https://shop.example.com/cart', geometry, x: 0.5, y: 0.5 };
+    expect(await handlePhoneBrowser('browser.tap', tap, fixture(deps))).toEqual({ error: 'browser-tab-hidden' });
+    // The tab stays locked while that send is still out, so nothing interleaves with it.
+    await expect(handlePhoneBrowser('browser.tap', tap, fixture(deps))).rejects.toThrow('input unavailable');
+    // The late ack lands: the rest of the abandoned tap is never sent, and the tab unlocks.
+    ack({});
+    for (let i = 0; i < 5; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(sent.filter((c) => c.method === 'Input.dispatchMouseEvent')).toHaveLength(1);
+  });
+
+  it('browser zoom keeps the capture readable but not tappable, and clips in device pixels', async () => {
+    const { deps, sent, answer } = fakeChrome();
+    answer.mockImplementation(async (method: string) => method === 'Page.getLayoutMetrics'
+      ? { cssVisualViewport: { ...METRICS.cssVisualViewport, zoom: 1.5 } } : { data: 'aGVsbG8=' });
+    const capture = await handlePhoneBrowser('browser.capture', scope, fixture(deps)) as Record<string, unknown>;
+    expect(capture.data).toBe('aGVsbG8=');
+    expect(capture.geometry).toBeUndefined();
+    expect(sent.find((c) => c.method === 'Page.captureScreenshot')?.params?.clip).toEqual({ x: 0, y: 60, width: 1500, height: 1050, scale: 0.75 });
+  });
+
+  it('a Chrome surface while the setting is not Chrome: the backend is unavailable', async () => {
+    const { deps } = fakeChrome();
+    const builtin = { ...fixture(deps), backend: () => 'builtin' };
+    expect(await handlePhoneBrowser('browser.capture', scope, builtin)).toEqual({ error: 'browser-backend-unavailable' });
+    expect(deps.tabs).not.toHaveBeenCalled();
   });
 
   it('one page session per request', async () => {
@@ -262,6 +297,14 @@ describe('which Chrome tabs a workspace has (phoneChromeTabs)', () => {
     expect(bank.listTargets).not.toHaveBeenCalled();
   });
 
+  it('help rows still read a pane-bound workspace profile, marked not previewable', async () => {
+    const work = client([tab('chrome-mine', 'ws-1'), tab('chrome-nobody')]);
+    const registry = (bound: boolean): PhoneChromeRegistry => ({ profileFor: () => 'work', isPaneBound: () => bound, peekLauncher: () => work });
+    expect(await phoneChromeHelpTabs('ws-1', registry(false))).toMatchObject([{ surfaceId: 'chrome-mine', previewable: true }]);
+    expect(await phoneChromeHelpTabs('ws-1', registry(true))).toMatchObject([{ surfaceId: 'chrome-mine', previewable: false }]);
+    expect(await phoneChromeHelpTabs('ws-1', { profileFor: () => 'live', isPaneBound: () => false, peekLauncher: () => work })).toEqual([]);
+  });
+
   it('focus and sessions reach only a listed tab, never a Live one', async () => {
     const work = client([tab('chrome-mine', 'ws-1')]);
     const live = client([tab('user-tab', 'ws-1')], { writeScope: {} as ChromeBackendClient['writeScope'] });
@@ -278,6 +321,11 @@ describe('which Chrome tabs a workspace has (phoneChromeTabs)', () => {
     expect(live.pageSession).not.toHaveBeenCalled();
     expect(deps.canOpen('ws-live')).toBe(false);
     expect(deps.canOpen('ws-1')).toBe(true);
+    const paneBound = createPhoneChromeDeps({
+      registry: { profileFor: () => 'work', isPaneBound: () => true, peekLauncher: () => work },
+      validateNavigation: async () => undefined,
+    });
+    expect(paneBound.canOpen('ws-1')).toBe(false);
     expect(await deps.tabs('ws-live')).toEqual([]);
   });
 });
