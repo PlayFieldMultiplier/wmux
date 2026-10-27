@@ -41,13 +41,25 @@ export function asRecoveryAgentSlug(value: string | undefined): AgentSlug | unde
 }
 
 /**
+ * `cwdMissing` is the daemon's fact at listing time, not part of the binding.
+ * A descriptor is saved, so it never keeps the mark: a folder added back must
+ * not still read as gone.
+ */
+function withoutCwdMissing(binding: ResumeBinding | undefined): ResumeBinding | undefined {
+  if (binding?.cwdMissing === undefined) return binding;
+  const copy = { ...binding };
+  delete copy.cwdMissing;
+  return copy;
+}
+
+/**
  * Build the renderer hand-off from a daemon tombstone. A descriptor is
  * returned even when both cwd fields are absent: its presence tells the create
  * path this is a dead-session replacement, for which home is the final fallback
  * instead of the workspace profile used by ordinary blank surfaces.
  */
 export function createDeadPaneRecovery(session: DeadPaneSessionSnapshot): DeadPaneRecovery {
-  const resumeBinding = session.resumeBinding;
+  const resumeBinding = withoutCwdMissing(session.resumeBinding);
   const resumeAgent = asRecoveryAgentSlug(session.resumeAgent)
     ?? asRecoveryAgentSlug(resumeBinding?.agent);
   return {

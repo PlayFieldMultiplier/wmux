@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import ResumeInfoChip, { buildPaneResumeCommand, lostFolderResumeCommand } from '../ResumeInfoChip';
 import type { ResumeBinding } from '../../../../shared/agentResume';
+import { createDeadPaneRecovery } from '../../../../shared/ptyRecovery';
 
 // buildPaneResumeCommand — the per-pane resume affordance's command builder.
 // Mirrors the reboot-recovery pill's exact-vs-fallback gates (deckRecovery /
@@ -327,5 +328,24 @@ describe('lostFolderResumeCommand', () => {
     expect(lostFolderResumeCommand(claude({ cwd: 'relative/dir' }), 'posix')).toBeNull();
     expect(lostFolderResumeCommand(claude({ cwd: '/repo/wt', sessionId: 'not-a-uuid' }), 'posix')).toBeNull();
     expect(lostFolderResumeCommand(claude({ cwd: '/repo/wt' }), null)).toBeNull(); // e.g. cmd.exe
+  });
+
+  it('doubles plain and typographic single quotes in a pwsh folder', () => {
+    expect(lostFolderResumeCommand(claude({ cwd: "C:\\it's\\wt\u2019s" }), 'pwsh'))
+      .toBe(`if (Set-Location -LiteralPath 'C:\\it''s\\wt\u2019\u2019s' -PassThru -ErrorAction SilentlyContinue) { claude --resume ${id} }`);
+  });
+});
+
+describe('cwdMissing and the exact resume', () => {
+  it('a pane cwd that still names the gone folder never takes the exact path', () => {
+    const out = buildPaneResumeCommand(claude({ cwd: '/repo/wt-gone', cwdMissing: true }), ['/repo/wt-gone'], true);
+    expect(out?.exact).toBe(false);
+    expect(out?.command).not.toContain('a1b2c3d4');
+  });
+
+  it('a dead-pane recovery binding resumes exactly once the folder is back', () => {
+    const recovered = createDeadPaneRecovery({ id: 's1', resumeBinding: claude({ cwd: '/repo/wt', cwdMissing: true }) });
+    const out = buildPaneResumeCommand(recovered.resumeBinding as ResumeBinding, ['/repo/wt'], false);
+    expect(out).toMatchObject({ command: `claude --resume a1b2c3d4-0000-0000-0000-9f8e7d6c5b4a`, exact: true });
   });
 });

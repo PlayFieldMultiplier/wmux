@@ -352,6 +352,23 @@ export function recoveryAgentLive(args: {
 export const AUTO_RESUME_CONTINUE_PROMPT = 'Continue the task you were working on when this session was interrupted.';
 
 /**
+ * The recovery pill's choice. `exactOk`: the binding is this launcher's and its
+ * folder matches the pane, so the pill offers the exact resume. `lostFolder`:
+ * the daemon reports that folder gone, which wins over a matching pane cwd (a
+ * stale surface or hook cwd can still name it), so the pill offers only the
+ * notice and Copy, never the exact resume or the picker.
+ */
+export function recoveryPillTarget(
+  binding: Pick<ResumeBinding, 'agent' | 'cwdMissing'> | undefined,
+  launcher: string,
+  cwdMatches: boolean,
+): { exactOk: boolean; lostFolder: boolean } {
+  const agentMatches = binding?.agent === launcher;
+  const lostFolder = agentMatches && binding?.cwdMissing === true;
+  return { exactOk: cwdMatches && agentMatches && !lostFolder, lostFolder };
+}
+
+/**
  * The line to run when a recovered Claude Code or Codex pane is resumed on app
  * start, or null
  * when it should be left alone. Same assembly as the Resume pill, with the
@@ -368,7 +385,7 @@ export function planAutoResume(args: {
   /** The user's opt-in setting (`claudeResumeOnStart`); off means the pill only. */
   enabled: boolean;
   agent: string | undefined;
-  binding: { agent?: string; cwd: string; sessionId?: string; permissionMode?: Parameters<typeof permissionFlagFor>[0] } | undefined;
+  binding: { agent?: string; cwd: string; sessionId?: string; permissionMode?: Parameters<typeof permissionFlagFor>[0]; cwdMissing?: boolean } | undefined;
   paneCwds: ReadonlyArray<string | undefined>;
   roleBinding: RoleBinding | undefined;
   /** OSC 133: the shell is running a command, not sitting at its prompt. */
@@ -398,7 +415,9 @@ export function planAutoResume(args: {
   const sessionId = binding?.sessionId && CHATV2_PROVIDER_SESSION_ID.test(binding.sessionId)
     ? binding.sessionId
     : undefined;
-  const exact = !!binding && !!sessionId && binding.agent === agent &&
+  // A folder the daemon reports gone is never resumed, even when a pane cwd
+  // still names it: `--resume` would run in a folder that is not there.
+  const exact = !!binding && !!sessionId && binding.agent === agent && binding.cwdMissing !== true &&
     args.paneCwds.some((c) => !!c && normalizeResumeCwd(binding.cwd) === normalizeResumeCwd(c));
   if (!binding || !sessionId || !exact) return null; // #1946: the pill offers the picker
   const plan = planRecoveryPillType({
@@ -1245,13 +1264,12 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
         // only fills lastDetectedAgent when empty — so a stale hint for one agent
         // could pair with a binding for another, typing `codex --resume <claude-id>`
         // (codex P2). Gate the exact-session path on an agent match too.
-        const agentMatches = resumeBinding?.agent === launcher;
-        const exactOk = cwdMatches && agentMatches;
+        // The conversation's folder is gone (a removed worktree, lostFolder):
+        // the picker here cannot list it, so the row names it and offers its
+        // exact line to copy. Nothing is typed (it runs only once the folder
+        // is back).
+        const { exactOk, lostFolder } = recoveryPillTarget(resumeBinding, launcher, cwdMatches);
         const sessionId = exactOk ? resumeBinding?.sessionId : undefined;
-        // The conversation's folder is gone (a removed worktree): the picker
-        // here cannot list it, so the row names it and offers its exact line
-        // to copy. Nothing is typed (it runs only once the folder is back).
-        const lostFolder = !exactOk && agentMatches && resumeBinding?.cwdMissing === true;
         const lostCommand = lostFolder && resumeBinding
           ? lostFolderResumeCommand(resumeBinding, lostFolderShell(
             window.electronAPI.platform,

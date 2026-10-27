@@ -1,6 +1,5 @@
 import { agentDisplayToSlug, type AgentSlug } from '../shared/agentIdentity';
 import type { ResumeBinding } from '../shared/agentResume';
-import { isUncOrDevicePath } from '../shared/cwdShape';
 import { isWslShell } from '../shared/wslTarget';
 import { screenShowsActiveDialog, screenShowsAgentDialog } from './transcript/chatScreenGate';
 import { transcriptTurnState } from './transcript/chatAgentStatus';
@@ -40,7 +39,8 @@ export function liveRecoveryHint<S, B>(
  * the conversation and its folder instead of opening a picker that cannot list
  * it. Read on a copy: the stored binding never carries the mark. Exec and
  * supervised panes resume on their own and are not marked; a WSL pane's folder
- * is in the distro and a network or device path is not probed, so neither is.
+ * is in the distro and a network, device or WSL share path is not probed, so
+ * neither is.
  */
 export function markCwdMissing(
   binding: ResumeBinding,
@@ -49,7 +49,9 @@ export function markCwdMissing(
   folderExists: (dir: string) => boolean,
 ): ResumeBinding {
   if (pane.exec || pane.supervision || pane.wslTarget || isWslShell(pane.cmd)) return binding;
-  if (!binding.cwd || isUncOrDevicePath(binding.cwd) || folderExists(binding.cwd)) return binding;
+  // A network, device or WSL share path (`\\server`, `\\?\`, `\\wsl.localhost`)
+  // is not probed: a stat there can stall every listing on a host or a distro.
+  if (!binding.cwd || /^[\\/]{2}/.test(binding.cwd) || folderExists(binding.cwd)) return binding;
   return transcriptLives(binding) ? { ...binding, cwdMissing: true } : binding;
 }
 

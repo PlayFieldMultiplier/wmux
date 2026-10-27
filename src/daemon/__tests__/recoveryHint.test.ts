@@ -67,4 +67,19 @@ describe('markCwdMissing', () => {
     expect(markCwdMissing(binding, {}, lives, () => true)).toBe(binding);
     expect(markCwdMissing(binding, {}, () => false, gone)).toBe(binding);
   });
+
+  it('never probes a network, device or WSL share path', () => {
+    let probed = 0;
+    const probe = () => { probed++; return false; };
+    for (const cwd of ['\\\\wsl.localhost\\Ubuntu\\home\\me', '\\\\wsl$\\Ubuntu\\x', '\\\\server\\share', '//server/share']) {
+      expect(markCwdMissing({ ...binding, cwd }, {}, lives, probe)).not.toHaveProperty('cwdMissing');
+    }
+    expect(probed).toBe(0);
+  });
+
+  it('is what daemon.listSessions hands out for a listed binding', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'index.ts'), 'utf-8');
+    const at = src.indexOf("pipeServer.onRpc('daemon.listSessions'");
+    expect(src.slice(at, at + 12000)).toMatch(/resumeBinding: markCwdMissing\(surfacedBinding, s, bindingTranscriptLives, fs\.existsSync\)/);
+  });
 });

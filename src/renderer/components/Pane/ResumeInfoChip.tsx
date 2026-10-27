@@ -75,7 +75,9 @@ export function buildPaneResumeCommand(
   // #1342 — a REMOTE pane's cwds live on another machine, so the desktop cannot
   // run this comparison at all; the host answers the question instead and the
   // caller passes its verdict through. Local callers leave it undefined.
-  const exact = exactOverride ?? paneCwds.some((c) => !!c && normCwd(c) === target);
+  // A folder the daemon reports gone is never resumed, even when a pane cwd
+  // still names it (a stale surface or hook cwd).
+  const exact = exactOverride ?? (binding.cwdMissing !== true && paneCwds.some((c) => !!c && normCwd(c) === target));
   // #1916: a permission flag only on an EXACT resume. Toggle on → bypass;
   // toggle off → the captured mode, never a captured bypass. The session
   // picker carries none.

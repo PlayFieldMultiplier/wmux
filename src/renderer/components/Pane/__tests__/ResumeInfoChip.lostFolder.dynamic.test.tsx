@@ -36,9 +36,9 @@ afterEach(() => {
   container.remove();
 });
 
-function openChip(binding: ResumeBinding): HTMLButtonElement[] {
+function openChip(binding: ResumeBinding, paneCwds: string[] = ['/Users/me']): HTMLButtonElement[] {
   act(() => {
-    root.render(React.createElement(ResumeInfoChip, { ptyId: 'pty-1', binding, paneCwds: ['/Users/me'] }));
+    root.render(React.createElement(ResumeInfoChip, { ptyId: 'pty-1', binding, paneCwds }));
   });
   act(() => { (container.querySelector('button[aria-expanded]') as HTMLButtonElement).click(); });
   return [...container.querySelectorAll('button')];
@@ -51,6 +51,16 @@ describe('ResumeInfoChip — lost folder', () => {
     expect(buttons.some((b) => b.textContent?.includes('Pick a Claude session'))).toBe(false);
     const copy = buttons.find((b) => b.textContent?.includes('Copy resume command'));
     expect(copy).toBeDefined();
+    await act(async () => { copy?.click(); await Promise.resolve(); });
+    expect(writeText).toHaveBeenCalledWith(`cd -- '/repo/wt-gone' && claude --resume ${ID}`);
+    expect(writeLaunch).not.toHaveBeenCalled();
+  });
+
+  it('a pane cwd that still names the gone folder gets the notice and Copy, not Resume', async () => {
+    const buttons = openChip(lost('/repo/wt-gone'), ['/repo/wt-gone']);
+    expect(container.textContent).toContain('which no longer exists');
+    expect(buttons.some((b) => /Resume Claude/.test(b.textContent ?? '') && !b.hasAttribute('aria-expanded'))).toBe(false);
+    const copy = buttons.find((b) => b.textContent?.includes('Copy resume command'));
     await act(async () => { copy?.click(); await Promise.resolve(); });
     expect(writeText).toHaveBeenCalledWith(`cd -- '/repo/wt-gone' && claude --resume ${ID}`);
     expect(writeLaunch).not.toHaveBeenCalled();
