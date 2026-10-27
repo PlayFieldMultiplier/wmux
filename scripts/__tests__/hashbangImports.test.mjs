@@ -15,7 +15,7 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { RELATIVE_IMPORT, ROOT, isTypeOnlyImport, listTestFiles, resolveRelative, stripStringsAndComments } from '../lib/test-lanes.mjs';
+import { RELATIVE_IMPORT, ROOT, commentSpans, isTypeOnlyImport, listTestFiles, resolveRelative } from '../lib/test-lanes.mjs';
 
 // A query that hands the importer the file's text or URL: the file is not run.
 const NOT_RUN_QUERY = /\?(?:raw|url|inline)\b/;
@@ -25,34 +25,21 @@ const SETUP_FILES = /\b(?:setupFiles|globalSetup)\s*:\s*\[([^\]]*)\]/g;
 const QUOTED_RELATIVE = /['"](\.{1,2}\/[^'"]+)['"]/g;
 
 /**
- * True when `index` sits in a comment: after `//` on its line, or on a line
- * that opens or continues a block comment (`/*`, ` * `). A glob string such as
- * 'src/**' is no comment, so the file is not scanned for `/*` pairs.
- */
-function inComment(source, index) {
-  const lineStart = source.lastIndexOf('\n', index - 1) + 1;
-  // Strings and comments that open and close on this line go in one pass, so
-  // a quote in a comment and a `//` in a URL both stay where they belong; a
-  // `//` comment is kept as a marker.
-  let before = stripStringsAndComments(source.slice(lineStart, index), '//');
-  const close = before.lastIndexOf('*/');
-  // ` */ import ...`: a comment opened above ends here, and code follows.
-  if (close !== -1) before = before.slice(close + 2);
-  else if (/^\s*(?:\/\*|\*)/.test(before)) return true;
-  return before.includes('//') || before.includes('/*');
-}
-
-/**
  * The relative specifiers a module loads as code, read as the lane rule reads
  * imports (RELATIVE_IMPORT): not a type-only import (TypeScript erases it), not
  * one in a comment, not a `?raw` or `?url` import. A query is dropped.
  */
 function loadedSpecifiers(source) {
+  // Comments come from one pass over the whole file, so a block comment's
+  // state carries across lines (an unprefixed line inside one is no code),
+  // and a quote in a comment or a `//` in a URL stays where it belongs.
+  const comments = commentSpans(source);
+  const inComment = (index) => comments.some(([start, end]) => start <= index && index < end);
   const specs = [];
   for (const m of source.matchAll(RELATIVE_IMPORT)) {
     // The opening quote: the match ends with the specifier and its closing quote.
     const quote = m.index + m[0].length - m[1].length - 2;
-    if (inComment(source, m.index) || isTypeOnlyImport(source, quote) || NOT_RUN_QUERY.test(m[1])) continue;
+    if (inComment(m.index) || isTypeOnlyImport(source, quote) || NOT_RUN_QUERY.test(m[1])) continue;
     specs.push(m[1].split('?')[0]);
   }
   return specs;
@@ -119,6 +106,8 @@ describe('what the walk counts as a load', () => {
   it('a re-export after a type import, and an import after a URL string, with or without semicolons', () => {
     expect(loadedSpecifiers("import type { T } from './t.mjs'\nexport { i } from './i.mjs'\n")).toEqual(['./i.mjs']);
     expect(loadedSpecifiers("import type { T } from './t.mjs';\nconst u = 'http://h'; import { type A, j } from './j.mjs';\n")).toEqual(['./j.mjs']);
+    // A dynamic import inside a template after an ASI-ended type import is a load.
+    expect(loadedSpecifiers("import type { T } from './t.mjs'\nconst s = `${import('./h.mjs')}`\n")).toEqual(['./h.mjs']);
   });
 
   it('not a type-only re-export', () => {
@@ -141,6 +130,8 @@ describe('what the walk counts as a load', () => {
     expect(loadedSpecifiers(source)).toEqual([]);
     // A quote inside a closed comment opens no string that hides the next import.
     expect(loadedSpecifiers("/* don't */ import a from './x.mjs'; import b from './y.mjs';\n")).toEqual(['./x.mjs', './y.mjs']);
+    // An unprefixed line inside a block comment that opened lines above is no code.
+    expect(loadedSpecifiers("/*\nimport './cli.mjs';\n*/\nimport './real.mjs';\n")).toEqual(['./real.mjs']);
   });
 
   it('not a ?raw or ?url import: the file comes back as text or a URL, never run', () => {

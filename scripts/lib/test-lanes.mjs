@@ -124,13 +124,14 @@ const toPosix = (p) => p.split(path.sep).join('/');
 // template that runs on to the next backtick lines below. A real template
 // literal still spans its lines.
 const STRING_OR_COMMENT = /'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`|\/\*[\s\S]*?\*\/|\/\/[^\n]*/g;
-/**
- * Source without its comments, and with each string literal emptied to `''`.
- * `lineComment` replaces each `//` comment instead, for a caller that needs
- * to see one was there.
- */
-export const stripStringsAndComments = (text, lineComment = '') =>
-  text.replace(STRING_OR_COMMENT, (m) => (m.startsWith('//') ? lineComment : m[0] === '/' ? '' : "''"));
+/** Source without its comments, and with each string literal emptied to `''`. */
+export const stripStringsAndComments = (text) => text.replace(STRING_OR_COMMENT, (m) => (m[0] === '/' ? '' : "''"));
+/** [start, end) of each comment in the source, read in that same one pass. */
+export function commentSpans(text) {
+  const spans = [];
+  for (const m of text.matchAll(STRING_OR_COMMENT)) if (m[0][0] === '/') spans.push([m.index, m.index + m[0].length]);
+  return spans;
+}
 const IN_TESTS_DIR = /(?:^|\/)__tests__\//;
 const TEST_SOURCE = /\.test\.[^/]+$/;
 // A relative specifier that can reach a helper: src/test-utils, a __tests__
