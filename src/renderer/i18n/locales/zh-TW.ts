@@ -723,6 +723,8 @@ export const zhTW = {
   'claudeIntegration.scheduledRetry': "暫時性錯誤後重試排程執行",
   'claudeIntegration.scheduledRetryDesc': "若排程執行的回合因網路或供應商伺服器錯誤而失敗，等待 5 分鐘後傳送一則繼續訊息。預設開啟；每個排程可個別關閉。",
   'claudeIntegration.scheduledRetryUnknown': "尚不清楚：正在等待 wmux 背景服務。",
+  'claudeIntegration.usageReserve': "保留使用量餘量",
+  'claudeIntegration.usageReserveDesc': "當 Claude 帳號的 5 小時用量達到 85% 或以上時，不再啟動會消耗該用量的無人值守工作，把最後 15% 留給你。排程執行會等待重設，仍在寬限期內就執行，否則記為錯過；機器人的扇出也會等待；你窗格中的代理發起的扇出會被拒絕，並告知重設時間。Codex 和其他代理不受限制，你輸入的內容也從不受影響。預設關閉。",
   'schedules.retryTransient': "暫時性錯誤後重試一次",
   'schedules.retryTransientHint': "遇到網路或供應商伺服器錯誤時，等待 5 分鐘後傳送一則繼續訊息。不會重新傳送提示詞。",
   'schedules.retryTransientGlobalHint': "僅在「設定 → Claude 整合」中開啟「暫時性錯誤後重試排程執行」時生效。",

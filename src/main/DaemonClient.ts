@@ -1161,6 +1161,17 @@ export class DaemonClient extends EventEmitter {
     }
   }
 
+  /** Hand the usage reserve's holds to the daemon (its scheduled runs). False when not delivered. */
+  async setUsageReserveHolds(holds: ReadonlyArray<{ account: string; untilMs: number }>): Promise<boolean> {
+    if (!this.isConnected) return false;
+    try {
+      const response = await this.rpc('daemon.usageReserve.set', { holds }) as { ok?: unknown };
+      return response.ok === true;
+    } catch {
+      return false; // an older daemon has no reserve
+    }
+  }
+
   /** Edit one pane's usage-limit hold (auto-resume, dismiss, resume now, reset fill). */
   async updateUsageLimit(id: string, patch: PaneUsageLimitPatch): Promise<boolean> {
     if (!this.isConnected) return false;

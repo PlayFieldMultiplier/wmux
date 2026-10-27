@@ -117,6 +117,8 @@ import {
   type FanoutPreset,
 } from '../../../shared/fanoutPreset';
 import { validateFanoutTaskGraph, type FanoutTaskGraph } from '../../../shared/fanoutTaskGraph';
+import { agentRow } from '../../../shared/agentIdentity';
+import { noteUsageReserveHeld, usageReserveHoldForWorkspace, usageReserveRefusalText, type UsageReserveHold } from '../../usage/usageReserve';
 import { botTemplate, type BotBinding, type BotProfile } from '../../../shared/bot';
 import { SHARED_SURFACE } from '../../../shared/botSurface';
 import { WAKE_LIMITS, botFanoutIdempotencyKey, type HeldFanoutArgs, type HeldWakeKind, type WakeItem } from '../../../shared/wake';
@@ -241,7 +243,7 @@ const FANOUT_PREVIEW_MIN_TASK_BYTES = 256;
 
 /** Why a fan-out never started. Reported on the poll so an unattended fleet
  *  learns WHY instead of watching a key go quiet. */
-export type FanOutDenyReason = 'declined' | 'timeout' | 'unavailable' | 'repo-moved' | 'audit-unavailable';
+export type FanOutDenyReason = 'declined' | 'timeout' | 'unavailable' | 'repo-moved' | 'audit-unavailable' | 'usage-reserve';
 
 const DENY_MESSAGE: Record<FanOutDenyReason, string> = {
   declined: 'the user denied the fan-out approval prompt',
@@ -250,6 +252,7 @@ const DENY_MESSAGE: Record<FanOutDenyReason, string> = {
   'repo-moved':
     "the calling terminal's repository changed between the request and the approval, so the approved repository is no longer the one that would be modified",
   'audit-unavailable': 'the fan-out audit log could not be written, and a fan-out that leaves no record does not run',
+  'usage-reserve': 'the usage reserve held its account when it was about to launch',
 };
 
 /**
@@ -332,7 +335,9 @@ export function buildFanOutPreview(
  *              a fan-out that already spawned tasks.
  */
 type GateState = { phase: 'awaiting' };
-type Tombstone = { phase: 'denied'; reason: FanOutDenyReason } | { phase: 'started' };
+type Tombstone =
+  | { phase: 'denied'; reason: FanOutDenyReason; /** usage-reserve: the hold's reset, and whether the bot's request is held. */ untilMs?: number; held?: boolean }
+  | { phase: 'started' };
 
 /** Typed wire error, shaped like the a2a.channel.* / task.mission.* envelope so
  *  MCP tools can branch on `error.code` instead of parsing a message. */
@@ -708,6 +713,11 @@ export interface FanOutRpcDeps {
   connectors?: () => ConnectorStore | null;
   /** The platform workers run on (default: this process's). */
   workerPlatform?: NodeJS.Platform;
+  /** The usage reserve's hold on the account a workspace's workers run on
+   *  (default: main/usage/usageReserve.ts). */
+  usageReserveHold?: (workspaceId: string) => UsageReserveHold | null;
+  /** A launch was held by the reserve: the owner is told once per hold. */
+  noteUsageReserveHeld?: (hold: UsageReserveHold) => void;
   /** The connections' OAuth service, for signed-in connections (default:
    *  main/connectors/workerGateway.ts workerGatewayOAuth). */
   gatewayOAuth?: () => GatewayOAuth | null;
@@ -776,6 +786,10 @@ export interface FanOutBotPort {
    *  report it, and hold `request` so the bot is woken with it when a slot
    *  frees (factory/heldFanouts.ts). Returns whether it was held. */
   workersFull(bot: BotBinding, full: WorkerSlotsFull, request?: HeldFanoutRequest): boolean;
+  /** The usage reserve holds the account its workers run on: hold `request`
+   *  so the bot is woken with it once the reserve lifts (heldFanouts.ts).
+   *  Returns whether it was held. */
+  heldByUsageReserve?(bot: BotBinding, request: HeldFanoutRequest): boolean;
   /** Whether this fan-out key was accepted before (durable across restarts). */
   fanoutKeySeen(key: string): boolean;
   recordFanoutKey(key: string): void;
@@ -878,12 +892,19 @@ export function botLaunchRefusal(
 
 /** Why a fan-out the owner's approval step stopped did not start, in plain
  *  words. Pure. */
+/** Whether a worker launching `agent` (undefined: the default launch, claude)
+ *  spends usage the reserve covers: the agent registry row says so. */
+function spendsUsageReserve(agent: string | undefined): boolean {
+  return agentRow(agent ?? FANOUT_WIRE_AGENT_CMD)?.usageReserve === true;
+}
+
 export function fanoutDenialText(reason: FanOutDenyReason): string {
   switch (reason) {
     case 'declined': return 'the owner declined it';
     case 'timeout': return 'nobody approved it in time';
     case 'repo-moved': return 'the repository moved while it waited for approval';
     case 'audit-unavailable': return 'wmux could not record the launch';
+    case 'usage-reserve': return 'the usage reserve held its account';
     default: return 'wmux could not ask for approval';
   }
 }
@@ -934,6 +955,15 @@ function defaultBotPort(): FanOutBotPort | null {
     },
     budgetExhausted: (bot, reason) => {
       emitBotHook({ type: 'bot.budget_exhausted', botId: bot.botId, workspaceId: bot.workspaceId, reason, at: Date.now() });
+    },
+    heldByUsageReserve: (bot, request) => {
+      try {
+        // Without its arguments it could not be started as asked: refused, not held.
+        return getHeldFanouts()?.hold({ botId: bot.botId, workspaceId: bot.workspaceId, ...request, requireArgs: true }) != null;
+      } catch (err) {
+        console.warn(`[factory] a fan-out of bot ${bot.botId} could not be held for the usage reserve: ${String(err)}`);
+        return false;
+      }
     },
     workersFull: (bot, full, request) => {
       let held = false;
@@ -1280,6 +1310,16 @@ export function registerFanOutRpc(
       return { ok: true as const, status: 'awaiting_approval' as const, idempotencyKey: callerKey };
     }
     const gate = terminal.get(key);
+    if (gate?.phase === 'denied' && gate.reason === 'usage-reserve' && gate.untilMs !== undefined) {
+      // Refused at its launch, after the approval: the same answer as before it.
+      return {
+        ok: false as const,
+        status: 'denied' as const,
+        idempotencyKey: callerKey,
+        reason: gate.reason,
+        error: { code: 'RESOURCE_EXHAUSTED', message: usageReserveRefusalText(gate.untilMs, Date.now(), gate.held === true) },
+      };
+    }
     if (gate?.phase === 'denied') {
       return {
         ok: false as const,
@@ -1657,6 +1697,21 @@ export function registerFanOutRpc(
     });
     if (gatewayRefusal) return deny('FAILED_PRECONDITION', gatewayRefusal);
 
+    // A bot's request as a hold keeps it, for a worker slot or the usage
+    // reserve. A workflow's durable intent owns its dispatch: a plain held
+    // retry cannot carry that internal binding or its verified predecessor
+    // SHA. A signed-in request keeps the asking wake's own mark (its
+    // connections taint its tasks, not the wake): a held one forced tainted
+    // would be refused on its retry. It keeps the asking wake's kind with it.
+    const heldRequest: HeldFanoutRequest | undefined = bot && !workflow ? {
+      args: heldFanoutArgs(params),
+      threadId: botNoticeThread,
+      tainted: gatewayConnectors.length > 0 ? gatewayWakeTainted : botWakeTainted,
+      guest: false,
+      ...(botWakeHandoff ? { handoffId: botWakeHandoff } : {}),
+      ...(gatewayConnectors.length > 0 && botWakeKind ? { wakeKind: botWakeKind } : {}),
+    } : undefined;
+
     // ── Global caps (live + rolling hour), reserved in this same tick ────
     // Over a cap is a refusal, never a queued prompt: with approval off by
     // default there is nobody to drain a queue, and with it on a loop would
@@ -1698,26 +1753,40 @@ export function registerFanOutRpc(
         return deny('RESOURCE_EXHAUSTED', `this bot runs at most ${most} worker${most === 1 ? '' : 's'} at once: start at most ${most} task${most === 1 ? '' : 's'} per fan-out`);
       }
       if (full) {
-        // A workflow's durable intent owns its dispatch. A plain held retry
-        // cannot carry that internal binding or its verified predecessor SHA.
-        // A signed-in request keeps the asking wake's own mark (its
-        // connections taint its tasks, not the wake): a held one forced
-        // tainted would be refused on its retry. It keeps the asking wake's
-        // kind with it.
-        const held = botPort.workersFull(bot, full, workflow ? undefined : {
-          args: heldFanoutArgs(params),
-          threadId: botNoticeThread,
-          tainted: gatewayConnectors.length > 0 ? gatewayWakeTainted : botWakeTainted,
-          guest: false,
-          ...(botWakeHandoff ? { handoffId: botWakeHandoff } : {}),
-          ...(gatewayConnectors.length > 0 && botWakeKind ? { wakeKind: botWakeKind } : {}),
-        });
+        const held = botPort.workersFull(bot, full, heldRequest);
         const note = full.scope === 'bot'
           ? workersHeldNote(open.bot - bookedBot, bookedBot, getAgentSlots()?.waiting().filter((w) => w.botId === bot.botId).length ?? 0)
           : '';
         return deny('RESOURCE_EXHAUSTED', workersFullText(full, held, note));
       }
     }
+
+    // ── Usage reserve ─────────────────────────────────────────────────────
+    // Workers run unattended, so none that spend usage wmux reads (Claude's:
+    // the default launch, or an agent whose row says so) start while the
+    // account they run on is in the 5h share its owner keeps
+    // (main/usage/usageReserve.ts). Checked after the bot's own limits, so a
+    // request those refuse is not held here. A bot's request is held and the
+    // bot woken with it once the reserve lifts; any other caller is refused
+    // with the reset time, to relay or retry. Here only the tasks whose agent
+    // is known before the approval: a role's binding comes with the approval,
+    // and every task is checked again at its launch (below).
+    const reserveHoldOf = (agents: ReadonlyArray<string | undefined>): UsageReserveHold | null =>
+      agents.some(spendsUsageReserve) ? (deps.usageReserveHold ?? usageReserveHoldForWorkspace)(callerWorkspaceId) : null;
+    /** Hold a bot's request for the reserve (once), and say why nothing started. */
+    let reserveHeld = false;
+    const reserveRefusal = (reserve: UsageReserveHold, mayHold: boolean): string => {
+      if (!reserveHeld && mayHold) {
+        reserveHeld = !!bot && !!heldRequest && botPort?.heldByUsageReserve?.(bot, heldRequest) === true;
+        if (reserveHeld) (deps.noteUsageReserveHeld ?? noteUsageReserveHeld)(reserve);
+      }
+      return usageReserveRefusalText(reserve.untilMs, Date.now(), reserveHeld);
+    };
+    const knownAgents = agentChoices.length > 0
+      ? agentChoices.map((c) => c.agent)
+      : parsed.titles.flatMap((_, k) => (parsed.roles[k] ? [] : [undefined]));
+    const reserve = reserveHoldOf(knownAgents);
+    if (reserve) return deny('RESOURCE_EXHAUSTED', reserveRefusal(reserve, true));
 
     const guards = guardsOf();
     const reservation = guards.reserve(key, parsed.titles.length, { ownerWorkspaceId: callerWorkspaceId, ...(bot ? { botId: bot.botId } : {}) });
@@ -1998,6 +2067,31 @@ export function registerFanOutRpc(
           return;
         }
 
+        // The usage reserve at the launch, with each task's agent resolved:
+        // its preset row / agents[k], else its role's binding as approved,
+        // else the default launch. A hold that began while the approval was
+        // up stops it here; one that begins later stops each task at its own
+        // launch (mayLaunch), a slot or dependency wait included.
+        const roleBindings = parsed.roles.some((r) => r) ? approvedRoleBindings(parsed.roles, verdict.roleBindings) : undefined;
+        const taskAgent = (k: number): string | undefined => agentChoices[k]?.agent ?? roleBindings?.[parsed.roles[k]?.trim() ?? '']?.agent;
+        const taskAgents = parsed.titles.map((_, k) => taskAgent(k));
+        const atLaunch = reserveHoldOf(taskAgents);
+        if (atLaunch) {
+          const why = reserveRefusal(atLaunch, true);
+          settle(key, { phase: 'denied', reason: 'usage-reserve', untilMs: atLaunch.untilMs, ...(reserveHeld ? { held: true } : {}) });
+          guards.release(key);
+          console.warn(`[fanout.rpc] fan-out ${key} not launched: the usage reserve holds its account`);
+          tellBot(noneStarted(why));
+          return;
+        }
+        // Whether a task passed its launch check: a request part of which
+        // launched is not held again whole (the rest is refused).
+        let launchPassed = false;
+        const reserveAtTaskLaunch = (index: number | undefined): string | null => {
+          const hold = reserveHoldOf(index === undefined ? taskAgents : [taskAgent(index)]);
+          return hold ? reserveRefusal(hold, !launchPassed) : null;
+        };
+
         // The audit record goes down BEFORE anything spawns, and a fan-out that
         // cannot leave one does not run: with no human in the loop by default,
         // this line is the only after-the-fact account of what was launched.
@@ -2079,10 +2173,15 @@ export function registerFanOutRpc(
             // dependent task waits does not change what that task runs.
             // A verdict without them freezes every role as unbound (fails
             // closed) rather than letting tasks read the live bindings.
-            ...(parsed.roles.some((r) => r) ? { roleBindings: approvedRoleBindings(parsed.roles, verdict.roleBindings) } : {}),
-            // A bot's worker is launched only while the bot may still spend:
-            // asked again right before each pane spawns.
-            ...(bot && botPort ? { mayLaunch: () => botPort.launchRefusal(bot.botId, botWakeId) } : {}),
+            ...(roleBindings ? { roleBindings } : {}),
+            // A bot's worker is launched only while the bot may still spend,
+            // and any worker only while the usage reserve does not hold its
+            // account: asked again right before each pane spawns.
+            mayLaunch: (task) => {
+              const refusal = (bot && botPort ? botPort.launchRefusal(bot.botId, botWakeId) : null) ?? reserveAtTaskLaunch(task?.index);
+              if (!refusal) launchPassed = true;
+              return refusal;
+            },
             // ...and only once the factory's agent budget has a slot for it
             // (factory/agentSlots.ts); a stop while it waits ends the wait.
             ...(bot && botPort && agentSlots

@@ -286,6 +286,7 @@ import { continueOnAccount } from './continueOnAccount';
 import { paneFree } from './paneFree';
 import { createOrphanSweep } from './winProcessSweep';
 import { classifyShell } from './shell-integration';
+import { loadUsageReserveHolds, takeUsageReserveHolds, usageReserveHoldAt } from './usageReserveHolds';
 import { UsageLimitRegistry } from './usageLimit/UsageLimitRegistry';
 import type { SessionPromptScheduleResult } from '../shared/sessionPromptSchedule';
 import { claudeUsageLimitFromStopFailure, USAGE_LIMIT_CONTINUE_PROMPT, type PaneUsageLimitPatch } from '../shared/usageLimit';
@@ -394,6 +395,9 @@ let hookIngest: HookIngest | null = null;
 let detectionAgreementLog: DetectionAgreementLog | null = null;
 /** Panes held at a provider usage limit (shared/usageLimit). Built once delivery exists. */
 let usageLimits: UsageLimitRegistry | null = null;
+/** The usage reserve's holds pushed by main: account key → 5h reset (ms).
+ *  Read from disk at start, so a restart before main reconnects keeps them. */
+let usageReserveHolds = new Map<string, number>();
 /** Scheduled runs. Built in registerRpcHandlers once the session RPCs exist. */
 let automationEngine: AutomationEngine | null = null;
 // Outbound webhook/ntfy notifications. Module-scoped for the same reason
@@ -6033,6 +6037,13 @@ function registerRpcHandlers(
     log: (message) => log('info', message),
   });
   pipeServer.onRpc('daemon.usageLimit.list', async () => ({ limits: usageLimits?.list() ?? [] }));
+  usageReserveHolds = loadUsageReserveHolds(getWmuxDir());
+  // The usage reserve's holds, from the app only (main reads the usage):
+  // account key → when its 5h window resets. Replaced whole on every push.
+  pipeServer.onRpc('daemon.usageReserve.set', async (params, ctx) => {
+    if (!pipeServer.isFirstParty(ctx.clientId)) return { ok: false };
+    return takeUsageReserveHolds(getWmuxDir(), params['holds'], (next) => { usageReserveHolds = next; }, (line) => log('warn', line));
+  });
   // Edits come from the app only (main relays the renderer's verbs and the
   // reset fill): an agent holding the daemon token for its hooks must not be
   // able to dismiss or re-time a hold.
@@ -6135,6 +6146,7 @@ function registerRpcHandlers(
       return signedIn === false;
     },
     authLost: (agent, env) => noteAuthLost?.('', agent, env, 'schedule'),
+    reserveHold: (account) => usageReserveHoldAt(usageReserveHolds, account, Date.now()),
     createSession: async ({ id, cwd, env, command }) => {
       await createSessionRpc({ id, cwd, env, exec: { command } });
     },

@@ -382,8 +382,9 @@ export interface FanOutRequest {
    *  worktree is ready: a reason refuses that task (its mission is closed,
    *  nothing is launched, and since no pane was ever started in it, its
    *  worktree is rolled back; see rollbackTaskWorktree). A bot's fan-out answers from the
-   *  factory switch, so turning the factory off stops a launch in progress. */
-  mayLaunch?: () => string | null;
+   *  factory switch, so turning the factory off stops a launch in progress.
+   *  `task.index` names the task (its index in `titles`). */
+  mayLaunch?: (task?: { index: number }) => string | null;
   /** Awaited right before mayLaunch for each task: a launch slot under the
    *  factory's agent budget (factory/agentSlots.ts). `ok:false` refuses the
    *  task as mayLaunch does; `release` is called once the task's ledger row is
@@ -1452,7 +1453,7 @@ export class FanOutService {
     /** See FanOutRequest.originPin. */
     originPin?: string;
     /** See FanOutRequest.mayLaunch. */
-    mayLaunch?: () => string | null;
+    mayLaunch?: (task?: { index: number }) => string | null;
     /** See FanOutRequest.awaitLaunchSlot. */
     awaitLaunchSlot?: (task: { taskId: string; title: string }) => Promise<LaunchSlot>;
     /** See FanOutRequest.secretNames. */
@@ -1809,7 +1810,7 @@ export class FanOutService {
     // The caller's last word before anything is launched.
     let refusal: string | null = null;
     try {
-      refusal = ctx.mayLaunch?.() ?? null;
+      refusal = ctx.mayLaunch?.({ index: ctx.index }) ?? null;
     } catch (err) {
       refusal = `the launch check failed: ${String(err)}`;
     }

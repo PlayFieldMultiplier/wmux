@@ -107,6 +107,9 @@ import { registerHooksRpc } from './pipe/handlers/hooks.rpc';
 import { registerUsageRpc, registerUsageTrailRpc } from './pipe/handlers/usage.rpc';
 import { registerCommitOriginRpc } from './pipe/handlers/commitOrigin.rpc';
 import { UsageTrailStore } from './usage/usageTrailStore';
+import { UsageReserve, setUsageReserve } from './usage/usageReserve';
+import { usageReserveToastText } from './automation/toastText';
+import { formatResetClock } from '../shared/usageLimit';
 import { CompletionAlarm } from '../shared/hooks/CompletionAlarm';
 import { UsagePoller } from './claude/UsagePoller';
 import { setUsageClientVersion, type UsageSnapshot } from './claude/UsageApi';
@@ -226,7 +229,7 @@ import { RemoteSpawnCoordinator } from './a2aRemote/remoteSpawnCoordinator';
 import { daemonRemoteA2aRpcDeps } from './a2a/remoteA2aRpcDeps';
 import { setA2aRemoteBridge } from './ipc/handlers/a2aRemote.handler';
 import { sendToRenderer } from './pipe/handlers/_bridge';
-import { AutomationBridge } from './automation/AutomationBridge';
+import { AutomationBridge, getAutomationUiLocale } from './automation/AutomationBridge';
 import { AutomationClient } from './automation/AutomationClient';
 import { toastManager } from './notification/ToastManager';
 import { WorkspaceContextRouter } from './metadata/WorkspaceContextRouter';
@@ -832,6 +835,7 @@ let remoteSpawnCoordinator: RemoteSpawnCoordinator | null = null;
 const automationBridge = new AutomationBridge(
   () => mainWindow,
   (text, onClick, opts) => toastManager.showDirect(text, '', undefined, { ...opts, onClick }),
+  (hold) => usageReserve.noteHeld(hold.account, hold.untilMs),
 );
 // X1 — folds daemon context.git/context.ports broadcasts into the sidebar
 // metadata channel (and drives the gh PR cache). Same lifecycle as the
@@ -1635,6 +1639,39 @@ registerUsageTrailRpc(rpcRouter, (account, sinceMs, untilMs) => (
     ? usageTrail.read(account, sinceMs, untilMs)
     : []));
 
+// Usage reserve: unattended starts wait while an account's 5h usage is in the
+// last 15%. Reads the usage held above; the daemon gets the holds for its
+// scheduled runs, and fan-outs ask it directly (fanout.rpc.ts).
+const usageReserve = new UsageReserve({
+  wmuxDir: getWmuxDir(),
+  snapshots: () => [
+    ['default', usagePoller.getState().snapshot],
+    ...accountUsageService.getAll().map((e): [string, typeof e.snapshot] => [e.accountId, e.snapshot]),
+  ],
+  accountOfWorkspace: (workspaceId) => getAccountStore().getBinding(workspaceId, 'claude') ?? 'default',
+  push: (holds) => daemonClient?.setUsageReserveHolds(holds) ?? Promise.resolve(false),
+  notify: (account, untilMs) => {
+    const locale = getAutomationUiLocale();
+    const who = account === 'default' ? null : getAccountStore().getAccount(account)?.name ?? account;
+    const text = usageReserveToastText(locale, who, formatResetClock(untilMs, Date.now(), locale));
+    toastManager.showDirect(text, '', undefined, { ignoreToastSetting: false, onClick: () => { mainWindow?.show(); } });
+  },
+  log: (line) => console.warn(line),
+});
+setUsageReserve(usageReserve);
+usagePoller.onStateChange(() => usageReserve.refresh());
+accountUsageService.onChange(() => usageReserve.refresh());
+ipcMain.handle(IPC.USAGE_RESERVE_GET, () => ({ enabled: usageReserve.enabled() }));
+ipcMain.handle(IPC.USAGE_RESERVE_SET, async (_event, enabled: unknown) => {
+  if (typeof enabled !== 'boolean') return { ok: false };
+  try {
+    await usageReserve.setEnabled(enabled);
+    return { ok: true };
+  } catch {
+    return { ok: false };
+  }
+});
+
 // Where a commit made in a pane came from, as the daemon recorded it.
 registerCommitOriginRpc(rpcRouter, (sha) => daemonClient?.lookupCommitOrigin(sha) ?? Promise.resolve('unavailable'));
 
@@ -1647,14 +1684,22 @@ registerUsageRpc(rpcRouter, {
     .filter((a) => a.vendor === 'claude')
     .map((a) => ({ id: a.id, configDir: a.configDir })),
   defaultConfigDir: () => path.join(os.homedir(), '.claude'),
+  // A live push is recorded and read by the reserve at ingest: with the
+  // meter off the poller stores it without telling its listeners.
   ingestDefault: (update) => {
     const accepted = usagePoller.ingestLive(update);
-    if (accepted) usageTrail.record('default', usagePoller.getState().snapshot);
+    if (accepted) {
+      usageTrail.record('default', usagePoller.getState().snapshot);
+      usageReserve.refresh();
+    }
     return accepted;
   },
   ingestAccount: (accountId, update) => {
     const accepted = accountUsageService.ingestLive(accountId, update);
-    if (accepted) usageTrail.record(accountId, claudeAccountSnapshot(accountId));
+    if (accepted) {
+      usageTrail.record(accountId, claudeAccountSnapshot(accountId));
+      usageReserve.refresh();
+    }
     return accepted;
   },
   log: (line) => console.warn(line),
@@ -2586,6 +2631,7 @@ app.on('ready', async () => {
       });
       remoteSpawnCoordinator.start();
       automationBridge.start(client);
+      usageReserve.pushNow();
       // X1 — context fold (git branch / worktree / ports / PR badge).
       workspaceContextRouter?.stop();
       workspaceContextRouter = new WorkspaceContextRouter(client, () => mainWindow);

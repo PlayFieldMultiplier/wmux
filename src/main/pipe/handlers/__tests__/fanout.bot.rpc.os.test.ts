@@ -90,6 +90,8 @@ interface Rig {
 }
 
 function rig(role: BotRole, over: Partial<BotProfile> = {}, opts: {
+  /** The usage reserve's hold for a workspace. Omitted = no reserve. */
+  reserve?: (workspaceId: string) => { account: string; untilMs: number } | null;
   builtinPresets?: boolean; connectors?: () => ConnectorStore | null; platform?: NodeJS.Platform; presets?: FanoutPreset[];
   /** Signed-in connections: the OAuth service, the sandbox probe, the conversation's mark and the service's tool list. */
   gateway?: {
@@ -190,6 +192,7 @@ function rig(role: BotRole, over: Partial<BotProfile> = {}, opts: {
     ...(opts.gateway ? { gatewayOAuth: opts.gateway.oauth, gatewaySandbox: opts.gateway.sandbox, conversationTainted: opts.gateway.conversationTainted } : {}),
     ...(opts.gateway?.listTools ? { gatewayListTools: opts.gateway.listTools } : {}),
     bot: () => port,
+    ...(opts.reserve ? { usageReserveHold: opts.reserve, noteUsageReserveHeld: () => undefined } : {}),
     wmuxDir: () => WMUX_DIR,
     botDefaultBranch: async (root) => {
       defaultBranchReads.push({ root, startedBefore: start.mock.calls.length });
@@ -596,6 +599,56 @@ describe('task.fanout.start — bot origin', () => {
     expect(await getWorkflowFanout()!({ idempotencyKey: 'wake:w-1:1', titles: ['step'], preset: 'default' }, botCtx('maintainer'), binding)).toMatchObject({ ok: true });
     r.port.refusal = 'the owner stopped this bot'; r.approve(); await r.flush();
     expect(r.start).not.toHaveBeenCalled(); expect(failed).toHaveBeenCalledWith('the owner stopped this bot');
+  });
+
+  it('the usage reserve holds a bot\'s fan-out for after the reset and starts nothing', async () => {
+    const r = rig('lead', {}, { reserve: () => ({ account: 'default', untilMs: Date.now() + 60_000 }) });
+    const held: HeldFanoutRequest[] = [];
+    r.port.heldByUsageReserve = (_b, request) => {
+      held.push(request);
+      return true;
+    };
+    const err = errorOf(await r.call({ idempotencyKey: 'wake:w-1:1', titles: ['fix it'], prompt: 'fix', preset: 'repro' }, botCtx('lead')));
+    expect(err.code).toBe('RESOURCE_EXHAUSTED');
+    expect(err.message).toMatch(/the request is held and this bot is woken with it/);
+    expect(held.map((h) => h.args.titles)).toEqual([['fix it']]);
+    expect(r.start).not.toHaveBeenCalled();
+    expect(r.port.seen.size).toBe(0);
+  });
+
+  it('a reserve hold that begins after the call holds the bot\'s request again at its launch, once', async () => {
+    let hold: { account: string; untilMs: number } | null = null;
+    const r = rig('lead', {}, { builtinPresets: true, reserve: () => hold });
+    const held: HeldFanoutRequest[] = [];
+    r.port.heldByUsageReserve = (_b, request) => {
+      held.push(request);
+      return true;
+    };
+    expect((await r.call({ idempotencyKey: 'wake:w-1:1', titles: ['a', 'b'], prompt: 'fix', preset: 'default' }, botCtx('lead'))).status).toBe('accepted');
+    await r.flush();
+    const req = r.start.mock.calls[0][0] as FanOutRequest;
+    // Both tasks wait (a slot); the hold begins meanwhile.
+    hold = { account: 'default', untilMs: Date.now() + 60_000 };
+    expect(req.mayLaunch?.({ index: 0 })).toMatch(/the request is held and this bot is woken with it/);
+    expect(req.mayLaunch?.({ index: 1 })).toMatch(/the request is held/);
+    expect(held.map((h) => h.args.titles)).toEqual([['a', 'b']]);
+  });
+
+  it('a request part of which launched is not held again whole; the rest is refused', async () => {
+    let hold: { account: string; untilMs: number } | null = null;
+    const r = rig('lead', {}, { builtinPresets: true, reserve: () => hold });
+    const held: HeldFanoutRequest[] = [];
+    r.port.heldByUsageReserve = (_b, request) => {
+      held.push(request);
+      return true;
+    };
+    await r.call({ idempotencyKey: 'wake:w-1:1', titles: ['a', 'b'], prompt: 'fix', preset: 'default' }, botCtx('lead'));
+    await r.flush();
+    const req = r.start.mock.calls[0][0] as FanOutRequest;
+    expect(req.mayLaunch?.({ index: 0 })).toBeNull();
+    hold = { account: 'default', untilMs: Date.now() + 60_000 };
+    expect(req.mayLaunch?.({ index: 1 })).toMatch(/start them after the window resets/);
+    expect(held).toEqual([]);
   });
 
   it('refuses a workflow at capacity without holding an unbound retry', async () => {

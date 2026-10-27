@@ -1354,3 +1354,99 @@ describe('AutomationEngine — one retry after a temporary provider error', () =
     expect(next.created).toEqual([]);
   });
 });
+
+describe('AutomationEngine — usage reserve', () => {
+  it('holds a due scheduled run until the reserve lifts, then starts it for its own occurrence', async () => {
+    let until: number | null = null;
+    const asked: string[] = [];
+    const h = harness({ ports: { reserveHold: (account) => { asked.push(account); return until; } } });
+    await h.engine.start({ timers: false });
+    const a = await h.engine.create(draft());
+    if (!a.ok || a.automation.nextRunAt === null) throw new Error();
+    const due = a.automation.nextRunAt;
+    h.clock.t = due + 10 * MIN;
+    until = h.clock.t + 2 * 60 * MIN;
+    h.engine.tick();
+    h.engine.tick(h.clock.t + MIN);
+    await settle();
+    expect(h.engine.listRuns()).toEqual([]);
+    expect(asked[0]).toBe('default');
+    expect(h.engine.list().automations[0].nextRunAt).toBe(due);
+    expect(h.events.filter((e) => e.type === 'reserve-held')).toEqual([
+      { type: 'reserve-held', automationId: a.automation.id, automationName: 'Nightly', account: 'default', untilMs: until },
+    ]);
+    // Past the reset: started for the occurrence it was held at, beyond its grace.
+    h.clock.t = until + MIN;
+    until = null;
+    h.engine.tick();
+    await settleLaunch(h);
+    expect(h.engine.listRuns()).toMatchObject([{ trigger: 'scheduled', scheduledFor: due, state: 'running' }]);
+  });
+
+  it('when a newer occurrence came due while held, that one runs and the held one is recorded missed', async () => {
+    let until: number | null = null;
+    const h = harness({ ports: { reserveHold: () => until } });
+    await h.engine.start({ timers: false });
+    const a = await h.engine.create(draft());
+    if (!a.ok || a.automation.nextRunAt === null) throw new Error();
+    const due = a.automation.nextRunAt;
+    h.clock.t = due + 10 * MIN;
+    until = h.clock.t + 25 * 60 * MIN;
+    h.engine.tick();
+    const nextDue = due + 24 * 60 * MIN;
+    h.clock.t = nextDue + 10 * MIN;
+    until = null;
+    h.engine.tick();
+    await settleLaunch(h);
+    const runs = h.engine.listRuns();
+    expect(runs.find((r) => r.state !== 'skipped')).toMatchObject({ scheduledFor: nextDue, state: 'running' });
+    expect(runs.find((r) => r.state === 'skipped')).toMatchObject({ scheduledFor: due, reason: 'missed' });
+  });
+
+  it('a held occurrence meets a restart as one that came due while the daemon was down', async () => {
+    const dir = tempDir('wmux-reserve-');
+    let until: number | null = null;
+    const first = harness({ dir, ports: { reserveHold: () => until } });
+    await first.engine.start({ timers: false });
+    const a = await first.engine.create(draft());
+    if (!a.ok || a.automation.nextRunAt === null) throw new Error();
+    const due = a.automation.nextRunAt;
+    first.clock.t = due + 10 * MIN;
+    until = first.clock.t + 10 * 60 * MIN;
+    first.engine.tick();
+    first.engine.stop();
+    await first.engine.whenSaved();
+    const second = harness({ dir });
+    second.clock.t = due + 3 * 60 * MIN; // past its 60 min grace
+    await second.engine.start({ timers: false });
+    second.engine.tick();
+    await settle();
+    expect(second.engine.listRuns()).toMatchObject([{ scheduledFor: due, state: 'skipped', reason: 'daemon_down' }]);
+  });
+
+  it('never holds a run started by hand', async () => {
+    const clock = { t: 0 };
+    const h = harness({ ports: { reserveHold: () => clock.t + 60 * MIN } });
+    clock.t = h.clock.t;
+    const run = await startedRun(h);
+    expect(run).toMatchObject({ trigger: 'manual', state: 'running' });
+    expect(h.events.some((e) => e.type === 'reserve-held')).toBe(false);
+  });
+
+  it('an edit while held drops the held occurrence: the reset starts nothing old', async () => {
+    let until: number | null = null;
+    const h = harness({ ports: { reserveHold: () => until } });
+    await h.engine.start({ timers: false });
+    const a = await h.engine.create(draft());
+    if (!a.ok || a.automation.nextRunAt === null) throw new Error();
+    h.clock.t = a.automation.nextRunAt + 10 * MIN;
+    until = h.clock.t + 60 * MIN;
+    h.engine.tick();
+    await h.engine.setEnabled(a.automation.id, false);
+    await h.engine.setEnabled(a.automation.id, true);
+    h.clock.t = until + MIN;
+    h.engine.tick();
+    await settle();
+    expect(h.engine.listRuns()).toEqual([]);
+  });
+});
