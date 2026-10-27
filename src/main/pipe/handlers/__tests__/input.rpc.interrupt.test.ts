@@ -22,7 +22,8 @@ function setup() {
   } as unknown as PTYManager;
   const noteInterruptInput = vi.fn();
   const router = new RpcRouter();
-  registerInputRpc(router, spyPty, () => fakeWindow, undefined, undefined, noteInterruptInput);
+  // No renderer screen here; the daemon finds no folder-trust prompt.
+  registerInputRpc(router, spyPty, () => fakeWindow, undefined, undefined, noteInterruptInput, { daemonFolderTrust: async () => 'clear' });
   return { router, writes, noteInterruptInput };
 }
 
