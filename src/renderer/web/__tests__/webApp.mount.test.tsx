@@ -73,7 +73,7 @@ beforeAll(async () => {
   document.body.appendChild(container);
   root = createRoot(container);
   await act(async () => {
-    stop = startWebSync({ token: 't', fetchImpl: fetchImpl as unknown as typeof fetch, intervalMs: 60_000, onUnauthorized: () => undefined });
+    stop = startWebSync({ credential: { kind: 'operator', token: 't' }, fetchImpl: fetchImpl as unknown as typeof fetch, intervalMs: 60_000, onUnauthorized: () => undefined });
     root.render(<WebApp />);
   });
   await act(async () => { await deliberateSleep(50, 'not yet converted (#2363): lets the first sync render under act; nothing polled'); });

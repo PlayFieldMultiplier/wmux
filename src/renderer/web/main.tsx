@@ -1,92 +1,110 @@
 /**
  * Entry of the browser build (wmux web `/`). Built by vite.web.config.ts
  * into one classic script + one stylesheet that scripts/build-daemon-web.mjs
- * inlines into the daemon's page, after boot.ts has installed the credential
- * and the deny-by-default `window.electronAPI`.
+ * inlines into the daemon's page, after boot.ts has installed the deny-by-default
+ * `window.electronAPI` and started settling the credential (`__wmuxWebSession`).
  */
 import { createRoot } from 'react-dom/client';
 import { useStore } from '../stores';
-import { onTerminalRegistered, terminalRegistry } from '../hooks/useTerminal';
+import { onTerminalRegistered, showCopyToastText, terminalRegistry } from '../hooks/useTerminal';
+import { t } from '../i18n';
 import { getTerminalReplayMute, isReplayMuted } from '../terminal/replayMute';
 import { WebApp, PHONE_QUERY } from './WebApp';
 import { startWebSync } from './webSync';
 import { createWebPty } from './webPty';
 import { setWebPtyHub } from './WebTerminal';
 import { installViewerParser } from './viewerParser';
-import { CLASSIC_PATH, WEB_PTY_BRIDGE_KEY } from './webElectronApi';
+import { setPendingCopyHint } from './pendingCopyHint';
+import { WEB_PTY_BRIDGE_KEY, type PendingCopyState } from './webElectronApi';
+import { createLeave, type WebSession } from './webCredential';
 import '../styles/globals.css';
 import '../styles/ui.css';
 
 /** Set by vite.web.config.ts; true only in WMUX_WEB_DEBUG=1 builds. */
 declare const __WMUX_WEB_DEBUG__: boolean | undefined;
 
-const w = window as unknown as Window & Record<string, unknown> & { __wmuxAppBooted?: boolean; __wmuxWebToken?: string };
+const w = window as unknown as Window & Record<string, unknown> & {
+  __wmuxAppBooted?: boolean;
+  __wmuxWebSession?: Promise<WebSession>;
+};
+// Before the session settles: boot.ts sends a page without it to the classic client at DOMContentLoaded.
 w.__wmuxAppBooted = true;
 
-const token = w.__wmuxWebToken ?? '';
-const toClassic = () => window.location.replace(CLASSIC_PATH);
+void w.__wmuxWebSession?.then(start);
 
-const hub = createWebPty({
-  token,
-  onUnauthorized: toClassic,
-  // Keys typed while a replayed screen is being parsed wait for it.
-  isReplaying: (ptyId) => {
-    const term = terminalRegistry.get(ptyId);
-    return !!term && isReplayMuted(getTerminalReplayMute(term));
-  },
-  // A mid-stream resize: pin the grid before the next byte parses; the
-  // fixedGeometry effect refits the font on the next render.
-  applyGeometry: (ptyId, g) => {
-    const term = terminalRegistry.get(ptyId);
-    if (term && (term.cols !== g.cols || term.rows !== g.rows)) term.resize(g.cols, g.rows);
-  },
-});
-setWebPtyHub(hub);
-w[WEB_PTY_BRIDGE_KEY] = hub.pty;
-// Every terminal this page mounts is a viewer: it never answers terminal
-// queries and never arms mouse reporting it could not send (viewerParser.ts).
-// A terminal registers in its mount effect, before its stream opens.
-onTerminalRegistered((ptyId) => {
-  const term = terminalRegistry.get(ptyId);
-  if (term) installViewerParser(term, { mayInput: () => hub.inputState() !== 'read-only' });
-});
-// Dogfood hook, as on the classic page: the real risk here is a leaked stream.
-w.__wmuxWebDebug = {
-  streams: () => hub.openStreamCount(),
-  live: () => hub.liveIds(),
-  inputState: () => hub.inputState(),
-  // A pane's screen as its terminal holds it (the WebGL renderer leaves no DOM
-  // text). It reads pane contents, so development builds only.
-  ...(typeof __WMUX_WEB_DEBUG__ !== 'undefined' && __WMUX_WEB_DEBUG__ ? {
-    screen: (ptyId: string) => {
+function start(session: WebSession): void {
+  const { credential } = session;
+  const onUnauthorized = createLeave(session, window);
+
+  const hub = createWebPty({
+    credential,
+    onUnauthorized,
+    // Keys typed while a replayed screen is being parsed wait for it.
+    isReplaying: (ptyId) => {
       const term = terminalRegistry.get(ptyId);
-      if (!term) return null;
-      const buf = term.buffer.active;
-      const lines: string[] = [];
-      for (let y = 0; y < term.rows; y++) lines.push(buf.getLine(buf.viewportY + y)?.translateToString(true) ?? '');
-      return { cols: term.cols, rows: term.rows, fontSize: term.options.fontSize, modes: term.modes, lines };
+      return !!term && isReplayMuted(getTerminalReplayMute(term));
     },
-  } : {}),
-};
+    // A mid-stream resize: pin the grid before the next byte parses; the
+    // fixedGeometry effect refits the font on the next render.
+    applyGeometry: (ptyId, g) => {
+      const term = terminalRegistry.get(ptyId);
+      if (term && (term.cols !== g.cols || term.rows !== g.rows)) term.resize(g.cols, g.rows);
+    },
+  });
+  setWebPtyHub(hub);
+  w[WEB_PTY_BRIDGE_KEY] = hub.pty;
+  // A copy the browser refused outside a gesture waits (webClipboardApi);
+  // the pill finishes it on a click, until it lands or is dropped.
+  const webClip = window.clipboardAPI as { onPendingCopy?: (fn: (state: PendingCopyState) => void) => () => void; finishPendingCopy?: () => void };
+  webClip.onPendingCopy?.((state) => {
+    setPendingCopyHint(state === 'waiting', () => webClip.finishPendingCopy?.());
+    if (state === 'copied') showCopyToastText(t('terminal.copied'));
+  });
+  // Every terminal this page mounts is a viewer: it never answers terminal
+  // queries and never arms mouse reporting it could not send (viewerParser.ts).
+  // A terminal registers in its mount effect, before its stream opens.
+  onTerminalRegistered((ptyId) => {
+    const term = terminalRegistry.get(ptyId);
+    if (term) installViewerParser(term, { mayInput: () => hub.inputState() !== 'read-only' });
+  });
+  // Dogfood hook, as on the classic page: the real risk here is a leaked stream.
+  w.__wmuxWebDebug = {
+    streams: () => hub.openStreamCount(),
+    live: () => hub.liveIds(),
+    inputState: () => hub.inputState(),
+    // A pane's screen as its terminal holds it (the WebGL renderer leaves no DOM
+    // text). It reads pane contents, so development builds only.
+    ...(typeof __WMUX_WEB_DEBUG__ !== 'undefined' && __WMUX_WEB_DEBUG__ ? {
+      screen: (ptyId: string) => {
+        const term = terminalRegistry.get(ptyId);
+        if (!term) return null;
+        const buf = term.buffer.active;
+        const lines: string[] = [];
+        for (let y = 0; y < term.rows; y++) lines.push(buf.getLine(buf.viewportY + y)?.translateToString(true) ?? '');
+        return { cols: term.cols, rows: term.rows, fontSize: term.options.fontSize, modes: term.modes, lines };
+      },
+    } : {}),
+  };
 
-useStore.setState({
-  readOnly: true,
-  // The image addon decodes with WebAssembly, which the page's CSP does not
-  // allow ('wasm-unsafe-eval'); sixel / iTerm2 images stay off in the browser.
-  inlineImagesEnabled: false,
-  sidebarVisible: !window.matchMedia(PHONE_QUERY).matches,
-});
-document.documentElement.setAttribute('data-theme', useStore.getState().theme);
+  useStore.setState({
+    readOnly: true,
+    // The image addon decodes with WebAssembly, which the page's CSP does not
+    // allow ('wasm-unsafe-eval'); sixel / iTerm2 images stay off in the browser.
+    inlineImagesEnabled: false,
+    sidebarVisible: !window.matchMedia(PHONE_QUERY).matches,
+  });
+  document.documentElement.setAttribute('data-theme', useStore.getState().theme);
 
-// THIS caller's grant (a read-only device gets false even on a server with
-// input on), re-read while the page lives: a failed first read or a changed
-// grant must not stick.
-hub.startConfig();
+  // THIS caller's grant (a read-only device gets false even on a server with
+  // input on), re-read while the page lives: a failed first read or a changed
+  // grant must not stick.
+  hub.startConfig();
 
-createRoot(document.getElementById('root')!).render(<WebApp />);
+  createRoot(document.getElementById('root')!).render(<WebApp />);
 
-startWebSync({
-  token,
-  onUnauthorized: toClassic,
-  onSessions: (rows) => hub.setSessions(rows),
-});
+  startWebSync({
+    credential,
+    onUnauthorized,
+    onSessions: (rows) => hub.setSessions(rows),
+  });
+}

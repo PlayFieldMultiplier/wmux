@@ -96,3 +96,24 @@ export function applyUnicodeWidthModel(terminal: UnicodeWidthTarget): void {
   terminal.loadAddon(new Unicode11Addon() as never);
   terminal.unicode.activeVersion = TERMINAL_UNICODE_VERSION;
 }
+
+/** The Unicode 11 width provider, captured once from the same addon (see terminalCharWidth). */
+let charWidthProvider: { wcwidth(codepoint: number): number } | null = null;
+
+/**
+ * Columns one code point takes on a wmux grid (0, 1 or 2), from the very
+ * tables applyUnicodeWidthModel loads, for code that reads a grid's text back
+ * by column (a row's text holds a wide character once, not once per cell).
+ * The addon is activated against a stub that only keeps the provider it
+ * registers; no terminal's width model is touched.
+ */
+export function terminalCharWidth(codepoint: number): number {
+  let provider = charWidthProvider;
+  if (!provider) {
+    new Unicode11Addon().activate({
+      unicode: { register: (p: { wcwidth(codepoint: number): number }) => { provider = p; } },
+    } as never);
+    charWidthProvider = provider;
+  }
+  return provider!.wcwidth(codepoint);
+}

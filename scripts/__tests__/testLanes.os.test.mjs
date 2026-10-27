@@ -23,6 +23,7 @@ import {
   laneOfName,
   listTestFiles,
   nameForLane,
+  osImports,
 } from '../lib/test-lanes.mjs';
 import { trackedTempDir } from '../../src/test-utils/trackedTempDir.ts';
 
@@ -124,6 +125,20 @@ describe('the rule', () => {
     expect(classify({ [T]: `import type { ChildProcess } from '${CP}';\n` }).lane).toBe('unit');
     expect(classify({ [T]: `import { type Socket, type Server } from '${NET}';\n` }).lane).toBe('unit');
     expect(classify({ [T]: `import { type Socket, connect } from '${NET}';\n` }).lane).toBe('integration');
+    // The word "import" in a comment or a name inside the braces is no statement start.
+    expect(classify({ [T]: `import {\n  type A, // see import type docs\n  spawn,\n} from '${CP}';\n` }).lane).toBe('integration');
+    expect(classify({ [T]: `import { type A, type importer } from '${CP}';\n` }).lane).toBe('unit');
+    // A re-export after a type import is its own statement, and a `//` in a string opens no comment.
+    expect(classify({ [T]: `import type { A } from './a';\nexport { spawn } from '${CP}';\n` }).lane).toBe('integration');
+    expect(classify({ [T]: `import type { A } from './a';\nconst u = 'http://h'; import { spawn } from '${CP}';\n` }).lane).toBe('integration');
+    expect(classify({ [T]: `import type { A } from './a'\nexport { spawn } from '${CP}'\n` }).lane).toBe('integration');
+    expect(classify({ [T]: `import type { A } from './a';\nconst u = 'http://h'; import { type B, spawn } from '${CP}';\n` }).lane).toBe('integration');
+    expect(classify({ [T]: `export type { ChildProcess } from '${CP}';\nexport { type Socket } from '${NET}';\n` }).lane).toBe('unit');
+    // Backticks in comments on two lines are no template literal (#2780 review).
+    const bare = 'child' + '_process';
+    expect(osImports(`import type { A } from './a'; // the \` key\nimport {\n  type ChildProcess, // \`spawn\` below\n  spawn,\n} from '${bare}';\n`)).toEqual([bare]);
+    // A real template literal still spans its lines, so a `//` in it opens no comment.
+    expect(osImports(`import type { A } from './a';\nconst u = \`\nhttp://h\`; import { type B, spawn } from '${bare}';\n`)).toEqual([bare]);
     expect(
       classify({ [T]: `vi.mock('${CP}', () => ({ spawn: vi.fn() }));\nimport { spawn } from '${CP}';\n` }).lane,
     ).toBe('unit');

@@ -27,15 +27,19 @@ import { workspaceAccountEnv } from './phone/workspaceAccountEnv';
 import { applyPaneAccount, assertPaneAccountUsable } from './phone/paneAccount';
 import type { PaneAccountVendor, StoredHandoffFrom } from '../shared/phonePaneAccount';
 import { DesktopPhoneBridge, keepAwakeRpc } from './phone/DesktopPhoneBridge';
+import { BrowserHelpTable } from './phone/BrowserHelpTable';
+import { BROWSER_HELP_SET_METHOD, PHONE_BROWSER_HELP_DECIDE_COMMAND, type BrowserHelpTableRow } from '../shared/phoneBrowserHelp';
 import { RunHistoryStore } from './history/RunHistoryStore';
 import { AutomationEngine } from './automation/AutomationEngine';
 import { assertExternalSessionId, registerAutomationRpc } from './automation/rpc';
+import { isTransientTurnFailure, shouldPushTurnFailure } from './automation/transientFailure';
 import { killProcessTree } from './automation/treeKill';
 import { captureProcessTree, matchesRecordedStart, recordedStartOf, treeKillRefusal, type CapturedTree } from './automation/verifiedTreeKill';
 import { pendingRemovalRefusalAt } from '../main/worktask/pendingWorktreeRemovals';
 import { recordedRunPtyIds } from './automation/store';
 import { AUTOMATION_EVENT } from '../shared/automation';
 import { InputReceiptStore } from './web/InputReceiptStore';
+import { parseTrustedProxyConfig } from './web/trustedProxy';
 import { PhoneWorktreeService } from './web/phoneWorktree';
 import { ProjectConfigStore } from '../main/project/ProjectConfigStore';
 import { phonePrepSummary, prepareNewWorktree } from '../main/worktask/workspacePrep';
@@ -48,7 +52,7 @@ import { MOA_PROMPTS_FILE, parseNotedPrompts, type NotedPrompt } from '../shared
 import { coercePhoneDecisions } from './approvals/decisionConfig';
 import { createOpenCodeDecisions } from './approvals/openCodeDecisions';
 import { isNativeDecision } from './approvals/types';
-import { SCROLLBACK_ROWS } from './web/hostSearch';
+import { SCROLLBACK_ROWS, joinWrappedRows } from './web/hostSearch';
 import { recoveryCwd, isWslShell, isWslCwdMissingError } from '../shared/wsl';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -83,9 +87,10 @@ import { loadWebPrefs, saveWebPrefs } from './web/webPrefsStore';
 import { scheduleTokenFileReHarden } from '../shared/security';
 import { applyTaskQueryView } from '../shared/a2aTaskQueryView';
 import { normalizeLivePaneIds } from '../shared/a2aOrphanedTask';
-import { WEB_DEFAULT_PORT, type WebTlsConfig } from '../shared/web';
+import { WEB_DEFAULT_PORT, webHostIsLoopback, type WebTlsConfig } from '../shared/web';
 import { generateSnapshotUnqueued, enqueueSnapshotJob, generateTextSnapshot, generateTextSnapshotUnqueued, runSmallSnapshotJob, capTextRowsToFrameBudget, MAX_SCROLLBACK } from './HeadlessSnapshot';
 import { queuedScreenText, queuedTextSnapshot } from './queuedSessionText';
+import { FolderTrustRefusedError, folderTrustRefusal, folderTrustState, registerFolderTrustRpc } from './folderTrustState';
 import type { TerminalPty } from '../shared/terminalPty';
 import { serializeSession } from './sessionSerialize';
 import { AwaitingScreenVerifier, AWAITING_NARROW_DIALOG_COLS, questionInFlight, renderPaneScreen, renderPaneTail } from './AwaitingScreenVerifier';
@@ -96,6 +101,7 @@ import { isPaneMoving } from './chat/v2/paneClaims';
 import { ApprovalPushRouter } from './push/approvalPushRouter';
 import { BotApprovalPushRouter } from './push/botApprovalPush';
 import { BotPromptPushRouter } from './push/botPromptPush';
+import { BROWSER_HELP_PUSH_CAPABILITY, BrowserHelpPushRouter, browserHelpPushAudience, type BrowserHelpResolution } from './push/browserHelpPush';
 import type { PushTableRouterDeps } from './push/pushTableRouter';
 import { parseBotApprovalPushRows, type BotApprovalPushRow } from '../shared/botApprovalPush';
 import { parseBotPromptPushRows, type BotPromptPushRow } from '../shared/botPromptPush';
@@ -159,7 +165,7 @@ import { isTaskState, type AgentStatus, type Message, type Task } from '../share
 import { ProcessMonitor } from './ProcessMonitor';
 import { AgentProcessTracker } from './AgentProcessTracker';
 import { CustomAgentNames } from './customAgentNames';
-import { liveRecoveryHint, namedAgentAlive, recordedTurnStillOpen, recordWasMidTurn, screenShowsLiveAgent, sightedRecoveredAgent } from './recoveryHint';
+import { liveRecoveryHint, markCwdMissing, namedAgentAlive, recordedTurnStillOpen, recordWasMidTurn, screenShowsLiveAgent, sightedRecoveredAgent } from './recoveryHint';
 import { checkWslAgentRunning, reportedAgentForPane, stopWslAgent, WslPidWatcher } from './wslAgentProcess';
 import { GateFlagFile } from './gateFlagFile';
 import { WSL_GATE_FLAG_FILE } from '../shared/wslIntegration';
@@ -190,7 +196,10 @@ import {
 import { createSnapshotRunner } from './snapshotRunner';
 import { createBufferHibernation } from './BufferHibernation';
 import { RingBuffer } from './RingBuffer';
-import { GitContextWatcher } from '../main/pty/gitContextWatch';
+import { GitContextWatcher, type Probe, type ProbeAnswer } from '../main/pty/gitContextWatch';
+import { CommitOriginCapture } from './commitOrigin/CommitOriginCapture';
+import { CommitOriginStore } from './commitOrigin/CommitOriginStore';
+import { SHA_RE } from '../shared/commitOrigin';
 import { PortWatcher } from '../main/pty/portWatch';
 import { initDaemonLogSink, isBrokenPipeError, stdioErrorsConsumed } from './util/logSink';
 import { installExitEvidence, noteExitReason } from './exitEvidence';
@@ -224,6 +233,7 @@ import { agentSlugToDisplay, isAgentSignal, type AgentSignal } from '../shared/h
 import { checkNativeTranscriptPath } from './transcript/providers';
 import { TranscriptProjector } from './transcript/TranscriptProjector';
 import { TranscriptActivityWatcher } from './transcript/TranscriptActivityWatcher';
+import { ToolRefusalTracker } from './transcript/toolRefusals';
 import { ShellPromptWatcher } from './shellPrompt/ShellPromptWatcher';
 import { foregroundTtyWait } from './shellPrompt/foregroundTtyWait';
 import { lastLineOfOutput } from './shellPrompt/shellPromptShape';
@@ -269,6 +279,7 @@ import type { ApprovalDecision, DecisionFormKind, NativeDecisionOutcome, NativeD
 import type { AgentSlug } from '../shared/events';
 import { LANLINK_SENTINEL_SESSION_ID } from '../shared/lanlink';
 import { classifyTasklistOutput, classifyKillOutcome, lockOwnerIsReclaimable, type ProcessLiveness } from '../shared/processLiveness';
+import { handleLiveness } from '../shared/processHandleLiveness';
 import { deliverScheduledPrompt, deliveryInputFence, type ScheduledPromptDeliveryDeps } from './sessionPromptDelivery';
 import { deliverCallerNudge } from './callerNudgeDelivery';
 import { paneTurnClosed, stopAgentTree } from './agentStop';
@@ -276,9 +287,10 @@ import { continueOnAccount } from './continueOnAccount';
 import { paneFree } from './paneFree';
 import { createOrphanSweep } from './winProcessSweep';
 import { classifyShell } from './shell-integration';
+import { loadUsageReserveHolds, takeUsageReserveHolds, usageReserveHoldAt } from './usageReserveHolds';
 import { UsageLimitRegistry } from './usageLimit/UsageLimitRegistry';
 import type { SessionPromptScheduleResult } from '../shared/sessionPromptSchedule';
-import { USAGE_LIMIT_CONTINUE_PROMPT, type PaneUsageLimitPatch } from '../shared/usageLimit';
+import { claudeUsageLimitFromStopFailure, USAGE_LIMIT_CONTINUE_PROMPT, type PaneUsageLimitPatch } from '../shared/usageLimit';
 import { chatAgentStatus, confirmedStopAt, transcriptTurnEnd } from './transcript/chatAgentStatus';
 import { DaemonPTYBridge } from './DaemonPTYBridge';
 import { createCodexSharedRuntime, runCodexDaemon } from './transcript/codexSharedRuntime';
@@ -384,6 +396,9 @@ let hookIngest: HookIngest | null = null;
 let detectionAgreementLog: DetectionAgreementLog | null = null;
 /** Panes held at a provider usage limit (shared/usageLimit). Built once delivery exists. */
 let usageLimits: UsageLimitRegistry | null = null;
+/** The usage reserve's holds pushed by main: account key → 5h reset (ms).
+ *  Read from disk at start, so a restart before main reconnects keeps them. */
+let usageReserveHolds = new Map<string, number>();
 /** Scheduled runs. Built in registerRpcHandlers once the session RPCs exist. */
 let automationEngine: AutomationEngine | null = null;
 // Outbound webhook/ntfy notifications. Module-scoped for the same reason
@@ -395,6 +410,8 @@ let transcriptProjector: TranscriptProjector | null = null;
 // Fleet's now-doing line for panes with no per-tool hook (setup-hooks installs,
 // Codex): tails the agent's own transcript. Guarded like the projector.
 let transcriptActivity: TranscriptActivityWatcher | null = null;
+/** The last refused tool call per pane, read from its Claude transcript. Set where the watcher is. */
+let toolRefusals: ToolRefusalTracker | null = null;
 let stallWatch: StallWatch | null = null;
 let shellPrompts: ShellPromptWatcher | null = null;
 let apiErrorTurnEnds: ApiErrorTurnEnds | null = null;
@@ -475,6 +492,12 @@ let pushBotPrompts: ((rows: BotPromptPushRow[]) => void) | undefined;
 /** The pipe clients that last published the bot approval and prompt tables (main). */
 let botApprovalsPublisher: string | null = null;
 let botPromptsPublisher: string | null = null;
+/** Main's open browser help requests (`daemon.browserHelp.set`), built once the pipe server exists. */
+let browserHelpTable: BrowserHelpTable | null = null;
+/** The browser help table, as phone pushes; set at boot once the push sender exists. */
+let pushBrowserHelp: ((rows: readonly BrowserHelpTableRow[], closed: ReadonlyMap<string, BrowserHelpResolution>) => void) | undefined;
+/** The pipe client that last published the browser help table (main). */
+let browserHelpPublisher: string | null = null;
 /** N4 — an agent's sign-in was lost (shared/agentAuthLost); set at boot once the pipe server exists. */
 let noteAuthLost: ((sessionId: string, agent: AuthLostAgent, env: Record<string, string> | undefined, origin: AuthLostOrigin, providerCode?: string) => void) | undefined;
 /** N4 — an agent and account was seen to work (a confirmed turn end, or its status said signed in). */
@@ -1001,6 +1024,8 @@ async function restoreWebServer(sessionManager: DaemonSessionManager): Promise<v
         // The Moa (HQ brain) pane main last vouched for, read per request so a
         // withdrawal closes the next check. See web/moaPane.ts.
         moaPane: currentMoaPane,
+        // Main's open browser help requests (phone/BrowserHelpTable.ts).
+        browserHelp: () => browserHelpTable,
         moaPrompts: readMoaPrompts,
         moaWake: getMoaWake,
         auditMoaSend: (entry) => getDeviceStore().recordMoaSend(entry),
@@ -1429,7 +1454,10 @@ function resumeLaunchCommand(
   if (!session.exec) return undefined;
   const phoneResume = codexRelayResumeCommand({...session,env:session.env ?? {}});
   if (phoneResume !== undefined) return phoneResume;
-  if (!isWslShell(session.cmd) && !fs.existsSync(session.cwd)) return undefined; // cwd gone → fresh, not wrong-target resume
+  if (!isWslShell(session.cmd) && !fs.existsSync(session.cwd)) { // cwd gone → fresh, not wrong-target resume
+    log('info', `[resume] ${session.id}: folder ${session.cwd} no longer exists; starting fresh, not resuming${session.resumeBinding ? ` ${session.resumeBinding.agent} conversation ${session.resumeBinding.sessionId}` : ''}`);
+    return undefined;
+  }
   // Prefer the persisted binding; fall back to a spool-captured one (the live
   // capture RPC failed, so the exact id only survived in the spool) so an exec
   // agent pane replays as `--resume <id>` instead of an ambiguous `--continue`.
@@ -1656,6 +1684,10 @@ function ingestResumeSpool(
  */
 async function processLiveness(pid: number): Promise<ProcessLiveness> {
   if (process.platform === 'win32') {
+    // The process handle first, as the launcher asks it (#2774): a terminated
+    // process can stay listed by tasklist while its last handles close.
+    const fromHandle = handleLiveness(pid);
+    if (fromHandle !== 'unknown') return fromHandle;
     // process.kill(pid, 0) is unreliable on Windows — it succeeds for stale PIDs
     // — so probe with tasklist. A thrown probe leaves stdout null → unknown.
     let stdout: string | null = null;
@@ -3445,7 +3477,11 @@ function registerRpcHandlers(
       const withAlive = managedForPrompt?.recoveredAgentUnconfirmed === true && agentProcessAlive !== true
         ? { ...withAlive0, recoveredAgentUnconfirmed: true as const }
         : withAlive0;
-      return surfacedBinding ? { ...withAlive, resumeBinding: surfacedBinding } : withAlive;
+      // A person-driven pane whose conversation folder is gone says so, instead
+      // of the picker in a folder that cannot list that conversation.
+      return surfacedBinding
+        ? { ...withAlive, resumeBinding: markCwdMissing(surfacedBinding, s, bindingTranscriptLives, fs.existsSync) }
+        : withAlive;
     });
 
     // Fix B: when includeSuspended is requested, append cap-skipped suspended
@@ -3725,6 +3761,7 @@ function registerRpcHandlers(
       auditSentFile: (entry) => getDeviceStore().recordSentFile(entry),
       // See the restore path.
       moaPane: currentMoaPane,
+      browserHelp: () => browserHelpTable,
       moaPrompts: readMoaPrompts,
       moaWake: getMoaWake,
       auditMoaSend: (entry) => getDeviceStore().recordMoaSend(entry),
@@ -3787,6 +3824,7 @@ function registerRpcHandlers(
       newToken?: boolean;
       tailscale?: boolean;
       tls?: unknown;
+      trustedProxy?: unknown;
       rememberPort?: boolean;
     };
     const port =
@@ -3800,6 +3838,13 @@ function registerRpcHandlers(
       ? p.allowedHosts.filter((h): h is string => typeof h === 'string')
       : [];
     const requestedTls = parseWebTlsConfig(p.tls);
+    // Never persisted and never inherited: a start that does not send it runs without it.
+    const trustedProxy = parseTrustedProxyConfig(p.trustedProxy);
+    if (trustedProxy && webHostIsLoopback(host)) {
+      throw new Error(
+        `--trust-proxy-* needs a non-loopback bind: a proxy at ${[...trustedProxy.from].join(', ')} cannot reach ${host}. Add --expose or --host <address>`,
+      );
+    }
     const tailscale = p.tailscale === true;
     // The desktop's in-place grant change restarts a RUNNING server. A stop
     // that landed after it read status wins: nothing is started, and the
@@ -3853,6 +3898,7 @@ function registerRpcHandlers(
         allowedHosts,
         tailscale,
         ...(tls ? { tls } : {}),
+        ...(trustedProxy ? { trustedProxy } : {}),
         token,
       });
     } catch (err) {
@@ -4394,6 +4440,30 @@ function registerRpcHandlers(
     });
   }
   const turnEnds = apiErrorTurnEnds;
+  // A pane's last refused tool call (shared/toolRefusal.ts), from the same
+  // tail; to the app only (not part of any phone payload).
+  if (!toolRefusals) {
+    const tracker = new ToolRefusalTracker({
+      emit: (sessionId, refusal) => {
+        const event: DaemonEvent = { type: 'agent.refusal', sessionId, data: { refusal } };
+        pipeServer.broadcast(event);
+      },
+      log: (line) => log('warn', line),
+    });
+    toolRefusals = tracker;
+    sessionManager.on('session:destroyed', (payload: { id: string }) => tracker.drop(payload.id));
+  }
+  const refusals = toolRefusals;
+  // A refusal counts only from the pane's own session, read from the file its
+  // binding names, as the API-error turn end above.
+  refusals.setTrusted((id, path) => {
+    const session = sessionManager.getSession(id);
+    const binding = resolveTranscriptBinding(id);
+    if (!session || isBrainPty({ id, env: session.meta.env })) return false;
+    const agent = agentRow(binding?.agent);
+    if (!binding || !agent?.apiErrorTurnEnd || binding.transcriptPath !== path) return false;
+    return checkNativeTranscriptPath(agent.slug, path, binding.sessionId, session.meta.env).ok;
+  });
   // A Claude lead turn an Agent Teams teammate's message woke (#2494): no
   // prompt hook fires for it, so its start is read from the same tail, and the
   // pane's turn opens the way a running hook opens it. Its Stop (or a
@@ -4453,9 +4523,14 @@ function registerRpcHandlers(
       },
       onClaudeLine: (sessionId, path, line) => {
         turnEnds.noteLine(sessionId, path, line);
+        refusals.noteLine(sessionId, path, line);
         wakes.noteLine(sessionId, path, line);
       },
-      onClaudeGap: (sessionId) => turnEnds.noteGap(sessionId),
+      onClaudeGap: (sessionId) => {
+        turnEnds.noteGap(sessionId);
+        refusals.drop(sessionId);
+      },
+      onClaudeWatchEnd: (sessionId) => refusals.drop(sessionId),
       afterTick: () => turnEnds.settle(),
     });
     transcriptActivity.start();
@@ -4815,6 +4890,8 @@ function registerRpcHandlers(
     // port sets so an already-listening dev server shows up without waiting
     // for it to change.
     if (ok) { try { resyncContextWatchers?.(); } catch { /* best effort */ } }
+    // Its pane refusals too: it holds none yet.
+    if (ok) { try { toolRefusals?.resync(); } catch { /* best effort */ } }
     return { ok };
   });
 
@@ -4934,6 +5011,7 @@ function registerRpcHandlers(
         ? Object.assign(outcome.rows.map((r) => r.text), { undimmed: outcome.rows.map((r) => r.undimmed ?? r.text) })
         : null;
     },
+    atFolderTrust: async (id, writer) => (await trustRefusal(sessionManager, id, writer, false)) !== null,
     agentProcessAlive: async (id, slug) => {
       if (!isAgentSlug(slug)) return false;
       return agentProcessTracker.isAgentRunning(id, slug, (pid) => ProcessMonitor.isRunning(pid));
@@ -5083,19 +5161,29 @@ function registerRpcHandlers(
       emitAgentEvent: (sessionId, data) => {
         const historySession = sessionManager.getSession(sessionId);
         const now = Date.now();
+        // A scheduled run's turn that failed on a temporary provider error is
+        // held for one continue (automation/transientFailure.ts); a usage-limit
+        // notice stays with the usage-limit registry.
+        const automationPane = automationEngine?.ownsPane(sessionId) === true;
+        const classifiedStop = data.signal.kind === 'agent.stop_failure'
+          ? classifyClaudeStopFailure(data.signal.payload ?? {}, now) : undefined;
+        const transientFailure = automationPane && classifiedStop !== undefined
+          && isTransientTurnFailure(classifiedStop, claudeUsageLimitFromStopFailure(data.signal.payload, now) !== null);
         // Contract v-next item 1: a Claude StopFailure is a typed turn failure.
         // Computed once, here, and handed unchanged to history, the liveness
         // frame and the push, so `turnId`/`at` match on every surface. The
         // same filters history applies: a vetoed or held delivery is not one.
         // A late delivery (the next turn already opened) is stamped with the
         // turn it ended, kept for history only, and never shown as live.
-        const served = data.signal.kind === 'agent.stop_failure' && data.status === 'error' && historySession
+        const served = classifiedStop && data.status === 'error' && historySession
           && !['internal', 'veto', 'pending'].includes(data.decision ?? '')
           && !isBrainPty({ id: sessionId, env: historySession.meta.env })
-          ? serveTurnFailure(historySession.bridge, classifyClaudeStopFailure(data.signal.payload ?? {}, now), {
+          ? serveTurnFailure(historySession.bridge, classifiedStop, {
             ts: Number.isFinite(data.signal.ts) ? data.signal.ts : now,
             ...(data.signal.agentSessionId ? { agentSessionId: data.signal.agentSessionId } : {}),
             push: (f) => {
+              // A held scheduled run is not final yet: only its final failure notifies.
+              if (!shouldPushTurnFailure(transientFailure, () => automationEngine?.armTransientRetry(sessionId, data.decision) === true)) return;
               pushTurnFailed?.(sessionId, f);
               if (f.reason === 'auth') noteAuthLost?.(sessionId, 'claude', historySession.meta.env, 'turn', f.providerCode);
             },
@@ -5109,7 +5197,6 @@ function registerRpcHandlers(
         const failure = served?.failure;
         const liveFailure = served?.current ? served.failure : undefined;
         // Scheduled runs keep their own history; they are not phone runs.
-        const automationPane = automationEngine?.ownsPane(sessionId) === true;
         if (historySession && !automationPane) recordHistory(store => store.ingest(sessionId, historySession.meta.env, data, historySession.meta.handoffFrom, failure));
         if (automationPane) {
           automationEngine?.onAgentEvent(sessionId, {
@@ -5117,8 +5204,8 @@ function registerRpcHandlers(
             status: data.status,
             ...(data.decision ? { decision: data.decision } : {}),
             ...(data.signal.agentSessionId ? { agentSessionId: data.signal.agentSessionId } : {}),
-            ...(data.signal.kind === 'agent.stop_failure' && classifyClaudeStopFailure(data.signal.payload ?? {}, now).reason === 'auth'
-              ? { authFailure: true } : {}),
+            ...(classifiedStop?.reason === 'auth' ? { authFailure: true } : {}),
+            ...(transientFailure ? { transientFailure: true } : {}),
           }).catch((err) => log('warn', `[automation] agent event handling failed for ${sessionId}:`, err));
         }
         // Hook Stop/awaiting-input is authoritative inside the same daemon that
@@ -5225,6 +5312,8 @@ function registerRpcHandlers(
       // no Chat surface open.
       onTranscriptNudge: (sessionId, kind, agentSessionId, ts, promptId) => {
         projector.nudge(sessionId, kind, agentSessionId);
+        // The turn's last lines (a refused tool call) reach the app before its Stop does.
+        if (kind === 'agent.stop') transcriptActivity?.readLinesNow(sessionId);
         // A hook-fed session's own activity line wins over the transcript.
         transcriptActivity?.noteHookSignal(sessionId, kind);
         stallWatch?.noteHookSignal(sessionId, kind);
@@ -5495,6 +5584,23 @@ function registerRpcHandlers(
     botPromptsPublisher = ctx.clientId;
     return { ok: true, accepted: rows.length };
   });
+  // Main's open browser help requests (shared/phoneBrowserHelp.ts): the whole
+  // table, from the registered desktop only. The phone lists it and gets a
+  // live `browser.help` frame for each one that opens or closes.
+  browserHelpTable ??= new BrowserHelpTable({
+    firstParty: (clientId) => firstPartyOnly(clientId, BROWSER_HELP_SET_METHOD),
+    isOwner: (clientId) => desktopPhoneBridge?.isOwner(clientId) === true,
+    emit: (frames) => webTerminalServer?.emitBrowserHelp(frames),
+    onRows: (rows, closed) => pushBrowserHelp?.(rows, closed),
+    log: (level, message) => log(level, message),
+  });
+  const helpTable = browserHelpTable;
+  pipeServer.onRpc(BROWSER_HELP_SET_METHOD, async (params, ctx) => {
+    const result = helpTable.set(ctx.clientId, params);
+    if (result.ok) browserHelpPublisher = ctx.clientId;
+    return result;
+  });
+  pipeServer.onClientClose((clientId) => helpTable.onClientClose(clientId));
 
   pipeServer.onRpc('daemon.workspaceFacts.set', async (params, ctx) => {
     // FIRST-PARTY ONLY, and this one is load-bearing rather than hygienic: a
@@ -5682,7 +5788,11 @@ function registerRpcHandlers(
     const managed = sessionManager.getSession(id);
     if (!managed) return undefined;
     const durable = managed.meta.resumeBinding;
-    const binding = durable && bindingTranscriptLives(durable) ? durable : undefined;
+    // A gone folder is marked as for pty.list, so the host never calls a stale
+    // pane cwd that still names it a match (resumeInfoOf).
+    const binding = durable && bindingTranscriptLives(durable)
+      ? markCwdMissing(durable, managed.meta, bindingTranscriptLives, fs.existsSync)
+      : undefined;
     const commandRunning = managed.promptLog.commandRunningIfKnown();
     // Same three-state derivation as pty.list: an exec unit IS its agent
     // process, a tracked pane answers from the tracker, and anything else stays
@@ -5778,6 +5888,8 @@ function registerRpcHandlers(
     const bracketedPaste = sessionManager.getSession(id)?.bridge.outputModes?.isSet(2004) ?? null;
     return { agentName: readDaemonAgentState(id).agentName, bracketedPaste };
   });
+  // Main's folder-trust check for a pane its renderer has no screen for.
+  registerFolderTrustRpc(pipeServer, sessionManager);
   const readChatAgentState = (id: string) => {
     const keyed = sessionManager.getSession(id)?.bridge;
     // A chat send fences on keys only: a pointer drifting over a mouse-tracking
@@ -5836,14 +5948,25 @@ function registerRpcHandlers(
     id: string, agentSlug: AgentSlug, incarnationId: string, prompt: string, bypassUsageHold = false,
   ): Promise<SessionPromptScheduleResult> => {
     if (!bypassUsageHold && usageLimits?.holds(id)) return 'busy';
-    return deliverPromptToSessionNow(id, agentSlug, incarnationId, prompt, {});
+    return deliverPromptToSessionNow(id, agentSlug, incarnationId, prompt, {}, 'scheduled prompt');
   };
+  // Every caller is automated input (a schedule, a run, a nudge, a usage-limit
+  // continue), so a screen that cannot rule out a folder-trust prompt stops it
+  // too. `writer` names the caller in the refusal's log line.
   const deliverPromptToSessionNow = (
     id: string, agentSlug: AgentSlug, incarnationId: string, prompt: string,
     opts: Pick<ScheduledPromptDeliveryDeps, 'acceptError' | 'authorized' | 'onWrite'>,
+    writer: string,
+    trust: { refuseUnknown?: boolean; onRefused?: (verdict: 'trust' | 'unknown') => void } = {},
   ) =>
     deliverScheduledPrompt(agentSlug, incarnationId, prompt, {
       ...opts,
+      // Each of these is tried again later: one log line per pane while the refusal holds.
+      folderTrustBlocks: async () => {
+        const refused = await trustRefusal(sessionManager, id, writer, trust.refuseUnknown ?? true, { once: true });
+        if (refused) trust.onRefused?.(refused);
+        return refused;
+      },
       getAgentState: () => {
         const current = readDaemonAgentState(id);
         const slug = current.agentName ? agentDisplayToSlug(current.agentName) : undefined;
@@ -5905,10 +6028,30 @@ function registerRpcHandlers(
     return deliverCallerNudge(prompt, {
       usageHeld: () => usageLimits?.holds(id) === true,
       input: () => sessionManager.getSession(id)?.bridge,
-      deliver: (opts) => deliverPromptToSessionNow(id, agentSlug, incarnationId, prompt, opts),
+      deliver: (opts) => deliverPromptToSessionNow(id, agentSlug, incarnationId, prompt, opts, 'caller nudge'),
     });
   });
 
+  // The one fixed continue message, shared by the usage-limit resume and a
+  // scheduled run's retry after a temporary provider error.
+  // Both pass the same folder-trust checks as any automated writer.
+  const deliverContinueMessage = async (
+    id: string, slug: AgentSlug, incarnationId: string, stillWanted: () => boolean,
+    writer: string, trust: { refuseUnknown?: boolean; onRefused?: (verdict: 'trust' | 'unknown') => void },
+  ): Promise<SessionPromptScheduleResult> => {
+    // A human draft in the composer is a wait, not a failure: answering
+    // 'busy' keeps the pane armed and retries once the draft is sent or cleared.
+    if (sessionManager.getSession(id)?.bridge.hasDraft() === true) return 'busy';
+    return deliverPromptToSessionNow(id, slug, incarnationId, USAGE_LIMIT_CONTINUE_PROMPT, {
+      // A turn that died on the limit (or on a provider error) leaves the pane at `error`.
+      acceptError: true,
+      // Asked before the paste and before the Enter: the hold must still be
+      // this one and still armed, and no human draft may sit in the
+      // composer (the input-revision proof covers the gap after the paste).
+      authorized: async (stage) => stillWanted()
+        && (stage === 'submit' || sessionManager.getSession(id)?.bridge.hasDraft() !== true),
+    }, writer, trust);
+  };
   usageLimits = new UsageLimitRegistry({
     broadcast: (event) => pipeServer.broadcast(event),
     // The agent verified on the pane when the limit was seen. The continue
@@ -5919,23 +6062,24 @@ function registerRpcHandlers(
       const slug = state.agentName ? agentDisplayToSlug(state.agentName) : undefined;
       return slug && state.agentVerified && state.incarnationId ? { slug, incarnationId: state.incarnationId } : null;
     },
-    deliverContinue: async (id, expected, stillWanted) => {
-      // A human draft in the composer is a wait, not a failure: answering
-      // 'busy' keeps the pane armed and retries once the draft is sent or cleared.
-      if (sessionManager.getSession(id)?.bridge.hasDraft() === true) return 'busy';
-      return deliverPromptToSessionNow(id, expected.slug, expected.incarnationId, USAGE_LIMIT_CONTINUE_PROMPT, {
-        // A turn that died on the limit leaves the pane at `error`.
-        acceptError: true,
-        // Asked before the paste and before the Enter: the hold must still be
-        // this one and still armed, and no human draft may sit in the
-        // composer (the input-revision proof covers the gap after the paste).
-        authorized: async (stage) => stillWanted()
-          && (stage === 'submit' || sessionManager.getSession(id)?.bridge.hasDraft() !== true),
-      });
+    deliverContinue: async (id, expected, stillWanted, armed) => {
+      // A person's Continue stops only at a prompt seen. Any refusal answers
+      // 'folder_trust', which waits without spending the busy retries.
+      let refused = false;
+      const result = await deliverContinueMessage(id, expected.slug, expected.incarnationId, stillWanted,
+        'usage-limit continue', { refuseUnknown: armed, onRefused: () => { refused = true; } });
+      return refused ? 'folder_trust' : result;
     },
     log: (message) => log('info', message),
   });
   pipeServer.onRpc('daemon.usageLimit.list', async () => ({ limits: usageLimits?.list() ?? [] }));
+  usageReserveHolds = loadUsageReserveHolds(getWmuxDir());
+  // The usage reserve's holds, from the app only (main reads the usage):
+  // account key → when its 5h window resets. Replaced whole on every push.
+  pipeServer.onRpc('daemon.usageReserve.set', async (params, ctx) => {
+    if (!pipeServer.isFirstParty(ctx.clientId)) return { ok: false };
+    return takeUsageReserveHolds(getWmuxDir(), params['holds'], (next) => { usageReserveHolds = next; }, (line) => log('warn', line));
+  });
   // Edits come from the app only (main relays the renderer's verbs and the
   // reset fill): an agent holding the daemon token for its hooks must not be
   // able to dismiss or re-time a hold.
@@ -5967,6 +6111,8 @@ function registerRpcHandlers(
     (error)=>log('warn','[codex] pane ownership cleanup failed:',error));
   sessionManager.on('session:died', (payload: { id: string }) => usageLimits?.drop(payload.id));
   sessionManager.on('session:destroyed', (payload: { id: string }) => usageLimits?.drop(payload.id));
+  sessionManager.on('session:died', (payload: { id: string }) => trustRefusalLogged.delete(payload.id));
+  sessionManager.on('session:destroyed', (payload: { id: string }) => trustRefusalLogged.delete(payload.id));
 
   // A pane with no agent whose command waits on stdin (y/N, Enter, a
   // password): reported to main as the pane's Needs you. Informational only.
@@ -6036,6 +6182,7 @@ function registerRpcHandlers(
       return signedIn === false;
     },
     authLost: (agent, env) => noteAuthLost?.('', agent, env, 'schedule'),
+    reserveHold: (account) => usageReserveHoldAt(usageReserveHolds, account, Date.now()),
     createSession: async ({ id, cwd, env, command }) => {
       await createSessionRpc({ id, cwd, env, exec: { command } });
     },
@@ -6047,6 +6194,11 @@ function registerRpcHandlers(
       return outcome?.ok ? outcome.rows.map((r) => r.text).join('\n') : '';
     },
     sendKey: async (id, sequence) => {
+      if (!liveManaged(id)) throw new Error('session gone');
+      // Escape (the first-run dismiss key) stops only at a prompt seen, as any
+      // Escape does; Enter also at a screen that cannot rule one out.
+      const refused = await trustRefusal(sessionManager, id, 'automation key', sequence !== '\x1b', { once: true });
+      if (refused) throw new FolderTrustRefusedError(refused);
       const managed = liveManaged(id);
       if (!managed) throw new Error('session gone');
       managed.ptyProcess.write(sequence);
@@ -6070,7 +6222,16 @@ function registerRpcHandlers(
     // engine needs to tell "nothing written" from "pasted, not submitted".
     deliverPrompt: async (id, slug, incarnationId, prompt, onWrite) => (usageLimits?.holds(id)
       ? 'busy'
-      : deliverPromptToSessionNow(id, slug, incarnationId, prompt, onWrite ? { onWrite } : {})),
+      : deliverPromptToSessionNow(id, slug, incarnationId, prompt, onWrite ? { onWrite } : {}, 'automation run')),
+    // A pane held at a usage limit is that registry's to resume. The trust
+    // checks run before the paste and before Enter: 'unknown' before any
+    // write answers 'busy' (the engine asks again within its grace), a
+    // prompt on screen 'folder_trust' (final), and either after the paste
+    // 'error' (final: the continue is never pasted twice).
+    deliverContinue: async (id, slug, incarnationId, stillWanted) => (usageLimits?.holds(id)
+      ? 'busy'
+      : deliverContinueMessage(id, slug, incarnationId, stillWanted, 'automation retry', { refuseUnknown: true })),
+    folderTrustState: (id) => folderTrustState({ getSession: (sid) => sessionManager.getSession(sid) }, id),
     hasPendingApproval: (id) => approvalRegistry?.list().pending.some((r) => r.sessionId === id) ?? false,
     transcriptTurnEndAt: (id) => transcriptTurnEnd(projector.snapshot(id)?.events, 0)?.at,
     transcriptLastEventAt: (id) => projector.snapshot(id)?.events.at(-1)?.ts,
@@ -6178,6 +6339,14 @@ function registerRpcHandlers(
     const expect = parseWriteExpectation(params['expect']);
     if (!sessionId || !data || data.length > 64 * 1024 || !expect) {
       throw new Error('daemon.writeIfUnchanged: sessionId, data (at most 64 KiB) and expect are required');
+    }
+    if (!sessionManager.getSession(sessionId)) return { written: false };
+    // A folder-trust prompt gets nothing; a screen that cannot rule one out
+    // stops all but a line a person asked for (`origin: 'human'`, the
+    // first-run sample command). Callers try again: one log line per pane.
+    const human = params['origin'] === 'human';
+    if (await trustRefusal(sessionManager, sessionId, human ? 'sample command' : 'launch line', !human, { once: true })) {
+      return { written: false, reason: 'folder_trust' };
     }
     const managed = sessionManager.getSession(sessionId);
     if (!managed) return { written: false };
@@ -8190,17 +8359,37 @@ function wireEvents(
 function wireContextWatchers(
   sessionManager: DaemonSessionManager,
   pipeServer: DaemonPipeServer,
+  makeCommitOrigins?: (read: (probe: Probe) => Promise<ProbeAnswer>) => CommitOriginCapture,
 ): () => void {
   // offLoop: a pane's cwd is read and watched only after a reader process
   // opened it. On macOS the daemon is its own responsible process for the
   // privacy check, and an open() under ~/Desktop it has no grant for blocked
   // this loop until main force-respawned the daemon (health pings failing).
   const gitWatcher = new GitContextWatcher(undefined, { offLoop: true });
+  // Reads the reflogs through the git watcher's own reader (never this thread).
+  const commitOrigins = makeCommitOrigins?.((probe) => gitWatcher.readThroughReader(probe));
   const portWatcher = new PortWatcher(() =>
     sessionManager.listLiveSessions().map((s) => ({ sessionId: s.id, pid: s.pid })),
   );
 
+  // Commit origins: the panes in a locally watched worktree, with their
+  // branch as last emitted. Synced on every answer and every pane gone, and
+  // on a slow timer for a move the watcher answers with no new value.
+  const branches = new Map<string, string | null>();
+  const syncCommitOrigins = (): void => {
+    if (!commitOrigins) return;
+    try {
+      commitOrigins.sync(gitWatcher.localRepos().map((r) => ({ ...r, branch: branches.get(r.sessionId) ?? null })));
+    } catch (err) {
+      log('warn', '[commitOrigin] sync failed:', err);
+    }
+  };
+  const commitOriginTimer = commitOrigins ? setInterval(syncCommitOrigins, COMMIT_ORIGIN_SYNC_MS) : null;
+  commitOriginTimer?.unref?.();
+
   gitWatcher.on('git', (payload: { sessionId: string; branch: string | null; isWorktree: boolean; absent?: true }) => {
+    branches.set(payload.sessionId, payload.branch);
+    syncCommitOrigins();
     try {
       const event: DaemonEvent = {
         type: 'context.git',
@@ -8245,6 +8434,8 @@ function wireContextWatchers(
   };
   const onGone = (payload: { id: string }) => {
     gitWatcher.remove(payload.id);
+    branches.delete(payload.id);
+    syncCommitOrigins();
   };
   sessionManager.on('session:created', onCreated);
   sessionManager.on('session:cwd', onCwd);
@@ -8271,8 +8462,61 @@ function wireContextWatchers(
     sessionManager.off('session:destroyed', onGone);
     portWatcher.stop();
     gitWatcher.dispose();
+    if (commitOriginTimer) clearInterval(commitOriginTimer);
+    commitOrigins?.dispose();
     resyncContextWatchers = null;
   };
+}
+
+/** How often the commit-origin capture re-reads the watched worktrees (ms). */
+const COMMIT_ORIGIN_SYNC_MS = 15_000;
+/** Rows of a pane's recent output searched for a new commit's short SHA. */
+const COMMIT_ORIGIN_SCROLLBACK = 200;
+
+/**
+ * Where each commit made in a pane came from (daemon/commitOrigin). Each pane
+ * is read the moment its worktree's reflog line lands: its workspace, the
+ * agent it runs and that agent's own session (its bound Claude transcript).
+ */
+function createCommitOriginCapture(
+  sessionManager: DaemonSessionManager,
+  store: CommitOriginStore,
+  taskAt: (cwd: string) => string | null,
+  read: (probe: Probe) => Promise<ProbeAnswer>,
+): CommitOriginCapture {
+  return new CommitOriginCapture({
+    store,
+    read,
+    livePanes: () => sessionManager.listLiveSessions().map((s) => s.id),
+    // Soft-wrapped rows joined back, so a long summary line still matches.
+    paneText: async (id) => {
+      const outcome = await queuedTextSnapshot(sessionManager, id, COMMIT_ORIGIN_SCROLLBACK);
+      return outcome?.ok ? joinWrappedRows(outcome.rows).join('\n') : null;
+    },
+    outputBytes: (id) => sessionManager.getSession(id)?.ringBuffer.totalBytesWritten ?? null,
+    pane: (id) => {
+      const meta = sessionManager.getSession(id)?.meta;
+      const ws = meta?.env?.[ENV_KEYS.WORKSPACE_ID];
+      // registerRpcHandlers' agent-state reader (readDaemonAgentState).
+      const agentName = readAgentStateForWeb?.(id).agentName;
+      const agent = agentName ? agentDisplayToSlug(agentName) ?? null : null;
+      // The agent's own session, only while its binding names the agent the
+      // pane runs now: none while a /clear or a new agent has not bound yet
+      // (the binding still names the previous conversation), none for a shell.
+      const binding = agent ? transcriptProjector?.sentFileBinding(id) ?? null : null;
+      return {
+        ptyId: id,
+        workspaceId: typeof ws === 'string' && ws.trim() ? ws.trim() : null,
+        agent,
+        agentSessionId: binding && binding.agent === agent ? binding.agentSessionId : null,
+      };
+    },
+    taskOf: (id) => {
+      const cwd = sessionManager.getSession(id)?.meta.cwd;
+      return cwd ? taskAt(cwd) : null;
+    },
+    log: (line) => log('warn', line),
+  });
 }
 
 /**
@@ -8285,6 +8529,8 @@ let resyncContextWatchers: (() => void) | null = null;
 
 /** Set in main(); consumed by shutdown(). */
 let disposeContextWatchers: (() => void) | null = null;
+/** Set in main(); flushed by shutdown(). */
+let commitOriginStore: CommitOriginStore | null = null;
 
 /** X8: set in main(); shutdown() cancels pending supervised restarts through it. */
 let paneSupervisorRef: PaneSupervisor | null = null;
@@ -8320,6 +8566,28 @@ let cachedBootId: string | undefined;
 let diskOnlySessions: DaemonSession[] = [];
 
 /** What every save writes: the managed sessions, then the disk-only records they have not taken. */
+/** Why a daemon writer must not type into `id` now (folderTrustState.ts):
+ *  'trust' always, 'unknown' when `refuseUnknown` (an automated writer). */
+function trustRefusal(
+  sessionManager: DaemonSessionManager, id: string, writer: string, refuseUnknown: boolean, opts: { once?: boolean } = {},
+): Promise<'trust' | 'unknown' | null> {
+  return folderTrustRefusal(sessionManager, id, writer, {
+    refuseUnknown,
+    log: (message) => {
+      // A writer that tries again (`once`) logs a refusal once per pane while it holds.
+      if (opts.once && trustRefusalLogged.get(id) === message) return;
+      if (opts.once) trustRefusalLogged.set(id, message);
+      log('warn', message);
+    },
+  }).then((refused) => {
+    if (!refused && opts.once) trustRefusalLogged.delete(id);
+    return refused;
+  });
+}
+
+/** The last refusal logged per pane for a writer that retries; dropped with the session. */
+const trustRefusalLogged = new Map<string, string>();
+
 /** A pane runs nothing, so a writer may type into it (chat v2's launch, the
  *  Continue on another account resume line). See paneFree.ts. */
 async function sessionPaneFree(sessionManager: DaemonSessionManager, agentProcessTracker: AgentProcessTracker, id: string): Promise<boolean> {
@@ -8523,6 +8791,7 @@ async function shutdown(
   // Stop X1 context watchers (port poll timer + git fs.watch handles)
   try { disposeContextWatchers?.(); } catch { /* best effort */ }
   disposeContextWatchers = null;
+  try { commitOriginStore?.flushSync(); } catch { /* best effort */ }
 
   // Stop process monitor
   processMonitor.unwatchAll();
@@ -8828,15 +9097,23 @@ async function main(): Promise<void> {
   // nobody there to report anything. Same collapseId, so the phone replaces
   // the pane's banner rather than stacking a second one.
   const deferredPush = new DeferredPushQueue({
-    send: (payload, opts) => pushSender.notify(payload, opts),
+    // A held browser help push goes only to the devices that may still answer
+    // it, and never costs an approval its place in the relay queue.
+    send: (payload, opts) => {
+      if (opts.requires !== BROWSER_HELP_PUSH_CAPABILITY || !opts.deviceIds) return pushSender.notify(payload, opts);
+      const deviceIds = browserHelpPushRouter.narrowRelease(String(payload.browserHelpId), opts.deviceIds);
+      if (deviceIds.length > 0) pushSender.notify(payload, { ...opts, deviceIds, yields: true });
+    },
     // Whether a held push went out or was evicted unsent decides whether its
     // record may later retract it. Only called on a release or an eviction,
     // both of which happen after the router below exists.
     onOutcome: (id, outcome, collapseId) => {
       if (botApprovalPushRouter.owns(id)) botApprovalPushRouter.onParkedOutcome(id, outcome);
       else if (botPromptPushRouter.owns(id)) botPromptPushRouter.onParkedOutcome(id, outcome);
+      else if (browserHelpPushRouter.owns(id)) browserHelpPushRouter.onParkedOutcome(id, outcome);
       else approvalPushRouter.onParkedOutcome(id, outcome, collapseId);
     },
+    yields: (key) => browserHelpPushRouter.owns(key),
     isPresent: desktopIsPresent,
     staleAfterMs: () => presenceConfig().staleAfterMs,
     log: (level, msg) => log(level, msg),
@@ -8979,6 +9256,27 @@ async function main(): Promise<void> {
   const botPromptPushRouter = new BotPromptPushRouter(botPushTableDeps);
   pushBotApprovals = (rows) => botApprovalPushRouter.set(rows);
   pushBotPrompts = (rows) => botPromptPushRouter.set(rows);
+  // A browser help request (phone/BrowserHelpTable.ts), pushed only to the
+  // devices that may answer it (push/browserHelpPush.ts). Same presence rules
+  // and park queue; the retraction goes to the devices the push went to.
+  const browserHelpPushRouter = new BrowserHelpPushRouter({
+    audience: () => {
+      const store = getDeviceStore();
+      return browserHelpPushAudience({
+        server: webTerminalServer?.currentStartState,
+        desktopDecides: desktopPhoneBridge?.supports(PHONE_BROWSER_HELP_DECIDE_COMMAND) === true,
+        targets: store.pushTargets(),
+        hasExplicitInputGrant: (deviceId) => store.hasExplicitInputGrant(deviceId),
+      });
+    },
+    isBrainPane: (ptyId) => isBrainPty({ id: ptyId, env: sessionManager.getSession(ptyId)?.meta.env }),
+    suppress: botPushTableDeps.suppress,
+    send: (payload, opts) => pushSender.notify(payload, opts),
+    park: (key, payload, collapseId, requires, deviceIds) => deferredPush.park(key, payload, collapseId, requires, deviceIds),
+    forget: (key) => deferredPush.forget(key),
+    log: (level, msg) => log(level, msg),
+  });
+  pushBrowserHelp = (rows, closed) => browserHelpPushRouter.set(rows, closed);
   // Contract §7 `turn_failed`: one push per failed turn (serveTurnFailure only
   // calls this for a failure it had not held). Presence is consulted like an
   // approval's, but a suppressed one is DROPPED, not parked: someone at the
@@ -9049,6 +9347,10 @@ async function main(): Promise<void> {
     if (botPromptsPublisher !== null && botPromptsPublisher === clientId) {
       botPromptPushRouter.forgetParked();
       botPromptsPublisher = null;
+    }
+    if (browserHelpPublisher !== null && browserHelpPublisher === clientId) {
+      browserHelpPushRouter.publisherGone();
+      browserHelpPublisher = null;
     }
     desktopPresence.forget(clientId);
     deferredPush.onPresenceChanged();
@@ -9532,6 +9834,8 @@ async function main(): Promise<void> {
     approvalBlocked: (id) =>
       sessionManager.getSession(id)?.bridge.isAwaitingHuman() === true
       || approvalRegistry?.list().pending.some((request) => request.sessionId === id) === true,
+    // The worker logs a held nudge once per pane while the verdict holds.
+    folderTrustVerdict: (id) => folderTrustState({ getSession: (sid) => sessionManager.getSession(sid) }, id),
     screenShowsApproval: async (id) => {
       const frame = await renderPaneScreen(() => sessionManager.getSession(id), generateTextSnapshot);
       if (!frame || frame.rows.every((row) => !row.trim())) return null;
@@ -9646,6 +9950,8 @@ async function main(): Promise<void> {
           kill: (pid, signal) => process.kill(pid, signal),
           stillIdle,
         }),
+        atFolderTrust: async (sid) =>
+          (await trustRefusal(sessionManager, sid, 'continue on account', false)) !== null,
         paneFree: (sid) => sessionPaneFree(sessionManager, agentProcessTracker, sid),
         chatOwnsPane: (sid) => chatV2Host?.ownsPane(sid) === true,
         promptRevision: (sid) => {
@@ -10220,7 +10526,23 @@ async function main(): Promise<void> {
     if (!classified) return;
     // The thread id is the conversation id `/turns` resolves for a Codex pane,
     // so a pane that moved to another thread does not show this failure.
+    // A scheduled run's turn: the relay is the proof it ended, so the engine
+    // hears of it here, whether or not the phone push below goes out. A
+    // transient failure arms the run's one continue (and then is not final,
+    // so nothing is pushed); any failure of the turn that continue started
+    // ends the run. A pane the usage-limit registry holds is that registry's.
+    const automationPane = automationEngine?.ownsPane(id) === true;
+    const transient = automationPane && isTransientTurnFailure(classified, usageLimits?.holds(id) === true);
+    let armed = false;
+    if (automationPane && classified.reason !== 'auth') {
+      armed = !shouldPushTurnFailure(transient, () => automationEngine?.armTransientRetry(id) === true);
+      if (!armed && automationEngine?.continuedRunPane(id)) {
+        automationEngine.onAgentEvent(id, { kind: 'agent.stop_failure', status: 'error' })
+          .catch((err) => log('warn', `[automation] agent event handling failed for ${id}:`, err));
+      }
+    }
     const served = serveTurnFailure(session.bridge, classified, { ts: now, agentSessionId: threadId, push: (f) => {
+      if (armed) return;
       pushTurnFailed?.(id, f);
       if (f.reason !== 'auth') return;
       noteAuthLost?.(id, 'codex', session.meta.env, 'turn', f.providerCode);
@@ -10352,7 +10674,19 @@ async function main(): Promise<void> {
   });
 
   // 6b. X1 workspace-context watchers (git HEAD fs.watch + PID-tree ports)
-  disposeContextWatchers = wireContextWatchers(sessionManager, pipeServer);
+  commitOriginStore = new CommitOriginStore(getWmuxDir(), Date.now, (line) => log('warn', line));
+  const commitOriginsStore = commitOriginStore;
+  pipeServer.onRpc('daemon.commitOrigin.lookup', async (params, ctx) => {
+    if (!pipeServer.isFirstParty(ctx.clientId)) return { ok: false };
+    const sha = typeof params['sha'] === 'string' ? params['sha'].toLowerCase() : '';
+    if (!SHA_RE.test(sha)) return { ok: false };
+    return { ok: true, origin: commitOriginsStore.get(sha) };
+  });
+  disposeContextWatchers = wireContextWatchers(
+    sessionManager,
+    pipeServer,
+    (read) => createCommitOriginCapture(sessionManager, commitOriginsStore, (cwd) => workTaskService?.openTaskAt(cwd)?.id ?? null, read),
+  );
 
   // 7a. #596 — bring `wmux web` back if the operator had it on. Kicked off
   // BEFORE the control pipe starts listening, so `webRestore` is already
@@ -10469,6 +10803,8 @@ async function main(): Promise<void> {
 
   // Channels v2 — start the wake worker sweep (15 s tick + post fast-path).
   channelWakeWorkerRef?.start();
+  sessionManager.on('session:died', (payload: { id: string }) => channelWakeWorkerRef?.forgetSession(payload.id));
+  sessionManager.on('session:destroyed', (payload: { id: string }) => channelWakeWorkerRef?.forgetSession(payload.id));
 
   // 8b. Reap dead sessions that exceeded their TTL (hourly)
   const reapInterval = setInterval(() => {

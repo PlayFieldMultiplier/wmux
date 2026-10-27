@@ -80,7 +80,11 @@ export interface HeldFanout {
   wakeKind?: HeldWakeKind;
 }
 
-export type HoldInput = Omit<HeldFanout, 'id' | 'heldAt' | 'titles' | 'count' | 'fingerprint' | 'args'> & { args: HeldFanoutArgs };
+export type HoldInput = Omit<HeldFanout, 'id' | 'heldAt' | 'titles' | 'count' | 'fingerprint' | 'args'> & {
+  args: HeldFanoutArgs;
+  /** Hold it only with its arguments kept (a request the bot is not asked to resend). */
+  requireArgs?: boolean;
+};
 
 /** Where a request came from: its thread and the handoff its wake delivered. */
 export type HeldContext = Pick<HeldFanout, 'threadId' | 'handoffId'>;
@@ -106,6 +110,10 @@ export interface HeldFanoutPorts {
   /** The wmux-wide live fan-out cap (FANOUT_LIVE_TASK_CAP). Absent: not
    *  checked here (the bot's retry is refused and held again). */
   liveLimit?: () => number;
+  /** Whether the usage reserve holds what a bot's workers would spend in
+   *  this workspace: a held request waits for it to lift (the recheck timer
+   *  sees it). */
+  reserveHeld?: (held: Pick<HeldFanout, 'botId' | 'workspaceId'>) => boolean;
   now?: () => number;
   newId?: () => string;
   log?: (line: string) => void;
@@ -114,7 +122,8 @@ export interface HeldFanoutPorts {
 }
 
 const SHA_RE = /^[0-9a-f]{40}$/;
-const FETCH_REF_RE = /^pull\/[1-9][0-9]{0,8}\/head$/;
+// A review head ref: GitHub's `pull/<n>/head` or GitLab's `merge-requests/<n>/head`.
+const FETCH_REF_RE = /^(?:pull|merge-requests)\/[1-9][0-9]{0,8}\/head$/;
 const NAME_MAX = 256;
 
 function strings(v: unknown, max: number, each: number): string[] | null {
@@ -261,6 +270,7 @@ export class HeldFanouts {
       .filter((t): t is string => typeof t === 'string' && t.trim().length > 0);
     if (titles.length === 0) return null;
     const args = sanitizeHeldFanoutArgs(redacted);
+    if (!args && input.requireArgs) return null;
     const id = (this.ports.newId ?? (() => `held-${now.toString(36)}-${(++this.seq).toString(36)}`))();
     const entry: HeldFanout = {
       id,
@@ -369,6 +379,7 @@ export class HeldFanouts {
           if (this.wake(h)) woken.push(h);
           continue;
         }
+        if (this.ports.reserveHeld?.(h)) continue;
         const taken = botTaken.get(h.botId) ?? 0;
         // A bot slot handed out in this pass is a live wmux task too.
         const wmux = liveLimit !== undefined && open.live !== undefined ? { live: open.live + factoryTaken, limit: liveLimit } : undefined;

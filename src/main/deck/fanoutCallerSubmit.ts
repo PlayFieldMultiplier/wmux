@@ -51,7 +51,7 @@ export interface FanoutCallerSubmitPorts {
   prOf?: (ptyId: string) => { number: number; url: string } | null;
   agentState: (ptyId: string) => Promise<{ agentName: string | null; agentVerified: boolean; incarnationId: string } | null>;
   deliver: (args: { id: string; agentSlug: AgentSlug; incarnationId: string; prompt: string }) => Promise<{
-    result: 'sent' | 'held' | 'session_changed' | 'unavailable' | 'error';
+    result: 'sent' | 'held' | 'approval_pending' | 'session_changed' | 'unavailable' | 'error';
     pasted: boolean;
   }>;
 }

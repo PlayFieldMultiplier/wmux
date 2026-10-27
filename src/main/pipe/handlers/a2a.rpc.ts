@@ -13,7 +13,7 @@ import { validateMessage } from '../../../shared/types';
 import { EXECUTE_SEND_MAIN_TIMEOUT_MS } from '../../../shared/executeApprovalBounds';
 import { GATED_DELIVERY_DEADLINE_MARGIN_MS, GATED_NEW_TASK_SEND_MAIN_TIMEOUT_MS, NEW_TASK_SEND_MAIN_TIMEOUT_MS } from '../../../shared/freshContext';
 import { flagOrphanedTask, isPagedTaskQuery, pagedTaskId, shapeTaskQueryResult, summarizeTask, applyTaskQueryView } from '../../../shared/a2aTaskQueryView';
-import { defaultSnapshot } from '../../pty/portWatch';
+import { defaultSnapshot, withDeadline, SNAPSHOT_DEADLINE_MS } from '../../pty/portWatch';
 import { claimTokenForPane, claimTokenForRun } from '../../workspace/workspaceClaimTrust';
 import { isIdentityRunPty, liveIdentityRunAnchors } from '../../automation/runIdentity';
 import type { PortSnapshot, SnapshotFn } from '../../pty/portWatch';
@@ -245,19 +245,6 @@ function resolveCodexThreadClaim(
 
 function normalizeCallerPid(raw: unknown): number | null {
   return typeof raw === 'number' && Number.isInteger(raw) && raw > 0 ? raw : null;
-}
-
-/** Resolve `p`, but never wait longer than `ms` — on timeout resolve `fallback`.
- *  Keeps a slow process snapshot from blocking (past the client's RPC deadline)
- *  the legacy identity fallback the handler still wants to return. */
-function withDeadline<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
-  if (ms <= 0) return Promise.resolve(fallback);
-  return new Promise<T>((resolve) => {
-    let settled = false;
-    const timer = setTimeout(() => { if (!settled) { settled = true; resolve(fallback); } }, ms);
-    const finish = (v: T) => { if (!settled) { settled = true; clearTimeout(timer); resolve(v); } };
-    p.then(finish, () => finish(fallback));
-  });
 }
 
 /** Soft cap for the whole resolve.identity call, under the MCP client's ~10s RPC
@@ -552,10 +539,13 @@ export function registerA2aRpc(
     }
     return cls === 'shared-server';
   }
-  let snapInflight: Promise<PortSnapshot> | null = null;
+  let snapInflight: Promise<PortSnapshot | null> | null = null;
   async function getCoalescedSnapshot(): Promise<PortSnapshot | null> {
     if (!snapInflight) {
-      snapInflight = snapshotFn().finally(() => { snapInflight = null; });
+      // Bounded, so a snapshot child that never exits frees the slot for the
+      // next handshake instead of every later one joining it forever.
+      snapInflight = withDeadline<PortSnapshot | null>(snapshotFn(), SNAPSHOT_DEADLINE_MS, null)
+        .finally(() => { snapInflight = null; });
     }
     try {
       return await snapInflight;
@@ -1361,6 +1351,11 @@ export function registerA2aRpc(
   router.register('a2a.task.send', async (params, ctx) => {
     const marked = refuseHandoffMarker('a2a.task.send', [params.message, params.title], ctx);
     if (marked) return marked;
+    // A new task with `execute` runs a background claude outside the worker
+    // fence: a fenced worker sends it as a message only.
+    if (ctx?.fencedWorker && params.execute === true && !params.taskId) {
+      return { error: 'a2a.task.send: execute is not available inside the worker fence; send the task without execute' };
+    }
     // Cross-host A2A: a reply on a remote task, or a new task to a remote
     // pane's exact alias, goes to the peer host instead of a local pane.
     if (remote && typeof params.taskId === 'string' && isRemoteTaskId(params.taskId)) {

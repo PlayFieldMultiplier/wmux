@@ -183,7 +183,7 @@ describe('daemon.listSessions reports agent liveness without a binding (#2030 re
     expect(BODY).not.toMatch(/if \(!surfacedBinding\) return/);
     const aliveAt = BODY.indexOf('agentProcessTracker.statusFor(s.id)');
     const attachAt = BODY.indexOf('{ ...withPrompt, agentProcessAlive }');
-    const returnAt = BODY.indexOf('return surfacedBinding ? { ...withAlive, resumeBinding: surfacedBinding } : withAlive;');
+    const returnAt = BODY.search(/return surfacedBinding\s*\?\s*\{ \.\.\.withAlive, resumeBinding: [^}]*\}\s*:\s*withAlive;/);
     expect(aliveAt).toBeGreaterThan(-1);
     expect(attachAt).toBeGreaterThan(aliveAt);
     expect(returnAt).toBeGreaterThan(attachAt);

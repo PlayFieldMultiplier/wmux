@@ -681,4 +681,18 @@ export const it = {
   'worktask.cleanup.detail.orphanMeta': 'Resta solo il record dell’attività, non il worktree (una rimozione è stata interrotta) — controlla, poi elimina.',
   'worktask.cleanup.detail.diskMissing': 'Il worktree manca dal disco (eliminato fuori da wmux o per un crash) — chiudi l’attività per sistemarlo.',
   'botsPage.guest.readNotice': "Da ora un bot esterno può leggere i messaggi di questa conversazione e scrivervi. Non vede mai ciò che è stato detto prima della sua aggiunta.",
+
+  // Scheduled runs: one retry after a temporary provider error
+  'claudeIntegration.scheduledRetry': "Riprova le esecuzioni pianificate dopo un errore temporaneo",
+  'claudeIntegration.scheduledRetryDesc': "Se il turno di un'esecuzione pianificata fallisce per un errore di rete o del server del provider, attendi 5 minuti e invia un messaggio per continuare. Attivo per impostazione predefinita; ogni pianificazione può disattivarlo.",
+  'claudeIntegration.scheduledRetryUnknown': "Non ancora noto: in attesa del servizio in background di wmux.",
+  'claudeIntegration.usageReserve': "Mantieni una riserva di utilizzo",
+  'claudeIntegration.usageReserveDesc': "Il lavoro non presidiato che consumerebbe l'utilizzo di 5 ore di un account Claude non parte finché tale utilizzo è all'85% o oltre, così l'ultimo 15% resta a te. Un'esecuzione pianificata attende il ripristino e parte allora se è ancora entro il suo margine, altrimenti è persa; anche il fan-out di un bot attende; un fan-out chiesto da un agente nel tuo riquadro viene rifiutato, con l'ora del ripristino. Codex e gli altri agenti non vengono trattenuti, e ciò che digiti non viene mai messo in attesa. Disattivato per impostazione predefinita.",
+  'schedules.retryTransient': "Riprova una volta dopo un errore temporaneo",
+  'schedules.retryTransientHint': "In caso di errore di rete o del server del provider, attendi 5 minuti e invia un messaggio per continuare. Il prompt non viene reinviato.",
+  'schedules.retryTransientGlobalHint': "Vale solo se «Riprova le esecuzioni pianificate dopo un errore temporaneo» è attivo in Impostazioni → Integrazione Claude.",
+  'schedules.state.retryWaiting': "In attesa: nuovo tentativo dopo un errore temporaneo del provider (tra {minutes} min)",
+  'schedules.reason.agent_error_retried_once': "errore dell'agente di nuovo dopo un tentativo",
+  'schedules.reason.agent_error_retry_blocked': "errore dell'agente; impossibile inviare il nuovo tentativo",
+  'schedules.reason.agent_error_retry_interrupted': "errore dell'agente; nessun nuovo tentativo, wmux è stato riavviato",
 } as const;

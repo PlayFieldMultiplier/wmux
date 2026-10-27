@@ -51,6 +51,7 @@ import type {
 } from '../../approvals/types';
 import { DECISION_V2_WEB_ANSWER, TERMINAL_PROMPT_WEB_ANSWER, TERMINAL_PROMPT_WEB_DECLINE, type DecisionFormKind, type TerminalPromptDetail } from '../../approvals/types';
 import type { DaemonSessionManager } from '../../DaemonSessionManager';
+import { folderTrustSessions } from '../../../test-utils/folderTrustSessions';
 
 // A minimal fake of exactly what WebTerminalServer touches: getSession() (for
 // stream/input) and listLiveSessions() (for the picker). No real daemon/pty.
@@ -5376,6 +5377,41 @@ describe('WebTerminalServer', () => {
       });
     });
 
+    describe('a launch line from the browser client', () => {
+      const launchInto = (token: string, body: string, launch: string | null) =>
+        fetch(`${base()}/api/input?session=s1${launch === null ? '' : `&launch=${launch}`}`, { method: 'POST', headers: bearer(token), body });
+      /** The fake pane takes the daemon session of a fixture pane: its screen, size and mute. */
+      const become = (paneId: string) => {
+        const fixture = folderTrustSessions().getSession(paneId);
+        if (!fixture) throw new Error(paneId);
+        Object.assign(managed, { meta: { ...managed.meta, ...fixture.meta }, ringBuffer: fixture.ringBuffer });
+        Object.assign((managed as unknown as { ptyProcess: object }).ptyProcess, fixture.ptyProcess);
+        Object.assign(bridge, fixture.bridge);
+      };
+
+      it('an auto-resume at a folder-trust prompt is refused, nothing written; typed keys still go through', async () => {
+        const info = await startRW();
+        become('pane-trust');
+        for (const launch of ['auto', 'human', 'anything']) {
+          const res = await launchInto(info.token as string, 'claude --resume x\r', launch);
+          expect(res.status).toBe(409);
+          expect(await res.json()).toEqual({ error: 'folder-trust', verdict: 'trust', effect: 'none' });
+        }
+        expect(write).not.toHaveBeenCalled();
+        // A person's own keys are not a launch line (they answer the prompt).
+        expect((await launchInto(info.token as string, '\r', null)).status).toBe(204);
+        expect(write).toHaveBeenCalledWith('\r');
+      });
+
+      it('a screen that cannot rule the prompt out stops only an automated line', async () => {
+        const info = await startRW();
+        become('pane-unknown');
+        expect((await launchInto(info.token as string, 'claude --resume x\r', 'auto')).status).toBe(409);
+        expect((await launchInto(info.token as string, 'claude --resume x', 'human')).status).toBe(204);
+        expect(write.mock.calls).toEqual([['claude --resume x']]);
+      });
+    });
+
     describe('raw input while the dialog is up', () => {
       const typeInto = (token: string, body: string, headers: Record<string, string> = {}) =>
         fetch(`${base()}/api/input?session=s1`, { method: 'POST', headers: { ...bearer(token), ...headers }, body });
@@ -10016,6 +10052,29 @@ describe('WebTerminalServer', () => {
       // The host-local transcript path never crosses the API, under any key.
       expect(raw).not.toContain('.jsonl');
       expect(raw).not.toContain('transcriptPath');
+    });
+
+    // A folder the daemon reports gone never matches, even when the pane's
+    // recorded cwd still names it: the desktop would type `--resume` there.
+    it('never calls a gone folder a cwd match', async () => {
+      live.push({
+        id: 's-gone', cwd: '/repo/wt-gone', cols: 80, rows: 24, state: 'detached',
+        agent: undefined, lastDetectedAgent: undefined, lastActivity: '2020-01-01T00:00:00.000Z',
+        env: { WMUX_WORKSPACE_ID: 'ws-1', WMUX_WORKSPACE_NAME: 'Workspace 1' },
+        cmd: '/usr/bin/bash',
+      });
+      resumeStates = {
+        's-gone': { binding: { agent: 'claude', sessionId: 'conv-gone', cwd: '/repo/wt-gone', ts: 1, cwdMissing: true } },
+      };
+      try {
+        const info = await startRO();
+        const r = await fetch(`${base()}/api/workspaces`, { headers: bearer(info.token as string) });
+        const body = (await r.json()) as { workspaces: Array<{ panes: Array<{ sessionId: string; resume?: Record<string, unknown> }> }> };
+        const pane = body.workspaces.flatMap((w) => w.panes).find((p) => p.sessionId === 's-gone');
+        expect(pane?.resume).toEqual({ agent: 'claude', sessionId: 'conv-gone', cwdMatches: false });
+      } finally {
+        live.length = 3;
+      }
     });
 
     it('groups multiple panes into the same workspace, sorted by sessionId', async () => {

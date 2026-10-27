@@ -59,6 +59,7 @@ export function boundDecisionForm(form: DecisionForm): DecisionForm | null {
         text,
         multiSelect: q.multiSelect === true,
         allowOther: q.allowOther === true,
+        ...(q.preview === true ? { preview: true as const } : {}),
         options,
       });
     }

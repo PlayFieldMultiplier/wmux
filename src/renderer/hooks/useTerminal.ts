@@ -14,6 +14,7 @@ import { isPcRailAction, pcRailClaimsKey } from '../components/PcRail/pcRailMode
 import { xtermWindowsBuildNumber } from '../../shared/conptyWindows';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { useStore } from '../stores';
+import { claimsBookmarkKey, keepAcrossRepaint as keepBookmarksAcrossRepaint } from '../components/Terminal/scrollbackBookmarks';
 import { t } from '../i18n';
 import { XTERM_THEMES, extractXtermColors, type ThemeId, type BuiltinThemeId } from '../themes';
 import { resolveMinimumContrastRatio } from '../tailwindPalette';
@@ -1118,6 +1119,12 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
         // the reset (rows, the same convention terminalPark uses, so the
         // restore stays proportional if the repaint reflows line counts).
         const fromBottom = Math.max(0, term.buffer.active.baseY - term.buffer.active.viewportY);
+        // reset() disposes every marker; put the scrollback bookmarks back
+        // once the snapshot has been parsed.
+        let restoreBookmarks: (() => void) | null = null;
+        try {
+          if (ptyIdRef.current) restoreBookmarks = keepBookmarksAcrossRepaint(term, ptyIdRef.current, useStore);
+        } catch { /* a bookmark carry never stops the repaint */ }
         discardTerminalOutput(term);
         term.reset();
         shellPromptModeResetFor(term)?.reset();
@@ -1129,6 +1136,12 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
         // historical chunks are muted; genuinely live chunks remain trusted.
         for (const chunk of st.buffer) {
           writePtyDataImmediately(term, chunk, replayMuteRef.current);
+        }
+        if (restoreBookmarks) {
+          const restore = restoreBookmarks;
+          term.write('', () => {
+            try { restore(); } catch { /* disposed mid-restore — teardown owns cleanup */ }
+          });
         }
         markTerminalClean(term);
         if (fromBottom > 0) {
@@ -2101,7 +2114,9 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
     // UI noise. Errors are also silent: the explicit Ctrl+C path still
     // surfaces them on retry.
     const autoCopy = createAutoSelectionCopy({
-      write: (text) => window.clipboardAPI.writeText(text),
+      // Silent on the web too: a refused auto-copy is not kept for the next
+      // key, which could be the ⌘V meant to paste what the clipboard holds.
+      write: (text) => window.clipboardAPI.writeText(text, { keepIfRefused: false }),
     });
     const selectionDisposable = terminal.onSelectionChange(() => {
       autoCopy.onSelection(terminal.getSelection());
@@ -2416,6 +2431,9 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
       // No paired computer, or a custom keybinding on the chord: the PC rail
       // does not take it, so the pane gets Shift+Alt+Arrow / Home.
       if (isPcRailAction(shortcut) && !pcRailClaimsKey(useStore.getState(), e)) return true;
+      // On the alternate screen Ctrl+M is the full-screen app's Enter, not a
+      // scrollback bookmark (useKeyboard asks the same predicate).
+      if (shortcut === 'addBookmark' && !claimsBookmarkKey(terminal)) return true;
       // #1280 — the Rich Input chord bubbles from HERE, instead of merely
       // being preventDefault'd downstream: xterm's own encode path calls
       // stopPropagation (its `cancel()`), so otherwise the chord never reaches
@@ -2960,6 +2978,13 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
       const fromBottom = Math.max(0, terminal.buffer.active.baseY - terminal.buffer.active.viewportY);
       discardTerminalOutput(terminal); // stale retained backlog + dirty flag
       warmSwap.cancel(); // this repaint replaces any pending cold frame
+      // The RIS disposes every marker. Measure the scrollback bookmarks once
+      // the bytes ahead of it have parsed, and put them back after the replay.
+      let restoreBookmarks: (() => void) | null = null;
+      const measureBookmarks = () => {
+        try { restoreBookmarks = keepBookmarksAcrossRepaint(terminal, ptyId, useStore); } catch { /* disposed mid-repaint — teardown owns cleanup */ }
+      };
+      terminal.write('', measureBookmarks);
       terminal.write(REPAINT_BEGIN, () => { shellPromptModeResetFor(terminal)?.reset(); });
       // The scanner labels every held chunk at its source. Historical bytes
       // are muted for their exact parse lifetime; live output is not muted.
@@ -2975,6 +3000,9 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
       // unfinished tail xterm now holds, so the live bytes that finish it are
       // still recognised as a query.
       if (held.pending) noteTerminalDirectWrite(terminal, held.pending.data);
+      terminal.write('', () => {
+        try { restoreBookmarks?.(); } catch { /* disposed mid-restore — teardown owns cleanup */ }
+      });
       if (fromBottom > 0) {
         // Trailing empty write = parse barrier (callbacks fire in write
         // order); scrollToLine only after the recovered screen is parsed and

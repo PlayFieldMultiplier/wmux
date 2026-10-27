@@ -69,3 +69,13 @@ export function automationToastText(
   const name = oneLine(automationName, NAME_MAX) || 'wmux';
   return `${name} · ${labels[kind]}`;
 }
+
+/** The usage-reserve notice: unattended work on an account waits for its 5h
+ *  reset. `who` is the account's name, or null for the default login. */
+export function usageReserveToastText(locale: AutomationUiLocale, who: string | null, untilClock: string): string {
+  const name = who === null ? null : oneLine(who, NAME_MAX);
+  if (locale === 'ko') {
+    return `사용량 예비분 보호: ${name ?? '기본 Claude 로그인'}의 무인 작업은 ${untilClock}까지 시작하지 않습니다`;
+  }
+  return `Usage reserve: unattended work on ${name ?? 'your default Claude login'} waits until ${untilClock}`;
+}

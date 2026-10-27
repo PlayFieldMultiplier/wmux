@@ -16,6 +16,7 @@ import { toWslPath } from '../../../shared/imagePaste';
 import type { TerminalChatAbortOutcome } from '../../transcript/TerminalChatService';
 import { cancelResponse } from '../../web/chatWire';
 import { agentAliveVerdict } from '../../canonicalAgent';
+import { trustFixtureRows } from '../../../test-utils/folderTrustSessions';
 import { OPENCODE_MAX_SEND_BYTES, fileHistoryEpoch, projectChatBlocked, tuiHistoryEpoch, type ChatQueueEvent } from '../chatBridge';
 
 const dirs: string[] = [];
@@ -442,6 +443,15 @@ describe('send', () => {
     expect(f.written).toEqual(['\x1b[200~a\x1b[201~', '\r', '\x1b[200~b\x1b[201~', '\r']);
   });
 
+  it('desktop and phone: a send to a pane on a folder-trust prompt is blocked as a terminal prompt, nothing written', async () => {
+    const f = fixture(); f.liveClaude();
+    f.state.screen = trustFixtureRows('claude-folder-trust-120x40');
+    expect(await f.bridge.desktopSend({ id: 'pane', agentSessionId: 'conv', text: 'hi', requestId: msgId() }))
+      .toEqual({ result: 'blocked', effect: 'none', replayed: false });
+    expect(await f.bridge.send(phoneSend())).toMatchObject({ result: 'blocked', error: 'chat-blocked', blockedBy: 'terminal', effect: 'none' });
+    expect(f.written).toEqual([]);
+  });
+
   it('desktop: mints an id for a legacy request id and keeps the desktop result enum', async () => {
     const f = fixture(); f.liveClaude();
     expect(await f.bridge.desktopSend({ id: 'pane', agentSessionId: 'conv', text: 'hi', requestId: randomUUID() }))
@@ -532,14 +542,14 @@ describe('launch', () => {
     // A WSL pane's record names the files main wrote for it: the worker
     // settings and this build's wmux server (botWorkerConnectors.os.test.ts
     // covers a native record's).
-    const botWorker = (dir: string) => {
+    const botWorker = (dir: string, fence?: { strength: 'full' | 'weaker' | 'off' }) => {
       const settings = path.join(dir, 'factory', 'worker-settings', '0123456789ab.json');
       const mcp = path.join(dir, 'factory', 'worker-mcp', '0123456789ab.json');
       fs.mkdirSync(path.dirname(settings), { recursive: true });
       fs.mkdirSync(path.dirname(mcp), { recursive: true });
       fs.writeFileSync(settings, JSON.stringify(buildBotWorkerSettings()));
       fs.writeFileSync(mcp, JSON.stringify({ mcpServers: { wmux: { type: 'stdio', command: '/bin/sh', args: ['-c', 'exec x'] } } }));
-      record(dir, { version: 1, sessions: { pane: { workspaceId: 'ws-task', at: 1, wsl: true, launch: { settingsFile: settings, mcpConfigFile: mcp, level: 'full' } } } });
+      record(dir, { version: 1, sessions: { pane: { workspaceId: 'ws-task', at: 1, wsl: true, launch: { settingsFile: settings, mcpConfigFile: mcp, level: 'full', ...(fence ? { fence } : {}) } } } });
       // Linux claude opens them through its /mnt mount (a Windows runner's path).
       return { settings, mcp, flags: `--settings="${toWslPath(settings) ?? settings}" --mcp-config="${toWslPath(mcp) ?? mcp}" --strict-mcp-config` };
     };
@@ -569,11 +579,38 @@ describe('launch', () => {
       const go = (extra: Record<string, unknown>) => createChatBridge(f.deps).launch({ id: 'pane', agent: 'claude', resume: true, refuseConversation: true, ...extra });
       expect(await go({ prompt: 'next' })).toEqual({ ok: true, effect: 'submitted' });
       f.shell.empty = true;
-      expect(await go({ mode: 'bypass' })).toMatchObject({ ok: true });
+      expect(await go({ mode: 'default' })).toMatchObject({ ok: true });
       expect(f.typed).toEqual([
         `cd -- '/proj' && claude ${files.flags} --resume ${SID} -- 'next'\r`,
-        `cd -- '/proj' && claude ${files.flags} --resume ${SID} --dangerously-skip-permissions\r`,
+        `cd -- '/proj' && claude ${files.flags} --resume ${SID}\r`,
       ]);
+    });
+
+    it('a launch that would run unattended types nothing: the worker fence starts only from wmux', async () => {
+      // Unattended by its flag, whatever the session's record says.
+      for (const fence of [undefined, { strength: 'off' as const }, { strength: 'weaker' as const }, { strength: 'full' as const }]) {
+        const f = fixture();
+        botWorker(f.dir, fence);
+        f.state.pane!.meta.cmd = '/bin/zsh';
+        expect(await f.bridge.launch({ id: 'pane', agent: 'claude', mode: 'bypass' })).toEqual({ ok: false, error: 'launch-unsupported', effect: 'none' });
+        expect(f.typed).toEqual([]);
+      }
+      // A session main started inside the fence, in any mode.
+      const fenced = fixture();
+      botWorker(fenced.dir, { strength: 'full' });
+      expect(await fenced.bridge.launch({ id: 'pane', agent: 'claude', prompt: 'go' })).toEqual({ ok: false, error: 'launch-unsupported', effect: 'none' });
+      // A line with no flag whose user settings start claude unattended.
+      const byDefault = fixture();
+      botWorker(byDefault.dir);
+      fs.mkdirSync(path.join(os.homedir(), '.claude'), { recursive: true });
+      const settings = path.join(os.homedir(), '.claude', 'settings.json');
+      fs.writeFileSync(settings, JSON.stringify({ permissions: { defaultMode: 'bypassPermissions' } }));
+      try {
+        expect(await byDefault.bridge.launch({ id: 'pane', agent: 'claude', prompt: 'go' })).toEqual({ ok: false, error: 'launch-unsupported', effect: 'none' });
+      } finally {
+        fs.unlinkSync(settings);
+      }
+      expect([...fenced.typed, ...byDefault.typed]).toEqual([]);
     });
 
     it('an unreadable record, or one without launch files outside WSL, types nothing', async () => {
@@ -1137,6 +1174,20 @@ describe('cancel', () => {
     expect(await f.bridge.desktopInterrupt('pane', 'conv', 't1:n.2')).toBe('not_running');
     expect(f.written).toEqual([]);
     expect(await f.bridge.desktopInterrupt('pane', 'conv', 't1:n.3')).toBe('sent');
+    expect(f.written).toEqual(['\x1b']);
+  });
+
+  it('a folder-trust prompt the daemon sees refuses a Stop and a Rewind before any ESC, naming the writer', async () => {
+    const f = running();
+    const asked: string[] = [];
+    let atTrust = true;
+    const bridge = createChatBridge({ ...f.deps, atFolderTrust: async (_id, writer) => { asked.push(writer); return atTrust; } });
+    expect(await bridge.desktopInterrupt('pane', 'conv')).toBe('blocked');
+    expect(await bridge.desktopRewind('pane')).toBe('blocked');
+    expect(f.written).toEqual([]);
+    expect(asked).toEqual(['chat stop', 'chat rewind']);
+    atTrust = false;
+    expect(await bridge.desktopInterrupt('pane', 'conv')).toBe('sent');
     expect(f.written).toEqual(['\x1b']);
   });
 

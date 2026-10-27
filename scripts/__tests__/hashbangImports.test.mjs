@@ -15,32 +15,34 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { ROOT, listTestFiles } from '../lib/test-lanes.mjs';
+import { RELATIVE_IMPORT, ROOT, commentSpans, isTypeOnlyImport, listTestFiles, resolveRelative } from '../lib/test-lanes.mjs';
 
-// Relative specifiers of static imports and re-exports, side-effect imports,
-// and dynamic imports of a string literal: every form Vite transforms.
-const SPECIFIER = /\bfrom\s*['"](\.{1,2}\/[^'"]+)['"]|\bimport\s*['"](\.{1,2}\/[^'"]+)['"]|\bimport\(\s*['"](\.{1,2}\/[^'"]+)['"]\s*\)/g;
-const EXTENSIONS = ['.ts', '.tsx', '.mts', '.js', '.mjs', '.cjs'];
+// A query that hands the importer the file's text or URL: the file is not run.
+const NOT_RUN_QUERY = /\?(?:raw|url|inline)\b/;
 // A vitest config names its setup and global setup files as strings; those
 // load through the same transform as an import.
 const SETUP_FILES = /\b(?:setupFiles|globalSetup)\s*:\s*\[([^\]]*)\]/g;
 const QUOTED_RELATIVE = /['"](\.{1,2}\/[^'"]+)['"]/g;
 
-const isFile = (abs) => {
-  try {
-    return fs.statSync(abs).isFile();
-  } catch {
-    return false;
+/**
+ * The relative specifiers a module loads as code, read as the lane rule reads
+ * imports (RELATIVE_IMPORT): not a type-only import (TypeScript erases it), not
+ * one in a comment, not a `?raw` or `?url` import. A query is dropped.
+ */
+function loadedSpecifiers(source) {
+  // Comments come from one pass over the whole file, so a block comment's
+  // state carries across lines (an unprefixed line inside one is no code),
+  // and a quote in a comment or a `//` in a URL stays where it belongs.
+  const comments = commentSpans(source);
+  const inComment = (index) => comments.some(([start, end]) => start <= index && index < end);
+  const specs = [];
+  for (const m of source.matchAll(RELATIVE_IMPORT)) {
+    // The opening quote: the match ends with the specifier and its closing quote.
+    const quote = m.index + m[0].length - m[1].length - 2;
+    if (inComment(m.index) || isTypeOnlyImport(source, quote) || NOT_RUN_QUERY.test(m[1])) continue;
+    specs.push(m[1].split('?')[0]);
   }
-};
-
-/** The file a relative specifier names, as TypeScript and Vite resolve it, or null. */
-function resolve(fromAbs, spec) {
-  const base = path.resolve(path.dirname(fromAbs), spec.split('?')[0]);
-  const candidates = [base, ...EXTENSIONS.map((ext) => base + ext), ...EXTENSIONS.map((ext) => path.join(base, `index${ext}`))];
-  // `./x.js` in TypeScript source names x.ts.
-  if (/\.[cm]?js$/.test(base)) candidates.push(...['.ts', '.tsx', '.mts'].map((ext) => base.replace(/\.[cm]?js$/, ext)));
-  return candidates.find(isFile) ?? null;
+  return specs;
 }
 
 describe('hashbang files reached from tests', () => {
@@ -64,10 +66,10 @@ describe('hashbang files reached from tests', () => {
         hits.push(`${via.get(abs).join(' -> ')} starts with a hashbang`);
         continue;
       }
-      const specs = [...source.matchAll(SPECIFIER)].map((m) => m[1] ?? m[2] ?? m[3]);
+      const specs = loadedSpecifiers(source);
       for (const [, list] of source.matchAll(SETUP_FILES)) specs.push(...[...list.matchAll(QUOTED_RELATIVE)].map((m) => m[1]));
       for (const spec of specs) {
-        const target = resolve(abs, spec);
+        const target = resolveRelative(abs, spec);
         if (!target || via.has(target)) continue;
         via.set(target, [...via.get(abs), rel(target)]);
         queue.push(target);
@@ -80,5 +82,61 @@ describe('hashbang files reached from tests', () => {
     // A planted hashbang in a global setup file stops Vitest before this test
     // runs, so check the walk reaches one instead.
     expect(via.has(path.join(ROOT, 'scripts', 'vitest-electron-binary.mjs'))).toBe(true);
+    // It reads the whole import graph, several thousand files: about 4.5 s on
+    // a busy Windows box already, so vitest's 5 s default is no margin.
+  }, 30_000);
+});
+
+describe('what the walk counts as a load', () => {
+  it('a value import, a re-export, a side-effect import and a literal dynamic import', () => {
+    const source = [
+      "import { a } from './a.mjs';",
+      "export { b } from './b.mjs';",
+      "import './c.mjs';",
+      "const d = await import('./d.mjs');",
+      "import { type T, e } from './e.mjs';",
+      "const u = 'https://example.com'; import f from './f.mjs';",
+      "import g from './g.mjs?v=1';",
+      "/* eslint-disable-next-line */ import { h } from './h.mjs';",
+      "import type { T2 } from './t2.mjs';",
+      "export { i } from './i.mjs';",
+      " */ import { k } from './k.mjs';",
+    ].join('\n');
+    expect(loadedSpecifiers(source)).toEqual(['./a.mjs', './b.mjs', './c.mjs', './d.mjs', './e.mjs', './f.mjs', './g.mjs', './h.mjs', './i.mjs', './k.mjs']);
+  });
+
+  it('a re-export after a type import, and an import after a URL string, with or without semicolons', () => {
+    expect(loadedSpecifiers("import type { T } from './t.mjs'\nexport { i } from './i.mjs'\n")).toEqual(['./i.mjs']);
+    expect(loadedSpecifiers("import type { T } from './t.mjs';\nconst u = 'http://h'; import { type A, j } from './j.mjs';\n")).toEqual(['./j.mjs']);
+    // A dynamic import inside a template after an ASI-ended type import is a load.
+    expect(loadedSpecifiers("import type { T } from './t.mjs'\nconst s = `${import('./h.mjs')}`\n")).toEqual(['./h.mjs']);
+  });
+
+  it('not a type-only re-export', () => {
+    expect(loadedSpecifiers("export type { X } from './x.mjs';\nexport { type Y } from './y.mjs';\n")).toEqual([]);
+  });
+
+  it('not a type-only import: TypeScript erases it', () => {
+    expect(loadedSpecifiers("import type { T } from './cli.mjs';\nimport { type A, type B } from './cli2.mjs';\n")).toEqual([]);
+  });
+
+  it('not an import in a comment', () => {
+    const source = [
+      "// import { run } from './cli.mjs';",
+      '/* import x from \'./cli2.mjs\'; */',
+      '/**',
+      " * Example: import y from './cli3.mjs';",
+      ' */',
+      "const z = 1; // was: import z from './cli4.mjs'",
+    ].join('\n');
+    expect(loadedSpecifiers(source)).toEqual([]);
+    // A quote inside a closed comment opens no string that hides the next import.
+    expect(loadedSpecifiers("/* don't */ import a from './x.mjs'; import b from './y.mjs';\n")).toEqual(['./x.mjs', './y.mjs']);
+    // An unprefixed line inside a block comment that opened lines above is no code.
+    expect(loadedSpecifiers("/*\nimport './cli.mjs';\n*/\nimport './real.mjs';\n")).toEqual(['./real.mjs']);
+  });
+
+  it('not a ?raw or ?url import: the file comes back as text or a URL, never run', () => {
+    expect(loadedSpecifiers("import text from './cli.mjs?raw';\nimport href from './cli2.mjs?url';\n")).toEqual([]);
   });
 });

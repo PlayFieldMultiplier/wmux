@@ -42,6 +42,9 @@ import { onPrVerdictRecorded } from '../../github/prVerdictStore';
 import { factVisibleToBot } from '../../factory/wakeTaint';
 import { factInIsland } from '../../factory/guestWorkspaces';
 import { inAnotherBotsDm } from '../../../shared/room';
+import { isFencedBotWorkerSession } from '../../agents/botWorkerMergeGuard';
+import { toolRefusalOf } from '../../agents/toolRefusals';
+import { refusalStopLine } from '../../../shared/toolRefusal';
 
 const ID_MAX = 256;
 
@@ -223,6 +226,11 @@ export function defaultFactIngestPorts(): FactIngestPorts {
   return {
     subscribeBus: (fn) => eventBus.subscribe(fn),
     findTaskByWorkspace: (ws) => ledger.findByTaskWorkspace(ws),
+    // A fenced bot worker's turn that stopped on a refused tool call says so.
+    stoppedOn: (ptyId) => {
+      const refusal = isFencedBotWorkerSession(ptyId) ? toolRefusalOf(ptyId) : null;
+      return refusal ? refusalStopLine(refusal) : null;
+    },
     onLedgerTransition: (fn) => ledger.onTransition(fn),
     onVerdictRecorded: onPrVerdictRecorded,
   };

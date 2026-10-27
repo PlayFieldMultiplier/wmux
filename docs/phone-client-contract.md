@@ -240,6 +240,7 @@ JSON backlog fetch (Bearer only).
 | `gate.state` | `{gateEnabled}` — the permission gate was armed or disarmed |
 | `channel.mention` | `{channelId, seq, fromMemberName, text, postedAt, tier}` — a channel message mentioned the operator row; re-fetch `/api/channels` (§9). Recorded, not live-only |
 | `moa` | `{moaSessionId}` — the Moa pane appeared (an id) or went away (`null`); see *Waking Moa from the phone*. Live only |
+| `browser.help` | `{phase, requestId, workspaceId, surfaceId?, deadlineAt, state?}` — a browser help request opened or closed; re-fetch `/api/browser-help`. No prompt. Live only; see *Browser help requests* |
 
 `phase` is `create` / `resolve` / `expire` / `supersede`.
 
@@ -264,7 +265,8 @@ what was true before. It is live-only like the two above — `GET /api/config`
 holds the authoritative value, so read that on reconnect rather than trying to
 replay transitions.
 
-**These three events are the ones that are NOT in the backlog.** Every other
+**These events — the three above, `moa` and `browser.help` — are the ones that
+are NOT in the backlog.** Every other
 kind is recorded, carries `id`/`epoch`, and replays on `?since=<cursor>`. The
 nudge is live-only and deliberately so: a busy pane raises one roughly every
 second, and recording those would push a pending `approval` out of the bounded
@@ -499,6 +501,13 @@ shows the agent's own permission dialog as an answerable pending
 ExitPlanMode record), except for a
 lone Esc or a lone Ctrl-C — see
 [`terminal_prompt`](#terminal_prompt--the-agents-own-permission-dialog).
+
+`POST /api/input?session=<id>&launch=<origin>` types a launch line (a resume
+command), not keys. The daemon refuses it with **409
+`{"error":"folder-trust","verdict":"trust"|"unknown","effect":"none"}`** when
+the pane is on an agent's folder-trust prompt, and also when its screen cannot
+rule one out, unless `launch=human` (a person clicked for this line). Any other
+value counts as automated. Plain keys (no `launch`) are not affected.
 
 Phone scrolling has two ownership modes. A terminal's normal buffer is local
 scrollback and must remain local (ordinary shells and Kiro use this path).
@@ -1884,8 +1893,14 @@ gets the whole prompt as a form:
 ```
 
 Option keys are the digits Claude draws. An option carries `description` when
-Claude draws one under its label (omitted otherwise). `allowOther` is always
-true: Claude adds its "Type something" row to every question. `otherMaxCells`
+Claude draws one under its label (omitted otherwise). `allowOther` is true
+wherever Claude adds its "Type something" row: on every question except a
+single-select one whose options carry a `preview`. That question carries
+`"preview": true` and `"allowOther": false`: Claude draws its option labels
+beside a box holding the focused option's preview, with no "Type something"
+row, so offer no free-text field for it (an `other` there is 400
+`invalid-choice` with nothing typed). Its options keep their `description`,
+which Claude does not draw in that layout. `otherMaxCells`
 is the widest `other` the pane can take now (`cols - 12` cells, a wide
 character counting two); the pane can be resized, so the answer checks the
 width again (`invalid-text` / `too-wide`). A prompt the daemon could not
@@ -1898,7 +1913,10 @@ card above.
 The daemon reads the picker as Claude draws it: each option by its whole
 label then its whole description (a long label wraps onto the next row), the
 "Type something" row last, and under the picker's bottom rule only Claude's
-`Chat about this` row and its key hint. A picker drawn any other way (a label
+`Chat about this` row and its key hint. A `preview: true` question is read
+from the left column only (every row from option 1 to the bottom rule cut at
+the preview box's column, a wide character counting two): each option by its
+whole label, no free-text row. A picker drawn any other way (a label
 cut short, another menu or an input prompt under it) is not the question the
 form describes: the answer is 409 `prompt-changed` with nothing typed.
 
@@ -1909,7 +1927,9 @@ form describes: the answer is 409 `prompt-changed` with nothing typed.
   as checked live on 2.1.288: a single-select option's digit; a
   multi-select's option digits (each toggles its box), then `↓` onto the
   in-question Submit row (labelled `Next` when another question follows) and
-  Enter; typed text as
+  Enter; on a `preview: true` question (measured on 2.1.311, where a digit
+  only moves the cursor) the option's digit, then Enter, or Enter alone for
+  option 1; typed text as
   the "Type something" row's digit, `↓` onto it where needed, one bracketed
   paste and Enter / `↓`. Several questions end on Claude's review screen,
   where the daemon checks that every question lists exactly the answer given
@@ -2757,6 +2777,89 @@ Handle it as the other retractions: silent, no category, drop any local copy
 of the card. The limits of bot approvals (daemon restart, a push is a nudge)
 apply the same way, with `botPromptPush` for the capability.
 
+### Browser help — an agent handing a browser step back to you
+
+A browser help request (*Browser help requests*, `/api/browser-help`) is
+pushed when it opens, **only to a device that can answer it from the app**.
+That is the rule of the decision route, all at once:
+
+1. the server runs with `--allow-transcript` (the request exists because of
+   an agent's prompt, and the list that shows it needs that consent);
+2. the server runs with `--allow-input`;
+3. the attached desktop takes a phone's decision;
+4. the device's registration listed `capabilities: ["browserHelpPush"]`;
+5. the device's input grant is on **and was set explicitly** (a read-only
+   device, or one paired before grants existed, gets nothing).
+
+A push presence held is released only to the devices that still pass this
+rule then, and not at all once the request's deadline has passed. With no such
+device it is not sent, and it is considered again at the desktop's next list.
+
+A request from a brain pane is never pushed: the phone may not answer it, so
+a banner could only dead-end. Sealed plaintext:
+
+```json
+{
+  "title": "Browser help needed",
+  "body": "An agent is waiting for you to finish a step in the browser.",
+  "approvalKind": "browser_help",
+  "browserHelpId": "5d0e9b82-…",
+  "workspaceId": "<workspace id>",
+  "surfaceId": "surf-…",
+  "requiresInAppChoice": true
+}
+```
+
+- `title` and `body` are always this fixed text (English, as every push
+  body; an app may show its own localized words for `approvalKind`
+  `browser_help`). Never the prompt, which is the agent's to write and stays
+  off the lock screen, and never the workspace name.
+- **Never an `approvalId`.** Open the request's card in the app: read it with
+  `GET /api/browser-help` and answer with `POST …/decision`.
+  `requiresInAppChoice` is always true.
+- `surfaceId` is absent when the agent named no tab.
+- No `risk`: presence holds these like a `normal` approval.
+- They never cost an approval its place: when the daemon's push queues are
+  full, a browser help push (or its retraction) is the one dropped, and at
+  most 8 are queued or held at a time.
+- APNs collapse id: `bh-<browserHelpId>`.
+
+When the request closes, however it ended, a retraction follows under the
+same collapse id, **to the devices the push went to** (a device that no longer
+lists `browserHelpPush` is skipped):
+
+```json
+{
+  "title": "Browser help closed",
+  "body": "No longer waiting — nothing to do.",
+  "kind": "approval_retraction",
+  "approvalKind": "browser_help",
+  "retractsApprovalId": "5d0e9b82-…",
+  "workspaceId": "<workspace id>",
+  "resolution": "completed"
+}
+```
+
+- `resolution` is `completed`, `continued` (Done), `cancelled` or
+  `timed_out`. A request the desktop's list dropped without saying how reads
+  `timed_out` past its deadline and `cancelled` before it.
+- `retractsApprovalId` is the request id, not a pane approval's: match it with
+  `approvalKind`. Handle it as the other retractions: silent, no category,
+  drop any local copy of the card. No retraction follows a push that never
+  left (presence still held it, or the held push was dropped).
+
+A request is pushed at most once. When no device could answer it as it
+opened (no grant yet, no server running), it is considered again each time
+the desktop next sends its list, and pushed then if a device qualifies. The
+desktop sending its list again, including after it reconnects, never pushes
+a request a second time. When the desktop app goes away, a banner already
+sent stays: a desktop that returns still listing the request keeps it, one
+that returns without it retracts it, and with no desktop at all it is
+retracted as `timed_out` at the request's deadline. (The `browser.help`
+frames close those requests at once; the list is the record.) The
+daemon-restart limit and "a push is a nudge" of bot approvals apply the same
+way, with `browserHelpPush` for the capability.
+
 ---
 
 ### Registering
@@ -2796,7 +2899,8 @@ it. That is deliberate — the token now on file belongs to the build that just
 called, not to the one before it.
 
 `capabilities` lists the push kinds this build can open: `"botApprovalPush"`
-(Bot approvals, above) and `"botPromptPush"` (Bot prompts, above). A push that needs a capability goes only to devices
+(Bot approvals, above), `"botPromptPush"` (Bot prompts, above) and
+`"browserHelpPush"` (Browser help, above). A push that needs a capability goes only to devices
 that listed it. Like the rest of the registration it is replaced wholesale, so
 send the full list every time; leaving it out clears it. Entries that are not
 names (`^[A-Za-z][A-Za-z0-9_]{0,63}$`) are dropped rather than refused, and
@@ -3508,9 +3612,72 @@ keyboard input after an unconfirmed response; refresh and inspect the page first
 Workspace identity never comes from the HTTP body. Main checks the current CDP
 owner, then calls only existing scoped screenshot/emulation/navigation/input operations.
 No arbitrary JavaScript, headers, cookies, CDP commands or RPC names are accepted.
-The capture envelope permits at most 2 MiB base64 image data; only capture requests
-receive the larger bridge response allowance. A hidden Mac workspace may not
-produce frames; clients show this failure and ask the user to bring it forward.
+The capture's base64 image data is at most 700 KiB (the whole reply is one line on
+the daemon's control pipe, which closes past 1 MiB); a larger first shot is retaken
+once smaller, then refused. Only capture requests receive the larger bridge
+response allowance. A hidden Mac workspace may not produce frames; clients show
+this failure and ask the user to bring it forward.
+
+#### Dedicated-profile Chrome tabs (`browserPreviewChrome`)
+
+`/api/config` carries `browserPreviewChrome: true` when the server runs with
+`--allow-transcript` and the attached desktop announced `browser.chromePreview`.
+OMITTED otherwise (an older desktop announces nothing); the preview then works
+exactly as above.
+
+- **Opt in**: `GET …/browser?chrome=1` (either route). Rows then gain
+  `backend: "builtin" | "chrome"`, and the tabs of a wmux Chrome profile that
+  this workspace opened (`chrome`) follow the builtin panes, 30 rows in all.
+  Without `?chrome=1`, or from a desktop without the flag, the list is the
+  same as before, with no `backend` field. Live Chrome (the user's own
+  browser) is never listed and never driven, and no phone action opens a
+  connection to it.
+- **Which tabs**: tabs of the workspace's own wmux Chrome profile that the
+  desktop recorded under exactly this workspace; a tab with no workspace on
+  record is nobody's. A profile bound to one pane only (a protected pane's,
+  say) is not listed: its policy applies to that pane's calls. Listing never
+  starts Chrome: while it is not running there are no `chrome` rows, nor while
+  the desktop cannot attach to its pages (its tab watcher is off or failed);
+  help rows for those tabs are then `previewable: false`.
+- **The same actions** take a `chrome` row's `id` as `surfaceId`: capture,
+  `navigate`, `type`, `key`, `tap`, `scroll`, with the same checks
+  (`expectedURL`, `geometry`, http(s) only). A Chrome capture has the builtin
+  shape and limit (`data`, `mimeType: "image/jpeg"`, `capturedAt`, `geometry`
+  from Chrome's layout metrics, `pageURL`). `viewport` is `501
+  browser-action-unsupported` on a Chrome tab.
+- **Background tabs**: the desktop never brings a Chrome tab forward on its
+  own. Chrome may stop painting a background tab; a capture, or an input,
+  that does not finish within about 5 s is `409 browser-tab-hidden`. Offer
+  `focus`. Typing uses focus emulation rather than raising the tab. At browser
+  zoom other than 100 % a capture is readable but carries no `geometry`.
+- **`open`** takes an optional `backend: "builtin" | "chrome"` (default
+  `builtin`, the rule above). `chrome` needs the desktop's browser setting to
+  be Chrome and the workspace's profile to be a wmux profile, not Live
+  Chrome (`503 browser-backend-unavailable` otherwise); it may start that
+  profile's Chrome. Any other value is `400`.
+- **`{action:"focus",surfaceId}`** (input permission): brings a builtin pane
+  or a Chrome tab of this workspace forward on the desktop (a Chrome tab's
+  window too). Send it only on the user's tap.
+- **Help-card typing**: `{action:"type",…,helpRequestId}` types only into the
+  tab that open help request is about (*Browser help requests*), and only while
+  that tab is still at the `origin` its row shows. That origin is the one the
+  tab had when the agent asked, and it never changes afterwards. The daemon
+  takes it from its own copy of the request, never from the body. A request
+  made with no known origin is never typed into this way. A tab that navigated
+  since the phone's last capture usually fails first on `expectedURL`
+  (`503 browser-preview-unavailable`). `409 browser-help-origin-changed`
+  covers the case where `expectedURL` matches but that page's origin is not
+  the request's: the tab left the site after the agent asked.
+
+| Response | Meaning |
+| --- | --- |
+| `404 {error:"browser-tab-gone"}` | The Chrome tab closed, was replaced by Chrome, or is not this workspace's. Refresh the list. |
+| `409 {error:"browser-tab-hidden"}` | The Chrome tab did not answer in time, usually because it is in the background. An input that timed out may still have partly applied (a press is always released): refresh before retrying. |
+| `503 {error:"browser-backend-unavailable"}` | No browser to drive: the setting is not Chrome, the workspace uses Live Chrome, or Chrome's connection is not up. |
+| `501 {error:"browser-action-unsupported"}` | The action does not exist for this tab (`viewport` on Chrome, `focus` on a desktop that cannot). |
+| `409 {error:"browser-help-origin-changed"}` | Help-card typing: the tab is no longer at the request's origin, or the request has none. Nothing was typed. |
+| `404 {error:"browser-help-not-found"}` / `409 {error:"browser-help-closed"}` | Help-card typing: no request with that id for this workspace and tab (open or closed), or this tab's request already ended. |
+| `503 {error:"browser-preview-unavailable"}` | Any other failure, as before. Never retry input automatically. |
 
 ### New agent pane launch options
 
@@ -4714,7 +4881,7 @@ worded (the values listed); a value not listed means the English `title`.
 | `task.cancelled` | `title` string | `Task cancelled: {title}` | — |
 | `task.stoppedByOwner` | `title` string | `Task cancelled · stopped by owner: {title}` | — |
 | `task.keptFolderCleaned` | `title` string, `days` number, `kind` string | `Removed the kept folder of "{title}"` | A folder kept after the owner stopped the task, removed by wmux after `days` days with no changes. `kind`: `research` for a research task's folder (no branch); absent for a worktree, whose branch stays. |
-| `task.inputRequired` | `title` string, `why` string | `Task needs input: {title}` | `why`: `trustDialog`, `firstRun` or `launchFailed`. |
+| `task.inputRequired` | `title` string, `why` string, `agent` string | `Task needs input: {title}` | `why`: `trustDialog`, `firstRun` or `launchFailed`. `agent`: with `trustDialog`, the agent showing the dialog (`Claude Code`, `Gemini CLI`, `Qwen Code`), the `{agent}` of its words; absent on cards written before, which were Claude Code's. |
 | `pr.merged` | `pr` number, `title` string | `PR #{pr} merged: {title}`<br>`PR #{pr} merged` | The second title when there is no `title`. |
 | `pr.closed` | `pr` number, `title` string | `PR #{pr} closed: {title}`<br>`PR #{pr} closed` | As `pr.merged`. |
 | `verdict.recorded` | `verdict` string, `pr` number, `sha` string, `bot` string | `Verdict {verdict} for #{pr} at {sha} by {bot}` | `verdict`: `pass` or `fail`. |
@@ -5259,6 +5426,100 @@ request stays `approved`; it ends `executed` or `refused`.
 | `503 {error:"desktop-unavailable"}` / `503 {error:"approvals-unavailable"}` | No desktop, or one that cannot answer approvals (too old, factory not started). |
 | `504 {error:"desktop-timeout"}` / `502 {error:"desktop-bad-reply"}` | The desktop did not answer, or answered badly. |
 
+#### Browser help requests (`browserHelp`, `/api/browser-help`)
+
+An agent driving a browser can hand one step back to the human
+(`browser_request_help`: a sign-in, a CAPTCHA, a payment confirmation). The
+desktop shows it with Done and Cancel; these routes show the same requests on
+the phone and answer them.
+
+- **Discovery**: `/api/config` carries `browserHelp: true` when the server
+  runs with `--allow-transcript` and the attached desktop announced
+  `browser.help`. OMITTED otherwise (an older desktop announces nothing). It
+  does not say whether this caller may answer; a refused answer is `403`.
+- **Read** (`GET /api/browser-help`): the transcript consent (the prompt is
+  written by the agent) and any caller that authenticates: the operator token
+  or a paired device that is not revoked. No input grant is needed. The list
+  is the daemon's copy of the desktop's open requests, so it answers without
+  asking the desktop.
+- **Answer** (`POST /api/browser-help/:requestId/decision`): the transcript
+  consent, and the rule of a bot approval's decision: the operator token, or
+  a paired device whose input grant is on **and was set explicitly**, on a
+  server started with `--allow-input`. Checked before the body is read and
+  again once it is in, on the credential the request carries (same caller,
+  not revoked, still granted). The request's workspace is the one the
+  daemon's list holds for the id; the body never names one.
+
+**`GET /api/browser-help`** — every open request, oldest first:
+
+```json
+{ "requests": [ { "requestId": "5d0e9b82-…", "workspaceId": "ws-…", "surfaceId": "surf-…",
+                  "prompt": "Sign in to the shop, then press Done.",
+                  "createdAt": 1759600000000, "deadlineAt": 1759600300000,
+                  "backend": "builtin", "previewable": true,
+                  "origin": "https://login.example.com", "sessionId": "pty-…" } ] }
+```
+
+- `prompt`: written by the agent. Render it as plain text, never as markup
+  or a link, and do not put it on the lock screen.
+- `surfaceId`: the tab the request is about; absent when the agent named none.
+- `backend`: `builtin` (a wmux browser pane), `chrome` (a wmux Chrome
+  profile) or `live` (the user's own Chrome, or a tab the desktop cannot
+  tell apart from it).
+- `previewable`: the workspace browser preview (*Workspace browser preview*)
+  can show this tab now: a `builtin` pane of the request's own workspace, or
+  a `chrome` tab that workspace opened; never `live`. A `chrome` row's tab is
+  in the preview list only with `?chrome=1`, so a client that does not send
+  it treats a `chrome` row as not previewable.
+- `origin`: `scheme://host[:port]` of the tab when the agent made the
+  request, pinned for the request's whole life (a later navigation does not
+  change it). Absent when it was not known then: no tab, not an http(s) page,
+  a Chrome that did not answer, or `live`. Absent stays absent.
+- `sessionId`: the `id` in `/api/sessions` of the pane whose agent asked,
+  so a client can link the card to that pane. Present only when
+  `/api/sessions` lists that pane when this list is read: absent when the
+  agent's pane is not known, is an orchestrator brain pane, or has closed.
+  The pane may close between the two reads, so a `sessionId` your sessions
+  list lacks just means no link. Absent on older desktops and daemons. Only
+  in this list: never in a `browser.help` frame or a push.
+- `deadlineAt`: the desktop closes the request as `timed_out` then. A
+  request past it is left out of the list (and answered `409`) even before
+  the desktop's next update says so.
+
+**`POST /api/browser-help/:requestId/decision`** — body
+`{"outcome": "continued" | "cancelled"}` (`continued` is Done). Any other
+field, or any other value, is `400`. `200 {requestId, state}` once the
+desktop settled it. The first answer wins, from any device or the desktop,
+and is never rewritten. An answer to a request past its deadline is `409`;
+the desktop closes it as `timed_out` on its own, and the close frame follows
+separately. **Never retry a decision automatically**: a lost
+reply may have settled it. Read the list again instead.
+
+**`browser.help` on `/api/events`** — one frame per request that opened
+(`phase: "open"`) or closed (`phase: "close"`), with
+`{requestId, workspaceId, surfaceId?, deadlineAt}` and, on a close, `state`
+(`completed`, `continued`, `cancelled` or `timed_out`) when the desktop said
+how it ended. No prompt and no origin: fetch the list for those. Live only
+(§4): never in the backlog and not replayed, so read `GET /api/browser-help`
+on every reconnect. Sent only under `--allow-transcript`. When the desktop
+disconnects, its requests close with no `state`; they open again if it
+returns with them still open.
+
+**Push**: a device that registered `browserHelpPush` and may answer gets a
+push when a request opens and a retraction when it closes (§7, *Browser
+help*).
+
+| Response | Meaning |
+| --- | --- |
+| `403 {error:"browser-help-disabled"}` | The server runs without `--allow-transcript`. |
+| `403 {error:"read-only"}` / `403 {error:"read-only: …"}` | No `--allow-input`, or this device may not answer (see above). |
+| `401 {error:"authorization-expired"}` | The credential stopped authenticating as the same caller while the body was read. |
+| `400 {error:"invalid-decision"}` | The body is not exactly `{outcome}`. |
+| `404 {error:"browser-help-not-found"}` | No open request with that id. |
+| `409 {error:"browser-help-closed"}` | It already ended (answered, timed out or completed). |
+| `503 {error:"desktop-unavailable"}` | No desktop, or none that published its requests. |
+| `504 {error:"desktop-timeout"}` / `502 {error:"desktop-bad-reply"}` | The desktop did not answer, or answered badly. Do not retry; read the list. |
+
 #### Resuming a bot worker (`/api/bot-tasks`)
 
 When an idle or finished worker is stopped to free its agent slot, wmux keeps
@@ -5447,13 +5708,22 @@ whose app page was not built serves the classic page at `/`.
   rejected promise and is never wired to the daemon. It also installs a
   `window.clipboardAPI` on the browser clipboard (secure contexts only) and
   registers `/sw.js` in a secure context, as the classic page does.
-- No stored credential, a 401, or a browser that cannot run the es2022 bundle
-  (iOS before 16.4) → the page goes to `/classic`. After pairing, the classic
-  page lands on `/` again (and an old browser falls straight back).
+- No stored credential → the page asks `GET /api/config` with no credential.
+  A 200 means a trusted sign-in proxy vouches for it (`wmux web
+  --trust-proxy-*`): the page runs with no token, sends no `Authorization`
+  header, opens streams with no `?token=` or ticket, and uses
+  `redirect: 'manual'`, so an ended sign-in (a redirect to the identity
+  provider) reloads the page through the sign-in. Anything else → `/classic`.
+- A 401 for a stored token goes to `/classic`, unless that same probe now
+  answers 200: then the token is dropped and the page boots again from `/`.
+  A browser that cannot run the es2022 bundle (iOS before 16.4) → `/classic`.
+  After pairing, the classic page lands on `/` again (and an old browser falls
+  straight back).
 - Terminals are the desktop's own `Terminal` component over the web routes:
   - A pane's stream (`GET /api/stream`, with a stream ticket for a device
-    credential — `<deviceId>.<secret>` — and `?token=` for the operator token,
-    which never asks for a ticket) is open only while the pane is shown and its
+    credential — `<deviceId>.<secret>` — `?token=` for the operator token,
+    which never asks for a ticket, and nothing for a proxy session, whose
+    cookies reach the sign-in proxy) is open only while the pane is shown and its
     terminal reports itself visible; it closes on hide. A device credential
     never goes into the URL: no ticket, no stream.
   - Inline images (sixel / iTerm2) are off in the browser: the image decoder

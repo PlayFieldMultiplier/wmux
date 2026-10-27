@@ -559,6 +559,7 @@ export const zhTW = {
   'sessionSchedule.statusBusy': '等待可輸入',
   'sessionSchedule.statusUnavailable': '等待 session',
   'sessionSchedule.statusSessionChanged': 'session 已更換，請重新建立',
+  'sessionSchedule.statusFolderTrust': '等待中：窗格停在資料夾信任提示',
   'sessionSchedule.statusSent': '已送出',
   'sessionSchedule.statusError': '投遞失敗',
   'sessionSchedule.statusPaused': '已暫停',
@@ -717,4 +718,18 @@ export const zhTW = {
   'worktask.cleanup.detail.orphanMeta': '只剩下任務記錄，工作樹已不存在（移除被中斷）— 檢查後刪除。',
   'worktask.cleanup.detail.diskMissing': '工作樹在磁碟上遺失（在 wmux 外被刪除或發生當機）— 關閉任務以清理。',
   'botsPage.guest.readNotice': "從現在起，外部機器人可以讀取此對話中的訊息並在其中發言。它看不到加入之前的內容。",
+
+  // Scheduled runs: one retry after a temporary provider error
+  'claudeIntegration.scheduledRetry': "暫時性錯誤後重試排程執行",
+  'claudeIntegration.scheduledRetryDesc': "若排程執行的回合因網路或供應商伺服器錯誤而失敗，等待 5 分鐘後傳送一則繼續訊息。預設開啟；每個排程可個別關閉。",
+  'claudeIntegration.scheduledRetryUnknown': "尚不清楚：正在等待 wmux 背景服務。",
+  'claudeIntegration.usageReserve': "保留使用量餘量",
+  'claudeIntegration.usageReserveDesc': "當 Claude 帳號的 5 小時用量達到 85% 或以上時，不再啟動會消耗該用量的無人值守工作，把最後 15% 留給你。排程執行會等待重設，仍在寬限期內就執行，否則記為錯過；機器人的扇出也會等待；你窗格中的代理發起的扇出會被拒絕，並告知重設時間。Codex 和其他代理不受限制，你輸入的內容也從不受影響。預設關閉。",
+  'schedules.retryTransient': "暫時性錯誤後重試一次",
+  'schedules.retryTransientHint': "遇到網路或供應商伺服器錯誤時，等待 5 分鐘後傳送一則繼續訊息。不會重新傳送提示詞。",
+  'schedules.retryTransientGlobalHint': "僅在「設定 → Claude 整合」中開啟「暫時性錯誤後重試排程執行」時生效。",
+  'schedules.state.retryWaiting': "等待中：暫時性供應商錯誤後重試（{minutes} 分鐘後）",
+  'schedules.reason.agent_error_retried_once': "重試一次後再次發生代理錯誤",
+  'schedules.reason.agent_error_retry_blocked': "代理錯誤；無法傳送重試",
+  'schedules.reason.agent_error_retry_interrupted': "代理錯誤；wmux 已重新啟動，未重試",
 } as const;

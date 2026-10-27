@@ -547,8 +547,11 @@ declare global {
        *
        * Callers MUST await and try/catch so the user can be notified and
        * the source selection preserved for retry.
+       *
+       * `keepIfRefused` is read by the browser app only: `false` fails a write
+       * the browser refused at once instead of retrying it on the next gesture.
        */
-      writeText: (text: string) => Promise<void>;
+      writeText: (text: string, options?: { keepIfRefused?: boolean }) => Promise<void>;
       readText: () => Promise<string>;
       readImage: (ptyId?: string) => Promise<string | null>;
       hasImage: () => Promise<boolean>;

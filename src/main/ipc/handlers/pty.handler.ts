@@ -21,7 +21,7 @@ import { resolveSpawnEnv } from '../../pty/resolveSpawnEnv';
 import { withFreshWindowsPath } from '../../../shared/windowsPathEnv';
 import { getAccountStore } from '../../account/accountStore';
 import { withAccountQuota } from '../../account/accountQuotaGate';
-import { botWorkerForCreate, botWorkerLaunchTask, botWorkerSessionRecord, clearedLaunchLine, forgetBotWorkerSession, guardedClaudeCwdRefusal, guardedCodexCwdRefusal, guardedCodexLaunch, guardedLaunchOf, isBotWorkerSession, noteBotWorkerSession, paneLaunchFolders, setWorkerMcpResolvers, taskConnectors, taskGatewayNames, withBotWorkerMergeGuard, type BotWorkerCreate, type WorkerGatewayLaunch } from '../../agents/botWorkerMergeGuard';
+import { botWorkerForCreate, botWorkerLaunchTask, botWorkerSessionRecord, noteGuardedLaunchTyped, clearedLaunchLine, forgetBotWorkerSession, guardedClaudeCwdRefusal, guardedCodexCwdRefusal, guardedCodexLaunch, guardedLaunchOf, isBotWorkerSession, noteBotWorkerSession, paneLaunchFolders, setWorkerMcpResolvers, taskConnectors, taskGatewayNames, withBotWorkerMergeGuard, type BotWorkerCreate, type WorkerGatewayLaunch } from '../../agents/botWorkerMergeGuard';
 import { isPlainCmdLaunchLine, namesClaude } from '../../../shared/botWorkerGuard';
 import { namesCodex } from '../../../shared/codexWorkerGuard';
 import { getMcpTarget } from '../../../shared/mcpTargets';
@@ -31,6 +31,7 @@ import { noteSessionAgentLaunched, noteSessionInput, noteTaskWorkerLaunched } fr
 import { beginPaneRelaunch, launchStillCurrent, startsAgent } from '../../factory/workerSlots';
 import { withLaunchSessionPin } from '../../agents/launchSessionPin';
 import { guardBotWorkerSessionText, guardCodexBotWorker } from '../../agents/codexWorkerGuard';
+import { workerFenceSupportFor } from '../../agents/botWorkerFence';
 import { resolveEnvPolicy, type SpawnKind } from '../../../shared/spawnKind';
 import { withheldCredentialNames } from '../../../shared/envFilter';
 import { getShellUtf8Locale } from '../../pty/shellLocale';
@@ -87,6 +88,7 @@ import { createSessionPromptScheduleHandlers } from '../../pty/sessionPromptSche
 import { localReconnectAnswer } from './localPtyReconnect';
 import { pendingRemovalRefusal } from '../../worktask/pendingWorktreeRemovals';
 import { launchAllowedByChat } from './chatLaunchGuard';
+import { folderTrustLaunchHold, folderTrustLaunchRefusal, forgetFolderTrustPane } from '../../folderTrustCheck';
 
 /**
  * Allowed shell basenames (compared case-insensitively).
@@ -249,7 +251,10 @@ async function stageCreate(options: PtyCreateOptions | undefined, botWorker: Bot
   } else {
     staged = withWmuxTools(staged);
   }
-  const guarded = withBotWorkerMergeGuard(await guardCodexBotWorker(staged, botWorker), botWorker, {}, { wsl, ...(level ? { level } : {}), ...(gateway ? { gateway } : {}) });
+  // The guard decides whether the line is fenced (botWorkerFence.ts); the
+  // fence support (and its self-test) is settled before it runs.
+  const fenceSupport = botWorker && line ? await workerFenceSupportFor(line, typeof staged?.cwd === 'string' ? staged.cwd : undefined) : undefined;
+  const guarded = withBotWorkerMergeGuard(await guardCodexBotWorker(staged, botWorker), botWorker, fenceSupport ? { fenceSupport } : {}, { wsl, ...(level ? { level } : {}), ...(gateway ? { gateway } : {}) });
   // A bot worker's line in a cmd.exe pane is read by cmd's own rules.
   if (botWorker && process.platform === 'win32' && isCmdShellPath(shellPath) && guarded?.initialCommand && !isPlainCmdLaunchLine(guarded.initialCommand)) {
     throw new Error('PTY_CREATE: a bot\'s worker line for a Command Prompt pane holds characters cmd would read as more than one command');
@@ -852,6 +857,9 @@ export function registerPTYHandlers(
       const verifyTaskLine = !!botWorker || !!options?.fanoutTaskOf;
       let verifying = false;
       const initialCmd = scheduleInitialCommand(botWorker && !isWslShell(shell) ? clearedLaunchLine(typedLine, shell) : typedLine, {
+        // A shell rc that starts an agent can put its folder-trust prompt
+        // where the startup line would land.
+        beforeWrite: () => folderTrustLaunchHold(daemonClient, sessionId, 'startup line', { refuseUnknown: true, once: true }),
         write: (cmd) => {
           const delivered = writeLaunchLine(cmd);
           if (delivered && verifyTaskLine && !verifying) {
@@ -885,16 +893,18 @@ export function registerPTYHandlers(
           }
           return delivered;
         },
-        onExhausted: () => {
+        onExhausted: (reason) => {
           console.warn(
-            `[pty:create] startup command for ${sessionId} not delivered after ` +
-            `retries — session pipe never became writable (pane may be empty).`,
+            reason
+              ? `[pty:create] startup command for ${sessionId} not typed: ${reason}`
+              : `[pty:create] startup command for ${sessionId} not delivered after ` +
+                `retries — session pipe never became writable (pane may be empty).`,
           );
           // J3 §3: 프롬프트 미발사를 렌더러에 통지(fan-out 토스트·재발사 소비 —
           // 사후 이벤트가 정본, 동기 리포트엔 싣지 못한다. 상태 영속 없음).
           const win = getWindow?.();
           if (win && !win.isDestroyed()) {
-            win.webContents.send(IPC.PTY_INITIAL_CMD_EXHAUSTED, sessionId);
+            win.webContents.send(IPC.PTY_INITIAL_CMD_EXHAUSTED, sessionId, reason);
           }
         },
       });
@@ -1168,7 +1178,7 @@ export function registerPTYHandlers(
   // guard or nothing is typed (botWorkerMergeGuard.ts); everywhere else it is
   // written as given.
   ipcMain.removeHandler(IPC.PTY_WRITE_LAUNCH);
-  ipcMain.handle(IPC.PTY_WRITE_LAUNCH, wrapHandler(IPC.PTY_WRITE_LAUNCH, async (_event: Electron.IpcMainInvokeEvent, id: unknown, text: unknown, submit: unknown) => {
+  ipcMain.handle(IPC.PTY_WRITE_LAUNCH, wrapHandler(IPC.PTY_WRITE_LAUNCH, async (_event: Electron.IpcMainInvokeEvent, id: unknown, text: unknown, submit: unknown, origin: unknown) => {
     if (typeof id !== 'string' || typeof text !== 'string' || text.length > PTY_WRITE_BACKSTOP) {
       throw new Error('PTY_WRITE_LAUNCH: an id and a line are required');
     }
@@ -1185,6 +1195,12 @@ export function registerPTYHandlers(
       throw new Error('PTY_WRITE_LAUNCH: a bot worker\'s line for a Command Prompt pane holds characters cmd would read as more than one command');
     }
     const line = sanitizePtyText(guardedText) + (submit === true ? '\r' : '');
+    // A line a person clicked to type stops only at a folder-trust prompt on
+    // screen; one wmux types on its own (any caller that does not say
+    // otherwise) also when the screen cannot rule one out.
+    const human = origin === 'human';
+    const trustRefusal = await folderTrustLaunchRefusal(dc, id, human ? 'launch line' : 'automated launch line', { refuseUnknown: !human });
+    if (trustRefusal) throw new Error(`PTY_WRITE_LAUNCH: ${trustRefusal}`);
     // Chat v2 owns the pane, or a move into chat holds it: a resume typed now
     // would put a second process on the conversation. The daemon decides.
     if (dc && startsAgent(text) && !(await launchAllowedByChat(dc, id, text))) {
@@ -1210,6 +1226,8 @@ export function registerPTYHandlers(
       throw err;
     }
     settleRelaunch?.(true);
+    // The line is in the pane: a fence it put the session inside is recorded.
+    if (botPane) noteGuardedLaunchTyped(id, guardedText);
     // An agent starts again in this pane, now or at the owner's Enter: an
     // ended task it belongs to is not known gone any more (agentGoneFacts.ts).
     noteSessionAgentLaunched(id, submit === true, botPane ? botWorkerSessionRecord(id)?.taskId : undefined);
@@ -1388,6 +1406,7 @@ export function registerPTYHandlers(
       await daemonClient.disconnectSessionPipe(id);
       sessionDecoders.delete(id);
       forgetPtyShell(id);
+      forgetFolderTrustPane(id);
       forgetBotWorkerSession(id);
       // Drop the data forwarding listener for this session so a future
       // create or reconnect doesn't pile new listeners on top of dead ones.
@@ -1951,6 +1970,7 @@ export function registerPTYHandlers(
       // explicit close would otherwise leave its entry behind for the life of
       // the process (and a recycled id would inherit the dead pane's shell).
       forgetPtyShell(payload.sessionId);
+      forgetFolderTrustPane(payload.sessionId);
     };
     daemonClient.on('session:died', onDaemonSessionDied);
   }

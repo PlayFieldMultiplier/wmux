@@ -35,7 +35,9 @@ function makeDaemon(
   const writes: Array<{ sessionId: string; data: string }> = [];
   const rpcCalls: Array<{ method: string; params: Record<string, unknown> }> = [];
   const sessions: Array<{ id: string; cwd?: string; spawnCwd?: string }> = [];
+  const trust = { state: 'clear' as 'trust' | 'clear' | 'unknown' };
   const client = {
+    folderTrustState: async () => ({ state: trust.state }),
     rpc: async (method: string, params: Record<string, unknown>) => {
       rpcCalls.push({ method, params });
       if (method === 'task.mission.list') {
@@ -51,7 +53,7 @@ function makeDaemon(
       return true;
     },
   };
-  return { client: client as unknown as DaemonClient, writes, rpcCalls, sessions };
+  return { client: client as unknown as DaemonClient, writes, rpcCalls, sessions, trust };
 }
 
 let base: string;
@@ -111,6 +113,25 @@ describe('worktask:refire (§3·F2 — 원래 initialCommand 재전송)', () => 
     expect(daemon.writes[0].sessionId).toBe('pty-1');
     expect(daemon.writes[0].data).toContain('claude');
     expect(daemon.writes[0].data.endsWith('\r')).toBe(true);
+  });
+
+  it('types nothing at a folder-trust prompt and says why; a screen it cannot read does not stop a re-fire a person asked for', async () => {
+    daemon = makeDaemon([]);
+    dispose = registerWorktaskHandlers(() => daemon.client);
+    const wt = seedWorktree('task-trust', true);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    daemon.trust.state = 'trust';
+    const refused = (await call(IPC.WORKTASK_REFIRE, { ptyId: 'pty-1', worktreePath: wt, initialCommand: 'claude "go"' })) as { ok: boolean; error?: string };
+    expect(refused).toEqual({ ok: false, error: 'worktask:refire: the pane is on a folder-trust prompt; answer it in the pane' });
+    expect(daemon.writes).toHaveLength(0);
+    expect(warn).toHaveBeenCalledWith('[folder-trust] refused task re-fire line on pane pty-1: folder-trust trust');
+    daemon.trust.state = 'unknown';
+    expect(((await call(IPC.WORKTASK_REFIRE, { ptyId: 'pty-1', worktreePath: wt, initialCommand: 'claude "go"' })) as { ok: boolean }).ok).toBe(true);
+    expect(daemon.writes).toHaveLength(1);
+    warn.mockRestore();
+    // Asked before a launch of the task is recorded.
+    const src = readFileSync(join(__dirname, '..', 'worktask.handler.ts'), 'utf8');
+    expect(src.indexOf("folderTrustLaunchRefusal(dc, ptyId, 'task re-fire line'")).toBeLessThan(src.indexOf('beginPaneRelaunch(ptyId)'));
   });
 
   it('re-fires a bot worker\'s launch line with the merge-lane guard after a restart, or types nothing', async () => {

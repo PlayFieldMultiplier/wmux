@@ -8,13 +8,18 @@ import { terminalCoreSelection } from '../shared/terminalCoreSettings';
 import { randomUUID as phoneBrowserRequestId } from 'node:crypto';
 import { webContents as phoneWebContents } from 'electron';
 import { withPhoneBrowserInputFocus, dispatchPhoneBrowserScroll, phoneBrowserNativeBounds } from './phone/PhoneBrowserInput';
-import { handlePhoneBrowser } from './phone/PhoneBrowser';
+import { focusBuiltinTab, handlePhoneBrowser } from './phone/PhoneBrowser';
+import { createPhoneChromeDeps, phoneChromeHelpTabs } from './phone/PhoneBrowserChrome';
+import { validateResolvedNavigationUrl } from './security/navigationPolicy';
+import { navigationPolicyOptions } from '../shared/types';
 import { handlePhoneWorkspaces } from './phone/PhoneWorkspaces';
 import { handlePhoneQuickCommands } from './quickCommands/QuickCommandStore';
 import { installPhoneBridge } from './phone/installPhoneBridge';
 import { installKeepAwakeLink } from './power/keepAwakeLink';
 import { botApprovalPushTable, createBotApprovalPushFeed, setBotApprovalPushFeed } from './phone/BotApprovalPushFeed';
 import { createBotPromptPushFeed, openBotPromptRows, setBotPromptPushFeed } from './phone/BotPromptPushFeed';
+import { createBrowserHelpFeed, setPhoneBrowserHelpStore } from './phone/PhoneBrowserHelp';
+import { BROWSER_HELP_SET_METHOD } from '../shared/phoneBrowserHelp';
 import { handlePhoneMoaWake } from './factory/phoneMessage';
 import { MOA_WAKE_COMMAND } from '../shared/moaWake';
 import { handlePhoneAccounts } from './phone/PhoneAccounts';
@@ -99,10 +104,19 @@ import { createComputerConsentRequester } from './computer/computerConsent';
 import type { ComputerService } from './computer/ComputerService';
 import { revealStatsAggregator } from './perf/revealStatsAggregator';
 import { registerHooksRpc } from './pipe/handlers/hooks.rpc';
-import { registerUsageRpc } from './pipe/handlers/usage.rpc';
+import { registerUsageRpc, registerUsageTrailRpc } from './pipe/handlers/usage.rpc';
+import { setToolRefusalSource } from './agents/toolRefusals';
+import { registerCommitOriginRpc } from './pipe/handlers/commitOrigin.rpc';
+import { UsageTrailStore } from './usage/usageTrailStore';
+import { registerPcEnvRpc } from './pipe/handlers/pcEnv.rpc';
+import { cachedAgentEnvSummary } from './pcdiff/agentEnv';
+import { AGENT_ENV_COMMAND } from '../shared/agentEnvSummary';
+import { UsageReserve, setUsageReserve } from './usage/usageReserve';
+import { usageReserveToastText } from './automation/toastText';
+import { formatResetClock } from '../shared/usageLimit';
 import { CompletionAlarm } from '../shared/hooks/CompletionAlarm';
 import { UsagePoller } from './claude/UsagePoller';
-import { setUsageClientVersion } from './claude/UsageApi';
+import { setUsageClientVersion, type UsageSnapshot } from './claude/UsageApi';
 import { AccountUsageService } from './account/AccountUsageService';
 import { getAccountRotationService } from './account/AccountRotationService';
 import { getAccountStore } from './account/accountStore';
@@ -175,6 +189,7 @@ import { DangerousActionConsent } from './browser-session/dangerousActionConsent
 import { registerBrowserConsentRpc } from './pipe/handlers/browserConsent.rpc';
 import { registerBrowserConsentGrantsIpc } from './ipc/handlers/browserConsentGrants.handler';
 import { registerBrowserAgentControlIpc } from './ipc/handlers/browserAgentControl.handler';
+import { registerBrowserHelpIpc } from './ipc/handlers/browserHelp.handler';
 import { BrowserAgentControl } from './browser-session/BrowserAgentControl';
 import { BROWSER_AGENT_CONTROL_IPC } from '../shared/browserAgentControl';
 import type { BorrowApprovalRequester } from '../shared/liveWriteScope';
@@ -194,7 +209,7 @@ import { clearPrivateBrowserSession, trackPrivateBrowserContents } from './brows
 import { BrowserBackendStore } from './browser-session/BrowserBackendStore';
 import { registerBrowserPrivateNetworkIpc } from './ipc/handlers/browserPrivateNetwork.handler';
 import { ChromeLauncherRegistry } from './browser-session/ChromeLauncher';
-import { ChromeProfileStore, reconcilePaneBindingsFromMirror } from './browser-session/ChromeProfileStore';
+import { ChromeProfileStore, LIVE_CHROME_PROFILE, reconcilePaneBindingsFromMirror } from './browser-session/ChromeProfileStore';
 import { createChromeProfileUseHandler, setChromeProfileUseListener } from './browser-session/profileFallback';
 import { noteRunBrowserProfileUnbound } from './automation/runIdentity';
 import { CHROME_PANE_IPC } from '../shared/chromePaneBinding';
@@ -218,7 +233,7 @@ import { RemoteSpawnCoordinator } from './a2aRemote/remoteSpawnCoordinator';
 import { daemonRemoteA2aRpcDeps } from './a2a/remoteA2aRpcDeps';
 import { setA2aRemoteBridge } from './ipc/handlers/a2aRemote.handler';
 import { sendToRenderer } from './pipe/handlers/_bridge';
-import { AutomationBridge } from './automation/AutomationBridge';
+import { AutomationBridge, getAutomationUiLocale } from './automation/AutomationBridge';
 import { AutomationClient } from './automation/AutomationClient';
 import { toastManager } from './notification/ToastManager';
 import { WorkspaceContextRouter } from './metadata/WorkspaceContextRouter';
@@ -269,6 +284,7 @@ import { broadcastMetadataUpdate, currentPrOfPty, getCwd, resetPollCacheOnRender
 import { broadcastSettledIdle } from './notification/turnSettle';
 import { readOrchRole } from '../shared/orchestratorRole';
 import { initLogSink, isBrokenPipeError, logLine, stdioErrorsConsumed } from './util/logSink';
+import { isFencedBotWorkerSession } from './agents/botWorkerMergeGuard';
 
 markBoot('imports-done');
 
@@ -823,6 +839,7 @@ let remoteSpawnCoordinator: RemoteSpawnCoordinator | null = null;
 const automationBridge = new AutomationBridge(
   () => mainWindow,
   (text, onClick, opts) => toastManager.showDirect(text, '', undefined, { ...opts, onClick }),
+  (hold) => usageReserve.noteHeld(hold.account, hold.untilMs),
 );
 // X1 — folds daemon context.git/context.ports broadcasts into the sidebar
 // metadata channel (and drives the gh PR cache). Same lifecycle as the
@@ -1242,29 +1259,51 @@ const browserHelpRequests = registerBrowserRpc(
   },
   browserAgentControl,
 );
-// browser_request_help — the renderer's Done / Cancel. Mirrors
-// PERMISSION_PROMPT_RESOLVE: a shape-validated invoke, and the AUTHORITATIVE
-// removal is the BROWSER_HELP_CLOSED push HelpRequests emits from inside its own
-// settle, so an optimistic local removal racing this is harmless. A stale or
-// already-settled id resolves `{ ok: false }` rather than throwing — the row may
-// have timed out under the operator's click.
-ipcMain.handle(
-  IPC.BROWSER_HELP_RESOLVE,
-  async (_event, payload: { requestId?: unknown; outcome?: unknown }) => {
-    if (
-      !payload ||
-      typeof payload.requestId !== 'string' ||
-      (payload.outcome !== 'continued' && payload.outcome !== 'cancelled')
-    ) {
-      return { ok: false, error: 'invalid browser help payload' };
-    }
-    const settled = await browserHelpRequests.resolveFromRenderer(
-      payload.requestId,
-      payload.outcome,
-    );
-    return { ok: settled };
+// browser_request_help — the renderer's Done / Cancel (see browserHelp.handler).
+registerBrowserHelpIpc(ipcMain, { getWindow: () => mainWindow, requests: browserHelpRequests });
+// The same requests on the phone (phone/PhoneBrowserHelp.ts): the open table
+// goes to the daemon on every change and, once the phone bridge is
+// registered, on every daemon connect; a phone's Done / Cancel comes back as
+// `workspaces.browserHelpDecide`.
+setPhoneBrowserHelpStore(browserHelpRequests);
+// The phone preview's dedicated Chrome tabs (phone/PhoneBrowserChrome.ts):
+// the workspace's own profile, strict workspace equality, never Live Chrome,
+// never a pane's exclusive profile, never a launch. The help
+// table below reads the same list, so its rows are previewable exactly when
+// the preview can drive them.
+const phoneChromeDeps = createPhoneChromeDeps({
+  registry: chromeRegistry,
+  validateNavigation: async (url) => {
+    const verdict = await validateResolvedNavigationUrl(url, navigationPolicyOptions(browserBackendStore.allowPrivateNetwork()));
+    if (!verdict.valid) throw new Error('Navigation refused');
   },
-);
+});
+const browserHelpFeed = createBrowserHelpFeed({
+  pending: () => browserHelpRequests.listPending(),
+  tabs: {
+    backend: () => browserBackendStore.get(),
+    builtinUrl: (surfaceId, workspaceId) => {
+      const target = webviewCdpManager.getTarget(surfaceId, workspaceId);
+      if (!target || target.workspaceId !== workspaceId) return null;
+      const wc = phoneWebContents.fromId(target.webContentsId);
+      return wc && !wc.isDestroyed() ? wc.getURL() : null;
+    },
+    // A pane may be bound to Live Chrome (its own profile) while its workspace
+    // is not: a tab not found in the workspace's Chrome may then be the user's.
+    mayBeLiveChrome: (workspaceId, tabFound) =>
+      chromeRegistry.profileFor(workspaceId) === LIVE_CHROME_PROFILE ||
+      (!tabFound && chromeRegistry.hasPaneBindings(workspaceId) && chromeRegistry.peekLauncher(LIVE_CHROME_PROFILE) !== undefined),
+    // Live Chrome is never listed: that is every tab the user has open.
+    chromeTabs: (workspaceId) => phoneChromeHelpTabs(workspaceId, chromeRegistry),
+  },
+  push: async (rows) => {
+    if (!daemonClient?.isConnected) throw new Error('Daemon not connected');
+    const result = (await daemonClient.rpc(BROWSER_HELP_SET_METHOD, { requests: rows, closed: browserHelpRequests.listSettled() })) as { ok?: boolean; error?: string } | undefined;
+    if (result?.ok !== true) throw new Error(result?.error ?? 'browser help table refused');
+    return result;
+  },
+});
+browserHelpRequests.onChange(() => browserHelpFeed.schedule());
 
 /** Set once the ApprovalQueue exists (below). Read lazily by browser.rpc. */
 let liveBorrowRequester: BorrowApprovalRequester | null = null;
@@ -1378,7 +1417,7 @@ const factoryHost = registerFactoryRpc(rpcRouter, {
   claudeUsage: () => ({
     read: (accountId) => (accountId === null
       ? usagePoller.getState().snapshot
-      : accountUsageService.getAll().find((e) => e.accountId === accountId)?.snapshot ?? null),
+      : claudeAccountSnapshot(accountId)),
     onChange: (cb) => {
       const offAccounts = accountUsageService.onChange(() => cb());
       const offDefault = usagePoller.onStateChange(() => cb());
@@ -1588,6 +1627,60 @@ ipcMain.on(IPC.LANLINK_RESYNC, () => {
   remoteInboxBridge?.resync();
 });
 
+function claudeAccountSnapshot(accountId: string): UsageSnapshot | null {
+  return accountUsageService.getAll().find((e) => e.accountId === accountId)?.snapshot ?? null;
+}
+
+// Usage history per account, from the live pushes below and the services' own
+// results; never a request of its own. A live push is recorded at ingest
+// because the default meter stores it silently while it is off.
+const usageTrail = new UsageTrailStore(path.join(getWmuxDir(), 'usage-trail.json'));
+usagePoller.onStateChange((state) => usageTrail.record('default', state.snapshot));
+accountUsageService.onChange((entry) => usageTrail.record(entry.accountId, entry.snapshot));
+// A removed account's history is not served; it ages out of the file.
+registerUsageTrailRpc(rpcRouter, (account, sinceMs, untilMs) => (
+  account === 'default' || getAccountStore().getAccount(account)
+    ? usageTrail.read(account, sinceMs, untilMs)
+    : []));
+
+// Agent environments compared across paired PCs (read-only).
+registerPcEnvRpc(rpcRouter, { wmuxVersion: app.getVersion() });
+// Usage reserve: unattended starts wait while an account's 5h usage is in the
+// last 15%. Reads the usage held above; the daemon gets the holds for its
+// scheduled runs, and fan-outs ask it directly (fanout.rpc.ts).
+const usageReserve = new UsageReserve({
+  wmuxDir: getWmuxDir(),
+  snapshots: () => [
+    ['default', usagePoller.getState().snapshot],
+    ...accountUsageService.getAll().map((e): [string, typeof e.snapshot] => [e.accountId, e.snapshot]),
+  ],
+  accountOfWorkspace: (workspaceId) => getAccountStore().getBinding(workspaceId, 'claude') ?? 'default',
+  push: (holds) => daemonClient?.setUsageReserveHolds(holds) ?? Promise.resolve(false),
+  notify: (account, untilMs) => {
+    const locale = getAutomationUiLocale();
+    const who = account === 'default' ? null : getAccountStore().getAccount(account)?.name ?? account;
+    const text = usageReserveToastText(locale, who, formatResetClock(untilMs, Date.now(), locale));
+    toastManager.showDirect(text, '', undefined, { ignoreToastSetting: false, onClick: () => { mainWindow?.show(); } });
+  },
+  log: (line) => console.warn(line),
+});
+setUsageReserve(usageReserve);
+usagePoller.onStateChange(() => usageReserve.refresh());
+accountUsageService.onChange(() => usageReserve.refresh());
+ipcMain.handle(IPC.USAGE_RESERVE_GET, () => ({ enabled: usageReserve.enabled() }));
+ipcMain.handle(IPC.USAGE_RESERVE_SET, async (_event, enabled: unknown) => {
+  if (typeof enabled !== 'boolean') return { ok: false };
+  try {
+    await usageReserve.setEnabled(enabled);
+    return { ok: true };
+  } catch {
+    return { ok: false };
+  }
+});
+
+// Where a commit made in a pane came from, as the daemon recorded it.
+registerCommitOriginRpc(rpcRouter, (sha) => daemonClient?.lookupCommitOrigin(sha) ?? Promise.resolve('unavailable'));
+
 // Live `rate_limits` pushed by the wmux statusline script. The account is the
 // one the pane actually runs on (its CLAUDE_CONFIG_DIR), not the workspace's
 // current binding, so this path is not subject to the routing limitation noted
@@ -1597,8 +1690,24 @@ registerUsageRpc(rpcRouter, {
     .filter((a) => a.vendor === 'claude')
     .map((a) => ({ id: a.id, configDir: a.configDir })),
   defaultConfigDir: () => path.join(os.homedir(), '.claude'),
-  ingestDefault: (update) => usagePoller.ingestLive(update),
-  ingestAccount: (accountId, update) => accountUsageService.ingestLive(accountId, update),
+  // A live push is recorded and read by the reserve at ingest: with the
+  // meter off the poller stores it without telling its listeners.
+  ingestDefault: (update) => {
+    const accepted = usagePoller.ingestLive(update);
+    if (accepted) {
+      usageTrail.record('default', usagePoller.getState().snapshot);
+      usageReserve.refresh();
+    }
+    return accepted;
+  },
+  ingestAccount: (accountId, update) => {
+    const accepted = accountUsageService.ingestLive(accountId, update);
+    if (accepted) {
+      usageTrail.record(accountId, claudeAccountSnapshot(accountId));
+      usageReserve.refresh();
+    }
+    return accepted;
+  },
   log: (line) => console.warn(line),
 });
 
@@ -1668,6 +1777,7 @@ const legacyTrafficCounter = new LegacyTrafficCounter({
   },
 });
 rpcRouter.setLegacyTrafficCounter(legacyTrafficCounter);
+rpcRouter.setFencedWorkerPty((ptyId) => isFencedBotWorkerSession(ptyId));
 
 // Phase 2.2 pre-commit 6: enforcement mode + approval queue.
 // (`isDevEnvironment` / `enforcementMode` are resolved above, before the RPC
@@ -2359,6 +2469,8 @@ app.on('ready', async () => {
     onInstall: async (client) => {
       daemonClient = client;
       console.log('[Main] Connected to wmux-daemon (auth verified)');
+      // Each pane's last refused tool call (agents/toolRefusals.ts), as this client holds it.
+      setToolRefusalSource((ptyId) => client.toolRefusalOf(ptyId));
       // DaemonClient has already sent subscribe -> identify, followed by a
       // post-identify subscribe when the daemon enforces the gate. Repeat the
       // idempotent identity RPC here so the presence report
@@ -2381,7 +2493,10 @@ app.on('ready', async () => {
         .then(() => {
           reportDesktopPresence(() => client, focusedPrimaryWindow() !== null);
           disposePhoneBridge?.();
-          disposePhoneBridge = installPhoneBridge(client,(command,payload) => command === MOA_WAKE_COMMAND
+          disposePhoneBridge = installPhoneBridge(client,(command,payload) => command === AGENT_ENV_COMMAND
+            // A paired PC comparing agent environments: names, versions and hashes.
+            ? cachedAgentEnvSummary({ wmuxVersion: app.getVersion() })
+            : command === MOA_WAKE_COMMAND
             // A failure main learns after the accept goes back on the receipt.
             ? Promise.resolve(handlePhoneMoaWake(payload))
             : command.startsWith('browser.') ? handlePhoneBrowser(command,payload,{
@@ -2402,6 +2517,9 @@ app.on('ready', async () => {
               await dispatchPhoneBrowserScroll(wc,event);
             },
             targets: () => webviewCdpManager.listTargets(),
+            focusBuiltin: (surfaceId, workspaceId) =>
+              focusBuiltinTab((method, params) => sendToRenderer(() => mainWindow, method, params), surfaceId, workspaceId),
+            chrome: phoneChromeDeps,
             input: (id, operation) => {
               const wc = phoneWebContents.fromId(id);
               if (!wc || wc.isDestroyed()) return Promise.reject(new Error('Browser unavailable'));
@@ -2416,6 +2534,9 @@ app.on('ready', async () => {
           // the same tick as the register above, before the daemon's answer to it.
           disposeKeepAwakeLink?.();
           disposeKeepAwakeLink = sleepPrevention ? installKeepAwakeLink(client, sleepPrevention.controller) : null;
+          // The daemon takes the browser help table only from the registered
+          // phone bridge, so it is sent after the register above, on the same pipe.
+          browserHelpFeed.publishNow();
         })
         .catch(() => {
           // Old daemon: no identify, therefore no presence, therefore pushes.
@@ -2521,6 +2642,7 @@ app.on('ready', async () => {
       });
       remoteSpawnCoordinator.start();
       automationBridge.start(client);
+      usageReserve.pushNow();
       // X1 — context fold (git branch / worktree / ports / PR badge).
       workspaceContextRouter?.stop();
       workspaceContextRouter = new WorkspaceContextRouter(client, () => mainWindow);
@@ -3155,6 +3277,11 @@ async function prepareInstallQuit(): Promise<void> {
     console.error('[Main] install-quit store flush failed:', err);
   }
   try {
+    usageTrail.flushSync();
+  } catch (err) {
+    console.error('[Main] install-quit usage trail flush failed:', err);
+  }
+  try {
     sessionManager.flushSync();
   } catch (err) {
     console.error('[Main] install-quit flushSync failed:', err);
@@ -3272,6 +3399,9 @@ app.on('before-quit', async (e) => {
   const chromeStopped = chromeRegistry.disposeAll().catch((err) => {
     console.error('[Main] before-quit step "chromeRegistry.disposeAll" threw — continuing:', err);
   });
+
+  // Pending usage-history samples, before anything below can stall.
+  usageTrail.flushSync();
 
   // macOS 로그아웃/재시작/종료 대응(P4): win32의 'session-end' flushSync와 동등한
   // 동기 세션 flush. macOS는 WM_ENDSESSION 대신 Apple Event로 quit을 보내고
@@ -3489,6 +3619,8 @@ app.on('before-quit', async (e) => {
   // window would drop the save the agent just made — the one it is most likely
   // to want on the next launch.
   safeStep('actionCacheStore.flushSync', () => getActionCacheStore().flushSync());
+  // Again here: a usage push can land while the teardown above runs.
+  safeStep('usageTrail.flushSync', () => usageTrail.flushSync());
   safeStep('pipeServer.stop', () => pipeServer.stop());
   safeStep('mcpRegistrar.unregister', () => mcpRegistrar.unregister());
   safeStep('autoUpdater.stop', () => autoUpdater.stop());
@@ -3574,6 +3706,11 @@ async function onWindowsSessionEnd(event?: Electron.WindowSessionEndEvent): Prom
     sessionManager.flushSync();
   } catch (err) {
     console.error('[Main] session-end flushSync failed:', err);
+  }
+  try {
+    usageTrail.flushSync();
+  } catch (err) {
+    console.error('[Main] session-end usage trail flush failed:', err);
   }
 
   if (daemonClient?.isConnected) {

@@ -77,6 +77,8 @@ export interface AwaitingFrame {
    * Present only when there is one.
    */
   unknown?: readonly string[];
+  /** Per row: a soft-wrap continuation of the row above. Absent when the parse did not say. */
+  wrapped?: readonly boolean[];
 }
 
 export interface AwaitingScreenVerifierDeps {
@@ -328,7 +330,7 @@ export interface RenderablePane {
 }
 
 type TextSnapshot = (req: { cols: number; rows: number; scrollback: number; initial: Buffer; geometry?: ReplayGeometry }) =>
-  Promise<{ ok: true; rows: Array<{ text: string }> } | { ok: false; reason?: string }>;
+  Promise<{ ok: true; rows: Array<{ text: string; wrapped?: boolean }> } | { ok: false; reason?: string }>;
 
 /**
  * The pane's live geometry: the PTY's own size when node-pty reports it (the
@@ -405,8 +407,9 @@ export async function renderPaneScreen(
   const after = liveGeometry(pane);
   if (!after || after.cols !== geometry.cols || after.rows !== geometry.rows) return null;
   const texts = outcome.rows.map((r) => r.text);
-  if (!read.marked || !texts.some((t) => t.includes(UNKNOWN_CELL))) return { rows: texts, mark, cols: geometry.cols };
+  const wrapped = outcome.rows.some((r) => r.wrapped !== undefined) ? { wrapped: outcome.rows.map((r) => r.wrapped === true) } : {};
+  if (!read.marked || !texts.some((t) => t.includes(UNKNOWN_CELL))) return { rows: texts, mark, cols: geometry.cols, ...wrapped };
   // Every other reader sees what it saw before: an unknown cell as a blank.
   const rows = texts.map((t) => t.split(UNKNOWN_CELL).join(' ').replace(/ +$/, ''));
-  return { rows, mark, cols: geometry.cols, unknown: texts };
+  return { rows, mark, cols: geometry.cols, unknown: texts, ...wrapped };
 }

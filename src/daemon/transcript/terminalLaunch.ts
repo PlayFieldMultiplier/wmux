@@ -1,4 +1,3 @@
-import path from 'node:path';
 import { validTerminalLaunchMode } from '../../shared/transcript/terminalChat';
 import { runCli } from '../../shared/runCli';
 import { stripWmuxNamespace } from '../web/webPaneEnv';
@@ -37,14 +36,7 @@ export function terminalLaunchCommand(agent: unknown, prompt: unknown, mode: unk
   return head + terminalLaunchModeFlag(mode) + (prompt === undefined ? '' : " -- '" + prompt.replace(/'/g, "'\\''") + "'");
 }
 
-/** The cwd forms each shell's resume line takes: a POSIX absolute path, or a Windows one. */
-// eslint-disable-next-line no-control-regex -- refusing controls is the point
-const CONTROL = /[\0-\x1f\x7f]/;
-export function resumeCwdUsable(cwd: string, shell: ResumeShell): boolean {
-  if (!cwd || CONTROL.test(cwd)) return false;
-  return shell === 'pwsh' ? path.win32.isAbsolute(cwd) && /^[A-Za-z]:[\\/]/.test(cwd)
-    : path.posix.isAbsolute(cwd) && !/['\\\u2018-\u201b]/.test(cwd);
-}
+export { resumeCwdUsable } from '../../shared/resumeShell';
 
 /** Resume EXACTLY `sessionId` (Claude `--resume <id>`, Codex `resume <id>`) with the request's own
  * mode and first message, through the same rewrite the desktop resume uses. Never a stored

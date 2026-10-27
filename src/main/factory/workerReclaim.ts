@@ -1612,7 +1612,15 @@ export interface WorkerResumePorts {
   listSessions: () => Promise<WorkerSessionInfo[]>;
   /** Type the launch line + Enter into the pane through the bot worker
    *  launch guard; false when nothing was typed. */
-  typeLine: (sessionId: string, line: string) => boolean;
+  /** `prepared`: what prepareLine settled for this line. */
+  typeLine: (sessionId: string, line: string, prepared?: unknown) => boolean;
+  /** Settle what typing `line` into `sessionId` needs that takes time (the
+   *  worker fence's support check), before the last checks that the resume
+   *  still stands; its answer goes to typeLine. */
+  prepareLine?: (sessionId: string, line: string) => Promise<unknown>;
+  /** Why the pane must not be typed into now (an agent's folder-trust
+   *  prompt, or a screen that cannot rule one out), or null. Absent: not asked. */
+  folderTrustRefusal?: (sessionId: string) => Promise<string | null>;
   /** Each task's launch generation on disk (workerSlots.ts): a resume typed
    *  into the worker's pane is a new launch, recorded before the line is
    *  typed. Absent: not recorded. */
@@ -1904,10 +1912,14 @@ async function resumeOnce(
   if (live.agentProcessAlive !== false && live.recoveredAgentUnconfirmed !== true && live.commandRunning !== false) {
     return refuse('unknown_state', 'what runs in the worker\'s pane cannot be told; open it and resume from there');
   }
+  // Asked before anything moves, and before the last stop checks below.
+  const atTrust = await ports.folderTrustRefusal?.(pane.sessionId);
+  if (atTrust) return refuse('not_typed', `the resume was not typed: ${atTrust}`);
   // A pane a resume opened earlier whose task was not moved to it then.
   if (!(await rebindTaskTo(ports, rec.taskId, workerWorkspaceOf(rec)))) {
     return refuse('not_reopened', 'the task could not be moved to the worker\'s pane; try again');
   }
+  const prepared = await ports.prepareLine?.(pane.sessionId, line);
   if (stopped()) return refuse('not_now', 'the bot\'s work was stopped while this resume was under way');
   const late = stillOk?.() ?? null;
   if (late) return refuse('not_now', late);
@@ -1923,7 +1935,7 @@ async function resumeOnce(
   }
   let typed = false;
   try {
-    typed = ports.typeLine(pane.sessionId, line);
+    typed = ports.prepareLine ? ports.typeLine(pane.sessionId, line, prepared) : ports.typeLine(pane.sessionId, line);
   } catch {
     typed = false;
   }

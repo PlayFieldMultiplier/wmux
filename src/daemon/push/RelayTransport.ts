@@ -27,6 +27,12 @@ export const RELAY_RETRY_JITTER_MS = 400;
  * still worth answering.
  */
 export const RELAY_QUEUE_CAP = 32;
+/**
+ * Entries queued with `yields` (a browser help push) held at most. They never
+ * push another entry out: when the queue is full one of their own goes, or
+ * the new one is refused.
+ */
+export const RELAY_YIELDING_CAP = 8;
 
 export interface RelayTransportDeps {
   /** Relay base URL, e.g. `https://push.wmux.example`. Absent = push is off. */
@@ -65,7 +71,7 @@ export class RelayTransport {
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly tag: string;
   private readonly noun: string;
-  private readonly queue: Array<() => Promise<void>> = [];
+  private readonly queue: Array<{ run: () => Promise<void>; yields: boolean }> = [];
   /**
    * The in-flight drain, or null. A boolean flag was not enough: `flush()`
    * would see "already draining" and return immediately, so it awaited nothing
@@ -115,17 +121,24 @@ export class RelayTransport {
    * Queue one unit of work and return immediately — no caller of this is
    * allowed to wait on a network round trip, least of all the hook path.
    */
-  enqueue(run: () => Promise<void>): void {
-    if (this.queue.length >= RELAY_QUEUE_CAP) {
-      this.queue.shift();
+  enqueue(run: () => Promise<void>, opts: { yields?: boolean } = {}): void {
+    const yields = opts.yields === true;
+    const yielding = this.queue.filter((item) => item.yields).length;
+    if ((yields && yielding >= RELAY_YIELDING_CAP) || this.queue.length >= RELAY_QUEUE_CAP) {
+      // A yielding entry goes first; a yielding newcomer never pushes out
+      // anything else.
+      const victim = this.queue.findIndex((item) => item.yields);
+      if (victim >= 0) this.queue.splice(victim, 1);
+      else if (!yields) this.queue.shift();
       this.dropped += 1;
       // One line per burst, not per drop: a relay outage would otherwise write
       // the log it is preventing us from delivering.
       if (this.dropped === 1 || this.dropped % 25 === 0) {
         this.deps.log?.('warn', `${this.tag} queue full, dropped ${this.dropped} ${this.noun}(s)`);
       }
+      if (victim < 0 && yields) return;
     }
-    this.queue.push(run);
+    this.queue.push({ run, yields });
     void this.drain();
   }
 
@@ -149,7 +162,7 @@ export class RelayTransport {
       const next = this.queue.shift();
       if (!next) break;
       try {
-        await next();
+        await next.run();
       } catch (err) {
         // A send that throws must not wedge the queue — the next item is a
         // fresh attempt against a possibly-recovered relay.

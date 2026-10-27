@@ -5,6 +5,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { RpcRouter } from '../../RpcRouter';
 import { registerA2aRpc } from '../a2a.rpc';
+import { SNAPSHOT_DEADLINE_MS } from '../../../pty/portWatch';
 import type { ClaudeWorker } from '../../../a2a/ClaudeWorker';
 import type { DaemonClient } from '../../../DaemonClient';
 import { createHash } from 'node:crypto';
@@ -337,6 +338,44 @@ describe('a2a.resolve.identity — server-side walk (callerPid)', () => {
     expect(calls).toBe(1);                                   // failed snapshot → NO retry
     expect(result.resolved).toBeNull();                      // no server walk
     expect(result.mappings).toEqual({ '49076': 'ws-live' }); // legacy fallback preserved
+  });
+
+  it('a snapshot that never settles falls back, then frees the coalesced slot after its deadline', async () => {
+    // A ps/lsof child stuck in the kernel never settles its snapshot. The
+    // handshake still answers through its failure path, and once the snapshot
+    // deadline passes a later handshake starts a fresh one instead of joining
+    // the stuck promise forever.
+    vi.useFakeTimers();
+    try {
+      fs.writeFileSync(path.join(dirRef.current, '49076'), 'daemon-shell');
+      sendToRendererMock.mockResolvedValue({ workspaceId: 'ws-live' });
+      let calls = 0;
+      const fresh = new Map<number, number>([[39876, 25020], [25020, 49076], [49076, 57454]]);
+      const router = new RpcRouter();
+      registerA2aRpc(router, () => fakeWindow, makeWorker(), {
+        snapshot: () => {
+          calls++;
+          if (calls > 1) return Promise.resolve({ ppidByPid: fresh, listeners: [] });
+          return new Promise<never>(() => { /* never settles */ });
+        },
+        readAncestry: async () => null,
+      });
+
+      const first = dispatchResolve(router, { callerPid: 39876 });
+      await vi.advanceTimersByTimeAsync(SNAPSHOT_DEADLINE_MS);
+      const firstResult = await first;
+      expect(firstResult.resolved).toBeNull();                      // no server walk
+      expect(firstResult.mappings).toEqual({ '49076': 'ws-live' }); // legacy fallback preserved
+      expect(calls).toBe(1);
+
+      const second = dispatchResolve(router, { callerPid: 39876 });
+      await vi.advanceTimersByTimeAsync(SNAPSHOT_DEADLINE_MS);
+      const secondResult = await second;
+      expect(calls).toBe(2); // the stuck snapshot no longer holds the slot
+      expect(secondResult.resolved).toEqual({ workspaceId: 'ws-live', ptyId: 'daemon-shell' });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('skips the snapshot wait when there are no live anchors (empty-map → no stall)', async () => {

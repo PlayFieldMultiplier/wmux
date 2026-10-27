@@ -28,7 +28,8 @@
 // follow-up — until then the install hint is shown in the Unknown state
 // and the user resolves the ambiguity by trying the install command.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { scheduledRetrySync, type ScheduledRetrySync } from './scheduledRetrySetting';
 import { useStore } from '../../stores';
 import { useT } from '../../hooks/useT';
 import { IconCheck, IconWarning } from '../icons';
@@ -210,6 +211,8 @@ function UsageCard({
           aria-label={t('claudeIntegration.usageLimit.autoResume')}
         />
       </SettingRow>
+      <UsageReserveRow t={t} />
+      <ScheduledRetryRow t={t} />
       <SettingRow
         id="clauderesumeonstart"
         label={t('claudeIntegration.resumeOnStart')}
@@ -222,6 +225,87 @@ function UsageCard({
         />
       </SettingRow>
     </SettingsSection>
+  );
+}
+
+/**
+ * Scheduled runs: hold a turn that failed on a temporary provider error and
+ * continue it once. The daemon keeps this (runs happen with no window open),
+ * so the row reads and writes it there. Until the daemon answers, or after a
+ * change whose outcome is unclear, the value is unknown: the switch is
+ * disabled and says so, and it is read again when the daemon (re)connects.
+ */
+export function ScheduledRetryRow({ t }: { t: (key: string, vars?: Record<string, string | number>) => string }) {
+  const [on, setOn] = useState<boolean | null>(null);
+  const sync = useRef<ScheduledRetrySync | null>(null);
+  useEffect(() => {
+    const api = window.electronAPI;
+    const current = scheduledRetrySync({
+      read: () => api?.automation?.settings?.() ?? Promise.resolve(null),
+      write: (value) => api.automation.setSettings({ retryTransientErrors: value }),
+    }, setOn);
+    sync.current = current;
+    current.read();
+    const offs = [api?.daemon?.onConnected?.(current.read), api?.daemon?.onReconnected?.(current.read)];
+    return () => {
+      current.dispose();
+      for (const off of offs) off?.();
+    };
+  }, []);
+  return (
+    <SettingRow
+      id="scheduledretry"
+      label={t('claudeIntegration.scheduledRetry')}
+      description={on === null
+        ? `${t('claudeIntegration.scheduledRetryDesc')} ${t('claudeIntegration.scheduledRetryUnknown')}`
+        : t('claudeIntegration.scheduledRetryDesc')}
+    >
+      <Switch
+        checked={on === true}
+        disabled={on === null}
+        onCheckedChange={(next) => sync.current?.change(next)}
+        aria-label={t('claudeIntegration.scheduledRetry')}
+        data-scheduled-retry={on === null ? 'unknown' : on ? 'on' : 'off'}
+      />
+    </SettingRow>
+  );
+}
+
+/**
+ * Usage reserve: unattended starts wait while a Claude account's 5h usage is
+ * in its last 15%. Main keeps and enforces it; the switch stays disabled
+ * until main has answered, and goes back to the value main reports after a
+ * write.
+ */
+export function UsageReserveRow({ t }: { t: (key: string, vars?: Record<string, string | number>) => string }) {
+  const [on, setOn] = useState<boolean | null>(null);
+  useEffect(() => {
+    let live = true;
+    void window.electronAPI?.usage?.reserve?.get().then((r) => { if (live) setOn(r.enabled); }).catch(() => undefined);
+    return () => { live = false; };
+  }, []);
+  const change = (next: boolean) => {
+    setOn(null);
+    void window.electronAPI.usage.reserve.set(next)
+      .catch(() => undefined)
+      .then(() => window.electronAPI.usage.reserve.get())
+      .then((r) => setOn(r.enabled))
+      .catch(() => setOn(null));
+  };
+  return (
+    <SettingRow
+      id="usagereserve"
+      label={t('claudeIntegration.usageReserve')}
+      description={t('claudeIntegration.usageReserveDesc')}
+    >
+      <Switch
+        checked={on === true}
+        disabled={on === null}
+        onCheckedChange={change}
+        aria-label={t('claudeIntegration.usageReserve')}
+        data-usage-reserve={on === null ? 'unknown' : on ? 'on' : 'off'}
+      />
+    </SettingRow>
   );
 }
 

@@ -40,7 +40,7 @@ export interface UsageUpdate {
  *  is an integer from Claude Code, so allow a little drift. A NEW window can
  *  only start after the old one reset, so its reset is hours later — far
  *  outside this slack. */
-const SAME_WINDOW_SLACK_SEC = 5 * 60;
+export const SAME_WINDOW_SLACK_SEC = 5 * 60;
 
 /** Merge one live window. Returns `prev` itself when the sample changes
  *  nothing, so callers can detect a no-op by reference. */

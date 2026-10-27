@@ -1,5 +1,6 @@
 import { agentDisplayToSlug, type AgentSlug } from '../shared/agentIdentity';
 import type { ResumeBinding } from '../shared/agentResume';
+import { isWslShell } from '../shared/wslTarget';
 import { screenShowsActiveDialog, screenShowsAgentDialog } from './transcript/chatScreenGate';
 import { transcriptTurnState } from './transcript/chatAgentStatus';
 import { fileTranscriptProvider } from './transcript/providers';
@@ -29,6 +30,29 @@ export function liveRecoveryHint<S, B>(
     return undefined;
   }
   return slug;
+}
+
+/**
+ * The binding a person-driven pane lists, marked `cwdMissing` when the folder
+ * its conversation ran in is gone (a removed worktree) while the transcript
+ * still exists. `--resume <id>` runs only from that folder, so the pane names
+ * the conversation and its folder instead of opening a picker that cannot list
+ * it. Read on a copy: the stored binding never carries the mark. Exec and
+ * supervised panes resume on their own and are not marked; a WSL pane's folder
+ * is in the distro and a network, device or WSL share path is not probed, so
+ * neither is.
+ */
+export function markCwdMissing(
+  binding: ResumeBinding,
+  pane: { exec?: unknown; supervision?: unknown; wslTarget?: unknown; cmd?: string },
+  transcriptLives: (binding: ResumeBinding) => boolean,
+  folderExists: (dir: string) => boolean,
+): ResumeBinding {
+  if (pane.exec || pane.supervision || pane.wslTarget || isWslShell(pane.cmd)) return binding;
+  // A network, device or WSL share path (`\\server`, `\\?\`, `\\wsl.localhost`)
+  // is not probed: a stat there can stall every listing on a host or a distro.
+  if (!binding.cwd || /^[\\/]{2}/.test(binding.cwd) || folderExists(binding.cwd)) return binding;
+  return transcriptLives(binding) ? { ...binding, cwdMissing: true } : binding;
 }
 
 /** How recent a recovered pane's last output must be for its turn to be continued. */
@@ -118,9 +142,14 @@ function dialogAtBottom(rows: readonly string[]): boolean {
   while (last >= 0 && rows[last].trim().length === 0) last--;
   if (last < 0) return false;
   // A narrow pane wraps the key hints and leaves their last word alone on the
-  // bottom row (`… · Esc to` / `cancel`, captured at 44 and 80 columns).
-  const wrapped = last > 0 && /^\S+$/.test(rows[last]) && /\b(?:esc|enter) to$/i.test(rows[last - 1].trimEnd());
-  const grid = wrapped ? [...rows.slice(0, last - 1), `${rows[last - 1].trimEnd()} ${rows[last]}`] : rows.slice(0, last + 1);
+  // bottom row (`… · Esc to` / `cancel`, captured at 44 and 80 columns), or
+  // their last two (`… · Esc` / `to cancel`: the preview picker's longer
+  // hint at 57 columns, captured on Claude Code 2.1.311).
+  const above = last > 0 ? rows[last - 1].trimEnd() : '';
+  const wrapped = last > 0 && (
+    (/^\S+$/.test(rows[last]) && /\b(?:esc|enter) to$/i.test(above))
+    || (/^to \S+$/i.test(rows[last]) && /\b(?:esc|enter)$/i.test(above)));
+  const grid = wrapped ? [...rows.slice(0, last - 1), `${above} ${rows[last]}`] : rows.slice(0, last + 1);
   if (!AGENT_BOTTOM_ROW.test(grid[grid.length - 1])) return false;
   return screenShowsActiveDialog(grid) || screenShowsAgentDialog(grid);
 }

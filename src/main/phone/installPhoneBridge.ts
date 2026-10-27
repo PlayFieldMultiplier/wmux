@@ -8,6 +8,9 @@ import { PHONE_BOTS_COMMAND } from '../../shared/phoneBots';
 import { GUEST_ROOM_CARDS_COMMAND, GUEST_ROOM_POST_COMMAND } from '../../shared/guestBots';
 import { PHONE_BOT_APPROVAL_COMMAND, PHONE_BOT_APPROVAL_DECIDE_COMMAND } from '../../shared/phoneBotApprovals';
 import { PHONE_WORKER_RESUME_COMMAND } from '../../shared/phoneWorkerResume';
+import { BROWSER_HELP_CAPABILITY, PHONE_BROWSER_HELP_DECIDE_COMMAND } from '../../shared/phoneBrowserHelp';
+import { BROWSER_CHROME_PREVIEW_CAPABILITY } from '../../shared/phoneBrowserPreview';
+import { AGENT_ENV_COMMAND } from '../../shared/agentEnvSummary';
 
 export function installPhoneBridge(client: DaemonClient, handle: (command: string, payload: Record<string,unknown>) => Promise<unknown>): () => void {
   let active = true;
@@ -34,6 +37,6 @@ export function installPhoneBridge(client: DaemonClient, handle: (command: strin
   client.on('event',listener);
   // Announce the optional commands this desktop handles; a daemon that predates
   // the announcement ignores the params.
-  void client.rpc('daemon.phone.register',{commands:[DESKTOP_ACCOUNT_ENV_COMMAND,MOA_WAKE_COMMAND,FACTORY_PHONE_MESSAGE_CAPABILITY,FLEET_TICKET_DETAIL_COMMAND,PHONE_ROOM_THREADS_COMMAND,PHONE_ROOM_CARDS_COMMAND,PHONE_BOT_APPROVAL_COMMAND,PHONE_BOT_APPROVAL_DECIDE_COMMAND,PHONE_BOTS_COMMAND,FACTORY_THREAD_MESSAGE_CAPABILITY,FACTORY_THREAD_ATTACHMENTS_CAPABILITY,PHONE_ROOM_ATTACHMENT_COMMAND,PHONE_ROOM_FILE_COMMAND,PHONE_WORKER_RESUME_COMMAND,GUEST_ROOM_POST_COMMAND,GUEST_ROOM_CARDS_COMMAND]}).catch(() => { /* Older daemon: no capability. */ });
+  void client.rpc('daemon.phone.register',{commands:[DESKTOP_ACCOUNT_ENV_COMMAND,MOA_WAKE_COMMAND,FACTORY_PHONE_MESSAGE_CAPABILITY,FLEET_TICKET_DETAIL_COMMAND,PHONE_ROOM_THREADS_COMMAND,PHONE_ROOM_CARDS_COMMAND,PHONE_BOT_APPROVAL_COMMAND,PHONE_BOT_APPROVAL_DECIDE_COMMAND,PHONE_BOTS_COMMAND,FACTORY_THREAD_MESSAGE_CAPABILITY,FACTORY_THREAD_ATTACHMENTS_CAPABILITY,PHONE_ROOM_ATTACHMENT_COMMAND,PHONE_ROOM_FILE_COMMAND,PHONE_WORKER_RESUME_COMMAND,GUEST_ROOM_POST_COMMAND,GUEST_ROOM_CARDS_COMMAND,BROWSER_HELP_CAPABILITY,PHONE_BROWSER_HELP_DECIDE_COMMAND,BROWSER_CHROME_PREVIEW_CAPABILITY,AGENT_ENV_COMMAND]}).catch(() => { /* Older daemon: no capability. */ });
   return () => { active = false; client.off('event',listener); };
 }

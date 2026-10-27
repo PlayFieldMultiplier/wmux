@@ -676,4 +676,18 @@ export const vi = {
   'worktask.cleanup.detail.orphanMeta': 'Chỉ còn bản ghi tác vụ, không có worktree (việc xóa bị gián đoạn) — kiểm tra, rồi xóa.',
   'worktask.cleanup.detail.diskMissing': 'Worktree không có trên đĩa (bị xóa bên ngoài wmux, hoặc do sự cố) — đóng tác vụ để dọn dẹp.',
   'botsPage.guest.readNotice': "Từ giờ, một bot bên ngoài có thể đọc tin nhắn trong cuộc trò chuyện này và đăng vào đó. Nó không bao giờ thấy những gì đã nói trước khi được thêm vào.",
+
+  // Scheduled runs: one retry after a temporary provider error
+  'claudeIntegration.scheduledRetry': "Thử lại lần chạy theo lịch sau lỗi tạm thời",
+  'claudeIntegration.scheduledRetryDesc': "Nếu lượt của một lần chạy theo lịch thất bại do lỗi mạng hoặc lỗi máy chủ của nhà cung cấp, chờ 5 phút rồi gửi một tin nhắn tiếp tục. Bật theo mặc định; mỗi lịch có thể tắt.",
+  'claudeIntegration.scheduledRetryUnknown': "Chưa rõ: đang chờ dịch vụ nền của wmux.",
+  'claudeIntegration.usageReserve': "Giữ phần dự trữ mức dùng",
+  'claudeIntegration.usageReserveDesc': "Công việc không giám sát sẽ dùng mức dùng 5 giờ của tài khoản Claude không bắt đầu khi mức dùng đó ở 85% trở lên, để 15% cuối dành cho bạn. Một lượt chạy theo lịch chờ đến khi đặt lại và chạy lúc đó nếu vẫn còn trong thời gian ân hạn, nếu không thì bị bỏ lỡ; fan-out của bot cũng chờ; fan-out do một agent trong ô của bạn yêu cầu sẽ bị từ chối, kèm thời điểm đặt lại. Codex và các agent khác không bị giữ lại, và những gì bạn gõ không bao giờ bị giữ lại. Tắt theo mặc định.",
+  'schedules.retryTransient': "Thử lại một lần sau lỗi tạm thời",
+  'schedules.retryTransientHint': "Khi có lỗi mạng hoặc lỗi máy chủ của nhà cung cấp, chờ 5 phút rồi gửi một tin nhắn tiếp tục. Lời nhắc không được gửi lại.",
+  'schedules.retryTransientGlobalHint': "Chỉ áp dụng khi “Thử lại lần chạy theo lịch sau lỗi tạm thời” đang bật trong Cài đặt → Tích hợp Claude.",
+  'schedules.state.retryWaiting': "Đang chờ: thử lại sau lỗi tạm thời của nhà cung cấp (sau {minutes} phút)",
+  'schedules.reason.agent_error_retried_once': "lại lỗi tác tử sau một lần thử lại",
+  'schedules.reason.agent_error_retry_blocked': "lỗi tác tử; không thể gửi lần thử lại",
+  'schedules.reason.agent_error_retry_interrupted': "lỗi tác tử; không thử lại, wmux đã khởi động lại",
 } as const;

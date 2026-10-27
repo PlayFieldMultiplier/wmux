@@ -119,6 +119,8 @@ interface Harness {
 }
 
 function setup(opts?: {
+  /** The usage reserve's hold for a workspace. Omitted = no reserve. */
+  reserve?: (workspaceId: string) => { account: string; untilMs: number } | null;
   ownerWorkspaceId?: string;
   cwd?: string | null;
   approval?: ApprovalStub;
@@ -270,6 +272,7 @@ function setup(opts?: {
     getDaemonClient: opts?.daemonSessions
       ? () => ({ isConnected: true, rpc: daemonRpc }) as unknown as DaemonClient
       : undefined,
+    ...(opts?.reserve ? { usageReserveHold: opts.reserve, noteUsageReserveHeld: () => undefined } : {}),
   });
   const handler = handlers.get('task.fanout.start');
   if (!handler) throw new Error('task.fanout.start was not registered');
@@ -1486,6 +1489,63 @@ describe('task.fanout.start — depth-1', () => {
     expect(err.code).toBe('FAILED_PRECONDITION');
     expect(err.message).toMatch(/lineage store/);
     expect(h.start).not.toHaveBeenCalled();
+  });
+});
+
+describe('task.fanout.start — usage reserve', () => {
+  it('refuses with the reset time and the Settings switch, before any prompt or worker', async () => {
+    const untilMs = Date.now() + 90 * 60_000;
+    const h = setup({ reserve: () => ({ account: 'default', untilMs }) });
+    const err = errorOf(await h.call(goodParams()));
+    expect(err.code).toBe('RESOURCE_EXHAUSTED');
+    expect(err.message).toContain(new Date(untilMs).toISOString());
+    expect(err.message).toMatch(/run unattended/);
+    expect(err.message).toMatch(/Settings > Claude integration > Usage reserve/);
+    await h.flush();
+    expect(h.approvalCount()).toBe(0);
+    expect(h.start).not.toHaveBeenCalled();
+  });
+
+  it('decides a roles-only fan-out by the bindings it was approved with', async () => {
+    const untilMs = Date.now() + 90 * 60_000;
+    const reserve = () => ({ account: 'default', untilMs });
+    // Every role bound to Codex: nothing it launches spends the covered usage.
+    const codex = setup({ reserve, approval: { approved: true, outcome: 'approved', roleBindings: { Builder: { agent: 'codex' }, Reviewer: { agent: 'codex' } } } });
+    expect((await codex.call(goodParams({ titles: ['a', 'b'], roles: ['Builder', 'Reviewer'] }))).status).toBe('accepted');
+    await codex.flush();
+    expect(codex.start).toHaveBeenCalledTimes(1);
+    // One role unbound (the default launch): refused at the launch, as before the prompt.
+    const mixed = setup({ reserve, approval: { approved: true, outcome: 'approved', roleBindings: { Builder: { agent: 'codex' }, Reviewer: null } } });
+    expect((await mixed.call(goodParams({ titles: ['a', 'b'], roles: ['Builder', 'Reviewer'] }))).status).toBe('accepted');
+    await mixed.flush();
+    expect(mixed.start).not.toHaveBeenCalled();
+    const polled = await mixed.call(goodParams({ titles: ['a', 'b'], roles: ['Builder', 'Reviewer'] }));
+    expect(polled).toMatchObject({ status: 'denied', reason: 'usage-reserve' });
+    expect(errorOf(polled).code).toBe('RESOURCE_EXHAUSTED');
+    expect(errorOf(polled).message).toContain(new Date(untilMs).toISOString());
+  });
+
+  it('a hold that begins while the approval is up stops the launch; one after it stops each task at its launch', async () => {
+    let hold: { account: string; untilMs: number } | null = null;
+    const h = setup({ reserve: () => hold, approval: 'hang' });
+    expect((await h.call(goodParams())).status).toBe('accepted');
+    hold = { account: 'default', untilMs: Date.now() + 60_000 };
+    h.approveHungPrompt();
+    await h.flush();
+    await h.flush();
+    expect(h.start).not.toHaveBeenCalled();
+    expect(errorOf(await h.call(goodParams())).code).toBe('RESOURCE_EXHAUSTED');
+
+    hold = null;
+    const later = setup({ reserve: () => hold, approval: { approved: true, outcome: 'approved', roleBindings: { Builder: { agent: 'codex' } } } });
+    await later.call(goodParams({ titles: ['a', 'b'], roles: ['Builder', ''] }));
+    await later.flush();
+    const req = later.request();
+    expect(req.mayLaunch?.({ index: 1 })).toBeNull();
+    hold = { account: 'default', untilMs: Date.now() + 60_000 };
+    // A slot or dependency wait ends in the same check, right before the spawn.
+    expect(req.mayLaunch?.({ index: 1 })).toMatch(/^usage reserve: .*run unattended/);
+    expect(req.mayLaunch?.({ index: 0 })).toBeNull(); // the Codex task
   });
 });
 

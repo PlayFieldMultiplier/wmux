@@ -1,5 +1,6 @@
 //! Event-driven PTY transport. Blocking OS reads/writes never run on Node.
 use crate::native_output::{NativeOutputChunk, NativeOutputDecoder};
+use crate::wake_gate::WakeGate;
 use napi::bindgen_prelude::*;
 use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi_derive::napi;
@@ -21,7 +22,28 @@ use std::sync::{
     Arc, Condvar, Mutex,
 };
 
-type Wake = ThreadsafeFunction<(), (), (), napi::Status, false, false, 1>;
+/// The JS wake callback. Every worker shares one single-slot queue, so the
+/// gate allows one queued call at a time; see `wake_gate` for why no wake
+/// is lost.
+struct Wake {
+    callback: ThreadsafeFunction<(), (), (), napi::Status, false, false, 1>,
+    gate: Arc<WakeGate>,
+}
+impl Wake {
+    fn notify(&self) {
+        if !self.gate.arm() {
+            return;
+        }
+        match self
+            .callback
+            .call((), ThreadsafeFunctionCallMode::NonBlocking)
+        {
+            // Closing never dispatches again; staying armed stops more calls.
+            napi::Status::Ok | napi::Status::Closing => {}
+            _ => self.gate.disarm(),
+        }
+    }
+}
 const INPUT_LIMIT: usize = 8 * 1024 * 1024;
 static ACTIVE_WORKERS: AtomicU32 = AtomicU32::new(0);
 struct Worker;
@@ -63,7 +85,7 @@ struct State {
 impl State {
     fn fail(&self, message: String, wake: &Wake) {
         *self.error.lock().unwrap_or_else(|p| p.into_inner()) = Some(message);
-        let _ = wake.call((), ThreadsafeFunctionCallMode::NonBlocking);
+        wake.notify();
     }
 }
 
@@ -126,14 +148,21 @@ impl NativeTransport {
         conpty_dll: Option<String>,
     ) -> Result<Self> {
         let size = size(cols, rows)?;
-        let wake = Arc::new(
-            notify
+        let gate = Arc::new(WakeGate::default());
+        let dispatched = gate.clone();
+        let wake = Arc::new(Wake {
+            callback: notify
                 .build_threadsafe_function::<()>()
                 .callee_handled::<false>()
                 .weak::<false>()
                 .max_queue_size::<1>()
-                .build()?,
-        );
+                // Runs on Node before `notify`, so its drain sees all data.
+                .build_callback(move |_| {
+                    dispatched.disarm();
+                    Ok(())
+                })?,
+            gate,
+        });
         #[cfg(unix)]
         let pair = {
             let _ = conpty_dll;
@@ -212,7 +241,7 @@ impl NativeTransport {
                                 #[cfg(unix)]
                                 break;
                             }
-                            let _ = reader_wake.call((), ThreadsafeFunctionCallMode::NonBlocking);
+                            reader_wake.notify();
                         }
                         Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                         #[cfg(unix)]
@@ -233,7 +262,7 @@ impl NativeTransport {
                     }
                 }
                 drop(tx);
-                let _ = reader_wake.call((), ThreadsafeFunctionCallMode::NonBlocking);
+                reader_wake.notify();
             });
         if let Err(e) = reader_start {
             result.close();
@@ -268,7 +297,7 @@ impl NativeTransport {
                     let mut input = writer_state.input.lock().unwrap_or_else(|p| p.into_inner());
                     input.bytes = input.bytes.saturating_sub(data.len());
                     drop(input);
-                    let _ = writer_wake.call((), ThreadsafeFunctionCallMode::NonBlocking);
+                    writer_wake.notify();
                     if let Err(e) = written {
                         let mut input =
                             writer_state.input.lock().unwrap_or_else(|p| p.into_inner());
@@ -355,7 +384,7 @@ impl NativeTransport {
                 input.bytes = 0;
                 drop(input);
                 waiter_state.ready.notify_all();
-                let _ = wake.call((), ThreadsafeFunctionCallMode::NonBlocking);
+                wake.notify();
             });
         if let Err(e) = wait_start {
             result.close();

@@ -1,4 +1,5 @@
 import type { BrowserWindow, WebContents } from 'electron';
+import { browserHelpOrigin } from '../../../shared/phoneBrowserHelp';
 import { Notification, nativeImage, shell, webContents } from 'electron';
 import type { RpcRouter } from '../RpcRouter';
 import { sendToRenderer } from './_bridge';
@@ -1988,7 +1989,7 @@ export function registerBrowserRpc(
     workspaceId: string,
     surfaceId: string | undefined,
     prompt: string,
-    ctx: RpcContext | undefined,
+    chromeCaller: () => Promise<ChromeCaller>,
   ): Promise<void> => {
     // The surfaceId is caller-supplied and the request store never resolves it,
     // so it is checked here against what the workspace can be PROVEN to hold
@@ -2017,7 +2018,7 @@ export function registerBrowserRpc(
         // The caller's own Chrome: a pane with its own profile raises its own
         // tab. Resolution failing (no registry, unidentified pane) lands in the
         // catch below and skips the raise; the notification still goes out.
-        const launcher = (await resolveChromeClient('browser.help.request', ctx, workspaceId)).client;
+        const launcher = (await chromeCaller()).client;
         const reachable = launcher
           ? (await launcher.cdpInfoTargets(workspaceId)).some(
               (t) => t.surfaceId === surfaceId || t.targetId === surfaceId,
@@ -2080,6 +2081,10 @@ export function registerBrowserRpc(
     // their click settle this agent's wait. Refused at the door. (Live is
     // different on purpose: asking the human to act on a tab the agent cannot
     // write to is the feature; that lane only never raises such a tab.)
+    // The tab's origin now, pinned on the request for its whole life: a phone
+    // types into this request's tab only while it is still at this origin.
+    // Unknown here stays unknown.
+    let origin: string | undefined;
     if (backend() === 'builtin' && surfaceId) {
       const owned =
         webviewCdpManager.getTarget(surfaceId, workspaceId) ??
@@ -2088,6 +2093,31 @@ export function registerBrowserRpc(
         throw new Error(
           `browser.help.request: BROWSER_SURFACE_NOT_REGISTERED: surface "${surfaceId}" is not a ` +
             'browser pane of this workspace. Pass one of your own surfaces, or omit surfaceId.',
+        );
+      }
+      const wc = webContents.fromId(owned.webContentsId);
+      origin = wc && !wc.isDestroyed() ? browserHelpOrigin(wc.getURL()) : undefined;
+    }
+    // A dedicated Chrome profile holds only tabs wmux opened, each recorded
+    // against a workspace, so the same rule holds there: the tab must be one
+    // this workspace opened. An unattributed tab does not count. Live Chrome
+    // (the client with a writeScope) keeps the behaviour described above.
+    // Resolved once and shared with the reveal below.
+    const chromeCaller = chromeCallerOf('browser.help.request', ctx, workspaceId);
+    if (backend() === 'chrome' && surfaceId) {
+      const { client } = await chromeCaller();
+      const tab = client.writeScope
+        ? undefined
+        : (await client.cdpInfoTargets(workspaceId)).find(
+          // A raw CDP targetId still names a tab here, as in browser.tabs and close.
+          (t) => (t.surfaceId === surfaceId || t.targetId === surfaceId) && t.workspaceId === workspaceId,
+        );
+      origin = tab ? browserHelpOrigin(tab.url) : undefined;
+      if (!client.writeScope && !tab) {
+        throw new Error(
+          `browser.help.request: BROWSER_SURFACE_NOT_REGISTERED: surface "${surfaceId}" was not found ` +
+            "among this workspace's open tabs in its Chrome (that Chrome may not be running). Pass the " +
+            'surfaceId of a tab this workspace opened, or open one with browser_open first.',
         );
       }
     }
@@ -2120,6 +2150,8 @@ export function registerBrowserRpc(
         ...(ref !== undefined && { ref }),
         ...(typeof params['timeoutMs'] === 'number' && { timeoutMs: params['timeoutMs'] }),
         ...(completion !== undefined && { completion }),
+        ...(callerPaneOf(ctx) !== undefined && { requesterPtyId: callerPaneOf(ctx) }),
+        ...(origin !== undefined && { origin }),
       });
     } catch (err) {
       // A refusal (already pending, unusable prompt) means nothing will ever
@@ -2131,7 +2163,7 @@ export function registerBrowserRpc(
       throw err;
     }
 
-    await revealHelpSurface(workspaceId, surfaceId, info.prompt, ctx);
+    await revealHelpSurface(workspaceId, surfaceId, info.prompt, chromeCaller);
     return { requestId: info.requestId, deadlineAt: info.deadlineAt, highlighted };
   });
 

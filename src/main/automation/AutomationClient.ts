@@ -14,6 +14,8 @@ import {
   type AutomationRun,
   type AutomationRunNowParams,
   type AutomationSetEnabledParams,
+  type AutomationSettings,
+  type AutomationSettingsResult,
   type AutomationUpdateParams,
 } from '../../shared/automation';
 
@@ -120,6 +122,26 @@ export class AutomationClient {
   /** MCP draft path: the daemon stores it disabled, proposed, approval mode. */
   propose(params: AutomationProposeParams): Promise<AutomationMutationResult> {
     return this.mutate(AUTOMATION_RPC.propose, { draft: params.draft });
+  }
+
+  /** The engine-wide settings; null from an older daemon that has none. */
+  async settings(): Promise<AutomationSettings | null> {
+    const r = (await this.transport.rpc(AUTOMATION_RPC.list, {})) as { settings?: unknown } | null;
+    const s = r?.settings as Partial<AutomationSettings> | undefined;
+    return s && typeof s.retryTransientErrors === 'boolean' ? { retryTransientErrors: s.retryTransientErrors } : null;
+  }
+
+  async setSettings(settings: Partial<AutomationSettings>): Promise<AutomationSettingsResult> {
+    try {
+      const r = (await this.transport.rpc(AUTOMATION_RPC.setSettings, { settings })) as
+        { ok?: unknown; settings?: Partial<AutomationSettings>; error?: unknown } | null;
+      if (r?.ok === true && typeof r.settings?.retryTransientErrors === 'boolean') {
+        return { ok: true, settings: { retryTransientErrors: r.settings.retryTransientErrors } };
+      }
+      return { ok: false, error: typeof r?.error === 'string' ? r.error : 'invalid daemon reply' };
+    } catch (err) {
+      return { ok: false, error: errorText(err) };
+    }
   }
 
   /** Clear attention items the desktop has surfaced (first-party only). */

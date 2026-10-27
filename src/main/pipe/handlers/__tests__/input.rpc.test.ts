@@ -7,7 +7,7 @@ import {
   registerInputRpc,
   decideTerminalOmittedTarget,
   isSessionTerminatingInput,
-  awaitSubmitReceipt,
+  awaitSubmitReceipt, EnterRetryRefused,
   composerCleared,
   needleInComposer,
   isTurnStart,
@@ -537,6 +537,7 @@ describe('input.send — multi-line text to an agent is pasted, not typed (#1594
       isConnected: true,
       writeToSession: (id: string, data: string) => writeMock(id, data),
       getSendTarget: vi.fn(() => Promise.resolve(target)),
+      folderTrustState: vi.fn(() => Promise.resolve({ state: 'clear' })),
     } as unknown as DaemonClient;
     const router = new RpcRouter();
     registerInputRpc(router, pty, () => fakeWindow, () => dc);
@@ -1262,6 +1263,23 @@ describe('input.send — submit receipt', () => {
     );
     expect(receipt.accepted).toBe(false);
     expect(receipt.retried).toBe(true);
+  });
+
+  it('a retry withheld for a trust prompt is not counted as retried, and says why', async () => {
+    const { probe } = fakeProbe([COMPOSER], [fresh('idle')]);
+    const receipt = await awaitSubmitReceipt(
+      probe,
+      NEEDLE,
+      { screen: COMPOSER, agentStatus: 'idle' },
+      async () => {
+        await Promise.resolve();
+        throw new EnterRetryRefused('input.send: pane "pty-1" is on a folder-trust prompt; answer it in the pane.');
+      },
+      waitOpts({ windowMs: 100 }),
+    );
+    expect(receipt.accepted).toBe(false);
+    expect(receipt.retried).toBe(false);
+    expect(receipt.retryRefused).toContain('folder-trust prompt');
   });
 
   it('stops at the total ceiling even when every window would allow more', async () => {

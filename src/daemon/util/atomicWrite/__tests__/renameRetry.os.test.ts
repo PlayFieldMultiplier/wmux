@@ -12,6 +12,7 @@ import path from 'node:path';
 import os from 'node:os';
 
 import { atomicWriteJSON, atomicWriteJSONSync } from '../core';
+import { atomicWriteText, atomicWriteTextSync } from '../text';
 
 let tmpDir: string;
 let targetPath: string;
@@ -269,6 +270,93 @@ describe('atomicWriteJSON commit-rename retry', () => {
 
       const commits = spy.mock.calls.filter((c) => c[1] === targetPath);
       expect(commits).toHaveLength(1);
+    });
+  });
+});
+
+describe('atomicWriteText commit-rename retry (shares the core policy)', () => {
+  it('sync: succeeds once the transient EPERM window closes', async () => {
+    await asPlatform('win32', () => {
+      const spy = failCommitRenameSync(2);
+      atomicWriteTextSync(targetPath, 'hello', { renameRetry: fastRetry });
+
+      expect(fs.readFileSync(targetPath, 'utf-8')).toBe('hello');
+      expect(spy.mock.calls.filter((c) => c[1] === targetPath)).toHaveLength(3);
+    });
+  });
+
+  it('async: succeeds once the transient EPERM window closes', async () => {
+    await asPlatform('win32', async () => {
+      const spy = failCommitRename(2);
+      await atomicWriteText(targetPath, 'hello', { renameRetry: fastRetry });
+
+      expect(fs.readFileSync(targetPath, 'utf-8')).toBe('hello');
+      expect(spy.mock.calls.filter((c) => c[1] === targetPath)).toHaveLength(3);
+    });
+  });
+
+  it('sync: retry exhaustion restores .bak to the target and rethrows the original error', async () => {
+    await asPlatform('win32', () => {
+      atomicWriteTextSync(targetPath, 'gen 1', { renameRetry: fastRetry });
+      failCommitRenameSync(Number.MAX_SAFE_INTEGER);
+
+      expect(() =>
+        atomicWriteTextSync(targetPath, 'gen 2', { renameRetry: fastRetry }),
+      ).toThrow(expect.objectContaining({ code: 'EPERM' }));
+
+      expect(fs.readFileSync(targetPath, 'utf-8')).toBe('gen 1');
+    });
+  });
+
+  it('async: retry exhaustion restores .bak to the target and rethrows the original error', async () => {
+    await asPlatform('win32', async () => {
+      await atomicWriteText(targetPath, 'gen 1', { renameRetry: fastRetry });
+      failCommitRename(Number.MAX_SAFE_INTEGER);
+
+      await expect(
+        atomicWriteText(targetPath, 'gen 2', { renameRetry: fastRetry }),
+      ).rejects.toMatchObject({ code: 'EPERM' });
+
+      expect(fs.readFileSync(targetPath, 'utf-8')).toBe('gen 1');
+    });
+  });
+
+  it('sync: a transient EPERM on the primary → .bak rename is retried', async () => {
+    await asPlatform('win32', () => {
+      atomicWriteTextSync(targetPath, 'gen 1', { renameRetry: fastRetry });
+      const bakPath = `${targetPath}.bak`;
+      const real = fs.renameSync.bind(fs);
+      let seen = 0;
+      vi.spyOn(fs, 'renameSync').mockImplementation((from: fs.PathLike, to: fs.PathLike) => {
+        if (to === bakPath && seen++ < 2) throw errno('EPERM');
+        return real(from, to);
+      });
+
+      atomicWriteTextSync(targetPath, 'gen 2', { renameRetry: fastRetry });
+
+      expect(seen).toBe(3);
+      expect(fs.readFileSync(targetPath, 'utf-8')).toBe('gen 2');
+      expect(fs.readFileSync(bakPath, 'utf-8')).toBe('gen 1');
+    });
+  });
+
+  it('sync: an exhausted .bak rename is logged as the backup step and the write still lands', async () => {
+    await asPlatform('win32', () => {
+      atomicWriteTextSync(targetPath, 'gen 1', { renameRetry: fastRetry });
+      const bakPath = `${targetPath}.bak`;
+      const real = fs.renameSync.bind(fs);
+      vi.spyOn(fs, 'renameSync').mockImplementation((from: fs.PathLike, to: fs.PathLike) => {
+        if (to === bakPath) throw errno('EPERM');
+        return real(from, to);
+      });
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      atomicWriteTextSync(targetPath, 'gen 2', { renameRetry: fastRetry });
+
+      expect(fs.readFileSync(targetPath, 'utf-8')).toBe('gen 2');
+      const exhausted = warn.mock.calls.map((c) => String(c[0])).find((m) => m.includes('still failing'));
+      expect(exhausted).toMatch(/^\[atomicWrite\] Backup rename to ".*\.bak" still failing/);
+      expect(exhausted).toContain('The write continues without a fresh backup.');
     });
   });
 });

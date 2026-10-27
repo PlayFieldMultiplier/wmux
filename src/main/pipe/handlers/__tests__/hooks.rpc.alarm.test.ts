@@ -74,6 +74,7 @@ function signal(overrides: Partial<AgentSignal>): AgentSignal {
     kind: 'agent.stop',
     agent: 'claude',
     cwd: '/repo',
+    ptyId: 'pty-1',
     payload: {},
     ts: 1_700_000_000_000,
     ...overrides,

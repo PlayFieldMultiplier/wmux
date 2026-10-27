@@ -13,7 +13,7 @@
 
 import os from 'node:os';
 
-function ownAddresses(): Set<string> {
+function readOwnAddresses(): Set<string> {
   const out = new Set<string>();
   for (const list of Object.values(os.networkInterfaces())) for (const a of list ?? []) out.add(a.address.toLowerCase());
   return out;
@@ -38,14 +38,13 @@ export function isLoopbackHost(host: string): boolean {
 /** How long a read of this machine's addresses is trusted before an unknown address reads them again. */
 export const OWN_ADDRESSES_TTL_MS = 5_000;
 
-export class InboundCounter {
-  private seenAt: number | null = null;
-  private count = 0;
+/** Whether an address belongs to this machine, from a cached read of its interfaces. */
+export class OwnAddresses {
   private mine: Set<string> | null = null;
   private mineAt = 0;
 
   /**
-   * `own` lists this machine's addresses (GetAdaptersAddresses, on the event
+   * `read` lists this machine's addresses (GetAdaptersAddresses, on the event
    * loop). It is read once, then again only for an address the last read did
    * not hold once that read is older than OWN_ADDRESSES_TTL_MS: an address
    * that came up after the listener started is still recognized as this
@@ -53,22 +52,35 @@ export class InboundCounter {
    * not one per connection.
    */
   constructor(
-    private readonly own: () => Set<string> = ownAddresses,
+    private readonly read: () => Set<string> = readOwnAddresses,
     private readonly now: () => number = Date.now,
   ) {}
 
-  private isOwn(ip: string): boolean {
+  has(ip: string): boolean {
     if (!this.mine || (!this.mine.has(ip) && this.now() - this.mineAt >= OWN_ADDRESSES_TTL_MS)) {
-      this.mine = this.own();
+      this.mine = this.read();
       this.mineAt = this.now();
     }
     return this.mine.has(ip);
+  }
+}
+
+export class InboundCounter {
+  private seenAt: number | null = null;
+  private count = 0;
+  private readonly own: OwnAddresses;
+
+  constructor(
+    own: () => Set<string> = readOwnAddresses,
+    private readonly now: () => number = Date.now,
+  ) {
+    this.own = new OwnAddresses(own, now);
   }
 
   note(remoteAddress: string | undefined | null): void {
     if (!remoteAddress) return;
     const ip = normalizeRemote(remoteAddress);
-    if (isLoopback(ip) || this.isOwn(ip)) return;
+    if (isLoopback(ip) || this.own.has(ip)) return;
     this.count += 1;
     this.seenAt = this.now();
   }

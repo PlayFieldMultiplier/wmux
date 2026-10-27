@@ -335,9 +335,11 @@ const electronAPI = {
       ipcRenderer.send(IPC.PTY_WRITE, id, data);
     },
     /** Type a launch line (a resume) into the pane, Enter too when `submit`.
-     *  Rejects when main refuses the line (a bot worker's line it cannot guard). */
-    writeLaunch: (id: string, text: string, submit: boolean) =>
-      ipcRenderer.invoke(IPC.PTY_WRITE_LAUNCH, id, text, submit) as Promise<void>,
+     *  Rejects when main refuses the line (a bot worker's line it cannot guard).
+     *  `origin: 'human'`: a person clicked for it; without it the line counts
+     *  as typed by wmux on its own. */
+    writeLaunch: (id: string, text: string, submit: boolean, origin?: 'human') =>
+      ipcRenderer.invoke(IPC.PTY_WRITE_LAUNCH, id, text, submit, origin) as Promise<void>,
     schedules: {
       list: (ptyId: string) =>
         ipcRenderer.invoke(IPC.SESSION_PROMPT_SCHEDULES_LIST, { ptyId }) as Promise<{
@@ -655,8 +657,9 @@ const electronAPI = {
     // live listener, not just a live (but reloading/unmounted) window.
     listenerReady: () => ipcRenderer.send(IPC.NOTIFICATION_LISTENER_READY),
     // J3 §3: initialCommand 재시도 소진(프롬프트 미발사) 통지 — fan-out 토스트 소비.
-    onInitialCmdExhausted: (callback: (ptyId: string) => void) => {
-      const listener = (_event: Electron.IpcRendererEvent, ptyId: string) => callback(ptyId);
+    onInitialCmdExhausted: (callback: (ptyId: string, reason?: string) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, ptyId: string, reason?: unknown) =>
+        callback(ptyId, typeof reason === 'string' ? reason : undefined);
       ipcRenderer.on(IPC.PTY_INITIAL_CMD_EXHAUSTED, listener);
       return () => { ipcRenderer.removeListener(IPC.PTY_INITIAL_CMD_EXHAUSTED, listener); };
     },
@@ -787,6 +790,9 @@ const electronAPI = {
     getTrustAgyFolders: () => ipcRenderer.invoke(IPC.FANOUT_TRUST_AGY_FOLDERS_GET) as Promise<boolean>,
     setTrustAgyFolders: (value: boolean) =>
       ipcRenderer.invoke(IPC.FANOUT_TRUST_AGY_FOLDERS_SET, value) as Promise<boolean>,
+    getWorkerFenceOff: (workspaceId: string) => ipcRenderer.invoke(IPC.WORKER_FENCE_OFF_GET, workspaceId) as Promise<boolean>,
+    setWorkerFenceOff: (workspaceId: string, off: boolean) =>
+      ipcRenderer.invoke(IPC.WORKER_FENCE_OFF_SET, workspaceId, off) as Promise<boolean>,
     getWorkerPermissionMode: () =>
       ipcRenderer.invoke(IPC.FANOUT_WORKER_MODE_GET) as Promise<
         import('../shared/workerLaunch').FanoutWorkerPermissionMode
@@ -967,6 +973,11 @@ const electronAPI = {
       ipcRenderer.invoke(IPC.AUTOMATION_RUN_NOW, id, kind, ...(endSessionOf === undefined ? [] : [endSessionOf])) as Promise<import('../shared/automation').AutomationRunNowResult>,
     cancelRun: (runId: string) =>
       ipcRenderer.invoke(IPC.AUTOMATION_CANCEL_RUN, runId) as Promise<import('../shared/automation').AutomationOkResult>,
+    /** Null when the daemon is not reachable or too old to have them. */
+    settings: () =>
+      ipcRenderer.invoke(IPC.AUTOMATION_SETTINGS) as Promise<import('../shared/automation').AutomationSettings | null>,
+    setSettings: (settings: import('../shared/automation').AutomationSettings) =>
+      ipcRenderer.invoke(IPC.AUTOMATION_SET_SETTINGS, settings) as Promise<import('../shared/automation').AutomationSettingsResult>,
     // The UI locale id only; main owns the toast words.
     setUiLocale: (locale: string) => ipcRenderer.send(IPC.AUTOMATION_TOAST_LABELS, locale),
     onPush: (callback: (push: import('../main/automation/AutomationBridge').AutomationPush) => void) => {
@@ -2030,6 +2041,11 @@ const electronAPI = {
     setEnabled: (enabled: boolean) => ipcRenderer.send(IPC.USAGE_TOGGLE, enabled),
     /** Manual refresh. UI is responsible for the 5-minute cooldown. */
     refresh: () => ipcRenderer.send(IPC.USAGE_REFRESH),
+    /** The usage reserve setting (main persists and enforces it). */
+    reserve: {
+      get: () => ipcRenderer.invoke(IPC.USAGE_RESERVE_GET) as Promise<{ enabled: boolean }>,
+      set: (enabled: boolean) => ipcRenderer.invoke(IPC.USAGE_RESERVE_SET, enabled) as Promise<{ ok: boolean }>,
+    },
   },
   // N4 — agents whose sign-in was lost (shared/agentAuthLost), one entry per
   // agent and account; `loginState` asks the agent's own status for an entry

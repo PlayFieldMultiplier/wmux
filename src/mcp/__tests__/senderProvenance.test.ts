@@ -111,6 +111,15 @@ describe('WI-002 senderPtyId provenance (source-level invariant)', () => {
     expect(tokens - decls).toBeGreaterThanOrEqual(5);
   });
 
+  it('a2a_task_send is send_message\'s own handler, so a fenced worker\'s execute is refused on the same a2a.task.send path', () => {
+    // The worker fence refuses a new task with execute in a2a.rpc.ts, not by
+    // tool name: the alias must reach that one pipe method.
+    expect(mcpIndexSrc).toMatch(/server\.tool\(\s*'a2a_task_send',[^;]*?SEND_MESSAGE_SHAPE,\s*sendMessageHandler,\s*\)/);
+    const handler = /const sendMessageHandler = async[\s\S]*?\n\};/.exec(mcpIndexSrc)?.[0] ?? '';
+    expect(handler).not.toBe('');
+    expect([...new Set(handler.match(/callRpc\('([^']+)'/g) ?? [])]).toEqual(["callRpc('a2a.task.send'"]);
+  });
+
   it('PTYManager local-mode spawn stamps WMUX_PTY_ID so a local-mode pane has the weak anchor', () => {
     // Daemon mode already sets it (DaemonSessionManager); local mode must match
     // or a bundled MCP server in a local-mode pane has no walk-free ptyId source.

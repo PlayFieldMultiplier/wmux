@@ -160,12 +160,29 @@ abstract class QueuedProbeReader implements ProbeReader {
  * the script. Answers follow the watcher's ProbeAnswer contract. It exits
  * when its stdin closes, so a parent that dies leaves no reader behind.
  */
+/** A `tail` probe answers at most this many bytes. */
+export const TAIL_MAX_BYTES = 64 * 1024;
+
 export const SHARE_READER_SOURCE = `
 'use strict';
 const fs = require('fs');
 const kind = (st) => (st.isDirectory() ? 'dir' : st.isFile() ? 'file' : 'other');
-async function answer(op, p) {
+const TAIL_MAX_BYTES = ${TAIL_MAX_BYTES};
+async function tail(p, from) {
+  const fh = await fs.promises.open(p, 'r');
   try {
+    const st = await fh.stat();
+    const start = Math.max(0, Math.min(Number.isSafeInteger(from) ? from : st.size, st.size));
+    const buf = Buffer.alloc(Math.min(TAIL_MAX_BYTES, st.size - start));
+    const { bytesRead } = buf.length > 0 ? await fh.read(buf, 0, buf.length, start) : { bytesRead: 0 };
+    return JSON.stringify({ size: st.size, ino: st.ino, bytes: buf.subarray(0, bytesRead).toString('base64') });
+  } finally {
+    await fh.close();
+  }
+}
+async function answer(op, p, from) {
+  try {
+    if (op === 'tail') return await tail(p, from);
     if (op === 'read') return await fs.promises.readFile(p, 'utf8');
     if (op === 'realpath') return await fs.promises.realpath(p);
     if (op === 'open') { await (await fs.promises.opendir(p)).close(); return 'opened'; }
@@ -185,7 +202,7 @@ process.stdin.on('data', (chunk) => {
     let req;
     try { req = JSON.parse(line); } catch { continue; }
     if (!req || typeof req.path !== 'string') continue;
-    answer(req.op, req.path).then((a) => process.stdout.write(JSON.stringify({ id: req.id, answer: a }) + '\\n'));
+    answer(req.op, req.path, req.from).then((a) => process.stdout.write(JSON.stringify({ id: req.id, answer: a }) + '\\n'));
   }
 });
 process.stdin.on('end', () => process.exit(0));
@@ -241,7 +258,7 @@ export class ChildProbeReader extends QueuedProbeReader {
     const id = ++this.nextId;
     return new Promise<ProbeAnswer>((resolve, reject) => {
       this.waiting = { id, resolve, reject };
-      child.stdin?.write(`${JSON.stringify({ id, op: probe.op, path: probe.path })}\n`);
+      child.stdin?.write(`${JSON.stringify({ id, op: probe.op, path: probe.path, ...(probe.from !== undefined ? { from: probe.from } : {}) })}\n`);
     });
   }
 

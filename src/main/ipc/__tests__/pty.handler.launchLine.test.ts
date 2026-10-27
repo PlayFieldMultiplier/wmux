@@ -22,6 +22,17 @@ describe('pty:create launch-line check', () => {
     expect(body).toMatch(/daemonClient\.rpc\('daemon\.readPromptEvents', \{ sessionId, limit: 32 \}, \{ timeoutMs: 2_000 \}\)/);
   });
 
+  it('forgets a pane\'s folder-trust log memory when its session dies or is disposed', () => {
+    expect(src).toMatch(/forgetPtyShell\(payload\.sessionId\);\s*forgetFolderTrustPane\(payload\.sessionId\);/);
+    expect(src).toMatch(/forgetPtyShell\(id\);\s*forgetFolderTrustPane\(id\);/);
+  });
+
+  it('asks about a folder-trust prompt before the startup line, an unreadable screen stopping it too', () => {
+    const at = src.indexOf('const verifyTaskLine');
+    const body = src.slice(at, src.indexOf('write: (cmd) => {', at));
+    expect(body).toContain("beforeWrite: () => folderTrustLaunchHold(daemonClient, sessionId, 'startup line', { refuseUnknown: true, once: true }),");
+  });
+
   it('re-sends only on the daemon\'s process-checked word that nothing runs in the pane', () => {
     const at = src.indexOf('const verifyTaskLine');
     const body = src.slice(at, src.indexOf('onExhausted', at));

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { RelayTransport } from '../RelayTransport';
+import { RELAY_QUEUE_CAP, RELAY_YIELDING_CAP, RelayTransport } from '../RelayTransport';
 
 describe('RelayTransport URL safety', () => {
   afterEach(() => vi.unstubAllEnvs());
@@ -148,5 +148,23 @@ describe('RelayTransport refusal detail', () => {
     ]);
     expect(await refuse(h)).toBe(403);
     expect(h.warns()).toEqual(['[push] relay answered 403 (apns: BadDeviceToken) for dev-1']);
+  });
+});
+
+describe('RelayTransport queue', () => {
+  it('★ a yielding entry never evicts another, and holds at most its own cap', async () => {
+    const transport = new RelayTransport({ relayUrl: 'https://relay.example', relaySecret: 'secret', tag: '[push]', noun: 'notification' });
+    const ran: string[] = [];
+    let unblock: () => void = () => undefined;
+    // The first entry is in flight and holds the queue.
+    transport.enqueue(() => new Promise<void>((resolve) => { unblock = resolve; }));
+    const entry = (name: string) => async () => { ran.push(name); };
+    for (let i = 0; i < RELAY_YIELDING_CAP + 2; i++) transport.enqueue(entry(`help-${i}`), { yields: true });
+    for (let i = 0; i < RELAY_QUEUE_CAP; i++) transport.enqueue(entry(`approval-${i}`));
+    transport.enqueue(entry('help-late'), { yields: true });
+    unblock();
+    await transport.flush();
+    expect(ran.filter((n) => n.startsWith('approval-'))).toHaveLength(RELAY_QUEUE_CAP);
+    expect(ran.some((n) => n.startsWith('help-'))).toBe(false);
   });
 });

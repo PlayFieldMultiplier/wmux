@@ -42,11 +42,20 @@ const GREEN = job('validate-runtime', 'completed', 'success');
 function fakeGh({
   issues = [], jobs = [], issue = { body: '', comments: [] }, annotations = {}, greenRuns = [],
   issuesAfterCreate = null, createdUrl = 'https://github.com/acme/app/issues/30\n', issueAfterClose = null,
+  failingRunListEvents = [],
 } = {}) {
   const calls = [];
   const gh = (args, options = {}) => {
     calls.push({ args, options });
-    if (args[0] === 'run' && args[1] === 'list') return JSON.stringify(greenRuns.map((databaseId) => ({ databaseId })));
+    // A green run is an id (a push run) or { databaseId, event }, newest
+    // first; GitHub filters them by `--event` and cuts them at `--limit`.
+    if (args[0] === 'run' && args[1] === 'list') {
+      const runs = greenRuns.map((run) => (typeof run === 'number' ? { databaseId: run, event: 'push' } : run));
+      const event = args.includes('--event') ? args[args.indexOf('--event') + 1] : null;
+      if (failingRunListEvents.includes(event)) throw new Error('HTTP 502: Bad Gateway');
+      const limit = Number(args[args.indexOf('--limit') + 1]);
+      return JSON.stringify(runs.filter((run) => !event || run.event === event).slice(0, limit).map(({ databaseId }) => ({ databaseId })));
+    }
     if (args[0] === 'api') {
       expect(args.slice(0, 2)).toEqual(['api', '--paginate']);
       expect(args.slice(3)).toEqual(['--jq', '.[].message']);
@@ -268,10 +277,32 @@ describe('report --state auto (the report job)', () => {
     const fake = fakeGh({ issues: [], jobs: [RED, REPORT], greenRuns: [57] });
     expect(report({ env: ENV, gh: fake.gh })).toBe('none');
     expect(fake.writes()).toEqual([]);
-    expect(fake.calls.find((c) => c.args[1] === 'list' && c.args[0] === 'run').args).toEqual([
-      'run', 'list', '-R', 'acme/app', '--workflow', 'Runtime suite', '--branch', 'main',
-      '--status', 'success', '--limit', '1', '--json', 'databaseId',
-    ]);
+    expect(fake.calls.filter((c) => c.args[1] === 'list' && c.args[0] === 'run').map((c) => c.args)).toEqual(
+      ['push', 'schedule', 'workflow_dispatch'].map((event) => [
+        'run', 'list', '-R', 'acme/app', '--workflow', 'Runtime suite', '--branch', 'main', '--event', event,
+        '--status', 'success', '--limit', '1', '--json', 'databaseId',
+      ]),
+    );
+  });
+
+  it('a green pull request run from a branch named main does not make a red main run stale', () => {
+    const fake = fakeGh({ issues: [], jobs: [RED, REPORT], greenRuns: [{ databaseId: 57, event: 'pull_request' }, 40] });
+    expect(report({ env: ENV, gh: fake.gh })).toBe('created');
+  });
+
+  it('a failed green-run query never stops the red run being reported', () => {
+    const fake = fakeGh({ issues: [], jobs: [RED, REPORT], greenRuns: [40], failingRunListEvents: ['schedule'] });
+    const logs = [];
+    expect(report({ env: ENV, gh: fake.gh, log: (line) => logs.push(line) })).toBe('created');
+    expect(logs.some((line) => line.includes('schedule') && line.includes('HTTP 502'))).toBe(true);
+    // Another event's newer green run still counts.
+    const stale = fakeGh({ issues: [], jobs: [RED, REPORT], greenRuns: [57], failingRunListEvents: ['schedule'] });
+    expect(report({ env: ENV, gh: stale.gh })).toBe('none');
+  });
+
+  it('a newer green nightly run makes a red run stale on a workflow with no push runs', () => {
+    const fake = fakeGh({ issues: [], jobs: [RED, REPORT], greenRuns: [{ databaseId: 57, event: 'schedule' }] });
+    expect(report({ env: ENV, gh: fake.gh })).toBe('none');
   });
 
   it('reports a red run newer than the last green one', () => {

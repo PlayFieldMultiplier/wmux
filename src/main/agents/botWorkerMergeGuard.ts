@@ -46,7 +46,6 @@ import {
   buildWorkerMcpConfig,
   buildWorkerSettings,
   buildWslWorkerMcpConfig,
-  contentFileName,
   spliceWorkerLaunch,
   workerWmuxLevel,
   type WorkerGatewayRoute,
@@ -64,6 +63,9 @@ import { toWslPath } from '../../shared/imagePaste';
 import { dataDirNoShellRefusal } from '../../shared/promptFileArgument';
 import { dataSuffix } from '../../shared/constants';
 import { bridgeHookGroups, findBridgeSourceFrom } from '../../cli/commands/setupHooks';
+import { attachWorkerFence, lastWorkerFenceSupport, pruneWorkerTempDirs, writeContentFile, type WorkerFenceAttach, type WorkerFenceAttachInput, type WorkerFenceStrength, type WorkerFenceSupport } from './botWorkerFence';
+import { isWorkerFenceOff } from './workerFencePolicy';
+import { mergeWorkerFenceSettings, workerFenceLaunch } from './workerFence';
 
 // The pure parts live in shared/ (the daemon guards a phone's launches too).
 export {
@@ -110,6 +112,17 @@ export interface BotWorkerGuardDeps {
    *  build's own executable). */
   wslRuntime?: () => string;
   platform?: NodeJS.Platform;
+  /** This computer's worker fence support (botWorkerFence.ts
+   *  workerFenceSupport), awaited by the caller before the launch. */
+  fenceSupport?: WorkerFenceSupport | null;
+  /** Whether the owner turned the fence off for a workspace (default:
+   *  workerFencePolicy.ts). */
+  fenceSwitchedOff?: (ownerWorkspaceId: string) => boolean;
+  /** A task workspace's owner workspace and the git dirs main recorded for
+   *  its worktree (default: its task ledger row). */
+  taskFacts?: (taskWorkspaceId: string) => { ownerWorkspaceId?: string; gitCommonDir?: string; gitWorktreeDir?: string } | null;
+  /** The fence's own inputs, for tests (its hook runtime, home, env). */
+  fence?: Pick<WorkerFenceAttachInput, 'runtime' | 'home' | 'env' | 'accountConfigDirs' | 'platform' | 'claudeTempRoots'>;
 }
 
 /** pty.handler points the guard at the app's MCP bundle and the owner's
@@ -266,6 +279,9 @@ export interface BotWorkerCreate {
   /** The fan-out launch only: who the in-flight spawns of this owner and
    *  folder are for (main's record, never the renderer's). */
   spawns?: BotSpawnIdentity[];
+  /** The fan-out launch only: the owner workspace main's in-flight spawn
+   *  record matched (never the create's own word). */
+  ownerWorkspaceId?: string;
 }
 
 export function botWorkerForCreate(
@@ -277,7 +293,7 @@ export function botWorkerForCreate(
   const owner = typeof options.fanoutTaskOf === 'string' ? options.fanoutTaskOf : '';
   if (owner && typeof options.cwd === 'string' && options.cwd && inflightBotSpawns.has(spawnKey(owner, options.cwd))) {
     const spawns = inflightSpawnIdentities.get(spawnKey(owner, options.cwd));
-    return { workspaceId, strict: true, ...(spawns ? { spawns: spawns.map((s) => ({ ...s, ...(s.connectors ? { connectors: s.connectors } : {}) })) } : {}) };
+    return { workspaceId, strict: true, ownerWorkspaceId: owner, ...(spawns ? { spawns: spawns.map((s) => ({ ...s, ...(s.connectors ? { connectors: s.connectors } : {}) })) } : {}) };
   }
   if (!workspaceId) return null;
   let bot = false;
@@ -344,9 +360,13 @@ export function withBotWorkerMergeGuard<T extends { initialCommand?: string; exe
   }
   // A worker with a signed-in connection gets the narrow wmux surface.
   const level = launch.gateway ? 'core' : workerWmuxLevel(launch.level, (deps.registeredLevel ?? defaultRegisteredLevel)());
+  // The fence's owner workspace: the one main's in-flight spawn record
+  // matched, else the task ledger's.
+  const facts = taskFactsOf(worker.workspaceId, deps);
+  const fence: FencePlan = { ownerWorkspaceId: worker.ownerWorkspaceId ?? facts?.ownerWorkspaceId ?? null, facts };
   const plan: LaunchPlan = launch.wsl
-    ? { kind: 'legacy', level }
-    : { kind: 'strict', connectors, level, cwd, ...(launch.gateway ? { gateway: launch.gateway } : {}) };
+    ? { kind: 'legacy', level, fence }
+    : { kind: 'strict', connectors, level, cwd, fence, ...(launch.gateway ? { gateway: launch.gateway } : {}) };
   // A worker with a signed-in connection runs the claude its sandbox support
   // was checked on, by its absolute path.
   const line = launch.gateway ? pinClaudeLauncher(options.initialCommand, launch.gateway.claudeExe) : options.initialCommand;
@@ -447,8 +467,81 @@ function guardError(where: string, why: string): Error {
  *  files for these connections, in a folder whose project settings are
  *  checked first. */
 type LaunchPlan =
-  | { kind: 'legacy'; level: WorkerWmuxLevel }
-  | { kind: 'strict'; connectors: readonly Connector[]; level: WorkerWmuxLevel; cwd: string; folders?: readonly string[]; strayKeys?: readonly string[]; gateway?: WorkerGatewayLaunch };
+  | { kind: 'legacy'; level: WorkerWmuxLevel; fence: FencePlan }
+  | { kind: 'strict'; connectors: readonly Connector[]; level: WorkerWmuxLevel; cwd: string; fence: FencePlan; folders?: readonly string[]; strayKeys?: readonly string[]; gateway?: WorkerGatewayLaunch };
+
+/** What decides a launch's worker fence (botWorkerFence.ts): the bot's
+ *  workspace (its off switch) and what the session's first launch ran in. */
+interface FencePlan {
+  ownerWorkspaceId: string | null;
+  /** The task ledger's row for the task workspace (null: none). */
+  facts: TaskFacts | null;
+  recorded?: { strength: WorkerFenceStrength; tempDir?: string; branch?: string | null };
+}
+
+type TaskFacts = { ownerWorkspaceId?: string; gitCommonDir?: string; gitWorktreeDir?: string };
+
+function taskFactsOf(taskWorkspaceId: string, deps: BotWorkerGuardDeps): TaskFacts | null {
+  try {
+    return (deps.taskFacts ?? ledgerTaskFacts)(taskWorkspaceId);
+  } catch {
+    return null;
+  }
+}
+
+function ledgerTaskFacts(taskWorkspaceId: string): TaskFacts | null {
+  const row = getTaskLedger().findByTaskWorkspace(taskWorkspaceId);
+  if (!row) return null;
+  return {
+    ownerWorkspaceId: row.ownerWorkspaceId,
+    ...(row.dispatch?.gitCommonDir ? { gitCommonDir: row.dispatch.gitCommonDir } : {}),
+    ...(row.dispatch?.gitWorktreeDir ? { gitWorktreeDir: row.dispatch.gitWorktreeDir } : {}),
+  };
+}
+
+/** The worker fence for a launch of `line` (none for a gateway worker, whose
+ *  own sandbox and tool gate are narrower). Throws the fence's refusal. */
+function fenceFor(where: string, line: string, dir: string, deps: BotWorkerGuardDeps, plan: LaunchPlan): WorkerFenceAttach {
+  if (plan.kind === 'strict' && plan.gateway) return { kind: 'none' };
+  const facts = plan.fence.facts;
+  let switchedOff = false;
+  if (plan.fence.ownerWorkspaceId) {
+    try {
+      switchedOff = (deps.fenceSwitchedOff ?? ((id: string) => isWorkerFenceOff(id, dir)))(plan.fence.ownerWorkspaceId);
+    } catch {
+      switchedOff = false;
+    }
+  }
+  try {
+    return attachWorkerFence({
+      line,
+      ...(plan.kind === 'strict' ? { cwd: plan.cwd } : {}),
+      wsl: plan.kind === 'legacy',
+      dir,
+      switchedOff,
+      ...(plan.fence.recorded ? { recorded: plan.fence.recorded } : {}),
+      support: deps.fenceSupport ?? lastWorkerFenceSupport(),
+      ...(facts?.gitCommonDir || facts?.gitWorktreeDir ? { expectedGit: { ...(facts.gitCommonDir ? { gitCommonDir: facts.gitCommonDir } : {}), ...(facts.gitWorktreeDir ? { gitWorktreeDir: facts.gitWorktreeDir } : {}) } } : {}),
+      ...(deps.fence ?? {}),
+    });
+  } catch (err) {
+    throw new Error(`${where}: ${(err as Error).message}`);
+  }
+}
+
+/** The fence's line checks (workerFenceLaunch: not claude, a wrapper, its own
+ *  --settings, --add-dir), with the fence's own sentence. A switched-off
+ *  fence attaches nothing, so it checks nothing. */
+function checkFencedLine(where: string, line: string, settingsPath: string, fence: WorkerFenceAttach): void {
+  if (fence.kind !== 'fence' || fence.strength === 'off') return;
+  const checked = workerFenceLaunch({ line, settingsPath, fence: fence.settings });
+  if (!checked.ok) throw new Error(`${where}: worker fence: ${checked.reason}`);
+}
+
+/** The launch files' record of the fence. */
+function fenceRecord(fence: WorkerFenceAttach): BotWorkerLaunchFiles['fence'] | undefined {
+  return fence.kind === 'fence' ? { strength: fence.strength, ...(fence.tempDir ? { tempDir: fence.tempDir } : {}), ...(fence.branch !== undefined ? { branch: fence.branch } : {}) } : undefined;
+}
 
 function guardLaunchLine(where: string, line: string, deps: BotWorkerGuardDeps, plan: LaunchPlan): { line: string; files?: BotWorkerLaunchFiles } {
   const dir = deps.dir ?? getWmuxDir();
@@ -458,13 +551,20 @@ function guardLaunchLine(where: string, line: string, deps: BotWorkerGuardDeps, 
   // guardError: the room card takes this sentence whole.
   const stuck = dataDirNoShellRefusal(dir);
   if (stuck) throw new Error(`${where}: ${stuck}`);
+  const fence = fenceFor(where, line, dir, deps, plan);
   if (plan.kind === 'legacy') {
     let settingsPath: string;
+    let workerSettings: Record<string, unknown> = buildBotWorkerSettings();
+    if (fence.kind === 'fence') {
+      const merged = mergeWorkerFenceSettings(fence.settings, [workerSettings]);
+      if (!merged.ok) throw new Error(`${where}: worker fence: the worker's own settings change the fence's ${merged.key}`);
+      workerSettings = merged.settings;
+    }
     try {
       // A per-launch copy, so the session record names it as main's own.
-      settingsPath = deps.writeSettings
+      settingsPath = deps.writeSettings && fence.kind === 'none'
         ? deps.writeSettings(dir)
-        : writeContentFile(path.join(dir, 'factory', 'worker-settings'), `${JSON.stringify(buildBotWorkerSettings(), null, 2)}\n`);
+        : writeContentFile(path.join(dir, 'factory', 'worker-settings'), `${JSON.stringify(workerSettings, null, 2)}\n`);
     } catch (err) {
       throw guardError(where, `the worker settings could not be written: ${String(err)}`);
     }
@@ -488,27 +588,41 @@ function guardLaunchLine(where: string, line: string, deps: BotWorkerGuardDeps, 
     const settingsInWsl = inWsl(settingsPath);
     const mcpInWsl = inWsl(mcpConfigFile);
     if (!settingsInWsl || !mcpInWsl) throw guardError(where, 'the worker\'s settings and MCP config cannot be reached from WSL');
+    checkFencedLine(where, line, settingsInWsl, fence);
     const guarded = spliceWorkerLaunch(line, settingsInWsl, mcpInWsl);
     if (guarded === null) throw guardError(where, 'the launch line cannot carry the worker\'s MCP config and rules');
-    return { line: guarded, files: { settingsFile: settingsPath, mcpConfigFile, level: plan.level } };
+    const recorded = fenceRecord(fence);
+    return { line: guarded, files: { settingsFile: settingsPath, mcpConfigFile, level: plan.level, ...(recorded ? { fence: recorded } : {}) } };
   }
   const unsafe = [plan.cwd, ...(plan.folders ?? [])].map(workerProjectSettingsRefusal).find((r) => r !== null);
   if (unsafe) throw guardError(where, `the worker's folder has Claude settings a bot's worker does not start with (${unsafe})`);
   const entry = (deps.mcpEntry ?? defaultMcpEntry)();
   if (!entry) throw guardError(where, 'the wmux MCP bundle was not found, so the worker could not report');
-  // A worker with a signed-in connection loads no user settings (one could
-  // widen its sandbox): wmux's hooks come in its own settings file instead.
-  const ownBridge = plan.gateway
+  // A worker with a signed-in connection, or inside the fence, loads no user
+  // settings (one could widen its sandbox, and their hooks run outside it):
+  // wmux's hooks come in its own settings file instead.
+  const fenced = fence.kind === 'fence' && fence.strength !== 'off';
+  const ownBridge = plan.gateway || fenced
     ? (deps.isolatedBridge ?? defaultIsolatedBridge)() ?? (deps.bridge ?? defaultBridge)()
     : (deps.isolatedBridge ?? defaultIsolatedBridge)();
   if (plan.gateway && !ownBridge) throw guardError(where, 'wmux\'s hook bridge was not found, so a worker with a signed-in connection could not report');
+  if (fenced && !ownBridge) throw new Error(`${where}: worker fence: wmux's hook bridge was not found, so a fenced worker could not report`);
   let files: BotWorkerLaunchFiles;
   try {
-    files = writeWorkerLaunchFiles(dir, entry, plan.level, plan.connectors, plan.strayKeys, ownBridge, plan.gateway);
+    files = writeWorkerLaunchFiles(dir, entry, plan.level, plan.connectors, plan.strayKeys, ownBridge, plan.gateway, fence.kind === 'fence' ? fence : undefined);
   } catch (err) {
+    if ((err as Error).message.startsWith('worker fence:')) throw new Error(`${where}: ${(err as Error).message}`);
     throw guardError(where, `the worker's MCP and rules files could not be written: ${String(err)}`);
   }
-  const guarded = spliceWorkerLaunch(line, files.settingsFile, files.mcpConfigFile, files.settingSources);
+  checkFencedLine(where, line, files.settingsFile, fence);
+  // The full fence runs exactly the claude its self-test ran.
+  let launchLine = line;
+  if (fence.kind === 'fence' && fence.launcher) {
+    const pinned = pinClaudeLauncher(line, fence.launcher);
+    if (pinned === null) throw new Error(`${where}: worker fence: the launch line cannot run the claude the fence was checked on`);
+    launchLine = pinned;
+  }
+  const guarded = spliceWorkerLaunch(launchLine, files.settingsFile, files.mcpConfigFile, files.settingSources);
   if (guarded === null) throw guardError(where, 'the launch line cannot carry the worker\'s MCP config and rules');
   return { line: guarded, files };
 }
@@ -516,7 +630,7 @@ function guardLaunchLine(where: string, line: string, deps: BotWorkerGuardDeps, 
 /** A worker launch's two files under `<dir>/factory/` (0600, folders 0700),
  *  named by their content, and each stdio connection's run folder with its
  *  empty npm user config. They hold names and paths only. */
-export function writeWorkerLaunchFiles(dir: string, entry: string, level: WorkerWmuxLevel, connectors: readonly Connector[], strayKeys: readonly string[] = [], ownBridge: string | null = null, gateway?: WorkerGatewayLaunch): BotWorkerLaunchFiles {
+export function writeWorkerLaunchFiles(dir: string, entry: string, level: WorkerWmuxLevel, connectors: readonly Connector[], strayKeys: readonly string[] = [], ownBridge: string | null = null, gateway?: WorkerGatewayLaunch, fence?: Extract<WorkerFenceAttach, { kind: 'fence' }>): BotWorkerLaunchFiles {
   const factory = path.join(dir, 'factory');
   const { runDir, npmrc } = prepareConnectorRunDirs(dir, connectors);
   const mcp = `${JSON.stringify(buildWorkerMcpConfig({ entry, level, connectors, runDir, npmrc, strayKeys, ...(gateway ? { gateway: gateway.routes } : {}) }), null, 2)}\n`;
@@ -533,7 +647,15 @@ export function writeWorkerLaunchFiles(dir: string, entry: string, level: Worker
     if (!gateCommand) throw new Error('the tool gate\'s runtime or path cannot be quoted');
     gatewaySettings = { names: Object.keys(gateway.routes), sandbox: gateway.sandbox, gateCommand, gateTimeout: WORKER_GATE_TIMEOUT_S };
   }
-  const settings = `${JSON.stringify(buildWorkerSettings(connectors, ownBridge ? bridgeHookGroups(ownBridge) : undefined, gatewaySettings), null, 2)}\n`;
+  let doc = buildWorkerSettings(connectors, ownBridge ? bridgeHookGroups(ownBridge) : undefined, gatewaySettings);
+  // The fence first (its hook leads), with the worker's rules and hooks.
+  if (fence) {
+    const merged = mergeWorkerFenceSettings(fence.settings, [doc]);
+    if (!merged.ok) throw new Error(`worker fence: the worker's own settings change the fence's ${merged.key}`);
+    doc = merged.settings;
+  }
+  const settings = `${JSON.stringify(doc, null, 2)}\n`;
+  const recorded = fence ? fenceRecord(fence) : undefined;
   return {
     settingsFile: writeContentFile(path.join(factory, 'worker-settings'), settings),
     mcpConfigFile: writeContentFile(path.join(factory, 'worker-mcp'), mcp),
@@ -541,8 +663,11 @@ export function writeWorkerLaunchFiles(dir: string, entry: string, level: Worker
     ...(connectionKeys.length > 0 ? { connectionKeys } : {}),
     // Its hooks are in its own file: the user's (which name the shared
     // bridge) are not loaded. A worker with a signed-in connection loads no
-    // settings but that file: none from its folder either.
+    // settings but that file: none from its folder either. A fenced worker
+    // loads no user or local settings (their hooks would run outside the
+    // fence), only its folder's project settings, checked first.
     ...(gateway ? { settingSources: 'none' as const } : ownBridge ? { settingSources: 'project' as const } : {}),
+    ...(recorded ? { fence: recorded } : {}),
   };
 }
 
@@ -569,29 +694,6 @@ export function prepareConnectorRunDirs(dir: string, connectors: readonly Connec
   return { runDir, npmrc };
 }
 
-function writeContentFile(folder: string, content: string, ext = '.json'): string {
-  fs.mkdirSync(folder, { recursive: true, mode: 0o700 });
-  const file = path.join(folder, contentFileName(content).replace(/\.json$/, ext));
-  try {
-    if (fs.readFileSync(file, 'utf8') === content) {
-      // In use again: the startup prune keeps it.
-      try { fs.utimesSync(file, new Date(), new Date()); } catch { /* best effort */ }
-      return file;
-    }
-  } catch {
-    /* missing: write it */
-  }
-  const tmp = `${file}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
-  try {
-    fs.writeFileSync(tmp, content, { encoding: 'utf8', mode: 0o600 });
-    fs.renameSync(tmp, file);
-  } catch (err) {
-    try { fs.unlinkSync(tmp); } catch { /* never written */ }
-    throw err;
-  }
-  return file;
-}
-
 // ── factory/bot-worker-sessions.json ─────────────────────────────────────────
 
 type SessionRecord = BotWorkerSessionRecord;
@@ -602,6 +704,16 @@ type SessionRecord = BotWorkerSessionRecord;
 let sessions: Map<string, SessionRecord> | null = null;
 let sessionsDir: string | null = null;
 let unreadable: string | null = null;
+/** The sessions main put inside the fence (full or weaker), kept in memory:
+ *  added when the fence is recorded, removed when the session ends, and
+ *  rebuilt from the record when it is read. isFencedBotWorkerSession counts
+ *  them whatever the record says later. */
+const fencedSessions = new Set<string>();
+
+function isFencedRecord(rec: SessionRecord | undefined): boolean {
+  const strength = rec?.launch?.fence?.strength;
+  return strength === 'full' || strength === 'weaker';
+}
 
 function loadSessions(dir: string): Map<string, SessionRecord> {
   if (sessions && sessionsDir === dir) return sessions;
@@ -610,6 +722,7 @@ function loadSessions(dir: string): Map<string, SessionRecord> {
   if (unreadable) console.warn(`[factory] ${botWorkerSessionsPath(dir)} is unreadable; every pane's launch line is guarded until it is fixed: ${unreadable}`);
   sessions = 'sessions' in read ? read.sessions : new Map();
   sessionsDir = dir;
+  for (const [id, rec] of sessions) if (isFencedRecord(rec)) fencedSessions.add(id);
   return sessions;
 }
 
@@ -657,10 +770,12 @@ export function noteBotWorkerSession(
     throw guardError('PTY_CREATE', `the worker session could not be recorded: ${String(err)}`);
   }
   map.set(sessionId, next.get(sessionId)!);
+  if (isFencedRecord(next.get(sessionId))) fencedSessions.add(sessionId);
 }
 
 /** The pane is gone. Best-effort: a record left behind only keeps guarding. */
 export function forgetBotWorkerSession(sessionId: string, dir: string = getWmuxDir()): void {
+  fencedSessions.delete(sessionId);
   const map = loadSessions(dir);
   if (unreadable || !map.has(sessionId)) return;
   const next = new Map(map);
@@ -681,6 +796,16 @@ export function botWorkerSessionRecord(sessionId: string, dir: string = getWmuxD
   return r ? { ...r } : null;
 }
 
+/** A bot worker's session that runs inside the fence (full or weaker): one
+ *  main fenced in this app session or read so from the record, else the
+ *  record's answer. A record that cannot be read adds no session (answering
+ *  yes for every pane would refuse the human ones too). */
+export function isFencedBotWorkerSession(sessionId: string, dir: string = getWmuxDir()): boolean {
+  if (fencedSessions.has(sessionId)) return true;
+  const rec = botWorkerSessionRecord(sessionId, dir);
+  return rec !== null && isFencedRecord(rec);
+}
+
 /** A bot worker's session — every session while the record is unreadable. */
 export function isBotWorkerSession(sessionId: string, dir: string = getWmuxDir()): boolean {
   const map = loadSessions(dir);
@@ -696,10 +821,13 @@ export function isBotWorkerWorkspace(workspaceId: string, dir: string = getWmuxD
 }
 
 /** Tests: drop the in-memory copy, as an app restart does. */
-export function reloadBotWorkerSessionsForTests(): void {
+export function reloadBotWorkerSessionsForTests(opts: { keepFenced?: boolean } = {}): void {
   sessions = null;
   sessionsDir = null;
   unreadable = null;
+  // A restart forgets them; `keepFenced` is the record going bad under a
+  // running app.
+  if (!opts.keepFenced) fencedSessions.clear();
 }
 
 /**
@@ -710,7 +838,59 @@ export function reloadBotWorkerSessionsForTests(): void {
 export function guardRefireLine(sessionId: string, line: string, deps: BotWorkerGuardDeps = {}): string {
   if (!isBotWorkerSession(sessionId, deps.dir ?? getWmuxDir())) return line;
   if (namesCodex(line)) throw guardError('worktask:refire', 'codex is not re-fired in a bot\'s worker pane');
-  return guardLaunchLine('worktask:refire', line, deps, recordedPlan('worktask:refire', sessionId, deps)).line;
+  const guarded = guardLaunchLine('worktask:refire', line, deps, recordedPlan('worktask:refire', sessionId, deps));
+  holdLaterFence(sessionId, guarded, deps.dir ?? getWmuxDir());
+  return guarded.line;
+}
+
+/** A guarded resume or re-fire line not typed yet, with what it carried. */
+const pendingLaunches = new Map<string, { line: string; files: BotWorkerLaunchFiles; dir: string }>();
+
+function holdLaterFence(sessionId: string, guarded: { line: string; files?: BotWorkerLaunchFiles }, dir: string): void {
+  if (guarded.files?.fence) pendingLaunches.set(sessionId, { line: guarded.line, files: guarded.files, dir });
+  else pendingLaunches.delete(sessionId);
+}
+
+/**
+ * The guarded `line` (as the guard returned it) was typed into
+ * `sessionId`: a fence it put the session inside that its first launch did
+ * not have (or a stronger one) is recorded now, so a later launch is not
+ * fenced less and the startup prune keeps its temp folder. A line the guard
+ * did not return for that session, or one never typed, records nothing.
+ * Best effort: a record that cannot be written is logged.
+ */
+export function noteGuardedLaunchTyped(sessionId: string, line: string): void {
+  const pending = pendingLaunches.get(sessionId);
+  if (!pending || pending.line !== line) return;
+  pendingLaunches.delete(sessionId);
+  try {
+    recordLaterFence('pty:write-launch', sessionId, pending.files, pending.dir);
+  } catch (err) {
+    console.warn(`[factory] ${String((err as Error).message)}`);
+  }
+}
+
+function recordLaterFence(where: string, sessionId: string, files: BotWorkerLaunchFiles | undefined, dir: string): void {
+  const fence = files?.fence;
+  if (!files || !fence || fence.strength === 'off') return;
+  const map = loadSessions(dir);
+  const rec = map.get(sessionId);
+  if (!rec) return;
+  const rank = { off: 0, weaker: 1, full: 2 } as const;
+  const was = rec.launch?.fence;
+  if (was && rank[was.strength] >= rank[fence.strength] && was.tempDir === fence.tempDir) return;
+  const next = new Map(map);
+  // This launch's files: the fenced ones the running claude reads.
+  // The branch is the one the first fenced launch recorded.
+  const branch = was && was.strength !== 'off' && was.branch !== undefined ? was.branch : fence.branch;
+  next.set(sessionId, { ...rec, launch: { ...files, fence: { strength: was && rank[was.strength] > rank[fence.strength] ? was.strength : fence.strength, ...(fence.tempDir ? { tempDir: fence.tempDir } : {}), ...(branch !== undefined ? { branch } : {}) } } });
+  try {
+    saveSessions(dir, next);
+  } catch (err) {
+    throw guardError(where, `the worker's fence could not be recorded: ${String(err)}`);
+  }
+  map.set(sessionId, next.get(sessionId)!);
+  if (isFencedRecord(next.get(sessionId))) fencedSessions.add(sessionId);
 }
 
 /** A recorded session's launch: in a WSL shell the worker settings and this
@@ -721,8 +901,12 @@ export function guardRefireLine(sessionId: string, line: string, deps: BotWorker
  *  folder on record (or a record that cannot be read) is refused. */
 function recordedPlan(where: string, sessionId: string, deps: BotWorkerGuardDeps): LaunchPlan {
   const rec = loadSessions(deps.dir ?? getWmuxDir()).get(sessionId);
-  if (rec?.wsl) return { kind: 'legacy', level: rec.launch?.level ?? workerWmuxLevel((deps.registeredLevel ?? defaultRegisteredLevel)()) };
-  if (!rec?.cwd) throw guardError(where, 'the session has no folder on record to check the worker\'s settings in');
+  const facts = rec ? taskFactsOf(rec.workspaceId, deps) : null;
+  const fence: FencePlan | null = rec
+    ? { ownerWorkspaceId: facts?.ownerWorkspaceId ?? null, facts, ...(rec.launch?.fence ? { recorded: rec.launch.fence } : {}) }
+    : null;
+  if (rec?.wsl && fence) return { kind: 'legacy', level: rec.launch?.level ?? workerWmuxLevel((deps.registeredLevel ?? defaultRegisteredLevel)()), fence };
+  if (!rec?.cwd || !fence) throw guardError(where, 'the session has no folder on record to check the worker\'s settings in');
   // A running shell cannot take a new gateway lease in its env: such a task
   // starts again only in a new pane (workerReclaim.ts respawns it).
   if (rec.launch && (deps.sessionGatewayTask ?? ledgerTaskHasGateway)(rec.workspaceId)) {
@@ -733,6 +917,7 @@ function recordedPlan(where: string, sessionId: string, deps: BotWorkerGuardDeps
     connectors: rec.launch ? (deps.sessionConnectors ?? ledgerTaskConnectors)(rec.workspaceId) : [],
     level: rec.launch?.level ?? workerWmuxLevel((deps.registeredLevel ?? defaultRegisteredLevel)()),
     cwd: rec.cwd,
+    fence,
     ...(deps.folders ? { folders: deps.folders } : {}),
     // The first launch's keys are still in the pane's environment.
     ...(rec.launch?.connectionKeys ? { strayKeys: rec.launch.connectionKeys } : {}),
@@ -770,7 +955,9 @@ export function guardSessionLaunch(sessionId: string, text: string, deps: BotWor
   if (!isBotWorkerSession(sessionId, deps.dir ?? getWmuxDir())) return text;
   if (namesCodex(text)) throw guardError('pty:write-launch', 'codex is not started again in a bot\'s worker pane');
   if (!namesClaude(text)) return text;
-  return guardLaunchLine('pty:write-launch', text, deps, recordedPlan('pty:write-launch', sessionId, deps)).line;
+  const guarded = guardLaunchLine('pty:write-launch', text, deps, recordedPlan('pty:write-launch', sessionId, deps));
+  holdLaterFence(sessionId, guarded, deps.dir ?? getWmuxDir());
+  return guarded.line;
 }
 
 /** Startup: remove per-launch files no session record names and older than
@@ -780,13 +967,15 @@ export function pruneWorkerLaunchFiles(dir: string = getWmuxDir(), now: number =
   const read = readBotWorkerSessions(dir);
   if (!('sessions' in read)) return 0;
   const named = new Set<string>();
+  const temps = new Set<string>();
   for (const r of read.sessions.values()) {
     if (r.launch) {
       named.add(r.launch.settingsFile);
       named.add(r.launch.mcpConfigFile);
+      if (r.launch.fence?.tempDir) temps.add(r.launch.fence.tempDir);
     }
   }
-  let removed = 0;
+  let removed = pruneWorkerTempDirs(dir, temps, now);
   for (const sub of ['worker-settings', 'worker-mcp']) {
     const folder = path.join(dir, 'factory', sub);
     let names: string[] = [];

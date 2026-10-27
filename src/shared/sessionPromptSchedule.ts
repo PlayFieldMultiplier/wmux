@@ -5,7 +5,20 @@ export type SessionPromptScheduleResult =
   | 'busy'
   | 'unavailable'
   | 'session_changed'
+  /** Nothing written: the pane is on an agent's folder-trust prompt. Stays
+   *  due, like 'busy' (a screen that cannot rule one out answers 'busy'). */
+  | 'folder_trust'
   | 'error';
+
+/** Every result, so a stored or answered value is checked against the
+ *  type: a new result fails typecheck here until it is listed. */
+const SESSION_PROMPT_SCHEDULE_RESULTS: Record<SessionPromptScheduleResult, true> = {
+  sent: true, busy: true, unavailable: true, session_changed: true, folder_trust: true, error: true,
+};
+
+export function isSessionPromptScheduleResult(value: unknown): value is SessionPromptScheduleResult {
+  return typeof value === 'string' && Object.hasOwn(SESSION_PROMPT_SCHEDULE_RESULTS, value);
+}
 
 export interface SessionPromptDeliveryClaim {
   /** Unique attempt token used to reject stale finalizers. */

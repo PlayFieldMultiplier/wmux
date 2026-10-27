@@ -124,6 +124,11 @@ export interface Automation {
     awaitTimeoutMinutes?: number;
     /** Absolute per-run ceiling (default AUTOMATION_DEFAULTS.maxRunMinutes). */
     maxRunMinutes?: number;
+    /**
+     * `false`: a turn that fails on a temporary provider error ends the run at
+     * once. Absent = retry once (when the global setting allows it).
+     */
+    retryTransientErrors?: false;
   };
   /** ms epoch of the next occurrence; null when disabled. */
   nextRunAt: number | null;
@@ -182,7 +187,13 @@ export type AutomationRunDetail =
   /** A browser action needed a person's consent, and nobody watches a scheduled run. */
   | 'browser_consent_unattended'
   /** Skipped as overlap only because a finished run's session is still open (it lingers, then closes). */
-  | 'previous_session_open';
+  | 'previous_session_open'
+  /** The turn failed on a temporary provider error, was continued once, and failed again. */
+  | 'retried_once'
+  /** The turn failed on a temporary provider error; at retry time the session could not take the continue. */
+  | 'retry_blocked'
+  /** The turn failed on a temporary provider error; wmux restarted before the retry. */
+  | 'retry_interrupted';
 
 export interface AutomationRun {
   id: string;
@@ -211,6 +222,13 @@ export interface AutomationRun {
   hasBrowserIdentity?: true;
   /** A browser call of this run used the shared default Chrome profile because nothing was bound. */
   browserProfileUnbound?: true;
+  /**
+   * Set while the run is held after a temporary provider error: when the one
+   * continue message is due, ms epoch. The run stays `running` meanwhile.
+   */
+  retryAt?: number;
+  /** The one continue message after a temporary provider error was attempted (at most one per run). */
+  retried?: true;
 }
 
 /**
@@ -285,8 +303,16 @@ export interface AutomationDraft {
   name: string;
   trigger: AutomationScheduleTrigger;
   action: AutomationLaunchAction;
-  policy?: Partial<Pick<Automation['policy'], 'awaitTimeoutMinutes' | 'maxRunMinutes'>>;
+  policy?: Partial<Pick<Automation['policy'], 'awaitTimeoutMinutes' | 'maxRunMinutes' | 'retryTransientErrors'>>;
 }
+
+/** Engine-wide settings, kept by the daemon (runs happen with no window open). */
+export interface AutomationSettings {
+  /** Hold a run whose turn failed on a temporary provider error and continue it once. Default on. */
+  retryTransientErrors: boolean;
+}
+
+export const AUTOMATION_DEFAULT_SETTINGS: AutomationSettings = { retryTransientErrors: true };
 
 // ── Daemon RPC contract ─────────────────────────────────────────────────────
 // Mutating methods and run snapshots are first-party only (desktop main).
@@ -316,6 +342,8 @@ export const AUTOMATION_RPC = {
   noteRunBrowser: 'automation.noteRunBrowser',
   /** First-party: a browser call of the live run behind `ptyId` used the shared default Chrome profile. */
   noteRunBrowserProfile: 'automation.noteRunBrowserProfile',
+  /** First-party: change the engine-wide settings (`list` returns them). */
+  setSettings: 'automation.setSettings',
 } as const;
 
 export interface AutomationCapabilitiesResult { capabilities: string[] }
@@ -370,7 +398,11 @@ export interface AutomationListResult {
   automations: Automation[];
   /** Unacknowledged attention items, oldest first. */
   pendingAttention?: AutomationAttention[];
+  /** Absent from an older daemon. */
+  settings?: AutomationSettings;
 }
+export interface AutomationSetSettingsParams { settings: Partial<AutomationSettings> }
+export type AutomationSettingsResult = { ok: true; settings: AutomationSettings } | { ok: false; error: string };
 export interface AutomationRunsParams { automationId?: string }
 export interface AutomationRunsResult { runs: AutomationRun[] }
 export interface AutomationSnapshotParams { runId: string }
@@ -435,4 +467,6 @@ export type AutomationEvent =
   | { type: 'automations-changed' }
   | { type: 'run-changed'; run: AutomationRun; automationName: string }
   /** A draft arrived, a grant was raised, or a grant went stale — surface to the human. */
-  | { type: 'attention'; automationId: string; automationName: string; kind: AutomationAttentionKind };
+  | { type: 'attention'; automationId: string; automationName: string; kind: AutomationAttentionKind }
+  /** A due run was held by the usage reserve: it starts once `untilMs` passes. Main tells the owner once per hold. */
+  | { type: 'reserve-held'; automationId: string; automationName: string; account: string; untilMs: number };

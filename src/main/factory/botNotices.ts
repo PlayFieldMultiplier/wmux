@@ -174,8 +174,9 @@ export function plainStartFailure(error: string): string {
   // #2256: pty:create's own sentence for a path cmd cannot carry names the
   // cause and the remedy (promptFileArgument.cmdLaunchPathRefusal), as does
   // the merge-lane guard's for a data folder no shell can pass (#2268,
-  // promptFileArgument.dataDirNoShellRefusal), in any shell.
-  const own = /(?:Command Prompt cannot pass|No shell can pass the wmux data folder) [^\n]*/.exec(error);
+  // promptFileArgument.dataDirNoShellRefusal), in any shell. So does the
+  // worker fence's (botWorkerFence.ts): the owner sees what refused it.
+  const own = /(?:Command Prompt cannot pass|No shell can pass the wmux data folder|worker fence:) [^\n]*/.exec(error);
   if (own) return own[0];
   const e = error.toLowerCase();
   return (START_FAILURES.find((f) => f.test.test(e)) ?? START_FAILURES[START_FAILURES.length - 1]).text;

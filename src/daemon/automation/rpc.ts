@@ -90,4 +90,5 @@ export function registerAutomationRpc(
   gated(AUTOMATION_RPC.identityRuns, async () => engine.identityRuns());
   gated(AUTOMATION_RPC.noteRunBrowser, (p) => engine.noteRunBrowser(p['runId'], p['detail']));
   gated(AUTOMATION_RPC.noteRunBrowserProfile, (p) => engine.noteRunBrowserProfile(p['ptyId']));
+  gated(AUTOMATION_RPC.setSettings, (p) => engine.setSettings(p['settings']));
 }

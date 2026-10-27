@@ -10,6 +10,9 @@ import {
   resumePermissionFlag,
 } from '../../../shared/agentResume';
 import { applyRoleBinding, type RoleBinding } from '../../../shared/orchestratorRole';
+import { CHATV2_PROVIDER_SESSION_ID } from '../../../shared/chatv2/ipc';
+import { inResumeCwd, resumeCwdUsable, type ResumeShell } from '../../../shared/resumeShell';
+import { toastFolderTrustLaunchRefusal } from '../../utils/folderTrustLaunchToast';
 
 /**
  * Assemble the resume command for a pane from its binding + LIVE cwd
@@ -73,7 +76,9 @@ export function buildPaneResumeCommand(
   // #1342 — a REMOTE pane's cwds live on another machine, so the desktop cannot
   // run this comparison at all; the host answers the question instead and the
   // caller passes its verdict through. Local callers leave it undefined.
-  const exact = exactOverride ?? paneCwds.some((c) => !!c && normCwd(c) === target);
+  // A folder the daemon reports gone is never resumed, even when a pane cwd
+  // still names it (a stale surface or hook cwd).
+  const exact = exactOverride ?? (binding.cwdMissing !== true && paneCwds.some((c) => !!c && normCwd(c) === target));
   // #1916: a permission flag only on an EXACT resume. Toggle on → bypass;
   // toggle off → the captured mode, never a captured bypass. The session
   // picker carries none.
@@ -100,6 +105,46 @@ export function buildPaneResumeCommand(
     suppressPermissionChoices: !exact,
   });
   return { command: rewrite.command, exact, roleRewritten: rewrite.changed };
+}
+
+/**
+ * The grammar a copied lost-folder resume line is written in, or null when the
+ * pane's shell reads neither (cmd.exe, nushell, fish), so no line that would
+ * fail there is offered. Mirrors the daemon's bound-resume shell check. An
+ * empty shell is the platform default, a POSIX shell off Windows.
+ */
+export function lostFolderShell(platform: string | undefined, shell: string | undefined): ResumeShell | null {
+  if (platform !== 'win32') {
+    const leaf = (shell ?? '').split(/[\\/]/).pop() ?? '';
+    return !leaf || /^-?(?:zsh|bash|sh)$/.test(leaf) ? 'posix' : null;
+  }
+  return /pwsh|powershell/i.test(shell ?? '') ? 'pwsh' : null;
+}
+
+/**
+ * The line for a conversation whose folder is gone (`cwdMissing`): change to
+ * that folder, then resume exactly that id. It is copied, never typed, and
+ * runs once the folder is back. Null when the id, the folder or the shell
+ * fails its check: the notice then names the folder and the UUID only.
+ *
+ * The pane's role binding applies as on an exact resume with the skip toggle
+ * off (the copied line has no toggle), and to the agent invocation before the
+ * folder change is prefixed, so its agent-stem gate reads the launch itself.
+ */
+export function lostFolderResumeCommand(
+  binding: ResumeBinding,
+  shell: ResumeShell | null,
+  roleBinding?: RoleBinding,
+): string | null {
+  const grammar = resumeGrammarFor(binding.agent);
+  if (!grammar || !shell || !CHATV2_PROVIDER_SESSION_ID.test(binding.sessionId)) return null;
+  const exact = grammar.withId(binding.sessionId);
+  if (exact === grammar.picker || !resumeCwdUsable(binding.cwd, shell)) return null;
+  const line = applyRoleBinding(`${binding.agent} ${exact}`, roleBinding, {
+    suppressSkipPermissions: agentSupportsPermissionFlag(binding.agent),
+    suppressPermissionChoices: false,
+  }).command;
+  return inResumeCwd(binding.cwd, line, shell);
 }
 
 /**
@@ -132,11 +177,14 @@ export default function ResumeInfoChip(props: {
   roleBinding?: RoleBinding;
   /** D2 — the role name that supplied `roleBinding`, for the audit log. */
   role?: string;
+  /** The pane's shell, for the lost-folder line's grammar (lostFolderShell). */
+  shell?: string;
 }): React.ReactElement | null {
-  const { ptyId, binding, paneCwds, roleBinding, role, exactOverride, onSend } = props;
+  const { ptyId, binding, paneCwds, roleBinding, role, exactOverride, onSend, shell } = props;
   const t = useT();
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [commandCopied, setCommandCopied] = useState(false);
   // #1916: holds only the user's explicit choice. Until they make one, the
   // toggle is on only for an exact resume of a session recorded in
   // bypassPermissions mode. Claude-only (Codex has no such flag), and not
@@ -153,6 +201,13 @@ export default function ResumeInfoChip(props: {
   const { command } = built;
 
   const agentName = binding.agent.charAt(0).toUpperCase() + binding.agent.slice(1);
+  // The conversation's folder is gone: the picker would open somewhere that
+  // cannot list it, so the panel names the folder and offers the exact line to
+  // copy instead. A remote pane's folder is the host's to judge, so not there.
+  const lostFolder = !built.exact && binding.cwdMissing === true && exactOverride === undefined;
+  const lostCommand = lostFolder
+    ? lostFolderResumeCommand(binding, lostFolderShell(window.electronAPI.platform, shell), roleBinding)
+    : null;
 
   const onRecover = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -169,22 +224,26 @@ export default function ResumeInfoChip(props: {
     // only by an explicit keystroke, never automatically).
     if (onSend) onSend(command);
     else {
-      window.electronAPI.pty.writeLaunch(ptyId, command, false).catch((err: unknown) => {
+      window.electronAPI.pty.writeLaunch(ptyId, command, false, 'human').catch((err: unknown) => {
         console.warn('[wmux:resume] the resume line was not typed', String(err));
+        toastFolderTrustLaunchRefusal(err);
       });
     }
     setOpen(false);
   };
 
+  const copyText = (text: string, setFlag: (v: boolean) => void) => {
+    void navigator.clipboard?.writeText(text).then(
+      () => {
+        setFlag(true);
+        window.setTimeout(() => setFlag(false), 1200);
+      },
+      () => { /* clipboard blocked — leave the text visible to select manually */ },
+    );
+  };
   const onCopy = (e: React.MouseEvent) => {
     e.stopPropagation();
-    void navigator.clipboard?.writeText(binding.sessionId).then(
-      () => {
-        setCopied(true);
-        window.setTimeout(() => setCopied(false), 1200);
-      },
-      () => { /* clipboard blocked — leave the UUID visible to select manually */ },
-    );
+    copyText(binding.sessionId, setCopied);
   };
 
   return (
@@ -297,8 +356,9 @@ export default function ResumeInfoChip(props: {
             </label>
           )}
 
-          {/* Exact command preview — WYSIWYG with what 복구 types. */}
-          <code
+          {/* Exact command preview — WYSIWYG with what 복구 types (or, for a
+              lost folder, with what Copy copies). */}
+          {(!lostFolder || lostCommand) && <code
             style={{
               display: 'block',
               padding: '4px 6px',
@@ -311,21 +371,48 @@ export default function ResumeInfoChip(props: {
               whiteSpace: 'pre-wrap',
             }}
           >
-            {command}
-          </code>
+            {lostFolder ? lostCommand : command}
+          </code>}
           {/* #1916: the folder the line runs in (the shell's tracked cwd).
               A remote pane passes no local cwd, so nothing is shown there. */}
-          {paneCwds[0] && (
+          {paneCwds[0] && !lostFolder && (
             <span style={{ color: 'var(--text-muted)', overflowWrap: 'anywhere' }}>
               {t('resume.runsIn', { cwd: paneCwds[0] })}
             </span>
           )}
-          {!built.exact && (
+          {lostFolder && (
+            <span style={{ color: 'var(--text-muted)', overflowWrap: 'anywhere' }}>
+              {t('resume.folderGone', { agent: agentName, id: binding.sessionId.slice(0, 8), cwd: binding.cwd })}
+            </span>
+          )}
+          {!built.exact && !lostFolder && (
             <span style={{ color: 'var(--text-muted)' }}>{t('resume.pickerNote')}</span>
           )}
 
+          {/* A lost folder: copy the line, never type it (it runs only once
+              the folder is back), and no picker. */}
+          {lostFolder && lostCommand && (
+            <button
+              onClick={(e) => { e.stopPropagation(); copyText(lostCommand, setCommandCopied); }}
+              title={t('resume.copyCommandTooltip')}
+              style={{
+                alignSelf: 'flex-start',
+                padding: '2px 10px',
+                font: 'inherit',
+                fontWeight: 600,
+                color: 'var(--text-main)',
+                backgroundColor: 'var(--bg-surface)',
+                border: '1px solid color-mix(in srgb, var(--accent-cursor) 55%, transparent)',
+                borderRadius: 4,
+                cursor: 'pointer',
+              }}
+            >
+              {commandCopied ? `✓ ${t('common.copied')}` : `⧉ ${t('resume.copyCommand')}`}
+            </button>
+          )}
+
           {/* 복구 — type the command into THIS pane (no auto-Enter). */}
-          <button
+          {!lostFolder && <button
             onClick={onRecover}
             title={built.exact ? t('resume.tooltip') : t('resume.pickTooltip')}
             style={{
@@ -343,7 +430,7 @@ export default function ResumeInfoChip(props: {
             ↩ {built.exact
               ? t('resume.label', { agent: agentName })
               : t('resume.pickLabel', { agent: agentName })}
-          </button>
+          </button>}
         </div>
       )}
     </span>
@@ -373,8 +460,9 @@ export function ResumeInfoChipGate(props: {
   paneCwds: ReadonlyArray<string | undefined>;
   roleBinding?: RoleBinding;
   role?: string;
+  shell?: string;
 }): React.ReactElement | null {
-  const { ptyId, binding, paneCwds, roleBinding, role } = props;
+  const { ptyId, binding, paneCwds, roleBinding, role, shell } = props;
   // The reactive decay clock — subscribing HERE (not in Pane) is the whole point.
   const agentClockMs = useStore((s) => s.agentClockMs);
   const activityAt = useStore((s) => s.surfaceActivityAt[ptyId] ?? 0);
@@ -402,6 +490,7 @@ export function ResumeInfoChipGate(props: {
       paneCwds={paneCwds}
       roleBinding={roleBinding}
       role={role}
+      shell={shell}
     />
   );
 }

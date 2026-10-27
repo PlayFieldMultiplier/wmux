@@ -7,6 +7,12 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 vi.mock('electron', () => ({ safeStorage: {} }));
+// The worker fence (botWorkerFence.ts) has tests of its own
+// (botWorkerFence.os.test.ts); here every launch is unfenced.
+vi.mock('../botWorkerFence', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../botWorkerFence')>()),
+  attachWorkerFence: () => ({ kind: 'none' }),
+}));
 
 import {
   beginBotWorkerSpawn,

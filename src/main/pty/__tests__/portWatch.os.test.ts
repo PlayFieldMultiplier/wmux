@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { PortWatcher, matchSessionPorts, defaultSnapshot, type PortSnapshot } from '../portWatch';
+import {
+  PortWatcher,
+  matchSessionPorts,
+  defaultSnapshot,
+  SNAPSHOT_DEADLINE_MS,
+  type PortSnapshot,
+} from '../portWatch';
 import { tryNativeSnapshot } from '../winSnapshotNative';
 
 vi.mock('../winSnapshotNative', () => ({ tryNativeSnapshot: vi.fn() }));
@@ -225,6 +231,45 @@ describe('PortWatcher', () => {
     await watcher.tick();
     await watcher.tick();
     expect(calls).toBe(5); // two failures after a success never reach the threshold
+  });
+
+  it('a snapshot that never settles does not freeze polling or stack a second one', async () => {
+    vi.useFakeTimers();
+    try {
+      let calls = 0;
+      let settle: ((s: PortSnapshot) => void) | undefined;
+      const watcher = new PortWatcher(
+        () => [{ sessionId: 's1', pid: 100 }],
+        {
+          snapshot: () => {
+            calls++;
+            if (calls > 1) return Promise.resolve(snap([], []));
+            // Models a ps/lsof child stuck in the kernel: execFile never settles.
+            return new Promise<PortSnapshot>((resolve) => { settle = resolve; });
+          },
+        },
+      );
+
+      const first = watcher.tick();
+      await vi.advanceTimersByTimeAsync(SNAPSHOT_DEADLINE_MS);
+      await expect(first).resolves.toBeUndefined(); // the deadline released the tick
+      expect(calls).toBe(1);
+
+      // Still pending: later ticks run, but each is a failure, not a new snapshot.
+      await watcher.tick();
+      await watcher.tick(); // third consecutive failure arms the backoff
+      expect(calls).toBe(1);
+      await watcher.tick(); // suppressed by the backoff window
+      expect(calls).toBe(1);
+
+      settle?.(snap([], [])); // the stuck child finally exits
+      await Promise.resolve();
+      vi.advanceTimersByTime(60_000);
+      await watcher.tick(); // nothing outstanding — a fresh snapshot starts
+      expect(calls).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

@@ -40,6 +40,7 @@ import type {
 import { stripReplayQuerySequences } from '../shared/replayQuerySanitizer';
 import { A2A_SPAWN_RPC, type A2aSpawnAskInput, type A2aSpawnAskResult, type A2aSpawnOutgoingList, type A2aSpawnPolicySetResult, type A2aSpawnPolicyV1, type A2aSpawnRequestSummary } from '../shared/a2aSpawn';
 import { createSessionPipeMarkers } from '../daemon/sessionPipeMarkers';
+import type { FolderTrustState } from '../daemon/folderTrustState';
 import { SessionPipeStreamScanner } from './daemon/sessionPipeStreamScanner';
 import { DAEMON_RPC_TIMEOUT_MS } from '../shared/timeouts';
 import { AGENT_STATE_BATCH_MAX } from '../shared/agentStateBatch';
@@ -56,7 +57,9 @@ import {
 import { connectWithRetry, type ConnectAttemptResult } from './daemonConnectRetry';
 import type { AgentStatus } from '../shared/types';
 import type { AgentSlug } from '../shared/agentIdentity';
-import type { SessionPromptScheduleResult } from '../shared/sessionPromptSchedule';
+import { isSessionPromptScheduleResult, type SessionPromptScheduleResult } from '../shared/sessionPromptSchedule';
+import { parseToolRefusal, type ToolRefusal } from '../shared/toolRefusal';
+import { parseCommitOrigin, type CommitOrigin } from '../shared/commitOrigin';
 
 // RCA A2 — single source of truth in shared/timeouts.ts so the renderer's
 // RECONCILE_TIMEOUT_MS can be derived from (and stay greater than) this value.
@@ -101,6 +104,8 @@ export class DaemonClient extends EventEmitter {
   private connected: boolean = false;
   private requestId: number = 0;
   private pendingRequests: Map<string, PendingRequest> = new Map();
+  /** Each pane's last refused tool call, as the daemon reported it (`agent.refusal`). */
+  private readonly toolRefusals = new Map<string, ToolRefusal>();
   private controlBuffer: string = '';
 
   constructor(
@@ -1104,6 +1109,36 @@ export class DaemonClient extends EventEmitter {
     }
   }
 
+  /**
+   * Whether a session's ring shows an agent's folder-trust dialog
+   * (daemon/folderTrustState): the daemon's verdict, or why there is none
+   * (not connected, a daemon that predates the method, no answer in time).
+   */
+  async folderTrustState(sessionId: string, timeoutMs: number): Promise<{ state: FolderTrustState } | { unavailable: string }> {
+    if (!this.isConnected) return { unavailable: 'daemon not connected' };
+    try {
+      const r = (await this.rpc('daemon.folderTrustState', { id: sessionId }, { timeoutMs })) as { state?: unknown } | null;
+      const state = r?.state;
+      return state === 'trust' || state === 'clear' || state === 'unknown' ? { state } : { unavailable: 'malformed answer' };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { unavailable: /Unknown method/.test(message) ? 'daemon predates daemon.folderTrustState' : message };
+    }
+  }
+
+  /** Where a commit came from (daemon/commitOrigin): null when not recorded;
+   *  'unavailable' when the daemon is unreachable or predates the record. */
+  async lookupCommitOrigin(sha: string): Promise<CommitOrigin | null | 'unavailable'> {
+    if (!this.isConnected) return 'unavailable';
+    try {
+      const response = await this.rpc('daemon.commitOrigin.lookup', { sha }) as { ok?: unknown; origin?: unknown };
+      if (response.ok !== true) return 'unavailable';
+      return response.origin == null ? null : parseCommitOrigin(response.origin) ?? 'unavailable';
+    } catch {
+      return 'unavailable';
+    }
+  }
+
   /** The daemon's pane usage-limit holds; empty when it is unreachable or predates them. */
   async listUsageLimits(): Promise<PaneUsageLimit[]> {
     if (!this.isConnected) return [];
@@ -1113,6 +1148,11 @@ export class DaemonClient extends EventEmitter {
     } catch {
       return [];
     }
+  }
+
+  /** The pane's last refused tool call, or null. */
+  toolRefusalOf(sessionId: string): ToolRefusal | null {
+    return this.toolRefusals.get(sessionId) ?? null;
   }
 
   /**
@@ -1126,6 +1166,17 @@ export class DaemonClient extends EventEmitter {
       return parseShellPromptList(await this.rpc('daemon.shellPrompt.list', {}));
     } catch {
       return null;
+    }
+  }
+
+  /** Hand the usage reserve's holds to the daemon (its scheduled runs). False when not delivered. */
+  async setUsageReserveHolds(holds: ReadonlyArray<{ account: string; untilMs: number }>): Promise<boolean> {
+    if (!this.isConnected) return false;
+    try {
+      const response = await this.rpc('daemon.usageReserve.set', { holds }) as { ok?: unknown };
+      return response.ok === true;
+    } catch {
+      return false; // an older daemon has no reserve
     }
   }
 
@@ -1155,14 +1206,7 @@ export class DaemonClient extends EventEmitter {
       const response = await this.rpc('daemon.deliverScheduledPromptV2', args) as {
         result?: unknown;
       };
-      if (
-        response.result === 'sent' ||
-        response.result === 'busy' ||
-        response.result === 'unavailable' ||
-        response.result === 'session_changed' ||
-        response.result === 'error'
-      ) return response.result;
-      return 'error';
+      return isSessionPromptScheduleResult(response.result) ? response.result : 'error';
     } catch (error) {
       if (
         error instanceof Error &&
@@ -1186,13 +1230,13 @@ export class DaemonClient extends EventEmitter {
     agentSlug: AgentSlug;
     incarnationId: string;
     prompt: string;
-  }): Promise<{ result: 'sent' | 'held' | 'session_changed' | 'unavailable' | 'error'; pasted: boolean }> {
+  }): Promise<{ result: 'sent' | 'held' | 'approval_pending' | 'session_changed' | 'unavailable' | 'error'; pasted: boolean }> {
     if (!this.isConnected) return { result: 'unavailable', pasted: false };
     try {
       const response = await this.rpc('daemon.deliverCallerNudgeV1', args) as { result?: unknown; pasted?: unknown };
       const pasted = response.pasted === true;
       const r = response.result;
-      if (r === 'sent' || r === 'held' || r === 'session_changed' || r === 'unavailable' || r === 'error') {
+      if (r === 'sent' || r === 'held' || r === 'approval_pending' || r === 'session_changed' || r === 'unavailable' || r === 'error') {
         return { result: r, pasted };
       }
       return { result: 'error', pasted: true };
@@ -1249,6 +1293,7 @@ export class DaemonClient extends EventEmitter {
       this.connected = false;
       this.controlPipe = null;
       this.controlBuffer = '';
+      this.toolRefusals.clear();
       this.emit('disconnected');
     });
   }
@@ -1438,6 +1483,17 @@ export class DaemonClient extends EventEmitter {
           if (typeof data?.count === 'number' && Number.isFinite(data.count) && data.count >= 0) {
             this.emit('session:subagents', { sessionId: event.sessionId, count: Math.floor(data.count) });
           }
+          break;
+        }
+        case 'agent.refusal': {
+          // The pane's last refused tool call (null clears), checked here.
+          // Kept by the client itself: the daemon sends what it holds again
+          // on subscribe, before main has a listener on a new client.
+          const data = event.data as { refusal?: unknown } | null;
+          // One it cannot read clears too: what stood before is no longer the last.
+          const refusal = parseToolRefusal(data?.refusal);
+          if (refusal) this.toolRefusals.set(event.sessionId, refusal);
+          else this.toolRefusals.delete(event.sessionId);
           break;
         }
         case 'shell.prompt': {

@@ -165,4 +165,41 @@ describe('recoverFromBlockedProbe (escalated re-ping BEFORE the recovery dialog)
     expect(askUserCalls).toBe(1);
     expect(outcome).toBe('recover');
   });
+
+  // #2774: the re-ping takes ~1.7 s, long enough for a daemon that was still
+  // exiting to finish. A dead daemon is cleaned up, not asked or refused about.
+  it('a process that exited during the re-ping is gone: no dialog, no refusal', async () => {
+    let exited = false;
+    let askUserCalls = 0;
+    const outcome = await recoverFromBlockedProbe({
+      token: 'auth-token',
+      reping: () => {
+        exited = true;
+        return Promise.resolve(false);
+      },
+      sleep: noSleep,
+      exited: () => exited,
+      askUser: () => {
+        askUserCalls += 1;
+        return Promise.resolve(false);
+      },
+    });
+    expect(outcome).toBe('gone');
+    expect(askUserCalls).toBe(0);
+  });
+
+  it('a process that exited while the user was asked is gone, not refused', async () => {
+    let exited = false;
+    const outcome = await recoverFromBlockedProbe({
+      token: '',
+      reping: () => Promise.resolve(false),
+      sleep: noSleep,
+      exited: () => exited,
+      askUser: () => {
+        exited = true;
+        return Promise.resolve(false);
+      },
+    });
+    expect(outcome).toBe('gone');
+  });
 });

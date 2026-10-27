@@ -681,4 +681,18 @@ export const bs = {
   'worktask.cleanup.detail.orphanMeta': 'Ostao je samo zapis zadatka, bez worktreeja (uklanjanje je prekinuto) — provjerite, pa obrišite.',
   'worktask.cleanup.detail.diskMissing': 'Worktree nedostaje na disku (obrisan izvan wmuxa ili zbog pada) — zatvorite zadatak da to uredite.',
   'botsPage.guest.readNotice': "Od sada vanjski bot može čitati poruke u ovom razgovoru i pisati u njega. Nikad ne vidi ono što je rečeno prije nego što je dodan.",
+
+  // Scheduled runs: one retry after a temporary provider error
+  'claudeIntegration.scheduledRetry': "Ponovi zakazana pokretanja nakon privremene greške",
+  'claudeIntegration.scheduledRetryDesc': "Ako potez zakazanog pokretanja ne uspije zbog greške mreže ili servera pružatelja, sačekaj 5 minuta i pošalji jednu poruku za nastavak. Uključeno po zadanom; svaki raspored to može isključiti.",
+  'claudeIntegration.scheduledRetryUnknown': "Još nepoznato: čeka se pozadinska usluga wmux.",
+  'claudeIntegration.usageReserve': "Zadrži rezervu korištenja",
+  'claudeIntegration.usageReserveDesc': "Rad bez nadzora koji bi trošio 5-satno korištenje Claude računa ne počinje dok je to korištenje na 85% ili više, kako bi posljednjih 15% ostalo vama. Zakazano pokretanje čeka resetovanje i tada se izvršava ako je još unutar dozvoljenog kašnjenja, inače je propušteno; fan-out bota također čeka; fan-out koji zatraži agent u vašem panelu odbija se uz vrijeme resetovanja. Codex i drugi agenti se ne zadržavaju, a ono što kucate nikad se ne zadržava. Isključeno po zadanom.",
+  'schedules.retryTransient': "Ponovi jednom nakon privremene greške",
+  'schedules.retryTransientHint': "Kod greške mreže ili servera pružatelja, sačekaj 5 minuta i pošalji jednu poruku za nastavak. Upit se ne šalje ponovo.",
+  'schedules.retryTransientGlobalHint': "Važi samo dok je uključeno „Ponovi zakazana pokretanja nakon privremene greške” u Postavke → Integracija s Claudeom.",
+  'schedules.state.retryWaiting': "Čeka: ponovni pokušaj nakon privremene greške pružatelja (za {minutes} min)",
+  'schedules.reason.agent_error_retried_once': "ponovo greška agenta nakon jednog ponovnog pokušaja",
+  'schedules.reason.agent_error_retry_blocked': "greška agenta; ponovni pokušaj nije bilo moguće poslati",
+  'schedules.reason.agent_error_retry_interrupted': "greška agenta; nije ponovljeno, wmux je ponovo pokrenut",
 } as const;

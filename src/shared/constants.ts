@@ -157,6 +157,8 @@ export const IPC = {
   FANOUT_REQUIRE_APPROVAL_SET: 'fanout:requireApproval:set',
   FANOUT_TRUST_AGY_FOLDERS_GET: 'fanout:trustAgyFolders:get',
   FANOUT_TRUST_AGY_FOLDERS_SET: 'fanout:trustAgyFolders:set',
+  WORKER_FENCE_OFF_GET: 'workerFence:off:get',
+  WORKER_FENCE_OFF_SET: 'workerFence:off:set',
   FANOUT_AUDIT_RECENT: 'fanout:audit:recent',
   FANOUT_LINEAGE: 'fanout:lineage',
   FANOUT_PRESETS_GET: 'fanout:presets:get',
@@ -604,6 +606,10 @@ export const IPC = {
   // "지금 새로고침" button). Triggers an immediate poll regardless of
   // interval timing. Caller enforces a UI-side cooldown (5 min).
   USAGE_REFRESH: 'usage:refresh',
+  // Usage reserve (main/usage/usageReserve.ts): renderer ↔ main read and
+  // write of the setting, which main persists and enforces.
+  USAGE_RESERVE_GET: 'usage:reserve:get',
+  USAGE_RESERVE_SET: 'usage:reserve:set',
   // Pane usage-limit pause (shared/usageLimit). Main → renderer push of one
   // pane's limit (`{ ptyId, limit: PaneUsageLimit | null }`, null = cleared),
   // renderer → main list on boot, and renderer → main edits (auto-resume,
@@ -813,6 +819,8 @@ export const IPC = {
   AUTOMATION_GRANT: 'automation:grant',
   AUTOMATION_RUN_NOW: 'automation:runNow',
   AUTOMATION_CANCEL_RUN: 'automation:cancelRun',
+  AUTOMATION_SETTINGS: 'automation:settings',
+  AUTOMATION_SET_SETTINGS: 'automation:setSettings',
   AUTOMATION_PUSH: 'automation:push',
   AUTOMATION_OPEN_RUN: 'automation:openRun',
   AUTOMATION_TOAST_LABELS: 'automation:toastLabels',

@@ -8,7 +8,8 @@
  *  - `setViewerVisibility(id, true|false)` opens / closes the pane's SSE stream
  *    (`GET /api/stream`). Nothing else opens one. A device credential opens it
  *    with a stream ticket and never rides the URL itself — no ticket, no stream
- *    (the retry backs off); the operator token uses `?token=`.
+ *    (the retry backs off); the operator token uses `?token=`; a sign-in proxy
+ *    session (webCredential.ts) carries nothing, its cookies ride along.
  *  - The stream's `snapshot` becomes ONE replay write (`onData(…, replay=true)`)
  *    followed by `onFlushComplete`, which is the contract useTerminal's
  *    resync/reset paths are written against. The replay starts with RIS, so a
@@ -44,6 +45,8 @@ import {
   staleReplayResetLevel,
 } from '../../shared/terminal/staleReplayModeReset';
 import { isFocusReport } from './viewerParser';
+import { FOLDER_TRUST_LAUNCH_REFUSAL } from '../../shared/folderTrustWording';
+import { isRefused, requestInitFor, type WebCredential } from './webCredential';
 
 export const WEB_LIVE_STREAM_CAP = 4;
 /** Consecutive stream failures before the pane gives its slot up. */
@@ -123,14 +126,14 @@ interface EventSourceLike {
 }
 
 export interface WebPtyDeps {
-  token: string;
+  credential: WebCredential;
   fetchImpl?: typeof fetch;
   createEventSource?: (url: string) => EventSourceLike;
   /** True while this pane's terminal is parsing replayed bytes. */
   isReplaying?: (ptyId: string) => boolean;
   /** The owner resized the pane: apply the grid now, before the next byte parses. */
   applyGeometry?: (ptyId: string, g: PaneGeometry) => void;
-  /** The daemon refused the credential (401). */
+  /** The daemon refused the credential (401), or the sign-in proxy ended the session. */
   onUnauthorized?: () => void;
   now?: () => number;
   setTimer?: (fn: () => void, ms: number) => unknown;
@@ -174,19 +177,13 @@ export function snapshotTail(gate: SnapshotGate | undefined): string {
   return staleReplayResetLevel(gate) === 'none' ? '' : STALE_REPLAY_ALIVE_SHELL_RESETS + STALE_REPLAY_DISPLAY_RESETS;
 }
 
-/** A device credential is `<deviceId>.<secret>`; the operator token has no dot. */
-export function isDeviceCredential(token: string): boolean {
-  return token.includes('.');
-}
-
 export function createWebPty(deps: WebPtyDeps) {
   const fetchImpl = deps.fetchImpl ?? fetch.bind(globalThis);
   const createEventSource = deps.createEventSource ?? ((url: string) => new EventSource(url));
   const now = deps.now ?? Date.now;
   const setTimer = deps.setTimer ?? ((fn: () => void, ms: number) => setTimeout(fn, ms));
   const clearTimer = deps.clearTimer ?? ((h: unknown) => clearTimeout(h as ReturnType<typeof setTimeout>));
-  const auth = { Authorization: `Bearer ${deps.token}` };
-  const device = isDeviceCredential(deps.token);
+  const credential = deps.credential;
   const sleep = (ms: number) => new Promise<void>((r) => { setTimer(r, ms); });
 
   const dataListeners = new Set<DataListener>();
@@ -218,25 +215,25 @@ export function createWebPty(deps: WebPtyDeps) {
     for (const l of [...viewListeners]) l();
   };
 
-  const request = async (url: string, init: RequestInit = {}): Promise<Response> => {
+  const request = async (url: string, init: RequestInit = {}, headers: Record<string, string> = {}): Promise<Response> => {
     const ctl = new AbortController();
     const timer = setTimer(() => ctl.abort(), REQUEST_TIMEOUT_MS);
     try {
-      return await fetchImpl(url, { ...init, signal: ctl.signal });
+      return await fetchImpl(url, { ...init, ...requestInitFor(credential, headers), signal: ctl.signal });
     } finally {
       clearTimer(timer);
     }
   };
 
-  /** Resolves true once a usable ticket is held (always true for the operator token). */
+  /** Resolves true once a usable ticket is held (always true for a credential that needs none). */
   const ensureTicket = (force: boolean): Promise<boolean> => {
-    if (!device) return Promise.resolve(true);
+    if (credential.kind !== 'device') return Promise.resolve(true);
     if (!force && ticket && now() < ticketExpiresAt - TICKET_RENEW_MARGIN_MS) return Promise.resolve(true);
     if (ticketInFlight) return ticketInFlight;
     ticketInFlight = (async () => {
       try {
-        const res = await request('/api/stream-ticket', { method: 'POST', headers: auth });
-        if (res.status === 401) { deps.onUnauthorized?.(); return false; }
+        const res = await request('/api/stream-ticket', { method: 'POST' });
+        if (isRefused(res)) { deps.onUnauthorized?.(); return false; }
         if (!res.ok) return false;
         const body = await res.json() as { ticket?: unknown; expiresAt?: unknown };
         if (typeof body.ticket !== 'string' || !body.ticket) return false;
@@ -254,8 +251,12 @@ export function createWebPty(deps: WebPtyDeps) {
 
   const streamUrl = (ptyId: string): string => {
     const base = `/api/stream?session=${encodeURIComponent(ptyId)}`;
-    // A device credential is durable: it never goes into a URL.
-    return device ? `${base}&ticket=${encodeURIComponent(ticket)}` : `${base}&token=${encodeURIComponent(deps.token)}`;
+    switch (credential.kind) {
+      // A device credential is durable: it never goes into a URL.
+      case 'device': return `${base}&ticket=${encodeURIComponent(ticket)}`;
+      case 'operator': return `${base}&token=${encodeURIComponent(credential.token)}`;
+      case 'proxy': return base;
+    }
   };
 
   const emitData = (ptyId: string, data: string, replay: boolean) => {
@@ -430,8 +431,8 @@ export function createWebPty(deps: WebPtyDeps) {
     configInFlight = (async () => {
       let ok = false;
       try {
-        const res = await request('/api/config', { headers: auth, cache: 'no-store' });
-        if (res.status === 401) { deps.onUnauthorized?.(); return; }
+        const res = await request('/api/config', { cache: 'no-store' });
+        if (isRefused(res)) { deps.onUnauthorized?.(); return; }
         if (res.ok) {
           const cfg = await res.json() as { allowInput?: unknown; hostPlatform?: unknown };
           if (typeof cfg.hostPlatform === 'string') hostPlatform = cfg.hostPlatform;
@@ -467,20 +468,32 @@ export function createWebPty(deps: WebPtyDeps) {
     notify();
   };
 
-  const send = async (ptyId: string, data: string): Promise<void> => {
+  /** Posts `data`; a launch line (`launch`) the daemon refused at a
+   *  folder-trust prompt answers its verdict and halts nothing. */
+  const send = async (ptyId: string, data: string, launch?: 'human' | 'auto'): Promise<'trust' | 'unknown' | void> => {
     let status = 0;
     let code = '';
+    let verdict: unknown;
+    let refused = false;
     try {
-      const res = await request(`/api/input?session=${encodeURIComponent(ptyId)}`, {
-        method: 'POST', body: data, headers: { ...auth, 'Content-Type': 'application/octet-stream' }, keepalive: true,
-      });
+      const res = await request(
+        `/api/input?session=${encodeURIComponent(ptyId)}${launch ? `&launch=${launch}` : ''}`,
+        { method: 'POST', body: data, keepalive: true },
+        { 'Content-Type': 'application/octet-stream' },
+      );
       status = res.status;
-      if (!res.ok) code = await res.json().then((b: { error?: unknown }) => (typeof b?.error === 'string' ? b.error : ''), () => '');
+      refused = isRefused(res);
+      if (!res.ok) {
+        const body = await res.json().catch(() => null) as { error?: unknown; verdict?: unknown } | null;
+        code = typeof body?.error === 'string' ? body.error : '';
+        verdict = body?.verdict;
+      }
     } catch {
       status = 0; // network error or timeout: the outcome is unknown
     }
     if (status >= 200 && status < 300) return;
-    if (status === 401) { halt(ptyId, 'unauthorized'); deps.onUnauthorized?.(); return; }
+    if (launch && status === 409 && code === 'folder-trust') return verdict === 'trust' ? 'trust' : 'unknown';
+    if (refused) { halt(ptyId, 'unauthorized'); deps.onUnauthorized?.(); return; }
     if (status === 403) { setInputState('read-only'); halt(ptyId, 'read-only'); return; }
     if (status === 413) { halt(ptyId, 'too-large'); return; }
     if (status >= 400 && status < 500) { halt(ptyId, `refused:${code || status}`); return; }
@@ -524,6 +537,27 @@ export function createWebPty(deps: WebPtyDeps) {
         await send(ptyId, data);
       });
       inputChain.set(ptyId, next);
+      return next;
+    },
+    /**
+     * A launch line (the desktop's `pty.writeLaunch`): the daemon applies the
+     * folder-trust policy, a person's line (`origin: 'human'`) stopping only
+     * at a prompt seen. Rejects when it was refused there; nothing is halted.
+     */
+    writeLaunch(ptyId: string, data: string, origin?: unknown): Promise<void> {
+      if (!ptyId || typeof data !== 'string' || data.length === 0) return Promise.resolve();
+      if (inputState === 'read-only') return Promise.resolve();
+      const prev = inputChain.get(ptyId) ?? Promise.resolve();
+      const next = prev.then(async () => {
+        await waitUntil(() => inputState !== 'checking' && !deps.isReplaying?.(ptyId));
+        if (halts.has(ptyId)) { countDropped(ptyId); return; }
+        if (inputState !== 'allowed') return;
+        const refused = await send(ptyId, data, origin === 'human' ? 'human' : 'auto');
+        if (refused === 'trust') throw new Error(`PTY_WRITE_LAUNCH: ${FOLDER_TRUST_LAUNCH_REFUSAL}`);
+        if (refused) throw new Error('PTY_WRITE_LAUNCH: the pane has no readable screen, so a folder-trust prompt cannot be ruled out');
+      });
+      // A refused line does not hold up the keys typed after it.
+      inputChain.set(ptyId, next.catch(() => undefined));
       return next;
     },
     async list(): Promise<Array<{ id: string; commandRunning?: boolean }>> {
@@ -627,8 +661,8 @@ export function createWebPty(deps: WebPtyDeps) {
       let body: Record<string, unknown>;
       try {
         res = await fetchImpl('/api/sessions', {
+          ...requestInitFor(credential, { 'Content-Type': 'application/json' }),
           method: 'POST',
-          headers: { ...auth, 'Content-Type': 'application/json' },
           body: JSON.stringify(target),
           signal: ctl.signal,
         });
@@ -645,7 +679,7 @@ export function createWebPty(deps: WebPtyDeps) {
       const error = typeof body.error === 'string' ? body.error : '';
       const detail = typeof body.detail === 'string' && body.detail ? body.detail : undefined;
       if (res.status === 201 && typeof body.id === 'string') return { ok: true, id: body.id };
-      if (res.status === 401) { deps.onUnauthorized?.(); return { ok: false, code: 'unauthorized' }; }
+      if (isRefused(res)) { deps.onUnauthorized?.(); return { ok: false, code: 'unauthorized' }; }
       if (res.status === 403 && error.startsWith('read-only')) { setInputState('read-only'); return { ok: false, code: 'read-only' }; }
       return { ok: false, code: error || String(res.status), ...(detail ? { detail } : {}) };
     },

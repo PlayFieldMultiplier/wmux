@@ -154,8 +154,10 @@ const FORM_UNSHOWABLE = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]|\s{2,}|^\s|\s$
  * to be shown and read back exactly as it is. A string that would be cut or
  * cleaned gets no form: the screen could not be matched against it.
  *
- * Option keys are their 1-based positions, the digit Claude draws. Every
- * question allows free text: Claude appends its "Type something" row to each.
+ * Option keys are their 1-based positions, the digit Claude draws. A question
+ * allows free text where Claude appends its "Type something" row: every one
+ * but a single-select whose options carry a `preview`, which Claude draws
+ * beside the preview with no such row (`preview: true`, measured on 2.1.311).
  */
 export function claudeQuestionsForm(payload: unknown): DecisionForm | null {
   const raw = readArray(readObject(payload, 'tool_input'), 'questions');
@@ -178,12 +180,16 @@ export function claudeQuestionsForm(payload: unknown): DecisionForm | null {
     // (sameQuestionText): two that read the same that way cannot be.
     const compactText = (text: string): string => text.replace(/\s+/g, '');
     if (questions.some((q) => compactText(q.text) === compactText(question))) return null;
+    // Any option with a preview turns the whole question into the side-by-side
+    // layout; a multi-select is drawn as usual (both measured).
+    const preview = !multiSelect && options.some((o) => isObject(o) && typeof o['preview'] === 'string' && o['preview'].length > 0);
     questions.push({
       id: `q${i}`,
       header,
       text: question,
       multiSelect,
-      allowOther: true,
+      allowOther: !preview,
+      ...(preview ? { preview: true as const } : {}),
       options: (labels as string[]).map((label, j) => {
         const description = descriptions[j];
         return { key: String(j + 1), label, ...(typeof description === 'string' && description ? { description } : {}) };

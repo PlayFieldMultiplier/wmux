@@ -680,4 +680,18 @@ export const da = {
   'worktask.cleanup.detail.orphanMeta': 'Kun opgaveposten er tilbage, ikke worktreet (en fjernelse blev afbrudt) — tjek det, og slet det.',
   'worktask.cleanup.detail.diskMissing': 'Worktreet mangler på disken (slettet uden for wmux, eller et nedbrud) — luk opgaven for at rydde op.',
   'botsPage.guest.readNotice': "Fra nu af kan en ekstern bot læse beskeder i denne samtale og skrive i den. Den ser aldrig, hvad der blev sagt, før den blev tilføjet.",
+
+  // Scheduled runs: one retry after a temporary provider error
+  'claudeIntegration.scheduledRetry': "Prøv planlagte kørsler igen efter en midlertidig fejl",
+  'claudeIntegration.scheduledRetryDesc': "Hvis en planlagt kørsels tur fejler på en netværks- eller serverfejl hos udbyderen, vent 5 minutter og send én fortsæt-besked. Slået til som standard; hver plan kan slå det fra.",
+  'claudeIntegration.scheduledRetryUnknown': "Endnu ukendt: venter på wmux-baggrundstjenesten.",
+  'claudeIntegration.usageReserve': "Behold en forbrugsreserve",
+  'claudeIntegration.usageReserveDesc': "Arbejde uden opsyn, der ville bruge en Claude-kontos 5-timersforbrug, starter ikke, mens forbruget er på 85 % eller mere, så de sidste 15 % er tilbage til dig. En planlagt kørsel venter på nulstillingen og kører da, hvis den stadig er inden for sin frist, ellers er den gået glip af; en bots fan-out venter også; en fan-out, som en agent i din rude beder om, afvises med tidspunktet for nulstillingen. Codex og andre agenter holdes ikke tilbage, og det, du skriver, holdes aldrig tilbage. Slået fra som standard.",
+  'schedules.retryTransient': "Prøv igen én gang efter en midlertidig fejl",
+  'schedules.retryTransientHint': "Ved en netværks- eller serverfejl hos udbyderen, vent 5 minutter og send én fortsæt-besked. Prompten sendes ikke igen.",
+  'schedules.retryTransientGlobalHint': "Gælder kun, mens “Prøv planlagte kørsler igen efter en midlertidig fejl” er slået til under Indstillinger → Claude-integration.",
+  'schedules.state.retryWaiting': "Venter: prøver igen efter en midlertidig udbyderfejl (om {minutes} min)",
+  'schedules.reason.agent_error_retried_once': "agentfejl igen efter ét nyt forsøg",
+  'schedules.reason.agent_error_retry_blocked': "agentfejl; det nye forsøg kunne ikke sendes",
+  'schedules.reason.agent_error_retry_interrupted': "agentfejl; ikke prøvet igen, wmux genstartede",
 } as const;

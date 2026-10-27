@@ -251,6 +251,10 @@ export interface AgentIdentityRow {
    *  exact resume under that account's CLAUDE_CONFIG_DIR picks the copy up
    *  (src/daemon/continueOnAccount.ts). */
   readonly continueOnAccount?: true;
+  /** wmux reads this agent's per-account 5h usage (the statusline push and
+   *  the usage API), so the usage reserve can hold its unattended starts
+   *  (src/main/usage/usageReserve.ts). */
+  readonly usageReserve?: true;
   /** A double ESC at rest, with an empty composer, opens the agent's own
    *  Rewind picker (src/daemon/transcript/openClaudeRewind.ts). */
   readonly rewindPicker?: true;
@@ -273,6 +277,11 @@ export interface AgentIdentityRow {
   readonly titleTurns?: true;
   /** First-run "Agent ready" card; see {@link AgentSetupSpec}. */
   readonly setup?: AgentSetupSpec;
+  /** What the fan-out first-run watch looks for on a freshly launched worker
+   *  (shared/agentFirstRun): `all` its first-run screens, dismissing the
+   *  one-shot interstitials; `trust` only its folder-trust dialog, which is
+   *  reported and never answered. Absent: not watched. */
+  readonly firstRunWatch?: 'all' | 'trust';
 }
 
 /**
@@ -292,6 +301,7 @@ export const AGENT_IDENTITIES = [
   {
     slug: 'claude',
     display: 'Claude Code',
+    firstRunWatch: 'all',
     connectorLaunch: 'mcp-json',
     modelFlag: '--model',
     resume: { picker: '--resume', exact: '--resume {id}', pin: '--session-id', idFormat: 'uuid' },
@@ -308,6 +318,7 @@ export const AGENT_IDENTITIES = [
     terminalChat: { send: true, cancel: true, images: true, queue: true },
     accounts: 'account-store',
     continueOnAccount: true,
+    usageReserve: true,
     rewindPicker: true,
     continueInChat: true,
     tokenUsage: true,
@@ -394,6 +405,7 @@ export const AGENT_IDENTITIES = [
   {
     slug: 'gemini',
     display: 'Gemini CLI',
+    firstRunWatch: 'trust',
     process: { packages: ['gemini-cli', '@google/gemini-cli'] },
     detect: 'screen',
     hooks: 'gemini',
@@ -559,6 +571,7 @@ export const AGENT_IDENTITIES = [
     // (src/daemon/transcript/qwenTranscript.ts).
     slug: 'qwen',
     display: 'Qwen Code',
+    firstRunWatch: 'trust',
     resume: { picker: '--resume', exact: '--resume {id}', pin: '--session-id', idFormat: 'uuid' },
     process: { packages: ['@qwen-code/qwen-code'] },
     detect: 'screen',

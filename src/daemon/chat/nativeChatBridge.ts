@@ -107,6 +107,11 @@ export interface NativeChatBridgeDeps<P extends ChatPane> {
    */
   approvals(): { pendingFor(id: string): { id: string; kind: string; answerable?: boolean } | undefined } | null;
   readScreen(id: string): Promise<ChatScreenRows | null>;
+  /** True when the session's own output shows an agent's folder-trust prompt
+   *  (held output included), asked before a Stop's or a Rewind's ESC. A chat
+   *  write is a person's, so a screen the daemon cannot read does not count.
+   *  (A send's own screen read already blocks the dialog.) Absent: not asked. */
+  atFolderTrust?(id: string, writer: string): Promise<boolean>;
   agentProcessAlive(id: string, slug: string): Promise<boolean>;
   /** Writes to the pane PTY and notes the input; false when the pane is gone. */
   write(id: string, data: string): boolean;
@@ -1386,6 +1391,8 @@ export function createChatBridge<P extends ChatPane>(deps: NativeChatBridgeDeps<
     if (sending.has(id)) return 'busy';
     sending.add(id);
     try {
+      // The ESC would answer a folder-trust prompt (Claude Code exits on it).
+      if (await deps.atFolderTrust?.(id, 'chat stop')) return 'blocked';
       return await interruptChatTurn(agentSessionId, {
         getTranscriptSessionId: () => deps.projector.status(id).agentSessionId,
         hasOpenApproval: () => hasOpenApproval(id),
@@ -1730,6 +1737,7 @@ export function createChatBridge<P extends ChatPane>(deps: NativeChatBridgeDeps<
     if (sending.has(id)) return 'busy';
     sending.add(id);
     try {
+      if (await deps.atFolderTrust?.(id, 'chat rewind')) return 'blocked';
       return await openClaudeRewind({
         hasOpenApproval: () => hasOpenApproval(id),
         getAgentState: () => {

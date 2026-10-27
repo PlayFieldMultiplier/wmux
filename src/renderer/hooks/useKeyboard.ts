@@ -34,6 +34,7 @@ import {
   toggleAgentToolbarPin,
 } from '../utils/commandActions';
 import { dictateIntoActivePane } from '../utils/paneDictation';
+import { addAt as addScrollbackBookmark, claimsBookmarkKey } from '../components/Terminal/scrollbackBookmarks';
 
 // Lightweight bookmark toast — reuses the same DOM element pattern as showCopyToast
 let bookmarkToastTimer: ReturnType<typeof setTimeout> | null = null;
@@ -363,6 +364,22 @@ export function useKeyboard() {
       const state = store.getState();
       return state.workspaces.find((w) => w.id === state.activeWorkspaceId);
     };
+    // The terminal whose DOM holds the key event's target, if any.
+    const terminalOwning = (target: EventTarget | null) => {
+      if (!(target instanceof Node)) return undefined;
+      for (const term of terminalRegistry.values()) {
+        if (term.element?.contains(target)) return term;
+      }
+      return undefined;
+    };
+    // The active pane's terminal: what the scrollback bookmark acts on.
+    const activeTerminal = () => {
+      const ws = activeWorkspace();
+      const pane = ws ? findLeaf(ws.rootPane, ws.activePaneId) : null;
+      const ptyId = pane?.surfaces.find((s) => s.id === pane.activeSurfaceId)?.ptyId;
+      const term = ptyId ? terminalRegistry.get(ptyId) : undefined;
+      return ptyId && term ? { ptyId, term } : null;
+    };
     // Ctrl+N counts the list the operator sees, which leaves out Moa's HQ.
     const jumpToWorkspace = (idx: number) => {
       // The digits follow the sidebar's numbering: a filtered list's rows.
@@ -571,18 +588,10 @@ export function useKeyboard() {
       },
       // Scrollback bookmark at the current scroll position.
       addBookmark: () => {
-        const state = store.getState();
-        const ws = activeWorkspace();
-        if (!ws) return;
-        const pane = findLeaf(ws.rootPane, ws.activePaneId);
-        if (!pane) return;
-        const surface = pane.surfaces.find((s) => s.id === pane.activeSurfaceId);
-        if (!surface?.ptyId) return;
-        const term = terminalRegistry.get(surface.ptyId);
-        if (!term) return;
-        const line = term.buffer.active.baseY + term.buffer.active.viewportY;
-        state.addBookmark(surface.ptyId, line);
-        showBookmarkToast();
+        const target = activeTerminal();
+        if (!target) return;
+        // A line that already has a bookmark keeps its dot and says nothing.
+        if (addScrollbackBookmark(target.term, target.ptyId, store) === 'added') showBookmarkToast();
       },
       toggleMessageFeed: () => { store.getState().toggleMessageFeed(); },
       toggleFileTree: () => { toggleFileTreePanel(store.getState()); },
@@ -851,7 +860,14 @@ export function useKeyboard() {
       // custom keybinding sits on it; otherwise it goes on (useTerminal lets
       // xterm encode it), as for a switched-off built-in.
       const pcUnclaimed = isPcRailAction(action) && !pcRailClaimsKey(store.getState(), e);
-      if (action && run && mentionClaim !== null && !pcUnclaimed) {
+      // On a full-screen app's alternate screen there is no scrollback to
+      // mark, and Ctrl+M is the app's Enter: useTerminal lets xterm send it.
+      // Judged on the terminal the key came from (a floating pane's, say),
+      // which is the one useTerminal's handler asks; a key from outside any
+      // terminal is judged on the active pane's.
+      const bookmarkUnclaimed = action === 'addBookmark'
+        && !claimsBookmarkKey(terminalOwning(e.target) ?? activeTerminal()?.term);
+      if (action && run && mentionClaim !== null && !pcUnclaimed && !bookmarkUnclaimed) {
         e.preventDefault();
         if (STOP_PROPAGATION_ACTIONS.has(action)) e.stopImmediatePropagation();
         shortcutPressGuard.noteActed(e);

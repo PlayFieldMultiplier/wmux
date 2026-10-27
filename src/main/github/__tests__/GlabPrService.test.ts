@@ -1,18 +1,18 @@
 // GlabPrService — GitLab REST 매핑·호스트 단위 게이트·TTL·updatedAt 캐시
 // (exec 목킹, GhPrService 테스트와 대칭).
 import { describe, it, expect, vi } from 'vitest';
-import { GLAB_ENV, GlabPrService, glabHostTarget, glabProjectPath, mapGlabMrItem, mapGlabNotes, mapGlabPipelineStatus } from '../GlabPrService';
+import { GLAB_ENV, GLAB_PIPELINES_QUERY, GlabPrService, glabHostTarget, glabProjectPath, mapGlabMrItem, mapGlabNotes, mapGlabPipelineStatus } from '../GlabPrService';
 import { PR_COMMENT_BODY_CAP } from '../../../shared/prSurface';
 
-type ExecCall = { cmd: string; args: string[] };
+type ExecCall = { cmd: string; args: string[]; input?: string };
 
 function makeService(
   handler: (args: string[]) => { stdout: string } | Error,
   nowRef: { t: number } = { t: 1000 },
 ) {
   const calls: ExecCall[] = [];
-  const exec = vi.fn(async (cmd: string, args: string[]) => {
-    calls.push({ cmd, args });
+  const exec = vi.fn(async (cmd: string, args: string[], opts?: { input?: string }) => {
+    calls.push({ cmd, args, input: opts?.input });
     const r = handler(args);
     if (r instanceof Error) throw r;
     return r;
@@ -205,30 +205,34 @@ describe('GlabPrService — MR head pipelines', () => {
   it('fills checks from one GraphQL call for every listed MR', async () => {
     const { svc, calls } = makeService((args) => {
       if (args[0] === 'mr') return { stdout: LIST };
-      if (args[0] === 'api' && args[1] === 'graphql') return { stdout: GRAPHQL };
+      if (args[0] === 'api' && args.includes('graphql')) return { stdout: GRAPHQL };
       return { stdout: '' };
     });
     const r = await svc.listPrs('D:/r');
     expect(r.ok && r.prs.map((p) => p.checks)).toEqual(['passing', 'pending', null]);
-    const gql = calls.filter((c) => c.args[1] === 'graphql');
+    const gql = calls.filter((c) => c.args.includes('graphql'));
     expect(gql.length).toBe(1);
-    expect(gql[0].args).toContain('fullPath=team/sub/repo');
-    expect(gql[0].args.find((a) => a.startsWith('query='))).toContain('iids: ["7","8","9"]');
+    // A constant query, its values as JSON on stdin: argv never carries a value.
+    expect(gql[0].args).toEqual(['api', '-X', 'POST', 'graphql', '--input', '-', '-H', 'Content-Type: application/json']);
+    expect(typeof gql[0].input).toBe('string');
+    const body = JSON.parse(gql[0].input as string);
+    expect(body).toEqual({ query: GLAB_PIPELINES_QUERY, variables: { fullPath: 'team/sub/repo', iids: ['7', '8', '9'] } });
   });
 
   it('still lists the MRs, with no dots, when the GraphQL read fails', async () => {
-    const { svc } = makeService((args) => {
+    const { svc, calls } = makeService((args) => {
       if (args[0] === 'mr') return { stdout: LIST };
       return Object.assign(new Error('graphql'), { stderr: 'Field headPipeline does not exist' });
     });
     const r = await svc.listPrs('D:/r');
     expect(r.ok && r.prs.map((p) => p.checks)).toEqual([null, null, null]);
+    expect(calls.some((c) => c.args.includes('graphql'))).toBe(true);
   });
 
   it('skips the GraphQL call when there are no MRs', async () => {
     const { svc, calls } = makeService((args) => (args[0] === 'mr' ? { stdout: '[]' } : { stdout: '' }));
     await svc.listPrs('D:/r');
-    expect(calls.some((c) => c.args[1] === 'graphql')).toBe(false);
+    expect(calls.some((c) => c.args.includes('graphql'))).toBe(false);
   });
 });
 

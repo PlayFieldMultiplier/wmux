@@ -571,6 +571,8 @@ const config: ForgeConfig = {
               // Without this the installer ships its bundled Electron logo as
               // /usr/share/pixmaps/wmux.png, which GNOME shows in the dock.
               icon: './assets/icon.png',
+              // The default lists ALSA only under Recommends, which --no-install-recommends and minimal images skip.
+              depends: ['libasound2t64 | libasound2'],
             },
           }),
           new MakerRpm({
@@ -581,6 +583,8 @@ const config: ForgeConfig = {
               // Without this the installer ships its bundled Electron logo as
               // /usr/share/pixmaps/wmux.png, which GNOME shows in the dock.
               icon: './assets/icon.png',
+              // The default requires no ALSA at all, so minimal installs lack libasound.so.2.
+              requires: ['(alsa-lib or libasound2)'],
             },
           }),
           // AppImage: distro-independent single-file portable binary (like the

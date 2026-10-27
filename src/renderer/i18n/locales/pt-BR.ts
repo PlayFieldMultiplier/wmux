@@ -682,4 +682,18 @@ export const ptBR = {
   'worktask.cleanup.detail.orphanMeta': 'Só resta o registro da tarefa, não o worktree (uma remoção foi interrompida) — verifique e depois exclua.',
   'worktask.cleanup.detail.diskMissing': 'O worktree não está no disco (excluído fora do wmux ou após uma falha) — feche a tarefa para limpar.',
   'botsPage.guest.readNotice': "A partir de agora, um bot externo pode ler as mensagens desta conversa e publicar nela. Ele nunca vê o que foi dito antes de ser adicionado.",
+
+  // Scheduled runs: one retry after a temporary provider error
+  'claudeIntegration.scheduledRetry': "Repetir execuções agendadas após um erro temporário",
+  'claudeIntegration.scheduledRetryDesc': "Se o turno de uma execução agendada falhar por erro de rede ou do servidor do provedor, aguardar 5 minutos e enviar uma mensagem para continuar. Ativado por padrão; cada agendamento pode desativar.",
+  'claudeIntegration.scheduledRetryUnknown': "Ainda desconhecido: aguardando o serviço em segundo plano do wmux.",
+  'claudeIntegration.usageReserve': "Manter uma reserva de uso",
+  'claudeIntegration.usageReserveDesc': "Trabalho sem supervisão que gastaria o uso de 5 horas de uma conta Claude não inicia enquanto esse uso estiver em 85% ou mais, para deixar os últimos 15% para você. Uma execução agendada espera a redefinição e roda então se ainda estiver dentro da tolerância; caso contrário, é perdida. O fan-out de um bot também espera, e um fan-out pedido por um agente no seu painel é recusado, com o horário da redefinição. Codex e outros agentes não ficam em espera, e o que você digita nunca fica em espera. Desativado por padrão.",
+  'schedules.retryTransient': "Repetir uma vez após um erro temporário",
+  'schedules.retryTransientHint': "Em caso de erro de rede ou do servidor do provedor, aguardar 5 minutos e enviar uma mensagem para continuar. O prompt não é reenviado.",
+  'schedules.retryTransientGlobalHint': "Só vale enquanto “Repetir execuções agendadas após um erro temporário” estiver ativado em Configurações → Integração com o Claude.",
+  'schedules.state.retryWaiting': "Aguardando: nova tentativa após um erro temporário do provedor (em {minutes} min)",
+  'schedules.reason.agent_error_retried_once': "erro do agente novamente após uma nova tentativa",
+  'schedules.reason.agent_error_retry_blocked': "erro do agente; não foi possível enviar a nova tentativa",
+  'schedules.reason.agent_error_retry_interrupted': "erro do agente; sem nova tentativa, o wmux reiniciou",
 } as const;

@@ -730,4 +730,18 @@ export const ja = {
   'worktask.cleanup.detail.orphanMeta': 'タスク記録だけが残り、worktree はありません（削除が中断されました）— 確認してから削除してください。',
   'worktask.cleanup.detail.diskMissing': 'worktree がディスク上にありません（wmux の外で削除されたか、クラッシュ）— タスクを閉じて整理してください。',
   'botsPage.guest.readNotice': "今後、外部ボットがこの会話のメッセージを読み、投稿できるようになります。追加される前の内容は見えません。",
+
+  // Scheduled runs: one retry after a temporary provider error
+  'claudeIntegration.scheduledRetry': "一時的なエラーの後、スケジュール実行を再試行",
+  'claudeIntegration.scheduledRetryDesc': "スケジュール実行のターンがネットワークまたはプロバイダーのサーバーエラーで失敗した場合、5分待って続行メッセージを1回送信します。既定でオン。スケジュールごとにオフにできます。",
+  'claudeIntegration.scheduledRetryUnknown': "まだ不明です: wmux のバックグラウンドサービスの応答を待っています。",
+  'claudeIntegration.usageReserve': "使用量の予備を残す",
+  'claudeIntegration.usageReserveDesc': "Claude アカウントの5時間の使用量が85%以上になると、その使用量を使う無人の作業を新しく開始せず、残り15%をあなたのために残します。予約実行はリセットを待ち、猶予時間内なら実行し、過ぎていれば見逃しとして記録します。ボットのファンアウトも待ち、あなたのペインのエージェントが求めたファンアウトはリセット時刻を添えて断ります。Codex などほかのエージェントは止めず、あなたが入力する操作も止めません。既定ではオフです。",
+  'schedules.retryTransient': "一時的なエラーの後に1回再試行",
+  'schedules.retryTransientHint': "ネットワークまたはプロバイダーのサーバーエラーの場合、5分待って続行メッセージを1回送信します。プロンプトは再送されません。",
+  'schedules.retryTransientGlobalHint': "設定 → Claude 連携の「一時的なエラーの後、スケジュール実行を再試行」がオンのときだけ有効です。",
+  'schedules.state.retryWaiting': "待機中: 一時的なプロバイダーエラーの後に再試行 ({minutes}分後)",
+  'schedules.reason.agent_error_retried_once': "1回再試行した後も再びエージェントエラー",
+  'schedules.reason.agent_error_retry_blocked': "エージェントエラー。再試行を送信できませんでした",
+  'schedules.reason.agent_error_retry_interrupted': "エージェントエラー。wmuxが再起動したため再試行せず",
 } as const;

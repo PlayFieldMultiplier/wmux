@@ -69,6 +69,7 @@ import { botWorkerSessionRecord, claimInflightCodexLaunch, guardRefireLine, guar
 import { getWmuxDir } from '../../daemon/config';
 import { workerGitEnv, workerGitPreflight, workerGitSafeArgs } from '../worktask/workerGit';
 import { excludeLineOnce } from '../git/infoExclude';
+import { workerFenceSupportFor } from './botWorkerFence';
 
 const execFileP = promisify(execFile);
 const RUN_TIMEOUT_MS = 15_000;
@@ -252,7 +253,10 @@ export async function guardBotWorkerSessionText(
   if (namesCodex(text) && isBotWorkerSession(sessionId, deps.dir)) {
     return guardCodexSessionLine(botWorkerSessionRecord(sessionId, deps.dir), text, deps, kind === 'refire' ? 'worktask:refire' : 'pty:write-launch');
   }
-  const guardDeps = { ...(deps.dir ? { dir: deps.dir } : {}), ...(deps.folders ? { folders: deps.folders } : {}) };
+  // The guard decides whether the line is fenced; the fence support (and
+  // its self-test) is settled before it runs.
+  const fenceSupport = isBotWorkerSession(sessionId, deps.dir) ? await workerFenceSupportFor(text, botWorkerSessionRecord(sessionId, deps.dir)?.cwd) : undefined;
+  const guardDeps = { ...(deps.dir ? { dir: deps.dir } : {}), ...(deps.folders ? { folders: deps.folders } : {}), ...(fenceSupport ? { fenceSupport } : {}) };
   return kind === 'refire' ? guardRefireLine(sessionId, text, guardDeps) : guardSessionLaunch(sessionId, text, guardDeps);
 }
 

@@ -452,6 +452,12 @@ export interface BotWorkerLaunchFiles {
    *  loads no settings but its own file (`--setting-sources=`), a worker
    *  with a signed-in connection. */
   settingSources?: 'project' | 'none';
+  /** The worker fence the launch ran in (main/agents/botWorkerFence.ts):
+   *  `full`, `weaker` (no OS sandbox), or `off` (turned off for its
+   *  workspace), the worker's own temp folder, and the branch its first
+   *  fenced launch ran on (null: detached), which a later launch must still
+   *  be on. A later launch of the session is never fenced less. */
+  fence?: { strength: 'full' | 'weaker' | 'off'; tempDir?: string; branch?: string | null };
 }
 
 /** One bot worker session. `workspaceId` and `at` are the version-1 record
@@ -494,7 +500,28 @@ export function isWorkerLaunchFiles(raw: unknown, dir: string): raw is BotWorker
   const keys = r.connectionKeys === undefined
     || (Array.isArray(r.connectionKeys) && r.connectionKeys.length <= 32 && r.connectionKeys.every((k) => typeof k === 'string' && /^[A-Z_][A-Z0-9_]{0,63}$/.test(k)));
   return inside(r.settingsFile, 'worker-settings') && inside(r.mcpConfigFile, 'worker-mcp') && (r.level === 'core' || r.level === 'full') && keys
-    && (r.settingSources === undefined || r.settingSources === 'project' || r.settingSources === 'none');
+    && (r.settingSources === undefined || r.settingSources === 'project' || r.settingSources === 'none')
+    && (r.fence === undefined || isLaunchFence(r.fence, dir));
+}
+
+/** A worker temp folder's name (main/agents/botWorkerFence.ts). */
+export const WORKER_TEMP_NAME = /^[0-9a-f]{32}$/;
+
+/** Where workers' own temp folders are made. */
+export function workerTempRoot(dir: string): string {
+  return path.join(dir, 'factory', 'worker-tmp');
+}
+
+/** A recorded fence: a known strength, the branch it started on (null:
+ *  detached) when recorded, and a temp folder (when any) directly under
+ *  workerTempRoot. Pure. */
+function isLaunchFence(raw: unknown, dir: string): raw is NonNullable<BotWorkerLaunchFiles['fence']> {
+  if (!raw || typeof raw !== 'object') return false;
+  const f = raw as Record<string, unknown>;
+  if (f.strength !== 'full' && f.strength !== 'weaker' && f.strength !== 'off') return false;
+  if (f.branch !== undefined && f.branch !== null && (typeof f.branch !== 'string' || f.branch.length === 0)) return false;
+  return f.tempDir === undefined
+    || (typeof f.tempDir === 'string' && path.dirname(f.tempDir) === workerTempRoot(dir) && WORKER_TEMP_NAME.test(path.basename(f.tempDir)));
 }
 
 export function botWorkerSessionsPath(dir: string): string {
@@ -514,7 +541,7 @@ export function readBotWorkerSessions(dir: string): { sessions: Map<string, BotW
       // Launch files that are not main's own are not used (the launch is then
       // guarded as a record without them).
       const launch = isWorkerLaunchFiles(r.launch, dir)
-        ? { settingsFile: r.launch.settingsFile, mcpConfigFile: r.launch.mcpConfigFile, level: r.launch.level, ...(r.launch.connectionKeys?.length ? { connectionKeys: [...r.launch.connectionKeys] } : {}), ...(r.launch.settingSources ? { settingSources: r.launch.settingSources } : {}) }
+        ? { settingsFile: r.launch.settingsFile, mcpConfigFile: r.launch.mcpConfigFile, level: r.launch.level, ...(r.launch.connectionKeys?.length ? { connectionKeys: [...r.launch.connectionKeys] } : {}), ...(r.launch.settingSources ? { settingSources: r.launch.settingSources } : {}), ...(r.launch.fence ? { fence: { strength: r.launch.fence.strength, ...(r.launch.fence.tempDir ? { tempDir: r.launch.fence.tempDir } : {}), ...(r.launch.fence.branch !== undefined ? { branch: r.launch.fence.branch } : {}) } } : {}) }
         : undefined;
       out.set(id, {
         workspaceId: r.workspaceId,
@@ -535,4 +562,159 @@ export function readBotWorkerSessions(dir: string): { sessions: Map<string, BotW
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return { unreadable: String(err) };
   }
   return { sessions: out };
+}
+
+// ── The worker fence (main/agents/workerFence.ts, botWorkerFence.ts) ────────
+// Its pure parts the daemon's phone launch checks too.
+
+/** The permission mode a launch line starts claude in, from its flags,
+ *  wherever they are: quoted words and the words inside them count too (a
+ *  wrapper's `sh -c "claude …"`), so a line that may run unattended is
+ *  never taken for one that does not. An unattended mode named anywhere
+ *  wins: the skip flag first (claude's own order), then bypassPermissions,
+ *  then auto; else the last mode named. Undefined: none named. */
+export function linePermissionMode(line: string): PermissionMode | undefined {
+  const words = tokenize(splitModelEnvMarker(line).command).flatMap((t) => t.value.split(/\s+/)).filter(Boolean);
+  if (words.includes('--dangerously-skip-permissions')) return 'bypassPermissions';
+  const named: PermissionMode[] = [];
+  for (let i = 0; i < words.length; i++) {
+    const v = words[i];
+    const m = v === '--permission-mode' ? words[i + 1] : v.startsWith('--permission-mode=') ? v.slice('--permission-mode='.length) : undefined;
+    const known = PERMISSION_MODES.find((k) => k === m);
+    if (known) named.push(known);
+  }
+  if (named.includes('bypassPermissions')) return 'bypassPermissions';
+  if (named.includes('auto')) return 'auto';
+  return named[named.length - 1];
+}
+
+export const PERMISSION_MODES: readonly PermissionMode[] = ['bypassPermissions', 'acceptEdits', 'plan', 'auto', 'default'];
+
+/** A JSON object file, or null. */
+export function readJsonObject(p: string): Record<string, unknown> | null {
+  try {
+    const v = JSON.parse(fs.readFileSync(p, 'utf8')) as unknown;
+    return v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The `permissions.defaultMode` claude would start a line with no mode flag
+ *  in, from the folder's local and project settings and every user settings
+ *  folder the pane may run with (`configDirs`): an unattended mode named in
+ *  any of them wins, else the first mode named. Undefined: none. */
+export function settingsDefaultMode(cwd: string | undefined, configDirs: readonly string[]): PermissionMode | undefined {
+  const files = [
+    ...(cwd ? [path.join(cwd, '.claude', 'settings.local.json'), path.join(cwd, '.claude', 'settings.json')] : []),
+    ...configDirs.map((d) => path.join(d, 'settings.json')),
+  ];
+  const named: PermissionMode[] = [];
+  for (const f of files) {
+    const perms = readJsonObject(f)?.permissions;
+    const mode = perms && typeof perms === 'object' && !Array.isArray(perms) ? (perms as Record<string, unknown>).defaultMode : undefined;
+    const known = PERMISSION_MODES.find((m) => m === mode);
+    if (known) named.push(known);
+  }
+  return named.find(isFencedMode) ?? named[0];
+}
+
+/** The modes an unattended worker runs in: the fence is for them. */
+export function isFencedMode(mode: PermissionMode | undefined): boolean {
+  return mode === 'bypassPermissions' || mode === 'auto';
+}
+
+
+/** The wmux MCP tools a fenced worker does not get, as claude names them
+ *  (`mcp__wmux__<tool>`): they run code, type into a pane, open a pane or a
+ *  remote worker, drive the desktop, or move a file in or out of the
+ *  browser, all from wmux's own processes, which the OS sandbox does not
+ *  cover, or start more workers. The reads, task_push and send_message
+ *  stay (send_message without `execute` on a new task: a2a.rpc.ts). */
+export const WORKER_FENCE_REFUSED_WMUX_TOOLS: readonly string[] = [
+  'repl_run', 'browser_repl', 'terminal_send', 'terminal_send_key', 'surface_new', 'pane_split', 'remote_spawn', 'computer', 'fanout_start',
+  'browser_file_upload', 'browser_download', 'browser_wait_for_download', 'browser_pdf', 'browser_trace',
+].map((t) => `mcp__wmux__${t}`);
+
+/** The pipe methods behind those of WORKER_FENCE_REFUSED_WMUX_TOOLS that
+ *  main runs, which main refuses to a fenced worker's pane as well. The
+ *  others (the REPLs and the browser's file tools) run in the MCP server
+ *  itself and are refused by the fence's settings and hook only. */
+export const WORKER_FENCE_REFUSED_RPC: ReadonlySet<string> = new Set([
+  'input.send', 'input.sendKey', 'surface.new', 'pane.split', 'a2a.remote.spawn', 'computer.act', 'task.fanout.start',
+]);
+
+/** Top-level settings keys: a sandbox of their own, or hooks turned off. */
+export const WORKER_FENCE_REFUSED_SETTINGS_KEYS: readonly string[] = ['sandbox', 'disableAllHooks'];
+
+/** `permissions` keys claude also opens the sandbox's writes by. */
+export const WORKER_FENCE_REFUSED_PERMISSION_KEYS: readonly string[] = ['additionalDirectories'];
+
+/** An allow rule for a file tool: claude widens the sandbox's writes by it. */
+export const WORKER_FENCE_FILE_ALLOW_RULE = /^\s*(Read|Edit|Write|MultiEdit|NotebookEdit)\s*(\(|$)/;
+
+function isInside(child: string, parent: string): boolean {
+  return child === parent || child.startsWith(parent.endsWith(path.sep) ? parent : parent + path.sep);
+}
+
+
+/**
+ * Why the fence cannot start in `worktree` because of its own Claude files,
+ * or null: `.claude`, `.claude/settings.json`, `.claude/settings.local.json`
+ * or `.mcp.json` is a link that leads out of the worktree (or nowhere): a
+ * command inside the fence could have pointed it at settings of its own; or
+ * the project settings turn on a sandbox of their own, turn hooks off, open
+ * more folders (`permissions.additionalDirectories`) or allow a file tool,
+ * each of which claude would apply on top of the fence. Checked at every
+ * launch, resume and re-fire.
+ */
+export function workerFenceFolderRefusal(worktree: string): string | null {
+  let wt: string;
+  try {
+    wt = fs.realpathSync(worktree);
+  } catch {
+    return 'the worker\'s folder could not be read';
+  }
+  for (const rel of ['.claude', '.mcp.json', path.join('.claude', 'settings.json'), path.join('.claude', 'settings.local.json')]) {
+    const p = path.join(wt, rel);
+    let st: fs.Stats;
+    try {
+      st = fs.lstatSync(p);
+    } catch {
+      continue;
+    }
+    if (!st.isSymbolicLink()) continue;
+    let real: string;
+    try {
+      real = fs.realpathSync(p);
+    } catch {
+      return `${rel} is a link that leads nowhere`;
+    }
+    if (!isInside(real, wt)) return `${rel} is a link out of the worktree`;
+  }
+  for (const name of ['settings.json', 'settings.local.json']) {
+    let text: string;
+    try {
+      text = fs.readFileSync(path.join(wt, '.claude', name), 'utf8');
+    } catch {
+      continue;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return `.claude/${name} is not valid JSON`;
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return `.claude/${name} is not a settings object`;
+    const s = parsed as Record<string, unknown>;
+    const keys = WORKER_FENCE_REFUSED_SETTINGS_KEYS.filter((k) => k in s);
+    if (keys.length > 0) return `.claude/${name} sets ${keys.join(', ')}`;
+    const perms = s.permissions && typeof s.permissions === 'object' && !Array.isArray(s.permissions) ? s.permissions as Record<string, unknown> : {};
+    const wide = WORKER_FENCE_REFUSED_PERMISSION_KEYS.filter((k) => k in perms);
+    if (wide.length > 0) return `.claude/${name} sets permissions.${wide.join(', permissions.')}`;
+    if (Array.isArray(perms.allow) && perms.allow.some((r) => typeof r !== 'string' || WORKER_FENCE_FILE_ALLOW_RULE.test(r))) {
+      return `.claude/${name} allows a file tool, which widens the fence`;
+    }
+  }
+  return null;
 }

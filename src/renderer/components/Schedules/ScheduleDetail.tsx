@@ -33,6 +33,9 @@ function report(error: string | undefined, t: ReturnType<typeof useT>, modeLabel
 function runReasonLabel(run: AutomationRun, t: ReturnType<typeof useT>): string {
   if (!run.reason) return '';
   if (run.reason === 'overlap' && run.detail === 'previous_session_open') return t('schedules.reason.overlap_session_open');
+  if (run.reason === 'agent_error' && (run.detail === 'retried_once' || run.detail === 'retry_blocked' || run.detail === 'retry_interrupted')) {
+    return t(`schedules.reason.agent_error_${run.detail}`);
+  }
   return t(`schedules.reason.${run.reason}`);
 }
 
@@ -261,8 +264,9 @@ function RunRow({ run, automation, showingOutput, onToggleOutput, onCancel }: {
 }) {
   const t = useT();
   const live = isLiveRun(run);
+  const retryIn = useMinutesUntil(live ? run.retryAt : undefined);
   const result = [
-    runStateLabel(run.state),
+    retryIn !== null ? t('schedules.state.retryWaiting', { minutes: retryIn }) : runStateLabel(run.state),
     runReasonLabel(run, t),
     run.trigger === 'test' ? t('schedules.triggerTest') : run.trigger === 'manual' ? t('schedules.triggerManual') : '',
   ].filter(Boolean).join(' · ');
@@ -311,6 +315,18 @@ function RunRow({ run, automation, showingOutput, onToggleOutput, onCancel }: {
       {showingOutput && <RunOutput run={run} automation={automation} />}
     </li>
   );
+}
+
+/** Whole minutes (at least 1) until `at`, re-read every 15 s; null without one. */
+function useMinutesUntil(at: number | undefined): number | null {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (at === undefined) return undefined;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 15_000);
+    return () => clearInterval(timer);
+  }, [at]);
+  return at === undefined ? null : Math.max(1, Math.ceil((at - now) / 60_000));
 }
 
 /** Status dot tone: live runs use the accent, outcomes their state colour. */
