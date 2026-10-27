@@ -418,7 +418,9 @@ export interface AgentProcessPick {
 /**
  * Pick the agent process among `shellPid`'s descendants:
  *   1. the SHALLOWEST descendant that RESOLVES to an agent — native stem
- *      (`claude`) or slug-resolved runtime (`node …/claude-code/cli.js`)
+ *      (`claude`), a version binary run by its path in the agent's install
+ *      directory under `userHome` (nativeInstallSlug), or slug-resolved
+ *      runtime (`node …/claude-code/cli.js`)
  *      compared by depth regardless of class (#919 panel: the old
  *      native-beats-runtime priority let a deeper native MCP-server binary
  *      steal the identity from a shallower node-hosted primary CLI),
@@ -442,6 +444,7 @@ export interface AgentProcessPick {
 export function selectAgentProcess(
   entries: ReadonlyArray<ProcessTreeEntry>,
   shellPid: number,
+  userHome = os.homedir(),
 ): AgentProcessPick | undefined {
   const byParent = new Map<number, ProcessTreeEntry[]>();
   for (const e of entries) {
@@ -454,7 +457,7 @@ export function selectAgentProcess(
     return AGENT_SLUG_SET.has(stem)
       ? (stem as AgentSlug)
       : NATIVE_STEM_TO_SLUG.get(stem) ??
-        (RUNTIME_STEMS.has(stem) ? resolveAgentSlug(entry.cmdline) : undefined);
+        (RUNTIME_STEMS.has(stem) ? resolveAgentSlug(entry.cmdline) : nativeInstallSlug(entry, userHome));
   };
   const root = entries.find((e) => e.pid === shellPid);
   const rootSlug = root ? slugOf(root) : undefined;
@@ -628,6 +631,26 @@ const NATIVE_INSTALL_DIRS: ReadonlyMap<AgentSlug, { dir: string; name: RegExp }>
   ['claude', { dir: '.local/share/claude/versions', name: /^\d+\.\d+\.\d+/ }],
   ['grok', { dir: '.grok/downloads', name: /^grok-\d+\.\d+\.\d+-(?:macos|linux)-(?:aarch64|arm64|x86_64|x64)$/ }],
 ]);
+
+/**
+ * The agent whose install directory under `userHome` holds the version binary
+ * a process was started by its full path (`~/.local/share/claude/versions/2.1.311`):
+ * the file name is a version, not the agent's name. Windows reports a bare
+ * image name, so the path comes from the command line there, compared without
+ * case or `.exe`. This only names the agent; isAgentImage still checks the
+ * running binary against the same home-anchored directory.
+ */
+function nativeInstallSlug(entry: ProcessTreeEntry, userHome: string): AgentSlug | undefined {
+  const raw = /[\\/]/.test(entry.name) ? entry.name : tokenizeCmdline(entry.cmdline ?? '')[0] ?? '';
+  const windows = /^[a-z]:[\\/]/i.test(raw);
+  const fold = (file: string) => (windows ? file.replace(/\\/g, '/').toLowerCase() : file);
+  const exe = fold(raw);
+  const name = windows ? path.posix.basename(exe).replace(/\.exe$/, '') : path.posix.basename(exe);
+  for (const [slug, install] of NATIVE_INSTALL_DIRS) {
+    if (install.name.test(name) && path.posix.dirname(exe) === path.posix.join(fold(userHome), install.dir)) return slug;
+  }
+  return undefined;
+}
 
 /** A release binary named for its target (`codex-aarch64-apple-darwin`). */
 const NATIVE_TARGET_SUFFIX = /-(?:aarch64|x86_64)-(?:apple-darwin|unknown-linux-(?:gnu|musl))$/;
@@ -1057,7 +1080,7 @@ export class AgentProcessTracker {
         const entries = await snapshot;
         if ((this.generation.get(sessionId) ?? 0) !== gen) return; // disarmed meanwhile
         this.noteCustomLabel(sessionId, entries, shellPid);
-        const pick = selectAgentProcess(entries, shellPid);
+        const pick = selectAgentProcess(entries, shellPid, this.userHome);
         let replaced = false;
         if (requireSlug) {
           const cur = this.states.get(sessionId);
@@ -1178,7 +1201,7 @@ export class AgentProcessTracker {
         if ((this.generation.get(sessionId) ?? 0) !== gen || this.states.get(sessionId) !== dead) return; // disarmed, or a probe took over
         // The pane's custom agent may have outlived this one, or exec'd away.
         this.noteCustomLabel(sessionId, entries, shellPid);
-        const pick = selectAgentProcess(entries, shellPid);
+        const pick = selectAgentProcess(entries, shellPid, this.userHome);
         if (!pick || pick.slug !== dead.slug || pick.pid === pid) {
           reportDeath();
           return;
@@ -1297,7 +1320,7 @@ export class AgentProcessTracker {
     if (!s?.alive || shellPid === undefined) return false;
     try {
       const table = await this.snapshot();
-      const pick = selectAgentProcess(table, shellPid);
+      const pick = selectAgentProcess(table, shellPid, this.userHome);
       // The death edge, disarm or a re-arm can land while the table is read.
       const current = () => this.states.get(sessionId) === s && s.alive && this.shellPids.get(sessionId) === shellPid;
       const picked = table.find((e) => e.pid === s.pid);
@@ -1342,7 +1365,7 @@ export class AgentProcessTracker {
     try {
       const root = (await this.snapshot()).find(entry => entry.pid === pid);
       return unchanged() && !!root &&
-        selectAgentProcess([{ ...root, ppid: -1 }], -1)?.slug === expectedSlug &&
+        selectAgentProcess([{ ...root, ppid: -1 }], -1, this.userHome)?.slug === expectedSlug &&
         await this.imageMatches(root, expectedSlug, state) && unchanged();
     } catch { return false; }
   }
@@ -1367,7 +1390,7 @@ export class AgentProcessTracker {
     const table = await this.snapshot();
     // The death edge, a disarm or a re-arm can land while the table is read.
     if (this.states.get(sessionId) !== s || !s.alive || this.shellPids.get(sessionId) !== shellPid) return null;
-    const pick = selectAgentProcess(table, shellPid);
+    const pick = selectAgentProcess(table, shellPid, this.userHome);
     const root = table.find((e) => e.pid === s.pid);
     // The tracked pid is in no process at all: its agent is gone.
     if (!root) {
