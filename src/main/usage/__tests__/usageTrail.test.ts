@@ -28,14 +28,23 @@ describe('UsageTrail.record', () => {
     ]);
   });
 
-  it('never swallows a reset edge or a drop', () => {
+  it('never swallows a reset edge', () => {
     const trail = new UsageTrail();
     trail.record('a', snap(90), T0);
     trail.record('a', snap(0, 10, R5 + 5 * 3600), T0 + MIN); // 5h window rolled over
     trail.record('a', snap(2, 10, R5 + 5 * 3600), T0 + 2 * MIN); // right after an edge: appends
-    trail.record('a', snap(1, 10, R5 + 5 * 3600), T0 + 3 * MIN); // a drop: appends
-    trail.record('a', snap(3, 10, R5 + 5 * 3600), T0 + 4 * MIN); // after the drop: appends
-    expect(trail.read('a').map((s) => s.s5)).toEqual([90, 0, 2, 1, 3]);
+    trail.record('a', snap(3, 10, R5 + 5 * 3600), T0 + 3 * MIN); // in the new slot: replaces
+    expect(trail.read('a').map((s) => s.s5)).toEqual([90, 0, 3]);
+  });
+
+  it('treats a lower reading in the same window as lag: keeps the higher value, appends nothing', () => {
+    const trail = new UsageTrail();
+    trail.record('a', snap(42, 20), T0);
+    // A lagging HTTP poll below the live max, reset a second off: same windows.
+    expect(trail.record('a', snap(40, 18, R5 - 1, R7 + 1), T0 + 20 * MIN)).toBe(false);
+    // A rise in one window still records, keeping the other window's higher value.
+    expect(trail.record('a', snap(43, 18), T0 + 30 * MIN)).toBe(true);
+    expect(trail.read('a').map((s) => [s.s5, s.s7])).toEqual([[42, 20], [43, 20]]);
   });
 
   it('treats resets within the merge slack as one window, and survives a clock step back', () => {
@@ -54,7 +63,8 @@ describe('UsageTrail.record', () => {
   it('keeps retention and the caps', () => {
     const trail = new UsageTrail();
     trail.record('old', snap(5), T0);
-    for (let i = 0; i <= MAX_SAMPLES_PER_KEY; i++) trail.record('a', snap(i % 2 ? 50 : 40), T0 + i * MIN);
+    // Each reset 10 min past the last is a new window, so every reading appends.
+    for (let i = 0; i <= MAX_SAMPLES_PER_KEY; i++) trail.record('a', snap(40, 10, R5 + i * 600), T0 + i * MIN);
     expect(trail.read('a')).toHaveLength(MAX_SAMPLES_PER_KEY);
     for (let k = 0; k < MAX_KEYS; k++) trail.record(`k${k}`, snap(1), T0 + 3000 * MIN + k);
     // 'old' was quietest, then 'a'; both leave once the key cap is hit.

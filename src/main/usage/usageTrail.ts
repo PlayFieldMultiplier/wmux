@@ -7,8 +7,11 @@
 //
 // Sampling:
 //   - a reading equal to the last sample is no change and is not written;
-//   - an edge (either reset moved past the merge's same-window slack, or
-//     either percentage dropped) is always appended, so the trail keeps the moment a window rolled over;
+//   - within one window (reset inside the merge's same-window slack) usage
+//     only grows, so a lower reading there is source lag: the higher value is
+//     kept and nothing is appended for it;
+//   - an edge (either reset moved past that slack) is always appended, so the
+//     trail keeps the moment a window rolled over;
 //   - otherwise, within TAIL_REPLACE_MS of the slot the tail opened, the new
 //     reading replaces the tail instead of growing the list (≤12 per hour);
 //   - the sample right after an edge always opens a new slot, so an edge is
@@ -103,12 +106,14 @@ export class UsageTrail {
       r7: snapshot.weeklyResetEpochSec,
     };
     if (!isUsageTrailSample(next)) return false;
+    if (last && sameReset(next.r5, last.r5)) next.s5 = Math.max(next.s5, last.s5);
+    if (last && sameReset(next.r7, last.r7)) next.s7 = Math.max(next.s7, last.s7);
     const sameWindows = !!last && sameReset(next.r5, last.r5) && sameReset(next.r7, last.r7);
     if (last && sameWindows && last.s5 === next.s5 && last.s7 === next.s7) {
       if (dropped) this.pruneKey(key, list as UsageTrailSample[], nowMs);
       return dropped;
     }
-    const edge = !!last && (!sameWindows || next.s5 < last.s5 || next.s7 < last.s7);
+    const edge = !!last && !sameWindows;
     if (!list) {
       list = [];
       this.trails.set(key, list);
