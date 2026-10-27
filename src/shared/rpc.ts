@@ -679,6 +679,7 @@ export type RpcMethod =
   | 'hooks.signal'
   | 'usage.rateLimits'
   | 'usage.trail'
+  | 'pc.envDiff'
   | 'commit.origin'
   | 'a2a.channel.list'
   | 'a2a.channel.get'
@@ -1038,6 +1039,7 @@ export const ALL_RPC_METHODS = [
   'hooks.signal',
   'usage.rateLimits',
   'usage.trail',
+  'pc.envDiff',
   'commit.origin',
   'a2a.channel.list',
   'a2a.channel.get',

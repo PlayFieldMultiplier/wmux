@@ -336,6 +336,14 @@ The EventBus (`src/main/events/EventBus.ts`) is an in-memory ring buffer of `RIN
 
 ---
 
+### PC environment comparison (internal)
+
+| Method | Params | Tier | Notes |
+|---|---|---|---|
+| `pc.envDiff` | `{}` | internal | This PC's agent environment summary beside each paired PC's (read over that PC's web API with its stored credential), and the rows where they differ. Names, versions and content hashes only. |
+
+The summary each PC serves is `GET /api/agent-env` on its web server, device-authenticated like `/api/config`. It is **desktop-internal**: read by another wmux desktop, not part of the phone client contract (`docs/phone-client-contract.md`), and may change without notice. A wmux from before it answers 404, which `pc.envDiff` reports as `unsupported`. Instruction files are hashed byte for byte as stored, so a line-ending difference is a real mismatch.
+
 ## What's intentionally not in this inventory
 
 - **Daemon internals.** `src/main/pty/*`, `src/main/session/SessionManager.ts` — these are reachable through the public surfaces above but their internal contracts are not part of the substrate.
@@ -413,6 +421,7 @@ The capability column below summarises the table. Three sentinels:
 | `hooks.signal` | `wmux.internal` | — | — |
 | `usage.rateLimits` | `wmux.internal` | — | — |
 | `usage.trail` | `wmux.internal` | — | — |
+| `pc.envDiff` | `wmux.internal` | — | — |
 | `commit.origin` | `wmux.internal` | — | — |
 
 Methods marked **bold** are surfaced in the approval dialog with stronger user-facing language (spec §3.6 — terminal-content / terminal-input risk classes).

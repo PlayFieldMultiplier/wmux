@@ -38,12 +38,14 @@ function discard(res: Response): void {
   void res.body?.cancel().catch(() => undefined);
 }
 
-async function getJson(
-  host: RemoteHost,
+/** A JSON GET to a paired host with its credential. `status`: the HTTP status
+ *  of an `unavailable` answer, when the host answered at all. */
+export async function getJson(
+  host: Pick<RemoteHost, 'origin' | 'token'>,
   path: string,
   maxBytes: number,
   fetchImpl: typeof fetch,
-): Promise<{ ok: true; body: unknown } | { ok: false; reason: PcRailFeedFailure }> {
+): Promise<{ ok: true; body: unknown } | { ok: false; reason: PcRailFeedFailure; status?: number }> {
   // Never send the token to another machine over plain http.
   if (!isCredentialSafeOriginString(host.origin)) return { ok: false, reason: 'insecure-transport' };
   let res: Response;
@@ -62,7 +64,7 @@ async function getJson(
   }
   if (!res.ok) {
     discard(res);
-    return { ok: false, reason: 'unavailable' };
+    return { ok: false, reason: 'unavailable', status: res.status };
   }
   try {
     return { ok: true, body: await readBoundedJson(res, maxBytes) };

@@ -108,6 +108,9 @@ import { registerUsageRpc, registerUsageTrailRpc } from './pipe/handlers/usage.r
 import { setToolRefusalSource } from './agents/toolRefusals';
 import { registerCommitOriginRpc } from './pipe/handlers/commitOrigin.rpc';
 import { UsageTrailStore } from './usage/usageTrailStore';
+import { registerPcEnvRpc } from './pipe/handlers/pcEnv.rpc';
+import { cachedAgentEnvSummary } from './pcdiff/agentEnv';
+import { AGENT_ENV_COMMAND } from '../shared/agentEnvSummary';
 import { UsageReserve, setUsageReserve } from './usage/usageReserve';
 import { usageReserveToastText } from './automation/toastText';
 import { formatResetClock } from '../shared/usageLimit';
@@ -1640,6 +1643,8 @@ registerUsageTrailRpc(rpcRouter, (account, sinceMs, untilMs) => (
     ? usageTrail.read(account, sinceMs, untilMs)
     : []));
 
+// Agent environments compared across paired PCs (read-only).
+registerPcEnvRpc(rpcRouter, { wmuxVersion: app.getVersion() });
 // Usage reserve: unattended starts wait while an account's 5h usage is in the
 // last 15%. Reads the usage held above; the daemon gets the holds for its
 // scheduled runs, and fan-outs ask it directly (fanout.rpc.ts).
@@ -2488,7 +2493,10 @@ app.on('ready', async () => {
         .then(() => {
           reportDesktopPresence(() => client, focusedPrimaryWindow() !== null);
           disposePhoneBridge?.();
-          disposePhoneBridge = installPhoneBridge(client,(command,payload) => command === MOA_WAKE_COMMAND
+          disposePhoneBridge = installPhoneBridge(client,(command,payload) => command === AGENT_ENV_COMMAND
+            // A paired PC comparing agent environments: names, versions and hashes.
+            ? cachedAgentEnvSummary({ wmuxVersion: app.getVersion() })
+            : command === MOA_WAKE_COMMAND
             // A failure main learns after the accept goes back on the receipt.
             ? Promise.resolve(handlePhoneMoaWake(payload))
             : command.startsWith('browser.') ? handlePhoneBrowser(command,payload,{
