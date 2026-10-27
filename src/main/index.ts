@@ -15,6 +15,8 @@ import { installPhoneBridge } from './phone/installPhoneBridge';
 import { installKeepAwakeLink } from './power/keepAwakeLink';
 import { botApprovalPushTable, createBotApprovalPushFeed, setBotApprovalPushFeed } from './phone/BotApprovalPushFeed';
 import { createBotPromptPushFeed, openBotPromptRows, setBotPromptPushFeed } from './phone/BotPromptPushFeed';
+import { createBrowserHelpFeed, setPhoneBrowserHelpStore } from './phone/PhoneBrowserHelp';
+import { BROWSER_HELP_SET_METHOD } from '../shared/phoneBrowserHelp';
 import { handlePhoneMoaWake } from './factory/phoneMessage';
 import { MOA_WAKE_COMMAND } from '../shared/moaWake';
 import { handlePhoneAccounts } from './phone/PhoneAccounts';
@@ -195,7 +197,7 @@ import { clearPrivateBrowserSession, trackPrivateBrowserContents } from './brows
 import { BrowserBackendStore } from './browser-session/BrowserBackendStore';
 import { registerBrowserPrivateNetworkIpc } from './ipc/handlers/browserPrivateNetwork.handler';
 import { ChromeLauncherRegistry } from './browser-session/ChromeLauncher';
-import { ChromeProfileStore, reconcilePaneBindingsFromMirror } from './browser-session/ChromeProfileStore';
+import { ChromeProfileStore, LIVE_CHROME_PROFILE, reconcilePaneBindingsFromMirror } from './browser-session/ChromeProfileStore';
 import { createChromeProfileUseHandler, setChromeProfileUseListener } from './browser-session/profileFallback';
 import { noteRunBrowserProfileUnbound } from './automation/runIdentity';
 import { CHROME_PANE_IPC } from '../shared/chromePaneBinding';
@@ -1245,6 +1247,42 @@ const browserHelpRequests = registerBrowserRpc(
 );
 // browser_request_help — the renderer's Done / Cancel (see browserHelp.handler).
 registerBrowserHelpIpc(ipcMain, { getWindow: () => mainWindow, requests: browserHelpRequests });
+// The same requests on the phone (phone/PhoneBrowserHelp.ts): the open table
+// goes to the daemon on every change and, once the phone bridge is
+// registered, on every daemon connect; a phone's Done / Cancel comes back as
+// `workspaces.browserHelpDecide`.
+setPhoneBrowserHelpStore(browserHelpRequests);
+const browserHelpFeed = createBrowserHelpFeed({
+  pending: () => browserHelpRequests.listPending(),
+  tabs: {
+    backend: () => browserBackendStore.get(),
+    builtinUrl: (surfaceId, workspaceId) => {
+      const target = webviewCdpManager.getTarget(surfaceId, workspaceId);
+      if (!target || target.workspaceId !== workspaceId) return null;
+      const wc = phoneWebContents.fromId(target.webContentsId);
+      return wc && !wc.isDestroyed() ? wc.getURL() : null;
+    },
+    // A pane may be bound to Live Chrome (its own profile) while its workspace
+    // is not: a tab not found in the workspace's Chrome may then be the user's.
+    mayBeLiveChrome: (workspaceId, tabFound) =>
+      chromeRegistry.profileFor(workspaceId) === LIVE_CHROME_PROFILE ||
+      (!tabFound && chromeRegistry.hasPaneBindings(workspaceId) && chromeRegistry.peekLauncher(LIVE_CHROME_PROFILE) !== undefined),
+    chromeTabs: async (workspaceId) => {
+      const profile = chromeRegistry.profileFor(workspaceId);
+      // Live Chrome is never listed: that is every tab the user has open.
+      const launcher = profile === LIVE_CHROME_PROFILE ? undefined : chromeRegistry.peekLauncher(profile);
+      if (!launcher || launcher.writeScope) return [];
+      return launcher.listTargets(workspaceId);
+    },
+  },
+  push: async (rows) => {
+    if (!daemonClient?.isConnected) throw new Error('Daemon not connected');
+    const result = (await daemonClient.rpc(BROWSER_HELP_SET_METHOD, { requests: rows, closed: browserHelpRequests.listSettled() })) as { ok?: boolean; error?: string } | undefined;
+    if (result?.ok !== true) throw new Error(result?.error ?? 'browser help table refused');
+    return result;
+  },
+});
+browserHelpRequests.onChange(() => browserHelpFeed.schedule());
 
 /** Set once the ApprovalQueue exists (below). Read lazily by browser.rpc. */
 let liveBorrowRequester: BorrowApprovalRequester | null = null;
@@ -2396,6 +2434,9 @@ app.on('ready', async () => {
           // the same tick as the register above, before the daemon's answer to it.
           disposeKeepAwakeLink?.();
           disposeKeepAwakeLink = sleepPrevention ? installKeepAwakeLink(client, sleepPrevention.controller) : null;
+          // The daemon takes the browser help table only from the registered
+          // phone bridge, so it is sent after the register above, on the same pipe.
+          browserHelpFeed.publishNow();
         })
         .catch(() => {
           // Old daemon: no identify, therefore no presence, therefore pushes.

@@ -2142,6 +2142,7 @@ export function registerBrowserRpc(
         ...(ref !== undefined && { ref }),
         ...(typeof params['timeoutMs'] === 'number' && { timeoutMs: params['timeoutMs'] }),
         ...(completion !== undefined && { completion }),
+        ...(callerPaneOf(ctx) !== undefined && { requesterPtyId: callerPaneOf(ctx) }),
       });
     } catch (err) {
       // A refusal (already pending, unusable prompt) means nothing will ever

@@ -52,6 +52,8 @@ interface HelpRecord {
   requestId: string;
   workspaceId: string;
   surfaceId: string | undefined;
+  /** The pane whose agent asked, when the caller's pane is known. */
+  requesterPtyId: string | undefined;
   prompt: string;
   ref: string | undefined;
   completion: BrowserHelpCompletion | undefined;
@@ -110,6 +112,8 @@ export interface HelpProbeTarget {
 export interface CreateHelpRequestArgs {
   workspaceId: string;
   surfaceId?: string;
+  /** The calling pane (`callerPaneOf`), when known. */
+  requesterPtyId?: string;
   prompt: string;
   ref?: string;
   timeoutMs?: number;
@@ -120,6 +124,23 @@ export interface HelpStatus {
   state: BrowserHelpState;
   url?: string;
 }
+
+/** One open request as `listPending` reports it: what a phone may be shown. */
+export interface PendingHelpRequest {
+  readonly requestId: string;
+  readonly workspaceId: string;
+  readonly surfaceId: string | undefined;
+  /** The pane whose agent asked, when known. */
+  readonly requesterPtyId?: string;
+  readonly prompt: string;
+  readonly createdAt: number;
+  readonly deadlineAt: number;
+}
+
+/** How a phone's answer went: settled by it, unknown here, or already over. */
+export type PhoneHelpResolution =
+  | { ok: true; state: BrowserHelpOutcome }
+  | { ok: false; reason: 'not-found' | 'closed' };
 
 function defaultMintId(): string {
   return globalThis.crypto?.randomUUID?.() ?? `help-${Math.random().toString(36).slice(2, 12)}`;
@@ -180,6 +201,7 @@ export class HelpRequests {
   private readonly opts: HelpRequestsOptions;
   private readonly now: () => number;
   private readonly mintId: () => string;
+  private readonly changeListeners = new Set<() => void>();
 
   constructor(opts: HelpRequestsOptions) {
     this.opts = opts;
@@ -227,6 +249,7 @@ export class HelpRequests {
       requestId: this.mintId(),
       workspaceId: args.workspaceId,
       surfaceId: args.surfaceId,
+      requesterPtyId: args.requesterPtyId,
       prompt,
       ref: args.ref,
       completion: normalizeCompletion(args.completion),
@@ -263,7 +286,55 @@ export class HelpRequests {
     } catch {
       /* the row is presentation; a push failure must not fail the request */
     }
+    this.notifyChanged();
     return info;
+  }
+
+  /**
+   * Be told whenever the set of open requests changes (one opened, one
+   * settled). Called synchronously, after the change is visible to
+   * `listPending`. Returns the unsubscribe.
+   */
+  onChange(listener: () => void): () => void {
+    this.changeListeners.add(listener);
+    return () => this.changeListeners.delete(listener);
+  }
+
+  private notifyChanged(): void {
+    for (const listener of this.changeListeners) {
+      try {
+        listener();
+      } catch {
+        /* a listener is a mirror of this store; it must not break a settle */
+      }
+    }
+  }
+
+  /**
+   * The requests still open, oldest first, read now. A request whose deadline
+   * has passed is settled as `timed_out` here and left out, for the same
+   * reason `settleIfExpired` exists: the deadline timer can be late.
+   */
+  listPending(): PendingHelpRequest[] {
+    const at = this.now();
+    const rows: PendingHelpRequest[] = [];
+    for (const record of this.records.values()) {
+      if (record.state !== 'pending') continue;
+      if (at >= record.deadlineAt) {
+        void this.settle(record, 'timed_out');
+        continue;
+      }
+      rows.push({
+        requestId: record.requestId,
+        workspaceId: record.workspaceId,
+        surfaceId: record.surfaceId,
+        ...(record.requesterPtyId !== undefined && { requesterPtyId: record.requesterPtyId }),
+        prompt: record.prompt,
+        createdAt: record.createdAt,
+        deadlineAt: record.deadlineAt,
+      });
+    }
+    return rows;
   }
 
   /** The renderer-facing payload for one record. */
@@ -317,6 +388,43 @@ export class HelpRequests {
     if (!record || record.state !== 'pending') return false;
     await this.settle(record, outcome);
     return true;
+  }
+
+  /**
+   * How the requests this store still remembers ended (settled ones only), so
+   * a phone told that a request closed can also be told how.
+   */
+  listSettled(): Array<{ requestId: string; state: Exclude<BrowserHelpState, 'pending'> }> {
+    const settled: Array<{ requestId: string; state: Exclude<BrowserHelpState, 'pending'> }> = [];
+    for (const record of this.records.values()) {
+      if (record.state !== 'pending') settled.push({ requestId: record.requestId, state: record.state });
+    }
+    return settled;
+  }
+
+  /**
+   * A paired phone answered. Scoped to the workspace the daemon's table names
+   * for this id (never one the phone sent), with the same "not found" answer
+   * for another workspace's id as `status`. A request past its deadline is
+   * settled as `timed_out` first and reported closed; so is one somebody
+   * already answered — the first answer wins and is never rewritten. Answers
+   * once the record is terminal, without waiting for the settle's page work.
+   * The caller must not retry: a lost reply is read back from the table.
+   */
+  async resolveFromPhone(
+    workspaceId: string,
+    requestId: string,
+    outcome: BrowserHelpOutcome,
+  ): Promise<PhoneHelpResolution> {
+    const record = this.ownedRecord(requestId, workspaceId);
+    if (!record) return { ok: false, reason: 'not-found' };
+    await this.settleIfExpired(requestId);
+    if (record.state !== 'pending') return { ok: false, reason: 'closed' };
+    // The answer is in once `settle` marked the record terminal, which it does
+    // before its first await; its page work (the final URL, the outline) can
+    // be slow on a page mid-navigation and must not hold the phone's reply.
+    void this.settle(record, outcome);
+    return { ok: true, state: outcome };
   }
 
   private ownedRecord(requestId: string, workspaceId: string): HelpRecord | null {
@@ -402,6 +510,7 @@ export class HelpRequests {
     this.stopTimers(record);
     const key = surfaceKey(record.workspaceId, record.surfaceId);
     if (this.bySurface.get(key) === record.requestId) this.bySurface.delete(key);
+    this.notifyChanged();
     return true;
   }
 

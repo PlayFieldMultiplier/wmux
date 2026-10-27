@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { isKeepAwakeState, type KeepAwakeState } from '../../shared/sleepPrevention';
 
-export type DesktopPhoneCommand = 'accounts.list' | 'accounts.bind' | 'accounts.usage' | 'accounts.env' | 'accounts.envForAccount' | 'prompts.list' | 'prompts.replace' | 'workspaces.list' | 'workspaces.create' | 'workspaces.fleetTicket' | 'browser.list' | 'browser.capture' | 'browser.viewport' | 'browser.navigate' | 'browser.type' | 'browser.key' | 'browser.tap' | 'browser.open' | 'browser.scroll' | 'moa.wake' | 'workspaces.roomThreads' | 'workspaces.roomCards' | 'workspaces.roomAttachment' | 'workspaces.roomFile' | 'workspaces.botApproval' | 'workspaces.botApprovalDecide' | 'workspaces.workerResume' | 'workspaces.guestPost';
+export type DesktopPhoneCommand = 'accounts.list' | 'accounts.bind' | 'accounts.usage' | 'accounts.env' | 'accounts.envForAccount' | 'prompts.list' | 'prompts.replace' | 'workspaces.list' | 'workspaces.create' | 'workspaces.fleetTicket' | 'browser.list' | 'browser.capture' | 'browser.viewport' | 'browser.navigate' | 'browser.type' | 'browser.key' | 'browser.tap' | 'browser.open' | 'browser.scroll' | 'moa.wake' | 'workspaces.roomThreads' | 'workspaces.roomCards' | 'workspaces.roomAttachment' | 'workspaces.roomFile' | 'workspaces.botApproval' | 'workspaces.botApprovalDecide' | 'workspaces.workerResume' | 'workspaces.guestPost' | 'workspaces.browserHelpDecide';
 export class DesktopPhoneError extends Error {
   constructor(public readonly tag: string) { super(tag); }
 }
@@ -40,6 +40,8 @@ export class DesktopPhoneBridge {
       : []);
     return true;
   }
+  /** Whether `clientId` is the registered desktop. */
+  isOwner(clientId: string) { return this.owner !== null && this.owner === clientId; }
   /** Whether the attached desktop announced `command` on this connection. */
   supports(command: string) { return this.owner !== null && this.commands.has(command); }
   disconnect(clientId: string) {

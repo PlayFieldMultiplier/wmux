@@ -240,6 +240,7 @@ JSON backlog fetch (Bearer only).
 | `gate.state` | `{gateEnabled}` — the permission gate was armed or disarmed |
 | `channel.mention` | `{channelId, seq, fromMemberName, text, postedAt, tier}` — a channel message mentioned the operator row; re-fetch `/api/channels` (§9). Recorded, not live-only |
 | `moa` | `{moaSessionId}` — the Moa pane appeared (an id) or went away (`null`); see *Waking Moa from the phone*. Live only |
+| `browser.help` | `{phase, requestId, workspaceId, surfaceId?, deadlineAt, state?}` — a browser help request opened or closed; re-fetch `/api/browser-help`. No prompt. Live only; see *Browser help requests* |
 
 `phase` is `create` / `resolve` / `expire` / `supersede`.
 
@@ -264,7 +265,8 @@ what was true before. It is live-only like the two above — `GET /api/config`
 holds the authoritative value, so read that on reconnect rather than trying to
 replay transitions.
 
-**These three events are the ones that are NOT in the backlog.** Every other
+**These events — the three above, `moa` and `browser.help` — are the ones that
+are NOT in the backlog.** Every other
 kind is recorded, carries `id`/`epoch`, and replays on `?since=<cursor>`. The
 nudge is live-only and deliberately so: a busy pane raises one roughly every
 second, and recording those would push a pending `approval` out of the bounded
@@ -5269,6 +5271,87 @@ request stays `approved`; it ends `executed` or `refused`.
 | `409 {error:"approval-refused", code, message}` | The decision does not apply now: `not_pending`, `too_late` (the desktop has already started it), `not_ruleable`, `too_many`, `write_failed`, `client_update_required` (an act approved without its `payloadHash`), `changed` (a `payloadHash` other than the request's), `not_on_phone` (decided on its desktop card only). |
 | `503 {error:"desktop-unavailable"}` / `503 {error:"approvals-unavailable"}` | No desktop, or one that cannot answer approvals (too old, factory not started). |
 | `504 {error:"desktop-timeout"}` / `502 {error:"desktop-bad-reply"}` | The desktop did not answer, or answered badly. |
+
+#### Browser help requests (`browserHelp`, `/api/browser-help`)
+
+An agent driving a browser can hand one step back to the human
+(`browser_request_help`: a sign-in, a CAPTCHA, a payment confirmation). The
+desktop shows it with Done and Cancel; these routes show the same requests on
+the phone and answer them.
+
+- **Discovery**: `/api/config` carries `browserHelp: true` when the server
+  runs with `--allow-transcript` and the attached desktop announced
+  `browser.help`. OMITTED otherwise (an older desktop announces nothing). It
+  does not say whether this caller may answer; a refused answer is `403`.
+- **Read** (`GET /api/browser-help`): the transcript consent (the prompt is
+  written by the agent) and any caller that authenticates: the operator token
+  or a paired device that is not revoked. No input grant is needed. The list
+  is the daemon's copy of the desktop's open requests, so it answers without
+  asking the desktop.
+- **Answer** (`POST /api/browser-help/:requestId/decision`): the transcript
+  consent, and the rule of a bot approval's decision: the operator token, or
+  a paired device whose input grant is on **and was set explicitly**, on a
+  server started with `--allow-input`. Checked before the body is read and
+  again once it is in, on the credential the request carries (same caller,
+  not revoked, still granted). The request's workspace is the one the
+  daemon's list holds for the id; the body never names one.
+
+**`GET /api/browser-help`** — every open request, oldest first:
+
+```json
+{ "requests": [ { "requestId": "5d0e9b82-…", "workspaceId": "ws-…", "surfaceId": "surf-…",
+                  "prompt": "Sign in to the shop, then press Done.",
+                  "createdAt": 1759600000000, "deadlineAt": 1759600300000,
+                  "backend": "builtin", "previewable": true,
+                  "origin": "https://login.example.com" } ] }
+```
+
+- `prompt`: written by the agent. Render it as plain text, never as markup
+  or a link, and do not put it on the lock screen.
+- `surfaceId`: the tab the request is about; absent when the agent named none.
+- `backend`: `builtin` (a wmux browser pane), `chrome` (a wmux Chrome
+  profile) or `live` (the user's own Chrome, or a tab the desktop cannot
+  tell apart from it).
+- `previewable`: the workspace browser preview (*Workspace browser preview*)
+  can show this tab now. Today only a `builtin` pane of the request's own
+  workspace is; never `live`.
+- `origin`: `scheme://host[:port]` of the tab, read by the desktop when it
+  last sent the list (a request opened or closed, or the desktop
+  reconnected). Absent when it could not read one: no tab, not an http(s)
+  page, a Chrome that is not running, or `live`.
+- `deadlineAt`: the desktop closes the request as `timed_out` then. A
+  request past it is left out of the list (and answered `409`) even before
+  the desktop's next update says so.
+
+**`POST /api/browser-help/:requestId/decision`** — body
+`{"outcome": "continued" | "cancelled"}` (`continued` is Done). Any other
+field, or any other value, is `400`. `200 {requestId, state}` once the
+desktop settled it. The first answer wins, from any device or the desktop,
+and is never rewritten. An answer to a request past its deadline is `409`;
+the desktop closes it as `timed_out` on its own, and the close frame follows
+separately. **Never retry a decision automatically**: a lost
+reply may have settled it. Read the list again instead.
+
+**`browser.help` on `/api/events`** — one frame per request that opened
+(`phase: "open"`) or closed (`phase: "close"`), with
+`{requestId, workspaceId, surfaceId?, deadlineAt}` and, on a close, `state`
+(`completed`, `continued`, `cancelled` or `timed_out`) when the desktop said
+how it ended. No prompt and no origin: fetch the list for those. Live only
+(§4): never in the backlog and not replayed, so read `GET /api/browser-help`
+on every reconnect. Sent only under `--allow-transcript`. When the desktop
+disconnects, its requests close with no `state`; they open again if it
+returns with them still open.
+
+| Response | Meaning |
+| --- | --- |
+| `403 {error:"browser-help-disabled"}` | The server runs without `--allow-transcript`. |
+| `403 {error:"read-only"}` / `403 {error:"read-only: …"}` | No `--allow-input`, or this device may not answer (see above). |
+| `401 {error:"authorization-expired"}` | The credential stopped authenticating as the same caller while the body was read. |
+| `400 {error:"invalid-decision"}` | The body is not exactly `{outcome}`. |
+| `404 {error:"browser-help-not-found"}` | No open request with that id. |
+| `409 {error:"browser-help-closed"}` | It already ended (answered, timed out or completed). |
+| `503 {error:"desktop-unavailable"}` | No desktop, or none that published its requests. |
+| `504 {error:"desktop-timeout"}` / `502 {error:"desktop-bad-reply"}` | The desktop did not answer, or answered badly. Do not retry; read the list. |
 
 #### Resuming a bot worker (`/api/bot-tasks`)
 

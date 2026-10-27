@@ -296,3 +296,84 @@ describe('HelpRequests workspace scoping', () => {
     expect((await h.store.status(b.requestId, 'ws-2'))?.state).toBe('pending');
   });
 });
+
+describe('HelpRequests on the phone', () => {
+  it('listPending reports the open requests in their phone shape, oldest first', async () => {
+    const h = harness(5_000);
+    const a = h.store.create({ ...base, timeoutMs: 60_000 });
+    const b = h.store.create({ workspaceId: 'ws-2', prompt: 'Approve the payment.', timeoutMs: 30_000 });
+    await h.store.cancel(a.requestId, 'ws-1');
+    const c = h.store.create({ ...base, surfaceId: 'surf-3', timeoutMs: 10_000 });
+    expect(h.store.listPending()).toEqual([
+      { requestId: b.requestId, workspaceId: 'ws-2', surfaceId: undefined, prompt: 'Approve the payment.', createdAt: 5_000, deadlineAt: 35_000 },
+      { requestId: c.requestId, workspaceId: 'ws-1', surfaceId: 'surf-3', prompt: base.prompt, createdAt: 5_000, deadlineAt: 15_000 },
+    ]);
+  });
+
+  it('listPending settles and leaves out a request whose deadline passed', async () => {
+    const h = harness(1_000);
+    const info = h.store.create({ ...base, timeoutMs: 10_000 });
+    h.setNow(11_000);
+    expect(h.store.listPending()).toEqual([]);
+    expect(await h.store.status(info.requestId, 'ws-1')).toEqual({ state: 'timed_out' });
+  });
+
+  it('resolveFromPhone settles only in the workspace that owns the request', async () => {
+    const h = harness();
+    const info = h.store.create(base);
+    expect(await h.store.resolveFromPhone('ws-2', info.requestId, 'continued')).toEqual({ ok: false, reason: 'not-found' });
+    expect(await h.store.resolveFromPhone('ws-1', 'req-unknown', 'continued')).toEqual({ ok: false, reason: 'not-found' });
+    expect((await h.store.status(info.requestId, 'ws-1'))?.state).toBe('pending');
+    expect(await h.store.resolveFromPhone('ws-1', info.requestId, 'continued')).toEqual({ ok: true, state: 'continued' });
+    expect((await h.store.status(info.requestId, 'ws-1'))?.state).toBe('continued');
+    await vi.waitFor(() => expect(h.closed).toEqual([info.requestId]), { timeout: 5_000 });
+  });
+
+  it('resolveFromPhone answers closed for an expired request, and settles it timed_out first', async () => {
+    const h = harness(1_000);
+    const info = h.store.create({ ...base, timeoutMs: 10_000 });
+    h.setNow(11_000);
+    expect(await h.store.resolveFromPhone('ws-1', info.requestId, 'continued')).toEqual({ ok: false, reason: 'closed' });
+    expect((await h.store.status(info.requestId, 'ws-1'))?.state).toBe('timed_out');
+  });
+
+  it('the first answer wins: the desktop then the phone, and two phones at once', async () => {
+    const h = harness();
+    const a = h.store.create(base);
+    expect(await h.store.resolveFromRenderer(a.requestId, 'cancelled')).toBe(true);
+    expect(await h.store.resolveFromPhone('ws-1', a.requestId, 'continued')).toEqual({ ok: false, reason: 'closed' });
+    expect((await h.store.status(a.requestId, 'ws-1'))?.state).toBe('cancelled');
+
+    const b = h.store.create({ ...base, surfaceId: 'surf-2' });
+    const [first, second] = await Promise.all([
+      h.store.resolveFromPhone('ws-1', b.requestId, 'continued'),
+      h.store.resolveFromPhone('ws-1', b.requestId, 'cancelled'),
+    ]);
+    expect(first).toEqual({ ok: true, state: 'continued' });
+    expect(second).toEqual({ ok: false, reason: 'closed' });
+    expect((await h.store.status(b.requestId, 'ws-1'))?.state).toBe('continued');
+    expect(h.store.listSettled()).toEqual([
+      { requestId: a.requestId, state: 'cancelled' },
+      { requestId: b.requestId, state: 'continued' },
+    ]);
+  });
+
+  it('resolveFromPhone answers without waiting for a slow page', async () => {
+    const h = harness();
+    const info = h.store.create(base);
+    h.probe.mockImplementation(() => new Promise(() => undefined));
+    expect(await h.store.resolveFromPhone('ws-1', info.requestId, 'cancelled')).toEqual({ ok: true, state: 'cancelled' });
+    expect((await h.store.status(info.requestId, 'ws-1'))?.state).toBe('cancelled');
+  });
+
+  it('onChange fires on open and on settle, after the change is visible', async () => {
+    const h = harness();
+    const seen: number[] = [];
+    const off = h.store.onChange(() => seen.push(h.store.listPending().length));
+    const info = h.store.create(base);
+    await h.store.resolveFromPhone('ws-1', info.requestId, 'continued');
+    off();
+    h.store.create({ ...base, surfaceId: 'surf-2' });
+    expect(seen).toEqual([1, 0]);
+  });
+});
