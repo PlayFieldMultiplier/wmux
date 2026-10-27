@@ -23,7 +23,7 @@
 import os from 'node:os';
 import path from 'node:path';
 import { launcherStem, tokenize, type PermissionMode } from '../../shared/agentResume';
-import { namesClaude, spliceSettingsFlag } from '../../shared/botWorkerGuard';
+import { isClaudeLauncher, namesClaude, spliceSettingsFlag } from '../../shared/botWorkerGuard';
 import { splitModelEnvMarker } from '../../shared/workerLaunch';
 import { botSandboxDenyRead, type BotSandboxInput } from '../factory/botExecSandbox';
 import { WORKER_GATE_TIMEOUT_S } from './workerToolGate';
@@ -425,7 +425,7 @@ export function workerFenceLaunch(input: {
   const tokens = tokenize(command);
   const first = tokens[0]?.value ?? '';
   const stem = launcherStem(first);
-  if (stem !== 'claude') {
+  if (!isClaudeLauncher(first)) {
     if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(first) || WRAPPER_STEMS.has(stem) || namesClaude(command)) {
       return refuse('wrapper', 'the line starts claude through another program, where the fence cannot be attached');
     }
