@@ -1584,6 +1584,45 @@ describe('resolveSessionIdForSignal', () => {
     ];
     expect(resolveSessionIdForSignal(makeSignal({ cwd: '/repo' }), tied)).toBe('pty-new');
   });
+
+  it('still places a cwd-routed signal on an unbound pane, its own bound pane, or with no session id', () => {
+    const unbound = [session({ id: 'pty-a', cwd: '/repo', env: {} })];
+    expect(resolveSessionIdForSignal(makeSignal({ cwd: '/repo', agentSessionId: 'conv-1' }), unbound)).toBe('pty-a');
+    const bound = [
+      session({ id: 'pty-a', cwd: '/repo', env: {}, lastActivity: '2026-02-01T00:00:00.000Z', resumeBinding: { agent: 'claude', sessionId: 'conv-1' } }),
+      session({ id: 'pty-b', cwd: '/repo', env: {}, lastActivity: '2026-01-01T00:00:00.000Z', resumeBinding: { agent: 'claude', sessionId: 'conv-2' } }),
+    ];
+    // The pane bound to this conversation wins even though the other is more recent.
+    expect(resolveSessionIdForSignal(makeSignal({ cwd: '/repo', agentSessionId: 'conv-2' }), bound)).toBe('pty-b');
+    expect(resolveSessionIdForSignal(makeSignal({ cwd: '/repo' }), bound)).toBe('pty-a');
+  });
+});
+
+describe('HookIngest — a session outside any pane in a bound pane\'s folder', () => {
+  it('neither rebinds nor lights the pane when its session id is not the pane\'s binding', () => {
+    // Measured: a Claude started in another terminal in the pane's folder sends
+    // SessionStart, UserPromptSubmit and StopFailure with no ptyId; the cwd tier
+    // handed all three to the pane, rebinding it and flipping it to running, then error.
+    const fixture = makeDeps([session({
+      id: 'pty-a',
+      cwd: '/repo',
+      env: {},
+      resumeBinding: { agent: 'claude', sessionId: '11111111-1111-4111-8111-111111111111' },
+    })]);
+    const ingest = new HookIngest(fixture.deps);
+    const outside = (kind: AgentSignalKind) => makeSignal({
+      kind,
+      cwd: '/repo',
+      agentSessionId: '22222222-2222-4222-8222-222222222222',
+    });
+    for (const kind of ['agent.session_start', 'agent.user_prompt_submit', 'agent.stop_failure'] as const) {
+      expect(ingest.handle(outside(kind))).toEqual({ ok: false, reason: 'no-workspace-match' });
+    }
+    expect(ingest.handlePermissionGate(outside('agent.awaiting_permission')).ok).toBe(false);
+    expect(fixture.bindings).toHaveLength(0);
+    expect(fixture.emitted).toHaveLength(0);
+    expect(fixture.nudges).toHaveLength(0);
+  });
 });
 
 describe('HookIngest — a signal whose claimed pane is gone is refused (#1523)', () => {

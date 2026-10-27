@@ -95,7 +95,8 @@ export interface HookIngestSession {
   lastActivity?: string;
   /**
    * The pane's current resume binding: `agent` guards a guessed route,
-   * `sessionId` is only logged (old → new on a rebind).
+   * `sessionId` keeps another conversation's cwd-routed signals off the pane
+   * and is logged (old → new on a rebind).
    */
   resumeBinding?: Pick<ResumeBinding, 'agent'> & { sessionId?: string };
   /** Canonical agent the detector/process tracker last saw in this pane. */
@@ -532,7 +533,12 @@ function mostRecent(sessions: HookIngestSession[]): HookIngestSession | null {
  *      in the renderer); a lone pane in the workspace stands in for it, and
  *      an ambiguous multi-pane workspace falls through rather than guessing.
  *   3. `cwd` — exact match, then longest directory prefix. The fallback for a
- *      session started outside any wmux pane.
+ *      session started outside any wmux pane. A pane already bound to a
+ *      different conversation is not a candidate: a session in the same folder
+ *      whose id is not the pane's binding is someone else's, and its
+ *      SessionStart would otherwise rebind the pane and its turn would light
+ *      it. An unbound pane, a pane that switched to this agent, or a signal
+ *      with no session id still matches.
  */
 export function resolveSessionIdForSignal(
   signal: AgentSignal,
@@ -559,7 +565,17 @@ export function resolveSessionIdForSignal(
     }
   }
 
-  return resolveSessionIdForCwd(signal.cwd, sessions);
+  const agentSessionId = signal.agentSessionId;
+  const candidates = agentSessionId
+    ? sessions.filter((s) => {
+      const bound = s.resumeBinding;
+      if (!bound?.sessionId || bound.sessionId === agentSessionId) return true;
+      // The pane switched agents: its binding is the previous agent's, and the
+      // detector already sees this one running there (the binding site's rule).
+      return bound.agent !== signal.agent && s.lastDetectedAgent === signal.agent;
+    })
+    : sessions;
+  return resolveSessionIdForCwd(signal.cwd, candidates);
 }
 
 /**
