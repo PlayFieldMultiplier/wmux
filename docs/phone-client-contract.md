@@ -5327,8 +5327,9 @@ the phone and answer them.
 `{"outcome": "continued" | "cancelled"}` (`continued` is Done). Any other
 field, or any other value, is `400`. `200 {requestId, state}` once the
 desktop settled it. The first answer wins, from any device or the desktop,
-and is never rewritten; an answer to a request past its deadline closes it as
-`timed_out` and is `409`. **Never retry a decision automatically**: a lost
+and is never rewritten. An answer to a request past its deadline is `409`;
+the desktop closes it as `timed_out` on its own, and the close frame follows
+separately. **Never retry a decision automatically**: a lost
 reply may have settled it. Read the list again instead.
 
 **`browser.help` on `/api/events`** — one frame per request that opened

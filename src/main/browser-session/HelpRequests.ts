@@ -52,6 +52,8 @@ interface HelpRecord {
   requestId: string;
   workspaceId: string;
   surfaceId: string | undefined;
+  /** The pane whose agent asked, when the caller's pane is known. */
+  requesterPtyId: string | undefined;
   prompt: string;
   ref: string | undefined;
   completion: BrowserHelpCompletion | undefined;
@@ -110,6 +112,8 @@ export interface HelpProbeTarget {
 export interface CreateHelpRequestArgs {
   workspaceId: string;
   surfaceId?: string;
+  /** The calling pane (`callerPaneOf`), when known. */
+  requesterPtyId?: string;
   prompt: string;
   ref?: string;
   timeoutMs?: number;
@@ -126,6 +130,8 @@ export interface PendingHelpRequest {
   readonly requestId: string;
   readonly workspaceId: string;
   readonly surfaceId: string | undefined;
+  /** The pane whose agent asked, when known. */
+  readonly requesterPtyId?: string;
   readonly prompt: string;
   readonly createdAt: number;
   readonly deadlineAt: number;
@@ -243,6 +249,7 @@ export class HelpRequests {
       requestId: this.mintId(),
       workspaceId: args.workspaceId,
       surfaceId: args.surfaceId,
+      requesterPtyId: args.requesterPtyId,
       prompt,
       ref: args.ref,
       completion: normalizeCompletion(args.completion),
@@ -321,6 +328,7 @@ export class HelpRequests {
         requestId: record.requestId,
         workspaceId: record.workspaceId,
         surfaceId: record.surfaceId,
+        ...(record.requesterPtyId !== undefined && { requesterPtyId: record.requesterPtyId }),
         prompt: record.prompt,
         createdAt: record.createdAt,
         deadlineAt: record.deadlineAt,

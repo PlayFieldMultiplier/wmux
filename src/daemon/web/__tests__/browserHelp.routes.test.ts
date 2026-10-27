@@ -89,7 +89,7 @@ describe('browser help routes', () => {
       });
       return { status: res.status, body: await res.json() as Record<string, unknown>, cache: res.headers.get('cache-control') };
     };
-    const open = (surfaceId = 'surf-1') => store.create({ workspaceId: 'ws-1', surfaceId, prompt: PROMPT, timeoutMs: 60_000 });
+    const open = (surfaceId = 'surf-1', requesterPtyId?: string) => store.create({ workspaceId: 'ws-1', surfaceId, prompt: PROMPT, timeoutMs: 60_000, ...(requesterPtyId ? { requesterPtyId } : {}) });
     return { base, get, decide, open, store, table, commands, publish, operator: `Bearer ${info.token as string}` };
   }
 
@@ -179,6 +179,19 @@ describe('browser help routes', () => {
       expect(await r.decide(info.requestId, { outcome: 'continued' }, 'Bearer d5.s5')).toMatchObject({ status: 401, body: { error: 'authorization-expired' } });
       expect(r.commands).toEqual([]);
       expect((await r.store.status(info.requestId, 'ws-1'))?.state).toBe('pending');
+    });
+
+    it('a brain pane\'s request is listed but not previewable, and only the operator answers it', async () => {
+      const r = await start();
+      const info = r.open('surf-1', 'brain-hq-1');
+      await r.publish();
+      const listed = await r.get('/api/browser-help');
+      expect(listed.body.requests).toEqual([expect.objectContaining({ requestId: info.requestId, previewable: false })]);
+      expect(JSON.stringify(listed.body)).not.toContain('brain-hq-1');
+      expect(await r.decide(info.requestId, { outcome: 'continued' })).toMatchObject({ status: 403, body: { error: 'browser-help-disabled' } });
+      expect(r.commands).toEqual([]);
+      expect((await r.store.status(info.requestId, 'ws-1'))?.state).toBe('pending');
+      expect(await r.decide(info.requestId, { outcome: 'continued' }, r.operator)).toMatchObject({ status: 200, body: { state: 'continued' } });
     });
 
     it('a read-only server or no transcript consent takes no decision from anyone', async () => {

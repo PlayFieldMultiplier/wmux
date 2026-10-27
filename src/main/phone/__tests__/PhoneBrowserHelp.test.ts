@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { browserHelpRow, browserHelpRows, createBrowserHelpFeed, handlePhoneBrowserHelpCommand, type BrowserHelpTabDeps } from '../PhoneBrowserHelp';
+import { browserHelpRow, browserHelpRows, createBrowserHelpFeed, createTabListReader, handlePhoneBrowserHelpCommand, type BrowserHelpTabDeps } from '../PhoneBrowserHelp';
 import type { PendingHelpRequest, PhoneHelpResolution } from '../../browser-session/HelpRequests';
 import type { PhoneBrowserHelpRow } from '../../../shared/phoneBrowserHelp';
 
@@ -88,7 +88,8 @@ describe('browserHelpRows', () => {
   });
 
   it('a Chrome that never answers costs only the origin, never the table', async () => {
-    const rows = await browserHelpRows([pending({ surfaceId: 'chrome-a' })], tabs({ backend: () => 'chrome', chromeTabs: () => new Promise(() => undefined) }), 10);
+    const hung = () => new Promise<never>(() => undefined);
+    const rows = await browserHelpRows([pending({ surfaceId: 'chrome-a' })], tabs({ backend: () => 'chrome', chromeTabs: hung }), createTabListReader(hung, { budgetMs: 10 }));
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ backend: 'chrome', previewable: false });
     expect(rows[0]).not.toHaveProperty('origin');
@@ -104,6 +105,49 @@ describe('browserHelpRows', () => {
     expect(rows).toHaveLength(128);
     expect(rows[0].requestId).toBe('req-0');
     expect(rows.at(-1)?.requestId).toBe('req-127');
+  });
+});
+
+describe('createTabListReader', () => {
+  it('a Chrome that never answers plus repeated changes still publishes, with one fetch outstanding', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetches = vi.fn(() => new Promise<never>(() => undefined));
+      const sent: unknown[] = [];
+      const deps = tabs({ backend: () => 'chrome', chromeTabs: fetches });
+      const feed = createBrowserHelpFeed({
+        pending: () => [pending({ surfaceId: 'chrome-a', requestId: `req-${sent.length}` })],
+        tabs: deps,
+        push: async (rows) => { sent.push(rows); },
+        tabReader: createTabListReader(fetches, { now: () => Date.now() }),
+      });
+      feed.publishNow();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(sent).toHaveLength(1);
+      // Changes keep coming: each goes out at once, with no new fetch.
+      for (let i = 0; i < 5; i += 1) {
+        feed.publishNow();
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      expect(sent).toHaveLength(6);
+      expect(fetches).toHaveBeenCalledTimes(1);
+      feed.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reuses a finished list briefly, then reads again', async () => {
+    let at = 0;
+    const read = vi.fn(async () => []);
+    const reader = createTabListReader(read, { now: () => at, cacheMs: 1_000 });
+    await reader('ws-1');
+    at = 500;
+    await reader('ws-1');
+    expect(read).toHaveBeenCalledTimes(1);
+    at = 1_600;
+    await reader('ws-1');
+    expect(read).toHaveBeenCalledTimes(2);
   });
 });
 

@@ -15,6 +15,7 @@
 // crosses (`sanitizeHelpPrompt`) and never rides in an SSE frame or a push.
 
 import { BROWSER_HELP_MAX_TIMEOUT_MS, sanitizeHelpPrompt, type BrowserHelpOutcome, type BrowserHelpState } from './browserHelp';
+import { isBrainPtyId } from './constants';
 
 /** Announced at `daemon.phone.register`: this desktop publishes the table. */
 export const BROWSER_HELP_CAPABILITY = 'browser.help';
@@ -40,6 +41,15 @@ export interface PhoneBrowserHelpRow {
   previewable: boolean;
   /** `scheme://host[:port]` of the tab when the desktop listed it; absent when unknown. */
   origin?: string;
+}
+
+/**
+ * One row as main sends it to the daemon: the phone row plus the pane whose
+ * agent asked, which the daemon keeps to itself (a brain pane's request is
+ * answered at the desktop) and never serves.
+ */
+export interface BrowserHelpTableRow extends PhoneBrowserHelpRow {
+  requesterPtyId?: string;
 }
 
 /** The `browser.help` SSE frame. Never carries the prompt. */
@@ -96,7 +106,7 @@ function epochMs(value: unknown): value is number {
 }
 
 /** One row, or null when any field is out of shape. Unlisted keys are dropped. */
-export function parseBrowserHelpRow(raw: unknown): PhoneBrowserHelpRow | null {
+export function parseBrowserHelpRow(raw: unknown): BrowserHelpTableRow | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const r = raw as Record<string, unknown>;
   if (!isBrowserHelpId(r.requestId) || !isBrowserHelpId(r.workspaceId)) return null;
@@ -108,7 +118,9 @@ export function parseBrowserHelpRow(raw: unknown): PhoneBrowserHelpRow | null {
   if (typeof r.backend !== 'string' || !(BACKENDS as readonly string[]).includes(r.backend)) return null;
   if (typeof r.previewable !== 'boolean') return null;
   if (r.origin !== undefined && (typeof r.origin !== 'string' || !ORIGIN_RE.test(r.origin))) return null;
+  if (r.requesterPtyId !== undefined && !isBrowserHelpId(r.requesterPtyId)) return null;
   const backend = r.backend as PhoneBrowserHelpBackend;
+  const brain = isBrainPtyId(r.requesterPtyId as string | undefined);
   return {
     requestId: r.requestId,
     workspaceId: r.workspaceId,
@@ -117,16 +129,18 @@ export function parseBrowserHelpRow(raw: unknown): PhoneBrowserHelpRow | null {
     createdAt: r.createdAt,
     deadlineAt: r.deadlineAt,
     backend,
-    // Never previewable on Live Chrome: that is the user's own browser.
-    previewable: backend === 'live' ? false : r.previewable,
+    // Never previewable on Live Chrome (the user's own browser), nor for a
+    // brain pane's request (answered at the desktop).
+    previewable: backend === 'live' || brain ? false : r.previewable,
     ...(r.origin !== undefined ? { origin: r.origin as string } : {}),
+    ...(r.requesterPtyId !== undefined ? { requesterPtyId: r.requesterPtyId as string } : {}),
   };
 }
 
 /** The whole table, or null when it is not an array, too long, or any row is out of shape. */
-export function parseBrowserHelpRows(raw: unknown): PhoneBrowserHelpRow[] | null {
+export function parseBrowserHelpRows(raw: unknown): BrowserHelpTableRow[] | null {
   if (!Array.isArray(raw) || raw.length > BROWSER_HELP_MAX_ROWS) return null;
-  const rows: PhoneBrowserHelpRow[] = [];
+  const rows: BrowserHelpTableRow[] = [];
   const seen = new Set<string>();
   for (const item of raw) {
     const row = parseBrowserHelpRow(item);

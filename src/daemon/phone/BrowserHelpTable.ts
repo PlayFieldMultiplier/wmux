@@ -17,7 +17,7 @@ import {
   parseBrowserHelpClosed,
   parseBrowserHelpRows,
   type PhoneBrowserHelpFrame,
-  type PhoneBrowserHelpRow,
+  type BrowserHelpTableRow,
 } from '../../shared/phoneBrowserHelp';
 import type { BrowserHelpState } from '../../shared/browserHelp';
 
@@ -38,10 +38,10 @@ export interface BrowserHelpTableOptions {
   now?: () => number;
 }
 
-export type BrowserHelpLookup = { row: PhoneBrowserHelpRow } | { closed: true } | null;
+export type BrowserHelpLookup = { row: BrowserHelpTableRow } | { closed: true } | null;
 
 export class BrowserHelpTable {
-  private rows = new Map<string, PhoneBrowserHelpRow>();
+  private rows = new Map<string, BrowserHelpTableRow>();
   private publisher: string | null = null;
   private readonly recentlyClosed = new Map<string, true>();
   /** Ids a decision through this daemon settled: never listed again, even by a table main computed before it. */
@@ -94,7 +94,7 @@ export class BrowserHelpTable {
    * next table says so (main's timer can be late, as after a sleep): main
    * would only answer it as closed.
    */
-  list(): PhoneBrowserHelpRow[] {
+  list(): BrowserHelpTableRow[] {
     const at = this.now();
     return [...this.rows.values()].filter((row) => row.deadlineAt > at);
   }
@@ -119,7 +119,7 @@ export class BrowserHelpTable {
     this.opts.emit([this.closeFrame(row, state)]);
   }
 
-  private closeFrame(row: PhoneBrowserHelpRow, state: Settled | undefined): PhoneBrowserHelpFrame {
+  private closeFrame(row: BrowserHelpTableRow, state: Settled | undefined): PhoneBrowserHelpFrame {
     this.recentlyClosed.set(row.requestId, true);
     while (this.recentlyClosed.size > RECENTLY_CLOSED_MAX) {
       this.recentlyClosed.delete(this.recentlyClosed.keys().next().value as string);
@@ -129,7 +129,7 @@ export class BrowserHelpTable {
 }
 
 /** The frame for one row, built from an allowlist: never the prompt. */
-function frameOf(phase: 'open' | 'close', row: PhoneBrowserHelpRow): PhoneBrowserHelpFrame {
+function frameOf(phase: 'open' | 'close', row: BrowserHelpTableRow): PhoneBrowserHelpFrame {
   return {
     phase,
     requestId: row.requestId,

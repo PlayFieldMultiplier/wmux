@@ -25,6 +25,7 @@ import {
   parseBrowserHelpDecideBody,
   parseBrowserHelpDecideReply,
   type BrowserHelpErrorCode,
+  type BrowserHelpTableRow,
   type PhoneBrowserHelpRow,
 } from '../../shared/phoneBrowserHelp';
 import type { BrowserHelpOutcome } from '../../shared/browserHelp';
@@ -38,7 +39,7 @@ export const BROWSER_HELP_DECISION_ROUTE = /^\/api\/browser-help\/([^/]+)\/decis
 /** The part of the daemon's table the routes use (BrowserHelpTable). */
 export interface BrowserHelpTableView {
   readonly published: boolean;
-  list(): PhoneBrowserHelpRow[];
+  list(): BrowserHelpTableRow[];
   lookup(requestId: string): BrowserHelpLookup;
   closeDecided(requestId: string, state: BrowserHelpOutcome): void;
 }
@@ -53,18 +54,28 @@ export function browserHelpSupported(desktop: BotApprovalsDesktop | null, allowT
   return allowTranscript && !!desktop && desktop.supports(BROWSER_HELP_CAPABILITY);
 }
 
+/** Whether a row came from a brain pane's agent (`isBrainPty` over the live session). */
+export type BrainPaneCheck = (ptyId: string) => boolean;
+
+/** The row a phone is served: no requesting pane, and a brain pane's never previewable. */
+function phoneRow(row: BrowserHelpTableRow, isBrainPane: BrainPaneCheck): PhoneBrowserHelpRow {
+  const { requesterPtyId, ...served } = row;
+  return requesterPtyId !== undefined && isBrainPane(requesterPtyId) ? { ...served, previewable: false } : served;
+}
+
 /** `GET /api/browser-help`. */
 export function browserHelpListResponse(opts: {
   allowTranscript: boolean;
   desktop: BotApprovalsDesktop | null;
   table: BrowserHelpTableView | null;
+  isBrainPane: BrainPaneCheck;
 }): BotApprovalsResponse {
   if (!opts.allowTranscript) return { status: 403, body: { error: 'browser-help-disabled' } };
   // No table yet is not an empty table: say the desktop is not there.
   if (!browserHelpSupported(opts.desktop, true) || !opts.table?.published) {
     return { status: 503, body: { error: 'desktop-unavailable' } };
   }
-  return { status: 200, body: { requests: opts.table.list() } };
+  return { status: 200, body: { requests: opts.table.list().map((row) => phoneRow(row, opts.isBrainPane)) } };
 }
 
 /** Why this caller may not decide, or null when it may. */
@@ -91,6 +102,7 @@ export async function browserHelpDecisionResponse(
     table: BrowserHelpTableView | null;
     readOnly: boolean;
     allowTranscript: boolean;
+    isBrainPane: BrainPaneCheck;
     /** The caller the credential on this request resolves to now, or null
      *  when it no longer authenticates as the same caller. Missing: refused. */
     reauthorize?: () => Promise<BotApprovalsCaller | null>;
@@ -126,6 +138,11 @@ export async function browserHelpDecisionResponse(
   const found = opts.table.lookup(requestId);
   if (!found) return { status: 404, body: { error: 'browser-help-not-found' } };
   if ('closed' in found) return { status: 409, body: { error: 'browser-help-closed' } };
+  // A brain pane's request is answered at the desktop, as its approvals are.
+  const requester = found.row.requesterPtyId;
+  if (now.kind === 'device' && requester !== undefined && opts.isBrainPane(requester)) {
+    return { status: 403, body: { error: 'browser-help-disabled' } };
+  }
   let raw: unknown;
   try {
     raw = await desktop.request(PHONE_BROWSER_HELP_DECIDE_COMMAND, {

@@ -3246,7 +3246,10 @@ export class WebTerminalServer {
     // Browser help requests: listed from the daemon's table, answered by the
     // operator or a device with an explicit input grant (browserHelp.ts).
     if (req.method === 'GET' && p === BROWSER_HELP_LIST_ROUTE) {
-      const r = browserHelpListResponse({ allowTranscript: this.opts?.allowTranscript === true, desktop: this.availableDesktop(), table: this.deps.browserHelp?.() ?? null });
+      const r = browserHelpListResponse({
+        allowTranscript: this.opts?.allowTranscript === true, desktop: this.availableDesktop(), table: this.deps.browserHelp?.() ?? null,
+        isBrainPane: (ptyId) => this.isBrainApproval(ptyId),
+      });
       return this.json(res, r.status, r.body, { 'Cache-Control': 'no-store' });
     }
     const browserHelpRoute = req.method === 'POST' ? BROWSER_HELP_DECISION_ROUTE.exec(p) : null;
@@ -3262,6 +3265,7 @@ export class WebTerminalServer {
       if (refused) this.json(res,refused.status,refused.body,{'Cache-Control':'no-store'});
       else this.readJsonBody(req,res,(body: unknown) => void browserHelpDecisionResponse(browserHelpRoute[1], body, {
         caller, desktop: this.availableDesktop(), table: this.deps.browserHelp?.() ?? null, ...gates, reauthorize,
+        isBrainPane: (ptyId) => this.isBrainApproval(ptyId),
       }).then(r => this.json(res,r.status,r.body,{'Cache-Control':'no-store'})));
       return;
     }
