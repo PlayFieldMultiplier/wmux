@@ -46,6 +46,16 @@ describe('BrowserHelpTable', () => {
     expect(t.list()).toEqual([row({ backend: 'live', previewable: false })]);
   });
 
+  it('never takes a session id from main, and its frames never carry one or the requesting pane', () => {
+    const { t, frames } = table();
+    t.set('main', { requests: [{ ...row(), requesterPtyId: 'pty-1', sessionId: 'pty-1' }] });
+    expect(t.list()[0]).not.toHaveProperty('sessionId');
+    t.set('main', { requests: [] });
+    expect(frames).toHaveLength(2);
+    expect(JSON.stringify(frames)).not.toContain('pty-1');
+    expect(JSON.stringify(frames)).not.toContain('sessionId');
+  });
+
   it('turns each change into open and close frames that carry no prompt', () => {
     const { t, frames } = table();
     t.set('main', { requests: [row()] });

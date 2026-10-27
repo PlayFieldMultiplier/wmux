@@ -3254,6 +3254,12 @@ export class WebTerminalServer {
       const r = browserHelpListResponse({
         allowTranscript: this.opts?.allowTranscript === true, desktop: this.availableDesktop(), table: this.deps.browserHelp?.() ?? null,
         isBrainPane: (ptyId) => this.isBrainApproval(ptyId),
+        // A pane /api/sessions lists: a live session (listLiveSessions'
+        // states); brain panes never get here (phoneRow answers them first).
+        requesterSession: (ptyId) => {
+          const managed = this.deps.sessionManager.getSession(ptyId);
+          return managed && (managed.meta.state === 'attached' || managed.meta.state === 'detached') ? ptyId : undefined;
+        },
       });
       return this.json(res, r.status, r.body, { 'Cache-Control': 'no-store' });
     }
