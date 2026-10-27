@@ -1,17 +1,12 @@
+import { useEffect, useRef } from 'react';
 import { useStore } from '../../stores';
+import { resolveCloseTabTarget, type CloseTabTarget } from '../../stores/closeTabConfirm';
 import { useT } from '../../hooks/useT';
-import { findLeaf } from '../../../shared/paneUtils';
 import { destroySurfaceRemoteSession } from '../../utils/remoteSessionTeardown';
 import { resolveActivePanePtyId } from '../../hooks/useActivePaneFocus';
 import { terminalRegistry } from '../../hooks/useTerminal';
 import Dialog, { DialogFooter, DialogHeader } from '../ui/Dialog';
 import Button from '../ui/Button';
-
-export interface CloseTabTarget {
-  workspaceId: string;
-  paneId: string;
-  surfaceId: string;
-}
 
 /**
  * Close a tab the way its × does: end its PTY (and a remote session this
@@ -20,15 +15,14 @@ export interface CloseTabTarget {
  */
 export function closeTabNow(target: CloseTabTarget): void {
   const state = useStore.getState();
-  const ws = state.workspaces.find((w) => w.id === target.workspaceId);
-  const pane = ws ? findLeaf(ws.rootPane, target.paneId) : null;
-  const surface = pane?.surfaces.find((s) => s.id === target.surfaceId);
-  if (!pane || !surface) return;
+  const found = resolveCloseTabTarget(state, target);
+  if (!found) return;
+  const { workspaceId, pane, surface } = found;
   if (surface.ptyId) window.electronAPI.pty.dispose(surface.ptyId);
   destroySurfaceRemoteSession(surface);
   const wasLastSurface = pane.surfaces.length <= 1;
-  state.closeSurface(pane.id, surface.id, target.workspaceId);
-  if (wasLastSurface) state.closePane(pane.id, target.workspaceId);
+  state.closeSurface(pane.id, surface.id, workspaceId);
+  if (wasLastSurface) state.closePane(pane.id, workspaceId);
 }
 
 /** Hand the keyboard back to the active pane's terminal once the dialog is
@@ -50,9 +44,7 @@ export default function CloseTabConfirm() {
   // minted), only a view of a remote session someone else owns, a local
   // placeholder slot (nothing runs in it), or none of these.
   const closeKind = useStore((s): 'shell' | 'remoteView' | 'placeholder' | 'other' => {
-    const ws = target ? s.workspaces.find((w) => w.id === target.workspaceId) : undefined;
-    const pane = ws && target ? findLeaf(ws.rootPane, target.paneId) : null;
-    const surface = pane?.surfaces.find((sf) => sf.id === target?.surfaceId);
+    const surface = target ? resolveCloseTabTarget(s, target)?.surface : undefined;
     if (surface?.surfaceType === 'placeholder') return 'placeholder';
     if (surface?.surfaceType === 'remote-terminal') {
       // A duplicated workspace's clone has no session id, so it views nothing.
@@ -61,18 +53,29 @@ export default function CloseTabConfirm() {
     }
     return surface?.ptyId ? 'shell' : 'other';
   });
-  const tabTitle = useStore((s) => {
-    const ws = target ? s.workspaces.find((w) => w.id === target.workspaceId) : undefined;
-    const pane = ws && target ? findLeaf(ws.rootPane, target.paneId) : null;
-    return pane?.surfaces.find((surface) => surface.id === target?.surfaceId)?.title;
-  });
+  const tabTitle = useStore((s) => (target ? resolveCloseTabTarget(s, target)?.surface.title : undefined));
   const dismiss = useStore((s) => s.dismissCloseTab);
+  // Closed from outside (its tab went away, and the store dismissed it): the
+  // keyboard goes back to the active terminal, as after Cancel, not to <body>.
+  const shown = useRef(false);
+  const closedHere = useRef(false);
+  useEffect(() => {
+    if (target) {
+      shown.current = true;
+      return;
+    }
+    if (shown.current && !closedHere.current) refocusActiveTerminal();
+    shown.current = false;
+    closedHere.current = false;
+  }, [target]);
   if (!target) return null;
   const cancel = () => {
+    closedHere.current = true;
     dismiss();
     refocusActiveTerminal();
   };
   const confirm = () => {
+    closedHere.current = true;
     dismiss();
     closeTabNow(target);
     refocusActiveTerminal();

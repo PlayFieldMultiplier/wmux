@@ -1,18 +1,16 @@
 // @vitest-environment jsdom
 //
-// The close-tab confirm follows its tab: it goes away when the tab does, by
-// whatever path, and a confirm whose tab is gone never swallows the next
-// close-tab request.
+// The close-tab confirm stays on its tab: it follows the tab to another pane,
+// goes away when the tab does (by whatever path, giving the keyboard back to
+// the active terminal), and so never swallows the next close-tab request.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { createWorkspace, type PaneLeaf, type Surface, type Workspace } from '../../../shared/types';
-import { create } from 'zustand';
-import { immer } from 'zustand/middleware/immer';
 import { getLeafPanes } from '../../../shared/paneUtils';
-import { useStore, type StoreState } from '../index';
-import { createUISlice } from '../slices/uiSlice';
+import { useStore } from '../index';
 import CloseTabConfirm from '../../components/Pane/CloseTabConfirm';
+import { terminalRegistry } from '../../hooks/useTerminal';
 
 function surface(id: string): Surface {
   return { id, ptyId: `pty-${id}`, title: id, shell: 'zsh', cwd: '/tmp', surfaceType: 'terminal' };
@@ -91,25 +89,29 @@ describe('a close-tab confirm whose tab goes away', () => {
     act(() => useStore.getState().closeSurface(paneA.id, 'a2', ws.id));
     expect(useStore.getState().closeTabConfirm).toEqual(target);
   });
+
+  it('follows its tab to another pane instead of going away', () => {
+    const { ws, paneA, paneB } = seed();
+    act(() => useStore.getState().requestCloseTab({ workspaceId: ws.id, paneId: paneA.id, surfaceId: 'a2' }));
+    act(() => {
+      useStore.setState((state) => {
+        const [a, b] = getLeafPanes(state.workspaces[0].rootPane);
+        const moved = a.surfaces.splice(a.surfaces.findIndex((s) => s.id === 'a2'), 1)[0];
+        b.surfaces.push(moved);
+      });
+    });
+    expect(useStore.getState().closeTabConfirm).toEqual({ workspaceId: ws.id, paneId: paneB.id, surfaceId: 'a2' });
+  });
 });
 
 describe('requestCloseTab', () => {
-  it('replaces a confirm whose tab is gone, so the shortcut is not swallowed', () => {
-    // The UI slice alone, with no store-level dismiss: a confirm whose tab is
-    // already gone when the next request arrives (the same tick).
-    const ws = createWorkspace('Alone');
-    const pane = ws.rootPane as PaneLeaf;
-    pane.surfaces = [surface('s1')];
-    const store = create<StoreState>()(
-      immer((...args) => ({
-        ...createUISlice(...args),
-        workspaces: [ws],
-        closeTabConfirm: { workspaceId: ws.id, paneId: pane.id, surfaceId: 'gone' },
-      }) as unknown as StoreState),
-    );
-    const next = { workspaceId: ws.id, paneId: pane.id, surfaceId: 's1' };
-    store.getState().requestCloseTab(next);
-    expect(store.getState().closeTabConfirm).toEqual(next);
+  it('opens a confirm for the next tab once the last one\'s tab went away, so the shortcut is not swallowed', () => {
+    const { ws, paneA, paneB } = seed();
+    act(() => useStore.getState().requestCloseTab({ workspaceId: ws.id, paneId: paneB.id, surfaceId: 'b1' }));
+    act(() => useStore.getState().closePane(paneB.id, ws.id));
+    const next = { workspaceId: ws.id, paneId: paneA.id, surfaceId: 'a1' };
+    act(() => useStore.getState().requestCloseTab(next));
+    expect(useStore.getState().closeTabConfirm).toEqual(next);
   });
 
   it('never retargets a confirm whose tab is still there', () => {
@@ -143,5 +145,27 @@ describe('the confirm dialog', () => {
     expect(document.querySelector('[data-testid="close-tab-confirm"]')).not.toBeNull();
     act(() => useStore.getState().closePane(paneB.id, ws.id));
     expect(document.querySelector('[data-testid="close-tab-confirm"]')).toBeNull();
+  });
+
+  it('hands the keyboard back to the active terminal when it leaves that way', async () => {
+    const { ws, paneA, paneB } = seed();
+    act(() => {
+      useStore.setState((state) => {
+        state.workspaces[0].activePaneId = paneA.id;
+      });
+    });
+    const term = { focus: vi.fn() };
+    terminalRegistry.set('pty-a1', term as never);
+    try {
+      act(() => root.render(React.createElement(CloseTabConfirm)));
+      act(() => useStore.getState().requestCloseTab({ workspaceId: ws.id, paneId: paneB.id, surfaceId: 'b1' }));
+      act(() => useStore.getState().closePane(paneB.id, ws.id));
+      await act(async () => {
+        await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)));
+      });
+      expect(term.focus).toHaveBeenCalled();
+    } finally {
+      terminalRegistry.delete('pty-a1');
+    }
   });
 });

@@ -18,7 +18,6 @@ import { clearRemoteSelection } from './workspaceSlice';
 import { publishPaneStashed, publishPaneFocused } from '../../events/publisher';
 import { saveSessionNow } from '../../utils/sessionSaveBridge';
 import { markRetentionMigrationDone } from '../retentionMigration';
-import { closeTabTargetLive } from '../closeTabConfirm';
 import { DEFAULT_BROWSER_BACKEND, isBrowserBackend, type BrowserBackend } from '../../../shared/browserBackend';
 import { CHROME_PRESET_VALUES } from '../../../shared/chromePresets';
 import { sanitizeShortcutOverrides, type ShortcutActionId, type ShortcutOverrides } from '../../../shared/keymap';
@@ -1656,10 +1655,9 @@ export const createUISlice: StateCreator<StoreState, [['zustand/immer', never]],
   closeTabConfirm: null,
 
   // A confirm already on screen keeps its tab: a second request must not
-  // retarget the dialog under the user's pointer. One whose tab is gone is
-  // stale and gives way, so the close-tab shortcut is never swallowed.
+  // retarget the dialog under the user's pointer.
   requestCloseTab: (target) => set((state) => {
-    if (!state.closeTabConfirm || !closeTabTargetLive(state, state.closeTabConfirm)) state.closeTabConfirm = target;
+    if (!state.closeTabConfirm) state.closeTabConfirm = target;
   }),
 
   dismissCloseTab: () => set((state) => {
