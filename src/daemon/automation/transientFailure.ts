@@ -17,12 +17,18 @@ export const TRANSIENT_RETRY_DELAY_MS = 5 * 60_000;
  */
 export const TRANSIENT_RETRY_READY_GRACE_MS = 60_000;
 
-/** Claude StopFailure codes for a provider overload or server error. */
-const CLAUDE_TRANSIENT_CODES: ReadonlySet<string> = new Set(['overloaded', 'server_error']);
-/** Codex CodexErrorInfo variants for a provider overload or a broken connection. */
-const CODEX_TRANSIENT_CODES: ReadonlySet<string> = new Set([
-  'serverOverloaded', 'httpConnectionFailed', 'responseStreamConnectionFailed', 'responseStreamDisconnected',
-]);
+/**
+ * Per provider: the codes for an overload or a broken connection (Claude
+ * StopFailure codes, Codex CodexErrorInfo variants), and whether a bare 5xx
+ * HTTP status counts on its own.
+ */
+const TRANSIENT_BY_PROVIDER: Record<TurnFailure['provider'], { codes: ReadonlySet<string>; serverStatus: boolean }> = {
+  claude: { codes: new Set(['overloaded', 'server_error']), serverStatus: false },
+  codex: {
+    codes: new Set(['serverOverloaded', 'httpConnectionFailed', 'responseStreamConnectionFailed', 'responseStreamDisconnected']),
+    serverStatus: true,
+  },
+};
 
 /**
  * `usageLimit`: the failure carried a usage-limit notice (Claude reports a
@@ -42,10 +48,11 @@ export function isTransientTurnFailure(
     case 'quota':
       return false;
     default: {
+      const rule = TRANSIENT_BY_PROVIDER[failure.provider];
       const code = failure.providerCode;
-      if (code && (failure.provider === 'claude' ? CLAUDE_TRANSIENT_CODES : CODEX_TRANSIENT_CODES).has(code)) return true;
+      if (code && rule.codes.has(code)) return true;
       const status = failure.httpStatus;
-      return failure.provider === 'codex' && status !== undefined && status >= 500 && status <= 599;
+      return rule.serverStatus && status !== undefined && status >= 500 && status <= 599;
     }
   }
 }
