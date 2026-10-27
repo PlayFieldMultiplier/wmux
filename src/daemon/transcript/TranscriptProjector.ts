@@ -32,6 +32,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileTranscriptProvider, checkNativeTranscriptPath } from './providers';
+import { resolveWslTranscriptPath } from '../hooks/transcriptPathGuard';
+import { agentRow } from '../../shared/agentIdentity';
 import type { ParsedTranscriptLine } from './parseEntry';
 import {
   TAIL_BYTES,
@@ -75,6 +77,12 @@ const EMPTY_PAGE = (): TranscriptPage => ({
 
 const DEFAULT_DEBOUNCE_MS = 150;
 const DEFAULT_POLL_MS = 3000;
+/**
+ * A WSL share cannot be watched (fs.watch fails to arm there), so its poll is
+ * a live turn's only trigger. One tick is one stat, about 1 ms on the share;
+ * at 500 ms an append shows up in about 0.35 s (0.47 s at p95).
+ */
+const DEFAULT_SHARE_POLL_MS = 500;
 
 /**
  * D3 — delay between the budgeted reads that drain a burst. Long enough to hand
@@ -106,6 +114,8 @@ interface WatchState {
   /** Subscribers, keyed by pipe clientId. Empty ⇒ tear the watch down. */
   clients: Set<string>;
   transcriptPath: string;
+  /** The path is on a WSL distro share, which sends no change events: poll it. */
+  share: boolean;
   parse: (line: string, offset: number) => ParsedTranscriptLine;
   watcher: fs.FSWatcher | null;
   poller: ReturnType<typeof setInterval> | null;
@@ -146,6 +156,8 @@ export class TranscriptProjector {
   private readonly deps: TranscriptProjectorDeps;
   private readonly debounceMs: number;
   private readonly pollMs: number;
+  private readonly sharePollMs: number;
+  private readonly wslShare: NonNullable<TranscriptProjectorDeps['wslShare']>;
   private readonly watches = new Map<string, WatchState>();
   /**
    * Per pane, the binding a `session_start` superseded, kept whether or not a
@@ -164,6 +176,8 @@ export class TranscriptProjector {
     this.deps = deps;
     this.debounceMs = deps.debounceMs ?? DEFAULT_DEBOUNCE_MS;
     this.pollMs = deps.pollMs ?? DEFAULT_POLL_MS;
+    this.sharePollMs = deps.sharePollMs ?? DEFAULT_SHARE_POLL_MS;
+    this.wslShare = deps.wslShare ?? {};
   }
 
   /**
@@ -430,6 +444,7 @@ export class TranscriptProjector {
       state = {
         clients: new Set(),
         transcriptPath: resolved.ok ? resolved.transcriptPath : '',
+        share: resolved.ok && resolved.share === true,
         parse: resolved.ok ? resolved.parse : () => ({ events: [], bodies: new Map() }),
         watcher: null,
         poller: null,
@@ -650,7 +665,7 @@ export class TranscriptProjector {
   private resolvePath(
     sessionId: string,
   ):
-    | { ok: true; agent: string; transcriptPath: string; agentSessionId: string; parse: (line: string, offset: number) => ParsedTranscriptLine; pending?: boolean }
+    | { ok: true; agent: string; transcriptPath: string; agentSessionId: string; parse: (line: string, offset: number) => ParsedTranscriptLine; pending?: boolean; share?: boolean }
     | { ok: false; reason: string } {
     let binding;
     try {
@@ -661,6 +676,27 @@ export class TranscriptProjector {
     if (!binding) return { ok: false, reason: this.absentBindingReason(sessionId) };
     const provider = fileTranscriptProvider(binding.agent);
     if (!provider) return { ok: false, reason: 'unsupported-agent' };
+    if (!binding.transcriptPath && binding.wslTranscriptPath && agentRow(binding.agent)?.wslTranscript) {
+      // A WSL pane's Claude transcript, read through the pane's distro share.
+      // The share path is worked out here on every read and never stored.
+      const wsl = resolveWslTranscriptPath(binding.wslTranscriptPath, binding.sessionId, this.deps.getWslTarget?.(sessionId), this.wslShare);
+      if (!wsl.ok) {
+        this.warnOnce(
+          `${sessionId}\u0000${binding.wslTranscriptPath}`,
+          `[transcript] refused WSL transcript path for ${sessionId}: ${wsl.reason}`,
+        );
+        return { ok: false, reason: 'unsafe-transcript-path' };
+      }
+      return {
+        ok: true,
+        transcriptPath: wsl.hostPath,
+        agentSessionId: binding.sessionId,
+        parse: provider.parse,
+        agent: binding.agent,
+        share: true,
+        ...(wsl.pending ? { pending: true } : {}),
+      };
+    }
     if (!binding.transcriptPath) return { ok: false, reason: 'no-transcript-path' };
     // The containment guard belongs HERE, at the single point every read goes
     // through, not only on the hook path that happens to be validated today.
@@ -748,6 +784,13 @@ export class TranscriptProjector {
     if (resolved.ok) state.parse = resolved.parse;
     if (next === state.transcriptPath) return;
     state.transcriptPath = next;
+    const share = resolved.ok && resolved.share === true;
+    if (share !== state.share && state.poller) {
+      // A share is polled at its own rate and a local file is watched: re-arm.
+      clearInterval(state.poller);
+      state.poller = null;
+    }
+    state.share = share;
     state.tailOffset = -1;
     state.forceReset = true;
     state.lastSize = -1;
@@ -772,6 +815,13 @@ export class TranscriptProjector {
     if (this.disposed || state.clients.size === 0) return;
     if (!state.transcriptPath) return;
     if (state.watcher || state.poller) return;
+    if (state.share) {
+      // A WSL distro share serves no change notifications (gitContextWatch's
+      // WSL_SHARE); fs.watch on it fails to arm. Hook nudges
+      // still mark each turn's edges; the poll carries a turn in progress.
+      this.startPolling(sessionId, state);
+      return;
+    }
 
     const dir = path.dirname(state.transcriptPath);
     const basename = transcriptBasename(state.transcriptPath);
@@ -799,9 +849,13 @@ export class TranscriptProjector {
     }
   }
 
-  /** ~3s size/mtime poll. Only ever runs while a client is subscribed. */
+  /**
+   * ~3s size/mtime poll (a WSL share: `sharePollMs`). Only ever runs while a
+   * client is subscribed; unsubscribe, dropPty and dispose clear it.
+   */
   private startPolling(sessionId: string, state: WatchState): void {
     if (this.disposed || state.poller || state.clients.size === 0) return;
+    const everyMs = state.share ? this.sharePollMs : this.pollMs;
     const poller = setInterval(() => {
       if (!state.transcriptPath) return;
       const stat = statTranscript(state.transcriptPath);
@@ -810,10 +864,12 @@ export class TranscriptProjector {
       state.lastSize = stat.size;
       state.lastMtimeMs = stat.mtimeMs;
       this.schedule(sessionId, state);
-    }, this.pollMs);
+    }, everyMs);
     poller.unref?.();
     state.poller = poller;
-    this.deps.log?.('info', `[transcript] fs.watch unavailable for ${sessionId}; polling every ${this.pollMs}ms`);
+    this.deps.log?.('info', state.share
+      ? `[transcript] ${sessionId} reads a WSL share; polling every ${everyMs}ms`
+      : `[transcript] fs.watch unavailable for ${sessionId}; polling every ${everyMs}ms`);
   }
 
   /** Trailing debounce: an append is many small writes, and we want one read. */

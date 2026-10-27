@@ -378,6 +378,13 @@ describe('toResumeCommand (X6)', () => {
       expect(mergeResumeBinding(prev, next).transcriptPath).toBe('C:\\t\\abc.jsonl');
     });
 
+    it('keeps a WSL pane\'s Linux transcript path the same way, and never for another conversation', () => {
+      const linux = '/home/dev/.claude/projects/-repo/abc.jsonl';
+      const prev = binding({ wslTranscriptPath: linux });
+      expect(mergeResumeBinding(prev, binding({ ts: 2 })).wslTranscriptPath).toBe(linux);
+      expect(mergeResumeBinding(prev, binding({ sessionId: 'new', ts: 2 })).wslTranscriptPath).toBeUndefined();
+    });
+
     it('takes the latest sessionId/cwd/ts (stable fields are not sticky)', () => {
       const prev = binding({ sessionId: 'old', cwd: 'C:\\a', ts: 1 });
       const next = binding({ sessionId: 'new', cwd: 'C:\\b', ts: 9 });

@@ -231,6 +231,7 @@ import { serveTurnFailure } from './turnFailure/serveTurnFailure';
 import { buildTurnFailedPushPayload, turnFailedPushCollapseId } from './push/turnFailedPushPayload';
 import { agentSlugToDisplay, isAgentSignal, type AgentSignal } from '../shared/hooks/signal-types';
 import { checkNativeTranscriptPath } from './transcript/providers';
+import { keepOwnWslTranscriptPath } from './hooks/transcriptPathGuard';
 import { TranscriptProjector } from './transcript/TranscriptProjector';
 import { TranscriptActivityWatcher } from './transcript/TranscriptActivityWatcher';
 import { ToolRefusalTracker } from './transcript/toolRefusals';
@@ -4228,6 +4229,11 @@ function registerRpcHandlers(
         vetted = rest;
       }
     }
+    // The same writer half for a WSL pane's Linux transcript path: only that
+    // pane's own Claude transcript is kept (the projector re-checks on read).
+    const ownWsl = keepOwnWslTranscriptPath(vetted, managed.meta.wslTarget);
+    if (ownWsl.dropped) log('warn', `[resume] refused WSL transcript path for ${id}`);
+    vetted = ownWsl.binding;
     const p = { id, resumeBinding: vetted };
     // Resume-chip edge trigger: a hook reaching this RPC proves claude is
     // running in the pane RIGHT NOW — attach the process watch (no-op while a
@@ -4299,7 +4305,9 @@ function registerRpcHandlers(
       // fills it in with the same sessionId/cwd — without this the fill is not
       // saveImmediate'd and a reboot loses the probe path (CodeRabbit). It only
       // transitions once (absent → present), so no per-turn write amplification.
-      || prev.transcriptPath !== next.transcriptPath;
+      || prev.transcriptPath !== next.transcriptPath
+      // A WSL pane's Chat reads this one; the same once-only fill.
+      || prev.wslTranscriptPath !== next.wslTranscriptPath;
     managed.meta.resumeBinding = next;
     // #2730: the pane's agent now holds this conversation (a resume typed by
     // hand, the TUI's own /resume). The terminal wins: a chat in another pane
@@ -4380,6 +4388,8 @@ function registerRpcHandlers(
       // Only the transcript-path containment check reads this — a workspace
       // profile may relocate CLAUDE_CONFIG_DIR per pane.
       getSessionEnv: (id) => sessionManager.getSession(id)?.meta.env,
+      // A WSL pane's transcript is read through this distro's share.
+      getWslTarget: (id) => sessionManager.getSession(id)?.meta.wslTarget,
       // A6 — unicast. An append carries the pane's conversation content, so it
       // goes only to the sockets that subscribed; broadcast would hand every
       // authenticated pipe client the whole transcript AND put an oversized

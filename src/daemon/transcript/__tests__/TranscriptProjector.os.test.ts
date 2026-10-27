@@ -966,3 +966,83 @@ describe('snapshot — a huge non-conversation line before the answer (after /cl
     expect(page.events.some((e) => e.kind === 'assistant_text' && e.text === 'ok')).toBe(true);
   });
 });
+
+describe('TranscriptProjector — a WSL pane\'s transcript on its distro share', () => {
+  const SID = '920b9112-1111-4222-8333-444455557777';
+  const LINUX = `/home/dev/.claude/projects/-home-dev-repo/${SID}.jsonl`;
+  let share: string;
+  let file: string;
+  let target: { distribution: string; user: string } | undefined;
+  let projector: TranscriptProjector;
+  const appends: { data: TranscriptAppendData }[] = [];
+
+  beforeEach(() => {
+    // The harness folder stands in for `\\wsl$\Ubuntu`, laid out as the distro's filesystem.
+    share = path.join(fs.realpathSync.native(harness.dir), 'Ubuntu');
+    file = path.join(share, 'home', 'dev', '.claude', 'projects', '-home-dev-repo', `${SID}.jsonl`);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.copyFileSync(path.join(FIXTURES, 'claude-basic.jsonl'), file);
+    target = { distribution: 'Ubuntu', user: 'dev' };
+    appends.length = 0;
+    projector = new TranscriptProjector({
+      getResumeBinding: () => binding({ sessionId: SID, wslTranscriptPath: LINUX }),
+      getWslTarget: () => target,
+      emitAppend: (_sessionId, data) => appends.push({ data }),
+      debounceMs: 1,
+      sharePollMs: 20,
+      wslShare: { platform: 'win32', shareRoot: (distro) => path.join(fs.realpathSync.native(harness.dir), distro) },
+    });
+  });
+
+  afterEach(() => {
+    projector.dispose();
+    vi.restoreAllMocks();
+  });
+
+  it('projects the file the Linux path names through the pane\'s distro', () => {
+    expect(projector.status('pty-1')).toMatchObject({ available: true, transcriptBasename: `${SID}.jsonl` });
+    expect(projector.transcriptPath('pty-1')).toBe(file);
+    expect(projector.snapshot('pty-1')?.events.map((e) => e.kind)).toContain('assistant_text');
+  });
+
+  it('is unavailable when the pane\'s own target does not own the path', () => {
+    target = { distribution: 'Ubuntu', user: 'other' };
+    expect(projector.status('pty-1')).toEqual({ available: false, reason: 'unsafe-transcript-path' });
+    target = undefined;
+    expect(projector.snapshot('pty-1')).toBeNull();
+  });
+
+  it('polls the share instead of watching it, and carries a live append', async () => {
+    const watch = vi.spyOn(fs, 'watch');
+    projector.subscribe('c1', 'pty-1');
+    expect(watch).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(appends.length).toBeGreaterThan(0), { timeout: 10_000 });
+    const before = appends.length;
+    fs.appendFileSync(file, JSON.stringify({
+      type: 'assistant',
+      uuid: 'wsl-live-1',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'from the share' }] },
+    }) + '\n');
+    await vi.waitFor(() => {
+      const rows = appends.slice(before).flatMap((a) => (a.data as { events: Array<{ kind: string; text?: string }> }).events);
+      expect(rows.some((e) => e.kind === 'assistant_text' && e.text === 'from the share')).toBe(true);
+    }, { timeout: 10_000 });
+  });
+
+  it('stops polling when the last subscriber leaves or the pane goes', () => {
+    const started = vi.spyOn(globalThis, 'setInterval');
+    const cleared = vi.spyOn(globalThis, 'clearInterval');
+    projector.subscribe('c1', 'pty-1');
+    expect(started).toHaveBeenCalledTimes(1);
+    expect(started.mock.calls[0][1]).toBe(20);
+    const first = started.mock.results[0].value;
+    projector.unsubscribe('c1', 'pty-1');
+    expect(cleared).toHaveBeenCalledWith(first);
+
+    projector.subscribe('c1', 'pty-2');
+    const second = started.mock.results[1].value;
+    projector.dropPty('pty-2');
+    expect(cleared).toHaveBeenCalledWith(second);
+    expect(projector.watchCount).toBe(0);
+  });
+});

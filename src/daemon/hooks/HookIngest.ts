@@ -70,6 +70,7 @@ import { boundRecordText, isClaudeFamilyAgent, TERMINAL_PROMPT_TOOL_NAME_MAX } f
 import { checkNativeTranscriptPath } from '../transcript/providers';
 import { isWslOwnTranscriptPath } from './transcriptPathGuard';
 import type { WslTarget } from '../../shared/wslTarget';
+import { agentRow } from '../../shared/agentIdentity';
 
 /** Rolling flood-summary interval. Mirrors the main-side handler. */
 const HOOK_FLOOD_LOG_INTERVAL_MS = 30_000;
@@ -1441,12 +1442,13 @@ export class HookIngest {
         ? signal.payload.transcript_path
         : undefined;
       let transcriptPath: string | undefined;
+      let wslTranscriptPath: string | undefined;
       const routed = sessions.find((s) => s.id === sessionId);
       if (claimedPath && routed?.wslTarget && isWslOwnTranscriptPath(claimedPath, signal.agentSessionId, routed.wslTarget)) {
         // #2270: the WSL pane's own transcript, inside its distro. This process
-        // cannot open that path, so the binding goes without it, as before,
-        // but it is not a refusal.
-        this.deps.log?.('debug', `[hooks] ${sessionId}: transcript is in WSL ${routed.wslTarget.distribution}; not stored`);
+        // cannot open that path as given, so it is kept as the Linux path only;
+        // the projector reads it through the distro share.
+        if (agentRow(signal.agent)?.wslTranscript) wslTranscriptPath = claimedPath;
       } else if (claimedPath) {
         const sessionEnv = routed?.env;
         const check = checkNativeTranscriptPath(signal.agent, claimedPath, signal.agentSessionId, sessionEnv);
@@ -1495,6 +1497,7 @@ export class HookIngest {
             cwd: signal.cwd,
             ...(permissionMode ? { permissionMode } : {}),
             ...(transcriptPath ? { transcriptPath } : {}),
+            ...(wslTranscriptPath ? { wslTranscriptPath } : {}),
             ts: signal.ts,
           }, signal.ptyId === sessionId);
           // Refusals are logged above; a rebind is logged too, so a pane that

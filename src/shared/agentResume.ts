@@ -212,6 +212,14 @@ export interface ResumeBinding {
    * mapping is version-drift-prone; capture deliberately avoided depending on it).
    */
   transcriptPath?: string;
+  /**
+   * A WSL pane's own transcript, as the Linux path its Claude reported
+   * (`/home/<user>/.claude/projects/<project>/<id>.jsonl`). Kept apart from
+   * `transcriptPath` because this process cannot open it as given: only the
+   * transcript projector reads it, through the pane's distro share
+   * (resolveWslTranscriptPath), and never stores what it opened.
+   */
+  wslTranscriptPath?: string;
   /** Capture time (ms). Staleness is decided by existence-probe, not a TTL. */
   ts: number;
   /**
@@ -399,6 +407,7 @@ export function mergeResumeBinding(
     prev?.cwd === next.cwd;
   if (sameConversation && !merged.permissionMode && prev?.permissionMode) merged.permissionMode = prev.permissionMode;
   if (sameConversation && !merged.transcriptPath && prev?.transcriptPath) merged.transcriptPath = prev.transcriptPath;
+  if (sameConversation && !merged.wslTranscriptPath && prev?.wslTranscriptPath) merged.wslTranscriptPath = prev.wslTranscriptPath;
   return merged;
 }
 
