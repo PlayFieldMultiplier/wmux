@@ -678,6 +678,7 @@ export type RpcMethod =
   | 'company.provisionCeo'
   | 'hooks.signal'
   | 'usage.rateLimits'
+  | 'pc.envDiff'
   | 'a2a.channel.list'
   | 'a2a.channel.get'
   | 'a2a.channel.getMessages'
@@ -1035,6 +1036,7 @@ export const ALL_RPC_METHODS = [
   'company.provisionCeo',
   'hooks.signal',
   'usage.rateLimits',
+  'pc.envDiff',
   'a2a.channel.list',
   'a2a.channel.get',
   'a2a.channel.getMessages',

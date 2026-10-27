@@ -13,6 +13,14 @@ import { createSshAwareFetch, getSshTunnelRegistry } from '../../remote/SshTunne
 import { reviveHost } from '../../remote/SshBootstrap';
 import { runSsh } from '../../remote/sshCommand';
 
+// The registered stores and their fetch, for main's read-only readers of the
+// paired PCs (pc.envDiff); null until registered.
+let access: { store: RemoteHostsStore; fetchImpl: typeof fetch } | null = null;
+
+export function remoteHostsAccess(): { store: RemoteHostsStore; fetchImpl: typeof fetch } | null {
+  return access;
+}
+
 export interface RemoteRegistrationDeps {
   registerRemote: typeof registerRemoteHandlers;
   registerPcRail: typeof registerPcRailHandlers;
@@ -29,7 +37,9 @@ export function registerRemoteSurfaces(
   const fetchImpl = createSshAwareFetch(fetch, sshTunnels, (id) => stores.store.get(id));
   const disposeRemote = deps.registerRemote({ store: stores.store, attachments: stores.attachments, fetchImpl, sshTunnels });
   const disposePcRail = deps.registerPcRail({ store: stores.store, attachments: stores.attachments, fetchImpl });
+  access = { store: stores.store, fetchImpl };
   return () => {
+    access = null;
     disposePcRail();
     disposeRemote();
   };

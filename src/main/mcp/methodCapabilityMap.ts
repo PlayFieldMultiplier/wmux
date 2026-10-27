@@ -742,6 +742,9 @@ export const METHOD_CAPABILITY: Record<RpcMethod, RequiredCapability> = {
   // Live Claude Code rate limits from the bundled statusline script — the same
   // internal caller class as hooks.signal.
   'usage.rateLimits': { capability: 'wmux.internal' },
+  // Agent environments of the paired PCs, read with their stored credentials.
+  // First-party readers only.
+  'pc.envDiff': { capability: 'wmux.internal' },
 };
 
 /**

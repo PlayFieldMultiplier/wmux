@@ -105,6 +105,9 @@ import type { ComputerService } from './computer/ComputerService';
 import { revealStatsAggregator } from './perf/revealStatsAggregator';
 import { registerHooksRpc } from './pipe/handlers/hooks.rpc';
 import { registerUsageRpc } from './pipe/handlers/usage.rpc';
+import { registerPcEnvRpc } from './pipe/handlers/pcEnv.rpc';
+import { cachedAgentEnvSummary } from './pcdiff/agentEnv';
+import { AGENT_ENV_COMMAND } from '../shared/agentEnvSummary';
 import { CompletionAlarm } from '../shared/hooks/CompletionAlarm';
 import { UsagePoller } from './claude/UsagePoller';
 import { setUsageClientVersion } from './claude/UsageApi';
@@ -1621,6 +1624,8 @@ ipcMain.on(IPC.LANLINK_RESYNC, () => {
 // one the pane actually runs on (its CLAUDE_CONFIG_DIR), not the workspace's
 // current binding, so this path is not subject to the routing limitation noted
 // at onClaudeTurnEnd above.
+// Agent environments compared across paired PCs (read-only).
+registerPcEnvRpc(rpcRouter, { wmuxVersion: app.getVersion() });
 registerUsageRpc(rpcRouter, {
   listClaudeAccounts: () => getAccountStore().listAccounts()
     .filter((a) => a.vendor === 'claude')
@@ -2411,7 +2416,10 @@ app.on('ready', async () => {
         .then(() => {
           reportDesktopPresence(() => client, focusedPrimaryWindow() !== null);
           disposePhoneBridge?.();
-          disposePhoneBridge = installPhoneBridge(client,(command,payload) => command === MOA_WAKE_COMMAND
+          disposePhoneBridge = installPhoneBridge(client,(command,payload) => command === AGENT_ENV_COMMAND
+            // A paired PC comparing agent environments: names, versions and hashes.
+            ? cachedAgentEnvSummary({ wmuxVersion: app.getVersion() })
+            : command === MOA_WAKE_COMMAND
             // A failure main learns after the accept goes back on the receipt.
             ? Promise.resolve(handlePhoneMoaWake(payload))
             : command.startsWith('browser.') ? handlePhoneBrowser(command,payload,{
