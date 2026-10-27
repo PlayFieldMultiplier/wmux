@@ -1268,6 +1268,12 @@ export const en = {
   'resume.pickLabel': 'Pick a {agent} session',
   'resume.pickTooltip': 'Choose which conversation to resume in this pane',
   'resume.pickerNote': 'No saved conversation is bound to this pane, so this opens the session picker for this folder instead of guessing: other panes may share the folder. Choose the conversation there. No permission-bypass flag is added.',
+  // The conversation's folder is gone (a removed worktree): the pane names it
+  // and offers its exact resume line to copy instead of the picker.
+  'resume.folderGone': '{agent} conversation {id} was in {cwd}, which no longer exists',
+  'resume.copyCommand': 'Copy resume command',
+  'resume.copyCommandTooltip': 'Copies the line that resumes this exact conversation. It works once the folder exists again (for example, after you add the worktree back). Nothing is typed or run for you.',
+  'resume.copiesLine': 'Copies: {command}',
 
   // Browser
   'browser.urlPlaceholder': 'Enter URL...',

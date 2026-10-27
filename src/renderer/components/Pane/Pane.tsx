@@ -43,7 +43,7 @@ import { ErrorBoundary } from '../ErrorBoundary';
 import { type ResumeBinding, agentSupportsPermissionFlag, defaultResumeSkipPermissions, normalizeResumeCwd, permissionFlagFor, resumeGrammarFor, resumePermissionFlag } from '../../../shared/agentResume';
 import { applyRoleBinding, type RoleBinding } from '../../../shared/orchestratorRole';
 import { CHATV2_PROVIDER_SESSION_ID } from '../../../shared/chatv2/ipc';
-import { ResumeInfoChipGate } from './ResumeInfoChip';
+import { ResumeInfoChipGate, lostFolderResumeCommand, lostFolderShell } from './ResumeInfoChip';
 import { tokenAttrs } from '../../themes';
 import PaneDecorations from '../../plugins/PaneDecorations';
 import { isRemoteMirrorVisible } from '../../stores/slices/remoteWorkspacesSlice';
@@ -352,6 +352,23 @@ export function recoveryAgentLive(args: {
 export const AUTO_RESUME_CONTINUE_PROMPT = 'Continue the task you were working on when this session was interrupted.';
 
 /**
+ * The recovery pill's choice. `exactOk`: the binding is this launcher's and its
+ * folder matches the pane, so the pill offers the exact resume. `lostFolder`:
+ * the daemon reports that folder gone, which wins over a matching pane cwd (a
+ * stale surface or hook cwd can still name it), so the pill offers only the
+ * notice and Copy, never the exact resume or the picker.
+ */
+export function recoveryPillTarget(
+  binding: Pick<ResumeBinding, 'agent' | 'cwdMissing'> | undefined,
+  launcher: string,
+  cwdMatches: boolean,
+): { exactOk: boolean; lostFolder: boolean } {
+  const agentMatches = binding?.agent === launcher;
+  const lostFolder = agentMatches && binding?.cwdMissing === true;
+  return { exactOk: cwdMatches && agentMatches && !lostFolder, lostFolder };
+}
+
+/**
  * The line to run when a recovered Claude Code or Codex pane is resumed on app
  * start, or null
  * when it should be left alone. Same assembly as the Resume pill, with the
@@ -368,7 +385,7 @@ export function planAutoResume(args: {
   /** The user's opt-in setting (`claudeResumeOnStart`); off means the pill only. */
   enabled: boolean;
   agent: string | undefined;
-  binding: { agent?: string; cwd: string; sessionId?: string; permissionMode?: Parameters<typeof permissionFlagFor>[0] } | undefined;
+  binding: { agent?: string; cwd: string; sessionId?: string; permissionMode?: Parameters<typeof permissionFlagFor>[0]; cwdMissing?: boolean } | undefined;
   paneCwds: ReadonlyArray<string | undefined>;
   roleBinding: RoleBinding | undefined;
   /** OSC 133: the shell is running a command, not sitting at its prompt. */
@@ -398,7 +415,9 @@ export function planAutoResume(args: {
   const sessionId = binding?.sessionId && CHATV2_PROVIDER_SESSION_ID.test(binding.sessionId)
     ? binding.sessionId
     : undefined;
-  const exact = !!binding && !!sessionId && binding.agent === agent &&
+  // A folder the daemon reports gone is never resumed, even when a pane cwd
+  // still names it: `--resume` would run in a folder that is not there.
+  const exact = !!binding && !!sessionId && binding.agent === agent && binding.cwdMissing !== true &&
     args.paneCwds.some((c) => !!c && normalizeResumeCwd(binding.cwd) === normalizeResumeCwd(c));
   if (!binding || !sessionId || !exact) return null; // #1946: the pill offers the picker
   const plan = planRecoveryPillType({
@@ -959,6 +978,8 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
   // mode (defaultResumeSkipPermissions), computed at render because the
   // binding can land after the hint.
   const [resumeSkipOverride, setResumeSkipOverride] = useState<boolean | undefined>(undefined);
+  // The lost-folder Copy button's brief "Copied".
+  const [resumeCopied, setResumeCopied] = useState(false);
   // Never carry a stale stage/toggle across panes or a re-offer.
   useEffect(() => {
     setResumeStage(0);
@@ -1112,6 +1133,7 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
             pane.surfaces.find((s) => s.id === pane.activeSurfaceId)?.cwd,
             workspace.metadata?.cwd,
           ]}
+          shell={pane.surfaces.find((s) => s.id === pane.activeSurfaceId)?.shell}
         />
       )}
       {/* #645 — drop indicator. Drawn by the pane being hovered, not by the
@@ -1242,9 +1264,32 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
         // only fills lastDetectedAgent when empty — so a stale hint for one agent
         // could pair with a binding for another, typing `codex --resume <claude-id>`
         // (codex P2). Gate the exact-session path on an agent match too.
-        const agentMatches = resumeBinding?.agent === launcher;
-        const exactOk = cwdMatches && agentMatches;
+        // The conversation's folder is gone (a removed worktree, lostFolder):
+        // the picker here cannot list it, so the row names it and offers its
+        // exact line to copy. Nothing is typed (it runs only once the folder
+        // is back).
+        const { exactOk, lostFolder } = recoveryPillTarget(resumeBinding, launcher, cwdMatches);
         const sessionId = exactOk ? resumeBinding?.sessionId : undefined;
+        const lostCommand = lostFolder && resumeBinding
+          ? lostFolderResumeCommand(resumeBinding, lostFolderShell(
+            window.electronAPI.platform,
+            pane.surfaces.find((s) => s.id === pane.activeSurfaceId)?.shell,
+          ), paneRoleBinding)
+          : null;
+        const lostNotice = lostFolder && resumeBinding
+          ? (id: string) => t('resume.folderGone', { agent: agentName, id, cwd: resumeBinding.cwd })
+          : null;
+        const onCopyLost = (e: React.MouseEvent) => {
+          e.stopPropagation();
+          if (!lostCommand) return;
+          void navigator.clipboard?.writeText(lostCommand).then(
+            () => {
+              setResumeCopied(true);
+              window.setTimeout(() => setResumeCopied(false), 1200);
+            },
+            () => { /* clipboard blocked — the tooltip still shows the line */ },
+          );
+        };
         // #1916: the skip toggle and the permission flag (see the helper).
         const { canSkip, skipChecked, forceSkip, permFlag } = resolveRecoveryPillPermissions({
           launcher,
@@ -1408,7 +1453,23 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
                 overflow: 'hidden',
               }}
             >
-            <button
+            {lostFolder ? lostCommand && (
+              <button
+                onClick={onCopyLost}
+                title={[t('resume.copyCommandTooltip'), t('resume.copiesLine', { command: lostCommand })].join('\n')}
+                aria-label={t('resume.copyCommand')}
+                style={{
+                  padding: '1px 6px',
+                  font: 'inherit',
+                  color: 'inherit',
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                }}
+              >
+                {resumeCopied ? `✓ ${t('common.copied')}` : `⧉ ${t('resume.copyCommand')}`}
+              </button>
+            ) : <button
               onClick={onPrimary}
               disabled={!resumePtyReady}
               title={primaryTooltip}
@@ -1424,7 +1485,7 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
               }}
             >
               {primaryLabel}
-            </button>
+            </button>}
             <button
               onClick={(e) => {
                 e.stopPropagation();
@@ -1449,7 +1510,7 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
                 cwd is visible before the click. A path, so mono, muted
                 metadata with no colour (DESIGN.md); it ellipsizes at the
                 START so the folder name stays visible, full path on hover. */}
-            {runCwd && (
+            {runCwd && !lostFolder && (
               <span
                 data-resume-cwd
                 title={t('resume.runsIn', { cwd: runCwd })}
@@ -1467,6 +1528,26 @@ export default function PaneComponent({ pane, workspace, isActive, isWorkspaceVi
                 }}
               >
                 <bdi>{t('resume.inCwd', { cwd: runCwd })}</bdi>
+              </span>
+            )}
+            {/* The lost folder's notice, in place of the run folder: muted
+                metadata with no colour; the tooltip has the full UUID. */}
+            {lostNotice && resumeBinding && (
+              <span
+                data-resume-lost-folder
+                title={lostNotice(resumeBinding.sessionId)}
+                style={{
+                  flex: '0 1 auto',
+                  minWidth: 0,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  fontWeight: 400,
+                  letterSpacing: 0,
+                  color: 'var(--text-muted)',
+                }}
+              >
+                {lostNotice(resumeBinding.sessionId.slice(0, 8))}
               </span>
             )}
           </span>

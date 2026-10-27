@@ -1,10 +1,13 @@
+// @wmux-lane unit
+// `win32` here is only a platform string passed to a pure function; nothing reaches the OS.
 import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createElement } from 'react';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import ResumeInfoChip, { buildPaneResumeCommand } from '../ResumeInfoChip';
+import ResumeInfoChip, { buildPaneResumeCommand, lostFolderResumeCommand, lostFolderShell } from '../ResumeInfoChip';
 import type { ResumeBinding } from '../../../../shared/agentResume';
+import { createDeadPaneRecovery } from '../../../../shared/ptyRecovery';
 
 // buildPaneResumeCommand — the per-pane resume affordance's command builder.
 // Mirrors the reboot-recovery pill's exact-vs-fallback gates (deckRecovery /
@@ -309,5 +312,69 @@ describe('buildPaneResumeCommand — no exact session opens the picker (#1946)',
     expect(src).toMatch(/built\.exact\s*\?\s*t\('resume\.label', \{ agent: agentName \}\)\s*:\s*t\('resume\.pickLabel', \{ agent: agentName \}\)/);
     expect(src).toContain("t('resume.pickerNote')");
     expect(src).toContain("title={built.exact ? t('resume.tooltip') : t('resume.pickTooltip')}");
+  });
+});
+
+// A conversation whose folder is gone: the copied line changes to that folder
+// first and resumes exactly that id, or there is no line at all.
+describe('lostFolderResumeCommand', () => {
+  const id = 'a1b2c3d4-0000-0000-0000-9f8e7d6c5b4a';
+  it('builds the cd-guarded exact line for each shell grammar', () => {
+    expect(lostFolderResumeCommand(claude({ cwd: '/repo/wt-gone' }), 'posix')).toBe(`cd -- '/repo/wt-gone' && claude --resume ${id}`);
+    expect(lostFolderResumeCommand(claude({ cwd: 'C:\\repo\\wt' }), 'pwsh'))
+      .toBe(`if (Set-Location -LiteralPath 'C:\\repo\\wt' -PassThru -ErrorAction SilentlyContinue) { claude --resume ${id} }`);
+  });
+
+  it('gives no line for an unusable folder, a bad id or a shell it is not written for', () => {
+    expect(lostFolderResumeCommand(claude({ cwd: "/repo/it's" }), 'posix')).toBeNull();
+    expect(lostFolderResumeCommand(claude({ cwd: 'relative/dir' }), 'posix')).toBeNull();
+    expect(lostFolderResumeCommand(claude({ cwd: '/repo/wt', sessionId: 'not-a-uuid' }), 'posix')).toBeNull();
+    expect(lostFolderResumeCommand(claude({ cwd: '/repo/wt' }), null)).toBeNull(); // e.g. cmd.exe
+  });
+
+  it("applies the pane's role binding to the agent invocation, before the folder change", () => {
+    expect(lostFolderResumeCommand(claude({ cwd: '/repo/wt-gone' }), 'posix', { agent: 'claude', model: 'haiku' }))
+      .toBe(`cd -- '/repo/wt-gone' && claude --model haiku --resume ${id}`);
+    // No skip toggle on a copied line: the role's skip flag is withheld, as with the toggle off.
+    expect(lostFolderResumeCommand(claude({ cwd: '/repo/wt-gone' }), 'posix', { agent: 'claude', model: 'haiku', skipPermissions: true }))
+      .toBe(`cd -- '/repo/wt-gone' && claude --model haiku --resume ${id}`);
+    // A role bound to a different agent leaves the line as it is.
+    expect(lostFolderResumeCommand(claude({ cwd: '/repo/wt-gone' }), 'posix', { agent: 'codex', model: 'gpt-5.5' }))
+      .toBe(`cd -- '/repo/wt-gone' && claude --resume ${id}`);
+  });
+
+  it('doubles plain and typographic single quotes in a pwsh folder', () => {
+    expect(lostFolderResumeCommand(claude({ cwd: "C:\\it's\\wt\u2019s" }), 'pwsh'))
+      .toBe(`if (Set-Location -LiteralPath 'C:\\it''s\\wt\u2019\u2019s' -PassThru -ErrorAction SilentlyContinue) { claude --resume ${id} }`);
+  });
+});
+
+describe('lostFolderShell', () => {
+  it('writes POSIX grammar only for a POSIX shell or the platform default off Windows', () => {
+    for (const shell of [undefined, '', '/bin/zsh', '-zsh', '/bin/bash', 'sh']) {
+      expect(lostFolderShell('darwin', shell)).toBe('posix');
+    }
+    for (const shell of ['/opt/homebrew/bin/nu', 'nu', '/usr/bin/fish']) {
+      expect(lostFolderShell('linux', shell)).toBeNull();
+    }
+  });
+
+  it('writes PowerShell grammar on Windows and none for cmd.exe', () => {
+    expect(lostFolderShell('win32', 'C:\\Program Files\\PowerShell\\7\\pwsh.exe')).toBe('pwsh');
+    expect(lostFolderShell('win32', 'C:\\Windows\\System32\\cmd.exe')).toBeNull();
+  });
+});
+
+describe('cwdMissing and the exact resume', () => {
+  it('a pane cwd that still names the gone folder never takes the exact path', () => {
+    const out = buildPaneResumeCommand(claude({ cwd: '/repo/wt-gone', cwdMissing: true }), ['/repo/wt-gone'], true);
+    expect(out?.exact).toBe(false);
+    expect(out?.command).not.toContain('a1b2c3d4');
+  });
+
+  it('a dead-pane recovery binding resumes exactly once the folder is back', () => {
+    const recovered = createDeadPaneRecovery({ id: 's1', resumeBinding: claude({ cwd: '/repo/wt', cwdMissing: true }) });
+    const out = buildPaneResumeCommand(recovered.resumeBinding as ResumeBinding, ['/repo/wt'], false);
+    expect(out).toMatchObject({ command: `claude --resume a1b2c3d4-0000-0000-0000-9f8e7d6c5b4a`, exact: true });
   });
 });

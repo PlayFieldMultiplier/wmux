@@ -1252,6 +1252,10 @@ export const pl = {
   'resume.pickLabel': 'Wybierz sesję {agent}',
   'resume.pickTooltip': 'Wybierz rozmowę do wznowienia w tym panelu',
   'resume.pickerNote': 'Z tym panelem nie jest powiązana żadna zapisana rozmowa, więc zamiast zgadywać otworzy się lista sesji dla tego folderu: inne panele mogą korzystać z tego samego folderu. Wybierz tam rozmowę. Flaga pomijania uprawnień nie zostanie dodana.',
+  'resume.folderGone': 'Rozmowa {agent} {id} była w {cwd}, który już nie istnieje',
+  'resume.copyCommand': 'Kopiuj polecenie wznowienia',
+  'resume.copyCommandTooltip': 'Kopiuje polecenie, które wznawia dokładnie tę rozmowę. Zadziała, gdy folder znów będzie istniał (np. po ponownym dodaniu worktree). Nic nie zostanie wpisane ani uruchomione za Ciebie.',
+  'resume.copiesLine': 'Kopiuje: {command}',
 
   // Browser
   'browser.urlPlaceholder': 'Wprowadź URL...',

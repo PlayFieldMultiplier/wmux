@@ -1,5 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { asRecoveryAgentSlug, createDeadPaneRecovery, mergeDeadPaneRecovery } from '../ptyRecovery';
+import { asRecoveryAgentSlug, createDeadPaneRecovery, mergeDeadPaneRecovery, normalizeDeadPaneRecovery } from '../ptyRecovery';
+
+describe('dead-pane recovery drops the listed cwdMissing fact', () => {
+  const marked = { agent: 'claude', sessionId: 'a1b2c3d4-0000-0000-0000-9f8e7d6c5b4a', cwd: '/repo/wt', ts: 1, cwdMissing: true };
+
+  it('neither a new descriptor nor one read back from session.json keeps it', () => {
+    const { cwdMissing: _drop, ...plain } = marked;
+    expect(_drop).toBe(true);
+    expect(createDeadPaneRecovery({ id: 's1', resumeBinding: marked }).resumeBinding).toEqual(plain);
+    expect(normalizeDeadPaneRecovery({ resumeBinding: marked })?.resumeBinding).toEqual(plain);
+    expect(marked.cwdMissing).toBe(true); // the listed copy is not changed
+  });
+});
 
 describe('createDeadPaneRecovery', () => {
   it('preserves validated legacy distro arguments independently of current settings', () => {

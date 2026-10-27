@@ -10018,6 +10018,29 @@ describe('WebTerminalServer', () => {
       expect(raw).not.toContain('transcriptPath');
     });
 
+    // A folder the daemon reports gone never matches, even when the pane's
+    // recorded cwd still names it: the desktop would type `--resume` there.
+    it('never calls a gone folder a cwd match', async () => {
+      live.push({
+        id: 's-gone', cwd: '/repo/wt-gone', cols: 80, rows: 24, state: 'detached',
+        agent: undefined, lastDetectedAgent: undefined, lastActivity: '2020-01-01T00:00:00.000Z',
+        env: { WMUX_WORKSPACE_ID: 'ws-1', WMUX_WORKSPACE_NAME: 'Workspace 1' },
+        cmd: '/usr/bin/bash',
+      });
+      resumeStates = {
+        's-gone': { binding: { agent: 'claude', sessionId: 'conv-gone', cwd: '/repo/wt-gone', ts: 1, cwdMissing: true } },
+      };
+      try {
+        const info = await startRO();
+        const r = await fetch(`${base()}/api/workspaces`, { headers: bearer(info.token as string) });
+        const body = (await r.json()) as { workspaces: Array<{ panes: Array<{ sessionId: string; resume?: Record<string, unknown> }> }> };
+        const pane = body.workspaces.flatMap((w) => w.panes).find((p) => p.sessionId === 's-gone');
+        expect(pane?.resume).toEqual({ agent: 'claude', sessionId: 'conv-gone', cwdMatches: false });
+      } finally {
+        live.length = 3;
+      }
+    });
+
     it('groups multiple panes into the same workspace, sorted by sessionId', async () => {
       live.push({
         id: 's4', cwd: '/x2', cols: 80, rows: 24, state: 'detached',

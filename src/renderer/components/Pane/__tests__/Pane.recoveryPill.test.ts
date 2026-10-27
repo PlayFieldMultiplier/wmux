@@ -16,7 +16,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { AUTO_RESUME_CONTINUE_PROMPT, claimAutoResume, markResumePillUsed, planAutoResume, planRecoveryPillType, resolveRecoveryPillPermissions } from '../Pane';
+import { AUTO_RESUME_CONTINUE_PROMPT, claimAutoResume, markResumePillUsed, planAutoResume, planRecoveryPillType, recoveryPillTarget, resolveRecoveryPillPermissions } from '../Pane';
 import type { RoleBinding } from '../../../../shared/orchestratorRole';
 
 const SID = 'a1b2c3d4-0000-0000-0000-9f8e7d6c5b4a';
@@ -249,6 +249,24 @@ describe('planRecoveryPillType — gates that must NOT rewrite', () => {
         roleBinding: reviewer,
       }),
     ).toBeNull();
+  });
+});
+
+// A folder the daemon reports gone (cwdMissing) wins over a pane cwd that
+// still names it: the pill offers only the notice and Copy, and nothing is
+// resumed on start.
+describe('cwdMissing — the pill and the automatic resume', () => {
+  const gone = { agent: 'claude', cwd: '/repo/wt-gone', sessionId: SID, cwdMissing: true };
+
+  it('the pill takes the lost-folder branch even when the pane cwd matches', () => {
+    expect(recoveryPillTarget(gone, 'claude', true)).toEqual({ exactOk: false, lostFolder: true });
+    expect(recoveryPillTarget(gone, 'claude', false)).toEqual({ exactOk: false, lostFolder: true });
+    expect(recoveryPillTarget({ ...gone, cwdMissing: undefined }, 'claude', true)).toEqual({ exactOk: true, lostFolder: false });
+    expect(recoveryPillTarget(gone, 'codex', true)).toEqual({ exactOk: false, lostFolder: false });
+  });
+
+  it('nothing is typed on start for a gone folder, even from a matching cwd', () => {
+    expect(planAutoResume({ enabled: true, agent: 'claude', binding: gone, paneCwds: ['/repo/wt-gone'], roleBinding: undefined })).toBeNull();
   });
 });
 
