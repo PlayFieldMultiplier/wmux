@@ -1,5 +1,6 @@
 // The worker fence's pure parts: the settings it builds and how a launch
 // line and the launch's other settings are merged with it.
+// @wmux-lane unit — `win32` is only an argument to a pure function here.
 import { describe, it, expect } from 'vitest';
 import * as path from 'node:path';
 import {
@@ -167,16 +168,28 @@ describe('the credential set', () => {
 
 describe('the hook command', () => {
   it('runs the runtime as node with the roots after the script, and refuses what a shell would read', () => {
-    expect(workerFenceHookCommand('/opt/wmux', '/d/hook.cjs', ['/w t', '/tmp/x'])).toBe('ELECTRON_RUN_AS_NODE=1 "/opt/wmux" "/d/hook.cjs" "/w t" "/tmp/x" || exit 2');
-    expect(workerFenceHookCommand('/opt/wmux', '/d/hook.cjs', [])).toBeNull();
-    expect(workerFenceHookCommand('node', '/d/hook.cjs', ['/w'])).toBeNull();
-    expect(workerFenceHookCommand('/opt/wmux', '/d/hook.cjs', ['/w/$(x)'])).toBeNull();
-    expect(workerFenceHookCommand('/opt/wmux', '/d/hook.cjs', ['/w/"x'])).toBeNull();
-    expect(workerFenceHookCommand('/opt/wmux', '/d/hook.cjs', ['/w/a\\b'])).toBeNull();
-    expect(workerFenceHookCommand('/opt/wmux', '/d/hook.cjs', ['/w/a`b'])).toBeNull();
-    expect(workerFenceHookCommand('/opt/wmux', '/d/hook.cjs', ['/w/a\nb'])).toBeNull();
+    expect(workerFenceHookCommand('/opt/wmux', '/d/hook.cjs', ['/w t', '/tmp/x'], 'linux')).toBe('ELECTRON_RUN_AS_NODE=1 "/opt/wmux" "/d/hook.cjs" "/w t" "/tmp/x" || exit 2');
+    expect(workerFenceHookCommand('/opt/wmux', '/d/hook.cjs', [], 'linux')).toBeNull();
+    expect(workerFenceHookCommand('node', '/d/hook.cjs', ['/w'], 'linux')).toBeNull();
+    expect(workerFenceHookCommand('/opt/wmux', '/d/hook.cjs', ['/w/$(x)'], 'linux')).toBeNull();
+    expect(workerFenceHookCommand('/opt/wmux', '/d/hook.cjs', ['/w/"x'], 'linux')).toBeNull();
+    expect(workerFenceHookCommand('/opt/wmux', '/d/hook.cjs', ['/w/a\\b'], 'linux')).toBeNull();
+    expect(workerFenceHookCommand('/opt/wmux', '/d/hook.cjs', ['/w/a`b'], 'linux')).toBeNull();
+    expect(workerFenceHookCommand('/opt/wmux', '/d/hook.cjs', ['/w/a\nb'], 'linux')).toBeNull();
     // Any other character reads as itself inside double quotes.
-    expect(workerFenceHookCommand('/opt/wmux', '/d/hook.cjs', ['/Users/me/코딩/a+b@c (1)'])).toBe('ELECTRON_RUN_AS_NODE=1 "/opt/wmux" "/d/hook.cjs" "/Users/me/코딩/a+b@c (1)" || exit 2');
+    expect(workerFenceHookCommand('/opt/wmux', '/d/hook.cjs', ['/Users/me/코딩/a+b@c (1)'], 'linux')).toBe('ELECTRON_RUN_AS_NODE=1 "/opt/wmux" "/d/hook.cjs" "/Users/me/코딩/a+b@c (1)" || exit 2');
+  });
+
+  it('on Windows: drive paths with forward slashes, for the Git Bash claude runs hooks in', () => {
+    expect(workerFenceHookCommand('C:\\Program Files\\wmux\\wmux.exe', 'C:\\Users\\me\\.wmux\\factory\\worker-hooks\\a.cjs', ['C:\\Users\\me\\.wmux\\worktrees\\t-1', 'C:/Users/me/.wmux/factory/worker-tmp/x'], 'win32'))
+      .toBe('ELECTRON_RUN_AS_NODE=1 "C:/Program Files/wmux/wmux.exe" "C:/Users/me/.wmux/factory/worker-hooks/a.cjs" "C:/Users/me/.wmux/worktrees/t-1" "C:/Users/me/.wmux/factory/worker-tmp/x" || exit 2');
+    // A UNC path, a POSIX path, and what bash or cmd would read are refused.
+    expect(workerFenceHookCommand('\\\\server\\share\\wmux.exe', 'C:\\h.cjs', ['C:\\w'], 'win32')).toBeNull();
+    expect(workerFenceHookCommand('C:\\wmux.exe', 'C:\\h.cjs', ['/w'], 'win32')).toBeNull();
+    expect(workerFenceHookCommand('C:\\wmux.exe', 'C:\\h.cjs', ['C:\\w\\a\\\\b'], 'win32')).toBeNull();
+    for (const bad of ['C:\\w\\%PATH%', 'C:\\w\\a!b', 'C:\\w\\$x', 'C:\\w\\"x', 'C:\\w\\a`b']) {
+      expect(workerFenceHookCommand('C:\\wmux.exe', 'C:\\h.cjs', [bad], 'win32'), bad).toBeNull();
+    }
   });
 });
 

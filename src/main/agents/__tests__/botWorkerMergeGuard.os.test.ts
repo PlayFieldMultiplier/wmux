@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -33,6 +33,13 @@ import { setTaskLedgerForTests } from '../../deck/taskLedgerHost';
 import { toWslPath } from '../../../shared/imagePaste';
 import { wslMcpLaunchOf } from '../../../shared/wslIntegration';
 import { cmdLaunchPathRefusal, promptFileArgument } from '../../../shared/promptFileArgument';
+
+// The worker fence (botWorkerFence.ts) has tests of its own
+// (botWorkerFence.os.test.ts); here every launch is unfenced.
+vi.mock('../botWorkerFence', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../botWorkerFence')>()),
+  attachWorkerFence: () => ({ kind: 'none' }),
+}));
 
 let dir: string;
 beforeEach(() => {
@@ -446,7 +453,7 @@ describe('pty:create applies the guard (source-level lock)', () => {
     // claude line, the guard's own wmux server), codex guard, merge guard, pin.
     expect(src).toContain('let staged = await withAccountQuota(options);');
     expect(src).toContain('const wsl = isWslShell(shellPath);');
-    expect(src).toMatch(/withBotWorkerMergeGuard\(await guardCodexBotWorker\(staged, botWorker\), botWorker, \{\}, \{ wsl,/);
+    expect(src).toMatch(/withBotWorkerMergeGuard\(await guardCodexBotWorker\(staged, botWorker\), botWorker, fenceSupport \? \{ fenceSupport \} : \{\}, \{ wsl,/);
     // #2256: a path cmd cannot carry is refused by its own cause before the guard refuses the line.
     const pathCheck = src.indexOf('const refusal = cmdLaunchPathRefusal(line0, getWmuxDir(), namesClaude(line0) && !namesCodex(line0));');
     expect(pathCheck).toBeGreaterThan(src.indexOf('async function stageCreate('));

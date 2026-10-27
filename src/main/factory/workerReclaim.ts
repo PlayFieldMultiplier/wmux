@@ -1612,7 +1612,7 @@ export interface WorkerResumePorts {
   listSessions: () => Promise<WorkerSessionInfo[]>;
   /** Type the launch line + Enter into the pane through the bot worker
    *  launch guard; false when nothing was typed. */
-  typeLine: (sessionId: string, line: string) => boolean;
+  typeLine: (sessionId: string, line: string) => boolean | Promise<boolean>;
   /** Each task's launch generation on disk (workerSlots.ts): a resume typed
    *  into the worker's pane is a new launch, recorded before the line is
    *  typed. Absent: not recorded. */
@@ -1923,7 +1923,7 @@ async function resumeOnce(
   }
   let typed = false;
   try {
-    typed = ports.typeLine(pane.sessionId, line);
+    typed = await ports.typeLine(pane.sessionId, line);
   } catch {
     typed = false;
   }

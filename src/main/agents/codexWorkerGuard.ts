@@ -69,6 +69,8 @@ import { botWorkerSessionRecord, claimInflightCodexLaunch, guardRefireLine, guar
 import { getWmuxDir } from '../../daemon/config';
 import { workerGitEnv, workerGitPreflight, workerGitSafeArgs } from '../worktask/workerGit';
 import { excludeLineOnce } from '../git/infoExclude';
+import { isFencedMode, linePermissionMode, workerFenceSupport } from './botWorkerFence';
+import { namesClaude } from '../../shared/botWorkerGuard';
 
 const execFileP = promisify(execFile);
 const RUN_TIMEOUT_MS = 15_000;
@@ -252,7 +254,12 @@ export async function guardBotWorkerSessionText(
   if (namesCodex(text) && isBotWorkerSession(sessionId, deps.dir)) {
     return guardCodexSessionLine(botWorkerSessionRecord(sessionId, deps.dir), text, deps, kind === 'refire' ? 'worktask:refire' : 'pty:write-launch');
   }
-  const guardDeps = { ...(deps.dir ? { dir: deps.dir } : {}), ...(deps.folders ? { folders: deps.folders } : {}) };
+  // A claude line that runs unattended in a bot's worker pane is fenced: the
+  // fence support (and its self-test) is settled before the guard runs.
+  const fenceSupport = namesClaude(text) && isFencedMode(linePermissionMode(text)) && isBotWorkerSession(sessionId, deps.dir)
+    ? await workerFenceSupport()
+    : undefined;
+  const guardDeps = { ...(deps.dir ? { dir: deps.dir } : {}), ...(deps.folders ? { folders: deps.folders } : {}), ...(fenceSupport ? { fenceSupport } : {}) };
   return kind === 'refire' ? guardRefireLine(sessionId, text, guardDeps) : guardSessionLaunch(sessionId, text, guardDeps);
 }
 

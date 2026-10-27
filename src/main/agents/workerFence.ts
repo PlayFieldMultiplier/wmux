@@ -602,9 +602,27 @@ try {
  *  node, the script, then the roots (the worktree first, then the worker's
  *  temp folder), each in double quotes. Null when there is no root or a path
  *  is not absolute or holds what a POSIX shell reads inside double quotes
- *  (`"`, `$`, a backtick, a backslash) or a line break. Pure. */
-export function workerFenceHookCommand(runtime: string, script: string, roots: readonly string[]): string | null {
-  const plain = (p: string) => /^\/[^"$`\\\0\r\n]*$/.test(p);
-  if (roots.length === 0 || ![runtime, script, ...roots].every(plain)) return null;
-  return `ELECTRON_RUN_AS_NODE=1 "${runtime}" "${script}" ${roots.map((r) => `"${r}"`).join(' ')} || exit 2`;
+ *  (`"`, `$`, a backtick, a backslash) or a line break.
+ *
+ *  On Windows claude runs a hook in Git Bash, so the line keeps its POSIX
+ *  form and each drive path is written with forward slashes (`C:/…`), which
+ *  bash leaves alone and Windows reads as the same path. Without Git Bash,
+ *  claude counts only exit 0 or 2 from such a hook and blocks on anything
+ *  else, so a line that shell cannot run refuses the call. A UNC path, a
+ *  path that is not a drive path, or one holding `%` or `!` (which cmd
+ *  reads) gives null. Pure. */
+export function workerFenceHookCommand(runtime: string, script: string, roots: readonly string[], platform: NodeJS.Platform = process.platform): string | null {
+  if (roots.length === 0) return null;
+  const paths = [runtime, script, ...roots];
+  let quoted: string[];
+  if (platform === 'win32') {
+    const drive = (p: string) => /^[A-Za-z]:[\\/][^"$`%!\0\r\n]*$/.test(p) && !/[\\/]{2}/.test(p.slice(2));
+    if (!paths.every(drive)) return null;
+    quoted = paths.map((p) => `"${p.replace(/\\/g, '/')}"`);
+  } else {
+    const plain = (p: string) => /^\/[^"$`\\\0\r\n]*$/.test(p);
+    if (!paths.every(plain)) return null;
+    quoted = paths.map((p) => `"${p}"`);
+  }
+  return `ELECTRON_RUN_AS_NODE=1 ${quoted.join(' ')} || exit 2`;
 }

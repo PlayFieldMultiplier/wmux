@@ -452,6 +452,11 @@ export interface BotWorkerLaunchFiles {
    *  loads no settings but its own file (`--setting-sources=`), a worker
    *  with a signed-in connection. */
   settingSources?: 'project' | 'none';
+  /** The worker fence the launch ran in (main/agents/botWorkerFence.ts):
+   *  `full`, `weaker` (no OS sandbox), or `off` (turned off for its
+   *  workspace), and the worker's own temp folder. A later launch of the
+   *  session is never fenced less. */
+  fence?: { strength: 'full' | 'weaker' | 'off'; tempDir?: string };
 }
 
 /** One bot worker session. `workspaceId` and `at` are the version-1 record
@@ -494,7 +499,18 @@ export function isWorkerLaunchFiles(raw: unknown, dir: string): raw is BotWorker
   const keys = r.connectionKeys === undefined
     || (Array.isArray(r.connectionKeys) && r.connectionKeys.length <= 32 && r.connectionKeys.every((k) => typeof k === 'string' && /^[A-Z_][A-Z0-9_]{0,63}$/.test(k)));
   return inside(r.settingsFile, 'worker-settings') && inside(r.mcpConfigFile, 'worker-mcp') && (r.level === 'core' || r.level === 'full') && keys
-    && (r.settingSources === undefined || r.settingSources === 'project' || r.settingSources === 'none');
+    && (r.settingSources === undefined || r.settingSources === 'project' || r.settingSources === 'none')
+    && (r.fence === undefined || isLaunchFence(r.fence, dir));
+}
+
+/** A recorded fence: a known strength, and a temp folder (when any) directly
+ *  under `<dir>/factory/worker-tmp/`. Pure. */
+function isLaunchFence(raw: unknown, dir: string): raw is NonNullable<BotWorkerLaunchFiles['fence']> {
+  if (!raw || typeof raw !== 'object') return false;
+  const f = raw as Record<string, unknown>;
+  if (f.strength !== 'full' && f.strength !== 'weaker' && f.strength !== 'off') return false;
+  return f.tempDir === undefined
+    || (typeof f.tempDir === 'string' && path.dirname(f.tempDir) === path.join(dir, 'factory', 'worker-tmp') && /^[0-9a-f]{32}$/.test(path.basename(f.tempDir)));
 }
 
 export function botWorkerSessionsPath(dir: string): string {
@@ -514,7 +530,7 @@ export function readBotWorkerSessions(dir: string): { sessions: Map<string, BotW
       // Launch files that are not main's own are not used (the launch is then
       // guarded as a record without them).
       const launch = isWorkerLaunchFiles(r.launch, dir)
-        ? { settingsFile: r.launch.settingsFile, mcpConfigFile: r.launch.mcpConfigFile, level: r.launch.level, ...(r.launch.connectionKeys?.length ? { connectionKeys: [...r.launch.connectionKeys] } : {}), ...(r.launch.settingSources ? { settingSources: r.launch.settingSources } : {}) }
+        ? { settingsFile: r.launch.settingsFile, mcpConfigFile: r.launch.mcpConfigFile, level: r.launch.level, ...(r.launch.connectionKeys?.length ? { connectionKeys: [...r.launch.connectionKeys] } : {}), ...(r.launch.settingSources ? { settingSources: r.launch.settingSources } : {}), ...(r.launch.fence ? { fence: { strength: r.launch.fence.strength, ...(r.launch.fence.tempDir ? { tempDir: r.launch.fence.tempDir } : {}) } } : {}) }
         : undefined;
       out.set(id, {
         workspaceId: r.workspaceId,
