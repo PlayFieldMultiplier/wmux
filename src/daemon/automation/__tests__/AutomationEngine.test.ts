@@ -1163,6 +1163,8 @@ describe('AutomationEngine — failure breaker', () => {
     expect(schedule(b)).toMatchObject({ enabled: false, nextRunAt: null, failureStreak: { reason: 'launch_failed', count: 3 } });
     expect(pausedItems(b)).toEqual([expect.objectContaining({ automationId: b.id, automationName: 'Nightly', reason: 'launch_failed' })]);
     expect(pausedEvents(b)).toEqual([{ type: 'attention', automationId: b.id, automationName: 'Nightly', kind: 'failure-paused' }]);
+    const tripped = b.h.events.filter((e) => e.type === 'run-changed' && e.pausedSchedule);
+    expect(tripped).toEqual([expect.objectContaining({ run: expect.objectContaining({ state: 'failed', reason: 'launch_failed' }) })]);
     // A scheduled run already claimed when the breaker tripped fails later: nothing more.
     await failures(b, 1);
     expect(schedule(b)).toMatchObject({ enabled: false, failureStreak: { count: 3 } });
@@ -1236,8 +1238,9 @@ describe('AutomationEngine — failure breaker', () => {
     expect(schedule(again)).toMatchObject({ enabled: false, failureStreak: { count: 3 } });
   });
 
-  it('await_timeout counts', async () => {
+  it('an unanswered wait (await_timeout) neither counts nor breaks the streak', async () => {
     const b = await breaker();
+    await failures(b, 2);
     b.h.state.pendingApproval = true;
     for (let i = 0; i < 3; i++) {
       const run = await live(b);
@@ -1247,8 +1250,8 @@ describe('AutomationEngine — failure breaker', () => {
       await b.h.engine.monitorOnce();
       expect(runById(b, run.id)).toMatchObject({ state: 'failed', reason: 'await_timeout' });
     }
-    expect(schedule(b)).toMatchObject({ enabled: false, failureStreak: { reason: 'await_timeout', count: 3 } });
-    expect(pausedItems(b)).toEqual([expect.objectContaining({ reason: 'await_timeout' })]);
+    expect(schedule(b)).toMatchObject({ enabled: true, failureStreak: { reason: 'launch_failed', count: 2 } });
+    expect(pausedItems(b)).toEqual([]);
   });
 
   it('a run whose end is reported twice counts once', async () => {

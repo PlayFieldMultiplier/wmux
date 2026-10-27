@@ -233,14 +233,13 @@ export interface AutomationRun {
 
 /**
  * The ends of a launched run that count toward the failure breaker. Every other
- * end is neutral: a person cancelled it, it never launched (skipped), or the
- * daemon cannot tell what happened (unknown).
+ * end is neutral: a person cancelled it or never answered it (await_timeout),
+ * it never launched (skipped), or the daemon cannot tell what happened (unknown).
  */
 export const AUTOMATION_FAILURE_REASONS = [
   'first_run_blocked',
   'launch_failed',
   'account_missing',
-  'await_timeout',
   'timeout',
   'agent_error',
   'login_needed',
@@ -465,7 +464,8 @@ export const AUTOMATION_EVENT = 'automation.event';
 
 export type AutomationEvent =
   | { type: 'automations-changed' }
-  | { type: 'run-changed'; run: AutomationRun; automationName: string }
+  /** `pausedSchedule`: this run's end tripped the failure breaker, and the `failure-paused` notice speaks for it. */
+  | { type: 'run-changed'; run: AutomationRun; automationName: string; pausedSchedule?: true }
   /** A draft arrived, a grant was raised, or a grant went stale — surface to the human. */
   | { type: 'attention'; automationId: string; automationName: string; kind: AutomationAttentionKind }
   /** A due run was held by the usage reserve: it starts once `untilMs` passes. Main tells the owner once per hold. */

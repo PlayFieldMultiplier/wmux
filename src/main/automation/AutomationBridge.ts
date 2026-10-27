@@ -120,6 +120,7 @@ export function parseAutomationEvent(data: unknown): AutomationEvent | null {
       type: 'run-changed',
       run: run as unknown as AutomationRun,
       automationName: typeof ev.automationName === 'string' ? ev.automationName : '',
+      ...(ev.pausedSchedule === true && { pausedSchedule: true as const }),
     };
   }
   if (ev.type === 'attention') {
@@ -302,7 +303,8 @@ export class AutomationBridge {
     this.send({ kind: 'event', event: ev });
     if (ev.type === 'run-changed') {
       noteRunForIdentity(ev.run);
-      this.toastRun(ev.run, ev.automationName);
+      // The failure-paused notice that follows says it for the run that tripped the breaker.
+      if (!ev.pausedSchedule) this.toastRun(ev.run, ev.automationName);
     } else if (ev.type === 'attention') {
       // The live event carries no queue id; read the queue so the toast and
       // its ack refer to the same item.
