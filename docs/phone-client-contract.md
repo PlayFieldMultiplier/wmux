@@ -6266,7 +6266,8 @@ transcript), then the Claude/Codex transcript file — and adds `chat` to every
   readable chat (OpenCode off a session route, OpenCode without the plugin,
   another live agent with no transcript yet): send the user to Terminal. The
   preview is cheap and never enumerates processes, so `shell-has-children` only
-  ever arrives from the launch POST, which re-verifies everything.
+  ever arrives from the launch POST, which re-verifies everything. So does
+  `worker-fence`, which the preview never reads.
 - **`historyEpoch`** is `h1:` (transcript file), `t1:` (OpenCode, a hash — the
   raw plugin epoch never leaves the daemon) or `m1:` (managed). Compare it for
   equality; never parse it. Evicting old rows sets `historyTruncated` and keeps
@@ -6589,6 +6590,7 @@ changes; never persist it. A new agent pane takes the same `mode` and
 | `resume` + `prompt` for an agent that cannot take both, or a bound resume with a `prompt` on a PowerShell pane | 409 | `{error:"resume-prompt-unsupported"}` | `none` |
 | shell not ready | 409 | `{error:"launch-not-ready", reason:"shell-not-empty"\|"shell-busy"\|"approval-pending"\|"not-integrated"}` | `none` |
 | shell cannot launch | 409 | `{error:"launch-unsupported", reason:"unsupported-shell"\|"shell-has-children"}` | `none` |
+| the pane is a fenced unattended worker | 409 | `{error:"launch-unsupported", reason:"worker-fence"}` | `none` |
 | same id, different request | 409 | `{error:"launch-id-conflict"}` | `none` |
 | malformed id or request | 400 | `{error:"invalid-chat-request", detail?}` | `none` |
 | id expired | 400 | `{error:"launch-id-expired"}` | `none` — "check Terminal" |
@@ -6600,6 +6602,10 @@ changes; never persist it. A new agent pane takes the same `mode` and
 | failure once typing started | 502 | `{error:"launch-unconfirmed"}` | `uncertain` |
 
 Every body also carries `clientLaunchId` when the request had one.
+`worker-fence`: the pane is a fenced unattended worker; it can be restarted only
+from the desktop app. An app that does not know the reason shows its generic
+`launch-unsupported` text. Other bot-worker refusals stay `launch-unsupported`
+with no reason.
 `unsupported-shell` means a WSL pane, a Windows host, or a shell other than
 zsh, bash or sh. A shell process that is gone at the idle check reads as
 `launch-not-ready` with `shell-busy` (the pane is being torn down). The launch

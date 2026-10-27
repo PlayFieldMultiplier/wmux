@@ -22,7 +22,7 @@ import { isUsableResumeBinding, withLaunchSessionId, type ResumeBinding } from '
 import { CHATV2_PROVIDER_SESSION_ID } from '../../shared/chatv2/ipc';
 import { classifyShell } from '../shell-integration';
 import { inResumeCwd, type ResumeShell } from './v2/handoff';
-import { guardBotWorkerLaunch } from './botWorkerLaunchGuard';
+import { guardBotWorkerLaunch, type WorkerFenceRefused } from './botWorkerLaunchGuard';
 import type { TerminalChatFailure, TerminalChatService } from '../transcript/TerminalChatService';
 import type { ChatSessionService } from './ChatSessionService';
 import { ChatSendReceiptStore, type StoredChatOutcome } from './ChatSendReceiptStore';
@@ -34,7 +34,7 @@ import { isActiveQueueState, type ChatQueueReason, type ChatQueueRecord, type Ch
 import {
   CHAT_LAUNCH_MAX_UNITS, CHAT_MESSAGE_RETENTION_MS, CHAT_SEND_MAX_UNITS, OPENCODE_MAX_SEND_BYTES, OPENCODE_REQUEST_MAX_BYTES,
   checkChatId, dangerousLaunchNotice, fileHistoryEpoch, openCodeSendBytes, tuiHistoryEpoch,
-  type ChatBlocked, type ChatBridge, type ChatCancelOutcome, type ChatCancelRequest, type ChatCancelTag, type ChatEffect, type ChatLaunchOutcome, type ChatLaunchPreview, type ChatLaunchReason,
+  type ChatBlocked, type ChatBridge, type ChatCancelOutcome, type ChatCancelRequest, type ChatCancelTag, type ChatEffect, type ChatLaunchOutcome, type ChatLaunchPreview, type ChatLaunchReason, type ChatLaunchRefusalReason,
   type ChatLaunchRequest, type ChatLaunchTag, type ChatOwner, type ChatResolution, type ChatSendOutcome, type ChatSendRequest,
   type ChatSendTag, type ChatTurn, type DangerousLaunchTrace,
   type ChatDeliveredMessage, type ChatDequeueResult, type ChatQueueEvent, type ChatQueueHoldReason, type ChatQueueItemView, type ChatSendReceiptView,
@@ -150,8 +150,8 @@ export interface NativeChatBridgeDeps<P extends ChatPane> {
   /** Whether the agent takes a first message on its resume line (default RESUME_TAKES_PROMPT). */
   resumeTakesPrompt?(agent: TerminalLaunchAgent): boolean;
   /** The launch line for a pane, guarded when it is a bot's fan-out worker
-   *  (default guardBotWorkerLaunch); null: type nothing. */
-  botWorkerLaunch?(id: string, line: string, head: string, folders?: readonly string[]): string | null;
+   *  (default guardBotWorkerLaunch); null or a worker-fence refusal: type nothing. */
+  botWorkerLaunch?(id: string, line: string, head: string, folders?: readonly string[]): string | null | WorkerFenceRefused;
   relays: {
     retire(id: string): Promise<void>;
     prepare(id: string, pane: P): Promise<LaunchRelay>;
@@ -1759,7 +1759,7 @@ export function createChatBridge<P extends ChatPane>(deps: NativeChatBridgeDeps<
   // Launch
 
   const launch = async (req: ChatLaunchRequest): Promise<ChatLaunchOutcome> => {
-    const fail = (error: ChatLaunchTag, reason?: ChatLaunchReason, effect: ChatEffect = 'none'): ChatLaunchOutcome =>
+    const fail = (error: ChatLaunchTag, reason?: ChatLaunchRefusalReason, effect: ChatEffect = 'none'): ChatLaunchOutcome =>
       ({ ok: false, error, effect, ...(reason ? { reason } : {}) });
     const { id, agent } = req;
     if (agent !== 'claude' && agent !== 'codex') return fail('invalid-chat-request');
@@ -1846,6 +1846,8 @@ export function createChatBridge<P extends ChatPane>(deps: NativeChatBridgeDeps<
       const folders = [bound?.cwd, pane.meta.cwd, pane.meta.spawnCwd].filter((f): f is string => typeof f === 'string' && f.length > 0);
       const guarded = (deps.botWorkerLaunch ?? ((i: string, l: string, h: string, f?: readonly string[]) => guardBotWorkerLaunch(i, l, h, undefined, f)))(id, command, head, folders);
       if (guarded === null) return fail('launch-unsupported');
+      // Said so the phone can tell where to restart it: only the desktop app.
+      if (typeof guarded !== 'string') return fail('launch-unsupported', 'worker-fence');
       command = guarded;
       if (agent === 'codex' && boundShell !== 'pwsh') {
         // Hook session_id can name an invocation rather than the conversation.
