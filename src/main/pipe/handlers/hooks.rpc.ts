@@ -642,7 +642,12 @@ export function registerHooksRpc(
       return { ok: false, reason: 'internal-error' };
     }
 
-    const ptyId = resolvePtyIdForSignal(signal, workspaces);
+    // No folder tier here: main holds neither the panes' resume bindings nor
+    // their agent pids, so it cannot tell a pane's own session from one started
+    // in another terminal in the same folder (the daemon verifies that; see
+    // HookIngest verifyGuessedRoute). This path only runs while the daemon is
+    // unreachable, so such a signal is dropped instead of guessed.
+    const ptyId = resolvePtyIdForSignal(signal, workspaces, { byFolder: false });
     meter.recordWorkspaceMatch(ptyId != null);
     if (!ptyId) {
       // No wmux workspace owns this cwd. Bridge fired but the user's
@@ -1412,6 +1417,8 @@ export async function resolveWorkspacesForSignal(
  *      bridge subprocess still has the inherited env).
  *   3. null — caller emits 'no-workspace-match'.
  *
+ * `byFolder: false` skips step 2, for a caller that cannot verify the guess.
+ *
  * Codex P1 #7 + user dogfood 2026-05-24 (workspace 4 turn-end was
  * landing in workspace 2's toast because both workspaces had the same
  * cwd) — cwd alone is ambiguous when two panes share a path. Env-first
@@ -1420,6 +1427,7 @@ export async function resolveWorkspacesForSignal(
 export function resolvePtyIdForSignal(
   signal: AgentSignal,
   workspaces: WorkspaceListEntry[],
+  { byFolder = true }: { byFolder?: boolean } = {},
 ): string | null {
   // X6 ③: EXACT per-pane routing. The daemon stamps WMUX_PTY_ID (its own session
   // id) into every pane's env, so a hook carries the precise ptyId it fired from.
@@ -1462,7 +1470,7 @@ export function resolvePtyIdForSignal(
       // yet would land here.
     }
   }
-  return resolvePtyIdForCwd(signal.cwd, workspaces);
+  return byFolder ? resolvePtyIdForCwd(signal.cwd, workspaces) : null;
 }
 
 /** Receipt-only attribution: lifecycle routing may choose an active pane,

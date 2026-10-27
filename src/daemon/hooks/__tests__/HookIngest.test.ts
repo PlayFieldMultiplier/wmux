@@ -3,7 +3,9 @@ import {
   HookIngest,
   PERMISSION_NOTIFY_GRACE_MS,
   gateInputIsCritical,
+  resolveSessionIdForCwd,
   resolveSessionIdForSignal,
+  sameConversation,
   type DetectorHeldEventData,
   type HookAgentEventData,
   type HookIngestSession,
@@ -581,7 +583,7 @@ describe('HookIngest', () => {
       const health = ingest.health();
       expect(health.latency.total).toBe(0);
       expect(health.latency.workspaceMatchRate).toEqual({ matched: 0, missed: 0 });
-      expect(health.refused).toEqual({ claimedPaneNotLive: 0, gateBypassedOnRefusedClaim: 0 });
+      expect(health.refused).toEqual({ claimedPaneNotLive: 0, gateBypassedOnRefusedClaim: 0, gateUnverifiedRoute: 0 });
       // Nothing recorded yet → no partial window to report.
       expect(health.flood).toBeNull();
     });
@@ -1543,11 +1545,16 @@ describe('resolveSessionIdForSignal', () => {
     )).toBeNull();
   });
 
-  it('resolves a lone pane in the claimed workspace when cwd cannot place it', () => {
+  it('resolves a lone pane in the claimed workspace when cwd cannot place it, only with proof', () => {
+    const lone = [session({ id: 'pty-c', cwd: '/other', env: { WMUX_WORKSPACE_ID: 'ws-2' }, resumeBinding: { agent: 'claude', sessionId: 'conv-c' } })];
+    expect(resolveSessionIdForSignal(
+      makeSignal({ cwd: '/tmp/unrelated', workspaceId: 'ws-2', agentSessionId: 'conv-c' }),
+      lone,
+    )).toBe('pty-c');
     expect(resolveSessionIdForSignal(
       makeSignal({ cwd: '/tmp/unrelated', workspaceId: 'ws-2' }),
       sessions,
-    )).toBe('pty-c');
+    )).toBeNull();
   });
 
   it('falls through rather than guessing between sibling panes', () => {
@@ -1558,9 +1565,9 @@ describe('resolveSessionIdForSignal', () => {
   });
 
   it('matches cwd exactly before falling back to the longest prefix', () => {
-    expect(resolveSessionIdForSignal(makeSignal({ cwd: '/repo/sub' }), sessions)).toBe('pty-b');
-    expect(resolveSessionIdForSignal(makeSignal({ cwd: '/repo/sub/deep' }), sessions)).toBe('pty-b');
-    expect(resolveSessionIdForSignal(makeSignal({ cwd: '/repo/other' }), sessions)).toBe('pty-a');
+    expect(resolveSessionIdForCwd('/repo/sub', sessions)).toBe('pty-b');
+    expect(resolveSessionIdForCwd('/repo/sub/deep', sessions)).toBe('pty-b');
+    expect(resolveSessionIdForCwd('/repo/other', sessions)).toBe('pty-a');
   });
 
   it('requires a proper directory prefix', () => {
@@ -1574,7 +1581,7 @@ describe('resolveSessionIdForSignal', () => {
 
   it('normalizes Windows paths to the same key', () => {
     const win = [session({ id: 'pty-w', cwd: 'D:\\wmux', env: {} })];
-    expect(resolveSessionIdForSignal(makeSignal({ cwd: 'd:/wmux/src' }), win)).toBe('pty-w');
+    expect(resolveSessionIdForCwd('d:/wmux/src', win)).toBe('pty-w');
   });
 
   it('breaks a cwd tie toward the most recently active pane', () => {
@@ -1585,64 +1592,114 @@ describe('resolveSessionIdForSignal', () => {
     expect(resolveSessionIdForSignal(makeSignal({ cwd: '/repo' }), tied)).toBe('pty-new');
   });
 
-  it('still places a cwd-routed signal on an unbound pane, its own bound pane, or with no session id', () => {
+  it('takes an unbound pane on an exact cwd match only, never by prefix', () => {
     const unbound = [session({ id: 'pty-a', cwd: '/repo', env: {} })];
     expect(resolveSessionIdForSignal(makeSignal({ cwd: '/repo', agentSessionId: 'conv-1' }), unbound)).toBe('pty-a');
+    expect(resolveSessionIdForSignal(makeSignal({ cwd: '/repo/sub', agentSessionId: 'conv-1' }), unbound)).toBeNull();
+  });
+
+  it('takes a bound pane for its own conversation, without a pid, even by prefix', () => {
     const bound = [
       session({ id: 'pty-a', cwd: '/repo', env: {}, lastActivity: '2026-02-01T00:00:00.000Z', resumeBinding: { agent: 'claude', sessionId: 'conv-1' } }),
       session({ id: 'pty-b', cwd: '/repo', env: {}, lastActivity: '2026-01-01T00:00:00.000Z', resumeBinding: { agent: 'claude', sessionId: 'conv-2' } }),
     ];
     // The pane bound to this conversation wins even though the other is more recent.
     expect(resolveSessionIdForSignal(makeSignal({ cwd: '/repo', agentSessionId: 'conv-2' }), bound)).toBe('pty-b');
-    expect(resolveSessionIdForSignal(makeSignal({ cwd: '/repo' }), bound)).toBe('pty-a');
+    expect(resolveSessionIdForSignal(makeSignal({ cwd: '/repo/sub', agentSessionId: 'conv-2' }), bound)).toBe('pty-b');
+    // Same agent, another conversation, no pid: neither pane.
+    expect(resolveSessionIdForSignal(makeSignal({ cwd: '/repo', agentSessionId: 'conv-3' }), bound)).toBeNull();
+    expect(resolveSessionIdForSignal(makeSignal({ cwd: '/repo' }), bound)).toBeNull();
+  });
+
+  it('never retries a weaker prefix once the exact match is refused', () => {
+    const panes = [
+      session({ id: 'pty-home', cwd: '/home/me', env: {}, resumeBinding: { agent: 'claude', sessionId: 'conv-9' } }),
+      session({ id: 'pty-proj', cwd: '/home/me/proj', env: {}, resumeBinding: { agent: 'claude', sessionId: 'conv-1' } }),
+    ];
+    // The ancestor pane would verify on its own, but it is a weaker match than
+    // the refused exact one.
+    expect(resolveSessionIdForSignal(makeSignal({ cwd: '/home/me/proj', agentSessionId: 'conv-9' }), panes)).toBeNull();
+    expect(resolveSessionIdForSignal(makeSignal({ cwd: '/home/me/other', agentSessionId: 'conv-9' }), panes)).toBe('pty-home');
+  });
+
+  it('follows an agent switch only when the switched-to agent is live in the pane', () => {
+    const pane = [session({ id: 'pty-a', cwd: '/repo', env: {}, resumeBinding: { agent: 'claude', sessionId: 'conv-1' } })];
+    const codex = makeSignal({ agent: 'codex', cwd: '/repo', agentSessionId: '0a1b2c3d-0000-7000-8000-00000000c0de' });
+    expect(resolveSessionIdForSignal(codex, pane, { liveAgentFor: () => 'codex' })).toBe('pty-a');
+    expect(resolveSessionIdForSignal(codex, pane, { liveAgentFor: () => 'claude' })).toBeNull();
+    // A stale detector marker is not a live process.
+    expect(resolveSessionIdForSignal(codex, [{ ...pane[0], lastDetectedAgent: 'codex' }])).toBeNull();
+  });
+});
+
+describe('sameConversation', () => {
+  it('reads the transcript stem and the session_id form on both sides', () => {
+    const binding = { sessionId: 'sid-1', transcriptPath: '/home/me/.claude/projects/-repo/stem-1.jsonl' };
+    expect(sameConversation({ agentSessionId: 'stem-1', payload: {} }, binding)).toBe(true);
+    expect(sameConversation({ agentSessionId: 'other', payload: { session_id: 'sid-1' } }, binding)).toBe(true);
+    expect(sameConversation({ agentSessionId: 'other', payload: { transcript_path: 'C:\\Users\\me\\stem-1.jsonl' } }, binding)).toBe(true);
+    expect(sameConversation({ agentSessionId: 'other', payload: { session_id: 'sid-2' } }, binding)).toBe(false);
   });
 });
 
 describe('HookIngest — a session outside any pane in a bound pane\'s folder', () => {
-  it('neither rebinds nor lights the pane when its session id is not the pane\'s binding', () => {
+  const PANE_CONV = '11111111-1111-4111-8111-111111111111';
+  const boundPane = session({ id: 'pty-a', cwd: '/repo', env: {}, resumeBinding: { agent: 'claude', sessionId: PANE_CONV } });
+  const fromPid = (overrides: Partial<AgentSignal>, agentPid?: number) => ({
+    ...makeSignal({ cwd: '/repo', ...overrides }),
+    ...(agentPid !== undefined ? { agentPid } : {}),
+  });
+
+  it('neither rebinds, lights nor gates the pane while the pane\'s own claude is live', () => {
     // Measured: a Claude started in another terminal in the pane's folder sends
     // SessionStart, UserPromptSubmit and StopFailure with no ptyId; the cwd tier
     // handed all three to the pane, rebinding it and flipping it to running, then error.
-    const fixture = makeDeps([session({
-      id: 'pty-a',
-      cwd: '/repo',
-      env: {},
-      resumeBinding: { agent: 'claude', sessionId: '11111111-1111-4111-8111-111111111111' },
-    })]);
-    const ingest = new HookIngest(fixture.deps);
-    const outside = (kind: AgentSignalKind) => makeSignal({
-      kind,
-      cwd: '/repo',
-      agentSessionId: '22222222-2222-4222-8222-222222222222',
+    const fixture = makeDeps([boundPane]);
+    const logs: string[] = [];
+    const ingest = new HookIngest({
+      ...fixture.deps,
+      agentPidFor: () => 4242,
+      liveAgentFor: () => 'claude',
+      log: (_level, message) => { logs.push(message); },
     });
+    const outside = (kind: AgentSignalKind) => fromPid({ kind, agentSessionId: '22222222-2222-4222-8222-222222222222' }, 5151);
     for (const kind of ['agent.session_start', 'agent.user_prompt_submit', 'agent.stop_failure'] as const) {
       expect(ingest.handle(outside(kind))).toEqual({ ok: false, reason: 'no-workspace-match' });
     }
-    expect(ingest.handlePermissionGate(outside('agent.awaiting_permission')).ok).toBe(false);
+    // No opinion: the bridge writes no permissionDecision for a refusal.
+    expect(ingest.handlePermissionGate(outside('agent.awaiting_permission'))).toEqual({ ok: false, reason: 'foreign-process' });
     expect(fixture.bindings).toHaveLength(0);
     expect(fixture.emitted).toHaveLength(0);
     expect(fixture.nudges).toHaveLength(0);
+    expect(ingest.health().refused.gateUnverifiedRoute).toBe(1);
+    expect(logs.filter((m) => m.includes('bound-to-another-session'))).toHaveLength(1);
+  });
+
+  it('does not reach a home-folder pane by prefix', () => {
+    const fixture = makeDeps([session({ id: 'pty-home', cwd: '/home/me', env: {} })]);
+    const ingest = new HookIngest(fixture.deps);
+    expect(ingest.handle(makeSignal({ kind: 'agent.session_start', cwd: '/home/me/proj', agentSessionId: 'conv-9' })).ok).toBe(false);
+    expect(fixture.bindings).toHaveLength(0);
   });
 
   it('still rebinds when the pane\'s own agent process starts a new session without the pane env', () => {
     // A claude launched in the pane with a scrubbed env (no WMUX_PTY_ID) that
     // runs /clear: a new session id, but the hook comes from the pane's tracked agent.
-    const fixture = makeDeps([session({
-      id: 'pty-a',
-      cwd: '/repo',
-      env: {},
-      resumeBinding: { agent: 'claude', sessionId: '11111111-1111-4111-8111-111111111111' },
-    })]);
+    const fixture = makeDeps([boundPane]);
     const ingest = new HookIngest({ ...fixture.deps, agentPidFor: () => 4242 });
-    const fromPid = (agentPid: number) => ({
-      ...makeSignal({ kind: 'agent.session_start', cwd: '/repo', agentSessionId: '33333333-3333-4333-8333-333333333333' }),
-      agentPid,
-    });
-    expect(ingest.handle(fromPid(5151))).toEqual({ ok: false, reason: 'no-workspace-match' });
-    expect(ingest.handle(fromPid(4242)).ok).toBe(true);
+    const cleared = (agentPid: number) => fromPid({ kind: 'agent.session_start', agentSessionId: '33333333-3333-4333-8333-333333333333' }, agentPid);
+    expect(ingest.handle(cleared(5151))).toEqual({ ok: false, reason: 'no-workspace-match' });
+    expect(ingest.handle(cleared(4242)).ok).toBe(true);
     expect(fixture.bindings).toEqual([
       expect.objectContaining({ ptyId: 'pty-a', binding: expect.objectContaining({ sessionId: '33333333-3333-4333-8333-333333333333' }) }),
     ]);
+  });
+
+  it('accepts the pane\'s own conversation without a pid', () => {
+    const fixture = makeDeps([boundPane]);
+    const ingest = new HookIngest(fixture.deps);
+    expect(ingest.handle(fromPid({ kind: 'agent.user_prompt_submit', agentSessionId: PANE_CONV })).ok).toBe(true);
+    expect(fixture.emitted.map((e) => e.sessionId)).toEqual(['pty-a']);
   });
 });
 
@@ -1699,7 +1756,7 @@ describe('HookIngest — a signal whose claimed pane is gone is refused (#1523)'
     expect(fixture.bindings).toHaveLength(0);
     expect(fixture.emitted).toHaveLength(0);
     expect(fixture.nudges).toHaveLength(0);
-    expect(ingest.health().refused).toEqual({ claimedPaneNotLive: 2, gateBypassedOnRefusedClaim: 0 });
+    expect(ingest.health().refused).toEqual({ claimedPaneNotLive: 2, gateBypassedOnRefusedClaim: 0, gateUnverifiedRoute: 0 });
     const refusals = logs.filter((l) => l.message.includes('claimed-pane-not-live'));
     expect(refusals).toEqual([{ level: 'info', message: expect.stringContaining('pty-closed') }]);
   });
@@ -1710,7 +1767,7 @@ describe('HookIngest — a signal whose claimed pane is gone is refused (#1523)'
     expect(ingest.handle(codexStop({ cwd: '/elsewhere' })).ok).toBe(false);
     expect(ingest.handlePermissionGate(codexStop({ kind: 'agent.awaiting_permission', cwd: '/elsewhere' })).ok)
       .toBe(false);
-    expect(ingest.health().refused).toEqual({ claimedPaneNotLive: 0, gateBypassedOnRefusedClaim: 0 });
+    expect(ingest.health().refused).toEqual({ claimedPaneNotLive: 0, gateBypassedOnRefusedClaim: 0, gateUnverifiedRoute: 0 });
   });
 
   it('ptyId of a live pane in ANOTHER workspace → refused', () => {
@@ -1736,7 +1793,7 @@ describe('HookIngest — a signal whose claimed pane is gone is refused (#1523)'
     expect(gate()).toEqual({ ok: false, reason: 'no-workspace-match' });
     expect(gate()).toEqual({ ok: false, reason: 'no-workspace-match' });
     expect(fixture.emitted).toHaveLength(0);
-    expect(ingest.health().refused).toEqual({ claimedPaneNotLive: 0, gateBypassedOnRefusedClaim: 2 });
+    expect(ingest.health().refused).toEqual({ claimedPaneNotLive: 0, gateBypassedOnRefusedClaim: 2, gateUnverifiedRoute: 0 });
     const traces = logs.filter((m) => m.includes('ungated'));
     expect(traces).toHaveLength(1);
     expect(traces[0]).toContain('Bash');
@@ -1753,11 +1810,12 @@ describe('HookIngest — a signal whose claimed pane is gone is refused (#1523)'
     ]);
   });
 
-  it('no ptyId → workspace/cwd routing unchanged', () => {
+  it('no ptyId → an unbound pane still takes a workspace or folder route on an exact cwd', () => {
     const fixture = makeDeps([session({ id: 'pty-a', cwd: '/repo' }), otherWorkspacePane]);
     const ingest = new HookIngest(fixture.deps);
-    expect(ingest.handle(codexStop({ workspaceId: 'ws-1', cwd: '/elsewhere' })).ok).toBe(true);
-    expect(ingest.handle(codexStop({ cwd: '/other/sub' })).ok).toBe(true);
+    expect(ingest.handle(codexStop({ workspaceId: 'ws-1', cwd: '/repo' })).ok).toBe(true);
+    expect(ingest.handle(codexStop({ cwd: '/other' })).ok).toBe(true);
+    expect(ingest.handle(codexStop({ cwd: '/other/sub' })).ok).toBe(false);
     expect(fixture.bindings.map((b) => b.ptyId)).toEqual(['pty-a', 'pty-other']);
   });
 
