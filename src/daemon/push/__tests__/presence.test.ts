@@ -245,6 +245,14 @@ describe('DeferredPushQueue', () => {
     expect(h.queue.size).toBe(0);
   });
 
+  it('★ a held push keeps its capability and device list on release', () => {
+    const h = harness();
+    h.queue.park('bh-1', payload('bh-1'), 'bh-req-1', 'browserHelpPush', ['phone-1']);
+    h.setPresent(false);
+    h.queue.onPresenceChanged();
+    expect(h.send).toHaveBeenCalledWith(payload('bh-1'), { collapseId: 'bh-req-1', requires: 'browserHelpPush', deviceIds: ['phone-1'] });
+  });
+
   it('keeps holding while presence persists', () => {
     const h = harness();
     h.queue.park('ap-1', payload('ap-1'));

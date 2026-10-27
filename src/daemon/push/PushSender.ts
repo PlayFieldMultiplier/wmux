@@ -80,6 +80,7 @@ interface QueuedPush {
   payload: PushPayload;
   collapseId?: string;
   requires?: string;
+  deviceIds?: readonly string[];
 }
 
 export interface PushSendOutcome {
@@ -132,13 +133,18 @@ export class PushSender {
    *
    * `requires` limits it to devices that registered that capability: a payload
    * an older app cannot act on never reaches it.
+   *
+   * `deviceIds` limits it further to those devices (an empty list reaches
+   * nobody): a push only some devices may act on, and its retraction to the
+   * devices that got it.
    */
-  notify(payload: PushPayload, opts: { collapseId?: string; requires?: string } = {}): void {
+  notify(payload: PushPayload, opts: { collapseId?: string; requires?: string; deviceIds?: readonly string[] } = {}): void {
     if (!this.enabled) return;
     const item: QueuedPush = {
       payload,
       ...(opts.collapseId ? { collapseId: opts.collapseId } : {}),
       ...(opts.requires ? { requires: opts.requires } : {}),
+      ...(opts.deviceIds ? { deviceIds: opts.deviceIds } : {}),
     };
     this.transport.enqueue(() => this.send(item).then(() => undefined));
   }
@@ -157,9 +163,11 @@ export class PushSender {
       lastStatus: null,
     };
     const requires = item.requires;
+    const only = item.deviceIds ? new Set(item.deviceIds) : null;
     const targets = this.deps
       .targets()
-      .filter((t) => requires === undefined || (t.push.capabilities?.includes(requires) ?? false));
+      .filter((t) => requires === undefined || (t.push.capabilities?.includes(requires) ?? false))
+      .filter((t) => only === null || only.has(t.deviceId));
     const ts = this.now();
 
     for (const target of targets) {

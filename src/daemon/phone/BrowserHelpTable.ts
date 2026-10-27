@@ -33,6 +33,12 @@ export interface BrowserHelpTableOptions {
   isOwner: (clientId: string) => boolean;
   /** The frames one change produced, in order. */
   emit: (frames: PhoneBrowserHelpFrame[]) => void;
+  /**
+   * The open rows after each accepted table and each decision taken here,
+   * with how the rows that left ended when known: the phone push
+   * (push/browserHelpPush.ts). Not called when the publisher disconnects.
+   */
+  onRows?: (rows: readonly BrowserHelpTableRow[], closed: ReadonlyMap<string, Settled>) => void;
   log?: (level: 'info' | 'warn', message: string) => void;
   /** Injectable clock. */
   now?: () => number;
@@ -72,6 +78,7 @@ export class BrowserHelpTable {
     this.rows = next;
     this.publisher = clientId;
     if (frames.length) this.opts.emit(frames);
+    this.opts.onRows?.([...next.values()], states);
     return { ok: true, accepted: rows.length };
   }
 
@@ -117,6 +124,7 @@ export class BrowserHelpTable {
     while (this.decided.size > RECENTLY_CLOSED_MAX) this.decided.delete(this.decided.values().next().value as string);
     this.rows.delete(requestId);
     this.opts.emit([this.closeFrame(row, state)]);
+    this.opts.onRows?.([...this.rows.values()], new Map([[requestId, state]]));
   }
 
   private closeFrame(row: BrowserHelpTableRow, state: Settled | undefined): PhoneBrowserHelpFrame {
