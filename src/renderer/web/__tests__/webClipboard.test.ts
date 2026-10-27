@@ -12,7 +12,7 @@ type Api = {
   finishPendingCopy: () => void;
 };
 
-function setup(userActivation?: { isActive: boolean }) {
+function setup() {
   const writeText = vi.fn<(text: string) => Promise<void>>();
   const doc = Object.assign(new EventTarget(), {
     body: null,
@@ -20,7 +20,7 @@ function setup(userActivation?: { isActive: boolean }) {
     createElement: () => { throw new Error('unused: there is an async clipboard'); },
     execCommand: () => false,
   });
-  const api = webClipboardApi({ clipboard: { writeText } as unknown as Clipboard, userActivation }, doc as unknown as Document) as unknown as Api;
+  const api = webClipboardApi({ clipboard: { writeText } as unknown as Clipboard }, doc as unknown as Document) as unknown as Api;
   const states: PendingCopyState[] = [];
   api.onPendingCopy((s) => states.push(s));
   const gesture = (type: string, pointerType?: string) => {
@@ -141,10 +141,24 @@ describe('webClipboardApi pending copy', () => {
     quiet.gesture('keydown');
     expect(quiet.writeText).toHaveBeenCalledTimes(1);
 
-    const active = setup({ isActive: true });
+    const active = setup();
     active.writeText.mockRejectedValue(new Error('NotAllowedError'));
+    active.gesture('keydown');
     expect(await settled(active.api.writeText('denied'))).toBe('rejected: copy refused');
     expect(active.states).toEqual([]);
+  });
+
+  it('keeps a refusal that arrives a moment after the gesture, while activation is still transient', async () => {
+    const { writeText, api, states, gesture } = setup();
+    writeText.mockRejectedValueOnce(new Error('NotAllowedError'));
+    gesture('keydown');
+    await flush();
+    const result = settled(api.writeText('osc52 after the key'));
+    await flush();
+    expect(states).toEqual(['waiting']);
+    writeText.mockResolvedValueOnce(undefined);
+    gesture('keydown');
+    expect(await result).toBe('resolved');
   });
 });
 

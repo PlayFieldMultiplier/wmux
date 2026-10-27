@@ -112,7 +112,7 @@ export interface WebWriteOptions { keepIfRefused?: boolean }
  * outcome; a newer copy or the TTL drops it.
  */
 export function webClipboardApi(
-  nav: Pick<Navigator, 'clipboard'> & { userActivation?: { isActive: boolean } },
+  nav: Pick<Navigator, 'clipboard'>,
   doc: Pick<Document, 'createElement' | 'execCommand' | 'body' | 'activeElement' | 'addEventListener' | 'removeEventListener'> | null = typeof document === 'undefined' ? null : document,
 ): Record<string, unknown> {
   const clip = nav.clipboard as Clipboard | undefined;
@@ -187,6 +187,20 @@ export function webClipboardApi(
     if (e.type === 'pointerup' && pointerType === 'mouse') return;
     retryPending();
   }
+  // True only while an activation-granting event is being dispatched. Not
+  // `userActivation.isActive`: that stays true for seconds after the event, so
+  // an OSC 52 write arriving moments later would count as inside it. Cleared on
+  // the next task, not a microtask: microtasks run between an event's listeners.
+  let inGestureTask = false;
+  const markGesture = (e: Event): void => {
+    const pointerType = (e as PointerEvent).pointerType;
+    if (e.type === 'pointerdown' && pointerType !== 'mouse') return;
+    if (e.type === 'pointerup' && pointerType === 'mouse') return;
+    if (inGestureTask) return;
+    inGestureTask = true;
+    setTimeout(() => { inGestureTask = false; }, 0);
+  };
+  for (const type of [...gestureEvents, 'click'] as const) doc?.addEventListener(type, markGesture, true);
   const keepPending = (text: string, err: unknown, seq: number): Promise<void> => {
     if (!doc || text.length > MAX_PENDING_COPY_CHARS || seq !== writeSeq) return Promise.reject(err);
     clearPending(new Error('copy replaced by a newer one'));
@@ -208,7 +222,7 @@ export function webClipboardApi(
   // A refusal inside a gesture is final (a gesture is what a retry would add).
   const writeText = (text: string, opts?: WebWriteOptions): Promise<void> => {
     const seq = ++writeSeq;
-    const inGesture = nav.userActivation?.isActive === true;
+    const inGesture = inGestureTask;
     inFlight.add(seq);
     return writeNow(text).then(
       () => {
