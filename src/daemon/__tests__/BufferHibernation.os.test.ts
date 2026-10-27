@@ -419,6 +419,38 @@ describe.each(ENGINES)('buffer hibernation (%s ring)', (engine) => {
     expect(after.writtenAt).toBe(before.writtenAt + 5);
   });
 
+  it.skipIf(skip)('transport output (a native chunk) wakes the ring and lands after the history', async () => {
+    const ring = makeRing(8 * MB);
+    fillRing(ring);
+    const history = ring.readAll();
+    sessions.push(fakeSession('p1', ring));
+    await createBufferHibernation(deps()).sweep();
+    expect(ring.isHibernated).toBe(true);
+
+    const bytes = Buffer.from('chunk\r\n');
+    ring.writeNativeChunk({ text: bytes.toString(), byteLength: bytes.length, readBytes: () => bytes, dispose: () => undefined });
+
+    expect(ring.isHibernated).toBe(false);
+    expect(ring.readAll().equals(Buffer.concat([history, bytes]))).toBe(true);
+    expect(ring.totalBytesWritten).toBe(history.length + bytes.length);
+  });
+
+  it.skipIf(skip)('clear while hibernated empties the ring and keeps the lifetime offset', async () => {
+    const ring = makeRing(8 * MB);
+    fillRing(ring);
+    const total = ring.totalBytesWritten;
+    sessions.push(fakeSession('p1', ring));
+    await createBufferHibernation(deps()).sweep();
+
+    ring.clear();
+
+    expect(ring.isHibernated).toBe(false);
+    expect(ring.size).toBe(0);
+    expect(ring.totalBytesWritten).toBe(total);
+    ring.write(Buffer.from('fresh'));
+    expect(ring.readAllWithGeometry()).toMatchObject({ data: Buffer.from('fresh'), writtenAt: total + 5 });
+  });
+
   it.skipIf(skip)('dispose while hibernated releases the ring and leaves the .buf alone', async () => {
     const ring = makeRing(8 * MB);
     fillRing(ring);
@@ -439,16 +471,6 @@ describe.each(ENGINES)('buffer hibernation (%s ring)', (engine) => {
   });
 });
 
-describe('buffer hibernation candidates', () => {
-  it('treats a rust ring like a node ring', () => {
-    const ring = new RingBuffer(8 * MB, 'node');
-    fillRing(ring);
-    const s = fakeSession('r', ring);
-    Object.defineProperty(ring, 'backend', { value: 'rust' });
-    expect(hibernationBlocker(s as unknown as ManagedSession, deps(), NOW)).toBeNull();
-  });
-});
-
 describe.skipIf(!rustRingAvailable && !RUST_PROMISED)('a hibernated rust ring', () => {
   it('wakes for a native snapshot freeze, with lifetime offsets', async () => {
     const ring = new RingBuffer(1.5 * MB, 'rust');
@@ -464,6 +486,7 @@ describe.skipIf(!rustRingAvailable && !RUST_PROMISED)('a hibernated rust ring', 
       expect(ring.isHibernated).toBe(false);
       expect(frozen?.readAll().equals(before)).toBe(true);
       expect(ring.totalBytesWritten).toBe(total);
+      expect(frozen?.writtenAt).toBe(total);
     } finally {
       frozen?.dispose();
     }

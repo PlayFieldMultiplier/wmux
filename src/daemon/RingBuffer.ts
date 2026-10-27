@@ -94,6 +94,7 @@ export class RingBuffer {
   // A rust ring holds its bytes here, except while hibernated: then this is
   // undefined and the node fields below describe the ring (see hibernate()).
   private native?: NativeRingStorage;
+  private NativeRing?: new (capacity: number) => NativeRingStorage; // re-creates it on wake
   // Lifetime offset of the native ring's first byte: a ring re-created on wake
   // counts from 0, so this keeps totalBytesWritten monotonic across wakes.
   private nativeBase = 0;
@@ -133,7 +134,10 @@ export class RingBuffer {
     }
     this.capacity = capacityBytes;
     if (backend === 'rust') {
-      try { this.native = new (loadNativeTerminalCore('ring-v1').NativeRing)(capacityBytes); }
+      try {
+        this.NativeRing = loadNativeTerminalCore('ring-v1').NativeRing;
+        this.native = new this.NativeRing(capacityBytes);
+      }
       catch { reportNativeFallback('ring'); }
     }
     this.backend = this.native ? 'rust' : 'node';
@@ -236,7 +240,11 @@ export class RingBuffer {
   /** Capture inside the shared snapshot slot; callers own the frozen copy. */
   freezeNative() {
     if (this.backend === 'rust') this.wake();
-    return this.native?.freeze();
+    const frozen = this.native?.freeze();
+    // Lifetime offset, like readAllWithGeometry(). An own property shadows the
+    // native getter, so the object stays the native instance feedFrozen needs.
+    if (frozen && this.nativeBase > 0) Object.defineProperty(frozen, 'writtenAt', { value: this.nativeBase + frozen.writtenAt });
+    return frozen;
   }
 
   /** Release native storage on explicit session removal, independently of GC. */
@@ -279,7 +287,8 @@ export class RingBuffer {
    * ever recorded.
    */
   readAllWithGeometry(): { data: Buffer; geometry: ReplayGeometry | undefined; writtenAt: number } {
-    if (this.backend === 'rust') this.wake();
+    // Still hibernated: serve the newest bytes, as readAll() does.
+    if (this.backend === 'rust' && !this.wake()) return { data: Buffer.concat(this.pending), geometry: undefined, writtenAt: this.totalWritten };
     if (this.native) {
       const snapshot = this.native.readAllWithGeometry();
       return { ...snapshot, writtenAt: this.nativeBase + snapshot.writtenAt, geometry: snapshot.geometry ?? undefined };
@@ -616,7 +625,9 @@ export class RingBuffer {
    * same byte it was recorded at.
    */
   private restoreNative(data: Buffer): void {
-    const native = new (loadNativeTerminalCore('ring-v1').NativeRing)(this.capacity);
+    const NativeRing = this.NativeRing;
+    if (!NativeRing) throw new Error('rust ring without its native class');
+    const native = new NativeRing(this.capacity);
     const windowStart = this.totalWritten - data.length;
     let written = 0;
     for (const mark of this.geometry) {
