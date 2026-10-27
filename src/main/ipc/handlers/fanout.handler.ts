@@ -34,6 +34,7 @@ import {
   setFanoutTrustAgyFolders,
   setFanoutWorkerPermissionMode,
 } from '../../worktask/fanoutWorkerPolicy';
+import { isWorkerFenceOff, setWorkerFenceOff } from '../../agents/workerFencePolicy';
 import { customAgentUsers, loadFanoutPresetsReport, saveFanoutPresets } from '../../worktask/fanoutPresets';
 import { loadCustomAgentsReport, saveCustomAgents } from '../../worktask/customAgents';
 
@@ -100,6 +101,21 @@ export function registerFanOutHandler(service: FanOutService): () => void {
     ),
   );
 
+  // The worker fence's off switch, per workspace (workerFencePolicy.ts).
+  ipcMain.removeHandler(IPC.WORKER_FENCE_OFF_GET);
+  ipcMain.handle(
+    IPC.WORKER_FENCE_OFF_GET,
+    wrapHandler(IPC.WORKER_FENCE_OFF_GET, async (_event: Electron.IpcMainInvokeEvent, workspaceId: unknown) =>
+      typeof workspaceId === 'string' && isWorkerFenceOff(workspaceId)),
+  );
+  ipcMain.removeHandler(IPC.WORKER_FENCE_OFF_SET);
+  ipcMain.handle(
+    IPC.WORKER_FENCE_OFF_SET,
+    wrapHandler(IPC.WORKER_FENCE_OFF_SET, async (_event: Electron.IpcMainInvokeEvent, workspaceId: unknown, off: unknown) =>
+      setWorkerFenceOff(workspaceId, off),
+    ),
+  );
+
   ipcMain.removeHandler(IPC.FANOUT_TRUST_AGY_FOLDERS_GET);
   ipcMain.handle(
     IPC.FANOUT_TRUST_AGY_FOLDERS_GET,
@@ -162,6 +178,8 @@ export function registerFanOutHandler(service: FanOutService): () => void {
     ipcMain.removeHandler(IPC.FANOUT_REQUIRE_APPROVAL_SET);
     ipcMain.removeHandler(IPC.FANOUT_TRUST_AGY_FOLDERS_GET);
     ipcMain.removeHandler(IPC.FANOUT_TRUST_AGY_FOLDERS_SET);
+    ipcMain.removeHandler(IPC.WORKER_FENCE_OFF_GET);
+    ipcMain.removeHandler(IPC.WORKER_FENCE_OFF_SET);
     ipcMain.removeHandler(IPC.FANOUT_PRESETS_GET);
     ipcMain.removeHandler(IPC.FANOUT_PRESETS_SET);
     ipcMain.removeHandler(IPC.FANOUT_CUSTOM_AGENTS_GET);

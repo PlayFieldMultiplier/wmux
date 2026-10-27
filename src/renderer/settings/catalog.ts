@@ -185,6 +185,7 @@ export const SETTINGS_CATALOG: SettingsCatalogEntry[] = [
   { id: 'roles', tab: 'roles', labelKey: 'settings.roleBindings', descKey: 'settings.roleBindingsDesc', synonyms: 'role reviewer tester planner model bind' },
   { id: 'a2a', tab: 'roles', labelKey: 'settings.a2aAutoApproveExecute', descKey: 'settings.a2aAutoApproveExecuteDesc', synonyms: 'a2a execute approve' },
   { id: 'fanoutapproval', tab: 'roles', labelKey: 'settings.fanoutRequireApproval', descKey: 'settings.fanoutRequireApprovalDesc', synonyms: 'fanout fan-out approval approve prompt unattended ask' },
+  { id: 'workerfence', tab: 'roles', labelKey: 'settings.workerFence', descKey: 'settings.workerFenceDesc', synonyms: 'worker fence sandbox bot unattended bypass auto credentials 울타리 샌드박스 봇 워커' },
   { id: 'fanoutagytrust', tab: 'roles', labelKey: 'settings.fanoutTrustAgyFolders', descKey: 'settings.fanoutTrustAgyFoldersDesc', synonyms: 'agy antigravity trust trusted folder workspace fanout fan-out' },
   { id: 'fanoutworkers', tab: 'roles', labelKey: 'settings.fanoutWorkerPermissionMode', descKey: 'settings.fanoutWorkerPermissionModeDesc', synonyms: 'fanout fan-out worker permission auto bypass sandbox' },
   { id: 'fanoutpresets', tab: 'roles', labelKey: 'settings.fanoutPresets', descKey: 'settings.fanoutPresetsDesc', synonyms: 'fanout fan-out preset image video agents codex grok output folder worktree' },

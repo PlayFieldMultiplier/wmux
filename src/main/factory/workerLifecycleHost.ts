@@ -21,7 +21,7 @@ import { eventBus } from '../events/EventBus';
 import { getLastBroadcastAgentStatus, hasOutstandingRunningClaim } from '../ipc/handlers/metadata.handler';
 import { lastHookTurnStart, lastTurnEnd } from '../notification/turnEvidence';
 import { lastUserInputAt } from '../notification/idleSuppression';
-import { botWorkerSessionRecord, guardSessionLaunch } from '../agents/botWorkerMergeGuard';
+import { botWorkerSessionRecord, guardSessionLaunch, noteGuardedLaunchTyped } from '../agents/botWorkerMergeGuard';
 import { getTaskLedger } from '../deck/taskLedgerHost';
 import { getBotRuntime } from './BotRuntime';
 import { getBotStore } from './botStore';
@@ -93,6 +93,7 @@ import { isFanoutWorkerPermissionMode } from '../../shared/workerLaunch';
 import { createWorkerLaunchRecovery } from './workerLaunchRecovery';
 import { LAUNCH_PROBE_CONFIRM_TIMEOUT_MS, LAUNCH_PROBE_TIMEOUT_MS } from '../worktask/fanoutLaunchProbe';
 import type { PermissionMode } from '../../shared/agentResume';
+import { workerFenceSupportFor, type WorkerFenceSupport } from '../agents/botWorkerFence';
 
 /** A resumed worker is checked for an exited agent this often. */
 const RESUMED_SWEEP_MS = 60_000;
@@ -617,11 +618,18 @@ export function startWorkerLifecycle(deps: WorkerLifecycleDeps): () => void {
       } : {}),
       // The same stage a resume typed from the pane takes (pty:write-launch):
       // a bot worker's line carries its settings file, or this throws.
-      typeLine: (sessionId, line) => {
+      typeLine: (sessionId, line, prepared) => {
         const c = daemon();
         if (!c) return false;
-        return c.writeToSession(sessionId, sanitizePtyText(guardSessionLaunch(sessionId, line)) + '\r');
+        const fenceSupport = prepared as WorkerFenceSupport | undefined;
+        const guarded = guardSessionLaunch(sessionId, line, fenceSupport ? { fenceSupport } : {});
+        const typed = c.writeToSession(sessionId, sanitizePtyText(guarded) + '\r');
+        if (typed) noteGuardedLaunchTyped(sessionId, guarded);
+        return typed;
       },
+      // The guard decides whether the line is fenced, with the fence support
+      // settled here and handed to typeLine.
+      prepareLine: (sessionId, line) => workerFenceSupportFor(line, botWorkerSessionRecord(sessionId)?.cwd),
       agentAlive: async (sessionId) => (await listSessions()).find((s) => s.id === sessionId)?.agentProcessAlive === true,
       submit: submitToWorkerPane,
       stopAgent: async (sessionId) => (await rpc('session.stopAgent', { sessionId })) as { ok?: boolean; stopped?: boolean; code?: string },

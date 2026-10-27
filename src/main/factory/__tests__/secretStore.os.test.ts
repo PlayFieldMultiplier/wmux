@@ -406,7 +406,7 @@ describe('secret grants', () => {
   it('the in-flight spawn mark carries main\'s bot and task for the fan-out launch only, until released', () => {
     const release = beginBotWorkerSpawn('ws-1', worktree, me);
     const create = { workspaceId: 'ws-task', cwd: worktree, fanoutTaskOf: 'ws-1' };
-    expect(botWorkerForCreate(create, { isBotTaskWorkspace: () => false })).toEqual({ workspaceId: 'ws-task', strict: true, spawns: [me] });
+    expect(botWorkerForCreate(create, { isBotTaskWorkspace: () => false })).toEqual({ workspaceId: 'ws-task', strict: true, ownerWorkspaceId: 'ws-1', spawns: [me] });
     const id = mint();
     expect(secretEnvForCreate({ ...create, secretGrant: id }, botWorkerForCreate(create, { isBotTaskWorkspace: () => false }))).toEqual({ NPM_TOKEN: VALUE });
     release();

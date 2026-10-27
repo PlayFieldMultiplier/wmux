@@ -1351,6 +1351,11 @@ export function registerA2aRpc(
   router.register('a2a.task.send', async (params, ctx) => {
     const marked = refuseHandoffMarker('a2a.task.send', [params.message, params.title], ctx);
     if (marked) return marked;
+    // A new task with `execute` runs a background claude outside the worker
+    // fence: a fenced worker sends it as a message only.
+    if (ctx?.fencedWorker && params.execute === true && !params.taskId) {
+      return { error: 'a2a.task.send: execute is not available inside the worker fence; send the task without execute' };
+    }
     // Cross-host A2A: a reply on a remote task, or a new task to a remote
     // pane's exact alias, goes to the peer host instead of a local pane.
     if (remote && typeof params.taskId === 'string' && isRemoteTaskId(params.taskId)) {
