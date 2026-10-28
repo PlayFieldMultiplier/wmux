@@ -105,6 +105,9 @@ export function scanStartupDa1(text: string): 'answer' | 'more' | 'closed' {
  *                 agent started (epoch ms of the episode's start) or stopped
  *                 being mid-turn; see isAgentMidTurn. Edges only.
  */
+/** How long an open episode must stay without a transcript turn before noteNoTranscriptTurn closes it. */
+const NO_TRANSCRIPT_TURN_GRACE_MS = 2_000;
+
 export class DaemonPTYBridge extends EventEmitter {
   private outputInterpreter: OutputInterpreter | null = null;
   private modeTracker: OutputModes | null = null;
@@ -1244,6 +1247,17 @@ export class DaemonPTYBridge extends EventEmitter {
       this.closeTurn();
       this.transcriptTurnEndAt = Date.now();
     }
+  }
+  /**
+   * The pane's own transcript ends with a finished turn, yet an episode is
+   * open: whatever opened it (a Codex /status submit) ran no turn there, so
+   * none of its stops will end it.
+   */
+  noteNoTranscriptTurn(): void {
+    // A real prompt reaches the rollout within milliseconds of its Enter; only
+    // an episode that has stayed empty past the grace is taken as no turn.
+    if (Date.now() - this.turnOpenedAt < NO_TRANSCRIPT_TURN_GRACE_MS) return;
+    if (this.turnOpen && !this.awaitingHuman) this.closeTurn();
   }
   /** When noteTranscriptTurnEnd last closed an episode (0 = never). */
   private transcriptTurnEndAt = 0;

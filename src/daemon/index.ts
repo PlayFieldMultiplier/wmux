@@ -292,7 +292,7 @@ import { loadUsageReserveHolds, takeUsageReserveHolds, usageReserveHoldAt } from
 import { UsageLimitRegistry } from './usageLimit/UsageLimitRegistry';
 import type { SessionPromptScheduleResult } from '../shared/sessionPromptSchedule';
 import { claudeUsageLimitFromStopFailure, USAGE_LIMIT_CONTINUE_PROMPT, type PaneUsageLimitPatch } from '../shared/usageLimit';
-import { chatAgentStatus, confirmedStopAt, transcriptTurnEnd } from './transcript/chatAgentStatus';
+import { chatAgentStatus, confirmedStopAt, transcriptTurnEnd, transcriptTurnState } from './transcript/chatAgentStatus';
 import { DaemonPTYBridge } from './DaemonPTYBridge';
 import { createCodexSharedRuntime, runCodexDaemon } from './transcript/codexSharedRuntime';
 import { validChatAttachments } from '../shared/transcript/chatAttachments';
@@ -5522,7 +5522,14 @@ function registerRpcHandlers(
         ...(pane?.meta.env ? { env: pane.meta.env } : {}),
         wsl: !!pane?.meta.wslTarget,
         admit: (late) => { ingest.handle(late); },
-        drop: () => log('info', `[codex] ignored stop for ${signal.ptyId ?? '?'}: thread ${signal.agentSessionId} has no rollout`),
+        drop: () => {
+          log('info', `[codex] ignored stop for ${signal.ptyId ?? '?'}: thread ${signal.agentSessionId} has no rollout`);
+          // That stop may be all a submit got: a /status runs no turn on the pane's
+          // own thread, so no stop of its own ends the episode the Enter opened.
+          if (pane && signal.ptyId && transcriptTurnState(projector.snapshot(signal.ptyId)?.events) === 'ended') {
+            pane.bridge.noteNoTranscriptTurn();
+          }
+        },
       });
       return now ? ingest.handle(now) : { ok: true };
     }
