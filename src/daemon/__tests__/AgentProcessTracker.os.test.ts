@@ -17,6 +17,7 @@ import {
   type ProcessTreeEntry,
 } from '../AgentProcessTracker';
 import { stopAgentTree } from '../agentStop';
+import { recordPaneIdentity, reportedAgentName, resolveCanonicalAgentIdentity } from '../canonicalAgent';
 
 const entry = (pid: number, ppid: number, name: string, cmdline?: string): ProcessTreeEntry => ({
   pid,
@@ -522,6 +523,72 @@ describe('AgentProcessTracker', () => {
     // The scoped launcher script names no agent; the native binary does.
     expect(watcher.watches.get('agent:s1')?.pid).toBe(201);
     expect(listener).toHaveBeenCalledWith('s1', { slug: 'codex', alive: true, observedAt: expect.any(Number) });
+  });
+
+  it('a pane whose Claude exited and that now runs Hermes names Hermes, not Claude', async () => {
+    const watcher = makeWatcher();
+    let table: ProcessTreeEntry[] = [entry(200, SHELL, 'claude', 'claude')];
+    const tracker = new AgentProcessTracker(watcher, async () => table);
+    tracker.arm('s1', SHELL);
+    await flush();
+    expect(tracker.identityFor('s1')).toEqual({ slug: 'claude', alive: true });
+    table = [];
+    watcher.watches.get('agent:s1')?.onDead();
+    expect(tracker.identityFor('s1')).toEqual({ slug: 'claude', alive: false });
+
+    // `hermes` (measured on v0.19.0): a console script its venv's python runs,
+    // with the Ink TUI as a node child.
+    const venv = '/Users/u/.hermes/hermes-agent/venv/bin';
+    table = [
+      entry(300, SHELL, `${venv}/python3`, `${venv}/python3 ${venv}/hermes`),
+      entry(301, 300, '/opt/homebrew/bin/node', 'node --expose-gc /Users/u/.hermes/hermes-agent/ui-tui/dist/entry.js'),
+    ];
+    // The command-start probe (commandStartAgentProbe) is what runs here.
+    tracker.armIfAgent('s1', SHELL);
+    await flush();
+    expect(tracker.identityFor('s1')).toEqual({ slug: 'hermes', alive: true });
+    expect(watcher.watches.get('agent:s1')?.pid).toBe(300);
+
+    // Claude's old hook authority and the detector's sticky Claude banner
+    // lose to the live process, and the pane's persisted name moves.
+    const canonical = resolveCanonicalAgentIdentity({
+      proc: tracker.identityFor('s1'),
+      auth: { slug: 'claude', ageMs: 10 * 60_000, exact: true },
+      screenSlug: 'claude',
+    });
+    expect(canonical).toEqual({ slug: 'hermes', source: 'process' });
+    expect(reportedAgentName({ rawName: 'Claude Code', screenSlug: 'claude', canonical })).toBe('Hermes Agent');
+    const meta: Parameters<typeof recordPaneIdentity>[0] = {
+      lastDetectedAgent: 'claude',
+      lastDetectedAgentEvidence: { source: 'hook', at: 1 },
+      resumeBinding: { agent: 'claude', ts: 1 },
+    };
+    expect(recordPaneIdentity(meta, canonical, 2)).toBe(true);
+    expect(meta.lastDetectedAgent).toBe('hermes');
+  });
+
+  it('names Hermes by its own script only', () => {
+    expect(resolveAgentSlug('/Users/u/.hermes/hermes-agent/venv/bin/python3 /Users/u/.hermes/hermes-agent/venv/bin/hermes --tui')).toBe('hermes');
+    expect(resolveAgentSlug('python3 /home/u/.local/share/uv/tools/hermes-agent/bin/hermes chat')).toBe('hermes');
+    // A user's own file, a positional, its TUI child: not Hermes.
+    expect(resolveAgentSlug('python3 hermes.py')).toBeUndefined();
+    expect(resolveAgentSlug('python3 /tmp/demo.py hermes')).toBeUndefined();
+    expect(resolveAgentSlug('node --expose-gc /Users/u/.hermes/hermes-agent/ui-tui/dist/entry.js')).toBeUndefined();
+    // The Windows console-script launcher is an image named for the script.
+    expect(selectAgentProcess([entry(200, SHELL, 'hermes.exe')], SHELL)).toEqual({ pid: 200, slug: 'hermes' });
+    // A console script's shebang names the interpreter it was installed with,
+    // version included; Windows may run it under pythonw.
+    for (const python of [
+      '/Users/u/.hermes/hermes-agent/venv/bin/python3.12',
+      '/usr/local/bin/python3.11',
+      '/opt/homebrew/bin/python3.13',
+      '/Library/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python',
+      'C:\\Users\\u\\hermes\\venv\\Scripts\\python.exe',
+      'C:\\Users\\u\\hermes\\venv\\Scripts\\pythonw.exe',
+    ]) {
+      const script = python.includes('\\') ? 'C:\\Users\\u\\hermes\\venv\\Scripts\\hermes' : '/Users/u/.hermes/hermes-agent/venv/bin/hermes';
+      expect(selectAgentProcess([entry(200, SHELL, python, `${python} ${script}`)], SHELL), python).toEqual({ pid: 200, slug: 'hermes' });
+    }
   });
 
   it('labels a pane with its custom agent beside the tracked agent, never as it', async () => {
@@ -1133,6 +1200,28 @@ describe.skipIf(process.platform === 'win32')('the real executable backs the age
     expect(isAgentImage(entry(200, 100, 'python3', `python3 ${empty}`), 'aider', PYTHON, HOME)).toBe(false);
     expect(isAgentImage(entry(200, 100, 'python3', `python3 ${pipx}`), 'aider', NODE, HOME)).toBe(false);
     expect(isAgentImage(entry(200, 100, 'python3', `python3 ${pipx}`), 'claude', PYTHON, HOME)).toBe(false);
+  });
+
+  it('hermes runs from an environment with its package or its editable install record', () => {
+    // Hermes' installer: `pip install -e` of its checkout, so site-packages holds
+    // only `hermes_agent-<version>.dist-info` (measured on v0.19.0 and v0.22.5).
+    const editable = pythonEnv('.hermes/hermes-agent/venv', 'hermes');
+    fs.mkdirSync(path.join(root, '.hermes/hermes-agent/venv/lib/python3.12/site-packages/hermes_agent-0.19.0.dist-info'), { recursive: true });
+    const wheel = pythonEnv('uv/tools/hermes-agent', 'hermes', 'hermes_cli');
+    const other = pythonEnv('venvs/not-hermes', 'hermes');
+    fs.writeFileSync(path.join(root, 'venvs/not-hermes/lib/python3.12/site-packages/hermes_agent-0.19.0.dist-info'), '');
+    fs.mkdirSync(path.join(root, 'venvs/not-hermes/lib/python3.12/site-packages/hermes_agent_extra-1.0.dist-info'), { recursive: true });
+    const python = (script: string) => path.join(path.dirname(script), 'python3');
+    for (const script of [editable, wheel]) {
+      expect(isAgentImage(entry(200, 100, python(script), `${python(script)} ${script}`), 'hermes', PYTHON, HOME), script).toBe(true);
+    }
+    // The interpreter named with its version, as a shebang names it.
+    const versioned = path.join(path.dirname(editable), 'python3.12');
+    expect(isAgentImage(entry(200, 100, versioned, `${versioned} ${editable}`), 'hermes', PYTHON, HOME)).toBe(true);
+    // A dist-info that is a file, or another distribution's: no install.
+    expect(isAgentImage(entry(200, 100, python(other), `${python(other)} ${other}`), 'hermes', PYTHON, HOME)).toBe(false);
+    expect(isAgentImage(entry(200, 100, python(editable), `${python(editable)} ${editable}`), 'aider', PYTHON, HOME)).toBe(false);
+    expect(isAgentImage(entry(200, 100, python(editable), `${python(editable)} ${editable}`), 'hermes', NODE, HOME)).toBe(false);
   });
 
   it('verifyLive refuses a renamed process and reads the image once per launch', async () => {

@@ -68,7 +68,7 @@ function recordsOf(deps: Pick<BotRepoDeps, 'records'>): WorkspaceRepoStore | nul
 
 export type BotRepoResult =
   | { ok: true; repo: { repoKey: string; repoPath: string; originPin?: string } }
-  | { ok: false; code: 'invalid_argument' | 'not_a_repo' | 'repo_untrusted' | 'no_remote'; message: string };
+  | { ok: false; code: 'invalid_argument' | 'not_a_repo' | 'repo_untrusted' | 'no_remote'; message: string; originSet?: boolean };
 
 /** A repository inside WSL (`\\wsl.localhost\<distro>\…`, `\\wsl$\…`): its bot's
  *  task worktrees on Windows are checked by their own path too, so the hint
@@ -117,7 +117,7 @@ export async function resolveBotRepo(folder: unknown, deps: BotRepoDeps = {}): P
   const raw = await readRawOriginUrl(git, repoPath);
   const rawKey = raw === null ? null : normalizeRepoKey(parseRemoteKey(raw));
   const repoKey = rawKey ?? normalizeRepoKey(parseRemoteKey(url));
-  if (!repoKey) return { ok: false, code: 'no_remote', message: `The origin remote of ${repoPath} is not an owner/repo address on a git host. ${NEEDS_HOSTED_ORIGIN}` };
+  if (!repoKey) return { ok: false, code: 'no_remote', originSet: true, message: `The origin remote of ${repoPath} is not an owner/repo address on a git host. ${NEEDS_HOSTED_ORIGIN}` };
   const originPin = rawKey && isOriginPin(raw) ? raw : null;
   return { ok: true, repo: { repoKey, repoPath, ...(originPin ? { originPin } : {}) } };
 }
@@ -544,7 +544,7 @@ export async function suggestBotRepo(
     ...(deps.platform ? { platform: deps.platform } : {}),
     ...(deps.daemonRpc ? { daemonRpc: deps.daemonRpc } : {}),
   });
-  let refusal: { code: 'not_a_repo' | 'repo_untrusted' | 'no_remote'; message: string } | null = null;
+  let refusal: { code: 'not_a_repo' | 'repo_untrusted' | 'no_remote'; message: string; originSet?: boolean } | null = null;
   let found: WorkspaceRepo | null = null;
   if (list.opened && 'error' in list.opened) {
     refusal = { code: 'not_a_repo', message: list.opened.error };
@@ -556,7 +556,7 @@ export async function suggestBotRepo(
         found = resolved.repo;
         break;
       }
-      if (!refusal && resolved.code !== 'invalid_argument') refusal = { code: resolved.code, message: resolved.message };
+      if (!refusal && resolved.code !== 'invalid_argument') refusal = { code: resolved.code, message: resolved.message, ...(resolved.originSet ? { originSet: true } : {}) };
     }
   }
   // Read after the awaits: a bot given a repo, or a None saved, meanwhile.
@@ -564,5 +564,5 @@ export async function suggestBotRepo(
   if (since) return since;
   if (found) return offer(found, false);
   if (!refusal) return { ok: false, code: 'no_folder' };
-  return { ok: false, code: refusal.code, message: refusal.message };
+  return { ok: false, code: refusal.code, message: refusal.message, ...(refusal.originSet ? { originSet: true } : {}) };
 }

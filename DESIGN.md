@@ -901,7 +901,12 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   at most; when main cannot be asked (one red line) or does not answer in
   time (one muted line) Add makes the bot without a repository and
   remembers nothing; a refused folder shows "No repository" with one muted
-  line saying why and how to fix it, and an add from there remembers
+  line saying why and how to fix it (a folder with no origin remote a bot
+  can push to: one plain line, then Copy command — `git remote add origin
+  <address>`, or `set-url` when origin is set but names no host; a copy the
+  clipboard refused shows the command to select instead of Copied — Check
+  again, which asks main for the folder once more, and Show details, which
+  holds main's full reason with the folder's path), and an add from there remembers
   nothing, so the folder is offered again once it is fixed; None is
   remembered for the workspace ("You chose no repository for this
   workspace…", with Choose folder…), so later adds and Add team do not ask
@@ -950,11 +955,13 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   adds the bot to the current workspace and opens its 1:1, where its
   greeting arrives. When the Claude engine cannot sign in the panel says why in
   one line and offers Log in to Claude (and Check again); Start waits until
-  it can. A build that cannot tell never blocks Start. Beside Start, a
-  secondary **Add a team (lead + 4 roles)** does the same for the five-bot
-  team (no name to type), opens the lead's chat and offers the group chat
-  row (Add bot, above). Under them the repository line of Add bot, with its
-  Checking state and its reason line; Start and Add a team wait while it
+  it can. A build that cannot tell never blocks Start. Under it the
+  repository line of Add bot, with its Checking state and its reason line;
+  then one muted line of text links: **Add a team (lead + 4 roles)**, which
+  does the same for the five-bot team (no name to type), opens the lead's
+  chat and offers the group chat row (Add bot, above), and Start from a
+  recipe…. Start is the only button beside the name, so the card leads
+  with one action; Start and Add a team wait while the repository line
   checks.
 
 ### Fleet
@@ -1261,9 +1268,11 @@ refresh button. Nothing about branches or worktrees sits above the lists.
   a detached HEAD, no upstream, behind the upstream, the default branch).
   Commit needs no upstream; Push and Create PR do. main re-checks each step.
 - **Tabs:** text tabs **Issues · Pull requests**, then **Worktrees** as a
-  quieter, secondary tab at the end (the active one carries the 2px accent
-  bar; a first visit opens on Issues, then the last tab is kept) over a
-  hairline. All repos (from the switcher) shows Issues and Pull requests
+  quieter, secondary tab at the end, set apart by a gap with no rule (the
+  active one carries the 2px accent bar; a first visit opens on Issues,
+  then the last tab is kept; a repo with no origin remote opens on
+  Worktrees, shown but not saved, until a tab is picked while it is shown)
+  over a hairline. All repos (from the switcher) shows Issues and Pull requests
   as **one flat list** across repos, newest update first, each row ending
   in a small neutral **repo tag** (`--selection`, `--chip-radius`, 11px;
   the full owner/repo in its tooltip). Over it, a row of **repo chips**,
@@ -1331,7 +1340,8 @@ refresh button. Nothing about branches or worktrees sits above the lists.
   task boxes, blockquotes and tables. GitHub's HTML is never rendered as
   HTML: comments and scripts vanish, `<details>` becomes a collapsed
   disclosure labelled by its summary, other tags reduce to their text.
-  Nothing selected is one quiet line.
+  Nothing selected is one quiet line, drawn only while the list has a row
+  to select; otherwise the pane stays empty.
 - **Worktrees tab:** the new-worktree line and, while one runs, the merge
   session on top, then the worktrees in the flat list's who-acts-next
   grammar, as fold sections in order: **In use** (a workspace on it),
@@ -1354,9 +1364,9 @@ refresh button. Nothing about branches or worktrees sits above the lists.
   with their pushed PR status and live agent status, and the open PR list
   of the header's read or a Pull requests list; the tab reads no PR list
   of its own. All headers stay neutral (no orange: none of these is a
-  question waiting on the owner), every section starts open, and under the
-  page title a summary line names each non-empty section with its count
-  and jumps to it. A row in Uncommitted changes, No open PR or Cleanup
+  question waiting on the owner), every section starts open, and while two
+  or more sections are non-empty a summary line under the page title names
+  each with its count and jumps to it (one section is its own header). A row in Uncommitted changes, No open PR or Cleanup
   candidates can be **snoozed** (1 hour, 1 day, 1 week, or until it
   changes): it moves to a folded **Snoozed** group at the end, with
   Unsnooze, until its time passes or its state changes (another section,
@@ -1423,6 +1433,14 @@ refresh button. Nothing about branches or worktrees sits above the lists.
   (`gh auth login --web`, or the command to copy when no tab can show it).
   gh not installed shows the install command for the OS and Check again.
   gh keeps the credential; wmux stores no token.
+- **No remote:** a repo with no origin remote shows, on Issues and Pull
+  requests, one card in the list's place: "This repository has no origin
+  remote.", one line saying the lists are read from origin on GitHub or
+  GitLab, the command in mono with Copy (`git remote add origin <address>`,
+  or `git remote set-url origin <address>` when origin is set but names no
+  host), and Check again, which refreshes the whole page (the repo's name
+  and link too). Copy says Copied only once the clipboard took it. No
+  primary: nothing on the card does the fix itself.
 - **Cost:** pull-only and only while the page is shown. The shown PR or
   issue list polls every 30s while the window is visible.
 - **Rail dot:** a red dot on the Git icon while an open workspace's open or
@@ -2174,6 +2192,7 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
 | 2026-10-28 | Owner-approved (Settings clean-up, part 3): terminal font size, font and cursor move from Appearance to the top of Terminal; the Settings › Plugins tab (a single link to the rail page) is removed, reversing the 2026-10-21 line that kept it. A row or note that only applies on another OS is hidden there (the agy accounts section off Windows, Start on login on Linux), and settings search hides it too; a row that works everywhere but is named after one OS reads in the platform's words (Finder, the Dock, ⌘G, macOS or Linux in About). A switch whose children act on nothing while it is off disables them: the pane ring's flash, and the Bots morning report and phone bot. A row that limits what bots may do (trusted authors, caps, the command reviewer, auto-merge) stays editable while the bots are off, so it can be set before they start. Accounts' quota switches are standard switches. The Company View toggle loses its default key (Ctrl+Shift+O, which it swallowed) and its Shortcuts row: it has opened nothing since #503; a key a user saved still binds and lists it | Settings read as cluttered: text settings sat on the wrong page, an empty tab took a nav row, macOS users read Windows-only text, and child rows looked live while their parent was off. Hiding by platform through the catalog keeps the row and its search hit in step |
 | 2026-10-28 | Owner-approved (first launch): the first launch is one short welcome dialog — the agents (once one is signed in, only the signed-in ones, the rest under Other agents), the Claude Code MCP and hooks rows, the update switch — ending on **Open a folder…**, the one primary once nothing needs setting up; it opens a workspace on that folder. No sample task, no bot task and no statusline offer in it (the statusline stays in Settings). Nothing opens by itself after it: the spotlight tour and the keyboard cheat sheet are on demand (Settings › Setup and reset, the `?` prefix action), and the cheat sheet loses its Don't show again. A check marks done or installed only; a switch row has no glyph. Opening a folder completes the first run; Skip, Later, × and Escape only mark it shown, and closing a reopened wizard never rewrites that. Existing profiles keep their seen flags and never see the first run again | A design critique found a first launch that stacked a long scrolling wizard with two primaries, a four-step tour that pulled the user from Fleet back to Workspaces, and an automatic cheat sheet; a reopened wizard said a skipped sample task was "Already completed". A new user needs an agent and their project, and the rest is found when it is needed |
 | 2026-10-28 | Owner-approved (quieter needs-you signal, after a design critique): one awaiting-input event is drawn as the sidebar row plus the rail's Fleet badge only. The titlebar's `N need you` chip is gone and needs you raises no in-app toast (the OS notification still fires while the window is out of focus). One word, "Needs you", in the sidebar, Fleet and the notification panel; Fleet drops "Needs input", "Needs your input" and the empty "The agent asks" block; a shell name is never shown as the agent. A needs-you notification row names workspace · agent and the question (or says no question text came); the panel's focused row is the neutral selection with the accent ring | One state was drawn about six times in three colours (blue toast, gold focus outline, orange) and four wordings, against the two-rendition cap. The rail badge stays over the titlebar chip because it is a number (no plural to get wrong), sits beside the Bots and Remote badges, and survives a collapsed sidebar |
+| 2026-10-28 | Owner-approved (design critique, harden): the Git page and the Bots first run lose their dead ends. A repo with no origin remote opens the Git page on Worktrees (shown, never saved; a tab picked there is kept) and its Issues and Pull requests show a no-remote card with the `git remote add origin <address>` command to copy and Check again; the detail pane's "Select…" line shows only while a list has a row; the Worktrees summary line needs two non-empty sections; the rule before the Worktrees tab is gone. In the Bots first run, Start is the only button beside the name and Add a team and Start from a recipe… are one muted line of links; a folder with no origin remote a bot can push to reads as one plain line with Copy command and Show details instead of main's whole reason. Amends Git › Tabs, Worktrees tab and Detail, and Bots › Add bot and First run | The Git page opened on an empty Issues tab whose detail pane asked for a selection that could not exist, while the useful Worktrees tab sat behind it. The Bots welcome card showed a blocking-looking grey paragraph with the full folder path and set-url instructions, and three equal buttons competed for the first action |
 | 2026-10-28 | Connect a PC: showing the Invite tab no longer turns the A2A listener on or opens an invite. Invite has a Create invite primary (Turn on and create invite while the listener is off, with a line naming the port it listens on); focus starts on the first field or primary, not the close ×; Connect is secondary until there is something to connect. Amends the Connect a PC dialog bullet | A design check found that merely looking at the Invite tab bound a port (and failed on one already in use) and wrote the clipboard. Showing a tab is not consent; the person turns messaging on by pressing a button that says so |
 | 2026-10-29 | Owner-approved (clarify, after a design critique): one vocabulary and one shortcut notation. Shortcuts are written by one formatter (`displayCombo`): macOS modifier glyphs in Apple's order with no separator (`⇧⌘D`, `⌃B`), Windows and Linux words joined by `+` (`Ctrl+Shift+D`); `Esc` and arrow glyphs on both. A hint that names a key reads the live binding, so a rebound key is shown as rebound. Internal words leave the UI: Surface → tab, A2A → PC messages / messages between PCs, HQ → the bots' main workspace, merge lane → auto-merge, hook bridge → Claude Code hooks, Bypass (schedules) → Full access; raw ids (`bypassPermissions`, pty ids, hook event names, `mcp__name__tool`) are not shown. Commands and labels are sentence case; split commands say the result (Split right / Split down) | The same thing had three names and one shortcut had four spellings, some wrong (Ctrl on macOS, a ⌘ prefix that is really ⌃). Coordinator and Verifier stay: they are the role names on the Bots pages |
 

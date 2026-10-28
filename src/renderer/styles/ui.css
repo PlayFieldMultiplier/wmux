@@ -2744,8 +2744,7 @@ html[data-glass] .wmux-frame-row > .wmux-shell-body {
 .wmux-git-tab:hover { color: var(--text-main); background: var(--hover-fill); }
 .wmux-git-tab[aria-selected='true'] { color: var(--text-main); font-weight: var(--title-weight, 500); box-shadow: inset 0 -2px 0 var(--accent); }
 /* Worktrees: the secondary tab, set apart by a gap and a hairline, quieter at rest. */
-.wmux-git-tab-aside { position: relative; margin-left: 13px; font-size: 12px; }
-.wmux-git-tab-aside::before { content: ''; position: absolute; left: -8px; top: 10px; bottom: 10px; width: 1px; background: var(--line); }
+.wmux-git-tab-aside { margin-left: 13px; font-size: 12px; }
 .wmux-git-toolbar .ui-segmented { margin-bottom: 4px; }
 .wmux-git-panel { display: flex; flex: 1; min-height: 0; }
 .wmux-git-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 0 32px; }
@@ -2829,8 +2828,8 @@ html[data-glass] .wmux-frame-row > .wmux-shell-body {
 .wmux-git-connect-desc { margin: 0; color: var(--text-sub); }
 .wmux-git-connect-actions { display: flex; gap: 8px; }
 .wmux-git-primary { height: 28px; padding: 0 12px; border-radius: 6px; background: var(--primary-fill); color: var(--primary-ink); font-size: 12px; font-weight: 500; }
-.wmux-git-connect-cmd { display: flex; align-items: center; gap: 8px; }
-.wmux-git-connect-cmd code { font-family: var(--font-mono, ui-monospace, 'SF Mono', Menlo, monospace); font-size: 11px; color: var(--text-main); }
+.wmux-git-connect-cmd { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.wmux-git-connect-cmd code { min-width: 0; overflow-wrap: anywhere; font-family: var(--font-mono, ui-monospace, 'SF Mono', Menlo, monospace); font-size: 11px; color: var(--text-main); }
 /* The Git rail icon's signal: red, because a failing check or a conflict is an error. */
 .wmux-sidebar-nav .wmux-nav-count.wmux-nav-alert { background: var(--accent-red); }
 
