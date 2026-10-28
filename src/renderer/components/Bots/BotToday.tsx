@@ -20,7 +20,7 @@ import { openFactorySettings } from './botsAddBot';
 
 type T = (key: string, vars?: Record<string, string | number>) => string;
 
-type EngineErrorCode = 'not_installed' | 'not_logged_in' | 'mcp_missing' | 'acp_test_only' | 'unusable' | 'api_key_missing' | 'subscription_refused' | 'hermes_not_ready' | 'hermes_mcp_missing' | 'hermes_tools_changed' | 'other';
+type EngineErrorCode = 'not_installed' | 'not_logged_in' | 'mcp_missing' | 'acp_test_only' | 'unusable' | 'api_key_missing' | 'subscription_refused' | 'hermes_not_ready' | 'hermes_mcp_missing' | 'hermes_tools_changed' | 'my_hermes_unavailable' | 'other';
 
 /** "2h 10m", "6h", "45m", "0m". */
 export function workerTimeText(min: number, t: T): string {
@@ -89,6 +89,7 @@ const ENGINE_ERROR_KEYS: Record<EngineErrorCode, string> = {
   hermes_not_ready: 'botsPage.engineError.hermesNotReady',
   hermes_mcp_missing: 'botsPage.engineError.hermesMcpMissing',
   hermes_tools_changed: 'botsPage.engineError.hermesToolsChanged',
+  my_hermes_unavailable: 'botsPage.engineError.myHermesUnavailable',
   other: 'botsPage.engineError.other',
 };
 
@@ -173,7 +174,9 @@ function EngineErrorCard({
         : code === 'api_key_missing' || code === 'subscription_refused' ? t('botsPage.openSettings')
           : t('botsPage.engineError.fix');
 
-  const showFix = code === 'not_installed' || (code === 'not_logged_in' && !!engine.login) || code === 'api_key_missing' || code === 'subscription_refused' || canResume;
+  // My Hermes does not run in this version: the fix is another engine in the
+  // profile, so there is nothing to retry here.
+  const showFix = code !== 'my_hermes_unavailable' && (code === 'not_installed' || (code === 'not_logged_in' && !!engine.login) || code === 'api_key_missing' || code === 'subscription_refused' || canResume);
 
   return (
     <div className="flex flex-col gap-1 pb-1" data-bots-engine-error={code} role="status">

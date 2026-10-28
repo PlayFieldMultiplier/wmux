@@ -53,6 +53,8 @@ import { BotSecretsSection, PhoneBotSelect } from './BotSecretsSection';
 import { BotConnectionsSection } from './BotConnectionsSection';
 import { ClaudeAuthSection, bridgeClaudeAuthPort, type ClaudeAuthPort } from './ClaudeAuthSection';
 import { InlineConfirm } from '../Bots/InlineConfirm';
+import { AddBotEngineRow } from '../Bots/BotEngineLine';
+import type { EnginePick, HermesPort } from '../Bots/botsHermes';
 import { selectBotTaskOwners, withoutBotTasks } from '../Sidebar/botTasks';
 import { listedWorkspaces } from '../../../shared/pcRail';
 import { createBot, turnBotsOn, type TurnBotsOnResult } from '../Bots/botsAddBot';
@@ -363,6 +365,8 @@ export interface AddBotFormProps {
   /** 'team': only the workspace and the repository, and Add team as the
    *  primary (the Bots page's "+" › Add team). Default: one bot. */
   mode?: 'bot' | 'team';
+  /** The engine picker's Hermes verbs (default: the preload's). */
+  hermesPort?: HermesPort;
 }
 
 /** Why Add cannot be pressed, as one line's key, or null. Pure. */
@@ -565,6 +569,8 @@ export function AddBotForm(props: AddBotFormProps): React.ReactElement {
   const [busy, setBusy] = useState(false);
   // The bots are off: Add (or Add team) first asks, in place, to turn them on.
   const [confirmOn, setConfirmOn] = useState<'bot' | 'team' | null>(null);
+  // The engine: Claude unless the owner picks a Hermes.
+  const [engine, setEngine] = useState<EnginePick>({ engine: 'claude-sdk' });
   const repo = useAddBotRepo(port, rows, workspaceId, pickFolder);
   // A name is required; a job is optional but, when written, one the store keeps.
   const typedName = normalizeBotName(name);
@@ -616,9 +622,12 @@ export function AddBotForm(props: AddBotFormProps): React.ReactElement {
         ...(typedJob ? { job: typedJob } : {}),
         ...repo.request,
         ...(avatar ? { avatar } : {}),
+        ...(engine.engine !== 'claude-sdk' ? { engine: engine.engine } : {}),
+        ...(engine.engine === 'my-hermes' && engine.profile ? { hermesProfile: engine.profile } : {}),
       });
       if (r.ok) onDone(r.bot);
-      else setError(r.message || t('settings.factory.addBotFailed'));
+      // Declined in main's My Hermes confirm: the form stays as it was.
+      else if (r.code !== 'cancelled') setError(r.message || t('settings.factory.addBotFailed'));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -751,6 +760,7 @@ export function AddBotForm(props: AddBotFormProps): React.ReactElement {
       <div className="text-[11px] text-[var(--text-muted)]">
         {t(repo.view.kind === 'inherited' ? 'settings.factory.addBotRepoInherited' : 'settings.factory.addBotRepoHint')}
       </div>
+      {!teamMode && <AddBotEngineRow value={engine} onPick={setEngine} t={t} port={props.hermesPort} disabled={busy} />}
       {teamMode && teamLine && <p data-testid="factory-add-team-plan" className="text-[12px] leading-snug text-[var(--text-sub)]">{teamLine}</p>}
       {shownError && <SettingNote tone="danger" role="alert" data-testid="factory-add-bot-error">{shownError}</SettingNote>}
       {confirmOn ? (
