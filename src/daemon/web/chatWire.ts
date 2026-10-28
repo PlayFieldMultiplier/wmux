@@ -33,6 +33,7 @@ import { truncateUtf8, utf8Bytes } from '../../shared/chatv2/limits';
 import { HARNESS_TITLE, type Block, type Session, type ToolPreview, type TurnOutcome } from '../../shared/chatv2/session';
 import type { ChatV2Host } from '../chat/v2/types';
 import type { ChatCancelEvent } from '../chat/chatCancelObserver';
+import { RECEIPT_AGENT_SESSION_ID_MAX, RECEIPT_HISTORY_EPOCH_MAX } from '../chat/ChatSendReceiptStore';
 import { CHAT_CANCEL_OBSERVE_MS, type ChatCancelEndedAs, type ChatCancelProgress } from '../../shared/phoneChatCancelOutcome';
 import type { TurnFailure } from '../../shared/phoneTurnFailure';
 
@@ -231,6 +232,9 @@ export function parseSendBody(body: unknown): { ok: true; value: SendBody } | { 
   for (const key of SEND_KEYS) {
     if (typeof o[key] !== 'string') return { ok: false, detail: `${key} must be a string`, clientMessageId: cmid };
   }
+  // No daemon identity is longer than a send receipt holds.
+  if ((o.agentSessionId as string).length > RECEIPT_AGENT_SESSION_ID_MAX) return { ok: false, detail: 'agentSessionId too long', clientMessageId: cmid };
+  if ((o.historyEpoch as string).length > RECEIPT_HISTORY_EPOCH_MAX) return { ok: false, detail: 'historyEpoch too long', clientMessageId: cmid };
   if (o.deliver !== undefined && o.deliver !== 'next-turn' && o.deliver !== 'steer') {
     return { ok: false, detail: 'deliver must be "next-turn" or "steer"', clientMessageId: cmid };
   }

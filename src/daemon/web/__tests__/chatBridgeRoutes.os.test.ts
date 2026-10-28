@@ -679,6 +679,12 @@ describe('native chat routes (contract v0.3.1)', () => {
       expect(res.status).toBe(400);
       res = await postJson(url(), h, '[1,2]');
       expect(res.status).toBe(400);
+      // Longer than any daemon identity (and than a send receipt holds).
+      res = await postJson(url(), h, sendBody({ historyEpoch: 'h'.repeat(65) }));
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ error: 'invalid-chat-request', detail: 'historyEpoch too long', effect: 'none' });
+      res = await postJson(url(), h, sendBody({ agentSessionId: 'a'.repeat(257) }));
+      expect(res.status).toBe(400);
       expect(chat.send).not.toHaveBeenCalled();
     });
 
