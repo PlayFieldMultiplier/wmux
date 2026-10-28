@@ -251,6 +251,12 @@ export class DaemonPTYBridge extends EventEmitter {
    * fill in where it agrees. Reset when the agent ends, like `hookSeen`.
    */
   private programStatusSeen = false;
+  /** The tracked agent the program's reports were accepted for. */
+  private programAgentSlug: string | null = null;
+  /** Hands a silent `working` pane back to the heuristics (see armProgramQuietCheck). */
+  private programQuietTimer: ReturnType<typeof setTimeout> | null = null;
+  /** No output and no report for this long while `working`: the program is hung, not working. */
+  private static readonly PROGRAM_WORKING_QUIET_MS = 5 * 60_000;
   /** OSC 7501 records of this terminal (root and child ids). */
   private readonly programStatus = new ProgramStatusStore();
   /** The last output chunk ended in ESC: a RIS (`ESC c`) may straddle chunks. */
@@ -1323,16 +1329,16 @@ export class DaemonPTYBridge extends EventEmitter {
 
   /**
    * An OSC 7501 report (see programStatus.ts). Every valid report is stored;
-   * only the root record drives the pane, and only on a pane whose agent is
-   * known (the detector named it or the process tracker watches it): a plain
-   * shell command reporting `working` is not an agent turn. The feature query
+   * only the root record drives the pane, and only while the process tracker
+   * watches an agent alive in it (paneAgent): a plain shell command reporting
+   * `working` is not an agent turn. The feature query
    * (`?`) is not answered yet, so only programs that report without asking
    * (Codex) reach this.
    */
   private noteProgramStatus(data: string): void {
     const report = parseProgramStatus(data);
     if (!report) return;
-    const before = this.programStatusSeen ? this.programStatus.root()?.state : undefined;
+    const prior = this.programStatusSeen ? this.programStatus.root() : undefined;
     this.programStatus.apply(report, Date.now());
     const root = this.programStatus.root();
     if (!root) {
@@ -1341,10 +1347,11 @@ export class DaemonPTYBridge extends EventEmitter {
       return;
     }
     if (report.id !== undefined || !this.sessionId) return;
-    const agent = this.paneAgentName();
-    if (!agent) return;
+    const pane = this.paneAgent();
+    if (!pane) return;
     this.programStatusSeen = true;
-    this.applyProgramState(root, before, agent, this.sessionId);
+    this.programAgentSlug = pane.slug;
+    this.applyProgramState(root, prior, pane.name, this.sessionId);
   }
 
   /**
@@ -1353,8 +1360,8 @@ export class DaemonPTYBridge extends EventEmitter {
    * need nothing new: `working` runs the turn, `blocked` waits on a human,
    * `idle` / `done` / `error` settle it. `title` and `msg` are stored only.
    */
-  private applyProgramState(record: ProgramStatusRecord, before: ProgramStatusRecord['state'] | undefined, agent: string, sessionId: string): void {
-    const changed = record.state !== before;
+  private applyProgramState(record: ProgramStatusRecord, prior: ProgramStatusRecord | undefined, agent: string, sessionId: string): void {
+    const changed = record.state !== prior?.state;
     if (record.state === 'blocked') {
       // The dialog the screen or a hook already raised: the program now answers for it too.
       if (this.awaitingHuman) {
@@ -1371,7 +1378,9 @@ export class DaemonPTYBridge extends EventEmitter {
     if (this.awaitingHuman && (this.awaitingFromProgram || !this.awaitingFromHook)) this.clearAwaiting('screen-cleared');
     if (record.state === 'working') {
       this.noteAgentStatus('running', false, undefined, false, undefined, 'program');
-      if (changed && !this.muted) {
+      // A repeat keeps the renderer's activity stamp fresh, as the Codex
+      // spinner title does (CODEX_SPINNER_REFRESH_MS).
+      if ((changed || Date.now() - this.lastActiveAt >= DaemonPTYBridge.CODEX_SPINNER_REFRESH_MS) && !this.muted) {
         this.lastActiveAt = Date.now();
         this.emit('active', { sessionId, agentName: agent, likelyRepaint: false });
       }
@@ -1379,6 +1388,9 @@ export class DaemonPTYBridge extends EventEmitter {
     }
     const status = record.state === 'idle' ? 'waiting' : record.state === 'done' ? 'complete' : 'error';
     if (!changed && this.explicitTerminalStatus && this.settledStatus === status) return;
+    // The same settle again after a submit (or a hook) started a turn since
+    // the program last said it: a repeat of the old state, not this turn's end.
+    if (!changed && prior && this.lastTurnStartedAt >= prior.updatedAt) return;
     const wasSettled = this.explicitTerminalStatus;
     this.noteAgentStatus(status, false, undefined, false, undefined, 'program');
     // `error` settles the turn without an event: main words an `error` event
@@ -1388,12 +1400,36 @@ export class DaemonPTYBridge extends EventEmitter {
     if (status === 'waiting' && !wasSettled && this.isPreTurn()) this.emit('idle', { sessionId, preTurn: true });
   }
 
-  /** The pane's agent as the screen or the process tracker knows it, or null. */
-  private paneAgentName(): string | null {
+  /**
+   * The agent the process tracker watches alive in the pane, or null. Not the
+   * detector's last agent alone: that outlives the agent, and bytes any later
+   * program prints (a `cat` of a crafted file) must not speak for it.
+   */
+  private paneAgent(): { slug: string; name: string } | null {
+    const slug = this.trackedAgent?.alive ? this.trackedAgent.slug : undefined;
+    if (!slug) return null;
     const screen = this.agentDetector?.getLastAgent();
-    if (screen) return screen;
-    const tracked = this.trackedAgent?.alive ? this.trackedAgent.slug : undefined;
-    return tracked ? agentRow(tracked)?.display ?? null : null;
+    const name = screen && agentDisplayToSlug(screen) === slug ? screen : agentRow(slug)?.display;
+    return name ? { slug, name } : null;
+  }
+
+  /**
+   * A program that says `working` repaints (Codex's spinner title is output),
+   * so output stopping for PROGRAM_WORKING_QUIET_MS with no report since means
+   * it is stopped or hung. Codex has no stall rule of its own (StallWatch is
+   * Claude's), so the pane goes back to the heuristics and gets the idle the
+   * silence held back. Its next report drives the pane again.
+   */
+  private armProgramQuietCheck(sessionId: string): void {
+    if (this.programQuietTimer) clearTimeout(this.programQuietTimer);
+    const reportAt = this.programStatus.root()?.updatedAt;
+    this.programQuietTimer = setTimeout(() => {
+      this.programQuietTimer = null;
+      if (!this.programWorking() || this.programStatus.root()?.updatedAt !== reportAt) return;
+      if (this.activityMonitor?.isActive(sessionId)) return;
+      this.handBackProgramStatus();
+      if (!this.explicitTerminalStatus) this.emit('idle', { sessionId, ...(this.isPreTurn() ? { preTurn: true } : {}) });
+    }, DaemonPTYBridge.PROGRAM_WORKING_QUIET_MS);
   }
 
   /** The program driving this pane says it is working. */
@@ -1424,6 +1460,9 @@ export class DaemonPTYBridge extends EventEmitter {
    */
   private handBackProgramStatus(): void {
     this.programStatusSeen = false;
+    this.programAgentSlug = null;
+    if (this.programQuietTimer) clearTimeout(this.programQuietTimer);
+    this.programQuietTimer = null;
     const raised = this.awaitingFromProgram;
     this.awaitingFromProgram = false;
     if (!raised || !this.awaitingHuman || this.awaitingFromHook) return;
@@ -1871,8 +1910,13 @@ export class DaemonPTYBridge extends EventEmitter {
         && this.claudeRunningTitleAt > 0 && this.claudeRunningTitleAt >= this.turnOpenedAt
         && titleShowsFinishedTurn({ title: this.lastTitle, at: this.lastTitleAt }, 'claude', this.claudeRunningTitleAt)
       ) this.closeTurn(true);
-      // A quiet stretch of a turn the program says is running is not idle.
-      if (this.explicitTerminalStatus || this.programWorking()) return;
+      // A quiet stretch of a turn the program says is running is not idle,
+      // up to a bound (armProgramQuietCheck).
+      if (this.programWorking()) {
+        this.armProgramQuietCheck(ptyId);
+        return;
+      }
+      if (this.explicitTerminalStatus) return;
       this.emit('idle', { sessionId: ptyId, ...(this.isPreTurn() ? { preTurn: true } : {}) });
     });
     // Activity → active notification. A submitted turn is re-armed by
@@ -2118,6 +2162,8 @@ export class DaemonPTYBridge extends EventEmitter {
       // A program reporting its own status owns the turn. A dialog read off
       // the screen still counts: one the program does not report must not go
       // unseen.
+      // The screen names another agent: the reporting one is gone.
+      if (this.programStatusSeen && agentDisplayToSlug(agentEvent.agent) !== this.programAgentSlug) this.endProgramStatusEpisode();
       if (this.programStatusSeen && agentEvent.status !== 'awaiting_input') return;
       const wasSettled = this.explicitTerminalStatus;
       // The question line of a box the agent's title (noteTitleAwaitingHuman)
@@ -2517,6 +2563,9 @@ export class DaemonPTYBridge extends EventEmitter {
     this.spinnerOpenedTurn = false;
     this.hookSeen = false;
     this.programStatusSeen = false;
+    this.programAgentSlug = null;
+    if (this.programQuietTimer) clearTimeout(this.programQuietTimer);
+    this.programQuietTimer = null;
     this.programStatus.clear();
     this.outputEndsWithEsc = false;
     this.awaitingFromProgram = false;

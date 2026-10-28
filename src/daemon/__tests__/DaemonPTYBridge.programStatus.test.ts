@@ -189,6 +189,69 @@ describe('DaemonPTYBridge — OSC 7501 program status', () => {
     expect(bridge.getProgramStatus()).toBeUndefined();
   });
 
+  it('after Codex exits, 7501 bytes another program prints do not speak for it', () => {
+    replay('boot');
+    feed(report('state=clear'));
+    bridge.noteAgentProcess({ slug: 'codex', alive: false });
+    // e.g. `cat` of a crafted file: the detector still names Codex, the process is gone.
+    feed(report('state=blocked:kind=permission:app=codex'));
+    expect(bridge.isProgramStatusDriving()).toBe(false);
+    expect(bridge.getAgentStatus()).not.toBe('awaiting_input');
+    feed(report('state=working:app=codex'));
+    expect(bridge.getAgentStatus()).not.toBe('running');
+  });
+
+  it('a working pane with no output and no report for five minutes goes back to the heuristics', () => {
+    replay('boot');
+    bridge.noteInput('say hi\r');
+    replay('turn 1');
+    idles = [];
+    vi.advanceTimersByTime(4 * 60_000);
+    expect(bridge.getAgentStatus()).toBe('running');
+    vi.advanceTimersByTime(2 * 60_000);
+    expect(bridge.isProgramStatusDriving()).toBe(false);
+    expect(idles).toHaveLength(1);
+    // Codex speaks again: it drives again.
+    feed(report('state=idle:app=codex'));
+    expect(bridge.isProgramStatusDriving()).toBe(true);
+    expect(bridge.getAgentStatus()).toBe('waiting');
+  });
+
+  it('a repeated working report refreshes activity at the spinner cadence', () => {
+    replay('boot');
+    bridge.noteInput('say hi\r');
+    const actives: unknown[] = [];
+    bridge.on('active', (e: unknown) => actives.push(e));
+    replay('turn 1');
+    // Output keeps the activity cycle open, so only a refresh reports `active` again.
+    const paint = (ms: number) => { for (let t = 0; t < ms; t += 2_000) { feed('.'); vi.advanceTimersByTime(2_000); } };
+    paint(4_000);
+    const settled = actives.length;
+    feed(report('state=working:app=codex'));
+    expect(actives).toHaveLength(settled);
+    paint(32_000);
+    feed(report('state=working:app=codex'));
+    expect(actives).toHaveLength(settled + 1);
+  });
+
+  it('a repeated idle right after a submit does not end the turn the submit started', () => {
+    replay('boot');
+    vi.advanceTimersByTime(500);
+    bridge.noteInput('say hi\r');
+    feed(report('state=idle:app=codex'));
+    expect(bridge.isTurnOpen()).toBe(true);
+    expect(bridge.getAgentStatus()).not.toBe('waiting');
+    replay('turn 1');
+    expect(bridge.getAgentStatus()).toBe('running');
+  });
+
+  it('the screen naming another agent ends the reporting one\'s episode', () => {
+    replay('boot');
+    expect(bridge.isProgramStatusDriving()).toBe(true);
+    feed('\x1b[?1049l\r\nClaude Code v2.1.310\r\n  bypass permissions on\r\n');
+    expect(bridge.isProgramStatusDriving()).toBe(false);
+  });
+
   it('stores, but does not act on, a report from a pane with no known agent', () => {
     const plain = new DaemonPTYBridge();
     const fake = makeFakePty();
