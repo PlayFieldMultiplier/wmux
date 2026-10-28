@@ -4548,7 +4548,8 @@ export function TabShortcuts() {
     const combo = typeof override === 'string' ? override : concreteCombo(entry, platform);
     return matchesShortcut(describe(entry.action), displayCombo(combo, platform));
   });
-  const prefixRowVisible = matchesShortcut(t('settings.prefixMode'), prefixKeyDisplay);
+  const prefixKeyLabel = displayCombo(prefixKeyDisplay, platform);
+  const prefixRowVisible = matchesShortcut(t('settings.prefixMode'), prefixKeyLabel);
   // Palette commands that ship with no key: listed so a key given to one (here
   // or from the palette) can be seen, changed and taken off again.
   const unsetLabel = t('settings.sc.unset');
@@ -4598,7 +4599,7 @@ export function TabShortcuts() {
           </p>
         )}
         {/* The prefix row keeps its own config below — no toggle. */}
-        {prefixRowVisible && <KbdRow keys={prefixKeyDisplay} description={t('settings.prefixMode')} />}
+        {prefixRowVisible && <KbdRow keys={prefixKeyLabel} description={t('settings.prefixMode')} />}
         {visibleShortcuts.map((entry) => {
           const override = shortcutOverrides[entry.action];
           const disabled = override === null;

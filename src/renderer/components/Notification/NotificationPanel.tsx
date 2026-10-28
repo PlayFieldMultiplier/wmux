@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, type ReactElement } from 'react';
 import { useStore } from '../../stores';
 import { useT } from '../../hooks/useT';
+import { useShortcutLabel } from '../../utils/shortcutLabel';
 import { timeAgo } from '../../utils/timeAgo';
 import { tokenAttrs } from '../../themes';
 import type { AgentStatus, Notification, NotificationType, Workspace } from '../../../shared/types';
@@ -328,9 +329,11 @@ export function NotificationPanelView(props: NotificationPanelViewProps): ReactE
       </div>
 
       {/* Footer */}
-      <div className="ui-note px-4 py-2.5" style={{ borderTop: '1px solid var(--surface-hairline)' }}>
-        {toggleHintLabel}
-      </div>
+      {toggleHintLabel && (
+        <div className="ui-note px-4 py-2.5" style={{ borderTop: '1px solid var(--surface-hairline)' }}>
+          {toggleHintLabel}
+        </div>
+      )}
     </div>
   );
 }
@@ -342,6 +345,7 @@ const EMPTY: Record<string, never> = {};
 
 export default function NotificationPanel() {
   const t = useT();
+  const toggleKey = useShortcutLabel('toggleNotifications');
   const notifications = useStore((s) => s.notifications);
   const notificationPanelVisible = useStore((s) => s.notificationPanelVisible);
   const toggleNotificationPanel = useStore((s) => s.toggleNotificationPanel);
@@ -551,7 +555,7 @@ export default function NotificationPanel() {
       unreadCount={unreadCount}
       dialogLabel={t('notification.title')}
       emptyLabel={t('notification.empty')}
-      toggleHintLabel={t('notification.toggle')}
+      toggleHintLabel={toggleKey ? t('notification.toggle', { key: toggleKey }) : ''}
       markAllReadLabel={t('notification.markAllRead')}
       markWorkspaceReadLabel={t('notification.markWorkspaceRead')}
       closeLabel={t('notification.close')}
