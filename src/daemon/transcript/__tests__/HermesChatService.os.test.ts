@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DatabaseSync } from 'node:sqlite';
 import { HermesChatService, routeTerminalChat, type HermesChatDeps } from '../HermesChatService';
+import { agentLaunchAt } from '../../agentLaunchAt';
 import type { TerminalChatService } from '../TerminalChatService';
 import { addMessage, addSession, hermesFixture } from './hermesFixture';
 
@@ -53,6 +54,14 @@ describe('HermesChatService', () => {
     expect((await service.read('p1'))?.status).toMatchObject({ agentStatus: 'awaiting_input', terminal: { capabilities: { send: false } } });
     setScreen(prompt('❯ draft the user is typing'));
     expect((await service.read('p1'))?.status.terminal?.capabilities.send).toBe(false);
+  });
+
+  it('binds a Hermes whose shell reported no command start, by its process start', async () => {
+    // No OSC 133 command start (a shell without wmux integration): the launch
+    // time is the Hermes process's own start, recorded on its launch edge.
+    const startedAt = Date.now() - 60_000;
+    const { service } = rig({ launchAt: () => agentLaunchAt(undefined, [undefined, { pid: 4242, startedAt }], 4242) });
+    expect((await service.read('p1'))?.status).toMatchObject({ available: true, agentSessionId: '20261029_053840_ec122e' });
   });
 
   it('binds nothing it cannot tell apart', async () => {

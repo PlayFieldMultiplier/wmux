@@ -8,6 +8,7 @@ import { createStartupRecovery } from './startupRecovery';
 import { loadChatSkills } from './transcript/chatSkills';
 import { TerminalChatService } from './transcript/TerminalChatService';
 import { HermesChatService, routeTerminalChat } from './transcript/HermesChatService';
+import { agentLaunchAt, type AgentProcessStart } from './agentLaunchAt';
 import { OpenCodeIdleSettler } from './transcript/openCodeIdleSettle';
 import { dangerousLaunchNotice, type ChatBridge, type ChatLaunchRequest } from './chat/chatBridge';
 import { ChatSendReceiptStore } from './chat/ChatSendReceiptStore';
@@ -453,6 +454,10 @@ const codexProcessStart = new Map<string, number>();
 let bindFromAgentCommandLine: ((sessionId: string, slug: string, pid: number) => void) | null = null;
 // The agent process (`pid@start`) whose command line each pane last read; cleared on its death edge.
 const agentCommandLineRead = new Map<string, string>();
+// The start of each pane's agent process whose command line names no
+// conversation (no resume grammar, so its line is never read above), for its
+// launch time when the shell reports no command start; cleared on its death edge.
+const agentProcessStart = new Map<string, AgentProcessStart>();
 // N4 — the agent pid each pane's sign-in was last checked for (once per agent process).
 const loginCheckedProcess = new Map<string, number>();
 // #1163 — registerRpcHandlers' canonical agent-state reader (readDaemonAgentState),
@@ -4957,12 +4962,11 @@ function registerRpcHandlers(
   /** When the pane's current agent started (epoch ms): its command start or its process's own start. */
   const paneAgentLaunchAt = (id: string): number | undefined => {
     const commandAt = sessionManager.getSession(id)?.promptLog.recent(256).filter((e) => e.type === 'command_start').pop()?.ts;
-    // `pid@start` from the launch edge, only while that pid is still the pane's agent.
+    // `pid@start` from the launch edge.
     const read = agentCommandLineRead.get(id) ?? '';
     const at = read.indexOf('@');
-    const startedAt = at > 0 && Number(read.slice(0, at)) === agentProcessTracker.pidFor(id) ? Number(read.slice(at + 1)) : NaN;
-    const known = [commandAt, startedAt > 0 ? startedAt : undefined].filter((v): v is number => v !== undefined);
-    return known.length > 0 ? Math.max(...known) : undefined;
+    const lineRead = at > 0 ? { pid: Number(read.slice(0, at)), startedAt: Number(read.slice(at + 1)) } : undefined;
+    return agentLaunchAt(commandAt, [lineRead, agentProcessStart.get(id)], agentProcessTracker.pidFor(id));
   };
   if (!hermesChat) {
     const liveHermes = (id: string): boolean => {
@@ -10116,8 +10120,17 @@ async function main(): Promise<void> {
     if (state.alive && state.slug && resumeGrammarFor(state.slug)) {
       const pid = agentProcessTracker.pidFor(sessionId);
       if (pid !== undefined) bindFromAgentCommandLine?.(sessionId, state.slug, pid);
+    } else if (state.alive && state.slug) {
+      // No line to read, but its launch time still matters (Hermes binds the
+      // conversation started after it).
+      const pid = agentProcessTracker.pidFor(sessionId);
+      if (pid !== undefined && agentProcessStart.get(sessionId)?.pid !== pid) {
+        void readProcessStartMs(pid).then((startedAt) => {
+          if (startedAt !== undefined && agentProcessTracker.pidFor(sessionId) === pid) agentProcessStart.set(sessionId, { pid, startedAt });
+        }).catch(() => undefined);
+      }
     }
-    if (!state.alive) agentCommandLineRead.delete(sessionId);
+    if (!state.alive) { agentCommandLineRead.delete(sessionId); agentProcessStart.delete(sessionId); }
     // N4 — an agent that starts in a pane whose account is signed out gets
     // the notice now, not after its first turn fails. It still runs: the pane
     // is the user's own. Once per agent process (the tracker re-emits alive);
