@@ -1,3 +1,5 @@
+// @wmux-lane unit
+// 'win32' is only an argument to the pure formatter; nothing here reads the OS.
 import { describe, it, expect } from 'vitest';
 import { en } from '../locales/en';
 import { LOCALE_LOADERS, type LocaleTable } from '../localeLoaders';

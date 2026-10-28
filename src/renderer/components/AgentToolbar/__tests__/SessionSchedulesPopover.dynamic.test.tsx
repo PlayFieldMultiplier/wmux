@@ -117,8 +117,11 @@ describe('SessionSchedulesPopover', () => {
     await mount(api);
     expect(container.querySelectorAll('[data-session-schedule-row]')).toHaveLength(2);
     expect(container.textContent).toContain('continue the milestone');
-    expect(container.textContent).toContain('Codex CLI · pty-codex');
-    expect(container.textContent).toContain('pty-other');
+    expect(container.textContent).toContain('Codex CLI');
+    expect(container.textContent).toContain('Another session');
+    // Raw pty ids are internal; the popover never shows them.
+    expect(container.textContent).not.toContain('pty-codex');
+    expect(container.textContent).not.toContain('pty-other');
 
     const otherDelete = container.querySelector<HTMLButtonElement>(
       '[data-schedule-id="other"] [data-session-schedule-delete]',
