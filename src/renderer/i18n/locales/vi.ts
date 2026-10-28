@@ -276,6 +276,7 @@ export const vi = {
   'settings.tabLan': "LAN",
   'settings.navGroupConnections': "Kết nối",
   'settings.learnMore': "Tìm hiểu thêm",
+  'settings.moreInfo': "Thêm thông tin",
   'settings.showLess': "Thu gọn",
   'settings.quickCommands': "Lệnh nhanh",
   'settings.sectionShell': "Shell",

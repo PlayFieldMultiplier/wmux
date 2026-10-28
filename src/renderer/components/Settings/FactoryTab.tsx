@@ -927,7 +927,7 @@ function TaskFoldersRow({ port, t, disabled }: { port: FactorySettingsPort; t: T
           <span data-testid="factory-task-folders-usage" className="text-[13px] text-[var(--text-sub)] tabular-nums">{text}</span>
           {clean && (
             <Button
-              size="sm"
+              size="md"
               variant="secondary"
               data-testid="factory-task-folders-clean"
               disabled={disabled || busy}
@@ -1033,7 +1033,7 @@ export function FactoryTab({ settingsPort, botPort, pickFolder, claudeAuthPort }
   const off = !sPort.available || !settings;
 
   return (
-    <div data-testid="factory-tab" className="flex flex-col">
+    <div data-testid="factory-tab" className="contents">
       {!sPort.available && (
         <SettingsSection>
           <SettingNote data-testid="factory-not-installed">{t('settings.factory.notInstalled')}</SettingNote>

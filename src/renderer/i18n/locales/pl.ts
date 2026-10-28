@@ -2697,6 +2697,7 @@ export const pl = {
   'settings.tabLan': 'LAN',
   'settings.navGroupConnections': 'Połączenia',
   'settings.learnMore': 'Więcej',
+  'settings.moreInfo': 'Więcej informacji',
   'settings.showLess': 'Mniej',
   'settings.quickCommands': 'Szybkie polecenia',
   'settings.sectionShell': 'Powłoka',

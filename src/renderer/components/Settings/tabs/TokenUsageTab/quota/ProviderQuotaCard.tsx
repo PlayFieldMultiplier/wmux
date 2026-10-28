@@ -71,7 +71,7 @@ export function ProviderQuotaCard({
 
   return (
     <div
-      className="p-3.5 rounded-xl border border-[var(--border-soft)] bg-[var(--bg-surface)] flex flex-col gap-2.5"
+      className="settings-block"
       data-testid={`quota-card-${provider}`}
     >
       <div className="flex items-center justify-between gap-3">
@@ -93,7 +93,7 @@ export function ProviderQuotaCard({
 
         <Button
           variant="secondary"
-          size="sm"
+          size="md"
           onClick={onRefresh}
           disabled={loading}
           aria-label={t('settings.tokenUsage.refreshQuotaAria', { provider: displayName })}

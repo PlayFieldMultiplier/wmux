@@ -276,6 +276,7 @@ export const ptBR = {
   'settings.tabLan': "LAN",
   'settings.navGroupConnections': "Conexões",
   'settings.learnMore': "Saiba mais",
+  'settings.moreInfo': "Mais informações",
   'settings.showLess': "Mostrar menos",
   'settings.quickCommands': "Comandos rápidos",
   'settings.sectionShell': "Shell",

@@ -276,6 +276,7 @@ export const uk = {
   'settings.tabLan': "LAN",
   'settings.navGroupConnections': "Підключення",
   'settings.learnMore': "Докладніше",
+  'settings.moreInfo': "Докладна інформація",
   'settings.showLess': "Згорнути",
   'settings.quickCommands': "Швидкі команди",
   'settings.sectionShell': "Оболонка",

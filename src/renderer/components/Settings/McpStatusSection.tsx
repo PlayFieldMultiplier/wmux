@@ -172,7 +172,7 @@ export function McpStatusSection({ api }: { api?: ElectronMcpApi } = {}) {
             )}
             <Button
               variant="secondary"
-              size="sm"
+              size="md"
               data-mcp-action={target.id}
               onClick={() => void handleRegisterTarget(target.id, target.displayName)}
               disabled={isBusy}
@@ -189,6 +189,7 @@ export function McpStatusSection({ api }: { api?: ElectronMcpApi } = {}) {
     <div className="flex items-center gap-2 shrink-0">
       <Button
         variant="secondary"
+        size="md"
         onClick={() => void handleReregister()}
         disabled={isBusy}
       >
@@ -198,6 +199,7 @@ export function McpStatusSection({ api }: { api?: ElectronMcpApi } = {}) {
         <>
           <Button
             variant="ghost"
+            size="md"
             onClick={() => setConfirmingUnregister(false)}
             disabled={isBusy}
           >
@@ -205,6 +207,7 @@ export function McpStatusSection({ api }: { api?: ElectronMcpApi } = {}) {
           </Button>
           <Button
             variant="danger"
+            size="md"
             onClick={() => void handleUnregister()}
             disabled={isBusy}
           >
@@ -214,6 +217,7 @@ export function McpStatusSection({ api }: { api?: ElectronMcpApi } = {}) {
       ) : (
         <Button
           variant="destructive"
+          size="md"
           onClick={() => setConfirmingUnregister(true)}
           disabled={isBusy}
         >

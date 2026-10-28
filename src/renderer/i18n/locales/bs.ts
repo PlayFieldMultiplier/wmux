@@ -276,6 +276,7 @@ export const bs = {
   'settings.tabLan': "LAN",
   'settings.navGroupConnections': "Veze",
   'settings.learnMore': "Saznaj više",
+  'settings.moreInfo': "Više informacija",
   'settings.showLess': "Prikaži manje",
   'settings.quickCommands': "Brze komande",
   'settings.sectionShell': "Ljuska",

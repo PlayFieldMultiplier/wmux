@@ -276,6 +276,7 @@ export const fr = {
   'settings.tabLan': "LAN",
   'settings.navGroupConnections': "Connexions",
   'settings.learnMore': "En savoir plus",
+  'settings.moreInfo': "Plus d'informations",
   'settings.showLess': "Afficher moins",
   'settings.quickCommands': "Commandes rapides",
   'settings.sectionShell': "Shell",

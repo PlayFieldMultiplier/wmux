@@ -276,6 +276,7 @@ export const ms = {
   'settings.tabLan': "LAN",
   'settings.navGroupConnections': "Sambungan",
   'settings.learnMore': "Ketahui lagi",
+  'settings.moreInfo': "Maklumat lanjut",
   'settings.showLess': "Tunjuk kurang",
   'settings.quickCommands': "Arahan pantas",
   'settings.sectionShell': "Shell",

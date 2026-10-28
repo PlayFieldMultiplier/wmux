@@ -278,6 +278,7 @@ export const ja = {
   'settings.tabLan': "LAN",
   'settings.navGroupConnections': "接続",
   'settings.learnMore': "詳しく",
+  'settings.moreInfo': "詳細情報",
   'settings.showLess': "閉じる",
   'settings.quickCommands': "クイックコマンド",
   'settings.sectionShell': "シェル",

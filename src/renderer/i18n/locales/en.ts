@@ -2722,6 +2722,7 @@ export const en = {
   'settings.tabLan': 'LAN',
   'settings.navGroupConnections': 'Connections',
   'settings.learnMore': 'Learn more',
+  'settings.moreInfo': 'More info',
   'settings.showLess': 'Show less',
   'settings.quickCommands': 'Quick commands',
   'settings.sectionShell': 'Shell',

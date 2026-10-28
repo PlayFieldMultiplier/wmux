@@ -11,7 +11,7 @@ export default function PluginsSection() {
   const t = useT();
   return <SettingsSection id="plugins">
     <SettingRow label={t('plugins.settings.moved')} description={t('plugins.settings.description')}>
-      <Button onClick={() => useStore.getState().setAppRoute('plugins')}>{t('plugins.settings.open')}</Button>
+      <Button size="md" onClick={() => useStore.getState().setAppRoute('plugins')}>{t('plugins.settings.open')}</Button>
     </SettingRow>
   </SettingsSection>;
 }

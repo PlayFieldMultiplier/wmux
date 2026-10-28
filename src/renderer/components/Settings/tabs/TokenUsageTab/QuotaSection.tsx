@@ -197,26 +197,24 @@ export function QuotaSection(props: QuotaSectionProps = {}): ReactElement {
       }
       data-testid="token-quota-section"
     >
-      <div className="flex flex-col gap-3 p-3">
-        {active.length === 0 ? (
-          <SettingNote data-testid="token-quota-empty">
-            {t('settings.tokenUsage.noSupportedAgentBound')}
-          </SettingNote>
-        ) : (
-          active.map((provider) => (
-            <ProviderQuotaCard
-              key={provider}
-              provider={provider}
-              reading={readings[provider]}
-              loading={loading[provider]}
-              onRefresh={() => handleRefresh(provider)}
-              agySensorStatus={provider === 'agy' ? agySensorStatus : undefined}
-              onInstallSensor={provider === 'agy' ? handleInstallAgySensor : undefined}
-              installingSensor={installingAgy}
-            />
-          ))
-        )}
-      </div>
+      {active.length === 0 ? (
+        <SettingNote data-testid="token-quota-empty">
+          {t('settings.tokenUsage.noSupportedAgentBound')}
+        </SettingNote>
+      ) : (
+        active.map((provider) => (
+          <ProviderQuotaCard
+            key={provider}
+            provider={provider}
+            reading={readings[provider]}
+            loading={loading[provider]}
+            onRefresh={() => handleRefresh(provider)}
+            agySensorStatus={provider === 'agy' ? agySensorStatus : undefined}
+            onInstallSensor={provider === 'agy' ? handleInstallAgySensor : undefined}
+            installingSensor={installingAgy}
+          />
+        ))
+      )}
     </SettingsSection>
   );
 }

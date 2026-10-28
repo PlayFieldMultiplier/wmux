@@ -68,7 +68,7 @@
 .settings-nav-hits { margin-left: auto; font-size: 11px; color: var(--text-sub); font-variant-numeric: tabular-nums; }
 
 /* Content: one centered column. */
-.settings-content { flex: 1; min-width: 0; overflow-y: auto; }
+.settings-content { flex: 1; min-width: 0; overflow-y: auto; scrollbar-gutter: stable; }
 .settings-column { width: 100%; max-width: 680px; margin: 0 auto; padding: 32px 24px 48px; }
 .settings-page-title { margin: 0 0 24px; font-size: 22px; font-weight: 500; line-height: 28px; color: var(--text-main); }
 .settings-page { display: flex; flex-direction: column; gap: 32px; }
@@ -78,9 +78,10 @@
 .settings-section-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
 .settings-section-title { margin: 0; }
 .settings-column .ui-group-label:not(:is([role="dialog"], [role="alertdialog"], .ui-popover, [role="listbox"]) *) { font-size: 13px; font-weight: 400; line-height: 20px; color: var(--text-sub); }
-.settings-section-desc { margin: -4px 0 8px; font-size: 12px; line-height: 16px; color: var(--text-sub); }
+.settings-section-desc { display: flex; align-items: center; gap: 4px; margin: -4px 0 8px; font-size: 12px; line-height: 16px; color: var(--text-sub); }
+.settings-section-desc > p { min-width: 0; }
 
-/* Row: Field on the left/right; long copy collapses to one line. */
+/* Row: Field on the left/right; long copy collapses to one line with an info button. */
 .settings-row { display: flex; flex-direction: column; padding: 8px 14px; min-height: 48px; justify-content: center; }
 .settings-row > .ui-field { min-height: 32px; }
 /* Calmer type than the shared Field and row recipes: a regular-weight label
@@ -90,19 +91,40 @@
 .settings-column :is(.ui-field-description, .ui-row-detail):not(:is([role="dialog"], [role="alertdialog"], .ui-popover, [role="listbox"]) *) { font-size: 12px; line-height: 16px; color: var(--text-sub); }
 .settings-row .ui-field-text { flex: 1; }
 .settings-clamp { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
-/* Accounts: a one-line summary, then the rest on its own line behind Learn more. */
+/* Accounts: a one-line summary, then the rest on its own line behind the info button. */
 [data-setting-id="claudeacct"] > .settings-section-desc p { white-space: pre-line; }
-.settings-more {
-  align-self: flex-start;
-  margin-top: 2px;
+.settings-desc-line { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.settings-desc-line > .settings-clamp { min-width: 0; }
+/* The info button after clamped copy: a muted glyph, a 24px hit area. */
+.settings-info {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
   padding: 0;
-  border-radius: 4px;
-  font-size: 12px;
-  line-height: 16px;
-  color: var(--accent-blue);
+  border-radius: 50%;
+  color: var(--text-muted);
   background: none;
 }
-.settings-more:hover { text-decoration: underline; }
+.settings-info::before { content: ''; position: absolute; inset: -4px; }
+.settings-info:hover,
+.settings-info[aria-expanded="true"] { color: var(--text-sub); }
+/* Its tip is portalled to the body (the section container clips overflow). */
+.ui-popover.settings-info-tip {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: var(--z-overlay);
+  max-width: 320px;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 18px;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
 .settings-note { margin: 0; padding: 10px 14px; font-size: 12px; line-height: 16px; color: var(--text-sub); }
 .settings-note[data-tone="warning"] { color: color-mix(in srgb, var(--accent-yellow) 80%, var(--text-main)); }
 .settings-note[data-tone="danger"] { color: color-mix(in srgb, var(--accent-red) 80%, var(--text-main)); }
