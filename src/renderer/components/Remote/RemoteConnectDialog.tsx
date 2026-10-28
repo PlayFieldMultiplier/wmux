@@ -152,6 +152,8 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
   const { applyPairStatus } = invite;
   // null until the listener's state is known (it picks the first tab).
   const [tab, setTab] = useState<ConnectTab | null>(initialTab ?? null);
+  // A tab the person picked (or the caller asked for) is never replaced by the status-based default.
+  const tabChosen = useRef(initialTab != null);
   // The LAN panel stays mounted once shown, so switching tabs keeps its PIN;
   // closing the dialog unmounts it, which closes a window it left open.
   const [lanShown, setLanShown] = useState(initialTab === 'lan');
@@ -162,6 +164,8 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
   const [turnedOn, setTurnedOn] = useState(false);
   // The listener's state as last read (null: not read yet, or no daemon). Read only; never changed on show.
   const [a2aState, setA2aState] = useState<A2aRemoteStatus | null>(null);
+  // Until the first read lands, Create invite cannot say whether it turns the listener on, so it waits.
+  const [statusRead, setStatusRead] = useState(false);
   const [inviteError, setInviteError] = useState<string | null>(null);
   // The listener could not bind: its code and port, explained by the daemon (who holds it, a port to try).
   const [inviteFailure, setInviteFailure] = useState<{ code: string; port: number } | null>(null);
@@ -203,7 +207,8 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
       const status = await api?.status().catch(() => null);
       if (!live) return;
       setA2aState(status ?? null);
-      if (!initialTab) setTab(status?.enabled && status.listening ? 'invite' : 'paste');
+      setStatusRead(true);
+      if (!tabChosen.current) setTab(status?.enabled && status.listening ? 'invite' : 'paste');
     })();
     return () => { live = false; };
   }, [initialTab, api]);
@@ -514,7 +519,9 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
   const working = busy || invite.joinBusy;
   const remaining = invite.remainingSec;
   // Off (or never set up): the button says it turns the listener on, and the line above it says what that is.
-  const a2aOff = a2aState !== null && !a2aState.enabled;
+  // A read that failed is not proof the listener is on: the button then says it turns it on.
+  const a2aOff = statusRead && (a2aState === null || !a2aState.enabled);
+  const createWaits = !statusRead || creating || shareBusy;
   const canConnect = paste.trim() !== '' && !working;
   // The port is taken: "Use port N" is what unblocks, so it is the primary and Create invite (a retry) is not.
   const usePortPrimary = inviteFailure !== null && !invite.invite && inviteProblem?.suggestion != null;
@@ -559,7 +566,7 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
       <DialogBody>
         <SegmentedControl<ConnectTab>
           value={tab}
-          onValueChange={(v) => { setTab(v); setMessage(null); if (v === 'lan') setLanShown(true); }}
+          onValueChange={(v) => { tabChosen.current = true; setTab(v); setMessage(null); if (v === 'lan') setLanShown(true); }}
           ariaLabel={t('remotePage.connect.title')}
           options={[
             { value: 'invite', label: t('remotePage.connect.tabInvite') },
@@ -572,7 +579,7 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
         {tab === 'lan' ? null : tab === 'invite' ? (
           <div className="wmux-remote-connect" data-testid="remote-connect-invite">
             <p className="wmux-remote-connect-note">{t('remotePage.connect.inviteDesc')}</p>
-            {a2aOff && !invite.invite && (
+            {a2aOff && a2aState !== null && !invite.invite && (
               <p className="wmux-remote-connect-note" data-testid="remote-connect-turn-on-note">
                 {t('remotePage.connect.turnOnNote', { port: a2aState?.port ?? '' })}
               </p>
@@ -747,10 +754,12 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
         {tab === 'invite' && !invite.invite && (
           <Button
             ref={createRef}
-            variant={creating || shareBusy || usePortPrimary ? 'secondary' : 'primary'}
+            variant={createWaits || usePortPrimary ? 'secondary' : 'primary'}
             size="md"
+            // aria-disabled while the read is pending keeps it focusable (it is the dialog's first focus).
             disabled={creating || shareBusy}
-            onClick={() => void startInvite()}
+            aria-disabled={!statusRead || undefined}
+            onClick={() => { if (statusRead) void startInvite(); }}
             data-testid="remote-connect-create"
           >
             {t(a2aOff ? 'remotePage.connect.turnOnAndCreate' : 'remotePage.connect.createInvite')}

@@ -363,6 +363,43 @@ describe('Connect a PC dialog', () => {
     expect(q('remote-connect-turned-on-blocked')).toBeNull();
     expect(q('remote-connect-turned-on')?.textContent).toBe('A2A was off on this PC. It is on now, so the other PC can reach it.');
   });
+
+  it('opened on Invite before the status read lands: Create invite waits, then says it turns A2A on', async () => {
+    stub('', false);
+    let answer!: (s: unknown) => void;
+    a2a.status.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve; }));
+    await render({ initialTab: 'invite' });
+    const create = () => q<HTMLButtonElement>('remote-connect-create')!;
+    expect(create().getAttribute('aria-disabled')).toBe('true');
+    expect(create().className).toContain('ui-btn-secondary');
+    expect(document.activeElement).toBe(create());
+    await act(async () => { create().click(); });
+    expect(a2a.configure).not.toHaveBeenCalled();
+    expect(a2a.pairBegin).not.toHaveBeenCalled();
+    await act(async () => { answer({ enabled: false, port: 45660, listening: false, hostId: 'me', name: 'MAC', fingerprint256: null, lastError: null }); });
+    for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve(); });
+    expect(create().hasAttribute('aria-disabled')).toBe(false);
+    expect(create().textContent).toBe('Turn on and create invite');
+    expect(q('remote-connect-turn-on-note')).not.toBeNull();
+  });
+
+  it('a status read that failed never shows a plain Create invite: the button says it turns A2A on', async () => {
+    stub('', false);
+    a2a.status.mockRejectedValueOnce(new Error('daemon away'));
+    await render({ initialTab: 'invite' });
+    expect(q('remote-connect-create')?.textContent).toBe('Turn on and create invite');
+  });
+
+  it('a tab picked while the first status read is pending is kept when it lands', async () => {
+    stub('');
+    let answer!: (s: unknown) => void;
+    a2a.status.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve; }));
+    await render({ initialTab: 'paste' });
+    await act(async () => { tab('LAN').click(); });
+    await act(async () => { answer({ enabled: true, port: 45660, listening: true, hostId: 'me', name: 'MAC', fingerprint256: null, lastError: null }); });
+    for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve(); });
+    expect(tab('LAN').getAttribute('aria-checked')).toBe('true');
+  });
 });
 
 describe('one invite for A2A and the workspaces', () => {
