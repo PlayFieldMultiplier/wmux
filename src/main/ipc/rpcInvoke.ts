@@ -42,6 +42,10 @@ export const RENDERER_RPC_METHODS: readonly string[] = Object.freeze([
 
 const allowed: ReadonlySet<string> = new Set(RENDERER_RPC_METHODS);
 
+/** Longest method name accepted; every listed method is far shorter. */
+const MAX_METHOD_LEN = 120;
+/** How many distinct refused names are remembered for logging once. */
+const MAX_LOGGED_REFUSALS = 256;
 const loggedRefusals = new Set<string>();
 
 export function createRpcInvokeHandler(
@@ -53,12 +57,15 @@ export function createRpcInvokeHandler(
     if (typeof method !== 'string' || method.length === 0) {
       return { ok: false, error: 'rpc:invoke: missing method' };
     }
+    if (method.length > MAX_METHOD_LEN) {
+      return { ok: false, error: 'rpc:invoke: method name too long' };
+    }
     if (!allowed.has(method)) {
-      if (!loggedRefusals.has(method) && loggedRefusals.size < 256) {
+      if (!loggedRefusals.has(method) && loggedRefusals.size < MAX_LOGGED_REFUSALS) {
         loggedRefusals.add(method);
-        console.warn(`[rpc:invoke] method not allowed: ${method.slice(0, 120)}`);
+        console.warn(`[rpc:invoke] method not allowed: ${method}`);
       }
-      return { ok: false, error: `rpc:invoke: method not allowed: ${method.slice(0, 120)}` };
+      return { ok: false, error: `rpc:invoke: method not allowed: ${method}` };
     }
     // An object-typed params is required (the router validates this too).
     const safeParams =

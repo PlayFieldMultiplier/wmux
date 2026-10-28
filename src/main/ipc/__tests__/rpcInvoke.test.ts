@@ -66,6 +66,39 @@ describe('rpc:invoke', () => {
     }
   });
 
+  it('refuses a non-string or overlong method name before any lookup, and logs nothing for it', async () => {
+    const { handler, run, webContents, mainFrame } = setup();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const event = { sender: webContents, senderFrame: mainFrame };
+      for (const bad of [42, null, undefined, { m: 'events.poll' }, ['events.poll']]) {
+        expect(await handler(event, bad, {})).toMatchObject({ ok: false, error: /missing method/ });
+      }
+      const long = 'x'.repeat(121);
+      expect(await handler(event, long, {})).toEqual({ ok: false, error: 'rpc:invoke: method name too long' });
+      expect(await handler(event, `events.poll${' '.repeat(200)}`, {})).toEqual({ ok: false, error: 'rpc:invoke: method name too long' });
+      expect(run).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('remembers at most 256 refused names for its once-only log', async () => {
+    const { handler, webContents, mainFrame } = setup();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const event = { sender: webContents, senderFrame: mainFrame };
+      for (let i = 0; i < 400; i++) await handler(event, `bounded.case.${i}`, {});
+      for (let i = 0; i < 400; i++) await handler(event, `bounded.case.${i}`, {});
+      const logged = warn.mock.calls.filter((c) => String(c[0]).includes('bounded.case.')).length;
+      expect(logged).toBeLessThanOrEqual(256);
+      expect(logged).toBeGreaterThan(0);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   // Each of these acts with lasting effect and has its own IPC channel
   // (keys and logins: BOT_SECRET_IPC; connectors: CONNECTOR_IPC; bot
   // approvals: BOT_APPROVAL_IPC; browser policy: BROWSER_POLICY_IPC; folder
