@@ -900,7 +900,10 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   at most; when main cannot be asked (one red line) or does not answer in
   time (one muted line) Add makes the bot without a repository and
   remembers nothing; a refused folder shows "No repository" with one muted
-  line saying why and how to fix it, and an add from there remembers
+  line saying why and how to fix it (a folder with no origin remote a bot
+  can push to: one plain line, then Copy command — `git remote add origin
+  <address>` — and Show details, which holds main's full reason with the
+  folder's path), and an add from there remembers
   nothing, so the folder is offered again once it is fixed; None is
   remembered for the workspace ("You chose no repository for this
   workspace…", with Choose folder…), so later adds and Add team do not ask
@@ -949,11 +952,13 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   adds the bot to the current workspace and opens its 1:1, where its
   greeting arrives. When the Claude engine cannot sign in the panel says why in
   one line and offers Log in to Claude (and Check again); Start waits until
-  it can. A build that cannot tell never blocks Start. Beside Start, a
-  secondary **Add a team (lead + 4 roles)** does the same for the five-bot
-  team (no name to type), opens the lead's chat and offers the group chat
-  row (Add bot, above). Under them the repository line of Add bot, with its
-  Checking state and its reason line; Start and Add a team wait while it
+  it can. A build that cannot tell never blocks Start. Under it the
+  repository line of Add bot, with its Checking state and its reason line;
+  then one muted line of text links: **Add a team (lead + 4 roles)**, which
+  does the same for the five-bot team (no name to type), opens the lead's
+  chat and offers the group chat row (Add bot, above), and Start from a
+  recipe…. Start is the only button beside the name, so the card leads
+  with one action; Start and Add a team wait while the repository line
   checks.
 
 ### Fleet
@@ -1252,9 +1257,11 @@ refresh button. Nothing about branches or worktrees sits above the lists.
   a detached HEAD, no upstream, behind the upstream, the default branch).
   Commit needs no upstream; Push and Create PR do. main re-checks each step.
 - **Tabs:** text tabs **Issues · Pull requests**, then **Worktrees** as a
-  quieter, secondary tab at the end (the active one carries the 2px accent
-  bar; a first visit opens on Issues, then the last tab is kept) over a
-  hairline. All repos (from the switcher) shows Issues and Pull requests
+  quieter, secondary tab at the end, set apart by a gap with no rule (the
+  active one carries the 2px accent bar; a first visit opens on Issues,
+  then the last tab is kept; a repo with no origin remote opens on
+  Worktrees, shown but not saved, until a tab is picked while it is shown)
+  over a hairline. All repos (from the switcher) shows Issues and Pull requests
   as **one flat list** across repos, newest update first, each row ending
   in a small neutral **repo tag** (`--selection`, `--chip-radius`, 11px;
   the full owner/repo in its tooltip). Over it, a row of **repo chips**,
@@ -1322,7 +1329,8 @@ refresh button. Nothing about branches or worktrees sits above the lists.
   task boxes, blockquotes and tables. GitHub's HTML is never rendered as
   HTML: comments and scripts vanish, `<details>` becomes a collapsed
   disclosure labelled by its summary, other tags reduce to their text.
-  Nothing selected is one quiet line.
+  Nothing selected is one quiet line, drawn only while the list has a row
+  to select; otherwise the pane stays empty.
 - **Worktrees tab:** the new-worktree line and, while one runs, the merge
   session on top, then the worktrees in the flat list's who-acts-next
   grammar, as fold sections in order: **In use** (a workspace on it),
@@ -1345,9 +1353,9 @@ refresh button. Nothing about branches or worktrees sits above the lists.
   with their pushed PR status and live agent status, and the open PR list
   of the header's read or a Pull requests list; the tab reads no PR list
   of its own. All headers stay neutral (no orange: none of these is a
-  question waiting on the owner), every section starts open, and under the
-  page title a summary line names each non-empty section with its count
-  and jumps to it. A row in Uncommitted changes, No open PR or Cleanup
+  question waiting on the owner), every section starts open, and while two
+  or more sections are non-empty a summary line under the page title names
+  each with its count and jumps to it (one section is its own header). A row in Uncommitted changes, No open PR or Cleanup
   candidates can be **snoozed** (1 hour, 1 day, 1 week, or until it
   changes): it moves to a folded **Snoozed** group at the end, with
   Unsnooze, until its time passes or its state changes (another section,
@@ -1414,6 +1422,11 @@ refresh button. Nothing about branches or worktrees sits above the lists.
   (`gh auth login --web`, or the command to copy when no tab can show it).
   gh not installed shows the install command for the OS and Check again.
   gh keeps the credential; wmux stores no token.
+- **No remote:** a repo with no origin remote shows, on Issues and Pull
+  requests, one card in the list's place: "This repository has no origin
+  remote.", one line saying the lists are read from origin on GitHub or
+  GitLab, the command `git remote add origin <address>` in mono with Copy,
+  and Check again. No primary: nothing on the card does the fix itself.
 - **Cost:** pull-only and only while the page is shown. The shown PR or
   issue list polls every 30s while the window is visible.
 - **Rail dot:** a red dot on the Git icon while an open workspace's open or
@@ -2154,6 +2167,7 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
 | 2026-10-26 | Custom agents: a last section on Settings › Roles & fan-out, not a new tab. One ui-group of rows (name · command line · "Known by its process" and unattended line, a "Used by" line while a role or preset launches it, with Edit / Delete), "Add custom agent" as the last row, and an inline stacked editor like Fan-out presets (Name, Command, Arguments, First prompt flag, Model flag, Unattended flags, Process names). Edit opens in place of its own row and the list keeps its order. Delete is disabled while the agent is used. The section description states the limits: process-only identity, no screen status, approvals or resume. Unattended starts empty and empty means not offered | Custom agents exist to be picked by roles and fan-out, so they sit beside them. The same shapes as Fan-out presets keep one editing grammar on the tab. Stating the limits and never defaulting unattended keeps a user-typed CLI from looking as supported as a registry agent, or from running unattended by surprise; blocking Delete keeps a role or preset from silently launching something else |
 | 2026-10-26 | An approved release is carried out. Its card's title names the tag, the repository and the short commit, and says it cannot be undone ("Publish release v1.2.3 of owner/repo at abc1234 — publishes a release, cannot be undone"; with a tag workflow, "Push tag … — starts its release workflow, cannot be undone"). The body is the bot's one line, one plain sentence of what Approve does, as whom and when, and that wmux cannot take it back, then "Marked Latest." or "Prerelease, never Latest." (with a tag workflow: "The workflow decides whether it is marked Latest."), then one plain line per workflow with no push filter that runs on the tag push as well ("<file> also runs on this tag push."), then what main read as plain lines (the default branch and how far the commit is behind its head, the checks on the commit, package.json's version), then a line naming the blocks and each published field in its own `wmux-payload` code block. Approve / Deny only, with the usual 10 s Undo; typed words, the chip and rules never approve it. The outcome card reads "Published release …" with its link, or with a tag workflow "Tag pushed — the release workflow is building it" with the Actions run linked when it can be read; nothing is tinted | A release is the one act that starts other machinery (a tag workflow publishes installers and packages), so the card states the commit, its checks and the version before Approve, and the hash covers every field that is published |
 | 2026-10-28 | Owner-approved (Settings clean-up, part 3): terminal font size, font and cursor move from Appearance to the top of Terminal; the Settings › Plugins tab (a single link to the rail page) is removed, reversing the 2026-10-21 line that kept it. A row or note that only applies on another OS is hidden there (the agy accounts section off Windows, Start on login on Linux), and settings search hides it too; a row that works everywhere but is named after one OS reads in the platform's words (Finder, the Dock, ⌘G, macOS or Linux in About). A switch whose children act on nothing while it is off disables them: the pane ring's flash, and the Bots morning report and phone bot. A row that limits what bots may do (trusted authors, caps, the command reviewer, auto-merge) stays editable while the bots are off, so it can be set before they start. Accounts' quota switches are standard switches. The Company View toggle loses its default key (Ctrl+Shift+O, which it swallowed) and its Shortcuts row: it has opened nothing since #503; a key a user saved still binds and lists it | Settings read as cluttered: text settings sat on the wrong page, an empty tab took a nav row, macOS users read Windows-only text, and child rows looked live while their parent was off. Hiding by platform through the catalog keeps the row and its search hit in step |
+| 2026-10-28 | Owner-approved (design critique, harden): the Git page and the Bots first run lose their dead ends. A repo with no origin remote opens the Git page on Worktrees (shown, never saved; a tab picked there is kept) and its Issues and Pull requests show a no-remote card with the `git remote add origin <address>` command to copy and Check again; the detail pane's "Select…" line shows only while a list has a row; the Worktrees summary line needs two non-empty sections; the rule before the Worktrees tab is gone. In the Bots first run, Start is the only button beside the name and Add a team and Start from a recipe… are one muted line of links; a folder with no origin remote a bot can push to reads as one plain line with Copy command and Show details instead of main's whole reason. Amends Git › Tabs, Worktrees tab and Detail, and Bots › Add bot and First run | The Git page opened on an empty Issues tab whose detail pane asked for a selection that could not exist, while the useful Worktrees tab sat behind it. The Bots welcome card showed a blocking-looking grey paragraph with the full folder path and set-url instructions, and three equal buttons competed for the first action |
 
 ### Desktop conversation view
 

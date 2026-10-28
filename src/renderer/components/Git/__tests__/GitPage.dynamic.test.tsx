@@ -412,8 +412,52 @@ describe('Git page', () => {
     }
   });
 
+  it('a repo with no origin remote opens on Worktrees, unsaved; Issues says so with the command to add one, and a tab picked there is kept', async () => {
+    prList.mockImplementation(async (p: string) => (p === '/code/beta' ? { ok: false, code: 'no-remote', message: 'no origin remote' } : { ok: true, prs: p === '/code/alpha' ? [PR] : [] }));
+    const issueList = (window as unknown as { electronAPI: { github: { issueList: ReturnType<typeof vi.fn> } } }).electronAPI.github.issueList;
+    issueList.mockImplementation(async (p: string) => (p === '/code/beta' ? { ok: false, code: 'no-remote', message: 'no origin remote' } : { ok: true, issues: [] }));
+    const writeText = vi.fn(async () => undefined);
+    (window as unknown as { clipboardAPI?: unknown }).clipboardAPI = { writeText };
+    try {
+      act(() => useStore.setState({ activeWorkspaceId: 'c', gitPage: { ...initialGitPageState(), tab: 'issues' } }));
+      act(() => root.render(createElement(GitPage)));
+      await settle();
+      expect(tab('worktrees').getAttribute('aria-selected')).toBe('true');
+      expect(container.querySelector('[data-git-worktrees-tab]')).not.toBeNull();
+      // Shown, not saved: the remembered tab is still the viewer's.
+      expect(useStore.getState().gitPage.tab).toBe('issues');
+      expect(localStorage.getItem('wmux.git.workView')).toBeNull();
+
+      act(() => tab('issues').click());
+      await settle();
+      expect(tab('issues').getAttribute('aria-selected')).toBe('true');
+      expect(container.querySelector('[data-git-no-remote]')).not.toBeNull();
+      expect(container.querySelector('[data-git-no-remote-command]')!.textContent).toContain('git remote add origin <address>');
+      // Nothing can be selected, so the detail pane does not ask for a selection.
+      expect(container.querySelector('[data-git-detail-empty]')).toBeNull();
+      act(() => (container.querySelector('[data-git-no-remote-copy]') as HTMLButtonElement).click());
+      expect(writeText).toHaveBeenCalledWith('git remote add origin <address>');
+
+      // A repo with a remote opens on the remembered tab.
+      act(() => useStore.setState({ activeWorkspaceId: 'a' }));
+      await settle();
+      expect(tab('issues').getAttribute('aria-selected')).toBe('true');
+      expect(container.querySelector('[data-git-no-remote]')).toBeNull();
+    } finally {
+      delete (window as unknown as { clipboardAPI?: unknown }).clipboardAPI;
+    }
+  });
+
+  it('one Worktrees section is its own header: no summary line repeats it', async () => {
+    act(() => useStore.setState({ activeWorkspaceId: 'c', gitPage: { ...initialGitPageState(), tab: 'worktrees' } }));
+    act(() => root.render(createElement(GitPage)));
+    await settle();
+    expect(container.querySelectorAll('[data-git-worktree-row]').length).toBe(1);
+    expect(container.querySelector('[data-git-wt-summary]')).toBeNull();
+  });
+
   it('This repo shows a selection only while it belongs to the current repo', async () => {
-    act(() => useStore.setState({ gitPage: { ...initialGitPageState(), selected: { kind: 'pr', repoPath: '/code/beta', number: 7 } } }));
+    act(() => useStore.setState({ gitPage: { ...initialGitPageState(), tab: 'prs', selected: { kind: 'pr', repoPath: '/code/beta', number: 7 } } }));
     act(() => root.render(createElement(GitPage)));
     await settle();
     expect(container.querySelector('[data-git-detail-empty]')).not.toBeNull();

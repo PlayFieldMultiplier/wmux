@@ -7,6 +7,9 @@ import { tokenAttrs } from '../../themes';
 import { FOCUS_RING } from '../focusRing';
 import { GH_LOGIN_COMMAND, openGithubLoginTab } from './connectGithub';
 
+/** What adds an origin remote; the address is the viewer's to fill in. */
+export const GIT_ADD_ORIGIN_COMMAND = 'git remote add origin <address>';
+
 export interface GhGate {
   code: string;
   message: string;
@@ -17,7 +20,7 @@ export function GhGateNotice({ gate, onRecheck, fallback }: {
   gate: GhGate;
   /** Check again: a read that probes past main's gate cache. */
   onRecheck: () => void;
-  /** The line for any other code (no remote, another host, an error). */
+  /** The line for any other code (another host, an error). */
   fallback: string;
 }): React.ReactElement {
   const t = useT();
@@ -89,6 +92,36 @@ export function GhGateNotice({ gate, onRecheck, fallback }: {
             </button>
           </div>
         )}
+      </div>
+    );
+  }
+
+  if (gate.code === 'no-remote') {
+    // Nothing to list until origin exists: say so once, with the command
+    // that adds it and a re-check (the gate cache is read past).
+    return (
+      <div className="wmux-git-connect" data-git-no-remote>
+        <p className="wmux-git-connect-title">{t('git.noRemote')}</p>
+        <p className="wmux-git-connect-desc">{t('git.noRemote.desc')}</p>
+        <div className="wmux-git-connect-cmd" data-git-no-remote-command>
+          <code>{GIT_ADD_ORIGIN_COMMAND}</code>
+          <button
+            type="button"
+            className={`wmux-git-button ${FOCUS_RING}`}
+            data-git-no-remote-copy
+            onClick={() => {
+              void window.clipboardAPI?.writeText?.(GIT_ADD_ORIGIN_COMMAND);
+              setCopied(true);
+            }}
+          >
+            {copied ? t('git.connect.copied') : t('git.connect.copy')}
+          </button>
+        </div>
+        <div className="wmux-git-connect-actions">
+          <button type="button" className={`wmux-git-button ${FOCUS_RING}`} onClick={onRecheck} data-git-connect-recheck>
+            {t('git.connect.recheck')}
+          </button>
+        </div>
       </div>
     );
   }

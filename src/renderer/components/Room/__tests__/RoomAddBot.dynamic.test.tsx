@@ -427,8 +427,8 @@ describe('Add bot: the repository comes from the workspace', () => {
   });
 
   it('a refused folder says why in one muted line; adding past it remembers nothing, so a folder fixed later is offered again', async () => {
-    const why = '/home/me/notes has no origin remote. Set it with "git remote add origin <address>".';
-    const { port, create } = formPort([], async () => ({ ok: false, code: 'no_remote', message: why }));
+    const why = '/src/notes is not a git checkout.';
+    const { port, create } = formPort([], async () => ({ ok: false, code: 'not_a_repo', message: why }));
     await renderForm(port, []);
     await typeInto('factory-add-bot-name', 'Dev');
     expect(q('factory-add-bot-no-repo')).not.toBeNull();
@@ -440,6 +440,33 @@ describe('Add bot: the repository comes from the workspace', () => {
     expect(q('factory-add-bot-repo-reason')).toBeNull();
     await act(async () => q<HTMLButtonElement>('factory-add-bot-submit')!.click());
     expect(create).toHaveBeenLastCalledWith({ workspaceId: WS, name: 'Dev', repoFolder: '/src/picked' });
+  });
+
+  it('a folder with no origin remote: one plain line, Copy command, and main\'s reason behind Show details; adding still works', async () => {
+    const why = '/src/notes has no origin remote. Set it with "git remote add origin <address>".';
+    const writeText = vi.fn(async () => undefined);
+    (window as unknown as { clipboardAPI?: unknown }).clipboardAPI = { writeText };
+    try {
+      const { port, create } = formPort([], async () => ({ ok: false, code: 'no_remote', message: why }));
+      await renderForm(port, []);
+      await typeInto('factory-add-bot-name', 'Dev');
+      const note = q('factory-add-bot-repo-reason')!;
+      expect(note.getAttribute('data-repo-reason')).toBe('no_remote');
+      expect(note.textContent).toContain('settings.factory.addBotRepoNoRemote');
+      // The long reason (with the folder's path) waits behind the disclosure.
+      expect(note.textContent).not.toContain(why);
+      expect(q('factory-add-bot-repo-detail')).toBeNull();
+      await act(async () => q<HTMLButtonElement>('factory-add-bot-repo-details')!.click());
+      expect(q('factory-add-bot-repo-detail')!.textContent).toBe(why);
+      expect(q('factory-add-bot-repo-details')!.getAttribute('aria-expanded')).toBe('true');
+      await act(async () => q<HTMLButtonElement>('factory-add-bot-repo-copy')!.click());
+      expect(writeText).toHaveBeenCalledWith('git remote add origin <address>');
+      expect(q('factory-add-bot-repo-copy')!.textContent).toBe('git.connect.copied');
+      await act(async () => q<HTMLButtonElement>('factory-add-bot-submit')!.click());
+      expect(create).toHaveBeenLastCalledWith({ workspaceId: WS, name: 'Dev' });
+    } finally {
+      delete (window as unknown as { clipboardAPI?: unknown }).clipboardAPI;
+    }
   });
 
   it('a remembered None: no repository, the remembered line and Choose folder…, never a suggestion', async () => {
@@ -470,7 +497,7 @@ describe('Add bot: the repository comes from the workspace', () => {
     expect(addBotRepoView(own, 'ws-b', sug, null)).toMatchObject({ kind: 'suggested', root: '/r/api' });
     expect(addBotRepoView([], WS, sug, '/x')).toEqual({ kind: 'picked', folder: '/x' });
     expect(addBotRepoView([], WS, { ok: false, code: 'no_remote' }, null)).toEqual({ kind: 'none' });
-    expect(addBotRepoView([], WS, { ok: false, code: 'no_remote', message: 'why' }, null)).toEqual({ kind: 'none', reason: 'why' });
+    expect(addBotRepoView([], WS, { ok: false, code: 'no_remote', message: 'why' }, null)).toEqual({ kind: 'none', reason: 'why', reasonCode: 'no_remote' });
     expect(addBotRepoView([], WS, { ok: false, code: 'none' }, null)).toEqual({ kind: 'none', remembered: true });
     expect(addBotRepoView([], WS, null, null, false, true)).toEqual({ kind: 'checking' });
     // A picked folder or None does not wait for main.

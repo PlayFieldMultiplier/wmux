@@ -49,6 +49,7 @@ import Switch from '../ui/Switch';
 import Select from '../ui/Select';
 import Input from '../ui/Input';
 import { FOCUS_RING } from '../focusRing';
+import { GIT_ADD_ORIGIN_COMMAND } from '../Git/GhGateNotice';
 import { BotSecretsSection, PhoneBotSelect } from './BotSecretsSection';
 import { BotConnectionsSection } from './BotConnectionsSection';
 import { ClaudeAuthSection, bridgeClaudeAuthPort, type ClaudeAuthPort } from './ClaudeAuthSection';
@@ -296,7 +297,7 @@ export type AddBotRepoView =
   | { kind: 'suggested'; repoKey: string; root: string; displayRoot: string }
   | { kind: 'picked'; folder: string }
   | { kind: 'checking' }
-  | { kind: 'none'; reason?: string; remembered?: boolean; unchecked?: 'failed' | 'slow' };
+  | { kind: 'none'; reason?: string; reasonCode?: string; remembered?: boolean; unchecked?: 'failed' | 'slow' };
 
 export function addBotRepoView(
   rows: readonly FactoryBotRow[],
@@ -325,7 +326,7 @@ export function addBotRepoView(
   if (pending) return { kind: 'checking' };
   if (suggestion && !suggestion.ok) {
     if (suggestion.code === 'none') return { kind: 'none', remembered: true };
-    if (suggestion.message) return { kind: 'none', reason: suggestion.message };
+    if (suggestion.message) return { kind: 'none', reason: suggestion.message, reasonCode: suggestion.code };
   }
   return { kind: 'none' };
 }
@@ -418,11 +419,51 @@ export function AddBotRepoRow({ view, t, busy, onChoose, onNone }: {
           {t(view.unchecked === 'failed' ? 'settings.factory.addBotRepoCheckFailed' : 'settings.factory.addBotRepoCheckSlow')}
         </p>
       )}
-      {view.kind === 'none' && !view.unchecked && (view.reason || view.remembered) && (
+      {view.kind === 'none' && !view.unchecked && view.reasonCode === 'no_remote' && view.reason && (
+        <RepoNoRemoteNote reason={view.reason} t={t} />
+      )}
+      {view.kind === 'none' && !view.unchecked && view.reasonCode !== 'no_remote' && (view.reason || view.remembered) && (
         <p data-testid="factory-add-bot-repo-reason" className="basis-full text-[11px] leading-snug text-[var(--text-muted)]">
           {view.reason ?? t('settings.factory.addBotRepoRemembered')}
         </p>
       )}
+    </div>
+  );
+}
+
+/** A folder whose origin a bot cannot push to: one plain line, the command
+ *  that adds origin, and main's full reason behind Show details. */
+function RepoNoRemoteNote({ reason, t }: { reason: string; t: T }): React.ReactElement {
+  const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+  return (
+    <div data-testid="factory-add-bot-repo-reason" data-repo-reason="no_remote" className="flex basis-full flex-col gap-1">
+      <p className="text-[12px] leading-snug text-[var(--text-sub)]">{t('settings.factory.addBotRepoNoRemote')}</p>
+      <span className="flex flex-wrap items-center gap-x-1 text-[12px] text-[var(--text-muted)]">
+        <button
+          type="button"
+          data-testid="factory-add-bot-repo-copy"
+          title={GIT_ADD_ORIGIN_COMMAND}
+          className={`hover:text-[var(--text-main)] ${FOCUS_RING}`}
+          onClick={() => {
+            void window.clipboardAPI?.writeText?.(GIT_ADD_ORIGIN_COMMAND);
+            setCopied(true);
+          }}
+        >
+          {copied ? t('git.connect.copied') : t('settings.factory.addBotRepoCopyCommand')}
+        </button>
+        <span aria-hidden="true">·</span>
+        <button
+          type="button"
+          data-testid="factory-add-bot-repo-details"
+          aria-expanded={open}
+          className={`hover:text-[var(--text-main)] ${FOCUS_RING}`}
+          onClick={() => setOpen((v) => !v)}
+        >
+          {t(open ? 'botsPage.engineError.hideDetails' : 'botsPage.engineError.showDetails')}
+        </button>
+      </span>
+      {open && <p data-testid="factory-add-bot-repo-detail" className="break-words text-[11px] leading-snug text-[var(--text-muted)]">{reason}</p>}
     </div>
   );
 }
