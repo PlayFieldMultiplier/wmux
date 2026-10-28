@@ -215,7 +215,12 @@ export function decideNotificationActions(
   //    workspace lastNotification metadata bump inside addNotification.
   const actions: NotificationAction[] = [addAction];
 
-  if (ctx.settings.toastEnabled) {
+  // No in-app toast for needs you (an agent waiting on a question or an
+  // approval, category 'approval'): inside the window the sidebar row and the
+  // rail's Fleet badge already say it, and DESIGN.md caps one attention event
+  // at two renditions. The OS toast below still fires while the window is out
+  // of focus, where neither of those can be seen.
+  if (ctx.settings.toastEnabled && payload.category !== 'approval') {
     actions.push({ kind: 'pushToast', payload });
   }
 

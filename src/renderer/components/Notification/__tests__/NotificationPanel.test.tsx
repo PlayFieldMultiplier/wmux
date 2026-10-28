@@ -33,8 +33,11 @@ import {
   notifTypeName,
   buildNotifAriaLabel,
   NotificationPanelView,
+  describeNotification,
   type NotificationPanelViewProps,
+  type NotifDisplayState,
 } from '../NotificationPanel';
+import { t } from '../../../i18n';
 import { useStore } from '../../../stores';
 import type { Notification, Pane } from '../../../../shared/types';
 import { focusNotificationTarget } from '../../../hooks/useNotificationListener';
@@ -482,5 +485,71 @@ describe('NotificationPanelView (renderToStaticMarkup)', () => {
     // The badge classname is unique; absence of the bg-[var(--accent)] pill
     // proves the badge wasn't rendered.
     expect(html).not.toMatch(/rounded-full"[^>]*>\s*0\s*</);
+  });
+});
+
+// ─── What a row says ─────────────────────────────────────────────────────────
+
+describe('describeNotification — a needs-you row names where it waits', () => {
+  const pane: Pane = {
+    id: 'p1', type: 'leaf', activeSurfaceId: 's1',
+    surfaces: [{ id: 's1', ptyId: 'pty-1', title: 'Zsh', shell: 'zsh', cwd: '/r', surfaceType: 'terminal' }],
+  };
+  const state = (over: Partial<NotifDisplayState> = {}): NotifDisplayState => ({
+    workspaces: [{ id: 'ws-1', name: 'web-client', rootPane: pane, activePaneId: 'p1' }],
+    surfaceAgent: {},
+    surfaceAgentStatus: {},
+    surfacePendingQuestion: {},
+    ...over,
+  });
+  const asking = mkNotif('n1', {
+    type: 'agent', title: 'Claude Code: Awaiting input', body: 'Awaiting input',
+    category: 'approval', ptyId: 'pty-1', surfaceId: 's1',
+  });
+
+  it('shows the workspace and agent, and the question while it still waits', () => {
+    const d = describeNotification(asking, state({
+      surfaceAgent: { 'pty-1': { name: 'Claude Code', status: 'awaiting_input' } },
+      surfacePendingQuestion: { 'pty-1': 'Apply the migration?' },
+    }), t, true);
+    expect(d).toEqual({ title: 'web-client · Claude Code', body: 'Needs you: “Apply the migration?”' });
+  });
+
+  it('says plainly when no question text came, instead of repeating the state word', () => {
+    const d = describeNotification(asking, state({ surfaceAgentStatus: { 'pty-1': 'awaiting_input' } }), t, true);
+    expect(d.title).toBe('web-client · Claude Code');
+    expect(d.body).toBe('Needs you. No question text was sent; the prompt is in its terminal.');
+    expect(`${d.title} ${d.body}`).not.toContain('Awaiting input');
+  });
+
+  it('an older row, or one no longer waiting, never borrows the live question', () => {
+    const live = state({
+      surfaceAgent: { 'pty-1': { name: 'Claude Code', status: 'awaiting_input' } },
+      surfacePendingQuestion: { 'pty-1': 'Apply the migration?' },
+    });
+    expect(describeNotification(asking, live, t, false).body).toBe('No longer waiting on you.');
+    expect(describeNotification(asking, state(), t, true).body).toBe('No longer waiting on you.');
+  });
+
+  it('any other row keeps its title; a body that only repeats it names the source', () => {
+    const done = mkNotif('n2', {
+      type: 'agent', title: 'Claude Code: Task finished', body: 'Task finished',
+      category: 'agent-turn', ptyId: 'pty-1', surfaceId: 's1',
+    });
+    expect(describeNotification(done, state(), t, false)).toEqual({ title: 'Claude Code: Task finished', body: 'web-client › Zsh' });
+    const failing = mkNotif('n3', { type: 'error', title: 'Tests failing', body: '2 failing', surfaceId: 's1' });
+    expect(describeNotification(failing, state(), t, false)).toEqual({ title: 'Tests failing', body: '2 failing' });
+  });
+
+  it('the view draws the described row and names it the same way', () => {
+    const html = renderToStaticMarkup(createElement(NotificationPanelView, mkViewProps({
+      notifications: [asking],
+      unreadCount: 1,
+      displayById: { n1: { title: 'web-client · Claude Code', body: 'Needs you: “Ship it?”' } },
+    })));
+    expect(html).toContain('web-client · Claude Code');
+    expect(html).toContain('Needs you: “Ship it?”');
+    expect(html).not.toContain('Awaiting input');
+    expect(html).toContain('wmux-notification-row');
   });
 });

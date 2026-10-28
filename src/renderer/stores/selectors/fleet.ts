@@ -1325,6 +1325,10 @@ export function groupFleetPanes(panes: FleetPane[], ctx: FleetGroupContext = {})
   return groups;
 }
 
+/** A terminal title that names only the program (an agent CLI or a shell),
+ *  never a task. */
+export const GENERIC_TERMINAL_TITLE = /^(claude(?: code)?|codex(?: cli)?|gemini(?: cli)?|agy|antigravity(?: cli)?|terminal|shell|zsh|bash|pwsh|powershell|cmd(?:\.exe)?)$/i;
+
 /** A terminal's application name is context, not a task title. Never invent
  * a task from output; use the user's label, mission, or terminal title. */
 export function fleetTitle(pane: FleetPane, mission?: WorkTask): string {
@@ -1332,8 +1336,7 @@ export function fleetTitle(pane: FleetPane, mission?: WorkTask): string {
   if (mission?.title.trim()) return mission.title.trim();
   // `✳` marks a finished Claude Code turn; `◐` / `◑` alternate while one runs.
   const title = pane.title.replace(/^[✳✻✽✶✢◐◑*]\s*/, '').trim();
-  const generic = /^(claude(?: code)?|codex(?: cli)?|gemini(?: cli)?|agy|antigravity(?: cli)?|terminal|shell|zsh|bash|pwsh|powershell|cmd(?:\.exe)?)$/i;
-  if (title && !generic.test(title) && title.toLowerCase() !== pane.agentName?.toLowerCase()) return title;
+  if (title && !GENERIC_TERMINAL_TITLE.test(title) && title.toLowerCase() !== pane.agentName?.toLowerCase()) return title;
   return pane.workspaceName;
 }
 

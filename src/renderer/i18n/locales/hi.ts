@@ -17,7 +17,6 @@ export const hi = {
   'workspace.agentError': 'एजेंट त्रुटि',
   'workspace.agentWaiting': 'एजेंट प्रतीक्षारत',
 
-  'workspace.agentAwaitingInput': 'एजेंट को इनपुट चाहिए',
   'workspace.needsYou': 'आपका इंतज़ार',
   'workspace.agentIdle': 'एजेंट निष्क्रिय',
   'workspace.agentUnverifiable': '{time} से कोई अपडेट नहीं',
@@ -87,6 +86,9 @@ export const hi = {
   'notification.clear': 'साफ़ करें',
   'notification.empty': 'कोई सूचना नहीं',
   'notification.toggle': 'टॉगल करने के लिए Ctrl+I',
+  'notification.needsYou.question': "आपका इंतज़ार: “{question}”",
+  'notification.needsYou.noQuestion': "आपका इंतज़ार। प्रश्न का पाठ नहीं आया; प्रॉम्प्ट उसके टर्मिनल में है।",
+  'notification.needsYou.over': "अब आपका इंतज़ार नहीं कर रहा।",
 
   // Command palette
   'palette.placeholder': 'कमांड टाइप करें...',

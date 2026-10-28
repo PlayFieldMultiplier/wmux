@@ -706,7 +706,6 @@ export const en = {
   'workspace.agentComplete': 'Complete',
   'workspace.agentError': 'Error',
   'workspace.agentWaiting': 'Waiting',
-  'workspace.agentAwaitingInput': 'Needs input',
   'workspace.needsYou': 'Needs you',
   'workspace.agentIdle': 'Idle',
   'workspace.agentUnverifiable': 'No update for {time}',
@@ -898,6 +897,9 @@ export const en = {
   'notification.clear': 'Clear',
   'notification.empty': 'No notifications',
   'notification.toggle': 'Ctrl+I to toggle',
+  'notification.needsYou.question': "Needs you: “{question}”",
+  'notification.needsYou.noQuestion': "Needs you. No question text was sent; the prompt is in its terminal.",
+  'notification.needsYou.over': "No longer waiting on you.",
 
   // Command palette
   'palette.placeholder': 'Type a command...',

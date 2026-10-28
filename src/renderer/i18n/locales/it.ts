@@ -17,7 +17,6 @@ export const it = {
   'workspace.agentError': 'Errore agente',
   'workspace.agentWaiting': 'Agente in attesa',
 
-  'workspace.agentAwaitingInput': 'Agente richiede input',
   'workspace.needsYou': 'Ti attende',
   'workspace.agentIdle': 'Agente inattivo',
   'workspace.agentUnverifiable': 'Nessun aggiornamento da {time}',
@@ -87,6 +86,9 @@ export const it = {
   'notification.clear': 'Cancella',
   'notification.empty': 'Nessuna notifica',
   'notification.toggle': 'Ctrl+I per alternare',
+  'notification.needsYou.question': "Ti attende: «{question}»",
+  'notification.needsYou.noQuestion': "Ti attende. Il testo della domanda non è arrivato; il prompt è nel suo terminale.",
+  'notification.needsYou.over': "Non ti attende più.",
 
   // Command palette
   'palette.placeholder': 'Digita un comando...',

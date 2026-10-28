@@ -17,7 +17,6 @@ export const de = {
   'workspace.agentError': 'Agent-Fehler',
   'workspace.agentWaiting': 'Agent wartet',
 
-  'workspace.agentAwaitingInput': 'Agent wartet auf Eingabe',
   'workspace.needsYou': 'Wartet auf dich',
   'workspace.agentIdle': 'Agent inaktiv',
   'workspace.agentUnverifiable': 'Seit {time} keine Rückmeldung',
@@ -87,6 +86,9 @@ export const de = {
   'notification.clear': 'Leeren',
   'notification.empty': 'Keine Benachrichtigungen',
   'notification.toggle': 'Strg+I zum Umschalten',
+  'notification.needsYou.question': "Wartet auf dich: „{question}“",
+  'notification.needsYou.noQuestion': "Wartet auf dich. Kein Fragetext übermittelt; die Eingabeaufforderung steht in seinem Terminal.",
+  'notification.needsYou.over': "Wartet nicht mehr auf dich.",
 
   // Command palette
   'palette.placeholder': 'Befehl eingeben...',

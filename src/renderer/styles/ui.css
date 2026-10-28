@@ -1188,7 +1188,9 @@ details[open] > .wmux-chatv2-tool-line .wmux-chatv2-chevron { transform: rotate(
 .wmux-board-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 /* The Fleet list: one attention list. A row is a fill on hover or selection,
  * never a box or a rule; section heads are sentence-case text with a dot. */
-.wmux-board .wmux-fleet-list { flex: 1; min-height: 0; overflow-y: auto; padding: 0 12px 12px; }
+/* The list takes its rows' height (scrolling once the page is full), so the
+ * detail area follows right under its last row instead of the page's foot. */
+.wmux-board .wmux-fleet-list { flex: 0 1 auto; min-height: 0; overflow-y: auto; padding: 0 12px 12px; }
 .wmux-board .wmux-fleet-quiet { padding: 4px 20px 2px; }
 .wmux-board .wmux-fleet-section-header { display: flex; align-items: center; gap: 7px; padding: 14px 8px 4px; font-size: 12px; font-weight: 500; letter-spacing: normal; text-transform: none; color: var(--text-sub); }
 .wmux-board .wmux-fleet-card { border-bottom: 0; border-radius: 8px; min-height: 52px; }

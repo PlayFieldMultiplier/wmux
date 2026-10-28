@@ -516,7 +516,6 @@ export const ko = {
   'workspace.agentComplete': '완료',
   'workspace.agentError': '오류',
   'workspace.agentWaiting': '대기 중',
-  'workspace.agentAwaitingInput': '입력 대기',
   'workspace.needsYou': '답변 대기',
   'workspace.agentIdle': '유휴',
   'workspace.agentUnverifiable': '{time}째 응답 없음',
@@ -609,6 +608,9 @@ export const ko = {
   'notification.clear': '지우기',
   'notification.empty': '알림 없음',
   'notification.toggle': 'Ctrl+I로 토글',
+  'notification.needsYou.question': "답변 대기: “{question}”",
+  'notification.needsYou.noQuestion': "답변 대기. 질문 내용이 오지 않았습니다. 프롬프트는 터미널에 있습니다.",
+  'notification.needsYou.over': "더 이상 기다리지 않습니다.",
 
   // Command palette
   'palette.placeholder': '명령어 입력...',

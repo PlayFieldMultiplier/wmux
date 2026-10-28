@@ -17,7 +17,6 @@ export const tr = {
   'workspace.agentError': 'Aracı hatası',
   'workspace.agentWaiting': 'Aracı bekliyor',
 
-  'workspace.agentAwaitingInput': 'Aracı girdi bekliyor',
   'workspace.needsYou': 'Seni bekliyor',
   'workspace.agentIdle': 'Aracı boşta',
   'workspace.agentUnverifiable': '{time} boyunca güncelleme yok',
@@ -87,6 +86,9 @@ export const tr = {
   'notification.clear': 'Temizle',
   'notification.empty': 'Bildirim yok',
   'notification.toggle': 'Değiştirmek için Ctrl+I',
+  'notification.needsYou.question': "Seni bekliyor: “{question}”",
+  'notification.needsYou.noQuestion': "Seni bekliyor. Soru metni gelmedi; istem kendi terminalinde.",
+  'notification.needsYou.over': "Artık seni beklemiyor.",
 
   // Command palette
   'palette.placeholder': 'Bir komut yazın...',

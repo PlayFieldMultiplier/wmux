@@ -17,7 +17,6 @@ export const uk = {
   'workspace.agentError': 'Помилка агента',
   'workspace.agentWaiting': 'Агент очікує',
 
-  'workspace.agentAwaitingInput': 'Агент очікує введення',
   'workspace.needsYou': 'Чекає на вас',
   'workspace.agentIdle': 'Агент простоює',
   'workspace.agentUnverifiable': 'Немає оновлень {time}',
@@ -87,6 +86,9 @@ export const uk = {
   'notification.clear': 'Очистити',
   'notification.empty': 'Немає сповіщень',
   'notification.toggle': 'Ctrl+I для перемикання',
+  'notification.needsYou.question': "Чекає на вас: «{question}»",
+  'notification.needsYou.noQuestion': "Чекає на вас. Текст питання не надійшов; запит — у його терміналі.",
+  'notification.needsYou.over': "Більше не чекає на вас.",
 
   // Command palette
   'palette.placeholder': 'Введіть команду...',

@@ -3,8 +3,9 @@ import { useStore } from '../../stores';
 import { useT } from '../../hooks/useT';
 import { timeAgo } from '../../utils/timeAgo';
 import { tokenAttrs } from '../../themes';
-import type { Notification, NotificationType } from '../../../shared/types';
-import { focusNotificationTarget } from '../../hooks/useNotificationListener';
+import type { AgentStatus, Notification, NotificationType, Workspace } from '../../../shared/types';
+import { describeNotificationSource, focusNotificationTarget, osToastBody } from '../../hooks/useNotificationListener';
+import { AGENT_IDENTITIES } from '../../../shared/agentIdentity';
 import Badge from '../ui/Badge';
 import Button from '../ui/Button';
 import { IconBell, IconRobot, IconWarning, IconX } from '../icons';
@@ -35,13 +36,76 @@ export function notifTypeName(type: NotificationType): string {
 
 /**
  * Build the screen-reader announce string for a notification row.
- * Shape: "{typeName}, {title}, {timeAgo}, {read|unread}"
+ * Shape: "{typeName}, {title}, {timeAgo}, {read|unread}" — or, when the row
+ * is drawn from `display`, "{typeName}, {title}, {body}, {timeAgo}, …" so the
+ * spoken name says what the row shows.
  */
-export function buildNotifAriaLabel(notif: Notification, now: number = Date.now()): string {
+export function buildNotifAriaLabel(notif: Notification, now: number = Date.now(), display?: NotifDisplay): string {
   const typeName = notifTypeName(notif.type);
   const rel = timeAgo(notif.timestamp, now);
   const state = notif.read ? 'read' : 'unread';
-  return `${typeName}, ${notif.title}, ${rel}, ${state}`;
+  const said = display ? `${display.title}, ${display.body}` : notif.title;
+  return `${typeName}, ${said}, ${rel}, ${state}`;
+}
+
+// ─── What a row says ─────────────────────────────────────────────────────────
+
+/** A row as drawn: a headline and one line under it. */
+export interface NotifDisplay {
+  title: string;
+  body: string;
+}
+
+/** The store slices a row's wording reads. */
+export interface NotifDisplayState {
+  workspaces: Workspace[];
+  surfaceAgent: Record<string, { name: string; status: AgentStatus } | undefined>;
+  surfaceAgentStatus: Record<string, AgentStatus | undefined>;
+  surfacePendingQuestion: Record<string, string | undefined>;
+}
+
+const KNOWN_AGENT_NAMES = new Set(AGENT_IDENTITIES.map((a) => a.display.toLowerCase()));
+
+/** The agent a hook title names ("Claude Code: Awaiting input" → "Claude
+ *  Code"), when it is a known agent. */
+function agentFromTitle(title: string): string | undefined {
+  const head = title.split(': ')[0]?.trim();
+  return head && head !== title && KNOWN_AGENT_NAMES.has(head.toLowerCase()) ? head : undefined;
+}
+
+/**
+ * What a panel row says, from data the store already has. A needs-you row
+ * (an agent waiting on a question or an approval in a local pane) names where
+ * it waits — workspace · agent — and what it asks: the agent's question while
+ * it still waits (on its newest row only), a plain sentence when no question
+ * text was captured, another when it no longer waits. It never repeats the
+ * state word main put in the title and body ("Awaiting input" twice). Any
+ * other row keeps its title; a body that only repeats the title gives way to
+ * where the notification came from, as the OS toast does.
+ */
+export function describeNotification(
+  notif: Notification,
+  state: NotifDisplayState,
+  t: (key: string, vars?: Record<string, string | number>) => string,
+  latestForPty: boolean,
+): NotifDisplay {
+  const ws = state.workspaces.find((w) => w.id === notif.workspaceId);
+  if (notif.category === 'approval' && notif.ptyId) {
+    const ptyId = notif.ptyId;
+    const agent = state.surfaceAgent[ptyId]?.name || agentFromTitle(notif.title);
+    const title = [ws?.name?.trim(), agent].filter(Boolean).join(' · ') || notif.title;
+    const question = latestForPty ? state.surfacePendingQuestion[ptyId]?.trim() : undefined;
+    const waiting = latestForPty && (!!question
+      || state.surfaceAgent[ptyId]?.status === 'awaiting_input'
+      || state.surfaceAgentStatus[ptyId] === 'awaiting_input');
+    const body = question ? t('notification.needsYou.question', { question })
+      : waiting ? t('notification.needsYou.noQuestion')
+      : t('notification.needsYou.over');
+    return { title, body };
+  }
+  const source = describeNotificationSource(ws, notif.surfaceId);
+  const body = source && osToastBody(notif.title, notif.body, source) === source ? source : notif.body;
+  return { title: notif.title, body };
 }
 
 /**
@@ -105,6 +169,9 @@ function TypeIcon({ type }: { type: string }): ReactElement {
 
 export interface NotificationPanelViewProps {
   notifications: Notification[];     // pre-sorted (DESC) by caller
+  /** How each row reads (describeNotification), by id; a row without an
+   *  entry shows its raw title and body. */
+  displayById?: Readonly<Record<string, NotifDisplay>>;
   unreadCount: number;
   dialogLabel: string;               // t('notification.title') equivalent
   emptyLabel: string;                // t('notification.empty')
@@ -132,7 +199,7 @@ export interface NotificationPanelViewProps {
  */
 export function NotificationPanelView(props: NotificationPanelViewProps): ReactElement {
   const {
-    notifications, unreadCount, dialogLabel, emptyLabel, toggleHintLabel,
+    notifications, displayById, unreadCount, dialogLabel, emptyLabel, toggleHintLabel,
     markAllReadLabel, markWorkspaceReadLabel, clearLabel, closeLabel,
     onNotifClick, onNotifKeyDown, onClose,
     onMarkAllRead, onMarkWorkspaceRead, onClear,
@@ -212,14 +279,20 @@ export function NotificationPanelView(props: NotificationPanelViewProps): ReactE
             {emptyLabel}
           </div>
         ) : (
-          notifications.map((notif, idx) => (
+          notifications.map((notif, idx) => {
+            const display = displayById?.[notif.id];
+            return (
             <div
               key={notif.id}
               ref={idx === firstUnreadIdx ? firstUnreadRef : undefined}
               role="button"
               tabIndex={0}
-              aria-label={buildNotifAriaLabel(notif)}
-              className={`px-4 py-3 cursor-pointer hover:bg-[var(--surface-fill)] transition-colors ${
+              aria-label={buildNotifAriaLabel(notif, Date.now(), display)}
+              data-notification-row
+              data-category={notif.category}
+              // The focused row (the panel focuses the first unread one) wears
+              // the neutral selection, never the OS focus colour (ui.css).
+              className={`wmux-notification-row px-4 py-3 cursor-pointer hover:bg-[var(--surface-fill)] transition-colors ${
                 notif.read ? 'opacity-60' : ''
               }`}
               style={{ borderBottom: '1px solid var(--surface-hairline)' }}
@@ -231,20 +304,21 @@ export function NotificationPanelView(props: NotificationPanelViewProps): ReactE
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between">
                     <span className={`text-[13px] leading-5 font-medium truncate ${notif.read ? 'text-[var(--text-sub)]' : 'text-[var(--text-main)]'}`}>
-                      {notif.title}
+                      {display?.title ?? notif.title}
                     </span>
                     <span className="text-[11px] text-[var(--text-sub)] flex-shrink-0 ml-2">
                       {timeAgo(notif.timestamp)}
                     </span>
                   </div>
-                  <p className="m-0 mt-0.5 text-[11px] leading-4 text-[var(--text-sub2)] truncate" {...tokenAttrs('textMain', 'text')} data-derived="textSub2">{notif.body}</p>
+                  <p className="m-0 mt-0.5 text-[11px] leading-4 text-[var(--text-sub2)] truncate" {...tokenAttrs('textMain', 'text')} data-derived="textSub2">{display?.body ?? notif.body}</p>
                 </div>
                 {!notif.read && (
                   <div className="w-1.5 h-1.5 rounded-full bg-[var(--accent)] mt-2 flex-shrink-0" {...tokenAttrs('accent', 'accent')} />
                 )}
               </div>
             </div>
-          ))
+            );
+          })
         )}
       </div>
 
@@ -257,6 +331,9 @@ export function NotificationPanelView(props: NotificationPanelViewProps): ReactE
 }
 
 // ─── Container (store-wired) ──────────────────────────────────────────────────
+
+const NONE: Workspace[] = [];
+const EMPTY: Record<string, never> = {};
 
 export default function NotificationPanel() {
   const t = useT();
@@ -279,6 +356,26 @@ export default function NotificationPanel() {
   const firstUnreadIdAtRenderRef = useRef<string | null>(null);
 
   const sorted = useMemo(() => sortNotificationsDesc(notifications), [notifications]);
+  // Read only while the panel is open: a closed panel must not re-render on
+  // every agent status change.
+  const workspaces = useStore((s) => (s.notificationPanelVisible ? s.workspaces : NONE));
+  const surfaceAgent = useStore((s) => (s.notificationPanelVisible ? s.surfaceAgent : EMPTY));
+  const surfaceAgentStatus = useStore((s) => (s.notificationPanelVisible ? s.surfaceAgentStatus : EMPTY));
+  const surfacePendingQuestion = useStore((s) => (s.notificationPanelVisible ? s.surfacePendingQuestion : EMPTY));
+  const displayById = useMemo(() => {
+    const out: Record<string, NotifDisplay> = {};
+    if (!notificationPanelVisible) return out;
+    const seenPty = new Set<string>();
+    const state = { workspaces, surfaceAgent, surfaceAgentStatus, surfacePendingQuestion };
+    for (const n of sorted) {
+      // Newest first: the first needs-you row of a pane is the one its live
+      // question belongs to.
+      const latest = n.category === 'approval' && !!n.ptyId && !seenPty.has(n.ptyId);
+      if (latest && n.ptyId) seenPty.add(n.ptyId);
+      out[n.id] = describeNotification(n, state, t, latest);
+    }
+    return out;
+  }, [notificationPanelVisible, sorted, workspaces, surfaceAgent, surfaceAgentStatus, surfacePendingQuestion, t]);
   // Capture at render time which notification the firstUnreadRef will point
   // at; consumed by the focus rAF below to detect the race window.
   firstUnreadIdAtRenderRef.current = sorted.find((n) => !n.read)?.id ?? null;
@@ -445,6 +542,7 @@ export default function NotificationPanel() {
   return (
     <NotificationPanelView
       notifications={sorted}
+      displayById={displayById}
       unreadCount={unreadCount}
       dialogLabel={t('notification.title')}
       emptyLabel={t('notification.empty')}

@@ -17,7 +17,6 @@ export const th = {
   'workspace.agentError': 'ข้อผิดพลาดของเอเจนต์',
   'workspace.agentWaiting': 'เอเจนต์รออยู่',
 
-  'workspace.agentAwaitingInput': 'เอเจนต์รอการป้อนข้อมูล',
   'workspace.needsYou': 'รอคุณอยู่',
   'workspace.agentIdle': 'เอเจนต์ว่าง',
   'workspace.agentUnverifiable': 'ไม่มีการอัปเดตมา {time}',
@@ -87,6 +86,9 @@ export const th = {
   'notification.clear': 'ล้าง',
   'notification.empty': 'ไม่มีการแจ้งเตือน',
   'notification.toggle': 'Ctrl+I เพื่อสลับ',
+  'notification.needsYou.question': "รอคุณอยู่: “{question}”",
+  'notification.needsYou.noQuestion': "รอคุณอยู่ ไม่ได้รับข้อความคำถาม พรอมต์อยู่ในเทอร์มินัลของมัน",
+  'notification.needsYou.over': "ไม่ได้รอคุณแล้ว",
 
   // Command palette
   'palette.placeholder': 'พิมพ์คำสั่ง...',

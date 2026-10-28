@@ -17,7 +17,6 @@ export const ms = {
   'workspace.agentError': 'Ralat ejen',
   'workspace.agentWaiting': 'Ejen menunggu',
 
-  'workspace.agentAwaitingInput': 'Ejen perlukan input',
   'workspace.needsYou': 'Menunggu anda',
   'workspace.agentIdle': 'Ejen melahu',
   'workspace.agentUnverifiable': 'Tiada kemas kini selama {time}',
@@ -87,6 +86,9 @@ export const ms = {
   'notification.clear': 'Kosongkan',
   'notification.empty': 'Tiada pemberitahuan',
   'notification.toggle': 'Ctrl+I untuk togol',
+  'notification.needsYou.question': "Menunggu anda: “{question}”",
+  'notification.needsYou.noQuestion': "Menunggu anda. Teks soalan tidak dihantar; gesaan ada di terminalnya.",
+  'notification.needsYou.over': "Tidak lagi menunggu anda.",
 
   // Command palette
   'palette.placeholder': 'Taip arahan...',

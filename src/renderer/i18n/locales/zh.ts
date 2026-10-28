@@ -493,6 +493,9 @@ export const zh = {
   'notification.clear': '清除',
   'notification.empty': '暂无通知',
   'notification.toggle': 'Ctrl+I 切换',
+  'notification.needsYou.question': "等你回应：“{question}”",
+  'notification.needsYou.noQuestion': "等你回应。没有收到问题内容，提示在它的终端里。",
+  'notification.needsYou.over': "已不再等你。",
 
   // Command palette
   'palette.placeholder': '输入命令...',
@@ -1305,7 +1308,6 @@ export const zh = {
   'sidebar.screenOffTooltip': '关闭内置显示器（外接显示器保持开启）',
   'sidebar.screenOffAccessibility': '授予 wmux 辅助功能权限（系统设置 → 隐私与安全 → 辅助功能）。',
   'sidebar.screenOffFailed': '无法切换内置显示器。',
-  'workspace.agentAwaitingInput': '需要输入',
   'workspace.needsYou': '等你回应',
   'workspace.agentCount': '智能体 {count}',
   'workspace.agentNeedsAttention': '需要你处理 {count}',

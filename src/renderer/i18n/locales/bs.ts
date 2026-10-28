@@ -17,7 +17,6 @@ export const bs = {
   'workspace.agentError': 'Greška agenta',
   'workspace.agentWaiting': 'Agent čeka',
 
-  'workspace.agentAwaitingInput': 'Agent traži unos',
   'workspace.needsYou': 'Čeka te',
   'workspace.agentIdle': 'Agent miruje',
   'workspace.agentUnverifiable': 'Nema ažuriranja {time}',
@@ -87,6 +86,9 @@ export const bs = {
   'notification.clear': 'Očisti',
   'notification.empty': 'Nema obavještenja',
   'notification.toggle': 'Ctrl+I za prebacivanje',
+  'notification.needsYou.question': "Čeka te: „{question}“",
+  'notification.needsYou.noQuestion': "Čeka te. Tekst pitanja nije stigao; upit je u njegovom terminalu.",
+  'notification.needsYou.over': "Više te ne čeka.",
 
   // Command palette
   'palette.placeholder': 'Ukucajte komandu...',

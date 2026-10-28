@@ -17,7 +17,6 @@ export const ru = {
   'workspace.agentError': 'Ошибка агента',
   'workspace.agentWaiting': 'Агент ожидает',
 
-  'workspace.agentAwaitingInput': 'Агент ждёт ввода',
   'workspace.needsYou': 'Ждёт вас',
   'workspace.agentIdle': 'Агент простаивает',
   'workspace.agentUnverifiable': 'Нет обновлений {time}',
@@ -87,6 +86,9 @@ export const ru = {
   'notification.clear': 'Очистить',
   'notification.empty': 'Нет уведомлений',
   'notification.toggle': 'Ctrl+I для переключения',
+  'notification.needsYou.question': "Ждёт вас: «{question}»",
+  'notification.needsYou.noQuestion': "Ждёт вас. Текст вопроса не пришёл; запрос — в его терминале.",
+  'notification.needsYou.over': "Больше не ждёт вас.",
 
   // Command palette
   'palette.placeholder': 'Введите команду...',
