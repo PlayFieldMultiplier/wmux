@@ -576,6 +576,19 @@ describe('AgentProcessTracker', () => {
     expect(resolveAgentSlug('node --expose-gc /Users/u/.hermes/hermes-agent/ui-tui/dist/entry.js')).toBeUndefined();
     // The Windows console-script launcher is an image named for the script.
     expect(selectAgentProcess([entry(200, SHELL, 'hermes.exe')], SHELL)).toEqual({ pid: 200, slug: 'hermes' });
+    // A console script's shebang names the interpreter it was installed with,
+    // version included; Windows may run it under pythonw.
+    for (const python of [
+      '/Users/u/.hermes/hermes-agent/venv/bin/python3.12',
+      '/usr/local/bin/python3.11',
+      '/opt/homebrew/bin/python3.13',
+      '/Library/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python',
+      'C:\\Users\\u\\hermes\\venv\\Scripts\\python.exe',
+      'C:\\Users\\u\\hermes\\venv\\Scripts\\pythonw.exe',
+    ]) {
+      const script = python.includes('\\') ? 'C:\\Users\\u\\hermes\\venv\\Scripts\\hermes' : '/Users/u/.hermes/hermes-agent/venv/bin/hermes';
+      expect(selectAgentProcess([entry(200, SHELL, python, `${python} ${script}`)], SHELL), python).toEqual({ pid: 200, slug: 'hermes' });
+    }
   });
 
   it('labels a pane with its custom agent beside the tracked agent, never as it', async () => {
@@ -1202,6 +1215,9 @@ describe.skipIf(process.platform === 'win32')('the real executable backs the age
     for (const script of [editable, wheel]) {
       expect(isAgentImage(entry(200, 100, python(script), `${python(script)} ${script}`), 'hermes', PYTHON, HOME), script).toBe(true);
     }
+    // The interpreter named with its version, as a shebang names it.
+    const versioned = path.join(path.dirname(editable), 'python3.12');
+    expect(isAgentImage(entry(200, 100, versioned, `${versioned} ${editable}`), 'hermes', PYTHON, HOME)).toBe(true);
     // A dist-info that is a file, or another distribution's: no install.
     expect(isAgentImage(entry(200, 100, python(other), `${python(other)} ${other}`), 'hermes', PYTHON, HOME)).toBe(false);
     expect(isAgentImage(entry(200, 100, python(editable), `${python(editable)} ${editable}`), 'aider', PYTHON, HOME)).toBe(false);

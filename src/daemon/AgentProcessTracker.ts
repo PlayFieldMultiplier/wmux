@@ -86,6 +86,16 @@ export interface PidWatcher {
  *  narrow without a cast dance. */
 const RUNTIME_STEMS: ReadonlySet<string> = new Set(['node', 'bun', 'deno', 'python', 'python3']);
 
+/** An image stem as RUNTIME_STEMS names it: a versioned or windowed Python
+ *  (`python3.12`, `python3.13`, `pythonw`) is its family, and Debian's `nodejs`
+ *  is node. A console script's shebang names the interpreter it was installed
+ *  with, version included (`<venv>/bin/python3.12 <venv>/bin/hermes`). */
+function runtimeStem(stem: string): string {
+  if (stem === 'nodejs') return 'node';
+  const python = /^pythonw?(\d*)(?:\.\d+)?$/.exec(stem);
+  return python ? (python[1] === '3' ? 'python3' : 'python') : stem;
+}
+
 /** Windows images that may hold a Claude conversation when their command
  *  line cannot be read (processesWithArg). */
 const UNREADABLE_HOLDER_IMAGE = /^(claude|node|bun)(\.exe)?$/i;
@@ -458,7 +468,7 @@ export function selectAgentProcess(
     return AGENT_SLUG_SET.has(stem)
       ? (stem as AgentSlug)
       : NATIVE_STEM_TO_SLUG.get(stem) ??
-        (RUNTIME_STEMS.has(stem) ? resolveAgentSlug(entry.cmdline) : nativeInstallSlug(entry, userHome));
+        (RUNTIME_STEMS.has(runtimeStem(stem)) ? resolveAgentSlug(entry.cmdline) : nativeInstallSlug(entry, userHome));
   };
   const root = entries.find((e) => e.pid === shellPid);
   const rootSlug = root ? slugOf(root) : undefined;
@@ -485,7 +495,7 @@ export function selectAgentProcess(
         } else if (childDepth === attributed.depth && slug !== attributed.slug) {
           ambiguous = true;
         }
-      } else if (RUNTIME_STEMS.has(stem) && (!sluglessRuntime || childDepth < sluglessRuntime.depth)) {
+      } else if (RUNTIME_STEMS.has(runtimeStem(stem)) && (!sluglessRuntime || childDepth < sluglessRuntime.depth)) {
         sluglessRuntime = { pid: child.pid, depth: childDepth };
       }
       queue.push({ pid: child.pid, depth: childDepth });
@@ -746,14 +756,14 @@ export function isAgentImage(
   realpath: (file: string) => string = fs.realpathSync,
 ): boolean {
   if (!image || !path.posix.isAbsolute(image)) return false;
-  if (!RUNTIME_STEMS.has(imageStem(entry.name))) {
+  if (!RUNTIME_STEMS.has(runtimeStem(imageStem(entry.name)))) {
     const stem = imageStem(image).replace(NATIVE_TARGET_SUFFIX, '');
     if ((AGENT_SLUG_SET.has(stem) ? stem : NATIVE_STEM_TO_SLUG.get(stem)) === slug) return true;
     if (!NATIVE_INSTALL_DIRS.has(slug)) return false;
     // The image path is resolved, so compare against the resolved home too.
     return inNativeInstallDir(image, userHome) === slug;
   }
-  const runtime = imageStem(image).replace(/^nodejs$/, 'node').replace(/^(python3)\.\d+$/, '$1');
+  const runtime = runtimeStem(imageStem(image));
   if (!RUNTIME_STEMS.has(runtime)) return false;
   const argv = tokenizeCmdline(entry.cmdline ?? '');
   const script = argv[1]?.startsWith('-') ? argv.slice(2).find((t) => !t.startsWith('-')) : argv[1];
