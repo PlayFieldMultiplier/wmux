@@ -142,6 +142,27 @@ describe('NotificationsView — initial render', () => {
   });
 });
 
+describe('NotificationsView — child rows follow the pane ring', () => {
+  const switchTag = (html: string, label: string): string =>
+    html.match(new RegExp(`<button[^>]*aria-label="${label}"[^>]*>`))?.[0] ?? '';
+
+  it('disables the flash switch while the pane ring is off, and only then', () => {
+    const off = renderToStaticMarkup(createElement(NotificationsView, makeProps({ paneRingEnabled: false })));
+    const on = renderToStaticMarkup(createElement(NotificationsView, makeProps({ paneRingEnabled: true })));
+    expect(switchTag(off, 'settings.paneFlash')).toMatch(/disabled/);
+    expect(switchTag(on, 'settings.paneFlash')).not.toMatch(/disabled/);
+  });
+
+  it('names the attention row after the Dock on macOS and the taskbar elsewhere', () => {
+    const mac = renderToStaticMarkup(createElement(NotificationsView, makeProps({ platform: 'darwin' })));
+    const win = renderToStaticMarkup(createElement(NotificationsView, makeProps({ platform: undefined })));
+    expect(switchTag(mac, 'settings.taskbarFlash.darwin')).not.toBe('');
+    expect(mac).toContain('settings.taskbarFlashDesc.darwin');
+    expect(switchTag(win, 'settings.taskbarFlash')).not.toBe('');
+    expect(win).toContain('settings.taskbarFlashDesc<');
+  });
+});
+
 // ─── Handler wiring — clicking each toggle calls the matching setter ─────────
 //
 // The static markup pattern can't fire DOM events, so we exercise the

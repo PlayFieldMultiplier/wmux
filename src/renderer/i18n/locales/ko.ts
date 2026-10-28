@@ -17,7 +17,6 @@ export const ko = {
   "connectors.access.legacy": "기존 연결의 일반 판 접근은 꺼져 있어요. 사용할 범위를 선택하세요.",
 
   "plugins.settings.title": "플러그인",
-  "plugins.settings.description": "서비스를 연결하고 wmux에 페이지를 추가하세요. 사용 전에 권한을 검토하세요.",
   "plugins.settings.installed": "설치됨",
   "plugins.settings.failed": "작업을 완료하지 못했습니다. 다시 시도하세요.",
   "plugins.settings.notApproved": "미승인",
@@ -31,7 +30,6 @@ export const ko = {
   "plugins.settings.officeHint": "모든 워크스페이스의 에이전트를 픽셀 아트 사무실 한 곳의 직원으로 보고 패널로 이동합니다. 터미널 내용에는 접근하지 않습니다.",
   "plugins.settings.install": "설치",
   "plugins.settings.loadFailed": "{name}을 불러오지 못했습니다. 매니페스트와 번들 파일을 확인하세요.",
-  'plugins.settings.moved': "플러그인이 별도 페이지로 옮겨졌습니다.",
 
   "connectors.quick.reviewExisting": "이 서비스에 꺼져 있거나 API 키 방식인 기존 연결이 있어요. 설치됨에서 해당 연결을 켜거나 설정을 확인하세요.",
   "connectors.quick.storage": "보안 저장소에 접근할 수 없어 연결을 시작할 수 없어요. 접근을 복구한 후 다시 시도하세요.",
@@ -2263,6 +2261,7 @@ export const ko = {
   'settings.sectionInput': '입력',
   'settings.sectionPerformance': '렌더링·메모리',
   'settings.sectionScrollback': '스크롤백',
+  'settings.sectionFontCursor': '글꼴과 커서',
   'settings.sectionInterface': '인터페이스',
   'settings.sectionSidebar': '사이드바',
   'settings.sectionPanes': '창',
@@ -2909,6 +2908,7 @@ export const ko = {
   'settings.startupDirectory': '시작 디렉토리',
   'settings.startupDirectoryDesc': '새 터미널이 시작되는 위치. 비우면 홈 디렉토리. 워크스페이스 프로필로 개별 재정의 가능.',
   'settings.startupDirectoryPlaceholder': '예: C:\\Projects',
+  'settings.startupDirectoryPlaceholder.posix': '예: ~/Projects',
   'settings.splitInheritsCwd': '분할 시 디렉토리 계승',
   'settings.splitInheritsCwdDesc': '창 분할로 생긴 새 패널이 원래 패널의 현재 디렉토리에서 시작합니다.',
   'settings.closeTabOnShellExit': '셸이 정상 종료되면 탭 닫기',
@@ -2996,6 +2996,8 @@ export const ko = {
   'settings.sidebarSortAttention': '주의',
   'settings.sidebarSortRecent': '최근 활동',
   'settings.sidebarShowExplorerButton': '"파일 탐색기에서 열기" 버튼 표시',
+  'settings.sidebarShowExplorerButton.darwin': '"Finder에서 열기" 버튼 표시',
+  'settings.sidebarShowExplorerButton.linux': '"파일 관리자에서 열기" 버튼 표시',
   'settings.sidebarShowExplorerButtonDesc': '사이드바 워크스페이스 행에 폴더 버튼을 표시합니다. 끄더라도 우클릭 메뉴에서는 계속 사용할 수 있습니다.',
   'settings.sidebarShowCopyInfoButton': '"세션 정보 복사" 버튼 표시',
   'settings.sidebarShowCopyInfoButtonDesc': '사이드바 워크스페이스 행에 세션 정보를 복사하는 버튼을 표시합니다.',
@@ -3159,6 +3161,8 @@ export const ko = {
   'settings.sc.prefixConflict': '{combo}는 프리픽스 키입니다',
   'settings.shortcutsNotAvailable': '내장 단축키 커스터마이즈는 아직 지원되지 않습니다.',
   'settings.aboutTagline': 'Windows 네이티브 AI 에이전트 터미널',
+  'settings.aboutTagline.darwin': 'macOS 네이티브 AI 에이전트 터미널',
+  'settings.aboutTagline.linux': 'Linux용 AI 에이전트 터미널',
   'settings.builtWith': '사용 기술',
   'settings.links': '링크',
   'settings.githubRepo': 'GitHub 저장소',
@@ -3693,6 +3697,7 @@ export const ko = {
   'settings.agentToolbar': '에이전트 주입 크롬',
   'settings.agentToolbarShow': '에이전트 주입 크롬',
   'settings.agentToolbarShowDesc': '파일, 스니펫, 입력창, 예약, 병렬 작업을 표시합니다. Ctrl+G는 항상 동작합니다.',
+  'settings.agentToolbarShowDesc.darwin': '파일, 스니펫, 입력창, 예약, 병렬 작업을 표시합니다. ⌘G는 항상 동작합니다.',
 
   // Channels (a2a.channel.* RPC UI surface)
   'channels.taskCommentPlaceholder': '작업에 의견 남기기…',

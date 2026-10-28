@@ -190,7 +190,7 @@ describe('Settings tabs', () => {
     expect(ALL_TABS).toEqual([
       'general', 'appearance', 'terminal', 'shortcuts', 'notifications',
       'claude-integration', 'accounts', 'factory', 'roles', 'tokens', 'browser', 'computer-use',
-      'plugins', 'remote', 'lanlink',
+      'remote', 'lanlink',
       'about',
     ]);
     const rendered = Array.from(container.querySelectorAll('[data-settings-tab]'))

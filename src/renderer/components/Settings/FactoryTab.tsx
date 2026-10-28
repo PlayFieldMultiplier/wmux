@@ -1031,6 +1031,11 @@ export function FactoryTab({ settingsPort, botPort, pickFolder, claudeAuthPort }
   };
 
   const off = !sPort.available || !settings;
+  // The morning report and the phone's bot act on nothing while the bots are
+  // off, so they wait for the switch. Rows that limit what bots may do (who
+  // they trust, caps, the command reviewer, auto-merge) stay editable, so they
+  // can be set before the bots start.
+  const botsOff = settings?.enabled === false;
 
   return (
     <div data-testid="factory-tab" className="contents">
@@ -1060,7 +1065,7 @@ export function FactoryTab({ settingsPort, botPort, pickFolder, claudeAuthPort }
         <SettingRow id="factorymorning" label={t('settings.factory.morning')} description={t('settings.factory.morningDesc')} layout="stacked">
           <div className="flex flex-wrap items-center gap-1.5">
             <Select
-              disabled={off}
+              disabled={off || botsOff}
               aria-label={t('settings.factory.morningHour')}
               value={String(settings?.morning.hour ?? 9)}
               onChange={(e) => settings && void patch({ morning: { ...settings.morning, hour: Number(e.target.value) } })}
@@ -1073,7 +1078,7 @@ export function FactoryTab({ settingsPort, botPort, pickFolder, claudeAuthPort }
                 <button
                   key={d}
                   type="button"
-                  disabled={off}
+                  disabled={off || botsOff}
                   aria-pressed={on}
                   data-weekday={d}
                   onClick={() => settings && void patch({
@@ -1138,7 +1143,7 @@ export function FactoryTab({ settingsPort, botPort, pickFolder, claudeAuthPort }
           />
         </SettingRow>
         <SettingRow id="factoryphonebot" label={t('settings.factory.phoneBot')} description={t('settings.factory.phoneBotDesc')}>
-          <PhoneBotSelect t={t} disabled={off} value={settings?.phoneBotId ?? undefined} onChange={(id) => void patch({ phoneBotId: id })} />
+          <PhoneBotSelect t={t} disabled={off || botsOff} value={settings?.phoneBotId ?? undefined} onChange={(id) => void patch({ phoneBotId: id })} />
         </SettingRow>
         <TaskFoldersRow port={sPort} t={t} disabled={off} />
         {error && <SettingNote tone="danger" role="alert">{error}</SettingNote>}

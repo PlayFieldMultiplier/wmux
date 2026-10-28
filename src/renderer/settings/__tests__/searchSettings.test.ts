@@ -43,7 +43,7 @@ describe('matchSettings', () => {
 
   it('counts hits per tab so the nav can show a badge', () => {
     const hits = matchSettings('cursor', t);
-    expect(tabHitCount('appearance', hits)).toBeGreaterThan(0);
+    expect(tabHitCount('terminal', hits)).toBeGreaterThan(0);
     expect(tabHitCount('general', hits)).toBe(0);
   });
 

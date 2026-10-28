@@ -1469,8 +1469,7 @@ a rebindable shortcut with no default key) or the `connectors` route.
   the actions, one muted note for the state ("Installing grants nothing. It
   stays closed until you review its permissions." and so on). A bundle that
   failed to load is listed as a muted line under the list.
-- **Settings › Plugins** keeps a single row, "Plugins moved to their own
-  page", with Open; nothing on it installs, approves or removes.
+- **Settings has no Plugins tab** (2026-10-28): the rail item is the way in.
 - **Narrow sheet** (under 640px): the list stacks over the detail.
 
 ### Settings
@@ -1950,10 +1949,10 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
 `SettingRow`, `SettingNote`).
 
 - **Information architecture** (owner-reviewed, 2026-09-24). Tabs, in nav
-  order: General · Appearance (theme, interface, sidebar, panes, terminal
-  text, agent toolbar) · Terminal · Keyboard · Notifications. Group
+  order: General · Appearance (theme, interface, sidebar, panes, agent
+  toolbar) · Terminal (font and cursor first) · Keyboard · Notifications. Group
   **Agents**: Claude Code · Accounts · Factory · Roles & fan-out ·
-  Token usage · Browser · Computer use. Group **Connections**: Plugins (a link to the Plugins page) · Remote & phone · LAN (the LanLink and A2A listener switches, and a link to the Remote page where PCs are paired and removed). Then
+  Token usage · Browser · Computer use. Group **Connections**: Remote & phone · LAN (the LanLink and A2A listener switches, and a link to the Remote page where PCs are paired and removed). Then
   About. Each tab answers one question; a setting lives on exactly one tab
   and the search catalog (`settings/catalog.ts`) names that tab. Retired tab
   ids resolve through `resolveSettingsTab` (Orchestrator, Agents and Moa all
@@ -2154,6 +2153,7 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
 | 2026-10-26 | Chat 2 runs Codex beside Claude Code: an Agent chip first among the new-chat composer's chips, fixed once the chat starts; Codex's model and permissions chips are fixed (its own default model, always Ask) | The chat-only view gained a second agent; the choice sits where the other start options (model, permissions) already are, and what Codex cannot change reads as fixed rather than missing |
 | 2026-10-26 | Custom agents: a last section on Settings › Roles & fan-out, not a new tab. One ui-group of rows (name · command line · "Known by its process" and unattended line, a "Used by" line while a role or preset launches it, with Edit / Delete), "Add custom agent" as the last row, and an inline stacked editor like Fan-out presets (Name, Command, Arguments, First prompt flag, Model flag, Unattended flags, Process names). Edit opens in place of its own row and the list keeps its order. Delete is disabled while the agent is used. The section description states the limits: process-only identity, no screen status, approvals or resume. Unattended starts empty and empty means not offered | Custom agents exist to be picked by roles and fan-out, so they sit beside them. The same shapes as Fan-out presets keep one editing grammar on the tab. Stating the limits and never defaulting unattended keeps a user-typed CLI from looking as supported as a registry agent, or from running unattended by surprise; blocking Delete keeps a role or preset from silently launching something else |
 | 2026-10-26 | An approved release is carried out. Its card's title names the tag, the repository and the short commit, and says it cannot be undone ("Publish release v1.2.3 of owner/repo at abc1234 — publishes a release, cannot be undone"; with a tag workflow, "Push tag … — starts its release workflow, cannot be undone"). The body is the bot's one line, one plain sentence of what Approve does, as whom and when, and that wmux cannot take it back, then "Marked Latest." or "Prerelease, never Latest." (with a tag workflow: "The workflow decides whether it is marked Latest."), then one plain line per workflow with no push filter that runs on the tag push as well ("<file> also runs on this tag push."), then what main read as plain lines (the default branch and how far the commit is behind its head, the checks on the commit, package.json's version), then a line naming the blocks and each published field in its own `wmux-payload` code block. Approve / Deny only, with the usual 10 s Undo; typed words, the chip and rules never approve it. The outcome card reads "Published release …" with its link, or with a tag workflow "Tag pushed — the release workflow is building it" with the Actions run linked when it can be read; nothing is tinted | A release is the one act that starts other machinery (a tag workflow publishes installers and packages), so the card states the commit, its checks and the version before Approve, and the hash covers every field that is published |
+| 2026-10-28 | Owner-approved (Settings clean-up, part 3): terminal font size, font and cursor move from Appearance to the top of Terminal; the Settings › Plugins tab (a single link to the rail page) is removed, reversing the 2026-10-21 line that kept it. A row or note that only applies on another OS is hidden there (the agy accounts section off Windows, Start on login on Linux), and settings search hides it too; a row that works everywhere but is named after one OS reads in the platform's words (Finder, the Dock, ⌘G, macOS or Linux in About). A switch whose children act on nothing while it is off disables them: the pane ring's flash, and the Bots morning report and phone bot. A row that limits what bots may do (trusted authors, caps, the command reviewer, auto-merge) stays editable while the bots are off, so it can be set before they start. Accounts' quota switches are standard switches. The Company View toggle loses its default key (Ctrl+Shift+O, which it swallowed) and its Shortcuts row: it has opened nothing since #503; a key a user saved still binds and lists it | Settings read as cluttered: text settings sat on the wrong page, an empty tab took a nav row, macOS users read Windows-only text, and child rows looked live while their parent was off. Hiding by platform through the catalog keeps the row and its search hit in step |
 
 ### Desktop conversation view
 

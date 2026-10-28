@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState } from 'react';
 import type { RotationAccountRow, RotationSettings } from '../../../main/account/AccountRotationService';
 import { useT } from '../../hooks/useT';
 import Badge from '../ui/Badge';
-import Checkbox from '../ui/Checkbox';
+import Switch from '../ui/Switch';
+import { SettingRow } from './SettingsLayout';
 
 type RotationState = { settings: RotationSettings; rows: RotationAccountRow[] };
 
@@ -34,18 +35,14 @@ export function AccountRotationControls({ state, reload }: { state: RotationStat
   };
   return (
     <>
-      {(['claude', 'codex'] as const).map((vendor) => (
-        <div key={vendor} className="ui-row" data-rotation-vendor={vendor}>
-          <Checkbox
-            checked={state.settings[vendor]}
-            onCheckedChange={(on) => set(vendor, on)}
-            aria-label={t(vendor === 'claude' ? 'accounts.rotateClaude' : 'accounts.rotateCodex')}
-          />
-          <span className="flex-1 text-[13px] text-[var(--text-main)]">
-            {t(vendor === 'claude' ? 'accounts.rotateClaude' : 'accounts.rotateCodex')}
-          </span>
-        </div>
-      ))}
+      {(['claude', 'codex'] as const).map((vendor) => {
+        const label = t(vendor === 'claude' ? 'accounts.rotateClaude' : 'accounts.rotateCodex');
+        return (
+          <SettingRow key={vendor} label={label} data-rotation-vendor={vendor}>
+            <Switch checked={state.settings[vendor]} onCheckedChange={(on) => set(vendor, on)} aria-label={label} />
+          </SettingRow>
+        );
+      })}
       <p className="settings-note">{t('accounts.rotateTerms')}</p>
     </>
   );

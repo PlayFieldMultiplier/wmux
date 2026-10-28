@@ -202,7 +202,6 @@ export const WMUX_KEYMAP: readonly KeymapEntry[] = [
   { action: 'toggleFileTree', combo: 'Ctrl+Shift+E', descriptionKey: 'settings.sc.toggleFileTree' },
   { action: 'openSettings', combo: 'Ctrl+,', descriptionKey: 'settings.sc.openSettings' },
   { action: 'toggleFleetView', combo: 'Ctrl+Shift+A', descriptionKey: 'settings.sc.toggleFleetView' },
-  { action: 'toggleCompanyView', combo: 'Ctrl+Shift+O', descriptionKey: 'settings.sc.toggleCompanyView' },
   { action: 'toggleBotsView', combo: 'Ctrl+Shift+J', descriptionKey: 'settings.sc.toggleBotsView' },
   { action: 'clearMultiview', combo: 'Ctrl+Shift+G', descriptionKey: 'settings.sc.clearMultiview' },
   { action: 'openBrowser', combo: 'Ctrl+Shift+L', descriptionKey: 'settings.sc.openBrowser' },
@@ -278,7 +277,24 @@ export const UNBOUND_SHORTCUTS: readonly { action: ShortcutActionId; description
   // The Plugins page. No default key: Ctrl+Shift+P is where users move the
   // command palette, and a default here would win over that override.
   { action: 'togglePluginsView', descriptionKey: 'settings.sc.togglePluginsView' },
+  // Opens nothing since #503 (CompanyView renders null). It once held
+  // Ctrl+Shift+O, which then did nothing but swallow the key; with no default
+  // the key reaches the pane again, and a key a user saved still binds.
+  { action: 'toggleCompanyView', descriptionKey: 'settings.sc.toggleCompanyView' },
 ];
+
+/** Unbound actions Settings › Shortcuts leaves out: they do nothing. */
+const UNLISTED_SHORTCUTS: ReadonlySet<ShortcutActionId> = new Set<ShortcutActionId>(['toggleCompanyView']);
+
+/**
+ * The unbound actions Settings › Shortcuts lists. An unlisted one is listed
+ * only while the user has a key on it, so that key can be taken off.
+ */
+export function settingsUnboundRows(overrides: ShortcutOverrides): ShortcutActionId[] {
+  return UNBOUND_SHORTCUTS
+    .map((e) => e.action)
+    .filter((action) => !UNLISTED_SHORTCUTS.has(action) || typeof overrides[action] === 'string');
+}
 
 /** The i18n key (and vars) naming `action` in shortcut lists. */
 export function shortcutDescription(
