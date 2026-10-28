@@ -36,7 +36,7 @@ export function hermesHome(env: Record<string, string | undefined>, platform: No
     const local = env.LOCALAPPDATA?.trim();
     return path.win32.join(local || path.win32.join(home, 'AppData', 'Local'), 'hermes');
   }
-  return path.join(home, '.hermes');
+  return path.posix.join(home, '.hermes');
 }
 
 type Opener = (location: URL) => DatabaseSync;
