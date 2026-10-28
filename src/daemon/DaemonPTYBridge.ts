@@ -19,7 +19,7 @@ import { ESCAPE_WIN32 } from '../shared/win32InputKeys';
 import { isEscapeChunk } from '../shared/hooks/interruptKeystroke';
 import { stripPassiveInput } from '../shared/terminal/passiveInput';
 import { kittyChunkAsLegacy } from '../shared/kittyKeyEvents';
-import { titleShowsFinishedTurn, titleShowsRunningTurn } from './transcript/chatScreenGate';
+import { titleShowsFinishedTurn, titleShowsRunningTurn, type TitleEvidence } from './transcript/chatScreenGate';
 import { AWAITING_TITLE, CLAUDE_IDLE_TITLE, CLAUDE_RUNNING_TITLE, CLAUDE_RUNNING_TITLE_OSC, RUNNING_TITLE } from '../shared/agentTitleRules';
 import { agentDisplayToSlug, agentRow, isAgentSlug } from '../shared/agentIdentity';
 import type { AgentSignal } from '../shared/hooks/signal-types';
@@ -66,6 +66,13 @@ export function scanStartupDa1(text: string): 'answer' | 'more' | 'closed' {
   }
   return 'more';
 }
+
+/**
+ * The answer to the OSC 7501 feature query (`OSC 7501 ; ? ST`): a bare `?`,
+ * which the spec reads as the default state and kind lists. Claude Code and
+ * Grok Build report nothing until a terminal answers.
+ */
+export const PROGRAM_STATUS_PROBE_REPLY = '\x1b]7501;?\x1b\\';
 
 /** The `agent` event message for an OSC 7501 `blocked` report, by its `kind`. */
 const PROGRAM_BLOCKED_MESSAGE: Record<'permission' | 'question' | 'auth' | 'none', string> = {
@@ -659,7 +666,7 @@ export class DaemonPTYBridge extends EventEmitter {
       // the command line, or the first prompt still working). Otherwise the
       // next submit starts the turn, so a key sent before it (a lone Esc
       // dismissing a notice) is never read as an interrupt of that turn.
-      if (this.turnOpen && this.bootEpisode && !this.titleShowsRunningTurn()) this.closeTurn();
+      if (this.turnOpen && this.bootEpisode && !this.titleShowsRunningTurn() && !this.programWorking()) this.closeTurn();
       if (this.turnOpen && this.sessionId) {
         const endedAt = DaemonPTYBridge.transcriptTurnEndProbe?.(this.sessionId);
         if (endedAt !== undefined) this.noteTranscriptTurnEnd(endedAt);
@@ -1366,9 +1373,8 @@ export class DaemonPTYBridge extends EventEmitter {
    * An OSC 7501 report (see programStatus.ts). Every valid report is stored;
    * only the root record drives the pane, and only while the process tracker
    * watches an agent alive in it (paneAgent): a plain shell command reporting
-   * `working` is not an agent turn. The feature query
-   * (`?`) is not answered yet, so only programs that report without asking
-   * (Codex) reach this.
+   * `working` is not an agent turn. Codex reports without asking; Claude Code
+   * once its query is answered (answerProgramStatusProbe).
    */
   private noteProgramStatus(data: string): void {
     const report = parseProgramStatus(data);
@@ -1387,6 +1393,31 @@ export class DaemonPTYBridge extends EventEmitter {
     this.programStatusSeen = true;
     this.programAgentSlug = pane.slug;
     this.applyProgramState(root, prior, pane.name, this.sessionId);
+  }
+
+  /**
+   * The feature query (`OSC 7501 ; ?`), answered straight to the PTY like the
+   * #1965 DA1 reply, every time it is asked. Only while a live tracked agent
+   * owns the pane, the same gate its reports need (paneAgent): Claude Code
+   * drops its spinner and idle title glyphs once answered, so a pane whose
+   * reports would not be applied (an agent the tracker has not seen yet, one
+   * behind ssh) is left on the title heuristics by not answering.
+   *
+   * Nothing else answers it: xterm.js ignores unknown OSCs, and every replay
+   * strips the query (replayQuerySanitizer), so recovered history, a held
+   * muted chunk or a later viewer never gets a late reply into the program's
+   * input. Recovered history is not read for OSCs at all (seedModes). The
+   * reply goes out inside the data callback, before the chunk is forwarded,
+   * so it reaches the program ahead of a viewer's answer to the DA1 Claude
+   * sends right behind the query (the spec's "unsupported" signal).
+   */
+  private answerProgramStatusProbe(ptyProcess: IPty): void {
+    if (!this.paneAgent()) return;
+    try {
+      ptyProcess.write(PROGRAM_STATUS_PROBE_REPLY);
+    } catch {
+      // The PTY is already gone: nothing is waiting for the answer.
+    }
   }
 
   /**
@@ -1438,6 +1469,12 @@ export class DaemonPTYBridge extends EventEmitter {
     this.emit('agent', { sessionId, event: { agent, status, message: PROGRAM_SETTLED_MESSAGE[record.state] } });
     // At the prompt before any turn (the agent booting), as the detector's idle prompt reports it.
     if (status === 'waiting' && !wasSettled && this.isPreTurn()) this.emit('idle', { sessionId, preTurn: true });
+    // #2264 — Claude Code (the agent whose title tells its turns) reports
+    // `done` for a turn that finished and `idle` for one cut short. Answered,
+    // it drops the idle title that confirmed an Esc interrupt, so its own
+    // `idle` right after a lone Esc confirms it.
+    if (record.state === 'idle' && agentRow(this.programAgentSlug)?.titleTurns === true
+      && (prior?.state === 'working' || prior?.state === 'blocked')) this.confirmEscInterrupt(sessionId);
   }
 
   /** Applies the root record stored before the tracker saw the agent alive. */
@@ -1752,13 +1789,21 @@ export class DaemonPTYBridge extends EventEmitter {
    * replay.
    */
   private noteTitleTurnEnd(sessionId: string): void {
+    if (this.agentDetector?.getLastAgent() !== 'Claude Code') return;
+    this.confirmEscInterrupt(sessionId);
+  }
+
+  /**
+   * Claude Code's turn ended right after a lone Esc (its idle title, or its
+   * own OSC 7501 `idle` after `working`): the Esc interrupted it.
+   */
+  private confirmEscInterrupt(sessionId: string): void {
     const now = Date.now();
     if (this.muted || now - this.lastResizeAtMs < RESIZE_REDRAW_GUARD_MS) return;
     if (now - this.lastEscAt >= ESC_INTERRUPT_CONFIRM_MS) return;
     // One Esc confirms one turn: a later idle title inside the same window
     // belongs to a turn that Esc never touched.
     if (this.lastEscAt === this.titleEdgeEscAt) return;
-    if (this.agentDetector?.getLastAgent() !== 'Claude Code') return;
     this.titleEdgeEscAt = this.lastEscAt;
     this.closeInterruptedTurn();
     this.emit('turnInterrupted', { sessionId, agent: 'Claude Code' });
@@ -1791,9 +1836,18 @@ export class DaemonPTYBridge extends EventEmitter {
     this.lastEscAt = Date.now();
   }
 
-  /** The latest window title the program set, and when (`at` 0 = never). */
-  getTitle(): { title: string; at: number } {
-    return { title: this.lastTitle, at: this.lastTitleAt };
+  /**
+   * The latest window title the program set, and when (`at` 0 = never), with
+   * the root OSC 7501 state while the agent's reports drive the pane.
+   */
+  getTitle(): TitleEvidence {
+    const slug = this.programStatusSeen ? this.programAgentSlug : null;
+    const root = slug ? this.programStatus.root() : undefined;
+    return {
+      title: this.lastTitle,
+      at: this.lastTitleAt,
+      ...(slug && root ? { program: { slug, state: root.state, at: root.updatedAt } } : {}),
+    };
   }
 
   /**
@@ -2193,7 +2247,8 @@ export class DaemonPTYBridge extends EventEmitter {
         return;
       }
       if (event.code === PROGRAM_STATUS_OSC) {
-        this.noteProgramStatus(event.data);
+        if (event.data.startsWith('?')) this.answerProgramStatusProbe(ptyProcess);
+        else this.noteProgramStatus(event.data);
         return;
       }
       if (event.code === 9 || event.code === 99 || event.code === 777) {
