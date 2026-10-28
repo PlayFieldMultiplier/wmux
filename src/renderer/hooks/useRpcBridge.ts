@@ -582,17 +582,14 @@ export function useRpcBridge(): void {
     // a per-method wrapper is cleaner).
     (window as unknown as {
       __wmuxChannelsRpc: {
+        // Reads only: rpc:invoke dispatches just the methods listed in
+        // RENDERER_RPC_METHODS (src/main/ipc/rpcInvoke.ts).
         rpc: (
           method:
             | 'a2a.channel.list'
             | 'a2a.channel.get'
             | 'a2a.channel.getMessages'
-            | 'a2a.channel.getMembers'
-            | 'a2a.channel.create'
-            | 'a2a.channel.archive'
-            | 'a2a.channel.join'
-            | 'a2a.channel.leave'
-            | 'a2a.channel.post',
+            | 'a2a.channel.getMembers',
           params: Record<string, unknown>,
         ) => Promise<RpcResult>;
         // D5 — mutating channel ops from the first-party UI. Routes the
