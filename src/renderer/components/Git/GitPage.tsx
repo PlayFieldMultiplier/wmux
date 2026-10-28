@@ -630,7 +630,7 @@ function AllLists({ groups, tab, refreshKey, filter, onFilter, sel, onSelect, pu
             >
               <span className="wmux-git-chevron" data-open={isOpen ? 'true' : undefined} aria-hidden="true"><IconChevron size={12} /></span>
               <span className="wmux-git-group-name">{g.name}</span>
-              <span className="wmux-git-group-meta">{t('git.allRepos.workspaces', { count: g.workspaceCount })}</span>
+              <span className="wmux-git-group-meta">{t(g.workspaceCount === 1 ? 'git.allRepos.workspacesOne' : 'git.allRepos.workspaces', { count: g.workspaceCount })}</span>
             </button>
             {isOpen && (
               <RepoList
@@ -671,7 +671,7 @@ function AllWorktrees({ groups, refreshKey, reportCounts, prListOf }: {
         <section key={g.key} className="wmux-git-group" data-git-repo-group={g.name} aria-label={g.name}>
           <h2 className="wmux-git-group-title">
             {g.name}
-            <span className="wmux-git-group-meta">{t('git.allRepos.workspaces', { count: g.workspaceCount })}</span>
+            <span className="wmux-git-group-meta">{t(g.workspaceCount === 1 ? 'git.allRepos.workspacesOne' : 'git.allRepos.workspaces', { count: g.workspaceCount })}</span>
           </h2>
           <GroupWorktrees group={g} refreshKey={refreshKey} reportCounts={reportCounts} prList={prListOf(g)} />
         </section>

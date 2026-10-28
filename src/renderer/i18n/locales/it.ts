@@ -5,10 +5,10 @@ export const it = {
   // Sidebar
   'sidebar.workspaces': 'Aree di lavoro',
   'sidebar.newWorkspace': 'Nuova area di lavoro',
-  'sidebar.newWorkspaceTooltip': 'Nuova area di lavoro (Ctrl+N)',
+  'sidebar.newWorkspaceTooltip': 'Nuova area di lavoro',
   'sidebar.newRemoteWorkspace': 'Nuovo workspace su {name}',
-  'sidebar.hideTooltip': 'Nascondi barra laterale (Ctrl+B)',
-  'sidebar.expandTooltip': 'Espandi barra laterale (Ctrl+B)',
+  'sidebar.hideTooltip': 'Nascondi barra laterale',
+  'sidebar.expandTooltip': 'Espandi barra laterale',
   'sidebar.unreadCount': '{count} non letti',
 
   // Workspace
@@ -65,9 +65,9 @@ export const it = {
 
   // Search
   'search.placeholder': 'Cerca...',
-  'search.prevTooltip': 'Risultato precedente (Maiusc+Invio)',
-  'search.nextTooltip': 'Risultato successivo (Invio)',
-  'search.closeTooltip': 'Chiudi (ESC)',
+  'search.prevTooltip': 'Risultato precedente',
+  'search.nextTooltip': 'Risultato successivo',
+  'search.closeTooltip': 'Chiudi',
   'search.regexTooltip': 'Usa espressione regolare',
   'search.allPanes': 'Tutti i pannelli',
   'search.regexMode': 'Regex',
@@ -85,7 +85,7 @@ export const it = {
   'notification.markAllRead': 'Segna tutto come letto',
   'notification.clear': 'Cancella',
   'notification.empty': 'Nessuna notifica',
-  'notification.toggle': 'Ctrl+I per alternare',
+  'notification.toggle': '{key} per alternare',
   'notification.needsYou.question': "Ti attende: «{question}»",
   'notification.needsYou.noQuestion': "Ti attende. Nessun testo della domanda; guarda il terminale.",
   'notification.needsYou.over': "Non ti attende più.",
@@ -98,7 +98,7 @@ export const it = {
   'palette.close': 'chiudi',
   'palette.cmd.toggleSidebar': 'Attiva/disattiva barra laterale',
   'palette.cmd.newWorkspace': 'Nuova area di lavoro',
-  'palette.cmd.newSurface': 'Nuova superficie',
+  'palette.cmd.newSurface': 'Nuova scheda',
   'palette.cmd.splitRight': 'Dividi a destra',
   'palette.cmd.splitDown': 'Dividi in basso',
   'palette.cmd.stashPane': 'Metti da parte il pannello (la sessione resta in esecuzione)',
@@ -108,7 +108,7 @@ export const it = {
   'palette.cmd.saveLayout': 'Salva il layout corrente come modello',
   'palette.cmd.layoutPrefix': 'Layout: ',
   'palette.catWorkspace': 'Area di lavoro',
-  'palette.catSurface': 'Superficie',
+  'palette.catSurface': 'Scheda',
   'palette.catCommand': 'Comando',
   'palette.catRecent': 'Recente',
 
@@ -369,14 +369,14 @@ export const it = {
   'settings.checkFailed': 'Verifica fallita',
   'settings.unknownError': 'Errore sconosciuto',
   'settings.notificationBehavior': 'Comportamento notifiche',
-  'settings.soundDesc': 'Web Audio API — nessun file esterno richiesto',
+  'settings.soundDesc': 'Riproduce un breve suono integrato quando arriva una notifica.',
   'settings.toast': 'Notifiche toast',
   'settings.toastDesc': 'Mostra toast quando l\'agente termina',
   'settings.ring': 'Animazione bordo',
   'settings.ringDesc': 'Pulsazione bordo sui pannelli con notifiche non lette',
   'settings.sc.toggleSidebar': 'Attiva/disattiva barra laterale',
-  'settings.sc.splitHorizontal': 'Dividi orizzontalmente',
-  'settings.sc.splitVertical': 'Dividi verticalmente',
+  'settings.sc.splitHorizontal': 'Dividi a destra',
+  'settings.sc.splitVertical': 'Dividi in basso',
   'settings.sc.newWorkspace': 'Nuova area di lavoro',
   'settings.sc.closeSurface': 'Chiudi scheda attiva',
   'settings.sc.closePane': 'Chiudi pannello diviso',
@@ -408,8 +408,8 @@ export const it = {
   'settings.prefixAddBinding': 'Aggiungi associazione',
   'settings.prefixReset': 'Ripristina valori predefiniti',
   'settings.prefixResetConfirm': 'Ripristinare tutte le impostazioni del prefisso ai valori predefiniti?',
-  'settings.prefix.splitHorizontal': 'Dividi orizzontalmente',
-  'settings.prefix.splitVertical': 'Dividi verticalmente',
+  'settings.prefix.splitHorizontal': 'Dividi a destra',
+  'settings.prefix.splitVertical': 'Dividi in basso',
   'settings.prefix.closePane': 'Chiudi pannello',
   'settings.prefix.newWorkspace': 'Nuova area di lavoro',
   'settings.prefix.nextWorkspace': 'Area di lavoro successiva',
@@ -484,16 +484,16 @@ export const it = {
 
   // Settings — Claude integration (Phase 1.5 signal-health card)
   'claudeIntegration.tab': 'Integrazione Claude',
-  'claudeIntegration.signalHealth.title': 'Stato del segnale del plugin',
+  'claudeIntegration.signalHealth.title': 'Plugin di Claude Code',
   'claudeIntegration.signalHealth.unknownBody':
-    'Stato del plugin: non ancora osservato. Installalo con il comando qui sotto in Claude Code. wmux conferma il rilevamento al primo hook attivato.',
+    'Ancora nessun segnale dal plugin wmux. Esegui il comando di installazione qui sotto in Claude Code; questo si aggiorna quando il plugin invia il primo segnale.',
   'claudeIntegration.signalHealth.detectedLastReceived': 'Ultimo segnale {rel}.',
   'claudeIntegration.signalHealth.detectedLatencyFormat':
     'Latenza P50 {p50}ms · P95 {p95}ms · {count} campioni',
   'claudeIntegration.signalHealth.workspaceMatchFormat':
     'Corrispondenza area di lavoro: {matched}/{total} hook associati a un pannello wmux',
   'claudeIntegration.signalHealth.staleBody':
-    'Stato del plugin: obsoleto. L\'ultimo hook è arrivato {rel} — il plugin potrebbe aver smesso di attivarsi oppure Claude Code è inattivo.',
+    'L’ultimo segnale del plugin è stato {rel}. Potrebbe essersi fermato, oppure Claude Code è inattivo.',
   'claudeIntegration.signalHealth.copyInstallCommand': 'Copia il comando di installazione',
   'claudeIntegration.signalHealth.copySuccess': 'Copiato — incolla in Claude Code',
   'claudeIntegration.signalHealth.copyError': 'Copia non riuscita — appunti bloccati',
@@ -501,7 +501,7 @@ export const it = {
   // Phase 2 — Anthropic 5h/7d usage meter
   'claudeIntegration.usage.title': 'Misuratore di utilizzo Anthropic (5h / 7d)',
   'claudeIntegration.usage.description':
-    'Legge il tuo utilizzo dall\'endpoint di utilizzo di Anthropic ogni 15 minuti con il tuo accesso a Claude Code (il token OAuth nell\'archiviazione locale). Legge soltanto l\'utilizzo: nessuna richiesta al modello e nessun consumo di quota. Il token non viene mai riscritto né registrato, ma inviato solo a api.anthropic.com.',
+    "Legge il tuo utilizzo dall'endpoint di utilizzo di Anthropic ogni 15 minuti con il tuo accesso a Claude Code. Legge soltanto l'utilizzo: nessuna richiesta al modello e nessun consumo di quota. Il token non viene mai riscritto né registrato, ma inviato solo a api.anthropic.com.",
   'claudeIntegration.usage.enableLabel': 'Mostra l\'utilizzo 5h / 7d nella barra di stato',
   'claudeIntegration.usage.refreshButton': 'Aggiorna ora',
   'claudeIntegration.usage.refreshCooldown': 'Aggiornamento disponibile tra {seconds}s',
@@ -642,6 +642,7 @@ export const it = {
   'pcSwitcher.manage': "Impostazioni di {name}",
   'app.portableData.notice': "Questa copia di wmux è in esecuzione fuori da Applicazioni, quindi usa dati separati. Spostala in Applicazioni per vedere le sessioni esistenti.",
   'pcSwitcher.othersNeedYou': "{count} ti aspettano su altri computer",
+  'pcSwitcher.othersNeedYouOne': '{count} ti aspetta su un altro computer',
   // Quit and Stop Sessions (main-process native confirm)
   'quitAndStop.message': "Uscire da wmux e arrestare tutte le sessioni?",
   'quitAndStop.detail': "Sessioni di agenti in esecuzione: {agents}. Terminali in tutto: {sessions}. Verranno arrestate tutte. L'uscita normale le lascia in esecuzione in background.",

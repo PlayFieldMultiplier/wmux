@@ -12,10 +12,9 @@
  * - Stays *below* the wizard modal in z-index — wizard is --z-dialog (70),
  *   we sit at --z-cheatsheet (40) so we never trap clicks meant for the
  *   wizard or auto-update prompt (--z-modal, 60).
- * - OS-aware modifier rendering (⌘ vs Ctrl+) mirrors `useKeyboard.ts`'s
- *   pattern (`window.electronAPI.platform === 'darwin'`).  tmux prefix
- *   (Ctrl+B) and bookmark (Ctrl+M) intentionally stay literal on every
- *   OS — wmux convention (Plan D1, mirroring useKeyboard.ts).
+ * - Keys come from the keymap defaults and are written by displayCombo, so
+ *   the sheet says ⌘D / ⌃B on macOS and Ctrl+D / Ctrl+B elsewhere — the
+ *   prefix (Ctrl+B) and bookmark (Ctrl+M) are literal Ctrl on every OS.
  *
  * The view is split into a dumb `<KeyboardCheatSheetView>` so the
  * presentation can be rendered (and snapshot-tested) without React's
@@ -28,6 +27,7 @@ import { useT } from '../hooks/useT';
 import { t as translate } from '../i18n';
 import Popover, { PopoverSection } from './ui/Popover';
 import Button from './ui/Button';
+import { defaultBindings, displayCombo, type ShortcutActionId } from '../../shared/keymap';
 import { IconX } from './icons';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -46,59 +46,40 @@ export type CheatSheetEntry = {
 };
 
 /**
- * Renders the OS-aware "command" modifier prefix.
- *  - darwin: "⌘"
- *  - everywhere else: "Ctrl+"
- *
- * Matches the cmdOrCtrl mapping in useKeyboard.ts so the cheat sheet is
- * always faithful to actual key handling.
- */
-export function formatModifier(platform: string | undefined): string {
-  return platform === 'darwin' ? '⌘' : 'Ctrl+';
-}
-
-/**
  * Build the shortcut list for the given platform.  Pure function so tests
- * can assert OS-specific output without rendering.
+ * can assert OS-specific output without rendering. Every key is read from
+ * the keymap's defaults and written by the one formatter (displayCombo).
  */
 export function buildShortcuts(platform: string | undefined): CheatSheetEntry[] {
-  const mod = formatModifier(platform);
+  const os: NodeJS.Platform = platform === 'darwin' || platform === 'linux' ? platform : 'win32';
+  const defaults = defaultBindings(os);
+  const keyOf = (action: ShortcutActionId) => displayCombo(defaults.find((b) => b.action === action)?.combo ?? '', os);
+  const show = (combo: string) => displayCombo(combo, os);
   return [
-    { label: 'cheatSheet.splitHorizontal', combo: `${mod}D` },
-    { label: 'cheatSheet.splitVertical', combo: `${mod}Shift+D` },
-    { label: 'cheatSheet.newWorkspace', combo: `${mod}N` },
-    { label: 'cheatSheet.openSettings', combo: `${mod},` },
-    { label: 'cheatSheet.commandPalette', combo: `${mod}K` },
-    { label: 'cheatSheet.toggleSidebar', combo: 'Ctrl+Shift+B' },
-    // Ctrl+Tab is literal on every OS — useKeyboard binds it via literalCtrl
-    // so the cheat sheet must show "Ctrl+" instead of ⌘ on macOS.
-    { label: 'cheatSheet.cyclePane', combo: 'Ctrl+Tab', literal: false },
-    // Ctrl+Arrow directional pane focus — literal Ctrl on every OS (bound via
-    // literalCtrl in useKeyboard.ts). Mirrors prefix+Arrow.
-    // TODO(T1): wire i18n key for cheat sheet "Move pane focus" entry.
+    { label: 'cheatSheet.splitHorizontal', combo: keyOf('splitHorizontal') },
+    { label: 'cheatSheet.splitVertical', combo: keyOf('splitVertical') },
+    { label: 'cheatSheet.newWorkspace', combo: keyOf('newWorkspace') },
+    { label: 'cheatSheet.openSettings', combo: keyOf('openSettings') },
+    { label: 'cheatSheet.commandPalette', combo: keyOf('commandPalette') },
+    { label: 'cheatSheet.toggleSidebar', combo: keyOf('toggleSidebar') },
+    // Ctrl+Tab is literal Ctrl on every OS (literalCtrl in the keymap).
+    { label: 'cheatSheet.cyclePane', combo: keyOf('nextPane'), literal: false },
     // Ctrl+Shift+Arrow moves focus: pane focus within a workspace, or between
-    // tiles when the multiview grid is showing. literalCtrl+shift →
-    // focusPaneDirection / focusMultiviewDirection in useKeyboard.ts. (Bare
-    // Ctrl+Arrow is intentionally unbound; split stays on Ctrl+D.)
-    { label: 'Move focus', combo: 'Ctrl+Shift+Arrows', literal: true },
-    // Alt+Up/Down cycle workspaces (prev / next). Own modifier so it doesn't
-    // collide with move (Ctrl) or split (Ctrl+Shift). Direct prev/next on top
-    // of Ctrl+1-9 (jump to N) and the prefix path.
+    // tiles when the multiview grid is showing (literal Ctrl on every OS).
+    // TODO(T1): wire i18n key for cheat sheet "Move focus" entry.
+    { label: 'Move focus', combo: show('Ctrl+Shift+Arrows'), literal: true },
+    // Alt+Up/Down cycle workspaces (prev / next).
     // TODO(T1): wire i18n key for cheat sheet "Switch workspace" entry.
-    { label: 'Switch workspace', combo: 'Alt+Up/Down', literal: true },
-    // tmux prefix is always literal Ctrl+B (wmux convention, D1 / useKeyboard.ts).
+    { label: 'Switch workspace', combo: `${keyOf('prevWorkspace')} / ${keyOf('nextWorkspace')}`, literal: true },
+    // The tmux prefix is literal Ctrl+B on every OS (isPrefixTrigger).
     // TODO(T1): wire i18n key for cheat sheet "tmux prefix" entry.
-    { label: 'tmux prefix', combo: 'Ctrl+B', literal: true },
-    // Maximize / zoom the focused pane to fill the window (tmux prefix then z;
-    // press again to restore). Surfaced here because there is no always-visible
-    // button — the pane only reveals a maximize affordance on hover — so the
-    // "no fullscreen button" gap is at least discoverable via the cheat sheet.
-    // literal: the prefix is Ctrl+B on every OS, so the combo can't use ⌘.
+    { label: 'tmux prefix', combo: show('Ctrl+B'), literal: true },
+    // Maximize / zoom the focused pane (prefix then z; press again to
+    // restore). There is no always-visible button, so the sheet lists it.
     // TODO(T1): wire i18n key for cheat sheet "Maximize pane" entry.
-    { label: 'Maximize pane', combo: 'Ctrl+B Z', literal: true },
-    // Bookmark is always literal Ctrl+M (matches useKeyboard.ts:448).
+    { label: 'Maximize pane', combo: `${show('Ctrl+B')} Z`, literal: true },
     // TODO(T1): wire i18n key for cheat sheet "Bookmark line" entry.
-    { label: 'Bookmark line', combo: 'Ctrl+M', literal: true },
+    { label: 'Bookmark line', combo: keyOf('addBookmark'), literal: true },
   ];
 }
 

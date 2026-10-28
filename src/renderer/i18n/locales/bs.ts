@@ -5,10 +5,10 @@ export const bs = {
   // Sidebar
   'sidebar.workspaces': 'Radni prostori',
   'sidebar.newWorkspace': 'Novi radni prostor',
-  'sidebar.newWorkspaceTooltip': 'Novi radni prostor (Ctrl+N)',
+  'sidebar.newWorkspaceTooltip': 'Novi radni prostor',
   'sidebar.newRemoteWorkspace': 'Novi radni prostor na {name}',
-  'sidebar.hideTooltip': 'Sakrij bočnu traku (Ctrl+B)',
-  'sidebar.expandTooltip': 'Proširi bočnu traku (Ctrl+B)',
+  'sidebar.hideTooltip': 'Sakrij bočnu traku',
+  'sidebar.expandTooltip': 'Proširi bočnu traku',
   'sidebar.unreadCount': '{count} nepročitanih',
 
   // Workspace
@@ -65,9 +65,9 @@ export const bs = {
 
   // Search
   'search.placeholder': 'Pretraži...',
-  'search.prevTooltip': 'Prethodni rezultat (Shift+Enter)',
-  'search.nextTooltip': 'Sljedeći rezultat (Enter)',
-  'search.closeTooltip': 'Zatvori (ESC)',
+  'search.prevTooltip': 'Prethodni rezultat',
+  'search.nextTooltip': 'Sljedeći rezultat',
+  'search.closeTooltip': 'Zatvori',
   'search.regexTooltip': 'Koristi regularni izraz',
   'search.allPanes': 'Svi paneli',
   'search.regexMode': 'Regex',
@@ -85,7 +85,7 @@ export const bs = {
   'notification.markAllRead': 'Označi sve kao pročitano',
   'notification.clear': 'Očisti',
   'notification.empty': 'Nema obavještenja',
-  'notification.toggle': 'Ctrl+I za prebacivanje',
+  'notification.toggle': '{key} za prebacivanje',
   'notification.needsYou.question': "Čeka te: „{question}“",
   'notification.needsYou.noQuestion': "Čeka te. Nema teksta pitanja; pogledaj terminal.",
   'notification.needsYou.over': "Više te ne čeka.",
@@ -98,7 +98,7 @@ export const bs = {
   'palette.close': 'zatvori',
   'palette.cmd.toggleSidebar': 'Prebaci bočnu traku',
   'palette.cmd.newWorkspace': 'Novi radni prostor',
-  'palette.cmd.newSurface': 'Nova površina',
+  'palette.cmd.newSurface': 'Nova kartica',
   'palette.cmd.splitRight': 'Podijeli desno',
   'palette.cmd.splitDown': 'Podijeli dolje',
   'palette.cmd.stashPane': 'Skloni panel (sesija nastavlja raditi)',
@@ -108,7 +108,7 @@ export const bs = {
   'palette.cmd.saveLayout': 'Sačuvaj trenutni izgled kao šablon',
   'palette.cmd.layoutPrefix': 'Izgled: ',
   'palette.catWorkspace': 'Radni prostor',
-  'palette.catSurface': 'Površina',
+  'palette.catSurface': 'Kartica',
   'palette.catCommand': 'Komanda',
   'palette.catRecent': 'Nedavno',
 
@@ -369,14 +369,14 @@ export const bs = {
   'settings.checkFailed': 'Provjera neuspjela',
   'settings.unknownError': 'Nepoznata greška',
   'settings.notificationBehavior': 'Ponašanje obavještenja',
-  'settings.soundDesc': 'Web Audio API — bez vanjskih datoteka',
+  'settings.soundDesc': 'Pušta kratak ugrađeni ton kada stigne obavijest.',
   'settings.toast': 'Toast obavještenja',
   'settings.toastDesc': 'Prikaži toast kad agent završi',
   'settings.ring': 'Animacija okvira',
   'settings.ringDesc': 'Pulsiranje okvira na panelima s nepročitanim obavještenjima',
   'settings.sc.toggleSidebar': 'Prebaci bočnu traku',
-  'settings.sc.splitHorizontal': 'Podijeli horizontalno',
-  'settings.sc.splitVertical': 'Podijeli vertikalno',
+  'settings.sc.splitHorizontal': 'Podijeli desno',
+  'settings.sc.splitVertical': 'Podijeli dolje',
   'settings.sc.newWorkspace': 'Novi radni prostor',
   'settings.sc.closeSurface': 'Zatvori aktivnu karticu',
   'settings.sc.closePane': 'Zatvori podijeljeni panel',
@@ -408,8 +408,8 @@ export const bs = {
   'settings.prefixAddBinding': 'Dodaj vezivanje',
   'settings.prefixReset': 'Vrati na zadano',
   'settings.prefixResetConfirm': 'Vratiti sve postavke prefiksa na zadano?',
-  'settings.prefix.splitHorizontal': 'Podijeli horizontalno',
-  'settings.prefix.splitVertical': 'Podijeli vertikalno',
+  'settings.prefix.splitHorizontal': 'Podijeli desno',
+  'settings.prefix.splitVertical': 'Podijeli dolje',
   'settings.prefix.closePane': 'Zatvori panel',
   'settings.prefix.newWorkspace': 'Novi radni prostor',
   'settings.prefix.nextWorkspace': 'Sljedeći radni prostor',
@@ -484,16 +484,16 @@ export const bs = {
 
   // Settings — Claude integration (Phase 1.5 signal-health card)
   'claudeIntegration.tab': 'Claude integracija',
-  'claudeIntegration.signalHealth.title': 'Stanje signala dodatka',
+  'claudeIntegration.signalHealth.title': 'Claude Code dodatak',
   'claudeIntegration.signalHealth.unknownBody':
-    'Status dodatka: još nije zabilježen. Instaliraj komandom ispod u Claude Code. wmux potvrđuje otkrivanje čim se okine prvi hook.',
+    'Još nema signala od wmux dodatka. Pokrenite naredbu za instalaciju ispod u Claude Codeu; ovo se ažurira kada dodatak prvi put javi.',
   'claudeIntegration.signalHealth.detectedLastReceived': 'Posljednji signal {rel}.',
   'claudeIntegration.signalHealth.detectedLatencyFormat':
     'Latencija P50 {p50}ms · P95 {p95}ms · {count} uzoraka',
   'claudeIntegration.signalHealth.workspaceMatchFormat':
     'Podudaranje radnog prostora: {matched}/{total} hookova razriješeno na wmux panel',
   'claudeIntegration.signalHealth.staleBody':
-    'Status dodatka: zastario. Posljednji hook stigao {rel} — dodatak je možda prestao okidati ili Claude Code miruje.',
+    'Posljednji signal dodatka bio je {rel}. Možda je prestao raditi ili je Claude Code neaktivan.',
   'claudeIntegration.signalHealth.copyInstallCommand': 'Kopiraj komandu za instalaciju',
   'claudeIntegration.signalHealth.copySuccess': 'Kopirano — zalijepi u Claude Code',
   'claudeIntegration.signalHealth.copyError': 'Kopiranje neuspjelo — međuspremnik zaključan',
@@ -501,7 +501,7 @@ export const bs = {
   // Phase 2 — Anthropic 5h/7d usage meter
   'claudeIntegration.usage.title': 'Mjerač korištenja Anthropic (5h / 7d)',
   'claudeIntegration.usage.description':
-    'Svakih 15 minuta čita tvoju potrošnju s Anthropic endpointa za potrošnju pomoću tvoje Claude Code prijave (OAuth token iz lokalnog spremišta). Samo čita potrošnju — ne šalje se nikakav zahtjev modelu i ne troši se kvota. Token se nikada ne upisuje natrag, nikada se ne bilježi, šalje se samo na api.anthropic.com.',
+    'Svakih 15 minuta čita tvoju potrošnju s Anthropic endpointa za potrošnju pomoću tvoje Claude Code prijave. Samo čita potrošnju — ne šalje se nikakav zahtjev modelu i ne troši se kvota. Token se nikada ne upisuje natrag, nikada se ne bilježi, šalje se samo na api.anthropic.com.',
   'claudeIntegration.usage.enableLabel': 'Prikaži iskorištenost 5h / 7d u statusnoj traci',
   'claudeIntegration.usage.refreshButton': 'Osvježi sada',
   'claudeIntegration.usage.refreshCooldown': 'Osvježavanje dostupno za {seconds}s',
@@ -642,6 +642,7 @@ export const bs = {
   'pcSwitcher.manage': "Postavke: {name}",
   'app.portableData.notice': "Ova kopija wmuxa radi izvan mape Aplikacije, pa koristi zasebne podatke. Premjestite je u Aplikacije da vidite postojeće sesije.",
   'pcSwitcher.othersNeedYou': "{count} čeka na vas na drugim računarima",
+  'pcSwitcher.othersNeedYouOne': '{count} čeka na vas na drugom računaru',
   // Quit and Stop Sessions (main-process native confirm)
   'quitAndStop.message': "Zatvoriti wmux i zaustaviti sve sesije?",
   'quitAndStop.detail': "Trenutno radi: sesije agenata: {agents}, ukupno terminala: {sessions}. Sve će biti zaustavljene. Obično zatvaranje ih ostavlja da rade u pozadini.",

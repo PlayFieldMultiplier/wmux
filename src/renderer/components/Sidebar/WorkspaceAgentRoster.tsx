@@ -270,7 +270,7 @@ function WorkspaceRosterSummary({
       ? (open ? t('workspace.hideAgents') : t('workspace.showAgents'))
       : rosterSummaryAriaLabel(roster, open, t),
     showTasks ? (paneTaskCount === 1 ? t('sidebar.tasks.countOne') : t('sidebar.tasks.count', { count: paneTaskCount })) : undefined,
-    showTasks && paneTaskNeedYou > 0 ? t('strip.needsYou', { count: paneTaskNeedYou }) : undefined,
+    showTasks && paneTaskNeedYou > 0 ? t(paneTaskNeedYou === 1 ? 'strip.needsYouOne' : 'strip.needsYou', { count: paneTaskNeedYou }) : undefined,
   ].filter(Boolean).join(', ');
 
   return (
