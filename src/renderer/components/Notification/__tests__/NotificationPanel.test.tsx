@@ -531,6 +531,15 @@ describe('describeNotification — a needs-you row names where it waits', () => 
     expect(describeNotification(asking, state(), t, true).body).toBe('No longer waiting on you.');
   });
 
+  it('a turn that ended on a question it still waits on reads as needs you, with the question', () => {
+    const turn = mkNotif('n4', {
+      type: 'agent', title: 'Claude Code: Task finished', body: 'Ready for input',
+      category: 'agent-turn', ptyId: 'pty-1', surfaceId: 's1',
+    });
+    const d = describeNotification(turn, state({ surfacePendingQuestion: { 'pty-1': 'Add a test too?' } }), t, true);
+    expect(d).toEqual({ title: 'web-client · Claude Code', body: 'Needs you: “Add a test too?”' });
+  });
+
   it('any other row keeps its title; a body that only repeats it names the source', () => {
     const done = mkNotif('n2', {
       type: 'agent', title: 'Claude Code: Task finished', body: 'Task finished',

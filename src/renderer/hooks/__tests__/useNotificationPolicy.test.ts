@@ -356,6 +356,16 @@ describe('decideNotificationActions', () => {
     expect(result.map((a) => a.kind)).toEqual(['addNotification', 'playSound', 'setPaneRing', 'flashFrame', 'osToast']);
   });
 
+  it('a turn that ended on a question still waiting is needs you: no in-app toast', () => {
+    const result = decideNotificationActions(
+      { ...samplePayload, type: 'agent', category: 'agent-turn' },
+      sampleTarget,
+      baseCtx({ asksForYou: true }),
+    );
+    expect(result.some((a) => a.kind === 'pushToast')).toBe(false);
+    expect(result[0].kind).toBe('addNotification');
+  });
+
   it('a finished turn keeps its in-app toast', () => {
     const result = decideNotificationActions(
       { ...samplePayload, type: 'agent', category: 'agent-turn' },

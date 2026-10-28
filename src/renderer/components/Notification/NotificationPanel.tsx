@@ -75,7 +75,8 @@ function agentFromTitle(title: string): string | undefined {
 
 /**
  * What a panel row says, from data the store already has. A needs-you row
- * (an agent waiting on a question or an approval in a local pane) names where
+ * (an agent in a local pane waiting on an approval, or whose turn ended on a
+ * question it still waits on) names where
  * it waits — workspace · agent — and what it asks: the agent's question while
  * it still waits (on its newest row only), a plain sentence when no question
  * text was captured, another when it no longer waits. It never repeats the
@@ -90,11 +91,13 @@ export function describeNotification(
   latestForPty: boolean,
 ): NotifDisplay {
   const ws = state.workspaces.find((w) => w.id === notif.workspaceId);
-  if (notif.category === 'approval' && notif.ptyId) {
-    const ptyId = notif.ptyId;
+  const ptyId = notif.ptyId;
+  const question = latestForPty && ptyId ? state.surfacePendingQuestion[ptyId]?.trim() : undefined;
+  // A turn that ended on a question still waiting is needs you too.
+  const needsYou = !!ptyId && (notif.category === 'approval' || (notif.category === 'agent-turn' && !!question));
+  if (needsYou && ptyId) {
     const agent = state.surfaceAgent[ptyId]?.name || agentFromTitle(notif.title);
     const title = [ws?.name?.trim(), agent].filter(Boolean).join(' · ') || notif.title;
-    const question = latestForPty ? state.surfacePendingQuestion[ptyId]?.trim() : undefined;
     const waiting = latestForPty && (!!question
       || state.surfaceAgent[ptyId]?.status === 'awaiting_input'
       || state.surfaceAgentStatus[ptyId] === 'awaiting_input');
@@ -368,9 +371,9 @@ export default function NotificationPanel() {
     const seenPty = new Set<string>();
     const state = { workspaces, surfaceAgent, surfaceAgentStatus, surfacePendingQuestion };
     for (const n of sorted) {
-      // Newest first: the first needs-you row of a pane is the one its live
-      // question belongs to.
-      const latest = n.category === 'approval' && !!n.ptyId && !seenPty.has(n.ptyId);
+      // Newest first: a pane's newest agent row is the one its live question
+      // belongs to.
+      const latest = (n.category === 'approval' || n.category === 'agent-turn') && !!n.ptyId && !seenPty.has(n.ptyId);
       if (latest && n.ptyId) seenPty.add(n.ptyId);
       out[n.id] = describeNotification(n, state, t, latest);
     }
