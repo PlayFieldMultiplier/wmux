@@ -6,6 +6,7 @@ import {
   customKeybindingsOn,
   collidesWithKeymap,
   ADVERTISED_SHORTCUTS,
+  SETTINGS_SHORTCUT_ROWS,
   UNBOUND_SHORTCUTS,
   SHORTCUT_ACTION_IDS,
   comboFromEvent,
@@ -593,5 +594,16 @@ describe('workspaceShortcutNumber', () => {
   it('has no digit for a row outside the list', () => {
     expect(workspaceShortcutNumber(-1, 12)).toBeUndefined();
     expect(workspaceShortcutNumber(12, 12)).toBeUndefined();
+  });
+});
+
+describe('SETTINGS_SHORTCUT_ROWS', () => {
+  it('leaves the dead Company View toggle out of the list but keeps it bound', () => {
+    const listed = SETTINGS_SHORTCUT_ROWS.map((e) => e.action);
+    expect(listed).not.toContain('toggleCompanyView');
+    expect(listed).toContain('toggleBotsView');
+    expect(listed.length).toBe(ADVERTISED_SHORTCUTS.length - 1);
+    expect(WMUX_KEYMAP.some((e) => e.action === 'toggleCompanyView')).toBe(true);
+    expect(sanitizeShortcutOverrides({ toggleCompanyView: null })).toEqual({ toggleCompanyView: null });
   });
 });

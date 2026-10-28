@@ -1,4 +1,3 @@
-import PluginsSection from './PluginsSection';
 import { TerminalEngineSetting } from './TerminalEngineSetting';
 import { QuickCommandsSection } from './QuickCommandsSection';
 import { SecretHookSetting } from './SecretHookSetting';
@@ -44,7 +43,7 @@ import {
   type FanoutWorkerPermissionMode,
 } from '../../../shared/workerLaunch';
 import {
-  ADVERTISED_SHORTCUTS,
+  SETTINGS_SHORTCUT_ROWS,
   UNBOUND_SHORTCUTS,
   builtinCombosFor,
   comboFromEvent,
@@ -95,12 +94,12 @@ import { A2aRemoteSection } from './A2aRemoteSection';
 import { RemoteSpawnSection } from './RemoteSpawnSection';
 import { terminalFontFamilyCss } from '../../utils/terminalFont';
 import { hasBareFunctionKeyBinding } from '../../utils/functionKeyBinding';
-import { Icon, IconPuzzle, IconX, IconCheck, IconChevron, IconExternalLink, IconBrowser, IconComputer, IconUsers, IconRobot, IconRemoteDevices, IconPlus, IconWarning } from '../icons';
+import { Icon, IconX, IconCheck, IconChevron, IconExternalLink, IconBrowser, IconComputer, IconUsers, IconRobot, IconRemoteDevices, IconPlus, IconWarning } from '../icons';
 import { TabComputerUse } from './ComputerUseSection';
 import { QuickLaunchSection } from './QuickLaunchSection';
 import PairedDevicesModal from '../StatusBar/PairedDevicesModal';
 import { FOCUS_RING } from '../focusRing';
-import { SETTINGS_CATALOG, SETTINGS_NAV_GROUPS, catalogEntryOnPlatform, resolveSettingsTab, type SettingsTabId } from '../../settings/catalog';
+import { SETTINGS_CATALOG, SETTINGS_NAV_GROUPS, catalogEntryFor, catalogEntryOnPlatform, catalogKeysOn, resolveSettingsTab, type SettingsTabId } from '../../settings/catalog';
 import { themeBlocksWindowGlass, windowGlassSupported, type WindowGlassLevel } from '../../utils/windowGlass';
 import { matchSettings, tabHitCount } from '../../settings/searchSettings';
 import { CursorShapePicker } from './CursorShapePicker';
@@ -1744,6 +1743,10 @@ export function ImagePasteModeView({
 
 function TabTerminal() {
   const t = useT();
+  const terminalFontSize    = useStore((s) => s.terminalFontSize);
+  const setTerminalFontSize = useStore((s) => s.setTerminalFontSize);
+  const terminalCursorStyle = useStore((s) => s.terminalCursorStyle);
+  const setTerminalCursorStyle = useStore((s) => s.setTerminalCursorStyle);
   const defaultShell = useStore((s) => s.defaultShell);
   const setDefaultShell = useStore((s) => s.setDefaultShell);
   const scrollbackLines = useStore((s) => s.scrollbackLines);
@@ -1823,6 +1826,32 @@ function TabTerminal() {
 
   return (
     <div className="settings-page">
+      <SettingsSection title={t('settings.sectionFontCursor')} overflowVisible>
+        <SettingRow id="fontsize" label={t('settings.fontSize')} description={`${terminalFontSize}px — ${t('settings.fontSizeRange')}`}>
+          <div className="flex items-center gap-2">
+            <input
+              type="range"
+              min={8}
+              max={24}
+              value={terminalFontSize}
+              onChange={(e) => setTerminalFontSize(Number(e.target.value))}
+              aria-label={t('settings.fontSize')}
+              className={`settings-range ${FOCUS_RING}`}
+            />
+            <span className="settings-range-value">{terminalFontSize}</span>
+          </div>
+        </SettingRow>
+        <SettingRow id="fontfamily" label={t('settings.fontFamily')} description={t('settings.fontFamilyDesc')}>
+          <FontFamilyField />
+        </SettingRow>
+        <div data-setting-id="cursorshape" className="settings-block scroll-mt-4">
+          <div className="flex flex-col gap-0.5">
+            <span className="ui-field-label">{t('settings.cursorShape')}</span>
+            <span className="ui-field-description">{t('settings.cursorShapeDesc')}</span>
+          </div>
+          <CursorShapePicker value={terminalCursorStyle} onChange={setTerminalCursorStyle} t={t} />
+        </div>
+      </SettingsSection>
       <SettingsSection title={t('settings.sectionShell')}>
         <SettingRow id="shell" label={t('settings.defaultShell')}>
           <SettingSelect
@@ -1852,7 +1881,7 @@ function TabTerminal() {
             label={t('settings.startupDirectory')}
             value={startupDirectory}
             onCommit={setStartupDirectory}
-            placeholder={t('settings.startupDirectoryPlaceholder')}
+            placeholder={t(window.electronAPI?.platform === 'win32' ? 'settings.startupDirectoryPlaceholder' : 'settings.startupDirectoryPlaceholder.posix')}
           />
         </SettingRow>
         <SettingRow id="splitcwd" label={t('settings.splitInheritsCwd')} description={t('settings.splitInheritsCwdDesc')}>
@@ -2290,7 +2319,7 @@ function AgentToolbarSection() {
 
   return (
     <SettingsSection title={t('settings.agentToolbar')}>
-      <SettingRow id="toolbar" label={t('settings.agentToolbarShow')} description={t('settings.agentToolbarShowDesc')}>
+      <SettingRow id="toolbar" label={t('settings.agentToolbarShow')} description={t(catalogKeysOn('toolbar', window.electronAPI?.platform).descKey ?? 'settings.agentToolbarShowDesc')}>
         <Toggle
           checked={agentToolbarEnabled}
           onChange={setAgentToolbarEnabled}
@@ -3578,11 +3607,8 @@ export function ChromePresetActionsView({
 
 function TabAppearance() {
   const t = useT();
-  const terminalFontSize    = useStore((s) => s.terminalFontSize);
-  const setTerminalFontSize = useStore((s) => s.setTerminalFontSize);
-  const terminalCursorStyle = useStore((s) => s.terminalCursorStyle);
-  const setTerminalCursorStyle = useStore((s) => s.setTerminalCursorStyle);
-
+  // The OS's own name for its file manager, as the sidebar button says it.
+  const explorerButtonLabelKey = catalogKeysOn('sidebarexplorerbutton', window.electronAPI?.platform).labelKey;
   const sidebarPosition = useStore((s) => s.sidebarPosition);
   const sidebarSortMode = useStore((s) => s.sidebarSortMode);
   const setSidebarSortMode = useStore((s) => s.setSidebarSortMode);
@@ -3780,11 +3806,11 @@ function TabAppearance() {
             ]}
           />
         </SettingRow>
-        <SettingRow id="sidebarexplorerbutton" label={t('settings.sidebarShowExplorerButton')} description={t('settings.sidebarShowExplorerButtonDesc')}>
+        <SettingRow id="sidebarexplorerbutton" label={t(explorerButtonLabelKey)} description={t('settings.sidebarShowExplorerButtonDesc')}>
           <Toggle
             checked={sidebarShowExplorerButton}
             onChange={setSidebarShowExplorerButton}
-            label={t('settings.sidebarShowExplorerButton')}
+            label={t(explorerButtonLabelKey)}
           />
         </SettingRow>
         <SettingRow id="sidebarcopyinfobutton" label={t('settings.sidebarShowCopyInfoButton')} description={t('settings.sidebarShowCopyInfoButtonDesc')}>
@@ -3940,33 +3966,6 @@ function TabAppearance() {
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title={t('settings.terminal')} overflowVisible>
-        <SettingRow id="fontsize" label={t('settings.fontSize')} description={`${terminalFontSize}px — ${t('settings.fontSizeRange')}`}>
-          <div className="flex items-center gap-2">
-            <input
-              type="range"
-              min={8}
-              max={24}
-              value={terminalFontSize}
-              onChange={(e) => setTerminalFontSize(Number(e.target.value))}
-              aria-label={t('settings.fontSize')}
-              className={`settings-range ${FOCUS_RING}`}
-            />
-            <span className="settings-range-value">{terminalFontSize}</span>
-          </div>
-        </SettingRow>
-        <SettingRow id="fontfamily" label={t('settings.fontFamily')} description={t('settings.fontFamilyDesc')}>
-          <FontFamilyField />
-        </SettingRow>
-        <div data-setting-id="cursorshape" className="settings-block scroll-mt-4">
-          <div className="flex flex-col gap-0.5">
-            <span className="ui-field-label">{t('settings.cursorShape')}</span>
-            <span className="ui-field-description">{t('settings.cursorShapeDesc')}</span>
-          </div>
-          <CursorShapePicker value={terminalCursorStyle} onChange={setTerminalCursorStyle} t={t} />
-        </div>
-      </SettingsSection>
-
       <AgentToolbarSection />
     </div>
   );
@@ -4013,6 +4012,8 @@ export interface NotificationsViewProps {
   onChangePaneFlashEnabled: (v: boolean) => void;
   taskbarFlashEnabled: boolean;
   onChangeTaskbarFlashEnabled: (v: boolean) => void;
+  /** Names the taskbar row in the OS's words (the Dock on macOS). */
+  platform?: string;
   notificationSoundChoice: 'default' | 'none';
 
   // #516 — per-category mute
@@ -4068,6 +4069,7 @@ export function NotificationsView(props: NotificationsViewProps) {
     paneGlowOpacity, onChangePaneGlowOpacity,
     paneFlashEnabled, onChangePaneFlashEnabled,
     taskbarFlashEnabled, onChangeTaskbarFlashEnabled,
+    platform,
     notificationSoundChoice,
     mutedNotificationCategories, onChangeCategoryMuted,
     workspaces, onChangeWorkspaceMuted, onChangeWorkspacePrWake, onChangeWorkspacePrWakeChecksPassed,
@@ -4130,21 +4132,27 @@ export function NotificationsView(props: NotificationsViewProps) {
           </div>
         </SettingRow>
 
-        {/* T12 — Pane flash */}
+        {/* T12 — Pane flash. The flash plays only inside the pane ring
+            (useNotificationPolicy), so it is disabled while the ring is off. */}
         <SettingRow label={t('settings.paneFlash')} description={t('settings.paneFlashDesc')}>
           <Toggle
             checked={paneFlashEnabled}
             onChange={onChangePaneFlashEnabled}
             label={t('settings.paneFlash')}
+            disabled={!paneRingEnabled}
           />
         </SettingRow>
 
-        {/* T12 — Taskbar flash */}
-        <SettingRow label={t('settings.taskbarFlash')} description={t('settings.taskbarFlashDesc')}>
+        {/* T12 — Taskbar flash. The same switch bounces the Dock on macOS
+            (ToastManager's dockBounceEnabled) and flashes the taskbar elsewhere. */}
+        <SettingRow
+          label={t(platform === 'darwin' ? 'settings.taskbarFlash.darwin' : 'settings.taskbarFlash')}
+          description={t(platform === 'darwin' ? 'settings.taskbarFlashDesc.darwin' : platform === 'linux' ? 'settings.taskbarFlashDesc.linux' : 'settings.taskbarFlashDesc')}
+        >
           <Toggle
             checked={taskbarFlashEnabled}
             onChange={onChangeTaskbarFlashEnabled}
-            label={t('settings.taskbarFlash')}
+            label={t(platform === 'darwin' ? 'settings.taskbarFlash.darwin' : 'settings.taskbarFlash')}
           />
         </SettingRow>
       </SettingsSection>
@@ -4329,6 +4337,7 @@ function TabNotifications() {
       onChangePaneFlashEnabled={setPaneFlashEnabled}
       taskbarFlashEnabled={taskbarFlashEnabled}
       onChangeTaskbarFlashEnabled={setTaskbarFlashEnabled}
+      platform={window.electronAPI?.platform}
       notificationSoundChoice={notificationSoundChoice}
       mutedNotificationCategories={mutedNotificationCategories}
       onChangeCategoryMuted={setNotificationCategoryMuted}
@@ -4534,7 +4543,7 @@ export function TabShortcuts() {
   const shortcutNeedle = shortcutQuery.trim();
   const matchesShortcut = (description: string, keys: string) =>
     matchesShortcutQuery(shortcutQuery, description, keys);
-  const visibleShortcuts = ADVERTISED_SHORTCUTS.filter((entry) => {
+  const visibleShortcuts = SETTINGS_SHORTCUT_ROWS.filter((entry) => {
     const override = shortcutOverrides[entry.action];
     const combo = typeof override === 'string' ? override : concreteCombo(entry, platform);
     return matchesShortcut(describe(entry.action), displayCombo(combo, platform));
@@ -5069,7 +5078,7 @@ function TabAbout() {
             <span className="text-[11px] font-mono tabular-nums text-[color:var(--text-sub)]">v{__APP_VERSION__}</span>
           </div>
           <p data-setting-id="version" className="ui-field-description m-0 mt-0.5 truncate scroll-mt-4">
-            {t('settings.aboutTagline')}
+            {t(catalogKeysOn('version', window.electronAPI?.platform).labelKey)}
           </p>
         </div>
       </Card>
@@ -5292,7 +5301,9 @@ export default function SettingsPanel({ initialTab }: { initialTab?: string }) {
     () => matchSettings(
       searchQuery,
       t,
-      SETTINGS_CATALOG.filter((entry) => catalogEntryOnPlatform(entry, window.electronAPI?.platform)),
+      SETTINGS_CATALOG
+        .filter((entry) => catalogEntryOnPlatform(entry, window.electronAPI?.platform))
+        .map((entry) => catalogEntryFor(entry, window.electronAPI?.platform)),
     ),
     [searchQuery, t],
   );
@@ -5337,7 +5348,6 @@ export default function SettingsPanel({ initialTab }: { initialTab?: string }) {
     tokens:               { label: t('settings.tabTokens'),        icon: <IconAgents /> },
     browser:              { label: t('settings.tabBrowser'),       icon: <IconBrowser /> },
     'computer-use':       { label: t('settings.tabComputerUse'),   icon: <IconComputer /> },
-    plugins:              { label: t('plugins.settings.title'), icon: <IconPuzzle /> },
     remote:               { label: t('settings.tabRemote'),        icon: <IconRemoteDevices /> },
     lanlink:              { label: t('settings.tabLan'),           icon: <IconLanLink /> },
     about:                { label: t('settings.tabAbout'),         icon: <IconAbout /> },
@@ -5525,7 +5535,6 @@ export default function SettingsPanel({ initialTab }: { initialTab?: string }) {
           {activeTab === 'tokens'             && <TokenUsageTab onOpenTab={setActiveTab} />}
                     {activeTab === 'browser'            && <TabBrowser />}
                     {activeTab === 'computer-use'       && <TabComputerUse />}
-                    {activeTab === 'plugins'            && <PluginsSection />}
                     {activeTab === 'remote'             && <TabRemote />}
                     {activeTab === 'lanlink'            && <><LanConnectionsLink /><LanLinkSection /><A2aRemoteSection /><RemoteSpawnSection /></>}
                     {activeTab === 'about'              && <TabAbout />}

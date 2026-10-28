@@ -6,9 +6,9 @@ import { useStore } from '../../stores';
 import { IconX } from '../icons';
 import Badge from '../ui/Badge';
 import Button from '../ui/Button';
-import Checkbox from '../ui/Checkbox';
 import Input from '../ui/Input';
-import { SettingsSection } from './SettingsLayout';
+import Switch from '../ui/Switch';
+import { SettingRow, SettingsSection } from './SettingsLayout';
 import { openTerminalTab } from '../../utils/accountLogin';
 
 type Snapshot = AgyAccountsSnapshot & { login: AgyLoginState };
@@ -82,6 +82,9 @@ export function AgyAccountsSection(): React.ReactElement | null {
 
   if (!api || !snap) return null;
   if (!snap.supported) {
+    // The vault is the Windows Credential Manager, so elsewhere the section
+    // has nothing to offer; on Windows it says why it is unavailable.
+    if (window.electronAPI?.platform !== 'win32') return null;
     return (
       <SettingsSection id="agyacct" title={t('agyAccounts.title')}>
         <p className="settings-note">{t('agyAccounts.unsupported')}</p>
@@ -114,15 +117,13 @@ export function AgyAccountsSection(): React.ReactElement | null {
   return (
     <SettingsSection id="agyacct" title={t('agyAccounts.title')} description={t('agyAccounts.intro')}>
       <p className="settings-note">{t('agyAccounts.machineWideNote')}</p>
-      <div className="ui-row">
-        <Checkbox
+      <SettingRow label={t('agyAccounts.autoRotate')} description={t('agyAccounts.autoRotateDesc')}>
+        <Switch
           checked={snap.autoRotate}
           onCheckedChange={(on) => run(api.setAutoRotate(on))}
           aria-label={t('agyAccounts.autoRotate')}
         />
-        <span className="flex-1 text-[13px] text-[var(--text-main)]">{t('agyAccounts.autoRotate')}</span>
-      </div>
-      <p className="settings-note">{t('agyAccounts.autoRotateDesc')}</p>
+      </SettingRow>
       <p className="settings-note">{t('agyAccounts.rotateTerms')}</p>
       {snap.accounts.length === 0 && <p className="settings-note">{t('agyAccounts.empty')}</p>}
       {snap.accounts.map((r) => (

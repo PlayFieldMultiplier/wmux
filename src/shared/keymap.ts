@@ -259,6 +259,18 @@ export const ADVERTISED_SHORTCUTS: readonly (KeymapEntry & { action: ShortcutAct
   );
 
 /**
+ * Bound actions Settings › Shortcuts does not list. toggleCompanyView has
+ * opened nothing since #503 (CompanyView renders null), so its row would
+ * advertise a key that does nothing. It stays in WMUX_KEYMAP so saved
+ * overrides and command references keep working.
+ */
+const UNLISTED_SHORTCUTS: ReadonlySet<ShortcutActionId> = new Set<ShortcutActionId>(['toggleCompanyView']);
+
+/** The built-in rows Settings › Shortcuts lists and its search filters. */
+export const SETTINGS_SHORTCUT_ROWS: typeof ADVERTISED_SHORTCUTS =
+  ADVERTISED_SHORTCUTS.filter((e) => !UNLISTED_SHORTCUTS.has(e.action));
+
+/**
  * Actions that ship with NO key. They exist so a command-palette command can
  * be given a shortcut (from the palette or Settings → Shortcuts): an override
  * binds one, and with no override nothing is bound — so they take no key from
