@@ -1286,8 +1286,9 @@ details[open] > .wmux-chatv2-tool-line .wmux-chatv2-chevron { transform: rotate(
 /* While the detail is open the list takes only its rows' height (scrolling
  * once the page is full), so the detail follows right under its last row
  * instead of sitting at the page's foot; the space left goes below it. */
-.wmux-board-body:has(+ .wmux-board-foot) { flex: 0 1 auto; }
-.wmux-board-body + .wmux-board-foot { margin-bottom: auto; }
+/* The list layout only: Board columns keep the full height. */
+.wmux-board-body:has(> .wmux-fleet-list):has(+ .wmux-board-foot) { flex: 0 1 auto; }
+.wmux-board-body:has(> .wmux-fleet-list) + .wmux-board-foot { margin-bottom: auto; }
 .wmux-board-foot > .wmux-board-preview { margin: 0; max-width: none; }
 .wmux-board-conversation { min-width: 0; padding: 8px 12px; border-radius: 10px; background: var(--bg-mantle); }
 .wmux-board-conversation-log { display: flex; flex-direction: column; gap: 8px; max-height: 260px; overflow-y: auto; outline: none; }
