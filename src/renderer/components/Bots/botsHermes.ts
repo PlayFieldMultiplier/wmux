@@ -151,7 +151,7 @@ export function readMyHermesStatus(raw: unknown): MyHermesStatus {
 }
 
 /** What the My Hermes readiness row says: its line, and a command to copy. */
-export function myHermesReadinessView(r: MyHermesReadiness): { key: string; vars: Record<string, string>; command?: string } {
+export function myHermesReadinessView(r: MyHermesReadiness, profile = MY_HERMES_DEFAULT_PROFILE): { key: string; vars: Record<string, string>; command?: string } {
   const version = r.version ?? '—';
   if (r.ready) return { key: 'botsPage.myHermes.ready', vars: { version } };
   switch (r.reason) {
@@ -162,7 +162,7 @@ export function myHermesReadinessView(r: MyHermesReadiness): { key: string; vars
     case 'unsupported': return { key: 'botsPage.hermes.unsupported', vars: { version, tested: TESTED_LINE } };
     case 'profile-missing': return { key: 'botsPage.myHermes.profileMissing', vars: {} };
     case 'acp-missing': return { key: 'botsPage.myHermes.acpMissing', vars: {} };
-    case 'no-model': return { key: 'botsPage.myHermes.noModel', vars: {}, command: 'hermes model' };
+    case 'no-model': return { key: 'botsPage.myHermes.noModel', vars: {}, command: profile === MY_HERMES_DEFAULT_PROFILE ? 'hermes model' : `hermes -p ${profile} model` };
     case 'approvals-off': return { key: 'botsPage.myHermes.approvalsOff', vars: {} };
     case 'wmux-mcp': return { key: 'botsPage.myHermes.wmuxMcp', vars: {} };
     case 'messengers': return { key: 'botsPage.myHermes.messengers', vars: { platforms: (r.platforms ?? []).join(', ') || '—' } };

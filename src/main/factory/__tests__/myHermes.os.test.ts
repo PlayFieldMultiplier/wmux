@@ -157,6 +157,8 @@ describe('myHermesReadiness', () => {
     expect(await myHermesReadiness('../etc', r.deps)).toMatchObject({ ready: false, reason: 'profile-missing' });
     expect(await myHermesReadiness('default', { ...r.deps, platform: 'win32' })).toMatchObject({ ready: false, reason: 'unsupported-os' });
     expect(await myHermesReadiness('default', { ...r.deps, resolveExe: () => null })).toMatchObject({ ready: false, reason: 'not-installed' });
+    // Not installed wins over a missing ~/.hermes.
+    expect(await myHermesReadiness('default', { ...r.deps, resolveExe: () => null, isDir: () => false })).toMatchObject({ reason: 'not-installed' });
     fs.rmSync(home, { recursive: true, force: true });
     fs.mkdirSync(home);
     expect(await myHermesReadiness('default', rig({ check: 1, config: READY_CONFIG }).deps)).toMatchObject({ ready: false, reason: 'acp-missing' });
@@ -172,7 +174,8 @@ describe('myHermesReadiness', () => {
 
 describe('My Hermes helpers', () => {
   it('lists default and the named profile folders Hermes accepts', () => {
-    expect(listMyHermesProfiles(home)).toEqual([]);
+    // No Hermes at all: `default` is still offered (its readiness says why).
+    expect(listMyHermesProfiles(home)).toEqual(['default']);
     makeHome();
     for (const n of ['coder', 'Bad Name', 'default']) fs.mkdirSync(path.join(home, '.hermes', 'profiles', n), { recursive: true });
     fs.writeFileSync(path.join(home, '.hermes', 'profiles', 'file'), '');

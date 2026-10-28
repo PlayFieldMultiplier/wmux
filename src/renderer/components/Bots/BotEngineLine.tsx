@@ -111,8 +111,10 @@ export function MyHermesUnsupportedLine({ status, t }: { status: MyHermesStatus 
 /** Whether My Hermes can serve a bot, in the line's words: one line, a
  *  command to copy when one fixes it, the notices (muted; colour carries
  *  no state here), and Check again. */
-export function MyHermesReadinessRow({ readiness, checking, recheck, t }: {
+export function MyHermesReadinessRow({ readiness, checking, recheck, t, profile }: {
   readiness: MyHermesReadiness | null;
+  /** The profile it is about (its fix commands name it). */
+  profile: string;
   checking: boolean;
   recheck: () => void;
   t: T;
@@ -121,7 +123,7 @@ export function MyHermesReadinessRow({ readiness, checking, recheck, t }: {
   if (!readiness) {
     return <p data-bots-my-hermes-readiness="checking" className="mt-1 text-[11px] text-[var(--text-muted)]">{t('botsPage.hermes.checking')}</p>;
   }
-  const view = myHermesReadinessView(readiness);
+  const view = myHermesReadinessView(readiness, profile);
   const copy = () => {
     if (!view.command) return;
     void navigator.clipboard?.writeText(view.command).then(() => setCopied(true), () => undefined);
@@ -315,7 +317,7 @@ export function BotEngineLine({ row, t, port: given }: { row: FactoryBotRow; t: 
         {editable && <MyHermesUnsupportedLine status={my.status} t={t} />}
         {onHermes && port.readiness && <HermesReadinessRow readiness={readiness} checking={checking} recheck={recheck} port={port} t={t} />}
         {ownProfile !== null && <p data-bots-my-hermes-not-yet className="mt-1 text-[11px] text-[var(--text-muted)]">{t('botsPage.myHermes.notYet')}</p>}
-        {ownProfile !== null && port.myHermes && <MyHermesReadinessRow readiness={my.readiness} checking={my.checking} recheck={my.recheck} t={t} />}
+        {ownProfile !== null && port.myHermes && <MyHermesReadinessRow readiness={my.readiness} checking={my.checking} recheck={my.recheck} profile={ownProfile} t={t} />}
         {staged && (
           <div className="mt-1.5">
             <InlineConfirm
@@ -360,7 +362,7 @@ export function AddBotEngineRow({ value, onPick, t, port: given, disabled }: {
         <MyHermesUnsupportedLine status={my.status} t={t} />
         {value.engine === 'hermes' && port.readiness && <HermesReadinessRow readiness={managed.readiness} checking={managed.checking} recheck={managed.recheck} port={port} t={t} />}
         {ownProfile !== null && <p data-bots-my-hermes-not-yet className="mt-1 text-[11px] text-[var(--text-muted)]">{t('botsPage.myHermes.notYet')}</p>}
-        {ownProfile !== null && port.myHermes && <MyHermesReadinessRow readiness={my.readiness} checking={my.checking} recheck={my.recheck} t={t} />}
+        {ownProfile !== null && port.myHermes && <MyHermesReadinessRow readiness={my.readiness} checking={my.checking} recheck={my.recheck} profile={ownProfile} t={t} />}
       </div>
     </div>
   );

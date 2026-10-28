@@ -58,14 +58,15 @@ const isDir = (p: string): boolean => {
   }
 };
 
-/** The owner's Hermes profiles: `default` when `~/.hermes` exists, then
- *  each folder of `~/.hermes/profiles` whose name Hermes accepts. */
+/** The owner's Hermes profiles: `default` (always, so a computer without
+ *  Hermes still shows the option and says why it is not ready), then each
+ *  folder of `~/.hermes/profiles` whose name Hermes accepts. */
 export function listMyHermesProfiles(home: string, deps: { isDir?: (p: string) => boolean; readdir?: (p: string) => string[] } = {}): string[] {
   const dirOk = deps.isDir ?? isDir;
   const readdir = deps.readdir ?? ((p: string) => fs.readdirSync(p));
   const root = myHermesRoot(home);
-  if (!dirOk(root)) return [];
   const out = [MY_HERMES_DEFAULT_PROFILE];
+  if (!dirOk(root)) return out;
   let names: string[] = [];
   try {
     names = readdir(path.join(root, 'profiles'));
@@ -214,10 +215,10 @@ export async function myHermesReadiness(profile: string, deps: MyHermesReadiness
   try {
     if (deps.platform === 'win32') return notReady('unsupported-os', 'My Hermes runs on macOS and Linux in this version.');
     if (!HERMES_PROFILE_RE.test(profile)) return notReady('profile-missing', 'That is not a Hermes profile name.');
-    const dir = myHermesProfileDir(deps.home, profile);
-    if (!(deps.isDir ?? isDir)(dir)) return notReady('profile-missing', `No Hermes profile ${profile} was found.`);
     const exe = deps.resolveExe();
     if (!exe) return notReady('not-installed', 'Hermes is not installed (no hermes executable found).');
+    const dir = myHermesProfileDir(deps.home, profile);
+    if (!(deps.isDir ?? isDir)(dir)) return notReady('profile-missing', `No Hermes profile ${profile} was found.`);
     const root = myHermesRoot(deps.home);
     if (!(deps.ownedBy ?? hermesExeOwnedBy)(exe, root)) {
       return notReady('foreign-install', `The hermes wmux found (${exe}) is not the one installed in ~/.hermes.`);
