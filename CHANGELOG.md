@@ -1,5 +1,468 @@
 ## [Unreleased]
 
+## [4.12.0] — 2026-10-28
+
+### Added
+
+- **An approved release is published.** Before, a bot's approved request to
+  publish a release was only recorded. Now wmux carries it out with your gh
+  login after the Undo window. In a repository whose workflows run on a tag
+  push, it pushes the tag at the commit the card showed, and that workflow
+  builds and publishes the release. Elsewhere it makes the release as a draft
+  and then publishes it. Before anything is written, wmux checks that the tag
+  is still free and the commit is on the default branch with its checks
+  green, and, in a project with a package.json, that the version matches the
+  tag. An approval while the checks have not passed is refused, not held:
+  the bot asks again once they pass. Only the card's own Approve button approves a
+  release, on the desktop or the phone. Typed words, "Approve N pending" and
+  "Always allow" never approve one.
+
+- **Codex in the chat-only view.** A new chat's composer has an Agent chip:
+  pick Claude Code or Codex before the first message. A Codex chat starts on
+  Codex's own default model and always asks before it runs a command or
+  edits a file; its approvals come to the same cards, and to the phone, as
+  Claude's. Moving the conversation to and from the terminal stays
+  Claude-only. Needs Codex 0.162.1 or later. (#2731)
+
+- **Amp, Droid, Pi, Cursor CLI and DeepSeek Harness are known agents.** wmux
+  now recognises them in a pane by their process, so a pane running one is
+  labelled with its name. Once one of Amp, Droid, Pi or Cursor CLI is
+  installed, the first-run "Agent ready" group shows its card too; an agent
+  that is not installed gets no card there.
+  Pi and Cursor CLI resume through their own session pickers.
+  Fan-out lists all five as not yet verified.
+
+- **GitHub Copilot CLI gets a setup card and resume.** Once Copilot is
+  installed, the first-run group shows its card with the same checks as the
+  other agents, and a pane that ran Copilot can reopen its session picker
+  (`copilot --resume`).
+
+- **Custom agents.** Settings › Roles & fan-out has a new Custom agents
+  section for agent CLIs wmux does not know yet. Give one a name, a command
+  (a program on PATH or an absolute path) and, if it needs them, arguments,
+  a first prompt flag, a model flag and unattended flags. It can then be
+  picked for a role or a fan-out preset row, and it launches as typed. wmux
+  does not read its screen, so it has no status, approval cards or resume,
+  and it is never given unattended or permission flags you did not type.
+  An agent a role or preset still uses cannot be deleted; its row says what
+  uses it.
+
+- **Qwen Code panes show their own status.** A pane running Qwen Code was
+  labelled Gemini CLI, because Qwen draws Gemini's input row, and its
+  working, idle and permission states were never read. wmux now recognises
+  Qwen Code by its window title and banner, shows it working while a reply
+  streams and ready once the turn ends, and marks the pane as needing you
+  while a shell or file-write permission prompt waits. English UI; the idle
+  state on Windows is not read yet. (#2740)
+
+- **Pi is recognised on screen.** A pane running Pi (`@earendil-works/pi-coding-agent`) is now identified from Pi's own window title and labelled as Pi. When Pi asks whether to trust a project folder, the pane shows that it is waiting for you. Before, a Pi pane looked like a plain shell and that question went unnoticed. (#2745)
+
+- **Custom agents are named on their pane.** A pane running one of your custom
+  agents now shows that agent's name. wmux recognises it by its process: the
+  Command's own name, or the process names you list in the new **Process
+  names** field. It is a label only; the agent still gets no status, approval
+  cards or resume. (#2751)
+
+- **Self-host wmux for a team.** `deploy/docker/` now holds a container image for one person's headless wmux. It comes with a compose example that gives each person their own isolated instance behind Traefik, plus company sign-in through oauth2-proxy. People open their terminals and agents from a browser, install nothing locally, and reach only their own address. Before, a shared server meant installing `wmux-server` by hand for each person, with no sign-in in front of it. See `docs/how-to/self-host-wmux-for-a-team.md`.
+
+- **Start a terminal from the browser.** A wmux server with no desktop attached
+  (for example the self-host container) opened in the browser used to show
+  "Workspaces 0" with nothing to click. It now offers **New terminal**, which
+  starts a shell in a new workspace named `main`, and a `+` button that adds a
+  shell to the active workspace. Both appear only when the page may type.
+
+- **Sign in through your company's proxy, with no wmux token.** A self-hosted
+  wmux behind a sign-in proxy (the `deploy/docker/` setup: Traefik with
+  oauth2-proxy) used to ask for the wmux token address even after the company
+  sign-in. `wmux web --trust-proxy-header/--trust-proxy-user/--trust-proxy-from`
+  now admits the signed-in person directly, but only from the proxy's own
+  fixed address, with exactly one matching identity header and no wmux
+  credential on the request. The browser app opens with no token, and an
+  ended sign-in sends the page back through the sign-in. The container image
+  turns it on from `WMUX_TRUST_PROXY_USER` and `WMUX_TRUST_PROXY_FROM`; the
+  token address keeps working.
+
+- **Answer an agent's browser help request from your phone.** When an agent
+  driving a browser stops for you (a sign-in, a CAPTCHA, a payment step), a
+  paired phone can now list the open requests, follow them as they open and
+  close, and press Done or Cancel. Before, only the wmux window could answer
+  them. The list needs the transcript permission, and answering needs a device
+  whose input grant was set explicitly, as for bot approvals. (#2796)
+
+- **Phones get a notification when an agent needs you in its browser.** When
+  an agent asks you to finish a browser step (a sign-in, a CAPTCHA, a payment
+  confirmation), a paired phone that can answer it now gets a push, and the
+  notification goes away once the request closes. Only a phone with an
+  explicit input grant gets it, on a server running with `--allow-transcript`
+  and `--allow-input`, and only from an app that supports it. Read-only phones
+  get nothing. The notification uses fixed wording and never shows the
+  agent's prompt. Before, the request appeared only on the desktop, or in the
+  phone app if you happened to open it.
+
+- **The phone's browser preview works on wmux Chrome tabs.** A phone that asks for
+  it can now list, view, tap, type into, scroll and navigate the tabs a workspace
+  opened in its own wmux Chrome profile, not only the browser panes inside wmux.
+  A new focus action brings a tab forward on the computer, and only when you tap
+  it. Typing from a browser help card is refused if the tab has moved to another
+  site. Your own Chrome (Live Chrome) is never shown or driven from the phone. (#2803)
+
+- **A scheduled run survives one temporary provider error.** When a run's
+  turn fails on a network error, a provider overload or server error, or a
+  short rate-limit throttle, the run now waits 5 minutes and sends one
+  continue message to the same session. The prompt is not sent again.
+  Before, the run ended failed at once. While it waits, the run list says so,
+  and you are notified only if the run still fails. A second failure ends the
+  run and says it was retried once. Sign-in, billing and usage-limit failures
+  are unchanged. The retry is on by default. Turn it off for every schedule
+  under Settings → Claude integration, or for one schedule in its editor.
+
+- **A Gemini CLI or Qwen Code folder-trust prompt now raises a pane
+  notice, and fan-out reports a worker stuck on it.** Before, only Claude
+  Code's and Codex's "do you trust this folder?" prompts raised a notice.
+  A fan-out worker launched as Gemini CLI or Qwen Code was never watched,
+  so its task showed as working while the agent waited on the prompt. The
+  task is now marked as needing input, and wmux still leaves the answer
+  to you.
+
+- **Room cards name the agent whose trust prompt stopped a worker.** They
+  say "Gemini CLI" or "Qwen Code" where they always said "Claude Code".
+
+- **Usage history per Claude account.** wmux now keeps eight days of each
+  Claude account's 5-hour and weekly usage. It is built only from readings it
+  already receives, so it adds no requests. Upcoming usage views will read
+  from it.
+
+- **Usage reserve.** A new setting, Keep a usage reserve (Settings → Claude
+  integration, off by default), keeps the last 15% of a Claude account's
+  5-hour window for you. While the account is at 85% or more, unattended work
+  that would spend that usage does not start: a scheduled run waits for the
+  reset and runs then if it is still within its grace (otherwise it is
+  missed), a bot's fan-out waits too, and a fan-out asked by an agent in your
+  pane is refused with the reset time. Codex and other agents are not held,
+  and what you type is never held.
+
+- **Compare agent setups across paired PCs (groundwork).** Each paired PC can
+  now report its agent CLI versions, the skills and MCP servers configured, and
+  fingerprints of its global instruction files (never their contents), so wmux
+  can show where two PCs differ. No view yet.
+
+- **Where a commit came from.** wmux now records, on this PC, which pane,
+  agent conversation and task made each commit in a pane's worktree. It
+  learns this from git's own reflog and from git's commit line in that pane,
+  and links a commit to a conversation only when exactly one pane in that
+  worktree showed that line; otherwise it keeps the worktree's panes as
+  possible sources. Nothing is written into the repository, and commit
+  messages are not stored.
+
+- **`pane.list` says which tool call was last refused, and by what.** Each row
+  now carries `lastRefusal` when the pane's Claude had a tool call refused: by
+  a permission rule, a hook, auto mode, the permission mode, the person at the
+  prompt, or the sandbox blocking a network connection. Read from Claude Code's
+  own transcript (2.1.307 or later); it clears once the agent moves on. A
+  fenced bot worker whose turn ended on such a refusal also records that in
+  the factory's fact log, so the bot that started it can tell why it stopped.
+  Before, a refused call left nothing behind but the agent's own reply.
+  (#2823)
+
+- **Says when a Claude turn keeps compacting without editing.** A turn that compacts its context three times without editing anything now shows the "Seems stuck" chip, with the count, so it does not use up the usage limit unseen. wmux still never stops the turn by itself.
+
+### Changed
+
+- **A bot that has read outside text asks before saving your request.**
+  When a bot's conversation has read a pull request, an issue or CI, your
+  own request to set up a routine or to remember something is no longer
+  refused. It goes to an approval card that shows your message and the
+  whole change, and only Approve on that desktop card saves it. A profile
+  change asked there uses the same card. These cards can't be approved
+  from the phone, the "Approve N pending" chip or typed words, and they have
+  no Undo. An older build keeps approvals off while such a request is still
+  in its list. (#2725)
+
+- **Lower memory per window.** The app's own scripts no longer contain
+  characters that need two bytes. Before, a single arrow or Korean letter in a
+  script made the engine store that whole script at two bytes per character.
+  The main process now holds about 4 MB less, and so does each window. Nothing
+  you see changes. (#2750)
+
+- **The background daemon keeps less memory after an output flood.** A burst
+  of terminal output, such as a long build log or `seq` in several panes, used
+  to leave about 50 MB more in the daemon's memory footprint for minutes after
+  it ended. The daemon now runs with a smaller V8 young generation. It drains
+  the same output as fast or faster and settles about 50 MB lower. (#2753)
+
+- **Each window loads only its own language.** The app used to load all 23
+  translations into every window at startup. Now it loads English and the
+  language you use, and fetches any other language when you switch to it.
+  This cuts about 2 MB of JavaScript from each window's startup and about
+  2 MB from its memory. The window now opens in your language from the first
+  frame; before, it showed English for a moment. (#2756)
+
+- **wmux's own glab calls no longer send glab usage telemetry.** The glab processes wmux starts for GitLab merge requests (list polls, sign-in checks, opening a merge request) now run with `GLAB_SEND_TELEMETRY=0`, so they no longer post usage events to your GitLab host. glab you run yourself is unchanged. (#2759)
+
+- **Lower memory for the background service, the command-line tool and the
+  agent tool server.** Like the app's windows before them, their scripts no
+  longer contain characters that need two bytes, so the engine stores each at
+  one byte per character. The background service holds about 8 MB less and
+  each agent tool server about 3 MB less. Nothing you see changes. (#2760)
+
+- **An approved bot act that never got going now ends after a day.** An approved comment, issue, close or release whose reads before the write kept failing used to be tried again on every sweep, with its card still saying approved and no word to anyone. If no try has reached the write 24 hours after you approved it, wmux now stops. The card says "The approval is more than a day old and nothing was done", and the bot is told to ask again if it is still wanted. An act that may already have reached GitHub is still settled by reading GitHub. (#2765)
+
+- On Windows, the terminal now runs on the Rust engine by default when the installed build includes it, with flatter memory over long sessions. A saved engine choice is kept, and Settings › Terminal engine can switch back to Node. (#2806)
+
+- **Unattended bot workers run inside a fence.** A bot worker in Bypass or Auto mode now writes only inside its task folder and its own temp folder, cannot read named credential files or wmux's own secrets, does not get the wmux tools that run code, type into other panes, open panes, start more workers or drive the desktop, stays on the branch it started on, and runs its commands in the OS sandbox where the computer has one (macOS; Linux with bubblewrap); elsewhere it gets the file guard and the credential denies and its pane says the fence is weaker. Settings → Roles & fan-out can turn the fence off per workspace. (#2812)
+
+- **The worker fence adds write protection for other worktrees' git
+  metadata on macOS.** A fenced bot worker's commands could write the git
+  folder of a worktree added after the worker started; the fence now closes
+  those by pattern too, once its self-test has shown the patterns hold on
+  this Mac's Claude Code. Otherwise it keeps to the worktrees that existed at
+  launch, as before, and the worker keeps its tools. (#2825)
+
+- **The phone says when a launch was refused by the worker fence.** A phone-started launch into a fenced unattended bot worker now answers `launch-unsupported` with reason `worker-fence`, so the app can say it restarts only from the desktop app, instead of showing a generic line.
+
+### Fixed
+
+- **Add bot opens on the workspace you are working in.** On the Bots page,
+  "+" › Add bot and Add team opened on the workspace of the conversation
+  shown, so a bot meant for the current workspace had to be moved there by
+  hand. They now open on the current workspace when a bot can join it.
+
+- **Copilot alone counts as a set-up agent.** With GitHub Copilot CLI as the
+  only agent installed, the sidebar kept showing "Agent not set up". It now
+  counts Copilot, like the other agents with an install card.
+
+- **A Cursor CLI pane no longer reads as Claude.** Cursor CLI runs Claude
+  Code's hooks from `.claude/settings.json`, so its pane could be labelled
+  Claude. A live `cursor-agent` process now names the pane Cursor CLI.
+
+- **Settings says why window glass stays opaque on Windows for some themes.**
+  A theme whose text cannot stay readable over glass runs opaque on Windows,
+  but Settings › Appearance › Window glass still offered Soft and Clear as if
+  they applied. The row now says the theme stays opaque so its text stays
+  readable. Your choice is kept, can still be changed, and applies again on a
+  theme that can keep glass.
+
+- **A chat gives way when you resume its conversation in a terminal.** A
+  chat-only chat already refused to open a conversation a terminal held, but
+  you could still resume a conversation an active chat held from a terminal,
+  with `claude --resume`, `codex resume` or the `/resume` picker. That left
+  two writers on one conversation. Now the terminal wins: the chat stops and
+  says the conversation continued in a terminal. When wmux knows exactly
+  which pane that terminal is in, it also offers to show that pane. Nothing
+  you type in the terminal is refused. Applies to Claude Code and Codex.
+  (#2737)
+
+- **Agents started in a background workspace get answers to their terminal
+  queries.** With hidden pane rendering paused, a pane you weren't looking at
+  left terminal queries unanswered until you showed it. Claude Code started
+  there, as fan-out and role panes are, gave up waiting and ran the whole
+  session without its enhanced keyboard support. A hidden pane now answers
+  right away. (#2746)
+
+- **Windows: a fast restart no longer starts a second daemon, and shutdown
+  catches a daemon that is still starting.** For up to a second and a half
+  after launch, a starting daemon had no pid file. A second start in that
+  window (the app and `wmux daemon start`, or a respawn) took it for dead and
+  launched another daemon, and "Shut down wmux completely" left the starting
+  one running. wmux now records the daemon the moment it is launched, so a
+  second start waits for it and shutdown finds it. A daemon that crashes
+  while starting no longer leaves a stale record behind. (#2749)
+
+- **A program asking the terminal something no longer counts as you typing.**
+  When a program queried the terminal (device attributes, cursor position,
+  kitty keyboard flags, colours), the terminal's automatic answer was taken
+  for a keystroke. It cleared the pane's resume hint, even in a pane nobody
+  was looking at, and reset wmux's record of when you last typed there. The
+  answers still reach the program; they just no longer count as input.
+  (#2754)
+
+- **Fan-out tasks run the role bindings their approval showed.** A role
+  rebound in Settings while a fan-out's dependent tasks wait no longer changes
+  what those tasks launch, and the approval now lists every setting a role
+  launches with (fresh context, tool level, skipped permission prompts).
+  (#2755)
+
+- **A long Multi Task PR body now opens a GitHub PR on Windows.** When a task PR's body ran past about 32,000 characters, it failed with `spawn ENAMETOOLONG` before GitHub CLI even started, because the body was passed on the command line. `gh pr create` now reads the body from standard input, so its length no longer matters to Windows. GitLab merge requests are not covered by this fix yet. (#2761)
+
+- **Long Multi Task merge request descriptions now open on GitLab from Windows.** For a task whose repository is on GitLab, a description past about 32,000 characters failed with `spawn ENAMETOOLONG` before GitLab CLI started, because it was passed on the command line. The merge request fields now go to `glab` on standard input, so the description's length no longer matters to Windows. (#2763)
+
+- **Long pull request comments, reviews and squash messages now post from Windows.** A line comment, reply, review or squash-merge body past about 32,000 characters failed with `spawn ENAMETOOLONG` before GitHub CLI started, because it was passed on the command line. These bodies now go to `gh` on standard input. (#2767)
+
+- **Qwen Code's shell and edit approvals are caught even when drawn before
+  wmux knew the pane was Qwen.** A permission prompt Qwen drew while the pane
+  still counted as another agent's (for example right after that agent
+  exited) was never marked as needing you. wmux now reads the prompt off the
+  screen once it learns the pane is Qwen, for shell commands, file writes and
+  edits. (#2768)
+
+- **A refused release's draft is no longer left behind after a quit.** When an
+  approved release was refused, wmux wrote the refusal first and only then
+  deleted the draft it had made on GitHub, or kept it and said so. If the app
+  quit between the two steps, or GitHub did not answer in that moment, the
+  draft stayed on GitHub and nobody was told. Now that pending decision is
+  saved with the refusal, and a later check finishes it. If the draft is kept,
+  the refusal says so and one more card appears in the thread. If GitHub
+  keeps not answering, wmux stops once a day and a dozen checks have passed
+  since the first unanswered one, and tells you the draft may still be
+  there. The bot that asked is told to wait until the draft is settled. A repository on GitHub Enterprise Server, whose workflow
+  runs may not name their file, now has its release checks matched by
+  workflow id. (#2775)
+
+- **A pane waiting on a folder-trust screen shows that it needs you.** When Claude Code or Codex opens in a new folder and asks whether to trust it, the pane now reads Needs you in Fleet and the sidebar. Before, it read Running · Turn in progress, so the question went unnoticed. (#2776)
+
+- **A long GitLab squash commit message no longer fails on Windows.** Squash-merging a GitLab merge request from wmux passed the commit message to `glab` on the command line, so a message past about 32,000 characters failed with `spawn ENAMETOOLONG` before GitLab CLI started. wmux's GitLab writes now send their fields to `glab` as JSON on standard input. (#2778)
+
+- **Starting the daemon right after it crashed no longer refuses.** A start
+  that ran while the old daemon was still shutting down could see it as
+  running, then fail to read it, and treat it as a live daemon it could not
+  verify. `wmux daemon start` refused with "alive but image lookup failed",
+  and the app asked whether to clean up. wmux now checks whether that process
+  has already exited (on Windows, by asking for its process handle first). A
+  daemon that has exited is cleaned up and a new one starts. A daemon that is
+  still running is checked as before. (#2779)
+
+- **Agents' folder-trust prompts are left to you.** When Claude Code or Codex
+  stops on its "trust this folder" prompt, messages and keys forwarded from
+  other agents or automation (send_message, task deliveries, `wmux send`,
+  `wmux send-key`, Escape included) no longer reach it, in any workspace
+  autonomy setting. The sender is told the pane is on a folder-trust prompt
+  and to answer it in the pane. Ordinary menus and approval dialogs work as
+  before. A pane whose session is still detached in this window (not yet
+  shown or attached) is not covered yet: its screen reads blank until the
+  forwarded key or text attaches it.
+
+- **Bot room logs and the bot handoff queue survive a brief file lock on
+  Windows.** When an antivirus scan or another reader held one of these files
+  for a moment, saving it failed on the spot, and a failed save could leave
+  the file missing until the next save. wmux now waits briefly and tries
+  again, and if the save still fails it puts the previous version back, as it
+  already did for its JSON state files. The same applies to scrollback saved
+  while no background daemon is connected, and the brief retry now also covers
+  the record wmux keeps of which Codex conversation a pane is showing. (#2783)
+
+- **Port chips in the sidebar no longer stop updating after a stuck port scan
+  on macOS and Linux.** A port scan (`ps` or `lsof`) that runs past its time
+  limit is now killed, and polling carries on. Before, the chips could freeze
+  until the app restarted. A scan process that the system will not let exit
+  at all (stuck inside the kernel) still pauses port updates until restart,
+  as before. (#2784)
+
+- **A scrollback bookmark (Ctrl+M) stays on the line it was set on.** Before,
+  every line of output that arrived while you were scrolled up moved the dot
+  one row off the bookmarked text, and a full scrollback dragged it down as old
+  lines were trimmed. A bookmark is now dropped once its line leaves the
+  scrollback, instead of pointing at whatever text took its place. It is also
+  lost when the pane's terminal is recreated, when a screen erase such as
+  Ctrl+L clears its row, and when the pane is reset at startup or on exit.
+  When a hidden pane is redrawn on reveal, a bookmark comes back only where
+  the same line, with the same lines around it, can still be found; otherwise
+  it is dropped. Bookmarks don't survive a redraw while a full-screen app is
+  open. In a full-screen app, Ctrl+M used to report "Bookmark added" and put a
+  dot on the top row; it now reaches the app as Enter. (#2785)
+
+- **wmux starts on minimal Linux installs.** The Linux .deb and .rpm now
+  require the ALSA sound library, so wmux starts on minimal installs. Before,
+  the .deb listed ALSA only as a recommendation and the .rpm not at all, so
+  ALSA arrived only when another package happened to pull it in. Installing
+  the .deb with `--no-install-recommends` on a system where nothing did (for
+  example an Ubuntu 24.04 container that already had `libglib2.0-bin`) left
+  `libasound.so.2` missing, and wmux could not start. (#2786)
+
+- **A browser help request on a dedicated Chrome profile now names only a tab in its own workspace.** Asking for help with a tab another workspace opened, or one with no recorded workspace, is refused, as it already was for panes on the built-in browser. The window's Done and Cancel for a help request also answer only the wmux window.
+
+- After a worktree is removed, a pane that ran Claude or Codex there now says
+  where the conversation was, instead of opening an empty picker in the home
+  folder. When the pane's shell, the conversation id and the folder path allow
+  it, it also offers the exact resume command to copy.
+
+- **`/clear` no longer leaves a pane "running".** Clearing an idle Claude
+  Code session kept its running dot and its row in Fleet's Running section
+  until the next prompt. (#2791)
+
+- In the browser app, a copy the browser refused (for example from Claude Code
+  on Safari or iPad) is no longer silently lost: a hint appears, and clicking
+  it finishes the copy.
+
+- **With the Rust terminal engine, the daemon's memory no longer grows while
+  panes stream output.** Each busy read leaked a small wake record; an 8-hour
+  Windows soak grew ~20 MiB an hour. (#2793)
+
+- Answering a Claude Code question from the phone now works when the options
+  show a preview, or wrap in a narrow pane.
+
+- A restored pane no longer shows its recovery pill over a live Claude Code
+  question whose key hint wraps before "to cancel" in a narrow pane.
+
+- **A Claude session started outside wmux no longer takes over a pane in the same folder.** Hooks from a session in another terminal, or a background session, carry no pane identity and were placed on a pane open in that folder: the pane's resume binding moved to the other conversation, and its status showed that session's turns (running, then error). Hooks placed by workspace or folder now reach a pane only when they come from that pane's own agent process or continue its conversation, or when the pane has no conversation yet and sits in exactly that folder. A claude reached through a tmux server started outside wmux, or over ssh, keeps its first bind but not a later new session; passing `WMUX_PTY_ID` and `WMUX_WORKSPACE_ID` through (tmux `update-environment`, ssh `SendEnv`) makes its hooks exact. (#2799)
+
+- **Automated input stops at a folder-trust prompt in a pane that is not on
+  screen.** wmux already refused to type or press keys into an agent's "do
+  you trust this folder?" prompt, but only when the pane's screen could be
+  read. A pane whose session had not started on this side yet, a parked
+  pane, or a recovered pane not yet shown let `terminal_send`,
+  `terminal_send_key` and agent-to-agent deliveries through. wmux now asks
+  the daemon whether the session's own output shows the prompt. If it does,
+  the input is refused, Escape included. If the daemon cannot tell, text and
+  Enter are refused, and Escape and ctrl+c still go through. Each refusal
+  says whether anything already reached the pane. When the daemon cannot
+  answer at all (it is not running, predates the check, or does not reply
+  in time), the check stands aside as before and logs that it did.
+
+- **Everything wmux types on its own now stops at an agent's "do you trust
+  this folder?" prompt.** This covers scheduled prompts, automation runs,
+  channel wake nudges, the fan-out caller nudge, the usage-limit continue,
+  auto-resume, a new pane's startup line, bot worker resumes and fan-out
+  launch lines. When a pane's screen cannot rule the prompt out, these wait
+  and try again. If they run out of time, they report it as they report any
+  failure. A scheduled prompt shows "waiting: pane at folder-trust prompt".
+
+- **Things you ask for stop only at the prompt itself.** This covers chat
+  sends, Stop and Rewind, the Resume pill and chip, a task re-fire, Continue
+  on another account and a manual usage-limit Continue. Each says why
+  nothing was typed.
+
+- **A scheduled prompt's last result** is kept when the schedules are read
+  back.
+
+- **Scheduled prompts and automation runs reach a native Claude started by
+  its version binary's path** (`~/.local/share/claude/versions/<version>`),
+  or one that re-execs into a new version. Such a pane used to answer
+  "unavailable". The same holds for grok's downloaded binaries. This applies
+  on macOS and Linux.
+
+- **wmux no longer types into the Gemini CLI or Qwen Code folder-trust
+  prompt.** wmux already refused to send messages, keys or Enter into the
+  Claude Code and Codex "do you trust this folder?" prompts. It did not
+  recognise the boxed prompt that Gemini CLI and Qwen Code draw. So a
+  forwarded Enter could trust the folder for you: Gemini then restarted, and
+  Qwen's prompt was treated as an ordinary approval menu. wmux now
+  recognises both prompts in panes of any width, including when the choices
+  are cut short or the cursor has moved. Answering them is left to you.
+  When a pane is too narrow to read the choices, automated input waits
+  instead of going through.
+
+- **Idle panes on the Rust terminal engine release their scrollback memory.**
+  A pane left idle for the hibernation window (24 hours by default) moves its
+  scrollback to disk and frees it from memory, and gets it back on the next
+  read or output. Until now this only happened on the Node engine; panes on
+  the Rust engine kept their full buffer, up to 8 MB each, for as long as they
+  stayed open.
+
+- **An approval notice could be missed when the terminal output was split
+  inside a colour code.** If a read ended inside such a code, the row that
+  finished the question right after it was taken for old output and no
+  notice was raised. This affected every agent.
+
+- **The close-tab confirm no longer lingers after its tab is gone.** When a tab with its close confirm open was closed another way (its pane closed, an MCP call, the tab's x, or its shell exiting), the dialog stayed on screen with a generic title and the close-tab shortcut stopped working until it was dismissed. The confirm now closes with its tab, follows a tab moved to another pane, and hands the keyboard back to the terminal. (#2826)
+
+- **Chat view works for Claude Code in a WSL terminal.** A WSL pane's Chat
+  view used to stay on "Conversation unavailable" with the message box
+  disabled, because Claude keeps its conversation inside the Linux distro
+  where wmux could not read it. wmux now reads it through the distro's
+  Windows share, so the Chat view shows the history and the live turn, you
+  can send messages from Chat, and a pending approval shows its "Answer in
+  Terminal" notice. The phone and web Chat show these panes too. (#2828)
+
 ## [4.11.0] — 2026-10-26
 
 ### Added
