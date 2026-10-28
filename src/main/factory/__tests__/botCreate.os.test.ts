@@ -76,8 +76,12 @@ describe('resolveBotRepo', () => {
 
   it('refuses a checkout without an origin, or whose origin names no owner/repo', async () => {
     const top = ok('/src/app\n');
-    expect(await resolveBotRepo('/src/app', { git: fakeGit(top, fail), realpath: (p) => p })).toMatchObject({ ok: false, code: 'no_remote' });
-    expect(await resolveBotRepo('/src/app', { git: fakeGit(top, ok('/srv/git/app.git\n')), realpath: (p) => p })).toMatchObject({ ok: false, code: 'no_remote' });
+    const none = await resolveBotRepo('/src/app', { git: fakeGit(top, fail), realpath: (p) => p });
+    expect(none).toMatchObject({ ok: false, code: 'no_remote' });
+    // No origin at all is added; an origin naming no host is changed, so the
+    // refusal says which (the page offers set-url instead of add).
+    expect(none.ok ? null : none.originSet).toBeUndefined();
+    expect(await resolveBotRepo('/src/app', { git: fakeGit(top, ok('/srv/git/app.git\n')), realpath: (p) => p })).toMatchObject({ ok: false, code: 'no_remote', originSet: true });
     // The refusal says what origin has to be, not only that it is wrong: the
     // folder picker is the only way to link, so the fix is in the repository.
     for (const url of [fail, ok('/srv/git/app.git\n')]) {
