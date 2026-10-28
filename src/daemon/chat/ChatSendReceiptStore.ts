@@ -9,6 +9,9 @@ import {
 } from './chatBridge';
 
 const MAX_FILE_BYTES = 4 * 1024 * 1024;
+/** Longest identity a receipt row holds; the send route refuses longer ones before any lookup. */
+export const RECEIPT_AGENT_SESSION_ID_MAX = 256;
+export const RECEIPT_HISTORY_EPOCH_MAX = 64;
 const RESULTS: readonly string[] = ['sent', 'busy', 'blocked', 'unconfirmed', 'session_changed', 'unavailable', 'error'];
 const EFFECTS: readonly string[] = ['none', 'uncertain', 'submitted'];
 const TAGS: readonly string[] = [
@@ -53,7 +56,8 @@ export interface ChatSendReceipt {
 /** What a dispatch that never reported back is, after a daemon restart: maybe typed. */
 const RESTART_UNCERTAIN: StoredChatOutcome = { result: 'unconfirmed', effect: 'uncertain', error: 'delivery-unconfirmed' };
 
-export type ChatReceiptInsert = 'inserted' | 'exists' | 'full' | 'persist-failed';
+/** `invalid`: a row the loader would reject; never written, so the file always loads. */
+export type ChatReceiptInsert = 'inserted' | 'exists' | 'full' | 'persist-failed' | 'invalid';
 export type ChatReceiptIdentity = Pick<ChatSendReceipt, 'paneId' | 'fingerprint' | 'agentSessionId' | 'historyEpoch'>;
 
 const hash = (parts: readonly string[]): string => createHash('sha256').update(JSON.stringify(parts)).digest('hex');
@@ -68,7 +72,7 @@ function validOutcome(value: unknown): value is StoredChatOutcome {
     (row.blockedBy === undefined || row.blockedBy === 'approval' || row.blockedBy === 'terminal') &&
     (row.limit === undefined || row.limit === 'units' || row.limit === 'bytes') &&
     (row.maxSendBytes === undefined || Number.isSafeInteger(row.maxSendBytes) && Number(row.maxSendBytes) > 0) &&
-    optionalString(row.agentSessionId, 256) && optionalString(row.historyEpoch, 64) &&
+    optionalString(row.agentSessionId, RECEIPT_AGENT_SESSION_ID_MAX) && optionalString(row.historyEpoch, RECEIPT_HISTORY_EPOCH_MAX) &&
     (row.queued === undefined || typeof row.queued === 'boolean') && optionalString(row.gate, 64);
 }
 
@@ -77,7 +81,8 @@ function validEntry(key: string, value: unknown): value is ChatSendReceipt {
   const row = value as Record<string, unknown>;
   return Number.isSafeInteger(row.createdAt) && typeof row.paneId === 'string' && row.paneId.length > 0 && row.paneId.length <= 256 &&
     typeof row.fingerprint === 'string' && /^[a-f0-9]{64}$/.test(row.fingerprint) &&
-    typeof row.agentSessionId === 'string' && row.agentSessionId.length <= 256 && optionalString(row.historyEpoch, 64) &&
+    typeof row.agentSessionId === 'string' && row.agentSessionId.length <= RECEIPT_AGENT_SESSION_ID_MAX &&
+    optionalString(row.historyEpoch, RECEIPT_HISTORY_EPOCH_MAX) &&
     (row.state === 'pending' && row.outcome === undefined || row.state === 'final' && validOutcome(row.outcome));
 }
 
@@ -150,11 +155,15 @@ export class ChatSendReceiptStore {
     const now = this.now();
     const retained = Object.fromEntries(Object.entries(this.entries).filter(([, row]) => row.createdAt > now - CHAT_MESSAGE_RETENTION_MS));
     if (Object.keys(retained).length >= this.limit) return 'full';
-    const next = { ...retained, [this.key(owner, clientMessageId)]: {
+    const key = this.key(owner, clientMessageId);
+    const row = {
       createdAt: chatIdTime(clientMessageId), paneId: receipt.paneId, fingerprint: receipt.fingerprint,
       agentSessionId: receipt.agentSessionId, ...(receipt.historyEpoch !== undefined ? { historyEpoch: receipt.historyEpoch } : {}),
       ...verdict,
-    } };
+    };
+    // The loader's own check: a row it would reject makes the whole store fail to load.
+    if (!validEntry(key, row)) return 'invalid';
+    const next = { ...retained, [key]: row };
     try { this.save(next); } catch { return 'persist-failed'; }
     this.entries = next;
     return 'inserted';

@@ -25,7 +25,9 @@ import { inResumeCwd, type ResumeShell } from './v2/handoff';
 import { guardBotWorkerLaunch, type WorkerFenceRefused } from './botWorkerLaunchGuard';
 import type { TerminalChatFailure, TerminalChatService } from '../transcript/TerminalChatService';
 import type { ChatSessionService } from './ChatSessionService';
-import { ChatSendReceiptStore, type StoredChatOutcome } from './ChatSendReceiptStore';
+import {
+  ChatSendReceiptStore, RECEIPT_AGENT_SESSION_ID_MAX, RECEIPT_HISTORY_EPOCH_MAX, type ChatReceiptInsert, type StoredChatOutcome,
+} from './ChatSendReceiptStore';
 import { ChatCancelReceiptStore } from './ChatCancelReceiptStore';
 import { createChatCancelObserver, type CancelProbe, type ChatCancelEvent, type WatchedCancel } from './chatCancelObserver';
 import { turnEndAfter, type TranscriptBoundary } from '../transcript/chatAgentStatus';
@@ -839,6 +841,10 @@ export function createChatBridge<P extends ChatPane>(deps: NativeChatBridgeDeps<
     outcome.effect === 'submitted' ? `submitted queued=${outcome.queued === true}`
       : `${outcome.effect === 'none' ? 'refused' : 'uncertain'} ${outcome.error ?? outcome.result ?? 'error'} at ${at}`;
 
+  /** What a send answers when its receipt could not be stored. */
+  const storeRefusal = (inserted: Exclude<ChatReceiptInsert, 'inserted' | 'exists'>): ChatSendTag =>
+    inserted === 'full' ? 'message-history-full' : inserted === 'invalid' ? 'invalid-chat-request' : 'chat-persist-failed';
+
   const sendWith = async (req: ChatSendRequest, dedup: boolean, managedRequestId = req.clientMessageId): Promise<ChatSendOutcome> => {
     const { clientMessageId, owner } = req;
     const idCheck = checkChatId(clientMessageId, now(), CHAT_MESSAGE_RETENTION_MS);
@@ -879,7 +885,12 @@ export function createChatBridge<P extends ChatPane>(deps: NativeChatBridgeDeps<
           ...(req.historyEpoch !== undefined ? { historyEpoch: req.historyEpoch } : {}),
         }, { ...outcome, gate });
         if (stored === 'exists') return early(store.lookup(owner, clientMessageId)) ?? refuse(clientMessageId, 'message-id-conflict');
-        if (stored !== 'inserted') deps.log('warn', `[chat] send ${clientMessageId} pane=${req.id} refusal receipt not stored (${stored})`);
+        // Unrecorded, it would read `unknown` and invite a same-id retry: answer as the pending insert does.
+        if (stored !== 'inserted') {
+          const error = storeRefusal(stored);
+          traceSend(req, `refused ${error} at receipt-store gate=${gate}`);
+          return refuse(clientMessageId, error);
+        }
       }
       traceSend(req, `refused ${outcome.error} at ${gate}`);
       return { clientMessageId, replayed: false, ...outcome };
@@ -887,6 +898,9 @@ export function createChatBridge<P extends ChatPane>(deps: NativeChatBridgeDeps<
     if (typeof req.text !== 'string' || !req.text.trim()) return invalid('invalid-chat-request', { result: 'error', detail: 'text' });
     if (req.text.length > CHAT_SEND_MAX_UNITS) return invalid('text-too-long', { result: 'error', limit: 'units' });
     if (!req.agentSessionId) return invalid('invalid-chat-request', { result: 'error', detail: 'agentSessionId' });
+    // Longer than a receipt row holds: no daemon identity is, and the store must stay loadable.
+    if (req.agentSessionId.length > RECEIPT_AGENT_SESSION_ID_MAX) return invalid('invalid-chat-request', { result: 'error', detail: 'agentSessionId' });
+    if ((req.historyEpoch?.length ?? 0) > RECEIPT_HISTORY_EPOCH_MAX) return invalid('invalid-chat-request', { result: 'error', detail: 'historyEpoch' });
 
     const resolution = await resolve(req.id);
     if (resolution.source === 'none') return gateRefusal('no-conversation', { effect: 'none', error: 'no-conversation' });
@@ -940,10 +954,10 @@ export function createChatBridge<P extends ChatPane>(deps: NativeChatBridgeDeps<
         ...(req.historyEpoch !== undefined ? { historyEpoch: req.historyEpoch } : {}),
       });
       if (inserted === 'exists') return early(store.lookup(owner, clientMessageId)) ?? refuse(clientMessageId, 'message-id-conflict');
-      if (inserted === 'full' || inserted === 'persist-failed') {
+      if (inserted !== 'inserted') {
         // The desktop sends without dedup, as when the store failed to load.
         if (owner !== 'desktop') {
-          const error = inserted === 'full' ? 'message-history-full' : 'chat-persist-failed';
+          const error = storeRefusal(inserted);
           traceSend(req, `refused ${error} at receipt-store`);
           return refuse(clientMessageId, error);
         }

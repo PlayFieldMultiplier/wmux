@@ -428,6 +428,31 @@ describe('send', () => {
     expect(f.bridge.receipt('desktop', 'pane', requestId).state).toBe('unknown');
   });
 
+  it('refuses an identity longer than a receipt holds before any gate, and the store still loads and sends', async () => {
+    const f = fixture(); f.liveClaude();
+    const long = phoneSend('x', { historyEpoch: 'h'.repeat(65) });
+    expect(await f.bridge.send(long)).toMatchObject({ error: 'invalid-chat-request', detail: 'historyEpoch', effect: 'none' });
+    expect(await f.bridge.send(phoneSend('x', { agentSessionId: 'a'.repeat(257) })))
+      .toMatchObject({ error: 'invalid-chat-request', detail: 'agentSessionId', effect: 'none' });
+    expect(f.bridge.receipt('device:a', 'pane', long.clientMessageId).state).toBe('unknown');
+    // A daemon restart loads the store, and the next send goes through.
+    const restarted = createChatBridge({ ...f.deps, receipts: new ChatSendReceiptStore(f.dir) });
+    expect(await restarted.send(phoneSend())).toMatchObject({ result: 'sent', effect: 'submitted' });
+  });
+
+  it('answers a refusal it could not record as the store failure, not the pane refusal', async () => {
+    const f = fixture(); f.liveClaude();
+    f.state.agent.agentVerified = false;
+    const full = createChatBridge({ ...f.deps, receipts: new ChatSendReceiptStore(fs.mkdtempSync(path.join(f.dir, 'x')), { limit: 0 }) });
+    const req = phoneSend();
+    expect(await full.send(req)).toMatchObject({ error: 'message-history-full', effect: 'none' });
+    const failing = createChatBridge({ ...f.deps, receipts: new ChatSendReceiptStore(fs.mkdtempSync(path.join(f.dir, 'y')), { write: () => { throw new Error('disk'); } }) });
+    expect(await failing.send(phoneSend())).toMatchObject({ error: 'chat-persist-failed', effect: 'none' });
+    expect(f.log.mock.calls.filter(([, m]) => String(m).includes(req.clientMessageId)))
+      .toEqual([['info', `[chat] send ${req.clientMessageId} pane=pane refused message-history-full at receipt-store gate=send-capability`]]);
+    expect(f.written).toEqual([]);
+  });
+
   it('never reports a send that wrote anything as none, whatever the delivery answers after the write', async () => {
     const f = fixture(); f.liveClaude();
     for (const result of ['busy', 'blocked', 'unconfirmed', 'unavailable', 'session_changed', 'error'] as const) {

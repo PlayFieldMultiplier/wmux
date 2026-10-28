@@ -114,4 +114,16 @@ describe('ChatSendReceiptStore', () => {
     fs.writeFileSync(file, JSON.stringify(disk));
     expect(new ChatSendReceiptStore(dir, { now: () => NOW }).view('device:a', 'pane-1', id(1)).state).toBe('refused');
   });
+
+  it('never writes a row its own loader would reject, so the file always loads', () => {
+    const dir = tempDir();
+    const store = new ChatSendReceiptStore(dir, { now: () => NOW });
+    expect(store.insertFinal('device:a', id(1), { ...receipt(), historyEpoch: 'h'.repeat(65) }, { effect: 'none', error: 'session-changed' }))
+      .toBe('invalid');
+    expect(store.insertPending('device:a', id(2), { ...receipt(), agentSessionId: 'a'.repeat(257) })).toBe('invalid');
+    expect(store.insertPending('device:a', id(3), receipt())).toBe('inserted');
+    const reloaded = new ChatSendReceiptStore(dir, { now: () => NOW });
+    expect(reloaded.view('device:a', 'pane-1', id(1)).state).toBe('unknown');
+    expect(reloaded.view('device:a', 'pane-1', id(3)).state).toBe('uncertain');
+  });
 });

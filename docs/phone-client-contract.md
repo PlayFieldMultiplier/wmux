@@ -6319,6 +6319,8 @@ with **no** `cursor`. Drop the rows and read again without one.
   Never POST an entry older than 24 h minus 10 minutes; settle it as
   "check Terminal".
 - `historyEpoch` must equal the current one; a mismatch is `session-changed`.
+  An `agentSessionId` over 256 or a `historyEpoch` over 64 UTF-16 code units is
+  no daemon identity and is refused as `400 invalid-chat-request`.
 - `text`: non-blank, at most 16,000 UTF-16 code units (`String.utf16.count`,
   not graphemes). When `chat.maxSendBytes` is present, also at most that many
   UTF-8 bytes; the daemon's own measurement of the exact OpenCode request stays
@@ -6358,7 +6360,8 @@ final refusal: its receipt reads `refused`, and a re-POST of the same id replays
 it (`replayed:true`) instead of checking the pane again; a new Send mints a new
 id as usual. Refusals of the request itself (`invalid-chat-request`,
 `text-too-long`, `message-id-*`) and the store's own failures
-(`message-history-full`, `chat-persist-failed`) store nothing. Daemons before
+(`message-history-full`, `chat-persist-failed`) store nothing; a pane refusal
+the store cannot record answers with that store failure instead. Daemons before
 this stored nothing for those pane refusals either, so their receipt read
 `unknown`. No response field changed.
 
