@@ -10120,7 +10120,8 @@ async function main(): Promise<void> {
     if (state.alive && state.slug && resumeGrammarFor(state.slug)) {
       const pid = agentProcessTracker.pidFor(sessionId);
       if (pid !== undefined) bindFromAgentCommandLine?.(sessionId, state.slug, pid);
-    } else if (state.alive && state.slug) {
+    }
+    if (state.alive && state.slug && !resumeGrammarFor(state.slug)) {
       // No line to read, but its launch time still matters (Hermes binds the
       // conversation started after it).
       const pid = agentProcessTracker.pidFor(sessionId);
