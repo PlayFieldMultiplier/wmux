@@ -66,3 +66,17 @@ it('opens the full text on click and closes it on Escape as an owned dialog', as
   expect(document.querySelector('.settings-info-tip')).toBeNull();
   expect(owned).toHaveBeenLastCalledWith(-1);
 });
+
+it('closes a pinned tip on a second click while the pointer is still over the button', async () => {
+  await render(() => undefined);
+  const button = host.querySelector<HTMLButtonElement>('.settings-info')!;
+
+  await act(async () => button.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })));
+  expect(button.getAttribute('aria-expanded')).toBe('true');
+  await act(async () => button.click());
+  expect(button.getAttribute('aria-expanded')).toBe('true');
+
+  await act(async () => button.click());
+  expect(button.getAttribute('aria-expanded')).toBe('false');
+  expect(document.querySelector('.settings-info-tip')).toBeNull();
+});

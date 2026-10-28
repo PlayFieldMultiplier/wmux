@@ -158,7 +158,17 @@ function InfoTip({ text }: { text: string }) {
         aria-label={t('settings.moreInfo')}
         aria-expanded={open}
         aria-controls={open ? tipId : undefined}
-        onClick={() => setPinned((v) => !v)}
+        onClick={() => {
+          // A click on a pinned tip closes it even while hover or keyboard
+          // focus would otherwise hold it open.
+          if (pinned) {
+            setPinned(false);
+            setHovered(false);
+            setFocused(false);
+          } else {
+            setPinned(true);
+          }
+        }}
         onMouseEnter={enter}
         onMouseLeave={leave}
         onFocus={(e) => { if (isKeyboardFocus(e.currentTarget)) setFocused(true); }}
