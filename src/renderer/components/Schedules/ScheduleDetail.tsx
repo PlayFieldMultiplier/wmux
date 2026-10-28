@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useStore } from '../../stores';
 import { useT } from '../../hooks/useT';
-import { AUTOMATION_DEFAULTS, type Automation, type AutomationLingeringSession, type AutomationRun } from '../../../shared/automation';
+import { AUTOMATION_DEFAULTS, isBreakerPaused, type Automation, type AutomationLingeringSession, type AutomationRun } from '../../../shared/automation';
 import { isLiveRun, isPermissionReset, sortRunsNewestFirst } from '../../stores/selectors/schedules';
 import { surfacePtyIds } from '../../stores/selectors/sidebarSeen';
 import Button from '../ui/Button';
@@ -106,6 +106,7 @@ export default function ScheduleDetail({ automation: a, accounts, onEdit, onDisc
     max: Math.round((a.policy.maxRunMinutes ?? AUTOMATION_DEFAULTS.maxRunMinutes) / 60 * 10) / 10,
   });
   const modeLabel = t(`schedules.mode.${a.permission.mode}`);
+  const streak = a.failureStreak;
   const next = a.enabled && a.nextRunAt !== null
     ? t('schedules.nextRunLabel', { time: formatWhen(a.nextRunAt) })
     : t('schedules.statusOff');
@@ -195,6 +196,18 @@ export default function ScheduleDetail({ automation: a, accounts, onEdit, onDisc
           >
             {t('schedules.regrant')}
           </Button>
+        </div>
+      )}
+
+      {/* The switch above is the action: turning the schedule back on clears the streak. */}
+      {streak && isBreakerPaused(a) && (
+        <div className="ui-notice ui-row" data-schedule-failure-paused>
+          <div className="ui-row-text">
+            <p className="ui-row-title">{t('schedules.failurePausedTitle')}</p>
+            <p className="ui-row-detail">
+              {t('schedules.failurePausedNote', { count: streak.count, reason: t(`schedules.reason.${streak.reason}`) })}
+            </p>
+          </div>
         </div>
       )}
 

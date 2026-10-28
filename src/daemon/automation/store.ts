@@ -20,9 +20,11 @@ import {
   AUTOMATION_DEFAULT_SETTINGS,
   AUTOMATION_DEFAULTS,
   AUTOMATION_FINAL_RUN_STATES,
+  isFailureReason,
   type Automation,
   type AutomationAttention,
   type AutomationAttentionKind,
+  type AutomationFailureStreak,
   type AutomationRun,
   type AutomationRunDetail,
   type AutomationRunReason,
@@ -68,9 +70,25 @@ const RUN_DETAILS: ReadonlySet<string> = new Set<AutomationRunDetail>([
   'retry_blocked',
   'retry_interrupted',
 ]);
-const ATTENTION_KINDS: ReadonlySet<string> = new Set<AutomationAttentionKind>(['proposed', 'grant-raised', 'needs-regrant']);
+const ATTENTION_KINDS: Record<AutomationAttentionKind, true> = {
+  proposed: true,
+  'grant-raised': true,
+  'needs-regrant': true,
+  'failure-paused': true,
+};
+const isAttentionKind = (v: unknown): v is AutomationAttentionKind =>
+  typeof v === 'string' && Object.prototype.hasOwnProperty.call(ATTENTION_KINDS, v);
 
 const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
+
+function coerceFailureStreak(raw: unknown): AutomationFailureStreak | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const o = raw as Record<string, unknown>;
+  const reason = o['reason'];
+  const count = num(o['count']);
+  if (!isFailureReason(reason) || count === undefined || !Number.isInteger(count) || count < 1) return undefined;
+  return { reason, count: Math.min(count, AUTOMATION_DEFAULTS.failureBreakerRuns) };
+}
 
 export function coerceAutomation(raw: unknown): Automation | null {
   if (!raw || typeof raw !== 'object') return null;
@@ -117,6 +135,7 @@ export function coerceAutomation(raw: unknown): Automation | null {
     }
   }
   const nextRunAt = num(o['nextRunAt']);
+  const failureStreak = coerceFailureStreak(o['failureStreak']);
   return {
     id,
     name: draft.value.name,
@@ -131,6 +150,7 @@ export function coerceAutomation(raw: unknown): Automation | null {
     createdAt,
     updatedAt: num(o['updatedAt']) ?? createdAt,
     createdBy: o['createdBy'] === 'mcp-proposal' ? 'mcp-proposal' : 'desktop-ui',
+    ...(failureStreak && { failureStreak }),
   };
 }
 
@@ -177,15 +197,18 @@ function coerceAttention(raw: unknown): AutomationAttention | null {
   if (!raw || typeof raw !== 'object') return null;
   const o = raw as Record<string, unknown>;
   const at = num(o['at']);
+  const kind = o['kind'];
+  const reason = o['reason'];
   if (typeof o['id'] !== 'string' || !ID_RE.test(o['id']) || typeof o['automationId'] !== 'string' ||
       typeof o['automationName'] !== 'string' || at === undefined ||
-      typeof o['kind'] !== 'string' || !ATTENTION_KINDS.has(o['kind'])) return null;
+      !isAttentionKind(kind)) return null;
   return {
     id: o['id'],
     automationId: o['automationId'],
     automationName: o['automationName'].slice(0, 120),
-    kind: o['kind'] as AutomationAttentionKind,
+    kind,
     at,
+    ...(kind === 'failure-paused' && isFailureReason(reason) && { reason }),
   };
 }
 

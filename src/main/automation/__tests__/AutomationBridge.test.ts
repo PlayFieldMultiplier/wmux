@@ -137,6 +137,20 @@ describe('AutomationBridge', () => {
     for (const [text] of toast.mock.calls) expect(text).not.toContain('quarterly');
   });
 
+  it('a failed run that paused its schedule toasts only the pause notice', async () => {
+    const { toast, bridge, client } = setup();
+    bridge.start(client);
+    await flush();
+    client.attention = [{ id: 'at1', automationId: 'a1', automationName: 'Morning report', kind: 'failure-paused', reason: 'timeout', at: 1 }];
+    client.emit('event', { type: AUTOMATION_EVENT, sessionId: '', data: { type: 'attention', automationId: 'a1', automationName: 'Morning report', kind: 'failure-paused' } });
+    client.emit('event', { type: AUTOMATION_EVENT, data: { type: 'run-changed', run: run({ state: 'failed', reason: 'timeout' }), automationName: 'Morning report', pausedSchedule: true } });
+    // terminate() re-emits the same run without the flag when its session was live.
+    client.emit('event', { type: AUTOMATION_EVENT, data: { type: 'run-changed', run: run({ state: 'failed', reason: 'timeout' }), automationName: 'Morning report' } });
+    await flush();
+    await flush();
+    expect(toast.mock.calls.map((c) => c[0])).toEqual(['Morning report · Paused after repeated failures']);
+  });
+
   it('restores an awaiting run and queued attention after a restart, then acks what it showed', async () => {
     const { toast, bridge, client } = setup();
     client.list = [automation(), automation({ id: 'a2', name: 'Draft', proposed: true, enabled: false })];
@@ -183,6 +197,23 @@ describe('AutomationBridge', () => {
     await flush();
     await flush();
     expect(toast.mock.calls.map((c) => c[0])).toEqual(['Old · Needs permission again', 'Edited · Needs permission again']);
+    expect(client.attention).toEqual([]);
+  });
+
+  it('toasts a failure-paused notice without its reason, live and from the queue, and acks it', async () => {
+    const { toast, bridge, client } = setup();
+    client.attention = [{ id: 'at1', automationId: 'a1', automationName: 'Nightly', kind: 'failure-paused', reason: 'login_needed', at: 1 }];
+    bridge.start(client);
+    await flush();
+    await flush();
+    client.attention = [{ id: 'at2', automationId: 'a2', automationName: 'Weekly', kind: 'failure-paused', reason: 'timeout', at: 2 }];
+    client.emit('event', { type: AUTOMATION_EVENT, sessionId: '', data: { type: 'attention', automationId: 'a2', automationName: 'Weekly', kind: 'failure-paused' } });
+    await flush();
+    await flush();
+    expect(toast.mock.calls.map((c) => [c[0], c[2]])).toEqual([
+      ['Nightly · Paused after repeated failures', { ignoreToastSetting: true }],
+      ['Weekly · Paused after repeated failures', { ignoreToastSetting: true }],
+    ]);
     expect(client.attention).toEqual([]);
   });
 

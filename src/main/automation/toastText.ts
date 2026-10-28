@@ -4,7 +4,7 @@
  * prompt and the run's output never ride in it. Kept pure so a test can pin
  * that nothing else leaks in.
  */
-export type AutomationToastKind = 'awaiting' | 'failed' | 'proposed' | 'grantRaised' | 'needsRegrant';
+export type AutomationToastKind = 'awaiting' | 'failed' | 'proposed' | 'grantRaised' | 'needsRegrant' | 'failurePaused';
 export type AutomationToastLabels = Record<AutomationToastKind, string>;
 
 /**
@@ -13,8 +13,8 @@ export type AutomationToastLabels = Record<AutomationToastKind, string>;
  * anything a status word would not.
  */
 const LABELS: Record<'en' | 'ko', AutomationToastLabels> = {
-  en: { awaiting: 'Needs your response', failed: 'Failed', proposed: 'Draft to review', grantRaised: 'Permission raised', needsRegrant: 'Needs permission again' },
-  ko: { awaiting: '응답 대기', failed: '실패', proposed: '검토할 초안', grantRaised: '권한 상승', needsRegrant: '권한 다시 필요' },
+  en: { awaiting: 'Needs your response', failed: 'Failed', proposed: 'Draft to review', grantRaised: 'Permission raised', needsRegrant: 'Needs permission again', failurePaused: 'Paused after repeated failures' },
+  ko: { awaiting: '응답 대기', failed: '실패', proposed: '검토할 초안', grantRaised: '권한 상승', needsRegrant: '권한 다시 필요', failurePaused: '연속 실패로 일시 중지됨' },
 };
 
 export const DEFAULT_AUTOMATION_TOAST_LABELS: AutomationToastLabels = LABELS.en;

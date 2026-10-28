@@ -32,6 +32,7 @@ import {
   AUTOMATION_DEFAULT_SETTINGS,
   AUTOMATION_DEFAULTS,
   AUTOMATION_PTY_PREFIX,
+  isFailureReason,
   type Automation,
   type AutomationAgent,
   type AutomationBrowserIdentity,
@@ -39,6 +40,7 @@ import {
   type AutomationRunIdentityResult,
   type AutomationAttention,
   type AutomationEvent,
+  type AutomationFailureReason,
   type AutomationListResult,
   type AutomationMutationResult,
   type AutomationOkResult,
@@ -399,7 +401,7 @@ export class AutomationEngine {
     for (const id of dropped) if (!liveRunIds.has(id)) deleteSnapshot(this.ports.wmuxDir, id);
   }
 
-  private emitRun(run: AutomationRun): void {
+  private emitRun(run: AutomationRun, pausedSchedule = false): void {
     const name = this.automations.find((a) => a.id === run.automationId)?.name ?? '';
     // The event stream reaches every client: it says THAT a run has a browser
     // identity, never which pane, account or sites.
@@ -408,6 +410,7 @@ export class AutomationEngine {
       type: 'run-changed',
       run: browserIdentity ? { ...shown, hasBrowserIdentity: true } : shown,
       automationName: name,
+      ...(pausedSchedule && { pausedSchedule: true as const }),
     });
   }
 
@@ -415,13 +418,19 @@ export class AutomationEngine {
     this.ports.emit({ type: 'automations-changed' });
   }
 
-  private queueAttention(automation: Automation, kind: AutomationAttention['kind'], announce = true): void {
+  private queueAttention(
+    automation: Automation,
+    kind: AutomationAttention['kind'],
+    announce = true,
+    reason?: AutomationFailureReason,
+  ): void {
     this.attention.push({
       id: this.newId(),
       automationId: automation.id,
       automationName: automation.name,
       kind,
       at: this.now(),
+      ...(reason && { reason }),
     });
     if (this.attention.length > ATTENTION_CAP) this.attention = this.attention.slice(-ATTENTION_CAP);
     if (announce) this.ports.emit({ type: 'attention', automationId: automation.id, automationName: automation.name, kind });
@@ -580,7 +589,10 @@ export class AutomationEngine {
     const identity = automation.action.browserIdentity;
     const nextAction = identity ? { ...draft.value.action, browserIdentity: identity } : draft.value.action;
     const bumped = changesWhatRuns(automation.action, nextAction);
-    if (bumped) automation.revision += 1;
+    if (bumped) {
+      automation.revision += 1;
+      this.resetBreaker(automation);
+    }
     automation.name = draft.value.name;
     automation.trigger = draft.value.trigger;
     automation.action = nextAction;
@@ -623,6 +635,7 @@ export class AutomationEngine {
     automation.enabled = enabled;
     // A human enabling a draft is what turns it into a schedule.
     if (enabled) delete automation.proposed;
+    this.resetBreaker(automation);
     this.reserveHeld.delete(automation.id);
     automation.nextRunAt = enabled ? nextOccurrenceAfter(automation.trigger, this.now()) : null;
     automation.updatedAt = this.now();
@@ -1597,7 +1610,54 @@ export class AutomationEngine {
     else delete run.reason;
     delete run.retryAt;
     run.endedAt = this.now();
-    this.emitRun(run);
+    this.emitRun(run, this.noteOutcome(run));
+  }
+
+  /**
+   * The failure breaker: consecutive scheduled runs that failed with one
+   * reason turn the schedule off after AUTOMATION_DEFAULTS.failureBreakerRuns.
+   * Manual and test runs, cancelled, skipped and unknown ends neither count
+   * nor break the streak. finish() calls this once per run. True when this run
+   * paused the schedule.
+   */
+  private noteOutcome(run: AutomationRun): boolean {
+    if (run.trigger !== 'scheduled') return false;
+    const automation = this.find(run.automationId);
+    // Off already (by a person or by the breaker): a run still in flight changes nothing.
+    if (!automation || !automation.enabled) return false;
+    // A run launched before an edit changed what runs says nothing about the schedule as it is now.
+    if (run.revision !== automation.revision) return false;
+    if (run.state === 'completed') {
+      if (!automation.failureStreak) return false;
+      delete automation.failureStreak;
+    } else if (run.state === 'failed' && isFailureReason(run.reason)) {
+      const prev = automation.failureStreak;
+      const count = prev?.reason === run.reason ? prev.count + 1 : 1;
+      automation.failureStreak = { reason: run.reason, count };
+      if (count >= AUTOMATION_DEFAULTS.failureBreakerRuns) {
+        automation.enabled = false;
+        automation.nextRunAt = null;
+        automation.updatedAt = this.now();
+        this.queueAttention(automation, 'failure-paused', true, run.reason);
+        this.ports.log('warn', `[automation] ${automation.id} paused after ${count} scheduled runs failed (${run.reason})`);
+      }
+    } else {
+      return false;
+    }
+    // The run's end is queued first: a crash between the two writes leaves a
+    // failed run and the older streak, never a pause whose last run reads
+    // `unknown` after the restart sweep. The streak, the pause and the notice
+    // share the automations.json write.
+    void this.persistRuns();
+    void this.persistAutomations();
+    this.emitAutomations();
+    return !automation.enabled;
+  }
+
+  /** A person toggled the schedule or changed what it runs: the streak starts over and the breaker's notice is answered. */
+  private resetBreaker(automation: Automation): void {
+    delete automation.failureStreak;
+    this.attention = this.attention.filter((x) => !(x.automationId === automation.id && x.kind === 'failure-paused'));
   }
 
   /** A turn ended: record it, then keep the session for the linger window. */
