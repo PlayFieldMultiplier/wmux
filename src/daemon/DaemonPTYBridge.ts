@@ -76,9 +76,10 @@ const PROGRAM_BLOCKED_MESSAGE: Record<'permission' | 'question' | 'auth' | 'none
 };
 
 /** The `agent` event message for an OSC 7501 settle. Never the program's own `msg`. */
-const PROGRAM_SETTLED_MESSAGE: Record<'waiting' | 'complete', string> = {
-  waiting: 'Ready for input',
-  complete: 'Task complete',
+const PROGRAM_SETTLED_MESSAGE: Record<'idle' | 'done' | 'error', string> = {
+  idle: 'Ready for input',
+  done: 'Task complete',
+  error: 'Turn ended',
 };
 
 /**
@@ -257,6 +258,12 @@ export class DaemonPTYBridge extends EventEmitter {
   private programQuietTimer: ReturnType<typeof setTimeout> | null = null;
   /** No output and no report for this long while `working`: the program is hung, not working. */
   private static readonly PROGRAM_WORKING_QUIET_MS = 5 * 60_000;
+  /** How long after a submit a repeated settle report is read as crossing it (applyProgramState). */
+  private static readonly PROGRAM_REPEAT_GRACE_MS = 2_000;
+  /** When the PTY last wrote anything, muted or not (0 = never). */
+  private lastOutputAt = 0;
+  /** When the program's last episode ended (endProgramStatusEpisode); older records are history. */
+  private programEpisodeEndAt = 0;
   /** OSC 7501 records of this terminal (root and child ids). */
   private readonly programStatus = new ProgramStatusStore();
   /** The last output chunk ended in ESC: a RIS (`ESC c`) may straddle chunks. */
@@ -734,7 +741,7 @@ export class DaemonPTYBridge extends EventEmitter {
    */
   noteAgentStatus(status: AgentEventStatus, authoritative = false, questionAt?: number, provisional = false, signalTs?: number, source?: 'program'): void {
     const program = source === 'program';
-    if (!authoritative && !program && this.programStatusSeen && status !== 'awaiting_input') return;
+    if (!authoritative && !program && this.programMutesScreen(status)) return;
     this.spinnerArmedCycle = false;
     if (authoritative) this.spinnerOpenedTurn = false;
     // #1463 — any hook is turn evidence. SessionStart re-sets `preTurn` after
@@ -1378,6 +1385,7 @@ export class DaemonPTYBridge extends EventEmitter {
     if (this.awaitingHuman && (this.awaitingFromProgram || !this.awaitingFromHook)) this.clearAwaiting('screen-cleared');
     if (record.state === 'working') {
       this.noteAgentStatus('running', false, undefined, false, undefined, 'program');
+      this.armProgramQuietCheck(sessionId);
       // A repeat keeps the renderer's activity stamp fresh, as the Codex
       // spinner title does (CODEX_SPINNER_REFRESH_MS).
       if ((changed || Date.now() - this.lastActiveAt >= DaemonPTYBridge.CODEX_SPINNER_REFRESH_MS) && !this.muted) {
@@ -1386,18 +1394,29 @@ export class DaemonPTYBridge extends EventEmitter {
       }
       return;
     }
-    const status = record.state === 'idle' ? 'waiting' : record.state === 'done' ? 'complete' : 'error';
+    // `error` settles as a neutral turn end: main words an `error` status as
+    // an API failure, which a program's own `error` need not be.
+    const status = record.state === 'idle' ? 'waiting' : 'complete';
     if (!changed && this.explicitTerminalStatus && this.settledStatus === status) return;
-    // The same settle again after a submit (or a hook) started a turn since
-    // the program last said it: a repeat of the old state, not this turn's end.
-    if (!changed && prior && this.lastTurnStartedAt >= prior.updatedAt) return;
+    // The same settle again right after a submit (or a hook) started a turn:
+    // a repeat of the old state crossing the submit, not this turn's end. A
+    // later one ends a turn the program never started (an empty Enter).
+    if (!changed && prior && this.lastTurnStartedAt >= prior.updatedAt
+      && Date.now() - this.lastTurnStartedAt < DaemonPTYBridge.PROGRAM_REPEAT_GRACE_MS) return;
     const wasSettled = this.explicitTerminalStatus;
     this.noteAgentStatus(status, false, undefined, false, undefined, 'program');
-    // `error` settles the turn without an event: main words an `error` event
-    // as an API failure, which a program's own `error` need not be.
-    if (status !== 'error') this.emit('agent', { sessionId, event: { agent, status, message: PROGRAM_SETTLED_MESSAGE[status] } });
+    this.emit('agent', { sessionId, event: { agent, status, message: PROGRAM_SETTLED_MESSAGE[record.state] } });
     // At the prompt before any turn (the agent booting), as the detector's idle prompt reports it.
     if (status === 'waiting' && !wasSettled && this.isPreTurn()) this.emit('idle', { sessionId, preTurn: true });
+  }
+
+  /** Applies the root record stored before the tracker saw the agent alive. */
+  private applyStoredProgramStatus(root: ProgramStatusRecord): void {
+    const pane = this.paneAgent();
+    if (!pane || !this.sessionId) return;
+    this.programStatusSeen = true;
+    this.programAgentSlug = pane.slug;
+    this.applyProgramState(root, undefined, pane.name, this.sessionId);
   }
 
   /**
@@ -1420,16 +1439,40 @@ export class DaemonPTYBridge extends EventEmitter {
    * Claude's), so the pane goes back to the heuristics and gets the idle the
    * silence held back. Its next report drives the pane again.
    */
-  private armProgramQuietCheck(sessionId: string): void {
+  private armProgramQuietCheck(sessionId: string, delay = DaemonPTYBridge.PROGRAM_WORKING_QUIET_MS): void {
     if (this.programQuietTimer) clearTimeout(this.programQuietTimer);
-    const reportAt = this.programStatus.root()?.updatedAt;
     this.programQuietTimer = setTimeout(() => {
       this.programQuietTimer = null;
-      if (!this.programWorking() || this.programStatus.root()?.updatedAt !== reportAt) return;
-      if (this.activityMonitor?.isActive(sessionId)) return;
+      const root = this.programStatus.root();
+      if (!this.programWorking() || !root || this.sessionId !== sessionId) return;
+      // Output or a report since: wait out the bound from the later of them.
+      const left = Math.max(this.lastOutputAt, root.updatedAt) + DaemonPTYBridge.PROGRAM_WORKING_QUIET_MS - Date.now();
+      if (left > 0) {
+        this.armProgramQuietCheck(sessionId, left);
+        return;
+      }
       this.handBackProgramStatus();
+      // The turn the silence held open ends too (softly: a later running
+      // edge resumes it), or main would keep reading it as mid-turn.
+      this.closeTurn(true);
+      this.activityMonitor?.endTurn(sessionId);
       if (!this.explicitTerminalStatus) this.emit('idle', { sessionId, ...(this.isPreTurn() ? { preTurn: true } : {}) });
-    }, DaemonPTYBridge.PROGRAM_WORKING_QUIET_MS);
+    }, delay);
+  }
+
+  /**
+   * Whether a screen read of `status` is muted because the program reports.
+   * A dialog never is. Nor is a settle while the program sits settled and has
+   * said nothing since a submit opened a turn: an Enter it never turned into
+   * work (an empty composer, a slash command) is ended by the screen.
+   */
+  private programMutesScreen(status: AgentEventStatus): boolean {
+    if (!this.programStatusSeen || status === 'awaiting_input') return false;
+    const root = this.programStatus.root();
+    const silentSinceSubmit = status !== 'running' && this.turnOpen && !!root
+      && (root.state === 'idle' || root.state === 'done' || root.state === 'error')
+      && this.lastTurnStartedAt >= root.updatedAt;
+    return !silentSinceSubmit;
   }
 
   /** The program driving this pane says it is working. */
@@ -1443,6 +1486,7 @@ export class DaemonPTYBridge extends EventEmitter {
    * stay, and the heuristics take the pane back.
    */
   private endProgramStatusEpisode(): void {
+    this.programEpisodeEndAt = Date.now();
     this.programStatus.dropTransient();
     this.handBackProgramStatus();
   }
@@ -1520,9 +1564,14 @@ export class DaemonPTYBridge extends EventEmitter {
     const screenName = this.getLastAgent();
     const previous = detector?.getTrustedAgent() ?? this.trackedAgent?.slug
       ?? (screenName ? agentDisplayToSlug(screenName) : undefined);
+    // A report the agent wrote before the tracker saw it alive (Codex's boot
+    // `idle`), not one left from an earlier episode.
+    const stored = this.programStatus.root();
+    const pendingReport = state.alive && !this.programStatusSeen && stored && stored.updatedAt > this.programEpisodeEndAt ? stored : undefined;
     if (!state.alive || ((state.observedAt !== undefined || state.replacedLive) && state.slug && previous && previous !== state.slug)) this.noteAgentEnded();
     this.trackedAgent = { ...(state.slug ? { slug: state.slug } : {}), alive: state.alive };
     this.reportMidTurn();
+    if (pendingReport && this.programStatus.root() === pendingReport) this.applyStoredProgramStatus(pendingReport);
     if (detector && state.alive && state.observedAt !== undefined && isAgentSlug(state.slug)) {
       if (detector.seedTrustedIdentity(state.slug, detector.getIdentityEpoch())) this.recheckQuietApproval(detector);
     }
@@ -1916,6 +1965,17 @@ export class DaemonPTYBridge extends EventEmitter {
         this.armProgramQuietCheck(ptyId);
         return;
       }
+      // A submit the program never turned into work (an empty Enter, a slash
+      // command): it is still at the state it last reported, so the turn the
+      // submit opened ends with the silence, settled as that state.
+      const root = this.programStatusSeen && this.turnOpen && !this.awaitingHuman ? this.programStatus.root() : undefined;
+      if (root && root.state !== 'working' && root.state !== 'blocked' && this.lastTurnStartedAt >= root.updatedAt) {
+        this.closeTurn(true);
+        this.settledStatus = root.state === 'idle' ? 'waiting' : 'complete';
+        this.explicitTerminalStatus = true;
+        this.emit('idle', { sessionId: ptyId, ...(this.isPreTurn() ? { preTurn: true } : {}) });
+        return;
+      }
       if (this.explicitTerminalStatus) return;
       this.emit('idle', { sessionId: ptyId, ...(this.isPreTurn() ? { preTurn: true } : {}) });
     });
@@ -2164,7 +2224,7 @@ export class DaemonPTYBridge extends EventEmitter {
       // unseen.
       // The screen names another agent: the reporting one is gone.
       if (this.programStatusSeen && agentDisplayToSlug(agentEvent.agent) !== this.programAgentSlug) this.endProgramStatusEpisode();
-      if (this.programStatusSeen && agentEvent.status !== 'awaiting_input') return;
+      if (this.programMutesScreen(agentEvent.status)) return;
       const wasSettled = this.explicitTerminalStatus;
       // The question line of a box the agent's title (noteTitleAwaitingHuman)
       // or its own `blocked` report already raised: the same dialog, told once.
@@ -2217,13 +2277,20 @@ export class DaemonPTYBridge extends EventEmitter {
         // coordinate system, so it needs the counter this chunk already moved.
         // Before the titles in this chunk are read (see ClaudeTitleTurnEdge.noteOutput).
         titleTurnEdge.noteOutput(data);
-        // RIS removes every OSC 7501 record. Read before this chunk's reports:
-        // a program that resets the terminal reports after it.
+        // RIS removes every OSC 7501 record, in stream order against this
+        // chunk's last report: before it, the report stands; after it, it goes.
         const risCarry = this.outputEndsWithEsc;
         this.outputEndsWithEsc = data.endsWith('\x1b');
-        if ((this.programStatus.size > 0 || this.programStatusSeen)
-          && (data.includes('\x1bc') || (risCarry && data.startsWith('c')))) this.resetProgramStatus();
+        let risAfterReports = false;
+        if (this.programStatus.size > 0 || this.programStatusSeen || data.includes('\x1b]7501;')) {
+          const risAt = Math.max(data.lastIndexOf('\x1bc'), risCarry && data.startsWith('c') ? 0 : -1);
+          if (risAt >= 0) {
+            if (risAt > data.lastIndexOf('\x1b]7501;')) risAfterReports = true;
+            else this.resetProgramStatus();
+          }
+        }
         interpreter.feed(data, ringBuffer.totalBytesWritten, nativeChunk);
+        if (risAfterReports) this.resetProgramStatus();
         // After the mode tracker and OSC 133 have seen this chunk (see noteCodexOutput).
         this.noteCodexOutput(data);
 
@@ -2262,6 +2329,7 @@ export class DaemonPTYBridge extends EventEmitter {
       // Ahead of the mute check: a recovered session is muted at spawn, and
       // its startup query is exactly the one nobody else will answer.
       if (this.startupDa1) this.checkStartupDa1(data, ptyProcess);
+      this.lastOutputAt = Date.now();
 
       const buf = nativeChunk ? undefined : Buffer.from(data);
       const byteLength = nativeChunk ? nativeChunk.byteLength : (buf?.length ?? 0);
@@ -2566,6 +2634,8 @@ export class DaemonPTYBridge extends EventEmitter {
     this.programAgentSlug = null;
     if (this.programQuietTimer) clearTimeout(this.programQuietTimer);
     this.programQuietTimer = null;
+    this.lastOutputAt = 0;
+    this.programEpisodeEndAt = 0;
     this.programStatus.clear();
     this.outputEndsWithEsc = false;
     this.awaitingFromProgram = false;

@@ -252,6 +252,82 @@ describe('DaemonPTYBridge — OSC 7501 program status', () => {
     expect(bridge.isProgramStatusDriving()).toBe(false);
   });
 
+  it('the quiet bound fires on an autonomous turn whose output stops, and ends the turn', () => {
+    replay('boot');
+    vi.advanceTimersByTime(10_000);
+    // One report, then nothing at all: no output ever starts the activity
+    // monitor's idle countdown, so only the report itself can arm the bound.
+    feed(report('state=working:app=codex'));
+    expect(bridge.getAgentStatus()).toBe('running');
+    vi.advanceTimersByTime(6 * 60_000);
+    expect(bridge.isProgramStatusDriving()).toBe(false);
+    expect(bridge.isTurnOpen()).toBe(false);
+    expect(bridge.isAgentMidTurn()).toBe(false);
+    expect(bridge.getAgentStatus()).not.toBe('running');
+  });
+
+  it('a submit Codex never turns into work (an empty Enter) ends with the silence', () => {
+    replay('boot');
+    vi.advanceTimersByTime(10_000);
+    bridge.noteInput('\r');
+    feed('\x1b[20;1H\u203a '); // the composer repaints, nothing more
+    expect(bridge.isTurnOpen()).toBe(true);
+    vi.advanceTimersByTime(6_000);
+    expect(bridge.isTurnOpen()).toBe(false);
+    expect(bridge.isAgentMidTurn()).toBe(false);
+    expect(bridge.getAgentStatus()).toBe('waiting');
+  });
+
+  it('a repeated idle well after a submit ends the turn the program never started', () => {
+    replay('boot');
+    vi.advanceTimersByTime(500);
+    bridge.noteInput('/status\r');
+    vi.advanceTimersByTime(2_500);
+    feed(report('state=idle:app=codex'));
+    expect(bridge.isTurnOpen()).toBe(false);
+    expect(bridge.getAgentStatus()).toBe('waiting');
+  });
+
+  it('RIS after a report in the same chunk removes it; a report after RIS stands', () => {
+    replay('boot');
+    feed(report('state=working:app=codex') + '\x1bc');
+    expect(bridge.getProgramStatus()).toBeUndefined();
+    feed('\x1bc' + report('state=working:app=codex'));
+    expect(bridge.getProgramStatus()?.state).toBe('working');
+  });
+
+  it('a report Codex wrote before the tracker saw it alive is applied when it does', () => {
+    const late = new DaemonPTYBridge();
+    const fake = makeFakePty();
+    late.setupDataForwarding(fake.pty, new RingBuffer(65536), 'sess-4', new PromptEventLog());
+    fake.feed(CODEX_MODES + BANNER);
+    fake.feed(report('state=idle:app=codex'));
+    expect(late.isProgramStatusDriving()).toBe(false);
+    late.noteAgentProcess({ slug: 'codex', alive: true });
+    expect(late.isProgramStatusDriving()).toBe(true);
+    expect(late.getAgentStatus()).toBe('waiting');
+    late.cleanup();
+  });
+
+  it('a record left from an earlier episode is not applied when the next agent starts', () => {
+    replay('boot');
+    feed(report('state=done:app=codex'));
+    bridge.noteAgentProcess({ slug: 'codex', alive: false });
+    feed('\x1b]133;A\x07');
+    expect(bridge.getProgramStatus()?.state).toBe('done');
+    bridge.noteAgentProcess({ slug: 'codex', alive: true });
+    expect(bridge.isProgramStatusDriving()).toBe(false);
+  });
+
+  it('error settles as a neutral turn end, never worded as an API failure', () => {
+    replay('boot');
+    bridge.noteInput('say hi\r');
+    replay('turn 1');
+    feed(report('state=error:app=codex'));
+    expect(bridge.getAgentStatus()).toBe('complete');
+    expect(agentEvents.at(-1)).toEqual({ agent: 'Codex CLI', status: 'complete', message: 'Turn ended' });
+  });
+
   it('stores, but does not act on, a report from a pane with no known agent', () => {
     const plain = new DaemonPTYBridge();
     const fake = makeFakePty();
