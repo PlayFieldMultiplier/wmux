@@ -148,6 +148,7 @@ export class HermesChatService {
       case 'unavailable': return { result: 'unavailable' };
       default:
         // After the paste nothing is provable: the text may sit in the prompt.
+        // (`transport-lost` is the union's "may have landed"; no HTTP hop here.)
         if (pasted) return { result: 'unconfirmed', reason: 'transport-lost' };
         return denied ? { result: 'error', reason: 'unauthorized' } : { result: 'unavailable' };
     }

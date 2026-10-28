@@ -869,7 +869,10 @@ export function createChatBridge<P extends ChatPane>(deps: NativeChatBridgeDeps<
     }
     // The daemon queue: a running turn, or anything already waiting on the
     // pane (any owner), holds the message for delivery after the turn ends.
+    // Only for an agent whose row declares the daemon queue (`chat.capabilities.queue`):
+    // a Hermes send during a turn is refused `busy`, as its capabilities say.
     if (req.queue && queueStore && owner !== 'desktop' && (resolution.source === 'file' || resolution.source === 'tui') &&
+        agentRow(resolution.status.terminal?.agent)?.sendQueue === true &&
         (turnRunning(req.id, resolution) || queueStore.hasActive(req.id))) {
       // Synchronous with the insert: a concurrent same-id send that also
       // passed the checks above (both awaited resolve) finds this one here.

@@ -4987,8 +4987,9 @@ function registerRpcHandlers(
         return sessionManager.listManagedSessions().some((other) => other.meta.id !== id && realCwd(other.meta.id) === cwd && liveHermes(other.meta.id));
       },
       readScreen: async (id) => {
-        const outcome = await queuedScreenText(sessionManager, id);
-        return outcome?.ok ? outcome.rows.map((row) => row.text) : null;
+        // Undimmed, so a dim placeholder in the prompt never reads as typed text.
+        const outcome = await queuedScreenText(sessionManager, id, true);
+        return outcome?.ok ? outcome.rows.map((row) => row.undimmed ?? row.text) : null;
       },
       bracketedPaste: (id) => sessionManager.getSession(id)?.bridge.outputModes?.isSet(2004) === true,
       keyInput: (id) => {

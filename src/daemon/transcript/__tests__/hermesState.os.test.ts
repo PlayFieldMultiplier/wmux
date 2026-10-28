@@ -124,6 +124,8 @@ describe('hermesPromptState', () => {
     expect(hermesPromptState(screen(['❯ ']))).toBe('idle-empty');
     expect(hermesPromptState(screen(['❯ wmux paste probe line one', 'line two']))).toBe('idle-typed');
     expect(hermesPromptState(screen(['⚕ ❯ ']))).toBe('running');
+    // As captured mid-turn: the running placeholder follows the prompt.
+    expect(hermesPromptState(screen(['⚕ ❯ msg=interrupt · /queue · /bg · /steer · Ctrl+C cancel']))).toBe('running');
     expect(hermesPromptState(screen(['⠙ ❯ ']))).toBe('running');
     expect(hermesPromptState(screen(['⚠ ❯ ']))).toBe('dialog');
     expect(hermesPromptState(screen(['🔐 ❯ ']))).toBe('dialog');
