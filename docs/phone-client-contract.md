@@ -6180,7 +6180,7 @@ drops both the note and the unwritten grant, and the roster on disk stays author
 ## Native chat
 
 The phone's Chat surface drives the **native conversation already running in the
-pane's terminal** (Claude, Codex, OpenCode): same PTY, same native session id.
+pane's terminal** (Claude, Codex, OpenCode, Hermes Agent): same PTY, same native session id.
 Opening Chat never spawns an agent, creates a native session or sends a prompt.
 Approvals, native permission dialogs and Stop stay in Terminal; there is no file
 undo. The only thing Chat can start is an agent in an empty shell (launch, below).
@@ -6216,8 +6216,8 @@ chat but never gets a composer.
 ### Reading: the `chat` object on `/turns`
 
 `GET /api/sessions/<id>/turns` stays the one reading route. With `chatBinding`
-the daemon resolves the pane the way the desktop Chat does — OpenCode TUI
-plugin first, then a managed record (only with no live agent and no
+the daemon resolves the pane the way the desktop Chat does — the OpenCode TUI
+plugin or Hermes Agent's own session database first, then a managed record (only with no live agent and no
 transcript), then the Claude/Codex transcript file — and adds `chat` to every
 200, including `available:false`:
 
@@ -6268,8 +6268,8 @@ transcript), then the Claude/Codex transcript file — and adds `chat` to every
   preview is cheap and never enumerates processes, so `shell-has-children` only
   ever arrives from the launch POST, which re-verifies everything. So does
   `worker-fence`, which the preview never reads.
-- **`historyEpoch`** is `h1:` (transcript file), `t1:` (OpenCode, a hash — the
-  raw plugin epoch never leaves the daemon) or `m1:` (managed). Compare it for
+- **`historyEpoch`** is `h1:` (transcript file), `t1:` (OpenCode or Hermes, a
+  hash — the raw epoch never leaves the daemon) or `m1:` (managed). Compare it for
   equality; never parse it. Evicting old rows sets `historyTruncated` and keeps
   the epoch.
 
@@ -6289,7 +6289,7 @@ error. A v1 cursor from before the upgrade therefore resets once.
 | `older` | (`dir=back`) prepend ids you do not have |
 
 `reset` is present **only** on the answer to a read that carried a cursor.
-OpenCode (`tui`) and managed reads are full bounded pages every time, so a forward
+OpenCode and Hermes (`tui`) and managed reads are full bounded pages every time, so a forward
 read with a cursor on those always answers `mode:"snapshot", reset:true`; they
 have no back paging (`dir=back` answers an empty `older` page with
 `hasMore:false`). `reset` is a merge instruction only. To tell a refresh from a
@@ -6301,6 +6301,27 @@ conversation change, compare the `chat` you held with the one you got:
 When a pane that had a conversation has none any more, a read with a cursor
 answers `{available:false, reason, reset:true, events:[], chat:{binding:"none", …}}`
 with **no** `cursor`. Drop the rows and read again without one.
+
+**Hermes Agent panes** (`chat.agent: "hermes"`). A pane running the classic
+Hermes REPL is read from Hermes' own session database (`<HERMES_HOME>/state.db`,
+read-only), the way an OpenCode pane is read from its plugin: a full bounded
+page of the newest rows on every read (`t1:` epoch, `mode:"snapshot"`, no back
+paging, `truncatedHead` when older rows are left out). It binds the newest
+interactive (`cli`) Hermes session recorded in the pane's folder since Hermes
+started there, so `/new` moves the binding (a new `agentSessionId`). Hermes
+records a session with its first message: until then the pane is
+`binding:"none"` with `launch.reason:"agent-running"`, so the first message is
+typed in Terminal. Two Hermes panes in one folder, a Hermes started with a
+profile (`-p`) or a `HERMES_HOME` the pane did not start with, and the Ink TUI
+(`--tui`, which records no folder) are not bound. History is read while
+Hermes runs; once it exits the pane reads as any other pane does.
+`capabilities.send` is true only while Hermes waits at its empty prompt:
+during a turn Hermes takes typed text as an interrupt, and in an approval or a
+question as the answer, so `agentStatus` is `running` or `awaiting_input` and
+`send` is `false` there. A send is pasted into the prompt, then Enter; Hermes
+itself turns a paste of five or more lines (or 2,000 characters) into a file
+reference. `cancel`, `queue`, images and `maxSendBytes` are absent or false.
+Tool calls and results are rows; Hermes' reasoning text is not sent.
 
 ### Sending: `POST /api/sessions/<id>/chat/messages`
 

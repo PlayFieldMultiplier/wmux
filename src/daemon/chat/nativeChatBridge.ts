@@ -862,7 +862,8 @@ export function createChatBridge<P extends ChatPane>(deps: NativeChatBridgeDeps<
     if (resolution.source === 'file' && !resolution.status.terminal?.capabilities.send) {
       return refuse(clientMessageId, 'chat-unavailable', { result: 'unavailable' });
     }
-    if (resolution.source === 'tui' &&
+    // The OpenCode plugin's request limit; a Hermes send is typed into its prompt and has none.
+    if (resolution.source === 'tui' && resolution.status.terminal?.agent === 'opencode' &&
         openCodeSendBytes(req.agentSessionId, resolution.rawEpoch, req.text, clientMessageId) > OPENCODE_REQUEST_MAX_BYTES) {
       return refuse(clientMessageId, 'text-too-long', { result: 'error', limit: 'bytes', maxSendBytes: OPENCODE_MAX_SEND_BYTES });
     }

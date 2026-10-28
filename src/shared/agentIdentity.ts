@@ -876,7 +876,8 @@ export const AGENT_IDENTITIES = [
     // TUI is a node child of that process. Its installer is an editable install
     // of a git checkout, so the image check also accepts the `hermes_agent`
     // dist-info (AgentProcessTracker isAgentImage).
-    // No hooks, no screen profile and no transcript wmux reads yet. No `resume`:
+    // No hooks and no screen profile. Its conversation is read from its own
+    // session database, not a transcript file (transcript/HermesChatService.ts). No `resume`:
     // its `--resume` / `-c` grammar is not verified here. No `mcp`: wmux's
     // Hermes integration (Bots) owns that configuration.
     slug: 'hermes',
