@@ -303,8 +303,11 @@ export class AutomationBridge {
     this.send({ kind: 'event', event: ev });
     if (ev.type === 'run-changed') {
       noteRunForIdentity(ev.run);
-      // The failure-paused notice that follows says it for the run that tripped the breaker.
-      if (!ev.pausedSchedule) this.toastRun(ev.run, ev.automationName);
+      // The failure-paused notice that follows says it for the run that tripped
+      // the breaker. Mark the run's failure as shown: terminate() re-emits the
+      // run without the flag, and that copy must not toast "Failed".
+      if (ev.pausedSchedule) remember(`${ev.run.id}:${ev.run.state}`);
+      else this.toastRun(ev.run, ev.automationName);
     } else if (ev.type === 'attention') {
       // The live event carries no queue id; read the queue so the toast and
       // its ack refer to the same item.

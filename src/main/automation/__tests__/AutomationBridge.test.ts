@@ -144,6 +144,8 @@ describe('AutomationBridge', () => {
     client.attention = [{ id: 'at1', automationId: 'a1', automationName: 'Morning report', kind: 'failure-paused', reason: 'timeout', at: 1 }];
     client.emit('event', { type: AUTOMATION_EVENT, sessionId: '', data: { type: 'attention', automationId: 'a1', automationName: 'Morning report', kind: 'failure-paused' } });
     client.emit('event', { type: AUTOMATION_EVENT, data: { type: 'run-changed', run: run({ state: 'failed', reason: 'timeout' }), automationName: 'Morning report', pausedSchedule: true } });
+    // terminate() re-emits the same run without the flag when its session was live.
+    client.emit('event', { type: AUTOMATION_EVENT, data: { type: 'run-changed', run: run({ state: 'failed', reason: 'timeout' }), automationName: 'Morning report' } });
     await flush();
     await flush();
     expect(toast.mock.calls.map((c) => c[0])).toEqual(['Morning report · Paused after repeated failures']);
