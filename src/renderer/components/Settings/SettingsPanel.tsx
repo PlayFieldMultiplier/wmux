@@ -526,11 +526,11 @@ function KbdRow({
           </kbd>
         )}
         {onToggleDisabled !== undefined && (
-          <Checkbox
+          <Switch
             checked={!disabled}
             onCheckedChange={() => onToggleDisabled()}
             title={toggleTitle}
-            // Unique per row — a list of checkboxes all reading the same hint
+            // Unique per row — a list of switches all reading the same hint
             // would be indistinguishable to a screen reader.
             aria-label={`${description} (${keys})`}
           />
@@ -591,7 +591,7 @@ const BUNDLED_FONTS = new Set([
 
 // ─── Reset section ───────────────────────────────────────────────────────────
 
-function ResetSection() {
+function ResetRow() {
   const t = useT();
   // A1: workspaces는 이 콜백 안에서만 명령형으로 쓰인다(렌더에 미사용) — 구독을
   // 없애고 getState()로 읽어 불필요한 리렌더를 제거한다.
@@ -626,25 +626,23 @@ function ResetSection() {
   }, [removeWorkspace, addWorkspace, setVisible, ipcInvoke]);
 
   return (
-    <SettingsSection id="reset" title={t('settings.reset')}>
-      <SettingRow label={t('settings.resetWorkspaces')} description={t('settings.resetWorkspacesDesc')}>
-        {confirming ? (
-          <div className="flex items-center gap-2 shrink-0">
-            <Button variant="ghost" onClick={() => setConfirming(false)}>
-              {t('settings.close')}
-            </Button>
-            {/* The final confirm of a destructive flow: solid red. */}
-            <UiButton variant="danger" size="md" onClick={handleReset}>
-              {t('settings.resetButton')}
-            </UiButton>
-          </div>
-        ) : (
-          <Button variant="destructive" onClick={() => setConfirming(true)}>
-            {t('settings.resetButton')}
+    <SettingRow id="reset" label={t('settings.resetWorkspaces')} description={t('settings.resetWorkspacesDesc')}>
+      {confirming ? (
+        <div className="flex items-center gap-2 shrink-0">
+          <Button variant="ghost" onClick={() => setConfirming(false)}>
+            {t('settings.close')}
           </Button>
-        )}
-      </SettingRow>
-    </SettingsSection>
+          {/* The final confirm of a destructive flow: solid red. */}
+          <UiButton variant="danger" size="md" onClick={handleReset}>
+            {t('settings.resetButton')}
+          </UiButton>
+        </div>
+      ) : (
+        <Button variant="destructive" onClick={() => setConfirming(true)}>
+          {t('settings.resetButton')}
+        </Button>
+      )}
+    </SettingRow>
   );
 }
 
@@ -1591,7 +1589,7 @@ function UpdateStatus() {
 // is the source of truth — read on mount, flipped optimistically with echo
 // reconciliation (mirrors OrchestratorSection's auto-wake). Rendered on win32
 // (Run key) + darwin(로그인 항목); the backing IPC is a no-op elsewhere.
-function StartupSection() {
+function StartupRow() {
   const t = useT();
   const [enabled, setEnabled] = useState(true);
   useEffect(() => {
@@ -1610,37 +1608,33 @@ function StartupSection() {
       .catch(() => setEnabled(!next));
   };
   return (
-    <SettingsSection title={t('settings.startup')}>
-      <SettingRow id="startup" label={t('settings.startOnLogin')} description={t('settings.startOnLoginDesc')}>
-        <Toggle checked={enabled} onChange={onChange} label={t('settings.startOnLogin')} />
-      </SettingRow>
-    </SettingsSection>
+    <SettingRow id="startup" label={t('settings.startOnLogin')} description={t('settings.startOnLoginDesc')}>
+      <Toggle checked={enabled} onChange={onChange} label={t('settings.startOnLogin')} />
+    </SettingRow>
   );
 }
 
 // Keep the computer awake (main/power/sleepPrevention.ts): off, while any
 // local agent is working (Fleet's Running), or always. The store holds the
 // choice; utils/sleepPreventionBridge.ts tells main.
-function SleepPreventionSection() {
+function SleepPreventionRow() {
   const t = useT();
   const mode = useStore((s) => s.sleepPreventionMode);
   const setMode = useStore((s) => s.setSleepPreventionMode);
   return (
-    <SettingsSection title={t('settings.power')}>
-      <SettingRow id="sleepprevention" label={t('settings.sleepPrevention')} description={t('settings.sleepPreventionDesc')}>
-        <SegmentedControl
-          value={mode}
-          onValueChange={setMode}
-          ariaLabel={t('settings.sleepPrevention')}
-          options={[
-            { value: 'off', label: t('settings.sleepPreventionOff') },
-            { value: 'working', label: t('settings.sleepPreventionWorking') },
-            { value: 'always', label: t('settings.sleepPreventionAlways') },
-          ]}
-          data-testid="sleep-prevention-mode"
-        />
-      </SettingRow>
-    </SettingsSection>
+    <SettingRow id="sleepprevention" label={t('settings.sleepPrevention')} description={t('settings.sleepPreventionDesc')}>
+      <SegmentedControl
+        value={mode}
+        onValueChange={setMode}
+        ariaLabel={t('settings.sleepPrevention')}
+        options={[
+          { value: 'off', label: t('settings.sleepPreventionOff') },
+          { value: 'working', label: t('settings.sleepPreventionWorking') },
+          { value: 'always', label: t('settings.sleepPreventionAlways') },
+        ]}
+        data-testid="sleep-prevention-mode"
+      />
+    </SettingRow>
   );
 }
 
@@ -1663,9 +1657,9 @@ function TabGeneral() {
 
   return (
     <div className="settings-page">
-      {/* Language — native names in one Select; no flags (DESIGN.md: no
-          emoji in chrome, and a flag is not a language). */}
-      <SettingsSection>
+      <SettingsSection title={t('settings.sectionLanguageUpdates')}>
+        {/* Language — native names in one Select; no flags (DESIGN.md: no
+            emoji in chrome, and a flag is not a language). */}
         <SettingRow id="language" label={t('settings.language')}>
           <SettingSelect
             label={t('settings.language')}
@@ -1674,10 +1668,6 @@ function TabGeneral() {
             options={LOCALE_OPTIONS.map(({ value, label }) => ({ value, label }))}
           />
         </SettingRow>
-      </SettingsSection>
-
-      {/* Updates */}
-      <SettingsSection title={t('settings.updates')}>
         <SettingRow id="autoupdate" label={t('settings.autoUpdate')} description={t('settings.autoUpdateDesc')}>
           <Toggle
             checked={autoUpdateEnabled}
@@ -1688,23 +1678,23 @@ function TabGeneral() {
         <UpdateStatus />
       </SettingsSection>
 
+      <SettingsSection title={t('settings.sectionStartupPower')}>
+        {/* Startup — win32(레지스트리 Run 키) + darwin(로그인 항목). 그 외 숨김. */}
+        {(window.electronAPI.platform === 'win32' || window.electronAPI.platform === 'darwin') && (
+          <StartupRow />
+        )}
+        <SleepPreventionRow />
+      </SettingsSection>
+
       {/* Git: commit / push / PR from the Git page, task adopt and Moa delivery. */}
-      <SettingsSection title={t('git.title')}>
+      <SettingsSection title={t('settings.sectionGitSafety')}>
         <SettingRow id="secretguard" label={t('settings.secretGuard')} description={t('settings.secretGuardDesc')}>
           <Toggle checked={secretGuardEnabled} onChange={setSecretGuardEnabled} label={t('settings.secretGuard')} />
         </SettingRow>
         <SecretHookSetting />
       </SettingsSection>
 
-      {/* Startup — win32(레지스트리 Run 키) + darwin(로그인 항목). 그 외 숨김. */}
-      {(window.electronAPI.platform === 'win32' || window.electronAPI.platform === 'darwin') && (
-        <StartupSection />
-      )}
-
-      <SleepPreventionSection />
-
-      {/* Tutorial */}
-      <SettingsSection title={t('settings.tutorial')}>
+      <SettingsSection title={t('settings.sectionSetupReset')}>
         <SettingRow id="tutorial" label={t('settings.restartTutorial')} description={t('settings.restartTutorialDesc')}>
           <Button
             variant="secondary"
@@ -1716,13 +1706,10 @@ function TabGeneral() {
             {t('settings.restartTutorial')}
           </Button>
         </SettingRow>
+        {/* First-run setup — the wizard and cheat sheet re-entry points. */}
+        <TabFirstRunSetup />
+        <ResetRow />
       </SettingsSection>
-
-      {/* First-run setup — the wizard and cheat sheet re-entry points. */}
-      <TabFirstRunSetup />
-
-      {/* Reset */}
-      <ResetSection />
     </div>
   );
 }
@@ -4009,7 +3996,8 @@ export interface NotificationsViewWorkspaceRow {
 export interface NotificationsViewProps {
   // Existing notification toggles
   notificationSoundEnabled: boolean;
-  onToggleNotificationSound: () => void;
+  /** The one Notification sound switch; see {@link applyNotificationSound}. */
+  onChangeNotificationSound: (on: boolean) => void;
   toastEnabled: boolean;
   onChangeToastEnabled: (v: boolean) => void;
   notificationRingEnabled: boolean;
@@ -4026,7 +4014,6 @@ export interface NotificationsViewProps {
   taskbarFlashEnabled: boolean;
   onChangeTaskbarFlashEnabled: (v: boolean) => void;
   notificationSoundChoice: 'default' | 'none';
-  onChangeNotificationSoundChoice: (choice: 'default' | 'none') => void;
 
   // #516 — per-category mute
   mutedNotificationCategories: NotificationCategory[];
@@ -4045,22 +4032,43 @@ export interface NotificationsViewProps {
 }
 
 /**
+ * Notification sound is two stored values: `notificationSoundEnabled` (saved
+ * with the session) and `notificationSoundChoice` ('none' silences the cue
+ * whatever the flag says). Settings shows them as one switch: on only when
+ * both let the cue play.
+ */
+export function notificationSoundOn(enabled: boolean, choice: 'default' | 'none'): boolean {
+  return enabled && choice !== 'none';
+}
+
+/** Turning the switch on also picks the default cue, so a 'none' left behind
+ *  by the old sound picker cannot keep an "on" switch silent. */
+export function applyNotificationSound(
+  on: boolean,
+  setEnabled: (enabled: boolean) => void,
+  setChoice: (choice: 'default' | 'none') => void,
+): void {
+  setEnabled(on);
+  if (on) setChoice('default');
+}
+
+/**
  * Pure presentational notifications settings block.
  *
  * Renders the global notification toggles (sound, toast, ring + 3 new T12
- * toggles + 1 sound-choice radio group) followed by the per-workspace mute
- * list. Exported so tests can drive it through `renderToStaticMarkup`.
+ * toggles) followed by the per-workspace mute list. Exported so tests can
+ * drive it through `renderToStaticMarkup`.
  */
 export function NotificationsView(props: NotificationsViewProps) {
   const {
-    notificationSoundEnabled, onToggleNotificationSound,
+    notificationSoundEnabled, onChangeNotificationSound,
     toastEnabled, onChangeToastEnabled,
     notificationRingEnabled, onChangeNotificationRingEnabled,
     paneRingEnabled, onChangePaneRingEnabled,
     paneGlowOpacity, onChangePaneGlowOpacity,
     paneFlashEnabled, onChangePaneFlashEnabled,
     taskbarFlashEnabled, onChangeTaskbarFlashEnabled,
-    notificationSoundChoice, onChangeNotificationSoundChoice,
+    notificationSoundChoice,
     mutedNotificationCategories, onChangeCategoryMuted,
     workspaces, onChangeWorkspaceMuted, onChangeWorkspacePrWake, onChangeWorkspacePrWakeChecksPassed,
     t,
@@ -4072,8 +4080,8 @@ export function NotificationsView(props: NotificationsViewProps) {
       <SettingsSection title={t('settings.notificationBehavior')}>
         <SettingRow id="sound" label={t('settings.sound')} description={t('settings.soundDesc')}>
           <Toggle
-            checked={notificationSoundEnabled}
-            onChange={() => onToggleNotificationSound()}
+            checked={notificationSoundOn(notificationSoundEnabled, notificationSoundChoice)}
+            onChange={onChangeNotificationSound}
             label={t('settings.sound')}
           />
         </SettingRow>
@@ -4139,49 +4147,6 @@ export function NotificationsView(props: NotificationsViewProps) {
             label={t('settings.taskbarFlash')}
           />
         </SettingRow>
-
-        {/* T12 — Notification sound choice (radio group, not a toggle) */}
-        <div className="settings-row" data-testid="notification-sound-choice-row">
-          <div className="flex items-center justify-between gap-4">
-            <div className="min-w-0 flex flex-col gap-0.5">
-              <span className="ui-field-label" id="notification-sound-choice-label">
-                {t('settings.notificationSoundChoice')}
-              </span>
-              <span className="ui-field-description" id="notification-sound-choice-desc">
-                {t('settings.notificationSoundChoiceDesc')}
-              </span>
-            </div>
-            <div
-              role="radiogroup"
-              aria-labelledby="notification-sound-choice-label"
-              aria-describedby="notification-sound-choice-desc"
-              className="flex items-center gap-4 shrink-0"
-            >
-              <label className="settings-radio">
-                <input
-                  type="radio"
-                  name="notification-sound-choice"
-                  value="default"
-                  checked={notificationSoundChoice === 'default'}
-                  aria-describedby="notification-sound-choice-desc"
-                  onChange={() => onChangeNotificationSoundChoice('default')}
-                />
-                {t('settings.notificationSoundChoiceDefault')}
-              </label>
-              <label className="settings-radio">
-                <input
-                  type="radio"
-                  name="notification-sound-choice"
-                  value="none"
-                  checked={notificationSoundChoice === 'none'}
-                  aria-describedby="notification-sound-choice-desc"
-                  onChange={() => onChangeNotificationSoundChoice('none')}
-                />
-                {t('settings.notificationSoundChoiceNone')}
-              </label>
-            </div>
-          </div>
-        </div>
       </SettingsSection>
 
       {/* #516 — Per-category mute. Muted categories still reach the
@@ -4220,43 +4185,22 @@ export function NotificationsView(props: NotificationsViewProps) {
           </SettingNote>
         ) : (
           <div className="flex flex-col" style={{ maxHeight: 240, overflowY: 'auto' }}>
-            {workspaces.map((ws, idx) => {
-              const labelId = `workspace-mute-label-${ws.id}`;
-              const descId = `workspace-mute-desc-${ws.id}`;
-              return (
-                <label
-                  key={ws.id}
-                  htmlFor={`workspace-mute-${ws.id}`}
-                  className="settings-row cursor-pointer hover:bg-[color:var(--surface-fill-hover)] transition-colors"
-                  style={{
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    borderTop: idx === 0 ? 'none' : '1px solid var(--surface-hairline)',
-                  }}
-                  data-testid={`per-workspace-mute-row-${ws.id}`}
-                >
-                  <div className="min-w-0 mr-3 flex flex-col gap-0.5">
-                    <span className="ui-field-label truncate" id={labelId}>
-                      {t('settings.muteWorkspace', { name: ws.name })}
-                    </span>
-                    <span className="ui-field-description truncate" id={descId}>
-                      {ws.name}
-                    </span>
-                  </div>
-                  <input
-                    id={`workspace-mute-${ws.id}`}
-                    type="checkbox"
-                    checked={ws.muted}
-                    aria-labelledby={labelId}
-                    aria-describedby={descId}
-                    onChange={(e) => onChangeWorkspaceMuted(ws.id, e.target.checked)}
-                    data-testid={`per-workspace-mute-checkbox-${ws.id}`}
-                    className="settings-native-check shrink-0 cursor-pointer"
-                  />
-                </label>
-              );
-            })}
+            {workspaces.map((ws, idx) => (
+              <SettingRow
+                key={ws.id}
+                label={t('settings.muteWorkspace', { name: ws.name })}
+                description={ws.name}
+                style={{ borderTop: idx === 0 ? 'none' : '1px solid var(--surface-hairline)' }}
+                data-testid={`per-workspace-mute-row-${ws.id}`}
+              >
+                <Switch
+                  id={`workspace-mute-${ws.id}`}
+                  checked={ws.muted}
+                  onCheckedChange={(muted) => onChangeWorkspaceMuted(ws.id, muted)}
+                  data-testid={`per-workspace-mute-switch-${ws.id}`}
+                />
+              </SettingRow>
+            ))}
           </div>
         )}
       </SettingsSection>
@@ -4330,7 +4274,7 @@ export function NotificationsView(props: NotificationsViewProps) {
 function TabNotifications() {
   const t = useT();
   const notificationSoundEnabled  = useStore((s) => s.notificationSoundEnabled);
-  const toggleNotificationSound   = useStore((s) => s.toggleNotificationSound);
+  const setNotificationSoundEnabled = useStore((s) => s.setNotificationSoundEnabled);
   const toastEnabled              = useStore((s) => s.toastEnabled);
   const setToastEnabled           = useStore((s) => s.setToastEnabled);
   const notificationRingEnabled   = useStore((s) => s.notificationRingEnabled);
@@ -4372,7 +4316,7 @@ function TabNotifications() {
     <NotificationsView
       t={t}
       notificationSoundEnabled={notificationSoundEnabled}
-      onToggleNotificationSound={toggleNotificationSound}
+      onChangeNotificationSound={(on) => applyNotificationSound(on, setNotificationSoundEnabled, setNotificationSoundChoice)}
       toastEnabled={toastEnabled}
       onChangeToastEnabled={setToastEnabled}
       notificationRingEnabled={notificationRingEnabled}
@@ -4386,7 +4330,6 @@ function TabNotifications() {
       taskbarFlashEnabled={taskbarFlashEnabled}
       onChangeTaskbarFlashEnabled={setTaskbarFlashEnabled}
       notificationSoundChoice={notificationSoundChoice}
-      onChangeNotificationSoundChoice={setNotificationSoundChoice}
       mutedNotificationCategories={mutedNotificationCategories}
       onChangeCategoryMuted={setNotificationCategoryMuted}
       workspaces={workspaceRows}
@@ -4732,42 +4675,42 @@ export function TabShortcuts() {
         {bindingEntries.length === 0 ? (
           <SettingNote>{t('settings.kb.noBindings')}</SettingNote>
         ) : (
+          // Laid out like the shortcut rows above: what it does on the left
+          // (the one menu that changes it), the key on the right.
           bindingEntries.map(([key, actionId]) => (
             <div key={key} className="settings-row settings-kbd-row">
-              <div className="flex items-center gap-3 min-w-0 flex-1">
+              <Select
+                aria-label={`${t('settings.prefixAction')} (${key})`}
+                className="settings-select settings-prefix-action min-w-0"
+                value={actionId}
+                onChange={(e) => {
+                  removePrefixBinding(key);
+                  setPrefixBinding(key, e.target.value);
+                }}
+              >
+                {PREFIX_ACTION_IDS.map((aid) => (
+                  <option key={aid} value={aid}>{prefixActionLabel(aid, t)}</option>
+                ))}
+              </Select>
+              <span className="flex items-center gap-3 shrink-0">
                 <button
                   type="button"
-                  className={`settings-kbd ${FOCUS_RING}`}
-                  // Fixed width so the action selects line up down the list.
-                  style={{ width: 88, justifyContent: 'center' }}
+                  className={`settings-kbd settings-kbd-hint ${FOCUS_RING}`}
                   onClick={() => setCapturingBindingKey(key)}
+                  title={t('settings.sc.changeKey')}
+                  aria-label={`${prefixActionLabel(actionId, t)} (${key}) — ${t('settings.sc.changeKey')}`}
                 >
                   {key}
                 </button>
-                <span className="text-[color:var(--text-muted)] shrink-0 inline-flex"><IconChevron /></span>
-                <Select
-                  aria-label={`${t('settings.prefixAction')} (${key})`}
-                  className="flex-1 min-w-0"
-                  value={actionId}
-                  onChange={(e) => {
-                    removePrefixBinding(key);
-                    setPrefixBinding(key, e.target.value);
-                  }}
+                <UiButton
+                  variant="icon"
+                  onClick={() => removePrefixBinding(key)}
+                  title={t('settings.kb.delete')}
+                  aria-label={t('settings.kb.delete')}
                 >
-                  {PREFIX_ACTION_IDS.map((aid) => (
-                    <option key={aid} value={aid}>{prefixActionLabel(aid, t)}</option>
-                  ))}
-                </Select>
-              </div>
-              <UiButton
-                variant="icon"
-                className="shrink-0"
-                onClick={() => removePrefixBinding(key)}
-                title={t('settings.kb.delete')}
-                aria-label={t('settings.kb.delete')}
-              >
-                <IconX size={12} />
-              </UiButton>
+                  <IconX size={12} />
+                </UiButton>
+              </span>
             </div>
           ))
         )}
@@ -4983,7 +4926,8 @@ interface FirstRunStatusViewProps {
 /**
  * Pure presentational block exported for renderToStaticMarkup tests.
  *
- * Renders the four status rows + the two action buttons. State + event wiring
+ * Renders the four status rows + the two action buttons, as rows of General's
+ * "Setup and reset" section (no section of its own). State + event wiring
  * lives in {@link TabFirstRunSetup}; this component just receives the data.
  */
 export function FirstRunStatusView({ status, onOpenWizard, onShowCheatSheet }: FirstRunStatusViewProps) {
@@ -5008,8 +4952,8 @@ export function FirstRunStatusView({ status, onOpenWizard, onShowCheatSheet }: F
   });
 
   return (
-    <SettingsSection id="firstrun" title={t('settings.firstRunSetup')} data-testid="first-run-setup-section">
-      <div className="settings-row" data-testid="first-run-setup-last-completed">
+    <>
+      <div className="settings-row scroll-mt-4" data-setting-id="firstrun" data-testid="first-run-setup-last-completed">
         <div className="flex items-center justify-between gap-4">
           <div className="min-w-0 flex flex-col gap-0.5">
             <span className="ui-field-label">{lastCompleted}</span>
@@ -5053,7 +4997,7 @@ export function FirstRunStatusView({ status, onOpenWizard, onShowCheatSheet }: F
           {status.status.claudeJsonPath}
         </SettingNote>
       )}
-    </SettingsSection>
+    </>
   );
 }
 

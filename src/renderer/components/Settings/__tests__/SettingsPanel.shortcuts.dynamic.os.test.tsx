@@ -32,7 +32,7 @@ function badge(description: string): HTMLButtonElement {
 }
 
 function toggle(description: string): HTMLButtonElement {
-  const el = [...container.querySelectorAll<HTMLButtonElement>('[role="checkbox"]')]
+  const el = [...container.querySelectorAll<HTMLButtonElement>('[role="switch"]')]
     .find((b) => b.getAttribute('aria-label')?.startsWith(`${description} (`));
   if (!el) throw new Error(`no toggle for ${description}`);
   return el;
@@ -172,7 +172,8 @@ describe('Settings → Shortcuts search', () => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(search(), value);
     search().dispatchEvent(new Event('input', { bubbles: true }));
   });
-  const shown = () => [...container.querySelectorAll('button[aria-label]')]
+  // The search filters the Shortcuts section only (prefix rows have key buttons too).
+  const shown = () => [...search().closest('section')!.querySelectorAll('button[aria-label]')]
     .map((b) => b.getAttribute('aria-label') ?? '')
     .filter((label) => / \(/.test(label));
 

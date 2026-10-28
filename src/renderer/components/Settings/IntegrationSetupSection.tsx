@@ -27,8 +27,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useT } from '../../hooks/useT';
 import { isInstallTake } from '../../../shared/statuslineOutcome';
-import { IconCheck } from '../icons';
 import Badge from '../ui/Badge';
+import { SettingNote, SettingRow, SettingsSection } from './SettingsLayout';
 
 // ─── Injected API (jsdom-testable; the container binds the preload bridges) ───
 
@@ -501,108 +501,94 @@ export function IntegrationSetupSection({
     : needsAction(mcp) ? 'mcp' : needsAction(statusline) ? 'statusline' : null;
 
   return (
-    <section
-      className="settings-section scroll-mt-4"
-      data-integration-setup
-      data-setting-id="setup"
-    >
-      <div className="settings-section-head">
-        <h3 className="ui-group-label settings-section-title">{t('integrationSetup.title')}</h3>
-      </div>
-      <p className="settings-section-desc">{t('integrationSetup.description')}</p>
-
-      <div className="ui-group">
+    <SettingsSection id="setup" title={t('integrationSetup.title')} description={t('integrationSetup.description')}>
+      <SetupRow
+        id="hooks"
+        required
+        primary={primaryRow === 'hooks'}
+        title={t('integrationSetup.hooks.title')}
+        description={t('integrationSetup.hooks.description')}
+        model={hooks}
+        actionLabel={t(hooks.stale ? 'integrationSetup.updateButton' : 'integrationSetup.installButton')}
+        onAction={() => {
+          const h = api.hooks;
+          if (!h) return;
+          // Update only from the probe that offered it (or a retry of that
+          // Update); every other state is a fresh install.
+          void runInstall(setHooks, hooks.stale && h.update ? h.update : h.install);
+        }}
+        note={hooks.state === 'outdated' && (hooks.stale?.length ?? 0) > 0
+          ? t('integrationSetup.hooks.updateNote', { hooks: (hooks.stale ?? []).join(', ') })
+          : null}
+      />
+      {promptSuppressed === true && (
+        <SettingRow label={t('integrationSetup.hooks.promptSuppressed')} data-hooks-prompt-suppressed>
+          <button
+            type="button"
+            data-hooks-prompt-reenable
+            onClick={reenablePrompt}
+            className="ui-btn ui-btn-ghost ui-btn-sm shrink-0"
+          >
+            {t('integrationSetup.hooks.promptReenable')}
+          </button>
+        </SettingRow>
+      )}
+      {accountHooks.map((row) => (
         <SetupRow
-          id="hooks"
+          key={row.accountId}
+          id={`hooks-account-${row.accountId}`}
           required
-          primary={primaryRow === 'hooks'}
-          title={t('integrationSetup.hooks.title')}
-          description={t('integrationSetup.hooks.description')}
-          model={hooks}
-          actionLabel={t(hooks.stale ? 'integrationSetup.updateButton' : 'integrationSetup.installButton')}
-          onAction={() => {
-            const h = api.hooks;
-            if (!h) return;
-            // Update only from the probe that offered it (or a retry of that
-            // Update); every other state is a fresh install.
-            void runInstall(setHooks, hooks.stale && h.update ? h.update : h.install);
-          }}
-          note={hooks.state === 'outdated' && (hooks.stale?.length ?? 0) > 0
-            ? t('integrationSetup.hooks.updateNote', { hooks: (hooks.stale ?? []).join(', ') })
+          title={t('integrationSetup.hooks.accountTitle', { name: row.name })}
+          description={t('integrationSetup.hooks.accountDescription')}
+          model={row.model}
+          actionLabel={t('integrationSetup.updateButton')}
+          primary={primaryRow === `hooks-account-${row.accountId}`}
+          onAction={() => void runAccountUpdate(row.accountId)}
+          note={(row.model.stale?.length ?? 0) > 0
+            ? t('integrationSetup.hooks.updateNote', { hooks: (row.model.stale ?? []).join(', ') })
             : null}
         />
-        {promptSuppressed === true && (
-          <div className="ui-row" data-hooks-prompt-suppressed>
-            <span className="ui-row-icon" aria-hidden="true" />
-            <div className="ui-row-text">
-              <p className="ui-row-detail">{t('integrationSetup.hooks.promptSuppressed')}</p>
-            </div>
-            <button
-              type="button"
-              data-hooks-prompt-reenable
-              onClick={reenablePrompt}
-              className="ui-btn ui-btn-ghost ui-btn-sm shrink-0"
-            >
-              {t('integrationSetup.hooks.promptReenable')}
-            </button>
-          </div>
-        )}
-        {accountHooks.map((row) => (
-          <SetupRow
-            key={row.accountId}
-            id={`hooks-account-${row.accountId}`}
-            required
-            title={t('integrationSetup.hooks.accountTitle', { name: row.name })}
-            description={t('integrationSetup.hooks.accountDescription')}
-            model={row.model}
-            actionLabel={t('integrationSetup.updateButton')}
-            primary={primaryRow === `hooks-account-${row.accountId}`}
-            onAction={() => void runAccountUpdate(row.accountId)}
-            note={(row.model.stale?.length ?? 0) > 0
-              ? t('integrationSetup.hooks.updateNote', { hooks: (row.model.stale ?? []).join(', ') })
-              : null}
-          />
-        ))}
-        <SetupRow
-          id="mcp"
-          required
-          primary={primaryRow === 'mcp'}
-          title={t('integrationSetup.mcp.title')}
-          description={t('integrationSetup.mcp.description')}
-          model={mcp}
-          actionLabel={t('integrationSetup.registerButton')}
-          onAction={() => void registerMcp()}
-        />
-        <SetupRow
-          id="statusline"
-          required={false}
-          primary={primaryRow === 'statusline'}
-          title={t('integrationSetup.statusline.title')}
-          description={t('integrationSetup.statusline.description')}
-          model={statusline}
-          actionLabel={t('integrationSetup.installButton')}
-          onAction={() => {
-            const sl = api.statusline;
-            if (sl) void runInstall(setStatusline, () => sl.install());
-          }}
-          note={foreignNote(t, statusline.foreign)}
-          secondaryLabel={
-            (statusline.foreign?.length ?? 0) > 0 || statusline.skip === 'foreign'
-              ? t('integrationSetup.replaceButton')
-              : null
-          }
-          onSecondary={() => {
-            const sl = api.statusline;
-            if (sl) void runInstall(setStatusline, () => sl.install({ force: true }));
-          }}
-        />
-      </div>
-    </section>
+      ))}
+      <SetupRow
+        id="mcp"
+        required
+        primary={primaryRow === 'mcp'}
+        title={t('integrationSetup.mcp.title')}
+        description={t('integrationSetup.mcp.description')}
+        model={mcp}
+        actionLabel={t('integrationSetup.registerButton')}
+        onAction={() => void registerMcp()}
+      />
+      <SetupRow
+        id="statusline"
+        required={false}
+        primary={primaryRow === 'statusline'}
+        title={t('integrationSetup.statusline.title')}
+        description={t('integrationSetup.statusline.description')}
+        model={statusline}
+        actionLabel={t('integrationSetup.installButton')}
+        onAction={() => {
+          const sl = api.statusline;
+          if (sl) void runInstall(setStatusline, () => sl.install());
+        }}
+        note={foreignNote(t, statusline.foreign)}
+        secondaryLabel={
+          (statusline.foreign?.length ?? 0) > 0 || statusline.skip === 'foreign'
+            ? t('integrationSetup.replaceButton')
+            : null
+        }
+        onSecondary={() => {
+          const sl = api.statusline;
+          if (sl) void runInstall(setStatusline, () => sl.install({ force: true }));
+        }}
+      />
+    </SettingsSection>
   );
 }
 
-/** A notice row (DESIGN.md): state icon · title + one-line description ·
- *  state badge · vertical hairline · action. */
+/** A standard Settings row (title + one-line description, then the state
+ *  badge and the action on the right); an error or note sits under it as a
+ *  row note. */
 function SetupRow({
   id,
   required,
@@ -640,57 +626,33 @@ function SetupRow({
   const showSecondary = !!secondaryLabel && !!onSecondary && !working;
 
   return (
-    <div
-      className="ui-row"
-      style={{ alignItems: 'flex-start' }}
-      data-setup-row={id}
-      data-setup-row-state={model.state}
-    >
-      <span className="ui-row-icon" style={{ height: 20 }} aria-hidden="true">
-        {installed ? (
-          <span className="wmux-welcome-glyph-ok inline-flex"><IconCheck size={14} /></span>
-        ) : (
-          <span className="wmux-welcome-todo" />
+    <div data-setup-row={id} data-setup-row-state={model.state}>
+      <SettingRow
+        label={(
+          <>
+            {title}{' '}
+            {/* Required is stated in text, not color: the color grammar reserves
+                red for destructive, and a red "required" on a healthy install
+                would read as an error. */}
+            <span className="text-[color:var(--text-sub)]">
+              {required ? t('integrationSetup.required') : t('integrationSetup.recommended')}
+            </span>
+          </>
         )}
-      </span>
-      <div className="ui-row-text">
-        <p className="ui-row-title">
-          {title}{' '}
-          {/* Required is stated in text, not color: the color grammar reserves
-              red for destructive, and a red "required" on a healthy install
-              would read as an error. */}
-          <span className="font-normal text-[color:var(--text-sub)]">
-            {required ? t('integrationSetup.required') : t('integrationSetup.recommended')}
-          </span>
-        </p>
-        <p className="ui-row-detail">{description}</p>
-        {model.state === 'error' && (
-          <p className="ui-row-error" data-setup-row-error>
-            {/* A skip is not a crash: it says what wmux chose not to touch and
-                what to do about it, in words. Printing the raw outcome token
-                (`skipped-foreign`) told the user nothing they could act on. */}
-            {model.skip === 'foreign'
-              ? `${t('integrationSetup.skippedForeign')}${foreignCommandSuffix(model.foreign)}`
-              : model.skip === 'no-backup'
-                ? t('integrationSetup.skippedNoBackup')
-                : model.skip === 'failed'
-                  ? t('integrationSetup.installFailedTarget')
-                  : model.skip === 'corrupt'
-                    ? t('integrationSetup.skippedCorrupt')
-                    : `${t('integrationSetup.installFailed')}${model.error ? ` (${model.error})` : ''}`}
-          </p>
-        )}
-        {/* A note and an error never both apply: the error already carries the
-            same fact in stronger words. */}
-        {note && model.state !== 'error' && (
-          <p className="ui-row-detail mt-1" data-setup-row-note>
-            {note}
-          </p>
-        )}
-      </div>
-      <StateChip state={model.state} />
-      {(showAction || showSecondary) && (
-        <div className="ui-row-action flex-col gap-1.5" style={{ alignSelf: 'stretch' }}>
+        description={description}
+      >
+        <span className="flex items-center gap-2 shrink-0">
+          <StateChip state={model.state} />
+          {showSecondary && (
+            <button
+              type="button"
+              onClick={onSecondary}
+              data-setup-row-secondary
+              className="ui-btn ui-btn-ghost ui-btn-md"
+            >
+              {secondaryLabel}
+            </button>
+          )}
           {showAction && (
             <button
               type="button"
@@ -703,17 +665,30 @@ function SetupRow({
               {working ? t('integrationSetup.working') : actionLabel}
             </button>
           )}
-          {showSecondary && (
-            <button
-              type="button"
-              onClick={onSecondary}
-              data-setup-row-secondary
-              className="ui-btn ui-btn-ghost ui-btn-md"
-            >
-              {secondaryLabel}
-            </button>
-          )}
-        </div>
+        </span>
+      </SettingRow>
+      {model.state === 'error' && (
+        <SettingNote tone="danger" data-setup-row-error>
+          {/* A skip is not a crash: it says what wmux chose not to touch and
+              what to do about it, in words. Printing the raw outcome token
+              (`skipped-foreign`) told the user nothing they could act on. */}
+          {model.skip === 'foreign'
+            ? `${t('integrationSetup.skippedForeign')}${foreignCommandSuffix(model.foreign)}`
+            : model.skip === 'no-backup'
+              ? t('integrationSetup.skippedNoBackup')
+              : model.skip === 'failed'
+                ? t('integrationSetup.installFailedTarget')
+                : model.skip === 'corrupt'
+                  ? t('integrationSetup.skippedCorrupt')
+                  : `${t('integrationSetup.installFailed')}${model.error ? ` (${model.error})` : ''}`}
+        </SettingNote>
+      )}
+      {/* A note and an error never both apply: the error already carries the
+          same fact in stronger words. */}
+      {note && model.state !== 'error' && (
+        <SettingNote data-setup-row-note>
+          {note}
+        </SettingNote>
       )}
     </div>
   );
@@ -733,7 +708,7 @@ function StateChip({ state }: { state: RowState }): React.ReactElement {
   // accent (DESIGN.md: there is no action-coloured badge).
   const tone = state === 'installed' ? 'success' : state === 'error' ? 'danger' : 'neutral';
   return (
-    <Badge tone={tone} className="shrink-0 self-start mt-0.5" data-setup-row-chip>
+    <Badge tone={tone} className="shrink-0" data-setup-row-chip>
       {label}
     </Badge>
   );

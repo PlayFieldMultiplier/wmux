@@ -754,8 +754,8 @@ export interface UISlice {
   // notificationSoundChoice: 'default' picks the bundled cue; 'none' suppresses
   //   sound regardless of notificationSoundEnabled. We keep both flags because
   //   the boolean is the "feature gate" while the choice is the "selected cue".
-  //   Per DESIGN review, the toggle UI exposes the choice; advanced users keep
-  //   the boolean as a master mute.
+  //   Settings shows both as one Notification sound switch (on = enabled and
+  //   not 'none'; turning it on also resets the choice to 'default').
   paneRingEnabled: boolean;
   setPaneRingEnabled: (enabled: boolean) => void;
 

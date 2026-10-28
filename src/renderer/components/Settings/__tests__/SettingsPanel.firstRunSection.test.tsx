@@ -74,7 +74,8 @@ describe('FirstRunStatusView (renderToStaticMarkup)', () => {
         onShowCheatSheet: noop,
       }),
     );
-    expect(html).toContain('first-run-setup-section');
+    // Rows of General's "Setup and reset" section; settings search jumps here.
+    expect(html).toContain('data-setting-id="firstrun"');
     expect(html).toContain('first-run-setup-last-completed');
     // English fallback copy from en.ts: "Not completed yet"
     expect(html).toContain('Not completed yet');

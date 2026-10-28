@@ -19,14 +19,19 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { NotificationsView, type NotificationsViewProps, type NotificationsViewWorkspaceRow } from '../SettingsPanel';
+import {
+  NotificationsView,
+  applyNotificationSound,
+  notificationSoundOn,
+  type NotificationsViewProps,
+  type NotificationsViewWorkspaceRow,
+} from '../SettingsPanel';
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
 
 const noop = (): void => undefined;
 const noopBool = (_: boolean): void => undefined;
-const noopNum = (_v: number) => {};
-const noopChoice = (_: 'default' | 'none'): void => undefined;
+const noopNum = (_v: number): void => undefined;
 const noopMute = (_id: string, _muted: boolean): void => undefined;
 
 /** Identity-style translator that returns the interpolated key — keeps tests
@@ -43,7 +48,7 @@ const tStub: NotificationsViewProps['t'] = (key, vars) => {
 function makeProps(overrides: Partial<NotificationsViewProps> = {}): NotificationsViewProps {
   return {
     notificationSoundEnabled: true,
-    onToggleNotificationSound: noop,
+    onChangeNotificationSound: noopBool,
     toastEnabled: true,
     onChangeToastEnabled: noopBool,
     notificationRingEnabled: true,
@@ -59,7 +64,6 @@ function makeProps(overrides: Partial<NotificationsViewProps> = {}): Notificatio
     taskbarFlashEnabled: true,
     onChangeTaskbarFlashEnabled: noopBool,
     notificationSoundChoice: 'default',
-    onChangeNotificationSoundChoice: noopChoice,
     workspaces: [],
     onChangeWorkspaceMuted: noopMute,
     t: tStub,
@@ -91,34 +95,20 @@ describe('NotificationsView — initial render', () => {
     // Taskbar flash
     expect(html).toContain('settings.taskbarFlash');
     expect(html).toContain('settings.taskbarFlashDesc');
-    // Sound choice (radio group, not a toggle)
-    expect(html).toContain('notification-sound-choice-row');
-    expect(html).toContain('settings.notificationSoundChoice');
-    expect(html).toContain('settings.notificationSoundChoiceDesc');
+    // Sound has one row: no separate sound-choice radio group.
+    expect(html).not.toContain('notification-sound-choice-row');
+    expect(html).not.toContain('role="radiogroup"');
   });
 
-  it('renders the sound-choice radio group with "default" selected by default', () => {
-    const html = renderToStaticMarkup(createElement(NotificationsView, makeProps()));
-    expect(html).toContain('role="radiogroup"');
-    expect(html).toContain('name="notification-sound-choice"');
-    // Match the `<input>` tag containing both `value="default"` and `checked`,
-    // regardless of attribute order (react-dom emits them in declaration order).
-    const defaultRadio = html.match(/<input[^>]*value="default"[^>]*>/);
-    const noneRadio = html.match(/<input[^>]*value="none"[^>]*>/);
-    expect(defaultRadio).not.toBeNull();
-    expect(noneRadio).not.toBeNull();
-    expect(defaultRadio && defaultRadio[0]).toContain('checked');
-    expect(noneRadio && noneRadio[0].includes('checked')).toBe(false);
-  });
-
-  it('renders sound-choice with "none" selected when prop says so', () => {
-    const html = renderToStaticMarkup(createElement(NotificationsView, makeProps({ notificationSoundChoice: 'none' })));
-    const defaultRadio = html.match(/<input[^>]*value="default"[^>]*>/);
-    const noneRadio = html.match(/<input[^>]*value="none"[^>]*>/);
-    expect(defaultRadio).not.toBeNull();
-    expect(noneRadio).not.toBeNull();
-    expect(noneRadio && noneRadio[0]).toContain('checked');
-    expect(defaultRadio && defaultRadio[0].includes('checked')).toBe(false);
+  it('shows one sound switch, on only while sound is enabled and the cue is not "none"', () => {
+    const soundState = (props: Partial<NotificationsViewProps>): string | null => {
+      const html = renderToStaticMarkup(createElement(NotificationsView, makeProps(props)));
+      const tag = html.match(/<button[^>]*aria-label="settings.sound"[^>]*>/);
+      return tag ? (tag[0].match(/aria-checked="(true|false)"/)?.[1] ?? null) : null;
+    };
+    expect(soundState({ notificationSoundEnabled: true, notificationSoundChoice: 'default' })).toBe('true');
+    expect(soundState({ notificationSoundEnabled: true, notificationSoundChoice: 'none' })).toBe('false');
+    expect(soundState({ notificationSoundEnabled: false, notificationSoundChoice: 'default' })).toBe('false');
   });
 
   it('renders all 4 new toggles as ON when store defaults are true', () => {
@@ -192,28 +182,35 @@ describe('NotificationsView — toggle handler wiring', () => {
   });
 });
 
-describe('NotificationsView — sound-choice radio wiring', () => {
-  it('choosing "default" calls setNotificationSoundChoice with "default"', () => {
-    const setter = vi.fn();
-    const props = makeProps({ notificationSoundChoice: 'none', onChangeNotificationSoundChoice: setter });
-    props.onChangeNotificationSoundChoice('default');
-    expect(setter).toHaveBeenCalledTimes(1);
-    expect(setter).toHaveBeenCalledWith('default');
+describe('Notification sound switch over its two stored values', () => {
+  it('reads on only when enabled and the choice is not "none"', () => {
+    expect(notificationSoundOn(true, 'default')).toBe(true);
+    expect(notificationSoundOn(true, 'none')).toBe(false);
+    expect(notificationSoundOn(false, 'default')).toBe(false);
+    expect(notificationSoundOn(false, 'none')).toBe(false);
   });
 
-  it('choosing "none" calls setNotificationSoundChoice with "none"', () => {
-    const setter = vi.fn();
-    const props = makeProps({ notificationSoundChoice: 'default', onChangeNotificationSoundChoice: setter });
-    props.onChangeNotificationSoundChoice('none');
-    expect(setter).toHaveBeenCalledTimes(1);
-    expect(setter).toHaveBeenCalledWith('none');
+  it('turning it on writes enabled and resets the choice to "default"', () => {
+    const setEnabled = vi.fn();
+    const setChoice = vi.fn();
+    applyNotificationSound(true, setEnabled, setChoice);
+    expect(setEnabled).toHaveBeenCalledWith(true);
+    expect(setChoice).toHaveBeenCalledWith('default');
+  });
+
+  it('turning it off writes enabled only and leaves the choice alone', () => {
+    const setEnabled = vi.fn();
+    const setChoice = vi.fn();
+    applyNotificationSound(false, setEnabled, setChoice);
+    expect(setEnabled).toHaveBeenCalledWith(false);
+    expect(setChoice).not.toHaveBeenCalled();
   });
 });
 
 // ─── Per-workspace mute list ────────────────────────────────────────────────
 
 describe('NotificationsView — per-workspace mute list', () => {
-  it('renders one row per workspace with a checkbox bound to muted', () => {
+  it('renders one row per workspace with a switch bound to muted', () => {
     const workspaces = [
       workspaceRow('ws-1', 'Workspace 1', false),
       workspaceRow('ws-2', 'Workspace 2', true),
@@ -221,14 +218,15 @@ describe('NotificationsView — per-workspace mute list', () => {
     const html = renderToStaticMarkup(createElement(NotificationsView, makeProps({ workspaces })));
     expect(html).toContain('per-workspace-mute-row-ws-1');
     expect(html).toContain('per-workspace-mute-row-ws-2');
-    expect(html).toContain('per-workspace-mute-checkbox-ws-1');
-    expect(html).toContain('per-workspace-mute-checkbox-ws-2');
-    // The muted row's checkbox renders as `checked`.
-    const ws2Checkbox = html.match(/id="workspace-mute-ws-2"[^>]*checked/);
-    expect(ws2Checkbox).not.toBeNull();
-    // The unmuted row's checkbox does NOT have the checked attribute.
-    const ws1Checkbox = html.match(/id="workspace-mute-ws-1"[^>]*checked/);
-    expect(ws1Checkbox).toBeNull();
+    expect(html).toContain('per-workspace-mute-switch-ws-1');
+    expect(html).toContain('per-workspace-mute-switch-ws-2');
+    const switchState = (id: string): string | null => {
+      const tag = html.match(new RegExp(`<button[^>]*id="workspace-mute-${id}"[^>]*>`));
+      return tag ? (tag[0].match(/aria-checked="(true|false)"/)?.[1] ?? null) : null;
+    };
+    // The muted row's switch is on, the unmuted row's is off.
+    expect(switchState('ws-2')).toBe('true');
+    expect(switchState('ws-1')).toBe('false');
   });
 
   it('renders the workspace name in the row label', () => {
@@ -288,12 +286,12 @@ describe('NotificationsView — existing toggle regressions', () => {
     expect(setter).toHaveBeenCalledWith(false);
   });
 
-  it('notificationSoundEnabled toggle calls toggleNotificationSound (no payload)', () => {
+  it('the sound switch passes its new state to onChangeNotificationSound', () => {
     const setter = vi.fn();
-    const props = makeProps({ notificationSoundEnabled: true, onToggleNotificationSound: setter });
-    props.onToggleNotificationSound();
+    const props = makeProps({ notificationSoundEnabled: true, onChangeNotificationSound: setter });
+    props.onChangeNotificationSound(false);
     expect(setter).toHaveBeenCalledTimes(1);
-    expect(setter).toHaveBeenCalledWith();
+    expect(setter).toHaveBeenCalledWith(false);
   });
 
   it('notificationRingEnabled onChange(false) calls setNotificationRingEnabled with false', () => {
