@@ -265,7 +265,7 @@ function dumpScrollbackBuffersSync(): Map<string, boolean> {
       const content = serializeTerminalBuffer(terminal);
       if (!content) continue;
       dumped.set(surface.id, true);
-      window.electronAPI.scrollback.dump(surface.id, content).catch(() => {});
+      window.electronAPI.scrollback.dump(surface.id, content).catch(() => undefined);
     }
   }
   return dumped;
@@ -871,17 +871,13 @@ export default function AppLayout() {
   // selectInboxOwnsApprovals.
   const inboxOwnsApprovals = selectInboxOwnsApprovals({ fleetViewVisible, fleetActiveTab });
   const onboardingActive = useStore((s) => s.onboardingActive);
-  const onboardingCompleted = useStore((s) => s.onboardingCompleted);
-  const startOnboarding = useStore((s) => s.startOnboarding);
   const completeOnboarding = useStore((s) => s.completeOnboarding);
 
   // ─── First-run wizard + cheat sheet (T8a) ───────────────────────────────
   // Local visibility state for the wizard (null = hidden, otherwise mode).
   // The cheat sheet mounts only while `cheatSheetForceShown` is set: the `?`
-  // prefix action and the Settings button force-show it immediately, and the
-  // first-boot queue auto-shows it once (using up `!cheatSheetDismissed`).
+  // prefix action and the Settings button show it. It never opens by itself.
   const firstRunCompleted = useStore((s) => s.firstRunCompleted);
-  const cheatSheetDismissed = useStore((s) => s.cheatSheetDismissed);
   const cheatSheetForceShown = useStore((s) => s.cheatSheetForceShown);
   const setFirstRunCompleted = useStore((s) => s.setFirstRunCompleted);
   const [showFirstRunWizard, setShowFirstRunWizard] = useState<'firstRun' | 'reopen' | null>(null);
@@ -1027,7 +1023,7 @@ export default function AppLayout() {
     const onResumed = (window as any).electronAPI?.system?.onResumed;
     return initAtlasWakeRecovery({
       onSystemResumed:
-        typeof onResumed === 'function' ? onResumed : () => () => {},
+        typeof onResumed === 'function' ? onResumed : () => () => undefined,
     });
   }, []);
 
@@ -1724,7 +1720,6 @@ export default function AppLayout() {
     })();
   // setPaneGate / clearAllPtyState are stable zustand action refs; reconcilePtys
   // captured by closure. Empty deps mirror pre-Fix-0 mount-only behavior.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ─── First-run wizard: probe marker on mount (T8a) ────────────────────
@@ -1800,11 +1795,11 @@ export default function AppLayout() {
 
   // ─── First-boot queue: one self-opening surface at a time ────────────
   // The wizard owns the first impression; after it, the legacy update
-  // question (upgraders only), the one-time "New: …" toast (upgraders only),
-  // the spotlight tour (first visit to the Fleet page) and the keyboard cheat
-  // sheet (once, after the tour, on Fleet) each wait until nothing else is open — no
-  // dialog, no Settings panel, no other queued surface. Each start is latched
-  // here: the surface's own modal layer must not count against itself.
+  // question (upgraders only) and the one-time "New: …" toast (upgraders
+  // only) each wait until nothing else is open — no dialog, no Settings
+  // panel, no other queued surface, no tour or cheat sheet the user opened.
+  // Each start is latched here: the surface's own modal layer must not count
+  // against itself.
   const firstBootNext = nextFirstBootSurface({
     firstRunSettled: firstRunProbeSettled,
     sessionSettled: sessionLoaded || sessionLoadFailed,
@@ -1816,16 +1811,11 @@ export default function AppLayout() {
     surfaceShowing: autoUpdatePromptOpen || onboardingActive || cheatSheetForceShown || featureNoticeShowing,
     autoUpdatePromptPending: showAutoUpdatePrompt,
     featureNoticePending,
-    firstRunCompleted,
-    onboardingCompleted,
-    onFleetPage: appRoute === 'fleet',
-    cheatSheetPending: !cheatSheetDismissed,
   });
   useEffect(() => {
     // A dialog that mounted in this same commit has registered its layer
     // already (child effects run first) but not yet re-rendered us.
     if (!firstBootNext || openModalLayerCount() > 0) return;
-    const st = useStore.getState();
     switch (firstBootNext) {
       case 'autoUpdatePrompt':
         setAutoUpdatePromptOpen(true);
@@ -1834,16 +1824,8 @@ export default function AppLayout() {
         setFeatureNoticePending(false);
         setFeatureNoticeToastId(showPrWakeNoticeOnce());
         break;
-      case 'onboarding':
-        startOnboarding();
-        break;
-      case 'cheatSheet':
-        // Shown once: used up as it opens, then shown like the `?` action.
-        st.setCheatSheetDismissed(true);
-        st.setCheatSheetForceShown(true);
-        break;
     }
-  }, [firstBootNext, modalLayerCount, startOnboarding]);
+  }, [firstBootNext, modalLayerCount]);
 
   // Re-reconcile when daemon connects late (respawn/reconnect after the
   // startup reconcile already ran). Gating + abort/timeout/preserve logic
@@ -2249,13 +2231,11 @@ export default function AppLayout() {
         }
       });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- projectCwdSignature + paneGate are the meaningful triggers; workspaces identity churns every render
+    // projectCwdSignature + paneGate are the meaningful triggers; workspaces identity churns every render.
   }, [projectCwdSignature, paneGate]);
 
   // Wizard close handler (T8a). Mirrors firstRunCompleted into uiSlice (main
-  // already wrote the marker via firstRun:complete or :dismiss). The cheat
-  // sheet auto-mounts via the derived condition below once firstRunCompleted
-  // flips true (D11) and the consent prompt / spotlight have cleared (#1276).
+  // already wrote the marker via firstRun:complete or :dismiss).
   const handleWizardClose = useCallback(() => {
     setShowFirstRunWizard(null);
     setFirstRunCompleted(true);
@@ -2441,9 +2421,8 @@ export default function AppLayout() {
       )}
 
       {/* Keyboard cheat sheet (T8a / Plan 1.18). Mounted only while shown:
-          the `?` prefix action and Settings › First-run setup force-show it
-          immediately; the first-boot queue auto-shows it once, after the tour
-          (#1276) — never by itself on a first run. */}
+          the `?` prefix action and Settings › Setup and reset show it. It
+          never opens by itself. */}
       {firstRunCompleted && cheatSheetForceShown && <KeyboardCheatSheet />}
 
       {companyViewVisible && (
