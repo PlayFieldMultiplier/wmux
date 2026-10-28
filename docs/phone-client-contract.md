@@ -6352,6 +6352,16 @@ first dispatch is still running. It never dispatches twice. A `pending` receipt
 found after a daemon restart is final-uncertain: a re-POST replays
 `{result:"unconfirmed", error:"delivery-unconfirmed", effect:"uncertain"}`.
 
+A send the pane refuses before anything is dispatched (`no-conversation`,
+`chat-unavailable`, `managed-read-only`, `session-changed`) is stored too, as a
+final refusal: its receipt reads `refused`, and a re-POST of the same id replays
+it (`replayed:true`) instead of checking the pane again; a new Send mints a new
+id as usual. Refusals of the request itself (`invalid-chat-request`,
+`text-too-long`, `message-id-*`) and the store's own failures
+(`message-history-full`, `chat-persist-failed`) store nothing. Daemons before
+this stored nothing for those pane refusals either, so their receipt read
+`unknown`. No response field changed.
+
 Two refinements of the draft contract, on purpose:
 
 - **Replay runs before binding resolution.** A retry after the agent exited
@@ -6444,9 +6454,9 @@ rides on a `submitted` receipt the agent queued behind its running turn.
 | --- | --- |
 | `pending` | dispatch still running; check again in 5 s |
 | `submitted` | final |
-| `refused` | final, `effect:"none"`; text back to the draft |
+| `refused` | final, `effect:"none"`; text back to the draft. Also a send the pane refused before dispatch (see Idempotency) |
 | `uncertain` | final-uncertain; check Terminal. A `pending` found after a daemon restart reads `uncertain` |
-| `unknown` | no receipt for this owner, pane and id: the POST never reached the store. Safe to POST again **with the same id**, only while the id is younger than 24 h and `/turns` still shows the same `agentSessionId` and `historyEpoch` |
+| `unknown` | no receipt for this owner, pane and id: the POST never reached the store, or the request itself was refused (and, on an older daemon, any refusal before dispatch). Safe to POST again **with the same id**, only while the id is younger than 24 h and `/turns` still shows the same `agentSessionId` and `historyEpoch` |
 
 Poll every `unknown` or `pending` entry every 5 s, even with a healthy SSE —
 nothing on `/api/events` names a send. `404` means the pane is gone: settle the

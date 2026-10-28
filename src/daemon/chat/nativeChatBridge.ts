@@ -709,8 +709,9 @@ export function createChatBridge<P extends ChatPane>(deps: NativeChatBridgeDeps<
 
   const replay = (clientMessageId: string, entry: { state: 'pending' | 'final'; outcome?: StoredChatOutcome }): ChatSendOutcome => {
     if (entry.state === 'pending' || !entry.outcome) return { clientMessageId, replayed: true, pending: true };
-    // A stored `queued:false` (valid on load) reads as absent.
-    const { queued, ...outcome } = entry.outcome;
+    // A stored `queued:false` (valid on load) reads as absent; `gate` is diagnostics only.
+    const { queued, gate: _gate, ...outcome } = entry.outcome;
+    void _gate;
     return { clientMessageId, replayed: true, ...outcome, ...(queued === true ? { queued: true as const } : {}) };
   };
 
@@ -733,7 +734,9 @@ export function createChatBridge<P extends ChatPane>(deps: NativeChatBridgeDeps<
     if (!deps.approvals()) return { result: 'unavailable', effect: 'none', error: 'chat-unavailable' };
     if (sending.has(id)) return { result: 'busy', effect: 'none', error: 'chat-busy' };
     sending.add(id);
-    let pasted = false;
+    // Any write that reached the PTY (or threw: it may have) can leave input
+    // in the composer, so from then on the send is never reported as `none`.
+    let wrote = false;
     let queued = false;
     let denied: 'paste' | 'submit' | undefined;
     const authorize = req.authorized;
@@ -761,22 +764,30 @@ export function createChatBridge<P extends ChatPane>(deps: NativeChatBridgeDeps<
           const slug = slugOf(deps.chatAgentState(id));
           try { return !!slug && await deps.agentProcessAlive(id, slug); } catch { return false; }
         },
-        write: (data) => deps.write(id, data),
+        write: (data) => {
+          let ok = true;
+          try {
+            ok = deps.write(id, data);
+            return ok;
+          } finally {
+            if (ok) wrote = true;
+          }
+        },
         ...(deps.delay ? { delay: deps.delay } : {}),
         ...(opts.idleOnly ? { idleOnly: true } : {}),
         ...(opts.onScreenHold ? { onScreenHold: opts.onScreenHold } : {}),
         ...(authorize ? { authorized: async (stage: 'first-write' | 'submit') => {
           let ok = false;
           try { ok = await authorize(stage); } catch { /* a failed check is a refusal */ }
-          if (!ok) denied = pasted ? 'submit' : 'paste';
+          if (!ok) denied = wrote ? 'submit' : 'paste';
           return ok;
         } } : {}),
-        // Any write, including the first leading image paste, may leave input in the composer.
-        onWrite: (stage, running) => { if (stage === 'paste') pasted = true; else queued = !!running; },
+        onWrite: (stage, running) => { if (stage === 'submit') queued = !!running; },
       }, req.attachments ?? []);
       if (denied) return { result: 'error', effect: denied === 'submit' ? 'uncertain' : 'none', error: 'authorization-expired' };
+      if (result === 'sent') return { result, effect: 'submitted', ...(queued ? { queued: true as const } : {}) };
+      if (wrote) return { result: 'error', effect: 'uncertain', error: 'send-interrupted' };
       switch (result) {
-        case 'sent': return { result, effect: 'submitted', ...(queued ? { queued: true as const } : {}) };
         case 'busy': return { result, effect: 'none', error: 'chat-busy' };
         case 'blocked': return { result, effect: 'none', error: 'chat-blocked', blockedBy: blockedBy(id) };
         case 'session_changed': return sessionChanged(id);
@@ -784,12 +795,10 @@ export function createChatBridge<P extends ChatPane>(deps: NativeChatBridgeDeps<
         case 'unavailable':
           // The write wrapper refuses before anything reaches the PTY.
           return { result, effect: 'none', error: 'chat-unavailable' };
-        default:
-          return pasted ? { result: 'error', effect: 'uncertain', error: 'send-interrupted' }
-            : { result: 'error', effect: 'none', error: 'invalid-chat-request' };
+        default: return { result: 'error', effect: 'none', error: 'invalid-chat-request' };
       }
     } catch {
-      return pasted ? { result: 'error', effect: 'uncertain', error: 'send-interrupted' } : { result: 'unavailable', effect: 'none', error: 'chat-unavailable' };
+      return wrote ? { result: 'error', effect: 'uncertain', error: 'send-interrupted' } : { result: 'unavailable', effect: 'none', error: 'chat-unavailable' };
     } finally { sending.delete(id); }
   };
 
@@ -818,6 +827,18 @@ export function createChatBridge<P extends ChatPane>(deps: NativeChatBridgeDeps<
     }
   };
 
+  /**
+   * One daemon log line per decision on a device or operator send: the id,
+   * the pane and where it was decided. Never the text or a file name.
+   */
+  const traceSend = (req: Pick<ChatSendRequest, 'owner' | 'id' | 'clientMessageId'>, verdict: string) => {
+    if (req.owner !== 'desktop') deps.log('info', `[chat] send ${req.clientMessageId} pane=${req.id} ${verdict}`);
+  };
+
+  const traceOutcome = (outcome: StoredChatOutcome, at: string): string =>
+    outcome.effect === 'submitted' ? `submitted queued=${outcome.queued === true}`
+      : `${outcome.effect === 'none' ? 'refused' : 'uncertain'} ${outcome.error ?? outcome.result ?? 'error'} at ${at}`;
+
   const sendWith = async (req: ChatSendRequest, dedup: boolean, managedRequestId = req.clientMessageId): Promise<ChatSendOutcome> => {
     const { clientMessageId, owner } = req;
     const idCheck = checkChatId(clientMessageId, now(), CHAT_MESSAGE_RETENTION_MS);
@@ -838,33 +859,62 @@ export function createChatBridge<P extends ChatPane>(deps: NativeChatBridgeDeps<
     if (held) return heldReplay(held, req.id, fingerprint, store?.lookup(owner, clientMessageId));
     const replayed = early(store?.lookup(owner, clientMessageId));
     if (replayed) return replayed;
-    if (typeof req.text !== 'string' || !req.text.trim()) return refuse(clientMessageId, 'invalid-chat-request', { result: 'error', detail: 'text' });
-    if (req.text.length > CHAT_SEND_MAX_UNITS) return refuse(clientMessageId, 'text-too-long', { result: 'error', limit: 'units' });
-    if (!req.agentSessionId) return refuse(clientMessageId, 'invalid-chat-request', { result: 'error', detail: 'agentSessionId' });
+    /** The request itself is refused: nothing is stored, a re-post is checked again. */
+    const invalid = (error: ChatSendTag, extra: Partial<ChatSendOutcome>): ChatSendOutcome => {
+      traceSend(req, `refused ${error} at validation`);
+      return refuse(clientMessageId, error, extra);
+    };
+    /**
+     * The pane refused it before any dispatch: nothing was written. A device
+     * or operator send keeps the refusal as its final receipt, so a receipt
+     * read says `refused` instead of `unknown`; a desktop retry is checked again.
+     */
+    const gateRefusal = (gate: string, outcome: StoredChatOutcome): ChatSendOutcome => {
+      if (store && owner !== 'desktop') {
+        // A same-id send that resolved alongside this one got there first: its answer stands.
+        const queuedMeanwhile = queueStore?.get(owner, clientMessageId);
+        if (queuedMeanwhile) return heldReplay(queuedMeanwhile, req.id, fingerprint, store.lookup(owner, clientMessageId));
+        const stored = store.insertFinal(owner, clientMessageId, {
+          paneId: req.id, fingerprint, agentSessionId: req.agentSessionId,
+          ...(req.historyEpoch !== undefined ? { historyEpoch: req.historyEpoch } : {}),
+        }, { ...outcome, gate });
+        if (stored === 'exists') return early(store.lookup(owner, clientMessageId)) ?? refuse(clientMessageId, 'message-id-conflict');
+        if (stored !== 'inserted') deps.log('warn', `[chat] send ${clientMessageId} pane=${req.id} refusal receipt not stored (${stored})`);
+      }
+      traceSend(req, `refused ${outcome.error} at ${gate}`);
+      return { clientMessageId, replayed: false, ...outcome };
+    };
+    if (typeof req.text !== 'string' || !req.text.trim()) return invalid('invalid-chat-request', { result: 'error', detail: 'text' });
+    if (req.text.length > CHAT_SEND_MAX_UNITS) return invalid('text-too-long', { result: 'error', limit: 'units' });
+    if (!req.agentSessionId) return invalid('invalid-chat-request', { result: 'error', detail: 'agentSessionId' });
 
     const resolution = await resolve(req.id);
-    if (resolution.source === 'none') return refuse(clientMessageId, 'no-conversation');
+    if (resolution.source === 'none') return gateRefusal('no-conversation', { effect: 'none', error: 'no-conversation' });
     // Image paths are pasted into a file-bound agent's composer only; the
     // OpenCode plugin and managed sessions have no attachment input.
     if (req.attachments?.length && resolution.source !== 'file') {
-      return refuse(clientMessageId, 'chat-unavailable', { result: 'unavailable' });
+      return gateRefusal('attachments', { result: 'unavailable', effect: 'none', error: 'chat-unavailable' });
     }
     if (resolution.source === 'managed') {
-      if (req.managedReadOnly) return refuse(clientMessageId, 'managed-read-only');
+      if (req.managedReadOnly) return gateRefusal('managed-read-only', { effect: 'none', error: 'managed-read-only' });
       // Desktop managed chat keeps its own durable receipts keyed by requestId.
       const result = await deps.managed()?.send(req.id, req.agentSessionId, req.text, managedRequestId) ?? 'unavailable';
-      return { clientMessageId, replayed: false, result, effect: result === 'sent' ? 'submitted' : 'none' };
+      // `unconfirmed` can replay a request that already crossed to the agent;
+      // every other refusal (`error` included) is answered before it crosses.
+      const effect = result === 'sent' ? 'submitted' : result === 'unconfirmed' ? 'uncertain' : 'none';
+      traceSend(req, `${effect === 'submitted' ? 'submitted' : effect === 'none' ? 'refused' : 'uncertain'} ${result} at managed`);
+      return { clientMessageId, replayed: false, result, effect };
     }
     if (resolution.status.agentSessionId !== req.agentSessionId ||
         req.historyEpoch !== undefined && req.historyEpoch !== resolution.epoch) {
-      return { clientMessageId, replayed: false, ...await sessionChanged(req.id, resolution) };
+      return gateRefusal('identity', await sessionChanged(req.id, resolution));
     }
     if (resolution.source === 'file' && !resolution.status.terminal?.capabilities.send) {
-      return refuse(clientMessageId, 'chat-unavailable', { result: 'unavailable' });
+      return gateRefusal('send-capability', { result: 'unavailable', effect: 'none', error: 'chat-unavailable' });
     }
     if (resolution.source === 'tui' &&
         openCodeSendBytes(req.agentSessionId, resolution.rawEpoch, req.text, clientMessageId) > OPENCODE_REQUEST_MAX_BYTES) {
-      return refuse(clientMessageId, 'text-too-long', { result: 'error', limit: 'bytes', maxSendBytes: OPENCODE_MAX_SEND_BYTES });
+      return invalid('text-too-long', { result: 'error', limit: 'bytes', maxSendBytes: OPENCODE_MAX_SEND_BYTES });
     }
     // The daemon queue: a running turn, or anything already waiting on the
     // pane (any owner), holds the message for delivery after the turn ends.
@@ -874,7 +924,9 @@ export function createChatBridge<P extends ChatPane>(deps: NativeChatBridgeDeps<
       // passed the checks above (both awaited resolve) finds this one here.
       const raced = early(store?.lookup(owner, clientMessageId));
       if (raced) return raced;
-      return enqueue(req, resolution.source, fingerprint);
+      const held = enqueue(req, resolution.source, fingerprint);
+      traceSend(req, held.queueState ? `queued state=${held.queueState}` : `refused ${held.error} at queue`);
+      return held;
     }
     // Same for a same-id send that went to the queue while this one resolved.
     const queuedMeanwhile = queueStore?.get(owner, clientMessageId);
@@ -890,7 +942,11 @@ export function createChatBridge<P extends ChatPane>(deps: NativeChatBridgeDeps<
       if (inserted === 'exists') return early(store.lookup(owner, clientMessageId)) ?? refuse(clientMessageId, 'message-id-conflict');
       if (inserted === 'full' || inserted === 'persist-failed') {
         // The desktop sends without dedup, as when the store failed to load.
-        if (owner !== 'desktop') return refuse(clientMessageId, inserted === 'full' ? 'message-history-full' : 'chat-persist-failed');
+        if (owner !== 'desktop') {
+          const error = inserted === 'full' ? 'message-history-full' : 'chat-persist-failed';
+          traceSend(req, `refused ${error} at receipt-store`);
+          return refuse(clientMessageId, error);
+        }
         deps.log('warn', `[chat] send receipt for ${req.id} not stored (${inserted}); desktop send without dedup`);
         store = null;
       }
@@ -902,6 +958,7 @@ export function createChatBridge<P extends ChatPane>(deps: NativeChatBridgeDeps<
       outcome = { result: 'unconfirmed', effect: 'uncertain', error: 'delivery-unconfirmed' };
     }
     if (store && !store.complete(owner, clientMessageId, outcome)) deps.log('warn', `[chat] send receipt for ${req.id} not persisted`);
+    traceSend(req, traceOutcome(outcome, `${resolution.source}-dispatch`));
     if (outcome.result === 'sent' && !outcome.error && owner !== 'desktop') {
       // The Enter opens the episode synchronously; a prompt Claude queued mid-turn opened none.
       const opened = resolution.source === 'file' && !outcome.queued ? deps.chatAgentState(req.id).turn?.id : undefined;
@@ -1090,15 +1147,16 @@ export function createChatBridge<P extends ChatPane>(deps: NativeChatBridgeDeps<
   const queueVerdict = (outcome: StoredChatOutcome): { state: ChatQueueState; reason?: ChatQueueReason } | { hold: QueueMemo['hold'] | null } => {
     if (outcome.result === 'sent' && !outcome.error) return { state: 'delivered' };
     // It may have been typed (a paste without its Enter, a plugin answer
-    // lost): never a state that invites the phone to send it again.
-    if (outcome.effect === 'uncertain') return { state: 'uncertain', reason: 'delivery-unconfirmed' };
+    // lost): never a state that invites the phone to send it again, and never
+    // a hold, which would paste it again on the next pass. Only a dispatch
+    // that wrote nothing (`none`) is held.
+    if (outcome.effect !== 'none') return { state: 'uncertain', reason: 'delivery-unconfirmed' };
     switch (outcome.error) {
       case 'chat-busy': return { hold: null };
       case 'chat-blocked': return { hold: outcome.blockedBy === 'approval' ? 'prompt-active' : 'blocked' };
       case 'chat-unavailable':
       case 'opencode-receipts-full':
-        if (outcome.effect === 'none') return { hold: null };
-        break;
+        return { hold: null };
       case 'session-changed': return { state: 'canceled', reason: 'session-changed' };
       case 'input-not-provably-empty': return { state: 'failed', reason: 'draft-present' };
       case 'authorization-expired': return { state: 'canceled', reason: 'authorization-revoked' };
@@ -1282,6 +1340,7 @@ export function createChatBridge<P extends ChatPane>(deps: NativeChatBridgeDeps<
       if (inserted === 'inserted' && !receipts?.complete(head.owner, head.clientMessageId, outcome)) {
         deps.log('warn', `[chat] send receipt for queued ${id} not persisted`);
       }
+      traceSend(req, `queue ${verdict.state}: ${traceOutcome(outcome, `${resolution.source}-dispatch`)}`);
       if (verdict.state === 'delivered' && outcome.queued) {
         // Claude queued it inside the running turn: no episode opened, and the
         // next-turn items still wait for this turn's end.

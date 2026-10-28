@@ -31,6 +31,12 @@ export interface StoredChatOutcome {
   historyEpoch?: string;
   /** `sent` while the turn ran: the agent's composer queued the prompt. */
   queued?: true;
+  /**
+   * The check that refused it before any dispatch (`insertFinal`), for the
+   * daemon log and diagnostics only; never on the wire. An older daemon
+   * ignores the key, and an unknown value loads as-is.
+   */
+  gate?: string;
 }
 
 export interface ChatSendReceipt {
@@ -48,6 +54,7 @@ export interface ChatSendReceipt {
 const RESTART_UNCERTAIN: StoredChatOutcome = { result: 'unconfirmed', effect: 'uncertain', error: 'delivery-unconfirmed' };
 
 export type ChatReceiptInsert = 'inserted' | 'exists' | 'full' | 'persist-failed';
+export type ChatReceiptIdentity = Pick<ChatSendReceipt, 'paneId' | 'fingerprint' | 'agentSessionId' | 'historyEpoch'>;
 
 const hash = (parts: readonly string[]): string => createHash('sha256').update(JSON.stringify(parts)).digest('hex');
 const optionalString = (value: unknown, max: number): boolean => value === undefined || typeof value === 'string' && value.length <= max;
@@ -62,7 +69,7 @@ function validOutcome(value: unknown): value is StoredChatOutcome {
     (row.limit === undefined || row.limit === 'units' || row.limit === 'bytes') &&
     (row.maxSendBytes === undefined || Number.isSafeInteger(row.maxSendBytes) && Number(row.maxSendBytes) > 0) &&
     optionalString(row.agentSessionId, 256) && optionalString(row.historyEpoch, 64) &&
-    (row.queued === undefined || typeof row.queued === 'boolean');
+    (row.queued === undefined || typeof row.queued === 'boolean') && optionalString(row.gate, 64);
 }
 
 function validEntry(key: string, value: unknown): value is ChatSendReceipt {
@@ -124,8 +131,21 @@ export class ChatSendReceiptStore {
   }
 
   /** Insert-if-absent. `inserted` means `pending` is durable; nothing else leaves a trace. */
-  insertPending(owner: ChatOwner, clientMessageId: string,
-    receipt: Pick<ChatSendReceipt, 'paneId' | 'fingerprint' | 'agentSessionId' | 'historyEpoch'>): ChatReceiptInsert {
+  insertPending(owner: ChatOwner, clientMessageId: string, receipt: ChatReceiptIdentity): ChatReceiptInsert {
+    return this.insert(owner, clientMessageId, receipt, { state: 'pending' });
+  }
+
+  /**
+   * Insert-if-absent, already final: a send refused before any dispatch, so
+   * a receipt read says `refused` instead of `unknown` and a re-post of the
+   * id replays the refusal.
+   */
+  insertFinal(owner: ChatOwner, clientMessageId: string, receipt: ChatReceiptIdentity, outcome: StoredChatOutcome): ChatReceiptInsert {
+    return this.insert(owner, clientMessageId, receipt, { state: 'final', outcome });
+  }
+
+  private insert(owner: ChatOwner, clientMessageId: string, receipt: ChatReceiptIdentity,
+    verdict: Pick<ChatSendReceipt, 'state' | 'outcome'>): ChatReceiptInsert {
     if (this.lookup(owner, clientMessageId)) return 'exists';
     const now = this.now();
     const retained = Object.fromEntries(Object.entries(this.entries).filter(([, row]) => row.createdAt > now - CHAT_MESSAGE_RETENTION_MS));
@@ -133,7 +153,7 @@ export class ChatSendReceiptStore {
     const next = { ...retained, [this.key(owner, clientMessageId)]: {
       createdAt: chatIdTime(clientMessageId), paneId: receipt.paneId, fingerprint: receipt.fingerprint,
       agentSessionId: receipt.agentSessionId, ...(receipt.historyEpoch !== undefined ? { historyEpoch: receipt.historyEpoch } : {}),
-      state: 'pending' as const,
+      ...verdict,
     } };
     try { this.save(next); } catch { return 'persist-failed'; }
     this.entries = next;
