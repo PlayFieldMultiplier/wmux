@@ -17,7 +17,6 @@ export const da = {
   'workspace.agentError': 'Agentfejl',
   'workspace.agentWaiting': 'Agent venter',
 
-  'workspace.agentAwaitingInput': 'Agent afventer input',
   'workspace.needsYou': 'Venter på dig',
   'workspace.agentIdle': 'Agent inaktiv',
   'workspace.agentUnverifiable': 'Ingen opdatering i {time}',
@@ -87,6 +86,9 @@ export const da = {
   'notification.clear': 'Ryd',
   'notification.empty': 'Ingen notifikationer',
   'notification.toggle': 'Ctrl+I for at skifte',
+  'notification.needsYou.question': "Venter på dig: “{question}”",
+  'notification.needsYou.noQuestion': "Venter på dig. Ingen spørgsmålstekst; se terminalen.",
+  'notification.needsYou.over': "Venter ikke længere på dig.",
 
   // Command palette
   'palette.placeholder': 'Indtast en kommando...',

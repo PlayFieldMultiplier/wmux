@@ -17,7 +17,6 @@ export const es = {
   'workspace.agentError': 'Error del agente',
   'workspace.agentWaiting': 'Agente en espera',
 
-  'workspace.agentAwaitingInput': 'Agente requiere entrada',
   'workspace.needsYou': 'Te espera',
   'workspace.agentIdle': 'Agente inactivo',
   'workspace.agentUnverifiable': 'Sin novedades desde hace {time}',
@@ -87,6 +86,9 @@ export const es = {
   'notification.clear': 'Limpiar',
   'notification.empty': 'Sin notificaciones',
   'notification.toggle': 'Ctrl+I para alternar',
+  'notification.needsYou.question': "Te espera: «{question}»",
+  'notification.needsYou.noQuestion': "Te espera. Sin texto de pregunta; mira su terminal.",
+  'notification.needsYou.over': "Ya no te espera.",
 
   // Command palette
   'palette.placeholder': 'Escribe un comando...',

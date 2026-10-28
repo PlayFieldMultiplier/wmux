@@ -17,7 +17,6 @@ export const zhTW = {
   'workspace.agentError': '代理發生錯誤',
   'workspace.agentWaiting': '代理等待中',
 
-  'workspace.agentAwaitingInput': '代理等待輸入',
   'workspace.needsYou': '等你回應',
   'workspace.agentIdle': '代理閒置',
   'workspace.agentUnverifiable': '{time} 無更新',
@@ -87,6 +86,9 @@ export const zhTW = {
   'notification.clear': '清除',
   'notification.empty': '沒有通知',
   'notification.toggle': '按 Ctrl+I 切換',
+  'notification.needsYou.question': "等你回應：「{question}」",
+  'notification.needsYou.noQuestion': "等你回應。沒有問題內容，請看它的終端機。",
+  'notification.needsYou.over': "已不再等你。",
 
   // Command palette
   'palette.placeholder': '輸入命令...',

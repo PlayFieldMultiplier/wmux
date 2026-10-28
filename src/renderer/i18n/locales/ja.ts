@@ -17,7 +17,6 @@ export const ja = {
   'workspace.agentError': 'エージェントエラー',
   'workspace.agentWaiting': 'エージェント待機中',
 
-  'workspace.agentAwaitingInput': 'エージェント入力待ち',
   'workspace.needsYou': '応答待ち',
   'workspace.agentIdle': 'エージェントアイドル',
   'workspace.agentUnverifiable': '{time} 更新なし',
@@ -87,6 +86,9 @@ export const ja = {
   'notification.clear': 'クリア',
   'notification.empty': '通知なし',
   'notification.toggle': 'Ctrl+Iで切替',
+  'notification.needsYou.question': "応答待ち:「{question}」",
+  'notification.needsYou.noQuestion': "応答待ち。質問の本文なし。ターミナルを確認してください。",
+  'notification.needsYou.over': "もう待っていません。",
 
   // Command palette
   'palette.placeholder': 'コマンドを入力...',

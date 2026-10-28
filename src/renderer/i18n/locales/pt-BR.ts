@@ -17,7 +17,6 @@ export const ptBR = {
   'workspace.agentError': 'Erro do agente',
   'workspace.agentWaiting': 'Agente aguardando',
 
-  'workspace.agentAwaitingInput': 'Agente aguarda entrada',
   'workspace.needsYou': 'Espera por você',
   'workspace.agentIdle': 'Agente inativo',
   'workspace.agentUnverifiable': 'Sem atualização há {time}',
@@ -87,6 +86,9 @@ export const ptBR = {
   'notification.clear': 'Limpar',
   'notification.empty': 'Sem notificações',
   'notification.toggle': 'Ctrl+I para alternar',
+  'notification.needsYou.question': "Espera por você: “{question}”",
+  'notification.needsYou.noQuestion': "Espera por você. Sem texto da pergunta; veja o terminal.",
+  'notification.needsYou.over': "Não está mais esperando por você.",
 
   // Command palette
   'palette.placeholder': 'Digite um comando...',

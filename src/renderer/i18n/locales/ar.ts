@@ -17,7 +17,6 @@ export const ar = {
   'workspace.agentError': 'خطأ في الوكيل',
   'workspace.agentWaiting': 'الوكيل في الانتظار',
 
-  'workspace.agentAwaitingInput': 'الوكيل يحتاج إدخالاً',
   'workspace.needsYou': 'ينتظر ردك',
   'workspace.agentIdle': 'الوكيل خامل',
   'workspace.agentUnverifiable': 'لا تحديث منذ {time}',
@@ -87,6 +86,9 @@ export const ar = {
   'notification.clear': 'مسح',
   'notification.empty': 'لا توجد إشعارات',
   'notification.toggle': 'Ctrl+I للتبديل',
+  'notification.needsYou.question': "ينتظر ردك: «{question}»",
+  'notification.needsYou.noQuestion': "ينتظر ردك. لا يوجد نص للسؤال؛ راجع الطرفية.",
+  'notification.needsYou.over': "لم يعد ينتظرك.",
 
   // Command palette
   'palette.placeholder': 'اكتب أمراً...',
