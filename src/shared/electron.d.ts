@@ -555,6 +555,8 @@ declare global {
       readText: () => Promise<string>;
       readImage: (ptyId?: string) => Promise<string | null>;
       hasImage: () => Promise<boolean>;
+      /** `ssh` when the pane's foreground is a remote session, else null. Desktop only. */
+      paneRemoteShell?: (ptyId: string) => Promise<string | null>;
       /** Write text main takes back off after `ttlMs` or on quit, if still there. */
       writeEphemeral?: (text: string, ttlMs: number) => Promise<void>;
       /** Clear the ephemeral text now unless it is `stillValid` (`''` = nothing is). */

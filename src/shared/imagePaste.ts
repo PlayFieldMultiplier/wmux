@@ -101,6 +101,54 @@ export function resolveImagePasteStrategy({
   return 'native';
 }
 
+/**
+ * Clients whose pane is a session on ANOTHER machine. A temp PNG written here
+ * is not on that machine, so its path is dead there; and the agent's own
+ * image-paste key makes a remote agent read the remote clipboard, not ours.
+ * Exact stems only: `ssh-agent`, `sshd` and `ssh-keygen` are local tools.
+ */
+const REMOTE_SHELL_CLIENTS = new Set(['ssh', 'mosh-client', 'et']);
+
+/** The remote-session client this executable is (`/usr/bin/ssh` → `ssh`), or null. */
+export function remoteShellClient(image: string | null | undefined): string | null {
+  if (typeof image !== 'string' || !image) return null;
+  const stem = (image.replace(/\\/g, '/').split('/').pop() ?? '').toLowerCase().replace(/\.exe$/, '');
+  return REMOTE_SHELL_CLIENTS.has(stem) ? stem : null;
+}
+
+/**
+ * The remote-session client in the pane's foreground, from one
+ * `ps -A -o pid=,pgid=,tpgid=,comm=` table (POSIX only).
+ *
+ * The shell's row carries its terminal's foreground process group (`tpgid`).
+ * Only that group's LEADER counts: an `ssh` a local agent runs as a tool call
+ * sits inside the agent's group (the agent stays the leader), and an `ssh &`
+ * leaves the shell in the foreground. Equal to the shell's own group means
+ * the shell is at its prompt. Anything unparseable reads as null — the caller
+ * then keeps today's paste.
+ */
+export function foregroundRemoteShellClient(psOutput: string, shellPid: number): string | null {
+  const rows = new Map<number, { pgid: number; tpgid: number; comm: string }>();
+  for (const line of psOutput.split('\n')) {
+    const m = /^\s*(\d+)\s+(\d+)\s+(-?\d+)\s+(.+?)\s*$/.exec(line);
+    if (m) rows.set(Number(m[1]), { pgid: Number(m[2]), tpgid: Number(m[3]), comm: m[4] });
+  }
+  const shell = rows.get(shellPid);
+  if (!shell || shell.tpgid <= 0 || shell.tpgid === shell.pgid) return null;
+  const leader = rows.get(shell.tpgid);
+  return leader ? remoteShellClient(leader.comm) : null;
+}
+
+/**
+ * Whether a paste should first ask main if the pane is a remote session.
+ * An explicit `native` setting is the user's call and is never second-guessed.
+ * The store's agent liveness is not a shortcut here: it comes from a 15 s poll
+ * and can predate an `ssh` typed after the agent exited.
+ */
+export function shouldCheckRemoteShell(input: Pick<ImagePasteStrategyInput, 'mode'>): boolean {
+  return input.mode !== 'native';
+}
+
 /** Windows-side WSL tooling that is not a shell — a /mnt path there is wrong. */
 const WSL_NON_SHELLS = new Set(['wslconfig', 'wslg', 'wslservice']);
 

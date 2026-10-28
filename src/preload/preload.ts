@@ -2707,6 +2707,8 @@ contextBridge.exposeInMainWorld('clipboardAPI', {
    *  pane needs /mnt/...). Omit it and the host path is returned verbatim. */
   readImage: (ptyId?: string) => ipcRenderer.invoke(IPC.CLIPBOARD_READ_IMAGE, ptyId) as Promise<string | null>,
   hasImage: () => ipcRenderer.invoke(IPC.CLIPBOARD_HAS_IMAGE) as Promise<boolean>,
+  /** `ssh` when the pane's foreground is a remote session, else null. */
+  paneRemoteShell: (ptyId: string) => ipcRenderer.invoke(IPC.CLIPBOARD_PANE_REMOTE_SHELL, ptyId) as Promise<string | null>,
   /** Write text main takes back off after `ttlMs` or on quit, if still there. */
   writeEphemeral: (text: string, ttlMs: number) =>
     ipcRenderer.invoke(IPC.CLIPBOARD_WRITE_EPHEMERAL, text, ttlMs) as Promise<void>,

@@ -1018,6 +1018,7 @@ export const ko = {
   'remote.hubRepairOriginMismatch': '이 링크는 “{name}”이 아니라 {origin}용입니다. 다시 페어링해도 컴퓨터를 다른 주소로 옮기지 않습니다.',
   'remote.hubPairedWith': '{origin}와(과) 페어링됨',
   'terminal.copyFailed': '복사 실패 — 선택 영역 유지됨',
+  'terminal.imagePasteRemote': '이미지를 붙여넣지 않았습니다: 이 판은 원격 {program} 세션이고 이미지는 이 컴퓨터에 있습니다',
   'terminal.copyPendingGesture': '눌러서 복사 마치기',
   'terminal.mouseOwnedSelectHint': '이 앱이 마우스를 사용 중 — Shift를 누른 채 드래그하면 선택됩니다',
   'terminal.mouseOwnedSelectHintMac': '이 앱이 마우스를 사용 중 — Option을 누른 채 드래그하면 선택됩니다',
