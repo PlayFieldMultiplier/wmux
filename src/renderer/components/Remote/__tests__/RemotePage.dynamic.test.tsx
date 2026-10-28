@@ -346,7 +346,7 @@ describe('Remote page', () => {
     expect($('[data-remote-notice]')?.textContent).toBe('office-win can still connect to this PC: revoking its pairing here failed. Try Remove again.');
   });
 
-  it('says A2A is listening as soon as Connect a PC turns it on, not at the next poll', async () => {
+  it('says A2A is listening as soon as Connect a PC turns it on (on its button, never on showing the tab), not at the next poll', async () => {
     stub([]);
     const off = { enabled: false, port: 45660, listening: false, hostId: 'me', name: 'MacBook', fingerprint256: null, lastError: null };
     api.a2aRemote.status.mockResolvedValue(off);
@@ -359,6 +359,11 @@ describe('Remote page', () => {
     for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve(); });
     const invite = [...document.querySelectorAll<HTMLButtonElement>('[data-testid="remote-connect-tabs"] button')].find((b) => b.textContent === 'Invite this PC')!;
     await act(async () => { invite.click(); });
+    for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve(); });
+    // Showing the Invite tab turns nothing on; its Turn on and create invite button does.
+    expect(api.a2aRemote.configure).not.toHaveBeenCalled();
+    expect($('[data-remote-a2a]')?.textContent).toBe('PC messages off');
+    await act(async () => { $<HTMLButtonElement>('[data-testid="remote-connect-create"]')!.click(); });
     for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve(); });
     expect(api.a2aRemote.configure).toHaveBeenCalledWith({ enabled: true });
     expect($('[data-remote-a2a]')?.textContent).toBe('PC messages on · port 45660');
