@@ -571,9 +571,8 @@ export function useRpcBridge(): void {
       window.electronAPI.rpc.invoke('events.poll', params) as Promise<RpcResult>;
 
     // ── In-renderer entry point for channelsSlice *Daemon thunks ─────────
-    // The renderer's create/post/join/leave/archive actions (U4, R4+R11)
-    // round-trip through the pipe RpcRouter to reach
-    // ChannelService.create/post/join/leave/archive. Parallel to
+    // The renderer's channel reads round-trip through the pipe RpcRouter;
+    // its create/post/join/leave/archive actions ride `mutateLocal`. Parallel to
     // `__wmuxEventsPoll` — same `electronAPI.rpc.invoke` plumbing — but
     // exposed as an object with a `rpc(method, params)` method so the
     // slice can call `a2a.channel.<method>` without concatenating the
