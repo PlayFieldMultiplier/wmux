@@ -276,6 +276,7 @@ export const tr = {
   'settings.tabLan': "LAN",
   'settings.navGroupConnections': "Bağlantılar",
   'settings.learnMore': "Daha fazla bilgi",
+  'settings.moreInfo': "Daha fazla bilgi",
   'settings.showLess': "Daha az göster",
   'settings.quickCommands': "Hızlı komutlar",
   'settings.sectionShell': "Kabuk",

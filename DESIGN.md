@@ -1983,8 +1983,9 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
   rounded container of rows.
 - **Row:** a 14px/400 label over a 12px `--text-sub` description line on the
   left, control on the right; rows are 48px minimum with 8px × 14px padding.
-  Overflowing copy collapses behind a 12px Learn more. Status words are
-  Badges. At most one primary per tab.
+  Overflowing copy clamps to one line with a 14px info (ⓘ) button after it
+  that shows the full text on hover, keyboard focus or click; Escape closes
+  it. Status words are Badges. At most one primary per tab.
 - **Controls:** a 30×18 switch (12px knob) with a 36×24 hit area, a select
   at least 140px wide with a 6px radius; buttons keep their shared sizes
   (26px `sm`, 32px `md`). These sizes apply only to the page's own rows,

@@ -77,12 +77,12 @@ export function QuickLaunchSection({
           <span className="flex items-center gap-3">
             {unavailable && <Badge tone="danger">{t('settings.quickLaunchUnavailable')}</Badge>}
             {shown.accelerator !== QUICK_LAUNCH_DEFAULT_ACCELERATOR && (
-              <Button variant="ghost" size="sm" onClick={() => update({ accelerator: QUICK_LAUNCH_DEFAULT_ACCELERATOR })}>
+              <Button variant="ghost" size="md" onClick={() => update({ accelerator: QUICK_LAUNCH_DEFAULT_ACCELERATOR })}>
                 {t('settings.quickLaunchReset')}
               </Button>
             )}
             <kbd className="ui-kbd settings-kbd-hint" data-disabled={!shown.enabled || undefined}>{keys}</kbd>
-            <Button variant="secondary" size="sm" disabled={!shown.enabled} onClick={() => setCapturing(true)}>
+            <Button variant="secondary" size="md" disabled={!shown.enabled} onClick={() => setCapturing(true)}>
               {t('settings.quickLaunchChange')}
             </Button>
           </span>

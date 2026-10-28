@@ -2712,6 +2712,7 @@ export const zh = {
   'settings.tabLan': '局域网',
   'settings.navGroupConnections': '连接',
   'settings.learnMore': '了解更多',
+  'settings.moreInfo': '更多信息',
   'settings.showLess': '收起',
   'settings.quickCommands': '快捷命令',
   'settings.sectionShell': 'Shell',

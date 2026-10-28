@@ -276,6 +276,7 @@ export const id = {
   'settings.tabLan': "LAN",
   'settings.navGroupConnections': "Koneksi",
   'settings.learnMore': "Selengkapnya",
+  'settings.moreInfo': "Info selengkapnya",
   'settings.showLess': "Tampilkan lebih sedikit",
   'settings.quickCommands': "Perintah cepat",
   'settings.sectionShell': "Shell",

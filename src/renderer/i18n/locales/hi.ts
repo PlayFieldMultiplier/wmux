@@ -276,6 +276,7 @@ export const hi = {
   'settings.tabLan': "LAN",
   'settings.navGroupConnections': "कनेक्शन",
   'settings.learnMore': "और जानें",
+  'settings.moreInfo': "अधिक जानकारी",
   'settings.showLess': "कम दिखाएँ",
   'settings.quickCommands': "त्वरित कमांड",
   'settings.sectionShell': "शेल",

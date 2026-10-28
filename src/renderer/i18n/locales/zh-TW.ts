@@ -276,6 +276,7 @@ export const zhTW = {
   'settings.tabLan': "區域網路",
   'settings.navGroupConnections': "連線",
   'settings.learnMore': "了解更多",
+  'settings.moreInfo': "更多資訊",
   'settings.showLess': "收合",
   'settings.quickCommands': "快速指令",
   'settings.sectionShell': "Shell",

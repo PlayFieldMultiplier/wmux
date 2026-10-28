@@ -276,6 +276,7 @@ export const da = {
   'settings.tabLan': "LAN",
   'settings.navGroupConnections': "Forbindelser",
   'settings.learnMore': "Læs mere",
+  'settings.moreInfo': "Mere information",
   'settings.showLess': "Vis mindre",
   'settings.quickCommands': "Hurtige kommandoer",
   'settings.sectionShell': "Shell",

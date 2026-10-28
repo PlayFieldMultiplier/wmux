@@ -276,6 +276,7 @@ export const ar = {
   'settings.tabLan': "الشبكة المحلية",
   'settings.navGroupConnections': "الاتصالات",
   'settings.learnMore': "معرفة المزيد",
+  'settings.moreInfo': "مزيد من المعلومات",
   'settings.showLess': "عرض أقل",
   'settings.quickCommands': "أوامر سريعة",
   'settings.sectionShell': "الصدفة",

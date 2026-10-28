@@ -276,6 +276,7 @@ export const ru = {
   'settings.tabLan': "LAN",
   'settings.navGroupConnections': "Подключения",
   'settings.learnMore': "Подробнее",
+  'settings.moreInfo': "Подробная информация",
   'settings.showLess': "Свернуть",
   'settings.quickCommands': "Быстрые команды",
   'settings.sectionShell': "Оболочка",

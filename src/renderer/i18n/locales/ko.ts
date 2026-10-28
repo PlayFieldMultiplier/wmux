@@ -2252,6 +2252,7 @@ export const ko = {
   'settings.tabLan': 'LAN',
   'settings.navGroupConnections': '연결',
   'settings.learnMore': '자세히',
+  'settings.moreInfo': '자세한 정보',
   'settings.showLess': '간단히',
   'settings.quickCommands': '빠른 명령',
   'settings.sectionShell': '셸',

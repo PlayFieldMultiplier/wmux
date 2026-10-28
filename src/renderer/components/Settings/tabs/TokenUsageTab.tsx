@@ -88,7 +88,7 @@ export function TokenUsageView({ bindings, onApply, onOpenTab, t }: TokenUsageVi
   }, [refreshSurfaceState]);
 
   return (
-    <div className="settings-page" data-testid="token-usage-tab">
+    <div className="contents" data-testid="token-usage-tab">
       <QuotaSection t={t} providers={providers} />
 
       <ProfileSection

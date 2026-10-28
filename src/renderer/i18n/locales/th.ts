@@ -276,6 +276,7 @@ export const th = {
   'settings.tabLan': "LAN",
   'settings.navGroupConnections': "การเชื่อมต่อ",
   'settings.learnMore': "ดูเพิ่มเติม",
+  'settings.moreInfo': "ข้อมูลเพิ่มเติม",
   'settings.showLess': "แสดงน้อยลง",
   'settings.quickCommands': "คำสั่งด่วน",
   'settings.sectionShell': "เชลล์",

@@ -107,7 +107,7 @@ export function ProfileSection({
     >
       {!bound ? (
         <SettingRow label={t('settings.tokenProfileNoRoles')}>
-          <Button variant="secondary" size="sm" onClick={() => onOpenTab('roles')}>
+          <Button variant="secondary" size="md" onClick={() => onOpenTab('roles')}>
             {t('settings.tokenProfileBindFirst')}
           </Button>
         </SettingRow>
@@ -152,7 +152,7 @@ export function ProfileSection({
       <SettingRow label={t('settings.tokenUsage.customizeSurface')} description={t('settings.tokenUsage.customizeSurfaceDesc')}>
         <Button
           variant={showCustom ? 'primary' : 'secondary'}
-          size="sm"
+          size="md"
           aria-expanded={showCustom}
           aria-controls="tokencustom"
           data-testid="token-customize-button"
