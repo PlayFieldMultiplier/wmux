@@ -6,6 +6,7 @@ import { selectWorkspaceRailSummary } from '../../stores/selectors/workspaceProj
 import { formatStaleMinutes, selectAllWorkspaceAgentStatus, selectAllWorkspaceUnverifiableMinutes, selectWorkspaceAttentionClasses } from '../../stores/selectors/fleet';
 import { StatusMarkView } from './AgentMarks';
 import { useT } from '../../hooks/useT';
+import { useShortcutLabel, withShortcut } from '../../utils/shortcutLabel';
 import { useRemoteWorkspaceCreate } from './useRemoteWorkspaceCreate';
 import { AGENT_STATUS_ICON } from './agentStatusIcon';
 import { useGlanceBoardOrder } from './useGlanceBoardOrder';
@@ -42,6 +43,8 @@ const PICKER_MENU_WIDTH = 208;
  */
 export default function MiniSidebar({ rail = false, collapsed = true }: { rail?: boolean; collapsed?: boolean } = {}) {
   const t = useT();
+  const newWorkspaceKey = useShortcutLabel('newWorkspace');
+  const sidebarKey = useShortcutLabel('toggleSidebar');
   const sidebarPosition = useStore((s) => s.sidebarPosition);
   // A1: 레일은 id/name + 에이전트 상태만 그린다 — 요약 투영만 구독해 cwd/git/
   // port 변경에는 리렌더되지 않게 한다.
@@ -185,7 +188,7 @@ export default function MiniSidebar({ rail = false, collapsed = true }: { rail?:
         style={{ borderColor: 'var(--border-soft)' }}
         onClick={togglePicker}
         data-mini-add-workspace
-        title={t('sidebar.newWorkspaceTooltip')}
+        title={withShortcut(t('sidebar.newWorkspaceTooltip'), newWorkspaceKey)}
         aria-label={t('sidebar.newWorkspaceTooltip')}
         data-onboarding-target="add-workspace"
         {...tokenAttrs('textSub', 'text')}
@@ -410,7 +413,7 @@ export default function MiniSidebar({ rail = false, collapsed = true }: { rail?:
         <button
           className={`w-8 h-8 rounded-md flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-main)] hover:bg-[var(--hover-fill)] transition-colors duration-150 font-mono text-caption ${FOCUS_RING}`}
           onClick={toggleSidebar}
-          title={t('sidebar.expandTooltip')}
+          title={withShortcut(t('sidebar.expandTooltip'), sidebarKey)}
           aria-label={t('sidebar.expandTooltip')}
         >
           <IconChevronDir dir={expandDirection(sidebarPosition)} />

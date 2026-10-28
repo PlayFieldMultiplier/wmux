@@ -1,6 +1,8 @@
 import { useRef, useState, useEffect, useMemo, useCallback } from 'react';
 import type { AgentStatus, Surface, Workspace } from '../../../shared/types';
 import { useT } from '../../hooks/useT';
+import { displayCombo } from '../../../shared/keymap';
+import { useShortcutLabel, withShortcut } from '../../utils/shortcutLabel';
 import { useDaemonModeActive } from '../../hooks/useDaemonMode';
 import { useShallow } from 'zustand/react/shallow';
 import { useStore } from '../../stores';
@@ -288,20 +290,12 @@ export function surfaceTabTooltip(
     : local;
 }
 
-/** Append a keyboard hint to a tooltip label, e.g. "New terminal (Ctrl+T)". */
 /** Warm both chat views before the Chat toggle is pressed. */
 function preloadChatViews(): void {
   void import('../Chat/ChatView').catch(() => undefined);
   void import('../ChatV2/ChatV2View').catch(() => undefined);
 }
 
-function withShortcut(label: string, keys: string): string {
-  return `${label} (${keys})`;
-}
-const SC_SPLIT_RIGHT = IS_MAC ? '⌘D' : 'Ctrl+D';
-const SC_SPLIT_DOWN = IS_MAC ? '⇧⌘D' : 'Ctrl+Shift+D';
-/** Mirrors the `cmdOrCtrl && key === 't'` binding in useKeyboard.ts. */
-const SC_NEW_TERMINAL = IS_MAC ? '⌘T' : 'Ctrl+T';
 
 /** Human-readable form of the prefix chord bound to an action, e.g. "Ctrl+B !".
  *  Read from the live config rather than hardcoded: the prefix key and the
@@ -314,7 +308,8 @@ function prefixChordFor(
   const bound = Object.entries(config.bindings).find(([, id]) => id === actionId)?.[0];
   if (!bound) return null;
   const m = /^Key([A-Z])$/.exec(config.key);
-  const prefix = IS_MAC ? `⌘${m ? m[1] : config.key}` : `Ctrl+${m ? m[1] : config.key}`;
+  // The prefix is literal Ctrl on every OS (isPrefixTrigger), ⌃ on macOS.
+  const prefix = displayCombo(`Ctrl+${m ? m[1] : config.key}`, IS_MAC ? 'darwin' : 'win32');
   return `${prefix} ${bound}`;
 }
 
@@ -506,6 +501,9 @@ export default function SurfaceTabs({
   // and replays it), and it needs a sibling to be left behind.
   const daemonConnected = useDaemonModeActive();
   const prefixConfig = useStore((s) => s.prefixConfig);
+  const splitRightKey = useShortcutLabel('splitHorizontal');
+  const splitDownKey = useShortcutLabel('splitVertical');
+  const newTerminalKey = useShortcutLabel('newSurface');
   const stashDisabled = !daemonConnected;
 
   // The two actions the cluster drives through the store rather than a prop.
@@ -782,14 +780,14 @@ export default function SurfaceTabs({
     {
       key: 'split-right',
       label: t('pane.splitRight'),
-      shortcut: SC_SPLIT_RIGHT,
+      shortcut: splitRightKey || undefined,
       icon: <IconSplitRight size={14} />,
       onSelect: onSplitHorizontal,
     },
     {
       key: 'split-down',
       label: t('pane.splitDown'),
-      shortcut: SC_SPLIT_DOWN,
+      shortcut: splitDownKey || undefined,
       icon: <IconSplitDown size={14} />,
       onSelect: onSplitVertical,
     },
@@ -896,7 +894,7 @@ export default function SurfaceTabs({
     onSplitHorizontalRemote, onSplitVerticalRemote, startPaneRename,
     menuTabSurface, startRename, canLinkRemote, canShareRemote, sharePeers, paneMuted, togglePaneMuted, continueAccount.mainItems, claudeRewindItems,
     stashChord, stashDisabled, stashTooltip, stashThisPane, isZoomed, toggleZoom,
-    layoutTemplates, shadow,
+    layoutTemplates, shadow, splitRightKey, splitDownKey,
   ]);
 
   const commitPaneRename = () => {
@@ -1213,7 +1211,7 @@ export default function SurfaceTabs({
         <button
           className={`ui-icon-btn ${FOCUS_RING} w-6 h-6 shrink-0`}
           onClick={(e) => { e.stopPropagation(); onAddTerminal(); }}
-          title={withShortcut(t('pane.newTerminal'), SC_NEW_TERMINAL)}
+          title={withShortcut(t('pane.newTerminal'), newTerminalKey)}
           aria-label={t('pane.newTerminal')}
           data-pane-action="new-terminal"
         >
@@ -1348,7 +1346,7 @@ export default function SurfaceTabs({
           <button
             className={`ui-icon-btn ${FOCUS_RING} w-6 h-6`}
             onClick={(e) => { e.stopPropagation(); onSplitHorizontal(); }}
-            title={withShortcut(t('pane.splitRight'), SC_SPLIT_RIGHT)}
+            title={withShortcut(t('pane.splitRight'), splitRightKey)}
             aria-label={t('pane.splitRight')}
             data-pane-action="split-right"
           >
@@ -1357,7 +1355,7 @@ export default function SurfaceTabs({
           <button
             className={`ui-icon-btn ${FOCUS_RING} w-6 h-6`}
             onClick={(e) => { e.stopPropagation(); onSplitVertical(); }}
-            title={withShortcut(t('pane.splitDown'), SC_SPLIT_DOWN)}
+            title={withShortcut(t('pane.splitDown'), splitDownKey)}
             aria-label={t('pane.splitDown')}
             data-pane-action="split-down"
           >

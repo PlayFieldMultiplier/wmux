@@ -148,9 +148,9 @@ export default function ExecuteApprovalDialog() {
               : sameWs
                 ? renderSentence(t('approval.sameWsSentence'), {
                     workspace: danger(t('approval.sameWsWorkspace')),
-                    mode: danger('bypassPermissions'),
+                    mode: danger(t('settings.fanoutWorkerMode.bypassPermissions')),
                   })
-                : renderSentence(t('approval.remoteSentence'), { mode: danger('bypassPermissions') })
+                : renderSentence(t('approval.remoteSentence'), { mode: danger(t('settings.fanoutWorkerMode.bypassPermissions')) })
         }
       />
       <DialogBody className="!gap-3">

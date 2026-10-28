@@ -231,8 +231,8 @@ export default function SessionSchedulesPopover({
             <span id="session-schedules-title">{t('sessionSchedule.title')}</span>
             {activeCount > 0 && <Badge>{activeCount}</Badge>}
           </div>
-          <div className="ui-note truncate" title={`${agentName ?? t('sessionSchedule.noAgent')} · ${ptyId}`}>
-            {agentName ?? t('sessionSchedule.noAgent')} · {ptyId}
+          <div className="ui-note truncate" title={agentName ?? t('sessionSchedule.noAgent')}>
+            {agentName ?? t('sessionSchedule.noAgent')}
           </div>
         </div>
         <Button
@@ -293,9 +293,7 @@ export default function SessionSchedulesPopover({
                   </div>
                   <div className="mt-0.5 flex flex-wrap gap-x-2 gap-y-0.5 text-[11px] leading-4 text-[var(--text-sub)]">
                     {schedule.ptyId !== ptyId && (
-                      <span title={schedule.ptyId}>
-                        {t('sessionSchedule.otherSession', { ptyId: schedule.ptyId })}
-                      </span>
+                      <span>{t('sessionSchedule.otherSession')}</span>
                     )}
                     <span className="font-mono">{formatWhen(schedule.nextRunAt)}</span>
                     {schedule.intervalMinutes && (() => {
