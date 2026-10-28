@@ -288,6 +288,36 @@ describe('DaemonPTYBridge — OSC 7501 program status', () => {
     expect(bridge.getAgentStatus()).toBe('waiting');
   });
 
+  it('a repeated idle inside the submit grace still lets the silence end an unworked submit', () => {
+    replay('boot');
+    vi.advanceTimersByTime(10_000);
+    bridge.noteInput('\r');
+    feed('\x1b[20;1H\u203a ');
+    vi.advanceTimersByTime(1_000);
+    feed(report('state=idle:app=codex')); // skipped: it crosses the submit
+    expect(bridge.isTurnOpen()).toBe(true);
+    vi.advanceTimersByTime(6_000);
+    expect(bridge.isTurnOpen()).toBe(false);
+    expect(bridge.isAgentMidTurn()).toBe(false);
+  });
+
+  it('the first prompt after launch is a turn once Codex reports working', () => {
+    replay('boot');
+    vi.advanceTimersByTime(1_000);
+    bridge.noteInput('say hi\r');
+    expect(bridge.isAgentMidTurn()).toBe(false); // #1670: a boot episode until proven
+    replay('turn 1');
+    expect(bridge.isAgentMidTurn()).toBe(true);
+  });
+
+  it('a bare first Enter (a dialog answer) followed by Codex\'s startup working stays a boot episode', () => {
+    replay('boot');
+    vi.advanceTimersByTime(1_000);
+    bridge.noteInput('\r');
+    feed(report('state=working:app=codex'));
+    expect(bridge.isAgentMidTurn()).toBe(false);
+  });
+
   it('RIS after a report in the same chunk removes it; a report after RIS stands', () => {
     replay('boot');
     feed(report('state=working:app=codex') + '\x1bc');

@@ -262,6 +262,14 @@ export class DaemonPTYBridge extends EventEmitter {
   private static readonly PROGRAM_REPEAT_GRACE_MS = 2_000;
   /** When the PTY last wrote anything, muted or not (0 = never). */
   private lastOutputAt = 0;
+  /**
+   * When the program's current root state was last applied (0 = never). A
+   * repeat skipped inside the submit grace leaves it, so the turn the submit
+   * opened is still read as one the program has not reported on.
+   */
+  private programStateAt = 0;
+  /** When a submit that carried a prompt last reached the pane (0 = never). */
+  private promptSubmittedAt = 0;
   /** When the program's last episode ended (endProgramStatusEpisode); older records are history. */
   private programEpisodeEndAt = 0;
   /** OSC 7501 records of this terminal (root and child ids). */
@@ -664,6 +672,7 @@ export class DaemonPTYBridge extends EventEmitter {
       // owns the keys there, whatever the tracker still reads alive.
       const atShellPrompt = this.shellPromptSeen && !this.shellCommandRunning;
       if (promptSubmitted && !atShellPrompt && this.paneAgentTitlesTurns()) this.claudePromptAt = Date.now();
+      if (promptSubmitted && !atShellPrompt) this.promptSubmittedAt = Date.now();
     } else if (this.turnSoftClosed) {
       // Answering a dialog resumes the episode it interrupted, even one a
       // detector settle closed softly before the dialog went up.
@@ -767,6 +776,11 @@ export class DaemonPTYBridge extends EventEmitter {
         // The program says it is working: the episode is its own, so neither
         // byte silence nor a running title dropping may end it.
         if (!this.awaitingHuman) this.openTurn(true);
+        // #1670 keeps the first submit after a launch a boot episode (it may
+        // only have answered a dialog). One that carried a prompt, followed
+        // by the program's own `working`, is a turn. Codex also reports
+        // `working` at startup, so the prompt is what tells them apart.
+        if (this.turnOpen && this.bootEpisode && this.promptSubmittedAt > 0 && this.promptSubmittedAt >= this.turnOpenedAt) this.bootEpisode = false;
         this.byteOpenedTurn = false;
         this.spinnerOpenedTurn = false;
       }
@@ -1369,6 +1383,7 @@ export class DaemonPTYBridge extends EventEmitter {
    */
   private applyProgramState(record: ProgramStatusRecord, prior: ProgramStatusRecord | undefined, agent: string, sessionId: string): void {
     const changed = record.state !== prior?.state;
+    if (record.state === 'blocked' || record.state === 'working') this.programStateAt = record.updatedAt;
     if (record.state === 'blocked') {
       // The dialog the screen or a hook already raised: the program now answers for it too.
       if (this.awaitingHuman) {
@@ -1401,8 +1416,9 @@ export class DaemonPTYBridge extends EventEmitter {
     // The same settle again right after a submit (or a hook) started a turn:
     // a repeat of the old state crossing the submit, not this turn's end. A
     // later one ends a turn the program never started (an empty Enter).
-    if (!changed && prior && this.lastTurnStartedAt >= prior.updatedAt
+    if (!changed && prior && this.lastTurnStartedAt >= this.programStateAt
       && Date.now() - this.lastTurnStartedAt < DaemonPTYBridge.PROGRAM_REPEAT_GRACE_MS) return;
+    this.programStateAt = record.updatedAt;
     const wasSettled = this.explicitTerminalStatus;
     this.noteAgentStatus(status, false, undefined, false, undefined, 'program');
     this.emit('agent', { sessionId, event: { agent, status, message: PROGRAM_SETTLED_MESSAGE[record.state] } });
@@ -1471,7 +1487,7 @@ export class DaemonPTYBridge extends EventEmitter {
     const root = this.programStatus.root();
     const silentSinceSubmit = status !== 'running' && this.turnOpen && !!root
       && (root.state === 'idle' || root.state === 'done' || root.state === 'error')
-      && this.lastTurnStartedAt >= root.updatedAt;
+      && this.lastTurnStartedAt >= this.programStateAt;
     return !silentSinceSubmit;
   }
 
@@ -1969,7 +1985,7 @@ export class DaemonPTYBridge extends EventEmitter {
       // command): it is still at the state it last reported, so the turn the
       // submit opened ends with the silence, settled as that state.
       const root = this.programStatusSeen && this.turnOpen && !this.awaitingHuman ? this.programStatus.root() : undefined;
-      if (root && root.state !== 'working' && root.state !== 'blocked' && this.lastTurnStartedAt >= root.updatedAt) {
+      if (root && root.state !== 'working' && root.state !== 'blocked' && this.lastTurnStartedAt >= this.programStateAt) {
         this.closeTurn(true);
         this.settledStatus = root.state === 'idle' ? 'waiting' : 'complete';
         this.explicitTerminalStatus = true;
@@ -2635,6 +2651,8 @@ export class DaemonPTYBridge extends EventEmitter {
     if (this.programQuietTimer) clearTimeout(this.programQuietTimer);
     this.programQuietTimer = null;
     this.lastOutputAt = 0;
+    this.programStateAt = 0;
+    this.promptSubmittedAt = 0;
     this.programEpisodeEndAt = 0;
     this.programStatus.clear();
     this.outputEndsWithEsc = false;
