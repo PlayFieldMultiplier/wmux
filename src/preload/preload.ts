@@ -190,7 +190,9 @@ export interface McpRegisterTargetResult {
 
 /** A bot.* call as the operator, with the router's envelope and the
  *  handler's refusal flattened to {ok, message?, code?}: the refusal's code
- *  (repo_mismatch, no_remote…) lets the renderer tell refusals apart. */
+ *  (repo_mismatch, no_remote…) lets the renderer tell refusals apart.
+ *  Each method sent here must be listed in RENDERER_RPC_METHODS
+ *  (src/main/ipc/rpcInvoke.ts). */
 async function factoryBotCall(method: string, params: Record<string, unknown>): Promise<{ ok: boolean; message?: string; code?: string }> {
   const resp = (await ipcRenderer.invoke(IPC.RPC_INVOKE, method, params)) as { ok?: unknown; result?: unknown; error?: unknown } | null;
   if (!resp || resp.ok !== true) return { ok: false, message: typeof resp?.error === 'string' ? resp.error : 'the bot call failed' };
@@ -740,7 +742,9 @@ const electronAPI = {
     // pipe-RPC methods like `events.poll` and `a2a.channel.*`. The
     // result envelope is the same `{ ok: true, ... } | { ok: false,
     // error }` (or method-native shape, e.g. events.poll returns
-    // `{ events, nextCursor, resync? }`) the pipe router returns.
+    // `{ events, nextCursor, resync? }`) the pipe router returns. Main
+    // dispatches only the methods in RENDERER_RPC_METHODS
+    // (src/main/ipc/rpcInvoke.ts) and refuses every other one.
     invoke: (method: string, params: Record<string, unknown>) =>
       ipcRenderer.invoke(IPC.RPC_INVOKE, method, params),
     // Renderer-only channel mutation (D5). Unlike `invoke` (which routes the

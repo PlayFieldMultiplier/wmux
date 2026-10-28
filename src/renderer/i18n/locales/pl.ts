@@ -701,7 +701,6 @@ export const pl = {
   'workspace.agentWaiting': 'Oczekuje',
   // Was missing entirely, so the one status the user must act on fell back to
   // English ("Needs input") in an otherwise Polish UI.
-  'workspace.agentAwaitingInput': 'Czeka na Ciebie',
   'workspace.needsYou': 'Czeka na Ciebie',
   'workspace.agentIdle': 'Bezczynny',
   'workspace.agentUnverifiable': 'Brak aktualizacji od {time}',
@@ -888,6 +887,9 @@ export const pl = {
   'notification.clear': 'Wyczyść',
   'notification.empty': 'Brak powiadomień',
   'notification.toggle': 'Ctrl+I aby przełączyć',
+  'notification.needsYou.question': "Czeka na Ciebie: „{question}”",
+  'notification.needsYou.noQuestion': "Czeka na Ciebie. Brak treści pytania; zajrzyj do terminala.",
+  'notification.needsYou.over': "Już na Ciebie nie czeka.",
 
   // Command palette
   'palette.placeholder': 'Wpisz polecenie...',

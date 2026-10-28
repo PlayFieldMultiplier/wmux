@@ -17,7 +17,6 @@ export const vi = {
   'workspace.agentError': 'Lỗi tác nhân',
   'workspace.agentWaiting': 'Tác nhân đang chờ',
 
-  'workspace.agentAwaitingInput': 'Tác nhân cần phản hồi',
   'workspace.needsYou': 'Đang chờ bạn',
   'workspace.agentIdle': 'Tác nhân nhàn rỗi',
   'workspace.agentUnverifiable': 'Không có cập nhật trong {time}',
@@ -87,6 +86,9 @@ export const vi = {
   'notification.clear': 'Xoá',
   'notification.empty': 'Không có thông báo',
   'notification.toggle': 'Ctrl+I để bật/tắt',
+  'notification.needsYou.question': "Đang chờ bạn: “{question}”",
+  'notification.needsYou.noQuestion': "Đang chờ bạn. Không có nội dung câu hỏi; xem terminal.",
+  'notification.needsYou.over': "Không còn chờ bạn nữa.",
 
   // Command palette
   'palette.placeholder': 'Nhập lệnh...',
