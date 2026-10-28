@@ -1,6 +1,7 @@
 import type { AgentSlug } from '../../shared/events';
 import type { PaneLabelRejection } from '../../shared/paneLabelRules';
 import type { TranslationKey } from '../i18n/locales/en';
+import { getWorkspaceLeafPanes, type WorkspacePaneOwner } from '../../shared/paneUtils';
 
 // === P2 pane self-naming (pure helpers) ===
 //
@@ -71,6 +72,22 @@ export function activeAgentSlug(
   return surface?.ptyId ? surfaceAgent?.[surface.ptyId]?.slug : undefined;
 }
 
+/**
+ * Where a PTY lives, as the user reads it: "<workspace> · <pane name>", or
+ * null when no open pane holds it. For lists that would otherwise show a raw
+ * pty id to tell sessions apart.
+ */
+export function ptyLocationName(
+  workspaces: ReadonlyArray<WorkspacePaneOwner & { name: string; wsOrdinal?: number }>,
+  paneLabel: Record<string, string> | undefined,
+  ptyId: string,
+): string | null {
+  for (const ws of workspaces) {
+    const leaf = getWorkspaceLeafPanes(ws).find((l) => l.surfaces.some((s) => s.ptyId === ptyId));
+    if (leaf) return `${ws.name} · ${leafDisplayName(paneLabel, ws, leaf)}`;
+  }
+  return null;
+}
 
 /** The always-unique tag of a pane: its auto coordinate without the agent
  *  suffix, e.g. `#w1-2`. */

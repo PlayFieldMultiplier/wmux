@@ -1520,7 +1520,11 @@ export default function FleetView() {
                     <FleetRequestPanel
                       kind={selectedAsk}
                       text={selectedAsk === 'input'
-                        ? surfacePendingQuestion[fleetTargetPtyId(detailPane)]?.trim() || undefined
+                        // The agent's own question, else the row's (a shell's
+                        // stdin prompt also reads as a question).
+                        ? surfacePendingQuestion[fleetTargetPtyId(detailPane)]?.trim()
+                          || (selectedRow.detailSource === 'question' ? selectedRow.detail?.trim() : undefined)
+                          || undefined
                         : (errorIdx >= 0 ? flattenAgentText(previewLines[errorIdx].trim()) || undefined : errorLines[detailPane.paneId])}
                       fallback={t(selectedRow.detailKey)}
                       choices={selectedAsk === 'input' ? promptChoices(previewLines) : []}

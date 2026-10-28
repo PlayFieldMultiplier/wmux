@@ -866,6 +866,23 @@ export const AGENT_IDENTITIES = [
     roleBinding: false,
     process: { packages: ['@deepseek-ai/dsh'] },
   },
+  {
+    // Hermes Agent (Nous Research), https://github.com/NousResearch/hermes-agent.
+    // Read from the installed sources of v0.19.0 and v0.22.5, 2026-10-29.
+    // `hermes` is a Python console script (pyproject `[project.scripts]`
+    // hermes = "hermes_cli.main:main"), so the process is the environment's
+    // interpreter running it: measured `…/venv/bin/python3 …/venv/bin/hermes`.
+    // The tracker names it by that script, which is the slug; its optional Ink
+    // TUI is a node child of that process. Its installer is an editable install
+    // of a git checkout, so the image check also accepts the `hermes_agent`
+    // dist-info (AgentProcessTracker isAgentImage).
+    // No hooks, no screen profile and no transcript wmux reads yet. No `resume`:
+    // its `--resume` / `-c` grammar is not verified here. No `mcp`: wmux's
+    // Hermes integration (Bots) owns that configuration.
+    slug: 'hermes',
+    display: 'Hermes Agent',
+    roleBinding: false,
+  },
 ] as const satisfies readonly AgentIdentityRow[];
 
 /** SLUG-form agent identifier. Derived, so it can never drift from the table. */

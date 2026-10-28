@@ -136,7 +136,7 @@ export function roleWorksOnRepo(role: BotRole): boolean {
  *  folder its reason (`message`, which says how to fix it). */
 export type FactoryBotRepoSuggestion =
   | { ok: true; repoKey: string; root: string; displayRoot: string; inherited: boolean }
-  | { ok: false; code: 'operator_only' | 'invalid_argument' | 'no_folder' | 'none' | 'not_a_repo' | 'repo_untrusted' | 'no_remote'; message?: string };
+  | { ok: false; code: 'operator_only' | 'invalid_argument' | 'no_folder' | 'none' | 'not_a_repo' | 'repo_untrusted' | 'no_remote'; message?: string; originSet?: boolean };
 
 /** FACTORY_BOT_PICK_AVATAR: the picked image as a stored-avatar preview (not
  *  saved yet), or why there is none. */

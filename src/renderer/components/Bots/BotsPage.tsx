@@ -346,33 +346,39 @@ function FirstBotPanel({ t, workspace, botPort, settings, confirmOn, on, engine,
           <Button type="submit" size="sm" variant={startable ? 'primary' : 'secondary'} data-bots-first-start disabled={!startable}>
             {t('botsPage.onboarding.start')}
           </Button>
-          {botPort.createTeam && (
-            <Button
-              type="button"
-              size="sm"
-              variant="secondary"
-              data-bots-first-team
-              disabled={!teamable}
-              title={t('settings.factory.addTeamHint', { names: TEAM_TEMPLATES.map((tpl) => names[tpl]).join(', '), lead: names.coordinator })}
-              onClick={() => void startTeam()}
-            >
-              {t('botsPage.onboarding.addTeam')}
-            </Button>
-          )}
         </form>
         {workspace && (
-          <AddBotRepoRow view={repo.view} t={t} busy={busy} onChoose={() => void repo.choose()} onNone={repo.chooseNone} />
+          <AddBotRepoRow view={repo.view} t={t} busy={busy} onChoose={() => void repo.choose()} onNone={repo.chooseNone} onRecheck={repo.recheck} />
         )}
+        {/* The other ways to begin are quiet links, so Start stays the one
+            action the card leads with. */}
         {workspace && (
-          <button
-            type="button"
-            data-bots-first-recipe
-            disabled={busy}
-            onClick={onRecipe}
-            className={`self-start text-[12px] text-[var(--text-muted)] hover:text-[var(--text-main)] ${FOCUS_RING}`}
-          >
-            {t('botsPage.onboarding.fromRecipe')}
-          </button>
+          <div className="flex flex-wrap items-center gap-x-1 text-[12px] text-[var(--text-muted)]">
+            {botPort.createTeam && (
+              <>
+                <button
+                  type="button"
+                  data-bots-first-team
+                  disabled={!teamable}
+                  title={t('settings.factory.addTeamHint', { names: TEAM_TEMPLATES.map((tpl) => names[tpl]).join(', '), lead: names.coordinator })}
+                  onClick={() => void startTeam()}
+                  className={`hover:text-[var(--text-main)] disabled:opacity-50 disabled:hover:text-[var(--text-muted)] ${FOCUS_RING}`}
+                >
+                  {t('botsPage.onboarding.addTeam')}
+                </button>
+                <span aria-hidden="true">·</span>
+              </>
+            )}
+            <button
+              type="button"
+              data-bots-first-recipe
+              disabled={busy}
+              onClick={onRecipe}
+              className={`hover:text-[var(--text-main)] disabled:opacity-50 ${FOCUS_RING}`}
+            >
+              {t('botsPage.onboarding.fromRecipe')}
+            </button>
+          </div>
         )}
         {blocked && name.trim() !== '' && <p data-bots-first-blocked className="text-[11px] text-[var(--text-muted)]">{t(blocked, { max: BOT_NAME_MAX })}</p>}
         {!workspace && <p data-bots-first-blocked className="text-[11px] text-[var(--text-muted)]">{t('settings.factory.addBotNeedWorkspace')}</p>}

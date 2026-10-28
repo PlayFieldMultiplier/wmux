@@ -25,6 +25,7 @@ import { getWorkspacePtyIds } from '../../../shared/paneUtils';
 import { destroyWorkspaceRemoteSessions } from '../../utils/remoteSessionTeardown';
 import { LOCAL_PC_ID, isShadowWorkspaceId } from '../../../shared/pcRail';
 import { useT } from '../../hooks/useT';
+import { useShortcutLabel, withShortcut } from '../../utils/shortcutLabel';
 import { useRemoteWorkspaceCreate } from './useRemoteWorkspaceCreate';
 import { buildWorkspaceMarkdown } from '../../utils/sessionInfoMarkdown';
 import { tokenAttrs } from '../../themes';
@@ -74,6 +75,7 @@ const NO_FACTS: Record<string, string> = {};
  */
 export default function Sidebar({ chrome = 'full' }: { chrome?: 'full' | 'sheet' } = {}) {
   const t = useT();
+  const sidebarKey = useShortcutLabel('toggleSidebar');
   const sidebarPosition = useStore((s) => s.sidebarPosition);
   // A1: 통트리 구독 해체. Sidebar는 목록 구조(id·name·순서)만 구독하고, 각
   // WorkspaceItem이 자기 ws를 self-subscribe한다. 배경 ws의 metadata/surface
@@ -679,7 +681,7 @@ export default function Sidebar({ chrome = 'full' }: { chrome?: 'full' | 'sheet'
           data-sidebar-collapse
           className={`${HIT_TARGET_24} rounded-md text-[color-mix(in_srgb,var(--text-main)_50%,transparent)] hover:text-[var(--text-main)] hover:bg-[var(--hover-fill)] transition-colors duration-150 ${FOCUS_RING}`}
           onClick={() => useStore.getState().toggleSidebar()}
-          title={t('sidebar.hideTooltip')}
+          title={withShortcut(t('sidebar.hideTooltip'), sidebarKey)}
           aria-label={t('sidebar.hideTooltip')}
         >
           <IconChevronDir dir={collapseDirection(sidebarPosition)} />

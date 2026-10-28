@@ -49,6 +49,8 @@ import Switch from '../ui/Switch';
 import Select from '../ui/Select';
 import Input from '../ui/Input';
 import { FOCUS_RING } from '../focusRing';
+import { originCommand } from '../Git/originCommand';
+import { useCopyText } from '../../hooks/useCopyText';
 import { BotSecretsSection, PhoneBotSelect } from './BotSecretsSection';
 import { BotConnectionsSection } from './BotConnectionsSection';
 import { ClaudeAuthSection, bridgeClaudeAuthPort, type ClaudeAuthPort } from './ClaudeAuthSection';
@@ -298,7 +300,7 @@ export type AddBotRepoView =
   | { kind: 'suggested'; repoKey: string; root: string; displayRoot: string }
   | { kind: 'picked'; folder: string }
   | { kind: 'checking' }
-  | { kind: 'none'; reason?: string; remembered?: boolean; unchecked?: 'failed' | 'slow' };
+  | { kind: 'none'; reason?: string; reasonCode?: string; originSet?: boolean; remembered?: boolean; unchecked?: 'failed' | 'slow' };
 
 export function addBotRepoView(
   rows: readonly FactoryBotRow[],
@@ -327,7 +329,7 @@ export function addBotRepoView(
   if (pending) return { kind: 'checking' };
   if (suggestion && !suggestion.ok) {
     if (suggestion.code === 'none') return { kind: 'none', remembered: true };
-    if (suggestion.message) return { kind: 'none', reason: suggestion.message };
+    if (suggestion.message) return { kind: 'none', reason: suggestion.message, reasonCode: suggestion.code, ...(suggestion.originSet ? { originSet: true } : {}) };
   }
   return { kind: 'none' };
 }
@@ -383,12 +385,14 @@ export function addBotBlockedReason(p: { canCreate: boolean; workspaceId: string
 /** "Works on acme/app · ~/code/app" with Change and None, or "No
  *  repository" with Choose folder…: what a new bot will work on, always in
  *  view (addBotRepoView). Shared with the Bots page's first screen. */
-export function AddBotRepoRow({ view, t, busy, onChoose, onNone }: {
+export function AddBotRepoRow({ view, t, busy, onChoose, onNone, onRecheck }: {
   view: AddBotRepoView;
   t: T;
   busy: boolean;
   onChoose: () => void;
   onNone: () => void;
+  /** Ask main for the workspace's folder again (after its origin is fixed). */
+  onRecheck?: () => void;
 }): React.ReactElement {
   const works = view.kind !== 'none' && view.kind !== 'checking';
   return (
@@ -422,11 +426,50 @@ export function AddBotRepoRow({ view, t, busy, onChoose, onNone }: {
           {t(view.unchecked === 'failed' ? 'settings.factory.addBotRepoCheckFailed' : 'settings.factory.addBotRepoCheckSlow')}
         </p>
       )}
-      {view.kind === 'none' && !view.unchecked && (view.reason || view.remembered) && (
+      {view.kind === 'none' && !view.unchecked && view.reasonCode === 'no_remote' && view.reason && (
+        <RepoNoRemoteNote reason={view.reason} originSet={view.originSet} onRecheck={onRecheck} t={t} />
+      )}
+      {view.kind === 'none' && !view.unchecked && view.reasonCode !== 'no_remote' && (view.reason || view.remembered) && (
         <p data-testid="factory-add-bot-repo-reason" className="basis-full text-[11px] leading-snug text-[var(--text-muted)]">
           {view.reason ?? t('settings.factory.addBotRepoRemembered')}
         </p>
       )}
+    </div>
+  );
+}
+
+/** A folder whose origin a bot cannot push to: one plain line, the command
+ *  that sets origin (add, or set-url when origin names no host), Check
+ *  again (asks main once more, so a fixed folder is offered), and main's
+ *  full reason behind Show details. "Copied" only once the write went
+ *  through; a failed copy shows the command to select by hand. */
+function RepoNoRemoteNote({ reason, originSet, onRecheck, t }: { reason: string; originSet?: boolean; onRecheck?: () => void; t: T }): React.ReactElement {
+  const [open, setOpen] = useState(false);
+  const { state: copyState, copy } = useCopyText();
+  const command = originCommand(originSet);
+  const link = `hover:text-[var(--text-main)] ${FOCUS_RING}`;
+  return (
+    <div data-testid="factory-add-bot-repo-reason" data-repo-reason="no_remote" className="flex basis-full flex-col gap-1">
+      <p className="text-[12px] leading-snug text-[var(--text-sub)]">{t('settings.factory.addBotRepoNoRemote')}</p>
+      <span className="flex flex-wrap items-center gap-x-1 text-[12px] text-[var(--text-muted)]">
+        <button type="button" data-testid="factory-add-bot-repo-copy" data-copy-state={copyState} title={command} className={link} onClick={() => void copy(command)}>
+          {copyState === 'copied' ? t('git.connect.copied') : t('settings.factory.addBotRepoCopyCommand')}
+        </button>
+        {onRecheck && (
+          <>
+            <span aria-hidden="true">·</span>
+            <button type="button" data-testid="factory-add-bot-repo-recheck" className={link} onClick={onRecheck}>
+              {t('botsPage.onboarding.checkAgain')}
+            </button>
+          </>
+        )}
+        <span aria-hidden="true">·</span>
+        <button type="button" data-testid="factory-add-bot-repo-details" aria-expanded={open} className={link} onClick={() => setOpen((v) => !v)}>
+          {t(open ? 'botsPage.engineError.hideDetails' : 'botsPage.engineError.showDetails')}
+        </button>
+      </span>
+      {copyState === 'failed' && <code data-testid="factory-add-bot-repo-command" className="select-all break-all font-mono text-[11px] text-[var(--text-main)]">{command}</code>}
+      {open && <p data-testid="factory-add-bot-repo-detail" className="break-words text-[11px] leading-snug text-[var(--text-muted)]">{reason}</p>}
     </div>
   );
 }
@@ -464,7 +507,10 @@ export function useAddBotRepo(port: FactoryBotPort, rows: readonly FactoryBotRow
   // its folders change (they only trigger the ask; main reads its own).
   const shownCwd = useStore((s) => s.workspaces.find((w) => w.id === workspaceId)?.metadata?.cwd ?? '');
   const shownStartup = useStore((s) => s.workspaces.find((w) => w.id === workspaceId)?.profile?.startupCwd ?? '');
-  const ask = [workspaceId, ownKey, shownCwd, shownStartup].join('\0');
+  // Check again: the same workspace asked once more (its folder's origin may
+  // have been fixed since).
+  const [recheckSeq, setRecheckSeq] = useState(0);
+  const ask = [workspaceId, ownKey, shownCwd, shownStartup, recheckSeq].join('\0');
   useEffect(() => {
     if (!port.suggestRepo || !workspaceId) return;
     let live = true;
@@ -499,7 +545,7 @@ export function useAddBotRepo(port: FactoryBotPort, rows: readonly FactoryBotRow
       setError(err instanceof Error ? err.message : String(err));
     }
   };
-  return { view, repoFolder, request, pending: view.kind === 'checking', choose, chooseNone: () => setChoice({ workspaceId, folder: null, none: true }), error };
+  return { view, repoFolder, request, pending: view.kind === 'checking', choose, chooseNone: () => setChoice({ workspaceId, folder: null, none: true }), recheck: () => setRecheckSeq((n) => n + 1), error };
 }
 
 /** The names "Add team" gives its bots, in the owner's language. */
@@ -755,7 +801,7 @@ export function AddBotForm(props: AddBotFormProps): React.ReactElement {
       </>)}
       <div className="flex items-center gap-2 text-[12px] text-[var(--text-sub)]">
         <span className="w-[120px] shrink-0">{t('settings.factory.addBotRepo')}</span>
-        <AddBotRepoRow view={repo.view} t={t} busy={busy} onChoose={() => void repo.choose()} onNone={repo.chooseNone} />
+        <AddBotRepoRow view={repo.view} t={t} busy={busy} onChoose={() => void repo.choose()} onNone={repo.chooseNone} onRecheck={repo.recheck} />
       </div>
       <div className="text-[11px] text-[var(--text-muted)]">
         {t(repo.view.kind === 'inherited' ? 'settings.factory.addBotRepoInherited' : 'settings.factory.addBotRepoHint')}
