@@ -34,7 +34,6 @@ import { useStore } from '../../stores';
 import { useT } from '../../hooks/useT';
 import { IconCheck, IconWarning } from '../icons';
 import Button from '../ui/Button';
-import Field from '../ui/Field';
 import Switch from '../ui/Switch';
 import { SettingRow, SettingsSection } from './SettingsLayout';
 
@@ -124,7 +123,8 @@ export function ClaudeIntegrationSection() {
 
   return (
     <>
-      <SettingsSection id="plugin" title={t('claudeIntegration.signalHealth.title')}>
+      {/* One row that names itself, so the section carries no heading. */}
+      <SettingsSection id="plugin">
         {cardState.kind === 'unknown' && (
           <UnknownBody t={t} onCopy={onCopyInstall} copyState={copyState} />
         )}
@@ -169,15 +169,13 @@ function UsageCard({
 
   return (
     <SettingsSection id="usage" title={t('claudeIntegration.usage.title')} description={t('claudeIntegration.usage.description')}>
-      <div className="settings-row">
-        <Field label={t('claudeIntegration.usage.enableLabel')}>
-          <Switch
-            checked={enabled}
-            onCheckedChange={setEnabled}
-            aria-label={t('claudeIntegration.usage.enableLabel')}
-          />
-        </Field>
-      </div>
+      <SettingRow label={t('claudeIntegration.usage.enableLabel')}>
+        <Switch
+          checked={enabled}
+          onCheckedChange={setEnabled}
+          aria-label={t('claudeIntegration.usage.enableLabel')}
+        />
+      </SettingRow>
       {enabled && (
         <div className="settings-row">
           <div className="flex items-center justify-between gap-4">
@@ -386,15 +384,12 @@ function UnknownBody({
   copyState: 'idle' | 'copied' | 'error';
 }) {
   return (
-    <div className="ui-row">
-      <span className="ui-row-icon" aria-hidden="true"><span className="wmux-welcome-todo" /></span>
-      <div className="ui-row-text">
-        <p className="ui-row-detail">{t('claudeIntegration.signalHealth.unknownBody')}</p>
-      </div>
-      <div className="ui-row-action">
-        <CopyInstallButton t={t} onCopy={onCopy} state={copyState} />
-      </div>
-    </div>
+    <SettingRow
+      label={t('claudeIntegration.signalHealth.title')}
+      description={t('claudeIntegration.signalHealth.unknownBody')}
+    >
+      <CopyInstallButton t={t} onCopy={onCopy} state={copyState} />
+    </SettingRow>
   );
 }
 
@@ -412,28 +407,23 @@ function DetectedBody({
   const matched = health.workspaceMatchRate.matched;
   const missed = health.workspaceMatchRate.missed;
   const totalAttempts = matched + missed;
+  // The last signal leads; latency and pane matching follow on the same
+  // clamped line (the info button shows all of it).
+  const detail = `${t('claudeIntegration.signalHealth.detectedLastReceived', { rel: relTime })} ${[
+    t('claudeIntegration.signalHealth.detectedLatencyFormat', {
+      p50: Math.round(p50),
+      p95: Math.round(p95),
+      count: health.count,
+    }),
+    t('claudeIntegration.signalHealth.workspaceMatchFormat', {
+      matched,
+      total: totalAttempts,
+    }),
+  ].join(' · ')}`;
   return (
-    <div className="ui-row">
-      <span className="ui-row-icon wmux-welcome-glyph-ok" aria-hidden="true"><IconCheck size={14} /></span>
-      <div className="ui-row-text">
-      <p className="ui-row-title">
-        {t('claudeIntegration.signalHealth.detectedLastReceived', { rel: relTime })}
-      </p>
-      <p className="ui-row-detail tabular-nums">
-        {t('claudeIntegration.signalHealth.detectedLatencyFormat', {
-          p50: Math.round(p50),
-          p95: Math.round(p95),
-          count: health.count,
-        })}
-      </p>
-      <p className="ui-row-detail tabular-nums">
-        {t('claudeIntegration.signalHealth.workspaceMatchFormat', {
-          matched,
-          total: totalAttempts,
-        })}
-      </p>
-      </div>
-    </div>
+    <SettingRow label={t('claudeIntegration.signalHealth.title')} description={detail}>
+      <span className="wmux-welcome-glyph-ok inline-flex" aria-hidden="true"><IconCheck size={14} /></span>
+    </SettingRow>
   );
 }
 
@@ -449,15 +439,15 @@ function StaleBody({
   copyState: 'idle' | 'copied' | 'error';
 }) {
   return (
-    <div className="ui-row">
-      <span className="ui-row-icon wmux-welcome-glyph-warn" aria-hidden="true"><IconWarning size={14} /></span>
-      <div className="ui-row-text">
-        <p className="ui-row-detail">{t('claudeIntegration.signalHealth.staleBody', { rel: relTime })}</p>
-      </div>
-      <div className="ui-row-action">
+    <SettingRow
+      label={t('claudeIntegration.signalHealth.title')}
+      description={t('claudeIntegration.signalHealth.staleBody', { rel: relTime })}
+    >
+      <span className="flex items-center gap-2 shrink-0">
+        <span className="wmux-welcome-glyph-warn inline-flex" aria-hidden="true"><IconWarning size={14} /></span>
         <CopyInstallButton t={t} onCopy={onCopy} state={copyState} />
-      </div>
-    </div>
+      </span>
+    </SettingRow>
   );
 }
 

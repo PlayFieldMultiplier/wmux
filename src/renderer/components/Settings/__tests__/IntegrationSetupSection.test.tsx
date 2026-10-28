@@ -423,7 +423,7 @@ describe('IntegrationSetupSection', () => {
     );
     cleanups.push(cleanup);
     await flush();
-    expect(container.querySelector('[data-integration-setup]')).not.toBeNull();
+    expect(container.querySelector('[data-setting-id="setup"]')).not.toBeNull();
     expect(state(container, 'statusline')).toBe('unavailable');
     expect(action(container, 'statusline')).toBeNull();
     expect(state(container, 'hooks')).toBe('missing');
@@ -433,7 +433,7 @@ describe('IntegrationSetupSection', () => {
     (window as unknown as { electronAPI?: unknown }).electronAPI = { deck: {} };
     const { container, cleanup } = render(<IntegrationSetupSectionContainer />);
     cleanups.push(cleanup);
-    expect(container.querySelector('[data-integration-setup]')).toBeNull();
+    expect(container.querySelector('[data-setting-id="setup"]')).toBeNull();
     delete (window as unknown as { electronAPI?: unknown }).electronAPI;
   });
 });

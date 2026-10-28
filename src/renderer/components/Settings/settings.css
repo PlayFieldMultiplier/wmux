@@ -168,6 +168,12 @@
 .settings-kbd-hint[data-unset] { color: var(--text-muted); }
 button.settings-kbd { cursor: pointer; }
 button.settings-kbd:hover { color: var(--text-main); background: var(--surface-fill-hover); }
+/* A prefix binding's action menu reads as the row's label, like a shortcut
+ * row's name: no box until hover or keyboard focus (which keeps its ring). */
+.ui-select.settings-prefix-action { margin-left: -8px; }
+.ui-select.settings-prefix-action > select { min-height: 28px; padding-left: 8px; font-size: 14px; }
+.ui-select.settings-prefix-action > select:not(:focus-visible) { border-color: transparent; background: transparent; }
+.ui-select.settings-prefix-action > select:not(:focus-visible):hover { background: var(--hover-fill); }
 
 /* Theme cards: visual, on surface radii and hairlines. */
 .settings-theme-card {

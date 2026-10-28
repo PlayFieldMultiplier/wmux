@@ -244,16 +244,19 @@ export function SettingRow({
   description,
   layout = 'inline',
   children,
+  ...rest
 }: {
   id?: string;
-  label: string;
+  /** Usually plain text; a node when part of the label is muted (a row's
+   *  "· required" suffix). */
+  label: ReactNode;
   description?: string;
   layout?: 'inline' | 'stacked';
   children?: ReactNode;
-}) {
+} & Omit<HTMLAttributes<HTMLDivElement>, 'id' | 'children'>) {
   const clamp = useClamp<HTMLSpanElement>(description);
   return (
-    <div data-setting-id={id} className="settings-row scroll-mt-4">
+    <div {...rest} data-setting-id={id} className="settings-row scroll-mt-4">
       <Field
         label={label}
         layout={layout}
