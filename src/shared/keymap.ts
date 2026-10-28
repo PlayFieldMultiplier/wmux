@@ -696,8 +696,10 @@ const MODIFIER_NAMES: Record<string, DisplayModifier | 'CmdOrCtrl'> = {
 const MAC_ORDER: readonly DisplayModifier[] = ['Ctrl', 'Alt', 'Shift', 'Meta'];
 const PC_ORDER: readonly DisplayModifier[] = ['Meta', 'Ctrl', 'Alt', 'Shift'];
 const MAC_GLYPH: Record<DisplayModifier, string> = { Ctrl: '⌃', Alt: '⌥', Shift: '⇧', Meta: '⌘' };
+// Combos say ArrowUp / Escape; Electron accelerators say Up / Esc / Return.
 const KEY_LABEL: Record<string, string> = {
   Escape: 'Esc', ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→',
+  Up: '↑', Down: '↓', Left: '←', Right: '→', Return: 'Enter',
 };
 
 /**

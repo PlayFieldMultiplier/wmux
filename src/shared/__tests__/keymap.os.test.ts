@@ -439,6 +439,9 @@ describe('display', () => {
     expect(displayCombo('CommandOrControl+Shift+Space', 'darwin')).toBe('⇧⌘Space');
     expect(displayCombo('CmdOrCtrl+Enter', 'win32')).toBe('Ctrl+Enter');
     expect(displayCombo('Control+Option+Escape', 'darwin')).toBe('⌃⌥Esc');
+    expect(displayCombo('CommandOrControl+Up', 'darwin')).toBe('⌘↑');
+    expect(displayCombo('CommandOrControl+Return', 'darwin')).toBe('⌘Enter');
+    expect(displayCombo('CommandOrControl+Shift+Left', 'win32')).toBe('Ctrl+Shift+←');
   });
 });
 

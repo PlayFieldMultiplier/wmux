@@ -80,6 +80,15 @@ describe('plain wording and one shortcut notation', () => {
     }
   });
 
+  it('the auto-approve setting states its whole scope, local agents included', async () => {
+    const workspaceWord: Record<string, string> = { en: 'this workspace', ko: '이 워크스페이스', pl: 'z tego obszaru roboczego', zh: '此工作区' };
+    const tables = Object.fromEntries(await allLocales());
+    for (const [name, word] of Object.entries(workspaceWord)) {
+      const v = (tables[name] as Record<string, string | undefined>)['settings.a2aAutoApproveExecuteDesc'];
+      expect(v, name).toContain(word);
+    }
+  });
+
   it('every singular key a plural has is in each locale that has the plural', async () => {
     const pairs = Object.keys(en).filter((k) => k.endsWith('One') && k.slice(0, -3) in en)
       .filter((k) => /^(strip|pcRail|pcSwitcher|workspace\.closeConfirm|git\.(mergeSummary|ship|allRepos)|prepCard)/.test(k));

@@ -5,6 +5,7 @@ import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import SessionSchedulesPopover, { type SessionSchedulesApi } from '../SessionSchedulesPopover';
 import type { SessionPromptSchedule } from '../../../../shared/sessionPromptSchedule';
+import { useStore } from '../../../stores';
 
 let container: HTMLDivElement;
 let root: Root;
@@ -112,6 +113,31 @@ async function mount(api: SessionSchedulesApi): Promise<void> {
 }
 
 describe('SessionSchedulesPopover', () => {
+  it('names the workspace and pane of each other-session schedule so the rows can be told apart', async () => {
+    const before = useStore.getState().workspaces;
+    useStore.setState({
+      workspaces: [{
+        ...before[0],
+        id: 'ws-api', name: 'api', wsOrdinal: 3,
+        rootPane: { type: 'leaf', id: 'pane-x', ordinal: 2, activeSurfaceId: 's-x', surfaces: [{ id: 's-x', ptyId: 'pty-other', title: 'zsh', surfaceType: 'terminal' }] },
+      }] as unknown as typeof before,
+    });
+    try {
+      const api = fakeApi([
+        schedule(),
+        schedule({ id: 'other', ptyId: 'pty-other' }),
+        schedule({ id: 'gone', ptyId: 'pty-gone' }),
+      ]);
+      await mount(api);
+      expect(container.textContent).toContain('api · w3-2');
+      // A pane that is no longer open has no name to show.
+      expect(container.textContent).toContain('Another session');
+      expect(container.textContent).not.toContain('pty-other');
+    } finally {
+      useStore.setState({ workspaces: before });
+    }
+  });
+
   it('lists current and other-session schedules without retargeting them', async () => {
     const api = fakeApi([schedule(), schedule({ id: 'other', ptyId: 'pty-other' })]);
     await mount(api);
