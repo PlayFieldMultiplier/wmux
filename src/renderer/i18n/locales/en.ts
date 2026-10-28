@@ -5554,6 +5554,7 @@ export const en = {
   'remotePage.peerRevoked': "Revoked",
   'remotePage.connect.inviteDesc': "On the other PC, open Remote › Connect a PC › Paste an invite and paste this. It sees only the panes you choose next.",
   'remotePage.connect.turnedOn': "A2A was off on this PC. It is on now, so the other PC can reach it.",
+  'remotePage.connect.turnedOnBlocked': "A2A is on now, but port {port} is in use, so the other PC cannot reach this PC until it listens on a free port.",
   'remotePage.connect.creating': "Creating an invite…",
   'remotePage.connect.createInvite': "Create invite",
   'remotePage.connect.turnOnAndCreate': "Turn on and create invite",

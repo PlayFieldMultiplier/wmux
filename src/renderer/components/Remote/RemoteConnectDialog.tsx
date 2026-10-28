@@ -577,7 +577,13 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
                 {t('remotePage.connect.turnOnNote', { port: a2aState?.port ?? '' })}
               </p>
             )}
-            {turnedOn && <p className="wmux-remote-connect-note" data-testid="remote-connect-turned-on">{t('remotePage.connect.turnedOn')}</p>}
+            {/* Says what the listener really did: on and reachable, or on but held off its port. */}
+            {turnedOn && a2aState?.listening && <p className="wmux-remote-connect-note" data-testid="remote-connect-turned-on">{t('remotePage.connect.turnedOn')}</p>}
+            {turnedOn && !a2aState?.listening && inviteFailure && (
+              <p className="wmux-remote-connect-note" data-testid="remote-connect-turned-on-blocked">
+                {t('remotePage.connect.turnedOnBlocked', { port: inviteFailure.port })}
+              </p>
+            )}
             {inviteError && <p className="wmux-a2a-note" data-tone="danger" role="alert">{inviteError}</p>}
             {inviteFailure && !invite.invite && (
               <ListenProblemView

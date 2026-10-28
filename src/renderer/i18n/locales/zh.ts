@@ -4476,6 +4476,7 @@ export const zh = {
   'remotePage.peerRevoked': "已撤销",
   'remotePage.connect.inviteDesc': "在另一台电脑上打开 远程 › 连接电脑 › 粘贴邀请，然后粘贴这段内容。它只能看到你接下来选择的窗格。",
   'remotePage.connect.turnedOn': "本机的 A2A 原本关闭，现已开启，另一台电脑可以连到本机了。",
+  'remotePage.connect.turnedOnBlocked': "A2A 现已开启，但端口 {port} 已被占用，在本机改用空闲端口监听之前，另一台电脑无法连到本机。",
   'remotePage.connect.creating': "正在创建邀请…",
   'remotePage.connect.createInvite': "创建邀请",
   'remotePage.connect.turnOnAndCreate': "开启并创建邀请",

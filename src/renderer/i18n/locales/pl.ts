@@ -5512,6 +5512,7 @@ export const pl = {
   'remotePage.peerRevoked': "Odwołany",
   'remotePage.connect.inviteDesc': "Na drugim komputerze otwórz Zdalny dostęp › Połącz komputer › Wklej zaproszenie i wklej to. Zobaczy tylko panele, które zaraz wybierzesz.",
   'remotePage.connect.turnedOn': "A2A było wyłączone na tym komputerze. Teraz jest włączone, więc drugi komputer może się z nim połączyć.",
+  'remotePage.connect.turnedOnBlocked': "A2A jest teraz włączone, ale port {port} jest zajęty, więc drugi komputer nie połączy się z tym, dopóki ten nie zacznie nasłuchiwać na wolnym porcie.",
   'remotePage.connect.creating': "Tworzenie zaproszenia…",
   'remotePage.connect.createInvite': "Utwórz zaproszenie",
   'remotePage.connect.turnOnAndCreate': "Włącz i utwórz zaproszenie",
