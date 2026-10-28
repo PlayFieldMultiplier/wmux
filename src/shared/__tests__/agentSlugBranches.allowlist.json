@@ -15,7 +15,7 @@
     "src/daemon/chat/nativeChatBridge.ts": 20,
     "src/daemon/history/RunHistoryStore.ts": 1,
     "src/daemon/hooks/HookIngest.ts": 5,
-    "src/daemon/index.ts": 10,
+    "src/daemon/index.ts": 11,
     "src/daemon/phone/paneAccount.ts": 2,
     "src/daemon/transcript/TerminalChatService.ts": 1,
     "src/daemon/transcript/TranscriptDiscovery.ts": 3,
