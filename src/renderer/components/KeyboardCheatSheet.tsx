@@ -1,15 +1,14 @@
 /**
  * T7 — KeyboardCheatSheet (Plan 1.18, D5 + D11)
  *
- * Bottom-right fixed overlay shown after the first-run wizard completes
- * (or is dismissed).  Lists the most useful keyboard shortcuts, runs a
- * 30-second auto-dismiss countdown (paused on hover, focus, or window
- * blur), and offers a "Don't show again" checkbox that persists through
- * `uiSlice.cheatSheetDismissed` (T5).
+ * Bottom-right fixed overlay, shown only when asked: the `?` prefix action
+ * or Settings › Setup and reset. Lists the most useful keyboard shortcuts
+ * and runs a 30-second auto-dismiss countdown (paused on hover, focus, or
+ * window blur). It never opens by itself, so it has no "Don't show again".
  *
  * Design notes:
- * - Renders nothing if `cheatSheetDismissed === true` (D11: permanent
- *   opt-out, only revivable from Settings → First-run setup).
+ * - A profile that opted out under the old automatic sheet keeps
+ *   `cheatSheetDismissed`; asking for the sheet still shows it.
  * - Stays *below* the wizard modal in z-index — wizard is --z-dialog (70),
  *   we sit at --z-cheatsheet (40) so we never trap clicks meant for the
  *   wizard or auto-update prompt (--z-modal, 60).
@@ -23,13 +22,12 @@
  * effect machinery, while the default export wires up timers and store
  * subscriptions.
  */
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../stores';
 import { useT } from '../hooks/useT';
 import { t as translate } from '../i18n';
 import Popover, { PopoverSection } from './ui/Popover';
 import Button from './ui/Button';
-import Checkbox from './ui/Checkbox';
 import { IconX } from './icons';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -110,15 +108,10 @@ export interface KeyboardCheatSheetViewProps {
   shortcuts: CheatSheetEntry[];
   /** Title text (already translated). */
   title: string;
-  /** "Don't show again" label (already translated). */
-  dontShowAgainLabel: string;
   /** Close button aria-label (already translated). */
   dismissLabel: string;
   /** Remaining countdown ratio in [0, 1]. */
   progress: number;
-  /** Whether the "Don't show again" checkbox is checked. */
-  dontShowAgain: boolean;
-  onDontShowAgainChange: (checked: boolean) => void;
   onDismiss: () => void;
   onMouseEnter: () => void;
   onMouseLeave: () => void;
@@ -131,11 +124,8 @@ export interface KeyboardCheatSheetViewProps {
 export function KeyboardCheatSheetView({
   shortcuts,
   title,
-  dontShowAgainLabel,
   dismissLabel,
   progress,
-  dontShowAgain,
-  onDontShowAgainChange,
   onDismiss,
   onMouseEnter,
   onMouseLeave,
@@ -144,7 +134,6 @@ export function KeyboardCheatSheetView({
   translateLabel,
 }: KeyboardCheatSheetViewProps) {
   const clamped = Math.max(0, Math.min(1, progress));
-  const dontShowId = useId();
   return (
     <Popover
       role="region"
@@ -181,20 +170,6 @@ export function KeyboardCheatSheetView({
             </li>
           ))}
         </ul>
-      </PopoverSection>
-      <PopoverSection>
-        <div className="flex items-center gap-2">
-          <Checkbox
-            id={dontShowId}
-            checked={dontShowAgain}
-            onCheckedChange={onDontShowAgainChange}
-            aria-label={dontShowAgainLabel}
-            data-testid="keyboard-cheat-sheet-dont-show-again"
-          />
-          <label htmlFor={dontShowId} className="ui-note cursor-pointer select-none">
-            {dontShowAgainLabel}
-          </label>
-        </div>
         {/* Inside the last section, so that section stays the popover's last
             child and its bottom inset collapses; absolute, so it still spans
             the card's bottom edge. */}
@@ -217,7 +192,6 @@ export function KeyboardCheatSheetView({
 
 export default function KeyboardCheatSheet() {
   const cheatSheetDismissed = useStore((s) => s.cheatSheetDismissed);
-  const setCheatSheetDismissed = useStore((s) => s.setCheatSheetDismissed);
   // One-shot force-show triggered by the `?` prefix action — re-displays the
   // overlay even after the user has permanently dismissed it, and resets the
   // local hidden/countdown state for a fresh viewing.
@@ -232,9 +206,6 @@ export default function KeyboardCheatSheet() {
   const hoverRef = useRef(false);
   const focusRef = useRef(false);
   const docHiddenRef = useRef(false);
-
-  // Reflect uiSlice "Don't show again" checkbox state for visual feedback.
-  const [dontShowAgain, setDontShowAgain] = useState(false);
 
   const platform = useMemo(() => {
     // electronAPI.platform was added by 1.14 OS-aware shortcut work — see
@@ -319,14 +290,6 @@ export default function KeyboardCheatSheet() {
     return () => document.removeEventListener('pointerdown', onPointerDown, true);
   }, [hidden, cheatSheetDismissed, cheatSheetForceShown, onDismiss]);
 
-  const onDontShowAgainChange = useCallback(
-    (checked: boolean) => {
-      setDontShowAgain(checked);
-      if (checked) setCheatSheetDismissed(true);
-    },
-    [setCheatSheetDismissed],
-  );
-
   const onMouseEnter = useCallback(() => {
     hoverRef.current = true;
   }, []);
@@ -350,11 +313,8 @@ export default function KeyboardCheatSheet() {
     <KeyboardCheatSheetView
       shortcuts={shortcuts}
       title={t('cheatSheet.title')}
-      dontShowAgainLabel={t('cheatSheet.dontShowAgain')}
       dismissLabel={t('cheatSheet.dismiss')}
       progress={progress}
-      dontShowAgain={dontShowAgain}
-      onDontShowAgainChange={onDontShowAgainChange}
       onDismiss={onDismiss}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}

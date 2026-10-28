@@ -246,8 +246,9 @@ bar is a drag region; each interactive child opts out with `no-drag`.
   right cluster; the whole gap drags the window. The command palette has no
   titlebar entry: ⌘K (Ctrl+K on Windows and Linux) opens it, and the rail's
   More menu lists it so it stays discoverable.
-- **Right:** Fleet vitals as appearing chips (`N running`, `N need you`; only
-  when nonzero, and dropped while Fleet is the page), the account usage when
+- **Right:** Fleet vitals as an appearing chip (`N running`; only when
+  nonzero, and dropped while Fleet is the page) — no Needs you count, which
+  is the rail's Fleet badge (see Attention renditions) — the account usage when
   it matters. The file tree toggle is not here: it is the agent bar's Files
   button (see File tree column). There is no room or bot panel toggle: bot
   conversations live on the Bots page.
@@ -1726,7 +1727,7 @@ always neutral (the fill ladder).
   - **The sidebar.** The agent row's trailer reads "Seems stuck" in `--accent-yellow` in place of the live activity. The running mark and the status word stay; no new status mark, never the attention orange.
 - **Needs you is the attention orange everywhere** — the sidebar ring, hairline,
   labels and counts, the collapsed rail's mark, the rail badge and dot,
-  Fleet's Needs you chip, section dot and row word, and the titlebar count —
+  and Fleet's Needs you chip, section dot and row word —
   so one state never wears two colours (and a white-accent look still reads
   it). One orange hue family (≈21–29°), its own value per look
   (`ATTENTION_COLORS` in `themes.ts`, emitted into each look's block in
@@ -1763,9 +1764,18 @@ always neutral (the fill ladder).
   closing message (`pendingQuestion`). A turn that finished with no question
   draws no hairline; it shows the done dot until its workspace is viewed. The Attention blink
   pulse (Motion) is a momentary opacity overlay, not a resting wash.
-- **Attention renditions:** one event is drawn at most twice (the evidence
-  row plus one global count). The titlebar vitals step aside on the Fleet
-  page, whose summary line already says them.
+- **Attention renditions:** one event is drawn at most twice: the evidence
+  row (the sidebar row, its hairline and its "Needs you") plus one global
+  count, the rail's Fleet badge. The titlebar carries no Needs you count, and
+  needs you raises no in-app toast (other notifications still toast; while
+  the window is out of focus the OS notification still fires, since neither
+  rendition can be seen). One state, one word: "Needs you" in the sidebar,
+  Fleet and the notification panel. The notification panel is opened on
+  demand and keeps the record; a needs-you row there names the workspace and
+  agent and says what it asks — the question while it still waits, or plainly
+  that no question text came — never the state word twice. Its focused row is
+  the neutral `--selection` fill with the accent focus ring, never the OS
+  focus colour.
 - **No dead gauges:** a count, chip or column at zero is not drawn.
 
 ## Typography and density
@@ -2172,6 +2182,8 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
 | 2026-10-26 | Custom agents: a last section on Settings › Roles & fan-out, not a new tab. One ui-group of rows (name · command line · "Known by its process" and unattended line, a "Used by" line while a role or preset launches it, with Edit / Delete), "Add custom agent" as the last row, and an inline stacked editor like Fan-out presets (Name, Command, Arguments, First prompt flag, Model flag, Unattended flags, Process names). Edit opens in place of its own row and the list keeps its order. Delete is disabled while the agent is used. The section description states the limits: process-only identity, no screen status, approvals or resume. Unattended starts empty and empty means not offered | Custom agents exist to be picked by roles and fan-out, so they sit beside them. The same shapes as Fan-out presets keep one editing grammar on the tab. Stating the limits and never defaulting unattended keeps a user-typed CLI from looking as supported as a registry agent, or from running unattended by surprise; blocking Delete keeps a role or preset from silently launching something else |
 | 2026-10-26 | An approved release is carried out. Its card's title names the tag, the repository and the short commit, and says it cannot be undone ("Publish release v1.2.3 of owner/repo at abc1234 — publishes a release, cannot be undone"; with a tag workflow, "Push tag … — starts its release workflow, cannot be undone"). The body is the bot's one line, one plain sentence of what Approve does, as whom and when, and that wmux cannot take it back, then "Marked Latest." or "Prerelease, never Latest." (with a tag workflow: "The workflow decides whether it is marked Latest."), then one plain line per workflow with no push filter that runs on the tag push as well ("<file> also runs on this tag push."), then what main read as plain lines (the default branch and how far the commit is behind its head, the checks on the commit, package.json's version), then a line naming the blocks and each published field in its own `wmux-payload` code block. Approve / Deny only, with the usual 10 s Undo; typed words, the chip and rules never approve it. The outcome card reads "Published release …" with its link, or with a tag workflow "Tag pushed — the release workflow is building it" with the Actions run linked when it can be read; nothing is tinted | A release is the one act that starts other machinery (a tag workflow publishes installers and packages), so the card states the commit, its checks and the version before Approve, and the hash covers every field that is published |
 | 2026-10-28 | Owner-approved (Settings clean-up, part 3): terminal font size, font and cursor move from Appearance to the top of Terminal; the Settings › Plugins tab (a single link to the rail page) is removed, reversing the 2026-10-21 line that kept it. A row or note that only applies on another OS is hidden there (the agy accounts section off Windows, Start on login on Linux), and settings search hides it too; a row that works everywhere but is named after one OS reads in the platform's words (Finder, the Dock, ⌘G, macOS or Linux in About). A switch whose children act on nothing while it is off disables them: the pane ring's flash, and the Bots morning report and phone bot. A row that limits what bots may do (trusted authors, caps, the command reviewer, auto-merge) stays editable while the bots are off, so it can be set before they start. Accounts' quota switches are standard switches. The Company View toggle loses its default key (Ctrl+Shift+O, which it swallowed) and its Shortcuts row: it has opened nothing since #503; a key a user saved still binds and lists it | Settings read as cluttered: text settings sat on the wrong page, an empty tab took a nav row, macOS users read Windows-only text, and child rows looked live while their parent was off. Hiding by platform through the catalog keeps the row and its search hit in step |
+| 2026-10-28 | Owner-approved (first launch): the first launch is one short welcome dialog — the agents (once one is signed in, only the signed-in ones, the rest under Other agents), the Claude Code MCP and hooks rows, the update switch — ending on **Open a folder…**, the one primary once nothing needs setting up; it opens a workspace on that folder. No sample task, no bot task and no statusline offer in it (the statusline stays in Settings). Nothing opens by itself after it: the spotlight tour and the keyboard cheat sheet are on demand (Settings › Setup and reset, the `?` prefix action), and the cheat sheet loses its Don't show again. A check marks done or installed only; a switch row has no glyph. Opening a folder completes the first run; Skip, Later, × and Escape only mark it shown, and closing a reopened wizard never rewrites that. Existing profiles keep their seen flags and never see the first run again | A design critique found a first launch that stacked a long scrolling wizard with two primaries, a four-step tour that pulled the user from Fleet back to Workspaces, and an automatic cheat sheet; a reopened wizard said a skipped sample task was "Already completed". A new user needs an agent and their project, and the rest is found when it is needed |
+| 2026-10-28 | Owner-approved (quieter needs-you signal, after a design critique): one awaiting-input event is drawn as the sidebar row plus the rail's Fleet badge only. The titlebar's `N need you` chip is gone and needs you raises no in-app toast (the OS notification still fires while the window is out of focus). One word, "Needs you", in the sidebar, Fleet and the notification panel; Fleet drops "Needs input", "Needs your input" and the empty "The agent asks" block; a shell name is never shown as the agent. A needs-you notification row names workspace · agent and the question (or says no question text came); the panel's focused row is the neutral selection with the accent ring | One state was drawn about six times in three colours (blue toast, gold focus outline, orange) and four wordings, against the two-rendition cap. The rail badge stays over the titlebar chip because it is a number (no plural to get wrong), sits beside the Bots and Remote badges, and survives a collapsed sidebar |
 | 2026-10-28 | Owner-approved (design critique, harden): the Git page and the Bots first run lose their dead ends. A repo with no origin remote opens the Git page on Worktrees (shown, never saved; a tab picked there is kept) and its Issues and Pull requests show a no-remote card with the `git remote add origin <address>` command to copy and Check again; the detail pane's "Select…" line shows only while a list has a row; the Worktrees summary line needs two non-empty sections; the rule before the Worktrees tab is gone. In the Bots first run, Start is the only button beside the name and Add a team and Start from a recipe… are one muted line of links; a folder with no origin remote a bot can push to reads as one plain line with Copy command and Show details instead of main's whole reason. Amends Git › Tabs, Worktrees tab and Detail, and Bots › Add bot and First run | The Git page opened on an empty Issues tab whose detail pane asked for a selection that could not exist, while the useful Worktrees tab sat behind it. The Bots welcome card showed a blocking-looking grey paragraph with the full folder path and set-url instructions, and three equal buttons competed for the first action |
 
 ### Desktop conversation view
@@ -2380,12 +2392,14 @@ differently in the two places, and in the order `fleet_triage` returns.
   is not drawn. Plain shells sit only in Idle and never keep the empty state
   from showing.
 - **One count:** the Needs you chip and the Needs you head read the same
-  two arrays (pane rows and decision tickets); the rail badge and the titlebar's `N need you` count the
-  same pane rows (`selectFleetSectionCounts`) and leave tickets out, which
-  the rail's tooltip says — so the titlebar and the rail badge always agree,
-  and match the chip whenever no ticket waits on a decision. A polite live region announces the count when it
+  two arrays (pane rows and decision tickets); the rail badge, the one
+  global count (the titlebar has none), counts the same pane rows
+  (`selectFleetSectionCounts`) and leaves tickets out, which the rail's
+  tooltip says — so it matches the chip whenever no ticket waits on a
+  decision. A polite live region announces the count when it
   changes, never when Fleet opens.
-- **Row:** status (dot and word), the title (an open ticket's title when the
+- **Row:** status (dot and word; an agent asking reads "Needs you", the
+  sidebar's word), the title (an open ticket's title when the
   pane holds one, else the task or pane name), workspace · agent · role ·
   stash, the now-doing line, elapsed time under it and one verb (Respond,
   See result, Check, Open). One word for a finished turn — Finished — in
@@ -2403,7 +2417,10 @@ differently in the two places, and in the order `fleet_triage` returns.
   foo.ts`, `Running npm test`); a finished or idle one says `Last: …` in the
   past tense (`Last: Ran npm test`), from the last tool it ran, which
   outlives the turn's end. An agent that reports no tools (Codex, others)
-  shows its last reply; a question shows in quotes and wraps to two lines;
+  shows its last reply; a question shows in quotes and wraps to two lines,
+  and a request with no question text (a permission prompt) shows no line —
+  the status already says Needs you; a shell's name ("Zsh") is never shown as
+  the agent;
   an error row shows the last `Error:` / stderr-shaped line of its terminal
   (mono), else its label; stopped and unconfirmed rows keep their label.
 - **Completion checks:** a finished pane's evidence badge reads its most
@@ -2420,8 +2437,10 @@ differently in the two places, and in the order `fleet_triage` returns.
   hidden at zero; pressing the pressed chip shows everything again. Then
   approvals, LAN messages, account usage, the next schedule and phones
   watching, each only when it is not zero, and Settled. While Fleet is the
-  page, the titlebar drops its own running / need you counts and usage.
-- **Detail area:** under the list, opened by a deliberate selection (an
+  page, the titlebar drops its own running count and usage.
+- **Detail area:** under the list — right after its last row, not pinned to
+  the page's foot (the list scrolls once the two fill the page) — opened by a
+  deliberate selection (an
   arrow move, the row's details button, Space) and never by the focus Fleet
   takes when it opens; Esc closes it before it closes Fleet. It shows the
   selected agent's last 20 lines of output (40 for an error row, its error
@@ -2430,7 +2449,8 @@ differently in the two places, and in the order `fleet_triage` returns.
   live, in the mantle fill. The sidebar's Tasks line opens Fleet on that
   task with the detail open. For a
   Needs you row the detail leads with what it asks, above the output: the
-  question in full (never truncated), the numbered choices of the prompt
+  question in full (never truncated; with no question text there is no
+  "The agent asks" block at all), the numbered choices of the prompt
   drawn at the bottom of its terminal (read-only), then Open approval (when
   an Approvals row waits on that workspace), Reply… (the row's composer;
   never on a permission prompt) and Jump to pane. An error row leads with

@@ -17,7 +17,6 @@ export const id = {
   'workspace.agentError': 'Galat agen',
   'workspace.agentWaiting': 'Agen menunggu',
 
-  'workspace.agentAwaitingInput': 'Agen perlu masukan',
   'workspace.needsYou': 'Menunggu Anda',
   'workspace.agentIdle': 'Agen menganggur',
   'workspace.agentUnverifiable': 'Tidak ada pembaruan selama {time}',
@@ -87,6 +86,9 @@ export const id = {
   'notification.clear': 'Bersihkan',
   'notification.empty': 'Tidak ada notifikasi',
   'notification.toggle': 'Ctrl+I untuk beralih',
+  'notification.needsYou.question': "Menunggu Anda: “{question}”",
+  'notification.needsYou.noQuestion': "Menunggu Anda. Tanpa teks pertanyaan; lihat terminalnya.",
+  'notification.needsYou.over': "Tidak lagi menunggu Anda.",
 
   // Command palette
   'palette.placeholder': 'Ketik perintah...',

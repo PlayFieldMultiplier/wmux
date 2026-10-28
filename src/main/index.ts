@@ -1147,8 +1147,13 @@ const fanoutCallerSubmit = createFanoutCallerSubmit({
 // (factory/workerReportNudge.ts): the gated submit, held while someone types.
 setWorkerPaneSubmit(async (ptyId, text, guardKey) =>
   (await inputRpc.gatedSubmit(ptyId, text, null, { waitQuiet: true, deadlineAt: Date.now() + 120_000, ...(guardKey ? { guardKey } : {}) })).ok === true);
-ipcMain.handle(IPC.DECK_FANOUT_CALLER_SESSION, (_e, ptyId: unknown) => fanoutCallerSubmit.session(ptyId));
-ipcMain.handle(IPC.DECK_FANOUT_CALLER_SUBMIT, (_e, payload: unknown) => fanoutCallerSubmit.submit(payload));
+// Check the sender like the other main-window handlers: these answer the
+// composer in the main window's own top frame, and a submit delivers a prompt
+// into an agent pane, so a <webview> guest or subframe must not reach them.
+ipcMain.handle(IPC.DECK_FANOUT_CALLER_SESSION, (event, ptyId: unknown) =>
+  isTrustedMainFrameSender(event, () => mainWindow) ? fanoutCallerSubmit.session(ptyId) : Promise.resolve(null));
+ipcMain.handle(IPC.DECK_FANOUT_CALLER_SUBMIT, (event, payload: unknown) =>
+  isTrustedMainFrameSender(event, () => mainWindow) ? fanoutCallerSubmit.submit(payload) : Promise.resolve({ result: 'unavailable' as const, pasted: false }));
 registerApprovalsRpc(rpcRouter, () => daemonClient);
 registerDeckRpc(rpcRouter, () => mainWindow);
 registerNotifyRpc(rpcRouter, () => mainWindow);

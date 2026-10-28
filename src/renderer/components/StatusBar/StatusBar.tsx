@@ -9,15 +9,14 @@ import { selectActiveWorkspaceSummary } from '../../stores/selectors/workspacePr
 import { tokenAttrs } from '../../themes';
 import { HIT_TARGET_24 } from '../hitArea';
 import { IconGear, IconCornerUpLeft } from '../icons';
-import { selectFleetPanes, sortFleetPanes, selectFleetSectionCounts, type FleetPane } from '../../stores/selectors/fleet';
-import { ownerFleetState, selectOwnerWorkspaces } from '../Sidebar/botTasks';
+import { selectFleetPanes, type FleetPane } from '../../stores/selectors/fleet';
+import { selectOwnerWorkspaces } from '../Sidebar/botTasks';
 import PluginStatusBarWidgets from '../../plugins/PluginStatusBarWidgets';
 import { COMPANY_MODE_ENABLED } from '../../../shared/featureFlags';
 import { FOCUS_RING } from '../focusRing';
 import type { StoreState } from '../../stores';
 import { RAIL_PAGE_TITLE_KEYS, workspaceChromeInTitlebar } from '../Titlebar/railPageTitle';
 import { displayWorkspaceName, resolveTaskLink } from '../../utils/fanoutProvenance';
-import { showWorkspaces } from '../../utils/showWorkspaces';
 
 /**
  * #1481 — when the active workspace is a fan-out task, the workspace that fanned
@@ -127,7 +126,7 @@ export function NotificationBellBadgeView({ unreadCount, onActivate }: Notificat
  * A local row needs a spawned PTY on a terminal surface. #1343 — a remote row
  * has neither: `surfaceType` is 'remote-terminal' and its ptyId is the
  * synthetic remote key, so it is admitted on `remote` alone. The chip is a
- * fleet-wide READOUT (and a jump target), not a command surface, which is why
+ * fleet-wide READOUT, not a command surface, which is why
  * remote agents belong here but not in DeckFleet.
  */
 function isFleetAgentRow(p: FleetPane): boolean {
@@ -170,37 +169,9 @@ export default function StatusBar() {
       };
     }),
   );
-  // One Needs you count everywhere: the same rows the rail badge and Fleet's
-  // chip count (selectFleetSectionCounts) — questions, errors, stopped
-  // supervision and unconfirmed panes — so the three numbers never differ.
-  // Bot workers are the Bots page's, never counted here (botTasks.ts).
-  const needsYouCount = useStore((s) => selectFleetSectionCounts(ownerFleetState(s)).needsYou);
-  // Jump to the most urgent pane — computed at click time (no subscription).
-  const jumpToUrgent = () => {
-    const s = useStore.getState();
-    const panes = sortFleetPanes(
-      selectFleetPanes({
-        workspaces: selectOwnerWorkspaces(s),
-        surfaceAgentStatus: s.surfaceAgentStatus,
-        surfaceActivity: s.surfaceActivity,
-        surfaceAgent: s.surfaceAgent,
-        surfacePendingQuestion: s.surfacePendingQuestion,
-        remoteWorkspaces: s.remoteWorkspaces,
-        usageLimitWaiting: s.usageLimitWaiting,
-      }).filter((p) => isFleetAgentRow(p)),
-      'attention',
-    );
-    const target = panes[0];
-    if (!target) return;
-    s.setActiveWorkspace(target.workspaceId);
-    // #977 — the chip counts stashed panes (they are still agents and they
-    // still get blocked), so the jump has to be able to REACH one. setActivePane
-    // only accepts panes in the visible tree, so without this the chip would
-    // count a pane it cannot take you to and the click would do nothing.
-    if (target.stashed) s.unstashPane(target.paneId, target.workspaceId);
-    s.setActivePane(target.paneId);
-    showWorkspaces(useStore.getState());
-  };
+  // No Needs you count here (DESIGN.md › Colour grammar › Attention
+  // renditions): one event is drawn at most twice — the sidebar row that is its
+  // evidence and one global count, the rail's Fleet badge.
   const toggleNotificationPanel = useStore((s) => s.toggleNotificationPanel);
   // The Fleet page has its own summary line; the titlebar's would repeat it.
   const onFleetPage = useStore((s) => s.appRoute === 'fleet');
@@ -305,23 +276,6 @@ export default function StatusBar() {
             />
             {(t('strip.running') || '{count} running').replace('{count}', String(fleetVitals.running))}
           </span>
-        )}
-        {!onFleetPage && needsYouCount > 0 && (
-          <button
-            type="button"
-            data-statusbar-needs
-            onClick={jumpToUrgent}
-            // min-h only: the chip is text, so it is already wide enough — it
-            // was the 13px line-height that put it under the pointer floor, and
-            // the 40px titlebar absorbs the extra height with no layout change.
-            // Needs you wears one colour everywhere — the attention orange: the
-            // sidebar's ring and label, the rail badge and this count.
-            className="flex items-center gap-1.5 min-h-[24px] font-semibold text-[var(--attention-text)] hover:opacity-80 transition-opacity"
-            title={t('strip.needsYouTooltip') || 'Jump to the pane that needs you'}
-          >
-            <span aria-hidden="true" className="w-[6px] h-[6px] rounded-full bg-[var(--attention)]" />
-            {(t('strip.needsYou') || '{count} need you').replace('{count}', String(needsYouCount))}
-          </button>
         )}
         {/* A5: company 비용 + 사용량 위젯(시계 커서 의존) — 분리된 소형 컴포넌트. */}
         {!onFleetPage && <StatusClockUsage isCompanyMode={isCompanyMode} />}
