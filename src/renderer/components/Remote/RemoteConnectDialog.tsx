@@ -162,7 +162,6 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
   const [turnedOn, setTurnedOn] = useState(false);
   // The listener's state as last read (null: not read yet, or no daemon). Read only; never changed on show.
   const [a2aState, setA2aState] = useState<A2aRemoteStatus | null>(null);
-  const [statusRead, setStatusRead] = useState(false);
   const [inviteError, setInviteError] = useState<string | null>(null);
   // The listener could not bind: its code and port, explained by the daemon (who holds it, a port to try).
   const [inviteFailure, setInviteFailure] = useState<{ code: string; port: number } | null>(null);
@@ -204,7 +203,6 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
       const status = await api?.status().catch(() => null);
       if (!live) return;
       setA2aState(status ?? null);
-      setStatusRead(true);
       if (!initialTab) setTab(status?.enabled && status.listening ? 'invite' : 'paste');
     })();
     return () => { live = false; };
@@ -512,12 +510,14 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
     setMessage({ tone: left.length > 0 ? 'danger' : 'muted', text: lines.join('\n'), ...(fix ? { fix } : {}) });
   }, [paste, connectOne, t]);
 
-  if (tab === null || !statusRead) return null;
+  if (tab === null) return null;
   const working = busy || invite.joinBusy;
   const remaining = invite.remainingSec;
   // Off (or never set up): the button says it turns the listener on, and the line above it says what that is.
   const a2aOff = a2aState !== null && !a2aState.enabled;
   const canConnect = paste.trim() !== '' && !working;
+  // The port is taken: "Use port N" is what unblocks, so it is the primary and Create invite (a retry) is not.
+  const usePortPrimary = inviteFailure !== null && !invite.invite && inviteProblem?.suggestion != null;
 
   // The LAN panel keeps its place in the body in both views below (second
   // child of DialogBody, after the tabs or an empty slot), so a PC redeeming
@@ -587,7 +587,7 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
                 busy={creating}
                 working={creating}
                 repair
-                primary={false}
+                primary={usePortPrimary}
                 listener="a2a"
                 t={t}
               />
@@ -741,7 +741,7 @@ export default function RemoteConnectDialog({ initialTab, onClose, onLinkPane, o
         {tab === 'invite' && !invite.invite && (
           <Button
             ref={createRef}
-            variant={creating || shareBusy ? 'secondary' : 'primary'}
+            variant={creating || shareBusy || usePortPrimary ? 'secondary' : 'primary'}
             size="md"
             disabled={creating || shareBusy}
             onClick={() => void startInvite()}

@@ -338,6 +338,20 @@ describe('Connect a PC dialog', () => {
     await render({ initialTab: 'invite' });
     expect(document.activeElement).toBe(q('remote-connect-create'));
   });
+
+  it('when the port is taken, Use port N is the one primary and Create invite steps back', async () => {
+    stub('', false);
+    a2a.configure.mockResolvedValue({ enabled: true, port: 45660, listening: false, hostId: 'me', name: 'MAC', fingerprint256: null, lastError: 'in use', lastErrorCode: 'EADDRINUSE', lastErrorPort: 45660 });
+    const netFirewall = { listenProblem: vi.fn(async () => ({ problem: { kind: 'port-in-use', port: 45660 }, holder: null, suggestion: 45661 })) };
+    vi.stubGlobal('electronAPI', { a2aRemote: a2a, remote, netFirewall });
+    await render({ initialTab: 'invite' });
+    await createInvite();
+    expect(a2a.pairBegin).not.toHaveBeenCalled();
+    const usePort = document.querySelector<HTMLButtonElement>('[data-listen-use-port="45661"]');
+    expect(usePort?.className).toContain('ui-btn-primary');
+    expect(q('remote-connect-create')?.className).toContain('ui-btn-secondary');
+    expect(document.querySelectorAll('.ui-btn-primary')).toHaveLength(1);
+  });
 });
 
 describe('one invite for A2A and the workspaces', () => {
