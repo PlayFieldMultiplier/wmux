@@ -122,6 +122,21 @@ export function decideAgentPrimary(
 }
 
 /**
+ * The agent rows the group lists before "Other agents": once an agent is
+ * signed in, only the signed-in ones and any with a run the user started;
+ * with none signed in yet, every agent, since one of them must be set up.
+ */
+export function agentRowsToList(
+  statuses: AgentSetupStatus[] | null,
+  runs: Partial<Record<AgentId, AgentRun>>,
+): { listed: AgentId[]; folded: AgentId[] } {
+  const all = shownAgentIds(statuses);
+  if (!statuses?.some((s) => s.readiness === 'ready')) return { listed: all, folded: [] };
+  const keep = (a: AgentId) => agentStatusOf(a, statuses)?.readiness === 'ready' || runs[a] !== undefined;
+  return { listed: all.filter(keep), folded: all.filter((a) => !keep(a)) };
+}
+
+/**
  * The "Agent ready" group: one row per agent. `onShowPane` is called when a
  * card brings a run's terminal tab to the front, so the wizard can step aside
  * (a modal over the pane would keep the user from typing or reading it).
@@ -129,6 +144,9 @@ export function decideAgentPrimary(
 export function AgentReadyGroup({ primary, onShowPane }: { primary: AgentId | null; onShowPane: (agent: AgentId) => void }) {
   const t = useT();
   const { statuses, runs } = useAgentSetup();
+  const [expanded, setExpanded] = useState(false);
+  const { listed, folded } = agentRowsToList(statuses, runs);
+  const rows = expanded ? [...listed, ...folded] : listed;
   return (
     <section className="flex flex-col gap-2" data-testid="first-run-agent-ready">
       <div>
@@ -136,7 +154,7 @@ export function AgentReadyGroup({ primary, onShowPane }: { primary: AgentId | nu
         <p className="ui-row-detail">{t('firstRunWizard.agent.groupHint')}</p>
       </div>
       <div className="ui-group">
-        {shownAgentIds(statuses).map((agent) => (
+        {rows.map((agent) => (
           <AgentCard
             key={agent}
             agent={agent}
@@ -148,6 +166,17 @@ export function AgentReadyGroup({ primary, onShowPane }: { primary: AgentId | nu
           />
         ))}
       </div>
+      {folded.length > 0 && !expanded && (
+        <Button
+          size="sm"
+          variant="ghost"
+          className="self-start"
+          onClick={() => setExpanded(true)}
+          data-testid="first-run-agent-show-others"
+        >
+          {t('firstRunWizard.agent.otherAgents', { count: folded.length })}
+        </Button>
+      )}
     </section>
   );
 }

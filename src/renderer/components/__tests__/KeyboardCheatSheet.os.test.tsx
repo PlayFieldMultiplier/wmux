@@ -140,11 +140,8 @@ function renderView(overrides: Partial<Parameters<typeof KeyboardCheatSheetView>
     createElement(KeyboardCheatSheetView, {
       shortcuts: buildShortcuts('win32'),
       title: 'Keyboard shortcuts',
-      dontShowAgainLabel: "Don't show again",
       dismissLabel: 'Dismiss',
       progress: 1,
-      dontShowAgain: false,
-      onDontShowAgainChange: noop,
       onDismiss: noop,
       onMouseEnter: noop,
       onMouseLeave: noop,
@@ -194,17 +191,10 @@ describe('KeyboardCheatSheetView (renderToStaticMarkup)', () => {
     expect(winHtml).toContain('Ctrl+M');
   });
 
-  it('renders an unchecked "Don\'t show again" checkbox by default', () => {
-    const html = renderView({ dontShowAgain: false });
-    // The token checkbox (ui/Checkbox), unchecked, with its visible label.
-    expect(html).toContain('role="checkbox"');
-    expect(html).toContain('aria-checked="false"');
-    expect(html).toMatch(/<label[^>]*for="[^"]+"[^>]*>Don(&#x27;|')t show again<\/label>/);
-  });
-
-  it('renders a checked "Don\'t show again" checkbox when dontShowAgain=true', () => {
-    const html = renderView({ dontShowAgain: true });
-    expect(html).toContain('aria-checked="true"');
+  it('has no "Don\'t show again": it opens only when asked', () => {
+    const html = renderView();
+    expect(html).not.toContain('role="checkbox"');
+    expect(html).not.toMatch(/show again/i);
   });
 
   it('renders the close button with proper aria-label', () => {
@@ -241,35 +231,6 @@ describe('KeyboardCheatSheetView (renderToStaticMarkup)', () => {
     // (`<li[\s>]`, not `<li`: the close icon's SVG <line>s would match too.)
     const liMatches = html.match(/<li[\s>]/g) ?? [];
     expect(liMatches.length).toBe(12);
-  });
-});
-
-// ─── Persistence call site (uiSlice integration) ─────────────────────────────
-
-describe('uiSlice persistence wiring', () => {
-  it("checking 'Don't show again' calls setCheatSheetDismissed(true)", () => {
-    // Simulate the wiring in the default export: the checkbox handler calls
-    // setCheatSheetDismissed only when checked === true.  We re-implement the
-    // tiny callback inline so we don't have to mount the timer-driven default
-    // export.
-    const setCheatSheetDismissed = vi.fn();
-    const handler = (checked: boolean) => {
-      if (checked) setCheatSheetDismissed(true);
-    };
-    handler(true);
-    expect(setCheatSheetDismissed).toHaveBeenCalledTimes(1);
-    expect(setCheatSheetDismissed).toHaveBeenCalledWith(true);
-  });
-
-  it("unchecking does not toggle setCheatSheetDismissed back to false", () => {
-    // Per D11, dismissal is permanent — the only way to reactivate the cheat
-    // sheet is via Settings → "Show keyboard cheat sheet" (T8b).
-    const setCheatSheetDismissed = vi.fn();
-    const handler = (checked: boolean) => {
-      if (checked) setCheatSheetDismissed(true);
-    };
-    handler(false);
-    expect(setCheatSheetDismissed).not.toHaveBeenCalled();
   });
 });
 
