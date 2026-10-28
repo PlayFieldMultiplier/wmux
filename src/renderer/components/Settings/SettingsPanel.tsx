@@ -43,8 +43,7 @@ import {
   type FanoutWorkerPermissionMode,
 } from '../../../shared/workerLaunch';
 import {
-  SETTINGS_SHORTCUT_ROWS,
-  UNBOUND_SHORTCUTS,
+  ADVERTISED_SHORTCUTS,
   builtinCombosFor,
   comboFromEvent,
   concreteCombo,
@@ -52,6 +51,7 @@ import {
   displayCombo,
   isPluginPageShortcut,
   pluginPageShortcut,
+  settingsUnboundRows,
   type ShortcutActionId,
 } from '../../../shared/keymap';
 import { usePlugins } from '../../plugins/usePlugins';
@@ -4543,7 +4543,7 @@ export function TabShortcuts() {
   const shortcutNeedle = shortcutQuery.trim();
   const matchesShortcut = (description: string, keys: string) =>
     matchesShortcutQuery(shortcutQuery, description, keys);
-  const visibleShortcuts = SETTINGS_SHORTCUT_ROWS.filter((entry) => {
+  const visibleShortcuts = ADVERTISED_SHORTCUTS.filter((entry) => {
     const override = shortcutOverrides[entry.action];
     const combo = typeof override === 'string' ? override : concreteCombo(entry, platform);
     return matchesShortcut(describe(entry.action), displayCombo(combo, platform));
@@ -4557,7 +4557,7 @@ export function TabShortcuts() {
   const pluginPages = railPagePlugins(plugins).map((p) => pluginPageShortcut(p.name));
   const orphanedPages = (Object.keys(shortcutOverrides) as ShortcutActionId[])
     .filter((action) => isPluginPageShortcut(action) && !pluginPages.includes(action));
-  const visibleUnbound = [...UNBOUND_SHORTCUTS.map((e) => e.action), ...pluginPages, ...orphanedPages].filter((action) => {
+  const visibleUnbound = [...settingsUnboundRows(shortcutOverrides), ...pluginPages, ...orphanedPages].filter((action) => {
     const override = shortcutOverrides[action];
     return matchesShortcut(describe(action), typeof override === 'string' ? displayCombo(override, platform) : '');
   });

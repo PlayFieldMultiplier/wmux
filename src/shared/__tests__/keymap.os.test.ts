@@ -6,8 +6,8 @@ import {
   customKeybindingsOn,
   collidesWithKeymap,
   ADVERTISED_SHORTCUTS,
-  SETTINGS_SHORTCUT_ROWS,
   UNBOUND_SHORTCUTS,
+  settingsUnboundRows,
   SHORTCUT_ACTION_IDS,
   comboFromEvent,
   concreteCombo,
@@ -597,13 +597,22 @@ describe('workspaceShortcutNumber', () => {
   });
 });
 
-describe('SETTINGS_SHORTCUT_ROWS', () => {
-  it('leaves the dead Company View toggle out of the list but keeps it bound', () => {
-    const listed = SETTINGS_SHORTCUT_ROWS.map((e) => e.action);
-    expect(listed).not.toContain('toggleCompanyView');
-    expect(listed).toContain('toggleBotsView');
-    expect(listed.length).toBe(ADVERTISED_SHORTCUTS.length - 1);
-    expect(WMUX_KEYMAP.some((e) => e.action === 'toggleCompanyView')).toBe(true);
-    expect(sanitizeShortcutOverrides({ toggleCompanyView: null })).toEqual({ toggleCompanyView: null });
+describe('the dead Company View toggle', () => {
+  it('takes no key by default, so Ctrl+Shift+O reaches the pane', () => {
+    for (const platform of ['win32', 'darwin', 'linux'] as const) {
+      const bindings = effectiveBindings(platform, {});
+      expect(bindings.some((b) => b.action === 'toggleCompanyView')).toBe(false);
+      expect(resolveShortcut(ev({ key: 'O', code: 'KeyO', ctrlKey: true, shiftKey: true }), bindings)).toBeNull();
+      expect(resolveShortcut(ev({ key: 'O', code: 'KeyO', metaKey: true, shiftKey: true }), bindings)).toBeNull();
+    }
+  });
+
+  it('still binds a key the user saved, and is listed only while it holds one', () => {
+    const overrides = sanitizeShortcutOverrides({ toggleCompanyView: 'Ctrl+Alt+O' });
+    expect(overrides).toEqual({ toggleCompanyView: 'Ctrl+Alt+O' });
+    expect(resolveShortcut(ev({ key: 'o', code: 'KeyO', ctrlKey: true, altKey: true }), effectiveBindings('win32', overrides))).toBe('toggleCompanyView');
+    expect(settingsUnboundRows({})).not.toContain('toggleCompanyView');
+    expect(settingsUnboundRows(overrides)).toContain('toggleCompanyView');
+    expect(settingsUnboundRows({})).toContain('stashPane');
   });
 });

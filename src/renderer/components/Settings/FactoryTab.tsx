@@ -1031,8 +1031,10 @@ export function FactoryTab({ settingsPort, botPort, pickFolder, claudeAuthPort }
   };
 
   const off = !sPort.available || !settings;
-  // The rows below the switch tune the running bots; with the bots off they
-  // act on nothing, so they are disabled until the switch is on.
+  // The morning report and the phone's bot act on nothing while the bots are
+  // off, so they wait for the switch. Rows that limit what bots may do (who
+  // they trust, caps, the command reviewer, auto-merge) stay editable, so they
+  // can be set before the bots start.
   const botsOff = settings?.enabled === false;
 
   return (
@@ -1048,7 +1050,7 @@ export function FactoryTab({ settingsPort, botPort, pickFolder, claudeAuthPort }
         </SettingRow>
         <SettingRow id="factorytrustedauthors" label={t('settings.factory.trustedAuthors')} description={t('settings.factory.trustedAuthorsDesc')}>
           <Input
-            disabled={off || botsOff}
+            disabled={off}
             value={authorsDraft ?? (settings?.trustedAuthors ?? []).join(', ')}
             placeholder="octocat, hubot"
             onChange={(e) => setAuthorsDraft(e.target.value)}
@@ -1091,17 +1093,17 @@ export function FactoryTab({ settingsPort, botPort, pickFolder, claudeAuthPort }
           </div>
         </SettingRow>
         <SettingRow id="factoryverifierownprs" label={t('settings.factory.verifierOwnPrs')} description={t('settings.factory.verifierOwnPrsDesc')}>
-          <Switch checked={settings?.verifierOnOwnerPrs === true} disabled={off || botsOff} onCheckedChange={(v) => void patch({ verifierOnOwnerPrs: v })} />
+          <Switch checked={settings?.verifierOnOwnerPrs === true} disabled={off} onCheckedChange={(v) => void patch({ verifierOnOwnerPrs: v })} />
         </SettingRow>
         <SettingRow id="factorycommandreviewer" label={t('bots.commands.reviewerSetting')}>
-          <Switch checked={settings?.botCommandReviewer !== false} disabled={off || botsOff} onCheckedChange={(v) => void patch({ botCommandReviewer: v })} data-testid="factory-command-reviewer" aria-label={t('bots.commands.reviewerSetting')} />
+          <Switch checked={settings?.botCommandReviewer !== false} disabled={off} onCheckedChange={(v) => void patch({ botCommandReviewer: v })} data-testid="factory-command-reviewer" aria-label={t('bots.commands.reviewerSetting')} />
         </SettingRow>
         <SettingRow id="factoryengine" label={t('settings.factory.engine')} description={t('settings.factory.engineDesc')}>
           <span data-testid="factory-engine" className="text-[13px] text-[var(--text-main)]">{t('settings.factory.engineSdk')}</span>
         </SettingRow>
         <SettingRow id="factoryconcurrency" label={t('settings.factory.concurrency')} description={t('settings.factory.concurrencyDesc')}>
           <Select
-            disabled={off || botsOff}
+            disabled={off}
             value={String(settings?.globalConcurrentBots ?? 2)}
             onChange={(e) => void patch({ globalConcurrentBots: Number(e.target.value) })}
           >
@@ -1110,7 +1112,7 @@ export function FactoryTab({ settingsPort, botPort, pickFolder, claudeAuthPort }
         </SettingRow>
         <SettingRow id="factorymaxagents" label={t('settings.factory.maxAgents')} description={t('settings.factory.maxAgentsDesc')}>
           <Select
-            disabled={off || botsOff}
+            disabled={off}
             data-testid="factory-max-agents"
             value={String(settings?.maxConcurrentAgents ?? 6)}
             onChange={(e) => void patch({ maxConcurrentAgents: Number(e.target.value) })}
@@ -1119,7 +1121,7 @@ export function FactoryTab({ settingsPort, botPort, pickFolder, claudeAuthPort }
           </Select>
         </SettingRow>
         <SettingRow id="factorylaneautomerge" label={t('settings.factory.laneAutoMerge')} description={t('settings.factory.laneAutoMergeDesc')}>
-          <Switch checked={settings?.laneAutoMerge === true} disabled={off || botsOff} onCheckedChange={(v) => void patch({ laneAutoMerge: v })} data-testid="factory-lane-auto-merge" />
+          <Switch checked={settings?.laneAutoMerge === true} disabled={off} onCheckedChange={(v) => void patch({ laneAutoMerge: v })} data-testid="factory-lane-auto-merge" />
         </SettingRow>
         <SettingRow id="factorylanedailycap" label={t('settings.factory.laneDailyCap')} description={t('settings.factory.laneDailyCapDesc', { max: FACTORY_LANE_DAILY_CAP_MAX })}>
           <Input
@@ -1128,7 +1130,7 @@ export function FactoryTab({ settingsPort, botPort, pickFolder, claudeAuthPort }
             max={FACTORY_LANE_DAILY_CAP_MAX}
             data-testid="factory-lane-daily-cap"
             aria-label={t('settings.factory.laneDailyCap')}
-            disabled={off || botsOff}
+            disabled={off}
             value={capDraft ?? String(settings?.laneDailyCap ?? 5)}
             onChange={(e) => setCapDraft(e.target.value)}
             onBlur={() => {
