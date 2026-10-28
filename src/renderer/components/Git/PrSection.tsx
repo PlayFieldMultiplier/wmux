@@ -21,7 +21,7 @@ export { relTime };
 
 export interface GithubBridge {
   prList: (repoPath: string, force?: boolean) => Promise<
-    { ok: true; prs: PrSummary[] } | { ok: false; code: string; message: string; provider?: 'github' | 'gitlab' }
+    { ok: true; prs: PrSummary[] } | { ok: false; code: string; message: string; provider?: 'github' | 'gitlab'; originSet?: boolean }
   >;
   prDetail: (repoPath: string, number: number, updatedAt: string) => Promise<
     { ok: true; detail: PrDetail } | { ok: false; code: string; message: string }
