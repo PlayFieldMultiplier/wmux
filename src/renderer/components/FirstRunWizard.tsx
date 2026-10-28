@@ -27,7 +27,7 @@ import Button from './ui/Button';
 import Switch from './ui/Switch';
 import { IconCheck, IconWarning } from './icons';
 import { FOCUS_RING } from './focusRing';
-import { AgentReadyGroup, AgentSetupCorner, cornerRun, decideAgentPrimary } from './FirstRunAgentCards';
+import { AgentReadyGroup, AgentSetupCorner, agentRowsToList, cornerRun, decideAgentPrimary } from './FirstRunAgentCards';
 import { refreshAgentStatus, useAgentSetup } from '../utils/agentSetupRuns';
 import { anyAgentSetUp, type AgentId } from '../../shared/agentSetup';
 import { FIRST_RUN_REOPEN_EVENT } from '../../shared/firstRun';
@@ -234,6 +234,15 @@ export default function FirstRunWizard({ mode, onClose }: FirstRunWizardProps) {
   }, [installedKey, refresh]);
   const agentPrimary = decideAgentPrimary(statuses, runs);
   const agentReady = statuses !== null && anyAgentSetUp(statuses);
+  // Which agents wait under "Other agents": decided on the first status read
+  // and kept (here, not in the group, which unmounts while the dialog steps
+  // aside), so a row the user is installing in never folds away.
+  const [foldedAgents, setFoldedAgents] = useState<AgentId[] | null>(null);
+  const folded = foldedAgents ?? (statuses ? agentRowsToList(statuses, runs).folded : []);
+  useEffect(() => {
+    if (foldedAgents === null && statuses !== null) setFoldedAgents(folded);
+  }, [foldedAgents, statuses, folded]);
+  const showAllAgents = useCallback(() => setFoldedAgents([]), []);
   const noAgentReady = statuses !== null && !agentReady;
 
   // ─── Hook bridge offer ─────────────────────────────────────────────────────
@@ -376,7 +385,12 @@ export default function FirstRunWizard({ mode, onClose }: FirstRunWizardProps) {
         {!loading && result && (
           <>
             {/* Agent ready: one set-up agent is enough to go on. */}
-            <AgentReadyGroup primary={primary === 'agent' ? agentPrimary : null} onShowPane={stepAside} />
+            <AgentReadyGroup
+              primary={primary === 'agent' ? agentPrimary : null}
+              onShowPane={stepAside}
+              folded={folded}
+              onShowAll={showAllAgents}
+            />
 
             {/* wmux's connection to Claude Code, and updates: one grouped
                 container, one row per item. Rows that need an action are

@@ -168,6 +168,33 @@ describe('FirstRunWizard agent ready step', () => {
     expect(primaries().map((b) => b.dataset.testid)).toEqual(['first-run-agent-claude-run']);
   });
 
+  it('a row opened from Other agents stays listed through a failed install and Retry', async () => {
+    installBridge([notInstalled('claude'), ready('codex')]);
+    let onData: ((id: string, data: string, replay: boolean) => void) | null = null;
+    (window as unknown as { electronAPI: { pty: Record<string, unknown> } }).electronAPI.pty.onData =
+      vi.fn((cb: typeof onData) => { onData = cb; return () => undefined; });
+    tab.open.mockResolvedValue({ workspaceId: 'ws-1', ptyId: 'pty-1' });
+    await act(async () => { root.render(createElement(FirstRunWizard, { mode: 'firstRun', onClose: vi.fn() })); });
+    await settle();
+    expect(byId('first-run-agent-claude')).toBeNull();
+    await act(async () => { byId('first-run-agent-show-others')?.click(); });
+    await act(async () => { byId('first-run-agent-claude-install')?.click(); });
+    await settle();
+    await act(async () => { byId('first-run-agent-claude-run')?.click(); });
+    await settle();
+    // The dialog stepped aside to the corner card while the install ran.
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    await act(async () => { onData?.('pty-1', '\x1b]133;C\x07\x1b]133;D;1\x07', false); });
+    await settle();
+    expect(byId('first-run-agent-claude')?.dataset.status).toBe('error');
+    await act(async () => {
+      (Array.from(container.querySelectorAll('button')).find((b) => b.textContent === 'Retry') as HTMLButtonElement).click();
+    });
+    await settle();
+    // Retry cleared the failed run; the row is still there, on its confirm step.
+    expect(byId('first-run-agent-claude-command')?.textContent).toBe(INSTALL);
+  });
+
   it('an agent whose sign-in wmux cannot check shows installed, says so, and offers Sign in as a secondary', async () => {
     installBridge([notInstalled('claude'), notInstalled('codex'), {
       agent: 'grok', readiness: 'installed', executable: '/home/u/.grok/bin/grok', version: '1.0.67', updateRecommended: false, loginKnown: false, candidates: [],
