@@ -1,3 +1,5 @@
+// @wmux-lane integration
+// Builds a real Hermes SQLite database in a temp folder (hermesFixture) and reads it.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DatabaseSync } from 'node:sqlite';
 import { HermesChatService, routeTerminalChat, type HermesChatDeps } from '../HermesChatService';
