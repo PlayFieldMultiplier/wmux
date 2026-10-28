@@ -1351,6 +1351,8 @@ export class DaemonPTYBridge extends EventEmitter {
    */
   /** OSC 133 command starts this pane's shell reported (monotonic; read through getCommandStarts). */
   private commandStarts = 0;
+  /** `commandStarts` when the tracked agent launched (see answerProgramStatusProbe). */
+  private agentCommandStarts = 0;
   private parsesOsc133 = false;
 
   /**
@@ -1410,9 +1412,16 @@ export class DaemonPTYBridge extends EventEmitter {
    * reply goes out inside the data callback, before the chunk is forwarded,
    * so it reaches the program ahead of a viewer's answer to the DA1 Claude
    * sends right behind the query (the spec's "unsupported" signal).
+   * `WMUX_PROGRAM_STATUS_REPLY=0` in the daemon's environment turns it off
+   * (a backend that mangles the reply, pending the Windows ConPTY smoke).
    */
   private answerProgramStatusProbe(ptyProcess: IPty): void {
-    if (!this.paneAgent()) return;
+    if (process.env.WMUX_PROGRAM_STATUS_REPLY === '0' || !this.paneAgent()) return;
+    // A command the shell started since the agent launched (after Ctrl+Z, the
+    // agent stays alive behind it) owns the keyboard: the reply would be typed
+    // into it. The agent's own tools never own the tty (Claude Code's Bash
+    // tool runs on pipes), so this only skips the shell's own commands.
+    if (this.commandStarts !== this.agentCommandStarts) return;
     try {
       ptyProcess.write(PROGRAM_STATUS_PROBE_REPLY);
     } catch {
@@ -1474,7 +1483,7 @@ export class DaemonPTYBridge extends EventEmitter {
     // it drops the idle title that confirmed an Esc interrupt, so its own
     // `idle` right after a lone Esc confirms it.
     if (record.state === 'idle' && agentRow(this.programAgentSlug)?.titleTurns === true
-      && (prior?.state === 'working' || prior?.state === 'blocked')) this.confirmEscInterrupt(sessionId);
+      && (prior?.state === 'working' || prior?.state === 'blocked')) this.confirmEscInterrupt(sessionId, true);
   }
 
   /** Applies the root record stored before the tracker saw the agent alive. */
@@ -1636,6 +1645,10 @@ export class DaemonPTYBridge extends EventEmitter {
     const stored = this.programStatus.root();
     const pendingReport = state.alive && !this.programStatusSeen && stored && stored.updatedAt > this.programEpisodeEndAt ? stored : undefined;
     if (!state.alive || ((state.observedAt !== undefined || state.replacedLive) && state.slug && previous && previous !== state.slug)) this.noteAgentEnded();
+    // The agent's launch edge: shell commands counted after it run behind it.
+    if (state.alive && (this.trackedAgent?.alive !== true || this.trackedAgent.slug !== state.slug || state.replacedLive)) {
+      this.agentCommandStarts = this.commandStarts;
+    }
     this.trackedAgent = { ...(state.slug ? { slug: state.slug } : {}), alive: state.alive };
     this.reportMidTurn();
     if (pendingReport && this.programStatus.root() === pendingReport) this.applyStoredProgramStatus(pendingReport);
@@ -1795,11 +1808,12 @@ export class DaemonPTYBridge extends EventEmitter {
 
   /**
    * Claude Code's turn ended right after a lone Esc (its idle title, or its
-   * own OSC 7501 `idle` after `working`): the Esc interrupted it.
+   * own OSC 7501 `idle` after `working`): the Esc interrupted it. A report is
+   * a state change, not a repaint, so the resize-redraw guard is the title's only.
    */
-  private confirmEscInterrupt(sessionId: string): void {
+  private confirmEscInterrupt(sessionId: string, reported = false): void {
     const now = Date.now();
-    if (this.muted || now - this.lastResizeAtMs < RESIZE_REDRAW_GUARD_MS) return;
+    if (this.muted || (!reported && now - this.lastResizeAtMs < RESIZE_REDRAW_GUARD_MS)) return;
     if (now - this.lastEscAt >= ESC_INTERRUPT_CONFIRM_MS) return;
     // One Esc confirms one turn: a later idle title inside the same window
     // belongs to a turn that Esc never touched.
@@ -1846,7 +1860,7 @@ export class DaemonPTYBridge extends EventEmitter {
     return {
       title: this.lastTitle,
       at: this.lastTitleAt,
-      ...(slug && root ? { program: { slug, state: root.state, at: root.updatedAt } } : {}),
+      ...(slug && root ? { program: { slug, state: root.state, at: root.stateSince } } : {}),
     };
   }
 
@@ -2247,7 +2261,7 @@ export class DaemonPTYBridge extends EventEmitter {
         return;
       }
       if (event.code === PROGRAM_STATUS_OSC) {
-        if (event.data.startsWith('?')) this.answerProgramStatusProbe(ptyProcess);
+        if (event.data === '?') this.answerProgramStatusProbe(ptyProcess);
         else this.noteProgramStatus(event.data);
         return;
       }

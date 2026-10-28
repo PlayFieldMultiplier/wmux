@@ -90,6 +90,44 @@ describe('DaemonPTYBridge — OSC 7501 feature query', () => {
     expect(fake.writes).toEqual([]);
   });
 
+  it('the reply reaches the PTY before the chunk carrying the query (and the DA1 behind it) goes to any viewer', () => {
+    const fake = makeFakePty();
+    bridge.setupDataForwarding(fake.pty, new RingBuffer(65536), 'sess-1', new PromptEventLog());
+    bridge.noteAgentProcess({ slug: 'claude', alive: true });
+    const writesAtEmit: number[] = [];
+    bridge.on('data', () => writesAtEmit.push(fake.writes.length));
+    fake.feed(`${QUERY_BEL}\x1b[c`);
+    expect(writesAtEmit).toEqual([1]);
+  });
+
+  it('does not answer a command the shell started behind the agent (Ctrl+Z, then a command)', () => {
+    const fake = makeFakePty();
+    bridge.setupDataForwarding(fake.pty, new RingBuffer(65536), 'sess-1', new PromptEventLog());
+    fake.feed('\x1b]133;C\x07'); // the shell runs `claude`
+    bridge.noteAgentProcess({ slug: 'claude', alive: true });
+    fake.feed(QUERY_BEL);
+    expect(fake.writes).toEqual([PROGRAM_STATUS_PROBE_REPLY]);
+    // Suspended: the shell prompts and runs `cat` of a file holding the query.
+    fake.feed('\x1b]133;D;148\x07\x1b]133;A\x07\x1b]133;B\x07');
+    fake.feed('\x1b]133;C\x07');
+    bridge.noteAgentProcess({ slug: 'claude', alive: true });
+    fake.feed(QUERY_BEL);
+    expect(fake.writes).toEqual([PROGRAM_STATUS_PROBE_REPLY]);
+  });
+
+  it('WMUX_PROGRAM_STATUS_REPLY=0 turns the reply off', () => {
+    vi.stubEnv('WMUX_PROGRAM_STATUS_REPLY', '0');
+    try {
+      const fake = makeFakePty();
+      bridge.setupDataForwarding(fake.pty, new RingBuffer(65536), 'sess-1', new PromptEventLog());
+      bridge.noteAgentProcess({ slug: 'claude', alive: true });
+      fake.feed(QUERY_BEL);
+      expect(fake.writes).toEqual([]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('a PTY that refuses the write does not break output handling', () => {
     const fake = makeFakePty(() => { throw new Error('EPIPE'); });
     bridge.setupDataForwarding(fake.pty, new RingBuffer(65536), 'sess-1', new PromptEventLog());
@@ -193,6 +231,30 @@ describe('DaemonPTYBridge — Claude Code with its query answered', () => {
     // Turn 1 and turn 2 each opened and closed once.
     expect(edges.filter((e) => e !== null)).toHaveLength(3);
     expect(edges.slice(0, 4).map((e) => e === null)).toEqual([false, true, false, true]);
+  });
+
+  it('a repeated settle report after a submit does not read as that turn finished', () => {
+    replay('boot', 'query');
+    replay('boot');
+    vi.advanceTimersByTime(5_000);
+    const startedAt = Date.now();
+    bridge.noteInput('say hi\r');
+    vi.advanceTimersByTime(100);
+    fake.feed('\x1b]7501;state=idle:app=claude-code\x07');
+    expect(titleShowsFinishedTurn(bridge.getTitle(), 'claude', startedAt)).toBe(false);
+  });
+
+  it('Claude\'s own idle after an Esc confirms the interrupt even right after a resize', () => {
+    replay('boot', 'query');
+    replay('boot');
+    bridge.noteInput('think hard\r');
+    fake.feed('\x1b]7501;state=working:app=claude-code\x07');
+    vi.advanceTimersByTime(5_000);
+    bridge.noteResize();
+    bridge.noteInput('\x1b');
+    vi.advanceTimersByTime(100);
+    fake.feed('\x1b]7501;state=idle:app=claude-code\x07');
+    expect(interrupted).toEqual([{ sessionId: 'sess-1', agent: 'Claude Code' }]);
   });
 
   it('a prompt typed into the turn a command-line prompt started joins it, as under the running title', () => {

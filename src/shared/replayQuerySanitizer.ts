@@ -52,8 +52,9 @@ const TERMINAL_QUERY_SOURCE = [
   '\\x1b\\](?:4|5|1[0-9])(?:;[0-9]*)*;\\?(?:\\x07|\\x1b\\\\)',
   // Program status feature query — OSC 7501 ; ? (Claude Code, Grok Build).
   // Only the daemon answers it, live (DaemonPTYBridge.answerProgramStatusProbe);
-  // a replayed one must reach no responder. Reports (`state=`) never match.
-  '\\x1b\\]7501;\\?[^\\x07\\x1b]*(?:\\x07|\\x1b\\\\)',
+  // a replayed one must reach no responder. The query is exactly `?`, so
+  // reports (`state=`) and an unterminated query never match.
+  '\\x1b\\]7501;\\?(?:\\x07|\\x1b\\\\)',
   // DCS queries — DECRQSS (DCS $ q .. ST) and XTGETTCAP (DCS + q .. ST)
   '\\x1bP[$+]q[^\\x1b]*\\x1b\\\\',
   // XTWINOPS size reports — CSI 14/16/18 t (text area / cell / grid size).
