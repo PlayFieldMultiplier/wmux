@@ -353,7 +353,7 @@ describe('Connect a PC dialog', () => {
     expect(document.querySelectorAll('.ui-btn-primary')).toHaveLength(1);
     // Turned on but held off its port: the line says the other PC cannot reach this one yet, never that it can.
     expect(q('remote-connect-turned-on')).toBeNull();
-    expect(q('remote-connect-turned-on-blocked')?.textContent).toBe('A2A is on now, but port 45660 is in use, so the other PC cannot reach this PC until it listens on a free port.');
+    expect(q('remote-connect-turned-on-blocked')?.textContent).toBe('Messages from other PCs are on now, but port 45660 is in use, so the other PC cannot reach this PC until it listens on a free port.');
     // Use port N binds: now it is reachable, and the line says so.
     a2a.configure.mockResolvedValue({ enabled: true, port: 45661, listening: true, hostId: 'me', name: 'MAC', fingerprint256: null, lastError: null });
     a2a.status.mockResolvedValue({ enabled: true, port: 45661, listening: true, hostId: 'me', name: 'MAC', fingerprint256: null, lastError: null });
@@ -361,7 +361,7 @@ describe('Connect a PC dialog', () => {
     for (let i = 0; i < 8; i++) await act(async () => { await Promise.resolve(); });
     expect(a2a.configure).toHaveBeenLastCalledWith({ port: 45661 });
     expect(q('remote-connect-turned-on-blocked')).toBeNull();
-    expect(q('remote-connect-turned-on')?.textContent).toBe('A2A was off on this PC. It is on now, so the other PC can reach it.');
+    expect(q('remote-connect-turned-on')?.textContent).toBe('Messages from other PCs were off on this PC. They are on now, so the other PC can reach it.');
   });
 
   it('opened on Invite before the status read lands: Create invite waits, then says it turns A2A on', async () => {

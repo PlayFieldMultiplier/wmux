@@ -5,10 +5,10 @@ export const id = {
   // Sidebar
   'sidebar.workspaces': 'Ruang kerja',
   'sidebar.newWorkspace': 'Ruang kerja baru',
-  'sidebar.newWorkspaceTooltip': 'Ruang kerja baru (Ctrl+N)',
+  'sidebar.newWorkspaceTooltip': 'Ruang kerja baru',
   'sidebar.newRemoteWorkspace': 'Workspace baru di {name}',
-  'sidebar.hideTooltip': 'Sembunyikan bilah sisi (Ctrl+B)',
-  'sidebar.expandTooltip': 'Buka bilah sisi (Ctrl+B)',
+  'sidebar.hideTooltip': 'Sembunyikan bilah sisi',
+  'sidebar.expandTooltip': 'Buka bilah sisi',
   'sidebar.unreadCount': '{count} belum dibaca',
 
   // Workspace
@@ -65,9 +65,9 @@ export const id = {
 
   // Search
   'search.placeholder': 'Cari...',
-  'search.prevTooltip': 'Hasil sebelumnya (Shift+Enter)',
-  'search.nextTooltip': 'Hasil berikutnya (Enter)',
-  'search.closeTooltip': 'Tutup (ESC)',
+  'search.prevTooltip': 'Hasil sebelumnya',
+  'search.nextTooltip': 'Hasil berikutnya',
+  'search.closeTooltip': 'Tutup',
   'search.regexTooltip': 'Gunakan ekspresi reguler',
   'search.allPanes': 'Semua panel',
   'search.regexMode': 'Regex',
@@ -85,7 +85,7 @@ export const id = {
   'notification.markAllRead': 'Tandai semua dibaca',
   'notification.clear': 'Bersihkan',
   'notification.empty': 'Tidak ada notifikasi',
-  'notification.toggle': 'Ctrl+I untuk beralih',
+  'notification.toggle': '{key} untuk beralih',
   'notification.needsYou.question': "Menunggu Anda: “{question}”",
   'notification.needsYou.noQuestion': "Menunggu Anda. Tanpa teks pertanyaan; lihat terminalnya.",
   'notification.needsYou.over': "Tidak lagi menunggu Anda.",
@@ -98,7 +98,7 @@ export const id = {
   'palette.close': 'tutup',
   'palette.cmd.toggleSidebar': 'Alihkan bilah sisi',
   'palette.cmd.newWorkspace': 'Ruang kerja baru',
-  'palette.cmd.newSurface': 'Permukaan baru',
+  'palette.cmd.newSurface': 'Tab baru',
   'palette.cmd.splitRight': 'Bagi ke kanan',
   'palette.cmd.splitDown': 'Bagi ke bawah',
   'palette.cmd.stashPane': 'Sisihkan panel (sesi tetap berjalan)',
@@ -108,7 +108,7 @@ export const id = {
   'palette.cmd.saveLayout': 'Simpan tata letak saat ini sebagai templat',
   'palette.cmd.layoutPrefix': 'Tata letak: ',
   'palette.catWorkspace': 'Ruang kerja',
-  'palette.catSurface': 'Permukaan',
+  'palette.catSurface': 'Tab',
   'palette.catCommand': 'Perintah',
   'palette.catRecent': 'Terbaru',
 
@@ -369,14 +369,14 @@ export const id = {
   'settings.checkFailed': 'Pemeriksaan gagal',
   'settings.unknownError': 'Galat tidak diketahui',
   'settings.notificationBehavior': 'Perilaku notifikasi',
-  'settings.soundDesc': 'Web Audio API — tidak perlu berkas eksternal',
+  'settings.soundDesc': 'Memutar nada singkat bawaan saat notifikasi masuk.',
   'settings.toast': 'Notifikasi toast',
   'settings.toastDesc': 'Tampilkan toast saat agen selesai',
   'settings.ring': 'Animasi cincin',
   'settings.ringDesc': 'Denyut tepi pada panel dengan notifikasi belum dibaca',
   'settings.sc.toggleSidebar': 'Alihkan bilah sisi',
-  'settings.sc.splitHorizontal': 'Bagi horizontal',
-  'settings.sc.splitVertical': 'Bagi vertikal',
+  'settings.sc.splitHorizontal': 'Bagi ke kanan',
+  'settings.sc.splitVertical': 'Bagi ke bawah',
   'settings.sc.newWorkspace': 'Ruang kerja baru',
   'settings.sc.closeSurface': 'Tutup tab aktif',
   'settings.sc.closePane': 'Tutup panel terbagi',
@@ -408,8 +408,8 @@ export const id = {
   'settings.prefixAddBinding': 'Tambah pengikatan',
   'settings.prefixReset': 'Atur ulang ke bawaan',
   'settings.prefixResetConfirm': 'Atur ulang semua pengaturan prefiks ke bawaan?',
-  'settings.prefix.splitHorizontal': 'Bagi horizontal',
-  'settings.prefix.splitVertical': 'Bagi vertikal',
+  'settings.prefix.splitHorizontal': 'Bagi ke kanan',
+  'settings.prefix.splitVertical': 'Bagi ke bawah',
   'settings.prefix.closePane': 'Tutup panel',
   'settings.prefix.newWorkspace': 'Ruang kerja baru',
   'settings.prefix.nextWorkspace': 'Ruang kerja berikutnya',
@@ -484,16 +484,16 @@ export const id = {
 
   // Settings — Claude integration (Phase 1.5 signal-health card)
   'claudeIntegration.tab': 'Integrasi Claude',
-  'claudeIntegration.signalHealth.title': 'Kesehatan sinyal plugin',
+  'claudeIntegration.signalHealth.title': 'Plugin Claude Code',
   'claudeIntegration.signalHealth.unknownBody':
-    'Status plugin: belum teramati. Pasang dengan perintah di bawah ini di Claude Code. wmux mengonfirmasi deteksi setelah hook pertama terpicu.',
+    'Belum ada sinyal dari plugin wmux. Jalankan perintah instal di bawah di Claude Code; ini diperbarui saat plugin pertama kali melapor.',
   'claudeIntegration.signalHealth.detectedLastReceived': 'Sinyal terakhir {rel}.',
   'claudeIntegration.signalHealth.detectedLatencyFormat':
     'Latensi P50 {p50}ms · P95 {p95}ms · {count} sampel',
   'claudeIntegration.signalHealth.workspaceMatchFormat':
     'Kecocokan ruang kerja: {matched}/{total} hook cocok dengan panel wmux',
   'claudeIntegration.signalHealth.staleBody':
-    'Status plugin: usang. Hook terakhir tiba {rel} — plugin mungkin berhenti terpicu atau Claude Code sedang menganggur.',
+    'Sinyal terakhir dari plugin {rel}. Plugin mungkin berhenti, atau Claude Code sedang diam.',
   'claudeIntegration.signalHealth.copyInstallCommand': 'Salin perintah pemasangan',
   'claudeIntegration.signalHealth.copySuccess': 'Tersalin — tempel ke Claude Code',
   'claudeIntegration.signalHealth.copyError': 'Gagal menyalin — papan klip terkunci',
@@ -501,7 +501,7 @@ export const id = {
   // Phase 2 — Anthropic 5h/7d usage meter
   'claudeIntegration.usage.title': 'Pengukur penggunaan Anthropic (5h / 7d)',
   'claudeIntegration.usage.description':
-    'Membaca penggunaan Anda dari endpoint penggunaan Anthropic setiap 15 menit dengan login Claude Code Anda (token OAuth di penyimpanan lokal). Hanya membaca penggunaan — tidak ada permintaan model yang dikirim dan tidak ada kuota yang terpakai. Token tidak pernah ditulis kembali, tidak pernah dicatat, hanya dikirim ke api.anthropic.com.',
+    'Membaca penggunaan Anda dari endpoint penggunaan Anthropic setiap 15 menit dengan login Claude Code Anda. Hanya membaca penggunaan — tidak ada permintaan model yang dikirim dan tidak ada kuota yang terpakai. Token tidak pernah ditulis kembali, tidak pernah dicatat, hanya dikirim ke api.anthropic.com.',
   'claudeIntegration.usage.enableLabel': 'Tampilkan utilisasi 5h / 7d di bilah status',
   'claudeIntegration.usage.refreshButton': 'Segarkan sekarang',
   'claudeIntegration.usage.refreshCooldown': 'Penyegaran tersedia dalam {seconds} dtk',
@@ -642,6 +642,7 @@ export const id = {
   'pcSwitcher.manage': "Pengaturan {name}",
   'app.portableData.notice': "Salinan wmux ini berjalan di luar Aplikasi, jadi menggunakan data terpisah. Pindahkan ke Aplikasi untuk melihat sesi yang sudah ada.",
   'pcSwitcher.othersNeedYou': "{count} menunggu Anda di komputer lain",
+  'pcSwitcher.othersNeedYouOne': '{count} menunggu Anda di komputer lain',
   // Quit and Stop Sessions (main-process native confirm)
   'quitAndStop.message': "Keluar dari wmux dan hentikan semua sesi?",
   'quitAndStop.detail': "Sedang berjalan: {agents} sesi agen, total {sessions} terminal. Semuanya akan dihentikan. Keluar biasa membiarkannya tetap berjalan di latar belakang.",

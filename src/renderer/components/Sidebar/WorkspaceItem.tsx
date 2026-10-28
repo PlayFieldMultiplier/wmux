@@ -1956,7 +1956,7 @@ function WorkspaceItem({ workspaceId, isActive, isMultiview, index, shortcutNumb
           // PTYs too, so a visible-only count promises to close fewer panes
           // than it actually kills.
           terminalCount={collectWorkspaceTerminalSurfaces(workspace).length}
-          detail={(count) => t('workspace.closeConfirmDetail', { count })}
+          detail={(count) => t(count === 1 ? 'workspace.closeConfirmDetailOne' : 'workspace.closeConfirmDetail', { count })}
           cancelLabel={t('workspace.closeCancel')}
           confirmLabel={t('workspace.closeConfirmYes')}
           onCancel={() => setCloseConfirmPos(null)}

@@ -1018,10 +1018,12 @@ Settings › LAN keeps only the listener switches. Top to bottom:
   **Connect a PC…** (secondary).
 - **This computer — one line** on a `--selection-subtle` band: this PC's
   name, phone access (`off` / this computer only / local network / Tailnet),
-  the A2A state (`A2A :45660 listening`, `A2A: port 45660 in use`,
-  `A2A: port 45660 unavailable` for a port Windows reserves or refuses,
-  `A2A: no firewall rule for port 45660`, another listener error, or
-  `A2A off`; never "not reachable", which the host cannot know) and a
+  the A2A state, worded for people as PC messages (`PC messages on ·
+  port 45660`, `PC messages: port 45660 in use`,
+  `PC messages: port 45660 unavailable` for a port Windows reserves or
+  refuses, `PC messages: no firewall rule for port 45660`, another listener
+  error, or `PC messages off`; never "not reachable", which the host cannot
+  know; the UI never says "A2A") and a
   **Details** toggle. While phone access is off, Share & pair sits on
   the line (its popover leads with Pair a phone, which starts sharing and
   shows the QR in the same click. It is offered only once the address will
@@ -1032,7 +1034,7 @@ Settings › LAN keeps only the listener switches. Top to bottom:
   the QR survives sharing turning on.
   Details unfolds in place: the phone
   address without its token (copy), whether input is allowed, Share & pair,
-  the A2A port and the full security code (the certificate fingerprint;
+  the PC messages port and the full security code (the certificate fingerprint;
   plain mono values; the code wraps anywhere, copy), and while A2A listens
   a **Firewall** line: what the last check said ("Allowed on private
   networks · TCP 45660", with "Another PC reached this one at 14:02" once
@@ -2173,6 +2175,7 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
 | 2026-10-28 | Owner-approved (first launch): the first launch is one short welcome dialog — the agents (once one is signed in, only the signed-in ones, the rest under Other agents), the Claude Code MCP and hooks rows, the update switch — ending on **Open a folder…**, the one primary once nothing needs setting up; it opens a workspace on that folder. No sample task, no bot task and no statusline offer in it (the statusline stays in Settings). Nothing opens by itself after it: the spotlight tour and the keyboard cheat sheet are on demand (Settings › Setup and reset, the `?` prefix action), and the cheat sheet loses its Don't show again. A check marks done or installed only; a switch row has no glyph. Opening a folder completes the first run; Skip, Later, × and Escape only mark it shown, and closing a reopened wizard never rewrites that. Existing profiles keep their seen flags and never see the first run again | A design critique found a first launch that stacked a long scrolling wizard with two primaries, a four-step tour that pulled the user from Fleet back to Workspaces, and an automatic cheat sheet; a reopened wizard said a skipped sample task was "Already completed". A new user needs an agent and their project, and the rest is found when it is needed |
 | 2026-10-28 | Owner-approved (quieter needs-you signal, after a design critique): one awaiting-input event is drawn as the sidebar row plus the rail's Fleet badge only. The titlebar's `N need you` chip is gone and needs you raises no in-app toast (the OS notification still fires while the window is out of focus). One word, "Needs you", in the sidebar, Fleet and the notification panel; Fleet drops "Needs input", "Needs your input" and the empty "The agent asks" block; a shell name is never shown as the agent. A needs-you notification row names workspace · agent and the question (or says no question text came); the panel's focused row is the neutral selection with the accent ring | One state was drawn about six times in three colours (blue toast, gold focus outline, orange) and four wordings, against the two-rendition cap. The rail badge stays over the titlebar chip because it is a number (no plural to get wrong), sits beside the Bots and Remote badges, and survives a collapsed sidebar |
 | 2026-10-28 | Connect a PC: showing the Invite tab no longer turns the A2A listener on or opens an invite. Invite has a Create invite primary (Turn on and create invite while the listener is off, with a line naming the port it listens on); focus starts on the first field or primary, not the close ×; Connect is secondary until there is something to connect. Amends the Connect a PC dialog bullet | A design check found that merely looking at the Invite tab bound a port (and failed on one already in use) and wrote the clipboard. Showing a tab is not consent; the person turns messaging on by pressing a button that says so |
+| 2026-10-29 | Owner-approved (clarify, after a design critique): one vocabulary and one shortcut notation. Shortcuts are written by one formatter (`displayCombo`): macOS modifier glyphs in Apple's order with no separator (`⇧⌘D`, `⌃B`), Windows and Linux words joined by `+` (`Ctrl+Shift+D`); `Esc` and arrow glyphs on both. A hint that names a key reads the live binding, so a rebound key is shown as rebound. Internal words leave the UI: Surface → tab, A2A → PC messages / messages between PCs, HQ → the bots' main workspace, merge lane → auto-merge, hook bridge → Claude Code hooks, Bypass (schedules) → Full access; raw ids (`bypassPermissions`, pty ids, hook event names, `mcp__name__tool`) are not shown. Commands and labels are sentence case; split commands say the result (Split right / Split down) | The same thing had three names and one shortcut had four spellings, some wrong (Ctrl on macOS, a ⌘ prefix that is really ⌃). Coordinator and Verifier stay: they are the role names on the Bots pages |
 
 ### Desktop conversation view
 
