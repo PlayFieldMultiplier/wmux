@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-// "Connect a PC…": one dialog, two tabs. Opening it changes nothing: it starts
-// on Invite only when A2A already listens, and choosing Invite is what turns
-// A2A on; Invite opens and copies an invite and turns into the new PC's
-// checklist when it joins. Paste reads the clipboard only on its button and
+// "Connect a PC…": one dialog, three tabs. Opening it or showing a tab changes
+// nothing: it starts on Invite only when A2A already listens, and only the
+// Create invite button turns A2A on (when it was off) and opens and copies an
+// invite; the dialog turns into the new PC's checklist when it joins. Paste reads the clipboard only on its button and
 // routes a wmux-a2a:// invite to the A2A join and every remote-host shape to
 // the remote-host pairing, never connecting before Connect is pressed.
 import { act } from 'react';
@@ -52,6 +52,11 @@ async function render(props: { initialTab?: 'invite' | 'paste' } = {}) {
   for (let i = 0; i < 6; i++) await act(async () => { await Promise.resolve(); });
 }
 const q = <E extends Element = HTMLElement>(id: string) => document.querySelector<E>(`[data-testid="${id}"]`);
+/** Press Create invite: the only thing that opens an invite. */
+async function createInvite() {
+  await act(async () => { q<HTMLButtonElement>('remote-connect-create')!.click(); });
+  for (let i = 0; i < 6; i++) await act(async () => { await Promise.resolve(); });
+}
 
 beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
@@ -158,13 +163,22 @@ describe('Connect a PC dialog', () => {
     }
   });
 
-  it('with A2A off, choosing Invite turns it on, tells the page, copies the invite at once, labels tailnet addresses, discards', async () => {
+  it('with A2A off, showing Invite changes nothing; Turn on and create invite turns it on, tells the page, copies the invite, labels tailnet addresses, discards', async () => {
     stub('', false);
     const onA2aStatus = vi.fn();
     await act(async () => root.render(<RemoteConnectDialog onClose={onClose} onLinkPane={onLinkPane} onA2aStatus={onA2aStatus} />));
     for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve(); });
     await act(async () => { tab('Invite this PC').click(); });
     for (let i = 0; i < 6; i++) await act(async () => { await Promise.resolve(); });
+    // Showing the tab only read the listener's state.
+    expect(a2a.configure).not.toHaveBeenCalled();
+    expect(a2a.pairBegin).not.toHaveBeenCalled();
+    expect(clipboard.writeText).not.toHaveBeenCalled();
+    expect(onA2aStatus).not.toHaveBeenCalled();
+    expect(q('remote-connect-turn-on-note')?.textContent).toContain('port 45660');
+    expect(q('remote-connect-create')?.textContent).toBe('Turn on and create invite');
+    expect(q('remote-connect-create')?.className).toContain('ui-btn-primary');
+    await createInvite();
     expect(a2a.configure).toHaveBeenCalledWith({ enabled: true });
     expect(onA2aStatus).toHaveBeenCalledWith(expect.objectContaining({ enabled: true, listening: true }));
     expect(q('remote-connect-turned-on')).not.toBeNull();
@@ -180,23 +194,31 @@ describe('Connect a PC dialog', () => {
     expect(q('remote-connect-copy')?.textContent).toBe('Copy');
     await act(async () => { q<HTMLButtonElement>('remote-connect-discard')!.click(); });
     expect(a2a.pairCancel).toHaveBeenCalled();
-    expect(q('remote-connect-new-code')).not.toBeNull();
+    expect(q('remote-connect-create')?.textContent).toBe('Create invite');
   });
 
   it('an invite turns on only the listener: never the remote-spawn policy', async () => {
     stub('', false);
     a2a.spawnPolicySet = vi.fn();
     await render({ initialTab: 'invite' });
+    expect(a2a.configure).not.toHaveBeenCalled();
+    await createInvite();
     expect(q('remote-connect-code')?.textContent).toBe(INVITE);
     expect(a2a.configure.mock.calls).toEqual([[{ enabled: true }]]);
     expect(a2a.spawnPolicySet).not.toHaveBeenCalled();
   });
 
-  it('with A2A already listening, opens on Invite and copies without touching the listener', async () => {
+  it('with A2A already listening, opens on Invite with nothing created; Create invite copies without touching the listener', async () => {
     stub('');
     await render();
     expect(q('remote-connect-invite')).not.toBeNull();
+    expect(a2a.pairBegin).not.toHaveBeenCalled();
+    expect(clipboard.writeText).not.toHaveBeenCalled();
+    expect(q('remote-connect-turn-on-note')).toBeNull();
+    expect(q('remote-connect-create')?.textContent).toBe('Create invite');
+    await createInvite();
     expect(a2a.configure).not.toHaveBeenCalled();
+    expect(a2a.pairBegin).toHaveBeenCalledTimes(1);
     expect(clipboard.writeText).toHaveBeenCalledWith(INVITE);
     expect(q('remote-connect-copy')?.textContent).toBe('Copied');
   });
@@ -204,6 +226,7 @@ describe('Connect a PC dialog', () => {
   it('turns into the checklist for the PC that redeemed the invite, with nothing ticked', async () => {
     stub('');
     await render({ initialTab: 'invite' });
+    await createInvite();
     expect(a2a.configure).not.toHaveBeenCalled();
     a2a.pairStatus.mockResolvedValue({ active: false, expiresAt: null, attemptsLeft: 3, lockedUntil: null });
     a2a.peersList.mockResolvedValue({ peers: [{ v: 1, peerId: 'p1', hostId: HOST, name: 'DESK', createdAt: '' }] });
@@ -228,6 +251,7 @@ describe('Connect a PC dialog', () => {
     // That PC removed this one on its side only: its old pairing here is still live.
     a2a.peersList.mockResolvedValue({ peers: [{ v: 1, peerId: 'p0', hostId: HOST, name: 'DESK', createdAt: '' }] });
     await render({ initialTab: 'invite' });
+    await createInvite();
     redeemed();
     a2a.peersList.mockResolvedValue({ peers: [
       { v: 1, peerId: 'p0', hostId: HOST, name: 'DESK', createdAt: '', revokedAt: '2026-10-09T00:00:00.000Z' },
@@ -240,6 +264,7 @@ describe('Connect a PC dialog', () => {
   it('keeps looking when the invite is gone before the new PC is stored', async () => {
     stub('');
     await render({ initialTab: 'invite' });
+    await createInvite();
     redeemed();
     // The daemon consumed the code and is still deriving the new PC's key.
     await tick();
@@ -253,12 +278,13 @@ describe('Connect a PC dialog', () => {
   it('an invite gone with nobody joining is let go after the grace ticks, and at once once it expired', async () => {
     stub('');
     await render({ initialTab: 'invite' });
+    await createInvite();
     redeemed();
     for (let i = 0; i < CONNECT_REDEEM_GRACE_TICKS; i++) await tick();
     expect(q('remote-connect-code')).not.toBeNull();
     await tick();
     expect(q('remote-connect-code')).toBeNull();
-    expect(q('remote-connect-new-code')).not.toBeNull();
+    expect(q('remote-connect-create')).not.toBeNull();
     expect(q('remote-connect-joined')).toBeNull();
 
     act(() => root.unmount());
@@ -266,10 +292,51 @@ describe('Connect a PC dialog', () => {
     stub('');
     a2a.pairBegin.mockResolvedValue({ invite: INVITE, expiresAt: Date.now() + 1_000, addresses: [], tailnet: [] });
     await render({ initialTab: 'invite' });
+    await createInvite();
     redeemed();
     await tick();
     expect(q('remote-connect-code')).toBeNull();
-    expect(q('remote-connect-new-code')).not.toBeNull();
+    expect(q('remote-connect-create')).not.toBeNull();
+  });
+
+  it('showing each tab only reads: no listener change, no invite, no clipboard, until a button is pressed', async () => {
+    stub(INVITE, false);
+    const lanlink = {
+      status: vi.fn(async () => ({ enabled: false, nic: null, effectivePort: 0, listening: false, nics: [] })),
+      pairStatus: vi.fn(async () => ({ active: false, failCount: 0 })),
+      pairBegin: vi.fn(),
+    };
+    vi.stubGlobal('electronAPI', { a2aRemote: a2a, remote, lanlink });
+    await render();
+    for (const label of ['Invite this PC', 'LAN', 'Paste an invite', 'Invite this PC']) {
+      await act(async () => { tab(label).click(); });
+      for (let i = 0; i < 6; i++) await act(async () => { await Promise.resolve(); });
+    }
+    expect(a2a.configure).not.toHaveBeenCalled();
+    expect(a2a.pairBegin).not.toHaveBeenCalled();
+    expect(lanlink.pairBegin).not.toHaveBeenCalled();
+    expect(clipboard.readText).not.toHaveBeenCalled();
+    expect(clipboard.writeText).not.toHaveBeenCalled();
+  });
+
+  it('focuses the first field, not the close button; Connect is secondary until there is something to connect', async () => {
+    stub('', false);
+    await render();
+    const input = q<HTMLInputElement>('remote-connect-input')!;
+    expect(document.activeElement).toBe(input);
+    const submit = () => q<HTMLButtonElement>('remote-connect-submit')!;
+    expect(submit().disabled).toBe(true);
+    expect(submit().className).toContain('ui-btn-secondary');
+    expect(document.querySelectorAll('.ui-btn-primary')).toHaveLength(0);
+    await act(async () => { clipboard.readText.mockResolvedValue(INVITE); pasteButton().click(); });
+    expect(submit().disabled).toBe(false);
+    expect(submit().className).toContain('ui-btn-primary');
+
+    act(() => root.unmount());
+    root = createRoot(container);
+    stub('');
+    await render({ initialTab: 'invite' });
+    expect(document.activeElement).toBe(q('remote-connect-create'));
   });
 });
 
@@ -303,6 +370,7 @@ describe('one invite for A2A and the workspaces', () => {
     stub('');
     stubWeb();
     await render({ initialTab: 'invite' });
+    await createInvite();
     await settle();
     expect(share().getAttribute('aria-checked')).toBe('false');
     expect(web.pairStart).not.toHaveBeenCalled();
@@ -327,6 +395,7 @@ describe('one invite for A2A and the workspaces', () => {
     stub('');
     stubWeb();
     await render({ initialTab: 'invite' });
+    await createInvite();
     await settle();
     await act(async () => { share().click(); });
     await settle();
@@ -341,6 +410,7 @@ describe('one invite for A2A and the workspaces', () => {
     stubWeb();
     slot = { ...pending(), pendingDeviceName: 'Phone', pendingPairFlow: 'phone' };
     await render({ initialTab: 'invite' });
+    await createInvite();
     await settle();
     await act(async () => { share().click(); });
     await settle();
@@ -358,6 +428,7 @@ describe('one invite for A2A and the workspaces', () => {
       release = () => { slot = pending(); resolve({ ...idle(), ...slot }); };
     }));
     await render({ initialTab: 'invite' });
+    await createInvite();
     await settle();
     await act(async () => { share().click(); });
     await settle();

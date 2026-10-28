@@ -1178,11 +1178,16 @@ Settings › LAN keeps only the listener switches. Top to bottom:
     of explanation and Connect a PC… as the primary.
 - **Recent activity:** its own short list (paired, revoked, host added,
   connects seen while the page is open).
-- **Connect a PC dialog:** three tabs, and opening it has no side effect. It
-  opens on **Invite this PC** only while the A2A listener is already up;
-  otherwise on **Paste an invite**, and choosing Invite is what turns the
-  listener on (one muted line says so, and the page's line follows at once).
-  Invite opens an invite and copies it at once (Copy reads "Copied" for
+- **Connect a PC dialog:** three tabs, and neither opening it nor showing a
+  tab has a side effect: both only read state. It opens on **Invite this PC**
+  only while the A2A listener is already up; otherwise on **Paste an
+  invite**. Focus starts on the tab's first field or primary (the paste
+  field, or Create invite), never on the close ×. Invite shows **Create
+  invite** as the primary; with the listener off it reads **Turn on and
+  create invite**, with one muted line above it naming what it turns on and
+  the port it listens on, and pressing it is what turns the listener on (a
+  muted line says so after, and the page's line follows at once). Create
+  invite opens an invite and copies it (Copy reads "Copied" for
   1.5 s, is the primary and stays for re-copying), shows the 8-character
   code grouped as ABCD-EFGH under it for reading out (display only: the
   whole invite is what is copied and pasted), lists the addresses the
@@ -1193,7 +1198,8 @@ Settings › LAN keeps only the listener switches. Top to bottom:
   button and shows it masked; it routes by shape: `wmux-a2a://` joins over
   A2A (then offers Link a pane now), and every remote-host shape — a pairing
   link, a `wmux web` URL with its token, an address and a code — pairs a
-  workspace share. Nothing connects before Connect.
+  workspace share. Nothing connects before Connect, which is secondary
+  while there is nothing to connect or a connect is in flight.
   Under Paste, one ghost link, "No invite? Add a PC over SSH…", opens the
   Add PC over SSH dialog for a computer that cannot send an invite.
   **LAN** pairs a message link with a PC on this network by a 6-digit PIN:
@@ -2154,6 +2160,7 @@ primitives plus `Settings/SettingsLayout.tsx` (`SettingsSection`,
 | 2026-10-26 | Custom agents: a last section on Settings › Roles & fan-out, not a new tab. One ui-group of rows (name · command line · "Known by its process" and unattended line, a "Used by" line while a role or preset launches it, with Edit / Delete), "Add custom agent" as the last row, and an inline stacked editor like Fan-out presets (Name, Command, Arguments, First prompt flag, Model flag, Unattended flags, Process names). Edit opens in place of its own row and the list keeps its order. Delete is disabled while the agent is used. The section description states the limits: process-only identity, no screen status, approvals or resume. Unattended starts empty and empty means not offered | Custom agents exist to be picked by roles and fan-out, so they sit beside them. The same shapes as Fan-out presets keep one editing grammar on the tab. Stating the limits and never defaulting unattended keeps a user-typed CLI from looking as supported as a registry agent, or from running unattended by surprise; blocking Delete keeps a role or preset from silently launching something else |
 | 2026-10-26 | An approved release is carried out. Its card's title names the tag, the repository and the short commit, and says it cannot be undone ("Publish release v1.2.3 of owner/repo at abc1234 — publishes a release, cannot be undone"; with a tag workflow, "Push tag … — starts its release workflow, cannot be undone"). The body is the bot's one line, one plain sentence of what Approve does, as whom and when, and that wmux cannot take it back, then "Marked Latest." or "Prerelease, never Latest." (with a tag workflow: "The workflow decides whether it is marked Latest."), then one plain line per workflow with no push filter that runs on the tag push as well ("<file> also runs on this tag push."), then what main read as plain lines (the default branch and how far the commit is behind its head, the checks on the commit, package.json's version), then a line naming the blocks and each published field in its own `wmux-payload` code block. Approve / Deny only, with the usual 10 s Undo; typed words, the chip and rules never approve it. The outcome card reads "Published release …" with its link, or with a tag workflow "Tag pushed — the release workflow is building it" with the Actions run linked when it can be read; nothing is tinted | A release is the one act that starts other machinery (a tag workflow publishes installers and packages), so the card states the commit, its checks and the version before Approve, and the hash covers every field that is published |
 | 2026-10-28 | Owner-approved (Settings clean-up, part 3): terminal font size, font and cursor move from Appearance to the top of Terminal; the Settings › Plugins tab (a single link to the rail page) is removed, reversing the 2026-10-21 line that kept it. A row or note that only applies on another OS is hidden there (the agy accounts section off Windows, Start on login on Linux), and settings search hides it too; a row that works everywhere but is named after one OS reads in the platform's words (Finder, the Dock, ⌘G, macOS or Linux in About). A switch whose children act on nothing while it is off disables them: the pane ring's flash, and the Bots morning report and phone bot. A row that limits what bots may do (trusted authors, caps, the command reviewer, auto-merge) stays editable while the bots are off, so it can be set before they start. Accounts' quota switches are standard switches. The Company View toggle loses its default key (Ctrl+Shift+O, which it swallowed) and its Shortcuts row: it has opened nothing since #503; a key a user saved still binds and lists it | Settings read as cluttered: text settings sat on the wrong page, an empty tab took a nav row, macOS users read Windows-only text, and child rows looked live while their parent was off. Hiding by platform through the catalog keeps the row and its search hit in step |
+| 2026-10-28 | Connect a PC: showing the Invite tab no longer turns the A2A listener on or opens an invite. Invite has a Create invite primary (Turn on and create invite while the listener is off, with a line naming the port it listens on); focus starts on the first field or primary, not the close ×; Connect is secondary until there is something to connect. Amends the Connect a PC dialog bullet | A design check found that merely looking at the Invite tab bound a port (and failed on one already in use) and wrote the clipboard. Showing a tab is not consent; the person turns messaging on by pressing a button that says so |
 
 ### Desktop conversation view
 
