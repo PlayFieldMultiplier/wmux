@@ -531,6 +531,16 @@ describe('describeNotification — a needs-you row names where it waits', () => 
     expect(describeNotification(asking, state(), t, true).body).toBe('No longer waiting on you.');
   });
 
+  it('names the agent its own title names, not whichever agent the pane runs now', () => {
+    const d = describeNotification(asking, state({
+      surfaceAgent: { 'pty-1': { name: 'Codex CLI', status: 'running' } },
+    }), t, false);
+    expect(d.title).toBe('web-client · Claude Code');
+    const untitled = mkNotif('n5', { type: 'agent', title: 'Awaiting input', body: '', category: 'approval', ptyId: 'pty-1' });
+    expect(describeNotification(untitled, state({ surfaceAgent: { 'pty-1': { name: 'Codex CLI', status: 'awaiting_input' } } }), t, true).title)
+      .toBe('web-client · Codex CLI');
+  });
+
   it('a turn that ended on a question it still waits on reads as needs you, with the question', () => {
     const turn = mkNotif('n4', {
       type: 'agent', title: 'Claude Code: Task finished', body: 'Ready for input',

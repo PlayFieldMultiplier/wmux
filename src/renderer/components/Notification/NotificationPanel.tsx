@@ -96,7 +96,9 @@ export function describeNotification(
   // A turn that ended on a question still waiting is needs you too.
   const needsYou = !!ptyId && (notif.category === 'approval' || (notif.category === 'agent-turn' && !!question));
   if (needsYou && ptyId) {
-    const agent = state.surfaceAgent[ptyId]?.name || agentFromTitle(notif.title);
+    // The agent the notification itself names: the pane may run another
+    // agent by now. The pane's live agent only when the title names none.
+    const agent = agentFromTitle(notif.title) || state.surfaceAgent[ptyId]?.name;
     const title = [ws?.name?.trim(), agent].filter(Boolean).join(' · ') || notif.title;
     const waiting = latestForPty && (!!question
       || state.surfaceAgent[ptyId]?.status === 'awaiting_input'

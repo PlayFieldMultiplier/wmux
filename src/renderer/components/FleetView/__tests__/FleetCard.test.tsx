@@ -144,6 +144,12 @@ describe('FleetCard — one name, a short label', () => {
     expect(fleetAgentName({ agentName: undefined, surfaceType: 'terminal', title: 'my build' })).toBe('my build');
   });
 
+  it('no shell wmux opens (ShellDetector names) or multiplexer is shown as the agent', () => {
+    for (const title of ['Fish', 'Bash', 'Git Bash', 'PowerShell 7', 'Windows PowerShell', 'pwsh.exe', 'Command Prompt', 'cmd.exe', 'WSL', 'nu', 'Nushell', 'tmux', 'sh', 'dash']) {
+      expect(fleetAgentName({ agentName: undefined, surfaceType: 'terminal', title }), title).toBe('');
+    }
+  });
+
   it('keeps the accessible name short: name, status, place, the question clipped', () => {
     const question = 'q'.repeat(200);
     const html = renderToStaticMarkup(createElement(FleetCard, {

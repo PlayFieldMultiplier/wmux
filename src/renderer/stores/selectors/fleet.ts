@@ -1325,9 +1325,11 @@ export function groupFleetPanes(panes: FleetPane[], ctx: FleetGroupContext = {})
   return groups;
 }
 
-/** A terminal title that names only the program (an agent CLI or a shell),
- *  never a task. */
-export const GENERIC_TERMINAL_TITLE = /^(claude(?: code)?|codex(?: cli)?|gemini(?: cli)?|agy|antigravity(?: cli)?|terminal|shell|zsh|bash|pwsh|powershell|cmd(?:\.exe)?)$/i;
+/** A terminal title that names only the program (an agent CLI, a shell or a
+ *  multiplexer), never a task. The shells are the ones ShellDetector offers,
+ *  under its names ("Git Bash", "PowerShell 7", "Command Prompt", "WSL") and
+ *  as bare commands, plus the other common POSIX shells and nu. */
+export const GENERIC_TERMINAL_TITLE = /^(?:claude(?: code)?|codex(?: cli)?|gemini(?: cli)?|agy|antigravity(?: cli)?|terminal|shell|(?:git )?bash|zsh|fish|sh|dash|ksh|csh|tcsh|nu(?:shell)?|xonsh|elvish|pwsh|(?:windows )?powershell(?: \d+)?|command prompt|cmd|wsl|tmux|screen|zellij)(?:\.exe)?$/i;
 
 /** A terminal's application name is context, not a task title. Never invent
  * a task from output; use the user's label, mission, or terminal title. */
