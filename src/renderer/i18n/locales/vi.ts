@@ -87,7 +87,7 @@ export const vi = {
   'notification.empty': 'Không có thông báo',
   'notification.toggle': 'Ctrl+I để bật/tắt',
   'notification.needsYou.question': "Đang chờ bạn: “{question}”",
-  'notification.needsYou.noQuestion': "Đang chờ bạn. Không nhận được nội dung câu hỏi; lời nhắc nằm trong terminal của nó.",
+  'notification.needsYou.noQuestion': "Đang chờ bạn. Không có nội dung câu hỏi; xem terminal.",
   'notification.needsYou.over': "Không còn chờ bạn nữa.",
 
   // Command palette

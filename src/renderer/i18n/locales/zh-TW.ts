@@ -87,7 +87,7 @@ export const zhTW = {
   'notification.empty': '沒有通知',
   'notification.toggle': '按 Ctrl+I 切換',
   'notification.needsYou.question': "等你回應：「{question}」",
-  'notification.needsYou.noQuestion': "等你回應。沒有收到問題內容，提示在它的終端機裡。",
+  'notification.needsYou.noQuestion': "等你回應。沒有問題內容，請看它的終端機。",
   'notification.needsYou.over': "已不再等你。",
 
   // Command palette

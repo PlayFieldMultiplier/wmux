@@ -87,7 +87,7 @@ export const da = {
   'notification.empty': 'Ingen notifikationer',
   'notification.toggle': 'Ctrl+I for at skifte',
   'notification.needsYou.question': "Venter på dig: “{question}”",
-  'notification.needsYou.noQuestion': "Venter på dig. Der kom ingen spørgsmålstekst; prompten står i dens terminal.",
+  'notification.needsYou.noQuestion': "Venter på dig. Ingen spørgsmålstekst; se terminalen.",
   'notification.needsYou.over': "Venter ikke længere på dig.",
 
   // Command palette

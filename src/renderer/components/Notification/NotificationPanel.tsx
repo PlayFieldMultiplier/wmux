@@ -313,7 +313,7 @@ export function NotificationPanelView(props: NotificationPanelViewProps): ReactE
                       {timeAgo(notif.timestamp)}
                     </span>
                   </div>
-                  <p className="m-0 mt-0.5 text-[11px] leading-4 text-[var(--text-sub2)] truncate" {...tokenAttrs('textMain', 'text')} data-derived="textSub2">{display?.body ?? notif.body}</p>
+                  <p className="m-0 mt-0.5 text-[11px] leading-4 text-[var(--text-sub2)] truncate" {...tokenAttrs('textMain', 'text')} data-derived="textSub2" title={display?.body}>{display?.body ?? notif.body}</p>
                 </div>
                 {!notif.read && (
                   <div className="w-1.5 h-1.5 rounded-full bg-[var(--accent)] mt-2 flex-shrink-0" {...tokenAttrs('accent', 'accent')} />

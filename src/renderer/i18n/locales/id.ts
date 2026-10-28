@@ -87,7 +87,7 @@ export const id = {
   'notification.empty': 'Tidak ada notifikasi',
   'notification.toggle': 'Ctrl+I untuk beralih',
   'notification.needsYou.question': "Menunggu Anda: “{question}”",
-  'notification.needsYou.noQuestion': "Menunggu Anda. Teks pertanyaan tidak terkirim; prompt ada di terminalnya.",
+  'notification.needsYou.noQuestion': "Menunggu Anda. Tanpa teks pertanyaan; lihat terminalnya.",
   'notification.needsYou.over': "Tidak lagi menunggu Anda.",
 
   // Command palette

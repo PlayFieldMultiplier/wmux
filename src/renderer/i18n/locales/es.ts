@@ -87,7 +87,7 @@ export const es = {
   'notification.empty': 'Sin notificaciones',
   'notification.toggle': 'Ctrl+I para alternar',
   'notification.needsYou.question': "Te espera: «{question}»",
-  'notification.needsYou.noQuestion': "Te espera. No llegó el texto de la pregunta; el aviso está en su terminal.",
+  'notification.needsYou.noQuestion': "Te espera. Sin texto de pregunta; mira su terminal.",
   'notification.needsYou.over': "Ya no te espera.",
 
   // Command palette

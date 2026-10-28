@@ -87,7 +87,7 @@ export const tr = {
   'notification.empty': 'Bildirim yok',
   'notification.toggle': 'Değiştirmek için Ctrl+I',
   'notification.needsYou.question': "Seni bekliyor: “{question}”",
-  'notification.needsYou.noQuestion': "Seni bekliyor. Soru metni gelmedi; istem kendi terminalinde.",
+  'notification.needsYou.noQuestion': "Seni bekliyor. Soru metni yok; terminaline bak.",
   'notification.needsYou.over': "Artık seni beklemiyor.",
 
   // Command palette

@@ -609,7 +609,7 @@ export const ko = {
   'notification.empty': '알림 없음',
   'notification.toggle': 'Ctrl+I로 토글',
   'notification.needsYou.question': "답변 대기: “{question}”",
-  'notification.needsYou.noQuestion': "답변 대기. 질문 내용이 오지 않았습니다. 프롬프트는 터미널에 있습니다.",
+  'notification.needsYou.noQuestion': "답변 대기. 질문 내용 없음, 터미널을 확인하세요.",
   'notification.needsYou.over': "더 이상 기다리지 않습니다.",
 
   // Command palette

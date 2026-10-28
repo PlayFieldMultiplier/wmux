@@ -87,7 +87,7 @@ export const uk = {
   'notification.empty': 'Немає сповіщень',
   'notification.toggle': 'Ctrl+I для перемикання',
   'notification.needsYou.question': "Чекає на вас: «{question}»",
-  'notification.needsYou.noQuestion': "Чекає на вас. Текст питання не надійшов; запит — у його терміналі.",
+  'notification.needsYou.noQuestion': "Чекає на вас. Тексту питання немає; перегляньте термінал.",
   'notification.needsYou.over': "Більше не чекає на вас.",
 
   // Command palette

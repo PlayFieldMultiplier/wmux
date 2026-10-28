@@ -87,7 +87,7 @@ export const fr = {
   'notification.empty': 'Aucune notification',
   'notification.toggle': 'Ctrl+I pour basculer',
   'notification.needsYou.question': "Vous attend : « {question} »",
-  'notification.needsYou.noQuestion': "Vous attend. Aucun texte de question reçu ; l’invite est dans son terminal.",
+  'notification.needsYou.noQuestion': "Vous attend. Pas de texte de question ; voir son terminal.",
   'notification.needsYou.over': "Ne vous attend plus.",
 
   // Command palette

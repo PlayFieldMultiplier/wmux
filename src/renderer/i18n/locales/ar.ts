@@ -87,7 +87,7 @@ export const ar = {
   'notification.empty': 'لا توجد إشعارات',
   'notification.toggle': 'Ctrl+I للتبديل',
   'notification.needsYou.question': "ينتظر ردك: «{question}»",
-  'notification.needsYou.noQuestion': "ينتظر ردك. لم يصل نص السؤال؛ المطالبة في الطرفية الخاصة به.",
+  'notification.needsYou.noQuestion': "ينتظر ردك. لا يوجد نص للسؤال؛ راجع الطرفية.",
   'notification.needsYou.over': "لم يعد ينتظرك.",
 
   // Command palette

@@ -87,7 +87,7 @@ export const th = {
   'notification.empty': 'ไม่มีการแจ้งเตือน',
   'notification.toggle': 'Ctrl+I เพื่อสลับ',
   'notification.needsYou.question': "รอคุณอยู่: “{question}”",
-  'notification.needsYou.noQuestion': "รอคุณอยู่ ไม่ได้รับข้อความคำถาม พรอมต์อยู่ในเทอร์มินัลของมัน",
+  'notification.needsYou.noQuestion': "รอคุณอยู่ ไม่มีข้อความคำถาม ดูที่เทอร์มินัล",
   'notification.needsYou.over': "ไม่ได้รอคุณแล้ว",
 
   // Command palette

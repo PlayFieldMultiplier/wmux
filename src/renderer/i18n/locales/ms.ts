@@ -87,7 +87,7 @@ export const ms = {
   'notification.empty': 'Tiada pemberitahuan',
   'notification.toggle': 'Ctrl+I untuk togol',
   'notification.needsYou.question': "Menunggu anda: “{question}”",
-  'notification.needsYou.noQuestion': "Menunggu anda. Teks soalan tidak dihantar; gesaan ada di terminalnya.",
+  'notification.needsYou.noQuestion': "Menunggu anda. Tiada teks soalan; lihat terminalnya.",
   'notification.needsYou.over': "Tidak lagi menunggu anda.",
 
   // Command palette

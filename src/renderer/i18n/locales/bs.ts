@@ -87,7 +87,7 @@ export const bs = {
   'notification.empty': 'Nema obavještenja',
   'notification.toggle': 'Ctrl+I za prebacivanje',
   'notification.needsYou.question': "Čeka te: „{question}“",
-  'notification.needsYou.noQuestion': "Čeka te. Tekst pitanja nije stigao; upit je u njegovom terminalu.",
+  'notification.needsYou.noQuestion': "Čeka te. Nema teksta pitanja; pogledaj terminal.",
   'notification.needsYou.over': "Više te ne čeka.",
 
   // Command palette

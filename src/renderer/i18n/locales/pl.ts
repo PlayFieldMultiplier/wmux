@@ -888,7 +888,7 @@ export const pl = {
   'notification.empty': 'Brak powiadomień',
   'notification.toggle': 'Ctrl+I aby przełączyć',
   'notification.needsYou.question': "Czeka na Ciebie: „{question}”",
-  'notification.needsYou.noQuestion': "Czeka na Ciebie. Treść pytania nie dotarła; monit jest w jego terminalu.",
+  'notification.needsYou.noQuestion': "Czeka na Ciebie. Brak treści pytania; zajrzyj do terminala.",
   'notification.needsYou.over': "Już na Ciebie nie czeka.",
 
   // Command palette

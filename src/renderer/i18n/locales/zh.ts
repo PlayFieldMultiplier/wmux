@@ -494,7 +494,7 @@ export const zh = {
   'notification.empty': '暂无通知',
   'notification.toggle': 'Ctrl+I 切换',
   'notification.needsYou.question': "等你回应：“{question}”",
-  'notification.needsYou.noQuestion': "等你回应。没有收到问题内容，提示在它的终端里。",
+  'notification.needsYou.noQuestion': "等你回应。没有问题内容，请看它的终端。",
   'notification.needsYou.over': "已不再等你。",
 
   // Command palette

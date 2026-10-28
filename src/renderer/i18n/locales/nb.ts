@@ -87,7 +87,7 @@ export const nb = {
   'notification.empty': 'Ingen varsler',
   'notification.toggle': 'Ctrl+I for å veksle',
   'notification.needsYou.question': "Venter på deg: «{question}»",
-  'notification.needsYou.noQuestion': "Venter på deg. Ingen spørsmålstekst kom med; ledeteksten står i terminalen.",
+  'notification.needsYou.noQuestion': "Venter på deg. Ingen spørsmålstekst; se terminalen.",
   'notification.needsYou.over': "Venter ikke lenger på deg.",
 
   // Command palette

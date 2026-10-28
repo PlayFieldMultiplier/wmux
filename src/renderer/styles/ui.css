@@ -1188,9 +1188,7 @@ details[open] > .wmux-chatv2-tool-line .wmux-chatv2-chevron { transform: rotate(
 .wmux-board-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 /* The Fleet list: one attention list. A row is a fill on hover or selection,
  * never a box or a rule; section heads are sentence-case text with a dot. */
-/* The list takes its rows' height (scrolling once the page is full), so the
- * detail area follows right under its last row instead of the page's foot. */
-.wmux-board .wmux-fleet-list { flex: 0 1 auto; min-height: 0; overflow-y: auto; padding: 0 12px 12px; }
+.wmux-board .wmux-fleet-list { flex: 1; min-height: 0; overflow-y: auto; padding: 0 12px 12px; }
 .wmux-board .wmux-fleet-quiet { padding: 4px 20px 2px; }
 .wmux-board .wmux-fleet-section-header { display: flex; align-items: center; gap: 7px; padding: 14px 8px 4px; font-size: 12px; font-weight: 500; letter-spacing: normal; text-transform: none; color: var(--text-sub); }
 .wmux-board .wmux-fleet-card { border-bottom: 0; border-radius: 8px; min-height: 52px; }
@@ -1276,6 +1274,8 @@ details[open] > .wmux-chatv2-tool-line .wmux-chatv2-chevron { transform: rotate(
 .wmux-board-foot-stack > .wmux-board-preview { margin: 0; }
 .wmux-fleet-request { min-width: 0; padding: 10px 14px; border-radius: 10px; background: var(--bg-mantle); font-size: 13px; color: var(--text-main); }
 .wmux-fleet-request h3 { margin: 0 0 4px; font-size: 11px; font-weight: 500; color: var(--text-subtle); }
+/* No question text: the actions (or the prompt's choices) open the block. */
+.wmux-fleet-request > .wmux-fleet-ticket-actions:first-child, .wmux-fleet-request > .wmux-fleet-request-choices:first-child { margin-top: 0; }
 .wmux-fleet-request-text { margin: 0; max-height: 160px; overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45; }
 .wmux-fleet-request-text.is-evidence { font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; }
 .wmux-fleet-request-choices { margin: 8px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--text-sub); overflow-wrap: anywhere; }
@@ -1283,6 +1283,11 @@ details[open] > .wmux-chatv2-tool-line .wmux-chatv2-chevron { transform: rotate(
 /* The selection's detail at the foot: the terminal preview and, for a
  * fan-out task, its conversation, side by side when both are open. */
 .wmux-board-foot { flex: none; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 8px; margin: 0 20px 8px; }
+/* While the detail is open the list takes only its rows' height (scrolling
+ * once the page is full), so the detail follows right under its last row
+ * instead of sitting at the page's foot; the space left goes below it. */
+.wmux-board-body:has(+ .wmux-board-foot) { flex: 0 1 auto; }
+.wmux-board-body + .wmux-board-foot { margin-bottom: auto; }
 .wmux-board-foot > .wmux-board-preview { margin: 0; max-width: none; }
 .wmux-board-conversation { min-width: 0; padding: 8px 12px; border-radius: 10px; background: var(--bg-mantle); }
 .wmux-board-conversation-log { display: flex; flex-direction: column; gap: 8px; max-height: 260px; overflow-y: auto; outline: none; }

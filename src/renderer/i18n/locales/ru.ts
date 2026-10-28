@@ -87,7 +87,7 @@ export const ru = {
   'notification.empty': 'Нет уведомлений',
   'notification.toggle': 'Ctrl+I для переключения',
   'notification.needsYou.question': "Ждёт вас: «{question}»",
-  'notification.needsYou.noQuestion': "Ждёт вас. Текст вопроса не пришёл; запрос — в его терминале.",
+  'notification.needsYou.noQuestion': "Ждёт вас. Текста вопроса нет; посмотрите терминал.",
   'notification.needsYou.over': "Больше не ждёт вас.",
 
   // Command palette

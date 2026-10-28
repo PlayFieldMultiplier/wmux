@@ -87,7 +87,7 @@ export const ja = {
   'notification.empty': '通知なし',
   'notification.toggle': 'Ctrl+Iで切替',
   'notification.needsYou.question': "応答待ち:「{question}」",
-  'notification.needsYou.noQuestion': "応答待ち。質問の本文は届いていません。プロンプトはターミナルにあります。",
+  'notification.needsYou.noQuestion': "応答待ち。質問の本文なし。ターミナルを確認してください。",
   'notification.needsYou.over': "もう待っていません。",
 
   // Command palette

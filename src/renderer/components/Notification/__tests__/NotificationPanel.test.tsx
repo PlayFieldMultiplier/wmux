@@ -518,7 +518,7 @@ describe('describeNotification — a needs-you row names where it waits', () => 
   it('says plainly when no question text came, instead of repeating the state word', () => {
     const d = describeNotification(asking, state({ surfaceAgentStatus: { 'pty-1': 'awaiting_input' } }), t, true);
     expect(d.title).toBe('web-client · Claude Code');
-    expect(d.body).toBe('Needs you. No question text was sent; the prompt is in its terminal.');
+    expect(d.body).toBe('Needs you. No question text; see its terminal.');
     expect(`${d.title} ${d.body}`).not.toContain('Awaiting input');
   });
 

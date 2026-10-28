@@ -898,7 +898,7 @@ export const en = {
   'notification.empty': 'No notifications',
   'notification.toggle': 'Ctrl+I to toggle',
   'notification.needsYou.question': "Needs you: “{question}”",
-  'notification.needsYou.noQuestion': "Needs you. No question text was sent; the prompt is in its terminal.",
+  'notification.needsYou.noQuestion': "Needs you. No question text; see its terminal.",
   'notification.needsYou.over': "No longer waiting on you.",
 
   // Command palette

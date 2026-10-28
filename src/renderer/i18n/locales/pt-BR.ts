@@ -87,7 +87,7 @@ export const ptBR = {
   'notification.empty': 'Sem notificações',
   'notification.toggle': 'Ctrl+I para alternar',
   'notification.needsYou.question': "Espera por você: “{question}”",
-  'notification.needsYou.noQuestion': "Espera por você. O texto da pergunta não veio; o prompt está no terminal dele.",
+  'notification.needsYou.noQuestion': "Espera por você. Sem texto da pergunta; veja o terminal.",
   'notification.needsYou.over': "Não está mais esperando por você.",
 
   // Command palette

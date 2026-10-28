@@ -87,7 +87,7 @@ export const hi = {
   'notification.empty': 'कोई सूचना नहीं',
   'notification.toggle': 'टॉगल करने के लिए Ctrl+I',
   'notification.needsYou.question': "आपका इंतज़ार: “{question}”",
-  'notification.needsYou.noQuestion': "आपका इंतज़ार। प्रश्न का पाठ नहीं आया; प्रॉम्प्ट उसके टर्मिनल में है।",
+  'notification.needsYou.noQuestion': "आपका इंतज़ार। प्रश्न का पाठ नहीं; उसका टर्मिनल देखें।",
   'notification.needsYou.over': "अब आपका इंतज़ार नहीं कर रहा।",
 
   // Command palette
