@@ -803,11 +803,11 @@ export default function RemotePage() {
           <h1 ref={titleRef} tabIndex={-1} id="remote-page-title" className="wmux-remote-title outline-none">{t('remotePage.title')}</h1>
           <span className="flex-1" />
           {lanMessages > 0 && (
-            <Button variant="secondary" size="sm" onClick={openLanInbox} data-remote-lan-inbox>
+            <Button variant="secondary" size="md" onClick={openLanInbox} data-remote-lan-inbox>
               {t('fleetBoard.lan', { count: lanMessages })}
             </Button>
           )}
-          <Button variant="secondary" size="sm" onClick={() => setConnect({})} data-remote-connect>{t('remotePage.connect.button')}</Button>
+          <Button variant="secondary" size="md" onClick={() => setConnect({})} data-remote-connect>{t('remotePage.connect.button')}</Button>
         </div>
         <p className="wmux-remote-summary" data-remote-summary>
           {summary.length > 0 ? summary.join(' · ') : loaded ? t('remotePage.sumNothing') : ''}
