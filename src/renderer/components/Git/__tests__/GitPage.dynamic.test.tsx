@@ -448,6 +448,53 @@ describe('Git page', () => {
     }
   });
 
+  it('no origin remote: a refused copy never says Copied, an origin naming no host offers set-url, and Check again reads the repo again', async () => {
+    const noRemote = { ok: false, code: 'no-remote', message: 'no origin remote', originSet: true };
+    let fixed = false;
+    prList.mockImplementation(async (p: string) => (p === '/code/beta' && !fixed ? noRemote : { ok: true, prs: [] }));
+    const issueList = (window as unknown as { electronAPI: { github: { issueList: ReturnType<typeof vi.fn> } } }).electronAPI.github.issueList;
+    issueList.mockImplementation(async (p: string) => (p === '/code/beta' && !fixed ? noRemote : { ok: true, issues: [] }));
+    const writeText = vi.fn(async () => { throw new Error('denied'); });
+    (window as unknown as { clipboardAPI?: unknown }).clipboardAPI = { writeText };
+    try {
+      act(() => useStore.setState({ activeWorkspaceId: 'c', gitPage: { ...initialGitPageState(), tab: 'issues' } }));
+      act(() => root.render(createElement(GitPage)));
+      await settle();
+      act(() => tab('issues').click());
+      await settle();
+      expect(container.querySelector('[data-git-no-remote-command]')!.textContent).toContain('git remote set-url origin <address>');
+      const copy = container.querySelector('[data-git-no-remote-copy]') as HTMLButtonElement;
+      await act(async () => { copy.click(); });
+      expect(writeText).toHaveBeenCalledWith('git remote set-url origin <address>');
+      expect(copy.textContent).toBe('Copy');
+      expect(copy.getAttribute('data-copy-state')).toBe('failed');
+      expect(container.querySelector('[data-git-page-repo-link]')).toBeNull();
+
+      // origin is fixed outside wmux: Check again reads the repo (name, link) too.
+      fixed = true;
+      remoteOf['/code/beta'] = 'github.com/o/beta';
+      act(() => (container.querySelector('[data-git-no-remote] [data-git-connect-recheck]') as HTMLButtonElement).click());
+      await settle();
+      expect(container.querySelector('[data-git-page-repo-link]')).not.toBeNull();
+      expect(container.querySelector('[data-git-no-remote]')).toBeNull();
+    } finally {
+      remoteOf['/code/beta'] = null;
+      delete (window as unknown as { clipboardAPI?: unknown }).clipboardAPI;
+    }
+  });
+
+  it('a tab picked in All repos is not a pick for the repo shown after: a repo with no remote still opens on Worktrees', async () => {
+    prList.mockImplementation(async (p: string) => (p === '/code/beta' ? { ok: false, code: 'no-remote', message: 'no origin remote' } : { ok: true, prs: [] }));
+    act(() => useStore.setState({ activeWorkspaceId: 'c', gitPage: { ...initialGitPageState(), scope: 'all', tab: 'worktrees' } }));
+    act(() => root.render(createElement(GitPage)));
+    await settle();
+    act(() => tab('issues').click());
+    await settle();
+    await chooseRepo('follow');
+    await settle();
+    expect(tab('worktrees').getAttribute('aria-selected')).toBe('true');
+  });
+
   it('one Worktrees section is its own header: no summary line repeats it', async () => {
     act(() => useStore.setState({ activeWorkspaceId: 'c', gitPage: { ...initialGitPageState(), tab: 'worktrees' } }));
     act(() => root.render(createElement(GitPage)));

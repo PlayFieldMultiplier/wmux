@@ -469,6 +469,40 @@ describe('Add bot: the repository comes from the workspace', () => {
     }
   });
 
+  it('no origin remote: a refused copy never says Copied and shows the command; an origin naming no host offers set-url', async () => {
+    const why = '/src/notes: the origin remote is not an owner/repo address.';
+    const writeText = vi.fn(async () => { throw new Error('denied'); });
+    (window as unknown as { clipboardAPI?: unknown }).clipboardAPI = { writeText };
+    try {
+      const { port } = formPort([], async () => ({ ok: false, code: 'no_remote', message: why, originSet: true }));
+      await renderForm(port, []);
+      expect(q('factory-add-bot-repo-copy')!.getAttribute('title')).toBe('git remote set-url origin <address>');
+      await act(async () => q<HTMLButtonElement>('factory-add-bot-repo-copy')!.click());
+      expect(writeText).toHaveBeenCalledWith('git remote set-url origin <address>');
+      expect(q('factory-add-bot-repo-copy')!.textContent).toBe('settings.factory.addBotRepoCopyCommand');
+      expect(q('factory-add-bot-repo-command')!.textContent).toBe('git remote set-url origin <address>');
+    } finally {
+      delete (window as unknown as { clipboardAPI?: unknown }).clipboardAPI;
+    }
+  });
+
+  it('no origin remote: Check again asks main once more, and a folder fixed since is what Add sends', async () => {
+    const answers: FactoryBotRepoSuggestion[] = [
+      { ok: false, code: 'no_remote', message: '/src/notes has no origin remote.' },
+      { ok: true, repoKey: 'github.com/acme/notes', root: '/src/notes', displayRoot: '~/src/notes', inherited: false },
+    ];
+    let n = 0;
+    const { port, create, suggestRepo } = formPort([], async () => answers[Math.min(n++, 1)]);
+    await renderForm(port, []);
+    await typeInto('factory-add-bot-name', 'Dev');
+    expect(q('factory-add-bot-no-repo')).not.toBeNull();
+    await act(async () => q<HTMLButtonElement>('factory-add-bot-repo-recheck')!.click());
+    expect(suggestRepo).toHaveBeenCalledTimes(2);
+    expect(q('factory-add-bot-repo-row')!.getAttribute('data-repo-kind')).toBe('suggested');
+    await act(async () => q<HTMLButtonElement>('factory-add-bot-submit')!.click());
+    expect(create).toHaveBeenLastCalledWith({ workspaceId: WS, name: 'Dev', repoFolder: '/src/notes' });
+  });
+
   it('a remembered None: no repository, the remembered line and Choose folder…, never a suggestion', async () => {
     const { port, create } = formPort([], async () => ({ ok: false, code: 'none' }));
     await renderForm(port, []);

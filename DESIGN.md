@@ -902,8 +902,10 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   remembers nothing; a refused folder shows "No repository" with one muted
   line saying why and how to fix it (a folder with no origin remote a bot
   can push to: one plain line, then Copy command — `git remote add origin
-  <address>` — and Show details, which holds main's full reason with the
-  folder's path), and an add from there remembers
+  <address>`, or `set-url` when origin is set but names no host; a copy the
+  clipboard refused shows the command to select instead of Copied — Check
+  again, which asks main for the folder once more, and Show details, which
+  holds main's full reason with the folder's path), and an add from there remembers
   nothing, so the folder is offered again once it is fixed; None is
   remembered for the workspace ("You chose no repository for this
   workspace…", with Choose folder…), so later adds and Add team do not ask
@@ -1425,8 +1427,11 @@ refresh button. Nothing about branches or worktrees sits above the lists.
 - **No remote:** a repo with no origin remote shows, on Issues and Pull
   requests, one card in the list's place: "This repository has no origin
   remote.", one line saying the lists are read from origin on GitHub or
-  GitLab, the command `git remote add origin <address>` in mono with Copy,
-  and Check again. No primary: nothing on the card does the fix itself.
+  GitLab, the command in mono with Copy (`git remote add origin <address>`,
+  or `git remote set-url origin <address>` when origin is set but names no
+  host), and Check again, which refreshes the whole page (the repo's name
+  and link too). Copy says Copied only once the clipboard took it. No
+  primary: nothing on the card does the fix itself.
 - **Cost:** pull-only and only while the page is shown. The shown PR or
   issue list polls every 30s while the window is visible.
 - **Rail dot:** a red dot on the Git icon while an open workspace's open or

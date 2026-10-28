@@ -233,7 +233,8 @@ export default function GitPage() {
   const setTab = (tab: GitPageTab) => {
     setGitPage({ tab });
     saveGitTab(tab);
-    setTabPickedIn(resolved?.repoPath ?? null);
+    // Only a pick made while one repo is shown belongs to that repo.
+    if (page.scope === 'repo') setTabPickedIn(resolved?.repoPath ?? null);
   };
   const onTabKey = (e: KeyboardEvent<HTMLButtonElement>) => {
     const i = TABS.indexOf(shownTab);
@@ -452,6 +453,7 @@ export default function GitPage() {
                     onSelect={(n) => select(resolved.repoPath, n)}
                     onItems={publish(resolved.repoPath, kind)}
                     dragContext={repoContext}
+                    onRefreshPage={recheck}
                   />
                 )
               ) : page.allLayout === 'flat' ? (
@@ -546,7 +548,7 @@ function ListPane({ scrollKey, ready, children }: { scrollKey: string; ready: nu
   );
 }
 
-function RepoList({ tab, repoPath, refreshKey, active, filter, onFilter, selected, onSelect, onItems, dragContext }: {
+function RepoList({ tab, repoPath, refreshKey, active, filter, onFilter, selected, onSelect, onItems, dragContext, onRefreshPage }: {
   tab: GitPageTab;
   repoPath: string;
   refreshKey: number;
@@ -558,6 +560,8 @@ function RepoList({ tab, repoPath, refreshKey, active, filter, onFilter, selecte
   onSelect: (n: number) => void;
   onItems: (list: PrSummary[] | IssueSummary[]) => void;
   dragContext?: GitDragOwner;
+  /** The page's refresh, for a no-remote card's Check again. */
+  onRefreshPage?: () => void;
 }) {
   return tab === 'issues' ? (
     <IssueSection
@@ -571,6 +575,7 @@ function RepoList({ tab, repoPath, refreshKey, active, filter, onFilter, selecte
       onSelect={(i) => onSelect(i.number)}
       onItems={onItems}
       dragContext={dragContext}
+      onRefreshPage={onRefreshPage}
     />
   ) : (
     <PrSection
@@ -582,6 +587,7 @@ function RepoList({ tab, repoPath, refreshKey, active, filter, onFilter, selecte
       onSelect={(p) => onSelect(p.number)}
       onItems={onItems}
       dragContext={dragContext}
+      onRefreshPage={onRefreshPage}
     />
   );
 }

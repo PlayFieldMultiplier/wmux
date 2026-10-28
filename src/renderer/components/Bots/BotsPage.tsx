@@ -348,7 +348,7 @@ function FirstBotPanel({ t, workspace, botPort, settings, confirmOn, on, engine,
           </Button>
         </form>
         {workspace && (
-          <AddBotRepoRow view={repo.view} t={t} busy={busy} onChoose={() => void repo.choose()} onNone={repo.chooseNone} />
+          <AddBotRepoRow view={repo.view} t={t} busy={busy} onChoose={() => void repo.choose()} onNone={repo.chooseNone} onRecheck={repo.recheck} />
         )}
         {/* The other ways to begin are quiet links, so Start stays the one
             action the card leads with. */}
