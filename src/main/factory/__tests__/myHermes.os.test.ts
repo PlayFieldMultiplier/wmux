@@ -1,6 +1,9 @@
 // My Hermes readiness against fake Hermes homes: each reason it is not
 // ready, the notices, the install check, and that a check writes nothing
 // (no file in the home changes and no Hermes command that writes is run).
+// My Hermes is macOS and Linux only in v1: on Windows the same fixtures
+// answer `unsupported-os` before anything runs, and the POSIX shapes are
+// checked on macOS and Linux.
 
 import * as crypto from 'crypto';
 import * as fs from 'fs';
@@ -9,6 +12,8 @@ import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { envNames, hermesExeOwnedBy, listMyHermesProfiles, myHermesReadiness, type MyHermesReadinessDeps } from '../myHermes';
 import type { HermesRun } from '../hermesEngine';
+
+const WIN = process.platform === 'win32';
 
 let home = '';
 beforeEach(() => {
@@ -59,7 +64,7 @@ function rig(answers: Answers, over: Partial<MyHermesReadinessDeps> = {}) {
     if (args.slice(0, 5).join(' ') === '-p default config get --json' && key in cfg) return { code: 0, stdout: `${JSON.stringify(cfg[key])}\n`, stderr: '' };
     return { code: 1, stdout: '', stderr: `Config key not set: ${key}` };
   };
-  const deps: MyHermesReadinessDeps = { home, platform: 'darwin', resolveExe: () => exe, run, baseEnv: { PATH: '/usr/bin' }, pidAlive: () => true, ...over };
+  const deps: MyHermesReadinessDeps = { home, platform: process.platform, resolveExe: () => exe, run, baseEnv: { PATH: '/usr/bin' }, pidAlive: () => true, ...over };
   return { deps, calls, exe };
 }
 
@@ -77,7 +82,17 @@ function expectReadOnly(calls: string[][]): void {
   }
 }
 
-describe('myHermesReadiness', () => {
+describe.runIf(WIN)('myHermesReadiness on Windows', () => {
+  it('answers unsupported-os before it runs Hermes or reads the home', async () => {
+    const r = rig({ config: READY_CONFIG });
+    const before = snapshot(home);
+    expect(await myHermesReadiness('default', r.deps)).toMatchObject({ ready: false, reason: 'unsupported-os' });
+    expect(r.calls).toEqual([]);
+    expect(snapshot(home)).toEqual(before);
+  });
+});
+
+describe.skipIf(WIN)('myHermesReadiness', () => {
   it('a ready profile reports its version and notices, and writes nothing', async () => {
     const r = rig({ config: { ...READY_CONFIG, 'approvals.mode': 'smart', command_allowlist: ['git *', 'ls'], mcp_servers: { github: {}, linear: {} } } });
     const before = snapshot(home);
