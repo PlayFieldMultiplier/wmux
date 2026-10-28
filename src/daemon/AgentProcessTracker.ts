@@ -623,7 +623,13 @@ const AGENT_PACKAGES: ReadonlyMap<AgentSlug, ReadonlySet<string>> = new Map(
 );
 
 /** Python packages a python-hosted agent ships in (`site-packages/aider`). */
-const PYTHON_PACKAGES: Partial<Record<AgentSlug, string>> = { aider: 'aider' };
+const PYTHON_PACKAGES: Partial<Record<AgentSlug, string>> = { aider: 'aider', hermes: 'hermes_cli' };
+
+/** Python distributions whose `<name>-<version>.dist-info` in an environment
+ *  also proves the agent is installed there. An editable install (Hermes'
+ *  own installer runs `pip install -e` on its git checkout) leaves no package
+ *  directory under site-packages, only that record. */
+const PYTHON_DISTRIBUTIONS: Partial<Record<AgentSlug, string>> = { hermes: 'hermes_agent' };
 
 /** Native agents whose installer names each binary by its version, in a
  *  directory under the user's home (`~/.local/share/claude/versions/2.1.307`,
@@ -698,7 +704,21 @@ function inPythonPackage(real: string, slug: AgentSlug): boolean {
   const lib = path.posix.join(path.posix.dirname(bin), 'lib');
   try {
     return fs.readdirSync(lib).some((dir) => /^python\d*(?:\.\d+)?$/.test(dir) &&
-      fs.statSync(path.posix.join(lib, dir, 'site-packages', pkg), { throwIfNoEntry: false })?.isDirectory() === true);
+      installedIn(path.posix.join(lib, dir, 'site-packages'), pkg, PYTHON_DISTRIBUTIONS[slug]));
+  } catch {
+    return false;
+  }
+}
+
+/** `site` holds the package directory `pkg`, or the `dist` distribution's
+ *  dist-info directory. */
+function installedIn(site: string, pkg: string, dist: string | undefined): boolean {
+  if (fs.statSync(path.posix.join(site, pkg), { throwIfNoEntry: false })?.isDirectory() === true) return true;
+  if (!dist) return false;
+  const record = new RegExp(`^${dist}-[^/]+\\.dist-info$`);
+  try {
+    return fs.readdirSync(site).some((name) => record.test(name) &&
+      fs.statSync(path.posix.join(site, name), { throwIfNoEntry: false })?.isDirectory() === true);
   } catch {
     return false;
   }
