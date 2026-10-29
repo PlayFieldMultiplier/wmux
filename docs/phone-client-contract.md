@@ -5394,7 +5394,11 @@ anything was sent: its reads kept failing, say) ends `refused` with
 `decidedAt`, or once the clock reads more than 24 hours earlier than
 `decidedAt` (a clock less far behind waits, as in the Undo window); nothing was
 sent, and the bot asks again with a new request if it is still wanted. An act a try of which may
-have reached GitHub is not aged out: a read of GitHub settles it.
+have reached GitHub is not aged out: a read of GitHub settles it. Once its
+reads have failed for 24 hours from its first try (12 failed reads at least),
+nothing more is sent for it: a read that then finds nothing on GitHub ends it
+`refused` with `approval-stale`, and while reads still cannot say it stays
+`approved`, and its thread gets one `status` card saying it may be on GitHub.
 
 `refusal` may be a list of codes joined by `, `; show one sentence per code.
 A refused `release` that made a draft adds one last code saying what became
