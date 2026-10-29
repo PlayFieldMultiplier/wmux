@@ -161,7 +161,10 @@ describe.each(['shadow', 'enforce'] as const)('bot role gate (%s mode)', (mode) 
     const managed = mintBotToken(MOA);
     try {
       expect(resolveCommanderToken(own)?.surface).toBe('room-post');
+      seen.length = 0;
       expect((await call('room.post', own)).ok).toBe(true);
+      // The handler is told (room.post confines it to its 1:1).
+      expect(seen.at(-1)?.ctx?.botSurface).toBe('room-post');
       expect((await call('mcp.identify', own)).ok).toBe(true);
       for (const method of ['room.read', 'plan.propose', 'task.fanout.start', 'verify.recordVerdict', 'bot.setJob']) {
         const res = await call(method, own);
@@ -173,6 +176,7 @@ describe.each(['shadow', 'enforce'] as const)('bot role gate (%s mode)', (mode) 
       for (const method of ['room.post', 'room.read', 'plan.propose', 'task.fanout.start', 'verify.recordVerdict', 'bot.setJob', 'mcp.identify']) {
         expect((await call(method, managed)).ok, method).toBe(true);
       }
+      expect(seen.at(-1)?.ctx?.botSurface).toBeUndefined();
       expect((await call('bot.park', managed)).ok).toBe(false);
     } finally {
       revokeCommanderToken(own);

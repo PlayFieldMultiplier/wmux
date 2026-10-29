@@ -422,6 +422,7 @@ export class RpcRouter {
       // in shadow and enforce mode alike.
       if (binding.bot) {
         ctx.bot = binding.bot;
+        if (binding.surface) ctx.botSurface = binding.surface;
         const botRefusal = botSurfaceRefusal(binding.bot.role, request.method, binding.surface);
         if (botRefusal) {
           this.notifyBotRefused({ at: Date.now(), bot: { ...binding.bot }, method: request.method, reason: botRefusal });
