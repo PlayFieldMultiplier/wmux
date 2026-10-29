@@ -304,4 +304,18 @@ describe('the owner\'s routines of a bot on My Hermes', () => {
       expect(await r.call(m, { botId: A, routineId: 'r-zzzzzzzz', paused: true }, asBot(A)), m).toMatchObject({ ok: false, code: 'not_authorized' });
     }
   });
+
+  it('off My Hermes, the owner can resume or delete a bot\'s routine wmux paused as refused, and only that one', async () => {
+    const r = ownRig();
+    const refused = r.store.set({ botId: A, workspaceId: 'ws-1' }, params as never);
+    const kept = r.store.set({ botId: A, workspaceId: 'ws-1' }, { ...params, title: 'Other' } as never);
+    if (!refused.ok || !kept.ok) throw new Error('set');
+    expect(r.store.pauseRefused(A, refused.routine.id)).toBe(true);
+    r.bots.set(A, profile(A));
+    expect(await r.call('routine.ownerPause', { botId: A, routineId: kept.routine.id, paused: true }, OPERATOR)).toMatchObject({ ok: false, code: 'not_found' });
+    expect(await r.call('routine.ownerPause', { botId: A, routineId: refused.routine.id, paused: false }, OPERATOR)).toMatchObject({ ok: true, routine: { state: 'active' } });
+    expect(r.store.pauseRefused(A, refused.routine.id)).toBe(true);
+    expect(await r.call('routine.ownerRemove', { botId: A, routineId: refused.routine.id }, OPERATOR)).toMatchObject({ ok: true });
+    expect(r.store.get(refused.routine.id)).toBeNull();
+  });
 });

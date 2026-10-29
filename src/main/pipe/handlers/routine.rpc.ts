@@ -193,9 +193,10 @@ export function registerRoutineHandlers(router: Pick<FactoryRouter, 'register'>,
     const store = deps.store();
     if (!store) return NOT_STARTED;
     // The owner's pause reaches only the named bot's routine; off My Hermes,
-    // only one the owner wrote.
+    // only one the owner wrote or one wmux paused as refused (no one else can
+    // bring that back).
     const r = typeof p.routineId === 'string' ? store.get(p.routineId) : null;
-    if (typeof p.routineId === 'string' && (r?.botId !== who.bot.id || (!isOwnHermesEngine(who.bot.engine) && r?.author !== 'owner'))) {
+    if (typeof p.routineId === 'string' && (r?.botId !== who.bot.id || (!isOwnHermesEngine(who.bot.engine) && !ownerReaches(r)))) {
       return { ok: false, code: 'not_found', message: `no routine ${p.routineId} for this bot` };
     }
     return store.pause({ kind: 'owner' }, p.routineId, p.paused);
@@ -207,7 +208,7 @@ export function registerRoutineHandlers(router: Pick<FactoryRouter, 'register'>,
     if (!who.ok) return who;
     const store = deps.store();
     if (!store) return NOT_STARTED;
-    if (!isOwnHermesEngine(who.bot.engine) && (typeof p.routineId !== 'string' || store.get(p.routineId)?.author !== 'owner')) {
+    if (!isOwnHermesEngine(who.bot.engine) && (typeof p.routineId !== 'string' || !ownerReaches(store.get(p.routineId)))) {
       return { ok: false, code: 'not_found', message: `no routine ${String(p.routineId)} of yours for this bot` };
     }
     return store.remove(who.bot.id, p.routineId);
@@ -241,6 +242,12 @@ export function registerRoutineHandlers(router: Pick<FactoryRouter, 'register'>,
     if (!store) return NOT_STARTED;
     return { ok: true, workersStopped: 0, gatesCancelled: 0, routinesPaused: store.pauseFor(botId, 'stop') };
   });
+}
+
+/** Off My Hermes, the owner's pause and remove reach a routine they wrote,
+ *  and one wmux paused as refused, which the bot itself cannot resume. */
+function ownerReaches(r: { author?: string; state?: string; paused?: { reason?: string } } | null | undefined): boolean {
+  return r?.author === 'owner' || (r?.state === 'paused' && r.paused?.reason === 'refused');
 }
 
 /** routine.set from a conversation that took in outside text: a new
