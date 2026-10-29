@@ -215,12 +215,65 @@ describe('folderTrustState', () => {
       expect(await folderTrustState(deps(m.session), 'pty-1')).toBe('clear');
     });
 
-    it("is 'unknown' once the hold overflowed: its newest output, the screen, is missing", async () => {
+    /** `bytes` of a resumed transcript, fed in chunks of about 16 KB. */
+    const transcript = (m: ReturnType<typeof mutedSession>, bytes: number): void => {
+      for (let fed = 0, n = 0; fed < bytes; ) {
+        let chunk = '';
+        while (chunk.length < 16 * 1024) chunk += `⏺ Resumed line ${n++}\r\n`;
+        m.feed(chunk);
+        fed += Buffer.byteLength(chunk);
+      }
+    };
+
+    it("reads the output past the head the unmute replays (#2855): a prompt there is 'clear', a dialog 'trust'", async () => {
+      const idle = mutedSession('');
+      transcript(idle, 300 * 1024);
+      idle.feed('\r\n❯ ');
+      expect(await folderTrustState(deps(idle.session), 'pty-1')).toBe('clear');
       const m = mutedSession('');
+      transcript(m, 300 * 1024);
       m.feed(frame(CLAUDE).toString());
-      m.feed('x'.repeat(300 * 1024));
-      expect(m.bridge.heldOutput()?.full).toBe(true);
-      expect(await folderTrustState(deps(m.session), 'pty-1')).toBe('unknown');
+      expect(await folderTrustState(deps(m.session), 'pty-1')).toBe('trust');
+      // An unmute at the same size brings no repaint: it releases the head and
+      // then the rest, so the pane shows the dialog that is up, not the start
+      // of what the program printed.
+      m.bridge.setMuted(false, { replayHeld: true });
+      const replayed = m.ring.readAll().toString();
+      expect(replayed).toContain('Resumed line 0\r\n');
+      expect(replayed).toContain('Yes, I trust this folder');
+      expect(await folderTrustState(deps(m.session), 'pty-1')).toBe('trust');
+    });
+
+    it('once the hold dropped output, reads its newest output alone, and a cell it never drew stays unknown', async () => {
+      const m = mutedSession('');
+      transcript(m, 3 * 1024 * 1024);
+      expect(m.bridge.heldOutput()?.read().dropped).toBeGreaterThan(0);
+      m.feed('\r\n❯ ');
+      expect(await folderTrustState(deps(m.session), 'pty-1')).toBe('clear');
+      m.feed(frame(CLAUDE).toString());
+      expect(await folderTrustState(deps(m.session), 'pty-1')).toBe('trust');
+      // Shown at the same size: the dialog drawn after the dropped output is replayed too.
+      m.bridge.setMuted(false, { replayHeld: true });
+      expect(await folderTrustState(deps(m.session), 'pty-1')).toBe('trust');
+      // 3 MB that redraw one row by cursor address, with no line feed.
+      const churn = (c: ReturnType<typeof mutedSession>): void => {
+        for (let fed = 0, n = 0; fed < 3 * 1024 * 1024; n++) {
+          const chunk = `\x1b[40;1H${n}`.padEnd(64, ' ').repeat(256);
+          c.feed(chunk);
+          fed += chunk.length;
+        }
+      };
+      // Drawn before the dropped output and never redrawn: not known to be gone.
+      const stale = mutedSession('');
+      stale.feed(frame(CLAUDE).toString());
+      churn(stale);
+      expect(await folderTrustState(deps(stale.session), 'pty-1')).toBe('unknown');
+      // Drawn by cursor address alone, a line feed only after it: read from the tail's first sequence.
+      const addressed = mutedSession('');
+      churn(addressed);
+      addressed.feed(`${frame(CLAUDE).toString()}\x1b[1;1H\n`);
+      expect(await folderTrustState(deps(addressed.session), 'pty-1')).toBe('trust');
+      await enqueueSnapshotJob(async () => undefined);
     });
 
     it("is 'unknown' after a resize while muted dropped the held output", async () => {
@@ -321,6 +374,20 @@ describe('a ring that outgrew the tail window, on a pane that went idle (#2855)'
     s.ringBuffer.write(Buffer.from(spinner(0)));
     expect(await folderTrustState(deps(s, { snapshot }), 'pty-1')).toBe('unknown');
     expect(parses).toBeGreaterThan(parsed);
+    await enqueueSnapshotJob(async () => undefined);
+  });
+
+  it('a muted session past the head the unmute replays reads its held output whole too', async () => {
+    const m = mutedSession('');
+    m.feed(frame(IDLE).toString());
+    for (let fed = 0, n = 0; fed < 600 * 1024; ) {
+      let chunk = '';
+      while (chunk.length < 16 * 1024) chunk += spinner(n++);
+      m.feed(chunk);
+      fed += Buffer.byteLength(chunk);
+    }
+    m.feed('\x1b[31;1H\x1b[K');
+    expect(await folderTrustState(deps(m.session), 'pty-1')).toBe('clear');
     await enqueueSnapshotJob(async () => undefined);
   });
 
