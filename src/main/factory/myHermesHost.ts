@@ -90,6 +90,9 @@ export class OwnHermesHost {
   private readonly log: (line: string) => void;
   private readonly pidAlive: (pid: number) => boolean;
   private stopping: Promise<void> | null = null;
+  /** The profile's turn gate: a new session of its bot waits for the last
+   *  turn of the one before (one bot per profile). */
+  private readonly turnGate: { ended: Promise<void> | null } = { ended: null };
 
   constructor(private readonly deps: OwnHermesHostDeps) {
     if (!HERMES_PROFILE_RE.test(deps.profile)) throw new Error('not a Hermes profile name');
@@ -163,6 +166,7 @@ export class OwnHermesHost {
       disposed: (adapter) => {
         this.adapters.delete(adapter);
       },
+      turnGate: this.turnGate,
     };
   }
 

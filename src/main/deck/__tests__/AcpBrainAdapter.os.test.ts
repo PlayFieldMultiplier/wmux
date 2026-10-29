@@ -723,6 +723,84 @@ describe('AcpBrainAdapter (My Hermes, own mode)', () => {
     adapter.dispose();
   });
 
+  it('a prompt the agent never got (it went just before) ends its turn, so the bot is not blocked', async () => {
+    let n = 0;
+    const children: FakeChild[] = [];
+    const spawnFn = () => {
+      n += 1;
+      const first = n === 1;
+      const child = new FakeChild((c, msg) => {
+        const id = msg.id as number;
+        if (msg.method === 'initialize') c.emitLine({ jsonrpc: '2.0', id, result: { protocolVersion: 1 } });
+        else if (msg.method === 'session/new' || msg.method === 'session/load') {
+          c.emitLine({ jsonrpc: '2.0', id, result: { sessionId: 'h-1' } });
+          // The first agent goes right after its session started.
+          if (first) c.kill();
+        } else if (msg.method === 'session/prompt') {
+          const text = (((msg.params as Record<string, unknown>).prompt as Array<Record<string, unknown>>)[0]?.text ?? '') as string;
+          if (text === '/tools') c.emitLine({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'h-1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: HERMES_TOOLS_OK } } } });
+          c.emitLine({ jsonrpc: '2.0', id, result: { stopReason: 'end_turn' } });
+        }
+      });
+      children.push(child);
+      return child as unknown as ChildProcessWithoutNullStreams;
+    };
+    const { adapter } = ownAdapter(spawnFn);
+    adapter.start({});
+    expect((await collect(adapter.send('hello'))).at(-1)).toMatchObject({ type: 'error' });
+    // The next message is not held behind a turn no agent will ever answer.
+    expect((await collect(adapter.send('again'))).at(-1)).toMatchObject({ type: 'turn-end' });
+    adapter.dispose();
+  });
+
+  it('a new adapter of the bot (a new session) waits for the last adapter\'s turn too', async () => {
+    const h = slowHermes();
+    const turnGate = { ended: null as Promise<void> | null };
+    const a = ownAdapter(h.spawnFn, { turnGate });
+    a.adapter.start({});
+    const turn = collect(a.adapter.send('hello'));
+    await vi.waitFor(() => expect(a.asks).toHaveLength(1), { timeout: 5_000 });
+    await vi.waitFor(() => expect(h.children[0].sent.some((s) => s.msg.method === 'session/cancel')).toBe(true), { timeout: 5_000 });
+    const b = ownAdapter(h.spawnFn, { turnGate });
+    b.adapter.start({});
+    const next = collect(b.adapter.send('again'));
+    await deliberateSleep(150, 'a negative check: the new session must not prompt while the old turn runs');
+    expect(h.texts).toEqual(['hello']);
+    h.answer();
+    await turn;
+    await vi.waitFor(() => expect(h.texts).toEqual(['hello', 'again']), { timeout: 3_000 });
+    h.answer('end_turn');
+    await next;
+    a.adapter.dispose();
+    b.adapter.dispose();
+  });
+
+  it('a timed-out prompt on a resumed session is not sent again on a fresh one', async () => {
+    const h = slowHermes();
+    const { adapter, asks } = ownAdapter(h.spawnFn);
+    adapter.start({ resumeSessionId: 'h-1' });
+    const turn = collect(adapter.send('hello'));
+    await vi.waitFor(() => expect(asks).toHaveLength(1), { timeout: 5_000 });
+    await deliberateSleep(300, 'a negative check: past the prompt timeout, no second prompt may go out');
+    h.answer();
+    expect((await turn).at(-1)).toMatchObject({ type: 'error', message: expect.stringContaining('timed out') });
+    expect(h.texts).toEqual(['hello']);
+    adapter.dispose();
+  });
+
+  it('says a photo was sent, since My Hermes is not shown it', async () => {
+    const h = slowHermes();
+    const { adapter } = ownAdapter(h.spawnFn);
+    adapter.start({ systemPrompt: 'SYSTEM' });
+    const turn = collect(adapter.send('what is wrong here?', { images: [{ mediaType: 'image/png', data: 'AAAA' }] }));
+    await vi.waitFor(() => expect(h.texts).toHaveLength(1), { timeout: 5_000 });
+    expect(h.texts[0]).toMatch(/^what is wrong here\?\n\n\(The owner attached a photo/);
+    expect(h.texts[0]).not.toContain('SYSTEM');
+    h.answer('end_turn');
+    await turn;
+    adapter.dispose();
+  });
+
   it('a stop and a shutdown cancel without a gateway stop', async () => {
     const h = slowHermes();
     const { adapter, policy, asks } = ownAdapter(h.spawnFn);
