@@ -2,7 +2,7 @@ import type { WslTarget } from './wslTarget';
 // === JSON-RPC Protocol Types ===
 
 import type { ResumeBinding } from './agentResume';
-import type { BotBinding } from './bot';
+import type { BotBinding, BotSurfaceNarrowing } from './bot';
 
 export interface RpcRequest {
   id: string;
@@ -272,6 +272,9 @@ export interface RpcContext {
    * a raw envelope field.
    */
   bot?: BotBinding;
+  /** A bot token's narrowed surface (a bot on My Hermes: `room-post`).
+   *  Set by RpcRouter from the token's binding only. */
+  botSurface?: BotSurfaceNarrowing;
   /**
    * #922 — the workspace the PLUGIN HOST derived for this caller, not one the
    * caller named. Set by RpcRouter only from the `hostedWorkspace` dispatch

@@ -79,7 +79,8 @@ export interface FactRef {
  *  main only, in main's words; `detail` may quote a tool's error output and
  *  is shown to the bot as data. */
 export interface BotNoticePayload {
-  topic: 'worker.started' | 'worker.start_failed' | 'worker.report_after_end' | 'worker.paused' | 'worker.connection_lost' | 'approval.decided' | 'pr.merged';
+  /** `wake.refused`: a bot on My Hermes was not sent a wake (myHermesTurn.ts). */
+  topic: 'worker.started' | 'worker.start_failed' | 'worker.report_after_end' | 'worker.paused' | 'worker.connection_lost' | 'approval.decided' | 'pr.merged' | 'wake.refused';
   /** One line, main's words. */
   title: string;
   /** More of main's words (optional). */

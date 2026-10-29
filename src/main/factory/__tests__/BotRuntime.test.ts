@@ -1692,3 +1692,117 @@ describe('conversation marks and removal', () => {
     expect(seen).toEqual([id]);
   });
 });
+
+describe('BotRuntime: a bot on My Hermes', () => {
+  const OWN = { kind: 'acp', command: 'hermes', args: ['acp'], preset: 'hermes', mode: 'own', profile: 'default' };
+  function ownRig(opts: { attended?: boolean; roomClean?: boolean | null } = {}) {
+    const r = rig();
+    const res = r.store.create({ workspaceId: 'ws-1', name: 'Mine', engine: OWN });
+    if (!res.ok) throw new Error(res.message);
+    const notes: Array<{ why: string; threadId?: string }> = [];
+    setBotRuntimePorts({
+      wakeAttended: () => opts.attended ?? true,
+      ownHermesRoomClean: () => (opts.roomClean === undefined ? true : opts.roomClean),
+      noteOwnHermesRefusal: (_p, item, why) => notes.push({ why, ...(item.threadId ? { threadId: item.threadId } : {}) }),
+      readThreadTail: () => ({ cards: [{ title: 'ROOM HISTORY', body: 'earlier words' } as never], truncated: false }),
+    });
+    return { ...r, id: res.bot.id, notes };
+  }
+
+  it('sends the owner\'s message alone, with a leading slash escaped; no room history', async () => {
+    const r = ownRig();
+    r.runtime.wake(r.id, { text: '/tools please', threadId: `dm:${r.id}` });
+    await settle();
+    expect(r.adapters[0].prompts).toEqual(['\\/tools please']);
+    r.adapters[0].end();
+    await settle();
+    r.runtime.wake(r.id, { text: 'hello', threadId: `dm:${r.id}` });
+    await settle();
+    expect(r.adapters[0].prompts[1]).toBe('hello');
+    expect(r.notes).toEqual([]);
+  });
+
+  it('refuses, with a room note and no turn: a message outside its 1:1, an unattended or tainted wake, a room another bot or a guest wrote in, and the Run button', async () => {
+    const cases: Array<[Parameters<typeof ownRig>[0], (r: ReturnType<typeof ownRig>) => void, RegExp]> = [
+      [{}, (r) => { r.runtime.wake(r.id, { text: 'hi', threadId: 'general' }); }, /one to one/],
+      [{ attended: false }, (r) => { r.runtime.wake(r.id, { text: 'hi', threadId: `dm:${r.id}` }); }, /yours alone/],
+      [{ roomClean: false }, (r) => { r.runtime.wake(r.id, { text: 'hi', threadId: `dm:${r.id}` }); }, /Another bot or a guest/],
+      [{ roomClean: null }, (r) => { r.runtime.wake(r.id, { text: 'hi', threadId: `dm:${r.id}` }); }, /could not read this chat/],
+      [{}, (r) => { r.runtime.wake(r.id, { threadId: `dm:${r.id}` }); }, /only your own messages/],
+    ];
+    for (const [opts, wake, why] of cases) {
+      const r = ownRig(opts);
+      wake(r);
+      await settle();
+      expect(r.adapters.flatMap((a) => a.prompts)).toEqual([]);
+      expect(r.notes).toEqual([expect.objectContaining({ why: expect.stringMatching(why) })]);
+      expect(r.store.get(r.id)?.parked).toBeUndefined();
+      // Nothing reached Hermes: the turn is not charged.
+      expect(r.store.usageOf(r.id).turns).toEqual([]);
+      __resetBotRuntimePortsForTesting();
+    }
+  });
+
+  it('a refused wake marks nothing, and only a wake the owner started is answered with a note', async () => {
+    const r = ownRig({ attended: false });
+    r.runtime.wake(r.id, { text: 'hi', threadId: `dm:${r.id}` });
+    await settle();
+    // Every wake reads as tainted here (no taint port), yet the refused one
+    // reached nothing: the conversation stays clean.
+    expect(conversationMarks(r.id)).toEqual({ tainted: false, signedIn: false });
+    expect(r.notes).toHaveLength(1);
+    // Another bot's mention is refused too, logged with no card, so no note
+    // can start a wake of its own.
+    r.queue.enqueue({ botId: r.id, workspaceId: 'ws-1', reason: { kind: 'mention', cardId: 'c-1', handoffId: 'h-m', fromBotId: 'bot-0000000b' }, priority: 1, threadId: `dm:${r.id}` });
+    await settle(10);
+    expect(r.adapters.flatMap((a) => a.prompts)).toEqual([]);
+    expect(r.notes).toHaveLength(1);
+  });
+
+  it('a wake that may carry a signed-in task\'s data is refused', async () => {
+    const r = ownRig();
+    setBotRuntimePorts({ wakeSignedIn: () => 'unknown' });
+    r.runtime.wake(r.id, { text: 'hi', threadId: `dm:${r.id}` });
+    await settle();
+    expect(r.adapters.flatMap((a) => a.prompts)).toEqual([]);
+    expect(r.notes).toEqual([expect.objectContaining({ why: expect.stringMatching(/yours alone/) })]);
+  });
+
+  it('a timed-out turn is interrupted but its session kept (the adapter stays blocked until Hermes ends the turn)', async () => {
+    const timers: Array<{ fn: () => void; at: number }> = [];
+    const r = rig({ mode: 'hang', timers });
+    const res = r.store.create({ workspaceId: 'ws-1', name: 'Mine', engine: OWN, budget: { turnTimeoutMs: 60_000 } });
+    if (!res.ok) throw new Error(res.message);
+    setBotRuntimePorts({ wakeAttended: () => true, ownHermesRoomClean: () => true });
+    const item = r.runtime.wake(res.bot.id, { text: 'slow', threadId: `dm:${res.bot.id}` });
+    await settle();
+    timers.find((t) => t.at === clock + 60_000)?.fn();
+    await settle();
+    expect(r.adapters[0].interrupted).toBe(1);
+    expect(r.adapters[0].disposed).toBe(false);
+    // It may have run part of the owner's message: it is never sent again,
+    // not by a retry and not by the owner's Resume of the parked bot.
+    expect(r.queue.get(item!.id)?.state).toBe('done');
+    for (const t of timers.filter((t) => t.at > clock + 60_000)) t.fn();
+    await settle();
+    r.runtime.resume(res.bot.id);
+    await settle();
+    expect(r.adapters.flatMap((a) => a.prompts)).toEqual(['slow']);
+  });
+
+  it('resumes the saved session', async () => {
+    const r = ownRig();
+    r.runtime.wake(r.id, { text: 'one', threadId: `dm:${r.id}` });
+    await settle();
+    r.adapters[0].end();
+    await settle();
+    expect(r.sessions.get(r.id)?.sessionId).toBe('sess-1');
+    r.runtime.dispose();
+    await Promise.all([r.store.flush(), r.queue.flush(), r.sessions.flush()]);
+    const again = rig({ load: true });
+    setBotRuntimePorts({ wakeAttended: () => true, ownHermesRoomClean: () => true });
+    again.runtime.wake(r.id, { text: 'two', threadId: `dm:${r.id}` });
+    await settle();
+    expect(again.adapters[0].started?.resumeSessionId).toBe('sess-1');
+  });
+});

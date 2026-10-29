@@ -29,7 +29,7 @@
 // terminal_read.
 
 import type { RpcMethod } from './rpc';
-import type { BotBinding, BotRole } from './bot';
+import type { BotBinding, BotRole, BotSurfaceNarrowing } from './bot';
 import { BOT_RPC, isBotRole } from './bot';
 import { FACT_RPC } from './facts';
 import { ASK_PERSON_RPC, HANDOFF_RPC } from './handoff';
@@ -260,12 +260,29 @@ export const ROLE_SURFACES: Readonly<Record<BotRole, BotSurface>> = {
  *  even if a future surface edit listed one. */
 export const BOT_TEARDOWN_DENY: ReadonlySet<string> = COMMANDER_TEARDOWN_DENY;
 
+/** The tools of a `room-post` bot (a bot on My Hermes): `room_post` only. */
+export const ROOM_POST_SURFACE_TOOLS: ReadonlySet<string> = new Set<string>(['room_post']);
+
+/** The methods a `room-post` bot token reaches: its MCP child's handshake
+ *  (BOT_BASE_RPC) and `room.post`. */
+export const ROOM_POST_SURFACE_RPC: ReadonlySet<string> = new Set<string>([...BOT_BASE_RPC, ROOM_RPC.post]);
+
+/** The tools a bot MCP server lists for `narrowing` (`--bot-surface=`):
+ *  the shared surface when absent, `room_post` for `room-post`, and nothing
+ *  for any other value. Pure. */
+export function botSurfaceTools(narrowing: string | undefined): ReadonlySet<string> {
+  if (narrowing === undefined) return SHARED_SURFACE.tools;
+  return narrowing === 'room-post' ? ROOM_POST_SURFACE_TOOLS : new Set<string>();
+}
+
 /** Why RpcRouter refused a bot call, or null when the method is on the bot
- *  surface. The role tag does not change the answer. Pure. */
-export function botSurfaceRefusal(role: BotRole, method: string): 'teardown' | 'surface' | null {
+ *  surface. The role tag does not change the answer; a `room-post` token
+ *  reaches ROOM_POST_SURFACE_RPC only. Pure. */
+export function botSurfaceRefusal(role: BotRole, method: string, narrowing?: BotSurfaceNarrowing): 'teardown' | 'surface' | null {
   if (BOT_TEARDOWN_DENY.has(method)) return 'teardown';
   // A binding whose tag is no role is malformed: nothing passes.
   if (!isBotRole(role) || !SHARED_SURFACE.rpc.has(method)) return 'surface';
+  if (narrowing === 'room-post' && !ROOM_POST_SURFACE_RPC.has(method)) return 'surface';
   return null;
 }
 

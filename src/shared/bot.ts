@@ -384,6 +384,11 @@ export function normalizeBotName(raw: unknown): string | undefined {
 /** What a bot token resolves to. */
 export interface BotBinding { workspaceId: string; botId: string; role: BotRole; }
 
+/** A bot token's narrowed surface. `room-post`: a bot on My Hermes (the
+ *  owner's own Hermes) holds one wmux tool, `room_post`; RpcRouter refuses
+ *  every other method for its token. Absent: the shared bot surface. */
+export type BotSurfaceNarrowing = 'room-post';
+
 const BINDING_WORKSPACE_RE = /^[A-Za-z0-9._-]{1,80}$/;
 
 /** A well-formed binding (non-empty workspace, bot id shape, known role). */
@@ -583,6 +588,9 @@ export const BOT_EVENT = 'bot.event';
 export const BOT_MODE_ARG_PREFIX = '--bot=';
 /** `--bot-token-file=<path>`: where the bot token is read from (once). */
 export const BOT_TOKEN_FILE_ARG_PREFIX = '--bot-token-file=';
+/** `--bot-surface=room-post`: the server registers only `room_post` (the
+ *  token's own narrowing, which main enforces, is the boundary). */
+export const BOT_SURFACE_ARG_PREFIX = '--bot-surface=';
 /** `--bot-token-file-keep`: read the token file without deleting it. For an
  *  agent host that starts the same MCP command more than once per session
  *  (Hermes: one discovery child, then the one its turns use); the spawner
@@ -600,6 +608,12 @@ export function botArgValue(argv: readonly string[]): string | undefined {
   return lastArg(argv, BOT_MODE_ARG_PREFIX);
 }
 
+/** The `--bot-surface=` narrowing (last one wins), or undefined. An unknown
+ *  value narrows to nothing (the caller fails closed). */
+export function botSurfaceArgValue(argv: readonly string[]): string | undefined {
+  return lastArg(argv, BOT_SURFACE_ARG_PREFIX);
+}
+
 /** The `--bot-token-file=` path (last one wins), or undefined. */
 export function botTokenFileArgValue(argv: readonly string[]): string | undefined {
   return lastArg(argv, BOT_TOKEN_FILE_ARG_PREFIX);
@@ -607,6 +621,11 @@ export function botTokenFileArgValue(argv: readonly string[]): string | undefine
 
 /** The MCP server args (after the bundle path) for one bot spawn. The role
  *  is the legacy tag; every bot server lists the same shared surface. */
-export function botMcpArgs(role: BotRole, tokenFile: string, keep = false): string[] {
-  return [`${BOT_MODE_ARG_PREFIX}${role}`, `${BOT_TOKEN_FILE_ARG_PREFIX}${tokenFile}`, ...(keep ? [BOT_TOKEN_FILE_KEEP_ARG] : [])];
+export function botMcpArgs(role: BotRole, tokenFile: string, keep = false, surface?: BotSurfaceNarrowing): string[] {
+  return [
+    `${BOT_MODE_ARG_PREFIX}${role}`,
+    `${BOT_TOKEN_FILE_ARG_PREFIX}${tokenFile}`,
+    ...(keep ? [BOT_TOKEN_FILE_KEEP_ARG] : []),
+    ...(surface ? [`${BOT_SURFACE_ARG_PREFIX}${surface}`] : []),
+  ];
 }

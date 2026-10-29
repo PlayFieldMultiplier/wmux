@@ -154,6 +154,7 @@ import { registerTaskPushRpc } from './pipe/handlers/taskPush.rpc';
 import { registerVerifyRpc } from './pipe/handlers/verify.rpc';
 import { registerFactoryRpc } from './factory/factoryHost';
 import { getHermesHost } from './factory/hermesHost';
+import { shutdownOwnHermesHosts } from './factory/myHermesHost';
 import { getFactorySettings, onFactorySettingsChanged } from './factory/factorySettings';
 // The agent factory's modules register themselves on import.
 import './factory/modules';
@@ -3448,6 +3449,11 @@ app.on('before-quit', async (e) => {
     ]),
     Promise.race([
       getHermesHost().shutdown().catch(() => undefined),
+      new Promise((resolve) => setTimeout(resolve, HERMES_SHUTDOWN_TIMEOUT_MS)),
+    ]),
+    // My Hermes: its turns are cancelled; the owner's gateway is not stopped.
+    Promise.race([
+      shutdownOwnHermesHosts().catch(() => undefined),
       new Promise((resolve) => setTimeout(resolve, HERMES_SHUTDOWN_TIMEOUT_MS)),
     ]),
   ]);

@@ -3,8 +3,12 @@ import { EventEmitter } from 'node:events';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { AcpBrainAdapter, type AcpHermesPolicy } from '../AcpBrainAdapter';
 import { HERMES_MCP_MISSING_LEAD, HERMES_TOOLS_CHANGED_LEAD } from '../../factory/engineError';
-import { commanderTokenWorkspace } from '../commanderTrust';
+import { commanderTokenWorkspace, resolveCommanderToken } from '../commanderTrust';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import type { BrainEvent } from '../BrainAdapter';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 // ── fake ACP agent over fake stdio ──────────────────────────────────────────
 // Mirrors the ClaudeSdkAdapter test philosophy: drive the adapter's REAL wire
@@ -498,6 +502,31 @@ describe('AcpBrainAdapter (Hermes preset)', () => {
     adapter.dispose();
   });
 
+  it('a turn\'s tool ids do not label the next turn\'s tools (the table clears after the tools check too)', async () => {
+    const { policy } = hermesPolicy();
+    let turn = 0;
+    const agent = hermesAgent({
+      onPrompt: (c, id, sessionId) => {
+        turn += 1;
+        const update = (u: Record<string, unknown>) => c.emitLine({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: u } });
+        if (turn === 1) {
+          update({ sessionUpdate: 'tool_call', toolCallId: 't-1', title: 'web_search', kind: 'fetch' });
+          update({ sessionUpdate: 'tool_call_update', toolCallId: 't-1', status: 'completed' });
+        } else {
+          // The agent reuses the id for an unnamed call.
+          update({ sessionUpdate: 'tool_call_update', toolCallId: 't-1', status: 'completed' });
+        }
+        c.emitLine({ jsonrpc: '2.0', id, result: { stopReason: 'end_turn' } });
+      },
+    });
+    const adapter = new AcpBrainAdapter({ spawnSpec: SPEC, newSessionSettleMs: 0, workspaceId: 'ws-1', mcpBundlePath: null, spawnFn: agent.spawnFn, hermes: policy });
+    adapter.start({});
+    expect(await collect(adapter.send('one'))).toContainEqual(expect.objectContaining({ type: 'tool-end', name: 'web_search' }));
+    const second = await collect(adapter.send('two'));
+    expect(second).toContainEqual(expect.objectContaining({ type: 'tool-end', toolId: 't-1', name: 'tool' }));
+    adapter.dispose();
+  });
+
   it('a stop rejects the waiting request, cancels the turn and lets it settle; dispose rejects and adds no prompt', async () => {
     const { policy, asks } = hermesPolicy();
     const agent = hermesAgent({
@@ -598,5 +627,255 @@ describe('AcpBrainAdapter (Hermes preset)', () => {
     expect(await collect(a2.send('go'))).toEqual([{ type: 'error', message: 'not ready' }]);
     expect(spawnFn).not.toHaveBeenCalled();
     a2.dispose();
+  });
+});
+
+describe('AcpBrainAdapter (My Hermes, own mode)', () => {
+  /** A Hermes that holds every prompt and answers a held one only when told
+   *  (a cancel alone does not end the turn). */
+  function slowHermes() {
+    const children: FakeChild[] = [];
+    const held: number[] = [];
+    const texts: string[] = [];
+    const spawnFn = () => {
+      const child = new FakeChild((c, msg) => {
+        const id = msg.id as number;
+        if (msg.method === undefined) return;
+        switch (msg.method) {
+          case 'initialize': c.emitLine({ jsonrpc: '2.0', id, result: { protocolVersion: 1 } }); return;
+          case 'session/new': c.emitLine({ jsonrpc: '2.0', id, result: { sessionId: 'h-1' } }); return;
+          case 'session/load': c.emitLine({ jsonrpc: '2.0', id, result: {} }); return;
+          case 'session/cancel': return;
+          case 'session/prompt': {
+            const params = msg.params as Record<string, unknown>;
+            const text = ((params.prompt as Array<Record<string, unknown>>)[0]?.text ?? '') as string;
+            if (text === '/tools') {
+              c.emitLine({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'h-1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: HERMES_TOOLS_OK } } } });
+              c.emitLine({ jsonrpc: '2.0', id, result: { stopReason: 'end_turn' } });
+              return;
+            }
+            texts.push(text);
+            held.push(id);
+            c.emitLine(permRequest('r-cmd', 'perm-check-1', 'execute', 'rm -rf build'));
+            return;
+          }
+        }
+      });
+      children.push(child);
+      return child as unknown as ChildProcessWithoutNullStreams;
+    };
+    const answer = (stopReason = 'cancelled'): void => {
+      const id = held.shift();
+      if (id !== undefined) children[children.length - 1].emitLine({ jsonrpc: '2.0', id, result: { stopReason } });
+    };
+    return { spawnFn, children, answer, texts, held };
+  }
+  const ownAdapter = (spawnFn: () => ChildProcessWithoutNullStreams, over: Partial<AcpHermesPolicy> = {}, mcpBundlePath: string | null = '/app/mcp/index.js') => {
+    const { policy, asks } = hermesPolicy({ mode: 'own', ...over });
+    const adapter = new AcpBrainAdapter({ spawnSpec: SPEC, newSessionSettleMs: 0, workspaceId: 'ws-1', mcpBundlePath, spawnFn, hermes: policy, promptTimeoutMs: 200 });
+    return { adapter, policy, asks };
+  };
+
+  it('a timed-out turn is cancelled, its request rejected, and the bot blocked until Hermes ends it; no gateway stop', async () => {
+    const h = slowHermes();
+    const { adapter, policy, asks } = ownAdapter(h.spawnFn);
+    adapter.start({ systemPrompt: 'SYSTEM', fleetContext: 'FLEET' });
+    let done = false;
+    const turn = collect(adapter.send('hello')).then((evs) => { done = true; return evs; });
+    await vi.waitFor(() => expect(asks).toHaveLength(1), { timeout: 5_000 });
+    const child = h.children[0];
+    await vi.waitFor(() => expect(child.sent.some((s) => s.msg.method === 'session/cancel')).toBe(true), { timeout: 5_000 });
+    expect(answerOf(child, 'r-cmd')).toEqual({ outcome: 'selected', optionId: 'deny' });
+    expect(asks[0].signal.aborted).toBe(true);
+    // Hermes has not reported the turn's end: the bot is still in it.
+    await deliberateSleep(300, 'a negative check: the turn must not end while Hermes has not answered');
+    expect(done).toBe(false);
+    // A new message waits for that end too.
+    let second = false;
+    const next = collect(adapter.send('again')).then((evs) => { second = true; return evs; });
+    await deliberateSleep(50, 'a negative check: the second message must not reach Hermes yet');
+    expect(h.texts).toEqual(['hello']);
+    h.answer();
+    expect((await turn).at(-1)).toMatchObject({ type: 'error', message: expect.stringContaining('timed out') });
+    // Own mode: the owner's raw message only, no system prompt or fleet context.
+    await vi.waitFor(() => expect(h.texts).toEqual(['hello', 'again']), { timeout: 5_000 });
+    h.answer('end_turn');
+    await next;
+    expect(second).toBe(true);
+    expect(policy.unsettled).not.toHaveBeenCalled();
+    expect(child.killed).toBe(false);
+    adapter.dispose();
+  });
+
+  it('a message stopped while it waits for the last turn\'s end is never sent', async () => {
+    const h = slowHermes();
+    const { adapter, asks } = ownAdapter(h.spawnFn);
+    adapter.start({});
+    const turn = collect(adapter.send('hello'));
+    await vi.waitFor(() => expect(asks).toHaveLength(1), { timeout: 5_000 });
+    const waiting = collect(adapter.send('stopped'));
+    await vi.waitFor(() => expect(h.children[0].sent.some((s) => s.msg.method === 'session/cancel')).toBe(true), { timeout: 5_000 });
+    // The owner stops the bot while 'stopped' waits for the first turn's end.
+    adapter.interrupt();
+    expect(await waiting).toEqual([]);
+    h.answer();
+    await turn;
+    const next = collect(adapter.send('next'));
+    // 'stopped' never reached Hermes, even after the first turn ended.
+    await vi.waitFor(() => expect(h.texts).toEqual(['hello', 'next']), { timeout: 3_000 });
+    h.answer('end_turn');
+    await next;
+    adapter.dispose();
+  });
+
+  it('a turn whose agent wmux kills ends with it, so the bot is not blocked forever', async () => {
+    const h = slowHermes();
+    const { adapter, asks } = ownAdapter(h.spawnFn);
+    adapter.start({});
+    const turn = collect(adapter.send('hello'));
+    await vi.waitFor(() => expect(asks).toHaveLength(1), { timeout: 5_000 });
+    await vi.waitFor(() => expect(h.children[0].sent.some((s) => s.msg.method === 'session/cancel')).toBe(true), { timeout: 5_000 });
+    // A protocol violation: wmux kills the agent; the turn it ran is over.
+    h.children[0].stdout.emit('data', Buffer.from('x'.repeat(8 * 1024 * 1024 + 1)));
+    expect(h.children[0].killed).toBe(true);
+    expect((await turn).at(-1)).toMatchObject({ type: 'error' });
+    // The killed agent's prompt is gone with it.
+    h.held.length = 0;
+    const next = collect(adapter.send('next'));
+    await vi.waitFor(() => expect(h.texts).toEqual(['hello', 'next']), { timeout: 3_000 });
+    h.answer('end_turn');
+    await next;
+    adapter.dispose();
+  });
+
+  it('a prompt the agent never got (it went just before) ends its turn, so the bot is not blocked', async () => {
+    let n = 0;
+    const children: FakeChild[] = [];
+    const spawnFn = () => {
+      n += 1;
+      const first = n === 1;
+      const child = new FakeChild((c, msg) => {
+        const id = msg.id as number;
+        if (msg.method === 'initialize') c.emitLine({ jsonrpc: '2.0', id, result: { protocolVersion: 1 } });
+        else if (msg.method === 'session/new' || msg.method === 'session/load') {
+          c.emitLine({ jsonrpc: '2.0', id, result: { sessionId: 'h-1' } });
+          // The first agent goes right after its session started.
+          if (first) c.kill();
+        } else if (msg.method === 'session/prompt') {
+          const text = (((msg.params as Record<string, unknown>).prompt as Array<Record<string, unknown>>)[0]?.text ?? '') as string;
+          if (text === '/tools') c.emitLine({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'h-1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: HERMES_TOOLS_OK } } } });
+          c.emitLine({ jsonrpc: '2.0', id, result: { stopReason: 'end_turn' } });
+        }
+      });
+      children.push(child);
+      return child as unknown as ChildProcessWithoutNullStreams;
+    };
+    const { adapter } = ownAdapter(spawnFn);
+    adapter.start({});
+    expect((await collect(adapter.send('hello'))).at(-1)).toMatchObject({ type: 'error' });
+    // The next message is not held behind a turn no agent will ever answer.
+    expect((await collect(adapter.send('again'))).at(-1)).toMatchObject({ type: 'turn-end' });
+    adapter.dispose();
+  });
+
+  it('a new adapter of the bot (a new session) waits for the last adapter\'s turn too', async () => {
+    const h = slowHermes();
+    const turnGate = { ended: null as Promise<void> | null };
+    const a = ownAdapter(h.spawnFn, { turnGate });
+    a.adapter.start({});
+    const turn = collect(a.adapter.send('hello'));
+    await vi.waitFor(() => expect(a.asks).toHaveLength(1), { timeout: 5_000 });
+    await vi.waitFor(() => expect(h.children[0].sent.some((s) => s.msg.method === 'session/cancel')).toBe(true), { timeout: 5_000 });
+    const b = ownAdapter(h.spawnFn, { turnGate });
+    b.adapter.start({});
+    const next = collect(b.adapter.send('again'));
+    await deliberateSleep(150, 'a negative check: the new session must not prompt while the old turn runs');
+    expect(h.texts).toEqual(['hello']);
+    h.answer();
+    await turn;
+    await vi.waitFor(() => expect(h.texts).toEqual(['hello', 'again']), { timeout: 3_000 });
+    h.answer('end_turn');
+    await next;
+    a.adapter.dispose();
+    b.adapter.dispose();
+  });
+
+  it('a timed-out prompt on a resumed session is not sent again on a fresh one', async () => {
+    const h = slowHermes();
+    const { adapter, asks } = ownAdapter(h.spawnFn);
+    adapter.start({ resumeSessionId: 'h-1' });
+    const turn = collect(adapter.send('hello'));
+    await vi.waitFor(() => expect(asks).toHaveLength(1), { timeout: 5_000 });
+    await deliberateSleep(300, 'a negative check: past the prompt timeout, no second prompt may go out');
+    h.answer();
+    expect((await turn).at(-1)).toMatchObject({ type: 'error', message: expect.stringContaining('timed out') });
+    expect(h.texts).toEqual(['hello']);
+    adapter.dispose();
+  });
+
+  it('says a photo was sent, since My Hermes is not shown it', async () => {
+    const h = slowHermes();
+    const { adapter } = ownAdapter(h.spawnFn);
+    adapter.start({ systemPrompt: 'SYSTEM' });
+    const turn = collect(adapter.send('what is wrong here?', { images: [{ mediaType: 'image/png', data: 'AAAA' }] }));
+    await vi.waitFor(() => expect(h.texts).toHaveLength(1), { timeout: 5_000 });
+    expect(h.texts[0]).toMatch(/^what is wrong here\?\n\n\(The owner attached a photo/);
+    expect(h.texts[0]).not.toContain('SYSTEM');
+    h.answer('end_turn');
+    await turn;
+    adapter.dispose();
+  });
+
+  it('a stop and a shutdown cancel without a gateway stop', async () => {
+    const h = slowHermes();
+    const { adapter, policy, asks } = ownAdapter(h.spawnFn);
+    adapter.start({});
+    const turn = collect(adapter.send('hello'));
+    await vi.waitFor(() => expect(asks).toHaveLength(1), { timeout: 5_000 });
+    adapter.interrupt();
+    const child = h.children[0];
+    expect(child.sent.some((s) => s.msg.method === 'session/cancel')).toBe(true);
+    expect(answerOf(child, 'r-cmd')).toEqual({ outcome: 'selected', optionId: 'deny' });
+    h.answer();
+    await turn;
+    const turn2 = collect(adapter.send('again'));
+    await vi.waitFor(() => expect(asks).toHaveLength(2), { timeout: 5_000 });
+    const quitting = adapter.shutdown();
+    h.answer();
+    await quitting;
+    await turn2;
+    expect(child.sent.filter((s) => s.msg.method === 'session/cancel').length).toBeGreaterThanOrEqual(2);
+    expect(policy.unsettled).not.toHaveBeenCalled();
+  });
+
+  it('hands the MCP child a room-post token and --bot-surface=room-post', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'acp-own-'));
+    const agent = hermesAgent({});
+    const binding = { workspaceId: 'ws-1', botId: 'bot-0000000a', role: 'lead' as const };
+    const adapter = new AcpBrainAdapter({
+      spawnSpec: SPEC, newSessionSettleMs: 0, mcpBundlePath: '/app/mcp/index.js', spawnFn: agent.spawnFn,
+      bot: { binding, cwd: dir, wmuxDir: dir }, hermes: hermesPolicy({ mode: 'own' }).policy,
+    });
+    try {
+      adapter.start({});
+      await collect(adapter.send('hi'));
+      const sessionNew = agent.children[0].sent.find((s) => s.msg.method === 'session/new');
+      const args = ((sessionNew?.msg.params as Record<string, unknown>).mcpServers as Array<Record<string, unknown>>)[0].args as string[];
+      expect(args).toContain('--bot-surface=room-post');
+      const tokenFile = args.find((a) => a.startsWith('--bot-token-file='))?.slice('--bot-token-file='.length) ?? '';
+      expect(resolveCommanderToken(fs.readFileSync(tokenFile, 'utf8'))?.surface).toBe('room-post');
+    } finally {
+      adapter.dispose();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed without the wmux tools, before any spawn', async () => {
+    const spawnFn = vi.fn(slowHermes().spawnFn);
+    const { adapter } = ownAdapter(spawnFn, {}, null);
+    adapter.start({});
+    expect(await collect(adapter.send('hi'))).toEqual([{ type: 'error', message: expect.stringContaining(HERMES_MCP_MISSING_LEAD) }]);
+    expect(spawnFn).not.toHaveBeenCalled();
+    adapter.dispose();
   });
 });
