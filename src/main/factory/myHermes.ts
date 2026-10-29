@@ -6,16 +6,26 @@
 // whether the profile could serve a bot; it never starts Hermes for one
 // (botEngines.ts refuses the spawn).
 //
-// Everything here is read-only, and separate from wmux's managed Hermes
+// Everything here is static: file reads only, no Hermes process at all. The
+// Hermes CLI is not run, because its startup can write the Hermes home: on
+// macOS and Linux `hermes --version` runs Hermes's update check, which
+// writes `.update_check` in the home, and loading the config runs
+// `ensure_hermes_home`. It is also separate from wmux's managed Hermes
 // (hermesEngine.ts `hermesReadiness` writes wmux's own home and starts a
 // probe session; nothing of it is used here):
 // - the profile folder is listed and checked with fs reads only;
-// - `hermes --version` (Hermes's fast path, which skips its update check)
-//   and `hermes acp --check` (imports only) run with the allowlisted
-//   environment, then `hermes -p <profile> config get --json <key>` for the
-//   few keys that decide readiness. No `config set`, no MCP probe, no gateway
-//   start, no `hermes update`, no `hermes doctor` (it loads the profile's
-//   keys into its own process and can call providers);
+// - the version is read from the pinned install itself
+//   (`~/.hermes/hermes-agent/hermes_cli/__init__.py` `__version__`), the
+//   install `hermesExeOwnedBy` proved the `hermes` on PATH starts;
+// - ACP support is the `acp` package in that install's venv;
+// - the profile's `config.yaml` is parsed (YAML 1.1, as Hermes's PyYAML
+//   reads it) for the few keys that decide readiness. Where a key is
+//   missing, Hermes's own default applies (hermes_cli/config.py
+//   DEFAULT_CONFIG): `model` "" (no model), `approvals.mode` "smart",
+//   `mcp_servers` none, `command_allowlist` [], `platforms` none. A missing
+//   or unreadable file is `unknown`, never a guess. Not seen by a static
+//   read: `${VAR}` references in values, an administrator's managed-scope
+//   overlay, and settings Hermes takes from the process environment;
 // - the profile's `.env` is read for its variable NAMES only (the messaging
 //   tokens that turn a platform on); a value never leaves `envNames`;
 // - `gateway_state.json` is read as wmux reads its own gateway's.
@@ -31,12 +41,12 @@ import {
   HERMES_VERSION_BELOW,
   HERMES_VERSION_MIN,
   hermesVersionStatus,
-  parseHermesVersion,
   type MyHermesNotice,
   type MyHermesNotReadyReason,
   type MyHermesReadiness,
 } from '../../shared/hermesEngine';
-import { hermesEnv, hermesHasModel, readHermesGatewayState, resolveHermesExecutable, runHermes, type HermesRun } from './hermesEngine';
+import YAML from 'yaml';
+import { hermesHasModel, readHermesGatewayState, resolveHermesExecutable } from './hermesEngine';
 
 /** The Hermes root of `home` (the default profile's folder). Pure. */
 export function myHermesRoot(home: string): string {
@@ -186,14 +196,73 @@ export interface MyHermesReadinessDeps {
   home: string;
   platform: NodeJS.Platform;
   resolveExe: () => string | null;
-  run: HermesRun;
-  /** Base environment (default process.env), allowlisted by hermesEnv. */
+  /** Base environment (default process.env), for whoever spawns Hermes later. */
   baseEnv?: NodeJS.ProcessEnv;
   isDir?: (p: string) => boolean;
+  /** A small text file's content, or null when it is missing or unreadable
+   *  (default: fs, at most 1 MiB). */
+  readText?: (file: string) => string | null;
   /** Whether a PID is alive (default: signal 0). */
   pidAlive?: (pid: number) => boolean;
   ownedBy?: (exe: string, root: string) => boolean;
   envNamesOf?: (file: string) => string[];
+}
+
+/** At most this much of a file is read (the version module, config.yaml). */
+const TEXT_MAX_BYTES = 1024 * 1024;
+
+function readTextFile(file: string): string | null {
+  try {
+    const st = fs.statSync(file);
+    if (!st.isFile() || st.size > TEXT_MAX_BYTES) return null;
+    return fs.readFileSync(file, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+/** The install a profile's `hermes` runs (hermesExeOwnedBy pins it). Pure. */
+export function myHermesInstallDir(root: string): string {
+  return path.join(root, 'hermes-agent');
+}
+
+/** `X.Y.Z` (or `X.Y.Z-<pre>`) from an install's `hermes_cli/__init__.py`
+ *  text (`__version__ = "0.22.5"`), or null. Pure. */
+export function parseInstallVersion(text: string): string | null {
+  const m = /^__version__\s*=\s*["'](\d{1,4})\.(\d{1,4})\.(\d{1,6})(?:-([0-9A-Za-z.]{1,40}))?["']\s*$/m.exec(text);
+  return m ? `${Number(m[1])}.${Number(m[2])}.${Number(m[3])}${m[4] ? `-${m[4]}` : ''}` : null;
+}
+
+/** Whether the install's venv holds the `acp` package Hermes's ACP adapter
+ *  imports: true, false, or null when the venv cannot be read. */
+export function installHasAcp(installDir: string, isDirFn: (p: string) => boolean = isDir): boolean | null {
+  const lib = path.join(installDir, 'venv', 'lib');
+  let pythons: string[];
+  try {
+    pythons = fs.readdirSync(lib).filter((n) => /^python3(\.\d+)?$/.test(n));
+  } catch {
+    return null;
+  }
+  if (pythons.length === 0) return null;
+  return pythons.some((py) => isDirFn(path.join(lib, py, 'site-packages', 'acp')));
+}
+
+/** A profile's config.yaml as Hermes's PyYAML reads it (YAML 1.1: `off` is
+ *  false), or null when it is not a mapping. Throws when it does not parse. */
+export function parseHermesConfig(text: string): Record<string, unknown> | null {
+  const doc: unknown = YAML.parse(text, { version: '1.1' });
+  if (doc === null || doc === undefined) return {};
+  return typeof doc === 'object' && !Array.isArray(doc) ? (doc as Record<string, unknown>) : null;
+}
+
+/** `cfg[a][b]…`, or undefined. Pure. */
+function pick(cfg: Record<string, unknown>, ...keys: string[]): unknown {
+  let v: unknown = cfg;
+  for (const k of keys) {
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
+    v = (v as Record<string, unknown>)[k];
+  }
+  return v;
 }
 
 function defaultPidAlive(pid: number): boolean {
@@ -223,27 +292,34 @@ export async function myHermesReadiness(profile: string, deps: MyHermesReadiness
     if (!(deps.ownedBy ?? hermesExeOwnedBy)(exe, root)) {
       return notReady('foreign-install', `The hermes wmux found (${exe}) is not the one installed in ~/.hermes.`);
     }
-    const env = hermesEnv(dir, deps.baseEnv ?? process.env, deps.platform, deps.home);
-    const v = await deps.run(exe, ['--version'], { env, timeoutMs: 20_000 });
-    const version = v.code === 0 ? parseHermesVersion(v.stdout) : null;
-    if (!version) return notReady('unknown', 'Hermes did not report its version.');
+    const readText = deps.readText ?? readTextFile;
+    const install = myHermesInstallDir(root);
+    const versionText = readText(path.join(install, 'hermes_cli', '__init__.py'));
+    const version = versionText === null ? null : parseInstallVersion(versionText);
+    if (!version) return notReady('unknown', 'wmux could not read the version of the Hermes installed in ~/.hermes.');
     const status = hermesVersionStatus(version);
     if (status === 'outdated') return notReady('outdated', `Hermes ${version} is older than ${HERMES_VERSION_MIN}. Update it with \`${HERMES_UPDATE_COMMAND}\`.`, { version });
     if (status === 'unsupported') return notReady('unsupported', `Hermes ${version} is newer than the versions wmux was tested with (below ${HERMES_VERSION_BELOW}).`, { version });
-    const check = await deps.run(exe, ['acp', '--check'], { env, timeoutMs: 30_000 });
-    if (check.code !== 0) return notReady('acp-missing', 'Hermes\'s ACP support is missing (`hermes acp --check` failed).', { version });
+    const acp = installHasAcp(install, deps.isDir ?? isDir);
+    if (acp === null) return notReady('unknown', 'wmux could not read the Hermes install in ~/.hermes.', { version });
+    if (!acp) return notReady('acp-missing', 'Hermes\'s ACP support is missing from its install.', { version });
 
-    // Only `config get`: the profile is read, never written.
-    const get = async (key: string): Promise<unknown> => {
-      const r = await deps.run(exe, ['-p', profile, 'config', 'get', '--json', key], { env, timeoutMs: 20_000 });
-      if (r.code !== 0) {
-        if (/config key not set/i.test(r.stdout + r.stderr)) return undefined;
-        throw new Error(`hermes config get ${key} failed`);
-      }
-      return JSON.parse(r.stdout.trim());
-    };
-    const [model, approvals, mcpServers, allowlist, platforms, gatewayPlatforms] = await Promise.all(
-      ['model', 'approvals.mode', 'mcp_servers', 'command_allowlist', 'platforms', 'gateway.platforms'].map(get));
+    const cfgText = readText(path.join(dir, 'config.yaml'));
+    if (cfgText === null) return notReady('unknown', 'wmux could not read this Hermes profile\'s config.yaml.', { version });
+    let cfg: Record<string, unknown> | null;
+    try {
+      cfg = parseHermesConfig(cfgText);
+    } catch {
+      cfg = null;
+    }
+    if (!cfg) return notReady('unknown', 'wmux could not read this Hermes profile\'s config.yaml.', { version });
+    // Hermes's defaults for a key the file leaves out (DEFAULT_CONFIG).
+    const model = pick(cfg, 'model');
+    const approvals = pick(cfg, 'approvals', 'mode') ?? 'smart';
+    const mcpServers = pick(cfg, 'mcp_servers');
+    const allowlist = pick(cfg, 'command_allowlist');
+    const platforms = pick(cfg, 'platforms');
+    const gatewayPlatforms = pick(cfg, 'gateway', 'platforms');
 
     const notices: MyHermesNotice[] = [];
     const mode = hermesApprovalMode(approvals);
@@ -260,11 +336,11 @@ export async function myHermesReadiness(profile: string, deps: MyHermesReadiness
     if (wmuxServer) {
       return notReady('wmux-mcp', `This Hermes has an MCP server named ${wmuxServer}, which would give the bot wmux's own tools. Remove it from ${profile === MY_HERMES_DEFAULT_PROFILE ? '~/.hermes' : `~/.hermes/profiles/${profile}`}/config.yaml.`, base);
     }
-    const cfg = configuredPlatforms(gatewayPlatforms, platforms);
+    const switches = configuredPlatforms(gatewayPlatforms, platforms);
     const fromEnv = (deps.envNamesOf ?? readEnvNames)(path.join(dir, '.env'))
       .map((n) => HERMES_MESSENGER_TOKEN_ENV[n])
-      .filter((p): p is string => typeof p === 'string' && !cfg.off.includes(p));
-    const messengers = [...new Set([...cfg.on, ...fromEnv])].sort();
+      .filter((p): p is string => typeof p === 'string' && !switches.off.includes(p));
+    const messengers = [...new Set([...switches.on, ...fromEnv])].sort();
     if (messengers.length > 0) {
       return notReady('messengers', `This Hermes connects to ${messengers.join(', ')}.`, { ...base, platforms: messengers });
     }
@@ -279,9 +355,9 @@ export async function myHermesReadiness(profile: string, deps: MyHermesReadiness
   }
 }
 
-/** The app's checks: the real home, PATH and runner. */
+/** The app's checks: the real home and PATH. */
 export function defaultMyHermesDeps(): MyHermesReadinessDeps {
-  return { home: os.homedir(), platform: process.platform, resolveExe: () => resolveHermesExecutable(), run: runHermes };
+  return { home: os.homedir(), platform: process.platform, resolveExe: () => resolveHermesExecutable() };
 }
 
 /** How long an answer serves the picker's re-asks; a Check again is fresh. */
