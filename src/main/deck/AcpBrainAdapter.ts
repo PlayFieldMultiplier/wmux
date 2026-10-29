@@ -89,9 +89,13 @@ export interface AcpBrainAdapterDeps {
  *  the turn), so a stop is a `session/cancel` that waits for the turn to
  *  settle, and an unanswered permission request stays live until answered. */
 export interface AcpHermesPolicy {
+  /** `own`: the owner's own Hermes profile (main/factory/myHermesHost.ts),
+   *  whose gateway wmux never stops. Absent: wmux's managed Hermes. */
+  mode?: 'managed' | 'own';
   /** Before each agent spawn: readiness, the settings read back and the
-   *  gateway check. `env` replaces the agent's whole environment. */
-  prepare(): Promise<{ ok: true; env: Record<string, string>; exe?: string } | { ok: false; message: string }>;
+   *  gateway check. `env` replaces the agent's whole environment; `args`,
+   *  when given, replace spawnSpec's. */
+  prepare(): Promise<{ ok: true; env: Record<string, string>; exe?: string; args?: string[] } | { ok: false; message: string }>;
   /** After session/new or session/load: an error that ends the turn, or null. */
   sessionStarted(): string | null;
   /** The owner's answer to the agent's permission request (an approval
@@ -193,6 +197,8 @@ export class AcpBrainAdapter implements BrainAdapter {
   private hermesEnv: Record<string, string> | null = null;
   /** Hermes: the executable `prepare` verified, spawned instead of spawnSpec's. */
   private hermesExe: string | null = null;
+  /** Hermes: the args `prepare` gave, used instead of spawnSpec's. */
+  private hermesArgs: string[] | null = null;
   /** Hermes: the in-flight session/prompt, so a stop can wait for it. */
   private promptInFlight: Promise<JsonRpcMessage> | null = null;
   /** Hermes: the one permission request waiting for the owner. */
@@ -242,7 +248,7 @@ export class AcpBrainAdapter implements BrainAdapter {
           // Hermes: an allowlisted environment, never main's (hermesEngine.ts hermesEnv).
           ...(this.hermesEnv ? { env: { ...this.hermesEnv } } : this.deps.spawnEnv ? { env: { ...process.env, ...this.deps.spawnEnv } } : {}),
         }));
-    const child = spawnFn(this.hermesExe ?? this.deps.spawnSpec.command, this.deps.spawnSpec.args);
+    const child = spawnFn(this.hermesExe ?? this.deps.spawnSpec.command, this.hermesArgs ?? this.deps.spawnSpec.args);
     this.child = child;
     this._initialized = false;
     this._sessionAttached = false;
@@ -593,6 +599,7 @@ export class AcpBrainAdapter implements BrainAdapter {
       if (!prepared.ok) return { error: prepared.message };
       this.hermesEnv = prepared.env;
       this.hermesExe = prepared.exe ?? null;
+      this.hermesArgs = prepared.args ? [...prepared.args] : null;
     }
     this.ensureChild();
     if (!this._initialized) {
