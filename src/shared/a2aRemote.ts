@@ -113,6 +113,12 @@ export const A2A_FEATURE_IMAGES = 'images.1';
  */
 export const A2A_FEATURE_SPAWN = 'spawn.1';
 /**
+ * The PC takes a Claude conversation another PC continues here
+ * (`shared/a2aContinue.ts`). A requester sends one only to a PC that
+ * advertises it.
+ */
+export const A2A_FEATURE_CONTINUE = 'continue.1';
+/**
  * Stream liveness both ways. A joiner with it acks its stream cursor every
  * `A2A_STREAM_PING_MS` while the stream is up (to a server whose hello lists
  * it); a server whose joiner advertised it ends that stream after

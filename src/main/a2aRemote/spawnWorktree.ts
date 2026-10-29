@@ -55,7 +55,7 @@ export interface SpawnWorktreeOptions {
   env?: Record<string, string>;
 }
 
-interface GitOut { code: number; stdout: string; stderr: string }
+export interface GitOut { code: number; stdout: string; stderr: string }
 
 /** Local or worktree config keys that refuse the repository. */
 const REFUSED_OWN_KEYS = /^(?:filter|include|includeif)\./;
@@ -178,10 +178,10 @@ function branchFor(spawnId: string): string {
   return `wmux/remote/${spawnId}`;
 }
 
-type Git = (args: string[], pre?: string[], at?: string) => Promise<GitOut>;
+export type Git = (args: string[], pre?: string[], at?: string) => Promise<GitOut>;
 
 /** git with the worker hardening, in `repo` (or `at`); `pre`: further `-c` options, after the safe ones. */
-function gitRunner(repo: string, opts: SpawnWorktreeOptions): Git {
+export function gitRunner(repo: string, opts: SpawnWorktreeOptions): Git {
   const env = workerGitEnv({ ...getExecEnv(), ...(opts.env ?? {}) });
   const gitExe = resolveExecutable('git', { env });
   const safe = workerGitSafeArgs(path.resolve(opts.noHooksDir ?? path.join(getWmuxHomeDir(), 'factory', 'no-hooks')));
