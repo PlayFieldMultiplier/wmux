@@ -604,4 +604,14 @@ describe('the owner\'s routines', () => {
     if (!bots.ok) throw new Error('create');
     expect(r.store.runNow(A, bots.routine.id)).toMatchObject({ ok: false, code: 'not_found' });
   });
+
+  it('run now on a one-time routine uses its one run: its slot does not fire it again', () => {
+    const r = rig();
+    const owner = r.store.ownerSet({ botId: A, workspaceId: 'ws-1' }, { botId: A, title: 'Once', prompt: 'Check once.', schedule: { kind: 'once', at: clock + HOUR } });
+    if (!owner.ok) throw new Error('ownerSet');
+    expect(r.store.runNow(A, owner.routine.id)).toMatchObject({ ok: true, routine: { state: 'done' } });
+    clock += HOUR;
+    expect(r.store.tick()).toEqual([]);
+    expect(r.wakes).toHaveLength(1);
+  });
 });

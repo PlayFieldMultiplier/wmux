@@ -556,6 +556,13 @@ export class RoutineStore {
     const now = this.now();
     if (!this.fire(r, bot, now)) return { ok: false, code: 'not_authorized', message: 'the run was not queued' };
     r.lastFiredAt = now;
+    // A one-time routine run now has used its one run: its slot must not fire it again later.
+    if (r.schedule.kind === 'once') {
+      r.state = 'done';
+      r.done = { reason: 'fired', at: now };
+      r.updatedAt = now;
+      delete r.nextDueAt;
+    }
     this.changed([r.botId]);
     return { ok: true, routine: publicCopy(r) };
   }
