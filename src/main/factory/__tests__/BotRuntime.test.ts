@@ -1741,6 +1741,31 @@ describe('BotRuntime: a bot on My Hermes', () => {
     }
   });
 
+  it('a refused wake marks nothing, and only a wake the owner started is answered with a note', async () => {
+    const r = ownRig({ attended: false });
+    r.runtime.wake(r.id, { text: 'hi', threadId: `dm:${r.id}` });
+    await settle();
+    // Every wake reads as tainted here (no taint port), yet the refused one
+    // reached nothing: the conversation stays clean.
+    expect(conversationMarks(r.id)).toEqual({ tainted: false, signedIn: false });
+    expect(r.notes).toHaveLength(1);
+    // Another bot's mention is refused too, logged with no card, so no note
+    // can start a wake of its own.
+    r.queue.enqueue({ botId: r.id, workspaceId: 'ws-1', reason: { kind: 'mention', cardId: 'c-1', handoffId: 'h-m', fromBotId: 'bot-0000000b' }, priority: 1, threadId: `dm:${r.id}` });
+    await settle(10);
+    expect(r.adapters.flatMap((a) => a.prompts)).toEqual([]);
+    expect(r.notes).toHaveLength(1);
+  });
+
+  it('a wake that may carry a signed-in task\'s data is refused', async () => {
+    const r = ownRig();
+    setBotRuntimePorts({ wakeSignedIn: () => 'unknown' });
+    r.runtime.wake(r.id, { text: 'hi', threadId: `dm:${r.id}` });
+    await settle();
+    expect(r.adapters.flatMap((a) => a.prompts)).toEqual([]);
+    expect(r.notes).toEqual([expect.objectContaining({ why: expect.stringMatching(/yours alone/) })]);
+  });
+
   it('a timed-out turn is interrupted but its session kept (the adapter stays blocked until Hermes ends the turn)', async () => {
     const timers: Array<{ fn: () => void; at: number }> = [];
     const r = rig({ mode: 'hang', timers });

@@ -82,6 +82,10 @@ import { runningWakeAttended, wakeTaintExpected } from './wakeTaint';
 import { ownHermesPrompt, ownHermesWakeRefusal } from './myHermesTurn';
 import { conversationMarks, endConversation, holdSignedInForWake, markConversation, releaseWakeHold, setConversationMarkListener, startConversation, type ConversationMarks } from './conversationMarks';
 
+/** The wakes the owner started: a My Hermes bot that is not sent one says
+ *  why in the room (BotRuntime.runTurn). */
+const OWNER_STARTED_WAKES: ReadonlySet<WakeReason['kind']> = new Set<WakeReason['kind']>(['human', 'manual', 'schedule', 'routine']);
+
 // ── sessions.json ───────────────────────────────────────────────────────────
 
 export const BOT_SESSIONS_VERSION = 1 as const;
@@ -1278,29 +1282,29 @@ export class BotRuntime {
         return;
       }
       if (run) run.adapter = s.live.adapter;
-      if (!s.live.ephemeral && this.wakeTainted(item)) markConversation(botId, 'tainted');
-      // What a signed-in task's worker read reaches this conversation now,
-      // a guest's conversation of its own included (a wake of unknown
-      // provenance runs there; its marks are never saved). A wake that
-      // cannot be told runs as signed-in, held for this wake only.
       const signedIn = this.wakeSignedIn(item);
-      if (signedIn === true) markConversation(botId, 'signedIn');
-      else if (signedIn === 'unknown') holdSignedInForWake(botId);
       // My Hermes: the owner's own message only, checked on every turn
-      // (myHermesTurn.ts); a refused wake runs no turn and says why.
+      // (myHermesTurn.ts) before the wake marks the conversation: a refused
+      // wake runs no turn, reaches nothing, and says why.
       let ownPrompt: string | null = null;
       if (own) {
         const why = ownHermesWakeRefusal({
           item,
           botId,
-          attended: (ports.wakeAttended ?? runningWakeAttended)(botId),
+          // A wake that may carry a signed-in task's data is never the
+          // owner's words alone.
+          attended: signedIn === false && (ports.wakeAttended ?? runningWakeAttended)(botId),
           roomClean: ports.ownHermesRoomClean?.(profile) ?? null,
         });
         if (why) {
-          try {
-            ports.noteOwnHermesRefusal?.(profile, item, why);
-          } catch (err) {
-            console.warn(`[factory] the My Hermes note of ${item.id} was not posted: ${String(err)}`);
+          // Only a wake the owner started is answered with a card; one from a
+          // fact, a bot or a guest is logged, so no note can start another.
+          if (OWNER_STARTED_WAKES.has(item.reason.kind)) {
+            try {
+              ports.noteOwnHermesRefusal?.(profile, item, why);
+            } catch (err) {
+              console.warn(`[factory] the My Hermes note of ${item.id} was not posted: ${String(err)}`);
+            }
           }
           console.warn(`[factory] ${item.id} not sent to My Hermes: ${why}`);
           outcome = 'done';
@@ -1308,6 +1312,13 @@ export class BotRuntime {
         }
         ownPrompt = ownHermesPrompt(item.reason.kind === 'human' ? item.reason.text : '');
       }
+      if (!s.live.ephemeral && this.wakeTainted(item)) markConversation(botId, 'tainted');
+      // What a signed-in task's worker read reaches this conversation now,
+      // a guest's conversation of its own included (a wake of unknown
+      // provenance runs there; its marks are never saved). A wake that
+      // cannot be told runs as signed-in, held for this wake only.
+      if (signedIn === true) markConversation(botId, 'signedIn');
+      else if (signedIn === 'unknown') holdSignedInForWake(botId);
       const photos: { images: BrainImage[]; note: string } = own ? { images: [], note: '' } : this.wakePhotos(profile, item);
       const prompt = ownPrompt ?? this.prompt(profile, item, await this.wakeTaskFiles(profile.id, item)) + photos.note;
       const result = await this.drive(s.live, prompt, profile.budget.turnTimeoutMs, () => run?.interrupted === true, run?.stopped, photos.images);
