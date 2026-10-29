@@ -714,6 +714,32 @@ describe('AcpBrainAdapter (My Hermes, own mode)', () => {
     adapter.dispose();
   });
 
+  it.skipIf(process.platform === 'win32')('at the bound wmux stops its agent with what it started, and the bot\'s turn ends only once they are gone', async () => {
+    const h = slowHermes();
+    const withPid = () => Object.assign(h.spawnFn(), { pid: 424242 }) as unknown as ChildProcessWithoutNullStreams;
+    let stopped: () => void = () => undefined;
+    const stops: number[] = [];
+    const stopAgentTree = (pid: number) => new Promise<void>((r) => {
+      stops.push(pid);
+      stopped = r;
+    });
+    const { policy, asks } = hermesPolicy({ mode: 'own' });
+    const adapter = new AcpBrainAdapter({ spawnSpec: SPEC, newSessionSettleMs: 0, workspaceId: 'ws-1', mcpBundlePath: '/app/mcp/index.js', spawnFn: withPid, hermes: policy, promptTimeoutMs: 60_000, ownCancelBoundMs: 200, stopAgentTree });
+    adapter.start({});
+    let done = false;
+    const turn = collect(adapter.send('hello')).then((evs) => { done = true; return evs; });
+    await vi.waitFor(() => expect(asks).toHaveLength(1), { timeout: 5_000 });
+    adapter.interrupt();
+    await vi.waitFor(() => expect(stops).toEqual([424242]), { timeout: 5_000 });
+    // The tree is still being stopped: the turn (and the bot's gate) holds.
+    await deliberateSleep(100, 'a negative check: the turn must not end before the tree is gone');
+    expect(done).toBe(false);
+    stopped();
+    expect((await turn).at(-1)).toMatchObject({ type: 'error' });
+    expect(policy.unsettled).toHaveBeenCalledTimes(1);
+    adapter.dispose();
+  });
+
   it('a timed-out turn Hermes never ends is let go at the bound too, so the bot is not blocked until restart', async () => {
     const h = slowHermes();
     const { adapter, policy, asks } = ownAdapter(h.spawnFn, {}, undefined, { promptTimeoutMs: 200, ownCancelBoundMs: 300 });

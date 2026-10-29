@@ -36,6 +36,7 @@ import { writeBotTokenHandoff, type BotTokenHandoff } from '../factory/botTokenH
 import type { BotBinding } from '../../shared/bot';
 import { COMMANDER_MODE_ARG } from '../../shared/commanderSurface';
 import { getWmuxDir } from '../../daemon/config';
+import { stopAgentTree } from './agentTreeStop';
 import { HERMES_MCP_MISSING_LEAD, HERMES_TOOLS_CHANGED_LEAD } from '../factory/engineError';
 
 // ── wire types (structural subset of ACP; validated defensively) ────────────
@@ -74,6 +75,9 @@ export interface AcpBrainAdapterDeps {
   newSessionSettleMs?: number;
   /** Own mode: the cancel bound override (tests). See OWN_CANCEL_BOUND_MS. */
   ownCancelBoundMs?: number;
+  /** Own mode, POSIX: how the agent and what it started are stopped
+   *  (default agentTreeStop.ts stopAgentTree; tests). */
+  stopAgentTree?: (pid: number) => Promise<void>;
   /** Agent factory bot mode: the session runs as this bot. The token is a
    *  bot token, handed to each MCP child in a fresh 0600 file named in its
    *  args (`--bot=<role>`, `--bot-token-file=`), never in its environment;
@@ -1027,12 +1031,23 @@ export class AcpBrainAdapter implements BrainAdapter {
     // handler ignores a child that is not current), so they end here: else
     // the bot would wait for that turn forever.
     if (this.own() && child) {
-      this.endLateTurns();
-      for (const [, entry] of this.pending) {
-        clearTimeout(entry.timer);
-        entry.resolve({ error: { message: 'ACP agent process exited' } });
-      }
+      const late = [...this.late.values()];
+      this.late.clear();
+      const pending = [...this.pending.values()];
       this.pending.clear();
+      for (const entry of pending) clearTimeout(entry.timer);
+      const end = (): void => {
+        for (const ended of late) ended();
+        for (const entry of pending) entry.resolve({ error: { message: 'ACP agent process exited' } });
+      };
+      // POSIX: the agent's tool commands run in sessions of their own, so the
+      // tree is stopped by its snapshot (agentTreeStop.ts), and the turn ends
+      // (opening the bot's turn gate) only once what it started is gone.
+      if (process.platform !== 'win32' && child.pid && child.exitCode === null) {
+        void (this.deps.stopAgentTree ?? stopAgentTree)(child.pid).catch(() => undefined).then(end);
+        return;
+      }
+      end();
     }
     if (!child || child.exitCode !== null) return;
     try {
