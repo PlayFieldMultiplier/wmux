@@ -116,15 +116,47 @@ export function normalizeBotJob(raw: unknown): string | undefined {
  *  verifies (main/factory/hermesEngine.ts); its `command`/`args` are stored
  *  only so a build without presets keeps the bot (it refuses ACP), and main
  *  ignores them. `mode` is how wmux attaches to Hermes: `managed` (wmux's own
- *  Hermes home and settings), the only mode this version runs; a missing or
- *  unknown mode reads as managed. */
+ *  Hermes home and settings) or `own` ("My Hermes": the owner's own Hermes
+ *  profile, `profile`, never written by wmux). A missing or unknown mode
+ *  reads as managed, so a build that does not know `own` runs such a bot on
+ *  wmux's managed Hermes, never on the owner's. This version stores `own`
+ *  but does not run it (main/factory/botEngines.ts refuses it). */
 export type BotEngine =
   | { kind: 'claude-sdk'; model?: string; effort?: string }
   | { kind: 'claude-pty'; model?: string }
-  | { kind: 'acp'; command: string; args: string[]; preset?: 'hermes'; mode?: HermesAttachMode };
+  | { kind: 'acp'; command: string; args: string[]; preset?: 'hermes'; mode?: HermesAttachMode; profile?: string };
 
 /** How a Hermes bot attaches to Hermes (BotEngine `mode`). */
-export type HermesAttachMode = 'managed';
+export type HermesAttachMode = 'managed' | 'own';
+
+/** The Hermes profile that is `~/.hermes` itself (Hermes's own name for it). */
+export const MY_HERMES_DEFAULT_PROFILE = 'default';
+
+/** A Hermes profile name: `default`, or a named profile's id as Hermes
+ *  checks it (hermes_cli/profiles.py `_PROFILE_ID_RE`). It becomes a path
+ *  component, so nothing else is accepted. */
+export const HERMES_PROFILE_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+
+/** Whether `raw` is a Hermes profile name wmux accepts. Pure. */
+export function isHermesProfileName(raw: unknown): raw is string {
+  return typeof raw === 'string' && HERMES_PROFILE_RE.test(raw);
+}
+
+/** The engine of a bot on the owner's own Hermes profile. Pure. */
+export function myHermesEngine(profile: string = MY_HERMES_DEFAULT_PROFILE): BotEngine {
+  return { kind: 'acp', command: 'hermes', args: ['acp'], preset: 'hermes', mode: 'own', profile };
+}
+
+/** Whether `engine` is the owner's own Hermes ("My Hermes"). Pure. */
+export function isOwnHermesEngine(engine: BotEngine | undefined): boolean {
+  return engine?.kind === 'acp' && engine.preset === 'hermes' && engine.mode === 'own';
+}
+
+/** The Hermes profile an own-mode engine is bound to, else null. Pure. */
+export function ownHermesProfile(engine: BotEngine | undefined): string | null {
+  if (!isOwnHermesEngine(engine) || engine?.kind !== 'acp') return null;
+  return engine.profile ?? MY_HERMES_DEFAULT_PROFILE;
+}
 
 export const DEFAULT_BOT_ENGINE: BotEngine = { kind: 'claude-sdk' };
 
@@ -393,7 +425,7 @@ export interface BotStatus {
     message: string;
     at: number;
     /** A stable cause when the park came from engine_unavailable (engineError.ts). */
-    code?: 'not_installed' | 'not_logged_in' | 'mcp_missing' | 'acp_test_only' | 'unusable' | 'api_key_missing' | 'subscription_refused' | 'hermes_not_ready' | 'hermes_mcp_missing' | 'hermes_tools_changed' | 'other';
+    code?: 'not_installed' | 'not_logged_in' | 'mcp_missing' | 'acp_test_only' | 'unusable' | 'api_key_missing' | 'subscription_refused' | 'hermes_not_ready' | 'hermes_mcp_missing' | 'hermes_tools_changed' | 'my_hermes_unavailable' | 'other';
     /** `not_logged_in` on a registered account (not the default sign-in):
      *  that account's name. */
     account?: string;

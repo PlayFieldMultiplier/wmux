@@ -27,7 +27,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { app } from 'electron';
-import { isHermesEngine, type BotBinding, type BotEngine, type BotProfile } from '../../shared/bot';
+import { isHermesEngine, isOwnHermesEngine, type BotBinding, type BotEngine, type BotProfile } from '../../shared/bot';
 import { CLAUDE_EFFORT_LEVELS, type ClaudeEffort } from '../../shared/claudeModels';
 import { validateBotBrainModel } from '../../shared/fanoutPreset';
 import type { BrainAdapter } from '../deck/BrainAdapter';
@@ -40,7 +40,7 @@ import { recordBotAuthSource, resolveBotClaudeAuth, type BotClaudeAuth } from '.
 import { markBotExecFailed, probeBotExecSupport, type BotExecSupport } from './botExecSandbox';
 import { getFactorySettings } from './factorySettings';
 import { getHermesHost, type HermesHost } from './hermesHost';
-import { HERMES_NOT_READY_LEAD } from './engineError';
+import { HERMES_NOT_READY_LEAD, MY_HERMES_UNAVAILABLE_MESSAGE } from './engineError';
 
 export interface BotEngineSpawnInput {
   profile: BotProfile;
@@ -216,6 +216,9 @@ export function createDefaultBotEngineFactory(deps: DefaultBotEngineDeps = {}): 
         };
       }
       case 'acp': {
+        // My Hermes is stored but not run in this version: refused, never
+        // run on wmux's managed Hermes instead.
+        if (isOwnHermesEngine(engine)) return refuse(MY_HERMES_UNAVAILABLE_MESSAGE);
         if (isHermesEngine(engine)) {
           // Readiness, the settings read back and the gateway check run
           // before each agent spawn (the adapter's `hermes.prepare`); a

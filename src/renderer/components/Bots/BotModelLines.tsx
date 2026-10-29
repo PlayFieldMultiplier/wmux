@@ -19,7 +19,7 @@ import { effortChoicesFor } from '../Settings/SettingsPanel';
 import { CLAUDE_EFFORT_LEVELS } from '../../../shared/claudeModels';
 import { CATALOG_AGENTS, staticClaudeModels, type CatalogModel } from '../../../shared/modelCatalog';
 import { DEFAULT_BOT_WORKER_AGENT } from '../../../shared/botWorkerAgent';
-import { isHermesEngine } from '../../../shared/bot';
+import { isHermesEngine, isOwnHermesEngine } from '../../../shared/bot';
 import type { FactoryBotPort, FactoryBotRow } from '../Room/factoryPorts';
 import { botModelName, brainEngine, unusableBrainModel, workerAgentPick } from './botsProfile';
 
@@ -139,7 +139,8 @@ export function BrainModelLine({ row, t, port }: { row: FactoryBotRow; t: T; por
   const models = useAgentModels(DEFAULT_BOT_WORKER_AGENT);
   const label = t('botsPage.models.thinksOn');
   if (isHermesEngine(engine)) {
-    return <ModelPickLine label={label} testId="bots-profile-brain" shown={t('botsPage.models.hermesModel')} model0="" effort0="" models={[]} efforts={() => []} t={t} />;
+    const shown = isOwnHermesEngine(engine) ? t('botsPage.models.myHermesModel') : t('botsPage.models.hermesModel');
+    return <ModelPickLine label={label} testId="bots-profile-brain" shown={shown} model0="" effort0="" models={[]} efforts={() => []} t={t} />;
   }
   if (engine.kind !== 'claude-sdk') {
     return <ModelPickLine label={label} testId="bots-profile-brain" shown={t('botsPage.models.otherEngine')} model0="" effort0="" models={[]} efforts={() => []} t={t} />;

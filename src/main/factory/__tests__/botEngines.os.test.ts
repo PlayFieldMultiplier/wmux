@@ -11,6 +11,7 @@ import { ACP_TEST_ONLY_MESSAGE, acpEnginesAllowed, runnableDefaultEngine, create
 import { ClaudeSdkAdapter } from '../../deck/ClaudeSdkAdapter';
 import { AcpBrainAdapter } from '../../deck/AcpBrainAdapter';
 import { DEFAULT_BOT_BUDGETS, type BotEngine, type BotProfile } from '../../../shared/bot';
+import { MY_HERMES_UNAVAILABLE_MESSAGE, classifyEngineError } from '../engineError';
 import { buildWakePrompt, fenceData, taskFactId, taskIdOfFactId } from '../wakePrompt';
 
 function input(engine: BotEngine, acpStub = false): BotEngineSpawnInput {
@@ -85,6 +86,14 @@ describe('bot engines', () => {
     if (!d.ok) throw new Error(d.message);
     expect((d.adapter as unknown as { bot?: { commandReviewer?: () => boolean } }).bot?.commandReviewer?.()).toBe(true);
     d.adapter.dispose();
+  });
+
+  it('My Hermes is refused with a plain line, never run on the managed Hermes', () => {
+    const hermes = vi.fn();
+    const r = factory({ hermes: hermes as never })(input({ kind: 'acp', command: 'hermes', args: ['acp'], preset: 'hermes', mode: 'own', profile: 'default' }));
+    expect(r).toEqual({ ok: false, code: 'engine_unavailable', message: MY_HERMES_UNAVAILABLE_MESSAGE });
+    expect(hermes).not.toHaveBeenCalled();
+    expect(classifyEngineError(MY_HERMES_UNAVAILABLE_MESSAGE)).toBe('my_hermes_unavailable');
   });
 
   it('acp builds an AcpBrainAdapter when its command resolves', () => {
