@@ -64,7 +64,7 @@ function adapterOn(host: OwnHermesHost) {
   const adapter = new AcpBrainAdapter({
     spawnSpec: { command: 'hermes', args: ['acp'] },
     newSessionSettleMs: 0,
-    mcpBundlePath: null,
+    mcpBundlePath: '/app/mcp/index.js',
     spawnFn: (cmd, args) => {
       spawns.push({ cmd, args });
       throw new Error('a refused own-mode bot must not spawn');

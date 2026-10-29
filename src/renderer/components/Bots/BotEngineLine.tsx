@@ -316,7 +316,6 @@ export function BotEngineLine({ row, t, port: given }: { row: FactoryBotRow; t: 
         {error && <p role="alert" className="mt-1 text-[11px] text-[var(--accent-red)]">{error}</p>}
         {editable && <MyHermesUnsupportedLine status={my.status} t={t} />}
         {onHermes && port.readiness && <HermesReadinessRow readiness={readiness} checking={checking} recheck={recheck} port={port} t={t} />}
-        {ownProfile !== null && <p data-bots-my-hermes-not-yet className="mt-1 text-[11px] text-[var(--text-muted)]">{t('botsPage.myHermes.notYet')}</p>}
         {ownProfile !== null && port.myHermes && <MyHermesReadinessRow readiness={my.readiness} checking={my.checking} recheck={my.recheck} profile={ownProfile} t={t} />}
         {staged && (
           <div className="mt-1.5">
@@ -361,7 +360,6 @@ export function AddBotEngineRow({ value, onPick, t, port: given, disabled }: {
         <EngineSelect testId="factory-add-bot-engine" label={label} value={value} onPick={onPick} status={my.status} disabled={disabled} t={t} />
         <MyHermesUnsupportedLine status={my.status} t={t} />
         {value.engine === 'hermes' && port.readiness && <HermesReadinessRow readiness={managed.readiness} checking={managed.checking} recheck={managed.recheck} port={port} t={t} />}
-        {ownProfile !== null && <p data-bots-my-hermes-not-yet className="mt-1 text-[11px] text-[var(--text-muted)]">{t('botsPage.myHermes.notYet')}</p>}
         {ownProfile !== null && port.myHermes && <MyHermesReadinessRow readiness={my.readiness} checking={my.checking} recheck={my.recheck} profile={ownProfile} t={t} />}
       </div>
     </div>

@@ -88,11 +88,20 @@ describe('bot engines', () => {
     d.adapter.dispose();
   });
 
-  it('My Hermes is refused with a plain line, never run on the managed Hermes', () => {
+  it('My Hermes runs on its own profile host, never on the managed Hermes; Windows refuses it', () => {
     const hermes = vi.fn();
-    const r = factory({ hermes: hermes as never })(input({ kind: 'acp', command: 'hermes', args: ['acp'], preset: 'hermes', mode: 'own', profile: 'default' }));
-    expect(r).toEqual({ ok: false, code: 'engine_unavailable', message: MY_HERMES_UNAVAILABLE_MESSAGE });
+    const own = { mode: 'own' as const, kind: 'acp' as const, command: 'hermes', args: ['acp'], preset: 'hermes' as const, profile: 'coder' };
+    const policy = { mode: 'own' as const };
+    const host = { profile: 'coder', policyFor: vi.fn(() => policy), register: vi.fn() };
+    const ownHermes = vi.fn(() => host);
+    const r = factory({ hermes: hermes as never, ownHermes: ownHermes as never, platform: 'darwin' })(input(own));
+    expect(r.ok && r.adapter).toBeInstanceOf(AcpBrainAdapter);
+    expect(ownHermes).toHaveBeenCalledWith('coder');
+    expect(host.register).toHaveBeenCalledTimes(1);
     expect(hermes).not.toHaveBeenCalled();
+    if (r.ok) r.adapter.dispose();
+    const win = factory({ hermes: hermes as never, ownHermes: ownHermes as never, platform: 'win32' })(input(own));
+    expect(win).toEqual({ ok: false, code: 'engine_unavailable', message: MY_HERMES_UNAVAILABLE_MESSAGE });
     expect(classifyEngineError(MY_HERMES_UNAVAILABLE_MESSAGE)).toBe('my_hermes_unavailable');
   });
 

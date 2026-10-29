@@ -67,7 +67,6 @@ describe('Bots profile Engine line', () => {
     await flush();
     expect(factoryMyHermes).toHaveBeenLastCalledWith({ profile: 'default' });
     expect(q('[data-bots-my-hermes-readiness="outdated"]')?.textContent).toContain('Update Hermes with `hermes update`');
-    expect(q('[data-bots-my-hermes-not-yet]')).not.toBeNull();
     await act(async () => { q('[data-testid="bots-profile-engine-switch-confirm"]')!.click(); });
     expect(setBotEngine).toHaveBeenCalledWith('bot-0000000a', 'my-hermes', 'default');
     // A no in main's confirm says nothing.

@@ -46,7 +46,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { BOT_TAKES_NO_GUEST_WAKES, botEngineGatesTools, type BotBinding, type BotProfile, type BotQuota, type BotStatus, type BotStatusUsage } from '../../shared/bot';
+import { BOT_TAKES_NO_GUEST_WAKES, botEngineGatesTools, isOwnHermesEngine, type BotBinding, type BotProfile, type BotQuota, type BotStatus, type BotStatusUsage } from '../../shared/bot';
 import type { Fact } from '../../shared/facts';
 import { inAnotherBotsDm, type RoomCard, type ThreadId } from '../../shared/room';
 import { WAKE_LIMITS, type WakeItem, type WakeReason } from '../../shared/wake';
@@ -78,7 +78,8 @@ import {
 } from './wakePrompt';
 import type { WakeQueue } from './wakeQueue';
 import { redactStoredSecrets } from './secretRedaction';
-import { wakeTaintExpected } from './wakeTaint';
+import { runningWakeAttended, wakeTaintExpected } from './wakeTaint';
+import { ownHermesPrompt, ownHermesWakeRefusal } from './myHermesTurn';
 import { conversationMarks, endConversation, holdSignedInForWake, markConversation, releaseWakeHold, setConversationMarkListener, startConversation, type ConversationMarks } from './conversationMarks';
 
 // ── sessions.json ───────────────────────────────────────────────────────────
@@ -328,6 +329,16 @@ export interface BotRuntimePorts {
   /** Whether a wake was started from outside text (wakeTaint.ts
    *  wakeTainted). Absent: every wake counts as tainted. */
   wakeTainted?: (item: WakeItem) => boolean;
+  /** Whether the wake bot `botId` runs now is attended and untainted
+   *  (wakeTaint.ts runningWakeAttended, the default). */
+  wakeAttended?: (botId: string) => boolean;
+  /** A bot on My Hermes: whether its 1:1 chat holds no other bot's and no
+   *  guest's card (myHermesTurn.ts ownHermesRoomClean); null or absent:
+   *  cannot tell, which refuses. */
+  ownHermesRoomClean?: (profile: BotProfile) => boolean | null;
+  /** A bot on My Hermes was not sent a wake: say why in the wake's thread
+   *  (a system card). */
+  noteOwnHermesRefusal?: (profile: BotProfile, item: WakeItem, why: string) => void;
   /** Whether a wake carried a fact of a task that used a signed-in
    *  connection (wakeTaint.ts wakeSignedIn); 'unknown' when that cannot be
    *  told. Absent: none did; that is only so where no taint tracker is part
@@ -1249,6 +1260,7 @@ export class BotRuntime {
     // (LiveSession.ephemeral): the bot's own conversation never holds a
     // guest's words.
     const guestWake = this.wakeGuest(item) !== false;
+    const own = isOwnHermesEngine(profile.engine);
     let ephemeral: LiveSession | null = null;
     try {
       // An engine that cannot hold its tools back takes no such wake (the
@@ -1274,9 +1286,31 @@ export class BotRuntime {
       const signedIn = this.wakeSignedIn(item);
       if (signedIn === true) markConversation(botId, 'signedIn');
       else if (signedIn === 'unknown') holdSignedInForWake(botId);
-      const photos = this.wakePhotos(profile, item);
-      const taskFiles = await this.wakeTaskFiles(profile.id, item);
-      const result = await this.drive(s.live, this.prompt(profile, item, taskFiles) + photos.note, profile.budget.turnTimeoutMs, () => run?.interrupted === true, run?.stopped, photos.images);
+      // My Hermes: the owner's own message only, checked on every turn
+      // (myHermesTurn.ts); a refused wake runs no turn and says why.
+      let ownPrompt: string | null = null;
+      if (own) {
+        const why = ownHermesWakeRefusal({
+          item,
+          botId,
+          attended: (ports.wakeAttended ?? runningWakeAttended)(botId),
+          roomClean: ports.ownHermesRoomClean?.(profile) ?? null,
+        });
+        if (why) {
+          try {
+            ports.noteOwnHermesRefusal?.(profile, item, why);
+          } catch (err) {
+            console.warn(`[factory] the My Hermes note of ${item.id} was not posted: ${String(err)}`);
+          }
+          console.warn(`[factory] ${item.id} not sent to My Hermes: ${why}`);
+          outcome = 'done';
+          return;
+        }
+        ownPrompt = ownHermesPrompt(item.reason.kind === 'human' ? item.reason.text : '');
+      }
+      const photos: { images: BrainImage[]; note: string } = own ? { images: [], note: '' } : this.wakePhotos(profile, item);
+      const prompt = ownPrompt ?? this.prompt(profile, item, await this.wakeTaskFiles(profile.id, item)) + photos.note;
+      const result = await this.drive(s.live, prompt, profile.budget.turnTimeoutMs, () => run?.interrupted === true, run?.stopped, photos.images);
       // A failed turn that reached the model cost as much as a finished one.
       if (result.costUsd !== undefined) {
         const usd = result.costUsd;
@@ -1321,7 +1355,10 @@ export class BotRuntime {
         errorMessage = result.error;
         // A timed-out turn may still be running in the engine: never send the
         // retry into the same session, start a fresh one.
-        if ('timedOut' in result && result.timedOut) this.endSession(botId);
+        // My Hermes: the turn was cancelled and the adapter keeps the bot
+        // blocked until Hermes ends it; the session stays (a new one would
+        // attach to the gateway still running the old turn).
+        if ('timedOut' in result && result.timedOut && !own) this.endSession(botId);
         // A turn that reached none of its wmux tools leaves a conversation
         // full of failed calls; resuming it replays them. The retry starts a
         // new conversation, and the saved one is forgotten.
