@@ -5399,7 +5399,7 @@ export const ko = {
   'botsPage.myHermes.acpMissing': "내 Hermes에 ACP 지원이 없어요(`hermes acp --check` 실패).",
   'botsPage.myHermes.noModel': "내 Hermes에 아직 모델이 설정되지 않았어요. 이렇게 설정하세요:",
   'botsPage.myHermes.approvalsOff': "내 Hermes의 승인이 꺼져 있어서(approvals.mode: off) 모든 명령이 묻지 않고 실행돼요. 봇에 쓰려면 승인을 켜세요.",
-  'botsPage.myHermes.wmuxMcp': "내 Hermes 설정에 wmux MCP 서버가 있어요. 예전 wmux 항목은 봇에게 운영자 수준 도구를 주니 ~/.hermes/config.yaml에서 지우세요.",
+  'botsPage.myHermes.wmuxMcp': "내 Hermes 설정에 wmux MCP 서버가 있어요. 예전 wmux 항목은 봇에게 운영자 수준 도구를 주니 {file}에서 지우세요.",
   'botsPage.myHermes.messengers': "이 Hermes는 {platforms}에 연결돼요. wmux에서 쓰려면 설정에서 끄세요.",
   'botsPage.myHermes.gatewayMessengers': "이 Hermes의 게이트웨이가 {platforms}을(를) 실행 중이에요. wmux에서 쓰려면 게이트웨이를 멈추거나 끄세요.",
   'botsPage.myHermes.unknown': "내 Hermes를 확인하지 못했어요.",

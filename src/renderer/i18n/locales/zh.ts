@@ -4827,7 +4827,7 @@ export const zh = {
   'botsPage.myHermes.acpMissing': "你的 Hermes 缺少 ACP 支持（`hermes acp --check` 失败）。",
   'botsPage.myHermes.noModel': "你的 Hermes 还未设置模型。请用以下命令设置：",
   'botsPage.myHermes.approvalsOff': "你的 Hermes 已关闭审批（approvals.mode: off），所有命令都会不经询问直接运行。请先开启审批再用于机器人。",
-  'botsPage.myHermes.wmuxMcp': "你的 Hermes 配置中有 wmux MCP 服务器。旧的 wmux 条目会给机器人操作员级工具；请从 ~/.hermes/config.yaml 中删除它。",
+  'botsPage.myHermes.wmuxMcp': "你的 Hermes 配置中有 wmux MCP 服务器。旧的 wmux 条目会给机器人操作员级工具；请从 {file} 中删除它。",
   'botsPage.myHermes.messengers': "此 Hermes 连接到 {platforms}；要在 wmux 中使用，请在其配置中关闭它们。",
   'botsPage.myHermes.gatewayMessengers': "此 Hermes 的网关正在运行 {platforms}；要在 wmux 中使用，请停止网关或关闭它们。",
   'botsPage.myHermes.unknown': "wmux 无法检查你的 Hermes。",

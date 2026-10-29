@@ -5850,7 +5850,7 @@ export const pl = {
   'botsPage.myHermes.acpMissing': "Twój Hermes nie ma obsługi ACP (`hermes acp --check` się nie powiodło).",
   'botsPage.myHermes.noModel': "Twój Hermes nie ma jeszcze ustawionego modelu. Ustaw go poleceniem:",
   'botsPage.myHermes.approvalsOff': "Zatwierdzanie jest wyłączone w Twoim Hermesie (approvals.mode: off), więc każde polecenie działałoby bez pytania. Włącz je, aby użyć go dla bota.",
-  'botsPage.myHermes.wmuxMcp': "Konfiguracja Twojego Hermesa ma serwer MCP wmux. Stary wpis wmux dałby botowi narzędzia na poziomie operatora; usuń go z ~/.hermes/config.yaml.",
+  'botsPage.myHermes.wmuxMcp': "Konfiguracja Twojego Hermesa ma serwer MCP wmux. Stary wpis wmux dałby botowi narzędzia na poziomie operatora; usuń go z {file}.",
   'botsPage.myHermes.messengers': "Ten Hermes łączy się z {platforms}; wyłącz je w jego konfiguracji, aby używać go w wmux.",
   'botsPage.myHermes.gatewayMessengers': "Bramka tego Hermesa obsługuje teraz {platforms}; zatrzymaj ją lub wyłącz je, aby używać go w wmux.",
   'botsPage.myHermes.unknown': "wmux nie mógł sprawdzić Twojego Hermesa.",

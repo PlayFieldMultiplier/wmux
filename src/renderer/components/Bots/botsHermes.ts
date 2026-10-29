@@ -12,6 +12,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   HERMES_MCP_FIX_COMMAND,
   HERMES_VERSION_MIN,
+  myHermesProfileLabel,
   type HermesNotReadyReason,
   type HermesReadiness,
   type MyHermesNotice,
@@ -164,7 +165,7 @@ export function myHermesReadinessView(r: MyHermesReadiness, profile = MY_HERMES_
     case 'acp-missing': return { key: 'botsPage.myHermes.acpMissing', vars: {} };
     case 'no-model': return { key: 'botsPage.myHermes.noModel', vars: {}, command: profile === MY_HERMES_DEFAULT_PROFILE ? 'hermes model' : `hermes -p ${profile} model` };
     case 'approvals-off': return { key: 'botsPage.myHermes.approvalsOff', vars: {} };
-    case 'wmux-mcp': return { key: 'botsPage.myHermes.wmuxMcp', vars: {} };
+    case 'wmux-mcp': return { key: 'botsPage.myHermes.wmuxMcp', vars: { file: `${myHermesProfileLabel(profile)}/config.yaml` } };
     case 'messengers': return { key: 'botsPage.myHermes.messengers', vars: { platforms: (r.platforms ?? []).join(', ') || '—' } };
     case 'gateway-messengers': return { key: 'botsPage.myHermes.gatewayMessengers', vars: { platforms: (r.platforms ?? []).join(', ') || '—' } };
     default: return { key: 'botsPage.myHermes.unknown', vars: {} };

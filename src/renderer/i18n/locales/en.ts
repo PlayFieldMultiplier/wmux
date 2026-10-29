@@ -5892,7 +5892,7 @@ export const en = {
   'botsPage.myHermes.acpMissing': "Your Hermes lacks its ACP support (`hermes acp --check` failed).",
   'botsPage.myHermes.noModel': "Your Hermes has no model set yet. Set one with:",
   'botsPage.myHermes.approvalsOff': "Approvals are off in your Hermes (approvals.mode: off), so every command would run without asking. Turn them on to use it for a bot.",
-  'botsPage.myHermes.wmuxMcp': "Your Hermes config has a wmux MCP server. An old wmux entry would give the bot operator-level tools; remove it from ~/.hermes/config.yaml.",
+  'botsPage.myHermes.wmuxMcp': "Your Hermes config has a wmux MCP server. An old wmux entry would give the bot operator-level tools; remove it from {file}.",
   'botsPage.myHermes.messengers': "This Hermes connects to {platforms}; turn those off in its config to use it in wmux.",
   'botsPage.myHermes.gatewayMessengers': "This Hermes's gateway is running {platforms}; stop it or turn those off to use it in wmux.",
   'botsPage.myHermes.unknown': "wmux couldn't check your Hermes.",
