@@ -68,6 +68,8 @@ export interface AcpBrainAdapterDeps {
   spawnFn?: (command: string, args: string[]) => ChildProcessWithoutNullStreams;
   /** Per-request timeout (initialize / session lifecycle), ms. */
   requestTimeoutMs?: number;
+  /** session/prompt timeout override (tests). See PROMPT_TIMEOUT_MS. */
+  promptTimeoutMs?: number;
   /** Fresh-session settle override (tests: 0). See NEW_SESSION_SETTLE_MS. */
   newSessionSettleMs?: number;
   /** Agent factory bot mode: the session runs as this bot. The token is a
@@ -208,6 +210,12 @@ export class AcpBrainAdapter implements BrainAdapter {
   /** Hermes: sessions whose tools were checked after their first turn. */
   private toolsChecked = new Set<string>();
   private shutdownPromise: Promise<void> | null = null;
+  /** Own mode: prompts whose request timed out, still waiting for Hermes's
+   *  answer (id → the end of that turn). */
+  private late = new Map<number | string, () => void>();
+  /** Own mode: the end of the last prompt's turn, until Hermes reports it
+   *  (its answer, or the agent going). A new turn waits for it. */
+  private ownTurnEnded: Promise<void> | null = null;
 
   constructor(deps: AcpBrainAdapterDeps) {
     this.deps = deps;
@@ -218,6 +226,11 @@ export class AcpBrainAdapter implements BrainAdapter {
 
   get sessionId(): string | null {
     return this._sessionId;
+  }
+
+  /** The owner's own Hermes (own mode): the gateway is never stopped. */
+  private own(): boolean {
+    return this.deps.hermes?.mode === 'own';
   }
 
   start(opts: BrainStartOptions): void {
@@ -302,6 +315,7 @@ export class AcpBrainAdapter implements BrainAdapter {
       this.child = null;
       // Its permission request went with it: the card stops waiting.
       this.dropPendingPermission();
+      this.endLateTurns();
       for (const [, entry] of this.pending) {
         clearTimeout(entry.timer);
         entry.resolve({ error: { message: 'ACP agent process exited' } });
@@ -362,6 +376,14 @@ export class AcpBrainAdapter implements BrainAdapter {
         clearTimeout(entry.timer);
         entry.resolve(msg);
       }
+      return;
+    }
+    // Own mode: Hermes answers a prompt whose request had timed out: that
+    // turn has ended now.
+    if (msg.id !== undefined && (msg.result !== undefined || msg.error !== undefined) && this.late.has(msg.id)) {
+      const ended = this.late.get(msg.id);
+      this.late.delete(msg.id);
+      ended?.();
       return;
     }
     // Agent → client REQUEST (has id + method): answer the small surface we
@@ -536,16 +558,35 @@ export class AcpBrainAdapter implements BrainAdapter {
     method: string,
     params: Record<string, unknown>,
     timeoutMs = this.deps.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    /** Own mode, a prompt: told when its turn really ends (the answer, even
+     *  one that arrives after the request timed out, or the agent going). */
+    onEnded?: () => void,
   ): Promise<JsonRpcMessage> {
     const id = this.nextId++;
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
+        if (onEnded) this.late.set(id, onEnded);
         resolve({ error: { message: `ACP request timed out: ${method}` } });
       }, timeoutMs);
-      this.pending.set(id, { resolve, timer });
+      this.pending.set(id, {
+        resolve: (m) => {
+          resolve(m);
+          // Answered in time: the turn ended with it. (A timed-out request is
+          // resolved by its timer, never here.)
+          onEnded?.();
+        },
+        timer,
+      });
       this.writeMessage({ jsonrpc: '2.0', id, method, params });
     });
+  }
+
+  /** Own mode: every turn still waiting for Hermes's answer ends (the agent
+   *  went, or the adapter was disposed). */
+  private endLateTurns(): void {
+    for (const [, ended] of this.late) ended();
+    this.late.clear();
   }
 
   // ── session lifecycle ───────────────────────────────────────────────────
@@ -724,6 +765,16 @@ export class AcpBrainAdapter implements BrainAdapter {
       yield { type: 'error', message: 'commander session disposed' };
       return;
     }
+    const own = this.own();
+    if (own) {
+      // The bot stays blocked while a cancelled turn has not ended in Hermes.
+      if (this.ownTurnEnded) await this.ownTurnEnded;
+      // Fail closed: an own bot answers through its one wmux tool.
+      if (!this.deps.mcpBundlePath) {
+        yield { type: 'error', message: `${HERMES_MCP_MISSING_LEAD} the wmux tools are not available in this build` };
+        return;
+      }
+    }
 
     // One-shot context injection on the first SUCCESSFUL turn (system prompt
     // + fleet snapshot ride the prompt — ACP has no separate system-prompt
@@ -734,7 +785,9 @@ export class AcpBrainAdapter implements BrainAdapter {
     const parts: string[] = [];
     if (this._startOptions.systemPrompt) parts.push(this._startOptions.systemPrompt);
     if (this._startOptions.fleetContext) parts.push(this._startOptions.fleetContext);
-    const prompt = parts.length > 0 ? `${parts.join('\n\n---\n\n')}\n\n---\n\n${text}` : text;
+    // Own mode: the owner's own message, nothing else (BotRuntime's own-mode
+    // input boundary decides which messages reach here).
+    const prompt = own ? rawText : parts.length > 0 ? `${parts.join('\n\n---\n\n')}\n\n---\n\n${text}` : text;
 
     // At most two attempts: the first may run against a disk-seeded session
     // id that the agent no longer knows. Some agents report an unknown id as
@@ -761,10 +814,25 @@ export class AcpBrainAdapter implements BrainAdapter {
         queue.push(ev);
         wake?.();
       };
+      // Own mode: the turn's real end (Hermes's answer, even after the request
+      // timed out, or the agent going) unblocks the bot.
+      let endTurn: (() => void) | undefined;
+      let turnEnded: Promise<void> | null = null;
+      if (own) {
+        const ended = new Promise<void>((r) => {
+          endTurn = r;
+        });
+        turnEnded = ended;
+        this.ownTurnEnded = ended;
+        void ended.then(() => {
+          if (this.ownTurnEnded === ended) this.ownTurnEnded = null;
+        });
+      }
       const promptDone = this.request(
         'session/prompt',
         { sessionId: session, prompt: [{ type: 'text', text: prompt }] },
-        PROMPT_TIMEOUT_MS,
+        this.deps.promptTimeoutMs ?? PROMPT_TIMEOUT_MS,
+        endTurn,
       ).finally(() => {
         wake?.();
       });
@@ -821,7 +889,12 @@ export class AcpBrainAdapter implements BrainAdapter {
           // burning model budget as a zombie — the next turn respawns
           // cleanly (GLM review).
           if (/timed out/i.test(message)) {
-            if (this.deps.hermes) {
+            if (own) {
+              // The owner's gateway is never stopped: cancel the turn and
+              // stay blocked until Hermes reports that it ended.
+              this.cancelOwnTurn();
+              if (turnEnded) await turnEnded;
+            } else if (this.deps.hermes) {
               // The timed-out request can no longer show the turn settling:
               // cancel it, then stop the gateway that may still run it.
               await this.cancelAndSettle();
@@ -909,8 +982,11 @@ export class AcpBrainAdapter implements BrainAdapter {
     }
     // Hermes: the gateway owns the turn. A permission request waiting for the
     // owner is rejected (a cancelled turn would leave it live), and a turn
-    // that does not settle has its gateway stopped.
-    if (this.deps.hermes) {
+    // that does not settle has its gateway stopped (own mode: never; the bot
+    // waits for the turn's end, ownTurnEnded).
+    if (this.own()) {
+      this.rejectPendingPermission();
+    } else if (this.deps.hermes) {
       this.rejectPendingPermission();
       const inFlight = this.promptInFlight;
       if (inFlight) void this.watchSettle(inFlight);
@@ -937,8 +1013,24 @@ export class AcpBrainAdapter implements BrainAdapter {
     }
   }
 
+  /** Own mode: cancel the running turn and reject the request waiting for
+   *  the owner; the gateway keeps running and ends the turn itself. */
+  private cancelOwnTurn(): void {
+    if (this._sessionId) this.writeMessage({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId: this._sessionId } });
+    this.rejectPendingPermission();
+  }
+
   /** Hermes: cancel the running turn, wait for it to settle, then kill the agent. */
   private async cancelAndSettle(): Promise<void> {
+    if (this.own()) {
+      // App quit or dispose: cancel, give the turn the settle time, then let
+      // wmux's own viewer process go. The owner's gateway is not stopped.
+      const ended = this.ownTurnEnded;
+      this.cancelOwnTurn();
+      if (ended) await Promise.race([ended, new Promise((r) => setTimeout(r, HERMES_SETTLE_MS))]);
+      this.killChildTree();
+      return;
+    }
     const inFlight = this.promptInFlight;
     if (this._sessionId) this.writeMessage({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId: this._sessionId } });
     this.rejectPendingPermission();
@@ -995,6 +1087,7 @@ export class AcpBrainAdapter implements BrainAdapter {
           }
           this.pending.clear();
           this.killChildTree();
+          this.endLateTurns();
           this.deps.hermes?.disposed?.(this);
         }
       })();

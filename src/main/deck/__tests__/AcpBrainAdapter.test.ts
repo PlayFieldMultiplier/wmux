@@ -5,6 +5,7 @@ import { AcpBrainAdapter, type AcpHermesPolicy } from '../AcpBrainAdapter';
 import { HERMES_MCP_MISSING_LEAD, HERMES_TOOLS_CHANGED_LEAD } from '../../factory/engineError';
 import { commanderTokenWorkspace } from '../commanderTrust';
 import type { BrainEvent } from '../BrainAdapter';
+import { deliberateSleep } from '../../../test-utils/waitFor';
 
 // ── fake ACP agent over fake stdio ──────────────────────────────────────────
 // Mirrors the ClaudeSdkAdapter test philosophy: drive the adapter's REAL wire
@@ -598,5 +599,113 @@ describe('AcpBrainAdapter (Hermes preset)', () => {
     expect(await collect(a2.send('go'))).toEqual([{ type: 'error', message: 'not ready' }]);
     expect(spawnFn).not.toHaveBeenCalled();
     a2.dispose();
+  });
+});
+
+describe('AcpBrainAdapter (My Hermes, own mode)', () => {
+  /** A Hermes that holds every prompt and answers a held one only when told
+   *  (a cancel alone does not end the turn). */
+  function slowHermes() {
+    const children: FakeChild[] = [];
+    const held: number[] = [];
+    const texts: string[] = [];
+    const spawnFn = () => {
+      const child = new FakeChild((c, msg) => {
+        const id = msg.id as number;
+        if (msg.method === undefined) return;
+        switch (msg.method) {
+          case 'initialize': c.emitLine({ jsonrpc: '2.0', id, result: { protocolVersion: 1 } }); return;
+          case 'session/new': c.emitLine({ jsonrpc: '2.0', id, result: { sessionId: 'h-1' } }); return;
+          case 'session/cancel': return;
+          case 'session/prompt': {
+            const params = msg.params as Record<string, unknown>;
+            const text = ((params.prompt as Array<Record<string, unknown>>)[0]?.text ?? '') as string;
+            if (text === '/tools') {
+              c.emitLine({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'h-1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: HERMES_TOOLS_OK } } } });
+              c.emitLine({ jsonrpc: '2.0', id, result: { stopReason: 'end_turn' } });
+              return;
+            }
+            texts.push(text);
+            held.push(id);
+            c.emitLine(permRequest('r-cmd', 'perm-check-1', 'execute', 'rm -rf build'));
+            return;
+          }
+        }
+      });
+      children.push(child);
+      return child as unknown as ChildProcessWithoutNullStreams;
+    };
+    const answer = (stopReason = 'cancelled'): void => {
+      const id = held.shift();
+      if (id !== undefined) children[children.length - 1].emitLine({ jsonrpc: '2.0', id, result: { stopReason } });
+    };
+    return { spawnFn, children, answer, texts };
+  }
+  const ownAdapter = (spawnFn: () => ChildProcessWithoutNullStreams, over: Partial<AcpHermesPolicy> = {}, mcpBundlePath: string | null = '/app/mcp/index.js') => {
+    const { policy, asks } = hermesPolicy({ mode: 'own', ...over });
+    const adapter = new AcpBrainAdapter({ spawnSpec: SPEC, newSessionSettleMs: 0, workspaceId: 'ws-1', mcpBundlePath, spawnFn, hermes: policy, promptTimeoutMs: 200 });
+    return { adapter, policy, asks };
+  };
+
+  it('a timed-out turn is cancelled, its request rejected, and the bot blocked until Hermes ends it; no gateway stop', async () => {
+    const h = slowHermes();
+    const { adapter, policy, asks } = ownAdapter(h.spawnFn);
+    adapter.start({ systemPrompt: 'SYSTEM', fleetContext: 'FLEET' });
+    let done = false;
+    const turn = collect(adapter.send('hello')).then((evs) => { done = true; return evs; });
+    await vi.waitFor(() => expect(asks).toHaveLength(1), { timeout: 5_000 });
+    const child = h.children[0];
+    await vi.waitFor(() => expect(child.sent.some((s) => s.msg.method === 'session/cancel')).toBe(true), { timeout: 5_000 });
+    expect(answerOf(child, 'r-cmd')).toEqual({ outcome: 'selected', optionId: 'deny' });
+    expect(asks[0].signal.aborted).toBe(true);
+    // Hermes has not reported the turn's end: the bot is still in it.
+    await deliberateSleep(300, 'a negative check: the turn must not end while Hermes has not answered');
+    expect(done).toBe(false);
+    // A new message waits for that end too.
+    let second = false;
+    const next = collect(adapter.send('again')).then((evs) => { second = true; return evs; });
+    await deliberateSleep(50, 'a negative check: the second message must not reach Hermes yet');
+    expect(h.texts).toEqual(['hello']);
+    h.answer();
+    expect((await turn).at(-1)).toMatchObject({ type: 'error', message: expect.stringContaining('timed out') });
+    // Own mode: the owner's raw message only, no system prompt or fleet context.
+    await vi.waitFor(() => expect(h.texts).toEqual(['hello', 'again']), { timeout: 5_000 });
+    h.answer('end_turn');
+    await next;
+    expect(second).toBe(true);
+    expect(policy.unsettled).not.toHaveBeenCalled();
+    expect(child.killed).toBe(false);
+    adapter.dispose();
+  });
+
+  it('a stop and a shutdown cancel without a gateway stop', async () => {
+    const h = slowHermes();
+    const { adapter, policy, asks } = ownAdapter(h.spawnFn);
+    adapter.start({});
+    const turn = collect(adapter.send('hello'));
+    await vi.waitFor(() => expect(asks).toHaveLength(1), { timeout: 5_000 });
+    adapter.interrupt();
+    const child = h.children[0];
+    expect(child.sent.some((s) => s.msg.method === 'session/cancel')).toBe(true);
+    expect(answerOf(child, 'r-cmd')).toEqual({ outcome: 'selected', optionId: 'deny' });
+    h.answer();
+    await turn;
+    const turn2 = collect(adapter.send('again'));
+    await vi.waitFor(() => expect(asks).toHaveLength(2), { timeout: 5_000 });
+    const quitting = adapter.shutdown();
+    h.answer();
+    await quitting;
+    await turn2;
+    expect(child.sent.filter((s) => s.msg.method === 'session/cancel').length).toBeGreaterThanOrEqual(2);
+    expect(policy.unsettled).not.toHaveBeenCalled();
+  });
+
+  it('fails closed without the wmux tools, before any spawn', async () => {
+    const spawnFn = vi.fn(slowHermes().spawnFn);
+    const { adapter } = ownAdapter(spawnFn, {}, null);
+    adapter.start({});
+    expect(await collect(adapter.send('hi'))).toEqual([{ type: 'error', message: expect.stringContaining(HERMES_MCP_MISSING_LEAD) }]);
+    expect(spawnFn).not.toHaveBeenCalled();
+    adapter.dispose();
   });
 });
