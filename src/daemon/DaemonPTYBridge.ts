@@ -124,6 +124,21 @@ const PROGRAM_SETTLED_MESSAGE: Record<'idle' | 'done' | 'error', string> = {
 /** How long an open episode must stay without a transcript turn before noteNoTranscriptTurn closes it. */
 const NO_TRANSCRIPT_TURN_GRACE_MS = 2_000;
 
+/**
+ * A held tail's bytes, oldest first. Once it has dropped some, its oldest kept
+ * byte may be inside a sequence, so it then starts at its first line or
+ * escape sequence, whichever comes first; `lost` counts every byte before.
+ */
+function tailBytes(tail: RingBuffer | null): { bytes: Buffer; lost: number } {
+  const data = tail?.readAll() ?? Buffer.alloc(0);
+  const lost = (tail?.totalBytesWritten ?? 0) - data.length;
+  if (lost === 0) return { bytes: data, lost: 0 };
+  const lf = data.indexOf(0x0a);
+  const esc = data.indexOf(0x1b);
+  const cut = Math.min(lf === -1 ? data.length : lf + 1, esc === -1 ? data.length : esc);
+  return { bytes: data.subarray(cut), lost: lost + cut };
+}
+
 export class DaemonPTYBridge extends EventEmitter {
   private outputInterpreter: OutputInterpreter | null = null;
   private modeTracker: OutputModes | null = null;
@@ -162,13 +177,25 @@ export class DaemonPTYBridge extends EventEmitter {
    * prompt leaves the pane blank until a key is pressed. `null` = not holding.
    *
    * Bounded by keeping the HEAD: once the cap is reached later chunks are not
-   * held (`heldFull`), but what was held stays — the shell's prompt, or a
+   * held for the unmute (`heldFull`), but what was held stays — the shell's prompt, or a
    * TUI's first frame, is printed first, so it is the part worth keeping.
    */
   private heldWhileMuted: string[] | null = null;
   private heldBytes = 0;
   private heldFull = false;
   private static readonly MAX_HELD_BYTES = 256 * 1024;
+  /**
+   * #2855: the output that arrived after the head filled, its newest
+   * MAX_HELD_TAIL_BYTES kept, so a screen read (heldOutput) still sees the
+   * live screen, and the unmute releases it after the head: an unmute at the
+   * same size brings no repaint, and the head alone would leave the pane
+   * showing the start of the output, not the screen the program last drew.
+   * Created at the first chunk past the head; a quarter of the 8 MB session
+   * ring the same output would fill unmuted, and that ring takes nothing
+   * while muted.
+   */
+  private heldTail: RingBuffer | null = null;
+  private static readonly MAX_HELD_TAIL_BYTES = 2 * 1024 * 1024;
   /** The unmuted capture path, set by setupDataForwarding; replays held chunks. */
   private captureChunk: ((data: string, buf: Buffer) => void) | null = null;
 
@@ -2416,6 +2443,10 @@ export class DaemonPTYBridge extends EventEmitter {
             this.heldWhileMuted.push(data);
           }
         }
+        if (this.heldWhileMuted && this.heldFull) {
+          this.heldTail ??= new RingBuffer(DaemonPTYBridge.MAX_HELD_TAIL_BYTES, 'node');
+          this.heldTail.write(buf ?? nativeChunk?.readBytes() ?? Buffer.from(data));
+        }
         return;
       }
       capture(data, buf, nativeChunk);
@@ -2512,8 +2543,9 @@ export class DaemonPTYBridge extends EventEmitter {
    * the caller before forwarding starts) is preserved.
    *
    * Muting starts holding the dropped chunks. Unmuting with `replayHeld`
-   * pushes them through the normal capture path (ring + clients) in order;
-   * without it they are discarded, as before (#1464).
+   * pushes them through the normal capture path (ring + clients) in order,
+   * the head and then the tail (see heldTail); without it they are
+   * discarded, as before (#1464).
    *
    * The replay goes out as LIVE bytes (after the attach flush), so terminal
    * queries in it — DA1/DSR/OSC color probes the program sent at startup and
@@ -2530,14 +2562,17 @@ export class DaemonPTYBridge extends EventEmitter {
     // empty and the storm would otherwise clear the threshold on its own.
     if (this.muted && !muted) this.lastResizeAtMs = Date.now();
     const held = this.heldWhileMuted;
+    // Read before the hold is reset below, which releases the tail.
+    const replay = !muted && opts?.replayHeld && held ? Buffer.concat([Buffer.from(held.join('')), tailBytes(this.heldTail).bytes]) : null;
     if (muted !== this.muted) {
       this.heldWhileMuted = muted ? [] : null;
       this.heldBytes = 0;
       this.heldFull = false;
+      this.dropHeldTail();
     }
     this.muted = muted;
-    if (!muted && opts?.replayHeld && held && held.length > 0 && this.captureChunk) {
-      const buf = stripReplayQuerySequences(Buffer.from(held.join('')));
+    if (replay && replay.length > 0 && this.captureChunk) {
+      const buf = stripReplayQuerySequences(replay);
       if (buf.length > 0) this.captureChunk(buf.toString(), buf);
     }
   }
@@ -2554,6 +2589,12 @@ export class DaemonPTYBridge extends EventEmitter {
     this.heldWhileMuted = [];
     this.heldBytes = 0;
     this.heldFull = false;
+    this.dropHeldTail();
+  }
+
+  private dropHeldTail(): void {
+    this.heldTail?.dispose();
+    this.heldTail = null;
   }
 
   /**
@@ -2581,12 +2622,25 @@ export class DaemonPTYBridge extends EventEmitter {
   }
 
   /**
-   * The output held while muted (see heldWhileMuted), oldest first, and
-   * whether later output was dropped once the cap was reached; null when not
-   * muted. Read-only: the unmute still releases it.
+   * The output that arrived while muted, for a screen read; null when not
+   * muted. `total`: its bytes so far. `read()`: the bytes, oldest first, all of
+   * them while the head and tail (see heldWhileMuted, heldTail) still join up,
+   * else the tail alone (tailBytes), `dropped` being the bytes before it.
+   * Read-only: the unmute still releases the hold.
    */
-  heldOutput(): { data: string; full: boolean } | null {
-    return this.heldWhileMuted ? { data: this.heldWhileMuted.join(''), full: this.heldFull } : null;
+  heldOutput(): { total: number; read(): { data: Buffer; dropped: number } } | null {
+    const head = this.heldWhileMuted;
+    if (!head) return null;
+    const tail = this.heldTail;
+    const headBytes = this.heldBytes;
+    return {
+      total: headBytes + (tail?.totalBytesWritten ?? 0),
+      read: () => {
+        const { bytes, lost } = tailBytes(tail);
+        if (lost === 0) return { data: Buffer.concat([Buffer.from(head.join('')), bytes]), dropped: 0 };
+        return { data: bytes, dropped: headBytes + lost };
+      },
+    };
   }
 
   cleanup(): void {

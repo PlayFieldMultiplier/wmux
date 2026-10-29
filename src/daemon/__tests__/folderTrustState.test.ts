@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { folderTrustRefusal, folderTrustState, type FolderTrustDeps, type FolderTrustSession } from '../folderTrustState';
 import { looksLikeFolderTrustDialog } from '../approvals/approvalKeystrokes';
-import { enqueueSnapshotJob, generateTextSnapshot } from '../HeadlessSnapshot';
+import { enqueueSnapshotJob, generateTextSnapshot, generateTextSnapshotUnqueued } from '../HeadlessSnapshot';
 import { RingBuffer } from '../RingBuffer';
 import { deliberateSleep } from '../../test-utils/waitFor';
 import { DaemonPTYBridge } from '../DaemonPTYBridge';
@@ -215,12 +215,65 @@ describe('folderTrustState', () => {
       expect(await folderTrustState(deps(m.session), 'pty-1')).toBe('clear');
     });
 
-    it("is 'unknown' once the hold overflowed: its newest output, the screen, is missing", async () => {
+    /** `bytes` of a resumed transcript, fed in chunks of about 16 KB. */
+    const transcript = (m: ReturnType<typeof mutedSession>, bytes: number): void => {
+      for (let fed = 0, n = 0; fed < bytes; ) {
+        let chunk = '';
+        while (chunk.length < 16 * 1024) chunk += `⏺ Resumed line ${n++}\r\n`;
+        m.feed(chunk);
+        fed += Buffer.byteLength(chunk);
+      }
+    };
+
+    it("reads the output past the head the unmute replays (#2855): a prompt there is 'clear', a dialog 'trust'", async () => {
+      const idle = mutedSession('');
+      transcript(idle, 300 * 1024);
+      idle.feed('\r\n❯ ');
+      expect(await folderTrustState(deps(idle.session), 'pty-1')).toBe('clear');
       const m = mutedSession('');
+      transcript(m, 300 * 1024);
       m.feed(frame(CLAUDE).toString());
-      m.feed('x'.repeat(300 * 1024));
-      expect(m.bridge.heldOutput()?.full).toBe(true);
-      expect(await folderTrustState(deps(m.session), 'pty-1')).toBe('unknown');
+      expect(await folderTrustState(deps(m.session), 'pty-1')).toBe('trust');
+      // An unmute at the same size brings no repaint: it releases the head and
+      // then the rest, so the pane shows the dialog that is up, not the start
+      // of what the program printed.
+      m.bridge.setMuted(false, { replayHeld: true });
+      const replayed = m.ring.readAll().toString();
+      expect(replayed).toContain('Resumed line 0\r\n');
+      expect(replayed).toContain('Yes, I trust this folder');
+      expect(await folderTrustState(deps(m.session), 'pty-1')).toBe('trust');
+    });
+
+    it('once the hold dropped output, reads its newest output alone, and a cell it never drew stays unknown', async () => {
+      const m = mutedSession('');
+      transcript(m, 3 * 1024 * 1024);
+      expect(m.bridge.heldOutput()?.read().dropped).toBeGreaterThan(0);
+      m.feed('\r\n❯ ');
+      expect(await folderTrustState(deps(m.session), 'pty-1')).toBe('clear');
+      m.feed(frame(CLAUDE).toString());
+      expect(await folderTrustState(deps(m.session), 'pty-1')).toBe('trust');
+      // Shown at the same size: the dialog drawn after the dropped output is replayed too.
+      m.bridge.setMuted(false, { replayHeld: true });
+      expect(await folderTrustState(deps(m.session), 'pty-1')).toBe('trust');
+      // 3 MB that redraw one row by cursor address, with no line feed.
+      const churn = (c: ReturnType<typeof mutedSession>): void => {
+        for (let fed = 0, n = 0; fed < 3 * 1024 * 1024; n++) {
+          const chunk = `\x1b[40;1H${n}`.padEnd(64, ' ').repeat(256);
+          c.feed(chunk);
+          fed += chunk.length;
+        }
+      };
+      // Drawn before the dropped output and never redrawn: not known to be gone.
+      const stale = mutedSession('');
+      stale.feed(frame(CLAUDE).toString());
+      churn(stale);
+      expect(await folderTrustState(deps(stale.session), 'pty-1')).toBe('unknown');
+      // Drawn by cursor address alone, a line feed only after it: read from the tail's first sequence.
+      const addressed = mutedSession('');
+      churn(addressed);
+      addressed.feed(`${frame(CLAUDE).toString()}\x1b[1;1H\n`);
+      expect(await folderTrustState(deps(addressed.session), 'pty-1')).toBe('trust');
+      await enqueueSnapshotJob(async () => undefined);
     });
 
     it("is 'unknown' after a resize while muted dropped the held output", async () => {
@@ -269,6 +322,88 @@ describe('folderTrustState', () => {
       unblock?.();
       await busy;
     }
+  });
+});
+
+describe('a ring that outgrew the tail window, on a pane that went idle (#2855)', () => {
+  // An agent's idle screen, drawn once.
+  const IDLE = [
+    ...Array.from({ length: 30 }, (_, i) => `⏺ Step ${i + 1} done.`),
+    '',
+    `╭${'─'.repeat(118)}╮`,
+    `│ > ${' '.repeat(114)}│`,
+    `╰${'─'.repeat(118)}╯`,
+    '  ? for shortcuts',
+  ];
+  const spinner = (n: number): string => `\x1b[31;1H✻ Thinking… (${n}s · esc to interrupt)\x1b[K`;
+
+  /** `first`, then a long stretch that redraws one row by cell diff, as ConPTY
+   *  and Claude Code do: the rest of the screen is drawn only before the tail. */
+  function longAfter(first: Buffer, redraw: (n: number) => string, end = ''): FolderTrustSession & { ringBuffer: RingBuffer } {
+    const s = session(first, 120, 40);
+    for (let n = 0; s.ringBuffer.totalBytesWritten < 600 * 1024; n++) s.ringBuffer.write(Buffer.from(redraw(n)));
+    s.ringBuffer.write(Buffer.from(end));
+    return s;
+  }
+
+  it("is 'clear' for an idle prompt the tail never redrew, and 'trust' for a dialog it never redrew", async () => {
+    // The turn ends: its spinner row is cleared, the prompt box stays as drawn.
+    const idle = longAfter(frame(IDLE), spinner, '\x1b[31;1H\x1b[K');
+    expect(await folderTrustState(deps(idle), 'pty-1')).toBe('clear');
+    const yes = CLAUDE.findIndex((row) => row.includes('Yes, I trust this folder')) + 1;
+    const dialog = longAfter(frame(CLAUDE), () => `\x1b[${yes};1H   Yes, I trust this folder`);
+    expect(await folderTrustState(deps(dialog), 'pty-1')).toBe('trust');
+  });
+
+  it('a whole-ring read that outlasts the budget answers the next request, until the pane prints again', async () => {
+    const s = longAfter(frame(IDLE), spinner, '\x1b[31;1H\x1b[K');
+    let parses = 0;
+    const snapshot: NonNullable<FolderTrustDeps['snapshot']> = async (req) => {
+      parses++;
+      if (req.initial.length > 512 * 1024) await deliberateSleep(400, 'a whole-ring parse on a slow machine, inside the stub');
+      return generateTextSnapshotUnqueued(req);
+    };
+    // The tail cannot decide, and the whole ring is not read within the budget.
+    expect(await folderTrustState(deps(s, { snapshot }), 'pty-1')).toBe('unknown');
+    // The queue runs in order: this job's turn comes once the whole-ring read is done.
+    await enqueueSnapshotJob(async () => undefined);
+    const parsed = parses;
+    expect(await folderTrustState(deps(s, { snapshot }), 'pty-1')).toBe('clear');
+    expect(parses).toBe(parsed);
+    // New output: the verdict is read again.
+    s.ringBuffer.write(Buffer.from(spinner(0)));
+    expect(await folderTrustState(deps(s, { snapshot }), 'pty-1')).toBe('unknown');
+    expect(parses).toBeGreaterThan(parsed);
+    await enqueueSnapshotJob(async () => undefined);
+  });
+
+  it('a muted session past the head the unmute replays reads its held output whole too', async () => {
+    const m = mutedSession('');
+    m.feed(frame(IDLE).toString());
+    for (let fed = 0, n = 0; fed < 600 * 1024; ) {
+      let chunk = '';
+      while (chunk.length < 16 * 1024) chunk += spinner(n++);
+      m.feed(chunk);
+      fed += Buffer.byteLength(chunk);
+    }
+    m.feed('\x1b[31;1H\x1b[K');
+    expect(await folderTrustState(deps(m.session), 'pty-1')).toBe('clear');
+    await enqueueSnapshotJob(async () => undefined);
+  });
+
+  it('a whole ring that does not parse in its budget is not parsed again until the pane prints', async () => {
+    const s = longAfter(frame(IDLE), spinner, '\x1b[31;1H\x1b[K');
+    let wholeParses = 0;
+    const snapshot: NonNullable<FolderTrustDeps['snapshot']> = async (req) => {
+      if (req.initial.length <= 512 * 1024) return generateTextSnapshotUnqueued(req);
+      wholeParses++;
+      return { ok: false, reason: 'budget' };
+    };
+    expect(await folderTrustState(deps(s, { snapshot }), 'pty-1')).toBe('unknown');
+    await enqueueSnapshotJob(async () => undefined);
+    expect(await folderTrustState(deps(s, { snapshot }), 'pty-1')).toBe('unknown');
+    await enqueueSnapshotJob(async () => undefined);
+    expect(wholeParses).toBe(1);
   });
 });
 

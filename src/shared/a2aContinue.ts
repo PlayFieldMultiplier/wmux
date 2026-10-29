@@ -351,12 +351,14 @@ export function isContinueRepoKey(v: unknown): v is string {
 
 /**
  * A branch name both PCs can hold: ASCII letters, digits and `._/-` only, and
- * none of the forms git refuses (git check-ref-format): a `..`, an empty or
- * dot-led part, a trailing `/` or `.`, a `.lock` part, a leading `-`.
+ * none of the forms git refuses (git check-ref-format --branch): a `..`, an
+ * empty or dot-led part, a trailing `/` or `.`, a `.lock` part, a leading
+ * `-`, or `HEAD` (as the name or its first part).
  */
 export function isContinueBranch(v: unknown): v is string {
   if (typeof v !== 'string' || v.length === 0 || v.length > CONTINUE_BRANCH_MAX) return false;
   if (!/^[A-Za-z0-9._/-]+$/.test(v) || v.startsWith('-') || v.includes('..') || v.endsWith('.')) return false;
+  if (v === 'HEAD' || v.startsWith('HEAD/')) return false;
   return v.split('/').every((part) => part !== '' && !part.startsWith('.') && !part.endsWith('.lock'));
 }
 

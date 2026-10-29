@@ -70,7 +70,7 @@ describe('parseContinueRequest', () => {
 describe('isContinueBranch', () => {
   it('takes a plain branch name and refuses the forms git refuses or another PC could not hold', () => {
     expect(isContinueBranch('feat/a2a-continue_1.2')).toBe(true);
-    for (const b of ['', '-x', 'a..b', 'a/', 'a.', '.a', 'a/.b', 'x.lock', 'a//b', 'a b', 'a~1', 'a^', 'a:b', '브랜치', 'a@{1}']) {
+    for (const b of ['', '-x', 'a..b', 'a/', 'a.', '.a', 'a/.b', 'x.lock', 'a//b', 'a b', 'a~1', 'a^', 'a:b', '브랜치', 'a@{1}', 'HEAD', 'HEAD/x']) {
       expect(isContinueBranch(b)).toBe(false);
     }
   });

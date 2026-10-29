@@ -79,9 +79,10 @@ describe('continuePreflight', () => {
     expect(await check()).toEqual({ ok: false, code: 'unsafe-config' });
   });
 
-  it('refuses a repository with a submodule, and a branch with no commit yet', async () => {
+  it('refuses a repository with a submodule, also from a folder that does not hold it, and a branch with no commit yet', async () => {
     g(repo, 'update-index', '--add', '--cacheinfo', `160000,${g(repo, 'rev-parse', 'HEAD')},vendor/lib`);
     expect(await check()).toEqual({ ok: false, code: 'submodules' });
+    expect(await check(path.join(repo, 'apps', 'site'))).toEqual({ ok: false, code: 'submodules' });
     const fresh = path.join(root, 'fresh');
     g(root, 'init', '-q', '-b', 'main', fresh);
     g(fresh, 'remote', 'add', 'origin', 'https://github.com/acme/fresh.git');
@@ -95,6 +96,17 @@ describe('continuePreflight', () => {
       fs.mkdirSync(dir, { recursive: true });
       expect(await check(dir)).toEqual({ ok: false, code: 'folder-unsupported' });
     }
+  });
+
+  it('refuses a change status does not show: an assume-unchanged or skip-worktree entry', async () => {
+    g(repo, 'update-index', '--assume-unchanged', 'README.md');
+    fs.writeFileSync(path.join(repo, 'README.md'), 'changed\n');
+    expect(await check(path.join(repo, 'apps', 'site'))).toEqual({ ok: false, code: 'hidden-changes' });
+    g(repo, 'update-index', '--no-assume-unchanged', 'README.md');
+    g(repo, 'checkout', '--', 'README.md');
+    expect((await check()).ok).toBe(true);
+    g(repo, 'update-index', '--skip-worktree', 'apps/site/index.txt');
+    expect(await check()).toEqual({ ok: false, code: 'hidden-changes' });
   });
 
   it('refuses a folder outside any repository', async () => {
