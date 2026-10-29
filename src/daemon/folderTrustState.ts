@@ -210,24 +210,19 @@ function readableOutput(session: FolderTrustSession): { mark: number; pane: () =
  * A muted session as the parse sees it, at the size the ring last recorded
  * (no resize while muted), and no longer muted: its ring followed by the
  * output held outside it. Once the hold dropped some, the newest held output
- * is read alone, like a ring that lost its oldest bytes: a cell it does not
- * draw is unknown (withUnknownCells).
+ * is read alone (from its first line or escape sequence, see the bridge's
+ * tailBytes), like a ring that lost its oldest bytes: a cell it does not draw
+ * is unknown (withUnknownCells).
  */
 function withHeldOutput(session: FolderTrustSession, held: { data: Buffer; dropped: number }): RenderablePane {
   const tailOnly = held.dropped > 0;
-  // The tail's oldest bytes may begin inside a sequence: start at the first
-  // line or escape sequence, whichever comes first, so output drawn by cursor
-  // address alone loses only what precedes its first sequence.
-  const lf = held.data.indexOf(0x0a);
-  const esc = held.data.indexOf(0x1b);
-  const cut = tailOnly ? Math.min(lf === -1 ? held.data.length : lf + 1, esc === -1 ? held.data.length : esc) : 0;
-  const data = held.data.subarray(cut);
+  const { data } = held;
   return {
     meta: session.meta,
     ptyProcess: session.ptyProcess,
     ringBuffer: {
       readAllWithGeometry: () => {
-        if (tailOnly) return { data, geometry: undefined, writtenAt: session.ringBuffer.totalBytesWritten + held.dropped + held.data.length };
+        if (tailOnly) return { data, geometry: undefined, writtenAt: session.ringBuffer.totalBytesWritten + held.dropped + data.length };
         const ring = session.ringBuffer.readAllWithGeometry();
         return { ...ring, data: Buffer.concat([ring.data, data]), writtenAt: ring.writtenAt + data.length };
       },

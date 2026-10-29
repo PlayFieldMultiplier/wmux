@@ -124,6 +124,21 @@ const PROGRAM_SETTLED_MESSAGE: Record<'idle' | 'done' | 'error', string> = {
 /** How long an open episode must stay without a transcript turn before noteNoTranscriptTurn closes it. */
 const NO_TRANSCRIPT_TURN_GRACE_MS = 2_000;
 
+/**
+ * A held tail's bytes, oldest first. Once it has dropped some, its oldest kept
+ * byte may be inside a sequence, so it then starts at its first line or
+ * escape sequence, whichever comes first; `lost` counts every byte before.
+ */
+function tailBytes(tail: RingBuffer | null): { bytes: Buffer; lost: number } {
+  const data = tail?.readAll() ?? Buffer.alloc(0);
+  const lost = (tail?.totalBytesWritten ?? 0) - data.length;
+  if (lost === 0) return { bytes: data, lost: 0 };
+  const lf = data.indexOf(0x0a);
+  const esc = data.indexOf(0x1b);
+  const cut = Math.min(lf === -1 ? data.length : lf + 1, esc === -1 ? data.length : esc);
+  return { bytes: data.subarray(cut), lost: lost + cut };
+}
+
 export class DaemonPTYBridge extends EventEmitter {
   private outputInterpreter: OutputInterpreter | null = null;
   private modeTracker: OutputModes | null = null;
@@ -172,9 +187,12 @@ export class DaemonPTYBridge extends EventEmitter {
   /**
    * #2855: the output that arrived after the head filled, its newest
    * MAX_HELD_TAIL_BYTES kept, so a screen read (heldOutput) still sees the
-   * live screen. The unmute never releases it. Created at the first chunk past
-   * the head; a quarter of the 8 MB session ring the same output would fill
-   * unmuted, and that ring takes nothing while muted.
+   * live screen, and the unmute releases it after the head: an unmute at the
+   * same size brings no repaint, and the head alone would leave the pane
+   * showing the start of the output, not the screen the program last drew.
+   * Created at the first chunk past the head; a quarter of the 8 MB session
+   * ring the same output would fill unmuted, and that ring takes nothing
+   * while muted.
    */
   private heldTail: RingBuffer | null = null;
   private static readonly MAX_HELD_TAIL_BYTES = 2 * 1024 * 1024;
@@ -2525,8 +2543,9 @@ export class DaemonPTYBridge extends EventEmitter {
    * the caller before forwarding starts) is preserved.
    *
    * Muting starts holding the dropped chunks. Unmuting with `replayHeld`
-   * pushes them through the normal capture path (ring + clients) in order;
-   * without it they are discarded, as before (#1464).
+   * pushes them through the normal capture path (ring + clients) in order,
+   * the head and then the tail (see heldTail); without it they are
+   * discarded, as before (#1464).
    *
    * The replay goes out as LIVE bytes (after the attach flush), so terminal
    * queries in it — DA1/DSR/OSC color probes the program sent at startup and
@@ -2543,6 +2562,8 @@ export class DaemonPTYBridge extends EventEmitter {
     // empty and the storm would otherwise clear the threshold on its own.
     if (this.muted && !muted) this.lastResizeAtMs = Date.now();
     const held = this.heldWhileMuted;
+    // Read before the hold is reset below, which releases the tail.
+    const replay = !muted && opts?.replayHeld && held ? Buffer.concat([Buffer.from(held.join('')), tailBytes(this.heldTail).bytes]) : null;
     if (muted !== this.muted) {
       this.heldWhileMuted = muted ? [] : null;
       this.heldBytes = 0;
@@ -2550,8 +2571,8 @@ export class DaemonPTYBridge extends EventEmitter {
       this.dropHeldTail();
     }
     this.muted = muted;
-    if (!muted && opts?.replayHeld && held && held.length > 0 && this.captureChunk) {
-      const buf = stripReplayQuerySequences(Buffer.from(held.join('')));
+    if (replay && replay.length > 0 && this.captureChunk) {
+      const buf = stripReplayQuerySequences(replay);
       if (buf.length > 0) this.captureChunk(buf.toString(), buf);
     }
   }
@@ -2604,8 +2625,8 @@ export class DaemonPTYBridge extends EventEmitter {
    * The output that arrived while muted, for a screen read; null when not
    * muted. `total`: its bytes so far. `read()`: the bytes, oldest first, all of
    * them while the head and tail (see heldWhileMuted, heldTail) still join up,
-   * else the tail alone, `dropped` being the bytes before it. Read-only: the
-   * unmute still releases the head.
+   * else the tail alone (tailBytes), `dropped` being the bytes before it.
+   * Read-only: the unmute still releases the hold.
    */
   heldOutput(): { total: number; read(): { data: Buffer; dropped: number } } | null {
     const head = this.heldWhileMuted;
@@ -2615,10 +2636,9 @@ export class DaemonPTYBridge extends EventEmitter {
     return {
       total: headBytes + (tail?.totalBytesWritten ?? 0),
       read: () => {
-        const tailData = tail?.readAll() ?? Buffer.alloc(0);
-        const dropped = (tail?.totalBytesWritten ?? 0) - tailData.length;
-        if (dropped === 0) return { data: Buffer.concat([Buffer.from(head.join('')), tailData]), dropped: 0 };
-        return { data: tailData, dropped: headBytes + dropped };
+        const { bytes, lost } = tailBytes(tail);
+        if (lost === 0) return { data: Buffer.concat([Buffer.from(head.join('')), bytes]), dropped: 0 };
+        return { data: bytes, dropped: headBytes + lost };
       },
     };
   }

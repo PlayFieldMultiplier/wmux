@@ -234,12 +234,14 @@ describe('folderTrustState', () => {
       transcript(m, 300 * 1024);
       m.feed(frame(CLAUDE).toString());
       expect(await folderTrustState(deps(m.session), 'pty-1')).toBe('trust');
-      // The unmute still releases the head alone.
+      // An unmute at the same size brings no repaint: it releases the head and
+      // then the rest, so the pane shows the dialog that is up, not the start
+      // of what the program printed.
       m.bridge.setMuted(false, { replayHeld: true });
-      const replayed = m.ring.readAll();
-      expect(replayed.toString()).toContain('Resumed line 0\r\n');
-      expect(replayed.toString()).not.toContain('Yes, I trust this folder');
-      expect(replayed.length).toBeLessThanOrEqual(256 * 1024);
+      const replayed = m.ring.readAll().toString();
+      expect(replayed).toContain('Resumed line 0\r\n');
+      expect(replayed).toContain('Yes, I trust this folder');
+      expect(await folderTrustState(deps(m.session), 'pty-1')).toBe('trust');
     });
 
     it('once the hold dropped output, reads its newest output alone, and a cell it never drew stays unknown', async () => {
@@ -249,6 +251,9 @@ describe('folderTrustState', () => {
       m.feed('\r\n❯ ');
       expect(await folderTrustState(deps(m.session), 'pty-1')).toBe('clear');
       m.feed(frame(CLAUDE).toString());
+      expect(await folderTrustState(deps(m.session), 'pty-1')).toBe('trust');
+      // Shown at the same size: the dialog drawn after the dropped output is replayed too.
+      m.bridge.setMuted(false, { replayHeld: true });
       expect(await folderTrustState(deps(m.session), 'pty-1')).toBe('trust');
       // 3 MB that redraw one row by cursor address, with no line feed.
       const churn = (c: ReturnType<typeof mutedSession>): void => {
