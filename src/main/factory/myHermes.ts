@@ -47,6 +47,7 @@ import {
 } from '../../shared/hermesEngine';
 import YAML from 'yaml';
 import { hermesHasModel, readHermesGatewayState, resolveHermesExecutable } from './hermesEngine';
+import { parseInstallVersion } from './hermesInstall';
 
 /** The Hermes root of `home` (the default profile's folder). Pure. */
 export function myHermesRoot(home: string): string {
@@ -226,12 +227,7 @@ export function myHermesInstallDir(root: string): string {
   return path.join(root, 'hermes-agent');
 }
 
-/** `X.Y.Z` (or `X.Y.Z-<pre>`) from an install's `hermes_cli/__init__.py`
- *  text (`__version__ = "0.22.5"`), or null. Pure. */
-export function parseInstallVersion(text: string): string | null {
-  const m = /^__version__\s*=\s*["'](\d{1,4})\.(\d{1,4})\.(\d{1,6})(?:-([0-9A-Za-z.]{1,40}))?["']\s*$/m.exec(text);
-  return m ? `${Number(m[1])}.${Number(m[2])}.${Number(m[3])}${m[4] ? `-${m[4]}` : ''}` : null;
-}
+export { parseInstallVersion };
 
 /** Whether the install's venv holds the `acp` package Hermes's ACP adapter
  *  imports: true, false, or null when the venv cannot be read. */

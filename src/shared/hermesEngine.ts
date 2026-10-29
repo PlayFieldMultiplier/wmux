@@ -36,17 +36,11 @@ export interface HermesReadiness {
   ready: boolean;
   /** Set when `ready` is false. */
   reason?: HermesNotReadyReason;
-  /** The version `hermes --version` reported, when one was read. */
+  /** The version of the install `hermes` runs, when it was read (from the
+   *  install's files, main/factory/hermesInstall.ts). */
   version?: string;
   /** A short, credential-free detail for the owner (English). */
   message?: string;
-}
-
-/** `X.Y.Z` (or `X.Y.Z-<pre>`) from `hermes --version` output ("Hermes Agent
- *  v0.22.5 (…)"), or null. Pure. */
-export function parseHermesVersion(text: string): string | null {
-  const m = /\bv?(\d{1,4})\.(\d{1,4})\.(\d{1,6})(?:-([0-9A-Za-z.]{1,40}))?\b/.exec(typeof text === 'string' ? text.split('\n', 1)[0] : '');
-  return m ? `${Number(m[1])}.${Number(m[2])}.${Number(m[3])}${m[4] ? `-${m[4]}` : ''}` : null;
 }
 
 function compareVersions(a: string, b: string): number {
