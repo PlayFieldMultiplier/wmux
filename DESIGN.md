@@ -534,16 +534,19 @@ status bar badges, `fleet_triage` or the phone's sidebar.
 - **Bot settings page (owner decision 2026-10-29):** a bot's settings
   live only here; Settings › Bots keeps what applies to every bot, and its
   bot rows are link rows ("Open settings ›") that open this page on the
-  Bots page. Every way in (the chat's ⚙ and pill, Settings › Bots, any
+  Bots page (while the bots are off the rows are disabled under one muted
+  line, "Turn Bots on to change a bot's settings.", since the Bots page is
+  not there). Every way in (the chat's ⚙ and pill, Settings › Bots, any
   "Open settings") goes through one store ask (`openBotSettings`), so it
   lands on the page, never at the top of Settings. The page takes the
   chat's place in the body (the list stays; under the 800px layout it opens
   over the list as the chat does): the 44px header band with a round back
   button (back to the chat, shown in both layouts) and "<name> · Settings";
-  a status strip under one `--stroke` hairline — on/off and presence
-  ("On · Idle", "Resuming…" after Resume as before), the first thing that
-  keeps it from new work (Today's blocker, below), today's turns of the
-  cap, worker time, workers in use, then one secondary: Pause, Resume
+  a status strip under one `--stroke` hairline — one state: Off, "Paused
+  by you", Parked (with what parked it beside it), or On with its presence
+  ("On · Idle", "On · Resuming…" after Resume as before); the first thing
+  that keeps it from new work (Today's blocker, below); today's turns of
+  the cap, worker time, workers in use; then the page's one Pause, Resume
   while parked, or Turn on while off; then a 180px section nav (32px rows,
   the selected one on `--selection` with the look's `--select-ring`;
   hidden under a 640px page) beside the scrolling sections, each a 13px
@@ -562,9 +565,9 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   connection with a checkbox, ticked where its workers get it; a tick acts
   at once; Add connection opens the dialog scoped to this bot; the recipe's
   checklist), **Memory & skills** (Skills and Memory, below), **What it can
-  do** (by engine, below) and **Pause or remove** (Pause, New
-  conversation, Stop, Delete bot, below). A My Hermes bot shows no Work or
-  Connections, and no worker limits in the strip or Limits: it starts no wmux workers and holds only `room_post`, so it
+  do** (by engine, below) and **Stop or remove** (New conversation, Stop,
+  Delete bot, below). A My Hermes bot shows no Work or
+  Connections, and no worker limits in the strip, Limits or Today: it starts no wmux workers and holds only `room_post`, so it
   can do two things — talk with the owner in its own chat, and use its
   Hermes's own tools under that Hermes's approvals — with one muted line
   on what it cannot (start wmux workers, read other chats or rooms,
@@ -580,7 +583,8 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   conversation, Stop and Delete bot. Leaving with unsaved changes (back,
   another conversation, another bot's page) replaces the footer with an
   InlineConfirm ("Leave without saving? …", Discard changes as the primary,
-  Keep editing); a rail page change leaves without asking. While the bots
+  Keep editing); leaving the Bots page itself (the rail, a shortcut,
+  Settings) asks the same way, through the route's leave guard. While the bots
   are off the form is disabled and only Delete bot acts.
   Today (owner decision 2026-10-16): the status strip names the first
   thing that keeps the bot from new work — paused by the owner,
@@ -608,8 +612,8 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   shows a warning and opens empty. Workers run on: a native Select of
   Default (the presets' engine) and each installed engine with a worker
   guard, one not installed listed but disabled.
-  Pause is a neutral secondary that parks the bot at once, with no confirm;
-  New conversation a neutral secondary that asks in place ("Start a new
+  Pause (in the strip) is a neutral secondary that parks the bot at once,
+  with no confirm; New conversation a neutral secondary that asks in place ("Start a new
   conversation with <name>? It forgets this conversation; its open cards
   and queued work stay."), its result a toast, mid-turn saying to stop the
   turn first; Stop — the bot's turn and its workers — a destructive

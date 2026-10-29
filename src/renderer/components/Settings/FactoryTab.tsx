@@ -791,6 +791,9 @@ function BotsList({ t, port, workspaceName, workspaces, defaultWorkspaceId, pick
   }
   return (
     <div data-testid="factory-bots" className="flex flex-col">
+      {/* A bot's page is on the Bots page, which is there only while the
+          bots are on: off, the rows say so instead of leading nowhere. */}
+      {botsOff && <p data-testid="factory-bots-off-note" className="px-3 pt-2 text-[11px] text-[var(--text-muted)]">{t('botsPage.settings.botsOffNote')}</p>}
       {groups.map(([ws, list]) => (
         <div key={ws} className="flex flex-col">
           <div className="px-3 pt-2 text-[11px] text-[var(--text-muted)]">{workspaceName(ws)}</div>
@@ -801,8 +804,9 @@ function BotsList({ t, port, workspaceName, workspaces, defaultWorkspaceId, pick
               data-testid="factory-bot-row"
               data-bot-id={row.bot.id}
               aria-label={t('botsPage.settings.open', { name: row.bot.name })}
+              disabled={botsOff}
               onClick={() => useStore.getState().openBotSettings(row.bot.id)}
-              className={`group w-full flex items-center gap-2 px-3 py-1.5 text-left text-[13px] rounded-[6px] hover:bg-[var(--hover-fill)] ${FOCUS_RING}`}
+              className={`group w-full flex items-center gap-2 px-3 py-1.5 text-left text-[13px] rounded-[6px] hover:bg-[var(--hover-fill)] disabled:hover:bg-transparent ${FOCUS_RING}`}
             >
               <BotAvatar bot={row.bot} size={20} t={t} />
               <PresenceDot presence={botPresence(row)} />
@@ -810,7 +814,7 @@ function BotsList({ t, port, workspaceName, workspaces, defaultWorkspaceId, pick
               <span className="text-[11px] text-[var(--text-muted)]">{botKindLabel(row.bot, t)}</span>
               {botModelSummary(row.bot, t) && <span data-testid="factory-bot-models" className="min-w-0 truncate text-[11px] text-[var(--text-muted)]">{botModelSummary(row.bot, t)}</span>}
               {!row.bot.enabled && <span className="text-[11px] text-[var(--text-muted)]">{t('settings.factory.botOff')}</span>}
-              <span className="ml-auto shrink-0 text-[11px] text-[var(--text-muted)] group-hover:text-[var(--text-main)]">{t('botsPage.settings.openRow')}</span>
+              {!botsOff && <span className="ml-auto shrink-0 text-[11px] text-[var(--text-muted)] group-hover:text-[var(--text-main)]">{t('botsPage.settings.openRow')}</span>}
             </button>
           ))}
         </div>

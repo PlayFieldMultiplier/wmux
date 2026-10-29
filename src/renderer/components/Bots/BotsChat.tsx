@@ -74,7 +74,7 @@ import { RoomCard, useIdLabels } from '../Room/RoomCard';
 import { CardAnswers, useWorkspaceNames } from '../Room/CardAnswers';
 import { ApprovePendingChip } from '../Room/ApprovalAnswers';
 import { pendingForChip, useApprovals } from '../Room/approvalsStore';
-import { PresenceDot, botActionsFor, botPresence } from '../Room/BotChips';
+import { PresenceDot, botPresence } from '../Room/BotChips';
 import { deliveryLine, deliveryTaken, photoPostParams, roomLead, roomPostParams, sentFrom, useMentionPicks, type SentTo } from '../Room/RoomComposer';
 import { actorLabel, cardApplyTaskId, cardResumeTaskId, cardTone, isRefThread, kindLabel, onceText, ownerCardText, planTextWithNames, requestTitles, threadLabel, threadRef, type IdLabels, type RoomActorView } from '../Room/roomFormat';
 import { botTemplate, delegatesFromConversation, type BotPresence, type BotProfile as BotProfileData } from '../../../shared/bot';
@@ -1849,20 +1849,17 @@ function emptyGroupLine(bots: readonly FactoryBotRow[], t: T): string {
   return lead ? t('botsPage.group.emptyLead', { name: lead.bot.name }) : t('botsPage.group.empty');
 }
 
-/** Pause (park the bot: it takes no new turn until Resume; reversible, so
- *  no confirm) beside Stop (the bot's turn and its workers, after an inline
- *  confirm; the result is a toast) and New conversation (the bot's next
- *  wake starts clean, after an inline confirm; refused mid-turn). A paused
- *  bot shows Resume in Today. */
-export function StopBot({ row, port, act, t }: { row: FactoryBotRow; port: BotsStopPort; act?: FactoryBotPort['act']; t: T }) {
+/** Stop (the bot's turn and its workers, after an inline confirm; the
+ *  result is a toast) beside New conversation (the bot's next wake starts
+ *  clean, after an inline confirm; refused mid-turn). Pause is the settings
+ *  page's status strip. */
+export function StopBot({ row, port, t }: { row: FactoryBotRow; port: BotsStopPort; t: T }) {
   const [confirming, setConfirming] = useState(false);
   const [confirmingNew, setConfirmingNew] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [pausing, setPausing] = useState(false);
   const stopBot = port.stopBot;
   const newConversation = port.newConversation;
-  const canPause = !!act && row.bot.enabled && botActionsFor(row).park;
-  if (!stopBot && !canPause && !newConversation) return null;
+  if (!stopBot && !newConversation) return null;
   const run = async () => {
     if (!stopBot) return;
     setBusy(true);
@@ -1894,18 +1891,6 @@ export function StopBot({ row, port, act, t }: { row: FactoryBotRow; port: BotsS
       setBusy(false);
     }
   };
-  const pause = async () => {
-    if (!act) return;
-    setPausing(true);
-    try {
-      const r = await act('park', row.bot.id);
-      if (!r.ok) useStore.getState().pushToast({ message: t('room.bot.actionFailed', { name: row.bot.name, reason: r.message ?? '' }), level: 'error' });
-    } catch (err) {
-      useStore.getState().pushToast({ message: t('room.bot.actionFailed', { name: row.bot.name, reason: err instanceof Error ? err.message : String(err) }), level: 'error' });
-    } finally {
-      setPausing(false);
-    }
-  };
   return (
     <div data-bots-stop-bot={row.bot.id}>
       {confirming && stopBot ? (
@@ -1930,7 +1915,6 @@ export function StopBot({ row, port, act, t }: { row: FactoryBotRow; port: BotsS
         />
       ) : (
         <div className="flex items-center gap-2">
-          {canPause && <Button size="sm" variant="secondary" data-testid="bots-pause-bot" disabled={pausing} onClick={() => void pause()}>{t('botsPage.pause.bot')}</Button>}
           {newConversation && <Button size="sm" variant="secondary" data-testid="bots-new-conversation" onClick={() => setConfirmingNew(true)}>{t('botsPage.newConversation')}</Button>}
           {stopBot && <Button size="sm" variant="destructive" data-testid="bots-stop-bot" onClick={() => setConfirming(true)}>{t('botsPage.stop.bot')}</Button>}
         </div>

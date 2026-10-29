@@ -542,6 +542,22 @@ describe('Add bot: the repository comes from the workspace', () => {
     expect(repoKeyLabel('ghe.example.com/acme/app')).toBe('ghe.example.com/acme/app');
   });
 
+  it('with the bots off, Settings › Bots rows are disabled under one line saying why, never a dead click', async () => {
+    const rows = [row('bot-00000001', { role: 'lead' })];
+    const botPort: FactoryBotPort = { available: true, list: async () => rows, subscribe: () => () => undefined, act: async () => ({ ok: true }) };
+    const off = { version: 1 as const, enabled: false, hqWorkspaceId: null, trustedAuthors: [], morning: { hour: 9, weekdays: [1] }, verifierOnOwnerPrs: true, defaultEngine: { kind: 'claude-sdk' as const }, globalConcurrentBots: 2, laneAutoMerge: false, laneDailyCap: 5 };
+    const settingsPort = { available: true, get: vi.fn(async () => off), set: vi.fn(async () => off) };
+    const openBotSettings = vi.fn();
+    useStore.setState({ workspaces: [{ id: WS, name: 'App' }] as never, activeWorkspaceId: WS, openBotSettings });
+    await render(createElement(FactoryTab, { settingsPort, botPort }));
+    expect(q('factory-bots-off-note')?.textContent).toBe(en['botsPage.settings.botsOffNote']);
+    const link = q<HTMLButtonElement>('factory-bot-row')!;
+    expect(link.disabled).toBe(true);
+    expect(link.textContent).not.toContain(en['botsPage.settings.openRow']);
+    await act(async () => link.click());
+    expect(openBotSettings).not.toHaveBeenCalled();
+  });
+
   it('Settings › Bots lists each bot as a link to its own settings page, with no editor of its own', async () => {
     const rows = [row('bot-00000001', { role: 'lead', repo: APP, job: 'Old job.' })];
     const update = vi.fn(async () => ({ ok: true }));

@@ -220,8 +220,9 @@ function EngineErrorCard({
  *  to name the slots held by tasks in review. `underStrip`: shown under the
  *  settings page's status strip, which names the blocker and holds the one
  *  Resume, so it shows neither (an engine error's Fix still resumes once its
- *  cause is gone). */
-export function BotToday({ row, act, liveWorkers, t, underStrip = false }: { row: FactoryBotRow; act?: FactoryBotPort['act']; liveWorkers?: number; t: T; underStrip?: boolean }) {
+ *  cause is gone). `workerLines` false: no worker time or slots (a bot that
+ *  starts no wmux workers). */
+export function BotToday({ row, act, liveWorkers, t, underStrip = false, workerLines = true }: { row: FactoryBotRow; act?: FactoryBotPort['act']; liveWorkers?: number; t: T; underStrip?: boolean; workerLines?: boolean }) {
   const [busy, setBusy] = useState(false);
   const view = botBudgetView(row.bot, row.status);
   if (!view.blocker && view.lines.length === 0) return null;
@@ -270,7 +271,7 @@ export function BotToday({ row, act, liveWorkers, t, underStrip = false }: { row
           </div>
         )}
         <ul className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-2 gap-y-0.5 tabular-nums">
-          {view.lines.map((line) => {
+          {view.lines.filter((line) => workerLines || (line.id !== 'workerTime' && line.id !== 'workers')).map((line) => {
             const { label, value } = lineText(line, t, liveWorkers, inReviewTasks);
             return (
               <li

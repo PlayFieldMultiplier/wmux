@@ -88,6 +88,11 @@ export interface RoomSlice {
   botsSettingsAsk: { botId: string; nonce: number } | null;
   /** Open the Bots page on a bot's settings page. */
   openBotSettings: (botId: string) => void;
+  /** Set by the Bots page while it is up: asked before the route leaves
+   *  it; true when it holds the leave (unsaved settings) and will call `go`
+   *  once the owner discards them. */
+  botsLeaveGuard: ((go: () => void) => boolean) | null;
+  setBotsLeaveGuard: (guard: ((go: () => void) => boolean) | null) => void;
   /** When each Bots conversation was last read to its newest card, this
    *  session (memory only; absent: BOTS_SESSION_START). A list row counts
    *  the bot messages after it as unread; a chat opened again marks the
@@ -166,6 +171,7 @@ export const createRoomSlice: StateCreator<StoreState, [['zustand/immer', never]
   roomPreviewCards: {},
   botsWorkerPanel: null,
   botsSettingsAsk: null,
+  botsLeaveGuard: null,
   botsSeenAt: {},
   setRoomActors: (actors) => set((s) => { s.roomActors = actors; }),
   setRoomPreviewCard: (workspaceId, threadId, card) => set((s) => {
@@ -219,6 +225,7 @@ export const createRoomSlice: StateCreator<StoreState, [['zustand/immer', never]
     return true;
   },
   setBotsWorkerPanel: (panel) => set((s) => { s.botsWorkerPanel = panel; }),
+  setBotsLeaveGuard: (guard) => set((s) => { s.botsLeaveGuard = guard; }),
   openBotSettings: (botId) => {
     set((s) => { s.botsSettingsAsk = { botId, nonce: Date.now() }; });
     get().openBotsPage();

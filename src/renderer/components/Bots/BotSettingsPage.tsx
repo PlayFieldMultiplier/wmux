@@ -79,6 +79,14 @@ function StatusStrip({ row, port, t, readOnly }: { row: FactoryBotRow; port: Bot
   const view = botBudgetView(row.bot, row.status);
   const actions = botActionsFor(row);
   const presence = useProfilePresenceKey(row);
+  // One state: off, paused by the owner, parked (its reason beside it), or
+  // on with its presence.
+  const parked = !!row.bot.parked || botPresence(row) === 'parked';
+  const pausedByOwner = row.bot.enabled && row.bot.parked?.reason === 'human';
+  const state = !row.bot.enabled ? t('botsPage.profile.off')
+    : pausedByOwner ? t('botsPage.settings.pausedByYou')
+      : parked ? t('room.presence.parked')
+        : `${t('botsPage.profile.on')} · ${t(presence)}`;
   const fail = (reason: string) => useStore.getState().pushToast({ message: t('room.bot.actionFailed', { name: row.bot.name, reason }), level: 'error' });
   const run = async (go: () => Promise<{ ok: boolean; message?: string }>) => {
     setBusy(true);
@@ -109,9 +117,9 @@ function StatusStrip({ row, port, t, readOnly }: { row: FactoryBotRow; port: Bot
     <div className="wmux-bot-settings-strip" role="status">
       <span className="flex items-center gap-1.5 font-[var(--title-weight,500)] text-[var(--text-main)]">
         <PresenceDot presence={botPresence(row)} />
-        <span data-bots-profile-state>{`${t(row.bot.enabled ? 'botsPage.profile.on' : 'botsPage.profile.off')} · ${t(presence)}`}</span>
+        <span data-bots-profile-state {...(pausedByOwner ? { 'data-bots-profile-parked': 'human' } : {})}>{state}</span>
       </span>
-      {view.blocker && (
+      {view.blocker && !pausedByOwner && (
         <span
           data-bots-profile-blocker={view.blocker.kind}
           {...(row.bot.parked ? { 'data-bots-profile-parked': row.bot.parked.reason } : {})}
@@ -391,7 +399,7 @@ export function BotSettingsPage({ row, workers, workspaceName, t, port, stopPort
                 </Row>
               ))}
               {!ownHermes && <p className="text-[11px] text-[var(--text-muted)]">{t('botsPage.settings.limitsHint', { time: workerTimeText(Math.round(bot.budget.maxWorkerHoursPerDay * 60), t) })}</p>}
-              <BotToday row={row} act={update ? port.act : undefined} liveWorkers={workers.length} t={t} underStrip />
+              <BotToday row={row} act={update ? port.act : undefined} liveWorkers={workers.length} t={t} underStrip workerLines={!ownHermes} />
             </section>
 
             {sections.includes('connections') && (
@@ -420,7 +428,7 @@ export function BotSettingsPage({ row, workers, workspaceName, t, port, stopPort
 
           <section data-bot-settings-section="remove" className="wmux-bot-settings-section wmux-bot-settings-form">
             {heading('remove')}
-            {!readOnly && <StopBot row={row} port={stopPort} {...(port.act ? { act: port.act } : {})} t={t} />}
+            {!readOnly && <StopBot row={row} port={stopPort} t={t} />}
             <DeleteBot row={row} port={port.remove ? { remove: port.remove } : undefined} t={t} />
           </section>
         </div>

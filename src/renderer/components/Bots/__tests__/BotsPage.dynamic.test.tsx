@@ -794,7 +794,8 @@ describe('Bots page', () => {
     await act(async () => { q<HTMLButtonElement>('[data-testid="bots-pause-bot"]')!.click(); });
     expect(act$).toHaveBeenCalledWith('park', LEAD);
     for (let i = 0; i < 5 && !q('[data-bots-profile-parked="human"]'); i++) await act(async () => { await Promise.resolve(); });
-    expect(q('[data-bots-profile-parked="human"]')?.textContent).toContain('Paused by you.');
+    // One state, not "On · Parked".
+    expect(q('[data-bots-profile-parked="human"]')?.textContent).toBe('Paused by you');
     expect(container.querySelectorAll('[data-testid="bots-resume-bot"]')).toHaveLength(1);
     expect(q('[data-testid="bots-pause-bot"]')).toBeNull();
   });
@@ -816,7 +817,7 @@ describe('Bots page', () => {
     await render(<BotsPage />);
     act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
     act(() => q('[data-bots-pill]')!.click());
-    expect(q('[data-bots-profile-state]')?.textContent).toBe('On · Parked');
+    expect(q('[data-bots-profile-state]')?.textContent).toBe('Paused by you');
     await act(async () => { q<HTMLButtonElement>('[data-testid="bots-resume-bot"]')!.click(); });
     for (let i = 0; i < 5 && q('[data-bots-profile-state]')?.textContent !== 'On · Resuming…'; i++) await act(async () => { await Promise.resolve(); });
     expect(q('[data-bots-profile-state]')?.textContent).toBe('On · Resuming…');
@@ -839,7 +840,7 @@ describe('Bots page', () => {
     await render(<BotsPage />);
     act(() => q(`[data-bots-row="bot:${VERIFIER}"]`)!.click());
     act(() => q('[data-bots-pill]')!.click());
-    expect(q('[data-bots-profile-state]')?.textContent).toBe('On · Parked');
+    expect(q('[data-bots-profile-state]')?.textContent).toBe('Paused by you');
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     try {
       await act(async () => { q<HTMLButtonElement>('[data-testid="bots-resume-bot"]')!.click(); });
@@ -2288,6 +2289,38 @@ describe('Bots page', () => {
     act(() => q('[data-testid="bot-settings-leave-confirm"]')!.click());
     expect(q('[data-bot-settings]')).toBeNull();
     expect(q(`[data-bots-chat="bot:${VERIFIER}"]`)).not.toBeNull();
+  });
+
+  it('leaving the Bots page with unsaved settings asks first, as Back does; Discard then goes', async () => {
+    setFactoryBotPort({ ...port, update: vi.fn(async () => ({ ok: true })) } as FactoryBotPort);
+    seedRooms();
+    await render(<BotsPage />);
+    act(() => useStore.getState().setAppRoute('bots'));
+    act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
+    act(() => q('[data-bots-settings]')!.click());
+    const name = q<HTMLInputElement>('[data-testid="bot-settings-name"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(name, 'Leader');
+      name.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    act(() => useStore.getState().setAppRoute('fleet'));
+    expect(useStore.getState().appRoute).toBe('bots');
+    expect(q('[data-testid="bot-settings-leave-confirm-row"]')).not.toBeNull();
+    act(() => q('[data-testid="bot-settings-leave-cancel"]')!.click());
+    act(() => useStore.getState().toggleBotsView());
+    expect(useStore.getState().appRoute).toBe('bots');
+    act(() => q('[data-testid="bot-settings-leave-confirm"]')!.click());
+    expect(useStore.getState().appRoute).toBe('workspaces');
+  });
+
+  it('leaving the Bots page with nothing unsaved goes at once', async () => {
+    seedRooms();
+    await render(<BotsPage />);
+    act(() => useStore.getState().setAppRoute('bots'));
+    act(() => q(`[data-bots-row="bot:${LEAD}"]`)!.click());
+    act(() => q('[data-bots-settings]')!.click());
+    act(() => useStore.getState().setAppRoute('fleet'));
+    expect(useStore.getState().appRoute).toBe('fleet');
   });
 
   it('a bot\'s job_changed card offers Undo, which writes the previous job back', async () => {

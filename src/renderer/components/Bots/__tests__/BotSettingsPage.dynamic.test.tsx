@@ -112,7 +112,7 @@ describe('BotSettingsPage', () => {
 
     // The sections, in the nav and on the page.
     expect([...host.querySelectorAll('[data-bot-settings-nav]')].map((b) => b.textContent)).toEqual(
-      ['Basics', 'Engine', 'Work', 'Limits', 'Connections', 'Memory & skills', 'What it can do', 'Pause or remove'],
+      ['Basics', 'Engine', 'Work', 'Limits', 'Connections', 'Memory & skills', 'What it can do', 'Stop or remove'],
     );
     // Read-only facts: workspace, engine, what wakes it in words.
     expect(q('[data-bot-settings-workspace]')?.textContent).toBe('App');
@@ -121,7 +121,8 @@ describe('BotSettingsPage', () => {
     // The status strip: state, today's turns and the one Pause.
     expect(q('[data-bots-profile-state]')?.textContent).toBe('On · Idle');
     expect(q('.wmux-bot-settings-strip')?.textContent).toContain(`Today: ${DEFAULT_BOT_BUDGETS.lead.maxTurnsPerDay - 190} of ${DEFAULT_BOT_BUDGETS.lead.maxTurnsPerDay} turns`);
-    // Pause or remove.
+    expect(q('[data-bots-today-line="workerTime"]')).not.toBeNull();
+    // Stop or remove.
     expect(q('[data-testid="bots-new-conversation"]')).not.toBeNull();
     expect(q('[data-testid="bots-stop-bot"]')).not.toBeNull();
     expect(q('[data-testid="bots-delete-bot"]')).not.toBeNull();
@@ -196,9 +197,26 @@ describe('BotSettingsPage', () => {
   it('a bot that is off shows Off and Turn on, which turns it on at once', async () => {
     const update = vi.fn(async () => ({ ok: true }));
     await mount(row({ enabled: false }), { update, act: vi.fn(async () => ({ ok: true })) });
-    expect(q('[data-bots-profile-state]')?.textContent).toMatch(/^Off · /);
+    expect(q('[data-bots-profile-state]')?.textContent).toBe('Off');
     await act(async () => q<HTMLButtonElement>('[data-testid="bots-turn-on-bot"]')!.click());
     expect(update).toHaveBeenCalledWith(ID, { enabled: true });
+  });
+
+  it('the status strip reads as one state, and Pause is only in the strip', async () => {
+    const r = row();
+    await mount(r, { update: vi.fn(async () => ({ ok: true })), act: vi.fn(async () => ({ ok: true })) });
+    expect(host.querySelectorAll('[data-testid="bots-pause-bot"]')).toHaveLength(1);
+    expect(q('[data-bot-settings-section="remove"] [data-testid="bots-pause-bot"]')).toBeNull();
+    expect(q('[data-bot-settings-nav="remove"]')?.textContent).toBe('Stop or remove');
+    await mount(row({ parked: { reason: 'human', at: 1 } }), { act: vi.fn(async () => ({ ok: true })) });
+    expect(q('[data-bots-profile-state]')?.textContent).toBe('Paused by you');
+    expect(q('.wmux-bot-settings-strip')?.textContent).not.toMatch(/On ·|Parked/);
+    expect(q('[data-testid="bots-resume-bot"]')).not.toBeNull();
+    await mount(row({ parked: { reason: 'error', at: 1 } }), { act: vi.fn(async () => ({ ok: true })) });
+    expect(q('[data-bots-profile-state]')?.textContent).toBe('Parked');
+    expect(q('[data-bots-profile-parked="error"]')?.textContent).toContain('Stopped after errors');
+    await mount(row({ enabled: false }), {});
+    expect(q('[data-bots-profile-state]')?.textContent).toBe('Off');
   });
 
   it('a My Hermes bot leaves out Work and Connections and lists only what it can really do', async () => {
@@ -216,6 +234,11 @@ describe('BotSettingsPage', () => {
     expect(canDo).toEqual([en['botsPage.canDo.myHermesTalk'], en['botsPage.canDo.myHermesTools']]);
     expect(canDo).not.toContain(en['botsPage.canDo.fanout']);
     expect(q('[data-cannot-do]')?.textContent).toBe(en['botsPage.canDo.myHermesCannot']);
+    // No worker figures anywhere: it starts no wmux workers.
+    expect(q('.wmux-bot-settings-strip')?.textContent).not.toMatch(/Worker/);
+    expect(q('[data-bots-today-line="workerTime"]')).toBeNull();
+    expect(q('[data-bots-today-line="workers"]')).toBeNull();
+    expect(q('[data-testid="bot-settings-workers"]')).toBeNull();
   });
 
   it('the bots off: nothing edits, Delete bot stays', async () => {

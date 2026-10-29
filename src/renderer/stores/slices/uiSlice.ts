@@ -1327,13 +1327,19 @@ export const createUISlice: StateCreator<StoreState, [['zustand/immer', never]],
   // ─── Rail route ──────────────────────────────────────────────────────────
   appRoute: 'workspaces',
 
-  setAppRoute: (route) => set((state) => {
-    if (state.appRoute === route) return;
-    applyAppRoute(state, route);
-    // A new page is a destination: the overlays that led here step aside.
-    state.commandPaletteVisible = false;
-    state.notificationPanelVisible = false;
-  }),
+  setAppRoute: (route) => {
+    // Leaving the Bots page with a bot's settings unsaved asks first; the
+    // page calls back here once the owner discards them.
+    const cur = get();
+    if (cur.appRoute === 'bots' && route !== 'bots' && cur.botsLeaveGuard?.(() => get().setAppRoute(route))) return;
+    set((state) => {
+      if (state.appRoute === route) return;
+      applyAppRoute(state, route);
+      // A new page is a destination: the overlays that led here step aside.
+      state.commandPaletteVisible = false;
+      state.notificationPanelVisible = false;
+    });
+  },
   pluginsSelection: null,
   setPluginsSelection: (selection) => set((state) => { state.pluginsSelection = selection; }),
   togglePluginsView: () => {
@@ -2318,7 +2324,10 @@ export const createUISlice: StateCreator<StoreState, [['zustand/immer', never]],
   toggleCompanyView: () => set((state) => { state.companyViewVisible = !state.companyViewVisible; }),
   // Opens the Bots rail page and, pressed there, returns to Workspaces.
   toggleBotsView: () => {
-    if (get().appRoute === 'bots') set((state) => { leaveAppRoute(state, 'bots'); });
+    if (get().appRoute === 'bots') {
+      if (get().botsLeaveGuard?.(() => get().toggleBotsView())) return;
+      set((state) => { leaveAppRoute(state, 'bots'); });
+    }
     else get().openBotsPage();
   },
   openBotsPage: () => {
