@@ -37,6 +37,7 @@
 
 import type { CompletionEvidence, TaskState } from './types';
 import type { A2aSpawnRequestV1, A2aSpawnResultV1, A2aSpawnTargetsV1 } from './a2aSpawn';
+import type { A2aContinueLinkState, A2aContinueManifestV1, A2aContinueRequestV1, A2aContinueResultV1, A2aContinueStatusQueryV1 } from './a2aContinue';
 
 // ─── Versions ───────────────────────────────────────────────────────────────
 
@@ -660,7 +661,7 @@ export interface A2aRemoteEnvelope {
    * payload is in `offer`. An older receiver refuses them as an unknown link.
    */
   link?: {
-    state: 'active' | 'revoked' | 'broken' | 'offer' | 'offer-withdrawn' | 'spawn' | 'spawn-result' | 'spawn-targets';
+    state: 'active' | 'revoked' | 'broken' | 'offer' | 'offer-withdrawn' | 'spawn' | 'spawn-result' | 'spawn-targets' | A2aContinueLinkState;
     version: number;
     reason?: A2aLinkRecordV1['endedReason'];
   };
@@ -674,6 +675,16 @@ export interface A2aRemoteEnvelope {
   spawn?: A2aSpawnRequestV1;
   spawnResult?: A2aSpawnResultV1;
   spawnTargets?: A2aSpawnTargetsV1;
+  /**
+   * Continuing a conversation on another PC (`shared/a2aContinue.ts`), each on
+   * a 'link' envelope of the state `continue`, `continue-manifest`,
+   * `continue-result` or `continue-status`. `linkId` is the continueId; these
+   * never touch a link record. An older receiver refuses them as an unknown link.
+   */
+  continue?: A2aContinueRequestV1;
+  continueManifest?: A2aContinueManifestV1;
+  continueResult?: A2aContinueResultV1;
+  continueStatus?: A2aContinueStatusQueryV1;
   /** For 'receipt' (with `taskId`). */
   receipt?: A2aRemoteReceipt;
   /**
