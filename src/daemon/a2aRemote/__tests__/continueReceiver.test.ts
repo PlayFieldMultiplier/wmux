@@ -7,9 +7,15 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { A2A_REMOTE_PROTOCOL, type A2aRemoteEnvelope } from '../../../shared/a2aRemote';
-import { defaultContinuePolicy, parseContinueRequest, type A2aContinuePolicyV1 } from '../../../shared/a2aContinue';
+import { continueResumesSource, defaultContinuePolicy, parseContinueRequest, type A2aContinuePolicyV1 } from '../../../shared/a2aContinue';
 import { defaultSpawnPolicy, type A2aSpawnPolicyV1 } from '../../../shared/a2aSpawn';
-import { A2aContinueReceiver, CONTINUE_STARTING_GRACE_MS, paneHoldsSession, type ContinueReceiverDeps } from '../continueReceiver';
+import {
+  A2aContinueReceiver,
+  CONTINUE_REFUSALS_PER_HOST_MAX,
+  CONTINUE_STARTING_GRACE_MS,
+  paneHoldsSession,
+  type ContinueReceiverDeps,
+} from '../continueReceiver';
 import { ContinueRequestStore } from '../continueRequestStore';
 import { SpawnChecks } from '../spawnChecks';
 
@@ -37,6 +43,7 @@ function makeReceiver(over: Partial<ContinueReceiverDeps> = {}): A2aContinueRece
     requests,
     enqueue: (hostId, env) => void sent.push({ hostId, env }),
     originKeyOf: async (p) => origins[p] ?? null,
+    isRepoTop: async () => true,
     freeBytes: async () => free,
     sessionLive: (s) => live.has(s),
     cardAvailable: () => true,
@@ -485,9 +492,12 @@ describe('the manifest waits on the disk', () => {
     expect(codes(id(late.req)).at(-1)).toBe('expired');
   });
 
-  it('room counts what this PC already holds for other conversations', async () => {
-    await toReceived();
-    // That one holds 1000 bytes of staging: 500 of 1500 are left.
+  it('room counts the bytes other requests have yet to write, not those already written', async () => {
+    const taking = request();
+    await ask(taking);
+    receiver.decide(HOST, id(taking), 'once');
+    await sendManifest(taking);
+    // Receiving 1000 bytes not written yet: 500 of 1500 are left.
     free = 1500;
     expect(await ask(request())).toEqual(['no-space']);
     const small = request({ estimate: { bytes: 100, files: 1 } });
@@ -495,6 +505,9 @@ describe('the manifest waits on the disk', () => {
     receiver.decide(HOST, id(small), 'once');
     await sendManifest(small);
     expect(codes(id(small)).at(-1)).toBe('no-space');
+    // Written now: the free space reads them, so nothing is held back twice.
+    receiver.received(HOST, id(taking));
+    expect(await ask(request())).toEqual(['waiting-for-approval']);
   });
 });
 
@@ -538,7 +551,7 @@ describe('the claim checks again', () => {
 });
 
 describe('a start main never reported on', () => {
-  it('is settled after its grace: started when a pane here runs it, else failed; and it holds no slot meanwhile', async () => {
+  it('is settled after its grace: started when a pane here runs it, else unknown, never failed', async () => {
     const running = await toReceived();
     const lost = await toReceived();
     await receiver.claim(HOST, id(running));
@@ -553,21 +566,90 @@ describe('a start main never reported on', () => {
     after.recover();
     await after.idle();
     expect(codes(id(running)).at(-1)).toBe('started');
-    expect(codes(id(lost)).at(-1)).toBe('failed');
+    // Its report was lost and no pane runs it now: it may have run, so A does not resume by itself.
+    expect(codes(id(lost)).at(-1)).toBe('unknown');
+    expect(continueResumesSource('unknown')).toBe(false);
   });
 });
 
 describe('paneHoldsSession', () => {
   const sid = crypto.randomUUID();
 
+  const claude = () => 'claude';
+
   it('reads the pane\'s own resume binding first, and the transcript only without one', () => {
     let read = 0;
     const transcript = (p: string | null) => () => { read += 1; return p; };
-    expect(paneHoldsSession({ resumeBinding: { sessionId: sid } }, transcript(null), sid)).toBe(true);
-    expect(paneHoldsSession({ resumeBinding: { sessionId: crypto.randomUUID() } }, transcript(`/p/${sid}.jsonl`), sid)).toBe(false);
+    expect(paneHoldsSession({ resumeBinding: { agent: 'claude', sessionId: sid } }, claude, transcript(null), sid)).toBe(true);
+    expect(paneHoldsSession({ resumeBinding: { agent: 'claude', sessionId: crypto.randomUUID() } }, claude, transcript(`/p/${sid}.jsonl`), sid)).toBe(false);
     expect(read).toBe(0);
-    expect(paneHoldsSession({}, transcript(`/home/u/.claude/projects/x/${sid}.jsonl`), sid)).toBe(true);
-    expect(paneHoldsSession({}, transcript(null), sid)).toBe(false);
+    expect(paneHoldsSession({}, claude, transcript(`/home/u/.claude/projects/x/${sid}.jsonl`), sid)).toBe(true);
+    expect(paneHoldsSession({}, claude, transcript(null), sid)).toBe(false);
     expect(read).toBe(2);
+  });
+
+  it('a binding the agent left behind does not count: only while that agent runs there', () => {
+    const bound = { resumeBinding: { agent: 'claude', sessionId: sid } };
+    expect(paneHoldsSession(bound, () => undefined, () => null, sid)).toBe(false);
+    expect(paneHoldsSession(bound, () => 'codex', () => null, sid)).toBe(false);
+    expect(paneHoldsSession({}, () => undefined, () => `/p/${sid}.jsonl`, sid)).toBe(false);
+  });
+});
+
+describe('origins and the root at the claim', () => {
+  it('a root whose origin could not be read is read again next time, not kept as none', async () => {
+    let reads = 0;
+    const flaky = makeReceiver({ originKeyOf: async (p) => (p === '/repos/web' && reads++ === 0 ? null : origins[p] ?? null) });
+    expect(await ask(request(), HOST, flaky)).toEqual(['repo-not-found']);
+    expect(await ask(request(), HOST, flaky)).toEqual(['waiting-for-approval']);
+  });
+
+  it('a root that is now a folder inside another repository: not-allowed, and no root goes to main', async () => {
+    const tops = makeReceiver({ isRepoTop: async () => false });
+    const req = request();
+    await ask(req, HOST, tops);
+    tops.decide(HOST, id(req), 'once');
+    await sendManifest(req, manifest(req), tops);
+    tops.received(HOST, id(req));
+    expect(await tops.claim(HOST, id(req))).toEqual({ ok: false, error: 'not-allowed' });
+    expect(state(req)).toBe('decided');
+  });
+
+  it('a second root with that origin saved while the claim reads the roots: repo-ambiguous, never a start', async () => {
+    const req = await toReceived();
+    let saved = false;
+    const racing = makeReceiver({
+      originKeyOf: async (p) => {
+        if (!saved) {
+          saved = true;
+          spawn.roots.push({ id: 'web2', label: 'Web 2', path: '/repos/web2' });
+          spawn.version += 1;
+          origins['/repos/web2'] = ORIGIN;
+        }
+        return origins[p] ?? null;
+      },
+    });
+    expect(await racing.claim(HOST, id(req))).toEqual({ ok: false, error: 'repo-ambiguous' });
+    expect(state(req)).toBe('decided');
+  });
+});
+
+describe('refusals and what they say', () => {
+  it('refusals of new requests go to one PC at most a set number of times a window, then nothing', async () => {
+    const ids = Array.from({ length: CONTINUE_REFUSALS_PER_HOST_MAX + 3 }, () => request());
+    for (const req of ids) receiver.applyInbound(link('continue', id(req), { continue: req }), { hostId: OTHER });
+    expect(sent.filter((s) => s.hostId === OTHER)).toHaveLength(CONTINUE_REFUSALS_PER_HOST_MAX);
+    clock += 60_000;
+    receiver.applyInbound(link('continue', id(ids[0]), { continue: ids[0] }), { hostId: OTHER });
+    expect(sent.filter((s) => s.hostId === OTHER)).toHaveLength(CONTINUE_REFUSALS_PER_HOST_MAX + 1);
+  });
+
+  it('path-too-long names this PC\'s root: a PC not allowed hears not-allowed', async () => {
+    const req = request();
+    requests.receive(HOST, parseContinueRequest(req)!);
+    requests.decide(HOST, id(req), 'path-too-long');
+    spawn.hosts = {};
+    receiver.applyInbound(link('continue-status', id(req), { continueStatus: { v: 1, continueId: id(req) } }), { hostId: HOST });
+    expect(codes(id(req))).toEqual(['not-allowed']);
   });
 });

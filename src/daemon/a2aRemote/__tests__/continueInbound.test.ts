@@ -40,6 +40,7 @@ beforeEach(() => {
     requests: new ContinueRequestStore({ dir, scheduleHarden: () => undefined }),
     enqueue: (_hostId, e) => void sent.push(e),
     originKeyOf: async () => null,
+    isRepoTop: async () => true,
     freeBytes: async () => 0,
     sessionLive: () => false,
     resendCoalesceMs: 0,

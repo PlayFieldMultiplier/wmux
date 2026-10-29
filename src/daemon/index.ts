@@ -138,7 +138,8 @@ import { A2aOffers } from './a2aRemote/offers';
 import { OfferStore } from './a2aRemote/offerStore';
 import { A2aRemoteDelivery, shareOfferFeatures } from './a2aRemote/delivery';
 import { A2aSpawnReceiver, registerSpawnRpc } from './a2aRemote/spawnReceiver';
-import { SpawnPolicyStore } from './a2aRemote/spawnPolicyStore';
+import { SpawnPolicyStore, samePath } from './a2aRemote/spawnPolicyStore';
+import { realpathNative } from './a2aRemote/spawnChecks';
 import { SpawnRequestStore } from './a2aRemote/spawnRequestStore';
 import { SpawnLinkStore } from './a2aRemote/spawnLinkStore';
 import { A2aSpawnStarter, registerSpawnStartRpc } from './a2aRemote/spawnStarter';
@@ -148,7 +149,7 @@ import { A2aContinueReceiver, paneHoldsSession } from './a2aRemote/continueRecei
 import { ContinuePolicyStore } from './a2aRemote/continuePolicyStore';
 import { ContinueRequestStore } from './a2aRemote/continueRequestStore';
 import { gitRunner } from '../main/a2aRemote/spawnWorktree';
-import { originUrlFromConfigList, originUrlRepoKey } from '../main/worktask/workerGit';
+import { originUrlRepoKey, readRawOriginUrl } from '../main/worktask/workerGit';
 import { linkAlias } from './a2aRemote/outbound';
 import { A2A_SPAWN_EVENT, type A2aSpawnEvent } from '../shared/a2aSpawn';
 import { A2A_FEATURE_IMAGES, A2A_FEATURE_LINK_OFFER, A2A_FEATURE_SPAWN, A2A_FEATURE_STREAM_PING, isRemoteTaskId, isTailnetIpv4 } from '../shared/a2aRemote';
@@ -10386,7 +10387,13 @@ async function main(): Promise<void> {
     });
     // A conversation another PC continues here (receiver side): off until this
     // PC's human opts in, and not advertised to any PC yet.
-    const a2aRootGit = new Map<string, ReturnType<typeof gitRunner>>();
+    // One git runner per spawn root (read-only git, the worker hardening).
+    const a2aRootGits = new Map<string, ReturnType<typeof gitRunner>>();
+    const a2aRootGit = (rootPath: string): ReturnType<typeof gitRunner> => {
+      let git = a2aRootGits.get(rootPath);
+      if (!git) a2aRootGits.set(rootPath, (git = gitRunner(rootPath, {})));
+      return git;
+    };
     const a2aContinue = new A2aContinueReceiver({
       policy: a2aContinuePolicy,
       spawnPolicy: a2aSpawnPolicy,
@@ -10395,18 +10402,25 @@ async function main(): Promise<void> {
         if (!a2aDelivery) throw new Error('messages between PCs are not carried this run');
         a2aDelivery.outbox.enqueue(hostId, envelope);
       },
-      // The root's own origin (read-only git, the worker hardening), keyed as the asker keys its own.
+      // The root's own origin, read through its common git dir, keyed as the asker keys its own.
       originKeyOf: async (rootPath) => {
-        let git = a2aRootGit.get(rootPath);
-        if (!git) a2aRootGit.set(rootPath, (git = gitRunner(rootPath, {})));
-        const out = await git(['config', '-z', '--list', '--show-scope']);
-        const url = out.code === 0 ? originUrlFromConfigList(out.stdout) : null;
+        const git = a2aRootGit(rootPath);
+        const url = await readRawOriginUrl((args, cwd) => git(args, [], cwd), rootPath);
         return url ? originUrlRepoKey(url) : null;
+      },
+      isRepoTop: async (rootPath) => {
+        const out = await a2aRootGit(rootPath)(['rev-parse', '--show-toplevel']);
+        const top = out.code === 0 ? out.stdout.trim() : '';
+        return top !== '' && samePath(await realpathNative(top), rootPath);
       },
       // The staging volume: the bytes land under the a2a dir.
       freeBytes: () => fs.promises.statfs(a2aDir).then((s) => s.bavail * s.bsize),
-      sessionLive: (sessionId) => sessionManager.listLiveSessions().some((m) =>
-        paneHoldsSession(m, () => transcriptProjector?.transcriptPath(m.id) ?? null, sessionId)),
+      sessionLive: (sessionId) => sessionManager.listLiveSessions().some((m) => paneHoldsSession(
+        m,
+        () => paneLiveAgent(sessionManager, agentProcessTracker, m.id),
+        () => transcriptProjector?.transcriptPath(m.id) ?? null,
+        sessionId,
+      )),
       log: a2aLog,
     });
     const a2aForgetHost = forgetHostCascade({ links: a2aLinks, exposures: a2aExposures, offers: a2aOffersRef }, a2aLog);

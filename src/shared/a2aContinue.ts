@@ -100,9 +100,10 @@ export const A2A_CONTINUE_CODES = [
   'declined',
   'expired',
   /**
-   * B holds no record of the request (a status answer). Not proof that B
-   * never started it (B may have lost or pruned a record it ran), so A never
-   * resumes on it by itself.
+   * B holds no record of the request (a status answer), or B began a start
+   * it cannot tell ever ran (its report never came, and no pane there runs
+   * the conversation). Not proof that B never started it (B may have lost
+   * or pruned a record it ran), so A never resumes on it by itself.
    */
   'unknown',
   'failed',

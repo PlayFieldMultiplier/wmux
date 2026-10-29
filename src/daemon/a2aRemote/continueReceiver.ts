@@ -7,6 +7,7 @@ import {
   continueAnswerFor,
   continueClaimable,
   continueClockOk,
+  isContinueAgent,
   parseContinueManifest,
   parseContinueRequest,
   parseContinueResult,
@@ -18,7 +19,7 @@ import {
   type A2aContinuePermissionMode,
   type A2aContinueRequestV1,
 } from '../../shared/a2aContinue';
-import { spawnHostAllowed } from '../../shared/a2aSpawn';
+import { spawnHostAllowed, type A2aSpawnPolicyV1, type A2aSpawnRootV1 } from '../../shared/a2aSpawn';
 import type { ContinuePolicyStore } from './continuePolicyStore';
 import { continueManifestBytes, sameContinueBody, type ContinueRequestRecordV1, type ContinueRequestStore } from './continueRequestStore';
 import { spawnChecks, type SpawnChecks } from './spawnChecks';
@@ -57,24 +58,33 @@ import { errMsg } from './storeFile';
  * policy, the request's commit, the caps and the disk; `received` once
  * PR2b's route has every file in staging; `claim` → `starting`, only while
  * `continueClaimable` and after the pane, policy and root checks again;
- * `started` / `failed`. An unclaimed request past its expiry ends `expired`
- * on the sweep. A claimed one is never started again. One main never
- * reported on is settled only after CONTINUE_STARTING_GRACE_MS, by whether a
- * pane here runs the conversation: a blind `failed` would let A resume its
- * own copy beside a start that did happen.
+ * `started` / `failed` from main. An unclaimed request past its expiry ends
+ * `expired` on the sweep. A claimed one is never started again. One main
+ * never reported on is settled after CONTINUE_STARTING_GRACE_MS: `started`
+ * when a live agent here runs the conversation, else `unknown`, never
+ * `failed`: the start may have run (a lost report, a pane since closed), and
+ * a `failed` would let A resume its own copy beside it.
+ *
+ * Refusals of new requests (they leave no record) go out at most
+ * CONTINUE_REFUSALS_PER_HOST_MAX per PC per CONTINUE_REFUSAL_WINDOW_MS, so
+ * made-up ids cannot fill the outbox; past that a request goes unanswered
+ * and expires on A, which stopped nothing for it.
  */
 
 /** The same answer to the same request goes out at most once in this window (a resend, a status query). */
 export const CONTINUE_RESEND_COALESCE_MS = 60_000;
 /** A claimed start main never reported on is settled after this long since its claim. */
 export const CONTINUE_STARTING_GRACE_MS = 10 * 60 * 1000;
+/** Refusals of new requests sent to one PC per window; past it, nothing is sent. */
+export const CONTINUE_REFUSALS_PER_HOST_MAX = 10;
+export const CONTINUE_REFUSAL_WINDOW_MS = 60_000;
 /** Recent answers remembered for coalescing. */
 const ANSWERED_RECENTLY_MAX = 1000;
 /** Open states before main claims a request: the sweep expires these. */
 const UNCLAIMED: readonly A2aContinueIncomingState[] = ['pending', 'awaiting', 'ready', 'receiving', 'received'];
-/** Codes that say what this PC holds: a PC not allowed now hears `not-allowed` instead. */
+/** Codes that say what this PC holds (`path-too-long`: how long its root's path is): a PC not allowed now hears `not-allowed` instead. */
 const REPO_CODES: ReadonlySet<A2aContinueCode> = new Set<A2aContinueCode>([
-  'repo-not-found', 'repo-ambiguous', 'branch-not-found', 'branch-busy', 'head-missing', 'diverged',
+  'repo-not-found', 'repo-ambiguous', 'branch-not-found', 'branch-busy', 'head-missing', 'diverged', 'path-too-long',
 ]);
 
 export interface ContinueReceiverDeps {
@@ -84,8 +94,10 @@ export interface ContinueReceiverDeps {
   requests: Pick<ContinueRequestStore, 'get' | 'inState' | 'unsent' | 'receive' | 'advance' | 'decide' | 'markSent' | 'prune' | 'reservedBytes'>;
   /** Queue an envelope to `hostId` (the delivery outbox); throws when it cannot. */
   enqueue: (hostId: HostId, envelope: A2aRemoteEnvelope) => void;
-  /** The origin of the repository at a spawn root, as originUrlRepoKey writes it; null without one. */
+  /** The origin of the repository at a spawn root, as originUrlRepoKey writes it; null without one (or unread). */
   originKeyOf: (rootPath: string) => Promise<string | null>;
+  /** A spawn root is still its repository's top level (not a folder inside another one). */
+  isRepoTop: (rootPath: string) => Promise<boolean>;
   /**
    * Free bytes on the staging volume (the a2a dir's), where a conversation's
    * bytes land. The Claude config dir's and the root's volumes are the
@@ -133,12 +145,26 @@ export function isContinueEnvelope(env: A2aRemoteEnvelope): env is A2aRemoteEnve
  * Whether a pane runs the conversation `sessionId`: its own resume binding
  * names it (from the agent's hooks, or its launch line's `--resume` /
  * `--session-id`), or, with no binding, the transcript bound to it is that
- * conversation's. The transcript (a path resolution) is read only then.
+ * conversation's; and an agent whose conversations can move runs there now,
+ * the binding's own. A binding outlives the agent that wrote it, so a shell
+ * where the conversation once ran does not count. Cheapest first: the
+ * transcript (a path resolution) and the live agent are read only when
+ * needed.
  */
-export function paneHoldsSession(pane: { resumeBinding?: { sessionId: string } }, transcriptPath: () => string | null, sessionId: string): boolean {
-  if (pane.resumeBinding) return pane.resumeBinding.sessionId === sessionId;
-  const transcript = transcriptPath();
-  return transcript !== null && path.basename(transcript) === `${sessionId}.jsonl`;
+export function paneHoldsSession(
+  pane: { resumeBinding?: { agent: string; sessionId: string } },
+  liveAgent: () => string | undefined,
+  transcriptPath: () => string | null,
+  sessionId: string,
+): boolean {
+  const bound = pane.resumeBinding;
+  if (bound && bound.sessionId !== sessionId) return false;
+  if (!bound) {
+    const transcript = transcriptPath();
+    if (transcript === null || path.basename(transcript) !== `${sessionId}.jsonl`) return false;
+  }
+  const agent = liveAgent();
+  return isContinueAgent(agent) && (!bound || bound.agent === agent);
 }
 
 const OK: A2aRemoteDeliverResponse = { ok: true, duplicate: false };
@@ -162,6 +188,8 @@ export class A2aContinueReceiver {
   private readonly answeredAt = new Map<string, number>();
   /** When each PC was last told `unknown`: at most once per window, whatever the id. */
   private readonly unknownAt = new Map<HostId, number>();
+  /** When each PC was refused a new request, within the last window. */
+  private readonly refusedAt = new Map<HostId, number[]>();
   /** Each spawn root's origin, for one version of the spawn policy. */
   private origins: { version: number; keys: Map<string, string | null> } = { version: -1, keys: new Map() };
   /** Checks, manifests and claims, one at a time: their disk and git checks share one bounded gate. */
@@ -293,6 +321,7 @@ export class A2aContinueReceiver {
   forgetHost(hostId: HostId): void {
     for (const k of [...this.answeredAt.keys()]) if (k.startsWith(`${hostId}:`)) this.answeredAt.delete(k);
     this.unknownAt.delete(hostId);
+    this.refusedAt.delete(hostId);
   }
 
   /** Settle every check, manifest and claim in flight (tests). */
@@ -314,18 +343,29 @@ export class A2aContinueReceiver {
     const refuse = (code: A2aContinueCode): ContinueClaimResult => (this.finish(hostId, continueId, code) ? { ok: false, error: code } : NOT_STORED);
     const before = this.claimRefusal(rec);
     if (before) return refuse(before);
-    let matched: Array<{ id: string; path: string }>;
+    let policy = this.deps.spawnPolicy.get();
+    let found: { root: A2aSpawnRootV1 } | { code: A2aContinueCode } = { code: 'not-allowed' };
     try {
-      matched = await this.rootsWithOrigin(rec.request.repo.origin, true);
+      for (let attempt = 1; ; attempt++) {
+        // eslint-disable-next-line no-await-in-loop -- a read that a policy save overtook is done again
+        found = await this.claimRoot(rec, policy);
+        const fresh = this.deps.spawnPolicy.get();
+        if (fresh.version === policy.version) break;
+        // The settings changed while the roots were read: read them again as they are now.
+        if (attempt === 3) {
+          found = { code: 'not-allowed' };
+          break;
+        }
+        policy = fresh;
+      }
     } catch (err) {
       return { ok: false, error: `the folder was not checked now, try again: ${errMsg(err)}` };
     }
-    // The read waited: the clock, the policy and the panes once more.
+    // The reads waited: the clock, the policy and the panes once more.
     const after = this.claimRefusal(rec);
     if (after) return refuse(after);
-    if (matched.length > 1) return refuse('repo-ambiguous');
-    const root = this.deps.spawnPolicy.get().roots.find((r) => r.id === rec.rootId);
-    if (!root || matched[0]?.id !== root.id || matched[0].path !== root.path) return refuse('not-allowed');
+    if ('code' in found) return refuse(found.code);
+    const { root } = found;
     if (!this.step(hostId, continueId, ['received'], 'starting')) return { ok: false, error: 'this request is not received, or is already starting' };
     return {
       ok: true,
@@ -339,6 +379,20 @@ export class A2aContinueReceiver {
         bytes: continueManifestBytes(rec.manifest),
       },
     };
+  }
+
+  /**
+   * The root a claim starts in, from one snapshot of the spawn policy: the
+   * one root whose origin, read afresh, is the request's, and still its
+   * repository's top level (a root that became a folder inside another
+   * repository reads that repository's origin). Or why there is none.
+   */
+  private async claimRoot(rec: ContinueRequestRecordV1, policy: A2aSpawnPolicyV1): Promise<{ root: A2aSpawnRootV1 } | { code: A2aContinueCode }> {
+    const matched = await this.rootsWithOrigin(rec.request.repo.origin, true, policy);
+    if (matched.length > 1) return { code: 'repo-ambiguous' };
+    const root = matched[0];
+    if (!root || root.id !== rec.rootId) return { code: 'not-allowed' };
+    return (await this.checks.run(() => this.deps.isRepoTop(root.path))) ? { root } : { code: 'not-allowed' };
   }
 
   /** Why a received request may not start now, if it may not. */
@@ -359,14 +413,14 @@ export class A2aContinueReceiver {
   /**
    * A claimed start main never reported on (it stopped, or its report was
    * lost), once CONTINUE_STARTING_GRACE_MS have passed since the claim
-   * (a starting record's `updatedAt`): `started` when a pane here runs the
-   * conversation, else `failed`. Never sooner, so a start still under way is
-   * not called failed.
+   * (a starting record's `updatedAt`): `started` when a live agent here runs
+   * the conversation, else `unknown`, on which A does not resume by itself.
+   * Never `failed`: only main's own report says a start did not run.
    */
   private settleStarts(): void {
     for (const rec of this.deps.requests.inState('starting')) {
       if (this.now() - Date.parse(rec.updatedAt) <= CONTINUE_STARTING_GRACE_MS) continue;
-      this.finish(rec.hostId, rec.request.continueId, this.deps.sessionLive(rec.request.sessionId) ? 'started' : 'failed');
+      this.finish(rec.hostId, rec.request.continueId, this.deps.sessionLive(rec.request.sessionId) ? 'started' : 'unknown');
     }
   }
 
@@ -424,28 +478,32 @@ export class A2aContinueReceiver {
   }
 
   /**
-   * The spawn roots whose origin is `origin`. Each root's origin is read once
-   * per spawn-policy version; `fresh` reads every root again (and keeps what
-   * it read). An error is thrown, never kept.
+   * The roots of `policy` whose origin is `origin`. Each root's origin is
+   * read once per spawn-policy version; `fresh` reads every root again (and
+   * keeps what it read). Only an origin read is kept: no origin (a failed
+   * read, a root not cloned yet) is read again next time. An error is thrown.
    */
-  private async rootsWithOrigin(origin: string, fresh: boolean): Promise<Array<{ id: string; path: string }>> {
-    const policy = this.deps.spawnPolicy.get();
+  private async rootsWithOrigin(origin: string, fresh: boolean, policy = this.deps.spawnPolicy.get()): Promise<A2aSpawnRootV1[]> {
     if (this.origins.version !== policy.version) this.origins = { version: policy.version, keys: new Map() };
     const keys = this.origins.keys;
-    const matched: Array<{ id: string; path: string }> = [];
+    const matched: A2aSpawnRootV1[] = [];
     for (const root of policy.roots) {
       let key = fresh ? undefined : keys.get(root.path);
       if (key === undefined) {
         // eslint-disable-next-line no-await-in-loop -- one git read at a time, through the bounded gate
         key = await this.checks.run(() => this.deps.originKeyOf(root.path));
-        keys.set(root.path, key);
+        if (key !== null) keys.set(root.path, key);
       }
-      if (key === origin) matched.push({ id: root.id, path: root.path });
+      if (key === origin) matched.push(root);
     }
     return matched;
   }
 
-  /** Room on the staging volume for `bytes`, beside what this PC's other received conversations hold there. */
+  /**
+   * Room on the staging volume for `bytes`, beside the bytes other requests
+   * have yet to write there (reservedBytes: what is written already is gone
+   * from the free space).
+   */
   private async roomFor(bytes: number): Promise<boolean> {
     const free = await this.checks.run(() => this.deps.freeBytes());
     return free - this.deps.requests.reservedBytes() >= bytes;
@@ -494,9 +552,10 @@ export class A2aContinueReceiver {
     return this.deps.policy.get().in.enabled && spawnHostAllowed(spawn, hostId) && (!req || spawn.agents.includes(req.agent));
   }
 
-  /** Past its expiry by B's clock: the claim's own test (continueClaimable), whatever state the record is in. */
+  /** Past its expiry by B's clock; an expiry that does not read counts as past. */
   private expired(rec: ContinueRequestRecordV1): boolean {
-    return !continueClaimable({ ...rec, state: 'received' }, this.now());
+    const expires = Date.parse(rec.request.expiresAt);
+    return Number.isNaN(expires) || this.now() > expires;
   }
 
   /** What `code` reads as to the record's PC: nothing of what this PC holds once that PC is not allowed. */
@@ -572,11 +631,21 @@ export class A2aContinueReceiver {
     return done;
   }
 
-  /** Answer a request that is not stored (coalesced); `unavailable` when it could not be queued, so A sends it again. */
+  /**
+   * Answer a request that is not stored (coalesced, and at most
+   * CONTINUE_REFUSALS_PER_HOST_MAX per PC per window); `unavailable` when it
+   * could not be queued, so A sends it again.
+   */
   private refuse(hostId: HostId, continueId: string, code: A2aContinueCode): A2aRemoteDeliverResponse {
     this.deps.log('info', `[a2a-remote] continue ${continueId} from ${hostId}: ${code}`);
     if (this.answeredRecently(hostId, continueId, code)) return OK;
-    return this.sendResult(hostId, continueId, code) ? OK : UNAVAILABLE;
+    const now = this.now();
+    const recent = (this.refusedAt.get(hostId) ?? []).filter((t) => now - t < CONTINUE_REFUSAL_WINDOW_MS);
+    this.refusedAt.set(hostId, recent);
+    if (recent.length >= CONTINUE_REFUSALS_PER_HOST_MAX) return OK;
+    if (!this.sendResult(hostId, continueId, code)) return UNAVAILABLE;
+    recent.push(now);
+    return OK;
   }
 
   private markSent(rec: ContinueRequestRecordV1, code: A2aContinueCode): void {
