@@ -983,8 +983,9 @@ export class AcpBrainAdapter implements BrainAdapter {
         return;
       } finally {
         // An abandoned turn's generator can end after the next turn started
-        // (own mode keeps the session): it clears only its own sink.
-        if (this.turnSink === sink) {
+        // (own mode keeps the session): it never clears that turn's sink or
+        // tool table. A null sink is this turn's (the tools check cleared it).
+        if (this.turnSink === sink || this.turnSink === null) {
           this.turnSink = null;
           // Per-turn tool-call id table: agents may reuse ids across turns, and
           // a stale entry would mislabel a later tool-end chip (GLM review).

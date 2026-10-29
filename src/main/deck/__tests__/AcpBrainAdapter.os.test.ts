@@ -502,6 +502,31 @@ describe('AcpBrainAdapter (Hermes preset)', () => {
     adapter.dispose();
   });
 
+  it('a turn\'s tool ids do not label the next turn\'s tools (the table clears after the tools check too)', async () => {
+    const { policy } = hermesPolicy();
+    let turn = 0;
+    const agent = hermesAgent({
+      onPrompt: (c, id, sessionId) => {
+        turn += 1;
+        const update = (u: Record<string, unknown>) => c.emitLine({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: u } });
+        if (turn === 1) {
+          update({ sessionUpdate: 'tool_call', toolCallId: 't-1', title: 'web_search', kind: 'fetch' });
+          update({ sessionUpdate: 'tool_call_update', toolCallId: 't-1', status: 'completed' });
+        } else {
+          // The agent reuses the id for an unnamed call.
+          update({ sessionUpdate: 'tool_call_update', toolCallId: 't-1', status: 'completed' });
+        }
+        c.emitLine({ jsonrpc: '2.0', id, result: { stopReason: 'end_turn' } });
+      },
+    });
+    const adapter = new AcpBrainAdapter({ spawnSpec: SPEC, newSessionSettleMs: 0, workspaceId: 'ws-1', mcpBundlePath: null, spawnFn: agent.spawnFn, hermes: policy });
+    adapter.start({});
+    expect(await collect(adapter.send('one'))).toContainEqual(expect.objectContaining({ type: 'tool-end', name: 'web_search' }));
+    const second = await collect(adapter.send('two'));
+    expect(second).toContainEqual(expect.objectContaining({ type: 'tool-end', toolId: 't-1', name: 'tool' }));
+    adapter.dispose();
+  });
+
   it('a stop rejects the waiting request, cancels the turn and lets it settle; dispose rejects and adds no prompt', async () => {
     const { policy, asks } = hermesPolicy();
     const agent = hermesAgent({
