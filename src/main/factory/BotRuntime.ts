@@ -1307,6 +1307,8 @@ export class BotRuntime {
             }
           }
           console.warn(`[factory] ${item.id} not sent to My Hermes: ${why}`);
+          // Nothing reached Hermes: the turn pump() counted is given back.
+          if (run && this.deps.store.get(botId)) this.deps.store.mutateUsage(botId, (u) => { unrecordTurn(u, run.startedAt); });
           outcome = 'done';
           return;
         }
@@ -1566,7 +1568,10 @@ export class BotRuntime {
       if (!giveUp) {
         this.deps.queue.retry(item.id);
       } else {
-        this.deps.queue.park(item.id);
+        // A failed My Hermes turn may have run part of the owner's message:
+        // its wake ends here, so no Resume sends it again.
+        if (outcome === 'failed' && isOwnHermesEngine(profile.engine)) this.deps.queue.finish(item.id);
+        else this.deps.queue.park(item.id);
         if (this.deps.store.get(botId)) this.deps.store.setParked(botId, { reason: 'error', at });
         emitBotHook({ type: 'bot.error', botId, workspaceId: profile.workspaceId, message: shown.slice(0, 500), wakeId: item.id, at });
       }

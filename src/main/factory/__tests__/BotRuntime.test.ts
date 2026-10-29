@@ -1727,7 +1727,7 @@ describe('BotRuntime: a bot on My Hermes', () => {
       [{}, (r) => { r.runtime.wake(r.id, { text: 'hi', threadId: 'general' }); }, /one to one/],
       [{ attended: false }, (r) => { r.runtime.wake(r.id, { text: 'hi', threadId: `dm:${r.id}` }); }, /yours alone/],
       [{ roomClean: false }, (r) => { r.runtime.wake(r.id, { text: 'hi', threadId: `dm:${r.id}` }); }, /Another bot or a guest/],
-      [{ roomClean: null }, (r) => { r.runtime.wake(r.id, { text: 'hi', threadId: `dm:${r.id}` }); }, /Another bot or a guest/],
+      [{ roomClean: null }, (r) => { r.runtime.wake(r.id, { text: 'hi', threadId: `dm:${r.id}` }); }, /could not read this chat/],
       [{}, (r) => { r.runtime.wake(r.id, { threadId: `dm:${r.id}` }); }, /only your own messages/],
     ];
     for (const [opts, wake, why] of cases) {
@@ -1737,6 +1737,8 @@ describe('BotRuntime: a bot on My Hermes', () => {
       expect(r.adapters.flatMap((a) => a.prompts)).toEqual([]);
       expect(r.notes).toEqual([expect.objectContaining({ why: expect.stringMatching(why) })]);
       expect(r.store.get(r.id)?.parked).toBeUndefined();
+      // Nothing reached Hermes: the turn is not charged.
+      expect(r.store.usageOf(r.id).turns).toEqual([]);
       __resetBotRuntimePortsForTesting();
     }
   });
@@ -1778,9 +1780,12 @@ describe('BotRuntime: a bot on My Hermes', () => {
     await settle();
     expect(r.adapters[0].interrupted).toBe(1);
     expect(r.adapters[0].disposed).toBe(false);
-    // It may have run part of the owner's message: it is never sent again.
-    expect(r.queue.get(item!.id)?.state).not.toBe('queued');
+    // It may have run part of the owner's message: it is never sent again,
+    // not by a retry and not by the owner's Resume of the parked bot.
+    expect(r.queue.get(item!.id)?.state).toBe('done');
     for (const t of timers.filter((t) => t.at > clock + 60_000)) t.fn();
+    await settle();
+    r.runtime.resume(res.bot.id);
     await settle();
     expect(r.adapters.flatMap((a) => a.prompts)).toEqual(['slow']);
   });
