@@ -221,7 +221,9 @@ export class AcpBrainAdapter implements BrainAdapter {
     this.deps = deps;
     this._workspaceId = deps.bot ? deps.bot.binding.workspaceId : deps.workspaceId ?? '';
     // P4 token lifecycle contract: mint at construction, revoke at dispose.
-    this._commanderToken = deps.bot ? mintBotToken(deps.bot.binding) : mintCommanderToken(this._workspaceId);
+    // My Hermes: the bot's token reaches room.post only (RpcRouter), and
+    // its MCP child lists room_post only.
+    this._commanderToken = deps.bot ? mintBotToken(deps.bot.binding, deps.hermes?.mode === 'own' ? 'room-post' : undefined) : mintCommanderToken(this._workspaceId);
   }
 
   get sessionId(): string | null {
@@ -605,7 +607,7 @@ export class AcpBrainAdapter implements BrainAdapter {
       // One hand-off per MCP child: every session/new or session/load starts one.
       // Hermes starts this command twice per session (discovery, then its
       // turns), so the file stays until dispose.
-      const handoff = writeBotTokenHandoff(this.deps.bot.binding, this._commanderToken, { dir: this.deps.bot.wmuxDir, keep: !!this.deps.hermes });
+      const handoff = writeBotTokenHandoff(this.deps.bot.binding, this._commanderToken, { dir: this.deps.bot.wmuxDir, keep: !!this.deps.hermes, ...(this.own() ? { surface: 'room-post' as const } : {}) });
       this.handoffs.push(handoff);
       return [
         {

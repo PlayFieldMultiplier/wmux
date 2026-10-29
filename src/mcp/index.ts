@@ -16,7 +16,7 @@ import { COMMANDER_TOOL_SURFACE, COMMANDER_ONLY_TOOLS } from '../shared/commande
 import { CORE_TOOL_SURFACE } from '../shared/coreSurface';
 import { ROLE_TOOL_SURFACES, resolveRoleName } from '../shared/roleSurfaces';
 import { isBotRole, type BotRole } from '../shared/bot';
-import { SHARED_SURFACE } from '../shared/botSurface';
+import { botSurfaceTools } from '../shared/botSurface';
 import { installBotTools, pinToolName } from './toolModules';
 // The factory's bot tool modules register themselves on import.
 import './botModules';
@@ -114,6 +114,9 @@ export interface WmuxServerCtx {
    *  lane narrowed to that factory role's surface (shared/botSurface.ts);
    *  `commanderToken` is then the bot token. */
   botRole?: string;
+  /** --bot-surface=<narrowing> value (from argv), unvalidated: a narrowed
+   *  bot lists fewer tools (shared/botSurface.ts botSurfaceTools). */
+  botSurface?: string;
   /** The pid identity walks start from (self pid, or the shim's pid). */
   callerPid: number;
   /** That pid's parent when already known (process.ppid); null → resolve lazily. */
@@ -910,7 +913,7 @@ if (ROLE_SURFACE) {
 // the role's tools register; every name that does is recorded, so the bot
 // tool lane at the end can serve the rest of the surface.
 const BOT_SURFACE: ReadonlySet<string> | null =
-  BOT_ROLE === undefined ? null : BOT_ROLE === null ? new Set<string>() : SHARED_SURFACE.tools;
+  BOT_ROLE === undefined ? null : BOT_ROLE === null ? new Set<string>() : botSurfaceTools(ctx.botSurface);
 const botRegistered = new Set<string>();
 if (BOT_SURFACE) {
   const tool = server.tool.bind(server);
@@ -2670,6 +2673,7 @@ if (BOT_ROLE) {
     rawRegisterTool: registerCatalogToolUnfiltered as (name: string, ...rest: unknown[]) => unknown,
     deps: { role: BOT_ROLE, callRpc: (method, params, timeoutMs) => callRpc(method, params, timeoutMs) },
     registered: botRegistered,
+    surface: botSurfaceTools(ctx.botSurface),
   });
 }
 

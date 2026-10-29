@@ -3,7 +3,10 @@ import { EventEmitter } from 'node:events';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { AcpBrainAdapter, type AcpHermesPolicy } from '../AcpBrainAdapter';
 import { HERMES_MCP_MISSING_LEAD, HERMES_TOOLS_CHANGED_LEAD } from '../../factory/engineError';
-import { commanderTokenWorkspace } from '../commanderTrust';
+import { commanderTokenWorkspace, resolveCommanderToken } from '../commanderTrust';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import type { BrainEvent } from '../BrainAdapter';
 import { deliberateSleep } from '../../../test-utils/waitFor';
 
@@ -698,6 +701,28 @@ describe('AcpBrainAdapter (My Hermes, own mode)', () => {
     await turn2;
     expect(child.sent.filter((s) => s.msg.method === 'session/cancel').length).toBeGreaterThanOrEqual(2);
     expect(policy.unsettled).not.toHaveBeenCalled();
+  });
+
+  it('hands the MCP child a room-post token and --bot-surface=room-post', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'acp-own-'));
+    const agent = hermesAgent({});
+    const binding = { workspaceId: 'ws-1', botId: 'bot-0000000a', role: 'lead' as const };
+    const adapter = new AcpBrainAdapter({
+      spawnSpec: SPEC, newSessionSettleMs: 0, mcpBundlePath: '/app/mcp/index.js', spawnFn: agent.spawnFn,
+      bot: { binding, cwd: dir, wmuxDir: dir }, hermes: hermesPolicy({ mode: 'own' }).policy,
+    });
+    try {
+      adapter.start({});
+      await collect(adapter.send('hi'));
+      const sessionNew = agent.children[0].sent.find((s) => s.msg.method === 'session/new');
+      const args = ((sessionNew?.msg.params as Record<string, unknown>).mcpServers as Array<Record<string, unknown>>)[0].args as string[];
+      expect(args).toContain('--bot-surface=room-post');
+      const tokenFile = args.find((a) => a.startsWith('--bot-token-file='))?.slice('--bot-token-file='.length) ?? '';
+      expect(resolveCommanderToken(fs.readFileSync(tokenFile, 'utf8'))?.surface).toBe('room-post');
+    } finally {
+      adapter.dispose();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('fails closed without the wmux tools, before any spawn', async () => {
