@@ -1332,6 +1332,50 @@ describe('the executable image reader', () => {
   });
 });
 
+// An update that deletes the version directory a running agent was started
+// from leaves the session without its own executable.
+describe('an agent running from a deleted install', () => {
+  const VERSION = '/Users/dev/.local/share/claude/versions/2.1.307';
+
+  it('is flagged once its image path is gone, and stays flagged', async () => {
+    const read = vi.fn(async () => VERSION);
+    const t = imageTracker([entry(100, 1, 'zsh'), entry(200, 100, 'claude', 'claude')], read, 'darwin');
+    t.arm('s1', 100);
+    await flush();
+    const onDisk = new Set([VERSION]);
+    const exists = (file: string) => onDisk.has(file);
+    // The first ask starts the one image read.
+    expect(t.agentImageMissingFor('s1', exists)).toBeUndefined();
+    await flush();
+    expect(t.agentImageMissingFor('s1', exists)).toBe(false);
+    onDisk.delete(VERSION);
+    expect(t.agentImageMissingFor('s1', exists)).toBe(true);
+    // A reinstall of that version is a new file: the process still runs the old one.
+    onDisk.add(VERSION);
+    expect(t.agentImageMissingFor('s1', exists)).toBe(true);
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it('is never claimed for a runtime-hosted agent or on Windows', async () => {
+    const gone = () => false;
+    const node = imageTracker([entry(100, 1, 'zsh'), entry(200, 100, 'node', 'node /usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js')],
+      async () => '/opt/homebrew/bin/node', 'linux');
+    node.arm('s1', 100);
+    await flush();
+    expect(node.identityFor('s1')).toEqual({ slug: 'claude', alive: true });
+    expect(node.agentImageMissingFor('s1', gone)).toBeUndefined();
+    await flush();
+    expect(node.agentImageMissingFor('s1', gone)).toBeUndefined();
+
+    const read = vi.fn(async () => VERSION);
+    const win = imageTracker([entry(100, 1, 'pwsh.exe'), entry(200, 100, 'claude.exe')], read, 'win32');
+    win.arm('s1', 100);
+    await flush();
+    expect(win.agentImageMissingFor('s1', gone)).toBeUndefined();
+    expect(read).not.toHaveBeenCalled();
+  });
+});
+
 describe('idle shell launch verification', () => {
   it('refuses a child process, replaced root or missing PID', async () => {
     let entries = [entry(100, 1, 'zsh')];

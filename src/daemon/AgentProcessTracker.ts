@@ -832,6 +832,11 @@ interface TrackedAgent {
   /** #2673 — the pane's launch count (setLaunchCounter) when this process was
    *  picked: a later command start in the pane may have launched its successor. */
   launchSeq?: number;
+  /** agentImageMissingFor's read of `pid`'s executable: `path` once read
+   *  (null for a runtime image, which is not the agent's own install), absent
+   *  while the read started at `readAt` is pending or after it failed.
+   *  `missing` latches: a running process never gets its file back. */
+  exe?: { readAt: number; path?: string | null; missing?: true };
 }
 
 /** #1727 — what the tracker needs to follow agents inside WSL panes. All
@@ -900,6 +905,8 @@ export class AgentProcessTracker {
    *  stillRunning() verdict on that entry is a verdict on that agent. */
   private readonly treeRoots = new WeakMap<ProcessTreeEntry, { sessionId: string; state: TrackedAgent }>();
   private snapshotStartedAt = 0;
+  /** An agentImageMissingFor image read is running. */
+  private agentImageReading = false;
   private identityProbeGuard?: (sessionId: string) => { epoch: number; isCurrent: () => boolean } | undefined;
   private launchCounter?: (sessionId: string) => number | undefined;
   private stateListener: ((sessionId: string, state: TrackedAgentState) => void) | undefined;
@@ -925,8 +932,19 @@ export class AgentProcessTracker {
     const ok = isAgentImage(entry, slug, image, this.userHome);
     // A failed read (a timeout, a permission error) is not a verdict: the
     // next check reads again.
-    if (cache && image !== undefined) cache.image = { key, ok };
+    if (cache && image !== undefined) {
+      cache.image = { key, ok };
+      if (cache.exe?.path === undefined) AgentProcessTracker.noteAgentImage(cache, image);
+    }
     return ok;
+  }
+
+  /** Record the executable `state.pid` runs for agentImageMissingFor. */
+  private static noteAgentImage(state: TrackedAgent, image: string): void {
+    // A runtime-hosted agent's image is node or python, not its install; an
+    // npm update rewrites the package at the same path anyway.
+    const native = path.posix.isAbsolute(image) && !RUNTIME_STEMS.has(runtimeStem(imageStem(image)));
+    state.exe = { readAt: state.exe?.readAt ?? Date.now(), path: native ? image : null };
   }
 
   private isWsl(sessionId: string): boolean {
@@ -1315,6 +1333,46 @@ export class AgentProcessTracker {
     const s = this.states.get(sessionId);
     if (!s) return undefined;
     return { ...(s.slug ? { slug: s.slug } : {}), alive: s.alive };
+  }
+
+  /**
+   * Whether the pane's live agent runs from an executable file that is no
+   * longer on disk. A native installer that deletes the previous version on
+   * update (`~/.local/share/claude/versions/<x.y.z>`) leaves every session
+   * still running that version without its own binary: on macOS it loses
+   * folder access, and tool runs fail. true = gone, false = still there,
+   * undefined = unknown: no live named agent, a WSL agent, Windows (a running
+   * executable is locked and cannot be deleted), a runtime-hosted agent
+   * (`node …/cli.js`: an npm update rewrites the package in place), or the
+   * image not read yet.
+   *
+   * The first call for a tracked process starts one image read (macOS: one
+   * lsof, which still names a deleted file; Linux: a readlink, whose
+   * ` (deleted)` suffix readExecutableImage strips) and answers undefined; a
+   * failed read is retried after ARM_BACKOFF_MS. One read runs at a time, so
+   * a session list over many panes starts one, not one per pane. Every later
+   * call is one stat of the known path. Never enumerates.
+   */
+  agentImageMissingFor(sessionId: string, exists: (file: string) => boolean = fs.existsSync): boolean | undefined {
+    const s = this.states.get(sessionId);
+    if (!s?.alive || !s.slug || s.wsl || (this.platform !== 'darwin' && this.platform !== 'linux')) return undefined;
+    const exe = s.exe;
+    if (exe?.path === undefined) {
+      if (!this.agentImageReading && (!exe || Date.now() - exe.readAt >= ARM_BACKOFF_MS)) {
+        this.agentImageReading = true;
+        s.exe = { readAt: Date.now() };
+        void this.readImage(s.pid).catch(() => undefined).then((image) => {
+          this.agentImageReading = false;
+          if (image !== undefined && this.states.get(sessionId) === s && s.exe?.path === undefined) {
+            AgentProcessTracker.noteAgentImage(s, image);
+          }
+        });
+      }
+      return undefined;
+    }
+    if (exe.path === null) return undefined;
+    if (!exe.missing && !exists(exe.path)) exe.missing = true;
+    return exe.missing === true;
   }
 
   /** True while the session's agent is a live process inside WSL, attributed

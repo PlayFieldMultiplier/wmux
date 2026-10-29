@@ -3489,9 +3489,15 @@ function registerRpcHandlers(
       // something shows an agent there again (its banner, a hook, the process
       // watch): said only while that holds, so a client can tell "no agent
       // since the restart" from "never attributed".
-      const withAlive = managedForPrompt?.recoveredAgentUnconfirmed === true && agentProcessAlive !== true
+      const withAlive1 = managedForPrompt?.recoveredAgentUnconfirmed === true && agentProcessAlive !== true
         ? { ...withAlive0, recoveredAgentUnconfirmed: true as const }
         : withAlive0;
+      // The live agent's executable was deleted under it (an update removed
+      // its version directory): it keeps running but can fail at any tool
+      // call. Additive and only ever true; pane.list hands it to pane_list.
+      const withAlive = agentProcessTracker.agentImageMissingFor(s.id) === true
+        ? { ...withAlive1, agentImageMissing: true as const }
+        : withAlive1;
       // A person-driven pane whose conversation folder is gone says so, instead
       // of the picker in a folder that cannot list that conversation.
       return surfacedBinding
