@@ -86,7 +86,6 @@ function defaultHolder(profile: string, botId: string): { id: string; name: stri
 }
 
 export class OwnHermesHost {
-  readonly mode = 'own' as const;
   private readonly adapters = new Set<AcpBrainAdapter>();
   private readonly log: (line: string) => void;
   private readonly pidAlive: (pid: number) => boolean;
@@ -142,7 +141,8 @@ export class OwnHermesHost {
       mode: 'own',
       prepare: () => this.prepareSpawn(binding.botId),
       sessionStarted: () => {
-        const state = readHermesGatewayState(this.root());
+        // A state file a gone gateway left behind does not refuse.
+        const state = this.liveGateway();
         const platforms = state ? Object.keys(state.platforms).filter((p) => p !== 'local') : [];
         return platforms.length > 0
           ? hermesNotReadyMessage({ ready: false, reason: 'config-mismatch', message: `its gateway runs messaging platforms (${platforms.slice(0, 3).join(', ')}).` })

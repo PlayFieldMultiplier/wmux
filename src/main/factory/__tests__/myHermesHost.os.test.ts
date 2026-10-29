@@ -158,6 +158,15 @@ describe.skipIf(WIN)('OwnHermesHost.prepareSpawn', () => {
     expect(await hostOf(r).prepareSpawn(BINDING.botId)).toMatchObject({ ok: true });
   });
 
+  it('after a session starts, a live gateway running a messenger refuses; a gone gateway\'s state file does not', () => {
+    const r = rig();
+    r.writeGateway(4245, ['hermes', 'gateway', 'run'], { telegram: { state: 'connected' } });
+    const policy = hostOf(r).policyFor(BINDING);
+    expect(policy.sessionStarted()).toMatch(/telegram/);
+    r.alive.clear();
+    expect(policy.sessionStarted()).toBeNull();
+  });
+
   it('a second bot on the profile (a copied bots.json) is refused in prepare', async () => {
     const r = rig();
     const host = hostOf(r, (profile, botId) => (profile === 'default' && botId !== 'bot-0000000b' ? { id: 'bot-0000000b', name: 'Bea' } : null));
