@@ -192,10 +192,15 @@ export class ContinueRequestStore {
     this.commit((m) => m.set(key(hostId, continueId), { ...rec, sent: code }));
   }
 
-  /** Bytes of the manifests this PC is taking or holds (`receiving`, `received`, `starting`): their staging is spoken for. */
+  /**
+   * Staging spoken for but not written yet: the manifests of the requests
+   * this PC is taking (`receiving`). A received or starting one has its bytes
+   * on disk already, where the free space reads them. PR2b, which writes
+   * staging, reserves only what a partial receive still lacks.
+   */
   reservedBytes(): number {
     let n = 0;
-    for (const r of this.records.values()) if (r.manifest && WITH_MANIFEST.has(r.state)) n += continueManifestBytes(r.manifest);
+    for (const r of this.records.values()) if (r.manifest && r.state === 'receiving') n += continueManifestBytes(r.manifest);
     return n;
   }
 

@@ -174,15 +174,25 @@ describe('starts in flight, room, and PCs removed', () => {
     store.advance(HOST, req.continueId, ['received'], 'starting');
   }
 
-  it('a claimed start holds its conversation but no slot of its PC, and its bytes stay reserved', () => {
+  it('a claimed start holds its conversation but no slot of its PC', () => {
     const store = open();
     const starts = Array.from({ length: CONTINUE_OPEN_PER_HOST_MAX }, () => request());
     for (const r of starts) toStarting(store, r);
     expect(store.receive(HOST, request()).kind).toBe('new');
     expect(store.receive(HOST, request({ sessionId: starts[0].sessionId }))).toEqual({ kind: 'busy' });
-    expect(store.reservedBytes()).toBe(CONTINUE_OPEN_PER_HOST_MAX * 10);
-    store.decide(HOST, starts[0].continueId, 'started');
-    expect(store.reservedBytes()).toBe((CONTINUE_OPEN_PER_HOST_MAX - 1) * 10);
+  });
+
+  it('only bytes still to come are reserved: a receiving manifest, not one already received', () => {
+    const store = open();
+    const req = request();
+    store.receive(HOST, req);
+    store.advance(HOST, req.continueId, ['pending'], 'awaiting', { rootId: 'web' });
+    store.advance(HOST, req.continueId, ['awaiting'], 'ready');
+    expect(store.reservedBytes()).toBe(0);
+    store.advance(HOST, req.continueId, ['ready'], 'receiving', { manifest: manifestFor(req) });
+    expect(store.reservedBytes()).toBe(10);
+    store.advance(HOST, req.continueId, ['receiving'], 'received');
+    expect(store.reservedBytes()).toBe(0);
   });
 
   it('forgetting a PC drops its records, on disk too; retaining drops those of PCs no longer paired', () => {
