@@ -4,7 +4,7 @@
 // fails here.
 import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
+import { join, relative, resolve, sep } from 'node:path';
 import { RENDERER_RPC_METHODS } from '../rpcInvoke';
 
 const ROOT = process.cwd();
@@ -76,7 +76,7 @@ describe('rpc:invoke allowlist', () => {
     for (const file of rendererFiles) {
       const src = readFileSync(file, 'utf8');
       for (const m of src.matchAll(/rpc\??\.invoke\(\s*([^'\s][^,)]*)/g)) {
-        dynamic.push(`${relative(ROOT, file)}: ${m[1].trim()}`);
+        dynamic.push(`${relative(ROOT, file).split(sep).join('/')}: ${m[1].trim()}`);
       }
     }
     // __wmuxChannelsRpc.rpc(method) forwards the four channel reads, whose
