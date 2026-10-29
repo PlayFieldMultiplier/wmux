@@ -13,6 +13,9 @@
 // origin taken from the repository's own config, keyed by originUrlRepoKey.
 // A repository with submodules is refused: status would read their own
 // config, which nothing checked, and the other PC does not check them out.
+// So is one with entries status does not look at (assume-unchanged,
+// skip-worktree): a change to them would not show, and the other PC would not
+// have it. The index is read at the top level, whatever the folder.
 //
 // The sender runs it twice: before it asks, and again once its agent has
 // stopped, to send the manifest only when nothing moved in between.
@@ -31,6 +34,7 @@ export type ContinuePreflightCode =
   | 'no-origin'
   | 'origin-unsupported'
   | 'submodules'
+  | 'hidden-changes'
   | 'detached'
   | 'no-commit'
   | 'branch-unsupported'
@@ -48,10 +52,11 @@ export type ContinuePreflightResult =
 export async function continuePreflight(cwd: string, opts: SpawnWorktreeOptions & { git?: Git } = {}): Promise<ContinuePreflightResult> {
   const run = opts.git ?? gitRunner(cwd, opts);
   const top = await run(['rev-parse', '--show-toplevel']);
-  if (top.code !== 0 || !top.stdout.trim()) return { ok: false, code: 'not-a-repo' };
+  const topDir = top.stdout.trim();
+  if (top.code !== 0 || !topDir) return { ok: false, code: 'not-a-repo' };
   let sub: string | null;
   try {
-    const rel = path.relative(fs.realpathSync.native(top.stdout.trim()), fs.realpathSync.native(cwd));
+    const rel = path.relative(fs.realpathSync.native(topDir), fs.realpathSync.native(cwd));
     sub = rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel) ? null : normalizeSpawnSub(rel.split(path.sep).join('/'));
   } catch {
     sub = null;
@@ -85,9 +90,13 @@ export async function continuePreflight(cwd: string, opts: SpawnWorktreeOptions 
   if (ahead.stdout.trim() !== '0') return { ok: false, code: 'unpushed' };
 
   // A gitlink (mode 160000) in the index is a submodule; the index is read, not refreshed.
-  const staged = await run(['ls-files', '--stage', '-z']);
+  const staged = await run(['ls-files', '--stage', '-z'], [], topDir);
   if (staged.code !== 0) return { ok: false, code: 'failed' };
   if (staged.stdout.split('\0').some((entry) => entry.startsWith('160000 '))) return { ok: false, code: 'submodules' };
+  // `-v` tags a skip-worktree entry `S`, and an assume-unchanged one in lower case.
+  const tagged = await run(['ls-files', '-v', '-z'], [], topDir);
+  if (tagged.code !== 0) return { ok: false, code: 'failed' };
+  if (tagged.stdout.split('\0').some((entry) => /^[a-zS] /.test(entry))) return { ok: false, code: 'hidden-changes' };
   const status = await run(['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=all'], ['--no-optional-locks']);
   if (status.code !== 0) return { ok: false, code: 'failed' };
   if (status.stdout !== '') return { ok: false, code: 'dirty' };
