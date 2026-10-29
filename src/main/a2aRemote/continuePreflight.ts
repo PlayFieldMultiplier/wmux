@@ -7,9 +7,15 @@
 // what the request names (A2aContinueRequestV1.repo).
 //
 // Read-only git with the worker hardening (spawnWorktree.ts gitRunner):
-// fsmonitor and hooks off, the repository's config read first and refused
-// when it sets a content filter (a status read would run it), and origin
-// taken from the repository's own config, keyed by originUrlRepoKey.
+// fsmonitor and hooks off, no optional locks (the index is not refreshed under
+// the agent still running there), the repository's config read first and
+// refused when it sets a content filter (a status read would run it), and
+// origin taken from the repository's own config, keyed by originUrlRepoKey.
+// A repository with submodules is refused: status would read their own
+// config, which nothing checked, and the other PC does not check them out.
+//
+// The sender runs it twice: before it asks, and again once its agent has
+// stopped, to send the manifest only when nothing moved in between.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -23,7 +29,9 @@ export type ContinuePreflightCode =
   | 'unsafe-config'
   | 'no-origin'
   | 'origin-unsupported'
+  | 'submodules'
   | 'detached'
+  | 'no-commit'
   | 'branch-unsupported'
   | 'no-upstream'
   | 'upstream-mismatch'
@@ -61,7 +69,9 @@ export async function continuePreflight(cwd: string, opts: SpawnWorktreeOptions 
   if (branchOut.code !== 0) return { ok: false, code: 'detached' };
   const branch = branchOut.stdout.trim();
   if (!isContinueBranch(branch)) return { ok: false, code: 'branch-unsupported' };
-  const head = (await run(['rev-parse', '--verify', 'HEAD^{commit}'])).stdout.trim();
+  const headOut = await run(['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']);
+  if (headOut.code !== 0) return { ok: false, code: 'no-commit' };
+  const head = headOut.stdout.trim();
   if (!isContinueCommit(head)) return { ok: false, code: 'failed' };
 
   const upstream = await run(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}']);
@@ -71,7 +81,11 @@ export async function continuePreflight(cwd: string, opts: SpawnWorktreeOptions 
   if (ahead.code !== 0) return { ok: false, code: 'failed' };
   if (ahead.stdout.trim() !== '0') return { ok: false, code: 'unpushed' };
 
-  const status = await run(['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none']);
+  // A gitlink (mode 160000) in the index is a submodule; the index is read, not refreshed.
+  const staged = await run(['ls-files', '--stage', '-z']);
+  if (staged.code !== 0) return { ok: false, code: 'failed' };
+  if (staged.stdout.split('\0').some((entry) => entry.startsWith('160000 '))) return { ok: false, code: 'submodules' };
+  const status = await run(['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=all'], ['--no-optional-locks']);
   if (status.code !== 0) return { ok: false, code: 'failed' };
   if (status.stdout !== '') return { ok: false, code: 'dirty' };
 

@@ -16,17 +16,23 @@
 // is named by its origin, and the conversation's files by their path below
 // its own folder.
 //
+// A checks its checkout again once its agent has stopped, and sends the
+// manifest only when it is still clean at the commit the request named: the
+// agent kept running while B decided. B refuses a manifest whose `head`
+// differs from the request's.
+//
 // The conversation belongs to B from `received` on. A resumes its own copy
 // only on a final answer that B did not start it and never will
-// (continueResumesSource); a timeout alone never resumes it. B starts it only
-// from `received` and only before it expires (continueClaimable).
+// (continueResumesSource); a timeout alone never resumes it, nor does an
+// `unknown`. B starts it only from `received` and only before it expires
+// (continueClaimable).
 //
 // Pure module: no node:* imports.
 
 import { agentRow, isAgentSlug, type AgentSlug } from './agentIdentity';
 import { CHATV2_PROVIDER_SESSION_ID } from './chatv2/ipc';
 import { isHostId, type HostId } from './a2aRemote';
-import { normalizeSpawnSub } from './a2aSpawn';
+import { normalizeSpawnSub, spawnClockOk } from './a2aSpawn';
 import { DEFAULT_FANOUT_WORKER_PERMISSION_MODE, isFanoutWorkerPermissionMode, type FanoutWorkerPermissionMode } from './workerLaunch';
 
 // ─── Limits ─────────────────────────────────────────────────────────────────
@@ -42,8 +48,6 @@ export const CONTINUE_SEGMENT_MAX = 120;
 /** Longest a request may wait for B, and how long it waits when the asker names no time. */
 export const CONTINUE_TTL_MAX_MS = 24 * 60 * 60 * 1000;
 export const CONTINUE_TTL_DEFAULT_MS = 60 * 60 * 1000;
-/** How far ahead of B's clock a request's `sentAt` may be. */
-export const CONTINUE_CLOCK_SKEW_MS = 10 * 60 * 1000;
 /** A decided request is kept this long, so a status query still gets its answer. */
 export const CONTINUE_RECORD_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
 /** A branch name (characters). */
@@ -95,7 +99,11 @@ export const A2A_CONTINUE_CODES = [
   'path-too-long',
   'declined',
   'expired',
-  /** B holds no record of the request (a status answer). */
+  /**
+   * B holds no record of the request (a status answer). Not proof that B
+   * never started it (B may have lost or pruned a record it ran), so A never
+   * resumes on it by itself.
+   */
   'unknown',
   'failed',
 ] as const;
@@ -111,13 +119,14 @@ export function isFinalContinueCode(code: A2aContinueCode): boolean {
 }
 
 /**
- * Whether A, which stopped its Claude for this request, resumes its own copy
- * on this answer: only on a final answer other than `started`. B answers that
- * only once it did not start the conversation and never will (an expired or
- * unknown request is never claimed, see continueClaimable).
+ * Whether A, which stopped its agent for this request, resumes its own copy
+ * on this answer: only on a final answer that B did not start the
+ * conversation and never will (an expired request is never claimed, see
+ * continueClaimable). Not on `started`, and not on `unknown`: that is the
+ * owner's call.
  */
 export function continueResumesSource(code: A2aContinueCode): boolean {
-  return isFinalContinueCode(code) && code !== 'started';
+  return isFinalContinueCode(code) && code !== 'started' && code !== 'unknown';
 }
 
 // ─── Wire ───────────────────────────────────────────────────────────────────
@@ -156,6 +165,8 @@ export interface A2aContinueFileV1 {
 export interface A2aContinueManifestV1 {
   v: 1;
   continueId: string;
+  /** The commit the checkout was at, clean, once the agent stopped: the request's `repo.head`, or B refuses. */
+  head: string;
   /** `<sessionId>.jsonl`. */
   transcript: A2aContinueFileV1;
   /** The conversation's folder `<sessionId>/` (tool results, subagents): each file by its path below it. */
@@ -246,7 +257,8 @@ export function continueAnswerFor(record: A2aContinueIncomingRecordV1 | undefine
     case 'starting':
       return 'received';
     case 'decided':
-      return record.code ?? 'failed';
+      // A decided record names a final code; any other is a writer's bug, and ends it.
+      return record.code && isFinalContinueCode(record.code) ? record.code : 'failed';
   }
 }
 
@@ -376,19 +388,18 @@ export function normalizeContinueRel(rel: unknown): string | null {
   return rel;
 }
 
-/** How a case-insensitive file system names a path: two that match it are one file there. */
+/**
+ * A path folded past any case-insensitive file system's own folding (NFC, then
+ * upper and lower case: `ς` and `σ` meet, and `ß` meets `ss`): two paths that
+ * meet here may be one file there. Folding too much only refuses a manifest.
+ */
 function foldedPath(rel: string): string {
-  return rel.normalize('NFC').toLowerCase();
+  return rel.normalize('NFC').toUpperCase().toLowerCase();
 }
 
-/** Whether a request is inside its time window by B's clock: not sent from the future, not living past CONTINUE_TTL_MAX_MS, and not expired. */
+/** Whether a request is inside its time window by B's clock (spawnClockOk, with CONTINUE_TTL_MAX_MS). */
 export function continueClockOk(sentAt: string, expiresAt: string, now: number): boolean {
-  const sent = Date.parse(sentAt);
-  const expires = Date.parse(expiresAt);
-  if (Number.isNaN(sent) || Number.isNaN(expires)) return false;
-  if (sent > now + CONTINUE_CLOCK_SKEW_MS) return false;
-  if (expires > now + CONTINUE_TTL_MAX_MS || expires > sent + CONTINUE_TTL_MAX_MS) return false;
-  return now <= expires;
+  return spawnClockOk(sentAt, expiresAt, now, CONTINUE_TTL_MAX_MS);
 }
 
 /** A request body, strictly; null when it is not exactly one. */
@@ -398,8 +409,9 @@ export function parseContinueRequest(raw: unknown): A2aContinueRequestV1 | null 
   const repo = raw['repo'];
   if (!isPlain(repo) || !onlyKeys(repo, ['origin', 'branch', 'head', 'sub'])) return null;
   if (!isContinueRepoKey(repo['origin']) || !isContinueBranch(repo['branch']) || !isContinueCommit(repo['head'])) return null;
+  // The folder below the top level, in its normal form, that every PC can hold.
   const sub = normalizeSpawnSub(repo['sub']);
-  if (sub === null || (repo['sub'] !== undefined && sub !== repo['sub'])) return null;
+  if (sub === null || (repo['sub'] !== undefined && (sub !== repo['sub'] || normalizeContinueRel(sub) === null))) return null;
   const estimate = raw['estimate'];
   if (!isPlain(estimate) || !onlyKeys(estimate, ['bytes', 'files'])) return null;
   if (!isCount(estimate['bytes'], CONTINUE_BYTES_MAX) || !isCount(estimate['files'], CONTINUE_FILES_MAX)) return null;
@@ -435,8 +447,8 @@ function parseFile(raw: unknown, keys: readonly string[]): A2aContinueFileV1 | n
  * caps. Null otherwise.
  */
 export function parseContinueManifest(raw: unknown): A2aContinueManifestV1 | null {
-  if (!isPlain(raw) || !onlyKeys(raw, ['v', 'continueId', 'transcript', 'files'])) return null;
-  if (raw['v'] !== 1 || !isContinueId(raw['continueId'])) return null;
+  if (!isPlain(raw) || !onlyKeys(raw, ['v', 'continueId', 'head', 'transcript', 'files'])) return null;
+  if (raw['v'] !== 1 || !isContinueId(raw['continueId']) || !isContinueCommit(raw['head'])) return null;
   const transcript = parseFile(raw['transcript'], ['sha256', 'bytes']);
   const files = raw['files'];
   if (!transcript || !Array.isArray(files) || files.length > CONTINUE_FILES_MAX) return null;
@@ -459,7 +471,7 @@ export function parseContinueManifest(raw: unknown): A2aContinueManifestV1 | nul
     const parts = folded.split('/');
     for (let i = 1; i < parts.length; i++) if (seen.has(parts.slice(0, i).join('/'))) return null;
   }
-  return { v: 1, continueId: raw['continueId'] as string, transcript, files: out };
+  return { v: 1, continueId: raw['continueId'] as string, head: raw['head'] as string, transcript, files: out };
 }
 
 export function parseContinueResult(raw: unknown): A2aContinueResultV1 | null {

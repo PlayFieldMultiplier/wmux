@@ -79,6 +79,15 @@ describe('continuePreflight', () => {
     expect(await check()).toEqual({ ok: false, code: 'unsafe-config' });
   });
 
+  it('refuses a repository with a submodule, and a branch with no commit yet', async () => {
+    g(repo, 'update-index', '--add', '--cacheinfo', `160000,${g(repo, 'rev-parse', 'HEAD')},vendor/lib`);
+    expect(await check()).toEqual({ ok: false, code: 'submodules' });
+    const fresh = path.join(root, 'fresh');
+    g(root, 'init', '-q', '-b', 'main', fresh);
+    g(fresh, 'remote', 'add', 'origin', 'https://github.com/acme/fresh.git');
+    expect(await check(fresh)).toEqual({ ok: false, code: 'no-commit' });
+  });
+
   it('refuses a folder outside any repository', async () => {
     const plain = path.join(root, 'plain');
     fs.mkdirSync(plain);

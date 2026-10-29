@@ -39,6 +39,7 @@ const request = (over: Record<string, unknown> = {}): Record<string, unknown> =>
 const manifest = (files: unknown[], over: Record<string, unknown> = {}): Record<string, unknown> => ({
   v: 1,
   continueId: ID,
+  head: HEAD,
   transcript: { sha256: SHA, bytes: 10 },
   files,
   ...over,
@@ -58,7 +59,7 @@ describe('parseContinueRequest', () => {
     for (const origin of ['https://github.com/acme/widget', 'git@github.com:acme/widget', '/srv/git/widget', 'github.com/acme/../x', 'GitHub.com/acme/widget']) {
       expect(parseContinueRequest(request({ repo: { origin, branch: 'main', head: HEAD } }))).toBeNull();
     }
-    for (const sub of ['../x', '/abs', 'a//b', './a', 'a\\b']) {
+    for (const sub of ['../x', '/abs', 'a//b', './a', 'a\\b', 'apps/aux', 'src/a:b', 'apps.', 'apps/x ']) {
       expect(parseContinueRequest(request({ repo: { origin: 'github.com/acme/widget', branch: 'main', head: HEAD, sub } }))).toBeNull();
     }
     expect(parseContinueRequest(request({ estimate: { bytes: CONTINUE_BYTES_MAX + 1, files: 0 } }))).toBeNull();
@@ -99,6 +100,8 @@ describe('parseContinueManifest', () => {
 
   it('refuses two paths one case-insensitive file system takes for one, and a file where a folder must be', () => {
     expect(parseContinueManifest(manifest([{ rel: 'a/B.txt', sha256: SHA, bytes: 1 }, { rel: 'a/b.txt', sha256: SHA, bytes: 1 }]))).toBeNull();
+    // Two forms of one Greek letter.
+    expect(parseContinueManifest(manifest([{ rel: 'σ.txt', sha256: SHA, bytes: 1 }, { rel: 'ς.txt', sha256: SHA, bytes: 1 }]))).toBeNull();
     // Composed and decomposed forms of the same name.
     expect(parseContinueManifest(manifest([{ rel: 'café', sha256: SHA, bytes: 1 }, { rel: 'café', sha256: SHA, bytes: 1 }]))).toBeNull();
     expect(parseContinueManifest(manifest([{ rel: 'a', sha256: SHA, bytes: 1 }, { rel: 'A/b', sha256: SHA, bytes: 1 }]))).toBeNull();
@@ -111,6 +114,7 @@ describe('parseContinueManifest', () => {
     expect(parseContinueManifest(manifest([{ rel: 'a', sha256: 'B'.repeat(64), bytes: 1 }]))).toBeNull();
     expect(parseContinueManifest(manifest([{ rel: 'a', sha256: SHA, bytes: 1, path: '/x' }]))).toBeNull();
     expect(parseContinueManifest(manifest([], { sessionId: SESSION }))).toBeNull();
+    expect(parseContinueManifest(manifest([], { head: 'HEAD' }))).toBeNull();
   });
 });
 
@@ -124,8 +128,9 @@ describe('results and status', () => {
   });
 
   it('resumes the source only on a final answer that is not started', () => {
-    for (const code of ['waiting-for-approval', 'ready', 'received', 'started'] as const) expect(continueResumesSource(code)).toBe(false);
-    for (const code of ['declined', 'expired', 'unknown', 'failed', 'diverged'] as const) expect(continueResumesSource(code)).toBe(true);
+    // `unknown` is no proof B never ran it: the owner decides.
+    for (const code of ['waiting-for-approval', 'ready', 'received', 'started', 'unknown'] as const) expect(continueResumesSource(code)).toBe(false);
+    for (const code of ['declined', 'expired', 'failed', 'diverged'] as const) expect(continueResumesSource(code)).toBe(true);
   });
 
   it("answers a status query from B's record, and unknown without one", () => {
@@ -139,6 +144,7 @@ describe('results and status', () => {
     expect(continueAnswerFor(record('starting'))).toBe('received');
     expect(continueAnswerFor(record('decided', 'started'))).toBe('started');
     expect(continueAnswerFor(record('decided'))).toBe('failed');
+    expect(continueAnswerFor(record('decided', 'received'))).toBe('failed');
 
     const expires = Date.parse(parsed.expiresAt);
     expect(continueClaimable(record('received'), expires)).toBe(true);
