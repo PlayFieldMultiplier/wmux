@@ -1,15 +1,36 @@
 // The own-mode Hermes host: every start condition is checked right before a
 // spawn, a refusal spawns nothing, and the owner's gateway is never stopped.
-// Fake Hermes homes and a fake runner; macOS and Linux only (v1), so on
-// Windows the same home is refused as unsupported before anything runs.
+// Fake Hermes homes, read statically; every process start is counted. macOS
+// and Linux only (v1), so on Windows the same home is refused as
+// unsupported before anything runs.
 
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// Every way to start a process, counted: a refusal or a shutdown starts none.
+const procCalls = vi.hoisted(() => [] as string[]);
+vi.mock('node:child_process', async (orig) => {
+  const real = await orig<typeof import('node:child_process')>();
+  const counted = <F extends (...a: never[]) => unknown>(name: string, fn: F): F => ((...a: Parameters<F>) => {
+    procCalls.push(name);
+    return fn(...a);
+  }) as F;
+  return {
+    ...real,
+    default: real,
+    execFile: counted('execFile', real.execFile),
+    execFileSync: counted('execFileSync', real.execFileSync),
+    spawn: counted('spawn', real.spawn),
+    spawnSync: counted('spawnSync', real.spawnSync),
+    exec: counted('exec', real.exec),
+    execSync: counted('execSync', real.execSync),
+  };
+});
+
 import { AcpBrainAdapter } from '../../deck/AcpBrainAdapter';
 import type { BrainEvent } from '../../deck/BrainAdapter';
-import type { HermesRun } from '../hermesEngine';
 import type { MyHermesReadinessDeps } from '../myHermes';
 import { OwnHermesHost, gatewayModeFlags, ownHermesToolAllowed } from '../myHermesHost';
 
@@ -19,39 +40,36 @@ const BINDING = { workspaceId: 'ws-1', botId: 'bot-0000000a', role: 'lead' as co
 let home = '';
 beforeEach(() => {
   home = fs.mkdtempSync(path.join(os.tmpdir(), 'wp2-ownhost-'));
+  procCalls.length = 0;
 });
 afterEach(() => {
   fs.rmSync(home, { recursive: true, force: true });
 });
 
-interface Answers { version?: string; config?: Record<string, unknown> }
+interface Answers { version?: string; config?: string }
 
-/** ~/.hermes with its install and the installer's launcher; a fake runner. */
+/** ~/.hermes with its install (version module, venv with acp), the
+ *  installer's launcher and the default profile's config.yaml. */
 function rig(answers: Answers = {}) {
   const root = path.join(home, '.hermes');
-  const venvExe = path.join(root, 'hermes-agent', 'venv', 'bin', 'hermes');
+  const install = path.join(root, 'hermes-agent');
+  const venvExe = path.join(install, 'venv', 'bin', 'hermes');
   fs.mkdirSync(path.dirname(venvExe), { recursive: true });
   fs.writeFileSync(venvExe, '#!/usr/bin/env python3\n', { mode: 0o755 });
+  fs.mkdirSync(path.join(install, 'hermes_cli'), { recursive: true });
+  fs.writeFileSync(path.join(install, 'hermes_cli', '__init__.py'), `__version__ = "${answers.version ?? '0.22.5'}"\n`);
+  fs.mkdirSync(path.join(install, 'venv', 'lib', 'python3.11', 'site-packages', 'acp'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'config.yaml'), answers.config ?? 'model:\n  default: x/y\napprovals:\n  mode: manual\n');
   const exe = path.join(home, '.local', 'bin', 'hermes');
   fs.mkdirSync(path.dirname(exe), { recursive: true });
   fs.writeFileSync(exe, `#!/usr/bin/env bash\nexec "${venvExe}" "$@"\n`, { mode: 0o755 });
-  const calls: string[][] = [];
-  const config = answers.config ?? { model: { default: 'x/y' }, 'approvals.mode': 'manual' };
-  const run: HermesRun = async (_exe, args) => {
-    calls.push(args);
-    if (args[0] === '--version') return { code: 0, stdout: `Hermes Agent v${answers.version ?? '0.22.5'}\n`, stderr: '' };
-    if (args[0] === 'acp') return { code: 0, stdout: 'Hermes ACP check OK\n', stderr: '' };
-    const key = args[args.length - 1];
-    if (key in config) return { code: 0, stdout: `${JSON.stringify(config[key])}\n`, stderr: '' };
-    return { code: 1, stdout: '', stderr: `Config key not set: ${key}` };
-  };
   const alive = new Set<number>();
-  const deps: MyHermesReadinessDeps = { home, platform: process.platform, resolveExe: () => exe, run, baseEnv: { PATH: '/usr/bin' }, pidAlive: (p) => alive.has(p) };
+  const deps: MyHermesReadinessDeps = { home, platform: process.platform, resolveExe: () => exe, baseEnv: { PATH: '/usr/bin' }, pidAlive: (p) => alive.has(p) };
   const writeGateway = (pid: number, argv: string[], platforms: Record<string, unknown> = {}): void => {
     fs.writeFileSync(path.join(root, 'gateway_state.json'), JSON.stringify({ pid, argv, hermes_home: root, platforms }));
     alive.add(pid);
   };
-  return { root, exe, calls, deps, alive, writeGateway };
+  return { root, exe, deps, alive, writeGateway };
 }
 
 function hostOf(r: ReturnType<typeof rig>, holder: (p: string, id: string) => { id: string; name: string } | null = () => null): OwnHermesHost {
@@ -85,7 +103,7 @@ describe.runIf(WIN)('OwnHermesHost on Windows', () => {
   it('refuses before anything runs', async () => {
     const r = rig();
     expect(await hostOf(r).prepareSpawn(BINDING.botId)).toMatchObject({ ok: false });
-    expect(r.calls).toEqual([]);
+    expect(procCalls).toEqual([]);
   });
 });
 
@@ -95,6 +113,7 @@ describe.skipIf(WIN)('OwnHermesHost.prepareSpawn', () => {
     const p = await hostOf(r).prepareSpawn(BINDING.botId);
     expect(p).toMatchObject({ ok: true, exe: r.exe, args: ['-p', 'default', 'acp'] });
     if (p.ok) expect(p.env.HERMES_HOME).toBe(r.root);
+    expect(procCalls).toEqual([]);
   });
 
   it('a messenger in the profile on a cold start: refused, and the adapter spawns nothing', async () => {
@@ -155,7 +174,7 @@ describe.skipIf(WIN)('OwnHermesHost.prepareSpawn', () => {
     const kill = vi.spyOn(process, 'kill');
     await host.policyFor(BINDING).unsettled();
     await host.shutdown();
-    expect(r.calls).toEqual([]);
+    expect(procCalls).toEqual([]);
     expect(kill).not.toHaveBeenCalled();
     kill.mockRestore();
   });
