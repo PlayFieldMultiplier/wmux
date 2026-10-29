@@ -26,7 +26,8 @@ import type { BotBinding } from '../../shared/bot';
 import { HERMES_PROFILE_RE } from '../../shared/bot';
 import type { AcpBrainAdapter, AcpHermesPolicy } from '../deck/AcpBrainAdapter';
 import { waitForCommanderTokenUse } from '../deck/commanderTrust';
-import { getApprovalService } from './approvals';
+import { getApprovalService, type ApprovalService } from './approvals';
+import { runningWakeAttended } from './wakeTaint';
 import { hermesEnv, hermesNotReadyMessage, readHermesGatewayState, type HermesGatewayState } from './hermesEngine';
 import { defaultMyHermesDeps, myHermesProfileDir, myHermesReadiness, type MyHermesReadinessDeps } from './myHermes';
 import { HERMES_PERMISSION_TIMEOUT_MS } from './hermesHost';
@@ -70,6 +71,11 @@ export interface OwnHermesHostDeps {
   holder?: (profile: string, botId: string) => { id: string; name: string } | null;
   pidAlive?: (pid: number) => boolean;
   log?: (line: string) => void;
+  /** Whether the bot's running wake is attended (default: wakeTaint.ts
+   *  runningWakeAttended). */
+  attended?: (botId: string) => boolean;
+  /** The approval store (default: getApprovalService). */
+  approvals?: () => Pick<ApprovalService, 'askNativeTool'> | null;
 }
 
 function defaultPidAlive(pid: number): boolean {
@@ -152,7 +158,10 @@ export class OwnHermesHost {
           : null;
       },
       askOwner: async (req, signal) => {
-        const approvals = getApprovalService();
+        // A run no one is present for (an owner routine's slot) is denied at
+        // once, with no card: an unanswered card would only hold the turn.
+        if (!(this.deps.attended ?? runningWakeAttended)(binding.botId)) return false;
+        const approvals = (this.deps.approvals ?? getApprovalService)();
         if (!approvals) return false;
         return approvals.askNativeTool(binding, req, { timeoutMs: HERMES_PERMISSION_TIMEOUT_MS, signal });
       },
