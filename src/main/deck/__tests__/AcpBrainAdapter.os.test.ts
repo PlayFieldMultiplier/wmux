@@ -740,6 +740,22 @@ describe('AcpBrainAdapter (My Hermes, own mode)', () => {
     adapter.dispose();
   });
 
+  it('a cancel watch whose turn fails stops wmux\'s agent at once instead of leaving its timer armed', async () => {
+    const h = slowHermes();
+    const { adapter, policy, asks } = ownAdapter(h.spawnFn, {}, undefined, { promptTimeoutMs: 60_000, ownCancelBoundMs: 60_000 });
+    adapter.start({});
+    const turn = collect(adapter.send('hello'));
+    await vi.waitFor(() => expect(asks).toHaveLength(1), { timeout: 5_000 });
+    const failed = Promise.reject(new Error('boom'));
+    failed.catch(() => undefined);
+    (adapter as unknown as { ownTurn: Promise<void> }).ownTurn = failed;
+    adapter.interrupt();
+    await vi.waitFor(() => expect(h.children[0].killed).toBe(true), { timeout: 3_000 });
+    expect(policy.unsettled).toHaveBeenCalledTimes(1);
+    expect((await turn).at(-1)).toMatchObject({ type: 'error' });
+    adapter.dispose();
+  });
+
   it('a timed-out turn Hermes never ends is let go at the bound too, so the bot is not blocked until restart', async () => {
     const h = slowHermes();
     const { adapter, policy, asks } = ownAdapter(h.spawnFn, {}, undefined, { promptTimeoutMs: 200, ownCancelBoundMs: 300 });

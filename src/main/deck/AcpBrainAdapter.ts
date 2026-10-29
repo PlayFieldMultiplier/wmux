@@ -821,7 +821,7 @@ export class AcpBrainAdapter implements BrainAdapter {
         await new Promise<void>((r) => {
           woke = r;
           this.ownStopWaiters.add(r);
-          void gate.then(r);
+          void gate.then(r, r);
         });
         this.ownStopWaiters.delete(woke);
       }
@@ -886,10 +886,11 @@ export class AcpBrainAdapter implements BrainAdapter {
         turnEnded = ended;
         this.gate().ended = ended;
         this.ownTurn = ended;
-        void ended.then(() => {
+        const clear = (): void => {
           if (this.gate().ended === ended) this.gate().ended = null;
           if (this.ownTurn === ended) this.ownTurn = null;
-        });
+        };
+        void ended.then(clear, clear);
       }
       const promptDone = this.request(
         'session/prompt',
@@ -1140,13 +1141,24 @@ export class AcpBrainAdapter implements BrainAdapter {
     const bound = new Promise<boolean>((r) => {
       timer = setTimeout(() => r(false), boundMs);
     });
-    void Promise.race([turn.then(() => true), bound]).then((ended) => {
-      clearTimeout(timer);
-      if (ended || this.ownTurn !== turn) return;
-      console.warn(`[acp-brain:${this.deps.spawnSpec.command}] a cancelled My Hermes turn did not end in ${boundMs} ms; closing wmux's own agent process (the gateway is not stopped)`);
+    const letGo = (why: string): void => {
+      console.warn(`[acp-brain:${this.deps.spawnSpec.command}] a cancelled My Hermes turn ${why}; closing wmux's own agent process (the gateway is not stopped)`);
       this.killChildTree();
       void this.deps.hermes?.unsettled().catch(() => undefined);
-    });
+    };
+    void Promise.race([turn.then(() => true), bound]).then(
+      (ended) => {
+        clearTimeout(timer);
+        if (ended || this.ownTurn !== turn) return;
+        letGo(`did not end in ${boundMs} ms`);
+      },
+      (err: unknown) => {
+        // Whether Hermes ended the turn cannot be told: as at the bound,
+        // what wmux started is stopped before the gate opens.
+        clearTimeout(timer);
+        letGo(`failed (${String(err)})`);
+      },
+    );
   }
 
   /** Hermes: cancel the running turn, wait for it to settle, then kill the agent. */
@@ -1158,7 +1170,7 @@ export class AcpBrainAdapter implements BrainAdapter {
       // the profile prompt. The owner's gateway is not stopped.
       const turn = this.ownTurn;
       this.cancelOwnTurn();
-      if (turn) await turn;
+      if (turn) await turn.catch(() => undefined);
       this.killChildTree();
       return;
     }

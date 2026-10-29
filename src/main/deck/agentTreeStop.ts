@@ -10,12 +10,15 @@
 // 1. SIGINT to the agent alone, which lets Hermes run its own cleanup of its
 //    tool groups (its ACP entry catches KeyboardInterrupt and exits), and up
 //    to `interruptWaitMs` for it to exit;
-// 2. SIGTERM to every process of the snapshot still alive, then after
+// 2. SIGTERM to every process of the tree still alive, then after
 //    `termGraceMs` SIGKILL to those still alive.
-// A process is signalled only while its PID still has the start time read in
-// the snapshot, so a PID the OS reused meanwhile is never touched, and
-// nothing outside the snapshot is ever signalled. Windows uses its tree kill
-// (taskkill /T), not this.
+// Every read of the table follows the tree: a process stays tracked only
+// while its PID still has the start time first read for it, and a process
+// started meanwhile below a tracked one is added with its own. So a PID the
+// OS reused is never touched, a command started during the waits is not
+// missed, and nothing outside the agent's tree is ever signalled. A table
+// that cannot be read (after a few tries) stops the agent alone, and says
+// so. Windows uses its tree kill (taskkill /T), not this.
 
 import { execFile } from 'node:child_process';
 
@@ -34,6 +37,9 @@ export interface AgentTreeStopDeps {
   table?: () => Promise<ProcRow[] | null>;
   /** Send a signal (default: process.kill). */
   signal?: (pid: number, sig: NodeJS.Signals) => void;
+  /** Whether a PID exists (default: signal 0); used only when the table cannot be read. */
+  alive?: (pid: number) => boolean;
+  log?: (line: string) => void;
   interruptWaitMs?: number;
   termGraceMs?: number;
   pollMs?: number;
@@ -42,6 +48,17 @@ export interface AgentTreeStopDeps {
 const INTERRUPT_WAIT_MS = 3_000;
 const TERM_GRACE_MS = 2_000;
 const POLL_MS = 100;
+/** Reads of the table before it counts as unreadable. */
+const TABLE_TRIES = 3;
+
+function defaultAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
 
 /** `ps -A -o pid=,ppid=,stat=,lstart=` output as rows. Pure. */
 export function parseProcTable(out: string): ProcRow[] {
@@ -84,20 +101,31 @@ function readTable(): Promise<ProcRow[] | null> {
   });
 }
 
-/** The snapshot's processes that are still the same processes (PID and start time). */
-async function stillAlive(snapshot: readonly ProcRow[], table: () => Promise<ProcRow[] | null>): Promise<ProcRow[]> {
-  const now = await table();
-  if (!now) return [];
-  const live = new Map(now.filter((r) => !r.zombie).map((r) => [r.pid, r.start]));
-  return snapshot.filter((r) => live.get(r.pid) === r.start);
+/** The tracked processes that are still the same processes (PID and start
+ *  time, not exited), plus every live process now below one of them that is
+ *  not tracked yet (a command started since the last read), with its own
+ *  start time. Pure. */
+export function followTree(tracked: readonly ProcRow[], rows: readonly ProcRow[]): ProcRow[] {
+  const live = rows.filter((r) => !r.zombie);
+  const now = new Map(live.map((r) => [r.pid, r.start]));
+  const out = new Map<number, ProcRow>();
+  for (const r of tracked) if (now.get(r.pid) === r.start) out.set(r.pid, r);
+  for (const r of [...out.values()]) {
+    for (const d of treeOf(r.pid, live)) if (!out.has(d.pid)) out.set(d.pid, d);
+  }
+  return [...out.values()];
 }
 
 /** Stop the agent `pid` and every process it started (see the head of this
  *  file). Resolves once they are gone or signalled with SIGKILL. When the
- *  table cannot be read, only the agent is signalled. Never throws. */
+ *  table cannot be read (after a few tries), only the agent is stopped, and
+ *  only while it was last seen alive; that is logged as incomplete. Never
+ *  throws. */
 export async function stopAgentTree(pid: number, deps: AgentTreeStopDeps = {}): Promise<void> {
   const table = deps.table ?? readTable;
   const signal = deps.signal ?? ((p: number, sig: NodeJS.Signals) => { process.kill(p, sig); });
+  const alive = deps.alive ?? defaultAlive;
+  const log = deps.log ?? ((line: string) => console.warn(line));
   const send = (p: number, sig: NodeJS.Signals): void => {
     try {
       signal(p, sig);
@@ -107,29 +135,68 @@ export async function stopAgentTree(pid: number, deps: AgentTreeStopDeps = {}): 
   };
   const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
   const poll = deps.pollMs ?? POLL_MS;
-  const snapshot = treeOf(pid, (await table()) ?? []);
-  if (snapshot.length === 0) {
-    // No table (or the agent already went): the agent alone, as before.
+  const termGraceMs = deps.termGraceMs ?? TERM_GRACE_MS;
+  /** The table, tried a few times: a single failed `ps` is not "all gone". */
+  const read = async (): Promise<ProcRow[] | null> => {
+    for (let i = 0; i < TABLE_TRIES; i++) {
+      if (i > 0) await sleep(poll);
+      const rows = await table();
+      if (rows) return rows;
+    }
+    return null;
+  };
+  /** No table: the agent alone, SIGTERM then SIGKILL, and only while it was
+   *  last seen alive (it is wmux's own child, not yet reaped). */
+  const agentOnly = async (agentSeen: boolean, when: string): Promise<void> => {
+    log(`[acp-brain] the process table could not be read ${when}; stopping only the agent (pid ${pid}), so a command it started may be left running`);
+    if (!agentSeen || !alive(pid)) return;
     send(pid, 'SIGTERM');
-    return;
-  }
-  const agent = snapshot[0];
-  // 1. Hermes's own cleanup first.
+    const until = Date.now() + termGraceMs;
+    while (alive(pid) && Date.now() < until) await sleep(poll);
+    if (alive(pid)) send(pid, 'SIGKILL');
+  };
+
+  const first = await read();
+  if (!first) return agentOnly(true, 'before the stop');
+  let tracked = followTree(treeOf(pid, first), first);
+  // Not in the table (gone, or the PID is no longer the agent's): nothing is signalled.
+  const agent = tracked.find((r) => r.pid === pid);
+  if (!agent) return;
+  const agentLive = (): boolean => tracked.some((r) => r.pid === agent.pid && r.start === agent.start);
+  /** Re-read the table into `tracked`; false when it cannot be read. */
+  const update = async (): Promise<boolean> => {
+    const rows = await read();
+    if (!rows) return false;
+    tracked = followTree(tracked, rows);
+    return true;
+  };
+
+  // 1. Hermes's own cleanup first. The table was read just above, with no
+  //    wait in between: the agent's PID and start time match it now.
   send(agent.pid, 'SIGINT');
   const until = Date.now() + (deps.interruptWaitMs ?? INTERRUPT_WAIT_MS);
-  let live = await stillAlive(snapshot, table);
-  while (live.length > 0 && live.some((r) => r.pid === agent.pid) && Date.now() < until) {
+  while (Date.now() < until) {
     await sleep(poll);
-    live = await stillAlive(snapshot, table);
+    const seen = agentLive();
+    if (!(await update())) return agentOnly(seen, 'while waiting for the agent');
+    if (!agentLive()) break;
   }
-  // 2. What is left of the snapshot.
-  if (live.length === 0) return;
-  for (const r of live) send(r.pid, 'SIGTERM');
-  const graceUntil = Date.now() + (deps.termGraceMs ?? TERM_GRACE_MS);
-  live = await stillAlive(live, table);
-  while (live.length > 0 && Date.now() < graceUntil) {
+  // 2. What is left, with whatever it started meanwhile.
+  {
+    const seen = agentLive();
+    if (!(await update())) return agentOnly(seen, 'before SIGTERM');
+  }
+  if (tracked.length === 0) return;
+  for (const r of tracked) send(r.pid, 'SIGTERM');
+  const graceUntil = Date.now() + termGraceMs;
+  while (tracked.length > 0 && Date.now() < graceUntil) {
     await sleep(poll);
-    live = await stillAlive(live, table);
+    const seen = agentLive();
+    if (!(await update())) return agentOnly(seen, 'after SIGTERM');
   }
-  for (const r of live) send(r.pid, 'SIGKILL');
+  {
+    const seen = agentLive();
+    if (!(await update())) return agentOnly(seen, 'before SIGKILL');
+  }
+  for (const r of tracked) send(r.pid, 'SIGKILL');
 }
