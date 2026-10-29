@@ -242,7 +242,8 @@ describe('My Hermes helpers', () => {
     expect(listMyHermesProfiles(home)).toEqual(['default', 'coder']);
   });
 
-  it('knows the installer launcher and a symlink into the install, not another hermes', () => {
+  // A bash launcher and a symlink are POSIX shapes; Windows answers unsupported-os first.
+  it.skipIf(WIN)('knows the installer launcher and a symlink into the install, not another hermes', () => {
     const { exe, root } = makeHome();
     expect(hermesExeOwnedBy(exe, root)).toBe(true);
     const link = path.join(home, 'link-hermes');
