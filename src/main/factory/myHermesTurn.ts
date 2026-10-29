@@ -18,17 +18,12 @@
 //   probe sends one).
 
 import type { WakeItem } from '../../shared/wake';
-import { dmThreadId, isGuestSourcedCard, type RoomCard, type ThreadId } from '../../shared/room';
+import { dmThreadId, isGuestSourcedCard, type RoomCard } from '../../shared/room';
+import type { WakeRoutineSummary } from './wakePrompt';
 
 /** A routine as a My Hermes wake checks it: the one lookup its verdict and
  *  its prompt are both built from (BotRuntime.ts). */
-export interface OwnHermesRoutine {
-  prompt: string;
-  author?: 'owner';
-  botId?: string;
-  workspaceId?: string;
-  threadId?: ThreadId;
-}
+export type OwnHermesRoutine = Pick<WakeRoutineSummary, 'prompt' | 'author' | 'botId' | 'workspaceId' | 'threadId'>;
 
 /** Why an own-mode bot's wake is not sent to Hermes. `pause`: the reason
  *  stays until the owner acts, so the routine is paused (and the note posted
@@ -48,13 +43,16 @@ const room = (input: { roomClean: boolean | null }): string | null => {
 /** Why an own-mode bot's wake is not sent to Hermes, or null. `attended`:
  *  the owner's message is attended and clean (a `human` wake);
  *  `routineClean`: the wake and the conversation are clean with no
- *  signed-in data (a `routine` wake); `routine`: the routine as looked up
- *  for this wake (null: gone). Pure. */
+ *  signed-in data (a `routine` wake), null when that cannot be told now;
+ *  `routine`: the routine as looked up for this wake (null: gone). What may
+ *  pass by itself (a chat that could not be read, a check that could not be
+ *  made) refuses this run only; what stays until the owner acts pauses the
+ *  routine. Pure. */
 export function ownHermesWakeRefusal(input: {
   item: WakeItem;
   botId: string;
   attended: boolean;
-  routineClean: boolean;
+  routineClean: boolean | null;
   roomClean: boolean | null;
   routine: OwnHermesRoutine | null;
 }): OwnHermesRefusal | null {
@@ -68,9 +66,12 @@ export function ownHermesWakeRefusal(input: {
     if (rt.botId !== input.botId || rt.workspaceId !== input.item.workspaceId) return { why: 'the routine is not this bot\'s, so this was not sent to My Hermes.', pause: false, note: false };
     if (rt.author !== 'owner') return { why: 'My Hermes runs only routines you set for it yourself; a bot wrote this one, so it is paused.', pause: true, note: true };
     if (rt.threadId !== dm || input.item.threadId !== dm) return { why: 'My Hermes runs routines only in its 1:1 chat, so this one is paused.', pause: true, note: true };
+    if (input.routineClean === null) return { why: 'wmux could not check that this conversation is clean, so this run of the routine was not sent to My Hermes.', pause: false, note: true };
     if (!input.routineClean) return { why: 'This conversation has taken in outside text, so wmux paused this routine; start a new conversation with My Hermes, then resume it.', pause: true, note: true };
     const dirty = room(input);
-    return dirty ? { why: `${dirty} The routine is paused.`, pause: true, note: true } : null;
+    if (!dirty) return null;
+    // A chat that could not be read may be readable next time.
+    return input.roomClean === null ? { why: dirty, pause: false, note: true } : { why: `${dirty} The routine is paused.`, pause: true, note: true };
   }
   if (r.kind !== 'human') return { why: 'My Hermes answers only your own messages in its 1:1 chat, so this was not sent to it.', pause: false, note: true };
   if (input.item.threadId !== dm || r.room === true || r.roomWide === true || r.lead === true) {

@@ -528,13 +528,18 @@ export class RoutineStore {
   }
 
   /** A bot on My Hermes was not sent a wake of this routine for a reason
-   *  that stays until the owner acts: it is paused (`refused`) rather than
-   *  refused at every slot. Returns whether it was paused now. */
+   *  that stays until the owner acts: an active one is paused (`refused`)
+   *  rather than refused at every slot. Returns whether to tell the owner:
+   *  false only for one already paused for that (a wake queued before the
+   *  pause tells nothing new). A done one-time routine stays done. */
   pauseRefused(botId: string, routineId: string): boolean {
     const r = this.routines.find((x) => x.id === routineId);
-    if (!r || r.botId !== botId || r.state !== 'active') return false;
-    this.pauseOne(r, 'refused');
-    this.changed([r.botId]);
+    if (!r || r.botId !== botId) return true;
+    if (r.state === 'paused' && r.paused?.reason === 'refused') return false;
+    if (r.state === 'active') {
+      this.pauseOne(r, 'refused');
+      this.changed([r.botId]);
+    }
     return true;
   }
 
@@ -545,9 +550,13 @@ export class RoutineStore {
     const r = this.routines.find((x) => x.id === routineId);
     if (!r || r.botId !== botId || r.author !== 'owner') return { ok: false, code: 'not_found', message: `no routine ${routineId} of yours for this bot` };
     if (r.state === 'done') return bad('this one-time routine is done; give it a new time first');
+    if (r.state === 'paused') return bad('this routine is paused; resume it first');
     const bot = this.botOf(r.botId);
     if (!bot || !this.canRun(bot)) return { ok: false, code: 'not_authorized', message: 'the bot cannot run now (it is off or parked, or bots are off)' };
-    if (!this.fire(r, bot, this.now())) return { ok: false, code: 'not_authorized', message: 'the run was not queued (the bot\'s queue is full)' };
+    const now = this.now();
+    if (!this.fire(r, bot, now)) return { ok: false, code: 'not_authorized', message: 'the run was not queued' };
+    r.lastFiredAt = now;
+    this.changed([r.botId]);
     return { ok: true, routine: publicCopy(r) };
   }
 
@@ -561,8 +570,15 @@ export class RoutineStore {
     if (typeof routineId !== 'string' || !ROUTINE_ID_RE.test(routineId)) return bad('routineId is not a routine id');
     if (typeof paused !== 'boolean') return bad('paused must be true or false');
     const r = this.routines.find((x) => x.id === routineId);
-    if (!r || (actor.kind === 'bot' && r.botId !== actor.botId)) return { ok: false, code: 'not_found', message: `you have no routine ${routineId}` };
-    if (!paused && r.state === 'done') return bad('this one-time routine is done; give it a new time with routine_set (routineId)');
+    // A bot pauses or resumes its own routines, never one the owner wrote.
+    if (!r || (actor.kind === 'bot' && (r.botId !== actor.botId || r.author === 'owner'))) return { ok: false, code: 'not_found', message: `you have no routine ${routineId}` };
+    // Paused because My Hermes refused it: only the owner resumes it.
+    if (!paused && actor.kind === 'bot' && r.state === 'paused' && r.paused?.reason === 'refused') {
+      return { ok: false, code: 'not_authorized', message: 'wmux paused this routine until the owner resumes it' };
+    }
+    if (!paused && r.state === 'done') {
+      return bad(actor.kind === 'bot' || r.author !== 'owner' ? 'this one-time routine is done; give it a new time with routine_set (routineId)' : 'this one-time routine is done; give it a new time first');
+    }
     const party: Party = actor.kind === 'bot' ? { kind: 'bot', workspaceId: r.workspaceId, botId: r.botId } : { kind: 'human' };
     if (paused && r.state === 'active') {
       this.pauseOne(r, actor.kind === 'bot' ? 'bot' : 'owner');

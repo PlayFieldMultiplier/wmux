@@ -24,7 +24,9 @@
 //   routine.ownerSet / ownerPause / ownerRemove / ownerRun
 //                   the operator (the main window) only, never a bot or the
 //                   phone, and only for a bot on My Hermes: the owner writes,
-//                   pauses, deletes or runs now that bot's routines. ownerSet
+//                   pauses, deletes or runs now that bot's routines (a bot
+//                   moved off My Hermes: pause and delete the owner's own
+//                   routines only, so none is left that no one can stop). ownerSet
 //                   marks a routine `author: 'owner'` and runs it in the bot's
 //                   1:1; it changes only a routine the owner wrote. Only such
 //                   a routine is sent to My Hermes (myHermesTurn.ts).
@@ -123,8 +125,10 @@ export interface RoutineHandlerDeps {
   bot?: (botId: string) => BotProfile | null;
 }
 
-/** The My Hermes bot an owner routine call names, or why not. */
-function ownerRoutineBot(raw: Record<string, unknown>, ctx: RpcContext | undefined, deps: RoutineHandlerDeps): { ok: true; bot: BotProfile } | Refusal {
+/** The My Hermes bot an owner routine call names, or why not. With
+ *  `anyEngine` (pause, delete), a bot no longer on My Hermes passes too, so
+ *  the owner's routines are never left with no one to stop them. */
+function ownerRoutineBot(raw: Record<string, unknown>, ctx: RpcContext | undefined, deps: RoutineHandlerDeps, anyEngine = false): { ok: true; bot: BotProfile } | Refusal {
   if (ctx?.operator !== true) return refuse('not_authorized', 'only the owner, in the wmux window, manages these routines');
   const botId = raw.botId;
   if (typeof botId !== 'string' || !BOT_ID_RE.test(botId)) return refuse('invalid_argument', 'botId must be a bot id');
@@ -135,7 +139,7 @@ function ownerRoutineBot(raw: Record<string, unknown>, ctx: RpcContext | undefin
     bot = null;
   }
   if (!bot) return refuse('invalid_argument', `no bot ${botId}`);
-  if (!isOwnHermesEngine(bot.engine)) return refuse('not_authorized', 'the owner\'s routines are for a bot on My Hermes');
+  if (!anyEngine && !isOwnHermesEngine(bot.engine)) return refuse('not_authorized', 'the owner\'s routines are for a bot on My Hermes');
   return { ok: true, bot };
 }
 
@@ -184,21 +188,28 @@ export function registerRoutineHandlers(router: Pick<FactoryRouter, 'register'>,
 
   router.register(ROUTINE_RPC.ownerPause, async (raw, ctx?: RpcContext) => {
     const p = obj(raw);
-    const who = ownerRoutineBot(p, ctx, deps);
+    const who = ownerRoutineBot(p, ctx, deps, true);
     if (!who.ok) return who;
     const store = deps.store();
     if (!store) return NOT_STARTED;
-    // The owner's pause reaches only the named bot's routine.
-    if (typeof p.routineId === 'string' && store.get(p.routineId)?.botId !== who.bot.id) return { ok: false, code: 'not_found', message: `no routine ${p.routineId} for this bot` };
+    // The owner's pause reaches only the named bot's routine; off My Hermes,
+    // only one the owner wrote.
+    const r = typeof p.routineId === 'string' ? store.get(p.routineId) : null;
+    if (typeof p.routineId === 'string' && (r?.botId !== who.bot.id || (!isOwnHermesEngine(who.bot.engine) && r?.author !== 'owner'))) {
+      return { ok: false, code: 'not_found', message: `no routine ${p.routineId} for this bot` };
+    }
     return store.pause({ kind: 'owner' }, p.routineId, p.paused);
   });
 
   router.register(ROUTINE_RPC.ownerRemove, async (raw, ctx?: RpcContext) => {
     const p = obj(raw);
-    const who = ownerRoutineBot(p, ctx, deps);
+    const who = ownerRoutineBot(p, ctx, deps, true);
     if (!who.ok) return who;
     const store = deps.store();
     if (!store) return NOT_STARTED;
+    if (!isOwnHermesEngine(who.bot.engine) && (typeof p.routineId !== 'string' || store.get(p.routineId)?.author !== 'owner')) {
+      return { ok: false, code: 'not_found', message: `no routine ${String(p.routineId)} of yours for this bot` };
+    }
     return store.remove(who.bot.id, p.routineId);
   });
 

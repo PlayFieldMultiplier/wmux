@@ -1770,12 +1770,12 @@ describe('BotRuntime: a bot on My Hermes', () => {
 
   describe('an owner routine', () => {
     type Routine = { routineId: string; title: string; prompt: string; schedule: string; author?: 'owner'; botId?: string; workspaceId?: string; threadId?: `dm:${string}` | 'general' };
-    function routineRig(opts: { routine: (id: string) => Routine; clean?: boolean; signedIn?: boolean | 'unknown' }) {
-      const r = ownRig();
+    function routineRig(opts: { routine: (id: string) => Routine; clean?: boolean | null; signedIn?: boolean | 'unknown'; roomClean?: boolean | null }) {
+      const r = ownRig(opts.roomClean !== undefined ? { roomClean: opts.roomClean } : {});
       const paused: string[] = [];
       setBotRuntimePorts({
         resolveRoutine: () => opts.routine(r.id) as never,
-        ownerRoutineClean: (_item, botId) => (opts.clean ?? true) && conversationMarks(botId)?.tainted === false,
+        ownerRoutineClean: (_item, botId) => (opts.clean === undefined ? conversationMarks(botId)?.tainted === false : opts.clean),
         wakeSignedIn: () => opts.signedIn ?? false,
         // Paused once: the store answers true only the first time.
         pauseRefusedRoutine: (_botId, routineId) => {
@@ -1810,7 +1810,7 @@ describe('BotRuntime: a bot on My Hermes', () => {
     });
 
     it('over a tainted conversation or a signed-in wake it is refused, paused with one note, and not charged', async () => {
-      for (const opts of [{ clean: false }, { signedIn: 'unknown' as const }]) {
+      for (const opts of [{ clean: false }, { signedIn: true }]) {
         const r = routineRig({ routine: owners, ...opts });
         r.fire();
         await settle(10);
@@ -1819,6 +1819,19 @@ describe('BotRuntime: a bot on My Hermes', () => {
         expect(r.adapters.flatMap((a) => a.prompts)).toEqual([]);
         expect(r.paused).toEqual(['r-aaaaaaaa']);
         expect(r.notes).toEqual([expect.objectContaining({ why: expect.stringMatching(/outside text/) })]);
+        expect(r.store.usageOf(r.id).turns).toEqual([]);
+        __resetBotRuntimePortsForTesting();
+      }
+    });
+
+    it('what may pass by itself refuses the run without a pause: a check that cannot be made, a chat that cannot be read', async () => {
+      for (const [opts, why] of [[{ signedIn: 'unknown' as const }, /could not check/], [{ clean: null }, /could not check/], [{ roomClean: null }, /could not read this chat/]] as const) {
+        const r = routineRig({ routine: owners, ...opts });
+        r.fire();
+        await settle(10);
+        expect(r.adapters.flatMap((a) => a.prompts)).toEqual([]);
+        expect(r.paused).toEqual([]);
+        expect(r.notes).toEqual([expect.objectContaining({ why: expect.stringMatching(why) })]);
         expect(r.store.usageOf(r.id).turns).toEqual([]);
         __resetBotRuntimePortsForTesting();
       }

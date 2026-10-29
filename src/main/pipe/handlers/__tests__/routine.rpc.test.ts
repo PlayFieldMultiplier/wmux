@@ -252,7 +252,7 @@ describe('the owner\'s routines of a bot on My Hermes', () => {
       bot: (id) => bots.get(id) ?? null,
     });
     const call = (method: string, raw: unknown, ctx?: RpcContext) => (handlers.get(method) as (r: unknown, c?: RpcContext) => Promise<unknown>)(raw, ctx);
-    return { store, call, queued, dropped };
+    return { store, call, queued, dropped, bots };
   }
 
   it('only the operator writes one, only for a bot on My Hermes, and it always runs in the bot\'s 1:1', async () => {
@@ -293,6 +293,13 @@ describe('the owner\'s routines of a bot on My Hermes', () => {
     expect(await r.call('routine.ownerPause', { botId: A, routineId: id, paused: true }, OPERATOR)).toMatchObject({ ok: true, routine: { state: 'paused' } });
     expect(await r.call('routine.ownerRemove', { botId: A, routineId: id }, OPERATOR)).toMatchObject({ ok: true });
     expect(r.store.get(id)).toBeNull();
+    // Moved off My Hermes: the owner can still pause and delete their own
+    // routines (none is left that no one can stop), but not write or run one.
+    const again = await r.call('routine.ownerSet', { botId: A, ...params }, OPERATOR) as { routine: { id: string } };
+    r.bots.set(A, profile(A));
+    expect(await r.call('routine.ownerPause', { botId: A, routineId: again.routine.id, paused: true }, OPERATOR)).toMatchObject({ ok: true });
+    expect(await r.call('routine.ownerRun', { botId: A, routineId: again.routine.id }, OPERATOR)).toMatchObject({ ok: false, code: 'not_authorized' });
+    expect(await r.call('routine.ownerRemove', { botId: A, routineId: again.routine.id }, OPERATOR)).toMatchObject({ ok: true });
     for (const m of ['routine.ownerPause', 'routine.ownerRemove', 'routine.ownerRun']) {
       expect(await r.call(m, { botId: A, routineId: 'r-zzzzzzzz', paused: true }, asBot(A)), m).toMatchObject({ ok: false, code: 'not_authorized' });
     }
