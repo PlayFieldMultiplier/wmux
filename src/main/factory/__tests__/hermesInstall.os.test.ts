@@ -26,7 +26,7 @@ vi.mock('node:child_process', async (orig) => {
   };
 });
 
-import { hermesInstallVersion, parseInstallVersion } from '../hermesInstall';
+import { hermesInstallVersion, launcherExecTargets, parseInstallVersion, shFirstWord } from '../hermesInstall';
 
 const WIN = process.platform === 'win32';
 
@@ -72,6 +72,55 @@ describe('hermesInstallVersion', () => {
     write(path.join(venv, 'Lib', 'site-packages', 'hermes_cli', '__init__.py'), versionModule('0.22.6'));
     expect(hermesInstallVersion(exe)).toBe('0.22.6');
     expect(procCalls).toEqual([]);
+  });
+
+  it('the Windows installer\'s published command: a binary launcher in <HERMES_HOME>\\bin beside <HERMES_HOME>\\hermes-agent', () => {
+    const home = path.join(dir, 'AppData', 'Local', 'hermes');
+    // A native launcher (loader stub + zip), larger than any text launcher, with no "#!" at its start.
+    const exe = write(path.join(home, 'bin', 'hermes.exe'), `MZ${'\0'.repeat(20_000)}#!C:\\py\\python.exe -I\nPK`);
+    write(path.join(home, 'hermes-agent', 'hermes_cli', '__init__.py'), versionModule('0.22.7'));
+    expect(hermesInstallVersion(exe)).toBe('0.22.7');
+    // Its venv's packages when the checkout has no version module.
+    fs.rmSync(path.join(home, 'hermes-agent', 'hermes_cli'), { recursive: true });
+    write(path.join(home, 'hermes-agent', 'venv', 'Lib', 'site-packages', 'hermes_cli', '__init__.py'), versionModule('0.22.8'));
+    expect(hermesInstallVersion(exe)).toBe('0.22.8');
+    expect(procCalls).toEqual([]);
+  });
+
+  it.skipIf(WIN)('a launcher is read for what it execs, not for a path it only mentions', () => {
+    const real = write(path.join(dir, 'real', 'hermes-agent', 'venv', 'bin', 'hermes'), '#!/usr/bin/env python3\n', 0o755);
+    write(path.join(dir, 'real', 'hermes-agent', 'hermes_cli', '__init__.py'), versionModule('0.22.5'));
+    const decoy = write(path.join(dir, 'decoy', 'hermes-agent', 'venv', 'bin', 'hermes'), '#!/usr/bin/env python3\n', 0o755);
+    write(path.join(dir, 'decoy', 'hermes-agent', 'hermes_cli', '__init__.py'), versionModule('0.19.0'));
+    const launcher = write(path.join(dir, '.local', 'bin', 'hermes'), [
+      '#!/bin/sh',
+      `# was: exec "${decoy}" "$@"`,
+      'if false; then',
+      `  exec "${decoy}" "$@"`,
+      'fi',
+      `exec '${real}' "$@"`,
+      '',
+    ].join('\n'), 0o755);
+    expect(hermesInstallVersion(launcher)).toBe('0.22.5');
+    expect(procCalls).toEqual([]);
+  });
+
+  it.skipIf(WIN)('a forwarder to a checkout\'s own launcher (<checkout>/.hermes/bin/hermes) reads that checkout', () => {
+    const checkout = path.join(dir, '.hermes', 'hermes-agent');
+    const own = write(path.join(checkout, '.hermes', 'bin', 'hermes'), `#!/bin/sh\nexec /usr/bin/python3 -I -c 'import sys' "$@"\n`, 0o755);
+    write(path.join(checkout, 'hermes_cli', '__init__.py'), versionModule('0.23.0'));
+    const forwarder = write(path.join(dir, '.local', 'bin', 'hermes'), `#!/bin/sh\nexec ${own} "$@"\n`, 0o755);
+    expect(hermesInstallVersion(forwarder)).toBe('0.23.0');
+    expect(procCalls).toEqual([]);
+  });
+
+  it('reads a command\'s first word the way sh does', () => {
+    expect(shFirstWord(` "/a b/hermes" "$@"`)).toBe('/a b/hermes');
+    expect(shFirstWord(` '/x/hermes' "$@"`)).toBe('/x/hermes');
+    expect(shFirstWord(` /a\\ b/hermes "$@"`)).toBe('/a b/hermes');
+    expect(shFirstWord(` "/unterminated`)).toBeNull();
+    expect(launcherExecTargets('#!/bin/sh\n# exec /c/hermes\necho exec /d/hermes\nexec /e/hermes "$@"\n')).toEqual(['/e/hermes']);
+    expect(launcherExecTargets('MZ exec /e/hermes')).toEqual([]);
   });
 
   it('null when no version module is found or none parses; nothing runs', () => {
