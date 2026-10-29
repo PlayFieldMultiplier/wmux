@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, it, expect, vi } from 'vitest';
 import {
   AGENT_MISS_BACKOFF_MS,
   AgentProcessTracker,
+  imageFileState,
   isAgentImage,
   parsePipeDelimited,
   readExecutableImage,
@@ -1328,6 +1329,93 @@ describe('the executable image reader', () => {
     win.arm('s1', 100);
     await flush();
     expect(await win.verifyLive('s1', 'claude')).toBe(true);
+    expect(read).not.toHaveBeenCalled();
+  });
+});
+
+// An update that deletes the version directory a running agent was started
+// from leaves the session without its own executable.
+describe('an agent running from a deleted install', () => {
+  const VERSION = '/Users/dev/.local/share/claude/versions/2.1.307';
+
+  it('is flagged once its image path is gone, and stays flagged', async () => {
+    const read = vi.fn(async () => VERSION);
+    const t = imageTracker([entry(100, 1, 'zsh'), entry(200, 100, 'claude', 'claude')], read, 'darwin');
+    t.arm('s1', 100);
+    await flush();
+    const onDisk = new Set([VERSION]);
+    const exists = (file: string) => (onDisk.has(file) ? 'present' as const : 'missing' as const);
+    // The first ask starts the one image read.
+    expect(t.agentImageMissingFor('s1', exists)).toBeUndefined();
+    await flush();
+    expect(t.agentImageMissingFor('s1', exists)).toBe(false);
+    onDisk.delete(VERSION);
+    expect(t.agentImageMissingFor('s1', exists)).toBe(true);
+    // A reinstall of that version is a new file: the process still runs the old one.
+    onDisk.add(VERSION);
+    expect(t.agentImageMissingFor('s1', exists)).toBe(true);
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it('is not claimed while the stat fails for another reason than the file being gone', async () => {
+    const t = imageTracker([entry(100, 1, 'zsh'), entry(200, 100, 'claude', 'claude')], async () => VERSION, 'darwin');
+    t.arm('s1', 100);
+    await flush();
+    t.agentImageMissingFor('s1', () => 'present');
+    await flush();
+    expect(t.agentImageMissingFor('s1', () => 'unknown')).toBeUndefined();
+    // Nothing latched: the next stat decides.
+    expect(t.agentImageMissingFor('s1', () => 'present')).toBe(false);
+    expect(t.agentImageMissingFor('s1', () => 'missing')).toBe(true);
+  });
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('reads a permission error as no verdict, and ENOENT as gone', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-image-state-'));
+    const file = path.join(dir, '2.1.307');
+    fs.writeFileSync(file, '');
+    try {
+      expect(imageFileState(file)).toBe('present');
+      fs.chmodSync(dir, 0o000);
+      expect(imageFileState(file)).toBe('unknown');
+      fs.chmodSync(dir, 0o700);
+      fs.unlinkSync(file);
+      expect(imageFileState(file)).toBe('missing');
+      expect(imageFileState(path.join(file, 'x'))).toBe('missing');
+    } finally {
+      fs.chmodSync(dir, 0o700);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('is never claimed for an image outside the agent\'s install directory', async () => {
+    const gone = () => 'missing' as const;
+    // lsof can name a mount point instead of an unlinked file; a Cask binary is not a versions-dir install.
+    for (const image of ['/', '/opt/homebrew/Caskroom/claude-code/2.1.307/claude']) {
+      const t = imageTracker([entry(100, 1, 'zsh'), entry(200, 100, 'claude', 'claude')], async () => image, 'darwin');
+      t.arm('s1', 100);
+      await flush();
+      t.agentImageMissingFor('s1', gone);
+      await flush();
+      expect(t.agentImageMissingFor('s1', gone), image).toBeUndefined();
+    }
+  });
+
+  it('is never claimed for a runtime-hosted agent or on Windows', async () => {
+    const gone = () => 'missing' as const;
+    const node = imageTracker([entry(100, 1, 'zsh'), entry(200, 100, 'node', 'node /usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js')],
+      async () => '/opt/homebrew/bin/node', 'linux');
+    node.arm('s1', 100);
+    await flush();
+    expect(node.identityFor('s1')).toEqual({ slug: 'claude', alive: true });
+    expect(node.agentImageMissingFor('s1', gone)).toBeUndefined();
+    await flush();
+    expect(node.agentImageMissingFor('s1', gone)).toBeUndefined();
+
+    const read = vi.fn(async () => VERSION);
+    const win = imageTracker([entry(100, 1, 'pwsh.exe'), entry(200, 100, 'claude.exe')], read, 'win32');
+    win.arm('s1', 100);
+    await flush();
+    expect(win.agentImageMissingFor('s1', gone)).toBeUndefined();
     expect(read).not.toHaveBeenCalled();
   });
 });
