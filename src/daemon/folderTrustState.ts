@@ -32,7 +32,7 @@ export type FolderTrustSession = RenderablePane & {
   meta: { state: DaemonSessionState };
   /** The lifetime byte count: the mark a whole-ring verdict was read at. */
   ringBuffer: { readonly totalBytesWritten: number };
-  bridge: { heldOutput(): { data: string; dropped: number } | null };
+  bridge: { heldOutput(): { total: number; read(): { data: Buffer; dropped: number } } | null };
   /** Resized while muted: the held output was dropped, or mixes sizes. */
   resizedWhileMuted?: boolean;
 };
@@ -99,7 +99,7 @@ export async function folderTrustState(deps: FolderTrustDeps, id: string): Promi
   if (!readable) return 'unknown';
   const known = currentWholeRingVerdict(session, readable.mark);
   if (known) return known;
-  const { pane } = readable;
+  const pane = readable.pane();
   const timeoutMs = deps.timeoutMs ?? FOLDER_TRUST_READ_TIMEOUT_MS;
   const deadline = Date.now() + timeoutMs;
   let dropped = false;
@@ -139,7 +139,7 @@ export async function folderTrustState(deps: FolderTrustDeps, id: string): Promi
     // and its verdict answers the next request. A read already under way
     // from before this tail's bytes does not answer for them.
     const wholeRing = await Promise.race([readWholeRing(deps, id, session), timedOut]);
-    return wholeRing && wholeRing.mark >= frame.mark ? wholeRing.state : 'unknown';
+    return wholeRing && wholeRing.mark >= readable.mark ? wholeRing.state : 'unknown';
   } finally {
     clearTimeout(timer);
   }
@@ -180,9 +180,10 @@ function readWholeRing(deps: FolderTrustDeps, id: string, session: FolderTrustSe
     const readable = readableOutput(session);
     if (!size || !readable) return null;
     const muted = session.bridge.isMuted;
-    const live = (): RenderablePane | undefined => (deps.getSession(id) === session && session.bridge.isMuted === muted ? readable.pane : undefined);
+    const pane = readable.pane();
+    const live = (): RenderablePane | undefined => (deps.getSession(id) === session && session.bridge.isMuted === muted ? pane : undefined);
     const frame = await renderPaneScreen(live, deps.snapshot ?? generateTextSnapshotUnqueued, { tail: false }).catch(() => null);
-    const verdict: WholeRingVerdict = { mark: frame?.mark ?? readable.mark, muted, cols: size.cols, rows: size.rows, state: frame ? verdictOf(frame) : 'unknown' };
+    const verdict: WholeRingVerdict = { mark: readable.mark, muted, cols: size.cols, rows: size.rows, state: frame ? verdictOf(frame) : 'unknown' };
     wholeRingVerdicts.set(session, verdict);
     return verdict;
   }).catch(() => null).finally(() => wholeRingReads.delete(session));
@@ -191,15 +192,18 @@ function readWholeRing(deps: FolderTrustDeps, id: string, session: FolderTrustSe
 }
 
 /**
- * What a read parses, and the mark it is read at: the session itself, or,
- * while it is muted, its ring and the output held outside it. Null when a
+ * The mark a read is taken at (the ring's lifetime byte count, plus the held
+ * output's for a muted session), and the pane it parses: the session itself,
+ * or, while it is muted, its ring and the output held outside it. Null when a
  * resize while muted dropped that output, or mixed it with output at the old
- * size.
+ * size. The pane is built only for a parse: the mark alone answers from a
+ * kept verdict.
  */
-function readableOutput(session: FolderTrustSession): { pane: RenderablePane; mark: number } | null {
-  if (!session.bridge.isMuted) return { pane: session, mark: session.ringBuffer.totalBytesWritten };
+function readableOutput(session: FolderTrustSession): { mark: number; pane: () => RenderablePane } | null {
+  if (!session.bridge.isMuted) return { mark: session.ringBuffer.totalBytesWritten, pane: () => session };
   const held = session.bridge.heldOutput();
-  return held && !session.resizedWhileMuted ? withHeldOutput(session, held) : null;
+  if (!held || session.resizedWhileMuted) return null;
+  return { mark: session.ringBuffer.totalBytesWritten + held.total, pane: () => withHeldOutput(session, held.read()) };
 }
 
 /**
@@ -207,41 +211,29 @@ function readableOutput(session: FolderTrustSession): { pane: RenderablePane; ma
  * (no resize while muted), and no longer muted: its ring followed by the
  * output held outside it. Once the hold dropped some, the newest held output
  * is read alone, like a ring that lost its oldest bytes: a cell it does not
- * draw is unknown (withUnknownCells). The mark counts all of it.
+ * draw is unknown (withUnknownCells).
  */
-function withHeldOutput(session: FolderTrustSession, held: { data: string; dropped: number }): { pane: RenderablePane; mark: number } {
-  const bytes = Buffer.from(held.data);
-  const mark = session.ringBuffer.totalBytesWritten + held.dropped + bytes.length;
-  if (held.dropped > 0) {
-    // Start on a line, or at an escape sequence, as a ring's tail does: the
-    // oldest chunk kept may begin inside a sequence.
-    const nl = bytes.indexOf(0x0a);
-    const esc = nl === -1 ? bytes.indexOf(0x1b) : -1;
-    const data = bytes.subarray(nl !== -1 ? nl + 1 : esc !== -1 ? esc : bytes.length);
-    return {
-      pane: {
-        meta: session.meta,
-        ptyProcess: session.ptyProcess,
-        ringBuffer: { readAllWithGeometry: () => ({ data, geometry: undefined, writtenAt: mark }) },
-        // The modes the dropped output set are unknown; the ring's are older.
-        bridge: { isMuted: false, outputModes: null },
-      },
-      mark,
-    };
-  }
+function withHeldOutput(session: FolderTrustSession, held: { data: Buffer; dropped: number }): RenderablePane {
+  const tailOnly = held.dropped > 0;
+  // The tail's oldest bytes may begin inside a sequence: start at the first
+  // line or escape sequence, whichever comes first, so output drawn by cursor
+  // address alone loses only what precedes its first sequence.
+  const lf = held.data.indexOf(0x0a);
+  const esc = held.data.indexOf(0x1b);
+  const cut = tailOnly ? Math.min(lf === -1 ? held.data.length : lf + 1, esc === -1 ? held.data.length : esc) : 0;
+  const data = held.data.subarray(cut);
   return {
-    pane: {
-      meta: session.meta,
-      ptyProcess: session.ptyProcess,
-      ringBuffer: {
-        readAllWithGeometry: () => {
-          const ring = session.ringBuffer.readAllWithGeometry();
-          return { ...ring, data: Buffer.concat([ring.data, bytes]), writtenAt: ring.writtenAt + bytes.length };
-        },
+    meta: session.meta,
+    ptyProcess: session.ptyProcess,
+    ringBuffer: {
+      readAllWithGeometry: () => {
+        if (tailOnly) return { data, geometry: undefined, writtenAt: session.ringBuffer.totalBytesWritten + held.dropped + held.data.length };
+        const ring = session.ringBuffer.readAllWithGeometry();
+        return { ...ring, data: Buffer.concat([ring.data, data]), writtenAt: ring.writtenAt + data.length };
       },
-      bridge: { isMuted: false, outputModes: session.bridge.outputModes },
     },
-    mark,
+    // The modes the dropped output set are unknown; the ring's are older.
+    bridge: { isMuted: false, outputModes: tailOnly ? null : session.bridge.outputModes },
   };
 }
 

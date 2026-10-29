@@ -170,14 +170,13 @@ export class DaemonPTYBridge extends EventEmitter {
   private heldFull = false;
   private static readonly MAX_HELD_BYTES = 256 * 1024;
   /**
-   * #2855: the output that arrived after the head filled, newest kept, so a
-   * screen read (heldOutput) still sees the live screen. The unmute never
-   * releases it. Bounded: once it passes MAX_HELD_TAIL_BYTES its oldest
-   * chunks go, counted in heldDropped.
+   * #2855: the output that arrived after the head filled, its newest
+   * MAX_HELD_TAIL_BYTES kept, so a screen read (heldOutput) still sees the
+   * live screen. The unmute never releases it. Created at the first chunk past
+   * the head; a quarter of the 8 MB session ring the same output would fill
+   * unmuted, and that ring takes nothing while muted.
    */
-  private heldTail: Array<{ data: string; bytes: number }> = [];
-  private heldTailBytes = 0;
-  private heldDropped = 0;
+  private heldTail: RingBuffer | null = null;
   private static readonly MAX_HELD_TAIL_BYTES = 2 * 1024 * 1024;
   /** The unmuted capture path, set by setupDataForwarding; replays held chunks. */
   private captureChunk: ((data: string, buf: Buffer) => void) | null = null;
@@ -2427,13 +2426,8 @@ export class DaemonPTYBridge extends EventEmitter {
           }
         }
         if (this.heldWhileMuted && this.heldFull) {
-          this.heldTail.push({ data, bytes: byteLength });
-          this.heldTailBytes += byteLength;
-          while (this.heldTailBytes > DaemonPTYBridge.MAX_HELD_TAIL_BYTES && this.heldTail.length > 1) {
-            const oldest = this.heldTail.shift()?.bytes ?? 0;
-            this.heldTailBytes -= oldest;
-            this.heldDropped += oldest;
-          }
+          this.heldTail ??= new RingBuffer(DaemonPTYBridge.MAX_HELD_TAIL_BYTES, 'node');
+          this.heldTail.write(buf ?? nativeChunk?.readBytes() ?? Buffer.from(data));
         }
         return;
       }
@@ -2578,9 +2572,8 @@ export class DaemonPTYBridge extends EventEmitter {
   }
 
   private dropHeldTail(): void {
-    this.heldTail = [];
-    this.heldTailBytes = 0;
-    this.heldDropped = 0;
+    this.heldTail?.dispose();
+    this.heldTail = null;
   }
 
   /**
@@ -2608,16 +2601,26 @@ export class DaemonPTYBridge extends EventEmitter {
   }
 
   /**
-   * The output that arrived while muted, oldest first, as a screen read needs
-   * it: all of it while the head and tail (see heldWhileMuted, heldTail) still
-   * join up, else the tail alone, `dropped` being the bytes that came before
-   * it. Null when not muted. Read-only: the unmute still releases the head.
+   * The output that arrived while muted, for a screen read; null when not
+   * muted. `total`: its bytes so far. `read()`: the bytes, oldest first, all of
+   * them while the head and tail (see heldWhileMuted, heldTail) still join up,
+   * else the tail alone, `dropped` being the bytes before it. Read-only: the
+   * unmute still releases the head.
    */
-  heldOutput(): { data: string; dropped: number } | null {
-    if (!this.heldWhileMuted) return null;
-    const tail = this.heldTail.map((c) => c.data).join('');
-    if (this.heldDropped === 0) return { data: this.heldWhileMuted.join('') + tail, dropped: 0 };
-    return { data: tail, dropped: this.heldBytes + this.heldDropped };
+  heldOutput(): { total: number; read(): { data: Buffer; dropped: number } } | null {
+    const head = this.heldWhileMuted;
+    if (!head) return null;
+    const tail = this.heldTail;
+    const headBytes = this.heldBytes;
+    return {
+      total: headBytes + (tail?.totalBytesWritten ?? 0),
+      read: () => {
+        const tailData = tail?.readAll() ?? Buffer.alloc(0);
+        const dropped = (tail?.totalBytesWritten ?? 0) - tailData.length;
+        if (dropped === 0) return { data: Buffer.concat([Buffer.from(head.join('')), tailData]), dropped: 0 };
+        return { data: tailData, dropped: headBytes + dropped };
+      },
+    };
   }
 
   cleanup(): void {

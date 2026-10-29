@@ -245,20 +245,29 @@ describe('folderTrustState', () => {
     it('once the hold dropped output, reads its newest output alone, and a cell it never drew stays unknown', async () => {
       const m = mutedSession('');
       transcript(m, 3 * 1024 * 1024);
-      expect(m.bridge.heldOutput()?.dropped).toBeGreaterThan(0);
+      expect(m.bridge.heldOutput()?.read().dropped).toBeGreaterThan(0);
       m.feed('\r\n❯ ');
       expect(await folderTrustState(deps(m.session), 'pty-1')).toBe('clear');
       m.feed(frame(CLAUDE).toString());
       expect(await folderTrustState(deps(m.session), 'pty-1')).toBe('trust');
+      // 3 MB that redraw one row by cursor address, with no line feed.
+      const churn = (c: ReturnType<typeof mutedSession>): void => {
+        for (let fed = 0, n = 0; fed < 3 * 1024 * 1024; n++) {
+          const chunk = `\x1b[40;1H${n}`.padEnd(64, ' ').repeat(256);
+          c.feed(chunk);
+          fed += chunk.length;
+        }
+      };
       // Drawn before the dropped output and never redrawn: not known to be gone.
       const stale = mutedSession('');
       stale.feed(frame(CLAUDE).toString());
-      for (let fed = 0, n = 0; fed < 3 * 1024 * 1024; n++) {
-        const chunk = `\x1b[40;1H${n}`.padEnd(64, ' ').repeat(256);
-        stale.feed(chunk);
-        fed += chunk.length;
-      }
+      churn(stale);
       expect(await folderTrustState(deps(stale.session), 'pty-1')).toBe('unknown');
+      // Drawn by cursor address alone, a line feed only after it: read from the tail's first sequence.
+      const addressed = mutedSession('');
+      churn(addressed);
+      addressed.feed(`${frame(CLAUDE).toString()}\x1b[1;1H\n`);
+      expect(await folderTrustState(deps(addressed.session), 'pty-1')).toBe('trust');
       await enqueueSnapshotJob(async () => undefined);
     });
 
