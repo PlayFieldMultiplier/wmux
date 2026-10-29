@@ -4253,6 +4253,7 @@ export const zh = {
   'schedules.routines.paused.stop': "已暂停（已停止）",
   'schedules.routines.paused.park': "已暂停（机器人已挂起）",
   'schedules.routines.paused.off': "已暂停（机器人已关闭）",
+  'schedules.routines.paused.refused': "已暂停（My Hermes 未运行）",
   'schedules.routines.once': "{when} 一次",
   'schedules.routines.done.fired': "已完成",
   'schedules.routines.done.missed': "已错过（未运行）",

@@ -542,3 +542,35 @@ describe('one-time routines and quiet hours', () => {
     expect(again.list()).toEqual([made.routine]);
   });
 });
+
+describe('the owner\'s routines', () => {
+  it('the author is kept on reload; one an older build rewrote without it reads as the bot\'s', async () => {
+    const r = rig();
+    const owner = r.store.ownerSet({ botId: A, workspaceId: 'ws-1' }, { botId: A, title: 'Build', prompt: 'Check the build.', schedule: hourly });
+    if (!owner.ok) throw new Error('ownerSet');
+    await r.store.flush();
+    const again = r.make();
+    again.load();
+    expect(again.get(owner.routine.id)).toMatchObject({ author: 'owner', threadId: `dm:${A}` });
+    // An older build rewrites the file field by field and drops `author`.
+    const raw = JSON.parse(fs.readFileSync(routinesPath(dir), 'utf8')) as { routines: Array<Record<string, unknown>> };
+    for (const x of raw.routines) delete x.author;
+    fs.writeFileSync(routinesPath(dir), JSON.stringify(raw));
+    const downgraded = r.make();
+    downgraded.load();
+    expect(downgraded.get(owner.routine.id)?.author).toBeUndefined();
+  });
+
+  it('a refused routine is paused once (reason refused) and stays paused until the owner resumes it', () => {
+    const r = rig();
+    const made = set(r);
+    if (!made.ok) throw new Error('create');
+    expect(r.store.pauseRefused(B, made.routine.id)).toBe(false);
+    expect(r.store.pauseRefused(A, made.routine.id)).toBe(true);
+    expect(r.store.pauseRefused(A, made.routine.id)).toBe(false);
+    expect(r.store.get(made.routine.id)).toMatchObject({ state: 'paused', paused: { reason: 'refused' } });
+    r.store.resumeFor(A, 'park');
+    expect(r.store.get(made.routine.id)?.state).toBe('paused');
+    expect(r.store.pause({ kind: 'owner' }, made.routine.id, false)).toMatchObject({ ok: true, routine: { state: 'active' } });
+  });
+});

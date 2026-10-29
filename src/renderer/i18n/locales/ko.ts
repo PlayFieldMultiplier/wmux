@@ -4837,6 +4837,7 @@ export const ko = {
   'schedules.routines.paused.stop': "멈춤 (정지됨)",
   'schedules.routines.paused.park': "멈춤 (봇 대기)",
   'schedules.routines.paused.off': "멈춤 (봇 꺼짐)",
+  'schedules.routines.paused.refused': "멈춤 (My Hermes가 실행하지 않음)",
   'schedules.routines.once': "{when} 한 번",
   'schedules.routines.done.fired': "완료",
   'schedules.routines.done.missed': "놓침 (실행 안 됨)",

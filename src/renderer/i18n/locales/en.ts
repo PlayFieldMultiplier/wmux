@@ -5330,6 +5330,7 @@ export const en = {
   'schedules.routines.paused.stop': "Paused (stopped)",
   'schedules.routines.paused.park': "Paused (bot parked)",
   'schedules.routines.paused.off': "Paused (bots off)",
+  'schedules.routines.paused.refused': "Paused (My Hermes did not run it)",
   'schedules.routines.once': "Once {when}",
   'schedules.routines.done.fired': "Done",
   'schedules.routines.done.missed': "Missed (not run)",
