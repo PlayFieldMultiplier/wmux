@@ -98,10 +98,12 @@ function StatusStrip({ row, port, t, readOnly }: { row: FactoryBotRow; port: Bot
       : actions.resume ? (act ? { key: 'room.bot.resume', id: 'bots-resume-bot', go: () => act('resume', row.bot.id) } : null)
         : act ? { key: 'botsPage.pause.bot', id: 'bots-pause-bot', go: () => act('park', row.bot.id) } : null;
   const counts: string[] = [];
+  // A My Hermes bot starts no wmux workers: its worker limits say nothing.
+  const workers = !isOwnHermesEngine(row.bot.engine);
   for (const line of view.lines) {
     if (line.id === 'turnsDay') counts.push(t('botsPage.settings.stripTurns', { used: line.used, max: line.used + line.left }));
-    else if (line.id === 'workerTime') counts.push(t('botsPage.settings.stripWorkerTime', { used: workerTimeText(line.usedMin, t), max: workerTimeText(line.maxMin, t) }));
-    else if (line.id === 'workers') counts.push(t('botsPage.settings.stripWorkers', { used: line.running, max: line.max }));
+    else if (line.id === 'workerTime' && workers) counts.push(t('botsPage.settings.stripWorkerTime', { used: workerTimeText(line.usedMin, t), max: workerTimeText(line.maxMin, t) }));
+    else if (line.id === 'workers' && workers) counts.push(t('botsPage.settings.stripWorkers', { used: line.running, max: line.max }));
   }
   return (
     <div className="wmux-bot-settings-strip" role="status">
@@ -228,6 +230,8 @@ export function BotSettingsPage({ row, workers, workspaceName, t, port, stopPort
     const el = scrollRef.current;
     if (!el) return;
     const top = el.getBoundingClientRect().top;
+    // Scrolled to the end: the last section, however short.
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 2) { setActive(sections[sections.length - 1]); return; }
     let current: BotSettingsSection = sections[0];
     for (const s of sections) {
       const sec = el.querySelector<HTMLElement>(`[data-bot-settings-section="${s}"]`);
@@ -281,7 +285,7 @@ export function BotSettingsPage({ row, workers, workspaceName, t, port, stopPort
               {heading('basics')}
               <Row label={t('settings.factory.botName')} htmlFor="bot-settings-name">
                 <div className="flex items-center gap-3">
-                  <span data-testid="factory-picture-preview" className="inline-flex shrink-0"><BotAvatar bot={{ ...bot, avatar: shownAvatar }} size={40} t={t} /></span>
+                  <span data-testid="factory-picture-preview" className="inline-flex shrink-0"><BotAvatar bot={{ ...bot, avatar: shownAvatar }} size={30} t={t} /></span>
                   <Input id="bot-settings-name" data-testid="bot-settings-name" value={form.name} maxLength={BOT_NAME_MAX} onChange={(e) => edit({ name: e.target.value })} className="min-w-0 flex-1 text-[13px]" />
                 </div>
                 {port.pickAvatar && port.setAvatar && (
@@ -309,10 +313,10 @@ export function BotSettingsPage({ row, workers, workspaceName, t, port, stopPort
                   className={`w-full rounded-[6px] border border-[var(--line)] focus:border-[var(--line-strong)] bg-transparent px-2 py-1.5 text-[13px] text-[var(--text-main)] outline-none ${FOCUS_RING}`}
                 />
               </Row>
-              <Row label={t('botsPage.profile.workspace')}><span data-bot-settings-workspace className="text-[13px] text-[var(--text-main)]">{workspaceName}</span></Row>
+              <Row label={t('botsPage.profile.workspace')}><span data-bot-settings-workspace className="wmux-bot-settings-value">{workspaceName}</span></Row>
               <Row label={t('botsPage.profile.repo')} testId="repo" hint={bot.repo ? undefined : <span data-bots-profile-repo-hint>{t('botsPage.profile.repoHint')}</span>}>
-                <div className="flex min-w-0 items-baseline gap-2 text-[13px]" data-bots-profile-repo>
-                  <span data-bots-profile-repo-key className="min-w-0 truncate text-[var(--text-main)]" title={form.repoFolder ?? bot.repo?.repoPath}>
+                <div className="flex min-w-0 items-center gap-2 text-[13px]" data-bots-profile-repo>
+                  <span data-bots-profile-repo-key className="wmux-bot-settings-value min-w-0 truncate" title={form.repoFolder ?? bot.repo?.repoPath}>
                     {form.repoFolder ?? (bot.repo ? repoKeyLabel(bot.repo.repoKey) : t('botsPage.profile.noRepo'))}
                   </span>
                   <Button size="sm" variant="ghost" data-testid="bots-profile-repo-change" onClick={() => void pickRepo()}>
@@ -350,7 +354,7 @@ export function BotSettingsPage({ row, workers, workspaceName, t, port, stopPort
                 </Row>
                 <BotCommands row={row} t={t} {...(form.commands !== null ? { enabled: form.commands } : {})} onEnabledChange={(v) => edit({ commands: v })} />
                 <Row label={t('botsPage.settings.wakesOn')} testId="wakes">
-                  <p data-bot-settings-wakes className="text-[13px] text-[var(--text-main)]">{botWakesOn(bot.triggers).map((k) => t(k)).join(' · ')}</p>
+                  <p data-bot-settings-wakes className="wmux-bot-settings-value">{botWakesOn(bot.triggers).map((k) => t(k)).join(' · ')}</p>
                   {routines.length > 0 && (
                     <ul className="mt-1 space-y-0.5 text-[12px]" data-bots-profile-routines>
                       {routines.map((r) => (
@@ -370,21 +374,23 @@ export function BotSettingsPage({ row, workers, workspaceName, t, port, stopPort
                 ['perDay', 'settings.factory.turnsPerDay', undefined],
                 ['perHour', 'settings.factory.turnsPerHour', t('settings.factory.noHourlyLimit')],
                 ['workers', 'settings.factory.workers', undefined],
-              ] as const).map(([key, label, placeholder]) => (
+              ] as const).filter(([key]) => !(ownHermes && key === 'workers')).map(([key, label, placeholder]) => (
                 <Row key={key} label={t(label)} htmlFor={`bot-settings-${key}`}>
-                  <Input
-                    id={`bot-settings-${key}`}
-                    data-testid={`bot-settings-${key}`}
-                    type="number"
-                    min={0}
-                    value={form[key]}
-                    {...(placeholder ? { placeholder } : {})}
-                    onChange={(e) => edit({ [key]: e.target.value })}
-                    className="w-[96px] text-[13px]"
-                  />
+                  <div className="w-[120px]">
+                    <Input
+                      id={`bot-settings-${key}`}
+                      data-testid={`bot-settings-${key}`}
+                      type="number"
+                      min={0}
+                      value={form[key]}
+                      {...(placeholder ? { placeholder } : {})}
+                      onChange={(e) => edit({ [key]: e.target.value })}
+                      className="text-[13px]"
+                    />
+                  </div>
                 </Row>
               ))}
-              <p className="text-[11px] text-[var(--text-muted)]">{t('botsPage.settings.limitsHint', { time: workerTimeText(Math.round(bot.budget.maxWorkerHoursPerDay * 60), t) })}</p>
+              {!ownHermes && <p className="text-[11px] text-[var(--text-muted)]">{t('botsPage.settings.limitsHint', { time: workerTimeText(Math.round(bot.budget.maxWorkerHoursPerDay * 60), t) })}</p>}
               <BotToday row={row} act={update ? port.act : undefined} liveWorkers={workers.length} t={t} underStrip />
             </section>
 

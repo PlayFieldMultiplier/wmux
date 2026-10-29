@@ -1907,7 +1907,7 @@ export function StopBot({ row, port, act, t }: { row: FactoryBotRow; port: BotsS
     }
   };
   return (
-    <div className="mt-1 border-t border-[var(--stroke)] pt-2" data-bots-stop-bot={row.bot.id}>
+    <div data-bots-stop-bot={row.bot.id}>
       {confirming && stopBot ? (
         <InlineConfirm
           text={t('botsPage.stop.botConfirm', { name: row.bot.name })}

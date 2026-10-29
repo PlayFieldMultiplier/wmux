@@ -85,7 +85,7 @@ export function BrainModelFields({ engine, model, effort, onModel, onEffort, t }
   const models = useAgentModels(DEFAULT_BOT_WORKER_AGENT);
   if (engine.kind !== 'claude-sdk') {
     const shown = isOwnHermesEngine(engine) ? t('botsPage.models.myHermesModel') : isHermesEngine(engine) ? t('botsPage.models.hermesModel') : t('botsPage.models.otherEngine');
-    return <span data-testid="bots-profile-brain-value" className="text-[13px] text-[var(--text-main)]">{shown}</span>;
+    return <span data-testid="bots-profile-brain-value" className="wmux-bot-settings-value">{shown}</span>;
   }
   const unusable = unusableBrainModel(engine);
   return (

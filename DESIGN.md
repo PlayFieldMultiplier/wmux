@@ -564,7 +564,7 @@ status bar badges, `fleet_triage` or the phone's sidebar.
   checklist), **Memory & skills** (Skills and Memory, below), **What it can
   do** (by engine, below) and **Pause or remove** (Pause, New
   conversation, Stop, Delete bot, below). A My Hermes bot shows no Work or
-  Connections: it starts no wmux workers and holds only `room_post`, so it
+  Connections, and no worker limits in the strip or Limits: it starts no wmux workers and holds only `room_post`, so it
   can do two things — talk with the owner in its own chat, and use its
   Hermes's own tools under that Hermes's approvals — with one muted line
   on what it cannot (start wmux workers, read other chats or rooms,

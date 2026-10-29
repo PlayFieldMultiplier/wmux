@@ -301,8 +301,13 @@
 .wmux-bot-settings-form + .wmux-bot-settings-form { margin-top: 28px; }
 .wmux-bot-settings-section { display: flex; flex-direction: column; gap: 6px; scroll-margin-top: 8px; }
 .wmux-bot-settings-heading { margin: 0 0 4px; font-size: 13px; font-weight: 400; color: var(--text-sub); }
-.wmux-bot-settings-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; padding: 4px 0; }
-.wmux-bot-settings-label { width: 140px; flex-shrink: 0; font-size: 13px; color: var(--text-sub); }
+/* Labels sit level with a 30px control's text; plain values use the same
+   line height. The profile's reused rows (engine, commands, today, skills,
+   memory) take the page's label column. */
+.wmux-bot-settings-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 4px 16px; padding: 4px 0; }
+.wmux-bot-settings-label { width: 140px; flex-shrink: 0; font-size: 13px; line-height: 30px; color: var(--text-sub); }
+.wmux-bot-settings-value { display: block; padding: 5px 0; font-size: 13px; line-height: 20px; color: var(--text-main); }
+.wmux-bot-settings-form .w-\[112px\] { width: 140px; margin-right: 4px; font-size: 13px; color: var(--text-sub); }
 .wmux-bot-settings-foot {
   display: flex;
   align-items: center;
