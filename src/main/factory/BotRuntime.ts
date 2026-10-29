@@ -1319,7 +1319,8 @@ export class BotRuntime {
       // cannot be told runs as signed-in, held for this wake only.
       if (signedIn === true) markConversation(botId, 'signedIn');
       else if (signedIn === 'unknown') holdSignedInForWake(botId);
-      const photos: { images: BrainImage[]; note: string } = own ? { images: [], note: '' } : this.wakePhotos(profile, item);
+      // My Hermes is not shown photos: the adapter says one was sent.
+      const photos = this.wakePhotos(profile, item);
       const prompt = ownPrompt ?? this.prompt(profile, item, await this.wakeTaskFiles(profile.id, item)) + photos.note;
       const result = await this.drive(s.live, prompt, profile.budget.turnTimeoutMs, () => run?.interrupted === true, run?.stopped, photos.images);
       // A failed turn that reached the model cost as much as a finished one.
@@ -1496,8 +1497,11 @@ export class BotRuntime {
     // Neither does a missing API key, nor a Hermes that is not ready or
     // offered a tool outside the allowed set (the owner fixes Hermes first).
     const noRetryCode = classifyEngineError(message);
+    // Nor a failed My Hermes turn: it may have run part of the owner's
+    // message with the owner's own tools, so it is never sent again.
     const noRetry = subscriptionRefused || noRetryCode === 'api_key_missing'
-      || noRetryCode === 'hermes_not_ready' || noRetryCode === 'hermes_mcp_missing' || noRetryCode === 'hermes_tools_changed';
+      || noRetryCode === 'hermes_not_ready' || noRetryCode === 'hermes_mcp_missing' || noRetryCode === 'hermes_tools_changed'
+      || (outcome === 'failed' && isOwnHermesEngine(profile.engine));
     const retryIn = outcome === 'failed' && limitNotice === null && !noRetry ? this.transientRetryDelay(item.id, message) : null;
     const finalAttempt = outcome !== 'failed' || noRetry || item.attempts >= WAKE_LIMITS.MAX_ATTEMPTS;
     // Spent network retries stay counted until the wake ends, so the

@@ -1772,12 +1772,17 @@ describe('BotRuntime: a bot on My Hermes', () => {
     const res = r.store.create({ workspaceId: 'ws-1', name: 'Mine', engine: OWN, budget: { turnTimeoutMs: 60_000 } });
     if (!res.ok) throw new Error(res.message);
     setBotRuntimePorts({ wakeAttended: () => true, ownHermesRoomClean: () => true });
-    r.runtime.wake(res.bot.id, { text: 'slow', threadId: `dm:${res.bot.id}` });
+    const item = r.runtime.wake(res.bot.id, { text: 'slow', threadId: `dm:${res.bot.id}` });
     await settle();
     timers.find((t) => t.at === clock + 60_000)?.fn();
     await settle();
     expect(r.adapters[0].interrupted).toBe(1);
     expect(r.adapters[0].disposed).toBe(false);
+    // It may have run part of the owner's message: it is never sent again.
+    expect(r.queue.get(item!.id)?.state).not.toBe('queued');
+    for (const t of timers.filter((t) => t.at > clock + 60_000)) t.fn();
+    await settle();
+    expect(r.adapters.flatMap((a) => a.prompts)).toEqual(['slow']);
   });
 
   it('resumes the saved session', async () => {
