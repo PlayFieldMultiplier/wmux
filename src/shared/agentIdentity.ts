@@ -255,6 +255,11 @@ export interface AgentIdentityRow {
    *  exact resume under that account's CLAUDE_CONFIG_DIR picks the copy up
    *  (src/daemon/continueOnAccount.ts). */
   readonly continueOnAccount?: true;
+  /** A conversation can continue on another paired PC: its transcript is one
+   *  `projects/<folder>/<id>.jsonl` and a `<id>/` folder beside it, <folder>
+   *  named by claudeProjectFolder, and the exact resume there picks it up
+   *  (src/shared/a2aContinue.ts). */
+  readonly continueOnPc?: true;
   /** wmux reads this agent's per-account 5h usage (the statusline push and
    *  the usage API), so the usage reserve can hold its unattended starts
    *  (src/main/usage/usageReserve.ts). */
@@ -323,6 +328,7 @@ export const AGENT_IDENTITIES = [
     terminalChat: { send: true, cancel: true, images: true, queue: true },
     accounts: 'account-store',
     continueOnAccount: true,
+    continueOnPc: true,
     usageReserve: true,
     rewindPicker: true,
     continueInChat: true,
