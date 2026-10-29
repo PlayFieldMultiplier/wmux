@@ -107,6 +107,7 @@ function EngineErrorCard({
   onResume,
   canResume,
   busy,
+  resumeButton,
 }: {
   botId: string;
   code: EngineErrorCode;
@@ -117,6 +118,8 @@ function EngineErrorCard({
   onResume: () => void;
   canResume: boolean;
   busy: boolean;
+  /** Its own Resume (false where the page's status strip holds the one). */
+  resumeButton: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [fixBusy, setFixBusy] = useState(false);
@@ -191,7 +194,7 @@ function EngineErrorCard({
             {fixLabel}
           </Button>
         )}
-        {canResume && (
+        {canResume && resumeButton && (
           <Button size="sm" variant="secondary" data-testid="bots-resume-bot" disabled={busy} onClick={onResume}>{t('room.bot.resume')}</Button>
         )}
       </div>
@@ -214,8 +217,11 @@ function EngineErrorCard({
 }
 
 /** `liveWorkers`: the bot's workers live now (the profile's "Workers now"),
- *  to name the slots held by tasks in review. */
-export function BotToday({ row, act, liveWorkers, t }: { row: FactoryBotRow; act?: FactoryBotPort['act']; liveWorkers?: number; t: T }) {
+ *  to name the slots held by tasks in review. `underStrip`: shown under the
+ *  settings page's status strip, which names the blocker and holds the one
+ *  Resume, so it shows neither (an engine error's Fix still resumes once its
+ *  cause is gone). */
+export function BotToday({ row, act, liveWorkers, t, underStrip = false }: { row: FactoryBotRow; act?: FactoryBotPort['act']; liveWorkers?: number; t: T; underStrip?: boolean }) {
   const [busy, setBusy] = useState(false);
   const view = botBudgetView(row.bot, row.status);
   if (!view.blocker && view.lines.length === 0) return null;
@@ -250,9 +256,10 @@ export function BotToday({ row, act, liveWorkers, t }: { row: FactoryBotRow; act
             canResume={canResume}
             busy={busy}
             onResume={() => void resume()}
+            resumeButton={!underStrip}
           />
         )}
-        {view.blocker && !engineCode && (
+        {view.blocker && !engineCode && !underStrip && (
           <div
             className="flex items-center gap-3 pb-1"
             data-bots-profile-blocker={view.blocker.kind}

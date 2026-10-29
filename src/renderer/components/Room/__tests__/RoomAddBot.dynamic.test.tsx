@@ -542,38 +542,23 @@ describe('Add bot: the repository comes from the workspace', () => {
     expect(repoKeyLabel('ghe.example.com/acme/app')).toBe('ghe.example.com/acme/app');
   });
 
-  it('the profile editor shows a bot\'s repository read-only', async () => {
-    const rows = [row('bot-00000001', { role: 'lead', repo: APP })];
+  it('Settings › Bots lists each bot as a link to its own settings page, with no editor of its own', async () => {
+    const rows = [row('bot-00000001', { role: 'lead', repo: APP, job: 'Old job.' })];
     const update = vi.fn(async () => ({ ok: true }));
     const botPort: FactoryBotPort = { available: true, list: async () => rows, subscribe: () => () => undefined, act: async () => ({ ok: true }), update };
     const settingsPort = { available: true, get: vi.fn(async () => null), set: vi.fn(async () => null) };
-    useStore.setState({ workspaces: [{ id: WS, name: 'App' }] as never, activeWorkspaceId: WS });
+    const openBotSettings = vi.fn();
+    useStore.setState({ workspaces: [{ id: WS, name: 'App' }] as never, activeWorkspaceId: WS, openBotSettings });
     await render(createElement(FactoryTab, { settingsPort, botPort }));
-    await act(async () => q<HTMLButtonElement>('factory-bot-row')!.click());
-    const editor = q('factory-bot-editor')!;
-    expect(editor.querySelector('[data-testid="factory-bot-repo"]')!.textContent).toBe('acme/app·/home/me/code/app');
-    expect(editor.querySelector('[data-testid="factory-add-bot-folder"]')).toBeNull();
-    expect(editor.querySelector('input[value="/home/me/code/app"]')).toBeNull();
-  });
-
-  it('the profile editor edits the job and the hourly cap (empty: none) and sends only what changed', async () => {
-    const rows = [row('bot-00000001', { role: 'lead', job: 'Old job.', budget: { ...DEFAULT_BOT_BUDGETS.lead, maxTurnsPerHour: 6 } })];
-    const update = vi.fn(async () => ({ ok: true }));
-    const botPort: FactoryBotPort = { available: true, list: async () => rows, subscribe: () => () => undefined, act: async () => ({ ok: true }), update };
-    const settingsPort = { available: true, get: vi.fn(async () => null), set: vi.fn(async () => null) };
-    useStore.setState({ workspaces: [{ id: WS, name: 'App' }] as never, activeWorkspaceId: WS });
-    await render(createElement(FactoryTab, { settingsPort, botPort }));
-    await act(async () => q<HTMLButtonElement>('factory-bot-row')!.click());
-    expect(q<HTMLTextAreaElement>('factory-bot-job')!.value).toBe('Old job.');
-    await typeInto('factory-bot-job', 'New job.');
-    const hour = container.querySelector<HTMLInputElement>('[data-testid="factory-bot-editor"] input[type="number"]')!;
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(hour, '');
-      hour.dispatchEvent(new Event('input', { bubbles: true }));
-    });
-    const save = [...container.querySelectorAll<HTMLButtonElement>('[data-testid="factory-bot-editor"] button')].find((b) => b.textContent === en['settings.factory.save'])!;
-    await act(async () => save.click());
-    expect(update).toHaveBeenCalledWith('bot-00000001', expect.objectContaining({ job: 'New job.', budget: expect.objectContaining({ maxTurnsPerHour: null }) }));
+    const link = q<HTMLButtonElement>('factory-bot-row')!;
+    expect(link.textContent).toContain(en['botsPage.settings.openRow']);
+    expect(link.hasAttribute('aria-expanded')).toBe(false);
+    await act(async () => link.click());
+    expect(openBotSettings).toHaveBeenCalledWith('bot-00000001');
+    // No in-place editor: name, job, limits and On live on the bot's page.
+    expect(q('factory-bot-editor')).toBeNull();
+    expect(q('factory-bot-job')).toBeNull();
+    expect(update).not.toHaveBeenCalled();
   });
 });
 
