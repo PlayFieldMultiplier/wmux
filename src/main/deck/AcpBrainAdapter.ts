@@ -216,6 +216,11 @@ export class AcpBrainAdapter implements BrainAdapter {
   /** Own mode: the end of the last prompt's turn, until Hermes reports it
    *  (its answer, or the agent going). A new turn waits for it. */
   private ownTurnEnded: Promise<void> | null = null;
+  /** Own mode: bumped by every stop (interrupt, dispose). A send that was
+   *  waiting for the last turn's end when the bot was stopped sends nothing. */
+  private ownEpoch = 0;
+  /** Own mode: sends waiting at the gate, woken by a stop. */
+  private ownStopWaiters = new Set<() => void>();
 
   constructor(deps: AcpBrainAdapterDeps) {
     this.deps = deps;
@@ -768,9 +773,21 @@ export class AcpBrainAdapter implements BrainAdapter {
       return;
     }
     const own = this.own();
+    const epoch = this.ownEpoch;
     if (own) {
       // The bot stays blocked while a cancelled turn has not ended in Hermes.
-      if (this.ownTurnEnded) await this.ownTurnEnded;
+      // A stop while waiting ends this send: it never prompts afterwards.
+      while (this.ownTurnEnded && epoch === this.ownEpoch && !this._disposed) {
+        const gate = this.ownTurnEnded;
+        let woke: () => void = () => undefined;
+        await new Promise<void>((r) => {
+          woke = r;
+          this.ownStopWaiters.add(r);
+          void gate.then(r);
+        });
+        this.ownStopWaiters.delete(woke);
+      }
+      if (this._disposed || epoch !== this.ownEpoch) return;
       // Fail closed: an own bot answers through its one wmux tool.
       if (!this.deps.mcpBundlePath) {
         yield { type: 'error', message: `${HERMES_MCP_MISSING_LEAD} the wmux tools are not available in this build` };
@@ -804,6 +821,8 @@ export class AcpBrainAdapter implements BrainAdapter {
         yield { type: 'error', message: session.error };
         return;
       }
+      // Own mode: stopped while the session started; nothing is sent.
+      if (own && (this._disposed || epoch !== this.ownEpoch)) return;
 
       // Buffer + pull: session/update notifications arrive on the socket
       // while we await the prompt response; queue them and drain into the
@@ -958,6 +977,17 @@ export class AcpBrainAdapter implements BrainAdapter {
     if (this.deps.hermes) this.rejectPendingPermission();
     const child = this.child;
     this.child = null;
+    // Own mode: the detached child's exit no longer ends its turns (the exit
+    // handler ignores a child that is not current), so they end here: else
+    // the bot would wait for that turn forever.
+    if (this.own() && child) {
+      this.endLateTurns();
+      for (const [, entry] of this.pending) {
+        clearTimeout(entry.timer);
+        entry.resolve({ error: { message: 'ACP agent process exited' } });
+      }
+      this.pending.clear();
+    }
     if (!child || child.exitCode !== null) return;
     try {
       if (process.platform === 'win32' && child.pid) {
@@ -988,6 +1018,7 @@ export class AcpBrainAdapter implements BrainAdapter {
     // waits for the turn's end, ownTurnEnded).
     if (this.own()) {
       this.rejectPendingPermission();
+      this.stopOwnWaiters();
     } else if (this.deps.hermes) {
       this.rejectPendingPermission();
       const inFlight = this.promptInFlight;
@@ -1013,6 +1044,14 @@ export class AcpBrainAdapter implements BrainAdapter {
     } catch {
       /* logged by the host */
     }
+  }
+
+  /** Own mode: a stop. A send still waiting for the last turn's end sends
+   *  nothing; the turn itself stays Hermes's to end. */
+  private stopOwnWaiters(): void {
+    this.ownEpoch++;
+    for (const wake of this.ownStopWaiters) wake();
+    this.ownStopWaiters.clear();
   }
 
   /** Own mode: cancel the running turn and reject the request waiting for
@@ -1043,6 +1082,7 @@ export class AcpBrainAdapter implements BrainAdapter {
   dispose(): void {
     if (this._disposed) return;
     this._disposed = true;
+    if (this.own()) this.stopOwnWaiters();
     // P4 token lifecycle: revoke FIRST so any straggling RPC from the child
     // fails closed at the router before the process winds down.
     revokeCommanderToken(this._commanderToken);

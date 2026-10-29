@@ -619,6 +619,7 @@ describe('AcpBrainAdapter (My Hermes, own mode)', () => {
         switch (msg.method) {
           case 'initialize': c.emitLine({ jsonrpc: '2.0', id, result: { protocolVersion: 1 } }); return;
           case 'session/new': c.emitLine({ jsonrpc: '2.0', id, result: { sessionId: 'h-1' } }); return;
+          case 'session/load': c.emitLine({ jsonrpc: '2.0', id, result: {} }); return;
           case 'session/cancel': return;
           case 'session/prompt': {
             const params = msg.params as Record<string, unknown>;
@@ -642,7 +643,7 @@ describe('AcpBrainAdapter (My Hermes, own mode)', () => {
       const id = held.shift();
       if (id !== undefined) children[children.length - 1].emitLine({ jsonrpc: '2.0', id, result: { stopReason } });
     };
-    return { spawnFn, children, answer, texts };
+    return { spawnFn, children, answer, texts, held };
   }
   const ownAdapter = (spawnFn: () => ChildProcessWithoutNullStreams, over: Partial<AcpHermesPolicy> = {}, mcpBundlePath: string | null = '/app/mcp/index.js') => {
     const { policy, asks } = hermesPolicy({ mode: 'own', ...over });
@@ -678,6 +679,47 @@ describe('AcpBrainAdapter (My Hermes, own mode)', () => {
     expect(second).toBe(true);
     expect(policy.unsettled).not.toHaveBeenCalled();
     expect(child.killed).toBe(false);
+    adapter.dispose();
+  });
+
+  it('a message stopped while it waits for the last turn\'s end is never sent', async () => {
+    const h = slowHermes();
+    const { adapter, asks } = ownAdapter(h.spawnFn);
+    adapter.start({});
+    const turn = collect(adapter.send('hello'));
+    await vi.waitFor(() => expect(asks).toHaveLength(1), { timeout: 5_000 });
+    const waiting = collect(adapter.send('stopped'));
+    await vi.waitFor(() => expect(h.children[0].sent.some((s) => s.msg.method === 'session/cancel')).toBe(true), { timeout: 5_000 });
+    // The owner stops the bot while 'stopped' waits for the first turn's end.
+    adapter.interrupt();
+    expect(await waiting).toEqual([]);
+    h.answer();
+    await turn;
+    const next = collect(adapter.send('next'));
+    // 'stopped' never reached Hermes, even after the first turn ended.
+    await vi.waitFor(() => expect(h.texts).toEqual(['hello', 'next']), { timeout: 3_000 });
+    h.answer('end_turn');
+    await next;
+    adapter.dispose();
+  });
+
+  it('a turn whose agent wmux kills ends with it, so the bot is not blocked forever', async () => {
+    const h = slowHermes();
+    const { adapter, asks } = ownAdapter(h.spawnFn);
+    adapter.start({});
+    const turn = collect(adapter.send('hello'));
+    await vi.waitFor(() => expect(asks).toHaveLength(1), { timeout: 5_000 });
+    await vi.waitFor(() => expect(h.children[0].sent.some((s) => s.msg.method === 'session/cancel')).toBe(true), { timeout: 5_000 });
+    // A protocol violation: wmux kills the agent; the turn it ran is over.
+    h.children[0].stdout.emit('data', Buffer.from('x'.repeat(8 * 1024 * 1024 + 1)));
+    expect(h.children[0].killed).toBe(true);
+    expect((await turn).at(-1)).toMatchObject({ type: 'error' });
+    // The killed agent's prompt is gone with it.
+    h.held.length = 0;
+    const next = collect(adapter.send('next'));
+    await vi.waitFor(() => expect(h.texts).toEqual(['hello', 'next']), { timeout: 3_000 });
+    h.answer('end_turn');
+    await next;
     adapter.dispose();
   });
 
