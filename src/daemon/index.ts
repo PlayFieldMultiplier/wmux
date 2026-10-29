@@ -144,6 +144,11 @@ import { SpawnLinkStore } from './a2aRemote/spawnLinkStore';
 import { A2aSpawnStarter, registerSpawnStartRpc } from './a2aRemote/spawnStarter';
 import { A2aSpawnRequester, registerSpawnAskRpc } from './a2aRemote/spawnRequester';
 import { SpawnOutgoingStore } from './a2aRemote/spawnOutgoingStore';
+import { A2aContinueReceiver } from './a2aRemote/continueReceiver';
+import { ContinuePolicyStore } from './a2aRemote/continuePolicyStore';
+import { ContinueRequestStore } from './a2aRemote/continueRequestStore';
+import { gitRunner } from '../main/a2aRemote/spawnWorktree';
+import { originUrlFromConfigList, originUrlRepoKey } from '../main/worktask/workerGit';
 import { linkAlias } from './a2aRemote/outbound';
 import { A2A_SPAWN_EVENT, type A2aSpawnEvent } from '../shared/a2aSpawn';
 import { A2A_FEATURE_IMAGES, A2A_FEATURE_LINK_OFFER, A2A_FEATURE_SPAWN, A2A_FEATURE_STREAM_PING, isRemoteTaskId, isTailnetIpv4 } from '../shared/a2aRemote';
@@ -10374,6 +10379,30 @@ async function main(): Promise<void> {
         a2aDelivery?.outbox.pending(hostId).some((r) => r.envelope.kind === 'link' && r.envelope.link?.state === 'spawn-targets') === true,
       log: a2aLog,
     });
+    // A conversation another PC continues here (receiver side): off until this
+    // PC's human opts in, and not advertised to any PC yet.
+    const a2aContinue = new A2aContinueReceiver({
+      policy: new ContinuePolicyStore({ dir: a2aDir, log: a2aLog }),
+      spawnPolicy: a2aSpawnPolicy,
+      requests: new ContinueRequestStore({ dir: a2aDir, log: a2aLog }),
+      enqueue: (hostId, envelope) => {
+        if (!a2aDelivery) throw new Error('messages between PCs are not carried this run');
+        a2aDelivery.outbox.enqueue(hostId, envelope);
+      },
+      // The root's own origin (read-only git, the worker hardening), keyed as the asker keys its own.
+      originKeyOf: async (rootPath) => {
+        const out = await gitRunner(rootPath, {})(['config', '-z', '--list', '--show-scope']);
+        const url = out.code === 0 ? originUrlFromConfigList(out.stdout) : null;
+        return url ? originUrlRepoKey(url) : null;
+      },
+      freeBytes: () => fs.promises.statfs(a2aDir).then((s) => s.bavail * s.bsize),
+      // A live pane whose bound Claude transcript is that conversation's.
+      sessionLive: (sessionId) => sessionManager.listLiveSessions().some((m) => {
+        const transcript = transcriptProjector?.transcriptPath(m.id) ?? null;
+        return transcript !== null && path.basename(transcript) === `${sessionId}.jsonl`;
+      }),
+      log: a2aLog,
+    });
     const a2aForgetHost = forgetHostCascade({ links: a2aLinks, exposures: a2aExposures, offers: a2aOffersRef }, a2aLog);
     const a2aCascade = (hostId: string): void => {
       a2aForgetHost(hostId);
@@ -10470,6 +10499,7 @@ async function main(): Promise<void> {
         refreshLink: (linkId) => (refresh ? refresh({ linkId }) : Promise.resolve(null)),
         offers: a2aOffersRef,
         spawn: a2aSpawn,
+        continue: a2aContinue,
         ...(a2aStarter ? { spawnLinks: a2aStarter } : {}),
         ...(a2aAsks ? { spawnAsks: a2aAsks } : {}),
         // This build shows and accepts share offers, takes images on
@@ -10493,12 +10523,14 @@ async function main(): Promise<void> {
       // A spawn request still pending from before a restart is decided now.
       a2aStarter?.reconcile();
       a2aSpawn.recover();
+      a2aContinue.recover();
       // Each PC allowed to ask learns what it may ask for (unless that is still queued for it).
       a2aSpawn.sendTargets();
       // Cards and approved starts past their expiry end `expired` even with nobody looking.
       // Put-backs of ended spawn links that could not be done yet are retried here too.
       const spawnSweep = setInterval(() => {
         a2aSpawn.sweep();
+        a2aContinue.sweep();
         a2aStarter?.reconcile();
         a2aAsks?.expire();
       }, 60_000);
