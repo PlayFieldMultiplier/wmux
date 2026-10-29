@@ -848,6 +848,11 @@ describe('a folder-trust verdict for a pane with no screen', () => {
     const res = await asBrain('input.send', { ptyId: 'pty-w', text: 'hello', submit: true });
     expect(res.error).toContain('is not on screen (it is stashed, or its workspace was unloaded while hidden)');
     expect(res.error).not.toContain('wide enough');
+    // No screen read at all: the daemon's read of the output is named, not the width.
+    live.screen = null;
+    const unread = await asBrain('input.send', { ptyId: 'pty-w', text: 'hello' });
+    expect(unread.error).toContain('gave no screen to read');
+    expect(unread.error).not.toContain('wide enough');
     expect(w.writes).toHaveLength(0);
   });
 

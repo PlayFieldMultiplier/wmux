@@ -269,11 +269,15 @@ export function folderTrustGateMessage(op: string, ptyId: string): string {
 }
 
 /** The refusal when neither the renderer nor the daemon could say whether a folder-trust prompt is up,
- *  or the screen shows a trust question over choices too narrow to read. `offScreen`: the pane has no
- *  terminal on screen, so the daemon read its screen from the session's output. */
-export function folderTrustUnknownMessage(op: string, ptyId: string, offScreen = false): string {
-  if (offScreen) {
+ *  or the screen shows a trust question over choices too narrow to read. `read`: where the verdict
+ *  came from, the screen text main had, or the daemon's read of the session's output for a pane with
+ *  no terminal on screen (`parked`) or no screen read at all (`output`). */
+export function folderTrustUnknownMessage(op: string, ptyId: string, read: 'screen' | 'parked' | 'output' = 'screen'): string {
+  if (read === 'parked') {
     return `${op}: pane "${ptyId}" is not on screen (it is stashed, or its workspace was unloaded while hidden), and its screen could not be read whole from its output yet, so a folder-trust prompt cannot be ruled out; retry in a few seconds, or show the pane.`;
+  }
+  if (read === 'output') {
+    return `${op}: pane "${ptyId}" gave no screen to read, and its screen could not be read whole from its output yet, so a folder-trust prompt cannot be ruled out; retry in a few seconds.`;
   }
   return `${op}: pane "${ptyId}" has no screen that reads whole (none was read, or a trust question's choices are cut too short), so a folder-trust prompt cannot be ruled out; retry once the pane is shown wide enough.`;
 }

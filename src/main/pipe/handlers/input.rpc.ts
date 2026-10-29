@@ -930,6 +930,12 @@ export interface ApprovalInputGate {
 /** The gate could not decide: a delivery found the screen unreadable (any policy). */
 class ApprovalGateUnavailable extends Error {}
 
+/** A folder-trust verdict, and where it was read (see folderTrustUnknownMessage). */
+interface FolderTrustRead {
+  verdict: FolderTrustState | null;
+  read: 'screen' | 'parked' | 'output';
+}
+
 /**
  * The folder-trust verdict for a pane: from the screen the renderer read, or,
  * when it read none (a hidden, parked or unattached pane, a failed read, or
@@ -938,33 +944,31 @@ class ApprovalGateUnavailable extends Error {}
  * daemon verdict to have, null: the check stands aside, as before it had a
  * fallback.
  */
-async function folderTrustVerdict(gate: ApprovalInputGate, ptyId: string, screen: ScreenRead): Promise<FolderTrustState | null> {
-  if (typeof screen === 'string' && screen.trim() !== '') return folderTrustOnScreen(screen);
+async function folderTrustVerdict(gate: ApprovalInputGate, ptyId: string, screen: ScreenRead): Promise<FolderTrustRead> {
+  if (typeof screen === 'string' && screen.trim() !== '') return { verdict: folderTrustOnScreen(screen), read: 'screen' };
   const verdict = (await gate.daemonFolderTrust?.(ptyId)) ?? null;
+  const parked = typeof screen === 'object' && screen !== null && 'parked' in screen;
   // No daemon verdict for a parked read: its ring text decides, as before.
-  if (verdict === null && typeof screen === 'object' && screen !== null && 'parked' in screen) return folderTrustOnScreen(screen.parked);
-  return verdict;
+  if (verdict === null && parked) return { verdict: folderTrustOnScreen(screen.parked), read: 'screen' };
+  return { verdict, read: parked ? 'parked' : 'output' };
 }
 
 /**
  * Refuse a non-operator's input on a folder-trust verdict: always on 'trust',
  * and on 'unknown' only when `refuseUnknown` (text, Enter and selecting keys;
  * Escape passes, since it also stops an agent). `stage` says what of this
- * input already reached the pane; `screen` is the read the verdict came from,
- * so an 'unknown' for a pane with no terminal on screen says so.
+ * input already reached the pane.
  */
 function refuseAtFolderTrust(
-  verdict: FolderTrustState | null,
+  { verdict, read }: FolderTrustRead,
   op: string,
   ptyId: string,
   refuseUnknown: boolean,
   stage = '',
-  screen: ScreenRead = null,
 ): void {
   if (!folderTrustStops(verdict, op, ptyId, refuseUnknown)) return;
   if (verdict === 'trust') throw new Error(`${folderTrustGateMessage(op, ptyId)}${stage}`);
-  const offScreen = typeof screen === 'object' && screen !== null && 'parked' in screen;
-  throw new ApprovalGateUnavailable(`${folderTrustUnknownMessage(op, ptyId, offScreen)}${stage}`);
+  throw new ApprovalGateUnavailable(`${folderTrustUnknownMessage(op, ptyId, read)}${stage}`);
 }
 
 /** What a refusal before any write says. */
@@ -982,7 +986,7 @@ async function assertNotAtFolderTrust(
 ): Promise<void> {
   if (ctx?.operator) return;
   const screen = await gate.readScreenText(ptyId);
-  refuseAtFolderTrust(await folderTrustVerdict(gate, ptyId, screen), op, ptyId, opts.refuseUnknown ?? true, opts.stage ?? NOTHING_SENT, screen);
+  refuseAtFolderTrust(await folderTrustVerdict(gate, ptyId, screen), op, ptyId, opts.refuseUnknown ?? true, opts.stage ?? NOTHING_SENT);
 }
 
 /** A retried Enter withheld on purpose (a folder-trust prompt took the screen). */
@@ -1017,7 +1021,7 @@ async function assertNotTypingAtAnApproval(
   const [policy, read] = await Promise.all([gate.answerPolicy(ptyId), gate.readScreenText(ptyId)]);
   // A delivery refuses an unreadable screen whatever the daemon would say.
   if (!(read === null && opts.refuseUnreadable)) {
-    refuseAtFolderTrust(await folderTrustVerdict(gate, ptyId, read), op, ptyId, true, opts.stage ?? NOTHING_SENT, read);
+    refuseAtFolderTrust(await folderTrustVerdict(gate, ptyId, read), op, ptyId, true, opts.stage ?? NOTHING_SENT);
   }
   // A parked read's ring text stands for the screen; a session that has not
   // started here shows nothing yet, so no dialog.

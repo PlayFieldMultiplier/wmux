@@ -373,10 +373,13 @@ export async function renderPaneTail(
  * the pane awaiting — when the pane is gone or muted, its geometry is unknown,
  * the parse failed, or the pane was resized while the render waited in the
  * snapshot queue (the frame then describes a grid the pane no longer has).
+ * `tail: false`: a whole ring that does not parse in time is null too, not
+ * read from its tail.
  */
 export async function renderPaneScreen(
   getPane: () => RenderablePane | undefined,
   snapshot: TextSnapshot,
+  opts: { tail?: boolean } = {},
 ): Promise<AwaitingFrame | null> {
   const pane = getPane();
   if (!pane || pane.bridge.isMuted) return null;
@@ -396,7 +399,7 @@ export async function renderPaneScreen(
   const mark = whole.writtenAt;
   let read = withUnknownCells(whole, geometry);
   let outcome = await snapshot({ ...geometry, scrollback: 0, initial: read.replay, geometry: read.geometry });
-  if (!outcome.ok && outcome.reason === 'budget') {
+  if (!outcome.ok && outcome.reason === 'budget' && opts.tail !== false) {
     const tail = readRingTailWithModesAndGeometry(pane.ringBuffer, outputModes, AWAITING_RENDER_WINDOW_BYTES);
     if (tail.writtenAt !== mark) return null;
     read = withUnknownCells(tail, geometry);

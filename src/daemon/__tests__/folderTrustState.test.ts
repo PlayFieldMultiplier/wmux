@@ -323,6 +323,21 @@ describe('a ring that outgrew the tail window, on a pane that went idle (#2855)'
     expect(parses).toBeGreaterThan(parsed);
     await enqueueSnapshotJob(async () => undefined);
   });
+
+  it('a whole ring that does not parse in its budget is not parsed again until the pane prints', async () => {
+    const s = longAfter(frame(IDLE), spinner, '\x1b[31;1H\x1b[K');
+    let wholeParses = 0;
+    const snapshot: NonNullable<FolderTrustDeps['snapshot']> = async (req) => {
+      if (req.initial.length <= 512 * 1024) return generateTextSnapshotUnqueued(req);
+      wholeParses++;
+      return { ok: false, reason: 'budget' };
+    };
+    expect(await folderTrustState(deps(s, { snapshot }), 'pty-1')).toBe('unknown');
+    await enqueueSnapshotJob(async () => undefined);
+    expect(await folderTrustState(deps(s, { snapshot }), 'pty-1')).toBe('unknown');
+    await enqueueSnapshotJob(async () => undefined);
+    expect(wholeParses).toBe(1);
+  });
 });
 
 describe('folderTrustRefusal', () => {
