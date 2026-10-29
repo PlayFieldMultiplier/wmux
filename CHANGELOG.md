@@ -61,8 +61,9 @@
   only wmux tool is posting in that chat. Hermes's permission requests come to you as
   approval cards. Stopping the bot cancels its turn and never stops your
   Hermes gateway. Before every start wmux checks the profile again, and it
-  never writes to it. Schedules, routines and the Run button are not sent to
-  My Hermes yet; the chat says so instead. macOS and Linux only.
+  never writes to it. Schedule actions and the Run button are not sent to
+  My Hermes yet (routines you write are; see below); the chat says so
+  instead. macOS and Linux only.
 
 - **Routines for My Hermes.** A bot on My Hermes can now run on a schedule,
   from routines you write for it yourself. Each routine runs in the bot's 1:1
