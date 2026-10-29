@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { atomicWriteJSONSync } from '../util/atomicWrite';
 import { scheduleTokenFileReHarden } from '../../shared/security';
+import type { HostId } from '../../shared/a2aRemote';
 import { coerceContinuePolicy, defaultContinuePolicy, type A2aContinuePolicyV1 } from '../../shared/a2aContinue';
 import { loadStore, storeUnavailable, type StoreLog } from './storeFile';
 
@@ -30,6 +31,7 @@ export interface ContinuePolicyStoreOptions {
 
 export class ContinuePolicyStore {
   readonly filePath: string;
+  private readonly log: StoreLog;
   private readonly write: (filePath: string, data: unknown) => void;
   private readonly scheduleHarden: (filePath: string) => void;
   private policy: A2aContinuePolicyV1;
@@ -37,6 +39,7 @@ export class ContinuePolicyStore {
 
   constructor(opts: ContinuePolicyStoreOptions) {
     this.filePath = path.join(opts.dir, CONTINUE_POLICY_FILE);
+    this.log = opts.log ?? ((): void => undefined);
     this.write = opts.write ?? ((p, d): void => atomicWriteJSONSync(p, d));
     this.scheduleHarden = opts.scheduleHarden ?? scheduleTokenFileReHarden;
     const loaded = loadStore({
@@ -44,7 +47,7 @@ export class ContinuePolicyStore {
       fileName: CONTINUE_POLICY_FILE,
       coerce: coerceContinuePolicy,
       now: opts.now ?? Date.now,
-      log: opts.log ?? ((): void => undefined),
+      log: this.log,
       level: 'warn',
       emptyMeans: 'continuing conversations starts off both ways',
     });
@@ -71,5 +74,31 @@ export class ContinuePolicyStore {
     this.scheduleHarden(this.filePath);
     this.policy = saved;
     return { ok: true, policy: structuredClone(saved) };
+  }
+
+  /** A paired PC was removed: this PC no longer sends it conversations (a re-pair starts from nothing). */
+  forgetHost(hostId: HostId): boolean {
+    return this.retainHosts((h) => h !== hostId, `forgetting ${hostId}`);
+  }
+
+  /**
+   * Keep only the PCs `paired` still knows, e.g. on start. Memory first: the
+   * live policy stops allowing a removed PC even when the file cannot be
+   * written; that is logged, and the next save writes the whole policy again.
+   */
+  retainHosts(paired: (hostId: HostId) => boolean, why = 'dropping PCs no longer paired'): boolean {
+    const gone = Object.keys(this.policy.out).filter((h) => !paired(h));
+    if (gone.length === 0) return false;
+    const out = { ...this.policy.out };
+    for (const h of gone) delete out[h];
+    this.policy = { ...this.policy, out, version: this.policy.version + 1 };
+    try {
+      if (!this.writable) throw storeUnavailable(CONTINUE_POLICY_FILE);
+      this.write(this.filePath, this.policy);
+      this.scheduleHarden(this.filePath);
+    } catch (err) {
+      this.log('error', `[a2a-remote] ${CONTINUE_POLICY_FILE}: not saved after ${why}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    return true;
   }
 }

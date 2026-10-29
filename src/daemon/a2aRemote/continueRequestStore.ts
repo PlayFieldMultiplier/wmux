@@ -37,7 +37,7 @@ import { isIsoString, isPlainObject, isSafeId, loadStore, storeUnavailable, type
  */
 
 export const CONTINUE_REQUESTS_FILE = 'continue-requests.json';
-/** Requests one PC may have open here at once. */
+/** Requests one PC may have open here at once; a claimed one (`starting`) holds no slot. */
 export const CONTINUE_OPEN_PER_HOST_MAX = 3;
 /** Decided requests kept per PC; past it, that PC's new requests are refused until some go. */
 export const CONTINUE_DECIDED_PER_HOST_MAX = 100;
@@ -73,6 +73,11 @@ export interface ContinueRequestStoreOptions {
 }
 
 const key = (hostId: HostId, continueId: string): string => `${hostId}:${continueId}`;
+
+/** What a manifest comes to on disk: the transcript and every file of the folder. */
+export function continueManifestBytes(m: A2aContinueManifestV1): number {
+  return m.files.reduce((n, f) => n + f.bytes, m.transcript.bytes);
+}
 
 /** Two parsed requests (or manifests) are the same: the parsers write their keys in one order. */
 export function sameContinueBody(a: unknown, b: unknown): boolean {
@@ -135,8 +140,10 @@ export class ContinueRequestStore {
     if ([...this.records.values()].some((r) => OPEN.has(r.state) && r.request.sessionId === req.sessionId)) return { kind: 'busy' };
     this.prune();
     const mine = [...this.records.values()].filter((r) => r.hostId === hostId);
-    const open = mine.filter((r) => OPEN.has(r.state)).length;
-    if (this.records.size >= CONTINUE_REQUESTS_MAX || open >= CONTINUE_OPEN_PER_HOST_MAX || mine.length - open >= CONTINUE_DECIDED_PER_HOST_MAX) {
+    // A claimed start holds its conversation (above) but no slot: one a crash left is settled later, not counted against the PC.
+    const open = mine.filter((r) => OPEN.has(r.state) && r.state !== 'starting').length;
+    const decided = mine.filter((r) => r.state === 'decided').length;
+    if (this.records.size >= CONTINUE_REQUESTS_MAX || open >= CONTINUE_OPEN_PER_HOST_MAX || decided >= CONTINUE_DECIDED_PER_HOST_MAX) {
       return { kind: 'full' };
     }
     const at = new Date(this.now()).toISOString();
@@ -183,6 +190,41 @@ export class ContinueRequestStore {
     if (!rec || rec.sent === code) return;
     this.assertWritable();
     this.commit((m) => m.set(key(hostId, continueId), { ...rec, sent: code }));
+  }
+
+  /** Bytes of the manifests this PC is taking or holds (`receiving`, `received`, `starting`): their staging is spoken for. */
+  reservedBytes(): number {
+    let n = 0;
+    for (const r of this.records.values()) if (r.manifest && WITH_MANIFEST.has(r.state)) n += continueManifestBytes(r.manifest);
+    return n;
+  }
+
+  /**
+   * A paired PC was removed: its requests go, from memory at once (nothing of
+   * that PC is answered or started after this) and then from the file; a
+   * write that fails is logged. Returns the records dropped.
+   */
+  forgetHost(hostId: HostId): number {
+    return this.retainHosts((h) => h !== hostId, `forgetting ${hostId}`);
+  }
+
+  /**
+   * Keep only the requests of PCs `paired` still knows, e.g. on start: a
+   * removal whose write failed before a restart is applied again here. A
+   * failed write is logged; the next write writes every record again.
+   */
+  retainHosts(paired: (hostId: HostId) => boolean, why = 'dropping PCs no longer paired'): number {
+    const gone = [...this.records.values()].filter((r) => !paired(r.hostId));
+    if (gone.length === 0) return 0;
+    for (const r of gone) this.records.delete(key(r.hostId, r.request.continueId));
+    try {
+      this.assertWritable();
+      this.write(this.filePath, { v: 1, records: [...this.records.values()] });
+      this.scheduleHarden(this.filePath);
+    } catch (err) {
+      this.log('error', `[a2a-remote] ${CONTINUE_REQUESTS_FILE}: not saved after ${why}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    return gone.length;
   }
 
   /** Drop decided records kept past `CONTINUE_RECORD_KEEP_MS` since their decision. */

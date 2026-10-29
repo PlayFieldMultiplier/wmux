@@ -163,3 +163,39 @@ describe('answers owed', () => {
     expect(open().unsent().map((r) => r.code)).toEqual(['failed']);
   });
 });
+
+describe('starts in flight, room, and PCs removed', () => {
+  function toStarting(store: ContinueRequestStore, req: A2aContinueRequestV1): void {
+    store.receive(HOST, req);
+    store.advance(HOST, req.continueId, ['pending'], 'awaiting', { rootId: 'web' });
+    store.advance(HOST, req.continueId, ['awaiting'], 'ready');
+    store.advance(HOST, req.continueId, ['ready'], 'receiving', { manifest: manifestFor(req) });
+    store.advance(HOST, req.continueId, ['receiving'], 'received');
+    store.advance(HOST, req.continueId, ['received'], 'starting');
+  }
+
+  it('a claimed start holds its conversation but no slot of its PC, and its bytes stay reserved', () => {
+    const store = open();
+    const starts = Array.from({ length: CONTINUE_OPEN_PER_HOST_MAX }, () => request());
+    for (const r of starts) toStarting(store, r);
+    expect(store.receive(HOST, request()).kind).toBe('new');
+    expect(store.receive(HOST, request({ sessionId: starts[0].sessionId }))).toEqual({ kind: 'busy' });
+    expect(store.reservedBytes()).toBe(CONTINUE_OPEN_PER_HOST_MAX * 10);
+    store.decide(HOST, starts[0].continueId, 'started');
+    expect(store.reservedBytes()).toBe((CONTINUE_OPEN_PER_HOST_MAX - 1) * 10);
+  });
+
+  it('forgetting a PC drops its records, on disk too; retaining drops those of PCs no longer paired', () => {
+    const store = open();
+    const mine = request();
+    const theirs = request();
+    store.receive(HOST, mine);
+    store.receive(OTHER, theirs);
+    expect(store.forgetHost(HOST)).toBe(1);
+    expect(open().get(HOST, mine.continueId)).toBeUndefined();
+    expect(open().get(OTHER, theirs.continueId)?.state).toBe('pending');
+    const reloaded = open();
+    expect(reloaded.retainHosts((h) => h === HOST)).toBe(1);
+    expect(open().inState('pending')).toEqual([]);
+  });
+});

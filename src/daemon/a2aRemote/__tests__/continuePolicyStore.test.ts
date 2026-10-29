@@ -30,6 +30,18 @@ describe('ContinuePolicyStore', () => {
     expect(store.get().in.enabled).toBe(true);
   });
 
+  it('a removed PC loses its send allow, in memory and on disk; retaining keeps only paired PCs', () => {
+    const OTHER = '22222222-2222-4222-8222-222222222222';
+    const store = open();
+    store.set({ v: 1, in: { enabled: true }, out: { [HOST]: { allowed: true }, [OTHER]: { allowed: true } }, version: 0 });
+    expect(store.forgetHost(HOST)).toBe(true);
+    expect(store.get().out).toEqual({ [OTHER]: { allowed: true } });
+    expect(open().get()).toMatchObject({ out: { [OTHER]: { allowed: true } }, version: 2 });
+    expect(store.forgetHost(HOST)).toBe(false);
+    expect(open().retainHosts((h) => h === HOST)).toBe(true);
+    expect(open().get().out).toEqual({});
+  });
+
   it('a file that is not a policy reads as off, and is kept aside', () => {
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, CONTINUE_POLICY_FILE), JSON.stringify({ v: 9, in: { enabled: true } }));
