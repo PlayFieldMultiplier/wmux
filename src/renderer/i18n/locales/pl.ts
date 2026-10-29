@@ -5288,6 +5288,7 @@ export const pl = {
   'schedules.routines.paused.stop': "Wstrzymana (zatrzymano)",
   'schedules.routines.paused.park': "Wstrzymana (bot wstrzymany)",
   'schedules.routines.paused.off': "Wstrzymana (boty wyłączone)",
+  'schedules.routines.paused.refused': "Wstrzymana (My Hermes jej nie uruchomił)",
   'schedules.routines.once': "Jednorazowo {when}",
   'schedules.routines.done.fired': "Wykonana",
   'schedules.routines.done.missed': "Pominięta (nie uruchomiono)",

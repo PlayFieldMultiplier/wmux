@@ -74,6 +74,8 @@ export const FACTORY_RPC_METHODS: readonly RpcMethod[] = [
   // A bot steers its own live worker and closes its own questions.
   BOT_RPC.workerMessage, BOT_RPC.questionClose,
   ROUTINE_RPC.set, ROUTINE_RPC.list, ROUTINE_RPC.pause,
+  // The owner's routines of a bot on My Hermes (operator only).
+  ROUTINE_RPC.ownerSet, ROUTINE_RPC.ownerPause, ROUTINE_RPC.ownerRemove, ROUTINE_RPC.ownerRun,
   WORKFLOW_RPC.create, WORKFLOW_RPC.read, WORKFLOW_RPC.advance,
   BOT_APPROVAL_RPC.request, BOT_APPROVAL_RPC.list,
   BOT_SECRET_RPC.request, BOT_SECRET_RPC.list, BOT_SECRET_RPC.loginRequest,

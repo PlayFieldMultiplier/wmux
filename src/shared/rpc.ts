@@ -785,6 +785,10 @@ export type RpcMethod =
   | 'routine.set'
   | 'routine.list'
   | 'routine.pause'
+  | 'routine.ownerSet'
+  | 'routine.ownerPause'
+  | 'routine.ownerRemove'
+  | 'routine.ownerRun'
   | 'workflow.create'
   | 'workflow.read'
   | 'workflow.advance'
@@ -1111,6 +1115,10 @@ export const ALL_RPC_METHODS = [
   'routine.set',
   'routine.list',
   'routine.pause',
+  'routine.ownerSet',
+  'routine.ownerPause',
+  'routine.ownerRemove',
+  'routine.ownerRun',
   'workflow.create',
   'workflow.read',
   'workflow.advance',
