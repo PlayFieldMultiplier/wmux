@@ -78,7 +78,7 @@ import {
 } from './wakePrompt';
 import type { WakeQueue } from './wakeQueue';
 import { redactStoredSecrets } from './secretRedaction';
-import { runningWakeAttended, wakeTaintExpected } from './wakeTaint';
+import { ownerRoutineWakeClean, runningWakeAttended, wakeTaintExpected } from './wakeTaint';
 import { ownHermesPrompt, ownHermesWakeRefusal } from './myHermesTurn';
 import { conversationMarks, endConversation, holdSignedInForWake, markConversation, releaseWakeHold, setConversationMarkListener, startConversation, type ConversationMarks } from './conversationMarks';
 
@@ -343,6 +343,12 @@ export interface BotRuntimePorts {
   /** A bot on My Hermes was not sent a wake: say why in the wake's thread
    *  (a system card). */
   noteOwnHermesRefusal?: (profile: BotProfile, item: WakeItem, why: string) => void;
+  /** Whether a routine wake of `botId` and its conversation are clean
+   *  (wakeTaint.ts ownerRoutineWakeClean, the default). */
+  ownerRoutineClean?: (item: WakeItem, botId: string) => boolean;
+  /** Pause a My Hermes bot's routine whose wakes are refused until the
+   *  owner acts (routines.ts pauseRefused); whether it was paused now. */
+  pauseRefusedRoutine?: (botId: string, routineId: string) => boolean;
   /** Whether a wake carried a fact of a task that used a signed-in
    *  connection (wakeTaint.ts wakeSignedIn); 'unknown' when that cannot be
    *  told. Absent: none did; that is only so where no taint tracker is part
@@ -1288,31 +1294,47 @@ export class BotRuntime {
       // wake runs no turn, reaches nothing, and says why.
       let ownPrompt: string | null = null;
       if (own) {
-        const why = ownHermesWakeRefusal({
+        // A routine's verdict and its prompt come from one lookup.
+        const routine = item.reason.kind === 'routine' ? ports.resolveRoutine?.(item.reason.routineId) ?? null : null;
+        const refusal = ownHermesWakeRefusal({
           item,
           botId,
           // A wake that may carry a signed-in task's data is never the
           // owner's words alone.
           attended: signedIn === false && (ports.wakeAttended ?? runningWakeAttended)(botId),
+          routineClean: signedIn === false && (ports.ownerRoutineClean ?? ownerRoutineWakeClean)(item, botId),
           roomClean: ports.ownHermesRoomClean?.(profile) ?? null,
+          routine,
         });
-        if (why) {
+        if (refusal) {
+          // A routine refused until the owner acts is paused, so its note is
+          // posted once, not at every slot.
+          let paused = false;
+          if (refusal.pause && item.reason.kind === 'routine') {
+            try {
+              paused = ports.pauseRefusedRoutine?.(botId, item.reason.routineId) === true;
+            } catch (err) {
+              console.warn(`[factory] routine ${item.reason.routineId} not paused: ${String(err)}`);
+            }
+          }
           // Only a wake the owner started is answered with a card; one from a
           // fact, a bot or a guest is logged, so no note can start another.
-          if (OWNER_STARTED_WAKES.has(item.reason.kind)) {
+          // A routine's note comes with its pause.
+          const note = refusal.note && OWNER_STARTED_WAKES.has(item.reason.kind) && (!refusal.pause || item.reason.kind !== 'routine' || paused);
+          if (note) {
             try {
-              ports.noteOwnHermesRefusal?.(profile, item, why);
+              ports.noteOwnHermesRefusal?.(profile, item, refusal.why);
             } catch (err) {
               console.warn(`[factory] the My Hermes note of ${item.id} was not posted: ${String(err)}`);
             }
           }
-          console.warn(`[factory] ${item.id} not sent to My Hermes: ${why}`);
+          console.warn(`[factory] ${item.id} not sent to My Hermes: ${refusal.why}`);
           // Nothing reached Hermes: the turn pump() counted is given back.
           if (run && this.deps.store.get(botId)) this.deps.store.mutateUsage(botId, (u) => { unrecordTurn(u, run.startedAt); });
           outcome = 'done';
           return;
         }
-        ownPrompt = ownHermesPrompt(item.reason.kind === 'human' ? item.reason.text : '');
+        ownPrompt = ownHermesPrompt(item.reason.kind === 'human' ? item.reason.text : routine?.prompt ?? '');
       }
       if (!s.live.ephemeral && this.wakeTainted(item)) markConversation(botId, 'tainted');
       // What a signed-in task's worker read reaches this conversation now,

@@ -1768,6 +1768,97 @@ describe('BotRuntime: a bot on My Hermes', () => {
     expect(r.notes).toEqual([expect.objectContaining({ why: expect.stringMatching(/yours alone/) })]);
   });
 
+  describe('an owner routine', () => {
+    type Routine = { routineId: string; title: string; prompt: string; schedule: string; author?: 'owner'; botId?: string; workspaceId?: string; threadId?: `dm:${string}` | 'general' };
+    function routineRig(opts: { routine: (id: string) => Routine; clean?: boolean; signedIn?: boolean | 'unknown' }) {
+      const r = ownRig();
+      const paused: string[] = [];
+      setBotRuntimePorts({
+        resolveRoutine: () => opts.routine(r.id) as never,
+        ownerRoutineClean: (_item, botId) => (opts.clean ?? true) && conversationMarks(botId)?.tainted === false,
+        wakeSignedIn: () => opts.signedIn ?? false,
+        // Paused once: the store answers true only the first time.
+        pauseRefusedRoutine: (_botId, routineId) => {
+          if (paused.includes(routineId)) return false;
+          paused.push(routineId);
+          return true;
+        },
+      });
+      let slot = 0;
+      const fire = (routineId = 'r-aaaaaaaa', botId = r.id) => r.queue.enqueue({ botId, workspaceId: 'ws-1', reason: { kind: 'routine', routineId, dueAt: clock + (slot += 1) }, priority: 2, threadId: `dm:${botId}` });
+      return { ...r, paused, fire };
+    }
+    const owners = (botId: string): Routine => ({ routineId: 'r-aaaaaaaa', title: 'Build', prompt: '/build check', schedule: 'every 60 min', author: 'owner', botId, workspaceId: 'ws-1', threadId: `dm:${botId}` });
+
+    it('runs with the routine\'s own text, though no one is present, when the wake and its conversation are clean', async () => {
+      const r = routineRig({ routine: owners });
+      setBotRuntimePorts({ wakeAttended: () => false });
+      r.fire();
+      await settle(10);
+      expect(r.adapters.flatMap((a) => a.prompts)).toEqual(['\\/build check']);
+      expect(r.notes).toEqual([]);
+    });
+
+    it('a queue item naming another bot\'s owner routine is refused, with no pause and no note', async () => {
+      const r = routineRig({ routine: () => owners('bot-0000000b') });
+      r.fire();
+      await settle(10);
+      expect(r.adapters.flatMap((a) => a.prompts)).toEqual([]);
+      expect(r.paused).toEqual([]);
+      expect(r.notes).toEqual([]);
+      expect(r.store.usageOf(r.id).turns).toEqual([]);
+    });
+
+    it('over a tainted conversation or a signed-in wake it is refused, paused with one note, and not charged', async () => {
+      for (const opts of [{ clean: false }, { signedIn: 'unknown' as const }]) {
+        const r = routineRig({ routine: owners, ...opts });
+        r.fire();
+        await settle(10);
+        r.fire();
+        await settle(10);
+        expect(r.adapters.flatMap((a) => a.prompts)).toEqual([]);
+        expect(r.paused).toEqual(['r-aaaaaaaa']);
+        expect(r.notes).toEqual([expect.objectContaining({ why: expect.stringMatching(/outside text/) })]);
+        expect(r.store.usageOf(r.id).turns).toEqual([]);
+        __resetBotRuntimePortsForTesting();
+      }
+    });
+
+    it('a routine the bot wrote (from before an engine switch) is refused and paused, with one note', async () => {
+      const r = routineRig({ routine: (id) => ({ ...owners(id), author: undefined }) });
+      r.fire();
+      await settle(10);
+      r.fire();
+      await settle(10);
+      expect(r.adapters.flatMap((a) => a.prompts)).toEqual([]);
+      expect(r.paused).toEqual(['r-aaaaaaaa']);
+      expect(r.notes).toEqual([expect.objectContaining({ why: expect.stringMatching(/a bot wrote this one/), threadId: `dm:${r.id}` })]);
+    });
+
+    it('a wake restored from the queue file is checked against the routine as it is when it runs', async () => {
+      const first = routineRig({ routine: owners });
+      first.runtime.dispose();
+      first.queue.enqueue({ botId: first.id, workspaceId: 'ws-1', reason: { kind: 'routine', routineId: 'r-aaaaaaaa', dueAt: clock }, priority: 2, threadId: `dm:${first.id}` });
+      await Promise.all([first.store.flush(), first.queue.flush(), first.sessions.flush()]);
+      const again = rig({ load: true });
+      const notes: string[] = [];
+      setBotRuntimePorts({
+        wakeAttended: () => true,
+        ownHermesRoomClean: () => true,
+        ownerRoutineClean: () => true,
+        wakeSignedIn: () => false,
+        noteOwnHermesRefusal: (_p, _i, why) => notes.push(why),
+        pauseRefusedRoutine: () => true,
+        // Rewritten by an older build since it was queued: no author now.
+        resolveRoutine: () => ({ ...owners(first.id), author: undefined }) as never,
+      });
+      again.runtime.kick();
+      await settle(10);
+      expect(again.adapters.flatMap((a) => a.prompts)).toEqual([]);
+      expect(notes).toEqual([expect.stringMatching(/a bot wrote this one/)]);
+    });
+  });
+
   it('a timed-out turn is interrupted but its session kept (the adapter stays blocked until Hermes ends the turn)', async () => {
     const timers: Array<{ fn: () => void; at: number }> = [];
     const r = rig({ mode: 'hang', timers });
