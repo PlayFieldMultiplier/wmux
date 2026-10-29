@@ -162,13 +162,23 @@ export class DaemonPTYBridge extends EventEmitter {
    * prompt leaves the pane blank until a key is pressed. `null` = not holding.
    *
    * Bounded by keeping the HEAD: once the cap is reached later chunks are not
-   * held (`heldFull`), but what was held stays — the shell's prompt, or a
+   * held for the unmute (`heldFull`), but what was held stays — the shell's prompt, or a
    * TUI's first frame, is printed first, so it is the part worth keeping.
    */
   private heldWhileMuted: string[] | null = null;
   private heldBytes = 0;
   private heldFull = false;
   private static readonly MAX_HELD_BYTES = 256 * 1024;
+  /**
+   * #2855: the output that arrived after the head filled, newest kept, so a
+   * screen read (heldOutput) still sees the live screen. The unmute never
+   * releases it. Bounded: once it passes MAX_HELD_TAIL_BYTES its oldest
+   * chunks go, counted in heldDropped.
+   */
+  private heldTail: Array<{ data: string; bytes: number }> = [];
+  private heldTailBytes = 0;
+  private heldDropped = 0;
+  private static readonly MAX_HELD_TAIL_BYTES = 2 * 1024 * 1024;
   /** The unmuted capture path, set by setupDataForwarding; replays held chunks. */
   private captureChunk: ((data: string, buf: Buffer) => void) | null = null;
 
@@ -2416,6 +2426,15 @@ export class DaemonPTYBridge extends EventEmitter {
             this.heldWhileMuted.push(data);
           }
         }
+        if (this.heldWhileMuted && this.heldFull) {
+          this.heldTail.push({ data, bytes: byteLength });
+          this.heldTailBytes += byteLength;
+          while (this.heldTailBytes > DaemonPTYBridge.MAX_HELD_TAIL_BYTES && this.heldTail.length > 1) {
+            const oldest = this.heldTail.shift()?.bytes ?? 0;
+            this.heldTailBytes -= oldest;
+            this.heldDropped += oldest;
+          }
+        }
         return;
       }
       capture(data, buf, nativeChunk);
@@ -2534,6 +2553,7 @@ export class DaemonPTYBridge extends EventEmitter {
       this.heldWhileMuted = muted ? [] : null;
       this.heldBytes = 0;
       this.heldFull = false;
+      this.dropHeldTail();
     }
     this.muted = muted;
     if (!muted && opts?.replayHeld && held && held.length > 0 && this.captureChunk) {
@@ -2554,6 +2574,13 @@ export class DaemonPTYBridge extends EventEmitter {
     this.heldWhileMuted = [];
     this.heldBytes = 0;
     this.heldFull = false;
+    this.dropHeldTail();
+  }
+
+  private dropHeldTail(): void {
+    this.heldTail = [];
+    this.heldTailBytes = 0;
+    this.heldDropped = 0;
   }
 
   /**
@@ -2581,12 +2608,16 @@ export class DaemonPTYBridge extends EventEmitter {
   }
 
   /**
-   * The output held while muted (see heldWhileMuted), oldest first, and
-   * whether later output was dropped once the cap was reached; null when not
-   * muted. Read-only: the unmute still releases it.
+   * The output that arrived while muted, oldest first, as a screen read needs
+   * it: all of it while the head and tail (see heldWhileMuted, heldTail) still
+   * join up, else the tail alone, `dropped` being the bytes that came before
+   * it. Null when not muted. Read-only: the unmute still releases the head.
    */
-  heldOutput(): { data: string; full: boolean } | null {
-    return this.heldWhileMuted ? { data: this.heldWhileMuted.join(''), full: this.heldFull } : null;
+  heldOutput(): { data: string; dropped: number } | null {
+    if (!this.heldWhileMuted) return null;
+    const tail = this.heldTail.map((c) => c.data).join('');
+    if (this.heldDropped === 0) return { data: this.heldWhileMuted.join('') + tail, dropped: 0 };
+    return { data: tail, dropped: this.heldBytes + this.heldDropped };
   }
 
   cleanup(): void {
