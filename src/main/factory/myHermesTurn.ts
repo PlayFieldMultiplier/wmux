@@ -25,6 +25,7 @@ export function ownHermesWakeRefusal(input: { item: WakeItem; botId: string; att
     return 'My Hermes talks with you one to one, so a message outside its 1:1 chat was not sent to it.';
   }
   if (!input.attended) return 'wmux could not confirm this message is yours alone, so it was not sent to My Hermes.';
+  if (input.roomClean === null) return 'wmux could not read this chat to check who wrote in it, so this was not sent to My Hermes.';
   if (input.roomClean !== true) return 'Another bot or a guest has written in this chat, so wmux no longer sends it to My Hermes.';
   return null;
 }

@@ -17,7 +17,9 @@ describe('ownHermesWakeRefusal', () => {
     expect(ownHermesWakeRefusal({ item: item(human, 'general'), botId: BOT, attended: true, roomClean: true })).toMatch(/one to one/);
     expect(ownHermesWakeRefusal({ item: item({ ...human, roomWide: true }), botId: BOT, attended: true, roomClean: true })).toMatch(/one to one/);
     expect(ownHermesWakeRefusal({ item: item(human), botId: BOT, attended: false, roomClean: true })).toMatch(/yours alone/);
-    expect(ownHermesWakeRefusal({ item: item(human), botId: BOT, attended: true, roomClean: null })).toMatch(/Another bot or a guest/);
+    expect(ownHermesWakeRefusal({ item: item(human), botId: BOT, attended: true, roomClean: false })).toMatch(/Another bot or a guest/);
+    // An unreadable chat refuses too, saying so rather than blaming a writer.
+    expect(ownHermesWakeRefusal({ item: item(human), botId: BOT, attended: true, roomClean: null })).toMatch(/could not read this chat/);
   });
 
   it('escapes a leading slash only', () => {
