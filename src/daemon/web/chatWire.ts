@@ -164,7 +164,8 @@ export function buildChatObject(
     ...(agent ? { agent } : {}),
     ...identity,
     historyTruncated: terminal?.historyTruncated === true,
-    ...(resolution.source === 'tui' ? { maxSendBytes: OPENCODE_MAX_SEND_BYTES } : {}),
+    // The OpenCode plugin's request limit; Hermes is typed into its prompt and has none.
+    ...(resolution.source === 'tui' && agent === 'opencode' ? { maxSendBytes: OPENCODE_MAX_SEND_BYTES } : {}),
     ...liveness,
     // `POST chat/launch {resume:true}` would continue this very conversation now.
     resumable: opts.resumable === true,

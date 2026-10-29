@@ -7,6 +7,8 @@ import { collectDaemonMemoryDiagnostics } from './memoryDiagnostics';
 import { createStartupRecovery } from './startupRecovery';
 import { loadChatSkills } from './transcript/chatSkills';
 import { TerminalChatService } from './transcript/TerminalChatService';
+import { HermesChatService, routeTerminalChat } from './transcript/HermesChatService';
+import { agentLaunchAt, type AgentProcessStart } from './agentLaunchAt';
 import { OpenCodeIdleSettler } from './transcript/openCodeIdleSettle';
 import { dangerousLaunchNotice, type ChatBridge, type ChatLaunchRequest } from './chat/chatBridge';
 import { ChatSendReceiptStore } from './chat/ChatSendReceiptStore';
@@ -432,6 +434,8 @@ let chatV2Host: ChatV2Host | null = null;
 /** Pane → whether the capture that started its pending transcript search was pane-exact (#2730). */
 const discoveryPaneExact = new Map<string, boolean>();
 let terminalChat: TerminalChatService | null = null;
+/** Hermes Agent panes' conversation, read from Hermes' own database (built with terminalChat). */
+let hermesChat: HermesChatService | null = null;
 /** OpenCode permissions/questions as native records (built with terminalChat). */
 let openCodeDecisions: ReturnType<typeof createOpenCodeDecisions> | null = null;
 /** Last list-time reconcile per pane: a phone polling `/api/approvals` must not cost a plugin round trip each time. */
@@ -450,6 +454,10 @@ const codexProcessStart = new Map<string, number>();
 let bindFromAgentCommandLine: ((sessionId: string, slug: string, pid: number) => void) | null = null;
 // The agent process (`pid@start`) whose command line each pane last read; cleared on its death edge.
 const agentCommandLineRead = new Map<string, string>();
+// The start of each pane's agent process whose command line names no
+// conversation (no resume grammar, so its line is never read above), for its
+// launch time when the shell reports no command start; cleared on its death edge.
+const agentProcessStart = new Map<string, AgentProcessStart>();
 // N4 — the agent pid each pane's sign-in was last checked for (once per agent process).
 const loginCheckedProcess = new Map<string, number>();
 // #1163 — registerRpcHandlers' canonical agent-state reader (readDaemonAgentState),
@@ -4951,6 +4959,66 @@ function registerRpcHandlers(
     });
     pipeServer.onClientClose(client => terminalChat?.dropClient(client));
   }
+  /** When the pane's current agent started (epoch ms): its command start or its process's own start. */
+  const paneAgentLaunchAt = (id: string): number | undefined => {
+    const commandAt = sessionManager.getSession(id)?.promptLog.recent(256).filter((e) => e.type === 'command_start').pop()?.ts;
+    // `pid@start` from the launch edge.
+    const read = agentCommandLineRead.get(id) ?? '';
+    const at = read.indexOf('@');
+    const lineRead = at > 0 ? { pid: Number(read.slice(0, at)), startedAt: Number(read.slice(at + 1)) } : undefined;
+    return agentLaunchAt(commandAt, [lineRead, agentProcessStart.get(id)], agentProcessTracker.pidFor(id));
+  };
+  if (!hermesChat) {
+    const liveHermes = (id: string): boolean => {
+      const state = readDaemonAgentState(id);
+      return state.agentVerified && agentDisplayToSlug(state.agentName ?? '') === 'hermes';
+    };
+    const realCwd = (id: string): string | undefined => {
+      const cwd = sessionManager.getSession(id)?.meta.cwd;
+      try { return cwd ? fs.realpathSync(cwd) : undefined; } catch { return cwd; }
+    };
+    hermesChat = new HermesChatService({
+      isHermes: liveHermes,
+      pane: (id) => {
+        const pane = sessionManager.getSession(id);
+        return pane && ['attached', 'detached'].includes(pane.meta.state)
+          ? { cwd: pane.meta.cwd, env: pane.meta.env, ...(pane.meta.incarnationId ? { incarnationId: pane.meta.incarnationId } : {}) }
+          : undefined;
+      },
+      launchAt: paneAgentLaunchAt,
+      sharesFolder: (id) => {
+        const cwd = realCwd(id);
+        return sessionManager.listManagedSessions().some((other) => other.meta.id !== id && realCwd(other.meta.id) === cwd && liveHermes(other.meta.id));
+      },
+      readScreen: async (id) => {
+        // Undimmed, so a dim placeholder in the prompt never reads as typed text.
+        const outcome = await queuedScreenText(sessionManager, id, true);
+        return outcome?.ok ? outcome.rows.map((row) => row.undimmed ?? row.text) : null;
+      },
+      bracketedPaste: (id) => sessionManager.getSession(id)?.bridge.outputModes?.isSet(2004) === true,
+      keyInput: (id) => {
+        const bridge = sessionManager.getSession(id)?.bridge;
+        return bridge ? { revision: bridge.getKeyInputRevision(), quiet: bridge.isKeyInputQuiet() } : undefined;
+      },
+      processAlive: (id) => agentProcessTracker.isAgentRunning(id, 'hermes', (pid) => ProcessMonitor.isRunning(pid)),
+      write: (id, data) => {
+        const managed = sessionManager.getSession(id);
+        if (!managed) return false;
+        managed.ptyProcess.write(data);
+        managed.bridge.noteInput(data);
+        return true;
+      },
+      emit: (id, data, clients) => {
+        nativeChatBridge?.nudgeQueue(id);
+        for (const client of clients) {
+          if (client.startsWith('web:')) { webTerminalServer?.emitTranscriptNudge(id); continue; }
+          if (!pipeServer.sendTo(client, { type: 'transcript.appended', sessionId: id, data })) hermesChat?.unsubscribe(client, id);
+        }
+      },
+    });
+    pipeServer.onClientClose(client => hermesChat?.dropClient(client));
+  }
+  const terminalChats = routeTerminalChat(() => terminalChat, hermesChat);
   if (!openCodeDecisions) {
     openCodeDecisions = createOpenCodeDecisions({
       read: async (id, known) => terminalChat ? terminalChat.readDecisions(id, known) : { state: 'unavailable' },
@@ -5000,18 +5068,10 @@ function registerRpcHandlers(
       .map((s) => s.meta.id),
     agentState: (id) => readDaemonAgentState(id),
     chatAgentState: (id) => readChatAgentState(id),
-    agentLaunchAt: (id) => {
-      const commandAt = sessionManager.getSession(id)?.promptLog.recent(256).filter((e) => e.type === 'command_start').pop()?.ts;
-      // `pid@start` from the launch edge, only while that pid is still the pane's agent.
-      const read = agentCommandLineRead.get(id) ?? '';
-      const at = read.indexOf('@');
-      const startedAt = at > 0 && Number(read.slice(0, at)) === agentProcessTracker.pidFor(id) ? Number(read.slice(at + 1)) : NaN;
-      const known = [commandAt, startedAt > 0 ? startedAt : undefined].filter((v): v is number => v !== undefined);
-      return known.length > 0 ? Math.max(...known) : undefined;
-    },
+    agentLaunchAt: paneAgentLaunchAt,
     transcriptBinding: resolveTranscriptBinding,
     projector,
-    terminalChat: () => terminalChat,
+    terminalChat: () => terminalChats,
     managed: () => chatSessions,
     approvals: () => approvalRegistry ? {
       pendingFor: (id) => {
@@ -5145,7 +5205,7 @@ function registerRpcHandlers(
     const id = typeof params['id'] === 'string' ? params['id'] : '';
     if (!id) return { ok: false, status: { available: false, reason: 'no-binding' } };
     const found = await bridge.route(id);
-    if (found.kind === 'native') { terminalChat!.subscribe(ctx.clientId, id); return { ok: true, status: found.read.status }; }
+    if (found.kind === 'native') { terminalChats.subscribe(ctx.clientId, id); return { ok: true, status: found.read.status }; }
     if (found.kind === 'opencode') return { ok: false, status: { available: false, reason: 'unavailable' } };
     if (found.kind === 'managed' && chatSessions) {
       const clients = chatSubscribers.get(id) ?? new Set<string>();
@@ -5157,7 +5217,7 @@ function registerRpcHandlers(
 
   pipeServer.onRpc('daemon.transcript.unsubscribe', async (params, ctx) => {
     const id = typeof params['id'] === 'string' ? params['id'] : '';
-    terminalChat?.unsubscribe(ctx.clientId, id);
+    terminalChats.unsubscribe(ctx.clientId, id);
     chatSubscribers.get(id)?.delete(ctx.clientId);
     if (!chatSubscribers.get(id)?.size) chatSubscribers.delete(id);
     if (id) projector.unsubscribe(ctx.clientId, id);
@@ -7673,6 +7733,7 @@ function wireEvents(
     apiErrorTurnEnds?.dropSession(payload.id);
     teammateWakes?.dropSession(payload.id);
     terminalChat?.dropPty(payload.id);
+    hermesChat?.dropPty(payload.id);
     // …and nothing left to discover a transcript FOR.
     transcriptDiscovery?.cancel(payload.id);
     codexCwdBinder?.reset(payload.id);
@@ -8360,6 +8421,7 @@ function wireEvents(
     apiErrorTurnEnds?.dropSession(payload.id);
     teammateWakes?.dropSession(payload.id);
     terminalChat?.dropPty(payload.id);
+    hermesChat?.dropPty(payload.id);
     // …and nothing left to discover a transcript FOR.
     transcriptDiscovery?.cancel(payload.id);
     codexCwdBinder?.reset(payload.id);
@@ -8765,6 +8827,7 @@ async function shutdown(
   transcriptActivity?.dispose();
   stallWatch?.dispose();
   terminalChat?.dispose();
+  hermesChat?.dispose();
   // Same for the discovery searches — unref'd watch handles and poll timers.
   transcriptDiscovery?.dispose();
   codexCwdBinder?.dispose();
@@ -10058,7 +10121,17 @@ async function main(): Promise<void> {
       const pid = agentProcessTracker.pidFor(sessionId);
       if (pid !== undefined) bindFromAgentCommandLine?.(sessionId, state.slug, pid);
     }
-    if (!state.alive) agentCommandLineRead.delete(sessionId);
+    if (state.alive && state.slug && !resumeGrammarFor(state.slug)) {
+      // No line to read, but its launch time still matters (Hermes binds the
+      // conversation started after it).
+      const pid = agentProcessTracker.pidFor(sessionId);
+      if (pid !== undefined && agentProcessStart.get(sessionId)?.pid !== pid) {
+        void readProcessStartMs(pid).then((startedAt) => {
+          if (startedAt !== undefined && agentProcessTracker.pidFor(sessionId) === pid) agentProcessStart.set(sessionId, { pid, startedAt });
+        }).catch(() => undefined);
+      }
+    }
+    if (!state.alive) { agentCommandLineRead.delete(sessionId); agentProcessStart.delete(sessionId); }
     // N4 — an agent that starts in a pane whose account is signed out gets
     // the notice now, not after its first turn fails. It still runs: the pane
     // is the user's own. Once per agent process (the tracker re-emits alive);

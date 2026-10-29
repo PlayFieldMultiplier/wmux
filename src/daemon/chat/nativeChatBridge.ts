@@ -926,13 +926,17 @@ export function createChatBridge<P extends ChatPane>(deps: NativeChatBridgeDeps<
     if (resolution.source === 'file' && !resolution.status.terminal?.capabilities.send) {
       return gateRefusal('send-capability', { result: 'unavailable', effect: 'none', error: 'chat-unavailable' });
     }
-    if (resolution.source === 'tui' &&
+    // The OpenCode plugin's request limit; a Hermes send is typed into its prompt and has none.
+    if (resolution.source === 'tui' && resolution.status.terminal?.agent === 'opencode' &&
         openCodeSendBytes(req.agentSessionId, resolution.rawEpoch, req.text, clientMessageId) > OPENCODE_REQUEST_MAX_BYTES) {
       return invalid('text-too-long', { result: 'error', limit: 'bytes', maxSendBytes: OPENCODE_MAX_SEND_BYTES });
     }
     // The daemon queue: a running turn, or anything already waiting on the
     // pane (any owner), holds the message for delivery after the turn ends.
+    // Only for an agent whose row declares the daemon queue (`chat.capabilities.queue`):
+    // a Hermes send during a turn is refused `busy`, as its capabilities say.
     if (req.queue && queueStore && owner !== 'desktop' && (resolution.source === 'file' || resolution.source === 'tui') &&
+        agentRow(resolution.status.terminal?.agent)?.sendQueue === true &&
         (turnRunning(req.id, resolution) || queueStore.hasActive(req.id))) {
       // Synchronous with the insert: a concurrent same-id send that also
       // passed the checks above (both awaited resolve) finds this one here.
