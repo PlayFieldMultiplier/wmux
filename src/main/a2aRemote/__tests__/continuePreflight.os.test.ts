@@ -88,6 +88,15 @@ describe('continuePreflight', () => {
     expect(await check(fresh)).toEqual({ ok: false, code: 'no-commit' });
   });
 
+  // Windows cannot make these folders at all, so there is nothing to refuse there.
+  it.skipIf(process.platform === 'win32')('refuses a folder below the top level that another PC could not hold', async () => {
+    for (const name of [['docs', 'aux'], ['docs', 'notes ']]) {
+      const dir = path.join(repo, ...name);
+      fs.mkdirSync(dir, { recursive: true });
+      expect(await check(dir)).toEqual({ ok: false, code: 'folder-unsupported' });
+    }
+  });
+
   it('refuses a folder outside any repository', async () => {
     const plain = path.join(root, 'plain');
     fs.mkdirSync(plain);

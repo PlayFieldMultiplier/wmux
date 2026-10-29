@@ -19,13 +19,14 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { isContinueBranch, isContinueCommit, isContinueRepoKey, type A2aContinueRequestV1 } from '../../shared/a2aContinue';
+import { isContinueBranch, isContinueCommit, isContinueRepoKey, normalizeContinueRel, type A2aContinueRequestV1 } from '../../shared/a2aContinue';
 import { normalizeSpawnSub } from '../../shared/a2aSpawn';
 import { originUrlFromConfigList, originUrlRepoKey, parseGitConfigList, workerGitConfigRefusal } from '../worktask/workerGit';
 import { gitRunner, type Git, type SpawnWorktreeOptions } from './spawnWorktree';
 
 export type ContinuePreflightCode =
   | 'not-a-repo'
+  | 'folder-unsupported'
   | 'unsafe-config'
   | 'no-origin'
   | 'origin-unsupported'
@@ -56,6 +57,8 @@ export async function continuePreflight(cwd: string, opts: SpawnWorktreeOptions 
     sub = null;
   }
   if (sub === null) return { ok: false, code: 'not-a-repo' };
+  // The request names it, and the other PC refuses a folder it cannot hold (parseContinueRequest).
+  if (sub && normalizeContinueRel(sub) === null) return { ok: false, code: 'folder-unsupported' };
 
   const config = await run(['config', '-z', '--list', '--show-scope']);
   if (config.code !== 0) return { ok: false, code: 'failed' };
