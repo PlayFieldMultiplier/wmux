@@ -620,6 +620,20 @@ export async function readExecutableImage(
   }
 }
 
+export type ImageFileState = 'present' | 'missing' | 'unknown';
+
+/** Whether `file` is on disk. Only ENOENT and ENOTDIR say it is gone; any
+ *  other failure (a permission error, an I/O error) is no verdict. */
+export function imageFileState(file: string): ImageFileState {
+  try {
+    fs.lstatSync(file);
+    return 'present';
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    return code === 'ENOENT' || code === 'ENOTDIR' ? 'missing' : 'unknown';
+  }
+}
+
 /** npm packages a runtime-hosted agent ships in: each registry row's
  *  `process.packages`, plus the packages of agents whose rows name none. */
 const EXTRA_AGENT_PACKAGES: Partial<Record<AgentSlug, readonly string[]>> = {
@@ -833,7 +847,7 @@ interface TrackedAgent {
    *  picked: a later command start in the pane may have launched its successor. */
   launchSeq?: number;
   /** agentImageMissingFor's read of `pid`'s executable: `path` once read
-   *  (null for a runtime image, which is not the agent's own install), absent
+   *  (null for an image outside the agent's native install directory), absent
    *  while the read started at `readAt` is pending or after it failed.
    *  `missing` latches: a running process never gets its file back. */
   exe?: { readAt: number; path?: string | null; missing?: true };
@@ -934,16 +948,18 @@ export class AgentProcessTracker {
     // next check reads again.
     if (cache && image !== undefined) {
       cache.image = { key, ok };
-      if (cache.exe?.path === undefined) AgentProcessTracker.noteAgentImage(cache, image);
+      if (cache.exe?.path === undefined) this.noteAgentImage(cache, image);
     }
     return ok;
   }
 
-  /** Record the executable `state.pid` runs for agentImageMissingFor. */
-  private static noteAgentImage(state: TrackedAgent, image: string): void {
-    // A runtime-hosted agent's image is node or python, not its install; an
-    // npm update rewrites the package at the same path anyway.
-    const native = path.posix.isAbsolute(image) && !RUNTIME_STEMS.has(runtimeStem(imageStem(image)));
+  /** Record the executable `state.pid` runs for agentImageMissingFor. Only a
+   *  version binary in the agent's own install directory is kept: that is
+   *  the file an update deletes, and anything else the read can name (a
+   *  runtime, a mount point lsof reports for an unlinked file) is no verdict. */
+  private noteAgentImage(state: TrackedAgent, image: string): void {
+    const native = state.slug !== undefined && path.posix.isAbsolute(image) &&
+      inNativeInstallDir(image, this.userHome) === state.slug;
     state.exe = { readAt: state.exe?.readAt ?? Date.now(), path: native ? image : null };
   }
 
@@ -1342,9 +1358,10 @@ export class AgentProcessTracker {
    * still running that version without its own binary: on macOS it loses
    * folder access, and tool runs fail. true = gone, false = still there,
    * undefined = unknown: no live named agent, a WSL agent, Windows (a running
-   * executable is locked and cannot be deleted), a runtime-hosted agent
-   * (`node …/cli.js`: an npm update rewrites the package in place), or the
-   * image not read yet.
+   * executable is locked and cannot be deleted), an image outside the agent's
+   * native install directory (a runtime-hosted `node …/cli.js` among them: an
+   * npm update rewrites the package in place), the image not read yet, or a
+   * stat that failed for another reason than the file being gone.
    *
    * The first call for a tracked process starts one image read (macOS: one
    * lsof, which still names a deleted file; Linux: a readlink, whose
@@ -1353,7 +1370,7 @@ export class AgentProcessTracker {
    * a session list over many panes starts one, not one per pane. Every later
    * call is one stat of the known path. Never enumerates.
    */
-  agentImageMissingFor(sessionId: string, exists: (file: string) => boolean = fs.existsSync): boolean | undefined {
+  agentImageMissingFor(sessionId: string, probe: (file: string) => ImageFileState = imageFileState): boolean | undefined {
     const s = this.states.get(sessionId);
     if (!s?.alive || !s.slug || s.wsl || (this.platform !== 'darwin' && this.platform !== 'linux')) return undefined;
     const exe = s.exe;
@@ -1364,15 +1381,18 @@ export class AgentProcessTracker {
         void this.readImage(s.pid).catch(() => undefined).then((image) => {
           this.agentImageReading = false;
           if (image !== undefined && this.states.get(sessionId) === s && s.exe?.path === undefined) {
-            AgentProcessTracker.noteAgentImage(s, image);
+            this.noteAgentImage(s, image);
           }
         });
       }
       return undefined;
     }
     if (exe.path === null) return undefined;
-    if (!exe.missing && !exists(exe.path)) exe.missing = true;
-    return exe.missing === true;
+    if (exe.missing) return true;
+    const state = probe(exe.path);
+    if (state === 'unknown') return undefined;
+    if (state === 'missing') exe.missing = true;
+    return state === 'missing';
   }
 
   /** True while the session's agent is a live process inside WSL, attributed
