@@ -950,7 +950,8 @@ async function folderTrustVerdict(gate: ApprovalInputGate, ptyId: string, screen
  * Refuse a non-operator's input on a folder-trust verdict: always on 'trust',
  * and on 'unknown' only when `refuseUnknown` (text, Enter and selecting keys;
  * Escape passes, since it also stops an agent). `stage` says what of this
- * input already reached the pane.
+ * input already reached the pane; `screen` is the read the verdict came from,
+ * so an 'unknown' for a pane with no terminal on screen says so.
  */
 function refuseAtFolderTrust(
   verdict: FolderTrustState | null,
@@ -958,10 +959,12 @@ function refuseAtFolderTrust(
   ptyId: string,
   refuseUnknown: boolean,
   stage = '',
+  screen: ScreenRead = null,
 ): void {
   if (!folderTrustStops(verdict, op, ptyId, refuseUnknown)) return;
   if (verdict === 'trust') throw new Error(`${folderTrustGateMessage(op, ptyId)}${stage}`);
-  throw new ApprovalGateUnavailable(`${folderTrustUnknownMessage(op, ptyId)}${stage}`);
+  const offScreen = typeof screen === 'object' && screen !== null && 'parked' in screen;
+  throw new ApprovalGateUnavailable(`${folderTrustUnknownMessage(op, ptyId, offScreen)}${stage}`);
 }
 
 /** What a refusal before any write says. */
@@ -979,7 +982,7 @@ async function assertNotAtFolderTrust(
 ): Promise<void> {
   if (ctx?.operator) return;
   const screen = await gate.readScreenText(ptyId);
-  refuseAtFolderTrust(await folderTrustVerdict(gate, ptyId, screen), op, ptyId, opts.refuseUnknown ?? true, opts.stage ?? NOTHING_SENT);
+  refuseAtFolderTrust(await folderTrustVerdict(gate, ptyId, screen), op, ptyId, opts.refuseUnknown ?? true, opts.stage ?? NOTHING_SENT, screen);
 }
 
 /** A retried Enter withheld on purpose (a folder-trust prompt took the screen). */
@@ -1014,7 +1017,7 @@ async function assertNotTypingAtAnApproval(
   const [policy, read] = await Promise.all([gate.answerPolicy(ptyId), gate.readScreenText(ptyId)]);
   // A delivery refuses an unreadable screen whatever the daemon would say.
   if (!(read === null && opts.refuseUnreadable)) {
-    refuseAtFolderTrust(await folderTrustVerdict(gate, ptyId, read), op, ptyId, true, opts.stage ?? NOTHING_SENT);
+    refuseAtFolderTrust(await folderTrustVerdict(gate, ptyId, read), op, ptyId, true, opts.stage ?? NOTHING_SENT, read);
   }
   // A parked read's ring text stands for the screen; a session that has not
   // started here shows nothing yet, so no dialog.

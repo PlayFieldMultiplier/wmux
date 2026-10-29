@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { folderTrustRefusal, folderTrustState, type FolderTrustDeps, type FolderTrustSession } from '../folderTrustState';
 import { looksLikeFolderTrustDialog } from '../approvals/approvalKeystrokes';
-import { enqueueSnapshotJob, generateTextSnapshot } from '../HeadlessSnapshot';
+import { enqueueSnapshotJob, generateTextSnapshot, generateTextSnapshotUnqueued } from '../HeadlessSnapshot';
 import { RingBuffer } from '../RingBuffer';
 import { deliberateSleep } from '../../test-utils/waitFor';
 import { DaemonPTYBridge } from '../DaemonPTYBridge';
@@ -269,6 +269,59 @@ describe('folderTrustState', () => {
       unblock?.();
       await busy;
     }
+  });
+});
+
+describe('a ring that outgrew the tail window, on a pane that went idle (#2855)', () => {
+  // An agent's idle screen, drawn once.
+  const IDLE = [
+    ...Array.from({ length: 30 }, (_, i) => `⏺ Step ${i + 1} done.`),
+    '',
+    `╭${'─'.repeat(118)}╮`,
+    `│ > ${' '.repeat(114)}│`,
+    `╰${'─'.repeat(118)}╯`,
+    '  ? for shortcuts',
+  ];
+  const spinner = (n: number): string => `\x1b[31;1H✻ Thinking… (${n}s · esc to interrupt)\x1b[K`;
+
+  /** `first`, then a long stretch that redraws one row by cell diff, as ConPTY
+   *  and Claude Code do: the rest of the screen is drawn only before the tail. */
+  function longAfter(first: Buffer, redraw: (n: number) => string, end = ''): FolderTrustSession & { ringBuffer: RingBuffer } {
+    const s = session(first, 120, 40);
+    for (let n = 0; s.ringBuffer.totalBytesWritten < 600 * 1024; n++) s.ringBuffer.write(Buffer.from(redraw(n)));
+    s.ringBuffer.write(Buffer.from(end));
+    return s;
+  }
+
+  it("is 'clear' for an idle prompt the tail never redrew, and 'trust' for a dialog it never redrew", async () => {
+    // The turn ends: its spinner row is cleared, the prompt box stays as drawn.
+    const idle = longAfter(frame(IDLE), spinner, '\x1b[31;1H\x1b[K');
+    expect(await folderTrustState(deps(idle), 'pty-1')).toBe('clear');
+    const yes = CLAUDE.findIndex((row) => row.includes('Yes, I trust this folder')) + 1;
+    const dialog = longAfter(frame(CLAUDE), () => `\x1b[${yes};1H   Yes, I trust this folder`);
+    expect(await folderTrustState(deps(dialog), 'pty-1')).toBe('trust');
+  });
+
+  it('a whole-ring read that outlasts the budget answers the next request, until the pane prints again', async () => {
+    const s = longAfter(frame(IDLE), spinner, '\x1b[31;1H\x1b[K');
+    let parses = 0;
+    const snapshot: NonNullable<FolderTrustDeps['snapshot']> = async (req) => {
+      parses++;
+      if (req.initial.length > 512 * 1024) await deliberateSleep(400, 'a whole-ring parse on a slow machine, inside the stub');
+      return generateTextSnapshotUnqueued(req);
+    };
+    // The tail cannot decide, and the whole ring is not read within the budget.
+    expect(await folderTrustState(deps(s, { snapshot }), 'pty-1')).toBe('unknown');
+    // The queue runs in order: this job's turn comes once the whole-ring read is done.
+    await enqueueSnapshotJob(async () => undefined);
+    const parsed = parses;
+    expect(await folderTrustState(deps(s, { snapshot }), 'pty-1')).toBe('clear');
+    expect(parses).toBe(parsed);
+    // New output: the verdict is read again.
+    s.ringBuffer.write(Buffer.from(spinner(0)));
+    expect(await folderTrustState(deps(s, { snapshot }), 'pty-1')).toBe('unknown');
+    expect(parses).toBeGreaterThan(parsed);
+    await enqueueSnapshotJob(async () => undefined);
   });
 });
 

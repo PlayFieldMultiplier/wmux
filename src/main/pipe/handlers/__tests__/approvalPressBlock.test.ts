@@ -841,6 +841,16 @@ describe('a folder-trust verdict for a pane with no screen', () => {
     expect((await asBrain('input.sendKey', { ptyId: 'pty-w', key: 'enter' })).ok).toBe(false);
   });
 
+  it("a parked read's 'unknown' says the pane is not on screen, not that it is too narrow", async () => {
+    live.policy = { allowed: true };
+    live.screen = { parked: '% ' };
+    live.daemonVerdict = 'unknown';
+    const res = await asBrain('input.send', { ptyId: 'pty-w', text: 'hello', submit: true });
+    expect(res.error).toContain('is not on screen (it is stashed, or its workspace was unloaded while hidden)');
+    expect(res.error).not.toContain('wide enough');
+    expect(w.writes).toHaveLength(0);
+  });
+
   it("the human operator is never asked about, whatever the verdict", async () => {
     live.screen = null;
     live.daemonVerdict = 'unknown';

@@ -336,7 +336,7 @@ type TextSnapshot = (req: { cols: number; rows: number; scrollback: number; init
  * The pane's live geometry: the PTY's own size when node-pty reports it (the
  * size the agent is actually drawing at), else the recorded meta size.
  */
-function liveGeometry(pane: RenderablePane): { cols: number; rows: number } | null {
+export function liveGeometry(pane: RenderablePane): { cols: number; rows: number } | null {
   const { cols: ptyCols, rows: ptyRows } = pane.ptyProcess;
   if (typeof ptyCols === 'number' && typeof ptyRows === 'number' && ptyCols > 0 && ptyRows > 0) {
     return { cols: ptyCols, rows: ptyRows };
