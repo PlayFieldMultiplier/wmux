@@ -667,6 +667,8 @@ export default function BotsPage({ onAddBot, port, api, now, settings, stop, eng
   const settingsDirty = useRef(false);
   const onSettingsDirty = useCallback((dirty: boolean) => { settingsDirty.current = dirty; }, []);
   const [leaveAsk, setLeaveAsk] = useState<{ go: () => void } | null>(null);
+  // A leave asked of a page that has since gone (its bot deleted) is dropped.
+  useEffect(() => { if (!settingsBotId) setLeaveAsk(null); }, [settingsBotId]);
   const guard = (go: () => void) => {
     if (settingsDirty.current) setLeaveAsk({ go });
     else go();
