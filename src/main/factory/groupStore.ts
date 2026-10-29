@@ -189,6 +189,8 @@ export class GroupStore {
     if (this.writeRefusal() || !isRoomWorkspaceId(workspaceId) || this.hadRoomGroup(workspaceId)) return null;
     const own = new Set((this.opts.bots?.() ?? []).filter((b) => b.ownHermes === true).map((b) => b.id));
     const ids = [...new Set(memberIds.filter((m) => BOT_ID_RE.test(m) && !own.has(m)))].slice(0, BOT_GROUP_LIMITS.MEMBERS_MAX);
+    // Without its My Hermes bots the room may be too small to be a group; it stays a room.
+    if (ids.length < BOT_GROUP_LIMITS.MEMBERS_MIN) return null;
     const at = this.now();
     const g: StoredGroup = { id: this.mintId(), workspaceId, name: '', memberIds: ids, threadId: GENERAL_THREAD, createdAt: at, updatedAt: at };
     this.groups = [...this.groups, g];
