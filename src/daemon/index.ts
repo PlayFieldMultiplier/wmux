@@ -144,7 +144,7 @@ import { SpawnLinkStore } from './a2aRemote/spawnLinkStore';
 import { A2aSpawnStarter, registerSpawnStartRpc } from './a2aRemote/spawnStarter';
 import { A2aSpawnRequester, registerSpawnAskRpc } from './a2aRemote/spawnRequester';
 import { SpawnOutgoingStore } from './a2aRemote/spawnOutgoingStore';
-import { A2aContinueReceiver } from './a2aRemote/continueReceiver';
+import { A2aContinueReceiver, paneHoldsSession } from './a2aRemote/continueReceiver';
 import { ContinuePolicyStore } from './a2aRemote/continuePolicyStore';
 import { ContinueRequestStore } from './a2aRemote/continueRequestStore';
 import { gitRunner } from '../main/a2aRemote/spawnWorktree';
@@ -10308,6 +10308,9 @@ async function main(): Promise<void> {
     // Remote spawn (receiver side): off until this PC's human opts a PC in.
     const a2aSpawnPolicy = new SpawnPolicyStore({ dir: a2aDir, log: a2aLog });
     const a2aSpawnRequests = new SpawnRequestStore({ dir: a2aDir, log: a2aLog });
+    // Continuing a conversation from another PC: off until this PC's human opts in.
+    const a2aContinuePolicy = new ContinuePolicyStore({ dir: a2aDir, log: a2aLog });
+    const a2aContinueRequests = new ContinueRequestStore({ dir: a2aDir, log: a2aLog });
     // A PC removed while a write failed is dropped again on start; only when
     // both pairing files read, so an unreadable one never clears the opt-ins.
     if (a2aPeers.usable && a2aRemoteHosts.usable) {
@@ -10315,6 +10318,8 @@ async function main(): Promise<void> {
         a2aPeers.list().some((p) => p.hostId === hostId && !p.revokedAt) || a2aRemoteHosts.get(hostId) !== undefined;
       a2aSpawnPolicy.retainHosts(a2aPaired);
       a2aSpawnRequests.retainHosts(a2aPaired);
+      a2aContinuePolicy.retainHosts(a2aPaired);
+      a2aContinueRequests.retainHosts(a2aPaired);
     }
     const a2aHostName = (hostId: string): string | undefined =>
       a2aRemoteHosts.get(hostId)?.name ?? a2aPeers.list().find((p) => p.hostId === hostId && !p.revokedAt)?.name;
@@ -10381,26 +10386,27 @@ async function main(): Promise<void> {
     });
     // A conversation another PC continues here (receiver side): off until this
     // PC's human opts in, and not advertised to any PC yet.
+    const a2aRootGit = new Map<string, ReturnType<typeof gitRunner>>();
     const a2aContinue = new A2aContinueReceiver({
-      policy: new ContinuePolicyStore({ dir: a2aDir, log: a2aLog }),
+      policy: a2aContinuePolicy,
       spawnPolicy: a2aSpawnPolicy,
-      requests: new ContinueRequestStore({ dir: a2aDir, log: a2aLog }),
+      requests: a2aContinueRequests,
       enqueue: (hostId, envelope) => {
         if (!a2aDelivery) throw new Error('messages between PCs are not carried this run');
         a2aDelivery.outbox.enqueue(hostId, envelope);
       },
       // The root's own origin (read-only git, the worker hardening), keyed as the asker keys its own.
       originKeyOf: async (rootPath) => {
-        const out = await gitRunner(rootPath, {})(['config', '-z', '--list', '--show-scope']);
+        let git = a2aRootGit.get(rootPath);
+        if (!git) a2aRootGit.set(rootPath, (git = gitRunner(rootPath, {})));
+        const out = await git(['config', '-z', '--list', '--show-scope']);
         const url = out.code === 0 ? originUrlFromConfigList(out.stdout) : null;
         return url ? originUrlRepoKey(url) : null;
       },
+      // The staging volume: the bytes land under the a2a dir.
       freeBytes: () => fs.promises.statfs(a2aDir).then((s) => s.bavail * s.bsize),
-      // A live pane whose bound Claude transcript is that conversation's.
-      sessionLive: (sessionId) => sessionManager.listLiveSessions().some((m) => {
-        const transcript = transcriptProjector?.transcriptPath(m.id) ?? null;
-        return transcript !== null && path.basename(transcript) === `${sessionId}.jsonl`;
-      }),
+      sessionLive: (sessionId) => sessionManager.listLiveSessions().some((m) =>
+        paneHoldsSession(m, () => transcriptProjector?.transcriptPath(m.id) ?? null, sessionId)),
       log: a2aLog,
     });
     const a2aForgetHost = forgetHostCascade({ links: a2aLinks, exposures: a2aExposures, offers: a2aOffersRef }, a2aLog);
@@ -10427,6 +10433,21 @@ async function main(): Promise<void> {
         a2aAsks?.forgetHost(hostId);
       } catch (err) {
         a2aLog('error', `[a2a-remote] revoke cascade: spawn requests sent to ${hostId}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      try {
+        a2aContinuePolicy.forgetHost(hostId);
+      } catch (err) {
+        a2aLog('error', `[a2a-remote] revoke cascade: continue policy for ${hostId}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      try {
+        a2aContinueRequests.forgetHost(hostId);
+      } catch (err) {
+        a2aLog('error', `[a2a-remote] revoke cascade: continue requests from ${hostId}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      try {
+        a2aContinue.forgetHost(hostId);
+      } catch (err) {
+        a2aLog('error', `[a2a-remote] revoke cascade: continue receiver for ${hostId}: ${err instanceof Error ? err.message : String(err)}`);
       }
       a2aDelivery?.onPeerRevoked(hostId);
     };

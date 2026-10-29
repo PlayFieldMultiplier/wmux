@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { A2A_REMOTE_PROTOCOL, type A2aRemoteEnvelope } from '../../../shared/a2aRemote';
 import { defaultContinuePolicy, parseContinueRequest, type A2aContinuePolicyV1 } from '../../../shared/a2aContinue';
 import { defaultSpawnPolicy, type A2aSpawnPolicyV1 } from '../../../shared/a2aSpawn';
-import { A2aContinueReceiver, type ContinueReceiverDeps } from '../continueReceiver';
+import { A2aContinueReceiver, CONTINUE_STARTING_GRACE_MS, paneHoldsSession, type ContinueReceiverDeps } from '../continueReceiver';
 import { ContinueRequestStore } from '../continueRequestStore';
 import { SpawnChecks } from '../spawnChecks';
 
@@ -132,7 +132,9 @@ describe('a request: who may ask, and what each refusal says', () => {
     const unknownRepo = { origin: 'github.com/acme/other', branch: 'main', head: HEAD };
     expect(await ask(request({ repo: unknownRepo }))).toEqual(['repo-not-found']);
     expect(await ask(request({ repo: unknownRepo }), OTHER)).toEqual(['not-allowed']);
+    // Origins are read once per spawn-policy version.
     origins['/repos/api'] = ORIGIN;
+    spawn.version += 1;
     expect(await ask(request())).toEqual(['repo-ambiguous']);
     // Turned off while the roots were read: the PC hears not-allowed, not what this PC holds.
     const flipping = makeReceiver({ originKeyOf: async () => { continuePolicy.in.enabled = false; return null; } });
@@ -286,15 +288,15 @@ describe('status queries', () => {
     expect(query(req)).toBe('ready');
     receiver.received(HOST, id(req));
     expect(query(req)).toBe('received');
-    receiver.claim(HOST, id(req));
+    await receiver.claim(HOST, id(req));
     expect(state(req)).toBe('starting');
     expect(query(req)).toBe('received');
     receiver.started(HOST, id(req));
     expect(query(req)).toBe('started');
-    // Another PC asking about the same id learns nothing of it.
+    // Another PC, not allowed, asking about the same id hears nothing.
     sent = [];
     receiver.applyInbound(link('continue-status', id(req), { continueStatus: { v: 1, continueId: id(req) } }), { hostId: OTHER });
-    expect(codes(id(req), OTHER)).toEqual(['unknown']);
+    expect(sent).toEqual([]);
   });
 });
 
@@ -302,16 +304,16 @@ describe('claim and start', () => {
   it('only a received request is claimed, once; a started one never starts again', async () => {
     const req = request();
     await ask(req);
-    expect(receiver.claim(HOST, id(req))).toMatchObject({ ok: false });
+    expect(await receiver.claim(HOST, id(req))).toMatchObject({ ok: false });
     receiver.decide(HOST, id(req), 'once');
     await sendManifest(req);
-    expect(receiver.claim(HOST, id(req))).toMatchObject({ ok: false });
+    expect(await receiver.claim(HOST, id(req))).toMatchObject({ ok: false });
     receiver.received(HOST, id(req));
-    const claim = receiver.claim(HOST, id(req));
+    const claim = await receiver.claim(HOST, id(req));
     expect(claim).toMatchObject({ ok: true, claim: { hostId: HOST, rootId: 'web', rootPath: '/repos/web', permissionMode: 'acceptEdits' } });
-    expect(receiver.claim(HOST, id(req))).toMatchObject({ ok: false });
+    expect(await receiver.claim(HOST, id(req))).toMatchObject({ ok: false });
     expect(receiver.started(HOST, id(req))).toEqual({ ok: true });
-    expect(receiver.claim(HOST, id(req))).toMatchObject({ ok: false });
+    expect(await receiver.claim(HOST, id(req))).toMatchObject({ ok: false });
     expect(receiver.started(HOST, id(req))).toMatchObject({ ok: false });
     // A resend of the request is answered `started`, and starts nothing.
     expect(await ask(req)).toEqual(['waiting-for-approval', 'ready', 'received', 'started', 'started']);
@@ -321,7 +323,7 @@ describe('claim and start', () => {
   it('never after the expiry: a claim, or bytes that came late, end it expired', async () => {
     const late = await toReceived();
     clock += 3601_000;
-    expect(receiver.claim(HOST, id(late))).toEqual({ ok: false, error: 'expired' });
+    expect(await receiver.claim(HOST, id(late))).toEqual({ ok: false, error: 'expired' });
     expect(codes(id(late)).at(-1)).toBe('expired');
     clock -= 3601_000;
     const slow = request();
@@ -335,7 +337,7 @@ describe('claim and start', () => {
 
   it('a start that failed, or bytes that did not arrive, end it failed', async () => {
     const req = await toReceived();
-    receiver.claim(HOST, id(req));
+    await receiver.claim(HOST, id(req));
     expect(receiver.failed(HOST, id(req))).toEqual({ ok: true });
     expect(codes(id(req)).at(-1)).toBe('failed');
     const lost = request();
@@ -352,8 +354,9 @@ describe('the sweep and a restart', () => {
     const waiting = request();
     await ask(waiting);
     const claimed = await toReceived();
-    receiver.claim(HOST, id(claimed));
-    clock += 3601_000;
+    clock += 3500_000;
+    await receiver.claim(HOST, id(claimed));
+    clock += 200_000;
     receiver.sweep();
     expect(codes(id(waiting)).at(-1)).toBe('expired');
     expect(state(claimed)).toBe('starting');
@@ -367,10 +370,10 @@ describe('the sweep and a restart', () => {
     expect(state(unsent)).toBe('awaiting');
     expect(codes(id(unsent))).toEqual([]);
     const started = await toReceived();
-    receiver.claim(HOST, id(started));
+    await receiver.claim(HOST, id(started));
     receiver.started(HOST, id(started));
     const starting = await toReceived();
-    receiver.claim(HOST, id(starting));
+    await receiver.claim(HOST, id(starting));
     // Stored, then the daemon stopped before its checks ran.
     const pending = request();
     requests.receive(HOST, parseContinueRequest(pending)!);
@@ -384,8 +387,8 @@ describe('the sweep and a restart', () => {
     await after.idle();
     expect(codes(id(unsent))).toEqual(['waiting-for-approval']);
     expect(codes(id(pending))).toEqual(['waiting-for-approval']);
-    expect(after.claim(HOST, id(started))).toMatchObject({ ok: false });
-    expect(after.claim(HOST, id(starting))).toMatchObject({ ok: false });
+    expect(await after.claim(HOST, id(started))).toMatchObject({ ok: false });
+    expect(await after.claim(HOST, id(starting))).toMatchObject({ ok: false });
     expect(state(starting)).toBe('starting');
     after.stop();
   });
@@ -399,5 +402,172 @@ describe('answers from the other PC', () => {
     expect(receiver.applyInbound(link('continue-result', cid, { continueResult: { v: 1, continueId: cid, code: 'yes' } }), { hostId: HOST }))
       .toEqual({ ok: false, error: 'bad-request' });
     expect(sent).toEqual([]);
+  });
+});
+
+describe('a PC no longer allowed', () => {
+  const status = (cid: string, hostId = HOST, r = receiver) =>
+    r.applyInbound(link('continue-status', cid, { continueStatus: { v: 1, continueId: cid } }), { hostId });
+
+  it('a resend of a request this PC holds is answered from its record, never refused: A must not resume beside it', async () => {
+    const req = await toReceived();
+    continuePolicy.in.enabled = false;
+    expect(await ask(req)).toEqual(['waiting-for-approval', 'ready', 'received', 'received']);
+    status(id(req));
+    expect(codes(id(req)).at(-1)).toBe('received');
+    expect(state(req)).toBe('received');
+    continuePolicy.in.enabled = true;
+    expect(await receiver.claim(HOST, id(req))).toMatchObject({ ok: true });
+  });
+
+  it('hears not-allowed for what this PC holds, and still where a request it owns is', async () => {
+    const missing = request({ repo: { origin: 'github.com/acme/other', branch: 'main', head: HEAD } });
+    expect(await ask(missing)).toEqual(['repo-not-found']);
+    const held = await toReceived();
+    spawn.hosts = {};
+    status(id(missing));
+    status(id(held));
+    expect(codes(id(missing)).at(-1)).toBe('not-allowed');
+    expect(codes(id(held)).at(-1)).toBe('received');
+  });
+
+  it('a manifest from a PC no longer allowed is not-allowed, whatever its commit', async () => {
+    const req = request();
+    await ask(req);
+    receiver.decide(HOST, id(req), 'once');
+    spawn.hosts = {};
+    await sendManifest(req, manifest(req, { head: 'd'.repeat(40) }));
+    expect(codes(id(req)).at(-1)).toBe('not-allowed');
+    // Decided so, not merely shown so: it reads not-allowed should the PC be allowed again.
+    expect(requests.get(HOST, id(req))?.code).toBe('not-allowed');
+  });
+
+  it('an id this PC never held: nothing to a PC not allowed, and `unknown` once per window to one that is', async () => {
+    const windowed = makeReceiver({ resendCoalesceMs: 60_000 });
+    const ids = [1, 2, 3].map(() => `ct-${crypto.randomUUID()}`);
+    for (const cid of ids) status(cid, OTHER, windowed);
+    windowed.applyInbound(link('continue-manifest', ids[0], { continueManifest: manifest({ continueId: ids[0] }) }), { hostId: OTHER });
+    await windowed.idle();
+    expect(sent).toEqual([]);
+    for (const cid of ids) status(cid, HOST, windowed);
+    expect(sent.map((s) => s.env.continueResult?.code)).toEqual(['unknown']);
+    clock += 60_000;
+    status(ids[1], HOST, windowed);
+    expect(sent).toHaveLength(2);
+    // A removed PC starts from nothing here, the window included.
+    windowed.forgetHost(HOST);
+    status(ids[2], HOST, windowed);
+    expect(sent).toHaveLength(3);
+  });
+});
+
+describe('the manifest waits on the disk', () => {
+  async function readyWith(freeBytes: ContinueReceiverDeps['freeBytes']) {
+    const r = makeReceiver({ freeBytes });
+    const req = request();
+    free = 1024 ** 3;
+    await ask(req, HOST, r);
+    r.decide(HOST, id(req), 'once');
+    return { r, req };
+  }
+
+  it('the policy and the clock are read again after the free space', async () => {
+    let flip = (): void => undefined;
+    const off = await readyWith(async () => { flip(); return free; });
+    flip = () => { continuePolicy.in.enabled = false; };
+    await sendManifest(off.req, manifest(off.req), off.r);
+    expect(codes(id(off.req)).at(-1)).toBe('not-allowed');
+    continuePolicy.in.enabled = true;
+    flip = () => undefined;
+    const late = await readyWith(async () => { flip(); return free; });
+    flip = () => { clock += 3601_000; };
+    await sendManifest(late.req, manifest(late.req), late.r);
+    expect(codes(id(late.req)).at(-1)).toBe('expired');
+  });
+
+  it('room counts what this PC already holds for other conversations', async () => {
+    await toReceived();
+    // That one holds 1000 bytes of staging: 500 of 1500 are left.
+    free = 1500;
+    expect(await ask(request())).toEqual(['no-space']);
+    const small = request({ estimate: { bytes: 100, files: 1 } });
+    await ask(small);
+    receiver.decide(HOST, id(small), 'once');
+    await sendManifest(small);
+    expect(codes(id(small)).at(-1)).toBe('no-space');
+  });
+});
+
+describe('the claim checks again', () => {
+  it('a pane that runs the conversation now: busy, and nothing starts', async () => {
+    const req = await toReceived();
+    live.add(req['sessionId'] as string);
+    expect(await receiver.claim(HOST, id(req))).toEqual({ ok: false, error: 'busy' });
+    expect(codes(id(req)).at(-1)).toBe('busy');
+  });
+
+  it('the root is read again: another origin is not-allowed, a second root with it repo-ambiguous', async () => {
+    const moved = await toReceived();
+    origins['/repos/web'] = 'github.com/acme/moved';
+    expect(await receiver.claim(HOST, id(moved))).toEqual({ ok: false, error: 'not-allowed' });
+    // The claim kept what it read: a new policy version reads it again.
+    origins['/repos/web'] = ORIGIN;
+    spawn.version += 1;
+    const twice = await toReceived();
+    origins['/repos/api'] = ORIGIN;
+    expect(await receiver.claim(HOST, id(twice))).toEqual({ ok: false, error: 'repo-ambiguous' });
+    expect(codes(id(twice)).at(-1)).toBe('repo-ambiguous');
+  });
+
+  it('origins are read once per spawn-policy version, and again at each claim', async () => {
+    const read: string[] = [];
+    const counting = makeReceiver({ originKeyOf: async (p) => { read.push(p); return origins[p] ?? null; } });
+    await ask(request(), HOST, counting);
+    await ask(request(), HOST, counting);
+    expect(read).toHaveLength(2);
+    spawn.version += 1;
+    const req = request();
+    await ask(req, HOST, counting);
+    expect(read).toHaveLength(4);
+    counting.decide(HOST, id(req), 'once');
+    await sendManifest(req, manifest(req), counting);
+    counting.received(HOST, id(req));
+    expect(await counting.claim(HOST, id(req))).toMatchObject({ ok: true, claim: { bytes: 1000 } });
+    expect(read).toHaveLength(6);
+  });
+});
+
+describe('a start main never reported on', () => {
+  it('is settled after its grace: started when a pane here runs it, else failed; and it holds no slot meanwhile', async () => {
+    const running = await toReceived();
+    const lost = await toReceived();
+    await receiver.claim(HOST, id(running));
+    await receiver.claim(HOST, id(lost));
+    live.add(running['sessionId'] as string);
+    clock += CONTINUE_STARTING_GRACE_MS;
+    receiver.sweep();
+    expect([state(running), state(lost)]).toEqual(['starting', 'starting']);
+    clock += 1000;
+    // A restart settles them too.
+    const after = makeReceiver();
+    after.recover();
+    await after.idle();
+    expect(codes(id(running)).at(-1)).toBe('started');
+    expect(codes(id(lost)).at(-1)).toBe('failed');
+  });
+});
+
+describe('paneHoldsSession', () => {
+  const sid = crypto.randomUUID();
+
+  it('reads the pane\'s own resume binding first, and the transcript only without one', () => {
+    let read = 0;
+    const transcript = (p: string | null) => () => { read += 1; return p; };
+    expect(paneHoldsSession({ resumeBinding: { sessionId: sid } }, transcript(null), sid)).toBe(true);
+    expect(paneHoldsSession({ resumeBinding: { sessionId: crypto.randomUUID() } }, transcript(`/p/${sid}.jsonl`), sid)).toBe(false);
+    expect(read).toBe(0);
+    expect(paneHoldsSession({}, transcript(`/home/u/.claude/projects/x/${sid}.jsonl`), sid)).toBe(true);
+    expect(paneHoldsSession({}, transcript(null), sid)).toBe(false);
+    expect(read).toBe(2);
   });
 });
