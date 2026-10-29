@@ -930,6 +930,12 @@ export interface ApprovalInputGate {
 /** The gate could not decide: a delivery found the screen unreadable (any policy). */
 class ApprovalGateUnavailable extends Error {}
 
+/** A folder-trust verdict, and where it was read (see folderTrustUnknownMessage). */
+interface FolderTrustRead {
+  verdict: FolderTrustState | null;
+  read: 'screen' | 'parked' | 'output';
+}
+
 /**
  * The folder-trust verdict for a pane: from the screen the renderer read, or,
  * when it read none (a hidden, parked or unattached pane, a failed read, or
@@ -938,12 +944,13 @@ class ApprovalGateUnavailable extends Error {}
  * daemon verdict to have, null: the check stands aside, as before it had a
  * fallback.
  */
-async function folderTrustVerdict(gate: ApprovalInputGate, ptyId: string, screen: ScreenRead): Promise<FolderTrustState | null> {
-  if (typeof screen === 'string' && screen.trim() !== '') return folderTrustOnScreen(screen);
+async function folderTrustVerdict(gate: ApprovalInputGate, ptyId: string, screen: ScreenRead): Promise<FolderTrustRead> {
+  if (typeof screen === 'string' && screen.trim() !== '') return { verdict: folderTrustOnScreen(screen), read: 'screen' };
   const verdict = (await gate.daemonFolderTrust?.(ptyId)) ?? null;
+  const parked = typeof screen === 'object' && screen !== null && 'parked' in screen;
   // No daemon verdict for a parked read: its ring text decides, as before.
-  if (verdict === null && typeof screen === 'object' && screen !== null && 'parked' in screen) return folderTrustOnScreen(screen.parked);
-  return verdict;
+  if (verdict === null && parked) return { verdict: folderTrustOnScreen(screen.parked), read: 'screen' };
+  return { verdict, read: parked ? 'parked' : 'output' };
 }
 
 /**
@@ -953,7 +960,7 @@ async function folderTrustVerdict(gate: ApprovalInputGate, ptyId: string, screen
  * input already reached the pane.
  */
 function refuseAtFolderTrust(
-  verdict: FolderTrustState | null,
+  { verdict, read }: FolderTrustRead,
   op: string,
   ptyId: string,
   refuseUnknown: boolean,
@@ -961,7 +968,7 @@ function refuseAtFolderTrust(
 ): void {
   if (!folderTrustStops(verdict, op, ptyId, refuseUnknown)) return;
   if (verdict === 'trust') throw new Error(`${folderTrustGateMessage(op, ptyId)}${stage}`);
-  throw new ApprovalGateUnavailable(`${folderTrustUnknownMessage(op, ptyId)}${stage}`);
+  throw new ApprovalGateUnavailable(`${folderTrustUnknownMessage(op, ptyId, read)}${stage}`);
 }
 
 /** What a refusal before any write says. */

@@ -269,8 +269,19 @@ export function folderTrustGateMessage(op: string, ptyId: string): string {
 }
 
 /** The refusal when neither the renderer nor the daemon could say whether a folder-trust prompt is up,
- *  or the screen shows a trust question over choices too narrow to read. */
-export function folderTrustUnknownMessage(op: string, ptyId: string): string {
+ *  or the screen shows a trust question over choices too narrow to read. `read`: where the verdict
+ *  came from, the screen text main had, or the daemon's read of the session's output for a pane with
+ *  no terminal on screen (`parked`) or no screen read at all (`output`). */
+export function folderTrustUnknownMessage(op: string, ptyId: string, read: 'screen' | 'parked' | 'output' = 'screen'): string {
+  // The daemon keeps a whole read's 'unknown' until the pane prints or resizes, so a timed retry only
+  // helps while that read is still running.
+  const next = 'A retry in a few seconds helps only while that read is still running; if this repeats, show the pane, or wait until it prints again.';
+  if (read === 'parked') {
+    return `${op}: pane "${ptyId}" is not on screen (it is stashed, or its workspace was unloaded while hidden), and its screen could not be read whole from its output, so a folder-trust prompt cannot be ruled out. ${next}`;
+  }
+  if (read === 'output') {
+    return `${op}: pane "${ptyId}" gave no screen to read, and its screen could not be read whole from its output, so a folder-trust prompt cannot be ruled out. ${next}`;
+  }
   return `${op}: pane "${ptyId}" has no screen that reads whole (none was read, or a trust question's choices are cut too short), so a folder-trust prompt cannot be ruled out; retry once the pane is shown wide enough.`;
 }
 

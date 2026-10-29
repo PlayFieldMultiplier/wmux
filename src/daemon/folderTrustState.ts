@@ -1,6 +1,6 @@
 import { readFolderTrustScreen } from './approvals/approvalKeystrokes';
-import { AWAITING_RENDER_WINDOW_BYTES, renderPaneScreen, type RenderablePane } from './AwaitingScreenVerifier';
-import { generateTextSnapshotUnqueued, runSmallSnapshotJob } from './HeadlessSnapshot';
+import { AWAITING_RENDER_WINDOW_BYTES, liveGeometry, renderPaneScreen, type AwaitingFrame, type RenderablePane } from './AwaitingScreenVerifier';
+import { enqueueSnapshotJob, generateTextSnapshotUnqueued, runSmallSnapshotJob } from './HeadlessSnapshot';
 import { UNKNOWN_CELL } from './sessionTextReplay';
 import { joinWrappedRows } from './web/hostSearch';
 import type { DaemonPipeServer } from './DaemonPipeServer';
@@ -30,6 +30,8 @@ const DIALOG_SPAN_ROWS = 44;
 /** What the verdict needs of a session (a ManagedSession). */
 export type FolderTrustSession = RenderablePane & {
   meta: { state: DaemonSessionState };
+  /** The lifetime byte count: the mark a whole-ring verdict was read at. */
+  ringBuffer: { readonly totalBytesWritten: number };
   bridge: { heldOutput(): { data: string; full: boolean } | null };
   /** Resized while muted: the held output was dropped, or mixes sizes. */
   resizedWhileMuted?: boolean;
@@ -40,9 +42,27 @@ type Snapshot = Parameters<typeof renderPaneScreen>[1];
 export interface FolderTrustDeps {
   getSession: (id: string) => FolderTrustSession | undefined;
   timeoutMs?: number;
-  /** Injected in tests; defaults to a parse outside the shared snapshot queue. */
+  /** Injected in tests; defaults to a parse outside the shared snapshot queue
+   *  (and, for a whole-ring read, the queue's own parse and budget). A
+   *  whole-ring read calls it inside the queue's slot, so it must not queue. */
   snapshot?: Snapshot;
 }
+
+/**
+ * What a parse of a session's whole ring decided, at the ring mark and the
+ * size it was read at. The bytes and the sizes they were written at fix the
+ * screen, so the verdict holds while the mark and the size stay the same.
+ */
+interface WholeRingVerdict {
+  mark: number;
+  cols: number;
+  rows: number;
+  state: FolderTrustState;
+}
+
+/** The last whole-ring verdict per session, and the read under way. */
+const wholeRingVerdicts = new WeakMap<FolderTrustSession, WholeRingVerdict>();
+const wholeRingReads = new WeakMap<FolderTrustSession, Promise<WholeRingVerdict | null>>();
 
 /**
  * The verdict for one session, read from the daemon's ring rather than a
@@ -59,6 +79,13 @@ export interface FolderTrustDeps {
  * rejected, and cells the ring no longer covers marked; a ring larger than
  * the tail window is read from its tail. The parse runs beside the shared
  * snapshot queue, not behind it, and is dropped once the budget is spent.
+ *
+ * A tail that cannot decide is not the last word (#2855). A renderer that
+ * repaints by cell diff (ConPTY, Claude Code) never redraws a cell that did
+ * not change, so the cells drawn before the tail read as unknown, and an idle
+ * pane prints nothing that would redraw them. The whole ring is then parsed
+ * on the shared queue, outside this budget, and its verdict answers every
+ * request until the pane prints or is resized.
  */
 export async function folderTrustState(deps: FolderTrustDeps, id: string): Promise<FolderTrustState> {
   const session = deps.getSession(id);
@@ -71,6 +98,9 @@ export async function folderTrustState(deps: FolderTrustDeps, id: string): Promi
     const held = session.bridge.heldOutput();
     if (!held || held.full || session.resizedWhileMuted) return 'unknown';
     pane = withHeldOutput(session, Buffer.from(held.data));
+  } else {
+    const known = currentWholeRingVerdict(session);
+    if (known) return known;
   }
   const timeoutMs = deps.timeoutMs ?? FOLDER_TRUST_READ_TIMEOUT_MS;
   const deadline = Date.now() + timeoutMs;
@@ -79,15 +109,19 @@ export async function folderTrustState(deps: FolderTrustDeps, id: string): Promi
     generateTextSnapshotUnqueued({ ...req, budgetMs: Math.max(1, deadline - Date.now()) })));
   // Past the deadline no further parse starts, and the one under way stops at its budget.
   let firstRead = true;
+  let readWhole = false;
   const snapshot: Snapshot = async (req) => {
     if (dropped) return { ok: false };
     // A whole ring larger than the tail window does not parse within the
     // budget: answer 'budget' at once, so renderPaneScreen reads its tail.
     // A live dialog is the pane's newest output, so the tail holds its draw.
-    const skipWhole = firstRead && req.initial.length > AWAITING_RENDER_WINDOW_BYTES + TAIL_SLACK_BYTES;
+    const whole = firstRead;
+    const skipWhole = whole && req.initial.length > AWAITING_RENDER_WINDOW_BYTES + TAIL_SLACK_BYTES;
     firstRead = false;
     if (skipWhole) return { ok: false, reason: 'budget' };
-    return parse(req);
+    const outcome = await parse(req);
+    if (whole && outcome.ok) readWhole = true;
+    return outcome;
   };
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timedOut = new Promise<null>((resolve) => {
@@ -100,14 +134,61 @@ export async function folderTrustState(deps: FolderTrustDeps, id: string): Promi
   try {
     const frame = await Promise.race([renderPaneScreen(() => (deps.getSession(id) === session ? pane : undefined), snapshot).catch(() => null), timedOut]);
     if (!frame) return 'unknown';
-    const lines = joinWrappedRows(frame.rows.map((text, i) => ({ text, wrapped: frame.wrapped?.[i] === true })), frame.cols);
-    const onScreen = readFolderTrustScreen(lines.slice(-60));
-    if (onScreen === 'trust') return 'trust';
-    if (onScreen === 'unreadable') return 'unknown';
-    return frame.unknown && unknownWhereADialogWouldBe(frame.unknown) ? 'unknown' : 'clear';
+    const state = verdictOf(frame);
+    if (state !== 'unknown' || readWhole || session.bridge.isMuted) return state;
+    // Only the tail was read, and it could not decide: wait for the whole
+    // ring for what is left of the budget. A read that outlasts it goes on,
+    // and its verdict answers the next request. A read already under way
+    // from before this tail's bytes does not answer for them.
+    const wholeRing = await Promise.race([readWholeRing(deps, id, session), timedOut]);
+    return wholeRing && wholeRing.mark >= frame.mark ? wholeRing.state : 'unknown';
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** A frame's verdict: the dialog on it, or an unseen cell where one would be. */
+function verdictOf(frame: AwaitingFrame): FolderTrustState {
+  const lines = joinWrappedRows(frame.rows.map((text, i) => ({ text, wrapped: frame.wrapped?.[i] === true })), frame.cols);
+  const onScreen = readFolderTrustScreen(lines.slice(-60));
+  if (onScreen === 'trust') return 'trust';
+  if (onScreen === 'unreadable') return 'unknown';
+  return frame.unknown && unknownWhereADialogWouldBe(frame.unknown) ? 'unknown' : 'clear';
+}
+
+/** The whole-ring verdict, while the ring holds no newer byte and the size is the one it was read at. */
+function currentWholeRingVerdict(session: FolderTrustSession): FolderTrustState | null {
+  const known = wholeRingVerdicts.get(session);
+  if (!known || known.mark !== session.ringBuffer.totalBytesWritten) return null;
+  const size = liveGeometry(session);
+  return size && size.cols === known.cols && size.rows === known.rows ? known.state : null;
+}
+
+/**
+ * Parse the session's whole ring on the shared snapshot queue, under the
+ * queue's own budget rather than a request's, and keep its verdict (see
+ * currentWholeRingVerdict). The ring is read when the job's turn comes; one
+ * read per session at a time, joined by any request while it runs. A ring
+ * that does not parse whole in that budget (about 2 s for a full 8 MB ring
+ * at the measured 4 MB/s) is kept as 'unknown' too: the same bytes would
+ * parse no better, and the queue is shared.
+ */
+function readWholeRing(deps: FolderTrustDeps, id: string, session: FolderTrustSession): Promise<WholeRingVerdict | null> {
+  const running = wholeRingReads.get(session);
+  if (running) return running;
+  const read = enqueueSnapshotJob(async () => {
+    const size = liveGeometry(session);
+    if (!size) return null;
+    // renderPaneScreen reads the ring before its first await, at this mark.
+    const mark = session.ringBuffer.totalBytesWritten;
+    const live = (): RenderablePane | undefined => (deps.getSession(id) === session && !session.bridge.isMuted ? session : undefined);
+    const frame = await renderPaneScreen(live, deps.snapshot ?? generateTextSnapshotUnqueued, { tail: false }).catch(() => null);
+    const verdict: WholeRingVerdict = { mark: frame?.mark ?? mark, cols: size.cols, rows: size.rows, state: frame ? verdictOf(frame) : 'unknown' };
+    wholeRingVerdicts.set(session, verdict);
+    return verdict;
+  }).catch(() => null).finally(() => wholeRingReads.delete(session));
+  wholeRingReads.set(session, read);
+  return read;
 }
 
 /**
