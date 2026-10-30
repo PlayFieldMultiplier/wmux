@@ -143,7 +143,7 @@ Spot-checked: `surface.rpc.ts` 95-99; `RpcRouter.ts` 851-852; `wmux-client.ts` 3
 
 ### 9.3 `mcp.mode` writer (8.1): answered
 
-- No hit for a writer of `mcp.mode` in the searches run (a token search over `src/` for `mcp.mode`, `enforcementMode`, `saveConfig` and `config.json mcp`). That is not an exhaustive grep (9.5). Every hit is a read (`enforcementMode.ts:54-58`) or a comment. The value can only be set by hand-editing `~/.wmux/config.json`.
+- No hit for a writer of `mcp.mode` in the searches run (a token search over `src/` for `mcp.mode`, `enforcementMode`, `saveConfig` and `config.json mcp`). That is not an exhaustive grep (9.5). Every hit in those searches is a read (`enforcementMode.ts:54-58`) or a comment. No writer was found in them; a writer outside them is not ruled out (9.5).
 
 ### 9.4 MCP and CLI client visibility of `pendingApproval` (8.6): answered
 
