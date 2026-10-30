@@ -5,7 +5,7 @@
 **Steps:**
 
 1. Put templates in `config/org/` in the fork: org file, department files, launch templates.
-2. Put the operator-local launcher at `C:\Users\victorb\.agents\wmux-org.ps1`, generated from its template, and keep the template in the fork.
+2. Put the operator-local launcher at `C:\Users\victorb\.agents\wmux-app.ps1`, generated from its template, and keep the template in the fork.
 3. Put one relaunch script per org agent in `C:\Users\victorb\.agents\`, following the naming already used there.
 4. Put agent definitions in PFM (`.claude/agents/`) through the normal PR path, not in the fork.
 
@@ -33,12 +33,12 @@
 
 ## Folder changes (fork)
 
-- `config/org/launch/wmux-org.ps1.template` (new).
+- `config/org/launch/wmux-app.ps1.template` (new).
 - `config/org/agents.json` (new, no secrets).
 
 ## Folder changes (PFM and local)
 
-- `C:\Users\victorb\.agents\wmux-org.ps1` (new, local, generated).
+- `C:\Users\victorb\.agents\wmux-app.ps1` (new, local, generated).
 - `C:\Users\victorb\.agents\<identity>.ps1` for each org agent (new, local).
 - `PFM___\.claude\agents\<identity>.md` for each org agent definition (new, through PR).
 
@@ -48,7 +48,7 @@
 
 ## Verification
 
-- `wmux-org.ps1 -DryRun` prints the resolved suffix and paths, and launches nothing.
+- `wmux-app.ps1 -DryRun` prints the resolved suffix and paths, and launches nothing.
 - Every entry in `agents.json` has a launch script that exists on disk.
 
 ## Status

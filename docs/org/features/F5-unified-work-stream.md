@@ -29,7 +29,7 @@
 ## Design
 
 - **Item.** `{id, department, owner, title, state: open|blocked|done|dropped, blockedBy?, evidence?, updatedAt, updatedBy}`. `done` requires `evidence` (a path, a PR URL, or a command result). Without it the state change is refused.
-- **Log.** One append-only file per org instance, `stream.jsonl`, under `~/.wmux-org/stream/`. Writes are atomic. Each line carries the writer's identity.
+- **Log.** One append-only file per org instance, `stream.jsonl`, under `~/.wmux-app/stream/`. Writes are atomic. Each line carries the writer's identity.
 - **Views.** A department view is the log filtered by `department`. The coordination workspace (ORG/COORDINATION) shows all departments.
 - **Wake rule.** A new item addressed to an owner is delivered with `send_message` or `a2a_task_send` to that owner's resolved surface, then read back. A channel post alone is not enough (F3).
 - **Source relation.** For LeagueOS work, an item links to a GitHub issue URL and does not duplicate its state.
@@ -37,7 +37,7 @@
 ## Folder changes (fork)
 
 - `src/org/stream/` (new): `schema.ts`, `log.ts`, `view.ts`, `wake.ts`, with tests.
-- `~/.wmux-org/stream/stream.jsonl` at runtime (not in the repo).
+- `~/.wmux-app/stream/stream.jsonl` at runtime (not in the repo).
 
 ## Open decisions
 
