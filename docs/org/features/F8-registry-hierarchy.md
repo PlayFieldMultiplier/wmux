@@ -16,8 +16,9 @@ A window is a process and data boundary only. It says nothing about which Claude
 |---|---|---|---|
 | PFM office | `-pfm` | The office's own agents (roster and coordination), plus a read-only view of every system. It starts no agent that a system window owns. | widest |
 | LeagueOS | `-leagueos` | The LeagueOS system's agents, including the MERIDIAN-BLUE-OTTOBOT system nested in it | middle |
+| AO_WMUX product window | `-wmux-app` | AO_WMUX's own full window: the product-understanding workspace for the wmux app itself. Owned by AO_WMUX (Victor, 2026-10-30). Subdivisions in section 8. | the product itself |
 
-A knowledge window for wmux-app (studying the product's own source) is not created. It would need its own reason and its own suffix, and nothing in the org needs it yet.
+The `-wmux-app` window is the full-window version of AO_WMUX's own pane and surface. AO_WMUX chooses its subdivisions and owns its targets (section 8).
 
 ## 3. Nesting, and the one-owner rule
 
@@ -47,7 +48,7 @@ One row per node:
 
 | # | Question | Decision | Reason |
 |---|---|---|---|
-| 1 | Window suffixes | `-pfm` and `-leagueos`. `-wmux-app` is not created. | Green field: no knowledge window has a reason yet. The two real zoom levels are the office and LeagueOS. |
+| 1 | Window suffixes | `-pfm` (office), `-leagueos` (LeagueOS), `-wmux-app` (AO_WMUX's product window). | Green field. Victor, 2026-10-30: `-wmux-app` is AO_WMUX's own window for understanding the product. It is a separate purpose from the office and from LeagueOS, so it keeps its own suffix. |
 | 2 | Where the registry lives | `config/org/registry.yaml` in this fork | The F7 launchers and the F1 isolation check read it, so it belongs with the code, under review. |
 | 3 | Who keeps it | The coordinator (MERIDIAN_BLUE) keeps it, changed only by reviewed PR | One writer until a second is needed. A steward role under F6 waits for that need. |
 | 4 | Is LeagueOS its own window | Yes: `-leagueos` owns the LeagueOS agents. `-pfm` views them read-only. | The one-owner rule (section 3) needs a single window per system. |
@@ -65,3 +66,20 @@ One row per node:
 - The launcher scripts (F7).
 - The isolation mechanics (F1).
 - The work stream (F5).
+
+## 8. The `-wmux-app` window (AO_WMUX)
+
+Owner: AO_WMUX. Purpose: understand the wmux product from its own source and behaviour, and work with it. AO_WMUX chose these subdivisions (Victor, 2026-10-30: "You choose its subdivisions. You own it.").
+
+| Workspace | Covers | Source of truth | Evidence file |
+|---|---|---|---|
+| W1 source | Entrypoints, and the module map of the locked 3.38.1 source: main, daemon, renderer, shared, company, mcp, preload | locked checkout `openwong2kim\wmux\checkout\tag-v3.38.1` | `docs/org/research/SOURCE-MAP-3.38.1.md` (planned, L-22) |
+| W2 behaviour | One verified claim per row, each with its file and line in the locked checkout | the same checkout; live checks only when the launch rule allows | `docs/org/research/BEHAVIOUR-3.38.1.md` (planned, L-23) |
+| W3 upstream | Watch `openwong2kim/wmux` issues, PRs and releases, read-only, with dated entries | GitHub | `docs/org/research/UPSTREAM-WATCH.md` (planned, L-24) |
+| W4 fork | Review of `PlayFieldMultiplier/wmux` PRs and the org design set | the fork at each PR head | PR links in LEDGER |
+
+Rules for this window:
+
+- Every claim cites a file and line in the locked checkout, or it is marked UNVERIFIED.
+- Large source reading is delegated to a cheap subagent with a written brief. AO_WMUX reviews the result.
+- No window is launched without Victor's approval (the standing launch rule). W2's live checks wait for that approval. Nothing else in this section needs it.
