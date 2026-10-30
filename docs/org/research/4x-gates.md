@@ -70,3 +70,56 @@ These are counts, not diffs. The code was not diffed between tags.
 ## 7. What this does not say
 
 It does not say the gates are good or bad. It does not say Victor's report is wrong. The open items are in section 6. The first to close is `createDefaultConfig` and the launch path, because they decide whether `enforce` actually reaches pane creation in a shipped install (L-27).
+
+## 8. L-27 findings (v4.13.0, AO_WMUX spot-checked 2026-10-30)
+
+Spot-checked: `daemon/config.ts` has no `mcp` string; `enforcementMode.ts:33`; `index.ts:1231-1232`; `pty.handler.ts:853` and `:862`; `scheduleInitialCommand.ts:89-93`.
+
+### 8.1 Shipped default (section 6, first bullet): resolved
+
+- `createDefaultConfig` (`src/daemon/config.ts`) writes no `mcp` key. The file has no `mcp` string at all.
+- The default comes from the environment. `src/main/mcp/enforcementMode.ts:33`: `const defaultMode: EnforcementMode = opts.isDev ? 'shadow' : 'enforce';`
+- `src/main/index.ts:1231`: `const isDevEnvironment = !app.isPackaged || process.env.NODE_ENV === 'development';`. A packaged build is `enforce`. A source run, or `NODE_ENV=development`, is `shadow`.
+- A user value overrides this only when it is exactly `shadow` or `enforce` (`enforcementMode.ts` 56-58). Anything else falls back to the environment default.
+
+### 8.2 Launch-line path (section 6, second bullet): partly resolved (the `pty:create` path only)
+
+Order in this path, for a new pane with an initial command:
+
+1. `stageCreate` at `src/main/ipc/handlers/pty.handler.ts:610`.
+2. A settle delay, then `attempt` at `scheduleInitialCommand.ts:98`.
+3. `beforeWrite`, the folder-trust hold, at `pty.handler.ts:862`: `folderTrustLaunchHold(daemonClient, sessionId, 'startup line', { refuseUnknown: true, once: true })`. If it returns a hold, the write is skipped (`scheduleInitialCommand.ts:93`).
+4. `writeLaunchLine` at `pty.handler.ts:853`: `return daemonClient.writeToSession(sessionId, sanitizePtyText(cmd) + '\r');`
+5. Only for fan-out or bot task panes: `verifyLaunchLine` checks presence after the write (`pty.handler.ts:867-892`). Its resend gate, `launchPresenceAllowsResend` (`src/daemon/launchPresence.ts:144-146`), runs after the first write, not before it.
+
+`agentLoginGate` is not in this path. Its only consumer found is the automation engine, `src/daemon/automation/AutomationEngine.ts:1021` (`this.ports.signedOut`). It does not gate interactive pane launch.
+
+Still open (see section 8.5): the renderer side of `pane.split` and `surface.new`, which sends `pty:create`.
+
+### 8.3 agentControl holds (section 6, third bullet): partly resolved (who can set a hold is documented intent, not checked code)
+
+- The refusal is `refusal(surfaceId, method)` at `src/main/browser-session/BrowserAgentControl.ts:74-78`. The modes are `'agent' | 'paused' | 'user'` (`src/shared/browserAgentControl.ts:16`).
+- The file documents that only the renderer's trusted IPC sets a mode (`BrowserAgentControl.ts` 35-37, documented intent; the enforcing `apply` path at 108 was not read). Agents can read holds; the file says they cannot clear them.
+- A hold applies to a browser tab only. `pane.split` has no hold check. `surface.new` has no hold check. A new surface has no entry and starts in `'agent'` mode. The only creation-side refusal is teardown guarding, not creation.
+
+### 8.4 pendingApproval (section 6, fourth bullet): partly resolved
+
+- `pendingApproval` is attached in `src/main/pipe/RpcRouter.ts` 731-747 when all hold: enforce mode, or an always-enforced risk class; a `clientName`; trust `unconfirmed`; non-empty `declaredCapabilities`; and an `approvalQueue`.
+- Trust is looked up by `clientName` (`RpcRouter.ts:662-664`). A missing `clientName` gets `legacy` and no prompt.
+- `surface.new` requires `wmux.internal` (`methodCapabilityMap.ts:200`). `PermissionEnforcer.ts:422-425` says that reserved name can never be declared, so an external plugin cannot be granted it.
+- `pane.split` requires `pane.create` (`methodCapabilityMap.ts:217`). A trusted caller without that grant gets `capability-not-declared` and no prompt.
+- The first-party and internal CLI tiers (`firstParty.ts`, `internalCli.ts`) allow both methods without a trust check. Those callers never see `pendingApproval`.
+- UNVERIFIED: what approving a prompt for `surface.new` does, and whether production sets `approvalQueue`.
+
+### 8.5 Whole-tree search (section 6, fifth bullet): resolved for the handler files
+
+- Fifty `.ts` files in `src/main/pipe/handlers/` were fetched. Fifteen registrations match `pane.` or `surface.`. Two create: `pane.split` (`pane.rpc.ts:430`, forwards at `:460`) and `surface.new` (`surface.rpc.ts:80`, forwards at `:95`).
+- `surface.ensurePty` (`input.rpc.ts:691`, `:1451`) is a renderer call, not a registered method. It starts the shell of a deferred surface.
+- UNVERIFIED: the renderer `pty:create` path from `pane.split` and `surface.new` to the launch write. The renderer was not read, so the link between `sendToRenderer` and `pty:create` is not confirmed.
+
+### 8.6 Open after this section
+
+- The renderer link (8.5).
+- Whether `approvalQueue` is injected in production, and what approving an unconfirmed `surface.new` prompt does (8.4).
+- Whether any writer puts `mcp.mode` into `~/.wmux/config.json` (8.1). Only the reader was checked.
+- Whether the MCP or CLI client shows `rejection.pendingApproval` to its caller.
