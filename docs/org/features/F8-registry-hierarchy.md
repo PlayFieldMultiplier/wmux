@@ -35,14 +35,24 @@ The folder tree does not yet match this nesting. On disk, `AS\MERIDIAN` and `AS\
 
 ## 4. What the registry records
 
-One row per node:
+The registry has two kinds of field, and they are never mixed in one row.
 
-- `id`: a stable slug, matching the folder name where one exists.
+**Stable fields** (kept in `config/org/registry.yaml`, changed only by reviewed PR):
+
+- `id`: a stable slug, matching the folder name where one exists. This is the identity.
 - `kind`: `window`, `system`, `workspace` or `agent`.
-- `parent`: the containing node's id. A window has none.
+- `parent`: the containing node's `id`. A window has none.
 - `window`: the suffix of the window that owns the node's agents.
-- `config`: the launch configuration of an agent: the launcher, the model, and the Claude login (`CLAUDE_CONFIG_DIR`). Only agent rows carry it. Windows, systems and workspaces do not, because a login is never a property of a window or a system. Credentials are never stored here; only the name of the vessel that holds them.
+- `config`: the agent's launch configuration: the launcher, the model, and the Claude login name (`CLAUDE_CONFIG_DIR` once resolved). Only agent rows carry it. Credentials are never stored here, only the name of the vessel that holds them.
 - `owner`: the agent or person accountable for the node.
+
+**Transient fields** (never written to the registry, never treated as current):
+
+- `ptyId`, `paneId`, `surfaceId`, `workspaceId`, process ids, and live status (`agentStatus`, `live`).
+- These change on every restart, split, or relaunch. They are resolved at the moment of use, from the live roster (`surface_list` and `a2a_discover`, which are themselves per-call snapshots), and the result is used once and discarded.
+- A discovery listing that names a pane is a snapshot. Reading a pane by an ID taken from one can return a different pane. Confirm identity by title and agent name before typing (see the handoff finding of 2026-10-30).
+
+Rule: a file on disk that lists agents is a claim about the past. Stable identity comes from the stable fields. Where an agent is now comes only from a live read. If a transient value appears in a stable file, it is a defect.
 
 ## 5. Decisions
 
