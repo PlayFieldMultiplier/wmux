@@ -61,7 +61,7 @@ These are counts, not diffs. The code was not diffed between tags.
 ## 6. UNVERIFIED
 
 - ~~Whether `pane.split` and `surface.new` are in the always-enforced list.~~ Resolved in section 3a: neither is.
-- Whether a shipped install actually runs in `enforce`: the default written by `createDefaultConfig` in `src/daemon/config.ts`, and whether a user config overrides it, were not read.
+- Whether a shipped install actually runs in `enforce`: the default written by `createDefaultConfig` in `src/daemon/config.ts`, and whether a user config at `mcp.mode` (section 3) overrides it, were not read.
 - The launch step end to end: which code types the agent launch into a pane after `surface.new` or `pane.split`, and in what order `agentLoginGate`, `launchPresence` and the launch path run. Not traced.
 - What `agentControl` holds can be set on. `src/main/browser-session/BrowserAgentControl.ts` was not read.
 - Whether a `pendingApproval` result from `pane.split` or `surface.new` in `enforce` mode is reachable at all, which depends on the caller's trust record. Not traced.
@@ -69,4 +69,4 @@ These are counts, not diffs. The code was not diffed between tags.
 
 ## 7. What this does not say
 
-It does not say the gates are good or bad. It does not say Victor's report is wrong. The next step for L-06 is to close section 6, starting with `isAlwaysEnforcedMethod` and `createDefaultConfig`, because they decide whether `enforce` actually reaches pane creation.
+It does not say the gates are good or bad. It does not say Victor's report is wrong. The open items are in section 6. The first to close is `createDefaultConfig` and the launch path, because they decide whether `enforce` actually reaches pane creation in a shipped install (L-27).
