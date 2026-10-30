@@ -69,4 +69,4 @@ These are counts, not diffs. The code was not diffed between tags.
 
 ## 7. What this does not say
 
-It does not say the gates are good or bad. It does not say Victor's report is wrong. The next step for L-06 is to close section 6, starting with `isAlwaysEnforcedMethod` and `createDefaultConfig`, because they decide whether `enforce` actually reaches pane creation.
+It does not say the gates are good or bad. It does not say Victor's report is wrong. The open items are in section 6. The first to close is `createDefaultConfig` and the launch path, because they decide whether `enforce` actually reaches pane creation in a shipped install (L-27).
