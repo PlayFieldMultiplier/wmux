@@ -6,7 +6,7 @@
 
 1. Launch the org instance with `WMUX_DATA_SUFFIX=-wmux-app` set on the exe process itself, through `C:\Users\victorb\.agents\wmux-app.ps1`.
 2. On first launch, confirm the log line `[Main] WMUX_DATA_SUFFIX="-wmux-app" → userData="…-wmux-app"`, and confirm the production `session.json` was not read.
-3. Confirm `C:\Users\victorb\.wmux-app\` was created, and that the daemon pipe name carries the suffix.
+3. Confirm `C:\Users\victorb\.wmux-wmux-app\` was created, and that the daemon pipe name carries the suffix.
 4. Run the isolation check (below) before adding any workspace.
 
 ## Current state (verified in source, 3.38.1)
@@ -39,7 +39,7 @@
 
 ## Verification
 
-- Start the org instance. Read the log line. Read `%APPDATA%` and `~/.wmux-app` to confirm the paths.
+- Start the org instance. Read the log line. Read `%APPDATA%` and `~/.wmux-wmux-app` to confirm the paths.
 - With the production window running, confirm the production `session.json` is unchanged after the org instance starts (compare hash before and after).
 - Create one workspace in the org instance, quit, relaunch, and confirm the workspace comes back in the org instance only.
 

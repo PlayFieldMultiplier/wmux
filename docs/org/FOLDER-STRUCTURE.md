@@ -63,9 +63,9 @@ The locked upstream checkout is `openwong2kim\wmux\checkout\tag-v3.38.1`. The ta
 Expected layout, from the `WMUX_DATA_SUFFIX` mechanics in `research/RESEARCH-DIGEST.md` section 2. The suffix is `-wmux-app`. Confirm each path on the first launch from the `[Main] WMUX_DATA_SUFFIX=… → userData=…` log line before relying on it.
 
 ```
-C:\Users\victorb\.wmux-app\            (getWmuxDir: config.json, daemon pipe, daemon token)
-%APPDATA%\wmux-app\                    (Electron userData: session.json, scrollback, metadata)  [expected, verify]
-\\.\pipe\wmux-app-victorb              (RPC pipe)  [expected from getPipeName, verify]
+C:\Users\victorb\.wmux-wmux-app\            (getWmuxDir: config.json, daemon pipe, daemon token)
+%APPDATA%\wmux-wmux-app\                    (Electron userData: session.json, scrollback, metadata)  [expected, verify]
+\\.\pipe\wmux-wmux-app-victorb              (RPC pipe)  [expected from getPipeName, verify]
 ```
 
 The org instance and the production instance must never share `session.json`. The launcher and F1 include a check for this.
