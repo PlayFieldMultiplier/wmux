@@ -132,7 +132,7 @@ Spot-checked: `surface.rpc.ts` 95-99; `RpcRouter.ts` 851-852; `wmux-client.ts` 3
 
 - `pane.split` and `surface.new` both forward to the renderer through `sendToRenderer`. `surface.rpc.ts` 95-99 forwards only `workspaceId`, `shell` and `cwd` (checked). `initialCommand` is not forwarded, so **a pipe-sent `surface.new` cannot carry a launch line**. `pane.split` forwards `direction` and `workspaceId` only (`pane.rpc.ts:460-463`, raw read).
 - Renderer dispatch: `src/renderer/hooks/useRpcBridge.ts:517` (`onCommand`) and `:1181` (`handleRpcMethod`). `surface.new` branch at `:1887`; `pane.split` branch at `:2289`.
-- Active-workspace `pane.split` creates no PTY itself (`:2323-2328`). The active leaf is filled by `src/renderer/components/Layout/EmptyLeafFunnel.tsx`, whose seed command comes from the workspace project seed (`:171`), not from RPC params.
+- Active-workspace `pane.split` creates no PTY itself (`:2323-2328`). The `AppLayout.tsx` comment says the active leaf is filled by `src/renderer/components/Layout/EmptyLeafFunnel.tsx`, whose seed command comes from the workspace project seed (`EmptyLeafFunnel.tsx:171`, checked). The mount is not verified (9.5).
 - Background-workspace `pane.split` calls `pty.create` without `initialCommand` (`useRpcBridge.ts:2351`, raw read).
 
 ### 9.2 Approval queue (8.4): answered
@@ -143,17 +143,18 @@ Spot-checked: `surface.rpc.ts` 95-99; `RpcRouter.ts` 851-852; `wmux-client.ts` 3
 
 ### 9.3 `mcp.mode` writer (8.1): answered
 
-- No file in `src/` writes the `mcp.mode` key. Every hit is a read (`enforcementMode.ts:54-58`) or a comment. The value can only be set by hand-editing `~/.wmux/config.json`.
+- No hit for a writer of `mcp.mode` in the searches run (a token search over `src/` for `mcp.mode`, `enforcementMode`, `saveConfig` and `config.json mcp`). That is not an exhaustive grep (9.5). Every hit is a read (`enforcementMode.ts:54-58`) or a comment. The value can only be set by hand-editing `~/.wmux/config.json`.
 
 ### 9.4 MCP and CLI client visibility of `pendingApproval` (8.6): answered
 
 - `pendingApproval` reaches the caller only as text. `RpcRouter.ts:851-852` (checked) formats it as `${r.method}: awaiting user approval (promptId=…)`, placed in the response `error` string.
 - The MCP client drops the structured object: `src/mcp/wmux-client.ts:309-314` (checked) rejects with `new Error(response.error)`, so the `rejection` field is discarded.
-- The CLI has no reader.
+- The CLI reader was not checked (9.5).
 
 ### 9.5 Still unverified (carried to L-28)
 
-- Whether `AppLayout.tsx` mounts `EmptyLeafFunnel` as the comment says (not fetched in full).
+- Whether `AppLayout.tsx` mounts `EmptyLeafFunnel` as its comment says (not fetched in full).
+- Whether any CLI command reads `rejection.pendingApproval` (the CLI was not searched; the earlier claim of no reader was not backed by a search).
 - Whether `_bridge.ts` `sendToRenderer` adds fields beyond those in 9.1 (not fetched).
 - Whether any MCP tool wrapper in `src/mcp/toolCatalog.ts` inspects the error text for the approval message (not read).
 - Whether a first-party caller can reach the `unconfirmed` branch (`RpcRouter.ts:316`, `inProcessFirstParty`), which decides whether the bundled server hits the prompt at all (not traced).
