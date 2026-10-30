@@ -52,7 +52,7 @@ One row per node:
 | 2 | Where the registry lives | `config/org/registry.yaml` in this fork | The F7 launchers and the F1 isolation check read it, so it belongs with the code, under review. |
 | 3 | Who keeps it | The coordinator (MERIDIAN_BLUE) keeps it, changed only by reviewed PR | One writer until a second is needed. A steward role under F6 waits for that need. |
 | 4 | Is LeagueOS its own window | Yes: `-leagueos` owns the LeagueOS agents. `-pfm` views them read-only. | The one-owner rule (section 3) needs a single window per system. |
-| 5 | Which Claude login an agent uses (L-11) | **Not a window or system property.** Any window can run any login configuration. The registry records the login on each agent row. | Victor, 2026-10-30: "any window can run any configuration of claude logins." This replaces the earlier version, which tied logins to systems. The choice of login for each agent (shared quota or separate) is still open under L-11. |
+| 5 | Which Claude login an agent uses (L-11) | **Not a window or system property, and not hard-coded.** Any window can run any login configuration. The login is a registry default per system or window, overridable per agent. See section 9. | Victor, 2026-10-30: "any window can run any configuration of claude logins" and "accounts should not be so hard coded." Defaults and the quota-switch rule are in section 9. |
 
 ## 6. Verification (when built)
 
@@ -83,3 +83,29 @@ Rules for this window:
 - Every claim cites a file and line in the locked checkout, or it is marked UNVERIFIED.
 - Large source reading is delegated to a cheap subagent with a written brief. AO_WMUX reviews the result.
 - No window is launched without Victor's approval (the standing launch rule). W2's live checks wait for that approval. Nothing else in this section needs it.
+
+## 9. Account defaults and quota switching
+
+Victor, 2026-10-30: "Accounts should not be so hard coded. You can default the Meridian or PFM to sharksandwich and default your own wmux app window to DarienSirius if you want, but agents should also know how to install a rabbit agent to switch accounts when quota limits near."
+
+### 9.1 Defaults (not fixed; overridable)
+
+| Scope | Default login name | Override |
+|---|---|---|
+| `-pfm` office window | `sharksandwich` | per system, per agent |
+| MERIDIAN and PFM systems | `sharksandwich` | per agent |
+| `-wmux-app` window (AO_WMUX) | `DarienSirius` | per agent |
+| `-leagueos` window | inherits `-pfm` unless set | per system, per agent |
+
+Rules:
+
+- A default is a value in `config/org/registry.yaml`, read at launch. No launcher hard-codes a login.
+- The name is a registry key. Resolving it to a real Claude Code configuration directory (`CLAUDE_CONFIG_DIR`) is a separate, verified step. Until it is verified, a default is a name only. AO_WMUX has not verified that `sharksandwich` or `DarienSirius` maps to a live Claude login on this machine.
+- Credentials are never written into the registry (section 4).
+
+### 9.2 Quota switching
+
+- Agents must be able to move to another account when a quota limit nears. The mechanism is a rabbit agent that performs the switch.
+- The existing roles are the authority: rabbit-0 is the quota guardian and login-dance authority (`C:\Users\victorb\.claude\agents\hazrat-rabbit.md`, `rc-and-wmux.md`). This doc does not create a new authority.
+- The requirement on the registry: each agent row names its primary login and an ordered fallback list, so a rabbit can switch without a human choosing the account at that moment.
+- Open for Victor: the fallback order per system, and whether a switch may run without a human present (the standing rule is that irreversible account actions need approval). Until decided, a switch is a proposal, not an automatic action.
