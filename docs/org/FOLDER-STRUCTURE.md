@@ -47,15 +47,13 @@ Rules for this repository:
 ## 2. The local source checkouts (this machine)
 
 ```
-C:\.______\.KADMON\.WMUX__\
-├── AGENTS.md                          (tier-1 facts; carries the fleet lock)
-├── README.md
-└── src\
-    ├── wmux-3.38.1\                   (upstream tag v3.38.1; read-only reference)
-    └── wmux-org\                      (clone of PlayFieldMultiplier/wmux; the org's working copy)
+C:\.______\.KADMON\.WMUX__\src├── wmux-3.38.1\                                   (upstream tag v3.38.1; read-only; LOCKED PATH, see LEDGER L-16)
+└── PlayFieldMultiplier\wmux\checkout\docs-org-design-v0\   (checkout of PlayFieldMultiplier/wmux, branch docs/org-design-v0)
 ```
 
-`wmux-3.38.1` is not edited. `wmux-org` is the only working copy the org edits, and each feature branch is checked out there, one at a time, or in a worktree.
+**Path rule (Victor, 2026-10-29): every working folder for this fork carries its org, its repo, its kind (`checkout` or `worktree`) and its branch in the path itself.** The pattern is `src\<org>\<repo>\<checkout|worktree>\<branch-slug>`, where the branch slug replaces `/` with `-`. The exact branch name is also written in this file and in `LEDGER.md`.
+
+`wmux-3.38.1` is not edited, and it does not follow the path rule because the fleet lock names it (LEDGER L-16). The org clone is `checkout\docs-org-design-v0`. Each new feature branch gets its own checkout or worktree under the same pattern.
 
 ## 3. Runtime data for the org instance
 
