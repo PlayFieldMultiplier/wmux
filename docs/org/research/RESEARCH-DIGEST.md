@@ -6,7 +6,7 @@ Every item lists its source. Items marked **VERIFIED** were read directly from t
 
 - **VERIFIED.** The fleet was pinned to wmux 3.38.1 on 2026-10-29. The lock text is in `C:\.______\.KADMON\.WMUX__\AGENTS.md`, under "Fleet version lock", and in the loaded agent file `PFM___\.claude\agents\ao-wmux.md` (merged as PR #144).
 - **VERIFIED.** Installed build path: `C:\Users\victorb\AppData\Local\wmux\app-3.38.1`.
-- **VERIFIED.** Locked source: `C:\.______\.KADMON\.WMUX__\src\wmux-3.38.1`, a git checkout of tag `v3.38.1`.
+- **VERIFIED.** Locked source: `C:\.______\.KADMON\.WMUX__\src\openwong2kim\wmux\checkout\tag-v3.38.1`, a git checkout of tag `v3.38.1`.
 - **OPEN.** The lock still names 3.38.1 as the installed and fleet version. Forking to this org changes which version we modify, so the lock text must be updated by PR, after Victor approves the wording (see LEDGER L-07).
 
 ## 2. Instance isolation: a second wmux with its own data

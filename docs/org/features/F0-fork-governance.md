@@ -40,7 +40,7 @@
 ## Verification
 
 - `gh api repos/PlayFieldMultiplier/wmux --jq .default_branch` returns `org/base-3.38.1`.
-- `git -C wmux-org describe --tags` returns `v3.38.1` on the base branch.
+- `git -C "C:\.______\.KADMON\.WMUX__\src\PlayFieldMultiplier\wmux\checkout\docs-org-design-v0" describe --tags` returns `v3.38.1` on the base branch.
 
 ## Status
 

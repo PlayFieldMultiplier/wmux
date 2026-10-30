@@ -47,13 +47,16 @@ Rules for this repository:
 ## 2. The local source checkouts (this machine)
 
 ```
-C:\.______\.KADMON\.WMUX__\src├── wmux-3.38.1\                                   (upstream tag v3.38.1; read-only; LOCKED PATH, see LEDGER L-16)
+C:\.______\.KADMON\.WMUX__\src\
+├── openwong2kim\wmux\checkout\tag-v3.38.1\        (upstream openwong2kim/wmux, tag v3.38.1, commit 245ba5e; read-only; LOCKED; see LEDGER L-16)
 └── PlayFieldMultiplier\wmux\checkout\docs-org-design-v0\   (checkout of PlayFieldMultiplier/wmux, branch docs/org-design-v0)
 ```
 
+**Naming rule (Victor, 2026-10-30):** a canonical location that locks a version of the openwong2kim product is anchored under the upstream owner's folder `openwong2kim\wmux`. The product's website is wmux.app. wmux.org is a different, unvalidated product, so no path or folder name may say `wmux-org` for this product.
+
 **Path rule (Victor, 2026-10-29): every working folder for this fork carries its org, its repo, its kind (`checkout` or `worktree`) and its branch in the path itself.** The pattern is `src\<org>\<repo>\<checkout|worktree>\<branch-slug>`, where the branch slug replaces `/` with `-`. The exact branch name is also written in this file and in `LEDGER.md`.
 
-`wmux-3.38.1` is not edited, and it does not follow the path rule because the fleet lock names it (LEDGER L-16). The org clone is `checkout\docs-org-design-v0`. Each new feature branch gets its own checkout or worktree under the same pattern.
+The locked upstream checkout is `openwong2kim\wmux\checkout\tag-v3.38.1`. The tag is in the branch slot because the checkout is detached at a tag, not on a branch. It is not edited. The org clone is `PlayFieldMultiplier\wmux\checkout\docs-org-design-v0`. Each new feature branch gets its own checkout or worktree under the same pattern.
 
 ## 3. Runtime data for the org instance
 
