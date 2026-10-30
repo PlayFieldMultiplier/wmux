@@ -15,7 +15,7 @@ Read this before acting. A row with status `open` is not done. Close a row only 
 | L-09 | Decide the parent of `AS/WMUX/APP/_` | Victor | open | Decision needed. `AS/MERIDIAN/BLUE/OTTOBOT/_` exists and is empty. |
 | L-10 | Decide the department list and each department's coordinator | Victor, with Meridian | open | Decision needed. Placeholders in FOLDER-STRUCTURE.md. |
 | L-11 | Decide whether the org has its own accounts or shares MERIDIAN's | Victor | open | Decision needed. Affects F6. |
-| L-12 | Commit, push and open a PR for `docs/org-design-v0` against `org/base-3.38.1` | AO_WMUX | open (next step) | Evidence: PR URL and an independent review of the exact head. |
+| L-12 | Commit, push and open a PR for `docs/org-design-v0` against `org/base-3.38.1` | AO_WMUX | done: PR open, review pending | PR https://github.com/PlayFieldMultiplier/wmux/pull/1 (commit 387dd4ba3). Independent review of the exact head still needed before merge. |
 | L-13 | Verify the self-contained claim: an agent with no prior context can use the set | AO_WMUX | open | Evidence: a fresh agent reads only `docs/org/README.md` and reports what it cannot find. |
 
 ## Notes
