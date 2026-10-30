@@ -7,7 +7,7 @@ Read this before acting. A row with status `open` is not done. Close a row only 
 | L-01 | Fork `openwong2kim/wmux` into `PlayFieldMultiplier` | AO_WMUX (acting account `DarienSirius`) | done | `gh api repos/PlayFieldMultiplier/wmux` returns `fork: true`, `parent: openwong2kim/wmux`. Created 2026-10-29. Visibility is public (forks of public repositories cannot be private). |
 | L-02 | Base branch at the locked tag | AO_WMUX | done | Branch `org/base-3.38.1` at `245ba5e80a1f97eb20f2f2497b39209a8a94f7ba`, which is tag `v3.38.1`. Set as default branch. |
 | L-03 | Clone the fork into `.WMUX__\src\wmux-org` | AO_WMUX | done | Clone exists; `git describe --tags` returns `v3.38.1` on `docs/org-design-v0`. |
-| L-04 | Write the design set (README, research, folder structure, F0–F7) | AO_WMUX | done in working tree | Files under `docs/org/` in the clone. Not yet committed or pushed (see L-12). |
+| L-04 | Write the design set (README, research, folder structure, F0–F7) | AO_WMUX | done | Committed as 387dd4ba3 on `docs/org-design-v0` and pushed. See L-12 for the PR. |
 | L-05 | Launch an isolated org instance and verify isolation | AO_WMUX, after Victor's approval | open | Blocked on approval. Evidence to collect: log line, hash of production `session.json` before and after, paths under `~/.wmux-org`. |
 | L-06 | Read the 4.13 pane, surface and launch-config gates; record in `research/4x-gates.md` | AO_WMUX | open | Not started. Evidence: the file with path and line for each gate. |
 | L-07 | Update the fleet lock in `AGENTS.md` (`.WMUX__`) and `ao-wmux.md` (PFM) to name the fork | AO_WMUX, after Victor approves wording | open | Requires Victor's approval of the text. PFM change goes through PR and `pfm-merge.sh`. |
