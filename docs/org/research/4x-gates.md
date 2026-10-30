@@ -82,7 +82,7 @@ Spot-checked: `daemon/config.ts` has no `mcp` string; `enforcementMode.ts:33`; `
 - `src/main/index.ts:1231`: `const isDevEnvironment = !app.isPackaged || process.env.NODE_ENV === 'development';`. A packaged build is `enforce`. A source run, or `NODE_ENV=development`, is `shadow`.
 - A user value overrides this only when it is exactly `shadow` or `enforce` (`enforcementMode.ts` 56-58). Anything else falls back to the environment default.
 
-### 8.2 Launch-line path (section 6, second bullet): resolved for the `pty:create` path
+### 8.2 Launch-line path (section 6, second bullet): partly resolved (the `pty:create` path only)
 
 Order in this path, for a new pane with an initial command:
 
@@ -99,7 +99,7 @@ Still open (see section 8.5): the renderer side of `pane.split` and `surface.new
 ### 8.3 agentControl holds (section 6, third bullet): resolved
 
 - The refusal is `refusal(surfaceId, method)` at `src/main/browser-session/BrowserAgentControl.ts:74-78`. The modes are `'agent' | 'paused' | 'user'` (`src/shared/browserAgentControl.ts:16`).
-- Only the renderer's trusted IPC can set a mode (`BrowserAgentControl.ts` 35-37, `apply` at 108). Agents can read holds but cannot clear them.
+- The file documents that only the renderer's trusted IPC sets a mode (`BrowserAgentControl.ts` 35-37, documented intent; the enforcing `apply` path at 108 was not read). Agents can read holds; the file says they cannot clear them.
 - A hold applies to a browser tab only. `pane.split` has no hold check. `surface.new` has no hold check. A new surface has no entry and starts in `'agent'` mode. The only creation-side refusal is teardown guarding, not creation.
 
 ### 8.4 pendingApproval (section 6, fourth bullet): partly resolved
