@@ -26,7 +26,14 @@ This is the layer that can reject `pane.split` and `surface.new` on identity or 
 - `src/main/pipe/RpcRouter.ts` 722-724 (checked): a non-`allow` outcome blocks the call only when the mode is `enforce`, or when `isAlwaysEnforcedMethod(request.method)` is true.
 - `src/main/pipe/RpcRouter.ts` 727-732 (raw read): for an unconfirmed identity with declared capabilities, the router queues an approval prompt and returns `pendingApproval: { promptId }`. It does not wait for the answer.
 
-**Net effect, as the code reads:** in a packaged production build the default is `enforce`, so a non-allow outcome from the mcp identity check blocks the RPC call. A dev build defaults to `shadow`. Whether `pane.split` and `surface.new` are in the always-enforced list is UNVERIFIED (see section 6).
+**Net effect, as the code reads:** in a packaged production build the default is `enforce`, so a non-allow outcome from the mcp identity check blocks the RPC call. A dev build defaults to `shadow`. Neither `pane.split` nor `surface.new` is always-enforced (section 3a), so in `shadow` mode a non-allow verdict on either is not blocked. In `enforce` mode, which is the production default, it is.
+
+### 3a. Always-enforced list (verified 2026-10-30 at v4.13.0)
+
+- `src/main/mcp/methodCapabilityMap.ts:119` (checked): `ALWAYS_ENFORCED_RISK_CLASSES = new Set(['computer', 'agent-state', 'agent-state-all'])`.
+- `methodCapabilityMap.ts` 122-125 (checked): `isAlwaysEnforcedMethod(method)` is true only when the method's `riskClass` is in that set.
+- `pane.split` is `{ capability: 'pane.create', riskClass: 'pane-lifecycle' }` at line 217 (checked). `pane-lifecycle` is not in the set, so it is not always-enforced.
+- `surface.new` is `{ capability: 'wmux.internal' }` at line 200 (checked). It has no `riskClass`, so it is not always-enforced.
 
 ## 4. Launch configuration step
 
@@ -53,7 +60,7 @@ These are counts, not diffs. The code was not diffed between tags.
 
 ## 6. UNVERIFIED
 
-- Whether `pane.split` and `surface.new` are in the always-enforced list. `isAlwaysEnforcedMethod` is imported from `src/main/mcp/methodCapabilityMap` (`RpcRouter.ts:12`, checked), and that file was not read.
+- ~~Whether `pane.split` and `surface.new` are in the always-enforced list.~~ Resolved in section 3a: neither is.
 - Whether a shipped install actually runs in `enforce`: the default written by `createDefaultConfig` in `src/daemon/config.ts`, and whether a user config overrides it, were not read.
 - The launch step end to end: which code types the agent launch into a pane after `surface.new` or `pane.split`, and in what order `agentLoginGate`, `launchPresence` and the launch path run. Not traced.
 - What `agentControl` holds can be set on. `src/main/browser-session/BrowserAgentControl.ts` was not read.
