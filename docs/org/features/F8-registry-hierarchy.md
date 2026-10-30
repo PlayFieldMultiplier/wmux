@@ -50,7 +50,7 @@ The registry has two kinds of field, and they are never mixed in one row.
 
 - `ptyId`, `paneId`, `surfaceId`, `workspaceId`, process ids, and live status (`agentStatus`, `live`).
 - These change on every restart, split, or relaunch. They are resolved at the moment of use, from the live roster (`surface_list` and `a2a_discover`, which are themselves per-call snapshots), and the result is used once and discarded.
-- A discovery listing that names a pane is a snapshot. Reading a pane by an ID taken from one can return a different pane. Confirm identity by title and agent name before typing (see the handoff finding of 2026-10-30).
+- A discovery listing that names a pane is a snapshot. Reading a pane by an ID taken from one can return a different pane. Confirm identity by title and agent name before typing (recorded in `C:.______.KADMONPLAY__FIELD_MULTI_PLIER__ASMERIDIANBLUEOTTOBOT_ASWMUXAPP_HANDOFF-2026-10-30.md`, outside this repo).
 
 Rule: a file on disk that lists agents is a claim about the past. Stable identity comes from the stable fields. Where an agent is now comes only from a live read. If a transient value appears in a stable file, it is a defect.
 
