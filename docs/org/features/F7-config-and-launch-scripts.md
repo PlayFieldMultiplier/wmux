@@ -21,7 +21,7 @@
 
 - No org launcher exists. No template exists in the fork.
 - No single list of org agents with their launch script name and their identity.
-- The location of the org's workspace subspace is undecided (LEDGER L-09).
+- None on location: `AS\MERIDIAN\BLUE\OTTOBOT\_\AS\WMUX\APP\_` is decided (L-09).
 
 ## Design
 
@@ -29,7 +29,7 @@
 - **One identity, one script.** Each org agent has exactly one launch script, named after its identity, and the file is listed in `config/org/agents.json` with its department and its workspace.
 - **Launch order.** The launcher sets `WMUX_DATA_SUFFIX` on the exe (F1), then starts the org instance, then relaunches agents one at a time, with a read-back after each.
 - **Config dirs.** A per-agent `CLAUDE_CONFIG_DIR` goes in the workspace profile (`workspace-profiles.md`), not in the launch script, so a profile change is visible in one place.
-- **Location.** The org's workspace subspace goes under `AS\MERIDIAN\BLUE\OTTOBOT\_` as the requested parent is not confirmed. Until L-09 is decided, nothing is created there.
+- **Location.** The org's workspace subspace is `AS\MERIDIAN\BLUE\OTTOBOT\_\AS\WMUX\APP\_` (decided, L-09).
 
 ## Folder changes (fork)
 
@@ -44,7 +44,6 @@
 
 ## Open decisions
 
-- L-09: the parent of `AS/WMUX/APP/_`.
 - Whether the launch templates should live in the fork or in PFM (the fork is public).
 
 ## Verification
@@ -54,4 +53,4 @@
 
 ## Status
 
-Designed. Partly blocked on L-09.
+Designed. L-09 closed. Launch scripts still need the open decisions in L-10 and L-11.

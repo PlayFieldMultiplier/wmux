@@ -1,5 +1,9 @@
 # F5: Unified work stream (company-level "who needs to do what next")
 
+**Plain meaning.** One shared list of work items for the whole org, with one entry per piece of work. Each entry says what it is, which department owns it, whether it is open, blocked or done, and, for done, the evidence that it is done. Every department reads from and writes to this one list. The list is the company-wide answer to "who needs to do what next, and what has already been finished." It is not a chat, not a channel, and not the GitHub Projects board used for LeagueOS product work.
+
+**Example entry:** `{id: ORG-0007, department: WMUX, owner: AO_WMUX, title: "Write F4 read of 4.x gates", state: open, blockedBy: none}`. When it is finished, the owner changes `state` to `done` and attaches the evidence, such as a file path and commit.
+
 **Goal:** the whole org reads one ordered stream of work items: what is open, who owns it, what is blocked, what is done and with what evidence. Every department writes to it and reads from it. No department keeps its own separate list as the source of truth.
 
 **Steps:**
