@@ -96,7 +96,7 @@ Order in this path, for a new pane with an initial command:
 
 Still open (see section 8.5): the renderer side of `pane.split` and `surface.new`, which sends `pty:create`.
 
-### 8.3 agentControl holds (section 6, third bullet): resolved
+### 8.3 agentControl holds (section 6, third bullet): partly resolved (who can set a hold is documented intent, not checked code)
 
 - The refusal is `refusal(surfaceId, method)` at `src/main/browser-session/BrowserAgentControl.ts:74-78`. The modes are `'agent' | 'paused' | 'user'` (`src/shared/browserAgentControl.ts:16`).
 - The file documents that only the renderer's trusted IPC sets a mode (`BrowserAgentControl.ts` 35-37, documented intent; the enforcing `apply` path at 108 was not read). Agents can read holds; the file says they cannot clear them.
