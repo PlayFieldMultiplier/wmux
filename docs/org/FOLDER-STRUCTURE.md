@@ -60,12 +60,12 @@ The locked upstream checkout is `openwong2kim\wmux\checkout\tag-v3.38.1`. The ta
 
 ## 3. Runtime data for the org instance
 
-Expected layout, from the `WMUX_DATA_SUFFIX` mechanics in `research/RESEARCH-DIGEST.md` section 2. The suffix is `-org`. Confirm each path on the first launch from the `[Main] WMUX_DATA_SUFFIX=… → userData=…` log line before relying on it.
+Expected layout, from the `WMUX_DATA_SUFFIX` mechanics in `research/RESEARCH-DIGEST.md` section 2. The suffix is `-pfm`. Confirm each path on the first launch from the `[Main] WMUX_DATA_SUFFIX=… → userData=…` log line before relying on it.
 
 ```
-C:\Users\victorb\.wmux-org\            (getWmuxDir: config.json, daemon pipe, daemon token)
-%APPDATA%\wmux-org\                    (Electron userData: session.json, scrollback, metadata)  [expected, verify]
-\\.\pipe\wmux-org-victorb              (RPC pipe)  [expected from getPipeName, verify]
+C:\Users\victorb\.wmux-pfm\            (getWmuxDir: config.json, daemon pipe, daemon token)
+%APPDATA%\wmux-pfm\                    (Electron userData: session.json, scrollback, metadata)  [expected, verify]
+\\.\pipe\wmux-pfm-victorb              (RPC pipe)  [expected from getPipeName, verify]
 ```
 
 The org instance and the production instance must never share `session.json`. The launcher and F1 include a check for this.
@@ -74,7 +74,7 @@ The org instance and the production instance must never share `session.json`. Th
 
 ```
 C:\Users\victorb\.agents\
-├── wmux-org.ps1                       (launcher: sets WMUX_DATA_SUFFIX on the exe itself; F1, F7)
+├── pfm.ps1                       (launcher: sets WMUX_DATA_SUFFIX on the exe itself; F1, F7)
 └── (existing per-agent launchers, unchanged)
 ```
 
