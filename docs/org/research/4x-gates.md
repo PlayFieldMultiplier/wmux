@@ -154,6 +154,7 @@ Spot-checked: `surface.rpc.ts` 95-99; `RpcRouter.ts` 851-852; `wmux-client.ts` 3
 ### 9.5 Still unverified (carried to L-28)
 
 - Whether `AppLayout.tsx` mounts `EmptyLeafFunnel` as its comment says (not fetched in full).
+- Whether the `mcp.mode` writer search is complete. It was a token search, not a full-tree grep, and a writer that builds the key dynamically would not match.
 - Whether any CLI command reads `rejection.pendingApproval` (the CLI was not searched; the earlier claim of no reader was not backed by a search).
 - Whether `_bridge.ts` `sendToRenderer` adds fields beyond those in 9.1 (not fetched).
 - Whether any MCP tool wrapper in `src/mcp/toolCatalog.ts` inspects the error text for the approval message (not read).
