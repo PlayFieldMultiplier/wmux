@@ -14,8 +14,8 @@ A window is a process and data boundary only. It says nothing about which Claude
 
 | Window | Suffix | Hosts | Zoom |
 |---|---|---|---|
-| PFM office | `-pfm` | Agents of the systems below it, plus a read-only view of the whole tree | widest |
-| LeagueOS | `-leagueos` | The LeagueOS system and everything nested in it | middle |
+| PFM office | `-pfm` | The office's own agents (roster and coordination), plus a read-only view of every system. It starts no agent that a system window owns. | widest |
+| LeagueOS | `-leagueos` | The LeagueOS system's agents, including the MERIDIAN-BLUE-OTTOBOT system nested in it | middle |
 
 A knowledge window for wmux-app (studying the product's own source) is not created. It would need its own reason and its own suffix, and nothing in the org needs it yet.
 
@@ -30,7 +30,7 @@ PFM (window -pfm)                      view: whole tree, read-only
 
 **One-owner rule.** A system's agents run in exactly one window. The `-pfm` window shows every system but starts no agent that another window owns. This prevents two wmux instances from driving the same pane or the same daemon. It does not limit logins: an agent's login is a separate choice (section 2).
 
-The folder tree nests the same way: `AS\MERIDIAN\BLUE\OTTOBOT\_\AS\WMUX\APP\_` (LEDGER L-09). The folder and the registry must agree on each parent. The registry is the source; the folder is checked against it.
+The folder tree does not yet match this nesting. On disk, `AS\MERIDIAN` and `AS\LeagueOS` are siblings directly under `AS`. The shell folder `AS\MERIDIAN\BLUE\OTTOBOT\_\AS\WMUX\APP\_` (LEDGER L-09) sits under MERIDIAN. The registry is the source for parents. Each folder's parent is compared with it and any mismatch is reported. A folder is not moved to match, and the registry is not changed to match a folder, without a separate decision.
 
 ## 4. What the registry records
 
@@ -58,7 +58,7 @@ One row per node:
 - Each node's `window` matches the suffix on the running process, read from the `[Main] WMUX_DATA_SUFFIX` log line.
 - No two windows share a `session.json` (F1 isolation check).
 - No agent appears under two windows (the one-owner rule).
-- Every folder under `AS\MERIDIAN\...` has a registry row whose `parent` matches its folder parent.
+- Each system's registry `parent` is compared with its folder parent. A mismatch is reported, not auto-fixed.
 
 ## 7. Not in this doc
 
