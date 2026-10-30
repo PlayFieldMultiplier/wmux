@@ -40,7 +40,7 @@
 ## Verification
 
 - `gh api repos/PlayFieldMultiplier/wmux --jq .default_branch` returns `org/base-3.38.1`.
-- `git -C "C:\.______\.KADMON\.WMUX__\src\PlayFieldMultiplier\wmux\checkout\docs-org-design-v0" describe --tags` returns `v3.38.1` on the base branch.
+- `git -C "C:\.______\.KADMON\.WMUX__\src\openwong2kim\wmux\checkout\tag-v3.38.1" describe --tags` returns `v3.38.1`, and `git rev-parse --short origin/org/base-3.38.1` returns `245ba5e80`. The base branch sits at the tag. The fork clone is on `docs/org-design-v0`, so its own `describe --tags` returns `v3.38.1-N-g<sha>`, not `v3.38.1`; that is expected and is not the base-branch check.
 
 ## Status
 
