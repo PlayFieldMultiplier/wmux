@@ -71,3 +71,10 @@ Next, in this order: open Channels, then Multi Task, each read by screenshot, wi
 - VERIFIED (live): `company_a2a_whoami` called from outside any wmux terminal returns `isError: true`, text "Workspace identity unknown. This MCP server cannot determine which workspace it belongs to. Make sure you are running inside a wmux terminal workspace."
 - Consequence: the company MCP tools need the MCP server to be started inside a wmux terminal workspace, so it can identify its workspace. That is the intended agent route.
 - Next test, read-only: run the same probe from the -wmux-app pane's own shell, then call company_a2a_whoami. Expected: an identity or a clearer refusal. Recorded as the next step.
+
+## Run 1, MCP route from inside the pane (2026-10-31)
+
+- VERIFIED (live, read-only): the same probe, run from the -wmux-app pane's own shell, lists the same 86 tools, and `company_a2a_whoami` now answers `{"error": "no company active"}` (not `isError`). So the MCP server identified its workspace from the pane.
+- VERIFIED (live, from the six company tool names): none of the six creates a company. Their names are whoami, send, broadcast, inbox, ack and status. A company must already exist before these tools do anything.
+- Question 1, partly answered: a company is created by `company.create` (RPC, first-party only; refused to outside callers) or through the UI (not yet reached). Creating one from an agent's MCP session is not possible in 3.38.1.
+- Next: reach the UI company entry without raising the window. Option, UNVERIFIED: Channels or Multi Task. Raising the window moves focus, so this is still blocked on a route that does not move focus.
