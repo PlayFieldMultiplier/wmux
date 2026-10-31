@@ -22,7 +22,7 @@ Status: proposal. Each rule is marked PROPOSED or FROM-SOURCE. Victor approves b
 
 ## 5. Team assignments
 - PROPOSED: one feature owner per concern. The owner holds the concern's ledger rows.
-- FROM-SOURCE: Victor assigns feature owners (feature-owner memory note). PROPOSED: an agent does not assign itself a new concern; this half has no source yet.
+- PROPOSED: Victor assigns feature owners, and an agent does not assign itself a new concern. No file in the repo cites this yet.
 
 ## 6. Responsibilities
 - PROPOSED: an owner is accountable for its concern's state, including its open items, until it hands them off with evidence.
@@ -30,5 +30,5 @@ Status: proposal. Each rule is marked PROPOSED or FROM-SOURCE. Victor approves b
 
 ## 7. Communication
 - FROM-SOURCE: send to a live agent by a task (`a2a_task_send`) or by typing into its PTY after reading the pane and confirming its input is empty; then send Enter as a separate key and read back.
-- PROPOSED: do not report a message as pending when its target was not running (this is the rule from the 2026-10-30 operating manual, not yet in a wmux rule file).
+- PROPOSED: do not report a message as pending when its target was not running (a lesson recorded in the ao-wmux agent definition; not yet in a shared rule file).
 - PROPOSED: a handoff names the next owner, the evidence, and the open items.
