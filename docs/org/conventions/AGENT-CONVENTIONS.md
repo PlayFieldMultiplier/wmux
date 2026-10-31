@@ -9,7 +9,7 @@ Status: proposal. Each rule is marked PROPOSED or FROM-SOURCE. Victor approves b
 
 ## 2. Launch parameters
 - FROM-SOURCE: launch only through a launch script in `C:\Users\victorb\.agents`; never a bare `claude --resume`.
-- FROM-SOURCE: pass the agent profile (`--agent`) and display name (`-n`) explicitly; `--dangerously-skip-permissions` is set by `resume-agent.ps1`.
+- FROM-SOURCE: the launch scripts pass the agent profile and display name. `resume-agent.ps1` reads `--agent` and `-n` from the session transcript, and always adds `--dangerously-skip-permissions`.
 - PROPOSED: record the model per agent in the registry; do not rely on the session's last model.
 
 ## 3. Agent profiles
@@ -22,7 +22,7 @@ Status: proposal. Each rule is marked PROPOSED or FROM-SOURCE. Victor approves b
 
 ## 5. Team assignments
 - PROPOSED: one feature owner per concern. The owner holds the concern's ledger rows.
-- FROM-SOURCE: Victor assigns feature owners; an agent does not assign itself a new concern.
+- FROM-SOURCE: Victor assigns feature owners (feature-owner memory note). PROPOSED: an agent does not assign itself a new concern; this half has no source yet.
 
 ## 6. Responsibilities
 - PROPOSED: an owner is accountable for its concern's state, including its open items, until it hands them off with evidence.
@@ -30,5 +30,5 @@ Status: proposal. Each rule is marked PROPOSED or FROM-SOURCE. Victor approves b
 
 ## 7. Communication
 - FROM-SOURCE: send to a live agent by a task (`a2a_task_send`) or by typing into its PTY after reading the pane and confirming its input is empty; then send Enter as a separate key and read back.
-- FROM-SOURCE: do not report a message as pending when its target was not running.
+- PROPOSED: do not report a message as pending when its target was not running (this is the rule from the 2026-10-30 operating manual, not yet in a wmux rule file).
 - PROPOSED: a handoff names the next owner, the evidence, and the open items.

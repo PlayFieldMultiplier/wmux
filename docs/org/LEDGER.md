@@ -37,3 +37,4 @@ Read this before acting. A row with status `open` is not done. Close a row only 
 
 - Victor's standing order (2026-10-29): every "I will" goes in this file in the same turn, with a status and an evidence column. A row marked `done` needs the evidence written here.
 - The acting account for the fork was `DarienSirius`. The office procedure prefers `ottopoet-thesean` for OPT work and allows `DarienSirius` only for a demonstrated missing permission. This is recorded as an attribution note, not as a fix.
+| L-29 | Sprint 1: sprint process and agent conventions (proposal) | AO_WMUX | in review | PR 20 (`docs/org-conventions-s1`), head `88d9e609f` before fixes. Review found unsourced rules; fixed in the next commit. Victor approves before any rule binds. |
