@@ -78,3 +78,10 @@ Next, in this order: open Channels, then Multi Task, each read by screenshot, wi
 - VERIFIED (live, from the six company tool names): none of the six creates a company. Their names are whoami, send, broadcast, inbox, ack and status. A company must already exist before these tools do anything.
 - Question 1, partly answered: a company is created by `company.create` (RPC, first-party only; refused to outside callers) or through the UI (not yet reached). Creating one from an agent's MCP session is not possible in 3.38.1.
 - Next: reach the UI company entry without raising the window. Option, UNVERIFIED: Channels or Multi Task. Raising the window moves focus, so this is still blocked on a route that does not move focus.
+
+## Run 1, UI attempt (2026-10-31, 05:26)
+
+- VERIFIED (UI Automation, no click): "Multi Task" and "New chat" in -wmux-app expose InvokePattern; Agent, Git, Channels and web do not. New chat is not invoked: it may start a paid agent session.
+- VERIFIED (screenshot, 05:26): the desktop is on the Windows LOCK SCREEN. The Multi Task invoke was sent, but nothing in the window is visible, so its effect is UNVERIFIED.
+- Consequence: no UI route to the company entry works while the desktop is locked. Blocked until the desktop is unlocked by its user. Not unlocked by AO_WMUX.
+- Next, when unlocked: screenshot, then Multi Task, read by screenshot.
