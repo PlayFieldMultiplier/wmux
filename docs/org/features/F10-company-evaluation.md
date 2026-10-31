@@ -41,3 +41,10 @@ What was observed, labelled:
 - UNVERIFIED: whether "Channels" or "Multi Task" opens the company view. Not yet tried.
 
 Next, in this order: open Channels, then Multi Task, each read by screenshot, with the same process-guarded click.
+
+## Run 1, continued (2026-10-31, 03:4x)
+
+- VERIFIED (process guard): a coordinate click on the sidebar Channels entry was NOT sent. The topmost window at that point is VS Code (pid 56304, `deck-schedules.json`), not -wmux-app (pid 56644). The guard stopped it.
+- VERIFIED (UI Automation): the Channels element in -wmux-app exposes no InvokePattern ("Unsupported Pattern"). An invoke attempt failed. A script's trailing "invoked" line was printed in error and is not a click.
+- Consequence: reaching Channels needs the -wmux-app window raised to the front, which moves focus. Not done, because it changes focus on Victor's machine.
+- Next route, which needs no focus change: call the company RPC methods directly over the -wmux-app pipe (`wmux-wmux-app-victorb`), starting with company.status and company.create. This answers question 1 from the source's own method surface. The pipe client must be written first.
