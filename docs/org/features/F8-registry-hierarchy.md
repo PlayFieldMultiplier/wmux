@@ -124,6 +124,6 @@ Rules:
 
 - This machine is ottobot. ottobot has no account of its own.
 - Preference order here: DarienSirius first, sharksandwich second. Both are non-machine-scoped agentic accounts.
-- ottopoet.thesean is the ottopoet computer's preference. It is not used as a preference on this machine.
-- Section 9.1 defaults are updated to match: the `-wmux-app` window and AO_WMUX use DarienSirius; the MERIDIAN and PFM systems use sharksandwich, as the second choice.
+- ottopoet-thesean is the ottopoet computer's preference. It is not used as a preference on this machine.
+- Section 9.1 defaults are NOT changed by this section. Section 9.1 still lists `sharksandwich` for MERIDIAN and PFM as the only default; this section records the ottobot order for AO_WMUX and the `-wmux-app` window, which is DarienSirius first.
 - The earlier entry that preferred ottopoet-thesean came from reading the office procedure for the ottopoet computer. It was applied in error and is withdrawn.
