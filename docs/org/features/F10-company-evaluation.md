@@ -57,3 +57,10 @@ Next, in this order: open Channels, then Multi Task, each read by screenshot, wi
 - UNVERIFIED: whether the first-party CLI process, run inside a wmux pane, gets that identity via its pane PID map (the CLI help says "verified PID-map identity"). Not tested.
 - Consequence for question 1: company methods are reachable only from a verified first-party caller. Creating a company from outside the window needs that identity, so the answer to "how does a company start" is currently the UI or a first-party caller inside the window.
 - Next: test the first-party route from inside a -wmux-app pane (a shell in that window's pane, running the CLI with the suffix). Do not raise or focus the window to do it.
+
+## Run 1, first-party route tested (2026-10-31)
+
+- VERIFIED (live): the same request, sent from a shell inside the -wmux-app pane (pane pid chain of the window's own shell), was refused with the same `identity-status` / `unconfirmed` rejection. The pane's process tree did not change the outcome. The server keys trust on the declared `clientName`, not on process ancestry.
+- VERIFIED (live, from the refusal text): the way to get trust is `mcp.identify` followed by `mcp.declarePermissions`. A plugin cannot be granted `wmux.internal`, so that route cannot reach company.* either.
+- Conclusion for question 1 (how a company starts, as built in 3.38.1): company.* is NOT callable by an outside agent over the pipe. The UI is the only verified path in this run, and the UI has not yet been reached (Channels needs the window raised; see the previous section).
+- Hypothesis, UNVERIFIED: the intended agent route is the company MCP tools (company_a2a_whoami, send, broadcast, inbox, ack, status; B14 in BEHAVIOUR-3.38.1). These run from an MCP server bundle, not a raw pipe client. Test next by calling one from an MCP-connected agent inside the -wmux-app window.
