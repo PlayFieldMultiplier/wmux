@@ -48,3 +48,12 @@ Next, in this order: open Channels, then Multi Task, each read by screenshot, wi
 - VERIFIED (UI Automation): the Channels element in -wmux-app exposes no InvokePattern ("Unsupported Pattern"). An invoke attempt failed. A script's trailing "invoked" line was printed in error and is not a click.
 - Consequence: reaching Channels needs the -wmux-app window raised to the front, which moves focus. Not done, because it changes focus on Victor's machine.
 - Next route, which needs no focus change: call the company RPC methods directly over the -wmux-app pipe (`wmux-wmux-app-victorb`), starting with company.status and company.create. This answers question 1 from the source's own method surface. The pipe client must be written first.
+
+## Run 1, RPC route (2026-10-31)
+
+- VERIFIED (live, read-only): the -wmux-app pipe `\.\pipe\wmux-wmux-app-victorb` accepts a request framed as one JSON line with id, method, params, token and clientName, and answers it. Framing taken from `src/cli/client.ts` in the locked checkout.
+- VERIFIED (live): `company.status` was refused. Response: `plugin is unconfirmed (observed clientName: "wmux-cli")`. Rejection reason `identity-status`, capability `wmux.internal`, status `unconfirmed`.
+- VERIFIED (source): `wmux.internal` is a reserved capability that no plugin declaration can grant (PermissionEnforcer.ts 422-425, per the 4.13 read; the 3.38.1 gate is the same family and needs confirming before a claim). The CLI tier is trusted only through a verified caller identity, which a raw pipe client does not have.
+- UNVERIFIED: whether the first-party CLI process, run inside a wmux pane, gets that identity via its pane PID map (the CLI help says "verified PID-map identity"). Not tested.
+- Consequence for question 1: company methods are reachable only from a verified first-party caller. Creating a company from outside the window needs that identity, so the answer to "how does a company start" is currently the UI or a first-party caller inside the window.
+- Next: test the first-party route from inside a -wmux-app pane (a shell in that window's pane, running the CLI with the suffix). Do not raise or focus the window to do it.
