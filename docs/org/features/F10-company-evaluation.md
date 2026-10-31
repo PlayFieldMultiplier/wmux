@@ -85,3 +85,12 @@ Next, in this order: open Channels, then Multi Task, each read by screenshot, wi
 - VERIFIED (screenshot, 05:26): the desktop is on the Windows LOCK SCREEN. The Multi Task invoke was sent, but nothing in the window is visible, so its effect is UNVERIFIED.
 - Consequence: no UI route to the company entry works while the desktop is locked. Blocked until the desktop is unlocked by its user. Not unlocked by AO_WMUX.
 - Next, when unlocked: screenshot, then Multi Task, read by screenshot.
+
+## Run 1, desktop state (2026-10-31, 06:0x)
+
+- VERIFIED (screenshot): the desktop is no longer on the lock screen. It shows the wallpaper.
+- VERIFIED (UI Automation): the -wmux-app top-level window reports Normal and on-screen (rect 328,222,1600,1000).
+- VERIFIED (screenshot of that rectangle): the window area shows only the wallpaper. The window is not painting on the desktop. Cause UNVERIFIED (likely the lock/unlock cycle).
+- VERIFIED (CLI, read-only): the -wmux-app shell pane still answers through the CLI (`read-screen` shows its prompt; the pane is alive).
+- Decision: AO_WMUX did not restart or kill the instance. Restarting a running instance is a shared-state action and is not taken without a reason.
+- Next: keep using the CLI route (read-only) to watch the instance, and re-check the window paint on the next tick.
