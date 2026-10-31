@@ -29,3 +29,45 @@ Decide, from observed runs, what the company feature does, where it breaks, and 
 - Run in the `-wmux-app` window (its suffix, WMUX_DATA_SUFFIX=-wmux-app, on the CLI call only).
 - Read the screen before every action; confirm dialogs by screenshot, never blind.
 - Record each run's start, actions and result in this file, dated.
+
+## Run 1 (2026-10-31, in the -wmux-app window)
+
+Question 1 (how a company starts): NOT YET ANSWERED.
+
+What was observed, labelled:
+- VERIFIED (screenshot, 03:29): the -wmux-app sidebar has four entries: Agent, Git, Channels, web. The Agent button opens a right-hand panel titled "Agent (Default)" with a "FLEET" list (one PowerShell 7 entry, idle), "Loop" and "Schedules" controls, and a message box.
+- VERIFIED (screenshot, 03:29): the "Agent (Default)" dropdown lists only model choices: Default, Opus 4.8, Sonnet 5, Haiku 4.5. It does NOT list a company.
+- VERIFIED (screenshot): the bottom bar has Attach, Files, Snippets, Rich Input, Broadcast, Multi Task, New chat. None is labelled company.
+- UNVERIFIED: whether "Channels" or "Multi Task" opens the company view. Not yet tried.
+
+Next, in this order: open Channels, then Multi Task, each read by screenshot, with the same process-guarded click.
+
+## Run 1, continued (2026-10-31, 03:4x)
+
+- VERIFIED (process guard): a coordinate click on the sidebar Channels entry was NOT sent. The topmost window at that point is VS Code (pid 56304, `deck-schedules.json`), not -wmux-app (pid 56644). The guard stopped it.
+- VERIFIED (UI Automation): the Channels element in -wmux-app exposes no InvokePattern ("Unsupported Pattern"). An invoke attempt failed. A script's trailing "invoked" line was printed in error and is not a click.
+- Consequence: reaching Channels needs the -wmux-app window raised to the front, which moves focus. Not done, because it changes focus on Victor's machine.
+- Next route, which needs no focus change: call the company RPC methods directly over the -wmux-app pipe (`wmux-wmux-app-victorb`), starting with company.status and company.create. This answers question 1 from the source's own method surface. The pipe client must be written first.
+
+## Run 1, RPC route (2026-10-31)
+
+- VERIFIED (live, read-only): the -wmux-app pipe `\.\pipe\wmux-wmux-app-victorb` accepts a request framed as one JSON line with id, method, params, token and clientName, and answers it. Framing taken from `src/cli/client.ts` in the locked checkout.
+- VERIFIED (live): `company.status` was refused. Response: `plugin is unconfirmed (observed clientName: "wmux-cli")`. Rejection reason `identity-status`, capability `wmux.internal`, status `unconfirmed`.
+- VERIFIED (source): `wmux.internal` is a reserved capability that no plugin declaration can grant (PermissionEnforcer.ts 422-425, per the 4.13 read; the 3.38.1 gate is the same family and needs confirming before a claim). The CLI tier is trusted only through a verified caller identity, which a raw pipe client does not have.
+- UNVERIFIED: whether the first-party CLI process, run inside a wmux pane, gets that identity via its pane PID map (the CLI help says "verified PID-map identity"). Not tested.
+- Consequence for question 1: company methods are reachable only from a verified first-party caller. Creating a company from outside the window needs that identity, so the answer to "how does a company start" is currently the UI or a first-party caller inside the window.
+- Next: test the first-party route from inside a -wmux-app pane (a shell in that window's pane, running the CLI with the suffix). Do not raise or focus the window to do it.
+
+## Run 1, first-party route tested (2026-10-31)
+
+- VERIFIED (live): the same request, sent from a shell inside the -wmux-app pane (pane pid chain of the window's own shell), was refused with the same `identity-status` / `unconfirmed` rejection. The pane's process tree did not change the outcome. The server keys trust on the declared `clientName`, not on process ancestry.
+- VERIFIED (live, from the refusal text): the way to get trust is `mcp.identify` followed by `mcp.declarePermissions`. A plugin cannot be granted `wmux.internal`, so that route cannot reach company.* either.
+- Conclusion for question 1 (how a company starts, as built in 3.38.1): company.* is NOT callable by an outside agent over the pipe. The UI is the only verified path in this run, and the UI has not yet been reached (Channels needs the window raised; see the previous section).
+- Hypothesis, UNVERIFIED: the intended agent route is the company MCP tools (company_a2a_whoami, send, broadcast, inbox, ack, status; B14 in BEHAVIOUR-3.38.1). These run from an MCP server bundle, not a raw pipe client. Test next by calling one from an MCP-connected agent inside the -wmux-app window.
+
+## Run 1, MCP route (2026-10-31)
+
+- VERIFIED (live, stdio, read-only): the 3.38.1 MCP bundle, started with the -wmux-app suffix, completes the MCP handshake (serverInfo `wmux` 3.38.1) and lists 86 tools, six of them company tools: company_a2a_whoami, company_a2a_send, company_a2a_broadcast, company_a2a_inbox, company_a2a_ack, company_a2a_status.
+- VERIFIED (live): `company_a2a_whoami` called from outside any wmux terminal returns `isError: true`, text "Workspace identity unknown. This MCP server cannot determine which workspace it belongs to. Make sure you are running inside a wmux terminal workspace."
+- Consequence: the company MCP tools need the MCP server to be started inside a wmux terminal workspace, so it can identify its workspace. That is the intended agent route.
+- Next test, read-only: run the same probe from the -wmux-app pane's own shell, then call company_a2a_whoami. Expected: an identity or a clearer refusal. Recorded as the next step.
