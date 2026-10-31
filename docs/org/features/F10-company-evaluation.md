@@ -29,3 +29,15 @@ Decide, from observed runs, what the company feature does, where it breaks, and 
 - Run in the `-wmux-app` window (its suffix, WMUX_DATA_SUFFIX=-wmux-app, on the CLI call only).
 - Read the screen before every action; confirm dialogs by screenshot, never blind.
 - Record each run's start, actions and result in this file, dated.
+
+## Run 1 (2026-10-31, in the -wmux-app window)
+
+Question 1 (how a company starts): NOT YET ANSWERED.
+
+What was observed, labelled:
+- VERIFIED (screenshot, 03:29): the -wmux-app sidebar has four entries: Agent, Git, Channels, web. The Agent button opens a right-hand panel titled "Agent (Default)" with a "FLEET" list (one PowerShell 7 entry, idle), "Loop" and "Schedules" controls, and a message box.
+- VERIFIED (screenshot, 03:29): the "Agent (Default)" dropdown lists only model choices: Default, Opus 4.8, Sonnet 5, Haiku 4.5. It does NOT list a company.
+- VERIFIED (screenshot): the bottom bar has Attach, Files, Snippets, Rich Input, Broadcast, Multi Task, New chat. None is labelled company.
+- UNVERIFIED: whether "Channels" or "Multi Task" opens the company view. Not yet tried.
+
+Next, in this order: open Channels, then Multi Task, each read by screenshot, with the same process-guarded click.
