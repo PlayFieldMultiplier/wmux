@@ -119,3 +119,11 @@ Rules:
 - The existing roles are the authority: rabbit-0 is the quota guardian and login-dance authority (`C:\Users\victorb\.claude\agents\hazrat-rabbit.md`, `rc-and-wmux.md`). This doc does not create a new authority.
 - The requirement on the registry: each agent row names its primary login and an ordered fallback list, so a rabbit can switch without a human choosing the account at that moment.
 - Open for Victor: the fallback order per system, and whether a switch may run without a human present (the standing rule is that irreversible account actions need approval). Until decided, a switch is a proposal, not an automatic action.
+
+## 10. Account order on this machine (correction, Victor 2026-10-31)
+
+- This machine is ottobot. ottobot has no account of its own.
+- Preference order here: DarienSirius first, sharksandwich second. Both are non-machine-scoped agentic accounts.
+- ottopoet-thesean is the ottopoet computer's preference. It is not used as a preference on this machine.
+- Section 9.1 defaults are NOT changed by this section. Section 9.1 still lists `sharksandwich` for MERIDIAN and PFM as the only default; this section records the ottobot order for AO_WMUX and the `-wmux-app` window, which is DarienSirius first.
+- The earlier entry that preferred ottopoet-thesean came from reading the office procedure for the ottopoet computer. It was applied in error and is withdrawn.
