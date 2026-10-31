@@ -10,13 +10,16 @@ Decide, from observed runs, what the company feature does, where it breaks, and 
 - Each claim about the feature cites the file and line in the locked checkout, or the run evidence, and is labelled VERIFIED or UNVERIFIED.
 - A written verdict per capability: keep, change (with the change), or drop (with the reason).
 
-## Verified so far (3.38.1, locked checkout)
-- Module: `src/company/` with `core/` (AgentPersonaGenerator, CostEstimator, MessageQueue, SoulLoader, messageTemplates, presets, soulMapping, workflows, builtinTemplates), `main/`, `mcp/`, `renderer/`, `types.ts`. Source: directory listing, 2026-10-31.
-- The wmux CLI has NO company subcommands (`wmux.cmd --help`, 2026-10-31). The feature is reached through the UI or the company MCP tools.
-- Company RPC handler: `src/main/pipe/handlers/company.rpc.ts` (digest, 2026-10-30; not re-read).
+## Facts (each labelled; source and date given)
+- VERIFIED (source, 2026-10-31): `src/company/` contains `core/`, `main/`, `mcp/`, `renderer/` and `types.ts`. Source: directory listing of tag v3.38.1.
+- VERIFIED (source, 2026-10-31): `src/company/core/` contains AgentPersonaGenerator, CostEstimator, MessageQueue, SoulLoader, messageTemplates, presets, soulMapping, workflows and builtinTemplates. Source: directory listing.
+- VERIFIED (source, 2026-10-31): the CLI source `src/cli` has no reference to "company" (case-insensitive grep, 0 files). The wmux CLI cannot drive a company. Source: grep of tag v3.38.1.
+- VERIFIED (source, 2026-10-31): `src/main/pipe/handlers/company.rpc.ts` (304 lines) registers ten RPC methods: company.create, destroy, status, addDept, removeDept, addMember, removeMember, broadcast, sendDept, sendMember, save, restore (plus any beyond line 192, not counted). Source: grep of the file.
+- UNVERIFIED: the behaviour of each company RPC method. Only the registrations were read, not their bodies.
+- UNVERIFIED: the `-wmux-app` suffix value. It is set by the launcher's environment, not a literal in the source; the window's data directory `wmux-wmux-app` was observed on disk on 2026-10-30.
 
 ## Open questions (to answer by running it)
-1. How does a company start: which UI control or MCP call creates one?
+1. How does a company start: `company.create` is registered in company.rpc.ts; which UI control or MCP call reaches it is UNVERIFIED.
 2. How are agents added, and do they run as real Claude sessions or as simulated personas?
 3. What does MessageQueue do between agents, and is it reached from a real agent's pane?
 4. Workflows and presets: do they execute, or only describe?
