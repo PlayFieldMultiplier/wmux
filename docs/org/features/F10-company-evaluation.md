@@ -64,3 +64,10 @@ Next, in this order: open Channels, then Multi Task, each read by screenshot, wi
 - VERIFIED (live, from the refusal text): the way to get trust is `mcp.identify` followed by `mcp.declarePermissions`. A plugin cannot be granted `wmux.internal`, so that route cannot reach company.* either.
 - Conclusion for question 1 (how a company starts, as built in 3.38.1): company.* is NOT callable by an outside agent over the pipe. The UI is the only verified path in this run, and the UI has not yet been reached (Channels needs the window raised; see the previous section).
 - Hypothesis, UNVERIFIED: the intended agent route is the company MCP tools (company_a2a_whoami, send, broadcast, inbox, ack, status; B14 in BEHAVIOUR-3.38.1). These run from an MCP server bundle, not a raw pipe client. Test next by calling one from an MCP-connected agent inside the -wmux-app window.
+
+## Run 1, MCP route (2026-10-31)
+
+- VERIFIED (live, stdio, read-only): the 3.38.1 MCP bundle, started with the -wmux-app suffix, completes the MCP handshake (serverInfo `wmux` 3.38.1) and lists 86 tools, six of them company tools: company_a2a_whoami, company_a2a_send, company_a2a_broadcast, company_a2a_inbox, company_a2a_ack, company_a2a_status.
+- VERIFIED (live): `company_a2a_whoami` called from outside any wmux terminal returns `isError: true`, text "Workspace identity unknown. This MCP server cannot determine which workspace it belongs to. Make sure you are running inside a wmux terminal workspace."
+- Consequence: the company MCP tools need the MCP server to be started inside a wmux terminal workspace, so it can identify its workspace. That is the intended agent route.
+- Next test, read-only: run the same probe from the -wmux-app pane's own shell, then call company_a2a_whoami. Expected: an identity or a clearer refusal. Recorded as the next step.
