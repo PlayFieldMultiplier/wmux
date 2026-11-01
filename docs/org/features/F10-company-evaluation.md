@@ -45,7 +45,7 @@ What was observed, labelled:
 
 - VERIFIED (process guard): a coordinate click on the sidebar Channels entry was NOT sent. The topmost window at that point is VS Code (pid 56304, `deck-schedules.json`), not -wmux-app (pid 56644). The guard stopped it.
 - VERIFIED (UI Automation): the Channels element in -wmux-app exposes no InvokePattern ("Unsupported Pattern"). An invoke attempt failed. A script's trailing "invoked" line was printed in error and is not a click.
-- Consequence: reaching Channels needs the -wmux-app window raised to the front, which moves focus. Not done at that time.
+- Inference (UNVERIFIED): reaching Channels needs the -wmux-app window raised to the front, which moves focus. Not done at that time.
 
 ## Run 1, RPC route (2026-10-31)
 
@@ -61,7 +61,9 @@ What was observed, labelled:
 
 - VERIFIED (live): the same request, sent from a shell inside the -wmux-app pane (its own shell process chain), was refused with the same `identity-status` / `unconfirmed` rejection. The result shows only that `company.status` is refused from this shell with clientName `wmux-cli`. It does not prove the cause is identity. The cause is UNVERIFIED; the source places `company.status` outside the CLI allowlist (see the source section above).
 - VERIFIED (live, from the refusal text): the refusal names `mcp.identify` followed by `mcp.declarePermissions` as the trust route. A plugin cannot be granted `wmux.internal`, so that route cannot reach company.* either (`src/main/mcp/PermissionEnforcer.ts:297-299`).
-- Conclusion (from the source and this run together): the company.* RPC methods are not callable by an outside agent over the pipe. The UI is the route this run has not yet verified.
+- VERIFIED (source, reviewed 2026-11-01): `company.create`, `company.destroy`, `company.status` and the other company mutations are on no allowlist. They are mapped to `wmux.internal` (`src/main/mcp/methodCapabilityMap.ts:443-445`), which a plugin cannot be granted, so an outside agent should not be able to call them.
+- VERIFIED (source, reviewed 2026-11-01): `company.a2a.*` (whoami, send, broadcast, inbox, ack, status) are in `FIRST_PARTY_METHODS` (`src/main/mcp/firstParty.ts:270-276`). They are allowed for any caller whose declared clientName is in `FIRST_PARTY_CLIENT_NAMES` (`src/main/mcp/firstParty.ts:65`; allow rule at `src/main/mcp/PermissionEnforcer.ts:221-227`). The source does not verify the clientName, so a pipe client that declares a first-party name could reach these. UNVERIFIED live: this run did not test that, and it is not a claim that it works.
+- The UI is the route this run has not yet verified.
 - Hypothesis, UNVERIFIED: the intended agent route is the company MCP tools (company_a2a_whoami, send, broadcast, inbox, ack, status). These run from an MCP server bundle, not a raw pipe client. Test next by calling one from an MCP-connected agent inside the -wmux-app window.
 
 ## Run 1, MCP route (2026-10-31)
@@ -74,15 +76,15 @@ What was observed, labelled:
 ## Run 1, MCP route from inside the pane (2026-10-31)
 
 - VERIFIED (live, read-only): the same probe, run from the -wmux-app pane's own shell, lists the same 86 tools, and `company_a2a_whoami` answers `{"error": "no company active"}` (not `isError`). The source of that text is `src/company/renderer/rpcHandlers.ts:293`. The live response itself is what this run observed.
-- VERIFIED (source, reviewed 2026-10-31): the six company MCP tools call only `company.a2a.whoami`, `send`, `broadcast`, `inbox`, `ack` and `status` (`src/company/mcp/index.ts:181, :199, :219, :238, :254, :268`). None of them calls a method that creates a company. A company must already exist before these tools do anything.
-- Question 1, route status: a company is created by `company.create` (RPC; refused to outside callers, see the source allowlist section above) or through the UI (not yet reached). The MCP tools do not create one.
+- VERIFIED (source, reviewed 2026-11-01): the six company MCP tools call `company.a2a.whoami`, `send`, `broadcast`, `inbox`, `ack` and `status` (`src/company/mcp/index.ts:181, :199, :219, :238, :254, :268`). They also call `a2a.resolve.identity` (`:100`) and `workspace.list` (`:89`) to resolve the workspace. None of them calls a method that creates a company. A company must already exist before these tools do anything.
+- Question 1, route status: a company is created by `company.create` (RPC; source-derived: it is on no allowlist, so an outside caller should be refused. UNVERIFIED live for `company.create`, which was not sent) or through the UI (not yet reached). The MCP tools do not create one.
 - Next: reach the UI company entry in the -wmux-app window. Option, UNVERIFIED: Channels or Multi Task. Raising the window moves focus.
 
 ## Run 1, UI attempt (2026-10-31, 05:26)
 
 - VERIFIED (UI Automation, no click): "Multi Task" and "New chat" in -wmux-app expose InvokePattern; Agent, Git, Channels and web do not. New chat is not invoked: it may start a paid agent session.
 - VERIFIED (screenshot, 05:26): the desktop is on the Windows LOCK SCREEN. The Multi Task invoke was sent, but nothing in the window is visible, so its effect is UNVERIFIED.
-- Consequence: no UI route to the company entry works while the desktop is locked.
+- Inference (UNVERIFIED): no UI route to the company entry works while the desktop is locked.
 - Next, when unlocked: screenshot, then Multi Task, read by screenshot.
 
 ## Run 1, desktop state (2026-10-31, 06:0x)
@@ -97,4 +99,4 @@ What was observed, labelled:
 
 - VERIFIED (screenshot): the -wmux-app window is in front and paints. Its rectangle shows Workspace 1, a PowerShell 7 pane with the earlier company-probe output, and the Agent panel. The window was brought to the front through a thread-attach focus request (AttachThreadInput plus SetForegroundWindow), after a plain SetForegroundWindow was refused. No restart.
 - VERIFIED (screenshot): Multi Task opens a dialog titled "Multi Task — N parallel isolated tasks". Its own text says each task gets a worktree and an idle agent pane. Its working directory is the shared PFM root, so it was NOT submitted. It was closed by a second invoke of the Multi Task button; Escape did not close it.
-- Consequence: the Multi Task route is not used in this workspace until its target folder is a fork worktree. The company entry is still not reached. Question 1 stays NOT YET ANSWERED.
+- Decision (not a fact): the Multi Task route is not used in this workspace until its target folder is a fork worktree. The company entry is still not reached. Question 1 stays NOT YET ANSWERED.
