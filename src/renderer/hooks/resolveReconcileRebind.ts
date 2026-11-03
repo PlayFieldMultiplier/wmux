@@ -92,3 +92,43 @@ export function resolveReconcileRebind(
   }
   return actions;
 }
+
+/**
+ * Blank-ptyId recovery (fix: reset leaves every surface ptyId at '').
+ *
+ * A surface whose stored ptyId is '' is never a dead-ptyId candidate, so
+ * reconcile used to leave it blank forever even when the daemon still holds a
+ * live session carrying its WMUX_SURFACE_ID. This pure policy binds such a
+ * surface to that live session.
+ *
+ * Policy:
+ *   - Only surfaces with an empty ptyId are considered (the caller filters).
+ *   - A live session is a target only if its surfaceId matches the surface.
+ *   - A live session already bound to ANY surface (boundPtyIds) is never
+ *     taken, so one PTY is never bound twice.
+ *   - Duplicate live claimants on one surfaceId use buildLiveBySurface's
+ *     newest-createdAt rule; one live pty is consumed by at most one surface.
+ *   - No match: no action. The surface stays blank, and the Terminal
+ *     self-create path handles it as before.
+ */
+export interface BlankSurface {
+  paneId: string;
+  surfaceId: string;
+}
+
+export function resolveBlankSurfaceRebind(
+  blanks: readonly BlankSurface[],
+  liveList: readonly LiveSessionInfo[],
+  boundPtyIds: ReadonlySet<string>,
+): RebindAction[] {
+  const liveBySurface = buildLiveBySurface(liveList);
+  const consumed = new Set<string>();
+  const actions: RebindAction[] = [];
+  for (const b of blanks) {
+    const livePty = liveBySurface.get(b.surfaceId);
+    if (!livePty || consumed.has(livePty) || boundPtyIds.has(livePty)) continue;
+    consumed.add(livePty);
+    actions.push({ paneId: b.paneId, surfaceId: b.surfaceId, newPtyId: livePty, kind: 'rebind', stalePtyId: '' });
+  }
+  return actions;
+}
