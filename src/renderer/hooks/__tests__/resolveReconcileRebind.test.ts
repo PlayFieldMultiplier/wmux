@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveReconcileRebind, buildLiveBySurface, type LiveSessionInfo } from '../resolveReconcileRebind';
+import { resolveReconcileRebind, resolveBlankSurfaceRebind, buildLiveBySurface, type LiveSessionInfo } from '../resolveReconcileRebind';
 
 const cand = (paneId: string, surfaceId: string, ptyId: string) => ({ paneId, surfaceId, ptyId });
 const live = (id: string, surfaceId?: string, createdAt?: string): LiveSessionInfo => ({ id, surfaceId, createdAt });
@@ -95,5 +95,64 @@ describe('resolveReconcileRebind (axis B-lite: clear-vs-rebind policy)', () => {
 
   it('returns [] for no candidates', () => {
     expect(resolveReconcileRebind([], new Set(), [])).toEqual([]);
+  });
+});
+
+describe('resolveBlankSurfaceRebind (fix: blank-ptyId surfaces rebind to their live session)', () => {
+  it('binds a blank surface to the live session carrying its WMUX_SURFACE_ID', () => {
+    const actions = resolveBlankSurfaceRebind(
+      [{ paneId: 'p1', surfaceId: 's1' }],
+      [live('pty-meridian-blue', 's1')],
+      new Set<string>(),
+    );
+    expect(actions).toEqual([
+      { paneId: 'p1', surfaceId: 's1', newPtyId: 'pty-meridian-blue', kind: 'rebind', stalePtyId: '' },
+    ]);
+  });
+
+  it('leaves a blank surface blank when no live session matches its surfaceId', () => {
+    const actions = resolveBlankSurfaceRebind(
+      [{ paneId: 'p1', surfaceId: 's1' }],
+      [live('pty-other', 's9')],
+      new Set<string>(),
+    );
+    expect(actions).toEqual([]);
+  });
+
+  it('never binds a live session that is already bound to some surface', () => {
+    const actions = resolveBlankSurfaceRebind(
+      [{ paneId: 'p1', surfaceId: 's1' }],
+      [live('pty-bound', 's1')],
+      new Set(['pty-bound']),
+    );
+    expect(actions).toEqual([]);
+  });
+
+  it('a live pty with no surfaceId is never a target', () => {
+    const actions = resolveBlankSurfaceRebind(
+      [{ paneId: 'p1', surfaceId: 's1' }],
+      [live('pty-no-surface')],
+      new Set<string>(),
+    );
+    expect(actions).toEqual([]);
+  });
+
+  it('two blank surfaces on one surfaceId do not double-bind one live pty', () => {
+    const actions = resolveBlankSurfaceRebind(
+      [{ paneId: 'p1', surfaceId: 's1' }, { paneId: 'p2', surfaceId: 's1' }],
+      [live('pty-a', 's1')],
+      new Set<string>(),
+    );
+    expect(actions).toHaveLength(1);
+    expect(actions[0]).toMatchObject({ paneId: 'p1', newPtyId: 'pty-a' });
+  });
+
+  it('binds several blank surfaces, each to its own live session', () => {
+    const actions = resolveBlankSurfaceRebind(
+      [{ paneId: 'p1', surfaceId: 's1' }, { paneId: 'p2', surfaceId: 's2' }],
+      [live('pty-1', 's1'), live('pty-2', 's2')],
+      new Set<string>(),
+    );
+    expect(actions.map((a) => [a.surfaceId, a.newPtyId])).toEqual([['s1', 'pty-1'], ['s2', 'pty-2']]);
   });
 });

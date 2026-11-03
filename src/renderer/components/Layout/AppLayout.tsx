@@ -9,7 +9,7 @@ import { WorkspaceCenter } from './WorkspaceCenter';
 import { EmptyLeafFunnel } from './EmptyLeafFunnel';
 import { selectProjectCwdSignature } from '../../stores/selectors/appLayout';
 import { registerSessionSaver, saveSessionNow } from '../../utils/sessionSaveBridge';
-import { resolveReconcileRebind } from '../../hooks/resolveReconcileRebind';
+import { resolveReconcileRebind, resolveBlankSurfaceRebind } from '../../hooks/resolveReconcileRebind';
 import NotificationPanel from '../Notification/NotificationPanel';
 import FleetView from '../FleetView/FleetView';
 // TASK-2: the 4 always-mounted overlays are lazy-loaded + render-gated below so
@@ -641,6 +641,7 @@ export default function AppLayout() {
         // mid-rehydrate), so clearing on the first cycle could destroy a live
         // session. We defer the destructive decision to a 2-strike re-query.
         const absentCandidates: { paneId: string; surfaceId: string; ptyId: string }[] = [];
+        const blankCandidates: { paneId: string; surfaceId: string }[] = [];
         const collect = (pane: Pane) => {
           if (signal?.aborted) return;
           if (pane.type === 'leaf') {
@@ -649,7 +650,11 @@ export default function AppLayout() {
               // browser/editor/diff는 PTY를 갖지 않음 — 재조정·자가생성 대상에서 제외(J2).
               if (surface.surfaceType === 'browser' || surface.surfaceType === 'editor' || surface.surfaceType === 'diff') continue;
               if (!surface.ptyId) {
-                console.log(`[AppLayout] Surface ${surface.id}: no ptyId, Terminal will self-create`);
+                // Blank ptyId (e.g. after a workspace reset). Collected, not
+                // skipped: a live daemon session that carries this surface's
+                // WMUX_SURFACE_ID is rebound to it below. With no match the
+                // surface stays blank and Terminal self-creates, as before.
+                blankCandidates.push({ paneId: pane.id, surfaceId: surface.id });
                 continue;
               }
               if (activeIds.has(surface.ptyId)) {
@@ -745,7 +750,45 @@ export default function AppLayout() {
             useStore.getState().updateSurfacePtyId(a.paneId, a.surfaceId, a.newPtyId);
           }
         }
-        console.log(`[AppLayout] Reconcile cycle #${reconcileCycleRef.current} complete (${absentCandidates.length} absent candidate(s))`);
+        // Blank-ptyId recovery (fix): bind a blank surface to the live daemon
+        // session whose WMUX_SURFACE_ID matches it. A live pty already bound to
+        // ANY surface is never taken. The apply step re-checks that the surface
+        // is still blank (CAS), so a Terminal that self-created in the meantime
+        // is not overwritten.
+        if (blankCandidates.length > 0 && !signal?.aborted) {
+          const boundPtyIds = new Set<string>();
+          const gatherBound = (p: Pane) => {
+            if (p.type === 'leaf') {
+              for (const s of p.surfaces) if (s.ptyId) boundPtyIds.add(s.ptyId);
+            } else {
+              p.children.forEach(gatherBound);
+            }
+          };
+          for (const ws of useStore.getState().workspaces) gatherBound(ws.rootPane);
+          const blankActions = resolveBlankSurfaceRebind(blankCandidates, activePtys, boundPtyIds);
+          for (const a of blankActions) {
+            if (signal?.aborted) break;
+            let currentPtyId: string | undefined;
+            for (const ws of useStore.getState().workspaces) {
+              const walk = (p: Pane): boolean => {
+                if (p.type === 'leaf') {
+                  if (p.id !== a.paneId) return false;
+                  currentPtyId = p.surfaces.find((s) => s.id === a.surfaceId)?.ptyId;
+                  return true;
+                }
+                return p.children.some(walk);
+              };
+              if (walk(ws.rootPane)) break;
+            }
+            if (currentPtyId !== '') {
+              console.warn(`[lifecycle] blank-rebind SKIPPED surface=${a.surfaceId}: ptyId now ${currentPtyId ?? 'gone'} (no longer blank)`);
+              continue;
+            }
+            console.warn(`[lifecycle] blank-rebind surface=${a.surfaceId} blank → live=${a.newPtyId} (WMUX_SURFACE_ID match, reset recovered)`);
+            useStore.getState().updateSurfacePtyId(a.paneId, a.surfaceId, a.newPtyId);
+          }
+        }
+        console.log(`[AppLayout] Reconcile cycle #${reconcileCycleRef.current} complete (${absentCandidates.length} absent candidate(s), ${blankCandidates.length} blank)`);
       } finally {
         reconcileInFlightRef.current = null;
       }
