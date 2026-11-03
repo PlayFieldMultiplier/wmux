@@ -495,12 +495,27 @@ function sessionIdFromTranscript(transcriptPath, fallback) {
 
 // ----- stdin reader -------------------------------------------------------
 
-async function readStdin() {
+// Stop waiting for hook stdin after this long. The RPC cap is HOOK_TIMEOUT_MS
+// (2s), so the stdin wait must end sooner. Without a cap, a stdin that never
+// closes hangs the hook for as long as the session stays open (a 25-minute
+// Stop hook was observed on 2026-11-03).
+const STDIN_TIMEOUT_MS = 1500;
+
+async function readStdin(stream = process.stdin, timeoutMs = STDIN_TIMEOUT_MS) {
   const chunks = [];
   let total = 0;
   let truncated = false;
   return new Promise((resolve, reject) => {
-    process.stdin.on('data', (c) => {
+    // A timed-out read resolves to null, the same as an empty stdin. It
+    // destroys the stream so nothing keeps the process alive.
+    const timer = setTimeout(() => {
+      logEvent('stdin-timeout', { waitedMs: timeoutMs, bytes: total });
+      stream.removeAllListeners('data');
+      stream.destroy();
+      resolve(null);
+    }, timeoutMs);
+    timer.unref?.();
+    stream.on('data', (c) => {
       // Codex review round 2, P2 #10 — cap input size so a runaway
       // tool response cannot OOM the bridge. Stop accumulating after
       // the cap; the resulting JSON will likely be malformed and the
@@ -510,8 +525,9 @@ async function readStdin() {
         const remaining = MAX_STDIN_BYTES - total;
         if (remaining > 0) chunks.push(c.subarray(0, remaining));
         total = MAX_STDIN_BYTES;
-        process.stdin.removeAllListeners('data');
-        process.stdin.destroy();
+        clearTimeout(timer);
+        stream.removeAllListeners('data');
+        stream.destroy();
         // Allow the 'end' handler below to wrap up; if it doesn't fire
         // because we destroyed early, resolve here.
         const buf = Buffer.concat(chunks).toString('utf8').trim();
@@ -528,7 +544,8 @@ async function readStdin() {
       chunks.push(c);
       total += c.length;
     });
-    process.stdin.on('end', () => {
+    stream.on('end', () => {
+      clearTimeout(timer);
       const buf = Buffer.concat(chunks).toString('utf8').trim();
       if (!buf) {
         resolve(null);
@@ -540,7 +557,10 @@ async function readStdin() {
         reject(err);
       }
     });
-    process.stdin.on('error', reject);
+    stream.on('error', (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
   });
 }
 
